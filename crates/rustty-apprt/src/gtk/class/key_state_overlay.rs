@@ -125,15 +125,27 @@ mod imp {
     impl KeyStateOverlay {
         /// PORTS: `key_state_overlay.zig:145-157` `setTables`. Replace the stored
         /// list (dropping the prior, the reference's `old.destroy()`), then notify
-        /// `has-tables` (`notify::tables` auto-fires via the property machinery).
-        fn set_tables(&self, value: Option<StringList>) {
+        /// `tables` and `has-tables`, in that order.
+        ///
+        /// CORRECTION (task 20, S52-F3): this notified only `has-tables`, relying
+        /// on GObject's automatic post-`set_property` notify for `tables` ("auto-
+        /// fires via the property machinery"). That automatic notify is queued
+        /// AFTER the explicit one, so handlers saw `has-tables` first. The reference
+        /// notifies both explicitly (`:155-156`); inside `g_object_set_property`'s
+        /// freeze the automatic `tables` notify then de-duplicates against the
+        /// queued one, exactly as it does for the reference's own accessor (which,
+        /// like this pspec, is not `EXPLICIT_NOTIFY`).
+        pub(super) fn set_tables(&self, value: Option<StringList>) {
             self.tables.replace(value);
+            self.obj().notify("tables");
             self.obj().notify("has-tables");
         }
 
-        /// PORTS: `key_state_overlay.zig:159-171` `setSequence`.
-        fn set_sequence(&self, value: Option<StringList>) {
+        /// PORTS: `key_state_overlay.zig:159-171` `setSequence`. Same ordering as
+        /// [`Self::set_tables`] (`:169-170`); same CORRECTION.
+        pub(super) fn set_sequence(&self, value: Option<StringList>) {
             self.sequence.replace(value);
+            self.obj().notify("sequence");
             self.obj().notify("has-sequence");
         }
 
@@ -251,5 +263,50 @@ impl KeyStateOverlay {
             this.set_valign_target(new_valign);
             widget.queue_resize();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// S52-F3: `setTables` / `setSequence` notify the property first and its
+    /// computed `has-*` companion second (`key_state_overlay.zig:155-156,169-170`).
+    ///
+    /// The setter is called directly, outside `g_object_set_property`, because that
+    /// is the only place the CALL order is observable as-is. Inside
+    /// `g_object_set_property` (how the reference's only caller, the
+    /// `tables: bind template.key-table` binding, reaches it) GLib queues
+    /// notifications during a freeze and dispatches the queue in REVERSE (measured on
+    /// GLib 2.88.2: the fixed setter dispatches `has-tables` then `tables`, the old
+    /// one `tables` then `has-tables`), so an assertion there would pin GLib's queue
+    /// rather than the port. Every notify of the four properties is recorded, so a
+    /// missing, extra or reordered emission fails, and the non-empty record is the
+    /// proof the setter ran.
+    #[test]
+    #[ignore = "requires a display; run via cargo test -p rustty-apprt --features gtk,x11,wayland --lib key_state_overlay -- --ignored"]
+    fn key_state_overlay_setters_notify_value_before_has() {
+        crate::gtk::init_for_display_test("key_state_overlay_setters_notify_value_before_has");
+        let _ = libadwaita::init();
+        crate::gtk::register_resources();
+
+        let overlay = KeyStateOverlay::default();
+        let seen = std::rc::Rc::new(RefCell::new(Vec::<String>::new()));
+        let sink = seen.clone();
+        // Only the four properties under test: the template binds the overlay's
+        // own `visible` to `has-*`, so a change there is expected and not ours.
+        overlay.connect_notify_local(None, move |_, pspec| {
+            let name = pspec.name();
+            if ["tables", "has-tables", "sequence", "has-sequence"].contains(&name) {
+                sink.borrow_mut().push(name.to_string());
+            }
+        });
+
+        overlay.imp().set_tables(Some(StringList::new(&["a"])));
+        assert_eq!(*seen.borrow(), ["tables", "has-tables"]);
+        seen.borrow_mut().clear();
+
+        overlay.imp().set_sequence(Some(StringList::new(&["b"])));
+        assert_eq!(*seen.borrow(), ["sequence", "has-sequence"]);
     }
 }

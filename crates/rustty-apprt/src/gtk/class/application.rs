@@ -148,6 +148,11 @@ mod imp {
     /// [`PresentSurfaceThunk`].
     type ColorSchemeThunk = RefCell<Option<Box<dyn Fn(bool)>>>;
 
+    /// Storage for the type-erased `open-config` seam
+    /// ([`Application::open_config_thunk`]), named for the same reason as
+    /// [`PresentSurfaceThunk`].
+    type OpenConfigThunk = RefCell<Option<Box<dyn Fn(rustty_core::app::OpenConfig)>>>;
+
     /// Storage for the type-erased `new-tab` seam
     /// ([`Application::new_tab_thunk`]), named for the same reason as
     /// [`PresentSurfaceThunk`]. The `Option<u64>` is the reference's
@@ -288,6 +293,14 @@ mod imp {
         /// it here. `None` until bound; the `present-surface` handler is then a
         /// no-op (placeholder-leaf doctrine).
         pub present_surface_thunk: PresentSurfaceThunk,
+
+        /// rustty-only seam carrying the monomorphized `open-config` push
+        /// (`self.core().mailbox.push(global.io(), .{ .open_config = target },
+        /// .forever)`, `application.zig:2102`, `actionOpenConfig`). Same
+        /// type-erasure rationale as [`Self::present_surface_thunk`]. `None` until
+        /// [`super::Application::bind_core_app`]; the `open-config` handler is then a
+        /// no-op (placeholder-leaf doctrine).
+        pub open_config_thunk: OpenConfigThunk,
 
         /// rustty-only seam carrying the monomorphized `new-tab` surface
         /// resolution + dispatch (`actionNewTab`'s
@@ -1719,11 +1732,16 @@ impl CoreSurfaceHandle for AppTargetHandle {
     }
 }
 
-// SIGUSR2 on Linux (all glibc targets rustty builds for — aarch64/x86_64) is 12.
-// The reference reads `std.posix.SIG.USR2`; gtk-rs/glib-sys expose no signal
-// constant and `libc` is not a dependency here, so the value is inlined with this
-// citation. (`application.zig:1404` `std.posix.SIG.USR2`.)
-const SIGUSR2: core::ffi::c_int = 12;
+// `std.posix.SIG.USR2` (`application.zig:1468-1469`), which resolves per target.
+//
+// CORRECTION (task 20, S49-F1): this was `const SIGUSR2: core::ffi::c_int = 12;`
+// under a comment saying "SIGUSR2 on Linux (all glibc targets rustty builds for —
+// aarch64/x86_64) is 12 ... `libc` is not a dependency here, so the value is
+// inlined". Both halves were false: this module also builds for FreeBSD
+// (`lib.rs`'s `any(target_os = "linux", target_os = "freebsd")` gate), where 12 is
+// SIGSYS and SIGUSR2 is 31, and `libc` IS a dependency of this crate
+// (`Cargo.toml`, the WS4 SIGPIPE sigaction). `libc::SIGUSR2` follows the target.
+const SIGUSR2: core::ffi::c_int = libc::SIGUSR2;
 
 // `g_unix_signal_add` is a GLib macro over `g_unix_signal_add_full`; the gtk4-rs
 // bindings wrap neither, so the real symbol is declared here and resolved at link
@@ -1976,17 +1994,11 @@ fn action_open_config(
     parameter: Option<&glib::Variant>,
     app: &Application,
 ) {
-    use rustty_apprt_api::action::OpenConfig;
+    use rustty_core::app::OpenConfig;
 
-    // `const target: CoreApp.Message.OpenConfig = target: { ... }` (`:2119-
-    // 2146`): the `StaticStringMap` lookup over the two detailed-action target
+    // `const target: CoreApp.Message.OpenConfig = target: { ... }` (`:2070-
+    // 2100`): the `StaticStringMap` lookup over the two detailed-action target
     // strings, defaulting to `.os_open` on every malformed-parameter path.
-    //
-    // PORT NOTE: the target type is the apprt-api `action::OpenConfig` (the
-    // same two-variant `os_open`/`new_window` enum as the reference's
-    // `CoreApp.Message.OpenConfig`) because rustty routes the parsed target
-    // straight to [`action::open_config`] rather than through the core
-    // mailbox; see the routing note below.
     let target: OpenConfig = 'target: {
         let Some(parameter) = parameter else {
             log::warn!(target: LOG_SCOPE, "no parameter provided to app.open-config action");
@@ -2016,14 +2028,18 @@ fn action_open_config(
         }
     };
 
-    // `self.core().mailbox.push(global.io(), .{ .open_config = target },
-    // .forever)` (`:2147`) is drained to `rt_app.performAction(.app,
-    // .open_config, <target>)` — a pure passthrough. rustty's
-    // `action::open_config` is self-contained (config path + `open_url` /
-    // edit-command window; needs no core mailbox/surface), so route it
-    // directly WITH the parsed target, the same precedent as
-    // [`action_reload_config`].
-    let _ = action::open_config(app, target);
+    // _ = self.core().mailbox.push(global.io(), .{ .open_config = target }, .forever);
+    //
+    // CORRECTION (task 20, S50-F5): this used to call `action::open_config(app,
+    // target)` directly, under a note arguing the mailbox hop "is drained to
+    // `rt_app.performAction(.app, .open_config, <target>)` — a pure passthrough".
+    // The end state is the same, but the reference performs it on the NEXT core
+    // tick, after anything already queued, and the drain emits the core's
+    // `mailbox message=open_config` log line. Both are observable, so the push is
+    // restored through the bound thunk ([`imp::Application::open_config_thunk`]).
+    if let Some(thunk) = app.imp().open_config_thunk.borrow().as_ref() {
+        thunk(target);
+    }
 }
 
 /// PORTS: `application.zig:2170-2202` `actionRingBell` (B7, f0f3f4d8d — the
@@ -2184,6 +2200,7 @@ fn deinit_private(priv_: &imp::Application) {
     // BACKREFs (never owned here).
     priv_.new_window_thunk.replace(None);
     priv_.new_tab_thunk.replace(None);
+    priv_.open_config_thunk.replace(None);
     priv_.tick_thunk.replace(None);
     priv_.needs_confirm_quit_thunk.replace(None);
     priv_.update_config_thunk.replace(None);
@@ -2849,6 +2866,19 @@ impl Application {
                     );
                 }
             })));
+
+        // The `open-config` push (`actionOpenConfig`, `application.zig:2102`):
+        // `self.core().mailbox.push(global.io(), .{ .open_config = target }, .forever)`.
+        self.imp().open_config_thunk.replace(Some(Box::new(
+            move |target: rustty_core::app::OpenConfig| {
+                // SAFETY: `core_app` is the stable heap pointer the caller passed to
+                // `new`; the push is the mailbox's own thread-safe enqueue.
+                let _ = unsafe { &*core_app }.mailbox.push(
+                    rustty_core::app::Message::OpenConfig(target),
+                    rustty_datastruct::blocking_queue::Timeout::Forever,
+                );
+            },
+        )));
 
         // The `new-tab` surface resolution + dispatch (`actionNewTab`,
         // `application.zig:1858-1907`, B5/034506f14): resolve the target
@@ -3767,53 +3797,108 @@ mod action {
         }
     }
 
-    /// `pub fn gotoWindow(direction) bool` (`:2067-2101`). Iterates our toplevel
-    /// windows forward/backward (wrapping) and presents+focuses the first visible,
-    /// non-active `Window`. Behavioral port of the `glib.List` prev/next walk.
+    /// `pub fn gotoWindow(direction) bool` (`application.zig:2476-2519`). Walks EVERY
+    /// toplevel forward/backward from the active one (wrapping) and presents+focuses
+    /// the first that `gotoWindowMaybe` accepts.
+    ///
+    /// CORRECTION (task 20, S50-F1): this used to filter the toplevel list down to
+    /// our `Window`s first, anchor at the active one of THOSE (else index 0), and
+    /// skip the anchor unconditionally. The reference keeps the whole
+    /// `gtk.Window.listToplevels()` list, anchors at the first active toplevel of any
+    /// type (else the head), and VISITS the anchor — it is skipped only because
+    /// `gotoWindowMaybe` rejects an active window. So with nothing active and one
+    /// window, the reference presents it and the port returned false; and with a
+    /// foreign toplevel (the GTK inspector, a native dialog) active, the two anchored
+    /// the ring at different positions.
     pub(super) fn goto_window(direction: GotoWindow) -> bool {
-        // Collect our own `Window` toplevels in toplevel order.
-        let windows: Vec<Window> = gtk4::Window::list_toplevels()
+        // `const glist = gtk.Window.listToplevels();` (`:2477`).
+        let glist: Vec<gtk4::Window> = gtk4::Window::list_toplevels()
             .into_iter()
             .filter_map(|w| w.downcast::<gtk4::Window>().ok())
-            .filter_map(|w| w.downcast::<Window>().ok())
             .collect();
-        if windows.is_empty() {
+        goto_window_walk(
+            &glist,
+            direction,
+            |w| w.is_active(),
+            |w| goto_window_maybe(w),
+        )
+    }
+
+    /// The list walk of `gotoWindow` (`application.zig:2480-2518`), over any node
+    /// type so the iteration order can be pinned without a display. `is_active` is
+    /// `findActiveWindow`'s predicate; `maybe` is `gotoWindowMaybe`.
+    pub(super) fn goto_window_walk<T>(
+        glist: &[T],
+        direction: GotoWindow,
+        is_active: impl Fn(&T) -> bool,
+        mut maybe: impl FnMut(&T) -> bool,
+    ) -> bool {
+        if glist.is_empty() {
             return false;
         }
 
-        // The window we start from is the active one (else the list head, `:2073-2075`).
-        let start = windows
-            .iter()
-            .position(|w| w.upcast_ref::<gtk4::Window>().is_active())
-            .unwrap_or(0);
+        // The window we're starting from is typically our active window.
+        // `glist.findCustom(null, findActiveWindow) orelse glist` (`:2480-2485`).
+        let starting = glist.iter().position(|w| is_active(w)).unwrap_or(0);
 
-        let n = windows.len();
-        // Walk forward/backward once around the ring (skipping the start slot).
-        for step in 1..=n {
-            let idx = match direction {
-                GotoWindow::Next => (start + step) % n,
-                GotoWindow::Previous => (start + n - (step % n)) % n,
-            };
-            if idx == start {
-                continue;
+        // Go forward or backwards in the list until we find a valid
+        // window that is visible. The walk begins AT `starting` (`:2489-2497`).
+        match direction {
+            GotoWindow::Next => {
+                for node in &glist[starting..] {
+                    if maybe(node) {
+                        return true;
+                    }
+                }
             }
-            if goto_window_maybe(&windows[idx]) {
-                return true;
+            GotoWindow::Previous => {
+                for node in glist[..=starting].iter().rev() {
+                    if maybe(node) {
+                        return true;
+                    }
+                }
             }
         }
+
+        // If we reached here, we didn't find a valid window to focus.
+        // Wrap around: from the head (`.next`) or the tail (`.previous`), stopping
+        // at `starting` (`:2501-2516`, `if (current_ == starting) break`).
+        match direction {
+            GotoWindow::Next => {
+                for node in &glist[..starting] {
+                    if maybe(node) {
+                        return true;
+                    }
+                }
+            }
+            GotoWindow::Previous => {
+                for node in glist[starting + 1..].iter().rev() {
+                    if maybe(node) {
+                        return true;
+                    }
+                }
+            }
+        }
+
         false
     }
 
-    /// `fn gotoWindowMaybe(gtk_window) bool` (`:2103-2119`). Presents + focuses the
-    /// active surface of a visible, non-active `Window`.
-    fn goto_window_maybe(window: &Window) -> bool {
-        let gtk_window = window.upcast_ref::<gtk4::Window>();
+    /// `fn gotoWindowMaybe(gtk_window) bool` (`application.zig:2521-2537`).
+    fn goto_window_maybe(gtk_window: &gtk4::Window) -> bool {
+        // If it is already active skip it.
         if gtk_window.is_active() {
             return false;
         }
-        if !window.is_visible() {
+        // If it is hidden, skip it.
+        if !gtk_window.is_visible() {
             return false;
         }
+        // If it isn't a Ghostty window, skip it.
+        let Some(window) = gtk_window.downcast_ref::<Window>() else {
+            return false;
+        };
+
+        // Focus our active surface
         let Some(surface) = window.get_active_surface() else {
             return false;
         };
@@ -3879,12 +3964,11 @@ mod action {
             Target::App => log::warn!(target: LOG_SCOPE, "mouse shape to app is unexpected"),
             Target::Surface(v) => {
                 // PORTS: `application.zig:2164` `surface.rt_surface.gobj().setMouseShape(shape)`.
-                // Sets the widget's `mouse-shape` property (carried as the shape's `i32`
-                // discriminant, see the `mouse-shape` field PORT NOTE). The generated setter
-                // fires `notify::mouse-shape`, driving `on_notify_mouse_shape` which sets the
-                // GLArea cursor.
+                // Sets the widget's `GhosttyMouseShape`-typed `mouse-shape` property. The
+                // generated setter fires `notify::mouse-shape`, driving
+                // `on_notify_mouse_shape` which sets the GLArea cursor.
                 if let Some(w) = widget(v) {
-                    w.set_mouse_shape(shape as i32);
+                    w.set_mouse_shape(crate::gtk::class::gtypes::MouseShapeEnum::from(shape));
                 }
             }
         }
@@ -4443,21 +4527,20 @@ mod action {
     /// [`super::action_ring_bell`]), then sets the `bell-ringing` property
     /// unless the surface is focused (f5419b9b1). The property drives the
     /// bind-time `should_border_be_shown` closure (`surface.rs`) so the bell
-    /// border lights up. We reproduce that here on the `Surface` widget: the
-    /// generated `set_bell_ringing` setter (from `#[property(get, set)]` on
-    /// `bell_ringing`) is the property write and the three `activate_action`s
-    /// are `ringBell`'s action fan-out (`surface.zig:2558-2560`).
+    /// border lights up. That method is [`Surface::set_bell_ringing_inner`].
+    ///
+    /// CORRECTION (task 20, S55-F2): this used to say "the generated
+    /// `set_bell_ringing` setter ... is the property write", and the arm below
+    /// called `Surface::ring_bell`, which "both this action and `commandFinished`
+    /// funnel through". The generated setter is not `setBellRinging`: it has no
+    /// change gate and no freeze.
     pub(super) fn ring_bell<C: CoreSurfaceHandle>(target: Target<'_, C>) {
         match target {
             Target::App => {}
             // `.surface => |v| v.rt_surface.surface.setBellRinging(true)` (`:2521`).
-            // rustty hosts the full bell (signal emit, `tab`/`win.ring-bell` action
-            // fan-out, audio, and the `bell-ringing` border property) in
-            // [`Surface::ring_bell`], which both this action and `commandFinished`
-            // funnel through.
             Target::Surface(v) => {
                 if let Some(w) = widget(v) {
-                    w.ring_bell();
+                    w.set_bell_ringing_inner(true);
                 }
             }
         }
@@ -5105,9 +5188,59 @@ mod tests {
     //   xvfb-run -a cargo test -p rustty-apprt --features gtk -- --ignored
     // GTK binds its "main thread" to whichever thread first calls `gtk::init`;
     // the cargo harness runs each test on a worker thread, so at most ONE GTK
-    // test's body executes per multi-threaded run (the others `gtk::init().err()`
-    // and skip — the established pattern, see `ext/actions.rs`
-    // `adding_actions_to_an_object`). Run each individually to exercise its body.
+    // test's body executes per multi-threaded run. Run each individually to
+    // exercise its body.
+    //
+    // CORRECTION (task 20): this used to say "the others `gtk::init().err()` and
+    // skip — the established pattern, see `ext/actions.rs`
+    // `adding_actions_to_an_object`". A skip that reports `1 passed` is not a
+    // pattern to follow: every one of these now calls
+    // `crate::gtk::init_for_display_test`, so the others FAIL, by name.
+
+    /// S50-F1: `gotoWindow`'s walk, pinned on plain integers so it needs no display.
+    /// Each case lists the nodes `gotoWindowMaybe` was asked about, in order. The
+    /// "accept nothing" predicate makes the whole visiting order observable.
+    #[test]
+    fn goto_window_walk_matches_the_reference_list_walk() {
+        use rustty_apprt_api::action::GotoWindow;
+
+        fn visits(n: usize, active: Option<usize>, dir: GotoWindow) -> Vec<usize> {
+            let list: Vec<usize> = (0..n).collect();
+            let mut seen = Vec::new();
+            let found = action::goto_window_walk(
+                &list,
+                dir,
+                |&i| Some(i) == active,
+                |&i| {
+                    seen.push(i);
+                    false
+                },
+            );
+            assert!(!found);
+            seen
+        }
+
+        // Anchored at the active node, which is VISITED first (gotoWindowMaybe is
+        // what rejects it), then to the end, then from the head up to the anchor.
+        assert_eq!(visits(4, Some(2), GotoWindow::Next), [2, 3, 0, 1]);
+        // Backwards to the head, then from the tail down to just past the anchor.
+        assert_eq!(visits(4, Some(2), GotoWindow::Previous), [2, 1, 0, 3]);
+        // Nothing active: anchored at the head.
+        assert_eq!(visits(3, None, GotoWindow::Next), [0, 1, 2]);
+        assert_eq!(visits(3, None, GotoWindow::Previous), [0, 2, 1]);
+        // Empty list.
+        assert_eq!(visits(0, None, GotoWindow::Next), Vec::<usize>::new());
+
+        // The audit's case (1): one window, nothing active. The reference presents
+        // it; the port used to skip the anchor and return false.
+        let list = [0usize];
+        assert!(action::goto_window_walk(
+            &list,
+            GotoWindow::Next,
+            |_| false,
+            |_| true
+        ));
+    }
 
     use allocator_api2::alloc::Global;
     use rustty_apprt_api as apprt;
@@ -5502,6 +5635,47 @@ mod tests {
         }
         assert_eq!(new_windows, 1, "activate must push exactly one NewWindow");
         assert_eq!(total, 1, "activate must push nothing but the NewWindow");
+    }
+
+    /// S50-F5: `app.open-config` pushes `.open_config = target` onto the core
+    /// mailbox (`application.zig:2102`) instead of performing it synchronously.
+    /// Drives the real handler with each target string plus a malformed one, then
+    /// drains the mailbox: exactly the three pushes, in order, and nothing else.
+    #[test]
+    #[ignore = "requires a display; run via cargo test -p rustty-apprt --features gtk,x11,wayland --lib open_config_pushes -- --ignored"]
+    fn open_config_pushes_onto_the_core_mailbox() {
+        use glib::prelude::ToVariant;
+        use rustty_core::app::OpenConfig;
+
+        crate::gtk::init_for_display_test("open_config_pushes_onto_the_core_mailbox");
+        let _ = libadwaita::init();
+
+        let mut core_app: Box<CoreApp<Double>> =
+            CoreApp::<Double>::create(Global).expect("core app");
+        let core_ptr: *mut CoreApp<Double> = &mut *core_app;
+        let app = build_test_app(core_ptr.cast());
+        app.bind_core_app::<Double>();
+
+        let action = gio::SimpleAction::new("open-config", Some(glib::VariantTy::STRING));
+        for target in ["new-window", "os-open", "not-a-target"] {
+            action_open_config(&action, Some(&target.to_variant()), &app);
+        }
+
+        let mut pushed = Vec::new();
+        while let Some(msg) = core_app.mailbox.pop() {
+            match msg {
+                Message::OpenConfig(v) => pushed.push(v),
+                _ => panic!("open-config pushed a message that is not OpenConfig"),
+            }
+        }
+        assert_eq!(
+            pushed,
+            [
+                OpenConfig::NewWindow,
+                OpenConfig::OsOpen,
+                OpenConfig::OsOpen
+            ]
+        );
     }
 
     /// PORTS: `application.zig:1475-1493` `dispose` + `:1400-1408` `startupSignals`.

@@ -70,9 +70,16 @@ mod imp {
         #[template_child]
         pub label: TemplateChild<gtk4::Label>,
 
-        /// PORTS: `resize_overlay.zig:78-91,132` the `label`/`label_text`
-        /// property + private field — the text set on the label when scheduled.
-        #[property(get, set, nullable)]
+        /// PORTS: `resize_overlay.zig:77-91,132` the `label` property, backed by
+        /// the `label_text` private field — the text set on the label when
+        /// scheduled.
+        ///
+        /// CORRECTION (task 20, S52-F1): the attribute was `#[property(get, set,
+        /// nullable)]`, so glib-macros registered the property under the FIELD's
+        /// name, `label-text`. The reference registers it as `label`
+        /// (`pub const name = "label"`, `:79`), and `setLabel` notifies that pspec.
+        /// The field keeps its name (the `label` template child owns the other).
+        #[property(name = "label", get, set, nullable)]
         pub label_text: RefCell<Option<String>>,
 
         /// PORTS: `resize_overlay.zig:37-54,135` the `duration` property /
@@ -213,14 +220,13 @@ impl Default for ResizeOverlay {
 }
 
 impl ResizeOverlay {
-    /// PORTS: `resize_overlay.zig:170-178` `setLabel`. Sets the text used the
-    /// next time the overlay is shown. This does NOT show the overlay if it is
-    /// currently hidden — the caller must also call [`Self::schedule`]. The
-    /// generated `set_label_text` setter dupes the string and notifies the
-    /// `label` pspec (`:177`).
-    pub fn set_label(&self, label: Option<&str>) {
-        self.set_label_text(label.map(std::string::ToString::to_string));
-    }
+    // PORTS: `resize_overlay.zig:170-178` `setLabel` is the `label` property's
+    // generated `set_label` setter: it dupes the string and notifies the `label`
+    // pspec (`:177`). It does NOT show the overlay if it is currently hidden — the
+    // caller must also call [`Self::schedule`]. CORRECTION (task 20, S52-F1): a
+    // hand-written `set_label` used to forward to the generated `set_label_text`;
+    // with the property correctly named `label` the generated setter has that
+    // name, so the wrapper is gone.
 
     /// PORTS: `resize_overlay.zig:180-193` `schedule`. Schedule the overlay to be
     /// shown on the next idle tick (to avoid flickering during resizes).
@@ -261,7 +267,7 @@ impl ResizeOverlay {
 
         // If we have a label to show, show ourselves; if we don't have label
         // text, then hide our label (`:211-217`).
-        let Some(text) = self.label_text() else {
+        let Some(text) = self.label() else {
             self.set_visible(false);
             return glib::ControlFlow::Break;
         };
@@ -297,5 +303,37 @@ impl ResizeOverlay {
     fn on_delay_timer(&self) -> glib::ControlFlow {
         self.imp().delay_timer.replace(None);
         glib::ControlFlow::Break
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// S52-F1: the text property is registered as `label` (`resize_overlay.zig:79`)
+    /// and setting it notifies `notify::label`. The notify counter is the positive
+    /// half: a property that exists but is never written would leave it at 0.
+    #[test]
+    #[ignore = "requires a display; run via cargo test -p rustty-apprt --features gtk,x11,wayland --lib resize_overlay -- --ignored"]
+    fn resize_overlay_text_property_is_named_label() {
+        crate::gtk::init_for_display_test("resize_overlay_text_property_is_named_label");
+        let _ = libadwaita::init();
+        crate::gtk::register_resources();
+
+        let overlay = ResizeOverlay::default();
+        assert!(overlay.find_property("label").is_some());
+        assert!(overlay.find_property("label-text").is_none());
+
+        let notified = std::rc::Rc::new(Cell::new(0u32));
+        let counter = notified.clone();
+        overlay.connect_notify_local(Some("label"), move |_, _| {
+            counter.set(counter.get() + 1);
+        });
+        overlay.set_label(Some("80 x 24"));
+        assert_eq!(notified.get(), 1);
+        assert_eq!(
+            overlay.property::<Option<String>>("label").as_deref(),
+            Some("80 x 24")
+        );
     }
 }

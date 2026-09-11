@@ -28,6 +28,16 @@ use super::surface::{CoreSurface, Surface, SurfaceOverrides};
 use crate::gtk::class::application::Application;
 use crate::gtk::ext;
 
+/// `const log = std.log.scoped(.gtk_ghostty_window)` (`tab.zig:20`) — the
+/// reference's tab file logs under the WINDOW scope. Rebranded per
+/// `.port/tools/PARITY_NAMING.md`, the same value as `window.rs`'s `LOG_SCOPE`.
+///
+/// CORRECTION (task 20): this file's four diagnostics were
+/// `eprintln!("warn(gtk): ...")`, a facade bypass with the wrong scope baked
+/// into the text; they go through the `log` facade now, which is also what lets
+/// a test observe which of them fired (S57-F2).
+const LOG_SCOPE: &str = "gtk_rustty_window";
+
 /// PORTS: `tab.zig:190-196` the `new` overrides struct.
 #[derive(Default)]
 pub struct TabOverrides {
@@ -361,7 +371,8 @@ impl Tab {
 
         // Without a config, just return the plain title (`:515-518`).
         let Some(config) = config else {
-            eprintln!("warn(gtk): config unavailable for computed title, likely bug");
+            // log.warn("config unavailable for computed title, likely bug", .{});
+            log::warn!(target: LOG_SCOPE, "config unavailable for computed title, likely bug");
             return Some(plain);
         };
         let config = config.get();
@@ -382,28 +393,56 @@ impl Tab {
 
 // -- Actions (tab.zig:396-478) -----------------------------------------------
 
-/// PORTS: `tab.zig:396-433` `actionClose`.
+/// PORTS: `tab.zig:398-433` `actionClose`.
 fn action_close(_a: &gio::SimpleAction, args: Option<&glib::Variant>, this: &Tab) {
-    let Some(args) = args else {
-        eprintln!("warn(gtk): tab.close-tab called without a parameter");
+    // const param = param_ orelse { log.warn(...); return; };
+    let Some(param) = args else {
+        // log.warn("tab.close-tab called without a parameter", .{});
+        log::warn!(target: LOG_SCOPE, "tab.close-tab called without a parameter");
         return;
     };
-    let Some(mode_str) = args.str() else {
-        eprintln!("warn(gtk): invalid mode provided to tab.close-tab");
-        return;
+
+    // var str: ?[*:0]const u8 = null;
+    // param.get("&s", &str);
+    //
+    // `&s` asks for type `s` exactly; any other variant leaves `str` null. It is
+    // read here but only CHECKED after the tab view lookup, as in the reference.
+    let str = if param.is_type(glib::VariantTy::STRING) {
+        param.str()
+    } else {
+        None
     };
+
+    // const tab_view = self.getTabView() orelse return;
+    // const page = tab_view.getPage(self.as(gtk.Widget));
+    //
+    // CORRECTION (task 20, S57-F2): the port checked the mode string BEFORE this
+    // lookup, so a tab with no `adw.TabView` ancestor and a non-string parameter
+    // logged `invalid mode provided to tab.close-tab`, where the reference returns
+    // silently. It also accepted `o`/`g` variants (`Variant::str`) that `&s` rejects.
     let Some(tab_view) = this.get_tab_view() else {
         return;
     };
     let page = tab_view.page(this);
 
-    // apprt.action.CloseTabMode tag names (`:412-424`).
+    // std.meta.stringToEnum(apprt.action.CloseTabMode, std.mem.span(str orelse { ... }))
+    let Some(mode_str) = str else {
+        // log.warn("invalid mode provided to tab.close-tab", .{});
+        log::warn!(target: LOG_SCOPE, "invalid mode provided to tab.close-tab");
+        return;
+    };
+
+    // Delegate to our parent to handle this, since this will emit
+    // a close-page signal that the parent can intercept.
+    // apprt.action.CloseTabMode tag names (`:412-432`).
     match mode_str {
         "this" => tab_view.close_page(&page),
         "other" => tab_view.close_other_pages(&page),
         "right" => tab_view.close_pages_after(&page),
         other => {
-            eprintln!("warn(gtk): invalid mode provided to tab.close-tab: {other}");
+            // Need to be defensive here since actions can be triggered externally.
+            // log.warn("invalid mode provided to tab.close-tab: {s}", .{str.?});
+            log::warn!(target: LOG_SCOPE, "invalid mode provided to tab.close-tab: {other}");
         }
     }
 }
@@ -496,5 +535,49 @@ mod tests {
         let ctx = glib::MainContext::default();
         while ctx.iteration(false) {}
         app.deinit();
+    }
+
+    /// S57-F2: `tab.close-tab` looks the tab view up BEFORE checking the mode
+    /// string (`tab.zig:406-423`). With no `adw.TabView` ancestor a non-string
+    /// parameter returns silently; inside one, the same parameter warns
+    /// `invalid mode provided to tab.close-tab`. The second half is the positive
+    /// control: it proves the handler reaches the check the first half is silent
+    /// about. A no-parameter call warns in both positions (it precedes the lookup).
+    #[test]
+    #[ignore = "requires a display; run via cargo test -p rustty-apprt --features gtk,x11,wayland --lib close_tab_checks -- --ignored"]
+    fn close_tab_checks_the_tab_view_before_the_mode() {
+        use glib::prelude::ToVariant;
+
+        crate::gtk::init_for_display_test("close_tab_checks_the_tab_view_before_the_mode");
+        let _ = libadwaita::init();
+        crate::gtk::register_resources();
+
+        let action = gio::SimpleAction::new("close-tab", None);
+        let not_a_string = 7u32.to_variant();
+        let warn = |msg: &str| (log::Level::Warn, LOG_SCOPE.to_string(), msg.to_string());
+
+        let tab = Tab::default();
+
+        let cap = crate::log_capture::start();
+        action_close(&action, Some(&not_a_string), &tab);
+        action_close(&action, None, &tab);
+        let detached = cap.messages();
+        drop(cap);
+        assert_eq!(
+            detached,
+            vec![warn("tab.close-tab called without a parameter")],
+            "no tab view: the non-string parameter must return before the mode check"
+        );
+
+        let tab_view = adw::TabView::new();
+        tab_view.append(&tab);
+        let cap = crate::log_capture::start();
+        action_close(&action, Some(&not_a_string), &tab);
+        let attached = cap.messages();
+        drop(cap);
+        assert_eq!(
+            attached,
+            vec![warn("invalid mode provided to tab.close-tab")]
+        );
     }
 }

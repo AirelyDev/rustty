@@ -67,10 +67,7 @@ use super::split_tree::{SplitTree, Tree};
 use super::surface::Surface;
 use super::tab::{Tab, TabOverrides};
 
-// `GtkTitlebarStyle` is carried as its `#[repr(C)]` discriminant across the
-// `titlebar-style` GObject property boundary (`.native == 0`, `.tabs == 1`).
-const TITLEBAR_STYLE_NATIVE: i32 = 0;
-const TITLEBAR_STYLE_TABS: i32 = 1;
+use super::gtypes::{ClipboardEnum, GtkTitlebarStyleEnum};
 
 mod imp {
     use super::*;
@@ -111,8 +108,12 @@ mod imp {
         #[property(name = "headerbar-visible", get = Self::headerbar_visible)]
         pub headerbar_visible_prop: PhantomData<bool>,
 
-        /// PORTS: `window.zig:135-151,221` `quick-terminal` (private field).
-        #[property(name = "quick-terminal", get, set)]
+        /// PORTS: `window.zig:135-151,221` `quick-terminal` (private field, which
+        /// starts `false`; the pspec default is `true`, `:143`).
+        ///
+        /// CORRECTION (task 20, S58-F4): the attribute had no `default`, so the
+        /// pspec default read `false`.
+        #[property(name = "quick-terminal", get, set, default = true)]
         pub quick_terminal: Cell<bool>,
 
         /// PORTS: `window.zig:153-166` `tabs-autohide` (computed).
@@ -132,13 +133,18 @@ mod imp {
         pub toolbar_style_prop: PhantomData<adw::ToolbarStyle>,
 
         /// PORTS: `window.zig:101-118` `titlebar-style` (computed
-        /// `GtkTitlebarStyle`). PORT NOTE (concern): the reference registers
-        /// `GtkTitlebarStyle` as a GObject enum; rustty carries the shape's
-        /// `#[repr(C)]` discriminant (`.native==0`/`.tabs==1`) across the property
-        /// boundary — the `titlebar_style_is_tabs` closure (`window.blp:94,118`)
-        /// consumes it as the same `i32`. The property NAME/notify are preserved.
-        #[property(name = "titlebar-style", get = Self::titlebar_style)]
-        pub titlebar_style_prop: PhantomData<i32>,
+        /// `GtkTitlebarStyle`, pspec default `.native`).
+        ///
+        /// CORRECTION (task 20, S58-F4): this was `PhantomData<i32>` under a PORT
+        /// NOTE (concern) that carried "the shape's `#[repr(C)]` discriminant
+        /// (`.native==0`/`.tabs==1`) across the property boundary". It is the
+        /// `GhosttyGtkTitlebarStyle` enum GType now ([`GtkTitlebarStyleEnum`]).
+        #[property(
+            name = "titlebar-style",
+            get = Self::titlebar_style,
+            builder(GtkTitlebarStyleEnum::Native)
+        )]
+        pub titlebar_style_prop: PhantomData<GtkTitlebarStyleEnum>,
 
         // ---- Template children (BORROW_FIELD, window.zig:263-267) ----------
         /// PORTS: `window.zig:263` `tab_overview`.
@@ -483,14 +489,11 @@ mod imp {
         }
 
         /// PORTS: `window.zig:1087-1091` `getTitlebarStyle`.
-        fn titlebar_style(&self) -> i32 {
+        fn titlebar_style(&self) -> GtkTitlebarStyleEnum {
             let cfg = self.config.borrow();
             match cfg.as_ref() {
-                Some(config) => match config.get().gtk_titlebar_style {
-                    GtkTitlebarStyle::Native => TITLEBAR_STYLE_NATIVE,
-                    GtkTitlebarStyle::Tabs => TITLEBAR_STYLE_TABS,
-                },
-                None => TITLEBAR_STYLE_NATIVE,
+                Some(config) => GtkTitlebarStyleEnum::from(config.get().gtk_titlebar_style),
+                None => GtkTitlebarStyleEnum::from(GtkTitlebarStyle::Native),
             }
         }
     }
@@ -1057,11 +1060,13 @@ mod imp {
                 let this_weak = obj.downgrade();
                 ids.push(
                     surface.connect_local("clipboard-write", false, move |args| {
-                        let clipboard_type: i32 =
-                            args[1].get().expect("clipboard-write type is an i32");
+                        let clipboard_type: ClipboardEnum = args[1]
+                            .get()
+                            .expect("clipboard-write type is a GhosttyApprtClipboard");
                         let text: String = args[2].get().expect("clipboard-write text is a string");
                         if let Some(win) = this_weak.upgrade() {
-                            win.imp().surface_clipboard_write(clipboard_type, &text);
+                            win.imp()
+                                .surface_clipboard_write(clipboard_type.into(), &text);
                         }
                         None
                     }),
@@ -1151,9 +1156,9 @@ mod imp {
         // ---- Surface signal handlers (window.zig:1645-1773) -----------------
         /// PORTS: `window.zig:1645-1666` `surfaceClipboardWrite`. Toast on a
         /// standard-clipboard write, when configured.
-        fn surface_clipboard_write(&self, clipboard_type: i32, text: &str) {
+        fn surface_clipboard_write(&self, clipboard_type: Clipboard, text: &str) {
             // We only toast for the standard clipboard (`:1652`).
-            if clipboard_type != Clipboard::Standard as i32 {
+            if clipboard_type != Clipboard::Standard {
                 return;
             }
             // We only toast if configured to (`:1654-1660`).
@@ -1904,28 +1909,24 @@ impl Window {
 
         // Show a confirmation dialog (`window.zig:1476-1494`). `close-request` →
         // `closeConfirmationCloseTab` and `cancel` → `closeConfirmationCancelTab`
-        // (`:1431-1457`) — both call `closePageFinish(page, …)`. The reference
-        // re-resolves the tab_view via `getAncestor(page.child())`; we already
-        // have it as `imp.tab_view`, so we clone it into the closures.
+        // (`:1604-1631`).
         //
-        // UNRESTORED SITES `window.zig:1612` and `:1626` (task-14d-3): both are
-        // `log.warn("close confirmation called for non-existent page", .{})` on
-        // the `orelse` of that `getAncestor`. Because this port never performs
-        // the lookup — it captures the `tab_view` it already holds — the
-        // failure the warning reports cannot occur, and restoring it would put
-        // a diagnostic on a success path. These two are the whole of this
-        // file's residual allowance.
+        // CORRECTION (task 20, S58-F3): both closures used to capture `imp.tab_view`
+        // and always call `close_page_finish` on it, under a note saying the
+        // reference's `getAncestor` lookup was unnecessary and that its
+        // `close confirmation called for non-existent page` warning "cannot occur".
+        // It can: the page's child may have left the view while the dialog was up,
+        // and the reference then warns and does NOT finish. The handlers re-resolve
+        // the view at response time, as the reference does.
         let dialog = CloseConfirmationDialog::new(Target::Tab);
-        let tab_view = imp.tab_view.get();
         let page_close = page.clone();
-        let tab_view_close = tab_view.clone();
         dialog.connect_local("close-request", false, move |_args| {
-            tab_view_close.close_page_finish(&page_close, true);
+            close_confirmation_close_tab(&page_close);
             None
         });
         let page_cancel = page.clone();
         dialog.connect_local("cancel", false, move |_args| {
-            tab_view.close_page_finish(&page_cancel, false);
+            close_confirmation_cancel_tab(&page_cancel);
             None
         });
         // Present keeps the dialog referenced by GTK until dismissed.
@@ -2182,8 +2183,8 @@ impl Window {
     /// PORTS: `window.zig:1229-1237` `closureTitlebarStyleIsTab`. Closure: `this`
     /// FIRST (the GtkBuilder expression scope), then the titlebar-style value.
     #[template_callback(name = "titlebar_style_is_tabs")]
-    fn closure_titlebar_style_is_tabs(_this: &Window, value: i32) -> bool {
-        value == TITLEBAR_STYLE_TABS
+    fn closure_titlebar_style_is_tabs(_this: &Window, value: GtkTitlebarStyleEnum) -> bool {
+        value == GtkTitlebarStyleEnum::Tabs
     }
 
     /// PORTS: `window.zig:1368-1378` `closureTitle` (8b7c57c75; bound as
@@ -2230,16 +2231,47 @@ impl Window {
 // -- GTK action handlers (window.zig:1790-2083) ------------------------------
 // Each receives the target `&Window` as ext::actions delivers it (invariant 10).
 
+/// PORTS: `window.zig:1603-1616` `closeConfirmationCloseTab`.
+fn close_confirmation_close_tab(page: &adw::TabPage) {
+    // const tab_view = ext.getAncestor(adw.TabView, page.getChild().as(gtk.Widget)) orelse { ... };
+    let Some(tab_view) = ext::ancestor::<adw::TabView>(&page.child()) else {
+        // log.warn("close confirmation called for non-existent page", .{});
+        log::warn!(target: LOG_SCOPE, "close confirmation called for non-existent page");
+        return;
+    };
+    tab_view.close_page_finish(page, true);
+}
+
+/// PORTS: `window.zig:1618-1631` `closeConfirmationCancelTab`.
+fn close_confirmation_cancel_tab(page: &adw::TabPage) {
+    // const tab_view = ext.getAncestor(adw.TabView, page.getChild().as(gtk.Widget)) orelse { ... };
+    let Some(tab_view) = ext::ancestor::<adw::TabView>(&page.child()) else {
+        // log.warn("close confirmation called for non-existent page", .{});
+        log::warn!(target: LOG_SCOPE, "close confirmation called for non-existent page");
+        return;
+    };
+    tab_view.close_page_finish(page, false);
+}
+
 /// PORTS: `window.zig:1790-1832` `actionAbout`.
 fn action_about(_action: &gio::SimpleAction, _param: Option<&glib::Variant>, this: &Window) {
     // AD-3: `adw_version.supportsDialogs()` collapses to the modern `adw` arm.
-    // PORT NOTE (R2): name/icon/developer/version are sourced from
-    // `rustty_identity`, NOT the reference's hardcoded "Ghostty" /
-    // "Ghostty Developers" / `build_config.version_string`. The reference's
-    // `website` ("https://ghostty.org") and `issue-url` (the ghostty GitHub
-    // issues page) are DROPPED: `rustty_identity` carries no homepage/issue-url
-    // constant, and emitting ghostty.org would leak the upstream identity into a
-    // user-visible shipped dialog (R2 forbids this).
+    // PORT NOTE (R2): name/icon/developer/version/issue-url/website are sourced
+    // from `rustty_identity`, NOT the reference's hardcoded "Ghostty" /
+    // "Ghostty Developers" / `build_config.version_string` / ghostty URLs.
+    //
+    // CORRECTION (task 20, S58-F1): this note used to say the reference's
+    // `website` and `issue-url` "are DROPPED: `rustty_identity` carries no
+    // homepage/issue-url constant". A missing constant is a reason to add one, not
+    // to drop two user-visible links; `rustty_identity::{WEBSITE, ISSUE_URL}` now
+    // exist for both profiles.
+    let dialog = about_dialog();
+    dialog.present(Some(this.upcast_ref::<gtk4::Widget>()));
+}
+
+/// The About dialog `actionAbout` shows (`window.zig:1972-1988`), built separately
+/// so its six properties can be read back without presenting it.
+fn about_dialog() -> adw::AboutDialog {
     // PORTS: `window.zig:1805` `i18n._("Ghostty Developers")`. R2 + gettext
     // interaction: a msgid is a lookup KEY, so this must be the literal the 31
     // catalogs carry (`po/io.airely.rustty.pot` `msgid "Rustty Developers"`) — the
@@ -2259,13 +2291,16 @@ fn action_about(_action: &gio::SimpleAction, _param: Option<&glib::Variant>, thi
         );
     }
     let developer_name = tr(c"Rustty Developers");
-    let dialog = adw::AboutDialog::builder()
+    // "application-name", "developer-name", "application-icon", "version",
+    // "issue-url", "website" (`window.zig:1974-1987`).
+    adw::AboutDialog::builder()
         .application_name(rustty_identity::APP_NAME_TITLECASE)
-        .application_icon(rustty_identity::BUNDLE_ID)
         .developer_name(developer_name)
+        .application_icon(rustty_identity::BUNDLE_ID)
         .version(rustty_identity::VERSION)
-        .build();
-    dialog.present(Some(this.upcast_ref::<gtk4::Widget>()));
+        .issue_url(rustty_identity::ISSUE_URL)
+        .website(rustty_identity::WEBSITE)
+        .build()
 }
 
 /// PORTS: `window.zig:1834-1840` `actionClose`.
@@ -2696,5 +2731,96 @@ mod tests {
         );
 
         app.deinit();
+    }
+    /// S58-F3: the tab close-confirmation handlers resolve the `adw.TabView` from
+    /// the page's child at response time (`window.zig:1603-1631`). While the page
+    /// is inside a view, cancel keeps it and close removes it (the positive half,
+    /// proving `close_page_finish` is reached on the resolved view). Once the child
+    /// has left every view, both warn `close confirmation called for non-existent
+    /// page` and do nothing else.
+    #[test]
+    #[ignore = "requires a display; run via cargo test -p rustty-apprt --features gtk,x11,wayland --lib close_confirmation_tab -- --ignored"]
+    fn close_confirmation_tab_handlers_resolve_the_view() {
+        crate::gtk::init_for_display_test("close_confirmation_tab_handlers_resolve_the_view");
+        let _ = libadwaita::init();
+
+        let view = adw::TabView::new();
+        view.connect_close_page(|_, _| glib::Propagation::Stop);
+        let page = view.append(&gtk4::Label::new(Some("tab")));
+
+        let cap = log_capture::start();
+        view.close_page(&page);
+        close_confirmation_cancel_tab(&page);
+        assert_eq!(
+            view.n_pages(),
+            1,
+            "cancel finishes the close with confirm=false"
+        );
+        view.close_page(&page);
+        close_confirmation_close_tab(&page);
+        assert_eq!(
+            view.n_pages(),
+            0,
+            "close finishes the close with confirm=true"
+        );
+        assert_eq!(
+            cap.messages(),
+            vec![],
+            "nothing is logged while the page exists"
+        );
+
+        close_confirmation_close_tab(&page);
+        close_confirmation_cancel_tab(&page);
+        let warn = (
+            log::Level::Warn,
+            LOG_SCOPE.to_string(),
+            "close confirmation called for non-existent page".to_string(),
+        );
+        assert_eq!(cap.messages(), vec![warn.clone(), warn]);
+    }
+    /// S58-F1: the About dialog carries all six properties the reference passes to
+    /// `adw.showAboutDialog` (`window.zig:1974-1987`), including `issue-url` and
+    /// `website`, which the port used to drop.
+    #[test]
+    #[ignore = "requires a display; run via cargo test -p rustty-apprt --features gtk,x11,wayland --lib about_dialog -- --ignored"]
+    fn about_dialog_carries_website_and_issue_url() {
+        crate::gtk::init_for_display_test("about_dialog_carries_website_and_issue_url");
+        let _ = libadwaita::init();
+
+        let dialog = about_dialog();
+        assert_eq!(
+            dialog.application_name(),
+            rustty_identity::APP_NAME_TITLECASE
+        );
+        assert_eq!(dialog.application_icon(), rustty_identity::BUNDLE_ID);
+        assert_eq!(dialog.version(), rustty_identity::VERSION);
+        assert_eq!(dialog.issue_url(), rustty_identity::ISSUE_URL);
+        assert_eq!(dialog.website(), rustty_identity::WEBSITE);
+        assert!(!dialog.developer_name().is_empty());
+    }
+    /// S58-F4: `quick-terminal`'s pspec default is `true` (the private field still
+    /// starts `false`), and `titlebar-style` is the `GhosttyGtkTitlebarStyle` enum
+    /// defaulting to `.native` (`window.zig:101-151`).
+    #[test]
+    #[ignore = "requires a display; run via cargo test -p rustty-apprt --features gtk,x11,wayland --lib window_pspec -- --ignored"]
+    fn window_pspec_types_and_defaults_match_the_reference() {
+        crate::gtk::init_for_display_test("window_pspec_types_and_defaults_match_the_reference");
+        let _ = libadwaita::init();
+        crate::gtk::register_resources();
+
+        let class = glib::Class::<Window>::from_type(Window::static_type()).expect("Window class");
+        let quick = class
+            .find_property("quick-terminal")
+            .expect("quick-terminal");
+        assert_eq!(quick.default_value().get::<bool>().ok(), Some(true));
+
+        let style = class
+            .find_property("titlebar-style")
+            .expect("titlebar-style");
+        assert_eq!(style.value_type(), GtkTitlebarStyleEnum::static_type());
+        assert_eq!(
+            style.default_value().get::<GtkTitlebarStyleEnum>().ok(),
+            Some(GtkTitlebarStyleEnum::Native)
+        );
     }
 }

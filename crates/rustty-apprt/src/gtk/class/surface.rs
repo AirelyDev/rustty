@@ -70,6 +70,8 @@ use rustty_vt::input::key_mods::Mods;
 use rustty_vt::input::mouse::{Button, ButtonState, ScrollMods};
 use rustty_vt::mouse::Shape as MouseShape;
 
+use super::gtypes::{ClipboardEnum, MouseShapeEnum};
+
 use crate::gtk::app::App;
 use crate::gtk::ext;
 use crate::gtk::gsettings;
@@ -227,8 +229,13 @@ mod imp {
         #[property(get, set, nullable)]
         pub font_size_request: RefCell<Option<FontSizeRequest>>,
 
-        /// PORTS: `surface.zig:154-170,611` `focused` (struct default `true`).
-        #[property(get, set, default = true)]
+        /// PORTS: `surface.zig:154-170,611` `focused`. The pspec default is `false`
+        /// (`:161`) while the private field starts `true` (`:611`, see [`Default`]).
+        ///
+        /// CORRECTION (task 20, S54-F3): the attribute was `default = true`, which
+        /// set the PSPEC default to the field's initial value; the reference's
+        /// `g_param_spec_get_default_value` reads `false`.
+        #[property(get, set)]
         pub focused: Cell<bool>,
 
         /// PORTS: `surface.zig:172-188,615` `mapped`.
@@ -249,17 +256,16 @@ mod imp {
         #[property(get, set, nullable)]
         pub min_size: RefCell<Option<Size>>,
 
-        /// PORTS: `surface.zig:222-240,586` `mouse-shape`.
+        /// PORTS: `surface.zig:222-240,586` `mouse-shape`, typed
+        /// `terminal.MouseShape` with pspec default `.text`.
         ///
-        /// PORT NOTE (concern): the reference registers `terminal.MouseShape` as a
-        /// GObject enum (`GhosttyMouseShape`); rustty's `mouse::Shape` deliberately
-        /// STRIPPED that registration to the apprt layer (rustty-vt R3 note). Until
-        /// the mouse-input task (T16/T17) needs the enum GType, this property
-        /// carries the shape's `#[repr(i32)]` discriminant, which round-trips to
-        /// [`MouseShape`] losslessly; the property NAME and notify semantics
-        /// (`notify::mouse-shape`) are preserved.
-        #[property(name = "mouse-shape", get, set)]
-        pub mouse_shape: Cell<i32>,
+        /// CORRECTION (task 20, S54-F3): this was a `Cell<i32>` (pspec default 0)
+        /// under a PORT NOTE saying the enum GType would come "until the mouse-input
+        /// task (T16/T17) needs" it. The GType is observable now — introspection,
+        /// `g_param_spec_get_default_value`, GtkBuilder — so the property carries the
+        /// `GhosttyMouseShape` registration ([`MouseShapeEnum`]).
+        #[property(name = "mouse-shape", get, set, builder(MouseShapeEnum::Text))]
+        pub mouse_shape: Cell<MouseShapeEnum>,
 
         /// PORTS: `surface.zig:202-220,589` `mouse-hidden`.
         #[property(get, set)]
@@ -495,7 +501,7 @@ mod imp {
                 key_table_prop: std::marker::PhantomData,
                 min_size: RefCell::new(None),
                 // `mouse_shape: .default` (`surface.zig:586`); `init` sets `.text`.
-                mouse_shape: Cell::new(MouseShape::Default as i32),
+                mouse_shape: Cell::new(MouseShapeEnum::from(MouseShape::Default)),
                 mouse_hidden: Cell::new(false),
                 mouse_hover_url: RefCell::new(None),
                 pwd: RefCell::new(None),
@@ -603,11 +609,15 @@ mod imp {
                     // `clipboard-read` (`:495-504`).
                     glib::subclass::Signal::builder("clipboard-read").build(),
                     // `clipboard-write` (`:480-492`), params `(apprt.Clipboard,
-                    // [*:0]const u8)`. PORT NOTE: `apprt.Clipboard` has no GObject type
-                    // yet, so its param rides as the enum's `i32` here. Emitted by
-                    // `Clipboard::set` after a non-confirm write (surface.rs `set_clipboard`).
+                    // [*:0]const u8)`. Emitted by `Clipboard::set` after a
+                    // non-confirm write (surface.rs `set_clipboard`).
+                    //
+                    // CORRECTION (task 20, S54-F3): the first param was
+                    // `i32::static_type()` under a note saying "`apprt.Clipboard` has
+                    // no GObject type yet". It has one: `GhosttyApprtClipboard`
+                    // ([`ClipboardEnum`], `gtypes.rs`).
                     glib::subclass::Signal::builder("clipboard-write")
-                        .param_types([i32::static_type(), String::static_type()])
+                        .param_types([ClipboardEnum::static_type(), String::static_type()])
                         .build(),
                     // `init` (`:507-516`).
                     glib::subclass::Signal::builder("init").build(),
@@ -647,7 +657,7 @@ mod imp {
             self.ime.replace(ImeState::default());
             self.cursor_pos.set(CursorPos { x: 0.0, y: 0.0 });
             // `priv.mouse_shape = .text` (`surface.zig:1796`).
-            self.mouse_shape.set(MouseShape::Text as i32);
+            self.mouse_shape.set(MouseShapeEnum::from(MouseShape::Text));
             self.mouse_hidden.set(false);
             self.focused.set(true);
             self.mapped.set(false);
@@ -1326,12 +1336,23 @@ impl Surface {
             .replace(Some(FontSizeRequest(parent_ref.font_size)));
         self.notify("font-size-request");
 
-        // The remainder needs a config (`:806-815`).
+        // Remainder needs a config. If there is no config we just assume
+        // we aren't inheriting any of these values (`:806-817`).
         if let Some(config_obj) = imp.config.borrow().as_ref() {
+            // Setup our cwd if configured to inherit
             if rustty_apprt_api::should_inherit_working_directory(context, config_obj.get()) {
-                let alloc = allocator_api2::alloc::Global;
-                if let Some(pwd) = parent_ref.pwd(alloc) {
-                    imp.pwd.replace(String::from_utf8(pwd).ok());
+                // if (parent.rt_surface.surface.getPwd()) |pwd| { ... }
+                //
+                // CORRECTION (task 20, S54-F1): this read `parent_ref.pwd(alloc)`,
+                // the CORE surface's terminal pwd (taken under the renderer mutex).
+                // The reference reads the parent WIDGET's `pwd` property, which is
+                // also set by the parent's own inheritance at creation — so a parent
+                // that inherited a directory but whose shell has not yet sent OSC 7
+                // passes it on in the reference and passed nothing here.
+                // SAFETY: `parent` is live (caller contract), so its `rt_surface` is
+                // the pinned apprt surface embedded in the parent widget's private.
+                if let Some(pwd) = unsafe { parent_widget_pwd(parent_ref.rt_surface) } {
+                    imp.pwd.replace(Some(pwd));
                     self.notify("pwd");
                 }
             }
@@ -1395,7 +1416,7 @@ impl Surface {
         }
         // Map the shape (carried as its `i32` discriminant) to a CSS cursor name
         // and set it (`:2389-2429`).
-        let name = mouse_shape_cursor_name(self.imp().mouse_shape.get());
+        let name = mouse_shape_cursor_name(self.imp().mouse_shape.get() as i32);
         self.upcast_ref::<gtk4::Widget>()
             .set_cursor_from_name(Some(name));
     }
@@ -1624,44 +1645,71 @@ impl Surface {
         true
     }
 
+    /// PORTS: `surface.zig:2296-2316` `setBellRinging`. Named `_inner` because the
+    /// `bell-ringing` property's generated setter owns `set_bell_ringing`; that
+    /// generated setter is the reference's `privateShallowFieldAccessor` (a plain
+    /// write), and THIS is the reference method every bell path calls.
+    ///
+    /// CORRECTION (task 20, S55-F2 + S54-F2): there was no such method. Callers
+    /// used the generated setter, which writes and notifies unconditionally, and
+    /// `ring_bell` carried the `setBellRinging(true)` half without the freeze. So
+    /// `notify::bell-ringing` fired on every focus-in, mouse press and key press
+    /// while the value did not change, and the notifications raised by `bell`
+    /// handlers and the ring-bell actions were not coalesced around the write. The
+    /// property's own contract (`surface.zig:62-68`) promises a notify only on a
+    /// full state change.
+    pub fn set_bell_ringing_inner(&self, ringing: bool) {
+        // Prevent duplicate change notifications if the signals we emit
+        // in this function cause this state to change again.
+        let _thaw = self.freeze_notify();
+
+        // Logic around bell reaction happens on every event even if we're
+        // already in the ringing state.
+        if ringing {
+            self.ring_bell();
+            // focus clears ringing state, so we should not change state to
+            // ringing if we're already focused
+            if self.focused() {
+                return;
+            }
+        }
+
+        // Property change only happens on actual state change
+        let imp = self.imp();
+        if imp.bell_ringing.get() == ringing {
+            return;
+        }
+        imp.bell_ringing.set(ringing);
+        self.notify_bell_ringing();
+    }
+
     /// Handle bell features that need to happen every time a BEL is received
     /// Currently this is audio and system but this could change in the future.
     ///
-    /// PORTS: `surface.zig:2548-2563` `ringBell` (B7 end state, f0f3f4d8d): emit
+    /// PORTS: `surface.zig:2561-2574` `ringBell` (B7 end state, f0f3f4d8d): emit
     /// the `bell` signal, then fan out to the `tab.`/`win.`/`app.ring-bell`
     /// widget actions (system beep, title bell, urgency — `window.rs`/`tab.rs` —
     /// and the application-owned audio bell, `application.rs` `action_ring_bell`).
-    /// The surface no longer owns any audio state.
     ///
-    /// PORT NOTE: the reference's `ringBell` is invoked by `setBellRinging(true)`
-    /// (`surface.zig:2287-2294`); rustty keeps `set_bell_ringing` as the plain
-    /// property write and hosts the full bell here, so the `.ring_bell` apprt
-    /// action (`application.rs`) and `commandFinished` both funnel through this
-    /// one method — including the reference handler's focused guard (f5419b9b1).
-    pub fn ring_bell(&self) {
+    /// CORRECTION (task 20): this used to also host the focused guard and the
+    /// `bell-ringing` write, with a PORT NOTE saying "rustty keeps
+    /// `set_bell_ringing` as the plain property write and hosts the full bell
+    /// here". Those belong to `setBellRinging` ([`Self::set_bell_ringing_inner`]),
+    /// which calls this; `ringBell` is private in the reference.
+    fn ring_bell(&self) {
         // Emit the signal
-        // `signals.bell.impl.emit(...)` (`:2551-2556`) — fire any bell subscriber
-        // BEFORE the action fan-out.
+        // `signals.bell.impl.emit(...)` — fire any bell subscriber BEFORE the
+        // action fan-out.
         self.emit_by_name::<()>("bell", &[]);
 
         // Activate actions if they exist
-        // (`:2558-2560`): the `tab.ring-bell` / `win.ring-bell` widget actions do
-        // the system beep, title bell, and attention/urgency (`window.rs`,
-        // `tab.rs`); `app.ring-bell` plays the application-owned audio bell
-        // (B7, `application.rs`). They bubble up from the surface widget.
+        // `tab.ring-bell` / `win.ring-bell` do the system beep, title bell, and
+        // attention/urgency (`window.rs`, `tab.rs`); `app.ring-bell` plays the
+        // application-owned audio bell (B7, `application.rs`). They bubble up from
+        // the surface widget.
         let _ = self.activate_action("tab.ring-bell", None);
         let _ = self.activate_action("win.ring-bell", None);
         let _ = self.activate_action("app.ring-bell", None);
-
-        // focus clears ringing state, so we should not change state to
-        // ringing if we're already focused (`surface.zig:2289-2294`, f5419b9b1).
-        if self.focused() {
-            return;
-        }
-
-        // The `bell-ringing` property write (`:2296-2300`); the border's bind-time
-        // `should_border_be_shown` closure re-evaluates, lighting the bell border.
-        self.set_bell_ringing(true);
     }
 
     /// PORTS: `surface.zig:1126-1133` `present`. Request that this terminal come to
@@ -2054,10 +2102,14 @@ impl Surface {
 
         let action = cfg.notify_on_command_finish_action;
 
-        // `if (action.bell) self.setBellRinging(true)` (`:1165`). In rustty the full
-        // bell lives in [`Surface::ring_bell`] (see its PORT NOTE).
+        // `if (action.bell) self.setBellRinging(true)` (`:1190`).
+        //
+        // CORRECTION (task 20, S54-F2): this called `self.ring_bell()`, whose note
+        // said "In rustty the full bell lives in [`Surface::ring_bell`]"; the write
+        // there was unconditional and unfrozen. See
+        // [`Surface::set_bell_ringing_inner`].
         if action.bell {
-            self.ring_bell();
+            self.set_bell_ringing_inner(true);
         }
 
         // `if (action.notify) { ... sendDesktopNotification(title, body) }`
@@ -2318,11 +2370,12 @@ impl Surface {
             }
 
             // `Surface.signals.@"clipboard-write".impl.emit(...)` with
-            // `(clipboard_type, text)` (`surface.zig:3832-3837`). PORT NOTE:
-            // `apprt.Clipboard` has no GObject type in this tier, so the param
-            // rides as the enum's `i32` (matching the signal declaration at
-            // `surface.rs:568`).
-            self.emit_by_name::<()>("clipboard-write", &[&(clipboard_type as i32), &text]);
+            // `(clipboard_type, text)` (`surface.zig:3832-3837`), the first as the
+            // `GhosttyApprtClipboard` enum the signal declares.
+            self.emit_by_name::<()>(
+                "clipboard-write",
+                &[&ClipboardEnum::from(clipboard_type), &text],
+            );
 
             return;
         }
@@ -2533,10 +2586,12 @@ impl Surface {
     /// (`:1596-1599`) with the language override applied and the GTK /
     /// desktop-activation vars stripped so they don't leak to the child.
     ///
-    /// PORT NOTE (deferred): the snap-path filtering (`:1625-1630`, comptime
-    /// `build_config.snap` — false in this build) lands with its own tier. The
-    /// winproto `addSubprocessEnv` hook and the quick-terminal env var
-    /// (`:1636-1642`) ARE ported below.
+    /// CORRECTION (task 20, S55-F1): this doc used to carry "PORT NOTE (deferred):
+    /// the snap-path filtering (`:1625-1630`, comptime `build_config.snap` — false
+    /// in this build) lands with its own tier". `snap` is a real build option
+    /// (`rustty_build_config::snap()`, set by `snap/snapcraft.yaml`'s build), so a
+    /// shipped snap leaked `SNAP_*` and snap-prefixed paths to child shells.
+    /// [`filter_snap_paths`] is the port, called below.
     #[must_use]
     pub fn default_termio_env(&self) -> rustty_global::EnvMap {
         let app = Application::default();
@@ -2569,6 +2624,13 @@ impl Surface {
             b"NOTIFY_SOCKET",
         ] {
             env.removev(key);
+        }
+
+        // Unset environment varies set by snaps if we're running in a snap.
+        // This allows Ghostty to further launch additional snaps.
+        // if (comptime build_config.snap) { if (env.get("SNAP") != null) try filterSnapPaths(alloc, &env); }
+        if rustty_build_config::snap() && env.hasv(b"SNAP") {
+            filter_snap_paths(&mut env);
         }
 
         // `if (ext.getAncestor(Window, self.as(gtk.Widget))) |window| { try
@@ -2874,7 +2936,7 @@ impl Surface {
 
                     // Bell stops ringing when any key is pressed that is used by
                     // the core in any way (`:1454-1456`).
-                    self.set_bell_ringing(false);
+                    self.set_bell_ringing_inner(false);
 
                     return true;
                 }
@@ -2917,13 +2979,15 @@ impl Surface {
 
         self.notify("focused");
 
-        // Bell stops ringing as soon as we gain focus (`:2764-2765`). The
-        // reference's `setBellRinging(false)` reduces here to the generated
-        // property setter (set + notify-on-change); the extra `ringBell` /
-        // freeze-notify semantics only matter for `setBellRinging(true)`, which
-        // this tier never calls — they land with the bell task (T16).
+        // Bell stops ringing as soon as we gain focus (`:2830`).
+        //
+        // CORRECTION (task 20, S55-F2): this used the generated property setter,
+        // under a note calling it "set + notify-on-change" and saying the
+        // freeze-notify semantics "only matter for `setBellRinging(true)`". The
+        // generated setter notifies on EVERY write, so every focus-in fired
+        // `notify::bell-ringing`; the change gate matters for `false` too.
         if focused {
-            self.set_bell_ringing(false);
+            self.set_bell_ringing_inner(false);
         }
     }
 
@@ -2997,7 +3061,7 @@ impl Surface {
         // SAFETY: `core` is the widget's boxed, initialized core surface.
         let grid = unsafe { &*core }.size.grid();
         let text = format!("{} x {}", grid.columns, grid.rows);
-        imp.resize_overlay.set_label(Some(&text));
+        imp.resize_overlay.set_label(Some(text.as_str()));
         imp.resize_overlay.schedule();
     }
 
@@ -3323,7 +3387,7 @@ impl Surface {
         };
 
         // Bell stops ringing if any mouse button is pressed (`:2794-2795`).
-        this.set_bell_ringing(false);
+        this.set_bell_ringing_inner(false);
 
         // Get our surface. If we don't have one, ignore this (`:2797-2799`).
         let Some(core) = this.core() else {
@@ -4711,6 +4775,96 @@ fn apply_command_overrides(
     }
 }
 
+/// PORTS: `surface.zig:1667-1740` `filterSnapPaths`. Filter out environment
+/// variables that start with forbidden prefixes.
+///
+/// PORT NOTE: the reference opens with `comptime assert(build_config.snap)`. Rust
+/// has no comptime assertion on a runtime-read build option, so the guarantee is
+/// held by the only caller ([`Surface::default_termio_env`] checks
+/// `rustty_build_config::snap()` first); the function itself is plain so the unit
+/// test can drive it in a non-snap build. The reference's arena is the two owned
+/// `Vec`s below, dropped on return.
+fn filter_snap_paths(env_map: &mut rustty_global::EnvMap) {
+    const SNAP_VARS: [&[u8]; 5] = [
+        b"SNAP",
+        b"SNAP_USER_COMMON",
+        b"SNAP_USER_DATA",
+        b"SNAP_DATA",
+        b"SNAP_COMMON",
+    ];
+
+    let mut env_to_remove: Vec<Vec<u8>> = Vec::new();
+    let mut env_to_update: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
+
+    for (key, value) in env_map.iter() {
+        // Ignore fields we set ourself
+        if key.as_slice() == b"TERMINFO" {
+            continue;
+        }
+        // `std.mem.startsWith(u8, key, "GHOSTTY")` — R2: the product env prefix.
+        if key.starts_with(rustty_identity::ENV_PREFIX.as_bytes()) {
+            continue;
+        }
+
+        // Any env var starting with SNAP must be removed
+        if key.starts_with(b"SNAP_") {
+            env_to_remove.push(key.clone());
+            continue;
+        }
+
+        let mut filtered_paths: Vec<&[u8]> = Vec::new();
+        let mut modified = false;
+        // `std.mem.splitAny(u8, value, ":")`.
+        for path in value.split(|&b| b == b':') {
+            let mut include = true;
+            for k in SNAP_VARS {
+                if let Some(snap_path) = env_map.getv(k) {
+                    if snap_path.is_empty() {
+                        continue;
+                    }
+                    if path.starts_with(snap_path) {
+                        include = false;
+                        modified = true;
+                        break;
+                    }
+                }
+            }
+            if include {
+                filtered_paths.push(path);
+            }
+        }
+
+        if modified {
+            if filtered_paths.is_empty() {
+                env_to_remove.push(key.clone());
+            } else {
+                // `std.mem.join(alloc, ":", filtered_paths.items)`.
+                let new_value = filtered_paths.join(&b':');
+                env_to_update.push((key.clone(), new_value));
+            }
+        }
+    }
+
+    for (key, value) in env_to_update {
+        env_map.put(&key, &value);
+    }
+    for key in env_to_remove {
+        env_map.removev(&key);
+    }
+}
+
+/// `parent.rt_surface.surface.getPwd()` (`surface.zig:812`): the `pwd` property of
+/// the widget that owns a core surface's apprt surface. `None` when the apprt
+/// surface has no widget backref or the widget has no pwd.
+///
+/// # Safety
+/// `rt_surface` must point at a live apprt surface (the pinned one embedded in a
+/// `Surface` widget's private).
+unsafe fn parent_widget_pwd(rt_surface: *mut ApprtSurface) -> Option<String> {
+    // SAFETY: caller contract.
+    unsafe { (*rt_surface).widget() }?.pwd()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5001,6 +5155,225 @@ mod tests {
         crate::gtk::register_resources();
         let _app = crate::gtk::class::application::Application::build_default_for_test();
         Surface::new(SurfaceOverrides::default())
+    }
+
+    /// S54-F3: the `mouse-shape` / `focused` pspecs and the `clipboard-write`
+    /// signal carry the reference's types and defaults (`surface.zig:154-170,
+    /// 222-240, 480-492`): `mouse-shape` is `GhosttyMouseShape` defaulting to
+    /// `.text`, `focused` defaults to `false` (the FIELD still starts `true`), and
+    /// `clipboard-write`'s first parameter is `GhosttyApprtClipboard`.
+    #[test]
+    #[ignore = "requires a display; run via cargo test -p rustty-apprt --features gtk,x11,wayland --lib surface_pspec -- --ignored"]
+    fn surface_pspec_types_and_defaults_match_the_reference() {
+        let surface = display_surface();
+
+        let shape = surface.find_property("mouse-shape").expect("mouse-shape");
+        assert_eq!(shape.value_type(), MouseShapeEnum::static_type());
+        assert_eq!(
+            shape.default_value().get::<MouseShapeEnum>().ok(),
+            Some(MouseShapeEnum::Text)
+        );
+
+        let focused = surface.find_property("focused").expect("focused");
+        assert_eq!(focused.default_value().get::<bool>().ok(), Some(false));
+        assert!(surface.focused(), "the private field still starts true");
+
+        let id =
+            glib::subclass::signal::SignalId::lookup("clipboard-write", Surface::static_type())
+                .expect("clipboard-write is registered");
+        let params: Vec<glib::Type> = id.query().param_types().iter().map(|t| t.type_()).collect();
+        assert_eq!(
+            params,
+            [ClipboardEnum::static_type(), String::static_type()]
+        );
+    }
+
+    /// S55-F1: `filterSnapPaths` (`surface.zig:1667-1740`) over a synthetic env.
+    /// Covers every branch: `SNAP_*` removed, the `SNAP` var itself removed (its own
+    /// value is a snap path), a colon list partially filtered and re-joined in
+    /// order, a list filtered to nothing removed, an empty snap var skipped rather
+    /// than matching everything, and `TERMINFO` / product-prefixed keys untouched
+    /// even when their value is a snap path. Display-free.
+    #[test]
+    fn filter_snap_paths_matches_the_reference() {
+        use rustty_global::EnvMap;
+
+        let mut env = EnvMap::default();
+        let product_key = format!("{}_RESOURCES_DIR", rustty_identity::ENV_PREFIX);
+        for (k, v) in [
+            ("SNAP", "/snap/rustty/12"),
+            ("SNAP_USER_DATA", "/home/u/snap/rustty/12"),
+            ("SNAP_DATA", ""),
+            (
+                "PATH",
+                "/snap/rustty/12/bin:/usr/bin:/home/u/snap/rustty/12/x:/bin",
+            ),
+            ("LD_LIBRARY_PATH", "/snap/rustty/12/lib"),
+            ("HOME", "/home/u"),
+            ("TERMINFO", "/snap/rustty/12/share/terminfo"),
+            (product_key.as_str(), "/snap/rustty/12/share/rustty"),
+        ] {
+            env.put(k.as_bytes(), v.as_bytes());
+        }
+
+        filter_snap_paths(&mut env);
+
+        let mut got: Vec<(String, String)> = env
+            .iter()
+            .map(|(k, v)| {
+                (
+                    String::from_utf8(k.clone()).unwrap(),
+                    String::from_utf8(v.clone()).unwrap(),
+                )
+            })
+            .collect();
+        got.sort();
+        let mut want = vec![
+            ("HOME".to_string(), "/home/u".to_string()),
+            ("PATH".to_string(), "/usr/bin:/bin".to_string()),
+            (
+                "TERMINFO".to_string(),
+                "/snap/rustty/12/share/terminfo".to_string(),
+            ),
+            (
+                product_key.clone(),
+                "/snap/rustty/12/share/rustty".to_string(),
+            ),
+        ];
+        want.sort();
+        assert_eq!(got, want);
+    }
+
+    /// S54-F1: `setParent` inherits `parent.rt_surface.surface.getPwd()` — the
+    /// parent WIDGET's `pwd` property (`surface.zig:812`), reached from the core
+    /// surface's `rt_surface`. A live core surface cannot be built in this tier, so
+    /// the lookup `set_parent` makes is driven directly with a real widget's pinned
+    /// apprt surface: the pwd comes back, and a second widget with none gives None.
+    #[test]
+    #[ignore = "requires a display; run via cargo test -p rustty-apprt --features gtk,x11,wayland --lib parent_widget_pwd -- --ignored"]
+    fn parent_widget_pwd_reads_the_parent_widget_property() {
+        let parent = display_surface();
+        let other = Surface::new(SurfaceOverrides::default());
+        parent.set_pwd(Some("/srv/inherited"));
+
+        // SAFETY: both `rt()` pointers are the widgets' pinned apprt surfaces, alive
+        // for this scope.
+        let got = unsafe { parent_widget_pwd(parent.rt().cast_mut()) };
+        assert_eq!(got.as_deref(), Some("/srv/inherited"));
+        let none = unsafe { parent_widget_pwd(other.rt().cast_mut()) };
+        assert_eq!(none, None);
+    }
+
+    /// S55-F2: `setBellRinging` (`surface.zig:2296-2316`). Pins the four things the
+    /// generated setter lost: the change gate (no `notify::bell-ringing` for a write
+    /// that does not change the value), the focused guard, the per-call `ringBell`
+    /// for every `true` even while already ringing, and the freeze that holds back
+    /// notifications raised by `bell` handlers until the write is done.
+    #[test]
+    #[ignore = "requires a display; run via cargo test -p rustty-apprt --features gtk,x11,wayland --lib set_bell_ringing -- --ignored"]
+    fn set_bell_ringing_gates_notify_and_freezes() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        let surface = display_surface();
+        let events: Rc<RefCell<Vec<&'static str>>> = Rc::default();
+
+        let sink = events.clone();
+        surface.connect_notify_local(Some("bell-ringing"), move |_, _| {
+            sink.borrow_mut().push("notify::bell-ringing");
+        });
+        let sink = events.clone();
+        surface.connect_notify_local(Some("zoom"), move |_, _| {
+            sink.borrow_mut().push("notify::zoom");
+        });
+        let sink = events.clone();
+        surface.connect_local("bell", false, move |args| {
+            let this = args[0]
+                .get::<Surface>()
+                .expect("bell is emitted on a Surface");
+            // A notification raised from inside a bell handler...
+            this.set_zoom(!this.zoom());
+            // ...must not be delivered until `setBellRinging` thaws.
+            sink.borrow_mut().push("bell handler returned");
+            None
+        });
+        let take = || std::mem::take(&mut *events.borrow_mut());
+
+        // Unchanged value: no notify at all.
+        surface.set_bell_ringing_inner(false);
+        surface.set_bell_ringing_inner(false);
+        assert_eq!(take(), Vec::<&str>::new());
+
+        // Focused (the struct default): the bell rings, the state does not change.
+        assert!(surface.focused());
+        surface.set_bell_ringing_inner(true);
+        assert_eq!(take(), ["bell handler returned", "notify::zoom"]);
+        assert!(!surface.bell_ringing());
+
+        // Unfocused: one state change, and a second ring notifies nothing new.
+        surface.imp().focused.set(false);
+        surface.set_bell_ringing_inner(true);
+        // Both notifications come after the handler returned; their relative order
+        // is GLib's notify-queue dispatch order at thaw, not the port's.
+        let mut got = take();
+        got[1..].sort_unstable();
+        assert_eq!(
+            got,
+            [
+                "bell handler returned",
+                "notify::bell-ringing",
+                "notify::zoom"
+            ]
+        );
+        surface.set_bell_ringing_inner(true);
+        assert_eq!(take(), ["bell handler returned", "notify::zoom"]);
+        assert!(surface.bell_ringing());
+
+        surface.set_bell_ringing_inner(false);
+        assert_eq!(take(), ["notify::bell-ringing"]);
+    }
+
+    /// S54-F2: `commandFinished`'s bell goes through `setBellRinging(true)`
+    /// (`surface.zig:1190`), so a second long command finishing while the bell is
+    /// already ringing rings again but does not re-notify `bell-ringing`.
+    #[test]
+    #[ignore = "requires a display; run via cargo test -p rustty-apprt --features gtk,x11,wayland --lib command_finished_bell -- --ignored"]
+    fn command_finished_bell_goes_through_set_bell_ringing() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        use rustty_config::value_types::{Duration, NotifyOnCommandFinish};
+
+        let surface = display_surface();
+        let mut cfg = rustty_config::Config::default_config();
+        cfg.notify_on_command_finish = NotifyOnCommandFinish::Always;
+        cfg.notify_on_command_finish_action.bell = true;
+        cfg.notify_on_command_finish_action.notify = false;
+        cfg.notify_on_command_finish_after = Duration { duration: 0 };
+        surface.imp().config.replace(Some(Config::new(&cfg)));
+        surface.imp().focused.set(false);
+
+        let bells = Rc::new(Cell::new(0u32));
+        let notifies = Rc::new(Cell::new(0u32));
+        let b = bells.clone();
+        surface.connect_local("bell", false, move |_| {
+            b.set(b.get() + 1);
+            None
+        });
+        let n = notifies.clone();
+        surface.connect_notify_local(Some("bell-ringing"), move |_, _| n.set(n.get() + 1));
+
+        let finished = rustty_apprt_api::action::CommandFinished {
+            exit_code: Some(0),
+            duration: Duration {
+                duration: 5_000_000_000,
+            },
+        };
+        assert!(surface.command_finished(finished));
+        assert!(surface.command_finished(finished));
+        assert_eq!(bells.get(), 2, "every finished command rings");
+        assert_eq!(notifies.get(), 1, "only the first is a state change");
+        assert!(surface.bell_ringing());
     }
 
     /// **Invariant 6 / §5.2** — `dispose` is idempotent (the null-guards). Populates

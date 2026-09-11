@@ -134,6 +134,17 @@ mod values {
     /// (`src/cli/version.zig`). R2: the repo is product identity, so rustty's is
     /// rustty's own — the workspace `Cargo.toml` `repository` value.
     pub const COMMIT_URL_PREFIX: &str = "https://github.com/AirelyDev/rustty/commit/";
+
+    /// The product website the About dialog links to. Reference:
+    /// `"https://ghostty.org"` (`src/apprt/gtk/class/window.zig:1970`). R2: the
+    /// per-token rename of that host, the one the macOS app already opens
+    /// (`macos/Sources/App/AppDelegate.swift`, `https://rustty.org/docs`).
+    pub const WEBSITE: &str = "https://rustty.org";
+
+    /// The issue tracker the About dialog links to. Reference:
+    /// `"https://github.com/ghostty-org/ghostty/issues"` (`window.zig:1984`). R2:
+    /// rustty's own repository, the workspace `Cargo.toml` `repository` value.
+    pub const ISSUE_URL: &str = "https://github.com/AirelyDev/rustty/issues";
 }
 
 // ---- ghostty reference values (parity harness only) -----------------------
@@ -198,6 +209,14 @@ mod values {
     /// `src/cli/version.zig` —
     /// `"\x1b]8;;https://github.com/ghostty-org/ghostty/commit/{s}\x1b\\"`.
     pub const COMMIT_URL_PREFIX: &str = "https://github.com/ghostty-org/ghostty/commit/";
+
+    /// Reference: `const website = "https://ghostty.org"`
+    /// (`src/apprt/gtk/class/window.zig:1970`).
+    pub const WEBSITE: &str = "https://ghostty.org";
+
+    /// Reference: `"https://github.com/ghostty-org/ghostty/issues"`
+    /// (`src/apprt/gtk/class/window.zig:1984`).
+    pub const ISSUE_URL: &str = "https://github.com/ghostty-org/ghostty/issues";
 }
 
 // ---- public re-exports (the stable identity API) --------------------------
@@ -234,6 +253,10 @@ pub const ENV_PREFIX: &str = values::ENV_PREFIX;
 pub const APP_NAME_TITLECASE: &str = values::APP_NAME_TITLECASE;
 /// URL prefix a source-commit hash is appended to (the `+version` OSC-8 link).
 pub const COMMIT_URL_PREFIX: &str = values::COMMIT_URL_PREFIX;
+/// Product website (the GTK About dialog's `website`).
+pub const WEBSITE: &str = values::WEBSITE;
+/// Issue tracker URL (the GTK About dialog's `issue-url`).
+pub const ISSUE_URL: &str = values::ISSUE_URL;
 
 /// The full XTVERSION (`CSI > 0 q`) wire response an application-level handler
 /// reports: `ESC P > | {XTVERSION_NAME} {VERSION} ESC \`.
@@ -282,6 +305,9 @@ mod tests {
             COMMIT_URL_PREFIX,
             "https://github.com/AirelyDev/rustty/commit/"
         );
+        assert_eq!(WEBSITE, "https://rustty.org");
+        assert_eq!(ISSUE_URL, "https://github.com/AirelyDev/rustty/issues");
+        assert!(!WEBSITE.contains("ghostty") && !ISSUE_URL.contains("ghostty"));
         // The vt library carries its OWN version (the reference's deliberate
         // app/lib split, build.zig:7-10); rustty's vt lib version has no
         // pre-release tag.
@@ -333,5 +359,8 @@ mod tests {
         // are exactly the strings the reference `reportXtversion` emits.
         assert_eq!(xtversion_response(), "\x1bP>|ghostty 1.3.2-dev\x1b\\");
         assert_eq!(libvt_xtversion_response(), "\x1bP>|libghostty\x1b\\");
+        // The GTK About dialog's links (`src/apprt/gtk/class/window.zig:1970,1984`).
+        assert_eq!(WEBSITE, "https://ghostty.org");
+        assert_eq!(ISSUE_URL, "https://github.com/ghostty-org/ghostty/issues");
     }
 }

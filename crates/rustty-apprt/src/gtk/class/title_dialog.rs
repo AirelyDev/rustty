@@ -109,6 +109,18 @@ mod imp {
                     .build()]
             })
         }
+
+        /// PORTS: `title_dialog.zig:151-161` `dispose` —
+        /// `gtk.Widget.disposeTemplate(self, getGObjectType())`, then the parent
+        /// dispose (which gtk4-rs chains after this returns).
+        ///
+        /// CORRECTION (task 20, S57-F1): this override was missing, so the class's
+        /// template children (the bound `entry`) were never released through the
+        /// template machinery. gtk4-rs does not call `gtk_widget_dispose_template`
+        /// on its own; every other templated class in this crate calls it here.
+        fn dispose(&self) {
+            self.dispose_template();
+        }
     }
 
     impl WidgetImpl for TitleDialog {}
@@ -173,6 +185,37 @@ impl TitleDialog {
                     }
                 }
             ),
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// S57-F1: `TitleDialog`'s own `dispose` releases its template children
+    /// (`title_dialog.zig:151-161`). `gtk_widget_dispose_template` clears each bound
+    /// child's struct field, so `entry` is unbound after it.
+    ///
+    /// The class's `ObjectImpl::dispose` is called DIRECTLY, not through
+    /// `g_object_run_dispose`: measured, a full `run_dispose` unbinds `entry` even
+    /// with the override removed (the parent classes' teardown gets there later),
+    /// so it cannot tell the two apart. What the reference adds is that THIS class's
+    /// dispose does it, before chaining up. The first assertion is the positive
+    /// half: the template really bound `entry`.
+    #[test]
+    #[ignore = "requires a display; run via cargo test -p rustty-apprt --features gtk,x11,wayland --lib title_dialog -- --ignored"]
+    fn title_dialog_dispose_releases_template_children() {
+        crate::gtk::init_for_display_test("title_dialog_dispose_releases_template_children");
+        let _ = libadwaita::init();
+        crate::gtk::register_resources();
+
+        let dialog = TitleDialog::new(Target::default(), None);
+        assert!(dialog.imp().entry.is_bound(), "the template binds `entry`");
+        dialog.imp().dispose();
+        assert!(
+            !dialog.imp().entry.is_bound(),
+            "dispose must run dispose_template, which clears the bound child"
         );
     }
 }
