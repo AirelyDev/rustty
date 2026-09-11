@@ -31,6 +31,17 @@ doctest = false
 # apprt's perform_ipc instead of the none backend when built for Linux/GTK.
 gtk = ["rustty-apprt/gtk"]
 
+# The reference's `build_options.x11` / `build_options.wayland`, which `+version`
+# reads to print the `libX11` / `libwayland` enabled|disabled lines
+# (`cli/version.zig:62-74`). They must exist HERE, not only on `rustty-apprt`,
+# because `cfg!(feature = ...)` in `version.rs` is evaluated in THIS crate: a
+# `rustty-apprt/x11` turned on elsewhere in the graph is invisible to it. Both
+# imply `gtk`, exactly as `crates/rustty/Cargo.toml` has it, and `crates/rustty`
+# forwards its own `x11`/`wayland` here so the shipped binary agrees with the
+# apprt it links. Added by task-18 with the GTK `+version` block (S70-F1).
+wayland = ["gtk", "rustty-apprt/wayland"]
+x11 = ["gtk", "rustty-apprt/x11"]
+
 [dependencies]
 # The `LOG`-class facade (DECISION-logging.md §6r4, call shape 2 — §6r
 # IMPORTANT 5's "rustty-cli calls logging::log directly" prescription was

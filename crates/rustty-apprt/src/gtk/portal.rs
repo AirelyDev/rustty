@@ -10,7 +10,8 @@
 //! [`crate::gtk::class::global_shortcuts`]'s own token helpers): the reference has
 //! TWO independent token generators — `portal.zig`'s (`usize`, formatted as a
 //! fixed-width hex string) and `class/global_shortcuts.zig`'s (`generateToken`,
-//! `:625`, a product-prefixed token). They are not shared upstream and are not
+//! `:687` — the note here said `:625`; verified against the pin by task-18 — a
+//! product-prefixed token). They are not shared upstream and are not
 //! shared here; each site keeps the token shape its own reference site emits, so
 //! the on-the-wire `handle_token` values match the oracle per call site.
 
@@ -28,24 +29,49 @@ pub const TOKEN_HEX_LEN: usize = size_of::<usize>() * 2;
 /// PORTS: `portal.zig:46` — the portal `Request` object-path prefix.
 const REQUEST_PATH_PREFIX: &str = "/org/freedesktop/portal/desktop/request";
 
-/// PORTS: `portal.zig:13-15` `generateToken`. A random token suitable for use in
+/// PORTS: `portal.zig:13-17` `generateToken`. A random token suitable for use in
 /// requests to the XDG Desktop Portal.
 ///
-/// PORT NOTE: the reference reaches `std.crypto.random`. The port has no CSPRNG
-/// dependency in this crate and does not need one: the token is not a secret, it
-/// is a per-request DISAMBIGUATOR that must merely be unpredictable enough not to
-/// collide with a concurrent request from this or another process. `glib`'s
-/// `random_int` (the GLib Mersenne-Twister PRNG, seeded from `/dev/urandom` at
-/// first use) is the same class of source the rest of the GTK tier already relies
-/// on. Two 32-bit draws fill a `usize` on 64-bit targets.
+/// CORRECTION (task-18, closes S48-F4). The note that stood here said "the
+/// reference reaches `std.crypto.random`. The port has no CSPRNG dependency in
+/// this crate and does not need one", and drew from `glib::random_int`. Both
+/// halves were wrong, and the second one was wrong in the direction that matters.
+///
+/// * **The entropy claim was stale.** At the pin the reference does not name
+///   `std.crypto.random` at all; `e8525c0fd` ("Update to Zig 0.16.0") rewrote it
+///   to `std.Random.IoSource{ .io = global.io() }`. That is not a downgrade:
+///   `std.Io.random` is documented as "obtains entropy from a cryptographically
+///   secure pseudo-random number generator", seeded by `randomSecure` (getrandom
+///   / arc4random / CNG) with an ASLR+time fallback ONLY when the OS entropy
+///   source is unavailable. So the reference used a CSPRNG before the rename and
+///   uses a CSPRNG after it — the source CLASS never changed.
+/// * **"No CSPRNG dependency in this crate" was false.** This crate's OTHER
+///   portal token generator — [`crate::gtk::class::global_shortcuts`]'s
+///   `generate_token`, the twin the module note below already points at — has
+///   called `rustty_os::file::crypto_random_bytes` all along. There was never a
+///   dependency to avoid, so the substitution bought nothing and cost the source
+///   class. It now draws from the same shim, which is what `std.Io.random`
+///   resolves to on every platform rustty targets.
+/// * The `glib::random_int` loop also carried a latent 32-bit bug: on a target
+///   where `usize` is 32 bits, `token << 32` is a shift overflow (a debug-build
+///   panic, a wrong value in release). The byte fill below has no width
+///   assumption.
+///
+/// Why the source class is worth keeping even though the token is not a secret:
+/// the portal spec requires the client to compute the `Request` object path and
+/// subscribe to it BEFORE issuing the call, so the token's job is to be unique.
+/// A predictable token is not obviously exploitable — the path is namespaced by
+/// the bus-assigned unique name, which a peer cannot forge. But "not obviously
+/// exploitable" is the argument, not the requirement, and it is an argument about
+/// the portal protocol that would have to be re-made every time the token's use
+/// changed. Matching the reference's source costs one function call, so the port
+/// does not spend a security argument to save it.
 pub fn generate_token() -> usize {
-    let mut token: usize = 0;
-    let mut filled = 0;
-    while filled < size_of::<usize>() {
-        token = (token << 32) | (glib::random_int() as usize);
-        filled += 4;
-    }
-    token
+    // const rng_impl: std.Random.IoSource = .{ .io = global.io() };
+    // return rng_impl.interface().int(usize);
+    let mut buf = [0u8; size_of::<usize>()];
+    rustty_os::file::crypto_random_bytes(&mut buf);
+    usize::from_ne_bytes(buf)
 }
 
 /// PORTS: `portal.zig:18-20` `formatToken`. Format a request token consistently
@@ -94,6 +120,35 @@ pub fn parse_request_path_token(request_path: &str) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// S48-F4 regression pin. Two properties the `glib::random_int` loop this
+    /// replaced could not hold: the draw must span the FULL `usize` width (that
+    /// loop built the value with `token << 32`, a shift overflow on a 32-bit
+    /// target — debug panic, wrong value in release), and consecutive tokens must
+    /// differ (a token that repeats collides with this process's own in-flight
+    /// `Request` object path, which is the one thing the token exists to prevent).
+    ///
+    /// Not a test that the source is a CSPRNG — no black-box test can be. That
+    /// property is held by the CALL, `rustty_os::file::crypto_random_bytes`, whose
+    /// own platform arms are tested in rustty-os; this pins that the call's full
+    /// output reaches the token.
+    #[test]
+    fn portal_generate_token_spans_the_full_usize_width() {
+        let half = usize::BITS / 2;
+        let mut high = false;
+        let mut low = false;
+        let mut distinct = false;
+        let first = generate_token();
+        for _ in 0..64 {
+            let t = generate_token();
+            distinct |= t != first;
+            high |= (t >> half) != 0;
+            low |= (t & (usize::MAX >> half)) != 0;
+        }
+        assert!(high, "no token set a bit in the high half of `usize`");
+        assert!(low, "no token set a bit in the low half of `usize`");
+        assert!(distinct, "64 consecutive tokens were all identical");
+    }
 
     /// PORTS: `portal.zig:67-75` `test "formatToken pads to fixed width"`.
     #[test]

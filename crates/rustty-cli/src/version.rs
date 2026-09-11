@@ -10,6 +10,18 @@
 //! commit hyperlink now emits: `build.rs` captures the source commit (the
 //! `+BUILD`-metadata analog) and `rustty_identity::COMMIT_URL_PREFIX` supplies
 //! the repo (R2).
+//!
+//! CORRECTION (task-18, S70-F1): "done, nothing deferred" was WRONG when it was
+//! written — the whole `app_runtime == .gtk` block (`version.zig:49-75`: kernel
+//! version, desktop env, GTK build/runtime, libadwaita build/runtime, libX11,
+//! libwayland) was absent, kept only as a comment. It is ported now. Two things
+//! for whoever reads this next: the block compiles ONLY under
+//! `--features gtk` on Linux/FreeBSD, so the macOS lane can never exercise it —
+//! [`write_gtk_block`] exists precisely so the FORMAT is still asserted on every
+//! host; and `libX11`/`libwayland` read `cfg!(feature = ...)` IN THIS CRATE, so
+//! `rustty-cli` needs its own `x11`/`wayland` features (it has them) and
+//! `crates/rustty` must forward them (it does). If you add a build option the
+//! block prints, it has to reach this crate the same way.
 
 // const std = @import("std");
 // const build_options = @import("build_options");
@@ -23,8 +35,17 @@ use rustty_build_config as build_config;
 //
 // const gtk_version = @import("../apprt/gtk/gtk_version.zig");
 // const adw_version = @import("../apprt/gtk/adw_version.zig");
-//   -> only referenced in the comptime `app_runtime == .gtk` block, which is
-//      statically false for the headless `.none` build; not imported here.
+//
+// CORRECTION (task-18, closes S70-F1). The note that stood here said these were
+// "only referenced in the comptime `app_runtime == .gtk` block, which is
+// statically false for the headless `.none` build; not imported here." That was
+// true when it was written and is no longer: `rustty-cli` gained a `gtk` feature
+// (forwarding `rustty-apprt/gtk`) and the GTK apprt's `gtk_version`/`adw_version`
+// modules landed, so the block is now PORTED below under
+// `#[cfg(all(feature = "gtk", any(target_os = "linux", target_os = "freebsd")))]`
+// and these two modules ARE imported there.
+#[cfg(all(feature = "gtk", any(target_os = "linux", target_os = "freebsd")))]
+use rustty_apprt::gtk::{adw_version, gtk_version};
 
 use crate::rustty::Error;
 
@@ -108,6 +129,122 @@ pub fn run() -> Result<u8, Error> {
     write_version(&mut stdout, tty)
 }
 
+/// The `{t}` tag name of a [`rustty_os::desktop::DesktopEnvironment`] — the
+/// reference's `{t}` on `internal_os.desktopEnvironment(&environ_map)`
+/// (`desktop.zig:73-78`: `gnome, macos, other, windows`).
+// Used ONLY by the `cfg`-gated GTK block in `write_version` (and by the tests).
+// Off that lane it is legitimately unused, so the `dead_code` allow is scoped to
+// exactly that case rather than blanket-applied.
+#[cfg_attr(
+    not(all(feature = "gtk", any(target_os = "linux", target_os = "freebsd"))),
+    allow(dead_code)
+)]
+fn desktop_environment_tag(de: rustty_os::desktop::DesktopEnvironment) -> &'static str {
+    match de {
+        rustty_os::desktop::DesktopEnvironment::Gnome => "gnome",
+        rustty_os::desktop::DesktopEnvironment::Macos => "macos",
+        rustty_os::desktop::DesktopEnvironment::Other => "other",
+        rustty_os::desktop::DesktopEnvironment::Windows => "windows",
+    }
+}
+
+/// The already-read inputs to the reference's `app_runtime == .gtk` block
+/// (`version.zig:49-75`).
+///
+/// PORT NOTE: a seam, not a divergence — same shape as [`write_version`] itself.
+/// The block is `cfg`-gated to a GTK Linux/FreeBSD build, so a test that called
+/// the real `gtk_version::runtime_version()` could not compile, let alone run, on
+/// the macOS lane. Lifting the four reads out makes the FORMAT — which is the
+/// whole of what S70-F1 reported missing — assertable on every host.
+// Used ONLY by the `cfg`-gated GTK block in `write_version` (and by the tests).
+// Off that lane it is legitimately unused, so the `dead_code` allow is scoped to
+// exactly that case rather than blanket-applied.
+#[cfg_attr(
+    not(all(feature = "gtk", any(target_os = "linux", target_os = "freebsd"))),
+    allow(dead_code)
+)]
+struct GtkBlock<'a> {
+    /// `None` = the target is not Linux, so the reference's inner
+    /// `builtin.os.tag == .linux` branch does not run and the line is omitted.
+    /// `Some(None)` = Linux, but `getKernelInfo` failed.
+    kernel_info: Option<Option<&'a [u8]>>,
+    desktop_env: &'static str,
+    gtk_build: (u16, u16, u16),
+    gtk_runtime: (u16, u16, u16),
+    adw_build: (u16, u16, u16),
+    adw_runtime: (u16, u16, u16),
+    x11: bool,
+    wayland: bool,
+}
+
+/// PORTS: `version.zig:49-75` — the body of the `app_runtime == .gtk` block.
+///
+/// PORT NOTE (`build :`). The reference prints `gtk_version.comptime_version` /
+/// `adw_version.comptime_version`, read from the BUILD BOX's `gtk/version.h`.
+/// rustty has no such header include and therefore no `comptime_version`; the
+/// documented stand-in is the pinned API BASELINE the crate compiles against
+/// (`gtk_version.rs:38-47`, `adw_version.rs:43`), which is the same quantity the
+/// reference's value serves as — the version the binary was COMPILED against.
+/// Passed in by the caller so this stays host-independent.
+// Used ONLY by the `cfg`-gated GTK block in `write_version` (and by the tests).
+// Off that lane it is legitimately unused, so the `dead_code` allow is scoped to
+// exactly that case rather than blanket-applied.
+#[cfg_attr(
+    not(all(feature = "gtk", any(target_os = "linux", target_os = "freebsd"))),
+    allow(dead_code)
+)]
+fn write_gtk_block<W: std::io::Write>(stdout: &mut W, b: &GtkBlock<'_>) -> Result<(), Error> {
+    // if (comptime builtin.os.tag == .linux) {
+    if let Some(kernel_info) = b.kernel_info {
+        // try stdout.print("  - kernel version: {s}\n", .{kernel_info orelse "Kernel information unavailable"});
+        write!(stdout, "  - kernel version: ")?;
+        stdout.write_all(kernel_info.unwrap_or(b"Kernel information unavailable"))?;
+        writeln!(stdout)?;
+    }
+    // try stdout.print("  - desktop env   : {t}\n", .{internal_os.desktopEnvironment(&environ_map)});
+    writeln!(stdout, "  - desktop env   : {}", b.desktop_env)?;
+    // try stdout.print("  - GTK version   :\n", .{});
+    writeln!(stdout, "  - GTK version   :")?;
+    // try stdout.print("    build         : {f}\n", .{gtk_version.comptime_version});
+    let (a, i, c) = b.gtk_build;
+    writeln!(stdout, "    build         : {a}.{i}.{c}")?;
+    // try stdout.print("    runtime       : {f}\n", .{gtk_version.getRuntimeVersion()});
+    let (a, i, c) = b.gtk_runtime;
+    writeln!(stdout, "    runtime       : {a}.{i}.{c}")?;
+    // try stdout.print("  - libadwaita    : enabled\n", .{});
+    writeln!(stdout, "  - libadwaita    : enabled")?;
+    // try stdout.print("    build         : {f}\n", .{adw_version.comptime_version});
+    let (a, i, c) = b.adw_build;
+    writeln!(stdout, "    build         : {a}.{i}.{c}")?;
+    // try stdout.print("    runtime       : {f}\n", .{adw_version.getRuntimeVersion()});
+    let (a, i, c) = b.adw_runtime;
+    writeln!(stdout, "    runtime       : {a}.{i}.{c}")?;
+    // if (comptime build_options.x11) {
+    //     try stdout.print("  - libX11        : enabled\n", .{});
+    // } else {
+    //     try stdout.print("  - libX11        : disabled\n", .{});
+    // }
+    writeln!(
+        stdout,
+        "  - libX11        : {}",
+        if b.x11 { "enabled" } else { "disabled" }
+    )?;
+
+    // We say `libwayland` since it is possible to build Rustty without
+    // Wayland integration but with Wayland-enabled GTK
+    // if (comptime build_options.wayland) {
+    //     try stdout.print("  - libwayland    : enabled\n", .{});
+    // } else {
+    //     try stdout.print("  - libwayland    : disabled\n", .{});
+    // }
+    writeln!(
+        stdout,
+        "  - libwayland    : {}",
+        if b.wayland { "enabled" } else { "disabled" }
+    )?;
+    Ok(())
+}
+
 /// The body of `run`, over an arbitrary sink and an explicit `tty` flag.
 ///
 /// PORT NOTE: a seam, not a divergence — the reference already threads `stdout`
@@ -186,41 +323,59 @@ fn write_version<W: std::io::Write>(stdout: &mut W, tty: bool) -> Result<u8, Err
     writeln!(stdout, "  - renderer      : {}", renderer_type_name())?;
     // try stdout.print("  - libxev        : {t}\n", .{xev.backend});
     writeln!(stdout, "  - libxev        : {}", libxev_backend_tag())?;
-    // PORT NOTE: the GTK block below is a comptime branch
-    // (`build_config.app_runtime == .gtk`), statically false for the headless
-    // `.none` build this milestone targets, so it is compiled out. It ports with
-    // the GTK apprt (Phase-3), where the `gtk` runtime and its
-    // `internal_os.getKernelInfo`/`desktopEnvironment` + `gtk_version`/
-    // `adw_version` + `build_options.x11`/`.wayland` helpers land. Its inner
-    // comments are preserved verbatim here (R1):
+    // CORRECTION (task-18, closes S70-F1). The note that stood here said the GTK
+    // block "ports with the GTK apprt (Phase-3)" and kept the reference body as a
+    // preserved comment. Both halves of that premise have since landed —
+    // `rustty-apprt/src/gtk/{gtk_version,adw_version}.rs`, `rustty_os::
+    // {getKernelInfo,desktopEnvironment}`, and the `x11`/`wayland` cargo features
+    // — so the block is LIVE below and the note was describing a finished thing
+    // as pending. The reference lines are preserved inline at each statement (R1)
+    // rather than as one dead block.
     //
-    //     if (comptime build_config.app_runtime == .gtk) {
-    //         if (comptime builtin.os.tag == .linux) {
-    //             const kernel_info = internal_os.getKernelInfo(alloc);
-    //             defer if (kernel_info) |k| alloc.free(k);
-    //             try stdout.print("  - kernel version: {s}\n", .{kernel_info orelse "Kernel information unavailable"});
-    //         }
-    //         try stdout.print("  - desktop env   : {t}\n", .{internal_os.desktopEnvironment()});
-    //         try stdout.print("  - GTK version   :\n", .{});
-    //         try stdout.print("    build         : {f}\n", .{gtk_version.comptime_version});
-    //         try stdout.print("    runtime       : {f}\n", .{gtk_version.getRuntimeVersion()});
-    //         try stdout.print("  - libadwaita    : enabled\n", .{});
-    //         try stdout.print("    build         : {f}\n", .{adw_version.comptime_version});
-    //         try stdout.print("    runtime       : {f}\n", .{adw_version.getRuntimeVersion()});
-    //         if (comptime build_options.x11) {
-    //             try stdout.print("  - libX11        : enabled\n", .{});
-    //         } else {
-    //             try stdout.print("  - libX11        : disabled\n", .{});
-    //         }
+    // if (comptime build_config.app_runtime == .gtk) {
     //
-    //         // We say `libwayland` since it is possible to build Rustty without
-    //         // Wayland integration but with Wayland-enabled GTK
-    //         if (comptime build_options.wayland) {
-    //             try stdout.print("  - libwayland    : enabled\n", .{});
-    //         } else {
-    //             try stdout.print("  - libwayland    : disabled\n", .{});
-    //         }
-    //     }
+    // PORT NOTE (the condition). The reference's `build_config.app_runtime` is a
+    // BUILD option; rustty's analog for "this build links the GTK apprt" is the
+    // cargo `gtk` feature, which is what `crates/rustty/Cargo.toml` turns on for
+    // exactly the targets whose `Runtime::default_for` is `.gtk`
+    // (`apprt/runtime.zig:14-24` -> linux + freebsd). Reading
+    // `build_config::app_runtime()` instead would be WRONG here: it is a const fn
+    // of the host target, so it says `Gtk` on Linux even in a build that never
+    // linked gtk4 and where `gtk_version` does not exist to call.
+    #[cfg(all(feature = "gtk", any(target_os = "linux", target_os = "freebsd")))]
+    {
+        //     if (comptime builtin.os.tag == .linux) {
+        //         const kernel_info = internal_os.getKernelInfo(alloc);
+        //         defer if (kernel_info) |k| alloc.free(k);
+        //         try stdout.print("  - kernel version: {s}\n", .{kernel_info orelse "Kernel information unavailable"});
+        //     }
+        // PORT NOTE: `getKernelInfo` owns its buffer (`Vec<u8>`), so the
+        // reference's `defer alloc.free` is the drop at the end of the block.
+        // Bytes, not `String` (memory: zig-byteslice-to-rust-rawbytes) — it is
+        // `uname(2)` output.
+        #[cfg(target_os = "linux")]
+        let kernel_info: Option<Option<Vec<u8>>> = Some(rustty_os::getKernelInfo());
+        #[cfg(not(target_os = "linux"))]
+        let kernel_info: Option<Option<Vec<u8>>> = None;
+
+        //     try stdout.print("  - desktop env   : {t}\n", .{internal_os.desktopEnvironment(&environ_map)});
+        // var environ_map = try global.environMap(); defer environ_map.deinit();
+        let environ_map = rustty_global::environ_map();
+
+        write_gtk_block(
+            stdout,
+            &GtkBlock {
+                kernel_info: kernel_info.as_ref().map(Option::as_deref),
+                desktop_env: desktop_environment_tag(rustty_os::desktopEnvironment(&environ_map)),
+                gtk_build: gtk_version::BASELINE,
+                gtk_runtime: gtk_version::runtime_version(),
+                adw_build: adw_version::BASELINE,
+                adw_runtime: adw_version::runtime_version(),
+                x11: cfg!(feature = "x11"),
+                wayland: cfg!(feature = "wayland"),
+            },
+        )?;
+    }
 
     // Don't forget to flush!
     // try stdout.flush();
@@ -343,5 +498,164 @@ mod tests {
             "no OSC-8 may be emitted when stdout is not a tty: {out:?}"
         );
         assert!(out.starts_with(rustty_identity::APP_NAME_TITLECASE));
+    }
+
+    /// PORTS the FORMAT of `version.zig:49-75` (the `app_runtime == .gtk` block),
+    /// which `+version` omitted entirely until task-18 (S70-F1).
+    ///
+    /// Column alignment is load-bearing: the reference pads every label to the
+    /// same width (`"  - kernel version: "`, `"  - desktop env   : "`,
+    /// `"    build         : "`), and a `+version` diff against upstream is how
+    /// anyone would notice. Asserted byte-for-byte against the reference's own
+    /// literals rather than by `contains`.
+    #[test]
+    fn gtk_block_matches_the_reference_format_on_linux() {
+        let mut buf: Vec<u8> = Vec::new();
+        write_gtk_block(
+            &mut buf,
+            &GtkBlock {
+                kernel_info: Some(Some(b"Linux 6.11.3-200.fc40.x86_64")),
+                desktop_env: "gnome",
+                gtk_build: (4, 14, 0),
+                gtk_runtime: (4, 22, 4),
+                adw_build: (1, 5, 0),
+                adw_runtime: (1, 6, 2),
+                x11: true,
+                wayland: false,
+            },
+        )
+        .expect("write_gtk_block");
+        assert_eq!(
+            String::from_utf8(buf).expect("utf-8"),
+            concat!(
+                "  - kernel version: Linux 6.11.3-200.fc40.x86_64\n",
+                "  - desktop env   : gnome\n",
+                "  - GTK version   :\n",
+                "    build         : 4.14.0\n",
+                "    runtime       : 4.22.4\n",
+                "  - libadwaita    : enabled\n",
+                "    build         : 1.5.0\n",
+                "    runtime       : 1.6.2\n",
+                "  - libX11        : enabled\n",
+                "  - libwayland    : disabled\n",
+            )
+        );
+    }
+
+    /// The reference's inner `if (comptime builtin.os.tag == .linux)` — a
+    /// FreeBSD GTK build prints the block WITHOUT the kernel line — and the
+    /// `orelse "Kernel information unavailable"` fallback, which is the arm a
+    /// `/proc`-less or failing `uname` takes.
+    #[test]
+    fn gtk_block_kernel_line_is_linux_only_and_has_a_fallback() {
+        let mut buf: Vec<u8> = Vec::new();
+        write_gtk_block(
+            &mut buf,
+            &GtkBlock {
+                kernel_info: None,
+                desktop_env: "other",
+                gtk_build: (4, 14, 0),
+                gtk_runtime: (4, 14, 0),
+                adw_build: (1, 5, 0),
+                adw_runtime: (1, 5, 0),
+                x11: false,
+                wayland: true,
+            },
+        )
+        .expect("write_gtk_block");
+        let out = String::from_utf8(buf).expect("utf-8");
+        assert!(
+            !out.contains("kernel version"),
+            "non-Linux GTK build must omit the kernel line: {out:?}"
+        );
+        assert!(out.starts_with("  - desktop env   : other\n"), "{out:?}");
+        assert!(
+            out.ends_with("  - libX11        : disabled\n  - libwayland    : enabled\n"),
+            "{out:?}"
+        );
+
+        let mut buf: Vec<u8> = Vec::new();
+        write_gtk_block(
+            &mut buf,
+            &GtkBlock {
+                kernel_info: Some(None),
+                desktop_env: "gnome",
+                gtk_build: (4, 14, 0),
+                gtk_runtime: (4, 14, 0),
+                adw_build: (1, 5, 0),
+                adw_runtime: (1, 5, 0),
+                x11: true,
+                wayland: true,
+            },
+        )
+        .expect("write_gtk_block");
+        assert!(String::from_utf8(buf)
+            .expect("utf-8")
+            .starts_with("  - kernel version: Kernel information unavailable\n"));
+    }
+
+    /// The `{t}` tag names the reference prints for `desktopEnvironment`
+    /// (`os/desktop.zig:73-78`).
+    #[test]
+    fn desktop_environment_tags_are_the_reference_tag_names() {
+        use rustty_os::desktop::DesktopEnvironment as De;
+        assert_eq!(desktop_environment_tag(De::Gnome), "gnome");
+        assert_eq!(desktop_environment_tag(De::Macos), "macos");
+        assert_eq!(desktop_environment_tag(De::Other), "other");
+        assert_eq!(desktop_environment_tag(De::Windows), "windows");
+    }
+
+    /// Off the GTK lane `+version` must be UNCHANGED — the block is the
+    /// reference's `comptime` branch, so the headless build emits nothing extra.
+    #[test]
+    #[cfg(not(all(feature = "gtk", any(target_os = "linux", target_os = "freebsd"))))]
+    fn non_gtk_version_output_has_no_gtk_block() {
+        let mut buf: Vec<u8> = Vec::new();
+        write_version(&mut buf, false).expect("write_version");
+        let out = String::from_utf8(buf).expect("utf-8");
+        for marker in [
+            "kernel version",
+            "desktop env",
+            "GTK version",
+            "libadwaita",
+            "libX11",
+            "libwayland",
+        ] {
+            assert!(
+                !out.contains(marker),
+                "{marker:?} leaked into a non-GTK +version: {out:?}"
+            );
+        }
+    }
+
+    /// On the GTK lane it must be PRESENT — the arm that actually closes S70-F1.
+    /// Runs only where the block compiles (the Linux VM).
+    #[test]
+    #[cfg(all(feature = "gtk", any(target_os = "linux", target_os = "freebsd")))]
+    fn gtk_version_output_carries_the_gtk_block() {
+        let mut buf: Vec<u8> = Vec::new();
+        write_version(&mut buf, false).expect("write_version");
+        let out = String::from_utf8(buf).expect("utf-8");
+        for marker in [
+            "  - desktop env   : ",
+            "  - GTK version   :\n",
+            "  - libadwaita    : enabled\n",
+            "  - libX11        : ",
+            "  - libwayland    : ",
+        ] {
+            assert!(
+                out.contains(marker),
+                "{marker:?} missing from the GTK +version: {out:?}"
+            );
+        }
+        #[cfg(target_os = "linux")]
+        assert!(out.contains("  - kernel version: "), "{out:?}");
+        // The block follows the libxev line, as in the reference.
+        let xev = out.find("  - libxev        : ").expect("libxev line");
+        let de = out.find("  - desktop env   : ").expect("desktop env line");
+        assert!(
+            xev < de,
+            "the GTK block must follow the libxev line: {out:?}"
+        );
     }
 }

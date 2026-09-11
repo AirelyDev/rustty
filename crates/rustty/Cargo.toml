@@ -55,8 +55,10 @@ gtk = ["rustty-apprt/gtk", "rustty-cli/gtk", "dep:allocator-api2"]
 # plain `--no-default-features --features gtk` build stays noop-only. `x11`
 # additionally makes `GDK_BACKEND=x11` runs land on the real X11 arm rather
 # than falling through to noop.
-wayland = ["gtk", "rustty-apprt/wayland"]
-x11 = ["gtk", "rustty-apprt/x11"]
+# task-18 (S70-F1): also forwarded to rustty-cli, whose `+version` GTK block
+# reads `cfg!(feature = "x11")`/`cfg!(feature = "wayland")` in ITS own crate.
+wayland = ["gtk", "rustty-apprt/wayland", "rustty-cli/wayland"]
+x11 = ["gtk", "rustty-apprt/x11", "rustty-cli/x11"]
 
 # PACKAGING options — the ports of the reference's `-Dflatpak=true` and
 # `-Dsnap`, which its own `flatpak/com.mitchellh.ghostty.yml` and
