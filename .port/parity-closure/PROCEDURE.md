@@ -118,6 +118,51 @@ asserted it advances by one.
 On this plan a "negative control" has three times turned out not to exercise the thing it
 claimed. Prove the control fails, then prove it fails *for the stated reason*.
 
+## Writing a PORT NOTE: two rules that prevent the plan's most recurrent defect (2026-09-11)
+
+The stale note is this plan's most recurrent defect class. It has been found in almost every
+stage: four files claiming a crate had no logging facade after it gained one; a comment naming
+the process-killing test fixture as the one in use; a header claiming all thirteen sites were
+restored when two were waived; a waiver that propagated into a code comment telling the next
+implementer not to uncomment a log call; a module header listing nine deferred functions, all
+of them live. Task 18 closed eight such rows and found four more instances that no row claims.
+
+These two rules come out of that task's measurements (`NEW-FINDINGS.md` N33) and bind whenever
+you WRITE a note, not only when you audit one.
+
+**1. Put the deferral note AT the deferred thing, never in a summary list at the top of a
+file.** `crates/rustty-termio/src/exec.rs` is the controlled experiment. Its module header
+carried a hand-maintained inventory of nine deferred function names; it went stale **nine ways
+at once**, and was still summarising them as deferred while three of the per-function notes
+**beside the code they describe** had already been struck individually as that code landed
+(`[M3]`, `[WS20]`, `[W6]`). The same shape produced `S211-F7`, `S72-F1` and `S83-F6` — three of
+task 18's eight rows, against the one a machine check would have caught. A note next to the
+thing it describes is read by whoever changes that thing; a note at the top of the file is read
+by nobody who is in a position to update it. **A module header may say THAT something is
+deferred and point at the site. It must not enumerate what, and it must not restate why.**
+
+**2. A note is mechanically checkable exactly when it asserts a DENOTATION — a number, or a
+symbol whose existence decides the claim. It is not checkable when it asserts a REASON, a SCOPE
+("this task lands only…") or a PLAN ("ports with the GTK apprt in Phase-3").** The
+reason-shaped notes are both the majority and the ones that rot hardest, because the work they
+describe moves and the sentence does not.
+
+This is a rule about how to WRITE, not only about what a gate can see. Two consequences:
+
+- **Prefer the denotation.** "`Selection.zig` has 20 `test` blocks; all 20 are ported" can be
+  checked by anyone in one command. "the Selection tests are ported" cannot. Where a note can
+  carry a count, a symbol name or a file:line, carry it — you are converting a claim that rots
+  silently into one that can be caught.
+- **Where you must write a reason, date it and bound it.** A reason-shaped note is a claim
+  about a state of the world that will change. Say which change retires it
+  ("until `rustty-oniguruma` lands" is retired by that crate existing; "the port has no CSPRNG
+  dependency in this crate" was already false when written). A reason with no expiry condition
+  outlives its truth and nothing can tell.
+
+And when you correct one: **mark it as a CORRECTION and quote what it used to say.** The
+evidence of what was believed is worth keeping, and a silent rewrite destroys the only record
+of how the drift happened. Every correction on this plan has followed that convention.
+
 ## Constraints that bind every row
 
 - **R1 full fidelity** — comments, tests assertion-for-assertion, error paths.

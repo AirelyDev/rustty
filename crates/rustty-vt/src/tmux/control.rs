@@ -27,7 +27,11 @@
 //! true. Only the REASON was stale, which is the kind of half-false note that
 //! survives a reading — the conclusion still looked right. Whether to make the
 //! feature default-on is a separate question from this row and is not decided
-//! here; the reference compiles `oni` unconditionally.
+//! here; the reference compiles `oni` unconditionally — that divergence is now
+//! FILED as `NEW-FINDINGS.md` **N34** (eight notification arms, `%output`
+//! among them, dead in the default build). Closing S208-F3 on this prose fix
+//! did NOT retire it. If you are here because the tmux `%output` arm is not
+//! firing, N34 is your row, not this note.
 
 // const std = @import("std");
 // const Allocator = std.mem.Allocator;

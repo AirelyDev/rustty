@@ -1749,6 +1749,22 @@ real `DerivedConfig`; nothing to do until then.
 - **found by**: task-18, answering its brief's research question.
 - **class**: DOC / gate design. **Not built as a gate** — task-18 was not scoped for one.
 
+> **IF YOU ARE HERE TO BUILD THE NAME CHECK, DON'T.** "Flag a note naming a file, symbol or
+> crate that does not exist" is the intuitive check in this class and it was measured: **6 hits
+> tree-wide, at most 1 real, 0 of the 8 DOC rows.** The failure is **structural, not a regex
+> problem** — see Candidate A. Port comments quote three namespaces in ONE indistinguishable
+> syntax: Rust crates, *reference Zig identifiers that R1 requires be reproduced and renamed*
+> (so they look exactly like port names and are not), and prose names for plans and docs.
+> Nothing in the token tells them apart, the R1 class is the largest of the three, and a
+> checker here would **punish fidelity**: the single largest false-positive family is
+> `rustty-build-data`, a correct R1 rename of the reference's own `ghostty-build-data` comment.
+>
+> **And do not build the "deferred beside live code" check either.** On `S60-F9` it would have
+> fired on a note whose residual claim is **TRUE** (`updateConfigEvent`, N32) and demanded the
+> note be deleted — **destroying a true statement**. A check that cannot represent "half
+> false" will launder half-false notes into no notes at all, which is strictly worse than the
+> defect. See Candidate C.
+
 Task-18's brief asked whether the recurring stale-note class can be checked by machine. It can,
 for one narrow subset, and the measurement is below. Three candidates were probed against the
 tree at `HEAD`; scripts are transient, the numbers are reproducible from the descriptions.
@@ -1836,11 +1852,19 @@ be decided mechanically, for a reason visible in this task's own rows:
 - **`S60-F9` had a residue that is correct** (N32), and a checker firing on "note says unported,
   symbol exists" would have demanded the note be deleted outright, destroying a true statement.
 
-**The rule this yields.** A note is mechanically checkable exactly when it asserts something
-with a *denotation* — a number, or a symbol whose existence decides the claim. It is not
-checkable when it asserts a *reason*, a *scope* ("this task lands only…"), or a *plan*. The
-reason-shaped notes are the majority and the ones that go stale hardest, because the work they
-describe moves and the sentence does not.
+### The rule
+
+**A note is mechanically checkable exactly when it asserts a DENOTATION — a number, or a symbol
+whose existence decides the claim. It is not checkable when it asserts a REASON, a SCOPE ("this
+task lands only…"), or a PLAN ("ports with the GTK apprt in Phase-3").**
+
+This is not an observation about eight rows; it is a rule for anyone WRITING a note, and it is
+where the leverage is. A reason cannot be made checkable by a better checker — it can only be
+made checkable by being written as a denotation in the first place. So the rule is stated in
+`PROCEDURE.md` ("Writing a PORT NOTE"), where a future stage writing notes meets it, and
+repeated here, where a future stage auditing them does. Reason-shaped notes are the majority
+and the ones that go stale hardest, because the work they describe moves and the sentence does
+not.
 
 **A cheaper intervention than a gate, from the same evidence.** Every stale note found on this
 plan was a claim about the FUTURE or about another part of the tree, written at the top of a
@@ -1853,3 +1877,63 @@ list at the top.** That is a convention, enforceable in review, and it would hav
 **state**: the four unclaimed instances are FIXED. The gate is NOT built — it needs its own
 coverage argument and a self-test arm per `R5`, which is a separate task. This entry is the
 finding.
+
+
+---
+
+## N34 — eight tmux control-mode notification arms are DEAD in the default build, because `oniguruma` is default-OFF and the reference compiles `oni` unconditionally
+
+- **id**: N34 (next free id checked 2026-09-11 against this file's headings; N33 was the last).
+- **found by**: task-18, while closing `S208-F3`. **Filed separately on the coordinator's
+  instruction so it does not depend on someone re-deriving it.**
+- **class**: behavioural divergence (feature-gate default), NOT a DOC row.
+
+### What `S208-F3` was, and what it was not
+
+`S208-F3` was a DOC row: `crates/rustty-vt/src/tmux/control.rs`'s header claimed "the `oni`
+binding crate does not exist yet … until the binding crate lands". The crate **does** exist
+(`crates/rustty-oniguruma`, wired as `rustty-vt`'s optional `oniguruma` dependency,
+`rustty-vt/Cargo.toml:113,221`), so the row closed. But that note was **half true**, and the
+surviving half is a real divergence that no row claims.
+
+### The divergence
+
+The reference compiles `oni` **unconditionally**: `tmux/control.zig` does
+`const oni = @import("oniguruma")` with no build option, so every notification arm is live in
+every ghostty build. In rustty the `oniguruma` cargo feature is **default-OFF**, so in the
+default build these eight arms fall through to the "unknown notification" path:
+
+`%output`, `%session-changed`, `%layout-change`, `%window-add`, `%window-renamed`,
+`%window-pane-changed`, `%client-detached`, `%client-session-changed`
+
+and the 8 reference tests that exercise them are not compiled. Counted and verified at pin
+`20abdb50a`: `control.zig` has 18 `test` blocks, 8 of them behind the gate, 10 (the begin/end
+blocks and `%sessions-changed`) live by default. `%output` is the arm that carries tmux
+control-mode's actual pane output, so what is dead by default is not an edge case.
+
+### Why this is not simply "turn the feature on"
+
+It is a real decision with a cost, which is exactly why it needs a row rather than a drive-by:
+
+- `rustty-oniguruma` is an FFI binding over a C library, and the port already carries a
+  `check_oniguruma_lane.sh` gate (G-ONIG) because that lane is otherwise linted by nothing.
+  Making it default-on moves every default build onto that dependency.
+- The same feature gates `string_map.rs`'s regex search surface and `renderer/link.rs`'s
+  `oni::Regex` compilation, so the blast radius is wider than tmux.
+- The reference's own build has no equivalent switch, so **there is no upstream behaviour to
+  match for the OFF state** — the OFF state is a rustty invention, and every hour it stays the
+  default is an hour the shipped default diverges from ghostty.
+
+### What task-18 did and did not do
+
+**Did:** corrected the note so it states the true part precisely (feature default-OFF ⇒ arms
+not compiled) instead of justifying it with a false premise (crate does not exist). The counts
+in that header were re-counted and are correct.
+
+**Did not:** decide the feature default. That is out of scope for a DOC row, and closing
+`S208-F3` on a prose fix must not be read as retiring the divergence — which is precisely the
+failure mode this file exists to prevent.
+
+**state**: OPEN. Needs a decision on the `oniguruma` feature default, and — if it stays OFF — a
+recorded justification for shipping with eight notification arms and `%output` dead, sitting
+next to the gate that lints the lane nobody compiles by default.
