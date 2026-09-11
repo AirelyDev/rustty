@@ -21,20 +21,24 @@
 //!   arena with owned `Option<String>` caches on the `RegularData`/`JumpData`
 //!   (task-directed) — same lifetime (freed with the object), no arena needed.
 //!
-//! # PORT NOTE — jump commands are a documented placeholder
+//! # PORT NOTE — jump commands
 //!
 //! `collectJumpCommands` (`command_palette.zig:225-243`) walks
 //! `Application.default().core().surfaces` and calls [`Command::new_jump`] for each
-//! live surface. This port tier keeps the core app pointer type-erased
-//! (`application.rs` `core_app: *mut c_void`), so there is no way to iterate all
-//! surfaces here yet, and [`Surface`] does not yet expose `getEffectiveTitle`/
-//! `getPwd` (`surface.zig:2000-2041`). The `Command` *jump* variant is ported in
-//! full (union, [`Command::new_jump`], [`Command::is_jump`],
+//! live surface. It is ported in full, along with the whole `Command` *jump*
+//! variant (union, [`Command::new_jump`], [`Command::is_jump`],
 //! [`Command::get_jump_surface`], and the jump arms of the title/description
-//! getters) so the type is 1:1 with the reference, but
-//! [`CommandPalette::collect_jump_commands`] is an inhabited no-op until surface
-//! iteration + `getEffectiveTitle`/`getPwd` land. Regular (config keybind) commands
-//! — the task's primary requirement — are populated in full.
+//! getters). The one structural difference from the reference is that the
+//! `Application` GObject stores its core app type-erased
+//! (`application.rs` `core_app: *mut c_void`) rather than comptime-monomorphized,
+//! so [`CommandPalette::collect_jump_commands`] reconstitutes the concrete
+//! `rustty_core::app::App<App>` from that pointer before walking `surfaces`; with
+//! the core app unbound (widget tests) the walk is skipped, as there are no
+//! surfaces to enumerate.
+//!
+//! This section previously described the function as "a documented placeholder"
+//! and "an inhabited no-op"; that has not been true since the surface walk landed
+//! directly below it (S51-F9).
 //!
 //! [`class::window::Window`]: crate::gtk::class::window::Window
 

@@ -81,8 +81,8 @@ use libc::{c_char, c_int};
 // `PlatformC`/`PlatformCMacOS` build the zeroed platform union for the default
 // `ghostty_surface_config_new`.
 use rustty_apprt::embedded::{
-    self, App, ClipboardComplete, Inspector, KeyTarget, Options, PlatformC, PlatformCMacOS,
-    Surface, SurfaceOptions,
+    App, ClipboardComplete, Inspector, KeyTarget, Options, PlatformC, PlatformCMacOS, Surface,
+    SurfaceOptions,
 };
 // The `apprt_api::App` TRAIT (`perform_action`) the embedded `App` implements —
 // imported under a distinct name so it does not shadow the concrete `App` above.
@@ -429,24 +429,25 @@ pub unsafe extern "C" fn rustty_cli_try_action() {
 // forward to the ported `rustty-apprt` embedded backend / core App.
 // ===================================================================
 
-/// The error set of [`app_new_`] — the union of `CoreApp::create`'s `CreateError`
-/// and [`App::init`]'s `KeymapError` (the reference `app_new_`'s inferred `!*App`
-/// error set). Kept as ONE enum so the reference's single `catch |err|` log site in
-/// [`rustty_app_new`] is preserved with the concrete `err` value.
+/// The error set of [`app_new_`] — `CoreApp::create`'s `CreateError` (the
+/// reference `app_new_`'s inferred `!*App` error set). Kept as an enum so the
+/// reference's single `catch |err|` log site in [`rustty_app_new`] is preserved
+/// with the concrete `err` value.
 //
-// PORT NOTE: the payloads ARE read — [`rustty_app_new`] formats the whole error via
+// PORT NOTE: the payload IS read — [`rustty_app_new`] formats the whole error via
 // `{err:?}` (the reference `log.err("… err={}", .{err})`) — but derived-`Debug` reads
-// are invisible to dead-code analysis (and on non-macOS `KeymapError` is `()`), so the
-// lint is allowed here.
+// are invisible to dead-code analysis, so the lint is allowed here.
+//
+// PORT NOTE (S46-F1): a second variant, `Keymap(embedded::KeymapError)`, used to
+// sit here because the port built `App.keymap` EAGERLY in `App::init`. Upstream's
+// keymap is lazy and its `init` cannot fail that way; with the port's `init` now
+// infallible, the variant had no constructor left.
 #[allow(dead_code)]
 #[derive(Debug)]
 enum AppNewError {
     // const core_app = try CoreApp.create(global.alloc);
     // (CoreApp.create's error: font.SharedGridSet.InitError || Allocator.Error.)
     Create(rustty_core::app::CreateError),
-    // try app.init(core_app, config, opts.*);
-    // (App.init's error: input.Keymap.init().)
-    Keymap(embedded::KeymapError),
 }
 
 /// C: rustty_app_new
@@ -509,18 +510,16 @@ unsafe fn app_new_(opts: *const Options, config: *const Config) -> Result<*mut A
     // collapse into boxing the returned value below (boxing is infallible, so the
     // `errdefer app.terminate()` never fires). `opts.*` copies the `Options` out of
     // the caller's pointer — `ptr::read` (Options is `#[repr(C)]`, trivially
-    // copyable). On an `App::init` error the `errdefer core_app.destroy()` fires:
-    // reconstruct the `Box<CoreApp>` and `destroy` it.
+    // copyable).
+    //
+    // PORT NOTE (S46-F1): `App::init` is now INFALLIBLE, matching the reference
+    // once its keymap became lazy — the reference's `try app.init(...)` only ever
+    // carried `config.clone`'s allocator error, and rustty's `clone_config` is
+    // infallible. The `errdefer core_app.destroy()` therefore has no arm left to
+    // fire on, exactly as `errdefer app.terminate()` already had none.
     // SAFETY: `opts`/`config` validity is the caller's contract.
     let opts_val = unsafe { core::ptr::read(opts) };
-    let app = match App::init(core_app, unsafe { &*config }, opts_val) {
-        Ok(app) => app,
-        Err(err) => {
-            // errdefer core_app.destroy();
-            unsafe { CoreApp::destroy(Box::from_raw(core_app)) };
-            return Err(AppNewError::Keymap(err));
-        }
-    };
+    let app = App::init(core_app, unsafe { &*config }, opts_val);
 
     // return app;
     Ok(Box::into_raw(Box::new(app)))

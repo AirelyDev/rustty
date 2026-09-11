@@ -290,6 +290,17 @@ impl OS2 {
         // field of the versioned struct; here `version` above IS that first field
         // and reading continues in place, so no seek is needed.
 
+        // Only versions 0..=5 are supported.
+        //
+        // PORT NOTE (S92-F1): the reference `switch (version)` dispatches BEFORE
+        // reading any field, so its `else => return error.OS2VersionNotSupported`
+        // fires on an unsupported version no matter how short the table is. This
+        // check used to sit AFTER every field read, so a short table declaring
+        // version > 5 returned `EndOfStream` instead.
+        if version > 5 {
+            return Err(InitError::OS2VersionNotSupported);
+        }
+
         // Prefix shared by every version (v0).
         let xAvgCharWidth = read_be_i16(data, &mut pos)?;
         let usWeightClass = read_be_u16(data, &mut pos)?;
@@ -351,11 +362,6 @@ impl OS2 {
         } else {
             (None, None)
         };
-
-        // Only versions 0..=5 are supported.
-        if version > 5 {
-            return Err(InitError::OS2VersionNotSupported);
-        }
 
         Ok(OS2 {
             version,
@@ -459,6 +465,29 @@ fn read_tag(data: &[u8], pos: &mut usize) -> Result<sfnt::Tag, InitError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// PORT NOTE: no reference analogue. The reference's `switch (version)`
+    /// dispatches before any field is read, so an unsupported version is
+    /// reported as `OS2VersionNotSupported` regardless of table length. The
+    /// port ran the check after every read and returned `EndOfStream` for a
+    /// short table (S92-F1).
+    #[test]
+    fn unsupported_version_is_reported_before_reading_fields() {
+        // A two-byte table: nothing but an unsupported version.
+        assert_eq!(
+            Err(InitError::OS2VersionNotSupported),
+            OS2::init(&[0x00, 0x06])
+        );
+        // And one byte longer than the version, still far too short.
+        assert_eq!(
+            Err(InitError::OS2VersionNotSupported),
+            OS2::init(&[0x00, 0xFF, 0x00])
+        );
+        // Positive control: a SUPPORTED version that is genuinely truncated
+        // still reports `EndOfStream`, so the check above did not simply
+        // swallow every short table.
+        assert_eq!(Err(InitError::EndOfStream), OS2::init(&[0x00, 0x04, 0x00]));
+    }
 
     // test "OS/2"
     #[test]

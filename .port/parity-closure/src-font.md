@@ -146,7 +146,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** freetype name(): family string is copied into buf with truncation; UTF-16 overflow falls back instead of asserting
   - **Oracle:** `src/font/face/freetype.zig:158-183` → **Rustty:** `crates/rustty-font-shaper/src/face/freetype.rs:307-353, 972-990`
   - **Audit's suggested fix:** Accept as a lifetime-driven idiom, or return a Cow so uncopied names keep full length.
-- [ ] **S92-F1** · CONFIRMED · `ABI` · behavioral-difference
+- [x] **S92-F1** · CONFIRMED · `ABI` · behavioral-difference
   - **What:** OS2.init: unsupported-version check happens after all field reads, so short tables with version>5 return EndOfStream instead of OS2VersionNotSupported
   - **Oracle:** `src/font/opentype/os2.zig:351-357, 566` → **Rustty:** `crates/rustty-font/src/opentype/os2.rs:286-358`
   - **Audit's suggested fix:** Move the `if version > 5 { return Err(InitError::OS2VersionNotSupported) }` check to immediately after reading `version` (before the prefix reads).

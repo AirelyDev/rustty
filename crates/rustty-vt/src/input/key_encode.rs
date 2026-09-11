@@ -483,7 +483,10 @@ fn legacy<W: Write>(writer: &mut W, event: &key::KeyEvent, opts: Options) -> std
     let utf8 = &event.utf8;
     if utf8.is_empty() {
         if let Some(byte) = legacy_alt_prefix(event, binding_mods, all_mods, opts) {
-            write!(writer, "\x1B{}", byte as char)?;
+            // PORT NOTE: `try writer.print("\x1B{c}", .{byte})`. Zig's `{c}`
+            // writes the `u8` RAW; `byte as char` would UTF-8-encode anything
+            // >= 0x80 into two bytes (S104-F1).
+            writer.write_all(&[0x1B, byte])?;
         }
         return Ok(());
     }
@@ -637,7 +640,9 @@ fn legacy<W: Write>(writer: &mut W, event: &key::KeyEvent, opts: Options) -> std
     // If we have alt-pressed and alt-esc-prefix is enabled, then
     // we need to prefix the utf8 sequence with an esc.
     if let Some(byte) = legacy_alt_prefix(event, binding_mods, all_mods, opts) {
-        return write!(writer, "\x1B{}", byte as char);
+        // PORT NOTE: `return try writer.print("\x1B{c}", .{byte});` — `{c}`
+        // writes the `u8` RAW (S104-F1).
+        return writer.write_all(&[0x1B, byte]);
     }
 
     // If we are on macOS, command+keys do not encode text. It isn't
@@ -3030,6 +3035,62 @@ mod tests {
         )
         .unwrap();
         assert_eq!(writer, b"\x1Be");
+    }
+
+    /// PORT NOTE: no reference analogue — Zig's `writer.print("\x1B{c}", .{byte})`
+    /// writes `byte` RAW (a single `u8`), so the reference cannot express this
+    /// bug and never needed a test for it. The port wrote
+    /// `write!(writer, "\x1B{}", byte as char)`, which UTF-8-ENCODES the value:
+    /// every `legacyAltPrefix` byte in `0x80..=0xFF` came out as two bytes
+    /// instead of one (finding S104-F1). Both call sites are covered: the
+    /// no-UTF-8 / unshifted-codepoint path here and the has-UTF-8 path below.
+    #[test]
+    fn legacy_alt_prefix_high_byte_is_written_raw() {
+        // The no-UTF-8 path: `legacyAltPrefix` falls through to
+        // `unshifted_codepoint`, which casts to `u8` for anything <= 0xFF.
+        let mut writer: Vec<u8> = Vec::new();
+        legacy(
+            &mut writer,
+            &ev(key::KeyEvent {
+                key: key::Key::KeyE,
+                unshifted_codepoint: 0xE9, // U+00E9 LATIN SMALL LETTER E WITH ACUTE
+                mods: Mods {
+                    alt: true,
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+            Options {
+                alt_esc_prefix: true,
+                macos_option_as_alt: OptionAsAlt::r#true,
+                ..Options::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(writer, b"\x1B\xE9");
+
+        // The has-UTF-8 path: a single byte >= 0x80 in `utf8` is returned
+        // directly by `legacyAltPrefix` and prefixed at the second call site.
+        let mut writer: Vec<u8> = Vec::new();
+        legacy(
+            &mut writer,
+            &ev(key::KeyEvent {
+                key: key::Key::KeyE,
+                utf8: vec![0xE9],
+                mods: Mods {
+                    alt: true,
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+            Options {
+                alt_esc_prefix: true,
+                macos_option_as_alt: OptionAsAlt::r#true,
+                ..Options::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(writer, b"\x1B\xE9");
     }
 
     #[test]

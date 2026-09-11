@@ -1009,7 +1009,13 @@ found, and current state.
 - **severity**: low (one `log.warn` the port cannot emit; the structural difference itself
   is benign on every path the port exercises)
 - **kind**: upstream-drift / structural, surfaced as an unrestorable diagnostic
-- **state**: **OPEN** as a tracked item. Not a LOG defect that can be closed by logging work.
+- **state**: **CLOSED by task 15**, with `S46-F1` — the row that tracks the structural
+  difference itself. `App.keymap` is now `UnsafeCell<Option<Keymap>>`, initialized lazily in
+  `keyboardLayout`, and `embedded.zig:251`'s `log.warn("error initializing keymap err={}")`
+  is live at that site. `App::init` became infallible in the same change (the reference's
+  `try app.init(..)` only ever carried `config.clone`'s allocator error, and rustty's
+  `clone_config` is infallible), which retired `AppNewError::Keymap` in `rustty-apprt-c`.
+  `S46-F5`'s waiver drops from 8 unrestorable sites to 7 accordingly.
 - **where**: reference `src/apprt/embedded.zig:243-256` (`App.keyboardLayout`) and `:194-200`
   (`App.init`); port `crates/rustty-apprt/src/embedded.rs` `App::init` / `App::keyboardLayout`
   (PORT NOTE at the latter).
@@ -1033,7 +1039,7 @@ found, and current state.
 - **what would change this**: porting the lazy keymap (`keymap: Option<Keymap>` +
   initialize-on-first-`keyboardLayout`). That is a structural port, not logging work, and
   it also changes when a keymap-init failure becomes visible to an embedder — which is why
-  it is filed here rather than folded into a LOG row.
+  it is filed here rather than folded into a LOG row. **Done in task 15** (see state).
 
 ---
 

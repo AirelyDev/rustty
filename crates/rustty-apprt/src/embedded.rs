@@ -161,8 +161,23 @@ pub struct App {
     pub core_app: *mut CoreApp,
     // opts: Options,
     pub opts: Options,
-    // keymap: input.Keymap,
-    pub keymap: Keymap,
+    /// The keyboard layout keymap. This is lazily initialized on first
+    /// use because creating it requires talking to the text input
+    /// system (TIS on macOS), and the first such call in a process is
+    /// slow (multiple milliseconds). It is only needed once keyboard
+    /// events start flowing, at which point the system is warm.
+    //
+    // keymap: ?input.Keymap,
+    //
+    // PORT NOTE (S46-F1): this was an eagerly-initialized `keymap: Keymap`,
+    // which cost every embedding host that TIS call at `App::init` whether or
+    // not a key was ever pressed, and made `App::init` fallible where upstream's
+    // is not. `UnsafeCell` (rather than a bare `Option`) because the lazy
+    // initialization happens inside `keyboardLayout`, which the apprt-api `App`
+    // seam declares as `&self` while the reference's takes a mutable `*App` —
+    // exactly the reconciliation `config` below already makes, and sound for the
+    // same reason (heap-owned, driven single-threaded through the C-ABI).
+    pub keymap: UnsafeCell<Option<Keymap>>,
 
     /// The configuration for the app. This is owned by this structure.
     //
@@ -347,14 +362,10 @@ impl KeyEvent<'_> {
 }
 
 impl App {
-    // See the `KeymapError` note: off Darwin this is the noop keymap's empty
-    // error set, spelled as the unit error like `keymap_noop.rs`.
-    #[allow(clippy::result_unit_err)]
-    pub fn init(
-        core_app: *mut CoreApp,
-        config: &Config,
-        opts: Options,
-    ) -> Result<App, KeymapError> {
+    // PORT NOTE (S46-F1): infallible. The reference `init` is `!void` only
+    // because of `config.clone`; rustty's `clone_config` is infallible, and the
+    // keymap is no longer built here.
+    pub fn init(core_app: *mut CoreApp, config: &Config, opts: Options) -> App {
         // We have to clone the config.
         // const alloc = core_app.alloc;
         // var config_clone = try config.clone(alloc);
@@ -364,32 +375,22 @@ impl App {
         // reference placement-init `init(self: *App, …)` returns the value here
         // (Rust has no placement-init — cf. core `App::init`; the CAPI
         // `rustty_app_new` boxes it).
-        let mut config_clone = config.clone_config();
+        let config_clone = config.clone_config();
 
-        // var keymap = try input.Keymap.init();
-        // errdefer keymap.deinit();
-        let keymap = match Keymap::init() {
-            Ok(keymap) => keymap,
-            Err(err) => {
-                // errdefer config_clone.deinit(): rustty `Config` uses an explicit
-                // `deinit` (no `Drop`), so the errdefer is honored manually.
-                config_clone.deinit();
-                return Err(err);
-            }
-        };
-
-        // self.* = .{ .core_app = core_app, .config = config_clone, .opts = opts, .keymap = keymap };
-        Ok(App {
+        // self.* = .{ .core_app = core_app, .config = config_clone, .opts = opts, .keymap = null };
+        App {
             core_app,
             config: UnsafeCell::new(config_clone),
             opts,
-            keymap,
-        })
+            keymap: UnsafeCell::new(None),
+        }
     }
 
     pub fn terminate(&mut self) {
-        // self.keymap.deinit();
-        self.keymap.deinit();
+        // if (self.keymap) |*v| v.deinit();
+        if let Some(v) = self.keymap.get_mut() {
+            v.deinit();
+        }
         // self.config.deinit();
         self.config.get_mut().deinit();
     }
@@ -478,9 +479,14 @@ impl App {
     // error set, spelled as the unit error like `keymap_noop.rs`.
     #[allow(clippy::result_unit_err)]
     pub fn reloadKeymap(&mut self) -> Result<(), KeymapError> {
-        // Reload the keymap
-        // try self.keymap.reload();
-        self.keymap.reload()
+        // Reload the keymap. If it was never initialized we don't need
+        // to do anything since lazy initialization will pick up the
+        // current layout.
+        // if (self.keymap) |*v| try v.reload();
+        match self.keymap.get_mut() {
+            Some(v) => v.reload(),
+            None => Ok(()),
+        }
     }
 
     /// Loads the keyboard layout.
@@ -497,31 +503,44 @@ impl App {
         // `Keymap` has no `source_id`), so the macOS body is the tail expr there.
         #[cfg(target_os = "macos")]
         {
+            // Lazily initialize the keymap.
+            // const keymap: *input.Keymap = keymap: {
+            //     if (self.keymap == null) {
+            //         self.keymap = input.Keymap.init() catch |err| {
+            //             log.warn("error initializing keymap err={}", .{err});
+            //             return .unknown;
+            //         };
+            //     }
+            //     break :keymap &self.keymap.?;
+            // };
+            //
+            // SAFETY: see the `keymap` field's PORT NOTE — the app is heap-owned
+            // and driven single-threaded through the C-ABI, and no other borrow of
+            // the cell is live across this block.
+            let slot = unsafe { &mut *self.keymap.get() };
+            if slot.is_none() {
+                match Keymap::init() {
+                    Ok(v) => *slot = Some(v),
+                    Err(err) => {
+                        // log.warn("error initializing keymap err={}", .{err});
+                        log::warn!(target: LOG_SCOPE, "error initializing keymap err={:?}", err);
+                        return Layout::Unknown;
+                    }
+                }
+            }
+            let keymap = slot.as_ref().unwrap();
+
             // Any layout larger than this is not something we can handle.
             // var buf: [256]u8 = undefined;
             let mut buf: [u8; 256] = [0; 256];
-            // const id = self.keymap.sourceId(&buf) catch |err| {
+            // const id = keymap.sourceId(&buf) catch |err| {
             //     comptime assert(@TypeOf(err) == error{OutOfMemory});
             //     return .unknown;
             // };
-            let id = match self.keymap.source_id(&mut buf) {
+            let id = match keymap.source_id(&mut buf) {
                 Ok(id) => id,
                 Err(_err) => return Layout::Unknown,
             };
-            // PORT NOTE (S46-F5, UNRESTORED SITE — one of `embedded.zig`'s 54):
-            // `embedded.zig:251` has a `log.warn("error initializing keymap
-            // err={}", .{err})` that this port has NO arm for. Upstream moved
-            // `App.keymap` to `?input.Keymap` and made `keyboardLayout` LAZILY
-            // initialize it (`self.keymap = input.Keymap.init() catch |err| { …
-            // return .unknown; }`); this port still initializes `keymap`
-            // EAGERLY in `App::init`, where the reference's own `init` does not
-            // log at all — it `try`s and propagates. Restoring the diagnostic
-            // here would put it on a path the reference does not log from, and
-            // restoring it faithfully means porting the lazy-keymap change,
-            // which is a STRUCTURAL divergence, not logging work. Tracked as its
-            // own entry in `NEW-FINDINGS.md` (N18) rather than hidden inside the
-            // LOG row.
-
             // return input.KeyboardLayout.mapAppleId(id) orelse .unknown;
             Layout::map_apple_id(id).unwrap_or(Layout::Unknown)
         }
@@ -3668,6 +3687,98 @@ pub struct ClipboardConfirm {
     /// session grant, reported back through the completion's
     /// remember field.
     pub can_remember: bool,
+}
+
+/// PORT NOTE: no reference analogue — the reference's laziness is visible in
+/// `App.keymap`'s type (`?input.Keymap`) and `keyboardLayout`'s `if (self.keymap
+/// == null)` block, which Zig's own tests never exercise. These pin the
+/// behaviour the port lost by initializing the keymap EAGERLY in `App::init`
+/// (S46-F1).
+#[cfg(test)]
+mod keymap_lazy_tests {
+    use super::*;
+
+    extern "C" fn stub_wakeup(_: *mut c_void) {}
+    extern "C" fn stub_action(_: *mut App, _: TargetC, _: ActionC) -> bool {
+        false
+    }
+    extern "C" fn stub_read_clipboard(
+        _: *mut c_void,
+        _: c_int,
+        _: *mut ClipboardRequest,
+        _: *const *const c_char,
+        _: usize,
+        _: bool,
+    ) -> c_int {
+        0
+    }
+    extern "C" fn stub_confirm_read_clipboard(
+        _: *mut c_void,
+        _: *const ClipboardConfirm,
+        _: *mut ClipboardRequest,
+        _: ClipboardRequestType,
+    ) {
+    }
+    extern "C" fn stub_write_clipboard(
+        _: *mut c_void,
+        _: c_int,
+        _: *const ClipboardContent,
+        _: usize,
+        _: bool,
+    ) {
+    }
+
+    /// An `App` whose `core_app` is never dereferenced by anything these tests
+    /// call. `keyboardLayout`/`reloadKeymap` touch only `self.keymap`.
+    fn test_app() -> App {
+        App {
+            core_app: std::ptr::null_mut(),
+            opts: Options {
+                userdata: std::ptr::null_mut(),
+                supports_selection_clipboard: false,
+                wakeup: stub_wakeup,
+                action: stub_action,
+                read_clipboard: stub_read_clipboard,
+                confirm_read_clipboard: stub_confirm_read_clipboard,
+                write_clipboard: stub_write_clipboard,
+                close_surface: None,
+            },
+            keymap: UnsafeCell::new(None),
+            config: UnsafeCell::new(Config::default()),
+        }
+    }
+
+    /// `reloadKeymap` on a never-initialized keymap does nothing and does NOT
+    /// initialize it: "lazy initialization will pick up the current layout".
+    #[test]
+    fn reload_keymap_does_not_initialize() {
+        let mut app = test_app();
+        assert!(unsafe { &*app.keymap.get() }.is_none());
+        app.reloadKeymap().unwrap();
+        assert!(
+            unsafe { &*app.keymap.get() }.is_none(),
+            "reloadKeymap must not force the lazy init"
+        );
+    }
+
+    /// `keyboardLayout` IS the initialization point. This is the positive
+    /// control for the test above: it proves the keymap slot is reachable and
+    /// does get filled, so `is_none()` there is a real observation and not an
+    /// unreachable field.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn keyboard_layout_initializes_lazily() {
+        let app = test_app();
+        assert!(unsafe { &*app.keymap.get() }.is_none());
+        let _ = app.keyboardLayout();
+        assert!(
+            unsafe { &*app.keymap.get() }.is_some(),
+            "keyboardLayout must lazily initialize the keymap"
+        );
+        // And a second call reuses it rather than rebuilding.
+        let _ = app.keyboardLayout();
+        assert!(unsafe { &*app.keymap.get() }.is_some());
+    }
 }
 
 #[cfg(test)]

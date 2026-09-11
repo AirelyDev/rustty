@@ -42,7 +42,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** allocTmpDir converts TMPDIR through String::from_utf8_lossy
   - **Oracle:** `src/os/file.zig:85-86` → **Rustty:** `crates/rustty-os/src/file.rs:146-147`
   - **Audit's suggested fix:** Return `Vec<u8>` (or OsString) trimmed of trailing '/' bytes.
-- [ ] **S111-F2** · CONFIRMED · `ABI` · stub-or-unimplemented
+- [x] **S111-F2** · CONFIRMED · `ABI` · stub-or-unimplemented
   - **What:** gerror_message() is a stub returning the literal "GError" — GLib error text is never logged
   - **Oracle:** `src/os/flatpak.zig:254,274,297,304,326-337,398` → **Rustty:** `crates/rustty-os/src/flatpak.rs:891-895`
   - **Audit's suggested fix:** Declare `#[repr(C)] struct GError { domain: u32, code: c_int, message: *const c_char }` and read `(*err).message` (null-checked) into the log string.

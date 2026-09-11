@@ -99,7 +99,19 @@ mod host_command {
         use std::os::raw::{c_char, c_int, c_uint, c_void};
 
         pub type guint = c_uint;
-        pub type GError = c_void; // opaque; field access via accessor in Rust
+        pub type GQuark = c_uint;
+        /// PORT NOTE (S111-F2): this was `pub type GError = c_void` — opaque —
+        /// and `gerror_message` below therefore returned the literal `"GError"`,
+        /// so every `{s}` the reference fills with `err.message` logged a
+        /// constant. GLib's `GError` is a PUBLIC, stable struct
+        /// (`glib/gerror.h`): `GQuark domain; gint code; gchar *message;`.
+        /// Declaring it lets the port read the same field the reference does.
+        #[repr(C)]
+        pub struct GError {
+            pub domain: GQuark,
+            pub code: c_int,
+            pub message: *mut c_char,
+        }
         pub type GDBusConnection = c_void;
         pub type GMainLoop = c_void;
         pub type GMainContext = c_void;
@@ -888,10 +900,26 @@ mod host_command {
         b as c_int
     }
 
-    unsafe fn gerror_message(_err: *mut c::GError) -> String {
-        // PORT NOTE: `g_err.?.*.message` — accessing the GError struct's message field.
-        // Surfaced via the opaque-pointer shim; the message text is logged.
-        "GError".to_string()
+    /// PORTS: the reference's `g_err.?.*.message` / `err.?.*.message` field
+    /// access, used by every `log.warn("... {s}", .{ ... .message })` in
+    /// `flatpak.zig`.
+    ///
+    /// The reference's `.?` asserts the pointer is non-null; it is only ever
+    /// reached on a GLib call that reported failure, and GLib guarantees a
+    /// non-null `message` on a non-null `GError`. Both are defensive here rather
+    /// than UB, because the failure path is exactly where a wrong assumption
+    /// would be discovered by a crash.
+    unsafe fn gerror_message(err: *mut c::GError) -> String {
+        if err.is_null() {
+            return "(null GError)".to_string();
+        }
+        let msg = unsafe { (*err).message };
+        if msg.is_null() {
+            return "(null message)".to_string();
+        }
+        unsafe { std::ffi::CStr::from_ptr(msg) }
+            .to_string_lossy()
+            .into_owned()
     }
 
     fn log_warn(msg: &str) {

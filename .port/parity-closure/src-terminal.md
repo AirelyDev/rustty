@@ -297,7 +297,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** verifyIntegrity log.warn diagnostics (with y/x/id/expected/actual details) are dropped
   - **Oracle:** `src/terminal/page.zig:405-611` → **Rustty:** `crates/rustty-vt/src/page_impl.rs:586-746`
   - **Audit's suggested fix:** Emit the equivalent `log::warn!` lines (with y, x, id, expected, actual) before each `return Err(...)` and a `log::error!` in assert_integrity before the panic.
-- [ ] **S158-F1** · CONFIRMED · `ABI` · other
+- [x] **S158-F1** · CONFIRMED · `ABI` · other
   - **What:** Cell doc comment states a stale bit layout that contradicts the constants
   - **Oracle:** `src/terminal/page.zig:2087-2130` → **Rustty:** `crates/rustty-vt/src/page.rs:574-586`
   - **Audit's suggested fix:** Rewrite the doc block to the 26/42/44/45/46/48 offsets (or delete the duplicated table and point at the CELL_* constants and cell_field_bit_offsets test).
@@ -441,7 +441,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** Stale PORT NOTE claims the oniguruma binding crate does not exist
   - **Oracle:** `src/terminal/tmux/control.zig:1-10` → **Rustty:** `crates/rustty-vt/src/tmux/control.rs:11-22`
   - **Audit's suggested fix:** Rewrite the note to state the real (and correct) rationale — the feature mirrors the reference `oniguruma` build option, is enabled by rustty-core for the app tier, and `cargo test -p rustty-vt --features oniguruma` is required to run the eight gated tests.
-- [ ] **S209-F1** · DISPUTED · `ABI` · behavioral-difference
+- [x] **S209-F1** · DISPUTED · `ABI` · behavioral-difference
   - **What:** Pane terminal dimension overflow: Zig @intCast traps, Rust `as` silently truncates
   - **Oracle:** `src/terminal/tmux/viewer.zig:1131-1140` → **Rustty:** `crates/rustty-vt/src/tmux/viewer.rs:935-950`
   - **Audit's suggested fix:** Use a checked conversion that reproduces the trap (e.g. `size::CellCountInt::try_from(d.width).expect(...)`, matching the @intCast safety check) or explicitly document/handle the overflow as the TODO suggests.

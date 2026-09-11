@@ -566,19 +566,21 @@ impl SemanticContent {
 /// PORT NOTE: reference `pub const Cell = packed struct(u64)`. Bit layout
 /// (least-significant first, matching Zig packing):
 ///   bits  0..1   content_tag : ContentTag (u2)
-///   bits  2..22  content     : union { codepoint:u21, color_palette:u8, color_rgb:RGB(u24) }  (21 bits wide)
-///   bits 23..38  style_id    : StyleId (u16)
-///   bits 39..40  wide        : Wide (u2)
-///   bit  41      protected   : bool (u1)
-///   bit  42      hyperlink   : bool (u1)
-///   bits 43..44  semantic_content : SemanticContent (u2)
-///   bits 45..60  _padding    : u16
-/// Note: the union field is 21 bits wide overall (the widest member, u21);
-/// `color_palette` occupies the low 8 bits and `color_rgb` the low 24... but the
-/// union width is `@bitSizeOf` of the widest member = u21 = 21 bits. The
-/// reference `Cell.RGB` is `packed struct { r,g,b: u8 }` = 24 bits, which is
-/// WIDER than u21; Zig sizes the union to the max member, so the content union is
-/// 24 bits. See the `comptime`/layout tests below which assert the total is u64.
+///   bits  2..25  content     : union { codepoint:u24, color_palette:u24, color_rgb:RGB(u24) }
+///   bits 26..41  style_id    : StyleId (u16)
+///   bits 42..43  wide        : Wide (u2)
+///   bit  44      protected   : bool (u1)
+///   bit  45      hyperlink   : bool (u1)
+///   bits 46..47  semantic_content : SemanticContent (u2)
+///   bits 48..63  _padding    : u16
+/// Note: the content union is 24 bits wide — Zig sizes a packed union to its
+/// WIDEST member, and every member is 24 bits: `codepoint` is
+/// `packed struct(u24) { data: u21, _pad: u3 }`, `color_palette` is
+/// `packed struct(u24) { data: u8, _pad: u16 }`, and `color_rgb` is
+/// `RGB = packed struct { r, g, b: u8 }`. The `CELL_*_SHIFT` constants below
+/// are the authority and the `cell_field_bit_offsets` layout test asserts
+/// them; this comment previously described a 21-bit union and every offset
+/// above it was three bits low (S158-F1).
 #[repr(transparent)]
 #[derive(Clone, Copy)]
 pub struct Cell(u64);

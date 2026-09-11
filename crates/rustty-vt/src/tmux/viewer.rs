@@ -969,13 +969,21 @@ impl Viewer {
             // so we cast but its not safe.
             // var t: Terminal = try .init(gpa_alloc, .{ .cols = @intCast(layout.width), .rows = @intCast(layout.height) });
             // errdefer t.deinit(gpa_alloc);
-            let t: Terminal = match Terminal::init(
-                self.alloc,
-                terminal_opts(
-                    d.width as size::CellCountInt,
-                    d.height as size::CellCountInt,
-                ),
-            ) {
+            //
+            // PORT NOTE (S209-F1): `@intCast` is a CHECKED narrowing in every
+            // safe build mode — an out-of-range layout dimension is illegal
+            // behavior detected, not a silent wrap. Bare `as` wrapped modulo
+            // 2^16 and handed `Terminal::init` a wrong (possibly 0) size, which
+            // the TODO above does NOT sanction: it says the cast "is not safe",
+            // which is exactly the reference's trap. PORT_RULES R7:
+            // `@intCast` -> `try_from(..).unwrap()`.
+            let cols = size::CellCountInt::try_from(d.width).unwrap_or_else(|_| {
+                panic!("@intCast: tmux pane layout width {} > max cols", d.width)
+            });
+            let rows = size::CellCountInt::try_from(d.height).unwrap_or_else(|_| {
+                panic!("@intCast: tmux pane layout height {} > max rows", d.height)
+            });
+            let t: Terminal = match Terminal::init(self.alloc, terminal_opts(cols, rows)) {
                 Ok(t) => t,
                 Err(_) => {
                     // errdefer: clear out all the new panes not shared with
@@ -2611,6 +2619,54 @@ mod tests {
     /// important since the tmux control mode protocol is very complex and
     /// fragile.
     // fn testViewer(viewer: *Viewer, steps: []const TestStep) !void {
+    /// PORT NOTE: no reference analogue. The reference narrows the layout's
+    /// `usize` width/height with `@intCast`, which is a CHECKED narrowing in
+    /// every safe build mode — an out-of-range layout is illegal behavior
+    /// detected, not a silent wrap. The port used bare `as`, which wraps modulo
+    /// 2^16 and hands `Terminal::init` a wrong (possibly 0) size (S209-F1).
+    /// Per PORT_RULES R7 `@intCast` ports as `try_from(..).unwrap()`, so this
+    /// test asserts the trap.
+    #[test]
+    #[should_panic(expected = "@intCast: tmux pane layout width")]
+    fn sync_layouts_pane_width_overflow_traps() {
+        let mut viewer = Viewer::init(Global).unwrap();
+        let window = Window {
+            id: 0,
+            width: 80,
+            height: 24,
+            layout: crate::tmux::layout::Layout {
+                width: 70_000,
+                height: 24,
+                x: 0,
+                y: 0,
+                content: crate::tmux::layout::Content::Pane(1),
+            },
+        };
+        let _ = viewer.sync_layouts(vec![window], false);
+    }
+
+    /// The positive control for the test above: the SAME code path with an
+    /// in-range width does NOT panic and does create the pane. Without this, a
+    /// `should_panic` test proves only that something panicked somewhere.
+    #[test]
+    fn sync_layouts_pane_width_in_range_is_created() {
+        let mut viewer = Viewer::init(Global).unwrap();
+        let window = Window {
+            id: 0,
+            width: 80,
+            height: 24,
+            layout: crate::tmux::layout::Layout {
+                width: 80,
+                height: 24,
+                x: 0,
+                y: 0,
+                content: crate::tmux::layout::Content::Pane(1),
+            },
+        };
+        viewer.sync_layouts(vec![window], false).unwrap();
+        assert!(viewer.panes.contains(&1));
+    }
+
     fn test_viewer(viewer: &mut Viewer, steps: Vec<TestStep>) {
         // for (steps, 0..) |step, i| {
         //     step.run(viewer) catch |err| {
