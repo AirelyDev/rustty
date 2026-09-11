@@ -5875,7 +5875,7 @@ mod tests {
     // parallel-cargo-test isolation lesson). Every KAT that spawns a real process
     // takes this lock for its duration. (T8: hoisted to the crate root so
     // `command::tests`' fork KATs share it — see the doc there.)
-    #[cfg(target_os = "macos")]
+    #[cfg(not(windows))]
     use crate::FORK_KAT_SERIAL;
 
     // WS19 T17a: `drain_pty_master_once` — the helper the `threadEnter` error arms
