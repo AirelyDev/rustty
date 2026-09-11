@@ -2146,7 +2146,7 @@ Reference defect: `UPSTREAM-DEFECTS.md` UD7.
   defect, R13) + port divergence on an error path.
 - **oracle**: `src/terminal/tmux/viewer.zig:1160-1161` (zero passes `@intCast`), then
   `src/terminal/page.zig:274` / `src/terminal/PageList.zig:647`; the errdefer at
-  `src/terminal/tmux/viewer.zig:365-374`.
+  `src/terminal/tmux/viewer.zig:635-644`. (Fix round 1: this cited `:365-374`.)
 - **rustty**: `crates/rustty-vt/src/tmux/viewer.rs:1006` (`sync_layouts`).
 
 S209-F1 covers only the out-of-range half of this site. A zero width or height passed the port's
@@ -2181,7 +2181,10 @@ about 9,200 / 39,000 for the reference on its 16 MiB thread. Under R13 nesting d
 `UPSTREAM-DEFECTS.md` UD10. Linux aarch64 (VM): the port's walkers overflow at nearly the same
 depths (parser about 1,480 debug / 6,270 release; `Debug` about 1,625 / 2,415), the reference at the
 same 9,200 / 39,000, and the three tests pass run individually in debug and release. `MAX_DEPTH`
-was not checked against tmux's source; a legitimate layout nested deeper would be rejected.
+matches upstream tmux: commit `b7c5030004` (2026-09-09) added `LAYOUT_V1_MAX_DEPTH 1000` with the
+same depth counting. Older tmux has no cap, so a hand-written `select-layout` string could nest
+deeper, but split-built layouts cannot realistically reach 1000. (Fix round 1: this first said the
+limit was not checked against tmux's source.)
 
 **state**: CLOSED by task R13-A (`886fa0c7`).
 
@@ -2200,3 +2203,19 @@ setting DECSTBM) does not work: an ESC in the reply ends the DCS. The check is r
 ReleaseFast. Reference defect: `UPSTREAM-DEFECTS.md` UD9.
 
 **state**: CLOSED by task R13-A (`886fa0c7`).
+
+## N44 — a tmux `list-panes` scroll region outside the pane crashed the next line feed
+
+- **id**: N44 (next free id checked 2026-09-11; N43 was the last). Inventory M111.
+- **found by**: the task R13-A reviewer; fixed in the task R13-A follow-up.
+- **severity**: medium. **kind**: missing-branch (reference defect, R13).
+- **oracle**: `src/terminal/tmux/viewer.zig:1013-1024` (`receivedPaneState`, `scroll:` block).
+- **rustty**: `crates/rustty-vt/src/tmux/viewer.rs:1665` (`received_pane_state`).
+
+The port stored tmux's scroll region as the reference does. A bottom at or past the pane's rows
+panicked the next line feed or wrap at `screen.rs:1577` (`cursor_down`); a one-row region away from
+the top panicked at `screen.rs:2088` (`cursor_scroll_region_up`, `limit >= 1`). No row claimed
+it. The port now ignores the region unless `top < bottom < rows`, as the same reply ignores bad
+cursor and tab-stop geometry. Reference defect: `UPSTREAM-DEFECTS.md` UD11.
+
+**state**: CLOSED by the task R13-A follow-up (`ac627fab`).
