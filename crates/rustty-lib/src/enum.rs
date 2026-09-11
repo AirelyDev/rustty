@@ -163,10 +163,16 @@ pub fn check_ghostty_henum<F>(t: &EnumType, prefix: &str, c: F) -> Result<(), St
 where
     F: Fn(&str) -> Option<i64>,
 {
-    // PORT NOTE: `info == .@"enum"` and `tag_type == c_int` and
-    // `is_exhaustive == true` are guaranteed by construction of `EnumType`
-    // (it always models an exhaustive enum); we assert the C-int tag here to
-    // mirror the reference's three opening `expect`s.
+    // PORT NOTE: `info == .@"enum"` and `is_exhaustive == true` are guaranteed by
+    // construction of `EnumType` (it always models an exhaustive enum). The
+    // `tag_type == c_int` expect is a real check: [`henum_type!`] fills
+    // `tag_type` from the enum's size ([`TagType::from_repr_size`]), so a
+    // non-`c_int`-sized repr fails here. Residual: a size cannot tell `i32` from
+    // `u32`, so a `#[repr(u32)]` enum still passes.
+    //
+    // CORRECTION (task 20): this note said all three facts, the `c_int` tag
+    // included, "are guaranteed by construction of `EnumType`"; that stopped being
+    // true when task 19's fix round derived the tag from the enum's size.
     if t.tag_type != TagType::CInt {
         return Err("expected c_int tag_type".to_string());
     }
@@ -354,7 +360,10 @@ pub fn __henum_mapped<E: Copy, R: Into<i64>>(mapper: fn(E) -> R, v: E) -> (usize
 /// - **values** — read out of the enum (`$E::$V as i64`, or a mapper), never
 ///   re-derived from list order (finding N29);
 /// - **tag type** — `size_of` the enum (or the mapper's return type), so a
-///   non-`c_int` repr fails the check's opening `tag_type == c_int` test;
+///   non-`c_int`-SIZED repr fails the check's opening `tag_type == c_int` test.
+///   Residual: a size cannot tell `i32` from `u32`, so `#[repr(u32)]` passes
+///   ([`TagType::from_repr_size`]; added to this bullet by task 20, where a reader
+///   of the macro looks);
 /// - **key ↔ variant, duplicates** — [`__henum_const_check`], at compile time.
 ///
 /// Two forms: the default reads the discriminant; the second takes a

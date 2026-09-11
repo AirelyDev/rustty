@@ -122,8 +122,12 @@ mod tests {
     /// PORTS: `media.zig:131-157` `test "bellMediaFile reuses one MediaFile per
     /// path"`. Regression guard for the audio-bell thread leak: each bell must
     /// replay a single cached `MediaFile`, not allocate a fresh pipeline per
-    /// ring. Asserts the reuse contract directly; needs no display and no
-    /// playback (`MediaFile` is lazy), only that the path comparison drives reuse.
+    /// ring. Asserts the reuse contract directly; needs no playback (`MediaFile`
+    /// is lazy), only that the path comparison drives reuse. It DOES need a
+    /// display, and is `#[ignore]`d for it (see the FIX below).
+    ///
+    /// CORRECTION (task 20): this doc said the test "needs no display and no
+    /// playback", which task 19's fix round made false.
     #[test]
     #[ignore = "requires a display; run via GDK_BACKEND=broadway (with broadwayd) or xvfb-run -a cargo test -p rustty-apprt --features gtk,x11,wayland bell_media_file -- --ignored"]
     fn bell_media_file_reuses_one_per_path() {
