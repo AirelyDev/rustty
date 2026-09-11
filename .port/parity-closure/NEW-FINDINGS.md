@@ -2103,3 +2103,98 @@ user overruled that ruling the same day (R13); the reference defects moved to
 `UPSTREAM-DEFECTS.md` UD1/UD2 and this entry now records only the port-side site.
 
 **state**: CLOSED by task 20 (`d9de0339`).
+
+## N39 — a tmux control-mode block over 1 MiB left the viewer alive, and the next attach panicked
+
+- **id**: N39 (next free id checked 2026-09-11 against this file's headings; N38 was the last).
+- **found by**: the R13 inventory (code sweep T1-1, `r13-inventory.md` M1); fixed by task R13-A.
+- **severity**: high. **kind**: missing-branch (reference defect, R13).
+- **oracle**: `src/terminal/dcs.zig:114-121`, `src/termio/stream_handler.zig:410`.
+- **rustty**: `crates/rustty-vt/src/dcs.rs:204` (`Handler::put`),
+  `crates/rustty-termio/src/stream_handler.rs:539` (the `.enter` assert).
+
+The port copied the reference: a discarded tmux DCS state emitted no `.exit`, so the viewer
+survived and the next `ESC P 1000 p` panicked at `stream_handler.rs:538`. No row claimed it.
+Under R13 `put` now emits `.exit` when it discards a tmux state. The reference defect is
+`UPSTREAM-DEFECTS.md` UD6, with the tests and the negative control.
+
+**state**: CLOSED by task R13-A (`e9808b18`).
+
+## N40 — eight tmux notification id captures unwrapped an overflowing `parseInt`
+
+- **id**: N40.
+- **found by**: the R13 inventory (M2; code T1-2, records F2, sessions B1, phase-3 U3); fixed by
+  task R13-A.
+- **severity**: high. **kind**: missing-branch (reference defect, R13).
+- **oracle**: `src/terminal/tmux/control.zig:238,269,309,347,377,408,413,470`.
+- **rustty**: `crates/rustty-vt/src/tmux/control.rs:970` (`parse_capture_usize`) and its eight
+  call sites.
+
+`.port/phase-3/UPSTREAM_BUGS.md` U3 recorded these as "left faithful" (a 20-digit id panicked the
+port as it does the reference). No LEDGER row. Under R13 an overflowing id takes the arm's own
+match-failure path. Only live with the `oniguruma` feature, which the app enables (N34).
+Reference defect: `UPSTREAM-DEFECTS.md` UD7.
+
+**state**: CLOSED by task R13-A (`886fa0c7`).
+
+## N41 — a zero tmux layout dimension crashed pane creation, and the pane-creation errdefer destroyed existing panes
+
+- **id**: N41.
+- **found by**: the R13 inventory (M4, code T1-3); the errdefer half by task R13-A while making the
+  failure path reachable.
+- **severity**: high (zero dimension); low (errdefer). **kind**: missing-branch (reference
+  defect, R13) + port divergence on an error path.
+- **oracle**: `src/terminal/tmux/viewer.zig:1160-1161` (zero passes `@intCast`), then
+  `src/terminal/page.zig:274` / `src/terminal/PageList.zig:647`; the errdefer at
+  `src/terminal/tmux/viewer.zig:365-374`.
+- **rustty**: `crates/rustty-vt/src/tmux/viewer.rs:1006` (`sync_layouts`).
+
+S209-F1 covers only the out-of-range half of this site. A zero width or height passed the port's
+checked cast and panicked inside `Terminal::init` — measured: `page_impl.rs:450` (index out of
+bounds) for a zero width, `pagelist/mod.rs:1928` (`!page_list.first.is_null()`) for a zero height.
+The inventory's other candidate, `terminal.rs:988-990` (`rows - 1`), is never reached first.
+Under R13 a zero dimension is a failed `Terminal::init`, like an out-of-range one.
+
+That made the `Terminal::init` failure branch reachable from input, and it diverged from the
+reference: it deinited every pane in the new map, including panes carried over from
+`self.panes`, where the reference's errdefer deinits only panes that are not in `self.panes`.
+The carried-over panes are now moved back. The viewer is defunct either way, so the visible
+difference was only which panes a defunct viewer still held. Test assertion: "pane 7 survives, as
+in the reference's errdefer". Reference defect: `UPSTREAM-DEFECTS.md` UD8.
+
+**state**: CLOSED by task R13-A (`886fa0c7`).
+
+## N42 — tmux layout parsing and teardown recursed without limit on a 2 MiB stack
+
+- **id**: N42.
+- **found by**: the R13 inventory (M6 code T1-4, P9); measured and fixed by task R13-A.
+- **severity**: medium. **kind**: missing-branch (reference defect, R13).
+- **oracle**: `src/terminal/tmux/layout.zig:87-230` (recursive call at :180).
+- **rustty**: `crates/rustty-vt/src/tmux/layout.rs:157` (`parse_next`), the `Drop for Layout`
+  above `ParseError`.
+
+The port recursed like the reference, and on a smaller stack: measured on macOS, the parser
+overflowed at about 1,500 levels in a debug build, and the derived `Debug` (used when the
+termio action log formats a `.windows` action) at about 2,400 in a release build, against
+about 9,200 / 39,000 for the reference on its 16 MiB thread. Under R13 nesting deeper than
+`MAX_DEPTH` (1000) is a `SyntaxError` and `Drop` is iterative. Reference defect:
+`UPSTREAM-DEFECTS.md` UD10. The Linux thread-stack check requested by the brief is pending
+controller approval to use the VM.
+
+**state**: CLOSED by task R13-A (`886fa0c7`), pending the Linux measurement.
+
+## N43 — the tmux viewer's "active area should be empty" debug assert was reachable
+
+- **id**: N43.
+- **found by**: the R13 inventory (M21, code T1-9); trigger established by task R13-A.
+- **severity**: low. **kind**: extra-check (reference defect, R13).
+- **oracle**: `src/terminal/tmux/viewer.zig:1070-1077`.
+- **rustty**: `crates/rustty-vt/src/tmux/viewer.rs:1768` (`received_pane_history`).
+
+The port ran the check under `debug_assertions`. It panics when a pane's `list-panes` state (scroll
+region, cursor below it) is applied before its history, which happens when a second pane is added
+while the first pane's captures are queued. The inventory's trigger ("a forged capture-pane reply"
+setting DECSTBM) does not work: an ESC in the reply ends the DCS. The check is removed, as in
+ReleaseFast. Reference defect: `UPSTREAM-DEFECTS.md` UD9.
+
+**state**: CLOSED by task R13-A (`886fa0c7`).

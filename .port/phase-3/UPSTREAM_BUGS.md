@@ -97,6 +97,8 @@ should do.
 
 ## U3 — tmux control-mode integer overflow on unbounded `([0-9]+)`
 
+> **Re-addressed under R13 (task R13-A, 2026-09-11):** no longer faithful; the port takes the arm's match-failure path. See `.port/parity-closure/UPSTREAM-DEFECTS.md` UD7.
+
 **Found:** 2026-07-31, untrusted-input panic sweep.
 
 `control.zig:233-237` parses tmux control-mode notification fields with
