@@ -1741,7 +1741,15 @@ impl Action {
                 value,
             ))?)),
             b"jump_to_prompt" => Ok(Action::JumpToPrompt(parse_field_int::<i16>(Some(value))?)),
-            b"goto_tab" => Ok(Action::GotoTab(parse_field_int::<usize>(Some(value))?)),
+            // R13 (UD58): bounded by `GOTO_TAB_MAX`, with this parser's
+            // out-of-range error.
+            b"goto_tab" => {
+                let v = parse_field_int::<usize>(Some(value))?;
+                if v > GOTO_TAB_MAX {
+                    return Err(Error::InvalidValue);
+                }
+                Ok(Action::GotoTab(v))
+            }
             b"move_tab" => Ok(Action::MoveTab(parse_field_int::<isize>(Some(value))?)),
 
             // enum variants (parseIntoField `.@"enum"` arm -> stringToEnum)
@@ -1974,6 +1982,27 @@ fn parse_int_usize(value: &[u8]) -> Result<usize, Error> {
         .and_then(|s| s.parse::<usize>().ok())
         .ok_or(Error::InvalidFormat)
 }
+
+/// The largest `goto_tab` index the action boundary can carry.
+///
+/// PORT NOTE: reference defect (R13, UPSTREAM-DEFECTS.md UD58). The field is
+/// `goto_tab: usize` (`Binding.zig:575`), but `Surface.zig:5328` narrows it with
+/// `@enumFromInt` into `apprt.action.GotoTab = enum(c_int)`, whose -1/-2/-3 are the
+/// previous/next/last sentinels. Above `c_int` max, ReleaseSafe panics and
+/// ReleaseFast truncates, so `goto_tab:4294967295` goes to the previous tab. Both
+/// action parsers reject a larger value with the error they already return for an
+/// integer argument that does not fit its type (`InvalidFormat` from
+/// `Action.parse`, `InvalidValue` from the tagged-union parser).
+pub const GOTO_TAB_MAX: usize = std::ffi::c_int::MAX as usize;
+
+/// `parseInt(usize, …)` for `goto_tab`, bounded by [`GOTO_TAB_MAX`] (R13, UD58).
+fn parse_int_goto_tab(value: &[u8]) -> Result<usize, Error> {
+    let v = parse_int_usize(value)?;
+    if v > GOTO_TAB_MAX {
+        return Err(Error::InvalidFormat);
+    }
+    Ok(v)
+}
 fn parse_int_u16(value: &[u8]) -> Result<u16, Error> {
     std::str::from_utf8(value)
         .ok()
@@ -2157,7 +2186,8 @@ impl Action {
             b"previous_tab" => void_arm!(Action::PreviousTab),
             b"next_tab" => void_arm!(Action::NextTab),
             b"last_tab" => void_arm!(Action::LastTab),
-            b"goto_tab" => num_arm!(Action::GotoTab, parse_int_usize),
+            // R13 (UD58): bounded by `GOTO_TAB_MAX`.
+            b"goto_tab" => num_arm!(Action::GotoTab, parse_int_goto_tab),
             b"move_tab" => num_arm!(Action::MoveTab, parse_int_isize),
             b"move_tab_to_new_window" => void_arm!(Action::MoveTabToNewWindow),
             b"toggle_tab_overview" => void_arm!(Action::ToggleTabOverview),
@@ -5220,6 +5250,50 @@ mod tests {
     // pervasively in the tests (`.{ .key = .{ .unicode = 'a' } }` etc.).
     fn uni(c: u32) -> TriggerKey {
         TriggerKey::Unicode(c)
+    }
+
+    // rustty-only (R13, UPSTREAM-DEFECTS.md UD58): a `goto_tab` index that
+    // `apprt.action.GotoTab = enum(c_int)` cannot hold is rejected by both action
+    // parsers, with the error each returns for an out-of-range integer. The
+    // largest index that fits is accepted. 4294967293..=4294967295 are the values
+    // the reference's ReleaseFast truncates onto the last/next/previous sentinels.
+    #[test]
+    fn goto_tab_index_above_c_int_max_is_rejected_by_both_parsers() {
+        assert_eq!(GOTO_TAB_MAX, i32::MAX as usize);
+        let too_large = [
+            "2147483648",
+            "3000000000",
+            "4294967293",
+            "4294967294",
+            "4294967295",
+            "18446744073709551615",
+        ];
+
+        // `Action.parse` (keybind values).
+        assert_eq!(
+            Ok(Action::GotoTab(GOTO_TAB_MAX)),
+            Action::parse(b"goto_tab:2147483647")
+        );
+        for v in too_large {
+            assert_eq!(
+                Err(Error::InvalidFormat),
+                Action::parse(format!("goto_tab:{v}").as_bytes()),
+                "keybind goto_tab:{v}"
+            );
+        }
+
+        // The tagged-union parser (`command-palette-entry` actions).
+        assert_eq!(
+            Ok(Action::GotoTab(GOTO_TAB_MAX)),
+            Action::parse_auto_tagged_union(b"goto_tab:2147483647")
+        );
+        for v in too_large {
+            assert_eq!(
+                Err(rustty_args::args::Error::InvalidValue),
+                Action::parse_auto_tagged_union(format!("goto_tab:{v}").as_bytes()),
+                "tagged union goto_tab:{v}"
+            );
+        }
     }
 
     // test "cval"  (Flags)

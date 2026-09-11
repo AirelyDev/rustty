@@ -12163,7 +12163,20 @@ where
                         binding::ScopedSurface::PreviousTab => apprt::action::GotoTab::PREVIOUS,
                         binding::ScopedSurface::NextTab => apprt::action::GotoTab::NEXT,
                         binding::ScopedSurface::LastTab => apprt::action::GotoTab::LAST,
-                        binding::ScopedSurface::GotoTab(v) => apprt::action::GotoTab(v as i32),
+                        // PORT NOTE: reference defect (R13, UPSTREAM-DEFECTS.md
+                        // UD58). The reference's `@enumFromInt(v)` narrows the
+                        // keybind's `usize` into `GotoTab = enum(c_int)`: above
+                        // `c_int` max, ReleaseSafe panics and ReleaseFast
+                        // truncates, so `goto_tab:4294967295` becomes `.previous`.
+                        // The port rejects such a value where the keybind is
+                        // parsed (`binding::GOTO_TAB_MAX`), as the parser rejects
+                        // any other integer argument its type cannot hold. Here the
+                        // value fits by construction, so the conversion is checked
+                        // (R7) rather than `as`, which wrapped (LEDGER S42-F4).
+                        binding::ScopedSurface::GotoTab(v) => apprt::action::GotoTab(
+                            i32::try_from(v)
+                                .expect("goto_tab index bounded by binding::GOTO_TAB_MAX at parse"),
+                        ),
                         // else => comptime unreachable,
                         _ => unreachable!(),
                     }),
