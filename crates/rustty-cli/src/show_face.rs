@@ -107,11 +107,9 @@ impl args::Target for Options {
             // cp: ?u21
             b"cp" => {
                 // A set-but-empty value resets to the default (null).
-                if let Some(v) = value {
-                    if v.is_empty() {
-                        self.cp = None;
-                        return Ok(());
-                    }
+                if args::is_reset_to_default(value) {
+                    self.cp = None;
+                    return Ok(());
                 }
                 // `--cp=65` / `0x41` / `0o101` / `0b1000001` — base auto-detected
                 // by `parse_field_int` (`std.fmt.parseInt(u21, v, 0)`), then bound-
@@ -125,11 +123,9 @@ impl args::Target for Options {
             }
             // string: ?[]const u8
             b"string" => {
-                if let Some(v) = value {
-                    if v.is_empty() {
-                        self.string = None;
-                        return Ok(());
-                    }
+                if args::is_reset_to_default(value) {
+                    self.string = None;
+                    return Ok(());
                 }
                 self.string = Some(args::parse_field_string(value)?);
                 Ok(())
@@ -137,11 +133,9 @@ impl args::Target for Options {
             // style: font.Style
             b"style" => {
                 // A set-but-empty value resets to the default (`.regular`).
-                if let Some(v) = value {
-                    if v.is_empty() {
-                        self.style = font::Style::Regular;
-                        return Ok(());
-                    }
+                if args::is_reset_to_default(value) {
+                    self.style = font::Style::Regular;
+                    return Ok(());
                 }
                 // std.meta.stringToEnum(font.Style, value)
                 self.style = args::parse_field_enum(value, |name| match name {
@@ -155,11 +149,9 @@ impl args::Target for Options {
             }
             // presentation: ?font.Presentation
             b"presentation" => {
-                if let Some(v) = value {
-                    if v.is_empty() {
-                        self.presentation = None;
-                        return Ok(());
-                    }
+                if args::is_reset_to_default(value) {
+                    self.presentation = None;
+                    return Ok(());
                 }
                 // std.meta.stringToEnum(font.Presentation, value)
                 self.presentation = Some(args::parse_field_enum(value, |name| match name {

@@ -1168,6 +1168,84 @@ pub fn parse_bool(v: &[u8]) -> Result<bool, ParseError> {
 // `parseIntoField` so each destination's field dispatch is identical.
 // ---------------------------------------------------------------------------
 
+/// `field.name[0] != '_'` — the reference's `parseIntoField` SKIPS every
+/// underscore-prefixed field, so such a key matches nothing and falls through
+/// to `return error.InvalidField`.
+//
+// PORT NOTE (parity S67-F6): in the reference this rule lives in the generic
+// `parseIntoField`; in the port the per-field match moved into each `Target`,
+// where it would otherwise be implicit in "the match arms happen not to list
+// the `_` fields". That implicitness is what made the ported test for this rule
+// vacuous — its test `Target` returned `InvalidField` unconditionally, so it
+// asserted its own stub. Making the rule an explicit library predicate gives
+// the Targets that HAVE underscore-prefixed fields (`rustty-config`'s `Config`:
+// `_arena`, `_diagnostics`, `_replay_steps`, `_conditional_state`, …) one place
+// to enforce it, and the test something real to drive.
+pub fn is_reserved_key(key: &[u8]) -> bool {
+    matches!(key.first(), Some(b'_'))
+}
+
+/// `if (value) |v| default: { if (v.len != 0) break :default; ... }` — the
+/// "set but EMPTY" value that resets a field to its declared default.
+//
+// PORT NOTE (parity S67-F6): also a generic `parseIntoField` rule that the
+// port's per-`Target` dispatch duplicated at every field of every destination
+// (nine production sites before this helper). One spelling, one place to get
+// it wrong.
+pub fn is_reset_to_default(value: Option<&[u8]>) -> bool {
+    matches!(value, Some(v) if v.is_empty())
+}
+
+/// The optional-field rule: `const Field = switch (@typeInfo(field.type)) {
+/// .optional => |opt| opt.child, else => field.type }` combined with the
+/// empty-value reset — an optional field's declared default is `null`, so an
+/// empty value clears it and any other value parses as the CHILD type.
+pub fn parse_field_optional<T, F>(value: Option<&[u8]>, parse: F) -> Result<Option<T>, ParseError>
+where
+    F: FnOnce(Option<&[u8]>) -> Result<T, ParseError>,
+{
+    if is_reset_to_default(value) {
+        return Ok(None);
+    }
+    Ok(Some(parse(value)?))
+}
+
+/// The 2/3-arg `parseCLI` rule for an OPTIONAL field:
+///
+/// ```zig
+/// .optional => if (@field(dst, field.name)) |*v| {
+///     try v.parseCLI(value);
+/// } else {
+///     var tmp: Field = undefined;
+///     try tmp.parseCLI(value);
+///     @field(dst, field.name) = tmp;
+/// },
+/// ```
+///
+/// i.e. parse IN PLACE when the field is already set (so the call can append to
+/// what is there), and into a fresh instance when it is not. `make` stands in
+/// for Zig's `var tmp: Field = undefined`, which Rust has no equivalent of.
+pub fn parse_field_optional_in_place<T, M, F>(
+    dst: &mut Option<T>,
+    value: Option<&[u8]>,
+    make: M,
+    parse: F,
+) -> Result<(), ParseError>
+where
+    M: FnOnce() -> T,
+    F: FnOnce(&mut T, Option<&[u8]>) -> Result<(), ParseError>,
+{
+    match dst {
+        Some(v) => parse(v, value),
+        None => {
+            let mut tmp = make();
+            parse(&mut tmp, value)?;
+            *dst = Some(tmp);
+            Ok(())
+        }
+    }
+}
+
 /// `[]const u8 => { const slice = value orelse return error.ValueRequired; ... }`.
 /// Returns an owned copy of the value bytes (the reference allocates+memcpy into
 /// the arena).

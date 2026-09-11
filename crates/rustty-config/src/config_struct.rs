@@ -70,8 +70,9 @@
 // const string = @import("string.zig");
 
 use rustty_args::args::{
-    parse_field_bool, parse_field_enum, parse_field_float, parse_field_int,
-    parse_field_sentinel_string, parse_field_string, Error, PackedStruct, ParseError, Target,
+    is_reserved_key, is_reset_to_default, parse_field_bool, parse_field_enum, parse_field_float,
+    parse_field_int, parse_field_sentinel_string, parse_field_string, Error, PackedStruct,
+    ParseError, Target,
 };
 use rustty_args::diagnostics::DiagnosticList;
 use rustty_cfg_fmt::{
@@ -9779,11 +9780,22 @@ impl Target for Config {
     // non-`_` field. The hyphenated Zig field names are the match patterns (e.g.
     // `b"font-family"`), exactly the names `parseIntoField` matches against.
     fn parse_into_field(&mut self, key: &[u8], value: Option<&[u8]>) -> Result<(), ParseError> {
+        // `if (field.name[0] != '_' and mem.eql(u8, field.name, key))` — the
+        // reference's `parseIntoField` SKIPS every underscore-prefixed field, so
+        // a `_`-prefixed key matches nothing and falls out as `InvalidField`.
+        // This Config is the Target that HAS such fields (`_arena`,
+        // `_diagnostics`, `_replay_steps`, `_conditional_state`, …), so the rule
+        // is enforced here explicitly rather than left implicit in "the match
+        // arms below happen not to list them" (parity S67-F6).
+        if is_reserved_key(key) {
+            return Err(Error::InvalidField);
+        }
+
         // The empty-string reset: `if (value) |v| { if (v.len == 0) <reset> }`.
         // For a field whose type has no `init` decl, the reset is to the struct's
         // declared default (`field.default_value_ptr`), which `Config::default()`
         // materializes. We compute the empty flag once; each arm consults it.
-        let is_empty = matches!(value, Some(v) if v.is_empty());
+        let is_empty = is_reset_to_default(value);
 
         // Reset field `$f` to the struct's declared default.
         macro_rules! reset_default {
@@ -11117,8 +11129,13 @@ mod parse_tests {
         );
     }
 
-    // Underscore-prefixed (internal) fields are never matched — they have no
-    // arm, so they fall through to `InvalidField` exactly like an unknown name.
+    // Underscore-prefixed (internal) fields are never matched. Since parity
+    // S67-F6 that is an EXPLICIT `is_reserved_key` guard at the top of
+    // `parse_into_field` (the shared library predicate the rustty-args test for
+    // this rule also drives) rather than only the implicit "they have no arm,
+    // so they fall through to `InvalidField` like an unknown name". Removing
+    // the guard today changes nothing observable — no arm names a `_` key —
+    // which is exactly why the rule needs somewhere explicit to live.
     #[test]
     fn parse_into_field_ignores_underscore_fields() {
         let mut cfg = Config::default();

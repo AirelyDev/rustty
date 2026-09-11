@@ -46,11 +46,9 @@ impl args::Target for Options {
                 // For optional fields, an empty (set-but-empty) value resets the
                 // value to the default (null) — the reference `parseIntoField`
                 // empty-value-default branch.
-                if let Some(v) = value {
-                    if v.is_empty() {
-                        self.config_file = None;
-                        return Ok(());
-                    }
+                if args::is_reset_to_default(value) {
+                    self.config_file = None;
+                    return Ok(());
                 }
                 self.config_file = Some(args::parse_field_sentinel_string(value)?);
                 Ok(())

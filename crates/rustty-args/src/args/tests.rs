@@ -264,21 +264,20 @@ fn parse_empty_value_resets_to_default() {
             // @field(dst, name) = default; }`).
             match key {
                 b"a" => {
-                    if let Some(v) = value {
-                        if v.is_empty() {
-                            self.a = 42; // declared default
-                            return Ok(());
-                        }
+                    // `is_reset_to_default` IS the library rule (parity
+                    // S67-F6); spelling the predicate inline here would make
+                    // this test assert its own copy of it.
+                    if is_reset_to_default(value) {
+                        self.a = Data::default().a; // declared default
+                        return Ok(());
                     }
                     self.a = parse_field_int::<u8>(value)?;
                     Ok(())
                 }
                 b"b" => {
-                    if let Some(v) = value {
-                        if v.is_empty() {
-                            self.b = false; // declared default
-                            return Ok(());
-                        }
+                    if is_reset_to_default(value) {
+                        self.b = Data::default().b; // declared default
+                        return Ok(());
                     }
                     self.b = parse_field_bool(value)?;
                     Ok(())
@@ -628,14 +627,27 @@ fn parse_into_field_ignore_underscore_prefixed_fields() {
         _a: Vec<u8>,
     }
     impl Target for Data {
-        fn parse_into_field(
-            &mut self,
-            _key: &[u8],
-            _value: Option<&[u8]>,
-        ) -> Result<(), ParseError> {
+        fn parse_into_field(&mut self, key: &[u8], value: Option<&[u8]>) -> Result<(), ParseError> {
             // field.name[0] != '_' — underscore-prefixed fields are skipped, so
             // they never match and `InvalidField` is returned.
-            Err(Error::InvalidField)
+            //
+            // PORT NOTE (parity S67-F6): this used to be an unconditional
+            // `Err(Error::InvalidField)`, i.e. the test asserted its own stub
+            // and would have passed whatever the library did. It now drives
+            // `args::is_reserved_key`, the same guard `rustty-config`'s Config
+            // Target runs before its field match.
+            if is_reserved_key(key) {
+                return Err(Error::InvalidField);
+            }
+            match key {
+                // The `_a` field IS reachable by name — only the underscore
+                // guard above keeps it from being written.
+                b"_a" => {
+                    self._a = parse_field_string(value)?;
+                    Ok(())
+                }
+                _ => Err(Error::InvalidField),
+            }
         }
     }
     let mut data = Data { _a: b"12".to_vec() };
@@ -668,12 +680,11 @@ fn parse_into_field_struct_with_init_func() {
             match key {
                 b"a" => {
                     // canHaveDecls and @hasDecl(Field, "init") with empty value
-                    // calls init and returns.
-                    if let Some(v) = value {
-                        if v.is_empty() {
-                            self.a.init();
-                            return Ok(());
-                        }
+                    // calls init and returns. The "empty value" half is the
+                    // library rule (parity S67-F6).
+                    if is_reset_to_default(value) {
+                        self.a.init();
+                        return Ok(());
                     }
                     Err(Error::InvalidValue)
                 }
@@ -1013,15 +1024,12 @@ fn parse_into_field_optional_field() {
         fn parse_into_field(&mut self, key: &[u8], value: Option<&[u8]>) -> Result<(), ParseError> {
             match key {
                 b"a" => {
-                    // Optional: empty value resets to the declared default (null).
-                    if let Some(v) = value {
-                        if v.is_empty() {
-                            self.a = None; // declared default
-                            return Ok(());
-                        }
-                    }
-                    // For optional fields, treat as the child type (bool).
-                    self.a = Some(parse_field_bool(value)?);
+                    // Optional: an empty value resets to the declared default
+                    // (null), anything else parses as the CHILD type (bool).
+                    // Both halves are `parse_field_optional`, the library rule
+                    // (parity S67-F6) — writing them out here would make the
+                    // test assert its own copy.
+                    self.a = parse_field_optional(value, parse_field_bool)?;
                     Ok(())
                 }
                 _ => Err(Error::InvalidField),
@@ -1096,15 +1104,14 @@ fn parse_into_field_optional_struct_with_parse_func() {
             match key {
                 b"a" => {
                     // 3 arg, optional: if set use it directly, else create new.
-                    match &mut self.a {
-                        Some(v) => v.parse_cli(value)?,
-                        None => {
-                            let mut tmp = Inner { v: Vec::new() };
-                            tmp.parse_cli(value)?;
-                            self.a = Some(tmp);
-                        }
-                    }
-                    Ok(())
+                    // That is `parse_field_optional_in_place`, the library rule
+                    // (parity S67-F6).
+                    parse_field_optional_in_place(
+                        &mut self.a,
+                        value,
+                        || Inner { v: Vec::new() },
+                        |v, value| v.parse_cli(value),
+                    )
                 }
                 _ => Err(Error::InvalidField),
             }

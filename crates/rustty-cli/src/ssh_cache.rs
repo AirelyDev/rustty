@@ -64,22 +64,18 @@ impl args::Target for Options {
             }
             // add: ?[]const u8 — an empty (set-but-empty) value resets to null.
             b"add" => {
-                if let Some(v) = value {
-                    if v.is_empty() {
-                        self.add = None;
-                        return Ok(());
-                    }
+                if args::is_reset_to_default(value) {
+                    self.add = None;
+                    return Ok(());
                 }
                 self.add = Some(args::parse_field_string(value)?);
                 Ok(())
             }
             // remove: ?[]const u8
             b"remove" => {
-                if let Some(v) = value {
-                    if v.is_empty() {
-                        self.remove = None;
-                        return Ok(());
-                    }
+                if args::is_reset_to_default(value) {
+                    self.remove = None;
+                    return Ok(());
                 }
                 self.remove = Some(args::parse_field_string(value)?);
                 Ok(())
@@ -87,11 +83,9 @@ impl args::Target for Options {
             // prune: ?Duration — the field type has a `parseCLI` (1-arg), and an
             // empty value resets the optional to null.
             b"prune" => {
-                if let Some(v) = value {
-                    if v.is_empty() {
-                        self.prune = None;
-                        return Ok(());
-                    }
+                if args::is_reset_to_default(value) {
+                    self.prune = None;
+                    return Ok(());
                 }
                 self.prune = Some(Duration::parse_cli(value)?);
                 Ok(())
