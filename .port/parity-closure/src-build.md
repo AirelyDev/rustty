@@ -27,7 +27,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** checkNixShell NixOS-outside-nix-shell build error is not ported
   - **Oracle:** `src/build/GhosttyExe.zig:36-37, 66-106` → **Rustty:** `crates/rustty/Cargo.toml:1-40`
   - **Audit's suggested fix:** Add the same check (Linux, non-cross, `/etc/NIXOS` present, `IN_NIX_SHELL` unset) to a build.rs of the `rustty` bin crate, emitting the same guidance (`nix develop -c cargo build`) as a hard error.
-- [ ] **S63-F7** · CONFIRMED · `INDIV` · missing-test
+- [x] **S63-F7** · CONFIRMED · `INDIV` · missing-test
   - **What:** No distcheck for the lib-vt tarball (test-lib-vt run + CMake configure/build inside the extracted tree)
   - **Oracle:** `src/build/GhosttyDist.zig:126-147, 156-171` → **Rustty:** `xtask/src/dist.rs:223-283`
   - **Audit's suggested fix:** Add `distcheck-lib-vt` to xtask: extract `dist/librustty-vt-<v>.tar.gz`, run `cargo test -p rustty-vt -p rustty-vt-c --offline --locked` and `cmake -B cmake-build && cmake --build cmake-build` inside it.

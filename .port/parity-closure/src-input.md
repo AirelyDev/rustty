@@ -25,7 +25,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
 
 ## Low (6)
 
-- [ ] **S102-F1** · CONFIRMED · `INDIV` · weakened-assertion
+- [x] **S102-F1** · CONFIRMED · `INDIV` · weakened-assertion
   - **What:** parse_chain: first p.next() result is discarded instead of `try`-checked
   - **Oracle:** `src/input/Binding.zig:3484-3489` → **Rustty:** `crates/rustty-input/src/binding.rs:6280-6286`
   - **Audit's suggested fix:** Replace with `p.next().unwrap();` (or `assert!(p.next().is_ok())`).
@@ -33,7 +33,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** Markdown header ends with three newlines instead of two
   - **Oracle:** `src/input/helpgen_actions.zig:45-58` → **Rustty:** `crates/rustty-input/src/helpgen_actions.rs:66-80`
   - **Audit's suggested fix:** Drop one `\n` so the header ends with exactly two newlines.
-- [ ] **S103-F3** · CONFIRMED · `INDIV` · weakened-assertion
+- [x] **S103-F3** · CONFIRMED · `INDIV` · weakened-assertion
   - **What:** `w3c` test iterates the hand-maintained TAG_NAMES table rather than every enum field, and the doc-claimed completeness test does not exist
   - **Oracle:** `src/input/key.zig:731-741` → **Rustty:** `crates/rustty-vt/src/input/key.rs:1417-1426, 583-588`
   - **Audit's suggested fix:** Add a test asserting `TAG_NAMES.len() == <variant count>` (e.g. `Key::Paste as usize + 1`) and that each index i has `TAG_NAMES[i].0 as usize == i`, or derive the table with a macro.

@@ -50,7 +50,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** load_coretext drops the `errdefer face.deinit()` — HarfBuzz font handle leaks when set_variations fails
   - **Oracle:** `src/font/DeferredFace.zig:248-258` → **Rustty:** `crates/rustty-font-shaper/src/deferred_face.rs:355-362`
   - **Audit's suggested fix:** Match the fontconfig/Windows arms: `match face.set_variations(..) { Ok(()) => Ok(face), Err(e) => { face.deinit(); Err(e) } }`.
-- [ ] **S85-F4** · CONFIRMED · `INDIV` · weakened-assertion
+- [x] **S85-F4** · CONFIRMED · `INDIV` · weakened-assertion
   - **What:** formatConfig percent/absolute tests assert only the value, not the full formatted entry line
   - **Oracle:** `src/font/Metrics.zig:561-585` → **Rustty:** `crates/rustty-font/src/metrics.rs:944-978`
   - **Audit's suggested fix:** Add a rustty-config (or rustty-cfg-fmt) test that formats `Some(MetricModifier::parse_cli(Some(b"24%")))` under key "a" through the real entry formatter and asserts `b"a = 24%\n"` (and `b"a = -30\n"`); update the stale PORT NOTE.

@@ -22,7 +22,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
 
 ## Low (12)
 
-- [ ] **S110-F3** · CONFIRMED · `INDIV` · weakened-assertion
+- [x] **S110-F3** · CONFIRMED · `INDIV` · weakened-assertion
   - **What:** Test `c allocator` does not exercise `c_allocator()`; the public fn is untested
   - **Oracle:** `src/lib/allocator.zig:246-253` → **Rustty:** `crates/rustty-lib/src/allocator.rs:665-683`
   - **Audit's suggested fix:** `let c_alloc = c_allocator(); let alloc = c_alloc.zig();` then the same alloc/len==10/free assertions.

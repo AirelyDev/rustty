@@ -46,7 +46,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** NULL results from CTFont/CTFontDescriptor/CTFontCollection creators become objc2 panics instead of the reference's error.OutOfMemory / `catch return null`
   - **Oracle:** `pkg/macos/text/font.zig:10-19,44-59 (also font_descriptor.zig:7-47, font_collection.zig:15-23, use-site src/apprt/embedded.zig:2434-2438)` → **Rustty:** `crates/rustty-font-shaper/src/face/coretext.rs:212,227,354,363,428,444,456,1364 (also discovery.rs:1156,1225,1654,2057,2065; shaper/coretext.rs:1063,1071; rustty-apprt-c/src/lib.rs:2921-2925)`
   - **Audit's suggested fix:** Declare the raw CTFontCreateWithFontDescriptor / CTFontCreateCopyWithAttributes / CTFontDescriptorCreateWithAttributes / CTFontDescriptorCreateCopyWithAttributes / CTFontDescriptorCreateCopyWithVariation / CTFontCollectionCreateWithFontDescriptors symbols in the existing `sys` modules (same pattern as CTFontCreateWithName) returning `*mut T`, and map NULL to Error::OutOfMemory (or `return null` in the apprt-c export).
-- [ ] **S36-F5** · CONFIRMED · `INDIV` · missing-test
+- [x] **S36-F5** · CONFIRMED · `INDIV` · missing-test
   - **What:** No test for the 'from descriptors no match' branch (NULL matching-descriptor array -> empty list)
   - **Oracle:** `pkg/macos/text/font_collection.zig:117-139` → **Rustty:** `crates/rustty-font-shaper/src/discovery.rs:1520-1547 (tests module 2590-2900)`
   - **Audit's suggested fix:** Add a discovery test that calls CoreText::discover with family 'ThisShouldNeverExist' and asserts the iterator yields nothing (list.len() == 0).

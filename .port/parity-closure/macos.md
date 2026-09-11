@@ -7,7 +7,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
 
 ## Medium (4)
 
-- [ ] **S15-F2** · CONFIRMED · `INDIV` · missing-test
+- [x] **S15-F2** · CONFIRMED · `INDIV` · missing-test
   - **What:** OUT-OF-SHARD NOTE: TerminalViewContainerTests.swift has no counterpart in rustty/macos/Tests
   - **Oracle:** `macos/Tests/Terminal/TerminalViewContainerTests.swift:1-EOF` → **Rustty:** `macos/Tests/Terminal/TerminalViewContainerTests.swift:n/a (absent)`
   - **Audit's suggested fix:** Port macos/Tests/Terminal/TerminalViewContainerTests.swift to rustty/macos/Tests/Terminal/ with the same assertions (rename-only), and add it to Rustty.xctestplan if tests are enumerated there.

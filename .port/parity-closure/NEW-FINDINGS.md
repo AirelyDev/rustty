@@ -2010,3 +2010,38 @@ reference's failure mode (a test failure), and it is the closest Rust has to
 **state**: CLOSED by task 19 at all five sites. Recorded here rather than reopening `S45-F1`,
 whose own claim — "the C values are looked up in the enum itself" — was true, was fixed, and is
 not this.
+
+## N37 — `xtask dist-lib-vt` has been BROKEN since task 17, and G-DIST runs it at its DEFAULT depth
+
+Found by task 19 the moment `distcheck-lib-vt` (S63-F7) existed to run it.
+
+`prune_to_lib_vt` computes the lib-vt tarball's crate closure from `cargo metadata` and
+deliberately skipped path DEV-dependencies, with the comment *"Dev-deps are skipped: they pull in
+test-only crates a source tarball for C consumers does not need."*
+
+**That premise is wrong twice.**
+
+1. **Cargo cannot LOAD a workspace whose member declares a path dev-dependency that is not on
+   disk.** It fails at `cargo vendor`, during `dist` itself, with
+   `failed to load manifest for dependency 'rustty-synthetic'`. The tarball is never produced.
+2. **The reference's check step for this exact tarball RUNS THE TESTS in it**
+   (`zig build test-lib-vt -Demit-lib-vt=true`), so the test-only crates are precisely what it
+   needs.
+
+**Measured at this task's base commit** `5a73f0bc`, in a clean worktree, with nothing of mine
+applied: `cargo run -p xtask -- dist-lib-vt` fails. The breaking change is task 17's S155-F5,
+which gave rustty-vt a `rustty-synthetic` dev-dependency — a change whose own report flagged the
+dev-dependency as novel (§11.5) and still could not see this, because nothing ran the command.
+
+**What it says about the gate.** `check_dist.sh` runs `xtask dist-lib-vt` at its DEFAULT depth,
+not behind `RUSTTY_DISTCHECK=1`. So G-DIST has been RED — or unrun — for the whole interval. A
+gate that nobody runs is indistinguishable from a gate that does not exist, and this one was
+reporting on the artifact `release-tip.yml` publishes as `librustty-vt-source.tar.gz`.
+
+**Fix**: dev-deps are closure edges (`xtask/src/dist.rs`, `prune_to_lib_vt`), and the false
+comment is replaced by a CORRECTION quoting it. `xtask dist-lib-vt` and the new
+`xtask distcheck-lib-vt` both pass.
+
+**state**: CLOSED by task 19. Recorded because the *class* is open: a gate step whose failure
+nobody observes. Worth asking, at the finale, which G-* steps have actually run since they were
+written.

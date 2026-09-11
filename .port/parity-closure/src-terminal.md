@@ -18,7 +18,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
 
 ## Medium (36)
 
-- [ ] **S127-F1** · CONFIRMED · `INDIV` · weakened-assertion
+- [x] **S127-F1** · CONFIRMED · `INDIV` · weakened-assertion
   - **What:** clone test compares only line-limit fields instead of the whole Limits struct
   - **Oracle:** `src/terminal/PageList.zig:11390-11395` → **Rustty:** `crates/rustty-vt/src/pagelist/tests.rs:6969-6978`
   - **Audit's suggested fix:** Replace the three line-only asserts with `assert_eq!(s.limits, cloned.limits);` (Limits already derives PartialEq/Eq).
@@ -42,7 +42,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** libghostty-vt default kitty_image_storage_limit is 320MB instead of the .lib artifact's 10MB
   - **Oracle:** `src/terminal/Terminal.zig:266-274` → **Rustty:** `crates/rustty-vt-c/src/terminal.rs:1547-1560`
   - **Audit's suggested fix:** Add an `Options` constructor/`Default` in rustty-vt carrying the reference field defaults (max_scrollback_bytes=Some(10_000), max_scrollback_lines=None, colors=default, default_modes=default, Block/Some(false), storage limit per artifact, loading_limits=DIRECT) and have rustty-vt-c use 10 * 1000 * 1000 for the lib artifact.
-- [ ] **S143-F1** · CONFIRMED · `INDIV` · weakened-assertion
+- [x] **S143-F1** · CONFIRMED · `INDIV` · weakened-assertion
   - **What:** resize failure-path test compares only subsets of flags, tabstops and cursor
   - **Oracle:** `src/terminal/Terminal.zig:4528-4569` → **Rustty:** `crates/rustty-vt/src/terminal.rs:19136-19306`
   - **Audit's suggested fix:** Snapshot `t.flags` (derive/impl PartialEq on Flags), clone the full `Tabstops` table (or compare all `get(i)` for i in 0..cols), and compare the full `Cursor` value (derive PartialEq or compare every field) before/after the failed resize.
@@ -58,7 +58,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** clipboard.Location is a closed enum; reference is non-exhaustive enum(c_int){_}
   - **Oracle:** `src/terminal/clipboard.zig:4-9` → **Rustty:** `crates/rustty-vt/src/clipboard.rs:14-23`
   - **Audit's suggested fix:** Either model Location like WriteStatus/ReadStatus (a #[repr(transparent)] i32 newtype with associated consts) so unknown values round-trip, or explicitly accept the D11 divergence and document it in clipboard.rs next to the type.
-- [ ] **S156-F1** · CONFIRMED · `INDIV` · weakened-assertion
+- [x] **S156-F1** · CONFIRMED · `INDIV` · weakened-assertion
   - **What:** ghostty.h ProgressReport.State check never reads the C header (tautological lookup)
   - **Oracle:** `src/terminal/osc.zig:249-253` → **Rustty:** `crates/rustty-vt/src/osc/mod.rs:406-434`
   - **Audit's suggested fix:** Reuse mouse.rs's `parse_header_enum` (hoist it into rustty-lib or a shared test helper) and look the values up in `include/rustty-embed.h`'s `rustty_action_progress_report_state_e` block, plus a probe-can-fail test as in mouse.rs.
@@ -142,7 +142,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** readFile with no `s=` size silently TRUNCATES at max_size instead of failing
   - **Oracle:** `src/terminal/kitty/graphics_image.zig:420-443` → **Rustty:** `crates/rustty-vt/src/kitty/graphics_image.rs:660-670`
   - **Audit's suggested fix:** Read `MAX_SIZE + 1` bytes (or check `managed.len() >= MAX_SIZE` after the take) and return `Error::InvalidData` when the limit was reached, mirroring `error.StreamTooLong`.
-- [ ] **S194-F2** · CONFIRMED · `INDIV` · weakened-assertion
+- [x] **S194-F2** · CONFIRMED · `INDIV` · weakened-assertion
   - **What:** test "OSC 52: get/set clipboard with allocator" ported without an allocator, making it a duplicate of the non-allocator test
   - **Oracle:** `src/terminal/osc/parsers/clipboard_operation.zig:94-107` → **Rustty:** `crates/rustty-vt/src/osc/parsers/clipboard_operation.rs:130-152`
   - **Audit's suggested fix:** Construct the parser with an allocator (ZigAllocatorRef) in this test so the allocating capture backing is actually covered, restoring the distinction from the preceding test.
@@ -373,7 +373,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** grid_ref_track allocates the TrackedGridRef on the Rust global heap instead of the caller's allocator
   - **Oracle:** `src/terminal/c/terminal.zig:1809-1834` → **Rustty:** `crates/rustty-vt-c/src/terminal.rs:4306-4340`
   - **Audit's suggested fix:** Allocate the TrackedGridRef through the wrapper's stored C allocator (`rustty_lib::allocator::create_raw`) and keep the `untrack_pin` + `RUSTTY_OUT_OF_MEMORY` unwind, matching the oracle's cleanup order.
-- [ ] **S180-F1** · CONFIRMED · `INDIV` · weakened-assertion
+- [x] **S180-F1** · CONFIRMED · `INDIV` · weakened-assertion
   - **What:** `scroll_viewport null` drops the `.row` tag call
   - **Oracle:** `src/terminal/c/terminal.zig:2394-2397` → **Rustty:** `crates/rustty-vt-c/src/terminal.rs:5218-5232`
   - **Audit's suggested fix:** Add the second call: `scroll_viewport(std::ptr::null_mut(), ScrollViewportC { tag: ScrollViewportTag::Row as c_int, value: ScrollViewportCValue { row: 1 } })`.
