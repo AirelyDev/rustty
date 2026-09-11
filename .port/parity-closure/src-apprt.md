@@ -23,7 +23,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** ipc header-sync tests look the C values up in the enum itself, never in the header
   - **Oracle:** `src/apprt/ipc.zig:27-29, 181-183` → **Rustty:** `crates/rustty-apprt-api/src/ipc.rs:372-420`
   - **Audit's suggested fix:** Include include/rustty-embed.h (include_str!) and parse the RUSTTY_IPC_TARGET_* / RUSTTY_IPC_ACTION_* enumerators as mouse.rs's header_decls does, then pass that map to check_ghostty_henum. (The same tautology is used by action_tests.rs run_henum, outside this shard.)
-- [ ] **S48-F1** · CONFIRMED · `INDIV` · weakened-assertion
+- [x] **S48-F1** · CONFIRMED · `INDIV` · weakened-assertion
   - **What:** bellMediaFile reuse test asserts path equality instead of object identity
   - **Oracle:** `src/apprt/gtk/media.zig:148-154` → **Rustty:** `crates/rustty-apprt/src/gtk/media.rs:142-149`
   - **Audit's suggested fix:** Keep `let first = current.clone();` before the same-path call and `assert_eq!(first, current);` (glib object handles compare by pointer), matching media.zig:154.
