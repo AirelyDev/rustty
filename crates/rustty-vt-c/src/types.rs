@@ -1430,6 +1430,7 @@ static DECLS: &[TypeDecl] = {
                     ("no_value", NoValue),
                     ("io_error", IoError),
                     ("limit_exceeded", LimitExceeded),
+                    ("rejected", Rejected),
                 ]
             )
         ),
@@ -2345,6 +2346,7 @@ static DECLS: &[TypeDecl] = {
                     ("userdata", Userdata),
                     ("decode_png", DecodePng),
                     ("log", Log),
+                    ("random_secure", RandomSecure),
                 ]
             )
         ),
@@ -2431,6 +2433,7 @@ static DECLS: &[TypeDecl] = {
                     ("mode", Mode),
                     ("vt_ground", VtGround),
                     ("cursor_at_prompt", CursorAtPrompt),
+                    ("clipboard_write_max_bytes", ClipboardWriteMaxBytes),
                 ]
             )
         ),
@@ -2480,6 +2483,8 @@ static DECLS: &[TypeDecl] = {
                     ("unknown_sequence", UnknownSequence),
                     ("unknown_max_bytes", UnknownMaxBytes),
                     ("terminfo_name", TerminfoName),
+                    ("clipboard_read", ClipboardRead),
+                    ("clipboard_write_max_bytes", ClipboardWriteMaxBytes),
                 ]
             )
         ),
@@ -3275,7 +3280,7 @@ mod tests {
     // minimal tree and assert the same facts. A tiny purpose-built parser is
     // used (no serde dependency in this leaf); it handles the object/number/
     // string/null subset this JSON emits.
-    fn parsed_json() -> JsonValue {
+    pub(super) fn parsed_json() -> JsonValue {
         let bytes = json_cstring();
         // Drop the trailing NUL sentinel.
         let s = std::str::from_utf8(&bytes[..bytes.len() - 1]).unwrap();
@@ -3289,7 +3294,7 @@ mod tests {
         v
     }
 
-    fn manifest_types(root: &JsonValue) -> &[(String, JsonValue)] {
+    pub(super) fn manifest_types(root: &JsonValue) -> &[(String, JsonValue)] {
         get(root.as_object(), "types").as_object()
     }
 
@@ -3824,7 +3829,7 @@ mod tests {
         obj.iter().find(|(k, _)| k == key).map(|(_, v)| v)
     }
 
-    fn get<'a>(obj: &'a [(String, JsonValue)], key: &str) -> &'a JsonValue {
+    pub(super) fn get<'a>(obj: &'a [(String, JsonValue)], key: &str) -> &'a JsonValue {
         match find(obj, key) {
             Some(v) => v,
             None => panic!("missing key {key}"),
@@ -3835,7 +3840,7 @@ mod tests {
         find(obj, key).is_some()
     }
 
-    enum JsonValue {
+    pub(super) enum JsonValue {
         Object(Vec<(String, JsonValue)>),
         Int(i64),
         Str(String),
@@ -3843,19 +3848,19 @@ mod tests {
     }
 
     impl JsonValue {
-        fn as_object(&self) -> &[(String, JsonValue)] {
+        pub(super) fn as_object(&self) -> &[(String, JsonValue)] {
             match self {
                 JsonValue::Object(o) => o,
                 _ => panic!("not an object"),
             }
         }
-        fn as_int(&self) -> i64 {
+        pub(super) fn as_int(&self) -> i64 {
             match self {
                 JsonValue::Int(n) => *n,
                 _ => panic!("not an int"),
             }
         }
-        fn as_str(&self) -> &str {
+        pub(super) fn as_str(&self) -> &str {
             match self {
                 JsonValue::Str(s) => s,
                 _ => panic!("not a string"),
@@ -3959,5 +3964,155 @@ mod tests {
                 .unwrap();
             JsonValue::Int(n)
         }
+    }
+}
+
+/// The manifest's enum tables are HAND-LISTED; the reference's are REFLECTED.
+///
+/// PORT NOTE: no reference analogue, and that is the whole point. The oracle
+/// writes `.initEnum("GhosttyTerminalOption", terminal.Option, "GHOSTTY_…")`
+/// and `inline for (@typeInfo(decl.T).@"enum".fields)` enumerates the Zig enum,
+/// so the oracle's manifest CANNOT omit a variant. Rust has no such reflection,
+/// so [`DECLS`] carries a written-out `enum_values!` list per enum — and four of
+/// those lists had silently fallen behind their own Rust enum (`S182-F1`..`F4`:
+/// `RUSTTY_REJECTED`, `RUSTTY_SYS_OPT_RANDOM_SECURE`,
+/// `RUSTTY_TERMINAL_OPT_CLIPBOARD_READ`/`_CLIPBOARD_WRITE_MAX_BYTES`,
+/// `RUSTTY_TERMINAL_DATA_CLIPBOARD_WRITE_MAX_BYTES`).
+///
+/// Nothing caught them: `G-ABISCHEMA` validates the manifest's SHAPE against a
+/// JSON Schema and has no idea which variants should exist, and
+/// `check-vt-enum-discriminants.mjs` compares the HEADER to the Rust enum, never
+/// to the manifest. This module is the missing third edge — manifest vs the
+/// shipped header — so the next omission fails a test instead of shipping.
+#[cfg(test)]
+mod manifest_header_sync_tests {
+    use super::tests::{get, manifest_types, parsed_json};
+    use rustty_lib::c_header::parse_header_enum;
+    use std::collections::BTreeMap;
+
+    /// Manifest enums with no counterpart in the curated header family. Each
+    /// entry must say why. A stale entry (one that HAS acquired a header enum)
+    /// is a FAIL — a rotting allowlist is how a check stops binding.
+    const UNDECLARED_IN_HEADERS: &[(&str, &str)] = &[];
+
+    /// Read every curated header's text.
+    fn header_text() -> String {
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../include/rustty");
+        let mut out = String::new();
+        let mut stack = vec![std::path::PathBuf::from(dir)];
+        // `include/rustty/vt.h` sits beside the `rustty/` directory's contents.
+        while let Some(d) = stack.pop() {
+            for e in std::fs::read_dir(&d).expect("curated header dir") {
+                let p = e.unwrap().path();
+                if p.is_dir() {
+                    stack.push(p);
+                } else if p.extension().and_then(|e| e.to_str()) == Some("h") {
+                    out.push_str(&std::fs::read_to_string(&p).unwrap());
+                    out.push('\n');
+                }
+            }
+        }
+        // The sentinel enumerator is `<PREFIX>_MAX_VALUE = RUSTTY_ENUM_MAX_VALUE`;
+        // substitute the macro so the strict parser sees an integer.
+        out.replace("RUSTTY_ENUM_MAX_VALUE", "2147483647")
+    }
+
+    /// The manifest's enum declarations as `name -> (prefix, {FULL_C_NAME: value})`,
+    /// with the `*_MAX_VALUE` sentinel row dropped (it is the manifest's own
+    /// bookkeeping, emitted from `sentinel_suffix`, not an enum field).
+    #[allow(clippy::type_complexity)]
+    fn manifest_enums() -> Vec<(String, BTreeMap<String, i64>)> {
+        let root = parsed_json();
+        let types = manifest_types(&root);
+        let mut out = Vec::new();
+        for (name, v) in types {
+            let obj = v.as_object();
+            if get(obj, "kind").as_str() != "enum" {
+                continue;
+            }
+            let prefix = get(obj, "prefix").as_str();
+            let mut rows = BTreeMap::new();
+            for (k, val) in get(obj, "values").as_object().iter() {
+                let value = val.as_int();
+                if value == i64::from(std::ffi::c_int::MAX) && k.ends_with("MAX_VALUE") {
+                    continue;
+                }
+                rows.insert(format!("{}{}", prefix, k), value);
+            }
+            out.push((name.clone(), rows));
+        }
+        out
+    }
+
+    /// Every manifest enum declares EXACTLY the enumerators the shipped header
+    /// declares, with the same values.
+    #[test]
+    fn manifest_enums_match_the_shipped_headers() {
+        let src = header_text();
+        let enums = manifest_enums();
+        assert!(
+            enums.len() >= 20,
+            "found only {} manifest enums — the walk is not finding them",
+            enums.len()
+        );
+
+        let mut checked = 0usize;
+        let mut failures: Vec<String> = Vec::new();
+        for (name, rows) in &enums {
+            let Ok(header) = parse_header_enum(&src, name) else {
+                if !UNDECLARED_IN_HEADERS.iter().any(|(n, _)| n == name) {
+                    failures.push(format!(
+                        "{}: manifest declares this enum but no curated header does, \
+                         and it is not in UNDECLARED_IN_HEADERS",
+                        name
+                    ));
+                }
+                continue;
+            };
+            checked += 1;
+            let header: BTreeMap<String, i64> = header
+                .into_iter()
+                .filter(|(n, _)| !n.ends_with("_MAX_VALUE"))
+                .collect();
+            for (n, v) in &header {
+                match rows.get(n) {
+                    None => failures.push(format!(
+                        "{}: header declares {} = {} and the manifest OMITS it",
+                        name, n, v
+                    )),
+                    Some(mv) if mv != v => failures.push(format!(
+                        "{}: {} is {} in the header but {} in the manifest",
+                        name, n, v, mv
+                    )),
+                    Some(_) => {}
+                }
+            }
+            for (n, v) in rows {
+                if !header.contains_key(n) {
+                    failures.push(format!(
+                        "{}: the manifest declares {} = {} and no header does",
+                        name, n, v
+                    ));
+                }
+            }
+        }
+
+        // Stale-allowlist rot.
+        for (n, _) in UNDECLARED_IN_HEADERS {
+            if parse_header_enum(&src, n).is_ok() {
+                failures.push(format!(
+                    "{}: listed in UNDECLARED_IN_HEADERS but the headers DO declare it now. \
+                     Delete the row.",
+                    n
+                ));
+            }
+        }
+
+        assert!(failures.is_empty(), "\n{}", failures.join("\n"));
+        assert!(
+            checked >= 20,
+            "only {} manifest enums were actually compared against a header",
+            checked
+        );
     }
 }

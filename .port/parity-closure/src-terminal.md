@@ -114,19 +114,19 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** Terminal internals are not allocated through the caller-supplied C allocator (F-008 Tier-2 residual)
   - **Oracle:** `src/terminal/c/terminal.zig:875-884` → **Rustty:** `crates/rustty-vt-c/src/terminal.rs:1538-1546`
   - **Audit's suggested fix:** Thread the resolved C allocator into `ZigTerminal::init` (make rustty-vt's Terminal generic over the allocator, as its `deinit(alloc)` signature already suggests), or record the divergence as an accepted, header-documented limitation.
-- [ ] **S182-F1** · CONFIRMED · `ABI` · missing-branch
+- [x] **S182-F1** · CONFIRMED · `ABI` · missing-branch
   - **What:** ABI manifest omits RUSTTY_REJECTED (-7) from the RusttyResult enum values
   - **Oracle:** `src/terminal/c/types.zig:244 (row) / src/terminal/c/result.zig:2-11` → **Rustty:** `crates/rustty-vt-c/src/types.rs:1418-1435`
   - **Audit's suggested fix:** Add `("rejected", Rejected),` to the RusttyResult enum_values! row.
-- [ ] **S182-F2** · CONFIRMED · `ABI` · missing-branch
+- [x] **S182-F2** · CONFIRMED · `ABI` · missing-branch
   - **What:** ABI manifest omits RUSTTY_SYS_OPT_RANDOM_SECURE (3) from RusttySysOption
   - **Oracle:** `src/terminal/c/types.zig:310 (row) / src/terminal/c/sys.zig:61-66` → **Rustty:** `crates/rustty-vt-c/src/types.rs:2338-2350`
   - **Audit's suggested fix:** Add `("random_secure", RandomSecure),` to the RusttySysOption row.
-- [ ] **S182-F3** · CONFIRMED · `ABI` · missing-branch
+- [x] **S182-F3** · CONFIRMED · `ABI` · missing-branch
   - **What:** ABI manifest omits CLIPBOARD_READ (38) and CLIPBOARD_WRITE_MAX_BYTES (39) from RusttyTerminalOption
   - **Oracle:** `src/terminal/c/types.zig:315 (row) / src/terminal/c/terminal.zig:1222-1223` → **Rustty:** `crates/rustty-vt-c/src/types.rs:2437-2484`
   - **Audit's suggested fix:** Append `("clipboard_read", ClipboardRead),` and `("clipboard_write_max_bytes", ClipboardWriteMaxBytes),` to the RusttyTerminalOption enum_values! row.
-- [ ] **S182-F4** · CONFIRMED · `ABI` · missing-branch
+- [x] **S182-F4** · CONFIRMED · `ABI` · missing-branch
   - **What:** ABI manifest omits CLIPBOARD_WRITE_MAX_BYTES (40) from RusttyTerminalData
   - **Oracle:** `src/terminal/c/types.zig:314 (row) / src/terminal/c/terminal.zig:1595` → **Rustty:** `crates/rustty-vt-c/src/types.rs:2387-2436`
   - **Audit's suggested fix:** Append `("clipboard_write_max_bytes", ClipboardWriteMaxBytes),` to the RusttyTerminalData enum_values! row.

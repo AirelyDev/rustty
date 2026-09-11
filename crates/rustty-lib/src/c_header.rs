@@ -46,22 +46,48 @@ pub fn strip_c_comments(src: &str) -> String {
     out
 }
 
-/// Parse `typedef enum { ... } <enum_name>;` out of C header text into its
-/// declared `(name, value)` pairs, in declaration order. Enumerators may be
-/// bare (value = previous + 1, starting at 0) or `NAME = <int>` (decimal,
-/// optionally negative, or `0x`-prefixed hex); anything else is an error
-/// rather than a silent skip.
+/// Parse `typedef enum [<tag or macro>] { ... } <enum_name>;` out of C header
+/// text into its declared `(name, value)` pairs, in declaration order.
+/// Enumerators may be bare (value = previous + 1, starting at 0) or
+/// `NAME = <int>` (decimal, optionally negative, or `0x`-prefixed hex);
+/// anything else is an error rather than a silent skip.
+///
+/// Comments are stripped from the WHOLE source before anything is located, so a
+/// prose comment reproducing an enum declaration (the curated `include/rustty`
+/// headers open with exactly that) cannot be mistaken for the real one.
+///
+/// The optional token between `enum` and `{` is what the curated vt headers use
+/// (`typedef enum RUSTTY_ENUM_TYPED {`); `include/rustty-embed.h` uses the bare
+/// form. Both are accepted.
 pub fn parse_header_enum(src: &str, enum_name: &str) -> Result<Vec<(String, i64)>, String> {
+    let src = strip_c_comments(src);
     let close = format!("}} {};", enum_name);
     let close_at = src
         .find(&close)
         .ok_or_else(|| format!("enum `{}` not found in header", enum_name))?;
     let head = &src[..close_at];
-    let open_pat = "typedef enum {";
+    let open_pat = "typedef enum";
     let open_at = head
         .rfind(open_pat)
         .ok_or_else(|| format!("no `{}` opening for `{}`", open_pat, enum_name))?;
-    let body = strip_c_comments(&head[open_at + open_pat.len()..]);
+    let after = &head[open_at + open_pat.len()..];
+    let brace_at = after
+        .find('{')
+        .ok_or_else(|| format!("no `{{` after `{}` for `{}`", open_pat, enum_name))?;
+    // Anything between `enum` and `{` must be a single identifier (a tag or a
+    // macro); anything else means we located the wrong region.
+    let between = after[..brace_at].trim();
+    if !between.is_empty()
+        && !between
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_')
+    {
+        return Err(format!(
+            "unexpected `{}` between `typedef enum` and `{{` for `{}`",
+            between, enum_name
+        ));
+    }
+    let body = after[brace_at + 1..].to_string();
     if body.contains('}') || body.contains('{') {
         return Err(format!("unbalanced braces in enum `{}`", enum_name));
     }
@@ -169,8 +195,10 @@ typedef enum {
     fn rejects_malformed_headers() {
         // Unknown enum name.
         assert!(parse_header_enum(SAMPLE, "rustty_nope_e").is_err());
-        // No `typedef enum {` opening.
+        // No `typedef enum` opening.
         assert!(parse_header_enum("} e_t;", "e_t").is_err());
+        // Junk between `enum` and `{`.
+        assert!(parse_header_enum("typedef enum a b {\n A,\n} e_t;", "e_t").is_err());
         // A value the parser does not understand (a shift expression).
         assert!(parse_header_enum("typedef enum {\n A = 1 << 3,\n} e_t;", "e_t").is_err());
         // A non-identifier enumerator.
@@ -188,6 +216,26 @@ typedef enum {
     fn strips_comments() {
         assert_eq!("a   b", strip_c_comments("a /* x */ b"));
         assert_eq!("a \n b", strip_c_comments("a // x\n b"));
+    }
+
+    /// The curated `include/rustty` headers open their enums with a MACRO
+    /// (`typedef enum RUSTTY_ENUM_TYPED {`), and their file header carries a
+    /// prose comment reproducing that same declaration. Both are pinned here:
+    /// the macro form parses, and the comment does NOT shadow the real one.
+    #[test]
+    fn parses_the_tagged_form_and_ignores_a_comment_that_mimics_it() {
+        let src = concat!(
+            "/*\n * typedef enum RUSTTY_ENUM_TYPED {\n *   DECOY = 99,\n * } RusttyThing;\n */\n",
+            "typedef enum RUSTTY_ENUM_TYPED {\n  RUSTTY_THING_A,\n  RUSTTY_THING_B = 5,\n",
+            "} RusttyThing;\n"
+        );
+        assert_eq!(
+            vec![
+                ("RUSTTY_THING_A".to_string(), 0i64),
+                ("RUSTTY_THING_B".to_string(), 5i64),
+            ],
+            parse_header_enum(src, "RusttyThing").unwrap()
+        );
     }
 
     #[test]
