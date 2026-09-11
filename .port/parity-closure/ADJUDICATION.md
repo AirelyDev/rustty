@@ -105,15 +105,50 @@ summaries.
 - Verified: same test-lane fact established for S165-F1 — `/Users/gael/projects/ghostty/build.zig:386` pins the oracle's test step to `.optimize = .Debug` unconditionally, so `zig build test` never runs this test (or any test) under a release-optimized build; Rust's default `cargo test` is the equivalent lane and runs `get_vt_processing_error` (`crates/rustty-vt-c/src/terminal.rs:6252-6316`) with full assertion parity. The `#[cfg(debug_assertions)]` gate only removes the test under the non-canonical `cargo test --release`.
 - Disposition: state=WAIVED
 
-### S190-F2 — WAIVED (not a defect)
+### S190-F2 — WAIVED (not a defect) [REVISED 2026-09-11 by task 16 fix round 1 — see below]
 - Refuting lens said: "under the port-wide OOM=abort policy that arm is unreachable code, and no input/state produces a different observable result ... Per the ground rules, a difference confined to unreachable code is refuted."
 - Verified: `crates/rustty-vt/src/kitty/graphics_storage.rs:806-822` (`Vec::push`, PORT NOTE acknowledging the oracle's degraded-but-safe `catch { continue; }` arm is unreachable) and `:1268-1300` (`convert_image_to_rgba` is infallible, calling `rgba_from_format` which itself aborts on OOM). Both differences are confined to genuine system-allocator-exhaustion, which is the crate-wide OOM=abort convention already established across S163-F1/S174-F3/S176-F2 in this same batch; no reachable input differs.
 - Disposition: state=WAIVED
+- **REVISION (task 16 fix round 1, 2026-09-11): state=OPEN — same refuted premise as S176-F2.**
+  The waiver rests on "the crate-wide OOM=abort convention already established across
+  S163-F1/S174-F3/**S176-F2** in this same batch". S176-F2 has since been re-adjudicated and
+  CLOSED-by-fix, because that "convention" is a choice of call and not a property of Rust:
+  `Vec::try_reserve` is the same growth, fallibly. Verified live at the pin —
+  `graphics_storage.zig:569-577` is `result.restores.append(s.alloc, ..) catch { log.warn("OOM
+  adjusting image placement for scroll"); continue; }`, a DEGRADED-BUT-SAFE arm the reference
+  really takes, and `crates/rustty-vt/src/kitty/graphics_storage.rs:806-825` is a bare
+  `Vec::push`. A `try_reserve` there reaches the arm, which also restores the `log.warn` this
+  row (class `LOG`) is actually about.
+  **Cost of the bad waiver, recorded because it is the interesting part:** the waiver
+  propagated into a CODE COMMENT at `graphics_storage.rs:820-823` instructing future work
+  "S190-F2 (WAIVED) already adjudicated this exact region as unreachable in the port; do not
+  uncomment this log call." A waiver that tells the next implementer not to look is worse than
+  an open row. That comment is corrected in the same commit.
+  Re-opened, NOT fixed: this is a `LOG`-class row and task 16 owns `ALLOC`. The fix is
+  `try_reserve` + the reference's `continue` + the `log.warn`, at both cited sites.
 
-### S204-F1 — WAIVED (not a defect)
+### S204-F1 — WAIVED (not a defect) [REVISED 2026-09-11 by task 16 fix round 1 — see below]
 - Refuting lens said: "the only divergence is behaviour under global-allocator exhaustion ... The staged buffer is bounded by Self::MAX_STAGED_PAYLOAD ... PayloadDecodeError::OutOfMemory is preserved and still produced on TerminalPage::init failure ... Difference confined to a path unreachable outside OS allocator failure."
 - Verified: `crates/rustty-vt/src/snapshot/page.rs:457` (`vec![0u8; remaining]`) and `:561-573` (`grid::StyleRemap::init()` / `HyperlinkRemap::init()` returning bare values) confirm the allocations are infallible Rust `Vec`s (abort on OOM), matching the crate-wide convention; `PayloadDecodeError::OutOfMemory` remains a live variant produced elsewhere in the same file (per the audit's citation of page.rs:303/369/536), so the enum itself is not orphaned — only this specific allocator-exhaustion arm is unreachable.
 - Disposition: state=WAIVED
+- **REVISION (task 16 fix round 1, 2026-09-11): state=OPEN — this waiver contradicts a defect
+  task 16 itself filed, over the same line of code.**
+  The waiver says the remap initialisers are infallible "matching the crate-wide convention".
+  `crates/rustty-vt/src/snapshot/page.rs:567-579`'s `grid::StyleRemap::init()` /
+  `HyperlinkRemap::init()` is **exactly** the allocation task 16 filed as **N30**, after
+  reading the oracle: `snapshot/page.zig:373-383` is
+  `grid.StyleRemap.init(alloc) catch return error.OutOfMemory`, and
+  `snapshot/grid.zig:1523-1532` declares `pub fn init(alloc: Allocator) Allocator.Error!Self`.
+  The port's `init()` is `vec![0u16; CAPACITY]` + `vec![0u64; CAPACITY / 64]`, which abort.
+  Filing it as a new finding while it stood waived was an inconsistency in task 16's own
+  output, caught in review; resolving it in favour of the reading that was done against the
+  pin.
+  The other half is the same class: `page.rs:457`'s `vec![0u8; remaining]` against
+  `snapshot/page.zig:252`'s `const staged = try alloc.alloc(u8, remaining)`. `MAX_STAGED_PAYLOAD`
+  bounds the size; it does not make the reference's error return unreachable.
+  Re-opened, NOT fixed — see the row's owner cell for the scope (26 `Remap::init` call sites,
+  24 of them in `grid.rs`'s own tests). **N30 is now CLAIMED by this row** and is annotated as
+  such rather than tracked twice.
 
 ### S207-F1 — WAIVED (not a defect)
 - Refuting lens said: "the restored primary AND alternate screens both end with total_limit 320MB in both trees; the 0 at snapshot/terminal.rs:1240 lives only on an object that is deinit'd and overwritten before any kitty command can reach it."

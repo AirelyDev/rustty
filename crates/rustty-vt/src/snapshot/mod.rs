@@ -249,9 +249,30 @@ pub mod io;
 ///     the cursor's tracked pin;
 ///   * `history::decode_page` — each history page.
 ///
+/// Twelve `tw::check` sites in all.
+///
 /// The transactionality sweep in `codec.rs` derives its bound from a
-/// baseline run's reach count and carries a FLOOR on that count, so
-/// dropping a site from this list turns that test red.
+/// baseline run's reach count and carries a FLOOR on that count. A site is
+/// protected by that floor only if one of the sweep's FIXTURES REACHES IT —
+/// the floor counts reaches, so a site nothing reaches contributes nothing to
+/// count and its loss is invisible. That is not a theoretical caveat: when
+/// this note first claimed, unqualified, that "dropping a site from this list
+/// turns that test red", `hyperlink::decode_page_string` was reached by
+/// neither fixture, and deleting its check left the WHOLE CRATE SUITE green
+/// (3039 passed, 0 failed). The sweep's third fixture — a terminal carrying an
+/// explicit hyperlink — exists to reach it.
+///
+/// **Verified, not asserted**: each of the twelve sites was disabled
+/// individually and the crate suite re-run; all twelve turn it red. Redo that
+/// sweep if you add a site, and add a fixture that reaches it if none does.
+///
+/// What the floor still cannot see, and neither can the reference's own test:
+/// a site that is still REACHED but no longer PROPAGATES the failure. The
+/// count is unchanged, and `saw_out_of_memory` is satisfied by any other
+/// site. Asserting `Err` at every index would catch it here, but the reference
+/// deliberately allows `Ok` (`hyperlink::decode_page_string`'s own caller
+/// DEGRADES to `Ok(0)` rather than propagating), so that assertion would be a
+/// divergence, not a strengthening.
 #[cfg(test)]
 pub(crate) mod tw {
     use core::cell::RefCell;

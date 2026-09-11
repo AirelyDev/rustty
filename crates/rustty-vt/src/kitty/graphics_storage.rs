@@ -818,9 +818,19 @@ impl ImageStorage {
             //     continue;
             // };
             // PORT NOTE: Rust's `Vec::push` aborts on OOM, so the reference's
-            // degraded-but-safe fallback arm is unreachable in this port.
-            // S190-F2 (WAIVED) already adjudicated this exact region as
-            // unreachable in the port; do not uncomment this log call.
+            // degraded-but-safe fallback arm is unreachable AS WRITTEN.
+            //
+            // CORRECTION (2026-09-11): an earlier version of this note said
+            // "S190-F2 (WAIVED) already adjudicated this exact region as
+            // unreachable in the port; do not uncomment this log call." That
+            // waiver has been RE-OPENED
+            // (`.port/parity-closure/ADJUDICATION.md#s190-f2`): the abort is a
+            // choice of call, not a property of Rust — `Vec::try_reserve` is the
+            // same growth, fallibly, and reaches the reference's
+            // `catch { log.warn(..); continue; }` arm. So this log call SHOULD be
+            // restored, together with the `try_reserve` + `continue` that makes
+            // it reachable. Do not treat the note above as a standing
+            // instruction to leave it alone.
             result.restores.push(Restore {
                 pin,
                 // SAFETY: shared read of the tracked pin, see above.

@@ -1628,6 +1628,16 @@ here the ledger does not contradict the waiver, it *dates* it.
   Reached from `snapshot/page.rs`'s `decode_payload_body` (two sites) whenever a decoded
   page declares a non-empty style or hyperlink table; `PayloadDecodeError::OutOfMemory`
   already exists there, so the error has somewhere to go.
+- **CORRECTION (fix round 1, 2026-09-11): a row DOES claim this — `S204-F1`.** Filing this as
+  unclaimed was wrong, and the way it was wrong matters: `S204-F1` cites the port side
+  (`snapshot/page.rs:457, 561-573`) rather than `grid.zig`, so a grep of the ledger's ORACLE
+  column for `grid.zig` found nothing and the row was invisible to the check that was run.
+  Worse, `S204-F1` stood **WAIVED** over this exact allocation ("the remap initialisers are
+  infallible, matching the crate-wide convention") while this entry called the same code a
+  defect — a self-contradiction inside one task's output, caught in review. `S204-F1` has been
+  re-opened (`ADJUDICATION.md#s204-f1`) and now OWNS this finding. **Lesson: when checking
+  whether a row claims a reference site, search the ledger's RUSTTY column too — a row is
+  allowed to be anchored on either side.**
 - **why it is filed rather than folded into S206-F1**: `S206-F1` cites
   `src/terminal/snapshot/snapshot.zig:1626-1694` — the transactionality TEST — and task 16
   restored that test's shape and instrumented the decode allocation sites the row names
@@ -1642,4 +1652,51 @@ here the ledger does not contradict the waiver, it *dates* it.
   `decode_payload_body`'s two call sites, and raise the transactionality test's
   `min_allocations` floor with a fixture whose pages carry styles. 26 call sites, 24 of
   them in `grid.rs`'s own tests.
-- **state**: **OPEN** — not attempted by task 16.
+- **state**: **OPEN**, tracked by **S204-F1** (re-opened 2026-09-11). Not attempted by task 16.
+
+## N31 — the Miri runner fabricates failures: it classifies on an abort STRING, and it uses a fixed temp path two sessions collide on
+
+- **id**: N31
+- **severity**: medium (no product code is wrong; the harm is to every future reader of the
+  memory-safety lane, which is one of the few gates that can catch real UB)
+- **kind**: instrument defect (the "verification instrument that cannot fail" class, inverted —
+  this one *fails when nothing is wrong*)
+- **where**: `.port/tools/miri-run.sh`
+- **two independent defects, both observed, not reasoned:**
+
+  1. **It classifies a run by grepping the captured output for an abort string, and that string
+     is what the compiler prints for ANY compile failure.** So a build break reads as
+     `res=UB`. Observed by task 16: a first `snapshot::` sweep reported **`ub=5`**, and all five
+     output files begin `error[E0603]: trait import 'Allocator' is private` — a stale edit, not
+     undefined behaviour. Observed again on
+     `tabstops_resize_reports_a_real_allocation_failure_without_the_tripwire`, which reported
+     `res=UB` for `error: resource exhaustion: tried to allocate more memory than available to
+     compiler` — Miri does not MODEL allocation failure, it hard-errors the interpreter, so a
+     test that deliberately fails an allocation can never pass under Miri and is not UB.
+  2. **It uses a FIXED temporary directory (`/tmp/mirirun.$CRATE`), which it `rm -rf`s at
+     startup.** A second session running the harness on the same crate deletes the first run's
+     in-flight output. Found in review: a concurrent run wiped the captured files and the
+     harness **reported three failures for tests that had exited cleanly**. That is the worst
+     failure mode an instrument can have — not a missed defect but a manufactured one, and a
+     manufactured one costs the next person a bisect.
+
+  A third, smaller thing worth knowing: the script's "building Miri test binary once" line is
+  misleading — each worker re-invokes `cargo miri test`, so editing the tree during a run
+  rebuilds mid-flight. That is how defect 1 was first triggered.
+
+- **suggested fix (all three, together — a gate change must buy net-new coverage under R5, and
+  this does: today the lane cannot distinguish "UB" from "did not build")**:
+  - classify on CONTENT, not on an abort string: a run is `UB` only if its output contains
+    Miri's `Undefined Behavior` banner;
+  - give compile failures (`error[E….]` / `could not compile`) and interpreter errors
+    (`resource exhaustion`, `unsupported operation`) their OWN buckets, reported separately
+    from `UB` and from `FAIL`. A `BUILD` bucket should abort the whole sweep, not be counted
+    per test;
+  - make the work directory unique (`mktemp -d`, or suffix the PID/run id), so two sessions
+    cannot delete each other's evidence;
+  - add a self-test arm per bucket — a fixture that fails to compile, one that hits a Miri
+    interpreter limit, one with real UB — so the classifier is itself measured. Every
+    instrument on this plan that was trusted without such an arm turned out to be wrong.
+- **NOT fixed by task 16**: it is a gate (R5), and a gate change needs its own argument and
+  self-test arms rather than a drive-by patch from the task it inconvenienced.
+- **state**: **OPEN**.

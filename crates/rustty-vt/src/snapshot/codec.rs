@@ -2595,10 +2595,25 @@ mod tests {
     // instrumented — `snapshot/grid.rs`'s `Remap::init`, which the reference
     // declares `Allocator.Error!Self` and the port made infallible. It lives in
     // `snapshot/grid.zig`, outside this row's cited oracle anchors
-    // (`snapshot.zig:1626-1694`), and is tracked as N30 in
-    // `.port/parity-closure/NEW-FINDINGS.md`. The complete golden's pages carry
-    // empty style/hyperlink tables, so they take `Remap::empty()` and this sweep
-    // would not reach it even if it were instrumented.
+    // (`snapshot.zig:1626-1694`). It is **S204-F1**'s, re-opened 2026-09-11
+    // (that row is anchored on the port side, `snapshot/page.rs:561-573`, which
+    // is why a search of the ledger's oracle column missed it); the reading is
+    // written up as N30 in `.port/parity-closure/NEW-FINDINGS.md`. The complete
+    // golden's pages carry empty style/hyperlink tables, so they take
+    // `Remap::empty()` and this sweep would not reach it even if it were
+    // instrumented — closing S204-F1 needs a fixture whose pages carry styles,
+    // and a raised floor here.
+    //
+    // PORT NOTE (what this test still cannot see — a FIDELITY LIMIT, not a
+    // regression): a site that is still REACHED but stops PROPAGATING its
+    // failure keeps this test green. The reach count is unchanged, so the floor
+    // is satisfied; the fail point still trips, so the per-index assertion is
+    // satisfied; and `saw_out_of_memory` is satisfied by any other site.
+    // Asserting `Err` at every index would catch it, but the reference
+    // deliberately permits `Ok` — `hyperlink::decode_page_string`'s caller
+    // degrades to `Ok(0)` instead of propagating, exactly as the reference's
+    // `decodePageString` does — so that assertion would be a divergence. The
+    // reference's own test has the same blind spot.
     //
     // PORT NOTE: this test was previously `#[cfg(debug_assertions)]`-gated on
     // the belief that "tripwires only arm in debug builds". That is wrong for
@@ -2674,6 +2689,28 @@ mod tests {
         )
         .unwrap();
         exercise(encoded.written(), 10);
+
+        t.deinit(Allocator);
+
+        // A terminal carrying an EXPLICIT hyperlink, so the page's own string
+        // allocator is exercised.
+        //
+        // PORT NOTE: net-new relative to the reference, which needs no such
+        // fixture because `FailingAllocator` sees every allocation whether a
+        // fixture reaches it or not. This seam is opt-in, so a `tw::check` is
+        // only protected by the floor if some fixture REACHES it — and neither
+        // fixture above reaches `hyperlink::decode_page_string`
+        // (`hyperlink.rs`'s page string-allocator site). Without this case,
+        // deleting that one `tw::check` left the whole crate suite green.
+        let mut t = Terminal::init(Allocator, terminal_options(10, 3, DEFAULT_MSB, None)).unwrap();
+        // SAFETY: `screens.active` is the live active screen owned by `t`.
+        let active: *mut TerminalScreen = t.screens.active;
+        unsafe { (*active).start_hyperlink(b"https://example.com/parity", Some(b"link-1")) }
+            .unwrap();
+        unsafe { (*active).test_write_string(b"hi") }.unwrap();
+        let mut encoded = io::AllocatingWriter::new();
+        encode(&mut encoded, &t, test_encode_options()).unwrap();
+        exercise(encoded.written(), 13);
 
         t.deinit(Allocator);
     }
