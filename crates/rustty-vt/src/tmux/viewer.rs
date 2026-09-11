@@ -306,26 +306,59 @@ pub enum ActionTag {
 }
 
 // PORT NOTE: the reference `Action.format` uses Zig comptime reflection over the
-// tagged union to print `Action{ .<tag> = <value> }`, special-casing
-// `[]const u8` payloads with a `trim`. Rust has no such reflection; a
-// hand-written `Display` reproduces the same shape. Only used for diagnostics
-// (the reference logs it in `testViewer`), so it is faithful to the output
-// shape, not exercised by any assertion.
+// tagged union to print `@typeName(Action){ .<tag> = <value> }`, special-casing
+// `[]const u8` payloads with a `trim` and rendering everything else with
+// `{any}`. Rust has no such reflection; a hand-written `Display` reproduces the
+// same output. Only used for diagnostics (the reference logs it in
+// `testViewer`), so it is faithful to the output shape, not exercised by any
+// assertion.
+//
+// The three literal spellings below were MEASURED against zig 0.16 (the
+// oracle's `minimum_zig_version`) rather than guessed, with a replica of this
+// file's directory layout:
+//
+//   @typeName  -> `terminal.tmux.viewer.Viewer.Action`
+//   `{any}` on the void `exit` payload -> `void`
+//   `{any}` on a `[]const Window`      -> `{ .{ .id = 1, .width = 2, … } }`
+//                                         (and `{  }` when empty)
+//
+// PARITY RESIDUAL (S209-F3): the `windows` arm can NOT be made byte-identical.
+// The reference's `Viewer.Window` carries a fifth field, `layout_arena:
+// ArenaAllocator.State`, which `{any}` prints as the arena's own bookkeeping
+// (a node list and an end index) — allocator internals whose value varies run
+// to run and which have NO counterpart here, because the port's `Layout` owns
+// its subtree (see the `Window` PORT NOTE). The struct SHAPE is reproduced and
+// `.layout` is rendered with Rust's `Debug`.
 impl std::fmt::Display for Action {
     fn fmt(&self, writer: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // try writer.writeAll(@typeName(T));
-        writer.write_str("viewer.Viewer.Action")?;
+        writer.write_str("terminal.tmux.viewer.Viewer.Action")?;
         // try writer.writeAll("{ .");
         writer.write_str("{ .")?;
         match self {
             // try writer.writeAll(@tagName(...)); try writer.writeAll(" = ");
             // []const u8 => try writer.print("\"{s}\"", .{trim(...)}),
-            Action::Exit => write!(writer, "exit =  }}"),
+            // else => try writer.print("{any}", .{value}),
+            Action::Exit => write!(writer, "exit = void }}"),
             Action::Command(v) => {
                 write!(writer, "command = \"{}\" }}", trim_display(v))
             }
-            // else => try writer.print("{any}", .{value}),
-            Action::Windows(v) => write!(writer, "windows = {v:?} }}"),
+            Action::Windows(v) => {
+                // `{any}` over a slice is `"{ " ++ join(", ") ++ " }"`, which
+                // is `"{  }"` (two spaces) when the slice is empty.
+                writer.write_str("windows = { ")?;
+                for (i, w) in v.iter().enumerate() {
+                    if i > 0 {
+                        writer.write_str(", ")?;
+                    }
+                    write!(
+                        writer,
+                        ".{{ .id = {}, .width = {}, .height = {}, .layout = {:?} }}",
+                        w.id, w.width, w.height, w.layout
+                    )?;
+                }
+                writer.write_str(" } }")
+            }
         }
     }
 }
@@ -2425,6 +2458,55 @@ mod tests {
     use super::*;
     use crate::tmux::control;
     use allocator_api2::alloc::Global;
+
+    /// PORT NOTE: NOT a reference test (the reference's `Action.format` is
+    /// covered only by `testViewer`'s failure log, which the port drops). It
+    /// pins the three renderings against the shapes MEASURED from zig 0.16 —
+    /// see the `Display for Action` PORT NOTE, including the `windows` residual
+    /// (parity S209-F3).
+    #[test]
+    fn action_display_matches_the_reference_format_shape() {
+        assert_eq!(
+            "terminal.tmux.viewer.Viewer.Action{ .exit = void }",
+            format!("{}", Action::Exit)
+        );
+        // `[]const u8` payloads are trimmed of " \t\r\n" and quoted.
+        assert_eq!(
+            "terminal.tmux.viewer.Viewer.Action{ .command = \"list-windows\" }",
+            format!("{}", Action::Command(b"  list-windows\r\n".to_vec()))
+        );
+        // `{any}` over an EMPTY slice is `{  }` — two spaces.
+        assert_eq!(
+            "terminal.tmux.viewer.Viewer.Action{ .windows = {  } }",
+            format!("{}", Action::Windows(Vec::new()))
+        );
+        let w = Window {
+            id: 1,
+            width: 2,
+            height: 3,
+            layout: crate::tmux::layout::Layout {
+                width: 2,
+                height: 3,
+                x: 0,
+                y: 0,
+                content: crate::tmux::layout::Content::Pane(7),
+            },
+        };
+        let rendered = format!("{}", Action::Windows(vec![w.clone(), w]));
+        assert!(
+            rendered.starts_with(
+                "terminal.tmux.viewer.Viewer.Action{ .windows = { .{ .id = 1, .width = 2, .height = 3, .layout = "
+            ),
+            "got: {rendered}"
+        );
+        assert!(rendered.ends_with(" } }"), "got: {rendered}");
+        // Two elements are separated by ", " and each is a `.{ ... }` literal.
+        assert_eq!(
+            2,
+            rendered.matches(".{ .id = 1,").count(),
+            "got: {rendered}"
+        );
+    }
 
     // Convenience: build an Input from a tmux notification.
     fn tmux(n: control::Notification) -> Input {

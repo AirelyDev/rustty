@@ -4154,13 +4154,16 @@ mod tests {
 
     // test "resize failure preserves terminal state and does not write"
     //
-    // WS18 release lane: this test injects a failure through a `rustty_util::tripwire`
-    // fail point, and `tripwire::Module::enabled()` is `cfg!(debug_assertions)` (the
-    // faithful stand-in for Zig's `builtin.is_test`; see its PORT NOTE). Without
-    // `debug_assertions` the fail point never trips, so the test can only run in
-    // debug — where it still runs and passes. NOT disabled to hide a failure.
+    // WS18 release lane (CORRECTED, parity S166-F2): this test injects a failure
+    // through a `rustty_util::tripwire` fail point, and `Module::enabled()` is
+    // `cfg!(any(test, debug_assertions, feature = "tripwire-test"))` — NOT
+    // `cfg!(debug_assertions)`, which is what the note here used to claim. The
+    // seam it arms (`tabstops::RESIZE_TW`) is `cfg(test)`, so both the seam and
+    // the tripwire are live under `cargo test -p rustty-vt --release`, and the
+    // `#[cfg_attr(not(debug_assertions), ignore)]` that used to sit here only
+    // ever suppressed a test that would have passed. The reference runs its
+    // `FailingAllocator` equivalent at every optimize mode.
     #[test]
-    #[cfg_attr(not(debug_assertions), ignore)]
     fn resize_failure_preserves_terminal_state_and_does_not_write() {
         calls_reset();
 
@@ -4279,19 +4282,18 @@ mod tests {
 
     // test "semantic failure is sticky while processing continues"
     //
-    // WS18 release lane: this test injects a failure through a `rustty_util::tripwire`
-    // fail point (the port's stand-in for the reference's
-    // `std.testing.FailingAllocator` — see the `SET_STRING_TW` PORT NOTE in
-    // terminal.rs), and `tripwire::Module::enabled()` is `cfg!(debug_assertions)`.
-    // Without `debug_assertions` the fail point never trips, so the test can only
-    // run in debug — where it still runs and passes. NOT disabled to hide a failure.
+    // WS18 release lane (CORRECTED, parity S166-F2): this test injects a failure
+    // through a `rustty_util::tripwire` fail point (the port's stand-in for the
+    // reference's `std.testing.FailingAllocator` — see the `SET_STRING_TW` PORT
+    // NOTE in terminal.rs). The P3-W5 repair that used to sit here
+    // (`#[cfg(debug_assertions)]` on the TEST, because the seam itself was
+    // `#[cfg(debug_assertions)]` and an `ignore` would still have to compile)
+    // was treating the symptom: the seam's gate is now
+    // `cfg(any(test, debug_assertions, feature = "tripwire-test"))`, which is
+    // what `Module::enabled()` has always used, so the seam and the test both
+    // exist under `cargo test -p rustty-vt --release`. The reference runs its
+    // equivalent at every optimize mode.
     #[test]
-    // P3-W5 repair: the seam this test drives (`SET_STRING_TW`, `SetStringFp`,
-    // `set_string_tw_*`) is itself `#[cfg(debug_assertions)]`, so an `ignore`
-    // attribute is not enough — the test would not COMPILE in release, which is
-    // what broke `cargo test -p rustty-vt --release` on `main`. Gate the test
-    // out entirely; it still runs and passes in debug.
-    #[cfg(debug_assertions)]
     fn semantic_failure_is_sticky_while_processing_continues() {
         let mut t = Terminal::init(Global, opts(10, 2)).unwrap();
 
@@ -4786,10 +4788,14 @@ mod tests {
     // test "DCS command memory is released"
     //
     // PORT NOTE: the reference relies on `testing.allocator` to detect a leak.
-    // rustty has no leak-detecting test allocator here; the value of the test in
-    // this port is that `dcsCommand` releases a COMPLETED unsupported command
-    // and `Handler::deinit` releases an INCOMPLETE one — both exercised below
-    // and both observable under Miri / a leak checker.
+    // rustty has no leak-detecting test allocator here, so on the normal lane
+    // the leak itself is only caught by Miri / `check_leaks.sh` — which left
+    // this test with NO assertion of any kind (parity S167-F1). The two
+    // `test_*` accessors below assert POSITIVELY that both halves the test
+    // names were reached: the completed command left the handler holding
+    // nothing, and the incomplete one left it holding bytes that only
+    // `deinit` can release. Without them a stream that silently dropped the
+    // sequences on the floor passed this test.
     #[test]
     fn dcs_command_memory_is_released() {
         let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
@@ -4799,10 +4805,20 @@ mod tests {
             // A completed command transfers its allocation to Command;
             // dcsCommand must release it even when there is no write effect.
             s.next_slice(b"\x1BP+q536D756C78\x1B\\");
+            assert!(
+                s.handler.dcs_handler.test_is_inactive(),
+                "the completed command must leave nothing in the handler"
+            );
 
             // An incomplete command remains owned by the handler and must be
             // released when the stream is deinitialized.
             s.next_slice(b"\x1BP+q536D756C78");
+            assert_eq!(
+                Some(b"536D756C78".len()),
+                s.handler.dcs_handler.test_xtgettcap_buffered(),
+                "the incomplete command must still be held by the handler, \
+                 otherwise there is nothing for deinit to release"
+            );
         }
         t.deinit(Global);
     }

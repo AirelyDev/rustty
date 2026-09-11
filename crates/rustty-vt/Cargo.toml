@@ -44,6 +44,19 @@ workspace = true
 #
 # The reference default set: every feature enabled (`Features{}`). Named as
 # `default` so an ordinary build, and the whole workspace, is unchanged.
+# TEST-ONLY, CROSS-CRATE (parity S166-F2). Zig's `builtin.is_test` is true for
+# the whole compilation unit at ANY optimize mode, so the reference's
+# allocation-failure tests run under `zig build test -Doptimize=Release*`. In
+# Rust `cfg(test)` is per-compilation-unit, so a fail point in THIS crate is
+# invisible to a test in another crate, and `cfg(debug_assertions)` — the
+# workaround that was used instead — deletes the fail point from every release
+# build, test or not, which silently turned three fail-point tests into
+# `#[cfg(debug_assertions)]` no-ops in the release lane. Downstream crates whose
+# tests arm this crate's fail points turn this on as a DEV-dependency feature
+# (`rustty-vt-c`), so it unifies only into test/bench/example builds; a
+# production `cargo build --release` builds no dev-deps and compiles the fail
+# points away.
+tripwire-test = ["rustty-util/tripwire-test"]
 default = [
     "snapshot",
     "formatter",

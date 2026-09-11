@@ -1639,14 +1639,40 @@ mod tests {
         atlas.deinit(alloc);
     }
 
+    /// LANE GUARD (parity S83-F3 / S86-F4), the tripwire analogue of
+    /// `RUSTTY_REQUIRE_GL` / `RUSTTY_REQUIRE_METAL`: a test lane that is
+    /// supposed to exercise the fail-point tests must not be able to go green
+    /// with the fail points compiled out.
+    ///
+    /// An env-var switch of the GL/Metal shape does not fit this case — those
+    /// convert a RUNTIME capability probe into a failure, whereas
+    /// `tripwire::Module::enabled()` is a compile-time `cfg!`, and a skip here
+    /// is spelled `#[ignore]`/`#[cfg]`, which no runtime check inside a test
+    /// body can observe because the body never runs. A lane-level assertion
+    /// can: it fails loudly in any build where the tripwires are disabled,
+    /// which is precisely the build in which every fail-point test below is
+    /// vacuous.
+    #[test]
+    fn tripwire_fail_points_are_armed_in_this_test_build() {
+        assert!(
+            rustty_util::tripwire::Module::<InitFp, OutOfMemory>::enabled(),
+            "tripwire fail points are compiled OUT of this build, so every \
+             fail-point test in this crate is vacuous. Enable \
+             `rustty-util/tripwire-test` as a dev-dependency feature."
+        );
+    }
+
     // test "init error"
     #[test]
-    // WS18 release lane: this test injects a failure through a `rustty_util::tripwire`
-    // fail point, and `tripwire::Module::enabled()` is `cfg!(debug_assertions)` (the
-    // faithful stand-in for Zig's `builtin.is_test`; see its PORT NOTE). Without
-    // `debug_assertions` the fail point never trips, so the test can only run in
-    // debug — where it still runs and passes. NOT disabled to hide a failure.
-    #[cfg_attr(not(debug_assertions), ignore)]
+    // WS18 release lane (CORRECTED, parity S83-F3 / S86-F4): this test injects a
+    // failure through a `rustty_util::tripwire` fail point.
+    // `tripwire::Module::enabled()` is NOT `cfg!(debug_assertions)` — it is
+    // `cfg!(any(test, debug_assertions, feature = "tripwire-test"))`, and this
+    // crate now turns on `rustty-util/tripwire-test` as a DEV-dependency
+    // feature, so the fail point trips in the release test lane as well. The
+    // reference runs its `FailingAllocator` equivalent at every optimize mode;
+    // the `#[ignore]` that used to sit here made the release lane green by
+    // skipping.
     fn init_error() {
         // Test every failure point in `init` and ensure that we don't
         // leak memory (testing.allocator verifies) since we're exiting early.
@@ -1675,12 +1701,15 @@ mod tests {
 
     // test "reserve error"
     #[test]
-    // WS18 release lane: this test injects a failure through a `rustty_util::tripwire`
-    // fail point, and `tripwire::Module::enabled()` is `cfg!(debug_assertions)` (the
-    // faithful stand-in for Zig's `builtin.is_test`; see its PORT NOTE). Without
-    // `debug_assertions` the fail point never trips, so the test can only run in
-    // debug — where it still runs and passes. NOT disabled to hide a failure.
-    #[cfg_attr(not(debug_assertions), ignore)]
+    // WS18 release lane (CORRECTED, parity S83-F3 / S86-F4): this test injects a
+    // failure through a `rustty_util::tripwire` fail point.
+    // `tripwire::Module::enabled()` is NOT `cfg!(debug_assertions)` — it is
+    // `cfg!(any(test, debug_assertions, feature = "tripwire-test"))`, and this
+    // crate now turns on `rustty-util/tripwire-test` as a DEV-dependency
+    // feature, so the fail point trips in the release test lane as well. The
+    // reference runs its `FailingAllocator` equivalent at every optimize mode;
+    // the `#[ignore]` that used to sit here made the release lane green by
+    // skipping.
     fn reserve_error() {
         // Test every failure point in `reserve` and ensure that we don't
         // leak memory (testing.allocator verifies) since we're exiting early.
@@ -1707,12 +1736,15 @@ mod tests {
 
     // test "grow error"
     #[test]
-    // WS18 release lane: this test injects a failure through a `rustty_util::tripwire`
-    // fail point, and `tripwire::Module::enabled()` is `cfg!(debug_assertions)` (the
-    // faithful stand-in for Zig's `builtin.is_test`; see its PORT NOTE). Without
-    // `debug_assertions` the fail point never trips, so the test can only run in
-    // debug — where it still runs and passes. NOT disabled to hide a failure.
-    #[cfg_attr(not(debug_assertions), ignore)]
+    // WS18 release lane (CORRECTED, parity S83-F3 / S86-F4): this test injects a
+    // failure through a `rustty_util::tripwire` fail point.
+    // `tripwire::Module::enabled()` is NOT `cfg!(debug_assertions)` — it is
+    // `cfg!(any(test, debug_assertions, feature = "tripwire-test"))`, and this
+    // crate now turns on `rustty-util/tripwire-test` as a DEV-dependency
+    // feature, so the fail point trips in the release test lane as well. The
+    // reference runs its `FailingAllocator` equivalent at every optimize mode;
+    // the `#[ignore]` that used to sit here made the release lane green by
+    // skipping.
     fn grow_error() {
         // Test every failure point in `grow` and ensure that we don't
         // leak memory (testing.allocator verifies) since we're exiting early.

@@ -570,6 +570,31 @@ enum State<A: Allocator = Global> {
     Tmux(TmuxState),
 }
 
+/// Test-only inspection of the in-progress DCS state.
+//
+// PORT NOTE: the reference's `test "DCS command memory is released"` proves its
+// point with `testing.allocator`'s leak detector, which this port has no
+// equivalent of on the normal test lane (parity S167-F1). These accessors let
+// that test assert POSITIVELY that it reached both halves of what it claims —
+// a completed command leaving nothing behind, and an incomplete one still
+// holding bytes for `deinit` to release.
+#[cfg(test)]
+impl<A: Allocator> Handler<A> {
+    /// True when no DCS command is in progress.
+    pub(crate) fn test_is_inactive(&self) -> bool {
+        matches!(self.state, State::Inactive)
+    }
+
+    /// Bytes the handler is currently holding for an in-progress XTGETTCAP,
+    /// or `None` when the state is not XTGETTCAP.
+    pub(crate) fn test_xtgettcap_buffered(&self) -> Option<usize> {
+        match &self.state {
+            State::Xtgettcap(v) => Some(v.written().len()),
+            _ => None,
+        }
+    }
+}
+
 impl<A: Allocator> State<A> {
     fn deinit(&mut self) {
         match self {

@@ -6257,19 +6257,17 @@ mod tests {
 
     // test "get vt_processing_error"
     //
-    // WS18 release lane: the reference forces the failure with
-    // `testing.failing_allocator`; this port arms the `set_title` tripwire fail
-    // point in rustty-vt, whose gate is `cfg(debug_assertions)` precisely so it
-    // is reachable from THIS crate (see the `SetStringFp` PORT NOTE). Without
-    // `debug_assertions` the fail point never trips, so the test can only run
-    // in debug — where it still runs and passes.
+    // WS18 release lane (CORRECTED, parity S166-F2 — this site is the third of
+    // the family and is claimed by no row): the reference forces the failure
+    // with `testing.failing_allocator`; this port arms the `set_title` tripwire
+    // fail point in rustty-vt. Its gate was `cfg(debug_assertions)`, which
+    // deleted the fail point from the release TEST lane as well as from
+    // production, so this test had to be `#[cfg(debug_assertions)]`-compiled
+    // out there. rustty-vt now carries a `tripwire-test` feature that this
+    // crate turns on as a DEV-dependency feature, so the fail point exists in
+    // the release test lane and the test runs at both optimize modes, as the
+    // reference's does.
     #[test]
-    // `cfg`, NOT `cfg_attr(..., ignore)`: `ignore` skips EXECUTION but the body
-    // is still COMPILED, and `SetStringFp`/`set_string_tw_*` do not exist under
-    // `--release`. That is precisely what made `cargo test --release` fail to
-    // BUILD (P3-W5 fixed the identical defect in rustty-vt; this sibling site
-    // was missed because the debug lane cannot see it).
-    #[cfg(debug_assertions)]
     fn get_vt_processing_error() {
         with_test_allocator(|alloc| {
             let (new_result, t) = new_t(alloc, 80, 24);

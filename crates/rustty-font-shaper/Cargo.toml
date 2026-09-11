@@ -162,3 +162,17 @@ objc2-core-text = { version = "0.3", features = ["CTFont", "CTFontDescriptor", "
 # the reference links (`src/stb`), copied into `vendor/` — see `build.rs`.
 [build-dependencies]
 cc = "1"
+
+[dev-dependencies]
+# TEST-ONLY (parity S83-F3 / S86-F4): enable rustty-util's `tripwire-test`
+# feature so this crate's fail-point tests trip in the RELEASE test lane too.
+# Zig's `builtin.is_test` is true for the whole compilation unit at ANY optimize
+# mode, so the reference's allocation-failure tests run under
+# `zig build test -Doptimize=Release*`. `Module::enabled()` is
+# `cfg!(any(test, debug_assertions, feature = "tripwire-test"))`, and `cfg(test)`
+# there is evaluated in rustty-util's OWN compilation unit — which is not a test
+# — so without this feature the fail points silently no-op in release and the
+# tests had to be `#[ignore]`d. A dev-dependency activates the feature ONLY for
+# test/bench/example builds, so `cargo build --release` still compiles
+# `tripwire::check` away.
+rustty-util = { workspace = true, features = ["tripwire-test"] }

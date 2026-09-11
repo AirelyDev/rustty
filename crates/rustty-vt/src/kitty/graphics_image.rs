@@ -920,14 +920,12 @@ impl LoadingImage {
         Ok(result)
     }
 
-    // PORT NOTE: `debugDump` is a Debug-only helper for capturing test data; it
-    // is `@compileError` outside Debug builds and is not exercised by any test.
-    // It is reproduced as a comment to preserve the reference verbatim.
+    /// Debug function to write the data to a file. This is useful for
+    /// capturing some test data for unit tests.
     //
-    // Debug function to write the data to a file. This is useful for
-    // capturing some test data for unit tests.
-    // pub fn debugDump(self: LoadingImage) !void {
+    // pub fn debugDump(io: std.Io, self: LoadingImage) !void {
     //     if (comptime builtin.mode != .Debug) @compileError("debugDump in non-debug");
+    //
     //     var buf: [1024]u8 = undefined;
     //     const filename = try std.fmt.bufPrint(
     //         &buf,
@@ -940,12 +938,54 @@ impl LoadingImage {
     //             self.image.id,
     //         },
     //     );
-    //     const cwd = std.fs.cwd();
-    //     const f = try cwd.createFile(filename, .{});
-    //     defer f.close();
+    //     const cwd = std.Io.Dir.cwd();
+    //     const f = try cwd.createFile(io, filename, .{});
+    //     defer f.close(io);
+    //
     //     const writer = f.writer();
     //     try writer.writeAll(self.data.items);
     // }
+    //
+    // PORT NOTE: the reference's `if (comptime builtin.mode != .Debug)
+    // @compileError(...)` makes this function EXIST only in a Debug build;
+    // `#[cfg(debug_assertions)]` is the exact analogue (a release build has no
+    // such item, so a caller added in release fails to compile, as it does
+    // upstream). The `io: std.Io` parameter is the reference's explicit IO
+    // handle — `std::fs` carries none, so it has no counterpart. The 1024-byte
+    // `bufPrint` scratch buffer is an allocation detail of Zig's fixed-buffer
+    // formatting, not observable output.
+    #[cfg(debug_assertions)]
+    pub fn debug_dump(&self) -> std::io::Result<()> {
+        use std::io::Write;
+        let mut f = std::fs::File::create(self.debug_dump_filename())?;
+        f.write_all(&self.data)
+    }
+
+    /// The `bufPrint`ed name `debug_dump` writes to.
+    //
+    // PORT NOTE: split out of `debug_dump` ONLY so the name is assertable
+    // without a test writing into the process-wide current directory (the
+    // reference's `Dir.cwd()`); the bytes produced are the reference's.
+    #[cfg(debug_assertions)]
+    pub(crate) fn debug_dump_filename(&self) -> String {
+        // @tagName(self.image.format) / @tagName(self.image.compression) —
+        // the Zig field names (see `Format::descriptor`/`Compression::descriptor`).
+        let format = match self.image.format {
+            command::Format::Rgb => "rgb",
+            command::Format::Rgba => "rgba",
+            command::Format::Png => "png",
+            command::Format::GrayAlpha => "gray_alpha",
+            command::Format::Gray => "gray",
+        };
+        let compression = match self.image.compression {
+            command::Compression::None => "none",
+            command::Compression::ZlibDeflate => "zlib_deflate",
+        };
+        format!(
+            "image-{}-{}-{}x{}-{}.data",
+            format, compression, self.image.width, self.image.height, self.image.id,
+        )
+    }
 
     /// Decompress the data in-place.
     fn decompress(&mut self) -> Result<(), Error> {
@@ -1562,6 +1602,41 @@ mod tests {
     // LoadingImage. We build the equivalent `Command` values via the ported
     // `command` module. The reference's `alloc.dupe(u8, ...)` (an owned copy the
     // command frees) maps to an owned `Vec<u8>` in `Command.data`.
+
+    /// PORT NOTE: NOT a reference test — `debugDump` is a Debug-only capture
+    /// helper the reference never calls. It pins the `bufPrint` filename shape
+    /// (parity S189-F3), whose `@tagName`s are the Zig field names.
+    #[cfg(debug_assertions)]
+    #[test]
+    fn debug_dump_filename_matches_the_reference_bufprint() {
+        let mut li = LoadingImage {
+            image: Image {
+                width: 20,
+                height: 10,
+                id: 7,
+                format: command::Format::Rgba,
+                compression: command::Compression::ZlibDeflate,
+                ..Image::default()
+            },
+            data: Vec::new(),
+            display: None,
+            frame: None,
+            quiet: command::Quiet::No,
+            response: command::Response::default(),
+            temporary_directory: None,
+        };
+        assert_eq!(
+            "image-rgba-zlib_deflate-20x10-7.data",
+            li.debug_dump_filename()
+        );
+
+        li.image.format = command::Format::GrayAlpha;
+        li.image.compression = command::Compression::None;
+        assert_eq!(
+            "image-gray_alpha-none-20x10-7.data",
+            li.debug_dump_filename()
+        );
+    }
 
     // test "temporary file path must be inside directory"
     #[test]
@@ -2224,6 +2299,58 @@ mod tests {
         assert!(img.compression == command::Compression::None);
         tmp_dir.dir().access(&path).unwrap();
         tmp_dir.deinit();
+    }
+
+    // test "image load: rgb, not compressed, relative regular file"
+    //
+    // PORT NOTE: the reference's `testing.tmpDir` lives under the CWD-relative
+    // `.zig-cache/tmp`, and this test's whole point is that `cmd.data` is a
+    // RELATIVE path (`.zig-cache/tmp/{s}/image.data`) — the sibling
+    // `image_load_rgb_not_compressed_regular_file` passes a realpath. The port
+    // keeps the scratch under `target/` and asserts the CWD it is relative to,
+    // so the path handed to the loader is relative exactly as the reference's
+    // is.
+    #[test]
+    #[cfg_attr(miri, ignore)] // real-OS temp-file filesystem syscalls
+    fn image_load_rgb_not_compressed_relative_regular_file() {
+        assert_eq!(
+            std::fs::canonicalize(std::env::current_dir().unwrap()).unwrap(),
+            std::fs::canonicalize(env!("CARGO_MANIFEST_DIR")).unwrap(),
+            "this test needs the cargo-set CWD to build a relative path from"
+        );
+        let rel_dir = format!("../../target/kitty-relative-scratch-{}", std::process::id());
+        std::fs::create_dir_all(&rel_dir).unwrap();
+        let rel_path = format!("{rel_dir}/image.data");
+        let data = include_bytes!("testdata/image-rgb-none-20x15-2147483647-raw.data");
+        std::fs::write(&rel_path, data).unwrap();
+
+        let cmd: command::Command = command::Command {
+            control: command::Control::Transmit(command::Transmission {
+                format: command::Format::Rgb,
+                medium: command::Medium::File,
+                compression: command::Compression::None,
+                width: 20,
+                height: 15,
+                image_id: 31,
+                ..Default::default()
+            }),
+            quiet: command::Quiet::No,
+            data: rel_path.as_bytes().to_vec(),
+        };
+
+        let mut loading = LoadingImage::init(
+            &cmd,
+            &Limits {
+                file: true,
+                temporary_file: TemporaryFileLimit::Disabled,
+                shared_memory: false,
+            },
+        )
+        .unwrap();
+        let img = loading.complete().unwrap();
+        assert!(img.compression == command::Compression::None);
+
+        std::fs::remove_dir_all(&rel_dir).unwrap();
     }
 
     // test "image load: regular file size reads exactly requested bytes"

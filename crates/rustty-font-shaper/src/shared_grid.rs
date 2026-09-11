@@ -801,6 +801,10 @@ mod tests {
 
         let mut grid = test_grid(TestMode::Normal, alloc, lib).unwrap();
 
+        use crate::codepoint_resolver::TEST_GET_INDEX_CALLS;
+        let resolver_calls = || TEST_GET_INDEX_CALLS.with(|c| c.get());
+        TEST_GET_INDEX_CALLS.with(|c| c.set(0));
+
         // Visible ASCII.
         for i in 32u32..127 {
             let idx = grid
@@ -815,13 +819,25 @@ mod tests {
         // Do it again without a resolver set to ensure we only hit the cache
         // const old_resolver = grid.resolver; grid.resolver = undefined; ...
         //
-        // PORT NOTE: the reference swaps in an `undefined` resolver to prove the
-        // second pass is served purely from the `codepoints` cache. Rust has no
-        // `undefined`; we cannot move `resolver` out of `grid` and keep `grid`
-        // usable. The cache-only guarantee is instead asserted by re-querying the
-        // same range: every value is already cached (populated by the first pass),
-        // so `get_index` returns from the fast-path read without touching the
-        // resolver. The results must be identical.
+        // PORT NOTE (parity S86-F3): the reference swaps in an `undefined`
+        // resolver, so ANY consultation of it in the second pass is UB and the
+        // test dies. Rust has no `undefined` and we cannot move `resolver` out
+        // of `grid` and keep `grid` usable — so the witness is a test-only
+        // counter bumped INSIDE `CodepointResolver::get_index`, i.e. inside the
+        // code the cache is supposed to keep us out of. Asserting only that the
+        // second pass returns the same values (which is all this test used to
+        // do) proves nothing: a cache that was never consulted returns the same
+        // values too.
+        //
+        // The first pass must have REACHED the resolver — otherwise the
+        // second pass's zero is vacuous.
+        let first_pass_calls = resolver_calls();
+        assert!(
+            first_pass_calls > 0,
+            "the first pass must reach the resolver, else the second pass's \
+             count proves nothing"
+        );
+        TEST_GET_INDEX_CALLS.with(|c| c.set(0));
         for i in 32u32..127 {
             let idx = grid
                 .get_index(alloc, i, Style::Regular, None)
@@ -830,6 +846,11 @@ mod tests {
             assert_eq!(Style::Regular, idx.style());
             assert_eq!(0u16, idx.idx());
         }
+        assert_eq!(
+            0,
+            resolver_calls(),
+            "the second pass must be served entirely from the cache"
+        );
 
         grid.deinit();
         lib.deinit();
@@ -837,12 +858,15 @@ mod tests {
 
     // test "renderGlyph error after cache insert rolls back cache entry"
     #[test]
-    // WS18 release lane: this test injects a failure through a `rustty_util::tripwire`
-    // fail point, and `tripwire::Module::enabled()` is `cfg!(debug_assertions)` (the
-    // faithful stand-in for Zig's `builtin.is_test`; see its PORT NOTE). Without
-    // `debug_assertions` the fail point never trips, so the test can only run in
-    // debug — where it still runs and passes. NOT disabled to hide a failure.
-    #[cfg_attr(not(debug_assertions), ignore)]
+    // WS18 release lane (CORRECTED, parity S83-F3 / S86-F4): this test injects a
+    // failure through a `rustty_util::tripwire` fail point.
+    // `tripwire::Module::enabled()` is NOT `cfg!(debug_assertions)` — it is
+    // `cfg!(any(test, debug_assertions, feature = "tripwire-test"))`, and this
+    // crate now turns on `rustty-util/tripwire-test` as a DEV-dependency
+    // feature, so the fail point trips in the release test lane as well. The
+    // reference runs its `FailingAllocator` equivalent at every optimize mode;
+    // the `#[ignore]` that used to sit here made the release lane green by
+    // skipping.
     fn render_glyph_error_after_cache_insert_rolls_back_cache_entry() {
         // This test verifies that when renderGlyph fails after inserting a cache
         // entry (via getOrPut), the errdefer properly removes the entry, preventing
@@ -906,14 +930,40 @@ mod tests {
         lib.deinit();
     }
 
+    /// LANE GUARD (parity S83-F3 / S86-F4), the tripwire analogue of
+    /// `RUSTTY_REQUIRE_GL` / `RUSTTY_REQUIRE_METAL`: a test lane that is
+    /// supposed to exercise the fail-point tests must not be able to go green
+    /// with the fail points compiled out.
+    ///
+    /// An env-var switch of the GL/Metal shape does not fit this case — those
+    /// convert a RUNTIME capability probe into a failure, whereas
+    /// `tripwire::Module::enabled()` is a compile-time `cfg!`, and a skip here
+    /// is spelled `#[ignore]`/`#[cfg]`, which no runtime check inside a test
+    /// body can observe because the body never runs. A lane-level assertion
+    /// can: it fails loudly in any build where the tripwires are disabled,
+    /// which is precisely the build in which every fail-point test below is
+    /// vacuous.
+    #[test]
+    fn tripwire_fail_points_are_armed_in_this_test_build() {
+        assert!(
+            rustty_util::tripwire::Module::<InitFp, TwOom>::enabled(),
+            "tripwire fail points are compiled OUT of this build, so every \
+             fail-point test in this crate is vacuous. Enable \
+             `rustty-util/tripwire-test` as a dev-dependency feature."
+        );
+    }
+
     // test "init error"
     #[test]
-    // WS18 release lane: this test injects a failure through a `rustty_util::tripwire`
-    // fail point, and `tripwire::Module::enabled()` is `cfg!(debug_assertions)` (the
-    // faithful stand-in for Zig's `builtin.is_test`; see its PORT NOTE). Without
-    // `debug_assertions` the fail point never trips, so the test can only run in
-    // debug — where it still runs and passes. NOT disabled to hide a failure.
-    #[cfg_attr(not(debug_assertions), ignore)]
+    // WS18 release lane (CORRECTED, parity S83-F3 / S86-F4): this test injects a
+    // failure through a `rustty_util::tripwire` fail point.
+    // `tripwire::Module::enabled()` is NOT `cfg!(debug_assertions)` — it is
+    // `cfg!(any(test, debug_assertions, feature = "tripwire-test"))`, and this
+    // crate now turns on `rustty-util/tripwire-test` as a DEV-dependency
+    // feature, so the fail point trips in the release test lane as well. The
+    // reference runs its `FailingAllocator` equivalent at every optimize mode;
+    // the `#[ignore]` that used to sit here made the release lane green by
+    // skipping.
     fn init_error() {
         // Test every failure point in `init` and ensure that we don't
         // leak memory (testing.allocator verifies) since we're exiting early.
@@ -983,7 +1033,16 @@ mod tests {
                 Err(InitError::OutOfMemory)
             ));
 
-            let _ = INIT_TW.with(|tw| tw.borrow_mut().end(ResetMode::Reset));
+            // defer tw.end(.reset) catch unreachable;
+            //
+            // `.unwrap()`, NOT `let _ =` (parity S86-F4): the reference here is
+            // `catch unreachable`, and discarding the `UntrippedError` is what
+            // lets a fail point that never trips pass unnoticed — which is
+            // exactly the failure mode the release lane had while this test was
+            // `#[ignore]`d there.
+            INIT_TW
+                .with(|tw| tw.borrow_mut().end(ResetMode::Reset))
+                .unwrap();
 
             lib.deinit();
         }

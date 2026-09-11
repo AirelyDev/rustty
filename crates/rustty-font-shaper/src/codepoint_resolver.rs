@@ -182,6 +182,16 @@ impl CodepointResolver {
         style: Style,
         p: Option<Presentation>,
     ) -> Option<collection::Index> {
+        // PORT NOTE (parity S86-F3): the reference's `SharedGrid` getIndex test
+        // proves its second pass is served from the cache by swapping in an
+        // `undefined` resolver — any call would be UB, so the test crashes if
+        // the cache is bypassed. Rust has no `undefined`, so the equivalent
+        // witness is a counter bumped INSIDE this function (the one the cache
+        // must not reach), which the test asserts advances on the first pass
+        // and does NOT advance on the second. Test builds only.
+        #[cfg(test)]
+        TEST_GET_INDEX_CALLS.with(|c| c.set(c.get() + 1));
+
         // If we've disabled a font style, then fall back to regular.
         if style != Style::Regular && !self.styles.get(style) {
             return self.get_index(alloc, cp, Style::Regular, p);
@@ -1010,4 +1020,12 @@ mod tests {
         let _ = lib;
         lib.deinit();
     }
+}
+
+// PORT NOTE (parity S86-F3): test-only witness for "this call reached the
+// resolver". See the note at the top of `CodepointResolver::get_index`.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static TEST_GET_INDEX_CALLS: core::cell::Cell<usize> =
+        const { core::cell::Cell::new(0) };
 }

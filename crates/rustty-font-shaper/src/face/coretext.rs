@@ -1654,7 +1654,13 @@ mod tests {
     // test "emoji"
     #[test]
     fn emoji() -> Result<(), Error> {
-        let ct_font = named_font("Apple Color Emoji", 18.0);
+        // const desc = try FontDescriptor.createWithNameAndSize(name, 12);
+        // const ct_font = try Font.createWithFontDescriptor(desc, 12);
+        //
+        // The BASE CTFont is built at 12pt and only the `Face` opts ask for 18
+        // — the reference exercises `initFontCopy` RESIZING the font, which a
+        // base already at 18pt does not.
+        let ct_font = named_font("Apple Color Emoji", 12.0);
         // defer ...release();
 
         let mut face = Face::init_font_copy(&ct_font, opts(18.0))?;

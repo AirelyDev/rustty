@@ -49,6 +49,18 @@ rustty-z2d = { workspace = true }
 allocator-api2 = { workspace = true }
 
 [dev-dependencies]
+# TEST-ONLY (parity S83-F3 / S86-F4): enable rustty-util's `tripwire-test`
+# feature so this crate's fail-point tests trip in the RELEASE test lane too.
+# Zig's `builtin.is_test` is true for the whole compilation unit at ANY optimize
+# mode, so the reference's allocation-failure tests run under
+# `zig build test -Doptimize=Release*`. `Module::enabled()` is
+# `cfg!(any(test, debug_assertions, feature = "tripwire-test"))`, and `cfg(test)`
+# there is evaluated in rustty-util's OWN compilation unit — which is not a test
+# — so without this feature the fail points silently no-op in release and the
+# tests had to be `#[ignore]`d. A dev-dependency activates the feature ONLY for
+# test/bench/example builds, so `cargo build --release` still compiles
+# `tripwire::check` away.
+rustty-util = { workspace = true, features = ["tripwire-test"] }
 # Pure-Rust PNG codec, used ONLY by the sprite face and glyf_rasterize PNG
 # known-answer tests: it decodes the checked-in reference images AND re-encodes
 # the rendered atlases so the encoded bytes are compared against the references
