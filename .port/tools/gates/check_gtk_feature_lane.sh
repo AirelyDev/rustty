@@ -82,7 +82,16 @@ FEATURES="gtk,wayland,x11"
 # `tests/gtk_seam.rs::gtk_exports_resources_dir_and_global_init_routes_through_it`,
 # the KAT that global init routes `resources_dir` through the gtk apprt's
 # Flatpak-aware override. 140 -> 141.
-GTK_DELTA_FLOOR=141
+# 2026-09-11 (task-18, S48-F4): 141 -> 167. Task-18 added exactly ONE gated test
+# (`gtk::portal::tests::portal_generate_token_spans_the_full_usize_width`); the
+# other 25 are DRIFT — the measured delta on the Fedora VM today is 167 and
+# intervening stages added gated tests without raising the floor. That is a real
+# hole, not bookkeeping: a floor 26 below the measurement cannot fail when 26
+# gated tests stop compiling, which is the exact vacuity this arm exists to
+# catch. Raising it to the measured value is net-new coverage (R5). If a future
+# stage finds this red at a number just under 167, the question is which gated
+# tests stopped COMPILING, not whether to lower the floor.
+GTK_DELTA_FLOOR=167
 WAYLAND_NAME_FLOOR=3
 X11_NAME_FLOOR=4
 

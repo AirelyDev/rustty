@@ -114,7 +114,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** parseRequestPathToken hex parsing differs on '_' separators and leading '+'
   - **Oracle:** `src/apprt/gtk/portal.zig:63-67` → **Rustty:** `crates/rustty-apprt/src/gtk/portal.rs:89-92`
   - **Audit's suggested fix:** Reject a leading '+' explicitly and (if underscore tolerance is wanted for fidelity) strip interior '_' subject to Zig's no-leading/trailing-underscore rule before from_str_radix.
-- [ ] **S48-F4** · CONFIRMED · `PRNG` · other
+- [x] **S48-F4** · CONFIRMED · `PRNG` · other
   - **What:** generateToken draws from GLib's MT PRNG; PORT NOTE cites a stale entropy source
   - **Oracle:** `src/apprt/gtk/portal.zig:13-17` → **Rustty:** `crates/rustty-apprt/src/gtk/portal.rs:31-49`
   - **Audit's suggested fix:** Update the PORT NOTE to cite std.Random.IoSource; optionally use getrandom-backed entropy (e.g. rand::rngs::OsRng or libc::getrandom) to match the source class.

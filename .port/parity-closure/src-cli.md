@@ -39,7 +39,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** Search box does not use TextInput.drawWithStyle: no cursor, no horizontal scroll/ellipsis
   - **Oracle:** `src/cli/list_themes.zig:823-836` → **Rustty:** `crates/rustty-cli/src/list_themes.rs:1345-1370`
   - **Audit's suggested fix:** Restructure lifetimes so `text_input` is `'a`-lived (e.g. hold it outside DrawState next to tty/vx, or give DrawState a `&'a mut TextInput` slot for the frame) and call `draw_with_style(child, ui_standard(scheme))` as the reference does.
-- [ ] **S70-F1** · CONFIRMED · `DOC` · missing-branch
+- [x] **S70-F1** · CONFIRMED · `DOC` · missing-branch
   - **What:** +version omits the entire GTK block (kernel, desktop env, GTK/libadwaita versions, libX11/libwayland) on the GTK build
   - **Oracle:** `src/cli/version.zig:49-75` → **Rustty:** `crates/rustty-cli/src/version.rs:189-223`
   - **Audit's suggested fix:** Add a `#[cfg(all(any(target_os = "linux", target_os = "freebsd"), feature = "gtk"))]` block (guarded at runtime on `build_config::app_runtime() == Runtime::Gtk`) that prints the kernel line (Linux only, with the exact fallback string), `desktop env` tag from rustty_os::desktopEnvironment(&environ_map), GTK/libadwaita build (BASELINE) and runtime versions formatted as `{major}.{minor}.{micro}`, and `libX11`/`libwayland` enabled/disabled from `cfg!(feature = "x11")`/`cfg!(feature = "wayland")` passed through rustty-cli's Cargo features.
