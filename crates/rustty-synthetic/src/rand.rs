@@ -297,6 +297,9 @@ macro_rules! impl_uint_prim {
 impl_uint_prim!(u8, 8, 1);
 // u16: the `rand.uintLessThan(u16, 1024)` draw of cli/Styled.zig (b11d60818).
 impl_uint_prim!(u16, 16, 2);
+// u32: the `random.uintLessThan(u32, key_space)` / `random.int(u32)` draws of
+// terminal/hash_map.zig's oracle test (parity S155-F5).
+impl_uint_prim!(u32, 32, 4);
 // NOTE: `usize` is 64-bit on the target — treated as `u64` LE, matching Zig's
 // `usize`.
 impl_uint_prim!(u64, 64, 8);
@@ -399,6 +402,32 @@ impl Rng<'_> {
     pub fn int_range_at_most<T: Uint>(&self, at_least: T, at_most: T) -> T {
         let d = T::from_u128(at_most.to_u128() - at_least.to_u128());
         T::from_u128(at_least.to_u128() + self.uint_at_most::<T>(d).to_u128())
+    }
+
+    /// PORT NOTE: `intRangeLessThan(r, comptime T, at_least, less_than)`,
+    /// unsigned branch (`at_least + r.uintLessThan(T, less_than - at_least)`).
+    pub fn int_range_less_than<T: Uint>(&self, at_least: T, less_than: T) -> T {
+        assert!(at_least.to_u128() < less_than.to_u128());
+        let d = T::from_u128(less_than.to_u128() - at_least.to_u128());
+        T::from_u128(at_least.to_u128() + self.uint_less_than::<T>(d).to_u128())
+    }
+
+    /// PORT NOTE: `shuffle(r, comptime T, buf)` = `shuffleWithIndex(T, buf,
+    /// usize)`; `MinArrayIndex(usize)` is `usize`, so the index draws are
+    /// `intRangeLessThan(usize, i, max)` and the number of PRNG draws — hence
+    /// the whole downstream stream — depends on taking them in exactly this
+    /// order.
+    pub fn shuffle<T: Copy>(&self, buf: &mut [T]) {
+        if buf.len() < 2 {
+            return;
+        }
+        let max: usize = buf.len();
+        let mut i: usize = 0;
+        while i < max - 1 {
+            let j: usize = self.int_range_less_than::<usize>(i, max);
+            buf.swap(i, j);
+            i += 1;
+        }
     }
 
     /// PORT NOTE: `intRangeAtMostBiased(r, comptime T, at_least, at_most)`, unsigned

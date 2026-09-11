@@ -268,6 +268,7 @@ rustty-zigstd = { workspace = true, features = ["tracking"] }
 # dev-dependency activates the feature ONLY for test/bench/example builds, so
 # `cargo build --release` (no dev-deps) still compiles `tripwire::check` away.
 rustty-util = { workspace = true, features = ["tripwire-test"] }
+rustty-synthetic = { workspace = true }
 # TEST-ONLY: the §4 alloc/latency/RSS bench harness (pagelist::bench) calls
 # getrusage(RUSAGE_SELF) for peak RSS. Same libc the reference's std.posix binds
 # (R3); dev-only so it never enters the production library.

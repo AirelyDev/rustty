@@ -396,8 +396,13 @@ mod tests {
                     .pages
                     .pin(point::Point::Active(point::Coordinate { x: 2, y: 1 }))
                     .unwrap(),
-                whitespace: None,
-                semantic_prompt_boundary: false,
+                // The reference writes `selectLine(.{ .pin = ... })`, i.e. BOTH
+                // of these at their `SelectLine` field defaults
+                // (`&selection_codepoints.default_line_whitespace` and `true`).
+                // `null`/`false` are the opposite of what the reference
+                // exercises (parity S140-F1).
+                whitespace: Some(&crate::selection_codepoints::DEFAULT_LINE_WHITESPACE),
+                semantic_prompt_boundary: true,
             })
             .unwrap();
         let sel_str = s
@@ -475,8 +480,13 @@ mod tests {
                     .pages
                     .pin(point::Point::Active(point::Coordinate { x: 2, y: 1 }))
                     .unwrap(),
-                whitespace: None,
-                semantic_prompt_boundary: false,
+                // The reference writes `selectLine(.{ .pin = ... })`, i.e. BOTH
+                // of these at their `SelectLine` field defaults
+                // (`&selection_codepoints.default_line_whitespace` and `true`).
+                // `null`/`false` are the opposite of what the reference
+                // exercises (parity S140-F1).
+                whitespace: Some(&crate::selection_codepoints::DEFAULT_LINE_WHITESPACE),
+                semantic_prompt_boundary: true,
             })
             .unwrap();
         // const map = try s.selectionStringMap(alloc, .{
@@ -566,8 +576,13 @@ mod tests {
                     .pages
                     .pin(point::Point::Active(point::Coordinate { x: 10, y: 0 }))
                     .unwrap(),
-                whitespace: None,
-                semantic_prompt_boundary: false,
+                // The reference writes `selectLine(.{ .pin = ... })`, i.e. BOTH
+                // of these at their `SelectLine` field defaults
+                // (`&selection_codepoints.default_line_whitespace` and `true`).
+                // `null`/`false` are the opposite of what the reference
+                // exercises (parity S140-F1).
+                whitespace: Some(&crate::selection_codepoints::DEFAULT_LINE_WHITESPACE),
+                semantic_prompt_boundary: true,
             })
             .unwrap();
         // const map = try s.selectionStringMap(alloc, .{
@@ -661,8 +676,13 @@ mod tests {
         let line = s
             .select_line(SelectLine {
                 pin: click_pin,
-                whitespace: None,
-                semantic_prompt_boundary: false,
+                // The reference writes `selectLine(.{ .pin = ... })`, i.e. BOTH
+                // of these at their `SelectLine` field defaults
+                // (`&selection_codepoints.default_line_whitespace` and `true`).
+                // `null`/`false` are the opposite of what the reference
+                // exercises (parity S140-F1).
+                whitespace: Some(&crate::selection_codepoints::DEFAULT_LINE_WHITESPACE),
+                semantic_prompt_boundary: true,
             })
             .unwrap();
         // const map = try s.selectionStringMap(alloc, .{
