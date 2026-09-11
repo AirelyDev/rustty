@@ -1271,7 +1271,7 @@ found, and current state.
 
 ---
 
-## N22 — G-LOGFILE counts `log.*` sites inside reference functions that the reference never calls
+## N22 — G-LOGFILE counts `log.*` sites inside reference functions that the reference never calls (CLOSED 2026-09-11 by a site-level dead-site declaration)
 
 **Found 2026-09-10 (task-14e-2), while accounting for the last 10 sites of `src/font/shaper/`.**
 
@@ -1327,6 +1327,25 @@ every `log.err` site in `rustty-config` had nowhere to go.
 
 The remaining four are the **N16 class — UNRESTORABLE, not dropped**:
 
+
+> **CLOSED 2026-09-11 (task 14gate round 8).** The eight sites are declared in
+> `.port/parity-closure/LOG-DEAD-SITES.tsv` and subtracted from the site inventory and from
+> their files' reference counts, so **the denominator is 1407, not 1415**, and every coverage
+> figure derived from it is corrected. NOT via the file-level `DECLARED-EXCLUDED` mechanism:
+> `coretext.zig` still has four genuinely live sites at `:254, :264, :277, :291`, so retiring
+> the file would have erased real debt and spent the exclusion budget on something that is
+> not an exclusion. The declaration is per SITE, a bogus line is RED, the kind comes from a
+> closed set, a reason is mandatory, and the population is capped at 8 on a two-way ratchet
+> because an undeclared dead site is undetectable by construction.
+>
+> **And it is net-new coverage, not a subtraction (R5): a port emission carrying a
+> declared-dead site's message is RED.** Nothing else in this gate can catch someone
+> faithfully restoring a call the reference never makes — every count check would applaud it,
+> and "read the preserved comment and add the call beneath it" is the standard method that
+> produces exactly that. Proved on the live tree: adding
+> `coretext.zig:775`'s message to `crates/rustty-font-shaper/src/shaper/coretext.rs` turns
+> the gate RED naming both sites.
+
 - `CApi.zig:17` / `:40` `error allocating config err={}` — the reference's `state.alloc.create`
   failure arms. `Box::new` aborts on OOM rather than returning an error.
 - `CApi.zig:22` `error creating config err={}` — `Config::default_config()` returns a `Config`,
@@ -1375,3 +1394,41 @@ the defect the 14e-1 review caught (a waiver contradicted by an open `missing-er
 here the ledger does not contradict the waiver, it *dates* it.
 
 **state**: OPEN as a dependency. Discharged by whoever closes `S94-F1`, in the same change.
+## N25 — five `rustty-font` diagnostics live only in test code, and were counted as if they were the port
+
+- **id**: N25 (next free id checked 2026-09-11 against `NEW-FINDINGS.md` headings, a
+  workspace grep for `\bN[0-9]+\b` and `progress.md`: N1-N24 taken.)
+- **severity**: low-medium (five reference diagnostics are absent from every production build;
+  no state or control-flow difference, and nothing regressed — this is debt that was
+  previously miscounted as done)
+- **kind**: unrestored sites / measurement correction
+- **oracle**: `src/font/sprite/Face.zig` (4 live sites) and
+  `src/font/glyf_rasterize_png_test.zig` (4 live sites).
+- **rustty**: `crates/rustty-font/src/sprite/face.rs` and
+  `crates/rustty-font/src/glyf_rasterize/glyf_rasterize_png_test.rs`.
+- **description**: until 2026-09-11 `G-LOGFILE` counted emissions inside `#[cfg(test)]` /
+  `#[test]` spans as if they were production code. When test spans were excluded
+  (task 14gate round 6), these two files' counts fell:
+
+  | port file | counted before | production only | test-only |
+  |---|---|---|---|
+  | `sprite/face.rs` | 5 | **1** | 4 |
+  | `glyf_rasterize/glyf_rasterize_png_test.rs` | 1 | **0** | 1 |
+
+  Their portmap allowances rose accordingly — `sprite/Face.zig` 0 -> 3,
+  `glyf_rasterize_png_test.zig` 3 -> 4. **Nothing regressed and no diagnostic was removed.**
+  Five of the reference's diagnostics were never emitted by a production build of
+  `rustty-font`; the gate simply could not tell, because a test that writes a logging macro
+  to prove one fires looks exactly like a site that fires.
+- **why it is recorded here rather than left in the allowances**: a raised allowance with a
+  generic reason is debt nobody owns and nobody meets. This entry is so the next stage
+  working `rustty-font` meets it as a tracked item. The two rows' `reason` cells point at the
+  cause; this entry is the item.
+- **what closing it looks like**: move the four `sprite/Face.zig` sites and the one
+  `glyf_rasterize_png_test.zig` site out of test scaffolding and onto the production paths
+  that correspond to the reference's, then tighten both portmap allowances in the same commit
+  — the gate is a ratchet and will go RED on the slack if they are not.
+- **how found**: task 14gate round 6, as a side effect of implementing test-span exclusion;
+  surfaced as a finding in round 8 at the coordinator's instruction, because it had been left
+  visible only as a raised number.
+- **state**: **OPEN.**

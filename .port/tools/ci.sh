@@ -786,7 +786,13 @@ GATE_REGISTRY=(
   # from one that never had a comment — collapsing the two let a message
   # truncated to its trailing clause pass GREEN. Measurements EXCLUDE
   # #[cfg(test)]/#[test] code (emissions AND preserved comments): a test that
-  # names a log_* sink was inflating counts. Nothing here is
+  # names a log_* sink was inflating counts (N25 records the five rustty-font
+  # diagnostics that turned out to exist only in test code). A SIXTH check
+  # subtracts DEAD reference sites — calls the reference contains and never
+  # reaches, N22's eight `debugPositions` sites — per SITE, never by retiring a
+  # file, and makes a port emission carrying a dead site's message RED, which is
+  # the only check here that can catch the port saying something the reference
+  # does not. Nothing here is
   # env-settable (R5); an absent or off-pin oracle checkout is 3 BLOCKED, never a
   # vacuous green.
   "G-LOGFILE-SELF|HARD|$PY $GATES/check_log_reconcile.py --self-test"

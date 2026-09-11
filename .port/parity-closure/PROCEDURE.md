@@ -300,6 +300,15 @@ claimed. Prove the control fails, then prove it fails *for the stated reason*.
      be wrong. And the authority on where a diagnostic lives now is the gate, which is
      regenerated from the reference on every run, not a frozen anchor. **Treat a ledger
      rustty anchor as "this region, at the time of the audit"; locate the code by symbol.**
+   - **A site the reference never REACHES is not a site.** Eight `log.*` calls sit inside
+     private `debugPositions` functions whose only callers the reference itself comments out
+     (N22), and counting them inflated every coverage denominator. They are declared per SITE
+     in `LOG-DEAD-SITES.tsv` — never by retiring the file, because one of those files still
+     has four live sites and a file-level exclusion would erase real debt. **A subtraction
+     from a gate has to buy new coverage to be allowed (R5), and this one does: a port
+     emission carrying a declared-dead site's message is RED.** That is the only check in the
+     gate that can catch the port saying something the reference does not, which is precisely
+     what "restore the call under the comment" would produce here.
    - **Ratchet EVERY number a stage can move, including the escape hatch.** Completing the
      portmap (N15) created a new lever: an EXCLUSION retires a reference file instead of
      reconciling it, so it erases that file's whole deficit. Reclassifying

@@ -1,0 +1,35 @@
+# LOG-DEAD-SITES.tsv - reference `log.*` calls the reference CONTAINS but NEVER REACHES.
+#
+# These are subtracted from the site inventory before every coverage figure, and from the
+# `expected` count of the file they live in. They are NOT exclusions: an exclusion retires a
+# whole reference FILE, and `font/shaper/coretext.zig` still has four genuinely live sites
+# alongside its four dead ones. Using the file-level mechanism here would erase real debt and
+# spend the exclusion budget on something that is not an exclusion.
+#
+# oracle_file  reference path at pin 20abdb50a.
+# line         the exact line of the `log.*` call. A line that is not a live reference log
+#              site at the pin is RED - a declaration that corresponds to nothing removes
+#              nothing and hides a drift.
+# kind         one of: unreachable-private, commented-caller, dead-branch.
+# reason       mandatory. A declaration with no reason is RED.
+#
+# THE CHECK THAT MAKES THIS NET-NEW COVERAGE RATHER THAN A SUBTRACTION (R5): a port emission
+# carrying a declared-dead site's MESSAGE is RED. Nothing else in this gate can catch someone
+# faithfully restoring a call the reference never makes - every count check would applaud it -
+# and "read the preserved comment and add the call beneath it" is the standard method that
+# produces exactly that. This plan has already found three genuine instances of the port
+# emitting what the reference does not.
+#
+# An UNDECLARED dead site is undetectable by construction: nothing in the text says a function
+# is never called. The cap below is therefore the only thing stopping this becoming an escape
+# hatch the way the exclusion list nearly did. Two-way ratchet; a missing directive BLOCKS.
+#!dead-site-cap entries=8
+oracle_file	line	kind	reason
+src/font/shaper/coretext.zig	775	unreachable-private	N22: inside private `fn debugPositions` (`:690`). A whole-tree grep for that name finds exactly four occurrences - the two definitions and two COMMENTED-OUT calls (`coretext.zig:503`, `harfbuzz.zig:236`). The fn is private, so Zig never analyses the body. The four LIVE sites in this same file (`:254, :264, :277, :291`) are unaffected and still counted.
+src/font/shaper/coretext.zig	793	unreachable-private	N22: inside private `fn debugPositions` (`:690`), whose only two call sites in the reference are commented out.
+src/font/shaper/coretext.zig	806	unreachable-private	N22: inside private `fn debugPositions` (`:690`), whose only two call sites in the reference are commented out.
+src/font/shaper/coretext.zig	820	unreachable-private	N22: inside private `fn debugPositions` (`:690`), whose only two call sites in the reference are commented out.
+src/font/shaper/harfbuzz.zig	379	unreachable-private	N22: inside private `fn debugPositions` (`:302`); its only call site is commented out at `:236`. Every log site in this file is inside that function, so this file's live count is 0.
+src/font/shaper/harfbuzz.zig	396	unreachable-private	N22: inside private `fn debugPositions` (`:302`); its only call site is commented out at `:236`.
+src/font/shaper/harfbuzz.zig	409	unreachable-private	N22: inside private `fn debugPositions` (`:302`); its only call site is commented out at `:236`.
+src/font/shaper/harfbuzz.zig	421	unreachable-private	N22: inside private `fn debugPositions` (`:302`); its only call site is commented out at `:236`.

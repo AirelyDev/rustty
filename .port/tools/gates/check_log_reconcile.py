@@ -69,6 +69,7 @@ PORT_DIR = os.path.dirname(os.path.dirname(GATES_DIR))
 ROOT = os.path.dirname(PORT_DIR)
 PORTMAP = os.path.join(PORT_DIR, "parity-closure", "LOG-PORTMAP.tsv")
 DIVERGENCES = os.path.join(PORT_DIR, "parity-closure", "LOG-TEXT-DIVERGENCES.tsv")
+DEAD_SITES = os.path.join(PORT_DIR, "parity-closure", "LOG-DEAD-SITES.tsv")
 LEDGER = os.path.join(PORT_DIR, "parity-closure", "LEDGER.tsv")
 
 # R3: the oracle is an EXTERNAL read-only checkout, never shipped into the repo.
@@ -977,6 +978,87 @@ def load_divergences(path):
 
 
 # ---------------------------------------------------------------------------
+# Dead reference sites
+# ---------------------------------------------------------------------------
+# A `log.*` call the reference contains but NEVER REACHES. `debugPositions` in
+# `font/shaper/coretext.zig` and `font/shaper/harfbuzz.zig` is private, and its
+# only two call sites in the whole reference are commented out — so Zig never
+# analyses either body and the eight sites inside them are code the reference
+# does not run. Counting them inflates the denominator of every coverage figure,
+# and "restoring" one would emit what the reference does not: the INVERSE defect,
+# of which this plan has already found three genuine instances (N22).
+#
+# WHY NOT `DECLARED-EXCLUDED`. That works at FILE granularity, and
+# `coretext.zig` still has four genuinely live sites at :254, :264, :277 and
+# :291. Retiring the file would erase real debt and would spend the exclusion
+# budget on something that is not an exclusion. This mechanism is per SITE, and
+# the live sites in the same file must survive it — there is a self-test arm for
+# exactly that.
+#
+# THE THIRD CHECK IS WHY THIS IS NET-NEW COVERAGE AND NOT A SUBTRACTION (R5):
+# a port emission carrying a declared-dead site's message is RED. Nothing else in
+# this gate can catch someone faithfully restoring a call the reference never
+# makes; the count checks would applaud it.
+DEAD_SITE_KINDS = (
+    "unreachable-private",  # private fn, every call site commented out
+    "commented-caller",     # reachable only from a call the reference comments out
+    "dead-branch",          # inside a branch the reference cannot take
+)
+DEAD_SITE_DIRECTIVE = re.compile(r"^#!\s*dead-site-cap\s+entries=(\d+)\s*$")
+
+
+def load_dead_sites(path):
+    """(rows, cap). Rows are {file, line, kind, reason}.
+
+    An UNDECLARED dead site is undetectable by construction — nothing in the text
+    says a function is never called. The cap is therefore the only thing standing
+    between this and an escape hatch, the way the exclusion list nearly became
+    one: a two-way ratchet, and a missing directive BLOCKS.
+    """
+    rows, cap = [], None
+    if not os.path.exists(path):
+        return rows, cap
+    with open(path, encoding="utf-8", newline="") as fh:
+        for lineno, raw in enumerate(fh, 1):
+            line = raw.rstrip("\n")
+            m = DEAD_SITE_DIRECTIVE.match(line)
+            if m:
+                cap = int(m.group(1))
+                continue
+            if not line.strip() or line.lstrip().startswith("#"):
+                continue
+            parts = line.split("\t")
+            if parts[0].strip() == "oracle_file":
+                continue
+            if len(parts) < 4:
+                raise ValueError(
+                    f"{path}:{lineno}: expected 4 tab-separated columns "
+                    "(oracle_file, line, kind, reason)"
+                )
+            try:
+                site = int(parts[1].strip())
+            except ValueError:
+                raise ValueError(f"{path}:{lineno}: line {parts[1]!r} is not an integer")
+            rows.append(
+                {
+                    "file": parts[0].strip(),
+                    "line": site,
+                    "kind": parts[2].strip(),
+                    "reason": parts[3].strip(),
+                    "lineno": lineno,
+                }
+            )
+    return rows, cap
+
+
+def dead_lines_by_file(dead_rows):
+    out = {}
+    for d in dead_rows:
+        out.setdefault(d["file"], set()).add(d["line"])
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Portmap
 # ---------------------------------------------------------------------------
 EXCLUSION_DIRECTIVE = re.compile(
@@ -1063,7 +1145,7 @@ def load_portmap(path):
 EXCLUSION_KINDS = ("no-port", "build-tooling", "vendored", "unresolved")
 
 
-def oracle_files_with_log_sites(zig_walk):
+def oracle_files_with_log_sites(zig_walk, dead_by_file=None):
     """{reference path: live log site count} over the WHOLE reference tree.
 
     THE POINT: the portmap was originally seeded from the audit's LOG rows, so it
@@ -1075,10 +1157,11 @@ def oracle_files_with_log_sites(zig_walk):
     a silence.
     """
     out = {}
+    dead_by_file = dead_by_file or {}
     for rel, text in zig_walk():
-        n = len(zig_sites(text))
-        if n:
-            out[rel] = n
+        sites = [x for x in zig_sites(text) if x not in dead_by_file.get(rel, ())]
+        if sites:
+            out[rel] = len(sites)
     return out
 
 
@@ -1104,7 +1187,7 @@ def ledger_log_files(path):
 def verdict(portmap, claims, zig_text, rust_text, facade_sources=None, report=False,
             oracle_log_files=None, exclusion_cap=None, raw_sources=None,
             ref_index=None, divergences=None, divergence_cap=None,
-            unpairable_cap=None):
+            unpairable_cap=None, dead_sites=None, dead_site_cap=None):
     """Return (rc, lines). rc 0 GREEN, 1 RED. Pure — all I/O is in the callers.
 
     `zig_text(path)` / `rust_text(path)` return source text or None if absent.
@@ -1135,6 +1218,8 @@ def verdict(portmap, claims, zig_text, rust_text, facade_sources=None, report=Fa
     defs = {p: wide_defs[p] for p in pool}
     stubs = {p: v for p, v in stubs.items() if p in pool}
 
+    dead_rows = dead_sites or []
+    dead_by_file = dead_lines_by_file(dead_rows)
     rows, total_expected, total_actual, total_bypass = [], 0, 0, 0
     missing_oracle, excluded_rows = [], []
     for r in portmap:
@@ -1145,7 +1230,9 @@ def verdict(portmap, claims, zig_text, rust_text, facade_sources=None, report=Fa
         if txt is None:
             missing_oracle.append(r["oracle"])
             continue
-        expected = len(zig_sites(txt))
+        expected = len(
+            [x for x in zig_sites(txt) if x not in dead_by_file.get(r["oracle"], ())]
+        )
         total_expected += expected
         arm_counts, arm_bypass = [], []
         for arm in r["arms"]:
@@ -1254,6 +1341,16 @@ def verdict(portmap, claims, zig_text, rust_text, facade_sources=None, report=Fa
             f"holding {ex_sites} site(s){budget}: "
             + ", ".join(f"{v} {k}" for k, v in sorted(kinds.items()))
         )
+    if dead_rows:
+        kinds = {}
+        for d in dead_rows:
+            kinds[d["kind"]] = kinds.get(d["kind"], 0) + 1
+        out.append(
+            f"           {len(dead_rows)} DEAD reference site(s) subtracted from the "
+            f"inventory (budget {dead_site_cap}): "
+            + ", ".join(f"{v} {k}" for k, v in sorted(kinds.items()))
+            + " — the reference contains these calls and never reaches them"
+        )
     if oracle_log_files:
         total_ref = sum(oracle_log_files.values())
         live_rows = set(oracle_log_files) & {x[0]["oracle"] for x in rows}
@@ -1347,6 +1444,90 @@ def verdict(portmap, claims, zig_text, rust_text, facade_sources=None, report=Fa
                     "commit that brought the file back into scope."
                 )
                 rc = 1
+    # --- DEAD SITES: validity, ratchet, and the inverse-defect check -----------
+    dead_bad_kind, dead_no_reason, dead_bogus, dead_emitted = [], [], [], []
+    if dead_rows:
+        for d in dead_rows:
+            if d["kind"] not in DEAD_SITE_KINDS:
+                dead_bad_kind.append((d["file"], d["line"], d["kind"]))
+            if not d["reason"]:
+                dead_no_reason.append((d["file"], d["line"]))
+            txt = zig_text(d["file"])
+            if txt is None or d["line"] not in zig_sites(txt):
+                dead_bogus.append((d["file"], d["line"]))
+        # A port emission carrying a declared-dead site's message is the INVERSE
+        # defect and the reason this mechanism is net-new coverage rather than a
+        # subtraction: no count check in this gate can see it, and "restore the
+        # call under the comment" is the standard method that would produce it.
+        arms_for = {}
+        for r in portmap:
+            for arm in r["arms"]:
+                for f in arm:
+                    arms_for.setdefault(r["oracle"], set()).add(f)
+        for d in dead_rows:
+            txt = zig_text(d["file"])
+            if txt is None:
+                continue
+            lines = txt.split("\n")
+            blob = " ".join(lines[d["line"] - 1 : d["line"] + 3])
+            m = ZIG_CALL_IN_COMMENT.search(blob)
+            if not m:
+                continue
+            msg = normalise_message(zig_format_arg(blob[m.end() - 1 :]))
+            if not msg:
+                continue
+            for f in sorted(arms_for.get(d["file"], ())):
+                if f not in pool:
+                    continue
+                code, nc = pool[f]
+                for eline, _lvl, emsg in live_emission_messages(code, nc):
+                    if emsg is not None and normalise_message(emsg) == msg:
+                        dead_emitted.append((f, eline, d["file"], d["line"], msg))
+    if dead_bad_kind:
+        out.append(
+            f"RED: {len(dead_bad_kind)} dead-site declaration(s) with a kind outside "
+            f"{DEAD_SITE_KINDS}: {dead_bad_kind[:5]}"
+        )
+        rc = 1
+    if dead_no_reason:
+        out.append(
+            f"RED: {len(dead_no_reason)} dead-site declaration(s) with no reason: "
+            f"{dead_no_reason[:5]}"
+        )
+        rc = 1
+    if dead_bogus:
+        out.append(
+            f"RED: {len(dead_bogus)} dead-site declaration(s) name a line that is not a "
+            "live reference log site at the pin. A declaration that does not correspond "
+            "to anything removes nothing and hides a drift:"
+        )
+        for f, line in dead_bogus[:8]:
+            out.append(f"       {f}:{line}")
+        rc = 1
+    if dead_emitted:
+        out.append(
+            f"RED: {len(dead_emitted)} port emission(s) carry the message of a DECLARED-DEAD "
+            "reference site. The reference never reaches that call, so emitting it is the "
+            "INVERSE defect — the port saying something the reference does not:"
+        )
+        for f, eline, zf, zline, msg in dead_emitted[:8]:
+            out.append(f"       {f}:{eline}  <-  {zf}:{zline}  {msg!r}")
+        rc = 1
+    if dead_site_cap is not None:
+        if len(dead_rows) > dead_site_cap:
+            out.append(
+                f"RED: {len(dead_rows)} dead-site declaration(s), budget {dead_site_cap}. "
+                "An UNDECLARED dead site is undetectable by construction, so this budget "
+                "is the only thing stopping the mechanism becoming an escape hatch the "
+                "way the exclusion list nearly did. Raising it is a reviewed edit."
+            )
+            rc = 1
+        elif len(dead_rows) < dead_site_cap:
+            out.append(
+                f"RED: {len(dead_rows)} dead-site declaration(s), budget {dead_site_cap} — "
+                "the same RATCHET as everything else here."
+            )
+            rc = 1
     bad_excl = []
     for r in excluded_rows:
         kind = r["reason"].split(":", 1)[0].strip()
@@ -2095,6 +2276,56 @@ def self_test():
         ("a preserved comment inside #[cfg(test)] is not checked either",
          run_txt(TXT_TEST, allowance="1"), 0)
     )
+    # 10k. DEAD REFERENCE SITES. `src/mixed.zig` has THREE live `log.*` sites; the
+    #      third is declared dead. The port emits two.
+    zig["src/mixed.zig"] = (
+        'const log = std.log.scoped(.x);\n'
+        'fn a() void { log.warn("live one", .{}); }\n'
+        'fn b() void { log.warn("live two", .{}); }\n'
+        'fn dead() void { log.warn("never reached", .{}); }\n'
+    )
+    rs["c/mixed.rs"] = (
+        'fn a() { log::warn!(target: S, "live one"); }\n'
+        'fn b() { log::warn!(target: S, "live two"); }\n'
+    )
+    rs["c/mixed_restored.rs"] = rs["c/mixed.rs"] + (
+        'fn d() { log::warn!(target: S, "never reached"); }\n'
+    )
+    DEAD_OK = [{"file": "src/mixed.zig", "line": 4, "kind": "unreachable-private",
+                "reason": "private, only caller commented out", "lineno": 1}]
+
+    def run_dead(dead, cap, port="c/mixed.rs"):
+        pm = [{"oracle": "src/mixed.zig", "excluded": False, "arms": [[port]],
+               "allowance": "0", "bypass_cap": "0", "reason": "", "lineno": 0}]
+        return verdict(pm, {}, zt, rt, oracle_log_files=None,
+                       dead_sites=dead, dead_site_cap=cap)[0]
+
+    # 1. the declared-dead site drops out of the reference count: 3 sites, 2
+    #    emissions, and the file reconciles only because the dead one is subtracted.
+    cases.append(("a declared-dead reference site drops out of the count",
+                  run_dead(DEAD_OK, 1), 0))
+    cases.append(("...and WITHOUT the declaration the same file is short",
+                  run_dead([], 0), 1))
+    # 2. a declaration naming a line the reference does not have
+    cases.append(("a dead-site declaration naming a non-site line is RED",
+                  run_dead([dict(DEAD_OK[0], line=1)], 1), 1))
+    cases.append(("a dead-site declaration with no reason is RED",
+                  run_dead([dict(DEAD_OK[0], reason="")], 1), 1))
+    cases.append(("a dead-site declaration with an unknown kind is RED",
+                  run_dead([dict(DEAD_OK[0], kind="because")], 1), 1))
+    # 3. THE NET-NEW ARM: a port emission AT a declared-dead site.
+    cases.append(("a port emission carrying a DEAD site's message is RED",
+                  run_dead(DEAD_OK, 1, port="c/mixed_restored.rs"), 1))
+    # 4. the live sites in the same file must survive. `c/mixed.rs` emits exactly
+    #    the two live messages; if the mechanism worked at file granularity, or
+    #    matched on function name without the line, this file would reconcile at
+    #    zero emissions — so drop one and it must go RED.
+    rs["c/mixed_one.rs"] = 'fn a() { log::warn!(target: S, "live one"); }\n'
+    cases.append(("the LIVE sites in a file with dead sites are still counted",
+                  run_dead(DEAD_OK, 1, port="c/mixed_one.rs"), 1))
+    # 5. the ratchet, both ways
+    cases.append(("dead-site declarations OVER budget", run_dead(DEAD_OK, 0), 1))
+    cases.append(("dead-site declarations UNDER budget (stale)", run_dead(DEAD_OK, 2), 1))
     # 11. a LOG row citing a file with no portmap entry
     cases.append(
         ("undeclared reference file",
@@ -2128,7 +2359,8 @@ def self_test():
         "SELF-TEST GREEN: the gate flips RED on a short file, an unreasoned or stale\n"
         "allowance, a short PLATFORM TWIN that summing would have hidden, a no-op\n"
         "log stub, an undeclared file, a missing port file, a vacuous scan, and a\n"
-        "facade-BYPASSING direct print over its declared cap, a TRUNCATED or\n"
+        "facade-BYPASSING direct print over its declared cap, a PORT EMISSION AT A\n"
+        "DECLARED-DEAD reference site, a TRUNCATED or\n"
         "respaced message text, a comment quoting a call the reference does not have,\n"
         "an UNDECLARED reference\n"
         "file with live log sites and an uncategorised exclusion — and the scanner agrees\n"
@@ -2247,7 +2479,24 @@ def main():
                     with open(full, encoding="utf-8", errors="replace") as fh:
                         yield os.path.relpath(full, ORACLE), fh.read()
 
-    oracle_log_files = oracle_files_with_log_sites(zig_walk)
+    try:
+        dead_sites, dead_site_cap = load_dead_sites(DEAD_SITES)
+    except ValueError as exc:
+        print(f"BLOCKED: {exc}", file=sys.stderr)
+        return 3
+    if dead_site_cap is None:
+        print(
+            "BLOCKED: LOG-DEAD-SITES.tsv carries no `#!dead-site-cap entries=N`\n"
+            "         directive. An UNDECLARED dead reference site is undetectable by\n"
+            "         construction, so the budget is the only thing keeping this from\n"
+            "         becoming an escape hatch; a cap that can be disabled by deleting a\n"
+            "         line is not a cap.",
+            file=sys.stderr,
+        )
+        return 3
+    oracle_log_files = oracle_files_with_log_sites(
+        zig_walk, dead_lines_by_file(dead_sites)
+    )
     ref_index = reference_message_index(zig_walk)
     if not oracle_log_files:
         print(
@@ -2296,6 +2545,8 @@ def main():
         divergences=divergences,
         divergence_cap=divergence_cap,
         unpairable_cap=unpairable_cap,
+        dead_sites=dead_sites,
+        dead_site_cap=dead_site_cap,
     )
     print("\n".join(lines))
     return rc
