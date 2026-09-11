@@ -238,24 +238,35 @@ pub fn encode<W: std::io::Write>(
         }
 
         terminal_mouse::Format::Utf8 => {
+            let mut buf: [u8; 4] = [0; 4];
+            let x_cp: u32 = (cell.x as u32) + 33;
+            let y_cp: u32 = (cell.y as u32) + 33;
+
+            // PORT NOTE: reference defect (R13, UPSTREAM-DEFECTS.md UD60). The
+            // reference writes `ESC [ M` and the button, then does
+            // `std.unicode.utf8Encode(x + 33) catch unreachable` for each
+            // coordinate. A cell coordinate is a `u16`, so `x + 33` is a surrogate
+            // (U+D800..U+DFFF) for x in 55263..=57310, which UTF-8 cannot encode:
+            // ReleaseSafe panics, ReleaseFast is undefined behaviour. A grid that
+            // wide is reachable through the libghostty-vt mouse encoder's `size`
+            // option (for example a 60000-pixel screen with 1-pixel cells). The
+            // port takes the path the X10 arm above takes for a coordinate its
+            // format cannot carry: the event is not reported. The check runs
+            // before anything is written, so no partial `ESC [ M` reaches the
+            // writer. The X10 arm's `log.info` text is specific to X10, so no
+            // message is logged here.
+            let (Some(x_ch), Some(y_ch)) = (char::from_u32(x_cp), char::from_u32(y_cp)) else {
+                return Ok(());
+            };
+
             writer.write_all(b"\x1B[M")?;
 
             // The button code always fits in a single byte.
             writer.write_all(&[32 + button_code])?;
 
-            let mut buf: [u8; 4] = [0; 4];
-            let x_cp: u32 = (cell.x as u32) + 33;
-            let y_cp: u32 = (cell.y as u32) + 33;
-
-            // PORT NOTE: `std.unicode.utf8Encode(cp, &buf) catch unreachable` —
-            // the cell coordinates are small valid scalar values, so the encode
-            // never errors (the reference asserts this with `catch unreachable`).
-            // `char::from_u32(..).unwrap()` is the faithful equivalent.
-            let x_ch = char::from_u32(x_cp).unwrap();
             let x_len = x_ch.encode_utf8(&mut buf).len();
             writer.write_all(&buf[0..x_len])?;
 
-            let y_ch = char::from_u32(y_cp).unwrap();
             let y_len = y_ch.encode_utf8(&mut buf).len();
             writer.write_all(&buf[0..y_len])?;
         }

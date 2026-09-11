@@ -824,6 +824,93 @@ mod tests {
         (new_result, encoder)
     }
 
+    // rustty-only (R13, UPSTREAM-DEFECTS.md UD60): a UTF-8 (mode 1005) mouse
+    // coordinate whose `+ 33` is a surrogate cannot be encoded. The reference
+    // reaches `catch unreachable`; the port does not report the event, and writes
+    // nothing. Driven through the C ABI with a 60000-column grid.
+    #[test]
+    fn encode_utf8_surrogate_coordinate_is_not_reported() {
+        with_test_allocator(|calloc| {
+            let mut encoder: Encoder = std::ptr::null_mut();
+            assert_eq!(Result::Success, unsafe { new(Some(calloc), &mut encoder) });
+            let event_mode = TrackingMode::Any;
+            unsafe { setopt_v(encoder, Option_::Event, &event_mode) };
+            let size = Size {
+                screen_width: 60_000,
+                screen_height: 60_000,
+                cell_width: 1,
+                cell_height: 1,
+                ..Size::default()
+            };
+            unsafe { setopt_v(encoder, Option_::Size, &size) };
+
+            let mut event: Event = std::ptr::null_mut();
+            assert_eq!(Result::Success, unsafe {
+                mouse_event::new(Some(calloc), &mut event)
+            });
+            unsafe { mouse_event::set_action(event, mouse_event::Action::Press) };
+            unsafe { mouse_event::set_button(event, mouse_event::Button::Left) };
+
+            let encode_at = |format: MouseFormat, x: f64, y: f64| -> (Result, Vec<u8>) {
+                unsafe { setopt_v(encoder, Option_::Format, &format) };
+                unsafe {
+                    mouse_event::set_position(
+                        event,
+                        mouse_event::Position {
+                            x: x as _,
+                            y: y as _,
+                        },
+                    )
+                };
+                let mut buf = [0u8; 32];
+                let mut written: usize = 0;
+                let r =
+                    unsafe { encode(encoder, event, buf.as_mut_ptr(), buf.len(), &mut written) };
+                (r, buf[..written].to_vec())
+            };
+
+            // Positive reach: SGR reports the very cells the UTF-8 cases use, so
+            // the grid is wide and tall enough and the press is reported.
+            assert_eq!(
+                (Result::Success, b"\x1b[<0;55264;1M".to_vec()),
+                encode_at(MouseFormat::Sgr, 55_263.0, 0.0)
+            );
+            assert_eq!(
+                (Result::Success, b"\x1b[<0;1;57311M".to_vec()),
+                encode_at(MouseFormat::Sgr, 0.0, 57_310.0)
+            );
+
+            // The last and first encodable code points around the surrogates.
+            // x = 55262 -> U+D7FF; x = 57311 -> U+E000.
+            assert_eq!(
+                (Result::Success, b"\x1b[M \xed\x9f\xbf!".to_vec()),
+                encode_at(MouseFormat::Utf8, 55_262.0, 0.0)
+            );
+            assert_eq!(
+                (Result::Success, b"\x1b[M \xee\x80\x80!".to_vec()),
+                encode_at(MouseFormat::Utf8, 57_311.0, 0.0)
+            );
+
+            // Surrogates, in each coordinate and at both ends of the range: not
+            // reported, nothing written, no partial `ESC [ M`.
+            for (x, y) in [
+                (55_263.0, 0.0),
+                (57_310.0, 0.0),
+                (0.0, 55_263.0),
+                (0.0, 57_310.0),
+            ] {
+                assert_eq!(
+                    (Result::Success, Vec::new()),
+                    encode_at(MouseFormat::Utf8, x, y),
+                    "UTF-8 mouse report at cell ({x}, {y})"
+                );
+            }
+
+            unsafe { mouse_event::free(event) };
+            unsafe { free(encoder) };
+        });
+    }
+
     // test "encode: sgr press left" {
     #[test]
     fn encode_sgr_press_left() {
