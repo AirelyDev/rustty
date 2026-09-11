@@ -4,8 +4,15 @@
 //!
 //! PORT STATUS: ported (R1). The renderer "link" set — an `oni.Regex`-backed
 //! match of `input.Link` regexes against the render-state viewport string,
-//! producing the highlighted `CellSet` — with all 3 `test{}` blocks
-//! (`renderCellMap`, `renderCellMap hover links`, `renderCellMap mods no match`).
+//! producing the highlighted `CellSet` — with all 4 `test{}` blocks
+//! (`renderCellMap`, `renderCellMap hover links`, `renderCellMap inactive links
+//! don't allocate`, `renderCellMap mods no match`).
+//
+// CORRECTION (task-18, an unclaimed instance of the S139-F1 stale-count class —
+// see `NEW-FINDINGS.md` N33): this said "all 3 `test{}` blocks" and named three.
+// `link.zig` has FOUR at pin `20abdb50a`; `renderCellMap inactive links don't
+// allocate` was ported (`render_cell_map_inactive_links_dont_allocate`) and the
+// header was not updated. The work was done; only the count was stale.
 //!
 //! The previous Oniguruma deferral is RESOLVED: `oniguruma-sys` + the `oni` safe
 //! wrapper (`rustty-oniguruma`) have landed, so `Set.fromConfig` compiles a real

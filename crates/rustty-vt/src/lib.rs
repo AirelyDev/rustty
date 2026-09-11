@@ -287,6 +287,7 @@ pub mod options;
 //
 // /// Forwarded decls from lib that are used.
 // pub const alloc = lib.allocator;
+// pub const TinyIo = lib.TinyIo;
 // pub const Buffer = lib.Buffer;
 // pub const Enum = lib.Enum;
 // pub const TaggedUnion = lib.TaggedUnion;
@@ -300,6 +301,13 @@ pub mod options;
 // `rustty-vt-c`); the forwarded `lib` decls are re-exported from the
 // `rustty-lib` crate at their use sites (e.g. `osc` uses
 // `rustty_lib::r#enum::check_ghostty_henum`).
+//
+// CORRECTION (task-18, part of S155-F7): the reproduction above was missing
+// `pub const TinyIo = lib.TinyIo;` (`terminal/lib.zig:17`) — restored. `TinyIo`
+// itself is a declared NON-PORT (`.port/phase-4/NON_PORTS.md`); the reference
+// LINE is still reproduced here because this block is a verbatim transcription of
+// `lib.zig` (R1), and a transcription that silently drops a line is how the next
+// reader concludes the reference does not have it.
 
 // ---------------------------------------------------------------------------
 // stb/main.zig — the stb image C-lib shim the reference kitty-graphics image
@@ -332,13 +340,27 @@ pub mod input;
 //
 //     // Internals
 //     _ = @import("bitmap_allocator.zig");
+//     _ = @import("compress.zig");
+//     _ = @import("fraction.zig");
 //     _ = @import("hash_map.zig");
+//     _ = @import("mem.zig");
 //     _ = @import("ref_counted_set.zig");
 //     _ = @import("size.zig");
 // }
-// PORT NOTE: the internal-only modules referenced by the reference root test
-// block (bitmap_allocator, hash_map, ref_counted_set) are private internals
-// ported by later vt sub-batches.
+// CORRECTION (task-18, closes S155-F7). Two defects in what stood here, both
+// verified against pin `20abdb50a` (`terminal/main.zig:93-104`):
+//
+//  1. The transcription omitted three of the reference's seven `_ = @import`
+//     lines — `compress.zig`, `fraction.zig` and `mem.zig`. Restored above. A
+//     reader diffing this block against upstream would have read the port as
+//     carrying four internals where the reference names seven.
+//  2. The note said those internals "are private internals ported by later vt
+//     sub-batches" — future tense that outlived the work. All seven are ported
+//     and declared in this file: `compress` (:63), `mem` (:94), `size_report`
+//     (:135), `fraction` (:158), and the three below.
+//
+// Rust has no `refAllDecls`; `cargo test -p rustty-vt` reaches every `#[test]`
+// in every module declared here, which is what the reference block buys.
 pub mod bitmap_allocator;
 pub mod hash_map;
 pub mod ref_counted_set;

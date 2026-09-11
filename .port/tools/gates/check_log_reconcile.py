@@ -874,8 +874,17 @@ def is_stranded_comment(rn, ref_index):
     preserved comment in the port and a check that cries wolf is ignored within a
     day. A naive "message not in the index" test reports 101 sites, of which the
     known real population is 3; the other 98 are R1 comments that are
-    deliberately not verbatim. Three filters, each removing a class that is
-    legitimately non-verbatim rather than stranded:
+    deliberately not verbatim. FOUR filters, each removing a class that is
+    legitimately non-verbatim rather than stranded — three enumerated here plus
+    the PLACEHOLDER-PREFIX filter, whose comment sits with its code below.
+
+    (Corrected by task-18: this said "Three filters" and enumerated three, while
+    the function has had four suppression rules since the prefix filter was added
+    — the fourth documented only at its own `return False`, where a reader
+    counting filters from the docstring would not meet it. The fifth `return
+    False`, `rn in ref_index`, is the base case "the reference HAS this message",
+    not a filter. A docstring that counts its own rules is itself a stale-count
+    claim waiting to happen; the enumeration is what matters, not the number.):
 
       * ELIDED comments (`"… err={}"`, `"... err={}"`) quote a call by shape, not
         by text, and were never meant to be reproducible.

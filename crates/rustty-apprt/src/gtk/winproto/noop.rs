@@ -101,13 +101,26 @@ impl App {
     #[allow(clippy::unused_self)]
     pub fn clear_global_shortcuts(&mut self) {}
 
-    // PORT NOTE: the reference's `eventMods` (`noop.zig:26-32`),
-    // `initQuickTerminal` (`noop.zig:37`), and the `Window`-parameterized methods
-    // reference `input.Mods`, `*gdk.Device`, and `class/window.zig` (`ApprtWindow`)
-    // — types whose ports land with the key encoder and the `Window` class (later
-    // L5/L6 tasks). They are added to `noop::App`/`noop::Window` when those
-    // consumers exist; this task lands only the surface the winproto union's
-    // `init`/`deinit` fall-through and the `Application` teardown require.
+    // CORRECTION (task-18, closes S60-F9). The note that stood here said
+    // `eventMods` (`noop.zig:26-32`), `initQuickTerminal` (`noop.zig:37`) and the
+    // `Window`-parameterized methods were NOT yet ported, pending the key encoder
+    // and the `Window` class, and that "this task lands only the surface the
+    // winproto union's `init`/`deinit` fall-through and the `Application`
+    // teardown require". Every clause of that is now false: `App::event_mods`
+    // (`:55`), `App::init_quick_terminal` (`:79`), `App::supports_quick_terminal`,
+    // `App::bind_global_shortcuts`/`clear_global_shortcuts` and the whole of
+    // `noop::Window` are live above and below, with their real `Mods` /
+    // `gdk4::Device` / `gtk4::Window` types.
+    //
+    // ONE reference decl is genuinely absent, and it is absent on purpose:
+    // `Window.updateConfigEvent` (`noop.zig:64-67`) takes
+    // `*const ApprtWindow.DerivedConfig`, and `DerivedConfig` DOES NOT EXIST in
+    // `class/window.zig` at pin `20abdb50a` — grep the reference tree and the only
+    // hit for either `updateConfigEvent` or `ApprtWindow.DerivedConfig` is this one
+    // declaration. Zig accepts it because nothing calls it, so its signature is
+    // never analysed; the x11 and wayland arms of the same union do not declare it
+    // either. There is nothing to port it AGAINST. If upstream revives it (a
+    // caller, or a real `DerivedConfig`), port it then — see `NEW-FINDINGS.md` N32.
 }
 
 /// PORTS: `noop.zig:40-73` `noop.Window`. Per-window windowing state for the

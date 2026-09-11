@@ -5,7 +5,13 @@
 //! PORTS: ghostty src/terminal/Selection.zig
 //!
 //! PORT STATUS: ported (vt-11d) — full Selection: bounds/order/containment/
-//! adjust + the 18 Selection tests.
+//! adjust + the 20 Selection tests.
+//
+// CORRECTION (task-18, closes S139-F1): the line above said "the 18 Selection
+// tests". Counted at pin `20abdb50a`: `Selection.zig` has 20 `test "…"` blocks and
+// this file has 20 `#[test]` fns. The count is a contract (R1), so it is worth
+// saying how it drifted: the header was written when 18 were ported and was not
+// touched when the last two landed. If you add a test here, this number moves.
 // PORT NOTE: `start_ptr`/`end_ptr` mirror the reference's `startPtr`/`endPtr`
 // (non-trait-method `start`/`end` naming kept verbatim from the reference).
 #![allow(clippy::should_implement_trait)]

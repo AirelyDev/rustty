@@ -4,7 +4,17 @@
 //!
 //! PORT STATUS: done (vt-9) — the `Handler` trait, `Stream<H>`, `init`/`deinit`,
 //! `next`/`next_slice`, the action router, and the full
-//! `csi`/`osc`/`esc`/`dcs`/`apc` dispatch, with `TestHandler`s + all 38 tests.
+//! `csi`/`osc`/`esc`/`dcs`/`apc` dispatch, with `TestHandler`s + all 63 named
+//! reference tests (`stream.zig` also has one unnamed-form `test Action`, a
+//! C-ABI union reification preserved as a comment at :4758 with its own PORT
+//! NOTE — 64 `test` blocks in total).
+//
+// CORRECTION (task-18, an unclaimed instance of the S139-F1 stale-count class —
+// see `NEW-FINDINGS.md` N33): this said "all 38 tests", as did the SIMD note
+// below. Counted at pin `20abdb50a`: 64 `test` blocks in `stream.zig`, 63 of
+// them named; all 63 have a preserved `// test "…"` comment and a live `#[test]`
+// here (75 `#[test]` total, the extra 12 being port-specific). 38 was the count
+// when vt-9 landed.
 //!
 //! SIMD STATUS (realigned 2026-07-10, VALIDATION_REPORT §3b — the former
 //! "DEFERRED SEAM" wording here was stale): the SIMD `next_slice` fast path
@@ -18,7 +28,7 @@
 //! arm is exercised under `--features simd`. The SHIPPING tiers (rustty-core,
 //! rustty-vt-c, rustty-apprt-c) turn the feature on, matching `-Dsimd`'s
 //! non-wasm default; wasm targets resolve `SIMD` off regardless
-//! (`options::SIMD`, `build/Config.zig:200-206`). (All 38 stream tests pass in both modes;
+//! (`options::SIMD`, `build/Config.zig:200-206`). (All 63 stream tests pass in both modes;
 //! Miri covers the scalar arm, ASan the C-FFI SIMD arm per MIRI_EXCEPTIONS.md).
 
 // PORT NOTE: the dispatch routines are a verbatim retargeting of the reference's

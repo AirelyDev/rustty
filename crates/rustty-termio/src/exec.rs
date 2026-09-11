@@ -6,14 +6,39 @@
 //! the 2 darwin-only and 4 windows-only tests keep the reference's
 //! SkipZigTest cfg-gating, F3 DirectWrite / stage-3 Command precedent).
 //!
-//! PORT STATUS: ported (integration-tier stage 4) EXCEPT the xev event-loop
-//! wiring (threadEnter/threadExit/focusGained/processExit*/termiosTimer/
-//! queueWrite/ttyWrite/ReadThread — the D6 deferral seam, 0 reference tests)
-//! and Subprocess.start (the fork/exec spawn whose stored `fork_exec: Command`
-//! aliases the subprocess's own arena-owned args/env — see its PORT NOTE);
-//! each deferred body is preserved verbatim (DEFERRALS.md, R5: no silent
-//! drops). The testable core — Subprocess.init's argv+env assembly and
-//! execCommand — is LIVE.
+//! PORT STATUS: ported (integration-tier stage 4). Every FUNCTION in this file
+//! is live. ONE thing is still deferred, and it is a field, not a function: the
+//! read thread's crash-sentry `thread_state.surface` (`:4528`), because the
+//! `AppMailbox` trait still exposes no `.surface` accessor — verified, not
+//! assumed: `rustty_crash::sentry::ThreadStateSurface` exists, but
+//! `rustty-apprt-api`'s `AppMailbox` has only `push`/`push_or_return`. That one
+//! deferral is stated at its own site and is not summarised here; see the next
+//! paragraph for why that distinction is the point of this correction.
+//!
+//! CORRECTION (task-18, closes S211-F7). This block used to read: "ported
+//! … EXCEPT the xev event-loop wiring (threadEnter/threadExit/focusGained/
+//! processExit*/termiosTimer/queueWrite/ttyWrite/ReadThread — the D6 deferral
+//! seam, 0 reference tests) and Subprocess.start … each deferred body is
+//! preserved verbatim … The testable core — Subprocess.init's argv+env assembly
+//! and execCommand — is LIVE." Every one of those nine names now has a live Rust
+//! body in this file, grepped one at a time: `threadEnter` (:441), `threadExit`
+//! (:799), `focusGained` (:939), `processExitCommon` (:1166), `processExit`
+//! (:1227), `termiosTimer` (:1276), `queueWrite` (:1492), `ttyWrite` (:1671),
+//! `Subprocess::start` (:2880), `ReadThread::threadMainPosix` (:4482). The file
+//! contains no `unimplemented!()` or `todo!()`.
+//!
+//! Read that list as a warning about this header's SHAPE, not just its content.
+//! It was a hand-maintained inventory of nine names, so it went stale nine ways
+//! at once and three separate per-function headers below had ALREADY been struck
+//! individually ([M3], [WS20], [W6]) while this one still summarised them as
+//! deferred. If you defer something here again, say it at the function, not in a
+//! list at the top that nobody updates.
+//!
+//! What DOES remain true: the reference's event loop is libxev and rustty's is
+//! `std::thread` plus the `crate::xev_seam` placeholder types (D6). That is a
+//! structural divergence with its own DEFERRALS.md entry — not an unported
+//! function — and the reference bodies stay preserved verbatim beside each port
+//! (R5: no silent drops).
 
 // PARITY: the reference's identifiers are camelCase (`initTerminal`,
 // `execCommand`, `killPid`, ...); preserved verbatim per R1/R2.
@@ -285,9 +310,11 @@ impl Exec {
         .unwrap();
     }
 
-    // DEFERRED (D6 xev event-loop wiring, 0 tests — R1-safe): the body starts
-    // the subprocess and wires the xev process watcher / write stream /
-    // termios timer / read thread. Preserved verbatim:
+    // [task-18 STALE HEADER STRUCK (S211-F7): this said "DEFERRED (D6 xev
+    // event-loop wiring, 0 tests — R1-safe)". `threadEnter` is FULLY IMPLEMENTED
+    // at :441 below — it starts the subprocess and wires the process watcher,
+    // write stream, termios timer and read thread over the `std::thread` +
+    // `xev_seam` substitute for libxev.] The reference body, preserved verbatim:
     //
     // pub fn threadEnter(
     //     self: *Exec,
@@ -871,7 +898,10 @@ impl Exec {
         let _ = read_thread.join();
     }
 
-    // DEFERRED (D6 xev termios timer, 0 tests — R1-safe). Preserved verbatim:
+    // [task-18 STALE HEADER STRUCK (S211-F7): this said "DEFERRED (D6 xev termios
+    // timer, 0 tests — R1-safe)". `focusGained` is FULLY IMPLEMENTED at :939
+    // below. It was also mislabelled: the block it heads is `focusGained`, not the
+    // termios timer (that is `termiosTimer`, live at :1276).] Reference, verbatim:
     //
     // pub fn focusGained(
     //     self: *Exec,
@@ -4335,11 +4365,13 @@ impl ReadThread {
     // const gather_budget_ns = 3 * std.time.ns_per_ms;
     pub(crate) const GATHER_BUDGET_NS: u64 = 3 * 1_000_000;
 
-    // DEFERRED (D6 thread lifecycle, 0 tests — R1-safe): spawned only by the
-    // deferred threadEnter; drives the deferred `Termio.processOutput` and the
-    // crash-sentry thread_state (whose `surface` field reads the reference
-    // Mailbox's surface pointer — the AppMailbox seam exposes it when core
-    // lands). Preserved verbatim:
+    // [task-18 STALE HEADER STRUCK (S211-F7): this said "DEFERRED (D6 thread
+    // lifecycle, 0 tests — R1-safe): spawned only by the deferred threadEnter;
+    // drives the deferred `Termio.processOutput` …". `threadMainPosix` is FULLY
+    // IMPLEMENTED at :4482 below, `threadEnter` (:441) really does spawn it, and
+    // `Termio::processOutput` is live. The one clause still standing is the
+    // crash-sentry `thread_state` seam, which is flagged separately at its own
+    // site (:4528) — see that note, not this one.] Reference, verbatim:
     //
     // fn threadMainPosix(fd: posix.fd_t, io: *termio.Termio, quit: posix.fd_t) void {
     //     // Always close our end of the pipe when we exit.

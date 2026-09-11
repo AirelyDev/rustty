@@ -20,10 +20,15 @@
 //! integration tests and the key.zig `Value` test. Documented deferrals: (1) the
 //! `RepeatableCodepointMap` font-blocked `parseCLI`/`formatConfig` tests (see
 //! DEFERRALS.md), which land when `font/CodepointMap.zig` arrives in rustty-font;
-//! (2) the per-field Pandoc Markdown `///` doc comments (~3499 reference lines)
-//! are still deferred to the field-doc fill sub-batch (see the `Config` struct
-//! PORT NOTE) — they are NOT yet ported, so the whole-`Config.zig` G3b
-//! comment-coverage gate remains RED until that sub-batch lands.
+//! (2) — CORRECTED (task-18, closes S72-F1) — the per-field Pandoc Markdown
+//! `///` doc comments. This block said they "are NOT yet ported, so the
+//! whole-`Config.zig` G3b comment-coverage gate remains RED until that sub-batch
+//! lands". Both clauses are now false and were measured before this was rewritten:
+//! the fill sub-batch LANDED (3431 `///` doc lines on the fields of `Config`
+//! below), and `python3 .port/tools/gates/check_comment_coverage.py --crate config`
+//! reports `distinctive ref comments=2857 missing=0` — GREEN. The only documented
+//! deferral left in this module is (1), the `RepeatableCodepointMap`
+//! font-blocked `parseCLI`/`formatConfig` tests.
 //
 // Config is the main config struct. These fields map directly to the
 // CLI flag names hence we use a lot of `@""` syntax to support hyphens.
@@ -1021,7 +1026,9 @@ pub enum OptionalFileAction {
 /// flag names (hyphens → underscores in the Rust ident; the original reference
 /// name is preserved in the comment for parse/format dispatch).
 //
-// PORT NOTE: per-field Pandoc doc comments are ported in the fill sub-batch.
+// PORT NOTE: the per-field Pandoc doc comments below WERE ported by the fill
+// sub-batch (corrected from "are ported in" by task-18, S72-F1: the future tense
+// outlived the work). G3b for this crate is green with `missing=0`.
 pub struct Config {
     // language: ?[:0]const u8 = null,
     /// Set Rustty's graphical user interface language to a language other than the

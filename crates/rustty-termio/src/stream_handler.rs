@@ -1,7 +1,15 @@
 //! The big vt-Stream handler: routes terminal.Stream actions into terminal
 //! state mutations, termio-mailbox writes, and surface/renderer messages.
 //!
-//! PORTS: ghostty src/termio/stream_handler.zig (0 `test{}` blocks).
+//! PORTS: ghostty src/termio/stream_handler.zig (2 `test{}` blocks — both
+//! ported: `kitty clipboard read: targets-only never consumes a one-time grant`
+//! and `kitty clipboard write: oversized text replies EFBIG`).
+//
+// CORRECTION (task-18, an unclaimed instance of the S139-F1 stale-count class —
+// see `NEW-FINDINGS.md` N33): this said "(0 `test{}` blocks)". That was a claim
+// about the REFERENCE, and it is false at pin `20abdb50a` — a zero is the most
+// dangerous count to leave stale, because nothing downstream looks for tests to
+// port from a file the header says has none.
 //!
 //! PORT STATUS: ported (integration-tier stage 4) EXCEPT the two cross-thread
 //! writer slow paths (`surfaceMessageWriter`/`rendererMessageWriter` — the

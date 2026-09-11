@@ -2,7 +2,14 @@
 //!
 //! PORTS: ghostty src/terminal/render.zig
 //!
-//! PORT STATUS: complete (vt-13). Every method + all 15 `test{}` blocks ported.
+//! PORT STATUS: complete (vt-13). Every method + all 20 `test{}` blocks ported.
+//
+// CORRECTION (task-18, an unclaimed instance of the S139-F1 stale-count class —
+// see `NEW-FINDINGS.md` N33): this said "all 15 `test{}` blocks". `render.zig`
+// has 20 at pin `20abdb50a` and all 20 are live here (23 `#[test]`, the extra
+// three being port-specific). "Every method + all N blocks" is a TOTALITY claim,
+// so a stale N does not merely under-report — it reads as a specific,
+// checkable promise that the file does not keep.
 //!
 //! Developer note: this is in src/terminal and not src/renderer because
 //! the goal is that this remains generic to multiple renderers. This can

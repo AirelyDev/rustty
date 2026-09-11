@@ -12,14 +12,22 @@
 //! `%session-changed`, `%layout-change`, `%window-add`, `%window-renamed`,
 //! `%window-pane-changed`, `%client-detached`, `%client-session-changed`) plus
 //! the 8 tests that exercise them are gated behind `#[cfg(feature =
-//! "oniguruma")]`, OFF by default — exactly as the `StringMap` port does. The
-//! `oni` binding crate does not exist yet, so the gated code is NOT compiled in
-//! the default build; with the feature off those arms fall through to the
-//! "unknown notification" path and the 8 tests are not compiled, faithful to the
-//! Zig pattern where regex support is a build option (the reference compiles
-//! `oni` unconditionally, but Rustty mirrors the established `SkipZigTest`-style
-//! feature gate until the binding crate lands). The remaining 10 tests
+//! "oniguruma")]`, OFF by default — exactly as the `StringMap` port does. With
+//! the feature off those arms fall through to the "unknown notification" path and
+//! the 8 tests are not compiled; with `--features oniguruma` (the G-ONIG lane,
+//! `.port/tools/gates/check_oniguruma_lane.sh`) they are. The remaining 10 tests
 //! (begin/end blocks + `%sessions-changed`) build and run by default.
+//!
+//! CORRECTION (task-18, closes S208-F3). The text here used to say "The `oni`
+//! binding crate does not exist yet, so the gated code is NOT compiled in the
+//! default build … until the binding crate lands". The crate DOES exist —
+//! `crates/rustty-oniguruma`, wired as `rustty-vt`'s optional `oniguruma`
+//! dependency (`Cargo.toml:113,221`). Note what did NOT change: the feature is
+//! still default-OFF, so "not compiled in the default build" was and remains
+//! true. Only the REASON was stale, which is the kind of half-false note that
+//! survives a reading — the conclusion still looked right. Whether to make the
+//! feature default-on is a separate question from this row and is not decided
+//! here; the reference compiles `oni` unconditionally.
 
 // const std = @import("std");
 // const Allocator = std.mem.Allocator;

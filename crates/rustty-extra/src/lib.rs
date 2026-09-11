@@ -21,8 +21,23 @@
 //! PORT NOTE: ghostty's `comptimeGenerate*` two-pass counter/fixed-buffer wrapper
 //! (a `std.Io.Writer.Discarding` size pre-count then a `.fixed(&buf)` fill) is a
 //! comptime-alloc artifact with no Rust analog; it collapses to a single growable
-//! `Vec`. The `+gen-*` CLI actions + `build.rs` file-emit stay DEFERRED (task
-//! scope) — this crate provides the generator fns + fidelity tests only.
+//! `Vec`.
+//!
+//! CORRECTION (task-18, closes S83-F6). The sentence that followed said "The
+//! `+gen-*` CLI actions + `build.rs` file-emit stay DEFERRED (task scope) — this
+//! crate provides the generator fns + fidelity tests only." BOTH halves have since
+//! landed, and both were checked before this was rewritten:
+//!
+//! - the `+gen-*` CLI (`main_build_data.zig`) is `xtask/src/main_build_data.rs`,
+//!   whose `Action` switch calls `rustty_extra::{bash,fish,zsh,sublime,vim}`
+//!   directly (`main_build_data.rs:117-124`);
+//! - the file-emit half is `xtask`'s `res_shell::gen_shell`,
+//!   `res_editor::gen_editor` and `res_terminfo::gen_terminfo`, which write the
+//!   same bytes into `zig-out/share`, with an anti-drift test pinning the two
+//!   byte sources together.
+//!
+//! This crate is still generators-plus-tests; what changed is that it now has
+//! consumers.
 
 pub mod bash;
 pub mod fish;
