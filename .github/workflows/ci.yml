@@ -152,6 +152,17 @@ jobs:
         if: runner.os == 'macOS'
         run: echo "RUSTTY_REQUIRE_METAL=1" >> "$GITHUB_ENV"
 
+      # parity S63-F8: the mirrored fuzz corpus lives under `.port/`, which is
+      # deliberately absent from the SOURCE TARBALL — so the five corpus-replay
+      # tests clean-skip when it is not there, which is right for a tarball and
+      # wrong for a repo checkout, where a vanished corpus would quietly retire
+      # 4,001 replays. RUSTTY_REQUIRE_FUZZ_CORPUS=1 flips that skip into a hard
+      # failure on every leg that HAS the repo (the same device as the two
+      # variables above). Env setup, not a check — the check sequence stays
+      # solely in ci.sh.
+      - name: Require the mirrored fuzz corpus (repo checkouts, parity S63-F8)
+        run: echo "RUSTTY_REQUIRE_FUZZ_CORPUS=1" >> "$GITHUB_ENV"
+
       - name: Cache cargo registry + target
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:

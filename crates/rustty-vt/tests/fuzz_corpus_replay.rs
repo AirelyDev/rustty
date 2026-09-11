@@ -35,6 +35,86 @@ fn port_corpus_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.port/phase-0/corpora/cvt")
 }
 
+/// RUSTTY-ONLY strict mode, the `RUSTTY_REQUIRE_GL` / `RUSTTY_REQUIRE_METAL`
+/// pattern (`rustty-renderer/src/opengl/gl/test_support.rs`) applied to the
+/// mirrored corpus (parity S63-F8).
+///
+/// The corpus lives under `.port/`, which is DELIBERATELY excluded from the
+/// source tarball — so every test here used to fail outright when the extracted
+/// tarball ran its own test suite, which nothing noticed while `xtask
+/// distcheck` only BUILT the extracted tree. A clean skip when the corpus is
+/// absent is the right answer for a tarball and the WRONG answer for the repo,
+/// where a vanished corpus would quietly retire 4,001 replays. So: skip when it
+/// is absent, and `RUSTTY_REQUIRE_FUZZ_CORPUS=1` — exported by `ci.sh` — turns
+/// that skip into a hard failure.
+fn corpus_required() -> bool {
+    corpus_required_from(std::env::var_os("RUSTTY_REQUIRE_FUZZ_CORPUS").as_deref())
+}
+
+/// The env-independent core of [`corpus_required`], split out so the unit tests
+/// can drive both arms WITHOUT mutating process-global environment.
+fn corpus_required_from(value: Option<&std::ffi::OsStr>) -> bool {
+    value == Some(std::ffi::OsStr::new("1"))
+}
+
+/// The strict-mode pivot: `true` when the caller should skip (the corpus is
+/// absent and nobody demanded it), a PANIC under
+/// `RUSTTY_REQUIRE_FUZZ_CORPUS=1`, `false` when the corpus is there.
+#[track_caller]
+fn skip_without_corpus(test_name: &str) -> bool {
+    skip_without_corpus_impl(port_corpus_root().is_dir(), corpus_required(), test_name)
+}
+
+/// The env- and filesystem-independent core of [`skip_without_corpus`].
+#[track_caller]
+fn skip_without_corpus_impl(present: bool, required: bool, test_name: &str) -> bool {
+    if present {
+        return false;
+    }
+    assert!(
+        !required,
+        "the mirrored fuzz corpus is required but absent \
+         (RUSTTY_REQUIRE_FUZZ_CORPUS=1): {test_name} would have skipped"
+    );
+    eprintln!(
+        "no mirrored fuzz corpus at {}; skipping {test_name}",
+        port_corpus_root().display()
+    );
+    true
+}
+
+/// PROVING tests for the strict mode: the pivot must be a no-op when the corpus
+/// is present, a clean skip when it is absent, and a panic under
+/// `RUSTTY_REQUIRE_FUZZ_CORPUS=1`. They drive the `*_from`/`*_impl` cores
+/// directly — never `std::env::set_var` — so they are race-free under the
+/// parallel harness and run everywhere.
+#[test]
+fn corpus_required_only_when_env_is_exactly_one() {
+    use std::ffi::OsStr;
+    assert!(!corpus_required_from(None));
+    assert!(!corpus_required_from(Some(OsStr::new(""))));
+    assert!(!corpus_required_from(Some(OsStr::new("0"))));
+    assert!(!corpus_required_from(Some(OsStr::new("true"))));
+    assert!(corpus_required_from(Some(OsStr::new("1"))));
+}
+
+#[test]
+fn skip_pivot_does_not_skip_when_the_corpus_is_present() {
+    assert!(!skip_without_corpus_impl(true, false, "some_test"));
+    assert!(!skip_without_corpus_impl(true, true, "some_test"));
+}
+
+#[test]
+fn skip_pivot_skips_when_the_corpus_is_absent_and_not_required() {
+    assert!(skip_without_corpus_impl(false, false, "some_test"));
+}
+
+#[test]
+#[should_panic(expected = "the mirrored fuzz corpus is required but absent")]
+fn skip_pivot_panics_when_the_corpus_is_required() {
+    skip_without_corpus_impl(false, true, "some_test");
+}
+
 /// The reference fuzz corpora (`test/fuzz-libghostty/corpus`), reachable only
 /// when the caller exports GHOSTTY_ORACLE=<path-to-ghostty-checkout>.
 fn oracle_corpus_root() -> Option<PathBuf> {
@@ -110,6 +190,9 @@ fn replay_dir_filtered(dir: &Path, harness: fn(&[u8]), keep: fn(&Path) -> bool) 
 /// `rustty_vt::fuzz_harness` at all).
 #[test]
 fn replay_port_initial_seeds_osc() {
+    if skip_without_corpus("replay_port_initial_seeds_osc") {
+        return;
+    }
     let n = replay_dir(
         &port_corpus_root().join("osc-initial"),
         fuzz_harness::fuzz_osc,
@@ -119,6 +202,9 @@ fn replay_port_initial_seeds_osc() {
 
 #[test]
 fn replay_port_initial_seeds_parser() {
+    if skip_without_corpus("replay_port_initial_seeds_parser") {
+        return;
+    }
     let n = replay_dir(
         &port_corpus_root().join("parser-initial"),
         fuzz_harness::fuzz_parser,
@@ -128,6 +214,9 @@ fn replay_port_initial_seeds_parser() {
 
 #[test]
 fn replay_port_initial_seeds_stream() {
+    if skip_without_corpus("replay_port_initial_seeds_stream") {
+        return;
+    }
     let n = replay_dir(
         &port_corpus_root().join("stream-initial"),
         fuzz_harness::fuzz_stream,
@@ -165,6 +254,9 @@ fn replay_fixed_fuzz_findings_osc() {
 /// inputs. Cheap (94 files) and catches cross-subsystem panics.
 #[test]
 fn replay_port_initial_seeds_cross() {
+    if skip_without_corpus("replay_port_initial_seeds_cross") {
+        return;
+    }
     let root = port_corpus_root();
     replay_dir(&root.join("parser-initial"), fuzz_harness::fuzz_stream);
     replay_dir(&root.join("osc-initial"), fuzz_harness::fuzz_parser);
@@ -197,6 +289,9 @@ const TIERS: [Tier<'static>; 6] = [
 /// The reference commits all six tiers for the same reason; this mirrors that.
 #[test]
 fn replay_port_full_corpus() {
+    if skip_without_corpus("replay_port_full_corpus") {
+        return;
+    }
     let root = port_corpus_root();
     let mut total = 0usize;
     for (dir, harness, min) in TIERS {
