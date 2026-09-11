@@ -23,7 +23,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** Tripwire fail-point tests are `ignore`d in release-mode test runs
   - **Oracle:** `src/font/Atlas.zig:826-889` → **Rustty:** `crates/rustty-font/src/atlas.rs:1649, 1683, 1715`
   - **Audit's suggested fix:** Gate tripwire enablement on `cfg!(test)` (or a `tripwire` test feature) rather than `debug_assertions` so the tests run in release test builds.
-- [ ] **S83-F6** · CONFIRMED · `DOC` · other
+- [x] **S83-F6** · CONFIRMED · `DOC` · other
   - **What:** Stale PORT NOTE claims the +gen-* consumers are DEFERRED although xtask consumes the generators
   - **Oracle:** `src/extra/bash.zig:17-31` → **Rustty:** `crates/rustty-extra/src/lib.rs:21-25`
   - **Audit's suggested fix:** Update the lib.rs PORT NOTE to point at xtask/src/main_build_data.rs.

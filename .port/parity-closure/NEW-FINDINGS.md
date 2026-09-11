@@ -1700,3 +1700,156 @@ here the ledger does not contradict the waiver, it *dates* it.
 - **NOT fixed by task 16**: it is a gate (R5), and a gate change needs its own argument and
   self-test arms rather than a drive-by patch from the task it inconvenienced.
 - **state**: **OPEN**.
+
+---
+
+## N32 — `winproto/noop.zig`'s `updateConfigEvent` cannot be ported: its parameter type does not exist at the pin
+
+- **id**: N32 (next free id checked 2026-09-11 against this file's headings; N31 was the last).
+- **found by**: task-18, closing `S60-F9`.
+- **class**: DOC / unportable reference decl.
+
+`S60-F9`'s stale PORT NOTE in `crates/rustty-apprt/src/gtk/winproto/noop.rs` claimed
+`eventMods`, `initQuickTerminal` and "the `Window`-parameterized methods" were unported. All of
+those are live (`:55`, `:79`, and the whole of `noop::Window`), so the row closes. But the note
+was not 100% false, and the residue is worth its own entry rather than a footnote inside a
+closed row (`PROCEDURE.md` blind spot 1, the carve-out):
+
+`noop.zig:64-67` declares
+
+```zig
+pub fn updateConfigEvent(_: *Window, _: *const ApprtWindow.DerivedConfig) !void {}
+```
+
+and **`ApprtWindow.DerivedConfig` does not exist at pin `20abdb50a`.** `grep -rn "DerivedConfig"
+/Users/gael/projects/ghostty/src/apprt/gtk/class/window.zig` returns nothing, and the only hit
+for `updateConfigEvent` anywhere in the reference tree is this one declaration. Zig accepts it
+because nothing calls it, so the signature is never analysed. The `x11` and `wayland` arms of
+the same `winproto.Window` union do not declare it either, so the union never dispatches to it.
+
+**There is nothing to port it against**, and porting it would mean inventing a `DerivedConfig`
+the reference does not have — which is worse than the gap. The exception is recorded in the
+three tracked places the carve-out requires: this entry, `S60-F9`'s `owner` cell, and a PORT
+NOTE at `noop.rs`.
+
+**The generalisable point.** A reference decl can be *unreachable* in a way that makes it
+unportable, and Zig's lazy analysis is what lets that state persist upstream. Rust has no
+equivalent — a Rust signature naming a missing type does not compile — so "the reference has it
+and we don't" is not automatically a defect. Check that the reference's own version would
+compile if anything called it.
+
+**state**: OPEN as a watch item. Discharged if upstream gives `updateConfigEvent` a caller or a
+real `DerivedConfig`; nothing to do until then.
+
+---
+
+## N33 — the stale-note class HAS a mechanically checkable subset: module-header test-count totality claims (4 unclaimed instances found)
+
+- **id**: N33.
+- **found by**: task-18, answering its brief's research question.
+- **class**: DOC / gate design. **Not built as a gate** — task-18 was not scoped for one.
+
+Task-18's brief asked whether the recurring stale-note class can be checked by machine. It can,
+for one narrow subset, and the measurement is below. Three candidates were probed against the
+tree at `HEAD`; scripts are transient, the numbers are reproducible from the descriptions.
+
+### Candidate A — "a note naming a file, symbol or crate that does not exist": NO
+
+Scan every `//` comment in `crates/**` and `xtask/**` for a backticked `` `rustty-*` `` token
+and flag the ones that are not a directory under `crates/`. **6 hits, at most 1 real, 0 of the
+8 DOC rows.** The five false positives are all legitimate: `rustty-completion-plan` (a memory
+doc), `rustty-gen` (a hypothetical crate named in a rationale for NOT creating it),
+`rustty-integration` (a shell-integration *file*), `rustty-ssh-` (a terminfo entry prefix), and
+`rustty-build-data` (an R1-faithful rename of the reference's own `ghostty-build-data` comment
+at `Config.zig:48` — a Zig binary, not a Rust crate). The one arguable hit is
+`rustty-build-config/src/build.rs:11`'s "`rustty-xtask` build tooling", where the crate is
+called `xtask` — a naming slip, not a stale note about port state.
+
+**Why it fails, and the failure is structural, not fixable by a better regex.** Port comments
+quote three namespaces that look identical: Rust crates, *reference* Zig identifiers (which R1
+requires be reproduced and renamed, so they look like port names and are not), and prose names
+for plans and docs. A checker cannot tell them apart from the token, and the R1 class — the one
+fidelity demands the most of — is the largest.
+
+### Candidate B — "a note asserting a count that can be counted": YES, narrowly
+
+Broad form (any `N … tests?` in any comment of a file whose header names one oracle `.zig`,
+compared against the oracle's `^test` count and the port's `#[test]` count): **143 claims
+examined, 74 flagged.** Unusable — most are sub-counts ("the 2 darwin-only and 4 windows-only
+tests", per-module breakdowns in a crate root, "the 8 tests that exercise them"), which are
+correct statements about a subset and have no reason to equal either total.
+
+Narrowed form — a **totality** claim (`all N tests`, ``all N `test{}` blocks``,
+``(N `test{}` blocks``) in the **first 30 lines** of a file whose header names exactly one
+oracle `.zig`, excluding any line containing `~`: **23 claims examined, 7 flagged, 5 true.**
+Precision 71%, and it caught the audit's own `S139-F1` plus **four instances no row claims**:
+
+| site | claimed | oracle `test` blocks | port `#[test]` | verdict |
+|---|---|---|---|---|
+| `rustty-vt/src/selection.rs:8` | 18 | 20 | 20 | TRUE (this is `S139-F1`) |
+| `rustty-vt/src/render.rs:5` | 15 | 20 | 23 | TRUE, unclaimed |
+| `rustty-vt/src/stream.rs:7,21` | 38 | 64 | 75 | TRUE, unclaimed |
+| `rustty-renderer/src/link.rs:7` | 3 | 4 | 5 | TRUE, unclaimed |
+| `rustty-termio/src/stream_handler.rs:4` | 0 | 2 | 11 | TRUE, unclaimed |
+| `rustty-vt/src/tmux/control.rs:14,18` | 8 | 18 | 24 | FALSE POSITIVE — a correct subset count (the 8 Oniguruma-gated tests) |
+
+All four unclaimed ones were checked test-name by test-name before any prose was touched: in
+every case the WORK was done and only the number was stale, so correcting the header removes a
+lie rather than moving one forward. All four are fixed in task-18's commit with an inline
+CORRECTION pointing here.
+
+**What it would cost.** ~80 lines of Python reusing `check_log_reconcile.py`'s existing
+oracle-tree walk, plus a declaration file for the subset-count false positives (the `tmux`
+shape), ratcheted the way that gate ratchets allowances. **What it would miss:** every stale
+note that is not a number — which is 7 of this task's 8 DOC rows.
+
+**Two measurement traps this probe fell into itself**, both instances of `PROCEDURE.md`'s
+"count through the instrument" rule:
+
+1. Counting oracle tests with `^test\s+["{]` misses Zig's **identifier form** (`test detectShell
+   {`, `test Action {`). That under-count manufactured a defect in
+   `termio/shell_integration.rs` (claim 21, "oracle 20") that does not exist — the reference
+   really has 21. The correct pattern is `^test\b`.
+2. Counting ported tests by preserved `// test "…"` comments under-counts, because a port may
+   record the reference test name in a `///` doc comment instead. That manufactured a missing
+   test in `render.rs` which is in fact ported at `:2593`.
+
+A count check whose own counter is wrong produces exactly the artifact it exists to catch.
+
+### Candidate C — "not ported / deferred / placeholder / no-op next to code that is none of those": NO as a gate, YES as a lint with a human
+
+This is the shape of 5 of the 8 DOC rows, and it is where the class actually lives. It cannot
+be decided mechanically, for a reason visible in this task's own rows:
+
+- **`S208-F3` was half true.** The note said the `oni` binding crate "does not exist yet, so the
+  gated code is NOT compiled in the default build". The crate exists (`rustty-oniguruma`) — but
+  the feature is still default-OFF, so the *conclusion* remained true. A checker keying on
+  "`#[cfg(feature = ...)]` exists" would have called it fine; one keying on "the named crate
+  exists" would have called it stale and been right for the wrong reason. The stale part was the
+  REASON, and a reason is not a predicate.
+- **`S211-F7`'s header listed nine deferred functions, all live.** That one IS mechanically
+  catchable: "a name in a DEFERRED sentence that resolves to a live `fn` in the same file". But
+  three per-function headers in that same file had already been struck individually (`[M3]`,
+  `[WS20]`, `[W6]`) while the module header still summarised them as deferred — so what a
+  checker would flag is the SUMMARY, and the summary is prose that names things loosely
+  (`processExit*`, `ReadThread`).
+- **`S60-F9` had a residue that is correct** (N32), and a checker firing on "note says unported,
+  symbol exists" would have demanded the note be deleted outright, destroying a true statement.
+
+**The rule this yields.** A note is mechanically checkable exactly when it asserts something
+with a *denotation* — a number, or a symbol whose existence decides the claim. It is not
+checkable when it asserts a *reason*, a *scope* ("this task lands only…"), or a *plan*. The
+reason-shaped notes are the majority and the ones that go stale hardest, because the work they
+describe moves and the sentence does not.
+
+**A cheaper intervention than a gate, from the same evidence.** Every stale note found on this
+plan was a claim about the FUTURE or about another part of the tree, written at the top of a
+file, maintained by hand. `exec.rs` is the proof: a nine-name inventory in the module header
+went stale nine ways at once, while the three per-function notes beside the actual code were
+each struck as the code landed. **Deferral notes belong at the deferred thing, not in a summary
+list at the top.** That is a convention, enforceable in review, and it would have prevented
+`S211-F7`, `S72-F1` and `S83-F6` outright.
+
+**state**: the four unclaimed instances are FIXED. The gate is NOT built — it needs its own
+coverage argument and a self-test arm per `R5`, which is a separate task. This entry is the
+finding.

@@ -306,7 +306,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** gtk-quick-terminal-namespace (and x11-instance-name) pass through String::from_utf8_lossy
   - **Oracle:** `src/apprt/gtk/winproto/wayland.zig:352` → **Rustty:** `crates/rustty-apprt/src/gtk/winproto/wayland.rs:909-911`
   - **Audit's suggested fix:** Pass the bytes through the raw C-string entry points (gtk4_layer_shell ffi / g_set_prgname) to avoid the lossy re-encode, per the byte-slice fidelity rule.
-- [ ] **S60-F9** · CONFIRMED · `DOC` · other
+- [x] **S60-F9** · CONFIRMED · `DOC` · other
   - **What:** Stale PORT NOTE in noop.rs claims eventMods/initQuickTerminal are not yet ported
   - **Oracle:** `src/apprt/gtk/winproto/noop.zig:27-38` → **Rustty:** `crates/rustty-apprt/src/gtk/winproto/noop.rs:104-110`
   - **Audit's suggested fix:** Delete the stale PORT NOTE.

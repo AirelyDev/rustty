@@ -38,7 +38,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
 
 ## Low (26)
 
-- [ ] **S72-F1** · CONFIRMED · `DOC` · other
+- [x] **S72-F1** · CONFIRMED · `DOC` · other
   - **What:** Stale module-header PORT STATUS claims the per-field doc comments are NOT ported and the G3b gate is RED
   - **Oracle:** `src/config/Config.zig:116-1879` → **Rustty:** `crates/rustty-config/src/config_struct.rs:19-26`
   - **Audit's suggested fix:** Update the module header's PORT STATUS paragraph to state the field docs are ported and drop the 'G3b RED' claim (or point to the actual gate record).

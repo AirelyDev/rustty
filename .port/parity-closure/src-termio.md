@@ -46,7 +46,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** gather-thread spawn failure panics instead of logging and returning
   - **Oracle:** `src/termio/Exec.zig:1470-1479` → **Rustty:** `crates/rustty-termio/src/exec.rs:4232-4245`
   - **Audit's suggested fix:** Match on the Builder::spawn_scoped result and return from threadMainPosix on Err (the QuitFdCloser/IdlePipeCloser guards already handle cleanup).
-- [ ] **S211-F7** · CONFIRMED · `DOC` · other
+- [x] **S211-F7** · CONFIRMED · `DOC` · other
   - **What:** Stale module-level PORT STATUS claims threadEnter/threadExit/ReadThread/queueWrite/Subprocess.start are deferred
   - **Oracle:** `src/termio/Exec.zig:1-16` → **Rustty:** `crates/rustty-termio/src/exec.rs:9-16`
   - **Audit's suggested fix:** Update the header to 'ported' and list only what genuinely remains (crash-sentry thread_state seam, Windows read-thread selection).

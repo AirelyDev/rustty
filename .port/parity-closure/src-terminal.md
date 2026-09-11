@@ -209,7 +209,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** testWriteString flattens cursorSetHyperlink's OutOfSpace into OutOfMemory
   - **Oracle:** `src/terminal/Screen.zig:3796, 3813, 3826, 3836` → **Rustty:** `crates/rustty-vt/src/screen.rs:5221, 5238, 5259, 5274`
   - **Audit's suggested fix:** Add an `OutOfSpace` variant to `PrintStringError` (or a dedicated `TestWriteStringError`) and propagate `IncreaseCapacityError` unchanged.
-- [ ] **S139-F1** · CONFIRMED · `DOC` · other
+- [x] **S139-F1** · CONFIRMED · `DOC` · other
   - **What:** Stale header comment says '18 Selection tests' but 20 are ported
   - **Oracle:** `src/terminal/Selection.zig:513-1676` → **Rustty:** `crates/rustty-vt/src/selection.rs:7-8`
   - **Audit's suggested fix:** Update the header comment to say 20 tests (or drop the count).
@@ -281,7 +281,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** Flattened.init/clone return Result<_, OutOfMemory> but can never yield Err (Vec::push/with_capacity abort on OOM)
   - **Oracle:** `src/terminal/highlight.zig:141-172` → **Rustty:** `crates/rustty-vt/src/highlight.rs:168-214`
   - **Audit's suggested fix:** Use `try_reserve`/`try_reserve_exact` before pushing (mapping TryReserveError to OutOfMemory) as hyperlink.rs's try_dupe_bytes does.
-- [ ] **S155-F7** · CONFIRMED · `DOC` · other
+- [x] **S155-F7** · CONFIRMED · `DOC` · other
   - **What:** Verbatim comment blocks for main.zig's root test and lib.zig are stale (omit compress/fraction/mem and TinyIo lines)
   - **Oracle:** `src/terminal/main.zig:93-104` → **Rustty:** `crates/rustty-vt/src/lib.rs:330-341, 288-296`
   - **Audit's suggested fix:** Refresh the two verbatim comment blocks to the pinned oracle text.
@@ -437,7 +437,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** tmux output delimiter is treated as a Unicode char rather than a byte
   - **Oracle:** `src/terminal/tmux/output.zig:17-36, 57-66` → **Rustty:** `crates/rustty-vt/src/tmux/output.rs:104-119, 383-405`
   - **Audit's suggested fix:** Split/emit on the raw byte (operate on `&[u8]`, or assert/restrict the delimiter to ASCII) so a >=0x80 delimiter behaves as in the reference.
-- [ ] **S208-F3** · CONFIRMED · `DOC` · other
+- [x] **S208-F3** · CONFIRMED · `DOC` · other
   - **What:** Stale PORT NOTE claims the oniguruma binding crate does not exist
   - **Oracle:** `src/terminal/tmux/control.zig:1-10` → **Rustty:** `crates/rustty-vt/src/tmux/control.rs:11-22`
   - **Audit's suggested fix:** Rewrite the note to state the real (and correct) rationale — the feature mirrors the reference `oniguruma` build option, is enabled by rustty-core for the app tier, and `cargo test -p rustty-vt --features oniguruma` is required to run the eight gated tests.
