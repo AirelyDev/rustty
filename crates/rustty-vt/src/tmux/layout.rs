@@ -50,6 +50,31 @@ pub enum Content {
     Vertical(Vec<Layout>),
 }
 
+/// The deepest container nesting `Layout::parse` accepts. No reference
+/// counterpart; see the R13 PORT NOTE on `parse_next`.
+pub const MAX_DEPTH: usize = 1000;
+
+// PORT NOTE: no reference counterpart (the reference frees the tree with its
+// arena). The derived drop glue would recurse once per nesting level, so the
+// tree is torn down with an explicit stack instead (R13, UPSTREAM-DEFECTS.md
+// UD10): each node's children are moved onto the stack before the node itself
+// drops, so every node drops with an empty child list.
+impl Drop for Layout {
+    fn drop(&mut self) {
+        let mut stack: Vec<Layout> = match &mut self.content {
+            Content::Pane(_) => return,
+            Content::Horizontal(children) | Content::Vertical(children) => {
+                core::mem::take(children)
+            }
+        };
+        while let Some(mut node) = stack.pop() {
+            if let Content::Horizontal(children) | Content::Vertical(children) = &mut node.content {
+                stack.append(children);
+            }
+        }
+    }
+}
+
 /// PORTS: ghostty `Layout.ParseError`.
 //
 // PORT NOTE: the reference is `Allocator.Error || error{SyntaxError}`. With
@@ -121,7 +146,7 @@ impl Layout {
         // var offset: usize = 0;
         let mut offset: usize = 0;
         // const root = try parseNext(alloc, str, &offset);
-        let root = Layout::parse_next(str, &mut offset)?;
+        let root = Layout::parse_next(str, &mut offset, 0)?;
         // if (offset != str.len) return error.SyntaxError;
         if offset != str.len() {
             return Err(ParseError::SyntaxError);
@@ -129,7 +154,33 @@ impl Layout {
         Ok(root)
     }
 
-    fn parse_next(str: &str, offset: &mut usize) -> Result<Layout, ParseError> {
+    // PORT NOTE: reference defect (R13, UPSTREAM-DEFECTS.md UD10). `parseNext`
+    // recurses once per `{`/`[` with no limit, and the string comes from tmux
+    // (`%layout-change`, the `list-windows` reply), so anything written to the
+    // pty inside `ESC P 1000 p` can nest it as deep as the control parser's
+    // 1 MiB line allows: about 116,000 levels at 9 bytes each. Measured on
+    // macOS arm64 with Zig 0.16 (a default 16 MiB thread, as the io reader
+    // thread uses): the reference overflows its stack at about 9,200 levels in
+    // Debug and about 39,000 in ReleaseSafe and ReleaseFast. The port's
+    // walkers run on a Rust thread's default 2 MiB stack, and several of them
+    // recurse over the tree (this parser, `init_layout`, the derived `Clone`,
+    // and the derived `Debug` the viewer's action log uses). Measured the same
+    // way, the first to overflow do so at about 1,500 levels in a debug build
+    // and about 2,400 in a release build. The port therefore rejects a layout
+    // nested deeper than `MAX_DEPTH` with the parser's existing `SyntaxError`,
+    // which the viewer already turns into its defunct state. A tmux split nests
+    // only inside a split of the other direction, and each level takes at least
+    // a row or a column (tmux's own behaviour, not re-read from its source), so
+    // a real layout this deep would need a window over 1,000 cells both wide
+    // and tall. `Drop` is iterative as well (see above `Layout`). `depth`
+    // counts the containers enclosing this node. Tests:
+    // `deeply_nested_layout_is_a_syntax_error_beyond_max_depth`,
+    // `dropping_a_very_deep_layout_does_not_recurse`, and the viewer's
+    // `a_layout_nested_deeper_than_max_depth_makes_the_viewer_defunct`.
+    fn parse_next(str: &str, offset: &mut usize, depth: usize) -> Result<Layout, ParseError> {
+        if depth > MAX_DEPTH {
+            return Err(ParseError::SyntaxError);
+        }
         let bytes = str.as_bytes();
 
         // Find the first `x` to grab the width.
@@ -234,7 +285,7 @@ impl Layout {
                 // while (true) {
                 loop {
                     // try nodes.append(alloc, try parseNext(alloc, str, offset));
-                    nodes.push(Layout::parse_next(str, offset)?);
+                    nodes.push(Layout::parse_next(str, offset, depth + 1)?);
 
                     // We should not reach the end of string here because
                     // we expect a closing bracket.
@@ -781,5 +832,87 @@ mod tests {
         // The checksum "bb62" corresponds to the layout "159x48,0,0{79x48,0,0,79x48,80,0}"
         let checksum = Checksum::calculate(b"159x48,0,0{79x48,0,0,79x48,80,0}");
         assert_eq!(b"bb62", &checksum.as_string());
+    }
+
+    // ---- R13 (task R13-A, UPSTREAM-DEFECTS UD10): nesting depth -------------
+
+    /// `n` nested horizontal containers around one pane, 9 bytes per level.
+    fn nested(n: usize) -> String {
+        let mut s = String::with_capacity(n * 9 + 9);
+        for _ in 0..n {
+            s.push_str("1x1,0,0{");
+        }
+        s.push_str("1x1,0,0,1");
+        for _ in 0..n {
+            s.push('}');
+        }
+        s
+    }
+
+    /// Runs `f` on a thread with Rust's default spawn stack, the stack the
+    /// termio reader thread runs the viewer on.
+    fn on_default_thread<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+        std::thread::spawn(f).join().unwrap()
+    }
+
+    /// The deepest nesting the control parser's 1 MiB line limit lets tmux
+    /// output carry is about 116,000 levels. The reference recurses into all of
+    /// it and overflows; the port stops at `MAX_DEPTH` with `SyntaxError`, and
+    /// accepts exactly `MAX_DEPTH`.
+    #[test]
+    fn deeply_nested_layout_is_a_syntax_error_beyond_max_depth() {
+        let levels = (1024 * 1024) / 9;
+        let result = on_default_thread(move || Layout::parse(&nested(levels)).map(|_| ()));
+        assert_eq!(Err(ParseError::SyntaxError), result);
+
+        let result = on_default_thread(|| Layout::parse(&nested(MAX_DEPTH + 1)).map(|_| ()));
+        assert_eq!(Err(ParseError::SyntaxError), result);
+
+        let depth = on_default_thread(|| {
+            let layout = Layout::parse(&nested(MAX_DEPTH)).unwrap();
+            let mut depth = 0;
+            let mut node = &layout;
+            while let Content::Horizontal(children) = &node.content {
+                depth += 1;
+                node = &children[0];
+            }
+            assert_eq!(Content::Pane(1), node.content);
+            depth
+        });
+        assert_eq!(MAX_DEPTH, depth, "MAX_DEPTH itself must parse");
+    }
+
+    /// Dropping a tree does not recurse. The tree is built without the parser,
+    /// 200,000 levels deep, far past what recursive drop glue survives on a
+    /// 2 MiB stack.
+    #[test]
+    fn dropping_a_very_deep_layout_does_not_recurse() {
+        let levels = on_default_thread(|| {
+            let mut node = Layout {
+                width: 1,
+                height: 1,
+                x: 0,
+                y: 0,
+                content: Content::Pane(1),
+            };
+            for _ in 0..200_000 {
+                node = Layout {
+                    width: 1,
+                    height: 1,
+                    x: 0,
+                    y: 0,
+                    content: Content::Vertical(vec![node]),
+                };
+            }
+            let mut levels = 0;
+            let mut cursor = &node;
+            while let Content::Vertical(children) = &cursor.content {
+                levels += 1;
+                cursor = &children[0];
+            }
+            drop(node);
+            levels
+        });
+        assert_eq!(200_000, levels);
     }
 }

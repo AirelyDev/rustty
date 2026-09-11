@@ -430,7 +430,14 @@ impl Parser {
             let starts = region.starts();
             let ends = region.ends();
 
-            let id = parse_int_usize(&line[starts[1] as usize..ends[1] as usize]).unwrap();
+            // `catch unreachable` in the reference: R13, see `parse_capture_usize`.
+            let Some(id) =
+                parse_capture_usize(cmd, line, &line[starts[1] as usize..ends[1] as usize])
+            else {
+                region.deinit();
+                re.deinit();
+                return Ok(None);
+            };
             let data = line[starts[2] as usize..ends[2] as usize].to_vec();
 
             // Important: do not clear buffer here since name points to it
@@ -477,7 +484,14 @@ impl Parser {
             let starts = region.starts();
             let ends = region.ends();
 
-            let id = parse_int_usize(&line[starts[1] as usize..ends[1] as usize]).unwrap();
+            // `catch unreachable` in the reference: R13, see `parse_capture_usize`.
+            let Some(id) =
+                parse_capture_usize(cmd, line, &line[starts[1] as usize..ends[1] as usize])
+            else {
+                region.deinit();
+                re.deinit();
+                return Ok(None);
+            };
             let name = line[starts[2] as usize..ends[2] as usize].to_vec();
 
             // Important: do not clear buffer here since name points to it
@@ -524,7 +538,14 @@ impl Parser {
             let starts = region.starts();
             let ends = region.ends();
 
-            let id = parse_int_usize(&line[starts[1] as usize..ends[1] as usize]).unwrap();
+            // `catch unreachable` in the reference: R13, see `parse_capture_usize`.
+            let Some(id) =
+                parse_capture_usize(cmd, line, &line[starts[1] as usize..ends[1] as usize])
+            else {
+                region.deinit();
+                re.deinit();
+                return Ok(None);
+            };
             let layout = line[starts[2] as usize..ends[2] as usize].to_vec();
             let visible_layout = line[starts[3] as usize..ends[3] as usize].to_vec();
             let raw_flags = line[starts[4] as usize..ends[4] as usize].to_vec();
@@ -578,7 +599,14 @@ impl Parser {
             let starts = region.starts();
             let ends = region.ends();
 
-            let id = parse_int_usize(&line[starts[1] as usize..ends[1] as usize]).unwrap();
+            // `catch unreachable` in the reference: R13, see `parse_capture_usize`.
+            let Some(id) =
+                parse_capture_usize(cmd, line, &line[starts[1] as usize..ends[1] as usize])
+            else {
+                region.deinit();
+                re.deinit();
+                return Ok(None);
+            };
 
             self.buffer.clear();
             self.state = State::Idle;
@@ -624,7 +652,14 @@ impl Parser {
             let starts = region.starts();
             let ends = region.ends();
 
-            let id = parse_int_usize(&line[starts[1] as usize..ends[1] as usize]).unwrap();
+            // `catch unreachable` in the reference: R13, see `parse_capture_usize`.
+            let Some(id) =
+                parse_capture_usize(cmd, line, &line[starts[1] as usize..ends[1] as usize])
+            else {
+                region.deinit();
+                re.deinit();
+                return Ok(None);
+            };
             let name = line[starts[2] as usize..ends[2] as usize].to_vec();
 
             // Important: do not clear buffer here since name points to it
@@ -671,8 +706,22 @@ impl Parser {
             let starts = region.starts();
             let ends = region.ends();
 
-            let window_id = parse_int_usize(&line[starts[1] as usize..ends[1] as usize]).unwrap();
-            let pane_id = parse_int_usize(&line[starts[2] as usize..ends[2] as usize]).unwrap();
+            // `catch unreachable` in the reference: R13, see `parse_capture_usize`.
+            let Some(window_id) =
+                parse_capture_usize(cmd, line, &line[starts[1] as usize..ends[1] as usize])
+            else {
+                region.deinit();
+                re.deinit();
+                return Ok(None);
+            };
+            // `catch unreachable` in the reference: R13, see `parse_capture_usize`.
+            let Some(pane_id) =
+                parse_capture_usize(cmd, line, &line[starts[2] as usize..ends[2] as usize])
+            else {
+                region.deinit();
+                re.deinit();
+                return Ok(None);
+            };
 
             self.buffer.clear();
             self.state = State::Idle;
@@ -765,7 +814,14 @@ impl Parser {
             let ends = region.ends();
 
             let client = line[starts[1] as usize..ends[1] as usize].to_vec();
-            let session_id = parse_int_usize(&line[starts[2] as usize..ends[2] as usize]).unwrap();
+            // `catch unreachable` in the reference: R13, see `parse_capture_usize`.
+            let Some(session_id) =
+                parse_capture_usize(cmd, line, &line[starts[2] as usize..ends[2] as usize])
+            else {
+                region.deinit();
+                re.deinit();
+                return Ok(None);
+            };
             let name = line[starts[3] as usize..ends[3] as usize].to_vec();
 
             // Important: do not clear buffer here since client/name point to it
@@ -842,9 +898,9 @@ fn parse_block_terminator(line_raw: &[u8]) -> Option<BlockTerminator> {
     // In the future, we should compare these to the %begin block
     // because the tmux source guarantees that these always match and
     // that is a more robust way to match.
-    parse_int_usize(time)?;
-    parse_int_usize(command_id)?;
-    parse_int_usize(flags)?;
+    parse_int_usize(time).ok()?;
+    parse_int_usize(command_id).ok()?;
+    parse_int_usize(flags).ok()?;
     if extra.is_some() {
         return None;
     }
@@ -893,11 +949,49 @@ fn trim_right_len(slice: &[u8], strip: &[u8]) -> usize {
 }
 
 // PORT NOTE: `std.fmt.parseInt(usize, bytes, 10)` — base-10 parse of an ASCII
-// byte slice into a `usize`. Returns `None` on any parse failure (empty,
-// non-digit, overflow), matching the reference's `catch` handling.
-fn parse_int_usize(bytes: &[u8]) -> Option<usize> {
-    let s = std::str::from_utf8(bytes).ok()?;
-    s.parse::<usize>().ok()
+// byte slice into a `usize`. The error mirrors `std.fmt.ParseIntError`
+// (`Overflow` / `InvalidCharacter`) so a caller that logs it renders the
+// reference's error name.
+fn parse_int_usize(bytes: &[u8]) -> Result<usize, ParseIntError> {
+    let s = std::str::from_utf8(bytes).map_err(|_| ParseIntError::InvalidCharacter)?;
+    s.parse::<usize>().map_err(|err| match err.kind() {
+        core::num::IntErrorKind::PosOverflow => ParseIntError::Overflow,
+        _ => ParseIntError::InvalidCharacter,
+    })
+}
+
+/// PORTS: `std.fmt.ParseIntError`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ParseIntError {
+    Overflow,
+    InvalidCharacter,
+}
+
+// PORT NOTE: reference defect (R13, UPSTREAM-DEFECTS.md UD7). Every id capture
+// in the regex arms is an unbounded `([0-9]+)`, and the reference parses it with
+// `std.fmt.parseInt(usize, ..) catch unreachable`
+// (`control.zig:238,269,309,347,377,408,413,470`). Twenty or more digits
+// overflow `usize`: a panic in ReleaseSafe, undefined behaviour in ReleaseFast.
+// Anything written to the pty inside `ESC P 1000 p` reaches it. The port takes
+// the arm's own match-failure path instead: the same `failed to match
+// notification` warning (with the parse error as `err`), then the shared
+// clear-buffer, back-to-idle cleanup, so the line yields no notification and
+// the parser keeps going. Test:
+// `an_overflowing_notification_id_warns_and_the_parser_continues`.
+#[cfg(feature = "oniguruma")]
+fn parse_capture_usize(cmd: &[u8], line: &[u8], digits: &[u8]) -> Option<usize> {
+    match parse_int_usize(digits) {
+        Ok(v) => Some(v),
+        Err(err) => {
+            log::warn!(
+                target: LOG_SCOPE,
+                "failed to match notification cmd={} line=\"{}\" err={err:?}",
+                String::from_utf8_lossy(cmd),
+                String::from_utf8_lossy(line),
+            );
+            None
+        }
+    }
 }
 
 /// Possible notification types from tmux control mode. These are documented
@@ -1621,5 +1715,67 @@ mod tests {
         assert_eq!(2, *session_id);
         assert_eq!(b"mysession" as &[u8], name.as_slice());
         c.deinit();
+    }
+
+    /// R13 (task R13-A, UPSTREAM-DEFECTS UD7). No reference test. Every numeric
+    /// capture in the regex arms is an unbounded `([0-9]+)`, and the reference
+    /// parses each with `parseInt(usize, ..) catch unreachable`
+    /// (`control.zig:238,269,309,347,377,408,413,470`), so a 20-digit id from
+    /// the pty panics (ReleaseSafe) or is undefined behaviour (ReleaseFast).
+    /// The port takes the arms' own match-failure path instead. The bytes go
+    /// through the VT stream and the DCS handler, and each case checks three
+    /// things: the one warning, that no notification came out of the bad line,
+    /// and that the parser still produces the valid `%output` sent after it.
+    #[cfg(feature = "oniguruma")]
+    #[test]
+    fn an_overflowing_notification_id_warns_and_the_parser_continues() {
+        const BIG: &str = "99999999999999999999";
+        let cases: [(&str, String); 8] = [
+            ("%output", format!("%output %{BIG} data")),
+            ("%session-changed", format!("%session-changed ${BIG} name")),
+            ("%layout-change", format!("%layout-change @{BIG} a b c")),
+            ("%window-add", format!("%window-add @{BIG}")),
+            ("%window-renamed", format!("%window-renamed @{BIG} name")),
+            (
+                "%window-pane-changed",
+                format!("%window-pane-changed @{BIG} %2"),
+            ),
+            (
+                "%window-pane-changed",
+                format!("%window-pane-changed @2 %{BIG}"),
+            ),
+            (
+                "%client-session-changed",
+                format!("%client-session-changed /dev/pts/1 ${BIG} name"),
+            ),
+        ];
+        for (cmd, line) in cases {
+            let mut s = crate::tmux::test_host::stream();
+            let cap = crate::log_capture::start();
+            s.next_slice(b"\x1bP1000p");
+            s.next_slice(line.as_bytes());
+            s.next_slice(b"\n%output %1 still-parsing\n\x1b\\");
+            let warnings: Vec<_> = cap
+                .messages()
+                .into_iter()
+                .filter(|(level, target, _)| {
+                    *level == log::Level::Warn && target == "terminal_tmux"
+                })
+                .collect();
+            drop(cap);
+            assert_eq!(
+                vec![tmux_warn(&format!(
+                    "failed to match notification cmd={cmd} line=\"{line}\" err=Overflow"
+                ))],
+                warnings,
+                "{line}"
+            );
+            assert_eq!(
+                vec!["enter", "output", "exit"],
+                s.handler.notifications,
+                "{line}: the bad line yields nothing, the next line still parses"
+            );
+            s.deinit();
+        }
     }
 }

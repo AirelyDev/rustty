@@ -13,6 +13,10 @@ pub mod layout;
 pub mod output;
 pub mod viewer;
 
+// Test-only byte-level host for the R13 tmux tests (no reference counterpart).
+#[cfg(all(test, feature = "oniguruma"))]
+pub(crate) mod test_host;
+
 // pub const ControlParser = control.Parser;
 pub use control::Parser as ControlParser;
 // pub const ControlNotification = control.Notification;

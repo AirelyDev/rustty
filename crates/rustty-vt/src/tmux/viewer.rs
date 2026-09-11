@@ -1003,32 +1003,65 @@ impl Viewer {
             // var t: Terminal = try .init(gpa_alloc, .{ .cols = @intCast(layout.width), .rows = @intCast(layout.height) });
             // errdefer t.deinit(gpa_alloc);
             //
-            // PORT NOTE (S209-F1): `@intCast` is a CHECKED narrowing in every
-            // safe build mode — an out-of-range layout dimension is illegal
-            // behavior detected, not a silent wrap. Bare `as` wrapped modulo
-            // 2^16 and handed `Terminal::init` a wrong (possibly 0) size, which
-            // the TODO above does NOT sanction: it says the cast "is not safe",
-            // which is exactly the reference's trap. PORT_RULES R7:
-            // `@intCast` -> `try_from(..).unwrap()`.
-            let cols = size::CellCountInt::try_from(d.width).unwrap_or_else(|_| {
-                panic!("@intCast: tmux pane layout width {} > max cols", d.width)
-            });
-            let rows = size::CellCountInt::try_from(d.height).unwrap_or_else(|_| {
-                panic!("@intCast: tmux pane layout height {} > max rows", d.height)
-            });
-            let t: Terminal = match Terminal::init(self.alloc, terminal_opts(cols, rows)) {
+            // PORT NOTE: reference defect (R13, UPSTREAM-DEFECTS.md UD8;
+            // parity S209-F1). The layout width and height come from tmux
+            // (`%layout-change`, or the `list-windows` reply), which is to
+            // say from anything written to the pty inside `ESC P 1000 p`. The
+            // reference `@intCast`s them to `u16`: above 65535 that panics in
+            // ReleaseSafe and is undefined behaviour in ReleaseFast. A zero
+            // passes the cast and panics inside `Terminal.init` instead
+            // (measured on the port's mirror: a zero width trips the cells
+            // index in `Page.initBuf`, `page.zig:274`; a zero height trips
+            // `first.?` in `PageList.init`, `PageList.zig:647`). The TODO
+            // above calls the cast unsafe. The port treats an out-of-range or
+            // zero dimension as a failed `Terminal.init`: the errdefer below
+            // runs and the caller turns the error into the defunct state,
+            // exactly as for any other pane initialisation failure. Task 15
+            // had ported the cast as a panic (R7); R13 reverses that. Tests:
+            // `list_windows_pane_dimensions_out_of_range_or_zero_make_the_viewer_defunct`,
+            // `layout_change_pane_dimensions_out_of_range_or_zero_make_the_viewer_defunct`.
+            let dims = match (
+                size::CellCountInt::try_from(d.width),
+                size::CellCountInt::try_from(d.height),
+            ) {
+                (Ok(cols), Ok(rows)) if cols > 0 && rows > 0 => Some((cols, rows)),
+                _ => None,
+            };
+            let t: Terminal = match dims.ok_or(VtError::SyntaxError).and_then(|(cols, rows)| {
+                Terminal::init(self.alloc, terminal_opts(cols, rows))
+                    .map_err(|_| VtError::OutOfMemory)
+            }) {
                 Ok(t) => t,
-                Err(_) => {
-                    // errdefer: clear out all the new panes not shared with
-                    // self.panes. The still-present panes already moved into
-                    // `panes` were taken from `self.panes` (owned), so deiniting
-                    // every new-map entry here is correct (no aliasing).
+                Err(err) => {
+                    // errdefer {
+                    //     // Clear out all the new panes.
+                    //     var panes_it = panes.iterator();
+                    //     while (panes_it.next()) |kv| {
+                    //         if (!self.panes.contains(kv.key_ptr.*)) {
+                    //             kv.value_ptr.deinit(self.alloc);
+                    //         }
+                    //     }
+                    //     panes.deinit(self.alloc);
+                    // }
                     //
-                    // Clear out all the new panes.
-                    for pane in panes.values_mut() {
-                        pane.deinit(self.alloc);
+                    // PORT NOTE: the reference deinits only the panes this sync
+                    // created; carried-over panes were copied, so they still
+                    // live in `self.panes`. Here carried-over panes were MOVED
+                    // out of `self.panes` above, so they are moved back rather
+                    // than deinited. (This path used to deinit every entry,
+                    // which destroyed the viewer's existing panes on failure.)
+                    for id in panes.keys().copied().collect::<Vec<usize>>() {
+                        let Some(entry) = panes.fetch_swap_remove(&id) else {
+                            continue;
+                        };
+                        let mut pane = entry.value;
+                        if prev_ids.contains(&id) {
+                            self.panes.put_no_clobber(id, pane);
+                        } else {
+                            pane.deinit(self.alloc);
+                        }
                     }
-                    return Err(VtError::OutOfMemory);
+                    return Err(err);
                 }
             };
             // gop.value_ptr.* = .{ .terminal = t };
@@ -1696,7 +1729,8 @@ impl Viewer {
         t.switch_screen(screen_key)
             .map_err(|_| VtError::OutOfMemory)?;
         // const screen: *Screen = t.screens.active;
-        let screen: *mut Screen = t.screens.active;
+        // (only read by the `runtime_safety` check at the end, which the port
+        // does not perform; see the R13 PORT NOTE there)
 
         // Get a VT stream from the terminal so we can send data as-is into
         // it. This will populate the active area too so it won't be exactly
@@ -1730,21 +1764,19 @@ impl Viewer {
         //     }) catch unreachable;
         //     assert(discarding.count == 0);
         // }
-        if cfg!(debug_assertions) {
-            let screen: &Screen = unsafe { &*screen };
-            let mut discarding = CountingDiscard::default();
-            screen
-                .dump_string(
-                    &mut discarding,
-                    crate::screen::DumpStringOptions {
-                        tl: screen.pages.get_top_left(crate::point::Tag::Active),
-                        br: None,
-                        unwrap: false,
-                    },
-                )
-                .unwrap();
-            assert(discarding.count == 0);
-        }
+        //
+        // PORT NOTE: reference defect (R13, UPSTREAM-DEFECTS.md UD9). The
+        // "should be empty" is not guaranteed: `index()` below the scroll
+        // region only moves the cursor, so a pane whose `list-panes` reply
+        // (scroll region, cursor row) was applied before its history arrived
+        // keeps the history text in the active area and the reference's
+        // `runtime_safety` assert panics. Both replies come from tmux, and a
+        // second pane appearing while the first pane's captures are queued
+        // puts that reply first. ReleaseFast has no check and continues with a
+        // non-empty active area, which the pane's `capture-pane` visible
+        // reply then erases (`eraseDisplay(.complete)`). The port does what
+        // ReleaseFast does: no check. Test:
+        // `pane_history_below_the_scroll_region_does_not_trip_the_empty_active_area_check`.
         Ok(())
     }
 
@@ -2420,23 +2452,6 @@ impl<'a> ListPanes<'a> {
     }
 }
 
-/// A `std.Io.Writer.Discarding` that counts bytes written (used by the
-/// debug-only "active area should be empty" assertion).
-#[derive(Default)]
-struct CountingDiscard {
-    count: usize,
-}
-
-impl std::io::Write for CountingDiscard {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.count += buf.len();
-        Ok(buf.len())
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
 use crate::csi;
 use crate::kitty;
 use crate::modes;
@@ -2702,29 +2717,59 @@ mod tests {
     /// fragile.
     // fn testViewer(viewer: *Viewer, steps: []const TestStep) !void {
     /// PORT NOTE: no reference analogue. The reference narrows the layout's
-    /// `usize` width/height with `@intCast`, which is a CHECKED narrowing in
-    /// every safe build mode — an out-of-range layout is illegal behavior
-    /// detected, not a silent wrap. The port used bare `as`, which wraps modulo
-    /// 2^16 and hands `Terminal::init` a wrong (possibly 0) size (S209-F1).
-    /// Per PORT_RULES R7 `@intCast` ports as `try_from(..).unwrap()`, so this
-    /// test asserts the trap.
+    /// `usize` width/height with `@intCast`, which traps above 65535; a zero
+    /// passes the cast and traps inside `Terminal.init` (S209-F1). This test
+    /// used to be `sync_layouts_pane_width_overflow_traps`, a `should_panic`
+    /// test pinning a ported trap. Under R13 (UPSTREAM-DEFECTS.md UD8) such a
+    /// layout is a failed pane initialisation: `sync_layouts` returns an error,
+    /// creates no pane, and keeps the panes the viewer already had. The
+    /// byte-level tests further down drive the same failure from the pty.
     #[test]
-    #[should_panic(expected = "@intCast: tmux pane layout width")]
-    fn sync_layouts_pane_width_overflow_traps() {
-        let mut viewer = Viewer::init(Global).unwrap();
-        let window = Window {
-            id: 0,
-            width: 80,
-            height: 24,
-            layout: crate::tmux::layout::Layout {
-                width: 70_000,
+    fn sync_layouts_pane_dimensions_out_of_range_or_zero_fail_without_a_pane() {
+        for (width, height) in [(70_000, 24), (80, 70_000), (0, 24), (80, 0)] {
+            let mut viewer = Viewer::init(Global).unwrap();
+            let existing = Window {
+                id: 0,
+                width: 80,
                 height: 24,
-                x: 0,
-                y: 0,
-                content: crate::tmux::layout::Content::Pane(1),
-            },
-        };
-        let _ = viewer.sync_layouts(vec![window], false);
+                layout: crate::tmux::layout::Layout {
+                    width: 80,
+                    height: 24,
+                    x: 0,
+                    y: 0,
+                    content: crate::tmux::layout::Content::Pane(1),
+                },
+            };
+            viewer.sync_layouts(vec![existing.clone()], false).unwrap();
+            assert!(viewer.panes.contains(&1));
+
+            let mut window = existing;
+            window.layout.content = crate::tmux::layout::Content::Horizontal(vec![
+                crate::tmux::layout::Layout {
+                    width: 40,
+                    height: 24,
+                    x: 0,
+                    y: 0,
+                    content: crate::tmux::layout::Content::Pane(1),
+                },
+                crate::tmux::layout::Layout {
+                    width,
+                    height,
+                    x: 41,
+                    y: 0,
+                    content: crate::tmux::layout::Content::Pane(2),
+                },
+            ]);
+            assert!(
+                viewer.sync_layouts(vec![window], false).is_err(),
+                "{width}x{height} must fail"
+            );
+            assert!(!viewer.panes.contains(&2), "{width}x{height}: no pane 2");
+            assert!(
+                viewer.panes.contains(&1),
+                "{width}x{height}: the failed sync keeps the existing pane"
+            );
+        }
     }
 
     /// The positive control for the test above: the SAME code path with an
@@ -3568,5 +3613,243 @@ mod tests {
             "expected the layout parse-failure diagnostic, got: {messages:?}"
         );
         drop(cap);
+    }
+
+    // ---- R13 (task R13-A): tmux-supplied layouts driven as raw bytes --------
+
+    #[cfg(feature = "oniguruma")]
+    fn viewer_diagnostics(cap: &crate::log_capture::Capture) -> Vec<String> {
+        cap.messages()
+            .into_iter()
+            .filter(|(level, target, _)| {
+                *level <= log::Level::Info && target == "terminal_tmux_viewer"
+            })
+            .map(|(_, _, msg)| msg)
+            .collect()
+    }
+
+    /// R13 (UPSTREAM-DEFECTS UD8). A `list-windows` reply whose pane layout is
+    /// `width`x`height`. The reference `@intCast`s both into `u16`
+    /// (`viewer.zig:1160-1161`), which traps above 65535, and hands a zero
+    /// straight to `Terminal.init`, which traps too. The port routes both
+    /// through the pane's `Terminal::init` failure path, so the viewer becomes
+    /// defunct. With in-range dimensions the same bytes create the pane.
+    #[cfg(feature = "oniguruma")]
+    fn list_windows_with_pane(width: usize, height: usize) -> (bool, Vec<String>) {
+        use crate::tmux::test_host;
+        let mut s = test_host::stream();
+        test_host::attach(&mut s);
+        let layout = format!("{width}x{height},0,0,7");
+        let line = test_host::list_windows_line(0, 80, 24, layout.as_bytes());
+        let cap = crate::log_capture::start();
+        s.next_slice(&test_host::block(3, &line));
+        let messages = viewer_diagnostics(&cap);
+        drop(cap);
+        assert_eq!(Some(&"block_end"), s.handler.notifications.last());
+        let created = s.handler.viewer().panes.contains(&7);
+        let defunct = s.handler.viewer().state == State::Defunct;
+        assert_eq!(
+            created, !defunct,
+            "{layout}: exactly one of created/defunct"
+        );
+        assert_eq!(usize::from(defunct), s.handler.viewer_exits, "{layout}");
+        s.deinit();
+        (created, messages)
+    }
+
+    #[cfg(feature = "oniguruma")]
+    #[test]
+    fn list_windows_pane_dimensions_out_of_range_or_zero_make_the_viewer_defunct() {
+        // Positive control: the same reply with an in-range pane.
+        let (created, messages) = list_windows_with_pane(80, 24);
+        assert!(created, "an in-range pane must be created");
+        assert_eq!(Vec::<String>::new(), messages);
+
+        for (w, h) in [(70_000, 24), (80, 70_000), (0, 24), (80, 0)] {
+            let (created, messages) = list_windows_with_pane(w, h);
+            assert!(!created, "{w}x{h} must not create a pane");
+            assert_eq!(
+                vec!["failed to process command output, becoming defunct".to_string()],
+                messages,
+                "{w}x{h}: the layout parsed (no parse diagnostic) and pane creation failed"
+            );
+        }
+    }
+
+    /// The same, through `%layout-change`: a known window gains pane 8 with the
+    /// given dimensions.
+    #[cfg(feature = "oniguruma")]
+    fn layout_change_adds_pane(width: usize, height: usize) -> (bool, Vec<String>) {
+        use crate::tmux::test_host;
+        let mut s = test_host::stream();
+        test_host::attach(&mut s);
+        let line = test_host::list_windows_line(0, 80, 24, b"80x24,0,0,7");
+        s.next_slice(&test_host::block(3, &line));
+        assert!(s.handler.viewer().panes.contains(&7));
+
+        let layout = format!("80x24,0,0{{40x24,0,0,7,{width}x{height},41,0,8}}");
+        let layout = test_host::with_checksum(layout.as_bytes());
+        let mut bytes = b"%layout-change @0 ".to_vec();
+        bytes.extend_from_slice(&layout);
+        bytes.push(b' ');
+        bytes.extend_from_slice(&layout);
+        bytes.extend_from_slice(b" *\n");
+        let cap = crate::log_capture::start();
+        s.next_slice(&bytes);
+        let messages = viewer_diagnostics(&cap);
+        drop(cap);
+        assert_eq!(Some(&"layout_change"), s.handler.notifications.last());
+        let created = s.handler.viewer().panes.contains(&8);
+        let defunct = s.handler.viewer().state == State::Defunct;
+        assert_eq!(
+            created, !defunct,
+            "{width}x{height}: exactly one of created/defunct"
+        );
+        assert_eq!(usize::from(defunct), s.handler.viewer_exits);
+        assert!(
+            s.handler.viewer().panes.contains(&7),
+            "{width}x{height}: pane 7 survives, as in the reference's errdefer"
+        );
+        s.deinit();
+        (created, messages)
+    }
+
+    /// R13 (UPSTREAM-DEFECTS UD9). After writing a pane's history the reference
+    /// fills the active area with `rows` `index()` calls, then asserts under
+    /// `runtime_safety` that the active area is empty (`viewer.zig:1070-1077`).
+    /// `index()` below the scroll region only moves the cursor down, so a pane
+    /// whose scroll region and cursor were set before its history arrives keeps
+    /// its text in the active area and the assert fires. History bytes cannot
+    /// carry ESC (it would end the DCS), but `list-panes` sets both: when a
+    /// second pane appears while the first pane's captures are still queued,
+    /// the first pane's `list-panes` reply lands before the second pane's
+    /// history. A real vim in that pane (scroll region above its command line,
+    /// cursor on the last row) is enough. The port does not check. The test
+    /// proves it reached the site by finding the history text still in the
+    /// active area, which is exactly the condition the reference asserts
+    /// against.
+    #[cfg(feature = "oniguruma")]
+    #[test]
+    fn pane_history_below_the_scroll_region_does_not_trip_the_empty_active_area_check() {
+        use crate::tmux::test_host;
+        let mut s = test_host::stream();
+        test_host::attach(&mut s);
+        // Pane 7 exists; its captures and list-panes are queued.
+        let line = test_host::list_windows_line(0, 80, 24, b"80x24,0,0,7");
+        s.next_slice(&test_host::block(3, &line));
+        // Pane 8 appears before any of them is answered.
+        let layout = test_host::with_checksum(b"80x24,0,0{40x24,0,0,7,39x24,41,0,8}");
+        let mut change = b"%layout-change @0 ".to_vec();
+        change.extend_from_slice(&layout);
+        change.push(b' ');
+        change.extend_from_slice(&layout);
+        change.extend_from_slice(b" *\n");
+        s.next_slice(&change);
+        assert!(s.handler.viewer().panes.contains(&8));
+
+        // Pane 7's four captures, then the list-panes reply, which also carries
+        // pane 8: cursor on row 23, scroll region rows 0-10.
+        for n in 4..8 {
+            s.next_slice(&test_host::block(n, b""));
+        }
+        s.next_slice(&test_host::block(
+            8,
+            b"%7;0;0;1;;;;0;4294967295;4294967295;0;1;0;0;0;0;0;0;0;0;0;;;0;23;8\n\
+              %8;0;23;1;;;;0;4294967295;4294967295;0;1;0;0;0;0;0;0;0;0;0;;;0;10;8",
+        ));
+        assert!(
+            s.handler
+                .commands
+                .last()
+                .is_some_and(|c| c.starts_with(b"capture-pane") && c.ends_with(b"%8\n")),
+            "the viewer must be asking for pane 8's primary history"
+        );
+
+        // Pane 8's history.
+        s.next_slice(&test_host::block(9, b"history text"));
+        assert_eq!(State::CommandQueue, s.handler.viewer().state);
+        assert_eq!(0, s.handler.viewer_exits);
+        let active = pane_dump(s.handler.viewer(), 8, crate::point::Tag::Active);
+        assert!(
+            active.contains("history text"),
+            "the active area is not empty after the index loop, got {active:?}"
+        );
+        s.deinit();
+    }
+
+    /// R13 (UPSTREAM-DEFECTS UD10). A `list-windows` reply whose layout nests
+    /// `levels` containers around pane 1, driven as pty bytes on a thread with
+    /// Rust's default spawn stack (the termio reader thread's). Returns whether
+    /// pane 1 was created and the viewer's diagnostics.
+    #[cfg(feature = "oniguruma")]
+    fn list_windows_with_nesting(levels: usize) -> (bool, Vec<String>) {
+        std::thread::spawn(move || {
+            use crate::tmux::test_host;
+            let mut layout = Vec::with_capacity(levels * 9 + 9);
+            for _ in 0..levels {
+                layout.extend_from_slice(b"1x1,0,0{");
+            }
+            layout.extend_from_slice(b"1x1,0,0,1");
+            layout.resize(layout.len() + levels, b'}');
+
+            let mut s = test_host::stream();
+            test_host::attach(&mut s);
+            let line = test_host::list_windows_line(0, 80, 24, &layout);
+            let block = test_host::block(3, &line);
+            let cap = crate::log_capture::start();
+            s.next_slice(&block);
+            let messages: Vec<String> = viewer_diagnostics(&cap)
+                .into_iter()
+                .map(|m| m.chars().take(60).collect())
+                .collect();
+            drop(cap);
+            assert_eq!(Some(&"block_end"), s.handler.notifications.last());
+            let created = s.handler.viewer().panes.contains(&1);
+            s.deinit();
+            (created, messages)
+        })
+        .join()
+        .unwrap()
+    }
+
+    #[cfg(feature = "oniguruma")]
+    #[test]
+    fn a_layout_nested_deeper_than_max_depth_makes_the_viewer_defunct() {
+        // The deepest the control parser's 1 MiB block limit allows.
+        let (created, messages) = list_windows_with_nesting((1024 * 1024 - 200) / 9);
+        assert!(!created);
+        assert_eq!(2, messages.len(), "{messages:?}");
+        assert!(
+            messages[0].starts_with("failed to parse window layout id=0 layout="),
+            "{messages:?}"
+        );
+        assert_eq!(
+            "failed to process command output, becoming defunct",
+            messages[1]
+        );
+
+        // `MAX_DEPTH` itself goes all the way through: parsed, cloned into the
+        // windows action, walked for panes, and the pane created.
+        let (created, messages) = list_windows_with_nesting(crate::tmux::layout::MAX_DEPTH);
+        assert!(created, "a layout exactly MAX_DEPTH deep must be accepted");
+        assert_eq!(Vec::<String>::new(), messages);
+    }
+
+    #[cfg(feature = "oniguruma")]
+    #[test]
+    fn layout_change_pane_dimensions_out_of_range_or_zero_make_the_viewer_defunct() {
+        let (created, messages) = layout_change_adds_pane(39, 24);
+        assert!(created, "an in-range pane must be created");
+        assert_eq!(Vec::<String>::new(), messages);
+
+        for (w, h) in [(70_000, 24), (39, 70_000), (0, 24), (39, 0)] {
+            let (created, messages) = layout_change_adds_pane(w, h);
+            assert!(!created, "{w}x{h} must not create a pane");
+            assert_eq!(
+                vec!["failed to handle layout change, becoming defunct".to_string()],
+                messages,
+                "{w}x{h}: the layout parsed (no parse diagnostic) and pane creation failed"
+            );
+        }
     }
 }
