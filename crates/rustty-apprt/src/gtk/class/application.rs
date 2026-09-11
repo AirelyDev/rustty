@@ -3839,7 +3839,7 @@ mod action {
 
         // The window we're starting from is typically our active window.
         // `glist.findCustom(null, findActiveWindow) orelse glist` (`:2480-2485`).
-        let starting = glist.iter().position(|w| is_active(w)).unwrap_or(0);
+        let starting = glist.iter().position(is_active).unwrap_or(0);
 
         // Go forward or backwards in the list until we find a valid
         // window that is visible. The walk begins AT `starting` (`:2489-2497`).
