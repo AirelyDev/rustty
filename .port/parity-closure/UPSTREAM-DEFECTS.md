@@ -794,6 +794,165 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - proposed fix:    Compute the number arithmetically at comptime, for example `std.fmt.comptimePrint("{d}", .{major * 10000 + minor * 100 + micro})` with integer components, and derive both strings from it; or parse `configure.ac` as the TODO above `Version` suggests.
 - upstream status: not reported
 
+### UD46 — libxev dynamic `test "prefer"` needs io_uring to be usable and cannot catch a broken `prefer`
+- kind:            test-weakness
+- upstream project: libxev
+- severity:        low
+- reference:       libxev (pinned by ghostty 20abdb50a `build.zig.zon:19-24`, tarball `libxev-9ce8e8e6ff89e583258a7f8e7adeeeaeae8611bf`) `src/dynamic.zig:218-227` (`test "prefer"`), `prefer` at :109-120, `test "detect"` at :207-216; candidates `src/backend.zig:31-46`; `io_uring.available()` `src/backend/io_uring.zig:18-33`
+- defect:          `Xev` returns the static API when there is a single candidate (dynamic.zig:39), so these dynamic tests exist only where there are at least two candidates, which is non-Android Linux with `{ io_uring, epoll }` (backend.zig:36). Two problems:
+  1. **It needs io_uring.** `try testing.expect(prefer(bes[0]))` requires io_uring to be usable. `available()` returns false whenever `linux.IoUring.init(256, 0)` fails (:29), and then the test fails instead of skipping. **UNVERIFIED:** not run on a host with io_uring disabled (for example `kernel.io_uring_disabled=2`, or a seccomp-filtered container).
+  2. **It cannot catch a broken `prefer`.** It only checks that `prefer(bes[0])` returns true and that the selected backend is available. **Changes it fails to catch** (by reading): change `if (candidate == be)` at :111 to `if (true)` (`prefer` then selects the first candidate whatever `be` is, which here is still `bes[0]`); or return true without assigning `backend` (drop :114), which stays green because the preceding `detect` test already set `backend` to io_uring.
+- ReleaseSafe:     no product effect; false failures on io_uring-less Linux hosts and missed regressions.
+- ReleaseFast:     same.
+- reachability:    none (test code).
+- port handling:   faithful but strengthened: `crates/rustty-xev/src/dynamic.rs:4653-4675` (`dynamic_prefer`) keeps `assert!(prefer(CANDIDATES[0]))` (PORT NOTE :4658-4661) and adds `assert_eq!(backend(), CANDIDATES[0])` and `assert!(!prefer(Backend::Kqueue))`.
+- parity row(s):   none; inventory M50.
+- test:            n/a (record only).
+- proposed fix:    Skip (`error.SkipZigTest`) when `bes[0].Api().available()` is false; after `prefer`, assert `backend == subset(bes[0])`; add `prefer(bes[1])` (epoll is always available on Linux) and assert that `backend` switched.
+- upstream status: not reported
+
+### UD47 — libxev io_uring `socket read cancellation` test submits its cancel twice, so it cannot detect a `Loop.cancel` that never queues
+- kind:            test-weakness
+- upstream project: libxev
+- severity:        low
+- reference:       libxev (pin as UD46) `src/backend/io_uring.zig:1731-1792` (test), `Loop.cancel` at :570-607 (`self.add(c_cancel)` at :606)
+- defect:          `loop.cancel(&c_read, &c_read_cancel, …)` already queues the cancel completion (:606). The test then calls `loop.add(&c_read_cancel);` again (:1786), so two `IORING_OP_ASYNC_CANCEL` SQEs with the same `user_data` are submitted and the cancel callback runs twice.
+  - **Change it fails to catch** (by reading): delete `self.add(c_cancel);` at :606, so `Loop.cancel` only fills in the completion. The test's own extra `add` still queues it, so the test stays green while every real `cancel` caller silently never cancels.
+  - **Kernel dependence:** the second cancel's `r catch unreachable` passes only if the kernel reports success for the repeat. The rustty port measured `cqe.res == 0` for both on Linux 6.19.10 aarch64 (PORT NOTE cited below). **UNVERIFIED** on other kernels; one that returns `-ENOENT` for the second cancel would hit `unreachable` in the test.
+- ReleaseSafe:     no product effect; the regression above passes, and on a `-ENOENT` kernel the test panics.
+- ReleaseFast:     same (the test's `unreachable` would be undefined behaviour).
+- reachability:    none (test code).
+- port handling:   faithful: `crates/rustty-xev/src/io_uring.rs:7342-7424` keeps the second `add`, with a PORT NOTE at :7404-7416 recording the double submit and the kernel measurement.
+- parity row(s):   none; inventory M51.
+- test:            n/a (record only).
+- proposed fix:    Remove the redundant `loop.add(&c_read_cancel);`; optionally count cancel-callback invocations and assert exactly one, which pins that `Loop.cancel` queues its completion.
+- upstream status: not reported
+
+### UD48 — libvaxis `transmitImage(.png)` sizes the PNG output buffer at the raw pixel size
+- kind:            latent (functional)
+- upstream project: libvaxis
+- severity:        low
+- reference:       vaxis 0.6.0 (pinned by ghostty 20abdb50a `build.zig.zon:25-30`) `src/Vaxis.zig:1045-1079` (`transmitImage`; `alloc(u8, img.imageByteSize())` at :1061, `writeToMemory` at :1062), reached from `loadImage` at :1081-1097; zigimg `d695acd9` (pinned by vaxis's `build.zig.zon:7-10`) `src/Image.zig:242-244` (`imageByteSize` is `rawBytes().len`) and :277-285 (`writeToMemory`: "The memory buffer is not grown for you so make sure you pass a large enough buffer"; a `std.Io.Writer.fixed`, `src/io.zig:104-108`)
+- defect:          The PNG encoding is written into a fixed buffer exactly as large as the raw pixel data, but PNG adds overhead: the signature and IHDR/IDAT/IEND framing, a zlib header and trailer, and one filter byte per scanline (zigimg `src/formats/png.zig:268-280` deflates at `.level = .default`). Any image whose PNG does not compress below its raw size overflows the writer: tiny images (a 1×1 RGBA image has 4 raw bytes) and high-entropy images of any size. `transmitImage` then returns the writer's error instead of transmitting. **UNVERIFIED:** the threshold was not measured, and the exact error name (`error.WriteFailed` from a fixed writer) is inferred from std, not observed.
+- ReleaseSafe:     no crash; `loadImage`/`transmitImage` fail for affected images.
+- ReleaseFast:     same.
+- reachability:    library API: any vaxis app calling `loadImage` or `transmitImage(.png)` with a small or noisy image. Ghostty's CLI TUIs call neither.
+- port handling:   faithful: `crates/rustty-vaxis/src/vaxis.rs:1067` (`vec![0u8; img.image_byte_size()]`), with the resulting `NoSpaceLeft` documented as preserved upstream behaviour at `crates/rustty-zigimg/src/lib.rs:59-64` and `crates/rustty-zigimg/src/png_encode.rs:34-38`.
+- parity row(s):   none; inventory M77.
+- test:            n/a (record only). The port's codec test deliberately oversizes its buffer (`crates/rustty-zigimg/tests/codec.rs:39-43`).
+- proposed fix:    Encode through an allocating writer (`std.Io.Writer.Allocating` on the arena) instead of a fixed buffer, or size the buffer with a deflate worst-case bound (raw bytes + one filter byte per row + deflate stored-block overhead + zlib and PNG framing).
+- upstream status: not reported
+
+### UD49 — libvaxis `WindowsTty.read` references a nonexistent `fd` field
+- kind:            latent (compile)
+- upstream project: libvaxis
+- severity:        low
+- reference:       vaxis 0.6.0 (pin as UD48) `src/tty.zig:310-312` (`pub fn read(self: *const WindowsTty, buf: []u8) !usize { return posix.read(self.fd, buf); }`), struct fields at :194-210
+- defect:          `WindowsTty` declares `stdin`, `stdout`, `initial_codepage`, `initial_input_mode`, `initial_output_mode`, `buf`, `tty_writer` and `last_mouse_button_press`, but no `fd`, so `read` cannot compile. It builds only because Zig analyses declarations lazily: `Loop.ttyRun`'s `.windows` arm (`src/Loop.zig:153-159`) calls `nextEvent`, and only the POSIX arm calls `tty.read`. Any Windows caller of `Tty.read` gets a compile error.
+- ReleaseSafe:     compile error if referenced; otherwise none.
+- ReleaseFast:     same.
+- reachability:    none (compile time, Windows only, only if a consumer calls `read`).
+- port handling:   repaired (Rust compiles every arm): `crates/rustty-vaxis/src/tty.rs:490-496` (module PORT NOTE) and `:940-948` implement `read` as `ReadFile` on the stdin handle.
+- parity row(s):   none; inventory M78.
+- test:            n/a.
+- proposed fix:    Implement `read` against `self.stdin` (for example `windows.ReadFile(self.stdin, buf, null)`), or remove it from `WindowsTty` if console input is meant to go only through `nextEvent`.
+- upstream status: not reported
+
+### UD50 — libxev epoll `pread`/`pwrite` start errors are tagged `.read`/`.write`
+- kind:            latent (wrong union tag; a panic for any user of the path)
+- upstream project: libxev
+- severity:        low
+- reference:       libxev (pin as UD46) `src/backend/epoll.zig` `Loop.start`: `.pread` arm :652-671 with `break :res .{ .read = err }` at :657 and :665; `.pwrite` arm :692-711 with `.{ .write = err }` at :701 and :709; `thread_schedule` at :526-528
+- defect:          `Result` is a tagged `union(OperationType)` (:1181-1198) with separate `pread` and `pwrite` fields, documented as "the result tag will ALWAYS match the operation tag". On the start path's error branches (`thread_schedule`, `fd_maybe_dup`, or `epoll_ctl` failing) the two arms build `.read`/`.write` results for a `.pread`/`.pwrite` operation, and :838-846 hands that result to the callback. The perform side tags them correctly (`.pread` :1054, `.pwrite` :1069). `xev.File`'s callbacks read `r.pread` (`src/watcher/file.zig:118`) and `r.pwrite` (:273), and `File.pread`/`pwrite` set `threadpool = true` on epoll (file.zig:131-133, :302-304). So on a loop created without a `thread_pool`, `thread_schedule` returns `error.ThreadPoolRequired` (:528) and produces `.{ .read = error.ThreadPoolRequired }`. **UNVERIFIED:** traced by reading, not executed.
+- ReleaseSafe:     panic: access of union field `pread` while field `read` is active.
+- ReleaseFast:     undefined behaviour (an inactive-field read; both payloads are `ReadError!usize`, so it likely "works" by accident).
+- reachability:    none in Ghostty (it uses `xev.Dynamic`, src/global.zig:30, but never `xev.File` or pread/pwrite operations). For libxev users: `File.pread`/`pwrite` on epoll with no thread pool, or a failing `dup`/`epoll_ctl`.
+- port handling:   corrected: `crates/rustty-xev/src/epoll.rs:980-998` (`Operation::PRead`) and `:1110-1125` (`Operation::PWrite`) tag `Result::PRead`/`Result::PWrite`, with a REFERENCE-QUIRK PORT NOTE (which cites older reference lines).
+- parity row(s):   none; inventory M79.
+- test:            n/a (record only).
+- proposed fix:    Tag the four sites `.{ .pread = err }` (:657, :665) and `.{ .pwrite = err }` (:701, :709). Regression test: on epoll with `Loop.init(.{})` (no thread pool), call `File.pread` and expect the callback to receive `error.ThreadPoolRequired` rather than a panic.
+- upstream status: not reported
+
+### UD51 — libxev dynamic `backend` doc says "first candidate" but the code defaults to the last
+- kind:            latent (doc)
+- upstream project: libxev
+- severity:        low
+- reference:       libxev (pin as UD46) `src/dynamic.zig:25-30` (doc: "The backend to use defaults to the first candidate backend and DOES NOT test that it is available") vs :91 `pub var backend: Backend = subset(bes[bes.len - 1]);`; the zero values of `DynamicCompletion` (:251-255) and `DynamicWriteQueue` (:377-381) also use the last candidate
+- defect:          On Linux (`{ io_uring, epoll }`) the default before `detect()`/`prefer()` is epoll, not io_uring as documented. The code is internally consistent; only the comment is wrong.
+- ReleaseSafe:     none; a reader who skips `detect()` expecting io_uring gets epoll.
+- ReleaseFast:     same.
+- reachability:    none (documentation).
+- port handling:   faithful: `crates/rustty-xev/src/dynamic.rs:139-149` (`BACKEND_DEFAULT = CANDIDATES[len-1]`, REFERENCE QUIRK note).
+- parity row(s):   none; inventory M80.
+- test:            n/a.
+- proposed fix:    Change the comment to "defaults to the last candidate backend (the most portable fallback)". If "first" is the intent, change :91 together with the two zero-value initialisers.
+- upstream status: not reported
+
+### UD52 — libxev dynamic `queueWrite` hands the callback a `*Completion` that points into no Completion
+- kind:            latent (ub if dereferenced)
+- upstream project: libxev
+- severity:        low
+- reference:       libxev (pin as UD46) `src/watcher/stream.zig:688-760` (dynamic `Writeable.queueWrite`), `api_cb` at :709-733 with `@fieldParentPtr("value", @as(*xev.Completion.Union, @fieldParentPtr(@tagName(tag), c_inner)))` at :724-727; backend `WriteRequest` at :37-56 (the backend `queueWrite` at :781-876 uses `&req.completion`); dynamic `WriteRequest = Dynamic.Union(&.{"WriteRequest"})` at `src/dynamic.zig:69`
+- defect:          In the dynamic `queueWrite`, the backend completion `c_inner` is `&req.<tag>.completion`: the `completion` field of a backend `WriteRequest` stored inside the dynamic `xev.WriteRequest` union (:740-752, :801). The trampoline treats `c_inner` as the `<tag>` field of an `xev.Completion.Union` and then as the `value` field of an `xev.Completion`, but neither encloses it, so the `*xev.Completion` passed to the user's `cb` does not point at any `xev.Completion`. The other dynamic trampolines (for example :188-195) receive `&c.value.<tag>` from a real `xev.Completion` and are correct. Upstream's test already avoids the mismatch: `test "pty: queued writes"` checks `xev.WriteRequest.from(c_result.?) == &write_req[1]` only `if (!xev.dynamic)` (:1373-1377). **UNVERIFIED:** whether computing (not dereferencing) such a `@fieldParentPtr` is itself illegal behaviour under Zig's rules, and whether the dynamic-mode skip "this test fails on x86_64 with a strange error" (:1279-1281) is related.
+- ReleaseSafe:     none unless the callback dereferences `c`; then it reads unrelated memory with no safety check.
+- ReleaseFast:     same.
+- reachability:    none in Ghostty: its only dynamic `queueWrite` callback, `ttyWrite` (src/termio/Exec.zig:471-485), ignores that parameter. Any libxev user whose dynamic `queueWrite` callback touches `c`.
+- port handling:   faithful: `crates/rustty-xev/src/dynamic.rs:2264-2280` (REFERENCE QUIRK PORT NOTE plus a `# Safety` contract that `c` must not be dereferenced); the Rust layout makes the up-cast an identity cast, so no out-of-object pointer is computed.
+- parity row(s):   none; inventory M81.
+- test:            n/a (record only).
+- proposed fix:    Do not synthesise an `*xev.Completion` in the dynamic `queueWrite` trampoline: either give the dynamic callback a `*xev.WriteRequest` (recovered with `@fieldParentPtr("completion", c_inner)` then `@fieldParentPtr(@tagName(tag), …)`), or document `c` as invalid. Adding `from` on the dynamic `WriteRequest` would let the test drop its `if (!xev.dynamic)` guard.
+- upstream status: not reported
+
+### UD53 — libxev io_uring `.noop` add consumes an SQE without filling it
+- kind:            latent (ub if reached)
+- upstream project: libxev
+- severity:        low
+- reference:       libxev (pin as UD46) `src/backend/io_uring.zig:362-403` (`add_`: `self.ring.get_sqe()` at :371, then the `.noop` arm at :399-403 marks the completion dead and returns without preparing the SQE); CQE dispatch :193-197 (`orelse continue` on `user_data == 0`); `user_data` set only after a real prep at :564; default `Completion.op = .noop` (:621); Zig 0.16 std `os/linux/IoUring.zig:139-148` (`get_sqe`) and :221-236 (`flush_sq`)
+- defect:          `get_sqe` advances `sq.sqe_tail` and returns `sqes[tail & mask]` without clearing it, and `flush_sq` later submits every SQE between head and tail. So the `.noop` slot is submitted on the next flush with whatever it already holds. On a never-used slot that is presumably zeroed memory, so the kernel sees `IORING_OP_NOP` with `user_data = 0` and `tick` skips its CQE (:194); upstream's own test comments on this ("Due to implementation details, we need to have an ongoing completion…", :1158). Once the ring has cycled, the slot still holds a previous SQE's opcode, fd, buffer and `user_data`, so a `.noop` add resubmits a stale operation (a read into an old buffer, or a `close` of a possibly reused fd number) whose CQE invokes an old completion's callback again. **UNVERIFIED:** not executed; the "fresh SQE memory is zeroed" premise was not checked in kernel source.
+- ReleaseSafe:     undefined behaviour after ring wrap (a stale operation re-executed; a callback on a dead or freed completion); no Zig safety check fires.
+- ReleaseFast:     same.
+- reachability:    libxev's own `test "io_uring: default completion"` (:1152-1180), on a fresh ring. No Ghostty caller adds a `.noop` completion.
+- port handling:   faithful: `crates/rustty-xev/src/io_uring.rs:1644-1672` (REFERENCE QUIRK PORT NOTE with the stale-slot caveat); CQE skip note at :1415-1417.
+- parity row(s):   none; inventory M82.
+- test:            n/a (record only).
+- proposed fix:    Handle `.noop` before `get_sqe`: mark it dead and return without touching the ring; or, if a posted CQE is wanted, call `sqe.prep_nop()` (Zig 0.16 `os/linux/io_uring_sqe.zig:23`) and set `sqe.user_data = 0` explicitly.
+- upstream status: not reported
+
+### UD54 — libxev `sendmsg` with the documented optional `buffer` panics with a TODO
+- kind:            latent (crash with no caller)
+- upstream project: libxev
+- severity:        low
+- reference:       libxev (pin as UD46) `src/backend/io_uring.zig:493-495` and `src/backend/epoll.zig:749-751` (`if (v.buffer) |_| @panic("TODO: sendmsg with buffer");`); the field is documented at `io_uring.zig:971-976` ("Optionally, a write buffer can be specified and the given msghdr will be populated with information about this buffer.")
+- defect:          `Operation.sendmsg.buffer` is public and documented as supported, but both Linux backends panic when it is set. The `iov` scratch field meant to back it (:976) is never used.
+- ReleaseSafe:     panic.
+- ReleaseFast:     panic (`@panic` is unconditional).
+- reachability:    none today: libxev's `UDP` watcher builds `sendmsg` without `buffer` (`src/watcher/udp.zig:645-651`), and Ghostty does not use `sendmsg`. Only a direct libxev user setting the documented field.
+- port handling:   faithful: `crates/rustty-xev/src/io_uring.rs:1749-1757` and `crates/rustty-xev/src/epoll.rs:1156-1164` (`panic!("TODO: sendmsg with buffer")`).
+- parity row(s):   none; inventory M83.
+- test:            n/a.
+- proposed fix:    Implement it (fill `v.iov[0]` from the buffer and point the `msghdr`'s `iov`/`iovlen` at it before `prep_sendmsg`), or remove the `buffer` field and its doc comment.
+- upstream status: not reported
+
+### UD55 — highway 1.2.0 adds the `evex512` target attribute on every GCC ≥ 14 and Clang ≥ 18, which GCC 16 rejects
+- kind:            latent (build)
+- upstream project: google-highway (already fixed on highway master; the actionable change for Ghostty is its pinned version)
+- severity:        low
+- reference:       highway 1.2.0 (tarball `highway-66486a10623fa0d72fe91260f96c892e41aceb06`, pinned by ghostty 20abdb50a `pkg/highway/build.zig.zon:8-11`) `hwy/ops/set_macros-inl.h:144-148`:
+  ```c
+  #if HWY_COMPILER_GCC_ACTUAL >= 1400 || HWY_COMPILER_CLANG >= 1800
+  #define HWY_TARGET_STR_AVX3_VL512 ",evex512"
+  ```
+  appended to the AVX3, AVX3_DL, AVX3_ZEN4 and AVX3_SPR target strings (:154-190); the AVX10.2 strings at :186-194 also emit `no-evex512`.
+- defect:          The guard has no upper compiler bound, but the attribute has been removed from newer compilers. **Measured (task R13-R, macOS host):** Homebrew's `x86_64-w64-mingw32-gcc` **16.2.0** rejects both `__attribute__((target("avx512f,evex512")))` and `target("avx512f,no-evex512")` with "attribute 'target' argument 'evex512' is unknown" (and `'no-evex512'`). Zig 0.16.0's bundled Clang (`zig cc -target x86_64-linux-gnu`) accepts both, so Ghostty's default build is unaffected today. highway master already bounds the guard (fetched 2026-09-11): `HWY_HAVE_EVEX512` is 1 only for `1400 <= GCC < 1600` or `1800 <= Clang < 2200`, citing llvm/llvm-project#157034 ("evex512 has been removed from clang 22"). The rustty build audit first hit this cross-building the byte-identical vendored header with mingw GCC 16 (`docs/superpowers/specs/2026-08-25-build-system-gap-audit.md:663-671`). **UNVERIFIED:** the first GCC release that rejects the attribute (only 16.2.0 was tested), the highway commit and release that carry the fix, and whether that fix also bounds the `no-evex512` strings.
+- ReleaseSafe:     build failure of highway's x86 AVX3/AVX10 targets on an affected compiler (GCC 16, or Clang 22 per the upstream comment).
+- ReleaseFast:     same.
+- reachability:    build: an x86 target compiled with GCC 16 (mingw, or a future Linux CI image), or with a Zig whose bundled Clang is 22 or later.
+- port handling:   byte-faithful vendor: `crates-sys/highway-sys/vendor/hwy/ops/set_macros-inl.h`, identical to the pinned copy (`cmp`) and deliberately not patched (audit :669-671).
+- parity row(s):   none; inventory M85.
+- test:            n/a. Probe: two one-line C files with the `target` attributes above, compiled with mingw GCC 16.2.0 and `zig cc` (Zig 0.16.0).
+- proposed fix:    Upstream highway has the fix. For Ghostty: move `pkg/highway` to a highway release that includes the bounded `HWY_HAVE_EVEX512` guard (identify the commit first), which will be required before Ghostty's Zig moves to Clang 22.
+- upstream status: fixed upstream in highway master (commit not identified); Ghostty's pin (1.2.0) does not have it
+
 ## Candidates pending verification
 
 Assembled from this plan's progress notes on 2026-09-11. **Not verified** — do not cite as fact.
