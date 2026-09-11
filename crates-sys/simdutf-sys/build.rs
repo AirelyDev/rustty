@@ -54,6 +54,15 @@ fn main() {
 
     // if (target.result.abi == .msvc) { ... }  (pkg/simdutf/build.zig:55-63)
     //
+    // CAVEAT (task 15 review): this mirror is PARTIALLY INERT. The reference
+    // compiles with Zig's bundled clang even when `abi == .msvc`, so all four
+    // tokens are clang spellings. The `cc` crate on an MSVC host drives `cl.exe`,
+    // which REJECTS `-fno-autolink` and `-fno-stack-protector`; `flag_if_supported`
+    // then silently drops them. Only the two `/D` defines survive. Closing this
+    // row is parity of the DEFINES, not of all four flags — the `-fno-*` pair
+    // needs either a clang-cl path or the `/GS-` + `/Zl` MSVC equivalents, and
+    // there is no MSVC lane here to tell which is right.
+    //
     // PORT NOTE (S38-F5): the reference adds four MSVC-only flags inside the
     // same `no_libcxx` branch, and they were not mirrored. `_USE_STD_VECTOR_
     // ALGORITHMS=0` and the `_Avx2WmemEnabledWeakValue` alias exist because

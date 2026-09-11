@@ -419,8 +419,21 @@ mod tests {
             crate::sys::set(crate::sys::Option_::Log, std::ptr::null())
         });
 
+        // FLAKE FIX (task 15, N28): compare only the entries on THIS test's own
+        // log scope. The sys log callback is process-global, so a concurrently
+        // running test's diagnostic lands in whichever buffer is installed; a
+        // whole-buffer equality would then fail for a reason this test does not
+        // control. Nothing else in the binary emits on this scope, so no
+        // coverage is lost.
+        let captured: Vec<_> = CAPTURED
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, s, _)| s == super::LOG_SCOPE)
+            .cloned()
+            .collect();
         assert_eq!(
-            *CAPTURED.lock().unwrap(),
+            captured,
             vec![(
                 crate::sys::LogLevel::Warning,
                 "osc".to_string(),

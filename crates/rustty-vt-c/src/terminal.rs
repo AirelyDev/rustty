@@ -10689,15 +10689,24 @@ mod tests {
         });
 
         let all = log_capture::CAPTURED.lock().unwrap().clone();
-        // Every diagnostic — whoever emitted it — carries the reference's level.
-        for (level, _, _) in all.iter() {
-            assert_eq!(crate::sys::LogLevel::Warning, *level);
-        }
-        let captured: Vec<(&String, &String)> = all
+        // FLAKE FIX (task 15, N28): this loop used to run over EVERY captured
+        // entry. `reset_global()` serializes the tests that MUTATE the sys
+        // global, but nothing stops a concurrently running test from EMITTING a
+        // diagnostic while this callback is installed, so a `debug`-level line
+        // from elsewhere in the binary would fail this test for a reason it does
+        // not control. Assert over the entries THIS test caused — which is why
+        // the unique SEL two lines above exists. Latent here (0 failures in 15
+        // runs), live in the two siblings this matches byte for byte:
+        // `render::tests::render_invalid_selector_warns_through_the_scoped_log_sink`
+        // and `log_root_tests::root_wrapper_invalid_selectors_warn_through_the_c_log_callback`.
+        let mine: Vec<&(crate::sys::LogLevel, String, String)> = all
             .iter()
             .filter(|(_, _, m)| m.ends_with("=31338"))
-            .map(|(_, s, m)| (s, m))
             .collect();
+        for (level, _, _) in mine.iter() {
+            assert_eq!(crate::sys::LogLevel::Warning, *level);
+        }
+        let captured: Vec<(&String, &String)> = mine.iter().map(|(_, s, m)| (s, m)).collect();
         let expected = [
             (LOG_SCOPE, "terminal_set invalid option value=31338"),
             (LOG_SCOPE, "terminal_get invalid data value=31338"),

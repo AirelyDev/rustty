@@ -265,8 +265,7 @@ pub enum Health {
 mod health_tests {
     use super::Health;
     use rustty_lib::c_header::header_decls;
-    use rustty_lib::r#enum::{check_ghostty_henum, enum_type, EnumType};
-    use rustty_lib::target::Target;
+    use rustty_lib::r#enum::{check_ghostty_henum, enum_type_values, EnumType};
 
     /// The checked-in public C header, embedded at compile time.
     ///
@@ -320,14 +319,19 @@ mod health_tests {
     }
 
     /// PORT NOTE: models the reference `enum(c_int)` `Health` as an [`EnumType`]
-    /// (C target) so the `checkGhosttyHEnum` test can reflect over its keys and
-    /// backing int. The keys are the snake_case forms of the variants, in
-    /// declaration order: healthy, unhealthy.
+    /// so the `checkGhosttyHEnum` test can reflect over its keys and backing
+    /// int. The keys are the snake_case forms of the variants, in declaration
+    /// order; the VALUES are `Health::Variant as i64`, read out of the enum.
+    ///
+    /// PORT NOTE (N29): this used to call `enum_type(Target::C, ..)`, the
+    /// `lib.Enum` FACTORY model, which assigns each key its INDEX — so the
+    /// check compared the header to a hand-typed list's ORDER and could not
+    /// observe `Health` at all.
     fn health_enum_descriptor() -> EnumType {
-        // Touch `Health` so the enum participates like the reference's
-        // `refAllDeclsRecursive` reach (`Health::Healthy`/`Health::Unhealthy`).
-        let _ = (Health::Healthy, Health::Unhealthy);
-        enum_type(Target::C, &[Some("healthy"), Some("unhealthy")])
+        enum_type_values(&[
+            ("healthy", Health::Healthy as i64),
+            ("unhealthy", Health::Unhealthy as i64),
+        ])
     }
 
     // test "ghostty.h Health" {

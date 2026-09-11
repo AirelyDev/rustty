@@ -364,8 +364,7 @@ impl<'a> Action<'a> {
 mod tests {
     use super::{ActionKey, TargetKey};
     use rustty_lib::c_header::header_decls;
-    use rustty_lib::r#enum::{check_ghostty_henum, enum_type};
-    use rustty_lib::target::Target as EnumTarget;
+    use rustty_lib::r#enum::{check_ghostty_henum, enum_type_values};
 
     /// The checked-in public C header, embedded at compile time.
     ///
@@ -379,14 +378,17 @@ mod tests {
         "/../../include/rustty-embed.h"
     ));
 
+    /// PORT NOTE (N29): the `fields` VALUES are `<RustEnum>::Variant as i64`,
+    /// read out of the enum, not the key's index in a hand-typed list. Without
+    /// that the check compares the header to a literal and cannot observe the
+    /// port's enums at all.
     fn run_henum_src(
         src: &str,
         header_enum: &str,
         prefix: &str,
-        keys: &[&str],
+        fields: &[(&str, i64)],
     ) -> Result<(), String> {
-        let opts: Vec<Option<&str>> = keys.iter().map(|k| Some(*k)).collect();
-        let t = enum_type(EnumTarget::C, &opts);
+        let t = enum_type_values(fields);
         let decls = header_decls(src, header_enum);
         check_ghostty_henum(&t, prefix, |name| decls.get(name).copied())
     }
@@ -398,9 +400,18 @@ mod tests {
     /// `@import("ghostty.h")` is the real header.
     #[test]
     fn ghostty_h_probe_can_fail() {
-        let keys = ["class", "detect"];
-        let run =
-            |src: &str| run_henum_src(src, "rustty_ipc_target_tag_e", "RUSTTY_IPC_TARGET_", &keys);
+        let fields = [
+            ("class", TargetKey::Class as i64),
+            ("detect", TargetKey::Detect as i64),
+        ];
+        let run = |src: &str| {
+            run_henum_src(
+                src,
+                "rustty_ipc_target_tag_e",
+                "RUSTTY_IPC_TARGET_",
+                &fields,
+            )
+        };
         run(HEADER_SRC).unwrap();
 
         let dropped = HEADER_SRC.replace("  RUSTTY_IPC_TARGET_DETECT,\n", "");
@@ -429,7 +440,10 @@ mod tests {
             HEADER_SRC,
             "rustty_ipc_target_tag_e",
             "RUSTTY_IPC_TARGET_",
-            &["class", "detect"],
+            &[
+                ("class", TargetKey::Class as i64),
+                ("detect", TargetKey::Detect as i64),
+            ],
         )
         .unwrap();
     }
@@ -448,7 +462,14 @@ mod tests {
             HEADER_SRC,
             "rustty_ipc_action_tag_e",
             "RUSTTY_IPC_ACTION_",
-            &["new_window", "new_tab", "toggle_quick_terminal"],
+            &[
+                ("new_window", ActionKey::NewWindow as i64),
+                ("new_tab", ActionKey::NewTab as i64),
+                (
+                    "toggle_quick_terminal",
+                    ActionKey::ToggleQuickTerminal as i64,
+                ),
+            ],
         )
         .unwrap();
     }

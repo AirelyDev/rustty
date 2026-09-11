@@ -22,6 +22,14 @@
 use std::collections::HashMap;
 
 /// Strip `//` and `/* */` comments from a C fragment.
+///
+/// CAVEAT: bytes are pushed as `char` (`out.push(b[i] as char)`), i.e. each byte
+/// is treated as a Latin-1 code point. Every byte of every header this is used
+/// on is ASCII, where that is exact, but a non-ASCII byte would be re-encoded
+/// rather than preserved. It is a latent trap, not a live bug: the enum bodies
+/// this feeds are identifiers, digits and punctuation, and a non-ASCII
+/// enumerator would already fail `parse_header_enum`'s identifier check. If this
+/// ever needs to handle non-ASCII header text, operate on bytes throughout.
 pub fn strip_c_comments(src: &str) -> String {
     let b = src.as_bytes();
     let mut out = String::with_capacity(src.len());

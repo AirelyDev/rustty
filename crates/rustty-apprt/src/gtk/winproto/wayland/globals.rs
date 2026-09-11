@@ -404,17 +404,25 @@ impl Globals {
     /// derived from a binding that is going away. Note this is called on
     /// re-advertisement too (`Globals.zig:166`), which is why it only resets
     /// derived state and never touches the proxy fields.
+    ///
+    /// PORT NOTE (S61-F2): this used to carry a second `Tag::ExtBackgroundEffect`
+    /// arm clearing `state.bg_blur_supported`, labelled in-place as a deliberate
+    /// DIVERGENCE. The reference's `onGlobalRemoved` has only the
+    /// `.kde_output_order` arm and an `else => {}`: a withdrawn
+    /// `ext_background_effect` manager leaves `bg_effect_capabilities` exactly
+    /// as it was. R1 fidelity — the extra arm is removed.
+    ///
+    /// With one arm left this is written as `if let`, not a one-armed `match`:
+    /// clippy's `single_match` is a hard error under the Linux lane's
+    /// warnings-as-errors, and it is the same control flow either way. The
+    /// reference's `switch` shape is preserved in the comment below.
     fn on_global_removed(&mut self, tag: Tag) {
-        match tag {
-            Tag::KdeOutputOrder => self.state.reset_output_order(),
-            // PORT NOTE (S61-F2): this used to carry a `Tag::ExtBackgroundEffect`
-            // arm clearing `state.bg_blur_supported`, labelled in-place as a
-            // deliberate DIVERGENCE. The reference's `onGlobalRemoved` has only
-            // the `.kde_output_order` arm and an `else => {}`: a withdrawn
-            // `ext_background_effect` manager leaves `bg_effect_capabilities`
-            // exactly as it was. R1 fidelity — the extra arm is removed.
-            // `else => {}`
-            _ => {}
+        // switch (tag) {
+        //     .kde_output_order => self.state.resetOutputOrder(self.alloc),
+        //     else => {},
+        // }
+        if let Tag::KdeOutputOrder = tag {
+            self.state.reset_output_order();
         }
     }
 

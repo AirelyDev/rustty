@@ -119,10 +119,10 @@ impl Shape {
 
 #[cfg(test)]
 mod shape_tests {
+    use super::Shape;
     use crate::options as build_options;
     use rustty_lib::c_header::{header_decls as parse_header_decls, parse_header_enum};
-    use rustty_lib::r#enum::{check_ghostty_henum, enum_type, EnumType};
-    use rustty_lib::target::Target;
+    use rustty_lib::r#enum::{check_ghostty_henum, enum_type_values, EnumType};
     use std::collections::HashMap;
 
     /// The `@hasDecl`/`@field` stand-in: the header's declarations as a lookup.
@@ -157,45 +157,47 @@ mod shape_tests {
     /// backing int. The keys are the snake_case forms of the variants, in
     /// declaration order, matching `@typeInfo(Shape).@"enum".fields`.
     fn enum_descriptor() -> EnumType {
-        enum_type(
-            Target::C,
-            &[
-                Some("default"),
-                Some("context_menu"),
-                Some("help"),
-                Some("pointer"),
-                Some("progress"),
-                Some("wait"),
-                Some("cell"),
-                Some("crosshair"),
-                Some("text"),
-                Some("vertical_text"),
-                Some("alias"),
-                Some("copy"),
-                Some("move"),
-                Some("no_drop"),
-                Some("not_allowed"),
-                Some("grab"),
-                Some("grabbing"),
-                Some("all_scroll"),
-                Some("col_resize"),
-                Some("row_resize"),
-                Some("n_resize"),
-                Some("e_resize"),
-                Some("s_resize"),
-                Some("w_resize"),
-                Some("ne_resize"),
-                Some("nw_resize"),
-                Some("se_resize"),
-                Some("sw_resize"),
-                Some("ew_resize"),
-                Some("ns_resize"),
-                Some("nesw_resize"),
-                Some("nwse_resize"),
-                Some("zoom_in"),
-                Some("zoom_out"),
-            ],
-        )
+        // PORT NOTE (N29): the VALUES are `Shape::Variant as i64`, read out of
+        // the `#[repr(i32)]` enum. This used to call `enum_type(Target::C, ..)`,
+        // the `lib.Enum` FACTORY model, which assigns each key its INDEX — so
+        // the check compared the header to a hand-typed list's ORDER and could
+        // not observe `Shape` at all.
+        enum_type_values(&[
+            ("default", Shape::Default as i64),
+            ("context_menu", Shape::ContextMenu as i64),
+            ("help", Shape::Help as i64),
+            ("pointer", Shape::Pointer as i64),
+            ("progress", Shape::Progress as i64),
+            ("wait", Shape::Wait as i64),
+            ("cell", Shape::Cell as i64),
+            ("crosshair", Shape::Crosshair as i64),
+            ("text", Shape::Text as i64),
+            ("vertical_text", Shape::VerticalText as i64),
+            ("alias", Shape::Alias as i64),
+            ("copy", Shape::Copy as i64),
+            ("move", Shape::Move as i64),
+            ("no_drop", Shape::NoDrop as i64),
+            ("not_allowed", Shape::NotAllowed as i64),
+            ("grab", Shape::Grab as i64),
+            ("grabbing", Shape::Grabbing as i64),
+            ("all_scroll", Shape::AllScroll as i64),
+            ("col_resize", Shape::ColResize as i64),
+            ("row_resize", Shape::RowResize as i64),
+            ("n_resize", Shape::NResize as i64),
+            ("e_resize", Shape::EResize as i64),
+            ("s_resize", Shape::SResize as i64),
+            ("w_resize", Shape::WResize as i64),
+            ("ne_resize", Shape::NeResize as i64),
+            ("nw_resize", Shape::NwResize as i64),
+            ("se_resize", Shape::SeResize as i64),
+            ("sw_resize", Shape::SwResize as i64),
+            ("ew_resize", Shape::EwResize as i64),
+            ("ns_resize", Shape::NsResize as i64),
+            ("nesw_resize", Shape::NeswResize as i64),
+            ("nwse_resize", Shape::NwseResize as i64),
+            ("zoom_in", Shape::ZoomIn as i64),
+            ("zoom_out", Shape::ZoomOut as i64),
+        ])
     }
 
     #[test]

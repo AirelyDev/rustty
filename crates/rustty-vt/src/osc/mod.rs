@@ -376,10 +376,10 @@ impl ProgressReportState {
 
 #[cfg(test)]
 mod tests {
+    use super::ProgressReportState;
     use crate::options as build_options;
     use rustty_lib::c_header::header_decls;
-    use rustty_lib::r#enum::{check_ghostty_henum, enum_type, EnumType};
-    use rustty_lib::target::Target;
+    use rustty_lib::r#enum::{check_ghostty_henum, enum_type_values, EnumType};
 
     /// The checked-in public C header, embedded at compile time.
     ///
@@ -438,17 +438,24 @@ mod tests {
     /// variants, in declaration order, matching
     /// `@typeInfo(State).@"enum".fields`: remove, set, error, indeterminate,
     /// pause.
+    ///
+    /// PORT NOTE (N29): the VALUES come from
+    /// `ProgressReportState::int_from_enum()` — the port's model of
+    /// `@intFromEnum` for this type, and the same function `cval()` ships
+    /// across the C ABI. This used to call `enum_type(Target::C, ..)`, the `lib.Enum`
+    /// FACTORY model, which assigns each key its INDEX — so the check compared
+    /// the header to a hand-typed list's ORDER and could not observe `State`.
     fn state_enum_descriptor() -> EnumType {
-        enum_type(
-            Target::C,
-            &[
-                Some("remove"),
-                Some("set"),
-                Some("error"),
-                Some("indeterminate"),
-                Some("pause"),
-            ],
-        )
+        enum_type_values(&[
+            ("remove", ProgressReportState::Remove.int_from_enum() as i64),
+            ("set", ProgressReportState::Set.int_from_enum() as i64),
+            ("error", ProgressReportState::Error.int_from_enum() as i64),
+            (
+                "indeterminate",
+                ProgressReportState::Indeterminate.int_from_enum() as i64,
+            ),
+            ("pause", ProgressReportState::Pause.int_from_enum() as i64),
+        ])
     }
 
     // test "ghostty.h Command.ProgressReport.State" {

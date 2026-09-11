@@ -8,8 +8,7 @@
 //! commented-out code at their type sites in `action.rs`, NOT counted toward G1.
 
 use rustty_lib::c_header::header_decls;
-use rustty_lib::r#enum::{check_ghostty_henum, enum_type};
-use rustty_lib::target::Target as EnumTarget;
+use rustty_lib::r#enum::{check_ghostty_henum, enum_type_values};
 
 use crate::action::*;
 
@@ -27,25 +26,49 @@ const HEADER_SRC: &str = include_str!(concat!(
     "/../../include/rustty-embed.h"
 ));
 
-/// PORT NOTE: the shared `checkGhosttyHEnum` driver. Models the reference
-/// `enum(c_int)` as an [`rustty_lib::r#enum::EnumType`] (C target) built from the
-/// snake_case field names in declaration order, then reflects over it exactly
-/// like `lib.checkGhosttyHEnum`: the C declarations come from `rustty-embed.h`'s
-/// `header_enum` block (prefix retargeted `GHOSTTY_` -> `RUSTTY_` per R2).
+/// PORT NOTE: the shared `checkGhosttyHEnum` driver. The reference reflects
+/// over the enum type itself (`@typeInfo(T).@"enum".fields`), so the keys AND
+/// their backing ints both come from `T`. Rust has no such reflection, so
+/// [`henum!`] below writes the pairing once — `("quit", ActionKey::Quit)` — and
+/// the VALUE half is `<ActionKey>::Quit as i64`, read out of the enum. The
+/// header supplies the C side. Every link is therefore a real comparison:
+/// header <-> Rust enum discriminant.
 ///
 /// FIX (S45-F1): the `c` closure previously returned each field's own value out
 /// of the descriptor being checked, so all 17 tests below compared the enum to
-/// itself and could not fail. `run_henum_src` is the same driver parameterised
-/// on the header TEXT so the `*_probe_can_fail` self-tests can perturb it.
-fn run_henum(header_enum: &str, prefix: &str, keys: &[&str]) {
-    run_henum_src(HEADER_SRC, header_enum, prefix, keys).unwrap();
+/// itself and could not fail.
+///
+/// FIX (N29): the descriptor was then built by `enum_type`, the `lib.Enum`
+/// FACTORY model, which assigns each key its INDEX in the key list. That made
+/// the check `header <-> position in a hand-typed literal`, which still could
+/// not observe the Rust enums — transposing two `ActionKey` variants left all
+/// 27 tests and all seven binary-interface gates green. The values now come
+/// from the enum.
+fn run_henum(header_enum: &str, prefix: &str, fields: &[(&str, i64)]) {
+    run_henum_src(HEADER_SRC, header_enum, prefix, fields).unwrap();
 }
 
-fn run_henum_src(src: &str, header_enum: &str, prefix: &str, keys: &[&str]) -> Result<(), String> {
-    let opts: Vec<Option<&str>> = keys.iter().map(|k| Some(*k)).collect();
-    let t = enum_type(EnumTarget::C, &opts);
+fn run_henum_src(
+    src: &str,
+    header_enum: &str,
+    prefix: &str,
+    fields: &[(&str, i64)],
+) -> Result<(), String> {
+    let t = enum_type_values(fields);
     let decls = header_decls(src, header_enum);
     check_ghostty_henum(&t, prefix, |name| decls.get(name).copied())
+}
+
+/// `("zig field name", RustEnum::Variant)` -> `("zig field name", <value>)`.
+///
+/// The variant is named, so the value is READ OUT OF THE ENUM rather than
+/// re-derived from the list's order. A reordered enum, a variant given an
+/// explicit discriminant, or an inserted variant all change what this expands
+/// to, and the header comparison then fails.
+macro_rules! henum {
+    ($header:literal, $prefix:literal, $E:ty, [ $( ($key:literal, $V:ident) ),* $(,)? ]) => {
+        run_henum($header, $prefix, &[ $( ($key, <$E>::$V as i64) ),* ])
+    };
 }
 
 /// Self-check that the probe above can actually FAIL — i.e. that it reads the
@@ -56,8 +79,11 @@ fn run_henum_src(src: &str, header_enum: &str, prefix: &str, keys: &[&str]) -> R
 /// `@import("ghostty.h")` is the real header.
 #[test]
 fn ghostty_h_probe_can_fail() {
-    let keys = ["app", "surface"];
-    let run = |src: &str| run_henum_src(src, "rustty_target_tag_e", "RUSTTY_TARGET_", &keys);
+    let fields = [
+        ("app", TargetKey::App as i64),
+        ("surface", TargetKey::Surface as i64),
+    ];
+    let run = |src: &str| run_henum_src(src, "rustty_target_tag_e", "RUSTTY_TARGET_", &fields);
 
     // Baseline: the real header passes.
     run(HEADER_SRC).unwrap();
@@ -84,7 +110,12 @@ fn ghostty_h_probe_can_fail() {
 #[test]
 fn ghostty_h_target_key() {
     let _ = (TargetKey::App, TargetKey::Surface);
-    run_henum("rustty_target_tag_e", "RUSTTY_TARGET_", &["app", "surface"]);
+    henum!(
+        "rustty_target_tag_e",
+        "RUSTTY_TARGET_",
+        TargetKey,
+        [("app", App), ("surface", Surface),]
+    );
 }
 
 // test "ghostty.h Action.Key" {
@@ -93,80 +124,81 @@ fn ghostty_h_target_key() {
 #[test]
 fn ghostty_h_action_key() {
     let _ = ActionKey::Quit;
-    run_henum(
+    henum!(
         "rustty_action_tag_e",
         "RUSTTY_ACTION_",
-        &[
-            "quit",
-            "new_window",
-            "new_tab",
-            "close_tab",
-            "new_split",
-            "close_all_windows",
-            "toggle_maximize",
-            "toggle_fullscreen",
-            "toggle_tab_overview",
-            "toggle_window_decorations",
-            "toggle_quick_terminal",
-            "toggle_command_palette",
-            "toggle_visibility",
-            "toggle_background_opacity",
-            "move_tab",
-            "goto_tab",
-            "goto_split",
-            "goto_window",
-            "resize_split",
-            "equalize_splits",
-            "toggle_split_zoom",
-            "present_terminal",
-            "size_limit",
-            "reset_window_size",
-            "initial_size",
-            "cell_size",
-            "scrollbar",
-            "render",
-            "inspector",
-            "show_gtk_inspector",
-            "render_inspector",
-            "export_terminal_io",
-            "desktop_notification",
-            "set_title",
-            "set_tab_title",
-            "set_window_title",
-            "prompt_title",
-            "pwd",
-            "mouse_shape",
-            "mouse_visibility",
-            "mouse_over_link",
-            "renderer_health",
-            "open_config",
-            "quit_timer",
-            "float_window",
-            "secure_input",
-            "key_sequence",
-            "key_table",
-            "color_change",
-            "reload_config",
-            "config_change",
-            "close_window",
-            "ring_bell",
-            "selection_changed",
-            "undo",
-            "redo",
-            "check_for_updates",
-            "open_url",
-            "show_child_exited",
-            "progress_report",
-            "show_on_screen_keyboard",
-            "command_finished",
-            "start_search",
-            "end_search",
-            "search_total",
-            "search_selected",
-            "readonly",
-            "copy_title_to_clipboard",
-            "move_tab_to_new_window",
-        ],
+        ActionKey,
+        [
+            ("quit", Quit),
+            ("new_window", NewWindow),
+            ("new_tab", NewTab),
+            ("close_tab", CloseTab),
+            ("new_split", NewSplit),
+            ("close_all_windows", CloseAllWindows),
+            ("toggle_maximize", ToggleMaximize),
+            ("toggle_fullscreen", ToggleFullscreen),
+            ("toggle_tab_overview", ToggleTabOverview),
+            ("toggle_window_decorations", ToggleWindowDecorations),
+            ("toggle_quick_terminal", ToggleQuickTerminal),
+            ("toggle_command_palette", ToggleCommandPalette),
+            ("toggle_visibility", ToggleVisibility),
+            ("toggle_background_opacity", ToggleBackgroundOpacity),
+            ("move_tab", MoveTab),
+            ("goto_tab", GotoTab),
+            ("goto_split", GotoSplit),
+            ("goto_window", GotoWindow),
+            ("resize_split", ResizeSplit),
+            ("equalize_splits", EqualizeSplits),
+            ("toggle_split_zoom", ToggleSplitZoom),
+            ("present_terminal", PresentTerminal),
+            ("size_limit", SizeLimit),
+            ("reset_window_size", ResetWindowSize),
+            ("initial_size", InitialSize),
+            ("cell_size", CellSize),
+            ("scrollbar", Scrollbar),
+            ("render", Render),
+            ("inspector", Inspector),
+            ("show_gtk_inspector", ShowGtkInspector),
+            ("render_inspector", RenderInspector),
+            ("export_terminal_io", ExportTerminalIO),
+            ("desktop_notification", DesktopNotification),
+            ("set_title", SetTitle),
+            ("set_tab_title", SetTabTitle),
+            ("set_window_title", SetWindowTitle),
+            ("prompt_title", PromptTitle),
+            ("pwd", Pwd),
+            ("mouse_shape", MouseShape),
+            ("mouse_visibility", MouseVisibility),
+            ("mouse_over_link", MouseOverLink),
+            ("renderer_health", RendererHealth),
+            ("open_config", OpenConfig),
+            ("quit_timer", QuitTimer),
+            ("float_window", FloatWindow),
+            ("secure_input", SecureInput),
+            ("key_sequence", KeySequence),
+            ("key_table", KeyTable),
+            ("color_change", ColorChange),
+            ("reload_config", ReloadConfig),
+            ("config_change", ConfigChange),
+            ("close_window", CloseWindow),
+            ("ring_bell", RingBell),
+            ("selection_changed", SelectionChanged),
+            ("undo", Undo),
+            ("redo", Redo),
+            ("check_for_updates", CheckForUpdates),
+            ("open_url", OpenUrl),
+            ("show_child_exited", ShowChildExited),
+            ("progress_report", ProgressReport),
+            ("show_on_screen_keyboard", ShowOnScreenKeyboard),
+            ("command_finished", CommandFinished),
+            ("start_search", StartSearch),
+            ("end_search", EndSearch),
+            ("search_total", SearchTotal),
+            ("search_selected", SearchSelected),
+            ("readonly", Readonly),
+            ("copy_title_to_clipboard", CopyTitleToClipboard),
+            ("move_tab_to_new_window", MoveTabToNewWindow),
+        ]
     );
 }
 
@@ -176,10 +208,11 @@ fn ghostty_h_action_key() {
 #[test]
 fn ghostty_h_split_direction() {
     let _ = SplitDirection::Right;
-    run_henum(
+    henum!(
         "rustty_action_split_direction_e",
         "RUSTTY_SPLIT_DIRECTION_",
-        &["right", "down", "left", "up"],
+        SplitDirection,
+        [("right", Right), ("down", Down), ("left", Left), ("up", Up),]
     );
 }
 
@@ -189,10 +222,18 @@ fn ghostty_h_split_direction() {
 #[test]
 fn ghostty_h_goto_split() {
     let _ = GotoSplit::Previous;
-    run_henum(
+    henum!(
         "rustty_action_goto_split_e",
         "RUSTTY_GOTO_SPLIT_",
-        &["previous", "next", "up", "left", "down", "right"],
+        GotoSplit,
+        [
+            ("previous", Previous),
+            ("next", Next),
+            ("up", Up),
+            ("left", Left),
+            ("down", Down),
+            ("right", Right),
+        ]
     );
 }
 
@@ -202,10 +243,11 @@ fn ghostty_h_goto_split() {
 #[test]
 fn ghostty_h_goto_window() {
     let _ = GotoWindow::Previous;
-    run_henum(
+    henum!(
         "rustty_action_goto_window_e",
         "RUSTTY_GOTO_WINDOW_",
-        &["previous", "next"],
+        GotoWindow,
+        [("previous", Previous), ("next", Next),]
     );
 }
 
@@ -215,10 +257,11 @@ fn ghostty_h_goto_window() {
 #[test]
 fn ghostty_h_resize_split_direction() {
     let _ = ResizeSplitDirection::Up;
-    run_henum(
+    henum!(
         "rustty_action_resize_split_direction_e",
         "RUSTTY_RESIZE_SPLIT_",
-        &["up", "down", "left", "right"],
+        ResizeSplitDirection,
+        [("up", Up), ("down", Down), ("left", Left), ("right", Right),]
     );
 }
 
@@ -228,15 +271,16 @@ fn ghostty_h_resize_split_direction() {
 #[test]
 fn ghostty_h_fullscreen() {
     let _ = Fullscreen::Native;
-    run_henum(
+    henum!(
         "rustty_action_fullscreen_e",
         "RUSTTY_FULLSCREEN_",
-        &[
-            "native",
-            "macos_non_native",
-            "macos_non_native_visible_menu",
-            "macos_non_native_padded_notch",
-        ],
+        Fullscreen,
+        [
+            ("native", Native),
+            ("macos_non_native", MacosNonNative),
+            ("macos_non_native_visible_menu", MacosNonNativeVisibleMenu),
+            ("macos_non_native_padded_notch", MacosNonNativePaddedNotch),
+        ]
     );
 }
 
@@ -246,10 +290,11 @@ fn ghostty_h_fullscreen() {
 #[test]
 fn ghostty_h_float_window() {
     let _ = FloatWindow::On;
-    run_henum(
+    henum!(
         "rustty_action_float_window_e",
         "RUSTTY_FLOAT_WINDOW_",
-        &["on", "off", "toggle"],
+        FloatWindow,
+        [("on", On), ("off", Off), ("toggle", Toggle),]
     );
 }
 
@@ -259,10 +304,11 @@ fn ghostty_h_float_window() {
 #[test]
 fn ghostty_h_secure_input() {
     let _ = SecureInput::On;
-    run_henum(
+    henum!(
         "rustty_action_secure_input_e",
         "RUSTTY_SECURE_INPUT_",
-        &["on", "off", "toggle"],
+        SecureInput,
+        [("on", On), ("off", Off), ("toggle", Toggle),]
     );
 }
 
@@ -272,10 +318,11 @@ fn ghostty_h_secure_input() {
 #[test]
 fn ghostty_h_inspector() {
     let _ = Inspector::Toggle;
-    run_henum(
+    henum!(
         "rustty_action_inspector_e",
         "RUSTTY_INSPECTOR_",
-        &["toggle", "show", "hide"],
+        Inspector,
+        [("toggle", Toggle), ("show", Show), ("hide", Hide),]
     );
 }
 
@@ -285,10 +332,11 @@ fn ghostty_h_inspector() {
 #[test]
 fn ghostty_h_quit_timer() {
     let _ = QuitTimer::Start;
-    run_henum(
+    henum!(
         "rustty_action_quit_timer_e",
         "RUSTTY_QUIT_TIMER_",
-        &["start", "stop"],
+        QuitTimer,
+        [("start", Start), ("stop", Stop),]
     );
 }
 
@@ -298,10 +346,11 @@ fn ghostty_h_quit_timer() {
 #[test]
 fn ghostty_h_readonly() {
     let _ = Readonly::Off;
-    run_henum(
+    henum!(
         "rustty_action_readonly_e",
         "RUSTTY_READONLY_",
-        &["off", "on"],
+        Readonly,
+        [("off", Off), ("on", On),]
     );
 }
 
@@ -311,10 +360,11 @@ fn ghostty_h_readonly() {
 #[test]
 fn ghostty_h_mouse_visibility() {
     let _ = MouseVisibility::Visible;
-    run_henum(
+    henum!(
         "rustty_action_mouse_visibility_e",
         "RUSTTY_MOUSE_",
-        &["visible", "hidden"],
+        MouseVisibility,
+        [("visible", Visible), ("hidden", Hidden),]
     );
 }
 
@@ -324,10 +374,11 @@ fn ghostty_h_mouse_visibility() {
 #[test]
 fn ghostty_h_prompt_title() {
     let _ = PromptTitle::Surface;
-    run_henum(
+    henum!(
         "rustty_action_prompt_title_e",
         "RUSTTY_PROMPT_TITLE_",
-        &["surface", "tab", "window"],
+        PromptTitle,
+        [("surface", Surface), ("tab", Tab), ("window", Window),]
     );
 }
 
@@ -337,10 +388,16 @@ fn ghostty_h_prompt_title() {
 #[test]
 fn ghostty_h_open_url_kind() {
     let _ = OpenUrlKind::Unknown;
-    run_henum(
+    henum!(
         "rustty_action_open_url_kind_e",
         "RUSTTY_ACTION_OPEN_URL_KIND_",
-        &["unknown", "text", "html", "osc8"],
+        OpenUrlKind,
+        [
+            ("unknown", Unknown),
+            ("text", Text),
+            ("html", Html),
+            ("osc8", Osc8),
+        ]
     );
 }
 
@@ -350,10 +407,11 @@ fn ghostty_h_open_url_kind() {
 #[test]
 fn ghostty_h_close_tab_mode() {
     let _ = CloseTabMode::This;
-    run_henum(
+    henum!(
         "rustty_action_close_tab_mode_e",
         "RUSTTY_ACTION_CLOSE_TAB_MODE_",
-        &["this", "other", "right"],
+        CloseTabMode,
+        [("this", This), ("other", Other), ("right", Right),]
     );
 }
 
@@ -363,10 +421,11 @@ fn ghostty_h_close_tab_mode() {
 #[test]
 fn ghostty_h_open_config() {
     let _ = OpenConfig::OsOpen;
-    run_henum(
+    henum!(
         "rustty_action_open_config_e",
         "RUSTTY_ACTION_OPEN_CONFIG_",
-        &["os_open", "new_window"],
+        OpenConfig,
+        [("os_open", OsOpen), ("new_window", NewWindow),]
     );
 }
 

@@ -109,6 +109,44 @@ pub fn enum_type(target: Target, keys: &[Option<&str>]) -> EnumType {
     }
 }
 
+/// Build an [`EnumType`] from an EXISTING enum's `(field name, @intFromEnum)`
+/// pairs, rather than from `lib.Enum`'s key list.
+///
+/// PORT NOTE: `checkGhosttyHEnum(T, prefix)` reflects over whatever `T` is. Most
+/// of its call sites pass a HAND-WRITTEN `enum(c_int)` (`apprt.Action.Key`,
+/// `apprt.ipc.Target.Key`, `renderer.Health`, `terminal.MouseShape`, …), not a
+/// type produced by `lib.Enum` — so `@typeInfo(T).@"enum".fields` yields the
+/// enum's OWN declared values. [`enum_type`] models the `lib.Enum` FACTORY,
+/// where each value is its index in the key list; that is the wrong model for a
+/// reflected enum, because it re-derives the values instead of reading them.
+///
+/// This constructor is the reflected case: the caller supplies each field's
+/// actual `<RustEnum>::<Variant> as i64`, so `check_ghostty_henum` compares the
+/// header against the Rust enum's real discriminants. Without it the check
+/// could not observe the enum at all — a transposition of two variants left
+/// every `ghostty_h_*` test green (finding N29).
+///
+/// Panics on a negative discriminant: [`EnumType`] stores `usize` values, and
+/// no reflected call site in this port has one (the reference's two
+/// negative-valued enums, `GotoTab` and `ColorKind`, are exactly the two whose
+/// `checkGhosttyHEnum` tests upstream has commented out).
+pub fn enum_type_values(fields: &[(&str, i64)]) -> EnumType {
+    let mut out: Vec<(String, usize)> = Vec::with_capacity(fields.len());
+    for (name, value) in fields {
+        assert!(
+            *value >= 0,
+            "enum_type_values: negative discriminant {} for `{}` — EnumType stores usize",
+            value,
+            name
+        );
+        out.push(((*name).to_string(), *value as usize));
+    }
+    EnumType {
+        tag_type: TagType::CInt,
+        fields: out,
+    }
+}
+
 /// Verify that for every key in enum T, there is a matching declaration in
 /// `rustty.h` with the correct value. This should only ever be called inside a `test`
 /// because the `rustty.h` module is only available then.

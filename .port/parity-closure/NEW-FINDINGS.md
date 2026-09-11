@@ -1478,10 +1478,16 @@ here the ledger does not contradict the waiver, it *dates* it.
   `_Static_assert((int)<header enumerator i> == <rust variant i's discriminant>)` by INDEX.
   It is genuinely independent — clang evaluates the header's own enumerators — and it does
   catch a value skew and a count skew. But because the pairing is positional and never
-  compares the two NAMES, transposing two enumerators in the header is invisible: each
-  assert is re-aimed at the enumerator that now occupies that slot, and both still hold.
-  That is precisely the drift `checkGhosttyHEnum` catches, because the reference pairs by
-  NAME (`<prefix><KEY>` uppercased).
+  compares the two NAMES, a transposition can be invisible: the assert is re-aimed at
+  whichever enumerator now occupies that slot.
+
+  **Correction (task 15 fix round 1, from the reviewer): this is confined to
+  IMPLICIT-value enums.** Transposing two enumerators that carry EXPLICIT values moves the
+  values with the names, so slot `i` now holds a different number and the assert fails —
+  those enums are caught. It is the implicit-value case that is blind: with bare
+  enumerators the value is the POSITION, so a transposition renumbers both names in place
+  and every positional assert still holds. Most of the curated headers' enums are bare,
+  which is why this matters, but the entry previously implied all of them were exposed.
 - **why it is positional today**: the header's enumerator names and the Rust variant names
   differ in shape, so a name pairing needs the same `<prefix><UPPER_SNAKE>` derivation
   `check_ghostty_henum` uses. The mapping doc-line convention the checker already relies on
@@ -1537,3 +1543,52 @@ here the ledger does not contradict the waiver, it *dates* it.
   assertion over shared process-global state must be scoped to the state the test itself
   produced.**
 - **state**: **CLOSED by task 15** in both places.
+
+## N29 — the `checkGhosttyHEnum` ports bound header ↔ a hand-typed literal, and never reached the Rust enums
+
+- **id**: N29 (next free id checked 2026-09-10 against `NEW-FINDINGS.md` headings and a
+  workspace grep for `\bN[0-9]+\b`: N1-N28 taken, N26-N28 by this same task.)
+- **severity**: **high** (22 C-ABI-sync tests that could not observe the thing they name;
+  the same defect class as `S45-F1`, one link further along the chain)
+- **kind**: weakened-assertion / verification instrument
+- **rustty**: `crates/rustty-apprt-api/src/action_tests.rs`,
+  `crates/rustty-apprt-api/src/ipc.rs`, `crates/rustty-renderer/src/lib.rs`,
+  `crates/rustty-vt/src/osc/mod.rs`, `crates/rustty-vt/src/mouse.rs`.
+- **description**: `S45-F1`'s fix made the `ghostty_h_*` tests read the shipped C header
+  instead of the descriptor under test. But the descriptor was still built by
+  `enum_type(Target::C, &keys)` — the `lib.Enum` **factory** model, which assigns each key
+  its INDEX in the key list. The key list is a hand-typed literal. So the chain was:
+
+  ```
+  header  <->  position in a hand-typed literal        (this test)
+  header  <->  reference                                (check_rustty_h_abi)
+  literal <->  the port's actual Rust enum              NOTHING
+  ```
+
+  The `let _ = (ActionKey::Quit, ..)` line at the top of each test is a token touch for
+  `refAllDeclsRecursive` reach — it names the enum, it does not compare anything to it.
+
+  **Proven by the reviewer**: transposing `NewWindow` and `NewTab` in
+  `crates/rustty-apprt-api/src/action.rs:412` — a live `#[repr(i32)]` enum whose own doc
+  says "Sync with: rustty_action_tag_e", so a genuine C-ABI tag break — left **27 tests
+  passing and all seven binary-interface gates green**.
+
+  The reference has no such gap: `checkGhosttyHEnum(T, prefix)` reflects over `T`, so both
+  the names and the values come from the enum itself. The factory model was simply the
+  wrong model for a reflected enum — most `checkGhosttyHEnum` call sites pass a
+  hand-written `enum(c_int)`, not a `lib.Enum` product.
+- **fix**: new `rustty_lib::r#enum::enum_type_values(&[(name, value)])` — the reflected
+  case — and every call site now supplies `<RustEnum>::Variant as i64` for the value half
+  (`ProgressReportState::int_from_enum()` for the one type whose C value is a hand-written
+  match rather than a `repr` discriminant, which is the function `cval()` ships). In
+  `action_tests.rs` a `henum!` macro writes the pairing once. All 22 tests now compare the
+  header against the enum's real discriminants.
+- **negative control**: the reviewer's exact transposition now fails with
+  `EnumType key new_window does not have the same backing int as RUSTTY_ACTION_NEW_WINDOW`;
+  restored, 27/27 green.
+- **what is still hand-typed**: which VARIANT a given snake_case key name maps to
+  (`("quit", ActionKey::Quit)`). A rename of a Rust variant is a compile error, and a
+  reorder, an inserted variant or an explicit discriminant all now fail the test — so the
+  residual is only a mis-typed pairing at authoring time, which the header comparison
+  catches for every key whose value differs.
+- **state**: **CLOSED by task 15 fix round 1.**
