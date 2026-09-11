@@ -2604,6 +2604,28 @@ mod tests {
     // instrumented — closing S204-F1 needs a fixture whose pages carry styles,
     // and a raised floor here.
     //
+    // PORT NOTE (which assertion is doing the work, so it is not weakened by
+    // accident): the FLOOR. `allocation_count > 0` is subsumed by it — the floor
+    // is a larger lower bound, and it is kept because the reference has it, not
+    // because it adds coverage — and the per-index "must actually have TRIPPED"
+    // assertion catches no mutation on its own; it exists to stop the bound
+    // drifting ABOVE reality, which is a different failure from a site going
+    // missing. Remove the floor and this seam stops being checked.
+    //
+    // PORT NOTE (the floor protects a site only if a FIXTURE REACHES IT, and
+    // reach is badly asymmetric — so do not read the site list in `mod.rs` as a
+    // coverage list). Measured by neutralising every other site and reading the
+    // baseline counts back: `terminal::decode_alloc_check` is reached 3 times by
+    // EVERY fixture (tab stops, pwd, title), and the complete golden's total
+    // before this seam was widened was exactly 3 — that one site was the only
+    // one the first fixture reached, and it alone was load-bearing.
+    // `continuation::decode_alloc` was reached only by the continuation fixture
+    // (4 = 3 + 1) and `hyperlink::decode_alloc` by neither. So the silently
+    // losable pair was those two, and the loss was never order-independent: what
+    // is losable depends on which fixture reaches what. If you add a fixture,
+    // add it because it reaches something nothing else does — that is the only
+    // reason the third one below exists.
+    //
     // PORT NOTE (what this test still cannot see — a FIDELITY LIMIT, not a
     // regression): a site that is still REACHED but stops PROPAGATING its
     // failure keeps this test green. The reach count is unchanged, so the floor

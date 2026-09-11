@@ -266,6 +266,35 @@ pub mod io;
 /// individually and the crate suite re-run; all twelve turn it red. Redo that
 /// sweep if you add a site, and add a fixture that reaches it if none does.
 ///
+/// **The floor is the only thing in that sweep doing the work.** Of the three
+/// assertions the test carries, `allocation_count > 0` is subsumed by the floor
+/// (the floor is a larger lower bound), and the per-index "the fail point must
+/// actually have TRIPPED" assertion catches no mutation on its own — it exists
+/// to stop the bound drifting above reality, which is a different failure from
+/// a site going missing. If you weaken or remove the floor, this seam stops
+/// being checked; everything else is scaffolding around it.
+///
+/// **Reach is per-FIXTURE and badly asymmetric, so "a site is in the list" and
+/// "a site is protected" are different facts.** Measured, by neutralising every
+/// other site and reading the baseline counts back:
+///
+///   * `terminal::decode_alloc_check` is reached THREE times by every fixture
+///     (tab stops, pwd, title). The complete golden's total before this seam was
+///     widened was exactly 3 — i.e. that one site was the ONLY one the first
+///     fixture reached, and it alone was load-bearing.
+///   * `continuation::decode_alloc` was reached only by the continuation
+///     fixture (total 4 = 3 + 1).
+///   * `hyperlink::decode_alloc` was reached by NEITHER. Under the old
+///     two-fixture sweep it was held up entirely by `hyperlink.rs`'s own
+///     `decode_allocation_failure` test.
+///
+/// So the pair that could be deleted in silence was
+/// `continuation::decode_alloc` + `hyperlink::decode_alloc`, and the loss was
+/// never order-independent: which sites are losable depends on which fixture
+/// reaches what, not on how many sites there are. The third fixture (the
+/// explicit-hyperlink terminal) is what makes all twelve floor-protected today
+/// — both hyperlink sites fail the floor now, not just their own test.
+///
 /// What the floor still cannot see, and neither can the reference's own test:
 /// a site that is still REACHED but no longer PROPAGATES the failure. The
 /// count is unchanged, and `saw_out_of_memory` is satisfied by any other
