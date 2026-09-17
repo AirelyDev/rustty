@@ -25,15 +25,51 @@ pub mod run;
 #[path = "shaper/noop.rs"]
 pub mod noop;
 // pub const harfbuzz = @import("shaper/harfbuzz.zig");
+//
+// PORT NOTE (Zig lazy analysis vs Rust eager compilation — THE impedance
+// mismatch in this file). The reference `@import`s `shaper/harfbuzz.zig`
+// UNCONDITIONALLY, right here, on every target. It can, because Zig only
+// semantically analyses a declaration that is actually referenced: in a
+// `.coretext` build the `Shaper` switch below picks `coretext.Shaper`, nothing
+// ever names `harfbuzz.Shaper`, and `shaper/harfbuzz.zig` is never type-checked.
+// Its `const Face = font.Face` would not even compile there — `font.Face` is
+// `coretext.Face`, whose `hb_font` is `void` (`harfbuzz_shaper` is false), and
+// `harfbuzz.shape(face.hb_font, ...)` wants a `harfbuzz.Font`. The reference is
+// not "supporting" both; it is simply not looking.
+//
+// Rust compiles every `mod` in the tree eagerly, so the unconditional import has
+// no faithful spelling. The two candidate readings are:
+//
+//   (a) keep the module compiled everywhere and make it type-check — which means
+//       giving the CoreText face an `hb_font` it does not have in the ported
+//       configuration, or making this file generic over a face it is not generic
+//       over in the reference. Both invent API, and (a) is exactly the departure
+//       that put a hard-coded `harfbuzz_shaper = true` in `face/coretext.rs`.
+//   (b) compile the module on the targets where the reference would actually
+//       analyse it — the targets whose default backend has
+//       `hasHarfbuzz() == true`.
+//
+// (b) is what "faithful" means here: `cfg` is rustty's stand-in for Zig's
+// laziness, and it reproduces the reference's OBSERVABLE content — on macOS the
+// HarfBuzz shaper is unreachable code in ghostty too (the `Shaper` selector
+// below resolves to `coretext.Shaper`, and `build/SharedDeps.zig:267` does not
+// even link HarfBuzz for a `.coretext` build). Nothing is lost: the file, every
+// comment in it, and all 25 of its ported `test {}` blocks stay in the tree and
+// compile and run on every target whose default backend selects them (Linux,
+// FreeBSD, Windows), which is the same set the reference type-checks them on.
+//
 // WASM DIVERGENCE: the HarfBuzz shaper is not compiled on the `wasm32` web_canvas
 // backend (no HarfBuzz on freestanding wasm); the `web_canvas` shaper is active.
-// EMBEDDER DIVERGENCE (feature `harfbuzz`, DEFAULT-ON): the HarfBuzz shaper also
-// drops out when an embedding application turns the vendored-C font backends off.
-// The `Shaper` selector below resolves to `coretext::Shaper` on the only target
-// where that is allowed (macOS, whose default backend is `.coretext` — "CoreText
-// for font discovery, rendering, and shaping", so `hasHarfbuzz()` is false for
-// it); see this crate's `Cargo.toml` `[features]`.
-#[cfg(all(not(target_arch = "wasm32"), feature = "harfbuzz"))]
+// EMBEDDER DIVERGENCE (feature `harfbuzz`, DEFAULT-ON): the feature is retained
+// in the gate because the module's FFI floor is `crate::hb`, which the feature
+// owns; on the non-macOS targets the crate's `lib.rs` `compile_error!` already
+// requires the feature to be on, so the gate never silently drops the shaper
+// where it is the active one.
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    not(target_os = "macos"),
+    feature = "harfbuzz"
+))]
 #[path = "shaper/harfbuzz.rs"]
 pub mod harfbuzz;
 // pub const coretext = @import("shaper/coretext.zig");
@@ -50,11 +86,9 @@ pub mod coretext;
 // un-vendored `zig-js` face). See that file's header for the full B1 analysis.
 #[path = "shaper/web_canvas.rs"]
 pub mod web_canvas;
-// The `Shaper` selector (below) models
-// the `coretext_harfbuzz`/`fontconfig_freetype` configurations and points at
-// `harfbuzz::Shaper`; the CoreText shaper is exercised through its own
-// `coretext::Shaper` type + tests, exactly as the reference's coretext.zig tests
-// reference the file's own `Shaper` (not the backend selector).
+// The `Shaper` selector (below) models the `fontconfig_freetype` /
+// `freetype_windows` configurations and points at `harfbuzz::Shaper` there; on
+// macOS it points at `coretext::Shaper`, the Darwin default backend's shaper.
 
 // pub const Cache = @import("shaper/Cache.zig");
 pub use cache::Cache;

@@ -90,9 +90,12 @@ ghostty-wasm-abi = ["dep:rustty-os"]
 # features named; anything else keeps FreeType in the graph.
 default = ["freetype", "harfbuzz", "fontconfig"]
 
-# HarfBuzz 11.0.0 text shaping (`hb.rs`, `shape::harfbuzz`, and the `hb_font` the
-# CoreText and FreeType faces carry). Also pulls `freetype-sys` — see the
-# implication chain above.
+# HarfBuzz 11.0.0 text shaping: the `hb.rs` package port (`pkg/harfbuzz`), the
+# `shape::harfbuzz` shaper, and the `hb_font` the FreeType face carries. NOT the
+# CoreText face: `Backend::default()` is `.coretext` on Darwin and its
+# `hasHarfbuzz()` is false, so `face/coretext.rs`'s `hb_font` is the reference
+# declaration's `void` arm on every build (see its `HARFBUZZ_SHAPER`). Also pulls
+# `freetype-sys` — see the implication chain above.
 harfbuzz = ["dep:harfbuzz-sys", "dep:freetype-sys"]
 # FreeType 2.13.2 glyph rasterization: the `ft` FFI glue, the `face::freetype`
 # backend face, and `library::FreetypeLibrary`. Implies `harfbuzz`.

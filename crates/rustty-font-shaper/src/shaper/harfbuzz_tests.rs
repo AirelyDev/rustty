@@ -3,12 +3,19 @@
 //! `error.SkipZigTest`). Kept in a sibling file (mirroring `page_tests.rs`),
 //! attached as the `tests` submodule of `harfbuzz.rs`.
 //!
-//! PORT NOTE (backend): these tests run on the macOS `coretext_harfbuzz`
-//! configuration — CoreText faces carrying an `hb_font` (`face/coretext.rs`) +
-//! this HarfBuzz shaper. The reference runs the same tests on the freetype /
-//! coretext_harfbuzz backends; the assertions are structural (cell counts and
-//! grid X positions driven by clusters, plus relative offset orderings) so they
-//! hold across the HarfBuzz-shaping backends.
+//! PORT NOTE (backend): these tests run wherever this shaper is the ACTIVE one —
+//! i.e. on the targets whose `Backend::default()` has `hasHarfbuzz() == true`:
+//! `fontconfig_freetype` (Linux/BSD) and `freetype_windows` (Windows), with
+//! FreeType faces carrying an `hb_font` (`face/freetype.rs`). They do NOT run on
+//! macOS: the Darwin default backend is `.coretext`, whose `hasHarfbuzz()` is
+//! false, so `shape.rs` gates this whole module off macOS — the same set the
+//! reference type-checks it on (see the `pub mod harfbuzz` PORT NOTE in
+//! `shape.rs` for the Zig-lazy-vs-Rust-eager reasoning). They previously ran on
+//! macOS against a CoreText face given an `hb_font` it does not have in the
+//! ported configuration; that was the departure, not the coverage. The
+//! assertions are structural (cell counts and grid X positions driven by
+//! clusters, plus relative offset orderings) so they hold across every
+//! HarfBuzz-shaping backend, exactly as the reference's do.
 
 use super::*;
 

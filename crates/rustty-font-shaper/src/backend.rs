@@ -94,8 +94,16 @@ impl Backend {
 
     // All the functions below can be called at comptime or runtime to
     // determine if we have a certain dependency.
+    //
+    // PORT NOTE: the reference comment above is load-bearing — every one of
+    // these predicates is called at COMPTIME by the font tier (e.g.
+    // `face/coretext.zig:39` `const harfbuzz_shaper = font.options.backend
+    // .hasHarfbuzz();`, and `build/SharedDeps.zig:267,271,292` gating the
+    // HarfBuzz/FreeType/Fontconfig link edges). The Rust equivalent of "callable
+    // at comptime" is `const fn`, so all four are `const fn`; that is a superset
+    // of the plain fn, so runtime callers are unaffected.
 
-    pub fn has_freetype(self) -> bool {
+    pub const fn has_freetype(self) -> bool {
         match self {
             Backend::Freetype
             | Backend::FreetypeWindows
@@ -109,7 +117,7 @@ impl Backend {
         }
     }
 
-    pub fn has_coretext(self) -> bool {
+    pub const fn has_coretext(self) -> bool {
         match self {
             Backend::Coretext
             | Backend::CoretextFreetype
@@ -123,7 +131,7 @@ impl Backend {
         }
     }
 
-    pub fn has_fontconfig(self) -> bool {
+    pub const fn has_fontconfig(self) -> bool {
         match self {
             Backend::FontconfigFreetype => true,
 
@@ -137,7 +145,7 @@ impl Backend {
         }
     }
 
-    pub fn has_harfbuzz(self) -> bool {
+    pub const fn has_harfbuzz(self) -> bool {
         match self {
             Backend::Freetype
             | Backend::FreetypeWindows
