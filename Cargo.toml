@@ -199,12 +199,29 @@ rustty-cfg-fmt = { path = "crates/rustty-cfg-fmt" }
 rustty-args = { path = "crates/rustty-args" }
 rustty-apprt-api = { path = "crates/rustty-apprt-api" }
 rustty-font = { path = "crates/rustty-font" }
-rustty-font-shaper = { path = "crates/rustty-font-shaper" }
+# `default-features = false` HERE, re-enabled per consumer, for the same reason
+# `rustty-config` sets it on `rustty-input` (see that manifest): a member that
+# writes `default-features = false` against a workspace dependency which did not
+# declare it gets the setting silently IGNORED by Cargo. `rustty-renderer` is the
+# one consumer that must be able to leave this crate's `freetype`/`harfbuzz`/
+# `fontconfig` features OFF — it is the crate an EMBEDDER depends on, and Cargo's
+# `links` uniqueness check spans the whole resolve graph (see the `[features]`
+# header of `crates/rustty-font-shaper/Cargo.toml`) — so the opt-out has to be
+# expressible here. Every OTHER consumer names the three features explicitly, so
+# their builds are byte-identical to before (R5).
+rustty-font-shaper = { path = "crates/rustty-font-shaper", default-features = false }
 # R1 safe wrapper (`oni::*`) over the vendored Oniguruma regex engine.
 rustty-oniguruma = { path = "crates/rustty-oniguruma" }
 rustty-input = { path = "crates/rustty-input" }
 rustty-inspector = { path = "crates/rustty-inspector" }
-rustty-renderer = { path = "crates/rustty-renderer" }
+# `default-features = false` for the SAME reason as `rustty-font-shaper` above:
+# Cargo silently IGNORES a member's `default-features = false` when the workspace
+# dependency did not declare it, and the crates on an EMBEDDER's dependency path
+# (`rustty-termio` -> `rustty-{config,apprt-api,inspector,renderer}`) must be able
+# to leave the `freetype`/`harfbuzz`/`fontconfig` pass-throughs off. Those four
+# forward the features instead of naming them; every other consumer names them
+# explicitly, so all in-workspace builds stay byte-identical (R5).
+rustty-renderer = { path = "crates/rustty-renderer", default-features = false }
 rustty-config = { path = "crates/rustty-config" }
 rustty-terminfo = { path = "crates/rustty-terminfo" }
 rustty-termio = { path = "crates/rustty-termio" }
@@ -303,7 +320,15 @@ sentry-sys = { path = "crates-sys/sentry-sys" }
 # links via pkg/dcimgui). The FFI leaf backing the inspector UI; FreeType (with
 # its bundled libpng) is provided by `freetype-sys`. KAT-only today (no consumer
 # yet — the inspector tier is not yet ported).
-dcimgui-sys = { path = "crates-sys/dcimgui-sys" }
+# `default-features = false` for the same reason as `rustty-font-shaper` /
+# `rustty-renderer` above: this crate's default-on `freetype` feature pulls
+# `freetype-sys`, and `rustty-inspector` — which sits on an EMBEDDER's dependency
+# path (`rustty-termio` -> `rustty-inspector` -> here) — must be able to leave it
+# off. Cargo IGNORES a member's `default-features = false` when the workspace
+# dependency did not declare it, so the opt-out has to live here. Consumers that
+# are NOT on that path name `features = ["freetype"]` and build byte-identically
+# (R5).
+dcimgui-sys = { path = "crates-sys/dcimgui-sys", default-features = false }
 # Stable polyfill of the unstable `core::alloc::Allocator` trait. This is the
 # faithful Rust map of Zig's `std.mem.Allocator`: `Allocator::allocate(Layout)`
 # / `deallocate` map to Zig `rawAlloc`/`rawFree`. `Global` == the current

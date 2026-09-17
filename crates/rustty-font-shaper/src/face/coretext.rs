@@ -73,6 +73,12 @@ use rustty_font::opentype::post::Post;
 use rustty_font::opentype::svg::SVG;
 use rustty_util::quirks::inlineAssert as assert;
 
+// EMBEDDER DIVERGENCE (feature `harfbuzz`, DEFAULT-ON): absent when an embedding
+// application turns the vendored-C font backends off. That configuration IS the
+// reference's plain `.coretext` backend, whose `hasHarfbuzz()` is false, so every
+// `if (comptime harfbuzz_shaper)` arm below collapses exactly as the reference's
+// does — see `HARFBUZZ_SHAPER` and this crate's `Cargo.toml` `[features]`.
+#[cfg(feature = "harfbuzz")]
 use crate::hb;
 
 use super::{DesiredSize, Options, Variation};
@@ -250,7 +256,16 @@ pub struct Face {
     // face carries a real `hb_font` built from the `CTFont` via
     // `harfbuzz.coretext.createFont`. `hb::Font` is a raw-pointer handle (no
     // `Drop`); it is destroyed in `deinit`, exactly as the FreeType face does.
+    //
+    // PORT NOTE (embedder divergence, feature `harfbuzz` — DEFAULT-ON): with the
+    // feature off the field is the reference's OTHER arm, `void` (Rust `()`),
+    // because that build is the plain `.coretext` backend where
+    // `harfbuzz_shaper == false`. The `if (harfbuzz_shaper) ... else void` shape
+    // of the reference declaration is what makes both arms faithful.
+    #[cfg(feature = "harfbuzz")]
     pub hb_font: hb::Font,
+    #[cfg(not(feature = "harfbuzz"))]
+    pub hb_font: (),
 
     /// Set quirks.disableDefaultFontFeatures
     pub quirks_disable_default_font_features: bool,
@@ -277,7 +292,11 @@ impl Face {
     // PORT NOTE: the macOS default backend is `coretext`, whose `hasHarfbuzz()` is
     // false; this const is reproduced as `false` so the comptime-gated Harfbuzz
     // arms below collapse to comments.
-    const HARFBUZZ_SHAPER: bool = true;
+    // PORT NOTE (embedder divergence, feature `harfbuzz` — DEFAULT-ON): the const
+    // is the feature, which is precisely `options.backend.hasHarfbuzz()` for the
+    // two macOS backends this file can be built as — `.coretext_harfbuzz` (true)
+    // and the reference's Darwin default `.coretext` (false).
+    const HARFBUZZ_SHAPER: bool = cfg!(feature = "harfbuzz");
 
     /// Initialize a CoreText-based font from a TTF/TTC in memory.
     // PORT NOTE: the reference signature is `init(lib: font.Library, source, opts)`
@@ -357,6 +376,9 @@ impl Face {
         // 26.6 fixed-point `i32` and `@bitCast`s it to the `u32` scale argument;
         // reproduced as `(pixels*64).round() as i32 as u32`.
         let _ = Self::HARFBUZZ_SHAPER;
+        #[cfg(not(feature = "harfbuzz"))]
+        let hb_font = ();
+        #[cfg(feature = "harfbuzz")]
         let hb_font = {
             let ct_font_ptr = CFRetained::as_ptr(&ct_font).as_ptr() as *const core::ffi::c_void;
             let hb_font =
@@ -376,6 +398,7 @@ impl Face {
                 Ok(cs) => Some(cs),
                 // errdefer hb_font.destroy();
                 Err(e) => {
+                    #[cfg(feature = "harfbuzz")]
                     hb_font.destroy();
                     return Err(e);
                 }
@@ -412,6 +435,7 @@ impl Face {
         // error. `font` and `color` own their data and release on `Drop`; the
         // HarfBuzz font is a raw handle, so it is destroyed here.
         if let Err(err) = log_axes(&result) {
+            #[cfg(feature = "harfbuzz")]
             result.hb_font.destroy();
             return Err(err);
         }
@@ -434,6 +458,7 @@ impl Face {
         // calling `deinit`; the face tests call it explicitly), so this runs once.
         #[cfg(test)]
         crate::face::test_probe::note_face_deinit();
+        #[cfg(feature = "harfbuzz")]
         self.hb_font.destroy();
     }
 
@@ -1894,6 +1919,11 @@ mod tests {
     /// `:124`. The port's `?` dropped the `Face` instead, and `Face` has no
     /// `Drop`, so the HarfBuzz font leaked. Proven POSITIVELY: a HarfBuzz
     /// user-data destroy callback runs only when the font is destroyed.
+    // EMBEDDER DIVERGENCE (feature `harfbuzz`, DEFAULT-ON): there is no HarfBuzz
+    // font to destroy when the feature is off (`harfbuzz_shaper == false`, the
+    // reference's `void` arm), and the probe is built from HarfBuzz user data.
+    // Default builds — and every gate lane — have the feature on.
+    #[cfg(feature = "harfbuzz")]
     #[test]
     fn a_failed_variation_axes_step_destroys_the_harfbuzz_font() -> Result<(), Error> {
         use core::sync::atomic::{AtomicUsize, Ordering};

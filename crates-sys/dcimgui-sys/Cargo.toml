@@ -42,6 +42,33 @@ doctest = false
 [lints]
 workspace = true
 
+[features]
+# `freetype` — the reference's `.freetype = true` for Dear ImGui (SharedDeps.zig),
+# i.e. `-DIMGUI_ENABLE_FREETYPE=1` plus the `misc/freetype/imgui_freetype.cpp`
+# translation unit and the `freetype-sys` link edge. DEFAULT-ON, so every existing
+# build of this crate is byte-identical (R5) — the same defines, the same TUs, the
+# same archive on the link line.
+#
+# WHY IT IS A FEATURE. Cargo permits exactly ONE package per resolve graph
+# declaring a given `links` value, and that check spans the WHOLE graph regardless
+# of target. An embedding desktop application that wants `rustty-termio` on macOS
+# therefore cannot build if our graph carries `freetype-sys` anywhere — and this
+# crate is on that path (`rustty-termio` -> `rustty-inspector` -> here), which
+# makes it the fourth and last FreeType edge after `rustty-font-shaper`'s own
+# three (see the `[features]` header of `crates/rustty-font-shaper/Cargo.toml` for
+# the full rationale). Only an OPTIONAL dependency leaves a graph.
+#
+# WHAT CHANGES WITH IT OFF. Dear ImGui falls back to its built-in `stb_truetype`
+# font loader, which is upstream's own default when `IMGUI_ENABLE_FREETYPE` is
+# undefined ("default to use FreeType when IMGUI_ENABLE_FREETYPE is defined,
+# otherwise default to use stb_truetype" — `dcimgui.h`). The C API is unchanged:
+# `ImFontLoader` is an opaque type in the generated bindings either way, and no
+# Rust code in this workspace names a FreeType-specific ImGui symbol. Inspector
+# glyph rasterization differs in quality; nothing else does. The parity gates all
+# run with the feature ON.
+default = ["freetype"]
+freetype = ["dep:freetype-sys"]
+
 [dependencies]
 # Dear ImGui is built with `-DIMGUI_ENABLE_FREETYPE=1` (the reference's
 # `.freetype = true`), so `imgui_draw.cpp` references
@@ -63,7 +90,9 @@ workspace = true
 # is neither needed for headers (`DEP_PNG_INCLUDE` would be unused) nor for
 # linking — and force-linking it would duplicate freetype-sys's bundled `png_*`
 # symbols. It is therefore intentionally omitted.
-freetype-sys = { path = "../freetype-sys" }
+#
+# OPTIONAL (feature `freetype`, DEFAULT-ON) — see the `[features]` header.
+freetype-sys = { path = "../freetype-sys", optional = true }
 
 [build-dependencies]
 # R3: compile the vendored Dear ImGui + Dear Bindings C++ standalone (`cc` in

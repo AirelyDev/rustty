@@ -154,6 +154,35 @@ mod install_contract_tests {
     }
 }
 
+// RUSTTY-ONLY guard (no oracle analogue; the reference selects its font backend
+// by build option and a mismatched one simply fails to compile). The
+// `freetype`/`harfbuzz`/`fontconfig` features exist so an EMBEDDER on macOS can
+// drop the vendored-C font stack from its resolve graph — `Backend::default()` is
+// `.coretext` there, which needs none of it. On every other native target the
+// default backend DOES need it (`.fontconfig_freetype` on Linux/BSD,
+// `.freetype_windows` on Windows), so turning the features off would otherwise
+// produce a cascade of missing-module errors instead of one honest message.
+#[cfg(all(
+    not(target_os = "macos"),
+    not(target_arch = "wasm32"),
+    not(all(feature = "freetype", feature = "harfbuzz"))
+))]
+compile_error!(
+    "rustty-font-shaper: this target's default font backend needs FreeType and \
+     HarfBuzz (`Backend::default()` is `.fontconfig_freetype` off Windows, \
+     `.freetype_windows` on Windows). The `freetype`/`harfbuzz`/`fontconfig` \
+     features may only be turned off for a macOS build, whose default backend is \
+     `.coretext`."
+);
+#[cfg(all(
+    not(any(target_os = "macos", target_os = "windows", target_arch = "wasm32")),
+    not(feature = "fontconfig")
+))]
+compile_error!(
+    "rustty-font-shaper: this target's default font backend is \
+     `.fontconfig_freetype`, which needs the `fontconfig` feature."
+);
+
 pub mod backend;
 pub mod codepoint_resolver;
 pub mod collection;
@@ -180,9 +209,17 @@ pub mod shared_grid_set;
 // (freestanding wasm has no C deps), so these `-sys` FFI-glue modules are gated
 // OFF; the `Face`/`Shaper`/`Library` selectors resolve to the browser Canvas
 // backend instead (see `face`/`shape`/`library`). Native is untouched.
-#[cfg(not(target_arch = "wasm32"))]
+//
+// EMBEDDER DIVERGENCE (features `freetype` / `harfbuzz`, both DEFAULT-ON): the
+// same two modules drop out when an embedding application turns the vendored-C
+// font backends off, because Cargo's `links` uniqueness check spans the whole
+// resolve graph and an optional dependency is the only way to leave it. macOS
+// resolves `Face`/`Shaper`/`Library` to the CoreText backend either way (the
+// reference's own Darwin default is `.coretext`), so nothing is lost there; see
+// the `[features]` header of this crate's `Cargo.toml`.
+#[cfg(all(not(target_arch = "wasm32"), feature = "freetype"))]
 pub mod ft;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "harfbuzz"))]
 pub mod hb;
 // Fontconfig binding wrapper (port of `pkg/fontconfig/*.zig`), the Linux/BSD
 // font-discovery seam. Gated OFF on macOS (CoreText discovers fonts; fontconfig
@@ -191,7 +228,14 @@ pub mod hb;
 // isn't available" — WS20; the `fontconfig-sys` dependency is gated off the same
 // way, so leaving this module on would have failed to link) and on wasm (no C
 // deps), matching the `fontconfig-sys` dependency's `cfg` table.
-#[cfg(not(any(target_os = "macos", target_os = "windows", target_arch = "wasm32")))]
+// EMBEDDER DIVERGENCE (feature `fontconfig`, DEFAULT-ON): also off when the
+// vendored-C font backends are turned off — the `cfg` above already keeps
+// fontconfig out of every macOS build, but it does NOT keep `fontconfig-sys` out
+// of the resolve graph, which is what a colliding `links = "fontconfig"` needs.
+#[cfg(all(
+    not(any(target_os = "macos", target_os = "windows", target_arch = "wasm32")),
+    feature = "fontconfig"
+))]
 pub mod fc;
 pub mod library;
 #[cfg(not(target_arch = "wasm32"))]

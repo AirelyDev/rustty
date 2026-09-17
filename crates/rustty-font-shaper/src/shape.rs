@@ -27,7 +27,13 @@ pub mod noop;
 // pub const harfbuzz = @import("shaper/harfbuzz.zig");
 // WASM DIVERGENCE: the HarfBuzz shaper is not compiled on the `wasm32` web_canvas
 // backend (no HarfBuzz on freestanding wasm); the `web_canvas` shaper is active.
-#[cfg(not(target_arch = "wasm32"))]
+// EMBEDDER DIVERGENCE (feature `harfbuzz`, DEFAULT-ON): the HarfBuzz shaper also
+// drops out when an embedding application turns the vendored-C font backends off.
+// The `Shaper` selector below resolves to `coretext::Shaper` on the only target
+// where that is allowed (macOS, whose default backend is `.coretext` — "CoreText
+// for font discovery, rendering, and shaping", so `hasHarfbuzz()` is false for
+// it); see this crate's `Cargo.toml` `[features]`.
+#[cfg(all(not(target_arch = "wasm32"), feature = "harfbuzz"))]
 #[path = "shaper/harfbuzz.rs"]
 pub mod harfbuzz;
 // pub const coretext = @import("shaper/coretext.zig");

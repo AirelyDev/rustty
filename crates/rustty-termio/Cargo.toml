@@ -16,6 +16,44 @@ authors.workspace = true
 workspace = true
 
 [features]
+# Pass-throughs for `rustty-font-shaper`'s three vendored-C font backends
+# (FreeType / HarfBuzz / Fontconfig), forwarded through EVERY edge of this crate
+# that reaches the shaper tier — `cargo tree -i rustty-font-shaper` names exactly
+# four: `rustty-renderer` directly, plus `rustty-config`, `rustty-apprt-api` and
+# `rustty-inspector`. Missing one would defeat the whole chain, because cargo
+# features UNIFY across a resolve graph: a single edge still enabling them turns
+# them back on for everybody.
+#
+# DEFAULT-ON, so every existing build of this crate is byte-identical (R5). They
+# exist because this crate is what an EMBEDDER depends on. Cargo permits exactly
+# one package per resolve graph declaring a given `links` value, and that check
+# spans the whole graph regardless of target — so `rustty-font-shaper`'s
+# `cfg`-gated `freetype-sys` / `fontconfig-sys` edges still collide with a host
+# application that links FreeType or Fontconfig itself, and the only fix is for
+# them to be ABSENT. A macOS embedder therefore takes
+# `default-features = false` and names none of these: the reference's default
+# Darwin backend is `.coretext` (CoreText for discovery, rendering AND shaping),
+# so nothing is lost. Full rationale in the `[features]` header of
+# `crates/rustty-font-shaper/Cargo.toml`.
+default = ["freetype", "harfbuzz", "fontconfig"]
+freetype = [
+    "rustty-renderer/freetype",
+    "rustty-config/freetype",
+    "rustty-apprt-api/freetype",
+    "rustty-inspector/freetype",
+]
+harfbuzz = [
+    "rustty-renderer/harfbuzz",
+    "rustty-config/harfbuzz",
+    "rustty-apprt-api/harfbuzz",
+    "rustty-inspector/harfbuzz",
+]
+fontconfig = [
+    "rustty-renderer/fontconfig",
+    "rustty-config/fontconfig",
+    "rustty-apprt-api/fontconfig",
+    "rustty-inspector/fontconfig",
+]
 # WS20: `build_config.flatpak` — the real `-Dflatpak` ghostty build option. When ON,
 # `Exec.zig`'s `const FlatpakHostCommand = if (!build_config.flatpak) struct{...} else
 # internal_os.FlatpakHostCommand` selects the REAL `os/flatpak.zig` host-command type
@@ -56,9 +94,26 @@ rustty-terminfo = { workspace = true }
 #   generic consumer, `M: AppMailbox`).
 # - rustty-global: the `xev = @import("../global.zig").xev` seam anchor (D6
 #   deferred; see `xev_seam` in src/xev_seam.rs).
-rustty-config = { workspace = true }
+# `default-features = false` + the explicit feature list (the same shape
+# `rustty-wasm` uses on this dependency): `rustty-config`'s defaults now include
+# the `freetype`/`harfbuzz`/`fontconfig` pass-throughs, and this crate sits on an
+# EMBEDDER's dependency path, where cargo feature UNIFICATION means one edge
+# still enabling them turns them back on for the whole graph. The two non-font
+# defaults are named back explicitly so the build is otherwise unchanged (R5),
+# and the font trio is forwarded by this crate's own features instead. It cannot
+# be spelled as `{ workspace = true, default-features = false }` — Cargo IGNORES
+# a member's `default-features = false` when the workspace dependency did not
+# declare it.
+rustty-config = { path = "../rustty-config", default-features = false, features = [
+    "renderer",
+    "input-oniguruma",
+] }
 rustty-renderer = { workspace = true }
-rustty-apprt-api = { workspace = true }
+# Same opt-out as `rustty-config` above: this crate forwards the font trio
+# itself, so the edge must not switch it on. Whole-graph `links` uniqueness plus
+# feature unification is why one enabling edge would be enough to break an
+# embedder (see this manifest's `[features]` header).
+rustty-apprt-api = { path = "../rustty-apprt-api", default-features = false }
 rustty-global = { workspace = true }
 # Core-tier C0 dep wiring (both downward-safe leaves):
 # - rustty-xev: the SHARED xev handle placeholder types (`Async`/`Loop`/...),
@@ -76,7 +131,8 @@ rustty-zigstd = { workspace = true }
 #   rustty-inspector does not depend on rustty-termio (it depends on
 #   rustty-vt/rustty-renderer/rustty-font/rustty-input/rustty-datastruct/
 #   rustty-lib/dcimgui-sys, all below termio); `check_acyclic.sh` stays green.
-rustty-inspector = { workspace = true }
+# Same opt-out as `rustty-apprt-api` above.
+rustty-inspector = { path = "../rustty-inspector", default-features = false }
 # Integration-tier stage 4 dep wiring (both leaf crates, downward-safe):
 # - rustty-build-config: `build_config.version_string`/`build_config.flatpak`
 #   (reference `build_config = @import("../build_config.zig")` in Exec.zig /

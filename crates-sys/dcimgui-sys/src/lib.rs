@@ -22,6 +22,11 @@
 // `lib.linkLibrary(freetype_dep.artifact("freetype"))`). freetype-sys in turn
 // keeps its bundled libpng + zlib on the line, so no separate libpng-sys dep is
 // required (see Cargo.toml).
+//
+// Feature `freetype` (DEFAULT-ON, = the reference's `.freetype = true`): with it
+// off, `imgui_freetype.cpp` is not compiled and nothing references the FreeType
+// API, so there is no archive to keep on the line (see Cargo.toml `[features]`).
+#[cfg(feature = "freetype")]
 extern crate freetype_sys;
 
 // The bindgen-generated module carries C naming conventions and machine-shaped

@@ -58,7 +58,12 @@ rustty-font = { workspace = true }
 # shared_grid_set). cli is the top app crate and font-shaper is BELOW it (above
 # vt+font, below apprt/core), so cli->font-shaper is a downward edge — acyclic
 # (G7; cli already reaches it transitively via rustty-core/rustty-apprt).
-rustty-font-shaper = { workspace = true }
+# The three vendored-C font backends are default-on for this crate, exactly as
+# before they became features: the workspace dependency sets
+# `default-features = false` (see the root manifest) purely so
+# `rustty-renderer` can expose the opt-out an embedder needs, so every other
+# consumer names them here and builds byte-identically (R5).
+rustty-font-shaper = { workspace = true, features = ["freetype", "harfbuzz", "fontconfig"] }
 rustty-input = { workspace = true }
 rustty-os = { workspace = true }
 # P3-W7 T2: the byte-typed environment accessors (`global.environ()`), which is

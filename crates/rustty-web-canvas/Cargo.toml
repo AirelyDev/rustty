@@ -32,7 +32,12 @@ crate-type = ["cdylib", "rlib"]
 rustty-vt-c = { workspace = true }
 # The font-shaper `web_canvas` backend: the browser-Canvas `Face` + `Shaper` and
 # their `rustty_wc_*` C-ABI exports (cfg-gated to wasm inside the crate).
-rustty-font-shaper = { workspace = true }
+# The three vendored-C font backends are default-on for this crate, exactly as
+# before they became features: the workspace dependency sets
+# `default-features = false` (see the root manifest) purely so
+# `rustty-renderer` can expose the opt-out an embedder needs, so every other
+# consumer names them here and builds byte-identically (R5).
+rustty-font-shaper = { workspace = true, features = ["freetype", "harfbuzz", "fontconfig"] }
 # The PURE font leaf: the `Atlas` glyphs are rendered into. Used by the local
 # `rustty_wc_atlas_*` helper exports.
 rustty-font = { workspace = true }

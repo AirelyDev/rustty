@@ -60,7 +60,17 @@ rustty-font = { workspace = true, features = ["wasm"] }
 # `rustty-web-canvas` already links the shaper freestanding). The exports are
 # behind the `ghostty-wasm-abi` feature so the separate `rustty_web_canvas.wasm`
 # deliverable keeps its documented `rustty_wc_*`-only surface.
-rustty-font-shaper = { workspace = true, features = ["ghostty-wasm-abi"] }
+# The three vendored-C font backends are default-on for this crate, exactly as
+# before they became features: the workspace dependency sets
+# `default-features = false` (see the root manifest) purely so
+# `rustty-renderer` can expose the opt-out an embedder needs, so every other
+# consumer names them here and builds byte-identically (R5).
+rustty-font-shaper = { workspace = true, features = [
+    "ghostty-wasm-abi",
+    "freetype",
+    "harfbuzz",
+    "fontconfig",
+] }
 
 # NOT depended on: `_ = @import("App.zig").Wasm;`. The reference's `App.Wasm` is an
 # EMPTY struct whose three exports are commented out upstream (App.zig:577-604), so

@@ -125,14 +125,27 @@ rustty-vt = { workspace = true }
 rustty-font = { workspace = true }
 # `rustty_font_shaper::face::DesiredSize` — the `font.face.DesiredSize` the gtk
 # `Surface` boxes as its `font-size-request` property (`class/surface.zig:583`).
-rustty-font-shaper = { workspace = true }
-rustty-renderer = { workspace = true }
+# The three vendored-C font backends are default-on for this crate, exactly as
+# before they became features: the workspace dependency sets
+# `default-features = false` (see the root manifest) purely so
+# `rustty-renderer` can expose the opt-out an embedder needs, so every other
+# consumer names them here and builds byte-identically (R5).
+rustty-font-shaper = { workspace = true, features = ["freetype", "harfbuzz", "fontconfig"] }
+# The three font-backend pass-throughs are default-on for this crate, exactly as
+# before they became features; the workspace dependency sets
+# `default-features = false` (see the root manifest) only so the crates on an
+# embedder's path can opt out, so this consumer names them and builds
+# byte-identically (R5).
+rustty-renderer = { workspace = true, features = ["freetype", "harfbuzz", "fontconfig"] }
 rustty-inspector = { workspace = true }
 # The inspector's ImGui context lifecycle (`apprt.embedded.Inspector`
 # init/deinit — ImGui_CreateContext/DestroyContext, SetCurrentContext, GetIO,
 # ImGui_ImplMetal_Shutdown). Vendored Dear ImGui + Dear Bindings C API leaf
 # (`links = "dcimgui"`); a lower-tier -sys crate (acyclic).
-dcimgui-sys = { workspace = true }
+# `freetype` is default-on for this crate exactly as before it became a feature;
+# the workspace dependency sets `default-features = false` (see the root manifest)
+# only so `rustty-inspector` can forward it for an embedder.
+dcimgui-sys = { workspace = true, features = ["freetype"] }
 # V13 (`gtk::{pre_exec,post_fork}`): `rustty_termio::command::{Command,
 # RtPreExecInfo, RtPostForkInfo, PostForkError, install_rt_hooks}`. The apprt is
 # the crate that OWNS the `rt_*` hook pair the reference picks at comptime

@@ -164,7 +164,11 @@ identity-oracle = [
 # GUI-glue dependency (R3). Off by default so the VT crate has no GUI dependency;
 # the apprt `gtk` feature turns it on (rustty-apprt Cargo.toml). When ON it pulls
 # the `dcimgui-sys` FFI leaf (the `ImGuiKey_*` constants `imgui_key` returns).
-imgui = ["dep:dcimgui-sys"]
+# `dcimgui-sys/freetype` is named here (rather than inherited) because the
+# workspace dependency now sets `default-features = false` — see the root
+# manifest. Enabling `imgui` is therefore byte-identical to before (R5), and with
+# `imgui` off, as it is by default, `dcimgui-sys` is not in the graph at all.
+imgui = ["dep:dcimgui-sys", "dcimgui-sys/freetype"]
 # OFF-BY-DEFAULT bench instrumentation: compiles the PageList page-allocation
 # tracking seam (`pagelist::page_tracking` + the `TrackingAllocator` child of the
 # page pool) into a NON-test build, so the standalone `alloc_bench` example can

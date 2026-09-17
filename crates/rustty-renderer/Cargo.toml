@@ -15,6 +15,23 @@ authors.workspace = true
 [lints]
 workspace = true
 
+[features]
+# Pass-throughs for `rustty-font-shaper`'s three vendored-C font backends,
+# DEFAULT-ON so every existing build of this crate is byte-identical (R5). They
+# exist because this crate is what an EMBEDDER depends on: a desktop app that
+# wants the renderer plus `rustty-termio` on macOS cannot build if our graph
+# declares a `links` value its own graph already declares, and Cargo's `links`
+# uniqueness check spans the WHOLE resolve graph regardless of target — so a
+# `cfg`-gated dependency is not enough, it has to be absent. The full rationale,
+# and why the CoreText-only macOS build loses nothing (the Darwin default backend
+# is `.coretext`), is in the `[features]` header of
+# `crates/rustty-font-shaper/Cargo.toml`. An embedder takes
+# `default-features = false` and, on macOS, names none of them.
+default = ["freetype", "harfbuzz", "fontconfig"]
+freetype = ["rustty-font-shaper/freetype"]
+harfbuzz = ["rustty-font-shaper/harfbuzz"]
+fontconfig = ["rustty-font-shaper/fontconfig"]
+
 [dependencies]
 # The `LOG` findings-class facade (DECISION-logging.md, Option A, ratified).
 # `rustty-renderer` sits BELOW `rustty-vt-c` in R4's acyclic layering, so its

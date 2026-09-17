@@ -44,6 +44,65 @@ doctest = false
 # (`face_render_glyph` returns a `wasm.toHostOwned` heap `*Glyph`).
 ghostty-wasm-abi = ["dep:rustty-os"]
 
+# The three vendored-C font backends, DEFAULT-ON so every existing build is
+# byte-identical (R5): `cargo build`/`cargo test` in this workspace resolves the
+# same graph, the same `-sys` crates, and the same modules as before these
+# features existed. They exist for ONE reason.
+#
+# WHY THEY EXIST — the `links` collision an EMBEDDER hits. Cargo permits exactly
+# ONE package per resolve graph declaring a given `links` value, and that check
+# runs over the WHOLE graph regardless of target: a `[target.'cfg(...)']`
+# dependency table does NOT exempt it. A desktop app that wants `rustty-termio` +
+# `rustty-renderer` on macOS therefore cannot build if its own graph already
+# links FreeType or Fontconfig through some other package (the concrete case:
+# `freetype-sys 0.20.1` and `yeslogic-fontconfig-sys 6.0.1`, pulled in by a GPUI
+# app's font stack). Making our `-sys` edges OPTIONAL is the only fix, because it
+# removes them from the graph entirely rather than merely from the link line.
+#
+# WHY IT IS SOUND ON macOS. The Darwin default backend is `.coretext` —
+# "CoreText for font discovery, rendering, and shaping" (`backend.rs`
+# `Backend::default`). FreeType serves only the non-default `coretext_freetype`
+# backend and the Linux/Windows backends, and Fontconfig only
+# `fontconfig_freetype`; macOS never links Fontconfig at all (the `fc` module and
+# `fontconfig-sys` are already `cfg`-gated off Darwin). Ghostty itself selects
+# these stacks by BUILD OPTION (`-Dfont-backend`), so expressing them as cargo
+# features is faithful in spirit (R8: a build switch ports as a switch, never
+# constant-folded). A macOS embedder that turns all three off gets the reference's
+# own default backend, unchanged.
+#
+# THE IMPLICATION CHAIN is forced by the code, not by taste:
+#   * `harfbuzz` pulls `dep:freetype-sys` as well, because `harfbuzz-sys` has a
+#     hard (non-optional) `freetype-sys` dependency — HarfBuzz is built with
+#     `-DHAVE_FREETYPE=1` so `src/hb-ft.cc` needs FreeType's headers and archive,
+#     mirroring the reference's `lib.linkLibrary(freetype)` — and because `hb.rs`'s
+#     `hb_ft` bridge (`create_font`/`create_face`, the port of
+#     `pkg/harfbuzz/freetype.zig`) is TYPED against `freetype_sys::FT_Face`.
+#     Enabling HarfBuzz therefore cannot drop FreeType from the graph; only
+#     turning HarfBuzz off can.
+#   * `freetype` implies `harfbuzz`, because the FreeType backend face
+#     (`face/freetype.rs`) shapes through HarfBuzz — it holds an `hb::Font` built
+#     by `hb::create_font` — exactly as `backend.zig`'s `hasHarfbuzz()` is true for
+#     every freetype-active backend.
+#   * `fontconfig` implies `freetype`, because the only backend that uses
+#     Fontconfig is `fontconfig_freetype` (`Backend::has_fontconfig` is true for
+#     that one arm alone).
+# So the minimal CoreText-only build is simply `default-features = false` with no
+# features named; anything else keeps FreeType in the graph.
+default = ["freetype", "harfbuzz", "fontconfig"]
+
+# HarfBuzz 11.0.0 text shaping (`hb.rs`, `shape::harfbuzz`, and the `hb_font` the
+# CoreText and FreeType faces carry). Also pulls `freetype-sys` — see the
+# implication chain above.
+harfbuzz = ["dep:harfbuzz-sys", "dep:freetype-sys"]
+# FreeType 2.13.2 glyph rasterization: the `ft` FFI glue, the `face::freetype`
+# backend face, and `library::FreetypeLibrary`. Implies `harfbuzz`.
+freetype = ["dep:freetype-sys", "harfbuzz"]
+# Fontconfig 2.14.2 font discovery/matching (the `fc` module, the port of
+# `pkg/fontconfig/*.zig`) for the `fontconfig_freetype` backend. Already gated off
+# macOS/Windows/wasm by `cfg`; this feature is what lets a NON-macOS-targeting
+# embedder drop `links = "fontconfig"` from the graph too. Implies `freetype`.
+fontconfig = ["dep:fontconfig-sys", "freetype"]
+
 [dependencies]
 # The `log` facade (`.port/parity-closure/DECISION-logging.md` §6/§6r): every
 # restored `log.warn`/`log.err`/`log.info`/`log.debug` reference call site in
@@ -113,8 +172,12 @@ allocator-api2 = { workspace = true }
 rustty-os = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-freetype-sys = { path = "../../crates-sys/freetype-sys" }
-harfbuzz-sys = { path = "../../crates-sys/harfbuzz-sys" }
+# OPTIONAL (features `freetype` / `harfbuzz`, both DEFAULT-ON): see the
+# `[features]` header — an embedder whose graph already declares
+# `links = "freetype"` can only build if these leave the graph entirely, and a
+# macOS build needs neither (the default Darwin backend is `.coretext`).
+freetype-sys = { path = "../../crates-sys/freetype-sys", optional = true }
+harfbuzz-sys = { path = "../../crates-sys/harfbuzz-sys", optional = true }
 
 # Fontconfig 2.14.2 (font discovery/matching) for the FreeType/Fontconfig
 # discovery backend — the SAME C library the reference links (R3), consumed by
@@ -131,7 +194,11 @@ harfbuzz-sys = { path = "../../crates-sys/harfbuzz-sys" }
 # `freetype_windows` discoverer now live, Windows uses the FreeType directory scan
 # and links no fontconfig.
 [target.'cfg(not(any(target_os = "macos", target_os = "windows", target_arch = "wasm32")))'.dependencies]
-fontconfig-sys = { path = "../../crates-sys/fontconfig-sys" }
+# OPTIONAL (feature `fontconfig`, DEFAULT-ON): the `cfg` table above keeps
+# fontconfig off macOS/Windows/wasm, but Cargo's `links` uniqueness check ignores
+# `cfg` and runs over the whole resolve graph — so an embedder colliding on
+# `links = "fontconfig"` needs the dependency gone, not merely inactive.
+fontconfig-sys = { path = "../../crates-sys/fontconfig-sys", optional = true }
 
 # macOS: the CoreText backend (font discovery + rendering + shaping) and its
 # CoreGraphics rasterization surface. R3/objc2: the crates.io objc2 framework

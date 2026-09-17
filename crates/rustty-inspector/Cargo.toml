@@ -15,6 +15,25 @@ authors.workspace = true
 [lints]
 workspace = true
 
+[features]
+# Pass-throughs for `rustty-font-shaper`'s three vendored-C font backends
+# (FreeType / HarfBuzz / Fontconfig), forwarded through `rustty-renderer`.
+# DEFAULT-ON, so every existing build of this crate is byte-identical (R5).
+#
+# They exist ONLY so an embedder can turn them off. Cargo permits exactly one
+# package per resolve graph declaring a given `links` value, and that check spans
+# the WHOLE graph regardless of target — so a `cfg`-gated `-sys` dependency does
+# not avoid it; it has to be absent. This crate sits on the path
+# `rustty-termio` -> here -> `rustty-renderer` -> `rustty-font-shaper`, and cargo
+# features UNIFY across a graph, so if this crate named the features outright the
+# embedder's opt-out would be silently overridden. Forwarding is the point. Full
+# rationale, and why a macOS CoreText-only build loses nothing, is in the
+# `[features]` header of `crates/rustty-font-shaper/Cargo.toml`.
+default = ["freetype", "harfbuzz", "fontconfig"]
+freetype = ["rustty-renderer/freetype", "dcimgui-sys/freetype"]
+harfbuzz = ["rustty-renderer/harfbuzz"]
+fontconfig = ["rustty-renderer/fontconfig"]
+
 [dependencies]
 rustty-vt = { workspace = true }
 # termio.rs: names `rustty_lib::allocator::{GlobalZigAllocator, ZigAllocatorRef}`

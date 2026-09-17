@@ -32,8 +32,24 @@ doctest = false
 # `wasm32-unknown-unknown`, which has no libc sysroot for those build scripts to
 # target. DEFAULT-ON, so every native build is byte-identical (R5); the wasm module
 # builds with `--no-default-features --features wasm`.
-default = ["renderer", "input-oniguruma"]
+default = ["renderer", "input-oniguruma", "freetype", "harfbuzz", "fontconfig"]
 renderer = ["dep:rustty-renderer"]
+# Pass-throughs for `rustty-font-shaper`'s three vendored-C font backends
+# (FreeType / HarfBuzz / Fontconfig), forwarded through the `rustty-renderer` edge
+# above. DEFAULT-ON, so every existing build of this crate is byte-identical (R5).
+#
+# They exist ONLY so an embedder can turn them off: Cargo permits one package per
+# resolve graph per `links` value, the check spans the WHOLE graph regardless of
+# target (a `cfg`-gated `-sys` dependency does NOT escape it), and cargo features
+# UNIFY — so a crate on the path `rustty-termio` -> here -> `rustty-renderer` ->
+# `rustty-font-shaper` that named the features outright would silently override
+# the embedder's opt-out. The `?` in `rustty-renderer?/...` keeps these from
+# activating the OPTIONAL `rustty-renderer` dependency, so the wasm module's
+# `--no-default-features --features wasm` build is unaffected. Full rationale is
+# in the `[features]` header of `crates/rustty-font-shaper/Cargo.toml`.
+freetype = ["rustty-renderer?/freetype"]
+harfbuzz = ["rustty-renderer?/harfbuzz"]
+fontconfig = ["rustty-renderer?/fontconfig"]
 # WS14 T6 — the second of the two edges that gate the freestanding wasm link:
 # `rustty-input`'s own default-on `oniguruma` feature (its `Link::oni_regex`), which
 # pulls `oniguruma-sys`. This crate's `rustty-input` dependency therefore sets

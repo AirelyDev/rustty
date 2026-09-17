@@ -1648,6 +1648,13 @@ mod tests {
     // module is a sibling in the same crate, so the identical sequence
     // (init library → memory face → createFace → createFont → setFontFuncs) is
     // spelled with the ported wrappers.
+    // EMBEDDER DIVERGENCE (feature `freetype`, DEFAULT-ON): the `ft` module is
+    // absent when only `harfbuzz` is on — `harfbuzz-sys` pulls `freetype-sys`
+    // unconditionally (it is built with `-DHAVE_FREETYPE=1`), so the bridge
+    // FUNCTIONS above still compile against `freetype_sys::FT_Face`, but this
+    // test drives them through the ported `crate::ft` wrappers. Default builds
+    // (and every gate lane) have `freetype` on, so this test always runs there.
+    #[cfg(feature = "freetype")]
     #[test]
     fn freetype_bridge() {
         let test_font = crate::ft::testing::FONT_REGULAR;

@@ -62,8 +62,17 @@ fn main() {
     // (`DEP_FREETYPE_INCLUDE`). Required because `-DIMGUI_ENABLE_FREETYPE=1`
     // makes `misc/freetype/imgui_freetype.cpp` `#include <ft2build.h>` /
     // `FT_FREETYPE_H` and call the FreeType API.
-    let ft_include =
-        env::var("DEP_FREETYPE_INCLUDE").expect("DEP_FREETYPE_INCLUDE not set by freetype-sys");
+    // Feature `freetype` (DEFAULT-ON, = the reference's `.freetype = true`): with
+    // it off there is no `freetype-sys` dependency, so no `DEP_FREETYPE_INCLUDE`
+    // and no `imgui_freetype.cpp` — Dear ImGui uses its built-in `stb_truetype`
+    // loader instead (upstream's own default). See the `[features]` header of
+    // Cargo.toml for why the dependency has to be optional at all.
+    let freetype = env::var_os("CARGO_FEATURE_FREETYPE").is_some();
+    let ft_include = if freetype {
+        env::var("DEP_FREETYPE_INCLUDE").expect("DEP_FREETYPE_INCLUDE not set by freetype-sys")
+    } else {
+        String::new()
+    };
 
     let mut build = cc::Build::new();
     build
@@ -75,18 +84,22 @@ fn main() {
         // lib.addIncludePath(bindings)).
         .include(&imgui)
         .include(&dcimgui)
-        // FreeType headers for imgui_freetype.cpp (reference wires this via the
-        // freetype dependency's include path).
-        .include(&ft_include)
         // Vendored upstream code: do not let its warnings fail the host build.
         .warnings(false)
         .flag_if_supported("-w")
         // Reference flags common to all TUs (pkg/dcimgui/build.zig `buildLib`).
         .define("IMGUI_HAS_DOCK", "1")
         .define("IMGUI_USE_WCHAR32", "1")
-        .define("IMGUI_DISABLE_OBSOLETE_FUNCTIONS", "1")
-        // freetype == true (SharedDeps.zig sets `.freetype = true`).
-        .define("IMGUI_ENABLE_FREETYPE", "1");
+        .define("IMGUI_DISABLE_OBSOLETE_FUNCTIONS", "1");
+
+    // freetype == true (SharedDeps.zig sets `.freetype = true`) — the default.
+    if freetype {
+        build
+            // FreeType headers for imgui_freetype.cpp (reference wires this via
+            // the freetype dependency's include path).
+            .include(&ft_include)
+            .define("IMGUI_ENABLE_FREETYPE", "1");
+    }
 
     // The reference defines IMGUI_IMPL_API for the backend impl headers. On
     // non-Windows it is `extern "C"` (Windows adds `__declspec(dllexport)`).
@@ -139,12 +152,18 @@ fn main() {
         "imgui/imgui_tables.cpp",
         "imgui/imgui_widgets.cpp",
         "imgui/imgui_demo.cpp",
-        // FreeType font backend (reference: freetype == true).
-        "imgui/misc/freetype/imgui_freetype.cpp",
         // Dear Bindings C API TUs (reference: bindings dependency).
         "dcimgui/dcimgui.cpp",
         "dcimgui/dcimgui_internal.cpp",
-    ] {
+    ]
+    .into_iter()
+    // FreeType font backend (reference: freetype == true) — compiled only with
+    // the default-on `freetype` feature, since it is what calls the FreeType API.
+    .chain(
+        freetype
+            .then_some("imgui/misc/freetype/imgui_freetype.cpp")
+            .into_iter(),
+    ) {
         build.file(vendor.join(src));
         println!("cargo:rerun-if-changed=vendor/{src}");
     }
@@ -209,9 +228,11 @@ fn main() {
             .define("IMGUI_HAS_DOCK", "1")
             .define("IMGUI_USE_WCHAR32", "1")
             .define("IMGUI_DISABLE_OBSOLETE_FUNCTIONS", "1")
-            .define("IMGUI_ENABLE_FREETYPE", "1")
             .define("IMGUI_IMPL_API", "extern \"C\"")
             .file(backends.join("imgui_impl_metal.mm"));
+        if freetype {
+            metal.define("IMGUI_ENABLE_FREETYPE", "1");
+        }
         metal.compile("dcimgui_metal");
         println!("cargo:rerun-if-changed=vendor/imgui/backends/imgui_impl_metal.mm");
         println!("cargo:rerun-if-changed=vendor/imgui/backends/imgui_impl_metal.h");

@@ -47,7 +47,12 @@ rustty-vt = { workspace = true, features = ["oniguruma", "simd", "wuffs"] }
 # OSC 52 strict base64 decode in `clipboardWrite`.
 rustty-simd = { workspace = true }
 rustty-config = { workspace = true }
-rustty-renderer = { workspace = true }
+# The three font-backend pass-throughs are default-on for this crate, exactly as
+# before they became features; the workspace dependency sets
+# `default-features = false` (see the root manifest) only so the crates on an
+# embedder's path can opt out, so this consumer names them and builds
+# byte-identically (R5).
+rustty-renderer = { workspace = true, features = ["freetype", "harfbuzz", "fontconfig"] }
 rustty-font = { workspace = true }
 rustty-input = { workspace = true }
 rustty-termio = { workspace = true }
@@ -78,7 +83,12 @@ rustty-oniguruma = { workspace = true }
 # vt+font (rustty-font-shaper); Surface<A>/App<A> also need it
 # (`font_grid_set: SharedGridSet`, CORE_BLUEPRINT §1). Downward-safe edge
 # (core is the top tier); the acyclic gate is the backstop.
-rustty-font-shaper = { workspace = true }
+# The three vendored-C font backends are default-on for this crate, exactly as
+# before they became features: the workspace dependency sets
+# `default-features = false` (see the root manifest) purely so
+# `rustty-renderer` can expose the opt-out an embedder needs, so every other
+# consumer names them here and builds byte-identically (R5).
+rustty-font-shaper = { workspace = true, features = ["freetype", "harfbuzz", "fontconfig"] }
 rustty-datastruct = { workspace = true }
 rustty-zigstd = { workspace = true }
 rustty-xev = { workspace = true }

@@ -13,7 +13,11 @@
 // WASM DIVERGENCE: the freetype FFI glue (`crate::ft`) is not compiled on the
 // `wasm32` web_canvas backend (no FreeType on freestanding wasm); `Library`
 // resolves to `NoopLibrary` there (like the CoreText backend).
-#[cfg(not(target_arch = "wasm32"))]
+// EMBEDDER DIVERGENCE (feature `freetype`, DEFAULT-ON): likewise absent when an
+// embedding application turns the vendored-C font backends off; `Library`
+// resolves to `NoopLibrary` on macOS either way, exactly as on the CoreText
+// backend (see this crate's `Cargo.toml` `[features]`).
+#[cfg(all(not(target_arch = "wasm32"), feature = "freetype"))]
 use crate::ft;
 
 /// The library-wide mutex type.
@@ -35,7 +39,7 @@ pub type Library = FreetypeLibrary;
 
 /// Library implementation for the freetype backend.
 // PORT NOTE: `library.zig`'s `FreetypeLibrary`. Not compiled on wasm (no FreeType).
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "freetype"))]
 #[derive(Clone, Copy, Debug)]
 pub struct FreetypeLibrary {
     /// The underlying FreeType library.
@@ -49,7 +53,7 @@ pub struct FreetypeLibrary {
     pub mutex: *mut Mutex,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "freetype"))]
 impl FreetypeLibrary {
     /// Initialize the library and its mutex.
     // PORT NOTE: `FreetypeLibrary.init`.

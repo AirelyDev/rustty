@@ -21,7 +21,18 @@
 // concrete `freetype::Face` is reachable directly as `face::freetype::Face`.
 // WASM DIVERGENCE: the FreeType backend face is not compiled on the `wasm32`
 // web_canvas backend (no FreeType on freestanding wasm).
-#[cfg(not(target_arch = "wasm32"))]
+// EMBEDDER DIVERGENCE (features `freetype` + `harfbuzz`, both DEFAULT-ON): the
+// FreeType backend face also drops out when an embedding application turns the
+// vendored-C font backends off. It needs BOTH features — it rasterizes through
+// `crate::ft` and shapes through `crate::hb` (`hasHarfbuzz()` is true for every
+// freetype-active backend) — and the `Face` selector below resolves to
+// `coretext::Face` on the only target where that is allowed (macOS, whose
+// default backend is `.coretext`; see this crate's `Cargo.toml` `[features]`).
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    feature = "freetype",
+    feature = "harfbuzz"
+))]
 pub mod freetype;
 //
 // PORT NOTE: `face/web_canvas.zig` (the browser Canvas backend `Face`) is ported

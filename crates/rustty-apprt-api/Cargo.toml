@@ -15,6 +15,25 @@ authors.workspace = true
 [lints]
 workspace = true
 
+[features]
+# Pass-throughs for `rustty-font-shaper`'s three vendored-C font backends
+# (FreeType / HarfBuzz / Fontconfig), forwarded through `rustty-renderer`.
+# DEFAULT-ON, so every existing build of this crate is byte-identical (R5).
+#
+# They exist ONLY so an embedder can turn them off. Cargo permits exactly one
+# package per resolve graph declaring a given `links` value, and that check spans
+# the WHOLE graph regardless of target — so a `cfg`-gated `-sys` dependency does
+# not avoid it; it has to be absent. This crate sits on the path
+# `rustty-termio` -> here -> `rustty-renderer` -> `rustty-font-shaper`, and cargo
+# features UNIFY across a graph, so if this crate named the features outright the
+# embedder's opt-out would be silently overridden. Forwarding is the point. Full
+# rationale, and why a macOS CoreText-only build loses nothing, is in the
+# `[features]` header of `crates/rustty-font-shaper/Cargo.toml`.
+default = ["freetype", "harfbuzz", "fontconfig"]
+freetype = ["rustty-renderer/freetype", "rustty-config/freetype"]
+harfbuzz = ["rustty-renderer/harfbuzz", "rustty-config/harfbuzz"]
+fontconfig = ["rustty-renderer/fontconfig", "rustty-config/fontconfig"]
+
 [dependencies]
 # The acyclicity guarantee (break #8): apprt-api depends ONLY on downstream
 # crates — never on rustty-core or rustty-apprt. This is what lets rustty-core
@@ -22,7 +41,21 @@ workspace = true
 # apprt<->core cycle. `check_acyclic.sh` is the hard proof.
 rustty-lib = { workspace = true }              # checkGhosttyHEnum / enum_type
 rustty-build-config = { workspace = true }     # apprt.Runtime (runtime.zig re-export)
-rustty-config = { workspace = true }           # Config, Config.Duration
+# `default-features = false` + the explicit feature list (the same shape
+# `rustty-wasm` uses on this dependency): `rustty-config`'s defaults now include
+# the `freetype`/`harfbuzz`/`fontconfig` pass-throughs, and this crate sits on an
+# EMBEDDER's dependency path, where cargo feature UNIFICATION means one edge
+# still enabling them turns them back on for the whole graph. The two non-font
+# defaults are named back explicitly so the build is otherwise unchanged (R5),
+# and the font trio is forwarded by this crate's own features instead. It cannot
+# be spelled as `{ workspace = true, default-features = false }` — Cargo IGNORES
+# a member's `default-features = false` when the workspace dependency did not
+# declare it.
+# Config, Config.Duration
+rustty-config = { path = "../rustty-config", default-features = false, features = [
+    "renderer",
+    "input-oniguruma",
+] }
 rustty-vt = { workspace = true }               # Scrollbar, MouseShape, osc ProgressReport/ColoredTarget
 rustty-input = { workspace = true }            # input.Trigger (+ Trigger.C) for KeySequence
 rustty-datastruct = { workspace = true }       # MessageData (surface WriteReq)

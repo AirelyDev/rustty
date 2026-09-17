@@ -118,7 +118,12 @@ libc = "0.2"
 # the display_id leaf pushes rustty_renderer::Message::MacosDisplayId over the
 # render-thread rustty_datastruct BlockingQueue with a Timeout. Forward edges to
 # crates far below apprt-c (the top sink) — check_acyclic.sh stays GREEN.
-rustty-renderer = { workspace = true }
+# The three font-backend pass-throughs are default-on for this crate, exactly as
+# before they became features; the workspace dependency sets
+# `default-features = false` (see the root manifest) only so the crates on an
+# embedder's path can opt out, so this consumer names them and builds
+# byte-identically (R5).
+rustty-renderer = { workspace = true, features = ["freetype", "harfbuzz", "fontconfig"] }
 rustty-datastruct = { workspace = true }
 # `ghostty_info` reads `build_config.version_string` + `builtin.mode` (main_c.zig:131);
 # rustty-build-config supplies `VERSION_STRING` + `mode_string()`. Forward edge (member 2,
@@ -150,7 +155,12 @@ rustty-bench = { workspace = true }
 # (+ the coretext `Face.font: CFRetained<CTFont>`). Forward edge to a crate far
 # below apprt-c (already transitively present via rustty-renderer) — apprt-c stays
 # the top sink, check_acyclic.sh GREEN.
-rustty-font-shaper = { workspace = true }
+# The three vendored-C font backends are default-on for this crate, exactly as
+# before they became features: the workspace dependency sets
+# `default-features = false` (see the root manifest) purely so
+# `rustty-renderer` can expose the opt-out an embedder needs, so every other
+# consumer names them here and builds byte-identically (R5).
+rustty-font-shaper = { workspace = true, features = ["freetype", "harfbuzz", "fontconfig"] }
 
 # macOS-only CoreText bindings for `rustty_surface_quicklook_font` (Darwin-gated,
 # like the reference's `Darwin` struct export). objc2-core-text supplies `CTFont`
