@@ -2956,6 +2956,37 @@ mod macos_impl {
             self.draw_mutex.unlock();
         }
 
+        /// PORT NOTE (rustty-only glue, additive): no reference counterpart — see
+        /// `Metal::set_offscreen_size`, which this forwards to. Ghostty's renderer
+        /// never sizes its own surface: `Metal.surfaceSize` reads the attached
+        /// layer's bounds, so the windowing system resizes it. rustty's OFFSCREEN
+        /// slice has no layer (`init_offscreen`, layer `None`), so an embedder that
+        /// composites the finished IOSurface itself needs this to make its surface
+        /// follow the pane. Purely additive: nothing in the reference lane calls it,
+        /// and on-screen (`layer.is_some()`) it has no effect at all.
+        ///
+        /// Separate from [`Self::set_screen_size`] on purpose, and *not* folded into
+        /// it: that one is the reference's `setScreenSize`, which owns only
+        /// `size.padding` (plus the uniforms derived from it), while `size.screen`
+        /// belongs to `draw_frame`, which re-derives it from `api.surface_size()` and
+        /// resizes the swap-chain target in the same breath. So the two compose:
+        /// this call changes what the *next* `draw_frame` will see, and a padding
+        /// update from the embedder's terminal size is still `set_screen_size`'s job.
+        ///
+        /// Takes `draw_mutex`, as `set_screen_size` does, so the write cannot land
+        /// midway through a concurrent `draw_frame`'s size handling.
+        pub fn set_offscreen_size(&mut self, size: ScreenSize) {
+            self.draw_mutex.lock();
+            // `defer self.draw_mutex.unlock()`: INFALLIBLE body (no `?`) => the end
+            // unlock is reached on every non-panic path (as in `set_screen_size`).
+
+            self.api.set_offscreen_size(size.width, size.height);
+
+            log::debug!(target: LOG_SCOPE, "offscreen size size={size:?}");
+
+            self.draw_mutex.unlock();
+        }
+
         // pub fn changeConfig(self: *Self, config: *DerivedConfig) !void
         //
         // SIGNATURE PORT NOTE (§4.3): the reference does a shallow `self.config = config.*`
@@ -7529,6 +7560,127 @@ mod macos_impl {
                     .expect("finalize_surface_init (no-op)");
 
                 // The windowed teardown must not panic/leak.
+                r.deinit();
+            }
+        }
+
+        // PORT NOTE (rustty-only, additive — no reference `test{}`): proves the
+        // OFFSCREEN seam M-3 setter actually reaches the drawn surface, which is the
+        // whole reason it exists. `set_offscreen_size` writes a private field; what
+        // an embedder needs is for the NEXT frame to be that size. So: draw once at
+        // the constructed size, resize, draw again, and read the swap-chain target
+        // (the IOSurface an embedder composites) plus `size.screen` back out. Without
+        // the setter both stay pinned to `init_offscreen`'s size forever.
+        mod offscreen_resize {
+            use super::*;
+
+            /// Drive one real frame, as the golden tests do.
+            fn draw_one_frame(r: &mut Renderer) {
+                let mut mutex = Mutex::new();
+                let mut t = Terminal::init(Global, opts(10, 3)).unwrap();
+                let st = state::State {
+                    mutex: &mut mutex,
+                    terminal: &mut t,
+                    inspector: None,
+                    inspector_ptr: None,
+                    preedit: None,
+                    mouse: state::Mouse::default(),
+                    demand: Default::default(),
+                    handoff_gen: Default::default(),
+                    handoff_park: Default::default(),
+                };
+                r.update_frame(&st, true).unwrap();
+                r.draw_frame(true).unwrap();
+            }
+
+            /// The target an embedder reads (`swap_chain.frames[frame_index].target`).
+            fn target_size(r: &Renderer) -> (usize, usize) {
+                let chain = r.swap_chain.as_ref().expect("a swap chain after a frame");
+                let frame = &chain.frames[chain.frame_index as usize];
+                (frame.target.width, frame.target.height)
+            }
+
+            #[test]
+            fn set_offscreen_size_resizes_the_next_frames_surface() {
+                let mut r = match golden_renderer(10, 3) {
+                    Some(r) => r,
+                    None => return, // Metal-skip
+                };
+
+                draw_one_frame(&mut r);
+                let built = r.size.screen;
+                // `golden_renderer` pins `offscreen_size == size.screen`, so the
+                // first frame drew at the constructed size — the state an embedder
+                // used to be stuck in.
+                assert_eq!(
+                    target_size(&r),
+                    (built.width as usize, built.height as usize),
+                    "the first frame must draw at the constructed offscreen size"
+                );
+
+                // A size no cell quantisation could have produced by itself, so a
+                // pass cannot be an accident of the grid.
+                let grown = ScreenSize {
+                    width: built.width + 37,
+                    height: built.height + 11,
+                };
+                r.set_offscreen_size(grown);
+                assert_eq!(
+                    r.api.surface_size().unwrap(),
+                    crate::metal::metal_impl::SurfaceSize {
+                        width: grown.width,
+                        height: grown.height,
+                    },
+                    "the setter must move what `draw_frame` reads as the surface size"
+                );
+
+                draw_one_frame(&mut r);
+                // `draw_frame`'s `size_changed` branch wrote `size.screen`...
+                assert_eq!(r.size.screen, grown, "draw_frame must adopt the new size");
+                // ...and `FrameState::resize` replaced the target behind it.
+                assert_eq!(
+                    target_size(&r),
+                    (grown.width as usize, grown.height as usize),
+                    "the swap-chain target must follow the new offscreen size"
+                );
+
+                r.deinit();
+            }
+
+            /// `set_screen_size` (the reference's `setScreenSize`) owns
+            /// `size.padding`; `set_offscreen_size` owns the surface. They compose —
+            /// neither clobbers the other — which is what an embedder relies on when
+            /// it resizes the surface and the grid together.
+            #[test]
+            fn set_offscreen_size_and_set_screen_size_compose() {
+                let mut r = match golden_renderer(10, 3) {
+                    Some(r) => r,
+                    None => return, // Metal-skip
+                };
+
+                let padding = Padding {
+                    top: 3,
+                    bottom: 4,
+                    left: 5,
+                    right: 6,
+                };
+                let mut size = r.size;
+                size.padding = padding;
+                r.set_screen_size(size);
+
+                let grown = ScreenSize {
+                    width: r.size.screen.width + 37,
+                    height: r.size.screen.height + 11,
+                };
+                r.set_offscreen_size(grown);
+                draw_one_frame(&mut r);
+
+                assert_eq!(r.size.screen, grown, "the surface resize must land");
+                assert_eq!(
+                    r.size.padding, padding,
+                    "and must not discard the padding `set_screen_size` set"
+                );
+
                 r.deinit();
             }
         }

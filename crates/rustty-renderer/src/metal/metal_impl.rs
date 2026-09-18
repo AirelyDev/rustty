@@ -150,9 +150,10 @@ pub struct Metal {
     // pointer.
     autorelease_pool: Option<*mut core::ffi::c_void>,
 
-    /// OFFSCREEN seam M-3: the fixed surface size (replaces `layer.bounds` in
-    /// `surfaceSize`). Set by `init_offscreen`; returned (clamped to
-    /// `max_texture_size`) by `surface_size`.
+    /// OFFSCREEN seam M-3: the offscreen surface size (replaces `layer.bounds` in
+    /// `surfaceSize`). Set by `init_offscreen`, changed afterwards by
+    /// `set_offscreen_size`; returned (clamped to `max_texture_size`) by
+    /// `surface_size`.
     offscreen_size: SurfaceSize,
 }
 
@@ -778,6 +779,27 @@ impl Metal {
                 height: self.offscreen_size.height.min(self.max_texture_size),
             }),
         }
+    }
+
+    /// PORT NOTE (rustty-only glue, additive): there is no reference counterpart.
+    /// Ghostty has no offscreen product mode at all — `offscreen_size` is rustty's
+    /// own OFFSCREEN seam M-3 (see the crate root's "R-d OFFSCREEN slice"), and the
+    /// reference's only size source is `layer.bounds * contentsScale`, which an
+    /// attached view resizes for it. An embedder that composites the finished
+    /// IOSurface itself has no layer whose bounds could drive `surface_size`, so
+    /// without this setter its surface is frozen at the size `init_offscreen` was
+    /// given and can never follow the pane it is drawn into. Purely additive: not
+    /// one byte of the on-screen (`layer.is_some()`) lane changes, and while a layer
+    /// is attached `offscreen_size` stays unread (`surface_size`'s `Some` branch).
+    ///
+    /// `draw_frame` re-reads `api.surface_size()` every frame, so the next frame
+    /// sees the new size, takes its `size_changed` branch (`generic.rs`:6356,
+    /// :6475-6483 — `size.screen` + `update_screen_size_uniforms`) and replaces the
+    /// swap-chain target through `FrameState::resize` (:6502-6516). Nothing here
+    /// touches the GPU; the caller serializes against a concurrent draw
+    /// (`Renderer::set_offscreen_size` takes `draw_mutex`).
+    pub fn set_offscreen_size(&mut self, width: u32, height: u32) {
+        self.offscreen_size = SurfaceSize { width, height };
     }
 
     /// Begin a frame.
