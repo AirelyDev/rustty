@@ -34,6 +34,16 @@ pub mod sentry_envelope;
 // PORT-hosted (not in src/crash/): the `build_options` blob entry + the
 // `@import("sentry")` Zig package.
 pub mod build_options;
+// PORT NOTE (Zig laziness vs Rust eagerness; same substitution as
+// `rustty-font-shaper`'s `shaper/harfbuzz.rs` off macOS): the reference's
+// `const sentry = if (build_options.sentry) @import("sentry");`
+// (src/crash/sentry.zig:7) means the `pkg/sentry` package is never SEMANTICALLY
+// ANALYSED in a `-Dsentry=false` build — and `SharedDeps.zig:407` does not even
+// link the libraries it binds to. Rust type-checks every module it compiles, so
+// `cfg` stands in for that lazy analysis: without the `sentry` feature the
+// sentry-sys dependency is absent (that IS the link gate) and this wrapper
+// module is not compiled, exactly the set of declarations Zig skips.
+#[cfg(feature = "sentry")]
 pub mod sentry_pkg;
 
 // pub const sentry = @import("sentry.zig");
@@ -69,6 +79,9 @@ mod tests {
     fn ref_all_decls() {
         // pub const sentry = @import("sentry.zig");
         let _ = std::any::type_name::<crate::sentry::Type>();
+        // (`Transport` is the sentry-native transport callback holder, so it
+        // only exists in a `-Dsentry=true` build — see sentry.rs's gate.)
+        #[cfg(feature = "sentry")]
         let _ = std::any::type_name::<crate::sentry::Transport>();
         // pub const Envelope = sentry_envelope.Envelope;
         let _ = std::any::type_name::<crate::Envelope>();

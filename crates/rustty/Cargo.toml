@@ -59,6 +59,18 @@ gtk = ["rustty-apprt/gtk", "rustty-cli/gtk", "dep:allocator-api2"]
 # reads `cfg!(feature = "x11")`/`cfg!(feature = "wayland")` in ITS own crate.
 wayland = ["gtk", "rustty-apprt/wayland", "rustty-cli/wayland"]
 x11 = ["gtk", "rustty-apprt/x11", "rustty-cli/x11"]
+# The reference's `-Dsentry` build option, forwarded to `rustty-crash` — where it
+# is BOTH `build_options::SENTRY` and the `SharedDeps.zig:407` link gate for
+# sentry-native + breakpad (see that crate's `[features]` header).
+#
+# OFF by default, and that is the per-target default doing its job rather than a
+# divergence: `build/Config.zig:224-236` resolves the option to true on
+# macOS/iOS and false everywhere else, a cargo `default = [...]` list cannot be
+# target-conditional, so the switch lives in build orchestration — exactly where
+# `-Dsimd` already lives (`xtask/src/main.rs`, the `--features simd` arm). The
+# Apple xcframework build passes `--features sentry`; a packager building this binary for a Darwin target passes it here.
+sentry = ["rustty-apprt/sentry"]
+
 
 # PACKAGING options — the ports of the reference's `-Dflatpak=true` and
 # `-Dsnap`, which its own `flatpak/com.mitchellh.ghostty.yml` and

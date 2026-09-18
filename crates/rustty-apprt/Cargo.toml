@@ -36,6 +36,18 @@ workspace = true
 # so the gtk inspector's ImGui key routing has the real mapping — it is an
 # apprt-layer GUI-glue dependency (R3) that only the gtk backend needs.
 gtk = ["dep:glib", "dep:gio", "dep:gdk4", "dep:gtk4", "dep:libadwaita", "rustty-vt/imgui"]
+# The reference's `-Dsentry` build option, forwarded to `rustty-crash` — where it
+# is BOTH `build_options::SENTRY` and the `SharedDeps.zig:407` link gate for
+# sentry-native + breakpad (see that crate's `[features]` header).
+#
+# OFF by default, and that is the per-target default doing its job rather than a
+# divergence: `build/Config.zig:224-236` resolves the option to true on
+# macOS/iOS and false everywhere else, a cargo `default = [...]` list cannot be
+# target-conditional, so the switch lives in build orchestration — exactly where
+# `-Dsimd` already lives (`xtask/src/main.rs`, the `--features simd` arm). The
+# Apple xcframework build passes `--features sentry`; a Linux/GTK build does not, matching the reference's own Linux default.
+sentry = ["rustty-crash/sentry"]
+
 
 # The reference's `-Dflatpak=true`, forwarded down to termio (which welds it to
 # `rustty-build-config/flatpak`). This crate needs no `cfg` of its own —

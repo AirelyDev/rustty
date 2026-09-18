@@ -49,7 +49,22 @@ rustty-os = { workspace = true }
 rustty-datastruct = { workspace = true }
 rustty-unicode = { workspace = true }
 rustty-util = { workspace = true }
-rustty-crash = { workspace = true }
+# NO `rustty-crash` EDGE — deliberately absent, do not "restore" it.
+#
+# `renderer/Thread.zig` is the reference's only renderer-tier crash user
+# (`:9` `const crash = @import("../crash/main.zig");`, `:217`/`:221` the
+# `crash.sentry.thread_state` set/clear around `threadMain_`). R4 relocated that
+# whole file into `rustty-core::renderer_seam` to break the renderer->core cycle,
+# and `crates/rustty-core/src/renderer_seam.rs:75` carries the import itself, so
+# `rustty-core` declares the edge. Nothing under `crates/rustty-renderer/src`
+# names `rustty_crash` — the edge was pure surplus.
+#
+# It also COST something, which is why it is named here rather than quietly
+# dropped: rustty-crash's `sentry-sys` is the port of `SharedDeps.zig:407`'s
+# `if (self.config.sentry)` link gate, and this crate is what an EMBEDDER depends
+# on (see the `[features]` header above). A stale edge from here dragged
+# sentry-native + breakpad into every embedder's link, including on targets where
+# ghostty links neither.
 rustty-font = { workspace = true }
 rustty-render-types = { workspace = true }
 # renderer/generic.zig's `prepBackgroundImage` decodes the configured background

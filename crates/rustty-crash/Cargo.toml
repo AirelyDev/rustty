@@ -16,13 +16,32 @@ authors.workspace = true
 workspace = true
 
 [features]
-# The explicit `zig build -Dsentry=true` user override of the reference's
-# src/build/Config.zig `sentry` option (W15-04): forces `build_options::SENTRY`
-# on for ANY target — the Linux opt-in enablement. Without it the per-target
-# `orelse` default applies (macOS/iOS on, everything else off). Cargo features
-# are additive, so the `-Dsentry=false` direction has no cargo seam (see
-# src/build_options.rs).
-sentry = []
+# The reference's `-Dsentry` build option (src/build/Config.zig:33,224-236),
+# resolved. It is the SINGLE source of truth for `build_options::SENTRY`
+# (src/build_options.rs) AND — through `dep:sentry-sys` — for whether
+# sentry-native + breakpad are LINKED AT ALL. That second half is
+# `SharedDeps.zig:407`'s `if (self.config.sentry) { … }`, which rustty
+# previously did not have: sentry-sys was an unconditional dependency, so a
+# Linux rustty build linked libraries a Linux ghostty build does not.
+#
+# PORT NOTE (cargo cannot express the per-target `orelse`): Config.zig resolves
+# the option per target — true on macOS/iOS, false everywhere else, "because
+# the crash reports on Linux don't have much useful information". A cargo
+# `default = [...]` list is not target-conditional, and a `cfg`-gated dependency
+# is still PRESENT in the resolve graph (which is the whole point of making it
+# optional), so the per-target switch has to live where the reference's lives:
+# build orchestration. `xtask`'s Apple xcframework build passes
+# `--features sentry`; non-Apple artifacts do not. This is exactly the
+# precedent `-Dsimd` already set here (xtask/src/main.rs, the `--features simd`
+# arm: "rustty's plain-`cargo build` default stays SIMD-off"). CONSEQUENCE,
+# stated plainly: a plain `cargo build`/`cargo test` on macOS now has
+# `SENTRY == false`, the same visible dev-workflow trade already accepted for
+# `simd`.
+#
+# So this ONE feature spells both directions of `-Dsentry=…` that the reference
+# can reach: on = `-Dsentry=true` (incl. the W15-04 Linux opt-in enablement),
+# off = `-Dsentry=false`, which an embedder previously could not reach at all.
+sentry = ["dep:sentry-sys"]
 
 [dependencies]
 # The `LOG`-class facade (DECISION-logging.md §6r4, call shape 2). `crash/
@@ -42,7 +61,12 @@ rustty-identity = { workspace = true }
 # R3: the vendored sentry-native 0.7.8 (ghostty's product `backend = .breakpad`
 # — SharedDeps.zig; breakpad client provided by breakpad-sys — and
 # `transport = .none` build) behind the ported pkg/sentry wrapper (`sentry_pkg`).
-sentry-sys = { workspace = true }
+#
+# OPTIONAL: this edge IS `SharedDeps.zig:407`'s `if (self.config.sentry)` link
+# gate (see the `sentry` feature above). `breakpad-sys` needs no separate gate —
+# it reaches the graph only as sentry-sys's own dependency
+# (crates-sys/sentry-sys/Cargo.toml:43), so it leaves with it.
+sentry-sys = { workspace = true, optional = true }
 # Zig `std.json` equivalent (ObjectMap == insertion-order-preserving map; see
 # the workspace manifest note). Used by the sentry_envelope port.
 serde_json = { workspace = true }

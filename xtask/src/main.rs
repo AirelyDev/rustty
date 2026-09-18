@@ -430,6 +430,18 @@ struct XcframeworkSpec {
     bundle: &'static str,
     /// How the public headers are staged for the clang module map.
     headers: HeaderLayout,
+    /// Extra cargo features this artifact is built with, on TOP of the crate's
+    /// default set.
+    ///
+    /// PORTS the build-orchestration half of `-Dsentry`. `build/Config.zig:224-236`
+    /// resolves the option per TARGET — true on macOS/iOS, false everywhere else
+    /// ("the crash reports on Linux don't have much useful information") — and
+    /// `SharedDeps.zig:407` then decides from the same boolean whether
+    /// sentry-native and breakpad are LINKED AT ALL. A cargo `default = [...]`
+    /// list cannot be target-conditional and a `cfg`-gated dependency is still
+    /// present in the resolve graph, so the per-target switch has to live here,
+    /// in the builder, exactly as `--features simd` already does below.
+    extra_features: &'static [&'static str],
 }
 
 /// The two shapes rustty's public headers take.
@@ -465,6 +477,10 @@ const XCF_KIT: XcframeworkSpec = XcframeworkSpec {
         src: "include/rustty-embed.h",
         dst: "rustty.h",
     },
+    // `-Dsentry` for an Apple target: `build/Config.zig:224-236` resolves it to
+    // TRUE on macOS/iOS, and this is the macOS app's library. See
+    // `extra_features` above and `rustty-crash`'s `[features]` header.
+    extra_features: &["sentry"],
 };
 
 /// PORTS: ghostty's `ghostty-vt.xcframework` (GhosttyXCFramework.zig's lib-vt
@@ -485,6 +501,10 @@ const XCF_VT: XcframeworkSpec = XcframeworkSpec {
         src: "include/rustty",
         umbrella: "rustty/vt.h",
     },
+    // No `sentry`: `rustty-vt-c` does not reach `rustty-crash` at all (the VT
+    // library is below the crash tier), so there is nothing to enable — the
+    // reference links sentry into the APP, not into libghostty-vt.
+    extra_features: &[],
 };
 
 /// Copy a directory tree verbatim. `std::fs` has no recursive copy and the
@@ -529,6 +549,17 @@ fn build_xcframework(spec: &XcframeworkSpec) -> Result<PathBuf, String> {
     // OS, so the app (deployment target 13.0) gets "built for newer macOS"
     // linker warnings. Set as an env on the Command so it reaches BOTH rustc and
     // every build-script `cc` invocation this cargo build spawns.
+    // SIMD on for the shipped product library, matching upstream Ghostty's
+    // default-on lib and the CMake wrapper's RUSTTY_VT_SIMD default. (rustty's
+    // plain-`cargo build` default stays SIMD-off.) `spec.extra_features` adds the
+    // per-artifact ones on top — today `sentry` for the Apple embedding
+    // framework, whose per-target default is the reference's `true`. Same
+    // mechanism, same reason: cargo has no target-conditional default feature
+    // list, so the builder resolves the switch.
+    let features = std::iter::once("simd")
+        .chain(spec.extra_features.iter().copied())
+        .collect::<Vec<_>>()
+        .join(",");
     let json = archives::cargo_build_json(
         &root,
         &[
@@ -536,11 +567,8 @@ fn build_xcframework(spec: &XcframeworkSpec) -> Result<PathBuf, String> {
             spec.krate,
             "--profile",
             "xcframework",
-            // SIMD on for the shipped product library, matching upstream
-            // Ghostty's default-on lib and the CMake wrapper's RUSTTY_VT_SIMD
-            // default. (rustty's plain-`cargo build` default stays SIMD-off.)
             "--features",
-            "simd",
+            &features,
             "--target",
             target,
         ],

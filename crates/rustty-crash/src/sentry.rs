@@ -6,6 +6,24 @@
 //!
 //! PORT STATUS: done
 //!
+//! PORT NOTE (Zig laziness vs Rust eagerness — the `-Dsentry=false` build):
+//! line 7 of the reference is `const sentry = if (build_options.sentry)
+//! @import("sentry");`, and its two entry points open with `if (comptime
+//! !build_options.sentry) return;` (`init`:60, `deinit`:213). With the option
+//! false, Zig never SEMANTICALLY ANALYSES the sentry-native binding or anything
+//! that touches it, and `SharedDeps.zig:407` does not link the library at all.
+//! Rust type-checks every module it compiles, so `#[cfg(feature = "sentry")]`
+//! stands in for that lazy analysis: the FFI-reaching declarations below —
+//! `initThread`/`cacheDir`, `beforeSend`, the `setTag` tag-name helpers, the
+//! disk `Transport`, and the tails of `init`/`deinit` past the reference's own
+//! early return — are exactly the set Zig skips. Everything the tier ABOVE
+//! crash names (`ThreadState`, `ThreadStateSurface`, `Type`,
+//! `setThreadState`/`clearThreadState`, `init`, `deinit`) stays present and
+//! compiled in BOTH configurations, because the reference's own callers
+//! (src/Surface.zig, renderer/Thread.zig, src/App.zig) are analysed in both.
+//! This is the same substitution, with the same argument, that
+//! `rustty-font-shaper`'s `shaper/harfbuzz.rs` gate carries off macOS.
+//!
 //! SEAM (integration-tier blueprint): the reference's `ThreadState.surface`
 //! is a concrete `*Surface` (src/Surface.zig, the core tier ABOVE crash);
 //! `beforeSend`'s surface-metadata block is seamed via the local
@@ -18,18 +36,30 @@
 // const Allocator = std.mem.Allocator;
 // const builtin = @import("builtin");
 // const build_config = @import("../build_config.zig");
+// (Only the `setTag` block of `initThread` and its tag-name helpers read this,
+// so it carries the same gate they do — see the module header.)
+#[cfg(feature = "sentry")]
 use rustty_build_config as build_config;
 // const build_options = @import("build_options");
 use crate::build_options;
 // const sentry = if (build_options.sentry) @import("sentry");
 // (PORT NOTE: the Zig binding package `pkg/sentry` is hosted in-crate as
-// `sentry_pkg`; the `if (build_options.sentry)` comptime gate collapses — the
-// module always compiles, and every reaching path is behind the same
-// `build_options.sentry` runtime-const checks the reference uses.)
+// `sentry_pkg`. The reference's `if (build_options.sentry)` is reproduced, NOT
+// collapsed: the cargo feature gates the `sentry-sys` dependency itself — the
+// port of `SharedDeps.zig:407` — so with it off there is no binding module to
+// import, precisely as Zig has no `sentry` decl to analyse. Every reaching path
+// is ALSO behind the same `build_options.sentry` runtime-const checks the
+// reference uses, which is what keeps the two halves in step.)
+#[cfg(feature = "sentry")]
 use crate::sentry_pkg as sentry;
 // const internal_os = @import("../os/main.zig");
+// (Reached only by `initThread`/`cacheDir` — same gate; see the module header.)
+#[cfg(feature = "sentry")]
 use rustty_os as internal_os;
 // const crash = @import("main.zig");
+// (Reached only by `initThread`'s `defaultDir` and the `Transport`'s envelope
+// parse — same gate; see the module header.)
+#[cfg(feature = "sentry")]
 use crate as crash;
 // PORT NOTE (P4-E33, `15c50c1db` "crash: do not use global state"): upstream
 // removed the `global = @import("../global.zig")` import entirely — this file
@@ -45,6 +75,10 @@ use crate as crash;
 //
 // PORT NOTE: the reference's scope tag, carried through the `log` facade as
 // `target: LOG_SCOPE` (DECISION-logging.md §6r4).
+// (All five emissions live in the gated region — same gate; see the module
+// header. The `include_str!` test below reads the SOURCE, not the const, so it
+// still holds in both configurations.)
+#[cfg(feature = "sentry")]
 const LOG_SCOPE: &str = "sentry";
 
 /// The global state for the Sentry SDK. This is unavoidable since crash
@@ -53,6 +87,7 @@ const LOG_SCOPE: &str = "sentry";
 // PORT NOTE: Zig's plain global (init/deinit "should only be called from one
 // thread" per the doc below); Rust statics must be Sync, so the handle rides
 // in a Mutex. `JoinHandle::join` consumes the handle, so deinit `take`s it.
+#[cfg(feature = "sentry")]
 static INIT_THREAD: std::sync::Mutex<Option<std::thread::JoinHandle<Result<(), InitThreadError>>>> =
     std::sync::Mutex::new(None);
 
@@ -68,10 +103,12 @@ static INIT_THREAD: std::sync::Mutex<Option<std::thread::JoinHandle<Result<(), I
 
 /// Holds the XDG cache dir.
 // var cache_dir_: ?[]const u8 = null;
+#[cfg(feature = "sentry")]
 static CACHE_DIR: std::sync::Mutex<Option<Vec<u8>>> = std::sync::Mutex::new(None);
 
 /// Holds the XDG state dir.
 // var state_dir_: ?[]const u8 = null;
+#[cfg(feature = "sentry")]
 static STATE_DIR: std::sync::Mutex<Option<Vec<u8>>> = std::sync::Mutex::new(None);
 
 /// SEAM (integration-tier blueprint): the read surface `beforeSend` needs from
@@ -122,6 +159,10 @@ pub enum Type {
 
 impl Type {
     /// PORT NOTE: Zig `@tagName(thr_state.type)` — the reference enum tag names.
+    // (Read only by `beforeSend`, which the `-Dsentry=false` build does not
+    // analyse — module header. The decl is KEPT in both configurations because
+    // `Type` is part of the surface the core tier names; only the lint moves.)
+    #[cfg_attr(not(feature = "sentry"), allow(dead_code))]
     const fn tagName(self) -> &'static str {
         match self {
             Type::Main => "main",
@@ -148,6 +189,8 @@ thread_local! {
 /// The type-erased image of a [`ThreadState<S>`] (what the thread-local
 /// actually stores; see the PORT NOTE above).
 #[derive(Clone, Copy)]
+// (Both fields are read only by `beforeSend` — see `Type::tagName` above.)
+#[cfg_attr(not(feature = "sentry"), allow(dead_code))]
 struct ErasedThreadState {
     type_: Type,
     surface: *const dyn ThreadStateSurface,
@@ -193,6 +236,12 @@ pub enum InitError {
 // global allocator; same collapse as dir.rs). The reference's four manual
 // `map.deinit()` arms (build-off, Windows, spawn-failure, thread exit) collapse
 // into Drop — N-A-by-ownership glue (same reasoning as E9).
+// (In the `-Dsentry=false` build the ONLY thing this fn does with the map is
+// drop it — which is precisely the reference's `var map = environ_map;
+// map.deinit();` early-return arm quoted below, expressed by ownership. Rust
+// still calls that an unused binding, so the lint is allowed for that config
+// only.)
+#[cfg_attr(not(feature = "sentry"), allow(unused_variables))]
 pub fn init(environ_map: rustty_global::EnvMap) -> Result<(), InitError> {
     // if (comptime !build_options.sentry) {
     //     var map = environ_map;
@@ -213,49 +262,59 @@ pub fn init(environ_map: rustty_global::EnvMap) -> Result<(), InitError> {
         return Ok(());
     }
 
-    // Must only start once
-    // assert(init_thread == null);
-    let mut init_thread = INIT_THREAD.lock().unwrap();
-    assert!(init_thread.is_none());
+    // PORT NOTE (Zig laziness; module header): everything from here down is
+    // what the reference's `if (comptime !build_options.sentry) return;` above
+    // makes unanalysed, and what `SharedDeps.zig:407` does not link. In Rust it
+    // carries the `sentry` feature gate for that reason. The two guards above
+    // stay LIVE and unchanged — `build_options::SENTRY` is still read exactly
+    // where the reference reads it.
+    #[cfg(feature = "sentry")]
+    {
+        // Must only start once
+        // assert(init_thread == null);
+        let mut init_thread = INIT_THREAD.lock().unwrap();
+        assert!(init_thread.is_none());
 
-    // We use a thread for initializing Sentry because initialization is
-    // slow enough to matter for process startup: resolving our directories
-    // can take multiple milliseconds on macOS (Apple APIs) and Sentry's
-    // own init does disk I/O. Everything Sentry is doing initially is safe
-    // to do on a separate thread and fast enough that its very likely to
-    // be done before a crash occurs.
-    //
-    // The environ map is a snapshot owned by the thread (and freed there),
-    // so it is safe against concurrent mutations of the process environment
-    // (e.g. ensureLocale on the main thread).
-    // const thr = std.Thread.spawn(
-    //     .{},
-    //     initThread,
-    //     .{ gpa, environ_map },
-    // ) catch |err| {
-    //     var map = environ_map;
-    //     map.deinit();
-    //     return err;
-    // };
-    // (PORT NOTE: on spawn failure the moved-in closure — and the map it owns —
-    // is dropped by `Builder::spawn`; the manual deinit arm collapses.)
-    //
-    // thr.setName(single_threaded.io(), "sentry-init") catch {};
-    // PORT NOTE: Rust can only name a thread AT spawn (`Builder::name`) — the same
-    // "sentry-init" name the reference sets post-spawn. Upstream: "Naming the
-    // thread from here only works on some platforms (e.g. Linux). On Darwin the
-    // thread names itself in initThread."
-    let thr = std::thread::Builder::new()
-        .name("sentry-init".to_string())
-        .spawn(move || initThread(environ_map))
-        .map_err(InitError::Spawn)?;
-    // init_thread = thr;
-    *init_thread = Some(thr);
+        // We use a thread for initializing Sentry because initialization is
+        // slow enough to matter for process startup: resolving our directories
+        // can take multiple milliseconds on macOS (Apple APIs) and Sentry's
+        // own init does disk I/O. Everything Sentry is doing initially is safe
+        // to do on a separate thread and fast enough that its very likely to
+        // be done before a crash occurs.
+        //
+        // The environ map is a snapshot owned by the thread (and freed there),
+        // so it is safe against concurrent mutations of the process environment
+        // (e.g. ensureLocale on the main thread).
+        // const thr = std.Thread.spawn(
+        //     .{},
+        //     initThread,
+        //     .{ gpa, environ_map },
+        // ) catch |err| {
+        //     var map = environ_map;
+        //     map.deinit();
+        //     return err;
+        // };
+        // (PORT NOTE: on spawn failure the moved-in closure — and the map it owns —
+        // is dropped by `Builder::spawn`; the manual deinit arm collapses.)
+        //
+        // thr.setName(single_threaded.io(), "sentry-init") catch {};
+        // PORT NOTE: Rust can only name a thread AT spawn (`Builder::name`) — the same
+        // "sentry-init" name the reference sets post-spawn. Upstream: "Naming the
+        // thread from here only works on some platforms (e.g. Linux). On Darwin the
+        // thread names itself in initThread."
+        let thr = std::thread::Builder::new()
+            .name("sentry-init".to_string())
+            .spawn(move || initThread(environ_map))
+            .map_err(InitError::Spawn)?;
+        // init_thread = thr;
+        *init_thread = Some(thr);
+    }
     Ok(())
 }
 
 /// PORT NOTE: the reified error set of `initThread`'s `!void` — the state/cache
 /// dir lookups' errors + `error.SentryInitFailed`.
+#[cfg(feature = "sentry")]
 #[derive(Debug)]
 enum InitThreadError {
     SentryInitFailed,
@@ -273,6 +332,7 @@ enum InitThreadError {
 // single largest cost in global.init (2967-4018µs → 30-70µs). The reference's
 // `if (comptime !build_options.sentry) return;` guard was dropped upstream in
 // this restructure (the thread is only ever spawned when sentry is enabled).
+#[cfg(feature = "sentry")]
 fn initThread(environ_map: rustty_global::EnvMap) -> Result<(), InitThreadError> {
     // var environ_map = environ_map_;
     // defer environ_map.deinit();
@@ -445,6 +505,7 @@ fn initThread(environ_map: rustty_global::EnvMap) -> Result<(), InitThreadError>
 // PORT NOTE (P4-E33): file-local, resolves the Sentry database (cache) dir from
 // the caller-supplied snapshot only. The `io`/`alloc` parameters are N-A /
 // collapsed as everywhere else in this file.
+#[cfg(feature = "sentry")]
 fn cacheDir(environ_map: &rustty_global::EnvMap) -> Result<Vec<u8>, InitThreadError> {
     // On macOS, we prefer to use the NSCachesDirectory value to be
     // a more idiomatic macOS application. But if XDG env vars are set
@@ -505,6 +566,12 @@ fn cacheDir(environ_map: &rustty_global::EnvMap) -> Result<Vec<u8>, InitThreadEr
 
 /// Process-wide deinitialization of our Sentry client. This ensures all
 /// our data is flushed.
+// (In the `-Dsentry=false` build the Windows guard below is the LAST statement
+// of the fn, so clippy calls its `return` needless. It is the faithful port of
+// `if (comptime builtin.os.tag == .windows) return;` and stays spelled that way
+// under R1, so the lint is allowed for that config only — the guard itself is
+// unchanged and still live.)
+#[cfg_attr(not(feature = "sentry"), allow(clippy::needless_return))]
 pub fn deinit() {
     // if (comptime !build_options.sentry) return;
     if !build_options::SENTRY {
@@ -516,22 +583,29 @@ pub fn deinit() {
         return;
     }
 
-    // If we're still initializing then wait for init to finish. This
-    // is highly unlikely since init is a very fast operation but we want
-    // to avoid the possibility.
-    // const thr = init_thread orelse return;
-    // PORT NOTE: `JoinHandle::join` consumes the handle, so it is `take`n out of
-    // the global (the reference leaves the joined `std.Thread` value behind).
-    let thr = match INIT_THREAD.lock().unwrap().take() {
-        Some(thr) => thr,
-        None => return,
-    };
-    // thr.join();
-    // (PORT NOTE: the reference's spawn wrapper discards `initThread`'s error;
-    // the joined Result is likewise discarded.)
-    let _ = thr.join();
-    // _ = sentry.c.sentry_close();
-    let _ = unsafe { sentry::c::sentry_close() };
+    // PORT NOTE (Zig laziness; module header): as in `init`, the tail past the
+    // reference's own `if (comptime !build_options.sentry) return;` is the part
+    // Zig never analyses and `SharedDeps.zig:407` never links, so it carries the
+    // `sentry` feature gate. Both guards above stay live.
+    #[cfg(feature = "sentry")]
+    {
+        // If we're still initializing then wait for init to finish. This
+        // is highly unlikely since init is a very fast operation but we want
+        // to avoid the possibility.
+        // const thr = init_thread orelse return;
+        // PORT NOTE: `JoinHandle::join` consumes the handle, so it is `take`n out of
+        // the global (the reference leaves the joined `std.Thread` value behind).
+        let thr = match INIT_THREAD.lock().unwrap().take() {
+            Some(thr) => thr,
+            None => return,
+        };
+        // thr.join();
+        // (PORT NOTE: the reference's spawn wrapper discards `initThread`'s error;
+        // the joined Result is likewise discarded.)
+        let _ = thr.join();
+        // _ = sentry.c.sentry_close();
+        let _ = unsafe { sentry::c::sentry_close() };
+    }
 }
 
 // fn beforeSend(
@@ -539,6 +613,7 @@ pub fn deinit() {
 //     _: ?*anyopaque,
 //     _: ?*anyopaque,
 // ) callconv(.c) sentry.c.sentry_value_t {
+#[cfg(feature = "sentry")]
 unsafe extern "C" fn beforeSend(
     event_val: sentry::c::sentry_value_t,
     _hint: *mut std::ffi::c_void,
@@ -658,6 +733,7 @@ unsafe extern "C" fn beforeSend(
 
 /// PORT NOTE: Zig `@tagName(build_config.app_runtime)` — the reference
 /// `apprt.Runtime` enum tag names (src/apprt/runtime.zig), byte-exact.
+#[cfg(feature = "sentry")]
 const fn tagNameRuntime(v: build_config::Runtime) -> &'static str {
     match v {
         build_config::Runtime::None => "none",
@@ -667,6 +743,7 @@ const fn tagNameRuntime(v: build_config::Runtime) -> &'static str {
 
 /// PORT NOTE: Zig `@tagName(build_config.font_backend)` — the reference
 /// `font.Backend` enum tag names (src/font/backend.zig), byte-exact.
+#[cfg(feature = "sentry")]
 const fn tagNameFontBackend(v: build_config::font::Backend) -> &'static str {
     match v {
         build_config::font::Backend::Freetype => "freetype",
@@ -682,6 +759,7 @@ const fn tagNameFontBackend(v: build_config::font::Backend) -> &'static str {
 
 /// PORT NOTE: Zig `@tagName(build_config.renderer)` — the reference
 /// `renderer.Backend` enum tag names (src/renderer/backend.zig), byte-exact.
+#[cfg(feature = "sentry")]
 const fn tagNameRenderer(v: build_config::renderer::Backend) -> &'static str {
     match v {
         build_config::renderer::Backend::Opengl => "opengl",
@@ -697,6 +775,7 @@ const fn tagNameRenderer(v: build_config::renderer::Backend) -> &'static str {
 // (The payloads are carried for the reference's `log.warn("... err={}", .{err})`
 // — currently a comment, like every log line in the port — and for Debug;
 // dead-code analysis intentionally ignores derived Debug, hence the allow.)
+#[cfg(feature = "sentry")]
 #[allow(dead_code)]
 #[derive(Debug)]
 enum SendError {
@@ -706,20 +785,24 @@ enum SendError {
     Io(std::io::Error),
 }
 
+#[cfg(feature = "sentry")]
 impl From<crate::sentry_envelope::Error> for SendError {
     fn from(err: crate::sentry_envelope::Error) -> SendError {
         SendError::Envelope(err)
     }
 }
 
+#[cfg(feature = "sentry")]
 impl From<std::io::Error> for SendError {
     fn from(err: std::io::Error) -> SendError {
         SendError::Io(err)
     }
 }
 
+#[cfg(feature = "sentry")]
 pub struct Transport;
 
+#[cfg(feature = "sentry")]
 impl Transport {
     // pub fn send(envelope: *sentry.Envelope, ud: ?*anyopaque) callconv(.c) void {
     /// # Safety
@@ -868,13 +951,23 @@ impl Transport {
 
 #[cfg(test)]
 mod tests {
+    #[cfg_attr(not(feature = "sentry"), allow(unused_imports))]
     use super::*;
+
+    // PORT NOTE (Zig laziness; module header): the four `beforeSend` tests below
+    // drive the sentry-native value API, so they only exist in the
+    // `-Dsentry=true` build — the reference has no test{} here at all (0
+    // reference tests in sentry.zig), and in a `-Dsentry=false` build there is
+    // no `beforeSend` to drive. They are GATED, never deleted; `cargo test -p
+    // rustty-crash --features sentry` (the G-FEATMATRIX arm) runs them. The
+    // fifth test reads this file's SOURCE text, so it holds in both.
 
     /// rustty-only seam test (rust >= zig; sentry.zig has 0 reference tests):
     /// prove the `ThreadStateSurface` trait seam feeds `beforeSend`'s
     /// Dimensions/tags metadata exactly as the reference's `*Surface` reads
     /// would. PURE value-API only — no `sentry_init`, no transport/backend
     /// thread (the task/reference gate: tests must not start the client).
+    #[cfg(feature = "sentry")]
     #[test]
     fn before_send_thread_state_surface_seam() {
         struct DummySurface;
@@ -935,6 +1028,7 @@ mod tests {
     /// diagnostics with a driver that does not need a live sentry client.
     ///
     /// Rides the same path `before_send_no_thread_state` above drives.
+    #[cfg(feature = "sentry")]
     #[test]
     fn before_send_without_thread_state_logs_the_skip() {
         let cap = crate::log_capture::start();
@@ -964,6 +1058,7 @@ mod tests {
 
     /// The absence half of the same site: WITH thread state, the skip line must
     /// not fire. Positive reach: the metadata the non-skip path writes.
+    #[cfg(feature = "sentry")]
     #[test]
     fn before_send_with_thread_state_does_not_log_the_skip() {
         struct DummySurface;
@@ -1055,6 +1150,7 @@ mod tests {
 
     /// rustty-only: without thread state `beforeSend` must pass the event
     /// through untouched (the reference's early-return arm).
+    #[cfg(feature = "sentry")]
     #[test]
     fn before_send_no_thread_state() {
         clearThreadState();

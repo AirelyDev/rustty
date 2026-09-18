@@ -58,6 +58,18 @@ identity-oracle = [
 # the CMake wrapper's RUSTTY_VT_SIMD default. ON by default now (see `default`
 # above), so `xtask xcframework`'s DEFAULT-feature-set build gets it.
 simd = ["rustty-vt/simd"]
+# The reference's `-Dsentry` build option, forwarded to `rustty-crash` — where it
+# is BOTH `build_options::SENTRY` and the `SharedDeps.zig:407` link gate for
+# sentry-native + breakpad (see that crate's `[features]` header).
+#
+# OFF by default, and that is the per-target default doing its job rather than a
+# divergence: `build/Config.zig:224-236` resolves the option to true on
+# macOS/iOS and false everywhere else, a cargo `default = [...]` list cannot be
+# target-conditional, so the switch lives in build orchestration — exactly where
+# `-Dsimd` already lives (`xtask/src/main.rs`, the `--features simd` arm). The
+# Apple xcframework build passes `--features sentry`; `xtask xcframework` (the RusttyKit.xcframework this crate IS) passes it here.
+sentry = ["rustty-apprt/sentry"]
+
 
 [dependencies]
 # WS4 CLI-action-from-C (main_c.zig `ghostty_cli_try_action` non-null path):
