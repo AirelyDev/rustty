@@ -5922,6 +5922,29 @@ impl<'a> ChangeIterator<'a> {
     }
 }
 
+/// `(comptime !builtin.target.cpu.arch.isWasm()) and (comptime
+/// !builtin.is_test)` — the guard around `finalize`'s default command /
+/// working-directory lookup (`Config.zig:4737-4739`). Called with the
+/// target's `cfg!` values; a function so the decision itself is testable on a
+/// host that is not wasm.
+const fn finalize_looks_up_defaults(is_wasm: bool, is_test: bool) -> bool {
+    !is_wasm && !is_test
+}
+
+/// The Windows arm's `wd == .home` step in `finalize` (`Config.zig:4776-4785`):
+/// `if (try internal_os.home(...)) |home| { wd = .{ .path = home }; } else {
+/// wd = .inherit; }`. The `try` returns `home`'s error from `finalize`.
+#[cfg(any(target_os = "windows", test))]
+fn windows_home_working_directory(
+    home: Result<Option<&[u8]>, rustty_os::homedir::Error>,
+) -> Result<WorkingDirectory, LoadError> {
+    match home {
+        Ok(Some(home)) => Ok(WorkingDirectory::Path(home.to_vec())),
+        Ok(None) => Ok(WorkingDirectory::Inherit),
+        Err(e) => Err(LoadError::Io(std::io::Error::other(format!("{e:?}")))),
+    }
+}
+
 // ===========================================================================
 // Config pass method signatures (the four comptime passes + lifecycle).
 // ===========================================================================
@@ -7421,8 +7444,13 @@ impl Config {
         // if ((comptime !builtin.target.cpu.arch.isWasm()) and
         //     (comptime !builtin.is_test))
         // {
-        #[cfg(not(test))]
-        {
+        //
+        // PORT NOTE (LEDGER S74-F7): this was `#[cfg(not(test))]`, which kept
+        // the block on wasm, where an embedder-installed environ could set
+        // `command` from `SHELL`. The guard now carries both terms. It is a
+        // `const fn` on `cfg!` values rather than a `#[cfg]`, as the Zig is a
+        // comptime `if`; the body still compiles everywhere.
+        if finalize_looks_up_defaults(cfg!(target_family = "wasm"), cfg!(test)) {
             // if (self.command == null or wd == .home) command: {
             if self.command.is_none() || wd == WorkingDirectory::Home {
                 'command: {
@@ -7509,15 +7537,18 @@ impl Config {
                             // var buf: [std.fs.max_path_bytes]u8 = undefined;
                             let mut buf = [0u8; MAX_PATH_BYTES];
                             // if (try internal_os.home(&buf)) |home| {
-                            if let Ok(Some(home)) =
-                                rustty_os::homedir::home(&rustty_global::environ_map(), &mut buf)
-                            {
-                                // wd = .{ .path = try alloc.dupe(u8, home) };
-                                wd = WorkingDirectory::Path(home.to_vec());
-                            } else {
-                                // wd = .inherit;
-                                wd = WorkingDirectory::Inherit;
-                            }
+                            //     wd = .{ .path = try alloc.dupe(u8, home) };
+                            // } else {
+                            //     wd = .inherit;
+                            // }
+                            //
+                            // PORT NOTE (LEDGER S74-F6): this was `if let
+                            // Ok(Some(home))`, which turned a `home()` error into
+                            // `.inherit`; the `try` returns it.
+                            wd = windows_home_working_directory(rustty_os::homedir::home(
+                                &rustty_global::environ_map(),
+                                &mut buf,
+                            ))?;
                         }
                     }
                     // WS14 T6 (wasm32 arm): a browser has no passwd database, so neither
@@ -13195,5 +13226,41 @@ mod integration_tests {
         );
         // The value is still not applied.
         assert_eq!(links_before, cfg.link.links.len());
+    }
+
+    // No reference test. LEDGER S74-F7: the reference skips `finalize`'s whole
+    // default command / working-directory lookup on wasm and in tests
+    // (`Config.zig:4737-4739`); the port gated it on `test` only, so on wasm
+    // an embedder-supplied environ (`rustty_global::environ::set_environ`)
+    // with `TERM_PROGRAM` and `SHELL` set `command` (ADJUDICATION.md S74-F7).
+    #[test]
+    fn finalize_default_lookup_is_skipped_on_wasm_and_in_tests() {
+        assert!(finalize_looks_up_defaults(false, false));
+        assert!(
+            !finalize_looks_up_defaults(true, false),
+            "wasm must skip it"
+        );
+        assert!(
+            !finalize_looks_up_defaults(false, true),
+            "tests must skip it"
+        );
+        assert!(!finalize_looks_up_defaults(true, true));
+    }
+
+    // No reference test. LEDGER S74-F6: the Windows arm's `try
+    // internal_os.home(...)` returns the error from `finalize`; only a `null`
+    // home falls back to `.inherit`.
+    #[test]
+    fn windows_home_lookup_error_propagates() {
+        assert!(matches!(
+            windows_home_working_directory(Ok(Some(b"C:\\Users\\me"))),
+            Ok(WorkingDirectory::Path(p)) if p == b"C:\\Users\\me"
+        ));
+        assert!(matches!(
+            windows_home_working_directory(Ok(None)),
+            Ok(WorkingDirectory::Inherit)
+        ));
+        let err = windows_home_working_directory(Err(rustty_os::homedir::Error::BufferTooSmall));
+        assert!(err.is_err(), "the home() error must propagate, got {err:?}");
     }
 }
