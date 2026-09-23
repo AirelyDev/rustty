@@ -15538,10 +15538,11 @@ mod scroll_gesture_cast_tests {
 
     #[test]
     fn x_precision_gesture_cast_out_of_range_scrolls_nothing() {
-        let mut mouse = Mouse::default();
-
         // Positive control: 3 px pending + 25 px over 10 px cells.
-        mouse.pending_scroll_x = 3.0;
+        let mut mouse = Mouse {
+            pending_scroll_x: 3.0,
+            ..Mouse::default()
+        };
         assert_eq!(
             ScrollAmount { delta: 2 },
             scroll_amount_x(&mut mouse, CELL, 25.0, mods(true))
