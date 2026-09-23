@@ -72,6 +72,15 @@ impl<'a> SVG<'a> {
         // sound, and we reject `len` records that don't fit the remaining bytes
         // (an EndOfStream the reference would only hit on later OOB access) to
         // keep the port free of undefined behavior (R6).
+        //
+        // PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD92. The
+        // reference's `records` has no length, so a font's `SVG ` table can make
+        // `svg.zig:43-44` read past the table: `records[0]` (and `records[len -
+        // 1]`) when fewer than 12 bytes per record remain, `len - 1` wrapping to
+        // 65535 when `numEntries` is 0 (ReleaseSafe: "integer overflow"), and
+        // `hasGlyph`'s binary search over a count the table does not contain.
+        // Both guards here return the reference's own `EndOfStream`, the error
+        // `init` already returns for a short table (LEDGER S92-F2 / S92-F3).
         let avail = (data.len() - pos) / 12;
         if len > avail {
             return Err(InitError::EndOfStream);
@@ -232,5 +241,32 @@ mod tests {
         ];
 
         assert_eq!(Some(InitError::EndOfStream), SVG::init(&table).err());
+    }
+
+    // UD92 (R13, task R13-D): `numEntries == 0`. The reference reads
+    // `records[0]` past the end of this table, then computes `len - 1` on a
+    // `u16` 0 (ReleaseSafe traps "integer overflow"; ReleaseFast reads
+    // `records[65535]`, about 786 KiB past it). The port returns `EndOfStream`.
+    // The positive control is the same table with one real record.
+    #[test]
+    fn svg_document_list_with_no_records_is_end_of_stream() {
+        let empty = [
+            0, 0, // Version
+            0, 0, 0, 6, // Document list offset: the very next byte
+            0, 0, // numEntries = 0
+        ];
+        assert_eq!(Some(InitError::EndOfStream), SVG::init(&empty).err());
+
+        let one = [
+            0, 0, // Version
+            0, 0, 0, 6, // Document list offset
+            0, 1, // numEntries = 1
+            0, 5, 0, 9, // startGlyphID 5, endGlyphID 9
+            0, 0, 0, 0, 0, 0, 0, 0, // svgDocOffset, svgDocLength
+        ];
+        let svg = SVG::init(&one).expect("one record");
+        assert_eq!((5, 9), (svg.start_glyph_id, svg.end_glyph_id));
+        assert!(svg.has_glyph(7));
+        assert!(!svg.has_glyph(10));
     }
 }
