@@ -18431,3 +18431,23 @@ fn ud131_degrade_dimension_mapping_is_coherent() {
         }
     }
 }
+
+// Parity S124-F2 (no reference test): `diagram` prints codepoints with
+// `writer.print("{u}", ..)`, which (zig 0.16
+// `std.Io.Writer.printUnicodeCodepoint`) writes U+FFFD for a surrogate half or
+// an out-of-range value instead of failing. The port used
+// `char::from_u32(..).unwrap()`, which panics.
+#[test]
+fn pagelist_diagram_writes_replacement_for_unencodable_codepoints() {
+    let mut s = PageList::init(Options::new(4, 2)).unwrap();
+    unsafe {
+        let page = super::Node::page(s.pages.first);
+        *(*page).get_row_and_cell(0, 0).cell = cell_codepoint('A' as u32);
+        *(*page).get_row_and_cell(1, 0).cell = cell_codepoint(0xD800);
+        *(*page).get_row_and_cell(2, 0).cell = cell_codepoint(0x1F_FFFF);
+    }
+    let mut out = String::new();
+    s.diagram(&mut out).unwrap();
+    assert!(out.contains("A\u{FFFD}\u{FFFD}"), "{out}");
+    s.deinit();
+}

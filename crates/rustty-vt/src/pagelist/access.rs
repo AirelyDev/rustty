@@ -196,14 +196,31 @@ impl PageList {
                                 )?;
                                 continue;
                             }
-                            write!(writer, "{}", char::from_u32(cell.codepoint()).unwrap())?;
+                            // try writer.print("{u}", .{cell.codepoint()});
+                            // PORT NOTE: Zig's `{u}` (`printUnicodeCodepoint`)
+                            // writes U+FFFD for a surrogate half or a value past
+                            // U+10FFFF; `char::from_u32` reports those as `None`.
+                            // CORRECTION (parity S124-F2): this and the grapheme
+                            // write below were `char::from_u32(..).unwrap()`,
+                            // which panicked on those values.
+                            write!(
+                                writer,
+                                "{}",
+                                char::from_u32(cell.codepoint())
+                                    .unwrap_or(char::REPLACEMENT_CHARACTER)
+                            )?;
                             if cell.has_grapheme() {
                                 let grapheme = unsafe {
                                     (*super::Node::page(chunk.node)).lookup_grapheme(cell)
                                 }
                                 .unwrap();
                                 for cp in grapheme {
-                                    write!(writer, "{}", char::from_u32(*cp).unwrap())?;
+                                    // try writer.print("{u}", .{cp});
+                                    write!(
+                                        writer,
+                                        "{}",
+                                        char::from_u32(*cp).unwrap_or(char::REPLACEMENT_CHARACTER)
+                                    )?;
                                 }
                             }
                         }

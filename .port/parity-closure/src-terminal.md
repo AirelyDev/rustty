@@ -181,7 +181,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** log.info/log.err calls in increaseCapacity and eraseRows are elided (commented out)
   - **Oracle:** `src/terminal/PageList.zig:4317, 4336, 5580` → **Rustty:** `crates/rustty-vt/src/pagelist/grow.rs:767, 784; crates/rustty-vt/src/pagelist/erase.rs:616`
   - **Audit's suggested fix:** Wire the crate's logging facade (whatever rustty-vt uses for scoped `terminal` logs) and emit the three messages at the same points.
-- [ ] **S124-F2** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S124-F2** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** diagram() panics on an unencodable codepoint where Zig `{u}` writes U+FFFD
   - **Oracle:** `src/terminal/PageList.zig:5926-5931` → **Rustty:** `crates/rustty-vt/src/pagelist/access.rs:199-207`
   - **Audit's suggested fix:** Use `char::from_u32(cp).unwrap_or(char::REPLACEMENT_CHARACTER)` at both sites.
@@ -305,7 +305,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** Pin/serial skip test omits the last-row serial comparison
   - **Oracle:** `src/terminal/render.zig:599-615` → **Rustty:** `crates/rustty-vt/src/render.rs:1037-1055`
   - **Audit's suggested fix:** Add `|| self.row_data[y + take - 1].serial != node_serial` to the condition at render.rs:1038-1044.
-- [ ] **S161-F2** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S161-F2** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** string() writes surrogate codepoints as WTF-8 bytes instead of U+FFFD
   - **Oracle:** `src/terminal/render.zig:991-999` → **Rustty:** `crates/rustty-vt/src/render.rs:1524-1548`
   - **Audit's suggested fix:** In `write_codepoint`'s `None` arm, emit `[0xEF, 0xBF, 0xBD]` when `utf8_codepoint_sequence_length(cp)` is Some(3) (surrogate), keeping the Err for out-of-range.
