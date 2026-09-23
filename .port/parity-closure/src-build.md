@@ -114,7 +114,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** wasm patcher accepts extra trailing arguments instead of failing the `args.len != 3` usage check
   - **Oracle:** `src/build/wasm_patch_growable_table.zig:21-26` → **Rustty:** `xtask/src/main.rs:772-781`
   - **Audit's suggested fix:** After taking input/output, `if args.next().is_some() { return Err(usage) }`.
-- [ ] **S65-F8** · CONFIRMED · `INDIV` · stub-or-unimplemented
+- [x] **S65-F8** · CONFIRMED · `INDIV` · stub-or-unimplemented
   - **What:** jetbrains_mono_bold / _italic / _bold_italic anonymous imports left as a DEFERRED comment
   - **Oracle:** `src/build/SharedDeps.zig:623-635` → **Rustty:** `crates/rustty-font/src/embedded.rs:62-65`
   - **Audit's suggested fix:** Vendor JetBrainsMono-Bold/Italic/BoldItalic.ttf into crates/rustty-font/res and add the three `include_bytes!` consts.
