@@ -799,15 +799,30 @@ fn complete_animation_frame(
     if frame_img.format != command::Format::Rgba {
         // const rgba = pixel.rgbaFromFormat(alloc, frame_img.format, frame_img.data.bytes().?)
         //     catch |err| { encodeError(&result, err); return result; };
-        // PORT NOTE: infallible in this port (see graphics_pixel.rs).
-        let rgba = pixel::rgba_from_format(frame_img.format, frame_img.data.bytes().unwrap());
+        // CORRECTION (parity S190-F2 / N101): `rgba_from_format` was
+        // infallible, so this ENOMEM arm was carried as a comment.
+        let rgba = match pixel::rgba_from_format(frame_img.format, frame_img.data.bytes().unwrap())
+        {
+            Ok(rgba) => rgba,
+            Err(err) => {
+                encode_error_storage(&mut result, err);
+                return result;
+            }
+        };
         // frame_img.data.deinit(alloc); — the assignment drops the old payload.
         frame_img.data = image::Data::Complete(rgba);
         frame_img.format = command::Format::Rgba;
     }
-    // storage.convertImageToRgba(io, alloc, img) catch |err| { ... };
-    // PORT NOTE: infallible in this port (see graphics_storage.rs).
-    storage.convert_image_to_rgba(alloc, img_id);
+    // storage.convertImageToRgba(io, alloc, img) catch |err| {
+    //     encodeError(&result, err);
+    //     return result;
+    // };
+    // CORRECTION (parity S190-F2): `convert_image_to_rgba` was infallible,
+    // so this ENOMEM arm was carried as a comment.
+    if let Err(err) = storage.convert_image_to_rgba(alloc, img_id) {
+        encode_error_storage(&mut result, err);
+        return result;
+    }
 
     // const anim = ensureAnimation(alloc, img) catch |err| { ... };
     // (re-borrowed per use below, see the hazard-#3 note above.)
@@ -1214,9 +1229,15 @@ fn compose_animation(alloc: Allocator, terminal: &mut Terminal, cmd: &Command) -
     }
 
     // All composition happens in RGBA.
-    // storage.convertImageToRgba(io, alloc, img) catch |err| { ... };
-    // PORT NOTE: infallible in this port (see graphics_storage.rs).
-    storage.convert_image_to_rgba(alloc, img_id);
+    // storage.convertImageToRgba(io, alloc, img) catch |err| {
+    //     encodeError(&result, err);
+    //     return result;
+    // };
+    // CORRECTION (parity S190-F2): see the frame-load call above.
+    if let Err(err) = storage.convert_image_to_rgba(alloc, img_id) {
+        encode_error_storage(&mut result, err);
+        return result;
+    }
 
     // The frame data is owned by this storage, so the const cast is
     // safe. The rectangles were validated disjoint above, so in-place
@@ -3857,6 +3878,80 @@ mod tests {
             &[0, 0, 255, 255, 0, 0, 0, 0],
             anim.frames[0].data.as_slice()
         );
+
+        t.deinit(alloc);
+    }
+
+    // Parity S190-F2 / N101 (no reference test): the three RGBA conversions
+    // in a=f and a=c answer ENOMEM when their allocation fails, as the
+    // reference's `catch |err| { encodeError(&result, err); return result; }`
+    // arms do. The `RGBA_FROM_FORMAT_TW` fail point stands in for the
+    // failing allocator.
+    fn rgba_alloc_fails<R>(f: impl FnOnce() -> R) -> R {
+        use crate::kitty::graphics_pixel::{RgbaFromFormatFp, RGBA_FROM_FORMAT_TW};
+        use rustty_util::tripwire::ResetMode;
+        RGBA_FROM_FORMAT_TW.with(|tw| {
+            tw.borrow_mut().errorAlways(
+                RgbaFromFormatFp::Alloc,
+                crate::kitty::graphics_storage::OutOfMemory,
+            )
+        });
+        let r = f();
+        RGBA_FROM_FORMAT_TW
+            .with(|tw| tw.borrow_mut().end(ResetMode::Reset))
+            .unwrap();
+        r
+    }
+
+    #[test]
+    fn kittygfx_animation_frame_rgba_conversion_oom_is_enomem() {
+        let alloc = allocator_api2::alloc::Global;
+        let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
+        {
+            let cmd = command::Parser::parse_string(b"a=t,f=24,s=1,v=1,i=1;/wAA").unwrap();
+            assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
+        }
+
+        // An RGB frame: the frame's own conversion fails first.
+        let cmd = command::Parser::parse_string(b"a=f,i=1,f=24,s=1,v=1;AAD/").unwrap();
+        let resp = rgba_alloc_fails(|| execute(alloc, &mut t, &cmd).unwrap());
+        assert_eq!(b"ENOMEM: out of memory".as_slice(), resp.message.as_slice());
+
+        // An RGBA frame over the RGB image: the image's conversion
+        // (`convertImageToRgba`) fails.
+        let cmd = command::Parser::parse_string(b"a=f,i=1,f=32,s=1,v=1;AAD//w==").unwrap();
+        let resp = rgba_alloc_fails(|| execute(alloc, &mut t, &cmd).unwrap());
+        assert_eq!(b"ENOMEM: out of memory".as_slice(), resp.message.as_slice());
+
+        // Neither attempt changed the image.
+        {
+            let storage = unsafe { &(*t.screens.active).kitty_images };
+            let img = storage.image_ptr_by_id_or_number(1, 0).unwrap();
+            assert_eq!(command::Format::Rgb, img.format);
+            assert_eq!(&[255, 0, 0], img.data.bytes().unwrap());
+            assert!(img.animation.is_none());
+        }
+
+        t.deinit(alloc);
+    }
+
+    #[test]
+    fn kittygfx_animation_compose_rgba_conversion_oom_is_enomem() {
+        let alloc = allocator_api2::alloc::Global;
+        let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
+        {
+            let cmd = command::Parser::parse_string(b"a=t,f=24,s=2,v=1,i=1;/wAAAAD/").unwrap();
+            assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
+        }
+
+        let cmd = command::Parser::parse_string(b"a=c,i=1,r=1,c=1,w=1,h=1,X=1,x=0").unwrap();
+        let resp = rgba_alloc_fails(|| execute(alloc, &mut t, &cmd).unwrap());
+        assert_eq!(b"ENOMEM: out of memory".as_slice(), resp.message.as_slice());
+        {
+            let storage = unsafe { &(*t.screens.active).kitty_images };
+            let img = storage.image_ptr_by_id_or_number(1, 0).unwrap();
+            assert_eq!(command::Format::Rgb, img.format);
+        }
 
         t.deinit(alloc);
     }

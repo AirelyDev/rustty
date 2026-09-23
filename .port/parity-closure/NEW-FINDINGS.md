@@ -3424,3 +3424,28 @@ Zig-faithful ports in `crates/rustty-vt/src/color.rs`.
 before its site's change, on the `_`-separated input.
 
 **state**: FIXED (batch T-A).
+
+## N101 — the a=f frame's own RGBA conversion could not answer ENOMEM
+
+- **id**: N101. Not in the inventory.
+- **found by**: batch T-A (tail wave), while closing S190-F2, by reading every caller of
+  `pixel.rgbaFromFormat`.
+- **severity**: low. **kind**: missing-error-path (same class as S190-F2).
+- **oracle**: `src/terminal/kitty/graphics_exec.zig:600-612` (`pixel.rgbaFromFormat(...) catch
+  |err| { encodeError(&result, err); return result; }` for a non-RGBA frame image);
+  `src/terminal/kitty/graphics_pixel.zig:18-40` (`Allocator.Error![]u8`).
+- **rustty**: `crates/rustty-vt/src/kitty/graphics_exec.rs` (frame load, the `frame_img.format
+  != Rgba` block); `crates/rustty-vt/src/kitty/graphics_pixel.rs` (`rgba_from_format`).
+
+S190-F2 cites only `convertImageToRgba`, but its one failure is `rgbaFromFormat`'s allocation,
+and the frame load calls `rgbaFromFormat` directly on the frame image just before it. The port's
+`rgba_from_format` was infallible (`Vec::with_capacity`, `to_vec`), so this arm was carried as a
+comment and an allocation failure aborted instead of answering `ENOMEM: out of memory`.
+`rgba_from_format` now returns `Result<Vec<u8>, OutOfMemory>` through `try_reserve_exact` (both
+the scalar and the wuffs arms), and all three callers answer ENOMEM.
+
+**tests**: `kittygfx_animation_frame_rgba_conversion_oom_is_enomem` (the frame's conversion, then
+the image's) and `kittygfx_animation_compose_rgba_conversion_oom_is_enomem`, through the
+`cfg(test)` fail point `RGBA_FROM_FORMAT_TW`. Both failed with the ENOMEM arms disabled.
+
+**state**: FIXED (batch T-A).

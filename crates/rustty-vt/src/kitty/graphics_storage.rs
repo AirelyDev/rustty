@@ -817,20 +817,23 @@ impl ImageStorage {
             //     log.warn("OOM adjusting image placement for scroll", .{});
             //     continue;
             // };
-            // PORT NOTE: Rust's `Vec::push` aborts on OOM, so the reference's
-            // degraded-but-safe fallback arm is unreachable AS WRITTEN.
-            //
-            // CORRECTION (2026-09-11): an earlier version of this note said
-            // "S190-F2 (WAIVED) already adjudicated this exact region as
-            // unreachable in the port; do not uncomment this log call." That
-            // waiver has been RE-OPENED
-            // (`.port/parity-closure/ADJUDICATION.md#s190-f2`): the abort is a
-            // choice of call, not a property of Rust — `Vec::try_reserve` is the
-            // same growth, fallibly, and reaches the reference's
-            // `catch { log.warn(..); continue; }` arm. So this log call SHOULD be
-            // restored, together with the `try_reserve` + `continue` that makes
-            // it reachable. Do not treat the note above as a standing
-            // instruction to leave it alone.
+            // PORT NOTE: `try_reserve(1)` is the fallible growth of the append,
+            // and the `cfg(test)` fail point stands in for a failing allocator
+            // (see `SCROLL_MARGINS_TW`).
+            // CORRECTION (parity S190-F2): this was a bare `Vec::push`, which
+            // aborts on OOM, and the log call was commented out.
+            #[cfg(test)]
+            let append_failed = SCROLL_MARGINS_TW
+                .with(|tw| tw.borrow_mut().check(ScrollMarginsFp::RestoresAppend))
+                .is_err();
+            #[cfg(not(test))]
+            let append_failed = false;
+            if append_failed || result.restores.try_reserve(1).is_err() {
+                // OOM: this placement is left to the whims of the
+                // generic pin tracking. Degraded, but safe.
+                log::warn!(target: LOG_SCOPE, "OOM adjusting image placement for scroll");
+                continue 'placements;
+            }
             result.restores.push(Restore {
                 pin,
                 // SAFETY: shared read of the tracked pin, see above.
@@ -1272,26 +1275,30 @@ impl ImageStorage {
     /// The pixels are unchanged visually but the stored representation
     /// changed, so the image is stamped with a fresh generation.
     //
-    // PORT NOTE: `Allocator.Error!void` — the only reference failure is a
-    // real allocation failure inside `rgbaFromFormat`, which aborts in this
-    // port (see graphics_pixel.rs), so the port is infallible; the exec
-    // callers' `catch` ENOMEM arms are carried as comments. `img: *Image` →
-    // image id per the hazard-#3 note above.
-    pub fn convert_image_to_rgba(&mut self, alloc: Allocator, image_id: u32) {
+    // PORT NOTE: `Allocator.Error!void` → `Result<(), OutOfMemory>`; the one
+    // failure is `rgbaFromFormat`'s allocation. `img: *Image` → image id per
+    // the hazard-#3 note above.
+    // CORRECTION (parity S190-F2): this was infallible because
+    // `rgba_from_format` was.
+    pub fn convert_image_to_rgba(
+        &mut self,
+        alloc: Allocator,
+        image_id: u32,
+    ) -> Result<(), OutOfMemory> {
         let _ = &alloc;
         let (rgba, old_len) = {
             let img = self.images.get(&image_id).unwrap();
             if img.format == command::Format::Rgba {
-                return;
+                return Ok(());
             }
             // const old = img.data.bytes() orelse return;
             let old = match img.data.bytes() {
                 Some(old) => old,
-                None => return,
+                None => return Ok(()),
             };
 
             // const rgba = try pixel.rgbaFromFormat(alloc, img.format, old);
-            (pixel::rgba_from_format(img.format, old), old.len())
+            (pixel::rgba_from_format(img.format, old)?, old.len())
         };
         {
             let img = self.images.get_mut(&image_id).unwrap();
@@ -1304,6 +1311,7 @@ impl ImageStorage {
             self.total_bytes += new_len;
         }
         self.mark_image_content_changed(image_id);
+        Ok(())
     }
 
     /// Reserve `bytes` of storage for animation frame data belonging
@@ -2324,6 +2332,24 @@ impl Drop for ScrollMargins {
 // placement-count overflow, `error.OutOfMemory` upstream).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OutOfMemory;
+
+// PORT NOTE (parity S190-F2): the reference reaches `scrollMarginsBegin`'s
+// degraded `restores.append ... catch` arm with a failing allocator; the
+// port's restores `Vec` is on the global heap, so a `cfg(test)` fail point in
+// front of the `try_reserve` stands in (same stand-in as `screen.rs`'s
+// `CURSOR_COPY_TW`).
+#[cfg(test)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub(crate) enum ScrollMarginsFp {
+    RestoresAppend,
+}
+
+#[cfg(test)]
+thread_local! {
+    pub(crate) static SCROLL_MARGINS_TW: core::cell::RefCell<
+        rustty_util::tripwire::Module<ScrollMarginsFp, OutOfMemory>,
+    > = core::cell::RefCell::new(rustty_util::tripwire::module());
+}
 
 /// The candidate type used during eviction (`evictImageExcept`).
 //
@@ -7108,6 +7134,78 @@ mod tests {
             // The image itself is retained.
             assert_eq!(1usize, storage.images.len());
         }
+
+        t.deinit(alloc);
+    }
+
+    // Parity S190-F2 (no reference test): when the restores append fails, the
+    // reference logs "OOM adjusting image placement for scroll" and leaves
+    // the placement to the generic pin tracking. It is neither restored nor
+    // deleted.
+    #[test]
+    fn scroll_margins_restores_append_failure_is_logged_and_skipped() {
+        use rustty_util::tripwire::ResetMode;
+        let alloc = allocator_api2::alloc::Global;
+        let mut t = Terminal::init(alloc, opts(10, 6)).unwrap();
+        t.width_px = 100;
+        t.height_px = 60;
+
+        let pin = track_pin(&mut t, point::Coordinate { x: 0, y: 2 }).unwrap();
+        {
+            let storage = unsafe { &mut (*t.screens.active).kitty_images };
+            storage
+                .add_image(
+                    alloc,
+                    t.screens.active,
+                    Image {
+                        id: 1,
+                        width: 10,
+                        height: 20,
+                        ..Image::default()
+                    },
+                )
+                .unwrap();
+            storage
+                .add_placement(
+                    alloc,
+                    t.screens.active,
+                    1,
+                    1,
+                    Placement::with_location(Location::Pin(pin)),
+                )
+                .unwrap();
+        }
+        t.set_top_and_bottom_margin(2, 5);
+
+        SCROLL_MARGINS_TW.with(|tw| {
+            tw.borrow_mut()
+                .errorAlways(ScrollMarginsFp::RestoresAppend, OutOfMemory)
+        });
+        let cap = crate::log_capture::start();
+        let result = {
+            let storage = unsafe { &mut (*t.screens.active).kitty_images };
+            storage.scroll_margins_begin(&mut t, -1, ScrollOp::InPlace)
+        };
+        let messages = cap.messages();
+        drop(cap);
+        SCROLL_MARGINS_TW
+            .with(|tw| tw.borrow_mut().end(ResetMode::Reset))
+            .unwrap();
+
+        assert_eq!(0usize, result.restores.len());
+        assert!(
+            messages
+                .iter()
+                .any(|(level, target, msg)| *level == log::Level::Warn
+                    && target == "kitty_gfx"
+                    && msg == "OOM adjusting image placement for scroll"),
+            "expected the OOM diagnostic, got: {messages:?}"
+        );
+        {
+            let storage = unsafe { &(*t.screens.active).kitty_images };
+            assert_eq!(1usize, storage.placements.len());
+        }
+        result.end();
 
         t.deinit(alloc);
     }

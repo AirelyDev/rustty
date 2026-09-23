@@ -397,7 +397,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** All log.info/log.warn/log.debug diagnostics in ImageStorage are carried as comments, never emitted
   - **Oracle:** `src/terminal/kitty/graphics_storage.zig:224-226, 302-311, 369, 576, 1025-1033, 1252, 1271, 1294, 1312, 1495-1505` → **Rustty:** `crates/rustty-vt/src/kitty/graphics_storage.rs:363-367, 452-458, 468, 530, 810-816, 1315-1322, 1607, 1631, 1655, 1682, 1935, 1944`
   - **Audit's suggested fix:** Optional: none required for functional parity; if diagnostics are wanted later, introduce a vt-level logging shim and restore these call sites verbatim.
-- [ ] **S190-F2** · DISPUTED · `LOG` · missing-error-path
+- [x] **S190-F2** · DISPUTED · `LOG` · missing-error-path
   - **What:** Two documented allocation-failure degradation paths cannot be reached in the port (abort instead)
   - **Oracle:** `src/terminal/kitty/graphics_storage.zig:570-579, 977-988` → **Rustty:** `crates/rustty-vt/src/kitty/graphics_storage.rs:806-822, 1268-1300`
   - **Audit's suggested fix:** None practical; the port-wide OOM=abort policy makes these arms dead code. If a fallible allocator is ever adopted for vt, restore `try_reserve`/`push` fallbacks at these two sites.
