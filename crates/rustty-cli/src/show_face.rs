@@ -289,7 +289,11 @@ where
             Ok(()) => {}
             Err(args::Error::ActionHelpRequested) => return Err(Error::ActionHelpRequested),
             Err(err) => {
-                writeln!(stderr, "Error parsing args: {err:?}")?;
+                writeln!(
+                    stderr,
+                    "Error parsing args: {}",
+                    crate::zig_error::args_error(&err)
+                )?;
                 return Ok(1);
             }
         }
@@ -359,6 +363,8 @@ where
         let config = match Config::load() {
             Ok(config) => config,
             Err(err) => {
+                // PORT NOTE: the reference prints `{}` of the error (`error.<Name>`);
+                // this prints the port error's Debug. NEW-FINDINGS N121 (task T-C).
                 write!(stderr, "Unable to load config: {err:?}")?;
                 return Ok(1);
             }
@@ -415,6 +421,8 @@ where
         let mut font_grid_set = match font::SharedGridSet::init(Global) {
             Ok(set) => set,
             Err(err) => {
+                // PORT NOTE: the reference prints `{}` of the error (`error.<Name>`);
+                // this prints the port error's Debug. NEW-FINDINGS N121 (task T-C).
                 write!(stderr, "Unable to initialize font grid set: {err:?}")?;
                 return Ok(1);
             }
@@ -451,6 +459,8 @@ where
         let (font_grid_key, font_grid) = match font_grid_set.r#ref(&font_config, font_size) {
             Ok(pair) => pair,
             Err(err) => {
+                // PORT NOTE: the reference prints `{}` of the error (`error.<Name>`);
+                // this prints the port error's Debug. NEW-FINDINGS N121 (task T-C).
                 write!(stderr, "Unable to get font grid: {err:?}")?;
                 return Ok(1);
             }
@@ -477,8 +487,14 @@ where
                 // };
                 let view = match std::str::from_utf8(string) {
                     Ok(view) => view,
-                    Err(err) => {
-                        write!(stderr, "Unable to parse string as unicode: {err:?}")?;
+                    Err(_) => {
+                        // `{}` of `Utf8View.init`'s only error, `error.InvalidUtf8`
+                        // (Zig 0.16.0 `std/unicode.zig:363`); this printed Rust's
+                        // `Utf8Error` Debug (task T-C, NEW-FINDINGS N121).
+                        write!(
+                            stderr,
+                            "Unable to parse string as unicode: error.InvalidUtf8"
+                        )?;
                         return Ok(1);
                     }
                 };
@@ -560,6 +576,8 @@ fn lookup<SO: Write, SE: Write>(
             return Ok(None);
         }
         Err(err) => {
+            // PORT NOTE: the reference prints `{}` of the error (`error.<Name>`);
+            // this prints the port error's Debug. NEW-FINDINGS N121 (task T-C).
             write!(stderr, "Unable to get face: {err:?}")?;
             return Ok(Some(1));
         }
@@ -575,6 +593,8 @@ fn lookup<SO: Write, SE: Write>(
     let name = match unsafe { &*face }.name(&mut buf) {
         Ok(name) => name,
         Err(err) => {
+            // PORT NOTE: the reference prints `{}` of the error (`error.<Name>`);
+            // this prints the port error's Debug. NEW-FINDINGS N121 (task T-C).
             write!(stderr, "Unable to get name of face: {err:?}")?;
             return Ok(Some(1));
         }

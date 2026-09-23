@@ -67,18 +67,22 @@ enum CheckArgError {
     ParseInt(ParseIntError),
     // homedir.ExpandError
     ExpandHome(rustty_os::homedir::ExpandError),
-    // std.Io.Dir.RealPathFileError
-    RealPath(std::io::Error),
+    // std.Io.Dir.RealPathFileError — the reference error's name.
+    RealPath(&'static str),
 }
 
 impl std::fmt::Display for CheckArgError {
     // The reference `stderr.print("Error parsing args: {}\n", .{err})` prints the
     // underlying failure; carry each variant's error through.
+    //
+    // PORT NOTE (parity S69-F5, task T-C): Zig's `{}` of an error value is
+    // `error.<Name>`; the realpath arm carries the reference's error name for
+    // the failed path (`zig_error::realpath_error_name`), not the OS message.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            CheckArgError::ParseInt(e) => write!(f, "{e:?}"),
-            CheckArgError::ExpandHome(e) => write!(f, "{e:?}"),
-            CheckArgError::RealPath(e) => write!(f, "{e}"),
+            CheckArgError::ParseInt(e) => write!(f, "error.{e:?}"),
+            CheckArgError::ExpandHome(e) => write!(f, "error.{e:?}"),
+            CheckArgError::RealPath(name) => write!(f, "error.{name}"),
         }
     }
 }
@@ -183,7 +187,9 @@ impl Options {
                 .map_err(CheckArgError::ExpandHome)?;
             // var realpath_buf: [std.fs.max_path_bytes]u8 = undefined;
             // const realpath = realpath_buf[0..try cwd.realPathFile(global.io(), expanded, &realpath_buf)];
-            let realpath = realpath_bytes(expanded).map_err(CheckArgError::RealPath)?;
+            let realpath = realpath_bytes(expanded).map_err(|e| {
+                CheckArgError::RealPath(crate::zig_error::realpath_error_name(expanded, &e))
+            })?;
             // self._working_directory_seen = true;
             self._working_directory_seen = true;
             // return try std.fmt.allocPrintSentinel(alloc, "--working-directory={s}", .{realpath}, 0);
@@ -431,7 +437,11 @@ where
         Err(args::Error::ActionHelpRequested) => return Err(Error::ActionHelpRequested),
         // else => { stderr.print("Error parsing args: {}\n", .{err}); return 1; },
         Err(err) => {
-            writeln!(stderr, "Error parsing args: {err:?}")?;
+            writeln!(
+                stderr,
+                "Error parsing args: {}",
+                crate::zig_error::args_error(&err)
+            )?;
             return Ok(1);
         }
     }
@@ -696,4 +706,40 @@ fn parse_unsigned_u64_base0(buf: &[u8]) -> Result<u64, ParseIntError> {
             .ok_or(ParseIntError::Overflow)?;
     }
     Ok(acc)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct VecArgs(std::vec::IntoIter<Vec<u8>>);
+    impl ArgIterator for VecArgs {
+        type Item = Vec<u8>;
+        fn next(&mut self) -> Option<Vec<u8>> {
+            self.0.next()
+        }
+    }
+    impl LocationProvider for VecArgs {}
+
+    fn run_with(arg: &[u8]) -> (u8, Vec<u8>) {
+        let mut it = VecArgs(vec![arg.to_vec()].into_iter());
+        let mut stderr: Vec<u8> = Vec::new();
+        let rc = run_args(&mut it, &mut stderr).unwrap();
+        (rc, stderr)
+    }
+
+    // parity S69-F5: `stderr.print("Error parsing args: {}\n", .{err})` prints a
+    // Zig error value as `error.<Name>`. The realpath name is the one Zig 0.16.0
+    // `realPathFile` returns for a missing path (MEASURED: error.FileNotFound).
+    #[test]
+    fn error_parsing_args_prints_the_zig_error_name() {
+        assert_eq!(
+            (1, b"Error parsing args: error.FileNotFound\n".to_vec()),
+            run_with(b"--working-directory=/nonexistent-rustty-t-c/x")
+        );
+        assert_eq!(
+            (1, b"Error parsing args: error.InvalidCharacter\n".to_vec()),
+            run_with(b"--surface-id=abc")
+        );
+    }
 }

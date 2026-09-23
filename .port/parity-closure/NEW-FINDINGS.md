@@ -3190,6 +3190,31 @@ delete its `pf_*` copy and `parse_float_f32`, in the config area.
 
 **state**: OPEN.
 
+## N121 — five `+show-face` error lines print a Rust Debug value where the reference prints `error.<Name>`
+
+- **id**: N121. Not in the inventory.
+- **found by**: task T-C (tail wave), closing S70-F6, whose audit text mentions these sites ("Similarly
+  `show_face.rs` prints `{err:?}`") although its cited anchors are `ssh.zig:281-283, 530-545` only.
+- **severity**: low (stderr text on failure paths). **kind**: behavioral-difference (message text).
+- **oracle**: `src/cli/show_face.zig` `runArgs`/`lookup`: `Unable to load config: {}` (:145), `Unable to
+  initialize font grid set: {}` (:164), `Unable to get font grid: {}` (:184), `Unable to get face: {}`
+  (:226), `Unable to get name of face: {}` (:233), at 20abdb50a.
+- **rustty**: `crates/rustty-cli/src/show_face.rs`, the five `write!(stderr, "Unable to …: {err:?}")` sites,
+  each carrying a PORT NOTE naming this entry.
+
+Zig's `{}` of an error value prints `error.<Name>` (MEASURED, Zig 0.16.0). The port prints the Debug of its
+own error types. For three of them the names cannot be produced by a prefix alone: `LoadError` carries an
+`io::Error`, and `collection::Error::Face(FaceError)` and the face-name errors carry backend payloads, so
+each needs a mapping to the reference error set of the call (`Config.load`, `SharedGridSet.ref`,
+`Collection.getFace`, `Face.name` per backend), which T-C did not derive. T-C fixed the two sites whose
+reference error is fixed: `Error parsing args: {}` (via `zig_error::args_error`, with S69-F5) and
+`Unable to parse string as unicode: {}` (`Utf8View.init`'s only error, `error.InvalidUtf8`).
+
+**proposed fix**: map each port error type to the reference's error names (as `zig_error::load_error`
+does for `Config.loadFile`), and print through that.
+
+**state**: OPEN.
+
 
 ## N140 — the XDG helpers collapse `homedir.home`'s `error.BufferTooSmall` into `NoHomeDir`
 

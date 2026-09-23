@@ -837,15 +837,19 @@ fn parse_destination(stdout: &[u8]) -> Option<Vec<u8>> {
 /// ControlMaster connection. The master tears down with the client
 /// (`ControlPersist=no`) so no socket lingers.
 // fn installRemoteTerminfo(alloc, opts, stderr) !void {
-fn install_remote_terminfo<We: Write>(
-    opts: &Options,
-    stderr: &mut We,
-) -> Result<(), std::io::Error> {
+//
+// PORT NOTE (parity S70-F6, task T-C): the inferred error set is
+// `error.InstallFailed` (spawn, wait and a failed exit all return it) plus the
+// `try encode(...)` writer error; the caller prints it with `{t}`, the bare tag
+// name. This returned three differently worded `io::Error`s instead.
+fn install_remote_terminfo<We: Write>(opts: &Options, stderr: &mut We) -> Result<(), InstallError> {
     // var buf: std.Io.Writer.Allocating = .init(alloc); defer buf.deinit();
     // try terminfopkg.ghostty.encode(&buf.writer);
     // const terminfo = buf.written();
     let mut buf: Vec<u8> = Vec::new();
-    terminfopkg::rustty().encode(&mut buf)?;
+    terminfopkg::rustty()
+        .encode(&mut buf)
+        .map_err(|_| InstallError::WriteFailed)?;
     let terminfo = buf;
 
     // ControlPath is in TMPDIR with a short, random basename. ssh uses
@@ -923,7 +927,7 @@ fn install_remote_terminfo<We: Write>(
         Ok(c) => c,
         Err(err) => {
             log_warn(&format!("terminfo install spawn failed: {err}"));
-            return Err(std::io::Error::other("terminfo install spawn failed"));
+            return Err(InstallError::InstallFailed);
         }
     };
 
@@ -938,12 +942,32 @@ fn install_remote_terminfo<We: Write>(
         Ok(s) => s,
         Err(err) => {
             log_warn(&format!("terminfo install wait failed: {err}"));
-            return Err(std::io::Error::other("terminfo install wait failed"));
+            return Err(InstallError::InstallFailed);
         }
     };
     // checkExit(term, "terminfo install") catch return error.InstallFailed;
-    check_exit(&status, "terminfo install")
-        .map_err(|_| std::io::Error::other("terminfo install failed"))
+    check_exit(&status, "terminfo install").map_err(|_| InstallError::InstallFailed)
+}
+
+/// The error set of `installRemoteTerminfo`, printed by its caller with `{t}`
+/// (the bare tag name; MEASURED with Zig 0.16.0, `{t}` of `error.InstallFailed`
+/// prints `InstallFailed`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InstallError {
+    /// `error.InstallFailed` — spawn, wait, or a failed/abnormal exit.
+    InstallFailed,
+    /// `error.WriteFailed` — `try terminfopkg.ghostty.encode(&buf.writer)`;
+    /// unreachable for the port's `Vec` sink, kept for the error set.
+    WriteFailed,
+}
+
+impl std::fmt::Display for InstallError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            InstallError::InstallFailed => "InstallFailed",
+            InstallError::WriteFailed => "WriteFailed",
+        })
+    }
 }
 
 /// Returns `128 + signum` for signal-killed children, matching shell convention.
@@ -1192,6 +1216,28 @@ mod tests {
         // try testing.expectEqualStrings("user@example.com", opts._ssh_args.items[2]);
         assert_eq!(b"user@example.com".as_slice(), opts._ssh_args[2].as_slice());
         opts.deinit();
+    }
+
+    // parity S70-F6: every install failure is `error.InstallFailed`, which the
+    // caller's `warnPrint(stderr, "failed to install terminfo: {t}", ...)`
+    // prints as the bare tag.
+    #[test]
+    fn install_failures_are_install_failed() {
+        let mut opts = Options::default();
+        let mut err_out: Vec<u8> = Vec::new();
+        // spawn failure
+        opts.ssh = b"/nonexistent/rustty-t-c-ssh".to_vec();
+        let e = install_remote_terminfo(&opts, &mut err_out).unwrap_err();
+        assert_eq!(InstallError::InstallFailed, e);
+        assert_eq!("InstallFailed", e.to_string());
+        // a non-zero exit
+        opts.ssh = b"/usr/bin/false".to_vec();
+        let e = install_remote_terminfo(&opts, &mut err_out).unwrap_err();
+        assert_eq!(InstallError::InstallFailed, e);
+        assert_eq!(
+            "failed to install terminfo: InstallFailed",
+            format!("failed to install terminfo: {e}")
+        );
     }
 
     // parity S70-F2: `args.zig` `parseIntoField` resets a field to its declared

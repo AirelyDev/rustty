@@ -556,7 +556,9 @@ fn os_name_bytes(name: &std::ffi::OsStr) -> &[u8] {
 //    (Rust sig divergence); `TerminalColor` cell-* arms resolve to the reference's
 //    missing-value fallback; Wyhash digest short-circuit → an equal-`Vec<usize>`
 //    compare (byte-observably identical); `std.Uri` → a faithful `file://` escaper;
-//    `LoadError` has no `Display` → `{err:?}` (cosmetic err-pane divergence).
+//    the err pane's `{}` of a `LoadError` is `zig_error::load_error` (CORRECTION,
+//    parity S69-F3: this line said "`LoadError` has no `Display` → `{err:?}`
+//    (cosmetic err-pane divergence)").
 // ===========================================================================
 
 use crate::pretty_arena::{styled, Arena};
@@ -1521,9 +1523,13 @@ fn draw_preview<'a>(st: &DrawState<'a>, win: Window<'a>, x_off_unconverted: i32)
                 );
             }
             {
-                // "{}" of the error — PORT NOTE (issue 3): `LoadError` has NO `Display`,
-                // so `{err:?}` (Debug); a documented COSMETIC divergence (err-pane text).
-                let text = arena.dupe(format!("{err:?}").as_bytes());
+                // const text = try std.fmt.allocPrint(alloc, "{}", .{err});
+                //
+                // CORRECTION (parity S69-F3, task T-C): this printed `{err:?}`
+                // under the note "`LoadError` has NO `Display`, so `{err:?}`
+                // (Debug); a documented COSMETIC divergence". `zig_error::load_error`
+                // renders the reference's `error.<Name>`.
+                let text = arena.dupe(crate::zig_error::load_error(&err).as_bytes());
                 let text_len = text.len() as u16;
                 let _ = child.print_segment(
                     styled(text, ui_err(scheme)),
@@ -2633,6 +2639,43 @@ mod picker_tests {
             "expected the error pane"
         );
         assert!(find_bytes(&out, b"Bogus"), "expected the theme name");
+    }
+
+    // parity S69-F3: the error pane's third line is `allocPrint("{}", .{err})`,
+    // Zig's `error.<Name>` rendering of the `loadFile` error: `FileNotFound`
+    // for a missing theme, `FileIsEmpty` for an empty one (file_load.zig:173).
+    #[test]
+    #[cfg_attr(miri, ignore = "opens a file — Miri isolation")]
+    fn draw_error_pane_prints_the_zig_error_name() {
+        let dir = std::env::temp_dir().join(format!("rustty-t-c-themes-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let empty = dir.join("Empty");
+        std::fs::write(&empty, b"").unwrap();
+        let empty_path = empty.to_str().unwrap().as_bytes().to_vec();
+
+        for (path, want) in [
+            (
+                b"/nonexistent/path/to/theme.zzz".to_vec(),
+                &b"error.FileNotFound"[..],
+            ),
+            (empty_path, &b"error.FileIsEmpty"[..]),
+        ] {
+            let arena = Arena::init();
+            let themes = vec![te(b"T", &path)];
+            let mut vx = smoke_vx();
+            let mut st = smoke_state(&arena, &themes, Mode::Normal);
+            draw(&mut vx, &mut st);
+            let mut out: Vec<u8> = Vec::new();
+            vx.render(&mut out).unwrap();
+            // Positive reach: the error pane rendered.
+            assert!(find_bytes(&out, b"Unable to open"));
+            assert!(
+                find_bytes(&out, want),
+                "expected {:?}",
+                String::from_utf8_lossy(want)
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // draw smoke: Help mode renders a key_help entry. (loads a config file for the

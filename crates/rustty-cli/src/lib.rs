@@ -91,6 +91,9 @@ pub mod ssh_cache;
 pub mod toggle_quick_terminal;
 pub mod tui;
 pub mod validate_config;
+// Zig's `{}` rendering of an error value (`error.<Name>`) for the port's error
+// types, used where a CLI message prints a reference error that way.
+mod zig_error;
 
 #[cfg(test)]
 mod test_util;
