@@ -363,12 +363,23 @@ process, a file, the VT stream, the config, the network, the kernel) can violate
 unsure, trace where the input comes from before deciding; "the reference also traps" is not
 by itself a reason to trap.
 
-**Non-crash reference defects** found along the way — a latent compile error in unused code,
-a copy-paste error in a message, dead code with commented callers, an unchecked call whose
-error surfaces somewhere misleading, a reference test too weak to fail — are also recorded in
-`UPSTREAM-DEFECTS.md` (as `kind: latent` or `kind: test-weakness`) so they are proposable. Those
-do not change port behaviour unless R1 says the port must diverge; message text and test
-assertions otherwise stay faithful.
+**Non-crash reference defects that visibly break the reference's own evident intent are
+also fixed in the port (user ruling 2026-09-23).** When the reference's behaviour contradicts
+what its own code, comments, docs or neighbouring code clearly mean it to do — output silently
+lost because a buffer is never flushed, an inverted condition (`XDG_CACHE_HOME` checked the
+wrong way round), a documented option that does nothing, a value mangled by an off-by-one — the
+port implements the intended behaviour, not the bug. The same four steps apply (intent, proof
+with a negative control, `PORT NOTE: reference defect (R13)`, `UPSTREAM-DEFECTS.md` entry), plus a
+fifth: **a one-line entry in the user-facing log `docs/ghostty-bug-fixes.md`**, which lists every
+place Rustty deliberately behaves differently from Ghostty to fix a Ghostty bug, with the UD id.
+Crash-class R13 fixes go in that log too.
+
+What stays faithful: behaviour whose intent is ambiguous or merely unusual, message text,
+cosmetic output, and reference tests too weak to fail. Those non-crash findings — a latent
+compile error in unused code, a copy-paste error in a message, dead code with commented callers,
+a reference test too weak to fail — are recorded in `UPSTREAM-DEFECTS.md` (as `kind: latent` or
+`kind: test-weakness`) so they are proposable, without changing port behaviour. When unsure
+whether a defect "visibly breaks evident intent", ask the controller; do not guess.
 
 Precedent this rule reverses: parity-closure S51-F7 was briefly ruled "port the panic"; the
 user overruled it. S209-F1 (tmux layout `@intCast` panicking on tmux-supplied dimensions) was
