@@ -2458,3 +2458,18 @@ NOT affected: `continuation::decode` checks the record's own `payload_len` again
 `max_bytes` before allocating, so its length is already bounded in both trees.
 
 **state**: CLOSED by task R13-S.
+
+## N55 — a child that exited before its kqueue watch was registered panicked the io thread
+
+- **id**: N55 (next free id checked 2026-09-22; N54 was the last). Inventory M7.
+- **found by**: the R13 inventory's code sweep (T1-5); trigger measured and fixed by task R13-C.
+- **severity**: medium. **kind**: missing-branch (reference defect, R13).
+- **oracle**: `src/termio/Exec.zig:296-305`.
+- **rustty**: `crates/rustty-termio/src/exec.rs` (`processExit`).
+
+The port's `r.unwrap()` mirrored `r catch unreachable`. XNU refuses an `EVFILT_PROC` registration for
+a zombie with `ESRCH` (measured), and the registration is only submitted on the loop tick after
+`threadEnter`, so a child that exits at once reached the panic. `NoSuchProcess` now takes
+`processExitCommon` with libxev's no-status code 0. Reference defect: `UPSTREAM-DEFECTS.md` UD67.
+
+**state**: CLOSED by task R13-C.

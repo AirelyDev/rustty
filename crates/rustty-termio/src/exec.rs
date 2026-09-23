@@ -1231,7 +1231,33 @@ impl Exec {
         r: core::result::Result<u32, xev::ProcessWaitError>,
     ) -> xev::CallbackAction {
         // const exit_code = r catch unreachable;
-        let exit_code = r.unwrap();
+        //
+        // PORT NOTE: reference defect (R13), UD67. The reference unwraps the wait
+        // result with `catch unreachable`, but on the kqueue backend (macOS,
+        // FreeBSD) a child that exits BEFORE the `EVFILT_PROC` registration is
+        // submitted makes XNU answer the registration with `ESRCH`, which libxev
+        // maps to `error.NoSuchProcess`. The registration is only submitted on
+        // the loop's next tick after `threadEnter`, so a command that exits at
+        // once (a typo'd `command`, `/usr/bin/true`) can reach it; measured on
+        // macOS 26.5.1 (a zombie child's `EV_ADD` returns `EV_ERROR` with
+        // `data = ESRCH`). ReleaseSafe panics; ReleaseFast is undefined
+        // behaviour. The child HAS exited, so the port takes the reference's own
+        // exit path, `processExitCommon`, with exit code 0 — the value libxev's
+        // kqueue backend itself reports when it has no decodable exit status
+        // (`kqueue.zig`'s proc arm returns 0 unless `WIFEXITED`). The other
+        // wait errors are left as the reference's `unreachable`: the completion
+        // is never canceled, and the proc op always delivers a kevent.
+        let exit_code = match r {
+            Ok(code) => code,
+            #[cfg(any(
+                target_os = "macos",
+                target_os = "ios",
+                target_os = "visionos",
+                target_os = "freebsd"
+            ))]
+            Err(xev::ProcessWaitError::NoSuchProcess) => 0,
+            Err(e) => unreachable!("process wait failed: {e:?}"),
+        };
         // processExitCommon(td_.?, exit_code);
         Self::processExitCommon::<M>(td_, exit_code);
         // return .disarm;
@@ -6906,8 +6932,19 @@ mod tests {
     // A trivial `AppMailbox` test double: it accepts every push (returns a
     // non-zero queue size) and records nothing. Enough for the exit / termios /
     // write callbacks, which only `push(...)` to it.
+    //
+    // The one thing it does keep is each `child_exited` exit code, in a
+    // thread-local (the exit callback runs on the thread that drives the loop,
+    // which in these KATs is the test thread), so the process-exit KATs can see
+    // which arm of `processExit` produced it.
     #[cfg(target_os = "macos")]
     struct TestMailbox;
+
+    #[cfg(target_os = "macos")]
+    thread_local! {
+        static CHILD_EXITED_CODES: std::cell::RefCell<Vec<u32>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
 
     #[cfg(target_os = "macos")]
     impl rustty_apprt_api::surface::AppMailbox for TestMailbox {
@@ -6916,12 +6953,15 @@ mod tests {
         #[allow(clippy::result_large_err)]
         fn push_or_return(
             &self,
-            _msg: rustty_apprt_api::surface::Message<'static>,
+            msg: rustty_apprt_api::surface::Message<'static>,
             _timeout: rustty_datastruct::blocking_queue::Timeout,
         ) -> Result<
             rustty_datastruct::blocking_queue::Size,
             rustty_apprt_api::surface::Message<'static>,
         > {
+            if let rustty_apprt_api::surface::Message::ChildExited(info) = &msg {
+                CHILD_EXITED_CODES.with(|v| v.borrow_mut().push(info.exit_code));
+            }
             // Non-zero => "accepted" (matches a live queue's push return).
             Ok(1)
         }
@@ -7296,6 +7336,191 @@ mod tests {
         exec.deinit();
         // The read thread is joined; deinit the harness Termio last.
         t.teardown();
+    }
+
+    /// UD67 harness: `threadEnter` a real `/bin/sh -c <script>` child on a real
+    /// pty and kqueue loop, run `before_first_tick` (which sees the child's pid)
+    /// BEFORE the loop has submitted the `EVFILT_PROC` registration, then pump the
+    /// loop until `processExit` has run. Returns the `child_exited` codes the
+    /// mailbox received and the backend's `exited` flag.
+    #[cfg(target_os = "macos")]
+    fn run_child_to_process_exit(
+        script: &[u8],
+        before_first_tick: impl FnOnce(libc::pid_t, &mut xev::Loop),
+    ) -> (Vec<u32>, bool) {
+        use allocator_api2::alloc::Global;
+        use std::time::{Duration, Instant};
+
+        CHILD_EXITED_CODES.with(|v| v.borrow_mut().clear());
+        let cfg = Config {
+            command: Some(configpkg::command::Command::Direct(vec![
+                b"/bin/sh".to_vec(),
+                b"-c".to_vec(),
+                script.to_vec(),
+            ])),
+            env: EnvMap::new(),
+            env_override: configpkg::RepeatableStringMap::default(),
+            shell_integration: configpkg::value_types::ShellIntegration::Detect,
+            shell_integration_features: configpkg::value_types::ShellIntegrationFeatures::default(),
+            cursor_blink: None,
+            working_directory: None,
+            resources_dir: None,
+            term: b"xterm-256color".to_vec(),
+            rt_pre_exec_info: RtPreExecInfo::default(),
+            rt_post_fork_info: RtPostForkInfo::default(),
+        };
+        let mut exec = Exec::init(Global, cfg).expect("Exec::init");
+        let mut loop_ = xev::Loop::init(xev::Options::default()).expect("Loop::init");
+        let loop_ptr: *mut xev::Loop = std::ptr::addr_of_mut!(loop_);
+        let t = TestTermio::build();
+        let mut td: crate::termio_impl::ThreadData<TestMailbox> = crate::termio_impl::ThreadData {
+            alloc: Global,
+            loop_: loop_ptr,
+            renderer_state: t.state,
+            surface_mailbox: TestMailbox,
+            backend: crate::backend::ThreadData::Exec(ThreadData {
+                start: Instant::now(),
+                exited: false,
+                write_stream: xev::Stream::init_fd(-1),
+                process: None,
+                write_pool: MemoryPool::init(Global),
+                write_queue: xev::WriteQueue::default(),
+                process_wait_c: xev::Completion::default(),
+                flatpak_wait_c: FlatpakHostCommandCompletion::default(),
+                read_thread: std::thread::spawn(|| {}),
+                read_thread_pipe: -1,
+                read_thread_fd: -1,
+                termios_timer: xev::Timer::init().expect("placeholder Timer::init"),
+                termios_timer_c: xev::Completion::default(),
+                termios_timer_running: false,
+                termios_mode: ptypkg::Mode::default(),
+            }),
+            mailbox: std::ptr::null_mut(),
+        };
+        unsafe { exec.threadEnter(Global, t.io, &mut td) }.expect("threadEnter");
+        let pid = match &exec.subprocess.process {
+            Some(Process::ForkExec(cmd)) => cmd.pid.expect("spawned child has a pid"),
+            _ => panic!("expected a fork/exec child"),
+        };
+        let master: std::os::fd::RawFd = {
+            let crate::backend::ThreadData::Exec(e) = &td.backend;
+            e.read_thread_fd
+        };
+
+        before_first_tick(pid, &mut loop_);
+
+        let exited = |td: &crate::termio_impl::ThreadData<TestMailbox>| {
+            let crate::backend::ThreadData::Exec(e) = &td.backend;
+            e.exited
+        };
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !exited(&td) && Instant::now() < deadline {
+            loop_.run(xev::RunMode::NoWait).expect("loop.run(NoWait)");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let was_exited = exited(&td);
+        let codes = CHILD_EXITED_CODES.with(|v| v.borrow().clone());
+
+        exec.threadExit(&mut td);
+        unsafe {
+            libc::close(master);
+        }
+        td.deinit();
+        loop_.deinit();
+        exec.deinit();
+        t.teardown();
+        (codes, was_exited)
+    }
+
+    /// Whether `pid` has exited and is waiting to be reaped. `WNOWAIT` leaves it
+    /// a zombie, so the loop's `EVFILT_PROC` registration still sees it.
+    #[cfg(target_os = "macos")]
+    fn child_is_zombie(pid: libc::pid_t) -> bool {
+        let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+        let rc = unsafe {
+            libc::waitid(
+                libc::P_PID,
+                pid as libc::id_t,
+                &mut info,
+                libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+            )
+        };
+        rc == 0 && info.si_pid == pid
+    }
+
+    /// Registers `EVFILT_PROC` for `pid` on a private kqueue, exactly as the xev
+    /// kqueue backend does (`EV_ADD | EV_ENABLE`, `NOTE_EXIT | NOTE_EXITSTATUS`),
+    /// and returns the errno the kernel answers the registration with (0 if it
+    /// was accepted).
+    #[cfg(target_os = "macos")]
+    fn evfilt_proc_registration_errno(pid: libc::pid_t) -> i64 {
+        unsafe {
+            let kq = libc::kqueue();
+            assert!(kq >= 0);
+            let change = libc::kevent {
+                ident: pid as libc::uintptr_t,
+                filter: libc::EVFILT_PROC,
+                flags: libc::EV_ADD | libc::EV_ENABLE | libc::EV_RECEIPT,
+                fflags: libc::NOTE_EXIT | libc::NOTE_EXITSTATUS,
+                data: 0,
+                udata: std::ptr::null_mut(),
+            };
+            let mut out: libc::kevent = std::mem::zeroed();
+            let n = libc::kevent(kq, &change, 1, &mut out, 1, std::ptr::null());
+            libc::close(kq);
+            assert_eq!(n, 1, "EV_RECEIPT always answers the change");
+            if out.flags & libc::EV_ERROR != 0 {
+                out.data as i64
+            } else {
+                0
+            }
+        }
+    }
+
+    // UD67 (R13): a child that has already exited when the kqueue loop submits
+    // its `EVFILT_PROC` registration. XNU answers that registration with ESRCH
+    // (`NoSuchProcess`), where the reference's `processExit` does `catch
+    // unreachable`. Driven through the REAL path, no seam: the registration is
+    // only submitted on the loop's first tick after `threadEnter`, so the test
+    // waits (with `WNOWAIT`, not a guessed sleep) until the child is a zombie
+    // before that first tick, and first checks on a private kqueue that the
+    // kernel really refuses a registration for it with ESRCH. (The exit code
+    // cannot tell the arms apart on macOS: the child is `login(1)`, which exits
+    // 0 whatever its command does.)
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn process_exit_reports_a_child_that_exited_before_the_watch_was_registered() {
+        use std::time::{Duration, Instant};
+        let _serial = FORK_KAT_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+
+        let mut saw_zombie = false;
+        let mut registration_errno = 0;
+        let (codes, exited) = run_child_to_process_exit(b"exit 3", |pid, _loop| {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !child_is_zombie(pid) && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            saw_zombie = child_is_zombie(pid);
+            registration_errno = evfilt_proc_registration_errno(pid);
+        });
+        assert!(
+            saw_zombie,
+            "precondition: the child must have exited before the first tick"
+        );
+        assert_eq!(
+            registration_errno,
+            libc::ESRCH as i64,
+            "precondition: the kernel refuses EVFILT_PROC for the zombie with ESRCH"
+        );
+        assert!(
+            exited,
+            "processExitCommon must run for the ESRCH wait result"
+        );
+        assert_eq!(
+            codes,
+            vec![0],
+            "exactly one child_exited, with the no-status code 0"
+        );
     }
 
     // KAT (rustty-only margin — blueprint §7 B3; NOT a mapped Zig `test{}`, so the

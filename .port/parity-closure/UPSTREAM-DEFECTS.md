@@ -1105,6 +1105,21 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - proposed fix:    compare the declared length with the record's remaining payload before allocating and return `error.EndOfStream`, which the code already returns a moment later.
 - upstream status: not reported
 
+### UD67 — a child that exits before its kqueue watch is registered hits `catch unreachable` in `processExit`
+- kind:            crash (safety-checked trap) / undefined behaviour
+- upstream project: ghostty (the error is libxev's documented `ProcError.NoSuchProcess`; the defect is Ghostty not handling it)
+- severity:        medium (kernel timing on ordinary use; kqueue platforms only)
+- reference:       `src/termio/Exec.zig:296-305` (`processExit`: `const exit_code = r catch unreachable;` at `:302`), with the watch started at `:159-165`; libxev `src/backend/kqueue.zig:157-168` (`add` only queues the completion; the kevent change is submitted on the next tick), `:1389-1393` (the proc op maps `ESRCH` to `ProcError.NoSuchProcess`), at 20abdb50a
+- defect:          `threadEnter` spawns the child and only queues its `EVFILT_PROC` registration; the kevent change is submitted on the io loop's next tick. If the child has exited by then it is a zombie, and XNU refuses `EV_ADD` for a zombie with `EV_ERROR`/`ESRCH`. libxev reports that as `error.NoSuchProcess`, which `processExit` declares unreachable.
+- ReleaseSafe:     panic "attempt to unwrap error: NoSuchProcess" on the io thread; the app aborts. By reading of `catch unreachable` (no Zig probe was built); the kernel half was measured, see reachability.
+- ReleaseFast:     undefined behaviour (`unreachable` on the error arm); the exit is never reported as intended.
+- reachability:    kernel timing on ordinary use: any child that exits before the io thread's first tick after spawn (a command that fails at once, a very short `command`). MEASURED on macOS 26.5.1 (arm64) with a C probe: `EV_ADD` of `EVFILT_PROC` with `NOTE_EXIT | NOTE_EXITSTATUS` for an exited, unreaped child returns `EV_ERROR` with `data = 3` (`ESRCH`), with or without `EV_RECEIPT`; registering straight after `fork` of a child that calls `_exit(0)` hit it 2 times in 200. On macOS Ghostty's child is `login(1)`, which narrows the window; FreeBSD (also kqueue) has no such wrapper. Not reachable on Linux (the pidfd backends report exit through `waitid`).
+- port handling:   `crates/rustty-termio/src/exec.rs` `processExit` takes the reference's own exit path, `processExitCommon`, for `NoSuchProcess`, with exit code 0 — the value libxev's kqueue backend itself reports when it has no decodable exit status (`kqueue.zig:1270-1281` returns 0 unless `WIFEXITED`). The child has exited, so the surface gets its `child_exited` exactly as it would have. On macOS the exit code never decides abnormal-exit detection (`Surface.zig:1256-1261` skips it on Darwin, and `login(1)` exits 0 anyway). The other wait errors keep the reference's `unreachable`: the completion is never canceled and the proc op always delivers a kevent. PORT NOTE at the site.
+- parity row(s):   NEW-FINDINGS N55. Inventory M7.
+- test:            `process_exit_reports_a_child_that_exited_before_the_watch_was_registered` (rustty-termio, macOS) drives the REAL path with no seam: a real `threadEnter` on a pty and a kqueue loop, a wait with `WNOWAIT` until the child is a zombie, a check on a private kqueue that the kernel refuses its registration with `ESRCH`, then the loop's first tick. It asserts that `processExitCommon` ran (`exited`) and that exactly one `child_exited` was pushed. Negative controls, macOS 2026-09-22, one at a time: the original `r.unwrap()` restored fails with "called `Result::unwrap()` on an `Err` value: NoSuchProcess" at the cast site; the `NoSuchProcess` arm replaced by `unreachable!()` fails at that arm. Restored.
+- proposed fix:    in `processExit`, handle `error.NoSuchProcess` by calling `processExitCommon(td, 0)` (or reap with `waitpid` to recover the status); alternatively libxev's kqueue proc op could `waitpid(WNOHANG)` on `ESRCH` and deliver the status.
+- upstream status: not reported
+
 ## Candidates pending verification
 
 Assembled from this plan's progress notes on 2026-09-11. **Not verified** — do not cite as fact.
