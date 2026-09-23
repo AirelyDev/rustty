@@ -1244,7 +1244,7 @@ impl Page {
     /// real VT input by TWO routes into the style set's `OutOfMemory` (both
     /// measured: ReleaseSafe SIGABRT, ReleaseFast `panic:` trap). Route (a), the
     /// PSL-overflow arm (`ref_counted_set.zig:268`), is reached on ANY width,
-    /// including an ORDINARY 80x24 terminal, with ~700 bytes of output: 32
+    /// including an ORDINARY 80x24 terminal, with about 1.2 KB of output: 32
     /// foreground colours whose unseeded style hashes share their low 16 bits
     /// stay clustered at every capacity doubling, so `increaseCapacity(.styles)`
     /// climbs to 65535 and returns `OutOfSpace` on a page holding only ~32 live

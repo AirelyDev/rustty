@@ -3036,7 +3036,7 @@ R13-L2 with the same method, after against before: 0.998 / 1.004 / 0.999, no cha
 
 The reference's row-copy retry loops `@panic` when `increaseCapacity(.styles)` returns `OutOfSpace`: the
 callers (IL/DL, a scroll, an erase across a page boundary) have already rotated rows, so a crash is
-chosen over a half-mutated page list. This is reachable on an ORDINARY 80×24 terminal from ~700 bytes of
+chosen over a half-mutated page list. This is reachable on an ORDINARY 80×24 terminal from about 1.2 KB of
 output (task R13-X3): 32 foreground colours whose unseeded, deterministic style hashes share their low 16
 bits stay clustered at every capacity doubling and drive the ref-counted set's PSL-overflow OutOfMemory
 arm (`ref_counted_set.zig:268`), so `increaseCapacity(.styles)` climbs to the 65,535 ceiling and returns
@@ -3063,7 +3063,7 @@ log test and a debug re-clone counter (UD131 "test").
 
 Update (task R13-X3): the R13-X2 review found the reachability was understated — the crash is reachable
 on an ORDINARY 80×24 terminal via the style set's PSL-overflow arm, not only on a wide terminal with a
-full live set. UD131's severity is raised to HIGH (a remotely reachable DoS: ~700 bytes of ordinary
+full live set. UD131's severity is raised to HIGH (a remotely reachable DoS: about 1.2 KB of ordinary
 output crash Ghostty at 80×24) and its `upstream status` says to report it privately via a GitHub
 security advisory. An 80-column debug test (`ud131_delete_lines_degrades_on_an_ordinary_80_column_terminal`,
 `terminal.rs`) and a control (31 colours) run in the default suite and on Linux aarch64, with a

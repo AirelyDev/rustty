@@ -23041,8 +23041,8 @@ mod tests {
     // wide[1])`) share their low 16 bits. The 32 colours below all hash to low
     // bits 0x2e2a, so they stay clustered at every capacity doubling and
     // `increaseCapacity(.styles)` climbs 128 -> ... -> 65535 and then returns
-    // OutOfSpace, on a page holding only ~32 live styles. About 700 bytes of
-    // ordinary output. The style hash is identical in the port, so the same
+    // OutOfSpace, on a page holding only ~32 live styles. About 1.2 KB of
+    // ordinary output (591 line feeds fill page 1). The style hash is identical in the port, so the same
     // colours cluster here (MEASURED, task R13-X3).
     //
     // Reference (MEASURED, task R13-X3, scratch ReleaseSafe/ReleaseFast builds at

@@ -1540,7 +1540,7 @@ impl Screen {
                 // 747). Reachable from real VT input (IL/DL, scroll, erase
                 // across a page boundary) by TWO routes into the style set's
                 // OutOfMemory: (1) the PSL-overflow arm, on ANY width including
-                // an ordinary 80x24 terminal, with ~700 bytes of output (32
+                // an ordinary 80x24 terminal, with about 1.2 KB of output (32
                 // hash-colliding colours drive the set to the ceiling on a page
                 // holding ~32 live styles); (2) a wide terminal whose page's
                 // style set is full of 53,247 distinct live styles at its
