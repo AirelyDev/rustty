@@ -765,6 +765,11 @@ const LAYOUT_OVERHEAD_FIXED: u64 = 1 << 20;
 /// An upper bound on the style set's per-item size, asserted by the same test.
 const STYLE_ITEM_SIZE_BOUND: u64 = 64;
 
+/// Whether `Page::layout`'s `usize` arithmetic can overflow for a declared
+/// capacity, so that `check_native_page_size` must bound it before computing
+/// it. True only for a `usize` narrower than 64 bits (see that function).
+const LAYOUT_NEEDS_PRE_GATE: bool = usize::BITS < 64;
+
 /// The bytes a declared capacity asks for in its own right, before any
 /// allocator or map overhead. Computed in `u64` so it is identical on every
 /// target, including the 32-bit ones (`wasm32`) where `Page::layout`'s own
@@ -783,7 +788,7 @@ fn declared_region_bytes(cap: TerminalPageCapacity) -> u64 {
 /// Reject a declared PAGE capacity whose native page could not be allocated.
 ///
 /// PORT NOTE: reference defect (R13, UPSTREAM-DEFECTS.md UD64).
-/// `Header.pageCapacity` (`snapshot/page.zig:560-578`) says it validates
+/// `Header.pageCapacity` (`snapshot/page.zig:565`) says it validates
 /// "native allocation requirements" but checks only that `columns` and `rows`
 /// are nonzero. The four capacity fields then flow, unchecked, into
 /// `createPageExt`, where `assert(layout.total_size <= size.max_page_size)`
@@ -806,22 +811,35 @@ fn declared_region_bytes(cap: TerminalPageCapacity) -> u64 {
 /// `PageList::allocate_page` — obtain their capacity from `Decoder::capacity`,
 /// so this one site covers both.
 fn check_native_page_size(cap: TerminalPageCapacity) -> Result<(), CapacityError> {
-    // Bound the layout before computing it. This is what makes the exact
-    // computation below safe on a 32-bit target, where `Page::layout` sums
-    // `usize` and a declared capacity can overflow it (a panic in the port's
-    // checked profiles, and in `release-fast` a wrapped, small `total_size`
-    // that passes the assertion and leaves the page buffer undersized for the
-    // grid decode that follows).
-    let bound = declared_region_bytes(cap)
-        .saturating_mul(LAYOUT_OVERHEAD_MULTIPLE)
-        .saturating_add(LAYOUT_OVERHEAD_FIXED);
-    if bound > crate::size::MAX_PAGE_SIZE as u64 {
-        return Err(CapacityError::InvalidDimensions);
+    // On a 32-bit `usize` (wasm32), bound the layout before computing it.
+    // `Page::layout` sums `usize`, and there a declared capacity can overflow
+    // it (a panic in the port's checked profiles, and in `release-fast` a
+    // wrapped, small `total_size` that passes the assertion and leaves the
+    // page buffer undersized for the grid decode that follows). The bound is
+    // conservative, so on such a target it can also refuse a capacity whose
+    // exact layout would have fit: a deliberate over-rejection, taken only
+    // where the exact computation is not safe to run.
+    //
+    // On a 64-bit `usize` the exact layout cannot overflow — every capacity
+    // field maxed at once still lays out (`page.zig:2708-2720`, "Page.layout
+    // can take a maxed capacity"; `page_layout_can_take_a_maxed_capacity` in
+    // the port) — so the exact check below is the whole gate there. The
+    // pre-gate must NOT run on 64-bit: it rejects capacities native Ghostty
+    // can itself produce and encode (a 48,151-column page whose grapheme
+    // capacity `increaseCapacity` doubled to 512 MiB or 1 GiB), which the
+    // reference decoder accepts.
+    if LAYOUT_NEEDS_PRE_GATE {
+        let bound = declared_region_bytes(cap)
+            .saturating_mul(LAYOUT_OVERHEAD_MULTIPLE)
+            .saturating_add(LAYOUT_OVERHEAD_FIXED);
+        if bound > crate::size::MAX_PAGE_SIZE as u64 {
+            return Err(CapacityError::InvalidDimensions);
+        }
     }
 
-    // The bound holds, so the real layout fits a `usize` on every target and
-    // its exact total can be compared with the limit the native assertion
-    // enforces.
+    // The real layout fits a `usize` (always on 64-bit; by the bound above on
+    // 32-bit), so its exact total can be compared with the limit the native
+    // assertion enforces.
     if TerminalPage::layout(cap).total_size as u64 > crate::size::MAX_PAGE_SIZE as u64 {
         return Err(CapacityError::InvalidDimensions);
     }
@@ -1982,6 +2000,61 @@ mod tests {
         // The native standard capacity is comfortably accepted: the gate
         // rejects only capacities no page could hold.
         assert_eq!(Ok(()), check_native_page_size(crate::page::std_capacity()));
+    }
+
+    // rustty-only (R13, UPSTREAM-DEFECTS.md UD64): the decoder boundary must
+    // not reject a capacity native Ghostty can itself produce and encode. A
+    // terminal 48,151 or more columns wide leaves the standard capacity
+    // (`initialCapacity`, `PageList.zig:535-540`): its page is
+    // `std_capacity` with only `cols` changed. `increaseCapacity`
+    // (`PageList.zig:4234-4255`) then doubles `grapheme_bytes` from 8192
+    // for as long as the exact layout stays within `max_page_size`, which
+    // reaches 512 MiB (a ~1.27 GiB layout) and 1 GiB (~2.46 GiB). The next
+    // doubling, 2 GiB, exceeds the limit and native growth returns
+    // `OutOfSpace` instead. `Header.init` copies `page.capacity` verbatim,
+    // so the first two are legal snapshot headers and the third is not.
+    #[test]
+    fn decode_accepts_a_large_capacity_native_ghostty_can_produce() {
+        let native = TerminalPageCapacity {
+            cols: 48_151,
+            // `std_capacity` outside test builds (`page.zig:1829-1834`).
+            grapheme_bytes: 8192,
+            ..crate::page::std_capacity()
+        };
+        let header = |grapheme_bytes: u32| Header {
+            columns: native.cols,
+            rows: native.rows,
+            style_count: 0,
+            hyperlink_count: 0,
+            style_capacity: native.styles,
+            hyperlink_capacity_bytes: native.hyperlink_bytes,
+            grapheme_capacity_bytes: grapheme_bytes,
+            string_capacity_bytes: native.string_bytes,
+        };
+        let limit = crate::size::MAX_PAGE_SIZE as u64;
+
+        for doubled in [1u32 << 29, 1 << 30] {
+            let cap = TerminalPageCapacity {
+                grapheme_bytes: doubled,
+                ..native
+            };
+            // The native growth rule accepts it: this is a page a real
+            // terminal can hold and therefore encode.
+            assert!(TerminalPage::layout(cap).total_size as u64 <= limit);
+            assert_eq!(Ok(cap), header(doubled).page_capacity());
+        }
+
+        // The next doubling is the one native growth refuses; the decoder
+        // refuses it too.
+        let oversized = TerminalPageCapacity {
+            grapheme_bytes: 1 << 31,
+            ..native
+        };
+        assert!(TerminalPage::layout(oversized).total_size as u64 > limit);
+        assert_eq!(
+            Err(CapacityError::InvalidDimensions),
+            header(1 << 31).page_capacity(),
+        );
     }
 
     // rustty-only (R13, UPSTREAM-DEFECTS.md UD65): a decoded PAGE declares its
