@@ -1506,22 +1506,34 @@ fn apply_cell(
         // PORT NOTE: reference defect (R13, UPSTREAM-DEFECTS.md UD65).
         // `grid.zig:1259-1265` calls `page.styles.use` once per styled cell,
         // and that is an unguarded `ref += 1` on a `u16`
-        // (`ref_counted_set.zig:365-379`). A native page cannot reach the
-        // ceiling — `std_capacity` is 215x215 = 46,225 cells and `adjust`
-        // preserves the byte budget — but a decoded PAGE declares its own
+        // (`ref_counted_set.zig:365-379`). A decoded PAGE declares its own
         // `columns` x `rows`, so a 256x256 page whose cells all carry one
         // style overflows it: a ReleaseSafe panic, and in ReleaseFast a wrap
-        // to zero that makes a live style read as dead, after which the
-        // post-grid release loop and the set's dead-item trimming corrupt the
-        // style table. Saturation is therefore decoder-only.
+        // to zero that makes a live style read as dead; the very next `use`
+        // then breaks `use`'s own `assert(ref > 0)` (undefined behaviour),
+        // before the post-grid release loop runs.
         //
-        // The safe handling is this function's OWN existing degrade: an ID it
-        // cannot honour stores the cell with the default style (that is what
-        // the `!= 0` check above already does for an unmapped ID, and what
-        // the hyperlink half below does when `set_hyperlink` fails). It loses
-        // this cell's style and nothing else, and invents no new behaviour.
-        // Rejecting the whole page would also work but would refuse pages
-        // that decode correctly today.
+        // This is NOT decoder-only. A standard native page holds at most
+        // 48,035 cells, but a terminal 48,036 or more columns wide (48,151 in
+        // a test build, whose `std_capacity` has a smaller grapheme region)
+        // gets `std_capacity` with only `cols` changed
+        // (`PageList.zig:535-540`): 215 rows x cols, over ten million
+        // cells. Ordinary styled output on
+        // such a terminal overflows the same refcount through `printCell`
+        // (measured, UPSTREAM-DEFECTS.md UD80). The port is still exposed on
+        // that native path; it is fixed separately.
+        //
+        // The safe handling HERE is this function's OWN existing degrade: an
+        // ID it cannot honour stores the cell with the default style (that is
+        // what the `!= 0` check above already does for an unmapped ID, and
+        // what the hyperlink half below does when `set_hyperlink` fails). It
+        // loses this cell's style and nothing else, and invents no new
+        // behaviour. Rejecting the whole page would also work but would refuse
+        // pages that decode correctly today, including snapshots of those
+        // wide terminals. Note that a degraded page leaves the style at the
+        // ceiling (65,534 once the style table's own reference is released),
+        // so it inherits UD80: one cursor-style `add` plus one styled print
+        // over it overflows through the native path.
         //
         // SAFETY: the remapped ID was assigned by this page's style set.
         if wire.style_id != 0

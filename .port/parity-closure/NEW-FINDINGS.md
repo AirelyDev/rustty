@@ -2275,7 +2275,7 @@ members.
   `.port/phase-3/UPSTREAM_BUGS.md` U2, the R13 inventory (M5); fixed by task R13-B.
 - **severity**: medium. **kind**: missing-branch (reference defect, R13).
 - **oracle**: `src/renderer/generic.zig:2266-2293`.
-- **rustty**: `crates/rustty-renderer/src/generic.rs:5657`,
+- **rustty**: `crates/rustty-renderer/src/generic.rs:5688`,
   `crates/rustty-renderer/src/generic/linux_impl.rs:4127`.
 
 S116-F1 found the port's `unreachable!()` in the three uniform writes, and the audit refuted it
@@ -2466,8 +2466,22 @@ positively, through the allocation tripwire, rather than relying on the error va
 code returns the same error, just 4 GiB later.
 
 The third site the sweep listed, `crates/rustty-vt/src/snapshot/continuation.rs` (`decode_alloc`), is
-NOT affected: `continuation::decode` checks the record's own `payload_len` against the caller's
-`max_bytes` before allocating, so its length is already bounded in both trees.
+NOT an A3 site, but it is not bounded by the record either (corrected by task R13-S2; the first version
+of this entry called it "already bounded in both trees", which overstated it). `continuation::decode`
+compares the record header's `payload_len` with `max_bytes` before allocating (`continuation.zig:94`),
+and `max_bytes` is the CALLER's configurable limit — the C decoder's `max_continuation_bytes` option,
+65 MiB by default (`apc.Protocol.maxDefaultBytes()`, the Kitty default) and settable higher
+(`crates/rustty-vt-c/src/snapshot.rs`, `DecoderOption::MaxContinuationBytes`). So a truncated
+CONTINUATION record declaring up to that limit still makes the port reserve AND zero-fill it before the
+read fails, where the reference only reserves.
+
+The UD66 remaining-bytes bound cannot help there, so it was deliberately not applied: the length being
+allocated IS the record's own declared payload, and `payload_remaining()` at that point returns exactly
+`payload_len` (borrowed: the whole window, streaming: the whole limit), so the comparison is always
+true. On the borrowed route the bytes are real, because the reader borrows only when the source already
+buffers the whole payload; on the streaming route no bound on what the source still holds exists. The
+residual port-only cost is therefore the zero-fill of at most the caller's own limit; it is bounded and
+unchanged.
 
 **state**: CLOSED by task R13-S.
 
@@ -2606,6 +2620,26 @@ overflowed them. They now saturate too. Reference defect: `UPSTREAM-DEFECTS.md` 
 
 **state**: CLOSED by task R13-C2.
 
+## N66 — styled output on a terminal 48,036 or more columns wide panics the port on the style refcount
+
+- **id**: N66 (reserved range N66–N69 for task R13-S2; N61 was the last on `parity-closure` when written).
+- **found by**: the R13-S review, while checking UD65's premise; measured again by task R13-S2.
+- **severity**: medium. **kind**: missing-branch (reference defect, R13).
+- **oracle**: `src/terminal/PageList.zig:535-540`, `src/terminal/Terminal.zig:1722`,
+  `src/terminal/ref_counted_set.zig:365-379`.
+- **rustty**: `crates/rustty-vt/src/pagelist/mod.rs` (`initial_capacity`), `crates/rustty-vt/src/terminal.rs`
+  (`print_cell`), `crates/rustty-vt/src/ref_counted_set.rs` (`use_id`).
+
+The port reproduces the reference faithfully: a terminal wide enough to leave the standard page
+capacity gets 215 rows x cols cells, and 65,536 or more cells printed in one style overflow the `u16`
+style refcount. Measured on macOS 2026-09-22 in the test profile: `Terminal::init` at 48,151 x 3,
+`set_attribute(Bold)`, 70,000 `print('A')` panics "attempt to add with overflow" at
+`ref_counted_set.rs:110`. `[profile.release]` keeps overflow checks on, so the shipped build panics too
+(aborting the host through `extern "C"`); `release-fast` wraps. Reference defect:
+`UPSTREAM-DEFECTS.md` UD80.
+
+**state**: OPEN. Recorded by task R13-S2; the fix touches the native print path and is its own batch.
+
 ## N70 — `+crash-report` truncated the age of a very old crash file instead of handling it
 
 - **id**: N70. Inventory P3 (with M30).
@@ -2718,3 +2752,4 @@ Every error path after the `ref` now releases it, in the missing errdefer's LIFO
 stays: it states an invariant that now holds. Reference defect: `UPSTREAM-DEFECTS.md` UD115.
 
 **state**: CLOSED by task R13-D2.
+

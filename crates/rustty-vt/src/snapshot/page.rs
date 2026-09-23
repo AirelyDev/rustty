@@ -2004,8 +2004,9 @@ mod tests {
 
     // rustty-only (R13, UPSTREAM-DEFECTS.md UD64): the decoder boundary must
     // not reject a capacity native Ghostty can itself produce and encode. A
-    // terminal 48,151 or more columns wide leaves the standard capacity
-    // (`initialCapacity`, `PageList.zig:535-540`): its page is
+    // terminal 48,036 or more columns wide in a shipped build (48,151 in a
+    // test build) leaves the standard capacity (`initialCapacity`,
+    // `PageList.zig:535-540`): its page is
     // `std_capacity` with only `cols` changed. `increaseCapacity`
     // (`PageList.zig:4234-4255`) then doubles `grapheme_bytes` from 8192
     // for as long as the exact layout stays within `max_page_size`, which

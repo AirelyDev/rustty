@@ -922,11 +922,15 @@ where
     ///
     /// PORT NOTE (R13, UPSTREAM-DEFECTS.md UD65): the reference has no such
     /// query — `use` is an unguarded `item.meta.ref += 1` over a `u16`
-    /// (`ref_counted_set.zig:365-379`). Nothing on the native write path can
-    /// reach the ceiling, because a page holds far fewer cells than
-    /// `maxInt(u16)` by construction, but a decoded page declares its own
-    /// dimensions. The snapshot grid decoder asks this before taking a
-    /// reference; see `snapshot/grid.rs`.
+    /// (`ref_counted_set.zig:365-379`). A decoded page declares its own
+    /// dimensions, so the snapshot grid decoder asks this before taking a
+    /// reference; see `snapshot/grid.rs`. The native write path can reach the
+    /// ceiling too: a terminal 48,036 or more columns wide (48,151 in a test
+    /// build) gets a page of 215 rows x cols (`PageList.zig:535-540`), and
+    /// ordinary styled output on it
+    /// overflows `use` from `printCell` (UPSTREAM-DEFECTS.md UD80). That path
+    /// does not ask this yet, so the port is still exposed there; it is fixed
+    /// separately.
     ///
     /// # Safety: `base` must be the true base of the backing buffer.
     pub unsafe fn ref_count_saturated<B: IntFromBase + Copy>(&self, base: B, id: Id) -> bool {
