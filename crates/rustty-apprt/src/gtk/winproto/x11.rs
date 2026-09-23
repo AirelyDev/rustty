@@ -820,10 +820,14 @@ impl Window {
     /// DestroyNotify, so it would avoid the measured pumped-reload case without a
     /// trap. It cannot cover a destroy GDK has not yet processed, or one that lands
     /// between the check and the request, and the trap covers every case the check
-    /// would. Adding it would also turn the reference's `failed to sync blur=` /
-    /// `failed to sync decorations=` errors on a destroyed window into silence, and
-    /// would stop the M110 test from reaching the trap, since that test's window is
-    /// already marked destroyed when it reloads. The trap alone is the complete fix.
+    /// would. R13 item 1 also argues against it: the trap takes the failure path
+    /// the reference's own code implies (`error.RequestFailed`, then
+    /// `resizeEvent` / `syncAppearance` log `failed to sync …`), whereas an early
+    /// `Ok` on a destroyed window would invent a silent skip the reference has no
+    /// counterpart for. (On a destroyed window the reference never logs those
+    /// errors: its first request exits the process in GDK's error handler.) A
+    /// secondary, test-side reason: the check would keep the M110 test's reloads
+    /// from reaching the trap. The trap alone is the complete fix.
     fn trap_x_errors<T>(&self, call: impl FnOnce() -> T) -> (T, bool) {
         let display = self.x11_surface.display();
         let guard = XErrorTrap::push(display.downcast_ref::<gdk4_x11::X11Display>());
@@ -859,6 +863,10 @@ impl Window {
         });
         // `if (status == 0) return error.RequestFailed` (`x11.zig:421`); a trapped
         // X error takes the same path (R13, [`Self::trap_x_errors`]).
+        #[cfg(test)]
+        if trapped {
+            TRAPPED_WRITES.with(|n| n.set(n.get() + 1));
+        }
         if status == 0 || trapped {
             Err(Error::RequestFailed)
         } else {
@@ -873,12 +881,25 @@ impl Window {
         });
         // `if (status == 0) return error.RequestFailed` (`x11.zig:430`); a trapped
         // X error takes the same path (R13, [`Self::trap_x_errors`]).
+        #[cfg(test)]
+        if trapped {
+            TRAPPED_WRITES.with(|n| n.set(n.get() + 1));
+        }
         if status == 0 || trapped {
             Err(Error::RequestFailed)
         } else {
             Ok(())
         }
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Test-only: how many `XChangeProperty` / `XDeleteProperty` calls on this
+    /// thread the X error trap reported as failed. The M110 test compares it with
+    /// the `failed to sync blur=` records a reload logs, so a record that no
+    /// trapped write produced cannot pass for one. Not compiled outside tests.
+    static TRAPPED_WRITES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// A pushed GDK X error trap that is always popped.
@@ -1018,7 +1039,9 @@ mod tests {
     }
 
     /// M110 / UD3 (R13): an X error on a winproto property call must not exit the
-    /// process, and the TRAP RESULT must be what turns it into `RequestFailed`.
+    /// process; each reload must issue its property write, and every
+    /// `failed to sync blur=` record it logs must come from a write the X error trap
+    /// reported as failed.
     ///
     /// The scenario is the measured one: map one of our windows on X11 with blur on,
     /// let a SECOND X client destroy its toplevel (`xdotool windowclose`), pump the
@@ -1029,23 +1052,31 @@ mod tests {
     ///   the region differs: `syncBlur` must CHANGE the property.
     ///
     /// `XDeleteProperty`/`XChangeProperty` always return 1, so for both the trap is
-    /// the ONLY failure signal. For each reload the child reports two things:
+    /// the ONLY failure signal. For each reload the child checks and reports:
     /// - how many `failed to sync blur=RequestFailed` records (`gtk_x11`, error)
-    ///   the reload's synchronous `syncAppearance` logged. `syncBlur` can fail only
-    ///   in its property write, so one record proves the write was ATTEMPTED and
-    ///   reported as failed. Zero means no write was made (e.g. `syncBlur` skipped,
-    ///   or the region unchanged), or the write was made and not reported;
+    ///   the reload's synchronous `syncAppearance` logged. Zero means no write was
+    ///   made (e.g. `syncBlur` skipped, or the region unchanged), or the write was
+    ///   made and not reported;
+    /// - (asserted in the child) that this count equals the number of
+    ///   `XChangeProperty` / `XDeleteProperty` calls the X error trap reported as
+    ///   failed during the reload (the test-only `TRAPPED_WRITES` counter,
+    ///   incremented where `trap_x_errors` returns `trapped`). This proves the
+    ///   write was ATTEMPTED: a `RequestFailed` returned without issuing the
+    ///   request (e.g. an early return on `is_destroyed()`) logs the same record
+    ///   but leaves the counter unchanged;
     /// - whether the window's cached blur region survived the reload unchanged,
     ///   which a write that was attempted and failed must leave it.
     ///
     /// Together these show each write was made against the dead window, was
-    /// reported by the trap as failed (nothing else can fail it here), and did not
-    /// exit the process. (Task 20 round 4: the round-3 test checked only the
-    /// cache, which also survives when no write is made at all; the round-3 review
-    /// kept it green with both traps removed by skipping the writes three ways.
-    /// Round 3 itself corrected an earlier version that relied on a `failed to
-    /// sync` line from `syncDecorations`' `XGetWindowProperty`, which that call
-    /// produces from its own reply code.)
+    /// reported by the trap as failed, that failure is the one logged, and it did
+    /// not exit the process. (Task 20 round 5: round 4 counted only the records,
+    /// which its reviewer kept green with both traps removed and an early
+    /// `Err(RequestFailed)` on `is_destroyed()`. Round 4: the round-3 test checked
+    /// only the cache, which also survives when no write is made at all; the
+    /// round-3 review kept it green with both traps removed by skipping the
+    /// writes three ways. Round 3 itself corrected an earlier version that relied
+    /// on a `failed to sync` line from `syncDecorations`' `XGetWindowProperty`,
+    /// which that call produces from its own reply code.)
     ///
     /// GDK's default X error handler calls `exit(1)`, which no in-process assertion
     /// can observe, so the scenario runs in a CHILD copy of this test binary. The
@@ -1221,10 +1252,21 @@ mod tests {
                 })
                 .count()
         };
+        let trapped_writes = || TRAPPED_WRITES.with(std::cell::Cell::get);
         let reload = |blur: bool| {
             let logged_before = failed_blur_writes();
+            let trapped_before = trapped_writes();
             win.set_property("config", config_with_blur(blur));
             let logged = failed_blur_writes() - logged_before;
+            let trapped = trapped_writes() - trapped_before;
+            // Each logged failure must be a property write the trap reported as
+            // failed: a `RequestFailed` produced without issuing the write (for
+            // example an early return on `is_destroyed()`) logs the same record.
+            assert_eq!(
+                trapped, logged,
+                "each `failed to sync blur=` record must come from a property write \
+                 the X error trap reported as failed (trapped writes vs records)"
+            );
             display.sync();
             pump(200);
             logged
