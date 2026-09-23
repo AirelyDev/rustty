@@ -45,6 +45,8 @@ def oracle_files():
     """`git ls-files src` in the oracle, with `GIT_*` removed (R5)."""
     return subprocess.run(["git", "ls-files", "src"], cwd=ORACLE, env=G.git_env(),
                           capture_output=True, text=True, check=True).stdout.split()
+
+
 SKIP_PREFIXES = ("src/build/", "src/bench/")
 
 PUB_FN = re.compile(r"^\s*pub fn ([A-Za-z_][A-Za-z0-9_]*)\s*\(", re.M)

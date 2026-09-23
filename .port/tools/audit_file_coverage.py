@@ -58,6 +58,7 @@ def oracle_files():
     return subprocess.run(["git", "ls-files", "src"], cwd=ORACLE, env=G.git_env(),
                           capture_output=True, text=True, check=True).stdout.split()
 
+
 # Oracle subtrees that have no Rust counterpart by design.
 SKIP_PREFIXES = ("src/build/", "src/bench/")
 
