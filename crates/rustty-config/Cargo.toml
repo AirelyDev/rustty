@@ -104,6 +104,12 @@ rustty-cfg-fmt = { workspace = true }
 # feature for the url.zig `url regex` test.
 rustty-oniguruma = { workspace = true, optional = true }
 
+# errno constants for `zig_error.rs` (the Zig error names the config diagnostics
+# print) and `O_DIRECTORY` for `Path.expand`'s `openDirAbsolute` (LEDGER S74-F4,
+# S78-F3..F5). Unix only: wasm32-unknown-unknown has no errno.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 # Build-time codegen of the `help_strings.Config` table (R1 port of
 # helpgen.genConfig): build.rs scans config_struct.rs for each field's `///` doc.
 [build-dependencies]

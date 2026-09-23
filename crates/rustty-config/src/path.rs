@@ -297,7 +297,10 @@ impl Path {
                             message.extend_from_slice(b"error expanding home directory for path ");
                             message.extend_from_slice(&path);
                             message.extend_from_slice(b": ");
-                            message.extend_from_slice(format!("{err:?}").as_bytes());
+                            // PORT NOTE (LEDGER S78-F4): `{}` of a Zig error is
+                            // `error.<Name>`; `ExpandError`'s variants carry the
+                            // reference's names (this printed `{err:?}` alone).
+                            message.extend_from_slice(format!("error.{err:?}").as_bytes());
                             diags.append(Diagnostic {
                                 message,
                                 ..Diagnostic::default()
@@ -338,6 +341,12 @@ impl Path {
 
         // var dir = try std.fs.openDirAbsolute(base, .{});
         // defer dir.close();
+        //
+        // PORT NOTE (LEDGER S78-F3): the base directory is opened FIRST and its
+        // error returned, as the reference's `try` does. The port used to skip
+        // this and resolve `base/path` as a string when the base was missing,
+        // fabricating an absolute path where the reference fails `expand`.
+        let _dir = open_dir_absolute(base)?;
         let base_path = std::path::Path::new(os_str_from_bytes(base));
 
         // const abs = dir.realpath(path, &buf) catch |err| abs: {
@@ -369,7 +378,13 @@ impl Path {
                 message.extend_from_slice(b"error resolving file path ");
                 message.extend_from_slice(&path);
                 message.extend_from_slice(b": ");
-                message.extend_from_slice(format!("{err:?}").as_bytes());
+                // PORT NOTE (LEDGER S78-F4): `error.<Name>` from
+                // `dirRealPathFilePosix`'s switch (this printed the `io::Error`
+                // Debug form, `Os { code: 20, kind: NotADirectory, .. }`).
+                message.extend_from_slice(
+                    crate::zig_error::fmt_error(&err, crate::zig_error::Call::RealPathFile)
+                        .as_bytes(),
+                );
                 diags.append(Diagnostic {
                     message,
                     ..Diagnostic::default()
@@ -609,6 +624,39 @@ impl FormatEntry for RepeatablePath {
 /// PORTS: `std.fs.max_path_bytes` (the platform max path length — POSIX
 /// `PATH_MAX`: 1024 on Darwin, 4096 on Linux). Sizes the `expand` stack buffer
 /// and bounds the `formatEntry` `[std.fs.max_path_bytes + 1]u8` scratch.
+/// `std.Io.Dir.openDirAbsolute(io, base, .{})` (`Io/Threaded.zig`
+/// `dirOpenDirPosix`): `O_RDONLY | O_DIRECTORY | O_CLOEXEC`, plus `O_PATH` where
+/// the platform has it (Linux here) because `.iterate` is false. The handle is
+/// only held for the call, as the reference's `defer dir.close()`.
+#[cfg(unix)]
+fn open_dir_absolute(base: &[u8]) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    #[cfg(target_os = "linux")]
+    let flags = libc::O_DIRECTORY | libc::O_PATH;
+    #[cfg(not(target_os = "linux"))]
+    let flags = libc::O_DIRECTORY;
+    std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(flags)
+        .open(os_str_from_bytes(base))
+}
+
+/// Windows: `read_dir` stands in for `openDirAbsolute` (existence and
+/// directory-ness). wasm: no filesystem; the reference never analyses this
+/// path there (WS14 T6), and the `canonicalize` below fails as before.
+#[cfg(not(unix))]
+fn open_dir_absolute(base: &[u8]) -> std::io::Result<()> {
+    #[cfg(target_family = "wasm")]
+    {
+        let _ = base;
+        Ok(())
+    }
+    #[cfg(not(target_family = "wasm"))]
+    {
+        std::fs::read_dir(os_str_from_bytes(base)).map(|_| ())
+    }
+}
+
 const fn libc_max_path_bytes() -> usize {
     // Zig `std.fs.max_path_bytes` is `std.c.PATH_MAX` on POSIX: the Darwin
     // family's `syslimits.h` PATH_MAX is 1024; Linux's `limits.h` is 4096.
@@ -2206,5 +2254,108 @@ mod tests {
                 String::from_utf8_lossy(&resolve_posix(paths))
             );
         }
+    }
+
+    fn path_bytes(p: &Path) -> Vec<u8> {
+        match p {
+            Path::Optional(v) | Path::Required(v) => v.clone(),
+        }
+    }
+
+    // No reference test. LEDGER S78-F4: both `expand` diagnostics format the
+    // error with `{}`, i.e. `error.<Name>` (`path.zig:179, :221`). The port used
+    // `{err:?}` (`BufferTooSmall`, `Os { code: 20, kind: NotADirectory, .. }`).
+    #[cfg(unix)]
+    #[test]
+    fn expand_diagnostics_use_zig_error_names() {
+        let base_dir = std::fs::canonicalize(std::env::temp_dir())
+            .unwrap()
+            .join(format!("rustty-s78f4-{}", std::process::id()));
+        std::fs::create_dir_all(&base_dir).unwrap();
+        std::fs::write(base_dir.join("plain"), b"x").unwrap();
+        let base = path_to_bytes(&base_dir);
+
+        // `dir.realPathFile(path)` fails with `error.NotDir` for a path through
+        // a regular file (MEASURED on zig 0.16.0 for the same `openat`).
+        let mut p = Path::Required(b"plain/x".to_vec());
+        let mut diags = DiagnosticList::default();
+        let r = p.expand(&base, &mut diags);
+        std::fs::remove_dir_all(&base_dir).unwrap();
+        r.unwrap();
+        assert_eq!(
+            b"error resolving file path plain/x: error.NotDir".as_slice(),
+            diags.items()[0].message.as_slice()
+        );
+        assert_eq!(
+            b"".as_slice(),
+            path_bytes(&p).as_slice(),
+            "the path is blanked"
+        );
+
+        // `expandHome` into the `max_path_bytes` buffer fails with
+        // `error.BufferTooSmall` for a longer result.
+        let long = format!("~/{}", "a".repeat(5000));
+        let mut p = Path::Required(long.clone().into_bytes());
+        let mut diags = DiagnosticList::default();
+        p.expand(b"/", &mut diags).unwrap();
+        assert_eq!(
+            format!("error expanding home directory for path {long}: error.BufferTooSmall")
+                .as_bytes(),
+            diags.items()[0].message.as_slice()
+        );
+    }
+
+    // No reference test. LEDGER S78-F3: `expand` opens `base` first
+    // (`var dir = try std.Io.Dir.openDirAbsolute(global.io(), base, .{})`,
+    // `path.zig:204`) and returns that error; the port never opened `base` and
+    // fabricated an absolute path by string resolution instead.
+    #[cfg(unix)]
+    #[test]
+    fn expand_returns_the_base_directory_open_error() {
+        let tmp = std::fs::canonicalize(std::env::temp_dir())
+            .unwrap()
+            .join(format!("rustty-s78f3-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::fs::write(tmp.join("plain"), b"x").unwrap();
+        let missing = path_to_bytes(&tmp.join("missing"));
+        let file_base = path_to_bytes(&tmp.join("plain"));
+
+        let mut p = Path::Required(b"theme.conf".to_vec());
+        let mut diags = DiagnosticList::default();
+        let missing_result = p.expand(&missing, &mut diags);
+        let after_missing = path_bytes(&p);
+
+        let mut q = Path::Required(b"theme.conf".to_vec());
+        let file_result = q.expand(&file_base, &mut diags);
+        let after_file = path_bytes(&q);
+
+        // Control: an existing base still expands.
+        let mut r = Path::Required(b"theme.conf".to_vec());
+        let ok_result = r.expand(&path_to_bytes(&tmp), &mut diags);
+        let after_ok = path_bytes(&r);
+        std::fs::remove_dir_all(&tmp).unwrap();
+
+        let err = missing_result.expect_err("a missing base must be an error");
+        assert_eq!(std::io::ErrorKind::NotFound, err.kind());
+        assert_eq!(
+            b"theme.conf".as_slice(),
+            after_missing.as_slice(),
+            "path untouched"
+        );
+        let err = file_result.expect_err("a base that is a file must be an error");
+        assert_eq!(Some(libc::ENOTDIR), err.raw_os_error());
+        assert_eq!(
+            b"theme.conf".as_slice(),
+            after_file.as_slice(),
+            "path untouched"
+        );
+        assert!(
+            diags.empty(),
+            "the reference records no diagnostic for this: {:?}",
+            diags.items()
+        );
+
+        ok_result.unwrap();
+        assert!(after_ok.ends_with(b"/theme.conf") && after_ok.starts_with(b"/"));
     }
 }

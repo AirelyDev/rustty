@@ -331,7 +331,7 @@ pub fn open(theme: &[u8], diags: &mut DiagnosticList) -> Option<ThemeFile> {
         let stat = match file.metadata() {
             Ok(m) => m,
             Err(err) => {
-                let err_str = err.to_string();
+                let err_str = crate::zig_error::fmt_error(&err, crate::zig_error::Call::Stat);
                 diags.append(Diagnostic {
                     message: alloc_print(&[
                         b"not reading theme from \"",
@@ -364,7 +364,7 @@ pub fn open(theme: &[u8], diags: &mut DiagnosticList) -> Option<ThemeFile> {
                     b"not reading theme from \"",
                     theme,
                     b"\": it is a ",
-                    kind_name(&stat).as_bytes(),
+                    crate::zig_error::file_kind_tag_name(&stat.file_type()).as_bytes(),
                 ]),
                 ..Default::default()
             });
@@ -427,7 +427,8 @@ pub fn open(theme: &[u8], diags: &mut DiagnosticList) -> Option<ThemeFile> {
                 let stat = match file.metadata() {
                     Ok(m) => m,
                     Err(err) => {
-                        let err_str = err.to_string();
+                        let err_str =
+                            crate::zig_error::fmt_error(&err, crate::zig_error::Call::Stat);
                         diags.append(Diagnostic {
                             message: alloc_print(&[
                                 b"not reading theme from \"",
@@ -455,7 +456,7 @@ pub fn open(theme: &[u8], diags: &mut DiagnosticList) -> Option<ThemeFile> {
                             b"not reading theme from \"",
                             theme,
                             b"\": it is a ",
-                            kind_name(&stat).as_bytes(),
+                            crate::zig_error::file_kind_tag_name(&stat.file_type()).as_bytes(),
                         ]),
                         ..Default::default()
                     });
@@ -486,7 +487,8 @@ pub fn open(theme: &[u8], diags: &mut DiagnosticList) -> Option<ThemeFile> {
                 //     return null;
                 // },
                 _ => {
-                    let err_str = err.to_string();
+                    let err_str =
+                        crate::zig_error::fmt_error(&err, crate::zig_error::Call::OpenFile);
                     diags.append(Diagnostic {
                         message: alloc_print(&[
                             b"failed to load theme \"",
@@ -583,7 +585,8 @@ pub fn open_absolute(theme: &[u8], diags: &mut DiagnosticList) -> Option<std::fs
                         b"failed to load theme from the path \"",
                         theme,
                         b"\": ",
-                        err.to_string().as_bytes(),
+                        crate::zig_error::fmt_error(&err, crate::zig_error::Call::OpenFile)
+                            .as_bytes(),
                     ]),
                     ..Default::default()
                 }),
@@ -633,21 +636,11 @@ fn alloc_print(parts: &[&[u8]]) -> Vec<u8> {
     out
 }
 
-/// `@tagName(stat.kind)` for the non-file kinds the diagnostics report. Returns
-/// the reference's `std.fs.File.Kind` tag name.
-fn kind_name(meta: &std::fs::Metadata) -> &'static str {
-    let ft = meta.file_type();
-    if ft.is_dir() {
-        "directory"
-    } else if ft.is_symlink() {
-        "sym_link"
-    } else {
-        // Block/char devices, fifos, sockets, etc. We only ever hit this arm for
-        // non-regular files; report the generic "unknown" the reference's Kind
-        // would render for anything not specifically named.
-        "unknown"
-    }
-}
+// PORT NOTE (LEDGER S78-F5): the `{}` error renderings and `@tagName(stat.kind)`
+// above go through `crate::zig_error` (`error.<Name>` and the full
+// `std.Io.File.Kind` tag set). A local `kind_name` used to collapse every kind but
+// `directory`/`sym_link` to `unknown`, and the errors printed the `io::Error`
+// Display.
 
 /// Build an `&OsStr` from raw path bytes without a lossy round-trip (R3/fidelity:
 /// byte-slices stay bytes). POSIX-only, matching the parity harness targets.
@@ -717,5 +710,65 @@ mod tests {
             !contains(msg, REPLACEMENT),
             "message replaced invalid bytes with U+FFFD"
         );
+    }
+
+    // No reference test. LEDGER S78-F5: the theme diagnostics format the
+    // error with `{}` (`error.<Name>`) and a non-file with
+    // `@tagName(stat.kind)` (`theme.zig:129-153, 259-277`). MEASURED on zig
+    // 0.16.0: `/dev/null` is a `character_device`; an unreadable file opens with
+    // `error.AccessDenied`, a path through a regular file with `error.NotDir`.
+    #[cfg(unix)]
+    #[test]
+    fn diagnostics_use_zig_error_and_kind_names() {
+        use std::os::unix::fs::PermissionsExt;
+
+        // `open` of an absolute non-file: the kind's tag name.
+        let mut diags = DiagnosticList::default();
+        assert!(open(b"/dev/null", &mut diags).is_none());
+        assert_eq!(
+            b"not reading theme from \"/dev/null\": it is a character_device".as_slice(),
+            diags.items()[0].message.as_slice()
+        );
+
+        let dir = std::env::temp_dir().join(format!("rustty-s78f5-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let plain = dir.join("plain");
+        std::fs::write(&plain, b"background = 000000\n").unwrap();
+        let locked = dir.join("locked");
+        std::fs::write(&locked, b"background = 000000\n").unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        // `openAbsolute`'s `else` arm: `error.NotDir`.
+        let not_dir = format!("{}/x", plain.to_str().unwrap());
+        let mut diags = DiagnosticList::default();
+        assert!(open_absolute(not_dir.as_bytes(), &mut diags).is_none());
+        let not_dir_msg = diags.items()[0].message.clone();
+
+        // ... and `error.AccessDenied`, when the file really is unreadable.
+        let locked_str = locked.to_str().unwrap().to_string();
+        let readable = std::fs::File::open(&locked).is_ok();
+        let mut diags = DiagnosticList::default();
+        let opened = open_absolute(locked_str.as_bytes(), &mut diags).is_some();
+        let locked_msg = diags.items().first().map(|d| d.message.clone());
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        assert_eq!(
+            format!("failed to load theme from the path \"{not_dir}\": error.NotDir").as_bytes(),
+            not_dir_msg.as_slice()
+        );
+        if readable {
+            eprintln!("skipping the AccessDenied arm: running with read access to a 0o000 file");
+            assert!(opened);
+        } else {
+            assert_eq!(
+                Some(
+                    format!(
+                        "failed to load theme from the path \"{locked_str}\": error.AccessDenied"
+                    )
+                    .into_bytes()
+                ),
+                locked_msg
+            );
+        }
     }
 }

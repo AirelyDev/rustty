@@ -5531,18 +5531,6 @@ fn dirname(path: &[u8]) -> Option<&[u8]> {
     }
 }
 
-/// `@tagName(stat.kind)` for a non-file stat used in `config-file` diagnostics.
-fn file_kind_name(meta: &std::fs::Metadata) -> &'static str {
-    let ft = meta.file_type();
-    if ft.is_dir() {
-        "directory"
-    } else if ft.is_symlink() {
-        "sym_link"
-    } else {
-        "unknown"
-    }
-}
-
 /// Build an `&OsStr` from raw path bytes without a lossy round-trip.
 #[cfg(unix)]
 fn os_str_from_bytes(bytes: &[u8]) -> &std::ffi::OsStr {
@@ -6981,11 +6969,15 @@ impl Config {
                         // const diag: cli.Diagnostic = .{
                         //     .message = ... "error opening config-file {s}: {}" ...
                         // };
+                        //
+                        // PORT NOTE (LEDGER S74-F4): `{}` of the Zig error is
+                        // `error.<Name>` (this printed the `io::Error` Display,
+                        // `Permission denied (os error 13)`).
                         let diag = rustty_args::diagnostics::Diagnostic {
                             message: format!(
                                 "error opening config-file {}: {}",
                                 String::from_utf8_lossy(&path),
-                                err
+                                crate::zig_error::fmt_error(&err, crate::zig_error::Call::OpenFile)
                             )
                             .into_bytes(),
                             ..Default::default()
@@ -7008,12 +7000,16 @@ impl Config {
             //     .file => {},
             //     else => |kind| { ... "config-file {s}: not reading because file type is {s}" ... continue; },
             // }
+            //
+            // PORT NOTE (LEDGER S74-F4): `@tagName(kind)` names every
+            // `File.Kind` (`character_device`, `named_pipe`, ...); this used to
+            // collapse all but `directory`/`sym_link` to `unknown`.
             if !stat.is_file() {
                 let diag = rustty_args::diagnostics::Diagnostic {
                     message: format!(
                         "config-file {}: not reading because file type is {}",
                         String::from_utf8_lossy(&path),
-                        file_kind_name(&stat)
+                        crate::zig_error::file_kind_tag_name(&stat.file_type())
                     )
                     .into_bytes(),
                     ..Default::default()
@@ -13262,5 +13258,72 @@ mod integration_tests {
         ));
         let err = windows_home_working_directory(Err(rustty_os::homedir::Error::BufferTooSmall));
         assert!(err.is_err(), "the home() error must propagate, got {err:?}");
+    }
+
+    /// Every diagnostic message in `cfg`, as text.
+    fn diagnostic_messages(cfg: &Config) -> Vec<String> {
+        cfg._diagnostics
+            .items()
+            .iter()
+            .map(|d| String::from_utf8_lossy(&d.message).into_owned())
+            .collect()
+    }
+
+    // No reference test. LEDGER S74-F4: `loadRecursiveFiles` formats the open
+    // error with `{}` (`error.<Name>`) and a non-file with `@tagName(stat.kind)`
+    // (`Config.zig:4413-4448`). MEASURED on zig 0.16.0: `openFileAbsolute` of an
+    // unreadable file is `error.AccessDenied`, of `f/x` with `f` a regular file
+    // `error.NotDir`; `/dev/null` is a `character_device`.
+    #[cfg(unix)]
+    #[test]
+    fn config_file_diagnostics_use_zig_error_and_kind_names() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut td = TempDir::init().unwrap();
+        td.dir().writeFile("locked", b"font-size = 12\n").unwrap();
+        td.dir().writeFile("plain", b"font-size = 12\n").unwrap();
+        let locked = td.dir().realpath("locked").unwrap();
+        let plain = td.dir().realpath("plain").unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let locked = locked.to_str().unwrap().to_string();
+        let not_dir = format!("{}/x", plain.to_str().unwrap());
+
+        let mut cfg = Config::default_config();
+        let args = [
+            format!("--config-file={locked}"),
+            format!("--config-file={not_dir}"),
+            "--config-file=/dev/null".to_string(),
+        ];
+        let arg_refs: Vec<&[u8]> = args.iter().map(|a| a.as_bytes()).collect();
+        let mut it = TestIterator::new(&arg_refs);
+        cfg.load_iter(&mut it).unwrap();
+        cfg.load_recursive_files().unwrap();
+        let messages = diagnostic_messages(&cfg);
+
+        // Only meaningful when the file really is unreadable (not as root).
+        if std::fs::File::open(&locked).is_err() {
+            assert!(
+                messages.contains(&format!(
+                    "error opening config-file {locked}: error.AccessDenied"
+                )),
+                "{messages:?}"
+            );
+        } else {
+            eprintln!("skipping the AccessDenied arm: running with read access to a 0o000 file");
+        }
+        assert!(
+            messages.contains(&format!(
+                "error opening config-file {not_dir}: error.NotDir"
+            )),
+            "{messages:?}"
+        );
+        assert!(
+            messages.contains(
+                &"config-file /dev/null: not reading because file type is character_device"
+                    .to_string()
+            ),
+            "{messages:?}"
+        );
+        td.deinit();
     }
 }
