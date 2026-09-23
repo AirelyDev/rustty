@@ -63,7 +63,7 @@ if [ "${1:-}" = "--print-oracle" ]; then
 fi
 # The one checked-in pin (empty when the file is unreadable, which arm 3
 # reports as BLOCKED).
-ORACLE_PIN="$(rustty_oracle_pin)"
+ORACLE_PIN="$(rustty_oracle_pin)" || ORACLE_PIN=""
 
 command -v git >/dev/null 2>&1 || blocked "git not installed"
 git rev-parse --git-dir >/dev/null 2>&1 || blocked "not a git checkout"

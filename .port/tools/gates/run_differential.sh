@@ -85,8 +85,11 @@ if [ "$MODE" = "print-oracle" ]; then
   exit 0
 fi
 # The one checked-in pin; the staleness guard requires the oracle's HEAD to be
-# exactly this commit (empty when the pin file is unreadable -> BLOCKED).
-ORACLE_PIN="$(rustty_oracle_pin)"
+# exactly this commit. `rustty_oracle_pin` returns 1 on a missing or malformed
+# file, which `set -e` would turn into a silent exit 1; the `|| ORACLE_PIN=""`
+# keeps the run going so the guard reports it as BLOCKED (exit 3) with a reason.
+# `--self-test-oracle` arms d-h run this exact line in a copy of the gate.
+ORACLE_PIN="$(rustty_oracle_pin)" || ORACLE_PIN=""
 
 echo "=== G4 :: differential VT clean (runner) ==="
 
@@ -143,8 +146,9 @@ check_driver_source_fresh() {
 # be rebuilt from source, so any green they produce is unre-derivable.
 enforce_driver_source_fresh() {
   mkdir -p "$DIAG_DIR"
-  local rc=0
-  check_driver_source_fresh || rc=$?
+  local rc=0 guard_out
+  guard_out="$(check_driver_source_fresh)" || rc=$?
+  [ -z "$guard_out" ] || printf '%s\n' "$guard_out"
   case "$rc" in
     0) echo "--- staleness guard: vt_driver.c compiles against the pinned oracle headers: OK ---" ;;
     1)
@@ -158,9 +162,11 @@ enforce_driver_source_fresh() {
       # R5: the guard could not check, so the gate cannot vouch for the
       # drivers. Before R13-GF3 this printed "skipped" and the run went on to
       # a green HARNESS-WIRED wherever the oracle was absent.
-      echo "BLOCKED: the driver-source staleness guard cannot run here (see the line"
-      echo "         above): it needs the oracle at the pin with a built zig-out/include"
-      echo "         and a C compiler. This is NOT a pass."
+      # The reason goes on the BLOCKED line itself: ci.sh copies that line into
+      # its WARNINGS summary.
+      echo "BLOCKED: G4 staleness guard: ${guard_out#*staleness guard: }"
+      echo "         The guard needs the oracle at the pin (ORACLE_PIN) with a built"
+      echo "         zig-out/include and a C compiler. This is NOT a pass."
       exit 3
       ;;
   esac
@@ -435,6 +441,13 @@ open(p, "wb").write(bytes(data))' "$tmpg"
 #   b. oracle off the pin       -> enforce exits 3 (BLOCKED)
 #   c. oracle at the pin, with a GIT_DIR + GIT_WORK_TREE decoy exported whose
 #      HEAD is elsewhere -> the HEAD check still reads the fixture oracle
+#   d. ORACLE_PIN NOT set by the arm: the pin this run read from the checked-in
+#      file must be the one the guard enforces (off-pin fixture -> BLOCKED)
+#   e-k. a copy of the gate run end to end in a fixture checkout, so the
+#      production pin-read line itself runs: ORACLE_PIN naming another commit,
+#      naming the oracle's HEAD, missing, empty, 39 hex, upper-case (j2: with
+#      no F, which a locale-collated `[a-f]` accepted), CRLF ->
+#      each BLOCKED exit 3 with its reason (never a silent `set -e` exit 1)
 # ---------------------------------------------------------------------------
 run_self_test_oracle() {
   echo "--- G4 staleness-guard oracle handling (hermetic) ---"
@@ -474,6 +487,80 @@ run_self_test_oracle() {
   else
     echo "  FAIL c. unexpected rc=$rc:"; printf '%s\n' "$out" | sed 's/^/       | /'; ok=0
   fi
+
+  # d. the PRODUCTION pin: nothing sets ORACLE_PIN here, so the value this run
+  #    read from the checked-in ORACLE_PIN stays in force. The fixture oracle's
+  #    HEAD is never the real pin, so the guard must BLOCK naming that pin.
+  local real_pin
+  real_pin="$(rustty_oracle_pin)" || real_pin=""
+  rc=0
+  out="$(GHOSTTY="$tmp/ghostty" DIAG_DIR="$tmp/diag"; enforce_driver_source_fresh 2>&1)" || rc=$?  # R5-selftest-fixture
+  if [ -n "$real_pin" ] && [ "$rc" = "3" ] && printf '%s' "$out" | grep -q "not the pin $real_pin"; then
+    echo "  ok   d. the checked-in pin is in force: off-pin fixture => BLOCKED exit 3"
+  else
+    echo "  FAIL d. with the checked-in pin (${real_pin:-unreadable}) an off-pin oracle gave rc=$rc, want 3 'not the pin <ORACLE_PIN>':"
+    printf '%s\n' "$out" | sed 's/^/       | /'; ok=0
+  fi
+
+  # e-k. a COPY of this gate, run end to end (`--progress`) in a fixture checkout
+  #    with its own ORACLE_PIN and a fixture oracle beside it, from a cwd outside
+  #    it, with the retired GHOSTTY override and a GIT_DIR decoy exported. This
+  #    runs the gate's own pin-read line, so a pin taken from anywhere but
+  #    ORACLE_PIN (the oracle's HEAD, a hardcoded SHA) or a pin read that kills
+  #    the run under `set -e` goes RED here.
+  local co lay_head copy_rc copy_out pinfile malformed
+  co="$tmp/layout/rustty"
+  mkdir -p "$co/.port/tools/gates" "$co/.port/phase-0/harness" "$co/.port/phase-0/corpora/cvt"
+  if ! { cp "$GATES_DIR/run_differential.sh" "$GATES_DIR/_oracle_root.sh" "$co/.port/tools/gates/" &&
+    cp "$REPO_ROOT/.port/tools/parity_names.env" "$co/.port/tools/" &&
+    : >"$co/.port/phase-0/harness/comparator.py" &&
+    rustty_fixture_git -C "$co" init -q >/dev/null 2>&1 &&
+    lay_head="$(rustty_fixture_repo "$tmp/layout/ghostty" README "layout oracle")"; }; then
+    echo "  FAIL e-k. could not build the fixture checkout"; rm -rf "$tmp"; return 1
+  fi
+  pinfile="$co/.port/tools/gates/ORACLE_PIN"
+  copy_env() ( # the copy's environment: no inherited GIT_*, then the decoys
+    cd "$tmp" || exit 1
+    for _v in $(compgen -e); do
+      case "$_v" in GIT_*) unset "$_v" ;; esac
+    done
+    export GHOSTTY="$tmp/decoy" GIT_DIR="$tmp/decoy/.git" GIT_WORK_TREE="$tmp/decoy"  # R5-selftest-fixture
+    "$@"
+  )
+  run_copy() { # sets copy_rc / copy_out
+    copy_rc=0
+    copy_out="$(copy_env bash "$co/.port/tools/gates/run_differential.sh" --progress 2>&1)" || copy_rc=$?
+  }
+  pin_arm() { # pin_arm <label> <want-substring>
+    if [ "$copy_rc" = "3" ] && [[ "$copy_out" == *"$2"* ]]; then
+      echo "  ok   $1 => BLOCKED exit 3"
+    else
+      echo "  FAIL $1 gave rc=$copy_rc, want 3 with '$2':"
+      printf '%s\n' "$copy_out" | sed 's/^/       | /'; ok=0
+    fi
+  }
+  printf '%s\n' "$decoy_head" >"$pinfile"; run_copy
+  pin_arm "e. copy: ORACLE_PIN names another commit" "at $lay_head, not the pin $decoy_head"
+  printf '%s\n' "$lay_head" >"$pinfile"; run_copy
+  pin_arm "f. copy: ORACLE_PIN names the oracle's HEAD (pin check passes; no zig-out/include)" \
+    "oracle include dir missing (" # (the resolved path is canonical: /private/var on macOS)
+  [[ "$copy_out" == *"/layout/ghostty/zig-out/include)"* ]] ||
+    { echo "  FAIL f. the guard did not name the fixture checkout's sibling oracle"; ok=0; }
+  malformed="ORACLE_PIN is missing or not a 40-hex commit"
+  rm -f "$pinfile"; run_copy
+  pin_arm "g. copy: ORACLE_PIN missing" "$malformed"
+  : >"$pinfile"; run_copy
+  pin_arm "h. copy: ORACLE_PIN empty" "$malformed"
+  printf '%s\n' "${lay_head:0:39}" >"$pinfile"; run_copy
+  pin_arm "i. copy: ORACLE_PIN 39 hex" "$malformed"
+  printf '%s\n' "$lay_head" | tr 'a-f' 'A-F' >"$pinfile"; run_copy
+  pin_arm "j. copy: ORACLE_PIN upper-case" "$malformed"
+  # j2. upper-case with no `F`: a locale-collated `[a-f]` range accepts it.
+  printf '%s\n' "$lay_head" | tr 'a-f' 'A-F' | tr 'F' 'E' >"$pinfile"; run_copy
+  pin_arm "j2. copy: ORACLE_PIN upper-case without an F" "$malformed"
+  printf '%s\r\n' "$lay_head" >"$pinfile"; run_copy
+  pin_arm "k. copy: ORACLE_PIN with a CRLF line ending" "$malformed"
+
   rm -rf "$tmp"
   if [ "$ok" = "1" ]; then echo "G4 ORACLE SELF-TEST: PASS"; return 0; fi
   echo "G4 ORACLE SELF-TEST: FAIL"; return 1

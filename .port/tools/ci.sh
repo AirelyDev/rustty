@@ -1069,13 +1069,24 @@ run_gate() {
     return 0
   fi
   section "gate $id  [$kind]  ->  $*"
-  "$@"; local rc=$?
+  # The gate's output is streamed as before and also kept, so a BLOCKED gate's
+  # own reason line(s) can go into the WARNINGS summary: an expected warning
+  # (say G-EOL on CI) must not hide a NEW reason behind the same gate id. The
+  # gate's stderr is merged into its stdout for this; the exit code is the
+  # gate's own (PIPESTATUS), so the pass/BLOCKED/RED contract is unchanged.
+  local rc log=""
+  log="$(mktemp "${TMPDIR:-/tmp}/ci_gate.XXXXXX" 2>/dev/null)" || log=""
+  if [ -n "$log" ]; then
+    "$@" 2>&1 | tee "$log"; rc=${PIPESTATUS[0]}
+  else
+    "$@"; rc=$?
+  fi
   if [ "$rc" -eq 0 ]; then
     echo ">> PASS: $id"
     if [ "$kind" = "PROGRESS" ]; then PROGRESS_NOTES+=("$id (progress/green)"); else PASSED+=("$id"); fi
   elif [ "$rc" -eq 3 ]; then
     echo ">> BLOCKED ($rc): $id [pending contract/tooling — surfaced, not greened]" >&2
-    WARNINGS+=("$id BLOCKED (exit 3)")
+    WARNINGS+=("$id BLOCKED (exit 3)$(blocked_reasons "$log")")
   else
     # Non-zero, non-BLOCKED => a real RED.
     if [ "$kind" = "HARD" ]; then
@@ -1086,6 +1097,29 @@ run_gate() {
       HARD_FAILURES+=("$id (claimed-done regression, exit $rc)")
     fi
   fi
+  [ -n "$log" ] && rm -f "$log"
+  return 0
+}
+
+# blocked_reasons LOG: the gate's own BLOCKED line(s) from its captured output,
+# each on a new "reason:" line (at most 3, deduplicated, `ok ...` arm lines
+# dropped, cut to 220 columns). A gate that printed none says so.
+blocked_reasons() {
+  local log="${1:-}" lines n
+  if [ -z "$log" ] || [ ! -r "$log" ]; then
+    printf '\n      reason: (output not captured; see the gate section above)'
+    return 0
+  fi
+  lines="$(grep -E 'BLOCKED' "$log" | grep -vE '^[[:space:]]*ok[[:space:]]' |
+    sed -E 's/^[[:space:]]+//' | awk '!seen[$0]++' | cut -c1-220)"
+  if [ -z "$lines" ]; then
+    printf '\n      reason: (the gate printed no BLOCKED line; see its section above)'
+    return 0
+  fi
+  n="$(printf '%s\n' "$lines" | wc -l | tr -d ' ')"
+  printf '%s\n' "$lines" | sed -n '1,3p' | while IFS= read -r l; do printf '\n      reason: %s' "$l"; done
+  [ "$n" -gt 3 ] && printf '\n      reason: (+%s more BLOCKED line(s) in the gate section above)' "$((n - 3))"
+  return 0
 }
 
 echo "=================================================================="

@@ -91,7 +91,7 @@ fi
 # Arm 2 reads the oracle's files AT THE PIN (`git show "$PIN:src/stb/..."`), not
 # at whatever the oracle's HEAD happens to be. The pin is the one checked-in
 # `ORACLE_PIN` (empty when that file is unreadable -> BLOCKED).
-ORACLE_PIN="$(rustty_oracle_pin)"
+ORACLE_PIN="$(rustty_oracle_pin)" || ORACLE_PIN=""
 
 # read_oracle_stb DEST — the ONLY place arm 2 reads the oracle. Copies
 # src/stb/{stb.c,stb_image.h,stb_image_resize.h} at the pin into DEST through

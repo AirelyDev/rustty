@@ -34,9 +34,13 @@
 # GIT_WORK_TREE decoy set, from a working directory outside the fixture:
 # `--print-oracle` for the location, D10's `--print-oracle-reads` for a real
 # oracle read, and G-EOL in full for arm 3's BLOCKED paths. A structural arm
-# scans the real consumers for a plain `git -C "$ORACLE"` and for a second
-# assignment of the oracle variable. The gates that read the oracle at a fixed
-# path (G4's guard, G-BENCH, G-LZ4, A5) run their own `--self-test-oracle`
+# (a lint) scans the real consumers: no plain `git ... $ORACLE` on one line, one
+# assignment of the oracle variable, and fixed per-file counts of every `git`
+# word and every bare mention of the variable (`printf -v`, `read`, `declare`,
+# ...). The pin arms check that no other file spells the pin, whole or in
+# 7-hex pieces, and that no gate holds another 40-hex constant. The gates that
+# read the oracle at a fixed path (G4's guard, which also runs a copy of G4 to
+# test its pin read, G-BENCH, G-LZ4, A5) run their own `--self-test-oracle`
 # from here.
 
 # `git "$@"` with every exported GIT_* variable removed — for any git call that
@@ -59,8 +63,13 @@ rustty_oracle_pin() {
   local pin=""
   [ -r "$_RUSTTY_ORACLE_LIB_DIR/ORACLE_PIN" ] || return 1
   IFS= read -r pin <"$_RUSTTY_ORACLE_LIB_DIR/ORACLE_PIN" || [ -n "$pin" ] || return 1
+  # The digits and letters are listed, not written as ranges: in a bracket
+  # expression `a-f` follows the locale's collation order, which under en_US
+  # (bash without `globasciiranges`, e.g. macOS's bash 3.2) also takes
+  # `A`-`E`, so an upper-case pin with no `F` in it passed (found by G4's
+  # `--self-test-oracle` arm j; arm j2 pins that case down).
   case "$pin" in
-    *[!0-9a-f]* | "") return 1 ;;
+    *[!0123456789abcdef]* | "") return 1 ;;
   esac
   [ "${#pin}" -eq 40 ] || return 1
   printf '%s\n' "$pin"
@@ -329,8 +338,24 @@ _rustty_oracle_self_test() {
   if [ -n "$sh_pin" ]; then
     others="$(grep -rlF "$sh_pin" "$root/.port/tools" 2>/dev/null | grep -vxF "$_RUSTTY_ORACLE_LIB_DIR/ORACLE_PIN")"
     if [ -z "$others" ]; then r=0; else r=1; fi
-    arm "$r" "no other .port/tools file hardcodes the pin" "$(printf '%s ' $others)"
+    arm "$r" "no other .port/tools file hardcodes the pin (the literal 40-hex SHA)" "$(printf '%s ' $others)"
+    # 7b. a split or abbreviated copy: no other file holds any 7-hex window of
+    #     the pin (7 is git's shortest default abbreviation), in either case.
+    #     A copy cut into pieces under 7 hex, or computed at run time, is out
+    #     of reach of any grep; after a pin advance it still fails closed
+    #     (BLOCKED), never a pass.
+    local i frags=""
+    for ((i = 0; i + 7 <= ${#sh_pin}; i++)); do frags="$frags${sh_pin:i:7}"$'\n'; done
+    others="$(printf '%s' "$frags" | grep -rlIiF -f - "$root/.port/tools" 2>/dev/null | grep -vxF "$_RUSTTY_ORACLE_LIB_DIR/ORACLE_PIN")"
+    if [ -z "$others" ]; then r=0; else r=1; fi
+    arm "$r" "no other .port/tools file holds a 7-hex piece of the pin (split or abbreviated copy)" "$(printf '%s ' $others)"
   fi
+  # 7c. the gates directory holds no 40-hex constant but ORACLE_PIN's, so a
+  #     second, DIFFERENT pin hardcoded in a gate is caught before it can
+  #     disagree with the file (G4's pin-read arms catch it end to end too).
+  others="$(grep -rlIE '(^|[^0-9A-Fa-f])[0-9A-Fa-f]{40}([^0-9A-Fa-f]|$)' "$here" 2>/dev/null | grep -vxF "$_RUSTTY_ORACLE_LIB_DIR/ORACLE_PIN")"
+  if [ -z "$others" ]; then r=0; else r=1; fi
+  arm "$r" "no .port/tools/gates file but ORACLE_PIN holds a 40-hex constant" "$(printf '%s ' $others)"
 
   # 8. D10's oracle READ, end to end, under a GIT_DIR + GIT_WORK_TREE decoy (and
   #    the retired override), from a cwd outside the fixture: `--print-oracle-
@@ -388,41 +413,55 @@ _rustty_oracle_self_test() {
   if [ "$rc" = "1" ] && [[ "$got" == *"still under line-ending conversion"* ]]; then r=0; else r=1; fi
   arm "$r" "G-EOL: a RED arm 1 wins over arm 3's BLOCKED (exit 1)" "rc=$rc: $(printf '%s' "$got" | tail -3 | tr '\n' '|')"
 
-  # 10. Structural scan of the REAL consumers. For each (file, oracle variable):
-  #     the variable is assigned exactly once outside the lines marked
-  #     `# R5-selftest-fixture` (whose number is fixed per file), and no line
-  #     runs plain `git` with it — every oracle git call goes through the
-  #     stripped runner. This catches a re-read override (`ORACLE="${X:-$ORACLE}"`)
-  #     or a plain `git -C "$ORACLE"` anywhere in the file, not only where an
-  #     end-to-end arm happens to look.
-  local spec file var nmark body assigns plain marks
+  # 10. Structural scan of the REAL consumers (a lint: it bounds what a new
+  #     oracle read can look like; the end-to-end arms above prove the reads).
+  #     For each (file, oracle variable), on the lines that are not whole-line
+  #     comments:
+  #     - the variable is assigned exactly once outside the lines marked
+  #       `# R5-selftest-fixture`, and the number of marked lines is fixed;
+  #     - no line runs `git`/"git"/'git' with `$VAR` on it;
+  #     - FIXED per-file counts, the method of the marker count: (a) every `git`
+  #       word in any spelling (`git`, `"git"`, `'git'`, `g=git; $g`, a helper
+  #       `f() { git -C "$1" ...; }`, `command git`, `env git`), and (b) every
+  #       BARE mention of the variable, i.e. one not written `$VAR`/`${VAR...}`:
+  #       `VAR=`, `printf -v VAR`, `read VAR`, `declare`/`local`/`readonly`/
+  #       `export VAR`, `mapfile VAR`, `unset VAR`, plus `${VAR:=}`/`${VAR=}`.
+  #     A legitimate edit that changes a count must go through
+  #     `rustty_oracle_git` and update the count here in the same commit.
+  tok_count() { tr -c 'A-Za-z0-9_' '\n' | grep -cx "$1"; } # whole-word count on stdin
+  local spec file var nmark ngit nbare body assigns plain marks ngot nbgot
   for spec in \
-    ".port/tools/gates/check_eol_fidelity.sh ORACLE 0" \
-    ".port/tools/gates/run_differential.sh GHOSTTY 3" \
-    ".port/tools/macos-parity/menu-shortcut-parity.sh GHOSTTY_ROOT 0" \
-    ".port/tools/stb-resize-oracle/run.sh ORACLE_REPO 0" \
-    ".port/tools/gates/check_bench_tests.sh ORACLE 0" \
-    ".port/tools/gates/check_lz4_byte_exact.sh ORACLE 0" \
-    ".port/tools/gates/check_rustty_vt_headers.sh GH 0"; do
-    read -r file var nmark <<<"$spec"
+    ".port/tools/gates/check_eol_fidelity.sh ORACLE 0 12 1" \
+    ".port/tools/gates/run_differential.sh GHOSTTY 5 3 6" \
+    ".port/tools/macos-parity/menu-shortcut-parity.sh GHOSTTY_ROOT 0 0 1" \
+    ".port/tools/stb-resize-oracle/run.sh ORACLE_REPO 0 1 1" \
+    ".port/tools/gates/check_bench_tests.sh ORACLE 0 2 4" \
+    ".port/tools/gates/check_lz4_byte_exact.sh ORACLE 0 3 3" \
+    ".port/tools/gates/check_rustty_vt_headers.sh GH 0 2 1"; do
+    read -r file var nmark ngit nbare <<<"$spec"
     body="$(grep -vE '^[[:space:]]*#' "$root/$file")"
     marks="$(printf '%s\n' "$body" | grep -c 'R5-selftest-fixture')"
     assigns="$(printf '%s\n' "$body" | grep -v 'R5-selftest-fixture' |
-      grep -cE "(^|[^A-Za-z0-9_\$])$var\+?=|(^|[^A-Za-z0-9_])read( -[A-Za-z]+)*( [A-Za-z_][A-Za-z0-9_]*)* $var([^A-Za-z0-9_]|\$)|\\\$\{$var:?=")"
-    plain="$(printf '%s\n' "$body" | grep -E "(^|[^A-Za-z0-9_])git[[:space:]]" |
+      grep -cE "(^|[^A-Za-z0-9_\$])$var\+?=|(^|[^A-Za-z0-9_])read( -[A-Za-z]+)*( [A-Za-z_][A-Za-z0-9_]*)* $var([^A-Za-z0-9_]|\$)|(^|[^A-Za-z0-9_])printf[[:space:]].*-v[[:space:]]*[\"']?$var([^A-Za-z0-9_]|\$)|\\\$\{$var:?=")"
+    plain="$(printf '%s\n' "$body" | grep -E "(^|[^A-Za-z0-9_./-])[\"']?git[\"']?[[:space:]]" |
       grep -E "\\\$\{?$var([^A-Za-z0-9_]|\$)" | head -3)"
-    if [ "$assigns" = "1" ] && [ "$marks" = "$nmark" ] && [ -z "$plain" ]; then r=0; else r=1; fi
-    arm "$r" "$(basename "$file"): \$$var assigned once, read only through the stripped runner" \
-      "assignments=$assigns (want 1), fixture-marked=$marks (want $nmark), plain git: ${plain:-none}"
+    ngot="$(printf '%s\n' "$body" | tok_count git)"
+    nbgot="$(printf '%s\n' "$body" | sed -E "s/\\\$\{?[!#]?$var//g" | tok_count "$var")"
+    nbgot=$((nbgot + $(printf '%s\n' "$body" | grep -oE "\\\$\{$var:?=" | wc -l)))
+    if [ "$assigns" = "1" ] && [ "$marks" = "$nmark" ] && [ -z "$plain" ] &&
+      [ "$ngot" = "$ngit" ] && [ "$nbgot" = "$nbare" ]; then r=0; else r=1; fi
+    arm "$r" "$(basename "$file"): \$$var assigned once; no plain \`git ... \$$var\` on one line; git words and bare \$$var mentions at their fixed counts" \
+      "assignments=$assigns (want 1), fixture-marked=$marks (want $nmark), git words=$ngot (want $ngit), bare $var=$nbgot (want $nbare), plain git: ${plain:-none}"
   done
   body="$(grep -vE '^[[:space:]]*//' "$root/.port/tools/check-vt-struct-layouts.mjs")"
   assigns="$(printf '%s\n' "$body" | grep -cE '(^|[^A-Za-z0-9_])ORACLE[[:space:]]*=[^=]')"
-  plain="$(printf '%s\n' "$body" | grep -cE '(execFileSync|execSync|spawnSync|spawn|exec)\(\s*"git"')"
-  if [ "$assigns" = "1" ] && [ "$plain" = "1" ]; then r=0; else r=1; fi
-  arm "$r" "check-vt-struct-layouts.mjs: ORACLE assigned once, git spawned only in oracleGit" \
-    "assignments=$assigns (want 1), git spawn sites=$plain (want 1)"
-  plain="$(grep -rnF --include='*.py' '"git", "-C"' "$root/.port/tools" | grep -vF "$here/_gatelib.py:")"
-  others="$(grep -rnF --include='*.py' '"git", "-C"' "$here/_gatelib.py" | wc -l | tr -d ' ')"
+  plain="$(printf '%s\n' "$body" | grep -cE "(execFileSync|execSync|spawnSync|spawn|exec)\([[:space:]]*[\"'\`]git[\"'\`]")"
+  ngot="$(printf '%s\n' "$body" | tok_count git)"
+  if [ "$assigns" = "1" ] && [ "$plain" = "1" ] && [ "$ngot" = "3" ]; then r=0; else r=1; fi
+  arm "$r" "check-vt-struct-layouts.mjs: ORACLE assigned once, git spawned (either quote style) only in oracleGit, git words at their fixed count" \
+    "assignments=$assigns (want 1), git spawn sites=$plain (want 1), git words=$ngot (want 3)"
+  plain="$(grep -rnE --include='*.py' "[\"']git[\"'],[[:space:]]*[\"']-C[\"']" "$root/.port/tools" | grep -vF "$here/_gatelib.py:")"
+  others="$(grep -rnE --include='*.py' "[\"']git[\"'],[[:space:]]*[\"']-C[\"']" "$here/_gatelib.py" | wc -l | tr -d ' ')"
   if [ -z "$plain" ] && [ "$others" = "1" ]; then r=0; else r=1; fi
   arm "$r" "Python: \`git -C <oracle>\` appears only in _gatelib.oracle_git" "${plain:-in _gatelib: $others}"
   plain="$(grep -rnE --include='*.py' 'cwd=ORACLE' "$root/.port/tools" | grep -v 'git_env()')"
