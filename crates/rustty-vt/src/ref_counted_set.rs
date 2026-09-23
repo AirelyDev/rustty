@@ -91,6 +91,8 @@ pub trait RefCountIntTrait: Copy + PartialEq + PartialOrd + Eq + Ord {
     const MAX: Self;
     fn add(self, other: Self) -> Self;
     fn sub(self, other: Self) -> Self;
+    /// `a +| b`: add, stopping at `MAX`. Port-only; see `bump_ref`.
+    fn saturating_add(self, other: Self) -> Self;
     /// `@intCast` from a usize the caller guarantees fits.
     fn from_usize(v: usize) -> Self;
 }
@@ -103,11 +105,59 @@ macro_rules! impl_refcount_int {
             const MAX: Self = <$t>::MAX;
             #[inline] fn add(self, other: Self) -> Self { self + other }
             #[inline] fn sub(self, other: Self) -> Self { self - other }
+            #[inline] fn saturating_add(self, other: Self) -> Self { <$t>::saturating_add(self, other) }
             #[inline] fn from_usize(v: usize) -> Self { v as $t }
         }
     )*};
 }
 impl_refcount_int!(u8, u16, u32, u64, usize);
+
+// PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD80. The reference
+// increments a reference count with an unguarded `item.meta.ref += 1` (`add`,
+// `addWithId`, `use`) or `+= n` (`useMultiple`), and the style set's
+// `RefCountInt` is `u16` (`style.zig:681-684`). A terminal 48,036 or more
+// columns wide (48,151 in a test build) gets a page of 215 rows x cols
+// (`PageList.zig:535-540`), so ordinary styled output — `printCell`, DECALN,
+// the print batch, the reflow and clone copies, a cursor style change — can
+// give one style more than 65,535 references on one page. ReleaseSafe panics
+// ("integer overflow", `ref_counted_set.zig:378`); ReleaseFast wraps, after
+// which `release` can drive a live style to 0 and the set can reuse its slot
+// while cells still point at it. Reachable from the C ABI (a terminal created
+// or resized that wide, then ordinary output).
+//
+// The port SATURATES and PINS: an increment stops at `maxInt(RefCountInt)`,
+// and a count at the maximum is never decremented again, so the item stays
+// live (and every cell keeps its style) until the page's memory is reset or
+// freed. The reference's own answer to a style it cannot store —
+// `Screen.manualStyleUpdate` growing the set (`increaseCapacity`) or splitting
+// the page (`splitForCapacity`) — does not fit this condition: growing the
+// set adds slots, not count width; a split cannot bound the count, because a
+// one-row page (which `PageList.split` refuses, `PageList.zig:3730`) of
+// 65,535 styled columns plus the cursor's reference is already 65,536; and
+// the copy routes (reflow, clone) fill a fixed destination page with no split
+// to fall back on. Falling back to the default style (as the snapshot
+// decoder's `apply_cell` does, UD65) would visibly drop the style from cells
+// the reference means to show styled. Pinning keeps every cell exactly as the
+// reference intends and costs at most one style slot per saturated style per
+// page, reclaimed with the page. The integrity check accepts a pinned count
+// below the cells seen (`page_impl.rs`, `verify_integrity`). The hyperlink set
+// shares this type but cannot reach the ceiling: its per-page cell map holds
+// at most 26,214 entries (UD65's review).
+#[inline(always)]
+fn bump_ref<R: RefCountIntTrait>(r: &mut R, n: R) {
+    *r = r.saturating_add(n);
+}
+
+/// Decrement `r` by `n` unless it is pinned at `R::MAX` (see `bump_ref`).
+/// Returns whether the count reached zero.
+#[inline(always)]
+fn drop_ref<R: RefCountIntTrait>(r: &mut R, n: R) -> bool {
+    if *r == R::MAX {
+        return false;
+    }
+    *r = r.sub(n);
+    *r == R::ZERO
+}
 
 /// The context trait supplying the duck-typed behaviors of the reference
 /// `Context` struct:
@@ -577,12 +627,13 @@ where
             // callers to clean up any resources associated with the value.
             self.context.deleted(unsafe { *value });
 
+            // PORT NOTE: reference defect (R13), UD80: saturating, see `bump_ref`.
             unsafe {
-                (*items.add(id.to_usize())).meta.ref_count = (*items.add(id.to_usize()))
-                    .meta
-                    .ref_count
-                    .add(RefCount::ONE);
-            }
+                bump_ref(
+                    &mut (*items.add(id.to_usize())).meta.ref_count,
+                    RefCount::ONE,
+                )
+            };
             return Ok(id);
         }
 
@@ -682,13 +733,13 @@ where
                     // resources associated with the value.
                     self.context.deleted(unsafe { *value });
 
+                    // PORT NOTE: reference defect (R13), UD80: saturating, see `bump_ref`.
                     unsafe {
-                        (*items.add(existing_id.to_usize())).meta.ref_count = (*items
-                            .add(existing_id.to_usize()))
-                        .meta
-                        .ref_count
-                        .add(RefCount::ONE);
-                    }
+                        bump_ref(
+                            &mut (*items.add(existing_id.to_usize())).meta.ref_count,
+                            RefCount::ONE,
+                        )
+                    };
                     return Ok(Some(existing_id));
                 }
 
@@ -719,12 +770,13 @@ where
                 // callers to clean up any resources associated with the value.
                 self.context.deleted(unsafe { *value });
 
+                // PORT NOTE: reference defect (R13), UD80: saturating, see `bump_ref`.
                 unsafe {
-                    (*items.add(id.to_usize())).meta.ref_count = (*items.add(id.to_usize()))
-                        .meta
-                        .ref_count
-                        .add(RefCount::ONE);
-                }
+                    bump_ref(
+                        &mut (*items.add(id.to_usize())).meta.ref_count,
+                        RefCount::ONE,
+                    )
+                };
 
                 return Ok(None);
             }
@@ -786,7 +838,10 @@ where
         // shouldn't be allowed.
         assert(item.meta.ref_count > RefCount::ZERO);
 
-        item.meta.ref_count = item.meta.ref_count.add(RefCount::ONE);
+        // PORT NOTE: reference defect (R13), UD80: the reference's
+        // `item.meta.ref += 1` overflows the `u16` style count on a wide page;
+        // the port saturates and pins, see `bump_ref`.
+        bump_ref(&mut item.meta.ref_count, RefCount::ONE);
     }
 
     /// Increment an item's reference count by a specified number.
@@ -807,7 +862,10 @@ where
         // shouldn't be allowed.
         assert(item.meta.ref_count > RefCount::ZERO);
 
-        item.meta.ref_count = item.meta.ref_count.add(n);
+        // PORT NOTE: reference defect (R13), UD80: the reference's
+        // `item.meta.ref += n` (DECALN, the print batch, the reflow and clone
+        // copies) overflows the same way; saturating, see `bump_ref`.
+        bump_ref(&mut item.meta.ref_count, n);
     }
 
     /// Get an item by its ID without incrementing its reference count.
@@ -877,8 +935,9 @@ where
         let item = unsafe { &mut *items.add(id.to_usize()) };
 
         assert(item.meta.ref_count > RefCount::ZERO);
-        item.meta.ref_count = item.meta.ref_count.sub(RefCount::ONE);
-        if item.meta.ref_count == RefCount::ZERO {
+        // PORT NOTE: reference defect (R13), UD80: a count pinned at the
+        // maximum is not decremented, see `bump_ref`.
+        if drop_ref(&mut item.meta.ref_count, RefCount::ONE) {
             self.living -= 1;
         }
     }
@@ -899,9 +958,9 @@ where
 
         // assert(item.meta.ref >= n); — `n` is an `Id`; compare via usize.
         assert(item.meta.ref_count >= ref_from_id::<RefCount, Id>(n));
-        item.meta.ref_count = item.meta.ref_count.sub(ref_from_id::<RefCount, Id>(n));
-
-        if item.meta.ref_count == RefCount::ZERO {
+        // PORT NOTE: reference defect (R13), UD80: a count pinned at the
+        // maximum is not decremented, see `bump_ref`.
+        if drop_ref(&mut item.meta.ref_count, ref_from_id::<RefCount, Id>(n)) {
             self.living -= 1;
         }
     }
@@ -928,9 +987,10 @@ where
     /// ceiling too: a terminal 48,036 or more columns wide (48,151 in a test
     /// build) gets a page of 215 rows x cols (`PageList.zig:535-540`), and
     /// ordinary styled output on it
-    /// overflows `use` from `printCell` (UPSTREAM-DEFECTS.md UD80). That path
-    /// does not ask this yet, so the port is still exposed there; it is fixed
-    /// separately.
+    /// overflows `use` from `printCell` (UPSTREAM-DEFECTS.md UD80). Every
+    /// increment in this set now saturates and pins at the maximum (see
+    /// `bump_ref`), so neither path can overflow; a `true` here means the
+    /// style is pinned.
     ///
     /// # Safety: `base` must be the true base of the backing buffer.
     pub unsafe fn ref_count_saturated<B: IntFromBase + Copy>(&self, base: B, id: Id) -> bool {

@@ -1520,8 +1520,9 @@ fn apply_cell(
         // (`PageList.zig:535-540`): 215 rows x cols, over ten million
         // cells. Ordinary styled output on
         // such a terminal overflows the same refcount through `printCell`
-        // (measured, UPSTREAM-DEFECTS.md UD80). The port is still exposed on
-        // that native path; it is fixed separately.
+        // (measured, UPSTREAM-DEFECTS.md UD80). The port's set now saturates
+        // and pins every increment at the maximum instead (UD80,
+        // `ref_counted_set.rs` `bump_ref`), so that path no longer overflows.
         //
         // The safe handling HERE is this function's OWN existing degrade: an
         // ID it cannot honour stores the cell with the default style (that is
@@ -1531,9 +1532,9 @@ fn apply_cell(
         // behaviour. Rejecting the whole page would also work but would refuse
         // pages that decode correctly today, including snapshots of those
         // wide terminals. Note that a degraded page leaves the style at the
-        // ceiling (65,534 once the style table's own reference is released),
-        // so it inherits UD80: one cursor-style `add` plus one styled print
-        // over it overflows through the native path.
+        // ceiling (65,534 once the style table's own reference is released);
+        // a later cursor-style `add` plus a styled print over it reaches the
+        // maximum and pins there (UD80) instead of overflowing.
         //
         // SAFETY: the remapped ID was assigned by this page's style set.
         if wire.style_id != 0

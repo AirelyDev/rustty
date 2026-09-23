@@ -22236,4 +22236,239 @@ mod tests {
 
         t.deinit(Global);
     }
+
+    // ---------------------------------------------------------------------
+    // UD80 (R13): a terminal wide enough to leave the standard page capacity
+    // gets `std_capacity` with only `cols` changed (`PageList.zig:535-540`),
+    // 215 rows x cols cells, so more than 65,535 cells can share one style on
+    // one page and the `u16` style refcount overflows. The port saturates the
+    // refcount and pins the style (see `ref_counted_set.rs`), so every cell
+    // keeps its style. These tests drive each native route to the ceiling.
+    //
+    // Width: 48,151 is the first width that leaves the standard capacity in a
+    // test build (whose `std_capacity` has a 512-byte grapheme budget; 48,036
+    // in a shipped build). The page is 215 x 48,151, but only the few rows the
+    // test writes are touched. Count: the cursor holds one reference and each
+    // styled cell one more, so 65,535 styled cells reach 65,536 references;
+    // 70,000 (the reference probe's count) passes the ceiling by 4,465.
+    // Three screen rows hold 144,453 cells, which DECALN fills in one go.
+    const UD80_COLS: size::CellCountInt = 48_151;
+    const UD80_ROWS: size::CellCountInt = 3;
+    const UD80_PRINTS: usize = 70_000;
+
+    /// Walk the active area in reading order and return, for the cells whose
+    /// codepoint is `cp`, how many there are and whether each one carries
+    /// `style_id` resolving to a style for which `want` holds. Also returns
+    /// that style's refcount on the (single) page.
+    fn ud80_scan(
+        t: &mut Terminal,
+        cp: u21,
+        style_id: style::Id,
+        want: impl Fn(&style::Style) -> bool,
+    ) -> (usize, bool, u16) {
+        let rows = t.rows as u32;
+        let mut n = 0usize;
+        let mut all = true;
+        let mut page_seen: *mut Page = core::ptr::null_mut();
+        for y in 0..rows {
+            let lc = t.active_mut().pages.get_cell(active_pt(0, y)).unwrap();
+            let page = unsafe { crate::pagelist::Node::page(lc.node) };
+            assert!(page_seen.is_null() || page_seen == page, "one page");
+            page_seen = page;
+            let cells = unsafe { &*(*page).get_cells(lc.row) };
+            for c in cells {
+                if c.content_codepoint() != cp {
+                    continue;
+                }
+                n += 1;
+                if c.style_id() != style_id || style_id == style::DEFAULT_ID {
+                    all = false;
+                    continue;
+                }
+                let st = unsafe { &*(*page).styles.get((*page).memory_ptr(), c.style_id()) };
+                all &= want(st);
+            }
+        }
+        let rc = unsafe {
+            (*page_seen)
+                .styles
+                .ref_count((*page_seen).memory_ptr(), style_id)
+        };
+        (n, all, rc)
+    }
+
+    fn ud80_cursor_style_id(t: &mut Terminal) -> style::Id {
+        unsafe { (*t.screens.active).cursor.style_id }
+    }
+
+    // UD80 through `printCell`: one style, 70,000 single prints.
+    #[test]
+    fn ud80_wide_terminal_one_style_past_the_refcount_ceiling_keeps_every_cell_styled() {
+        let mut t = Terminal::init(Global, opts(UD80_COLS, UD80_ROWS)).unwrap();
+        t.set_attribute(sgr::Attribute::Bold).unwrap();
+        for _ in 0..UD80_PRINTS {
+            t.print('A' as u32).unwrap();
+        }
+        let id = ud80_cursor_style_id(&mut t);
+        let (n, all, rc) = ud80_scan(&mut t, 'A' as u21, id, |s| s.flags.bold);
+        assert_eq!(n, UD80_PRINTS, "every print landed");
+        assert!(all, "every printed cell keeps the bold style");
+        assert_eq!(rc, u16::MAX, "the refcount saturated and pinned");
+
+        // Releasing references on a pinned style (overwrite, then erase) does
+        // not underflow the count or free the style while cells use it.
+        t.set_cursor_pos(1, 1);
+        t.set_attribute(sgr::Attribute::Unset).unwrap();
+        for _ in 0..10 {
+            t.print('B' as u32).unwrap();
+        }
+        let (n, all, rc) = ud80_scan(&mut t, 'A' as u21, id, |s| s.flags.bold);
+        assert_eq!(n, UD80_PRINTS - 10);
+        assert!(all, "the remaining cells keep the bold style");
+        assert_eq!(rc, u16::MAX, "a pinned style stays pinned on release");
+        t.erase_display(csi::EraseDisplay::Complete, false);
+        let (n, _, rc) = ud80_scan(&mut t, 'A' as u21, id, |s| s.flags.bold);
+        assert_eq!(n, 0);
+        assert_eq!(rc, u16::MAX);
+
+        // The pinned style is reused by the next add of the same value.
+        t.set_attribute(sgr::Attribute::Bold).unwrap();
+        assert_eq!(ud80_cursor_style_id(&mut t), id);
+        t.print('C' as u32).unwrap();
+        let (n, all, _) = ud80_scan(&mut t, 'C' as u21, id, |s| s.flags.bold);
+        assert_eq!((n, all), (1, true));
+
+        t.deinit(Global);
+    }
+
+    // UD80 through the batched `print_slice` path (`use_multiple`).
+    #[test]
+    fn ud80_wide_terminal_print_slice_past_the_refcount_ceiling_keeps_every_cell_styled() {
+        let mut t = Terminal::init(Global, opts(UD80_COLS, UD80_ROWS)).unwrap();
+        t.set_attribute(sgr::Attribute::Bold).unwrap();
+        let chunk = vec!['A' as u32; 4096];
+        let mut left = UD80_PRINTS;
+        while left > 0 {
+            let k = left.min(chunk.len());
+            t.print_slice(&chunk[..k]).unwrap();
+            left -= k;
+        }
+        let id = ud80_cursor_style_id(&mut t);
+        let (n, all, rc) = ud80_scan(&mut t, 'A' as u21, id, |s| s.flags.bold);
+        assert_eq!(n, UD80_PRINTS);
+        assert!(all, "every printed cell keeps the bold style");
+        assert_eq!(rc, u16::MAX);
+        t.deinit(Global);
+    }
+
+    // UD80 through DECALN (`use_multiple(cols)` per row): three full rows.
+    #[test]
+    fn ud80_wide_terminal_decaln_past_the_refcount_ceiling_keeps_every_cell_styled() {
+        let mut t = Terminal::init(Global, opts(UD80_COLS, UD80_ROWS)).unwrap();
+        let red = color::RGB {
+            r: 0xFF,
+            g: 0,
+            b: 0,
+        };
+        t.set_attribute(sgr::Attribute::DirectColorBg(red)).unwrap();
+        t.decaln().unwrap();
+        let id = ud80_cursor_style_id(&mut t);
+        let (n, all, rc) = ud80_scan(&mut t, 'E' as u21, id, |s| {
+            s.bg_color.tag() == style::ColorTag::Rgb && s.bg_color.rgb() == red
+        });
+        assert_eq!(n, UD80_COLS as usize * UD80_ROWS as usize);
+        assert!(all, "every DECALN cell keeps the background");
+        assert_eq!(rc, u16::MAX);
+        t.deinit(Global);
+    }
+
+    // UD80 through reflow: a resize re-wraps the saturated rows into new
+    // pages (`use_multiple` / `add_with_id` in the clone chain).
+    #[test]
+    fn ud80_wide_terminal_reflow_past_the_refcount_ceiling_keeps_every_cell_styled() {
+        let mut t = Terminal::init(Global, opts(UD80_COLS, UD80_ROWS)).unwrap();
+        t.set_attribute(sgr::Attribute::Bold).unwrap();
+        for _ in 0..UD80_PRINTS {
+            t.print('A' as u32).unwrap();
+        }
+        t.resize(
+            Global,
+            Resize {
+                cols: UD80_COLS + 49,
+                rows: UD80_ROWS,
+                cell_size_px: None,
+            },
+        )
+        .unwrap();
+        let id = ud80_cursor_style_id(&mut t);
+        let (n, all, rc) = ud80_scan(&mut t, 'A' as u21, id, |s| s.flags.bold);
+        assert_eq!(n, UD80_PRINTS);
+        assert!(all, "every reflowed cell keeps the bold style");
+        assert_eq!(rc, u16::MAX);
+        t.deinit(Global);
+    }
+
+    // UD80 through a page clone: distinct styles past the page's style
+    // capacity make `manualStyleUpdate` grow it (`increaseCapacity`), which
+    // clones every row, the saturated style included, into a new page
+    // (`add_with_id` / `use_multiple` in the clone chain). 100,000 prints fill
+    // two rows and start the third, so the clone's per-row `add_with_id` for
+    // the third row's first cell lands on an already-saturated style.
+    #[test]
+    fn ud80_wide_terminal_capacity_clone_past_the_refcount_ceiling_keeps_every_cell_styled() {
+        const PRINTS: usize = 100_000;
+        let mut t = Terminal::init(Global, opts(UD80_COLS, UD80_ROWS)).unwrap();
+        t.set_attribute(sgr::Attribute::Bold).unwrap();
+        for _ in 0..PRINTS {
+            t.print('A' as u32).unwrap();
+        }
+        let page_cap = |t: &mut Terminal| unsafe {
+            let node = (*(*t.screens.active).cursor.page_pin).node;
+            (*crate::pagelist::Node::page(node)).capacity.styles
+        };
+        let styles_before = page_cap(&mut t);
+        for i in 0..300u32 {
+            let fg = color::RGB {
+                r: (i & 0xFF) as u8,
+                g: (i >> 8) as u8,
+                b: 1,
+            };
+            t.set_attribute(sgr::Attribute::DirectColorFg(fg)).unwrap();
+            t.print('D' as u32).unwrap();
+        }
+        assert!(
+            page_cap(&mut t) > styles_before,
+            "the page was grown (cloned)"
+        );
+        t.set_attribute(sgr::Attribute::Unset).unwrap();
+        t.set_attribute(sgr::Attribute::Bold).unwrap();
+        let id = ud80_cursor_style_id(&mut t);
+        let (n, all, rc) = ud80_scan(&mut t, 'A' as u21, id, |s| s.flags.bold);
+        assert_eq!(n, PRINTS);
+        assert!(all, "every cloned cell keeps the bold style");
+        assert_eq!(rc, u16::MAX);
+        t.deinit(Global);
+    }
+
+    // UD80 through the VT stream, the route an embedder's `vt_write` takes:
+    // SGR 1, then 70,000 printable bytes, as ordinary output.
+    #[test]
+    fn ud80_wide_terminal_vt_stream_past_the_refcount_ceiling_keeps_every_cell_styled() {
+        let mut t = Terminal::init(Global, opts(UD80_COLS, UD80_ROWS)).unwrap();
+        {
+            let mut stream = t.vt_stream();
+            stream.next_slice(b"\x1b[1m");
+            let chunk = [b'A'; 1000];
+            for _ in 0..UD80_PRINTS / chunk.len() {
+                stream.next_slice(&chunk);
+            }
+            stream.deinit();
+        }
+        let id = ud80_cursor_style_id(&mut t);
+        let (n, all, rc) = ud80_scan(&mut t, 'A' as u21, id, |s| s.flags.bold);
+        assert_eq!(n, UD80_PRINTS);
+        assert!(all, "every printed cell keeps the bold style");
+        assert_eq!(rc, u16::MAX);
+        t.deinit(Global);
+    }
 }

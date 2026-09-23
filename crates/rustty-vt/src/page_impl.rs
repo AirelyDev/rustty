@@ -764,7 +764,14 @@ impl Page {
         {
             for (id, expected) in styles_seen.iter() {
                 let ref_count = unsafe { self.styles.ref_count(base, *id) } as usize;
-                if ref_count < *expected {
+                // PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD80:
+                // the style set saturates and pins a count at its maximum
+                // instead of overflowing (`ref_counted_set.rs`, `bump_ref`), so
+                // a pinned count may sit below the cells that use the style on
+                // a page wider than the standard capacity. A pinned style is
+                // never freed, which is what this check protects.
+                let pinned = ref_count == usize::from(size::CellCountInt::MAX);
+                if ref_count < *expected && !pinned {
                     log::warn!(
                         target: crate::page::LOG_SCOPE,
                         "page integrity violation style ref count mismatch id={id:?} expected={expected} actual={ref_count}"
