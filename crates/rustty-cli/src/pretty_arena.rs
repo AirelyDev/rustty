@@ -45,6 +45,88 @@ pub fn winsize_for(tty: &rustty_vaxis::Tty) -> Result<Winsize, Error> {
     }
 }
 
+/// The tty operations the `prettyPrint` device lifecycle needs. Implemented by
+/// the real `rustty_vaxis::Tty`; the lifecycle is generic over it so its
+/// cleanup order can be tested with failures injected.
+pub trait PrettyTty {
+    type Writer: std::io::Write;
+    /// `tty.writer()`.
+    fn writer(&mut self) -> &mut Self::Writer;
+    /// The `winsize` switch: `.windows` default, else `try tty.getWinsize()`.
+    fn winsize(&self) -> Result<Winsize, Error>;
+    /// `tty.deinit()`.
+    fn deinit(self);
+}
+
+impl PrettyTty for rustty_vaxis::Tty {
+    type Writer = rustty_vaxis::tty::TtyWriter;
+    fn writer(&mut self) -> &mut Self::Writer {
+        rustty_vaxis::Tty::writer(self)
+    }
+    fn winsize(&self) -> Result<Winsize, Error> {
+        winsize_for(self)
+    }
+    fn deinit(self) {
+        rustty_vaxis::Tty::deinit(self)
+    }
+}
+
+/// The device lifecycle shared by `list_colors` and `list_keybinds`
+/// `prettyPrint`, from just after `vaxis.init` to the end of the function:
+///
+/// ```zig
+/// var tty = try vaxis.Tty.init(global.io(), &buf);
+/// defer tty.deinit();
+/// var vx = try vaxis.init(global.io(), alloc, &env_map, .{});
+/// defer vx.deinit(alloc, tty.writer());
+/// vx.caps.unicode = .unicode;
+/// try tty.writer().writeAll(vaxis.ctlseqs.unicode_set);
+/// defer tty.writer().writeAll(vaxis.ctlseqs.unicode_reset) catch {};
+/// const winsize: vaxis.Winsize = switch (builtin.os.tag) { ... else => try tty.getWinsize() };
+/// <body: try vx.resize(...) ... >
+/// ```
+///
+/// Each `defer` runs on every exit after the point it is registered, LIFO:
+/// a failed `unicode_set` write runs `vx.deinit` then `tty.deinit`; anything
+/// later runs `unicode_reset`, `vx.deinit`, `tty.deinit`.
+//
+// PORT NOTE (parity S68-F1, S68-F2, task T-C): the two callers used to `?` the
+// `unicode_set` write and the `getWinsize` call BEFORE their hand-placed cleanup
+// block, so an error there returned with the terminal still raw and `/dev/tty`
+// open (`PosixTty` has no `Drop`). Both now go through this function.
+pub fn pretty_device_lifecycle<'a, T, F>(
+    mut tty: T,
+    vx: &mut rustty_vaxis::Vaxis<'a>,
+    body: F,
+) -> Result<(), Error>
+where
+    T: PrettyTty,
+    F: FnOnce(&mut T::Writer, &mut rustty_vaxis::Vaxis<'a>, Winsize) -> std::io::Result<()>,
+{
+    use std::io::Write;
+    // vx.caps.unicode = .unicode;
+    vx.caps.unicode = rustty_vaxis::gwidth::Method::Unicode;
+    // try tty.writer().writeAll(vaxis.ctlseqs.unicode_set);
+    let res = match tty.writer().write_all(rustty_vaxis::ctlseqs::unicode_set) {
+        Err(e) => Err(Error::from(e)),
+        Ok(()) => {
+            // const winsize = ... try tty.getWinsize();  then the body.
+            let res = match tty.winsize() {
+                Ok(winsize) => body(tty.writer(), vx, winsize).map_err(Error::from),
+                Err(e) => Err(e),
+            };
+            // defer tty.writer().writeAll(vaxis.ctlseqs.unicode_reset) catch {};
+            let _ = tty.writer().write_all(rustty_vaxis::ctlseqs::unicode_reset);
+            res
+        }
+    };
+    // defer vx.deinit(alloc, tty.writer());
+    vx.deinit(tty.writer());
+    // defer tty.deinit();
+    tty.deinit();
+    res
+}
+
 /// `.{ .text = t }` — a bare segment (default style + no hyperlink).
 pub fn seg(text: &[u8]) -> Segment<'_> {
     Segment {
@@ -106,5 +188,139 @@ impl Arena {
         // buffer before its own `Drop`, which happens after the borrow `'a` ends.
         // This is the standard typed-arena chunk pattern; Stacked-Borrows / Miri clean.
         unsafe { &*ptr }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rustty_vaxis::ctlseqs;
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    /// Everything the lifecycle does to the tty, in order.
+    #[derive(Debug, PartialEq, Eq)]
+    enum Ev {
+        Write(Vec<u8>),
+        Winsize,
+        Body,
+        TtyDeinit,
+    }
+
+    struct FakeWriter {
+        log: Rc<RefCell<Vec<Ev>>>,
+        fail_unicode_set: bool,
+    }
+    impl std::io::Write for FakeWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            if self.fail_unicode_set && buf == ctlseqs::unicode_set {
+                return Err(std::io::Error::other("write failed"));
+            }
+            self.log.borrow_mut().push(Ev::Write(buf.to_vec()));
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    struct FakeTty {
+        w: FakeWriter,
+        fail_winsize: bool,
+        deinits: Rc<Cell<u32>>,
+    }
+    impl PrettyTty for FakeTty {
+        type Writer = FakeWriter;
+        fn writer(&mut self) -> &mut FakeWriter {
+            &mut self.w
+        }
+        fn winsize(&self) -> Result<Winsize, Error> {
+            self.w.log.borrow_mut().push(Ev::Winsize);
+            if self.fail_winsize {
+                return Err(Error::from(std::io::Error::other("no winsize")));
+            }
+            Ok(Winsize {
+                rows: 24,
+                cols: 80,
+                x_pixel: 0,
+                y_pixel: 0,
+            })
+        }
+        fn deinit(self) {
+            self.deinits.set(self.deinits.get() + 1);
+            self.w.log.borrow_mut().push(Ev::TtyDeinit);
+        }
+    }
+
+    fn run(fail_unicode_set: bool, fail_winsize: bool) -> (Result<(), Error>, Vec<Ev>, u32) {
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let deinits = Rc::new(Cell::new(0));
+        let tty = FakeTty {
+            w: FakeWriter {
+                log: log.clone(),
+                fail_unicode_set,
+            },
+            fail_winsize,
+            deinits: deinits.clone(),
+        };
+        let mut vx = rustty_vaxis::Vaxis::init(rustty_vaxis::vaxis::Options::default());
+        let body_log = log.clone();
+        let res = pretty_device_lifecycle(tty, &mut vx, |_w, _vx, _ws| {
+            body_log.borrow_mut().push(Ev::Body);
+            Ok(())
+        });
+        let events = std::mem::take(&mut *log.borrow_mut());
+        (res, events, deinits.get())
+    }
+
+    fn index(events: &[Ev], ev: &Ev) -> Option<usize> {
+        events.iter().position(|e| e == ev)
+    }
+
+    // parity S68-F1 / S68-F2: `try tty.getWinsize()` failing still runs the
+    // three defers registered before it, LIFO: `unicode_reset`, `vx.deinit`,
+    // `tty.deinit` (which restores the termios).
+    #[test]
+    fn winsize_failure_still_restores_the_tty() {
+        let (res, events, deinits) = run(false, true);
+        assert!(res.is_err());
+        let set = index(&events, &Ev::Write(ctlseqs::unicode_set.to_vec()));
+        let winsize = index(&events, &Ev::Winsize);
+        let reset = index(&events, &Ev::Write(ctlseqs::unicode_reset.to_vec()));
+        // Positive reach: the failing call really ran, after `unicode_set`.
+        assert!(set.is_some() && winsize > set);
+        assert_eq!(None, index(&events, &Ev::Body));
+        assert!(reset > winsize);
+        assert_eq!(1, deinits);
+        assert_eq!(Some(&Ev::TtyDeinit), events.last());
+    }
+
+    // A failed `unicode_set` write runs only the two defers registered before
+    // it (`vx.deinit`, `tty.deinit`); `unicode_reset` is not yet registered and
+    // `getWinsize` is not reached.
+    #[test]
+    fn unicode_set_failure_still_deinits_the_tty() {
+        let (res, events, deinits) = run(true, false);
+        assert!(res.is_err());
+        assert_eq!(None, index(&events, &Ev::Winsize));
+        assert_eq!(
+            None,
+            index(&events, &Ev::Write(ctlseqs::unicode_reset.to_vec()))
+        );
+        assert_eq!(1, deinits);
+        assert_eq!(Some(&Ev::TtyDeinit), events.last());
+    }
+
+    // The success path: set, winsize, body, reset, then the tty is released last.
+    #[test]
+    fn success_runs_every_defer_in_order() {
+        let (res, events, deinits) = run(false, false);
+        assert!(res.is_ok());
+        let set = index(&events, &Ev::Write(ctlseqs::unicode_set.to_vec()));
+        let body = index(&events, &Ev::Body);
+        let reset = index(&events, &Ev::Write(ctlseqs::unicode_reset.to_vec()));
+        assert!(set.is_some() && body > set && reset > body);
+        assert_eq!(1, deinits);
+        assert_eq!(Some(&Ev::TtyDeinit), events.last());
     }
 }

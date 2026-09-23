@@ -26,11 +26,10 @@ use rustty_vt::x11_color;
 // const vaxis = @import("vaxis");
 //   The interactive `prettyPrint` render leaf (WIRE1) drives the vaxis TUI core.
 use rustty_vaxis::cell::{Color, Style};
-use rustty_vaxis::gwidth::Method;
 use rustty_vaxis::window::PrintResult;
-use rustty_vaxis::{ctlseqs, Winsize};
+use rustty_vaxis::Winsize;
 // const tui = @import("tui.zig");
-use crate::pretty_arena::{po, seg, styled, winsize_for, Arena};
+use crate::pretty_arena::{po, pretty_device_lifecycle, seg, styled, Arena};
 use crate::tui;
 
 use std::io::Write;
@@ -192,37 +191,24 @@ fn pretty_print(keys: &[&str]) -> Result<u8, Error> {
     // Set up vaxis
     // var buf: [1024]u8 = undefined;
     // var tty = try vaxis.Tty.init(&buf);
-    let mut tty = rustty_vaxis::Tty::init(vec![0u8; 1024])?;
-    // defer tty.deinit();   (fired LIFO-last below)
+    let tty = rustty_vaxis::Tty::init(vec![0u8; 1024])?;
+    // defer tty.deinit();   (in `pretty_device_lifecycle`)
     // var vx = try vaxis.init(alloc, .{});
     let mut vx = rustty_vaxis::Vaxis::init(rustty_vaxis::vaxis::Options::default());
-    // defer vx.deinit(alloc, tty.writer());   (fired below)
+    // defer vx.deinit(alloc, tty.writer());   (in `pretty_device_lifecycle`)
 
     // We know we are ghostty, so let's enable mode 2027. Vaxis normally does this but you need an
     // event loop to auto-enable it.
     // vx.caps.unicode = .unicode;
-    vx.caps.unicode = Method::Unicode;
     // try tty.writer().writeAll(vaxis.ctlseqs.unicode_set);
-    tty.writer().write_all(ctlseqs::unicode_set)?;
-    // defer tty.writer().writeAll(vaxis.ctlseqs.unicode_reset) catch {};   (fired LIFO-first below)
-
-    let winsize = winsize_for(&tty)?;
-
-    // The render body (from `vx.resize` on) — captured (not `?`-ed) so the three
-    // reference `defer`s below fire on BOTH the Ok and the Err path.
-    let res = render_colors(tty.writer(), &mut vx, winsize, keys, &arena);
-
-    // PORT NOTE: the reference registers three `defer`s — `tty.deinit` (1st),
-    // `vx.deinit` (2nd), `unicode_reset` (3rd) — that run LIFO at scope exit.
-    // Emit them here in LIFO order (unicode_reset → vx.deinit → tty.deinit) so
-    // cleanup runs on every exit; then propagate `res`.
     // defer tty.writer().writeAll(vaxis.ctlseqs.unicode_reset) catch {};
-    let _ = tty.writer().write_all(ctlseqs::unicode_reset);
-    // defer vx.deinit(alloc, tty.writer());
-    vx.deinit(tty.writer());
-    // defer tty.deinit();
-    tty.deinit();
-    res?;
+    // const winsize: vaxis.Winsize = ...;
+    //   All four, and every `defer` above on every exit path, are in
+    //   `pretty_device_lifecycle` (parity S68-F1); the render body (from
+    //   `vx.resize` on) is `render_colors`.
+    pretty_device_lifecycle(tty, &mut vx, |w, vx, winsize| {
+        render_colors(w, vx, winsize, keys, &arena)
+    })?;
 
     // return 0;
     Ok(0)
@@ -375,6 +361,8 @@ fn order_ignore_case(a: &[u8], b: &[u8]) -> std::cmp::Ordering {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rustty_vaxis::ctlseqs;
+    use rustty_vaxis::gwidth::Method;
     use rustty_vaxis::vaxis::Options;
 
     fn contains(haystack: &[u8], needle: &[u8]) -> bool {
