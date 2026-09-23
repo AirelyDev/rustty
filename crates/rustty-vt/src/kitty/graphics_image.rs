@@ -841,16 +841,18 @@ impl LoadingImage {
                 return Err(Error::InvalidData);
             }
         } else {
-            use std::io::Read;
-            // `.limited(max_size)`: read at most `max_size` bytes.
-            let mut limited = (&mut file).take(MAX_SIZE as u64);
-            if let Err(err) = limited.read_to_end(&mut managed) {
+            // reader.appendRemaining(alloc, &managed, .limited(max_size)) catch {
+            if let Err(err) = append_remaining_limited(&mut file, &mut managed, MAX_SIZE) {
                 // log.warn("failed to read image file: {?}", .{buf_reader.err});
                 //
                 // PORT NOTE: the reference renders the buffered reader's
-                // OPTIONAL stored error (`{?}` — `null` when unset); here the
-                // failure is always present at this site, so it renders as the
-                // error itself.
+                // OPTIONAL stored error (`{?}`): the file's read error, or
+                // `null` when the failure is `error.StreamTooLong`, which
+                // leaves it unset.
+                let err: String = match err {
+                    AppendRemainingError::ReadFailed(err) => err.to_string(),
+                    AppendRemainingError::StreamTooLong => String::from("null"),
+                };
                 log::warn!(target: LOG_SCOPE, "failed to read image file: {err}");
                 return Err(Error::InvalidData);
             }
@@ -1519,6 +1521,40 @@ impl Rect {
 /// uniformly across those targets, so the value is pinned here.
 #[cfg(not(any(windows, target_os = "android", target_arch = "wasm32")))]
 const NAME_MAX: usize = 255;
+
+/// The failures of [`append_remaining_limited`].
+enum AppendRemainingError {
+    /// `error.StreamTooLong`: `limit` bytes were read.
+    StreamTooLong,
+    /// `error.ReadFailed`, with the reader's error.
+    ReadFailed(std::io::Error),
+}
+
+/// `reader.appendRemaining(gpa, list, .limited(limit))` (zig 0.16
+/// `std/Io/Reader.zig` `appendRemainingAligned`): appends the rest of the
+/// stream to `list`, but "if `limit` is reached or exceeded,
+/// `error.StreamTooLong` is returned instead", so a stream of exactly `limit`
+/// bytes is an error too. (Allocation failure aborts, the Rust global OOM
+/// policy.)
+// CORRECTION (parity S189-F2): `readFile` used `take(MAX_SIZE).read_to_end`,
+// which stops silently at the limit, so a file of `max_size` bytes or more
+// loaded truncated instead of failing with `InvalidData`.
+fn append_remaining_limited(
+    reader: &mut impl std::io::Read,
+    list: &mut Vec<u8>,
+    limit: usize,
+) -> Result<(), AppendRemainingError> {
+    use std::io::Read;
+    let start = list.len();
+    reader
+        .take(limit as u64)
+        .read_to_end(list)
+        .map_err(AppendRemainingError::ReadFailed)?;
+    if list.len() - start >= limit {
+        return Err(AppendRemainingError::StreamTooLong);
+    }
+    Ok(())
+}
 
 /// Returns whether a name follows the POSIX shared memory name format.
 fn validSharedMemoryName(name: &[u8], name_max: usize) -> bool {
@@ -2417,6 +2453,65 @@ mod tests {
         let img = loading.complete().unwrap();
         assert!(img.compression == command::Compression::None);
         tmp_dir.dir().access(&path).unwrap();
+        tmp_dir.deinit();
+    }
+
+    // Parity S189-F2 (no reference test): `appendRemaining(.., .limited(n))`
+    // fails with `error.StreamTooLong` once `n` bytes have been read, so a
+    // stream of exactly `n` bytes fails as well.
+    #[test]
+    fn append_remaining_limited_matches_zig_limit_semantics() {
+        let run = |input: &[u8], limit: usize| {
+            let mut list = b"x".to_vec();
+            let mut reader = input;
+            let r = append_remaining_limited(&mut reader, &mut list, limit);
+            (
+                r.map_err(|e| matches!(e, AppendRemainingError::StreamTooLong)),
+                list,
+            )
+        };
+        assert_eq!((Ok(()), b"xabc".to_vec()), run(b"abc", 4));
+        assert_eq!(Err(true), run(b"abcd", 4).0);
+        assert_eq!(Err(true), run(b"abcdef", 4).0);
+        assert_eq!(Err(true), run(b"", 0).0);
+    }
+
+    // Parity S189-F2, through `readFile`: a file with no `s=` size and
+    // `max_size` bytes is rejected with `InvalidData` rather than loaded
+    // truncated. The file is sparse, so it takes no disk space.
+    #[test]
+    #[cfg_attr(miri, ignore)] // real-OS temp-file filesystem syscalls
+    fn image_load_file_of_max_size_without_size_is_invalid_data() {
+        let mut tmp_dir = temp_dir::TempDir::init().unwrap();
+        tmp_dir.dir().writeFile("image.data", b"").unwrap();
+        let path = tmp_dir.dir().realpath("image.data").unwrap();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_len(MAX_SIZE as u64)
+            .unwrap();
+
+        let cmd: command::Command = command::Command {
+            control: command::Control::Transmit(command::Transmission {
+                format: command::Format::Rgb,
+                medium: command::Medium::File,
+                compression: command::Compression::None,
+                image_id: 31,
+                ..Default::default()
+            }),
+            quiet: command::Quiet::No,
+            data: path_to_bytes(&path),
+        };
+        let result = LoadingImage::init(
+            &cmd,
+            &Limits::all_with_temp_dir(&tmp_dir_realpath(&tmp_dir)),
+        );
+        assert!(
+            matches!(result, Err(Error::InvalidData)),
+            "{:?}",
+            result.as_ref().err()
+        );
         tmp_dir.deinit();
     }
 

@@ -138,7 +138,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** Missing test "image load: rgb, not compressed, relative regular file"
   - **Oracle:** `src/terminal/kitty/graphics_image.zig:1440-1470` → **Rustty:** `crates/rustty-vt/src/kitty/graphics_image.rs:1872-2601`
   - **Audit's suggested fix:** Add a `image_load_rgb_not_compressed_relative_regular_file` test that writes the fixture into a scratch dir under the crate's CWD and passes a relative path as `Command.data`, asserting `complete()` succeeds with `Compression::None`.
-- [ ] **S189-F2** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S189-F2** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** readFile with no `s=` size silently TRUNCATES at max_size instead of failing
   - **Oracle:** `src/terminal/kitty/graphics_image.zig:420-443` → **Rustty:** `crates/rustty-vt/src/kitty/graphics_image.rs:660-670`
   - **Audit's suggested fix:** Read `MAX_SIZE + 1` bytes (or check `managed.len() >= MAX_SIZE` after the take) and return `Error::InvalidData` when the limit was reached, mirroring `error.StreamTooLong`.
