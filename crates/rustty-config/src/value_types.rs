@@ -6991,6 +6991,14 @@ impl QuickTerminalSizeSize {
             // },
             QuickTerminalSizeSize::Percentage(v) => {
                 let dim: f32 = parent_dimensions as f32;
+                // PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD96.
+                // `parse` accepts any non-negative float, including `inf%` and
+                // `1e10%` (and `nan%`, since `nan < 0` is false), and the
+                // reference's `@intFromFloat` traps in ReleaseSafe on a result
+                // outside `u32` (measured, Zig 0.16.0; ReleaseFast gives
+                // 4294967295, NaN gives 0 in every mode). Rust's `as` saturates
+                // to those same ReleaseFast values, so the port computes the
+                // reference's shipped result without the trap.
                 (v / 100.0 * dim) as u32
             }
             // .pixels => |v| return v,
@@ -9597,6 +9605,50 @@ mod tests {
                     height: 1766
                 },
                 size.calculate(QuickTerminalPosition::Center, dims_portrait)
+            );
+        }
+    }
+
+    /// UD96 (R13, task R13-D): `quick-terminal-size` percentages the parser
+    /// accepts but whose pixel size is outside `u32`. The reference's
+    /// `@intFromFloat(v / 100.0 * dim)` traps on `inf%` and `1e10%` (ReleaseFast:
+    /// 4294967295) and gives 0 for `nan%` (measured, Zig 0.16.0). The port
+    /// yields the reference's ReleaseFast values without trapping.
+    #[test]
+    fn quick_terminal_size_out_of_range_percentages_do_not_trap() {
+        let dims = QuickTerminalSizeDimensions {
+            width: 2560,
+            height: 1600,
+        };
+        // Positive control: an ordinary percentage.
+        let half = QuickTerminalSizeSize::parse(b"50%").unwrap();
+        assert_eq!(800, half.to_pixels(dims.height));
+
+        for (input, want) in [
+            (&b"inf%"[..], u32::MAX),
+            (b"1e10%", u32::MAX),
+            (b"nan%", 0),
+        ] {
+            let size = QuickTerminalSizeSize::parse(input).unwrap_or_else(|e| {
+                panic!("the parser accepts {:?}: {e:?}", String::from_utf8_lossy(input))
+            });
+            assert!(
+                matches!(size, QuickTerminalSizeSize::Percentage(_)),
+                "precondition: {:?} is a percentage",
+                String::from_utf8_lossy(input)
+            );
+            assert_eq!(want, size.to_pixels(dims.height));
+            // And through `calculate`, as the apprt reaches it.
+            let qts = QuickTerminalSize {
+                primary: Some(size),
+                secondary: None,
+            };
+            assert_eq!(
+                QuickTerminalSizeDimensions {
+                    width: dims.width,
+                    height: want
+                },
+                qts.calculate(QuickTerminalPosition::Top, dims)
             );
         }
     }
