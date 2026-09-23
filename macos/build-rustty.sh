@@ -68,9 +68,27 @@ echo "== 3/3 xcodebuild =="
 # third-party library rustty could vendor.
 # Guard: `.port/tools/gates/no_homebrew_gettext_gate.sh` proves this by building
 # with Homebrew's libintl hidden.
+#
+# External environment variables can mess up xcodebuild, so it runs in a
+# clean environment (GhosttyXcodebuild.zig:58-60 keeps only PATH; HOME is kept
+# too, as macos/build.nu does, because xcodebuild resolves DerivedData under
+# it) (S64-F7).
 cd macos
-exec xcodebuild -project Rustty.xcodeproj -scheme Rustty -configuration "$CONFIGURATION" \
+env -i HOME="$HOME" PATH="$PATH" \
+  xcodebuild -project Rustty.xcodeproj -scheme Rustty -configuration "$CONFIGURATION" \
   -destination "$DESTINATION" \
   CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO \
   OTHER_LDFLAGS="-lstdc++" \
   "$@"
+
+# Copy the app bundle to the install path (GhosttyXcodebuild.zig:167-178, the
+# `copy app bundle` step `zig build install` runs). `cp -R` because there are
+# symlinks in the bundle. PREFIX is the reference's install prefix, `zig-out`
+# by default.
+APP="$(env -i HOME="$HOME" PATH="$PATH" xcodebuild -project Rustty.xcodeproj -scheme Rustty \
+  -configuration "$CONFIGURATION" -destination "$DESTINATION" -showBuildSettings 2>/dev/null \
+  | awk -F' = ' '/ BUILT_PRODUCTS_DIR = /{d=$2} / FULL_PRODUCT_NAME = /{p=$2} END{print d"/"p}')"
+PREFIX="${PREFIX:-$ROOT/zig-out}"
+mkdir -p "$PREFIX"
+cp -R "$APP" "$PREFIX"
+echo "copied $APP to $PREFIX"

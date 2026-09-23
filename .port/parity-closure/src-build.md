@@ -90,7 +90,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** Non-Darwin `ghostty-internal` shared/static library, header install and pkg-config files are not produced
   - **Oracle:** `src/build/GhosttyLib.zig:83-179, 213-300` → **Rustty:** `xtask/src/main.rs:496-599`
   - **Audit's suggested fix:** Add an xtask `install-lib` step for Linux/Windows that installs the rustty-apprt-c cdylib/staticlib, `include/rustty-embed.h`, and emits `rustty-internal.pc` / `rustty-internal-static.pc` with the same fields.
-- [ ] **S64-F7** · CONFIRMED · `INDIV` · missing-branch
+- [x] **S64-F7** · CONFIRMED · `INDIV` · missing-branch
   - **What:** `zig build run` open step and `copy app bundle` step have no counterpart
   - **Oracle:** `src/build/GhosttyXcodebuild.zig:127-178` → **Rustty:** `macos/build-rustty.sh:35-54`
   - **Audit's suggested fix:** Add an `xtask run-macos` (or a `macos/run-rustty.sh`) that applies the PlistBuddy tweak, sets RUSTTY_LOG=stderr,macos and RUSTTY_MAC_LAUNCH_SOURCE=zig_run, and execs the app binary with forwarded args; scrub env in build-rustty.sh like build.nu.
