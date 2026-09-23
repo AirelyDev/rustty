@@ -82,7 +82,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** The `ghostty-gen` data generator binary is named `rustty-synthetic`, not `rustty-gen`
   - **Oracle:** `src/build/GhosttyBench.zig:16-31` → **Rustty:** `crates/rustty-synthetic/Cargo.toml:31-34`
   - **Audit's suggested fix:** Rename the bin to `rustty-gen` (or add a second [[bin]] alias) so the bench docs and the oracle name line up.
-- [ ] **S63-F5** · CONFIRMED · `INDIV` · missing-branch
+- [x] **S63-F5** · CONFIRMED · `INDIV` · missing-branch
   - **What:** Windows build lacks the GUI subsystem and the .rc resource (icon/manifest) embedding
   - **Oracle:** `src/build/GhosttyExe.zig:43-52` → **Rustty:** `crates/rustty/Cargo.toml:1-40`
   - **Audit's suggested fix:** Add `#![cfg_attr(windows, windows_subsystem = "windows")]` to crates/rustty/src/main.rs and a build.rs that compiles dist/windows/rustty.rc (e.g. via embed-resource) on `target_os = "windows"`.

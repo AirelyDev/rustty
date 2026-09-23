@@ -29,11 +29,19 @@
 //! `main_gen.zig`/`main_wasm.zig`/`main_build_data.zig` (0t gen/wasm artifacts,
 //! not on the `rustty` exe's switch above) are deferred (DEFERRALS.md).
 
+// `GhosttyExe.zig:43-49`: `exe.subsystem = .Windows` on Windows (S63-F5).
+// The `.rc` resource half is `build.rs`.
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
 // /// See build_config.ExeEntrypoint for why we do this.
 // const entrypoint = switch (build_config.exe_entrypoint) {
 //     .ghostty => @import("main_ghostty.zig"), ...
 // };
 mod main_rustty;
+
+#[cfg(test)]
+#[path = "build_checks.rs"]
+mod build_checks;
 
 /// The main entrypoint for the program.
 // pub const main = entrypoint.main;
