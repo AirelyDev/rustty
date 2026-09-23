@@ -229,6 +229,11 @@ pub(crate) fn collapse_ws(src: &str) -> String {
 /// an emission — test call sites included — so a probe written inline in
 /// `cf_release_thread.rs` credited that file's arm with a tenth emission
 /// against nine reference sites. This module is in no portmap arm.
+///
+/// Gated like its only caller (`cf_release_thread`'s `#[cfg(all(test,
+/// target_os = "macos"))]` test module): on every other target the probe has
+/// no user and would be dead code under `clippy -D warnings`.
+#[cfg(target_os = "macos")]
 pub(crate) fn emit_probe(target: &str, message: &str) {
     log::warn!(target: target, "{message}");
 }

@@ -8518,7 +8518,10 @@ mod errno_tests {
             (libc::ESPIPE, "seek"),
             (libc::ESRCH, "no such process"),
             (libc::EFBIG, "file too large"),
-            (libc::ERANGE, "too large"),
+            // "result": Darwin/FreeBSD say "Result too large", glibc says
+            // "Numerical result out of range", musl "Result not
+            // representable". The earlier "too large" was Darwin's text only.
+            (libc::ERANGE, "result"),
             (libc::EOVERFLOW, "value too large"),
             (libc::ENOLCK, "locks"),
         ];
