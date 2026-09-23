@@ -772,6 +772,15 @@ impl Modifier {
                 let p_clamped: f64 = 0.0_f64.max(p);
                 let v_f64: f64 = v as f64;
                 let applied_f64: f64 = (v_f64 * p_clamped).round();
+                // PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD97.
+                // The reference's `@intFromFloat` into the metric's integer type
+                // traps in ReleaseSafe when the percentage pushes the value out
+                // of range: `parse` accepts `inf%` and any huge percentage, e.g.
+                // `adjust-cell-width = inf%` (measured, Zig 0.16.0; ReleaseFast
+                // gives the type's max, NaN gives 0 in every mode because
+                // `@max(0, nan)` is 0). Rust's `as` saturates to those same
+                // ReleaseFast values, the same saturation the `.absolute` arm
+                // already applies by design (`std.math.cast ... orelse maxInt`).
                 applied_f64 as u32
             }
             Modifier::Absolute(abs) => {
@@ -792,6 +801,7 @@ impl Modifier {
                 let p_clamped: f64 = 0.0_f64.max(p);
                 let v_f64: f64 = v as f64;
                 let applied_f64: f64 = (v_f64 * p_clamped).round();
+                // PORT NOTE: reference defect (R13), UD97 — see `apply_u32`.
                 applied_f64 as i32
             }
             Modifier::Absolute(abs) => {
@@ -1140,6 +1150,36 @@ mod tests {
             let v: u32 = m.apply_u32(100);
             assert_eq!(180u32, v);
         }
+    }
+
+    /// UD97 (R13, task R13-D): a percentage modifier that pushes a metric out
+    /// of its integer range. The reference traps on `@intFromFloat` for
+    /// `inf%` or `1e300%` (ReleaseFast: the type's max) and gives 0 for `nan%`
+    /// (measured, Zig 0.16.0). Parsed from the config text, as `adjust-*` is.
+    #[test]
+    fn Modifier_percent_out_of_range_saturates() {
+        for (input, want_u32, want_i32) in [
+            (&b"inf%"[..], u32::MAX, i32::MAX),
+            (b"1e300%", u32::MAX, i32::MAX),
+            (b"nan%", 0, 0),
+        ] {
+            let m = Modifier::parse(input).unwrap();
+            assert!(
+                matches!(m, Modifier::Percent(_)),
+                "precondition: {:?} parses as a percentage",
+                String::from_utf8_lossy(input)
+            );
+            assert_eq!(want_u32, m.apply_u32(17));
+            assert_eq!(want_i32, m.apply_i32(17));
+        }
+
+        // The same through `Metrics::apply`, as `adjust-cell-width` reaches it.
+        let mut set: ModifierSet = ModifierSet::new();
+        set.insert(Key::CellWidth, Modifier::parse(b"inf%").unwrap());
+        let mut m: Metrics = init();
+        m.cell_width = 100;
+        m.apply(&set);
+        assert_eq!(u32::MAX, m.cell_width);
     }
 
     #[test]
