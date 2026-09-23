@@ -1907,8 +1907,14 @@ where
                 // PORT NOTE: reference defect (R13), inventory M16 — as in
                 // `renderCallback`, but this arm has the reference's own
                 // warning, which is kept; then disarm instead of
-                // `unreachable` (the blink stops until the next
-                // `reset_cursor_blink` re-runs the timer).
+                // `unreachable`. The blink then stops until the next focus
+                // GAIN: `reset_cursor_blink` re-runs the timer only while
+                // `cursor_c` is active (`Thread.zig:390`, the
+                // `ResetCursorBlink` arm above), so a keypress only makes the
+                // cursor visible, and the `.focus = true` arm
+                // (`Thread.zig:371-384`) is what runs a dead timer again.
+                // While unfocused a stopped timer is the reference's own
+                // intended state (UD73, corrected by task R13-C2).
                 _ => {
                     // log.warn("error in cursor timer callback err={}", .{err});
                     log::warn!(
@@ -2011,6 +2017,17 @@ where
         // The port keeps the reference's warning and then disarms, which is
         // what the success arms do: the timer has fired or is firing, so
         // there is nothing left to cancel.
+        //
+        // Trigger (corrected by task R13-C2): this callback is passed only by
+        // the `.focus = false` arm (`Thread.zig:357-370`), so the race is
+        // losing focus while the blink timer fires. `reset_cursor_blink`'s
+        // `Timer.reset` queues its own `TIMEOUT_REMOVE` with the loop's no-op
+        // callback (libxev `io_uring.zig:289-324`) and never reaches here.
+        // After the failed cancel the timer's own completion arrives as an
+        // expiration and `cursorTimerCallback` re-runs it, so the blink timer
+        // keeps ticking while unfocused. That is invisible (an unfocused
+        // cursor is a hollow block whatever the blink state,
+        // `cursor.zig:58-60`) and the next focus loss cancels it again.
         if let Err(err) = r {
             #[cfg(not(target_os = "linux"))]
             match err {
@@ -2057,8 +2074,25 @@ where
         r: Result<(), xev::WaitError>,
     ) -> xev::CallbackAction {
         // _ = r catch unreachable;
+        //
+        // PORT NOTE: reference defect (R13), UD75 (task R13-C2). The wait
+        // error is not impossible: on Linux the stop `Async` is an eventfd
+        // `poll`, and the epoll backend (Ghostty's `xev.Dynamic` falls back to
+        // it when io_uring is unavailable) starts it with
+        // `epoll_ctl(EPOLL_CTL_ADD)`, which fails with `ENOSPC` once the
+        // user's `fs.epoll.max_user_watches` is used up (a per-user limit
+        // any of the user's processes can exhaust) or with `ENOMEM`; that
+        // arrives here as an error, and the reference traps. Disarming would
+        // leave the thread with no stop watcher, so `deinit`'s join would hang
+        // forever; stopping the loop would stop the renderer on an error that
+        // is not a stop request. The port re-arms instead, which is what the
+        // same file's `wakeupCallback` does for the same `Async.WaitError`
+        // (without its message, which names the wakeup; the reference has
+        // none here). The eventfd (a mach port on macOS) keeps the
+        // notification, so a stop notified while
+        // the wait cannot register is delivered once it does.
         if r.is_err() {
-            unreachable!()
+            return xev::CallbackAction::Rearm;
         }
         // self_.?.loop.stop();
         unsafe { (*self_).loop_.stop() };
@@ -3086,6 +3120,28 @@ mod thread_diagnostics_tests {
             format!("{:?}", messages[0]).contains("error in cursor timer callback err=Unexpected"),
             "{messages:?}"
         );
+    }
+
+    /// UD75 (R13, task R13-C2): `stopCallback`'s `_ = r catch unreachable`.
+    /// The wait error (an epoll `ENOSPC`/`ENOMEM` on the stop eventfd's
+    /// registration) cannot be forced, so it is injected, with a null thread:
+    /// the error arm must return before the thread is touched (a null pointer
+    /// would expose it, and a stopped loop would need one). It re-arms, as
+    /// `wakeupCallback` does for the same error type, and logs nothing, as
+    /// the reference has no message here.
+    #[test]
+    fn stop_callback_rearms_on_a_wait_error() {
+        let cap = log_capture::start();
+        let action = Thread::<TestApp>::stopCallback(
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+            Err(xev::WaitError::Unexpected),
+        );
+        let messages = cap.messages();
+        drop(cap);
+        assert_eq!(xev::CallbackAction::Rearm, action);
+        assert_eq!(Vec::<log_capture::CapturedRecord>::new(), messages);
     }
 
     /// `Thread.zig:308` — `mailbox message={}` renders the ACTIVE TAG AND ITS
