@@ -2927,6 +2927,35 @@ where
     /// logically uninitialized.
     unsafe fn initErrdefers(self_: *mut Surface<A>, io_live: bool) {
         unsafe {
+            // PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD104. The
+            // reference's errdefers (`render_thread.deinit()` :582,
+            // `io_thread.deinit()` :586, `self.io.deinit()`) free the thread
+            // loops and the terminal while the renderer and io threads spawned
+            // at :725/:733 are still running, when a later `try` fails (the io
+            // thread's own spawn, or `performAction(.set_title)`). Every
+            // spawned thread is therefore stopped and joined FIRST, in
+            // `deinit`'s order (renderer, then io), before any teardown below:
+            // the renderer thread reads the terminal that `self.io.deinit()`
+            // frees, so joining it only after that deinit (as this function
+            // used to) left the same race in the port. Task R13-D moved the
+            // renderer join here and added the io join.
+            //
+            // Stop the renderer via a NARROW Copy handle (no whole-struct read
+            // while it may still be live — §2.2 rule 4; Async::notify(&self)
+            // touches only the mach port). Join the spawned handle if init
+            // still holds it on this path; else the never-started child is
+            // simply absent.
+            if let Some(handle) = (*self_).renderer_thr.take() {
+                let _ = (*self_).renderer_thread.stop.notify();
+                let _ = handle.join();
+            }
+            // The io thread, if it was spawned (`io_thr` is stored straight
+            // after its spawn succeeds), the same way `deinit` stops it.
+            if let Some(handle) = (*self_).io_thr.take() {
+                let _ = (*self_).io_thread.stop.notify();
+                let _ = handle.join();
+            }
+
             // errdefer self.io.deinit(); (Surface.zig:682 — armed only after
             // the io block; consuming receiver, read back out.)
             if io_live {
@@ -2937,27 +2966,11 @@ where
             std::ptr::read(&raw const (*self_).io_thread).deinit();
             // errdefer render_thread.deinit(); (Surface.zig:575)
             //
-            // The renderer child is LIVE on this post-spawn unwind path (spawn
-            // above, then perform_action(.set_title) can fail below —
-            // Surface.zig:743). Stop and join it BEFORE deinit so deinit()'s
-            // teardown does not race/UAF the child, then read the field out
-            // by-value (no whole `&mut renderer_thread` — E2's aliasing
-            // discipline forbids it post-spawn), matching the io half above.
-            // (The reference errdefer omits the stop/join — a latent UAF we fix
-            // on the port; the io half at :2490 reproduces the same latent bug,
-            // termio-owned and out of W3 scope — flagged for the sibling.)
+            // The renderer child was stopped and joined at the top of this
+            // function (UD104), so read the field out by-value (no whole
+            // `&mut renderer_thread` — E2's aliasing discipline) and deinit,
+            // matching the io half above.
             {
-                // Stop the child via a NARROW Copy handle (no whole-struct read
-                // while it may still be live — §2.2 rule 4; Async::notify(&self)
-                // touches only the mach port).
-                let _ = (*self_).renderer_thread.stop.notify();
-                // Join the spawned handle if init still holds it on this path;
-                // else the never-started child is simply absent.
-                if let Some(handle) = (*self_).renderer_thr.take() {
-                    let _ = handle.join();
-                }
-                // Child is now dead — read the field out by-value (no `&mut`) and
-                // deinit, matching the io half above.
                 let mut rt = std::ptr::read(&raw const (*self_).renderer_thread);
                 rt.deinit();
             }
