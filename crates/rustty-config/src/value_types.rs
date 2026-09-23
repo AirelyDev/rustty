@@ -9624,13 +9624,12 @@ mod tests {
         let half = QuickTerminalSizeSize::parse(b"50%").unwrap();
         assert_eq!(800, half.to_pixels(dims.height));
 
-        for (input, want) in [
-            (&b"inf%"[..], u32::MAX),
-            (b"1e10%", u32::MAX),
-            (b"nan%", 0),
-        ] {
+        for (input, want) in [(&b"inf%"[..], u32::MAX), (b"1e10%", u32::MAX), (b"nan%", 0)] {
             let size = QuickTerminalSizeSize::parse(input).unwrap_or_else(|e| {
-                panic!("the parser accepts {:?}: {e:?}", String::from_utf8_lossy(input))
+                panic!(
+                    "the parser accepts {:?}: {e:?}",
+                    String::from_utf8_lossy(input)
+                )
             });
             assert!(
                 matches!(size, QuickTerminalSizeSize::Percentage(_)),

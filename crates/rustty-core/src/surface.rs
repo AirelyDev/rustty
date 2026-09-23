@@ -512,7 +512,10 @@ mod r13_window_size_overflow_tests {
 
         for ms in [5000u32, u32::MAX] {
             let cfg = load(format!("click-repeat-interval = {ms}\n").as_bytes());
-            assert_eq!(ms, cfg.click_repeat_interval, "the value reaches the config");
+            assert_eq!(
+                ms, cfg.click_repeat_interval,
+                "the value reaches the config"
+            );
             let mut dc = DerivedConfig::init(Allocator, &cfg).unwrap();
             assert_eq!(
                 u64::from(ms) * 1_000_000,
