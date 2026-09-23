@@ -5737,6 +5737,12 @@ mod tests {
         r.has_custom_shaders = true;
         r.size.padding.left = u32::MAX;
         r.size.padding.top = u32::MAX;
+        // `golden_renderer` leaves the cell contents unsized (the frame's
+        // `rebuild_cells` sizes them); a cursor needs rows.
+        r.cells.resize(rustty_render_types::GridSize {
+            rows: 3,
+            columns: 10,
+        });
         let glyph = crate::shaders::CellText {
             atlas: Atlas::Grayscale,
             bools: crate::shaders::CellTextBools {
