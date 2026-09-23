@@ -2350,7 +2350,20 @@ where
         //
         // (the ported `termio::Thread::init` collapses the `alloc` param —
         // its PORT NOTE.)
-        let io_thread = match termio::Thread::init() {
+        //
+        // Test-only (UD115, task R13-H2): an armed fault fails this init, the
+        // last early return before the big write, so the test sees the grid
+        // released here. Not compiled into production builds.
+        #[cfg(feature = "init-fault-inject")]
+        let io_thread_result = if crate::init_fault::inject(crate::init_fault::Fault::IoThreadInit)
+        {
+            Err(rustty_xev::Error)
+        } else {
+            termio::Thread::init()
+        };
+        #[cfg(not(feature = "init-fault-inject"))]
+        let io_thread_result = termio::Thread::init();
+        let io_thread = match io_thread_result {
             Ok(v) => v,
             Err(err) => {
                 // (the armed errdefers, LIFO — Surface.zig:575/564/559/490)
@@ -2801,9 +2814,18 @@ where
         // whose naming cannot fail — the reference's ignored `setName`
         // failure (`catch {}`) collapses.
         let arg = RendererThreadArg::<A>(unsafe { &raw mut (*self_).renderer_thread });
+        // Test-only (task R13-H2): observes the thread itself, independently
+        // of the logged join (see `init_fault::ThreadProbe`). Not compiled
+        // into production builds.
+        #[cfg(feature = "init-fault-inject")]
+        let probe =
+            crate::init_fault::ThreadProbe::start(crate::init_fault::ProbedThread::Renderer);
         let spawn_result = std::thread::Builder::new()
             .name("renderer".to_string())
             .spawn(move || {
+                // (the probe is dropped when this closure ends)
+                #[cfg(feature = "init-fault-inject")]
+                let _probe = probe;
                 // (capture the whole Send wrapper, not the raw-ptr field —
                 // edition-2021 disjoint captures would otherwise capture the
                 // `!Send` pointer directly.)
@@ -2853,7 +2875,13 @@ where
                 "init-fault-inject: the io thread spawn failed",
             ))
         } else {
-            io_builder.spawn(io_main)
+            // (the R13-H2 thread probe, as for the renderer above)
+            let probe = crate::init_fault::ThreadProbe::start(crate::init_fault::ProbedThread::Io);
+            io_builder.spawn(move || {
+                // (the probe is dropped when this closure ends)
+                let _probe = probe;
+                io_main()
+            })
         };
         #[cfg(not(feature = "init-fault-inject"))]
         let spawn_result = io_builder.spawn(io_main);

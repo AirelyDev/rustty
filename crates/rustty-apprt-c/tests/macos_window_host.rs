@@ -979,12 +979,17 @@ fn shows_visible_window_on_device() {
 // dev-dependency feature of this crate; see `rustty_core::init_fault`):
 // - `IoSpawn` fails the io thread's spawn, with the renderer thread running;
 // - `AfterIoSpawn` fails the next fallible step, where the `set_title` `try`
-//   sits, with both threads running.
+//   sits, with both threads running;
+// - `IoThreadInit` fails `termio::Thread::init`, UD115's last early return
+//   before the spawns (task R13-H2), for the font-grid release check below.
 // The hook logs each spawn, stop, join and free on the init thread, and the
 // test requires the exact sequence: every spawned thread stopped and joined,
 // then the frees. At each free the probe also checks that no spawned thread
-// is still unjoined; if one is (the old order), it prints why and `_exit`s
-// BEFORE the free, so the failure is reported without touching freed memory.
+// is still running, observed by a probe moved into the thread itself (not
+// the logged join, which the code under test writes), and that none is
+// unjoined in the log; if one is (the old order, or a join replaced by
+// dropping the handle), it prints why and `_exit`s BEFORE the free, so the
+// failure is reported without touching freed memory.
 // That is why each case runs in a child process: the parent asserts the
 // child's exit status and output, and a violation fails the parent's
 // assertion with the probe's reason instead of crashing the test runner.
@@ -998,6 +1003,7 @@ fn init_error_path_joins_both_threads_before_freeing_their_state() {
         let fault = match which.to_str() {
             Some("io-spawn") => Fault::IoSpawn,
             Some("after-io-spawn") => Fault::AfterIoSpawn,
+            Some("io-thread-init") => Fault::IoThreadInit,
             other => panic!("unknown fault {other:?}"),
         };
         let quiet = || {
@@ -1049,16 +1055,19 @@ fn init_error_path_joins_both_threads_before_freeing_their_state() {
             Event::Freed("renderer_thread"),
             Event::Freed("renderer_state.mutex"),
         ];
-        let mut expected = match fault {
+        let expected: Vec<Event> = match fault {
             // The io thread never started; the renderer is stopped and joined.
-            Fault::IoSpawn => vec![
+            Fault::IoSpawn => [
                 Event::RendererSpawned,
                 Event::Injected(Fault::IoSpawn),
                 Event::RendererStopped,
                 Event::RendererJoined,
-            ],
+            ]
+            .into_iter()
+            .chain(frees)
+            .collect(),
             // Both are stopped and joined, renderer first as in `deinit`.
-            Fault::AfterIoSpawn => vec![
+            Fault::AfterIoSpawn => [
                 Event::RendererSpawned,
                 Event::IoSpawned,
                 Event::Injected(Fault::AfterIoSpawn),
@@ -1066,9 +1075,15 @@ fn init_error_path_joins_both_threads_before_freeing_their_state() {
                 Event::RendererJoined,
                 Event::IoStopped,
                 Event::IoJoined,
-            ],
+            ]
+            .into_iter()
+            .chain(frees)
+            .collect(),
+            // UD115's last early return (task R13-H2): `termio::Thread::init`
+            // fails before either thread is spawned, and that return frees
+            // without the post-spawn hooks, so only the fault is logged.
+            Fault::IoThreadInit => vec![Event::Injected(Fault::IoThreadInit)],
         };
-        expected.extend(frees);
         assert_eq!(
             expected, log,
             "every spawned thread is stopped and joined before its state is freed"
@@ -1093,7 +1108,7 @@ fn init_error_path_joins_both_threads_before_freeing_their_state() {
     }
 
     let exe = std::env::current_exe().expect("current_exe");
-    for which in ["io-spawn", "after-io-spawn"] {
+    for which in ["io-spawn", "after-io-spawn", "io-thread-init"] {
         let out = std::process::Command::new(&exe)
             .args(["--exact", NAME, "--test-threads=1", "--nocapture"])
             .env(CHILD, which)
