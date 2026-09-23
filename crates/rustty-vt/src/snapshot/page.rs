@@ -2060,17 +2060,26 @@ mod tests {
     }
 
     // rustty-only (R13, UPSTREAM-DEFECTS.md UD64): the exact page-size check's
-    // own boundary. On a 48,151-column page with `grapheme_bytes` 1,382,748,161
-    // (other fields `std_capacity`), the exact layout is 2^32 bytes, one past
-    // `MAX_PAGE_SIZE` (`u32::MAX`); a check loosened by even one byte would let
-    // it through to the native assertion (`pagelist/mod.rs`,
+    // own boundary. On a 48,151-column page (other fields `std_capacity`), the
+    // smallest `grapheme_bytes` whose exact layout passes `MAX_PAGE_SIZE`
+    // (`u32::MAX`) lays out at exactly 2^32 bytes; a check loosened by even one
+    // byte would let it through to the native assertion (`pagelist/mod.rs`,
     // `create_page_ext`), which is UD64's crash. The largest grapheme budget
     // that lays out below 2^32 is accepted. (`>=` in place of `>` is an
     // equivalent change: the layout is a multiple of the page size, and
     // `u32::MAX` is odd, so they are never equal.)
+    //
+    // The grapheme budget is found by a binary search over the platform's own
+    // `Page::layout`, not hard-coded: the layout is rounded to `page_size_min`
+    // (16 KiB on macOS arm64, 4 KiB on Linux), so a constant proven on one
+    // platform misses 2^32 on another (on Linux, 1,382,748,161 lays out 12,288
+    // bytes short, and the test would not reach the boundary at all). The
+    // search's result is asserted to lay out at exactly 2^32, so a platform on
+    // which the construction does not reach the boundary fails here loudly
+    // instead of passing vacuously; on macOS arm64, where it was measured, it
+    // must also equal that constant.
     #[test]
     fn decode_rejects_a_capacity_whose_exact_layout_is_one_past_the_limit() {
-        const AT_LIMIT: u32 = 1_382_748_161;
         let native = TerminalPageCapacity {
             cols: 48_151,
             ..crate::page::std_capacity()
@@ -2094,17 +2103,37 @@ mod tests {
         };
         let limit = crate::size::MAX_PAGE_SIZE as u64;
 
-        assert_eq!(layout(AT_LIMIT), limit + 1, "the layout is exactly 2^32");
+        // The smallest grapheme budget whose layout exceeds the limit (the
+        // layout is monotone in `grapheme_bytes`).
+        let (mut lo, mut hi) = (native.grapheme_bytes, u32::MAX);
+        assert!(layout(lo) <= limit && layout(hi) > limit);
+        while hi - lo > 1 {
+            let mid = lo + (hi - lo) / 2;
+            if layout(mid) > limit {
+                hi = mid;
+            } else {
+                lo = mid;
+            }
+        }
+        let at_limit = hi;
+        assert_eq!(
+            layout(at_limit),
+            limit + 1,
+            "the construction must lay out at exactly 2^32 on this platform \
+             (page_size_min = {})",
+            crate::page::PAGE_SIZE_MIN
+        );
+        if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+            assert_eq!(at_limit, 1_382_748_161, "the value measured on macOS arm64");
+        }
         assert_eq!(
             Err(CapacityError::InvalidDimensions),
-            header(AT_LIMIT).page_capacity(),
+            header(at_limit).page_capacity(),
         );
 
-        // The last grapheme budget below it that still fits is accepted.
-        let mut fits = AT_LIMIT - 1;
-        while layout(fits) > limit {
-            fits -= 1;
-        }
+        // The largest grapheme budget below it, which still fits, is accepted.
+        let fits = lo;
+        assert_eq!(fits + 1, at_limit);
         assert!(layout(fits) <= limit);
         assert!(header(fits).page_capacity().is_ok());
     }
