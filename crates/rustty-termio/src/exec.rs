@@ -4613,9 +4613,10 @@ impl ReadThread {
         // macOS 26.5.1 (XNU also pushes `FIONBIO` to the tty, which accepts
         // it): a fresh master, a master whose slave is closed, and a master
         // whose session leader has exited all take `O_NONBLOCK`; only a closed
-        // descriptor fails (`EBADF`). On Linux, `setfl` refuses only
-        // `O_APPEND`/`O_DIRECT`/`O_NOATIME` changes, which this call does not
-        // make (by reading; not measured, the VM was down).
+        // descriptor fails (`EBADF`). The same four cases on Linux (Fedora,
+        // kernel 6.19.10 aarch64) give the same results; there `setfl`
+        // refuses only `O_APPEND`/`O_DIRECT`/`O_NOATIME` changes, which this
+        // call does not make.
         if !Self::setNonblock(fd) {
             // log.err("read thread exiting, pty fd must be non-blocking", .{});
             log::error!(target: LOG_SCOPE, "read thread exiting, pty fd must be non-blocking");
