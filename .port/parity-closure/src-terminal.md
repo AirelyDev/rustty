@@ -62,7 +62,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** ghostty.h ProgressReport.State check never reads the C header (tautological lookup)
   - **Oracle:** `src/terminal/osc.zig:249-253` → **Rustty:** `crates/rustty-vt/src/osc/mod.rs:406-434`
   - **Audit's suggested fix:** Reuse mouse.rs's `parse_header_enum` (hoist it into rustty-lib or a shared test helper) and look the values up in `include/rustty-embed.h`'s `rustty_action_progress_report_state_e` block, plus a probe-can-fail test as in mouse.rs.
-- [ ] **S156-F2** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S156-F2** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** Shape.getGObjectType (GhosttyMouseShape GObject enum) stripped; GTK mouse-shape property is a plain int
   - **Oracle:** `src/terminal/mouse.zig:77-92` → **Rustty:** `crates/rustty-apprt/src/gtk/class/surface.rs:247-257`
   - **Audit's suggested fix:** Register a `RusttyMouseShape` glib enum type (glib::Enum derive over rustty_vt::mouse::Shape or a wrapper) and type the `mouse-shape` property with it, matching surface.zig:222-240.

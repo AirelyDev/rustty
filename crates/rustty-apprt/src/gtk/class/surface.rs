@@ -3234,11 +3234,13 @@ impl Surface {
     }
 }
 
-// PORT NOTE (concern): the reference's typed `getMouseShape`/`setMouseShape`
-// (`surface.zig:2176-2184`) over `terminal.MouseShape`, plus the
-// `GhosttyMouseShape` GObject enum, are deferred to the mouse-input task
-// (T16/T17) — see the `mouse-shape` property's PORT NOTE. The generated
-// `mouse_shape()`/`set_mouse_shape()` `i32` accessors carry the shape meanwhile.
+// PORT NOTE: the reference's typed `getMouseShape`/`setMouseShape`
+// (`surface.zig:2176-2184`) over `terminal.MouseShape` are the generated
+// `mouse_shape()`/`set_mouse_shape()` accessors, typed by the `GhosttyMouseShape`
+// GObject enum (`gtypes.rs` `MouseShapeEnum`).
+// CORRECTION (parity S156-F2): this note said the enum and the typed accessors
+// were deferred and that the accessors were `i32`. Both landed with task 20
+// (S54-F3); the note was not updated then.
 
 /// PORTS: `surface.zig:2575-2584` `actionPromptTitle`. Perform the
 /// `prompt_surface_title` binding action on the core surface; the action loops
