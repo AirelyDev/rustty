@@ -389,6 +389,13 @@ impl Coordinate {
                 let cell_height: f64 = size.cell.height as f64;
                 let clamped_x: f64 = (0.0f64).max(term.x);
                 let clamped_y: f64 = (0.0f64).max(term.y);
+                // PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD100.
+                // The reference's `@intFromFloat` into the `u16` grid unit
+                // (`size.zig:144-145`) traps in ReleaseSafe on a position more
+                // than 65535 cells from the origin, which a C-ABI mouse position
+                // can be (and on `inf` from a zero cell width). Rust's `as`
+                // saturates, and the `@min` below clamps to the grid, which is
+                // what the surrounding code does for every other overshoot.
                 let col: GridSizeUnit = (clamped_x / cell_width) as GridSizeUnit;
                 let row: GridSizeUnit = (clamped_y / cell_height) as GridSizeUnit;
                 let clamped_col: GridSizeUnit = col.min(grid.columns - 1);
@@ -539,6 +546,13 @@ impl GridSize {
         let cell_height: f32 = cell.height as f32;
         let screen_width: f32 = screen.width as f32;
         let screen_height: f32 = screen.height as f32;
+        // PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD100. The
+        // reference's `@intFromFloat` into the `u16` unit (`size.zig:258-259`)
+        // traps in ReleaseSafe when a screen holds more than 65535 cells, or on
+        // `inf` from a zero cell size (ReleaseFast wraps 100000 to 34464,
+        // measured, Zig 0.16.0). Screen and cell sizes reach here from the C
+        // ABI (`rustty_surface_set_size`) and the apprt. Rust's `as` saturates
+        // to the largest grid the unit holds instead.
         let calc_cols: GridSizeUnit = (screen_width / cell_width) as GridSizeUnit;
         let calc_rows: GridSizeUnit = (screen_height / cell_height) as GridSizeUnit;
         self.columns = 1.max(calc_cols);
@@ -621,6 +635,80 @@ impl Padding {
 #[allow(non_snake_case)]
 mod tests {
     use super::*;
+
+    /// UD100 (R13, task R13-D): grid arithmetic whose result leaves the `u16`
+    /// unit. The reference traps on `@intFromFloat` in `GridSize.update` and in
+    /// the surface-to-grid conversion (measured, Zig 0.16.0: 100000 px of 1 px
+    /// cells and a zero cell width both trap; ReleaseFast wraps to 34464 and
+    /// gives 65535). The port saturates and clamps.
+    #[test]
+    fn grid_arithmetic_outside_u16_saturates() {
+        // Positive control.
+        let g = GridSize::init(
+            ScreenSize {
+                width: 800,
+                height: 600,
+            },
+            CellSize {
+                width: 10,
+                height: 20,
+            },
+        );
+        assert_eq!((80, 30), (g.columns, g.rows));
+
+        let g = GridSize::init(
+            ScreenSize {
+                width: 100_000,
+                height: 600,
+            },
+            CellSize {
+                width: 1,
+                height: 20,
+            },
+        );
+        assert_eq!(
+            (u16::MAX, 30),
+            (g.columns, g.rows),
+            "saturated, not wrapped to 34464"
+        );
+        let g = GridSize::init(
+            ScreenSize {
+                width: 800,
+                height: 600,
+            },
+            CellSize {
+                width: 0,
+                height: 0,
+            },
+        );
+        assert_eq!((u16::MAX, u16::MAX), (g.columns, g.rows), "inf saturates");
+
+        // A mouse position far outside the surface clamps to the last cell.
+        let size = Size {
+            screen: ScreenSize {
+                width: 800,
+                height: 600,
+            },
+            cell: CellSize {
+                width: 10,
+                height: 20,
+            },
+            padding: Padding::default(),
+        };
+        for (x, y) in [
+            (1e12, 1e12),
+            (f64::INFINITY, f64::INFINITY),
+            (f64::NAN, f64::NAN),
+        ] {
+            let grid =
+                Coordinate::Surface(CoordinateSurface { x, y }).convert(CoordinateTag::Grid, size);
+            let want = if x.is_nan() { (0, 0) } else { (79, 29) };
+            match grid {
+                Coordinate::Grid(g) => assert_eq!(want, (g.x, g.y), "({x}, {y})"),
+                other => panic!("expected a grid coordinate, got {other:?}"),
+            }
+        }
+    }
 
     #[test]
     fn Size_balancePadding_equal_distributes_whitespace_equally() {
