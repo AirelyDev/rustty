@@ -1100,16 +1100,19 @@ pub type Set = crate::ref_counted_set::RefCountedSet<Style, Id, size::CellCountI
 //     `RefCountInt = size.CellCountInt` (u16) (`style.zig:15`, `:681`),
 //     34 rounded to 36/4.
 // `ref_item_geometry_matches_the_reference_probe` pins the result to what a
-// Zig probe of the reference reports.
+// Zig probe of the reference reports, and `ref_geometry_golden_tests` checks
+// these shadows against the golden that G-REFGEOM
+// (`.port/tools/gates/check_ref_item_geometry.py`) re-measures the reference
+// into, so an upstream change to these declarations turns that gate red.
 #[repr(C)]
 #[allow(dead_code)] // never built: only its size and alignment are read
-struct RefShadowColor {
+pub(crate) struct RefShadowColor {
     payload: u32,
     tag: u8,
 }
 #[repr(C)]
 #[allow(dead_code)] // never built: only its size and alignment are read
-struct RefShadowStyle {
+pub(crate) struct RefShadowStyle {
     fg_color: RefShadowColor,
     bg_color: RefShadowColor,
     underline_color: RefShadowColor,
@@ -1117,7 +1120,7 @@ struct RefShadowStyle {
 }
 #[repr(C)]
 #[allow(dead_code)] // never built: only its size and alignment are read
-struct RefShadowItem {
+pub(crate) struct RefShadowItem {
     value: RefShadowStyle,
     bucket: Id,
     psl: Id,

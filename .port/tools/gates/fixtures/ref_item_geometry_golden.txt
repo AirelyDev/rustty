@@ -1,0 +1,57 @@
+# G-REFGEOM golden: the reference's set-item geometry at the pin.
+#
+# The output of `ref_item_geometry_probe.zig` (this directory) run by
+# `.port/tools/gates/check_ref_item_geometry.py` against the pinned ghostty
+# oracle, 20abdb50a6216c450d6d4d010c41c7edf5ab15b2, with Zig 0.16.0:
+# `zig build test-lib-vt-build -Dtarget=<t>` for aarch64-macos (the macOS
+# arm64 host's native target), aarch64-linux-gnu and wasm32-wasi.
+#
+# Two consumers pin themselves to this one file:
+#   - the gate, which re-runs the probe and goes RED on any difference, so an
+#     upstream change to `Style`, `Color`, `RGB`, `Flags`, `PageEntry`,
+#     `Offset.Slice` or `RefCountedSet.Item` shows up when the pin moves;
+#   - `ref_geometry_golden_tests` (crates/rustty-vt/src/ref_geometry_golden_tests.rs),
+#     which checks the port's shadow types, its own items and the set strides
+#     (NEW-FINDINGS N88) against these lines: the 64-bit lines on the host,
+#     the wasm32 lines through a layout model.
+#
+# Regenerate only by running the gate at a NEW pin and copying its output;
+# never by hand.
+#
+# Format: <arch>-<os> <reference type> <@sizeOf> <@alignOf>
+aarch64-macos usize 8 8
+aarch64-macos color.RGB 4 4
+aarch64-macos style.Style.Color 8 4
+aarch64-macos style.Style.Flags 2 2
+aarch64-macos style.Style 28 4
+aarch64-macos style.Set.Item.Metadata 6 2
+aarch64-macos style.Set.Item 36 4
+aarch64-macos size.Offset(u8).Slice 16 8
+aarch64-macos hyperlink.PageEntry.Id 24 8
+aarch64-macos hyperlink.PageEntry 40 8
+aarch64-macos hyperlink.Set.Item.Metadata 6 2
+aarch64-macos hyperlink.Set.Item 48 8
+aarch64-linux usize 8 8
+aarch64-linux color.RGB 4 4
+aarch64-linux style.Style.Color 8 4
+aarch64-linux style.Style.Flags 2 2
+aarch64-linux style.Style 28 4
+aarch64-linux style.Set.Item.Metadata 6 2
+aarch64-linux style.Set.Item 36 4
+aarch64-linux size.Offset(u8).Slice 16 8
+aarch64-linux hyperlink.PageEntry.Id 24 8
+aarch64-linux hyperlink.PageEntry 40 8
+aarch64-linux hyperlink.Set.Item.Metadata 6 2
+aarch64-linux hyperlink.Set.Item 48 8
+wasm32-wasi usize 4 4
+wasm32-wasi color.RGB 4 4
+wasm32-wasi style.Style.Color 8 4
+wasm32-wasi style.Style.Flags 2 2
+wasm32-wasi style.Style 28 4
+wasm32-wasi style.Set.Item.Metadata 6 2
+wasm32-wasi style.Set.Item 36 4
+wasm32-wasi size.Offset(u8).Slice 8 4
+wasm32-wasi hyperlink.PageEntry.Id 12 4
+wasm32-wasi hyperlink.PageEntry 20 4
+wasm32-wasi hyperlink.Set.Item.Metadata 6 2
+wasm32-wasi hyperlink.Set.Item 28 4

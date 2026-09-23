@@ -365,6 +365,11 @@ pub mod bitmap_allocator;
 pub mod hash_map;
 pub mod ref_counted_set;
 
+// Rustty-only (task R13-L2): the port's set-item geometry against the
+// reference golden that G-REFGEOM (`check_ref_item_geometry.py`) measures.
+#[cfg(test)]
+mod ref_geometry_golden_tests;
+
 // PORT NOTE: port of the reference AFL++ harness package
 // `test/fuzz-libghostty/src/fuzz_{osc,parser,stream}.zig` (which lives OUTSIDE
 // the terminal module in the reference tree). Declared here so the cargo-fuzz

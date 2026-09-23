@@ -162,46 +162,68 @@ pub struct PageEntry {
 // semantics or size: the oracle's `union(enum) { explicit: Offset(u8).Slice,
 // implicit: size.OffsetInt }` has the same 24-byte size and the same undefined
 // bytes — Zig simply permits reading undefined bytes and Rust does not, so
-// R1 fidelity cannot carry the enum representation over. Both payload slots
-// are now always fully written (the inactive one as zero), the tag is a raw
+// R1 fidelity cannot carry the enum representation over. Every payload byte
+// is now always written (see the R13-L2 note below for how), the tag is a raw
 // `u8` so a value read back out of a page mapping can never be
 // invalid-enum-value UB, and every read goes through a tag-checked accessor —
 // the analogue of the reference's checked union-field access, and the identical
 // shape `style::Color` already uses in this port.
+//
+// PORT NOTE (task R13-L2, NEW-FINDINGS N88): the two payloads SHARE their
+// bytes, as the reference union's do. The first reshape above kept both
+// payloads side by side (`explicit`, then `implicit`, then the tag), which was
+// 24 bytes on 64-bit only by coincidence (16 + 4 + 1 rounds to 24, the union's
+// 16 + 1 does too) and 16 on wasm32 against the union's 12 (8 + 1 rounded to
+// 4), so the port's hyperlink `Set.Item` was 32 bytes there against the
+// reference's 28 and did not fit the reference's slot (`RefItemGeometry`).
+// Now one `OffsetSlice` holds the payload: `.explicit` is the whole slice, and
+// `.implicit` is its first 4 bytes, the `Offset` field, which is where the
+// reference's union puts the `u32` too (a union's fields all start at its
+// byte 0). An implicit id keeps `len` at zero. No `union` and no `unsafe` are
+// needed: both payloads are plain `u32`s in the same position, so the
+// "shared bytes" are a field the two accessors read in turn, each behind the
+// tag check. Sizes: 24/8 on 64-bit (16 + 1 + 7), 12/4 on 32-bit (8 + 1 + 3),
+// the reference's `@sizeOf(PageEntry.Id)` on both (the wasm32 figure measured
+// by the R13-L review's Zig probe for `wasm32-wasi`).
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct PageEntryId {
-    /// The `explicit` union payload. Zeroed (and never read) when the tag is
-    /// `Implicit`, so that these bytes are always initialized.
-    explicit: OffsetSlice<u8>,
-
-    /// The `implicit` union payload. Zero (and never read) when the tag is
-    /// `Explicit`, so that these bytes are always initialized.
-    implicit: size::OffsetInt,
+    /// The union payload. For `.explicit`, the slice itself. For
+    /// `.implicit`, the `u32` lives in `payload.offset` and `payload.len` is
+    /// zero, so that every byte is initialized and a given implicit value has
+    /// exactly one byte image.
+    payload: OffsetSlice<u8>,
 
     /// A `PageEntryIdTag` held as a raw `u8` (see the PORT NOTE above).
     /// The mapping arrives zeroed and `0` is `PageEntryIdTag::Implicit`, which
     /// is also `PageEntry::default()`'s tag.
     tag: u8,
 
-    /// The 3 tail-padding bytes the fields above imply, named so that every
-    /// byte of a `PageEntryId` written into a page mapping is initialized.
-    _padding: [u8; 3],
+    /// The tail-padding bytes the fields above imply (7 on 64-bit, 3 on
+    /// 32-bit), named so that every byte of a `PageEntryId` written into a
+    /// page mapping is initialized.
+    _padding: [u8; core::mem::size_of::<usize>() - 1],
 }
 
 // `PageEntryId` must have no implicit padding at all, or the reshape above is
-// pointless. 64-bit: 16 + 4 + 1 + 3 == 24 at align 8, the oracle's `@sizeOf`
-// too. 32-bit: `OffsetSlice` is 8 there (its `_padding` is 64-bit-only), so
-// 8 + 4 + 1 + 3 == 16 at align 4 — still byte-complete, the `[u8; 3]` is
-// required on BOTH widths. Only the literals were width-specific.
+// pointless, and it must be the reference union's size. 64-bit: 16 + 1 + 7 ==
+// 24 at align 8. 32-bit: `OffsetSlice` is 8 there (its `_padding` is
+// 64-bit-only), so 8 + 1 + 3 == 12 at align 4.
 //
-// FINDING (P3-W6 T1): as with `OffsetSlice`'s pair, these literal asserts were a
-// hard compile error on any 32-bit target from the moment they landed
-// (main @ 9d8fafb), and no gate saw it because A5's wasm build is skipped when a
-// stale `.wasm` is present. Written against `size_of::<usize>()` they bind on
-// both widths.
-const _: () = assert!(core::mem::size_of::<PageEntryId>() == 2 * core::mem::size_of::<usize>() + 8);
+// FINDING (P3-W6 T1): as with `OffsetSlice`'s pair, the literal asserts first
+// written here were a hard compile error on any 32-bit target from the moment
+// they landed (main @ 9d8fafb), and no gate saw it because A5's wasm build is
+// skipped when a stale `.wasm` is present. Written against `size_of::<usize>()`
+// they bind on both widths.
+const _: () = assert!(core::mem::size_of::<PageEntryId>() == 3 * core::mem::size_of::<usize>());
 const _: () = assert!(core::mem::align_of::<PageEntryId>() == core::mem::align_of::<usize>());
+// The union shape, checkable on the host: the tag follows the one shared
+// payload directly. Two payloads side by side (the shape before task R13-L2)
+// put it 4 bytes later, which is 24 bytes on 64-bit too, so the size assert
+// above cannot tell them apart there; only the wasm32 build's `ItemStride`
+// assert could.
+const _: () =
+    assert!(core::mem::offset_of!(PageEntryId, tag) == core::mem::size_of::<OffsetSlice<u8>>());
 
 /// `std.meta.activeTag(PageEntry.Id)` — the reference's union tag.
 #[repr(u8)]
@@ -223,10 +245,9 @@ impl PageEntryId {
     #[inline]
     pub const fn Explicit(slice: OffsetSlice<u8>) -> PageEntryId {
         PageEntryId {
-            explicit: slice,
-            implicit: 0,
+            payload: slice,
             tag: PageEntryIdTag::Explicit as u8,
-            _padding: [0; 3],
+            _padding: [0; core::mem::size_of::<usize>() - 1],
         }
     }
 
@@ -235,10 +256,9 @@ impl PageEntryId {
     #[inline]
     pub const fn Implicit(v: size::OffsetInt) -> PageEntryId {
         PageEntryId {
-            explicit: OffsetSlice::new(Offset::new(0), 0),
-            implicit: v,
+            payload: OffsetSlice::new(Offset::new(v), 0),
             tag: PageEntryIdTag::Implicit as u8,
-            _padding: [0; 3],
+            _padding: [0; core::mem::size_of::<usize>() - 1],
         }
     }
 
@@ -262,14 +282,14 @@ impl PageEntryId {
     #[inline]
     pub fn explicit(self) -> OffsetSlice<u8> {
         debug_assert!(self.tag == PageEntryIdTag::Explicit as u8);
-        self.explicit
+        self.payload
     }
 
     /// The reference's `self.implicit` union-field access. See `explicit`.
     #[inline]
     pub fn implicit(self) -> size::OffsetInt {
         debug_assert!(self.tag == PageEntryIdTag::Implicit as u8);
-        self.implicit
+        self.payload.offset.offset
     }
 }
 
@@ -527,23 +547,29 @@ pub type Set = RefCountedSet<PageEntry, Id, size::CellCountInt, SetContext>;
 //   - `RefCountedSet.Item = struct { value: T, meta: Metadata }`, the
 //     metadata three `u16`s (`Id = size.HyperlinkCountInt`, `RefCountInt =
 //     size.CellCountInt`, `hyperlink.zig:18`, `:211`), 46 rounded to 48/8.
-// The port's item is 48/8 too, so this changes nothing today; it keeps the
-// hyperlink section tied to the reference if the port's `PageEntry` changes.
+// On a 32-bit `usize` (wasm32) the same declarations give 8/4, 12/4, 20/4 and
+// 26 rounded to 28/4, measured by the R13-L review's Zig probe for
+// `wasm32-wasi`. The port's item is 48/8 on 64-bit and, since `PageEntryId`
+// shares its payload bytes as the union does (task R13-L2), 28/4 on 32-bit:
+// the same geometry on both. The assert below keeps the hyperlink section tied
+// to the reference if the port's `PageEntry` changes; `ref_geometry_golden_tests`
+// checks the shadows and the port's types against the G-REFGEOM golden, the
+// wasm32 lines through a layout model (task R13-L2).
 #[repr(C)]
 #[allow(dead_code)] // never built: only its size and alignment are read
-struct RefShadowSlice {
+pub(crate) struct RefShadowSlice {
     offset: u32,
     len: usize,
 }
 #[repr(C)]
 #[allow(dead_code)] // never built: only its size and alignment are read
-struct RefShadowPageEntryId {
+pub(crate) struct RefShadowPageEntryId {
     payload: RefShadowSlice,
     tag: u8,
 }
 #[repr(C)]
 #[allow(dead_code)] // never built: only its size and alignment are read
-struct RefShadowItem {
+pub(crate) struct RefShadowItem {
     value_id: RefShadowPageEntryId,
     value_uri: RefShadowSlice,
     bucket: Id,
