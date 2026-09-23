@@ -36,9 +36,12 @@
 # oracle read, and G-EOL in full for arm 3's BLOCKED paths. A structural arm
 # (a lint) scans the real consumers: no plain `git ... $ORACLE` on one line, one
 # assignment of the oracle variable, and fixed per-file counts of every `git`
-# word and every bare mention of the variable (`printf -v`, `read`, `declare`,
-# ...). The pin arms check that no other file spells the pin, whole or in
-# 7-hex pieces, and that no gate holds another 40-hex constant. The gates that
+# word (counted with quotes and backslashes removed) and every bare mention of
+# the variable (`printf -v`, `read`, `declare`, ...); no escape spelling a
+# letter or digit, and no `git` formed by joining string literals in the Node
+# and Python readers. The pin arms check that no other TRACKED file spells the
+# pin, whole or in 7-hex pieces, and that no tracked gate holds another 40-hex
+# constant (untracked and ignored files, a stale .pyc, are skipped). The gates that
 # read the oracle at a fixed path (G4's guard, which also runs a copy of G4 to
 # test its pin read, G-BENCH, G-LZ4, A5) run their own `--self-test-oracle`
 # from here.
@@ -335,27 +338,95 @@ _rustty_oracle_self_test() {
   else
     blocked_arm "rustty_oracle_pin and _gatelib.oracle_pin agree" "python3 not installed"
   fi
-  if [ -n "$sh_pin" ]; then
-    others="$(grep -rlF "$sh_pin" "$root/.port/tools" 2>/dev/null | grep -vxF "$_RUSTTY_ORACLE_LIB_DIR/ORACLE_PIN")"
-    if [ -z "$others" ]; then r=0; else r=1; fi
-    arm "$r" "no other .port/tools file hardcodes the pin (the literal 40-hex SHA)" "$(printf '%s ' $others)"
-    # 7b. a split or abbreviated copy: no other file holds any 7-hex window of
-    #     the pin (7 is git's shortest default abbreviation), in either case.
-    #     A copy cut into pieces under 7 hex, or computed at run time, is out
-    #     of reach of any grep; after a pin advance it still fails closed
-    #     (BLOCKED), never a pass.
-    local i frags=""
-    for ((i = 0; i + 7 <= ${#sh_pin}; i++)); do frags="$frags${sh_pin:i:7}"$'\n'; done
-    others="$(printf '%s' "$frags" | grep -rlIiF -f - "$root/.port/tools" 2>/dev/null | grep -vxF "$_RUSTTY_ORACLE_LIB_DIR/ORACLE_PIN")"
-    if [ -z "$others" ]; then r=0; else r=1; fi
-    arm "$r" "no other .port/tools file holds a 7-hex piece of the pin (split or abbreviated copy)" "$(printf '%s ' $others)"
-  fi
-  # 7c. the gates directory holds no 40-hex constant but ORACLE_PIN's, so a
+  # The pin scans (7a-7c) read the repository's TRACKED files only (their
+  # working-tree content). An untracked or ignored file is not the repository's
+  # content: a stale, gitignored `__pycache__/*.pyc` compiled from an old gate
+  # still holds the old pin, and made 7a RED on one machine and not another.
+  # `tracked_grep <repo> <pathspec> <grep args...>` prints the matching tracked
+  # files (repo-relative) except ORACLE_PIN itself, and returns 2 when git
+  # cannot list them (the arm is then BLOCKED: an empty list is never a pass).
+  # Arm 7d runs these same three scans on a fixture repository.
+  tracked_grep() {
+    local repo="$1" spec="$2" list
+    shift 2
+    list="$(mktemp "${TMPDIR:-/tmp}/goracle_ls.XXXXXX")" || return 2
+    if ! clean_git -C "$repo" ls-files -z -- "$spec" >"$list" 2>/dev/null || [ ! -s "$list" ]; then
+      rm -f "$list"
+      return 2
+    fi
+    (cd "$repo" && xargs -0 grep -ls "$@" -- <"$list") | grep -vxF '.port/tools/gates/ORACLE_PIN'
+    rm -f "$list"
+    return 0
+  }
+  # 7a: the literal 40-hex pin, binary files included (a .pyc, say).
+  pin_literal_hits() { tracked_grep "$1" .port/tools -F -e "$2"; }
+  # 7b: a split or abbreviated copy: any 7-hex window of the pin (7 is git's
+  #     shortest default abbreviation), in either case. A copy cut into pieces
+  #     under 7 hex, or computed at run time, is out of reach of any grep;
+  #     after a pin advance it still fails closed (BLOCKED), never a pass.
+  pin_piece_hits() {
+    local i pieces=()
+    for ((i = 0; i + 7 <= ${#2}; i++)); do pieces+=(-e "${2:i:7}"); done
+    tracked_grep "$1" .port/tools -IiF "${pieces[@]}"
+  }
+  # 7c: the gates directory holds no 40-hex constant but ORACLE_PIN's, so a
   #     second, DIFFERENT pin hardcoded in a gate is caught before it can
   #     disagree with the file (G4's pin-read arms catch it end to end too).
-  others="$(grep -rlIE '(^|[^0-9A-Fa-f])[0-9A-Fa-f]{40}([^0-9A-Fa-f]|$)' "$here" 2>/dev/null | grep -vxF "$_RUSTTY_ORACLE_LIB_DIR/ORACLE_PIN")"
-  if [ -z "$others" ]; then r=0; else r=1; fi
-  arm "$r" "no .port/tools/gates file but ORACLE_PIN holds a 40-hex constant" "$(printf '%s ' $others)"
+  hex40_hits() { tracked_grep "$1" .port/tools/gates -IE -e '(^|[^0-9A-Fa-f])[0-9A-Fa-f]{40}([^0-9A-Fa-f]|$)'; }
+  if [ -n "$sh_pin" ]; then
+    r=0; others="$(pin_literal_hits "$root" "$sh_pin")" || r=$?
+    if [ "$r" = "2" ]; then
+      blocked_arm "no other tracked .port/tools file hardcodes the pin" "git ls-files could not list $root/.port/tools"
+    else
+      if [ -z "$others" ]; then r=0; else r=1; fi
+      arm "$r" "no other tracked .port/tools file hardcodes the pin (the literal 40-hex SHA)" "$(printf '%s ' $others)"
+    fi
+    r=0; others="$(pin_piece_hits "$root" "$sh_pin")" || r=$?
+    if [ "$r" = "2" ]; then
+      blocked_arm "no other tracked .port/tools file holds a 7-hex piece of the pin" "git ls-files could not list $root/.port/tools"
+    else
+      if [ -z "$others" ]; then r=0; else r=1; fi
+      arm "$r" "no other tracked .port/tools file holds a 7-hex piece of the pin (split or abbreviated copy)" "$(printf '%s ' $others)"
+    fi
+  fi
+  r=0; others="$(hex40_hits "$root")" || r=$?
+  if [ "$r" = "2" ]; then
+    blocked_arm "no tracked .port/tools/gates file but ORACLE_PIN holds a 40-hex constant" "git ls-files could not list $root/.port/tools/gates"
+  else
+    if [ -z "$others" ]; then r=0; else r=1; fi
+    arm "$r" "no tracked .port/tools/gates file but ORACLE_PIN holds a 40-hex constant" "$(printf '%s ' $others)"
+  fi
+  # 7d. the three scans on a fixture repository: a tracked file is caught, an
+  #     untracked or gitignored one (the stale .pyc case) is not, and a
+  #     directory git cannot list is BLOCKED (2), not a pass.
+  local ps="$base/pinscan" p2 want7
+  p2="$(printf '%s' "$fixture_pin" | tr '0123456789abcdef' '123456789abcdef0')" # another 40-hex value
+  mkdir -p "$ps/.port/tools/gates/__pycache__" "$base/notrepo/.port/tools/gates"
+  printf '%s\n' "$fixture_pin" >"$ps/.port/tools/gates/ORACLE_PIN"
+  printf 'PIN=%s\n' "$fixture_pin" >"$ps/.port/tools/tracked-pin.sh"
+  printf 'PIN=%s\n' "$fixture_pin" >"$ps/.port/tools/untracked-pin.sh"
+  printf 'old\0%s\0' "$fixture_pin" >"$ps/.port/tools/gates/__pycache__/stale.pyc"
+  printf 'short=%s\n' "${fixture_pin:20:7}" >"$ps/.port/tools/tracked-piece.txt"
+  printf 'short=%s\n' "${fixture_pin:20:7}" >"$ps/.port/tools/untracked-piece.txt"
+  printf 'OTHER=%s\n' "$p2" >"$ps/.port/tools/gates/tracked-hex.sh"
+  printf 'OTHER=%s\n' "$p2" >"$ps/.port/tools/gates/untracked-hex.sh"
+  printf '__pycache__/\n' >"$ps/.gitignore"
+  printf '%s\n' "$fixture_pin" >"$base/notrepo/.port/tools/gates/ORACLE_PIN"
+  if { clean_git -C "$ps" init -q && clean_git -C "$ps" add -- .gitignore \
+    .port/tools/gates/ORACLE_PIN .port/tools/tracked-pin.sh .port/tools/tracked-piece.txt \
+    .port/tools/gates/tracked-hex.sh && clean_git -C "$ps" commit -q -m pinscan; } >/dev/null 2>&1; then
+    got="$(pin_literal_hits "$ps" "$fixture_pin" | sort | tr '\n' ' ')"
+    got="$got| $(pin_piece_hits "$ps" "$fixture_pin" | sort | tr '\n' ' ')"
+    got="$got| $(hex40_hits "$ps" | sort | tr '\n' ' ')"
+    want7=".port/tools/tracked-pin.sh | .port/tools/tracked-piece.txt .port/tools/tracked-pin.sh | .port/tools/gates/tracked-hex.sh "
+    if [ "$got" = "$want7" ]; then r=0; else r=1; fi
+    arm "$r" "7a-7c scan tracked files only: tracked copies caught; untracked and gitignored (.pyc) ignored" "got '$got', want '$want7'"
+    rc=0; pin_literal_hits "$base/notrepo" "$fixture_pin" >/dev/null || rc=$?
+    if [ "$rc" = "2" ]; then r=0; else r=1; fi
+    arm "$r" "7a-7c are BLOCKED (2), not a pass, where git cannot list the files" "rc=$rc"
+  else
+    blocked_arm "7a-7c scan tracked files only (fixture)" "could not build the pin-scan fixture repository"
+  fi
 
   # 8. D10's oracle READ, end to end, under a GIT_DIR + GIT_WORK_TREE decoy (and
   #    the retired override), from a cwd outside the fixture: `--print-oracle-
@@ -426,40 +497,99 @@ _rustty_oracle_self_test() {
   #       BARE mention of the variable, i.e. one not written `$VAR`/`${VAR...}`:
   #       `VAR=`, `printf -v VAR`, `read VAR`, `declare`/`local`/`readonly`/
   #       `export VAR`, `mapfile VAR`, `unset VAR`, plus `${VAR:=}`/`${VAR=}`.
+  #     `git` is counted after deleting every `"`, `'` and `\`, so a spliced or
+  #     escaped spelling (`gi''t`, `gi\t`, `eval "g""it ..."`) reads as `git`.
+  #     An escape that encodes a letter or digit (`$'\x67it'`, `\147`, `\u0067`)
+  #     is not allowed in any reader, and in the Node and Python readers no line
+  #     may form `git` by joining string literals (`'g'+'it'`, `"g" "it"`).
   #     A legitimate edit that changes a count must go through
-  #     `rustty_oracle_git` and update the count here in the same commit.
+  #     `rustty_oracle_git` and update the count here in the same commit; the
+  #     FAIL line names the spec entry to change. Arm 10s proves each of these
+  #     spellings goes RED on a copy of a real reader.
   tok_count() { tr -c 'A-Za-z0-9_' '\n' | grep -cx "$1"; } # whole-word count on stdin
-  local spec file var nmark ngit nbare body assigns plain marks ngot nbgot
+  # A backslash escape whose value is an ASCII letter or digit: hex `\xHH`,
+  # `\u00HH`, `\u{HH}`, `\U000000HH`, octal `\060`-`\077` / `\1NN` (with or
+  # without a leading 0), and Python's `\N{...}`. None of the readers needs one.
+  local esc_alnum='\\(x(3[0-9]|[46][1-9A-Fa-f]|[57][0-9Aa])|u(00(3[0-9]|[46][1-9A-Fa-f]|[57][0-9Aa])|\{0*(3[0-9]|[46][1-9A-Fa-f]|[57][0-9Aa])\})|U000000(3[0-9]|[46][1-9A-Fa-f]|[57][0-9Aa])|0?[67][0-7]|0?1[0-7][0-7]|N\{)'
+  # Lines (not whole-line `#`/`//` comments) where joining adjacent string
+  # literals, with or without `+`, makes a `git` word the line did not have.
+  concat_git() {
+    awk -v Q="'" -v B='`' '
+      function ngit(s,  a, m, i, n) {
+        gsub(/[^A-Za-z0-9_]+/, " ", s); m = split(s, a, " "); n = 0
+        for (i = 1; i <= m; i++) if (a[i] == "git") n++
+        return n
+      }
+      /^[ \t]*(#|\/\/)/ { next }
+      { j = $0; gsub("[\"" Q B "][ \t]*[+]?[ \t]*[\"" Q B "]", "", j)
+        if (ngit(j) > ngit($0)) print FILENAME ":" FNR ": " $0 }' "$@"
+  }
+  # struct_sh_check <path> <spec: file var nmark ngit nbare>: sets sc_r, sc_detail.
+  local sc_r sc_detail
+  struct_sh_check() {
+    local path="$1" file var nmark ngit nbare body sbody assigns plain marks ngot nbgot nesc
+    read -r file var nmark ngit nbare <<<"$2"
+    body="$(grep -vE '^[[:space:]]*#' "$path")"
+    sbody="$(printf '%s\n' "$body" | tr -d "\"'\\\\")"
+    marks="$(printf '%s\n' "$body" | grep -c 'R5-selftest-fixture')"
+    assigns="$(printf '%s\n' "$body" | grep -v 'R5-selftest-fixture' |
+      grep -cE "(^|[^A-Za-z0-9_\$])$var\+?=|(^|[^A-Za-z0-9_])read( -[A-Za-z]+)*( [A-Za-z_][A-Za-z0-9_]*)* $var([^A-Za-z0-9_]|\$)|(^|[^A-Za-z0-9_])printf[[:space:]].*-v[[:space:]]*[\"']?$var([^A-Za-z0-9_]|\$)|\\\$\{$var:?=")"
+    plain="$(printf '%s\n' "$sbody" | grep -E "(^|[^A-Za-z0-9_./-])git[[:space:]]" |
+      grep -E "\\\$\{?$var([^A-Za-z0-9_]|\$)" | head -3)"
+    ngot="$(printf '%s\n' "$sbody" | tok_count git)"
+    nbgot="$(printf '%s\n' "$body" | sed -E "s/\\\$\{?[!#]?$var//g" | tok_count "$var")"
+    nbgot=$((nbgot + $(printf '%s\n' "$body" | grep -oE "\\\$\{$var:?=" | wc -l)))
+    nesc="$(printf '%s\n' "$body" | grep -cE "$esc_alnum")"
+    sc_detail="assignments=$assigns (want 1), fixture-marked=$marks (want $nmark), git words=$ngot (want $ngit), bare $var=$nbgot (want $nbare), letter/digit escapes=$nesc (want 0), plain git: ${plain:-none}"
+    if [ "$assigns" = "1" ] && [ "$marks" = "$nmark" ] && [ -z "$plain" ] &&
+      [ "$ngot" = "$ngit" ] && [ "$nbgot" = "$nbare" ] && [ "$nesc" = "0" ]; then
+      sc_r=0
+    else
+      sc_r=1
+      sc_detail="$sc_detail. A new oracle read must go through rustty_oracle_git; if this change is intended, update the entry '$file $var $nmark $ngit $nbare' in arm 10's spec table in .port/tools/gates/_oracle_root.sh to '$file $var $marks $ngot $nbgot' in the same commit (plain git and escapes are never allowed)"
+    fi
+  }
+  # node_check <path>: the Node reader, likewise; sets sc_r, sc_detail.
+  node_check() {
+    local body assigns plain ngot nesc joined
+    body="$(grep -vE '^[[:space:]]*//' "$1")"
+    assigns="$(printf '%s\n' "$body" | grep -cE '(^|[^A-Za-z0-9_])ORACLE[[:space:]]*=[^=]')"
+    plain="$(printf '%s\n' "$body" | grep -cE "(execFileSync|execSync|spawnSync|spawn|exec)\([[:space:]]*[\"'\`]git[\"'\`]")"
+    ngot="$(printf '%s\n' "$body" | tok_count git)"
+    nesc="$(printf '%s\n' "$body" | grep -cE "$esc_alnum")"
+    joined="$(concat_git "$1" | head -3)"
+    sc_detail="assignments=$assigns (want 1), git spawn sites=$plain (want 1), git words=$ngot (want 3), letter/digit escapes=$nesc (want 0), git formed by joining literals: ${joined:-none}"
+    if [ "$assigns" = "1" ] && [ "$plain" = "1" ] && [ "$ngot" = "3" ] && [ "$nesc" = "0" ] &&
+      [ -z "$joined" ]; then
+      sc_r=0
+    else
+      sc_r=1
+      sc_detail="$sc_detail. A new oracle read must go through oracleGit; if this change is intended, update the counts in node_check in .port/tools/gates/_oracle_root.sh arm 10 in the same commit (joined literals and escapes are never allowed)"
+    fi
+  }
+  # py_forms_git <dir>: Python lines under <dir> that spell `git` by joining
+  # literals, or hold a letter/digit escape.
+  py_forms_git() {
+    find "$1" -name '*.py' -type f -print | sort | while IFS= read -r f; do
+      concat_git "$f"
+      grep -nE "$esc_alnum" "$f" | sed "s|^|$f:|"
+    done
+  }
+  local spec eol_spec=".port/tools/gates/check_eol_fidelity.sh ORACLE 0 12 1"
   for spec in \
-    ".port/tools/gates/check_eol_fidelity.sh ORACLE 0 12 1" \
+    "$eol_spec" \
     ".port/tools/gates/run_differential.sh GHOSTTY 5 3 6" \
     ".port/tools/macos-parity/menu-shortcut-parity.sh GHOSTTY_ROOT 0 0 1" \
     ".port/tools/stb-resize-oracle/run.sh ORACLE_REPO 0 1 1" \
     ".port/tools/gates/check_bench_tests.sh ORACLE 0 2 4" \
     ".port/tools/gates/check_lz4_byte_exact.sh ORACLE 0 3 3" \
     ".port/tools/gates/check_rustty_vt_headers.sh GH 0 2 1"; do
-    read -r file var nmark ngit nbare <<<"$spec"
-    body="$(grep -vE '^[[:space:]]*#' "$root/$file")"
-    marks="$(printf '%s\n' "$body" | grep -c 'R5-selftest-fixture')"
-    assigns="$(printf '%s\n' "$body" | grep -v 'R5-selftest-fixture' |
-      grep -cE "(^|[^A-Za-z0-9_\$])$var\+?=|(^|[^A-Za-z0-9_])read( -[A-Za-z]+)*( [A-Za-z_][A-Za-z0-9_]*)* $var([^A-Za-z0-9_]|\$)|(^|[^A-Za-z0-9_])printf[[:space:]].*-v[[:space:]]*[\"']?$var([^A-Za-z0-9_]|\$)|\\\$\{$var:?=")"
-    plain="$(printf '%s\n' "$body" | grep -E "(^|[^A-Za-z0-9_./-])[\"']?git[\"']?[[:space:]]" |
-      grep -E "\\\$\{?$var([^A-Za-z0-9_]|\$)" | head -3)"
-    ngot="$(printf '%s\n' "$body" | tok_count git)"
-    nbgot="$(printf '%s\n' "$body" | sed -E "s/\\\$\{?[!#]?$var//g" | tok_count "$var")"
-    nbgot=$((nbgot + $(printf '%s\n' "$body" | grep -oE "\\\$\{$var:?=" | wc -l)))
-    if [ "$assigns" = "1" ] && [ "$marks" = "$nmark" ] && [ -z "$plain" ] &&
-      [ "$ngot" = "$ngit" ] && [ "$nbgot" = "$nbare" ]; then r=0; else r=1; fi
-    arm "$r" "$(basename "$file"): \$$var assigned once; no plain \`git ... \$$var\` on one line; git words and bare \$$var mentions at their fixed counts" \
-      "assignments=$assigns (want 1), fixture-marked=$marks (want $nmark), git words=$ngot (want $ngit), bare $var=$nbgot (want $nbare), plain git: ${plain:-none}"
+    read -r file var _ <<<"$spec"
+    struct_sh_check "$root/$file" "$spec"
+    arm "$sc_r" "$(basename "$file"): \$$var assigned once; no plain \`git ... \$$var\` on one line; no letter escapes; git words and bare \$$var mentions at their fixed counts" "$sc_detail"
   done
-  body="$(grep -vE '^[[:space:]]*//' "$root/.port/tools/check-vt-struct-layouts.mjs")"
-  assigns="$(printf '%s\n' "$body" | grep -cE '(^|[^A-Za-z0-9_])ORACLE[[:space:]]*=[^=]')"
-  plain="$(printf '%s\n' "$body" | grep -cE "(execFileSync|execSync|spawnSync|spawn|exec)\([[:space:]]*[\"'\`]git[\"'\`]")"
-  ngot="$(printf '%s\n' "$body" | tok_count git)"
-  if [ "$assigns" = "1" ] && [ "$plain" = "1" ] && [ "$ngot" = "3" ]; then r=0; else r=1; fi
-  arm "$r" "check-vt-struct-layouts.mjs: ORACLE assigned once, git spawned (either quote style) only in oracleGit, git words at their fixed count" \
-    "assignments=$assigns (want 1), git spawn sites=$plain (want 1), git words=$ngot (want 3)"
+  node_check "$root/.port/tools/check-vt-struct-layouts.mjs"
+  arm "$sc_r" "check-vt-struct-layouts.mjs: ORACLE assigned once, git spawned (either quote style) only in oracleGit, git words at their fixed count, no joined or escaped git" "$sc_detail"
   plain="$(grep -rnE --include='*.py' "[\"']git[\"'],[[:space:]]*[\"']-C[\"']" "$root/.port/tools" | grep -vF "$here/_gatelib.py:")"
   others="$(grep -rnE --include='*.py' "[\"']git[\"'],[[:space:]]*[\"']-C[\"']" "$here/_gatelib.py" | wc -l | tr -d ' ')"
   if [ -z "$plain" ] && [ "$others" = "1" ]; then r=0; else r=1; fi
@@ -467,6 +597,59 @@ _rustty_oracle_self_test() {
   plain="$(grep -rnE --include='*.py' 'cwd=ORACLE' "$root/.port/tools" | grep -v 'git_env()')"
   if [ -z "$plain" ]; then r=0; else r=1; fi
   arm "$r" "Python: every git call with cwd=ORACLE passes env=git_env()" "$plain"
+  plain="$(py_forms_git "$root/.port/tools" | head -3)"
+  if [ -z "$plain" ]; then r=0; else r=1; fi
+  arm "$r" "Python: no line forms git by joining literals or with a letter/digit escape" \
+    "$plain (a new oracle read must go through _gatelib.oracle_git)"
+
+  # 10s. The structural checks above, on COPIES of real readers with one bypass
+  #      line added each (the R13-G F4 review's list, plus the octal spelling):
+  #      every one must go RED, and the unmodified copy must stay GREEN.
+  local sd="$base/struct" line
+  mkdir -p "$sd/py"
+  cp "$root/.port/tools/gates/check_eol_fidelity.sh" "$sd/eol.sh"
+  cp "$root/.port/tools/check-vt-struct-layouts.mjs" "$sd/node.mjs"
+  struct_sh_check "$sd/eol.sh" "$eol_spec"
+  r="$sc_r"; node_check "$sd/node.mjs"; [ "$sc_r" = "0" ] || r=1
+  arm "$r" "10s. unmodified copies of G-EOL and the Node reader pass the structural checks" "$sc_detail"
+  while IFS= read -r line; do
+    cp "$root/.port/tools/gates/check_eol_fidelity.sh" "$sd/eol.sh"
+    printf '%s\n' "$line" >>"$sd/eol.sh"
+    struct_sh_check "$sd/eol.sh" "$eol_spec"
+    if [ "$sc_r" = "1" ]; then r=0; else r=1; fi
+    arm "$r" "10s. G-EOL copy + \`$line\` is RED" "$sc_detail"
+  done <<'BYPASS_SH'
+gi''t -C "$ORACLE" rev-parse HEAD
+gi\t -C "$ORACLE" rev-parse HEAD
+$'\x67it' -C "$ORACLE" rev-parse HEAD
+$'\147it' -C "$ORACLE" rev-parse HEAD
+eval "g""it -C \"\$ORACLE\" rev-parse HEAD"
+BYPASS_SH
+  while IFS= read -r line; do
+    cp "$root/.port/tools/check-vt-struct-layouts.mjs" "$sd/node.mjs"
+    printf '%s\n' "$line" >>"$sd/node.mjs"
+    node_check "$sd/node.mjs"
+    if [ "$sc_r" = "1" ]; then r=0; else r=1; fi
+    arm "$r" "10s. Node reader copy + \`$line\` is RED" "$sc_detail"
+  done <<'BYPASS_JS'
+execFileSync('g'+'it', ['-C', ORACLE, 'rev-parse', 'HEAD']);
+execFileSync(`gi` + `t`, ['-C', ORACLE, 'rev-parse', 'HEAD']);
+execFileSync('\x67it', ['-C', ORACLE, 'rev-parse', 'HEAD']);
+BYPASS_JS
+  printf 'import subprocess\nsubprocess.run(["echo", "-C"])\n' >"$sd/py/clean.py"
+  plain="$(py_forms_git "$sd/py")"
+  if [ -z "$plain" ]; then r=0; else r=1; fi
+  arm "$r" "10s. a clean Python file passes" "$plain"
+  while IFS= read -r line; do
+    printf 'import subprocess\n%s\n' "$line" >"$sd/py/bypass.py"
+    plain="$(py_forms_git "$sd/py")"
+    if [ -n "$plain" ]; then r=0; else r=1; fi
+    arm "$r" "10s. Python + \`$line\` is RED" "nothing flagged"
+  done <<'BYPASS_PY'
+subprocess.run(["g" + "it", "-C", ORACLE])
+subprocess.run(["g" "it", "-C", ORACLE])
+subprocess.run(["\x67it", "-C", ORACLE])
+BYPASS_PY
 
   # 11. The gates that read the oracle at a FIXED path (and G4's guard) prove
   #     their own reads and BLOCKED paths on hermetic fixtures.

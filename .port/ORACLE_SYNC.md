@@ -18,9 +18,10 @@ it is the SHA referenced by `.port/PORT_RULES.md` (R12 main-parity tracking) and
 The gates read this SHA from **one** checked-in file, `.port/tools/gates/ORACLE_PIN`: a single line
 holding the full 40-hex commit, lower-case, with no other content. The shell gates read it through
 `rustty_oracle_pin` (`.port/tools/gates/_oracle_root.sh`) and the Python gates through
-`_gatelib.oracle_pin()`. G-ORACLE-SH-SELF checks that the two readers agree, that no other file
-under `.port/tools` spells the SHA (in full, or as any 7-hex piece of it), and that no other file in
-`.port/tools/gates` holds a 40-hex constant. The SHA in the block above is the human record;
+`_gatelib.oracle_pin()`. G-ORACLE-SH-SELF checks that the two readers agree, that no other tracked
+file under `.port/tools` spells the SHA (in full, or as any 7-hex piece of it), and that no other
+tracked file in `.port/tools/gates` holds a 40-hex constant. Untracked and ignored files (a stale
+`__pycache__/*.pyc`, say) are not scanned: they are not the repository's content. The SHA in the block above is the human record;
 `ORACLE_PIN` is what the gates enforce, and the two must always be equal.
 
 - **G-EOL arm 3, G4's staleness guard and G-LOGFILE** require the oracle's HEAD to equal
@@ -126,7 +127,7 @@ agent depends on that tree standing still. Advancing therefore requires:
      at the new pin. G4's guard checks only HEAD == `ORACLE_PIN`, and cannot tell that
      `zig-out/include` was built at an older commit;
    - run `bash .port/tools/gates/_oracle_root.sh --self-test` (G-ORACLE-SH-SELF). Its pin arms
-     fail if the new SHA, whole or as a 7-hex piece, was copied into another `.port/tools` file,
+     fail if the new SHA, whole or as a 7-hex piece, was copied into another tracked `.port/tools` file,
      or if any 40-hex constant other than `ORACLE_PIN`'s (the old SHA, say) sits in
      `.port/tools/gates`. They look only for the current pin, so the **old** SHA, abbreviated
      anywhere or whole in a `.port/tools` file outside `gates/`, is not caught by them.

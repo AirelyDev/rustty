@@ -446,7 +446,8 @@ open(p, "wb").write(bytes(data))' "$tmpg"
 #   e-k. a copy of the gate run end to end in a fixture checkout, so the
 #      production pin-read line itself runs: ORACLE_PIN naming another commit,
 #      naming the oracle's HEAD, missing, empty, 39 hex, upper-case (j2: with
-#      no F, which a locale-collated `[a-f]` accepted), CRLF ->
+#      no F, which a locale-collated `[a-f]` accepted; run under
+#      LC_ALL=en_US.UTF-8 whatever the caller's locale), CRLF ->
 #      each BLOCKED exit 3 with its reason (never a silent `set -e` exit 1)
 # ---------------------------------------------------------------------------
 run_self_test_oracle() {
@@ -527,9 +528,9 @@ run_self_test_oracle() {
     export GHOSTTY="$tmp/decoy" GIT_DIR="$tmp/decoy/.git" GIT_WORK_TREE="$tmp/decoy"  # R5-selftest-fixture
     "$@"
   )
-  run_copy() { # sets copy_rc / copy_out
-    copy_rc=0
-    copy_out="$(copy_env bash "$co/.port/tools/gates/run_differential.sh" --progress 2>&1)" || copy_rc=$?
+  run_copy() { # run_copy [NAME=VALUE...]: sets copy_rc / copy_out; the copy runs
+    copy_rc=0 #  under this same bash, with the given variables added to its env
+    copy_out="$(copy_env env "$@" "${BASH:-bash}" "$co/.port/tools/gates/run_differential.sh" --progress 2>&1)" || copy_rc=$?
   }
   pin_arm() { # pin_arm <label> <want-substring>
     if [ "$copy_rc" = "3" ] && [[ "$copy_out" == *"$2"* ]]; then
@@ -556,8 +557,30 @@ run_self_test_oracle() {
   printf '%s\n' "$lay_head" | tr 'a-f' 'A-F' >"$pinfile"; run_copy
   pin_arm "j. copy: ORACLE_PIN upper-case" "$malformed"
   # j2. upper-case with no `F`: a locale-collated `[a-f]` range accepts it.
-  printf '%s\n' "$lay_head" | tr 'a-f' 'A-F' | tr 'F' 'E' >"$pinfile"; run_copy
-  pin_arm "j2. copy: ORACLE_PIN upper-case without an F" "$malformed"
+  #     That needs a collating locale (bash 3.2, as on macOS, under en_US), so
+  #     the copy runs under LC_ALL=en_US.UTF-8 whatever the caller's locale:
+  #     a range reverted into `rustty_oracle_pin` goes RED here even when the
+  #     self-test itself runs under LC_ALL=C. The probe line says whether this
+  #     bash really collates `[a-f]` under that locale (bash 5 has
+  #     `globasciiranges` on, so there the range is ASCII and the bug cannot
+  #     occur). Fallback: with no en_US UTF-8 locale installed, the arm runs
+  #     under the caller's locale and says so; such a machine cannot show the
+  #     bug either, since the bug needs that locale.
+  local j2_loc="" j2_note j2_all
+  j2_all="$(locale -a 2>/dev/null)" || j2_all="" # (not piped into grep -q: pipefail + SIGPIPE)
+  if printf '%s\n' "$j2_all" | grep -iE '^en_US\.utf-?8$' >/dev/null; then j2_loc="en_US.UTF-8"; fi
+  if [ -n "$j2_loc" ]; then
+    if env LC_ALL="$j2_loc" "${BASH:-bash}" -c 'case A in [a-f]) exit 0 ;; esac; exit 1'; then
+      j2_note="LC_ALL=$j2_loc; this bash collates [a-f] there, so a reverted range is caught"
+    else
+      j2_note="LC_ALL=$j2_loc; this bash's [a-f] is ASCII there (globasciiranges), so the bug cannot occur"
+    fi
+  else
+    j2_note="fallback: no en_US UTF-8 locale installed, ran under the caller's locale"
+  fi
+  printf '%s\n' "$lay_head" | tr 'a-f' 'A-F' | tr 'F' 'E' >"$pinfile"
+  if [ -n "$j2_loc" ]; then run_copy LC_ALL="$j2_loc"; else run_copy; fi
+  pin_arm "j2. copy: ORACLE_PIN upper-case without an F ($j2_note)" "$malformed"
   printf '%s\r\n' "$lay_head" >"$pinfile"; run_copy
   pin_arm "k. copy: ORACLE_PIN with a CRLF line ending" "$malformed"
 
