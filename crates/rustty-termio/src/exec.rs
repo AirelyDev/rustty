@@ -7022,6 +7022,13 @@ mod tests {
     // `.port/tools/repro_subprocess_hang.sh` (pre-fix 12/12 hangs, post-fix
     // 0 hangs) plus the `killPid bounded wait` divergence entry in
     // `.port/phase-2/DEFERRALS.md`.
+    //
+    // (Task R13-D, UD93: the two objections above are answered by
+    // `kill_pid_abandons_a_child_that_ignores_sighup`. The deadline is now a
+    // parameter of `kill_pid_until`, so the test waits 300 ms rather than
+    // `KILL_ABANDON`, and its child ignores SIGHUP from before `exec` rather
+    // than wedging, so it is SIGKILLable and is killed and reaped afterwards.
+    // It exercises the deadline itself; the `?Es` wedge stays out-of-suite.)
 
     // A trivial `AppMailbox` test double: it accepts every push (returns a
     // non-zero queue size) and records nothing. Enough for the exit / termios /
