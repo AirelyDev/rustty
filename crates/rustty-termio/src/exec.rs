@@ -4603,6 +4603,19 @@ impl ReadThread {
         //     log.err("read thread exiting, pty fd must be non-blocking", .{});
         //     return;
         // }
+        //
+        // PORT NOTE (R7, checked under R13 by task R13-C, inventory M88): the
+        // early return below would leave the pty with no reader (the `?Es`
+        // wedge `drain_pty_master_once` exists for), but it is not reachable,
+        // so it stays faithful. `fd` is the pty master `threadEnter` opened
+        // and keeps open until this thread is joined, and `F_GETFL`/`F_SETFL`
+        // on an open descriptor fails only for an invalid one. Measured on
+        // macOS 26.5.1 (XNU also pushes `FIONBIO` to the tty, which accepts
+        // it): a fresh master, a master whose slave is closed, and a master
+        // whose session leader has exited all take `O_NONBLOCK`; only a closed
+        // descriptor fails (`EBADF`). On Linux, `setfl` refuses only
+        // `O_APPEND`/`O_DIRECT`/`O_NOATIME` changes, which this call does not
+        // make (by reading; not measured, the VM was down).
         if !Self::setNonblock(fd) {
             // log.err("read thread exiting, pty fd must be non-blocking", .{});
             log::error!(target: LOG_SCOPE, "read thread exiting, pty fd must be non-blocking");
