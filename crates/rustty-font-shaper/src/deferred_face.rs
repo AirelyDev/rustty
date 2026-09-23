@@ -317,6 +317,15 @@ mod coretext_payload {
                 let Some(family_name) = ct_font_copy_family_name(&ct.font) else {
                     return Ok(b"unknown");
                 };
+                // PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD110.
+                // The reference never releases this +1 copy (nor the display
+                // name's in `name`, nor `Face.name`'s), on the `cstringPtr`
+                // return or the `cstring(buf)` one: each call leaks a retain on
+                // the name string (measured on a font loaded from data; a system
+                // font's names are immortal). `CFRetained` releases it at scope
+                // end; the bytes are copied into `buf` first, so nothing borrows
+                // the string (LEDGER S85-F6 / S90-F3: the port therefore has no
+                // zero-copy return for a name longer than `buf`).
                 let s = family_name.to_string();
                 let bytes = s.as_bytes();
                 if bytes.len() > buf.len() {
@@ -350,6 +359,8 @@ mod coretext_payload {
                 // `CTFontCopyDisplayName` can return NULL (the reference `pkg/macos`
                 // wrapper is `copyDisplayName(self: *Font) ?*foundation.String`);
                 // fall back to the family name when it does (d166c05ed).
+                // PORT NOTE: reference defect (R13), UD110 — the copy is
+                // released at scope end (see `family_name`).
                 let Some(display_name) = ct_font_copy_display_name(&ct.font) else {
                     // orelse return self.familyName(buf);
                     return self.family_name(buf);
@@ -1495,6 +1506,74 @@ mod tests {
                 variations: Vec::new(),
             }),
         }
+    }
+
+    /// UD110 (R13, task R13-D): the reference leaks the +1 name string on every
+    /// `DeferredFace.name`/`familyName` and CoreText `Face.name` call. For a font
+    /// loaded from data CoreText hands back the SAME string object on each copy
+    /// (measured), so a leaked +1 shows up as a rising retain count. The port
+    /// must leave it where it was after many calls.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn coretext_name_lookups_release_the_copied_name_string() {
+        use objc2_core_foundation::CFString;
+        extern "C" {
+            fn CFGetRetainCount(cf: *const core::ffi::c_void) -> isize;
+        }
+        let rc = |s: &CFString| unsafe { CFGetRetainCount((s as *const CFString).cast()) };
+        // Independent copies (not the code under test): CTFontCopyAttribute
+        // (family) and CTFontCopyDisplayName, each +1 in an owning handle.
+        let copy_family = |f: &objc2_core_text::CTFont| {
+            unsafe { f.attribute(objc2_core_text::kCTFontFamilyNameAttribute) }
+                .unwrap()
+                .downcast::<CFString>()
+                .unwrap()
+        };
+        let copy_display = |f: &objc2_core_text::CTFont| unsafe { f.display_name() };
+
+        let mut def = coretext_deferred(rustty_font::embedded::VARIABLE);
+        let font = def.ct.as_ref().unwrap().font.clone();
+        let family = copy_family(&font);
+        let display = copy_display(&font);
+        // Preconditions: each copy returns the one object we hold, and it is not
+        // an immortal constant, so a leaked retain is visible in its count.
+        assert!(std::ptr::eq(&*family, &*copy_family(&font)));
+        assert!(std::ptr::eq(&*display, &*copy_display(&font)));
+        let (family_rc, display_rc) = (rc(&family), rc(&display));
+        assert!(family_rc < 1_000_000 && display_rc < 1_000_000);
+
+        let mut buf = [0u8; 1024];
+        for _ in 0..100 {
+            assert_eq!(b"JetBrains Mono", def.family_name(&mut buf).unwrap());
+            assert!(!def.name(&mut buf).unwrap().is_empty());
+        }
+        assert_eq!(family_rc, rc(&family), "familyName released its copy");
+        assert_eq!(display_rc, rc(&display), "name released its copy");
+
+        // The loaded CoreText `Face`'s own `name`.
+        let face = crate::face::coretext::Face::init(
+            crate::library::Library::init().unwrap(),
+            rustty_font::embedded::VARIABLE,
+            crate::face::Options {
+                size: crate::face::DesiredSize {
+                    points: 12.0,
+                    xdpi: crate::face::DEFAULT_DPI,
+                    ydpi: crate::face::DEFAULT_DPI,
+                },
+                freetype_load_flags: crate::face::FREETYPE_LOAD_FLAGS_DEFAULT,
+            },
+        )
+        .unwrap();
+        let face_family = copy_family(&face.font);
+        let face_rc = rc(&face_family);
+        assert!(face_rc < 1_000_000);
+        for _ in 0..100 {
+            assert_eq!(b"JetBrains Mono", face.name(&mut buf).unwrap());
+        }
+        assert_eq!(face_rc, rc(&face_family), "Face.name released its copy");
+
+        drop((family, display, face_family));
+        def.deinit();
     }
 
     /// S85-F2: a font whose CoreText family name is NULL (here: a font file with

@@ -634,6 +634,9 @@ impl Face {
     // `buf`, returning a sub-slice of it (identical bytes); over-long names that
     // don't fit `buf` map the reference's `orelse error.OutOfMemory`.
     pub fn name<'a>(&self, buf: &'a mut [u8]) -> Result<&'a [u8], Error> {
+        // PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD110. The
+        // reference never releases the +1 `copyFamilyName` result; here the
+        // `CFRetained` releases it at scope end, after the copy into `buf`.
         let family_name = unsafe { self.font.family_name() };
         let s = family_name.to_string();
         let bytes = s.as_bytes();
