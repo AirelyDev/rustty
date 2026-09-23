@@ -920,12 +920,21 @@ fn push_int(out: &mut Vec<u8>, mut v: i64) {
 // comment for why the registration belongs at each entry point.
 use crate::install_wasm_log_backend;
 
-/// `export fn face_new(ptr, len, pts, p) ?*Face`
+/// `export fn face_new(ptr: [*]const u8, len: usize, pts: u16, p: u16) ?*Face`
+// PORT NOTE (`pts: u16`, NEW-FINDINGS N73, task R13-D2): the reference export
+// takes the size as a `u16` (points) and widens it into `initNamed`'s `f32`
+// `DesiredSize.points`; only the inner `face_new_` takes `f32`
+// (`web_canvas.zig:494`, `:498`). This export took `f32`, which accepted a
+// fractional size the reference cannot receive. Every caller (the JS glue in
+// `example/wasm-web-canvas/index.html` and `.port/tools/web-canvas-instantiate.mjs`)
+// passes a whole number, which a wasm `i32` parameter receives unchanged. The
+// `const` below pins the reference's parameter types at compile time.
+const _: extern "C" fn(*const u8, usize, u16, u16) -> *mut Face = rustty_wc_face_new;
 #[no_mangle]
 pub extern "C" fn rustty_wc_face_new(
     ptr: *const u8,
     len: usize,
-    pts: f32,
+    pts: u16,
     presentation: u16,
 ) -> *mut Face {
     install_wasm_log_backend();
@@ -943,8 +952,9 @@ pub extern "C" fn rustty_wc_face_new(
     } else {
         Presentation::Emoji
     };
+    // .{ .points = pts } — the `u16` widened into the `f32` field.
     let size = DesiredSize {
-        points: pts,
+        points: f32::from(pts),
         xdpi: super::DEFAULT_DPI,
         ydpi: super::DEFAULT_DPI,
     };
