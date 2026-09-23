@@ -3034,14 +3034,19 @@ R13-L2 with the same method, after against before: 0.998 / 1.004 / 0.999, no cha
   `crates/rustty-vt/src/pagelist/grow.rs` (`clone_row_grow_capacity`),
   `crates/rustty-vt/src/page_impl.rs` (`clone_partial_row_degrade`).
 
-On a very wide terminal (>= 47,932 columns, shipped macOS) whose page's style set is genuinely full of
-live styles at the `u16` ceiling (65,535), the reference's row-copy retry loops `@panic` when
-`increaseCapacity(.styles)` returns `OutOfSpace`: the callers (IL/DL, a scroll, an erase across a page
-boundary) have already rotated rows, so a crash is chosen over a half-mutated page list. MEASURED
-reachable in both ReleaseSafe (SIGABRT) and ReleaseFast (`panic:` trap) against a scratch
-`libghostty-vt` build (task R13-X). A terminal narrower than 9,585 columns cannot reach it (its standard
-page holds fewer cells than the 47,923 live styles the set needs before it stops rehashing; see UD131's
-reachability for the bound). The port instead completes the copy: when a capacity increase returns
+The reference's row-copy retry loops `@panic` when `increaseCapacity(.styles)` returns `OutOfSpace`: the
+callers (IL/DL, a scroll, an erase across a page boundary) have already rotated rows, so a crash is
+chosen over a half-mutated page list. This is reachable on an ORDINARY 80×24 terminal from ~700 bytes of
+output (task R13-X3): 32 foreground colours whose unseeded, deterministic style hashes share their low 16
+bits stay clustered at every capacity doubling and drive the ref-counted set's PSL-overflow OutOfMemory
+arm (`ref_counted_set.zig:268`), so `increaseCapacity(.styles)` climbs to the 65,535 ceiling and returns
+`OutOfSpace` on a page holding only ~32 live styles — no wide terminal and no full set needed. (A SECOND
+route needs a wide terminal, >= 47,932 columns on shipped macOS, whose page's style set is genuinely full
+of 53,247 distinct live styles at the ceiling; that width threshold belongs to that route only.) MEASURED
+reachable in both ReleaseSafe (SIGABRT) and ReleaseFast (`panic:` trap) against a scratch `libghostty-vt`
+build: the 80-column PSL route (task R13-X3) and the wide distinct-styles route (task R13-X). Every width
+is reachable via the PSL route; task R13-X's "a terminal narrower than 9,585 columns cannot reach it" was
+wrong (it missed the PSL arm) and is removed. The port instead completes the copy: when a capacity increase returns
 `OutOfSpace` it degrades THAT dimension only and retries, so the other dimensions (graphemes, hyperlinks,
 strings) still grow, a style already in the set is still stored, and only the parts of cells that fail
 in a degraded dimension fall back to the default — at the style ceiling, the style of cells that bring a
@@ -3056,4 +3061,88 @@ of 3,000 graphemes lost, grapheme capacity left at 512 bytes); the per-dimension
 it, with mixed-row tests against a control copy, release-only VT tests of every route, a once-per-copy
 log test and a debug re-clone counter (UD131 "test").
 
-**state**: CLOSED by task R13-X (per-dimension degrade: task R13-X2).
+Update (task R13-X3): the R13-X2 review found the reachability was understated — the crash is reachable
+on an ORDINARY 80×24 terminal via the style set's PSL-overflow arm, not only on a wide terminal with a
+full live set. UD131's severity is raised to HIGH (a remotely reachable DoS: ~700 bytes of ordinary
+output crash Ghostty at 80×24) and its `upstream status` says to report it privately via a GitHub
+security advisory. An 80-column debug test (`ud131_delete_lines_degrades_on_an_ordinary_80_column_terminal`,
+`terminal.rs`) and a control (31 colours) run in the default suite and on Linux aarch64, with a
+restore-the-`@panic` negative control; a pure table test covers the non-style degrade arms; the
+release VT tests now assert integrity through `verify_integrity` (real in release); the log wording is
+"cell part(s)". The port behaviour is unchanged — it already degrades this route correctly.
+
+**state**: CLOSED by task R13-X (per-dimension degrade: task R13-X2; reachability and records corrected
+by task R13-X3).
+
+## N81 — the log-reconcile gate cannot declare a PORT-ONLY emission, so each one masks one future reference-site loss
+
+- **id**: N81. Not in the inventory.
+- **found by**: task R13-X3, closing the R13-X2 review's blocking item 2 (the G-LOGFILE allowance that hid a real missing reference site).
+- **severity**: low (a gate-sensitivity gap, not a port defect). **kind**: gate-gap.
+- **gate**: `.port/tools/gates/check_log_reconcile.py` (G-LOGFILE), reconciling against `.port/parity-closure/LOG-PORTMAP.tsv`.
+
+The gate counts each port arm's live emissions and compares against the reference file's live `log.*`
+sites, with `deficit = max(0, reference − port)` and an allowance ratchet. It has two declaration files:
+`LOG-TEXT-DIVERGENCES.tsv` (a reference site whose message text the port changed) and
+`LOG-DEAD-SITES.tsv` (an unreachable reference site subtracted from the expectation). NEITHER can express
+a PORT-ONLY emission — a diagnostic the port emits that has no reference counterpart. Such an emission is
+silently counted toward its file's port total, and because a surplus is clamped (`max(0, …)`), it cannot
+even be seen: it OVER-CREDITS the file by one and thereby masks one future loss of a real reference site
+in that file (the gate stays green until a SECOND site is also lost).
+
+Concretely (task R13-X3): `src/terminal/PageList.zig` has 23 live reference sites. The port arm
+(`pagelist/{erase,grow,mod,resize}.rs`) emits 24 — the 23 reference-matched sites plus one PORT-ONLY R13
+diagnostic, the row-copy degrade warning `log_row_degrade` (call site `grow.rs:594`, UPSTREAM-DEFECTS.md
+UD131), which the reference does not have (it `@panic`s there instead). MEASURED: with `PageList.zig:775`
+(`assertIntegrity`'s `log.err`) restored as `mod.rs:1943`, the arm reads 23 reference / 24 port, deficit
+0, GREEN. Removing `:775` again leaves 23/23 — still GREEN — even though a real reference site is now
+missing: the +1 over-credit absorbs it. Only once the over-credit is subtracted (MEASURED by stubbing
+`log_row_degrade` so the gate stops counting its call site) does removing `:775` drop the arm to 22/23,
+deficit 1, RED. So the +1 currently masks exactly one future reference-site loss in `PageList.zig`.
+
+Tasks R13-X/R13-X2 hit this: R13-X added the port-only line (raising 22/23 to 23/23) and R13-X2 tightened
+the allowance from 1 to 0 citing the wrong precedent (R13-P, which had added a genuine counterpart of a
+reference site, not a port-only line). The correct precedent is `src/apprt/embedded.zig` (commit
+`d130c504`), where port-only D11 range guards were declared a deliberate over-credit and the ratchet
+forced allowance 0. The LOG-PORTMAP reason is rewritten to that form by task R13-X3.
+
+**proposed remedy** (NOT implemented here): a message-keyed `LOG-PORT-ONLY.tsv` whose rows are SUBTRACTED
+from the port count of a declared reference file. It would carry a `#!port-only-cap` two-way ratchet (a
+missing directive is BLOCKED), a self-test arm, and a RED check if a declared message is absent from the
+port. With that in place, the `PageList.zig` +1 (and the `embedded.zig` over-credit, which should then be
+revisited) would be declared and subtracted, so removing `:775` would correctly go RED. This is a gate
+change to `check_log_reconcile.py` and its ledger; it is recorded, not applied, in this round.
+
+**state**: OPEN (remedy proposed, not implemented).
+
+## N82 — the port's hyperlink hash is SipHash where the reference's is Wyhash (observable through the PSL arm)
+
+- **id**: N82. Not in the inventory. Predates this round.
+- **found by**: the R13-X2 review (recorded by task R13-X3); the UD131 PSL route is what makes the
+  difference observable.
+- **severity**: low. **kind**: R1 fidelity candidate (a divergence from the reference that is in principle
+  observable, not yet shown to break a user-facing behaviour).
+- **oracle**: `src/terminal/hyperlink.zig` — the `hyperlink.Set` context hashes a hyperlink with
+  `std.hash.Wyhash.init(0)`.
+- **rustty**: `crates/rustty-vt/src/hyperlink.rs:376` uses `std::collections::hash_map::DefaultHasher`
+  (SipHash-1-3). Its PORT NOTE argues the hyperlink hash is never oracle-compared and that "any
+  self-consistent hash is parity-preserving".
+
+That argument is what UD131 undercuts. The ref-counted set's PSL-overflow arm (`ref_counted_set.zig:268`)
+turns the hash into observable behaviour: WHICH inputs collide in their low bits decides which inputs
+drive the set to `OutOfMemory`, and so which inputs the reference crashes on (UD131) or the port degrades.
+For STYLES the port's hash matches the reference (`std.hash.int`, MEASURED: the 32 UD131 colours cluster
+identically in both), so the crash/degrade inputs coincide. For HYPERLINKS they do not: SipHash and
+Wyhash cluster different URI sets, so a hyperlink-ceiling PSL trigger reachable on the reference
+(`hyperlink_bytes` is `u16`, so the map has a reachable ceiling) would need a DIFFERENT set of URIs on the
+port, and vice versa. No user-visible divergence has been constructed — the sets are internal and the port
+degrades safely where the reference would crash — so this is a candidate, not a confirmed R1 break.
+
+**evidence**: UD131 (the style hash matches, MEASURED; the mechanism by which an unseeded set hash becomes
+observable); `hyperlink.rs:376` vs `hyperlink.zig` (`DefaultHasher` vs `Wyhash.init(0)`).
+
+**proposed fix** (NOT applied here): if adopted as R1, port the hyperlink context hash as Wyhash (as N88's
+style-set work aligned the style item layout), so the port and reference cluster hyperlinks identically.
+Not fixed in this round; recorded for adjudication.
+
+**state**: OPEN (R1 candidate).

@@ -23120,9 +23120,7 @@ mod tests {
             }
             buf.extend_from_slice(b"\x1b[0m");
             // 'Y' with a NEW style on the first row of page 2.
-            buf.extend_from_slice(
-                format!("\x1b[{};1H\x1b[48;2;1;2;3mY\x1b[0m", b + 1).as_bytes(),
-            );
+            buf.extend_from_slice(format!("\x1b[{};1H\x1b[48;2;1;2;3mY\x1b[0m", b + 1).as_bytes());
             // DL at row 2 pulls page 2's first row (Y) into the full page 1.
             buf.extend_from_slice(b"\x1b[2;1H\x1b[M");
             st.next_slice(&buf);
@@ -23153,8 +23151,7 @@ mod tests {
         // The first colliding cell (active row 1, untouched by DL at row 2) keeps
         // its non-default style: only the UNSTORABLE cell degrades.
         let first = t.active_mut().pages.get_cell(active_pt(0, 0)).unwrap();
-        let first_colliding_kept =
-            unsafe { (*first.cell).style_id() } != crate::style::DEFAULT_ID;
+        let first_colliding_kept = unsafe { (*first.cell).style_id() } != crate::style::DEFAULT_ID;
 
         // Integrity holds across every page (real check in a debug build).
         let mut node = t.active_mut().pages.pages.first;
