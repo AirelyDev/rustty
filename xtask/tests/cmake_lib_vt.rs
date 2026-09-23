@@ -20,10 +20,7 @@ fn configure(tag: &str) -> Option<PathBuf> {
         eprintln!("SKIPPED: cmake is not on PATH");
         return None;
     }
-    let dir = std::env::temp_dir().join(format!(
-        "xtask-cmake-lib-vt-{tag}-{}",
-        std::process::id()
-    ));
+    let dir = std::env::temp_dir().join(format!("xtask-cmake-lib-vt-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     let out = Command::new("cmake")
         .arg("-S")
@@ -121,10 +118,7 @@ fn install_layout_is_versioned_like_the_reference() {
     };
     let meta = std::fs::symlink_metadata(lib.join(&real)).expect("real name installed");
     assert!(meta.file_type().is_file());
-    assert_eq!(
-        std::fs::read_link(lib.join(&so)).unwrap(),
-        Path::new(&real)
-    );
+    assert_eq!(std::fs::read_link(lib.join(&so)).unwrap(), Path::new(&real));
     assert_eq!(std::fs::read_link(lib.join(&link)).unwrap(), Path::new(&so));
     assert!(lib.join("librustty-vt.a").is_file());
     assert!(!lib.join("librustty_vt_c.a").exists());
@@ -139,8 +133,9 @@ fn install_layout_is_versioned_like_the_reference() {
         // The first entry after the path line is the library's own id.
         let id = text.lines().nth(1).unwrap_or_default().trim().to_string();
         assert!(
-            id.starts_with("@rpath/librustty-vt.dylib (compatibility version 1.0.0, current version")
-                && id.contains(&format!("current version {v}")),
+            id.starts_with(
+                "@rpath/librustty-vt.dylib (compatibility version 1.0.0, current version"
+            ) && id.contains(&format!("current version {v}")),
             "{text}"
         );
     }
@@ -150,9 +145,7 @@ fn install_layout_is_versioned_like_the_reference() {
         .unwrap();
     assert_eq!(field(&pc, "Libs:"), "-L${libdir} -lrustty-vt");
     let pcs = std::fs::read_to_string(lib.join("pkgconfig/librustty-vt-static.pc"))
-        .or_else(|_| {
-            std::fs::read_to_string(prefix.join("share/pkgconfig/librustty-vt-static.pc"))
-        })
+        .or_else(|_| std::fs::read_to_string(prefix.join("share/pkgconfig/librustty-vt-static.pc")))
         .unwrap();
     assert_eq!(field(&pcs, "Libs:"), "${libdir}/librustty-vt.a");
     let _ = std::fs::remove_dir_all(&dir);
