@@ -75,8 +75,20 @@ local iteration.
 | exit | meaning | ci.sh effect |
 |---|---|---|
 | `0` | PASS, or (PROGRESS gate) progress-green while crates are stubs | not a failure |
-| `3` | BLOCKED — a contract/tooling input is missing | **WARNING** (surfaced, never a silent green) |
+| `3` | BLOCKED — a contract/tooling input is missing | **WARNING** (surfaced, never a silent green); the summary line carries the gate's own `BLOCKED` reason line(s) |
 | other non-zero | RED | HARD gate ⇒ fails CI; PROGRESS gate ⇒ a *claimed-done crate regressed* ⇒ fails CI (R5) |
+
+In the `WARNINGS` summary each BLOCKED gate is followed by up to three
+`reason:` lines, copied from the `BLOCKED` lines the gate printed. A gate that
+is an expected warning on a lane (G4, G-EOL, D10, G-LOGFILE on CI) can
+therefore not hide a new, different reason behind the same gate id: read the
+reason, not just the id.
+
+For the oracle gates, exit 3 means the oracle is **absent, off the pin
+(`.port/tools/gates/ORACLE_PIN`), or dirty**, or the pin file itself is missing
+or malformed: G-EOL arm 3, G4's staleness guard and G-LOGFILE need the oracle's
+HEAD to equal `ORACLE_PIN`; D10 needs the oracle to have that commit (it reads
+`src/stb` at the pin, whatever HEAD is). See `.port/ORACLE_SYNC.md`.
 
 ---
 
@@ -126,7 +138,12 @@ never a fake HARD claim; `ci.yml` prints an explicit
 binding byte-exact differential is the LOCAL run, where `build_ref_driver.sh` /
 `build_port_driver.sh` produce both drivers and any diff is RED (exit 1) and
 fails ci.sh. (G1b `check_test_counts.py` is local-only for the same R3 reason:
-the ghostty oracle checkout is absent on CI ⇒ probe exits 3 BLOCKED.)
+the ghostty oracle checkout is absent on CI ⇒ probe exits 3 BLOCKED.) Locally,
+G4's driver-source staleness guard also BLOCKS (exit 3) when the oracle is
+absent, is not at `ORACLE_PIN`, lacks a built `zig-out/include`, or there is no
+C compiler, and when `ORACLE_PIN` is missing or malformed. G-EOL, D10 and
+G-LOGFILE are BLOCKED on CI for the same no-oracle reason; `ci.yml`'s policy
+note names all of them.
 
 ---
 

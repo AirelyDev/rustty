@@ -309,7 +309,8 @@ the divergence is decided explicitly per site, never inherited silently:
 
 - A standing main-parity workflow (`.port/phase-2/wf-main-parity.js`, lands via
   plan Task 19; ledger `.port/phase-2/MAIN_PARITY.md`) enumerates every
-  upstream ghostty commit (since the pinned reference SHA, `20abdb50a` — advanced
+  upstream ghostty commit (since the pinned reference SHA, `20abdb50a`
+  (machine-readable: `.port/tools/gates/ORACLE_PIN`, the one file the gates read) — advanced
   from `4749c4e9` by `P3-W10 T3` on 2026-07-31, from `6ad1fe7d8` by the
   Phase-4 resync on 2026-08-17, from `12967b68f` by the Phase-5 resync on
   2026-08-25, from `683d8db64` by the gap-close on 2026-08-26, then from
@@ -321,7 +322,8 @@ the divergence is decided explicitly per site, never inherited silently:
   `/Users/gael/projects/ghostty` stays read-only: `git fetch` is the one
   sanctioned write (remote refs only), never checkout/pull/reset. The **sole**
   exception is a deliberate pin advance, which requires that no other lane is
-  active and follows the checklist in `.port/ORACLE_SYNC.md` ("Advancing the pin").
+  active and follows the checklist in `.port/ORACLE_SYNC.md` ("Advancing the pin"),
+  which updates `ORACLE_PIN` in the same commit as this rule's SHA.
   Note `.port/phase-2/MAIN_PARITY.md` was triaged at `53bd14fec` scoped to
   `src/`+`include/`, so it cannot speak for `53bd14fec..6ad1fe7d8`; the Phase-3
   record is `docs/superpowers/plans/2026-07-29-phase3-upstream-resync.md` + `.port/phase-3/`.

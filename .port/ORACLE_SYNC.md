@@ -15,6 +15,24 @@ There is **one** sync point. The oracle working tree is checked out (detached) a
 it is the SHA referenced by `.port/PORT_RULES.md` (R12 main-parity tracking) and
 `.port/cycle-analysis.md`.
 
+The gates read this SHA from **one** checked-in file, `.port/tools/gates/ORACLE_PIN`: a single line
+holding the full 40-hex commit, lower-case, with no other content. The shell gates read it through
+`rustty_oracle_pin` (`.port/tools/gates/_oracle_root.sh`) and the Python gates through
+`_gatelib.oracle_pin()`. G-ORACLE-SH-SELF checks that the two readers agree, that no other file
+under `.port/tools` spells the SHA (in full, or as any 7-hex piece of it), and that no other file in
+`.port/tools/gates` holds a 40-hex constant. The SHA in the block above is the human record;
+`ORACLE_PIN` is what the gates enforce, and the two must always be equal.
+
+- **G-EOL arm 3, G4's staleness guard and G-LOGFILE** require the oracle's HEAD to equal
+  `ORACLE_PIN`; G-EOL also requires a clean `test/fuzz-libghostty/corpus`. On a mismatch they
+  report BLOCKED (exit 3), which ci.sh shows as a WARNING, never GREEN.
+- **D10** reads `src/stb/*` at the `ORACLE_PIN` commit (`git show "$PIN:…"`), whatever the oracle's
+  HEAD is. It reports BLOCKED only when the oracle does not have that commit, so it does **not**
+  flag an `ORACLE_PIN` that was left behind after an advance.
+- A missing or malformed `ORACLE_PIN` is BLOCKED, never a pass. G4's `--self-test-oracle` runs a
+  copy of G4 against a missing, empty, 39-hex, upper-case and CRLF file to prove it.
+- **G-BENCH, G-LZ4 and A5** read `origin/main` and ignore the pin.
+
 Verify with:
 
 ```sh
@@ -99,8 +117,19 @@ agent depends on that tree standing still. Advancing therefore requires:
 3. A recorded **before** state for the tree-reading gates — at minimum G3b
    (`check_comment_coverage.py`) and G1b (`check_test_counts.py`).
 4. A recorded **after** state and a per-crate delta in **both** directions.
-5. `.port/ORACLE_SYNC.md`, `.port/PORT_RULES.md` (R12) and `.port/cycle-analysis.md` updated
-   together, and a commit message stating which range the advance absorbed.
+5. `.port/tools/gates/ORACLE_PIN` (the full 40-hex SHA, one line), `.port/ORACLE_SYNC.md`,
+   `.port/PORT_RULES.md` (R12) and `.port/cycle-analysis.md` are updated **together in one
+   commit**, and the commit message states which range the advance absorbed. Until `ORACLE_PIN`
+   names the new HEAD, G-EOL, G4 and G-LOGFILE report BLOCKED on every local run. D10 does not,
+   and keeps reading the old pin's `src/stb`. Then:
+   - rebuild the oracle's `zig-out/include` and re-run `.port/phase-0/harness/build_ref_driver.sh`
+     at the new pin. G4's guard checks only HEAD == `ORACLE_PIN`, and cannot tell that
+     `zig-out/include` was built at an older commit;
+   - run `bash .port/tools/gates/_oracle_root.sh --self-test` (G-ORACLE-SH-SELF). Its pin arms
+     fail if the new SHA, whole or as a 7-hex piece, was copied into another `.port/tools` file,
+     or if any 40-hex constant other than `ORACLE_PIN`'s (the old SHA, say) sits in
+     `.port/tools/gates`. They look only for the current pin, so an abbreviated **old** SHA
+     elsewhere is not caught by them.
 
 **Advancing is bidirectional — do not model it as "the stale reference sentences disappear".**
 `P3-W10 T3` measured this. The gates re-read the *same pinned file list* (from the phase-0
