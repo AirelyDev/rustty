@@ -312,10 +312,22 @@ pub(crate) fn initial_size_px(
 
 /// `@as(u32, @intFromFloat(@ceil(v)))`, which traps on an infinite value or
 /// one outside `u32` in safety-checked builds; `None` there instead (R13,
-/// UD59). A NaN does NOT trap there: it converts to `0` (measured on arm64 and
-/// x86_64, every build mode, task R13-P2). `None` for it too is the port's
-/// choice — `0 + padding` is not a window size — and reaching it takes a NaN
-/// content scale from the embedder.
+/// UD59).
+///
+/// PORT NOTE (R13, UD59; decided by task R13-C): a NaN does NOT trap there.
+/// With a NaN content scale the reference's `recomputeInitialSize` computes a
+/// size of 0 and sends 0 plus the padding (measured, Zig 0.16.0: `8` for an
+/// 800 px width and 4 px padding a side, Debug, ReleaseSafe and ReleaseFast,
+/// arm64 and x86_64 under Rosetta 2). The port returns `None` and so takes the
+/// function's own skip path. Why not match the 0: the language makes a
+/// conversion with no `u32` result illegal behaviour (`@intFromFloat` docs),
+/// the safety check merely lets NaN through, and the 0 is what LLVM's
+/// `fptoui` of a NaN (a poison value) happens to lower to on these two
+/// targets; it is not a size anything asked for. A content scale that cannot
+/// size the window is the same case as a size that does not fit, and UD59's
+/// handling for that is the skip. Reaching it takes a NaN content scale from
+/// the embedder (`rustty_surface_set_content_scale`, or `scale_factor` in the
+/// surface config).
 fn u32_from_ceil(v: f32) -> Option<u32> {
     let c = v.ceil();
     // NaN is outside every range, so `contains` rejects it too.
@@ -429,6 +441,95 @@ mod r13_window_size_overflow_tests {
                 SCALE
             )
         );
+    }
+
+    /// UD71 (R13, task R13-C): `Surface.zig:437-455` `scaledPadding` and the
+    /// padding sums in `renderer/size.zig`. `window-padding-x = 4294967295` at
+    /// 144 dpi is out of `u32` (the reference traps on the cast); `window-padding-y
+    /// = 2147483648` at 72 dpi converts, but its top + bottom overflows `u32` in
+    /// `subPadding` (the reference traps there). The port saturates both, and the
+    /// grid keeps its one-cell minimum.
+    #[test]
+    fn an_oversized_window_padding_saturates_and_leaves_a_one_cell_grid() {
+        // Positive control: an ordinary padding is scaled by the dpi.
+        let cfg = load(b"window-padding-x = 2\nwindow-padding-y = 3\n");
+        let mut dc = DerivedConfig::init(Allocator, &cfg).unwrap();
+        let pad = dc.scaledPadding(144.0, 144.0);
+        assert_eq!((4, 4, 6, 6), (pad.left, pad.right, pad.top, pad.bottom));
+        dc.deinit();
+
+        let cfg = load(b"window-padding-x = 4294967295\nwindow-padding-y = 2147483648\n");
+        assert_eq!(
+            u32::MAX,
+            cfg.window_padding_x.top_left,
+            "the value reaches the config"
+        );
+        let mut dc = DerivedConfig::init(Allocator, &cfg).unwrap();
+        let pad = dc.scaledPadding(144.0, 72.0);
+        dc.deinit();
+        assert_eq!(
+            (u32::MAX, u32::MAX),
+            (pad.left, pad.right),
+            "saturated, not trapped"
+        );
+        assert_eq!(
+            (1 << 31, 1 << 31),
+            (pad.top, pad.bottom),
+            "in range; the SUM is not"
+        );
+
+        let mut sz = size(10, 20, 0);
+        sz.padding = pad;
+        assert_eq!(
+            rendererpkg::size::ScreenSize {
+                width: 0,
+                height: 0
+            },
+            sz.terminal(),
+            "the padding leaves no room"
+        );
+        let grid = sz.grid();
+        assert_eq!((1, 1), (grid.columns, grid.rows), "the grid keeps one cell");
+        let blank = sz.screen.blank_padding(pad, grid, sz.cell);
+        assert_eq!((0, 0), (blank.right, blank.bottom));
+
+        // Surface.init's balancing path with the same explicit padding.
+        sz.balance_padding(pad, configpkg::value_types::WindowPaddingBalance::True);
+        assert_eq!((1, 1), (sz.grid().columns, sz.grid().rows));
+    }
+
+    /// `u32_from_ceil` on a NaN (task R13-C). The reference's `@as(u32,
+    /// @intFromFloat(@ceil(width_f32 / scale.x)))` with a NaN content scale does
+    /// not trap: it yields 0, so it would send an initial size of 0 plus the
+    /// padding (measured, Zig 0.16.0, `final_width = 8` for 800 px and 4 px
+    /// padding a side, Debug/ReleaseSafe/ReleaseFast, arm64 and x86_64 under
+    /// Rosetta 2). The port skips instead; see `u32_from_ceil`.
+    #[test]
+    fn initial_size_px_with_a_nan_content_scale_takes_the_skip_path() {
+        let cfg = load(b"window-width = 80\nwindow-height = 24\n");
+        // Positive control: the same config with a real scale.
+        assert_eq!(
+            Some((80 * 10 + 8, 24 * 20 + 8)),
+            initial_size_px(cfg.window_width, cfg.window_height, size(10, 20, 4), SCALE)
+        );
+        for scale in [
+            apprt::ContentScale {
+                x: f32::NAN,
+                y: 1.0,
+            },
+            apprt::ContentScale {
+                x: 1.0,
+                y: f32::NAN,
+            },
+        ] {
+            assert_eq!(
+                None,
+                initial_size_px(cfg.window_width, cfg.window_height, size(10, 20, 4), scale),
+                "a NaN content scale ({scale:?}) sends no initial size"
+            );
+        }
+        assert_eq!(None, u32_from_ceil(f32::NAN));
+        assert_eq!(Some(0), u32_from_ceil(-0.5), "ceil(-0.5) is -0, which is 0");
     }
 
     #[test]
@@ -1225,6 +1326,20 @@ impl DerivedConfig {
     //
     // (first callsite: `Surface::init`, chunk C6 — Surface.zig:536; more land
     // C8 :2514 / C11 :3630.)
+    //
+    // PORT NOTE: reference defect (R13), UD71. Each side is
+    // `@intFromFloat(@floor(padding * dpi / 72))`, a safety-checked cast of a
+    // config value (`window-padding-x`/`-y`, any `u32`) scaled by the
+    // embedder's content scale. `window-padding-x = 4294967295` at 72 dpi, or
+    // 3000000000 at 144 dpi (Retina), is out of `u32`: ReleaseSafe panics
+    // "integer part of floating point value out of bounds" at startup,
+    // ReleaseFast yields 4294967295 (measured, Zig 0.16.0). The port's `as u32`
+    // saturates to that same 4294967295 — a padding "as large as it goes",
+    // which the reference already treats as a padding wider than the window
+    // (one-cell grid, the "Is your padding reasonable?" warning). A NaN dpi
+    // gives 0 in both trees. What made the saturated value safe downstream is
+    // the saturating padding sums in `rustty-render-types` (`sub_padding`,
+    // `blank_padding`, `balance_padding`), which overflowed before.
     fn scaledPadding(&self, x_dpi: f32, y_dpi: f32) -> rendererpkg::size::Padding {
         // const padding_top: u32 = padding_top: {
         //     const padding_top: f32 = @floatFromInt(self.window_padding_top);

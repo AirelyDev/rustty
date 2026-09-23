@@ -270,7 +270,14 @@ impl Size {
                 // first row. The maximum is the balanced explicit horizontal
                 // padding plus half a cell width. Any excess is shifted to
                 // the bottom.
-                let max_top = (explicit.left + explicit.right + self.cell.width) / 2;
+                //
+                // PORT NOTE: reference defect (R13), UD71 — the sum saturates
+                // (see `ScreenSize::sub_padding`).
+                let max_top = explicit
+                    .left
+                    .saturating_add(explicit.right)
+                    .saturating_add(self.cell.width)
+                    / 2;
                 let vshift = self.padding.top.saturating_sub(max_top);
                 self.padding.top -= vshift;
                 self.padding.bottom += vshift;
@@ -446,10 +453,24 @@ pub struct ScreenSize {
 
 impl ScreenSize {
     /// Subtract padding from the screen size.
+    //
+    // PORT NOTE: reference defect (R13), UD71. The reference saturates the
+    // subtraction (`-|`) but ADDS the two paddings unchecked, so a
+    // `window-padding-x`/`-y` of 2147483648 or more per side (at 72 dpi)
+    // overflows `u32`: ReleaseSafe panics "integer overflow", ReleaseFast wraps
+    // the padding to nothing (measured, Zig 0.16.0). The sum saturates here, so
+    // a padding wider than the screen leaves no room for the grid, which the
+    // reference already handles (the grid keeps one cell and `resize` warns
+    // "Is your padding reasonable?"). The same for `blank_padding` and
+    // `Size::balance_padding`.
     pub fn sub_padding(self, padding: Padding) -> ScreenSize {
         ScreenSize {
-            width: self.width.saturating_sub(padding.left + padding.right),
-            height: self.height.saturating_sub(padding.top + padding.bottom),
+            width: self
+                .width
+                .saturating_sub(padding.left.saturating_add(padding.right)),
+            height: self
+                .height
+                .saturating_sub(padding.top.saturating_add(padding.bottom)),
         }
     }
 
@@ -460,8 +481,9 @@ impl ScreenSize {
     pub fn blank_padding(self, padding: Padding, grid: GridSize, cell: CellSize) -> Padding {
         let grid_width = grid.columns as u32 * cell.width;
         let grid_height = grid.rows as u32 * cell.height;
-        let padded_width = grid_width + (padding.left + padding.right);
-        let padded_height = grid_height + (padding.top + padding.bottom);
+        // (R13, UD71 — saturating; see `sub_padding`.)
+        let padded_width = grid_width.saturating_add(padding.left.saturating_add(padding.right));
+        let padded_height = grid_height.saturating_add(padding.top.saturating_add(padding.bottom));
 
         // Note these have to use a saturating subtraction to avoid underflow
         // because our padding can cause the padded sizes to be larger than

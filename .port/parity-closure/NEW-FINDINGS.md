@@ -2518,3 +2518,19 @@ stored first when installing, `display` skips a null context, and the note is co
 defect: `UPSTREAM-DEFECTS.md` UD70.
 
 **state**: CLOSED by task R13-C.
+
+## N59 — a `window-padding` of 2^31 or more panicked on the padding sums
+
+- **id**: N59. Not in the inventory (found by task R13-P; decided by task R13-C).
+- **found by**: task R13-P (the `scaledPadding` cast); task R13-C (the downstream sums).
+- **severity**: low. **kind**: missing-branch (reference defect, R13).
+- **oracle**: `src/Surface.zig:437-455`; `src/renderer/size.zig:72`, `:199-214`.
+- **rustty**: `crates/rustty-render-types/src/lib.rs` (`sub_padding`, `blank_padding`, `balance_padding`);
+  `crates/rustty-core/src/surface.rs` (`scaledPadding`, note only).
+
+The port's saturating `as u32` in `scaledPadding` looked safe, but two paddings of 2^31 or more
+(`window-padding-x = 2147483648`, or anything the cast saturated) overflowed `left + right` in
+`sub_padding`, and release keeps overflow checks, so the port panicked where the reference does. The
+padding sums now saturate, leaving a one-cell grid. Reference defect: `UPSTREAM-DEFECTS.md` UD71.
+
+**state**: CLOSED by task R13-C.
