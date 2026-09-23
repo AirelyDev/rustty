@@ -1414,6 +1414,14 @@ fn draw<'a>(vx: &mut Vaxis<'a>, st: &mut DrawState<'a>) {
             });
             // const theme = self.themes[self.filtered.items[self.current]];  (issue-4 guard)
             //   allocPrint "theme = {s}" → arena-duped; empty filter → skip the line.
+            //   PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD94. The
+            //   reference indexes the list here with no check (`list_themes.zig:838-839`).
+            //   Enter on a filter that matched nothing switches to `.save`, `draw` has
+            //   reset `current` to 0 (`:656-658`), and `filtered.items[0]` on the empty
+            //   list traps (ReleaseSafe: index out of bounds; ReleaseFast: an
+            //   out-of-bounds read). With nothing selected there is no theme to name,
+            //   so the `theme = …` line is left empty and the rest of the save
+            //   instructions still draw. Test: `draw_smoke_save_empty_guard`.
             let theme_line: &[u8] = if !st.filtered.is_empty() {
                 let theme = &themes[st.filtered[st.current]];
                 let mut v: Vec<u8> = Vec::new();
@@ -2677,9 +2685,10 @@ mod picker_tests {
     /// UD94 (R13, task R13-D): the key handlers on a filter that matches
     /// nothing. The reference indexes `filtered.items[current]` for `c`/`C`
     /// (`list_themes.zig:486`, `:492`) and sets `current = filtered.items.len - 1`
-    /// for End (`:443`, `:470`), which underflow or read out of bounds on an
-    /// empty list, and `updateFiltered` reads an `undefined` `selected` when the
-    /// old list was empty (`:336-338`, `:414`). The port guards `c`/`C`, lets End
+    /// for End (`:470`), which underflow or read out of bounds on an empty
+    /// list (the save-pane draw, `:838-839`, is covered by
+    /// `draw_smoke_save_empty_guard`), and `updateFiltered` reads an
+    /// `undefined` `selected` when the old list was empty (`:336-338`, `:414`). The port guards `c`/`C`, lets End
     /// wrap (the draw resets `current` before any index), and carries
     /// `selected` as an `Option`.
     ///
