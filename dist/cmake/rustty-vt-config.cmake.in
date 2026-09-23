@@ -57,19 +57,11 @@ if(NOT TARGET rustty-vt::rustty-vt-static)
         INTERFACE_COMPILE_DEFINITIONS "RUSTTY_STATIC"
     )
     if(APPLE)
-        # Base list from `rustc --print native-static-libs` (order matters). The
-        # static archive also pulls in rustty-os's i18n object, which references
-        # gettext; on macOS that needs an external libintl (brew install gettext).
-        find_library(_rustty_intl intl
-            HINTS /opt/homebrew/opt/gettext/lib /opt/homebrew/lib
-                  /usr/local/opt/gettext/lib /usr/local/lib)
-        if(NOT _rustty_intl)
-            set(_rustty_intl "intl")
-        endif()
+        # Base list from `rustc --print native-static-libs` (order matters). No
+        # libintl: the archive bundles its own vendored one (S64-F6).
         set_target_properties(rustty-vt::rustty-vt-static PROPERTIES
-            INTERFACE_LINK_LIBRARIES "c++;-framework CoreFoundation;-framework Foundation;iconv;${_rustty_intl};System;objc;c;m"
+            INTERFACE_LINK_LIBRARIES "c++;-framework CoreFoundation;-framework Foundation;iconv;System;objc;c;m"
         )
-        unset(_rustty_intl)
     elseif(WIN32)
         set_target_properties(rustty-vt::rustty-vt-static PROPERTIES
             INTERFACE_LINK_LIBRARIES "ntdll;kernel32;ws2_32;userenv;bcrypt;advapi32"

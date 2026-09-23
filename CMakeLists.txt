@@ -231,21 +231,16 @@ set_target_properties(rustty-vt-static PROPERTIES
 if(APPLE)
     # Rust std + the crate's C deps on macOS. The base list is the authoritative
     # `rustc --print native-static-libs` output for rustty-vt-c (order matters).
-    # Additionally, the static archive pulls in rustty-os's i18n object, which
-    # references gettext (bindtextdomain/dgettext/textdomain). Unlike Linux
-    # (glibc provides these), macOS needs an external libintl — install gettext
-    # (`brew install gettext`). This is only required for the STATIC library;
-    # the shared library dead-code-eliminates the unused i18n path.
-    find_library(RUSTTY_INTL_LIBRARY intl
-        HINTS /opt/homebrew/opt/gettext/lib /opt/homebrew/lib
-              /usr/local/opt/gettext/lib /usr/local/lib)
-    if(NOT RUSTTY_INTL_LIBRARY)
-        message(WARNING "libintl (gettext) not found; static linking of "
-            "rustty-vt-static may fail. Install gettext (brew install gettext).")
-        set(RUSTTY_INTL_LIBRARY "intl")
-    endif()
+    #
+    # No libintl (S64-F6). The gettext calls rustty-os's i18n object makes
+    # (bindtextdomain/dgettext/textdomain) resolve inside the archive: the
+    # vendored `gettext-sys` libintl is bundled into it (measured: `nm` shows
+    # them defined in librustty_vt_c.a, and a static link of
+    # example/c-vt-cmake-static with no -lintl runs). CORRECTION (2026-09-23):
+    # this block used to find_library() a Homebrew libintl and link it, on the
+    # premise that macOS "needs an external libintl".
     set_target_properties(rustty-vt-static PROPERTIES
-        INTERFACE_LINK_LIBRARIES "c++;-framework CoreFoundation;-framework Foundation;iconv;${RUSTTY_INTL_LIBRARY};System;objc;c;m"
+        INTERFACE_LINK_LIBRARIES "c++;-framework CoreFoundation;-framework Foundation;iconv;System;objc;c;m"
     )
 elseif(WIN32)
     # Rust std on Windows (MSVC) uses these system import libraries.
@@ -327,11 +322,10 @@ install(
 # `-lc++` IS required. Asserting the reference's "no libc++" property would be
 # asserting something untrue of this build.
 if(APPLE)
-    # RUSTTY_INTL_LIBRARY was resolved above (find_library, with Homebrew
-    # hints). Emit the FULL path: a bare `-lintl` does not resolve on macOS
-    # without also emitting the -L for the Homebrew gettext prefix, and a .pc
-    # that hands consumers an unresolvable flag is worse than none.
-    set(RUSTTY_VT_PC_LIBS_PRIVATE "-lc++ -framework CoreFoundation -framework Foundation -liconv ${RUSTTY_INTL_LIBRARY} -lobjc -lc -lm")
+    # No libintl, and so no machine-specific absolute path in an installed file
+    # (S64-F6): the archive carries its own vendored libintl (see
+    # rustty-vt-static above).
+    set(RUSTTY_VT_PC_LIBS_PRIVATE "-lc++ -framework CoreFoundation -framework Foundation -liconv -lobjc -lc -lm")
 elseif(WIN32)
     set(RUSTTY_VT_PC_LIBS_PRIVATE "-lntdll -lkernel32 -lws2_32 -luserenv -lbcrypt -ladvapi32")
 else()

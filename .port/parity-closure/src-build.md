@@ -55,7 +55,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** Shared/static library install layout differs: no versioned real name, soname symlinks, compatibility_version, or libghostty-vt-style basenames
   - **Oracle:** `src/build/GhosttyLibVt.zig:384-490` → **Rustty:** `CMakeLists.txt:122-145,267-274`
   - **Audit's suggested fix:** In the CMake install step (and xtask), rename/copy the cargo artifacts to `librustty-vt.<X.Y.Z>.{dylib,so}` + `.<X>` + unversioned symlinks (install_name_tool -id @rpath/librustty-vt.dylib, or `-C link-arg=-Wl,-install_name,...,-compatibility_version,1.0.0` in a cargo config), install the static archive as `librustty-vt.a` / `rustty-vt-static.lib`, and point the .pc `Libs` at `-lrustty-vt`.
-- [ ] **S64-F6** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S64-F6** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** pkg-config Libs.private/Requires.private differ: rustty's static archive requires libc++ and (on macOS) an external libintl; the .pc files hardcode a Homebrew gettext path
   - **Oracle:** `src/build/GhosttyLibVt.zig:493-499,509-556,565-576` → **Rustty:** `CMakeLists.txt:231-249,329-346`
   - **Audit's suggested fix:** Drop the i18n object from the rustty-vt-c static archive (gate rustty-os's gettext bindings behind a feature that rustty-vt-c does not enable) so no libintl is needed; build simdutf/highway with `-nostdlib++`/no-libcxx flags (or link libc++ statically into the archive) so Libs.private can be empty like the oracle; never bake absolute Homebrew paths into an installed .pc.
