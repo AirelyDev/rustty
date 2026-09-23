@@ -3940,8 +3940,23 @@ fn killCommand(command: &mut Command<'static>) -> Result<(), KillError> {
 }
 
 // fn killPid(pid: c.pid_t) !void {
+//
+// PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD93. The reference
+// loop (`Exec.zig:1186-1214`) has no exit but reaping the child, so a child that
+// survives SIGHUP — one that ignores it, a slow cleanup, or a macOS `login(1)`
+// wedged in the kernel exit path (`?Es`) — keeps `killPid` spinning forever and
+// the surface never finishes closing. The port's `KILL_ABANDON` deadline (the
+// `[R1-DIVERGENCE: bounded kill wait]` note above) is that safe handling; the
+// deadline is a parameter of `kill_pid_until` so a test can drive it without
+// waiting ten seconds. Production always passes `KILL_ABANDON`.
 #[cfg(not(windows))]
 fn killPid(pid: libc::pid_t) -> Result<(), KillError> {
+    kill_pid_until(pid, KILL_ABANDON)
+}
+
+/// The body of [`killPid`], with the abandon deadline as a parameter (UD93).
+#[cfg(not(windows))]
+fn kill_pid_until(pid: libc::pid_t, abandon: std::time::Duration) -> Result<(), KillError> {
     // const pgid = getpgid(pid) orelse return;
     let pgid = match getpgid(pid) {
         Some(pgid) => pgid,
@@ -4039,7 +4054,7 @@ fn killPid(pid: libc::pid_t) -> Result<(), KillError> {
         // SLOW-but-reapable child is also abandoned here (accepted consequence,
         // see the note above) — but it is never killed, so its cleanup still
         // completes.
-        if elapsed >= KILL_ABANDON {
+        if elapsed >= abandon {
             // log.warn("child pid={} unreapable after {}s, abandoning", ...);
             return Err(KillError::Abandoned);
         }
@@ -6913,6 +6928,71 @@ mod tests {
             libc::close(fds.read);
         }
         subprocess.deinit();
+    }
+
+    /// UD93 (R13, task R13-D): a child that survives SIGHUP. The reference's
+    /// `killPid` spins until the child is reaped, forever for one that ignores
+    /// the signal. The port abandons it at the deadline. The child here ignores
+    /// SIGHUP from before its `exec` (set in `pre_exec`, so there is no race with
+    /// the first `killpg`) and is in its own session, as the real child is after
+    /// `setsid`, so `killpg` never reaches the test process. The deadline is
+    /// 300 ms (production: `KILL_ABANDON`); a stuck `killPid` is detected by a
+    /// 10 s watchdog, which SIGKILLs the child so the thread can finish.
+    #[cfg(not(windows))]
+    #[test]
+    fn kill_pid_abandons_a_child_that_ignores_sighup() {
+        use std::os::unix::process::CommandExt as _;
+        let mut cmd = std::process::Command::new("/bin/sleep");
+        cmd.arg("60");
+        // SAFETY: `setsid` and `signal` are async-signal-safe.
+        unsafe {
+            cmd.pre_exec(|| {
+                libc::setsid();
+                libc::signal(libc::SIGHUP, libc::SIG_IGN);
+                Ok(())
+            });
+        }
+        let child = cmd.spawn().expect("spawn sleep");
+        let pid = child.id() as libc::pid_t;
+        // `spawn` returns after `exec`, so `setsid` has run: the group is the
+        // child's own, never the test runner's.
+        assert_eq!(pid, unsafe { libc::getpgid(pid) });
+
+        const DEADLINE: std::time::Duration = std::time::Duration::from_millis(300);
+        let (tx, rx) = std::sync::mpsc::channel();
+        let started = std::time::Instant::now();
+        let worker = std::thread::spawn(move || {
+            let _ = tx.send(kill_pid_until(pid, DEADLINE));
+        });
+        let result = rx.recv_timeout(std::time::Duration::from_secs(10));
+        let elapsed = started.elapsed();
+        let alive = unsafe { libc::kill(pid, 0) } == 0;
+        // Clean up whatever happened: SIGKILL ends the child, which lets a stuck
+        // loop reap it and return.
+        unsafe {
+            libc::kill(pid, libc::SIGKILL);
+        }
+        worker.join().unwrap();
+        let mut status = 0;
+        unsafe {
+            libc::waitpid(pid, &mut status, 0);
+        }
+
+        let result = result.unwrap_or_else(|_| {
+            panic!("killPid did not return within 10 s for a child that ignores SIGHUP")
+        });
+        assert!(
+            matches!(result, Err(KillError::Abandoned)),
+            "the child is abandoned at the deadline, got {result:?}"
+        );
+        assert!(
+            elapsed >= DEADLINE,
+            "the loop kept signalling until the deadline ({elapsed:?})"
+        );
+        assert!(
+            alive,
+            "the child survived every SIGHUP, so the loop never reaped it"
+        );
     }
 
     // [I2 / review follow-up] REMOVED: `kill_pid_bounded_when_child_is_unreapable`.
