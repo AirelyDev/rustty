@@ -2076,8 +2076,13 @@ mod tests {
     // bytes short, and the test would not reach the boundary at all). The
     // search's result is asserted to lay out at exactly 2^32, so a platform on
     // which the construction does not reach the boundary fails here loudly
-    // instead of passing vacuously; on macOS arm64, where it was measured, it
-    // must also equal that constant.
+    // instead of passing vacuously; on macOS arm64 it must also equal the
+    // reference's own value there, 1,382,747,137: a Zig probe of `Page.layout`
+    // at the pin (test build, 48,151 x 215, 128 styles) lays that budget out
+    // at exactly 2^32 and one byte less at 2^32 - 16,384 (task R13-L2). The
+    // constant was 1,382,748,161 before NEW-FINDINGS N88 laid the style set
+    // out at the reference's item geometry, which moved the grapheme section's
+    // start by 1,024 bytes.
     #[test]
     fn decode_rejects_a_capacity_whose_exact_layout_is_one_past_the_limit() {
         let native = TerminalPageCapacity {
@@ -2124,7 +2129,10 @@ mod tests {
             crate::page::PAGE_SIZE_MIN
         );
         if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
-            assert_eq!(at_limit, 1_382_748_161, "the value measured on macOS arm64");
+            assert_eq!(
+                at_limit, 1_382_747_137,
+                "the reference's value on macOS arm64"
+            );
         }
         assert_eq!(
             Err(CapacityError::InvalidDimensions),
