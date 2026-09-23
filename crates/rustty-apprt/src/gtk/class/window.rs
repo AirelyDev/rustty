@@ -1066,7 +1066,11 @@ mod imp {
                         let clipboard_type: ClipboardEnum = args[1]
                             .get()
                             .expect("clipboard-write type is a GhosttyApprtClipboard");
-                        let text: String = args[2].get().expect("clipboard-write text is a string");
+                        // `text: [*:0]const u8`: read RAW. The payload may be
+                        // non-UTF-8 (an OSC 52 write; S56-F3), which
+                        // `Value::get::<String>()` would panic on.
+                        let text = crate::gtk::class::surface::raw_string_bytes(&args[2])
+                            .unwrap_or_default();
                         if let Some(win) = this_weak.upgrade() {
                             win.imp()
                                 .surface_clipboard_write(clipboard_type.into(), &text);
@@ -1159,7 +1163,7 @@ mod imp {
         // ---- Surface signal handlers (window.zig:1645-1773) -----------------
         /// PORTS: `window.zig:1645-1666` `surfaceClipboardWrite`. Toast on a
         /// standard-clipboard write, when configured.
-        fn surface_clipboard_write(&self, clipboard_type: Clipboard, text: &str) {
+        fn surface_clipboard_write(&self, clipboard_type: Clipboard, text: &[u8]) {
             // We only toast for the standard clipboard (`:1652`).
             if clipboard_type != Clipboard::Standard {
                 return;
@@ -1174,7 +1178,8 @@ mod imp {
                     return;
                 }
                 // PORTS `:1663-1665`'s `i18n._(...)` lookups (the reference wraps
-                // at the CALLER, not inside `addToast`).
+                // at the CALLER, not inside `addToast`). `if (text[0] != 0)`: the
+                // C string's bytes, so empty means its first byte is the NUL.
                 if text.is_empty() {
                     tr(c"Cleared clipboard")
                 } else {

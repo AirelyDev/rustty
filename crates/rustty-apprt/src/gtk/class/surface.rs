@@ -1414,9 +1414,8 @@ impl Surface {
         if self.imp().mouse_hidden.get() {
             return;
         }
-        // Map the shape (carried as its `i32` discriminant) to a CSS cursor name
-        // and set it (`:2389-2429`).
-        let name = mouse_shape_cursor_name(self.imp().mouse_shape.get() as i32);
+        // Map the typed shape to a CSS cursor name and set it (`:2482-2520`).
+        let name = mouse_shape_cursor_name(MouseShape::from(self.imp().mouse_shape.get()));
         self.upcast_ref::<gtk4::Widget>()
             .set_cursor_from_name(Some(name));
     }
@@ -2333,7 +2332,13 @@ impl Surface {
         let Some(text_content) = contents.iter().find(|c| c.mime == b"text/plain") else {
             return;
         };
-        let text = String::from_utf8_lossy(text_content.data).into_owned();
+        // `const text: [:0]const u8 = ... break content.data;` — the payload's
+        // BYTES. CORRECTION (task T-D, S56-F3): this was
+        // `String::from_utf8_lossy(text_content.data)`, so a non-UTF-8 OSC 52
+        // payload reached the `clipboard-write` signal with U+FFFD in place of its
+        // bytes. The signal now carries the bytes ([`raw_string_value`]); the
+        // confirmation dialog's copy is the one R13 exception (below).
+        let text: &[u8] = text_content.data;
 
         // If no confirmation is necessary, set the clipboard (`surface.zig:3777`).
         if !confirm {
@@ -2369,20 +2374,47 @@ impl Surface {
                 log::warn!(target: LOG_SCOPE, "failed to set clipboard content err={err}");
             }
 
-            // `Surface.signals.@"clipboard-write".impl.emit(...)` with
-            // `(clipboard_type, text)` (`surface.zig:3832-3837`), the first as the
-            // `GhosttyApprtClipboard` enum the signal declares.
-            self.emit_by_name::<()>(
+            // Surface.signals.@"clipboard-write".impl.emit(
+            //     self,
+            //     null,
+            //     .{ clipboard_type, text.ptr },
+            //     null,
+            // );
+            // (`surface.zig:4117-4122`): the first param as the
+            // `GhosttyApprtClipboard` enum the signal declares, the second as the
+            // payload's C string, raw.
+            self.emit_by_name_with_values(
                 "clipboard-write",
-                &[&ClipboardEnum::from(clipboard_type), &text],
+                &[
+                    ClipboardEnum::from(clipboard_type).to_value(),
+                    raw_string_value(text),
+                ],
             );
 
             return;
         }
 
-        // confirm == true → showClipboardConfirmation (`surface.zig:3842-3846`).
-        // DEFERRED to Phase B.
-        self.show_clipboard_confirmation(ClipboardRequest::Osc52Write(clipboard_type), &text);
+        // showClipboardConfirmation(self, .{ .osc_52_write = clipboard_type }, text);
+        // (`surface.zig:4127-4131`).
+        //
+        // PORT NOTE: reference defect (R13), `UPSTREAM-DEFECTS.md` UD172. The
+        // reference inserts the payload's raw bytes into the dialog's
+        // `GtkTextBuffer` (`showClipboardConfirmation`, `insertAtCursor(str,
+        // len)`), whose precondition is valid UTF-8. For a non-UTF-8 OSC 52 payload
+        // (any program can send one) GTK rejects the insert —
+        // `Gtk-CRITICAL: gtk_text_buffer_emit_insert: assertion 'g_utf8_validate
+        // (text, len, NULL)' failed`, MEASURED on GTK 4.22.4 — the preview is
+        // EMPTY, and confirming writes that empty buffer text to the clipboard
+        // (`clipboardConfirmationConfirm` reads the buffer's `text`); in a GTK
+        // built with `G_DISABLE_CHECKS` the invalid bytes reach the text btree,
+        // which assumes UTF-8 (UNVERIFIED). The port keeps the conservative
+        // handling it already had for this one copy: the preview shows the payload
+        // with each invalid sequence replaced by U+FFFD, and confirming writes that
+        // text, so the user confirms exactly what is written.
+        self.show_clipboard_confirmation(
+            ClipboardRequest::Osc52Write(clipboard_type),
+            &String::from_utf8_lossy(text),
+        );
     }
 
     /// PORTS: `surface.zig:3934-3943` `Clipboard.get`. Get the specific GDK
@@ -2425,6 +2457,10 @@ impl Surface {
         // Set `request` LAST: it fires `notify::request`, which sets the dialog's
         // heading/body from the variant.
         dialog.set_request(Some(ClipboardRequestBoxed(req)));
+        // TEST-ONLY observation point (compiled out of non-test builds): the UD172
+        // test reads back the preview buffer of the dialog this call built.
+        #[cfg(test)]
+        LAST_CLIPBOARD_CONFIRMATION.with(|last| last.replace(Some(dialog.clone())));
 
         // Wire confirm/deny (`surface.zig:3968-3981`). The signals carry the
         // "remember" flag as their single bool param (`args[1]`). We ref `self`
@@ -3234,11 +3270,14 @@ impl Surface {
     }
 }
 
-// PORT NOTE (concern): the reference's typed `getMouseShape`/`setMouseShape`
-// (`surface.zig:2176-2184`) over `terminal.MouseShape`, plus the
-// `GhosttyMouseShape` GObject enum, are deferred to the mouse-input task
-// (T16/T17) — see the `mouse-shape` property's PORT NOTE. The generated
-// `mouse_shape()`/`set_mouse_shape()` `i32` accessors carry the shape meanwhile.
+// CORRECTION (task T-D, S55-F4): a PORT NOTE here read "the reference's typed
+// `getMouseShape`/`setMouseShape` (`surface.zig:2176-2184`) over
+// `terminal.MouseShape`, plus the `GhosttyMouseShape` GObject enum, are deferred
+// to the mouse-input task (T16/T17) ... The generated `mouse_shape()`/
+// `set_mouse_shape()` `i32` accessors carry the shape meanwhile." Stale since task
+// 20 (S54-F3): the `mouse-shape` property is typed `MouseShapeEnum`
+// (`GhosttyMouseShape`), so its generated accessors are the typed
+// `getMouseShape`/`setMouseShape` (`surface.zig:2264-2272`).
 
 /// PORTS: `surface.zig:2575-2584` `actionPromptTitle`. Perform the
 /// `prompt_surface_title` binding action on the core surface; the action loops
@@ -3281,56 +3320,94 @@ fn action_notify_on_next_command_finish(
 // The 39 template callbacks (`surface.zig:3623-3661`). Per the placeholder-leaf
 // doctrine most are `unimplemented!()` (Tasks 16/17/19 fill them); the three
 // reached during template instantiation return safe values (see the module doc).
-/// Map a [`MouseShape`] discriminant (as carried by the `mouse-shape` property) to
-/// its W3C/CSS cursor name for `gtk.Widget.set_cursor_from_name`.
+#[cfg(test)]
+thread_local! {
+    /// The last `ClipboardConfirmationDialog` `show_clipboard_confirmation` built on
+    /// this thread (TEST-ONLY; see the UD172 test).
+    static LAST_CLIPBOARD_CONFIRMATION: RefCell<Option<ClipboardConfirmationDialog>> =
+        const { RefCell::new(None) };
+}
+
+/// A `G_TYPE_STRING` `GValue` holding `bytes` UNCONVERTED — what the reference's
+/// `[*:0]const u8` signal argument is (`surface.zig:4117-4122`, `text.ptr`). A
+/// GValue string does not require UTF-8 (`g_value_set_string` copies the bytes);
+/// glib-rs's `String`/`&str` values do, which is why this goes through the C call.
+/// C reads up to the first NUL, as it does for the reference's pointer.
 ///
-/// PORTS: the `switch (priv.mouse_shape)` in `surface.zig:2389-2427` (`propMouseShape`).
-/// Indexed by the shape's `#[repr(i32)]` discriminant in `mouse::Shape` declaration
-/// order (`rustty-vt/src/mouse.rs:70-105`); an out-of-range value falls back to
-/// `"default"`.
-fn mouse_shape_cursor_name(repr: i32) -> &'static str {
-    // Declaration order of `mouse::Shape` (`mouse.rs:71-104`), each mapped to the
-    // reference's cursor name (`surface.zig:2390-2426`).
-    const NAMES: [&str; 34] = [
-        "default",       // Default
-        "context-menu",  // ContextMenu
-        "help",          // Help
-        "pointer",       // Pointer
-        "progress",      // Progress
-        "wait",          // Wait
-        "cell",          // Cell
-        "crosshair",     // Crosshair
-        "text",          // Text
-        "vertical-text", // VerticalText
-        "alias",         // Alias
-        "copy",          // Copy
-        "move",          // Move
-        "no-drop",       // NoDrop
-        "not-allowed",   // NotAllowed
-        "grab",          // Grab
-        "grabbing",      // Grabbing
-        "all-scroll",    // AllScroll
-        "col-resize",    // ColResize
-        "row-resize",    // RowResize
-        "n-resize",      // NResize
-        "e-resize",      // EResize
-        "s-resize",      // SResize
-        "w-resize",      // WResize
-        "ne-resize",     // NeResize
-        "nw-resize",     // NwResize
-        "se-resize",     // SeResize
-        "sw-resize",     // SwResize
-        "ew-resize",     // EwResize
-        "ns-resize",     // NsResize
-        "nesw-resize",   // NeswResize
-        "nwse-resize",   // NwseResize
-        "zoom-in",       // ZoomIn
-        "zoom-out",      // ZoomOut
-    ];
-    usize::try_from(repr)
-        .ok()
-        .and_then(|i| NAMES.get(i).copied())
-        .unwrap_or("default")
+/// A receiver must read it with `g_value_get_string`, never
+/// `Value::get::<String>()` (which panics on non-UTF-8); the one in-tree receiver
+/// is `window.rs`'s `clipboard-write` handler.
+pub(crate) fn raw_string_value(bytes: &[u8]) -> glib::Value {
+    use glib::translate::ToGlibPtrMut;
+    let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+    let c = std::ffi::CString::new(&bytes[..end]).expect("no interior NUL before `end`");
+    let mut value = glib::Value::from_type(glib::Type::STRING);
+    // SAFETY: `value` is an initialized G_TYPE_STRING GValue; GLib copies `c`.
+    unsafe { glib::gobject_ffi::g_value_set_string(value.to_glib_none_mut().0, c.as_ptr()) };
+    value
+}
+
+/// The bytes of a `G_TYPE_STRING` `GValue`, read without UTF-8 validation (the
+/// reader half of [`raw_string_value`]). `None` for a NULL string.
+pub(crate) fn raw_string_bytes(value: &glib::Value) -> Option<Vec<u8>> {
+    use glib::translate::ToGlibPtr;
+    // SAFETY: `value` is a live GValue; `g_value_get_string` returns its own
+    // NUL-terminated string (or NULL), valid while `value` is.
+    unsafe {
+        let p = glib::gobject_ffi::g_value_get_string(value.to_glib_none().0);
+        (!p.is_null()).then(|| std::ffi::CStr::from_ptr(p).to_bytes().to_vec())
+    }
+}
+
+/// Map a [`MouseShape`] to its W3C/CSS cursor name for
+/// `gtk.Widget.set_cursor_from_name`.
+///
+/// PORTS: the `switch (priv.mouse_shape)` in `surface.zig:2482-2517`
+/// (`propMouseShape`), arm for arm and in the reference's arm order.
+///
+/// CORRECTION (task T-D, S55-F4): this took the shape as its `i32` discriminant
+/// and indexed a 34-entry name table in `mouse::Shape` declaration order, with an
+/// out-of-range index falling back to `"default"` — a branch the reference's
+/// exhaustive switch does not have. The `mouse-shape` property has carried the
+/// typed `GhosttyMouseShape` since task 20 (S54-F3), so the map is the
+/// reference's switch again; an unhandled shape is now a compile error.
+fn mouse_shape_cursor_name(shape: MouseShape) -> &'static str {
+    match shape {
+        MouseShape::Default => "default",
+        MouseShape::Help => "help",
+        MouseShape::Pointer => "pointer",
+        MouseShape::ContextMenu => "context-menu",
+        MouseShape::Progress => "progress",
+        MouseShape::Wait => "wait",
+        MouseShape::Cell => "cell",
+        MouseShape::Crosshair => "crosshair",
+        MouseShape::Text => "text",
+        MouseShape::VerticalText => "vertical-text",
+        MouseShape::Alias => "alias",
+        MouseShape::Copy => "copy",
+        MouseShape::NoDrop => "no-drop",
+        MouseShape::Move => "move",
+        MouseShape::NotAllowed => "not-allowed",
+        MouseShape::Grab => "grab",
+        MouseShape::Grabbing => "grabbing",
+        MouseShape::AllScroll => "all-scroll",
+        MouseShape::ColResize => "col-resize",
+        MouseShape::RowResize => "row-resize",
+        MouseShape::NResize => "n-resize",
+        MouseShape::EResize => "e-resize",
+        MouseShape::SResize => "s-resize",
+        MouseShape::WResize => "w-resize",
+        MouseShape::NeResize => "ne-resize",
+        MouseShape::NwResize => "nw-resize",
+        MouseShape::SeResize => "se-resize",
+        MouseShape::SwResize => "sw-resize",
+        MouseShape::EwResize => "ew-resize",
+        MouseShape::NsResize => "ns-resize",
+        MouseShape::NeswResize => "nesw-resize",
+        MouseShape::NwseResize => "nwse-resize",
+        MouseShape::ZoomIn => "zoom-in",
+        MouseShape::ZoomOut => "zoom-out",
+    }
 }
 
 #[gtk4::template_callbacks]
@@ -4005,14 +4082,40 @@ impl Surface {
     /// values[1] (an `i32` width) and abort the (nounwind) FFI trampoline with a
     /// type mismatch. We take `(&self, width, height)`; the trailing area value
     /// is ignored positionally.
+    /// `glareaResize`'s debug block (`surface.zig:3452-3470`): the GL area's scale
+    /// factor and the scale of the window's `GdkSurface`, 0 when the widget has no
+    /// root or the root no surface yet.
+    ///
+    /// CORRECTION (task T-D, S56-F4): the port logged only `width`/`height`/`scale`
+    /// under a comment saying "The window (gdk-surface) scale is elided from the
+    /// log here". The reference's `window_scale={}` is restored.
+    fn gl_resize_debug_log(&self, width: i32, height: i32) {
+        // const widget = gl_area.as(gtk.Widget);
+        let widget = self.imp().gl_area.upcast_ref::<gtk4::Widget>();
+        // const scale_factor = widget.getScaleFactor();
+        let scale_factor = widget.scale_factor();
+        // const window_scale_factor = scale: {
+        //     const root = widget.getRoot() orelse break :scale 0;
+        //     const gtk_native = root.as(gtk.Native);
+        //     const gdk_surface = gtk_native.getSurface() orelse break :scale 0;
+        //     break :scale gdk_surface.getScaleFactor();
+        // };
+        let window_scale_factor = widget
+            .root()
+            .and_then(|root| root.upcast_ref::<gtk4::Native>().surface())
+            .map_or(0, |surface| surface.scale_factor());
+
+        // log.debug("gl resize width={} height={} scale={} window_scale={}", .{
+        log::debug!(target: LOG_SCOPE, "gl resize width={width} height={height} scale={scale_factor} window_scale={window_scale_factor}");
+    }
+
     #[template_callback]
     fn gl_resize(&self, width: i32, height: i32) {
         let imp = self.imp();
 
-        // Debug output to understand what GTK is telling us (`:3352-3369`). The
-        // window (gdk-surface) scale is elided from the log here.
-        log::debug!(target: LOG_SCOPE, "gl resize width={width} height={height} scale={}",
-            imp.gl_area.scale_factor(),);
+        // Some debug output to help understand what GTK is telling us
+        // (`:3452-3470`).
+        self.gl_resize_debug_log(width, height);
 
         // Store our cached size (`:3371-3379`).
         let new_size = SurfaceSize {
@@ -5226,6 +5329,166 @@ mod tests {
             params,
             [ClipboardEnum::static_type(), String::static_type()]
         );
+    }
+
+    /// S56-F3: a non-confirmed clipboard write emits `clipboard-write` with the
+    /// payload's RAW bytes (`surface.zig:4117-4122`, `text.ptr`); a non-UTF-8
+    /// OSC 52 payload is not U+FFFD-substituted. The handler reads the argument
+    /// the way `window.rs`'s does, and must fire exactly once.
+    #[test]
+    #[ignore = "requires a display; run via cargo test -p rustty-apprt --features gtk,x11,wayland --lib clipboard_write_signal -- --ignored"]
+    fn clipboard_write_signal_carries_the_raw_payload() {
+        let surface = display_surface();
+        let seen: std::rc::Rc<RefCell<Vec<Vec<u8>>>> = std::rc::Rc::default();
+        let sink = seen.clone();
+        surface.connect_local("clipboard-write", false, move |args| {
+            sink.borrow_mut()
+                .push(raw_string_bytes(&args[2]).expect("a non-NULL text"));
+            None
+        });
+
+        surface.set_clipboard(
+            Clipboard::Standard,
+            &[ClipboardContent {
+                mime: b"text/plain",
+                data: b"caf\xe9",
+            }],
+            false,
+        );
+        assert_eq!(*seen.borrow(), [b"caf\xe9".to_vec()]);
+    }
+
+    /// UD172 (R13), the confirmation half of S56-F3: a non-UTF-8 OSC 52 payload
+    /// that needs confirmation must preview as its U+FFFD-substituted text. The
+    /// reference inserts the raw bytes into the `GtkTextBuffer`, whose UTF-8
+    /// precondition fails (a `Gtk-CRITICAL`, measured), leaving the preview empty
+    /// and a confirm that writes an empty clipboard.
+    #[test]
+    #[ignore = "requires a display; run via cargo test -p rustty-apprt --features gtk,x11,wayland --lib clipboard_confirmation_preview -- --ignored"]
+    fn clipboard_confirmation_preview_substitutes_invalid_utf8() {
+        let surface = display_surface();
+        let window = gtk4::Window::new();
+        window.set_child(Some(&surface));
+
+        surface.set_clipboard(
+            Clipboard::Standard,
+            &[ClipboardContent {
+                mime: b"text/plain",
+                data: b"caf\xe9",
+            }],
+            true,
+        );
+        let dialog = LAST_CLIPBOARD_CONFIRMATION
+            .with(|last| last.borrow_mut().take())
+            .expect("confirm = true builds a confirmation dialog");
+        let buffer = dialog
+            .get_clipboard_contents()
+            .expect("the dialog carries the preview buffer");
+        let text: String = buffer.property("text");
+        assert_eq!(text, "caf\u{FFFD}");
+        window.destroy();
+    }
+
+    /// S56-F4: `glareaResize`'s debug line carries `window_scale`
+    /// (`surface.zig:3452-3470`): 0 while the surface has no root, and the root's
+    /// `GdkSurface` scale factor once it is in a realized window.
+    #[test]
+    #[ignore = "requires a display; run via cargo test -p rustty-apprt --features gtk,x11,wayland --lib gl_resize_debug -- --ignored"]
+    fn gl_resize_debug_log_carries_the_window_scale() {
+        let surface = display_surface();
+        let scale = surface.imp().gl_area.scale_factor();
+
+        // No root: `getRoot() orelse break :scale 0`.
+        let cap = crate::log_capture::start();
+        surface.gl_resize_debug_log(10, 20);
+        let unrooted = cap.messages();
+        drop(cap);
+        assert_eq!(
+            unrooted,
+            [(
+                log::Level::Debug,
+                LOG_SCOPE.to_owned(),
+                format!("gl resize width=10 height=20 scale={scale} window_scale=0"),
+            )]
+        );
+
+        // In a realized window: the root's native GdkSurface exists.
+        let window = gtk4::Window::new();
+        window.set_child(Some(&surface));
+        WidgetExt::realize(&window);
+        let gdk_surface = window
+            .upcast_ref::<gtk4::Native>()
+            .surface()
+            .expect("a realized window has a GdkSurface");
+        let window_scale = gdk_surface.scale_factor();
+        assert!(window_scale > 0, "a real GdkSurface scale is positive");
+
+        let cap = crate::log_capture::start();
+        surface.gl_resize_debug_log(30, 40);
+        let rooted = cap.messages();
+        drop(cap);
+        let scale = surface.imp().gl_area.scale_factor();
+        assert_eq!(
+            rooted,
+            [(
+                log::Level::Debug,
+                LOG_SCOPE.to_owned(),
+                format!("gl resize width=30 height=40 scale={scale} window_scale={window_scale}"),
+            )]
+        );
+        window.destroy();
+    }
+
+    /// S55-F4: `propMouseShape`'s switch (`surface.zig:2482-2517`), every arm, the
+    /// pairs copied from the reference in its arm order. Display-free: the map is
+    /// a pure function of the typed shape; the property itself is pinned by
+    /// `surface_pspec_types_and_defaults_match_the_reference`.
+    #[test]
+    fn mouse_shape_cursor_names_match_the_reference_switch() {
+        let reference: [(MouseShape, &str); 34] = [
+            (MouseShape::Default, "default"),
+            (MouseShape::Help, "help"),
+            (MouseShape::Pointer, "pointer"),
+            (MouseShape::ContextMenu, "context-menu"),
+            (MouseShape::Progress, "progress"),
+            (MouseShape::Wait, "wait"),
+            (MouseShape::Cell, "cell"),
+            (MouseShape::Crosshair, "crosshair"),
+            (MouseShape::Text, "text"),
+            (MouseShape::VerticalText, "vertical-text"),
+            (MouseShape::Alias, "alias"),
+            (MouseShape::Copy, "copy"),
+            (MouseShape::NoDrop, "no-drop"),
+            (MouseShape::Move, "move"),
+            (MouseShape::NotAllowed, "not-allowed"),
+            (MouseShape::Grab, "grab"),
+            (MouseShape::Grabbing, "grabbing"),
+            (MouseShape::AllScroll, "all-scroll"),
+            (MouseShape::ColResize, "col-resize"),
+            (MouseShape::RowResize, "row-resize"),
+            (MouseShape::NResize, "n-resize"),
+            (MouseShape::EResize, "e-resize"),
+            (MouseShape::SResize, "s-resize"),
+            (MouseShape::WResize, "w-resize"),
+            (MouseShape::NeResize, "ne-resize"),
+            (MouseShape::NwResize, "nw-resize"),
+            (MouseShape::SeResize, "se-resize"),
+            (MouseShape::SwResize, "sw-resize"),
+            (MouseShape::EwResize, "ew-resize"),
+            (MouseShape::NsResize, "ns-resize"),
+            (MouseShape::NeswResize, "nesw-resize"),
+            (MouseShape::NwseResize, "nwse-resize"),
+            (MouseShape::ZoomIn, "zoom-in"),
+            (MouseShape::ZoomOut, "zoom-out"),
+        ];
+        for (shape, name) in reference {
+            assert_eq!(mouse_shape_cursor_name(shape), name, "{shape:?}");
+            // And through the GObject enum the property carries.
+            assert_eq!(
+                mouse_shape_cursor_name(MouseShape::from(MouseShapeEnum::from(shape))),
+                name
+            );
+        }
     }
 
     /// S55-F1: `filterSnapPaths` (`surface.zig:1667-1740`) over a synthetic env.

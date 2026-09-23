@@ -15,13 +15,17 @@ use std::path::Path;
 
 use gtk4::prelude::*;
 
+// const log = std.log.scoped(.gtk_media);
+const LOG_SCOPE: &str = "gtk_media";
+
 /// PORTS: `media.zig:11-18` `fromFilename`. Build a `MediaFile` for an absolute
 /// `path`, first checking it is accessible; `None` (with a warning) otherwise.
 pub fn from_filename(path: &Path) -> Option<gtk4::MediaFile> {
     debug_assert!(path.is_absolute());
     // `std.fs.accessAbsolute(path, .{ .mode = .read_only })` (`media.zig:13`).
     if let Err(err) = std::fs::File::open(path) {
-        eprintln!("warn(gtk): unable to access {}: {err}", path.display());
+        // log.warn("unable to access {s}: {t}", .{ path, err });
+        log::warn!(target: LOG_SCOPE, "unable to access {}: {err}", path.display());
         return None;
     }
     Some(gtk4::MediaFile::for_filename(path))
@@ -32,15 +36,75 @@ pub fn from_filename(path: &Path) -> Option<gtk4::MediaFile> {
 ///
 /// PORT NOTE: retained for parity with `media.zig`; the gtk backend's bell path
 /// only uses [`from_filename`] via [`bell_media_file`] (`surface.zig:2506`).
+///
+/// CORRECTION (task T-D, S48-F5): this went through gio-rs's
+/// `resources_get_info`, which folds the reference's two failure arms into one
+/// `Err`, and logged only the GError's message. The reference calls
+/// `g_resources_get_info` itself and logs the quark domain, the code and the
+/// message when a GError is set, and a separate message-less warning when the
+/// call returns FALSE without one; both arms are restored through the C call.
 #[allow(dead_code)]
 pub fn from_resource(path: &str) -> Option<gtk4::MediaFile> {
     debug_assert!(path.starts_with('/'));
-    match gio::functions::resources_get_info(path, gio::ResourceLookupFlags::NONE) {
-        Ok(_) => Some(gtk4::MediaFile::for_resource(path)),
-        Err(err) => {
-            eprintln!("warn(gtk): failed to find resource {path}: {err}");
-            None
-        }
+    let c_path = std::ffi::CString::new(path).ok()?;
+    // var gerr: ?*glib.Error = null;
+    // const found = gio.resourcesGetInfo(path, .{}, null, null, &gerr);
+    let mut gerr: *mut glib::ffi::GError = std::ptr::null_mut();
+    // SAFETY: `c_path` is NUL-terminated and outlives the call; the size and flags
+    // out-pointers may be null (`gio/gresource.c`), and `gerr` is a valid
+    // out-pointer to a null `GError*`.
+    let found = unsafe {
+        gio::ffi::g_resources_get_info(
+            c_path.as_ptr(),
+            gio::ffi::G_RESOURCE_LOOKUP_FLAGS_NONE,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &mut gerr,
+        )
+    };
+    // if (gerr) |err| { defer err.free(); log.warn(...); return null; }
+    if !gerr.is_null() {
+        // SAFETY: GLib set `gerr` to a GError we now own; `from_glib_full` frees it.
+        let err: glib::Error = unsafe { glib::translate::from_glib_full(gerr) };
+        let (domain, code, message) = gerror_parts(&err, "(no message)");
+        // log.warn("failed to find resource {s}: {s} {d} {s}", .{ path,
+        //     glib.quarkToString(err.f_domain), err.f_code,
+        //     err.f_message orelse "(no message)" });
+        log::warn!(target: LOG_SCOPE, "failed to find resource {path}: {domain} {code} {message}");
+        return None;
+    }
+    // if (found == 0) { log.warn("failed to find resource {s}", .{path}); return null; }
+    if found == glib::ffi::GFALSE {
+        log::warn!(target: LOG_SCOPE, "failed to find resource {path}");
+        return None;
+    }
+    Some(gtk4::MediaFile::for_resource(path))
+}
+
+/// `glib.quarkToString(err.f_domain)`, `err.f_code` and `err.f_message orelse
+/// <fallback>` — the three GError fields the reference's warnings print, read from
+/// the `GError` itself (glib-rs's `Display` prints only the message).
+fn gerror_parts(err: &glib::Error, no_message: &str) -> (String, i32, String) {
+    use glib::translate::ToGlibPtr;
+    let raw: *const glib::ffi::GError = err.to_glib_none().0;
+    // SAFETY: `raw` points at the live GError `err` owns for this call.
+    unsafe {
+        let domain = glib::ffi::g_quark_to_string((*raw).domain);
+        let domain = if domain.is_null() {
+            String::new()
+        } else {
+            std::ffi::CStr::from_ptr(domain)
+                .to_string_lossy()
+                .into_owned()
+        };
+        let message = if (*raw).message.is_null() {
+            no_message.to_owned()
+        } else {
+            std::ffi::CStr::from_ptr((*raw).message)
+                .to_string_lossy()
+                .into_owned()
+        };
+        (domain, (*raw).code, message)
     }
 }
 
@@ -112,12 +176,90 @@ fn media_file_error(media_file: &gtk4::MediaFile) {
     let path = path
         .as_deref()
         .map_or_else(|| "<<unknown>>".to_string(), |p| p.display().to_string());
-    eprintln!("warn(gtk): error playing sound from {path}: {err}");
+    // CORRECTION (task T-D, S48-F5): this printed `{err}` (the message only);
+    // the reference prints the quark domain and code too.
+    let (domain, code, message) = gerror_parts(&err, "");
+    // log.warn("error playing sound from {s}: {s} {d} {s}", .{
+    //     path orelse "<<unknown>>", glib.quarkToString(err.f_domain), err.f_code,
+    //     err.f_message orelse "" });
+    log::warn!(target: LOG_SCOPE, "error playing sound from {path}: {domain} {code} {message}");
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// S48-F5: `fromResource`'s GError arm prints the quark domain, the code and
+    /// the message under the file's scope (`media.zig:29-41`). Display-free: a
+    /// missing resource fails before any `MediaFile` exists. The domain/code are
+    /// GLib's own `G_RESOURCE_ERROR_NOT_FOUND` (code 0 of
+    /// `g-resource-error-quark`), read back from GLib rather than assumed.
+    ///
+    /// The reference's second arm (`found == 0` with no GError, `:43-46`) is
+    /// ported but not driven here: `g_resources_get_info` sets a GError on every
+    /// FALSE return in GLib 2.88, so no input reaches it.
+    #[test]
+    fn from_resource_missing_logs_domain_code_and_message() {
+        let cap = crate::log_capture::start();
+        let got = from_resource("/io/airely/rustty/no/such/resource.oga");
+        let messages = cap.messages();
+        drop(cap);
+        assert!(got.is_none(), "a missing resource yields no MediaFile");
+
+        use glib::error::ErrorDomain;
+        let domain = glib::Quark::from_str("g-resource-error-quark");
+        assert_eq!(gio::ResourceError::domain(), domain);
+        let not_found = gio::ResourceError::NotFound.code();
+        assert_eq!(messages.len(), 1, "exactly one warning; got {messages:?}");
+        let (level, target, msg) = &messages[0];
+        assert_eq!(*level, log::Level::Warn);
+        assert_eq!(target, "gtk_media");
+        let prefix = format!(
+            "failed to find resource /io/airely/rustty/no/such/resource.oga: \
+             g-resource-error-quark {not_found} "
+        );
+        assert!(
+            msg.starts_with(&prefix) && msg.len() > prefix.len(),
+            "domain, code and a non-empty message; got {msg:?}"
+        );
+    }
+
+    /// S48-F5: `mediaFileError` prints the domain and the code too
+    /// (`media.zig:110-133`). Sets a GError on a `required` bell's stream, which
+    /// fires the `notify::error` handler `bell_media_file` connected.
+    #[test]
+    #[ignore = "requires a display; run via cargo test -p rustty-apprt --features gtk,x11,wayland --lib media_file_error -- --ignored"]
+    fn media_file_error_logs_domain_code_and_message() {
+        crate::gtk::init_for_display_test("media_file_error_logs_domain_code_and_message");
+        let path = std::env::temp_dir().join("rustty-bell-test-error.oga");
+        std::fs::write(&path, b"").unwrap();
+        let Some(media) = bell_media_file(None, &path, true) else {
+            panic!("bell_media_file returned None for an accessible file");
+        };
+
+        let cap = crate::log_capture::start();
+        media.set_error(glib::Error::new(glib::FileError::Noent, "boom"));
+        let messages = cap.messages();
+        drop(cap);
+
+        use glib::error::ErrorDomain;
+        let code = glib::FileError::Noent.code();
+        assert_eq!(
+            messages,
+            [(
+                log::Level::Warn,
+                "gtk_media".to_owned(),
+                format!(
+                    "error playing sound from {}: g-file-error-quark {code} boom",
+                    path.display()
+                ),
+            )]
+        );
+        // Leaked for the GstPlay teardown race documented in
+        // `bell_media_file_reuses_one_per_path`.
+        std::mem::forget(media);
+        let _ = std::fs::remove_file(&path);
+    }
 
     /// PORTS: `media.zig:131-157` `test "bellMediaFile reuses one MediaFile per
     /// path"`. Regression guard for the audio-bell thread leak: each bell must

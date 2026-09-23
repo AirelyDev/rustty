@@ -71,13 +71,27 @@ pub enum Error {
     /// A request with this token is already in flight — the reference's
     /// `putNoClobber` error (`OpenURI.zig:175`).
     DuplicateToken,
-    /// DELIBERATE, DOCUMENTED DIVERGENCE (no reference counterpart): the URI is not
-    /// valid UTF-8. The reference `dupeZ`s the raw bytes and hands the pointer to a
-    /// `"s"` variant; D-Bus strings are REQUIRED to be UTF-8, so non-UTF-8 bytes
-    /// would produce an invalid message rather than an open. Reporting it as an
-    /// error routes the URL to the OS opener — which takes raw bytes — via the
-    /// caller's existing error arm (`application.zig:2359-2362`), i.e. the byte
-    /// string still gets opened, just not through the portal.
+    /// The URI is not valid UTF-8 (no reference counterpart).
+    ///
+    /// PORT NOTE: reference defect (R13), `UPSTREAM-DEFECTS.md` UD171. The
+    /// reference `dupeZ`s the URL's raw bytes and passes them to
+    /// `builder.add("s", entry.uri.ptr)` (`OpenURI.zig:279`), i.e.
+    /// `g_variant_new_string`, whose precondition is valid UTF-8. A non-UTF-8 URL
+    /// (a terminal hyperlink, OSC 8, carries arbitrary bytes) violates it:
+    /// MEASURED on GLib 2.88.2 with a C probe that builds `sendRequest`'s payload
+    /// the reference's way, GLib logs `GLib-CRITICAL: g_variant_new_string():
+    /// requires valid UTF-8` and substitutes the string `[Invalid UTF-8]`, so the
+    /// portal is asked to open `[Invalid UTF-8]`. A failed `g_return_*_if_fail` is
+    /// a programmer error after which, in GLib's own words, the function "should be
+    /// considered to have undefined behaviour"; with the checks compiled out
+    /// (`G_DISABLE_CHECKS`) the invalid string would reach the D-Bus serializer,
+    /// whose UTF-8 `g_assert` aborts the process (measured for the IPC path, UD170).
+    /// The port checks the bytes first and reports this error, which the caller
+    /// handles with the reference's own failure path for `start`: `log.err("unable
+    /// to open uri err={}")` then `openUrlFallback` (`application.zig:2845-2849`),
+    /// so the URL is still opened, by the OS opener, with its raw bytes. It is
+    /// checked BEFORE any state is mutated, so nothing is left behind (no entry, no
+    /// subscription, no cleanup timer, no portal call).
     UriNotUtf8,
 }
 
@@ -879,8 +893,13 @@ mod tests {
     ///
     /// An earlier version of this test asserted the opposite ordering and FAILED
     /// on Linux from the day it landed (WS19 T8) — its rationale ("the UTF-8 check
-    /// must run first") had no oracle basis. The `UriNotUtf8` path itself is
-    /// exercised by the live-gated portal KAT, where a connection exists.
+    /// must run first") had no oracle basis.
+    ///
+    /// CORRECTION (task T-D, S59-F5): this doc went on "The `UriNotUtf8` path
+    /// itself is exercised by the live-gated portal KAT, where a connection
+    /// exists." No test or gate in the tree named `UriNotUtf8` (grep of
+    /// `crates/*/tests` and `.port/tools`, 2026-09-23). It is driven now by
+    /// `open_uri_rejects_a_non_utf8_uri_before_any_state`, below.
     #[test]
     fn open_uri_connection_check_precedes_uri_validation() {
         let open_uri = OpenUri::new();
@@ -892,6 +911,90 @@ mod tests {
             .expect_err("no dbus connection was set");
         assert_eq!(err, Error::DBusConnectionRequired);
         assert_eq!(open_uri.in_flight(), 0);
+    }
+
+    /// A private message bus for one test: `dbus-daemon --session --nofork
+    /// --print-address` on its own socket, connected WITHOUT touching the process
+    /// environment (`DBUS_SESSION_BUS_ADDRESS`), which other tests in the same
+    /// binary read concurrently. The daemon is killed when the guard drops.
+    struct PrivateBus {
+        daemon: std::process::Child,
+        conn: gio::DBusConnection,
+    }
+
+    impl PrivateBus {
+        fn start() -> PrivateBus {
+            use std::io::BufRead;
+            let mut daemon = std::process::Command::new("dbus-daemon")
+                .args(["--session", "--nofork", "--print-address"])
+                .stdout(std::process::Stdio::piped())
+                .spawn()
+                .expect("dbus-daemon must be installed for this test");
+            let mut address = String::new();
+            std::io::BufReader::new(daemon.stdout.as_mut().expect("piped stdout"))
+                .read_line(&mut address)
+                .expect("dbus-daemon prints its address");
+            let conn = gio::DBusConnection::for_address_sync(
+                address.trim(),
+                gio::DBusConnectionFlags::AUTHENTICATION_CLIENT
+                    | gio::DBusConnectionFlags::MESSAGE_BUS_CONNECTION,
+                None,
+                gio::Cancellable::NONE,
+            )
+            .expect("connect to the private bus");
+            assert!(
+                conn.unique_name().is_some(),
+                "a message-bus connection has a unique name"
+            );
+            PrivateBus { daemon, conn }
+        }
+    }
+
+    impl Drop for PrivateBus {
+        fn drop(&mut self) {
+            let _ = self.conn.close_sync(gio::Cancellable::NONE);
+            let _ = self.daemon.kill();
+            let _ = self.daemon.wait();
+        }
+    }
+
+    /// S59-F5 / UD171 (R13): with a connection, a non-UTF-8 URL is refused with
+    /// `UriNotUtf8` BEFORE any state exists: no entry, no request made, no
+    /// cleanup timer. The reference would call `g_variant_new_string` on the bytes
+    /// (a GLib precondition violation, measured: `GLib-CRITICAL` and the portal
+    /// asked to open `[Invalid UTF-8]`). Positive control on the same connection:
+    /// a UTF-8 URL does start a request (one entry in flight).
+    #[test]
+    fn open_uri_rejects_a_non_utf8_uri_before_any_state() {
+        let bus = PrivateBus::start();
+        let open_uri = OpenUri::new();
+        open_uri.set_dbus_connection(Some(&bus.conn));
+
+        assert_eq!(
+            open_uri.start(OpenUrl {
+                kind: OpenUrlKind::Unknown,
+                url: b"https://example.invalid/caf\xe9",
+            }),
+            Err(Error::UriNotUtf8),
+        );
+        assert_eq!(open_uri.in_flight(), 0, "no entry for the refused URL");
+        assert!(
+            open_uri.inner.state.borrow().cleanup_timer.is_none(),
+            "no cleanup timer for the refused URL"
+        );
+        assert_eq!(open_uri.observed(), Observed::default());
+
+        // Positive control: the same object and connection DO start a request for
+        // a UTF-8 URL, so the refusal above is the UTF-8 check, not a dead object.
+        assert_eq!(
+            open_uri.start(OpenUrl {
+                kind: OpenUrlKind::Unknown,
+                url: b"https://example.invalid/cafe",
+            }),
+            Ok(()),
+        );
+        assert_eq!(open_uri.in_flight(), 1);
+        open_uri.deinit();
     }
 
     /// `deinit` is idempotent (`OpenURI.zig:129-130` `if (!self.alive) return`) and

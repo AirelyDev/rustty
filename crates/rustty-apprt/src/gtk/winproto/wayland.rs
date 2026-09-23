@@ -949,9 +949,8 @@ impl Window {
             QuickTerminalLayer::Bottom => Layer::Bottom,
             QuickTerminalLayer::Background => Layer::Background,
         });
-        window.set_namespace(Some(&String::from_utf8_lossy(
-            &config.gtk_quick_terminal_namespace,
-        )));
+        // layer_shell.setNamespace(window, config.@"gtk-quick-terminal-namespace");
+        set_layer_namespace_raw(window, &config.gtk_quick_terminal_namespace);
 
         // Re-resolve the target monitor on every sync so that config reloads
         // and primary-output changes take effect without recreating the window.
@@ -1091,6 +1090,29 @@ fn quick_terminal_primary_output_name(apprt_window: &ApprtWindow) -> Option<Stri
     name
 }
 
+/// `layer_shell.setNamespace(window, config.@"gtk-quick-terminal-namespace")`
+/// (`wayland.zig:352`) with the config's raw bytes.
+///
+/// CORRECTION (task T-D, S60-F8): the port went through gtk4-layer-shell's safe
+/// `set_namespace(Option<&str>)` after `String::from_utf8_lossy`, so a non-UTF-8
+/// namespace reached the compositor with U+FFFD in place of its bytes. The
+/// reference hands the `[:0]const u8` config value to `gtk_layer_set_namespace`
+/// unconverted; so does this. C reads up to the first NUL, as it does for the
+/// reference's sentinel-terminated slice.
+fn set_layer_namespace_raw(window: &gtk4::Window, namespace: &[u8]) {
+    use glib::translate::ToGlibPtr;
+    let end = namespace
+        .iter()
+        .position(|&b| b == 0)
+        .unwrap_or(namespace.len());
+    let c = std::ffi::CString::new(&namespace[..end]).expect("no interior NUL before `end`");
+    // SAFETY: `window` is a live GtkWindow for the call; `c` is NUL-terminated and
+    // outlives it (gtk-layer-shell copies the string).
+    unsafe {
+        gtk4_layer_shell_sys::gtk_layer_set_namespace(window.to_glib_none().0, c.as_ptr());
+    }
+}
+
 /// PORTS: `value_types.zig` `BackgroundBlur.enabled` (rustty's
 /// `value_types::background_blur_enabled`, which is `pub(crate)` to rustty-config).
 /// Replicated here since sync_blur needs it. macOS-glass variants imply blur, so
@@ -1102,5 +1124,39 @@ fn background_blur_enabled(v: BackgroundBlur) -> bool {
         | BackgroundBlur::MacosGlassRegular
         | BackgroundBlur::MacosGlassClear => true,
         BackgroundBlur::Radius(r) => r > 0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// S60-F8: `gtk-quick-terminal-namespace` reaches gtk-layer-shell as its raw
+    /// bytes (`wayland.zig:352`); a non-UTF-8 byte is kept, not replaced by
+    /// U+FFFD. Read back through `gtk_layer_get_namespace`. Needs a Wayland
+    /// compositor with wlr-layer-shell (headless sway on the VM); FAILS without one.
+    #[test]
+    #[ignore = "requires a wlr-layer-shell compositor; run with GDK_BACKEND=wayland WAYLAND_DISPLAY=... cargo test -p rustty-apprt --features gtk,x11,wayland --lib layer_namespace -- --ignored"]
+    fn layer_namespace_is_set_from_the_raw_config_bytes() {
+        use glib::translate::ToGlibPtr;
+        crate::gtk::init_for_display_test("layer_namespace_is_set_from_the_raw_config_bytes");
+        assert!(
+            gtk4_layer_shell::is_supported(),
+            "this test needs a compositor offering wlr-layer-shell"
+        );
+        let window = gtk4::Window::new();
+        window.init_layer_shell();
+
+        set_layer_namespace_raw(&window, b"caf\xe9-quick");
+
+        // SAFETY: the window is a live layer-shell window; the returned string is
+        // owned by gtk-layer-shell and read before the window is destroyed.
+        let got = unsafe {
+            let p = gtk4_layer_shell_sys::gtk_layer_get_namespace(window.to_glib_none().0);
+            assert!(!p.is_null(), "a namespace was set");
+            std::ffi::CStr::from_ptr(p).to_bytes().to_vec()
+        };
+        assert_eq!(got, b"caf\xe9-quick");
+        window.destroy();
     }
 }

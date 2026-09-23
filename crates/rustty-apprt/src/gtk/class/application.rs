@@ -610,11 +610,16 @@ mod imp {
             // Sync our accelerators for menu items (`:1233`).
             self.sync_action_accelerators();
 
-            // Load our runtime and custom CSS (`:1238-1249`). A failure here just
-            // leaves the old CSS in place — it must not fail the whole config
-            // change — so both loaders warn-and-continue internally.
+            // Load our runtime and custom CSS. If this fails then our window is
+            // just stuck with the old CSS but we don't want to fail the entire
+            // config change operation (`:1300-1314`).
             self.load_runtime_css();
-            self.load_custom_css();
+            // self.loadCustomCss() catch |err| {
+            //     log.warn("failed to load custom CSS, no custom CSS applied, err={}", .{err});
+            // };
+            if let Err(err) = self.load_custom_css() {
+                log::warn!(target: LOG_SCOPE, "failed to load custom CSS, no custom CSS applied, err={err}");
+            }
         }
 
         /// PORTS: `application.zig:...` `signalCssParsingError` — the
@@ -965,7 +970,11 @@ mod imp {
             self.global_shortcut_bind_failed_count
                 .set(self.global_shortcut_bind_failed_count.get() + 1);
 
-            let (title, body) = super::bind_failed_notification(failure);
+            // `... catch return;` (`:1773-1778`): no notification when the body
+            // does not fit the reference's 512-byte buffer (S49-F4 / S50-F3).
+            let Some((title, body)) = super::bind_failed_notification(failure) else {
+                return;
+            };
             // `Action.desktopNotification(self, .app, .{ .title, .body })`
             // (`:1721-1724`).
             action::desktop_notification(
@@ -973,7 +982,7 @@ mod imp {
                 Target::<super::AppTargetHandle>::App,
                 rustty_apprt_api::action::DesktopNotification {
                     title: title.as_bytes(),
-                    body: body.as_bytes(),
+                    body: &body,
                 },
             );
         }
@@ -1247,20 +1256,40 @@ mod imp {
             provider.load_from_string(&css);
         }
 
-        /// PORTS: `application.zig:1066-1140` `loadCustomCss`. Loads each
+        /// PORTS: `application.zig:1119-1199` `loadCustomCss`. Loads each
         /// `gtk-custom-css` file into a fresh provider appended to
         /// `custom_css_providers` and registered on the display at USER priority.
-        fn load_custom_css(&self) {
+        ///
+        /// Returns the reference's `LoadCustomCssError` arm: a read error other
+        /// than `FileTooBig` on a file that OPENED stops the whole load (the files
+        /// after it are not loaded; the ones before it stay applied), and the caller
+        /// logs `failed to load custom CSS, no custom CSS applied, err={}`
+        /// (`:1309-1314`). Measured on the VM with the reference's own open + read
+        /// code (Zig 0.16, aarch64-linux): a DIRECTORY named in `gtk-custom-css`
+        /// opens, then its first read fails with `error.IsDir`.
+        ///
+        /// CORRECTION (task T-D, S49-F3): this returned `()`. It checked the size
+        /// with `fs::metadata` and read with `fs::read`, so a read error was logged
+        /// as "error opening gtk-custom-css file" and skipped, and the files after
+        /// it still loaded. It also logged `loading gtk-custom-css path=` only
+        /// after a successful read (the reference logs it between the open and the
+        /// read), printed the size limit as `5242880 bytes` (the reference's `{Bi}`
+        /// prints `5MiB`, measured), and parsed `String::from_utf8_lossy(contents)`
+        /// where the reference hands GTK the file's bytes (`glib.Bytes` +
+        /// `loadFromBytes`). GTK treats those differently: measured on GTK 4.22.4,
+        /// a stylesheet whose comment holds one Latin-1 byte parses to NOTHING from
+        /// raw bytes, and to its rules after U+FFFD substitution.
+        pub(super) fn load_custom_css(&self) -> std::io::Result<()> {
             use std::os::unix::ffi::OsStrExt;
 
-            // `gdk.Display.getDefault() orelse { warn; return }` (`:1069-1072`).
+            // `gdk.Display.getDefault() orelse { warn; return }` (`:1126-1129`).
             let Some(display) = gtk4::gdk::Display::default() else {
                 log::warn!(target: LOG_SCOPE, "unable to get display");
-                return;
+                return Ok(());
             };
 
             // Unload the previously loaded style providers, then clear the list
-            // (`:1074-1081`). Each was registered at USER priority below; drop it
+            // (`:1131-1138`). Each was registered at USER priority below; drop it
             // off the display before releasing our reference.
             {
                 let mut providers = self.custom_css_providers.borrow_mut();
@@ -1272,47 +1301,28 @@ mod imp {
 
             let cfg = self.config.borrow();
             let Some(cfg) = cfg.as_ref() else {
-                return;
+                return Ok(());
             };
             let config = cfg.get();
 
-            // 5 MB per-file limit (`:1101`).
-            const CSS_FILE_SIZE_LIMIT: u64 = 5 * 1024 * 1024;
-
-            // `for (config.@"gtk-custom-css".value.items) |p|` (`:1083`). Each path
+            // `for (config.@"gtk-custom-css".value.items) |p|` (`:1141`). Each path
             // was already expanded to absolute at config load.
             for p in &config.gtk_custom_css.value {
                 // `.optional => .{ path, true }` / `.required => .{ path, false }`
-                // (`:1084-1087`).
+                // (`:1142-1145`).
                 let (path_bytes, optional) = match p {
                     rustty_config::path::Path::Optional(path) => (path, true),
                     rustty_config::path::Path::Required(path) => (path, false),
                 };
                 let path = std::path::Path::new(std::ffi::OsStr::from_bytes(path_bytes));
 
-                // Open + read the file (`:1088-1113`). A missing OPTIONAL file is
-                // silent; any other open error (or a missing REQUIRED file) warns;
-                // either way we skip to the next path.
-                let contents = match std::fs::metadata(path) {
-                    Ok(meta) if meta.len() > CSS_FILE_SIZE_LIMIT => {
-                        log::warn!(target: LOG_SCOPE, "gtk-custom-css file {} was larger than {CSS_FILE_SIZE_LIMIT} bytes",
-                            path.display());
-                        continue;
-                    }
-                    Ok(_) => match std::fs::read(path) {
-                        Ok(bytes) => bytes,
-                        Err(err) => {
-                            let missing = err.kind() == std::io::ErrorKind::NotFound;
-                            if !missing || !optional {
-                                log::warn!(target: LOG_SCOPE, "error opening gtk-custom-css file {}: {err}",
-                                    path.display());
-                            }
-                            continue;
-                        }
-                    },
+                // const file = std.Io.Dir.openFileAbsolute(global.io(), path, .{})
+                //     catch |err| { if (err != error.FileNotFound or !optional) log.warn(...); continue; };
+                // (`:1146-1158`). A missing OPTIONAL file is silent.
+                let file = match std::fs::File::open(path) {
+                    Ok(file) => file,
                     Err(err) => {
-                        let missing = err.kind() == std::io::ErrorKind::NotFound;
-                        if !missing || !optional {
+                        if err.kind() != std::io::ErrorKind::NotFound || !optional {
                             log::warn!(target: LOG_SCOPE, "error opening gtk-custom-css file {}: {err}",
                                 path.display());
                         }
@@ -1320,10 +1330,37 @@ mod imp {
                     }
                 };
 
+                // const css_file_size_limit = 5 * 1024 * 1024; // 5MB
+                const CSS_FILE_SIZE_LIMIT: usize = 5 * 1024 * 1024;
+
+                // log.info("loading gtk-custom-css path={s}", .{path});
                 log::info!(target: LOG_SCOPE, "loading gtk-custom-css path={}", path.display());
 
+                // const contents = compat_file.readToEndAlloc(file, alloc, css_file_size_limit)
+                //     catch |err| switch (err) {
+                //         error.FileTooBig => { log.warn(...); continue; },
+                //         else => |e| return e,
+                //     };
+                // (`:1166-1176`).
+                let contents = match super::read_to_end_alloc(file, CSS_FILE_SIZE_LIMIT) {
+                    Ok(contents) => contents,
+                    Err(super::ReadToEndAllocError::FileTooBig) => {
+                        // `{Bi}` of `css_file_size_limit` (5 * 1024 * 1024) prints
+                        // `5MiB` (Zig 0.16, measured on the VM).
+                        const CSS_FILE_SIZE_LIMIT_BI: &str = "5MiB";
+                        // log.warn("gtk-custom-css file {s} was larger than {Bi}", .{ path, css_file_size_limit });
+                        log::warn!(target: LOG_SCOPE, "gtk-custom-css file {} was larger than {CSS_FILE_SIZE_LIMIT_BI}",
+                            path.display());
+                        continue;
+                    }
+                    Err(super::ReadToEndAllocError::Io(err)) => return Err(err),
+                };
+
+                // const bytes = glib.Bytes.new(contents.ptr, contents.len); (`:1180`)
+                let bytes = glib::Bytes::from_owned(contents);
+
                 // Fresh provider, wire the parse-error logger, own it in the Vec,
-                // load, and register on the display at USER priority (`:1115-1139`).
+                // load, and register on the display at USER priority (`:1183-1197`).
                 let css_provider = gtk4::CssProvider::new();
                 let obj = self.obj();
                 css_provider.connect_parsing_error(glib::clone!(
@@ -1336,13 +1373,15 @@ mod imp {
                 self.custom_css_providers
                     .borrow_mut()
                     .push(css_provider.clone());
-                css_provider.load_from_string(&String::from_utf8_lossy(&contents));
+                // css_provider.loadFromBytes(bytes); (`:1196`)
+                css_provider.load_from_bytes(&bytes);
                 gtk4::style_context_add_provider_for_display(
                     &display,
                     &css_provider,
                     gtk4::STYLE_PROVIDER_PRIORITY_USER,
                 );
             }
+            Ok(())
         }
 
         /// PORTS: `application.zig:823-846` `startQuitTimer`. Called when the last
@@ -1681,42 +1720,122 @@ unsafe extern "C" fn handle_sigusr2(ud: glib::ffi::gpointer) -> glib::ffi::gbool
 /// fallbacks otherwise (`:1707-1713`). The trigger label falls back to `"?"` when
 /// the trigger cannot be rendered (`:1701-1705`).
 ///
-/// PORT NOTE (byte fidelity): `failure.message` is compositor wire data
-/// ([`Vec<u8>`]); it is decoded lossily HERE, at the one place it becomes
-/// user-facing display text, and nowhere earlier.
+/// Returns `None` where the reference returns without raising a notification: the
+/// body does not fit its 512-byte buffer (`:1773-1778`, `bufPrintZ(...) catch
+/// return`).
 ///
-/// PORT NOTE: the reference formats into a fixed 512-byte buffer and RETURNS
-/// (raising no notification at all) when the body does not fit (`:1715-1720`,
-/// `catch return`). rustty's `String` grows, so the notification is always raised;
-/// a notification silently dropped for length is a defect, not behaviour worth
-/// reproducing.
-pub(crate) fn bind_failed_notification(failure: &BindFailed) -> (String, String) {
-    // `key.labelFromTrigger(&writer, failure.trigger) catch false` → `"?"`
-    // (`:1700-1705`).
+/// The body is BYTES, as the reference's is: `failure.message` is compositor wire
+/// data (`[*:0]const u8`), and the 512-byte limit is a limit on those bytes. It is
+/// decoded only where it becomes display text (`action::desktop_notification`).
+///
+/// CORRECTION (task T-D, S49-F4 / S50-F3): this returned `(String, String)` under
+/// a PORT NOTE reading "rustty's `String` grows, so the notification is always
+/// raised; a notification silently dropped for length is a defect, not behaviour
+/// worth reproducing", and it decoded `failure.message` lossily before measuring
+/// anything. Neither buffer limit was reproduced. A dropped notification is not a
+/// crash, leak, hang or UB, so `PORT_RULES.md` R13 does not apply and R1 does: both
+/// limits are reproduced ([`BIND_FAILED_LABEL_BUF_LEN`], [`BIND_FAILED_BODY_BUF_LEN`])
+/// and the silent drop is recorded upstream as a latent defect
+/// (`UPSTREAM-DEFECTS.md` UD174).
+pub(crate) fn bind_failed_notification(failure: &BindFailed) -> Option<(String, Vec<u8>)> {
+    // var label_buf: [128]u8 = undefined;
+    // var writer: std.Io.Writer = .fixed(&label_buf);
+    // const label: []const u8 = label: {
+    //     const ok = key.labelFromTrigger(&writer, failure.trigger) catch false;
+    //     break :label if (ok) writer.buffered() else "?";
+    // };
     let label = {
         let mut buf = String::new();
-        if crate::gtk::key::label_from_trigger(&mut buf, failure.trigger) {
-            buf
-        } else {
-            "?".to_owned()
-        }
+        let ok = crate::gtk::key::label_from_trigger(&mut buf, failure.trigger);
+        bind_failed_label(ok, buf)
     };
 
-    // `if (failure.message[0] != 0) break :detail failure.message;` (`:1708`).
-    let detail: String = if failure.message.is_empty() {
+    // const detail: [*:0]const u8 = detail: {
+    //     if (failure.message[0] != 0) break :detail failure.message;
+    //     break :detail if (failure.revoked) ... else ...;
+    // };
+    //
+    // `[*:0]`: the message ends at its first NUL.
+    let message = failure
+        .message
+        .split(|&b| b == 0)
+        .next()
+        .unwrap_or_default();
+    let detail: &[u8] = if message.is_empty() {
         if failure.revoked {
-            tr(c"The keybind was revoked by the system.").to_owned()
+            tr(c"The keybind was revoked by the system.").as_bytes()
         } else {
-            tr(c"The keybind was denied by the system.").to_owned()
+            tr(c"The keybind was denied by the system.").as_bytes()
         }
     } else {
-        String::from_utf8_lossy(&failure.message).into_owned()
+        message
     };
 
-    (
-        tr(c"Global keybind unavailable").to_owned(),
-        format!("{label}: {detail}"),
-    )
+    // var body_buf: [512]u8 = undefined;
+    // const body = std.fmt.bufPrintZ(&body_buf, "{s}: {s}", .{ label, detail }) catch return;
+    let body = bind_failed_body(label.as_bytes(), detail)?;
+
+    Some((tr(c"Global keybind unavailable").to_owned(), body))
+}
+
+/// `compat_file.ReadToEndAllocError` as `loadCustomCss` distinguishes it:
+/// `error.FileTooBig` versus every other read error.
+#[derive(Debug)]
+pub(crate) enum ReadToEndAllocError {
+    /// `error.FileTooBig`: more than `max_bytes` were read.
+    FileTooBig,
+    /// Any other read error (`else => |e| return e`).
+    Io(std::io::Error),
+}
+
+/// PORTS: `src/lib/compat/file.zig:15-31` `readToEndAlloc`: read from the file's
+/// current position to end of stream, `error.FileTooBig` once more than
+/// `max_bytes` have been read. A STREAMING limit, as the reference's is (it never
+/// consults the file's size), so a file whose reported size is not its content
+/// (a `/proc` file, a FIFO) is measured by what it yields.
+pub(crate) fn read_to_end_alloc(
+    file: std::fs::File,
+    max_bytes: usize,
+) -> Result<Vec<u8>, ReadToEndAllocError> {
+    use std::io::Read;
+    let mut contents = Vec::new();
+    // Reading at most `max_bytes + 1` is enough to tell "fits" from "too big":
+    // the reference fails as soon as its running total would pass `max_bytes`.
+    file.take(max_bytes as u64 + 1)
+        .read_to_end(&mut contents)
+        .map_err(ReadToEndAllocError::Io)?;
+    if contents.len() > max_bytes {
+        return Err(ReadToEndAllocError::FileTooBig);
+    }
+    Ok(contents)
+}
+
+/// `var label_buf: [128]u8` (`application.zig:1758`).
+const BIND_FAILED_LABEL_BUF_LEN: usize = 128;
+/// `var body_buf: [512]u8` (`application.zig:1773`).
+const BIND_FAILED_BODY_BUF_LEN: usize = 512;
+
+/// The label half of `globalShortcutBindFailed`: `labelFromTrigger` into a
+/// `.fixed(&label_buf)` writer fails with `WriteFailed` once the label exceeds
+/// the 128-byte buffer, and a failure (of either kind) becomes `"?"`.
+fn bind_failed_label(ok: bool, label: String) -> String {
+    if ok && label.len() <= BIND_FAILED_LABEL_BUF_LEN {
+        label
+    } else {
+        "?".to_owned()
+    }
+}
+
+/// The body half: `bufPrintZ(&body_buf, "{s}: {s}", ...)` needs the formatted
+/// bytes PLUS the NUL sentinel to fit 512 bytes, so a body of 512 bytes or more
+/// is `error.NoSpaceLeft`, which the reference turns into `return` (no
+/// notification).
+fn bind_failed_body(label: &[u8], detail: &[u8]) -> Option<Vec<u8>> {
+    let mut body = Vec::with_capacity(label.len() + 2 + detail.len());
+    body.extend_from_slice(label);
+    body.extend_from_slice(b": ");
+    body.extend_from_slice(detail);
+    (body.len() < BIND_FAILED_BODY_BUF_LEN).then_some(body)
 }
 
 /// A zero-sized [`CoreSurfaceHandle`] used only to name the `C` type parameter of
@@ -1949,7 +2068,7 @@ fn parse_overrides(arguments_it: glib::VariantIter) -> Option<TabOverrides> {
         // a parse failure warns and CONTINUES (`:2079-2082`), unlike the
         // command arm.
         if let Some(v) = str.strip_prefix("--shell-integration=") {
-            match ShellIntegration::string_to_enum(v.trim().as_bytes()) {
+            match ShellIntegration::string_to_enum(trim_ascii_whitespace(v).as_bytes()) {
                 Some(parsed) => parsed_shell_integration = Some(parsed),
                 None => {
                     log::warn!(target: LOG_SCOPE, "unable to parse shell integration {v}: InvalidValue")
@@ -1960,12 +2079,12 @@ fn parse_overrides(arguments_it: glib::VariantIter) -> Option<TabOverrides> {
         // `if (std.mem.cutPrefix(u8, str, "--working-directory="))`
         // (`:2085-2091`).
         if let Some(v) = str.strip_prefix("--working-directory=") {
-            working_directory = Some(v.trim().to_string());
+            working_directory = Some(trim_ascii_whitespace(v).to_string());
             continue;
         }
         // `if (std.mem.cutPrefix(u8, str, "--title="))` (`:2092-2097`).
         if let Some(v) = str.strip_prefix("--title=") {
-            title = Some(v.trim().to_string());
+            title = Some(trim_ascii_whitespace(v).to_string());
             continue;
         }
     }
@@ -1984,6 +2103,18 @@ fn parse_overrides(arguments_it: glib::VariantIter) -> Option<TabOverrides> {
         working_directory,
         title,
     })
+}
+
+/// `std.mem.trim(u8, v, &std.ascii.whitespace)` — `parseOverrides`' trim of the
+/// `--shell-integration=`, `--working-directory=` and `--title=` values.
+///
+/// `std.ascii.whitespace` is `{ ' ', '\t', '\n', '\r', VT (0x0B), FF (0x0C) }`
+/// (Zig 0.16 `lib/std/ascii.zig:162`). CORRECTION (task T-D, S50-F2): the three
+/// sites used `str::trim()`, which also strips Unicode `White_Space` (U+00A0,
+/// U+0085, U+2028, U+3000, ...). `str::trim_ascii()` is not a substitute either:
+/// its set omits VT, which Zig's includes.
+fn trim_ascii_whitespace(v: &str) -> &str {
+    v.trim_matches(|c: char| matches!(c, ' ' | '\t' | '\n' | '\r' | '\x0B' | '\x0C'))
 }
 
 /// PORTS: `application.zig:2114-2148` `actionOpenConfig` (`open-config`;
@@ -2660,9 +2791,11 @@ impl Application {
         //   `:1258` `accelerator somehow longer than 1024 bytes: {f}` — the
         //          reference formats into a fixed 1024-byte stack buffer; this
         //          port formats into a `String`.
-        //   `:1304` `out of memory loading runtime CSS, no runtime CSS applied`
-        //          and `:1310` `failed to load custom CSS, ...` —
-        //          `load_runtime_css`/`load_custom_css` return `()`.
+        //   `:1304` `out of memory loading runtime CSS, no runtime CSS applied` —
+        //          `load_runtime_css` returns `()`. (CORRECTION, task T-D: this
+        //          entry also listed `:1310` `failed to load custom CSS, ...` as
+        //          unrestorable because `load_custom_css` returned `()`; it returns
+        //          the reference's read error now and `:1310` is live, S49-F3.)
         //   `:1804` `error toggling quick terminal err={}` and `:1815`
         //          `error quitting err={}` — both collapse to a direct call
         //          that cannot fail (see each action fn's own PORT NOTE).
@@ -5197,6 +5330,155 @@ mod tests {
     // pattern to follow: every one of these now calls
     // `crate::gtk::init_for_display_test`, so the others FAIL, by name.
 
+    /// S49-F3: `loadCustomCss` (`application.zig:1119-1199`) against real files.
+    ///
+    /// - A directory in `gtk-custom-css` opens and then fails its first read
+    ///   (`error.IsDir`, measured with the reference's own open + read code on the
+    ///   VM). That is not `FileTooBig`, so the WHOLE load stops: a stylesheet
+    ///   listed after it is not loaded, one listed before it stays loaded, and the
+    ///   caller (`propConfig`, `:1309-1314`) logs `failed to load custom CSS, no
+    ///   custom CSS applied, err=...`.
+    /// - The provider is fed the file's BYTES (`loadFromBytes`): a stylesheet
+    ///   whose comment holds one Latin-1 byte parses to nothing in GTK (measured,
+    ///   GTK 4.22.4), where its U+FFFD-substituted text would parse to its rule.
+    #[test]
+    #[ignore = "requires a display; run via cargo test -p rustty-apprt --features gtk,x11,wayland --lib load_custom_css -- --ignored"]
+    fn load_custom_css_stops_on_a_read_error_and_loads_raw_bytes() {
+        use rustty_config::path::Path as CfgPath;
+
+        crate::gtk::init_for_display_test(
+            "load_custom_css_stops_on_a_read_error_and_loads_raw_bytes",
+        );
+        let _ = libadwaita::init();
+
+        let dir = std::env::temp_dir().join(format!("rustty-s49f3-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("a-directory.css")).unwrap();
+        let ok_css = dir.join("ok.css");
+        std::fs::write(&ok_css, b"label { color: red; }").unwrap();
+        let latin1_css = dir.join("latin1.css");
+        std::fs::write(&latin1_css, b"/* caf\xe9 */ label { color: red; }").unwrap();
+        let cfg_path = |p: &std::path::Path| {
+            use std::os::unix::ffi::OsStrExt;
+            CfgPath::Required(p.as_os_str().as_bytes().to_vec())
+        };
+        let provider_text = |provider: &gtk4::CssProvider| -> Vec<u8> {
+            use glib::translate::ToGlibPtr;
+            // SAFETY: GTK returns a newly allocated NUL-terminated string we free.
+            unsafe {
+                let p = gtk4::ffi::gtk_css_provider_to_string(provider.to_glib_none().0);
+                let bytes = std::ffi::CStr::from_ptr(p).to_bytes().to_vec();
+                glib::ffi::g_free(p.cast());
+                bytes
+            }
+        };
+
+        let app = build_test_app(std::ptr::null_mut());
+        let set_css = |paths: Vec<CfgPath>| {
+            let mut core = rustty_config::Config::default_config();
+            core.gtk_custom_css.value = paths;
+            app.imp().config.replace(Some(Config::new(&core)));
+        };
+
+        // [dir, ok]: the directory's read error stops the load before ok.css.
+        set_css(vec![
+            cfg_path(&dir.join("a-directory.css")),
+            cfg_path(&ok_css),
+        ]);
+        let err = app
+            .imp()
+            .load_custom_css()
+            .expect_err("a directory's read error must abort the load");
+        assert_eq!(err.kind(), std::io::ErrorKind::IsADirectory);
+        assert_eq!(
+            app.imp().custom_css_providers.borrow().len(),
+            0,
+            "nothing after the failing entry is loaded"
+        );
+
+        // [ok, dir]: the entry BEFORE the failure stays loaded (positive: the loop
+        // ran and loaded a provider before it stopped).
+        set_css(vec![
+            cfg_path(&ok_css),
+            cfg_path(&dir.join("a-directory.css")),
+        ]);
+        assert!(app.imp().load_custom_css().is_err());
+        assert_eq!(app.imp().custom_css_providers.borrow().len(), 1);
+
+        // The caller logs the reference's warning with the error.
+        set_css(vec![cfg_path(&dir.join("a-directory.css"))]);
+        let cap = crate::log_capture::start();
+        app.imp().prop_config(&app);
+        let messages = cap.messages();
+        drop(cap);
+        let failed: Vec<_> = messages
+            .iter()
+            .filter(|(_, _, m)| {
+                m.starts_with("failed to load custom CSS, no custom CSS applied, err=")
+            })
+            .collect();
+        assert_eq!(failed.len(), 1, "one caller warning; got {messages:?}");
+        assert_eq!(failed[0].0, log::Level::Warn);
+        assert_eq!(failed[0].1, LOG_SCOPE);
+
+        // Raw bytes: the Latin-1 comment makes GTK parse nothing; the control
+        // (pure ASCII, same rule) parses to its rule.
+        set_css(vec![cfg_path(&latin1_css), cfg_path(&ok_css)]);
+        app.imp().load_custom_css().expect("both files load");
+        let providers = app.imp().custom_css_providers.borrow().clone();
+        assert_eq!(providers.len(), 2);
+        assert_eq!(
+            provider_text(&providers[0]),
+            b"",
+            "GTK is handed the raw bytes (a lossy U+FFFD copy would parse to the rule)"
+        );
+        assert!(
+            provider_text(&providers[1]).starts_with(b"label {"),
+            "control: the ASCII stylesheet parses to its rule"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// S50-F2: `parseOverrides` trims its three values with
+    /// `std.mem.trim(u8, v, &std.ascii.whitespace)` (`application.zig:2072-2097`):
+    /// ASCII space/TAB/LF/CR/VT/FF only. A value ending in U+00A0 (NO-BREAK SPACE)
+    /// or U+3000 keeps it; VT and FF are stripped. Display-free: the argv arrives
+    /// as a plain `as` variant.
+    #[test]
+    fn parse_overrides_trims_ascii_whitespace_only() {
+        use glib::prelude::*;
+        use rustty_config::value_types::ShellIntegration;
+
+        let parse = |args: &[&str]| {
+            let v = args.to_variant();
+            parse_overrides(v.iter()).expect("no --command, so parsing cannot fail")
+        };
+
+        // Unicode whitespace is NOT trimmed (the reference trims ASCII only).
+        let o = parse(&[
+            "--title=\u{a0}tab\u{a0}",
+            "--working-directory=/tmp/x\u{3000}",
+        ]);
+        assert_eq!(o.title.as_deref(), Some("\u{a0}tab\u{a0}"));
+        assert_eq!(o.working_directory.as_deref(), Some("/tmp/x\u{3000}"));
+
+        // ... so a NO-BREAK SPACE makes the shell-integration value unparseable
+        // (the reference warns and continues), where `str::trim` would parse it.
+        let o = parse(&["--shell-integration=\u{a0}bash"]);
+        assert_eq!(o.shell_integration, None);
+
+        // Every byte of `std.ascii.whitespace`, VT and FF included, IS trimmed.
+        let o = parse(&[
+            "--title= \t\n\r\x0B\x0Ctab\x0C\x0B\r\n\t ",
+            "--working-directory=\x0B/tmp/y\x0C",
+            "--shell-integration=\x0Bbash\x0C",
+        ]);
+        assert_eq!(o.title.as_deref(), Some("tab"));
+        assert_eq!(o.working_directory.as_deref(), Some("/tmp/y"));
+        assert_eq!(o.shell_integration, Some(ShellIntegration::Bash));
+    }
+
     /// S50-F1: `gotoWindow`'s walk, pinned on plain integers so it needs no display.
     /// Each case lists the nodes `gotoWindowMaybe` was asked about, in order. The
     /// "accept nothing" predicate makes the whole visiting order observable.
@@ -5509,9 +5791,10 @@ mod tests {
             action: rustty_input::binding::Action::NewWindow,
             message: b"already held by vicinae".to_vec(),
             revoked: false,
-        });
+        })
+        .expect("fits the 512-byte body buffer");
         assert_eq!(title, "Global keybind unavailable");
-        assert_eq!(body, "Super+Q: already held by vicinae");
+        assert_eq!(body, b"Super+Q: already held by vicinae");
 
         // Empty message + denied -> the "denied" fallback (`:1710-1712`).
         let (_, body) = bind_failed_notification(&BindFailed {
@@ -5519,8 +5802,9 @@ mod tests {
             action: rustty_input::binding::Action::NewWindow,
             message: Vec::new(),
             revoked: false,
-        });
-        assert_eq!(body, "Super+Q: The keybind was denied by the system.");
+        })
+        .expect("fits the 512-byte body buffer");
+        assert_eq!(body, b"Super+Q: The keybind was denied by the system.");
 
         // Empty message + revoked -> the "revoked" fallback (`:1710-1711`). This
         // pair is the reason the `revoked` flag is carried at all: a test of only
@@ -5530,8 +5814,9 @@ mod tests {
             action: rustty_input::binding::Action::NewWindow,
             message: Vec::new(),
             revoked: true,
-        });
-        assert_eq!(body, "Super+Q: The keybind was revoked by the system.");
+        })
+        .expect("fits the 512-byte body buffer");
+        assert_eq!(body, b"Super+Q: The keybind was revoked by the system.");
 
         // An unformattable trigger degrades to "?" rather than dropping the
         // notification (`:1701-1705`).
@@ -5543,8 +5828,63 @@ mod tests {
             action: rustty_input::binding::Action::NewWindow,
             message: b"nope".to_vec(),
             revoked: false,
-        });
-        assert_eq!(body, "?: nope");
+        })
+        .expect("fits the 512-byte body buffer");
+        assert_eq!(body, b"?: nope");
+    }
+
+    /// S49-F4 / S50-F3: `globalShortcutBindFailed`'s two fixed buffers
+    /// (`application.zig:1758-1778`). The body is `bufPrintZ` into 512 bytes, so it
+    /// fits at 511 bytes plus the NUL and at 512 the reference returns WITHOUT a
+    /// notification; the label is written into 128 bytes and one byte more turns it
+    /// into `"?"`. The message bytes are measured raw (a non-UTF-8 byte is ONE byte,
+    /// not the three of a U+FFFD).
+    #[test]
+    fn application_bind_failed_notification_buffer_limits() {
+        use rustty_input::binding::{Trigger, TriggerKey};
+        use rustty_vt::input::key_mods::Mods;
+
+        let trigger = Trigger {
+            key: TriggerKey::Unicode('q' as u32),
+            mods: Mods {
+                super_: true,
+                ..Default::default()
+            },
+        };
+        let notify = |message: Vec<u8>| {
+            bind_failed_notification(&BindFailed {
+                trigger,
+                action: rustty_input::binding::Action::NewWindow,
+                message,
+                revoked: false,
+            })
+        };
+        // "Super+Q: " is 9 bytes.
+        let prefix = b"Super+Q: ".len();
+
+        // 511 bytes of body: the largest that fits `[512]u8` with its sentinel.
+        let (_, body) = notify(vec![b'x'; 511 - prefix]).expect("511 bytes fit");
+        assert_eq!(body.len(), 511);
+        // 512 bytes: `bufPrintZ` fails and the reference raises nothing.
+        assert!(
+            notify(vec![b'x'; 512 - prefix]).is_none(),
+            "a 512-byte body does not fit the reference's buffer"
+        );
+        // Measured in raw bytes: 501 x's + one 0xE9 is 511 bytes (fits); decoded
+        // lossily it would be 513 (and be dropped).
+        let mut msg = vec![b'x'; 511 - prefix - 1];
+        msg.push(0xE9);
+        let (_, body) = notify(msg).expect("511 raw bytes fit");
+        assert_eq!(
+            body.last(),
+            Some(&0xE9),
+            "the message bytes are passed through raw"
+        );
+
+        // The 128-byte label buffer.
+        assert_eq!(bind_failed_label(true, "k".repeat(128)), "k".repeat(128));
+        assert_eq!(bind_failed_label(true, "k".repeat(129)), "?");
+        assert_eq!(bind_failed_label(false, "k".to_owned()), "?");
     }
 
     /// PORTS: `application.zig:1475-1481` — the `bind-failed` connection. Emitting

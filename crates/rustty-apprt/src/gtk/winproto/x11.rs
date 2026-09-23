@@ -33,10 +33,11 @@
 //!
 //! # DEFERRALS
 //!
-//! * **Quick terminal.** [`App::supports_quick_terminal`] is `false` and
-//!   [`App::init_quick_terminal`] returns unsupported — matching the reference,
-//!   whose X11 `supportsQuickTerminal` is unconditionally `false` (`x11.zig:172-177`;
-//!   the quick terminal is a Wayland layer-shell feature).
+//! * **Quick terminal.** [`App::supports_quick_terminal`] warns and is `false`, and
+//!   [`App::init_quick_terminal`] is an empty success — matching the reference
+//!   (`x11.zig:172-177`; the quick terminal is a Wayland layer-shell feature).
+//!   CORRECTION (task T-D, S60-F5): this said `init_quick_terminal` "returns
+//!   unsupported".
 
 use rustty_global::EnvMapExt as _;
 use std::os::raw::{c_int, c_long, c_uchar, c_uint, c_ulong, c_void};
@@ -109,8 +110,6 @@ pub enum Error {
     PropertyTypeMismatch,
     /// `error.PropertyFormatMismatch` (`x11.zig:385,441`).
     PropertyFormatMismatch,
-    /// The quick terminal is not supported on X11 (`x11.zig:172-177`).
-    QuickTerminalUnsupported,
 }
 
 impl core::fmt::Display for Error {
@@ -124,14 +123,22 @@ impl core::fmt::Display for Error {
             Error::RequestFailed => write!(f, "X11 request failed"),
             Error::PropertyTypeMismatch => write!(f, "X11 property type mismatch"),
             Error::PropertyFormatMismatch => write!(f, "X11 property format mismatch"),
-            Error::QuickTerminalUnsupported => {
-                write!(f, "quick terminal is not supported on X11")
-            }
         }
     }
 }
 
 impl std::error::Error for Error {}
+
+/// `glib.setPrgname(name)` with the name's raw bytes: the reference passes its
+/// `[:0]const u8` config value straight to `g_set_prgname`, which does not
+/// require UTF-8. C reads up to the first NUL, as it does for the reference's
+/// sentinel-terminated slice.
+fn set_prgname_raw(name: &[u8]) {
+    let end = name.iter().position(|&b| b == 0).unwrap_or(name.len());
+    let c = std::ffi::CString::new(&name[..end]).expect("no interior NUL before `end`");
+    // SAFETY: `c` is a valid NUL-terminated string; GLib copies it.
+    unsafe { glib::ffi::g_set_prgname(c.as_ptr()) };
+}
 
 impl From<Error> for WinprotoError {
     fn from(e: Error) -> Self {
@@ -229,15 +236,42 @@ impl App {
         // binding; the pointer is a live `Display` GDK owns for its lifetime.
         let display = unsafe { x11d.xdisplay() };
 
-        // Set WM_CLASS. The instance name is derived from `g_set_prgname`
-        // (`x11.zig:46-69`): `x11-instance-name` if set, else the debug/release
-        // program name. Matches the reference's structure with rustty's identity.
-        let program_name: std::borrow::Cow<'_, str> = match &config.x11_instance_name {
-            Some(pn) => String::from_utf8_lossy(pn),
-            None if cfg!(debug_assertions) => std::borrow::Cow::Borrowed("rustty-debug"),
-            None => std::borrow::Cow::Borrowed("rustty"),
+        // const x11_program_name: [:0]const u8 = if (config.@"x11-instance-name") |pn|
+        //     pn
+        // else if (builtin.mode == .Debug)
+        //     "ghostty-debug"
+        // else
+        //     "ghostty";
+        let x11_program_name: &[u8] = match &config.x11_instance_name {
+            Some(pn) => pn,
+            None if cfg!(debug_assertions) => b"rustty-debug",
+            None => b"rustty",
         };
-        glib::set_prgname(Some(program_name.as_ref()));
+
+        // Set the X11 window class property (WM_CLASS) if we are on an X11
+        // display.
+        //
+        // Note that we also set the program name here using g_set_prgname.
+        // This is how the instance name field for WM_CLASS is derived when
+        // calling gdk_x11_display_set_program_class; there does not seem to be
+        // a way to set it directly. It does not look like this is being set by
+        // our other app initialization routines currently, but since we're
+        // currently deriving its value from x11-instance-name effectively, I
+        // feel like gating it behind an X11 check is better intent.
+        //
+        // This makes the property show up like so when using xprop:
+        //
+        //     WM_CLASS(STRING) = "rustty", "io.airely.rustty"
+        //
+        // Append "-debug" on both when using the debug build.
+        //
+        // CORRECTION (task T-D, S60-F8): the instance name went through
+        // `String::from_utf8_lossy` and `glib::set_prgname(&str)`, so a non-UTF-8
+        // `x11-instance-name` reached WM_CLASS with U+FFFD in place of its bytes,
+        // and the reference's comment block above had been dropped. The reference
+        // hands the raw `[:0]const u8` to `glib.setPrgname`; so does
+        // [`set_prgname_raw`].
+        set_prgname_raw(x11_program_name);
         // `gdk_x11.X11Display.setProgramClass(gdk_display, app_id)` (`x11.zig:70`).
         x11d.set_program_class(app_id);
 
@@ -441,16 +475,21 @@ impl App {
         false
     }
 
-    /// PORTS: `x11.zig:177` `App.initQuickTerminal`. Unsupported on X11 — returns
-    /// [`Error::QuickTerminalUnsupported`]. Only reachable if
-    /// [`Self::supports_quick_terminal`] is `true` (never), so effectively
-    /// unreachable; the reference's body is empty.
-    #[allow(clippy::unused_self)]
+    /// PORTS: `x11.zig:177` `App.initQuickTerminal` —
+    /// `pub fn initQuickTerminal(_: *App, _: *ApprtWindow) !void {}`: an empty
+    /// SUCCESS.
+    ///
+    /// CORRECTION (task T-D, S60-F5): this returned
+    /// `Err(Error::QuickTerminalUnsupported)` (a variant the reference's X11 error
+    /// set does not have) under a doc saying "Unsupported on X11 — returns
+    /// QuickTerminalUnsupported ... the reference's body is empty". The body is
+    /// empty AND returns success; the variant is removed.
+    #[allow(clippy::unused_self, clippy::unnecessary_wraps)]
     pub fn init_quick_terminal(
         &mut self,
         _window: &impl gtk4::prelude::IsA<gtk4::Window>,
     ) -> Result<(), WinprotoError> {
-        Err(Error::QuickTerminalUnsupported.into())
+        Ok(())
     }
 }
 
@@ -964,6 +1003,77 @@ mod tests {
         _property: c_ulong,
     ) -> c_int {
         0
+    }
+
+    /// S60-F5: X11 `supportsQuickTerminal` warns "quick terminal is not yet
+    /// supported on X11" and returns false; `initQuickTerminal` is an empty
+    /// SUCCESS (`x11.zig:172-177`). Needs a live X server (headless sway's
+    /// Xwayland on the VM); FAILS rather than returning without one.
+    #[test]
+    #[ignore = "requires an X server; run with GDK_BACKEND=x11 DISPLAY=... cargo test -p rustty-apprt --features gtk,x11,wayland --lib x11_quick_terminal -- --ignored"]
+    fn x11_quick_terminal_warns_unsupported_and_init_succeeds() {
+        crate::gtk::init_for_display_test("x11_quick_terminal_warns_unsupported_and_init_succeeds");
+        let display = gdk4::Display::default().expect("a default GDK display");
+        assert!(
+            display.downcast_ref::<gdk4_x11::X11Display>().is_some(),
+            "this test needs the X11 GDK backend (GDK_BACKEND=x11)"
+        );
+        let mut x11_app = App::init(
+            &display,
+            "io.airely.rustty.test",
+            &CoreConfig::default_config(),
+        )
+        .expect("x11 App::init")
+        .expect("the X11 arm");
+
+        let cap = crate::log_capture::start();
+        let supported = x11_app.supports_quick_terminal();
+        let messages = cap.messages();
+        drop(cap);
+        assert!(!supported);
+        assert_eq!(
+            messages,
+            [(
+                log::Level::Warn,
+                LOG_SCOPE.to_owned(),
+                "quick terminal is not yet supported on X11".to_owned(),
+            )]
+        );
+
+        let window = gtk4::Window::new();
+        assert!(
+            x11_app.init_quick_terminal(&window).is_ok(),
+            "the reference's initQuickTerminal is an empty success"
+        );
+        window.destroy();
+    }
+
+    /// S60-F8: `x11-instance-name` reaches `g_set_prgname` as its raw bytes
+    /// (`x11.zig:46-69`, `glib.setPrgname(x11_program_name)`), which is where
+    /// GDK derives WM_CLASS's instance name from. A non-UTF-8 byte is kept, not
+    /// replaced by U+FFFD.
+    #[test]
+    #[ignore = "requires an X server; run with GDK_BACKEND=x11 DISPLAY=... cargo test -p rustty-apprt --features gtk,x11,wayland --lib x11_instance_name -- --ignored"]
+    fn x11_instance_name_reaches_g_set_prgname_raw() {
+        crate::gtk::init_for_display_test("x11_instance_name_reaches_g_set_prgname_raw");
+        let display = gdk4::Display::default().expect("a default GDK display");
+        assert!(
+            display.downcast_ref::<gdk4_x11::X11Display>().is_some(),
+            "this test needs the X11 GDK backend (GDK_BACKEND=x11)"
+        );
+        let mut config = CoreConfig::default_config();
+        config.x11_instance_name = Some(b"caf\xe9-rustty".to_vec());
+        let _x11_app = App::init(&display, "io.airely.rustty.test", &config)
+            .expect("x11 App::init")
+            .expect("the X11 arm");
+
+        // SAFETY: GLib returns its own NUL-terminated copy of the program name.
+        let prgname = unsafe {
+            let p = glib::ffi::g_get_prgname();
+            assert!(!p.is_null(), "App::init set a program name");
+            std::ffi::CStr::from_ptr(p).to_bytes().to_vec()
+        };
+        assert_eq!(prgname, b"caf\xe9-rustty");
     }
 
     /// S60-F1: `syncBlur` commits its new region to the cache only after the
