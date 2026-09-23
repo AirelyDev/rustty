@@ -5362,6 +5362,15 @@ pub enum LoadError {
     Io(std::io::Error),
     /// A parse error propagated from `loadIter`.
     Parse(ParseError),
+    /// A default-path lookup error propagated from `file_load` (the reference's
+    /// `try file_load.defaultXdgPath(alloc)` and siblings in `loadDefaultFiles`).
+    FileLoad(crate::file_load::FileLoadError),
+}
+
+impl From<crate::file_load::FileLoadError> for LoadError {
+    fn from(e: crate::file_load::FileLoadError) -> LoadError {
+        LoadError::FileLoad(e)
+    }
 }
 
 impl LoadError {
@@ -6157,10 +6166,16 @@ impl Config {
         // const legacy_xdg_path = try file_load.legacyDefaultXdgPath(alloc);
         // defer alloc.free(legacy_xdg_path);
         // (W94-B02-01: the XDG helpers are byte-typed now — no `into_bytes`.)
-        let legacy_xdg_path = crate::file_load::legacy_default_xdg_path().unwrap_or_default();
+        //
+        // PORT NOTE (LEDGER S74-F1): each `try` is a `?`. These four lookups
+        // were `.unwrap_or_default()`, so a failed lookup (e.g. a `$HOME` longer
+        // than the XDG helper's 1024-byte buffer with `XDG_CONFIG_HOME` unset)
+        // loaded an EMPTY path and panicked in `load_file`'s
+        // `assert!(is_absolute)`; the reference returns the error.
+        let legacy_xdg_path = crate::file_load::legacy_default_xdg_path()?;
         // const xdg_path = try file_load.defaultXdgPath(alloc);
         // defer alloc.free(xdg_path);
-        let xdg_path = crate::file_load::default_xdg_path().unwrap_or_default();
+        let xdg_path = crate::file_load::default_xdg_path()?;
         // const xdg_loaded: bool = xdg_loaded: {
         let xdg_loaded: bool = {
             // const legacy_xdg_action = self.loadOptionalFile(alloc, legacy_xdg_path);
@@ -6195,14 +6210,11 @@ impl Config {
         {
             // const legacy_app_support_path = try file_load.legacyDefaultAppSupportPath(alloc);
             // defer alloc.free(legacy_app_support_path);
-            let legacy_app_support_path = crate::file_load::legacy_default_app_support_path()
-                .map(String::into_bytes)
-                .unwrap_or_default();
+            let legacy_app_support_path =
+                crate::file_load::legacy_default_app_support_path()?.into_bytes();
             // const app_support_path = try file_load.preferredAppSupportPath(alloc);
             // defer alloc.free(app_support_path);
-            let app_support_path = crate::file_load::preferred_app_support_path()
-                .map(String::into_bytes)
-                .unwrap_or_default();
+            let app_support_path = crate::file_load::preferred_app_support_path()?.into_bytes();
             // const app_support_loaded: bool = loaded: {
             let app_support_loaded: bool = {
                 // const legacy_app_support_action = self.loadOptionalFile(
@@ -6824,11 +6836,15 @@ impl Config {
         // directory.
         // var buf: [std.fs.max_path_bytes]u8 = undefined;
         // try self.expandPaths(try std.fs.cwd().realpath(".", &buf));
-        let cwd = std::env::current_dir()
-            .ok()
-            .and_then(|p| p.canonicalize().ok())
-            .map(|p| path_to_bytes(&p))
-            .unwrap_or_default();
+        //
+        // PORT NOTE (LEDGER S74-F3): both `try`s propagate. This was
+        // `.ok()...unwrap_or_default()`, so an unresolvable cwd (deleted, or
+        // not searchable) expanded every CLI path against an EMPTY base; the
+        // reference returns the `realPathFile` error before `expandPaths`.
+        // `realPathFile(".")` on `cwd()` is libc `realpath(".")`
+        // (`Io/Threaded.zig` `dirRealPathFilePosix`, the `AT.FDCWD` arm), which
+        // is what `canonicalize` calls.
+        let cwd = path_to_bytes(&std::fs::canonicalize(".")?);
         self.expand_paths(&cwd)?;
 
         Ok(())
