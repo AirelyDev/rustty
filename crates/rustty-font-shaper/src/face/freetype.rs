@@ -2574,7 +2574,8 @@ mod tests {
     /// `:120-126`. The port's `?` dropped the `Face` instead, leaking the
     /// HarfBuzz font and the boxed mutex. Proven POSITIVELY for the HarfBuzz
     /// font: a user-data destroy callback runs only when the font is destroyed.
-    /// The boxed mutex has no comparable probe; it is freed on the same arm.
+    /// The boxed mutex is proven freed by
+    /// `a_failed_variation_axes_step_frees_the_ft_mutex` below.
     #[test]
     fn a_failed_variation_axes_step_destroys_the_harfbuzz_font() -> Result<(), Error> {
         use core::sync::atomic::{AtomicUsize, Ordering};
@@ -2624,6 +2625,110 @@ mod tests {
             before + 1,
             DESTROYED.load(Ordering::SeqCst),
             "the HarfBuzz font is destroyed on the error path, not leaked"
+        );
+
+        base.deinit();
+        Ok(())
+    }
+
+    // Task R13-P2 (N53): the probe for the OTHER errdefer on that arm,
+    // `errdefer lib.alloc.destroy(ft_mutex)`. The boxed mutex is a
+    // `std::sync::Mutex<()>`, which cannot carry a drop counter, so the probe
+    // watches the ALLOCATION instead: a global allocator that forwards every
+    // call to `System` and, on `dealloc`, records whether the pointer it frees is
+    // the one this thread asked it to watch. The counters are THREAD-LOCAL, so a
+    // parallel test's frees cannot set them (libtest runs each test on its own
+    // thread, and the free under test happens on the test's thread). A watched
+    // address cannot be reused while its box is still live, so a later
+    // allocation at the same address cannot fake the free.
+    struct DeallocWatch;
+
+    thread_local! {
+        static WATCHED: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+        static WATCHED_FREED: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
+    }
+
+    unsafe impl std::alloc::GlobalAlloc for DeallocWatch {
+        unsafe fn alloc(&self, layout: std::alloc::Layout) -> *mut u8 {
+            unsafe { std::alloc::System.alloc(layout) }
+        }
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: std::alloc::Layout) {
+            // `try_with`: never touch a thread-local that is being torn down.
+            let _ = WATCHED.try_with(|w| {
+                if w.get() != 0 && w.get() == ptr as usize {
+                    let _ = WATCHED_FREED.try_with(|f| f.set(true));
+                }
+            });
+            unsafe { std::alloc::System.dealloc(ptr, layout) }
+        }
+        unsafe fn realloc(
+            &self,
+            ptr: *mut u8,
+            layout: std::alloc::Layout,
+            new_size: usize,
+        ) -> *mut u8 {
+            unsafe { std::alloc::System.realloc(ptr, layout, new_size) }
+        }
+        unsafe fn alloc_zeroed(&self, layout: std::alloc::Layout) -> *mut u8 {
+            unsafe { std::alloc::System.alloc_zeroed(layout) }
+        }
+    }
+
+    // D6-ALLOW(watching shim, not an allocator substitution): this lives inside
+    // `#[cfg(test)] mod tests`, so it exists only in this crate's test binary
+    // and can never enter a shipped build. Every arm forwards to
+    // `std::alloc::System`, i.e. plain `malloc`/`free`, which the ASan/LSan
+    // interceptors still see; `dealloc` only compares a pointer against a
+    // thread-local first. Same shape as `rustty-renderer/src/link.rs`'s
+    // counting shim.
+    #[global_allocator]
+    static DEALLOC_WATCH: DeallocWatch = DeallocWatch;
+
+    #[test]
+    fn a_failed_variation_axes_step_frees_the_ft_mutex() -> Result<(), Error> {
+        // The probe needs a real allocation to watch: a zero-sized box would
+        // never reach the allocator.
+        assert_ne!(0, core::mem::size_of::<library::Mutex>());
+
+        // The probe itself sees a free of the watched pointer (and only then).
+        let sentinel = Box::into_raw(Box::new(library::Mutex::new(())));
+        WATCHED_FREED.with(|f| f.set(false));
+        WATCHED.with(|w| w.set(sentinel as usize));
+        assert!(!WATCHED_FREED.with(|f| f.get()));
+        // SAFETY: `sentinel` came from `Box::into_raw` just above.
+        drop(unsafe { Box::from_raw(sentinel) });
+        assert!(
+            WATCHED_FREED.with(|f| f.get()),
+            "the probe observes the free"
+        );
+        WATCHED.with(|w| w.set(0));
+
+        // A real face, to borrow the FT face from (as in the test above).
+        let lib = Library::init()?;
+        let mut base = Face::init(lib, embedded::VARIABLE, opts(size(12.0, 96, 96)))?;
+
+        WATCHED_FREED.with(|f| f.set(false));
+        let mut watched = 0usize;
+        let got = Face::init_face_with(base.lib, base.face, opts(size(12.0, 96, 96)), |f| {
+            watched = f.ft_mutex as usize;
+            WATCHED.with(|w| w.set(watched));
+            assert!(
+                !WATCHED_FREED.with(|f| f.get()),
+                "the mutex is live while the face is being built"
+            );
+            Err(Error::OutOfMemory)
+        });
+        let freed = WATCHED_FREED.with(|f| f.get());
+        WATCHED.with(|w| w.set(0));
+
+        assert!(
+            matches!(got, Err(Error::OutOfMemory)),
+            "the failure propagates"
+        );
+        assert_ne!(0, watched, "the seam saw the boxed mutex");
+        assert!(
+            freed,
+            "the boxed ft_mutex is freed on the error path, not leaked"
         );
 
         base.deinit();
