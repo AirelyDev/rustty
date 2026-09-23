@@ -2369,7 +2369,9 @@ that override was dropped entirely; it now matches.
 - **found by**: the R13-G part B sweep (read, not run); verified and fixed by task R13-P.
 - **severity**: low. **kind**: port-only panic on external input.
 - **oracle**: `src/termio/Exec.zig:1847-2010` (`execCommand`'s per-argument `dupeZ`),
-  `src/os/flatpak.zig:360-361`, `src/os/passwd.zig:86-88`, and the fontconfig descriptor path.
+  `src/os/flatpak.zig:360-361`, `src/os/passwd.zig:121-122` (the `dupeZ` of the shell and home fields;
+  first cited as `:86-88`, the `cmd.spawn`/`cmd.wait` lines, corrected by task R13-P2), and the fontconfig
+  descriptor path.
 - **rustty**: `crates/rustty-termio/src/exec.rs` (`cstring`), `crates/rustty-font-shaper/src/discovery.rs`
   (`to_fc_pattern`), `crates/rustty-os/src/flatpak.rs`, `crates/rustty-os/src/passwd.rs`.
 
