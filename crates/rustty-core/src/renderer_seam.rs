@@ -1999,13 +1999,18 @@ where
         // The diagnostic is kept because the reference emits it BEFORE
         // trapping, so the operator sees which error caused the crash.
         //
-        // REOPENED (task R13-C, PORT_RULES R13, UD73): these errors are
-        // kernel-reachable on io_uring, so the `unreachable!()` below is a
-        // ported reference defect. The fix (drop it; the callback already
-        // disarms) and the inversion of
-        // `cursor_cancel_callback_traps_on_an_impossible_error` compile only
-        // on Linux and are pending the Linux run. The three sibling timer
-        // callbacks are already fixed.
+        // PORT NOTE: reference defect (R13), UD73 (task R13-C reopened and
+        // re-closed S114-F2). The paragraph above is superseded: these errors
+        // are not impossible. On io_uring the timer cancel is a
+        // `TIMEOUT_REMOVE`, and a remove that races the timer firing completes
+        // with `-EALREADY` (the kernel's `io_timeout_extract` when
+        // `hrtimer_try_to_cancel` fails), which libxev's `timer_remove`
+        // mapping (NOENT, BUSY, TIME) does not name, so it arrives here as
+        // `Unexpected`; `-EBUSY` arrives as `ExpirationInProgress`. Both hit
+        // the reference's `unreachable`.
+        // The port keeps the reference's warning and then disarms, which is
+        // what the success arms do: the timer has fired or is firing, so
+        // there is nothing left to cancel.
         if let Err(err) = r {
             #[cfg(not(target_os = "linux"))]
             match err {
@@ -2017,13 +2022,14 @@ where
                 // error.NotFound => {}, // completed before it could cancel
                 xev::CancelError::NotFound => {}
                 // else => { log.warn(...); unreachable; },
+                //
+                // (R13, UD73: warn, then fall through to `.disarm`.)
                 _ => {
                     // log.warn("error in cursor cancel callback err={}", .{err});
                     log::warn!(
                         target: LOG_SCOPE,
                         "error in cursor cancel callback err={err:?}"
                     );
-                    unreachable!()
                 }
             }
         }
@@ -3002,20 +3008,38 @@ mod thread_diagnostics_tests {
         assert_eq!(Vec::<log_capture::CapturedRecord>::new(), messages);
     }
 
-    /// S114-F2's actual defect: the port SWALLOWED these and continued where
-    /// the reference warns and hits `unreachable`. The row is closed on this
-    /// assertion, not on a log line — before the fix this call returned
-    /// `.disarm` quietly and the test fails by NOT panicking.
+    /// S114-F2, REVERSED by task R13-C under R13 (UD73). This test used to be
+    /// `cursor_cancel_callback_traps_on_an_impossible_error` and pinned the
+    /// reference's warn-then-`unreachable`. Those errors are kernel-reachable
+    /// on io_uring, so each must now WARN (the reference's own diagnostic,
+    /// which also proves the error arm was reached rather than a success arm)
+    /// and then DISARM without panicking. The injected errors stand in for the
+    /// kernel's `-EALREADY` race, which cannot be scheduled.
     #[test]
     #[cfg(target_os = "linux")]
-    #[should_panic(expected = "internal error: entered unreachable code")]
-    fn cursor_cancel_callback_traps_on_an_impossible_error() {
-        let _ = Thread::<TestApp>::cursorCancelCallback(
-            core::ptr::null_mut(),
-            core::ptr::null_mut(),
-            core::ptr::null_mut(),
-            Err(xev::CancelError::Unexpected),
-        );
+    fn cursor_cancel_callback_warns_and_disarms_on_a_cancel_error() {
+        for err in [
+            xev::CancelError::ExpirationInProgress,
+            xev::CancelError::Unexpected,
+        ] {
+            let cap = log_capture::start();
+            let action = Thread::<TestApp>::cursorCancelCallback(
+                core::ptr::null_mut(),
+                core::ptr::null_mut(),
+                core::ptr::null_mut(),
+                Err(err),
+            );
+            let messages = cap.messages();
+            drop(cap);
+
+            assert_eq!(xev::CallbackAction::Disarm, action, "{err:?}");
+            assert_eq!(1, messages.len(), "{err:?}: {messages:?}");
+            assert!(
+                format!("{:?}", messages[0])
+                    .contains(&format!("error in cursor cancel callback err={err:?}")),
+                "{messages:?}"
+            );
+        }
     }
 
     /// Inventory M16 (R13): the three timer callbacks' `else => unreachable`
