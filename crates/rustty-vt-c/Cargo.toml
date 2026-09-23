@@ -123,6 +123,10 @@ rustty-vt = { path = "../rustty-vt", default-features = false }
 rustty-unicode = { workspace = true }
 rustty-lib = { workspace = true }
 rustty-render-types = { workspace = true }
+# `terminal/c/sys.zig` imports `os/stderr.zig` for `logStderr`'s raw write
+# (parity S178-F2). rustty-vt already depends on rustty-os, so this adds no
+# crate to the graph.
+rustty-os = { workspace = true }
 allocator-api2 = { workspace = true }
 # The `log` facade backend (task-14a/DECISION-logging.md §"the wiring
 # pattern"): rustty-vt-c installs a `log::Log` impl (`sys::Logger`) that
@@ -172,7 +176,6 @@ log = { workspace = true }
 # build) for free — one declaration, one artifact class, no per-crate repeat
 # needed as later stages add sites.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-rustty-os = { workspace = true }
 log = { workspace = true, features = ["release_max_level_off"] }
 
 [dev-dependencies]

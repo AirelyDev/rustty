@@ -361,11 +361,11 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** `search::new` drops the registry-insert out-of-memory path
   - **Oracle:** `src/terminal/c/search.zig:135-145` → **Rustty:** `crates/rustty-vt-c/src/search.rs:389-400`
   - **Audit's suggested fix:** Use a fallible insert (e.g. `try_reserve` before `insert`, or the allocator-aware hashbrown API) so a registry allocation failure destroys the wrapper and returns `Result::OutOfMemory` as the oracle does.
-- [ ] **S178-F1** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S178-F1** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** log_stderr renders scope/message through String::from_utf8_lossy instead of raw bytes
   - **Oracle:** `src/terminal/c/sys.zig:249-285` → **Rustty:** `crates/rustty-vt-c/src/sys.rs:600-660`
   - **Audit's suggested fix:** Write the raw bytes: `lock.write_all(b"[")`, `write_all(level_text.as_bytes())`, `write_all(b"](")`, `write_all(scope)`, `write_all(b"): ")`, `write_all(message)`, `write_all(b"\n")` — or build the line into a stack `[u8; 2048+128]` buffer and issue one `write_all`, matching the reference's single-write path exactly.
-- [ ] **S178-F2** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S178-F2** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** log_stderr no longer emits each line with a single write; the doc-comment guarantee is unbacked
   - **Oracle:** `src/terminal/c/sys.zig:219-285` → **Rustty:** `crates/rustty-vt-c/src/sys.rs:586-660`
   - **Audit's suggested fix:** Format into a `[u8; LogEmitter::buffer_size + 128]` stack buffer and emit it with a single `write_all`, falling back to piecewise writes when the line does not fit — restoring both the single-write property and the reference's two-path structure. (Fixing this and the lossy-UTF-8 finding together is one change.)

@@ -416,6 +416,12 @@ fn emit_log(level: LogLevel, scope: &[u8], message: &[u8]) {
     );
 }
 
+// const buffer_size = 2048;
+// PORT NOTE: `LogEmitter.buffer_size`, hoisted to module scope because
+// `log_stderr` (every target) sizes its line buffer from it while
+// `LogEmitter` itself is `cfg(not(wasm32))`.
+const LOG_EMITTER_BUFFER_SIZE: usize = 2048;
+
 /// Emits logs in chunks. Almost all logs will be less than the chunk size
 /// but this allows emitting larger logs without heap allocation.
 // const LogEmitter = struct { c_level, scope_text, buf: [2048]u8, pos: usize, ... }
@@ -425,7 +431,7 @@ fn emit_log(level: LogLevel, scope: &[u8], message: &[u8]) {
 struct LogEmitter<'a> {
     c_level: LogLevel,
     scope_text: &'a [u8],
-    buf: [u8; 2048],
+    buf: [u8; LOG_EMITTER_BUFFER_SIZE],
     pos: usize,
 }
 
@@ -572,7 +578,7 @@ fn log_fn_c_abi(level: StdLevel, scope: &str, args: core::fmt::Arguments) {
     let mut ctx = LogEmitter {
         c_level,
         scope_text,
-        buf: [0u8; 2048],
+        buf: [0u8; LOG_EMITTER_BUFFER_SIZE],
         pos: 0,
     };
     // const writer: std.io.GenericWriter(...) = .{ .context = &ctx };
@@ -744,10 +750,8 @@ pub fn install_log_backend() {
 /// and would keep the entire `std.Io.Threaded` vtable alive in the binary
 /// (see `os/stderr.zig`). On freestanding/wasm targets this is a no-op
 /// (no stderr available).
-// PORT NOTE: the `std.debug.lockStderr` avoidance above is Zig binary-size
-// machinery (`std.Io` vtable retention) with no Rust analogue; the port gets
-// the same no-interleaving guarantee by holding `std::io::stderr().lock()`
-// for the whole line (see the lock PORT NOTE in the body).
+// PORT NOTE: the raw write is `rustty_os::stderr::write`, the port of
+// `os/stderr.zig`, so the port also bypasses `std::io::stderr()`'s lock.
 // pub fn logStderr(_, level, scope_ptr, scope_len, message_ptr, message_len)
 //     callconv(...) void { ... }
 /// PORT NOTE: the C calling convention is the `extern "C"` wrapper in `lib.rs`
@@ -782,49 +786,84 @@ pub unsafe fn log_stderr(
         LogLevel::Debug => "debug",
     };
 
-    // The reference formats the line into a stack buffer and emits it with a
-    // single raw stderr write, falling back to piecewise writes when it does
-    // not fit:
-    //
-    //     // Large enough for a full logFn chunk plus the level/scope prefix.
-    //     var buffer: [LogEmitter.buffer_size + 128]u8 = undefined;
-    //     const line: ?[]const u8 = ...bufPrint(&buffer, ...) catch null;
-    //     if (line) |v| { stderr.write(v); return; }
-    //
-    //     // The line didn't fit in our buffer (an embedder called us directly
-    //     // with a very large message). Fall back to writing the pieces
-    //     // separately; interleaving with other threads is possible here but
-    //     // this is a best-effort diagnostic path.
-    //     stderr.write("["); ...
-    //
-    // PORT NOTE: the port instead holds the stderr lock for the duration of
-    // the write — the same thread-safe, mutex-protected output with the same
-    // no-interleaving observable, and with no fixed buffer there is no
-    // didn't-fit fallback path to reproduce.
-    use std::io::Write as _;
-    let stderr = std::io::stderr();
-    let mut lock = stderr.lock();
-    // nosuspend { if (scope.len > 0) { ... } else { ... } }
-    if !scope.is_empty() {
-        // writer.print("[{s}]({s}): {s}\n", .{ level_text, scope, message });
-        // PORT NOTE: the trailing `\n` is emitted by `writeln!` (identical bytes).
-        let _ = writeln!(
-            lock,
-            "[{}]({}): {}",
-            level_text,
-            String::from_utf8_lossy(scope),
-            String::from_utf8_lossy(message)
-        );
+    log_stderr_to(
+        &mut |bytes: &[u8]| rustty_os::stderr::write(bytes),
+        level_text,
+        scope,
+        message,
+    );
+}
+
+/// The body of [`log_stderr`] after the level is named, over a `write` sink
+/// that is `stderr.write` (`rustty_os::stderr::write`) in production and a
+/// recorder in the tests.
+// CORRECTION (parity S178-F1, S178-F2): this used to hold
+// `std::io::stderr().lock()` and `writeln!` the line with the scope and
+// message passed through `String::from_utf8_lossy`. That replaced invalid
+// UTF-8 with U+FFFD where the reference writes the bytes as they are, and
+// `writeln!` issues one write per fragment, so the single-write guarantee in
+// the doc comment was not backed. The reference's two paths are ported below.
+fn log_stderr_to(write: &mut dyn FnMut(&[u8]), level_text: &str, scope: &[u8], message: &[u8]) {
+    // Large enough for a full logFn chunk plus the level/scope prefix.
+    // var buffer: [LogEmitter.buffer_size + 128]u8 = undefined;
+    let mut buffer = [0u8; LOG_EMITTER_BUFFER_SIZE + 128];
+    // const line: ?[]const u8 = if (scope.len > 0)
+    //     std.fmt.bufPrint(&buffer, "[{s}]({s}): {s}\n", .{ level_text, scope, message }) catch null
+    // else
+    //     std.fmt.bufPrint(&buffer, "[{s}]: {s}\n", .{ level_text, message }) catch null;
+    let line: Option<&[u8]> = if !scope.is_empty() {
+        buf_print(
+            &mut buffer,
+            &[
+                b"[",
+                level_text.as_bytes(),
+                b"](",
+                scope,
+                b"): ",
+                message,
+                b"\n",
+            ],
+        )
     } else {
-        // writer.print("[{s}]: {s}\n", .{ level_text, message });
-        // PORT NOTE: the trailing `\n` is emitted by `writeln!` (identical bytes).
-        let _ = writeln!(
-            lock,
-            "[{}]: {}",
-            level_text,
-            String::from_utf8_lossy(message)
-        );
+        buf_print(
+            &mut buffer,
+            &[b"[", level_text.as_bytes(), b"]: ", message, b"\n"],
+        )
+    };
+    // if (line) |v| { stderr.write(v); return; }
+    if let Some(v) = line {
+        write(v);
+        return;
     }
+
+    // The line didn't fit in our buffer (an embedder called us directly
+    // with a very large message). Fall back to writing the pieces
+    // separately; interleaving with other threads is possible here but
+    // this is a best-effort diagnostic path.
+    write(b"[");
+    write(level_text.as_bytes());
+    write(b"]");
+    if !scope.is_empty() {
+        write(b"(");
+        write(scope);
+        write(b")");
+    }
+    write(b": ");
+    write(message);
+    write(b"\n");
+}
+
+/// `std.fmt.bufPrint` for a format made only of `{s}` byte-slice arguments:
+/// the concatenated `parts` in `buf`, or `None` (`error.NoSpaceLeft`) when
+/// they do not fit.
+fn buf_print<'b>(buf: &'b mut [u8], parts: &[&[u8]]) -> Option<&'b [u8]> {
+    let mut pos = 0usize;
+    for part in parts {
+        let end = pos.checked_add(part.len())?;
+        buf.get_mut(pos..end)?.copy_from_slice(part);
+        pos = end;
+    }
+    Some(&buf[..pos])
 }
 
 #[cfg(test)]
@@ -861,6 +900,63 @@ pub(crate) mod tests {
         drop(g);
         *terminal_sys::decode_png.write().unwrap() = None;
         guard
+    }
+
+    // Parity S178-F1 / S178-F2 (no reference test): `logStderr` writes the
+    // scope and message bytes as they are, and a line that fits the
+    // `LogEmitter.buffer_size + 128` buffer goes out in ONE write.
+    #[test]
+    fn log_stderr_writes_raw_bytes_in_one_write() {
+        let mut writes: Vec<Vec<u8>> = Vec::new();
+        log_stderr_to(
+            &mut |b: &[u8]| writes.push(b.to_vec()),
+            "warning",
+            b"sc\xffpe",
+            b"m\xfe\x80sg",
+        );
+        assert_eq!(writes, vec![b"[warning](sc\xffpe): m\xfe\x80sg\n".to_vec()]);
+
+        writes.clear();
+        log_stderr_to(
+            &mut |b: &[u8]| writes.push(b.to_vec()),
+            "info",
+            b"",
+            b"\xc3",
+        );
+        assert_eq!(writes, vec![b"[info]: \xc3\n".to_vec()]);
+    }
+
+    // The reference's fallback: a line that does not fit is written piecewise.
+    #[test]
+    fn log_stderr_writes_an_oversized_line_in_pieces() {
+        let message = vec![b'x'; LOG_EMITTER_BUFFER_SIZE + 128];
+        let mut writes: Vec<Vec<u8>> = Vec::new();
+        log_stderr_to(
+            &mut |b: &[u8]| writes.push(b.to_vec()),
+            "error",
+            b"s",
+            &message,
+        );
+        let expected: Vec<&[u8]> = vec![
+            b"[", b"error", b"]", b"(", b"s", b")", b": ", &message, b"\n",
+        ];
+        assert_eq!(
+            writes,
+            expected.iter().map(|b| b.to_vec()).collect::<Vec<_>>()
+        );
+
+        writes.clear();
+        log_stderr_to(
+            &mut |b: &[u8]| writes.push(b.to_vec()),
+            "debug",
+            b"",
+            &message,
+        );
+        let expected: Vec<&[u8]> = vec![b"[", b"debug", b"]", b": ", &message, b"\n"];
+        assert_eq!(
+            writes,
+            expected.iter().map(|b| b.to_vec()).collect::<Vec<_>>()
+        );
     }
 
     #[test]
