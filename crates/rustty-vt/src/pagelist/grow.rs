@@ -564,13 +564,37 @@ impl PageList {
         // PORT NOTE: reference defect (R13), UD80: at most one same-capacity
         // re-clone to drop orphaned pinned styles; see `styles_hold_pinned`.
         let mut reclaimed_pinned_styles = false;
+        // Debug-only guard on that one-shot flag: a regression that re-clones
+        // twice fails at once instead of re-cloning forever.
+        let mut reclones: u32 = 0;
+        // PORT NOTE: reference defect (R13), UD131: the dimensions whose
+        // capacity increase returned `OutOfSpace` and are now degraded rather
+        // than grown; see `degrade_dimension` (and its termination bound).
+        let mut degrade = crate::page::RowDegradeMask::default();
         loop {
             let cur_page: *mut Page = unsafe { Node::page(current) };
             let cur_rows = unsafe { (*cur_page).rows.ptr((*cur_page).memory_ptr()) };
-            let res =
-                unsafe { (*cur_page).clone_row_from(&*src_page, cur_rows.add(dst_y), src_row) };
-            let Err(err) = res else {
-                return current;
+            let res = if !degrade.any() {
+                unsafe { (*cur_page).clone_row_from(&*src_page, cur_rows.add(dst_y), src_row) }
+                    .map(|()| crate::page::RowDegrade::default())
+            } else {
+                unsafe {
+                    (*cur_page).clone_partial_row_degrade(
+                        src_page,
+                        cur_rows.add(dst_y),
+                        src_row,
+                        0,
+                        (*cur_page).size.cols as usize,
+                        degrade,
+                    )
+                }
+            };
+            let err = match res {
+                Ok(rep) => {
+                    log_row_degrade(&rep);
+                    return current;
+                }
+                Err(err) => err,
             };
 
             // Adjust our page capacity to make room for what we
@@ -589,6 +613,11 @@ impl PageList {
                         && styles_hold_pinned(cur_page) =>
                 {
                     reclaimed_pinned_styles = true;
+                    reclones += 1;
+                    debug_assert!(
+                        reclones <= 1,
+                        "UD80 re-clone ran twice: one-shot flag regressed"
+                    );
                     match self.increase_capacity(current, None) {
                         Ok(n) => n,
                         Err(_) => panic!("increaseCapacity system allocator OOM"),
@@ -603,34 +632,17 @@ impl PageList {
                 // PORT NOTE: reference defect (R13), UD131. The reference
                 // `@panic("increaseCapacity OutOfSpace")` here (PageList.zig:
                 // 5108). Reachable from real VT input on a wide terminal whose
-                // page's managed set is genuinely full at its capacity ceiling
-                // (no orphaned pinned styles to reclaim, or the one re-clone
-                // above already dropped them). The rows are already rotated, so
-                // instead of crashing we finish the copy best-effort: cells
-                // whose style/hyperlink/grapheme cannot be stored fall back to
-                // the default, keeping their codepoints and the row flags.
+                // page's style set is genuinely full of live styles at its
+                // capacity ceiling (no orphaned pinned styles to reclaim, or
+                // the one re-clone above already dropped them). The rows are
+                // already rotated, so instead of crashing the loop degrades
+                // THIS dimension only and retries: every other dimension keeps
+                // growing, and a cell loses only the part (style, grapheme or
+                // hyperlink) that fails in a degraded dimension, keeping its
+                // codepoint; the row flags are kept.
                 Err(IncreaseCapacityError::OutOfSpace) => {
-                    let rep = unsafe {
-                        (*cur_page).clone_partial_row_degrade(
-                            src_page,
-                            cur_rows.add(dst_y),
-                            src_row,
-                            0,
-                            (*cur_page).size.cols as usize,
-                        )
-                    };
-                    if rep.any() {
-                        log::warn!(
-                            target: crate::page::LOG_SCOPE,
-                            "row copy at style-set capacity ceiling: {} cell(s) degraded to \
-                             default (styles={}, hyperlinks={}, graphemes={}); see UD131",
-                            rep.styles + rep.hyperlinks + rep.graphemes,
-                            rep.styles,
-                            rep.hyperlinks,
-                            rep.graphemes,
-                        );
-                    }
-                    return current;
+                    degrade_dimension(&mut degrade, adjustment);
+                    current
                 }
             };
 
@@ -1040,6 +1052,67 @@ pub(crate) fn styles_hold_pinned(page: *const Page) -> bool {
         }
     }
     false
+}
+
+/// Moves the dimension whose capacity increase just returned `OutOfSpace`
+/// from "grow" to "degrade" in a row-copy loop's `mask`.
+///
+/// PORT NOTE (R13, UPSTREAM-DEFECTS.md UD131): the reference `@panic`s at
+/// that point (Screen.zig:747, PageList.zig:5108). The port's loops instead
+/// retry with `Page::clone_partial_row_degrade`, which stores the cells that
+/// fit, leaves the parts of a cell that fail in a degraded dimension at their
+/// default, and still returns every other dimension's error so the loop keeps
+/// growing it.
+///
+/// TERMINATION: a dimension enters the mask only here, and a degraded
+/// dimension's errors are never returned again (`RowDegradeMask::degrades`),
+/// so its capacity increase can never run again: each of the four dimensions
+/// flips at most once (the `debug_assert!` below). Every other retry either
+/// grows a dimension strictly (finitely many times before its `u16`/`u32`
+/// ceiling or the page-size limit returns `OutOfSpace`, which flips it), is
+/// the one-shot UD80 re-clone, or is the reference's own rehash arm
+/// (`for_clone_error` returning `None`), which this does not change.
+///
+/// `adjustment` is `None` only for a same-capacity rehash, and a clone at an
+/// unchanged capacity cannot return `OutOfSpace` (only the doubling of a
+/// dimension can). Should it ever, every dimension degrades, so the next copy
+/// cannot fail on managed memory and the loop still ends.
+pub(crate) fn degrade_dimension(
+    mask: &mut crate::page::RowDegradeMask,
+    adjustment: Option<IncreaseCapacity>,
+) {
+    let flag = match adjustment {
+        Some(IncreaseCapacity::Styles) => &mut mask.styles,
+        Some(IncreaseCapacity::GraphemeBytes) => &mut mask.graphemes,
+        Some(IncreaseCapacity::HyperlinkBytes) => &mut mask.hyperlinks,
+        Some(IncreaseCapacity::StringBytes) => &mut mask.strings,
+        None => {
+            debug_assert!(false, "a same-capacity clone returned OutOfSpace");
+            *mask = crate::page::RowDegradeMask::ALL;
+            return;
+        }
+    };
+    debug_assert!(
+        !*flag,
+        "UD131: a degraded dimension was grown again ({adjustment:?}); the loop may not terminate"
+    );
+    *flag = true;
+}
+
+/// Logs a finished degraded row copy once (never once per cell).
+/// PORT-ONLY (R13, UPSTREAM-DEFECTS.md UD131); see `degrade_dimension`.
+pub(crate) fn log_row_degrade(rep: &crate::page::RowDegrade) {
+    if rep.any() {
+        log::warn!(
+            target: crate::page::LOG_SCOPE,
+            "row copy at a page capacity ceiling: {} cell(s) degraded to default \
+             (styles={}, hyperlinks={}, graphemes={}); see UD131",
+            rep.styles + rep.hyperlinks + rep.graphemes,
+            rep.styles,
+            rep.hyperlinks,
+            rep.graphemes,
+        );
+    }
 }
 
 /// `PageList.IncreaseCapacityError`

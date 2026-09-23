@@ -22813,4 +22813,215 @@ mod tests {
         );
         t.deinit(Global);
     }
+
+    // UD131 (R13) through REAL VT input, one test per route. RELEASE ONLY:
+    //
+    //     cargo test -p rustty-vt --release --lib -- --ignored ud131_vt_release
+    //
+    // Each case takes well under a second in release; in a debug build the
+    // per-write page integrity check walks the whole 50,000 x 215 page and a
+    // case does not finish in ten minutes, which is why the unit tests of the
+    // two loops fabricate the full set instead. In a debug build these tests
+    // return at once.
+    //
+    // The recipe is the reference probe's (UPSTREAM-DEFECTS.md UD131): a
+    // 50,000-column terminal, `fills` cells each with a distinct SGR 38;2
+    // colour (53,247 fill the page's style set with live styles at the `u16`
+    // ceiling), one cell 'Y' with a new style (background 1;2;3) on a row of
+    // another page, then the trigger that copies that row onto the full page.
+    // The reference `@panic`s at `Screen.zig:747` for DL and IL and at
+    // `PageList.zig:5108` for the alternate-screen LF and SU and the
+    // primary-screen scroll region (task R13-X's probe, re-measured by the
+    // R13-X review). The port keeps 'Y', drops its unstorable style to the
+    // default, and logs the degrade once.
+    //
+    // NEGATIVE CONTROLS (task R13-X2, macOS 2026-09-23, release): restoring
+    // the reference's `@panic("increaseCapacity OutOfSpace")` in the Screen
+    // loop's `OutOfSpace` arm fails exactly the DL and IL tests; restoring it
+    // in the PageList loop's arm fails exactly the alternate-screen LF, SU and
+    // scroll-region tests.
+    struct Ud131VtCase {
+        rows: size::CellCountInt,
+        fills: u32,
+        pre: &'static [u8],
+        fill_row: u32,
+        y_row: u32,
+        trigger: &'static [u8],
+    }
+
+    /// Runs one case; returns 'Y''s background (`None` when it degraded to
+    /// the default style) and the UD131 log records.
+    fn ud131_vt_run(c: &Ud131VtCase) -> (Option<String>, Vec<String>) {
+        let mut t = Terminal::init(Global, opts(50_000, c.rows)).unwrap();
+        let cap = crate::log_capture::start();
+        {
+            let mut st = t.vt_stream();
+            st.next_slice(c.pre);
+            st.next_slice(format!("\x1b[{};1H", c.fill_row).as_bytes());
+            let mut buf = Vec::with_capacity(1 << 20);
+            for i in 0..c.fills {
+                // Distinct 24-bit colours (an odd multiplier is a bijection).
+                let v = i.wrapping_add(1).wrapping_mul(2_654_435_761) & 0xFF_FFFF;
+                buf.extend_from_slice(
+                    format!("\x1b[38;2;{};{};{}mX", v >> 16, (v >> 8) & 255, v & 255).as_bytes(),
+                );
+            }
+            buf.extend_from_slice(b"\x1b[0m");
+            st.next_slice(&buf);
+            st.next_slice(format!("\x1b[{};1H\x1b[48;2;1;2;3mY\x1b[0m", c.y_row).as_bytes());
+            st.next_slice(c.trigger);
+            st.deinit();
+        }
+        let logs: Vec<String> = cap
+            .messages()
+            .into_iter()
+            .filter(|(_, _, m)| m.contains("UD131"))
+            .map(|(_, _, m)| m)
+            .collect();
+        drop(cap);
+
+        let mut y_bg = None;
+        let mut found = false;
+        for y in 0..c.rows as u32 {
+            let lc = t.active_mut().pages.get_cell(active_pt(0, y)).unwrap();
+            if unsafe { (*lc.cell).content_codepoint() } != 'Y' as u21 {
+                continue;
+            }
+            found = true;
+            let page = unsafe { crate::pagelist::Node::page(lc.node) };
+            let sid = unsafe { (*lc.cell).style_id() };
+            if sid != crate::style::DEFAULT_ID {
+                let s = unsafe { *(*page).styles.get((*page).memory_ptr(), sid) };
+                y_bg = Some(format!("{:?}", s.bg_color));
+            }
+            break;
+        }
+        assert!(found, "the 'Y' cell survives the copy");
+
+        let mut node = t.active_mut().pages.pages.first;
+        while !node.is_null() {
+            unsafe { (*crate::pagelist::Node::page(node)).assert_integrity() };
+            node = unsafe { (*node).next };
+        }
+        t.deinit(Global);
+        (y_bg, logs)
+    }
+
+    fn ud131_vt_expect_degraded(c: Ud131VtCase) {
+        if cfg!(debug_assertions) {
+            eprintln!("ud131_vt_release: skipped in a debug build; run with --release");
+            return;
+        }
+        let (bg, logs) = ud131_vt_run(&c);
+        assert_eq!(bg, None, "'Y''s new style degrades to the default");
+        assert_eq!(
+            logs,
+            vec![
+                "row copy at a page capacity ceiling: 1 cell(s) degraded to default \
+                 (styles=1, hyperlinks=0, graphemes=0); see UD131"
+                    .to_string()
+            ],
+            "one degraded copy, logged once"
+        );
+    }
+
+    const UD131_FULL: u32 = 53_247;
+
+    // DL at the bottom row: `deleteLines` -> the Screen loop.
+    #[test]
+    #[ignore = "release only: cargo test -p rustty-vt --release --lib -- --ignored ud131_vt_release"]
+    fn ud131_vt_release_delete_lines_degrades_at_the_screen_site() {
+        ud131_vt_expect_degraded(Ud131VtCase {
+            rows: 216,
+            fills: UD131_FULL,
+            pre: b"",
+            fill_row: 2,
+            y_row: 216,
+            trigger: b"\x1b[215;1H\x1b[M",
+        });
+    }
+
+    // IL: `insertLines` -> the Screen loop.
+    #[test]
+    #[ignore = "release only: cargo test -p rustty-vt --release --lib -- --ignored ud131_vt_release"]
+    fn ud131_vt_release_insert_lines_degrades_at_the_screen_site() {
+        ud131_vt_expect_degraded(Ud131VtCase {
+            rows: 430,
+            fills: UD131_FULL,
+            pre: b"",
+            fill_row: 217,
+            y_row: 215,
+            trigger: b"\x1b[215;1H\x1b[L",
+        });
+    }
+
+    // Alternate-screen LF at the bottom: `index` -> `eraseRowBounded` -> the
+    // PageList loop.
+    #[test]
+    #[ignore = "release only: cargo test -p rustty-vt --release --lib -- --ignored ud131_vt_release"]
+    fn ud131_vt_release_alt_screen_linefeed_degrades_at_the_pagelist_site() {
+        ud131_vt_expect_degraded(Ud131VtCase {
+            rows: 216,
+            fills: UD131_FULL,
+            pre: b"\x1b[?1049h",
+            fill_row: 2,
+            y_row: 216,
+            trigger: b"\x1b[216;1H\n",
+        });
+    }
+
+    // Alternate-screen SU: `scrollUp` -> `eraseRow` -> the PageList loop.
+    #[test]
+    #[ignore = "release only: cargo test -p rustty-vt --release --lib -- --ignored ud131_vt_release"]
+    fn ud131_vt_release_alt_screen_scroll_up_degrades_at_the_pagelist_site() {
+        ud131_vt_expect_degraded(Ud131VtCase {
+            rows: 216,
+            fills: UD131_FULL,
+            pre: b"\x1b[?1049h",
+            fill_row: 2,
+            y_row: 216,
+            trigger: b"\x1b[S",
+        });
+    }
+
+    // Primary-screen scroll region with a top margin, LF at its bottom:
+    // `index` -> `eraseRowBounded` -> the PageList loop.
+    #[test]
+    #[ignore = "release only: cargo test -p rustty-vt --release --lib -- --ignored ud131_vt_release"]
+    fn ud131_vt_release_scroll_region_linefeed_degrades_at_the_pagelist_site() {
+        ud131_vt_expect_degraded(Ud131VtCase {
+            rows: 216,
+            fills: UD131_FULL,
+            pre: b"",
+            fill_row: 3,
+            y_row: 216,
+            trigger: b"\x1b[2;216r\x1b[216;1H\n",
+        });
+    }
+
+    // Boundary control: one fill fewer (53,246) leaves room for 'Y''s style,
+    // so the same DL keeps it and logs nothing (the reference survives this
+    // too).
+    #[test]
+    #[ignore = "release only: cargo test -p rustty-vt --release --lib -- --ignored ud131_vt_release"]
+    fn ud131_vt_release_one_style_below_the_ceiling_keeps_the_style() {
+        if cfg!(debug_assertions) {
+            eprintln!("ud131_vt_release: skipped in a debug build; run with --release");
+            return;
+        }
+        let (bg, logs) = ud131_vt_run(&Ud131VtCase {
+            rows: 216,
+            fills: UD131_FULL - 1,
+            pre: b"",
+            fill_row: 2,
+            y_row: 216,
+            trigger: b"\x1b[215;1H\x1b[M",
+        });
+        assert!(
+            bg.as_deref()
+                .is_some_and(|s| s.contains('1') && s.contains('2') && s.contains('3')),
+            "'Y' keeps its 1;2;3 background: {bg:?}"
+        );
+        assert!(logs.is_empty(), "no degrade: {logs:?}");
+    }
 }

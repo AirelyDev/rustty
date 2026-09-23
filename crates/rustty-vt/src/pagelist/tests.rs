@@ -18114,8 +18114,10 @@ fn ud131_erase_row_loop_full_live_set_degrades_new_style_to_default() {
     // with the first style genuinely pinned (saturated by its cells). The pin
     // keeps `styles_hold_pinned` true across the one re-clone, so the loop
     // re-clones once (reclaiming nothing), then degrades — which is exactly the
-    // path W2's one-shot flag bounds. Removing that flag turns this into an
-    // unbounded re-clone (verified out of band; it would hang the test).
+    // path W2's one-shot flag bounds. A regression of that flag (task R13-X2's
+    // control: resetting it whenever the node changed) now fails this test in
+    // under a second on the loop's debug re-clone counter ("UD80 re-clone ran
+    // twice: one-shot flag regressed") instead of re-cloning forever.
     let (live, _pinned) =
         unsafe { (*super::Node::page(dst_node)).test_fill_full_live_pinned(1..4, true) };
     assert!(live > 50_000, "the set is full of live styles: {live}");
@@ -18176,4 +18178,154 @@ fn ud131_erase_row_loop_full_live_set_degrades_new_style_to_default() {
         node_ = unsafe { (*node_).next };
     }
     s.deinit();
+}
+
+// UD131 (R13), the per-dimension degrade: a full LIVE style set at the `u16`
+// ceiling must degrade ONLY the cells whose style is new to that set. Every
+// other dimension of the copy (graphemes, hyperlinks, their strings) must
+// still grow, and a style the set already has must still be stored. The
+// source row mixes all of these (`ud131_test_support::build_mixed_src`: a wide
+// character and its spacer on an existing style and on a new one, existing and
+// new styles, a 3,000-cell grapheme run that needs grapheme growth, an
+// implicit and an explicit hyperlink, and a 200-cell run over 12 long-URI
+// links that needs hyperlink and string growth). The copy into the full page
+// is compared cell by cell with a control copy into the same kind of page
+// with an ordinary style set.
+//
+// The degrade is logged once per copy even though the copy retries several
+// times after the style dimension degrades (once per grown dimension); two
+// copies log twice.
+//
+// NEGATIVE CONTROLS (task R13-X2, macOS 2026-09-23): "degrade every style"
+// (the degrade copy never stores a style) and "degrade graphemes when only
+// styles are full" (`degrade_dimension` setting every flag, R13-X's
+// behaviour) each turn this test and its Screen twin red.
+fn ud131_mixed_fixture(fill: bool) -> PageList {
+    let mut s = PageList::init(Options::new(
+        crate::page::ud131_test_support::mixed_cols(fill),
+        6,
+    ))
+    .unwrap();
+    s.split(Pin {
+        node: s.pages.first,
+        y: 3,
+        x: 0,
+        garbage: false,
+    })
+    .unwrap();
+    assert_eq!(2, s.total_pages());
+    // Room on the SOURCE page for the mixed row's graphemes and links.
+    for (dim, n) in [
+        (IncreaseCapacity::GraphemeBytes, 8),
+        (IncreaseCapacity::HyperlinkBytes, 8),
+        (IncreaseCapacity::StringBytes, 4),
+    ] {
+        for _ in 0..n {
+            let _ = s.increase_capacity(s.pages.last, Some(dim)).unwrap();
+        }
+    }
+    if fill {
+        while unsafe { super::Node::capacity(s.pages.first).styles } < size::CellCountInt::MAX {
+            let _ = s
+                .increase_capacity(s.pages.first, Some(IncreaseCapacity::Styles))
+                .unwrap();
+        }
+        // No pinned style: the loop degrades on the first `OutOfSpace`.
+        let (live, _) =
+            unsafe { (*super::Node::page(s.pages.first)).test_fill_full_live_pinned(1..3, false) };
+        assert!(live > 50_000, "the set is full of live styles: {live}");
+    }
+    s
+}
+
+#[test]
+fn ud131_erase_row_loop_degrades_only_new_styles_and_grows_the_other_dimensions() {
+    use crate::page::ud131_test_support as t;
+    // Control: an ordinary destination stores everything.
+    let mut ctl = ud131_mixed_fixture(false);
+    let ctl_src = unsafe { super::Node::page(ctl.pages.last) };
+    let ctl_row = unsafe { t::build_mixed_src(ctl_src, 0) };
+    let cap = crate::log_capture::start();
+    let ctl_out = ctl.clone_row_grow_capacity(ctl.pages.first, 0, ctl_src, ctl_row);
+    assert!(
+        !cap.messages().iter().any(|(_, _, m)| m.contains("UD131")),
+        "the control copy does not degrade"
+    );
+    drop(cap);
+    let ctl_page = unsafe { super::Node::page(ctl_out) };
+
+    // Degraded: the destination's style set is full of live styles.
+    let mut deg = ud131_mixed_fixture(true);
+    let deg_src = unsafe { super::Node::page(deg.pages.last) };
+    let deg_row = unsafe { t::build_mixed_src(deg_src, 0) };
+    let start_cap = unsafe { super::Node::capacity(deg.pages.first) };
+    let styles_before = unsafe { (*super::Node::page(deg.pages.first)).styles.count() };
+
+    let cap = crate::log_capture::start();
+    let out = deg.clone_row_grow_capacity(deg.pages.first, 0, deg_src, deg_row);
+    let first_copy = cap.messages();
+    // A second copy of the same row into the same destination row.
+    let out = deg.clone_row_grow_capacity(out, 0, deg_src, deg_row);
+    let both_copies = cap.messages();
+    drop(cap);
+    let page = unsafe { super::Node::page(out) };
+
+    unsafe {
+        t::assert_only_new_styles_degraded(ctl_page, page, 0);
+
+        // The other dimensions grew instead of degrading.
+        let c = (*page).capacity;
+        assert!(
+            c.grapheme_bytes > start_cap.grapheme_bytes,
+            "grapheme bytes grew: {} -> {}",
+            start_cap.grapheme_bytes,
+            c.grapheme_bytes
+        );
+        assert!(
+            c.hyperlink_bytes > start_cap.hyperlink_bytes,
+            "hyperlink bytes grew: {} -> {}",
+            start_cap.hyperlink_bytes,
+            c.hyperlink_bytes
+        );
+        assert!(
+            c.string_bytes > start_cap.string_bytes,
+            "string bytes grew: {} -> {}",
+            start_cap.string_bytes,
+            c.string_bytes
+        );
+        // The style set stayed at its ceiling and gained nothing.
+        assert_eq!(c.styles, size::CellCountInt::MAX);
+        assert_eq!((*page).styles.count(), styles_before);
+
+        (*page).assert_integrity();
+        (*ctl_page).assert_integrity();
+    }
+
+    // Logged once per copy, with the per-dimension counts: only styles.
+    let expected = (
+        log::Level::Warn,
+        crate::page::LOG_SCOPE.to_string(),
+        "row copy at a page capacity ceiling: 5 cell(s) degraded to default \
+         (styles=5, hyperlinks=0, graphemes=0); see UD131"
+            .to_string(),
+    );
+    let ud131 = |v: &[crate::log_capture::CapturedRecord]| {
+        v.iter()
+            .filter(|(_, _, m)| m.contains("UD131"))
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        ud131(&first_copy),
+        vec![expected.clone()],
+        "one record for one copy"
+    );
+    assert_eq!(
+        ud131(&both_copies),
+        vec![expected.clone(), expected],
+        "one record per copy"
+    );
+
+    ctl.deinit();
+    deg.deinit();
 }

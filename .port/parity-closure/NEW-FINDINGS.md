@@ -3039,11 +3039,21 @@ live styles at the `u16` ceiling (65,535), the reference's row-copy retry loops 
 `increaseCapacity(.styles)` returns `OutOfSpace`: the callers (IL/DL, a scroll, an erase across a page
 boundary) have already rotated rows, so a crash is chosen over a half-mutated page list. MEASURED
 reachable in both ReleaseSafe (SIGABRT) and ReleaseFast (`panic:` trap) against a scratch
-`libghostty-vt` build (task R13-X). A normal-width terminal cannot reach it (the set rehashes/compacts
-below the ceiling). The port instead finishes the copy after W2's one-shot re-clone: every cell whose
-style, hyperlink or grapheme cannot be stored falls back to the default, keeping its codepoint and the
-row flags; only the genuinely unstorable cells degrade, logged once per copy. This mirrors the
-reference's own degrade-to-default precedent (`increaseCapacity` / `manualStyleUpdate`, UD65). Reference
-defect: `UPSTREAM-DEFECTS.md` UD131.
+`libghostty-vt` build (task R13-X). A terminal narrower than 9,585 columns cannot reach it (its standard
+page holds fewer cells than the 47,923 live styles the set needs before it stops rehashing; see UD131's
+reachability for the bound). The port instead completes the copy: when a capacity increase returns
+`OutOfSpace` it degrades THAT dimension only and retries, so the other dimensions (graphemes, hyperlinks,
+strings) still grow, a style already in the set is still stored, and only the parts of cells that fail
+in a degraded dimension fall back to the default — at the style ceiling, the style of cells that bring a
+new style; codepoints and row flags are kept. Logged once per copy. Each dimension degrades at most
+once, which bounds the loop (UD131 "port handling"). This mirrors the reference's own
+degrade-to-default precedent (`increaseCapacity` / `manualStyleUpdate`, UD65). Reference defect:
+`UPSTREAM-DEFECTS.md` UD131.
 
-**state**: CLOSED by task R13-X.
+Update (task R13-X2): task R13-X's first version degraded every dimension as soon as the style set
+returned `OutOfSpace`, dropping graphemes and hyperlinks that could still grow (the R13-X review: 2,968
+of 3,000 graphemes lost, grapheme capacity left at 512 bytes); the per-dimension degrade above replaced
+it, with mixed-row tests against a control copy, release-only VT tests of every route, a once-per-copy
+log test and a debug re-clone counter (UD131 "test").
+
+**state**: CLOSED by task R13-X (per-dimension degrade: task R13-X2).

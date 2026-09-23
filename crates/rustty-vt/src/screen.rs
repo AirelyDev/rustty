@@ -1420,9 +1420,12 @@ impl Screen {
     ///
     /// Callers use this mid-mutation (after rows have been rotated or
     /// shifted), so a failure can't be propagated without leaving the
-    /// page list half-mutated (and corrupt). If the capacity can't be
-    /// increased (system OOM or the page is already at max capacity),
-    /// this panics: a crash is better than corruption.
+    /// page list half-mutated (and corrupt). On a system OOM while
+    /// increasing the capacity this panics: a crash is better than
+    /// corruption. When a dimension is already at its maximum capacity the
+    /// reference also panics; the port instead degrades that dimension and
+    /// finishes the copy (PORT NOTE at the `OutOfSpace` arm below,
+    /// UPSTREAM-DEFECTS.md UD131).
     //
     // UB HAZARD (`P3-W2` T4 Step 3): `src_page` and `node.page()` are two raw
     // `*mut Page`s and `increase_capacity` FREES the latter, which would leave
@@ -1458,20 +1461,46 @@ impl Screen {
         // re-clone to drop orphaned pinned styles; see
         // `pagelist::grow::styles_hold_pinned`.
         let mut reclaimed_pinned_styles = false;
+        // Debug-only guard on that one-shot flag: a regression that re-clones
+        // twice fails at once instead of re-cloning forever.
+        let mut reclones: u32 = 0;
+        // PORT NOTE: reference defect (R13), UD131: the dimensions whose
+        // capacity increase returned `OutOfSpace` and are now degraded rather
+        // than grown; see `pagelist::grow::degrade_dimension` (and its
+        // termination bound).
+        let mut degrade = pagepkg::RowDegradeMask::default();
         loop {
             let cur_page: *mut Page = unsafe { pagelist::Node::page(current) };
             let cur_rows = unsafe { (*cur_page).rows.ptr((*cur_page).memory_ptr()) };
-            let res = unsafe {
-                (*cur_page).clone_partial_row_from(
-                    &*src_page,
-                    cur_rows.add(dst_y),
-                    src_row,
-                    x_start,
-                    x_end,
-                )
+            let res = if !degrade.any() {
+                unsafe {
+                    (*cur_page).clone_partial_row_from(
+                        &*src_page,
+                        cur_rows.add(dst_y),
+                        src_row,
+                        x_start,
+                        x_end,
+                    )
+                }
+                .map(|()| pagepkg::RowDegrade::default())
+            } else {
+                unsafe {
+                    (*cur_page).clone_partial_row_degrade(
+                        src_page,
+                        cur_rows.add(dst_y),
+                        src_row,
+                        x_start,
+                        x_end,
+                        degrade,
+                    )
+                }
             };
-            let Err(err) = res else {
-                return current;
+            let err = match res {
+                Ok(rep) => {
+                    pagelist::grow::log_row_degrade(&rep);
+                    return current;
+                }
+                Err(err) => err,
             };
 
             // Adjust our page capacity to make room for what we
@@ -1490,6 +1519,11 @@ impl Screen {
                         && pagelist::grow::styles_hold_pinned(cur_page) =>
                 {
                     reclaimed_pinned_styles = true;
+                    reclones += 1;
+                    debug_assert!(
+                        reclones <= 1,
+                        "UD80 re-clone ran twice: one-shot flag regressed"
+                    );
                     match self.increase_capacity(current, None) {
                         Ok(n) => n,
                         Err(_) => panic!("increaseCapacity system allocator OOM"),
@@ -1505,34 +1539,17 @@ impl Screen {
                 // `@panic("increaseCapacity OutOfSpace")` here (Screen.zig:
                 // 747). Reachable from real VT input (IL/DL, scroll, erase
                 // across a page boundary) on a wide terminal whose page's
-                // managed set is genuinely full at its capacity ceiling (no
-                // orphaned pinned styles to reclaim, or the one re-clone above
-                // already dropped them). The rows are already rotated, so
-                // instead of crashing we finish the copy best-effort: cells
-                // whose style/hyperlink/grapheme cannot be stored fall back to
-                // the default, keeping their codepoints and the row flags.
+                // style set is genuinely full of live styles at its capacity
+                // ceiling (no orphaned pinned styles to reclaim, or the one
+                // re-clone above already dropped them). The rows are already
+                // rotated, so instead of crashing the loop degrades THIS
+                // dimension only and retries: every other dimension keeps
+                // growing, and a cell loses only the part (style, grapheme or
+                // hyperlink) that fails in a degraded dimension, keeping its
+                // codepoint; the row flags are kept.
                 Err(pagelist::grow::IncreaseCapacityError::OutOfSpace) => {
-                    let rep = unsafe {
-                        (*cur_page).clone_partial_row_degrade(
-                            src_page,
-                            cur_rows.add(dst_y),
-                            src_row,
-                            x_start,
-                            x_end,
-                        )
-                    };
-                    if rep.any() {
-                        log::warn!(
-                            target: crate::page::LOG_SCOPE,
-                            "row copy at style-set capacity ceiling: {} cell(s) degraded to \
-                             default (styles={}, hyperlinks={}, graphemes={}); see UD131",
-                            rep.styles + rep.hyperlinks + rep.graphemes,
-                            rep.styles,
-                            rep.hyperlinks,
-                            rep.graphemes,
-                        );
-                    }
-                    return current;
+                    pagelist::grow::degrade_dimension(&mut degrade, adjustment);
+                    current
                 }
             };
         }
@@ -16020,8 +16037,10 @@ mod tests {
     // with `split` so each keeps a small `size.rows` (a full 53,247-style set
     // fits on wide rows), which keeps the page clones cheap. The first style is
     // genuinely pinned, so the loop re-clones once (reclaiming nothing) then
-    // degrades — the path W2's one-shot flag bounds; dropping that flag makes
-    // the loop re-clone forever.
+    // degrades — the path W2's one-shot flag bounds. A regression of that flag
+    // (task R13-X2's control: resetting it whenever the node changed) fails
+    // this test in under a second on the loop's debug re-clone counter instead
+    // of re-cloning forever.
     #[test]
     fn ud131_clone_partial_row_loop_full_live_set_degrades_new_style_to_default() {
         let mut s = Screen::init(
@@ -16166,5 +16185,166 @@ mod tests {
             node_ = unsafe { (*node_).next };
         }
         s.deinit();
+    }
+
+    // UD131 (R13), the per-dimension degrade through the IL/DL/scroll loop
+    // (`Screen::clone_partial_row_grow_capacity`): the twin of
+    // `pagelist::tests::ud131_erase_row_loop_degrades_only_new_styles_and_grows_the_other_dimensions`,
+    // with the same mixed source row (`ud131_test_support::build_mixed_src`),
+    // the same control comparison, and the same once-per-copy log check. See
+    // that test for the row and the negative controls.
+    fn ud131_mixed_screen(fill: bool) -> Screen {
+        let mut s = Screen::init(
+            Allocator,
+            Options {
+                cols: crate::page::ud131_test_support::mixed_cols(fill),
+                rows: 6,
+                max_scrollback_bytes: Some(1 << 30),
+                max_scrollback_lines: None,
+                kitty_image_storage_limit: 0,
+                kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
+            },
+        )
+        .unwrap();
+        s.pages
+            .split(Pin {
+                node: s.pages.pages.first,
+                y: 3,
+                x: 0,
+                garbage: false,
+            })
+            .unwrap();
+        assert_eq!(2, s.pages.total_pages());
+        // Room on the SOURCE page for the mixed row's graphemes and links.
+        for (dim, n) in [
+            (pagelist::grow::IncreaseCapacity::GraphemeBytes, 8),
+            (pagelist::grow::IncreaseCapacity::HyperlinkBytes, 8),
+            (pagelist::grow::IncreaseCapacity::StringBytes, 4),
+        ] {
+            for _ in 0..n {
+                let _ = s
+                    .pages
+                    .increase_capacity(s.pages.pages.last, Some(dim))
+                    .unwrap();
+            }
+        }
+        if fill {
+            while unsafe { pagelist::Node::capacity(s.pages.pages.first).styles }
+                < size::CellCountInt::MAX
+            {
+                let _ = s
+                    .pages
+                    .increase_capacity(
+                        s.pages.pages.first,
+                        Some(pagelist::grow::IncreaseCapacity::Styles),
+                    )
+                    .unwrap();
+            }
+            let (live, _) = unsafe {
+                (*pagelist::Node::page(s.pages.pages.first)).test_fill_full_live_pinned(1..3, false)
+            };
+            assert!(live > 50_000, "the set is full of live styles: {live}");
+        }
+        s
+    }
+
+    #[test]
+    fn ud131_clone_partial_row_loop_degrades_only_new_styles_and_grows_the_other_dimensions() {
+        use crate::page::ud131_test_support as t;
+
+        // Control: an ordinary destination stores everything.
+        let mut ctl = ud131_mixed_screen(false);
+        let ctl_cols = ctl.pages.cols as usize;
+        let ctl_src = unsafe { pagelist::Node::page(ctl.pages.pages.last) };
+        let ctl_row = unsafe { t::build_mixed_src(ctl_src, 0) };
+        let cap = crate::log_capture::start();
+        let ctl_out = ctl.clone_partial_row_grow_capacity(
+            ctl.pages.pages.first,
+            0,
+            ctl_src,
+            ctl_row,
+            0,
+            ctl_cols,
+        );
+        assert!(
+            !cap.messages().iter().any(|(_, _, m)| m.contains("UD131")),
+            "the control copy does not degrade"
+        );
+        drop(cap);
+        let ctl_page = unsafe { pagelist::Node::page(ctl_out) };
+
+        // Degraded: the destination's style set is full of live styles.
+        let mut deg = ud131_mixed_screen(true);
+        let deg_cols = deg.pages.cols as usize;
+        let deg_src = unsafe { pagelist::Node::page(deg.pages.pages.last) };
+        let deg_row = unsafe { t::build_mixed_src(deg_src, 0) };
+        let start_cap = unsafe { pagelist::Node::capacity(deg.pages.pages.first) };
+        let styles_before = unsafe {
+            (*pagelist::Node::page(deg.pages.pages.first))
+                .styles
+                .count()
+        };
+
+        let cap = crate::log_capture::start();
+        let out = deg.clone_partial_row_grow_capacity(
+            deg.pages.pages.first,
+            0,
+            deg_src,
+            deg_row,
+            0,
+            deg_cols,
+        );
+        let first_copy = cap.messages();
+        let out = deg.clone_partial_row_grow_capacity(out, 0, deg_src, deg_row, 0, deg_cols);
+        let both_copies = cap.messages();
+        drop(cap);
+        let page = unsafe { pagelist::Node::page(out) };
+
+        unsafe {
+            t::assert_only_new_styles_degraded(ctl_page, page, 0);
+
+            let c = (*page).capacity;
+            assert!(
+                c.grapheme_bytes > start_cap.grapheme_bytes,
+                "grapheme bytes grew"
+            );
+            assert!(
+                c.hyperlink_bytes > start_cap.hyperlink_bytes,
+                "hyperlink bytes grew"
+            );
+            assert!(c.string_bytes > start_cap.string_bytes, "string bytes grew");
+            assert_eq!(c.styles, size::CellCountInt::MAX);
+            assert_eq!((*page).styles.count(), styles_before);
+
+            (*page).assert_integrity();
+            (*ctl_page).assert_integrity();
+        }
+
+        let expected = (
+            log::Level::Warn,
+            crate::page::LOG_SCOPE.to_string(),
+            "row copy at a page capacity ceiling: 5 cell(s) degraded to default \
+             (styles=5, hyperlinks=0, graphemes=0); see UD131"
+                .to_string(),
+        );
+        let ud131 = |v: &[crate::log_capture::CapturedRecord]| {
+            v.iter()
+                .filter(|(_, _, m)| m.contains("UD131"))
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            ud131(&first_copy),
+            vec![expected.clone()],
+            "one record for one copy"
+        );
+        assert_eq!(
+            ud131(&both_copies),
+            vec![expected.clone(), expected],
+            "one record per copy"
+        );
+
+        ctl.deinit();
+        deg.deinit();
     }
 }

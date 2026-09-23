@@ -43,6 +43,54 @@ impl RowDegrade {
     }
 }
 
+/// The managed-memory dimensions a row copy may DEGRADE rather than grow.
+/// PORT-ONLY (R13, UPSTREAM-DEFECTS.md UD131). One flag per capacity
+/// dimension the row-copy retry loops can grow (`IncreaseCapacity`'s
+/// `Styles`, `GraphemeBytes`, `HyperlinkBytes`, `StringBytes`). A flag is set
+/// only once that dimension's OWN capacity increase returned `OutOfSpace`; a
+/// dimension whose flag is clear keeps returning its errors so the loop grows
+/// it. See `clone_partial_row_degrade`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RowDegradeMask {
+    pub styles: bool,
+    pub graphemes: bool,
+    pub hyperlinks: bool,
+    pub strings: bool,
+}
+
+impl RowDegradeMask {
+    /// Every dimension degraded.
+    pub const ALL: RowDegradeMask = RowDegradeMask {
+        styles: true,
+        graphemes: true,
+        hyperlinks: true,
+        strings: true,
+    };
+
+    /// Whether any dimension degrades.
+    pub fn any(&self) -> bool {
+        self.styles || self.graphemes || self.hyperlinks || self.strings
+    }
+
+    /// Whether a clone error is one this mask degrades instead of returning.
+    /// The dimension of each error is the one `IncreaseCapacity::for_clone_error`
+    /// grows for it; the rehash errors grow nothing, so they are always
+    /// returned (the loop rehashes, as the reference does).
+    pub fn degrades(&self, err: CloneFromError) -> bool {
+        match err {
+            CloneFromError::StyleSetOutOfMemory => self.styles,
+            CloneFromError::StringAllocOutOfMemory => self.strings,
+            CloneFromError::HyperlinkSetOutOfMemory | CloneFromError::HyperlinkMapOutOfMemory => {
+                self.hyperlinks
+            }
+            CloneFromError::GraphemeMapOutOfMemory | CloneFromError::GraphemeAllocOutOfMemory => {
+                self.graphemes
+            }
+            CloneFromError::StyleSetNeedsRehash | CloneFromError::HyperlinkSetNeedsRehash => false,
+        }
+    }
+}
+
 /// `Page.IntegrityError`
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IntegrityError {
@@ -1183,29 +1231,40 @@ impl Page {
         result
     }
 
-    /// Best-effort variant of `clone_partial_row_from` for the row-copy retry
-    /// loops (`Screen::clone_partial_row_grow_capacity`,
-    /// `PageList::clone_row_grow_capacity`) when the page's style set (or any
-    /// other managed set) is full at its capacity ceiling and cannot grow.
+    /// Variant of `clone_partial_row_from` for the row-copy retry loops
+    /// (`Screen::clone_partial_row_grow_capacity`,
+    /// `PageList::clone_row_grow_capacity`) once a managed-memory dimension of
+    /// this page is at its capacity ceiling and cannot grow.
     ///
     /// PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD131. The
-    /// reference's retry loops `@panic("increaseCapacity OutOfSpace")` here
-    /// (Screen.zig:747, PageList.zig:5108): the callers have already rotated
-    /// rows, so the copy cannot be unwound and a crash is chosen over a
-    /// half-mutated page list. This is reachable from real VT input on a wide
-    /// terminal (>= 47,932 cols on shipped macOS) whose page holds a genuinely
-    /// full set of 53,247 distinct LIVE styles, followed by an IL/DL, scroll,
-    /// or erase that pulls a row carrying a new style across a page boundary
-    /// (measured: ReleaseSafe SIGABRT, ReleaseFast `panic:` trap). Following
-    /// the reference's own precedent for an unstorable style
-    /// (`Screen.increaseCapacity` / `manualStyleUpdate` degrade the cursor to
-    /// the default style; UD65's decoder degrade), this finishes the copy with
-    /// every cell whose managed memory cannot be stored falling back to the
-    /// default (no style, no hyperlink, no grapheme) while keeping its
-    /// codepoint and every row flag. Cells whose styles/links already exist in
-    /// the destination set are stored normally, so only the genuinely
-    /// unstorable cells degrade. The caller logs the returned counts once per
-    /// copy, never once per cell.
+    /// reference's retry loops `@panic("increaseCapacity OutOfSpace")` when a
+    /// capacity increase fails (Screen.zig:747, PageList.zig:5108): the
+    /// callers have already rotated rows, so the copy cannot be unwound and a
+    /// crash is chosen over a half-mutated page list. This is reachable from
+    /// real VT input on a wide terminal (>= 47,932 cols on shipped macOS)
+    /// whose page holds a genuinely full set of 53,247 distinct LIVE styles,
+    /// followed by an IL/DL, scroll, or erase that pulls a row carrying a new
+    /// style across a page boundary (measured: ReleaseSafe SIGABRT,
+    /// ReleaseFast `panic:` trap). Following the reference's own precedent for
+    /// an unstorable style (`Screen.increaseCapacity` / `manualStyleUpdate`
+    /// degrade the cursor to the default style; UD65's decoder degrade), the
+    /// port degrades PER DIMENSION: the loop sets a `mask` flag only for the
+    /// dimension whose own capacity increase returned `OutOfSpace`, and this
+    /// copy leaves a cell's style / grapheme / hyperlink at the default only
+    /// when it fails in a dimension the mask degrades. A failure in any other
+    /// dimension is returned exactly as `clone_partial_row_from` returns it,
+    /// so the loop still grows that dimension and retries. A cell whose style
+    /// (or link) already exists in the destination set is stored normally, so
+    /// at the style ceiling only cells bringing a NEW style lose it; their
+    /// codepoints, and every row flag, are kept. The caller logs the returned
+    /// counts once per copy, never once per cell.
+    ///
+    /// Leaks: none for graphemes (`set_graphemes` frees its slice when the map
+    /// put fails). A degraded hyperlink whose URI was duplicated before its set
+    /// add failed leaves that string orphaned in the string allocator, exactly
+    /// as the reference's `dupe`-before-`addWithId` does (page.zig:979-1002,
+    /// no errdefer); it needs the hyperlink dimension at its own ceiling, and
+    /// the next string growth (a clone) reclaims it. See UD131.
     #[allow(clippy::not_unsafe_ptr_arg_deref)]
     pub fn clone_partial_row_degrade(
         &mut self,
@@ -1214,12 +1273,32 @@ impl Page {
         src_row: *const Row,
         x_start: usize,
         x_end_req: usize,
-    ) -> RowDegrade {
+        mask: RowDegradeMask,
+    ) -> Result<RowDegrade, CloneFromError> {
         debug_assert!(
             !std::ptr::eq(other, self as *const Page),
             "clone_partial_row_degrade is only used across pages by the row-copy loops"
         );
+        // This whole operation breaks integrity until the end, as in
+        // `clone_partial_row_from`.
         self.pause_integrity_checks(true);
+        let result = self.clone_partial_row_degrade_inner(
+            other, dst_row, src_row, x_start, x_end_req, mask,
+        );
+        self.pause_integrity_checks(false);
+        self.assert_integrity();
+        result
+    }
+
+    fn clone_partial_row_degrade_inner(
+        &mut self,
+        other: *const Page,
+        dst_row: *mut Row,
+        src_row: *const Row,
+        x_start: usize,
+        x_end_req: usize,
+        mask: RowDegradeMask,
+    ) -> Result<RowDegrade, CloneFromError> {
         let mut rep = RowDegrade::default();
 
         let self_base = self.memory_ptr();
@@ -1262,35 +1341,44 @@ impl Page {
                 unsafe { core::slice::from_raw_parts_mut(dst_cells_off_ptr, span) };
             let other_cells = unsafe { core::slice::from_raw_parts(other_cells_ptr, span) };
             fastmem::copy(dst_cells, other_cells);
-            self.pause_integrity_checks(false);
-            self.assert_integrity();
-            return rep;
+            return Ok(rep);
         }
 
-        // Slow path: per cell, store what fits and degrade the rest.
+        // Slow path: the reference's per-cell body (page.zig:895-984, the
+        // same calls in the same order as `clone_cell_managed_from`), except
+        // that a failure in a dimension `mask` degrades leaves that part of
+        // the cell at its default instead of returning.
         for i in 0..span {
             let dst_cell: *mut Cell = unsafe { dst_cells_off_ptr.add(i) };
             let src_cell: *const Cell = unsafe { other_cells_ptr.add(i) };
             unsafe { *dst_cell = (*src_cell).copy_with_managed_reset() };
             let src = unsafe { *src_cell };
 
-            if src.has_grapheme()
-                && self
-                    .clone_cell_graphemes_from(other, false, dst_row, dst_cell, src_cell)
-                    .is_err()
-            {
-                // set_graphemes sets the cell's grapheme markers only on
-                // success, so the reset cell is still clean here.
-                rep.graphemes += 1;
+            if src.has_grapheme() {
+                if let Err(e) =
+                    self.clone_cell_graphemes_from(other, false, dst_row, dst_cell, src_cell)
+                {
+                    if !mask.degrades(e) {
+                        return Err(e);
+                    }
+                    // set_graphemes sets the cell's grapheme markers only on
+                    // success, and frees its slice on failure, so the reset
+                    // cell is clean and nothing leaks.
+                    rep.graphemes += 1;
+                }
             }
-            if src.hyperlink()
-                && self
-                    .clone_cell_hyperlink_from(other, false, dst_row, dst_cell, src_cell)
-                    .is_err()
-            {
-                // set_hyperlink is the last step of that helper and runs only
-                // on success, so the reset cell carries no hyperlink marker.
-                rep.hyperlinks += 1;
+            if src.hyperlink() {
+                if let Err(e) =
+                    self.clone_cell_hyperlink_from(other, false, dst_row, dst_cell, src_cell)
+                {
+                    if !mask.degrades(e) {
+                        return Err(e);
+                    }
+                    // set_hyperlink is the last step of that helper and runs
+                    // only on success, so the reset cell carries no hyperlink
+                    // marker.
+                    rep.hyperlinks += 1;
+                }
             }
             if src.style_id() != stylepkg::DEFAULT_ID {
                 unsafe { (*dst_row).set_styled(true) };
@@ -1303,8 +1391,21 @@ impl Page {
                     Ok(added) => unsafe {
                         (*dst_cell).set_style_id(added.unwrap_or(src_style_id))
                     },
-                    // Unstorable: leave the cell on the default style.
-                    Err(_) => rep.styles += 1,
+                    Err(e) => {
+                        let e = match e {
+                            crate::ref_counted_set::AddError::OutOfMemory => {
+                                CloneFromError::StyleSetOutOfMemory
+                            }
+                            crate::ref_counted_set::AddError::NeedsRehash => {
+                                CloneFromError::StyleSetNeedsRehash
+                            }
+                        };
+                        if !mask.degrades(e) {
+                            return Err(e);
+                        }
+                        // Unstorable: leave the cell on the default style.
+                        rep.styles += 1;
+                    }
                 }
             }
             if KITTY_GRAPHICS && src.codepoint() == KITTY_PLACEHOLDER {
@@ -1312,9 +1413,7 @@ impl Page {
             }
         }
 
-        self.pause_integrity_checks(false);
-        self.assert_integrity();
-        rep
+        Ok(rep)
     }
 
     /// Test helper (UD131): fill this page's style set with distinct LIVE
@@ -1356,14 +1455,7 @@ impl Page {
             let base = (*this).memory_ptr();
 
             // The pinned style, placed on the first `u16::MAX` cells.
-            let pinned = stylepkg::Style {
-                flags: stylepkg::Flags {
-                    italic: true,
-                    ..Default::default()
-                },
-                fg_color: stylepkg::Color::Rgb(crate::color::RGB { r: 1, g: 2, b: 3 }),
-                ..Default::default()
-            };
+            let pinned = ud131_test_support::first_fill_style();
             let pinned_id = (*this).styles.add(base, pinned).unwrap();
             let mut pinned_cells: usize = 0;
             let mut count: usize = 1;
@@ -1384,14 +1476,7 @@ impl Page {
                     }
                     // Distinct live styles, one cell each. `count` fits in the
                     // 24 bits of an RGB, so every value is unique.
-                    let st = stylepkg::Style {
-                        fg_color: stylepkg::Color::Rgb(crate::color::RGB {
-                            r: (count & 0xFF) as u8,
-                            g: ((count >> 8) & 0xFF) as u8,
-                            b: (((count >> 16) & 0xFF) as u8) | 0x80,
-                        }),
-                        ..Default::default()
-                    };
+                    let st = ud131_test_support::fill_style(count);
                     let Ok(id) = (*this).styles.add(base, st) else {
                         break 'outer;
                     };
@@ -3021,5 +3106,345 @@ impl StaticBitSet {
     }
     fn count(&self) -> usize {
         self.count
+    }
+}
+
+/// Test support for the UD131 row-copy degrade tests (`pagelist/tests.rs` and
+/// `screen.rs` drive the two retry loops with the same mixed source row and
+/// compare the degraded copy against a control copy). PORT-ONLY (R13).
+#[cfg(test)]
+pub(crate) mod ud131_test_support {
+    use super::*;
+    use crate::hyperlink::{Hyperlink, HyperlinkId, PageEntryIdTag};
+
+    /// The style `test_fill_full_live_pinned` puts first (and pins when asked).
+    pub(crate) fn first_fill_style() -> Style {
+        Style {
+            flags: stylepkg::Flags {
+                italic: true,
+                ..Default::default()
+            },
+            fg_color: stylepkg::Color::Rgb(crate::color::RGB { r: 1, g: 2, b: 3 }),
+            ..Default::default()
+        }
+    }
+
+    /// The `count`-th distinct style `test_fill_full_live_pinned` places
+    /// (`count` from 1). Its 24-bit value is unique for every count.
+    pub(crate) fn fill_style(count: usize) -> Style {
+        Style {
+            fg_color: stylepkg::Color::Rgb(crate::color::RGB {
+                r: (count & 0xFF) as u8,
+                g: ((count >> 8) & 0xFF) as u8,
+                b: (((count >> 16) & 0xFF) as u8) | 0x80,
+            }),
+            ..Default::default()
+        }
+    }
+
+    /// Two styles no fill ever places.
+    pub(crate) fn new_style_a() -> Style {
+        Style {
+            flags: stylepkg::Flags {
+                bold: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+    pub(crate) fn new_style_b() -> Style {
+        Style {
+            flags: stylepkg::Flags {
+                faint: true,
+                ..Default::default()
+            },
+            bg_color: stylepkg::Color::Palette(7),
+            ..Default::default()
+        }
+    }
+
+    /// Columns of the mixed row that carry a style the full destination set
+    /// does NOT have: exactly the cells a style-ceiling degrade may touch.
+    pub(crate) const NEW_STYLE_XS: [usize; 5] = [0, 1, 3, 4, 10];
+    /// First column of the grapheme run.
+    pub(crate) const GRAPHEME_RUN_X: usize = 12;
+    /// Length of the grapheme run: enough to need grapheme growth on the
+    /// destination (a 50,000-column page starts at 512 grapheme bytes, 32
+    /// chunks; the tests assert the growth happened). The review used 3,000,
+    /// which needs the same growth but made each debug-build retry re-scan the
+    /// grapheme map on every one of the 3,000 removals (`hash_map`'s debug
+    /// canonical-placement check), about 10 s per test.
+    pub(crate) const GRAPHEME_RUN: usize = 300;
+    /// First column of the hyperlink run.
+    pub(crate) const LINK_RUN_X: usize = GRAPHEME_RUN_X + GRAPHEME_RUN;
+    /// Length of the hyperlink run, cycling over `RUN_LINKS` distinct
+    /// implicit links with `RUN_URI_LEN`-byte URIs: enough cells and string
+    /// bytes to need hyperlink and string growth on the destination.
+    pub(crate) const LINK_RUN: usize = 200;
+    pub(crate) const RUN_LINKS: usize = 12;
+    pub(crate) const RUN_URI_LEN: usize = 200;
+    /// Columns the tests compare (the rest of the row is blank).
+    pub(crate) const SPAN: usize = LINK_RUN_X + LINK_RUN + 4;
+
+    /// Page widths for the mixed tests. The full set needs 53,248 live cells
+    /// on the destination's two fill rows, and one page must hold every row
+    /// of the fixture, which needs a width past `maxCols` (47,931 on macOS;
+    /// below it a standard page holds only one such row). The control only
+    /// needs the mixed row (`SPAN` columns). Every capacity growth re-clones
+    /// the page and every copy re-checks its integrity, which in a debug
+    /// build walks every cell, so the pages are kept as small as the fixture
+    /// allows (three rows each, made by `split`).
+    pub(crate) fn mixed_cols(fill: bool) -> u16 {
+        if fill { 50_000 } else { SPAN as u16 }
+    }
+
+    fn cell(cp: u32, wide: Wide) -> Cell {
+        let mut c = Cell::zeroed();
+        c.set_content_tag(ContentTag::Codepoint);
+        c.set_content_codepoint(cp);
+        c.set_wide(wide);
+        c
+    }
+
+    /// Builds the mixed source row at `y` of `page` (a page other than the
+    /// destination):
+    ///
+    /// | x | cell | style |
+    /// |---|---|---|
+    /// | 0, 1 | wide U+4E2D + spacer tail | new A |
+    /// | 2 | 'E' | existing (`fill_style(1)`) |
+    /// | 3 | 'F' + U+0301 | new A |
+    /// | 4 | 'G' + implicit link | new B |
+    /// | 5, 6 | wide U+4E2D + spacer tail | existing (`fill_style(1)`) |
+    /// | 7 | 'H' + U+0302 U+0303 + explicit link | existing (`fill_style(2)`) |
+    /// | 8 | 'I' | none |
+    /// | 9 | 'J' + implicit link | none |
+    /// | 10 | 'K' + explicit link | new A |
+    /// | 11 | 'P' | existing (`first_fill_style`) |
+    /// | 12..312 | 'g' + U+0301 | none |
+    /// | 312..512 | 'l' + one of 12 implicit links (200-byte URIs) | none |
+    ///
+    /// plus the wrap flag and a semantic prompt on the row.
+    ///
+    /// # Safety
+    /// `page` must be a live page at least `SPAN` columns wide, `y` a row of
+    /// it, and the row blank.
+    pub(crate) unsafe fn build_mixed_src(page: *mut Page, y: usize) -> *const Row {
+        unsafe {
+            // Each `set_*` below re-checks the whole (50,000-column) page's
+            // integrity in a debug build; check once at the end instead.
+            (*page).pause_integrity_checks(true);
+            let base = (*page).memory_ptr();
+            let row = (*page).get_row(y);
+            (*row).set_wrap(true);
+            (*row).set_semantic_prompt(SemanticPrompt::Prompt);
+
+            let implicit = (*page)
+                .insert_hyperlink(Hyperlink {
+                    id: HyperlinkId::Implicit(0),
+                    uri: b"https://ud131.example/implicit".to_vec(),
+                })
+                .unwrap();
+            let explicit = (*page)
+                .insert_hyperlink(Hyperlink {
+                    id: HyperlinkId::Explicit(b"ud131-xid".to_vec()),
+                    uri: b"https://ud131.example/explicit".to_vec(),
+                })
+                .unwrap();
+
+            let a = (*page).styles.add(base, new_style_a()).unwrap();
+            let b = (*page).styles.add(base, new_style_b()).unwrap();
+            let e1 = (*page).styles.add(base, fill_style(1)).unwrap();
+            let e2 = (*page).styles.add(base, fill_style(2)).unwrap();
+            let p = (*page).styles.add(base, first_fill_style()).unwrap();
+
+            let put = |x: usize, c: Cell, style: StyleId| {
+                let dst = (*page).get_row_and_cell(x, y).cell;
+                *dst = c;
+                if style != stylepkg::DEFAULT_ID {
+                    (*dst).set_style_id(style);
+                    (*row).set_styled(true);
+                }
+            };
+            put(0, cell(0x4E2D, Wide::Wide), a);
+            put(1, cell(0, Wide::SpacerTail), a);
+            put(2, cell('E' as u32, Wide::Narrow), e1);
+            put(3, cell('F' as u32, Wide::Narrow), a);
+            put(4, cell('G' as u32, Wide::Narrow), b);
+            put(5, cell(0x4E2D, Wide::Wide), e1);
+            put(6, cell(0, Wide::SpacerTail), e1);
+            put(7, cell('H' as u32, Wide::Narrow), e2);
+            put(8, cell('I' as u32, Wide::Narrow), stylepkg::DEFAULT_ID);
+            put(9, cell('J' as u32, Wide::Narrow), stylepkg::DEFAULT_ID);
+            put(10, cell('K' as u32, Wide::Narrow), a);
+            put(11, cell('P' as u32, Wide::Narrow), p);
+            // `add` took one reference each; these are the other uses.
+            (*page).styles.use_multiple(base, a, 3); // x 0, 1, 3, 10
+            (*page).styles.use_multiple(base, e1, 2); // x 2, 5, 6
+
+            let cellp = |x: usize| (*page).get_row_and_cell(x, y).cell;
+            (*page).set_graphemes(row, cellp(3), &[0x0301]).unwrap();
+            (*page).set_graphemes(row, cellp(7), &[0x0302, 0x0303]).unwrap();
+            (*page).set_hyperlink(row, cellp(4), implicit).unwrap();
+            (*page).hyperlink_set.use_id(base, implicit);
+            (*page).set_hyperlink(row, cellp(9), implicit).unwrap();
+            (*page).set_hyperlink(row, cellp(7), explicit).unwrap();
+            (*page).hyperlink_set.use_id(base, explicit);
+            (*page).set_hyperlink(row, cellp(10), explicit).unwrap();
+
+            for x in GRAPHEME_RUN_X..GRAPHEME_RUN_X + GRAPHEME_RUN {
+                put(x, cell('g' as u32, Wide::Narrow), stylepkg::DEFAULT_ID);
+                (*page).set_graphemes(row, cellp(x), &[0x0301]).unwrap();
+            }
+
+            let mut run_links = Vec::with_capacity(RUN_LINKS);
+            for j in 0..RUN_LINKS {
+                let mut uri = format!("https://ud131.example/run/{j}/").into_bytes();
+                uri.resize(RUN_URI_LEN, b'a' + j as u8);
+                run_links.push(
+                    (*page)
+                        .insert_hyperlink(Hyperlink {
+                            id: HyperlinkId::Implicit(100 + j as u32),
+                            uri,
+                        })
+                        .unwrap(),
+                );
+            }
+            for k in 0..LINK_RUN {
+                let x = LINK_RUN_X + k;
+                let id = run_links[k % RUN_LINKS];
+                put(x, cell('l' as u32, Wide::Narrow), stylepkg::DEFAULT_ID);
+                if k >= RUN_LINKS {
+                    (*page).hyperlink_set.use_id(base, id);
+                }
+                (*page).set_hyperlink(row, cellp(x), id).unwrap();
+            }
+
+            (*page).pause_integrity_checks(false);
+            (*page).assert_integrity();
+            row
+        }
+    }
+
+    /// Everything a row copy carries for one cell, resolved to values.
+    #[derive(Debug, PartialEq)]
+    pub(crate) struct CellSnap {
+        pub cp: u32,
+        pub wide: Wide,
+        pub graphemes: Option<Vec<u32>>,
+        /// (tag, explicit id bytes or the implicit id in decimal, uri).
+        pub link: Option<(PageEntryIdTag, Vec<u8>, Vec<u8>)>,
+        /// The resolved style, as its `Debug` text (`Style` has no `PartialEq`).
+        pub style: String,
+    }
+
+    /// # Safety
+    /// `page` must be live, `(x, y)` inside it.
+    pub(crate) unsafe fn snap(page: *mut Page, x: usize, y: usize) -> CellSnap {
+        unsafe {
+            let base = (*page).memory_ptr();
+            let c = (*page).get_row_and_cell(x, y).cell;
+            let graphemes = if (*c).has_grapheme() {
+                Some((*page).lookup_grapheme(c).unwrap().to_vec())
+            } else {
+                None
+            };
+            let link = if (*c).hyperlink() {
+                let id = (*page).lookup_hyperlink(c).unwrap();
+                let e = Page::hyperlink_get_of(page, id);
+                let tag = e.id.tag();
+                let idb = match tag {
+                    PageEntryIdTag::Explicit => e.id.explicit().slice(base).to_vec(),
+                    PageEntryIdTag::Implicit => e.id.implicit().to_string().into_bytes(),
+                };
+                Some((tag, idb, e.uri.slice(base).to_vec()))
+            } else {
+                None
+            };
+            let style = if (*c).style_id() == stylepkg::DEFAULT_ID {
+                Style::default()
+            } else {
+                *(*page).styles.get(base, (*c).style_id())
+            };
+            CellSnap {
+                cp: (*c).codepoint(),
+                wide: (*c).wide(),
+                graphemes,
+                link,
+                style: format!("{style:?}"),
+            }
+        }
+    }
+
+    fn default_style() -> String {
+        format!("{:?}", Style::default())
+    }
+
+    /// The row flags a copy carries.
+    ///
+    /// # Safety
+    /// `page` must be live, `y` a row of it.
+    pub(crate) unsafe fn row_flags(page: *mut Page, y: usize) -> String {
+        unsafe {
+            let r = *(*page).get_row(y);
+            format!(
+                "wrap={} wrap_cont={} styled={} grapheme={} hyperlink={} prompt={:?} kitty={}",
+                r.wrap(),
+                r.wrap_continuation(),
+                r.styled(),
+                r.grapheme(),
+                r.hyperlink(),
+                r.semantic_prompt(),
+                r.kitty_virtual_placeholder(),
+            )
+        }
+    }
+
+    /// Asserts the degraded copy at row `y` of `deg` equals the control copy
+    /// at row `y` of `ctl` everywhere except the style of the `NEW_STYLE_XS`
+    /// cells, which must be the default in the degraded copy (and not in the
+    /// control): codepoints, wide flags, graphemes, hyperlinks (id and URI)
+    /// and row flags are identical.
+    ///
+    /// # Safety
+    /// Both pages live, `y` a row of each, both at least `SPAN` wide.
+    pub(crate) unsafe fn assert_only_new_styles_degraded(ctl: *mut Page, deg: *mut Page, y: usize) {
+        unsafe {
+            let mut style_diffs = Vec::new();
+            for x in 0..SPAN {
+                let a = snap(ctl, x, y);
+                let b = snap(deg, x, y);
+                assert_eq!(
+                    (a.cp, a.wide, &a.graphemes, &a.link),
+                    (b.cp, b.wide, &b.graphemes, &b.link),
+                    "x={x}: codepoint, wide, graphemes and hyperlink match the control"
+                );
+                if a.style != b.style {
+                    style_diffs.push(x);
+                    assert_eq!(
+                        b.style,
+                        default_style(),
+                        "x={x}: a degraded style is the default"
+                    );
+                }
+            }
+            assert_eq!(
+                style_diffs,
+                NEW_STYLE_XS.to_vec(),
+                "exactly the new-style cells lose their style"
+            );
+            for x in NEW_STYLE_XS {
+                assert_ne!(
+                    snap(ctl, x, y).style,
+                    default_style(),
+                    "x={x}: the control keeps it"
+                );
+            }
+            assert_eq!(
+                row_flags(ctl, y),
+                row_flags(deg, y),
+                "row flags match the control"
+            );
+        }
     }
 }
