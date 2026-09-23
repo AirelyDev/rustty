@@ -944,15 +944,15 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
   #define HWY_TARGET_STR_AVX3_VL512 ",evex512"
   ```
   appended to the AVX3, AVX3_DL, AVX3_ZEN4 and AVX3_SPR target strings (:154-190); the AVX10.2 strings at :186-194 also emit `no-evex512`.
-- defect:          The guard has no upper compiler bound, but the attribute has been removed from newer compilers. **Measured (task R13-R, macOS host):** Homebrew's `x86_64-w64-mingw32-gcc` **16.2.0** rejects both `__attribute__((target("avx512f,evex512")))` and `target("avx512f,no-evex512")` with "attribute 'target' argument 'evex512' is unknown" (and `'no-evex512'`). Zig 0.16.0's bundled Clang (`zig cc -target x86_64-linux-gnu`) accepts both, so Ghostty's default build is unaffected today. highway master already bounds the guard (fetched 2026-09-11): `HWY_HAVE_EVEX512` is 1 only for `1400 <= GCC < 1600` or `1800 <= Clang < 2200`, citing llvm/llvm-project#157034 ("evex512 has been removed from clang 22"). The rustty build audit first hit this cross-building the byte-identical vendored header with mingw GCC 16 (`docs/superpowers/specs/2026-08-25-build-system-gap-audit.md:663-671`). **UNVERIFIED:** the first GCC release that rejects the attribute (only 16.2.0 was tested), the highway commit and release that carry the fix, and whether that fix also bounds the `no-evex512` strings.
+- defect:          The guard has no upper compiler bound, but the attribute has been removed from newer compilers. **Measured (task R13-R, macOS host):** Homebrew's `x86_64-w64-mingw32-gcc` **16.2.0** rejects both `__attribute__((target("avx512f,evex512")))` and `target("avx512f,no-evex512")` with "attribute 'target' argument 'evex512' is unknown" (and `'no-evex512'`). Zig 0.16.0's bundled Clang (`zig cc -target x86_64-linux-gnu`) accepts both, so Ghostty's default build is unaffected today. highway master already bounds the guard (fetched 2026-09-11): `HWY_HAVE_EVEX512` is 1 only for `1400 <= GCC < 1600` or `1800 <= Clang < 2200`, citing llvm/llvm-project#157034 ("evex512 has been removed from clang 22"). The rustty build audit first hit this cross-building the byte-identical vendored header with mingw GCC 16 (`docs/superpowers/specs/2026-08-25-build-system-gap-audit.md:663-671`). **Upstream fixes (task R13-D, checked against google/highway on GitHub 2026-09-22):** `7cde540171` (2025-05-22, "Do not add evex512 to HWY_TARGET_STR with GCC 16 or later") bounds the GCC side and is in release **1.3.0**; the Clang bound (`HWY_COMPILER_CLANG < 2200`, citing llvm/llvm-project#157034) is `4201022df1` (2025-09-15), and `31ea1cfdf8` (2025-09-22) makes it overridable as `HWY_HAVE_EVEX512`; both are in **1.4.0**, not 1.3.0 (GitHub compare against the tags). Neither 1.3.0's nor 1.4.0's `set_macros-inl.h` contains a `no-evex512` string any more. **UNVERIFIED:** the first GCC release that rejects the attribute (only 16.2.0 was tested; highway's commit says "GCC 16 or later").
 - ReleaseSafe:     build failure of highway's x86 AVX3/AVX10 targets on an affected compiler (GCC 16, or Clang 22 per the upstream comment).
 - ReleaseFast:     same.
 - reachability:    build: an x86 target compiled with GCC 16 (mingw, or a future Linux CI image), or with a Zig whose bundled Clang is 22 or later.
 - port handling:   byte-faithful vendor: `crates-sys/highway-sys/vendor/hwy/ops/set_macros-inl.h`, identical to the pinned copy (`cmp`) and deliberately not patched (audit :669-671).
 - parity row(s):   none; inventory M85.
 - test:            n/a. Probe: two one-line C files with the `target` attributes above, compiled with mingw GCC 16.2.0 and `zig cc` (Zig 0.16.0).
-- proposed fix:    Upstream highway has the fix. For Ghostty: move `pkg/highway` to a highway release that includes the bounded `HWY_HAVE_EVEX512` guard (identify the commit first), which will be required before Ghostty's Zig moves to Clang 22.
-- upstream status: fixed upstream in highway master (commit not identified); Ghostty's pin (1.2.0) does not have it
+- proposed fix:    bump Ghostty's highway pin (`pkg/highway/build.zig.zon`) to **1.4.0**, the first release with both the GCC 16 and the Clang 22 bounds (1.3.0 has only the GCC one). Required before Ghostty's Zig moves to Clang 22.
+- upstream status: fixed in highway 1.4.0 (`7cde540171`, `4201022df1`, `31ea1cfdf8`); Ghostty's pin (1.2.0) does not have it
 
 ### UD57 — custom-shader colour uniforms read `.color` on a `TerminalColor` that can be `cell-foreground` or `cell-background`
 - kind:            crash (ReleaseFast: ub)
@@ -1226,6 +1226,366 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - proposed fix:    make `handleWinch` async-signal-safe: set an atomic flag or write to a self-pipe, and run the callbacks from the event loop's own thread (the input thread can `poll` the pipe alongside the tty).
 - upstream status: not reported
 
+### UD90 — a 128-byte input-method commit during a keypress overflows the `u7` `im_len`
+- kind:            crash (safety-checked trap) / silent data loss
+- upstream project: ghostty
+- severity:        medium (an input method decides the commit)
+- reference:       `src/apprt/gtk/class/surface.zig:662-663` (`im_buf: [128]u8`, `im_len: u7`), `:3269-3280` (`imCommit`, `.not_composing` arm: `if (str.len > priv.im_buf.len)` then `priv.im_len = @intCast(str.len)` at `:3277`), read back at `:1430-1451` (`keyEvent`), at 20abdb50a
+- defect:          the guard admits a commit of exactly `im_buf.len` = 128 bytes, but `im_len` is a `u7` (0..=127), so `@intCast(128)` does not fit.
+- ReleaseSafe:     panic "integer does not fit in destination type" (measured, Zig 0.16.0, the cast alone).
+- ReleaseFast:     128 truncates to 0 (measured), so the committed text is silently dropped from the key event.
+- reachability:    an input method (IBus, fcitx, XCompose) that commits exactly 128 bytes while a key event is in progress. The IM decides the commit; which real IM configurations produce 128 bytes is UNVERIFIED.
+- port handling:   `im_len` is a `u8`, so the 128-byte commit is buffered whole; 129 bytes still take the reference's own "not enough buffer space" warning. PORT NOTE at `crates/rustty-apprt/src/gtk/class/surface.rs:4147`. The port's comment that called 128 "the reference's `u7` bound" is corrected.
+- parity row(s):   inventory M8.
+- test:            `a_128_byte_commit_during_a_keypress_is_buffered_whole` (rustty-apprt, display-gated, run on the VM under a private headless sway): 64 two-byte characters committed during a keypress give `im_len` 128 and the same bytes in `im_buf`; 129 bytes are not buffered. Negative control, VM 2026-09-22: the `u7` range reinstated as a check fails with "integer does not fit in destination type" at the store. Restored.
+- proposed fix:    make `im_len` a `u8` (or `std.math.IntFittingRange(0, im_buf.len)`), or change the guard to `str.len >= priv.im_buf.len`.
+- upstream status: not reported
+
+### UD91 — a `global:` keybind on a key GTK has no keysym for hits `orelse unreachable` in the Wayland hotkeys
+- kind:            crash (safety-checked trap) / undefined behaviour
+- upstream project: ghostty
+- severity:        medium (a config line, on a compositor that offers the protocol)
+- reference:       `src/apprt/gtk/winproto/wayland/Hotkeys.zig:33-60` (`Entry.bind`: `const keysym = key.keysymFromTrigger(self.trigger) orelse unreachable;` at `:40`, with the comment "The only time this will return an error is when `trigger.key` is `catch_all`"), the public `bind` filter at `:95-136` (skips only `catch_all`, `:111`); `src/apprt/gtk/key.zig:62-68` (`keysymFromTrigger`: `.physical => |k| keyvalFromKey(k)`), `:319-332` (`keyvalFromKey` returns null for a key absent from `keymap`), at 20abdb50a
+- defect:          `keysymFromTrigger` is also null for every `input.Key` the GTK `keymap` does not list: 43 values at the pin, counting `unidentified` (counted by script), e.g. `audio_volume_up`, `browser_back`, `media_play_pause`, `intl_backslash`, `numpad_comma`. `keybind = global:audio_volume_up=…` is not a `catch_all`, so it passes the filter and reaches the `unreachable`.
+- ReleaseSafe:     panic "reached unreachable code" while binding the hotkeys. By reading.
+- ReleaseFast:     undefined behaviour.
+- reachability:    config: a `global:` keybind on one of those keys, under a compositor that advertises `vicinae_hotkey_manager_v1` (the Vicinae hotkey protocol). Which compositors ship that protocol is UNVERIFIED.
+- port handling:   `Entry::bind` returns `BindError::NoKeysym`, which the reference's own `bind` loop reports (`log.warn("failed to request hotkey trigger={f} err={}", …)`, `:127-133`) and skips; the other binds still go out. PORT NOTE at `crates/rustty-apprt/src/gtk/winproto/wayland/hotkeys.rs:133`.
+- parity row(s):   inventory M9.
+- test:            `hotkeys_bind_skips_a_trigger_with_no_keysym` (rustty-apprt, Linux, no display: the fake `wayland-server` compositor of the existing wire test): `global:audio_volume_up` and `global:super+q` are both selected, exactly one has no keysym, `bind` does not panic, and only `q`'s keysym reaches the compositor. Negative control, VM 2026-09-22: `unreachable!()` restored in place of the `NoKeysym` return panics "entered unreachable code" at that line. Restored.
+- proposed fix:    `const keysym = key.keysymFromTrigger(self.trigger) orelse return error.NoKeysym;` (the caller already logs a bind error), or skip such triggers in the public `bind` filter; and correct the comment.
+- upstream status: not reported
+
+### UD92 — the OpenType `SVG ` table parser reads past the table on a short or empty document list
+- kind:            ub (out-of-bounds read) / crash (safety-checked trap)
+- upstream project: ghostty
+- severity:        medium (a font file)
+- reference:       `src/font/opentype/svg.zig:25-50` (`SVG.init`: `const records: [*]const [12]u8 = @ptrCast(data[reader.seek..]);` at `:42`, `glyphRange(&records[0])` at `:43`, `records[(len - 1)]` at `:44`, `.records = records[0..len]` at `:49`), `:53-72` (`hasGlyph` binary search over `records`), at 20abdb50a
+- defect:          `records` is a many-item pointer with no length. `records[0]` is read before `len` is considered, `len - 1` is computed on a `u16` 0, and nothing checks that `len` records fit in the table. So an `SVG ` table whose `numEntries` is 0, or larger than the bytes left, is read out of bounds.
+- ReleaseSafe:     `numEntries = 0`: panic "integer overflow" on `len - 1`, after `records[0]` has already read past a table that ends there (the pointer read is unchecked). An overrunning count: no trap; `glyphRange(&records[len - 1])` and later `hasGlyph` read past the table. By reading (the `u16` underflow is the same shape as UD72's, measured there).
+- ReleaseFast:     `len - 1` wraps to 65535 and `records[65535]` is read about 786 KiB past the table; an overrunning count reads past it the same way.
+- reachability:    a font file with an `SVG ` table (for example one named by `font-family`, or picked by fallback discovery).
+- port handling:   `crates/rustty-font/src/opentype/svg.rs` returns the reference's own `EndOfStream` when the records do not fit (`len > (data.len() - pos) / 12`) and when `len == 0`. PORT NOTE at `svg.rs:76`.
+- parity row(s):   LEDGER S92-F2 (closed by task R13-D), S92-F3 (WAIVED, re-grounded on R13); inventory M10.
+- test:            `svg_document_list_with_no_records_is_end_of_stream` (new; positive control: the same table with one real record parses and answers `has_glyph`) and `svg_document_list_record_count_past_end` (rustty-font). Negative controls, macOS 2026-09-22, one at a time: the `len == 0` guard removed fails with "index out of bounds: the len is 0 but the index is 0" (the `records[0]` read); the count guard removed makes `init` return `Ok` for a two-record count with no record bytes (the port then reads past the table too). Restored.
+- proposed fix:    slice the records with a length: `if (data.len - reader.seek < @as(usize, len) * 12) return error.EndOfStream; if (len == 0) return error.EndOfStream;` then `const records = std.mem.bytesAsSlice([12]u8, data[reader.seek..][0 .. len * 12]);`.
+- upstream status: not reported
+
+### UD93 — `killPid` waits forever for a child that survives SIGHUP
+- kind:            deadlock (a surface that never finishes closing)
+- upstream project: ghostty
+- severity:        medium (ordinary use; see reachability)
+- reference:       `src/termio/Exec.zig:1176-1215` (`killPid`: `while (true)` { `killpg(pgid, SIGHUP)`; `waitpid(pid, WNOHANG)`; `if (res_pid != 0) break;` sleep 10 ms }), at 20abdb50a
+- defect:          the loop's only exit is reaping the child. A child that survives SIGHUP keeps it spinning: one that ignores or handles SIGHUP and does not exit, or a macOS `login(1)` session leader wedged in the kernel exit path (state `?Es`, SIGKILL-immune) while output is still queued on the pty with no reader.
+- ReleaseSafe:     the thread that stops the subprocess spins forever (10 ms sleeps); the surface never finishes closing. By reading.
+- ReleaseFast:     the same.
+- reachability:    ordinary use: a `command` whose process ignores SIGHUP (the port's test uses `SIG_IGN` inherited across `exec`). The `?Es` wedge was reproduced on the port side, 12/12, at an older pin (`.port/tools/repro_subprocess_hang.sh`); it was not re-measured at this pin (UNVERIFIED at the pin). Its trigger is UD102.
+- port handling:   `crates/rustty-termio/src/exec.rs` bounds the same loop with `KILL_ABANDON` (10 s) and returns `KillError::Abandoned`, which `stop` treats as non-fatal; the child is left running, never SIGKILLed (the rationale is in the `[R1-DIVERGENCE: bounded kill wait]` note). The deadline is a parameter of `kill_pid_until` (production passes `KILL_ABANDON`). PORT NOTE at `exec.rs:3952`.
+- parity row(s):   `.port/phase-2/DEFERRALS.md` "killPid bounded wait"; inventory M13.
+- test:            `kill_pid_abandons_a_child_that_ignores_sighup` (rustty-termio, macOS and the VM): a real child in its own session that ignores SIGHUP from before `exec`; a 300 ms deadline returns `Abandoned` after at least 300 ms with the child still alive; a 10 s watchdog SIGKILLs the child if the loop is stuck. Negative control, macOS 2026-09-22: the deadline check disabled (the reference's loop) fails with "killPid did not return within 10 s for a child that ignores SIGHUP". Restored.
+- proposed fix:    bound the loop (the port abandons after 10 s without escalating), and drain the pty before stopping on the `threadEnter` error path (UD102).
+- upstream status: not reported
+
+### UD94 — `+list-themes` indexes an empty theme list after a search that matches nothing
+- kind:            crash (safety-checked trap) / undefined behaviour
+- upstream project: ghostty
+- severity:        low (interactive CLI)
+- reference:       `src/cli/list_themes.zig:443` and `:470` (`self.current = self.filtered.items.len - 1;`, End/`G` and the search arm), `:486` and `:492` (`self.themes[self.filtered.items[self.current]]` for `c` and `C`), `:334-338` and `:414` (`updateFiltered`: `var selected: []const u8 = undefined;`, set only when the old list is non-empty, then `if (selected.len == 0)`), at 20abdb50a
+- defect:          after a search that matches nothing, `filtered.items` is empty: End computes `0 - 1` on a `usize`, `c`/`C` index `filtered.items[current]` out of bounds, and a later `updateFiltered` that finds matches reads the `undefined` `selected`.
+- ReleaseSafe:     End: panic "integer overflow"; `c`/`C`: panic "index out of bounds". By reading (the same trap shapes are measured elsewhere in this file).
+- ReleaseFast:     End wraps `current` to `maxInt(usize)`; `c`/`C` read past the list (undefined behaviour); `selected.len` reads uninitialised memory.
+- reachability:    interactive: in `+list-themes`, type a search that matches nothing, then press `c`, `C` or End.
+- port handling:   `crates/rustty-cli/src/list_themes.rs`: `c`/`C` do nothing on an empty list (nothing is selected), End wraps harmlessly (every index is guarded and `draw` resets `current`), and `selected` is an `Option`. PORT NOTEs at `list_themes.rs:921`, `:966`, `:2365`.
+- parity row(s):   LEDGER S69-F7 (closed by task R13-D); inventory M25.
+- test:            `keys_on_a_filter_that_matches_nothing_do_not_index_it` (rustty-cli, macOS and the VM). `update` needs the real `Tty`, which opens `/dev/tty`, so the test re-executes its own binary with a fresh pty as the controlling terminal; the child drives End (asserting `current` wrapped), `c`, `C`, the four navigation keys, a draw, and a search clear that must list both themes with `current` 0, then prints a marker the parent requires. Negative control, macOS 2026-09-22: the `c` guard removed makes the child panic "index out of bounds: the len is 0 but the index is 18446744073709551615". Restored.
+- proposed fix:    return early from the `c`/`C`/End handlers when `filtered.items.len == 0`, and initialise `selected` to `""`.
+- upstream status: not reported
+
+### UD95 — `click-repeat-interval` above 4294 ms overflows the `u32` nanosecond product
+- kind:            crash (safety-checked trap) / wrong value
+- upstream project: ghostty
+- severity:        low (a config value)
+- reference:       `src/Surface.zig:395` (`.mouse_interval = config.@"click-repeat-interval" * 1_000_000`), field `mouse_interval: u64` at `:315`; `click-repeat-interval: u32` (`src/config/Config.zig:2578`), at 20abdb50a
+- defect:          the product is computed in `u32` (the operand's type) and only then widened to the `u64` field.
+- ReleaseSafe:     panic "integer overflow" at surface creation for any value above 4294 (measured, Zig 0.16.0, the expression alone).
+- ReleaseFast:     wraps: 5000 ms becomes 705032704 ns (measured), a 0.7 s repeat interval.
+- reachability:    config: `click-repeat-interval = 5000`.
+- port handling:   `crates/rustty-core/src/surface.rs` widens before multiplying (`u64::from(…) * 1_000_000`). PORT NOTE at `surface.rs:1273`.
+- parity row(s):   LEDGER S40-F1 (closed by task R13-D); inventory M26.
+- test:            `a_click_repeat_interval_above_u32_nanoseconds_is_widened_not_trapped` (rustty-core): 500 ms (positive control), 5000 ms and `u32::MAX` ms through the config loader into a real `DerivedConfig`. Negative control, macOS 2026-09-22: the product computed in `u32` fails "attempt to multiply with overflow". Restored.
+- proposed fix:    `@as(u64, config.@"click-repeat-interval") * std.time.ns_per_ms`.
+- upstream status: not reported
+
+### UD96 — `quick-terminal-size` accepts percentages whose pixel size traps, and pixel sizes that do not fit `c_int`
+- kind:            crash (safety-checked trap)
+- upstream project: ghostty
+- severity:        low (a config value)
+- reference:       `src/config/Config.zig:9457-9465` (`Size.toPixels`: `return @intFromFloat(v / 100.0 * dim);`), `:9467-9490` (`Size.parse`: `parseFloat`, rejects only `percentage < 0`); `src/apprt/gtk/winproto/wayland.zig:441-449` (`window.setDefaultSize(@intCast(dims.width), @intCast(dims.height))` into `c_int`), at 20abdb50a
+- defect:          the parser accepts `inf%`, `1e10%` and `nan%` (`nan < 0` is false), and a pixel size above `maxInt(c_int)`. The percentage conversion and the `c_int` cast are both unchecked.
+- ReleaseSafe:     `inf%` or `1e10%`: panic "integer part of floating point value out of bounds"; `3000000000px`: panic "integer does not fit in destination type" in the Wayland quick terminal (all measured, Zig 0.16.0, the expressions alone). `nan%` gives 0 without a trap.
+- ReleaseFast:     `inf%`/`1e10%` give 4294967295, `nan%` 0; `3000000000px` becomes -1294967296, which GTK rejects: `gtk_window_set_default_size: assertion 'width >= -1' failed`, the size is left unchanged (measured, GTK 4.22 under headless sway, Python GI).
+- reachability:    config: `quick-terminal-size = inf%` (or `3000000000px`) on the GTK Wayland quick terminal. Whether the macOS quick terminal has the same conversion is UNVERIFIED (not read).
+- port handling:   `crates/rustty-config/src/value_types.rs` `to_pixels` converts with Rust's saturating `as`, which yields the reference's ReleaseFast values without the trap; the Wayland `set_default_size` casts with `as i32`, which also gives the reference's ReleaseFast value, so a pixel size above `i32::MAX` draws the same GTK critical and is ignored (not a crash; not changed by this task). PORT NOTE at `value_types.rs:6994`.
+- parity row(s):   inventory M27.
+- test:            `quick_terminal_size_out_of_range_percentages_do_not_trap` (rustty-config): `50%` (positive control), `inf%`, `1e10%` and `nan%` parse as percentages and give 4294967295/4294967295/0, directly and through `calculate`. Negative control, macOS 2026-09-22: the reference's range check reinstated fails "integer part of floating point value out of bounds". Restored. The `c_int` cast is not driven by a test.
+- proposed fix:    reject non-finite percentages in `Size.parse`, and use `std.math.lossyCast` (or clamp to the monitor) in `toPixels` and before `setDefaultSize`.
+- upstream status: not reported
+
+### UD97 — an `adjust-*` percentage that pushes a metric out of range traps in `Modifier.apply`
+- kind:            crash (safety-checked trap)
+- upstream project: ghostty
+- severity:        low (a config value)
+- reference:       `src/font/Metrics.zig:460-478` (`Modifier.parse`: `parseFloat(f64, …)`, any value above -100% accepted, including `inf%`), `:515-525` (`apply`, `.percent` arm: `const applied_T: T = @intFromFloat(@round(v_f64 * p_clamped));`), at 20abdb50a
+- defect:          the percentage is unbounded, and the product is converted to the metric's integer type unchecked. The `.absolute` arm of the same function saturates on purpose (`std.math.cast(T, …) orelse maxInt(T)`), so the percentage arm is the inconsistent one.
+- ReleaseSafe:     `adjust-cell-width = inf%` (or `1e300%`): panic "integer part of floating point value out of bounds" (measured, Zig 0.16.0, the expression alone). `nan%` gives 0 without a trap (`@max(0, nan)` is 0, measured).
+- ReleaseFast:     the metric becomes the type's maximum (4294967295 for a `u32`, measured).
+- reachability:    config: any `adjust-*` metric modifier given as a huge or infinite percentage.
+- port handling:   `crates/rustty-font/src/metrics.rs` `apply_u32`/`apply_i32` convert with Rust's saturating `as`, the same values as the reference's ReleaseFast and the same saturation the `.absolute` arm applies. What the rest of the app does with a 4294967295 px cell (the same state `adjust-cell-width = 2147483647` reaches through the `.absolute` arm) is not covered here; see UD59. PORT NOTEs at `metrics.rs:775`, `:804`.
+- parity row(s):   inventory M28.
+- test:            `Modifier_percent_out_of_range_saturates` (rustty-font): `inf%`, `1e300%` and `nan%` parsed from text give the type's max / max / 0 for `u32` and `i32`, and `Metrics::apply` with `cell_width = inf%` gives 4294967295. Negative control, macOS 2026-09-22: the range check reinstated in `apply_u32` fails "integer part of floating point value out of bounds". Restored.
+- proposed fix:    reject non-finite percentages in `Modifier.parse`, and saturate the `.percent` arm as the `.absolute` arm does (`std.math.lossyCast`).
+- upstream status: not reported
+
+### UD98 — a `font-variation` value outside the 16.16 range traps in the FreeType face
+- kind:            crash (safety-checked trap)
+- upstream project: ghostty
+- severity:        low (a config value; FreeType builds)
+- reference:       `src/font/face/freetype.zig:278-316` (`setVariations`: `coords[i] = @intFromFloat(v.value * 65536);` at `:310`, into `FT_Fixed` = `c_long`); `font-variation` values are parsed with `std.fmt.parseFloat(f64, …)` (`src/config/Config.zig:6441-6445`), at 20abdb50a
+- defect:          the parsed value is any `f64`, including `inf`, and `v.value * 65536` is converted to `c_long` unchecked.
+- ReleaseSafe:     `font-variation = wght=inf` (or `1e20`): panic "integer part of floating point value out of bounds" (measured, Zig 0.16.0, the expression alone). NaN gives 0.
+- ReleaseFast:     the `c_long` maximum (measured).
+- reachability:    config: `font-variation` on a FreeType build (Linux; the CoreText face passes the `f64` to CoreText and has no such cast).
+- port handling:   `crates/rustty-font-shaper/src/face/freetype.rs` converts with Rust's saturating `as` (the reference's ReleaseFast values). FreeType stores the saturated design coordinate as given, and the face still renders (both measured in the test). PORT NOTE at `freetype.rs:592`.
+- parity row(s):   inventory M29.
+- test:            `set_variations_with_an_out_of_range_value_saturates` (rustty-font-shaper, FreeType): JetBrains Mono `wght` 600 (positive control), then `inf`, `1e20`, `-inf` and NaN give design coordinates `c_long` max / max / min / 0, and a glyph renders after each. Negative control, macOS 2026-09-22: the range check reinstated fails "integer part of floating point value out of bounds". Restored.
+- proposed fix:    clamp the value to the axis range from `mm.axis[i]` (or at least `std.math.lossyCast`) before converting.
+- upstream status: not reported
+
+### UD99 — `+crash-report` traps on a crash file whose mtime is more than 584 years old
+- kind:            crash (safety-checked trap) / wrong output
+- upstream project: ghostty
+- severity:        low (a file in the user's crash directory)
+- reference:       `src/cli/crash_report.zig:83-91` (`const diff = now - report.mtime;` then `if (diff <= 0) "now" else … @intCast(diff)` into `Config.Duration.duration: u64`), `mtime` from `stat.mtime.toNanoseconds()` (`src/crash/dir.zig:58`, `i128`), at 20abdb50a
+- defect:          an age of more than 2^64 ns (about 584.5 years) does not fit the `u64` duration. A future mtime is not affected: it takes the `diff <= 0` "now" arm. (The inventory described the trigger as a future-dated file; that is wrong.)
+- ReleaseSafe:     panic "integer does not fit in destination type" (measured, Zig 0.16.0, for an mtime in the year 1400).
+- ReleaseFast:     the age wraps: the year-1400 file is listed as about 42 years old (measured: 1330699126290448384 ns).
+- reachability:    a file in the crash directory (`$XDG_STATE_HOME/ghostty/crash`) with an mtime before about 1441. Linux tmpfs and btrfs store an mtime in the year 1400 (measured on the VM with `touch -d`); macOS APFS clamps any earlier mtime to 1677 (measured), whose age still fits, so macOS is not affected.
+- port handling:   `crates/rustty-cli/src/crash_report.rs` saturates the age to the largest `Duration` ("584y 49w 23h 34m 33s ago", a lower bound on the true age) instead of trapping. The port had truncated with `as u64` (the reference's ReleaseFast value, inventory P3); that is fixed in this task. PORT NOTE at `crash_report.rs:196`.
+- parity row(s):   NEW-FINDINGS N70 (the port's truncation); inventory M30, P3.
+- test:            `a_report_too_old_for_a_duration_saturates_instead_of_trapping` (rustty-cli) runs the real `run_inner` over a real crash directory with a year-1400, a one-minute-old and a year-2200 report: "now" for the future one, "… ago" for the recent one, and on Linux (where the precondition asserts the filesystem kept the year-1400 mtime) the saturated label for the ancient one. Negative controls, VM 2026-09-22, one at a time: the old `as u64` fails with "42y 10w 3d 3h 51m 6s" against "584y 49w 23h 34m 33s"; the reference's checked cast fails "integer does not fit in destination type". Restored.
+- proposed fix:    `const d = Config.Duration{ .duration = std.math.lossyCast(u64, diff) };`.
+- upstream status: not reported
+
+### UD100 — grid arithmetic traps on a size or position more than 65535 cells wide
+- kind:            crash (safety-checked trap)
+- upstream project: ghostty
+- severity:        low (embedder sizes and positions)
+- reference:       `src/renderer/size.zig:253-261` (`GridSize.update`: `const calc_cols: Unit = @intFromFloat(screen_width / cell_width);`, `Unit` = `CellCountInt` = `u16`), `:138-147` (`Coordinate.convert` to `.grid`: `const col: GridSize.Unit = @intFromFloat(clamped_x / cell_width);`), at 20abdb50a
+- defect:          the quotient is converted to `u16` unchecked. A screen or a position more than 65535 cells from the origin, or a zero cell size (`inf`), traps. The conversion's own next line clamps to the grid (`@min(col, grid.columns - 1)`), so a saturating conversion is the evident intent.
+- ReleaseSafe:     panic "integer part of floating point value out of bounds" (measured, Zig 0.16.0: 100000 px of 1 px cells, and a zero cell width).
+- ReleaseFast:     100000 wraps to 34464 columns; `inf` gives 65535 (measured).
+- reachability:    the C ABI (`ghostty_surface_set_size`, `ghostty_surface_mouse_pos`) and the apprt: a size or mouse position far outside any real screen, or a zero cell size. Whether a real host produces one is UNVERIFIED.
+- port handling:   `crates/rustty-render-types/src/lib.rs` converts with Rust's saturating `as`; the grid-position path then clamps to the grid as the reference does. PORT NOTEs at `lib.rs:392`, `:549`.
+- parity row(s):   inventory M31.
+- test:            `grid_arithmetic_outside_u16_saturates` (rustty-render-types): 80x30 (positive control); 100000 px of 1 px cells gives 65535 columns, a zero cell gives 65535x65535; mouse positions `1e12` and `inf` clamp to the last cell and NaN to the first. Negative controls, macOS 2026-09-22, one at a time: the range check reinstated in `update`, then in the grid conversion, each fails "integer part of floating point value out of bounds". Restored.
+- proposed fix:    `std.math.lossyCast(Unit, …)` in both places.
+- upstream status: not reported
+
+### UD101 — `log.err` between `fork` and `exec` can deadlock the child
+- kind:            deadlock (the child hangs before `exec`)
+- upstream project: ghostty
+- severity:        low (thread timing, plus a pre-exec failure)
+- reference:       `src/termio/Exec.zig:1041-1051` (`os_pre_exec` callback: `sp.childPreExec() catch |err| log.err("error initializing child: {}", .{err});` at `:1045`); `src/apprt/gtk/pre_exec.zig:39` and `:58` (`log.err` in `preExec`, the cgroup move); both run in the forked child through the global `logFn`, which takes `std.debug.lockStderr` (`src/main_ghostty.zig:158-161`), at 20abdb50a
+- defect:          after `fork` only the forking thread exists in the child. If another thread of the (multi-threaded) parent held the stderr lock, or an allocator lock the formatting needs, at the moment of the fork, the child blocks on it forever. POSIX allows only async-signal-safe calls between `fork` and `exec`.
+- ReleaseSafe:     the child hangs before `exec`; the terminal shows no process. By reading; not reproduced against the Zig logger. Whether Zig's stderr lock or allocator registers an `atfork` handler that would prevent this is UNVERIFIED.
+- ReleaseFast:     the same.
+- reachability:    thread timing, when `childPreExec` fails, or on the Linux cgroup path (`linux-cgroup` config) when the move is slow or the `gtk-single-instance = detect` arm is taken.
+- port handling:   both sites write the pre-rendered line with a raw `write(2)` on a stack buffer (`log_err_child_raw` in `crates/rustty-termio/src/exec.rs`, `log_err_raw` in `crates/rustty-apprt/src/gtk/pre_exec.rs`), the same bytes `logFn` would write. PORT NOTEs at `exec.rs:2080`, `pre_exec.rs:339`.
+- parity row(s):   ADJUDICATION fork/exec sections (tasks 14d-3, 14e-1; no reversal); UD candidate C4; inventory M32.
+- test:            `log_err_child_raw_completes_in_a_child_forked_while_stderr_is_locked` (rustty-termio, macOS and the VM): a thread holds std's stderr lock across a real `fork`, the child runs `log_err_child_raw` and must `_exit(0)` within 5 s. Negative control, macOS 2026-09-22: the helper's `write(2)` replaced by a write through `std::io::stderr().lock()` hangs the child ("the forked child hung on the stderr lock another thread held at the fork"). Restored. The existing `log_err_child_raw_writes_exactly_what_logfn_would` pins the bytes.
+- proposed fix:    format into a stack buffer and `write(2)` it in the child (as the port does), or pass the error back to the parent through the existing exec-failure pipe.
+- upstream status: not reported
+
+### UD102 — `threadEnter`'s error path stops a freshly spawned child that has no pty reader
+- kind:            deadlock (with UD93)
+- upstream project: ghostty
+- severity:        low (a `threadEnter` failure after the spawn)
+- reference:       `src/termio/Exec.zig:86-104` (`threadEnter`: `errdefer self.subprocess.stop();` at `:104`), followed by the fallible `xev.Process.init` (`:107-109`), and the later pipe, timer and read-thread spawn; the read thread is only started at the end of `threadEnter`, at 20abdb50a
+- defect:          every error after the spawn runs `stop()` while nobody reads the pty master. A SIGHUP'd `login(1)` with output still queued on the slave then wedges in the kernel exit path (`?Es` on macOS), and `stop()`'s `killPid` waits for it forever (UD93).
+- ReleaseSafe:     the io thread hangs in `killPid`. The mechanism was reproduced on the port side at an older pin (records: "verified twice"; the 12/12 repro of UD93); it was not re-measured at this pin (UNVERIFIED at the pin).
+- ReleaseFast:     the same.
+- reachability:    a `threadEnter` failure after the child is spawned: `xev.Process.init`, pipe or timer creation, or the read-thread spawn (fd or thread exhaustion).
+- port handling:   `crates/rustty-termio/src/exec.rs` drains the pty master once, bounded (`drain_pty_master_once`, `DRAIN_BUDGET` 50 ms), before `stop()` on each of these error arms, and `killPid` is bounded anyway (UD93). PORT NOTE at `exec.rs:3860`.
+- parity row(s):   `.port/phase-3/assessments/E-os-termio-platform.md` §5.3; inventory M33.
+- test:            `drain_pty_master_once_consumes_pending_and_returns_on_a_quiet_master` (rustty-termio) proves the drain; the error arms themselves are not driven (they need a failing `xev.Process.init` or thread spawn). No new test in this task.
+- proposed fix:    start the reader before anything that can fail after the spawn, or drain (or close) the pty master before `stop()` on the error path; and bound `killPid` (UD93).
+- upstream status: not reported
+
+### UD103 — a closed window's pending tab-overview focus timer fires on the freed window
+- kind:            ub (use after free)
+- upstream project: ghostty
+- severity:        low (a window closed within 500 ms of leaving the tab overview)
+- reference:       `src/apprt/gtk/class/window.zig:1397-1406` (`dispose` removes only `handle_active_state_source`), `:267` (`tab_overview_focus_timer: ?c_uint`), `:1543-1553` (`tabOverviewOpen` arms `glib.timeoutAdd(500, tabOverviewFocusTimer, self)`), `:1556-1571` (`tabOverviewFocusTimer` casts the userdata back to `*Self` and uses it), at 20abdb50a
+- defect:          `dispose` does not remove the 500 ms focus timer, and the timer's userdata is the raw window pointer. If the window is finalized first, the timer runs on freed memory.
+- ReleaseSafe:     a use after free when the timer fires (no safety check covers a dangling userdata). By reading; not reproduced against the reference.
+- ReleaseFast:     the same.
+- reachability:    ordinary use: close a window within 500 ms of closing its tab overview.
+- port handling:   `crates/rustty-apprt/src/gtk/class/window.rs` `dispose` also removes `tab_overview_focus_timer` (invariant 11: a source lives no longer than its object). PORT NOTE at `window.rs:336` (updated to cite R13).
+- parity row(s):   LEDGER S58-F5 (WAIVED, re-grounded on R13); inventory M34.
+- test:            `window_dispose_removes_source_ids` (rustty-apprt, display-gated; run on the VM under a private headless sway): arms both timers, finalizes the window, and asserts neither source is still registered. Negative control, VM 2026-09-22: the focus-timer removal deleted from `dispose` fails "dispose must remove tab_overview_focus_timer (invariant 11)". Restored.
+- proposed fix:    in `dispose`, `if (priv.tab_overview_focus_timer) |v| { _ = glib.Source.remove(v); priv.tab_overview_focus_timer = null; }`.
+- upstream status: not reported
+
+### UD104 — `Surface.init`'s error path frees the renderer and io state while their threads still run
+- kind:            ub (use after free / data race)
+- upstream project: ghostty
+- severity:        low (a thread-spawn failure during surface creation)
+- reference:       `src/Surface.zig:582` (`errdefer render_thread.deinit();`), `:586` (`errdefer io_thread.deinit();`), the `self.io` errdefer in the io block; the renderer thread spawned at `:725-730`, then `try std.Thread.spawn` for the io thread at `:733-737`, then the `try rt_app.performAction(.set_title …)` calls at `:748-795` (first at `:754`), at 20abdb50a
+- defect:          once the renderer thread is running, a failure of the io thread's spawn (or of a later `try`) unwinds through errdefers that deinit the renderer thread's loop and the terminal it reads, without stopping or joining the thread.
+- ReleaseSafe:     a use after free on the renderer thread. By reading; not reproduced.
+- ReleaseFast:     the same.
+- reachability:    `std.Thread.spawn` failing for the io thread (thread or memory exhaustion). The `set_title` action cannot fail in either upstream apprt at the pin (GTK `setTitle` returns `void`; embedded `performAction` only calls the host), so the spawn is the practical trigger.
+- port handling:   `crates/rustty-core/src/surface.rs` `initErrdefers` now stops and joins the renderer and io threads first, in `deinit`'s order, before any teardown. **The port was not safe**: it joined the renderer only after `self.io.deinit()` (so a failed io spawn freed the terminal under the running renderer), and it never stopped the io thread. Fixed by task R13-D. PORT NOTE at `surface.rs:2966`.
+- parity row(s):   NEW-FINDINGS N72 (the port's own race); inventory M35.
+- test:            none. `Surface::init` cannot run in a unit test (it spawns a pty, a renderer and an io thread; the file's own module notes say so), and no port apprt's `set_title` returns an error, so the path is covered by reading only.
+- proposed fix:    stop and join each spawned thread in an `errdefer` placed right after its spawn (`errdefer { self.renderer_thread.stop.notify() catch {}; self.renderer_thr.join(); }`), before the deinit errdefers run.
+- upstream status: not reported
+
+### UD105 — a window's pending activation token outlives the window and calls back into it
+- kind:            ub (use after free) + leak
+- upstream project: ghostty
+- severity:        low (a window closed while an urgency request is pending)
+- reference:       `src/apprt/gtk/winproto/wayland.zig:216-221` (`Window.deinit`: destroys `bg_effect`, releases `decoration` and `slide`, and leaves `activation_token`), `:261-274` (`setUrgent`: `token.setListener(*Window, onActivationTokenEvent, self)`), `:450-472` (`onActivationTokenEvent` reads `self.globals` and `self.activation_token`), at 20abdb50a
+- defect:          a token requested by `setUrgent(true)` whose `done` has not arrived when the window is torn down keeps the window as its listener userdata. The late `done` runs `onActivationTokenEvent` on the freed window, and the token proxy leaks.
+- ReleaseSafe:     a use after free when the reply arrives. By reading against the reference; the late reply itself is measured (see test).
+- ReleaseFast:     the same.
+- reachability:    ordinary use under Wayland: a window closed right after it asked for attention (e.g. a bell with urgency), before the compositor answered.
+- port handling:   `crates/rustty-apprt/src/gtk/winproto/wayland.rs` `deinit` destroys a pending token, so libwayland drops the late reply. PORT NOTE at `wayland.rs:707`. (The inventory's other half, a `wl_region` never destroyed, is REFUTED at the pin: `syncBlur` has `defer wl_region.destroy()` at `:308-309`.)
+- parity row(s):   LEDGER S60-F2 (WAIVED, re-grounded on R13), S60-F3; inventory M36.
+- test:            `a_pending_activation_token_is_destroyed_with_its_window` (rustty-apprt, `tests/gtk_wayland_deinit_token.rs`, headed; run on the VM under a private headless sway): a positive control first (with the window alive, the compositor's `done` arrives); then `set_urgent(true)` immediately followed by `deinit`, and no `done` may be dispatched within 3 s. Negative control, VM 2026-09-22: the token destroy removed from `deinit` fails with "a `done` reached the token of a window that was already torn down (before=1, after=2)". Restored.
+- proposed fix:    in `Window.deinit`, `if (self.activation_token) |token| token.destroy();`.
+- upstream status: not reported
+
+### UD106 — the wasm `face_new` export narrows its presentation argument into `enum(u1)` unchecked
+- kind:            latent (unbuilt code)
+- upstream project: ghostty
+- severity:        low
+- reference:       `src/font/face/web_canvas.zig:494-511` (`face_new(ptr, len, pts, p: u16)` → `face_new_` → `@enumFromInt(presentation)` into `font.Presentation = enum(u1)`), at 20abdb50a
+- defect:          any value other than 0 or 1 is illegal behaviour. The only caller is the JS glue, which passes 0 or 1. The file is not compiled by any build step at the pin (UD37, UD38), so this is not reachable today.
+- ReleaseSafe:     panic "invalid enum value" (measured, Zig 0.16.0, the expression alone).
+- ReleaseFast:     2 truncates to `.text` (measured).
+- reachability:    none today (the wasm font tree is not built); the JS glue if it were.
+- port handling:   `crates/rustty-font-shaper/src/face/web_canvas.rs` maps 0 to text and any other value to emoji, which agrees with the reference on both values it defines. The export's own error path (`catch null`) would be the stricter handling; not changed. PORT NOTE at `web_canvas.rs:934`.
+- parity row(s):   LEDGER S91-F6 (WAIVED, re-grounded on R13); inventory M38.
+- test:            none (no reference behaviour to diverge from on 0/1).
+- proposed fix:    `std.meta.intToEnum(font.Presentation, presentation) catch return error.InvalidPresentation`, alongside UD37/UD38.
+- upstream status: not reported
+
+### UD107 — libvaxis queues key text that points into the read thread's 8 KiB ring
+- kind:            ub (data race / dangling slice)
+- upstream project: libvaxis
+- severity:        low (keyboard input in the CLI TUIs)
+- reference:       libvaxis 0.6.0 (the version Ghostty pins) `src/Loop.zig:152` (`var cache: GraphemeCache = .{};` on the read thread's stack in `_ttyRun`), `:240`, `:250`, `:306`, `:316` (`mut_key.text = cache.put(text);` then `postEvent`); `src/GraphemeCache.zig:5-21` (an 8 KiB buffer that `put` wraps to index 0 when full)
+- defect:          each queued key event's `text` is a slice into the read thread's ring. When the read thread has put another 8 KiB through the ring before the main thread handles an event, the event's text is overwritten while it is read (a data race); after `stop` the ring's stack frame is gone and any event still queued points into it.
+- ReleaseSafe:     wrong key text or a read of a dead stack frame; no safety check covers either. By reading; not reproduced against libvaxis.
+- ReleaseFast:     the same.
+- reachability:    more than 8 KiB of key text queued faster than the TUI consumes it (for example a large paste without bracketed paste into `+list-themes`' search while it reloads themes). Realistic timing UNVERIFIED.
+- port handling:   `crates/rustty-vaxis/src/loop_.rs` copies the text into the queued event (`KeyOwned`, `Vec<u8>`); the `LoopEvent: Send + 'static` bound rejects any event type that borrows the read thread, so the reference's shape cannot be written in safe Rust. PORT NOTE at `loop_.rs:447` (module note at `:32-41`).
+- parity row(s):   inventory M39.
+- test:            `queued_key_text_is_owned_not_a_view_of_the_read_buffer` (rustty-vaxis): 100 key events of 100 bytes each (more than 8 KiB) are posted through `handle_event_generic` from one buffer that is rewritten after each post, as the ring would be, and every queued event must still hold its own text. The reference's borrow cannot be reinstated in safe Rust (compile error); as a sensitivity check, dropping the text on post fails "event 0 kept its own text".
+- proposed fix:    copy the text into the event (allocate, or give each event its own small inline buffer), or have the consumer own the cache.
+- upstream status: not reported
+
+### UD108 — libvaxis's `Loop.should_quit` is a plain `bool` shared between threads
+- kind:            ub (data race)
+- upstream project: libvaxis
+- severity:        low
+- reference:       libvaxis 0.6.0 `src/Loop.zig:25` (`should_quit: bool = false`), written by `stop` on the caller's thread (`:66`, `:73`), read by the read thread's loop conditions (`:157`, `:175`)
+- defect:          an unsynchronized write and read from two threads. In practice the read thread is woken by the device status report `stop` sends, but nothing orders the store before that read.
+- ReleaseSafe:     a data race; no safety check covers it. By reading.
+- ReleaseFast:     the same; the compiler may hoist the load out of the loop.
+- reachability:    every TUI stop.
+- port handling:   `crates/rustty-vaxis/src/loop_.rs` uses an `AtomicBool`. PORT NOTE at `loop_.rs:129`.
+- parity row(s):   inventory M40.
+- test:            none beyond `loop_lifecycle`; the property is by construction (an atomic).
+- proposed fix:    `should_quit: std.atomic.Value(bool)`.
+- upstream status: not reported
+
+### UD109 — the fontconfig `fc-match` test destroys every pattern twice
+- kind:            test-weakness (a double free in test code)
+- upstream project: ghostty
+- severity:        low (test code only)
+- reference:       `pkg/fontconfig/test.zig:24-58` (`test "fc-match"`: `defer fs.destroy();` then `defer for (fs.fonts()) |font| font.destroy();` at `:39-40`); `FontSet.destroy` is `FcFontSetDestroy` and `Pattern.destroy` is `FcPatternDestroy` (`pkg/fontconfig/font_set.zig:11-13`, `pattern.zig:21-23`), at 20abdb50a
+- defect:          `FcFontSetDestroy` already destroys each pattern in the set. The deferred loop runs first (LIFO) and frees every pattern; `fs.destroy()` then destroys them again.
+- ReleaseSafe:     a double free inside fontconfig. **Re-verified at the pin** (task R13-D) with the same call sequence in the port's test: glibc aborts with "corrupted size vs. prev_size while consolidating" (SIGABRT), Fedora 44 aarch64, fontconfig 2.17.0. The Zig test itself was not run on this host (no Zig on the VM); the call sequence is the one the wrappers above produce.
+- ReleaseFast:     the same.
+- reachability:    running the fontconfig package tests.
+- port handling:   `crates/rustty-font-shaper/src/fc.rs` `fc_match` destroys the set only (the fontconfig-documented teardown). PORT NOTE at `fc.rs:1274` (the existing UPSTREAM BUG note, P4-U3, now citing R13).
+- parity row(s):   `.port/phase-4/UPSTREAM_BUGS.md` P4-U3; inventory M41.
+- test:            `fc::tests::fc_match` (rustty-font-shaper). Negative control, VM 2026-09-22: the reference's per-pattern destroy loop reinstated before `fs.destroy()` aborts the test binary with the glibc message above. Restored.
+- proposed fix:    delete the `defer for (fs.fonts()) |font| font.destroy();` line.
+- upstream status: not reported
+
+### UD110 — CoreText name lookups never release the copied name string
+- kind:            leak
+- upstream project: ghostty
+- severity:        low (a retain per lookup, on fonts loaded from data)
+- reference:       `src/font/DeferredFace.zig:143-169` (`familyName`: `ct.font.copyAttribute(.family_name)`), `:173-203` (`name`: `ct.font.copyDisplayName()`); `src/font/face/coretext.zig:204-212` (`Face.name`: `self.font.copyFamilyName()`), at 20abdb50a
+- defect:          each is a +1 CoreFoundation "Copy" result, and no path releases it: neither the `cstringPtr` return (which hands out a pointer into the string, so it cannot be released there) nor the `cstring(buf)` copy.
+- ReleaseSafe:     one leaked retain per call. **Measured** (macOS 26.5.1, Python ctypes against CoreText): for a font created from data (JetBrains Mono), `CTFontCopyFamilyName`, `CTFontCopyDisplayName` and `CTFontCopyAttribute(family)` return the same string object on every call, and 1000 unreleased copies raise its retain count by 1000; for a system font (Menlo) the names are immortal constants, so nothing leaks there.
+- ReleaseFast:     the same.
+- reachability:    font discovery and logging paths that ask for a face's name (for example fallback discovery for VT text with uncovered codepoints, `+list-fonts`, `+show-face`); the leak is per call.
+- port handling:   `crates/rustty-font-shaper/src/deferred_face.rs` and `face/coretext.rs` hold each copy in a `CFRetained`, copy the bytes into `buf`, and release it at scope end. The cost is that a name longer than `buf` is an error rather than a zero-copy pointer (LEDGER S85-F6 / S90-F3). PORT NOTEs at `deferred_face.rs:320`, `:362`, `face/coretext.rs:637`.
+- parity row(s):   LEDGER S85-F6, S90-F3 (narrowed to the `buf`-length contract by task R13-D); UD candidate C5; inventory M42.
+- test:            `coretext_name_lookups_release_the_copied_name_string` (rustty-font-shaper, macOS): preconditions that each copy returns the one object held and that it is not immortal; then 100 calls each of `DeferredFace::family_name`, `DeferredFace::name` and the CoreText `Face::name` leave the retain counts unchanged. Negative controls, macOS 2026-09-22, one at a time: an extra unreleased retain in `family_name`, in `name`, and in `Face::name` each fail with a count of 102 against 2 at that assertion. Restored.
+- proposed fix:    `defer family_name.release();` after copying into `buf`, and return the `cstring(buf)` copy on every path (the `cstringPtr` fast path cannot outlive the release); or return an owned string the caller releases.
+- upstream status: not reported
+
+### UD111 — a built-in fallback face leaks when `Collection.add` fails
+- kind:            leak
+- upstream project: ghostty
+- severity:        low
+- reference:       `src/font/SharedGridSet.zig:261-400` (every built-in fallback face is built inline: `_ = try c.add(self.alloc, try .init(self.font_lib, font.embedded.…, …), .{…})`); `src/font/Collection.zig:107-108` ("If no error is encountered then the collection takes ownership of the face"), `:122-124` (`CollectionFull`), `:139` (`SetSizeFailed`), and `:142` (`list.append`, `OutOfMemory`), at 20abdb50a
+- defect:          `add` keeps its documented contract (on error the caller still owns the face), but these callers hold no reference to the temporary face, so when `add` fails nothing deinits it: the FT face or CTFont, its HarfBuzz font, and on FreeType the mutex leak.
+- ReleaseSafe:     a leak per failing add, then the grid key build fails. By reading.
+- ReleaseFast:     the same.
+- reachability:    `SetSizeFailed` from `setSize` at the configured size (whether a finite `font-size` can make FreeType or CoreText fail here is UNVERIFIED), `CollectionFull` (about 8190 faces in one style, unrealistic), or allocation failure.
+- port handling:   `crates/rustty-font-shaper/src/collection.rs` `add` takes the face by value and deinits it on both error arms before returning (W9F-02). PORT NOTE at `collection.rs:208`.
+- parity row(s):   inventory M92 (resolved: the leak is at these callers, not in `add`); R13-G part C, C2.
+- test:            `add_set_size_failure_deinits_face` and the `CollectionFull` test beside it (rustty-font-shaper, existing W9F-02 tests with a deinit probe and a `set_size` fail-point). Negative control, macOS 2026-09-22: the `SetSizeFailed` arm's `deinit` replaced by `mem::forget` fails the deinit count (0 against 1). Restored.
+- proposed fix:    bind each face to a local with `errdefer face.deinit()` before `c.add`, in all the built-in fallback adds.
+- upstream status: not reported
+
+### UD112 — the Wayland `Globals.init` leaks itself and its registry when a roundtrip fails
+- kind:            leak
+- upstream project: ghostty
+- severity:        low (once per process, on a failing compositor connection)
+- reference:       `src/apprt/gtk/winproto/wayland/Globals.zig:75-94` (`init`: `alloc.create(Globals)` at `:78`, `try display.getRegistry()` at `:85`, `return error.RoundtripFailed` at `:87` and `:91`, with no `errdefer`); the caller's `errdefer globals.deinit()` (`wayland.zig:52-53`) only arms after success; `src/apprt/gtk/class/application.zig:359-370` catches the error and continues on the noop winproto, at 20abdb50a
+- defect:          on a roundtrip failure the `Globals` allocation and the `wl_registry` proxy are never freed. The leaked `Globals` stays the registry listener's userdata, so later registry events still reach it (no use after free, since it is never freed).
+- ReleaseSafe:     a one-time leak. By reading.
+- ReleaseFast:     the same.
+- reachability:    the compositor: a `wl_display_roundtrip` failure during GTK startup (usually a dead connection).
+- port handling:   `crates/rustty-apprt/src/gtk/winproto/wayland.rs` holds `Globals` in a `Box` and returns with `?`, so the box and the event queue are dropped. Whether wayland-rs also frees the client-side `wl_registry` proxy (the interface has no destructor request) is UNVERIFIED. PORT NOTE at `wayland.rs:217`.
+- parity row(s):   R13-G part C, C3.
+- test:            none (a roundtrip failure cannot be forced in the fake-compositor harness without a new seam).
+- proposed fix:    `errdefer alloc.destroy(self);` after the create and `errdefer registry.destroy();` after `getRegistry`.
+- upstream status: not reported
+
+### UD113 — libghostty-vt range-checks enum arguments only in safety-checked builds
+- kind:            ub (hardening proposal)
+- upstream project: ghostty
+- severity:        low (a C caller passing an undeclared enum value)
+- reference:       `src/terminal/c/terminal.zig:1503-1514` (`scroll_viewport`: `switch (behavior.tag)` on the C-supplied tag, no check at all); the `if (comptime std.debug.runtime_safety) { _ = std.enums.fromInt(E, @intFromEnum(x)) orelse return .invalid_value; }` pattern, e.g. `src/terminal/c/row.zig:70-74`, 28 sites in 15 files under `src/terminal/c/` (counted by `grep`), at 20abdb50a
+- defect:          a C enum can carry any integer. The library's own code shows the intended handling of an undeclared value (`return .invalid_value`), but compiles the check out of ReleaseFast, the build it ships, and `scroll_viewport` has no check in any build. The library's code sweep called this a caller contract; it is recorded here as a hardening proposal, because the handling the library already has is one comparison away.
+- ReleaseSafe:     the checked functions return `invalid_value`; `scroll_viewport` panics "switch on corrupt value" (measured, Zig 0.16.0, the switch alone).
+- ReleaseFast:     undefined behaviour: the probe's `switch` on 99 took an arm that does not exist (returned 100, measured).
+- reachability:    a C-ABI embedder passing an undeclared value (a bug, or a header from a newer library version).
+- port handling:   every rustty-vt-c export takes such enums as a plain `c_int` and narrows with `from_c_int` (doctrine D11), returning `invalid_value`, or silently returning for `scroll_viewport`, which has no result to report. `scroll_viewport` also carried a `debug_assert!` that mirrored the trap and aborted across `extern "C"` in debug and `release-safe` builds (inventory P4); task R13-D removed it. PORT NOTE at `crates/rustty-vt-c/src/terminal.rs:3511`.
+- parity row(s):   NEW-FINDINGS N71 (the port's debug-build abort); `.port/phase-3/README.md` D11; inventory M37, P4.
+- test:            `scroll_viewport_invalid_tag` (rustty-vt-c), inverted by this task: `c_int::MAX`, -1 and the first value past `row` must not panic in any build and leave the viewport unchanged, and a declared tag still acts afterwards. Negative control, macOS 2026-09-22: the `debug_assert!` reinstated fails with "corrupt RusttyTerminalScrollViewportTag: 2147483647". Restored.
+- proposed fix:    make the existing `std.enums.fromInt(…) orelse return .invalid_value` checks unconditional (drop the `runtime_safety` gate; the cost is one comparison per call), and add one to `scroll_viewport`.
+- upstream status: not reported
+
 ## Candidates pending verification
 
 Assembled from this plan's progress notes on 2026-09-11. **Not verified** — do not cite as fact.
@@ -1233,9 +1593,9 @@ Assembled from this plan's progress notes on 2026-09-11. **Not verified** — do
 | # | reference | suspected defect | kind | port today | source |
 |---|---|---|---|---|---|
 | C3 | `src/renderer/Thread.zig:698-723` `cursorCancelCallback` | superseded by UD73 (task R13-C) | crash | see UD73 | task 14d-1 |
-| C4 | `src/termio/Exec.zig:1045`; `src/apprt/gtk/pre_exec.zig:39,58` | `log.err` between fork and exec: the log function allocates and locks, so a child forked from a multi-threaded parent can deadlock silently | deadlock | handled safely (raw `write`, tasks 14d-3 and 14e-1) | tasks 14d-3, 14e-1 |
-| C5 | `src/font/DeferredFace.zig:154-157, 186-197` | zero-copy `cstringPtr` path returns into a +1 CFString that is never released | leak | rows S85-F6 / S90-F3 left OPEN | task 16 |
-| C11 | `src/font/face/coretext.zig:1023-1036`; `src/terminal/StringMap` tests | assertions cannot distinguish the fixture under test | test-weakness | ported verbatim (S90-F5, S140-F1) | task 17 |
+| C4 | `src/termio/Exec.zig:1045`; `src/apprt/gtk/pre_exec.zig:39,58` | superseded by UD101 (task R13-D) | deadlock | see UD101 | tasks 14d-3, 14e-1 |
+| C5 | `src/font/DeferredFace.zig:154-157, 186-197` | superseded by UD110 (task R13-D) | leak | see UD110 | task 16 |
+| ~~C11~~ | ~~`src/font/face/coretext.zig:1023-1036`; `src/terminal/StringMap` tests~~ | ~~assertions cannot distinguish the fixture under test~~ STRUCK (task R13-D): refuted as a reference defect by the R13 verify pass (those tests assert what they are named for; the insensitivity only limits the port's negative controls) | ~~test-weakness~~ | ported verbatim (S90-F5, S140-F1) | task 17 |
 
 ### UD56 — GDK's own X11 requests exit the process after another client destroys a toplevel
 - kind:            crash
