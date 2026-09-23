@@ -78,7 +78,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** lib-vt tarball does not apply the lib_vt_excludes pathspecs
   - **Oracle:** `src/build/GhosttyDist.zig:95-102, 184-209` → **Rustty:** `xtask/src/dist.rs:285-427`
   - **Audit's suggested fix:** Remove the equivalent directories (macos, images, po, example, test, flatpak, snap, dist/{doxygen,linux,macos,windows}, crates/*/assets large binaries) from the staged tree in `prune_to_lib_vt`, mirroring lib_vt_excludes.
-- [ ] **S63-F12** · CONFIRMED · `INDIV` · different-constant
+- [x] **S63-F12** · CONFIRMED · `INDIV` · different-constant
   - **What:** The `ghostty-gen` data generator binary is named `rustty-synthetic`, not `rustty-gen`
   - **Oracle:** `src/build/GhosttyBench.zig:16-31` → **Rustty:** `crates/rustty-synthetic/Cargo.toml:31-34`
   - **Audit's suggested fix:** Rename the bin to `rustty-gen` (or add a second [[bin]] alias) so the bench docs and the oracle name line up.
