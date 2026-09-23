@@ -517,6 +517,16 @@ GATE_REGISTRY=(
   # tree and was green either way. HARD: green, and a demonstrated RED flip
   # (delete the corpora path rule -> "still under line-ending conversion").
   "G-EOL|HARD|bash $GATES/check_eol_fidelity.sh"
+  # G-ORACLE-SH-SELF (R13-GF2) — the shell twin of `_gatelib.oracle_root`.
+  # G-EOL, G4 and the macOS menu-shortcut parity harness used to read the
+  # oracle from an environment variable (GHOSTTY_ORACLE / GHOSTTY /
+  # GHOSTTY_ROOT), which could point a gate at any tree (R5); they now share
+  # `_oracle_root.sh`. Its self-test runs a copy of each end to end with the old
+  # variables and a GIT_DIR + GIT_WORK_TREE decoy set, from a cwd outside the
+  # fixture, and checks the shell resolver against the Python one. HARD: RED
+  # if a consumer honours an override again (reinstating `${GHOSTTY_ORACLE:-…}`
+  # turns its arm red).
+  "G-ORACLE-SH-SELF|HARD|bash $GATES/_oracle_root.sh --self-test"
   # G-XTASK (2026-08-26) — the xtask subcommands nothing else ran. xtask IS
   # rustty's build.zig; grepping every `xtask -- <cmd>` across .port/tools and
   # .github/workflows found `resources`, `gen`, `wasm-patch-growable-table` and

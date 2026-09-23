@@ -34,17 +34,22 @@ import subprocess
 import sys
 import tempfile
 
-ROOT = subprocess.run(["git", "rev-parse", "--show-toplevel"],
-                      cwd=os.path.dirname(os.path.abspath(__file__)),
-                      capture_output=True, text=True, check=True).stdout.strip()
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _gatelib as G  # noqa: E402
+
+# The checkout this gate belongs to, from the script's own location — never
+# `git rev-parse --show-toplevel`, which honours `GIT_DIR` + `GIT_WORK_TREE` and
+# so let the environment move the whole gate (frozen inventory, ledger and
+# oracle) onto a decoy tree (R5).
+ROOT = G.RUSTTY_ROOT
 # The oracle sits BESIDE THE MAIN CHECKOUT, which is NOT `ROOT` when this runs
 # inside a git worktree: `ROOT/../ghostty` resolves to
 # `.claude/worktrees/ghostty`, which does not exist. `--git-common-dir` points at
 # the MAIN repo's .git from inside any worktree; the shared resolver
-# `_gatelib.oracle_root` does that (no env override, `GIT_*` stripped) and is
-# covered by G-LOGFILE's self-test.
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import _gatelib as G  # noqa: E402
+# `_gatelib.oracle_root` does that (no env override, `GIT_*` stripped, git's
+# answer used only on exit 0) and is covered by G-LOGFILE's self-test. With
+# `ROOT` script-relative as well, nothing in the environment redirects this
+# gate; self-test arm 4 proves it.
 
 
 def _oracle_root():
@@ -123,11 +128,52 @@ def self_test(frozen, live, ledger):
     arm("empty live census trips the vacuity floor",
         empty["total_test_blocks"] < 1000)
 
+    # 4. The environment cannot move the gate. A fresh process imports this
+    #    module with GIT_DIR + GIT_WORK_TREE naming a decoy repository and the
+    #    decoy as its working directory (outside this checkout); ROOT and ORACLE
+    #    must be exactly what this unredirected process computed. Before ROOT
+    #    was script-relative, `--show-toplevel` returned the decoy and the
+    #    oracle followed it.
+    arm("GIT_DIR + GIT_WORK_TREE redirect neither ROOT nor ORACLE",
+        _redirect_probe())
+
     if failures:
         print(f"SELF-TEST RED: {len(failures)} arm(s) could not fail: {failures}")
         return 1
-    print("SELF-TEST GREEN: all 3 arms demonstrated reachable FAIL.")
+    print("SELF-TEST GREEN: all 4 arms demonstrated reachable FAIL.")
     return 0
+
+
+def _redirect_probe():
+    """True when a GIT_DIR + GIT_WORK_TREE decoy leaves ROOT and ORACLE alone."""
+    import shutil
+    env = G.git_env()
+    base = os.path.realpath(tempfile.mkdtemp(prefix="gcensus_redirect_"))
+    try:
+        decoy = os.path.join(base, "rustty")
+        os.makedirs(decoy)
+        os.makedirs(os.path.join(base, "ghostty", "src"))
+        subprocess.run(["git", "init", "-q"], cwd=decoy, env=env,
+                       capture_output=True, check=True)
+        env.update({"GIT_DIR": os.path.join(decoy, ".git"), "GIT_WORK_TREE": decoy})
+        probe = ("import sys; d = sys.argv[1]; sys.argv = [sys.argv[0]]; "
+                 "sys.path.insert(0, d); import check_census_staleness as C; "
+                 "print(C.ROOT); print(C.ORACLE)")
+        r = subprocess.run([sys.executable, "-c", probe,
+                            os.path.dirname(os.path.abspath(__file__))],
+                           cwd=decoy, env=env, capture_output=True, text=True)
+        got = r.stdout.split("\n")[:2]
+        want = [ROOT, ORACLE]
+        if r.returncode != 0 or got != want:
+            print(f"       (probe rc={r.returncode} got {got}, want {want}; "
+                  f"stderr={r.stderr.strip()[-300:]!r})")
+            return False
+        return True
+    except (OSError, subprocess.CalledProcessError) as exc:
+        print(f"       (fixture could not be built: {exc})")
+        return False
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
 
 
 def main():

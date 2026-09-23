@@ -29,28 +29,34 @@ import re
 import subprocess
 import sys
 
-ROOT = subprocess.run(["git", "rev-parse", "--show-toplevel"],
-                      cwd=os.path.dirname(os.path.abspath(__file__)),
-                      capture_output=True, text=True, check=True).stdout.strip()
-# The oracle sits BESIDE THE MAIN CHECKOUT, which is NOT `ROOT` when this runs
-# inside a git worktree: `ROOT/../ghostty` resolves to
+# The checkout this tool belongs to, from the script's own location, and the
+# oracle beside the MAIN checkout, from the shared `_gatelib.oracle_root`.
+#
+# `ROOT/../ghostty` is wrong inside a git worktree: it resolves to
 # `.claude/worktrees/ghostty`, which does not exist. Measured on a scratch
-# worktree, the old form died with
-# `FileNotFoundError: ... '/…/tmp/ghostty'` — loud, at least, but it made these
-# tools unrunnable from every agent worktree, and one lane worked around it by
-# creating a symlink. A tool that needs a symlink to be correct is one that will
-# be wrong the next time nobody makes one. `--git-common-dir` points at the MAIN
-# repo's .git from inside any worktree, so its parent is always the real
-# checkout; falling back to ROOT keeps the non-worktree case identical.
-def _oracle_root():
-    common = subprocess.run(
-        ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
-        cwd=ROOT, capture_output=True, text=True).stdout.strip()
-    main_checkout = os.path.dirname(common) if common else ROOT
-    return os.path.abspath(os.path.join(main_checkout, "..", "ghostty"))
+# worktree, that form died with `FileNotFoundError: ... '/…/tmp/ghostty'` — loud,
+# at least, but it made these tools unrunnable from every agent worktree, and one
+# lane worked around it by creating a symlink. `oracle_root` asks git for
+# `--git-common-dir`, whose parent is the real checkout from inside any worktree.
+#
+# R5: nothing here is caller-settable. `ROOT` used to come from
+# `git rev-parse --show-toplevel` and this tool kept its own copy of the
+# resolver; neither stripped `GIT_*`, so `GIT_DIR` + `GIT_WORK_TREE` moved ROOT
+# and the oracle onto a decoy tree. `oracle_root` runs git with `GIT_*` removed
+# and uses its answer only on exit 0, and `oracle_files` lists the oracle the
+# same way. G-TESTS-SELF (`audit_test_coverage.py --self-test`) proves it for
+# all three audit tools.
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "gates"))
+import _gatelib as G  # noqa: E402
+
+ROOT = G.RUSTTY_ROOT
+ORACLE = G.oracle_root(ROOT)
 
 
-ORACLE = _oracle_root()
+def oracle_files():
+    """`git ls-files src` in the oracle, with `GIT_*` removed (R5)."""
+    return subprocess.run(["git", "ls-files", "src"], cwd=ORACLE, env=G.git_env(),
+                          capture_output=True, text=True, check=True).stdout.split()
 
 # Oracle subtrees that have no Rust counterpart by design.
 SKIP_PREFIXES = ("src/build/", "src/bench/")
@@ -118,8 +124,7 @@ def main():
     if "--crate" in argv:
         only = argv[argv.index("--crate") + 1]
 
-    files = subprocess.run(["git", "ls-files", "src"], cwd=ORACLE,
-                           capture_output=True, text=True, check=True).stdout.split()
+    files = oracle_files()
     zig = [f for f in files if f.endswith(".zig")
            and not any(f.startswith(p) for p in SKIP_PREFIXES)]
 

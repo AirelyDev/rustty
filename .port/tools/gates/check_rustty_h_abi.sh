@@ -85,7 +85,7 @@ if [ ! -f "$TSV" ]; then
   exit 3
 fi
 if [ ! -f "$ORACLE" ]; then
-  echo "BLOCKED: ghostty oracle header not found at $ORACLE (external READ-ONLY pinned oracle; set ORACLE_TREE / clone the pinned ghostty checkout)"
+  echo "BLOCKED: ghostty oracle header not found at $ORACLE (external READ-ONLY pinned oracle; ORACLE_HEADER_PATH is set by the checked-in parity_names.env, not the environment — clone the pinned ghostty checkout there)"
   exit 3
 fi
 # Freeze-pin: the oracle checkout must be the exact version this gate was pinned

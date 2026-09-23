@@ -2026,11 +2026,21 @@ def oracle_resolution_check():
             with open(os.path.join(root, ".git", "HEAD"), "w") as fh:
                 fh.write(head + "\n")
 
-        def gate(extra_env=None):
+        # A decoy repository OUTSIDE the fixture checkout whose sibling IS at the
+        # pin. Arms 2-4b run the gate copy with the decoy as the working
+        # directory, so a resolver that consulted the process cwd (rather than
+        # the gate's own script-relative root) would find the pinned decoy
+        # oracle and turn those BLOCKED expectations into passes.
+        decoy = os.path.join(base, "decoy", "rustty")
+        os.makedirs(decoy)
+        git(decoy, "init", "-q")
+        write_head(os.path.join(base, "decoy", "ghostty"), ORACLE_PIN)
+
+        def gate(extra_env=None, cwd=decoy):
             e = dict(env)
             e.update(extra_env or {})
             r = subprocess.run([sys.executable, os.path.join(gates, "check_log_reconcile.py")],
-                               cwd=wt, env=e, capture_output=True, text=True)
+                               cwd=cwd, env=e, capture_output=True, text=True)
             return r.returncode, r.stderr
 
         # 1. the resolver, called on the worktree path
@@ -2039,27 +2049,36 @@ def oracle_resolution_check():
              got == oracle, f"got {got}, want {oracle}")
         # 2. oracle absent -> BLOCKED, naming the main-checkout sibling
         rc, err = gate()
-        case("absent oracle is BLOCKED (exit 3) at the main-checkout sibling",
+        case("absent oracle is BLOCKED (exit 3) at the main-checkout sibling "
+             "(cwd outside the fixture)",
              rc == 3 and f"oracle checkout is absent at {oracle}.\n" in err,
              f"rc={rc} stderr={err.strip()!r}")
         # 3. oracle present off the pin -> BLOCKED
         write_head(oracle, "0" * 40)
         rc, err = gate()
-        case("off-pin oracle is BLOCKED (exit 3)",
+        case("off-pin oracle is BLOCKED (exit 3) (cwd outside the fixture)",
              rc == 3 and "not the pin" in err, f"rc={rc} stderr={err.strip()!r}")
-        # 4. GIT_DIR cannot redirect the oracle: a decoy repository whose sibling
-        #    IS at the pin must not turn the off-pin real oracle into a pass.
-        decoy = os.path.join(base, "decoy", "rustty")
-        os.makedirs(decoy)
-        git(decoy, "init", "-q")
-        write_head(os.path.join(base, "decoy", "ghostty"), ORACLE_PIN)
-        rc, err = gate({"GIT_DIR": os.path.join(decoy, ".git")})
-        case("GIT_DIR in the environment does not redirect the oracle",
+        # 4. GIT_DIR + GIT_WORK_TREE cannot redirect the oracle: the pinned
+        #    decoy must not turn the off-pin real oracle into a pass.
+        rc, err = gate({"GIT_DIR": os.path.join(decoy, ".git"), "GIT_WORK_TREE": decoy})
+        case("GIT_DIR + GIT_WORK_TREE in the environment do not redirect the oracle",
              rc == 3 and "not the pin" in err, f"rc={rc} stderr={err.strip()!r}")
+        # 4b. git's stdout is trusted only on exit 0: a git that prints the
+        #     decoy's common dir and then FAILS must give the fallback (the
+        #     worktree's own, absent, sibling -> BLOCKED), not the pinned decoy.
+        fakebin = os.path.join(base, "fakebin")
+        os.makedirs(fakebin)
+        with open(os.path.join(fakebin, "git"), "w") as fh:
+            fh.write(f"#!/bin/sh\necho {os.path.join(decoy, '.git')}\nexit 1\n")
+        os.chmod(os.path.join(fakebin, "git"), 0o755)
+        rc, err = gate({"PATH": fakebin + os.pathsep + env.get("PATH", "")})
+        case("a failing git's output is ignored (fallback sibling is BLOCKED)",
+             rc == 3 and f"oracle checkout is absent at {stale}.\n" in err,
+             f"rc={rc} stderr={err.strip()!r}")
         # 5. oracle at the pin -> the oracle checks pass (the run then stops at
         #    the deliberately empty portmap)
         write_head(oracle, ORACLE_PIN)
-        rc, err = gate()
+        rc, err = gate(cwd=wt)
         case("pinned oracle beside the main checkout passes the oracle checks",
              rc == 3 and "oracle checkout" not in err and "portmap" in err,
              f"rc={rc} stderr={err.strip()!r}")

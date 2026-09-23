@@ -27,28 +27,23 @@ import re
 import subprocess
 import sys
 
-ROOT = subprocess.run(["git", "rev-parse", "--show-toplevel"],
-                      cwd=os.path.dirname(os.path.abspath(__file__)),
-                      capture_output=True, text=True, check=True).stdout.strip()
-# The oracle sits BESIDE THE MAIN CHECKOUT, which is NOT `ROOT` when this runs
-# inside a git worktree: `ROOT/../ghostty` resolves to
-# `.claude/worktrees/ghostty`, which does not exist. Measured on a scratch
-# worktree, the old form died with
-# `FileNotFoundError: ... '/…/tmp/ghostty'` — loud, at least, but it made these
-# tools unrunnable from every agent worktree, and one lane worked around it by
-# creating a symlink. A tool that needs a symlink to be correct is one that will
-# be wrong the next time nobody makes one. `--git-common-dir` points at the MAIN
-# repo's .git from inside any worktree, so its parent is always the real
-# checkout; falling back to ROOT keeps the non-worktree case identical.
-def _oracle_root():
-    common = subprocess.run(
-        ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
-        cwd=ROOT, capture_output=True, text=True).stdout.strip()
-    main_checkout = os.path.dirname(common) if common else ROOT
-    return os.path.abspath(os.path.join(main_checkout, "..", "ghostty"))
+# The checkout this tool belongs to, from the script's own location, and the
+# oracle beside the MAIN checkout, from the shared `_gatelib.oracle_root`.
+# The reasoning, and the R5 history (ROOT from `--show-toplevel` and a private
+# resolver, neither stripping `GIT_*`), is in `audit_file_coverage.py`. Arm 5
+# of `--self-test` proves that GIT_DIR + GIT_WORK_TREE move none of ROOT,
+# ORACLE or `oracle_files()`, here and in the two sibling audit tools.
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "gates"))
+import _gatelib as G  # noqa: E402
+
+ROOT = G.RUSTTY_ROOT
+ORACLE = G.oracle_root(ROOT)
 
 
-ORACLE = _oracle_root()
+def oracle_files():
+    """`git ls-files src` in the oracle, with `GIT_*` removed (R5)."""
+    return subprocess.run(["git", "ls-files", "src"], cwd=ORACLE, env=G.git_env(),
+                          capture_output=True, text=True, check=True).stdout.split()
 SKIP_PREFIXES = ("src/build/", "src/bench/")
 
 TEST_BLOCK = re.compile(r'^\s*test\s+"([^"]+)"\s*\{', re.M)
@@ -202,11 +197,66 @@ def self_test(zig, fns, cites, accepted):
     if not ok:
         failures.append("vacuity")
 
+    # 5. REDIRECT arm (R5): the environment cannot move any of the three audit
+    #    tools. Each is imported in a fresh process whose working directory is a
+    #    decoy repository outside this checkout, with GIT_DIR + GIT_WORK_TREE
+    #    naming the decoy (which tracks a `src/decoy.zig`). ROOT, ORACLE and
+    #    `oracle_files()` must equal what this unredirected process computed.
+    for mod in ("audit_file_coverage", "audit_symbol_coverage", "audit_test_coverage"):
+        ok, why = _redirect_probe(mod)
+        print(f"  {'ok  ' if ok else 'FAIL'} {mod}: GIT_DIR + GIT_WORK_TREE redirect "
+              f"neither ROOT, ORACLE nor the oracle file list")
+        if not ok:
+            print(f"       ({why})")
+            failures.append(f"redirect:{mod}")
+
     if failures:
         print(f"SELF-TEST RED: {len(failures)} arm(s) could not fail: {failures}")
         return 1
-    print("SELF-TEST GREEN: all 4 acceptance arms demonstrated reachable FAIL.")
+    print("SELF-TEST GREEN: all 4 acceptance arms demonstrated reachable FAIL; "
+          "the audit tools ignore GIT_* redirection.")
     return 0
+
+
+def _redirect_probe(mod):
+    """(ok, why) for one audit module imported under a GIT_DIR/GIT_WORK_TREE decoy."""
+    import hashlib
+    import shutil
+    import tempfile
+
+    def digest(files):
+        return hashlib.sha256("\n".join(sorted(files)).encode()).hexdigest()
+
+    env = G.git_env()
+    git_cfg = ["-c", "user.name=selftest", "-c", "user.email=selftest@invalid",
+               "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null"]
+    base = os.path.realpath(tempfile.mkdtemp(prefix="gaudit_redirect_"))
+    try:
+        decoy = os.path.join(base, "rustty")
+        os.makedirs(os.path.join(decoy, "src"))
+        open(os.path.join(decoy, "src", "decoy.zig"), "w").close()
+        for args in (["init", "-q"], ["add", "src/decoy.zig"]):
+            subprocess.run(["git", *git_cfg, *args], cwd=decoy, env=env,
+                           capture_output=True, check=True)
+        env.update({"GIT_DIR": os.path.join(decoy, ".git"), "GIT_WORK_TREE": decoy})
+        probe = ("import sys; d, m = sys.argv[1], sys.argv[2]; sys.argv = [sys.argv[0]]; "
+                 "sys.path.insert(0, d); import importlib, hashlib; "
+                 "M = importlib.import_module(m); print(M.ROOT); print(M.ORACLE); "
+                 "print(hashlib.sha256('\\n'.join(sorted(M.oracle_files())).encode())"
+                 ".hexdigest())")
+        r = subprocess.run([sys.executable, "-c", probe,
+                            os.path.dirname(os.path.abspath(__file__)), mod],
+                           cwd=decoy, env=env, capture_output=True, text=True)
+        got = r.stdout.split("\n")[:3]
+        want = [ROOT, ORACLE, digest(oracle_files())]
+        if r.returncode != 0 or got != want:
+            return False, (f"rc={r.returncode} got {got}, want {want}; "
+                           f"stderr={r.stderr.strip()[-300:]!r}")
+        return True, ""
+    except (OSError, subprocess.CalledProcessError) as exc:
+        return False, f"fixture could not be built: {exc}"
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
 
 
 def main():
@@ -246,8 +296,7 @@ def main():
     cites = re.sub(r"\n\s*(?:///|//!|//|\*)?[ \t]*", " ", cites)
     cites = re.sub(r"\s+", " ", cites)
 
-    files = subprocess.run(["git", "ls-files", "src"], cwd=ORACLE,
-                           capture_output=True, text=True, check=True).stdout.split()
+    files = oracle_files()
     # EVERY phase's non-port ledger, not just phase 3's. The ledgers are written
     # per phase (`.port/phase-N/NON_PORTS.md`) and reading one of them was an
     # accident of the phase this tool was written in: `src/lib/TinyIo.zig` — a

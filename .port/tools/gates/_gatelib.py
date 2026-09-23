@@ -730,6 +730,15 @@ _LEDGER_ROW = re.compile(
     r"^\|\s*`([^`]+)`\s*\|\s*`([0-9a-f]{7,40})`\s*\|([^|]*)\|", re.M)
 
 
+def git_env():
+    """The process environment with every `GIT_*` variable removed.
+
+    For git calls that read the oracle or locate a checkout: `GIT_DIR`,
+    `GIT_WORK_TREE`, `GIT_COMMON_DIR` and the `GIT_CONFIG_*` injection family
+    would otherwise redirect them to another repository (R5)."""
+    return {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+
+
 def oracle_root(checkout=RUSTTY_ROOT):
     """The read-only ghostty oracle checkout: `ghostty` BESIDE THE MAIN checkout.
 
@@ -744,17 +753,20 @@ def oracle_root(checkout=RUSTTY_ROOT):
     git runs with every `GIT_*` variable removed: `GIT_DIR` would otherwise
     redirect `--git-common-dir` to a decoy repository and, with it, the oracle.
     `checkout` exists for the gates' own self-tests; production callers pass
-    their script-relative root. If git cannot answer, the fallback is the
-    checkout's own sibling — the pre-worktree behaviour, which from a worktree
-    names a missing directory and so reaches the caller's BLOCKED path rather
-    than a vacuous green.
+    their script-relative root. git's stdout is trusted only when it exits 0.
+    If git cannot answer, the fallback is the checkout's own sibling — the
+    pre-worktree behaviour, which from a worktree names a missing directory and
+    so reaches the caller's BLOCKED path rather than a vacuous green.
+
+    `.port/tools/gates/_oracle_root.sh` is the shell twin of this function; its
+    self-test checks that the two agree.
     """
     import subprocess
-    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
     try:
-        common = subprocess.run(
+        r = subprocess.run(
             ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
-            cwd=checkout, capture_output=True, text=True, env=env).stdout.strip()
+            cwd=checkout, capture_output=True, text=True, env=git_env())
+        common = r.stdout.strip() if r.returncode == 0 else ""
     except OSError:
         common = ""
     main_checkout = os.path.dirname(common) if common else checkout

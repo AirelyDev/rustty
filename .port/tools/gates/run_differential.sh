@@ -61,9 +61,25 @@ MODE="auto"
 case "${1:-}" in
   --progress)  MODE="progress" ;;
   --self-test) MODE="self-test" ;;
+  --print-oracle) MODE="print-oracle" ;;
   "" )         MODE="auto" ;;
   *) echo "run_differential.sh: unknown arg '${1:-}'" >&2; exit 2 ;;
 esac
+
+# The read-only oracle checkout (its zig-out/include feeds the driver-source
+# staleness guard): `ghostty` beside the MAIN checkout, resolved by the shared
+# shell resolver (the twin of `_gatelib.oracle_root`). R5: no environment
+# override — the former `GHOSTTY` could point the guard at any tree — and
+# `GIT_*` cannot redirect it. `--print-oracle` prints the result and exits;
+# G-ORACLE-SH-SELF (`_oracle_root.sh --self-test`) runs a copy of this gate that
+# way with the old override and a GIT_DIR decoy set.
+# shellcheck source=.port/tools/gates/_oracle_root.sh
+source "$REPO_ROOT/.port/tools/gates/_oracle_root.sh" || { echo "BLOCKED: cannot source _oracle_root.sh"; exit 3; }
+GHOSTTY="$(rustty_oracle_root "$REPO_ROOT")"
+if [ "$MODE" = "print-oracle" ]; then
+  echo "$GHOSTTY"
+  exit 0
+fi
 
 echo "=== G4 :: differential VT clean (runner) ==="
 
@@ -77,7 +93,6 @@ if [ "$blocked" = "1" ]; then exit 3; fi
 REF_DRIVER="$HARNESS/bin/vt_driver_ref"
 PORT_DRIVER="${RUSTTY_VT_DRIVER:-$HARNESS/bin/vt_driver_port}"
 DIAG_DIR="$HARNESS/results/diag"
-GHOSTTY="${GHOSTTY:-/Users/gael/projects/ghostty}"
 
 # ---------------------------------------------------------------------------
 # Driver-source staleness guard (F-016): the shared vt_driver.c must still

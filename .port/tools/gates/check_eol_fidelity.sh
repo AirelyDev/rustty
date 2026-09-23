@@ -45,6 +45,20 @@ cd "$ROOT" || exit 1
 
 blocked() { echo "G-EOL BLOCKED: $*"; exit 3; }
 
+# The reference checkout for arm 3: `ghostty` beside the MAIN checkout, resolved
+# by the shared shell resolver (the twin of `_gatelib.oracle_root`). R5: there
+# is no environment override — the former `GHOSTTY_ORACLE` could point arm 3 at
+# any tree — and `GIT_*` cannot redirect it. `--print-oracle` prints the result
+# and exits; G-ORACLE-SH-SELF (`_oracle_root.sh --self-test`) runs a copy of
+# this gate that way with the old override and a GIT_DIR decoy set.
+# shellcheck source=.port/tools/gates/_oracle_root.sh
+source "$ROOT/.port/tools/gates/_oracle_root.sh" || blocked "cannot source _oracle_root.sh"
+ORACLE="$(rustty_oracle_root "$ROOT")"
+if [ "${1:-}" = "--print-oracle" ]; then
+  echo "$ORACLE"
+  exit 0
+fi
+
 command -v git >/dev/null 2>&1 || blocked "git not installed"
 git rev-parse --git-dir >/dev/null 2>&1 || blocked "not a git checkout"
 
@@ -127,7 +141,6 @@ RAN=$((RAN + 1))
 
 # ── 3. the shared fuzz seeds match the reference byte for byte ───────────────
 echo "=== G-EOL 3/3 :: seed corpora vs the reference ==="
-ORACLE="${GHOSTTY_ORACLE:-/Users/gael/projects/ghostty}"
 REF_CORPUS="$ORACLE/test/fuzz-libghostty/corpus"
 if [ ! -d "$REF_CORPUS" ]; then
   echo "  skipped reference byte-comparison (no oracle checkout at $ORACLE — R3, local-only)"

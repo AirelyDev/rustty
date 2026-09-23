@@ -18,12 +18,25 @@
 #   - ghostty: macos/GhosttyKit.xcframework/macos-arm64_x86_64/ghostty-internal.a
 #   - rustty:  macos/RusttyKit.xcframework/macos-arm64/{libRusttyKit.a,Headers/rustty.h}
 #
-# Usage:  .port/tools/macos-parity/menu-shortcut-parity.sh
+# Usage:  .port/tools/macos-parity/menu-shortcut-parity.sh [--print-oracle]
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RUSTTY_ROOT="$(cd "$HERE/../../.." && pwd)"
-GHOSTTY_ROOT="${GHOSTTY_ROOT:-$(cd "$RUSTTY_ROOT/../ghostty" && pwd)}"
+# The reference checkout: `ghostty` beside the MAIN checkout, resolved by the
+# shared shell resolver (the twin of `_gatelib.oracle_root`). The former
+# `GHOSTTY_ROOT` override is gone (R5: nothing caller-settable points a parity
+# check at a different oracle), and so is its default `$RUSTTY_ROOT/../ghostty`,
+# which from a git worktree names `.claude/worktrees/ghostty`. `--print-oracle`
+# prints the result and exits; G-ORACLE-SH-SELF (`_oracle_root.sh --self-test`)
+# runs a copy of this script that way with the old override set.
+# shellcheck source=.port/tools/gates/_oracle_root.sh
+source "$RUSTTY_ROOT/.port/tools/gates/_oracle_root.sh" || { echo "PARITY FAIL: cannot source _oracle_root.sh" >&2; exit 1; }
+GHOSTTY_ROOT="$(rustty_oracle_root "$RUSTTY_ROOT")"
+if [ "${1:-}" = "--print-oracle" ]; then
+  echo "$GHOSTTY_ROOT"
+  exit 0
+fi
 OUT="$(mktemp -d)"; trap 'rm -rf "$OUT"' EXIT
 
 # Frameworks both static libs pull in.

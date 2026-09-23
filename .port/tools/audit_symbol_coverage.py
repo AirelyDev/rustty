@@ -28,28 +28,23 @@ import re
 import subprocess
 import sys
 
-ROOT = subprocess.run(["git", "rev-parse", "--show-toplevel"],
-                      cwd=os.path.dirname(os.path.abspath(__file__)),
-                      capture_output=True, text=True, check=True).stdout.strip()
-# The oracle sits BESIDE THE MAIN CHECKOUT, which is NOT `ROOT` when this runs
-# inside a git worktree: `ROOT/../ghostty` resolves to
-# `.claude/worktrees/ghostty`, which does not exist. Measured on a scratch
-# worktree, the old form died with
-# `FileNotFoundError: ... '/…/tmp/ghostty'` — loud, at least, but it made these
-# tools unrunnable from every agent worktree, and one lane worked around it by
-# creating a symlink. A tool that needs a symlink to be correct is one that will
-# be wrong the next time nobody makes one. `--git-common-dir` points at the MAIN
-# repo's .git from inside any worktree, so its parent is always the real
-# checkout; falling back to ROOT keeps the non-worktree case identical.
-def _oracle_root():
-    common = subprocess.run(
-        ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
-        cwd=ROOT, capture_output=True, text=True).stdout.strip()
-    main_checkout = os.path.dirname(common) if common else ROOT
-    return os.path.abspath(os.path.join(main_checkout, "..", "ghostty"))
+# The checkout this tool belongs to, from the script's own location, and the
+# oracle beside the MAIN checkout, from the shared `_gatelib.oracle_root`.
+# The reasoning, and the R5 history (ROOT from `--show-toplevel` and a private
+# resolver, neither stripping `GIT_*`), is in `audit_file_coverage.py`.
+# G-TESTS-SELF (`audit_test_coverage.py --self-test`) proves that GIT_DIR +
+# GIT_WORK_TREE move none of ROOT, ORACLE or `oracle_files()` here.
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "gates"))
+import _gatelib as G  # noqa: E402
+
+ROOT = G.RUSTTY_ROOT
+ORACLE = G.oracle_root(ROOT)
 
 
-ORACLE = _oracle_root()
+def oracle_files():
+    """`git ls-files src` in the oracle, with `GIT_*` removed (R5)."""
+    return subprocess.run(["git", "ls-files", "src"], cwd=ORACLE, env=G.git_env(),
+                          capture_output=True, text=True, check=True).stdout.split()
 SKIP_PREFIXES = ("src/build/", "src/bench/")
 
 PUB_FN = re.compile(r"^\s*pub fn ([A-Za-z_][A-Za-z0-9_]*)\s*\(", re.M)
@@ -88,8 +83,7 @@ def main():
         nonported = set(re.findall(r"`(src/[\w/]+\.zig)`",
                                    open(nonports_path, errors="ignore").read()))
 
-    files = subprocess.run(["git", "ls-files", "src"], cwd=ORACLE,
-                           capture_output=True, text=True, check=True).stdout.split()
+    files = oracle_files()
     zig = [f for f in files if f.endswith(".zig")
            and not any(f.startswith(p) for p in SKIP_PREFIXES)
            and f not in nonported]
