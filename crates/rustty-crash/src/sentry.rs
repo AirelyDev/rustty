@@ -528,22 +528,23 @@ fn cacheDir(environ_map: &rustty_global::EnvMap) -> Result<Vec<u8>, InitThreadEr
     //     }
     // }
     //
-    // CORRECTION (LEDGER S79-F1, parity tail T-E): this used to read "UPSTREAM
-    // BUG — NOT PORTED AS WRITTEN (P4-E35, escalated + ratified ...) rustty
-    // ports the pre-range, comment-consistent behavior: set-and-nonempty
-    // XDG_CACHE_HOME → respect XDG (`xdg.cache` below); unset or empty →
-    // NSCachesDirectory". The condition above contradicts its comment (upstream
-    // `15c50c1db` inverted it; UPSTREAM-DEFECTS UD21), but it is a non-crash
-    // reference defect, and PORT_RULES R13 (2026-09-11, later than P4-E35)
-    // keeps those faithful. So the port now does what the reference does:
-    // set-and-nonempty `XDG_CACHE_HOME` → NSCachesDirectory; unset or empty →
-    // the XDG cache. Test `cache_dir_follows_the_reference_condition`.
+    // PORT NOTE: reference defect (R13), UD21 (LEDGER S79-F1). The condition
+    // above is the inverse of its own comment: upstream `15c50c1db` inverted it
+    // while extracting the fn, so a set-and-nonempty `XDG_CACHE_HOME` picks
+    // NSCachesDirectory and an unset one picks the XDG path. That visibly breaks
+    // the reference's evident intent, so under R13 (as extended 2026-09-23) the
+    // port does what the comment says: set and non-empty `XDG_CACHE_HOME` →
+    // respect XDG (`xdg.cache` below); unset or empty → NSCachesDirectory
+    // (`XDG_CACHE_HOME=""` is treated as unset). This is the phase-4 P4-E35
+    // behaviour; parity tail T-E briefly ported the inversion (under R13 as it
+    // stood before the extension) and this round reverts that. Listed in
+    // `docs/ghostty-bug-fixes.md`. Test `cache_dir_follows_the_intended_condition`.
     #[cfg(target_os = "macos")]
-    'macos: {
-        let Some(xdg_cache_home) = environ_map.get(&b"XDG_CACHE_HOME"[..]) else {
-            break 'macos;
-        };
-        if !xdg_cache_home.is_empty() {
+    {
+        let respect_xdg = environ_map
+            .get(&b"XDG_CACHE_HOME"[..])
+            .is_some_and(|xdg_cache_home| !xdg_cache_home.is_empty());
+        if !respect_xdg {
             // (W94-B02-01: the macOS arm's UTF-8 `String` converts losslessly
             // via `into_bytes` — the statics are raw path bytes.)
             return internal_os::macos::cacheDir("sentry")
@@ -1171,14 +1172,17 @@ mod tests {
         result.decref();
     }
 
-    // No reference test. LEDGER S79-F1: the reference's macOS `cacheDir`
-    // (`sentry.zig:188-207`) returns `NSCachesDirectory` when `XDG_CACHE_HOME`
-    // is set and non-empty, and the XDG cache otherwise (the inverse of its own
-    // comment; UPSTREAM-DEFECTS UD21, latent). Non-crash reference defects stay
-    // faithful (PORT_RULES R13), so the port does the same.
+    // No reference test. LEDGER S79-F1, reference defect (R13) UD21: the
+    // reference's macOS `cacheDir` (`sentry.zig:188-207`) returns
+    // `NSCachesDirectory` when `XDG_CACHE_HOME` is set and non-empty, and the
+    // XDG cache otherwise: the inverse of its own comment ("if XDG env vars
+    // are set we will respect them"). The port implements the comment.
+    // Negative control: reinstate the reference's condition (NSCaches when
+    // set and non-empty) and the first assertion fails with the two paths
+    // swapped.
     #[cfg(all(feature = "sentry", target_os = "macos"))]
     #[test]
-    fn cache_dir_follows_the_reference_condition() {
+    fn cache_dir_follows_the_intended_condition() {
         let map = |pairs: &[(&str, &str)]| -> rustty_global::EnvMap {
             pairs
                 .iter()
@@ -1186,15 +1190,16 @@ mod tests {
                 .collect()
         };
         let ns_caches = internal_os::macos::cacheDir("sentry").unwrap().into_bytes();
-        let xdg = format!("/h/.cache/{}/sentry", rustty_identity::APP_NAME).into_bytes();
+        let xdg = format!("/x/{}/sentry", rustty_identity::APP_NAME).into_bytes();
+        assert_ne!(ns_caches, xdg);
 
-        // Set and non-empty: NSCachesDirectory.
+        // Set and non-empty: the XDG cache under `$XDG_CACHE_HOME`.
         let got = cacheDir(&map(&[("XDG_CACHE_HOME", "/x"), ("HOME", "/h")])).unwrap();
-        assert_eq!(ns_caches, got);
-        // Unset, or empty: the XDG cache (under `$HOME`).
+        assert_eq!(xdg, got);
+        // Unset, or empty: NSCachesDirectory.
         let got = cacheDir(&map(&[("HOME", "/h")])).unwrap();
-        assert_eq!(xdg, got);
+        assert_eq!(ns_caches, got);
         let got = cacheDir(&map(&[("XDG_CACHE_HOME", ""), ("HOME", "/h")])).unwrap();
-        assert_eq!(xdg, got);
+        assert_eq!(ns_caches, got);
     }
 }

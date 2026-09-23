@@ -22,10 +22,14 @@ upstream report; if upstream fixes it, the entry is closed by a normal port.
 
 ## P4-U1 — `crash/sentry.zig` `cacheDir` macOS XDG_CACHE_HOME check INVERTED (NOT ported)
 
-**SUPERSEDED 2026-09-23 (parity tail T-E, LEDGER S79-F1):** the port now follows the
-reference's condition, because PORT_RULES R13 (2026-09-11) keeps non-crash reference
-defects faithful. The record below is kept as written; the defect is proposable
-upstream as `.port/parity-closure/UPSTREAM-DEFECTS.md` UD21.
+**STANDS (re-affirmed 2026-09-23, parity tail T-E fix round, LEDGER S79-F1):** the port
+implements the comment-consistent behaviour described below. PORT_RULES R13, as extended
+by the user on 2026-09-23, fixes non-crash reference defects that visibly break the
+reference's own evident intent, and this inverted condition is R13's own example. (Parity
+tail T-E had briefly marked this record SUPERSEDED and ported the inversion, under R13 as
+it stood before the extension; the fix round reverted that.) The defect is proposable
+upstream as `.port/parity-closure/UPSTREAM-DEFECTS.md` UD21, and the difference is listed
+in `docs/ghostty-bug-fixes.md`. The record below is kept as written.
 
 **Kind:** upstream regression, deliberately NOT ported (binding escalation
 ruling in the w6-crash task; assessment row P4-E35).
