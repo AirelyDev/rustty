@@ -127,6 +127,9 @@ mod sys {
             variation_identifier: &CFNumber,
             variation_value: f64,
         ) -> *mut CTFontDescriptor;
+        // `Face::name` (UD114): objc2's `CTFont::family_name` asserts a non-null
+        // result, but CoreText returns NULL for a font with no `name` table.
+        pub fn CTFontCopyFamilyName(font: &CTFont) -> *mut objc2_core_foundation::CFString;
     }
 }
 
@@ -637,7 +640,26 @@ impl Face {
         // PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD110. The
         // reference never releases the +1 `copyFamilyName` result; here the
         // `CFRetained` releases it at scope end, after the copy into `buf`.
-        let family_name = unsafe { self.font.family_name() };
+        // (It leaks only for a face loaded from data, i.e. the embedded fonts:
+        // a discovered font's names are immortal constants, measured.)
+        //
+        // PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD114. The
+        // reference's `copyFamilyName` (`pkg/macos/text/font.zig:166-168`) is
+        // non-optional (`@ptrFromInt` of the result), but `CTFontCopyFamilyName`
+        // returns NULL for a font with no `name` table (measured: `Face::init`
+        // accepts such a font), so the reference traps (ReleaseSafe) or
+        // dereferences NULL (ReleaseFast), and objc2's non-null `family_name()`
+        // panicked here. The lookup is nullable, and a missing family name takes
+        // the reference's own answer for the same CoreText NULL,
+        // `DeferredFace.familyName`'s `orelse return "unknown"`
+        // (`DeferredFace.zig:157-158`).
+        // SAFETY: `self.font` is a live retained CTFont. CTFontCopyFamilyName
+        // follows the Copy rule (+1), which `CFRetained::from_raw` takes over.
+        let raw = unsafe { sys::CTFontCopyFamilyName(&self.font) };
+        let Some(family_name) = NonNull::new(raw).map(|p| unsafe { CFRetained::from_raw(p) })
+        else {
+            return Ok(b"unknown");
+        };
         let s = family_name.to_string();
         let bytes = s.as_bytes();
         if bytes.len() > buf.len() {
@@ -1703,6 +1725,54 @@ mod tests {
         let font_name = face.name(&mut buf)?;
         assert_eq!(font_name, b"Menlo");
 
+        face.deinit();
+        Ok(())
+    }
+
+    /// UD114 (R13, task R13-D2): a font file with no `name` table loads
+    /// (`Face::init` accepts it) but CoreText has no family name for it, so the
+    /// reference's non-optional `copyFamilyName` traps and objc2's non-null
+    /// `family_name()` panicked ("function was marked as returning non-null,
+    /// but actually returned NULL"). `Face::name` must give "unknown", the
+    /// reference's `DeferredFace.familyName` answer for the same NULL. The
+    /// fixture is the S85-F2 one (`deferred_face.rs`
+    /// `a_coretext_font_without_a_family_name_is_unknown`): the embedded
+    /// JetBrains Mono with its `name` table's directory tag renamed.
+    #[test]
+    fn a_face_without_a_family_name_is_unknown() -> Result<(), Error> {
+        let mut buf = [0u8; 1024];
+
+        // Positive control: the unmodified font has its real family name.
+        let mut face = Face::init(
+            crate::library::Library::init().unwrap(),
+            embedded::VARIABLE,
+            opts(12.0),
+        )?;
+        assert_eq!(face.name(&mut buf)?, b"JetBrains Mono");
+        face.deinit();
+
+        let mut bytes = embedded::VARIABLE.to_vec();
+        let num_tables = u16::from_be_bytes([bytes[4], bytes[5]]) as usize;
+        let mut renamed = false;
+        for i in 0..num_tables {
+            let rec = 12 + 16 * i;
+            if &bytes[rec..rec + 4] == b"name" {
+                bytes[rec..rec + 4].copy_from_slice(b"zzzz");
+                renamed = true;
+            }
+        }
+        assert!(renamed, "the font has a name table to remove");
+
+        // The load succeeds: the trigger is `name`, not `init`.
+        let mut face = Face::init(crate::library::Library::init().unwrap(), &bytes, opts(12.0))?;
+        // Precondition: CoreText really returns NULL for this font, so the
+        // assertion below is reached through the NULL arm.
+        let raw = unsafe { sys::CTFontCopyFamilyName(&face.font) };
+        assert!(
+            raw.is_null(),
+            "precondition: CTFontCopyFamilyName is NULL for a font with no name table"
+        );
+        assert_eq!(face.name(&mut buf)?, b"unknown");
         face.deinit();
         Ok(())
     }
