@@ -94,7 +94,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** `zig build run` open step and `copy app bundle` step have no counterpart
   - **Oracle:** `src/build/GhosttyXcodebuild.zig:127-178` → **Rustty:** `macos/build-rustty.sh:35-54`
   - **Audit's suggested fix:** Add an `xtask run-macos` (or a `macos/run-rustty.sh`) that applies the PlistBuddy tweak, sets RUSTTY_LOG=stderr,macos and RUSTTY_MAC_LAUNCH_SOURCE=zig_run, and execs the app binary with forwarded args; scrub env in build-rustty.sh like build.nu.
-- [ ] **S64-F8** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S64-F8** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** emit_terminfo / emit_termcap / emit_themes build gates are unconditional in xtask
   - **Oracle:** `src/build/GhosttyResources.zig:43-53,60-77,125-136` → **Rustty:** `xtask/src/res_terminfo.rs:132-141,168-170`
   - **Audit's suggested fix:** Add `--emit-terminfo/--emit-termcap/--emit-themes` flags to `xtask resources` defaulting to the oracle's profile-dependent values (true for debug, false for release; themes true).

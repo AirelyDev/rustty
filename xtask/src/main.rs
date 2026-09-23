@@ -75,6 +75,7 @@ SUBCOMMANDS:
                        build-lib-vt-xcframework job ships and example/swift-vt-xcframework
                        consumes.
     resources [--target-os <os>] [--prefix <prefix>] [--flatpak] [--debug] [--system-package]
+              [--optimize <mode>] [--emit-terminfo <bool>] [--emit-termcap <bool>] [--emit-themes <bool>]
                        Generate zig-out/share/{terminfo,<app>,vim,nvim,fish,zsh,bash-completion,man,locale,bat} for the macOS Copy-Resources phase (<app> = rustty by default, ghostty under identity-oracle).
                        --target-os (linux|macos|freebsd|windows|…, default: host) selects the
                        TARGET layout like ghostty's cfg.target: freebsd puts the terminfo tree
@@ -85,6 +86,10 @@ SUBCOMMANDS:
                        (default /usr), --flatpak swaps the D-Bus service + caps icons at 512,
                        --debug uses the -debug app id, --system-package puts the systemd user
                        unit under zig-out/lib instead of zig-out/share.
+                       --optimize (Debug|ReleaseSafe|ReleaseFast|ReleaseSmall, default Debug like
+                       `zig build`) picks the emit-terminfo/emit-termcap defaults: the terminfo
+                       source and termcap are installed for Debug only (the source always on
+                       windows). --emit-* override them; --emit-themes defaults to true.
     update-translations
                        Regenerate po/io.airely.rustty.pot from the GTK-apprt + Nautilus
                        sources and msgmerge every po/*.po catalog (needs xgettext+msgmerge
@@ -762,8 +767,30 @@ fn resources(args: &mut impl Iterator<Item = String>) -> Result<PathBuf, String>
     let mut flatpak = false;
     let mut debug = false;
     let mut system_package = false;
+    // `-Doptimize` and the `-Demit-terminfo` / `-Demit-termcap` /
+    // `-Demit-themes` overrides (`Config.zig:504-529`, S64-F8).
+    let mut optimize = res_terminfo::Optimize::Debug;
+    let mut emit_terminfo: Option<bool> = None;
+    let mut emit_termcap: Option<bool> = None;
+    let mut emit_themes = true;
+    let parse_bool = |flag: &str, v: Option<String>| -> Result<bool, String> {
+        match v.as_deref() {
+            Some("true") => Ok(true),
+            Some("false") => Ok(false),
+            _ => Err(format!("{flag} requires `true` or `false`")),
+        }
+    };
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--optimize" => {
+                let v = args.next().ok_or("--optimize requires a value")?;
+                optimize = res_terminfo::Optimize::parse(&v).ok_or_else(|| {
+                    format!("--optimize `{v}`: expected Debug, ReleaseSafe, ReleaseFast or ReleaseSmall")
+                })?;
+            }
+            "--emit-terminfo" => emit_terminfo = Some(parse_bool(&arg, args.next())?),
+            "--emit-termcap" => emit_termcap = Some(parse_bool(&arg, args.next())?),
+            "--emit-themes" => emit_themes = parse_bool(&arg, args.next())?,
             "--target-os" => {
                 target_os = args.next().ok_or("--target-os requires a value")?;
             }
@@ -781,11 +808,22 @@ fn resources(args: &mut impl Iterator<Item = String>) -> Result<PathBuf, String>
     let share = root.join("zig-out/share");
     std::fs::create_dir_all(&share).map_err(|e| format!("create zig-out/share/: {e}"))?;
 
-    res_terminfo::gen_terminfo(&share, &target_os).map_err(|e| format!("gen_terminfo: {e}"))?;
+    let mut emit = res_terminfo::Emit::defaults(&target_os, optimize);
+    if let Some(v) = emit_terminfo {
+        emit.terminfo = v;
+    }
+    if let Some(v) = emit_termcap {
+        emit.termcap = v;
+    }
+    res_terminfo::gen_terminfo(&share, &target_os, emit)
+        .map_err(|e| format!("gen_terminfo: {e}"))?;
     res_shell::gen_shell(&share).map_err(|e| format!("gen_shell: {e}"))?;
     res_editor::gen_editor(&share).map_err(|e| format!("gen_editor: {e}"))?;
     res_misc::gen_misc(&share).map_err(|e| format!("gen_misc: {e}"))?;
-    res_themes::gen_themes(&share).map_err(|e| format!("gen_themes: {e}"))?;
+    // Themes: `if (cfg.emit_themes)` (`GhosttyResources.zig:127-138`).
+    if emit_themes {
+        res_themes::gen_themes(&share).map_err(|e| format!("gen_themes: {e}"))?;
+    }
     res_shell_integration::gen_shell_integration(&share)
         .map_err(|e| format!("gen_shell_integration: {e}"))?;
 
