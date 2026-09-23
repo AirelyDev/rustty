@@ -13087,4 +13087,62 @@ mod integration_tests {
         cfg.load_iter(&mut it).unwrap();
         assert!(!cfg._diagnostics.empty());
     }
+
+    /// Format `cfg` the way `+show-config` does and return the text.
+    fn show_config(cfg: &Config) -> String {
+        let mut buf = rustty_cfg_fmt::AllocatingWriter::init();
+        crate::formatter_file::FileFormatter::new(cfg)
+            .format(&mut buf)
+            .unwrap();
+        String::from_utf8(buf.written().to_vec()).unwrap()
+    }
+
+    // No reference test. LEDGER S76-F6: `mouse-scroll-multiplier`'s bare
+    // fallback and its `precision:`/`discrete:` fields are all
+    // `std.fmt.parseFloat`, which takes hex floats and `_` separators. (Fixed
+    // by the `parse_float_f64` port under S75-F1, `7a5bbdb8`; this pins the
+    // row's own surface through the parser, including the bare form.)
+    #[test]
+    fn mouse_scroll_multiplier_accepts_zig_float_syntax_through_the_parser() {
+        let mut cfg = Config::default_config();
+        let mut it = TestIterator::new(&[b"--mouse-scroll-multiplier=0x1p1"]);
+        cfg.load_iter(&mut it).unwrap();
+        assert!(cfg._diagnostics.empty(), "{:?}", cfg._diagnostics.items());
+        assert_eq!(
+            (2.0, 2.0),
+            (
+                cfg.mouse_scroll_multiplier.precision,
+                cfg.mouse_scroll_multiplier.discrete
+            )
+        );
+
+        let mut it =
+            TestIterator::new(&[b"--mouse-scroll-multiplier=precision:1_0,discrete:0x1.8"]);
+        cfg.load_iter(&mut it).unwrap();
+        assert!(cfg._diagnostics.empty(), "{:?}", cfg._diagnostics.items());
+        assert!(show_config(&cfg).contains("mouse-scroll-multiplier = precision:10,discrete:1.5\n"));
+    }
+
+    // No reference test. LEDGER S75-F3: `RepeatableFontVariation.formatEntry`
+    // prints the value with `{d}`, which renders NaN as `nan` (MEASURED, zig
+    // 0.16.0: `{d}` of `std.math.nan(f64)` is `nan`; `parseFloat("nan")` and
+    // `parseFloat("-nan")` both give a NaN with the sign bit CLEAR).
+    #[test]
+    fn font_variation_nan_formats_as_zig_nan() {
+        let mut cfg = Config::default_config();
+        let mut it = TestIterator::new(&[
+            b"--font-variation=wght=nan",
+            b"--font-variation=wdth=-nan",
+            b"--font-variation=slnt=-inf",
+        ]);
+        cfg.load_iter(&mut it).unwrap();
+        assert!(cfg._diagnostics.empty(), "{:?}", cfg._diagnostics.items());
+        // The values really are NaN (so the formatting arm under test runs).
+        assert!(cfg.font_variation.list[0].value.is_nan());
+        assert!(cfg.font_variation.list[1].value.is_nan());
+        let out = show_config(&cfg);
+        assert!(out.contains("font-variation = wght=nan\n"), "{out}");
+        assert!(out.contains("font-variation = wdth=nan\n"), "{out}");
+        assert!(out.contains("font-variation = slnt=-inf\n"), "{out}");
+    }
 }

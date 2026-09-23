@@ -6956,8 +6956,17 @@ fn parse_float_f64(input: &[u8]) -> Result<f64, ParseError> {
 }
 
 /// PORTS: the `{d}` float formatter — shortest round-trippable decimal. Rust's
-/// default float `Display` produces the same shortest decimal.
+/// default float `Display` produces the same shortest decimal for every
+/// finite value and for `inf`/`-inf` (MEASURED against zig 0.16.0 `{d}`:
+/// 1e100, 1e-7, 5e-324, f64::MAX, -0.0 and others print identically).
+///
+/// PORT NOTE (LEDGER S75-F3): NaN is the one difference. Zig's `{d}` prints
+/// `nan` (`-nan` with the sign bit set, `std/fmt/float.zig` `copySpecialStr`);
+/// Rust's `Display` prints `NaN` for both.
 fn fmt_float(v: f64) -> String {
+    if v.is_nan() {
+        return if v.is_sign_negative() { "-nan" } else { "nan" }.to_string();
+    }
     format!("{v}")
 }
 
