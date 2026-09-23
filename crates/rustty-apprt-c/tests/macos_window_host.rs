@@ -66,9 +66,9 @@ use rustty_apprt_c::capi::Text;
 use rustty_apprt_c::{
     rustty_app_free, rustty_app_new, rustty_app_tick, rustty_app_update_config, rustty_init,
     rustty_set_window_background_blur, rustty_surface_config_new, rustty_surface_free,
-    rustty_surface_free_text, rustty_surface_new, rustty_surface_quicklook_font,
-    rustty_surface_quicklook_word, rustty_surface_set_content_scale, rustty_surface_set_display_id,
-    rustty_surface_set_size,
+    rustty_surface_free_text, rustty_surface_mouse_scroll, rustty_surface_new,
+    rustty_surface_quicklook_font, rustty_surface_quicklook_word, rustty_surface_set_content_scale,
+    rustty_surface_set_display_id, rustty_surface_set_size,
 };
 use rustty_config::value_types::BackgroundBlur;
 
@@ -472,6 +472,46 @@ impl Drop for HostedSurface {
             rustty_app_free(self.app);
         }
     }
+}
+
+// Task R13-C (UD62 follow-up): pins `scrollCallback`'s call into its lifted y
+// and x helpers through the REAL path — the `rustty_surface_mouse_scroll` C
+// entry point on a live surface. Precision offsets smaller than one cell only
+// accumulate into `pending_scroll_x`/`pending_scroll_y`, so the two values say
+// which offset reached which helper, with no scroll side effects. The
+// reference's x block reads no multiplier and the y block multiplies by
+// `mouse-scroll-multiplier`'s precision value (1.0 by default).
+#[test]
+fn mouse_scroll_routes_each_offset_to_its_own_axis() {
+    let Some(host) = HostedSurface::spawn() else {
+        eprintln!("no Metal device / app_new failed; skipping");
+        return;
+    };
+    // SAFETY: `host.surface` is the live surface from `rustty_surface_new`; the
+    // mouse state and the derived config are main-thread state, and this thread
+    // is the one calling `scrollCallback`.
+    let core = unsafe { &(*host.surface).core_surface };
+    let cell = core.size.cell;
+    let precision = core.config.mouse_scroll_multiplier.precision;
+    let (x0, y0) = (core.mouse.pending_scroll_x, core.mouse.pending_scroll_y);
+    assert_eq!((0.0, 0.0), (x0, y0), "a fresh surface has nothing pending");
+    let (xoff, yoff) = (3.0, 7.0);
+    assert!(
+        xoff < f64::from(cell.width) && yoff * precision < f64::from(cell.height),
+        "the offsets must stay below one cell ({cell:?}) so nothing scrolls"
+    );
+
+    // bit 0 of the mods is `precision`.
+    // SAFETY: `host.surface` is live.
+    unsafe { rustty_surface_mouse_scroll(host.surface, xoff, yoff, 1) };
+
+    // SAFETY: as above; re-read after the call.
+    let core = unsafe { &(*host.surface).core_surface };
+    assert_eq!(
+        (xoff, yoff * precision),
+        (core.mouse.pending_scroll_x, core.mouse.pending_scroll_y),
+        "xoff reaches the x helper and yoff the y helper"
+    );
 }
 
 #[test]

@@ -14472,13 +14472,15 @@ fn clipboardTextContent<'a>(contents: &[terminal::clipboard::Content<'a>]) -> Op
 ///
 /// This returns `None` where the reference traps, and ALSO for NaN, which has
 /// no `isize`; each caller takes the handling its own value means — see the
-/// call sites. For NaN those arms match the reference on arm64 and are safer
-/// than it on x86_64: `scroll_page_fractional` saturates NaN to `0` (arm64's
+/// call sites. For NaN: `scroll_page_fractional` saturates it to `0` (arm64's
 /// value; x86_64's `isize::MIN` would scroll toward the top), and the gesture
-/// casts scroll nothing (the delta-0 result arm64 produces; x86_64's
-/// `isize::MIN` would drive the per-row loops). Where a gesture's
-/// `assert(@abs(amount) >= 1)` precedes the cast, a NaN trips that assert
-/// first in a checked build, in both trees.
+/// casts scroll nothing. On the discrete x path that is arm64's delta-0 result
+/// (x86_64's `isize::MIN` would drive the per-row loops). On the y and
+/// precision-x paths the reference's `assert(@abs(amount) >= 1)` precedes the
+/// cast, so a NaN fails that assert in a safe reference build (and ReleaseFast
+/// latches it into `pending_scroll_*`); the port's guard runs ahead of its
+/// copy of that assert, so a NaN from the C ABI scrolls nothing in every
+/// build (task R13-C).
 #[inline]
 fn isize_from_float(v: f64) -> Option<isize> {
     // `@intFromFloat` converts the INTEGER PART (truncation toward zero) and
@@ -14596,8 +14598,6 @@ fn scroll_amount_y(
             // We scroll by the number of rows in the offset and save the remainder
             // const amount = poff / cell_size;
             let amount = poff / cell_size;
-            // assert(@abs(amount) >= 1);
-            debug_assert!(amount.abs() >= 1.0);
             // Round towards zero.
             // const delta: isize = @intFromFloat(@trunc(amount));
             //
@@ -14606,14 +14606,24 @@ fn scroll_amount_y(
             // C-ABI embedder) is not scrolled at all — the `.{}` arm this
             // function already takes for an offset too small to act on. It is
             // taken BEFORE the pending store, so `pending_scroll_y` can never
-            // hold a NaN that poisons every later scroll, and BEFORE the
-            // `delta` assert below, which holds for every value that gets
-            // past here. Saturating would be worse than the crash it
-            // replaces: `scrollCallback`'s consumers of this amount loop
-            // `0..delta` writing one report per row.
+            // hold a NaN that poisons every later scroll, and BEFORE BOTH
+            // asserts, which hold for every value that gets past here.
+            // Saturating would be worse than the crash it replaces:
+            // `scrollCallback`'s consumers of this amount loop `0..delta`
+            // writing one report per row.
+            //
+            // The guard sits ahead of the reference's `assert(@abs(amount) >=
+            // 1)` (task R13-C): a NaN offset from `rustty_surface_mouse_scroll`
+            // makes `amount` NaN, which fails that assert, and a
+            // `debug_assert!` panic inside an `extern "C"` entry point aborts
+            // the process in debug and `release-safe` builds. Outside input
+            // can violate it, so under R13 it is not an invariant until the
+            // guard has run.
             let Some(delta) = isize_from_float(amount.trunc()) else {
                 break 'y ScrollAmount::default();
             };
+            // assert(@abs(amount) >= 1);
+            debug_assert!(amount.abs() >= 1.0);
             // self.mouse.pending_scroll_y = poff - (amount * cell_size);
             mouse.pending_scroll_y = poff - (amount * cell_size);
             // assert(@abs(delta) >= 1);
@@ -14667,14 +14677,15 @@ fn scroll_amount_x(
 
             // const amount = poff / cell_size;
             let amount = poff / cell_size;
-            // assert(@abs(amount) >= 1);
-            debug_assert!(amount.abs() >= 1.0);
             // const delta: isize = @intFromFloat(@trunc(amount));
             //
-            // (R13, UD62 — see the y calculation's note.)
+            // (R13, UD62 — see the y calculation's note, including why the
+            // guard runs ahead of the `amount` assert.)
             let Some(delta) = isize_from_float(amount.trunc()) else {
                 break 'x ScrollAmount::default();
             };
+            // assert(@abs(amount) >= 1);
+            debug_assert!(amount.abs() >= 1.0);
             // self.mouse.pending_scroll_x = poff - (amount * cell_size);
             mouse.pending_scroll_x = poff - (amount * cell_size);
             // assert(@abs(delta) >= 1);
@@ -15501,6 +15512,27 @@ mod scroll_gesture_cast_tests {
             }
         }
 
+        // NaN (task R13-C): on the precision path a NaN offset makes `amount`
+        // NaN, which the reference's `assert(@abs(amount) >= 1)` rejects; the
+        // guard now runs ahead of that assert, so a NaN from the C ABI scrolls
+        // nothing instead of failing the `debug_assert!` (an abort inside the
+        // `extern "C"` entry point in debug and `release-safe` builds). The
+        // discrete path is not driven with NaN: on Darwin `@min(nan, -1)` is
+        // -1 in both trees (measured, Zig 0.16.0), so it is an ordinary tick.
+        for v in [f64::NAN, -f64::NAN] {
+            mouse.pending_scroll_y = 5.0;
+            assert_eq!(
+                none(),
+                scroll_amount_y(&mut mouse, CELL, multiplier, v, mods(true)),
+                "precision yoff NaN scrolls nothing"
+            );
+            assert!(
+                mouse.pending_scroll_y == 5.0,
+                "precision yoff NaN leaves the pending offset alone, got {}",
+                mouse.pending_scroll_y
+            );
+        }
+
         // Not poisoned: the next ordinary scroll still adds to the kept 5 px.
         assert_eq!(
             ScrollAmount { delta: 2 },
@@ -15548,7 +15580,9 @@ mod scroll_gesture_cast_tests {
             scroll_amount_x(&mut mouse, CELL, 25.0, mods(true))
         );
 
-        for v in TRAPPING {
+        // NaN (task R13-C): as on the y precision path, the guard runs ahead
+        // of the `amount` assert a NaN would fail.
+        for v in TRAPPING.into_iter().chain([f64::NAN, -f64::NAN]) {
             mouse.pending_scroll_x = 3.0;
             assert_eq!(
                 none(),
