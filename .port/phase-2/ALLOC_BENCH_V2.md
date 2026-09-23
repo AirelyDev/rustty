@@ -75,9 +75,10 @@ task R13-L: the port now uses the reference's style-set geometry, and
 `20abdb50a`: styles 4,000, std page 409,600 bytes on macOS and 401,408 on
 Linux aarch64. The reference item geometry itself is re-measured against a
 golden by G-REFGEOM, `.port/tools/gates/check_ref_item_geometry.py`, task
-R13-L2.) Consequence for comparison: rustty std pages
-are smaller, so equal ROW workloads produce equal PAGE counts (verified below)
-but smaller byte totals.
+R13-L2.) Consequence for this comparison, which ran against the OLD oracle:
+rustty std pages are smaller than that old oracle's, so equal ROW workloads
+produce equal PAGE counts (verified below) but smaller byte totals. Against the
+reference at the current pin the std page sizes are equal.
 
 ## 3. Results
 

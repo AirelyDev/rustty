@@ -2898,13 +2898,24 @@ too (measured 2026-09-22 at `551e7a30` on `rvm`), so N88 did not cause it. The d
 correct; the test needs its boundary budget found per target (the smallest budget whose layout exceeds
 `MAX_PAGE_SIZE`) instead of a constant.
 
-**state**: OPEN (for the owner of task R13-W's test).
+**state**: CLOSED by task R13-L3, on the R13-L2 review's Linux run (see the second update).
 
 Update (task R13-L2): task R13-W2 replaced the constant with a binary search over the platform's own
 `Page::layout` that asserts it reaches exactly 2^32, so the test no longer depends on the page size; its
 remaining macOS arm64 pin is now the reference's 1,382,747,137 (a Zig probe of `Page.layout` at the pin;
 1,382,748,161 was the port's value before N88). Not yet re-run on Linux aarch64, so the state stays OPEN
 until a VM run confirms it.
+
+Update (task R13-L3): confirmed on Linux aarch64. The R13-L2 review ran the port on `rvm` at `r13-l2`
+`0e805945` (which `r13-l3`'s `2e5b52ce` cherry-picks onto `parity-closure`; review-R13L2 §2):
+- `cargo test -p rustty-vt --features oniguruma --lib` passes, 3,089 passed and 0 failed, the boundary
+  test included;
+- the test's search finds 1,382,759,425, with a layout of exactly 2^32 and `PAGE_SIZE_MIN` 4,096. That
+  is the reference's Linux value: a Zig probe of `Page.layout` at the pin, cross-built for
+  aarch64-linux and run on `rvm`, gives 1,382,759,425 (2^32) against 1,382,759,424 (2^32 − 4,096);
+- the mutation `> MAX_PAGE_SIZE as u64` → `> MAX_PAGE_SIZE as u64 + 1` in `check_native_page_size`
+  turns the test RED on Linux (`snapshot/page.rs:2137`: `Err(InvalidDimensions)` against `Ok(Capacity {
+  … grapheme_bytes: 1382759425 … })`).
 
 ## N91 — on wasm32 the port's hyperlink set item was 32 bytes against the reference's 28
 
@@ -2949,6 +2960,16 @@ side-by-side shape restored turns the host build red (the tag-offset assert) and
 (the size assert, the hyperlink item assert and `ItemStride::SIZE`). `check_cross_targets.sh`: GREEN,
 wasm32-unknown-unknown and wasm32-wasip1 built (the Windows, FreeBSD and Android legs skip on this host
 for want of a toolchain, as before); `rustty-wasm` and `rustty-web-canvas` build for wasm32.
+
+The model alone did not pin the REFERENCE side on wasm32: it retypes the shadows' fields by hand, so a
+shadow field changed to a wrong 32-bit type passed it (the R13-L2 review: `RefShadowSlice.len` as `u64`
+kept both the host tests and the wasm32 build green, with the wasm32 hyperlink item silently 32/8). Task
+R13-L3 added `#[cfg(target_pointer_width = "32")]` `const` asserts pinning the shadows to the golden's
+`wasm32-wasi` lines: `RefShadowSlice` 8/4, `RefShadowPageEntryId` 12/4, the hyperlink `RefShadowItem`
+and `REF_ITEM_SIZE/ALIGN` 28/4 (`hyperlink.rs`), and `RefShadowColor` 8/4, `RefShadowStyle` 28/4, the
+style `RefShadowItem` and `REF_ITEM_SIZE/ALIGN` 36/4 (`style.rs`). Negative control: `len: u64` makes
+`cargo build -p rustty-vt-c --target wasm32-unknown-unknown --release` fail (E0080 on the slice
+assert). G-REFGEOM itself now follows the oracle-gate rules and runs in ci.sh (see `.port/tools/CI.md`).
 
 **state**: CLOSED by task R13-L2.
 
