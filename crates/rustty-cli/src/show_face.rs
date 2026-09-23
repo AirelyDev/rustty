@@ -735,11 +735,41 @@ fn font_shared_grid_set_derived_config(config: &Config) -> font::shared_grid_set
         adjust_box_thickness: config.adjust_box_thickness,
         adjust_icon_height: config.adjust_icon_height,
         // .@"freetype-load-flags" = if (FreetypeLoadFlags != void) config.@"freetype-load-flags" else {},
-        //   On macOS the shaper's `FreetypeLoadFlags` is `()` (the reference `void`
-        //   arm — exact); the config value flows on freetype targets when that DI
-        //   lands with the Linux backend.
-        freetype_load_flags: rustty_font_shaper::face::FREETYPE_LOAD_FLAGS_DEFAULT,
+        //
+        // CORRECTION (parity S70-F5, task T-C): this set the default on every
+        // target, under the note "On macOS the shaper's `FreetypeLoadFlags` is
+        // `()` (the reference `void` arm — exact); the config value flows on
+        // freetype targets when that DI lands with the Linux backend". That DI
+        // had landed (`rustty_core::surface::freetype_load_flags_from_config`,
+        // used by rustty-core's copy of this bridge); `derived_freetype_load_flags`
+        // below now selects per target as rustty-core's does.
+        freetype_load_flags: derived_freetype_load_flags(&config.freetype_load_flags),
     }
+}
+
+/// `if (font.face.FreetypeLoadFlags != void) config.@"freetype-load-flags" else {}`.
+/// macOS's backend is `coretext`, whose `FreetypeLoadFlags` is `void` (`()`).
+#[cfg(target_os = "macos")]
+fn derived_freetype_load_flags(
+    _c: &rustty_config::value_types::FreetypeLoadFlags,
+) -> rustty_font_shaper::face::FreetypeLoadFlags {
+}
+
+/// Linux/BSD's default backend is `fontconfig_freetype`, so the configured
+/// flags flow through.
+#[cfg(not(any(target_os = "macos", target_arch = "wasm32")))]
+fn derived_freetype_load_flags(
+    c: &rustty_config::value_types::FreetypeLoadFlags,
+) -> rustty_font_shaper::face::FreetypeLoadFlags {
+    rustty_core::surface::freetype_load_flags_from_config(c)
+}
+
+/// The wasm `web_canvas` backend has no FreeType either.
+#[cfg(target_arch = "wasm32")]
+fn derived_freetype_load_flags(
+    _c: &rustty_config::value_types::FreetypeLoadFlags,
+) -> rustty_font_shaper::face::FreetypeLoadFlags {
+    rustty_font_shaper::face::FREETYPE_LOAD_FLAGS_DEFAULT
 }
 
 #[cfg(test)]
@@ -754,6 +784,38 @@ mod tests {
         }
     }
     impl rustty_args::diagnostics::LocationProvider for VecArgs {}
+
+    // parity S70-F5: on a FreeType target `DerivedConfig.init` copies
+    // `config.@"freetype-load-flags"`; every flag is flipped from its default so
+    // a dropped copy cannot pass. LINUX-ONLY (macOS's type is `void`).
+    #[cfg(not(any(target_os = "macos", target_arch = "wasm32")))]
+    #[test]
+    fn derived_config_carries_the_configured_freetype_load_flags() {
+        let mut config = Config::default_config();
+        let d = config.freetype_load_flags;
+        config.freetype_load_flags.hinting = !d.hinting;
+        config.freetype_load_flags.force_autohint = !d.force_autohint;
+        config.freetype_load_flags.monochrome = !d.monochrome;
+        config.freetype_load_flags.autohint = !d.autohint;
+        config.freetype_load_flags.light = !d.light;
+        let got = font_shared_grid_set_derived_config(&config).freetype_load_flags;
+        assert_eq!(
+            (
+                !d.hinting,
+                !d.force_autohint,
+                !d.monochrome,
+                !d.autohint,
+                !d.light
+            ),
+            (
+                got.hinting,
+                got.force_autohint,
+                got.monochrome,
+                got.autohint,
+                got.light
+            )
+        );
+    }
 
     // parity S67-F1: `formatValues(Options, "style", ...)` appends the
     // `font.Style` names; `presentation` (`?font.Presentation`, `.optional`)
