@@ -3506,23 +3506,20 @@ pub unsafe fn scroll_viewport(terminal_: Terminal, behavior: ScrollViewport) {
     let t: *mut ZigTerminal = unsafe { (*terminal_).terminal };
     // D11 (P3-W6 T2): the narrowing point for `behavior.tag`. Exactly the shape
     // `compress` uses for its `mode_` (`:960`): an explicit `match` on the
-    // incoming C integer, the sound analog of `std.meta.intToEnum`. The
-    // reference switches directly on the typed tag, so its safety-checked
-    // builds (Debug/ReleaseSafe) panic "switch on corrupt value" on an
-    // undeclared tag; the `debug_assert!` below mirrors that trap in debug
-    // builds (W35-B07). Release builds keep the defined early return — the
-    // same path as a null terminal handle above — which is strictly safer
-    // than the reference's ReleaseFast, where the same input is UB.
-    let zig_behavior = match ScrollViewportTag::from_c_int(behavior.tag) {
-        Some(t) => t,
-        None => {
-            debug_assert!(
-                false,
-                "corrupt RusttyTerminalScrollViewportTag: {}",
-                behavior.tag
-            );
-            return;
-        }
+    // incoming C integer, the sound analog of `std.meta.intToEnum`.
+    //
+    // PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD113. The
+    // reference switches directly on the typed tag (`c/terminal.zig:1508`), so
+    // an undeclared tag from the C caller panics "switch on corrupt value" in
+    // Debug/ReleaseSafe and takes an arbitrary arm in ReleaseFast (measured,
+    // Zig 0.16.0). The tag is input from outside the library, so it is not an
+    // invariant (R7) and must not trap here either: this port used to carry a
+    // `debug_assert!` mirroring the trap, which aborted across `extern "C"` in
+    // debug and `release-safe` builds (task R13-D, inventory P4). Every build
+    // now takes the defined early return — the same path as a null terminal
+    // handle above, since the function returns nothing to report an error in.
+    let Some(zig_behavior) = ScrollViewportTag::from_c_int(behavior.tag) else {
+        return;
     };
     let zig_behavior = match zig_behavior {
         ScrollViewportTag::Top => ZigScrollViewport::Top,
@@ -5272,12 +5269,13 @@ mod tests {
         };
     }
 
-    // PROVING TEST (W35-B07): no reference analog. The reference switches
-    // directly on the typed tag, so its safety-checked builds panic "switch on
-    // corrupt value" on an undeclared tag while ReleaseFast is UB. The port's
-    // parity: debug builds trap via `debug_assert!`; release builds take the
-    // defined silent return. `catch_unwind` (not `#[should_panic]`) so the
-    // terminal is freed on every path and Miri sweeps stay leak-free.
+    // PROVING TEST (W35-B07; inverted by task R13-D, UD113): no reference
+    // analog. The reference switches directly on the typed tag, so its
+    // safety-checked builds panic "switch on corrupt value" on an undeclared
+    // tag while ReleaseFast takes an arbitrary arm. Under R13 the port takes
+    // the defined silent return in EVERY build, debug included (this test used
+    // to require a debug-build panic). `catch_unwind` (not `#[should_panic]`)
+    // so a regression still frees the terminal and fails on the assertion.
     #[test]
     fn scroll_viewport_invalid_tag() {
         with_test_allocator(|alloc| {
@@ -5300,25 +5298,38 @@ mod tests {
             };
             assert_eq!(b"hello", plain_string(t).as_slice());
 
-            // An undeclared tag: debug builds panic (parity with the
-            // reference's safety-checked "switch on corrupt value"), release
-            // builds return silently with the viewport untouched.
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+            // Undeclared tags, including negative ones and the first value past
+            // `row`: every build returns silently with the viewport untouched.
+            for tag in [c_int::MAX, -1, ScrollViewportTag::Row as c_int + 1] {
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+                    scroll_viewport(
+                        t,
+                        ScrollViewportC {
+                            tag,
+                            value: ScrollViewportCValue { _padding: [0; 2] },
+                        },
+                    )
+                }));
+                assert!(
+                    result.is_ok(),
+                    "an undeclared tag ({tag}) from the C caller must not panic (R13, UD113)"
+                );
+                // The viewport is untouched: "hello" still visible.
+                assert_eq!(b"hello", plain_string(t).as_slice());
+            }
+
+            // The positive control after the invalid calls: a declared tag
+            // still acts (Bottom scrolls "hello" back out of view).
+            unsafe {
                 scroll_viewport(
                     t,
                     ScrollViewportC {
-                        tag: c_int::MAX,
+                        tag: ScrollViewportTag::Bottom as c_int,
                         value: ScrollViewportCValue { _padding: [0; 2] },
                     },
                 )
-            }));
-            if cfg!(debug_assertions) {
-                assert!(result.is_err(), "undeclared tag must trap in debug builds");
-            } else {
-                assert!(result.is_ok());
-            }
-            // Either way the viewport is untouched: "hello" still visible.
-            assert_eq!(b"hello", plain_string(t).as_slice());
+            };
+            assert_eq!(b"", plain_string(t).as_slice());
 
             unsafe { free(t) };
         });
