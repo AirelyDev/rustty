@@ -215,7 +215,7 @@ impl App {
         let mut boxed = Box::new(Globals::new(conn, qh, registry, app_id));
 
         // PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD112.
-        // `Globals.zig:75-94` `init` creates `Globals` and its registry proxy,
+        // `Globals.zig:75-96` `init` creates `Globals` and its registry proxy,
         // then returns `error.RoundtripFailed` with no `errdefer`, and the caller
         // (`class/application.zig`) continues on the noop winproto, so both leak.
         // Here `boxed` and the event queue are dropped by the `?` below. (Whether

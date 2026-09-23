@@ -2676,7 +2676,7 @@ it. Negative controls: the pre-R13-D order, and the io join alone removed, each 
 The export took `pts: f32`, so a JS caller could pass a fractional size the reference cannot receive.
 It now takes `u16` and widens it into `DesiredSize.points`, as the reference does. Consumers found: the
 JS glue in `example/wasm-web-canvas/index.html` (`32.0`), `.port/tools/web-canvas-instantiate.mjs`
-(three calls, `16.0`), and the symbol-retention table in `crates/rustty-web-canvas/src/lib.rs` (a
+(four calls, `:69`, `:194`, `:242`, `:254`, `16.0`), and the symbol-retention table in `crates/rustty-web-canvas/src/lib.rs` (a
 function-pointer cast, signature-agnostic). None depends on `f32`: each passes a whole number, which a
 wasm `i32` parameter receives unchanged. `web-canvas-instantiate.mjs` passes after the change
 (`ALL OK`, macOS, `wasm32-unknown-unknown` release). A `const` item pins the signature; negative
