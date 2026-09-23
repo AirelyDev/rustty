@@ -187,6 +187,14 @@ logs `@tagName(posix.errno(-1))` — the errno of the *literal* `-1` rather than
 the real `errno` from the failed call. Cosmetic (log text only), but wrong.
 `crates/rustty-os/src/pty.rs` logs the real errno. **Do not reproduce the bug.**
 
+> **REFUTED (annotated 2026-09-22, task R13-D; the text above is kept as written).** There is no
+> bug to reproduce. With libc linked, Zig 0.16's `std.posix.errno` is `std.c.errno`, which returns
+> `@enumFromInt(_errno().*)` when its argument is `-1` (`std/c.zig:75-78`): `errno(-1)` is the idiom for
+> "read this thread's errno", and Ghostty always links libc (`src/build/SharedDeps.zig:470`). The two
+> sites (`src/pty.zig:158` and `src/termio/Exec.zig:1759`, not two in `pty.zig`) therefore log the real
+> errno, and the port's rendering is equivalent, not a correction. Refuted by the R13 record drafts
+> (`r13-record-drafts.md`, M68); inventory M68 is DROP.
+
 ---
 
 # Rows that are NOT non-ports (recorded so the boundary is unambiguous)
