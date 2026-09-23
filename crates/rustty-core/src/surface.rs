@@ -310,8 +310,12 @@ pub(crate) fn initial_size_px(
     Some((final_width, final_height))
 }
 
-/// `@as(u32, @intFromFloat(@ceil(v)))`, which traps on NaN or a value outside
-/// `u32` in safety-checked builds; `None` there instead (R13, UD59).
+/// `@as(u32, @intFromFloat(@ceil(v)))`, which traps on an infinite value or
+/// one outside `u32` in safety-checked builds; `None` there instead (R13,
+/// UD59). A NaN does NOT trap there: it converts to `0` (measured on arm64 and
+/// x86_64, every build mode, task R13-P2). `None` for it too is the port's
+/// choice — `0 + padding` is not a window size — and reaching it takes a NaN
+/// content scale from the embedder.
 fn u32_from_ceil(v: f32) -> Option<u32> {
     let c = v.ceil();
     // NaN is outside every range, so `contains` rejects it too.
@@ -14451,7 +14455,10 @@ fn clipboardTextContent<'a>(contents: &[terminal::clipboard::Content<'a>]) -> Op
 ///
 /// RUST CONTRACT (differs from the Zig builtin it replaces): Zig
 /// `@intFromFloat` is safety-checked — Debug/ReleaseSafe TRAP when the value
-/// has no in-range integer representation (including NaN); ReleaseFast is UB.
+/// is infinite or outside the destination; ReleaseFast is UB. A NaN is NOT
+/// caught by the check: it converts, in every mode, to a target-dependent
+/// value — `0` on arm64, `isize::MIN` on x86_64 (measured with Zig 0.16.0,
+/// task R13-P2; the x86_64 build under Rosetta 2).
 ///
 /// PORT NOTE: reference defect (R13), `UPSTREAM-DEFECTS.md` UD62. The trap is
 /// reachable from ordinary input, so it is NOT ported: `keybind =
@@ -14460,15 +14467,25 @@ fn clipboardTextContent<'a>(contents: &[terminal::clipboard::Content<'a>]) -> Op
 /// with Zig 0.16.0 (`r13p-reference-probe.zig`): Debug and ReleaseSafe panic
 /// "integer part of floating point value out of bounds", ReleaseFast yields
 /// `9223372036854775807`; `std.fmt.parseFloat` accepts `1e30`, `inf` and `nan`,
-/// so the config can carry every one of them.
+/// so the config can carry each of them (the first two trap; `nan` does not —
+/// see above).
 ///
-/// This returns `None` where the reference traps, and each caller takes the
-/// handling its own value means — see the call sites.
+/// This returns `None` where the reference traps, and ALSO for NaN, which has
+/// no `isize`; each caller takes the handling its own value means — see the
+/// call sites. For NaN those arms match the reference on arm64 and are safer
+/// than it on x86_64: `scroll_page_fractional` saturates NaN to `0` (arm64's
+/// value; x86_64's `isize::MIN` would scroll toward the top), and the gesture
+/// casts scroll nothing (the delta-0 result arm64 produces; x86_64's
+/// `isize::MIN` would drive the per-row loops). Where a gesture's
+/// `assert(@abs(amount) >= 1)` precedes the cast, a NaN trips that assert
+/// first in a checked build, in both trees.
 #[inline]
 fn isize_from_float(v: f64) -> Option<isize> {
     // `@intFromFloat` converts the INTEGER PART (truncation toward zero) and
     // safety-checks that it fits the destination. `-(isize::MIN as f64)` is
-    // exactly 2^63; NaN/inf fail both comparisons, as they do in the reference.
+    // exactly 2^63; inf fails a comparison, as it fails the reference's check.
+    // NaN fails both too, although the reference's check lets it through (see
+    // the doc comment).
     let t = v.trunc();
     if t >= isize::MIN as f64 && t < -(isize::MIN as f64) {
         Some(t as isize)
@@ -15337,12 +15354,12 @@ mod isize_from_float_tests {
         assert_eq!(isize_from_float(-1.9), Some(-1));
     }
 
-    /// The values the reference traps on (measured in Debug and ReleaseSafe)
-    /// are exactly the values that have no `isize`, and the gesture call sites
-    /// scroll nothing for them instead of crashing or looping to `isize::MAX`.
+    /// The values the reference traps on (measured in Debug and ReleaseSafe:
+    /// infinities and finite values outside `isize`) have no `isize`, and the
+    /// gesture call sites scroll nothing for them instead of crashing or
+    /// looping to `isize::MAX` (`scroll_gesture_cast_tests` drives those).
     #[test]
     fn isize_from_float_reports_the_values_the_reference_traps_on() {
-        assert_eq!(isize_from_float(f64::NAN), None);
         assert_eq!(isize_from_float(f64::INFINITY), None);
         assert_eq!(isize_from_float(f64::NEG_INFINITY), None);
         assert_eq!(isize_from_float(1e300), None);
@@ -15350,6 +15367,18 @@ mod isize_from_float_tests {
         // The boundary: 2^63 has no `isize`, the largest f64 below it does.
         assert_eq!(isize_from_float(-(isize::MIN as f64)), None);
         assert_eq!(isize_from_float(isize::MIN as f64), Some(isize::MIN));
+    }
+
+    /// NaN is NOT a value the reference traps on: the safety check lets it
+    /// through, and the result is target-dependent — `0` on arm64 and
+    /// `isize::MIN` on x86_64, in every build mode (measured, task R13-P2).
+    /// It has no `isize` either, so it is reported like the trapping values and
+    /// each caller's arm decides what it means (task R13-P2 re-checked them:
+    /// see `isize_from_float`).
+    #[test]
+    fn isize_from_float_reports_nan_whose_reference_value_is_target_dependent() {
+        assert_eq!(isize_from_float(f64::NAN), None);
+        assert_eq!(isize_from_float(-f64::NAN), None);
     }
 
     /// `scroll_page_fractional`'s arm: `keybind = …=scroll_page_fractional:1e30`

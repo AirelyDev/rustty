@@ -1809,12 +1809,14 @@ mod tests {
     // test "SelectionGesture drag clamps unrepresentable positions"
     //
     // PORT NOTE (08e376f23 pt.1 — VERIFIED NON-ISSUE in Rust): upstream adds
-    // `pixelFromFloat` because Zig's `@intFromFloat` panics on NaN and on
-    // out-of-range values. Rust's `f64 as u32` is saturating and NaN-safe by
-    // language definition (RFC 2884), and `f64::max(0.0, NaN) == 0.0`, so the
-    // existing `f64::max(0.0, ..) as u32` sites already have `pixelFromFloat`'s
-    // semantics. This test is a documentation-value regression lock, not a bug
-    // fix.
+    // `pixelFromFloat` because Zig's `@intFromFloat` panics on out-of-range
+    // values (and infinity). A NaN does NOT panic there: it converts to an
+    // unspecified value (0 for `u32`, measured on arm64 and x86_64, task
+    // R13-P2), which `pixelFromFloat` pins to 0. Rust's `f64 as u32` is
+    // saturating and NaN-safe by language definition (RFC 2884), and
+    // `f64::max(0.0, NaN) == 0.0`, so the existing `f64::max(0.0, ..) as u32`
+    // sites already have `pixelFromFloat`'s semantics. This test is a
+    // documentation-value regression lock, not a bug fix.
     #[test]
     fn drag_clamps_unrepresentable_positions() {
         let mut t = Terminal::init(Allocator, opts(5, 5)).unwrap();
