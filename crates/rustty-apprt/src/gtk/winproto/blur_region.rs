@@ -7,7 +7,7 @@
 //! (`BlurRegion.zig:36-40`).
 //!
 //! Consumed by the Wayland winproto arm's `Window::sync_blur`
-//! ([`super::wayland::Window`]); gated `#[cfg(feature = "wayland")]` alongside it.
+//! ([`super::wayland::Window`]); gated `#[cfg(rustty_gtk_wayland)]` alongside it.
 //!
 //! # Divergence from the reference
 //!

@@ -24,11 +24,11 @@ pub mod noop;
 
 /// The blur-region helper ([`BlurRegion`](blur_region::BlurRegion)) is consumed
 /// by the Wayland AND X11 arms, so it is gated to either.
-#[cfg(any(feature = "wayland", feature = "x11"))]
+#[cfg(any(rustty_gtk_wayland, rustty_gtk_x11))]
 mod blur_region;
-#[cfg(feature = "wayland")]
+#[cfg(rustty_gtk_wayland)]
 pub mod wayland;
-#[cfg(feature = "x11")]
+#[cfg(rustty_gtk_x11)]
 pub mod x11;
 
 use rustty_config::Config as CoreConfig;
@@ -47,11 +47,11 @@ use rustty_config::Config as CoreConfig;
 pub enum WinprotoError {
     /// A Wayland-backend failure (display probe / registry roundtrip /
     /// unsupported quick terminal). See [`wayland::Error`].
-    #[cfg(feature = "wayland")]
+    #[cfg(rustty_gtk_wayland)]
     Wayland(wayland::Error),
     /// An X11-backend failure (surface probe / libX11 load / property request).
     /// See [`x11::Error`].
-    #[cfg(feature = "x11")]
+    #[cfg(rustty_gtk_x11)]
     X11(x11::Error),
 }
 
@@ -62,11 +62,11 @@ impl core::fmt::Display for WinprotoError {
         // protocol feature the enum is uninhabited: the `_` arm (present only then)
         // discharges the match via the uninhabited `match *self {}`.
         match self {
-            #[cfg(feature = "wayland")]
+            #[cfg(rustty_gtk_wayland)]
             WinprotoError::Wayland(e) => write!(f, "wayland winproto error: {e}"),
-            #[cfg(feature = "x11")]
+            #[cfg(rustty_gtk_x11)]
             WinprotoError::X11(e) => write!(f, "x11 winproto error: {e}"),
-            #[cfg(not(any(feature = "wayland", feature = "x11")))]
+            #[cfg(not(any(rustty_gtk_wayland, rustty_gtk_x11)))]
             _ => match *self {},
         }
     }
@@ -81,10 +81,10 @@ pub enum Protocol {
     /// `.none` (`winproto.zig:17`) — the no-op backend ([`noop`]).
     None,
     /// `.wayland` (`winproto.zig:18`) — the Wayland backend (L5.4).
-    #[cfg(feature = "wayland")]
+    #[cfg(rustty_gtk_wayland)]
     Wayland,
     /// `.x11` (`winproto.zig:19`) — the X11 backend (L6).
-    #[cfg(feature = "x11")]
+    #[cfg(rustty_gtk_x11)]
     X11,
 }
 
@@ -96,10 +96,10 @@ pub enum App {
     /// `none: noop.App` (`winproto.zig:25`).
     None(noop::App),
     /// `wayland: wayland.App` (`winproto.zig:26`).
-    #[cfg(feature = "wayland")]
+    #[cfg(rustty_gtk_wayland)]
     Wayland(wayland::App),
     /// `x11: x11.App` (`winproto.zig:27`).
-    #[cfg(feature = "x11")]
+    #[cfg(rustty_gtk_x11)]
     X11(x11::App),
 }
 
@@ -130,11 +130,11 @@ impl App {
             return Ok(App::None(v));
         }
 
-        #[cfg(feature = "wayland")]
+        #[cfg(rustty_gtk_wayland)]
         if let Some(v) = wayland::App::init(gdk_display, app_id, config)? {
             return Ok(App::Wayland(v));
         }
-        #[cfg(feature = "x11")]
+        #[cfg(rustty_gtk_x11)]
         if let Some(v) = x11::App::init(gdk_display, app_id, config)? {
             return Ok(App::X11(v));
         }
@@ -150,9 +150,9 @@ impl App {
     pub fn deinit(&mut self) {
         match self {
             App::None(v) => v.deinit(),
-            #[cfg(feature = "wayland")]
+            #[cfg(rustty_gtk_wayland)]
             App::Wayland(v) => v.deinit(),
-            #[cfg(feature = "x11")]
+            #[cfg(rustty_gtk_x11)]
             App::X11(v) => v.deinit(),
         }
     }
@@ -164,9 +164,9 @@ impl App {
     pub fn protocol(&self) -> Protocol {
         match self {
             App::None(_) => Protocol::None,
-            #[cfg(feature = "wayland")]
+            #[cfg(rustty_gtk_wayland)]
             App::Wayland(_) => Protocol::Wayland,
-            #[cfg(feature = "x11")]
+            #[cfg(rustty_gtk_x11)]
             App::X11(_) => Protocol::X11,
         }
     }
@@ -174,7 +174,7 @@ impl App {
     /// Test-observability seam (rustty-specific): the X11 arm's XKB base event
     /// code, or `None` on any other arm. Lets the live X11 KAT prove
     /// `XkbQueryExtension` ran without exposing the arm's internals.
-    #[cfg(feature = "x11")]
+    #[cfg(rustty_gtk_x11)]
     #[doc(hidden)]
     #[must_use]
     pub fn x11_xkb_base_event_code(&self) -> Option<std::os::raw::c_int> {
@@ -195,9 +195,9 @@ impl App {
     ) -> rustty_vt::input::key_mods::Mods {
         let arm = match self {
             App::None(v) => v.event_mods(device, gtk_mods),
-            #[cfg(feature = "wayland")]
+            #[cfg(rustty_gtk_wayland)]
             App::Wayland(v) => v.event_mods(device, gtk_mods),
-            #[cfg(feature = "x11")]
+            #[cfg(rustty_gtk_x11)]
             App::X11(v) => v.event_mods(device, gtk_mods),
         };
         arm.unwrap_or_else(|| crate::gtk::key::translate_mods(gtk_mods))
@@ -209,9 +209,9 @@ impl App {
     pub fn supports_quick_terminal(&self) -> bool {
         match self {
             App::None(v) => v.supports_quick_terminal(),
-            #[cfg(feature = "wayland")]
+            #[cfg(rustty_gtk_wayland)]
             App::Wayland(v) => v.supports_quick_terminal(),
-            #[cfg(feature = "x11")]
+            #[cfg(rustty_gtk_x11)]
             App::X11(v) => v.supports_quick_terminal(),
         }
     }
@@ -232,9 +232,9 @@ impl App {
     ) -> bool {
         match self {
             App::None(v) => v.bind_global_shortcuts(shortcuts, config),
-            #[cfg(feature = "wayland")]
+            #[cfg(rustty_gtk_wayland)]
             App::Wayland(v) => v.bind_global_shortcuts(shortcuts, config),
-            #[cfg(feature = "x11")]
+            #[cfg(rustty_gtk_x11)]
             App::X11(v) => v.bind_global_shortcuts(shortcuts, config),
         }
     }
@@ -244,9 +244,9 @@ impl App {
     pub fn clear_global_shortcuts(&mut self) {
         match self {
             App::None(v) => v.clear_global_shortcuts(),
-            #[cfg(feature = "wayland")]
+            #[cfg(rustty_gtk_wayland)]
             App::Wayland(v) => v.clear_global_shortcuts(),
-            #[cfg(feature = "x11")]
+            #[cfg(rustty_gtk_x11)]
             App::X11(v) => v.clear_global_shortcuts(),
         }
     }
@@ -263,9 +263,9 @@ impl App {
     ) -> Result<(), WinprotoError> {
         match self {
             App::None(v) => v.init_quick_terminal(window),
-            #[cfg(feature = "wayland")]
+            #[cfg(rustty_gtk_wayland)]
             App::Wayland(v) => v.init_quick_terminal(window),
-            #[cfg(feature = "x11")]
+            #[cfg(rustty_gtk_x11)]
             App::X11(v) => v.init_quick_terminal(window),
         }
     }
@@ -300,10 +300,10 @@ pub enum Window {
     /// is otherwise invisible: the dispatch arms below call through the `Box` by
     /// auto-deref, so the shape of the port's dispatch matches the reference's
     /// `inline for` exactly as before.
-    #[cfg(feature = "wayland")]
+    #[cfg(rustty_gtk_wayland)]
     Wayland(Box<wayland::Window>),
     /// `x11: x11.Window` (`winproto.zig:92`).
-    #[cfg(feature = "x11")]
+    #[cfg(rustty_gtk_x11)]
     X11(x11::Window),
 }
 
@@ -331,9 +331,9 @@ impl Window {
     ) -> Result<Window, WinprotoError> {
         match app {
             App::None(a) => Ok(Window::None(noop::Window::init(a, window)?)),
-            #[cfg(feature = "wayland")]
+            #[cfg(rustty_gtk_wayland)]
             App::Wayland(a) => Ok(Window::Wayland(Box::new(wayland::Window::init(a, window)?))),
-            #[cfg(feature = "x11")]
+            #[cfg(rustty_gtk_x11)]
             App::X11(a) => Ok(Window::X11(x11::Window::init(a, window)?)),
         }
     }
@@ -342,9 +342,9 @@ impl Window {
     pub fn deinit(&mut self) {
         match self {
             Window::None(v) => v.deinit(),
-            #[cfg(feature = "wayland")]
+            #[cfg(rustty_gtk_wayland)]
             Window::Wayland(v) => v.deinit(),
-            #[cfg(feature = "x11")]
+            #[cfg(rustty_gtk_x11)]
             Window::X11(v) => v.deinit(),
         }
     }
@@ -355,9 +355,9 @@ impl Window {
     pub fn client_side_decoration_enabled(&self) -> bool {
         match self {
             Window::None(v) => v.client_side_decoration_enabled(),
-            #[cfg(feature = "wayland")]
+            #[cfg(rustty_gtk_wayland)]
             Window::Wayland(v) => v.client_side_decoration_enabled(),
-            #[cfg(feature = "x11")]
+            #[cfg(rustty_gtk_x11)]
             Window::X11(v) => v.client_side_decoration_enabled(),
         }
     }
@@ -369,9 +369,9 @@ impl Window {
     pub fn resize_event(&mut self) -> Result<(), WinprotoError> {
         match self {
             Window::None(v) => v.resize_event(),
-            #[cfg(feature = "wayland")]
+            #[cfg(rustty_gtk_wayland)]
             Window::Wayland(v) => v.resize_event(),
-            #[cfg(feature = "x11")]
+            #[cfg(rustty_gtk_x11)]
             Window::X11(v) => v.resize_event(),
         }
     }
@@ -381,9 +381,9 @@ impl Window {
     pub fn sync_appearance(&mut self) -> Result<(), WinprotoError> {
         match self {
             Window::None(v) => v.sync_appearance(),
-            #[cfg(feature = "wayland")]
+            #[cfg(rustty_gtk_wayland)]
             Window::Wayland(v) => v.sync_appearance(),
-            #[cfg(feature = "x11")]
+            #[cfg(rustty_gtk_x11)]
             Window::X11(v) => v.sync_appearance(),
         }
     }
@@ -397,9 +397,9 @@ impl Window {
     ) -> Result<(), WinprotoError> {
         match self {
             Window::None(v) => v.add_subprocess_env(env),
-            #[cfg(feature = "wayland")]
+            #[cfg(rustty_gtk_wayland)]
             Window::Wayland(v) => v.add_subprocess_env(env),
-            #[cfg(feature = "x11")]
+            #[cfg(rustty_gtk_x11)]
             Window::X11(v) => v.add_subprocess_env(env),
         }
     }
@@ -409,9 +409,9 @@ impl Window {
     pub fn set_urgent(&mut self, urgent: bool) -> Result<(), WinprotoError> {
         match self {
             Window::None(v) => v.set_urgent(urgent),
-            #[cfg(feature = "wayland")]
+            #[cfg(rustty_gtk_wayland)]
             Window::Wayland(v) => v.set_urgent(urgent),
-            #[cfg(feature = "x11")]
+            #[cfg(rustty_gtk_x11)]
             Window::X11(v) => v.set_urgent(urgent),
         }
     }

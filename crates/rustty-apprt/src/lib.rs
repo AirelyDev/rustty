@@ -56,6 +56,17 @@ pub mod embedded;
 pub mod gtk;
 pub mod none;
 
+/// Whether the GTK winproto X11 / Wayland arms are built into this crate:
+/// the reference's `build_options.x11` / `build_options.wayland`, whose
+/// defaults come from the system GTK4's targets (`src/build/gtk.zig`,
+/// S65-F6). Decided by `build.rs`; see `gtk_targets.rs`.
+pub const GTK_X11: bool = cfg!(rustty_gtk_x11);
+/// See [`GTK_X11`].
+pub const GTK_WAYLAND: bool = cfg!(rustty_gtk_wayland);
+
+#[cfg(test)]
+mod gtk_targets;
+
 // TEST-ONLY: the capture `log::Log` the restored `LOG`-row sites are asserted
 // against (stage 14d-3). Not part of any published surface.
 #[cfg(test)]

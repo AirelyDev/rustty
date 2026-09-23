@@ -18,10 +18,11 @@
 //! for whoever reads this next: the block compiles ONLY under
 //! `--features gtk` on Linux/FreeBSD, so the macOS lane can never exercise it —
 //! [`write_gtk_block`] exists precisely so the FORMAT is still asserted on every
-//! host; and `libX11`/`libwayland` read `cfg!(feature = ...)` IN THIS CRATE, so
-//! `rustty-cli` needs its own `x11`/`wayland` features (it has them) and
-//! `crates/rustty` must forward them (it does). If you add a build option the
-//! block prints, it has to reach this crate the same way.
+//! host; and `libX11`/`libwayland` read `rustty_apprt::GTK_X11` /
+//! `GTK_WAYLAND`, the arms the apprt actually built (S65-F6). CORRECTION
+//! (2026-09-23): they used to read `cfg!(feature = ...)` in this crate, which
+//! reported the requested features rather than the arms the GTK4 target probe
+//! lets through.
 
 // const std = @import("std");
 // const build_options = @import("build_options");
@@ -371,8 +372,11 @@ fn write_version<W: std::io::Write>(stdout: &mut W, tty: bool) -> Result<u8, Err
                 gtk_runtime: gtk_version::runtime_version(),
                 adw_build: adw_version::BASELINE,
                 adw_runtime: adw_version::runtime_version(),
-                x11: cfg!(feature = "x11"),
-                wayland: cfg!(feature = "wayland"),
+                // The arms actually built into the apprt (S65-F6): the
+                // feature allows an arm, the GTK4 target probe or an explicit
+                // RUSTTY_GTK_* option decides it.
+                x11: rustty_apprt::GTK_X11,
+                wayland: rustty_apprt::GTK_WAYLAND,
             },
         )?;
     }

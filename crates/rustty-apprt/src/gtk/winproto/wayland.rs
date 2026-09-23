@@ -6,7 +6,7 @@
 //! protocol objects that drive CSD, background blur, quick-terminal slide, and
 //! `xdg_activation` urgency).
 //!
-//! Gated `#[cfg(feature = "wayland")]` at the [`super`] module; pulls the
+//! Gated `#[cfg(rustty_gtk_wayland)]` at the [`super`] module; pulls the
 //! `gdk4-wayland` / `wayland-client` / `wayland-backend` / `wayland-protocols` /
 //! `wayland-protocols-plasma` crates (Cargo `wayland` feature). On GNOME/mutter —
 //! the common target — only `wl_compositor` + `xdg_activation_v1` are advertised,

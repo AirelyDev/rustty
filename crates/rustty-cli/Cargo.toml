@@ -39,6 +39,9 @@ gtk = ["rustty-apprt/gtk"]
 # imply `gtk`, exactly as `crates/rustty/Cargo.toml` has it, and `crates/rustty`
 # forwards its own `x11`/`wayland` here so the shipped binary agrees with the
 # apprt it links. Added by task-18 with the GTK `+version` block (S70-F1).
+# CORRECTION (S65-F6, 2026-09-23): `version.rs` now prints
+# `rustty_apprt::GTK_X11` / `GTK_WAYLAND`, the arms the apprt actually built,
+# so these features only forward the request to rustty-apprt.
 wayland = ["gtk", "rustty-apprt/wayland"]
 x11 = ["gtk", "rustty-apprt/x11"]
 

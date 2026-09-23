@@ -182,6 +182,40 @@ const BLUEPRINT_HELP: &str = "\n\nWhen building from a source checkout, rustty r
 version 0.16 or newer of `blueprint-compiler` as a build-time dependency. Please install \
 it, ensure that it is available on your PATH, and then retry building rustty.";
 
+#[path = "src/gtk_targets.rs"]
+mod gtk_targets;
+
+/// `rustty_gtk_x11` / `rustty_gtk_wayland`: which winproto arms are built
+/// (S65-F6; see `src/gtk_targets.rs`). Probes the system GTK4 only for a
+/// native gtk build.
+fn gtk_winproto_cfgs(native_gtk: bool) {
+    println!("cargo::rustc-check-cfg=cfg(rustty_gtk_x11)");
+    println!("cargo::rustc-check-cfg=cfg(rustty_gtk_wayland)");
+    println!("cargo:rerun-if-env-changed=RUSTTY_GTK_X11");
+    println!("cargo:rerun-if-env-changed=RUSTTY_GTK_WAYLAND");
+    println!("cargo:rerun-if-env-changed=PKG_CONFIG_PATH");
+    if !native_gtk {
+        return;
+    }
+    let probed = gtk_targets::parse_targets(gtk_targets::probe().as_deref());
+    let x11 = gtk_targets::arm_enabled(
+        env::var_os("CARGO_FEATURE_X11").is_some(),
+        env::var("RUSTTY_GTK_X11").ok().as_deref(),
+        probed.x11,
+    );
+    let wayland = gtk_targets::arm_enabled(
+        env::var_os("CARGO_FEATURE_WAYLAND").is_some(),
+        env::var("RUSTTY_GTK_WAYLAND").ok().as_deref(),
+        probed.wayland,
+    );
+    if x11 {
+        println!("cargo::rustc-cfg=rustty_gtk_x11");
+    }
+    if wayland {
+        println!("cargo::rustc-cfg=rustty_gtk_wayland");
+    }
+}
+
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
 
@@ -210,6 +244,7 @@ fn main() {
         env::var("CARGO_CFG_TARGET_OS").as_deref(),
         Ok("linux") | Ok("freebsd")
     );
+    gtk_winproto_cfgs(gtk && gtk_target);
     if !(gtk && gtk_target) {
         return;
     }

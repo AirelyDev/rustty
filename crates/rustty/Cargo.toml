@@ -37,7 +37,13 @@ path = "src/main.rs"
 default = ["gtk", "wayland", "x11"]
 gtk = ["rustty-apprt/gtk", "rustty-cli/gtk", "dep:allocator-api2"]
 # Windowing-protocol arms of the GTK apprt's `winproto` union, passed through to
-# rustty-apprt. Both imply `gtk` and are DEFAULT-ON (F-007): ghostty derives its
+# rustty-apprt. Both imply `gtk` and are DEFAULT-ON (F-007). CORRECTION
+# (S65-F6, 2026-09-23): a feature now only ALLOWS its arm. rustty-apprt's
+# build.rs builds it when the system GTK4 has that target (`pkg-config
+# --variable=targets gtk4`, src/build/gtk.zig) or when RUSTTY_GTK_X11 /
+# RUSTTY_GTK_WAYLAND=true asks for it (=false turns it off), which is the
+# reference's `-Dx11=` / `-Dwayland=` with their probed defaults. The text below
+# predates that and describes the feature defaults only. ghostty derives its
 # gtk-wayland/gtk-x11 build defaults from `pkg-config --variable=targets gtk4`
 # (src/build/gtk.zig probing the distro GTK), which on a normal distro GTK
 # enables BOTH arms. Cargo has no declarative pkg-config autodetection, so
