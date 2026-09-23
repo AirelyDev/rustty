@@ -1196,13 +1196,28 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - proposed fix:    decode with `std.meta.intToEnum(Mouse.Button, …) catch return null_event` (consuming the sequence), or make `Mouse.Button` non-exhaustive; and use `std.math.sub(u8, full_input[i], 32) catch return null_event` in the X10 branch.
 - upstream status: not reported
 
+### UD73 — the renderer thread's timer and cancel callbacks hit `unreachable` on an error the event loop can return
+- kind:            crash (ReleaseFast: undefined behaviour)
+- upstream project: ghostty (the errors are libxev's documented sets; libxev maps io_uring's `-EALREADY` on a timer cancel to `Unexpected`)
+- severity:        low (Linux io_uring, kernel timing)
+- reference:       `src/renderer/Thread.zig:690-714` (`cursorCancelCallback`: `else => { log.warn("error in cursor cancel callback err={}", .{err}); unreachable; }` at `:707-710`); siblings `renderCallback` `else => unreachable` (`:559`), `animationTimerCallback` (`:621`), `cursorTimerCallback` `else => { log.warn("error in cursor timer callback err={}", …); unreachable; }` (`:664-667`); at 20abdb50a
+- defect:          the callbacks declare every error other than `Canceled` (and, for the cancel, `NotFound`) unreachable, but they are not guaranteed by construction: on Linux io_uring a timer cancel that races the timer firing completes with `-EALREADY`, which libxev maps to `Unexpected`, and the timer SQEs can complete with other errnos that also map to `Unexpected`. On kqueue the arms are dead (timers never reach a syscall; the cancel set is only `Canceled`).
+- ReleaseSafe:     panic "reached unreachable code" on the render thread (after the warning, for the two callbacks that have one). By reading.
+- ReleaseFast:     undefined behaviour.
+- reachability:    kernel timing on Linux io_uring: a cursor-blink reset (`reset_cursor_blink`, e.g. on every keypress) cancelling the blink timer as it fires. The `-EALREADY` path is from reading, NOT verified on a kernel.
+- port handling:   `crates/rustty-core/src/renderer_seam.rs`. Done by task R13-C: `renderCallback` and `animationTimerCallback` take the `Canceled` arm (disarm) for any error, with no diagnostic because the reference has none; `cursorTimerCallback` keeps the reference's warning and then disarms. NOT DONE (Linux only, VM down): `cursorCancelCallback`'s Linux arm still warns and then `unreachable!()`s, and `cursor_cancel_callback_traps_on_an_impossible_error` still pins that; the fix is to drop the `unreachable!()` after the warning (the callback already returns `.disarm`) and invert the test to assert the warning and the disarm.
+- parity row(s):   LEDGER S114-F2 (REOPENED by task R13-C; closed by 14d-1 on the ported `unreachable`). Inventory M16 (UD candidate C3, records F5, sessions D3).
+- test:            `timer_callbacks_disarm_on_an_unexpected_error` (rustty-core; runs on every target) injects `TimerRunError::Unexpected` into the three timer callbacks with a null thread — the kernel error cannot be forced, and the null thread proves the error arm returns before the thread is touched — and asserts `.disarm` from each, silence from the first two and exactly the reference's cursor-timer warning from the third. Negative controls, macOS 2026-09-22, one at a time: `unreachable!()` restored in each callback panics "entered unreachable code" at that callback's line. Restored. NOT RUN: the cursor-cancel half, which compiles only on Linux.
+- proposed fix:    replace each `unreachable` with the `Canceled` arm's `return .disarm` (keeping the existing warnings), since the loop can deliver these errors.
+- upstream status: not reported
+
 ## Candidates pending verification
 
 Assembled from this plan's progress notes on 2026-09-11. **Not verified** — do not cite as fact.
 
 | # | reference | suspected defect | kind | port today | source |
 |---|---|---|---|---|---|
-| C3 | `src/renderer/Thread.zig:698-723` `cursorCancelCallback` | `unreachable` on cancel errors other than Canceled/NotFound; reachability depends on what the event loop can return | crash? | **ported as `unreachable!()`** (task 14d-1, S114-F2) — reachability must be decided | task 14d-1 |
+| C3 | `src/renderer/Thread.zig:698-723` `cursorCancelCallback` | superseded by UD73 (task R13-C) | crash | see UD73 | task 14d-1 |
 | C4 | `src/termio/Exec.zig:1045`; `src/apprt/gtk/pre_exec.zig:39,58` | `log.err` between fork and exec: the log function allocates and locks, so a child forked from a multi-threaded parent can deadlock silently | deadlock | handled safely (raw `write`, tasks 14d-3 and 14e-1) | tasks 14d-3, 14e-1 |
 | C5 | `src/font/DeferredFace.zig:154-157, 186-197` | zero-copy `cstringPtr` path returns into a +1 CFString that is never released | leak | rows S85-F6 / S90-F3 left OPEN | task 16 |
 | C11 | `src/font/face/coretext.zig:1023-1036`; `src/terminal/StringMap` tests | assertions cannot distinguish the fixture under test | test-weakness | ported verbatim (S90-F5, S140-F1) | task 17 |

@@ -1754,11 +1754,17 @@ where
         //     error.Canceled => return .disarm,
         //     else => unreachable,
         // };
-        if let Err(err) = r {
-            match err {
-                xev::TimerRunError::Canceled => return xev::CallbackAction::Disarm,
-                _ => unreachable!(),
-            }
+        //
+        // PORT NOTE: reference defect (R13), inventory M16 (with
+        // `cursorCancelCallback`, LEDGER S114-F2). The `else => unreachable`
+        // is reachable on Linux io_uring, where a timer SQE can complete with
+        // an errno libxev maps to `error.Unexpected` (the kernel path is not
+        // verified; see S114-F2). The reference has no diagnostic here, so the
+        // port adds none: any error takes the `Canceled` arm (disarm — the
+        // next wakeup re-arms the render timer). On kqueue the arm is dead
+        // (timers never reach a syscall).
+        if r.is_err() {
+            return xev::CallbackAction::Disarm;
         }
         // const t: *Thread = self_ orelse {
         //     // This shouldn't happen so we log it.
@@ -1828,20 +1834,19 @@ where
         //     error.Canceled => return .disarm,
         //     else => unreachable,
         // };
-        if let Err(err) = r {
-            match err {
-                xev::TimerRunError::Canceled => return xev::CallbackAction::Disarm,
-                // else => unreachable,
-                //
-                // CORRECTED (task 14d-1): this arm carried a
-                // `// log.warn("animation callback fired without data set")`
-                // comment. That is a MIS-TRANSCRIPTION — the reference's
-                // `else` arm here is a bare `unreachable` with no diagnostic
-                // (`Thread.zig:619`); the "fired without data set" warning
-                // belongs to the `self_ orelse` arm below
-                // (`Thread.zig:623-627`), where it is now restored.
-                _ => unreachable!(),
-            }
+        //
+        // CORRECTED (task 14d-1): the `else` arm carried a
+        // `// log.warn("animation callback fired without data set")`
+        // comment. That is a MIS-TRANSCRIPTION — the reference's `else` arm
+        // here is a bare `unreachable` with no diagnostic (`Thread.zig:621`);
+        // the "fired without data set" warning belongs to the `self_ orelse`
+        // arm below (`Thread.zig:623-627`), where it is now restored.
+        //
+        // PORT NOTE: reference defect (R13), inventory M16 — as in
+        // `renderCallback`: any error disarms, with no diagnostic because the
+        // reference has none.
+        if r.is_err() {
+            return xev::CallbackAction::Disarm;
         }
         // const t: *Thread = self_ orelse {
         //     // This shouldn't happen so we log it.
@@ -1899,13 +1904,18 @@ where
             match err {
                 // This is sent when our timer is canceled. That's fine.
                 xev::TimerRunError::Canceled => return xev::CallbackAction::Disarm,
+                // PORT NOTE: reference defect (R13), inventory M16 — as in
+                // `renderCallback`, but this arm has the reference's own
+                // warning, which is kept; then disarm instead of
+                // `unreachable` (the blink stops until the next
+                // `reset_cursor_blink` re-runs the timer).
                 _ => {
                     // log.warn("error in cursor timer callback err={}", .{err});
                     log::warn!(
                         target: LOG_SCOPE,
                         "error in cursor timer callback err={err:?}"
                     );
-                    unreachable!()
+                    return xev::CallbackAction::Disarm;
                 }
             }
         }
@@ -1988,6 +1998,14 @@ where
         // build, and in a release build both are UB-on-reach by contract.
         // The diagnostic is kept because the reference emits it BEFORE
         // trapping, so the operator sees which error caused the crash.
+        //
+        // REOPENED (task R13-C, PORT_RULES R13, UD73): these errors are
+        // kernel-reachable on io_uring, so the `unreachable!()` below is a
+        // ported reference defect. The fix (drop it; the callback already
+        // disarms) and the inversion of
+        // `cursor_cancel_callback_traps_on_an_impossible_error` compile only
+        // on Linux and are pending the Linux run. The three sibling timer
+        // callbacks are already fixed.
         if let Err(err) = r {
             #[cfg(not(target_os = "linux"))]
             match err {
@@ -2997,6 +3015,52 @@ mod thread_diagnostics_tests {
             core::ptr::null_mut(),
             core::ptr::null_mut(),
             Err(xev::CancelError::Unexpected),
+        );
+    }
+
+    /// Inventory M16 (R13): the three timer callbacks' `else => unreachable`
+    /// arms, reachable on Linux io_uring. Driven by an injected
+    /// `TimerRunError::Unexpected` (the kernel error cannot be forced), with a
+    /// null thread: the error arm must return before the thread is touched,
+    /// which a null pointer would expose. Each disarms; the cursor timer keeps
+    /// the reference's warning, the other two stay silent as the reference is.
+    #[test]
+    fn timer_callbacks_disarm_on_an_unexpected_error() {
+        let cap = log_capture::start();
+        let render = Thread::<TestApp>::renderCallback(
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+            Err(xev::TimerRunError::Unexpected),
+        );
+        let animation = Thread::<TestApp>::animationTimerCallback(
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+            Err(xev::TimerRunError::Unexpected),
+        );
+        let silent = cap.messages();
+        let cursor = Thread::<TestApp>::cursorTimerCallback(
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+            Err(xev::TimerRunError::Unexpected),
+        );
+        let messages = cap.messages();
+        drop(cap);
+
+        assert_eq!(xev::CallbackAction::Disarm, render);
+        assert_eq!(xev::CallbackAction::Disarm, animation);
+        assert_eq!(xev::CallbackAction::Disarm, cursor);
+        assert_eq!(
+            Vec::<log_capture::CapturedRecord>::new(),
+            silent,
+            "render and animation have no diagnostic in the reference"
+        );
+        assert_eq!(1, messages.len(), "{messages:?}");
+        assert!(
+            format!("{:?}", messages[0]).contains("error in cursor timer callback err=Unexpected"),
+            "{messages:?}"
         );
     }
 
