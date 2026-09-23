@@ -126,7 +126,8 @@ case "$rc_run" in
      echo "     ReleaseSmall byte-exact; ReleaseFast within the measured +/-1-on-3 %"
      echo "     envelope; negative control discriminating."
      exit 0 ;;
-  3) echo "D10: BLOCKED — the ghostty-recipe arm could not run (no zig / no oracle repo)."
+  3) echo "D10: BLOCKED — the ghostty-recipe arm could not run (no zig, or no oracle repo"
+     echo "     holding the pin commit)."
      echo "     The consensus arm and the negative control ran GREEN. Never a silent green."
      exit 3 ;;
   *) echo "D10: RED — see run.sh output above."

@@ -42,6 +42,46 @@ RUSTTY_ROOT="$(cd "$SELF_DIR/../../.." && pwd)"
 # module now compiles unconditionally and contributes its 3 test{}s.
 MIN_TESTS=27
 
+# The oracle for the action-set arm, and the stripped git runner that reads it.
+# `rustty_oracle_git` removes every GIT_* variable: a plain `git -C "$ORACLE"
+# show` honours GIT_DIR, so a decoy repository could hand this arm any action
+# list (R5). The path stays fixed (no environment override) and is read at
+# `origin/main` on purpose, so no pin applies — see the arm below.
+ORACLE="/Users/gael/projects/ghostty"
+# shellcheck source=.port/tools/gates/_oracle_root.sh
+source "$SELF_DIR/_oracle_root.sh" || { echo "BLOCKED: cannot source _oracle_root.sh" >&2; exit 3; }
+
+# oracle_actions ORACLE OUT — the ONLY read of the oracle: the sorted action
+# names of `origin/main:src/benchmark/cli.zig`, written to OUT.
+oracle_actions() {
+  rustty_oracle_git -C "$1" show origin/main:src/benchmark/cli.zig 2>/dev/null \
+    | sed -n '/^pub const Action = enum {/,/^};/p' \
+    | sed -n 's/^    @"\([a-z0-9-]*\)",$/\1/p' | sort -u > "$2"
+}
+
+# ---- oracle-read self-test (hermetic; run by G-ORACLE-SH-SELF) -------------
+# Two throwaway repositories: a fixture oracle whose origin/main lists two
+# actions, and a decoy whose origin/main lists one. With GIT_DIR +
+# GIT_WORK_TREE naming the decoy, `oracle_actions` on the fixture must still
+# return the fixture's two.
+if [ "${1:-}" = "--self-test-oracle" ]; then
+  st="$(mktemp -d "${TMPDIR:-/tmp}/gbench_oracle.XXXXXX")" || exit 1
+  cli() { printf 'pub const Action = enum {\n'; for a in "$@"; do printf '    @"%s",\n' "$a"; done; printf '};\n'; }
+  if ! rustty_fixture_repo "$st/ghostty" src/benchmark/cli.zig "$(cli alpha-one beta-two)" >/dev/null ||
+    ! rustty_fixture_repo "$st/decoy" src/benchmark/cli.zig "$(cli decoy-only)" >/dev/null; then
+    echo "SELF-TEST-ORACLE: FAIL (could not build the fixture repositories)"; rm -rf "$st"; exit 1
+  fi
+  ( export GIT_DIR="$st/decoy/.git" GIT_WORK_TREE="$st/decoy"; cd "$st/decoy" && oracle_actions "$st/ghostty" "$st/got.txt" )
+  got="$(tr '\n' ' ' < "$st/got.txt")"
+  rm -rf "$st"
+  if [ "$got" = "alpha-one beta-two " ]; then
+    echo "  ok   the oracle read ignores a GIT_DIR + GIT_WORK_TREE decoy"
+    echo "SELF-TEST-ORACLE: PASS"; exit 0
+  fi
+  echo "  FAIL the oracle read returned '$got', want 'alpha-one beta-two ' (a GIT_DIR decoy answered it)"
+  echo "SELF-TEST-ORACLE: FAIL"; exit 1
+fi
+
 # ---- self-test -------------------------------------------------------------
 # Proves the count arm can actually go RED, on fabricated libtest output rather
 # than by mutating the crate. A gate whose FAIL arm is never exercised is the
@@ -117,9 +157,10 @@ done
 # until WS10 T11. Drive the comparison from the ORACLE instead, so the arm
 # cannot go vacuous by rustty shrinking its own list.
 #
-# `git show` only — NEVER a checkout. Oracle absent => exit 3 BLOCKED.
+# `git show` only — NEVER a checkout, and only through `oracle_actions` (GIT_*
+# stripped). Oracle absent => exit 3 BLOCKED. `origin/main`, not the pin, is
+# deliberate: the arm tracks upstream's action set.
 # ---------------------------------------------------------------------------
-ORACLE="/Users/gael/projects/ghostty"
 echo "=== G-BENCH: oracle action-set parity ==="
 if [ ! -d "$ORACLE/.git" ]; then
   echo "BLOCKED: ghostty oracle checkout not found at $ORACLE (R3 — the external"
@@ -127,9 +168,7 @@ if [ ! -d "$ORACLE/.git" ]; then
   exit 3
 fi
 T="${TMPDIR:-/tmp}"
-git -C "$ORACLE" show origin/main:src/benchmark/cli.zig 2>/dev/null \
-  | sed -n '/^pub const Action = enum {/,/^};/p' \
-  | sed -n 's/^    @"\([a-z0-9-]*\)",$/\1/p' | sort -u > "$T/gbench_oracle.txt"
+oracle_actions "$ORACLE" "$T/gbench_oracle.txt"
 if [ ! -s "$T/gbench_oracle.txt" ]; then
   echo "BLOCKED: read 0 actions from oracle origin/main:src/benchmark/cli.zig."
   echo "         An empty reference side would make this arm VACUOUS (R5)."

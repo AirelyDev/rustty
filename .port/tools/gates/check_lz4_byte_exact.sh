@@ -75,13 +75,60 @@ EXPECTED_POINTS=7976
 EXPECTED_SELFTEST_ROWS=1631
 
 SELF_TEST=0
+SELF_TEST_ORACLE=0
 case "${1:-}" in
   --self-test) SELF_TEST=1 ;;
+  --self-test-oracle) SELF_TEST_ORACLE=1 ;;
   "") ;;
-  *) echo "usage: $0 [--self-test]" >&2; exit 2 ;;
+  *) echo "usage: $0 [--self-test | --self-test-oracle]" >&2; exit 2 ;;
 esac
 
 say() { echo "[G-LZ4] $*"; }
+
+# The stripped git runner: every GIT_* variable removed, so GIT_DIR cannot
+# answer `git -C "$ORACLE" show` from another repository (R5).
+# shellcheck source=.port/tools/gates/_oracle_root.sh
+source "$ROOT/.port/tools/gates/_oracle_root.sh" || { say "BLOCKED: cannot source _oracle_root.sh"; exit 3; }
+
+# read_oracle_codec ORACLE DEST — the ONLY read of the oracle: lz4.zig and
+# lz4_differential.zig at origin/main, into DEST. Returns non-zero (with git's
+# error in DEST/<file>.err) when a file cannot be read.
+read_oracle_codec() {
+  local f
+  for f in lz4.zig lz4_differential.zig; do
+    rustty_oracle_git -C "$1" show "origin/main:src/terminal/compress/$f" > "$2/$f" 2>"$2/$f.err" \
+      || { READ_FAILED="$f"; return 1; }
+  done
+}
+
+# --self-test-oracle (hermetic; run by G-ORACLE-SH-SELF): a fixture oracle and
+# a decoy, each with its own origin/main lz4.zig. With GIT_DIR + GIT_WORK_TREE
+# naming the decoy, `read_oracle_codec` on the fixture must return the
+# fixture's bytes.
+if [ "$SELF_TEST_ORACLE" -eq 1 ]; then
+  st="$(mktemp -d "${TMPDIR:-/tmp}/glz4_oracle.XXXXXX")" || exit 1
+  ok=1
+  for repo in ghostty decoy; do
+    if ! rustty_fixture_repo "$st/$repo" src/terminal/compress/lz4.zig "// $repo lz4" >/dev/null; then ok=0; fi
+    printf '// %s differential' "$repo" > "$st/$repo/src/terminal/compress/lz4_differential.zig"
+    rustty_fixture_git -C "$st/$repo" add -A >/dev/null 2>&1 &&
+      rustty_fixture_git -C "$st/$repo" commit -q -m two >/dev/null 2>&1 &&
+      rustty_fixture_git -C "$st/$repo" update-ref refs/remotes/origin/main HEAD >/dev/null 2>&1 || ok=0
+  done
+  mkdir -p "$st/out"
+  if [ "$ok" -eq 1 ] && ( export GIT_DIR="$st/decoy/.git" GIT_WORK_TREE="$st/decoy"
+                          cd "$st/decoy" && read_oracle_codec "$st/ghostty" "$st/out" ) &&
+     [ "$(cat "$st/out/lz4.zig")" = "// ghostty lz4" ] &&
+     [ "$(cat "$st/out/lz4_differential.zig")" = "// ghostty differential" ]; then
+    rm -rf "$st"
+    say "  ok   the oracle read ignores a GIT_DIR + GIT_WORK_TREE decoy"
+    say "SELF-TEST-ORACLE: PASS"; exit 0
+  fi
+  say "  FAIL the oracle read did not return the fixture oracle's files under a GIT_DIR decoy"
+  say "       (lz4.zig: '$(cat "$st/out/lz4.zig" 2>/dev/null)')"
+  rm -rf "$st"
+  say "SELF-TEST-ORACLE: FAIL"; exit 1
+fi
 
 # ---- environment ----------------------------------------------------------
 if [ ! -d "$ORACLE/.git" ]; then
@@ -113,14 +160,14 @@ mkdir -p "$TMP/z" "$TMP/r"
 
 # ---- oracle arm -----------------------------------------------------------
 # `git show` only; never `git checkout`. Reading origin/main here is deliberate:
-# the gate must track upstream's codec, not the pinned working tree.
-for f in lz4.zig lz4_differential.zig; do
-  if ! git -C "$ORACLE" show "origin/main:src/terminal/compress/$f" > "$TMP/z/$f" 2>"$TMP/z/$f.err"; then
-    say "BLOCKED: cannot read origin/main:src/terminal/compress/$f from the oracle."
-    sed 's/^/[G-LZ4]   /' "$TMP/z/$f.err" >&2
-    exit 3
-  fi
-done
+# the gate must track upstream's codec, not the pinned working tree, so no pin
+# applies. The read goes through `read_oracle_codec` (GIT_* stripped).
+READ_FAILED=""
+if ! read_oracle_codec "$ORACLE" "$TMP/z"; then
+  say "BLOCKED: cannot read origin/main:src/terminal/compress/$READ_FAILED from the oracle."
+  sed 's/^/[G-LZ4]   /' "$TMP/z/$READ_FAILED.err" >&2
+  exit 3
+fi
 cp "$GATEDIR/harness.zig" "$TMP/z/harness.zig"
 if ! ( cd "$TMP/z" && zig build-exe harness.zig -O ReleaseSafe -lc ) > "$TMP/z/build.log" 2>&1; then
   say "FAIL: the oracle (Zig) arm did not build."

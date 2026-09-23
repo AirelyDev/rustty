@@ -33,9 +33,12 @@
 #    git is not silently converting them. Deliberately scoped to those families
 #    rather than the whole tree so the gate is correct on Windows too, where
 #    `core.autocrlf` legitimately produces `i/lf w/crlf` for ordinary sources.
-# 3. When the reference checkout is reachable, the shared fuzz seeds are
-#    compared against it BYTE FOR BYTE. Skipped BY NAME when absent (R3: the
-#    oracle is never a build dependency), never silently passed.
+# 3. The shared fuzz seeds are compared BYTE FOR BYTE against the reference
+#    checkout, which must be at the pin (`ORACLE_PIN`) with a clean corpus
+#    directory. When it is absent, off the pin, dirty, or shares no seeds,
+#    this arm is BLOCKED and so is the gate (exit 3): R3 keeps the oracle off
+#    CI, and ci.sh reports exit 3 as a WARNING, never as GREEN. A RED in arm 1
+#    or 2 still wins (exit 1).
 #
 # Exit contract (`.port/tools/CI.md`): 0 = pass, 1 = red, 3 = BLOCKED.
 set -uo pipefail
@@ -58,6 +61,9 @@ if [ "${1:-}" = "--print-oracle" ]; then
   echo "$ORACLE"
   exit 0
 fi
+# The one checked-in pin (empty when the file is unreadable, which arm 3
+# reports as BLOCKED).
+ORACLE_PIN="$(rustty_oracle_pin)"
 
 command -v git >/dev/null 2>&1 || blocked "git not installed"
 git rev-parse --git-dir >/dev/null 2>&1 || blocked "not a git checkout"
@@ -141,10 +147,18 @@ RAN=$((RAN + 1))
 
 # ── 3. the shared fuzz seeds match the reference byte for byte ───────────────
 echo "=== G-EOL 3/3 :: seed corpora vs the reference ==="
-REF_CORPUS="$ORACLE/test/fuzz-libghostty/corpus"
-if [ ! -d "$REF_CORPUS" ]; then
-  echo "  skipped reference byte-comparison (no oracle checkout at $ORACLE — R3, local-only)"
+REF_CORPUS_REL="test/fuzz-libghostty/corpus"
+REF_CORPUS="$ORACLE/$REF_CORPUS_REL"
+ARM3_BLOCKED=""
+if ! why="$(rustty_oracle_pin_status "$ORACLE" "$ORACLE_PIN" "$REF_CORPUS_REL")"; then
+  ARM3_BLOCKED="$why"
+elif [ ! -d "$REF_CORPUS" ]; then
+  ARM3_BLOCKED="the pinned oracle has no $REF_CORPUS_REL"
+fi
+if [ -n "$ARM3_BLOCKED" ]; then
+  echo "  BLOCKED reference byte-comparison: $ARM3_BLOCKED (R3: local-only)"
 else
+  echo "  reference: $ORACLE @ ${ORACLE_PIN:0:9} (the pin; $REF_CORPUS_REL clean)"
   cmp_fail=0
   cmp_ran=0
   for tier in osc-initial parser-initial stream-initial osc-cmin parser-cmin stream-cmin; do
@@ -169,11 +183,14 @@ else
     fi
   done
   if [ "$cmp_ran" -eq 0 ]; then
-    echo "  skipped reference byte-comparison (oracle present but no shared seeds found)"
-  elif [ "$cmp_fail" -ne 0 ]; then
-    note_fail "seed corpora diverge from the reference"
+    ARM3_BLOCKED="the pinned oracle and rustty share no seed file — nothing was compared"
+    echo "  BLOCKED reference byte-comparison: $ARM3_BLOCKED"
+  else
+    if [ "$cmp_fail" -ne 0 ]; then
+      note_fail "seed corpora diverge from the reference"
+    fi
+    RAN=$((RAN + 1))
   fi
-  RAN=$((RAN + 1))
 fi
 
 echo "--- G-EOL summary: $RAN arm(s) ran ---"
@@ -184,6 +201,13 @@ fi
 if [ "$FAILED" -ne 0 ]; then
   echo "G-EOL RED: see above." >&2
   exit 1
+fi
+# Arm 3 could not check. A gate that cannot check says BLOCKED, never GREEN
+# (R5); arms 1 and 2 ran clean and are reported above.
+if [ -n "$ARM3_BLOCKED" ]; then
+  echo "G-EOL BLOCKED: arm 3 could not compare against the reference ($ARM3_BLOCKED)."
+  echo "              $RAN other arm(s) ran clean."
+  exit 3
 fi
 echo "G-EOL GREEN ($RAN arm(s) clean)."
 exit 0

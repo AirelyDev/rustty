@@ -35,6 +35,9 @@
 #   run_differential.sh                 # auto: real gate if port driver exists, else progress
 #   run_differential.sh --progress      # force progress (harness self-test) mode
 #   run_differential.sh --self-test     # self-test: wiring + RED-flip injection proof
+#   run_differential.sh --self-test-oracle  # hermetic: the staleness guard BLOCKS on
+#                                       # an absent or off-pin oracle, and GIT_* cannot
+#                                       # move its HEAD check (run by G-ORACLE-SH-SELF)
 #   RUSTTY_VT_DRIVER=/path/to/bin run_differential.sh   # point at the port driver
 #
 # Exit 0 = GREEN (real) or HARNESS-WIRED (progress); non-zero = RED / BLOCKED.
@@ -62,6 +65,7 @@ case "${1:-}" in
   --progress)  MODE="progress" ;;
   --self-test) MODE="self-test" ;;
   --print-oracle) MODE="print-oracle" ;;
+  --self-test-oracle) MODE="self-test-oracle" ;;
   "" )         MODE="auto" ;;
   *) echo "run_differential.sh: unknown arg '${1:-}'" >&2; exit 2 ;;
 esac
@@ -80,6 +84,9 @@ if [ "$MODE" = "print-oracle" ]; then
   echo "$GHOSTTY"
   exit 0
 fi
+# The one checked-in pin; the staleness guard requires the oracle's HEAD to be
+# exactly this commit (empty when the pin file is unreadable -> BLOCKED).
+ORACLE_PIN="$(rustty_oracle_pin)"
 
 echo "=== G4 :: differential VT clean (runner) ==="
 
@@ -99,13 +106,20 @@ DIAG_DIR="$HARNESS/results/diag"
 # COMPILE against the pinned oracle headers. A pin advance that changes the C
 # ABI out from under the driver source must be RED here, never a silent skip
 # and never stale binaries voting green (same lesson as the dc054bb G6 fix:
-# a broken probe is a silent skip). Runs wherever the oracle include tree is
-# present (the gate is oracle-local; without the oracle it BLOCKS elsewhere).
+# a broken probe is a silent skip). It needs the oracle AT THE PIN (HEAD ==
+# `ORACLE_PIN`) with its built `zig-out/include`, plus a real C compiler. When
+# any of those is missing the guard cannot check, and a guard that cannot
+# check is BLOCKED (exit 3 from `enforce_driver_source_fresh`), never skipped.
 #   $1 = path to the driver source to check (parameterized for the self-test)
-# Returns 0 fresh / 1 stale / 2 probe-unavailable (caller decides).
+# Returns 0 fresh / 1 stale / 2 probe-unavailable (the caller BLOCKS on 2).
 check_driver_source_fresh() {
   local src="${1:-$HARNESS/ref_driver/vt_driver.c}"
-  local inc="$GHOSTTY/zig-out/include"
+  local inc="$GHOSTTY/zig-out/include" why
+  # `zig-out/include` is build output, so HEAD == pin does not prove the
+  # headers were built from the pin; it does rule out an oracle on another
+  # commit, which is the case a pin advance produces.
+  why="$(rustty_oracle_pin_status "$GHOSTTY" "$ORACLE_PIN")" \
+    || { echo "    staleness guard: $why"; return 2; }
   [ -d "$inc" ] || { echo "    staleness guard: oracle include dir missing ($inc)"; return 2; }
   # `cc` is aliased in this environment; resolve a real clang explicitly.
   local cc="" sysroot_flag=()
@@ -140,7 +154,15 @@ enforce_driver_source_fresh() {
       sed 's/^/    | /' "$DIAG_DIR/.staleness.err" | head -20
       exit 3
       ;;
-    2) echo "    (staleness guard skipped: probe unavailable; oracle-absent runs BLOCK below)" ;;
+    2)
+      # R5: the guard could not check, so the gate cannot vouch for the
+      # drivers. Before R13-GF3 this printed "skipped" and the run went on to
+      # a green HARNESS-WIRED wherever the oracle was absent.
+      echo "BLOCKED: the driver-source staleness guard cannot run here (see the line"
+      echo "         above): it needs the oracle at the pin with a built zig-out/include"
+      echo "         and a C compiler. This is NOT a pass."
+      exit 3
+      ;;
   esac
 }
 
@@ -399,11 +421,70 @@ open(p, "wb").write(bytes(data))' "$tmpg"
   else
     echo "  FAIL: no golden available for the golden-leg flip proof"; ok=0
   fi
+  # 7. The oracle-handling arms (also run alone by G-ORACLE-SH-SELF).
+  run_self_test_oracle || ok=0
   if [ "$ok" = "1" ]; then echo "SELF-TEST: PASS"; return 0; else echo "SELF-TEST: FAIL"; return 1; fi
+}
+
+# ---------------------------------------------------------------------------
+# Hermetic self-test of the staleness guard's oracle handling (R5). Each arm
+# runs the guard in a subshell against a throwaway fixture, with GHOSTTY,
+# ORACLE_PIN and DIAG_DIR set INSIDE that subshell — none of them is read from
+# the environment by the gate itself.
+#   a. oracle absent            -> enforce exits 3 (BLOCKED), not "skipped"
+#   b. oracle off the pin       -> enforce exits 3 (BLOCKED)
+#   c. oracle at the pin, with a GIT_DIR + GIT_WORK_TREE decoy exported whose
+#      HEAD is elsewhere -> the HEAD check still reads the fixture oracle
+# ---------------------------------------------------------------------------
+run_self_test_oracle() {
+  echo "--- G4 staleness-guard oracle handling (hermetic) ---"
+  local ok=1 tmp rc out pin decoy_head
+  tmp="$(mktemp -d "${TMPDIR:-/tmp}/g4_oracle.XXXXXX")" || { echo "  FAIL: mktemp"; return 1; }
+  pin="$(rustty_fixture_repo "$tmp/ghostty" README "at the pin")" \
+    && decoy_head="$(rustty_fixture_repo "$tmp/decoy" README "decoy")" \
+    || { echo "  FAIL: could not build the fixture repositories"; rm -rf "$tmp"; return 1; }
+  mkdir -p "$tmp/ghostty/zig-out/include"
+  printf 'int g4_selftest;\n' > "$tmp/probe.c"
+  mkdir -p "$tmp/diag"
+
+  rc=0
+  out="$(GHOSTTY="$tmp/absent" ORACLE_PIN="$pin" DIAG_DIR="$tmp/diag"; enforce_driver_source_fresh 2>&1)" || rc=$?  # R5-selftest-fixture
+  if [ "$rc" = "3" ] && printf '%s' "$out" | grep -q "no oracle checkout at $tmp/absent"; then
+    echo "  ok   a. absent oracle => BLOCKED exit 3"
+  else
+    echo "  FAIL a. absent oracle gave rc=$rc, want 3 BLOCKED:"; printf '%s\n' "$out" | sed 's/^/       | /'; ok=0
+  fi
+
+  rc=0
+  out="$(GHOSTTY="$tmp/ghostty" ORACLE_PIN="$decoy_head" DIAG_DIR="$tmp/diag"; enforce_driver_source_fresh 2>&1)" || rc=$?  # R5-selftest-fixture
+  if [ "$rc" = "3" ] && printf '%s' "$out" | grep -q "not the pin $decoy_head"; then
+    echo "  ok   b. off-pin oracle => BLOCKED exit 3"
+  else
+    echo "  FAIL b. off-pin oracle gave rc=$rc, want 3 BLOCKED:"; printf '%s\n' "$out" | sed 's/^/       | /'; ok=0
+  fi
+
+  rc=0
+  out="$(export GIT_DIR="$tmp/decoy/.git" GIT_WORK_TREE="$tmp/decoy"
+         GHOSTTY="$tmp/ghostty" ORACLE_PIN="$pin" DIAG_DIR="$tmp/diag"  # R5-selftest-fixture
+         check_driver_source_fresh "$tmp/probe.c" 2>&1)" || rc=$?
+  if printf '%s' "$out" | grep -Eq "staleness guard: .*(pin|git checkout|oracle checkout)"; then
+    echo "  FAIL c. a GIT_DIR decoy moved the HEAD check:"; printf '%s\n' "$out" | sed 's/^/       | /'; ok=0
+  elif [ "$rc" = "0" ] || { [ "$rc" = "2" ] && printf '%s' "$out" | grep -q "no real C compiler"; }; then
+    echo "  ok   c. GIT_DIR + GIT_WORK_TREE decoy does not move the HEAD check (rc=$rc)"
+  else
+    echo "  FAIL c. unexpected rc=$rc:"; printf '%s\n' "$out" | sed 's/^/       | /'; ok=0
+  fi
+  rm -rf "$tmp"
+  if [ "$ok" = "1" ]; then echo "G4 ORACLE SELF-TEST: PASS"; return 0; fi
+  echo "G4 ORACLE SELF-TEST: FAIL"; return 1
 }
 
 if [ "$MODE" = "self-test" ]; then
   run_self_test
+  exit $?
+fi
+if [ "$MODE" = "self-test-oracle" ]; then
+  run_self_test_oracle
   exit $?
 fi
 

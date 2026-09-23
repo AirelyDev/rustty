@@ -68,14 +68,13 @@ import sys
 
 # The RUST root follows the checkout this script lives in — never a hardcoded absolute
 # path. (WS19 T1 fixed exactly that bug in check_test_counts.py, where hardcoded roots
-# made the gate silently measure `main` when run from a worktree.)
-ROOT = subprocess.run(
-    ["git", "rev-parse", "--show-toplevel"],
-    cwd=os.path.dirname(os.path.abspath(__file__)),
-    capture_output=True,
-    text=True,
-    check=True,
-).stdout.strip()
+# made the gate silently measure `main` when run from a worktree.) It is SCRIPT-RELATIVE
+# (`.port/tools/gates/` is three levels below the root), not `git rev-parse
+# --show-toplevel`: that honours GIT_DIR + GIT_WORK_TREE, so the environment could point
+# the gate at another tree's ledgers (R5; the same fix G-CENSUS got in R13-GF2). The
+# self-test's redirect arm proves it.
+GATES_DIR = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(GATES_DIR)))
 
 LEDGERS = [
     ".port/phase-2/DEFERRALS.md",
@@ -743,6 +742,19 @@ def self_test():
     print(f"G-P2 SELF-TEST — ENVIRONMENT-BLOCKED arm, {len(rows)} real row(s): "
           f"{', '.join(v for v, _ in rows)}")
     failures = 0
+
+    # R13-GF3: the environment cannot move ROOT. A fresh process imports this module
+    # with GIT_DIR + GIT_WORK_TREE naming a decoy and the decoy as its cwd; ROOT must
+    # still be this checkout. Restoring `git rev-parse --show-toplevel` turns it RED.
+    sys.path.insert(0, GATES_DIR)
+    import _gatelib as G  # noqa: E402
+    ok, why = G.root_redirect_probe(GATES_DIR, "check_phase2_closure", ["ROOT"], [ROOT])
+    if ok:
+        print("  root: GIT_DIR + GIT_WORK_TREE do not redirect ROOT")
+    else:
+        print(f"  root: REDIRECTED by GIT_DIR + GIT_WORK_TREE — {why}", file=sys.stderr)
+        failures += 1
+
     for vid, body in rows:
         claimed, ok, why = environment_blocked_status(body)
         if not ok:

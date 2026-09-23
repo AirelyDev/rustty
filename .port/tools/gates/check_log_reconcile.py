@@ -84,7 +84,10 @@ sys.path.insert(0, GATES_DIR)
 import _gatelib as G  # noqa: E402
 
 ORACLE = G.oracle_root(ROOT)
-ORACLE_PIN = "20abdb50a6216c450d6d4d010c41c7edf5ab15b2"
+# The pin lives in ONE file, `.port/tools/gates/ORACLE_PIN`, which the shell
+# gates read through `_oracle_root.sh`; G-ORACLE-SH-SELF asserts both readers
+# agree. None (missing or malformed file) is BLOCKED in `main`.
+ORACLE_PIN = G.oracle_pin()
 
 # ---------------------------------------------------------------------------
 # Reference side (Zig)
@@ -2010,7 +2013,7 @@ def oracle_resolution_check():
         gates = os.path.join(wt, ".port", "tools", "gates")
         os.makedirs(gates)
         os.makedirs(os.path.join(wt, ".port", "parity-closure"))
-        for f in ("check_log_reconcile.py", "_gatelib.py"):
+        for f in ("check_log_reconcile.py", "_gatelib.py", "ORACLE_PIN"):
             shutil.copy(os.path.join(GATES_DIR, f), gates)
         # A present-but-empty portmap: the gate's first check passes and the
         # oracle checks are the next thing it reaches.
@@ -2547,6 +2550,13 @@ def main():
             f"BLOCKED: the read-only ghostty oracle checkout is absent at {ORACLE}.\n"
             "         Without it every reference file would scan to zero log sites\n"
             "         and every port would 'reconcile' — a vacuous green.",
+            file=sys.stderr,
+        )
+        return 3
+    if ORACLE_PIN is None:
+        print(
+            f"BLOCKED: the oracle pin file {G.ORACLE_PIN_FILE} is missing or not a\n"
+            "         40-hex commit, so the oracle's commit cannot be checked.",
             file=sys.stderr,
         )
         return 3

@@ -31,6 +31,74 @@ const SYSROOT = (() => {
   }
 })();
 
+// --- oracle reads ------------------------------------------------------------
+// EVERY git call in this file goes through `oracleGit`, which runs git with every
+// GIT_* variable removed from its environment. A plain `git -C <oracle> show`
+// honours GIT_DIR, so a decoy repository could answer the registry-parity check
+// below with any type list (R5). The oracle path itself is fixed (no override).
+function oracleGit(dir, args, opts = {}) {
+  const env = Object.fromEntries(
+    Object.entries(process.env).filter(([k]) => !k.startsWith("GIT_")),
+  );
+  return execFileSync("git", ["-C", dir, ...args], {
+    stdio: "pipe",
+    maxBuffer: 1 << 24,
+    ...opts,
+    env,
+  });
+}
+// The ONLY read of the oracle's contents: the registry names of
+// origin/main:src/terminal/c/types.zig, without their `Ghostty` prefix.
+function oracleRegistryKeys(dir) {
+  const text = oracleGit(dir, ["show", "origin/main:src/terminal/c/types.zig"]).toString();
+  return new Set(
+    [...text.matchAll(/\.init[A-Za-z]+\(\s*"Ghostty([A-Za-z0-9_]+)"/g)].map((m) => m[1]),
+  );
+}
+
+// --self-test-oracle (hermetic; run by A5's `--self-test-oracle`, which
+// G-ORACLE-SH-SELF runs): a fixture oracle and a decoy, each registering one
+// different type at origin/main. With GIT_DIR + GIT_WORK_TREE naming the decoy,
+// `oracleRegistryKeys` on the fixture must return the fixture's type.
+if (process.argv.includes("--self-test-oracle")) {
+  const { mkdtempSync, mkdirSync, rmSync } = await import("node:fs");
+  const base = mkdtempSync(`${process.env.TMPDIR || "/tmp"}/a5c_oracle.`);
+  const ident = [
+    "-c", "user.name=selftest", "-c", "user.email=selftest@invalid",
+    "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null",
+  ];
+  let got = "<read failed>";
+  try {
+    for (const [repo, name] of [["ghostty", "FixtureReal"], ["decoy", "DecoyOnly"]]) {
+      const dir = `${base}/${repo}`;
+      mkdirSync(`${dir}/src/terminal/c`, { recursive: true });
+      writeFileSync(`${dir}/src/terminal/c/types.zig`, `.initStruct("Ghostty${name}"),\n`);
+      oracleGit(dir, ["init", "-q"]);
+      oracleGit(dir, [...ident, "add", "-A"]);
+      oracleGit(dir, [...ident, "commit", "-q", "-m", "fixture"]);
+      oracleGit(dir, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    }
+    process.env.GIT_DIR = `${base}/decoy/.git`;
+    process.env.GIT_WORK_TREE = `${base}/decoy`;
+    process.chdir(`${base}/decoy`);
+    try {
+      got = [...oracleRegistryKeys(`${base}/ghostty`)].join(",");
+    } catch {
+      got = "<read failed>";
+    }
+  } finally {
+    delete process.env.GIT_DIR;
+    delete process.env.GIT_WORK_TREE;
+    rmSync(base, { recursive: true, force: true });
+  }
+  if (got === "FixtureReal") {
+    console.log("  ok   A5 arm (c): the oracle registry read ignores a GIT_DIR + GIT_WORK_TREE decoy");
+    process.exit(0);
+  }
+  console.log(`  FAIL A5 arm (c): the oracle registry read returned '${got}', want 'FixtureReal'`);
+  process.exit(1);
+}
+
 // --- 1. type_json from the NATIVE build (the target the c-vt examples run on).
 // The wasm build reports wasm32 layouts (usize=4); the curated headers compile
 // for the native host (usize=8), so we must compare native-vs-native. Build a
@@ -118,11 +186,13 @@ const NOT_IN_TYPE_JSON = {};
 // --- oracle parity for the REGISTRY ITSELF ---------------------------------
 // The allowlist above is only trustworthy if "the oracle also omits it" is
 // checked rather than asserted. Read the oracle's registry (git show only —
-// NEVER a checkout) and require rustty's type_json key set to equal it after
-// the R2 rename. Oracle absent => exit 3 BLOCKED, never a silent green.
+// NEVER a checkout, and only through `oracleGit`, GIT_* stripped) and require
+// rustty's type_json key set to equal it after the R2 rename. Oracle absent =>
+// exit 3 BLOCKED, never a silent green. `origin/main`, not the pin, is
+// deliberate (the lib-vt C-API surface lives beyond the pin), so no pin check.
 const ORACLE = "/Users/gael/projects/ghostty";
 try {
-  execFileSync("git", ["-C", ORACLE, "rev-parse", "--git-dir"], { stdio: "pipe" });
+  oracleGit(ORACLE, ["rev-parse", "--git-dir"]);
 } catch {
   console.log(
     "    BLOCKED: ghostty oracle checkout not found at " + ORACLE + " (R3);" +
@@ -130,20 +200,11 @@ try {
   );
   process.exit(3);
 }
-const oracleTypes = execFileSync(
-  "git",
-  ["-C", ORACLE, "show", "origin/main:src/terminal/c/types.zig"],
-  { stdio: "pipe", maxBuffer: 1 << 24 },
-).toString();
 // P4-W5 Bundle T: the oracle registry is now the `type_decls` list of
 // `.initStruct/.initTaggedStruct/.initUnion/.initEnum/.initEnumSentinel/
 // .initPacked/.initAlias/.initOpaque("Ghostty...")` rows (all six kinds, not
 // only structs) — the parity below therefore binds the WHOLE registry.
-const oracleKeys = new Set(
-  [...oracleTypes.matchAll(/\.init[A-Za-z]+\(\s*"Ghostty([A-Za-z0-9_]+)"/g)].map(
-    (m) => m[1],
-  ),
-);
+const oracleKeys = oracleRegistryKeys(ORACLE);
 if (oracleKeys.size === 0) {
   console.log(
     "    BLOCKED: read 0 struct names from the oracle registry. An empty" +

@@ -535,6 +535,27 @@ def ledger_self_test():
               f"{'excused' if not ported else 'REFUSED'}")
         ok &= good7
 
+    # [l8] R13-GF3: arms 2 and 3 read the oracle with git (`merge-base`, `show`).
+    #      With GIT_DIR + GIT_WORK_TREE naming a decoy repository, the control
+    #      row must still be accepted: the reads go through `G.oracle_git`
+    #      (GIT_* stripped). A plain `git -C <oracle>` would ask the decoy,
+    #      which has no such commit, and reject the row.
+    import subprocess as _sp
+    decoy = os.path.join(tmp, "decoy")
+    os.makedirs(decoy)
+    _sp.run(["git", "init", "-q"], cwd=decoy, env=G.git_env(), capture_output=True)
+    saved = {k: os.environ.get(k) for k in ("GIT_DIR", "GIT_WORK_TREE")}
+    os.environ["GIT_DIR"] = os.path.join(decoy, ".git")
+    os.environ["GIT_WORK_TREE"] = decoy
+    try:
+        arm("[l8] control accepted under a GIT_DIR + GIT_WORK_TREE decoy", good, True)
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
     import shutil as _shutil
     _shutil.rmtree(tmp, ignore_errors=True)
     return ok

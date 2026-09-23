@@ -19,17 +19,18 @@ zig-cache dep packages, R3), and a missing ref would silently count zig=0 and
 turn the gate VACUOUSLY green. Never green on that: surface it (ci.sh renders
 exit 3 as a WARNING, never a pass).
 """
-import re, sys, glob, os, subprocess
+import re, sys, glob, os
 
 # WS19 T1 (N1): the RUST side must follow the CHECKOUT THIS SCRIPT LIVES IN, not a
 # hardcoded absolute path. Run from a git worktree, the old hardcodes made the gate
 # count `main`'s tests while reporting on the worktree's changes — G1b was VACUOUS for
 # every worktree change. Same bug `.port/tools/miri-run.sh` already fixed this way.
-RS_ROOT = subprocess.run(
-    ["git", "rev-parse", "--show-toplevel"],
-    cwd=os.path.dirname(os.path.abspath(__file__)),
-    capture_output=True, text=True, check=True,
-).stdout.strip()
+# R13-GF3: SCRIPT-RELATIVE (`.port/tools/gates/` is three levels below the root),
+# no longer `git rev-parse --show-toplevel` — that honours GIT_DIR + GIT_WORK_TREE,
+# so the environment could make the gate count another tree's tests (R5; the fix
+# G-CENSUS got in R13-GF2). `--self-test` proves it.
+GATES_DIR = os.path.dirname(os.path.abspath(__file__))
+RS_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(GATES_DIR)))
 
 # The ORACLE root stays hardcoded ON PURPOSE (R3: the oracle is an EXTERNAL reference,
 # never shipped to CI) and stays NON-overridable: `.port/tools/ci.sh:114-129` records
@@ -968,7 +969,28 @@ def rust_count(files):
         n += sum(1 for ln in open(f, errors="ignore") if re.search(r'#\[test\]', ln))
     return n
 
+def self_test():
+    """G1b's self-test (oracle-free, so ci.sh runs it before the oracle probe).
+
+    The environment cannot move RS_ROOT: a fresh process imports this module
+    with GIT_DIR + GIT_WORK_TREE naming a decoy repository and the decoy as its
+    working directory, and RS_ROOT must still be this checkout. Restoring
+    `git rev-parse --show-toplevel` turns this RED (it prints the decoy)."""
+    sys.path.insert(0, GATES_DIR)
+    import _gatelib as G
+    ok, why = G.root_redirect_probe(GATES_DIR, "check_test_counts", ["RS_ROOT"], [RS_ROOT])
+    print(f"  {'ok  ' if ok else 'FAIL'} GIT_DIR + GIT_WORK_TREE do not redirect RS_ROOT")
+    if not ok:
+        print(f"       ({why})")
+        print("G1b SELF-TEST: RED")
+        return 1
+    print("G1b SELF-TEST: GREEN")
+    return 0
+
+
 def main():
+    if "--self-test" in sys.argv[1:]:
+        sys.exit(self_test())
     only = sys.argv[1] if len(sys.argv) > 1 else None
     # R3 guard against VACUOUS greens: every explicitly listed (non-wildcard)
     # zig reference file must exist. The zig side lives in external read-only

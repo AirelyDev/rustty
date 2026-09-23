@@ -112,6 +112,23 @@
 #                                    The workspace lanes already RUN the crate;
 #                                    what they cannot see is a test being
 #                                    DELETED. WS10 T4.
+#   G-EOL check_eol_fidelity.sh      byte fidelity of the corpora, fixtures
+#                                    and vendored trees        -> HARD-FAIL
+#                                    (no-conversion attributes in force,
+#                                    index bytes == worktree bytes, and the
+#                                    shared fuzz seeds byte-equal to the
+#                                    oracle AT THE PIN; oracle absent, off the
+#                                    pin or dirty -> exit 3 BLOCKED, a
+#                                    WARNING, never GREEN.)
+#   G-ORACLE-SH-SELF _oracle_root.sh --self-test
+#                                    the shell oracle resolver and every
+#                                    oracle reader            -> HARD-FAIL
+#                                    (location, the ONE pin file, reads under
+#                                    a GIT_DIR decoy, G-EOL/G4/D10 BLOCKED on
+#                                    an absent/off-pin oracle, a structural
+#                                    scan for plain `git -C "$ORACLE"`, and
+#                                    each fixed-path reader's
+#                                    --self-test-oracle.)
 #   G-WINPROTO-DEFAULT               the DEFAULT GUI dep graph per target
 #     check_default_linux_winproto.sh (Linux + FreeBSD: gtk4/libadwaita and both
 #                                    winproto arms; macOS: none)     -> HARD-FAIL
@@ -387,6 +404,10 @@ run_webgl_lane() {
 # rust #[test] < zig test{} minus documented apc-deferred is RED and fails
 # CI — no done-status grace; it binds per-module today).
 run_test_counts() {
+  # R13-GF3: the gate's own self-test first. It needs no oracle (it proves the
+  # environment cannot redirect the checked root), so it binds on every lane; a
+  # RED here is a PROGRESS-went-RED failure, never a warning.
+  "$PY" "$GATES/check_test_counts.py" --self-test || return 1
   # Must stay identical to the root check_test_counts.py hard-codes (defense 1).
   local oracle="/Users/gael/projects/ghostty"
   if [ ! -d "$oracle/src" ]; then
@@ -525,7 +546,13 @@ GATE_REGISTRY=(
   # variables and a GIT_DIR + GIT_WORK_TREE decoy set, from a cwd outside the
   # fixture, and checks the shell resolver against the Python one. HARD: RED
   # if a consumer honours an override again (reinstating `${GHOSTTY_ORACLE:-…}`
-  # turns its arm red).
+  # turns its arm red). R13-GF3 added: the one ORACLE_PIN file both resolvers
+  # read; D10's oracle READ and G-EOL run end to end against a pinned fixture
+  # oracle under a GIT_DIR decoy, including G-EOL's BLOCKED paths (absent, off
+  # the pin, dirty corpus); a structural scan of every oracle reader for plain
+  # `git -C "$ORACLE"` or a second assignment of the oracle variable; and the
+  # `--self-test-oracle` arms of G4, G-BENCH, G-LZ4 and A5. An arm that cannot
+  # check (no python3, no node) makes it exit 3 BLOCKED, never GREEN.
   "G-ORACLE-SH-SELF|HARD|bash $GATES/_oracle_root.sh --self-test"
   # G-XTASK (2026-08-26) — the xtask subcommands nothing else ran. xtask IS
   # rustty's build.zig; grepping every `xtask -- <cmd>` across .port/tools and

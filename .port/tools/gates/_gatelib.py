@@ -755,8 +755,12 @@ def oracle_root(checkout=RUSTTY_ROOT):
     `checkout` exists for the gates' own self-tests; production callers pass
     their script-relative root. git's stdout is trusted only when it exits 0.
     If git cannot answer, the fallback is the checkout's own sibling — the
-    pre-worktree behaviour, which from a worktree names a missing directory and
-    so reaches the caller's BLOCKED path rather than a vacuous green.
+    pre-worktree behaviour, which from a worktree names a missing directory.
+
+    This function only LOCATES the oracle; it never checks that it exists. Every
+    caller must treat a missing (or off-pin, see `oracle_pin`) oracle as BLOCKED
+    — never as a skip that lets the gate go green. That is the caller's
+    contract, and each caller's self-test asserts it.
 
     `.port/tools/gates/_oracle_root.sh` is the shell twin of this function; its
     self-test checks that the two agree.
@@ -771,6 +775,70 @@ def oracle_root(checkout=RUSTTY_ROOT):
         common = ""
     main_checkout = os.path.dirname(common) if common else checkout
     return os.path.abspath(os.path.join(main_checkout, "..", "ghostty"))
+
+
+# The ONE place the oracle pin is written down: `ORACLE_PIN`, a one-line file
+# beside this module. `_oracle_root.sh`'s `rustty_oracle_pin` reads the same
+# file, and G-ORACLE-SH-SELF asserts the two readers agree. Advancing the pin
+# (`.port/ORACLE_SYNC.md`) means editing that file and nothing else in the gates.
+ORACLE_PIN_FILE = os.path.join(GATES_DIR, "ORACLE_PIN")
+
+
+def oracle_pin(path=None):
+    """The full 40-hex oracle pin from `ORACLE_PIN`, or None if it is missing
+    or malformed. Callers treat None as BLOCKED, never as "no pin to check"."""
+    try:
+        with open(path or ORACLE_PIN_FILE, encoding="utf-8") as fh:
+            pin = fh.read().strip()
+    except OSError:
+        return None
+    return pin if re.fullmatch(r"[0-9a-f]{40}", pin) else None
+
+
+def oracle_git(oracle, *args, **kw):
+    """`git -C <oracle> <args>` with every `GIT_*` variable removed (R5).
+
+    The Python twin of `_oracle_root.sh`'s `rustty_oracle_git`: every read of
+    the oracle's CONTENTS (`show`, `log`, `merge-base`, `rev-parse`) goes
+    through here, because `GIT_DIR` would otherwise answer `git -C <oracle>`
+    from another repository. Keyword arguments pass to `subprocess.run`."""
+    import subprocess
+    kw.setdefault("capture_output", True)
+    return subprocess.run(["git", "-C", oracle, *args], env=git_env(), **kw)
+
+
+def root_redirect_probe(gates_dir, module, attrs, want):
+    """Self-test arm helper: import `module` from `gates_dir` in a FRESH process
+    whose GIT_DIR + GIT_WORK_TREE name a decoy repository and whose working
+    directory is that decoy (outside this checkout), print `attrs`, and compare
+    them with `want`. Returns (ok, detail). This is how a gate proves its root
+    is script-relative: `git rev-parse --show-toplevel` would print the decoy.
+    """
+    import shutil
+    import subprocess
+    import tempfile
+    base = os.path.realpath(tempfile.mkdtemp(prefix="gate_root_redirect_"))
+    try:
+        decoy = os.path.join(base, "rustty")
+        os.makedirs(decoy)
+        env = git_env()
+        subprocess.run(["git", "init", "-q"], cwd=decoy, env=env,
+                       capture_output=True, check=True)
+        env.update({"GIT_DIR": os.path.join(decoy, ".git"), "GIT_WORK_TREE": decoy})
+        probe = ("import sys; d = sys.argv[1]; sys.argv = [sys.argv[0]]; "
+                 f"sys.path.insert(0, d); import {module} as M; "
+                 + "; ".join(f"print(M.{a})" for a in attrs))
+        r = subprocess.run([sys.executable, "-c", probe, gates_dir],
+                           cwd=decoy, env=env, capture_output=True, text=True)
+        got = r.stdout.split("\n")[:len(attrs)]
+        if r.returncode != 0 or got != list(want):
+            return False, (f"probe rc={r.returncode} got {got}, want {list(want)}; "
+                           f"stderr={r.stderr.strip()[-300:]!r}")
+        return True, ""
+    except (OSError, subprocess.CalledProcessError) as exc:
+        return False, f"fixture could not be built: {exc}"
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
 
 
 def _oracle_src():
@@ -801,7 +869,6 @@ def contract_deletions():
       rejects = [(entry, why)] for rows that failed an arm.
     An unreadable/absent ledger or oracle yields ({}, []) — the caller then has
     no exemptions at all, which is the fail-closed direction."""
-    import subprocess
     if not os.path.exists(CONTRACT_DELETIONS_MD):
         return {}, []
     src = _oracle_src()
@@ -853,14 +920,13 @@ def contract_deletions():
             rejects.append((entry, "the test still exists upstream"))
             continue
         # (2) the commit is reachable from the oracle's HEAD
-        if subprocess.run(["git", "-C", oracle, "merge-base", "--is-ancestor",
-                           sha, "HEAD"], capture_output=True).returncode != 0:
+        if oracle_git(oracle, "merge-base", "--is-ancestor",
+                      sha, "HEAD").returncode != 0:
             rejects.append((entry, f"{sha} is not an ancestor of the oracle HEAD"))
             continue
         # (3) that commit removed exactly this declaration
-        diff = subprocess.run(
-            ["git", "-C", oracle, "show", "--format=", "-U0", sha, "--", "src"],
-            capture_output=True, text=True).stdout
+        diff = oracle_git(oracle, "show", "--format=", "-U0", sha, "--", "src",
+                          text=True).stdout
         if not _test_decl_re(name, prefix="-").search(diff):
             rejects.append((entry, f"{sha} does not remove `test \"{name}\"`"))
             continue

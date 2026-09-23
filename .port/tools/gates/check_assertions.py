@@ -187,9 +187,10 @@ class _LiveOracle:
         if not sha or not oracle_file:
             return False
         path = os.path.join("src", oracle_file)
-        r = subprocess.run(["git", "-C", self.oracle, "log", "-1",
-                            "--format=%H", sha, "--", path],
-                           capture_output=True, text=True)
+        # `G.oracle_git`: GIT_* stripped, so a GIT_DIR decoy cannot answer
+        # "did this commit touch the file" for the oracle (R5).
+        r = G.oracle_git(self.oracle, "log", "-1", "--format=%H", sha, "--", path,
+                         text=True)
         return r.returncode == 0 and r.stdout.strip() != ""
 
 
@@ -688,6 +689,20 @@ def drift_self_test():
     write_ledger(2, 1, shrink_sha)
     r = invoke()
     arm("[i] verified row (2->1, rust 1 >= live 1) -> GREEN",
+        r.returncode == 0 and "DRIFT-OK" in r.stdout, r)
+
+    # (i2) R13-GF3: the same verified row, with GIT_DIR + GIT_WORK_TREE naming a
+    #      decoy repository and the decoy as the working directory. `commit_touches`
+    #      reads the oracle through `G.oracle_git` (GIT_* stripped), so the row is
+    #      still verified. A plain `git -C <oracle> log` would ask the decoy, which
+    #      has no such commit, and reject it.
+    decoy = os.path.join(base, "decoy")
+    os.makedirs(decoy)
+    sp.run(["git", "init", "-q"], cwd=decoy, env=G.git_env(), capture_output=True)
+    r = sp.run([sys.executable, script], capture_output=True, text=True, cwd=decoy,
+               env=dict(G.git_env(), GIT_DIR=os.path.join(decoy, ".git"),
+                        GIT_WORK_TREE=decoy))
+    arm("[i2] verified row under a GIT_DIR + GIT_WORK_TREE decoy -> GREEN",
         r.returncode == 0 and "DRIFT-OK" in r.stdout, r)
 
     # (j) the row MISSTATES the live tree (claims live=0) => RED.

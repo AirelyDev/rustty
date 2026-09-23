@@ -3,6 +3,58 @@
 # Spec: docs/superpowers/specs/2026-07-15-rustty-c-header-family-design.md
 set -e
 root=$(cd "$(dirname "$0")/../../.." && pwd); cd "$root"
+
+# Every read of the oracle goes through `oracle_git`: the shared
+# `rustty_oracle_git` from `_oracle_root.sh` (every GIT_* variable removed),
+# reached through bash because this gate runs under `sh`. A plain
+# `git -C "$GH" show` honours GIT_DIR, so a decoy repository could answer
+# arm (d) with any export list (R5).
+ORACLE_LIB="$root/.port/tools/gates/_oracle_root.sh"
+oracle_git() { bash -c '. "$1" || exit 3; shift; rustty_oracle_git "$@"' oracle_git "$ORACLE_LIB" "$@"; }
+# oracle_exports ORACLE — the ONLY read of the oracle in this script: the
+# R2-renamed `rustty_*` names of origin/main:src/lib_vt.zig's exports, sorted.
+oracle_exports() {
+  oracle_git -C "$1" show origin/main:src/lib_vt.zig 2>/dev/null \
+    | grep -oE '\.name = "ghostty_[a-z0-9_]+"' \
+    | sed 's/.*"ghostty_/rustty_/; s/"$//' | sort -u
+}
+
+# --self-test-oracle (hermetic; run by G-ORACLE-SH-SELF): a fixture oracle and
+# a decoy, each exporting one different name at origin/main. With GIT_DIR +
+# GIT_WORK_TREE naming the decoy, `oracle_exports` on the fixture must return
+# the fixture's name. Then the same for the Node registry reader of arm (c).
+if [ "${1:-}" = "--self-test-oracle" ]; then
+  st=$(mktemp -d "${TMPDIR:-/tmp}/a5_oracle.XXXXXX")
+  if ! bash -c '. "$1" || exit 1
+      rustty_fixture_repo "$2/ghostty" src/lib_vt.zig "@export(&f, .{ .name = \"ghostty_fixture_real\" });" >/dev/null &&
+      rustty_fixture_repo "$2/decoy" src/lib_vt.zig "@export(&f, .{ .name = \"ghostty_decoy_only\" });" >/dev/null' \
+      a5_fixture "$ORACLE_LIB" "$st"; then
+    echo "SELF-TEST-ORACLE: FAIL (could not build the fixture repositories)"; rm -rf "$st"; exit 1
+  fi
+  got=$(GIT_DIR="$st/decoy/.git"; GIT_WORK_TREE="$st/decoy"; export GIT_DIR GIT_WORK_TREE
+        cd "$st/decoy" && oracle_exports "$st/ghostty") || got="<read failed>"
+  rm -rf "$st"
+  rc=0
+  if [ "$got" = "rustty_fixture_real" ]; then
+    echo "  ok   A5 arm (d): the oracle read ignores a GIT_DIR + GIT_WORK_TREE decoy"
+  else
+    echo "  FAIL A5 arm (d): the oracle read returned '$got', want 'rustty_fixture_real'"
+    rc=1
+  fi
+  if command -v node >/dev/null 2>&1; then
+    node .port/tools/check-vt-struct-layouts.mjs --self-test-oracle || rc=1
+  else
+    echo "  BLOCKED A5 arm (c): node is not installed, so its oracle read cannot be checked"
+    [ "$rc" -eq 0 ] && rc=3
+  fi
+  case "$rc" in
+    0) echo "SELF-TEST-ORACLE: PASS" ;;
+    3) echo "SELF-TEST-ORACLE: BLOCKED (never a pass)" ;;
+    *) echo "SELF-TEST-ORACLE: FAIL" ;;
+  esac
+  exit "$rc"
+fi
+
 lib=target/release/librustty_vt_c.dylib
 # P3-W6: UNCONDITIONAL, same reason as the wasm build below. This was
 # `[ -f "$lib" ] || cargo build …`, which is the SAME stale-artifact vacuity —
@@ -293,7 +345,9 @@ $(wc -l < "$T/vt_nonabi.txt" | tr -d ' ') documented non-ABI tokens)"
 # the pinned working tree because the lib-vt C-API series (BL-5) that defines this
 # surface lives BEYOND the pin and WS5 ported it from there; reading the pin would
 # under-count by 17 exports and make the arm weaker than the code it checks.
-# NEVER `git checkout` in the oracle repo — `git show` only.
+# NEVER `git checkout` in the oracle repo — `git show` only, through
+# `oracle_exports` (GIT_* stripped). `origin/main` rather than the pin is
+# deliberate (above), so no pin check applies to this arm.
 echo "== (d) every ORACLE lib_vt.zig export has a rustty_* counterpart =="
 GH="/Users/gael/projects/ghostty"
 if [ ! -d "$GH/.git" ]; then
@@ -302,9 +356,7 @@ if [ ! -d "$GH/.git" ]; then
   echo "           cannot bind here. This is NOT a pass."
   exit 3
 fi
-git -C "$GH" show origin/main:src/lib_vt.zig 2>/dev/null \
-  | grep -oE '\.name = "ghostty_[a-z0-9_]+"' \
-  | sed 's/.*"ghostty_/rustty_/; s/"$//' | sort -u > "$T/a5_oracle.txt"
+oracle_exports "$GH" > "$T/a5_oracle.txt"
 if [ ! -s "$T/a5_oracle.txt" ]; then
   echo "  BLOCKED: read 0 exports from oracle origin/main:src/lib_vt.zig."
   echo "           An empty reference side would make this arm VACUOUS (R5), so it"
