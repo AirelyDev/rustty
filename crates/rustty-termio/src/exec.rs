@@ -2077,6 +2077,9 @@ fn subprocess_pre_exec(cmd: &mut Command) -> Option<u8> {
         // log.err("error initializing child: {}", .{err});
         //
         // PORT NOTE (async-signal safety) — see `log_err_child_raw` below.
+        // PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD101: the
+        // reference's `log.err` here can deadlock the child on a lock another
+        // thread held at the fork; this raw `write(2)` is the safe handling.
         // THIS RUNS IN THE FORKED CHILD, between `fork(2)` and `execve(2)`, so
         // the `log::` facade must never be used here. `rustty-apprt`'s
         // `gtk/pre_exec.rs` is the PRECEDENT this follows, not a case to
@@ -8408,6 +8411,74 @@ mod child_raw_log_tests {
         assert!(
             body.contains("libc::write("),
             "the emission must be a raw write(2) — POSIX async-signal-safe"
+        );
+    }
+
+    /// UD101 (R13, task R13-D): the behaviour the structural test above stands
+    /// in for. The reference logs from the forked child through the global
+    /// `logFn`, which takes a process-wide stderr lock (`main_ghostty.zig`,
+    /// `std.debug.lockStderr`); if another thread held it at the fork, it is held
+    /// forever in the child and the child hangs before `exec`. Here a thread
+    /// holds std's stderr lock across a real `fork`, and the child runs
+    /// `log_err_child_raw`; it must exit, within 5 s, where a locking printer
+    /// would block for good.
+    #[test]
+    fn log_err_child_raw_completes_in_a_child_forked_while_stderr_is_locked() {
+        use std::sync::mpsc::channel;
+        let _serial = crate::FORK_KAT_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+
+        let (locked_tx, locked_rx) = channel::<()>();
+        let (release_tx, release_rx) = channel::<()>();
+        let holder = std::thread::spawn(move || {
+            let _guard = std::io::stderr().lock();
+            locked_tx.send(()).unwrap();
+            let _ = release_rx.recv();
+        });
+        locked_rx.recv().unwrap();
+
+        // SAFETY: the child only redirects fd 2, calls the helper under test
+        // (stack buffer + `write(2)`) and `_exit`s.
+        let pid = unsafe { libc::fork() };
+        assert!(pid >= 0, "fork(2) failed");
+        if pid == 0 {
+            unsafe {
+                let null = libc::open(c"/dev/null".as_ptr(), libc::O_WRONLY);
+                libc::dup2(null, 2);
+                log_err_child_raw(&crate::Error);
+                libc::_exit(0);
+            }
+        }
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut status = 0;
+        let exited = loop {
+            let rc = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+            if rc == pid {
+                break true;
+            }
+            if std::time::Instant::now() >= deadline {
+                break false;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        };
+        if !exited {
+            unsafe {
+                libc::kill(pid, libc::SIGKILL);
+                libc::waitpid(pid, &mut status, 0);
+            }
+        }
+        release_tx.send(()).unwrap();
+        holder.join().unwrap();
+
+        assert!(
+            exited,
+            "the forked child hung on the stderr lock another thread held at the fork"
+        );
+        assert!(
+            libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0,
+            "the child ran to its _exit(0), status {status:#x}"
         );
     }
 }
