@@ -7,7 +7,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
 
 ## Medium (16)
 
-- [ ] **S63-F1** · CONFIRMED · `INDIV` · missing-branch
+- [x] **S63-F1** · CONFIRMED · `INDIV` · missing-branch
   - **What:** update-translations drops the command-palette source and the N_ keyword from xgettext
   - **Oracle:** `src/build/GhosttyI18n.zig:64-71, 152-155` → **Rustty:** `xtask/src/translations.rs:79-92, 196-219`
   - **Audit's suggested fix:** Add `crates/rustty-input/src/command.rs` (and `--keyword=N_`) to the GTK xgettext leg in translations.rs, matching GhosttyI18n.zig:152-155.

@@ -140,8 +140,9 @@ fn collect_recursive(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
 }
 
 /// Write a minimal, valid empty gettext template (header-only). Used when the
-/// GTK-apprt leg has zero source files, so the merge step still has a
-/// well-formed `gtk.pot` to consume (rather than erroring on "no input file").
+/// Nautilus script is absent, so the merge step still has a well-formed
+/// `py.pot` to consume (rather than erroring on "no input file"). The GTK leg
+/// never needs it: the command-palette source is always one of its inputs.
 fn write_empty_pot(path: &Path) -> Result<(), String> {
     let body = "\
 # SOME DESCRIPTIVE TITLE.\n\
@@ -151,6 +152,58 @@ msgstr \"\"\n\
 \"Content-Type: text/plain; charset=UTF-8\\n\"\n\
 \"Content-Transfer-Encoding: 8bit\\n\"\n";
     std::fs::write(path, body).map_err(|e| format!("write empty pot {}: {e}", path.display()))
+}
+
+/// "For localization of command palette" (`GhosttyI18n.zig:152-155`): the
+/// reference's `src/input/command.zig`, as a repo-relative path so the `.pot`
+/// carries no checkout-specific prefix.
+const COMMAND_PALETTE_PATH: &str = "crates/rustty-input/src/command.rs";
+
+/// The GTK leg's `xgettext --language=C` invocation (`GhosttyI18n.zig:63-155`),
+/// writing `gtk_pot` from the repo-relative `gtk_sources`. Run it with the
+/// workspace root as the current directory.
+fn gtk_xgettext_command(gtk_pot: &Path, gtk_sources: &[PathBuf]) -> Command {
+    // --language=C silences xgettext's "unknown extension" errors on .blp/.rs;
+    // --keyword=_ / --keyword=C_:1c,2 match rustty-os's `_()` / `C_()` gettext
+    // wrappers (`C_` = pgettext: arg 1 is the context `c`, arg 2 the msgid).
+    //
+    // --force-po is a rustty adaptation NOT in upstream: with the placeholder
+    // GTK apprt the scanned .rs files contain zero recognized `_()` call sites,
+    // and without --force-po xgettext writes NO output file when it extracts no
+    // messages — which would then break the merge step below on a missing
+    // gtk.pot. --force-po forces a valid header-only .pot to always be written.
+    // (Upstream never hits this because ghostty's live .blp/.zig always yield
+    // messages.) It is harmless once real strings exist.
+    let mut xg = Command::new("xgettext");
+    xg.arg("--language=C")
+        .arg("--from-code=UTF-8")
+        .arg("--force-po")
+        .arg("--keyword=_")
+        // `--keyword=N_` (`GhosttyI18n.zig:69`) marks the command-palette
+        // titles and descriptions: `command.rs` wraps each in `i18n::N_(b"…")`,
+        // and the C lexer reads the `b` prefix as an identifier and still
+        // extracts the literal (measured: 180 msgids).
+        .arg("--keyword=N_")
+        // rustty-specific: `_` is not a legal Rust fn name, so `os/i18n.zig`'s
+        // `_()` is ported as `rustty_os::i18n::gettext_()`, called from the GTK
+        // apprt through the `&str`-returning wrapper `crate::gtk::i18n::tr()`.
+        // xgettext's C lexer tokenizes `i18n::gettext_(c"…")` / `tr(c"…")` such
+        // that these keywords match (the `c"…"` literal prefix is harmless to
+        // the C lexer). WITHOUT them every Rust call site is invisible to
+        // extraction — measured: 0 `.rs:` references before, 26 after.
+        .arg("--keyword=gettext_")
+        .arg("--keyword=tr")
+        .arg("--keyword=C_:1c,2")
+        .arg("-o")
+        .arg(gtk_pot);
+    for src in gtk_sources {
+        // Repo-relative paths (run from `root`) keep the .pot free of
+        // absolute checkout paths.
+        xg.arg(src);
+    }
+    // For localization of command palette
+    xg.arg(COMMAND_PALETTE_PATH);
+    xg
 }
 
 /// Port of `GhosttyI18n.createUpdateStep`: regenerate `po/<DOMAIN>.pot` from
@@ -175,49 +228,12 @@ pub fn update_translations() -> Result<PathBuf, String> {
     let py_pot = tmp.join("py.pot");
 
     // ── (1) GTK leg: xgettext --language=C over the .blp + .rs sources. ──
-    //
-    // --language=C silences xgettext's "unknown extension" errors on .blp/.rs;
-    // --keyword=_ / --keyword=C_:1c,2 match rustty-os's `_()` / `C_()` gettext
-    // wrappers (`C_` = pgettext: arg 1 is the context `c`, arg 2 the msgid).
-    //
-    // --force-po is a rustty adaptation NOT in upstream: with the placeholder
-    // GTK apprt the scanned .rs files contain zero recognized `_()` call sites,
-    // and without --force-po xgettext writes NO output file when it extracts no
-    // messages — which would then break the merge step below on a missing
-    // gtk.pot. --force-po forces a valid header-only .pot to always be written.
-    // (Upstream never hits this because ghostty's live .blp/.zig always yield
-    // messages.) It is harmless once real strings exist.
+    // The flags and their rationale are at `gtk_xgettext_command`.
     let gtk_sources = collect_gtk_sources(&root)?;
-    if gtk_sources.is_empty() {
-        // No GTK source files at all: xgettext would error "no input file
-        // given", so emit a valid empty template directly. EXPECTED today if
-        // crates/rustty-apprt has no .blp/.rs.
-        write_empty_pot(&gtk_pot)?;
-    } else {
-        let mut xg = Command::new("xgettext");
-        xg.arg("--language=C")
-            .arg("--from-code=UTF-8")
-            .arg("--force-po")
-            .arg("--keyword=_")
-            // rustty-specific: `_` is not a legal Rust fn name, so `os/i18n.zig`'s
-            // `_()` is ported as `rustty_os::i18n::gettext_()`, called from the GTK
-            // apprt through the `&str`-returning wrapper `crate::gtk::i18n::tr()`.
-            // xgettext's C lexer tokenizes `i18n::gettext_(c"…")` / `tr(c"…")` such
-            // that these keywords match (the `c"…"` literal prefix is harmless to
-            // the C lexer). WITHOUT them every Rust call site is invisible to
-            // extraction — measured: 0 `.rs:` references before, 26 after.
-            .arg("--keyword=gettext_")
-            .arg("--keyword=tr")
-            .arg("--keyword=C_:1c,2")
-            .arg("-o")
-            .arg(&gtk_pot);
-        for src in &gtk_sources {
-            // Repo-relative paths (run from `root`) keep the .pot free of
-            // absolute checkout paths.
-            xg.arg(src);
-        }
-        run(xg.current_dir(&root), "xgettext (gtk)")?;
-    }
+    run(
+        gtk_xgettext_command(&gtk_pot, &gtk_sources).current_dir(&root),
+        "xgettext (gtk)",
+    )?;
 
     // ── (2) Python leg: xgettext --language=Python over the Nautilus script. ──
     // --force-po for the same robustness reason as the GTK leg above.
@@ -304,4 +320,58 @@ fn capture(cmd: &mut Command, what: &str) -> Result<Vec<u8>, String> {
         ));
     }
     Ok(output.stdout)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `GhosttyI18n.zig:63-71` passes `--keyword=N_` and `:152-155` adds the
+    /// command-palette source (`src/input/command.zig`, ported as
+    /// `crates/rustty-input/src/command.rs`) to the GTK leg. S63-F1.
+    #[test]
+    fn gtk_xgettext_carries_the_n_keyword_and_the_command_palette() {
+        let cmd = gtk_xgettext_command(Path::new("gtk.pot"), &[PathBuf::from("a.blp")]);
+        let args: Vec<_> = cmd.get_args().map(|a| a.to_str().unwrap()).collect();
+        assert!(args.contains(&"--keyword=N_"), "{args:?}");
+        assert_eq!(
+            args.last(),
+            Some(&COMMAND_PALETTE_PATH),
+            "the command palette is the last input, after the GTK sources: {args:?}"
+        );
+        assert!(args.contains(&"a.blp"), "{args:?}");
+    }
+
+    /// Runs the real GTK-leg command over NO GTK sources, so every msgid in
+    /// the output comes from the command-palette input and the `N_` keyword.
+    /// 180 is the command-palette block the committed `.pot` carries
+    /// (`crates/rustty-apprt/tests/i18n_msgid_coverage.rs` pins the same 180).
+    /// Needs `xgettext` on `PATH`; without it the test reports that it did
+    /// not run rather than passing silently.
+    #[test]
+    fn gtk_xgettext_extracts_the_command_palette_msgids() {
+        if Command::new("xgettext").arg("--version").output().is_err() {
+            eprintln!("SKIPPED: xgettext is not on PATH");
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("xtask-i18n-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let pot = dir.join("gtk.pot");
+        let status = gtk_xgettext_command(&pot, &[])
+            .current_dir(workspace_root())
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let body = std::fs::read_to_string(&pot).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        // Every `msgid` entry except the header's. (A wrapped long msgid also
+        // starts `msgid ""`, so the header is subtracted, not filtered.)
+        let msgids = body.lines().filter(|l| l.starts_with("msgid ")).count() - 1;
+        assert_eq!(msgids, 180, "{body}");
+        assert!(
+            body.contains("#: crates/rustty-input/src/command.rs:")
+                && body.contains("msgid \"Reset Terminal\""),
+            "{body}"
+        );
+    }
 }
