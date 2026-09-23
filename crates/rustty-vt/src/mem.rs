@@ -27,6 +27,15 @@
 use crate::page::PAGE_SIZE_MIN;
 
 // const log = std.log.scoped(.terminal_mem);
+// The scope, carried through the `log` facade as `target: LOG_SCOPE`
+// (DECISION-logging.md §6r4).
+// CORRECTION (parity S156-F3): the three `log.warn` calls below were
+// comment-only.
+#[cfg_attr(
+    not(any(target_os = "macos", target_os = "ios", target_os = "linux")),
+    allow(dead_code)
+)]
+const LOG_SCOPE: &str = "terminal_mem";
 
 /// What guarantee decommit must provide when the OS cannot discard a mapping.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,16 +71,85 @@ extern "C" {
     fn libc_madvise(addr: *mut core::ffi::c_void, len: usize, advice: i32) -> i32;
 }
 
-/// Issue one `madvise` call. Returns true when the kernel accepted it.
+/// `std.posix.MadviseError`, the error `std.posix.madvise` maps each errno to
+/// (zig 0.16 `std/posix.zig:1408-1421`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)] // each errno arm is reachable only on some targets
+enum MadviseError {
+    PermissionDenied,
+    AccessDenied,
+    SystemResources,
+    InvalidSyscall,
+    WouldExceedMaximumResidentSetSize,
+    OutOfMemory,
+    MadviseUnavailable,
+    Unexpected,
+}
+
+impl MadviseError {
+    // switch (errno(system.madvise(ptr, length, advice))) {
+    //     .SUCCESS => return,
+    //     .PERM => return error.PermissionDenied,
+    //     .ACCES => return error.AccessDenied,
+    //     .AGAIN => return error.SystemResources,
+    //     .BADF => unreachable, // The map exists, but the area maps something that isn't a file.
+    //     .INVAL => return error.InvalidSyscall,
+    //     .IO => return error.WouldExceedMaximumResidentSetSize,
+    //     .NOMEM => return error.OutOfMemory,
+    //     .NOSYS => return error.MadviseUnavailable,
+    //     else => |err| return unexpectedErrno(err),
+    // }
+    // PORT NOTE: the std `.BADF => unreachable` arm is `Unexpected` here; the
+    // callers pass anonymous page mappings, so the kernel never reports it,
+    // and a std-library `unreachable` is not an invariant this crate asserts.
+    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "linux"))]
+    fn from_errno(errno: i32) -> MadviseError {
+        match errno {
+            libc_errno::EPERM => MadviseError::PermissionDenied,
+            libc_errno::EACCES => MadviseError::AccessDenied,
+            libc_errno::EAGAIN => MadviseError::SystemResources,
+            libc_errno::EINVAL => MadviseError::InvalidSyscall,
+            libc_errno::EIO => MadviseError::WouldExceedMaximumResidentSetSize,
+            libc_errno::ENOMEM => MadviseError::OutOfMemory,
+            libc_errno::ENOSYS => MadviseError::MadviseUnavailable,
+            _ => MadviseError::Unexpected,
+        }
+    }
+}
+
+/// The errno values `MadviseError::from_errno` distinguishes. They are the
+/// same on Darwin and Linux (x86_64/aarch64) except `EAGAIN` and `ENOSYS`.
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "linux"))]
+mod libc_errno {
+    pub const EPERM: i32 = 1;
+    pub const EIO: i32 = 5;
+    pub const ENOMEM: i32 = 12;
+    pub const EACCES: i32 = 13;
+    pub const EINVAL: i32 = 22;
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    pub const EAGAIN: i32 = 35;
+    #[cfg(target_os = "linux")]
+    pub const EAGAIN: i32 = 11;
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    pub const ENOSYS: i32 = 78;
+    #[cfg(target_os = "linux")]
+    pub const ENOSYS: i32 = 38;
+}
+
+/// Issue one `madvise` call (`std.posix.madvise`).
 ///
 /// # Safety
 /// `ptr` must be a live, page-aligned mapping of at least `len` bytes.
 #[cfg(any(target_os = "macos", target_os = "ios", target_os = "linux"))]
 #[inline]
-unsafe fn madvise(ptr: *mut u8, len: usize, advice: i32) -> bool {
+unsafe fn madvise(ptr: *mut u8, len: usize, advice: i32) -> Result<(), MadviseError> {
     // SAFETY: caller contract — `ptr` is a live page-aligned mapping of `len`
     // bytes; `madvise` never dereferences it from Rust's perspective.
-    unsafe { libc_madvise(ptr as *mut core::ffi::c_void, len, advice) == 0 }
+    if unsafe { libc_madvise(ptr as *mut core::ffi::c_void, len, advice) } == 0 {
+        return Ok(());
+    }
+    let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
+    Err(MadviseError::from_errno(errno))
 }
 
 /// # Safety
@@ -79,8 +157,8 @@ unsafe fn madvise(ptr: *mut u8, len: usize, advice: i32) -> bool {
 #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "linux")))]
 #[inline]
 #[allow(dead_code)] // no caller on targets without retained-mapping reclaim (e.g. wasm32)
-unsafe fn madvise(_ptr: *mut u8, _len: usize, _advice: i32) -> bool {
-    false
+unsafe fn madvise(_ptr: *mut u8, _len: usize, _advice: i32) -> Result<(), MadviseError> {
+    Err(MadviseError::MadviseUnavailable)
 }
 
 /// Return whether this target can reclaim physical memory for `mode` while
@@ -183,10 +261,11 @@ pub unsafe fn decommit(mode: DecommitMode, ptr: *mut u8, len: usize, dirty_len: 
     #[cfg(target_os = "linux")]
     {
         // SAFETY: caller contract — `ptr` is a live page-aligned mapping.
-        if unsafe { madvise(ptr, len, MADV_DONTNEED) } {
+        let Err(err) = (unsafe { madvise(ptr, len, MADV_DONTNEED) }) else {
             return true;
-        }
+        };
         // log.warn("madvise(DONTNEED) failed err={}", .{err});
+        log::warn!(target: LOG_SCOPE, "madvise(DONTNEED) failed err={err:?}");
         if matches!(mode, DecommitMode::Strict) {
             return false;
         }
@@ -205,13 +284,14 @@ pub unsafe fn decommit(mode: DecommitMode, ptr: *mut u8, len: usize, dirty_len: 
         }
 
         // SAFETY: caller contract — `ptr` is a live page-aligned mapping.
-        if unsafe { madvise(ptr, len, MADV_FREE_REUSABLE) } {
+        let Err(err) = (unsafe { madvise(ptr, len, MADV_FREE_REUSABLE) }) else {
             return true;
-        }
+        };
 
         match mode {
             DecommitMode::Strict => {
                 // log.warn("madvise(FREE_REUSABLE) failed err={}", .{err});
+                log::warn!(target: LOG_SCOPE, "madvise(FREE_REUSABLE) failed err={err:?}");
                 return false;
             }
 
@@ -258,8 +338,9 @@ pub unsafe fn recommit(ptr: *mut u8, len: usize) {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     {
         // SAFETY: caller contract — `ptr` is a live page-aligned mapping.
-        if !unsafe { madvise(ptr, len, MADV_FREE_REUSE) } {
+        if let Err(err) = unsafe { madvise(ptr, len, MADV_FREE_REUSE) } {
             // log.warn("madvise(FREE_REUSE) failed err={}", .{err});
+            log::warn!(target: LOG_SCOPE, "madvise(FREE_REUSE) failed err={err:?}");
         }
     }
 
@@ -272,6 +353,22 @@ pub unsafe fn recommit(ptr: *mut u8, len: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Parity S156-F3 (no reference test): the logged `err` is the
+    // `std.posix.MadviseError` the call failed with. An unknown advice value
+    // is EINVAL, which std maps to `error.InvalidSyscall`.
+    #[test]
+    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "linux"))]
+    #[cfg_attr(miri, ignore)] // FFI
+    fn madvise_reports_the_std_posix_error() {
+        let (ptr, layout) = aligned_alloc(crate::page::PAGE_SIZE_MIN);
+        // SAFETY: the kernel rejects the advice without touching the range.
+        let result = unsafe { madvise(ptr, crate::page::PAGE_SIZE_MIN, 0x7fff) };
+        assert_eq!(Err(MadviseError::InvalidSyscall), result);
+        assert_eq!("InvalidSyscall", format!("{:?}", result.unwrap_err()));
+        // SAFETY: allocated above with `layout`.
+        unsafe { std::alloc::dealloc(ptr, layout) };
+    }
 
     fn aligned_alloc(len: usize) -> (*mut u8, std::alloc::Layout) {
         let layout = std::alloc::Layout::from_size_align(len, crate::page::PAGE_SIZE_MIN).unwrap();

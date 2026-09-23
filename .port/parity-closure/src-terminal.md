@@ -285,11 +285,11 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** Verbatim comment blocks for main.zig's root test and lib.zig are stale (omit compress/fraction/mem and TinyIo lines)
   - **Oracle:** `src/terminal/main.zig:93-104` → **Rustty:** `crates/rustty-vt/src/lib.rs:330-341, 288-296`
   - **Audit's suggested fix:** Refresh the two verbatim comment blocks to the pinned oracle text.
-- [ ] **S156-F3** · CONFIRMED · `INDIV` · other
+- [x] **S156-F3** · CONFIRMED · `INDIV` · other
   - **What:** madvise failure warnings not logged
   - **Oracle:** `src/terminal/mem.zig:109,129,169` → **Rustty:** `crates/rustty-vt/src/mem.rs:189,214,262`
   - **Audit's suggested fix:** Wire a logging facade (e.g. the `log` crate) into rustty-vt and emit the three warnings, including the errno.
-- [ ] **S156-F4** · CONFIRMED · `INDIV` · other
+- [x] **S156-F4** · CONFIRMED · `INDIV` · other
   - **What:** ensureAllocator warning not logged
   - **Oracle:** `src/terminal/osc.zig:439-444` → **Rustty:** `crates/rustty-vt/src/osc/mod.rs:895-906`
   - **Audit's suggested fix:** Emit the warning through a logging facade once one is wired into rustty-vt.

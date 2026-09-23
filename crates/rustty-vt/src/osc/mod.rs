@@ -652,6 +652,21 @@ pub enum State {
     S5522,
 }
 
+impl State {
+    /// `@tagName(state)`, as `{t}` prints it: `start`, `invalid`, or the
+    /// OSC number (`@"52"` is `52`).
+    // PORT NOTE: the numeric reference tags are spelled `S<n>` here (a Rust
+    // identifier cannot start with a digit); the tag is the variant name with
+    // that `S` removed, or the lower-cased name for the two word tags.
+    pub fn tag_name(self) -> String {
+        let name = format!("{self:?}");
+        match name.strip_prefix('S') {
+            Some(digits) if digits.bytes().all(|b| b.is_ascii_digit()) => digits.to_string(),
+            _ => name.to_ascii_lowercase(),
+        }
+    }
+}
+
 /// PORT NOTE: the capture backing. The reference uses `std.Io.Writer` over
 /// either a fixed buffer or an allocating buffer. The filled parser path
 /// threads the fixed/allocating distinction through `CaptureMode`.
@@ -950,11 +965,17 @@ impl<'a> Parser<'a> {
         if self.alloc.is_some() {
             return true;
         }
-        // PORT NOTE: `const log = std.log.scoped(.osc);` — Rustty has no logging
-        // facade wired into this crate (matching the convention used by PageList
-        // / DCS et al.), so the scoped logger and its calls are ported as
-        // commented lines.
+        // const log = std.log.scoped(.osc);
         // log.warn("An allocator is required to process OSC {t} but none was provided.", .{self.state});
+        // CORRECTION (parity S156-F4): a PORT NOTE here said "Rustty has no
+        // logging facade wired into this crate (matching the convention used by
+        // PageList / DCS et al.), so the scoped logger and its calls are ported
+        // as commented lines". The crate logs through the `log` facade.
+        log::warn!(
+            target: "osc",
+            "An allocator is required to process OSC {} but none was provided.",
+            self.state.tag_name()
+        );
         self.state = State::Invalid;
         false
     }
@@ -1444,6 +1465,32 @@ mod ref_tests {
 mod capture_tests {
     use super::*;
     use rustty_lib::allocator::{GlobalZigAllocator, ZigAllocatorRef};
+
+    // Parity S156-F4 (no reference test): `ensureAllocator` warns, naming the
+    // state with `{t}`, before it invalidates the parser.
+    #[test]
+    fn ensure_allocator_warns_when_no_allocator_was_provided() {
+        assert_eq!("start", State::Start.tag_name());
+        assert_eq!("invalid", State::Invalid.tag_name());
+        assert_eq!("5522", State::S5522.tag_name());
+
+        let mut p = Parser::init(None);
+        let cap = crate::log_capture::start();
+        for ch in b"10;" {
+            p.next(*ch);
+        }
+        let messages = cap.messages();
+        drop(cap);
+        assert_eq!(State::Invalid, p.state);
+        assert_eq!(
+            vec![(
+                log::Level::Warn,
+                "osc".to_string(),
+                "An allocator is required to process OSC 10 but none was provided.".to_string(),
+            )],
+            messages
+        );
+    }
 
     // test "Parser allocating captures have a hard limit"
     #[test]
