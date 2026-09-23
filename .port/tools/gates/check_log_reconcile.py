@@ -38,6 +38,21 @@ count, so the arm can read greener than a per-site audit would. The portmap
 records every such overlap in its `reason` column. A green here means "no
 diagnostic mass was lost", not "every individual site is live".
 
+PORT-ONLY EMISSIONS (N81): a port diagnostic with NO reference counterpart — an
+R13 handling line, a D11 range guard, an extra static copy of one reference site
+— used to be counted, and because a surplus is clamped it silently credited its
+file with a site that is not there, masking the next real loss (deleting the
+ported `PageList.zig:775` left the gate GREEN). `LOG-PORT-ONLY.tsv` declares each
+one by call site (enclosing fn + call-text substring), and it is SUBTRACTED from
+every arm containing its file before the comparison. Every row must select
+exactly one live emission (none = stale, several = ambiguous, both RED), and the
+row count sits on a two-way `#!port-only-cap` ratchet; a missing directive or a
+malformed row is BLOCKED. The subtraction only ever lowers a port count, so it
+cannot hide a loss. Two credits it does NOT remove, because they are real
+counterparts of OTHER reference files: shared-file overlap (above) and a call
+site of another file's log helper (`application.rs` calling `gtk_version`'s
+`log_version`) — N190.
+
 EXCLUSION BUDGET: an exclusion retires a reference file rather than reconciling
 it, erasing its whole deficit — the widest lever here, and once the only number
 that was not ratcheted (retiring `src/termio/Exec.zig` wiped 58 sites and stayed
@@ -71,6 +86,7 @@ ROOT = os.path.dirname(PORT_DIR)
 PORTMAP = os.path.join(PORT_DIR, "parity-closure", "LOG-PORTMAP.tsv")
 DIVERGENCES = os.path.join(PORT_DIR, "parity-closure", "LOG-TEXT-DIVERGENCES.tsv")
 DEAD_SITES = os.path.join(PORT_DIR, "parity-closure", "LOG-DEAD-SITES.tsv")
+PORT_ONLY = os.path.join(PORT_DIR, "parity-closure", "LOG-PORT-ONLY.tsv")
 LEDGER = os.path.join(PORT_DIR, "parity-closure", "LEDGER.tsv")
 
 # R3: the oracle is an EXTERNAL read-only checkout, never shipped into the repo.
@@ -535,8 +551,14 @@ def discover_emitters(sources):
     return emitters, defs, stubs
 
 
-def rust_emissions(paths, sources, emitters, defs):
-    """[(path, line, what)] live emission sites across `paths`."""
+def emission_sites(paths, sources, emitters, defs):
+    """[(path, pos, line, what)] live emission sites across `paths`, with offsets.
+
+    The one place that decides what an emission IS. `rust_emissions` (the count)
+    and the LOG-PORT-ONLY.tsv resolver (which must name one of exactly these
+    sites) both read it, so a declaration can never select something the count
+    does not count.
+    """
     hits = []
     for path in paths:
         code, nc = sources[path]
@@ -549,15 +571,23 @@ def rust_emissions(paths, sources, emitters, defs):
 
         for pos in primitive_sites(code, nc):
             if not inside(pos):
-                hits.append((path, code.count("\n", 0, pos) + 1, "direct"))
+                hits.append((path, pos, code.count("\n", 0, pos) + 1, "direct"))
         tspans = test_ranges(code)
         for name in emitters:
             for m in re.finditer(
                 r"(?<![A-Za-z0-9_.])" + re.escape(name) + r"\s*[!(]", code
             ):
                 if not inside(m.start()) and not in_spans(m.start(), tspans):
-                    hits.append((path, code.count("\n", 0, m.start()) + 1, name))
+                    hits.append(
+                        (path, m.start(), code.count("\n", 0, m.start()) + 1, name)
+                    )
     return hits
+
+
+def rust_emissions(paths, sources, emitters, defs):
+    """[(path, line, what)] live emission sites across `paths`."""
+    return [(p, line, what) for p, _pos, line, what in
+            emission_sites(paths, sources, emitters, defs)]
 
 
 # ---------------------------------------------------------------------------
@@ -1080,6 +1110,205 @@ def dead_lines_by_file(dead_rows):
 
 
 # ---------------------------------------------------------------------------
+# Port-only emissions (N81)
+# ---------------------------------------------------------------------------
+# The MIRROR IMAGE of a dead site. A dead site is a reference call with no port
+# counterpart that must come OFF the reference count; a port-only emission is a
+# port diagnostic with no reference counterpart that must come OFF the port
+# count. Before this file existed nothing could say so, and because a surplus is
+# clamped (`max(0, reference - port)`) such an emission was not merely uncounted
+# but INVISIBLE: it silently credited its reference file with one site and so
+# masked the next real loss there. Measured (N81): `src/terminal/PageList.zig`
+# read 23 reference / 24 port because of the port-only R13 degrade warning at
+# `pagelist/grow.rs` (`log_row_degrade`), and deleting the genuinely ported
+# `PageList.zig:775` site left the gate GREEN.
+#
+# A declaration can only make the count STRICTER (it lowers a port total), so it
+# cannot hide a loss. It can still rot: a declaration that selects nothing, or
+# selects the wrong thing, would quietly stop subtracting. So every row must
+# resolve to EXACTLY ONE live production emission — none is RED (stale), two or
+# more is RED (ambiguous), two rows selecting the same emission is RED — and the
+# number of rows is capped on the same two-way ratchet as every other escape
+# hatch in this gate. A missing cap directive BLOCKS.
+#
+# Rows key on the CALL SITE, never on a line number (line numbers drift; see
+# `load_divergences`): the innermost enclosing Rust `fn` plus a substring of the
+# emission's own call text. `fn#k` picks the k-th match inside that fn in file
+# order, for the one case text cannot separate — two textually identical copies
+# in one function (a `#[cfg]` twin).
+PORT_ONLY_KINDS = (
+    "r13-handling",     # port-only diagnostic of the safe handling of a reference defect (R13)
+    "rust-only-path",   # an arm or path only Rust has (an Option/Result, seam or API the reference lacks)
+    "abi-guard",        # a C-boundary range guard with no reference counterpart (D11)
+    "instrumentation",  # rustty-only instrumentation on its own target
+    "expansion",        # an EXTRA static copy of ONE reference site (unrolled inline-for, cfg twin, split arm)
+    "open-finding",     # a port-only emission recorded as an open NEW-FINDINGS defect; delete the row when fixed
+)
+PORT_ONLY_DIRECTIVE = re.compile(r"^#!\s*port-only-cap\s+entries=(\d+)\s*$")
+PORT_ONLY_FN = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)(?:#([1-9][0-9]*))?$")
+
+
+def load_port_only(path):
+    """(rows, cap). Rows are {oracle, file, fn, occurrence, match, kind, reason}.
+
+    Malformed input is a ValueError (BLOCKED in `main`), never a skipped row: a
+    row the loader cannot read would silently stop subtracting.
+    """
+    rows, cap = [], None
+    if not os.path.exists(path):
+        return rows, cap
+    with open(path, encoding="utf-8", newline="") as fh:
+        for lineno, raw in enumerate(fh, 1):
+            line = raw.rstrip("\n")
+            m = PORT_ONLY_DIRECTIVE.match(line)
+            if m:
+                if cap is not None:
+                    raise ValueError(f"{path}:{lineno}: a second `#!port-only-cap` directive")
+                cap = int(m.group(1))
+                continue
+            if not line.strip() or line.lstrip().startswith("#"):
+                continue
+            parts = line.split("\t")
+            if parts[0].strip() == "oracle_file":
+                continue
+            if len(parts) != 6:
+                raise ValueError(
+                    f"{path}:{lineno}: expected 6 tab-separated columns "
+                    "(oracle_file, port_file, function, match, kind, reason), "
+                    f"got {len(parts)}"
+                )
+            fm = PORT_ONLY_FN.match(parts[2].strip())
+            if not fm:
+                raise ValueError(
+                    f"{path}:{lineno}: function {parts[2]!r} is not `name` or `name#k` (k >= 1)"
+                )
+            match = parts[3].replace("\\t", "\t").replace("\\n", "\n").replace("\\\\", "\\")
+            if not parts[0].strip() or not parts[1].strip() or not match.strip():
+                raise ValueError(f"{path}:{lineno}: oracle_file, port_file and match must be non-empty")
+            rows.append(
+                {
+                    "oracle": parts[0].strip(),
+                    "file": parts[1].strip(),
+                    "fn": fm.group(1),
+                    "occurrence": int(fm.group(2)) if fm.group(2) else None,
+                    "match": " ".join(match.split()),
+                    "kind": parts[4].strip(),
+                    "reason": parts[5].strip(),
+                    "lineno": lineno,
+                }
+            )
+    return rows, cap
+
+
+RUST_FN = re.compile(r"(?<![A-Za-z0-9_])fn\s+([A-Za-z_][A-Za-z0-9_]*)\s*[(<]")
+
+
+def rust_fn_spans(code):
+    """[(name, body_open, body_close)] for every `fn` with a body. `code` is stripped."""
+    out = []
+    for m in RUST_FN.finditer(code):
+        body = _brace_body(code, m.end() - 1)
+        if body:
+            out.append((m.group(1), body[0], body[1]))
+    return out
+
+
+def enclosing_fn(spans, pos):
+    """Name of the INNERMOST `fn` whose body contains `pos`, or None."""
+    best = None
+    for name, a, b in spans:
+        if a <= pos <= b and (best is None or a > best[1]):
+            best = (name, a)
+    return best[0] if best else None
+
+
+def call_text(code, nc, pos):
+    """The emission's call text from `pos` to its closing delimiter, whitespace-collapsed.
+
+    Delimiters are matched on `code` (string bodies blanked, so a `)` inside a
+    message cannot end the call early); the text is read from `nc` (strings kept,
+    comments blanked), which is offset-identical.
+    """
+    i = pos
+    while i < len(code) and code[i] not in "([{":
+        if code[i] == ";":
+            return " ".join(nc[pos:i].split())
+        i += 1
+    depth, j = 0, i
+    while j < len(code):
+        if code[j] in "([{":
+            depth += 1
+        elif code[j] in ")]}":
+            depth -= 1
+            if depth == 0:
+                break
+        j += 1
+    return " ".join(nc[pos : j + 1].split())
+
+
+def resolve_port_only(rows, pool, emitters, defs, portmap):
+    """Resolve every declaration to one live emission.
+
+    Returns (subtract, problems): `subtract` maps port file -> {offset: line} of
+    the emissions declared port-only (subtracted from every arm that contains the file —
+    a port-only emission has no counterpart in ANY reference file, so it
+    over-credits every reference file whose arm includes it); `problems` maps a
+    problem class -> [(row, detail)].
+    """
+    problems = {k: [] for k in ("missing_file", "not_in_arm", "bad_kind",
+                                "no_reason", "stale", "ambiguous", "duplicate")}
+    arm_files = {}
+    for r in portmap:
+        for arm in r.get("arms", []):
+            for f in arm:
+                arm_files.setdefault(r["oracle"], set()).add(f)
+    fn_cache, site_cache = {}, {}
+    subtract, taken = {}, {}
+    for row in rows:
+        if row["kind"] not in PORT_ONLY_KINDS:
+            problems["bad_kind"].append((row, row["kind"]))
+        if not row["reason"]:
+            problems["no_reason"].append((row, ""))
+        if row["file"] not in arm_files.get(row["oracle"], ()):
+            problems["not_in_arm"].append((row, row["oracle"]))
+            continue
+        if row["file"] not in pool:
+            problems["missing_file"].append((row, row["file"]))
+            continue
+        code, nc = pool[row["file"]]
+        if row["file"] not in site_cache:
+            spans = fn_cache.setdefault(row["file"], rust_fn_spans(code))
+            site_cache[row["file"]] = [
+                (pos, line, enclosing_fn(spans, pos), call_text(code, nc, pos))
+                for _p, pos, line, _w in sorted(
+                    emission_sites([row["file"]], pool, emitters, defs),
+                    key=lambda h: h[1],
+                )
+            ]
+        hits = [
+            (pos, line) for pos, line, fn, text in site_cache[row["file"]]
+            if fn == row["fn"] and row["match"] in text
+        ]
+        if row["occurrence"] is not None:
+            hits = hits[row["occurrence"] - 1 : row["occurrence"]]
+        if not hits:
+            problems["stale"].append((row, ""))
+            continue
+        if len(hits) > 1:
+            problems["ambiguous"].append((row, [line for _pos, line in hits]))
+            continue
+        key = (row["file"], hits[0][0])
+        if key in taken:
+            problems["duplicate"].append(
+                (row, f"line {hits[0][1]} is also selected by the row at :{taken[key]}")
+            )
+            continue
+        taken[key] = row["lineno"]
+        subtract.setdefault(row["file"], {})[hits[0][0]] = hits[0][1]
+    return subtract, problems
+
+
+# ---------------------------------------------------------------------------
 # Portmap
 # ---------------------------------------------------------------------------
 EXCLUSION_DIRECTIVE = re.compile(
@@ -1208,7 +1437,8 @@ def ledger_log_files(path):
 def verdict(portmap, claims, zig_text, rust_text, facade_sources=None, report=False,
             oracle_log_files=None, exclusion_cap=None, raw_sources=None,
             ref_index=None, divergences=None, divergence_cap=None,
-            unpairable_cap=None, dead_sites=None, dead_site_cap=None):
+            unpairable_cap=None, dead_sites=None, dead_site_cap=None,
+            port_only=None, port_only_cap=None):
     """Return (rc, lines). rc 0 GREEN, 1 RED. Pure — all I/O is in the callers.
 
     `zig_text(path)` / `rust_text(path)` return source text or None if absent.
@@ -1241,7 +1471,11 @@ def verdict(portmap, claims, zig_text, rust_text, facade_sources=None, report=Fa
 
     dead_rows = dead_sites or []
     dead_by_file = dead_lines_by_file(dead_rows)
+    # PORT-ONLY emissions come off the port count BEFORE any comparison (N81).
+    po_rows = port_only or []
+    po_subtract, po_problems = resolve_port_only(po_rows, pool, emitters, defs, portmap)
     rows, total_expected, total_actual, total_bypass = [], 0, 0, 0
+    po_by_oracle = {}
     missing_oracle, excluded_rows = [], []
     for r in portmap:
         if r.get("excluded"):
@@ -1255,14 +1489,18 @@ def verdict(portmap, claims, zig_text, rust_text, facade_sources=None, report=Fa
             [x for x in zig_sites(txt) if x not in dead_by_file.get(r["oracle"], ())]
         )
         total_expected += expected
-        arm_counts, arm_bypass = [], []
+        arm_counts, arm_bypass, arm_po = [], [], []
         for arm in r["arms"]:
             present = [f for f in arm if f in pool]
+            po = sum(len(po_subtract.get(f, {})) for f in present)
+            arm_po.append(po)
             arm_counts.append(
-                len(rust_emissions(present, pool, emitters, defs)) if present else 0
+                len(rust_emissions(present, pool, emitters, defs)) - po if present else 0
             )
             arm_bypass.append(len(rust_direct_prints(present, pool)) if present else 0)
         actual = min(arm_counts) if arm_counts else 0
+        if any(arm_po):
+            po_by_oracle[r["oracle"]] = arm_po
         # MAX over arms, not min: a bypass on ANY platform arm is a bypass.
         bypass = max(arm_bypass) if arm_bypass else 0
         total_actual += actual
@@ -1295,9 +1533,13 @@ def verdict(portmap, claims, zig_text, rust_text, facade_sources=None, report=Fa
                 f"   allowance={r['allowance']}"
                 + (f"   bypass={bypass}/{r['bypass_cap']}" if bypass or r["bypass_cap"] not in ("0", "") else "")
             )
+            po = po_by_oracle.get(r["oracle"], [0] * len(arm_counts))
             out.append(
                 "                       arms: "
-                + " | ".join(f"{'+'.join(a)}={c}" for a, c in zip(r["arms"], arm_counts))
+                + " | ".join(
+                    f"{'+'.join(a)}={c}" + (f" (after -{p} port-only)" if p else "")
+                    for a, c, p in zip(r["arms"], arm_counts, po)
+                )
             )
             out.append(
                 "                       rows: "
@@ -1371,6 +1613,18 @@ def verdict(portmap, claims, zig_text, rust_text, facade_sources=None, report=Fa
             f"inventory (budget {dead_site_cap}): "
             + ", ".join(f"{v} {k}" for k, v in sorted(kinds.items()))
             + " — the reference contains these calls and never reaches them"
+        )
+    if po_rows:
+        kinds = {}
+        for d in po_rows:
+            kinds[d["kind"]] = kinds.get(d["kind"], 0) + 1
+        out.append(
+            f"           {len(po_rows)} PORT-ONLY emission(s) declared and subtracted from "
+            f"the port count of {len(po_by_oracle)} reference file(s) "
+            f"(budget {port_only_cap}): "
+            + ", ".join(f"{v} {k}" for k, v in sorted(kinds.items()))
+            + " — diagnostics with no reference counterpart, which would otherwise "
+            "over-credit their file and mask a real loss (N81)"
         )
     if oracle_log_files:
         total_ref = sum(oracle_log_files.values())
@@ -1547,6 +1801,50 @@ def verdict(portmap, claims, zig_text, rust_text, facade_sources=None, report=Fa
             out.append(
                 f"RED: {len(dead_rows)} dead-site declaration(s), budget {dead_site_cap} — "
                 "the same RATCHET as everything else here."
+            )
+            rc = 1
+    # --- PORT-ONLY declarations: every row resolves to ONE emission; ratchet ----
+    po_labels = {
+        "missing_file": "name a port file that does not exist",
+        "not_in_arm": "name a port file that is not in the declared reference file's "
+                      "portmap arms — the subtraction would land on a file it does not "
+                      "describe",
+        "bad_kind": f"carry a kind outside {PORT_ONLY_KINDS}",
+        "no_reason": "carry no reason — the same rule as an allowance",
+        "stale": "match NO live emission (STALE). A declaration that selects nothing "
+                 "stops subtracting silently; delete it in the commit that removed the "
+                 "emission, or fix its function/match",
+        "ambiguous": "match MORE THAN ONE live emission (AMBIGUOUS). Narrow the match, or "
+                     "pick one copy with `fn#k`",
+        "duplicate": "select an emission another row already selects — it would be "
+                     "subtracted twice",
+    }
+    for key, label in po_labels.items():
+        bad = po_problems.get(key, [])
+        if bad:
+            out.append(f"RED: {len(bad)} LOG-PORT-ONLY.tsv declaration(s) {label}:")
+            for row, detail in bad[:8]:
+                out.append(
+                    f"       :{row['lineno']} {row['file']} fn {row['fn']}"
+                    + (f"#{row['occurrence']}" if row["occurrence"] else "")
+                    + f" match {row['match']!r}"
+                    + (f"  ({detail})" if detail else "")
+                )
+            rc = 1
+    if port_only_cap is not None:
+        if len(po_rows) > port_only_cap:
+            out.append(
+                f"RED: {len(po_rows)} port-only declaration(s), budget {port_only_cap}. "
+                "Each one removes an emission from the count; the list must not grow "
+                "silently. Raising the budget is a deliberate, reviewed edit to the "
+                "`#!port-only-cap` directive."
+            )
+            rc = 1
+        elif len(po_rows) < port_only_cap:
+            out.append(
+                f"RED: {len(po_rows)} port-only declaration(s), budget {port_only_cap} — the "
+                "same RATCHET as everything else here: tighten it in the commit that "
+                "removed the declaration."
             )
             rc = 1
     bad_excl = []
@@ -2491,6 +2789,121 @@ def self_test():
     # 5. the ratchet, both ways
     cases.append(("dead-site declarations OVER budget", run_dead(DEAD_OK, 0), 1))
     cases.append(("dead-site declarations UNDER budget (stale)", run_dead(DEAD_OK, 2), 1))
+    # 10l. PORT-ONLY EMISSIONS (N81). `src/po.zig` has TWO live sites. The port
+    #      files carry one Rust-only guard line on top of whatever reference sites
+    #      they keep; `c/po_lost.rs` has LOST "site two" — the `PageList.zig:775`
+    #      shape, where the guard's +1 made the lost file still read 2/2.
+    zig["src/po.zig"] = (
+        'const log = std.log.scoped(.x);\n'
+        'fn a() void { log.warn("site one", .{}); }\n'
+        'fn b() void { log.warn("site two", .{}); }\n'
+    )
+    PO_GUARD = 'fn guard() {\n    log::warn!(target: S, "rust-only guard");\n}\n'
+    rs["c/po_full.rs"] = (
+        'fn a() { log::warn!(target: S, "site one"); }\n'
+        'fn b() { log::warn!(target: S, "site two"); }\n' + PO_GUARD
+    )
+    rs["c/po_lost.rs"] = 'fn a() { log::warn!(target: S, "site one"); }\n' + PO_GUARD
+    rs["c/po_twin.rs"] = rs["c/po_full.rs"] + (
+        'fn twin() {\n'
+        '    log::warn!(target: S, "cfg twin");\n'
+        '    log::warn!(target: S, "cfg twin");\n}\n'
+    )
+
+    def po_row(**kw):
+        row = {"oracle": "src/po.zig", "file": "c/po_lost.rs", "fn": "guard",
+               "occurrence": None, "match": '"rust-only guard"',
+               "kind": "rust-only-path", "reason": "fixture", "lineno": 1}
+        row.update(kw)
+        return row
+
+    def run_po(port, rows, cap, allowance="0"):
+        pm = [{"oracle": "src/po.zig", "excluded": False, "arms": [[port]],
+               "allowance": allowance, "bypass_cap": "0",
+               "reason": "fixture" if allowance != "0" else "", "lineno": 0}]
+        return verdict(pm, {}, zt, rt, oracle_log_files=None,
+                       port_only=rows, port_only_cap=cap)[0]
+
+    # 1. the subtraction itself: 2 sites, 1 kept + 1 guard. Declared, the guard
+    #    comes off and the file is honestly 1 short, inside a reasoned allowance
+    #    of 1; UNdeclared, the same allowance is stale because the guard
+    #    over-credits the file back to 2/2.
+    cases.append(("a declared port-only emission is SUBTRACTED from the port count",
+                  run_po("c/po_lost.rs", [po_row()], 1, allowance="1"), 0))
+    cases.append(("...undeclared, it over-credits (allowance 1 reads stale)",
+                  run_po("c/po_lost.rs", [], 0, allowance="1"), 1))
+    # 2. THE :775 CASE. A real reference site is lost while a port-only line is
+    #    present. Undeclared, the loss is MASKED — that is N81's before-state, kept
+    #    as an arm so the masking is demonstrated, not asserted. Declared, RED.
+    cases.append(("N81 before: an undeclared port-only line MASKS a lost site",
+                  run_po("c/po_lost.rs", [], 0), 0))
+    cases.append(("a lost reference site goes RED despite a DECLARED port-only line",
+                  run_po("c/po_lost.rs", [po_row()], 1), 1))
+    cases.append(("...and the same declaration on the intact file is GREEN",
+                  run_po("c/po_full.rs", [po_row(file="c/po_full.rs")], 1), 0))
+    # 3. STALE: a row that selects nothing — wrong text, or wrong enclosing fn.
+    cases.append(("a port-only row matching NO emission is RED (stale)",
+                  run_po("c/po_full.rs", [po_row(file="c/po_full.rs", match='"gone"')], 1), 1))
+    cases.append(("a port-only row naming the wrong fn is RED (stale)",
+                  run_po("c/po_full.rs", [po_row(file="c/po_full.rs", fn="a")], 1), 1))
+    cases.append(("a port-only row whose `fn#k` is past the last copy is RED (stale)",
+                  run_po("c/po_twin.rs", [po_row(file="c/po_twin.rs", fn="twin",
+                                                 match='"cfg twin"', occurrence=3)], 1), 1))
+    # 4. AMBIGUOUS: two textually identical copies in one fn. `fn#k` picks one;
+    #    two rows selecting the SAME copy would subtract it twice.
+    cases.append(("a port-only row matching TWO emissions is RED (ambiguous)",
+                  run_po("c/po_twin.rs", [po_row(file="c/po_twin.rs", fn="twin",
+                                                 match='"cfg twin"')], 1), 1))
+    cases.append(("...`fn#2` selects exactly one copy",
+                  run_po("c/po_twin.rs", [po_row(file="c/po_twin.rs", fn="twin",
+                                                 match='"cfg twin"', occurrence=2)], 1), 0))
+    cases.append(("two rows selecting the SAME emission are RED (double subtraction)",
+                  run_po("c/po_full.rs", [po_row(file="c/po_full.rs"),
+                                          po_row(file="c/po_full.rs", lineno=2)], 2), 1))
+    # 5. THE CAP, both ways.
+    cases.append(("port-only declarations OVER budget",
+                  run_po("c/po_full.rs", [po_row(file="c/po_full.rs")], 0), 1))
+    cases.append(("port-only declarations UNDER budget (stale)",
+                  run_po("c/po_full.rs", [po_row(file="c/po_full.rs")], 2), 1))
+    # 6. row validity: kind, reason, and a port file outside the declared arm.
+    cases.append(("a port-only row with an unknown kind is RED",
+                  run_po("c/po_full.rs", [po_row(file="c/po_full.rs", kind="because")], 1), 1))
+    cases.append(("a port-only row with no reason is RED",
+                  run_po("c/po_full.rs", [po_row(file="c/po_full.rs", reason="")], 1), 1))
+    cases.append(("a port-only row whose file is not in the reference file's arm is RED",
+                  run_po("c/po_full.rs", [po_row(file="c/po_twin.rs", fn="twin",
+                                                 match='"cfg twin"', occurrence=1)], 1), 1))
+    # 7. MALFORMED FILE -> the loader raises, which `main` turns into BLOCKED (3);
+    #    a missing directive loads as cap None, which `main` BLOCKS too.
+    import tempfile
+    header = "oracle_file\tport_file\tfunction\tmatch\tkind\treason\n"
+    good = "src/po.zig\tc/po_full.rs\tguard\t\"rust-only guard\"\trust-only-path\tfixture\n"
+    loader_cases = (
+        ("a well-formed LOG-PORT-ONLY.tsv loads (1 row, cap 1)",
+         "#!port-only-cap entries=1\n" + header + good, (1, 1)),
+        ("a LOG-PORT-ONLY.tsv with no cap directive loads cap=None (BLOCKED)",
+         header + good, (1, None)),
+        ("a row with the wrong column count is malformed (BLOCKED)",
+         "#!port-only-cap entries=1\n" + header + "src/po.zig\tc/po_full.rs\tguard\n",
+         "ValueError"),
+        ("a `fn#0` occurrence is malformed (BLOCKED)",
+         "#!port-only-cap entries=1\n" + header + good.replace("\tguard\t", "\tguard#0\t"),
+         "ValueError"),
+        ("a second cap directive is malformed (BLOCKED)",
+         "#!port-only-cap entries=1\n#!port-only-cap entries=9\n" + header + good,
+         "ValueError"),
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        for name, text, want in loader_cases:
+            path = os.path.join(tmp, "LOG-PORT-ONLY.tsv")
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(text)
+            try:
+                rows_, cap_ = load_port_only(path)
+                got = (len(rows_), cap_)
+            except ValueError:
+                got = "ValueError"
+            cases.append((name, got, want))
     # 11. a LOG row citing a file with no portmap entry
     cases.append(
         ("undeclared reference file",
@@ -2526,7 +2939,9 @@ def self_test():
         "allowance, a short PLATFORM TWIN that summing would have hidden, a no-op\n"
         "log stub, an undeclared file, a missing port file, a vacuous scan, and a\n"
         "facade-BYPASSING direct print over its declared cap, a PORT EMISSION AT A\n"
-        "DECLARED-DEAD reference site, a TRUNCATED or\n"
+        "DECLARED-DEAD reference site, a reference site lost behind a DECLARED\n"
+        "PORT-ONLY line (N81) and a stale, ambiguous, doubled, unbudgeted or malformed\n"
+        "port-only declaration, a TRUNCATED or\n"
         "respaced message text, a comment quoting a call the reference does not have,\n"
         "an UNDECLARED reference\n"
         "file with live log sites and an uncategorised exclusion — and the scanner agrees\n"
@@ -2669,6 +3084,20 @@ def main():
             file=sys.stderr,
         )
         return 3
+    try:
+        port_only, port_only_cap = load_port_only(PORT_ONLY)
+    except ValueError as exc:
+        print(f"BLOCKED: {exc}", file=sys.stderr)
+        return 3
+    if port_only_cap is None:
+        print(
+            "BLOCKED: LOG-PORT-ONLY.tsv is missing, or carries no\n"
+            "         `#!port-only-cap entries=N` directive. Each declaration removes an\n"
+            "         emission from the port count; a cap that can be disabled by\n"
+            "         deleting a line is not a cap (N81).",
+            file=sys.stderr,
+        )
+        return 3
     oracle_log_files = oracle_files_with_log_sites(
         zig_walk, dead_lines_by_file(dead_sites)
     )
@@ -2722,6 +3151,8 @@ def main():
         unpairable_cap=unpairable_cap,
         dead_sites=dead_sites,
         dead_site_cap=dead_site_cap,
+        port_only=port_only,
+        port_only_cap=port_only_cap,
     )
     print("\n".join(lines))
     return rc

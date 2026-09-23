@@ -1,0 +1,83 @@
+# LOG-PORT-ONLY.tsv - port log emissions with NO reference counterpart, subtracted from the port count.
+#
+# Read .port/tools/gates/check_log_reconcile.py first; this file is only data.
+#
+# WHY (NEW-FINDINGS.md N81). G-LOGFILE counts a reference file's live `log.*` sites against the
+# live emissions of the Rust files declared to port it, with deficit = max(0, reference - port).
+# A port emission with no reference counterpart is counted anyway, and because a surplus is clamped
+# it is invisible: it credits its file with one site that is not there and so MASKS the next real
+# loss in that file. Measured: `src/terminal/PageList.zig` read 23 reference / 24 port because of the
+# port-only R13 degrade warning, and deleting the genuinely ported `PageList.zig:775` site left the
+# gate GREEN. Every row here is subtracted from the port count of EVERY portmap arm that contains its
+# port file, before any comparison. A declaration can only make the count stricter.
+#
+# oracle_file   the reference file this emission would otherwise be credited to. Its portmap arms
+#               MUST contain port_file, or the row is RED.
+# port_file     the Rust file holding the emission.
+# function      the innermost enclosing Rust `fn` of the emission, optionally `name#k` = the k-th
+#               matching emission inside that fn in file order (only for textually identical copies,
+#               e.g. a `#[cfg]` twin). Keyed on the call site, never on a line number: lines drift.
+# match         a substring of the emission's call text (from the macro/fn name to its closing
+#               delimiter, whitespace collapsed; comments excluded, string contents included).
+# kind          one of: r13-handling, rust-only-path, abi-guard, instrumentation, expansion,
+#               open-finding. `expansion` is an EXTRA static copy of ONE reference site (an
+#               unrolled inline-for, a cfg/feature twin, one reference call split across two arms);
+#               the first copy stays counted as that site's counterpart and only the extras are
+#               declared. `open-finding` is a port-only emission that is itself an open
+#               NEW-FINDINGS defect: delete the row in the commit that fixes it.
+# reason        mandatory. A declaration with no reason is RED.
+#
+# Every row must resolve to EXACTLY ONE live production emission: none is RED (stale), more than one
+# is RED (ambiguous), two rows selecting one emission is RED. The row count is capped, two-way:
+# more rows than the budget is RED, fewer is RED (tighten it in the commit that removed a row). A
+# missing directive BLOCKS. Messages containing a TAB or newline are written `\t` / `\n`.
+#!port-only-cap entries=48
+oracle_file	port_file	function	match	kind	reason
+src/terminal/PageList.zig	crates/rustty-vt/src/pagelist/grow.rs	clone_row_grow_capacity	log_row_degrade(	r13-handling	UD131/N80: the once-per-copy row-copy degrade warning. The reference `@panic("increaseCapacity OutOfSpace")`s here (PageList.zig:5108) and has no diagnostic; the port degrades the unstorable dimension and logs. N81's measured case: it made PageList.zig read 24/23 and masked the loss of :775.
+src/terminal/Screen.zig	crates/rustty-vt/src/screen.rs	clone_partial_row_grow_capacity	log_row_degrade(	r13-handling	UD131/N80: the same degrade warning on the partial-row copy. The reference `@panic`s at Screen.zig:747 and logs nothing.
+src/apprt/embedded.zig	crates/rustty-apprt-c/src/lib.rs	rustty_app_key	"error processing key event: action out of range"	abi-guard	D11 (P3-W6 T2): `action` crosses as the raw C integer and is narrowed here; the reference takes the Zig enum and has no out-of-range path. One of the 3 port-only range guards the embedded.zig row called a deliberate over-credit (d130c504). lib.rs is also in src/main_c.zig's arm, which this row subtracts from too.
+src/apprt/embedded.zig	crates/rustty-apprt-c/src/lib.rs	rustty_surface_key	"error processing key event: action out of range"	abi-guard	D11 (P3-W6 T2): the surface twin of the rustty_app_key range guard; no reference counterpart.
+src/apprt/embedded.zig	crates/rustty-apprt-c/src/lib.rs	rustty_inspector_key	"error processing key event: action/key out of range"	abi-guard	D11 (P3-W6 T2): both `action` and `key` are narrowed from C integers; no reference counterpart.
+src/apprt/gtk/class/global_shortcuts.zig	crates/rustty-apprt/src/gtk/class/global_shortcuts.rs	dispatch_activation	"global shortcut dispatch map-hit id=	instrumentation	Rustty-only instrumentation the WS15 live portal gate depends on, on target `rustty_gtk_instrumentation` (task-14d-3). No reference counterpart.
+src/apprt/gtk/class/global_shortcuts.zig	crates/rustty-apprt/src/gtk/class/global_shortcuts.rs	request	"global shortcuts: dbus connection has no unique name"	instrumentation	Rustty-only instrumentation on target `rustty_gtk_instrumentation` (task-14d-3). No reference counterpart.
+src/apprt/gtk/class/global_shortcuts.zig	crates/rustty-apprt/src/gtk/class/global_shortcuts.rs	on_response	"global shortcuts bound results=	instrumentation	Rustty-only instrumentation on target `rustty_gtk_instrumentation` (task-14d-3). No reference counterpart.
+src/apprt/gtk/class/surface.zig	crates/rustty-apprt/src/gtk/class/surface.rs	clipboard_confirmation_deny	"request should not be able to be remembered"	rust-only-path	The reference `@panic`s here (surface.zig:4324) for requests that can never set the remember switch; the port logs instead (PORT NOTE at the site). Not a `log.*` site of the reference.
+src/apprt/gtk/class/surface.zig	crates/rustty-apprt/src/gtk/class/surface.rs	default_termio_env	"winproto failed to add subprocess env	open-finding	N191: at pin 20abdb50a surface.zig:1657 is `try window.winproto().addSubprocessEnv(&env);` with no log; the port logs and continues. The text quotes a superseded revision (LOG-TEXT-DIVERGENCES.tsv declares the comment stale). Delete this row when N191 is fixed.
+src/apprt/gtk/class/surface.zig	crates/rustty-apprt/src/gtk/class/surface.rs	init_surface	"core app not bound; cannot initialize surface"	rust-only-path	Guard on the port's singleton seam (`app_core_ptr()` is None only in widget tests); the reference reads its app pointer directly and has no such path.
+src/apprt/gtk/class/surface.zig	crates/rustty-apprt/src/gtk/class/surface.rs	init_surface	"rt app not bound; cannot initialize surface"	rust-only-path	The rt-app twin of the core-app seam guard above; no reference counterpart.
+src/apprt/gtk/portal/OpenURI.zig	crates/rustty-apprt/src/gtk/portal/open_uri.rs	request_callback	"open uri reply object path is not a string"	rust-only-path	glib-rs `Variant::str()` is an Option where the reference's `reply.get("(&o)", ...)` cannot fail after its type check; the arm is Rust-only and deliberately does not borrow a reference site's text (PORT NOTE at the site).
+src/os/systemd.zig	crates/rustty-os/src/systemd.rs	reloading	"unable to get MONOTONIC clock: {}"	rust-only-path	The reference reads the clock with the infallible `std.Io.Timestamp.now` (systemd.zig:184); the port's `clock_gettime` returns a status, and this arm logs it. No reference counterpart.
+src/renderer/OpenGL.zig	crates/rustty-renderer/src/opengl/gl/sys.rs	init	"initialized EGL	rust-only-path	The port's surfaceless-EGL offscreen context (headless tests); the reference has no EGL initialisation and no such diagnostic.
+src/renderer/OpenGL.zig	crates/rustty-renderer/src/opengl/opengl_impl.rs	present_to_default	"Error re-enabling GL_FRAMEBUFFER_SRGB	expansion	OpenGL.zig:308's one `defer` site; the port splits `present` into `present` (offscreen, the counted copy) and `present_to_default` (windowed), so the site has two static copies (PORT NOTE at the site).
+src/renderer/Thread.zig	crates/rustty-core/src/renderer_seam.rs	drawFrame#2	"error drawing err=	expansion	Thread.zig:481's one site as a `#[cfg(target_os = "macos")]` / `#[cfg(not(...))]` twin inside one fn; only one copy compiles per target. #1 (macOS) stays counted.
+src/apprt/gtk/winproto/wayland/Globals.zig	crates/rustty-apprt/src/gtk/winproto/wayland/globals.rs	bind_global	XdgActivationV1::interface()	expansion	Globals.zig:150's single `log.debug("matched {}")` sits in an `inline for` over the interface list; Rust's if-else dispatch writes one static copy per interface (the row's own reason, task-14d-3). The WlCompositor copy stays counted.
+src/apprt/gtk/winproto/wayland/Globals.zig	crates/rustty-apprt/src/gtk/winproto/wayland/globals.rs	bind_global	OrgKdeKwinServerDecorationManager::interface()	expansion	Unrolled copy of Globals.zig:150 (see the XdgActivationV1 row).
+src/apprt/gtk/winproto/wayland/Globals.zig	crates/rustty-apprt/src/gtk/winproto/wayland/globals.rs	bind_global	OrgKdeKwinSlideManager::interface()	expansion	Unrolled copy of Globals.zig:150 (see the XdgActivationV1 row).
+src/apprt/gtk/winproto/wayland/Globals.zig	crates/rustty-apprt/src/gtk/winproto/wayland/globals.rs	bind_global	KdeOutputOrderV1::interface()	expansion	Unrolled copy of Globals.zig:150 (see the XdgActivationV1 row).
+src/apprt/gtk/winproto/wayland/Globals.zig	crates/rustty-apprt/src/gtk/winproto/wayland/globals.rs	bind_global	ExtBackgroundEffectManagerV1::interface()	expansion	Unrolled copy of Globals.zig:150 (see the XdgActivationV1 row).
+src/apprt/gtk/winproto/wayland/Globals.zig	crates/rustty-apprt/src/gtk/winproto/wayland/globals.rs	bind_global	VicinaeHotkeyManagerV1::interface()	expansion	Unrolled copy of Globals.zig:150 (see the XdgActivationV1 row).
+src/font/face/web_canvas.zig	crates/rustty-font-shaper/src/face/web_canvas.rs	face_render_glyph	"error rendering glyph err=	expansion	web_canvas.zig:527's one site, emitted by both export surfaces: `rustty_wc_face_render_glyph` (counted) and the `ghostty-wasm-abi` feature module's reference-named `face_render_glyph` export.
+src/font/face/web_canvas.zig	crates/rustty-font-shaper/src/face/web_canvas.rs	face_debug_canvas	"error adding debug canvas	expansion	web_canvas.zig:534's one site, emitted by both export surfaces: `rustty_wc_face_debug_canvas` (counted) and the `ghostty-wasm-abi` feature module's `face_debug_canvas`.
+src/terminal/stream.zig	crates/rustty-vt/src/stream.rs	handle_codepoint	"ignoring UTF-8-decoded C1 controls	expansion	The reference routes 12 call sites through `logUnsupportedOnce`, whose body holds ONE `log.warn(format, args)` (stream.zig:3076, the only one the reference scanner counts); the port inlines a `log::warn!` at each of the 12 call sites behind the `log_unsupported_once` predicate. The first copy (next_slice_capped) stays counted as :3076; this and the other 10 rows are the extras.
+src/terminal/stream.zig	crates/rustty-vt/src/stream.rs	execute	"invalid C0 character, ignoring:	expansion	Inlined `logUnsupportedOnce` call (stream.zig:1395); an extra copy of the :3076 site (see the handle_codepoint row).
+src/terminal/stream.zig	crates/rustty-vt/src/stream.rs	csi_dispatch	"invalid device attributes command:	expansion	Inlined `logUnsupportedOnce` call (stream.zig:1913); an extra copy of the :3076 site.
+src/terminal/stream.zig	crates/rustty-vt/src/stream.rs	csi_dispatch#1	"unimplemented mode:	expansion	Inlined `logUnsupportedOnce` call (stream.zig:2003); an extra copy of the :3076 site.
+src/terminal/stream.zig	crates/rustty-vt/src/stream.rs	csi_dispatch#2	"unimplemented mode:	expansion	Inlined `logUnsupportedOnce` call (stream.zig:2024); an extra copy of the :3076 site.
+src/terminal/stream.zig	crates/rustty-vt/src/stream.rs	csi_dispatch	"unknown CSI m with intermediate:	expansion	Inlined `logUnsupportedOnce` call (stream.zig:2093); an extra copy of the :3076 site.
+src/terminal/stream.zig	crates/rustty-vt/src/stream.rs	csi_dispatch	"ignoring CSI 22/23 t with extra parameters:	expansion	Inlined `logUnsupportedOnce` call (stream.zig:2428); an extra copy of the :3076 site.
+src/terminal/stream.zig	crates/rustty-vt/src/stream.rs	csi_dispatch	"ignoring CSI t with unimplemented parameter:	expansion	Inlined `logUnsupportedOnce` call (stream.zig:2433); an extra copy of the :3076 site.
+src/terminal/stream.zig	crates/rustty-vt/src/stream.rs	osc_dispatch	"OSC 1 (change icon) received and ignored	expansion	Inlined `logUnsupportedOnce` call (stream.zig:2611); an extra copy of the :3076 site.
+src/terminal/stream.zig	crates/rustty-vt/src/stream.rs	esc_dispatch#1	"unimplemented ESC action:	expansion	Inlined `logUnsupportedOnce` call (stream.zig:2815); an extra copy of the :3076 site.
+src/terminal/stream.zig	crates/rustty-vt/src/stream.rs	esc_dispatch#2	"unimplemented ESC action:	expansion	Inlined `logUnsupportedOnce` call (stream.zig:3013); an extra copy of the :3076 site.
+src/termio/Exec.zig	crates/rustty-termio/src/exec.rs	start	"error.BadPathName"	expansion	Exec.zig:984's one `cannot access cwd, ignoring` site. The port has three copies: one in each of the two mutually exclusive `start` arms, plus the `error.BadPathName` arm task R13-P added (N50) for the path Zig's `pathToPosix` rejects. The first copy stays counted.
+src/termio/Exec.zig	crates/rustty-termio/src/exec.rs	start#2	"cannot access cwd, ignoring: {}", std::io::Error::last_os_error()	expansion	The second-arm copy of Exec.zig:984 (see the error.BadPathName row).
+src/termio/Exec.zig	crates/rustty-termio/src/exec.rs	start#2	"started subcommand path=	expansion	Exec.zig:1080's one site, written once in each of the two mutually exclusive `start` arms (the row's own reason, task-14e-1). The first copy stays counted.
+src/terminal/tmux/viewer.zig	crates/rustty-vt/src/tmux/viewer.rs	next_command#2	"failed to process command output, becoming defunct"	expansion	viewer.zig:457 handles `.block_end` and `.block_err` in ONE inline switch prong; the port writes one arm per variant (PORT NOTE at the BlockErr arm). The BlockEnd copy stays counted.
+src/terminal/c/render.zig	crates/rustty-vt-c/src/render.rs	get_multi	"render_state_get invalid data value=	expansion	render.zig:297 sits in the `inline fn getDispatch` shared by `get` and `get_multi`; the port writes the guard in each caller. The `get_checked` copy stays counted.
+src/terminal/c/render.zig	crates/rustty-vt-c/src/render.rs	row_cells_get_multi	"render_state_row_cells_get invalid data value=	expansion	render.zig:730 sits in the `inline fn rowCellsGetDispatch` shared by the single and multi getters; the `row_cells_get_checked` copy stays counted.
+src/terminal/c/render.zig	crates/rustty-vt-c/src/render.rs	row_get_multi	"render_state_row_get invalid data value=	expansion	render.zig:963 sits in the `inline fn rowGetDispatch` shared by `row_get` and `row_get_multi`; the `row_get_checked` copy stays counted.
+src/renderer/generic.zig	crates/rustty-renderer/src/generic.rs	prep_background_image	error.StreamTooLong	expansion	generic.zig:1975's one `error reading background image file` catch; the port splits it into the too-long `Ok(_)` arm and the `Err` arm, two static copies. The `Err` copy stays counted.
+src/renderer/generic.zig	crates/rustty-renderer/src/generic/linux_impl.rs	prep_background_image	error.StreamTooLong	expansion	The Linux-twin copy of the same split of generic.zig:1975. linux_impl.rs is also src/renderer/opengl/Frame.zig's arm, which this row subtracts from too.
+src/renderer/generic.zig	crates/rustty-renderer/src/generic.rs	set_offscreen_size	"offscreen size size=	rust-only-path	The port's offscreen-target API (`set_offscreen_size`) has no reference counterpart; the reference's `screen size size={}` (generic.zig:2137) is a different site, ported separately.
+src/main_ghostty.zig	crates/rustty/src/main_rustty.rs	run_gtk	"failed to initialize the app error=	rust-only-path	The reference's `const app: *App = try App.create(alloc);` (main_ghostty.zig:100) propagates the error out of `main`, where Zig's start code reports it; the port has no error-returning `main` here, so it logs and exits 1. Not a `log.*` site of the reference.
+src/main_ghostty.zig	crates/rustty/src/main_rustty.rs	run_gtk	"the GTK event loop exited with an error=	rust-only-path	The reference's `try app_runtime.run();` (main_ghostty.zig:114) propagates out of `main`; the port logs and exits 1. Not a `log.*` site of the reference.
