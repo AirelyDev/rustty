@@ -3419,14 +3419,13 @@ impl Trigger {
 //
 // PORT NOTE: the reference's `foldedCodepoint` ASCII fast path uses
 // `uucode.ascii.isAlphabetic`/`toLower`; the Unicode slow path uses
-// `uucode.get(.case_folding_full, cp)`. The ASCII fast path is ported exactly.
-// The Unicode `case_folding_full` table is NOT yet ported to rustty-unicode (it
-// is uucode-backed; tracked for the unicode crate), so the slow path mirrors the
-// reference's documented fallback behavior: "If more codepoints are produced then
-// we return the codepoint as-is which isn't correct but until we have a failing
-// test then I don't want to handle this." We return the single (non-ASCII)
-// codepoint unchanged in slot 0, which matches the reference for every non-
-// multi-expansion codepoint and for all ported tests (which are ASCII only).
+// `uucode.get(.case_folding_full, cp)`, ported as
+// `rustty_unicode::case_folding::case_folding_full`. CORRECTION (S65-F1,
+// 2026-09-23): the slow path used to return `[cp, 0, 0]` for every non-ASCII
+// code point, under a note that the table was "NOT yet ported". As in the
+// reference, a folding of up to three code points fills the array; the
+// reference's comment about returning the code point as-is does not describe
+// its own code, which copies the whole slice.
 fn folded_codepoint(cp: u21) -> [u21; 3] {
     // ASCII fast path
     if ascii_is_alphabetic(cp) {
@@ -3437,7 +3436,10 @@ fn folded_codepoint(cp: u21) -> [u21; 3] {
     // If more codepoints are produced then we return the codepoint
     // as-is which isn't correct but until we have a failing test
     // then I don't want to handle this.
-    [cp, 0, 0]
+    let (slice, len) = rustty_unicode::case_folding::case_folding_full(cp);
+    let mut array: [u21; 3] = [0; 3];
+    array[..len].copy_from_slice(&slice[..len]);
+    array
 }
 
 // PORT NOTE: `uucode.ascii.isAlphabetic` (uucode ascii.zig): `'A'...'Z',
@@ -5963,6 +5965,41 @@ mod tests {
             let mut p = Parser::init(b"all:a>b=ignore").unwrap();
             assert_eq!(Err(Error::InvalidFormat), p.next());
         }
+    }
+
+    /// S65-F1: `foldedCodepoint`'s Unicode slow path is
+    /// `uucode.get(.case_folding_full, cp)` (`Binding.zig:2003-2011`), so two
+    /// triggers differing only in the case of a non-ASCII letter hash and
+    /// compare equal, and a multi-code-point folding fills more than one slot.
+    #[test]
+    fn trigger_folds_non_ascii_case() {
+        // U+00C9 É folds to U+00E9 é.
+        assert_eq!(folded_codepoint(0x00C9), [0x00E9, 0, 0]);
+        // U+00DF ß folds to "ss", and so does U+1E9E ẞ.
+        assert_eq!(folded_codepoint(0x00DF), [0x73, 0x73, 0]);
+        assert_eq!(folded_codepoint(0x1E9E), [0x73, 0x73, 0]);
+        // No folding: the code point itself.
+        assert_eq!(folded_codepoint(0x00E9), [0x00E9, 0, 0]);
+
+        let upper = Trigger {
+            key: TriggerKey::Unicode(0x00C9),
+            mods: Mods::default(),
+        };
+        let lower = Trigger {
+            key: TriggerKey::Unicode(0x00E9),
+            mods: Mods::default(),
+        };
+        // `foldedEqual` is the binding set's equality (`bindingSetEqual`);
+        // plain `equal` stays exact.
+        assert!(upper.folded_equal(lower));
+        assert!(!upper.equal(lower));
+        assert_eq!(upper.hash(), lower.hash());
+        // A different letter still differs.
+        let other = Trigger {
+            key: TriggerKey::Unicode(0x00E8),
+            mods: Mods::default(),
+        };
+        assert!(!upper.folded_equal(other));
     }
 
     // test "Trigger: equal"

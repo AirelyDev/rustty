@@ -1489,6 +1489,7 @@ dependencies = [
  "rustty-oniguruma",
  "rustty-os",
  "rustty-render-types",
+ "rustty-unicode",
  "rustty-util",
  "rustty-vt",
  "rustty-zigstd",

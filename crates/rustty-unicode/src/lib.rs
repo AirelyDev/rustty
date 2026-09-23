@@ -14,6 +14,7 @@
 
 mod generated;
 
+pub mod case_folding;
 pub mod grapheme;
 pub mod lut;
 pub mod props;

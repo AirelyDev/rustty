@@ -59,7 +59,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** pkg-config Libs.private/Requires.private differ: rustty's static archive requires libc++ and (on macOS) an external libintl; the .pc files hardcode a Homebrew gettext path
   - **Oracle:** `src/build/GhosttyLibVt.zig:493-499,509-556,565-576` → **Rustty:** `CMakeLists.txt:231-249,329-346`
   - **Audit's suggested fix:** Drop the i18n object from the rustty-vt-c static archive (gate rustty-os's gettext bindings behind a feature that rustty-vt-c does not enable) so no libintl is needed; build simdutf/highway with `-nostdlib++`/no-libcxx flags (or link libc++ statically into the archive) so Libs.private can be empty like the oracle; never bake absolute Homebrew paths into an installed .pc.
-- [ ] **S65-F1** · CONFIRMED · `INDIV` · missing-function
+- [x] **S65-F1** · CONFIRMED · `INDIV` · missing-function
   - **What:** `case_folding_full` runtime table not ported; non-ASCII key case folding falls back to identity
   - **Oracle:** `src/build/uucode_config.zig:31-38` → **Rustty:** `crates/rustty-input/src/binding.rs:3390-3410`
   - **Audit's suggested fix:** Generate a case_folding_full table into rustty-unicode (same harness pipeline as props/symbols) and use it in folded_codepoint for single-codepoint folds.
