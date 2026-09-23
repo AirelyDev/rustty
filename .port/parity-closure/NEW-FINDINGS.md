@@ -3166,6 +3166,31 @@ Not fixed in this round; recorded for adjudication.
   `version_build()` per arm (git: the short hash; tagged: `None`; no git: `0000000`).
 - **state**: CLOSED (tail-b2).
 
+## N120 — two ports of `std.fmt.parseFloat`: rustty-config's is f64-only and private
+
+- **id**: N120. Not in the inventory.
+- **found by**: task T-C (tail wave), closing S67-F4.
+- **severity**: low (duplication; no behaviour difference found). **kind**: maintenance / drift risk.
+- **oracle**: Zig 0.16.0 `lib/std/fmt/parse_float.zig` + `parse_float/{parse,FloatStream,convert_hex}.zig`.
+- **rustty**: `crates/rustty-config/src/value_types.rs` (`pf_*`, `parse_float_f64`, parity S75-F1; plus
+  `zig_float_strip_underscores` / `parse_float_f32`) and, since T-C, `crates/rustty-args/src/std_fmt.rs`
+  (`parse_float::<f32|f64>`, `parse_int`).
+
+S67-F4 needed a `std.fmt.parseFloat` port in `rustty-args` (`parse_field_float`, the `f32`/`f64` arm of
+`parseIntoField`). `rustty-config` already had one, for `f64` only and private to `value_types.rs`, and it
+sits ABOVE `rustty-args`, so `rustty-args` cannot call it. T-C ported the grammar again in `rustty-args`
+(generic over `f32`/`f64`, `convert_hex` included) rather than edit `value_types.rs`, which belongs to the
+config area's batch. The two copies now implement the same grammar. `parse_float_f32` in `value_types.rs`
+is NOT the full grammar: it validates underscores and strips them, then calls Rust's parser, so it rejects
+hex floats. Whether any `f32` value in `value_types.rs` reaches `parse_float_f32` with a hex float is
+UNVERIFIED.
+
+**proposed fix** (NOT applied here): make `value_types.rs` call `rustty_args::std_fmt::parse_float` and
+delete its `pf_*` copy and `parse_float_f32`, in the config area.
+
+**state**: OPEN.
+
+
 ## N140 — the XDG helpers collapse `homedir.home`'s `error.BufferTooSmall` into `NoHomeDir`
 
 - **id**: N140. Not in the inventory. Found by the T-E reviewer (review-T-E "S74-F1 error name"),

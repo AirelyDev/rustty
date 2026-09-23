@@ -59,8 +59,9 @@ impl Entry {
                 //     "Invalid timestamp in cache entry: {s} err={}",
                 //     .{ timestamp_str, err },
                 // );
+                // `{}` on a Zig error value prints `error.<Name>`.
                 log_warn(&format!(
-                    "Invalid timestamp in cache entry: {} err={}",
+                    "Invalid timestamp in cache entry: {} err=error.{:?}",
                     String::from_utf8_lossy(timestamp_str),
                     err,
                 ));
@@ -150,15 +151,13 @@ impl<'a> TokenizeScalar<'a> {
 
 /// `std.fmt.parseInt(i64, s, 10)`: parse a base-10 signed integer, erroring on
 /// non-digit input or overflow (the reference's `catch` path returns null).
-fn parse_int_i64(s: &[u8]) -> Result<i64, std::num::ParseIntError> {
-    // `str::parse::<i64>` accepts an optional leading `+`/`-` and rejects
-    // non-digit bytes and out-of-range values, matching `std.fmt.parseInt`.
-    match std::str::from_utf8(s) {
-        Ok(text) => text.parse::<i64>(),
-        // Non-UTF8 input can't be a valid base-10 integer; reuse a parse error
-        // so the caller's `catch` (warn + return null) path is taken.
-        Err(_) => "".parse::<i64>(),
-    }
+//
+// PORT NOTE (parity S71-F2): this used `str::parse::<i64>`, which rejects the
+// `_` digit separators `std.fmt.parseInt` skips (`1_700_000_000` is a valid
+// timestamp to the reference). It now calls the port of the reference's own
+// parser, whose error is the reference's error set.
+fn parse_int_i64(s: &[u8]) -> Result<i64, rustty_args::std_fmt::ParseIntError> {
+    rustty_args::std_fmt::parse_int::<i64>(s, 10)
 }
 
 // std.log.scoped default: warnings surface on stderr. Mirrors the os/open.rs
@@ -252,5 +251,16 @@ mod tests {
             b"host|999999999999999999999999999999999999999999999999|xterm-rustty"
         )
         .is_none(),);
+    }
+
+    // parity S71-F2: `std.fmt.parseInt(i64, s, 10)` skips `_` between digits
+    // and rejects a leading or trailing one. MEASURED against Zig 0.16.0:
+    // "1_700_000_000" -> 1700000000, "_1700" and "1700_" -> InvalidCharacter.
+    #[test]
+    fn cache_entry_timestamp_accepts_the_reference_digit_separators() {
+        let entry = Entry::parse(b"host|1_700_000_000|term").unwrap();
+        assert_eq!(1_700_000_000_i64, entry.timestamp);
+        assert!(Entry::parse(b"host|_1700|term").is_none());
+        assert!(Entry::parse(b"host|1700_|term").is_none());
     }
 }

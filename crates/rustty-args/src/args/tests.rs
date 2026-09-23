@@ -1768,3 +1768,44 @@ fn line_iterator_is_silent_on_lines_that_fit() {
     assert_eq!(None, end);
     assert_eq!(Vec::<CapturedRecord>::new(), messages);
 }
+
+// parity S67-F3: `parseIntoField`'s integer arm is `std.fmt.parseInt(Int, v, 0)`,
+// which ignores `_` digit separators. Values MEASURED against Zig 0.16.0.
+#[test]
+fn parse_field_int_accepts_the_reference_underscore_separators() {
+    assert_eq!(parse_field_int::<u64>(Some(b"10_000_000")), Ok(10_000_000));
+    assert_eq!(parse_field_int::<u32>(Some(b"0x1_0")), Ok(16));
+    assert_eq!(parse_field_int::<u32>(Some(b"-0")), Ok(0));
+    // The reference still rejects a leading/trailing `_` and a doubled sign.
+    assert_eq!(
+        parse_field_int::<u32>(Some(b"_10")),
+        Err(Error::InvalidValue)
+    );
+    assert_eq!(
+        parse_field_int::<u32>(Some(b"10_")),
+        Err(Error::InvalidValue)
+    );
+    assert_eq!(
+        parse_field_int::<i32>(Some(b"+-5")),
+        Err(Error::InvalidValue)
+    );
+}
+
+// parity S67-F4: `parseIntoField`'s float arm is `std.fmt.parseFloat`, which
+// accepts `_` separators and hexadecimal floats. Values MEASURED against Zig
+// 0.16.0.
+#[test]
+fn parse_field_float_accepts_the_reference_grammar() {
+    assert_eq!(parse_field_float::<f64>(Some(b"1_000.5")), Ok(1000.5));
+    assert_eq!(parse_field_float::<f64>(Some(b"0x1.8p3")), Ok(12.0));
+    assert_eq!(parse_field_float::<f32>(Some(b"0x1.8p3")), Ok(12.0));
+    assert_eq!(parse_field_float::<f64>(Some(b"0x1.8")), Ok(1.5));
+    assert_eq!(
+        parse_field_float::<f32>(Some(b"1__0")),
+        Err(Error::InvalidValue)
+    );
+    assert_eq!(
+        parse_field_float::<f64>(Some(b"1e_5")),
+        Err(Error::InvalidValue)
+    );
+}

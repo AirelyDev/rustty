@@ -29,6 +29,7 @@
 // const CommaSplitter = @import("CommaSplitter.zig");
 use crate::comma_splitter::CommaSplitter;
 use crate::diagnostics::{Diagnostic, DiagnosticList, Location, LocationError, LocationProvider};
+use crate::std_fmt::{self, ZigFloat, ZigInt};
 // PORT NOTE (P3-W7 T4): the reference's `internal_os` import was only used for
 // `internal_os.args`, and upstream DELETED `src/os/args.zig` in `e8525c0fd`.
 // The seam now goes straight to `std::env::args_os()` (see `OsArgIterator`), so
@@ -1284,20 +1285,25 @@ pub fn parse_field_bool(value: Option<&[u8]>) -> Result<bool, ParseError> {
 /// `inline u8..isize => |Int| std.fmt.parseInt(Int, value orelse return
 /// error.ValueRequired, 0) catch return error.InvalidValue`.
 //
-// PORT NOTE: base `0` means auto-detect `0x`/`0o`/`0b`/decimal prefix, exactly
-// as `std.fmt.parseInt(..., 0)`. `parse_int_auto` reproduces that prefix
-// handling for unsigned and signed targets.
-pub fn parse_field_int<T: IntFromStrRadix>(value: Option<&[u8]>) -> Result<T, ParseError> {
+// PORT NOTE (parity S67-F3): base `0` auto-detects a `0x`/`0o`/`0b` prefix,
+// and `std.fmt.parseInt` ignores `_` digit separators (`10_000_000`); both are
+// in `std_fmt::parse_int`, a port of the reference's own parser. This helper
+// used to hand the digits to Rust's `from_str_radix`, which rejects every `_`,
+// rejects `-0` for an unsigned type, and accepts a second sign (`+-5`).
+pub fn parse_field_int<T: ZigInt>(value: Option<&[u8]>) -> Result<T, ParseError> {
     let v = value.ok_or(Error::ValueRequired)?;
-    parse_int_auto::<T>(v).map_err(|_| Error::InvalidValue)
+    std_fmt::parse_int::<T>(v, 0).map_err(|_| Error::InvalidValue)
 }
 
 /// `f32, f64 => |Float| std.fmt.parseFloat(Float, value orelse return
 /// error.ValueRequired) catch return error.InvalidValue`.
-pub fn parse_field_float<T: std::str::FromStr>(value: Option<&[u8]>) -> Result<T, ParseError> {
+//
+// PORT NOTE (parity S67-F4): `std.fmt.parseFloat` accepts `_` digit separators
+// and hexadecimal floats (`0x1.8p3`); Rust's `str::parse` accepts neither.
+// `std_fmt::parse_float` ports the reference's grammar.
+pub fn parse_field_float<T: ZigFloat>(value: Option<&[u8]>) -> Result<T, ParseError> {
     let v = value.ok_or(Error::ValueRequired)?;
-    let s = std::str::from_utf8(v).map_err(|_| Error::InvalidValue)?;
-    s.parse::<T>().map_err(|_| Error::InvalidValue)
+    std_fmt::parse_float::<T>(v).map_err(|_| Error::InvalidValue)
 }
 
 /// `.@"enum" => std.meta.stringToEnum(Field, value orelse return
@@ -1313,75 +1319,11 @@ where
     from_name(v).ok_or(Error::InvalidValue)
 }
 
-/// PORTS: the `IntFromStrRadix` capability used by `parse_field_int` — the set
-/// of integer types the reference enumerates (`u8,u16,u21,u32,u64,usize,
-/// i8,i16,i32,i64,isize`). `u21` has no native Rust type; it is represented as
-/// `u32` with the 21-bit range enforced (the reference's `u21` rejects values
-/// `> 0x1F_FFFF` via `parseInt`'s range check).
-pub trait IntFromStrRadix: Sized {
-    // PORT NOTE: the `()` error is intentional — every parse failure collapses to
-    // the same observable outcome (`InvalidValue`) at the call site
-    // (`parse_field_int` maps `Err(())` -> `Error::InvalidValue`), exactly as the
-    // reference's `parseInt(...) catch return error.InvalidValue`.
-    #[allow(clippy::result_unit_err)]
-    fn from_str_radix_auto(s: &str, radix: u32) -> Result<Self, ()>;
-}
-
-macro_rules! impl_int_from_str_radix {
-    ($($t:ty),*) => {$(
-        impl IntFromStrRadix for $t {
-            fn from_str_radix_auto(s: &str, radix: u32) -> Result<Self, ()> {
-                <$t>::from_str_radix(s, radix).map_err(|_| ())
-            }
-        }
-    )*};
-}
-impl_int_from_str_radix!(u8, u16, u32, u64, usize, i8, i16, i32, i64, isize);
-
 // const u21: parse as u32 then range-check (no native u21).
 //
-// PORT NOTE: callers needing a `u21` parse as `u32` via `parse_int_auto` and
+// PORT NOTE: callers needing a `u21` parse as `u32` via `parse_field_int` and
 // then bound-check `<= 0x1F_FFFF`; this matches the reference's `u21` parse
 // returning `error.Overflow` (=> `InvalidValue`) for out-of-range values.
-
-/// `std.fmt.parseInt(T, v, 0)` — base 0 auto-detects the radix from a `0x`/`0o`/
-/// `0b` prefix (and an optional leading sign), defaulting to decimal.
-fn parse_int_auto<T: IntFromStrRadix>(v: &[u8]) -> Result<T, ()> {
-    let s = std::str::from_utf8(v).map_err(|_| ())?;
-
-    // Handle an optional leading sign, mirroring std.fmt.parseInt.
-    let (sign, rest) = match s.strip_prefix('-') {
-        Some(r) => ("-", r),
-        None => match s.strip_prefix('+') {
-            Some(r) => ("", r),
-            None => ("", s),
-        },
-    };
-
-    // Detect the radix prefix.
-    let (radix, digits) =
-        if let Some(r) = rest.strip_prefix("0x").or_else(|| rest.strip_prefix("0X")) {
-            (16, r)
-        } else if let Some(r) = rest.strip_prefix("0o").or_else(|| rest.strip_prefix("0O")) {
-            (8, r)
-        } else if let Some(r) = rest.strip_prefix("0b").or_else(|| rest.strip_prefix("0B")) {
-            (2, r)
-        } else {
-            (10, rest)
-        };
-
-    if digits.is_empty() {
-        return Err(());
-    }
-
-    let combined = if sign.is_empty() {
-        digits.to_string()
-    } else {
-        format!("{sign}{digits}")
-    };
-
-    T::from_str_radix_auto(&combined, radix)
-}
 
 // ---------------------------------------------------------------------------
 // Glue reproducing std functions used above.
