@@ -17,6 +17,9 @@
 // PORT NOTE: `const Command = @import("../../osc.zig").Command;`
 // PORT NOTE: `const Terminator = @import("../../osc.zig").Terminator;`
 use crate::osc::{Command, Parser, State, Terminator};
+// const kitty_metadata = @import("../kitty_metadata.zig");
+// PORT NOTE: used by its full path, `crate::osc::kitty_metadata`, in
+// `Option_::read`.
 
 // PORT NOTE: `const encoding = @import("../encoding.zig");` — imported by the
 // reference but not referenced in this module's logic; ported as this note.
@@ -227,54 +230,22 @@ impl Option_ {
         // PORT NOTE: the dependent `key.Type()` is selected at the end via the
         // `OptionValue` variant matching `self`; the `null`/not-found path
         // (`return null;`) maps to the corresponding variant carrying `None`.
-        let value: &[u8] = 'value: {
-            let key = self.tag_name();
-            let mut pos: usize = 0;
-            while pos < metadata.len() {
-                // skip any whitespace
-                while pos < metadata.len() && metadata[pos].is_ascii_whitespace() {
-                    pos += 1;
-                }
-                // bail if we are out of metadata
-                if pos >= metadata.len() {
-                    return self.null_value();
-                }
-                if !metadata[pos..].starts_with(key) {
-                    // this isn't the key we are looking for, skip to the next option, or bail if
-                    // there is no next option
-                    pos = match metadata[pos..].iter().position(|&b| b == b':') {
-                        Some(rel) => pos + rel,
-                        None => return self.null_value(),
-                    };
-                    pos += 1;
-                    continue;
-                }
-                // skip past the key
-                pos += key.len();
-                // skip any whitespace
-                while pos < metadata.len() && metadata[pos].is_ascii_whitespace() {
-                    pos += 1;
-                }
-                // bail if we are out of metadata
-                if pos >= metadata.len() {
-                    return self.null_value();
-                }
-                // a valid option has an '='
-                if metadata[pos] != b'=' {
-                    return self.null_value();
-                }
-                // the end of the value is bounded by a ':' or the end of the metadata
-                let end = match metadata[pos..].iter().position(|&b| b == b':') {
-                    Some(rel) => pos + rel,
-                    None => metadata.len(),
-                };
-                let start = pos + 1;
-                // strip any leading or trailing whitespace
-                break 'value trim_whitespace(&metadata[start..end]);
+        let value: &[u8] = {
+            // var it: kitty_metadata.ValueIterator(@tagName(key), null) = .init(metadata);
+            let mut it =
+                crate::osc::kitty_metadata::ValueIterator::init(self.tag_name(), None, metadata);
+            // const value = it.next() orelse return null;
+            match it.next() {
+                Some(v) => v,
+                None => return self.null_value(),
             }
-            // the key was not found
-            return self.null_value();
         };
+        // CORRECTION (parity S195-F1): this was a hand-rolled scan kept from an
+        // older reference, which matched the key as a PREFIX
+        // (`metadata[pos..].starts_with(key)`), returned null at the first
+        // matching-prefix field without an `=` instead of skipping it, and
+        // trimmed with `u8::is_ascii_whitespace` (no VT, 0x0B). The reference
+        // delegates to `kitty_metadata.ValueIterator`, as above.
 
         // return the parsed value
         match self {
@@ -329,20 +300,6 @@ fn parse_identifier(str: &[u8]) -> Option<Vec<u8>> {
     None
 }
 
-// PORT NOTE: `std.mem.trim(u8, slice, &std.ascii.whitespace)` — strip leading
-// and trailing ASCII whitespace bytes from the slice.
-fn trim_whitespace(s: &[u8]) -> &[u8] {
-    let mut start = 0;
-    let mut end = s.len();
-    while start < end && s[start].is_ascii_whitespace() {
-        start += 1;
-    }
-    while end > start && s[end - 1].is_ascii_whitespace() {
-        end -= 1;
-    }
-    &s[start..end]
-}
-
 pub fn parse<'a>(parser: &'a mut Parser, terminator_ch: Option<u8>) -> Option<&'a mut Command> {
     // assert(parser.state == .@"5522");
     debug_assert!(parser.state == State::S5522);
@@ -392,6 +349,30 @@ mod tests {
     // PORT NOTE: the reference uses `testing.allocator`. The ported `OSC`
     // payload is self-owning (`String`s), so the parser needs no allocator for
     // OSC 5522; `Parser::init(None)` is the faithful equivalent.
+
+    // Parity S195-F1: no reference test here; `kitty_metadata.zig:76-84`
+    // locks the same `ValueIterator` semantics. `Option.read` matches a field
+    // whose trimmed key is EXACTLY the option name, and skips (does not stop
+    // at) a field with a longer key or no `=`. The trim set is
+    // `std.ascii.whitespace`, which includes VT (0x0B).
+    #[test]
+    fn option_read_uses_the_metadata_value_iterator() {
+        use super::OptionValue;
+        let str_of = |v: OptionValue| match v {
+            OptionValue::Str(s) => s,
+            other => panic!("expected a string option, got {other:?}"),
+        };
+        assert_eq!(Some(b"B".to_vec()), str_of(Option_::Pw.read(b"pwx=1:pw=B")));
+        assert_eq!(Some(b"5".to_vec()), str_of(Option_::Id.read(b"id:id=5")));
+        assert_eq!(
+            Some(b"B".to_vec()),
+            str_of(Option_::Pw.read(b"\x0bpw\x0b=\x0bB\x0b"))
+        );
+        assert!(matches!(
+            Option_::Type.read(b"typeX=1:type=read"),
+            OptionValue::Type(Some(Operation::Read))
+        ));
+    }
 
     #[test]
     fn osc_5522_empty_metadata_and_missing_payload() {

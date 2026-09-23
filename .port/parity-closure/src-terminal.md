@@ -150,7 +150,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** parse_int_u9 rejects the '_' digit separators that Zig's std.fmt.parseInt accepts
   - **Oracle:** `src/terminal/osc/parsers/color.zig:177-181, 250-254` → **Rustty:** `crates/rustty-vt/src/osc/parsers/color.rs:482-488`
   - **Audit's suggested fix:** Mirror std.fmt.parseInt's separator handling: strip '_' characters that are neither leading nor trailing (and reject a leading/trailing or doubled '_') before the numeric parse.
-- [ ] **S195-F1** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S195-F1** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** OSC 5522 Option_::read hand-rolls prefix key matching instead of using the ported ValueIterator (exact-key, skip-field) semantics
   - **Oracle:** `src/terminal/osc/parsers/kitty_clipboard_protocol.zig:97-115 (Option.read) + src/terminal/osc/kitty_metadata.zig:39-72 (ValueIterator.next)` → **Rustty:** `crates/rustty-vt/src/osc/parsers/kitty_clipboard_protocol.rs:226-292`
   - **Audit's suggested fix:** Replace the hand-rolled scan in `Option_::read` with `kitty_metadata::ValueIterator::init(self.tag_name(), None, metadata).next()` (mirroring kitty_desktop_notification.rs:376-395), delete the now-dead local `trim_whitespace`, and add the prefix-key regression case (e.g. `5522;password=A:pw=B`) as a test.
