@@ -1949,6 +1949,19 @@ mod coretext_impl {
                             // const cf_id = dict.getValue(Key.identifier.Value(), Key.identifier.key()).?;
                             // const cf_name = dict.getValue(Key.name.Value(), Key.name.key()).?;
                             // const cf_def = dict.getValue(Key.default_value.Value(), Key.default_value.key()).?;
+                            //
+                            // PORT NOTE (R7, checked under R13 by task R13-C, inventory
+                            // M87): the three `.expect`s below are invariant checks,
+                            // not reachable reference defects. CoreText builds each
+                            // axis dictionary itself and always supplies all three
+                            // keys. Measured on macOS 26.5.1, 2026-09-22: all 113 axes
+                            // of the 55 variable fonts among the 528 installed
+                            // descriptors have them; and for a crafted font whose
+                            // `fvar` axis names a missing `name` record, whose `name`
+                            // table is removed, or whose axis tag is non-printable,
+                            // CoreText still supplies the name (the tag, or an empty
+                            // string) as a CFString and the identifier and default as
+                            // CFNumbers. A font file cannot remove them.
                             let cf_id = unsafe {
                                 dict_get(
                                     dict,
