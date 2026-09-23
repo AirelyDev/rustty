@@ -284,7 +284,8 @@ point is that they become proposable upstream rather than lost in a task report.
      Filename inference gets at least five entries wrong — `global.zig` ports to
      `rustty-apprt/src/lib.rs`, `renderer/Thread.zig` to `rustty-core/src/renderer_seam.rs`
      (a different crate), `OpenGL.zig`'s head to `opengl/gl/sys.rs`, `main_ghostty.zig` to
-     `rustty-core/src/logging.rs`, and both renderer twin pairs split two ways. **Adding a
+     the binary's `rustty/src/main_rustty.rs` (it was mapped to `rustty-core/src/logging.rs`,
+     logFn's transport, until N190), and both renderer twin pairs split two ways. **Adding a
      LOG row for a reference file with no portmap entry turns the gate RED**; add the entry
      in the same commit, and take that as the prompt to say where the file really ports to.
    - **Platform twins are separate arms (`|`), never summed.** A file's score is the
@@ -368,6 +369,18 @@ point is that they become proposable upstream rather than lost in a task report.
      emission carrying a declared-dead site's message is RED.** That is the only check in the
      gate that can catch the port saying something the reference does not, which is precisely
      what "restore the call under the comment" would produce here.
+   - **A diagnostic the reference does not have is not a site either, and an uncounted one
+     is worse than a missing one.** A port-only emission (an R13 handling line, a D11 range
+     guard, a Rust-only error arm, instrumentation) or an extra static copy of ONE reference
+     site (an unrolled `inline for`, a `#[cfg]` twin, a call split across two arms, the 12
+     inlined `logUnsupportedOnce` calls) used to be counted, and because the gate clamps a
+     surplus it could not even be seen: it credited its file with a site that was not there
+     and masked the next real loss. Deleting the ported `PageList.zig:775` left the gate green
+     (N81), and the sweep that followed found such lines hiding missing sites in 11 more files
+     (N190). Declare every one in `LOG-PORT-ONLY.tsv` — by enclosing fn and call text, never by
+     line — in the commit that adds it; the gate subtracts it and RED-flags a row that selects
+     none or several emissions, and the list is capped. **Never raise an allowance to absorb a
+     port-only line, and never let one cancel a restored site.**
    - **Ratchet EVERY number a stage can move, including the escape hatch.** Completing the
      portmap (N15) created a new lever: an EXCLUSION retires a reference file instead of
      reconciling it, so it erases that file's whole deficit. Reclassifying
