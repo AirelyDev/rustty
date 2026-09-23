@@ -918,6 +918,9 @@ fn update<'a>(
                     //   PORT NOTE (issue 4): `wrapping_sub(1)` mirrors ReleaseFast's `usize`
                     //   wrap on an empty filter; `draw` resets `current = 0` before any index,
                     //   so the wrapped value is never used to index (matching the reference).
+                    //   PORT NOTE: reference defect (R13), UD94: the reference's `len - 1`
+                    //   traps (ReleaseSafe "integer overflow") on an empty filter; the
+                    //   wrap is harmless here because every index is guarded or reset.
                     if key.matches_any(&[key::end, key::kp_end, 'G' as u32], none) {
                         st.current = st.filtered.len().wrapping_sub(1);
                     }
@@ -960,6 +963,11 @@ fn update<'a>(
                     // if (key.matches('c', .{})) copy theme name  else if (key.matches('c', .{shift})) copy path;
                     //   PORT NOTE (§1 divergence): NO `alloc` arg. (issue 4) guard the
                     //   `filtered[current]` index on an empty filter.
+                    //   PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD94.
+                    //   The reference indexes `filtered.items[current]` here with no
+                    //   check, so `c`/`C` after a search that matched nothing reads
+                    //   out of bounds (ReleaseSafe: index panic). With nothing
+                    //   selected there is nothing to copy, so the key does nothing.
                     if key.matches('c' as u32, none) {
                         if !st.filtered.is_empty() {
                             vx.copy_to_system_clipboard(
@@ -2354,6 +2362,10 @@ fn update_filtered(st: &mut DrawState) -> Result<(), Error> {
     // const relative = self.current -| self.window;
     let relative = st.current.saturating_sub(st.window);
     // if (self.filtered.items.len > 0) selected = self.themes[self.filtered.items[self.current]].theme;
+    //   PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD94. The
+    //   reference leaves `selected` `undefined` when the old list is empty and
+    //   then reads `selected.len` (`:414`) once the new list is not; `None` is the
+    //   "nothing was selected" the reference's own `selected.len == 0` arm means.
     let selected: Option<Vec<u8>> = if !st.filtered.is_empty() {
         Some(st.themes[st.filtered[st.current]].theme.clone())
     } else {
@@ -2660,6 +2672,163 @@ mod picker_tests {
             b"file:///a/b.ghostty".to_vec()
         );
         assert_eq!(uri_from_path(b"/a b"), b"file:///a%20b".to_vec());
+    }
+
+    /// UD94 (R13, task R13-D): the key handlers on a filter that matches
+    /// nothing. The reference indexes `filtered.items[current]` for `c`/`C`
+    /// (`list_themes.zig:486`, `:492`) and sets `current = filtered.items.len - 1`
+    /// for End (`:443`, `:470`), which underflow or read out of bounds on an
+    /// empty list, and `updateFiltered` reads an `undefined` `selected` when the
+    /// old list was empty (`:336-338`, `:414`). The port guards `c`/`C`, lets End
+    /// wrap (the draw resets `current` before any index), and carries
+    /// `selected` as an `Option`.
+    ///
+    /// `update` needs the real `Tty`, which opens `/dev/tty`, so the body runs in
+    /// a re-executed copy of this test binary whose controlling terminal is a
+    /// fresh pty.
+    #[test]
+    fn keys_on_a_filter_that_matches_nothing_do_not_index_it() {
+        const CHILD: &str = "RUSTTY_R13D_LIST_THEMES_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            empty_filter_keys_child();
+            return;
+        }
+
+        let (mut master, mut slave) = (0, 0);
+        let rc = unsafe {
+            libc::openpty(
+                &mut master,
+                &mut slave,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        assert_eq!(0, rc, "openpty");
+
+        use std::os::fd::FromRawFd as _;
+        use std::os::unix::process::CommandExt as _;
+        let mut cmd = std::process::Command::new(std::env::current_exe().unwrap());
+        cmd.args([
+            "--exact",
+            "list_themes::picker_tests::keys_on_a_filter_that_matches_nothing_do_not_index_it",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(CHILD, "1")
+        .stdin(unsafe { std::process::Stdio::from_raw_fd(libc::dup(slave)) });
+        // SAFETY: `setsid` and `ioctl` are async-signal-safe; fd 0 is the slave.
+        unsafe {
+            cmd.pre_exec(|| {
+                libc::setsid();
+                if libc::ioctl(0, libc::TIOCSCTTY as _, 0) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let mut child = cmd
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("re-exec the test binary");
+        unsafe {
+            libc::close(slave);
+        }
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        let status = loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                break Some(status);
+            }
+            if std::time::Instant::now() >= deadline {
+                let _ = child.kill();
+                break None;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+        let out = child.wait_with_output().unwrap();
+        unsafe {
+            libc::close(master);
+        }
+        let log = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let status = status.unwrap_or_else(|| panic!("the child hung:\n{log}"));
+        assert!(status.success(), "the child failed ({status}):\n{log}");
+        assert!(
+            log.contains("r13d: every key handled on an empty filter"),
+            "the child ran the body:\n{log}"
+        );
+    }
+
+    fn empty_filter_keys_child() {
+        let dir = std::env::temp_dir().join(format!("rustty-r13d-themes-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (a, b) = (dir.join("A"), dir.join("B"));
+        std::fs::write(&a, "background = #000000\n").unwrap();
+        std::fs::write(&b, "background = #ffffff\n").unwrap();
+        let themes = vec![
+            te(b"A", a.as_os_str().as_encoded_bytes()),
+            te(b"B", b.as_os_str().as_encoded_bytes()),
+        ];
+        let arena = Arena::init();
+        let mut vx = smoke_vx();
+        let mut st = smoke_state(&arena, &themes, Mode::Normal);
+        // A search that matched nothing.
+        st.filtered.clear();
+
+        let mut tty = Tty::init(Vec::new()).expect("the pty is the controlling terminal");
+        let key = |codepoint: u32, mods: Modifiers, shifted: Option<u32>| {
+            Event::KeyPress(KeyOwned {
+                codepoint,
+                text: None,
+                shifted_codepoint: shifted,
+                base_layout_codepoint: None,
+                mods,
+            })
+        };
+        let none = Modifiers::default();
+        let shift = Modifiers {
+            shift: true,
+            ..Default::default()
+        };
+        let ctrl = Modifiers {
+            ctrl: true,
+            ..Default::default()
+        };
+
+        // End wraps `current` (the reference's `len - 1` on an empty list).
+        update(&mut vx, &mut tty, &mut st, key(key::end, none, None)).unwrap();
+        assert_eq!(usize::MAX, st.current, "precondition: End wrapped");
+        // c / C would index `filtered[current]`.
+        update(&mut vx, &mut tty, &mut st, key('c' as u32, none, None)).unwrap();
+        update(
+            &mut vx,
+            &mut tty,
+            &mut st,
+            key('c' as u32, shift, Some('C' as u32)),
+        )
+        .unwrap();
+        // Navigation on the empty list.
+        for k in [key::down, key::up, key::page_down, key::page_up] {
+            update(&mut vx, &mut tty, &mut st, key(k, none, None)).unwrap();
+        }
+        draw(&mut vx, &mut st);
+        // Clearing the search refilters from an empty list (`selected` absent).
+        update(&mut vx, &mut tty, &mut st, key('x' as u32, ctrl, None)).unwrap();
+        assert_eq!(
+            vec![0, 1],
+            st.filtered,
+            "the cleared search lists both themes"
+        );
+        assert_eq!(0, st.current);
+
+        tty.deinit();
+        std::fs::remove_dir_all(&dir).unwrap();
+        println!("r13d: every key handled on an empty filter");
     }
 
     // Interactive Loop path — needs a real `/dev/tty` (absent in the sandbox).
