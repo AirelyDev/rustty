@@ -125,6 +125,10 @@ pub struct Loop<'a, T> {
     /// Zig `should_quit: bool` — an `AtomicBool` (Zig's plain bool is a latent
     /// cross-thread race; `store`/`load` `Relaxed` makes it explicit and sound while
     /// keeping `stop` a pure `&self` op).
+    ///
+    /// PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD108: the
+    /// reference's plain `bool` is written by `stop` on the caller's thread and
+    /// read by the read thread's loop condition with no synchronization.
     should_quit: AtomicBool,
 }
 
@@ -440,6 +444,10 @@ pub unsafe fn handle_event_generic<'a, T: LoopEvent>(
                     return;
                 }
                 // HACK: yuck. there has to be a better way (Rust's better way: OWN the bytes)
+                // PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD107: the
+                // reference queues a slice of the read thread's 8 KiB grapheme ring,
+                // which the read thread overwrites when it wraps (and which dies
+                // with the thread); the event owns a copy here (module note).
                 if let Some(ev) = T::key_press(key.into_owned()) {
                     (*self_ptr).queue.push(ev);
                 }
@@ -661,6 +669,53 @@ mod tests {
         fn focus_in() -> Option<Self> {
             Some(TestEvent::FocusIn)
         }
+    }
+
+    /// UD107 (R13, task R13-D): libvaxis 0.6.0 queues each key event's text
+    /// as a slice of the read thread's 8 KiB `GraphemeCache` ring, so the text
+    /// of an event still in the queue is overwritten once the read thread has
+    /// put another 8 KiB through the ring. Here more than 8 KiB of key text is
+    /// posted through `handle_event_generic` from ONE buffer that is rewritten
+    /// after every post, as the ring would be; every queued event must still
+    /// hold its own text. (The reference's borrow cannot be reinstated in safe
+    /// Rust: `LoopEvent: Send + 'static` rejects an event that borrows the
+    /// read thread.)
+    #[test]
+    fn queued_key_text_is_owned_not_a_view_of_the_read_buffer() {
+        let mut tty = Tty::init(Vec::new()).unwrap();
+        let mut vx = Vaxis::default();
+        let mut l: Loop<'_, TestEvent> = Loop::new(&mut tty, &mut vx);
+
+        const EVENTS: usize = 100;
+        const LEN: usize = 100; // 100 x 100 bytes > 8 KiB
+        let mut ring = [0u8; LEN];
+        for i in 0..EVENTS {
+            ring.fill(b'a' + (i % 26) as u8);
+            let key = crate::key::Key {
+                codepoint: u32::from(ring[0]),
+                text: Some(&ring[..]),
+                shifted_codepoint: None,
+                base_layout_codepoint: None,
+                mods: Default::default(),
+            };
+            // SAFETY: `l` and `vx` are live locals; no other borrow is held.
+            unsafe { handle_event_generic(&mut l, &mut vx, Event::KeyPress(key)) };
+        }
+        ring.fill(0);
+
+        for i in 0..EVENTS {
+            match l.try_event() {
+                Some(TestEvent::KeyPress(k)) => assert_eq!(
+                    Some(vec![b'a' + (i % 26) as u8; LEN]),
+                    k.text,
+                    "event {i} kept its own text"
+                ),
+                other => panic!("event {i}: expected a key press, got {other:?}"),
+            }
+        }
+        assert!(l.try_event().is_none());
+        drop(l);
+        tty.deinit();
     }
 
     #[test]
