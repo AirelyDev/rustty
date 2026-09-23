@@ -1,6 +1,6 @@
 //! rustty-apprt::gtk::winproto::x11
 //!
-//! PORTS: ghostty `src/apprt/gtk/winproto/x11.zig` (499 loc) — the X11
+//! PORTS: ghostty `src/apprt/gtk/winproto/x11.zig` (509 loc) — the X11
 //! window-protocol backend. Two types: [`App`] (per-application: the xlib
 //! `Display` GDK owns, plus the interned [`Atoms`]) and [`Window`] (per-surface:
 //! the `X11Surface` XID plus the CSD/blur property machinery).
@@ -18,24 +18,24 @@
 //!
 //! GDK owns the real xlib `Display`. [`App::init`] downcasts the GDK display to
 //! [`gdk4_x11::X11Display`] — ELSE returns `Ok(None)`, THE ORDERED-INIT FALLBACK
-//! HINGE (`x11.zig:38-41`): under a non-X11 display this makes [`super::App::init`]
+//! HINGE (`x11.zig:39-42`): under a non-X11 display this makes [`super::App::init`]
 //! fall through to the noop arm. It then reaches the xlib `Display*` via
-//! `unsafe { x11d.xdisplay() }` (`x11.zig:43`). A window's XID comes from
+//! `unsafe { x11d.xdisplay() }` (`x11.zig:44`). A window's XID comes from
 //! downcasting the GDK surface to [`gdk4_x11::X11Surface`] and calling `.xid()`
-//! (`x11.zig:187-193`).
+//! (`x11.zig:198-204`).
 //!
 //! # Ownership
 //!
 //! The xlib `Display` is GDK-OWNED — [`App::deinit`] does NOT `XCloseDisplay` it
-//! (`x11.zig:110-112`). X11 window state is property-based (no per-surface proxy
+//! (`x11.zig:111-113`). X11 window state is property-based (no per-surface proxy
 //! objects to destroy, unlike Wayland), so [`Window::deinit`] only clears the
-//! cached blur region (`x11.zig:203-205`).
+//! cached blur region (`x11.zig:214-216`).
 //!
 //! # DEFERRALS
 //!
 //! * **Quick terminal.** [`App::supports_quick_terminal`] is `false` and
 //!   [`App::init_quick_terminal`] returns unsupported — matching the reference,
-//!   whose X11 `supportsQuickTerminal` is unconditionally `false` (`x11.zig:161-166`;
+//!   whose X11 `supportsQuickTerminal` is unconditionally `false` (`x11.zig:172-177`;
 //!   the quick terminal is a Wayland layer-shell feature).
 
 use rustty_global::EnvMapExt as _;
@@ -56,31 +56,31 @@ use super::WinprotoError;
 /// The rustty `Window` GObject the winproto `Window::init` is realized against;
 /// downcast from the generic `&impl IsA<gtk4::Window>` so the arm can read the
 /// per-window config (`background-blur`, `window-decoration`) the reference reads
-/// off its `*ApprtWindow` (`x11.zig:225-230,299,331`).
+/// off its `*ApprtWindow` (`x11.zig:236-241,244,310`).
 type ApprtWindow = crate::gtk::class::window::Window;
 
 /// `_MOTIF_WM_HINTS` flag bit: decorations field is meaningful (`Xm/MwmUtil.h`;
-/// the reference's `MotifWMHints.flags.decorations` bit, `x11.zig:482-484`).
+/// the reference's `MotifWMHints.flags.decorations` bit, `x11.zig:493-495`).
 const MWM_HINTS_DECORATIONS: c_ulong = 1 << 1;
 /// `_MOTIF_WM_HINTS` decorations bit: enable ALL decorations (the reference's
-/// `MotifWMHints.decorations.all` bit, `x11.zig:490-492`).
+/// `MotifWMHints.decorations.all` bit, `x11.zig:501-502`).
 const MWM_DECOR_ALL: c_ulong = 1 << 0;
 
 /// X11 property `format` value: 32-bit-logical items, stored as `c_long` words in
-/// the client API (`x11.zig:459-461`). Both properties this arm writes
+/// the client API (`x11.zig:471,477`). Both properties this arm writes
 /// (`_MOTIF_WM_HINTS`, `_KDE_NET_WM_BLUR_BEHIND_REGION`) use format 32.
 const FORMAT_32: c_int = 32;
 
 /// `XkbUseCoreKbd` (`X11/XKBlib.h`, via `X11/extensions/XKB.h`) — the core-keyboard
-/// device spec (`x11.zig:94`). `x11-dl` does not export it, so it is spelled here.
+/// device spec (`x11.zig:95`). `x11-dl` does not export it, so it is spelled here.
 const XKB_USE_CORE_KBD: c_uint = 0x0100;
 /// `XkbMajorVersion` (`X11/XKBlib.h`) — the XKB version rustty asks for
-/// (`x11.zig:77`). Not exported by `x11-dl`.
+/// (`x11.zig:78`). Not exported by `x11-dl`.
 const XKB_MAJOR_VERSION: c_int = 1;
-/// `XkbMinorVersion` (`X11/XKBlib.h`) (`x11.zig:78`). Not exported by `x11-dl`.
+/// `XkbMinorVersion` (`X11/XKBlib.h`) (`x11.zig:79`). Not exported by `x11-dl`.
 const XKB_MINOR_VERSION: c_int = 0;
 /// `QueuedAfterReading` (`X11/Xlib.h`) — the `XEventsQueued` mode the reference
-/// uses (`x11.zig:136`). Not exported by `x11-dl`.
+/// uses (`x11.zig:137`). Not exported by `x11-dl`.
 const QUEUED_AFTER_READING: c_int = 1;
 
 /// `const log = std.log.scoped(.gtk_x11)` (`x11.zig:25`).
@@ -91,25 +91,25 @@ const QUEUED_AFTER_READING: c_int = 1;
 const LOG_SCOPE: &str = "gtk_x11";
 
 /// PORTS: the inferred error set of `x11.zig`'s `!App` / `!Window` returns
-/// (`X11Error` + `GetWindowPropertyError`, `x11.zig:423-431`). Wrapped by
+/// (`X11Error` + `GetWindowPropertyError`, `x11.zig:434-442`). Wrapped by
 /// [`super::WinprotoError::X11`].
 #[derive(Debug)]
 pub enum Error {
-    /// `error.NotX11Surface` (`x11.zig:188,193`).
+    /// `error.NotX11Surface` (`x11.zig:199,204`).
     NotX11Surface,
     /// `x11-dl` could not load `libX11`. rustty-specific: the reference links Xlib
     /// statically via `@cImport`, so it has no analogue (there is nothing to load).
     XlibLoadFailed,
-    /// `error.XkbInitializationError` (`x11.zig:88,100`) — `XkbQueryExtension` or
+    /// `error.XkbInitializationError` (`x11.zig:89,101`) — `XkbQueryExtension` or
     /// `XkbSelectEventDetails` failed.
     XkbInitializationError,
-    /// `error.RequestFailed` (`x11.zig:424`) — an Xlib call reported failure.
+    /// `error.RequestFailed` (`x11.zig:435`) — an Xlib call reported failure.
     RequestFailed,
-    /// `error.PropertyTypeMismatch` (`x11.zig:373,429`).
+    /// `error.PropertyTypeMismatch` (`x11.zig:384,440`).
     PropertyTypeMismatch,
-    /// `error.PropertyFormatMismatch` (`x11.zig:374,430`).
+    /// `error.PropertyFormatMismatch` (`x11.zig:385,441`).
     PropertyFormatMismatch,
-    /// The quick terminal is not supported on X11 (`x11.zig:161-166`).
+    /// The quick terminal is not supported on X11 (`x11.zig:172-177`).
     QuickTerminalUnsupported,
 }
 
@@ -139,19 +139,19 @@ impl From<Error> for WinprotoError {
     }
 }
 
-/// PORTS: `x11.zig:433-449` `Atoms`. The interned X11 atoms the property writes
-/// target. The reference interns exactly these two (`x11.zig:437-448`); everything
+/// PORTS: `x11.zig:444-460` `Atoms`. The interned X11 atoms the property writes
+/// target. The reference interns exactly these two (`x11.zig:448-459`); everything
 /// else it needs (`XA_CARDINAL`, the None atom) is a compile-time constant.
 #[derive(Clone, Copy)]
 struct Atoms {
-    /// `_KDE_NET_WM_BLUR_BEHIND_REGION` (`x11.zig:439-442`).
+    /// `_KDE_NET_WM_BLUR_BEHIND_REGION` (`x11.zig:450-453`).
     kde_blur: xlib::Atom,
-    /// `_MOTIF_WM_HINTS` (`x11.zig:443-446`).
+    /// `_MOTIF_WM_HINTS` (`x11.zig:454-457`).
     motif_wm_hints: xlib::Atom,
 }
 
 impl Atoms {
-    /// PORTS: `x11.zig:437-448` `Atoms.init`. Uses GDK's per-display atom cache
+    /// PORTS: `x11.zig:448-459` `Atoms.init`. Uses GDK's per-display atom cache
     /// (`gdk_x11_get_xatom_by_name_for_display`) exactly as the reference does,
     /// rather than a raw `XInternAtom`.
     fn init(display: &gdk4_x11::X11Display) -> Atoms {
@@ -165,7 +165,7 @@ impl Atoms {
     }
 }
 
-/// PORTS: `x11.zig:481-498` `MotifWMHints`. See `Xm/MwmUtil.h`. `#[repr(C)]` of
+/// PORTS: `x11.zig:491-509` `MotifWMHints`. See `Xm/MwmUtil.h`. `#[repr(C)]` of
 /// five machine words; the reference expresses `flags`/`decorations` as `c_ulong`
 /// packed bitfields, but the only bits this arm touches are
 /// [`MWM_HINTS_DECORATIONS`] (in `flags`) and [`MWM_DECOR_ALL`] (in `decorations`),
@@ -181,9 +181,9 @@ struct MotifWmHints {
     status: c_ulong,
 }
 
-/// PORTS: `x11.zig:26-167` `App`. Application-wide X11 state.
+/// PORTS: `x11.zig:27-178` `App`. Application-wide X11 state.
 pub struct App {
-    /// PORTS: `x11.zig:27` `display: *xlib.Display`. GDK owns it (`x11.zig:110-112`
+    /// PORTS: `x11.zig:28` `display: *xlib.Display`. GDK owns it (`x11.zig:111-113`
     /// deinit is a no-op) — this is a BORROW, never `XCloseDisplay`d here.
     display: *mut xlib::Display,
     /// The `x11-dl` function table (`XChangeProperty`/`XGetWindowProperty`/
@@ -191,11 +191,11 @@ pub struct App {
     /// through the static `@cImport`. `Rc` so each [`Window`] shares the one
     /// process-cached table without re-`open`ing.
     xlib: Rc<xlib::Xlib>,
-    /// PORTS: `x11.zig:28` `base_event_code: c_int`. The XKB extension's base event
+    /// PORTS: `x11.zig:29` `base_event_code: c_int`. The XKB extension's base event
     /// code, returned by `XkbQueryExtension` — [`Self::event_mods`] compares a
-    /// peeked event's `type` against it (`x11.zig:141`).
+    /// peeked event's `type` against it (`x11.zig:142`).
     base_event_code: c_int,
-    /// PORTS: `x11.zig:29` `atoms: Atoms`.
+    /// PORTS: `x11.zig:30` `atoms: Atoms`.
     atoms: Atoms,
 }
 
@@ -209,28 +209,28 @@ impl std::fmt::Debug for App {
 }
 
 impl App {
-    /// PORTS: `x11.zig:31-108` `App.init`. Probe the GDK display for X11; if it is
+    /// PORTS: `x11.zig:32-109` `App.init`. Probe the GDK display for X11; if it is
     /// not X11, return `Ok(None)` — THE ORDERED-INIT FALLBACK HINGE
-    /// (`x11.zig:38-41`). Otherwise reach the xlib `Display`, set the program class
+    /// (`x11.zig:39-42`). Otherwise reach the xlib `Display`, set the program class
     /// (WM_CLASS), load the `libX11` function table, initialize the XKB extension
-    /// (`x11.zig:71-101`), and intern the atoms.
+    /// (`x11.zig:72-102`), and intern the atoms.
     pub fn init(
         gdk_display: &gdk4::Display,
         app_id: &str,
         config: &CoreConfig,
     ) -> Result<Option<App>, WinprotoError> {
         // `gobject.ext.cast(gdk_x11.X11Display, gdk_display) orelse return null`
-        // (`x11.zig:38-41`).
+        // (`x11.zig:39-42`).
         let Some(x11d) = gdk_display.downcast_ref::<gdk4_x11::X11Display>() else {
             return Ok(None);
         };
 
-        // `gdk_x11_display.getXdisplay()` (`x11.zig:43`). `unsafe` per the gdk4-x11
+        // `gdk_x11_display.getXdisplay()` (`x11.zig:44`). `unsafe` per the gdk4-x11
         // binding; the pointer is a live `Display` GDK owns for its lifetime.
         let display = unsafe { x11d.xdisplay() };
 
         // Set WM_CLASS. The instance name is derived from `g_set_prgname`
-        // (`x11.zig:45-69`): `x11-instance-name` if set, else the debug/release
+        // (`x11.zig:46-69`): `x11-instance-name` if set, else the debug/release
         // program name. Matches the reference's structure with rustty's identity.
         let program_name: std::borrow::Cow<'_, str> = match &config.x11_instance_name {
             Some(pn) => String::from_utf8_lossy(pn),
@@ -238,14 +238,14 @@ impl App {
             None => std::borrow::Cow::Borrowed("rustty"),
         };
         glib::set_prgname(Some(program_name.as_ref()));
-        // `gdk_x11.X11Display.setProgramClass(gdk_display, app_id)` (`x11.zig:69`).
+        // `gdk_x11.X11Display.setProgramClass(gdk_display, app_id)` (`x11.zig:70`).
         x11d.set_program_class(app_id);
 
         // Load libX11's function table (process-cached in x11-dl). rustty-specific:
         // stands in for the reference's static `@cImport` of Xlib.
         let xlib = xlib::Xlib::open().map_err(|_| Error::XlibLoadFailed)?;
 
-        // XKB (`x11.zig:71-101`). `XkbQueryExtension` reports the extension's base
+        // XKB (`x11.zig:72-102`). `XkbQueryExtension` reports the extension's base
         // event code; `XkbSelectEventDetails` then asks the server to deliver
         // `XkbStateNotify` events whose MODIFIER-state bits changed, which is what
         // `event_mods` peeks for. Both are FATAL on failure in the reference.
@@ -259,7 +259,7 @@ impl App {
         let mut major: c_int = XKB_MAJOR_VERSION;
         let mut minor: c_int = XKB_MINOR_VERSION;
         // `if (XkbQueryExtension(...) == 0) return error.XkbInitializationError`
-        // (`x11.zig:79-89`).
+        // (`x11.zig:80-90`).
         if unsafe {
             (xlib.XkbQueryExtension)(
                 display,
@@ -284,7 +284,7 @@ impl App {
 
         // `if (XkbSelectEventDetails(display, XkbUseCoreKbd, XkbStateNotify,
         // XkbModifierStateMask, XkbModifierStateMask) == 0) return
-        // error.XkbInitializationError` (`x11.zig:92-101`).
+        // error.XkbInitializationError` (`x11.zig:93-102`).
         if unsafe {
             (xlib.XkbSelectEventDetails)(
                 display,
@@ -313,7 +313,7 @@ impl App {
 
     /// Test-observability seam (rustty-specific; the reference reads the field
     /// directly from the same module). Exposes the XKB base event code
-    /// [`Self::init`] captured (`x11.zig:105`) so the live X11 KAT can prove
+    /// [`Self::init`] captured (`x11.zig:106`) so the live X11 KAT can prove
     /// `XkbQueryExtension` actually ran.
     #[doc(hidden)]
     #[must_use]
@@ -321,13 +321,13 @@ impl App {
         self.base_event_code
     }
 
-    /// PORTS: `x11.zig:110-112` `App.deinit`. Nothing to release — the xlib
+    /// PORTS: `x11.zig:111-113` `App.deinit`. Nothing to release — the xlib
     /// `Display` is GDK-owned (NOT closed here), and X11 state is property-based
     /// (no proxies).
     #[allow(clippy::unused_self)]
     pub fn deinit(&mut self) {}
 
-    /// PORTS: `x11.zig:114-159` `App.eventMods`. Checks for an IMMEDIATE pending XKB
+    /// PORTS: `x11.zig:115-160` `App.eventMods`. Checks for an IMMEDIATE pending XKB
     /// state-update event and derives the keyboard modifiers from it. This is
     /// necessary because the standard GTK X11 API (and X11 generally) does not
     /// include the just-pressed key in the modifier snapshot carried by that key's
@@ -338,7 +338,7 @@ impl App {
     /// via `key::translate_mods` (`winproto.zig:62`).
     ///
     /// The approach is the reference's, which credits Firefox/Gecko's
-    /// `widget/gtk/nsGtkKeyUtils.cpp` (`x11.zig:132-133`).
+    /// `widget/gtk/nsGtkKeyUtils.cpp` (`x11.zig:133-134`).
     #[must_use]
     pub fn event_mods(
         &self,
@@ -346,25 +346,25 @@ impl App {
         _gtk_mods: gdk4::ModifierType,
     ) -> Option<rustty_vt::input::key_mods::Mods> {
         // `if (XEventsQueued(display, QueuedAfterReading) == 0) return null`
-        // (`x11.zig:134-137`). This guard is load-bearing: XPeekEvent BLOCKS when
+        // (`x11.zig:135-138`). This guard is load-bearing: XPeekEvent BLOCKS when
         // the queue is empty.
         if unsafe { (self.xlib.XEventsQueued)(self.display, QUEUED_AFTER_READING) } == 0 {
             return None;
         }
 
         // `var nextEvent: XEvent = undefined; _ = XPeekEvent(display, &nextEvent)`
-        // (`x11.zig:139-140`). PEEK, not next: the event stays queued for GDK.
+        // (`x11.zig:140-141`). PEEK, not next: the event stays queued for GDK.
         let mut next_event = std::mem::MaybeUninit::<xlib::XEvent>::uninit();
         unsafe { (self.xlib.XPeekEvent)(self.display, next_event.as_mut_ptr()) };
         let next_event = unsafe { next_event.assume_init() };
 
-        // `if (nextEvent.type != self.base_event_code) return null` (`x11.zig:141`).
+        // `if (nextEvent.type != self.base_event_code) return null` (`x11.zig:142`).
         if unsafe { next_event.type_ } != self.base_event_code {
             return None;
         }
 
         // `const xkb_event: *XkbEvent = @ptrCast(&nextEvent); if
-        // (xkb_event.any.xkb_type != XkbStateNotify) return null` (`x11.zig:143-144`).
+        // (xkb_event.any.xkb_type != XkbStateNotify) return null` (`x11.zig:144-145`).
         // `xlib::XEvent` is a union whose `pad: [c_long; 24]` (192 bytes on LP64) is
         // the standard Xlib event buffer, which is >= every Xkb*Event — the same
         // reinterpretation the reference does with `@ptrCast`.
@@ -376,7 +376,7 @@ impl App {
         }
 
         // `const xkb_state_notify_event: *XkbStateNotifyEvent = @ptrCast(xkb_event);
-        // const lookup_mods = xkb_state_notify_event.lookup_mods` (`x11.zig:146-148`).
+        // const lookup_mods = xkb_state_notify_event.lookup_mods` (`x11.zig:147-149`).
         let state: xlib::XkbStateNotifyEvent = unsafe {
             std::ptr::read_unaligned(
                 std::ptr::from_ref(&next_event).cast::<xlib::XkbStateNotifyEvent>(),
@@ -385,13 +385,13 @@ impl App {
         let lookup_mods = c_uint::from(state.lookup_mods);
 
         // `log.debug("X11: found extra XkbStateNotify event w/lookup_mods: {b}")`
-        // (`x11.zig:151`).
+        // (`x11.zig:152`).
         log::debug!(
             target: LOG_SCOPE,
             "X11: found extra XkbStateNotify event w/lookup_mods: {lookup_mods:b}"
         );
 
-        // `x11.zig:149,152-158` — the XKB mask -> `input.Mods` mapping.
+        // `x11.zig:149,153-157` — the XKB mask -> `input.Mods` mapping.
         let mut mods = rustty_vt::input::key_mods::Mods::default();
         if lookup_mods & xlib::ShiftMask != 0 {
             mods.shift = true;
@@ -412,7 +412,7 @@ impl App {
         Some(mods)
     }
 
-    /// PORTS: `x11.zig:162-169` `App.bindGlobalShortcuts`. X11 has no native
+    /// PORTS: `x11.zig:162-168` `App.bindGlobalShortcuts`. X11 has no native
     /// global-hotkey mechanism rustty drives (the reference's X11 arm returns
     /// `false` unconditionally), so global keybinds keep taking the XDG desktop
     /// portal path verbatim.
@@ -426,12 +426,12 @@ impl App {
         false
     }
 
-    /// PORTS: `x11.zig:171` `App.clearGlobalShortcuts`. Nothing was bound
+    /// PORTS: `x11.zig:170` `App.clearGlobalShortcuts`. Nothing was bound
     /// (the reference's empty body).
     #[allow(clippy::unused_self)]
     pub fn clear_global_shortcuts(&mut self) {}
 
-    /// PORTS: `x11.zig:161-164` `App.supportsQuickTerminal`. The quick terminal is
+    /// PORTS: `x11.zig:172-175` `App.supportsQuickTerminal`. The quick terminal is
     /// a Wayland layer-shell feature; the reference's X11 arm returns `false`.
     #[allow(clippy::unused_self)]
     #[must_use]
@@ -441,7 +441,7 @@ impl App {
         false
     }
 
-    /// PORTS: `x11.zig:166` `App.initQuickTerminal`. Unsupported on X11 — returns
+    /// PORTS: `x11.zig:177` `App.initQuickTerminal`. Unsupported on X11 — returns
     /// [`Error::QuickTerminalUnsupported`]. Only reachable if
     /// [`Self::supports_quick_terminal`] is `true` (never), so effectively
     /// unreachable; the reference's body is empty.
@@ -454,14 +454,14 @@ impl App {
     }
 }
 
-/// PORTS: `x11.zig:169-421` `Window`. Per-surface X11 state.
+/// PORTS: `x11.zig:180-432` `Window`. Per-surface X11 state.
 pub struct Window {
-    /// PORTS: `x11.zig:171` `apprt_window: *ApprtWindow`. A WEAK ref (the window
+    /// PORTS: `x11.zig:182` `apprt_window: *ApprtWindow`. A WEAK ref (the window
     /// owns this winproto `Window`, so a strong ref is a GObject refcount cycle);
     /// upgraded at sync time to read config. Non-owning, like the reference's raw
     /// pointer.
     apprt_window: glib::WeakRef<ApprtWindow>,
-    /// PORTS: `x11.zig:172` `x11_surface: *gdk_x11.X11Surface`. Cloned (bumps the
+    /// PORTS: `x11.zig:183` `x11_surface: *gdk_x11.X11Surface`. Cloned (bumps the
     /// GObject refcount) rather than borrowed, to avoid a lifetime tie to `App`;
     /// GDK owns the underlying surface, so `deinit` just drops this ref.
     x11_surface: gdk4_x11::X11Surface,
@@ -473,11 +473,11 @@ pub struct Window {
     /// Copy of [`App::atoms`].
     atoms: Atoms,
 
-    /// PORTS: `x11.zig:175` `blur_region`.
+    /// PORTS: `x11.zig:186` `blur_region`.
     blur_region: BlurRegion,
-    /// PORTS: `x11.zig:180` `last_applied_decoration_hints`. Cache the last applied
+    /// PORTS: `x11.zig:191` `last_applied_decoration_hints`. Cache the last applied
     /// `_MOTIF_WM_HINTS` to avoid redundant property writes, which glitch some WMs
-    /// (ghostty PR #8075, `x11.zig:177-180`).
+    /// (ghostty PR #8075, `x11.zig:188-191`).
     last_applied_decoration_hints: Option<MotifWmHints>,
 }
 
@@ -490,7 +490,7 @@ impl std::fmt::Debug for Window {
 }
 
 impl Window {
-    /// PORTS: `x11.zig:182-201` `Window.init`.
+    /// PORTS: `x11.zig:193-212` `Window.init`.
     pub fn init(
         app: &App,
         window: &impl gtk4::prelude::IsA<gtk4::Window>,
@@ -502,12 +502,12 @@ impl Window {
         let apprt = gtk_window.downcast_ref::<ApprtWindow>();
 
         // `apprt_window.as(gtk.Native).getSurface() orelse return error.NotX11Surface`
-        // (`x11.zig:187-189`).
+        // (`x11.zig:198-199`).
         let Some(gdk_surface) = gtk_window.surface() else {
             return Err(Error::NotX11Surface.into());
         };
         // `gobject.ext.cast(gdk_x11.X11Surface, surface) orelse return error.NotX11Surface`
-        // (`x11.zig:190-193`).
+        // (`x11.zig:201-204`).
         let Some(x11_surface) = gdk_surface.downcast_ref::<gdk4_x11::X11Surface>() else {
             return Err(Error::NotX11Surface.into());
         };
@@ -523,14 +523,14 @@ impl Window {
         })
     }
 
-    /// PORTS: `x11.zig:203-205` `Window.deinit`. Clear the cached blur region; X11
+    /// PORTS: `x11.zig:214-216` `Window.deinit`. Clear the cached blur region; X11
     /// state is property-based so there are no proxies to destroy, and the xlib
     /// `Display`/`X11Surface` are GDK-owned.
     pub fn deinit(&mut self) {
         self.blur_region.clear();
     }
 
-    /// PORTS: `x11.zig:207-212` `Window.resizeEvent`. The blur region must track
+    /// PORTS: `x11.zig:218-223` `Window.resizeEvent`. The blur region must track
     /// window resizes.
     pub fn resize_event(&mut self) -> Result<(), WinprotoError> {
         // self.syncBlur() catch |err| { log.err("failed to sync blur={}", .{err}); };
@@ -540,7 +540,7 @@ impl Window {
         Ok(())
     }
 
-    /// PORTS: `x11.zig:214-223` `Window.syncAppearance`. Re-derive both the blur
+    /// PORTS: `x11.zig:225-234` `Window.syncAppearance`. Re-derive both the blur
     /// region (CSD toggles change its offset) and the decoration hints.
     pub fn sync_appearance(&mut self) -> Result<(), WinprotoError> {
         // self.syncBlur() catch |err| { log.err("failed to sync blur={}", .{err}); };
@@ -554,7 +554,7 @@ impl Window {
         Ok(())
     }
 
-    /// PORTS: `x11.zig:225-230` `Window.clientSideDecorationEnabled`. Returns the
+    /// PORTS: `x11.zig:236-241` `Window.clientSideDecorationEnabled`. Returns the
     /// ACTUAL present decoration intent (the noop contract).
     #[must_use]
     pub fn client_side_decoration_enabled(&self) -> bool {
@@ -564,7 +564,7 @@ impl Window {
         )
     }
 
-    /// PORTS: `x11.zig:331-333` `Window.setUrgent`. Drives urgency via GDK's
+    /// PORTS: `x11.zig:342-344` `Window.setUrgent`. Drives urgency via GDK's
     /// `X11Surface::set_urgency_hint` (the WM_HINTS urgency flag) — the SAME
     /// mechanism the reference uses (`self.x11_surface.setUrgencyHint(...)`), NOT a
     /// `_NET_WM_STATE_DEMANDS_ATTENTION` client message.
@@ -573,7 +573,7 @@ impl Window {
         Ok(())
     }
 
-    /// PORTS: `x11.zig:320-329` `Window.addSubprocessEnv`. Publishes the window's
+    /// PORTS: `x11.zig:331-340` `Window.addSubprocessEnv`. Publishes the window's
     /// XID as `WINDOWID` — the long-standing X11 convention many terminal-aware
     /// tools read. NOT product-namespaced (R2): the reference spells it `WINDOWID`
     /// because that is the ecosystem's name, not Ghostty's.
@@ -582,12 +582,12 @@ impl Window {
         &mut self,
         env: &mut rustty_global::EnvMap,
     ) -> Result<(), WinprotoError> {
-        // `bufPrint("{}", .{xid})` — DECIMAL (`x11.zig:322-326`).
+        // `bufPrint("{}", .{xid})` — DECIMAL (`x11.zig:333-337`).
         env.put(b"WINDOWID", self.x11_surface.xid().to_string().as_bytes());
         Ok(())
     }
 
-    /// PORTS: `x11.zig:232-276` `Window.syncBlur`. Sets/clears the KDE blur region
+    /// PORTS: `x11.zig:243-287` `Window.syncBlur`. Sets/clears the KDE blur region
     /// property from the window's `background-blur` config.
     //
     // PORT NOTE (S60-F6): the reference is `fn syncBlur(self: *Window) !void` and
@@ -605,7 +605,7 @@ impl Window {
         };
         let blur = config.get().background_blur;
 
-        // `if (blur.enabled()) calcForWindow(..., true) else .empty` (`x11.zig:238-246`).
+        // `if (blur.enabled()) calcForWindow(..., true) else .empty` (`x11.zig:249-257`).
         // The X11 path requests DEVICE coordinates (`to_device_coordinates = true`).
         let region = if background_blur_enabled(blur) {
             let csd = self.client_side_decoration_enabled();
@@ -615,13 +615,13 @@ impl Window {
             BlurRegion::empty()
         };
 
-        // Only touch X11 when the region actually changes (`x11.zig:250-253`).
+        // Only touch X11 when the region actually changes (`x11.zig:260-264`).
         if region.eql(&self.blur_region) {
             return Ok(());
         }
 
         if region.slices().is_empty() {
-            // `deleteProperty(kde_blur)` (`x11.zig:271`).
+            // `deleteProperty(kde_blur)` (`x11.zig:282`).
             self.delete_property(self.atoms.kde_blur)?;
         } else {
             // log.debug("set blur={}, window xid={}, region={}", .{ blur, xid, region });
@@ -631,7 +631,7 @@ impl Window {
                 xid = self.x11_surface.xid(),
             );
             // `changeProperty(Slice, kde_blur, XA_CARDINAL, ._32, .replace, slices)`
-            // (`x11.zig:262-269`). Each `Slice` is four `c_long` words => nelements
+            // (`x11.zig:273-280`). Each `Slice` is four `c_long` words => nelements
             // = 4 * len. `Slice` is `#[repr(C)]` of `i64`(=`c_long`) so the slice
             // buffer is already a contiguous long array.
             let slices = region.slices();
@@ -650,7 +650,7 @@ impl Window {
         Ok(())
     }
 
-    /// PORTS: `x11.zig:278-318` `Window.syncDecorations`. Read the existing
+    /// PORTS: `x11.zig:289-329` `Window.syncDecorations`. Read the existing
     /// `_MOTIF_WM_HINTS` (to preserve other bits), set the decorations flag + `all`
     /// bit from the window-decoration config, and write it back — skipping the
     /// write when the hints are unchanged.
@@ -660,33 +660,33 @@ impl Window {
     // error. This used to swallow the error and `return`, which left
     // `failed to sync decorations={}` with nothing to report.
     fn sync_decorations(&mut self) -> Result<(), Error> {
-        // `getWindowProperty(...)` catching PropertyNotFound (`x11.zig:281-296`).
+        // `getWindowProperty(...)` catching PropertyNotFound (`x11.zig:292-307`).
         let mut hints = match self.get_motif_hints() {
             Ok(Some(h)) => h,
-            // PropertyNotFound => default (already-zeroed) hints (`x11.zig:289-290`).
+            // PropertyNotFound => default (already-zeroed) hints (`x11.zig:300-301`).
             Ok(None) => MotifWmHints::default(),
             // RequestFailed / type / format mismatch: the reference PROPAGATES,
             // and so does this now — `syncAppearance` is where it is logged.
             Err(err) => return Err(err),
         };
 
-        // `hints.flags.decorations = true` (`x11.zig:298`).
+        // `hints.flags.decorations = true` (`x11.zig:309`).
         hints.flags |= MWM_HINTS_DECORATIONS;
         // `hints.decorations.all = switch (decoration) { .server => true, else => false }`
-        // (`x11.zig:299-302`).
+        // (`x11.zig:310-313`).
         if matches!(self.window_decoration(), WindowDecoration::Server) {
             hints.decorations |= MWM_DECOR_ALL;
         } else {
             hints.decorations &= !MWM_DECOR_ALL;
         }
 
-        // Only update when the hints actually change (`x11.zig:305-307`).
+        // Only update when the hints actually change (`x11.zig:315-318`).
         if self.last_applied_decoration_hints == Some(hints) {
             return Ok(());
         }
 
         // `changeProperty(MotifWMHints, motif_wm_hints, motif_wm_hints, ._32, .replace, &.{hints})`
-        // (`x11.zig:309-316`). One element of five `c_long` words => nelements = 5.
+        // (`x11.zig:320-327`). One element of five `c_long` words => nelements = 5.
         let data = std::ptr::addr_of!(hints).cast::<c_uchar>();
         unsafe {
             self.change_property(
@@ -701,17 +701,17 @@ impl Window {
     }
 
     /// The window-decoration intent, read live from the apprt window
-    /// (`x11.zig:226,299`). Falls back to `.auto` if the weak ref is dead.
+    /// (`x11.zig:237,310`). Falls back to `.auto` if the weak ref is dead.
     fn window_decoration(&self) -> WindowDecoration {
         self.apprt_window
             .upgrade()
             .map_or(WindowDecoration::Auto, |w| w.get_window_decoration())
     }
 
-    /// PORTS: `x11.zig:335-379` `Window.getWindowProperty`, specialized to
+    /// PORTS: `x11.zig:346-390` `Window.getWindowProperty`, specialized to
     /// [`MotifWmHints`] (format 32, five words). Returns `Ok(None)` for the
     /// reference's `error.PropertyNotFound` (the caller treats it as "use
-    /// defaults"). The `XFree` of the returned buffer mirrors `x11.zig:378`.
+    /// defaults"). The `XFree` of the returned buffer mirrors `x11.zig:389`.
     fn get_motif_hints(&self) -> Result<Option<MotifWmHints>, Error> {
         // FIXME: Maybe we should switch to libxcb one day.
         // Sounds like a much better idea than whatever this is
@@ -750,7 +750,7 @@ impl Window {
             }
             return Err(Error::RequestFailed);
         }
-        // `if (actual_type == None) return error.PropertyNotFound` (`x11.zig:372`) —
+        // `if (actual_type == None) return error.PropertyNotFound` (`x11.zig:383`) —
         // the X11 `None` atom is 0. Modelled as `Ok(None)`. Nothing was allocated.
         if actual_type == 0 {
             return Ok(None);
@@ -758,11 +758,11 @@ impl Window {
 
         // Validate, then free unconditionally (buffer WAS allocated).
         let result = (|| {
-            // `if (typ != actual_type) return error.PropertyTypeMismatch` (`x11.zig:373`).
+            // `if (typ != actual_type) return error.PropertyTypeMismatch` (`x11.zig:384`).
             if actual_type != self.atoms.motif_wm_hints {
                 return Err(Error::PropertyTypeMismatch);
             }
-            // `if (format != actual_format) return error.PropertyFormatMismatch` (`x11.zig:374`).
+            // `if (format != actual_format) return error.PropertyFormatMismatch` (`x11.zig:385`).
             if actual_format != FORMAT_32 {
                 return Err(Error::PropertyFormatMismatch);
             }
@@ -773,14 +773,14 @@ impl Window {
                 return Ok(None);
             }
             // `const data_ptr: *T = @ptrCast(prop_return); result.* = data_ptr.*`
-            // (`x11.zig:376-377`). `read_unaligned` is defensive; the format-32
+            // (`x11.zig:387-388`). `read_unaligned` is defensive; the format-32
             // buffer is in fact `c_long`-aligned.
             Ok(Some(unsafe {
                 std::ptr::read_unaligned(prop.cast::<MotifWmHints>())
             }))
         })();
 
-        // `_ = XFree(prop_return)` (`x11.zig:378`).
+        // `_ = XFree(prop_return)` (`x11.zig:389`).
         if !prop.is_null() {
             unsafe { (self.xlib.XFree)(prop.cast::<c_void>()) };
         }
@@ -813,8 +813,17 @@ impl Window {
     /// exit the process — an immediate `maximize` (request 8, `MapWindow`) and a
     /// hide/show after pumping (request 18) — in a plain GTK 4.22.4 window too
     /// (`UPSTREAM-DEFECTS.md` UD56, upstream project gtk). The trap functions are
-    /// deprecated since GTK 4.18, along with the rest of GDK's X11 backend API; there is
-    /// no replacement for trapping X errors in GDK 4.
+    /// deprecated since GTK 4.18, along with the rest of GDK's X11 backend API.
+    ///
+    /// Not added: a `gdk_surface_is_destroyed` check before the calls (task 20 round
+    /// 4). It is not deprecated and reads `true` once GDK has processed the
+    /// DestroyNotify, so it would avoid the measured pumped-reload case without a
+    /// trap. It cannot cover a destroy GDK has not yet processed, or one that lands
+    /// between the check and the request, and the trap covers every case the check
+    /// would. Adding it would also turn the reference's `failed to sync blur=` /
+    /// `failed to sync decorations=` errors on a destroyed window into silence, and
+    /// would stop the M110 test from reaching the trap, since that test's window is
+    /// already marked destroyed when it reloads. The trap alone is the complete fix.
     fn trap_x_errors<T>(&self, call: impl FnOnce() -> T) -> (T, bool) {
         let display = self.x11_surface.display();
         let guard = XErrorTrap::push(display.downcast_ref::<gdk4_x11::X11Display>());
@@ -825,7 +834,7 @@ impl Window {
     /// PORTS: `x11.zig:392-422` `Window.changeProperty`, concrete over a raw
     /// (format-32) byte buffer. `nelements` is the count of 32-bit-logical items
     /// (i.e. `c_long` words). Returns [`Error::RequestFailed`] when Xlib reports
-    /// failure — note Xlib's status is `0 = failure` here (`x11.zig:407-410`).
+    /// failure — note Xlib's status is `0 = failure` here (`x11.zig:418-421`).
     ///
     /// # Safety
     /// `data` must point to `nelements` `c_long`-width words of the property type.
@@ -937,7 +946,7 @@ mod tests {
     }
 
     /// S60-F1: `syncBlur` commits its new region to the cache only after the
-    /// property write succeeded (`x11.zig:271-286`, `try` before
+    /// property write succeeded (`x11.zig:282-286`, `try` before
     /// `self.blur_region = region`). The window's cache is seeded non-empty and blur
     /// is off, so the sync must DELETE the property. With a failing
     /// `XDeleteProperty` the sync errors and the cache keeps the old region, so the
@@ -1020,24 +1029,44 @@ mod tests {
     ///   the region differs: `syncBlur` must CHANGE the property.
     ///
     /// `XDeleteProperty`/`XChangeProperty` always return 1, so for both the trap is
-    /// the ONLY failure signal. The child reports whether the window's cached blur
-    /// region survived each write unchanged, which happens only when the trap
-    /// reported the error. The earlier `failed to sync` log line cannot prove that:
-    /// `syncDecorations`' `XGetWindowProperty` produces it from its own reply code.
-    /// Fix round 3 corrected that claim, which this doc used to make.
+    /// the ONLY failure signal. For each reload the child reports two things:
+    /// - how many `failed to sync blur=RequestFailed` records (`gtk_x11`, error)
+    ///   the reload's synchronous `syncAppearance` logged. `syncBlur` can fail only
+    ///   in its property write, so one record proves the write was ATTEMPTED and
+    ///   reported as failed. Zero means no write was made (e.g. `syncBlur` skipped,
+    ///   or the region unchanged), or the write was made and not reported;
+    /// - whether the window's cached blur region survived the reload unchanged,
+    ///   which a write that was attempted and failed must leave it.
+    ///
+    /// Together these show each write was made against the dead window, was
+    /// reported by the trap as failed (nothing else can fail it here), and did not
+    /// exit the process. (Task 20 round 4: the round-3 test checked only the
+    /// cache, which also survives when no write is made at all; the round-3 review
+    /// kept it green with both traps removed by skipping the writes three ways.
+    /// Round 3 itself corrected an earlier version that relied on a `failed to
+    /// sync` line from `syncDecorations`' `XGetWindowProperty`, which that call
+    /// produces from its own reply code.)
     ///
     /// GDK's default X error handler calls `exit(1)`, which no in-process assertion
     /// can observe, so the scenario runs in a CHILD copy of this test binary. The
-    /// parent asserts the child exited 0 and reported both writes as trapped. Without
-    /// a display the child fails (`init_for_display_test`), so this test fails too.
+    /// parent asserts the child exited 0 and reported one failed write per reload
+    /// with the cache kept. Without a display the child fails
+    /// (`init_for_display_test`), so this test fails too.
     #[test]
     #[ignore = "requires an X server; run with GDK_BACKEND=x11 DISPLAY=... cargo test -p rustty-apprt --features gtk,x11,wayland --lib x11_error_on_a_destroyed -- --ignored"]
     fn x11_error_on_a_destroyed_window_does_not_exit_the_process() {
         const CHILD: &str = "RUSTTY_M110_CHILD";
         const MARKER: &str = "M110_CHILD_RETURNED";
         if std::env::var_os(CHILD).is_some() {
-            let (delete_kept, change_kept) = destroyed_window_config_reload_scenario();
-            println!("{MARKER} delete_trapped={delete_kept} change_trapped={change_kept}");
+            let [delete, change] = destroyed_window_config_reload_scenario();
+            println!(
+                "{MARKER} delete: failed_writes_logged={} cache_kept={}; \
+                 change: failed_writes_logged={} cache_kept={}",
+                delete.failed_writes_logged,
+                delete.cache_kept,
+                change.failed_writes_logged,
+                change.cache_kept
+            );
             return;
         }
 
@@ -1066,15 +1095,26 @@ mod tests {
             .unwrap_or_else(|| panic!("child never returned; stdout={stdout}\nstderr={stderr}"));
         assert_eq!(
             line,
-            format!("{MARKER} delete_trapped=true change_trapped=true"),
-            "both property writes on the dead window must fail through the trap and \
-             leave the cached region unchanged; stderr={stderr}"
+            format!(
+                "{MARKER} delete: failed_writes_logged=1 cache_kept=true; \
+                 change: failed_writes_logged=1 cache_kept=true"
+            ),
+            "each reload must attempt its property write on the dead window, have the \
+             trap report it failed, and leave the cached region unchanged; stderr={stderr}"
         );
     }
 
-    /// The child half of the test above. Returns whether the cached blur region was
-    /// left unchanged by (a) the DELETE and (b) the CHANGE on the destroyed window.
-    fn destroyed_window_config_reload_scenario() -> (bool, bool) {
+    /// What one reload in [`destroyed_window_config_reload_scenario`] did.
+    struct ReloadOutcome {
+        /// `failed to sync blur=RequestFailed` records logged by the reload.
+        failed_writes_logged: usize,
+        /// The cached blur region is what it was before the reload.
+        cache_kept: bool,
+    }
+
+    /// The child half of the test above: (a) the DELETE reload, (b) the CHANGE
+    /// reload on the destroyed window.
+    fn destroyed_window_config_reload_scenario() -> [ReloadOutcome; 2] {
         use gtk4::prelude::GtkWindowExt as _;
 
         crate::gtk::init_for_display_test(
@@ -1164,27 +1204,59 @@ mod tests {
         }
         pump(1000);
 
-        // (a) Blur OFF: `syncBlur` deletes the property on the dead window.
-        win.set_property("config", config_with_blur(false));
-        display.sync();
-        pump(200);
-        let delete_kept = cached() == before;
+        // Each reload's `syncAppearance` runs synchronously inside `set_property`
+        // (`notify::config`), and the trap pops (and syncs) before `syncBlur`
+        // returns, so the reload's failed write is logged before `set_property`
+        // returns. Only records from inside that call are counted, so a
+        // `resizeEvent` during a later pump cannot stand in for the reload's write.
+        let capture = crate::log_capture::start();
+        let failed_blur_writes = || {
+            capture
+                .messages()
+                .iter()
+                .filter(|(level, target, message)| {
+                    *level == log::Level::Error
+                        && target == LOG_SCOPE
+                        && message == "failed to sync blur=RequestFailed"
+                })
+                .count()
+        };
+        let reload = |blur: bool| {
+            let logged_before = failed_blur_writes();
+            win.set_property("config", config_with_blur(blur));
+            let logged = failed_blur_writes() - logged_before;
+            display.sync();
+            pump(200);
+            logged
+        };
 
-        // (b) Blur ON with a sentinel cache: `syncBlur` changes the property.
+        // (a) Blur OFF: `syncBlur` deletes the property on the dead window.
+        let delete = ReloadOutcome {
+            failed_writes_logged: reload(false),
+            cache_kept: cached() == before,
+        };
+
+        // (b) Blur ON with a sentinel cache: `syncBlur` changes the property. The
+        // sentinel must differ from the region blur-on computes (`before`), or
+        // `syncBlur` sees no change and makes no write.
         let sentinel = vec![Slice {
             x: 1,
             y: 2,
             width: 3,
             height: 4,
         }];
+        assert_ne!(
+            sentinel, before,
+            "the sentinel must differ from the blur-on region, or reload (b) writes nothing"
+        );
         if let crate::gtk::winproto::Window::X11(w) = &mut *win.imp().winproto.borrow_mut() {
             w.blur_region = BlurRegion::from_slices(sentinel.clone());
         }
-        win.set_property("config", config_with_blur(true));
-        display.sync();
-        pump(200);
-        let change_kept = cached() == sentinel;
+        let change = ReloadOutcome {
+            failed_writes_logged: reload(true),
+            cache_kept: cached() == sentinel,
+        };
 
-        (delete_kept, change_kept)
+        [delete, change]
     }
 }
