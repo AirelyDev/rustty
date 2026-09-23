@@ -2873,6 +2873,65 @@ def self_test():
     cases.append(("a port-only row whose file is not in the reference file's arm is RED",
                   run_po("c/po_full.rs", [po_row(file="c/po_twin.rs", fn="twin",
                                                  match='"cfg twin"', occurrence=1)], 1), 1))
+    # 6b. ARM MEMBERSHIP AND SUBTRACTION SCOPE (review tail-s1 B2). The arm above
+    #     passes through `missing_file` (its pool holds only `c/po_full.rs`), so it
+    #     never reached `not_in_arm`, and every fixture had ONE port file, so
+    #     nothing pinned WHICH arms a declaration comes off. Here `c/po_shared.rs`
+    #     (one reference site + the guard) is in BOTH platform arms of
+    #     `src/po_x.zig`, and `src/po_y.zig`'s arm is pooled but does not hold it.
+    zig["src/po_x.zig"] = SELF_ZIG_TWO + 'fn c() void { log.warn("c", .{}); }\n'
+    zig["src/po_y.zig"] = SELF_ZIG_TWO
+    rs["c/po_shared.rs"] = 'fn a() { log::warn!(target: S, "a"); }\n' + PO_GUARD
+    rs["c/po_mac.rs"] = 'fn b() { log::warn!(target: S, "b"); }\n'
+    rs["c/po_lin.rs"] = 'fn b() { log::warn!(target: S, "b"); }\nfn c() { log::warn!(target: S, "c"); }\n'
+    rs["c/po_y.rs"] = SELF_RS_TWO
+    SCOPE_PM = [
+        {"oracle": "src/po_x.zig", "excluded": False,
+         "arms": [["c/po_shared.rs", "c/po_mac.rs"], ["c/po_shared.rs", "c/po_lin.rs"]],
+         "allowance": "1", "bypass_cap": "0", "reason": "fixture", "lineno": 0},
+        {"oracle": "src/po_y.zig", "excluded": False, "arms": [["c/po_y.rs"]],
+         "allowance": "0", "bypass_cap": "0", "reason": "", "lineno": 0},
+    ]
+    SHARED_ROW = po_row(oracle="src/po_x.zig", file="c/po_shared.rs")
+
+    def scope_arm_counts(rows):
+        """{oracle: [count per arm]} read back from the gate's own --report table."""
+        _rc, lines = verdict(SCOPE_PM, {}, zt, rt, report=True, oracle_log_files=None,
+                             port_only=rows, port_only_cap=len(rows))
+        got, cur = {}, None
+        for line in lines:
+            m = re.match(r"\s+\d+\s+\d+\s+\d+\s+(\S+)", line)
+            if m:
+                cur = m.group(1)
+            m = re.match(r"\s+arms: (.*)$", line)
+            if m and cur:
+                got[cur] = [int(re.match(r"[^=]+=(\d+)", a.strip()).group(1))
+                            for a in m.group(1).split(" | ")]
+        return got
+
+    base = scope_arm_counts([])
+    after = scope_arm_counts([SHARED_ROW])
+    # (a) a row naming the WRONG reference file with a real, pooled port file.
+    #     It must be RED through `not_in_arm` itself, not through `missing_file`.
+    _sub, probs = resolve_port_only(
+        [po_row(oracle="src/po_y.zig", file="c/po_shared.rs")],
+        {f: (rust_strip(rs[f]), rust_strip_comments_only(rs[f]))
+         for f in ("c/po_shared.rs", "c/po_mac.rs", "c/po_lin.rs", "c/po_y.rs")},
+        set(), {f: [] for f in ("c/po_shared.rs", "c/po_mac.rs", "c/po_lin.rs", "c/po_y.rs")},
+        SCOPE_PM,
+    )
+    cases.append(("a wrong-oracle row with a POOLED file is RED via `not_in_arm`",
+                  (len(probs["not_in_arm"]), len(probs["missing_file"])), (1, 0)))
+    # (b) the declared emission comes off BOTH arms that hold the file ...
+    cases.append(("a port-only row is subtracted from EVERY arm holding its file",
+                  after.get("src/po_x.zig"),
+                  [c - 1 for c in base.get("src/po_x.zig", [])] or None))
+    # (c) ... and off no arm that does not.
+    cases.append(("an arm that does NOT hold the file keeps its count",
+                  after.get("src/po_y.zig"), base.get("src/po_y.zig")))
+    cases.append(("...and the fixture reconciles only with the subtraction in both arms",
+                  verdict(SCOPE_PM, {}, zt, rt, oracle_log_files=None,
+                          port_only=[SHARED_ROW], port_only_cap=1)[0], 0))
     # 7. MALFORMED FILE -> the loader raises, which `main` turns into BLOCKED (3);
     #    a missing directive loads as cap None, which `main` BLOCKS too.
     import tempfile
