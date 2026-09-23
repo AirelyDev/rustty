@@ -1103,6 +1103,8 @@ found, and current state.
 > whose message appears nowhere in the reference at the pin — live OR commented-out — is
 > reported, and must be declared as `stale-comment` in `LOG-TEXT-DIVERGENCES.tsv` or the gate
 > is RED. **21 are declared**, well beyond the three this entry was opened for.
+> (Corrected 2026-09-22, task R13-D: `LOG-TEXT-DIVERGENCES.tsv` now declares **17** `stale-comment`
+> rows, of 28 data rows in all. The 21 above is kept as written at the time.)
 >
 > **Measured 2026-09-11 by walking `is_stranded_comment`'s branches in the order the code
 > applies them**, over the 1581 preserved reference comments in mapped port files (down from
@@ -2430,6 +2432,14 @@ error path, not leaked").
 
 **state**: CLOSED by task R13-P (`b2ac07ec`).
 
+> **2026-09-22 (task R13-D): the CoreText half no longer applies.** Merged commit `8d7e04d1` removed the
+> CoreText face's HarfBuzz font (with its seam and test) on purpose: CoreText builds never shape with
+> HarfBuzz (`Face::HARFBUZZ_SHAPER` is false there, enforced by a `const` assert), so `hb_font` is `()`
+> and that error arm has nothing to free, as in the reference's macOS build, where
+> `errdefer if (comptime harfbuzz_shaper) hb_font.destroy()` compiles away (confirmed by the R13-P2
+> review). "Both backends now free them" is therefore true of FreeType only; the FreeType half above,
+> re-proved by task R13-P2, stands.
+
 ## N54 — the snapshot decoder zero-filled an attacker-declared string length before reading it
 
 - **id**: N54 (next free id checked 2026-09-11; N53 was the last). R13-G part A, A3.
@@ -2563,3 +2573,51 @@ SIGWINCH on a thread holding the handlers mutex (`notify_winsize`, or the port's
 self-pipe and a dispatcher thread runs the callbacks. Reference defect: `UPSTREAM-DEFECTS.md` UD74.
 
 **state**: CLOSED by task R13-C.
+
+## N70 — `+crash-report` truncated the age of a very old crash file instead of handling it
+
+- **id**: N70. Inventory P3 (with M30).
+- **found by**: the R13 code sweep (T2); fixed by task R13-D.
+- **severity**: low. **kind**: wrong-value (reference defect, R13).
+- **oracle**: `src/cli/crash_report.zig:83-91`.
+- **rustty**: `crates/rustty-cli/src/crash_report.rs` (`run_inner`).
+
+The reference traps (`@intCast`) when a report's age exceeds 2^64 ns. The port converted with
+`diff as u64`, which truncates an `i128`, so a crash file dated in the year 1400 (which Linux tmpfs and
+btrfs store, measured) was listed as about 42 years old. The age now saturates to the largest
+`Duration`. The inventory said the trigger was a future-dated file; a future mtime already takes the
+reference's own "now" arm. Reference defect: `UPSTREAM-DEFECTS.md` UD99.
+
+**state**: CLOSED by task R13-D.
+
+## N71 — `scroll_viewport`'s `debug_assert!` aborted across `extern "C"` on an undeclared tag
+
+- **id**: N71. Inventory P4 (with M37).
+- **found by**: session log B6; fixed by task R13-D.
+- **severity**: low. **kind**: missing-branch (reference defect, R13).
+- **oracle**: `src/terminal/c/terminal.zig:1503-1514`.
+- **rustty**: `crates/rustty-vt-c/src/terminal.rs` (`scroll_viewport`).
+
+The port narrowed the C tag safely but kept a `debug_assert!(false, …)` that mirrored the reference's
+"switch on corrupt value" trap. In debug and `release-safe` builds an embedder's undeclared tag
+aborted the process inside the `extern "C"` export. The tag is C-caller input, so under R13 it is not
+an invariant: every build now returns, and `scroll_viewport_invalid_tag` requires that. Reference
+defect (a hardening proposal): `UPSTREAM-DEFECTS.md` UD113.
+
+**state**: CLOSED by task R13-D.
+
+## N72 — `Surface.init`'s error path freed the terminal while the renderer thread was running
+
+- **id**: N72. Inventory M35 (the inventory called the port already safe).
+- **found by**: task R13-D, verifying M35; fixed by task R13-D.
+- **severity**: low. **kind**: missing-branch (reference defect, R13).
+- **oracle**: `src/Surface.zig:582`, `:586`, `:725-737`.
+- **rustty**: `crates/rustty-core/src/surface.rs` (`initErrdefers`).
+
+The port's post-spawn unwind stopped and joined the renderer thread, which the reference does not, but
+only after `self.io.deinit()` had freed the terminal the renderer reads, and it never stopped the io
+thread. A failed io-thread spawn reached it. Both threads are now stopped and joined first, in
+`deinit`'s order. Covered by reading only: `Surface::init` cannot run in a unit test, and no port
+apprt's `set_title` can fail. Reference defect: `UPSTREAM-DEFECTS.md` UD104.
+
+**state**: CLOSED by task R13-D.
