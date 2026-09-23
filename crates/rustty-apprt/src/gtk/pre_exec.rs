@@ -335,6 +335,14 @@ fn sleep_millis(ms: i64) {
 /// having dropped both of `pre_exec.zig`'s diagnostics. Renaming it is the whole
 /// of the change — the bytes, the fd and the async-signal-safety are untouched
 /// (task-14d-3).
+///
+/// PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD101: the
+/// reference's `log.err` calls at `pre_exec.zig:39` and `:58` run in the forked
+/// child through the global `logFn` and its process-wide stderr lock, so the
+/// child can hang before `exec`. This raw `write(2)` is the safe handling; the
+/// behaviour is proven by `rustty-termio`'s
+/// `log_err_child_raw_completes_in_a_child_forked_while_stderr_is_locked` for
+/// the same shape.
 fn log_err_raw(msg: &'static [u8]) {
     // SAFETY: `msg` is a live `'static` byte slice; fd 2 is stderr. A short or
     // failed write is ignored, as a logger's would be.
