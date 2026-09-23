@@ -114,7 +114,7 @@ The reference builds the log argument with `try face.name(&name_buf)`. Zig evalu
 
 The reference builds the `ctx.font` value with `std.fmt.allocPrint(alloc, "{d}px {s}", .{ self.size.points, self.font_str })` where `points` is `f32`, so 13.5 points yields `"13.5px …"`. The port does `push_int(&mut font_val, self.size.points as i64)`, truncating fractional point sizes to an integer (`"13px …"`). For any non-integral `DesiredSize.points` the browser renders a different font size than the reference would, and all glyph measurements/renders scale accordingly (plus a guaranteed spurious font read-back mismatch).
 
-*Evidence:* `web_canvas.zig:310-314` vs `web_canvas.rs:597-600` with `push_int` (`web_canvas.rs:812-828` / verified `871-885`) handling integers only; `DesiredSize.points` is `f32` on both sides (`face/mod.rs:242`), and `rustty_wc_face_new` takes `pts: f32`.
+*Evidence:* `web_canvas.zig:310-314` vs `web_canvas.rs:597-600` with `push_int` (`web_canvas.rs:812-828` / verified `871-885`) handling integers only; `DesiredSize.points` is `f32` on both sides (`face/mod.rs:242`), and `rustty_wc_face_new` takes `pts: u16`, as the reference's export does (`web_canvas.zig:494`; it took `f32` until N73 corrected it, `.port/parity-closure/NEW-FINDINGS.md`).
 
 *Suggested fix:* Format `points` as Zig `{d}` would for `f32` (shortest round-trip decimal, no trailing zeros) so fractional sizes reach the canvas unchanged.
 
