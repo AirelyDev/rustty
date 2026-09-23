@@ -2620,7 +2620,7 @@ overflowed them. They now saturate too. Reference defect: `UPSTREAM-DEFECTS.md` 
 
 **state**: CLOSED by task R13-C2.
 
-## N66 — styled output on a terminal 48,036 or more columns wide panics the port on the style refcount
+## N66 — styled output on a terminal about 48,000 or more columns wide panics the port on the style refcount
 
 - **id**: N66 (reserved range N66–N69 for task R13-S2; N61 was the last on `parity-closure` when written).
 - **found by**: the R13-S review, while checking UD65's premise; measured again by task R13-S2.
@@ -2630,15 +2630,23 @@ overflowed them. They now saturate too. Reference defect: `UPSTREAM-DEFECTS.md` 
 - **rustty**: `crates/rustty-vt/src/pagelist/mod.rs` (`initial_capacity`), `crates/rustty-vt/src/terminal.rs`
   (`print_cell`), `crates/rustty-vt/src/ref_counted_set.rs` (`use_id`).
 
-The port reproduces the reference faithfully: a terminal wide enough to leave the standard page
-capacity gets 215 rows x cols cells, and 65,536 or more cells printed in one style overflow the `u16`
-style refcount. Measured on macOS 2026-09-22 in the test profile: `Terminal::init` at 48,151 x 3,
-`set_attribute(Bold)`, 70,000 `print('A')` panics "attempt to add with overflow" at
-`ref_counted_set.rs:110`. `[profile.release]` keeps overflow checks on, so the shipped build panics too
-(aborting the host through `extern "C"`); `release-fast` wraps. Reference defect:
-`UPSTREAM-DEFECTS.md` UD80.
+The port reproduced the reference's defect, from a different width: a terminal wide enough to leave the
+standard page capacity gets 215 rows x cols cells, and the 65,535th cell printed in one style overflows
+the `u16` style refcount (the cursor holds the other reference). Measured on macOS 2026-09-22 in the test
+profile: `Terminal::init` at 48,151 x 3, `set_attribute(Bold)`, 70,000 `print('A')` panics "attempt to
+add with overflow" at `ref_counted_set.rs:110`. `[profile.release]` keeps overflow checks on, so the
+shipped build panics too (aborting the host through `extern "C"`); `release-fast` wraps. NOT a faithful
+reproduction of the threshold: the port leaves the standard capacity at 48,036 columns shipped and 48,151
+in a test build (macOS, from the port's `Capacity::adjust`), where Ghostty does so at 47,932 shipped
+(macOS arm64; 46,908 on Linux aarch64) and 48,047 in a test build, because the port's style-set item is
+smaller than the reference's. So from 47,932 to 48,035 columns (shipped, macOS) Ghostty aborts and the
+port did not. Reference defect: `UPSTREAM-DEFECTS.md` UD80.
 
-**state**: OPEN. Recorded by task R13-S2; the fix touches the native print path and is its own batch.
+**state**: CLOSED by task R13-W. `RefCountedSet` now saturates every increment at the maximum and never
+decrements a count at the maximum, so the style is pinned and every cell keeps it; six tests in `terminal.rs`
+(`ud80_wide_terminal_*`, at 50,000 columns, above every threshold measured in either tree) drive the VT
+stream, print, the print batch, DECALN, reflow and a capacity-growth clone past the ceiling. See
+`UPSTREAM-DEFECTS.md` UD80.
 
 ## N70 — `+crash-report` truncated the age of a very old crash file instead of handling it
 

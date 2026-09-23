@@ -115,15 +115,20 @@ impl_refcount_int!(u8, u16, u32, u64, usize);
 // PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD80. The reference
 // increments a reference count with an unguarded `item.meta.ref += 1` (`add`,
 // `addWithId`, `use`) or `+= n` (`useMultiple`), and the style set's
-// `RefCountInt` is `u16` (`style.zig:681-684`). A terminal 48,036 or more
-// columns wide (48,151 in a test build) gets a page of 215 rows x cols
-// (`PageList.zig:535-540`), so ordinary styled output — `printCell`, DECALN,
-// the print batch, the reflow and clone copies, a cursor style change — can
-// give one style more than 65,535 references on one page. ReleaseSafe panics
-// ("integer overflow", `ref_counted_set.zig:378`); ReleaseFast wraps, after
-// which `release` can drive a live style to 0 and the set can reuse its slot
-// while cells still point at it. Reachable from the C ABI (a terminal created
-// or resized that wide, then ordinary output).
+// `RefCountInt` is `u16` (`style.zig:681-684`). A terminal wide enough to
+// leave the standard page capacity — in Ghostty, measured: 47,932 columns or
+// more in a shipped build on macOS arm64, 46,908 on Linux aarch64, 48,047 in
+// a macOS test build; it depends on the platform's page size (the port's
+// thresholds differ, see UD80) — gets a page of 215 rows x cols
+// (`PageList.zig:535-540`), so ordinary styled output — the VT stream's
+// `printSliceFill` (`useMultiple`, `Terminal.zig:1114`), `printCell`
+// (`Terminal.zig:1722`), DECALN, the reflow and clone copies, a cursor style
+// change — needs more than 65,535 references to one style on one page; with
+// the cursor's own reference the 65,535th styled cell overflows. ReleaseSafe
+// panics ("integer overflow", `ref_counted_set.zig:378` / `:397`);
+// ReleaseFast wraps, after which `release` can drive a live style to 0 and
+// the set can reuse its slot while cells still point at it. Reachable from the
+// C ABI (a terminal created or resized that wide, then ordinary output).
 //
 // The port SATURATES and PINS: an increment stops at `maxInt(RefCountInt)`,
 // and a count at the maximum is never decremented again, so the item stays
@@ -984,10 +989,12 @@ where
     /// (`ref_counted_set.zig:365-379`). A decoded page declares its own
     /// dimensions, so the snapshot grid decoder asks this before taking a
     /// reference; see `snapshot/grid.rs`. The native write path can reach the
-    /// ceiling too: a terminal 48,036 or more columns wide (48,151 in a test
-    /// build) gets a page of 215 rows x cols (`PageList.zig:535-540`), and
-    /// ordinary styled output on it
-    /// overflows `use` from `printCell` (UPSTREAM-DEFECTS.md UD80). Every
+    /// ceiling too: a terminal wide enough to leave the standard capacity
+    /// (in Ghostty 47,932 columns or more in a shipped macOS arm64 build,
+    /// 46,908 on Linux aarch64; the port's thresholds differ, see UD80) gets a
+    /// page of 215 rows x cols (`PageList.zig:535-540`), and ordinary styled
+    /// output on it overflows `useMultiple` from `printSliceFill` and `use`
+    /// from `printCell` (UPSTREAM-DEFECTS.md UD80). Every
     /// increment in this set now saturates and pins at the maximum (see
     /// `bump_ref`), so neither path can overflow; a `true` here means the
     /// style is pinned.

@@ -22245,14 +22245,20 @@ mod tests {
     // refcount and pins the style (see `ref_counted_set.rs`), so every cell
     // keeps its style. These tests drive each native route to the ceiling.
     //
-    // Width: 48,151 is the first width that leaves the standard capacity in a
-    // test build (whose `std_capacity` has a 512-byte grapheme budget; 48,036
-    // in a shipped build). The page is 215 x 48,151, but only the few rows the
-    // test writes are touched. Count: the cursor holds one reference and each
-    // styled cell one more, so 65,535 styled cells reach 65,536 references;
-    // 70,000 (the reference probe's count) passes the ceiling by 4,465.
-    // Three screen rows hold 144,453 cells, which DECALN fills in one go.
-    const UD80_COLS: size::CellCountInt = 48_151;
+    // Width: 50,000 leaves the standard capacity in Ghostty and in the port,
+    // in every build measured. The first width that does is, for Ghostty,
+    // 47,932 shipped on macOS arm64, 46,908 shipped on Linux aarch64 and
+    // 48,047 in a macOS test build (it depends on the platform's page size);
+    // for the port, whose style-set item is smaller than the reference's, it
+    // is 48,036 shipped and 48,151 in a test build on macOS. `ud80_scan`
+    // asserts the page really is the wide one, so the tests cannot go vacuous
+    // if those thresholds move. The page is 215 x 50,000, but only the few
+    // rows a test writes are touched. Count: the cursor holds one reference
+    // and each styled cell one more, so 65,534 styled cells bring the count
+    // to 65,535 and the 65,535th overflows it (measured in the reference);
+    // 70,000 (the reference probe's count) passes the ceiling by 4,466.
+    // Three screen rows hold 150,000 cells, which DECALN fills in one go.
+    const UD80_COLS: size::CellCountInt = 50_000;
     const UD80_ROWS: size::CellCountInt = 3;
     const UD80_PRINTS: usize = 70_000;
 
@@ -22274,6 +22280,11 @@ mod tests {
             let lc = t.active_mut().pages.get_cell(active_pt(0, y)).unwrap();
             let page = unsafe { crate::pagelist::Node::page(lc.node) };
             assert!(page_seen.is_null() || page_seen == page, "one page");
+            let cap = unsafe { (*page).capacity };
+            assert!(
+                cap.rows as usize * cap.cols as usize > usize::from(u16::MAX),
+                "the page is the wide, non-standard one"
+            );
             page_seen = page;
             let cells = unsafe { &*(*page).get_cells(lc.row) };
             for c in cells {
@@ -22301,15 +22312,28 @@ mod tests {
         unsafe { (*t.screens.active).cursor.style_id }
     }
 
-    // UD80 through `printCell`: one style, 70,000 single prints.
+    // UD80 through `printCell` (`Terminal.zig:1722`, the `Terminal.print`
+    // API route): one style, 70,000 single prints, checked at the exact
+    // ceiling on the way.
     #[test]
     fn ud80_wide_terminal_one_style_past_the_refcount_ceiling_keeps_every_cell_styled() {
         let mut t = Terminal::init(Global, opts(UD80_COLS, UD80_ROWS)).unwrap();
         t.set_attribute(sgr::Attribute::Bold).unwrap();
-        for _ in 0..UD80_PRINTS {
+        for _ in 0..65_534 {
             t.print('A' as u32).unwrap();
         }
         let id = ud80_cursor_style_id(&mut t);
+        let (_, _, rc) = ud80_scan(&mut t, 'A' as u21, id, |s| s.flags.bold);
+        assert_eq!(
+            rc,
+            u16::MAX,
+            "65,534 cells plus the cursor: the exact ceiling"
+        );
+        // The 65,535th styled cell is the one the reference overflows on.
+        t.print('A' as u32).unwrap();
+        for _ in 65_535..UD80_PRINTS {
+            t.print('A' as u32).unwrap();
+        }
         let (n, all, rc) = ud80_scan(&mut t, 'A' as u21, id, |s| s.flags.bold);
         assert_eq!(n, UD80_PRINTS, "every print landed");
         assert!(all, "every printed cell keeps the bold style");
@@ -22341,7 +22365,8 @@ mod tests {
         t.deinit(Global);
     }
 
-    // UD80 through the batched `print_slice` path (`use_multiple`).
+    // UD80 through the batched `print_slice` path (`printSliceFill`'s
+    // `useMultiple`, `Terminal.zig:1114`).
     #[test]
     fn ud80_wide_terminal_print_slice_past_the_refcount_ceiling_keeps_every_cell_styled() {
         let mut t = Terminal::init(Global, opts(UD80_COLS, UD80_ROWS)).unwrap();
@@ -22411,12 +22436,12 @@ mod tests {
     // UD80 through a page clone: distinct styles past the page's style
     // capacity make `manualStyleUpdate` grow it (`increaseCapacity`), which
     // clones every row, the saturated style included, into a new page
-    // (`add_with_id` / `use_multiple` in the clone chain). 100,000 prints fill
+    // (`add_with_id` / `use_multiple` in the clone chain). 110,000 prints fill
     // two rows and start the third, so the clone's per-row `add_with_id` for
     // the third row's first cell lands on an already-saturated style.
     #[test]
     fn ud80_wide_terminal_capacity_clone_past_the_refcount_ceiling_keeps_every_cell_styled() {
-        const PRINTS: usize = 100_000;
+        const PRINTS: usize = 110_000;
         let mut t = Terminal::init(Global, opts(UD80_COLS, UD80_ROWS)).unwrap();
         t.set_attribute(sgr::Attribute::Bold).unwrap();
         for _ in 0..PRINTS {
@@ -22451,7 +22476,10 @@ mod tests {
     }
 
     // UD80 through the VT stream, the route an embedder's `vt_write` takes:
-    // SGR 1, then 70,000 printable bytes, as ordinary output.
+    // SGR 1, then 70,000 printable bytes, as ordinary output. The stream hands
+    // runs of printables to `print_slice`, so this is the reference's
+    // `stream_terminal.zig:362` -> `printSliceFast` -> `printSliceFill` ->
+    // `useMultiple` route (`Terminal.zig:1114`, `ref_counted_set.zig:397`).
     #[test]
     fn ud80_wide_terminal_vt_stream_past_the_refcount_ceiling_keeps_every_cell_styled() {
         let mut t = Terminal::init(Global, opts(UD80_COLS, UD80_ROWS)).unwrap();

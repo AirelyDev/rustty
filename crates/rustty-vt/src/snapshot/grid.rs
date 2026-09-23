@@ -1513,14 +1513,16 @@ fn apply_cell(
         // then breaks `use`'s own `assert(ref > 0)` (undefined behaviour),
         // before the post-grid release loop runs.
         //
-        // This is NOT decoder-only. A standard native page holds at most
-        // 48,035 cells, but a terminal 48,036 or more columns wide (48,151 in
-        // a test build, whose `std_capacity` has a smaller grapheme region)
-        // gets `std_capacity` with only `cols` changed
-        // (`PageList.zig:535-540`): 215 rows x cols, over ten million
-        // cells. Ordinary styled output on
-        // such a terminal overflows the same refcount through `printCell`
-        // (measured, UPSTREAM-DEFECTS.md UD80). The port's set now saturates
+        // This is NOT decoder-only. A terminal wide enough to leave the
+        // standard capacity gets `std_capacity` with only `cols` changed
+        // (`PageList.zig:535-540`): 215 rows x cols, over ten million cells.
+        // In Ghostty that is 47,932 columns or more in a shipped macOS arm64
+        // build, 46,908 on Linux aarch64 and 48,047 in a macOS test build
+        // (it depends on the platform's page size); the port's thresholds
+        // are 48,036 and 48,151 on macOS, because its style-set item is
+        // smaller. Ordinary styled output on such a terminal overflows the
+        // same refcount through `printSliceFill` and `printCell` (measured,
+        // UPSTREAM-DEFECTS.md UD80). The port's set now saturates
         // and pins every increment at the maximum instead (UD80,
         // `ref_counted_set.rs` `bump_ref`), so that path no longer overflows.
         //

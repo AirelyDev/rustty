@@ -2004,9 +2004,10 @@ mod tests {
 
     // rustty-only (R13, UPSTREAM-DEFECTS.md UD64): the decoder boundary must
     // not reject a capacity native Ghostty can itself produce and encode. A
-    // terminal 48,036 or more columns wide in a shipped build (48,151 in a
-    // test build) leaves the standard capacity (`initialCapacity`,
-    // `PageList.zig:535-540`): its page is
+    // terminal wide enough to leave the standard capacity (in Ghostty 47,932
+    // columns or more in a shipped macOS arm64 build, 48,047 in a test build;
+    // 48,151 is above both, and above the port's own thresholds)
+    // (`initialCapacity`, `PageList.zig:535-540`) gets a page that is
     // `std_capacity` with only `cols` changed. `increaseCapacity`
     // (`PageList.zig:4234-4255`) then doubles `grapheme_bytes` from 8192
     // for as long as the exact layout stays within `max_page_size`, which
@@ -2056,6 +2057,56 @@ mod tests {
             Err(CapacityError::InvalidDimensions),
             header(1 << 31).page_capacity(),
         );
+    }
+
+    // rustty-only (R13, UPSTREAM-DEFECTS.md UD64): the exact page-size check's
+    // own boundary. On a 48,151-column page with `grapheme_bytes` 1,382,748,161
+    // (other fields `std_capacity`), the exact layout is 2^32 bytes, one past
+    // `MAX_PAGE_SIZE` (`u32::MAX`); a check loosened by even one byte would let
+    // it through to the native assertion (`pagelist/mod.rs`,
+    // `create_page_ext`), which is UD64's crash. The largest grapheme budget
+    // that lays out below 2^32 is accepted. (`>=` in place of `>` is an
+    // equivalent change: the layout is a multiple of the page size, and
+    // `u32::MAX` is odd, so they are never equal.)
+    #[test]
+    fn decode_rejects_a_capacity_whose_exact_layout_is_one_past_the_limit() {
+        const AT_LIMIT: u32 = 1_382_748_161;
+        let native = TerminalPageCapacity {
+            cols: 48_151,
+            ..crate::page::std_capacity()
+        };
+        let header = |grapheme_bytes: u32| Header {
+            columns: native.cols,
+            rows: native.rows,
+            style_count: 0,
+            hyperlink_count: 0,
+            style_capacity: native.styles,
+            hyperlink_capacity_bytes: native.hyperlink_bytes,
+            grapheme_capacity_bytes: grapheme_bytes,
+            string_capacity_bytes: native.string_bytes,
+        };
+        let layout = |grapheme_bytes: u32| {
+            TerminalPage::layout(TerminalPageCapacity {
+                grapheme_bytes,
+                ..native
+            })
+            .total_size as u64
+        };
+        let limit = crate::size::MAX_PAGE_SIZE as u64;
+
+        assert_eq!(layout(AT_LIMIT), limit + 1, "the layout is exactly 2^32");
+        assert_eq!(
+            Err(CapacityError::InvalidDimensions),
+            header(AT_LIMIT).page_capacity(),
+        );
+
+        // The last grapheme budget below it that still fits is accepted.
+        let mut fits = AT_LIMIT - 1;
+        while layout(fits) > limit {
+            fits -= 1;
+        }
+        assert!(layout(fits) <= limit);
+        assert!(header(fits).page_capacity().is_ok());
     }
 
     // rustty-only (R13, UPSTREAM-DEFECTS.md UD65): a decoded PAGE declares its
