@@ -588,6 +588,15 @@ impl Face {
                 };
                 for v in vs {
                     if id == v.id.to_u32() {
+                        // PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md
+                        // UD98. `font-variation = wght=inf` (or any value whose
+                        // 16.16 form leaves `FT_Fixed`, e.g. `1e20`) parses, and
+                        // the reference's `@intFromFloat(v.value * 65536)` traps
+                        // in ReleaseSafe (measured, Zig 0.16.0; ReleaseFast
+                        // gives the `c_long` max, NaN gives 0 in every mode).
+                        // Rust's `as` saturates to those same ReleaseFast values;
+                        // FreeType keeps the design coordinate as given and the
+                        // face still renders (task R13-D's test).
                         coords[i] = (v.value * 65536.0) as c::FT_Fixed;
                         break;
                     }
@@ -2732,6 +2741,62 @@ mod tests {
         );
 
         base.deinit();
+        Ok(())
+    }
+
+    /// UD98 (R13, task R13-D): `font-variation` values whose 16.16 fixed-point
+    /// form is out of range. The reference's `@intFromFloat(v.value * 65536)`
+    /// traps on `inf` and `1e20` (ReleaseFast: the `c_long` max) and gives 0 for
+    /// NaN (measured, Zig 0.16.0). The port stores those same saturated values,
+    /// and the face still renders a glyph afterwards.
+    #[test]
+    fn set_variations_with_an_out_of_range_value_saturates() -> Result<(), Error> {
+        let mut lib = Library::init()?;
+        let mut face = Face::init(lib, embedded::VARIABLE, opts(size(12.0, 96, 96)))?;
+        let wght = super::super::Id::init(b"wght");
+        let coord = |face: &Face| -> Result<c::FT_Fixed, Error> {
+            let mut coords: [c::FT_Fixed; 1] = [0];
+            face.face.get_var_design_coordinates(&mut coords)?;
+            Ok(coords[0])
+        };
+
+        // Positive control: an in-range weight is applied as given.
+        face.set_variations(
+            &[super::super::Variation {
+                id: wght,
+                value: 600.0,
+            }],
+            opts(size(12.0, 96, 96)),
+        )?;
+        assert_eq!(600 << 16, coord(&face)?);
+
+        let alloc = Global;
+        let mut atlas = Atlas::init(alloc, 512, Format::Grayscale)?;
+        for (value, want) in [
+            (f64::INFINITY, c::FT_Fixed::MAX),
+            (1e20, c::FT_Fixed::MAX),
+            (f64::NEG_INFINITY, c::FT_Fixed::MIN),
+            (f64::NAN, 0),
+        ] {
+            face.set_variations(
+                &[super::super::Variation { id: wght, value }],
+                opts(size(12.0, 96, 96)),
+            )?;
+            assert_eq!(want, coord(&face)?, "wght={value}");
+            face.render_glyph(
+                alloc,
+                &mut atlas,
+                face.glyph_index('A' as u32).unwrap(),
+                RenderOptions {
+                    grid_metrics: Metrics::calc(face.get_metrics()),
+                    ..Default::default()
+                },
+            )?;
+        }
+
+        atlas.deinit(alloc);
+        face.deinit();
+        lib.deinit();
         Ok(())
     }
 
