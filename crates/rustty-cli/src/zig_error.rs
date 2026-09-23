@@ -72,6 +72,17 @@ pub fn load_error(e: &rustty_config::config_struct::LoadError) -> String {
             }
         }
         LoadError::Parse(p) => args_error(p),
+        // `loadDefaultFiles`' path-lookup errors (T-E, S74-F1). `loadFile`,
+        // the only caller here, never returns one; named as the variant for
+        // completeness.
+        LoadError::FileLoad(f) => {
+            use rustty_config::file_load::FileLoadError;
+            match f {
+                FileLoadError::NoHomeDir => "error.NoHomeDir".to_string(),
+                FileLoadError::AppleApiFailed => "error.AppleApiFailed".to_string(),
+                FileLoadError::Io(_) => "error.ReadFailed".to_string(),
+            }
+        }
     }
 }
 
