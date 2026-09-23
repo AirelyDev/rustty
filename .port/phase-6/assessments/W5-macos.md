@@ -90,7 +90,9 @@ enumerates targets, not files. swiftlint (`macos/AGENTS.md`) is clean on every t
 `GHOSTTY_ROOT=/Users/gael/projects/ghostty .port/tools/macos-parity/menu-shortcut-parity.sh`
 (the worktree is not a sibling of `ghostty/`, so the default `../ghostty` needed overriding; the
 harness only reads the oracle's prebuilt `ghostty-internal.a`, outputs go to a mktemp dir; oracle
-`git status` clean afterwards):
+`git status` clean afterwards). Since R13-G part F2 the override no longer exists and the plain
+`.port/tools/macos-parity/menu-shortcut-parity.sh` finds the oracle from any worktree (see Open
+items):
 
 ```
 menu-shortcut parity OK — 51 actions resolve byte-identically (rustty == ghostty)
@@ -113,8 +115,12 @@ None blocking for W5. Observations outside the range (not touched, for the final
 
 - `macos/build-rustty.sh:2-3` header still says "Branch A: ghostty_* ABI aliases" — stale wording
   since the `rustty_*` rebrand (`macos/REBRAND.md`); doc-only, not in this range.
-- `.port/tools/macos-parity/menu-shortcut-parity.sh:26` derives `GHOSTTY_ROOT` from
-  `$RUSTTY_ROOT/../ghostty`, which is wrong from any worktree under `rustty-wt/`; the env override
-  works, so no change made here.
+- `.port/tools/macos-parity/menu-shortcut-parity.sh:26` derived `GHOSTTY_ROOT` from
+  `$RUSTTY_ROOT/../ghostty`, which is wrong from any worktree under `rustty-wt/`. At the time the
+  env override worked around it, so no change was made here. **Superseded (R13-G part F2):** the
+  `GHOSTTY_ROOT` override is gone (R5: nothing caller-settable may point a parity check at another
+  oracle). The harness now resolves the oracle with the shared `_oracle_root.sh`, which finds
+  `ghostty` beside the MAIN checkout from any worktree, so no override is needed. An exported
+  `GHOSTTY_ROOT` is silently ignored.
 - `Package.resolved` `originHash` is unchanged by the `exactVersion` requirement in BOTH trees
   (oracle kept `e721da7f…`); xcodebuild accepted it without rewriting the file.

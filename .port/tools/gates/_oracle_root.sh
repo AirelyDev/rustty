@@ -149,7 +149,7 @@ _RUSTTY_ORACLE_CONSUMERS=(
 
 _rustty_oracle_self_test() {
   local here root base main_co wt oracle stale decoy decoy_oracle fakebin
-  local failed=0 blocked=0 got want rel copy r
+  local failed=0 blocked=0 got want rel copy r rc
   here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   root="$(cd "$here/../../.." && pwd)"
 
@@ -361,32 +361,32 @@ _rustty_oracle_self_test() {
   #    whose seed differs, so an override honoured at ANY point is caught.
   copy="$wt/.port/tools/gates/check_eol_fidelity.sh"
   eol() { (cd "$decoy" && clean_env GHOSTTY_ORACLE="$decoy_oracle" bash "$copy" 2>&1); }
-  r=0; got="$(eol)" || r=$?
-  if [ "$r" = "0" ] && [[ "$got" == *"reference: $oracle @ ${fixture_pin:0:9}"* ]] &&
+  rc=0; got="$(eol)" || rc=$?
+  if [ "$rc" = "0" ] && [[ "$got" == *"reference: $oracle @ ${fixture_pin:0:9}"* ]] &&
     [[ "$got" == *"ok      parser-initial (1 seed(s) byte-identical"* ]]; then r=0; else r=1; fi
-  arm "$r" "G-EOL at the pin compares against the resolved oracle and is GREEN" "$(printf '%s' "$got" | tail -4 | tr '\n' '|')"
+  arm "$r" "G-EOL at the pin compares against the resolved oracle and is GREEN" "rc=$rc: $(printf '%s' "$got" | tail -4 | tr '\n' '|')"
   mv "$oracle" "$oracle.away"
-  r=0; got="$(eol)" || r=$?
+  rc=0; got="$(eol)" || rc=$?
   mv "$oracle.away" "$oracle"
-  if [ "$r" = "3" ] && [[ "$got" == *"G-EOL BLOCKED"*"no oracle checkout at $oracle"* ]]; then r=0; else r=1; fi
-  arm "$r" "G-EOL is BLOCKED (3), not GREEN, when the oracle is absent" "rc=$r: $(printf '%s' "$got" | tail -3 | tr '\n' '|')"
+  if [ "$rc" = "3" ] && [[ "$got" == *"G-EOL BLOCKED"*"no oracle checkout at $oracle"* ]]; then r=0; else r=1; fi
+  arm "$r" "G-EOL is BLOCKED (3), not GREEN, when the oracle is absent" "rc=$rc: $(printf '%s' "$got" | tail -3 | tr '\n' '|')"
   printf '%s\n' "$decoy_head" >"$wt/.port/tools/gates/ORACLE_PIN"
-  r=0; got="$(eol)" || r=$?
+  rc=0; got="$(eol)" || rc=$?
   printf '%s\n' "$fixture_pin" >"$wt/.port/tools/gates/ORACLE_PIN"
-  if [ "$r" = "3" ] && [[ "$got" == *"not the pin $decoy_head"* ]]; then r=0; else r=1; fi
-  arm "$r" "G-EOL is BLOCKED (3) when the oracle is off the pin" "$(printf '%s' "$got" | tail -3 | tr '\n' '|')"
+  if [ "$rc" = "3" ] && [[ "$got" == *"not the pin $decoy_head"* ]]; then r=0; else r=1; fi
+  arm "$r" "G-EOL is BLOCKED (3) when the oracle is off the pin" "rc=$rc: $(printf '%s' "$got" | tail -3 | tr '\n' '|')"
   printf 'dirty\n' >>"$oracle/$seed_rel"
-  r=0; got="$(eol)" || r=$?
+  rc=0; got="$(eol)" || rc=$?
   printf 'a\r\nb\r\n' >"$oracle/$seed_rel"
-  if [ "$r" = "3" ] && [[ "$got" == *"differs from the pin"* ]]; then r=0; else r=1; fi
-  arm "$r" "G-EOL is BLOCKED (3) when the oracle's corpus is dirty" "$(printf '%s' "$got" | tail -3 | tr '\n' '|')"
+  if [ "$rc" = "3" ] && [[ "$got" == *"differs from the pin"* ]]; then r=0; else r=1; fi
+  arm "$r" "G-EOL is BLOCKED (3) when the oracle's corpus is dirty" "rc=$rc: $(printf '%s' "$got" | tail -3 | tr '\n' '|')"
   mv "$oracle" "$oracle.away"
   printf '* text=auto\n' >"$wt/.gitattributes"
-  r=0; got="$(eol)" || r=$?
+  rc=0; got="$(eol)" || rc=$?
   printf '.port/phase-0/corpora/cvt/** -text\n' >"$wt/.gitattributes"
   mv "$oracle.away" "$oracle"
-  if [ "$r" = "1" ]; then r=0; else r=1; fi
-  arm "$r" "G-EOL: a RED arm 1 wins over arm 3's BLOCKED (exit 1)" "$(printf '%s' "$got" | tail -3 | tr '\n' '|')"
+  if [ "$rc" = "1" ] && [[ "$got" == *"still under line-ending conversion"* ]]; then r=0; else r=1; fi
+  arm "$r" "G-EOL: a RED arm 1 wins over arm 3's BLOCKED (exit 1)" "rc=$rc: $(printf '%s' "$got" | tail -3 | tr '\n' '|')"
 
   # 10. Structural scan of the REAL consumers. For each (file, oracle variable):
   #     the variable is assigned exactly once outside the lines marked
