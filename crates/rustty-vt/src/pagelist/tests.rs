@@ -17902,3 +17902,107 @@ fn pagelist_resize_trimmed_rows_have_default_state() {
 
     s.deinit();
 }
+
+// UD80 (R13), the row-copy retry loop of `eraseRow` (`cloneRowGrowCapacity`):
+// the destination page's style set is full, at the `u16` capacity ceiling, of
+// pinned styles no cell uses (orphans: a count at 65,535 and no cell left,
+// what styled output on a very wide terminal leaves behind), and the row
+// pulled up across the page boundary carries a style that set does not have.
+// The reference's loop panics ("increaseCapacity OutOfSpace"); the port
+// re-clones the page once at the same capacity, which drops the orphans, and
+// the copy succeeds. 4,000 columns keeps the page at a dozen rows, so the
+// clones are cheap.
+#[test]
+fn ud80_erase_row_into_a_page_full_of_orphaned_pinned_styles_reclaims_them() {
+    let mut s = PageList::init(Options::new(4000, 10)).unwrap();
+    {
+        let page = unsafe { super::Node::page(s.pages.last) };
+        unsafe { (*page).pause_integrity_checks(true) };
+        let n = unsafe { (*page).capacity.rows - (*page).size.rows };
+        for _ in 0..n {
+            let _ = s.grow().unwrap();
+        }
+        unsafe { (*page).pause_integrity_checks(false) };
+        s.grow_rows(5).unwrap();
+        assert_eq!(2, s.total_pages());
+    }
+
+    // The top row of the second page carries a bold cell.
+    let bold = Style {
+        flags: stylepkg::Flags {
+            bold: true,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    unsafe {
+        let page = super::Node::page(s.pages.last);
+        let id = (*page).styles.add((*page).memory_ptr(), bold).unwrap();
+        let rac = (*page).get_row_and_cell(0, 0);
+        *rac.cell = cell_codepoint('S' as u32);
+        (*rac.cell).set_style_id(id);
+        (*rac.row).set_styled(true);
+    }
+
+    // The first page: style capacity at the ceiling, the set full of orphans.
+    while unsafe { super::Node::capacity(s.pages.first).styles } < size::CellCountInt::MAX {
+        let _ = s
+            .increase_capacity(s.pages.first, Some(IncreaseCapacity::Styles))
+            .unwrap();
+    }
+    let orphans = unsafe {
+        let page = super::Node::page(s.pages.first);
+        (*page).pause_integrity_checks(true);
+        let mut n = 0u32;
+        loop {
+            let base = (*page).memory_ptr();
+            let st = Style {
+                fg_color: stylepkg::Color::Rgb(crate::color::RGB {
+                    r: (n & 0xFF) as u8,
+                    g: (n >> 8) as u8,
+                    b: 0x33,
+                }),
+                ..Default::default()
+            };
+            let Ok(id) = (*page).styles.add(base, st) else {
+                break;
+            };
+            (*page).styles.use_multiple(base, id, u16::MAX - 1);
+            n += 1;
+        }
+        (*page).pause_integrity_checks(false);
+        (*page).assert_integrity();
+        n
+    };
+    assert!(orphans > 50_000, "the set is full of orphans: {orphans}");
+    assert!(super::grow::styles_hold_pinned(unsafe {
+        super::Node::page(s.pages.first)
+    }));
+
+    s.erase_row(point::Point::Active(point::Coordinate { x: 0, y: 0 }))
+        .unwrap();
+
+    // The bold row moved up into the first page (active row 4).
+    let lc = s
+        .get_cell(point::Point::Active(point::Coordinate { x: 0, y: 4 }))
+        .unwrap();
+    assert!(std::ptr::eq(lc.node, s.pages.first));
+    let page: *mut Page = unsafe { super::Node::page(lc.node) };
+    assert_eq!(unsafe { (*lc.cell).codepoint() }, 'S' as u32);
+    let st = unsafe {
+        *(*page)
+            .styles
+            .get((*page).memory_ptr(), (*lc.cell).style_id())
+    };
+    assert!(st.flags.bold, "the copied cell keeps its style");
+    assert!(
+        unsafe { (*page).styles.count() } < 10,
+        "the orphans were dropped"
+    );
+    let mut node_ = s.pages.first;
+    while !node_.is_null() {
+        unsafe { (*super::Node::page(node_)).assert_integrity() };
+        node_ = unsafe { (*node_).next };
+    }
+    s.deinit();
+}

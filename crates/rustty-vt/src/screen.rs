@@ -1454,6 +1454,10 @@ impl Screen {
         );
 
         let mut current = node;
+        // PORT NOTE: reference defect (R13), UD80: at most one same-capacity
+        // re-clone to drop orphaned pinned styles; see
+        // `pagelist::grow::styles_hold_pinned`.
+        let mut reclaimed_pinned_styles = false;
         loop {
             let cur_page: *mut Page = unsafe { pagelist::Node::page(current) };
             let cur_rows = unsafe { (*cur_page).rows.ptr((*cur_page).memory_ptr()) };
@@ -1472,11 +1476,25 @@ impl Screen {
 
             // Adjust our page capacity to make room for what we
             // didn't have space for and retry the copy.
-            current = match self.increase_capacity(
-                current,
-                pagelist::grow::IncreaseCapacity::for_clone_error(err),
-            ) {
+            let adjustment = pagelist::grow::IncreaseCapacity::for_clone_error(err);
+            current = match self.increase_capacity(current, adjustment) {
                 Ok(n) => n,
+                // PORT NOTE: reference defect (R13), UD80. The style set is
+                // full at its capacity ceiling, where the reference crashes
+                // below. If it holds a pinned style, re-clone once at the same
+                // capacity first: the recount drops pinned styles no cell
+                // uses. A second failure reaches the reference's crash.
+                Err(pagelist::grow::IncreaseCapacityError::OutOfSpace)
+                    if adjustment == Some(pagelist::grow::IncreaseCapacity::Styles)
+                        && !reclaimed_pinned_styles
+                        && pagelist::grow::styles_hold_pinned(cur_page) =>
+                {
+                    reclaimed_pinned_styles = true;
+                    match self.increase_capacity(current, None) {
+                        Ok(n) => n,
+                        Err(_) => panic!("increaseCapacity system allocator OOM"),
+                    }
+                }
                 // We can't gracefully recover from either of these
                 // here: our callers have already rotated or shifted
                 // rows, so returning an error would leave the page
@@ -3766,6 +3784,13 @@ impl Screen {
                     Err(IncreaseCapacityError::OutOfMemory) => {
                         return Err(IncreaseCapacityError::OutOfMemory);
                     }
+                    Err(IncreaseCapacityError::OutOfSpace)
+                        if self.reclaim_pinned_styles_before_split(page) =>
+                    {
+                        // PORT NOTE (R13, UD80): a same-capacity re-clone
+                        // freed style slots; see the helper.
+                        unsafe { (*self.cursor.page_pin).node }
+                    }
                     Err(IncreaseCapacityError::OutOfSpace) => {
                         // Out of space, we need to split the page. Split wherever
                         // is using less capacity and hope that works. If it doesn't
@@ -3815,6 +3840,45 @@ impl Screen {
 
         self.cursor.style_id = id;
         Ok(())
+    }
+
+    /// Before `manualStyleUpdate` splits the cursor's page because its full
+    /// style set cannot grow (`OutOfSpace`), re-clone the page once at the
+    /// SAME capacity if the set holds a pinned style, and report whether the
+    /// re-clone freed at least one style slot.
+    ///
+    /// PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD80. The
+    /// reference has no such step. The port pins a style whose `u16` reference
+    /// count saturates (`ref_counted_set.rs`, `bump_ref`), and a pinned style
+    /// stays counted after its cells are overwritten. Page clones recount from
+    /// the cells and drop such orphans, and below the ceiling every style-set
+    /// growth is a clone, but the capacity projection counts the orphans, so
+    /// the style capacity can climb to `maxInt(u16)`; there growth returns
+    /// `OutOfSpace` and the reference's fallback splits the page. The cursor
+    /// can stay on the full half, and every later new style then fails
+    /// (`set_attribute` keeps the previous style) although the set holds
+    /// styles nothing uses — phantom references the reference never has.
+    /// This step is the same clone growth already performs, at the capacity
+    /// the page has. Returns `true` only if the style count fell; the caller
+    /// then adds on the re-cloned page. Returns `false` if the set holds no
+    /// pinned style (every count is exact, a re-clone can reclaim nothing, and
+    /// the reference path runs unchanged, with no clone), if the clone
+    /// reclaimed nothing (the styles are genuinely in use), or if it could not
+    /// allocate; the caller then splits as the reference does. It runs at most
+    /// once per `manual_style_update` call, with no retry, so it cannot loop.
+    fn reclaim_pinned_styles_before_split(&mut self, page: *mut Page) -> bool {
+        if !pagelist::grow::styles_hold_pinned(page) {
+            return false;
+        }
+        let before = unsafe { (*page).styles.count() };
+        // `Screen::increase_capacity`, not the PageList's, so the cursor's
+        // hyperlink reference and cached row/cell pointers are migrated. The
+        // cursor's style was released and its id reset to the default above,
+        // so there is no style to re-add.
+        match self.increase_capacity(unsafe { (*self.cursor.page_pin).node }, None) {
+            Ok(node) => unsafe { (*crate::pagelist::Node::page(node)).styles.count() < before },
+            Err(_) => false,
+        }
     }
 
     /// Split at the given pin so that the pinned row moves to the page

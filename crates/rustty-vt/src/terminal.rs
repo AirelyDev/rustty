@@ -22499,4 +22499,302 @@ mod tests {
         assert_eq!(rc, u16::MAX);
         t.deinit(Global);
     }
+
+    // ---------------------------------------------------------------------
+    // UD80 (R13), the style-capacity ceiling. A pinned style stays counted
+    // after its cells are overwritten (an "orphan"). Page clones recount from
+    // the cells and drop orphans, but the capacity projection counts them, so
+    // the style capacity can climb to `maxInt(u16)`; there growth returns
+    // `OutOfSpace`. The port re-clones the page once at the same capacity
+    // before the reference's split (`manualStyleUpdate`) or crash (the
+    // row-copy retry loops), when the set holds a pinned style.
+    //
+    // The review-R13W probe reached the ceiling organically on a 50,000 x 3
+    // terminal (a new RGB background plus DECALN per iteration) after 56,675
+    // iterations, about 8.5 billion cell writes. These tests reach the same
+    // state in a few iterations: they grow the style capacity straight to the
+    // ceiling with the reference test's own loop ("restoreCursor uses default
+    // style on OutOfSpace"), which skips the two projection jumps
+    // (128 -> 4,096 -> 65,535), and then fill the rest of the set with pinned
+    // styles no cell uses. Such a style is exactly what the probe accumulates:
+    // a count at 65,535 and no cell left.
+
+    /// Grow the style capacity of the page `node` returns to the `u16`
+    /// ceiling, the way the reference test does, and return that page.
+    fn ud80_presize_styles(
+        t: &mut Terminal,
+        node: impl Fn(&mut Terminal) -> *mut crate::pagelist::Node,
+    ) -> *mut Page {
+        loop {
+            let n = node(t);
+            if unsafe { crate::pagelist::Node::capacity(n).styles } == size::CellCountInt::MAX {
+                return unsafe { crate::pagelist::Node::page(n) };
+            }
+            t.active_mut()
+                .increase_capacity(n, Some(pagelist::grow::IncreaseCapacity::Styles))
+                .unwrap();
+        }
+    }
+
+    /// Fill `page`'s style set with pinned styles that no cell uses until
+    /// `add` fails. Each gets one reference from `add` and 65,534 more, which
+    /// pins it at 65,535. `tag` keeps the values distinct from the styles a
+    /// test sets itself. Once `add` has failed with `OutOfMemory` (the ids are
+    /// used up, or a probe sequence reached the last `psl_stats` bucket),
+    /// every later `add` of a new value fails the same way, which is the
+    /// state the probe reached.
+    fn ud80_fill_with_orphans(page: *mut Page, tag: u8) -> usize {
+        let mut n = 0u32;
+        unsafe {
+            (*page).pause_integrity_checks(true);
+            loop {
+                let base = (*page).memory_ptr();
+                let st = style::Style {
+                    fg_color: style::Color::Rgb(color::RGB {
+                        r: (n & 0xFF) as u8,
+                        g: (n >> 8) as u8,
+                        b: tag,
+                    }),
+                    ..Default::default()
+                };
+                let id = match (*page).styles.add(base, st) {
+                    Ok(id) => id,
+                    Err(e) => {
+                        assert_eq!(e, crate::ref_counted_set::AddError::OutOfMemory);
+                        break;
+                    }
+                };
+                (*page).styles.use_multiple(base, id, u16::MAX - 1);
+                assert!((*page).styles.ref_count_saturated(base, id));
+                n += 1;
+            }
+            (*page).pause_integrity_checks(false);
+            (*page).assert_integrity();
+        }
+        n as usize
+    }
+
+    fn ud80_cursor_page(t: &mut Terminal) -> *mut Page {
+        unsafe { crate::pagelist::Node::page((*(*t.screens.active).cursor.page_pin).node) }
+    }
+
+    // The review-R13W probe as a test: a new RGB background plus DECALN per
+    // iteration, past the iteration at which the unmitigated code starts
+    // failing every SGR. The first `REAL` iterations run at the ceiling, each
+    // DECALN pinning its new style and orphaning the previous one; then the
+    // rest of the set is filled with orphans, so iteration `REAL` finds the
+    // set full. Without the re-clone the page is split, the cursor (homed by
+    // DECALN) stays on the full half, and that SGR and every later one fail
+    // (`set_attribute` keeps the previous style).
+    #[test]
+    fn ud80_wide_terminal_orphaned_pinned_styles_at_the_capacity_ceiling_are_reclaimed_not_split() {
+        const REAL: u32 = 4;
+        const PAST: u32 = 6;
+        let mut t = Terminal::init(Global, opts(UD80_COLS, UD80_ROWS)).unwrap();
+        let page = ud80_presize_styles(&mut t, |t| unsafe {
+            (*(*t.screens.active).cursor.page_pin).node
+        });
+
+        let mut reclaimed_at = None;
+        for i in 0..REAL + PAST {
+            if i == REAL {
+                assert_eq!(ud80_cursor_page(&mut t), page, "not cloned yet");
+                let orphans = ud80_fill_with_orphans(page, 0x55);
+                assert!(orphans > 50_000, "the set is full of orphans: {orphans}");
+            }
+            let bg = color::RGB {
+                r: i as u8,
+                g: 0x11,
+                b: 0xAA,
+            };
+            let before = unsafe { (*ud80_cursor_page(&mut t)).styles.count() };
+            t.set_attribute(sgr::Attribute::DirectColorBg(bg))
+                .unwrap_or_else(|e| panic!("iteration {i}: SGR failed: {e:?}"));
+            let cursor_bg = unsafe { (*t.screens.active).cursor.style.bg_color };
+            assert!(
+                cursor_bg.tag() == style::ColorTag::Rgb && cursor_bg.rgb() == bg,
+                "iteration {i}: the cursor takes the new style"
+            );
+            let id = ud80_cursor_style_id(&mut t);
+            assert_ne!(id, style::DEFAULT_ID, "iteration {i}");
+            t.decaln().unwrap();
+
+            let page = ud80_cursor_page(&mut t);
+            let after = unsafe { (*page).styles.count() };
+            if after < before {
+                reclaimed_at.get_or_insert(i);
+            }
+            assert_eq!(
+                t.active_mut().pages.total_pages(),
+                1,
+                "iteration {i}: no split"
+            );
+            assert_eq!(
+                unsafe { (*page).capacity.styles },
+                size::CellCountInt::MAX,
+                "iteration {i}: still at the ceiling"
+            );
+            let (n, all, rc) = ud80_scan(&mut t, 'E' as u21, id, |s| {
+                s.bg_color.tag() == style::ColorTag::Rgb && s.bg_color.rgb() == bg
+            });
+            assert_eq!(n, UD80_COLS as usize * UD80_ROWS as usize);
+            assert!(
+                all,
+                "iteration {i}: every DECALN cell takes the new background"
+            );
+            assert_eq!(rc, u16::MAX, "iteration {i}");
+        }
+        // The re-clone ran exactly where the unmitigated code split, and
+        // dropped every orphan: only the last DECALN style is left.
+        assert_eq!(reclaimed_at, Some(REAL));
+        assert!(unsafe { (*ud80_cursor_page(&mut t)).styles.count() } < 10);
+        t.deinit(Global);
+    }
+
+    // The no-reclaim case: the set is full at the ceiling of styles that are
+    // genuinely in use (one pinned by 70,000 bold cells, the rest one cell
+    // each), so the re-clone reclaims nothing and the reference's split still
+    // happens, once per SGR, and returns.
+    #[test]
+    fn ud80_wide_terminal_live_styles_at_the_capacity_ceiling_still_split() {
+        let mut t = Terminal::init(Global, opts(UD80_COLS, UD80_ROWS)).unwrap();
+        t.set_attribute(sgr::Attribute::Bold).unwrap();
+        for _ in 0..UD80_PRINTS {
+            t.print('A' as u32).unwrap();
+        }
+        let bold = ud80_cursor_style_id(&mut t);
+        let page = ud80_presize_styles(&mut t, |t| unsafe {
+            (*(*t.screens.active).cursor.page_pin).node
+        });
+
+        // One live style per cell after the cursor, until the set is full.
+        let mut live = 0u32;
+        unsafe {
+            (*page).pause_integrity_checks(true);
+            let base = (*page).memory_ptr();
+            'fill: for y in 1..UD80_ROWS as usize {
+                let row = (*page).get_row(y);
+                let cells = &mut *(*page).get_cells(row);
+                let start = if y == 1 {
+                    UD80_PRINTS - UD80_COLS as usize + 1
+                } else {
+                    0
+                };
+                for c in &mut cells[start..] {
+                    let st = style::Style {
+                        fg_color: style::Color::Rgb(color::RGB {
+                            r: (live & 0xFF) as u8,
+                            g: (live >> 8) as u8,
+                            b: 0x77,
+                        }),
+                        ..Default::default()
+                    };
+                    let Ok(id) = (*page).styles.add(base, st) else {
+                        break 'fill;
+                    };
+                    c.set_content_codepoint('L' as u21);
+                    c.set_style_id(id);
+                    (*row).set_styled(true);
+                    live += 1;
+                }
+            }
+            (*page).pause_integrity_checks(false);
+            (*page).assert_integrity();
+            assert!((*page).styles.ref_count_saturated(base, bold));
+        }
+        assert!(live > 50_000, "the set is full of live styles: {live}");
+
+        let count_l = |t: &mut Terminal| {
+            let mut n = 0usize;
+            for y in 0..UD80_ROWS as u32 {
+                let lc = t.active_mut().pages.get_cell(active_pt(0, y)).unwrap();
+                let page = unsafe { crate::pagelist::Node::page(lc.node) };
+                for c in unsafe { &*(*page).get_cells(lc.row) } {
+                    if c.content_codepoint() == 'L' as u21 {
+                        let st =
+                            unsafe { &*(*page).styles.get((*page).memory_ptr(), c.style_id()) };
+                        assert_eq!(st.fg_color.rgb().b, 0x77, "a live style survived");
+                        n += 1;
+                    }
+                }
+            }
+            n
+        };
+
+        // The first new style: the re-clone reclaims nothing, so the page is
+        // split, as in the reference.
+        assert_eq!(t.active_mut().pages.total_pages(), 1);
+        let red = color::RGB {
+            r: 0xFF,
+            g: 0,
+            b: 0,
+        };
+        let r = t.set_attribute(sgr::Attribute::DirectColorBg(red));
+        assert_eq!(t.active_mut().pages.total_pages(), 2, "the page was split");
+        assert_eq!(count_l(&mut t), live as usize, "no live style was dropped");
+        // The split moves the cursor's row, with row 2, to the new page. Both
+        // rows' live styles go with it, so that page's set is full too and the
+        // add fails: the reference's own "we tried" outcome, which keeps the
+        // previous style (bold, no background).
+        assert!(r.is_err());
+        let cursor = unsafe { &(*t.screens.active).cursor };
+        assert!(cursor.style.flags.bold);
+        assert_eq!(cursor.style.bg_color.tag(), style::ColorTag::None);
+
+        // And again: the call returns, one attempt per SGR, no loop.
+        let blue = color::RGB {
+            r: 0,
+            g: 0,
+            b: 0xFF,
+        };
+        let r = t.set_attribute(sgr::Attribute::DirectColorBg(blue));
+        assert!(r.is_err());
+        assert_eq!(count_l(&mut t), live as usize);
+        t.deinit(Global);
+    }
+
+    // The row-copy retry loop (`Screen.clonePartialRowGrowCapacity`, reached
+    // by DL across a page boundary): the destination page's style set is full
+    // of orphaned pinned styles at the ceiling, and the row pulled into it
+    // carries a style it does not have. The reference's loop panics
+    // ("increaseCapacity OutOfSpace") here; the port re-clones once, which
+    // drops the orphans, and the copy succeeds.
+    #[test]
+    fn ud80_delete_lines_into_a_page_full_of_orphaned_pinned_styles_reclaims_them() {
+        let mut t = Terminal::init(Global, opts(4000, 5)).unwrap();
+        let first_page_rows =
+            unsafe { crate::pagelist::Node::capacity(t.active_mut().pages.pages.first).rows };
+        for _ in 0..(first_page_rows + 1) {
+            t.linefeed().unwrap();
+        }
+        assert_eq!(2, unsafe {
+            crate::pagelist::Node::rows(t.active_mut().pages.pages.last)
+        });
+        // The first row of the second page (active y = 3) carries a style.
+        t.set_cursor_pos(4, 1);
+        t.set_attribute(sgr::Attribute::Bold).unwrap();
+        t.print_string(b"S").unwrap();
+        t.set_attribute(sgr::Attribute::Unset).unwrap();
+        t.set_cursor_pos(1, 1);
+
+        let page = ud80_presize_styles(&mut t, |t| t.active_mut().pages.pages.first);
+        assert!(ud80_fill_with_orphans(page, 0x33) > 50_000);
+
+        t.delete_lines(1);
+        let lc = t.active_mut().pages.get_cell(active_pt(0, 2)).unwrap();
+        let page = unsafe { crate::pagelist::Node::page(lc.node) };
+        assert!(std::ptr::eq(lc.node, t.active_mut().pages.pages.first));
+        assert_eq!(unsafe { (*lc.cell).content_codepoint() }, 'S' as u21);
+        let st = unsafe {
+            &*(*page)
+                .styles
+                .get((*page).memory_ptr(), (*lc.cell).style_id())
+        };
+        assert!(st.flags.bold, "the copied cell keeps its style");
+        assert!(
+            unsafe { (*page).styles.count() } < 10,
+            "the orphans were dropped"
+        );
+        t.deinit(Global);
+    }
 }

@@ -132,8 +132,8 @@ impl_refcount_int!(u8, u16, u32, u64, usize);
 //
 // The port SATURATES and PINS: an increment stops at `maxInt(RefCountInt)`,
 // and a count at the maximum is never decremented again, so the item stays
-// live (and every cell keeps its style) until the page's memory is reset or
-// freed. The reference's own answer to a style it cannot store —
+// live (and every cell keeps its style) in that page's memory; a clone of the
+// page recounts it from the cells. The reference's own answer to a style it cannot store —
 // `Screen.manualStyleUpdate` growing the set (`increaseCapacity`) or splitting
 // the page (`splitForCapacity`) — does not fit this condition: growing the
 // set adds slots, not count width; a split cannot bound the count, because a
@@ -143,9 +143,22 @@ impl_refcount_int!(u8, u16, u32, u64, usize);
 // to fall back on. Falling back to the default style (as the snapshot
 // decoder's `apply_cell` does, UD65) would visibly drop the style from cells
 // the reference means to show styled. Pinning keeps every cell exactly as the
-// reference intends and costs at most one style slot per saturated style per
-// page, reclaimed with the page. The integrity check accepts a pinned count
-// below the cells seen (`page_impl.rs`, `verify_integrity`). The hyperlink set
+// reference intends. Its cost: a pinned style stays counted after its cells
+// are overwritten (an orphan), one style slot each, until the page is next
+// cloned. Every clone (capacity growth, a rehash, a split's new page, a
+// screen clone) recounts from the cells and drops orphans, but the growth
+// projection counts them, so repeated pin-then-overwrite (a new style plus
+// DECALN per iteration on a very wide terminal) can push the style capacity to
+// `maxInt(u16)`. There growth returns `OutOfSpace`, and the reference's
+// fallback splits the page, which can leave the cursor on a full set that
+// fails every new style (the R13-W review measured 23,325 SGRs in a row). So
+// before that split, and before the row-copy retry loops' crash, the port
+// re-clones the page ONCE at the same capacity when the set holds a pinned
+// style (`pagelist/grow.rs` `styles_hold_pinned`, `screen.rs`
+// `reclaim_pinned_styles_before_split`), dropping the orphans exactly as
+// growth does below the ceiling; if that frees nothing, the reference's path
+// runs. The integrity check accepts a pinned count below the cells seen
+// (`page_impl.rs`, `verify_integrity`). The hyperlink set
 // shares this type but cannot reach the ceiling: its per-page cell map holds
 // at most 26,214 entries (UD65's review).
 #[inline(always)]
@@ -1631,6 +1644,86 @@ mod tests {
             assert!(it.next().is_none());
 
             // defer alloc.free(buf);
+            std::alloc::dealloc(buf, alloc_layout);
+        }
+    }
+
+    // PORT NOTE: port-only test (R13, UPSTREAM-DEFECTS.md UD80). Each
+    // increment arm of the set, driven to the `u16` ceiling on a tiny set:
+    // one step below it lands exactly on 65,535, one step past it saturates
+    // there, and a pinned count is not decremented by `release`. The
+    // terminal-level UD80 tests reach every arm but `add_with_id`'s dead-id
+    // arm (a dead id whose value is live under another id), which the R13-W
+    // review found could be reverted alone without a test going red.
+    //
+    // NEGATIVE CONTROL: that arm's `bump_ref` made an unchecked
+    // `ref_count.add(ONE)` (the reference's `+= 1`) fails this test with
+    // "attempt to add with overflow".
+    #[test]
+    fn every_increment_arm_saturates_and_pins_at_the_ceiling() {
+        let layout: Layout<u16> = Layout::init::<u32, u16>(32);
+        let alloc_layout =
+            core::alloc::Layout::from_size_align(layout.total_size, TestSet::base_align()).unwrap();
+        // SAFETY: `total_size` for a cap-32 layout is non-zero.
+        let buf = unsafe { std::alloc::alloc(alloc_layout) };
+        assert!(!buf.is_null());
+        let base = OffsetBuf::init(buf);
+
+        // SAFETY: `buf` is a live `base_align`-aligned allocation of
+        // `layout.total_size` bytes, used as the base for every call below.
+        unsafe {
+            let mut set: TestSet = TestSet::init(base, layout, TestContext);
+            let near = |set: &TestSet, id: u16| {
+                let rc = set.ref_count(base, id);
+                set.use_multiple(base, id, u16::MAX - 1 - rc);
+                assert_eq!(set.ref_count(base, id), u16::MAX - 1);
+            };
+
+            // `add_with_id`'s dead-id arm: a dead id requested for a value
+            // live under another id takes a reference on that other id.
+            let live = set.add(base, 11).unwrap();
+            let dead = set.add(base, 22).unwrap();
+            let _keep = set.add(base, 33).unwrap();
+            set.release(base, dead);
+            near(&set, live);
+            assert_eq!(Some(live), set.add_with_id(base, 11, dead).unwrap());
+            assert_eq!(set.ref_count(base, live), u16::MAX, "exactly the ceiling");
+            assert_eq!(Some(live), set.add_with_id(base, 11, dead).unwrap());
+            assert_eq!(set.ref_count(base, live), u16::MAX, "saturated");
+
+            // `add`'s existing-item arm.
+            let a = set.add(base, 44).unwrap();
+            near(&set, a);
+            for _ in 0..2 {
+                assert_eq!(a, set.add(base, 44).unwrap());
+            }
+            assert_eq!(set.ref_count(base, a), u16::MAX);
+
+            // `add_with_id`'s equal-id arm.
+            let b = set.add(base, 55).unwrap();
+            near(&set, b);
+            for _ in 0..2 {
+                assert_eq!(None, set.add_with_id(base, 55, b).unwrap());
+            }
+            assert_eq!(set.ref_count(base, b), u16::MAX);
+
+            // `use_id`.
+            let c = set.add(base, 66).unwrap();
+            near(&set, c);
+            set.use_id(base, c);
+            set.use_id(base, c);
+            assert_eq!(set.ref_count(base, c), u16::MAX);
+
+            // `use_multiple`, past the ceiling in one call.
+            let d = set.add(base, 77).unwrap();
+            set.use_multiple(base, d, u16::MAX);
+            assert_eq!(set.ref_count(base, d), u16::MAX);
+
+            // A pinned count is never decremented again.
+            set.release(base, d);
+            set.release_multiple(base, d, 100);
+            assert_eq!(set.ref_count(base, d), u16::MAX, "pinned");
+
             std::alloc::dealloc(buf, alloc_layout);
         }
     }

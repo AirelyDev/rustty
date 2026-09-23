@@ -561,6 +561,9 @@ impl PageList {
         );
 
         let mut current = node;
+        // PORT NOTE: reference defect (R13), UD80: at most one same-capacity
+        // re-clone to drop orphaned pinned styles; see `styles_hold_pinned`.
+        let mut reclaimed_pinned_styles = false;
         loop {
             let cur_page: *mut Page = unsafe { Node::page(current) };
             let cur_rows = unsafe { (*cur_page).rows.ptr((*cur_page).memory_ptr()) };
@@ -572,9 +575,25 @@ impl PageList {
 
             // Adjust our page capacity to make room for what we
             // didn't have space for.
-            current = match self.increase_capacity(current, IncreaseCapacity::for_clone_error(err))
-            {
+            let adjustment = IncreaseCapacity::for_clone_error(err);
+            current = match self.increase_capacity(current, adjustment) {
                 Ok(n) => n,
+                // PORT NOTE: reference defect (R13), UD80. The style set is
+                // full at its capacity ceiling, where the reference crashes
+                // below. If it holds a pinned style, re-clone once at the same
+                // capacity first: the recount drops pinned styles no cell
+                // uses. A second failure reaches the reference's crash.
+                Err(IncreaseCapacityError::OutOfSpace)
+                    if adjustment == Some(IncreaseCapacity::Styles)
+                        && !reclaimed_pinned_styles
+                        && styles_hold_pinned(cur_page) =>
+                {
+                    reclaimed_pinned_styles = true;
+                    match self.increase_capacity(current, None) {
+                        Ok(n) => n,
+                        Err(_) => panic!("increaseCapacity system allocator OOM"),
+                    }
+                }
                 // We can't gracefully recover from either of these
                 // here: our callers have already rotated rows, so
                 // returning an error would leave the page list
@@ -964,6 +983,35 @@ impl IncreaseCapacity {
             }
         }
     }
+}
+
+/// Whether the page's style set holds a PINNED style: one whose reference
+/// count saturated at `maxInt(RefCountInt)` and is never decremented again.
+///
+/// PORT NOTE (R13, UPSTREAM-DEFECTS.md UD80): the reference has no such
+/// query; it exists only for the port's reclaim-before-split step. A pinned
+/// style can outlive every cell that used it (an "orphan"), so a style set can
+/// be full of styles nothing uses. A re-clone of the page at the SAME capacity
+/// (`increaseCapacity(null)`) recounts every style from the cells and drops the
+/// orphans, which is what capacity growth already does below the `u16`
+/// ceiling. Once the style capacity is at that ceiling growth returns
+/// `OutOfSpace`, and the callers that would otherwise split the page
+/// (`Screen.manualStyleUpdate`) or crash (the row-copy retry loops) re-clone
+/// once first, but only when this returns `true`: without a pinned style every
+/// count is exact, a re-clone can reclaim nothing, and the reference's own
+/// path runs unchanged. The scan is linear in the set's ids and runs only on
+/// that `OutOfSpace` path.
+pub(crate) fn styles_hold_pinned(page: *const Page) -> bool {
+    unsafe {
+        let base = (*page).memory_ptr();
+        let mut it = (*page).styles.iterator(base);
+        while let Some(entry) = it.next() {
+            if (*page).styles.ref_count_saturated(base, entry.id) {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// `PageList.IncreaseCapacityError`
