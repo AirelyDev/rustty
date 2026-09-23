@@ -764,7 +764,9 @@ impl PageCompression {
             // encoded_total += encoded_len;
             encoded_total += encoded_len;
             // std.debug.print("page-compression page={d} raw={d} encoded={d} ratio={d:.2}%\n", ...);
-            println!(
+            //
+            // `std.debug.print` writes to STDERR; S61-F9 (this was `println!`).
+            eprintln!(
                 "page-compression page={page_index} raw={len} encoded={encoded_len} ratio={:.2}%",
                 percentage(encoded_len, len)
             );
@@ -773,7 +775,7 @@ impl PageCompression {
 
         // std.debug.print("page-compression total pages={d} raw={d} encoded={d}
         //     ratio={d:.2}% workspace={d} output_bound={d}\n", ...);
-        println!(
+        eprintln!(
             "page-compression total pages={page_index} raw={raw_total} encoded={encoded_total} \
              ratio={:.2}% workspace={} output_bound={}",
             percentage(encoded_total, raw_total),

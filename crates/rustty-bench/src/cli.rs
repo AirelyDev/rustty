@@ -78,6 +78,48 @@ impl Action {
         }
     }
 
+    /// `@tagName(action)` — the inverse of [`Self::from_name`]: the kebab CLI
+    /// token that IS the reference enum's tag name. Used where the reference
+    /// formats `@tagName(action)` (`CApi.zig:27`, S61-F8).
+    pub fn tag_name(self) -> &'static str {
+        match self {
+            Action::CodepointWidth => "codepoint-width",
+            Action::GraphemeBreak => "grapheme-break",
+            Action::ScreenClone => "screen-clone",
+            Action::TerminalFormatter => "terminal-formatter",
+            Action::TerminalParser => "terminal-parser",
+            Action::TerminalResize => "terminal-resize",
+            Action::TerminalSnapshot => "terminal-snapshot",
+            Action::TerminalStream => "terminal-stream",
+            Action::IsSymbol => "is-symbol",
+            Action::OscParser => "osc-parser",
+            Action::PageCompression => "page-compression",
+            Action::ScrollbackCompression => "scrollback-compression",
+            Action::HyperlinkMap => "hyperlink-map",
+            Action::ApcParser => "apc-parser",
+        }
+    }
+
+    /// Every action, in declaration order (test support for the
+    /// [`Self::tag_name`] / [`Self::from_name`] round trip).
+    #[cfg(test)]
+    pub(crate) const ALL: [Action; 14] = [
+        Action::CodepointWidth,
+        Action::GraphemeBreak,
+        Action::ScreenClone,
+        Action::TerminalFormatter,
+        Action::TerminalParser,
+        Action::TerminalResize,
+        Action::TerminalSnapshot,
+        Action::TerminalStream,
+        Action::IsSymbol,
+        Action::OscParser,
+        Action::PageCompression,
+        Action::ScrollbackCompression,
+        Action::HyperlinkMap,
+        Action::ApcParser,
+    ];
+
     // /// Returns the struct associated with the action. The struct
     // /// should have a few decls:
     // ///

@@ -330,11 +330,11 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** Hotkey description is never truncated to "" for actions longer than 255 bytes
   - **Oracle:** `src/apprt/gtk/winproto/wayland/Hotkeys.zig:42-43` → **Rustty:** `crates/rustty-apprt/src/gtk/winproto/wayland/hotkeys.rs:136-141`
   - **Audit's suggested fix:** Substitute an empty description when the formatted action exceeds 255 bytes.
-- [ ] **S61-F8** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S61-F8** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** Failure log prints the Rust Debug variant name instead of the action tag name
   - **Oracle:** `src/benchmark/CApi.zig:25-31` → **Rustty:** `crates/rustty-bench/src/capi.rs:62-66`
   - **Audit's suggested fix:** Print the kebab-case action name (the inverse of `Action::from_name`).
-- [ ] **S61-F9** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S61-F9** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** report mode prints to stdout instead of stderr
   - **Oracle:** `src/benchmark/PageCompression.zig:436-453` → **Rustty:** `crates/rustty-bench/src/page_compression.rs:749-764`
   - **Audit's suggested fix:** Use `eprintln!` for both report lines.
