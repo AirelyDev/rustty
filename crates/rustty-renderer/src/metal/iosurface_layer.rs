@@ -57,13 +57,20 @@ pub type DisplayCallback = Option<unsafe extern "C" fn(*mut c_void)>;
 // `setInstanceVariable` of an objc id built from `@intFromPtr(display_cb)`.
 // `AtomicPtr` gives interior mutability so `set_display_callback` can take `&self`
 // AND makes the cross-thread pairing formally defined: the reference's plain ObjC
-// ivars are unsynchronized (both `setDisplayCallback` and the CA `display` fire on
-// the main thread in practice), but nothing pins that at the type level, and a
-// non-atomic `Cell` written on one thread while `display` reads on another is a
-// data race — UB (VALIDATION_REPORT §3c.10; race reproduced + fix proven on the
-// isolated Miri harness, .port/phase-2/mirihar-chunk3b `ivars_naive` UB /
-// `ivars_shipped` CLEAN). SeqCst store/load is the free fix — no observable
-// behavior change on the (main-thread-only) reference schedule.
+// ivars are unsynchronized, and a non-atomic `Cell` written on one thread while
+// `display` reads on another is a data race — UB (VALIDATION_REPORT §3c.10; race
+// reproduced + fix proven on the isolated Miri harness,
+// .port/phase-2/mirihar-chunk3b `ivars_naive` UB / `ivars_shipped` CLEAN).
+//
+// PORT NOTE: reference defect (R13), UD70. This note used to say that
+// `setDisplayCallback` and the CA `display` both fire on the main thread. They do
+// not: `setDisplayCallback` is reached from `loopEnter`, which the RENDER thread
+// calls (`renderer/Thread.zig:227-228` → `generic.zig:902-906` →
+// `Metal.zig:164-170`), while CoreAnimation calls `display` on the main thread
+// (for example on a bounds change, `needsDisplayOnBoundsChange`). Atomics remove
+// the data race but not the torn PAIR: the reference stores `display_cb` and then
+// `display_ctx`, so a `display` between the two stores calls the callback with a
+// null renderer. `set_display_callback` and `display` below close that window.
 pub struct Ivars {
     display_cb: AtomicPtr<c_void>,
     display_ctx: AtomicPtr<c_void>,
@@ -96,8 +103,18 @@ define_class!(
             };
             let cb: DisplayCallback = unsafe { core::mem::transmute(bits) };
             // if (display_cb) |cb| cb(@ptrCast(self.getInstanceVariable("display_ctx").value));
+            //
+            // PORT NOTE: reference defect (R13), UD70. The reference calls the
+            // callback with whatever `display_ctx` holds, which is null if
+            // `display` runs between `setDisplayCallback`'s two stores (render
+            // thread vs main thread); `displayCallback` then dereferences a null
+            // renderer. A null context is skipped here, the same as the
+            // reference's own no-callback arm (no draw on this pass).
             if let Some(cb) = cb {
-                unsafe { cb(self.ivars().display_ctx.load(Ordering::SeqCst)) };
+                let ctx = self.ivars().display_ctx.load(Ordering::SeqCst);
+                if !ctx.is_null() {
+                    unsafe { cb(ctx) };
+                }
             }
         }
 
@@ -264,14 +281,28 @@ impl IOSurfaceLayer {
         // PORT NOTE: `self.layer.setInstanceVariable("display_cb"/"display_ctx", ...)`
         // (lines 128-135). The fn pointer is stored as raw bits (null == None);
         // atomic stores per the Ivars PORT NOTE (§3c.10).
-        self.layer.ivars().display_cb.store(
-            display_cb.map_or(core::ptr::null_mut(), |f| f as *const c_void as *mut c_void),
-            Ordering::SeqCst,
-        );
-        self.layer
-            .ivars()
-            .display_ctx
-            .store(display_ctx, Ordering::SeqCst);
+        //
+        // PORT NOTE: reference defect (R13), UD70. The reference always stores
+        // `display_cb` first, so while INSTALLING a callback (render thread,
+        // `loopEnter`) a main-thread `display` between the stores sees the new
+        // callback with a still-null context. The port orders the stores so a
+        // reader only ever sees "no callback" or "a callback with its context":
+        // installing stores the context first; clearing (`release`/`Drop`) clears
+        // the callback first, which is the reference's own clearing order.
+        let ivars = self.layer.ivars();
+        let cb_bits =
+            display_cb.map_or(core::ptr::null_mut(), |f| f as *const c_void as *mut c_void);
+        if cb_bits.is_null() {
+            ivars.display_cb.store(cb_bits, Ordering::SeqCst);
+            #[cfg(all(test, target_os = "macos"))]
+            tests::between_display_stores(self);
+            ivars.display_ctx.store(display_ctx, Ordering::SeqCst);
+        } else {
+            ivars.display_ctx.store(display_ctx, Ordering::SeqCst);
+            #[cfg(all(test, target_os = "macos"))]
+            tests::between_display_stores(self);
+            ivars.display_cb.store(cb_bits, Ordering::SeqCst);
+        }
     }
 }
 
@@ -388,6 +419,133 @@ mod tests {
             !FIRED_AFTER_DROP.load(Ordering::SeqCst),
             "display after Drop must not invoke the cleared callback"
         );
+    }
+
+    // ---- UD70 (R13) ----------------------------------------------------------
+    //
+    // The race is between the render thread's `set_display_callback` and a
+    // main-thread CoreAnimation `display`; a real CA schedule cannot be driven
+    // deterministically, so `set_display_callback` calls
+    // `between_display_stores` between its two ivar stores. It exists only in
+    // this crate's own test build (`#[cfg(all(test, target_os = "macos"))]` at
+    // the call site and here), and does nothing unless a test on the SAME
+    // thread installed a hook. The hook plays the main thread: it inspects the
+    // ivars and sends `-display` at exactly the moment the race would.
+
+    type Hook = Box<dyn FnMut(&IOSurfaceLayer)>;
+
+    thread_local! {
+        static BETWEEN_STORES: std::cell::RefCell<Option<Hook>> =
+            const { std::cell::RefCell::new(None) };
+        static SEEN_CTX: std::cell::RefCell<Vec<usize>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    pub(super) fn between_display_stores(layer: &IOSurfaceLayer) {
+        let hook = BETWEEN_STORES.with(|h| h.borrow_mut().take());
+        if let Some(mut hook) = hook {
+            hook(layer);
+            BETWEEN_STORES.with(|h| *h.borrow_mut() = Some(hook));
+        }
+    }
+
+    fn set_hook(hook: Option<Hook>) {
+        BETWEEN_STORES.with(|h| *h.borrow_mut() = hook);
+    }
+
+    unsafe extern "C" fn record_ctx(ctx: *mut c_void) {
+        SEEN_CTX.with(|v| v.borrow_mut().push(ctx as usize));
+    }
+
+    fn seen() -> Vec<usize> {
+        SEEN_CTX.with(|v| std::mem::take(&mut *v.borrow_mut()))
+    }
+
+    /// What the hook observed at the gap: `(cb is null, ctx as usize)`, and the
+    /// contexts `-display` passed to the callback right then.
+    type Gap = std::rc::Rc<std::cell::RefCell<Vec<(bool, usize, Vec<usize>)>>>;
+
+    fn gap_probe() -> (Gap, Hook) {
+        let gap: Gap = Default::default();
+        let g = gap.clone();
+        let hook: Hook = Box::new(move |layer: &IOSurfaceLayer| {
+            let iv = layer.layer.ivars();
+            let cb_null = iv.display_cb.load(Ordering::SeqCst).is_null();
+            let ctx = iv.display_ctx.load(Ordering::SeqCst) as usize;
+            let _: () = unsafe { msg_send![&*layer.layer, display] };
+            g.borrow_mut().push((cb_null, ctx, seen()));
+        });
+        (gap, hook)
+    }
+
+    /// Installing a callback (the render thread's `loopEnter`): a `display`
+    /// between the two stores must not see the callback without its context.
+    /// The reference stores the callback first, so this `display` calls it with
+    /// a null renderer.
+    #[test]
+    fn a_display_while_the_callback_is_installed_never_gets_a_null_context() {
+        let _ = seen();
+        let layer = IOSurfaceLayer::init().expect("IOSurfaceLayer::init");
+        let (gap, hook) = gap_probe();
+        set_hook(Some(hook));
+        layer.set_display_callback(Some(record_ctx), 0xABCD_usize as *mut c_void);
+        set_hook(None);
+
+        let gap = gap.borrow().clone();
+        assert_eq!(1, gap.len(), "the hook ran once, between the two stores");
+        let (cb_null, ctx, called_with) = &gap[0];
+        assert!(
+            called_with.is_empty(),
+            "display between the stores must not call the callback; it got {called_with:?}"
+        );
+        assert!(
+            *cb_null,
+            "the callback is published last, after its context"
+        );
+        assert_eq!(0xABCD, *ctx, "the context is stored first");
+
+        // Once installed, `display` calls it with its context.
+        let _: () = unsafe { msg_send![&*layer.layer, display] };
+        assert_eq!(vec![0xABCD], seen());
+    }
+
+    /// Clearing (`release`/`Drop`) keeps the reference's own order: the
+    /// callback goes first, so a `display` in between calls nothing.
+    #[test]
+    fn a_display_while_the_callback_is_cleared_calls_nothing() {
+        let _ = seen();
+        let layer = IOSurfaceLayer::init().expect("IOSurfaceLayer::init");
+        layer.set_display_callback(Some(record_ctx), 0xABCD_usize as *mut c_void);
+        let (gap, hook) = gap_probe();
+        set_hook(Some(hook));
+        layer.set_display_callback(None, core::ptr::null_mut());
+        set_hook(None);
+
+        let gap = gap.borrow().clone();
+        assert_eq!(1, gap.len(), "the hook ran once, between the two stores");
+        assert_eq!((true, 0xABCD, vec![]), gap[0]);
+    }
+
+    /// `display` itself skips a callback whose context is null, whatever the
+    /// store order that produced the pair.
+    #[test]
+    fn display_skips_a_callback_whose_context_is_null() {
+        let _ = seen();
+        let layer = IOSurfaceLayer::init().expect("IOSurfaceLayer::init");
+        let iv = layer.layer.ivars();
+        let cb: DisplayCallback = Some(record_ctx);
+        iv.display_cb.store(
+            cb.map_or(core::ptr::null_mut(), |f| f as *const c_void as *mut c_void),
+            Ordering::SeqCst,
+        );
+        let _: () = unsafe { msg_send![&*layer.layer, display] };
+        assert!(seen().is_empty(), "no call with a null context");
+
+        // The same callback runs once its context is there.
+        iv.display_ctx
+            .store(0x1234_usize as *mut c_void, Ordering::SeqCst);
+        let _: () = unsafe { msg_send![&*layer.layer, display] };
+        assert_eq!(vec![0x1234], seen());
     }
 
     // The overridden `display` method invokes the stored display callback+ctx.

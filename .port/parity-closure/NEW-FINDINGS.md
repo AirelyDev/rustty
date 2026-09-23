@@ -2502,3 +2502,19 @@ path. The copy is now committed only on success, released on the error path, and
 released only after a successful reload. Reference defect: `UPSTREAM-DEFECTS.md` UD69.
 
 **state**: CLOSED by task R13-C.
+
+## N58 — the Metal display callback could still see a callback without its context
+
+- **id**: N58. Inventory M91.
+- **found by**: records F16; triaged FIX in `r13-verify-triage.md`; fixed by task R13-C.
+- **severity**: low. **kind**: missing-branch (reference defect, R13).
+- **oracle**: `src/renderer/metal/IOSurfaceLayer.zig:127-162`.
+- **rustty**: `crates/rustty-renderer/src/metal/iosurface_layer.rs` (`set_display_callback`, `display`).
+
+The port's atomics removed the formal data race but kept the reference's store order (callback, then
+context), so a main-thread `display` between the render thread's two stores still called the callback
+with a null renderer; its PORT NOTE wrongly said both sides ran on the main thread. The context is now
+stored first when installing, `display` skips a null context, and the note is corrected. Reference
+defect: `UPSTREAM-DEFECTS.md` UD70.
+
+**state**: CLOSED by task R13-C.
