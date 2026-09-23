@@ -1680,18 +1680,123 @@ fn realpath_of_handle(file: &std::fs::File) -> std::io::Result<Vec<u8>> {
     Ok(target.into_os_string().into_vec())
 }
 
-// PORT NOTE: remaining targets (windows, other unixes, wasm). Zig's
-// `File.realPath` covers windows via the NT object path; the rustty windows
-// tier has no handle-path binding yet, so the kitty file/temporary-file medium
-// fails closed (`InvalidData` via `validatedFilePath`) there.
-//
-// DEFERRAL: the windows arm (`GetFinalPathNameByHandleW`) is registered in
-// `.port/phase-2/DEFERRALS.md` — "kitty file-medium handle-path on Windows" —
-// with its blast radius, the reason it is host-unverifiable from here, and its
-// reopen trigger. It is a named, owned ledger row rather than an in-code marker
-// precisely because a marker states the gap without ever forcing anyone to act
-// on it (detector D3, `check_constants_parity.py`, rule (a)).
-#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "android")))]
+// Windows: Zig's `File.realPath` is `realPathWindows` (std/Io/Threaded.zig):
+// `GetFinalPathNameByHandle(h_file, .{ .volume_name = .Dos }, buf)`, then
+// `std.unicode.wtf16LeToWtf8`. Zig builds the DOS path from the NT object name
+// and the mount manager and does NOT prepend `\\?\`; a UNC path comes back as
+// `\\server\share\...`. The Win32 `GetFinalPathNameByHandleW` with
+// `VOLUME_NAME_DOS` gives the same path with the `\\?\` (or `\\?\UNC\`) prefix,
+// which `final_path_to_zig_dos` strips.
+// CORRECTION (parity S189-F4): this arm used to return `Unsupported`, so the
+// kitty file and temporary-file media failed closed on Windows.
+#[cfg(windows)]
+fn realpath_of_handle(file: &std::fs::File) -> std::io::Result<Vec<u8>> {
+    use std::os::windows::io::AsRawHandle;
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetFinalPathNameByHandleW(
+            hfile: *mut core::ffi::c_void,
+            lpszfilepath: *mut u16,
+            cchfilepath: u32,
+            dwflags: u32,
+        ) -> u32;
+    }
+    // FILE_NAME_NORMALIZED | VOLUME_NAME_DOS
+    const FLAGS: u32 = 0;
+
+    // `var wide_buf: [windows.PATH_MAX_WIDE]u16`; a longer path is
+    // `error.NameTooLong` there, and an error here.
+    const PATH_MAX_WIDE: usize = 32767;
+    let mut buf = vec![0u16; PATH_MAX_WIDE];
+    // SAFETY(ffi-boundary/graphics_image): `buf` holds `buf.len()` u16s and
+    // the call writes at most that many, NUL included; `file` keeps the
+    // handle open for the duration of the call.
+    let n = unsafe {
+        GetFinalPathNameByHandleW(
+            file.as_raw_handle(),
+            buf.as_mut_ptr(),
+            buf.len() as u32,
+            FLAGS,
+        )
+    } as usize;
+    if n == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // A return value not below the buffer length is the size needed.
+    if n >= buf.len() {
+        return Err(std::io::Error::from(std::io::ErrorKind::InvalidFilename));
+    }
+    Ok(wtf16le_to_wtf8(&final_path_to_zig_dos(&buf[..n])))
+}
+
+/// `GetFinalPathNameByHandleW(.., VOLUME_NAME_DOS)` output in the form Zig's
+/// `GetFinalPathNameByHandle(.., .{ .volume_name = .Dos })` returns it:
+/// `\\?\UNC\server\share\x` becomes `\\server\share\x` and `\\?\C:\x`
+/// becomes `C:\x`.
+#[cfg(any(windows, test))]
+fn final_path_to_zig_dos(wide: &[u16]) -> Vec<u16> {
+    let unc: Vec<u16> = "\\\\?\\UNC\\".encode_utf16().collect();
+    let dos: Vec<u16> = "\\\\?\\".encode_utf16().collect();
+    if wide.starts_with(&unc) {
+        let mut out: Vec<u16> = "\\\\".encode_utf16().collect();
+        out.extend_from_slice(&wide[unc.len()..]);
+        out
+    } else if wide.starts_with(&dos) {
+        wide[dos.len()..].to_vec()
+    } else {
+        wide.to_vec()
+    }
+}
+
+/// `std.unicode.wtf16LeToWtf8`: surrogate pairs combine, and an unpaired
+/// surrogate is encoded as its own three-byte sequence (WTF-8), so no path is
+/// lossy.
+#[cfg(any(windows, test))]
+fn wtf16le_to_wtf8(wide: &[u16]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(wide.len());
+    let mut i = 0;
+    while i < wide.len() {
+        let u = wide[i] as u32;
+        let cp = if (0xD800..0xDC00).contains(&u)
+            && i + 1 < wide.len()
+            && (0xDC00..0xE000).contains(&(wide[i + 1] as u32))
+        {
+            i += 1;
+            0x10000 + ((u - 0xD800) << 10) + (wide[i] as u32 - 0xDC00)
+        } else {
+            u
+        };
+        i += 1;
+        if cp < 0x80 {
+            out.push(cp as u8);
+        } else if cp < 0x800 {
+            out.push(0xC0 | (cp >> 6) as u8);
+            out.push(0x80 | (cp & 0x3F) as u8);
+        } else if cp < 0x10000 {
+            out.push(0xE0 | (cp >> 12) as u8);
+            out.push(0x80 | ((cp >> 6) & 0x3F) as u8);
+            out.push(0x80 | (cp & 0x3F) as u8);
+        } else {
+            out.push(0xF0 | (cp >> 18) as u8);
+            out.push(0x80 | ((cp >> 12) & 0x3F) as u8);
+            out.push(0x80 | ((cp >> 6) & 0x3F) as u8);
+            out.push(0x80 | (cp & 0x3F) as u8);
+        }
+    }
+    out
+}
+
+// PORT NOTE: remaining targets (other unixes, wasm). Zig's `File.realPath`
+// has arms for more unixes than the port's rustty tiers build for; on these
+// the kitty file/temporary-file medium fails closed (`InvalidData` via
+// `validatedFilePath`).
+#[cfg(not(any(
+    target_os = "macos",
+    target_os = "linux",
+    target_os = "android",
+    windows
+)))]
 fn realpath_of_handle(_file: &std::fs::File) -> std::io::Result<Vec<u8>> {
     Err(std::io::Error::from(std::io::ErrorKind::Unsupported))
 }
@@ -1751,6 +1856,62 @@ fn unlink(path: &[u8]) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Parity S189-F4 (no reference test): the host-independent half of the
+    // Windows `realpath_of_handle` arm. The `GetFinalPathNameByHandleW` call
+    // itself only runs on Windows.
+    #[test]
+    fn windows_final_path_takes_zig_dos_form() {
+        let w = |s: &str| s.encode_utf16().collect::<Vec<u16>>();
+        assert_eq!(
+            w("C:\\Users\\a\\img.png"),
+            final_path_to_zig_dos(&w("\\\\?\\C:\\Users\\a\\img.png"))
+        );
+        assert_eq!(
+            w("\\\\server\\share\\img.png"),
+            final_path_to_zig_dos(&w("\\\\?\\UNC\\server\\share\\img.png"))
+        );
+        assert_eq!(w("C:\\x"), final_path_to_zig_dos(&w("C:\\x")));
+    }
+
+    // Runs in CI's `windows` job (`cargo test -p rustty-vt`): the handle path
+    // of a real file is `std::fs::canonicalize`'s answer without the `\\?\`
+    // prefix.
+    #[cfg(windows)]
+    #[test]
+    fn windows_realpath_of_handle_is_the_canonical_path() {
+        use std::os::windows::ffi::OsStrExt;
+        let path = std::env::temp_dir().join("rustty-s189-f4-realpath.txt");
+        std::fs::write(&path, b"x").unwrap();
+        let file = std::fs::File::open(&path).unwrap();
+        let got = realpath_of_handle(&file).unwrap();
+        drop(file);
+        let canon: Vec<u16> = std::fs::canonicalize(&path)
+            .unwrap()
+            .as_os_str()
+            .encode_wide()
+            .collect();
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(wtf16le_to_wtf8(&final_path_to_zig_dos(&canon)), got);
+        assert!(!got.starts_with(b"\\\\?\\"));
+    }
+
+    #[test]
+    fn wtf16le_to_wtf8_matches_zig() {
+        let w = |s: &str| s.encode_utf16().collect::<Vec<u16>>();
+        assert_eq!(b"C:\\a".to_vec(), wtf16le_to_wtf8(&w("C:\\a")));
+        // Two-, three- and four-byte sequences (U+00E9, U+20AC, U+1F600).
+        assert_eq!(
+            "\u{e9}\u{20ac}\u{1f600}".as_bytes().to_vec(),
+            wtf16le_to_wtf8(&w("\u{e9}\u{20ac}\u{1f600}"))
+        );
+        // An unpaired surrogate is kept as WTF-8, not replaced.
+        assert_eq!(
+            vec![b'a', 0xED, 0xA0, 0x80, b'b'],
+            wtf16le_to_wtf8(&[0x61, 0xD800, 0x62])
+        );
+        assert_eq!(vec![0xED, 0xB0, 0x80], wtf16le_to_wtf8(&[0xDC00]));
+    }
 
     // PORT NOTE: the reference's tests construct `command.Command` literals with
     // a `.control = .{ .transmit = ... }` and `.data` slice, then exercise

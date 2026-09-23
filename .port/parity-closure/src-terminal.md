@@ -389,7 +389,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** `LoadingImage.debugDump` not ported (carried as a comment)
   - **Oracle:** `src/terminal/kitty/graphics_image.zig:563-586` → **Rustty:** `crates/rustty-vt/src/kitty/graphics_image.rs:854-880`
   - **Audit's suggested fix:** Optionally add a `#[cfg(debug_assertions)] pub fn debug_dump(&self) -> std::io::Result<()>` with the same filename format, or leave as-is and record it as an accepted cosmetic gap.
-- [ ] **S189-F4** · CONFIRMED · `INDIV` · stub-or-unimplemented
+- [x] **S189-F4** · CONFIRMED · `INDIV` · stub-or-unimplemented
   - **What:** Windows has no handle-based realpath, so the kitty file/temporary-file media fail closed there
   - **Oracle:** `src/terminal/kitty/graphics_image.zig:451-465` → **Rustty:** `crates/rustty-vt/src/kitty/graphics_image.rs:1407-1420`
   - **Audit's suggested fix:** Add a Windows arm using `GetFinalPathNameByHandleW` (stripping the `\\?\` prefix) so `validatedFilePath` can apply the blocklist to the opened handle, then close the deferral row.

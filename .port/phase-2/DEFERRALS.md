@@ -8283,7 +8283,18 @@ resolves).**
 
 ## kitty file-medium handle-path on Windows — `realpath_of_handle` has no `GetFinalPathNameByHandleW` arm [D3 marker conversion, 2026-08-29]
 
-**Status: OPEN, owned by the `platform-linux-windows` workstream.** Registered
+**Status: CLOSED (parity S189-F4, batch T-A, 2026-09-23).** `realpath_of_handle`
+has a `#[cfg(windows)]` arm: `GetFinalPathNameByHandleW(VOLUME_NAME_DOS)`, the
+`\\?\` / `\\?\UNC\` prefix stripped to the form Zig's `GetFinalPathNameByHandle(.Dos)`
+returns, then a WTF-16 to WTF-8 conversion ported from `std.unicode.wtf16LeToWtf8`.
+The prefix and conversion logic is host-independent and tested on every host
+(`windows_final_path_takes_zig_dos_form`, `wtf16le_to_wtf8_matches_zig`);
+`windows_realpath_of_handle_is_the_canonical_path` runs the call itself in CI's
+`windows` job. From macOS the arm and that test were type-checked for
+`x86_64-pc-windows-msvc` and `-gnu` (the rust-std for both is now installed), not
+run. The history below is kept.
+
+**Former status: OPEN, owned by the `platform-linux-windows` workstream.** Registered
 here after detector **D3** (`check_constants_parity.py`, rule (a): zero surviving
 port-incompleteness markers in a claimed-done crate) reported the
 `TODO(port): windows GetFinalPathNameByHandleW once a windows tier lands.` that
