@@ -22,8 +22,7 @@
 #![allow(clippy::enum_variant_names)]
 
 use rustty_args::args::{
-    parse_auto_struct, parse_bool, parse_field_int, AutoStruct, Error, PackedStruct, ParseError,
-    WHITESPACE,
+    parse_auto_struct, parse_bool, AutoStruct, Error, PackedStruct, ParseError, WHITESPACE,
 };
 use rustty_cfg_fmt::{
     format_entry_display, format_entry_packed_struct, format_entry_string, format_entry_void,
@@ -78,8 +77,17 @@ macro_rules! impl_limit_int {
             fn from_default(v: u128) -> $t {
                 v as $t
             }
+            // PORT NOTE (LEDGER S78-F2): `std.fmt.parseInt(T, input, 0)`. This
+            // was `parse_field_int` (rustty-args' `from_str_radix` path), which
+            // rejects the `_` separators and `-0` that `parseInt` accepts, so
+            // `scrollback-limit-bytes = 50_000_000` was a config error.
+            // `parse_unsigned_base0` is this crate's port of the base-0
+            // unsigned `parseInt`; every `Limit` `T` is unsigned.
             fn parse_limit(input: &[u8]) -> Result<$t, ParseError> {
-                parse_field_int::<$t>(Some(input))
+                parse_unsigned_base0(input)
+                    .ok()
+                    .and_then(|v| <$t>::try_from(v).ok())
+                    .ok_or(Error::InvalidValue)
             }
         }
     )*};
@@ -8023,6 +8031,62 @@ mod tests {
         assert_eq!(
             Err(Error::InvalidValue),
             TestLimit::parse_cli(Some(b"invalid"))
+        );
+    }
+
+    // No reference test. LEDGER S78-F2: `parseCLI` is
+    // `std.fmt.parseInt(T, input, 0)`, which skips interior `_` separators,
+    // takes `0x`/`0o`/`0b` (either case), a leading `+`, and `-0` for an
+    // unsigned `T`. Expected values MEASURED on zig 0.16.0
+    // (`std.fmt.parseInt(usize, s, 0)` / `(u8, s, 0)`).
+    #[test]
+    fn limit_parse_cli_accepts_the_zig_parse_int_grammar() {
+        type TestLimit = Limit<usize, 42>;
+        let ok: &[(&[u8], usize)] = &[
+            (b"50_000_000", 50_000_000),
+            (b"0x1_0", 16),
+            (b"0X10", 16),
+            (b"0b1_0", 2),
+            (b"0o7_7", 63),
+            (b"1__0", 10),
+            (b"+5", 5),
+            (b"-0", 0),
+            (b"18446744073709551615", usize::MAX),
+        ];
+        for &(input, want) in ok {
+            assert_eq!(
+                Ok(want),
+                TestLimit::parse_cli(Some(input)).map(|l| l.value),
+                "{:?}",
+                String::from_utf8_lossy(input)
+            );
+        }
+        let bad: &[&[u8]] = &[
+            b"_1",
+            b"1_",
+            b"0x",
+            b"0x_10",
+            b"-1",
+            b"18446744073709551616",
+            b"1 ",
+            b"",
+        ];
+        for &input in bad {
+            assert_eq!(
+                Err(Error::InvalidValue),
+                TestLimit::parse_cli(Some(input)).map(|l| l.value),
+                "{:?}",
+                String::from_utf8_lossy(input)
+            );
+        }
+        // A narrow `T` overflows exactly where Zig's does.
+        assert_eq!(
+            Ok(255),
+            Limit::<u8, 1>::parse_cli(Some(b"0xf_f")).map(|l| l.value)
+        );
+        assert_eq!(
+            Err(Error::InvalidValue),
+            Limit::<u8, 1>::parse_cli(Some(b"256")).map(|l| l.value)
         );
     }
 

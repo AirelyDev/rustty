@@ -13055,4 +13055,36 @@ mod integration_tests {
             );
         }
     }
+
+    // =======================================================================
+    // Parity tail T-E: rows whose fix changes an observable parse result are
+    // tested here through the real parser (`load_iter`), not only at the value
+    // type.
+    // =======================================================================
+
+    // No reference test. LEDGER S78-F2: `Limit.parseCLI` is
+    // `std.fmt.parseInt(T, input, 0)`, so `_` separators and a radix prefix are
+    // valid in the config (values MEASURED on zig 0.16.0).
+    #[test]
+    fn limit_keys_accept_zig_int_separators_through_the_parser() {
+        let mut cfg = Config::default_config();
+        let mut it = TestIterator::new(&[
+            b"--scrollback-limit-bytes=50_000_000",
+            b"--clipboard-write-limit-bytes=0x4_000_000",
+        ]);
+        cfg.load_iter(&mut it).unwrap();
+        assert!(
+            cfg._diagnostics.empty(),
+            "no diagnostic expected, got {:?}",
+            cfg._diagnostics.items()
+        );
+        assert_eq!(50_000_000, cfg.scrollback_limit_bytes.value);
+        assert_eq!(0x400_0000, cfg.clipboard_write_limit_bytes.value);
+
+        // Still rejected, as the reference rejects it: a trailing separator.
+        let mut cfg = Config::default_config();
+        let mut it = TestIterator::new(&[b"--scrollback-limit-bytes=1_"]);
+        cfg.load_iter(&mut it).unwrap();
+        assert!(!cfg._diagnostics.empty());
+    }
 }
