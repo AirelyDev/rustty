@@ -16,7 +16,11 @@
 // CORRECTION (LEDGER S79-F3, S79-F4): this used to say "`std.json` maps to
 // `serde_json` with the `preserve_order` feature". serde_json differs from
 // `std.json` on duplicate keys, out-of-`i64` integers, overflowing floats,
-// float printing and nesting depth; see `crate::json`'s header. The
+// float printing and nesting depth; see `crate::json`'s header.
+// CORRECTION (UD182): the nesting-depth difference is not "`std.json` has no
+// limit". `std.json` parses any depth but its `Stringify` panics past its
+// documented 256 levels; the port parses any depth and `serialize` returns an
+// `InvalidInput` error past 256 (reference defect, R13). The
 // `std.Io.Reader` surface (`streamDelimiterLimit`/`discardDelimiterInclusive`/
 // `streamExact`/`takeByte`) is reproduced over `std::io::BufRead` by the
 // private helpers at the bottom of this file, with the reference's exact
@@ -161,14 +165,16 @@ impl Envelope {
         //     buf.written(),
         //     .{ .allocate = .alloc_if_needed },
         // );
-        let value = crate::json::parse_from_slice(&buf)?;
+        let mut value = crate::json::parse_from_slice(&buf)?;
 
         // return switch (value) {
         //     .object => |map| map,
         //     else => error.EnvelopeMalformedHeaders,
         // };
-        match value {
-            crate::json::Value::Object(map) => Ok(map),
+        // (PORT NOTE: `json::Value` has an iterative `Drop` (UD182), so the
+        // map is taken out of it rather than moved.)
+        match &mut value {
+            crate::json::Value::Object(map) => Ok(std::mem::take(map)),
             _ => Err(Error::EnvelopeMalformedHeaders),
         }
     }
@@ -229,14 +235,14 @@ impl Envelope {
                 return Ok(None);
             }
 
-            let value = crate::json::parse_from_slice(line)?;
+            let mut value = crate::json::parse_from_slice(line)?;
 
             // break :headers switch (value) {
             //     .object => |map| map,
             //     else => return error.EnvelopeItemMalformedHeaders,
             // };
-            match value {
-                crate::json::Value::Object(map) => map,
+            match &mut value {
+                crate::json::Value::Object(map) => std::mem::take(map),
                 _ => return Err(Error::EnvelopeItemMalformedHeaders),
             }
         };
@@ -1106,5 +1112,41 @@ mod tests {
             ),
             String::from_utf8(output).unwrap(),
         );
+    }
+
+    // No reference test. Reference defect (R13), UD182: `std.json.fmt` panics
+    // on a header nested deeper than 256 levels (MEASURED on zig 0.16.0
+    // ReleaseSafe, exit 134), while `parseFromSliceLeaky` accepts it. The port
+    // parses it too, and `serialize` returns an `InvalidInput` error instead
+    // of panicking. Negative control: drop the depth check in
+    // `json::stringify_object` and this fails on `unwrap_err`.
+    #[test]
+    fn serialize_rejects_a_header_deeper_than_256_levels() {
+        let header = |depth: usize| {
+            // The header object is itself one level.
+            let inner = depth - 1;
+            format!("{{\"x\":{}0{}}}\n", "[".repeat(inner), "]".repeat(inner))
+        };
+
+        // 256 levels: parses and round-trips.
+        let input = header(256);
+        let mut reader: &[u8] = input.as_bytes();
+        let mut v = Envelope::parse(&mut reader).unwrap();
+        let mut output: Vec<u8> = Vec::new();
+        v.serialize(&mut output).unwrap();
+        assert_eq!(input, String::from_utf8(output).unwrap());
+
+        // 257 levels: parses (as the reference does), serialize errors.
+        let input = header(257);
+        let mut reader: &[u8] = input.as_bytes();
+        let mut v = Envelope::parse(&mut reader).unwrap();
+        assert!(v.headers.contains_key("x"));
+        let mut output: Vec<u8> = Vec::new();
+        let err = v.serialize(&mut output).unwrap_err();
+        assert!(
+            matches!(&err, Error::Io(e) if e.kind() == std::io::ErrorKind::InvalidInput),
+            "{err:?}"
+        );
+        assert!(output.is_empty(), "nothing is written before the error");
     }
 }

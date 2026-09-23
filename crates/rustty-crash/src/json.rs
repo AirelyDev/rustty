@@ -12,10 +12,35 @@
 //! wins), an integer outside `i64` (`std.json`: `.number_string`, kept verbatim;
 //! serde: `u64` or a rounded `f64`), a float that overflows `f64` (`std.json`:
 //! `.number_string`; serde: a parse error), float printing (`std.json`: `2.0` ->
-//! `2`, `1e100` -> all 101 digits; serde: `2.0`, `1e100`), and nesting deeper
-//! than serde's 128-level limit (`std.json` has none). This module is a direct
-//! port of those semantics instead. Every behaviour here is pinned against a
-//! golden file MEASURED from zig 0.16.0 (`testdata/std_json_golden.tsv`).
+//! `2`, `1e100` -> all 101 digits; serde: `2.0`, `1e100`), and nesting depth
+//! (serde: a parse error past 128 levels; `std.json`: see below). This module
+//! is a direct port of those semantics instead. Every behaviour here is pinned
+//! against a golden file MEASURED from zig 0.16.0 (`testdata/std_json_golden.tsv`).
+//!
+//! Nesting depth. CORRECTION: this header used to say `std.json` has no
+//! nesting limit. Its parser has none (`Scanner` keeps an allocator-backed
+//! `BitStack`; MEASURED on zig 0.16.0 ReleaseSafe: 100,000 levels parse), but
+//! `Stringify` is documented to a maximum output depth of 256
+//! (`std/json/Stringify.zig:74` `.checked_to_fixed_depth = 256`, `:572`).
+//!
+//! PORT NOTE: reference defect (R13), UD182. `std.json.fmt` of a value nested
+//! 257 or more levels deep does not return an error: in safe builds it panics
+//! (MEASURED, ReleaseSafe: `index out of bounds: index 32, len 32` at
+//! `BitStack.zig:50`, exit 134, for arrays and objects alike), and in
+//! ReleaseFast the check is compiled out and the fixed 32-byte stack is
+//! written out of bounds. Here [`stringify`] and [`stringify_object`] check
+//! the depth first and return an [`std::io::ErrorKind::InvalidInput`] error
+//! without writing anything, so the documented 256-level limit is enforced as
+//! an error. Parsing stays unlimited, as in the reference, so an envelope
+//! whose headers nest deeper than 256 still parses (the reference's
+//! `sendInternal` only parses, then writes the raw bytes). Reachability: the
+//! reference's `Envelope.serialize` is called only by its tests; the input
+//! is sentry-native's own envelope.
+//!
+//! The port's own depth bound: parsing is iterative and [`Value`]'s `Drop` is
+//! iterative, so neither overflows the stack at any depth; [`stringify`]
+//! recurses at most 256 levels. The derived `Clone`, `PartialEq` and `Debug`
+//! still recurse per level; nothing outside tests calls them on parsed input.
 
 use std::io::Write;
 
@@ -37,6 +62,60 @@ pub enum Value {
     String(String),
     Array(Vec<Value>),
     Object(ObjectMap),
+}
+
+/// Dropping a deeply nested value must not recurse once per level (a
+/// 20,000-level array overflowed the 2 MB test-thread stack with the derived
+/// drop glue). The children are moved onto a heap stack instead, so every
+/// `Value` is dropped with no nested container left in it.
+impl Drop for Value {
+    fn drop(&mut self) {
+        fn take_children(v: &mut Value, stack: &mut Vec<Value>) {
+            match v {
+                Value::Array(items) => stack.append(items),
+                Value::Object(map) => stack.extend(map.drain(..).map(|(_, v)| v)),
+                _ => {}
+            }
+        }
+        let mut stack = Vec::new();
+        take_children(self, &mut stack);
+        while let Some(mut v) = stack.pop() {
+            take_children(&mut v, &mut stack);
+        }
+    }
+}
+
+/// The maximum nesting depth `std.json.Stringify` supports
+/// (`Stringify.zig:74`, `:572`).
+pub const MAX_STRINGIFY_DEPTH: usize = 256;
+
+/// The nesting depth of `value` as `Stringify` counts it (`[[[]]]` is 3; a
+/// scalar is 0), computed without recursion.
+fn nesting_depth(value: &Value) -> usize {
+    let mut max = 0;
+    let mut stack: Vec<(&Value, usize)> = vec![(value, 0)];
+    while let Some((v, depth)) = stack.pop() {
+        match v {
+            Value::Array(items) => {
+                max = max.max(depth + 1);
+                stack.extend(items.iter().map(|c| (c, depth + 1)));
+            }
+            Value::Object(map) => {
+                max = max.max(depth + 1);
+                stack.extend(map.values().map(|c| (c, depth + 1)));
+            }
+            _ => {}
+        }
+    }
+    max
+}
+
+/// The error [`stringify`] returns where the reference panics (UD182).
+fn too_deep() -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::InvalidInput,
+        "JSON nesting depth exceeds std.json.Stringify's maximum of 256",
+    )
 }
 
 /// The `std.json` parse errors reachable from `parseFromSliceLeaky` on a
@@ -86,7 +165,7 @@ fn value_from_number_slice(s: &str) -> Value {
 }
 
 /// A container being built (`jsonParse`'s explicit stack; no recursion, so no
-/// depth limit, as in the reference).
+/// parse depth limit, as in the reference's parser).
 enum Frame {
     Array(Vec<Value>),
     /// The object so far and the key whose value is being parsed.
@@ -441,7 +520,20 @@ fn write_string<W: Write>(w: &mut W, s: &str) -> std::io::Result<()> {
 }
 
 /// `std.json.fmt(value, .{ .whitespace = .minified })`.
+///
+/// PORT NOTE: reference defect (R13), UD182: a value nested deeper than
+/// [`MAX_STRINGIFY_DEPTH`] is an `InvalidInput` error, with nothing written;
+/// the reference panics (see the module header).
 pub fn stringify<W: Write>(w: &mut W, value: &Value) -> std::io::Result<()> {
+    if nesting_depth(value) > MAX_STRINGIFY_DEPTH {
+        return Err(too_deep());
+    }
+    write_value(w, value)
+}
+
+/// The printer behind [`stringify`]. The caller has checked the depth, so this
+/// recurses at most [`MAX_STRINGIFY_DEPTH`] levels.
+fn write_value<W: Write>(w: &mut W, value: &Value) -> std::io::Result<()> {
     match value {
         Value::Null => w.write_all(b"null"),
         Value::Bool(b) => w.write_all(if *b { b"true" } else { b"false" }),
@@ -459,16 +551,25 @@ pub fn stringify<W: Write>(w: &mut W, value: &Value) -> std::io::Result<()> {
                 if i > 0 {
                     w.write_all(b",")?;
                 }
-                stringify(w, item)?;
+                write_value(w, item)?;
             }
             w.write_all(b"]")
         }
-        Value::Object(map) => stringify_object(w, map),
+        Value::Object(map) => write_object(w, map),
     }
 }
 
-/// `std.json.fmt(std.json.Value{ .object = map }, minified)`.
+/// `std.json.fmt(std.json.Value{ .object = map }, minified)`, with the same
+/// depth check as [`stringify`] (the object itself is one level; UD182).
 pub fn stringify_object<W: Write>(w: &mut W, map: &ObjectMap) -> std::io::Result<()> {
+    let children = map.values().map(nesting_depth).max().unwrap_or(0);
+    if 1 + children > MAX_STRINGIFY_DEPTH {
+        return Err(too_deep());
+    }
+    write_object(w, map)
+}
+
+fn write_object<W: Write>(w: &mut W, map: &ObjectMap) -> std::io::Result<()> {
     w.write_all(b"{")?;
     for (i, (k, v)) in map.iter().enumerate() {
         if i > 0 {
@@ -476,7 +577,7 @@ pub fn stringify_object<W: Write>(w: &mut W, map: &ObjectMap) -> std::io::Result
         }
         write_string(w, k)?;
         w.write_all(b":")?;
-        stringify(w, v)?;
+        write_value(w, v)?;
     }
     w.write_all(b"}")
 }
@@ -529,14 +630,78 @@ mod tests {
         assert_eq!(143, n, "the whole golden file was checked");
     }
 
+    fn nested(depth: usize, object: bool) -> String {
+        let (open, close) = if object { ("{\"a\":", "}") } else { ("[", "]") };
+        format!("{}0{}", open.repeat(depth), close.repeat(depth))
+    }
+
+    /// MEASURED on zig 0.16.0 ReleaseSafe (`parseFromSliceLeaky` +
+    /// `std.json.fmt(.., minified)`): 256 levels round-trip, for arrays and
+    /// objects.
     #[test]
-    fn deep_nesting_has_no_limit() {
-        // serde_json stops at 128 levels; `std.json` has no limit.
-        let depth = 1_000;
-        let input = format!("{}{}", "[".repeat(depth), "]".repeat(depth));
-        let v = parse_from_slice(input.as_bytes()).unwrap();
-        let mut out = Vec::new();
-        stringify(&mut out, &v).unwrap();
-        assert_eq!(input.as_bytes(), out.as_slice());
+    fn stringify_round_trips_the_documented_256_levels() {
+        for object in [false, true] {
+            let input = nested(MAX_STRINGIFY_DEPTH, object);
+            let v = parse_from_slice(input.as_bytes()).unwrap();
+            assert_eq!(MAX_STRINGIFY_DEPTH, nesting_depth(&v));
+            let mut out = Vec::new();
+            stringify(&mut out, &v).unwrap();
+            assert_eq!(input.as_bytes(), out.as_slice());
+            if let Value::Object(map) = &v {
+                let mut out = Vec::new();
+                stringify_object(&mut out, map).unwrap();
+                assert_eq!(input.as_bytes(), out.as_slice());
+            }
+        }
+    }
+
+    /// Reference defect (R13), UD182: at 257 levels zig 0.16.0's
+    /// `std.json.fmt` panics (MEASURED, ReleaseSafe, exit 134, arrays and
+    /// objects). The port returns an `InvalidInput` error and writes nothing.
+    /// Negative control: drop the depth check in `stringify` (then in
+    /// `stringify_object`) and this fails on `unwrap_err`.
+    #[test]
+    fn stringify_rejects_depth_257_with_an_error() {
+        let mut objects_checked = 0;
+        for object in [false, true] {
+            let input = nested(MAX_STRINGIFY_DEPTH + 1, object);
+            // The parser has no limit (MEASURED: zig parses it too).
+            let v = parse_from_slice(input.as_bytes()).unwrap();
+            let mut out = Vec::new();
+            let err = stringify(&mut out, &v).unwrap_err();
+            assert_eq!(std::io::ErrorKind::InvalidInput, err.kind());
+            assert!(out.is_empty(), "nothing is written before the error");
+
+            // The object entry point counts the object itself as a level.
+            if let Value::Object(map) = &v {
+                let mut out = Vec::new();
+                let err = stringify_object(&mut out, map).unwrap_err();
+                assert_eq!(std::io::ErrorKind::InvalidInput, err.kind());
+                assert!(out.is_empty());
+                objects_checked += 1;
+            }
+        }
+        assert_eq!(1, objects_checked);
+    }
+
+    /// CORRECTION: this test was `deep_nesting_has_no_limit` and claimed
+    /// `std.json` has no nesting limit. Its parser has none (MEASURED on zig
+    /// 0.16.0: 100,000 levels parse), so the port parses any depth, and a
+    /// parsed value must drop without overflowing the stack. Negative
+    /// control: remove `impl Drop for Value` and this test aborts the test
+    /// binary with "has overflowed its stack".
+    #[test]
+    fn parse_and_drop_any_depth_without_stack_overflow() {
+        for object in [false, true] {
+            let depth = 200_000;
+            let input = nested(depth, object);
+            let v = parse_from_slice(input.as_bytes()).unwrap();
+            assert_eq!(depth, nesting_depth(&v));
+            // Stringify refuses it rather than recursing 200,000 levels.
+            let mut out = Vec::new();
+            let err = stringify(&mut out, &v).unwrap_err();
+            assert_eq!(std::io::ErrorKind::InvalidInput, err.kind());
+            drop(v);
+        }
     }
 }
