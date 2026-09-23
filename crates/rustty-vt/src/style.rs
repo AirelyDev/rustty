@@ -162,17 +162,28 @@ impl Eq for Flags {}
 // alloc…[0x17c..0x17d], but memory is uninitialized").
 //
 // `Color` is therefore now a byte-complete `#[repr(C)]` value: a `u8` tag
-// followed by a 3-byte payload that is ALWAYS fully written. This *improves*
-// fidelity rather than weakening it — those 4 bytes are exactly what the
-// reference itself specifies for a color, because the reference's own
-// `PackedStyle` pairs `Color.Tag` with a 24-bit `Data` union whose per-tag
-// content is `none => 0`, `palette => idx` in the low byte with the high 16
-// bits `_padding: u16 = 0`, and `rgb => r | g<<8 | b<<16` (see
-// `PackedStyle::data_from_color`). A `Color` is now literally `{ Tag, Data }`,
-// and the unused payload bytes carry precisely the zero that `_padding = 0`
-// mandates. Type safety at the API is preserved: the payload is private and
-// every read goes through a tag-checked accessor (`palette()` / `rgb()`), which
-// is the analogue of the reference's checked union-field access.
+// followed by a 3-byte payload that is ALWAYS fully written. Its content
+// follows the reference's `PackedStyle` hash-key encoding, which pairs
+// `Color.Tag` with a 24-bit `Data` union whose per-tag content is `none => 0`,
+// `palette => idx` in the low byte with the high 16 bits `_padding: u16 = 0`,
+// and `rgb => r | g<<8 | b<<16` (see `PackedStyle::data_from_color`). A
+// `Color` is literally `{ Tag, Data }`, and the unused payload bytes carry
+// precisely the zero that `_padding = 0` mandates. Type safety at the API is
+// preserved: the payload is private and every read goes through a
+// tag-checked accessor (`palette()` / `rgb()`), which is the analogue of the
+// reference's checked union-field access.
+//
+// CORRECTION (NEW-FINDINGS N88): this note used to say the 4 bytes are
+// "exactly what the reference itself specifies for a color". They are not.
+// `PackedStyle.Data` is only the hash key; the color the reference STORES in a
+// `Style` is the tagged union above, 8 bytes at align 4 (its `color.RGB`
+// payload is a `packed struct(u24)`, 4/4). So the port's `Style` is 21/1
+// against the reference's 28/4, and its style-set item 28/2 against 36/4.
+// That size reached the page layout (the styles section, and through it the
+// rows of every page), which was observable. The style set is now laid out
+// with the reference's item geometry (`RefShadowColor`, next to `Set`, and
+// `ref_counted_set::RefItemGeometry`), so `Color` stays 4/1 in memory, which
+// the compact `Style` compare and hash paths rely on.
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct Color {
@@ -1069,6 +1080,62 @@ impl crate::ref_counted_set::RefCountedSetContext<Style> for SetContext {
 /// The available set of styles in use on a page.
 pub type Set = crate::ref_counted_set::RefCountedSet<Style, Id, size::CellCountInt, SetContext>;
 
+// PORT NOTE (layout parity, NEW-FINDINGS N88): the reference's `Set.Item` for
+// `Style` is 36 bytes at align 4; the port's is 28 at align 2, because its
+// `Style` is 21/1 against the reference's 28/4 (`Color` 4/1 against 8/4,
+// `color.RGB` 3/1 against 4/4, `Flags` 9/1 against 2/2). The item array's size
+// decides the page layout (see `RefItemGeometry`), so the set is laid out with
+// the reference's geometry. It is derived here from shadows of the reference's
+// declarations at `20abdb50a`, each field the size and alignment of the
+// reference's own type:
+//   - `Style.Color = union(Tag) { none: void, palette: u8, rgb: color.RGB }`,
+//     `Tag = enum(u8)` (`style.zig:47`); the payload is `color.RGB`,
+//     `packed struct(u24)` (`color.zig:540`), 4/4, so the tagged union is 8/4;
+//   - `Style.Flags = packed struct(u16)` (`style.zig:31`), 2/2;
+//   - `Style = struct { fg_color, bg_color, underline_color: Color, flags }`
+//     (`style.zig:21`), 26 rounded to 28/4;
+//   - `RefCountedSet.Item = struct { value: T, meta: Metadata }` with
+//     `Metadata = struct { bucket: Id, psl: Id, ref: RefCountInt }`
+//     (`ref_counted_set.zig:83`), `Id = size.StyleCountInt` (u16) and
+//     `RefCountInt = size.CellCountInt` (u16) (`style.zig:15`, `:681`),
+//     34 rounded to 36/4.
+// `ref_item_geometry_matches_the_reference_probe` pins the result to what a
+// Zig probe of the reference reports.
+#[repr(C)]
+#[allow(dead_code)] // never built: only its size and alignment are read
+struct RefShadowColor {
+    payload: u32,
+    tag: u8,
+}
+#[repr(C)]
+#[allow(dead_code)] // never built: only its size and alignment are read
+struct RefShadowStyle {
+    fg_color: RefShadowColor,
+    bg_color: RefShadowColor,
+    underline_color: RefShadowColor,
+    flags: u16,
+}
+#[repr(C)]
+#[allow(dead_code)] // never built: only its size and alignment are read
+struct RefShadowItem {
+    value: RefShadowStyle,
+    bucket: Id,
+    psl: Id,
+    ref_count: size::CellCountInt,
+}
+
+impl crate::ref_counted_set::RefItemGeometry for Style {
+    const REF_ITEM_SIZE: usize = core::mem::size_of::<RefShadowItem>();
+    const REF_ITEM_ALIGN: usize = core::mem::align_of::<RefShadowItem>();
+}
+
+// The port's own item fits the reference's slot (also checked, generically,
+// by `ItemStride`).
+const _: () = assert!(
+    core::mem::size_of::<crate::ref_counted_set::Item<Style, Id, size::CellCountInt>>()
+        <= <Style as crate::ref_counted_set::RefItemGeometry>::REF_ITEM_SIZE
+);
+
 // PORT NOTE: `std.hash.int` on a u64 dispatches to `uint64` (mx3). Ported
 // verbatim so the deferred `Set` hashing matches when RefCountedSet lands.
 // PERF(port): `#[inline]` — the reference calls it `@call(.always_inline, ...)`.
@@ -1722,6 +1789,187 @@ mod tests {
         fn drop(&mut self) {
             unsafe { std::alloc::dealloc(self.ptr, self.layout) };
         }
+    }
+
+    // Rustty-only (N88): the geometry the style and hyperlink sets are laid
+    // out with is the reference's. The numbers are what a Zig probe of the
+    // reference at `20abdb50a` printed (`@sizeOf`/`@alignOf` of `Style`,
+    // `style.Style.Color`, `color.RGB`, `style.Set.Item`, `hyperlink.Set.Item`,
+    // and `style.Set.Layout.init(n)` for small `n`), on macOS arm64 and (all
+    // but `Color` and `RGB`) on Linux aarch64, with the same results.
+    #[test]
+    fn ref_item_geometry_matches_the_reference_probe() {
+        use crate::ref_counted_set::{ItemStride, Layout, RefItemGeometry};
+        // `Style.Color` 8/4 (its `color.RGB` payload 4/4), `Style` 28/4.
+        assert_eq!(4, core::mem::size_of::<u32>()); // the shadow's `RGB`
+        assert_eq!(8, core::mem::size_of::<RefShadowColor>());
+        assert_eq!(4, core::mem::align_of::<RefShadowColor>());
+        assert_eq!(28, core::mem::size_of::<RefShadowStyle>());
+        assert_eq!(4, core::mem::align_of::<RefShadowStyle>());
+        assert_eq!(36, <Style as RefItemGeometry>::REF_ITEM_SIZE);
+        assert_eq!(4, <Style as RefItemGeometry>::REF_ITEM_ALIGN);
+        assert_eq!(36, ItemStride::<Style, Id, size::CellCountInt>::SIZE);
+        assert_eq!(4, ItemStride::<Style, Id, size::CellCountInt>::ALIGN);
+        type HlStride =
+            ItemStride<crate::hyperlink::PageEntry, crate::hyperlink::Id, size::CellCountInt>;
+        assert_eq!(48, HlStride::SIZE);
+        assert_eq!(8, HlStride::ALIGN);
+        assert_eq!(48, crate::page::hyperlink_set_item_size());
+
+        // `(n, items_start, total_size)` of `Set.Layout.init(n)`. At n = 1
+        // the reference aligns the (empty) item array to 4, the port's own
+        // item alignment would give 2.
+        for (n, items_start, total_size) in [
+            (0, 0, 0),
+            (1, 4, 4),
+            (2, 4, 40),
+            (16, 32, 500),
+            (128, 256, 4000),
+        ] {
+            let l = Layout::<Id>::init::<Style, size::CellCountInt>(n);
+            assert_eq!(items_start, l.items_start, "Layout.init({n}).items_start");
+            assert_eq!(total_size, l.total_size, "Layout.init({n}).total_size");
+        }
+    }
+
+    // Rustty-only (N88): the style set's items sit at the reference's stride
+    // (36 bytes), not at the port's `size_of::<Item>()` (28), and every
+    // access path reads and writes them there. The set is filled to
+    // capacity with distinct styles and distinct reference counts; each item
+    // is then read back through `get`, `get_at`, `lookup`, `ref_count`, the
+    // iterator, `item_at`, and the raw bytes at `items_start + id * 36`, after
+    // which the tail of every slot must still be zero (an item written at
+    // the wrong stride lands in some slot's tail). It then releases a third
+    // of the items, adds new styles into the freed ids (`insert`'s reap and
+    // placement, `delete_item`), and checks everything again.
+    //
+    // NEGATIVE CONTROL: address any one path with `items.add(id)` (the port's
+    // own stride) instead of `item_at` — e.g. `get`, `get_at`, the iterator,
+    // `use_id`, `release`, or `insert`'s final placement — and this goes red.
+    #[test]
+    fn set_items_are_addressed_at_the_reference_stride() {
+        use crate::ref_counted_set::{item_at, Item, ItemStride};
+        type SetItem = Item<Style, Id, size::CellCountInt>;
+        const STRIDE: usize = 36;
+        assert_eq!(STRIDE, ItemStride::<Style, Id, size::CellCountInt>::SIZE);
+        assert!(
+            core::mem::size_of::<SetItem>() < STRIDE,
+            "the test needs a stride larger than the item"
+        );
+
+        let layout = crate::ref_counted_set::Layout::<Id>::init::<Style, size::CellCountInt>(256);
+        let buf = AlignedBuf::new(layout.total_size, Set::base_align());
+        // SAFETY: fresh allocation of `total_size` bytes.
+        unsafe { core::ptr::write_bytes(buf.ptr, 0xA5, layout.total_size) };
+        let mut set = unsafe { Set::init(buf.offset_buf(), layout, SetContext) };
+        let base = buf.base();
+
+        fn style_for(n: u32) -> Style {
+            Style {
+                fg_color: Color::Rgb(color::RGB {
+                    r: n as u8,
+                    g: (n >> 8) as u8,
+                    b: 0x5A,
+                }),
+                bg_color: Color::Palette((n * 7) as u8),
+                underline_color: if n.is_multiple_of(2) {
+                    Color::None
+                } else {
+                    Color::Palette(n as u8)
+                },
+                flags: Flags {
+                    bold: n.is_multiple_of(3),
+                    italic: n.is_multiple_of(5),
+                    ..Flags::default()
+                },
+            }
+        }
+
+        // `(id, style, refs)` of every live item.
+        let mut live: Vec<(Id, Style, u16)> = Vec::new();
+        let mut n: u32 = 0;
+        loop {
+            let style = style_for(n);
+            let Ok(id) = (unsafe { set.add(base, style) }) else {
+                break;
+            };
+            let refs = 1 + (n % 4) as u16;
+            for _ in 1..refs {
+                unsafe { set.use_id(base, id) };
+            }
+            live.push((id, style, refs));
+            n += 1;
+        }
+        assert!(live.len() > 150, "filled {} items", live.len());
+
+        let check = |set: &Set, live: &[(Id, Style, u16)]| {
+            let items = unsafe { set.items_ptr(base) };
+            for &(id, style, refs) in live {
+                let i = id as usize;
+                assert!(unsafe { (*set.get(base, id)).eql(&style) }, "get({id})");
+                assert!(
+                    unsafe { (*set.get_at(items, id)).eql(&style) },
+                    "get_at({id})"
+                );
+                assert_eq!(Some(id), unsafe { set.lookup(base, style) }, "lookup({id})");
+                assert_eq!(refs, unsafe { set.ref_count(base, id) }, "ref_count({id})");
+                let via_item_at = unsafe { &*item_at(items, i) };
+                assert!(via_item_at.value.eql(&style), "item_at({id})");
+                // The raw bytes at the reference's offset.
+                let raw = unsafe { base.add(layout.items_start + i * STRIDE) };
+                let from_raw: SetItem = unsafe { core::ptr::read(raw as *const SetItem) };
+                assert!(from_raw.value.eql(&style), "raw bytes of item {id}");
+                assert_eq!(refs, from_raw.meta.ref_count, "raw ref count of item {id}");
+            }
+            // Every live item exactly once, in id order, from the iterator.
+            let mut it = unsafe { set.iterator(base) };
+            let mut seen: Vec<(Id, Style)> = Vec::new();
+            while let Some(e) = it.next() {
+                seen.push((e.id, unsafe { *e.value_ptr }));
+            }
+            let mut want: Vec<(Id, Style)> = live.iter().map(|&(id, s, _)| (id, s)).collect();
+            want.sort_by_key(|&(id, _)| id);
+            assert_eq!(want.len(), seen.len(), "iterator count");
+            for ((wid, ws), (sid, ss)) in want.iter().zip(seen.iter()) {
+                assert_eq!(wid, sid, "iterator id");
+                assert!(ws.eql(ss), "iterator value of {sid}");
+            }
+            // The tail of every slot is untouched by the set.
+            for i in 0..layout.cap {
+                let slot = unsafe { base.add(layout.items_start + i * STRIDE) };
+                for b in core::mem::size_of::<SetItem>()..STRIDE {
+                    assert_eq!(0, unsafe { *slot.add(b) }, "slot {i} tail byte {b}");
+                }
+            }
+        };
+        check(&set, &live);
+
+        // Release every third item to zero, then add new styles into the
+        // freed ids (`add_with_id` on a dead id: `delete_item`, then
+        // `insert`'s probe, reap and placement).
+        let mut kept: Vec<(Id, Style, u16)> = Vec::new();
+        let mut freed: Vec<Id> = Vec::new();
+        for (k, &(id, style, refs)) in live.iter().enumerate() {
+            if k % 3 == 1 {
+                for _ in 0..refs {
+                    unsafe { set.release(base, id) };
+                }
+                freed.push(id);
+            } else {
+                kept.push((id, style, refs));
+            }
+        }
+        for &dead in &freed {
+            let style = style_for(n);
+            n += 1;
+            let id = match unsafe { set.add_with_id(base, style, dead) }.unwrap() {
+                None => dead,
+                Some(other) => other,
+            };
+            kept.push((id, style, 1));
+        }
+        assert!(freed.len() > 50, "freed {}", freed.len());
+        check(&set, &kept);
     }
 
     #[test]

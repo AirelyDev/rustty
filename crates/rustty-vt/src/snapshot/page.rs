@@ -1954,14 +1954,14 @@ mod tests {
     // 32-bit `usize` (wasm32), so the bound must really be an upper bound.
     #[test]
     fn the_page_size_bound_is_an_upper_bound_on_the_real_layout() {
+        // The stride the set is laid out with (the reference's item size,
+        // N88), not the port's smaller `size_of::<Item>()`.
         assert!(
-            core::mem::size_of::<
-                crate::ref_counted_set::Item<
-                    TerminalStyle,
-                    TerminalStyleId,
-                    crate::size::CellCountInt,
-                >,
-            >() as u64
+            crate::ref_counted_set::ItemStride::<
+                TerminalStyle,
+                TerminalStyleId,
+                crate::size::CellCountInt,
+            >::SIZE as u64
                 <= STYLE_ITEM_SIZE_BOUND,
         );
 
@@ -2006,7 +2006,7 @@ mod tests {
     // not reject a capacity native Ghostty can itself produce and encode. A
     // terminal wide enough to leave the standard capacity (in Ghostty 47,932
     // columns or more in a shipped macOS arm64 build, 48,047 in a test build;
-    // 48,151 is above both, and above the port's own thresholds)
+    // 48,151 is above both; the port's thresholds are the same, N88)
     // (`initialCapacity`, `PageList.zig:535-540`) gets a page that is
     // `std_capacity` with only `cols` changed. `increaseCapacity`
     // (`PageList.zig:4234-4255`) then doubles `grapheme_bytes` from 8192

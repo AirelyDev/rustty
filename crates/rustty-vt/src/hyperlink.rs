@@ -515,6 +515,52 @@ impl RefCountedSetContext<PageEntry> for SetContext {
 /// can share the same hyperlink without duplicating the data.
 pub type Set = RefCountedSet<PageEntry, Id, size::CellCountInt, SetContext>;
 
+// PORT NOTE (layout parity, NEW-FINDINGS N88): the set is laid out with the
+// reference's `Set.Item` geometry (see `ref_counted_set::RefItemGeometry`),
+// derived from shadows of the reference's declarations at `20abdb50a`:
+//   - `Offset(u8).Slice = struct { offset: Offset(u8), len: usize }`
+//     (`size.zig`), 16/8;
+//   - `PageEntry.Id = union(enum) { explicit: Offset(u8).Slice, implicit:
+//     size.OffsetInt }` (`hyperlink.zig:84`), 24/8;
+//   - `PageEntry = struct { id: PageEntry.Id, uri: Offset(u8).Slice }`
+//     (`hyperlink.zig:80`), 40/8;
+//   - `RefCountedSet.Item = struct { value: T, meta: Metadata }`, the
+//     metadata three `u16`s (`Id = size.HyperlinkCountInt`, `RefCountInt =
+//     size.CellCountInt`, `hyperlink.zig:18`, `:211`), 46 rounded to 48/8.
+// The port's item is 48/8 too, so this changes nothing today; it keeps the
+// hyperlink section tied to the reference if the port's `PageEntry` changes.
+#[repr(C)]
+#[allow(dead_code)] // never built: only its size and alignment are read
+struct RefShadowSlice {
+    offset: u32,
+    len: usize,
+}
+#[repr(C)]
+#[allow(dead_code)] // never built: only its size and alignment are read
+struct RefShadowPageEntryId {
+    payload: RefShadowSlice,
+    tag: u8,
+}
+#[repr(C)]
+#[allow(dead_code)] // never built: only its size and alignment are read
+struct RefShadowItem {
+    value_id: RefShadowPageEntryId,
+    value_uri: RefShadowSlice,
+    bucket: Id,
+    psl: Id,
+    ref_count: size::CellCountInt,
+}
+
+impl crate::ref_counted_set::RefItemGeometry for PageEntry {
+    const REF_ITEM_SIZE: usize = core::mem::size_of::<RefShadowItem>();
+    const REF_ITEM_ALIGN: usize = core::mem::align_of::<RefShadowItem>();
+}
+
+const _: () = assert!(
+    core::mem::size_of::<crate::ref_counted_set::Item<PageEntry, Id, size::CellCountInt>>()
+        <= <PageEntry as crate::ref_counted_set::RefItemGeometry>::REF_ITEM_SIZE
+);
+
 // rustty-only tests (the reference's `dupe` contract is carried by its
 // `Allocator.Error!Hyperlink` signature, which Zig callers must `try`): pin that
 // the ported `dupe` is FALLIBLE rather than an aborting `Vec::clone`, and that

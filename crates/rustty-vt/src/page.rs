@@ -166,10 +166,12 @@ pub const STRING_BYTES_DEFAULT: usize = STRING_COUNT_DEFAULT * STRING_CHUNK;
 /// we support. A hyperlink can be longer than this multiplier; the multiplier
 /// just sets the total capacity to simplify adjustable size metrics.
 const HYPERLINK_COUNT_DEFAULT: usize = 4;
+/// `@sizeOf(hyperlink.Set.Item)`.
+// PORT NOTE (layout parity, N88): the reference's item size, the stride the
+// set is laid out with (`ref_counted_set::ItemStride`), not the port's
+// `size_of::<Item>()`. They are both 48 today.
 pub fn hyperlink_set_item_size() -> usize {
-    core::mem::size_of::<
-        crate::ref_counted_set::Item<hyperlink::PageEntry, hyperlink::Id, size::CellCountInt>,
-    >()
+    crate::ref_counted_set::ItemStride::<hyperlink::PageEntry, hyperlink::Id, size::CellCountInt>::SIZE
 }
 fn hyperlink_bytes_default() -> usize {
     HYPERLINK_COUNT_DEFAULT * hyperlink_set_item_size()

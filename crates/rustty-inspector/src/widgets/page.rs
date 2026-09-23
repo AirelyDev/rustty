@@ -785,12 +785,12 @@ fn rowsTable(page: &Page) {
 fn stylesList(page: &Page) {
     // const items = page.styles.items.ptr(page.memory)[0..page.styles.layout.cap];
     let base = page.memory_ptr();
-    let items = unsafe {
-        core::slice::from_raw_parts(
-            page.styles.items.ptr(base).cast_const(),
-            page.styles.layout.cap,
-        )
-    };
+    // PORT NOTE (layout parity, N88): the items are the reference's stride
+    // apart, not `size_of::<Item>()`, so they are addressed one by one with
+    // `item_at` rather than viewed as a `&[Item]` slice.
+    let items_ptr = unsafe { page.styles.items.ptr(base) };
+    let items = (0..page.styles.layout.cap)
+        .map(move |i| unsafe { &*rustty_vt::ref_counted_set::item_at(items_ptr, i) });
 
     // var count: usize = 0;
     // for (items, 0..) |item, index| {
@@ -799,7 +799,7 @@ fn stylesList(page: &Page) {
     //     count += 1;
     // }
     let mut count: usize = 0;
-    for (index, item) in items.iter().enumerate() {
+    for (index, item) in items.clone().enumerate() {
         if index == 0 {
             continue;
         }
@@ -903,7 +903,7 @@ fn stylesList(page: &Page) {
     // for (items, 0..) |item, index| {
     //     if (index == 0) continue;
     //     if (item.meta.ref == 0) continue;
-    for (index, item) in items.iter().enumerate() {
+    for (index, item) in items.clone().enumerate() {
         if index == 0 {
             continue;
         }
@@ -952,12 +952,11 @@ fn stylesList(page: &Page) {
 fn hyperlinksList(page: &Page) {
     // const items = page.hyperlink_set.items.ptr(page.memory)[0..page.hyperlink_set.layout.cap];
     let base = page.memory_ptr();
-    let items = unsafe {
-        core::slice::from_raw_parts(
-            page.hyperlink_set.items.ptr(base).cast_const(),
-            page.hyperlink_set.layout.cap,
-        )
-    };
+    // PORT NOTE (layout parity, N88): addressed with `item_at`, see
+    // `stylesList`.
+    let items_ptr = unsafe { page.hyperlink_set.items.ptr(base) };
+    let items = (0..page.hyperlink_set.layout.cap)
+        .map(move |i| unsafe { &*rustty_vt::ref_counted_set::item_at(items_ptr, i) });
 
     // var count: usize = 0;
     // for (items, 0..) |item, index| {
@@ -966,7 +965,7 @@ fn hyperlinksList(page: &Page) {
     //     count += 1;
     // }
     let mut count: usize = 0;
-    for (index, item) in items.iter().enumerate() {
+    for (index, item) in items.clone().enumerate() {
         if index == 0 {
             continue;
         }
@@ -1078,7 +1077,7 @@ fn hyperlinksList(page: &Page) {
     // for (items, 0..) |item, index| {
     //     if (index == 0) continue;
     //     if (item.meta.ref == 0) continue;
-    for (index, item) in items.iter().enumerate() {
+    for (index, item) in items.clone().enumerate() {
         if index == 0 {
             continue;
         }

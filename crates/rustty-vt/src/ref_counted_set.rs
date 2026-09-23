@@ -119,7 +119,7 @@ impl_refcount_int!(u8, u16, u32, u64, usize);
 // leave the standard page capacity — in Ghostty, measured: 47,932 columns or
 // more in a shipped build on macOS arm64, 46,908 on Linux aarch64, 48,047 in
 // a macOS test build; it depends on the platform's page size (the port's
-// thresholds differ, see UD80) — gets a page of 215 rows x cols
+// thresholds are the same since N88) — gets a page of 215 rows x cols
 // (`PageList.zig:535-540`), so ordinary styled output — the VT stream's
 // `printSliceFill` (`useMultiple`, `Terminal.zig:1114`), `printCell`
 // (`Terminal.zig:1722`), DECALN, the reflow and clone copies, a cursor style
@@ -199,6 +199,77 @@ pub trait RefCountedSetContext<T> {
     fn hash(&self, value: T) -> u64;
     fn eql(&self, a: T, b: T) -> bool;
     fn deleted(&self, _value: T) {}
+}
+
+/// The reference's size and alignment of the set's `Item` for a value type,
+/// which the port lays the item array out with.
+//
+// PORT NOTE (layout parity, NEW-FINDINGS N88): the reference's `Item` is
+// `struct { value: T, meta: Metadata }`, and `Layout.init` sizes the item
+// array as `items_cap * @sizeOf(Item)` after aligning it to `@alignOf(Item)`
+// (`ref_counted_set.zig`, `Layout.init`). The port keeps some value types
+// more compact than the reference's (`style::Style` is 21/1 bytes against
+// 28/4, so its `Item` is 28/2 against 36/4). The item array's size feeds
+// `Page.layout`, and so the page size, `availableBitsForGrid`, the rows of
+// every page, `maxCols` and `std_size`: all of them are observable (page
+// split points, scrollback kept under `scrollback-limit`, snapshot page
+// boundaries, grid refs). So each value type states the REFERENCE's
+// `@sizeOf(Item)` / `@alignOf(Item)` here, and the set lays out and
+// addresses its items with that stride and alignment (`ItemStride`): item
+// `i` sits at `items_start + i * REF_ITEM_SIZE`, exactly where the
+// reference puts it, with the port's compact item at the start of its slot
+// and the slot's tail zero. The constants are pinned against a Zig probe of
+// the reference by `style.rs`'s `ref_item_geometry_matches_the_reference_probe`.
+pub trait RefItemGeometry {
+    /// The reference's `@sizeOf(Item)` for this value type.
+    const REF_ITEM_SIZE: usize;
+    /// The reference's `@alignOf(Item)` for this value type.
+    const REF_ITEM_ALIGN: usize;
+}
+
+/// The stride and alignment the item array is laid out and addressed with:
+/// the reference's (`RefItemGeometry`), checked at compile time to hold the
+/// port's own `Item`.
+pub struct ItemStride<T, Id, RefCount>(PhantomData<(T, Id, RefCount)>);
+
+impl<T: RefItemGeometry, Id: IdInt, RefCount: RefCountIntTrait> ItemStride<T, Id, RefCount> {
+    /// The byte distance between consecutive items. Every address into the
+    /// item array is `items + id * SIZE` (`item_at`), never `items.add(id)`.
+    pub const SIZE: usize = {
+        let size = T::REF_ITEM_SIZE;
+        // The port's item fits in the reference's slot ...
+        core::assert!(size >= core::mem::size_of::<Item<T, Id, RefCount>>());
+        // ... and every slot start stays aligned for the port's item.
+        core::assert!(size.is_multiple_of(core::mem::align_of::<Item<T, Id, RefCount>>()));
+        size
+    };
+
+    /// The item array's alignment.
+    pub const ALIGN: usize = {
+        let align = T::REF_ITEM_ALIGN;
+        core::assert!(align.is_power_of_two());
+        core::assert!(align >= core::mem::align_of::<Item<T, Id, RefCount>>());
+        core::assert!(Self::SIZE.is_multiple_of(align));
+        align
+    };
+}
+
+/// The item with id (index) `id` of an item array starting at `items`.
+///
+/// # Safety
+///
+/// `items` must be a set's resolved items pointer (`items.ptr(base)`) and
+/// `id < layout.cap`, so the result stays inside the set's item array.
+#[inline(always)]
+pub unsafe fn item_at<T: RefItemGeometry, Id: IdInt, RefCount: RefCountIntTrait>(
+    items: *mut Item<T, Id, RefCount>,
+    id: usize,
+) -> *mut Item<T, Id, RefCount> {
+    // SAFETY: the caller keeps `id` below the laid-out capacity, and the
+    // array is `cap * ItemStride::SIZE` bytes (`Layout::init`), so the
+    // offset stays in the allocation. `SIZE` is a multiple of the item's
+    // alignment, so the result is aligned.
+    unsafe { items.byte_add(id * ItemStride::<T, Id, RefCount>::SIZE) }
 }
 
 /// Set item
@@ -338,7 +409,7 @@ pub enum AddError {
 // nameable by callers, so no aliases are needed; the comment is preserved here.
 pub struct RefCountedSet<T, Id, RefCount, Context>
 where
-    T: Copy + Default,
+    T: Copy + Default + RefItemGeometry,
     Id: IdInt,
     RefCount: RefCountIntTrait,
     Context: RefCountedSetContext<T>,
@@ -393,7 +464,7 @@ where
 // exactly correct.
 impl<T, Id, RefCount, Context> Clone for RefCountedSet<T, Id, RefCount, Context>
 where
-    T: Copy + Default,
+    T: Copy + Default + RefItemGeometry,
     Id: IdInt,
     RefCount: RefCountIntTrait,
     Context: RefCountedSetContext<T> + Clone,
@@ -437,7 +508,7 @@ impl<Id: IdInt> Layout<Id> {
     /// of items that the set can actually store, since ID 0 is reserved.
     pub fn init<T, RefCount>(cap: usize) -> Layout<Id>
     where
-        T: Copy + Default,
+        T: Copy + Default + RefItemGeometry,
         RefCount: RefCountIntTrait,
     {
         assert(cap <= (Id::MAX.to_usize()) + 1);
@@ -466,8 +537,14 @@ impl<Id: IdInt> Layout<Id> {
         let table_end = table_start + table_cap * core::mem::size_of::<Id>();
 
         // const items_start = std.mem.alignForward(usize, table_end, @alignOf(Item));
-        let items_start = align_forward(table_end, core::mem::align_of::<Item<T, Id, RefCount>>());
-        let items_end = items_start + items_cap * core::mem::size_of::<Item<T, Id, RefCount>>();
+        // const items_end = items_start + items_cap * @sizeOf(Item);
+        //
+        // PORT NOTE (layout parity, N88): `@alignOf(Item)` and `@sizeOf(Item)`
+        // are the REFERENCE's, through `ItemStride` (see `RefItemGeometry`),
+        // not the port's more compact `Item`, so the array and every page
+        // section after it sit where the reference puts them.
+        let items_start = align_forward(table_end, ItemStride::<T, Id, RefCount>::ALIGN);
+        let items_end = items_start + items_cap * ItemStride::<T, Id, RefCount>::SIZE;
 
         let total_size = items_end;
 
@@ -484,7 +561,7 @@ impl<Id: IdInt> Layout<Id> {
 
 impl<T, Id, RefCount, Context> RefCountedSet<T, Id, RefCount, Context>
 where
-    T: Copy + Default,
+    T: Copy + Default + RefItemGeometry,
     Id: IdInt,
     RefCount: RefCountIntTrait,
     Context: RefCountedSetContext<T>,
@@ -492,9 +569,11 @@ where
     /// `pub const base_align: std.mem.Alignment = .fromByteUnits(@max(...))`
     pub fn base_align() -> usize {
         // @max(@alignOf(Context), @alignOf(Layout), @alignOf(Item), @alignOf(Id))
+        //
+        // `@alignOf(Item)` is the reference's (`ItemStride::ALIGN`, N88).
         core::mem::align_of::<Context>()
             .max(core::mem::align_of::<Layout<Id>>())
-            .max(core::mem::align_of::<Item<T, Id, RefCount>>())
+            .max(ItemStride::<T, Id, RefCount>::ALIGN)
             .max(core::mem::align_of::<Id>())
     }
 
@@ -558,14 +637,15 @@ where
         // mapping arrives zeroed from mmap and `Page::reinit` re-zeroes it.
         unsafe {
             let items_ptr = items.ptr(base);
+            // The whole laid-out array, the tail of every slot included (N88).
             core::ptr::write_bytes(
                 items_ptr as *mut u8,
                 0,
-                l.cap * core::mem::size_of::<Item<T, Id, RefCount>>(),
+                l.cap * ItemStride::<T, Id, RefCount>::SIZE,
             );
             let default_meta = Metadata::<Id, RefCount>::default();
             for i in 0..l.cap {
-                let item = items_ptr.add(i);
+                let item = item_at(items_ptr, i);
                 core::ptr::write(
                     core::ptr::addr_of_mut!((*item).meta.bucket),
                     default_meta.bucket,
@@ -629,7 +709,7 @@ where
         // Trim dead items from the end of the list.
         while self.next_id > Id::ONE
             && unsafe {
-                (*items.add(self.next_id.sub(Id::ONE).to_usize()))
+                (*item_at(items, self.next_id.sub(Id::ONE).to_usize()))
                     .meta
                     .ref_count
             } == RefCount::ZERO
@@ -648,7 +728,7 @@ where
             // PORT NOTE: reference defect (R13), UD80: saturating, see `bump_ref`.
             unsafe {
                 bump_ref(
-                    &mut (*items.add(id.to_usize())).meta.ref_count,
+                    &mut (*item_at(items, id.to_usize())).meta.ref_count,
                     RefCount::ONE,
                 )
             };
@@ -687,11 +767,11 @@ where
 
         let id = unsafe { self.insert(base, value, self.next_id) };
         unsafe {
-            (*items.add(id.to_usize())).meta.ref_count = (*items.add(id.to_usize()))
+            (*item_at(items, id.to_usize())).meta.ref_count = (*item_at(items, id.to_usize()))
                 .meta
                 .ref_count
                 .add(RefCount::ONE);
-            assert((*items.add(id.to_usize())).meta.ref_count == RefCount::ONE);
+            assert((*item_at(items, id.to_usize())).meta.ref_count == RefCount::ONE);
         }
         self.living += 1;
 
@@ -741,7 +821,7 @@ where
         assert(id > Id::ZERO);
 
         if id < self.next_id {
-            if unsafe { (*items.add(id.to_usize())).meta.ref_count } == RefCount::ZERO {
+            if unsafe { (*item_at(items, id.to_usize())).meta.ref_count } == RefCount::ZERO {
                 // Requested ID is dead, but if the value exists not under
                 // another ID then ref count that and increase the ID.
                 if let Some(existing_id) = unsafe { self.lookup_context(base, value) } {
@@ -754,7 +834,7 @@ where
                     // PORT NOTE: reference defect (R13), UD80: saturating, see `bump_ref`.
                     unsafe {
                         bump_ref(
-                            &mut (*items.add(existing_id.to_usize())).meta.ref_count,
+                            &mut (*item_at(items, existing_id.to_usize())).meta.ref_count,
                             RefCount::ONE,
                         )
                     };
@@ -770,18 +850,18 @@ where
                 let added_id = unsafe { self.insert(base, value, id) };
 
                 unsafe {
-                    (*items.add(added_id.to_usize())).meta.ref_count = (*items
-                        .add(added_id.to_usize()))
-                    .meta
-                    .ref_count
-                    .add(RefCount::ONE);
+                    (*item_at(items, added_id.to_usize())).meta.ref_count =
+                        (*item_at(items, added_id.to_usize()))
+                            .meta
+                            .ref_count
+                            .add(RefCount::ONE);
                 }
 
                 self.living += 1;
 
                 return Ok(if added_id == id { None } else { Some(added_id) });
             } else if self.context.eql(unsafe { *value }, unsafe {
-                (*items.add(id.to_usize())).value
+                (*item_at(items, id.to_usize())).value
             }) {
                 // Notify the context that the value is "deleted" because
                 // we're reusing the existing value in the set. This allows
@@ -791,7 +871,7 @@ where
                 // PORT NOTE: reference defect (R13), UD80: saturating, see `bump_ref`.
                 unsafe {
                     bump_ref(
-                        &mut (*items.add(id.to_usize())).meta.ref_count,
+                        &mut (*item_at(items, id.to_usize())).meta.ref_count,
                         RefCount::ONE,
                     )
                 };
@@ -831,7 +911,7 @@ where
             return false;
         }
         let items = unsafe { self.items.ptr(base) };
-        let item = unsafe { items.add(id.to_usize()) };
+        let item = unsafe { item_at(items, id.to_usize()) };
         let live = unsafe { (*item).meta.ref_count } > RefCount::ZERO;
         live && self
             .context
@@ -848,7 +928,7 @@ where
         assert(id.to_usize() < self.layout.cap);
 
         let items = unsafe { self.items.ptr(base) };
-        let item = unsafe { &mut *items.add(id.to_usize()) };
+        let item = unsafe { &mut *item_at(items, id.to_usize()) };
 
         // If `use` is being called on an item with 0 references, then
         // either someone forgot to call it before, released too early
@@ -872,7 +952,7 @@ where
         assert(id.to_usize() < self.layout.cap);
 
         let items = unsafe { self.items.ptr(base) };
-        let item = unsafe { &mut *items.add(id.to_usize()) };
+        let item = unsafe { &mut *item_at(items, id.to_usize()) };
 
         // If `use` is being called on an item with 0 references, then
         // either someone forgot to call it before, released too early
@@ -902,7 +982,7 @@ where
         // of one page's `hyperlink_set`. A `&mut` Unique retag here pops the
         // sibling result off the borrow stack and makes its later use UB
         // (rust-mut-args-strongly-protected). Field access goes through the raw.
-        let item = unsafe { items.add(id.to_usize()) };
+        let item = unsafe { item_at(items, id.to_usize()) };
 
         assert(unsafe { (*item).meta.ref_count } > RefCount::ZERO);
 
@@ -915,6 +995,10 @@ where
     // exact asserts. `get(base, id)` == `get_at(items_ptr(base), id)`.
 
     /// The resolved items base pointer (the hoistable half of `get`).
+    ///
+    /// The items are `ItemStride::SIZE` bytes apart, which can be more than
+    /// `size_of::<Item>()` (N88): address them with `item_at` / `get_at`,
+    /// never `.add(id)` or a `&[Item]` slice over the array.
     ///
     /// # Safety: `base` must be the true base of the backing buffer.
     pub unsafe fn items_ptr<B: IntFromBase + Copy>(&self, base: B) -> *mut Item<T, Id, RefCount> {
@@ -933,7 +1017,7 @@ where
         assert(id.to_usize() < self.layout.cap);
 
         // SB: raw `*mut Item` — see `get`.
-        let item = unsafe { items.add(id.to_usize()) };
+        let item = unsafe { item_at(items, id.to_usize()) };
 
         assert(unsafe { (*item).meta.ref_count } > RefCount::ZERO);
 
@@ -950,7 +1034,7 @@ where
         assert(id.to_usize() < self.layout.cap);
 
         let items = unsafe { self.items.ptr(base) };
-        let item = unsafe { &mut *items.add(id.to_usize()) };
+        let item = unsafe { &mut *item_at(items, id.to_usize()) };
 
         assert(item.meta.ref_count > RefCount::ZERO);
         // PORT NOTE: reference defect (R13), UD80: a count pinned at the
@@ -972,7 +1056,7 @@ where
         assert(id.to_usize() < self.layout.cap);
 
         let items = unsafe { self.items.ptr(base) };
-        let item = unsafe { &mut *items.add(id.to_usize()) };
+        let item = unsafe { &mut *item_at(items, id.to_usize()) };
 
         // assert(item.meta.ref >= n); — `n` is an `Id`; compare via usize.
         assert(item.meta.ref_count >= ref_from_id::<RefCount, Id>(n));
@@ -991,7 +1075,7 @@ where
         assert(id.to_usize() < self.layout.cap);
 
         let items = unsafe { self.items.ptr(base) };
-        let item = unsafe { &*items.add(id.to_usize()) };
+        let item = unsafe { &*item_at(items, id.to_usize()) };
         item.meta.ref_count
     }
 
@@ -1004,7 +1088,7 @@ where
     /// reference; see `snapshot/grid.rs`. The native write path can reach the
     /// ceiling too: a terminal wide enough to leave the standard capacity
     /// (in Ghostty 47,932 columns or more in a shipped macOS arm64 build,
-    /// 46,908 on Linux aarch64; the port's thresholds differ, see UD80) gets a
+    /// 46,908 on Linux aarch64; the port's are the same since N88) gets a
     /// page of 215 rows x cols (`PageList.zig:535-540`), and ordinary styled
     /// output on it overflows `useMultiple` from `printSliceFill` and `use`
     /// from `printCell` (UPSTREAM-DEFECTS.md UD80). Every
@@ -1044,7 +1128,7 @@ where
         let table = unsafe { self.table.ptr(base) };
         let items = unsafe { self.items.ptr(base) };
 
-        let item = unsafe { *items.add(id.to_usize()) };
+        let item = unsafe { *item_at(items, id.to_usize()) };
 
         if item.meta.bucket.to_usize() > self.layout.table_cap {
             return;
@@ -1060,23 +1144,27 @@ where
             self.psl_stats[item.meta.psl.to_usize()].sub(Id::ONE);
         unsafe {
             *table.add(item.meta.bucket.to_usize()) = Id::ZERO;
-            *items.add(id.to_usize()) = Item::default();
+            *item_at(items, id.to_usize()) = Item::default();
         }
 
         let mut p: Id = item.meta.bucket;
         let mut n: Id = p.wrapping_add(Id::ONE).bit_and(self.layout.table_mask);
 
         while unsafe { *table.add(n.to_usize()) } != Id::ZERO
-            && unsafe { (*items.add((*table.add(n.to_usize())).to_usize())).meta.psl } > Id::ZERO
+            && unsafe {
+                (*item_at(items, (*table.add(n.to_usize())).to_usize()))
+                    .meta
+                    .psl
+            } > Id::ZERO
         {
             unsafe {
                 let tn = *table.add(n.to_usize());
-                (*items.add(tn.to_usize())).meta.bucket = p;
-                let psl = (*items.add(tn.to_usize())).meta.psl;
+                (*item_at(items, tn.to_usize())).meta.bucket = p;
+                let psl = (*item_at(items, tn.to_usize())).meta.psl;
                 self.psl_stats[psl.to_usize()] = self.psl_stats[psl.to_usize()].sub(Id::ONE);
-                (*items.add(tn.to_usize())).meta.psl =
-                    (*items.add(tn.to_usize())).meta.psl.sub(Id::ONE);
-                let psl2 = (*items.add(tn.to_usize())).meta.psl;
+                (*item_at(items, tn.to_usize())).meta.psl =
+                    (*item_at(items, tn.to_usize())).meta.psl.sub(Id::ONE);
+                let psl2 = (*item_at(items, tn.to_usize())).meta.psl;
                 self.psl_stats[psl2.to_usize()] = self.psl_stats[psl2.to_usize()].add(Id::ONE);
                 *table.add(p.to_usize()) = *table.add(n.to_usize());
             }
@@ -1133,7 +1221,7 @@ where
                 return None;
             }
 
-            let item = unsafe { *items.add(id.to_usize()) };
+            let item = unsafe { *item_at(items, id.to_usize()) };
 
             // An item with a shorter probe sequence length would never
             // end up in the middle of another sequence, since it would
@@ -1210,7 +1298,7 @@ where
                 if held_is_new {
                     &mut new_item.meta
                 } else {
-                    unsafe { &mut (*items.add(held_item_idx)).meta }
+                    unsafe { &mut (*item_at(items, held_item_idx)).meta }
                 }
             };
         }
@@ -1236,7 +1324,7 @@ where
                 break;
             }
 
-            let item = unsafe { &mut *items.add(id.to_usize()) };
+            let item = unsafe { &mut *item_at(items, id.to_usize()) };
 
             // If there's a dead item then we resurrect it
             // for our value so that we can reuse its ID,
@@ -1296,7 +1384,7 @@ where
             let held_ref = if held_is_new {
                 new_item.meta.ref_count
             } else {
-                unsafe { (*items.add(held_item_idx)).meta.ref_count }
+                unsafe { (*item_at(items, held_item_idx)).meta.ref_count }
             };
             if item.meta.psl < held_psl
                 || (item.meta.psl == held_psl && item.meta.ref_count < held_ref)
@@ -1339,7 +1427,7 @@ where
         // mapping, and `CompressedPage::init` compresses that mapping as raw
         // bytes. The two field writes copy exactly the same value bytes.
         unsafe {
-            let dst = items.add(chosen_id.to_usize());
+            let dst = item_at(items, chosen_id.to_usize());
             (*dst).value = new_item.value;
             (*dst).meta = new_item.meta;
         }
@@ -1420,14 +1508,15 @@ pub struct Entry<T, Id: IdInt> {
 //     buffer's owner (the page / test harness) outlives the iterator per the
 //     `iterator()` safety contract. Kept raw exactly as the reference keeps a
 //     many-item pointer: any mutation of the set invalidates it, and no `&`/
-//     `&mut` is ever formed over the whole item array.
+//     `&mut` is ever formed over the whole item array. Items are addressed
+//     at the reference stride, `item_at` (N88).
 pub struct Iterator<T, Id: IdInt, RefCount: RefCountIntTrait> {
     pub items: *mut Item<T, Id, RefCount>,
     pub id: Id,
     pub end: Id,
 }
 
-impl<T, Id: IdInt, RefCount: RefCountIntTrait> Iterator<T, Id, RefCount> {
+impl<T: RefItemGeometry, Id: IdInt, RefCount: RefCountIntTrait> Iterator<T, Id, RefCount> {
     pub fn next(&mut self) -> Option<Entry<T, Id>> {
         while self.id < self.end {
             let id = self.id;
@@ -1440,7 +1529,7 @@ impl<T, Id: IdInt, RefCount: RefCountIntTrait> Iterator<T, Id, RefCount> {
             // `id < end <= next_id <= layout.cap` bounds the index. Raw
             // pointer arithmetic + field projections only — no reference to
             // the item array is formed.
-            let item = unsafe { self.items.add(id.to_usize()) };
+            let item = unsafe { item_at(self.items, id.to_usize()) };
             if unsafe { (*item).meta.ref_count } == RefCount::ZERO {
                 continue;
             }
@@ -1535,6 +1624,14 @@ mod tests {
         x = (x ^ (x >> 15)).wrapping_mul(0x846ca68b);
         x = x ^ (x >> 16);
         x
+    }
+
+    // The reference's `Item` for `RefCountedSet(u32, u16, u16, ...)` is
+    // `{ value: u32, meta: { u16, u16, u16 } }`: 10 bytes rounded to 12/4,
+    // the same as the port's.
+    impl RefItemGeometry for u32 {
+        const REF_ITEM_SIZE: usize = 12;
+        const REF_ITEM_ALIGN: usize = 4;
     }
 
     // const TestSet = RefCountedSet(u32, u16, u16, ...);

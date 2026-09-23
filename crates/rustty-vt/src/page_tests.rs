@@ -473,6 +473,160 @@ mod tests {
         );
     }
 
+    // Rustty-only (NEW-FINDINGS N88): the page geometry equals the reference's.
+    //
+    // Every number below was measured from the reference at `20abdb50a` by a
+    // Zig probe appended to a scratch copy of `page.zig` (`zig build
+    // test-lib-vt`, Zig 0.16.0): natively on macOS arm64 (`page_size_min`
+    // 16 KiB) and cross-compiled with `-Dtarget=aarch64-linux-gnu` and run on
+    // Linux aarch64 (4 KiB). The probe printed `Page.layout(cap).total_size`,
+    // `styles_layout.total_size`, `availableBitsForGrid`, `maxCols`, and
+    // `adjust(.{ .cols = c }).rows` of `std_capacity` with the grapheme budget
+    // set to 512 (the test build's) and 8,192 (the shipped build's), and the
+    // total size of an 80 x 591 page as its style capacity grows.
+    //
+    // NEGATIVE CONTROL: lay the style set out with the port's own
+    // `size_of::<Item>()` / `align_of::<Item>()` again (`Layout::init`,
+    // `ref_counted_set.rs`) and this goes red: the styles section is 3,168
+    // bytes against 4,000, and the port's old geometry holds 594 rows at 80
+    // columns against the reference's 593 (macOS, test build).
+    struct RefGeometry {
+        grapheme_bytes: u32,
+        total_size: usize,
+        available_bits: usize,
+        max_cols: u16,
+        /// `(cols, rows)` of `std_capacity.adjust(.{ .cols = cols })`.
+        rows: [(u16, u16); 13],
+        /// `(styles, total_size)` of an 80 x 591 page.
+        non_std: [(u16, usize); 4],
+    }
+
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    const REF_GEOMETRY: [RefGeometry; 2] = [
+        RefGeometry {
+            grapheme_bytes: 512,
+            total_size: 393216,
+            available_bits: 3075008,
+            max_cols: 48046,
+            rows: [
+                (1, 24023),
+                (40, 1171),
+                (80, 593),
+                (100, 475),
+                (119, 400),
+                (120, 397),
+                (132, 361),
+                (160, 298),
+                (200, 239),
+                (215, 222),
+                (256, 186),
+                (1000, 47),
+                (10000, 4),
+            ],
+            non_std: [(256, 409600), (2048, 458752), (8192, 655360), (65535, 2441216)],
+        },
+        RefGeometry {
+            grapheme_bytes: 8192,
+            total_size: 409600,
+            available_bits: 3067648,
+            max_cols: 47931,
+            rows: [
+                (1, 23966),
+                (40, 1169),
+                (80, 591),
+                (100, 474),
+                (119, 399),
+                (120, 396),
+                (132, 360),
+                (160, 297),
+                (200, 238),
+                (215, 221),
+                (256, 186),
+                (1000, 47),
+                (10000, 4),
+            ],
+            non_std: [(256, 425984), (2048, 475136), (8192, 671744), (65535, 2457600)],
+        },
+    ];
+
+    #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+    const REF_GEOMETRY: [RefGeometry; 2] = [
+        RefGeometry {
+            grapheme_bytes: 512,
+            total_size: 380928,
+            available_bits: 2976704,
+            max_cols: 46510,
+            rows: [
+                (1, 23255),
+                (40, 1134),
+                (80, 574),
+                (100, 460),
+                (119, 387),
+                (120, 384),
+                (132, 349),
+                (160, 288),
+                (200, 231),
+                (215, 215),
+                (256, 180),
+                (1000, 46),
+                (10000, 4),
+            ],
+            non_std: [(256, 397312), (2048, 454656), (8192, 647168), (65535, 2437120)],
+        },
+        RefGeometry {
+            grapheme_bytes: 8192,
+            total_size: 401408,
+            available_bits: 3002112,
+            max_cols: 46907,
+            rows: [
+                (1, 23454),
+                (40, 1144),
+                (80, 579),
+                (100, 464),
+                (119, 390),
+                (120, 387),
+                (132, 352),
+                (160, 291),
+                (200, 233),
+                (215, 217),
+                (256, 182),
+                (1000, 46),
+                (10000, 4),
+            ],
+            non_std: [(256, 413696), (2048, 471040), (8192, 663552), (65535, 2453504)],
+        },
+    ];
+
+    #[cfg(any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(target_os = "linux", target_arch = "aarch64")
+    ))]
+    #[test]
+    fn page_geometry_matches_the_reference() {
+        for g in &REF_GEOMETRY {
+            let mut cap = std_capacity();
+            cap.grapheme_bytes = g.grapheme_bytes;
+            let l = Page::layout(cap);
+            let gb = g.grapheme_bytes;
+            assert_eq!(4000, l.styles_layout.total_size, "gb={gb}: styles section");
+            assert_eq!(g.total_size, l.total_size, "gb={gb}: std page size");
+            assert_eq!(g.available_bits, cap.available_bits_for_grid(), "gb={gb}: availableBitsForGrid");
+            assert_eq!(Some(g.max_cols), cap.max_cols(), "gb={gb}: maxCols");
+            for &(cols, rows) in &g.rows {
+                let adjusted = cap.adjust(Adjustment { cols: Some(cols) }).unwrap();
+                assert_eq!(rows, adjusted.rows, "gb={gb}: rows per page at {cols} cols");
+            }
+            for &(styles, total) in &g.non_std {
+                let c = Capacity {
+                    styles,
+                    grapheme_bytes: g.grapheme_bytes,
+                    ..Capacity::new(80, 591)
+                };
+                assert_eq!(total, Page::layout(c).total_size, "gb={gb}: 80x591 page with {styles} styles");
+            }
+        }
+    }
+
     // =====================================================================
     // Ported `test {}` blocks (assertion-for-assertion).
     // =====================================================================

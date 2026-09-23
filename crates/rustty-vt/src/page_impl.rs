@@ -804,9 +804,10 @@ impl Page {
                     self.styles.layout.table_cap,
                 )
             };
-            let styles_items = unsafe {
-                core::slice::from_raw_parts(self.styles.items.ptr(base), self.styles.layout.cap)
-            };
+            // The items are the reference's stride apart, not
+            // `size_of::<Item>()` (N88), so they are addressed with
+            // `item_at`, never as a `&[Item]` slice.
+            let styles_items = unsafe { self.styles.items.ptr(base) };
 
             let mut zombies: usize = 0;
 
@@ -814,7 +815,10 @@ impl Page {
                 if id == 0 {
                     continue;
                 }
-                let item = &styles_items[id as usize];
+                assert!((id as usize) < self.styles.layout.cap);
+                // SAFETY: `id` is a table entry of this set, bounded by the
+                // laid-out capacity (asserted above, as the slice index was).
+                let item = unsafe { &*crate::ref_counted_set::item_at(styles_items, id as usize) };
                 if item.meta.ref_count == 0 {
                     continue;
                 }
