@@ -45,23 +45,12 @@ fn main() {
     dylib_identity();
 }
 
-/// The shared library's versioned identity (S64-F5), which the reference's
-/// Apple native link sets at `GhosttyLibVt.zig:420-437` and Zig's own shared
-/// link sets elsewhere:
-///
-/// - Apple: `-current_version <X.Y.Z>` ("Record the exact package version
-///   for runtime inspection"), `-compatibility_version 1.0.0` ("Preserve
-///   compatibility with the initial public ABI") and
-///   `-headerpad_max_install_names` ("Leave room for packaging tools to
-///   rewrite install names"). The install name itself is left as cargo sets
-///   it (`@rpath/librustty_vt_c.dylib`) so the build tree keeps working; the
-///   CMake install renames the file and rewrites the install name to
-///   `@rpath/librustty-vt.dylib`.
-/// - ELF: the soname `librustty-vt.so.<X>` (Zig's `libghostty-vt.so.<X>`),
-///   only when `RUSTTY_VT_SONAME` asks for it. The CMake build sets it and
-///   links the build-tree name; a plain `cargo build` leaves the cdylib
-///   without a soname, so the examples that link `-lrustty_vt_c` straight
-///   from `target/` keep resolving.
+#[path = "src/dylib_link_args.rs"]
+mod dylib_link_args;
+
+/// The shared library's extra link arguments: its versioned identity
+/// (S64-F5) and Android's 16 KiB page size (S64-F9). See
+/// `src/dylib_link_args.rs`.
 fn dylib_identity() {
     let os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     let version = format!(
@@ -70,15 +59,10 @@ fn dylib_identity() {
         std::env::var("CARGO_PKG_VERSION_MINOR").unwrap_or_default(),
         std::env::var("CARGO_PKG_VERSION_PATCH").unwrap_or_default(),
     );
-    if os == "macos" || os == "ios" {
-        println!("cargo::rustc-cdylib-link-arg=-Wl,-current_version,{version}");
-        println!("cargo::rustc-cdylib-link-arg=-Wl,-compatibility_version,1.0.0");
-        println!("cargo::rustc-cdylib-link-arg=-Wl,-headerpad_max_install_names");
-    }
+    println!("cargo::rerun-if-changed=src/dylib_link_args.rs");
     println!("cargo::rerun-if-env-changed=RUSTTY_VT_SONAME");
-    if let Ok(soname) = std::env::var("RUSTTY_VT_SONAME") {
-        if !soname.is_empty() && os != "macos" && os != "ios" && os != "windows" {
-            println!("cargo::rustc-cdylib-link-arg=-Wl,-soname,{soname}");
-        }
+    let soname = std::env::var("RUSTTY_VT_SONAME").ok();
+    for arg in dylib_link_args::dylib_link_args(&os, &version, soname.as_deref()) {
+        println!("cargo::rustc-cdylib-link-arg={arg}");
     }
 }

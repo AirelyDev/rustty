@@ -566,8 +566,9 @@ function(rustty_vt_add_target)
             INTERFACE_LINK_LIBRARIES "ntdll;kernel32;ws2_32;userenv;bcrypt;advapi32"
         )
     elseif(_RVT_RUST_TARGET MATCHES "darwin|apple")
+        # No `intl`: the archive bundles its own vendored libintl (S64-F6).
         set_target_properties(${_static_target} PROPERTIES
-            INTERFACE_LINK_LIBRARIES "c++;-framework CoreFoundation;-framework Foundation;iconv;intl;objc;c;m"
+            INTERFACE_LINK_LIBRARIES "c++;-framework CoreFoundation;-framework Foundation;iconv;objc;c;m"
         )
     else()
         set_target_properties(${_static_target} PROPERTIES

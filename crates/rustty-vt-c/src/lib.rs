@@ -94,6 +94,8 @@ pub mod cell;
 pub mod color;
 pub mod color_scheme;
 mod cwrap;
+#[cfg(test)]
+mod dylib_link_args;
 pub mod focus;
 pub mod formatter;
 pub mod grid_ref;
