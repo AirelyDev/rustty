@@ -491,6 +491,12 @@ jobs:
       # The XCFramework the Xcode project links against. This also covers
       # `xtask xcframework`, which G-XTASK otherwise runs only under an opt-in
       # env var because of its cost.
+      # `xtask xcframework` builds the universal library by default (the
+      # reference's `-Dxcframework-target` default), which needs the x86_64
+      # standard library.
+      - name: Install the macOS targets
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
       - name: Build RusttyKit.xcframework
         run: cargo run --release -p xtask -- xcframework
 

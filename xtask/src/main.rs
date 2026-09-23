@@ -66,7 +66,8 @@ USAGE:
 SUBCOMMANDS:
     header-gen         Generate include/rustty.h from rustty-vt-c via cbindgen (R2)
     header-gen-apprt   Generate include/rustty-apprt.h from rustty-apprt-c via cbindgen (R2)
-    xcframework        Package rustty-apprt-c into macos/RusttyKit.xcframework (macOS Swift-app tier;
+    xcframework [--target universal|native]
+                       Package rustty-apprt-c into macos/RusttyKit.xcframework (macOS Swift-app tier;
                        the path Rustty.xcodeproj links, matching the reference's
                        GhosttyXCFramework out_path)
     xcframework-vt     Package rustty-vt-c into dist/rustty-vt.xcframework (the VT library for
@@ -146,7 +147,7 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
-        Some("xcframework") => match xcframework() {
+        Some("xcframework") => match xcframework(&mut args) {
             Ok(out) => {
                 println!("wrote {}", out.display());
                 ExitCode::SUCCESS
@@ -381,8 +382,12 @@ fn header_gen_apprt() -> Result<PathBuf, String> {
 /// DEFAULT feature set — the `identity-oracle` alias layer was deleted
 /// (rebrand Task 1), so only `rustty_*` symbols are exported.
 ///
-/// macOS-arm64 slice only (the host target). A universal slice would add
-/// `x86_64-apple-darwin` via `lipo`; deferred until that target is installed.
+/// The macOS slice is universal (aarch64 + x86_64, `lipo`-combined) by
+/// default, or the host arch alone with `--target native`: the reference's
+/// `-Dxcframework-target`, default `.universal` (`Config.zig:22, 183-187`;
+/// S63-F3 / S64-F3 / S65-F3). CORRECTION (2026-09-23): this used to read
+/// "macOS-arm64 slice only (the host target). A universal slice would add
+/// `x86_64-apple-darwin` via `lipo`; deferred until that target is installed."
 ///
 /// R3: uses rustty's OWN validated `include/rustty-embed.h` (the frozen
 /// ghostty.h token-renamed and checked against the pinned upstream, per
@@ -395,6 +400,10 @@ fn header_gen_apprt() -> Result<PathBuf, String> {
 /// "object file was built for newer macOS version than being linked" warnings
 /// that appear when the host toolchain defaults to the running OS (e.g. 26.x).
 const MACOS_DEPLOYMENT_TARGET: &str = "13.0";
+
+/// `Config.zig:808-812` `osVersionMinLibVt(.ios)`: "lib-vt is the only thing
+/// we still build for iOS, so its deployment target lives here".
+const IOS_DEPLOYMENT_TARGET: &str = "13.0";
 
 /// What distinguishes one xcframework from another.
 ///
@@ -447,6 +456,124 @@ struct XcframeworkSpec {
     /// present in the resolve graph, so the per-target switch has to live here,
     /// in the builder, exactly as `--features simd` already does below.
     extra_features: &'static [&'static str],
+    /// Which slices the bundle carries. See [`Slices`].
+    slices: Slices,
+}
+
+/// How an xcframework's slices are chosen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Slices {
+    /// The embedding framework: one macOS slice, universal or native per
+    /// `xcframework_target` (`GhosttyXCFramework.zig:18-57`).
+    MacosByTarget,
+    /// The VT library: `GhosttyLibVt.initStaticAppleUniversal`
+    /// (`GhosttyLibVt.zig:146-215`) ALWAYS builds the macOS universal slice
+    /// and adds the iOS device and simulator slices when the iOS SDK is
+    /// detected; `xcframework_target` does not apply.
+    AppleUniversal,
+}
+
+/// `xcframework.zig:1-3` `Target = enum { native, universal }`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum XcframeworkTarget {
+    Native,
+    Universal,
+}
+
+/// One `-library` of an xcframework: the Rust targets whose combined archives
+/// make it (two are `lipo`-combined into one fat archive), and the target
+/// directory name its archive is written under.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Slice {
+    targets: Vec<&'static str>,
+    dir: &'static str,
+}
+
+/// The host's macOS target triple (the reference's `genericMacOSTarget(b,
+/// null)`, the native arch).
+fn native_macos_target() -> &'static str {
+    if std::env::consts::ARCH == "x86_64" {
+        "x86_64-apple-darwin"
+    } else {
+        "aarch64-apple-darwin"
+    }
+}
+
+/// The slices a spec's bundle carries.
+fn plan_slices(slices: Slices, target: XcframeworkTarget, ios_sdk: bool) -> Vec<Slice> {
+    // `initMacOSUniversal` / `initStaticAppleUniversal`: aarch64 + x86_64.
+    let universal = Slice {
+        targets: vec!["aarch64-apple-darwin", "x86_64-apple-darwin"],
+        dir: "universal-apple-darwin",
+    };
+    match slices {
+        Slices::MacosByTarget => match target {
+            XcframeworkTarget::Universal => vec![universal],
+            XcframeworkTarget::Native => {
+                let t = native_macos_target();
+                vec![Slice {
+                    targets: vec![t],
+                    dir: t,
+                }]
+            }
+        },
+        Slices::AppleUniversal => {
+            let mut v = vec![universal];
+            if ios_sdk {
+                v.push(Slice {
+                    targets: vec!["aarch64-apple-ios"],
+                    dir: "aarch64-apple-ios",
+                });
+                v.push(Slice {
+                    targets: vec!["aarch64-apple-ios-sim"],
+                    dir: "aarch64-apple-ios-sim",
+                });
+            }
+            v
+        }
+    }
+}
+
+/// `detectAppleSDK` for iOS: whether `xcrun` can find the iPhoneOS SDK.
+fn ios_sdk_available() -> bool {
+    Command::new("xcrun")
+        .args(["--sdk", "iphoneos", "--show-sdk-path"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// The environment one Apple target's cargo build runs with: the deployment
+/// target (`Config.osVersionMin`, macOS 13.0; `osVersionMinLibVt`, iOS 13.0),
+/// and for the iOS simulator the reference's explicit CPU model
+/// (`GhosttyLibVt.zig:199-205`, `.cpu_model = apple_a17`), for both rustc and
+/// the `cc`-driven C builds.
+fn apple_target_env(target: &str) -> Vec<(&'static str, &'static str)> {
+    if target == "aarch64-apple-ios-sim" {
+        vec![
+            ("IPHONEOS_DEPLOYMENT_TARGET", IOS_DEPLOYMENT_TARGET),
+            (
+                "CARGO_TARGET_AARCH64_APPLE_IOS_SIM_RUSTFLAGS",
+                "-C target-cpu=apple-a17",
+            ),
+            ("CFLAGS_aarch64_apple_ios_sim", "-mcpu=apple-a17"),
+            ("CXXFLAGS_aarch64_apple_ios_sim", "-mcpu=apple-a17"),
+        ]
+    } else if target.contains("-apple-ios") {
+        vec![("IPHONEOS_DEPLOYMENT_TARGET", IOS_DEPLOYMENT_TARGET)]
+    } else {
+        vec![("MACOSX_DEPLOYMENT_TARGET", MACOS_DEPLOYMENT_TARGET)]
+    }
+}
+
+/// `LipoStep.zig:30-34`: `lipo -create -output <out> <a> <b>`.
+fn lipo_command(out: &Path, inputs: &[PathBuf]) -> Command {
+    let mut cmd = Command::new("lipo");
+    cmd.arg("-create").arg("-output").arg(out);
+    for i in inputs {
+        cmd.arg(i);
+    }
+    cmd
 }
 
 /// The two shapes rustty's public headers take.
@@ -486,6 +613,7 @@ const XCF_KIT: XcframeworkSpec = XcframeworkSpec {
     // TRUE on macOS/iOS, and this is the macOS app's library. See
     // `extra_features` above and `rustty-crash`'s `[features]` header.
     extra_features: &["sentry"],
+    slices: Slices::MacosByTarget,
 };
 
 /// PORTS: ghostty's `ghostty-vt.xcframework` (GhosttyXCFramework.zig's lib-vt
@@ -510,6 +638,7 @@ const XCF_VT: XcframeworkSpec = XcframeworkSpec {
     // library is below the crash tier), so there is nothing to enable — the
     // reference links sentry into the APP, not into libghostty-vt.
     extra_features: &[],
+    slices: Slices::AppleUniversal,
 };
 
 /// Copy a directory tree verbatim. `std::fs` has no recursive copy and the
@@ -529,17 +658,86 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn xcframework() -> Result<PathBuf, String> {
-    build_xcframework(&XCF_KIT)
+/// Parse `xtask xcframework`'s flags: `--target universal|native`
+/// (`-Dxcframework-target`), default universal.
+fn parse_xcframework_args(
+    args: &mut impl Iterator<Item = String>,
+) -> Result<XcframeworkTarget, String> {
+    let mut target = XcframeworkTarget::Universal;
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--target" => {
+                target = match args.next().as_deref() {
+                    Some("universal") => XcframeworkTarget::Universal,
+                    Some("native") => XcframeworkTarget::Native,
+                    _ => return Err("--target requires `universal` or `native`".into()),
+                };
+            }
+            other => return Err(format!("unknown `xcframework` flag `{other}`")),
+        }
+    }
+    Ok(target)
+}
+
+fn xcframework(args: &mut impl Iterator<Item = String>) -> Result<PathBuf, String> {
+    let target = parse_xcframework_args(args)?;
+    build_xcframework(&XCF_KIT, target)
 }
 
 fn xcframework_vt() -> Result<PathBuf, String> {
-    build_xcframework(&XCF_VT)
+    // `xcframework_target` does not apply to the VT library (see `Slices`).
+    build_xcframework(&XCF_VT, XcframeworkTarget::Universal)
 }
 
-fn build_xcframework(spec: &XcframeworkSpec) -> Result<PathBuf, String> {
+fn build_xcframework(
+    spec: &XcframeworkSpec,
+    xcf_target: XcframeworkTarget,
+) -> Result<PathBuf, String> {
     let root = workspace_root();
-    let target = "aarch64-apple-darwin";
+    let ios_sdk = spec.slices == Slices::AppleUniversal && ios_sdk_available();
+    let slices = plan_slices(spec.slices, xcf_target, ios_sdk);
+
+    // One library per slice: each Rust target's combined archive, then
+    // `lipo` for a fat slice.
+    let mut libs: Vec<PathBuf> = Vec::with_capacity(slices.len());
+    for slice in &slices {
+        let mut per_target = Vec::with_capacity(slice.targets.len());
+        for target in &slice.targets {
+            per_target.push(build_combined_archive(&root, spec, target)?);
+        }
+        let lib = if let [one] = per_target.as_slice() {
+            one.clone()
+        } else {
+            let out = root.join(format!(
+                "target/{}/xcframework/{}.a",
+                slice.dir, spec.lib_stem
+            ));
+            std::fs::create_dir_all(out.parent().unwrap())
+                .map_err(|e| format!("mkdir {}: {e}", out.display()))?;
+            let _ = std::fs::remove_file(&out);
+            let status = lipo_command(&out, &per_target)
+                .current_dir(&root)
+                .status()
+                .map_err(|e| format!("spawn lipo: {e}"))?;
+            if !status.success() {
+                return Err(format!("lipo exited with {status}"));
+            }
+            out
+        };
+        libs.push(lib);
+    }
+
+    stage_and_create_xcframework(&root, spec, &libs)
+}
+
+/// Build one Rust target's staticlib and fold in its vendored C archives
+/// (steps 1 and 1b), returning the combined archive.
+fn build_combined_archive(
+    root: &Path,
+    spec: &XcframeworkSpec,
+    target: &str,
+) -> Result<PathBuf, String> {
+    let root = root.to_path_buf();
 
     // 1. Build the DEFAULT-profile staticlib under the abort profile.
     //
@@ -577,7 +775,7 @@ fn build_xcframework(spec: &XcframeworkSpec) -> Result<PathBuf, String> {
             "--target",
             target,
         ],
-        &[("MACOSX_DEPLOYMENT_TARGET", MACOS_DEPLOYMENT_TARGET)],
+        &apple_target_env(target),
     )?;
 
     // 1b. Combine the Rust staticlib with its vendored C archives into ONE
@@ -660,6 +858,18 @@ fn build_xcframework(spec: &XcframeworkSpec) -> Result<PathBuf, String> {
     if !lib.exists() {
         return Err(format!("combined lib not found at {}", lib.display()));
     }
+    Ok(lib)
+}
+
+/// Steps 2 and 3: stage the headers and module map, then
+/// `xcodebuild -create-xcframework` with one `-library`/`-headers` pair per
+/// slice (`XCFrameworkStep.zig`).
+fn stage_and_create_xcframework(
+    root: &Path,
+    spec: &XcframeworkSpec,
+    libs: &[PathBuf],
+) -> Result<PathBuf, String> {
+    let root = root.to_path_buf();
 
     // 2. Stage the headers dir + the clang module map.
     let dist = root.join("dist");
@@ -717,11 +927,12 @@ fn build_xcframework(spec: &XcframeworkSpec) -> Result<PathBuf, String> {
     std::fs::create_dir_all(&out_dir).map_err(|e| format!("mkdir {}: {e}", out_dir.display()))?;
     let out = out_dir.join(spec.bundle);
     let _ = std::fs::remove_dir_all(&out);
-    let status = Command::new("xcodebuild")
-        .args(["-create-xcframework", "-library"])
-        .arg(&lib)
-        .arg("-headers")
-        .arg(&headers)
+    let mut xcb = Command::new("xcodebuild");
+    xcb.arg("-create-xcframework");
+    for lib in libs {
+        xcb.arg("-library").arg(lib).arg("-headers").arg(&headers);
+    }
+    let status = xcb
         .arg("-output")
         .arg(&out)
         .current_dir(&root)
@@ -879,6 +1090,78 @@ mod tests {
     use super::*;
 
     const WASM_PATCH_USAGE: &str = "usage: wasm-patch-growable-table <input.wasm> <output.wasm>";
+
+    /// `Config.zig:22, 183-187`: `xcframework_target` defaults to universal,
+    /// and `GhosttyXCFramework.zig:42-57` then packs ONE macOS library, the
+    /// `initMacOSUniversal` lipo of aarch64 and x86_64 (S63-F3, S64-F3,
+    /// S65-F3). `native` is the host arch alone.
+    #[test]
+    fn kit_xcframework_is_universal_by_default() {
+        let t = parse_xcframework_args(&mut std::iter::empty()).unwrap();
+        assert_eq!(t, XcframeworkTarget::Universal);
+        let slices = plan_slices(XCF_KIT.slices, t, true);
+        assert_eq!(
+            slices,
+            vec![Slice {
+                targets: vec!["aarch64-apple-darwin", "x86_64-apple-darwin"],
+                dir: "universal-apple-darwin",
+            }]
+        );
+        let native =
+            parse_xcframework_args(&mut ["--target", "native"].into_iter().map(String::from))
+                .unwrap();
+        let slices = plan_slices(XCF_KIT.slices, native, true);
+        assert_eq!(slices.len(), 1);
+        assert_eq!(slices[0].targets, vec![native_macos_target()]);
+        assert!(
+            parse_xcframework_args(&mut ["--target", "fat"].into_iter().map(String::from)).is_err()
+        );
+    }
+
+    /// `GhosttyLibVt.zig:146-215`: the VT library always has the macOS
+    /// universal slice, plus the iOS device and simulator slices when the
+    /// iOS SDK is detected (S64-F4).
+    #[test]
+    fn vt_xcframework_has_the_apple_universal_slices() {
+        let with_ios = plan_slices(XCF_VT.slices, XcframeworkTarget::Native, true);
+        let targets: Vec<_> = with_ios.iter().map(|s| s.targets.clone()).collect();
+        assert_eq!(
+            targets,
+            vec![
+                vec!["aarch64-apple-darwin", "x86_64-apple-darwin"],
+                vec!["aarch64-apple-ios"],
+                vec!["aarch64-apple-ios-sim"],
+            ]
+        );
+        let without = plan_slices(XCF_VT.slices, XcframeworkTarget::Universal, false);
+        assert_eq!(without.len(), 1);
+        let sim = apple_target_env("aarch64-apple-ios-sim");
+        assert!(sim.contains(&("IPHONEOS_DEPLOYMENT_TARGET", "13.0")));
+        assert!(sim.contains(&(
+            "CARGO_TARGET_AARCH64_APPLE_IOS_SIM_RUSTFLAGS",
+            "-C target-cpu=apple-a17"
+        )));
+        assert_eq!(
+            apple_target_env("aarch64-apple-ios"),
+            [("IPHONEOS_DEPLOYMENT_TARGET", "13.0")]
+        );
+        assert_eq!(
+            apple_target_env("x86_64-apple-darwin"),
+            [("MACOSX_DEPLOYMENT_TARGET", "13.0")]
+        );
+    }
+
+    /// `LipoStep.zig:30-34`.
+    #[test]
+    fn lipo_command_matches_the_reference_argv() {
+        let cmd = lipo_command(
+            Path::new("out.a"),
+            &[PathBuf::from("a.a"), PathBuf::from("b.a")],
+        );
+        assert_eq!(cmd.get_program(), "lipo");
+        let args: Vec<_> = cmd.get_args().map(|a| a.to_str().unwrap()).collect();
+        assert_eq!(args, ["-create", "-output", "out.a", "a.a", "b.a"]);
+    }
 
     /// `wasm_patch_growable_table.zig:21-26`: `if (args.len != 3)` logs the
     /// usage line and exits 1, so too MANY arguments is the same usage error

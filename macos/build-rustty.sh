@@ -15,6 +15,28 @@ cd "$ROOT"
 
 CONFIGURATION="${CONFIGURATION:-Debug}"
 
+# XCFRAMEWORK_TARGET is the reference's `-Dxcframework-target` (Config.zig:22,
+# 183-187), default `universal`: the library is the lipo of aarch64 and x86_64
+# (GhosttyLib.initMacOSUniversal) and xcodebuild gets no arch override, so the
+# configuration's own architectures apply (both for Release). `native` builds
+# the host arch only and pins xcodebuild to it, as GhosttyXcodebuild.zig:36-48
+# does with `-arch` (S64-F3).
+XCFRAMEWORK_TARGET="${XCFRAMEWORK_TARGET:-universal}"
+case "$XCFRAMEWORK_TARGET" in
+  universal)
+    # The x86_64 standard library is not installed by default on an arm64 host.
+    rustup target add aarch64-apple-darwin x86_64-apple-darwin
+    DESTINATION='generic/platform=macOS'
+    ;;
+  native)
+    DESTINATION="platform=macOS,arch=$(uname -m)"
+    ;;
+  *)
+    echo "XCFRAMEWORK_TARGET must be universal or native, got '$XCFRAMEWORK_TARGET'" >&2
+    exit 1
+    ;;
+esac
+
 echo "== 1/3 packaging RusttyKit.xcframework =="
 # `xtask xcframework` now writes STRAIGHT to macos/RusttyKit.xcframework — the
 # path Rustty.xcodeproj links and the one the reference emits to
@@ -27,7 +49,7 @@ echo "== 1/3 packaging RusttyKit.xcframework =="
 # whatever stale copy was lying around. On this machine that copy was 69 header
 # lines behind and the app failed with 18 "cannot find X in scope" errors.
 # Having one location instead of two removes the failure mode entirely.
-cargo run -q -p xtask -- xcframework
+cargo run -q -p xtask -- xcframework --target "$XCFRAMEWORK_TARGET"
 
 echo "== 2/3 generating app resources (zig-out/share) =="
 cargo run -q -p xtask -- resources
@@ -48,7 +70,7 @@ echo "== 3/3 xcodebuild =="
 # with Homebrew's libintl hidden.
 cd macos
 exec xcodebuild -project Rustty.xcodeproj -scheme Rustty -configuration "$CONFIGURATION" \
-  -destination 'platform=macOS,arch=arm64' \
+  -destination "$DESTINATION" \
   CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO \
   OTHER_LDFLAGS="-lstdc++" \
   "$@"

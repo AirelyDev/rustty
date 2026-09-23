@@ -15,7 +15,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** Version pre-release/build are never derived from git, so dev builds report the `stable` release channel
   - **Oracle:** `src/build/Config.zig:276-339, 693-701` → **Rustty:** `crates/rustty-build-config/src/lib.rs:93-103, 131-141, 159-181`
   - **Audit's suggested fix:** In a build.rs (identity or build-config) detect git branch/short hash like GitVersion.detect, expose `VERSION_STRING` as `X.Y.Z-<branch>+<hash>` (or `-dev+0000000` without git) and derive ReleaseChannel from it; keep bare X.Y.Z only for `vX.Y.Z` tags / an explicit override.
-- [ ] **S63-F3** · CONFIRMED · `INDIV` · missing-branch
+- [x] **S63-F3** · CONFIRMED · `INDIV` · missing-branch
   - **What:** No universal (aarch64 + x86_64) macOS library; xcframework_target default `.universal` not honoured
   - **Oracle:** `src/build/GhosttyLib.zig:181-211` → **Rustty:** `xtask/src/main.rs:363-364, 496-524`
   - **Audit's suggested fix:** Build the staticlib for both `aarch64-apple-darwin` and `x86_64-apple-darwin`, `lipo -create` the combined archives, and expose an `--xcframework-target universal|native` switch mirroring the option.
@@ -43,11 +43,11 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** metal compile omits -mmacos-version-min=<os_version_min>
   - **Oracle:** `src/build/MetallibStep.zig:36-56` → **Rustty:** `crates/rustty-renderer/build.rs:70-79`
   - **Audit's suggested fix:** Add `.arg("-mmacos-version-min=13.0")` (read MACOSX_DEPLOYMENT_TARGET when set, defaulting to the 13.0 floor xtask already pins) to the metal compile command.
-- [ ] **S64-F3** · CONFIRMED · `INDIV` · missing-branch
+- [x] **S64-F3** · CONFIRMED · `INDIV` · missing-branch
   - **What:** XCFramework `.universal` target (arm64 + x86_64 via lipo) not built; app/xcframework are aarch64-only
   - **Oracle:** `src/build/GhosttyXCFramework.zig:18-57` → **Rustty:** `xtask/src/main.rs:363-364,500-522`
   - **Audit's suggested fix:** Build both `aarch64-apple-darwin` and `x86_64-apple-darwin` staticlibs (each normalised + libtool-combined), `lipo -create -output` them, and hand the universal archive to `-create-xcframework`; keep a `--native` opt-out mirroring xcframework_target.
-- [ ] **S64-F4** · CONFIRMED · `ABI` · missing-branch
+- [x] **S64-F4** · CONFIRMED · `ABI` · missing-branch
   - **What:** lib-vt xcframework lacks the macOS universal slice and the iOS device/simulator slices
   - **Oracle:** `src/build/GhosttyLibVt.zig:146-215,547-586,631-659` → **Rustty:** `xtask/src/main.rs:455-471,500-522`
   - **Audit's suggested fix:** Extend build_xcframework with a slice list: macOS universal (lipo of aarch64/x86_64), plus `aarch64-apple-ios` and `aarch64-apple-ios-sim` when `xcrun --sdk iphoneos --show-sdk-path` succeeds; pass each `-library` to `-create-xcframework`.
@@ -67,7 +67,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** addSimd MSVC-only C++ flags not applied (`-D_Avx2WmemEnabledWeakValue=_Avx2WmemEnabled`, `-fno-autolink`)
   - **Oracle:** `src/build/SharedDeps.zig:995-999` → **Rustty:** `crates/rustty-simd/build.rs:120-127`
   - **Audit's suggested fix:** Add `if target_env == "msvc" { build.define("_Avx2WmemEnabledWeakValue", Some("_Avx2WmemEnabled")); build.flag_if_supported("-fno-autolink"); }`.
-- [ ] **S65-F3** · CONFIRMED · `INDIV` · missing-branch
+- [x] **S65-F3** · CONFIRMED · `INDIV` · missing-branch
   - **What:** xcframework `universal` target (x86_64 slice + lipo) not implemented; only native aarch64 built
   - **Oracle:** `src/build/xcframework.zig:1-3` → **Rustty:** `xtask/src/main.rs:363-364, 499-500`
   - **Audit's suggested fix:** Add a `--universal` mode building both targets and lipo-ing the archives before `-create-xcframework`.

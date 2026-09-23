@@ -34,8 +34,6 @@
 #   * the `sentry-dsym` job — rustty has no Sentry project to upload to.
 #   * Nix/cachix setup and the namespace.so runner pool — rustty has no flake
 #     (`.port/phase-3/NON_PORTS.md` §G13) and uses GitHub-hosted runners.
-#   * a universal macOS slice: `xtask xcframework` builds aarch64 only (see its
-#     doc comment), so the app archive is named `-arm64`, not `-universal`.
 
 on:
   workflow_dispatch:
@@ -291,14 +289,14 @@ jobs:
           xcrun stapler staple "Rustty.dmg"
           xcrun stapler staple "$APP"
 
-      # Zip up the app and symbols. `-arm64`, not `-universal`: `xtask
-      # xcframework` builds the aarch64-apple-darwin slice only.
+      # Zip up the app and symbols. `-universal`, as the reference names it:
+      # build-rustty.sh builds the universal (aarch64 + x86_64) library and app.
       - name: Zip App
         run: |
-          ( cd "$(dirname "$APP")" && zip -9 -r --symlinks "$GITHUB_WORKSPACE/rustty-macos-arm64.zip" "$(basename "$APP")" )
+          ( cd "$(dirname "$APP")" && zip -9 -r --symlinks "$GITHUB_WORKSPACE/rustty-macos-universal.zip" "$(basename "$APP")" )
           DSYM="$APP.dSYM"
           if [ -d "$DSYM" ]; then
-            ( cd "$(dirname "$DSYM")" && zip -9 -r --symlinks "$GITHUB_WORKSPACE/rustty-macos-arm64-dsym.zip" "$(basename "$DSYM")" )
+            ( cd "$(dirname "$DSYM")" && zip -9 -r --symlinks "$GITHUB_WORKSPACE/rustty-macos-universal-dsym.zip" "$(basename "$DSYM")" )
           else
             echo "::warning title=No dSYM::$DSYM does not exist; publishing without debug symbols."
           fi
@@ -309,8 +307,8 @@ jobs:
           name: macos
           path: |-
             Rustty.dmg
-            rustty-macos-arm64.zip
-            rustty-macos-arm64-dsym.zip
+            rustty-macos-universal.zip
+            rustty-macos-universal-dsym.zip
 
   # PORTS: ghostty release-tag.yml `sentry-dsym`. Uploads the macOS debug
   # symbols so Sentry can symbolicate crash reports from a shipped build.
@@ -342,12 +340,12 @@ jobs:
             echo "::warning title=Sentry upload skipped::SENTRY_AUTH_TOKEN is not configured; debug symbols were not uploaded."
             exit 0
           fi
-          if [ ! -f rustty-macos-arm64-dsym.zip ]; then
+          if [ ! -f rustty-macos-universal-dsym.zip ]; then
             echo "::warning title=No dSYM::build-macos produced no dsym zip; nothing to upload."
             exit 0
           fi
           brew install getsentry/tools/sentry-cli
-          unzip -q rustty-macos-arm64-dsym.zip -d dsym
+          unzip -q rustty-macos-universal-dsym.zip -d dsym
           sentry-cli debug-files upload --include-sources dsym
 
   appcast:
@@ -508,9 +506,9 @@ jobs:
           mv "rustty-${RUSTTY_VERSION}.tar.gz.minisig" "blob/${RUSTTY_VERSION}/rustty-${RUSTTY_VERSION}.tar.gz.minisig"
           mv rustty-source.tar.gz "blob/${RUSTTY_VERSION}/rustty-source.tar.gz"
           mv rustty-source.tar.gz.minisig "blob/${RUSTTY_VERSION}/rustty-source.tar.gz.minisig"
-          mv rustty-macos-arm64.zip "blob/${RUSTTY_VERSION}/rustty-macos-arm64.zip"
-          if [ -f rustty-macos-arm64-dsym.zip ]; then
-            mv rustty-macos-arm64-dsym.zip "blob/${RUSTTY_VERSION}/rustty-macos-arm64-dsym.zip"
+          mv rustty-macos-universal.zip "blob/${RUSTTY_VERSION}/rustty-macos-universal.zip"
+          if [ -f rustty-macos-universal-dsym.zip ]; then
+            mv rustty-macos-universal-dsym.zip "blob/${RUSTTY_VERSION}/rustty-macos-universal-dsym.zip"
           fi
           mv Rustty.dmg "blob/${RUSTTY_VERSION}/Rustty.dmg"
           # Staged, not live: publish-tag.yml promotes it to /appcast.xml once
