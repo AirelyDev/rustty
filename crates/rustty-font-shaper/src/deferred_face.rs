@@ -262,6 +262,17 @@ mod coretext_payload {
         }
     }
 
+    /// `ct.font.copyAttribute(.family_name)` — `None` when CoreText has no
+    /// family name (`CTFontCopyAttribute(font, kCTFontFamilyNameAttribute)`,
+    /// the reference's `pkg/macos` `copyAttribute`, which is nullable).
+    fn ct_font_copy_family_name(font: &CTFont) -> Option<CFRetained<CFString>> {
+        // SAFETY: `font` is a live retained CTFont and the key is CoreText's own
+        // constant; the Copy rule gives the returned attribute +1, which the
+        // `CFRetained` owns.
+        let attr = unsafe { font.attribute(objc2_core_text::kCTFontFamilyNameAttribute) }?;
+        attr.downcast::<CFString>().ok()
+    }
+
     /// `ct.font.copyDisplayName()` — `None` when CoreText has no display name.
     fn ct_font_copy_display_name(font: &CTFont) -> Option<CFRetained<CFString>> {
         // SAFETY: `font` is a live retained CTFont.
@@ -297,7 +308,15 @@ mod coretext_payload {
             //     return family_name.cstringPtr(.utf8) orelse family_name.cstring(buf, .utf8) ...;
             // },
             if let Some(ct) = self.ct.as_ref() {
-                let family_name = unsafe { ct.font.family_name() };
+                // PORT NOTE (S85-F2): the reference's `copyAttribute(.family_name)`
+                // is nullable and a NULL takes `orelse return "unknown"`. objc2's
+                // `CTFont::family_name` (`CTFontCopyFamilyName`) asserts non-null
+                // and PANICKED instead; CoreText returns NULL for a font file with
+                // no `name` table (measured, macOS 26.5.1). Use the same nullable
+                // attribute copy the reference uses.
+                let Some(family_name) = ct_font_copy_family_name(&ct.font) else {
+                    return Ok(b"unknown");
+                };
                 let s = family_name.to_string();
                 let bytes = s.as_bytes();
                 if bytes.len() > buf.len() {
@@ -1459,5 +1478,65 @@ mod tests {
         face.deinit();
         def.deinit();
         lib.deinit();
+    }
+
+    /// A CoreText `DeferredFace` for `bytes` (a font file in memory).
+    #[cfg(target_os = "macos")]
+    fn coretext_deferred(bytes: &[u8]) -> super::DeferredFace {
+        use objc2_core_foundation::CFData;
+        use objc2_core_text::{CTFont, CTFontManagerCreateFontDescriptorFromData};
+        let data = CFData::from_bytes(bytes);
+        let desc = unsafe { CTFontManagerCreateFontDescriptorFromData(&data) }
+            .expect("CoreText accepts the font data");
+        let font = unsafe { CTFont::with_font_descriptor(&desc, 12.0, std::ptr::null()) };
+        super::DeferredFace {
+            ct: Some(super::CoreTextData {
+                font,
+                variations: Vec::new(),
+            }),
+        }
+    }
+
+    /// S85-F2: a font whose CoreText family name is NULL (here: a font file with
+    /// no `name` table) gives "unknown", the reference's `orelse return
+    /// "unknown"`, where objc2's non-null `family_name()` panicked. `name` falls
+    /// back to the family name (the display name is NULL too), so it reaches
+    /// the same arm.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_coretext_font_without_a_family_name_is_unknown() {
+        // Positive control: the unmodified font has its real family name.
+        let mut def = coretext_deferred(rustty_font::embedded::VARIABLE);
+        let mut buf = [0u8; 1024];
+        assert_eq!(b"JetBrains Mono", def.family_name(&mut buf).unwrap());
+        def.deinit();
+
+        // The same font with its `name` table's directory tag renamed, so
+        // CoreText finds no names at all.
+        let mut bytes = rustty_font::embedded::VARIABLE.to_vec();
+        let num_tables = u16::from_be_bytes([bytes[4], bytes[5]]) as usize;
+        let mut renamed = false;
+        for i in 0..num_tables {
+            let rec = 12 + 16 * i;
+            if &bytes[rec..rec + 4] == b"name" {
+                bytes[rec..rec + 4].copy_from_slice(b"zzzz");
+                renamed = true;
+            }
+        }
+        assert!(renamed, "the font has a name table to remove");
+
+        let mut def = coretext_deferred(&bytes);
+        let ct = def.ct.as_ref().unwrap();
+        assert!(
+            unsafe {
+                ct.font
+                    .attribute(objc2_core_text::kCTFontFamilyNameAttribute)
+            }
+            .is_none(),
+            "precondition: CoreText has no family name for this font"
+        );
+        assert_eq!(b"unknown", def.family_name(&mut buf).unwrap());
+        assert_eq!(b"unknown", def.name(&mut buf).unwrap());
+        def.deinit();
     }
 }
