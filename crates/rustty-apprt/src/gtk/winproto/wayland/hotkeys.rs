@@ -129,6 +129,15 @@ impl Entry {
         // unreachable`; the port returns the error instead of aborting, because a
         // compositor-facing path must never be able to abort the terminal even if a
         // future `bind` regressed the guard.
+        //
+        // PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD91. The
+        // guarantee does not hold: `keysymFromTrigger` is also null for the 43
+        // `input.Key` values GTK's keymap does not map (counting `unidentified`;
+        // e.g. `audio_volume_up`,
+        // `browser_back`, `intl_backslash`), so `keybind = global:<one of them>`
+        // traps once a compositor offers `vicinae_hotkey_manager_v1`. The
+        // `NoKeysym` return takes the reference's own `bind` loop warning and
+        // skips just this entry.
         let Some(keysym) = key::keysym_from_trigger(self.trigger) else {
             return Err(BindError::NoKeysym);
         };
@@ -972,6 +981,102 @@ mod tests {
             failures.borrow().len(),
             2,
             "exactly one bind-failed per failed binding"
+        );
+    }
+
+    /// UD91 (R13, task R13-D): a `global:` bind on one of the physical keys GTK's
+    /// keymap has no keysym for (`audio_volume_up` here; 43 `input.Key` values
+    /// at the pin, counting `unidentified`). The reference's `Entry.bind` says only `catch_all` lacks a keysym
+    /// and spells it `orelse unreachable` (`Hotkeys.zig:40`), so such a config
+    /// line traps once a compositor offers `vicinae_hotkey_manager_v1`. The port
+    /// returns `NoKeysym`, which the reference's own `bind` loop logs and skips:
+    /// the other binds still go out. Wire-level, as the test above.
+    #[test]
+    fn hotkeys_bind_skips_a_trigger_with_no_keysym() {
+        use std::os::unix::net::UnixStream;
+        use std::sync::Arc;
+
+        use fake_compositor_proto::vicinae_hotkey_manager_v1::VicinaeHotkeyManagerV1 as SrvManager;
+
+        let (server_sock, client_sock) = UnixStream::pair().expect("socket pair");
+        let mut display: wayland_server::Display<FakeCompositor> =
+            wayland_server::Display::new().expect("wayland-server display");
+        let mut dh = display.handle();
+        dh.create_global::<FakeCompositor, SrvManager, ()>(1, ());
+        let _client = dh
+            .insert_client(server_sock, Arc::new(NoClientData))
+            .expect("insert client");
+        let mut server = FakeCompositor::default();
+
+        let host = wayland_client::Connection::from_socket(client_sock).expect("host connection");
+        let backend = unsafe {
+            wayland_backend::sys::client::Backend::from_foreign_display(
+                host.backend().display_ptr(),
+            )
+        };
+        let conn = wayland_client::Connection::from_backend(backend);
+        let mut event_queue = conn.new_event_queue::<Globals>();
+        let qh = event_queue.handle();
+        let registry = conn.display().get_registry(&qh, ());
+        let mut globals = Box::new(Globals::new(
+            conn.clone(),
+            qh.clone(),
+            registry,
+            "com.mitchellh.rustty",
+        ));
+        for _ in 0..16 {
+            event_queue.flush().expect("client flush");
+            display
+                .dispatch_clients(&mut server)
+                .expect("server dispatch");
+            display.flush_clients().expect("server flush");
+            gdk_read(&host);
+            event_queue
+                .dispatch_pending(&mut globals)
+                .expect("client dispatch");
+            if globals.vicinae_hotkey_manager().is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        let manager = globals
+            .vicinae_hotkey_manager()
+            .cloned()
+            .expect("the registry must bind the advertised vicinae_hotkey_manager_v1");
+
+        let config = config_with(&[
+            "global:audio_volume_up=new_window",
+            "global:super+q=new_tab",
+        ]);
+        let selected = select_entries(&config);
+        assert_eq!(2, selected.len(), "precondition: both binds are selected");
+        let no_keysym: Vec<_> = selected
+            .iter()
+            .filter(|(t, _)| key::keysym_from_trigger(*t).is_none())
+            .collect();
+        assert_eq!(
+            1,
+            no_keysym.len(),
+            "precondition: exactly one selected trigger has no keysym"
+        );
+        assert!(matches!(no_keysym[0].0.key, TriggerKey::Physical(_)));
+
+        let gs = GlobalShortcuts::new();
+        globals.hotkeys_mut().bind(&manager, &qh, &gs, &config);
+        assert_eq!(2, globals.hotkeys().entry_count());
+
+        event_queue.flush().expect("client flush");
+        display
+            .dispatch_clients(&mut server)
+            .expect("server dispatch");
+        let q = selected
+            .iter()
+            .find_map(|(t, _)| key::keysym_from_trigger(*t))
+            .expect("super+q has a keysym");
+        assert_eq!(
+            vec![q],
+            server.binds.iter().map(|b| b.keysym).collect::<Vec<_>>(),
+            "only the bind with a keysym reaches the compositor"
         );
     }
 

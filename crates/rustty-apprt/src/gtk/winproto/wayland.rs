@@ -214,6 +214,14 @@ impl App {
         // `hotkeys.rs`'s module docs.
         let mut boxed = Box::new(Globals::new(conn, qh, registry, app_id));
 
+        // PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD112.
+        // `Globals.zig:75-94` `init` creates `Globals` and its registry proxy,
+        // then returns `error.RoundtripFailed` with no `errdefer`, and the caller
+        // (`class/application.zig`) continues on the noop winproto, so both leak.
+        // Here `boxed` and the event queue are dropped by the `?` below. (Whether
+        // wayland-rs also frees the client-side `wl_registry` proxy, an interface
+        // with no destructor request, is not verified.)
+
         // First roundtrip: enumerate + bind globals + install listeners
         // (`Globals.zig:84`).
         event_queue
@@ -695,6 +703,13 @@ impl Window {
         }
         // The reference leaves the token to its `done`/next-`setUrgent`; destroy it
         // here too so teardown does not leak it.
+        //
+        // PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD105. The
+        // reference's `deinit` leaves a pending token alive with the `*Window` as
+        // its listener userdata, so a `done` that arrives after the window is
+        // gone runs `onActivationTokenEvent` on a dangling `self` (and the proxy
+        // leaks). Destroying it here makes libwayland drop the late reply
+        // (`tests/gtk_wayland_deinit_token.rs`).
         if let Some(token) = self.activation_token.take() {
             token.destroy();
         }

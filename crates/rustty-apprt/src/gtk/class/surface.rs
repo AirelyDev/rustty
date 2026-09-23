@@ -4141,7 +4141,17 @@ impl Surface {
 
                 // Copy our committed text to the buffer (`:3185-3187`).
                 ime.im_buf[..str_bytes.len()].copy_from_slice(str_bytes);
-                // **Invariant 9**: `im_len ≤ 128` (the reference's `u7` bound).
+                // **Invariant 9**: `im_len ≤ 128`, the buffer's length (guarded
+                // just above).
+                //
+                // PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD90.
+                // The reference's `im_len` is a `u7` (0..=127) but the guard
+                // admits a commit of exactly `im_buf.len()` = 128 bytes, so
+                // `@intCast(str.len)` traps in ReleaseSafe on a 128-byte commit
+                // and truncates it to 0 in ReleaseFast (measured, Zig 0.16.0),
+                // silently dropping the text. The input method (IBus, fcitx,
+                // XCompose) decides the commit. The port's `u8` holds 128, so the
+                // commit is buffered whole, which is what the guard intends.
                 debug_assert!(str_bytes.len() <= ime.im_buf.len());
                 ime.im_len = str_bytes.len() as u8;
 
@@ -5140,6 +5150,36 @@ mod tests {
             0,
             "a commit outside a keyevent is not buffered for the encoder"
         );
+    }
+
+    /// UD90 (R13, task R13-D): an input-method commit of exactly 128 bytes
+    /// during a keypress. The reference's `im_len: u7` cannot hold 128, which its
+    /// own `str.len > im_buf.len` guard admits, so `@intCast` traps (ReleaseFast:
+    /// the length becomes 0 and the text is lost). The port buffers all 128
+    /// bytes; 129 still takes the reference's warn-and-return. Display-gated for
+    /// the real `IMMulticontext`, as the test above.
+    #[test]
+    #[ignore = "requires a display; run via cargo test -p rustty-apprt --features gtk -- --ignored"]
+    fn a_128_byte_commit_during_a_keypress_is_buffered_whole() {
+        let surface = display_surface();
+        let imp = surface.imp();
+
+        // 64 two-byte characters: exactly the 128-byte buffer.
+        let text = "\u{e9}".repeat(64);
+        assert_eq!(128, text.len());
+        imp.ime.borrow_mut().in_keyevent = ImKeyEvent::True;
+        Surface::im_commit(&imp.im_context, &text, &surface);
+        {
+            let ime = imp.ime.borrow();
+            assert_eq!(128, ime.im_len, "the whole commit is buffered");
+            assert_eq!(text.as_bytes(), &ime.im_buf[..128]);
+        }
+
+        // One byte more is the reference's own "not enough buffer space" arm.
+        imp.ime.borrow_mut().im_len = 0;
+        let long = format!("{text}a");
+        Surface::im_commit(&imp.im_context, &long, &surface);
+        assert_eq!(0, imp.ime.borrow().im_len, "129 bytes are not buffered");
     }
 
     /// Sets up GTK + a default `GhosttyApplication` and returns a fresh `Surface`.
