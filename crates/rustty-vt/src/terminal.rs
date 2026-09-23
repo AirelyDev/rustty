@@ -9590,11 +9590,11 @@ mod tests {
 
     // test "Terminal: print kitty unicode placeholder"
     #[test]
+    #[cfg_attr(
+        not(all(feature = "kitty-graphics", not(target_os = "none"))),
+        ignore = "SkipZigTest: needs options::KITTY_GRAPHICS (R14)"
+    )]
     fn terminal_print_kitty_unicode_placeholder() {
-        if !crate::options::KITTY_GRAPHICS {
-            return;
-        }
-
         let mut t = Terminal::init(Global, opts(10, 10)).unwrap();
 
         t.print(kitty::graphics_unicode::PLACEHOLDER).unwrap();
@@ -9624,11 +9624,11 @@ mod tests {
     /// runs its `else` when the loop did not `break`), so both arms are pinned
     /// here.
     #[test]
+    #[cfg_attr(
+        not(all(feature = "kitty-graphics", not(target_os = "none"))),
+        ignore = "SkipZigTest: needs options::KITTY_GRAPHICS (R14)"
+    )]
     fn terminal_erase_line_clears_the_kitty_virtual_placeholder_flag() {
-        if !crate::options::KITTY_GRAPHICS {
-            return;
-        }
-
         let mut t = Terminal::init(Global, opts(10, 10)).unwrap();
         let flag = |t: &mut Terminal| -> bool {
             let list_cell = t.active_mut().pages.get_cell(screen_pt(0, 0)).unwrap();
@@ -18847,18 +18847,19 @@ mod tests {
     // test "Terminal: fullReset preserves kitty graphics limits"
     //
     #[test]
+    #[cfg_attr(
+        not(all(feature = "kitty-graphics", not(target_os = "none"))),
+        ignore = "SkipZigTest: needs options::KITTY_GRAPHICS (R14)"
+    )]
     fn terminal_full_reset_preserves_kitty_graphics_limits() {
         use crate::kitty::graphics_image::{Limits, TemporaryFileLimit};
 
         // if (comptime !build_options.kitty_graphics) return error.SkipZigTest;
         //
-        // PORT NOTE: the early return is this crate's idiom for
-        // `error.SkipZigTest` behind a build option (see `dcs.rs`'s
+        // PORT NOTE: the `cfg_attr(.., ignore)` above is this crate's idiom for
+        // `error.SkipZigTest` behind a build option (R14; see `dcs.rs`'s
         // `tmux_enter_and_implicit_exit`); `kitty_images` is only maintained
         // when the option is on.
-        if !crate::options::KITTY_GRAPHICS {
-            return;
-        }
 
         let temp_dir = b"/tmp/rustty-kitty-images";
 
@@ -18957,11 +18958,12 @@ mod tests {
 
     // test "Terminal: glyph APC stores session glossary entries"
     #[test]
+    #[cfg_attr(
+        not(feature = "glyph-protocol"),
+        ignore = "SkipZigTest: needs options::GLYPH_PROTOCOL (R14)"
+    )]
     fn terminal_glyph_apc_stores_session_glossary_entries() {
         // if (comptime !build_options.glyph_protocol) return error.SkipZigTest;
-        if !crate::options::GLYPH_PROTOCOL {
-            return;
-        }
 
         use crate::apc::glyph::response::{Coverage, Response, ResponseQuery, ResponseRegister};
 
@@ -22912,10 +22914,13 @@ mod tests {
     }
 
     fn ud131_vt_expect_degraded(c: Ud131VtCase) {
-        if cfg!(debug_assertions) {
-            eprintln!("ud131_vt_release: skipped in a debug build; run with --release");
-            return;
-        }
+        // R14: these tests are #[ignore]d; asked for in a debug build they FAIL
+        // with how to run them instead of returning `ok` having run nothing.
+        assert!(
+            !cfg!(debug_assertions),
+            "ud131_vt_release: release only (a debug build does not finish); run \
+             cargo test -p rustty-vt --release --lib -- --ignored ud131_vt_release"
+        );
         let (bg, logs) = ud131_vt_run(&c);
         assert_eq!(bg, None, "'Y''s new style degrades to the default");
         assert_eq!(
@@ -23009,10 +23014,13 @@ mod tests {
     #[test]
     #[ignore = "release only: cargo test -p rustty-vt --release --lib -- --ignored ud131_vt_release"]
     fn ud131_vt_release_one_style_below_the_ceiling_keeps_the_style() {
-        if cfg!(debug_assertions) {
-            eprintln!("ud131_vt_release: skipped in a debug build; run with --release");
-            return;
-        }
+        // R14: these tests are #[ignore]d; asked for in a debug build they FAIL
+        // with how to run them instead of returning `ok` having run nothing.
+        assert!(
+            !cfg!(debug_assertions),
+            "ud131_vt_release: release only (a debug build does not finish); run \
+             cargo test -p rustty-vt --release --lib -- --ignored ud131_vt_release"
+        );
         let (bg, logs) = ud131_vt_run(&Ud131VtCase {
             rows: 216,
             fills: UD131_FULL - 1,

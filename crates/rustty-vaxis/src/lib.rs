@@ -376,10 +376,15 @@ mod recover_tests {
             .unwrap_or_else(|p| p.into_inner());
 
         let master = unsafe { libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY) };
-        if master < 0 {
-            eprintln!("skipping: posix_openpt unavailable in this sandbox");
-            return;
-        }
+        // R14: this used to return early ("unavailable in this sandbox"), which
+        // reports `ok` having checked nothing. Every supported host has ptys (the
+        // rustty-os and termio pty tests open them unconditionally), so a failure
+        // here is a real environment problem and must say so.
+        assert!(
+            master >= 0,
+            "posix_openpt failed: {}",
+            std::io::Error::last_os_error()
+        );
         assert_eq!(0, unsafe { libc::grantpt(master) });
         assert_eq!(0, unsafe { libc::unlockpt(master) });
         let name = unsafe { libc::ptsname(master) };

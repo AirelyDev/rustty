@@ -222,11 +222,59 @@ fn test_shaper_with_font(font_req: TestFont) -> TestShaper {
     TestShaper { shaper, grid, lib }
 }
 
+/// R14 strict mode for the system-font skips (the `RUSTTY_REQUIRE_METAL` /
+/// `RUSTTY_REQUIRE_GL` pattern): the reference skips a shaping test when its
+/// font is not installed, which a Rust test can only express as returning `ok`.
+/// `RUSTTY_REQUIRE_SYSTEM_FONTS=1` turns that skip into a FAILURE. The macOS CI
+/// leg exports it: every font these tests ask for except Noto Serif Tibetan (an
+/// `#[ignore]`d test) is a stock macOS Supplemental font. The Linux leg does not
+/// (a stock runner has none of them).
+fn system_fonts_required() -> bool {
+    system_fonts_required_from(std::env::var_os("RUSTTY_REQUIRE_SYSTEM_FONTS").as_deref())
+}
+
+fn system_fonts_required_from(value: Option<&std::ffi::OsStr>) -> bool {
+    value == Some(std::ffi::OsStr::new("1"))
+}
+
+/// A no-op when fonts are not required (the caller prints its skip line and
+/// returns), a panic when they are.
+#[track_caller]
+fn require_system_font_or_skip(font_req: &str, why: &str) {
+    require_system_font_or_skip_impl(system_fonts_required(), font_req, why);
+}
+
+#[track_caller]
+fn require_system_font_or_skip_impl(required: bool, font_req: &str, why: &str) {
+    assert!(
+        !required,
+        "system font required but unavailable (RUSTTY_REQUIRE_SYSTEM_FONTS=1): \
+         {font_req:?} {why}"
+    );
+    eprintln!("system font {font_req:?} {why}; skipping");
+}
+
+#[test]
+fn system_font_pivot_is_strict_only_when_env_is_exactly_one() {
+    use std::ffi::OsStr;
+    assert!(!system_fonts_required_from(None));
+    assert!(!system_fonts_required_from(Some(OsStr::new("0"))));
+    assert!(system_fonts_required_from(Some(OsStr::new("1"))));
+    require_system_font_or_skip_impl(false, "Some Font", "was not found");
+}
+
+#[test]
+#[should_panic(expected = "system font required but unavailable (RUSTTY_REQUIRE_SYSTEM_FONTS=1)")]
+fn system_font_pivot_panics_when_required() {
+    require_system_font_or_skip_impl(true, "Some Font", "was not found");
+}
+
 // fn testShaperWithDiscoveredFont(alloc: Allocator, font_req: [:0]const u8) !TestShaper {
 //
 // PORT NOTE: `error.SkipZigTest` (font not found / not matching / discovery
-// unavailable) is modeled as `Option::None` — the caller returns early (a Rust
-// test that returns is a pass, i.e. an effective skip).
+// unavailable) is modeled as `Option::None` — the caller returns early — after
+// the R14 pivot [`require_system_font_or_skip`], so the skip is printed, and is
+// a failure under `RUSTTY_REQUIRE_SYSTEM_FONTS=1`.
 #[cfg(not(target_arch = "wasm32"))]
 fn test_shaper_with_discovered_font(font_req: &str) -> Option<TestShaper> {
     use crate::discovery::{Descriptor, Discover};
@@ -262,6 +310,7 @@ fn test_shaper_with_discovered_font(font_req: &str) -> Option<TestShaper> {
             None => {
                 disco_it.deinit();
                 disco.deinit();
+                require_system_font_or_skip(font_req, "was not found");
                 return None;
             }
         };
@@ -276,6 +325,7 @@ fn test_shaper_with_discovered_font(font_req: &str) -> Option<TestShaper> {
             face.deinit();
             disco_it.deinit();
             disco.deinit();
+            require_system_font_or_skip(font_req, "was not matched (discovery fell back)");
             return None;
         }
 
@@ -1226,16 +1276,20 @@ fn shape_tai_tham_vowels_position_differs_from_advance() {
 }
 
 // test "shape Tibetan characters" {
+//
+// R14: Noto Serif Tibetan is not a stock font on any CI runner, so this test
+// would skip everywhere by default; it is `#[ignore]`d instead of returning
+// `ok`, and FAILS when asked for on a host without the font.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
+#[ignore = "needs Noto Serif Tibetan, which no stock macOS or Linux install has; \
+            install it and run with --ignored (R14)"]
 fn shape_tibetan_characters() {
     // We need a font that has multiple glyphs for this codepoint to reproduce
     // the old broken behavior, and Noto Serif Tibetan is one of them. It's not
     // a default Mac font, and if we can't find it we just skip the test.
-    let mut testdata = match test_shaper_with_discovered_font("Noto Serif Tibetan") {
-        Some(t) => t,
-        None => return,
-    };
+    let mut testdata = test_shaper_with_discovered_font("Noto Serif Tibetan")
+        .expect("shape_tibetan_characters needs the Noto Serif Tibetan font installed");
 
     let mut buf: Vec<u8> = Vec::new();
     push_utf8(&mut buf, 0x0f00); // ༀ

@@ -1955,6 +1955,7 @@ mod tests {
     // test "Command: os pre exec 1" {
     #[test]
     #[cfg_attr(miri, ignore)] // real fork/exec/waitpid syscalls (termio's G6 tool is ASan, not Miri)
+    #[cfg_attr(windows, ignore = "the body only exists under cfg(not(windows)) (R14)")]
     fn command_os_pre_exec_1() {
         // if (builtin.os.tag == .windows) return error.SkipZigTest;
         // (PORT NOTE: the reference's windows SkipZigTest maps to cfg-gating the
@@ -2009,6 +2010,7 @@ mod tests {
     // test "Command: os pre exec 2" {
     #[test]
     #[cfg_attr(miri, ignore)] // real fork/exec/waitpid syscalls (termio's G6 tool is ASan, not Miri)
+    #[cfg_attr(windows, ignore = "the body only exists under cfg(not(windows)) (R14)")]
     fn command_os_pre_exec_2() {
         // if (builtin.os.tag == .windows) return error.SkipZigTest;
         #[cfg(not(windows))]
@@ -2059,6 +2061,7 @@ mod tests {
     // test "Command: rt pre exec 1" {
     #[test]
     #[cfg_attr(miri, ignore)] // real fork/exec/waitpid syscalls (termio's G6 tool is ASan, not Miri)
+    #[cfg_attr(windows, ignore = "the body only exists under cfg(not(windows)) (R14)")]
     fn command_rt_pre_exec_1() {
         // if (builtin.os.tag == .windows) return error.SkipZigTest;
         #[cfg(not(windows))]
@@ -2109,6 +2112,7 @@ mod tests {
     // test "Command: rt pre exec 2" {
     #[test]
     #[cfg_attr(miri, ignore)] // real fork/exec/waitpid syscalls (termio's G6 tool is ASan, not Miri)
+    #[cfg_attr(windows, ignore = "the body only exists under cfg(not(windows)) (R14)")]
     fn command_rt_pre_exec_2() {
         // if (builtin.os.tag == .windows) return error.SkipZigTest;
         #[cfg(not(windows))]
@@ -2159,6 +2163,7 @@ mod tests {
     // test "Command: rt post fork 1" {
     #[test]
     #[cfg_attr(miri, ignore)] // real fork/exec/waitpid syscalls (termio's G6 tool is ASan, not Miri)
+    #[cfg_attr(windows, ignore = "the body only exists under cfg(not(windows)) (R14)")]
     fn command_rt_post_fork_1() {
         // if (builtin.os.tag == .windows) return error.SkipZigTest;
         #[cfg(not(windows))]
@@ -2523,6 +2528,7 @@ mod tests {
     // test "Command: posix fork handles execveZ failure" {
     #[test]
     #[cfg_attr(miri, ignore)] // real fork/exec/waitpid syscalls (termio's G6 tool is ASan, not Miri)
+    #[cfg_attr(windows, ignore = "the body only exists under cfg(not(windows)) (R14)")]
     fn command_posix_fork_handles_execvez_failure() {
         // if (builtin.os.tag == .windows) { return error.SkipZigTest; }
         #[cfg(not(windows))]

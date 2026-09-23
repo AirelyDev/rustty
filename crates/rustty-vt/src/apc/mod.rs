@@ -890,11 +890,12 @@ mod tests {
 
     // test "garbage Kitty command"
     #[test]
+    #[cfg_attr(
+        not(all(feature = "kitty-graphics", not(target_os = "none"))),
+        ignore = "SkipZigTest: needs options::KITTY_GRAPHICS (R14)"
+    )]
     fn garbage_kitty_command() {
         // if (comptime !build_options.kitty_graphics) return error.SkipZigTest;
-        if !KITTY_GRAPHICS {
-            return;
-        }
 
         let alloc = Global;
 
@@ -908,11 +909,12 @@ mod tests {
 
     // test "Kitty command with overflow u32"
     #[test]
+    #[cfg_attr(
+        not(all(feature = "kitty-graphics", not(target_os = "none"))),
+        ignore = "SkipZigTest: needs options::KITTY_GRAPHICS (R14)"
+    )]
     fn kitty_command_with_overflow_u32() {
         // if (comptime !build_options.kitty_graphics) return error.SkipZigTest;
-        if !KITTY_GRAPHICS {
-            return;
-        }
 
         let alloc = Global;
 
@@ -926,11 +928,12 @@ mod tests {
 
     // test "Kitty command with overflow i32"
     #[test]
+    #[cfg_attr(
+        not(all(feature = "kitty-graphics", not(target_os = "none"))),
+        ignore = "SkipZigTest: needs options::KITTY_GRAPHICS (R14)"
+    )]
     fn kitty_command_with_overflow_i32() {
         // if (comptime !build_options.kitty_graphics) return error.SkipZigTest;
-        if !KITTY_GRAPHICS {
-            return;
-        }
 
         let alloc = Global;
 
@@ -944,11 +947,12 @@ mod tests {
 
     // test "kitty feed error deinits parser"
     #[test]
+    #[cfg_attr(
+        not(all(feature = "kitty-graphics", not(target_os = "none"))),
+        ignore = "SkipZigTest: needs options::KITTY_GRAPHICS (R14)"
+    )]
     fn kitty_feed_error_deinits_parser() {
         // if (comptime !build_options.kitty_graphics) return error.SkipZigTest;
-        if !KITTY_GRAPHICS {
-            return;
-        }
 
         let alloc = Global;
 
@@ -968,11 +972,12 @@ mod tests {
 
     // test "kitty max bytes exceeded"
     #[test]
+    #[cfg_attr(
+        not(all(feature = "kitty-graphics", not(target_os = "none"))),
+        ignore = "SkipZigTest: needs options::KITTY_GRAPHICS (R14)"
+    )]
     fn kitty_max_bytes_exceeded() {
         // if (comptime !build_options.kitty_graphics) return error.SkipZigTest;
-        if !KITTY_GRAPHICS {
-            return;
-        }
 
         let alloc = Global;
 
@@ -1007,11 +1012,12 @@ mod tests {
 
     // test "valid Kitty command"
     #[test]
+    #[cfg_attr(
+        not(all(feature = "kitty-graphics", not(target_os = "none"))),
+        ignore = "SkipZigTest: needs options::KITTY_GRAPHICS (R14)"
+    )]
     fn valid_kitty_command() {
         // if (comptime !build_options.kitty_graphics) return error.SkipZigTest;
-        if !KITTY_GRAPHICS {
-            return;
-        }
 
         let alloc = Global;
 
@@ -1116,11 +1122,12 @@ mod tests {
 
     // test "feedSlice valid Kitty command"
     #[test]
+    #[cfg_attr(
+        not(all(feature = "kitty-graphics", not(target_os = "none"))),
+        ignore = "SkipZigTest: needs options::KITTY_GRAPHICS (R14)"
+    )]
     fn feed_slice_valid_kitty_command() {
         // if (comptime !build_options.kitty_graphics) return error.SkipZigTest;
-        if !KITTY_GRAPHICS {
-            return;
-        }
 
         let alloc = Global;
 
@@ -1140,11 +1147,11 @@ mod tests {
 
     // test "feedSlice identify split across slices"
     #[test]
+    #[cfg_attr(
+        not(all(feature = "kitty-graphics", not(target_os = "none"))),
+        ignore = "SkipZigTest: needs options::KITTY_GRAPHICS (R14)"
+    )]
     fn feed_slice_identify_split_across_slices() {
-        if !KITTY_GRAPHICS {
-            return;
-        }
-
         let alloc = Global;
 
         let mut h: Handler = Handler::default();
@@ -1193,11 +1200,11 @@ mod tests {
 
     // test "feedSlice kitty max bytes exceeded"
     #[test]
+    #[cfg_attr(
+        not(all(feature = "kitty-graphics", not(target_os = "none"))),
+        ignore = "SkipZigTest: needs options::KITTY_GRAPHICS (R14)"
+    )]
     fn feed_slice_kitty_max_bytes_exceeded() {
-        if !KITTY_GRAPHICS {
-            return;
-        }
-
         let alloc = Global;
 
         // var h: Handler = .{ .max_bytes = .init(.{ .kitty = 4 }) };

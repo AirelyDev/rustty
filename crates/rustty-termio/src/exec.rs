@@ -6034,6 +6034,10 @@ mod tests {
 
     // test "execCommand darwin: shell command" {
     #[test]
+    #[cfg_attr(
+        not(any(target_os = "macos", target_os = "ios")),
+        ignore = "the body only exists on macOS/iOS (R14)"
+    )]
     fn exec_command_darwin_shell_command() {
         // if (comptime !builtin.os.tag.isDarwin()) return error.SkipZigTest;
         // (PORT NOTE: cfg-gating the body is the SkipZigTest analogue — stage-3
@@ -6090,6 +6094,10 @@ mod tests {
 
     // test "execCommand darwin: direct command" {
     #[test]
+    #[cfg_attr(
+        not(any(target_os = "macos", target_os = "ios")),
+        ignore = "the body only exists on macOS/iOS (R14)"
+    )]
     fn exec_command_darwin_direct_command() {
         // if (comptime !builtin.os.tag.isDarwin()) return error.SkipZigTest;
         #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -6138,6 +6146,7 @@ mod tests {
 
     // test "execCommand: shell command, empty passwd" {
     #[test]
+    #[cfg_attr(windows, ignore = "the body only exists under cfg(not(windows)) (R14)")]
     fn exec_command_shell_command_empty_passwd() {
         // if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
         #[cfg(not(windows))]
@@ -6180,6 +6189,7 @@ mod tests {
 
     // test "execCommand: shell command, error passwd" {
     #[test]
+    #[cfg_attr(windows, ignore = "the body only exists under cfg(not(windows)) (R14)")]
     fn exec_command_shell_command_error_passwd() {
         // if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
         #[cfg(not(windows))]
@@ -6224,6 +6234,7 @@ mod tests {
 
     // test "execCommand: direct command, error passwd" {
     #[test]
+    #[cfg_attr(windows, ignore = "the body only exists under cfg(not(windows)) (R14)")]
     fn exec_command_direct_command_error_passwd() {
         // if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
         #[cfg(not(windows))]
@@ -6268,6 +6279,7 @@ mod tests {
 
     // test "execCommand: direct command, config freed" {
     #[test]
+    #[cfg_attr(windows, ignore = "the body only exists under cfg(not(windows)) (R14)")]
     fn exec_command_direct_command_config_freed() {
         // if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
         #[cfg(not(windows))]
@@ -6316,6 +6328,7 @@ mod tests {
 
     // test "execCommand windows: bare cmd.exe resolves via COMSPEC" {
     #[test]
+    #[cfg_attr(not(windows), ignore = "the body only exists under cfg(windows) (R14)")]
     fn exec_command_windows_bare_cmd_exe_resolves_via_comspec() {
         // if (comptime builtin.os.tag != .windows) return error.SkipZigTest;
         #[cfg(windows)]
@@ -6347,6 +6360,7 @@ mod tests {
 
     // test "execCommand windows: bare non-cmd shell is passed through" {
     #[test]
+    #[cfg_attr(not(windows), ignore = "the body only exists under cfg(windows) (R14)")]
     fn exec_command_windows_bare_non_cmd_shell_is_passed_through() {
         // if (comptime builtin.os.tag != .windows) return error.SkipZigTest;
         #[cfg(windows)]
@@ -6373,6 +6387,7 @@ mod tests {
 
     // test "execCommand windows: shell with args is split on whitespace" {
     #[test]
+    #[cfg_attr(not(windows), ignore = "the body only exists under cfg(windows) (R14)")]
     fn exec_command_windows_shell_with_args_is_split_on_whitespace() {
         // if (comptime builtin.os.tag != .windows) return error.SkipZigTest;
         #[cfg(windows)]
@@ -6400,6 +6415,7 @@ mod tests {
 
     // test "execCommand windows: direct command is passed through unchanged" {
     #[test]
+    #[cfg_attr(not(windows), ignore = "the body only exists under cfg(windows) (R14)")]
     fn exec_command_windows_direct_command_is_passed_through_unchanged() {
         // if (comptime builtin.os.tag != .windows) return error.SkipZigTest;
         #[cfg(windows)]

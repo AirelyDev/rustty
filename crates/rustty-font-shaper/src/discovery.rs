@@ -2844,12 +2844,11 @@ mod tests {
         let _fc = crate::fc::global_shared();
         // if (options.backend != .fontconfig_freetype) return error.SkipZigTest;
         //
-        // PORT NOTE: the reference's `!= fontconfig_freetype` early-return skip is
-        // expressed as an inverted `== fontconfig_freetype` guard (clippy-clean). On
-        // the freetype-active backend class the body discovers a real system font.
-        if crate::options::BACKEND != crate::Backend::FontconfigFreetype {
-            return;
-        }
+        // PORT NOTE: the reference's `!= fontconfig_freetype` skip is the
+        // `#[cfg]` on this test: `options::BACKEND` is `FontconfigFreetype` on
+        // exactly that target set (`Backend::default()`), so a runtime guard here
+        // could never fire (R14: no silent early return). On the freetype-active
+        // backend class the body discovers a real system font.
 
         use crate::library::Library;
 
@@ -2890,9 +2889,7 @@ mod tests {
         // Shared: fontconfig's global state must not be torn down under us
         // (see `fc::FC_GLOBAL`).
         let _fc = crate::fc::global_shared();
-        if crate::options::BACKEND != crate::Backend::FontconfigFreetype {
-            return;
-        }
+        // The backend skip is the `#[cfg]` above (see `fontconfig`, R14).
 
         use super::fontconfig_impl::deinit_destroys;
         use crate::library::Library;
@@ -2943,9 +2940,7 @@ mod tests {
         // (see `fc::FC_GLOBAL`).
         let _fc = crate::fc::global_shared();
         // if (options.backend != .fontconfig_freetype) return error.SkipZigTest;
-        if crate::options::BACKEND != crate::Backend::FontconfigFreetype {
-            return;
-        }
+        // (the `#[cfg]` above IS that skip, R14 — see `fontconfig`)
 
         use crate::library::Library;
 
@@ -3058,11 +3053,9 @@ mod tests {
     fn coretext() {
         // if (options.backend != .coretext and options.backend != .coretext_freetype)
         //     return error.SkipZigTest;
-        if crate::options::BACKEND != crate::Backend::Coretext
-            && crate::options::BACKEND != crate::Backend::CoretextFreetype
-        {
-            return;
-        }
+        // (the `#[cfg(target_os = "macos")]` above IS that skip: `options::BACKEND`
+        // is `Coretext` on every macOS build, so a runtime guard could never fire;
+        // R14 — no silent early return)
 
         use crate::library::Library;
 
@@ -3107,11 +3100,9 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn from_descriptors_no_match() {
-        if crate::options::BACKEND != crate::Backend::Coretext
-            && crate::options::BACKEND != crate::Backend::CoretextFreetype
-        {
-            return;
-        }
+        // (the `#[cfg(target_os = "macos")]` above IS that skip: `options::BACKEND`
+        // is `Coretext` on every macOS build, so a runtime guard could never fire;
+        // R14 — no silent early return)
 
         use crate::library::Library;
 
@@ -3144,11 +3135,9 @@ mod tests {
     fn coretext_codepoint() {
         // if (options.backend != .coretext and options.backend != .coretext_freetype)
         //     return error.SkipZigTest;
-        if crate::options::BACKEND != crate::Backend::Coretext
-            && crate::options::BACKEND != crate::Backend::CoretextFreetype
-        {
-            return;
-        }
+        // (the `#[cfg(target_os = "macos")]` above IS that skip: `options::BACKEND`
+        // is `Coretext` on every macOS build, so a runtime guard could never fire;
+        // R14 — no silent early return)
 
         use crate::library::Library;
 
@@ -3186,14 +3175,15 @@ mod tests {
     // test "coretext sorting" {
     #[cfg(target_os = "macos")]
     #[test]
+    #[ignore = "SkipZigTest: the reference disables this test unconditionally \
+                (`if (true) return error.SkipZigTest;`, SF Pro is not in CI); \
+                its body is ported as comments only (R14)"]
     fn coretext_sorting() {
         // if (options.backend != .coretext and options.backend != .coretext_freetype)
         //     return error.SkipZigTest;
-        if crate::options::BACKEND != crate::Backend::Coretext
-            && crate::options::BACKEND != crate::Backend::CoretextFreetype
-        {
-            return;
-        }
+        // (the `#[cfg(target_os = "macos")]` above IS that skip: `options::BACKEND`
+        // is `Coretext` on every macOS build, so a runtime guard could never fire;
+        // R14 — no silent early return)
 
         // !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!//
         // FIXME: Disabled for now because SF Pro is not available in CI
@@ -3202,13 +3192,16 @@ mod tests {
         //        font correctly, instead of relying on the system fonts.
         // if (true) return error.SkipZigTest;
         // !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!//
-        #[allow(clippy::needless_return)]
-        if true {
-            return;
-        }
+        //
+        // R14: that unconditional skip is the `#[ignore]` above. Run on request,
+        // the test FAILS rather than reporting `ok` for a body that does not exist.
+        panic!(
+            "coretext_sorting is disabled upstream (`if (true) return error.SkipZigTest;`); \
+             its body is not ported"
+        );
 
-        // The remainder is unreachable (the `if (true) return` above always skips);
-        // it is ported verbatim as reference below and never executes:
+        // The remainder is unreachable (the reference's `if (true) return` always
+        // skips); it is ported verbatim as reference below and never executes:
         //
         // var lib = try Library.init(alloc); defer lib.deinit();
         // var ct = CoreText.init(lib); defer ct.deinit();
@@ -3265,18 +3258,20 @@ mod tests {
     // SKIP-STUB (the crate's established `fontconfig`/`web_canvas` precedent, and
     // VERIFICATION_DEBT V11): the body is LIVE as of WS20 and compiles only on
     // `target_os = "windows"`, where `Windows`/`DeferredFace.win` exist. On every
-    // other host the backend guard is false and this returns immediately — which IS
-    // the reference's own `if (options.backend != .freetype_windows) return
-    // error.SkipZigTest;`. It still needs a stock Windows install to pass: it
-    // asserts `Arial` is discoverable and has a glyph for 'A'.
+    // other host the `cfg_attr(.., ignore)` below reports it `ignored` — the
+    // reference's own `if (options.backend != .freetype_windows) return
+    // error.SkipZigTest;`, made visible (R14; `options::BACKEND` is
+    // `FreetypeWindows` on exactly that target). It still needs a stock Windows
+    // install to pass: it asserts `Arial` is discoverable and has a glyph for 'A'.
     #[test]
+    #[cfg_attr(
+        not(all(target_os = "windows", not(target_arch = "wasm32"))),
+        ignore = "SkipZigTest: freetype_windows backend only (R14)"
+    )]
     fn windows() {
         #[cfg(all(target_os = "windows", not(target_arch = "wasm32")))]
         {
             // if (options.backend != .freetype_windows) return error.SkipZigTest;
-            if crate::options::BACKEND != crate::Backend::FreetypeWindows {
-                return;
-            }
 
             use crate::library::Library;
 

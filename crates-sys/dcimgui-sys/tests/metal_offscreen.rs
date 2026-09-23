@@ -42,6 +42,42 @@ static IMGUI_CONTEXT_TEST_LOCK: Mutex<()> = Mutex::new(());
 /// Framebuffer edge length, in pixels, for the offscreen render target.
 const DIM: usize = 256;
 
+/// R14 strict mode, the `RUSTTY_REQUIRE_METAL` pivot of
+/// `rustty-renderer/src/metal/test_support.rs` (not reachable from this -sys
+/// crate): `true` only when the variable is exactly `1`.
+fn metal_required() -> bool {
+    metal_required_from(std::env::var_os("RUSTTY_REQUIRE_METAL").as_deref())
+}
+
+fn metal_required_from(value: Option<&std::ffi::OsStr>) -> bool {
+    value == Some(std::ffi::OsStr::new("1"))
+}
+
+/// A no-op when Metal is not required (the caller prints its skip line and
+/// returns), a panic when it is.
+fn require_metal_or_skip_impl(required: bool, test_name: &str) {
+    assert!(
+        !required,
+        "Metal device required but unavailable (RUSTTY_REQUIRE_METAL=1): \
+         {test_name} would have skipped: MTLCreateSystemDefaultDevice() returned nil"
+    );
+}
+
+#[test]
+fn metal_pivot_is_strict_only_when_env_is_exactly_one() {
+    use std::ffi::OsStr;
+    assert!(!metal_required_from(None));
+    assert!(!metal_required_from(Some(OsStr::new("0"))));
+    assert!(metal_required_from(Some(OsStr::new("1"))));
+    require_metal_or_skip_impl(false, "some_test");
+}
+
+#[test]
+#[should_panic(expected = "Metal device required but unavailable (RUSTTY_REQUIRE_METAL=1)")]
+fn metal_pivot_panics_when_required() {
+    require_metal_or_skip_impl(true, "some_test");
+}
+
 #[test]
 fn metal_offscreen_render_writes_pixels() {
     let _guard = IMGUI_CONTEXT_TEST_LOCK
@@ -51,7 +87,9 @@ fn metal_offscreen_render_writes_pixels() {
     // --- Metal device + queue -------------------------------------------
     let Some(device) = MTLCreateSystemDefaultDevice() else {
         // No Metal device (should not happen on this hardware, but a headless
-        // CI box without a GPU must not hard-fail the suite).
+        // CI box without a GPU must not hard-fail the suite). R14: the skip is
+        // a FAILURE under `RUSTTY_REQUIRE_METAL=1`, which the macOS CI leg sets.
+        require_metal_or_skip_impl(metal_required(), "metal_offscreen_render_writes_pixels");
         eprintln!("skipping: MTLCreateSystemDefaultDevice() returned nil");
         return;
     };

@@ -1013,15 +1013,16 @@ mod tests {
 
     // test "tmux enter and implicit exit"
     #[test]
+    #[cfg_attr(
+        not(feature = "oniguruma"),
+        ignore = "SkipZigTest: tmux_control_mode tracks the oniguruma feature (R14)"
+    )]
     fn tmux_enter_and_implicit_exit() {
         // if (comptime !build_options.tmux_control_mode) return error.SkipZigTest;
         //
         // PORT NOTE: under the default Rustty build `tmux_control_mode` is
-        // false, so this test is skipped (returns early), faithfully mirroring
-        // `error.SkipZigTest`; `--features oniguruma` enables it.
-        if !build_options::TMUX_CONTROL_MODE {
-            return;
-        }
+        // false, so this test is IGNORED (the `cfg_attr` above), mirroring
+        // `error.SkipZigTest` visibly (R14); `--features oniguruma` enables it.
 
         let mut h: Handler<Global> = Handler::default();
 

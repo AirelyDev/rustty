@@ -603,6 +603,23 @@ GATE_REGISTRY=(
   # merge. HARD: green at landing, milliseconds, and BOTH its FAIL arms (doubled
   # init; vacuous zero-match) are mutation-proven.
   "G-GTKINIT|HARD|bash $GATES/check_gtk_one_init.sh"
+  # G-SKIP (PORT_RULES R14, 2026-09-23) — no silent skips in test code. A Rust
+  # test that returns early reports `ok`, so a skip on a missing resource (Metal,
+  # GL, a display, a font, the corpus, a feature, the OS) made a lane that lost
+  # the resource GREEN with nothing run: `macos_window_host.rs` skipped every
+  # hosted-surface KAT with `let Some(host) = spawn() else { return }`, unseen by
+  # RUSTTY_REQUIRE_METAL, and ~100 `if (comptime ..) return error.SkipZigTest`
+  # ports passed in builds without their feature. The audit converted every site
+  # (cfg_attr ignore / strict-mode pivot / #[ignore] + loud failure / deleted).
+  # This lint keeps the class out: an early return with no pivot or assertion, a
+  # cfg-only body, an all-assertions-in-one-`if` body, or an unpivoted "skipping"
+  # line in a test helper is RED; the allow-list is capped and reasoned. STATIC,
+  # so it binds on every OS (it sees Linux-only and Windows-only tests from
+  # macOS). SELF first (the G-CENSUS-SELF convention): 21 synthetic arms prove
+  # each RED and each accept path, the dead-guard re-verification, and the
+  # stale / over-cap allow-list arms. HARD: green at landing, about a second.
+  "G-SKIP-SELF|HARD|$PY $GATES/check_silent_skips.py --self-test"
+  "G-SKIP|HARD|$PY $GATES/check_silent_skips.py"
   # G-P2 (WS19 T19) — the Phase 2 CLOSURE gate, and the standing invariant that keeps
   # Phase 2 closed. It parses the four Phase-2 ledgers and FAILS if any open item lacks
   # an owner in an OPEN workstream, where "open workstream" is DERIVED from the ROADMAP's

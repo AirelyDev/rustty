@@ -7963,6 +7963,10 @@ mod tests {
 
     // test "stream: continuation allocation failure recovers"
     #[test]
+    #[cfg_attr(
+        not(debug_assertions),
+        ignore = "the body only exists under cfg(debug_assertions) (R14)"
+    )]
     fn stream_continuation_allocation_failure_recovers() {
         #[cfg(debug_assertions)]
         {

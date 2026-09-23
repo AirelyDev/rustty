@@ -342,11 +342,8 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)] // env/passwd/objc home lookup hits real OS state
     #[allow(non_snake_case)]
+    #[cfg_attr(windows, ignore = "SkipZigTest on Windows (R14)")]
     fn expand_home_unix() {
-        if cfg!(windows) {
-            return; // error.SkipZigTest
-        }
-
         // PORT NOTE (P3-W7 T3): upstream's test now builds the map from
         // `testing.environ`; rustty's equivalent is the captured process
         // environment, and the `crate::env_test_lock()` serialization is gone

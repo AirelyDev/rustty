@@ -2091,11 +2091,12 @@ mod tests {
 
     // test "complete snapshot preserves Kitty virtual placeholders"
     #[test]
+    #[cfg_attr(
+        not(all(feature = "kitty-graphics", not(target_os = "none"))),
+        ignore = "SkipZigTest: needs options::KITTY_GRAPHICS (R14)"
+    )]
     fn complete_snapshot_preserves_kitty_virtual_placeholders() {
         // if (comptime !build_options.kitty_graphics) return error.SkipZigTest;
-        if !crate::options::KITTY_GRAPHICS {
-            return;
-        }
 
         let mut t = Terminal::init(Allocator, terminal_options(2, 1, DEFAULT_MSB, None)).unwrap();
         // defer t.deinit(testing.allocator);

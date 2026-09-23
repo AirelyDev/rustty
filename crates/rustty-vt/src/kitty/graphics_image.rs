@@ -2620,17 +2620,23 @@ mod tests {
 
     #[test]
     #[cfg_attr(miri, ignore)] // real-OS temp-file filesystem syscalls
+    #[cfg_attr(
+        not(feature = "wuffs"),
+        ignore = "SkipZigTest: no PNG decoder without the wuffs feature (R14)"
+    )]
     fn image_load_png_not_compressed_regular_file() {
         // PORT NOTE: `if (sys.decode_png == null) return error.SkipZigTest;`. The
-        // decoder seam is not installed in this VT leaf crate (the wuffs binding
-        // rides a later FFI crate), so this test is skipped, matching the
-        // reference's skip when no decoder is present.
+        // decoder seam is installed exactly when the `wuffs` feature is on
+        // (`sys::tests::default_decoder_matches_artifact_and_feature`), so the
+        // skip is the `cfg_attr(.., ignore)` above and a missing decoder here is
+        // a failure, not an early-return `ok` (R14).
         let _png_lock = sys::decode_png_test_lock
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        if sys::decode_png.read().unwrap().is_none() {
-            return;
-        }
+        assert!(
+            sys::decode_png.read().unwrap().is_some(),
+            "the wuffs feature is on but no PNG decoder is installed"
+        );
 
         let mut tmp_dir = temp_dir::TempDir::init().unwrap();
         let data = include_bytes!("testdata/image-png-none-50x76-2147483647-raw.data");
@@ -2786,14 +2792,21 @@ mod tests {
 
     // test "image load: png rejects oversized Wuffs image before allocation"
     #[test]
+    #[cfg_attr(
+        not(feature = "wuffs"),
+        ignore = "SkipZigTest: no PNG decoder without the wuffs feature (R14)"
+    )]
     fn image_load_png_rejects_oversized_wuffs_image_before_allocation() {
         let _png_lock = sys::decode_png_test_lock
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         // if (sys.decode_png == null) return error.SkipZigTest;
-        if sys::decode_png.read().unwrap().is_none() {
-            return;
-        }
+        // (that skip is the `cfg_attr(.., ignore)` above: the decoder is
+        // installed exactly under `wuffs`; R14)
+        assert!(
+            sys::decode_png.read().unwrap().is_some(),
+            "the wuffs feature is on but no PNG decoder is installed"
+        );
 
         // Turn the small test PNG into a 32768x32767 image. Its decoded RGBA
         // size is just under Wuffs' 4 GiB package limit but over Kitty's 400 MiB

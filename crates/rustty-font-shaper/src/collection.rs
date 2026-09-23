@@ -1968,13 +1968,19 @@ mod tests {
 
     // test "hasCodepoint emoji default graphical"
     #[test]
+    #[cfg_attr(
+        any(target_os = "macos", target_os = "windows", target_arch = "wasm32"),
+        ignore = "SkipZigTest: fontconfig_freetype backend only (R14)"
+    )]
     fn has_codepoint_emoji_default_graphical() {
         // if (options.backend != .fontconfig_freetype) return error.SkipZigTest;
         //
         // PORT NOTE: the reference early-returns `SkipZigTest` when the backend
         // isn't `fontconfig_freetype`; here the body runs only when it is (an
-        // inverted guard, equivalent to the skip and clippy-clean). On the macOS
-        // coretext gate the condition is false, so the test is a no-op skip.
+        // inverted guard, equivalent to the skip and clippy-clean). Where the
+        // condition is false (`Backend::default()`: macOS, Windows, wasm32) the
+        // `cfg_attr(.., ignore)` above reports the test `ignored` instead of an
+        // empty pass (R14).
         #[cfg(not(target_os = "macos"))]
         if options::BACKEND == Backend::FontconfigFreetype {
             let test_emoji = embedded::EMOJI;

@@ -3146,3 +3146,47 @@ style-set work aligned the style item layout), so the port and reference cluster
 Not fixed in this round; recorded for adjudication.
 
 **state**: OPEN (R1 candidate).
+
+## N196 — tests passed without testing anything when their environment was missing
+
+- **id**: N196. Not in the inventory. Found by the tail-s3 task (silent-skip audit), 2026-09-23.
+- **severity**: medium (test evidence, not product behaviour). **kind**: gate / test-honesty.
+- **what**: a Rust test that returns early reports `ok`. 185 sites across the workspace did exactly
+  that when something they needed was missing, measured by the new G-SKIP lint run against the
+  pre-fix tree (145 early returns, 22 bodies that are all `#[cfg]`-gated, 17 unpivoted "skipping"
+  lines in test helpers, 1 test whose every assertion sat in one else-less `if`). The resource-
+  dependent ones: `crates/rustty-apprt-c/tests/macos_window_host.rs` (every hosted-surface KAT,
+  `let Some(host) = HostedSurface::spawn() else { return; }`, not covered by `RUSTTY_REQUIRE_METAL`),
+  `crates-sys/dcimgui-sys/tests/metal_offscreen.rs`, the CoreText/HarfBuzz shaping tests (system
+  fonts), the renderer display-link test, the GTK `gtk_perform_action` KATs (`#[ignore]`d yet silent
+  when run), the two GHOSTTY_ORACLE corpus tests, the LZ4 and UD131 opt-in tests, and a
+  `posix_openpt` skip in rustty-vaxis. The rest were ports of `if (comptime …) return
+  error.SkipZigTest;` (kitty-graphics, glyph-protocol, oniguruma/tmux, wuffs, target OS) written as
+  runtime returns, so a build without the feature reported them passed — MEASURED: in a default
+  `cargo test -p rustty-vt`, `dcs::tests::tmux_enter_and_implicit_exit` and both
+  `image_load_png_*` Wuffs tests used to pass having run nothing; they now report `ignored`, and
+  pass with `--features oniguruma,wuffs`.
+- **fix**: PORT_RULES R14 (compile-time scope -> `cfg_attr(.., ignore)`; runtime resource ->
+  `require_<x>_or_skip` pivot under `RUSTTY_REQUIRE_<X>=1`, or `#[ignore]` + a loud failure; dead
+  skips deleted), applied to every site; G-SKIP (`.port/tools/gates/check_silent_skips.py`, HARD
+  with `--self-test`) keeps the class out. New variables: `RUSTTY_REQUIRE_SYSTEM_FONTS` (set on the
+  macOS CI leg) and `RUSTTY_REQUIRE_DISPLAY` (not set in CI: runner display UNVERIFIED).
+- **state**: CLOSED (tail-s3).
+
+## N197 — CI's distcheck runs the extracted tarball's tests with `RUSTTY_REQUIRE_FUZZ_CORPUS=1` inherited
+
+- **id**: N197. Not in the inventory. Found by the tail-s3 task while deciding whether `.git`-probing
+  xtask tests could take a strict variable. UNVERIFIED: distcheck was not run.
+- **severity**: medium (a CI lane expected to go red). **kind**: CI wiring.
+- **what**: `.github/workflows/ci.yml` exports `RUSTTY_REQUIRE_FUZZ_CORPUS=1` into `$GITHUB_ENV` for
+  the whole `test` job, and sets `RUSTTY_DISTCHECK=1` on the Ubuntu leg. `xtask distcheck`
+  (`xtask/src/dist.rs:361-371`) runs `cargo test --workspace` inside the extracted source tarball
+  with the parent environment inherited (only `CARGO_HOME` is overridden). The tarball omits `.port/`
+  (`.gitattributes:103`, `.port export-ignore`), so the five corpus replays in
+  `crates/rustty-vt/tests/fuzz_corpus_replay.rs` find no corpus and, with the variable inherited,
+  panic instead of skipping. By reading, the Ubuntu leg's G-DIST distcheck arm should therefore fail.
+- **proposed fix** (NOT applied; out of this task's scope): have distcheck clear the repo-only strict
+  variables for the tarball run (`.env_remove("RUSTTY_REQUIRE_FUZZ_CORPUS")`), since a tarball
+  legitimately lacks the corpus. The same reason is why the `.git`-probing xtask tests were
+  allow-listed in G-SKIP rather than given a strict variable.
+- **state**: OPEN.

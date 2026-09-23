@@ -1502,6 +1502,7 @@ mod tests {
 
     // test "xdg: empty XDG_DATA_DIRS" {
     #[test]
+    #[cfg_attr(windows, ignore = "the body only exists under cfg(not(windows)) (R14)")]
     fn xdg_empty_xdg_data_dirs() {
         // if (builtin.os.tag == .windows) return error.SkipZigTest;
         #[cfg(not(windows))]
@@ -1539,6 +1540,7 @@ mod tests {
 
     // test "xdg: existing XDG_DATA_DIRS" {
     #[test]
+    #[cfg_attr(windows, ignore = "the body only exists under cfg(not(windows)) (R14)")]
     fn xdg_existing_xdg_data_dirs() {
         // if (builtin.os.tag == .windows) return error.SkipZigTest;
         #[cfg(not(windows))]

@@ -357,11 +357,9 @@ mod tests {
 
     #[test]
     #[cfg_attr(miri, ignore)] // ffi: vendored gnulib canonicalizer (gettext-sys) crosses the C boundary (ASan, not Miri)
+    #[cfg_attr(not(target_os = "macos"), ignore = "macOS only (R14)")]
     fn canonicalizeLocale_darwin() {
         // PORT NOTE: `if (!builtin.target.os.tag.isDarwin()) return error.SkipZigTest;`
-        if !cfg!(target_os = "macos") {
-            return; // error.SkipZigTest
-        }
 
         // Each assert_eq! ports one `try testing.expectEqualStrings(expected, actual)`
         // (asserted directly, as the reference does — G2 counts assertion-for-assertion).
@@ -437,10 +435,8 @@ mod tests {
     /// the exact behavior the reference's `_` has today.
     #[test]
     #[cfg_attr(miri, ignore)] // ffi: vendored gettext catalog runtime crosses the C boundary (ASan, not Miri)
+    #[cfg_attr(not(target_os = "macos"), ignore = "macOS only (R14)")]
     fn gettext_resolves_from_vendored_libintl() {
-        if !cfg!(target_os = "macos") {
-            return; // the vendored libintl is macOS-only (Linux gets it from libc)
-        }
         let msgid = c"ws9 untranslated probe";
         assert_eq!(gettext_(msgid), msgid);
     }

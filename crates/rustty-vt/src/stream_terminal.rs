@@ -5674,11 +5674,12 @@ mod tests {
 
     // test "glyph protocol APC with write_pty callback"
     #[test]
+    #[cfg_attr(
+        not(feature = "glyph-protocol"),
+        ignore = "SkipZigTest: needs options::GLYPH_PROTOCOL (R14)"
+    )]
     fn glyph_protocol_apc_with_write_pty_callback() {
         // if (comptime !build_options.glyph_protocol) return error.SkipZigTest;
-        if !crate::options::GLYPH_PROTOCOL {
-            return;
-        }
 
         let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
 
@@ -7072,11 +7073,12 @@ mod tests {
 
     // test "kitty graphics APC response"
     #[test]
+    #[cfg_attr(
+        not(all(feature = "kitty-graphics", not(target_os = "none"))),
+        ignore = "SkipZigTest: needs options::KITTY_GRAPHICS (R14)"
+    )]
     fn kitty_graphics_apc_response() {
         // if (comptime !build_options.kitty_graphics) return error.SkipZigTest;
-        if !crate::options::KITTY_GRAPHICS {
-            return;
-        }
 
         let mut t = Terminal::init(Global, opts(10, 10)).unwrap();
 
@@ -7098,11 +7100,12 @@ mod tests {
 
     // test "kitty graphics via APC"
     #[test]
+    #[cfg_attr(
+        not(all(feature = "kitty-graphics", not(target_os = "none"))),
+        ignore = "SkipZigTest: needs options::KITTY_GRAPHICS (R14)"
+    )]
     fn kitty_graphics_via_apc() {
         // if (comptime !build_options.kitty_graphics) return error.SkipZigTest;
-        if !crate::options::KITTY_GRAPHICS {
-            return;
-        }
 
         let mut t = Terminal::init(Global, opts(10, 10)).unwrap();
 
@@ -7223,10 +7226,11 @@ mod tests {
     /// ESPIPE).
     #[test]
     #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg_attr(
+        not(all(feature = "kitty-graphics", not(target_os = "none"))),
+        ignore = "SkipZigTest: needs options::KITTY_GRAPHICS (R14)"
+    )]
     fn kitty_graphics_shared_memory_copies_the_requested_range() {
-        if !crate::options::KITTY_GRAPHICS {
-            return;
-        }
         let shm = PeerShm::create("range", 4096, |i| (i % 251) as u8);
         let mut t = Terminal::init(Global, shm_opts()).unwrap();
 
@@ -7255,10 +7259,11 @@ mod tests {
     /// shared-memory object (`ftruncate` returns EINVAL, measured).
     #[test]
     #[cfg(target_os = "linux")]
+    #[cfg_attr(
+        not(all(feature = "kitty-graphics", not(target_os = "none"))),
+        ignore = "SkipZigTest: needs options::KITTY_GRAPHICS (R14)"
+    )]
     fn kitty_graphics_shared_memory_truncated_after_fstat_is_invalid_data() {
-        if !crate::options::KITTY_GRAPHICS {
-            return;
-        }
         let shm = PeerShm::create("trunc", 4096, |i| (i % 251) as u8);
         let peer_fd = shm.fd;
         let truncated = std::rc::Rc::new(std::cell::Cell::new(false));

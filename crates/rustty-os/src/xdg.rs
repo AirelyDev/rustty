@@ -367,11 +367,8 @@ mod tests {
 
     // test "fallback when xdg env empty" {
     #[test]
+    #[cfg_attr(windows, ignore = "SkipZigTest on Windows (R14)")]
     fn fallback_when_xdg_env_empty() {
-        if cfg!(windows) {
-            return; // error.SkipZigTest
-        }
-
         for case in dir_cases() {
             let mut environ_map = EnvMap::new();
             let temp_home = "/tmp/rustty-test-home";
@@ -389,11 +386,8 @@ mod tests {
 
     // test "fallback when xdg env empty and subdir" {
     #[test]
+    #[cfg_attr(windows, ignore = "SkipZigTest on Windows (R14)")]
     fn fallback_when_xdg_env_empty_and_subdir() {
-        if cfg!(windows) {
-            return; // error.SkipZigTest
-        }
-
         for case in dir_cases() {
             let mut environ_map = EnvMap::new();
             let temp_home = "/tmp/rustty-test-home";
@@ -426,11 +420,8 @@ mod tests {
     // silently discarded in favor of the `$HOME` fallback (the pre-fix
     // `String::from_utf8` surface did the latter).
     #[test]
+    #[cfg_attr(windows, ignore = "SkipZigTest on Windows (R14)")]
     fn non_utf8_xdg_env_is_used_raw() {
-        if cfg!(windows) {
-            return; // error.SkipZigTest
-        }
-
         for case in dir_cases() {
             let mut environ_map = EnvMap::new();
             environ_map.insert(b"HOME".to_vec(), b"/tmp/rustty-test-home".to_vec());
@@ -457,11 +448,8 @@ mod tests {
     // PROVING TEST (W94-B02-01 companion): a non-UTF-8 `$HOME` also flows
     // through the byte-typed join instead of being rejected as `NoHomeDir`.
     #[test]
+    #[cfg_attr(windows, ignore = "SkipZigTest on Windows (R14)")]
     fn non_utf8_home_fallback_is_used_raw() {
-        if cfg!(windows) {
-            return; // error.SkipZigTest
-        }
-
         for case in dir_cases() {
             let mut environ_map = EnvMap::new();
             environ_map.insert(b"HOME".to_vec(), b"/tmp/w94-\xfe-home".to_vec());

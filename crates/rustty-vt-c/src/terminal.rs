@@ -10455,11 +10455,12 @@ mod tests {
 
     // test "set glyph protocol disables APC handling and clears glossary"
     #[test]
+    #[cfg_attr(
+        not(feature = "glyph-protocol"),
+        ignore = "SkipZigTest: needs the glyph-protocol vt feature (R14)"
+    )]
     fn set_glyph_protocol_disables_apc_handling_and_clears_glossary() {
         // if (comptime !build_options.glyph_protocol) return error.SkipZigTest;
-        if !rustty_vt::options::GLYPH_PROTOCOL {
-            return;
-        }
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
             let (new_result, t) = new_t(alloc, 80, 24);
@@ -10808,10 +10809,11 @@ mod tests {
     // `#[cfg(target_pointer_width = "32")]` test below for the trapping arm.
     #[test]
     #[cfg(target_pointer_width = "64")]
+    #[cfg_attr(
+        not(feature = "kitty-graphics"),
+        ignore = "SkipZigTest: needs the kitty-graphics vt feature (R14)"
+    )]
     fn kitty_image_storage_limit_round_trips_above_32_bits() {
-        if !rustty_vt::options::KITTY_GRAPHICS {
-            return;
-        }
         with_test_allocator(|alloc| {
             let (r, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, r);

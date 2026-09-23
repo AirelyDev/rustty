@@ -198,12 +198,60 @@ fn test_shaper_with_font(font_req: TestFont) -> TestShaper {
     TestShaper { shaper, grid, lib }
 }
 
+/// R14 strict mode for the system-font skips (the `RUSTTY_REQUIRE_METAL` /
+/// `RUSTTY_REQUIRE_GL` pattern): the reference skips a shaping test when its
+/// font is not installed, which a Rust test can only express as returning `ok`.
+/// `RUSTTY_REQUIRE_SYSTEM_FONTS=1` turns that skip into a FAILURE. The macOS CI
+/// leg exports it: every font these tests ask for except Noto Serif Tibetan (an
+/// `#[ignore]`d test) is a stock macOS Supplemental font. The Linux leg does not
+/// (a stock runner has none of them).
+fn system_fonts_required() -> bool {
+    system_fonts_required_from(std::env::var_os("RUSTTY_REQUIRE_SYSTEM_FONTS").as_deref())
+}
+
+fn system_fonts_required_from(value: Option<&std::ffi::OsStr>) -> bool {
+    value == Some(std::ffi::OsStr::new("1"))
+}
+
+/// A no-op when fonts are not required (the caller prints its skip line and
+/// returns), a panic when they are.
+#[track_caller]
+fn require_system_font_or_skip(font_req: &str, why: &str) {
+    require_system_font_or_skip_impl(system_fonts_required(), font_req, why);
+}
+
+#[track_caller]
+fn require_system_font_or_skip_impl(required: bool, font_req: &str, why: &str) {
+    assert!(
+        !required,
+        "system font required but unavailable (RUSTTY_REQUIRE_SYSTEM_FONTS=1): \
+         {font_req:?} {why}"
+    );
+    eprintln!("system font {font_req:?} {why}; skipping");
+}
+
+#[test]
+fn system_font_pivot_is_strict_only_when_env_is_exactly_one() {
+    use std::ffi::OsStr;
+    assert!(!system_fonts_required_from(None));
+    assert!(!system_fonts_required_from(Some(OsStr::new("0"))));
+    assert!(system_fonts_required_from(Some(OsStr::new("1"))));
+    require_system_font_or_skip_impl(false, "Some Font", "was not found");
+}
+
+#[test]
+#[should_panic(expected = "system font required but unavailable (RUSTTY_REQUIRE_SYSTEM_FONTS=1)")]
+fn system_font_pivot_panics_when_required() {
+    require_system_font_or_skip_impl(true, "Some Font", "was not found");
+}
+
 /// Return a fully initialized shaper by discovering a named font on the system.
 // fn testShaperWithDiscoveredFont(alloc: Allocator, font_req: [:0]const u8) !TestShaper {
 //
 // PORT NOTE: `error.SkipZigTest` / `error.FontNotFound` (discovery returns null)
-// is modeled as `Option::None` — the caller returns early (a Rust test that
-// returns is a pass, i.e. an effective skip).
+// is modeled as `Option::None` — the caller returns early — after the R14 pivot
+// [`require_system_font_or_skip`], so the skip is printed, and is a failure
+// under `RUSTTY_REQUIRE_SYSTEM_FONTS=1`.
 fn test_shaper_with_discovered_font(font_req: &str) -> Option<TestShaper> {
     use crate::discovery::{Descriptor, Discover};
 
@@ -237,6 +285,7 @@ fn test_shaper_with_discovered_font(font_req: &str) -> Option<TestShaper> {
             None => {
                 disco_it.deinit();
                 disco.deinit();
+                require_system_font_or_skip(font_req, "was not found");
                 return None;
             }
         };

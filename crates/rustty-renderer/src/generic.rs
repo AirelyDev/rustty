@@ -8682,7 +8682,17 @@ mod macos_impl {
                 if r.display_link.is_none() {
                     // No active display (headless / locked session): the
                     // fallback-rendering arm, covered by the guard tests above.
+                    // R14: a skip here is visible, and a failure under
+                    // `RUSTTY_REQUIRE_DISPLAY=1`.
                     r.deinit();
+                    crate::metal::test_support::require_display_or_skip(
+                        "sync_parks_the_link_while_idle_and_runs_it_while_dirty",
+                        &"createWithActiveCGDisplays failed (no active display)",
+                    );
+                    eprintln!(
+                        "no active display; skipping \
+                         sync_parks_the_link_while_idle_and_runs_it_while_dirty"
+                    );
                     return;
                 }
 

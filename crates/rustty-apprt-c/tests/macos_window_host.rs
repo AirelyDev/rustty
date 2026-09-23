@@ -107,6 +107,57 @@ unsafe fn app_new_serialized(opts: &Options, config: *mut rustty_config::Config)
     unsafe { rustty_app_new(opts, config) }
 }
 
+// R14 strict-mode pivot for this binary: the sibling of the renderer's
+// `metal::test_support::require_metal_or_skip`, which is `pub(crate)` there and so
+// out of reach of an integration test. Every "no Metal device / app_new failed"
+// skip in this file goes through `HostedSurface::spawn_with`, which calls this: a
+// no-op by default (the test prints its skip line and returns), a PANIC under
+// `RUSTTY_REQUIRE_METAL=1`, which the macOS CI leg exports
+// (`.github/workflows/ci.yml`). A runner that loses its Metal device then turns
+// this binary RED instead of reporting `ok` for tests that ran nothing.
+fn metal_required() -> bool {
+    metal_required_from(std::env::var_os("RUSTTY_REQUIRE_METAL").as_deref())
+}
+
+/// The env-independent core of [`metal_required`], unit-tested below without
+/// touching the process environment.
+fn metal_required_from(value: Option<&std::ffi::OsStr>) -> bool {
+    value == Some(std::ffi::OsStr::new("1"))
+}
+
+#[track_caller]
+fn require_metal_or_skip(what: &str) {
+    require_metal_or_skip_impl(metal_required(), what);
+}
+
+#[track_caller]
+fn require_metal_or_skip_impl(required: bool, what: &str) {
+    assert!(
+        !required,
+        "Metal device required but unavailable (RUSTTY_REQUIRE_METAL=1): the test at {} \
+         would have skipped: {what}",
+        std::panic::Location::caller()
+    );
+}
+
+#[test]
+fn metal_pivot_is_strict_only_when_env_is_exactly_one() {
+    use std::ffi::OsStr;
+    assert!(!metal_required_from(None));
+    assert!(!metal_required_from(Some(OsStr::new(""))));
+    assert!(!metal_required_from(Some(OsStr::new("0"))));
+    assert!(!metal_required_from(Some(OsStr::new("true"))));
+    assert!(metal_required_from(Some(OsStr::new("1"))));
+    // Not required: the pivot returns, preserving the skip.
+    require_metal_or_skip_impl(false, "no device");
+}
+
+#[test]
+#[should_panic(expected = "Metal device required but unavailable (RUSTTY_REQUIRE_METAL=1)")]
+fn metal_pivot_panics_when_required() {
+    require_metal_or_skip_impl(true, "no device");
+}
+
 // --- MockHostView: the layer-host double handed across the C-ABI as `nsview` ---
 // A plain `NSObject` subclass (the renderer `generic.rs:6531` precedent, verbatim
 // selectors) so it has NO AppKit main-thread constraint and needs NO
@@ -242,9 +293,14 @@ struct HostedSurface {
     view: Retained<MockHostView>,
 }
 impl HostedSurface {
+    #[track_caller]
     fn spawn() -> Option<Self> {
         Self::spawn_with(make_config_transparent_blur())
     }
+    /// `None` means no Metal device (or `app_new` failed) and the caller skips.
+    /// Both arms go through [`require_metal_or_skip`] first, so under
+    /// `RUSTTY_REQUIRE_METAL=1` they panic here, naming the calling test.
+    #[track_caller]
     fn spawn_with(config: *mut rustty_config::Config) -> Option<Self> {
         ensure_init();
         let view = make_host_view();
@@ -252,6 +308,7 @@ impl HostedSurface {
         // SAFETY: `test_options`/config are live for the call; app_new clones the config.
         let app = unsafe { app_new_serialized(&test_options(), config) };
         if app.is_null() {
+            require_metal_or_skip("rustty_app_new returned null");
             return None;
         }
         // SAFETY: default surface options built by the live C-ABI export.
@@ -267,6 +324,7 @@ impl HostedSurface {
             // no Metal device => skip. Reclaim the app so the skip leaks nothing.
             // SAFETY: `app` is the live pointer from `rustty_app_new`.
             unsafe { rustty_app_free(app) };
+            require_metal_or_skip("rustty_surface_new returned null (no Metal device)");
             return None;
         }
         Some(HostedSurface { app, surface, view })
@@ -896,7 +954,8 @@ fn resize_tracks_host_layer_bounds() {
 // This is the ONLY test that uses AppKit (`objc2-app-kit`, dev-only). It is #[ignore]
 // and NOT part of the headless gate: it needs a live WindowServer/GUI session AND the
 // process main thread. Under the default libtest harness it runs on a worker thread,
-// where `MainThreadMarker::new()` is `None` and it early-returns with a note — to
+// where `MainThreadMarker::new()` is `None` and it FAILS (R14: an #[ignore]d test
+// that was asked for and cannot run is a failure, never a silent `ok`) — to
 // actually show the window, invoke it from a main-thread runner (e.g. a
 // `harness = false` shim, or `cargo test -- --ignored --test-threads=1` from a GUI
 // login session where the first frame lands on the main thread). It is a manual
@@ -909,11 +968,10 @@ fn shows_visible_window_on_device() {
     use objc2_foundation::{NSPoint, NSRect, NSSize};
 
     let Some(mtm) = MainThreadMarker::new() else {
-        eprintln!(
-            "shows_visible_window_on_device: not on the AppKit main thread; \
-                   run from a main-thread runner to see a real window. Skipping."
+        panic!(
+            "shows_visible_window_on_device: not on the AppKit main thread, so no \
+             window can be shown; run it from a main-thread runner"
         );
-        return;
     };
     ensure_init();
     // SAFETY: on the AppKit main thread (`mtm`); AppKit window construction.
@@ -943,7 +1001,9 @@ fn shows_visible_window_on_device() {
     if surface.is_null() {
         // SAFETY: `app` is the live pointer from `rustty_app_new`.
         unsafe { rustty_app_free(app) };
-        return; // no Metal => skip
+        panic!(
+            "shows_visible_window_on_device: rustty_surface_new returned null (no Metal device)"
+        );
     }
     // Makes the window VISIBLE (needs a WindowServer); safe on the main thread.
     window.makeKeyAndOrderFront(None);
@@ -1117,6 +1177,9 @@ fn init_error_path_joins_both_threads_before_freeing_their_state() {
         let stdout = String::from_utf8_lossy(&out.stdout);
         let stderr = String::from_utf8_lossy(&out.stderr);
         if stdout.contains("R13D2-CHILD-SKIP") {
+            // (The child already went through the pivot, and inherits
+            // RUSTTY_REQUIRE_METAL; this keeps the parent's skip line honest too.)
+            require_metal_or_skip("the child could not create a surface");
             eprintln!("{which}: no Metal device / app_new failed; skipping");
             continue;
         }

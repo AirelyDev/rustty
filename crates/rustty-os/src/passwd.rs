@@ -268,11 +268,8 @@ mod tests {
 
     #[test]
     #[cfg_attr(miri, ignore)] // real-OS getpwuid_r syscall
+    #[cfg_attr(windows, ignore = "SkipZigTest on Windows (R14)")]
     fn passwd_entry() {
-        if cfg!(windows) {
-            return; // error.SkipZigTest
-        }
-
         // We should be able to get an entry
         let entry = get().unwrap();
         assert!(entry.shell.is_some());

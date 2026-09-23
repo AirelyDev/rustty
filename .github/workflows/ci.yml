@@ -152,6 +152,21 @@ jobs:
         if: runner.os == 'macOS'
         run: echo "RUSTTY_REQUIRE_METAL=1" >> "$GITHUB_ENV"
 
+      # PORT_RULES R14: the CoreText shaping tests skip when the system font
+      # they ask for is not installed (the reference's SkipZigTest). Every font
+      # they name — Arial Unicode MS, Noto Sans Tai Tham / Javanese / Chakma —
+      # ships in a stock macOS install (/System/Library/Fonts/Supplemental), so on
+      # this leg a skip means the image changed, and RUSTTY_REQUIRE_SYSTEM_FONTS=1
+      # makes it a failure. NOT set on Ubuntu: a stock runner has none of these
+      # fonts, and the HarfBuzz twins skip there by design (the one non-stock
+      # font, Noto Serif Tibetan, is an #[ignore]d test on every leg).
+      # RUSTTY_REQUIRE_DISPLAY (the CoreVideo display-link test) is deliberately
+      # NOT set: whether the hosted runner has an active display is unverified.
+      # Env setup, not a check — the check sequence stays solely in ci.sh.
+      - name: Require the stock macOS shaping fonts (macOS only, R14)
+        if: runner.os == 'macOS'
+        run: echo "RUSTTY_REQUIRE_SYSTEM_FONTS=1" >> "$GITHUB_ENV"
+
       # parity S63-F8: the mirrored fuzz corpus lives under `.port/`, which is
       # deliberately absent from the SOURCE TARBALL — so the five corpus-replay
       # tests clean-skip when it is not there, which is right for a tarball and

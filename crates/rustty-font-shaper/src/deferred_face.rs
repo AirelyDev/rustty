@@ -1356,8 +1356,9 @@ mod tests {
     // return error.SkipZigTest;` is expressed here as a compile-time `cfg` gate to
     // the fontconfig-active target class (mirroring the `coretext` test's
     // `#[cfg(target_os = "macos")]`), since the body names `discovery::Fontconfig`,
-    // which only exists on that target. The runtime `!= fontconfig_freetype` skip is
-    // additionally kept as an inverted `== fontconfig_freetype` guard for fidelity.
+    // which only exists on that target. That `cfg` is the whole skip: a runtime
+    // `!= fontconfig_freetype` guard inside it could never fire, and an early
+    // `return` would be a silent pass anyway (R14).
     #[cfg(all(
         not(target_os = "macos"),
         not(target_os = "windows"),
@@ -1369,9 +1370,9 @@ mod tests {
         // (see `fc::FC_GLOBAL`).
         let _fc = crate::fc::global_shared();
         // if (options.backend != .fontconfig_freetype) return error.SkipZigTest;
-        if crate::options::BACKEND != crate::Backend::FontconfigFreetype {
-            return;
-        }
+        // (the `#[cfg]` above IS that skip: `options::BACKEND` is
+        // `FontconfigFreetype` on exactly that target set, so a runtime guard
+        // could never fire; R14 — no silent early return)
 
         use crate::discovery;
         use crate::face::DesiredSize;
@@ -1441,9 +1442,8 @@ mod tests {
     #[test]
     fn coretext() {
         // if (options.backend != .coretext) return error.SkipZigTest;
-        if crate::options::BACKEND != crate::Backend::Coretext {
-            return;
-        }
+        // (the `#[cfg(target_os = "macos")]` above IS that skip: `options::BACKEND`
+        // is `Coretext` on every macOS build; R14 — no silent early return)
 
         use crate::discovery;
         use crate::face::DesiredSize;

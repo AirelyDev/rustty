@@ -374,6 +374,56 @@ Precedent this rule reverses: parity-closure S51-F7 was briefly ruled "port the 
 user overruled it. S209-F1 (tmux layout `@intCast` panicking on tmux-supplied dimensions) was
 ported as a panic by task 15 and is re-addressed under this rule.
 
+## R14 — No silent skips in tests (BINDING, 2026-09-23)
+
+A Rust test that returns early reports `ok`, which cannot be told apart from a pass. So a
+test that skips because something it needs is missing — a Metal device, a GL context, a
+display, a font, the fuzz corpus, the oracle, a `.git` checkout, a feature flag, the target
+OS — lets a lane that lost the resource go GREEN having checked nothing. Zig reports
+`error.SkipZigTest` as SKIPPED; the port must report it as something other than a pass.
+Every skip takes exactly one of these forms:
+
+1. **Compile-time scope** (target OS/arch, cargo feature, build profile, or a `const` derived
+   from them, including every `if (comptime …) return error.SkipZigTest;`) is an attribute on
+   the test: `#[cfg(…)]` (the test does not exist there) or
+   `#[cfg_attr(<cond>, ignore = "<reason> (R14)")]` (libtest reports it `ignored`). Never a
+   runtime `if <const> { return; }`, and never a body whose only statements are
+   `#[cfg(…)]`-gated without such an attribute. The Zig skip line stays as a comment.
+2. **Runtime resource** goes through a strict-mode pivot, `require_<x>_or_skip(..)`, called
+   immediately before the skip (directly, or inside the helper whose `None` the test skips
+   on). By default the pivot is a no-op and the test prints its `skipping` line; under
+   `RUSTTY_REQUIRE_<X>=1` it PANICS. CI exports the variable on every lane where the
+   resource exists, so there the tests are executed evidence. The variables:
+
+   | Variable | Resource | Set by CI on |
+   |---|---|---|
+   | `RUSTTY_REQUIRE_METAL` | a Metal device | the macOS leg |
+   | `RUSTTY_REQUIRE_GL` | a headless GL 4.3 core context (llvmpipe) | the Ubuntu leg |
+   | `RUSTTY_REQUIRE_FUZZ_CORPUS` | the mirrored fuzz corpus (`.port/`) | every repo-checkout job |
+   | `RUSTTY_REQUIRE_SYSTEM_FONTS` | the stock macOS Supplemental fonts the shaping tests name | the macOS leg |
+   | `RUSTTY_REQUIRE_DISPLAY` | an active display for a CoreVideo display link (macOS) | nobody yet (runner not established) |
+
+   A resource that no CI lane has (a non-stock font, the Ghostty oracle checkout, a
+   WindowServer main thread) is not probed-and-skipped: the test is `#[ignore = "…"]`d and,
+   when run with `--ignored`, FAILS naming what is missing (`init_for_display_test` is the
+   GTK form of this; an `#[ignore]`d test was asked for, so a missing resource is a broken
+   environment).
+3. **A skip that can hide nothing real is deleted** (a `posix_openpt` that every supported
+   host has; a backend guard inside a `#[cfg]` that already selects that backend).
+
+Early returns that are not skips stay legal: the child arm of a parent/child test (guarded by
+`std::env::var_os(CHILD)`; the parent asserts on its output), and a return whose block has
+already asserted. A statically dead guard kept verbatim for R1 (`ARTIFACT == .lib`) is
+listed in G-SKIP's guard allow-list, which re-verifies the constant on every run.
+
+**Enforcement:** G-SKIP (`.port/tools/gates/check_silent_skips.py`, HARD in `ci.sh`, with a
+`--self-test`) scans every `#[test]` under `crates/`, `crates-sys/` and `xtask/` and fails on
+an early return with no pivot or assertion, a cfg-only body with no scoped ignore, a test
+whose every assertion sits inside one else-less `if`, and a "skipping" line in any test
+helper with no pivot before it. Its allow-list is capped (6 sites, 2 guards) and every entry
+carries a reason. It is a lexical lint, not a proof: a skip it cannot see (for example a
+`continue` out of a loop that was the whole test) is still an R14 violation.
+
 ## Pre-port tier checklist (binding, 2026-07-10)
 
 Per-tier PRE-PORT GATE for the remaining tiers (gtk ~23k LOC, swift-app glue,

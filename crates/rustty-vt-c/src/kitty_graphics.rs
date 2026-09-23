@@ -1529,11 +1529,12 @@ mod tests {
 
     // test "placement_iterator new/free"
     #[test]
+    #[cfg_attr(
+        not(feature = "kitty-graphics"),
+        ignore = "SkipZigTest: needs the kitty-graphics vt feature (R14)"
+    )]
     fn placement_iterator_new_free() {
         // if (comptime !build_options.kitty_graphics) return error.SkipZigTest;
-        if !KITTY_GRAPHICS {
-            return;
-        }
         with_test_allocator(|ta| {
             // var iter: PlacementIterator = null;
             let mut iter: PlacementIterator = core::ptr::null_mut();
@@ -1557,15 +1558,17 @@ mod tests {
 
     // PORT NOTE: every test below short-circuits in the reference with
     // `if (comptime !build_options.kitty_graphics) return error.SkipZigTest;`.
-    // The rustty analog is a runtime guard on `KITTY_GRAPHICS`; on the supported
-    // targets it is always `true`, so the body runs.
+    // The rustty analog is a `cfg_attr(not(feature = "kitty-graphics"), ignore)`
+    // on each test (R14: an ignored test, never a silent `ok`); the feature is in
+    // this crate's default set, so the body runs.
 
     // test "placement_iterator next on empty storage"
     #[test]
+    #[cfg_attr(
+        not(feature = "kitty-graphics"),
+        ignore = "SkipZigTest: needs the kitty-graphics vt feature (R14)"
+    )]
     fn placement_iterator_next_on_empty_storage() {
-        if !KITTY_GRAPHICS {
-            return;
-        }
         with_test_allocator(|ta| {
             // var t: terminal_c.Terminal = null;
             let mut t: terminal_c::Terminal = core::ptr::null_mut();
@@ -1612,10 +1615,11 @@ mod tests {
 
     // test "placement_iterator get before next returns invalid"
     #[test]
+    #[cfg_attr(
+        not(feature = "kitty-graphics"),
+        ignore = "SkipZigTest: needs the kitty-graphics vt feature (R14)"
+    )]
     fn placement_iterator_get_before_next_returns_invalid() {
-        if !KITTY_GRAPHICS {
-            return;
-        }
         with_test_allocator(|ta| {
             let mut t: terminal_c::Terminal = core::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
@@ -1662,10 +1666,11 @@ mod tests {
 
     // test "placement_iterator with transmit and display"
     #[test]
+    #[cfg_attr(
+        not(feature = "kitty-graphics"),
+        ignore = "SkipZigTest: needs the kitty-graphics vt feature (R14)"
+    )]
     fn placement_iterator_with_transmit_and_display() {
-        if !KITTY_GRAPHICS {
-            return;
-        }
         with_test_allocator(|ta| {
             let mut t: terminal_c::Terminal = core::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
@@ -1747,10 +1752,11 @@ mod tests {
 
     // test "placement_iterator with multiple placements"
     #[test]
+    #[cfg_attr(
+        not(feature = "kitty-graphics"),
+        ignore = "SkipZigTest: needs the kitty-graphics vt feature (R14)"
+    )]
     fn placement_iterator_with_multiple_placements() {
-        if !KITTY_GRAPHICS {
-            return;
-        }
         with_test_allocator(|ta| {
             let mut t: terminal_c::Terminal = core::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
@@ -1837,10 +1843,11 @@ mod tests {
 
     // test "placement_iterator_set layer filter"
     #[test]
+    #[cfg_attr(
+        not(feature = "kitty-graphics"),
+        ignore = "SkipZigTest: needs the kitty-graphics vt feature (R14)"
+    )]
     fn placement_iterator_set_layer_filter() {
-        if !KITTY_GRAPHICS {
-            return;
-        }
         with_test_allocator(|ta| {
             let mut t: terminal_c::Terminal = core::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
@@ -1990,10 +1997,11 @@ mod tests {
 
     // test "image_get_handle returns null for missing id"
     #[test]
+    #[cfg_attr(
+        not(feature = "kitty-graphics"),
+        ignore = "SkipZigTest: needs the kitty-graphics vt feature (R14)"
+    )]
     fn image_get_handle_returns_null_for_missing_id() {
-        if !KITTY_GRAPHICS {
-            return;
-        }
         with_test_allocator(|ta| {
             let mut t: terminal_c::Terminal = core::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
@@ -2018,10 +2026,11 @@ mod tests {
 
     // test "image_get_handle and image_get with transmitted image"
     #[test]
+    #[cfg_attr(
+        not(feature = "kitty-graphics"),
+        ignore = "SkipZigTest: needs the kitty-graphics vt feature (R14)"
+    )]
     fn image_get_handle_and_image_get_with_transmitted_image() {
-        if !KITTY_GRAPHICS {
-            return;
-        }
         with_test_allocator(|ta| {
             let mut t: terminal_c::Terminal = core::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
@@ -2114,11 +2123,12 @@ mod tests {
 
     // test "image_get exposes pending metadata without a data pointer"
     #[test]
+    #[cfg_attr(
+        not(feature = "kitty-graphics"),
+        ignore = "SkipZigTest: needs the kitty-graphics vt feature (R14)"
+    )]
     fn image_get_exposes_pending_metadata_without_a_data_pointer() {
         // if (comptime !build_options.kitty_graphics) return error.SkipZigTest;
-        if !KITTY_GRAPHICS {
-            return;
-        }
         with_test_allocator(|ta| {
             // var t: terminal_c.Terminal = null;
             let mut t: terminal_c::Terminal = core::ptr::null_mut();
@@ -2230,10 +2240,11 @@ mod tests {
 
     // test "placement_rect with transmit and display"
     #[test]
+    #[cfg_attr(
+        not(feature = "kitty-graphics"),
+        ignore = "SkipZigTest: needs the kitty-graphics vt feature (R14)"
+    )]
     fn placement_rect_with_transmit_and_display() {
-        if !KITTY_GRAPHICS {
-            return;
-        }
         with_test_allocator(|ta| {
             let mut t: terminal_c::Terminal = core::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
@@ -2300,10 +2311,11 @@ mod tests {
 
     // test "placement_rect null args return invalid_value"
     #[test]
+    #[cfg_attr(
+        not(feature = "kitty-graphics"),
+        ignore = "SkipZigTest: needs the kitty-graphics vt feature (R14)"
+    )]
     fn placement_rect_null_args_return_invalid_value() {
-        if !KITTY_GRAPHICS {
-            return;
-        }
         // var sel: selection_c.CSelection = undefined;
         let mut sel = CSelection::default();
         // try testing.expectEqual(Result.invalid_value, placement_rect(null, null, null, &sel));
@@ -2319,10 +2331,11 @@ mod tests {
 
     // test "placement_pixel_size with transmit and display"
     #[test]
+    #[cfg_attr(
+        not(feature = "kitty-graphics"),
+        ignore = "SkipZigTest: needs the kitty-graphics vt feature (R14)"
+    )]
     fn placement_pixel_size_with_transmit_and_display() {
-        if !KITTY_GRAPHICS {
-            return;
-        }
         with_test_allocator(|ta| {
             let mut t: terminal_c::Terminal = core::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
@@ -2381,10 +2394,11 @@ mod tests {
 
     // test "placement_pixel_size null args return invalid_value"
     #[test]
+    #[cfg_attr(
+        not(feature = "kitty-graphics"),
+        ignore = "SkipZigTest: needs the kitty-graphics vt feature (R14)"
+    )]
     fn placement_pixel_size_null_args_return_invalid_value() {
-        if !KITTY_GRAPHICS {
-            return;
-        }
         let mut w: u32 = 0;
         let mut h: u32 = 0;
         assert_eq!(Result::InvalidValue, unsafe {
@@ -2400,10 +2414,11 @@ mod tests {
 
     // test "placement_grid_size with transmit and display"
     #[test]
+    #[cfg_attr(
+        not(feature = "kitty-graphics"),
+        ignore = "SkipZigTest: needs the kitty-graphics vt feature (R14)"
+    )]
     fn placement_grid_size_with_transmit_and_display() {
-        if !KITTY_GRAPHICS {
-            return;
-        }
         with_test_allocator(|ta| {
             let mut t: terminal_c::Terminal = core::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
@@ -2461,10 +2476,11 @@ mod tests {
 
     // test "placement_grid_size null args return invalid_value"
     #[test]
+    #[cfg_attr(
+        not(feature = "kitty-graphics"),
+        ignore = "SkipZigTest: needs the kitty-graphics vt feature (R14)"
+    )]
     fn placement_grid_size_null_args_return_invalid_value() {
-        if !KITTY_GRAPHICS {
-            return;
-        }
         let mut cols: u32 = 0;
         let mut rows: u32 = 0;
         assert_eq!(Result::InvalidValue, unsafe {
@@ -2480,10 +2496,11 @@ mod tests {
 
     // test "placement_viewport_pos with transmit and display"
     #[test]
+    #[cfg_attr(
+        not(feature = "kitty-graphics"),
+        ignore = "SkipZigTest: needs the kitty-graphics vt feature (R14)"
+    )]
     fn placement_viewport_pos_with_transmit_and_display() {
-        if !KITTY_GRAPHICS {
-            return;
-        }
         with_test_allocator(|ta| {
             let mut t: terminal_c::Terminal = core::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
@@ -2540,10 +2557,11 @@ mod tests {
 
     // test "placement_viewport_pos fully off-screen above"
     #[test]
+    #[cfg_attr(
+        not(feature = "kitty-graphics"),
+        ignore = "SkipZigTest: needs the kitty-graphics vt feature (R14)"
+    )]
     fn placement_viewport_pos_fully_off_screen_above() {
-        if !KITTY_GRAPHICS {
-            return;
-        }
         with_test_allocator(|ta| {
             let mut t: terminal_c::Terminal = core::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
@@ -2601,10 +2619,11 @@ mod tests {
 
     // test "placement_viewport_pos top off-screen"
     #[test]
+    #[cfg_attr(
+        not(feature = "kitty-graphics"),
+        ignore = "SkipZigTest: needs the kitty-graphics vt feature (R14)"
+    )]
     fn placement_viewport_pos_top_off_screen() {
-        if !KITTY_GRAPHICS {
-            return;
-        }
         with_test_allocator(|ta| {
             let mut t: terminal_c::Terminal = core::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
@@ -2666,10 +2685,11 @@ mod tests {
 
     // test "placement_viewport_pos bottom off-screen"
     #[test]
+    #[cfg_attr(
+        not(feature = "kitty-graphics"),
+        ignore = "SkipZigTest: needs the kitty-graphics vt feature (R14)"
+    )]
     fn placement_viewport_pos_bottom_off_screen() {
-        if !KITTY_GRAPHICS {
-            return;
-        }
         with_test_allocator(|ta| {
             let mut t: terminal_c::Terminal = core::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
@@ -2728,10 +2748,11 @@ mod tests {
 
     // test "placement_viewport_pos top and bottom off-screen"
     #[test]
+    #[cfg_attr(
+        not(feature = "kitty-graphics"),
+        ignore = "SkipZigTest: needs the kitty-graphics vt feature (R14)"
+    )]
     fn placement_viewport_pos_top_and_bottom_off_screen() {
-        if !KITTY_GRAPHICS {
-            return;
-        }
         with_test_allocator(|ta| {
             let mut t: terminal_c::Terminal = core::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
@@ -2793,10 +2814,11 @@ mod tests {
 
     // test "placement_viewport_pos null args return invalid_value"
     #[test]
+    #[cfg_attr(
+        not(feature = "kitty-graphics"),
+        ignore = "SkipZigTest: needs the kitty-graphics vt feature (R14)"
+    )]
     fn placement_viewport_pos_null_args_return_invalid_value() {
-        if !KITTY_GRAPHICS {
-            return;
-        }
         let mut col: i32 = 0;
         let mut row: i32 = 0;
         assert_eq!(Result::InvalidValue, unsafe {
@@ -2812,10 +2834,11 @@ mod tests {
 
     // test "placement_source_rect defaults to full image"
     #[test]
+    #[cfg_attr(
+        not(feature = "kitty-graphics"),
+        ignore = "SkipZigTest: needs the kitty-graphics vt feature (R14)"
+    )]
     fn placement_source_rect_defaults_to_full_image() {
-        if !KITTY_GRAPHICS {
-            return;
-        }
         with_test_allocator(|ta| {
             let mut t: terminal_c::Terminal = core::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
@@ -2873,10 +2896,11 @@ mod tests {
 
     // test "placement_source_rect with explicit source rect"
     #[test]
+    #[cfg_attr(
+        not(feature = "kitty-graphics"),
+        ignore = "SkipZigTest: needs the kitty-graphics vt feature (R14)"
+    )]
     fn placement_source_rect_with_explicit_source_rect() {
-        if !KITTY_GRAPHICS {
-            return;
-        }
         with_test_allocator(|ta| {
             let mut t: terminal_c::Terminal = core::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
@@ -2942,10 +2966,11 @@ mod tests {
 
     // test "placement_source_rect clamps to image bounds"
     #[test]
+    #[cfg_attr(
+        not(feature = "kitty-graphics"),
+        ignore = "SkipZigTest: needs the kitty-graphics vt feature (R14)"
+    )]
     fn placement_source_rect_clamps_to_image_bounds() {
-        if !KITTY_GRAPHICS {
-            return;
-        }
         with_test_allocator(|ta| {
             let mut t: terminal_c::Terminal = core::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
@@ -3021,10 +3046,11 @@ mod tests {
 
     // test "placement_source_rect null args return invalid_value"
     #[test]
+    #[cfg_attr(
+        not(feature = "kitty-graphics"),
+        ignore = "SkipZigTest: needs the kitty-graphics vt feature (R14)"
+    )]
     fn placement_source_rect_null_args_return_invalid_value() {
-        if !KITTY_GRAPHICS {
-            return;
-        }
         let mut x: u32 = 0;
         let mut y: u32 = 0;
         let mut w: u32 = 0;
@@ -3043,10 +3069,11 @@ mod tests {
 
     // test "image_get on null returns invalid_value"
     #[test]
+    #[cfg_attr(
+        not(feature = "kitty-graphics"),
+        ignore = "SkipZigTest: needs the kitty-graphics vt feature (R14)"
+    )]
     fn image_get_on_null_returns_invalid_value() {
-        if !KITTY_GRAPHICS {
-            return;
-        }
         let mut id: u32 = 0;
         assert_eq!(Result::InvalidValue, unsafe {
             image_get(
@@ -3059,10 +3086,11 @@ mod tests {
 
     // test "placement_render_info returns all fields"
     #[test]
+    #[cfg_attr(
+        not(feature = "kitty-graphics"),
+        ignore = "SkipZigTest: needs the kitty-graphics vt feature (R14)"
+    )]
     fn placement_render_info_returns_all_fields() {
-        if !KITTY_GRAPHICS {
-            return;
-        }
         with_test_allocator(|ta| {
             let mut t: terminal_c::Terminal = core::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
@@ -3150,11 +3178,12 @@ mod tests {
 
     // test "placement_render_info handles maximum grid dimensions"
     #[test]
+    #[cfg_attr(
+        not(feature = "kitty-graphics"),
+        ignore = "SkipZigTest: needs the kitty-graphics vt feature (R14)"
+    )]
     fn placement_render_info_handles_maximum_grid_dimensions() {
         // if (comptime !build_options.kitty_graphics) return error.SkipZigTest;
-        if !KITTY_GRAPHICS {
-            return;
-        }
         with_test_allocator(|ta| {
             // var t: terminal_c.Terminal = null;
             let mut t: terminal_c::Terminal = core::ptr::null_mut();
@@ -3212,10 +3241,11 @@ mod tests {
 
     // test "placement_render_info off-screen sets viewport_visible false"
     #[test]
+    #[cfg_attr(
+        not(feature = "kitty-graphics"),
+        ignore = "SkipZigTest: needs the kitty-graphics vt feature (R14)"
+    )]
     fn placement_render_info_off_screen_sets_viewport_visible_false() {
-        if !KITTY_GRAPHICS {
-            return;
-        }
         with_test_allocator(|ta| {
             let mut t: terminal_c::Terminal = core::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
@@ -3276,10 +3306,11 @@ mod tests {
 
     // test "placement_render_info null returns invalid_value"
     #[test]
+    #[cfg_attr(
+        not(feature = "kitty-graphics"),
+        ignore = "SkipZigTest: needs the kitty-graphics vt feature (R14)"
+    )]
     fn placement_render_info_null_returns_invalid_value() {
-        if !KITTY_GRAPHICS {
-            return;
-        }
         let mut ri = PlacementRenderInfo::default();
         assert_eq!(Result::InvalidValue, unsafe {
             placement_render_info(
@@ -3293,10 +3324,11 @@ mod tests {
 
     // test "image_get_multi success"
     #[test]
+    #[cfg_attr(
+        not(feature = "kitty-graphics"),
+        ignore = "SkipZigTest: needs the kitty-graphics vt feature (R14)"
+    )]
     fn image_get_multi_success() {
-        if !KITTY_GRAPHICS {
-            return;
-        }
         with_test_allocator(|ta| {
             let mut t: terminal_c::Terminal = core::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
@@ -3355,10 +3387,11 @@ mod tests {
 
     // test "image_get_multi error sets out_written"
     #[test]
+    #[cfg_attr(
+        not(feature = "kitty-graphics"),
+        ignore = "SkipZigTest: needs the kitty-graphics vt feature (R14)"
+    )]
     fn image_get_multi_error_sets_out_written() {
-        if !KITTY_GRAPHICS {
-            return;
-        }
         // var id: u32 = 0; var written: usize = 99;
         let mut id: u32 = 0;
         let mut written: usize = 99;
@@ -3386,10 +3419,11 @@ mod tests {
 
     // test "image_get_multi null keys returns invalid_value"
     #[test]
+    #[cfg_attr(
+        not(feature = "kitty-graphics"),
+        ignore = "SkipZigTest: needs the kitty-graphics vt feature (R14)"
+    )]
     fn image_get_multi_null_keys_returns_invalid_value() {
-        if !KITTY_GRAPHICS {
-            return;
-        }
         let mut id: u32 = 0;
         let values: [*mut c_void; 1] = [&mut id as *mut u32 as *mut c_void];
         // try testing.expectEqual(Result.invalid_value, image_get_multi(null, 1, null, &values, null));
@@ -3406,10 +3440,11 @@ mod tests {
 
     // test "placement_get_multi success"
     #[test]
+    #[cfg_attr(
+        not(feature = "kitty-graphics"),
+        ignore = "SkipZigTest: needs the kitty-graphics vt feature (R14)"
+    )]
     fn placement_get_multi_success() {
-        if !KITTY_GRAPHICS {
-            return;
-        }
         with_test_allocator(|ta| {
             let mut t: terminal_c::Terminal = core::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
@@ -3484,10 +3519,11 @@ mod tests {
 
     // test "placement_get_multi error sets out_written"
     #[test]
+    #[cfg_attr(
+        not(feature = "kitty-graphics"),
+        ignore = "SkipZigTest: needs the kitty-graphics vt feature (R14)"
+    )]
     fn placement_get_multi_error_sets_out_written() {
-        if !KITTY_GRAPHICS {
-            return;
-        }
         let mut id: u32 = 0;
         let mut written: usize = 99;
 
@@ -3512,10 +3548,11 @@ mod tests {
 
     // test "placement_get_multi null keys returns invalid_value"
     #[test]
+    #[cfg_attr(
+        not(feature = "kitty-graphics"),
+        ignore = "SkipZigTest: needs the kitty-graphics vt feature (R14)"
+    )]
     fn placement_get_multi_null_keys_returns_invalid_value() {
-        if !KITTY_GRAPHICS {
-            return;
-        }
         let mut id: u32 = 0;
         let values: [*mut c_void; 1] = [&mut id as *mut u32 as *mut c_void];
         // try testing.expectEqual(Result.invalid_value, placement_get_multi(null, 1, null, &values, null));
@@ -3532,10 +3569,11 @@ mod tests {
 
     // test "storage generation via get"
     #[test]
+    #[cfg_attr(
+        not(feature = "kitty-graphics"),
+        ignore = "SkipZigTest: needs the kitty-graphics vt feature (R14)"
+    )]
     fn storage_generation_via_get() {
-        if !KITTY_GRAPHICS {
-            return;
-        }
         with_test_allocator(|ta| {
             let mut t: terminal_c::Terminal = core::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
@@ -3623,10 +3661,11 @@ mod tests {
 
     // test "image generation detects same-sized retransmission"
     #[test]
+    #[cfg_attr(
+        not(feature = "kitty-graphics"),
+        ignore = "SkipZigTest: needs the kitty-graphics vt feature (R14)"
+    )]
     fn image_generation_detects_same_sized_retransmission() {
-        if !KITTY_GRAPHICS {
-            return;
-        }
         with_test_allocator(|ta| {
             let mut t: terminal_c::Terminal = core::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
@@ -3730,10 +3769,11 @@ mod tests {
 
     // test "image generation via image_get_multi"
     #[test]
+    #[cfg_attr(
+        not(feature = "kitty-graphics"),
+        ignore = "SkipZigTest: needs the kitty-graphics vt feature (R14)"
+    )]
     fn image_generation_via_image_get_multi() {
-        if !KITTY_GRAPHICS {
-            return;
-        }
         with_test_allocator(|ta| {
             let mut t: terminal_c::Terminal = core::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
@@ -3809,10 +3849,11 @@ mod tests {
         ignore = "MIRI EXCEPTION (rustty-vt-c kitty): vendored zlib FFI \
          (inflateInit2_) — runs natively + ASan; see MIRI_EXCEPTIONS.md"
     )]
+    #[cfg_attr(
+        not(feature = "kitty-graphics"),
+        ignore = "SkipZigTest: needs the kitty-graphics vt feature (R14)"
+    )]
     fn image_compression_and_format_always_report_decoded_data() {
-        if !KITTY_GRAPHICS {
-            return;
-        }
         with_test_allocator(|ta| {
             let mut t: terminal_c::Terminal = core::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
@@ -3892,10 +3933,11 @@ mod tests {
 
     // test "generation never recurs across resets and screen switches"
     #[test]
+    #[cfg_attr(
+        not(feature = "kitty-graphics"),
+        ignore = "SkipZigTest: needs the kitty-graphics vt feature (R14)"
+    )]
     fn generation_never_recurs_across_resets_and_screen_switches() {
-        if !KITTY_GRAPHICS {
-            return;
-        }
         with_test_allocator(|ta| {
             let mut t: terminal_c::Terminal = core::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {
@@ -4081,10 +4123,11 @@ mod tests {
     // `s=1,v=3` keeps the raw payload (12 bytes) a multiple of 3 so the
     // base64 body needs no `=` padding.
     #[test]
+    #[cfg_attr(
+        not(feature = "kitty-graphics"),
+        ignore = "SkipZigTest: needs the kitty-graphics vt feature (R14)"
+    )]
     fn image_get_writes_a_full_c_int_for_format_and_compression() {
-        if !KITTY_GRAPHICS {
-            return;
-        }
         with_test_allocator(|ta| {
             let mut t: terminal_c::Terminal = core::ptr::null_mut();
             assert_eq!(Result::Success, unsafe {

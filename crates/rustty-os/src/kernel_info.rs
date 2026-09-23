@@ -50,11 +50,8 @@ mod tests {
 
     #[test]
     #[cfg_attr(miri, ignore)] // reads /proc/sys/kernel/osrelease (real OS file)
+    #[cfg_attr(not(target_os = "linux"), ignore = "reads /proc: Linux only (R14)")]
     fn read_proc_sys_kernel_osrelease() {
-        if cfg!(not(target_os = "linux")) {
-            return; // reference returns null (test no-op on non-Linux)
-        }
-
         let kernel_info = getKernelInfo().unwrap();
 
         // Since we can't hardcode the info in tests, just check
