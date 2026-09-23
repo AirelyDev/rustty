@@ -498,6 +498,31 @@ mod r13_window_size_overflow_tests {
         assert_eq!((1, 1), (sz.grid().columns, sz.grid().rows));
     }
 
+    /// UD95 (R13, task R13-D): `click-repeat-interval` above 4294 ms. The
+    /// reference computes `config.@"click-repeat-interval" * 1_000_000` in `u32`
+    /// (`Surface.zig:395`) and traps (ReleaseFast: 5000 -> 705032704 ns,
+    /// measured). Driven through the config loader into a real `DerivedConfig`.
+    #[test]
+    fn a_click_repeat_interval_above_u32_nanoseconds_is_widened_not_trapped() {
+        // Positive control: an ordinary interval.
+        let cfg = load(b"click-repeat-interval = 500\n");
+        let mut dc = DerivedConfig::init(Allocator, &cfg).unwrap();
+        assert_eq!(500_000_000, dc.mouse_interval);
+        dc.deinit();
+
+        for ms in [5000u32, u32::MAX] {
+            let cfg = load(format!("click-repeat-interval = {ms}\n").as_bytes());
+            assert_eq!(ms, cfg.click_repeat_interval, "the value reaches the config");
+            let mut dc = DerivedConfig::init(Allocator, &cfg).unwrap();
+            assert_eq!(
+                u64::from(ms) * 1_000_000,
+                dc.mouse_interval,
+                "{ms} ms is {ms}000000 ns, not a wrapped u32"
+            );
+            dc.deinit();
+        }
+    }
+
     /// `u32_from_ceil` on a NaN (task R13-C). The reference's `@as(u32,
     /// @intFromFloat(@ceil(width_f32 / scale.x)))` with a NaN content scale does
     /// not trap: it yields 0, so it would send an initial size of 0 plus the
@@ -1241,6 +1266,14 @@ impl DerivedConfig {
             // ([`font_shared_grid_set_derived_config`]).
             font: font_shared_grid_set_derived_config(config),
             // .mouse_interval = config.@"click-repeat-interval" * 1_000_000, // 500ms
+            //
+            // PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD95. The
+            // reference multiplies in `u32` (the config field's type) before the
+            // result widens to the `u64` field, so `click-repeat-interval` above
+            // 4294 (ms) traps in ReleaseSafe and wraps in ReleaseFast (5000 ms
+            // becomes 705032704 ns, measured). The port widens first, which is
+            // the reference's evident intent (the field is `u64` nanoseconds);
+            // any `u32` millisecond count fits.
             mouse_interval: u64::from(config.click_repeat_interval) * 1_000_000, // 500ms
             // .mouse_hide_while_typing = config.@"mouse-hide-while-typing",
             mouse_hide_while_typing: config.mouse_hide_while_typing,
