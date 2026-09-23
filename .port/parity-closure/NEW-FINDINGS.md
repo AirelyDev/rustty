@@ -1103,8 +1103,10 @@ found, and current state.
 > whose message appears nowhere in the reference at the pin — live OR commented-out — is
 > reported, and must be declared as `stale-comment` in `LOG-TEXT-DIVERGENCES.tsv` or the gate
 > is RED. **21 are declared**, well beyond the three this entry was opened for.
-> (Corrected 2026-09-22, task R13-D: `LOG-TEXT-DIVERGENCES.tsv` now declares **17** `stale-comment`
-> rows, of 28 data rows in all. The 21 above is kept as written at the time.)
+> (Corrected 2026-09-22, task R13-D: `LOG-TEXT-DIVERGENCES.tsv` now has **17** `stale-comment` rows,
+> of 28 data rows in all; `check_log_reconcile.py` reports "19 stale preserved comment(s)" covered by
+> them, since a row names a file and a message and can cover more than one comment. The 21 above is
+> kept as written at the time.)
 >
 > **Measured 2026-09-11 by walking `is_stranded_comment`'s branches in the order the code
 > applies them**, over the 1581 preserved reference comments in mapped port files (down from
