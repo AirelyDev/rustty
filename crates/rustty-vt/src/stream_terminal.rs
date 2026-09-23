@@ -261,6 +261,19 @@ pub struct Effects<'a> {
     // clipboard_write: ?*const fn (*Handler, clipboard.Write) void
     // PORT NOTE (7ae9b1113): the pre-range `-> WriteResult` return became the
     // reply-based `clipboard.Write.reply` carried on the request.
+    // PORT NOTE (R7 soundness override, parity S166-F1): the reference's reply
+    // state holds `handler: *Handler` and applies the reply's side effects
+    // (the pty response, and a `remember` grant) INSIDE `reply`, while the
+    // callback is still running. Here the callback holds `&mut Handler`, a
+    // protected argument for the whole call, so any write through another
+    // alias of the handler during the call is undefined behavior
+    // (`rust-mut-args-strongly-protected`). The reply therefore only records
+    // into the request's stack state, and the handler applies the effects
+    // right after the callback returns. The contract this gives an effect
+    // implementation, and the one place it differs from the reference: pty
+    // bytes the callback writes itself come BEFORE the reply's response, and
+    // a grant recorded by `reply` is not visible until the callback returns.
+    // Pinned by `clipboard_read_reply_is_written_after_the_callback_returns`.
     pub clipboard_write: Option<fn(&mut Handler<'a>, clipboard::Write)>,
 
     /// Called when the running program requests clipboard contents
@@ -288,6 +301,8 @@ pub struct Effects<'a> {
     /// the program's follow-up read arrives here with `granted` set
     /// since the user already pasted. See `paste`.
     // clipboard_read: ?*const fn (*Handler, clipboard.Read) void
+    // PORT NOTE: the reply-ordering contract on `clipboard_write` above
+    // applies here too.
     pub clipboard_read: Option<fn(&mut Handler<'a>, clipboard::Read)>,
 
     /// Called when drag and drop protocol state changes in a way the
@@ -943,8 +958,11 @@ impl<'a> Handler<'a> {
         // `handler: *Handler` and writes the pty from INSIDE the effect
         // callback; the port's reply only ENCODES into the stack state (no
         // Handler alias while the callback's `&mut Handler` is live) and the
-        // handler delivers the bytes here, immediately after the callback —
-        // the observable pty write sequence is unchanged.
+        // handler delivers the bytes here, immediately after the callback.
+        // CORRECTION (parity S166-F1): this note used to say the observable
+        // pty write sequence is unchanged. It is unchanged only when the
+        // callback writes nothing itself; see the contract on
+        // `Effects::clipboard_write`.
         let response = core::mem::take(&mut state.response);
         if !response.is_empty() {
             self.write_pty(&response);
@@ -1106,8 +1124,8 @@ impl<'a> Handler<'a> {
         // `handler: *Handler` and grants/writes from INSIDE the effect
         // callback; the port's reply only records into the stack state and
         // the handler applies the grant + pty write here, immediately after
-        // the callback — the observable sequence is unchanged (see
-        // `do_clipboard_read`).
+        // the callback (see `do_clipboard_read`, and the ordering contract on
+        // `Effects::clipboard_write`, parity S166-F1).
         if state.remember && !state.pw.is_empty() {
             // self.handler.kitty_clipboard_grants.grant(..., self.pw, .read, false)
             self.kitty_clipboard_grants
@@ -8651,6 +8669,42 @@ mod tests {
 
     fn cr_written() -> Vec<u8> {
         CR_WRITTEN.with(|c| c.borrow().clone())
+    }
+
+    fn cr_clipboard_read_then_write_pty(handler: &mut Handler, read: clipboard::Read) {
+        read.reply(clipboard::ReadResult::Success(
+            clipboard::ReadResultSuccess {
+                contents: &[clipboard::Content {
+                    mime: b"text/plain",
+                    data: b"hello",
+                }],
+                ..clipboard::ReadResultSuccess::default()
+            },
+        ));
+        handler.write_pty(b"X");
+    }
+
+    // Parity S166-F1 (no reference test; pins the port's documented contract,
+    // see `Effects::clipboard_write`): the reply's response is written when
+    // the callback returns, so bytes the callback writes itself come first.
+    // The reference writes the response inside `reply`, which would give
+    // "\x1B]52;c;aGVsbG8=\x1B\\X".
+    #[test]
+    fn clipboard_read_reply_is_written_after_the_callback_returns() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        CR_WRITTEN.with(|c| c.borrow_mut().clear());
+
+        let mut s = t.vt_stream();
+        s.handler.effects.write_pty = Some(cr_write_pty);
+        s.handler.effects.clipboard_read = Some(cr_clipboard_read_then_write_pty);
+        s.next_slice(b"\x1B]52;c;?\x1B\\");
+        assert_eq!(
+            b"X\x1B]52;c;aGVsbG8=\x1B\\".as_slice(),
+            cr_written().as_slice()
+        );
+
+        s.deinit();
+        t.deinit(Global);
     }
 
     // test "clipboard_read effect callback"

@@ -329,7 +329,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** 'stream: continuation lifecycle' is wholly #[ignore]d in release builds, not just its FailingAllocator arm
   - **Oracle:** `src/terminal/stream.zig:4850-4906` → **Rustty:** `crates/rustty-vt/src/stream.rs:6845-6932`
   - **Audit's suggested fix:** Drop the cfg_attr ignore and keep only the `#[cfg(debug_assertions)]` block guard on the failing-allocator arm so the other four assertions run in every configuration.
-- [ ] **S166-F1** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S166-F1** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** Clipboard read/write reply side effects are applied after the effect callback returns instead of inside `reply`
   - **Oracle:** `src/terminal/stream_terminal.zig:738-760, 927-960, 1206-1234` → **Rustty:** `crates/rustty-vt/src/stream_terminal.rs:907-951, 1083-1118, 1261-1339, 2922-3184`
   - **Audit's suggested fix:** Document the deferral as an intentional contract in the Effects doc comment, or apply the grant/pty write from inside `reply` via a raw handler pointer in the state (as the oracle does) if the SB/Miri harness allows it.
