@@ -454,7 +454,19 @@ impl<'s> Decoder<'s> {
             // decoders then parse a flat buffer, which keeps per-row work free
             // of stream adapters. The CRC and exact-length checks in `finish`
             // are unaffected.
-            let mut staged = vec![0u8; remaining];
+            // const staged = try alloc.alloc(u8, remaining);
+            // defer alloc.free(staged);
+            // CORRECTION (parity S204-F1): this was `vec![0u8; remaining]`,
+            // which aborts where the reference returns OutOfMemory. The
+            // `cfg(test)` check stands in for the reference tests' failing
+            // allocator (see `snapshot::tw`).
+            #[cfg(test)]
+            super::tw::check(super::tw::SnapshotFp::Alloc).map_err(|_| DecodeError::OutOfMemory)?;
+            let mut staged: Vec<u8> = Vec::new();
+            staged
+                .try_reserve_exact(remaining)
+                .map_err(|_| DecodeError::OutOfMemory)?;
+            staged.resize(remaining, 0);
             self.record_reader
                 .payload_reader()
                 .read_slice_all(&mut staged)?;
@@ -564,15 +576,19 @@ fn decode_payload_body_inner(
     // Pages without styles or hyperlinks, the common case for plain
     // scrollback, skip the remap tables entirely: every encoded cell ID
     // resolves to the default through the empty remap.
+    // CORRECTION (parity S204-F1): both `init`s were infallible; the
+    // reference's `catch return error.OutOfMemory` is restored.
     let mut style_remap: grid::StyleRemap = if header.style_count > 0 {
-        grid::StyleRemap::init()
+        // grid.StyleRemap.init(alloc) catch return error.OutOfMemory
+        grid::StyleRemap::init().map_err(|_| PayloadDecodeError::OutOfMemory)?
     } else {
         grid::StyleRemap::empty()
     };
     // defer style_remap.deinit(alloc); — dropped.
 
     let mut hyperlink_remap: grid::HyperlinkRemap = if header.hyperlink_count > 0 {
-        grid::HyperlinkRemap::init()
+        // grid.HyperlinkRemap.init(alloc) catch return error.OutOfMemory
+        grid::HyperlinkRemap::init().map_err(|_| PayloadDecodeError::OutOfMemory)?
     } else {
         grid::HyperlinkRemap::empty()
     };
@@ -1409,6 +1425,71 @@ mod tests {
         let mut decoded = decode(&mut source).unwrap();
         assert_eq!(b"next", source.take(4).unwrap());
         decoded.deinit();
+    }
+
+    // Parity S204-F1 (no reference test; the reference's failing-allocator
+    // sweeps reach these through `snapshot.zig`'s transactionality test): the
+    // two remap tables and the staged payload return OutOfMemory when their
+    // allocation fails.
+    #[test]
+    fn decode_remap_allocation_failure_is_out_of_memory() {
+        use crate::snapshot::tw;
+        use rustty_util::tripwire::ResetMode;
+        let test_page_fixture = test_page_fixture();
+
+        // The fixture carries styles and hyperlinks, so it takes both remaps.
+        // The other reaches are `hyperlink::decode_page_string`, one per
+        // string, which come after the remaps.
+        let _ = tw::take_reached();
+        let mut reader = io::FixedReader::new(&test_page_fixture);
+        decode_payload(&mut reader).unwrap().deinit();
+        assert!(tw::take_reached() >= 2);
+
+        // Index 0 is the style remap, index 1 the hyperlink remap: both are
+        // allocated before any table entry is read.
+        for fail_index in 0..2 {
+            tw::error_after(tw::SnapshotFp::Alloc, fail_index);
+            let mut reader = io::FixedReader::new(&test_page_fixture);
+            assert_eq!(
+                Err(PayloadDecodeError::OutOfMemory),
+                decode_payload(&mut reader).map(|mut page| page.deinit()),
+                "fail_index={fail_index}",
+            );
+            assert_eq!(Ok(()), tw::end(ResetMode::Reset));
+        }
+    }
+
+    #[test]
+    fn decode_staged_payload_allocation_failure_is_out_of_memory() {
+        use crate::snapshot::tw;
+        use rustty_util::tripwire::ResetMode;
+
+        let mut page = TerminalPage::init(TerminalPageCapacity::new(2, 1)).unwrap();
+        unsafe { *page.get_row_and_cell(0, 0).cell = terminal_page::Cell::init('A' as u32) };
+        let mut destination = io::AllocatingWriter::new();
+        let mut stream = record::Writer::init(&mut destination);
+        encode(&page, &mut stream).unwrap();
+        let framed = stream.destination().written().to_vec();
+        stream.deinit();
+        page.deinit();
+
+        // A one-byte buffer keeps the payload from being fully buffered, so
+        // `Decoder.decode` stages it. No remap is taken: the page has no
+        // styles or hyperlinks.
+        let decode_limited = |framed: &[u8]| {
+            let mut source = io::FixedReader::new(framed);
+            let mut read_buf = [0u8; 1];
+            let mut limited =
+                io::LimitedReader::new(&mut source, io::Limit::Unlimited, &mut read_buf);
+            decode(&mut limited).map(|mut page| page.deinit())
+        };
+        let _ = tw::take_reached();
+        assert_eq!(Ok(()), decode_limited(&framed));
+        assert_eq!(1, tw::take_reached());
+
+        tw::error_always(tw::SnapshotFp::Alloc);
+        assert_eq!(Err(DecodeError::OutOfMemory), decode_limited(&framed));
+        assert_eq!(Ok(()), tw::end(ResetMode::Reset));
     }
 
     // test "decode sparse page rejects every truncation"

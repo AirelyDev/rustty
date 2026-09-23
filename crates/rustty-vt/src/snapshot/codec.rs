@@ -2592,9 +2592,13 @@ mod tests {
     // FailingAllocator's accounting.
     //
     // PORT NOTE (parity S206-F1, closed under `PROCEDURE.md` blind-spot 1's
-    // carve-out): one decode allocation in this subsystem is still NOT
+    // carve-out): one decode allocation in this subsystem was NOT
     // instrumented — `snapshot/grid.rs`'s `Remap::init`, which the reference
-    // declares `Allocator.Error!Self` and the port made infallible. It lives in
+    // declares `Allocator.Error!Self` and the port made infallible.
+    // UPDATE (batch T-A, S204-F1 closed): `Remap::init` is fallible and
+    // instrumented now, and the fourth fixture below (a styled cell) reaches
+    // the style remap; the hyperlink fixture reaches the hyperlink remap. The
+    // rest of this note is the history of why. It lives in
     // `snapshot/grid.zig`, outside this row's cited oracle anchors
     // (`snapshot.zig:1626-1694`). It is **S204-F1**'s, re-opened 2026-09-11
     // (that row is anchored on the port side, `snapshot/page.rs:561-573`, which
@@ -2743,7 +2747,25 @@ mod tests {
         unsafe { (*active).test_write_string(b"hi") }.unwrap();
         let mut encoded = io::AllocatingWriter::new();
         encode(&mut encoded, &t, test_encode_options()).unwrap();
-        exercise(encoded.written(), 13);
+        exercise(encoded.written(), 14);
+
+        t.deinit(Allocator);
+
+        // A terminal carrying a STYLED cell, so a page's style table is
+        // non-empty and its decode takes `grid::StyleRemap::init`.
+        //
+        // PORT NOTE (parity S204-F1): net-new for the same reason as the
+        // hyperlink fixture above. No other fixture writes a style, so without
+        // this case the style remap's `tw::check` is reached by nothing in
+        // this sweep. (styled_fixture_added)
+        let mut t = Terminal::init(Allocator, terminal_options(10, 3, DEFAULT_MSB, None)).unwrap();
+        {
+            let mut stream = t.vt_stream();
+            stream.next_slice(b"\x1b[1mhi");
+        }
+        let mut encoded = io::AllocatingWriter::new();
+        encode(&mut encoded, &t, test_encode_options()).unwrap();
+        exercise(encoded.written(), 10);
 
         t.deinit(Allocator);
     }

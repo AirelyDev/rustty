@@ -1661,6 +1661,10 @@ here the ledger does not contradict the waiver, it *dates* it.
   `min_allocations` floor with a fixture whose pages carry styles. 26 call sites, 24 of
   them in `grid.rs`'s own tests.
 - **state**: **OPEN**, tracked by **S204-F1** (re-opened 2026-09-11). Not attempted by task 16.
+- **update (batch T-A)**: FIXED with S204-F1. `Remap::init` returns `Result` through
+  `try_reserve_exact` behind a `SnapshotFp::Alloc` check, `decode_payload_body` returns
+  `OutOfMemory` for either remap, and the transactionality sweep has a styled fixture and
+  raised floors (hyperlink fixture 13 to 14, styled fixture 10).
 
 ## N31 — the Miri runner fabricates failures: it classifies on an abort STRING, and it uses a fixed temp path two sessions collide on
 

@@ -413,7 +413,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** exit_code parsing: Zig std.fmt.parseInt accepts '_' digit separators, Rust str::parse does not
   - **Oracle:** `src/terminal/osc/parsers/semantic_prompt.zig:160-166` → **Rustty:** `crates/rustty-vt/src/osc/parsers/semantic_prompt.rs:323-333`
   - **Audit's suggested fix:** Strip interior `_` separators (rejecting leading/trailing `_` and an all-`_`/empty remainder) before calling `parse::<i32>()`, mirroring Zig's parseIntWithSign, and add a regression assertion to `option_read_exit_code`.
-- [ ] **S204-F1** · DISPUTED · `ALLOC` · missing-error-path
+- [x] **S204-F1** · DISPUTED · `ALLOC` · missing-error-path
   - **What:** Decode-time temporary allocations abort instead of returning OutOfMemory
   - **Oracle:** `src/terminal/snapshot/page.zig:252-253, 373-381` → **Rustty:** `crates/rustty-vt/src/snapshot/page.rs:457, 561-573`
   - **Audit's suggested fix:** If the port wants full parity on this error path, use a fallible allocation (e.g. `Vec::try_reserve`) for the staged payload and remap tables and map failure to `PayloadDecodeError::OutOfMemory`; otherwise record the deviation in a PORT NOTE next to the staged allocation.
