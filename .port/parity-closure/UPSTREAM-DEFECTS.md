@@ -1395,7 +1395,7 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - kind:            deadlock (the child hangs before `exec`)
 - upstream project: ghostty
 - severity:        low (thread timing, plus a pre-exec failure)
-- reference:       `src/termio/Exec.zig:1041-1051` (`os_pre_exec` callback: `sp.childPreExec() catch |err| log.err("error initializing child: {}", .{err});` at `:1045`); `src/apprt/gtk/pre_exec.zig:39` and `:58` (`log.err` in `preExec`, the cgroup move); both run in the forked child through the global `logFn`, which takes `std.debug.lockStderr` (`src/main_ghostty.zig:158-161`), at 20abdb50a
+- reference:       `src/termio/Exec.zig:1041-1051` (`os_pre_exec` callback: `sp.childPreExec() catch |err| log.err("error initializing child: {}", .{err});` at `:1045`); `src/apprt/gtk/pre_exec.zig:40` and `:56` (`log.err` in `preExec`, the cgroup move; older records cite `:39,58`); both run in the forked child through the global `logFn`, which takes `std.debug.lockStderr` (`src/main_ghostty.zig:158-161`), at 20abdb50a
 - defect:          after `fork` only the forking thread exists in the child. If another thread of the (multi-threaded) parent held the stderr lock, or an allocator lock the formatting needs, at the moment of the fork, the child blocks on it forever. POSIX allows only async-signal-safe calls between `fork` and `exec`.
 - ReleaseSafe:     the child hangs before `exec`; the terminal shows no process. By reading; not reproduced against the Zig logger. Whether Zig's stderr lock or allocator registers an `atfork` handler that would prevent this is UNVERIFIED.
 - ReleaseFast:     the same.

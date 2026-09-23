@@ -337,7 +337,7 @@ fn sleep_millis(ms: i64) {
 /// (task-14d-3).
 ///
 /// PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD101: the
-/// reference's `log.err` calls at `pre_exec.zig:39` and `:58` run in the forked
+/// reference's `log.err` calls at `pre_exec.zig:40` and `:56` run in the forked
 /// child through the global `logFn` and its process-wide stderr lock, so the
 /// child can hang before `exec`. This raw `write(2)` is the safe handling; the
 /// behaviour is proven by `rustty-termio`'s
