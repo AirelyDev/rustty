@@ -1211,6 +1211,21 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - proposed fix:    replace each `unreachable` with the `Canceled` arm's `return .disarm` (keeping the existing warnings), since the loop can deliver these errors.
 - upstream status: not reported
 
+### UD74 — libvaxis's SIGWINCH handler takes a mutex and runs callbacks in signal context
+- kind:            deadlock
+- upstream project: libvaxis
+- severity:        low (a resize must land on a thread holding the handlers mutex or a lock a callback takes)
+- reference:       libvaxis 0.6.0 (the version Ghostty pins) `src/tty.zig:132-140` (`handleWinch`: `handler_mutex.lock(handler_io) catch @panic(…)`, then every registered callback), installed at `:62-73` (`posix.sigaction(posix.SIG.WINCH, …)` in `PosixTty.init`); the same non-recursive `handler_mutex` (`:49`) guards `notifyWinsize` (`:123-130`); the callback Ghostty's CLI TUIs register is the `Loop`'s winsize callback (an `ioctl` and an event-queue push)
+- defect:          neither a mutex lock nor the queue push is async-signal-safe. If SIGWINCH is delivered to a thread that already holds `handler_mutex` (inside `notifyWinsize`) or the event queue's lock, the handler blocks on a lock its own thread holds, forever. The inventory recorded the scenario as unverified, and a validation report called it overstated: the window is the few instructions of a registration or a queue operation.
+- ReleaseSafe:     the thread hangs (and with it the TUI, if it is the main or the input thread). `@panic` only if the lock reports cancelation. By reading: `std.Io.Mutex` is not recursive; no Zig probe was built.
+- ReleaseFast:     the same.
+- reachability:    a terminal resize (SIGWINCH from the kernel) while a libvaxis TUI registers its handler or pushes an event — e.g. resizing the window as `+list-themes` or `+boo` starts. In the port the window was wider: rustty's own `deregister_winsize` (called from `Loop::drop`) takes the same mutex.
+- port handling:   `crates/rustty-vaxis/src/tty.rs`: the handler now only writes one byte to a non-blocking, close-on-exec self-pipe, saving and restoring `errno` around the `write(2)`. A process-lifetime dispatcher thread (`vaxis-winch`), created with the pipe the first time the handler is installed, reads it and runs the registered callbacks under the mutex in ordinary thread context, once per wake (signals that arrive before it wakes coalesce, as the kernel already coalesces pending SIGWINCHes). The `sigaction` itself is unchanged. A failure to create the pipe or the thread is returned from `PosixTty::init` as an errno, as its other syscalls are. PORT NOTEs at the module header, `install_winch_handler` and `handle_winch`.
+- parity row(s):   NEW-FINDINGS N61. Inventory M24 (records F11).
+- test:            `a_sigwinch_while_the_handlers_are_locked_still_reaches_the_callback` (rustty-vaxis, macOS and the Linux VM). A positive control first: `kill(getpid(), SIGWINCH)` reaches a registered callback. Then the deadlock shape, deterministically: a helper thread locks the handlers mutex and sends SIGWINCH to ITSELF (`pthread_kill`), then unlocks; the test asserts the thread finishes within 5 s, that the resize still reaches the callback afterwards, and that every callback ran on the `vaxis-winch` thread, never in signal context. Negative control, 2026-09-22, on macOS and on the VM: the reference's handler body restored (lock the mutex, run the callbacks) fails with "the SIGWINCH handler deadlocked on the handlers mutex" after the 5 s bound. Restored.
+- proposed fix:    make `handleWinch` async-signal-safe: set an atomic flag or write to a self-pipe, and run the callbacks from the event loop's own thread (the input thread can `poll` the pipe alongside the tty).
+- upstream status: not reported
+
 ## Candidates pending verification
 
 Assembled from this plan's progress notes on 2026-09-11. **Not verified** — do not cite as fact.

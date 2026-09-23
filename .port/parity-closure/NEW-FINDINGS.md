@@ -2548,3 +2548,18 @@ branch's `- 32` underflowed for a raw byte below 32, both from tty input. Such e
 consuming the whole sequence. Reference defect: `UPSTREAM-DEFECTS.md` UD72.
 
 **state**: CLOSED by task R13-C.
+
+## N61 — the vaxis SIGWINCH handler locked a mutex and ran callbacks in signal context
+
+- **id**: N61. Inventory M24.
+- **found by**: records F11; fixed by task R13-C.
+- **severity**: low. **kind**: missing-branch (reference defect, R13; upstream libvaxis).
+- **oracle**: libvaxis 0.6.0 `src/tty.zig:132-140`.
+- **rustty**: `crates/rustty-vaxis/src/tty.rs` (`handle_winch`, `install_winch_handler`, `winch_dispatcher`).
+
+The port kept upstream's handler body, and its module note called that "Zig's exact design". A
+SIGWINCH on a thread holding the handlers mutex (`notify_winsize`, or the port's own
+`deregister_winsize`) deadlocked it, measured by the negative control. The handler now writes to a
+self-pipe and a dispatcher thread runs the callbacks. Reference defect: `UPSTREAM-DEFECTS.md` UD74.
+
+**state**: CLOSED by task R13-C.

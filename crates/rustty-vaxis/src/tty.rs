@@ -14,9 +14,14 @@
 //! sandbox, so any device smoke test is `#[ignore]`-on-device. The R6 gate here is
 //! ASan/native. `TestTty` (pipe-backed) covers the device-free path.
 //!
-//! PORT NOTE (async-signal-safety): locking a mutex + `ioctl`/queue-push inside the
-//! SIGWINCH handler is NOT async-signal-safe — but it is Zig's exact design and the
-//! faithful port keeps it (the impure-backend contract, ASan/native-tested, never Miri).
+//! PORT NOTE (async-signal-safety): reference defect (R13), UD74. Upstream's
+//! `handleWinch` locks the handlers mutex and runs the callbacks (an `ioctl` and a
+//! queue push) inside the SIGWINCH handler, which is not async-signal-safe: a
+//! resize that interrupts a thread holding that mutex (`notifyWinsize`, or the
+//! port's `deregister_winsize`) or the event queue's lock deadlocks it. The port's
+//! handler only writes one byte to a self-pipe; a dispatcher thread (`vaxis-winch`)
+//! reads it and runs the callbacks under the mutex in ordinary thread context. See
+//! [`PosixTty::install_winch_handler`].
 //!
 //! PORT NOTE (§3.4 buffer/writer): Zig `init(buffer: []u8)` hands a caller write buffer
 //! to `std.fs.File.Writer`. Rust buffers writes over the RAW `fd` WITHOUT owning it (so
@@ -67,6 +72,20 @@ pub enum TtyError {
 #[cfg(not(windows))]
 fn errno() -> i32 {
     std::io::Error::last_os_error().raw_os_error().unwrap_or(0)
+}
+
+/// The calling thread's `errno` slot, for the signal handler to save and
+/// restore around its `write(2)`.
+#[cfg(not(windows))]
+fn errno_location() -> *mut c_int {
+    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd"))]
+    unsafe {
+        libc::__error()
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "freebsd")))]
+    unsafe {
+        libc::__errno_location()
+    }
 }
 
 /// The target TTY implementation. Zig: `if is_test TestTty else switch(os){ .windows =>
@@ -229,6 +248,16 @@ static HANDLERS: Mutex<HandlerState> = Mutex::new(HandlerState {
 #[cfg(not(windows))]
 static HANDLER_INSTALLED: AtomicBool = AtomicBool::new(false);
 
+/// The write end of the SIGWINCH self-pipe (UD74), or -1 before the first
+/// install. The signal handler's only work is a `write(2)` to it, which is
+/// async-signal-safe; an atomic load is lock-free.
+#[cfg(not(windows))]
+static WINCH_PIPE_WRITE: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(-1);
+
+/// Creates the self-pipe and its dispatcher thread, once per process.
+#[cfg(not(windows))]
+static WINCH_DISPATCHER: std::sync::OnceLock<Result<(), TtyError>> = std::sync::OnceLock::new();
+
 #[cfg(not(windows))]
 pub struct PosixTty {
     /// the original state of the terminal, prior to calling makeRaw
@@ -257,21 +286,7 @@ impl PosixTty {
         // Set the termios of the tty
         let termios = Self::make_raw(fd)?;
 
-        let mut act: libc::sigaction = unsafe { std::mem::zeroed() };
-        // libc's `struct sigaction` exposes the handler as `sa_sigaction` (a usize-width
-        // slot); put the 1-arg `extern "C" fn(c_int)` in via a fn-ptr cast, and DO NOT
-        // set SA_SIGINFO (`sa_flags = 0` — the 1-arg form, not the 3-arg siginfo handler).
-        act.sa_sigaction = Self::handle_winch as *const () as libc::sighandler_t;
-        act.sa_mask = unsafe { std::mem::zeroed() };
-        #[cfg(not(target_os = "macos"))]
-        unsafe {
-            libc::sigemptyset(&mut act.sa_mask);
-        }
-        act.sa_flags = 0;
-        unsafe {
-            libc::sigaction(libc::SIGWINCH, &act, std::ptr::null_mut());
-        }
-        HANDLER_INSTALLED.store(true, Ordering::SeqCst);
+        Self::install_winch_handler()?;
 
         let self_ = PosixTty {
             fd,
@@ -410,17 +425,107 @@ impl PosixTty {
         state.idx = w;
     }
 
-    // Used by `init` (non-windows, non-test); dead under `#[cfg(test)]` where Tty=TestTty.
-    #[allow(dead_code)]
-    extern "C" fn handle_winch(_sig: c_int) {
-        let state = HANDLERS.lock().unwrap();
-        let mut i: usize = 0;
-        while i < state.idx {
-            if let Some(handler) = &state.handlers[i] {
-                (handler.callback)(handler.context);
-            }
-            i += 1;
+    /// Install the SIGWINCH handler (the `posix.sigaction` block of upstream's
+    /// `init`, `tty.zig`), creating the self-pipe and its dispatcher thread the
+    /// first time.
+    ///
+    /// PORT NOTE: reference defect (R13), UD74 — see the module note. The
+    /// handler stays process-global and installed with the same `sigaction`
+    /// flags; only its body moves out of signal context. The dispatcher lives
+    /// for the process, like the handler table it serves. `init` propagates a
+    /// failure to create the pipe or the thread (an errno), as it does for its
+    /// other syscalls.
+    pub(crate) fn install_winch_handler() -> Result<(), TtyError> {
+        (*WINCH_DISPATCHER.get_or_init(Self::start_winch_dispatcher))?;
+
+        let mut act: libc::sigaction = unsafe { std::mem::zeroed() };
+        // libc's `struct sigaction` exposes the handler as `sa_sigaction` (a usize-width
+        // slot); put the 1-arg `extern "C" fn(c_int)` in via a fn-ptr cast, and DO NOT
+        // set SA_SIGINFO (`sa_flags = 0` — the 1-arg form, not the 3-arg siginfo handler).
+        act.sa_sigaction = Self::handle_winch as *const () as libc::sighandler_t;
+        act.sa_mask = unsafe { std::mem::zeroed() };
+        #[cfg(not(target_os = "macos"))]
+        unsafe {
+            libc::sigemptyset(&mut act.sa_mask);
         }
+        act.sa_flags = 0;
+        unsafe {
+            libc::sigaction(libc::SIGWINCH, &act, std::ptr::null_mut());
+        }
+        HANDLER_INSTALLED.store(true, Ordering::SeqCst);
+        Ok(())
+    }
+
+    /// Create the self-pipe (both ends close-on-exec, the write end
+    /// non-blocking) and the thread that runs the handlers.
+    fn start_winch_dispatcher() -> Result<(), TtyError> {
+        let mut fds = [0 as c_int; 2];
+        if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
+            return Err(TtyError::Errno(errno()));
+        }
+        let (r, w) = (fds[0], fds[1]);
+        unsafe {
+            libc::fcntl(r, libc::F_SETFD, libc::FD_CLOEXEC);
+            libc::fcntl(w, libc::F_SETFD, libc::FD_CLOEXEC);
+            let flags = libc::fcntl(w, libc::F_GETFL);
+            libc::fcntl(w, libc::F_SETFL, flags | libc::O_NONBLOCK);
+        }
+        let spawned = std::thread::Builder::new()
+            .name("vaxis-winch".into())
+            .spawn(move || Self::winch_dispatcher(r));
+        if let Err(e) = spawned {
+            unsafe {
+                libc::close(r);
+                libc::close(w);
+            }
+            return Err(TtyError::Errno(e.raw_os_error().unwrap_or(libc::EAGAIN)));
+        }
+        WINCH_PIPE_WRITE.store(w, Ordering::SeqCst);
+        Ok(())
+    }
+
+    /// The dispatcher: every wake runs the registered handlers once, under the
+    /// handlers mutex — the loop body upstream's `handleWinch` runs in signal
+    /// context. Several signals that arrive before it wakes coalesce into one
+    /// pass, as the kernel already coalesces pending SIGWINCHes.
+    fn winch_dispatcher(r: c_int) {
+        let mut buf = [0u8; 64];
+        loop {
+            let n = unsafe { libc::read(r, buf.as_mut_ptr() as *mut c_void, buf.len()) };
+            if n < 0 {
+                if errno() == libc::EINTR {
+                    continue;
+                }
+                return;
+            }
+            if n == 0 {
+                return;
+            }
+            let state = HANDLERS.lock().unwrap_or_else(|e| e.into_inner());
+            let mut i: usize = 0;
+            while i < state.idx {
+                if let Some(handler) = &state.handlers[i] {
+                    (handler.callback)(handler.context);
+                }
+                i += 1;
+            }
+        }
+    }
+
+    /// The SIGWINCH handler. Async-signal-safe: one `write(2)` to the
+    /// self-pipe, with `errno` saved and restored around it. No lock, no
+    /// callback (UD74).
+    extern "C" fn handle_winch(_sig: c_int) {
+        let w = WINCH_PIPE_WRITE.load(Ordering::Relaxed);
+        if w < 0 {
+            return;
+        }
+        let saved = errno_location();
+        let before = unsafe { *saved };
+        let byte = 1u8;
+        // A full pipe (EAGAIN) already holds a wake-up; nothing is lost.
+        let _ = unsafe { libc::write(w, (&byte as *const u8).cast(), 1) };
+        unsafe { *saved = before };
     }
 
     /// makeRaw enters the raw state for the terminal.
@@ -1546,16 +1651,94 @@ impl TestTty {
 mod tests {
     use super::*;
 
+    /// Serializes the tests that touch the process-global `HANDLERS`.
+    static HANDLERS_TEST: Mutex<()> = Mutex::new(());
+
+    static WINCH_CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    static WINCH_OFF_DISPATCHER: AtomicBool = AtomicBool::new(false);
+
+    extern "C" fn count_winch(_ctx: *mut c_void) {
+        if std::thread::current().name() != Some("vaxis-winch") {
+            WINCH_OFF_DISPATCHER.store(true, Ordering::SeqCst);
+        }
+        WINCH_CALLS.fetch_add(1, Ordering::SeqCst);
+    }
+
+    fn wait_for_calls(at_least: usize) -> bool {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while WINCH_CALLS.load(Ordering::SeqCst) < at_least {
+            if std::time::Instant::now() > deadline {
+                return false;
+            }
+            std::thread::yield_now();
+        }
+        true
+    }
+
+    /// UD74 (R13): the SIGWINCH handler must be async-signal-safe. The
+    /// deadlock upstream's `handleWinch` allows is driven deterministically:
+    /// a thread holds the handlers mutex (as `notifyWinsize` or
+    /// `deregister_winsize` do) and receives the SIGWINCH itself
+    /// (`pthread_kill` to that thread). Upstream's handler then locks the same
+    /// mutex on the same thread. The port's handler only writes to the
+    /// self-pipe, so the thread gets its signal, releases the mutex, and the
+    /// resize still reaches the callback, on the dispatcher thread rather than
+    /// in signal context.
+    #[test]
+    fn a_sigwinch_while_the_handlers_are_locked_still_reaches_the_callback() {
+        let _serial = HANDLERS_TEST.lock().unwrap_or_else(|e| e.into_inner());
+        let ctx = 0xD74_usize as *mut c_void;
+        PosixTty::notify_winsize(SignalHandler {
+            context: ctx,
+            callback: count_winch,
+        })
+        .unwrap();
+        PosixTty::install_winch_handler().unwrap();
+
+        // Positive control: an ordinary resize reaches the callback.
+        let base = WINCH_CALLS.load(Ordering::SeqCst);
+        unsafe { libc::kill(libc::getpid(), libc::SIGWINCH) };
+        assert!(wait_for_calls(base + 1), "a SIGWINCH reaches the callback");
+
+        // The deadlock shape, on a helper thread so a hang is detected
+        // instead of wedging the test.
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let guard = HANDLERS.lock().unwrap_or_else(|e| e.into_inner());
+            unsafe { libc::pthread_kill(libc::pthread_self(), libc::SIGWINCH) };
+            drop(guard);
+            let _ = tx.send(());
+        });
+        assert!(
+            rx.recv_timeout(std::time::Duration::from_secs(5)).is_ok(),
+            "the SIGWINCH handler deadlocked on the handlers mutex"
+        );
+        let after_lock = WINCH_CALLS.load(Ordering::SeqCst);
+        assert!(
+            wait_for_calls(base + 2),
+            "the resize delivered while the mutex was held still reaches the callback \
+             (calls: {after_lock})"
+        );
+        assert!(
+            !WINCH_OFF_DISPATCHER.load(Ordering::SeqCst),
+            "callbacks run on the dispatcher thread, never in signal context"
+        );
+
+        PosixTty::deregister_winsize(ctx);
+    }
+
     // PORT NOTE (rustty-only, VALIDATION_REPORT §3c.5): pins the
     // `deregister_winsize` bookkeeping that `Loop::drop` relies on — every entry
     // with the matching context is removed and the survivors are compacted so
     // `handle_winch`'s `while i < idx` walk stays exact. No other test touches
-    // the process-global HANDLERS (Loop::init is a no-op under cfg(test)), so no
-    // serialization lock is needed. The UAF this deregistration prevents is
+    // the process-global HANDLERS (Loop::init is a no-op under cfg(test)) except
+    // the UD74 SIGWINCH test below, which takes the same `HANDLERS_TEST` lock.
+    // The UAF this deregistration prevents is
     // proven separately on the isolated Miri harness
     // (.port/phase-2/mirihar-chunk3b `winch_naive`/`winch_shipped`).
     #[test]
     fn deregister_winsize_removes_and_compacts() {
+        let _serial = HANDLERS_TEST.lock().unwrap_or_else(|e| e.into_inner());
         extern "C" fn cb(_ctx: *mut c_void) {}
         let a = 0x1000_usize as *mut c_void;
         let b = 0x2000_usize as *mut c_void;
