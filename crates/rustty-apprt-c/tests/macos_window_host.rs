@@ -66,9 +66,9 @@ use rustty_apprt_c::capi::Text;
 use rustty_apprt_c::{
     rustty_app_free, rustty_app_new, rustty_app_tick, rustty_app_update_config, rustty_init,
     rustty_set_window_background_blur, rustty_surface_config_new, rustty_surface_free,
-    rustty_surface_free_text, rustty_surface_mouse_scroll, rustty_surface_new,
-    rustty_surface_quicklook_font, rustty_surface_quicklook_word, rustty_surface_set_content_scale,
-    rustty_surface_set_display_id, rustty_surface_set_size,
+    rustty_surface_free_text, rustty_surface_ime_point, rustty_surface_mouse_scroll,
+    rustty_surface_new, rustty_surface_quicklook_font, rustty_surface_quicklook_word,
+    rustty_surface_set_content_scale, rustty_surface_set_display_id, rustty_surface_set_size,
 };
 use rustty_config::value_types::BackgroundBlur;
 
@@ -243,11 +243,14 @@ struct HostedSurface {
 }
 impl HostedSurface {
     fn spawn() -> Option<Self> {
+        Self::spawn_with(make_config_transparent_blur())
+    }
+    fn spawn_with(config: *mut rustty_config::Config) -> Option<Self> {
         ensure_init();
         let view = make_host_view();
         let nsview_ptr: *mut c_void = Retained::as_ptr(&view) as *mut c_void;
         // SAFETY: `test_options`/config are live for the call; app_new clones the config.
-        let app = unsafe { app_new_serialized(&test_options(), make_config_transparent_blur()) };
+        let app = unsafe { app_new_serialized(&test_options(), config) };
         if app.is_null() {
             return None;
         }
@@ -511,6 +514,156 @@ fn mouse_scroll_routes_each_offset_to_its_own_axis() {
         (xoff, yoff * precision),
         (core.mouse.pending_scroll_x, core.mouse.pending_scroll_y),
         "xoff reaches the x helper and yoff the y helper"
+    );
+}
+
+// UD68 probe (task R13-C2). A `#[global_allocator]` that forwards every call
+// to `System` and, on `dealloc`, notes whether the freed pointer is the one
+// this THREAD asked it to watch. Thread-local, so frees on parallel test
+// threads cannot set it; and the watched string is live until freed, so its
+// address cannot be reused by another allocation to fake the free.
+struct DeallocWatch;
+
+thread_local! {
+    static WATCHED: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+    static WATCHED_FREED: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
+}
+
+unsafe impl std::alloc::GlobalAlloc for DeallocWatch {
+    unsafe fn alloc(&self, layout: std::alloc::Layout) -> *mut u8 {
+        unsafe { std::alloc::System.alloc(layout) }
+    }
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: std::alloc::Layout) {
+        // `try_with`: never touch a thread-local that is being torn down.
+        let _ = WATCHED.try_with(|w| {
+            if w.get() != 0 && w.get() == ptr as usize {
+                let _ = WATCHED_FREED.try_with(|f| f.set(true));
+            }
+        });
+        unsafe { std::alloc::System.dealloc(ptr, layout) }
+    }
+    unsafe fn alloc_zeroed(&self, layout: std::alloc::Layout) -> *mut u8 {
+        unsafe { std::alloc::System.alloc_zeroed(layout) }
+    }
+    unsafe fn realloc(&self, ptr: *mut u8, layout: std::alloc::Layout, new: usize) -> *mut u8 {
+        unsafe { std::alloc::System.realloc(ptr, layout, new) }
+    }
+}
+
+// D6-ALLOW(watching shim, not an allocator substitution): this is an
+// integration-test binary (`tests/`), so it can never enter a shipped build.
+// Every arm forwards to `std::alloc::System`, i.e. plain `malloc`/`free`, which
+// the ASan/LSan interceptors still see; `dealloc` only compares a pointer
+// against a thread-local first. Same shape as `rustty-apprt`'s
+// `inherited_working_directory_tests` probe.
+#[global_allocator]
+static DEALLOC_WATCH: DeallocWatch = DeallocWatch;
+
+// Task R13-C2 (UD68): the `clear()` call in `Surface::deinit` frees the last
+// inherited working directory handed to the host, through the REAL path: a
+// live surface whose terminal has a pwd, `rustty_surface_inherited_config`
+// (→ `newSurfaceOptions` → `hand_out`), then `rustty_surface_free`
+// (→ `App::closeSurface` → `Surface::deinit`). `closeSurface` frees the box
+// as `ManuallyDrop<Surface>`, so without that `clear()` the string would leak,
+// as it does in the reference.
+#[test]
+fn surface_free_frees_the_last_inherited_working_directory() {
+    let Some(host) = HostedSurface::spawn() else {
+        eprintln!("no Metal device / app_new failed; skipping");
+        return;
+    };
+    let host = core::mem::ManuallyDrop::new(host);
+
+    // Give the terminal a pwd, as an OSC 7 from the shell would, under the
+    // renderer-state mutex the IO thread also takes.
+    // SAFETY: `host.surface` is live; `renderer_state.mutex`/`terminal` are the
+    // surface's own raw pointers, and the terminal is touched only under the
+    // mutex.
+    unsafe {
+        let rs = &raw const (*host.surface).core_surface.renderer_state;
+        (*(*rs).mutex).lock();
+        (*(*rs).terminal).set_pwd(b"/tmp/r13c2-ud68").unwrap();
+        (*(*rs).mutex).unlock();
+    }
+
+    // SAFETY: `host.surface` is live.
+    let opts = unsafe {
+        rustty_apprt_c::rustty_surface_inherited_config(
+            host.surface,
+            rustty_apprt_api::NewSurfaceContext::Tab,
+        )
+    };
+    let wd = opts.working_directory;
+    assert!(!wd.is_null(), "a tab inherits the terminal's pwd");
+    // SAFETY: `wd` is owned by the surface until the next call or its free.
+    assert_eq!(
+        b"/tmp/r13c2-ud68",
+        unsafe { std::ffi::CStr::from_ptr(wd) }.to_bytes()
+    );
+
+    WATCHED_FREED.with(|f| f.set(false));
+    WATCHED.with(|w| w.set(wd as usize));
+    // SAFETY: `host.surface` is the live surface; freed once, here.
+    unsafe { rustty_surface_free(host.surface) };
+    let freed = WATCHED_FREED.with(|f| f.get());
+    WATCHED.with(|w| w.set(0));
+    assert!(
+        freed,
+        "Surface::deinit frees the last inherited working directory"
+    );
+
+    // The rest of `HostedSurface::drop`, without the surface already freed.
+    // SAFETY: `host.app` is live; `host.view` is read out once and dropped.
+    unsafe {
+        rustty_app_free(host.app);
+        drop(core::ptr::read(&host.view));
+    }
+}
+
+// Task R13-C2 (UD76): `imePoint`'s cursor sums with a saturated padding
+// (UD71), the state `contentScaleCallback` leaves until the IO thread's
+// resize shrinks the grid. The reference's unchecked `u32` sums overflow for
+// any cursor off the first column or row; the port saturates. Driven through
+// the real `rustty_surface_ime_point` on a live surface. The child is a silent
+// `sleep`, so no output moves the cursor the test places.
+#[test]
+fn ime_point_saturates_with_a_saturated_padding() {
+    let cfg = make_config_transparent_blur();
+    // SAFETY: `cfg` is a live Config; `command` is a plain pub field.
+    unsafe {
+        (*cfg).command = Some(rustty_config::Command::Direct(vec![
+            b"/bin/sleep".to_vec(),
+            b"600".to_vec(),
+        ]));
+    }
+    let Some(host) = HostedSurface::spawn_with(cfg) else {
+        eprintln!("no Metal device / app_new failed; skipping");
+        return;
+    };
+    // SAFETY: `host.surface` is live. The cursor is written under the
+    // renderer-state mutex the IO thread and `imePoint` take; `size` is
+    // main-thread state and this thread is the one calling `imePoint`.
+    unsafe {
+        let rs = &raw const (*host.surface).core_surface.renderer_state;
+        (*(*rs).mutex).lock();
+        (*(*rs).terminal).set_cursor_pos(3, 4); // 1-based: row 3, column 4
+        (*(*rs).mutex).unlock();
+        let size = &raw mut (*host.surface).core_surface.size;
+        (*size).padding.left = u32::MAX;
+        (*size).padding.top = u32::MAX;
+    }
+    let (mut x, mut y, mut w, mut h) = (0.0f64, 0.0f64, 0.0f64, 0.0f64);
+    // SAFETY: `host.surface` is live; the four out-pointers are locals.
+    unsafe { rustty_surface_ime_point(host.surface, &mut x, &mut y, &mut w, &mut h) };
+    // Scale 2.0 (the harness's content scale): the saturated edge plus half a
+    // cell (x) or a cell (y), halved.
+    assert!(
+        x >= f64::from(u32::MAX) / 2.0,
+        "x from the saturated sum: {x}"
+    );
+    assert!(
+        y >= f64::from(u32::MAX) / 2.0,
+        "y from the saturated sum: {y}"
     );
 }
 
