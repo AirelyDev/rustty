@@ -6976,15 +6976,12 @@ mod tests {
         let elapsed = started.elapsed();
         let alive = unsafe { libc::kill(pid, 0) } == 0;
         // Clean up whatever happened: SIGKILL ends the child, which lets a stuck
-        // loop reap it and return.
-        unsafe {
-            libc::kill(pid, libc::SIGKILL);
-        }
+        // loop reap it and return; then reap it here (an error just means the
+        // loop already did).
+        let mut child = child;
+        let _ = child.kill();
         worker.join().unwrap();
-        let mut status = 0;
-        unsafe {
-            libc::waitpid(pid, &mut status, 0);
-        }
+        let _ = child.wait();
 
         let result = result.unwrap_or_else(|_| {
             panic!("killPid did not return within 10 s for a child that ignores SIGHUP")
