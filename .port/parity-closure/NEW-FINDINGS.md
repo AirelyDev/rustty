@@ -2640,7 +2640,10 @@ reproduction of the threshold: the port leaves the standard capacity at 48,036 c
 in a test build (macOS, from the port's `Capacity::adjust`), where Ghostty does so at 47,932 shipped
 (macOS arm64; 46,908 on Linux aarch64) and 48,047 in a test build, because the port's style-set item is
 smaller than the reference's. So from 47,932 to 48,035 columns (shipped, macOS) Ghostty aborts and the
-port did not. Reference defect: `UPSTREAM-DEFECTS.md` UD80.
+port did not. Reference defect: `UPSTREAM-DEFECTS.md` UD80. Since N88 (task R13-L) the port's style set is
+laid out with the reference's item geometry, and a sweep of the port's `Capacity::adjust` gives Ghostty's
+thresholds exactly: 47,932 shipped and 48,047 in a test build on macOS, 46,908 shipped and 46,511 in a test
+build on Linux aarch64.
 
 **state**: CLOSED by task R13-W. `RefCountedSet` now saturates every increment at the maximum and never
 decrements a count at the maximum, so the style is pinned and every cell keeps it; six tests in `terminal.rs`
@@ -2761,3 +2764,109 @@ stays: it states an invariant that now holds. Reference defect: `UPSTREAM-DEFECT
 
 **state**: CLOSED by task R13-D2.
 
+## N88 — the style set's item size made every page's layout, and so its rows, differ from the reference's
+
+- **id**: N88 (reserved range N88–N90 for task R13-L).
+- **found by**: the R13-S2 review ("new finding"), measured by the R13 page-layout investigation; fixed by
+  task R13-L.
+- **severity**: medium. **kind**: layout divergence (R1).
+- **oracle**: `src/terminal/ref_counted_set.zig` (`Item`, `Layout.init`: `items_cap * @sizeOf(Item)` after
+  `alignForward(table_end, @alignOf(Item))`), `src/terminal/style.zig:21-47` (`Style`, `Flags`,
+  `Color`), `src/terminal/color.zig:540` (`RGB`), `src/terminal/page.zig` (`Page.layout`,
+  `Capacity.availableBitsForGrid` / `adjust` / `maxCols`, `std_capacity`).
+- **rustty**: `crates/rustty-vt/src/ref_counted_set.rs` (`RefItemGeometry`, `ItemStride`, `item_at`,
+  `Layout::init`, `base_align`), `crates/rustty-vt/src/style.rs` and `crates/rustty-vt/src/hyperlink.rs`
+  (the geometry impls), `crates/rustty-vt/src/page.rs` (`hyperlink_set_item_size`).
+
+The port's `Style` is 21 bytes at align 1 (`Color` 4/1, `color.RGB` 3/1, `Flags` 9/1) where the reference's
+is 28 at align 4 (`Color` 8/4, `RGB` 4/4, `Flags` 2/2), so its style-set `Item` was 28/2 against 36/4. The
+item array is laid out as `items_cap * size_of::<Item>()`, so the styles section of a standard page was
+3,168 bytes against 4,000. Every other section is byte-identical, but the styles section feeds
+`availableBitsForGrid`, so the rows of every page, `maxCols` and the standard size differed. MEASURED
+(Zig 0.16.0 probe of `20abdb50a` on macOS arm64 and cross-compiled for Linux aarch64; the port before the
+fix from the investigation's probe):
+
+| | macOS shipped | macOS test | Linux shipped | Linux test |
+|---|---|---|---|---|
+| rows at 80 columns, reference / port before | 591 / 593 | 593 / 594 | 579 / 574 | 574 / 575 |
+| `maxCols`, reference / port before | 47,931 / 48,035 | 48,046 / 48,150 | 46,907 / 46,499 | 46,510 / 46,614 |
+| standard page bytes, reference / port before | 409,600 / 409,600 | 393,216 / 393,216 | 401,408 / 397,312 | 380,928 / 380,928 |
+
+Every width from 1 to 119 differed; on macOS the port held more rows per page, on Linux shipped fewer.
+Pages with 2,048 or more styles were 3–17% smaller than the reference's. Observable: the lines kept under
+`scrollback-limit` (about +244 on macOS and −46 on Linux at the 50 MB default, 80 columns), page split
+points and `scrollback-limit-lines` pruning, snapshot HISTORY page boundaries, grid refs `(node, y)`, the
+inspector's page figures, the Linux pool item size, and the wide-terminal thresholds of UD64, UD65, UD80
+and N66. Two records called the difference "not observable": the module doc of
+`crates/rustty-vt/tests/std_size_golden.rs` and `.port/phase-2/ALLOC_BENCH_V2.md` §2 (both corrected).
+The `Style.Color` PORT NOTE also claimed its 4 bytes were "exactly what the reference specifies for a
+color", confusing `PackedStyle`'s 24-bit hash key with the stored 8-byte union (corrected).
+
+**fix**: the port keeps its compact types (the `Style` compare, hash and clone paths behind the published
+perf lead rely on them) and lays the set out with the REFERENCE's item geometry. `RefItemGeometry` gives
+each value type the reference's `@sizeOf(Item)` / `@alignOf(Item)`, derived from `#[repr(C)]` shadows of
+the reference's declarations (`style.rs` `RefShadowItem`: 36/4; `hyperlink.rs`: 48/8, the same as the
+port's). `ItemStride` checks at compile time that the port's item fits its slot and stays aligned.
+`Layout::init`, `base_align` and `init`'s zeroing use it, and every item address is `items + id * 36`
+through `item_at`: `add`, `add_with_id`, `add_with_id_is_pure_ref_bump`, `use_id`, `use_multiple`, `get`,
+`get_at`, `release`, `release_multiple`, `ref_count`, `delete_item`, `lookup`, `insert`, the iterator, the
+page integrity walk (`page_impl.rs`, which viewed the items as a `&[Item]`), and the inspector's style and
+hyperlink lists (`rustty-inspector` `widgets/page.rs`, likewise). Each item sits where the reference puts
+it, with the port's 28 bytes at the start of its 36-byte slot and the tail zero. `hyperlink_set_item_size`
+is the stride. The snapshot wire format is unchanged.
+
+**tests**: `ref_item_geometry_matches_the_reference_probe` (`style.rs`: the shadows, both strides and
+`Layout.init(n)` for n = 0, 1, 2, 16, 128 against the probe); `set_items_are_addressed_at_the_reference_stride`
+(`style.rs`: a set filled to capacity, read back through every access path and at the raw offset
+`items_start + id * 36`, slot tails zero, then a third released and refilled through `add_with_id`);
+`page_geometry_matches_the_reference` (`page_tests.rs`: rows per page at 13 widths from 1 to 10,000,
+`maxCols`, `availableBitsForGrid`, the standard size and four non-standard sizes, test and shipped budgets,
+on macOS and on Linux aarch64); `std_size_golden` (styles 4,000, a Linux 401,408 pin, shipped rows per page
+and `maxCols`). Negative controls (2026-09-22, each mutation applied by a script that refuses a pattern
+matching other than once, file restored after each): addressing one path with `items.add(id)` instead of
+`item_at` — `get`, `get_at`, the iterator, `use_id`, `ref_count`, `insert`'s placement, `lookup`, `init`'s
+metadata loop, or `item_at` itself — turns the addressing test red; laying the set out with
+`size_of::<Item>()` turns the geometry and page tests red; with `align_of::<Item>()` the `Layout.init(1)`
+check goes red.
+
+**performance** (macOS arm64, `rustty-bench` release-fast, r13-w base against the fix, alternating runs):
+`+terminal-stream` medians within ±1.3% on ascii, two SGR-heavy corpora and a truecolor corpus with
+thousands of distinct styles; `+screen-clone` render ns/op (loops 1 and 5) +1.1% on SGR, −2.6% on
+truecolor; `+screen-clone` clone on the truecolor corpus +6.4%, which a build with the reference layout but
+the old 28-byte addressing reproduces (+5.0% against base, parity with the fix): it is the reference's
+larger page for a page with thousands of styles, not the stride.
+
+**state**: CLOSED by task R13-L.
+
+## N89 — the `hyperlink.Set`, `Page` and `PageList` node headers are larger than the reference's
+
+- **id**: N89.
+- **found by**: the R13 page-layout investigation.
+- **severity**: low. **kind**: representation (heap objects only).
+- **oracle**: `src/terminal/hyperlink.zig:211` (`Set`'s context: `page: ?*Page`, `src_page: ?*const Page`).
+- **rustty**: `crates/rustty-vt/src/hyperlink.rs` (`SetContext`).
+
+The hyperlink set's context stores its page pointers as exposed-address `Option<usize>` (Stacked
+Borrows), 16 bytes each with no null niche, where the reference's `?*Page` is 8. So the `hyperlink.Set`
+header is 168 bytes against 152, `Page` 416 against 400, and a `PageList` node 480 against 472. These live
+in heap objects, not in page memory: no page section, row count or snapshot byte changes. They show only
+through allocator-callback sizes (`NodePool` items). Deliberate; recorded, not fixed.
+
+**state**: RECORDED (deliberate).
+
+## N90 — the UD64 page-size boundary test fails on Linux aarch64
+
+- **id**: N90.
+- **found by**: task R13-L, running the `rustty-vt` suite on `rvm`.
+- **severity**: low. **kind**: test portability.
+- **rustty**: `crates/rustty-vt/src/snapshot/page.rs`
+  (`decode_rejects_a_capacity_whose_exact_layout_is_one_past_the_limit`, task R13-W).
+
+The test hard-codes a grapheme budget, 1,382,748,161, measured on macOS, at which a 48,151-column page
+lays out at exactly 2^32 bytes. With a 4 KiB `page_size_min` the same capacity lays out at 4,294,955,008
+bytes (12,288 short of 2^32), so the first assertion fails on Linux aarch64. It fails on the `r13-w` base
+too (measured 2026-09-22 at `551e7a30` on `rvm`), so N88 did not cause it. The decoder's check itself is
+correct; the test needs its boundary budget found per target (the smallest budget whose layout exceeds
+`MAX_PAGE_SIZE`) instead of a constant.
+
+**state**: OPEN (for the owner of task R13-W's test).

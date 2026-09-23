@@ -1519,8 +1519,8 @@ fn apply_cell(
         // In Ghostty that is 47,932 columns or more in a shipped macOS arm64
         // build, 46,908 on Linux aarch64 and 48,047 in a macOS test build
         // (it depends on the platform's page size); the port's thresholds
-        // are 48,036 and 48,151 on macOS, because its style-set item is
-        // smaller. Ordinary styled output on such a terminal overflows the
+        // are the same since its style set is laid out with the reference's
+        // item geometry (N88). Ordinary styled output on such a terminal overflows the
         // same refcount through `printSliceFill` and `printCell` (measured,
         // UPSTREAM-DEFECTS.md UD80). The port's set now saturates
         // and pins every increment at the maximum instead (UD80,

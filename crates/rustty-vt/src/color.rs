@@ -1125,6 +1125,15 @@ impl Dynamic {
 // backing-integer rounding). The 24-bit DATA layout is identical and matches the
 // C type `RGB.C` (`extern struct { r, g, b: u8 }`). The size assert is adapted
 // in the test below with a PORT NOTE; the bit-size (24) invariant is preserved.
+//
+// The 4-byte storage size is not only a Zig artifact: it is part of the
+// reference's `Style.Color` (8/4) and so of the style set's item (36/4), whose
+// size decides the page layout. The port's 3-byte `RGB` does not carry that
+// size into the layout any more: the style set is laid out with the reference's
+// item geometry, derived from a shadow of these types in which `RGB` is 4 bytes
+// at align 4 (`style.rs`, `RefShadowColor`; NEW-FINDINGS N88) and pinned against
+// a Zig probe by `ref_item_geometry_matches_the_reference_probe`. That test is
+// where `@sizeOf(RGB) == 4` is now guarded, as the layout sees it.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RGB {
@@ -1871,6 +1880,9 @@ mod tests {
         // bytes). The Rust `#[repr(C)]` representation of three `u8`s is 3 bytes
         // (and byte-identical to the C type `RGB.C`); we assert the true data
         // layout (3 bytes / 24 bits) here rather than the Zig backing size.
+        // The backing size still matters to the page layout, through the
+        // style set's item; it is guarded there (N88, see the PORT NOTE on
+        // `RGB`).
         assert_eq!(24, core::mem::size_of::<RGB>() * 8);
         assert_eq!(3, core::mem::size_of::<RGB>());
     }

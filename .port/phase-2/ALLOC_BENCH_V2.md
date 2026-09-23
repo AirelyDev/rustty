@@ -62,11 +62,11 @@ rows 1720, cells 369800, grapheme_map 10768, hyperlink_set 152, hyperlink_map 46
 
 | section | Zig oracle | rustty | cause |
 |---|---:|---:|---|
-| styles | 4000 | 3168 | Zig `Style` is 28 B/align 4 → RefCountedSet Item 36 B; Rust `Style` is 21 B/align 1 → Item 28 B. Repr-level, not observable through the style API. |
+| styles | 4000 | 3168 | Zig `Style` is 28 B/align 4 → RefCountedSet Item 36 B; Rust `Style` is 21 B/align 1 → Item 28 B. Repr-level, not observable through the style API. CORRECTION (2026-09-22, NEW-FINDINGS N88): it WAS observable — the styles section feeds `availableBitsForGrid`, so rows per page, `maxCols`, the Linux std page size, scrollback kept under `scrollback-limit` and snapshot page boundaries differed. The port now lays the set out with the reference's item geometry: styles 4000, identical. |
 | grapheme_alloc | 131136 | 8256 | `BitmapAllocator.layout`: the port carries upstream ghostty fix `b953bb346` (chunks region = `aligned_chunk_count*chunk_size`); the PINNED oracle predates it and over-reserves `aligned_cap*chunk_size` (~120 KiB dead, unreachable space per std page). |
 | string_alloc | 65544 | 2056 | Same `b953bb346` fix (~62 KiB dead space in the oracle). |
 
-Geometry is not observable behavior, and 180 KiB per std page of the delta is
+Geometry is not observable behavior (CORRECTION 2026-09-22, NEW-FINDINGS N88: false for the styles row above, now fixed; and the 589,824-byte oracle figure was an older pin's — at `20abdb50a`, which has `b953bb346`, the reference's std page is 409,600 bytes on macOS, equal to the port's), and 180 KiB per std page of the delta is
 dead (bitmap-unaddressable) space in the OLD oracle that upstream itself
 removed. Per instructions the geometry was NOT changed; the golden test pins
 the port's actual sections/total so future drift is caught, and documents the

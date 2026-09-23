@@ -22249,8 +22249,8 @@ mod tests {
     // in every build measured. The first width that does is, for Ghostty,
     // 47,932 shipped on macOS arm64, 46,908 shipped on Linux aarch64 and
     // 48,047 in a macOS test build (it depends on the platform's page size);
-    // for the port, whose style-set item is smaller than the reference's, it
-    // is 48,036 shipped and 48,151 in a test build on macOS. `ud80_scan`
+    // the port's are the same, since its style set is laid out with the
+    // reference's item geometry (N88). `ud80_scan`
     // asserts the page really is the wide one, so the tests cannot go vacuous
     // if those thresholds move. The page is 215 x 50,000, but only the few
     // rows a test writes are touched. Count: the cursor holds one reference
