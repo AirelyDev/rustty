@@ -1717,6 +1717,21 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 
 - upstream status: NOT YET REPORTED. Report PRIVATELY through Ghostty's GitHub security advisory process (a repository Security Advisory / private vulnerability report), NOT a public issue: this is a remotely reachable denial-of-service — about 1.2 KB of ordinary terminal output crashes Ghostty at a standard 80×24 size — so it should be disclosed privately and given time to fix before any public description.
 
+### UD180 — `+list-keybinds --docs` never prints a keybind action's help
+- kind:            latent (functional: documentation output silently empty)
+- upstream project: ghostty
+- severity:        low
+- reference:       src/config/Config.zig:7560-7576 (`Keybinds.formatEntryDocs`, the `docs` branch); src/input/Binding.zig:2138-2148 (`Set.Value = union(enum) { leader, leaf, leaf_chained }`); src/helpgen.zig:119-136 (`genKeybindActions` emits one `KeybindAction` decl per `Binding.Action` union field). At 20abdb50a.
+- defect:          the docs branch does `const name = @tagName(v);` with `v` a `Binding.Set.Value`, so `name` is `leader`, `leaf` or `leaf_chained`, and then looks for a `help_strings.KeybindAction` decl of that name. Those decls are named after ACTIONS (`new_window`, `copy_to_clipboard`, ...), and no action is called `leader`, `leaf` or `leaf_chained`, so the lookup never matches. `ghostty +list-keybinds --docs` therefore prints one blank line before each root binding and never the `# <action>` / `#   <help>` block the code is written to print. Evidently the intent was the tag of the binding's ACTION (`v.leaf.action`, and some choice for chained leaves). By reading, not measured on a Ghostty build.
+- ReleaseSafe:     no crash; the `--docs` output lacks every action description.
+- ReleaseFast:     same.
+- reachability:    any user running `ghostty +list-keybinds --docs`.
+- port handling:   faithful (R13 covers crash-class defects only; this one keeps the reference's output): `crates/rustty-config/src/value_types.rs` `v_tag_name` returns the `Set.Value` tag, so the port prints the same blank lines. Before LEDGER S76-F1 the port returned the action tag and printed the help blocks.
+- parity row(s):   LEDGER S76-F1.
+- test:            `keybinds_format_entry_docs_writes_only_the_blank_line` (`value_types.rs`) pins the reference output.
+- proposed fix:    in the docs branch take the action tag: `const name = switch (v) { .leaf => |leaf| @tagName(leaf.action), .leaf_chained => |c| @tagName(c.actions.items[0]), .leader => continue-without-docs };` (or print one help block per chained action).
+- upstream status: not reported
+
 ## Candidates pending verification
 
 Assembled from this plan's progress notes on 2026-09-11. **Not verified** — do not cite as fact.

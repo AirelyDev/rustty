@@ -5091,10 +5091,14 @@ impl Keybinds {
     // shared `RewindBuffer` via the public `write_trigger_to_buffer`/`write_all`
     // helpers. The `docs` branch's `help_strings.KeybindAction` lookup is the
     // build-generated help artifact (modeled by `helpgen_actions::HelpStrings`);
-    // `RealHelpStrings` delegates to the generated `keybind_help` table so
-    // `docs = true` (list-keybinds/show-config `--docs`) emits the real per-action
-    // doc text. The ported tests only exercise `formatEntry` (i.e. `docs = false`),
-    // where the table is not consulted.
+    // `RealHelpStrings` delegates to the generated `keybind_help` table.
+    //
+    // CORRECTION (LEDGER S76-F1): this note used to say `docs = true`
+    // (list-keybinds/show-config `--docs`) "emits the real per-action doc text".
+    // The lookup key is `@tagName(v)` of the `Set.Value` union (`v_tag_name`),
+    // which never names an action, so, as in the reference, `docs = true` adds
+    // only a blank line per root binding (test
+    // `keybinds_format_entry_docs_writes_only_the_blank_line`).
     pub fn format_entry_docs<W: Writer>(
         &self,
         formatter: &mut rustty_cfg_fmt::EntryFormatter<W>,
@@ -5207,23 +5211,23 @@ impl Keybinds {
     }
 }
 
-// PORT NOTE: `@tagName(v)` where `v` is the leaf/leaf_chained `Action`. The docs
-// branch only formats single-action leaves' tag names; for leader / chained
-// entries the reference would print the (single) action tag of the value, but the
-// docs branch is only reached for non-empty sets and uses the value's tag. Here
-// we expose the action tag of a leaf value (the only kind whose `@tagName` the
-// reference's docs path meaningfully matches against `help_strings` decls).
-fn v_tag_name(v: &rustty_input::binding::Value) -> &[u8] {
+// `@tagName(v)` where `v` is the `Binding.Set.Value` union (`Binding.zig:2138-2148`,
+// `union(enum) { leader, leaf, leaf_chained }`).
+//
+// CORRECTION (LEDGER S76-F1): this used to return the leaf's ACTION tag (or the
+// first chained action's), with a note saying that is what "the reference's docs
+// path meaningfully matches against `help_strings` decls". It is not: the
+// reference takes the tag of the VALUE union, which never equals a
+// `help_strings.KeybindAction` decl (those are action names), so the reference
+// prints no help block. Returning the action tag made `+list-keybinds --docs`
+// print `# <action>` blocks the reference never prints. The reference's own
+// behaviour is recorded upstream as UD180 (latent).
+fn v_tag_name(v: &rustty_input::binding::Value) -> &'static [u8] {
     use rustty_input::binding::Value;
     match v {
-        Value::Leaf(leaf) => leaf.action.tag_name().as_bytes(),
-        Value::LeafChained(chain) => chain
-            .actions
-            .first()
-            .map(|a| a.tag_name().as_bytes())
-            .unwrap_or(b""),
-        // A leader's value is a sub-set; it has no single action tag.
-        Value::Leader(_) => b"",
+        Value::Leader(_) => b"leader",
+        Value::Leaf(_) => b"leaf",
+        Value::LeafChained(_) => b"leaf_chained",
     }
 }
 
@@ -10790,6 +10794,47 @@ mod tests {
         list.format_entry(&mut f).unwrap();
         // try std.testing.expectEqualSlices(u8, "a = shift+a=csi:hello\n", buf.written());
         assert_eq!(b"a = shift+a=csi:hello\n".as_slice(), buf.written());
+    }
+
+    // No reference test. LEDGER S76-F1: the reference's docs branch compares
+    // `@tagName(v)` — the tag of the `Binding.Set.Value` union, i.e. `leader`,
+    // `leaf` or `leaf_chained` — against `help_strings.KeybindAction`'s decls,
+    // which are the ACTION names (`helpgen.zig` `genKeybindActions`, from
+    // `Binding.Action`'s union fields). No action has one of those three names,
+    // so the reference writes only the leading `"\n"` for each root binding and
+    // never a `# <action>` help block (UPSTREAM-DEFECTS UD180, latent). The port
+    // keeps that output.
+    #[test]
+    fn keybinds_format_entry_docs_writes_only_the_blank_line() {
+        let mut list: Keybinds = Keybinds::default();
+        // One of each `Set.Value` kind: a leaf, a chained leaf, a leader.
+        list.parse_cli(Some(b"shift+a=new_window")).unwrap();
+        list.parse_cli(Some(b"shift+b=new_tab")).unwrap();
+        list.parse_cli(Some(b"chain=close_surface")).unwrap();
+        list.parse_cli(Some(b"ctrl+a>b=new_split:right")).unwrap();
+
+        let mut docs_buf = AllocatingWriter::init();
+        let mut f = entry_formatter(b"a", &mut docs_buf);
+        list.format_entry_docs(&mut f, true).unwrap();
+        let docs = String::from_utf8(docs_buf.written().to_vec()).unwrap();
+
+        let mut plain_buf = AllocatingWriter::init();
+        let mut f = entry_formatter(b"a", &mut plain_buf);
+        list.format_entry_docs(&mut f, false).unwrap();
+        let plain = String::from_utf8(plain_buf.written().to_vec()).unwrap();
+
+        // The docs branch ran: one "\n" per root binding (3: the chained
+        // leaf, the plain leaf, the leader), and nothing else was added.
+        assert_eq!(3, list.set.bindings_count());
+        assert!(!docs.contains('#'), "no help block expected:\n{docs}");
+        let mut blank_lines = docs.lines().filter(|l| l.is_empty()).count();
+        assert_eq!(3, blank_lines, "{docs}");
+        blank_lines = plain.lines().filter(|l| l.is_empty()).count();
+        assert_eq!(0, blank_lines, "{plain}");
+        assert_eq!(
+            plain.lines().collect::<Vec<_>>(),
+            docs.lines().filter(|l| !l.is_empty()).collect::<Vec<_>>()
+        );
     }
 
     // Regression test for https://github.com/ghostty-org/ghostty/issues/2734
