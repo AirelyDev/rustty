@@ -1241,11 +1241,19 @@ impl Page {
     /// capacity increase fails (Screen.zig:747, PageList.zig:5108): the
     /// callers have already rotated rows, so the copy cannot be unwound and a
     /// crash is chosen over a half-mutated page list. This is reachable from
-    /// real VT input on a wide terminal (>= 47,932 cols on shipped macOS)
-    /// whose page holds a genuinely full set of 53,247 distinct LIVE styles,
-    /// followed by an IL/DL, scroll, or erase that pulls a row carrying a new
-    /// style across a page boundary (measured: ReleaseSafe SIGABRT,
-    /// ReleaseFast `panic:` trap). Following the reference's own precedent for
+    /// real VT input by TWO routes into the style set's `OutOfMemory` (both
+    /// measured: ReleaseSafe SIGABRT, ReleaseFast `panic:` trap):
+    ///   1. the PSL-overflow arm (`ref_counted_set.zig:268`), reached on ANY
+    ///      width, including an ORDINARY 80x24 terminal, with ~700 bytes of
+    ///      output: 32 foreground colours whose unseeded style hashes share
+    ///      their low 16 bits stay clustered at every capacity doubling, so
+    ///      `increaseCapacity(.styles)` climbs to 65535 and returns `OutOfSpace`
+    ///      on a page holding only ~32 live styles;
+    ///   2. the distinct-live-styles arm, on a wide terminal (>= 47,932 cols on
+    ///      shipped macOS) whose page holds a full set of 53,247 distinct LIVE
+    ///      styles;
+    /// each followed by an IL/DL, scroll, or erase that pulls a row carrying a
+    /// new style across a page boundary. Following the reference's own precedent for
     /// an unstorable style (`Screen.increaseCapacity` / `manualStyleUpdate`
     /// degrade the cursor to the default style; UD65's decoder degrade), the
     /// port degrades PER DIMENSION: the loop sets a `mask` flag only for the
@@ -1254,10 +1262,13 @@ impl Page {
     /// when it fails in a dimension the mask degrades. A failure in any other
     /// dimension is returned exactly as `clone_partial_row_from` returns it,
     /// so the loop still grows that dimension and retries. A cell whose style
-    /// (or link) already exists in the destination set is stored normally, so
-    /// at the style ceiling only cells bringing a NEW style lose it; their
-    /// codepoints, and every row flag, are kept. The caller logs the returned
-    /// counts once per copy, never once per cell.
+    /// already exists in the destination set is stored normally, so at the style
+    /// ceiling only cells bringing a NEW style lose it; their codepoints, and
+    /// every row flag, are kept. CAVEAT: a cell whose hyperlink already exists is
+    /// likewise kept UNLESS the hyperlink MAP itself is full (its
+    /// `hyperlink_count >= capacity` is checked before the lookup), in which case
+    /// an existing link is dropped too when the hyperlink dimension is degraded.
+    /// The caller logs the returned counts once per copy, never once per cell.
     ///
     /// Leaks: none for graphemes (`set_graphemes` frees its slice when the map
     /// put fails). A degraded hyperlink whose URI was duplicated before its set

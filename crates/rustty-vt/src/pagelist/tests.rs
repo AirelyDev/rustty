@@ -18305,7 +18305,7 @@ fn ud131_erase_row_loop_degrades_only_new_styles_and_grows_the_other_dimensions(
     let expected = (
         log::Level::Warn,
         crate::page::LOG_SCOPE.to_string(),
-        "row copy at a page capacity ceiling: 5 cell(s) degraded to default \
+        "row copy at a page capacity ceiling: 5 cell part(s) degraded to default \
          (styles=5, hyperlinks=0, graphemes=0); see UD131"
             .to_string(),
     );
@@ -18328,4 +18328,106 @@ fn ud131_erase_row_loop_degrades_only_new_styles_and_grows_the_other_dimensions(
 
     ctl.deinit();
     deg.deinit();
+}
+
+// UD131 (R13): the degrade dimension mapping is coherent. For EVERY
+// `CloneFromError`, the flag that `IncreaseCapacity::for_clone_error` -> the
+// row-copy loop's `degrade_dimension` sets is exactly the one
+// `RowDegradeMask::degrades` consults, and no other. Without this the non-style
+// degrade paths (hyperlinks, strings, graphemes) are untested: mis-mapping
+// hyperlink errors to the `strings` flag in `degrades` leaves every VT test
+// green, yet at runtime a degraded hyperlink dimension would be grown again
+// (`debug_assert!` in debug, an infinite loop in release). NEGATIVE CONTROL
+// (task R13-X3): change `HyperlinkSetOutOfMemory | HyperlinkMapOutOfMemory =>
+// self.hyperlinks` to `self.strings` in `RowDegradeMask::degrades` and this
+// test fails.
+#[test]
+fn ud131_degrade_dimension_mapping_is_coherent() {
+    use super::grow::degrade_dimension;
+    use crate::page::{CloneFromError as E, RowDegradeMask};
+
+    // Every variant of `CloneFromError`, exhaustively (a `match` below makes the
+    // compiler enforce the list stays complete).
+    let all = [
+        E::StyleSetOutOfMemory,
+        E::StyleSetNeedsRehash,
+        E::StringAllocOutOfMemory,
+        E::HyperlinkSetOutOfMemory,
+        E::HyperlinkSetNeedsRehash,
+        E::HyperlinkMapOutOfMemory,
+        E::GraphemeMapOutOfMemory,
+        E::GraphemeAllocOutOfMemory,
+    ];
+    for err in all {
+        // Exhaustiveness guard: a new variant forces an update here.
+        match err {
+            E::StyleSetOutOfMemory
+            | E::StyleSetNeedsRehash
+            | E::StringAllocOutOfMemory
+            | E::HyperlinkSetOutOfMemory
+            | E::HyperlinkSetNeedsRehash
+            | E::HyperlinkMapOutOfMemory
+            | E::GraphemeMapOutOfMemory
+            | E::GraphemeAllocOutOfMemory => {}
+        }
+
+        let adj = IncreaseCapacity::for_clone_error(err);
+        match adj {
+            None => {
+                // Rehash errors grow nothing, so no mask ever degrades them:
+                // the loop always returns them and rehashes, as the reference
+                // does. True on both the empty and the fully-degraded mask.
+                assert!(
+                    !RowDegradeMask::default().degrades(err),
+                    "rehash error {err:?} must never be degraded"
+                );
+                assert!(
+                    !RowDegradeMask::ALL.degrades(err),
+                    "rehash error {err:?} must never be degraded, even under ALL"
+                );
+            }
+            Some(_) => {
+                // The mask the loop builds for this error: only the dimension
+                // `for_clone_error` grows for it.
+                let mut mask = RowDegradeMask::default();
+                degrade_dimension(&mut mask, adj);
+
+                // Exactly one flag set: the mapping is 1:1.
+                let set = [mask.styles, mask.graphemes, mask.hyperlinks, mask.strings]
+                    .iter()
+                    .filter(|b| **b)
+                    .count();
+                assert_eq!(set, 1, "exactly one dimension degrades {err:?}");
+
+                // That flag is the one `degrades` consults for this error.
+                assert!(
+                    mask.degrades(err),
+                    "the flag set for {err:?} is the one that degrades it"
+                );
+
+                // And the OTHER three flags do not degrade it: a mask with
+                // every flag BUT the mapped one leaves this error to be
+                // returned (grown), never degraded. This catches a `degrades`
+                // that consults the wrong flag.
+                let mut others = RowDegradeMask::ALL;
+                // Clear only the mapped flag:
+                if mask.styles {
+                    others.styles = false;
+                }
+                if mask.graphemes {
+                    others.graphemes = false;
+                }
+                if mask.hyperlinks {
+                    others.hyperlinks = false;
+                }
+                if mask.strings {
+                    others.strings = false;
+                }
+                assert!(
+                    !others.degrades(err),
+                    "no dimension other than the mapped one degrades {err:?}"
+                );
+            }
+        }
+    }
 }

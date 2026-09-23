@@ -631,10 +631,18 @@ impl PageList {
                 }
                 // PORT NOTE: reference defect (R13), UD131. The reference
                 // `@panic("increaseCapacity OutOfSpace")` here (PageList.zig:
-                // 5108). Reachable from real VT input on a wide terminal whose
-                // page's style set is genuinely full of live styles at its
+                // 5108). Reachable from real VT input by TWO routes into the
+                // style set's OutOfMemory: (1) the PSL-overflow arm, on ANY
+                // width (32 hash-colliding colours drive the set to the ceiling
+                // on a page holding ~32 live styles); (2) a wide terminal whose
+                // page's style set is full of 53,247 distinct live styles at its
                 // capacity ceiling (no orphaned pinned styles to reclaim, or
-                // the one re-clone above already dropped them). The rows are
+                // the one re-clone above already dropped them). This PageList
+                // loop's own routes (alt-screen LF/SU, a primary scroll region)
+                // still need the full set to land on the erase DESTINATION page,
+                // so route (1) reaches it on a wide primary scroll region rather
+                // than at 80 columns; the Screen loop reaches route (1) at 80
+                // columns via DL/IL. The rows are
                 // already rotated, so instead of crashing the loop degrades
                 // THIS dimension only and retries: every other dimension keeps
                 // growing, and a cell loses only the part (style, grapheme or
@@ -1103,9 +1111,12 @@ pub(crate) fn degrade_dimension(
 /// PORT-ONLY (R13, UPSTREAM-DEFECTS.md UD131); see `degrade_dimension`.
 pub(crate) fn log_row_degrade(rep: &crate::page::RowDegrade) {
     if rep.any() {
+        // "cell part(s)", not "cell(s)": the count sums degraded style, hyperlink
+        // and grapheme SLOTS, so a cell that loses both its style and its
+        // grapheme counts twice (R13-X3, review N4).
         log::warn!(
             target: crate::page::LOG_SCOPE,
-            "row copy at a page capacity ceiling: {} cell(s) degraded to default \
+            "row copy at a page capacity ceiling: {} cell part(s) degraded to default \
              (styles={}, hyperlinks={}, graphemes={}); see UD131",
             rep.styles + rep.hyperlinks + rep.graphemes,
             rep.styles,

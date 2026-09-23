@@ -22898,9 +22898,13 @@ mod tests {
         }
         assert!(found, "the 'Y' cell survives the copy");
 
+        // `assert_integrity` is a no-op without `debug_assertions`, and these
+        // tests run in RELEASE, so call `verify_integrity` (whose body runs in
+        // every build) directly and assert it on each page (R13-X3, review N1).
         let mut node = t.active_mut().pages.pages.first;
         while !node.is_null() {
-            unsafe { (*crate::pagelist::Node::page(node)).assert_integrity() };
+            let page = unsafe { &*crate::pagelist::Node::page(node) };
+            assert_eq!(page.verify_integrity(), Ok(()), "page integrity holds");
             node = unsafe { (*node).next };
         }
         t.deinit(Global);
@@ -22917,7 +22921,7 @@ mod tests {
         assert_eq!(
             logs,
             vec![
-                "row copy at a page capacity ceiling: 1 cell(s) degraded to default \
+                "row copy at a page capacity ceiling: 1 cell part(s) degraded to default \
                  (styles=1, hyperlinks=0, graphemes=0); see UD131"
                     .to_string()
             ],
@@ -23023,5 +23027,181 @@ mod tests {
             "'Y' keeps its 1;2;3 background: {bg:?}"
         );
         assert!(logs.is_empty(), "no degrade: {logs:?}");
+    }
+
+    // UD131 (R13) on an ORDINARY 80x24 terminal, in the DEFAULT debug suite.
+    //
+    // Unlike the wide-terminal `ud131_vt_release_*` tests, this route does NOT
+    // need a page to leave the standard capacity. It drives the ref-counted
+    // style set into its OTHER out-of-memory arm: the probe-sequence-length
+    // overflow (`ref_counted_set.zig:268`, "the hash function is not perfect ...
+    // we claim to be out of memory"), which fires as soon as one item sits 31
+    // slots from its home bucket. That takes only 32 live styles whose unseeded,
+    // deterministic style hashes (`style.zig:664`, `std.hash.int(wide[0] ^
+    // wide[1])`) share their low 16 bits. The 32 colours below all hash to low
+    // bits 0x2e2a, so they stay clustered at every capacity doubling and
+    // `increaseCapacity(.styles)` climbs 128 -> ... -> 65535 and then returns
+    // OutOfSpace, on a page holding only ~32 live styles. About 700 bytes of
+    // ordinary output. The style hash is identical in the port, so the same
+    // colours cluster here (MEASURED, task R13-X3).
+    //
+    // Reference (MEASURED, task R13-X3, scratch ReleaseSafe/ReleaseFast builds at
+    // 20abdb50a): 80x24, these 32 colours, then `Y` with a new style on the first
+    // row of the next page, then DL across the page boundary -> @panic
+    // "increaseCapacity OutOfSpace" at Screen.zig:747 <- deleteLines
+    // (Terminal.zig:3215). ReleaseSafe SIGABRT (44 of 29,923 sweep runs die),
+    // ReleaseFast SIGTRAP (8 of 253). 31 colours never trigger; no DL never
+    // triggers.
+    //
+    // NEGATIVE CONTROL (task R13-X3): restoring the reference's `@panic` in the
+    // Screen loop's `OutOfSpace` arm (`clone_partial_row_grow_capacity`, at the
+    // `IncreaseCapacityError::OutOfSpace` match arm) makes
+    // `ud131_delete_lines_degrades_on_an_ordinary_80_column_terminal` fail.
+    #[rustfmt::skip]
+    const UD131_PSL_COLOURS: [(u8, u8, u8); 32] = [
+        (0, 3, 183), (0, 36, 22), (0, 212, 121), (1, 39, 95), (1, 89, 203),
+        (1, 98, 209), (1, 196, 183), (3, 10, 143), (3, 27, 63), (3, 136, 88),
+        (3, 177, 19), (4, 4, 80), (4, 38, 52), (5, 170, 136), (6, 82, 67),
+        (6, 211, 183), (6, 221, 6), (6, 247, 172), (7, 62, 169), (7, 87, 247),
+        (7, 177, 15), (8, 49, 218), (8, 179, 161), (9, 140, 163), (9, 205, 72),
+        (10, 83, 2), (10, 93, 46), (10, 248, 1), (11, 112, 126), (11, 210, 50),
+        (13, 123, 81), (14, 56, 135),
+    ];
+
+    struct Ud131PslOutcome {
+        y_degraded: bool,
+        y_found: bool,
+        first_colliding_kept: bool,
+        logs: Vec<String>,
+    }
+
+    /// Drives the PSL-overflow recipe on an 80x24 terminal with the first
+    /// `n_colliding` colours, then DL across a page boundary. Walks every page's
+    /// `assert_integrity` (real in a debug build).
+    fn ud131_psl_80col_run(n_colliding: usize) -> Ud131PslOutcome {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        let cap = crate::log_capture::start();
+
+        // Scroll until the active area straddles a page boundary.
+        {
+            let mut st = t.vt_stream();
+            st.next_slice(b"\x1b[24;1H");
+            st.deinit();
+        }
+        let mut boundary = None;
+        for _ in 0..4000 {
+            {
+                let mut st = t.vt_stream();
+                st.next_slice(b"\n");
+                st.deinit();
+            }
+            let n0 = t.active_mut().pages.get_cell(active_pt(0, 0)).unwrap().node;
+            for y in 1..24u32 {
+                if t.active_mut().pages.get_cell(active_pt(0, y)).unwrap().node != n0 {
+                    if (4..=20).contains(&y) {
+                        boundary = Some(y);
+                    }
+                    break;
+                }
+            }
+            if boundary.is_some() {
+                break;
+            }
+        }
+        let b = boundary.expect("the active area straddles a page boundary");
+
+        {
+            let mut st = t.vt_stream();
+            let mut buf = Vec::new();
+            // The colliding styles on active row 1 (page 1, the DL destination).
+            buf.extend_from_slice(b"\x1b[1;1H");
+            for &(r, g, bb) in &UD131_PSL_COLOURS[..n_colliding] {
+                buf.extend_from_slice(format!("\x1b[38;2;{r};{g};{bb}mX").as_bytes());
+            }
+            buf.extend_from_slice(b"\x1b[0m");
+            // 'Y' with a NEW style on the first row of page 2.
+            buf.extend_from_slice(
+                format!("\x1b[{};1H\x1b[48;2;1;2;3mY\x1b[0m", b + 1).as_bytes(),
+            );
+            // DL at row 2 pulls page 2's first row (Y) into the full page 1.
+            buf.extend_from_slice(b"\x1b[2;1H\x1b[M");
+            st.next_slice(&buf);
+            st.deinit();
+        }
+
+        let logs: Vec<String> = cap
+            .messages()
+            .into_iter()
+            .filter(|(_, _, m)| m.contains("UD131"))
+            .map(|(_, _, m)| m)
+            .collect();
+        drop(cap);
+
+        // 'Y' survives the copy; its new style degraded to the default.
+        let mut y_found = false;
+        let mut y_degraded = false;
+        for y in 0..24u32 {
+            let lc = t.active_mut().pages.get_cell(active_pt(0, y)).unwrap();
+            if unsafe { (*lc.cell).content_codepoint() } != 'Y' as u21 {
+                continue;
+            }
+            y_found = true;
+            y_degraded = unsafe { (*lc.cell).style_id() } == crate::style::DEFAULT_ID;
+            break;
+        }
+
+        // The first colliding cell (active row 1, untouched by DL at row 2) keeps
+        // its non-default style: only the UNSTORABLE cell degrades.
+        let first = t.active_mut().pages.get_cell(active_pt(0, 0)).unwrap();
+        let first_colliding_kept =
+            unsafe { (*first.cell).style_id() } != crate::style::DEFAULT_ID;
+
+        // Integrity holds across every page (real check in a debug build).
+        let mut node = t.active_mut().pages.pages.first;
+        while !node.is_null() {
+            unsafe { (*crate::pagelist::Node::page(node)).assert_integrity() };
+            node = unsafe { (*node).next };
+        }
+        // And the whole page list.
+        t.active_mut().pages.assert_integrity();
+
+        t.deinit(Global);
+        Ud131PslOutcome {
+            y_degraded,
+            y_found,
+            first_colliding_kept,
+            logs,
+        }
+    }
+
+    #[test]
+    fn ud131_delete_lines_degrades_on_an_ordinary_80_column_terminal() {
+        let o = ud131_psl_80col_run(32);
+        assert!(o.y_found, "the 'Y' cell survives the copy");
+        assert!(o.y_degraded, "'Y''s new style degrades to the default");
+        assert!(
+            o.first_colliding_kept,
+            "the storable colliding cell keeps its style; only the unstorable degrades"
+        );
+        assert_eq!(
+            o.logs,
+            vec![
+                "row copy at a page capacity ceiling: 1 cell part(s) degraded to \
+                 default (styles=1, hyperlinks=0, graphemes=0); see UD131"
+                    .to_string()
+            ],
+            "exactly one degrade record for one copy"
+        );
+    }
+
+    // 31 colliding colours stay one below the PSL-overflow threshold, so the set
+    // rehashes instead of failing: nothing degrades, nothing is logged (the
+    // reference survives this too).
+    #[test]
+    fn ud131_thirty_one_colours_is_the_80_column_control() {
+        let o = ud131_psl_80col_run(31);
+        assert!(o.y_found, "'Y' is present");
+        assert!(!o.y_degraded, "'Y' keeps its new style");
+        assert!(o.logs.is_empty(), "no degrade: {:?}", o.logs);
     }
 }

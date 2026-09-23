@@ -1940,6 +1940,7 @@ impl PageList {
 
         if let Err(_err) = self.verify_integrity() {
             // log.err("PageList integrity check failed: {}", .{err});
+            log::error!(target: LOG_SCOPE, "PageList integrity check failed: {_err:?}");
             panic!("PageList integrity check failed: {_err:?}");
         }
     }
