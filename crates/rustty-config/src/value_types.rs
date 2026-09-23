@@ -5221,7 +5221,10 @@ impl Keybinds {
 // `help_strings.KeybindAction` decl (those are action names), so the reference
 // prints no help block. Returning the action tag made `+list-keybinds --docs`
 // print `# <action>` blocks the reference never prints. The reference's own
-// behaviour is recorded upstream as UD180 (latent).
+// behaviour is recorded upstream as UD180 (latent). It stays faithful under R13
+// as extended 2026-09-23: the flag's own help (`list_keybinds.zig:50-51`) says
+// `--docs` "currently does nothing", and finishing it would mean inventing
+// output for chained and leader bindings (reasons in UD180).
 fn v_tag_name(v: &rustty_input::binding::Value) -> &'static [u8] {
     use rustty_input::binding::Value;
     match v {
@@ -8064,6 +8067,11 @@ mod tests {
             (b"0X10", 16),
             (b"0b1_0", 2),
             (b"0o7_7", 63),
+            // Uppercase `0B` / `0O` (MEASURED on zig 0.16.0: 2 and 15).
+            (b"0B10", 2),
+            (b"0O17", 15),
+            (b"0B1_0", 2),
+            (b"0O7_7", 63),
             (b"1__0", 10),
             (b"+5", 5),
             (b"-0", 0),
