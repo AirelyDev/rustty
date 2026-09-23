@@ -56,6 +56,8 @@ pub fn parse_format_struct<'a>(
     str: &'a str,
     delimiter: u8,
 ) -> Result<Vec<Value<'a>>, ParseError> {
+    assert_ascii_delimiter(delimiter);
+
     // Parse all our fields
     // const fields = @typeInfo(T).@"struct".fields;
     // var it = std.mem.splitScalar(u8, str, delimiter);
@@ -103,12 +105,16 @@ pub fn comptime_format(vars: &[Variable], delimiter: u8) -> String {
 // PORT NOTE: `writer: *std.Io.Writer` -> return an owned `String`. The byte
 // output (`#{var}` joined by `delimiter`) is identical.
 pub fn format(vars: &[Variable], delimiter: u8) -> String {
+    assert_ascii_delimiter(delimiter);
+
     let mut out = String::new();
     // for (vars, 0..) |variable, i| {
     for (i, variable) in vars.iter().enumerate() {
         // if (i != 0) try writer.writeByte(delimiter);
         if i != 0 {
-            out.push(delimiter as char);
+            // An ASCII byte is its own one-byte `char` (see
+            // `assert_ascii_delimiter`), so this writes exactly one byte.
+            out.push(char::from(delimiter));
         }
         // try writer.print("#{{{t}}}", .{variable});
         out.push_str("#{");
@@ -116,6 +122,19 @@ pub fn format(vars: &[Variable], delimiter: u8) -> String {
         out.push('}');
     }
     out
+}
+
+// PORT NOTE (parity S208-F2): the reference's `delimiter: u8` is a BYTE,
+// which `std.mem.splitScalar(u8, ..)` splits on and `writer.writeByte` writes.
+// The port's text is `&str`/`String`: an ASCII byte is its own one-byte
+// `char`, so splitting and writing it is byte-identical, but a byte >= 0x80
+// never occurs on its own in UTF-8 text and cannot be written into a `String`
+// on its own. The old code widened it with `delimiter as char`, splitting on
+// (and writing) that code point's two-byte encoding instead. Every reference
+// caller passes a comptime ASCII constant (`' '`, `';'`, `','`, `'\t'`), so a
+// non-ASCII delimiter is refused rather than mistranslated.
+fn assert_ascii_delimiter(delimiter: u8) {
+    assert!(delimiter.is_ascii(), "tmux format delimiter must be ASCII");
 }
 
 // Returns a struct type that contains fields for each of the given
@@ -384,7 +403,7 @@ struct SplitScalar<'a> {
 impl<'a> SplitScalar<'a> {
     fn new(str: &'a str, delimiter: u8) -> SplitScalar<'a> {
         SplitScalar {
-            inner: str.split(delimiter as char),
+            inner: str.split(char::from(delimiter)),
         }
     }
 
@@ -875,6 +894,22 @@ mod tests {
         let result = parse_format_struct(t, "$1,", b',').unwrap();
         assert_eq!(Value::Usize(1), result[0]);
         assert_eq!(Value::Str(""), result[1]);
+    }
+
+    // Parity S208-F2 (no reference test): the delimiter is a BYTE. The port's
+    // text is `&str`/`String`, where a byte >= 0x80 is never a standalone
+    // delimiter and cannot be written on its own, so a non-ASCII delimiter is
+    // refused instead of being widened to a two-byte `char`.
+    #[test]
+    #[should_panic(expected = "tmux format delimiter must be ASCII")]
+    fn parse_format_struct_refuses_a_non_ascii_delimiter() {
+        let _ = parse_format_struct(&[Variable::SessionId], "$1", 0xE9);
+    }
+
+    #[test]
+    #[should_panic(expected = "tmux format delimiter must be ASCII")]
+    fn format_refuses_a_non_ascii_delimiter() {
+        let _ = format(&[Variable::SessionId, Variable::WindowId], 0xE9);
     }
 
     // PORT NOTE: the reference `testFormat` checks BOTH `comptimeFormat` and the

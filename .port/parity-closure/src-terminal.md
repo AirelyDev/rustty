@@ -381,7 +381,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** `get vt_processing_error` counterpart is compiled out of release builds
   - **Oracle:** `src/terminal/c/terminal.zig:3035-3073` → **Rustty:** `crates/rustty-vt-c/src/terminal.rs:6252-6316`
   - **Audit's suggested fix:** Either expose a release-visible fail point (or a failing-allocator equivalent) for the terminal-owned string update path so the test can be unconditional, or accept the gap explicitly in the census ledger.
-- [ ] **S185-F1** · CONFIRMED · `INDIV` · other
+- [x] **S185-F1** · CONFIRMED · `INDIV` · other
   - **What:** Stale "DEFERRED to vt-12 / compiling stub" PORT NOTE on graphics_storage re-export
   - **Oracle:** `src/terminal/kitty/graphics.zig:18-27` → **Rustty:** `crates/rustty-vt/src/kitty/graphics.rs:27-30`
   - **Audit's suggested fix:** Delete or reword the stale deferral note in crates/rustty-vt/src/kitty/graphics.rs:27-30.
@@ -417,7 +417,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** Decode-time temporary allocations abort instead of returning OutOfMemory
   - **Oracle:** `src/terminal/snapshot/page.zig:252-253, 373-381` → **Rustty:** `crates/rustty-vt/src/snapshot/page.rs:457, 561-573`
   - **Audit's suggested fix:** If the port wants full parity on this error path, use a fallible allocation (e.g. `Vec::try_reserve`) for the staged payload and remap tables and map failure to `PayloadDecodeError::OutOfMemory`; otherwise record the deviation in a PORT NOTE next to the staged allocation.
-- [ ] **S205-F1** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S205-F1** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** Two decode tests use unlimited scrollback where the reference uses the Options default of zero
   - **Oracle:** `src/terminal/snapshot/screen.zig:2371-2377, 2444-2450` → **Rustty:** `crates/rustty-vt/src/snapshot/screen.rs:2971, 3050`
   - **Audit's suggested fix:** Change both call sites to `screen_options(1, 1, Some(0))` so the decode options match the reference's `Options` default.
@@ -433,7 +433,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** Notification format/Display output text differs from the reference's comptime-reflected format
   - **Oracle:** `src/terminal/tmux/control.zig:568-590` → **Rustty:** `crates/rustty-vt/src/tmux/control.rs:878-975`
   - **Audit's suggested fix:** Emit `terminal.tmux.control.Notification` as the type name, print `void` for the payload-less tags, and render the struct payloads the way Zig's `{any}` does (byte-array members), or accept the divergence explicitly in the PORT NOTE since the only consumer is a log line.
-- [ ] **S208-F2** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S208-F2** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** tmux output delimiter is treated as a Unicode char rather than a byte
   - **Oracle:** `src/terminal/tmux/output.zig:17-36, 57-66` → **Rustty:** `crates/rustty-vt/src/tmux/output.rs:104-119, 383-405`
   - **Audit's suggested fix:** Split/emit on the raw byte (operate on `&[u8]`, or assert/restrict the delimiter to ASCII) so a >=0x80 delimiter behaves as in the reference.

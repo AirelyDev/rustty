@@ -2984,7 +2984,7 @@ mod tests {
         let written = stream.destination().written().to_vec();
         stream.deinit();
         let mut source = io::FixedReader::new(&written);
-        let mut decoded = decode(&mut source, Allocator, screen_options(1, 1, None)).unwrap();
+        let mut decoded = decode(&mut source, Allocator, screen_options(1, 1, Some(0))).unwrap();
         // defer decoded.deinit();
         assert!(decoded.screen.cursor.hyperlink.is_none());
 
@@ -3056,7 +3056,7 @@ mod tests {
         let written = stream.destination().written().to_vec();
         stream.deinit();
         let mut source = io::FixedReader::new(&written);
-        let mut decoded = decode(&mut source, Allocator, screen_options(1, 1, None)).unwrap();
+        let mut decoded = decode(&mut source, Allocator, screen_options(1, 1, Some(0))).unwrap();
         // defer decoded.deinit();
 
         // SAFETY: the cursor's page cell is live page memory of the decoded
