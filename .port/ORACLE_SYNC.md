@@ -128,8 +128,8 @@ agent depends on that tree standing still. Advancing therefore requires:
    - run `bash .port/tools/gates/_oracle_root.sh --self-test` (G-ORACLE-SH-SELF). Its pin arms
      fail if the new SHA, whole or as a 7-hex piece, was copied into another `.port/tools` file,
      or if any 40-hex constant other than `ORACLE_PIN`'s (the old SHA, say) sits in
-     `.port/tools/gates`. They look only for the current pin, so an abbreviated **old** SHA
-     elsewhere is not caught by them.
+     `.port/tools/gates`. They look only for the current pin, so the **old** SHA, abbreviated
+     anywhere or whole in a `.port/tools` file outside `gates/`, is not caught by them.
 
 **Advancing is bidirectional — do not model it as "the stale reference sentences disappear".**
 `P3-W10 T3` measured this. The gates re-read the *same pinned file list* (from the phase-0

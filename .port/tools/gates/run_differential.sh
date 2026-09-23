@@ -88,7 +88,7 @@ fi
 # exactly this commit. `rustty_oracle_pin` returns 1 on a missing or malformed
 # file, which `set -e` would turn into a silent exit 1; the `|| ORACLE_PIN=""`
 # keeps the run going so the guard reports it as BLOCKED (exit 3) with a reason.
-# `--self-test-oracle` arms d-h run this exact line in a copy of the gate.
+# `--self-test-oracle` arms e-k and j2 run this exact line in a copy of the gate (arm d runs it in place).
 ORACLE_PIN="$(rustty_oracle_pin)" || ORACLE_PIN=""
 
 echo "=== G4 :: differential VT clean (runner) ==="
