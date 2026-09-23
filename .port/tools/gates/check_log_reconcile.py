@@ -31,12 +31,14 @@ exit 3: the oracle checkout must exist and be at the pinned commit, the portmap
 must be non-empty, and the total reference site count must be non-zero.
 
 WHAT IT DOES NOT CLAIM: this is a COUNT reconciliation, not a per-site
-attribution. Where two reference files port into one Rust file (e.g. both
-`renderer/generic.zig` and `renderer/opengl/Frame.zig` land sites in
-`generic/linux_impl.rs`) each reference file is credited with that file's whole
-count, so the arm can read greener than a per-site audit would. The portmap
-records every such overlap in its `reason` column. A green here means "no
-diagnostic mass was lost", not "every individual site is live".
+attribution. Within one reference file's arm, emissions are counted, not paired
+to sites, so a paraphrased counterpart and the site it replaces read the same. A
+green here means "no diagnostic mass was lost", not "every individual site is
+live". ACROSS reference files it no longer credits one file with another's
+emissions: a port file held by several reference files' arms must say, in
+`LOG-ATTRIBUTION.tsv`, which file each of its emissions counts for (task
+tail-s1b, N190) — `main_c.zig` had read 27 against 3 and `opengl/Frame.zig` 25
+against 1 on shared files.
 
 PORT-ONLY EMISSIONS (N81): a port diagnostic with NO reference counterpart — an
 R13 handling line, a D11 range guard, an extra static copy of one reference site
@@ -48,10 +50,19 @@ every arm containing its file before the comparison. Every row must select
 exactly one live emission (none = stale, several = ambiguous, both RED), and the
 row count sits on a two-way `#!port-only-cap` ratchet; a missing directive or a
 malformed row is BLOCKED. The subtraction only ever lowers a port count, so it
-cannot hide a loss. Two credits it does NOT remove, because they are real
-counterparts of OTHER reference files: shared-file overlap (above) and a call
-site of another file's log helper (`application.rs` calling `gtk_version`'s
-`log_version`) — N190.
+cannot hide a loss. The credits that are real counterparts of OTHER reference
+files — shared-file overlap and a call site of another file's log helper
+(`application.rs` calling `gtk_version`'s `log_version`) — are attributed in
+`LOG-ATTRIBUTION.tsv` instead (above).
+
+REFERENCE SITES THE PORT CANNOT HAVE (task tail-s1b): three more ways a reference
+site legitimately has no port emission, each now machine-checked instead of
+living in an allowance's prose — (1) the reference compiles it only into its
+tests (`zig_test_only_lines`, the mirror of the port side's `#[cfg(test)]` rule;
+automatic, no declaration); (2) the reference reaches it on a condition the port
+or one platform arm cannot produce (`LOG-ABSENT-SITES.tsv`, per arm, RED if that
+arm still emits the message); (3) the reference never reaches it at all
+(`LOG-DEAD-SITES.tsv`, as before).
 
 EXCLUSION BUDGET: an exclusion retires a reference file rather than reconciling
 it, erasing its whole deficit — the widest lever here, and once the only number
@@ -87,6 +98,8 @@ PORTMAP = os.path.join(PORT_DIR, "parity-closure", "LOG-PORTMAP.tsv")
 DIVERGENCES = os.path.join(PORT_DIR, "parity-closure", "LOG-TEXT-DIVERGENCES.tsv")
 DEAD_SITES = os.path.join(PORT_DIR, "parity-closure", "LOG-DEAD-SITES.tsv")
 PORT_ONLY = os.path.join(PORT_DIR, "parity-closure", "LOG-PORT-ONLY.tsv")
+ABSENT_SITES = os.path.join(PORT_DIR, "parity-closure", "LOG-ABSENT-SITES.tsv")
+ATTRIBUTION = os.path.join(PORT_DIR, "parity-closure", "LOG-ATTRIBUTION.tsv")
 LEDGER = os.path.join(PORT_DIR, "parity-closure", "LEDGER.tsv")
 
 # R3: the oracle is an EXTERNAL read-only checkout, never shipped into the repo.
@@ -166,12 +179,122 @@ def zig_strip(line):
 
 
 def zig_sites(text):
-    """Line numbers of live `log.*` calls in Zig source text."""
+    """Line numbers of live `log.*` calls in Zig source text, TEST CODE INCLUDED.
+
+    Every count in this gate reads `zig_prod_sites`, which drops the test-only
+    ones; this raw form is what the test-only rule is measured against.
+    """
     return [
         k
         for k, line in enumerate(text.split("\n"), 1)
         if ZIG_CALL.search(zig_strip(line))
     ]
+
+
+# A Zig `test` block: `test "name" {`, `test identifier {` or `test {`. Matched on
+# `zig_strip`ped text, where the string name is already blanked to spaces.
+ZIG_TEST_BLOCK = re.compile(r"(?m)^[ \t]*test\b[ \t]*(?:[A-Za-z_][A-Za-z0-9_]*)?[ \t]*\{")
+# A NON-pub fn (`fn name(`, `inline fn name(`), anywhere. A `pub`/`export`/`extern`
+# fn can be reached from another file, so the rule never applies to one.
+ZIG_PRIVATE_FN = re.compile(
+    r"(?m)^[ \t]*(?:(?:inline|noinline)[ \t]+)?fn[ \t]+([A-Za-z_][A-Za-z0-9_]*)[ \t]*\("
+)
+
+
+def _zig_block(code, open_at):
+    """(open, close) of the `{...}` starting at or after `open_at` in stripped Zig."""
+    i = code.find("{", open_at)
+    if i < 0:
+        return None
+    depth = 0
+    for j in range(i, len(code)):
+        if code[j] == "{":
+            depth += 1
+        elif code[j] == "}":
+            depth -= 1
+            if depth == 0:
+                return (i, j)
+    return None
+
+
+def zig_test_only_lines(text):
+    """Line numbers that the reference compiles ONLY INTO ITS TESTS.
+
+    WHY (task tail-s1b, the `tmux/viewer.zig:1497` case). The Rust side of this
+    gate has always skipped `#[cfg(test)]` code (`test_ranges`): test code is not
+    the port. The Zig side counted everything, so a `log.*` call inside the
+    reference's own test helper was demanded of the port's PRODUCTION code, where
+    it has no counterpart — `viewer.zig:1497` (`testViewer step failed`) sits in
+    the private helper `testViewer`, called only from `test` blocks. The two
+    sides must apply the same rule.
+
+    A line is test-only when it is inside
+      1. a `test "..." { ... }` block, or
+      2. the body of a NON-pub fn every one of whose references in the file is
+         itself test-only (rule 1, or another fn of rule 2 — a fixed point). A
+         private Zig fn cannot be named from another file, so the file is the
+         whole universe of its callers. A fn with NO reference at all is not
+         test-only: it is dead, which is `LOG-DEAD-SITES.tsv`'s business, and
+         Zig does not analyse it in tests either.
+    CONSERVATIVE BY CONSTRUCTION: a name is matched as a bare identifier, so a
+    second fn or field with the same name anywhere in the file keeps the helper
+    counted (a false "production", never a false "test-only").
+    """
+    lines = text.split("\n")
+    code = "\n".join(zig_strip(line) for line in lines)
+    spans = []
+    for m in ZIG_TEST_BLOCK.finditer(code):
+        body = _zig_block(code, m.end() - 1)
+        if body:
+            spans.append(body)
+    fns = []
+    for m in ZIG_PRIVATE_FN.finditer(code):
+        head = code[code.rfind("\n", 0, m.start()) + 1 : m.start()]
+        if re.search(r"\b(?:pub|export|extern)\b", head):
+            continue
+        body = _zig_block(code, m.end())
+        if body:
+            fns.append((m.group(1), m.start(1), body))
+
+    def inside(pos, regions):
+        return any(a <= pos <= b for a, b in regions)
+
+    test_fns = set()
+    changed = True
+    while changed:
+        changed = False
+        regions = spans + [body for name, _at, body in fns if name in test_fns]
+        for name, at, body in fns:
+            if name in test_fns:
+                continue
+            refs = [
+                r.start()
+                for r in re.finditer(r"(?<![A-Za-z0-9_])" + re.escape(name) + r"(?![A-Za-z0-9_])", code)
+                if r.start() != at and not (body[0] <= r.start() <= body[1])  # recursion
+            ]
+            # A second definition of the same name is a reference we cannot place.
+            if sum(1 for n, _a, _b in fns if n == name) > 1:
+                continue
+            if refs and all(inside(p, regions) for p in refs):
+                test_fns.add(name)
+                changed = True
+    regions = spans + [body for name, _at, body in fns if name in test_fns]
+    out, pos = set(), 0
+    for k, line in enumerate(lines, 1):
+        stripped = zig_strip(line)
+        # Place the line by its `log.*` call when it has one: a one-line
+        # `fn inner() void { log.warn(...); }` starts before its own body.
+        m = ZIG_CALL.search(stripped)
+        if inside(pos + (m.start() if m else 0), regions):
+            out.add(k)
+        pos += len(stripped) + 1
+    return out
+
+
+def zig_prod_sites(text):
+    """Line numbers of live `log.*` calls the reference compiles into PRODUCTION."""
+    test_only = zig_test_only_lines(text)
+    return [k for k in zig_sites(text) if k not in test_only]
 
 
 # ---------------------------------------------------------------------------
@@ -562,8 +685,12 @@ def emission_sites(paths, sources, emitters, defs):
     hits = []
     for path in paths:
         code, nc = sources[path]
+        # A DECLARED facade (LOG-ATTRIBUTION.tsv kind `facade`) is an emitter in its
+        # own file only: its body is the sink, its call sites are the emissions.
+        local = {name for k, name, _d, _o, _c in defs[path] if k == "facade"}
         spans = [
-            (decl, bc) for _k, name, decl, _bo, bc in defs[path] if name in emitters
+            (decl, bc) for k, name, decl, _bo, bc in defs[path]
+            if name in emitters or k == "facade"
         ]
 
         def inside(pos):
@@ -573,7 +700,7 @@ def emission_sites(paths, sources, emitters, defs):
             if not inside(pos):
                 hits.append((path, pos, code.count("\n", 0, pos) + 1, "direct"))
         tspans = test_ranges(code)
-        for name in emitters:
+        for name in sorted(set(emitters) | local):
             for m in re.finditer(
                 r"(?<![A-Za-z0-9_.])" + re.escape(name) + r"\s*[!(]", code
             ):
@@ -1143,6 +1270,7 @@ PORT_ONLY_KINDS = (
     "instrumentation",  # rustty-only instrumentation on its own target
     "expansion",        # an EXTRA static copy of ONE reference site (unrolled inline-for, cfg twin, split arm)
     "open-finding",     # a port-only emission recorded as an open NEW-FINDINGS defect; delete the row when fixed
+    "transport",        # a call INTO the log backend itself (the reference's sink has no `log.*` site), counted only for its `log_*` name
 )
 PORT_ONLY_DIRECTIVE = re.compile(r"^#!\s*port-only-cap\s+entries=(\d+)\s*$")
 PORT_ONLY_FN = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)(?:#([1-9][0-9]*))?$")
@@ -1308,6 +1436,327 @@ def resolve_port_only(rows, pool, emitters, defs, portmap):
     return subtract, problems
 
 
+def _split_row(path, lineno, line, ncols, names):
+    parts = line.split("\t")
+    if len(parts) != ncols:
+        raise ValueError(
+            f"{path}:{lineno}: expected {ncols} tab-separated columns ({', '.join(names)}), "
+            f"got {len(parts)}"
+        )
+    return parts
+
+
+def _load_capped(path, directive, header, ncols, names, make_row):
+    """(rows, cap) for a capped declaration file. Malformed input raises ValueError."""
+    rows, cap = [], None
+    if not os.path.exists(path):
+        return rows, cap
+    with open(path, encoding="utf-8", newline="") as fh:
+        for lineno, raw in enumerate(fh, 1):
+            line = raw.rstrip("\n")
+            m = directive.match(line)
+            if m:
+                if cap is not None:
+                    raise ValueError(f"{path}:{lineno}: a second cap directive")
+                cap = int(m.group(1))
+                continue
+            if not line.strip() or line.lstrip().startswith("#"):
+                continue
+            if line.split("\t")[0].strip() == header:
+                continue
+            rows.append(make_row(_split_row(path, lineno, line, ncols, names), lineno))
+    return rows, cap
+
+
+# ---------------------------------------------------------------------------
+# Absent reference sites (task tail-s1b)
+# ---------------------------------------------------------------------------
+# A reference `log.*` site the reference DOES reach, on a condition the port —
+# or one platform arm of it — cannot produce. It is the reachable sibling of a
+# dead site: `LOG-DEAD-SITES.tsv` is a property of the reference alone (the call
+# is never reached); this is a property of the PAIR (the reference reaches it, the
+# port has no such arm):
+#   * `infallible-call` — the catch arm of a call that cannot fail in the port:
+#     an allocation (Rust aborts on OOM), a `bufPrint` whose port is a growable
+#     `format!`, an API whose Rust binding returns `()` or a value;
+#   * `unrepresentable-state` — a guard on a state the port's types cannot hold
+#     (a null user-data pointer in what is a typed closure, a null reply that is
+#     an `Ok(Variant)`);
+#   * `platform-gated` — the reference compiles the site out on this arm's
+#     platform (`if (comptime DisplayLink == void) return;`).
+# Before this file these could only be an ALLOWANCE, which names its sites in
+# prose nobody checks. A row here is machine-checked instead: the reference line
+# must be a live production site at the pin, the port file must be in the
+# reference file's arm, the named port fn must exist in production code there,
+# and — THE CHECK THAT STOPS IT SILENCING A REAL EMISSION — no arm the row covers
+# may emit the site's message more often than the reference sites still counted
+# for it. A row covers exactly the arms of its reference file that contain its
+# port file, so a Linux-only `platform-gated` row cannot excuse the macOS arm.
+# LIMIT (recorded, not hidden): the silence check counts per MESSAGE, so sites
+# that share one message are interchangeable to it — `embedded.zig`'s four
+# `error completing clipboard request` sites (:857 :883 :899 :946, two live)
+# accept a row naming :857 where :883 is meant. The line must still be a live
+# production site with that message, and the count per message must hold.
+ABSENT_KINDS = ("infallible-call", "unrepresentable-state", "platform-gated")
+ABSENT_DIRECTIVE = re.compile(r"^#!\s*absent-site-cap\s+entries=(\d+)\s*$")
+ABSENT_COLS = ("oracle_file", "line", "port_file", "port_fn", "kind", "reason")
+
+
+def load_absent_sites(path):
+    """(rows, cap). Rows are {file, line, port_file, fn, kind, reason, lineno}."""
+
+    def make(parts, lineno):
+        try:
+            site = int(parts[1].strip())
+        except ValueError:
+            raise ValueError(f"{path}:{lineno}: line {parts[1]!r} is not an integer")
+        if not parts[0].strip() or not parts[2].strip() or not parts[3].strip():
+            raise ValueError(f"{path}:{lineno}: oracle_file, port_file and port_fn must be non-empty")
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", parts[3].strip()):
+            raise ValueError(f"{path}:{lineno}: port_fn {parts[3]!r} is not a Rust identifier")
+        return {"file": parts[0].strip(), "line": site, "port_file": parts[2].strip(),
+                "fn": parts[3].strip(), "kind": parts[4].strip(),
+                "reason": parts[5].strip(), "lineno": lineno}
+
+    return _load_capped(path, ABSENT_DIRECTIVE, "oracle_file", 6, ABSENT_COLS, make)
+
+
+def zig_site_message(text, line):
+    """The normalised format string of the reference `log.*` call at `line`, or None."""
+    lines = text.split("\n")
+    blob = " ".join(lines[line - 1 : line + 3])
+    m = ZIG_CALL_IN_COMMENT.search(blob)
+    if not m:
+        return None
+    return normalise_message(zig_format_arg(blob[m.end() - 1 :]))
+
+
+def arms_containing(portmap_row, port_file):
+    """Indexes of the row's arms that contain `port_file`."""
+    return [i for i, arm in enumerate(portmap_row.get("arms", [])) if port_file in arm]
+
+
+# ---------------------------------------------------------------------------
+# Attribution of port emissions (task tail-s1b, N190)
+# ---------------------------------------------------------------------------
+# The gate counts per reference FILE and credits every emission in a port file to
+# every reference file whose arm holds it. Where one port file ports SEVERAL
+# reference files that is not a limitation to document, it is a mask: before this
+# file `src/main_c.zig` read 27 port emissions against 3 reference sites because
+# its arm, `rustty-apprt-c/src/lib.rs`, also holds `embedded.zig`'s C API — all 3
+# of its sites could be deleted and the gate stayed GREEN; `opengl/Frame.zig` read
+# 25 against 1 for the same reason. Three kinds:
+#   * `default-owner` — function `*`, match `*`: every emission of a SHARED port
+#     file (one in two or more reference files' arms) counts for this reference
+#     file only, unless an `owner` row says otherwise. A shared file with no
+#     default owner is RED: the overlap credit it would carry is exactly the mask.
+#   * `owner` — one emission (enclosing fn + call-text substring, resolved exactly
+#     like a LOG-PORT-ONLY.tsv row: none is stale, several is ambiguous) counts for
+#     the named reference file and comes off every other arm. It must be
+#     PLAUSIBLE: either one of its string literals matches a live site of the
+#     named file at least as well as it matches any other file sharing the port
+#     file (and at the pairing floor), or it is a call of a `log_*` emitter that
+#     is DEFINED in the named file's own arm (`application.rs` calling
+#     `gtk_version`'s `log_version`).
+#   * `facade` — function `name`, match `*`: `name` is a helper in `port_file`
+#     whose body holds the emission, so ITS CALL SITES in that file are the
+#     emissions and its body is not (what the gate already does for any `log_*`
+#     helper, for one that is not named `log_*`). Four reference sites that each
+#     say `unable to remove <what>` fold into `surface.rs`'s one
+#     `remove_source_id(id, what)`; counting the helper's body once reported
+#     three of them missing.
+ATTRIBUTION_KINDS = ("default-owner", "owner", "facade")
+ATTRIBUTION_DIRECTIVE = re.compile(r"^#!\s*attribution-cap\s+entries=(\d+)\s*$")
+ATTRIBUTION_COLS = ("kind", "oracle_file", "port_file", "function", "match", "reason")
+
+
+def load_attribution(path):
+    """(rows, cap). Rows are {kind, oracle, file, fn, match, reason, lineno}."""
+
+    def make(parts, lineno):
+        kind, fn, match = parts[0].strip(), parts[3].strip(), parts[4]
+        match = " ".join(match.replace("\\t", "\t").replace("\\n", "\n").split())
+        if not parts[1].strip() or not parts[2].strip() or not fn or not match:
+            raise ValueError(f"{path}:{lineno}: oracle_file, port_file, function and match must be non-empty")
+        if kind == "default-owner" and (fn != "*" or match != "*"):
+            raise ValueError(f"{path}:{lineno}: a `default-owner` row takes function `*` and match `*`")
+        if kind == "facade" and (match != "*" or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", fn)):
+            raise ValueError(f"{path}:{lineno}: a `facade` row takes a fn name and match `*`")
+        occurrence = None
+        if kind == "owner":
+            fm = PORT_ONLY_FN.match(fn)
+            if not fm:
+                raise ValueError(f"{path}:{lineno}: function {fn!r} is not `name` or `name#k` (k >= 1)")
+            fn, occurrence = fm.group(1), int(fm.group(2)) if fm.group(2) else None
+        return {"kind": kind, "oracle": parts[1].strip(), "file": parts[2].strip(),
+                "fn": fn, "occurrence": occurrence, "match": match,
+                "reason": parts[5].strip(), "lineno": lineno}
+
+    return _load_capped(path, ATTRIBUTION_DIRECTIVE, "kind", 6, ATTRIBUTION_COLS, make)
+
+
+def rust_fn_decls(code):
+    """[(name, decl, body_open, body_close)] for every `fn` with a body."""
+    out = []
+    for m in RUST_FN.finditer(code):
+        body = _brace_body(code, m.end() - 1)
+        if body:
+            out.append((m.group(1), m.start(), body[0], body[1]))
+    return out
+
+
+def _string_literals(text):
+    return [m.group(1) for m in re.finditer(r'"((?:[^"\\]|\\.)*)"', text)]
+
+
+def resolve_facades(rows, pool, emitters):
+    """{path: [("facade", name, decl, bo, bc)]} and problems for `facade` rows."""
+    problems = {k: [] for k in ("missing_file", "no_fn", "no_emission", "redundant", "duplicate")}
+    out, seen = {}, set()
+    for row in rows:
+        if row["kind"] != "facade":
+            continue
+        if row["file"] not in pool:
+            problems["missing_file"].append((row, row["file"]))
+            continue
+        key = (row["file"], row["fn"])
+        if key in seen:
+            problems["duplicate"].append((row, ""))
+            continue
+        seen.add(key)
+        if row["fn"] in emitters:
+            problems["redundant"].append((row, "already a log_* emitter"))
+            continue
+        code, nc = pool[row["file"]]
+        tspans = test_ranges(code)
+        decls = [d for d in rust_fn_decls(code) if d[0] == row["fn"] and not in_spans(d[1], tspans)]
+        if len(decls) != 1:
+            problems["no_fn"].append((row, f"{len(decls)} production definition(s)"))
+            continue
+        name, decl, bo, bc = decls[0]
+        if not primitive_sites(code[bo : bc + 1], nc[bo : bc + 1], skip_tests=False):
+            problems["no_emission"].append((row, "its body holds no live emission"))
+            continue
+        out.setdefault(row["file"], []).append(("facade", name, decl, bo, bc))
+    return out, problems
+
+
+def resolve_attribution(rows, pool, emitters, defs, portmap, po_subtract, ref_messages,
+                        emitter_homes):
+    """Resolve `default-owner` / `owner` rows.
+
+    Returns (owner_of, problems): `owner_of` maps port file -> (default oracle,
+    {offset: oracle}) for every shared file with a default owner.
+    """
+    problems = {k: [] for k in ("missing_file", "not_in_arm", "bad_kind", "no_reason",
+                                "not_shared", "no_default", "unowned_shared",
+                                "stale", "ambiguous", "duplicate", "port_only",
+                                "redundant", "implausible")}
+    holders = {}
+    for r in portmap:
+        for arm in r.get("arms", []):
+            for f in arm:
+                holders.setdefault(f, set()).add(r["oracle"])
+    arm_files = {}
+    for r in portmap:
+        for arm in r.get("arms", []):
+            for f in arm:
+                arm_files.setdefault(r["oracle"], set()).add(f)
+    owner_of, taken = {}, {}
+    for row in rows:
+        if row["kind"] not in ATTRIBUTION_KINDS:
+            problems["bad_kind"].append((row, row["kind"]))
+        if not row["reason"]:
+            problems["no_reason"].append((row, ""))
+        if row["file"] not in arm_files.get(row["oracle"], ()):
+            problems["not_in_arm"].append((row, row["oracle"]))
+            continue
+        if row["file"] not in pool:
+            problems["missing_file"].append((row, row["file"]))
+            continue
+        if row["kind"] == "default-owner":
+            if len(holders.get(row["file"], ())) < 2:
+                problems["not_shared"].append((row, "only one reference file's arm holds it"))
+                continue
+            if row["file"] in owner_of:
+                problems["duplicate"].append((row, "a second default owner"))
+                continue
+            owner_of[row["file"]] = (row["oracle"], {})
+    for f, olist in sorted(holders.items()):
+        if len(olist) >= 2 and f in pool and f not in owner_of:
+            problems["unowned_shared"].append(
+                ({"lineno": 0, "file": f, "fn": "*", "occurrence": None, "match": "*"},
+                 "held by " + ", ".join(sorted(olist)))
+            )
+    site_cache = {}
+    for row in rows:
+        if row["kind"] != "owner" or row["file"] not in pool:
+            continue
+        if row["file"] not in arm_files.get(row["oracle"], ()):
+            continue
+        if row["file"] not in owner_of:
+            problems["no_default"].append((row, "the file has no `default-owner` row"))
+            continue
+        default, specific = owner_of[row["file"]]
+        if row["oracle"] == default:
+            problems["redundant"].append((row, "names the file's default owner"))
+            continue
+        code, nc = pool[row["file"]]
+        if row["file"] not in site_cache:
+            spans = rust_fn_spans(code)
+            site_cache[row["file"]] = [
+                (pos, line, enclosing_fn(spans, pos), call_text(code, nc, pos), what)
+                for _p, pos, line, what in sorted(
+                    emission_sites([row["file"]], pool, emitters, defs), key=lambda h: h[1]
+                )
+            ]
+        hits = [(pos, line, text, what) for pos, line, fn, text, what in site_cache[row["file"]]
+                if fn == row["fn"] and row["match"] in text]
+        if row["occurrence"] is not None:
+            hits = hits[row["occurrence"] - 1 : row["occurrence"]]
+        if not hits:
+            problems["stale"].append((row, ""))
+            continue
+        if len(hits) > 1:
+            problems["ambiguous"].append((row, [h[1] for h in hits]))
+            continue
+        pos, line, text, what = hits[0]
+        if pos in po_subtract.get(row["file"], {}):
+            problems["port_only"].append((row, f"line {line} is declared port-only"))
+            continue
+        if (row["file"], pos) in taken:
+            problems["duplicate"].append((row, f"line {line} is also owned by the row at :{taken[(row['file'], pos)]}"))
+            continue
+        # PLAUSIBILITY: an attribution must not be a way to move an emission to a
+        # file it does not describe.
+        homes = set(emitter_homes.get(what, set()))
+        qual = re.search(r"([A-Za-z_][A-Za-z0-9_]*)::\s*$", code[max(0, pos - 80) : pos])
+        if qual:  # `gtk_version::log_version()` names its module; two files define `log_version`
+            homes = {h for h in homes if f"/{qual.group(1)}.rs" in h or f"/{qual.group(1)}/" in h}
+        home_ok = bool(homes & arm_files.get(row["oracle"], set()))
+        lits = [normalise_message(s) for s in _string_literals(text)]
+
+        def best(oracle):
+            import difflib
+            b = 0.0
+            for lit in lits:
+                for msg in ref_messages(oracle):
+                    if msg:
+                        b = max(b, difflib.SequenceMatcher(None, msg, lit).ratio())
+            return b
+
+        mine = best(row["oracle"])
+        others = max([best(o) for o in holders[row["file"]] if o != row["oracle"]] or [0.0])
+        if not home_ok and not (mine >= PAIR_SIMILARITY and mine >= others):
+            problems["implausible"].append(
+                (row, f"line {line}: best match {mine:.2f} to {row['oracle']}, {others:.2f} elsewhere")
+            )
+            continue
+        taken[(row["file"], pos)] = row["lineno"]
+        specific[pos] = row["oracle"]
+    return owner_of, problems
+
+
 # ---------------------------------------------------------------------------
 # Portmap
 # ---------------------------------------------------------------------------
@@ -1409,7 +1858,7 @@ def oracle_files_with_log_sites(zig_walk, dead_by_file=None):
     out = {}
     dead_by_file = dead_by_file or {}
     for rel, text in zig_walk():
-        sites = [x for x in zig_sites(text) if x not in dead_by_file.get(rel, ())]
+        sites = [x for x in zig_prod_sites(text) if x not in dead_by_file.get(rel, ())]
         if sites:
             out[rel] = len(sites)
     return out
@@ -1438,7 +1887,8 @@ def verdict(portmap, claims, zig_text, rust_text, facade_sources=None, report=Fa
             oracle_log_files=None, exclusion_cap=None, raw_sources=None,
             ref_index=None, divergences=None, divergence_cap=None,
             unpairable_cap=None, dead_sites=None, dead_site_cap=None,
-            port_only=None, port_only_cap=None):
+            port_only=None, port_only_cap=None, absent_sites=None, absent_cap=None,
+            attribution=None, attribution_cap=None):
     """Return (rc, lines). rc 0 GREEN, 1 RED. Pure — all I/O is in the callers.
 
     `zig_text(path)` / `rust_text(path)` return source text or None if absent.
@@ -1466,16 +1916,98 @@ def verdict(portmap, claims, zig_text, rust_text, facade_sources=None, report=Fa
     wide = dict(facade_sources or {})
     wide.update(pool)
     emitters, wide_defs, stubs = discover_emitters(wide)
-    defs = {p: wide_defs[p] for p in pool}
+    defs = {p: list(wide_defs[p]) for p in pool}
     stubs = {p: v for p, v in stubs.items() if p in pool}
+    emitter_homes = {}
+    for p, dl in wide_defs.items():
+        for _k, name, _d, _o, _c in dl:
+            if name in emitters:
+                emitter_homes.setdefault(name, set()).add(p)
+
+    # DECLARED FACADES first: they change what an emission IS in their file, so
+    # every later resolver must see the call sites, not the body (tail-s1b).
+    at_rows = attribution or []
+    facades, fa_problems = resolve_facades(at_rows, pool, emitters)
+    for p, entries in facades.items():
+        defs[p].extend(entries)
+        for _k, name, _d, _o, _c in entries:
+            emitter_homes.setdefault(name, set()).add(p)
 
     dead_rows = dead_sites or []
     dead_by_file = dead_lines_by_file(dead_rows)
     # PORT-ONLY emissions come off the port count BEFORE any comparison (N81).
     po_rows = port_only or []
     po_subtract, po_problems = resolve_port_only(po_rows, pool, emitters, defs, portmap)
+
+    ref_msg_cache = {}
+
+    def ref_messages(oracle):
+        if oracle not in ref_msg_cache:
+            txt = zig_text(oracle)
+            ref_msg_cache[oracle] = (
+                [zig_site_message(txt, k) for k in zig_prod_sites(txt)] if txt else []
+            )
+        return ref_msg_cache[oracle]
+
+    owner_of, at_problems = resolve_attribution(
+        at_rows, pool, emitters, defs, portmap, po_subtract, ref_messages, emitter_homes
+    )
+    ab_rows = absent_sites or []
+    ab_problems = {k: [] for k in ("bad_kind", "no_reason", "bogus", "dead", "not_in_arm",
+                                   "missing_file", "no_fn", "duplicate", "all_arms",
+                                   "emitted")}
+    oracle_rows = {r["oracle"]: r for r in portmap if not r.get("excluded")}
+    ab_by_arm = {}  # (oracle, arm index) -> [row]
+    for a in ab_rows:
+        if a["kind"] not in ABSENT_KINDS:
+            ab_problems["bad_kind"].append((a, a["kind"]))
+        if not a["reason"]:
+            ab_problems["no_reason"].append((a, ""))
+        txt = zig_text(a["file"])
+        if txt is None or a["line"] not in zig_prod_sites(txt):
+            ab_problems["bogus"].append((a, "not a live production reference log site at the pin"))
+            continue
+        if a["line"] in dead_by_file.get(a["file"], ()):
+            ab_problems["dead"].append((a, "also declared in LOG-DEAD-SITES.tsv"))
+            continue
+        pr = oracle_rows.get(a["file"])
+        idxs = arms_containing(pr, a["port_file"]) if pr else []
+        if not idxs:
+            ab_problems["not_in_arm"].append((a, a["file"]))
+            continue
+        if a["port_file"] not in pool:
+            ab_problems["missing_file"].append((a, a["port_file"]))
+            continue
+        code, _nc = pool[a["port_file"]]
+        tspans = test_ranges(code)
+        if not any(n == a["fn"] and not in_spans(d, tspans) for n, d, _o, _c in rust_fn_decls(code)):
+            ab_problems["no_fn"].append((a, f"no production `fn {a['fn']}` in {a['port_file']}"))
+            continue
+        if a["kind"] == "platform-gated" and len(idxs) == len(pr["arms"]):
+            ab_problems["all_arms"].append((a, "a site absent from EVERY arm is not platform-gated"))
+            continue
+        clash = [i for i in idxs if any(b["line"] == a["line"] for b in ab_by_arm.get((a["file"], i), []))]
+        if clash:
+            ab_problems["duplicate"].append((a, f"arm(s) {clash} already declare :{a['line']}"))
+            continue
+        for i in idxs:
+            ab_by_arm.setdefault((a["file"], i), []).append(a)
+
+    def counted(oracle, present):
+        """Live emissions in `present` that count for `oracle`: (path, pos) list."""
+        out_ = []
+        for p, pos, _line, _w in emission_sites(present, pool, emitters, defs):
+            if pos in po_subtract.get(p, {}):
+                continue
+            if p in owner_of:
+                default, specific = owner_of[p]
+                if specific.get(pos, default) != oracle:
+                    continue
+            out_.append((p, pos))
+        return out_
+
     rows, total_expected, total_actual, total_bypass = [], 0, 0, 0
-    po_by_oracle = {}
+    po_by_oracle, arm_expected = {}, {}
     missing_oracle, excluded_rows = [], []
     for r in portmap:
         if r.get("excluded"):
@@ -1485,27 +2017,57 @@ def verdict(portmap, claims, zig_text, rust_text, facade_sources=None, report=Fa
         if txt is None:
             missing_oracle.append(r["oracle"])
             continue
-        expected = len(
-            [x for x in zig_sites(txt) if x not in dead_by_file.get(r["oracle"], ())]
-        )
+        prod = [x for x in zig_prod_sites(txt) if x not in dead_by_file.get(r["oracle"], ())]
+        expected = len(prod)
         total_expected += expected
-        arm_counts, arm_bypass, arm_po = [], [], []
-        for arm in r["arms"]:
+        arm_counts, arm_bypass, arm_po, arm_exp = [], [], [], []
+        for ai, arm in enumerate(r["arms"]):
             present = [f for f in arm if f in pool]
             po = sum(len(po_subtract.get(f, {})) for f in present)
             arm_po.append(po)
-            arm_counts.append(
-                len(rust_emissions(present, pool, emitters, defs)) - po if present else 0
-            )
+            live = counted(r["oracle"], present) if present else []
+            arm_counts.append(len(live))
+            absent_here = ab_by_arm.get((r["oracle"], ai), [])
+            arm_exp.append(expected - len(absent_here))
             arm_bypass.append(len(rust_direct_prints(present, pool)) if present else 0)
-        actual = min(arm_counts) if arm_counts else 0
+            # THE SILENCE CHECK: a row may not excuse a message this arm emits.
+            if absent_here:
+                ref_count = {}
+                for k in prod:
+                    m = zig_site_message(txt, k)
+                    ref_count[m] = ref_count.get(m, 0) + 1
+                gone = {}
+                for a in absent_here:
+                    m = zig_site_message(txt, a["line"])
+                    gone[m] = gone.get(m, 0) + 1
+                for m, n_gone in gone.items():
+                    if m is None:
+                        continue
+                    emitted = [
+                        (p, pool[p][0].count("\n", 0, pos) + 1)
+                        for p, pos in live
+                        if m in {normalise_message(s) for s in
+                                 _string_literals(call_text(pool[p][0], pool[p][1], pos))}
+                    ]
+                    if len(emitted) > ref_count.get(m, 0) - n_gone:
+                        for a in absent_here:
+                            if zig_site_message(txt, a["line"]) == m:
+                                ab_problems["emitted"].append(
+                                    (a, f"arm {ai + 1} emits {m!r} at "
+                                        + ", ".join(f"{p}:{ln}" for p, ln in emitted)
+                                        + f" against {ref_count.get(m, 0)} reference site(s)")
+                                )
+        deficits = [max(0, e - c) for e, c in zip(arm_exp, arm_counts)] or [expected]
+        worst = max(range(len(deficits)), key=lambda i: deficits[i]) if arm_counts else None
+        actual = arm_counts[worst] if worst is not None else 0
         if any(arm_po):
             po_by_oracle[r["oracle"]] = arm_po
+        arm_expected[r["oracle"]] = arm_exp
         # MAX over arms, not min: a bypass on ANY platform arm is a bypass.
         bypass = max(arm_bypass) if arm_bypass else 0
         total_actual += actual
         total_bypass += bypass
-        deficit = max(0, expected - actual)
+        deficit = max(deficits)
         rows.append((r, expected, arm_counts, actual, deficit, bypass))
 
     # --- vacuity defenses (exit 3 territory is handled by main; these are RED) --
@@ -1534,11 +2096,14 @@ def verdict(portmap, claims, zig_text, rust_text, facade_sources=None, report=Fa
                 + (f"   bypass={bypass}/{r['bypass_cap']}" if bypass or r["bypass_cap"] not in ("0", "") else "")
             )
             po = po_by_oracle.get(r["oracle"], [0] * len(arm_counts))
+            ex = arm_expected.get(r["oracle"], [expected] * len(arm_counts))
             out.append(
                 "                       arms: "
                 + " | ".join(
-                    f"{'+'.join(a)}={c}" + (f" (after -{p} port-only)" if p else "")
-                    for a, c, p in zip(r["arms"], arm_counts, po)
+                    f"{'+'.join(a)}={c}"
+                    + (f"/{e}" if e != expected else "")
+                    + (f" (after -{p} port-only)" if p else "")
+                    for a, c, p, e in zip(r["arms"], arm_counts, po, ex)
                 )
             )
             out.append(
@@ -1625,6 +2190,27 @@ def verdict(portmap, claims, zig_text, rust_text, facade_sources=None, report=Fa
             + ", ".join(f"{v} {k}" for k, v in sorted(kinds.items()))
             + " — diagnostics with no reference counterpart, which would otherwise "
             "over-credit their file and mask a real loss (N81)"
+        )
+    if ab_rows:
+        kinds = {}
+        for d in ab_rows:
+            kinds[d["kind"]] = kinds.get(d["kind"], 0) + 1
+        out.append(
+            f"           {len(ab_rows)} ABSENT reference site(s) declared per arm "
+            f"(budget {absent_cap}): "
+            + ", ".join(f"{v} {k}" for k, v in sorted(kinds.items()))
+            + " — the reference reaches these, on a condition the port (or that arm) "
+            "cannot produce; none may be emitted by an arm it excuses"
+        )
+    if at_rows:
+        kinds = {}
+        for d in at_rows:
+            kinds[d["kind"]] = kinds.get(d["kind"], 0) + 1
+        out.append(
+            f"           {len(at_rows)} ATTRIBUTION row(s) (budget {attribution_cap}): "
+            + ", ".join(f"{v} {k}" for k, v in sorted(kinds.items()))
+            + f" — {len(owner_of)} shared port file(s) credit each emission to ONE "
+            "reference file, not to every arm that holds the file"
         )
     if oracle_log_files:
         total_ref = sum(oracle_log_files.values())
@@ -1728,7 +2314,7 @@ def verdict(portmap, claims, zig_text, rust_text, facade_sources=None, report=Fa
             if not d["reason"]:
                 dead_no_reason.append((d["file"], d["line"]))
             txt = zig_text(d["file"])
-            if txt is None or d["line"] not in zig_sites(txt):
+            if txt is None or d["line"] not in zig_prod_sites(txt):
                 dead_bogus.append((d["file"], d["line"]))
         # A port emission carrying a declared-dead site's message is the INVERSE
         # defect and the reason this mechanism is net-new coverage rather than a
@@ -1847,6 +2433,85 @@ def verdict(portmap, claims, zig_text, rust_text, facade_sources=None, report=Fa
                 "removed the declaration."
             )
             rc = 1
+    # --- ABSENT sites: every row names a live site, an arm file and a port fn ---
+    ab_labels = {
+        "bad_kind": f"carry a kind outside {ABSENT_KINDS}",
+        "no_reason": "carry no reason",
+        "bogus": "name a line that is not a live PRODUCTION reference log site at the pin",
+        "dead": "name a site LOG-DEAD-SITES.tsv already subtracts",
+        "not_in_arm": "name a port file in none of the reference file's arms",
+        "missing_file": "name a port file that does not exist",
+        "no_fn": "name a port fn that does not exist in production code (STALE)",
+        "duplicate": "declare a site an earlier row already declares on the same arm",
+        "all_arms": "are `platform-gated` but cover every arm",
+        "emitted": "excuse a site whose message the arm STILL EMITS — the row would "
+                   "silence a real emission; delete it (the site is ported)",
+    }
+    for key, label in ab_labels.items():
+        bad = ab_problems.get(key, [])
+        if bad:
+            out.append(f"RED: {len(bad)} LOG-ABSENT-SITES.tsv declaration(s) {label}:")
+            for a, detail in bad[:8]:
+                out.append(
+                    f"       :{a['lineno']} {a['file']}:{a['line']} -> {a['port_file']} fn {a['fn']}"
+                    + (f"  ({detail})" if detail else "")
+                )
+            rc = 1
+    if absent_cap is not None and len(ab_rows) != absent_cap:
+        out.append(
+            f"RED: {len(ab_rows)} absent-site declaration(s), budget {absent_cap} — a "
+            "two-way RATCHET: each row removes a reference site from an arm's "
+            "expectation, so the list must not grow or shrink silently. Edit "
+            "`#!absent-site-cap` deliberately."
+        )
+        rc = 1
+    # --- ATTRIBUTION: shared files are owned; owner rows resolve and are plausible
+    at_labels = {
+        "missing_file": "name a port file that does not exist",
+        "not_in_arm": "name a port file that is not in the named reference file's arms",
+        "bad_kind": f"carry a kind outside {ATTRIBUTION_KINDS}",
+        "no_reason": "carry no reason",
+        "not_shared": "give a default owner to a port file only one reference file holds",
+        "no_default": "own an emission in a file with no `default-owner` row",
+        "unowned_shared": "— these port files are in SEVERAL reference files' arms with no "
+                          "`default-owner` row, so every emission would credit every one of "
+                          "them (the overlap mask):",
+        "stale": "match NO live emission (STALE)",
+        "ambiguous": "match MORE THAN ONE live emission (AMBIGUOUS)",
+        "duplicate": "select an emission (or a default) another row already selects",
+        "port_only": "own an emission LOG-PORT-ONLY.tsv declares port-only",
+        "redundant": "restate the default owner",
+        "implausible": "attribute an emission to a reference file it does not match — "
+                       "no literal matches that file's sites at least as well as the "
+                       "others', and it is not a call of an emitter defined in its arm",
+    }
+    fa_labels = {
+        "missing_file": "name a facade in a port file that does not exist",
+        "no_fn": "name a facade fn with no single production definition",
+        "no_emission": "name a facade fn whose body emits nothing",
+        "redundant": "name a facade that is already a `log_*` emitter",
+        "duplicate": "declare the same facade twice",
+    }
+    for d, labels in ((fa_problems, fa_labels), (at_problems, at_labels)):
+        for key, bad in d.items():
+            if not bad:
+                continue
+            label = labels[key]
+            out.append(f"RED: {len(bad)} LOG-ATTRIBUTION.tsv declaration(s) {label}")
+            for row, detail in bad[:8]:
+                out.append(
+                    f"       :{row['lineno']} {row['file']} fn {row['fn']}"
+                    + (f"#{row['occurrence']}" if row.get("occurrence") else "")
+                    + f" match {row['match']!r}"
+                    + (f"  ({detail})" if detail else "")
+                )
+            rc = 1
+    if attribution_cap is not None and len(at_rows) != attribution_cap:
+        out.append(
+            f"RED: {len(at_rows)} attribution row(s), budget {attribution_cap} — a two-way "
+            "RATCHET; edit `#!attribution-cap` deliberately."
+        )
+        rc = 1
     bad_excl = []
     for r in excluded_rows:
         kind = r["reason"].split(":", 1)[0].strip()
@@ -1887,8 +2552,10 @@ def verdict(portmap, claims, zig_text, rust_text, facade_sources=None, report=Fa
             "diagnostics than the allowance permits:"
         )
         for r, expected, arm_counts, actual, deficit, allowance in shortfalls:
+            ex = arm_expected.get(r["oracle"], [expected] * len(arm_counts))
             arms = " | ".join(
-                f"{'+'.join(a)}={c}" for a, c in zip(r["arms"], arm_counts)
+                f"{'+'.join(a)}={c}" + (f" (expects {e} after declared-absent sites)" if e != expected else "")
+                for a, c, e in zip(r["arms"], arm_counts, ex)
             )
             out.append(
                 f"       {r['oracle']}: reference={expected} port={actual} "
@@ -2963,6 +3630,318 @@ def self_test():
             except ValueError:
                 got = "ValueError"
             cases.append((name, got, want))
+
+    # 10m. TEST-ONLY REFERENCE SITES (task tail-s1b). The port side never counted
+    #      #[cfg(test)]; the reference side counted everything, so a `log.*` in the
+    #      reference's own test helper was demanded of production code
+    #      (`tmux/viewer.zig:1497`). Five shapes, each pinned by line number.
+    ZIG_TESTS = (
+        'const log = std.log.scoped(.x);\n'                              # 1
+        'fn prod() void { log.warn("prod", .{}); }\n'                   # 2 counted
+        'test "a" {\n'                                                   # 3
+        '    log.warn("in a test block", .{});\n'                        # 4 test-only
+        '    helper(1);\n'                                               # 5
+        '}\n'                                                            # 6
+        'fn helper(i: usize) void {\n'                                   # 7
+        '    log.warn("helper step {}", .{i});\n'                        # 8 test-only
+        '    inner();\n'                                                 # 9
+        '}\n'                                                            # 10
+        'fn inner() void { log.warn("only via helper", .{}); }\n'       # 11 test-only (fixed point)
+        'fn shared() void { log.warn("shared", .{}); }\n'               # 12 counted
+        'pub fn exported() void { log.warn("pub", .{}); }\n'            # 13 counted (pub)
+        'fn unused() void { log.warn("never called", .{}); }\n'         # 14 counted (dead, not test)
+        'fn caller() void { shared(); }\n'                               # 15
+        'test "b" { shared(); exported(); }\n'                           # 16
+    )
+    cases.append(("test-only rule: sites in a test block, a test-only helper and its "
+                  "callee are dropped; production, pub and uncalled ones are kept",
+                  zig_prod_sites(ZIG_TESTS), [2, 12, 13, 14]))
+    cases.append(("test-only rule: the raw scan still sees all seven",
+                  zig_sites(ZIG_TESTS), [2, 4, 8, 11, 12, 13, 14]))
+    zig["src/testonly.zig"] = ZIG_TESTS
+    rs["c/testonly.rs"] = (
+        'fn a() { log::warn!(target: S, "prod"); log::warn!(target: S, "shared"); }\n'
+        'fn b() { log::warn!(target: S, "pub"); log::warn!(target: S, "never called"); }\n'
+    )
+    cases.append(("...and a port with exactly the production sites reconciles",
+                  run([("src/testonly.zig", "c/testonly.rs", "0", "")])[0], 0))
+
+    # 10n. ABSENT REFERENCE SITES (task tail-s1b). `src/ab.zig` has three sites;
+    #      :3 is the catch arm of a call the port cannot fail, :4 shares :2's text.
+    zig["src/ab.zig"] = (
+        'const log = std.log.scoped(.x);\n'
+        'fn a() void { log.warn("site one", .{}); }\n'
+        'fn b() void { x() catch log.warn("oom arm", .{}); }\n'
+        'fn c() void { log.warn("site one", .{}); }\n'
+        'test "t" { log.warn("test only", .{}); }\n'
+    )
+    rs["c/ab_mac.rs"] = (
+        'fn a() { log::warn!(target: S, "site one"); }\n'
+        'fn b() { x(); }\n'
+        'fn c() { log::warn!(target: S, "site one"); }\n'
+    )
+    rs["c/ab_lin.rs"] = 'fn a() { log::warn!(target: S, "site one"); }\nfn b() { x(); }\n'
+    rs["c/ab_emits.rs"] = rs["c/ab_mac.rs"] + 'fn d() { log::warn!(target: S, "oom arm"); }\n'
+
+    def ab_row(**kw):
+        row = {"file": "src/ab.zig", "line": 3, "port_file": "c/ab_mac.rs", "fn": "b",
+               "kind": "infallible-call", "reason": "fixture", "lineno": 1}
+        row.update(kw)
+        return row
+
+    def run_ab(arms, rows, cap=None, allowance="0", dead=None):
+        pm = [{"oracle": "src/ab.zig", "excluded": False, "arms": arms,
+               "allowance": allowance, "bypass_cap": "0",
+               "reason": "fixture" if allowance != "0" else "", "lineno": 0}]
+        return verdict(pm, {}, zt, rt, oracle_log_files=None, absent_sites=rows,
+                       absent_cap=len(rows) if cap is None else cap,
+                       dead_sites=dead, dead_site_cap=len(dead) if dead else None)
+
+    MAC = [["c/ab_mac.rs"]]
+    cases.append(("an absent-declared site comes off the arm's expectation",
+                  run_ab(MAC, [ab_row()])[0], 0))
+    cases.append(("...and WITHOUT the declaration the same arm is short",
+                  run_ab(MAC, [])[0], 1))
+    cases.append(("an absent row naming a non-site line is RED",
+                  run_ab(MAC, [ab_row(line=1)])[0], 1))
+    cases.append(("an absent row naming a TEST-ONLY reference line is RED",
+                  run_ab(MAC, [ab_row(line=5)])[0], 1))
+    cases.append(("an absent row whose port file is in no arm is RED",
+                  run_ab(MAC, [ab_row(port_file="c/ab_lin.rs")])[0], 1))
+    cases.append(("an absent row naming a port fn that does not exist is RED (stale)",
+                  run_ab(MAC, [ab_row(fn="gone")])[0], 1))
+    cases.append(("an absent row with an unknown kind is RED",
+                  run_ab(MAC, [ab_row(kind="because")])[0], 1))
+    cases.append(("an absent row with no reason is RED",
+                  run_ab(MAC, [ab_row(reason="")])[0], 1))
+    cases.append(("absent rows OVER budget", run_ab(MAC, [ab_row()], cap=0)[0], 1))
+    cases.append(("absent rows UNDER budget (stale)", run_ab(MAC, [ab_row()], cap=2)[0], 1))
+    cases.append(("two absent rows for one site on one arm are RED",
+                  run_ab(MAC, [ab_row(), ab_row(lineno=2)])[0], 1))
+    cases.append(("a site declared both dead and absent is RED",
+                  run_ab(MAC, [ab_row()], dead=[{"file": "src/ab.zig", "line": 3,
+                                                  "kind": "dead-branch", "reason": "x",
+                                                  "lineno": 1}])[0], 1))
+    # THE SILENCE CHECK. The arm emits the excused message -> RED, although the
+    # count alone would read GREEN (3 sites - 1 absent = 2 <= 3 emissions).
+    cases.append(("an absent row whose message the arm STILL EMITS is RED",
+                  run_ab([["c/ab_emits.rs"]], [ab_row(port_file="c/ab_emits.rs")])[0], 1))
+    # A shared message: :2 and :4 both say "site one". Declaring :4 absent while
+    # the arm emits TWO copies is RED (one would be silenced); with one copy it is
+    # the honest state (:2 live, :4 absent).
+    cases.append(("a shared-message site may be declared absent when one copy is emitted",
+                  run_ab([["c/ab_lin.rs"]], [ab_row(port_file="c/ab_lin.rs"),
+                                             ab_row(line=4, port_file="c/ab_lin.rs", fn="a",
+                                                    lineno=2)])[0], 0))
+    cases.append(("...but not when the arm emits both copies",
+                  run_ab(MAC, [ab_row(), ab_row(line=4, fn="c", lineno=2)])[0], 1))
+    # PER ARM. A row applies only to arms that contain its port file.
+    TWIN = [["c/ab_mac.rs"], ["c/ab_lin.rs"]]
+    # `c/ab_mac2.rs` is a byte copy of `c/ab_mac.rs` in the OTHER arm: the row
+    # names ab_mac.rs, so ab_mac2.rs's arm still expects :3 and is RED. A row
+    # applied to every arm would turn this GREEN.
+    rs["c/ab_mac2.rs"] = rs["c/ab_mac.rs"]
+    cases.append(("an absent row covers only the arms holding its port file",
+                  run_ab([["c/ab_mac.rs"], ["c/ab_mac2.rs"]], [ab_row()])[0], 1))
+    cases.append(("...each arm declares its own",
+                  run_ab(TWIN, [ab_row(), ab_row(port_file="c/ab_lin.rs", line=4, fn="a",
+                                                 kind="platform-gated", lineno=2),
+                                ab_row(port_file="c/ab_lin.rs", lineno=3)])[0], 0))
+    cases.append(("a platform-gated row that covers EVERY arm is RED",
+                  run_ab(MAC, [ab_row(kind="platform-gated")])[0], 1))
+    ab_header = "oracle_file\tline\tport_file\tport_fn\tkind\treason\n"
+    ab_good = "src/ab.zig\t3\tc/ab_mac.rs\tb\tinfallible-call\tfixture\n"
+    for name, text, want in (
+        ("a well-formed LOG-ABSENT-SITES.tsv loads",
+         "#!absent-site-cap entries=1\n" + ab_header + ab_good, (1, 1)),
+        ("LOG-ABSENT-SITES.tsv without a cap loads cap=None (BLOCKED)",
+         ab_header + ab_good, (1, None)),
+        ("an absent row with a non-integer line is malformed",
+         "#!absent-site-cap entries=1\n" + ab_header + ab_good.replace("\t3\t", "\tx\t"),
+         "ValueError"),
+        ("an absent row with the wrong column count is malformed",
+         "#!absent-site-cap entries=1\n" + ab_header + "src/ab.zig\t3\tc/ab_mac.rs\n",
+         "ValueError"),
+    ):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "LOG-ABSENT-SITES.tsv")
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(text)
+            try:
+                rows_, cap_ = load_absent_sites(path)
+                got = (len(rows_), cap_)
+            except ValueError:
+                got = "ValueError"
+        cases.append((name, got, want))
+
+    # 10o. ATTRIBUTION (task tail-s1b, N190). `c/shared.rs` ports BOTH `src/own_p.zig`
+    #      (two sites) and `src/own_q.zig` (one site): the `main_c.zig` shape, where
+    #      the shared file used to credit every emission to both files.
+    zig["src/own_p.zig"] = (
+        'const log = std.log.scoped(.x);\n'
+        'fn a() void { log.warn("initializing the app failed err={}", .{e}); }\n'
+        'fn b() void { log.warn("app tick failed err={}", .{e}); }\n'
+    )
+    zig["src/own_q.zig"] = (
+        'const log = std.log.scoped(.x);\n'
+        'fn a() void { log.err("CLI action failed error={}", .{e}); }\n'
+    )
+    rs["c/shared.rs"] = (
+        'fn p1() { log::warn!(target: S, "initializing the app failed err={e:?}"); }\n'
+        'fn p2() { log::warn!(target: S, "app tick failed err={e:?}"); }\n'
+        'fn q1() { log::error!(target: S, "CLI action failed error={e:?}"); }\n'
+    )
+    rs["c/shared_q_lost.rs"] = (
+        'fn p1() { log::warn!(target: S, "initializing the app failed err={e:?}"); }\n'
+        'fn p2() { log::warn!(target: S, "app tick failed err={e:?}"); }\n'
+    )
+
+    def at_row(**kw):
+        row = {"kind": "owner", "oracle": "src/own_q.zig", "file": "c/shared.rs", "fn": "q1",
+               "occurrence": None, "match": '"CLI action failed', "reason": "fixture",
+               "lineno": 2}
+        row.update(kw)
+        return row
+
+    def at_default(**kw):
+        row = {"kind": "default-owner", "oracle": "src/own_p.zig", "file": "c/shared.rs",
+               "fn": "*", "occurrence": None, "match": "*", "reason": "fixture", "lineno": 1}
+        row.update(kw)
+        return row
+
+    def run_at(port, rows, cap=None, allow_q="0", port_only_rows=None):
+        pm = [{"oracle": "src/own_p.zig", "excluded": False, "arms": [[port]],
+               "allowance": "0", "bypass_cap": "0", "reason": "", "lineno": 0},
+              {"oracle": "src/own_q.zig", "excluded": False, "arms": [[port]],
+               "allowance": allow_q, "bypass_cap": "0",
+               "reason": "fixture" if allow_q != "0" else "", "lineno": 0}]
+        return verdict(pm, {}, zt, rt, oracle_log_files=None, attribution=rows,
+                       attribution_cap=len(rows) if cap is None else cap,
+                       port_only=port_only_rows or [],
+                       port_only_cap=len(port_only_rows or []))
+
+    # THE MASK, before and after. `c/shared_q_lost.rs` has lost own_q's only site.
+    cases.append(("a shared port file with no default owner is RED",
+                  run_at("c/shared.rs", [])[0], 1))
+    cases.append(("attributed: a shared file that lost the other file's site goes RED",
+                  run_at("c/shared_q_lost.rs", [at_default()])[0], 1))
+    cases.append(("...the intact file reconciles with the owner row",
+                  run_at("c/shared.rs", [at_default(), at_row()])[0], 0))
+    cases.append(("...WITHOUT the owner row the default owner takes it (own_q short)",
+                  run_at("c/shared.rs", [at_default()])[0], 1))
+    cases.append(("an owner row matching no emission is RED (stale)",
+                  run_at("c/shared.rs", [at_default(), at_row(match='"gone"')])[0], 1))
+    cases.append(("an owner row matching two emissions is RED (ambiguous)",
+                  run_at("c/shared.rs", [at_default(), at_row(fn="p1", match="log::warn!")])[0], 1))
+    cases.append(("an owner row naming the default owner is RED (redundant)",
+                  run_at("c/shared.rs", [at_default(), at_row(oracle="src/own_p.zig")])[0], 1))
+    cases.append(("an IMPLAUSIBLE owner row (the text matches the other file) is RED",
+                  run_at("c/shared.rs", [at_default(), at_row(fn="p2", match='"app tick')])[0], 1))
+    # (Checked by its own RED line: the count alone is also short here, so rc
+    # cannot tell the two reasons apart.)
+    cases.append(("an owner row on a port-only emission is RED for that reason",
+                  any("declares port-only" in line for line in run_at(
+                      "c/shared.rs", [at_default(), at_row()], allow_q="1",
+                      port_only_rows=[po_row(oracle="src/own_q.zig", file="c/shared.rs",
+                                             fn="q1", match='"CLI action failed')])[1]),
+                  True))
+    cases.append(("a second default owner for one file is RED",
+                  run_at("c/shared.rs", [at_default(), at_default(oracle="src/own_q.zig",
+                                                                  lineno=3)])[0], 1))
+    cases.append(("attribution rows OVER budget",
+                  run_at("c/shared.rs", [at_default(), at_row()], cap=1)[0], 1))
+    cases.append(("attribution rows UNDER budget (stale)",
+                  run_at("c/shared.rs", [at_default(), at_row()], cap=3)[0], 1))
+    cases.append(("an attribution row with no reason is RED",
+                  run_at("c/shared.rs", [at_default(), at_row(reason="")])[0], 1))
+    # A default owner on a file only one reference file holds is meaningless.
+    cases.append(("a default owner for an UNSHARED file is RED",
+                  verdict([{"oracle": "src/ok.zig", "excluded": False, "arms": [["c/ok.rs"]],
+                            "allowance": "0", "bypass_cap": "0", "reason": "", "lineno": 0}],
+                          {}, zt, rt, attribution=[at_default(oracle="src/ok.zig", file="c/ok.rs")],
+                          attribution_cap=1)[0], 1))
+    # HOME PLAUSIBILITY: a call of a `log_*` emitter carries no literal; it may be
+    # owned by the file whose arm DEFINES the emitter, named by its module path.
+    zig["src/ver_a.zig"] = 'const log = std.log.scoped(.x);\nfn v() void { log.info("A version", .{}); }\n'
+    zig["src/app.zig"] = 'const log = std.log.scoped(.x);\nfn a() void { log.info("app", .{}); }\n'
+    rs["c/ver_a.rs"] = 'pub fn log_version() { log::info!(target: S, "A version"); }\n'
+    rs["c/ver_b.rs"] = 'pub fn log_version() { log::info!(target: S, "B version"); }\n'
+    rs["c/app.rs"] = ('fn new() { log::info!(target: S, "app"); crate::ver_a::log_version();'
+                      ' crate::ver_b::log_version(); }\n')
+    VER_PM = [{"oracle": "src/app.zig", "excluded": False, "arms": [["c/app.rs"]],
+               "allowance": "0", "bypass_cap": "0", "reason": "", "lineno": 0},
+              {"oracle": "src/ver_a.zig", "excluded": False, "arms": [["c/ver_a.rs", "c/app.rs"]],
+               "allowance": "0", "bypass_cap": "0", "reason": "", "lineno": 0}]
+    VER_DEF = at_default(oracle="src/app.zig", file="c/app.rs")
+    VER_PO = [po_row(oracle="src/app.zig", file="c/app.rs", fn="new#2", match="log_version()")]
+
+    def run_ver(occ):
+        return verdict(VER_PM, {}, zt, rt, attribution=[VER_DEF, at_row(
+            oracle="src/ver_a.zig", file="c/app.rs", fn="new", occurrence=occ,
+            match="log_version()")], attribution_cap=2,
+            port_only=[dict(VER_PO[0], fn="new", occurrence=3 - occ)], port_only_cap=1)[0]
+
+    cases.append(("an emitter call is owned by the file whose arm DEFINES it (module path)",
+                  run_ver(1), 0))
+    cases.append(("...and the same row on the OTHER module's call is RED (implausible)",
+                  run_ver(2), 1))
+    # FACADE: a helper not named `log_*` whose CALL SITES are the emissions.
+    zig["src/fold.zig"] = (
+        'const log = std.log.scoped(.x);\n'
+        'fn a() void { if (remove(x) == 0) log.warn("unable to remove timer", .{}); }\n'
+        'fn b() void { if (remove(y) == 0) log.warn("unable to remove idle source", .{}); }\n'
+        'fn c() void { if (remove(z) == 0) log.warn("unable to remove reset source", .{}); }\n'
+    )
+    rs["c/fold.rs"] = (
+        'fn remove_id(id: u32, what: &str) {\n'
+        '    if !remove(id) { log::warn!(target: S, "unable to remove {what}"); }\n}\n'
+        'fn dispose() { remove_id(1, "timer"); remove_id(2, "idle source");'
+        ' remove_id(3, "reset source"); }\n'
+    )
+    rs["c/fold_stub.rs"] = rs["c/fold.rs"].replace(
+        'log::warn!(target: S, "unable to remove {what}");', "")
+    FACADE = {"kind": "facade", "oracle": "src/fold.zig", "file": "c/fold.rs",
+              "fn": "remove_id", "occurrence": None, "match": "*", "reason": "fixture",
+              "lineno": 1}
+
+    def run_fold(port, rows, allowance="0"):
+        pm = [{"oracle": "src/fold.zig", "excluded": False, "arms": [[port]],
+               "allowance": allowance, "bypass_cap": "0",
+               "reason": "fixture" if allowance != "0" else "", "lineno": 0}]
+        return verdict(pm, {}, zt, rt, attribution=rows, attribution_cap=len(rows))[0]
+
+    cases.append(("a FACADE's call sites are the emissions (3 folded sites reconcile)",
+                  run_fold("c/fold.rs", [FACADE]), 0))
+    cases.append(("...without it the body counts once and two sites read missing",
+                  run_fold("c/fold.rs", [], allowance="2"), 0))
+    cases.append(("a facade whose body emits nothing is RED",
+                  run_fold("c/fold_stub.rs", [dict(FACADE, file="c/fold_stub.rs")]), 1))
+    cases.append(("a facade naming a fn that does not exist is RED",
+                  run_fold("c/fold.rs", [dict(FACADE, fn="gone")]), 1))
+    at_header = "kind\toracle_file\tport_file\tfunction\tmatch\treason\n"
+    for name, text, want in (
+        ("a well-formed LOG-ATTRIBUTION.tsv loads",
+         "#!attribution-cap entries=1\n" + at_header
+         + "default-owner\tsrc/own_p.zig\tc/shared.rs\t*\t*\tfixture\n", (1, 1)),
+        ("LOG-ATTRIBUTION.tsv without a cap loads cap=None (BLOCKED)",
+         at_header + "default-owner\tsrc/own_p.zig\tc/shared.rs\t*\t*\tfixture\n", (1, None)),
+        ("a default-owner row with a function is malformed",
+         "#!attribution-cap entries=1\n" + at_header
+         + "default-owner\tsrc/own_p.zig\tc/shared.rs\tp1\t*\tfixture\n", "ValueError"),
+        ("a facade row with a match is malformed",
+         "#!attribution-cap entries=1\n" + at_header
+         + "facade\tsrc/fold.zig\tc/fold.rs\tremove_id\t\"x\"\tfixture\n", "ValueError"),
+    ):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "LOG-ATTRIBUTION.tsv")
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(text)
+            try:
+                rows_, cap_ = load_attribution(path)
+                got = (len(rows_), cap_)
+            except ValueError:
+                got = "ValueError"
+        cases.append((name, got, want))
     # 11. a LOG row citing a file with no portmap entry
     cases.append(
         ("undeclared reference file",
@@ -3157,6 +4136,21 @@ def main():
             file=sys.stderr,
         )
         return 3
+    try:
+        absent_sites, absent_cap = load_absent_sites(ABSENT_SITES)
+        attribution, attribution_cap = load_attribution(ATTRIBUTION)
+    except ValueError as exc:
+        print(f"BLOCKED: {exc}", file=sys.stderr)
+        return 3
+    if absent_cap is None or attribution_cap is None:
+        print(
+            "BLOCKED: LOG-ABSENT-SITES.tsv (`#!absent-site-cap entries=N`) or\n"
+            "         LOG-ATTRIBUTION.tsv (`#!attribution-cap entries=N`) is missing or\n"
+            "         carries no cap directive. Each row moves a count; a cap that can be\n"
+            "         disabled by deleting a line is not a cap.",
+            file=sys.stderr,
+        )
+        return 3
     oracle_log_files = oracle_files_with_log_sites(
         zig_walk, dead_lines_by_file(dead_sites)
     )
@@ -3212,6 +4206,10 @@ def main():
         dead_site_cap=dead_site_cap,
         port_only=port_only,
         port_only_cap=port_only_cap,
+        absent_sites=absent_sites,
+        absent_cap=absent_cap,
+        attribution=attribution,
+        attribution_cap=attribution_cap,
     )
     print("\n".join(lines))
     return rc

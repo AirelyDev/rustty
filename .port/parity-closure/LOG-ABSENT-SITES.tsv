@@ -1,0 +1,74 @@
+# LOG-ABSENT-SITES.tsv - reference `log.*` sites the reference REACHES, on a condition the port
+# (or one platform arm of it) cannot produce. Subtracted from the expectation of every arm of the
+# reference file that contains `port_file`.
+#
+# Read .port/tools/gates/check_log_reconcile.py first; this file is only data.
+#
+# WHY (task tail-s1b). Before this file the only way to account for such a site was a non-zero
+# ALLOWANCE in LOG-PORTMAP.tsv, whose `reason` names the sites in prose nothing checks: a site that
+# was later ported, or a reason that named the wrong line, stayed invisible. Here each site is one
+# row the gate verifies. It is NOT LOG-DEAD-SITES.tsv: a dead site is one the REFERENCE never
+# reaches (a property of the reference alone); these the reference does reach.
+#
+# oracle_file  reference path at pin 20abdb50a.
+# line         the exact line of the reference `log.*` call. RED unless it is a live PRODUCTION
+#              site at the pin (not test-only, not declared dead).
+# port_file    the Rust file where the reference call's code is ported. It selects the arm(s): the
+#              row applies to every arm of oracle_file that contains it. RED if no arm does.
+# port_fn      the Rust fn that ports the reference code holding the site (where the catch arm
+#              would be). RED (stale) unless a production `fn port_fn` exists in port_file.
+# kind         infallible-call  - the catch arm of a call that cannot fail in the port (an
+#                                 allocation - Rust aborts on OOM; a `bufPrint` ported as a
+#                                 growable `format!`; a binding that returns `()` or a value).
+#              unrepresentable-state - a guard on a state the port's types cannot hold (a null
+#                                 user-data pointer in what is a typed closure, a null reply that
+#                                 is an `Ok(Variant)`).
+#              platform-gated   - the reference compiles the site out on the arm's platform. RED
+#                                 if the row covers every arm.
+# reason       mandatory: the port fn, and why the error or state cannot occur there.
+#
+# THE SILENCE CHECK: an arm the row covers may not emit the site's message more often than the
+# reference sites still counted for it (a site that has since been ported is RED until its row is
+# deleted). The row count is a two-way ratchet; a missing directive BLOCKS.
+#!absent-site-cap entries=40
+oracle_file	line	port_file	port_fn	kind	reason
+src/apprt/embedded.zig	353	crates/rustty-apprt/src/embedded.rs	performPreAction	infallible-call	`value.config.clone(self.core_app.alloc)` fails only with `Allocator.Error`; the port's `clone_config` is infallible (Rust allocation aborts on OOM, so the arm cannot be reached). PORT NOTE at the `.config_change` arm.
+src/apprt/embedded.zig	559	crates/rustty-apprt/src/embedded.rs	init	infallible-call	`WorkingDirectory.finalize(arena)` is `Allocator.Error!void` (Config.zig:5525); the port's `WorkingDirectory::finalize` returns `()` (owned allocation, Rust allocation aborts on OOM, so the arm cannot be reached). PORT NOTE at the call.
+src/apprt/embedded.zig	828	crates/rustty-apprt/src/embedded.rs	completeKittyClipboardWrite	infallible-call	`conv_alloc.alloc(CAPI.ClipboardContent, n)` from a `stackFallback(1024)` allocator; the port builds an owned `Vec` (Rust allocation aborts on OOM, so the arm cannot be reached).
+src/apprt/embedded.zig	883	crates/rustty-apprt/src/embedded.rs	completeClipboardRequest	infallible-call	the `contents` `conv_alloc.alloc` (stackFallback); ported as an owned `Vec` (Rust allocation aborts on OOM, so the arm cannot be reached). The same message's :857/:946 sites (the `completeClipboardRequest` error switch) ARE live, at embedded.rs `completeKittyClipboardWrite` and `completeClipboardRequest`.
+src/apprt/embedded.zig	899	crates/rustty-apprt/src/embedded.rs	completeClipboardRequest	infallible-call	the `available` `conv_alloc.alloc` (stackFallback); ported as an owned `Vec` (Rust allocation aborts on OOM, so the arm cannot be reached).
+src/apprt/embedded.zig	1983	crates/rustty-apprt-c/src/lib.rs	rustty_surface_tty_name	infallible-call	`alloc.dupeZ(u8, tty_name)`; the port copies with `to_vec()` (Rust allocation aborts on OOM, so the arm cannot be reached). PORT NOTE at the site.
+src/apprt/gtk/class/global_shortcuts.zig	239	crates/rustty-apprt/src/gtk/class/global_shortcuts.rs	build_shortcut_map	infallible-call	`error.WriteFailed` from formatting the trigger into a fixed 1024-byte stack buffer; the port formats it into a growable `String`, which cannot fail. Consolidated PORT NOTE at `fn refresh`.
+src/apprt/gtk/class/global_shortcuts.zig	345	crates/rustty-apprt/src/gtk/class/global_shortcuts.rs	on_response	infallible-call	`alloc.dupeZ` of the session handle into the arena; the port keeps an owned `String` (Rust allocation aborts on OOM, so the arm cannot be reached).
+src/apprt/gtk/class/global_shortcuts.zig	365	crates/rustty-apprt/src/gtk/class/global_shortcuts.rs	on_response	infallible-call	`shortcuts.request(.bind_shortcuts)` is `Allocator.Error!void` (global_shortcuts.zig:378); the port's `request` returns `()` (Rust allocation aborts on OOM, so the arm cannot be reached).
+src/apprt/gtk/class/global_shortcuts.zig	567	crates/rustty-apprt/src/gtk/class/global_shortcuts.rs	set_dbus_connection	infallible-call	`self.refresh()` is `Allocator.Error!void` (global_shortcuts.zig:184); the port's `refresh` returns `()` (Rust allocation aborts on OOM, so the arm cannot be reached).
+src/apprt/gtk/class/global_shortcuts.zig	580	crates/rustty-apprt/src/gtk/class/global_shortcuts.rs	constructed	infallible-call	`propConfig`'s `self.refresh()` (Allocator.Error only); the port connects `notify::config` to `refresh` in `constructed`, and `refresh` returns `()`.
+src/apprt/gtk/class/surface.zig	2735	crates/rustty-apprt/src/gtk/class/surface.rs	drop	infallible-call	`stream.toOwnedSliceSentinel(0)` on the `Allocating` writer fails only with OutOfMemory; the port's drop handler builds an owned `String` (Rust allocation aborts on OOM, so the arm cannot be reached).
+src/apprt/gtk/class/surface.zig	2762	crates/rustty-apprt/src/gtk/class/surface.rs	drop	infallible-call	the second `toOwnedSliceSentinel(0)` of the drop handler (single-file branch); same reason as :2735.
+src/apprt/gtk/portal/OpenURI.zig	225	crates/rustty-apprt/src/gtk/portal/open_uri.rs	request_callback	unrepresentable-state	`unsubscribeFromResponse` warns when `self.dbus` is null because it needs the connection to call `signalUnsubscribe`; the port's subscription is an RAII `SignalSubscription` that unsubscribes on drop, so there is no connection to lack (PORT NOTE at the drop).
+src/apprt/gtk/portal/OpenURI.zig	369	crates/rustty-apprt/src/gtk/portal/open_uri.rs	request_callback	unrepresentable-state	the reference recovers the D-Bus connection by downcasting the untyped `?*gobject.Object` a C async callback receives; the port's closure captures the typed connection, so there is no null source object (PORT NOTE above `request_callback`).
+src/apprt/gtk/portal/OpenURI.zig	373	crates/rustty-apprt/src/gtk/portal/open_uri.rs	request_callback	unrepresentable-state	the same downcast's wrong-type arm; a typed capture cannot hold another type (PORT NOTE above `request_callback`).
+src/apprt/gtk/portal/OpenURI.zig	393	crates/rustty-apprt/src/gtk/portal/open_uri.rs	request_callback	unrepresentable-state	`callFinish` returning null; gio-rs's async call yields `Result<Variant, Error>`, and its `Ok` arm is never null (PORT NOTE above `request_callback`).
+src/apprt/gtk/portal/OpenURI.zig	454	crates/rustty-apprt/src/gtk/portal/open_uri.rs	response_received	unrepresentable-state	the null user-data guard of a C signal callback; the port's handler is a Rust closure over an `Rc<Inner>` (PORT NOTE above `response_received`).
+src/apprt/gtk/portal/OpenURI.zig	532	crates/rustty-apprt/src/gtk/portal/open_uri.rs	cleanup	unrepresentable-state	the null user-data guard of the cleanup timer's C callback; the port's timer closure captures `Rc<Inner>` (PORT NOTE above `response_received`).
+src/apprt/gtk/winproto/wayland/Globals.zig	157	crates/rustty-apprt/src/gtk/winproto/wayland/globals.rs	bind_global	infallible-call	`registry.bind(...) catch` in the zig-wayland binding; wayland-rs `WlRegistry::bind` returns the proxy and has no synchronous failure (PORT NOTE above `bind_global`).
+src/apprt/gtk/winproto/wayland/Globals.zig	239	crates/rustty-apprt/src/gtk/winproto/wayland/globals.rs	event	infallible-call	`alloc.dupeZ` of the output name; the port's name is already an owned `String` (Rust allocation aborts on OOM, so the arm cannot be reached). PORT NOTE at the site.
+src/renderer/generic.zig	991	crates/rustty-renderer/src/generic/linux_impl.rs	loop_enter	platform-gated	`displayLinkCallback` exists only to be registered as a CVDisplayLink output callback by `syncDisplayLink`, whose first line is `if (comptime DisplayLink == void) return;`; `DisplayLink` is `void` off macOS (generic.zig:41), so Zig never analyses the callback on Linux. The macOS arm emits it at metal/cvdisplaylink.rs `output_callback` (review tail-s1 N1). `loop_enter` is where the Linux port documents the gate.
+src/renderer/generic.zig	1169	crates/rustty-renderer/src/generic/linux_impl.rs	set_macos_display_id	platform-gated	inside `syncDisplayLink` after `if (comptime DisplayLink == void) return;` (generic.zig:1160); compiled out on Linux. Live on macOS at generic.rs `sync_display_link`.
+src/renderer/generic.zig	1177	crates/rustty-renderer/src/generic/linux_impl.rs	set_macos_display_id	platform-gated	the same comptime-dead `syncDisplayLink` body (generic.zig:1160) on Linux.
+src/renderer/generic.zig	1183	crates/rustty-renderer/src/generic/linux_impl.rs	set_macos_display_id	platform-gated	the same comptime-dead `syncDisplayLink` body (generic.zig:1160) on Linux.
+src/renderer/generic.zig	1188	crates/rustty-renderer/src/generic/linux_impl.rs	set_macos_display_id	platform-gated	the same comptime-dead `syncDisplayLink` body (generic.zig:1160) on Linux.
+src/renderer/generic.zig	1190	crates/rustty-renderer/src/generic/linux_impl.rs	set_macos_display_id	platform-gated	the same comptime-dead `syncDisplayLink` body (generic.zig:1160) on Linux.
+src/renderer/generic.zig	1558	crates/rustty-renderer/src/generic.rs	update_frame	infallible-call	`self.rebuildCells(...) catch` - the reference's `rebuildCells` fails only on allocation; the port's `rebuild_cells` returns `()` (Rust allocation aborts on OOM, so the arm cannot be reached). S115-F4 (WAIVED).
+src/renderer/generic.zig	1558	crates/rustty-renderer/src/generic/linux_impl.rs	update_frame	infallible-call	the Linux twin of the generic.rs row (S115-F4).
+src/renderer/generic.zig	2912	crates/rustty-renderer/src/generic.rs	rebuild_row	infallible-call	`font_shaper_cache.put(...) catch` - allocation-only in the reference; the port's `ShaperCache::put` is infallible (Rust allocation aborts on OOM, so the arm cannot be reached). S116-F2 (WAIVED).
+src/renderer/generic.zig	2912	crates/rustty-renderer/src/generic/linux_impl.rs	rebuild_row	infallible-call	the Linux twin (S116-F2).
+src/renderer/generic.zig	3181	crates/rustty-renderer/src/generic.rs	rebuild_row	infallible-call	the second `font_shaper_cache.put` catch in `rebuildRow` (S116-F2).
+src/renderer/generic.zig	3181	crates/rustty-renderer/src/generic/linux_impl.rs	rebuild_row	infallible-call	the Linux twin (S116-F2).
+src/terminal/stream.zig	1291	crates/rustty-vt/src/stream.rs	next_non_utf8	infallible-call	the `catch` of `self.handler.vtRaw(action)`; the only `vtRaw` in the reference (inspector/widgets/termio.zig:828) is `!bool` because it allocates, while the port's `vt_raw` returns `bool` (PORT NOTE at the call).
+src/termio/Exec.zig	731	crates/rustty-termio/src/exec.rs	init	infallible-call	`std.fmt.bufPrint(&buf, "{s}/..", .{resources_dir})` into a `max_path_bytes` buffer can overflow for a long resources dir; the port builds the path with a growable `format!` (PORT NOTE at the site).
+src/termio/Exec.zig	748	crates/rustty-termio/src/exec.rs	init	infallible-call	the MANPATH twin of :731 (`"{s}/../man"`); same growable `format!`.
+src/termio/Exec.zig	840	crates/rustty-termio/src/exec.rs	init	infallible-call	the `error.OutOfMemory` arm of `execCommand(alloc, ...)`; the port's `exec_command` cannot fail with OOM (Rust allocation aborts on OOM, so the arm cannot be reached). PORT NOTE at the site.
+src/terminal/c/terminal.zig	475	crates/rustty-vt-c/src/terminal.rs	clipboard_read_trampoline	infallible-call	`stackFallback(128, terminal.gpa())` for the MIME list; the port uses a `Vec` on rustty's Global allocator (Rust allocation aborts on OOM, so the arm cannot be reached; PERF(port) note at the site). The reference's gpa can be a host-supplied C allocator, which the port does not route these conversions through - an allocator-parity difference, not a log one.
+src/terminal/c/terminal.zig	527	crates/rustty-vt-c/src/terminal.rs	clipboard_read_reply_trampoline	infallible-call	the `contents` `stackFallback(256)` alloc; a `Vec` on the Global allocator in the port (Rust allocation aborts on OOM, so the arm cannot be reached).
+src/terminal/c/terminal.zig	538	crates/rustty-vt-c/src/terminal.rs	clipboard_read_reply_trampoline	infallible-call	the `available` `stackFallback(256)` alloc; a `Vec` on the Global allocator in the port (Rust allocation aborts on OOM, so the arm cannot be reached).

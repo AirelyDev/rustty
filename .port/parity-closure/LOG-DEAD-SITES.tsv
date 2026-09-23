@@ -23,7 +23,7 @@
 # An UNDECLARED dead site is undetectable by construction: nothing in the text says a function
 # is never called. The cap below is therefore the only thing stopping this becoming an escape
 # hatch the way the exclusion list nearly did. Two-way ratchet; a missing directive BLOCKS.
-#!dead-site-cap entries=8
+#!dead-site-cap entries=12
 oracle_file	line	kind	reason
 src/font/shaper/coretext.zig	775	unreachable-private	N22: inside private `fn debugPositions` (`:690`). A whole-tree grep for that name finds exactly four occurrences - the two definitions and two COMMENTED-OUT calls (`coretext.zig:503`, `harfbuzz.zig:236`). The fn is private, so Zig never analyses the body. The four LIVE sites in this same file (`:254, :264, :277, :291`) are unaffected and still counted.
 src/font/shaper/coretext.zig	793	unreachable-private	N22: inside private `fn debugPositions` (`:690`), whose only two call sites in the reference are commented out.
@@ -33,3 +33,7 @@ src/font/shaper/harfbuzz.zig	379	unreachable-private	N22: inside private `fn deb
 src/font/shaper/harfbuzz.zig	396	unreachable-private	N22: inside private `fn debugPositions` (`:302`); its only call site is commented out at `:236`.
 src/font/shaper/harfbuzz.zig	409	unreachable-private	N22: inside private `fn debugPositions` (`:302`); its only call site is commented out at `:236`.
 src/font/shaper/harfbuzz.zig	421	unreachable-private	N22: inside private `fn debugPositions` (`:302`); its only call site is commented out at `:236`.
+src/termio/Exec.zig	1078	dead-branch	task tail-s1b: `errdefer killCommand(&cmd) catch |err| log.warn(...)` is registered at :1077, and every statement between it and the function's success `return` (:1080 `log.info`, :1082 the `self.process` assignment, :1083 the `return switch`) is infallible, so no error can leave the scope after it and the errdefer never runs. exec.rs keeps it as a comment (:3439-3446).
+src/os/systemd.zig	34	dead-branch	task tail-s1b: `std.fmt.bufPrint(&comm_path_buf, "/proc/{d}/comm", .{ppid})` writes at most 6 + 10 + 5 = 21 bytes (a pid_t is at most 10 digits) into a `std.fs.max_path_bytes` buffer, so NoSpaceLeft cannot occur. The port's `format!` has no arm either.
+src/os/systemd.zig	188	dead-branch	task tail-s1b: `bufPrint(&buffer, "RELOADING=1\nMONOTONIC_USEC={d}", .{now})` writes 27 bytes plus an i64 (at most 20 characters) = 47 into a 64-byte buffer, so the catch arm cannot run.
+src/apprt/gtk/class/surface.zig	3618	dead-branch	task tail-s1b: `bufPrintZ(&buf, "{d} x {d}", .{ grid_size.columns, grid_size.rows })` - both are `CellCountInt` = u16 (terminal/size.zig:22, renderer/size.zig:239), at most 5 + 3 + 5 + NUL = 14 bytes into `buf: [32]u8`, so the `unable to format text` arm cannot run. The port formats with `format!` (surface.rs `resize_overlay_schedule`).
