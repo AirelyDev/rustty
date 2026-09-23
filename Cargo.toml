@@ -342,6 +342,10 @@ allocator-api2 = "0.2"
 # std-lib shims in rustty-zigstd, this maps a Zig *stdlib* facility, not
 # ghostty code (R3 concerns C libraries; pure-Rust bindings to stdlib-level
 # functionality are fine).
+# CORRECTION (LEDGER S79-F3, S79-F4, parity tail T-E): rustty-crash no longer
+# uses serde_json; its value model and printer differ from `std.json`, so the
+# crash-envelope port now has its own `std.json` port (crates/rustty-crash/src/
+# json.rs, on `indexmap`). The remaining user is xtask.
 serde_json = { version = "1", features = ["preserve_order"] }
 
 # Workspace-wide lints. Kept conservative for the scaffold phase; tightened as

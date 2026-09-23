@@ -67,9 +67,11 @@ rustty-identity = { workspace = true }
 # it reaches the graph only as sentry-sys's own dependency
 # (crates-sys/sentry-sys/Cargo.toml:43), so it leaves with it.
 sentry-sys = { workspace = true, optional = true }
-# Zig `std.json` equivalent (ObjectMap == insertion-order-preserving map; see
-# the workspace manifest note). Used by the sentry_envelope port.
-serde_json = { workspace = true }
+# `std.json.ObjectMap` (`StringArrayHashMap`, insertion-ordered) for
+# `src/json.rs`, the port of the `std.json` parse/stringify sentry_envelope uses.
+# CORRECTION (LEDGER S79-F3, S79-F4): this edge was `serde_json`, whose value
+# model and printer differ from `std.json` (see `src/json.rs`).
+indexmap = "2"
 
 # P4-E33 (`15c50c1db` "crash: do not use global state"): upstream's crash files
 # no longer import `global` AT ALL — callers pass the environment-map snapshot

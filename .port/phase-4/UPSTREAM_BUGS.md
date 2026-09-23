@@ -22,6 +22,11 @@ upstream report; if upstream fixes it, the entry is closed by a normal port.
 
 ## P4-U1 — `crash/sentry.zig` `cacheDir` macOS XDG_CACHE_HOME check INVERTED (NOT ported)
 
+**SUPERSEDED 2026-09-23 (parity tail T-E, LEDGER S79-F1):** the port now follows the
+reference's condition, because PORT_RULES R13 (2026-09-11) keeps non-crash reference
+defects faithful. The record below is kept as written; the defect is proposable
+upstream as `.port/parity-closure/UPSTREAM-DEFECTS.md` UD21.
+
 **Kind:** upstream regression, deliberately NOT ported (binding escalation
 ruling in the w6-crash task; assessment row P4-E35).
 

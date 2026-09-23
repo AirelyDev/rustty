@@ -401,9 +401,9 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - ReleaseSafe:     no crash. On macOS the Sentry database (`sentry_options_set_database_path_n`, :164-168) lands in the XDG cache for users who did not set `XDG_CACHE_HOME`, and in `~/Library/Caches` for users who did. Crash reports are written by the custom transport to `crash.defaultDir` (`xdg.state … "ghostty/crash"`, sentry.zig:122, crash/dir.zig:7-10), so only the database location changes.
 - ReleaseFast:     same.
 - reachability:    environment (macOS builds with Sentry enabled).
-- port handling:   diverges (escalation ruling P4-E35): `crates/rustty-crash/src/sentry.rs:450-484` implements the comment-consistent, pre-`15c50c1db` behaviour, with an UPSTREAM BUG note quoting the reference.
-- parity row(s):   none in LEDGER; phase-4 P4-U1 / assessment P4-E35; inventory M65.
-- test:            n/a (record only).
+- port handling:   faithful since parity tail T-E (LEDGER S79-F1): `crates/rustty-crash/src/sentry.rs` `cacheDir` now uses the reference's condition. CORRECTION: this line used to read "diverges (escalation ruling P4-E35): `crates/rustty-crash/src/sentry.rs:450-484` implements the comment-consistent, pre-`15c50c1db` behaviour"; PORT_RULES R13 (2026-09-11) keeps non-crash reference defects faithful, and it postdates P4-E35.
+- parity row(s):   LEDGER S79-F1 (the row this entry previously said did not exist); phase-4 P4-U1 / assessment P4-E35; inventory M65.
+- test:            `cache_dir_follows_the_reference_condition` (`sentry.rs`, `--features sentry`, macOS).
 - proposed fix:    Restore the intended condition: `const xdg = environ_map.get("XDG_CACHE_HOME"); if (xdg == null or xdg.?.len == 0) return try internal_os.macos.cacheDir(alloc, "sentry");`, then fall through to `xdg.cache`.
 - upstream status: not reported
 

@@ -1398,13 +1398,13 @@ dependencies = [
 name = "rustty-crash"
 version = "0.1.0"
 dependencies = [
+ "indexmap",
  "log",
  "rustty-build-config",
  "rustty-global",
  "rustty-identity",
  "rustty-os",
  "sentry-sys",
- "serde_json",
 ]
 
 [[package]]
