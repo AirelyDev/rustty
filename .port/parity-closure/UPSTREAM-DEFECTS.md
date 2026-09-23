@@ -1732,6 +1732,21 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - proposed fix:    in the docs branch take the action tag: `const name = switch (v) { .leaf => |leaf| @tagName(leaf.action), .leaf_chained => |c| @tagName(c.actions.items[0]), .leader => continue-without-docs };` (or print one help block per chained action).
 - upstream status: not reported
 
+### UD181 — `RepeatableCodepointMap.equal` compares font families by pointer, so a clone is never equal to its source
+- kind:            latent
+- upstream project: ghostty
+- severity:        low
+- reference:       src/config/Config.zig:8199-8210 (`RepeatableCodepointMap.equal`, `std.meta.eql(a, b)` per entry); src/font/CodepointMap.zig:36-43 (`clone` dupes each descriptor, `discovery.zig:109` `dupeZ`s `family`); zig 0.16.0 `std/meta.zig:660` (`.slice => a.ptr == b.ptr and a.len == b.len`). At 20abdb50a.
+- defect:          `std.meta.eql` on an entry compares the `descriptor.family` slice by address. Any two maps whose families live in different allocations compare unequal even with identical content: a clone and its source, or the same `font-codepoint-map` parsed twice. So `Config.changed(.@"font-codepoint-map")` would report a change on every reload with a non-empty map. By reading; `std.meta.eql`'s slice rule was read in the pinned stdlib.
+- ReleaseSafe:     no product effect at the pin: `changeIterator` has no production caller, and the formatter compares against a default config whose map is empty (see ADJUDICATION.md S76-F5).
+- ReleaseFast:     same.
+- reachability:    none today; it becomes live as soon as a caller compares two loaded configs.
+- port handling:   compares `family` by content (`crates/rustty-config/src/value_types.rs` `RepeatableCodepointMap::equal`, PORT NOTE there); unobservable, so LEDGER S76-F5 is WAIVED rather than reproduced.
+- parity row(s):   LEDGER S76-F5.
+- test:            `repeatable_codepoint_map_clone_equal` (`value_types.rs`) pins the port's content equality.
+- proposed fix:    compare fields explicitly: ranges, then `std.mem.eql` on the optional family/style strings and the variations, then the scalar fields (or use `std.testing`-style deep equality).
+- upstream status: not reported
+
 ## Candidates pending verification
 
 Assembled from this plan's progress notes on 2026-09-11. **Not verified** — do not cite as fact.
