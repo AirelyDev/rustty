@@ -14,6 +14,8 @@ mod dist;
 
 mod release;
 
+mod patchelf;
+
 mod archives;
 
 use std::path::{Path, PathBuf};
@@ -114,6 +116,11 @@ SUBCOMMANDS:
                        `cmake --build` from the extracted tree. Port of ghostty's
                        `zig build test-lib-vt -Demit-lib-vt=true` + CMake check steps
                        (GhosttyDist.zig:126-147, 156-171).
+    patchelf [--patch-interp <path>] [--patch-rpath <paths>] <binary>
+                       Port of Config.zig's patch-interp/patch-rpath + addPatchElf: run
+                       `patchelf --set-interpreter/--set-rpath` on a built binary. On native
+                       Linux inside a Nix shell the defaults are the ld.so on PATH and
+                       LD_LIBRARY_PATH, so a dev-shell build also runs outside the shell.
     release-info [--version <vX.Y.Z>] [--ref <refs/tags/vX.Y.Z>] [--no-workspace-check]
                        Emit the release metadata (version, build, commit, commit_long)
                        the .github/workflows/release-{tag,tip}.yml pipelines consume,
@@ -234,6 +241,22 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
+        Some("patchelf") => {
+            match patchelf::run(&mut args) {
+                Ok(Some(out)) => {
+                    println!("patched {}", out.display());
+                    ExitCode::SUCCESS
+                }
+                Ok(None) => {
+                    println!("nothing to patch (not native Linux in a Nix shell, and no --patch-* option)");
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("xtask: patchelf failed: {e}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
         Some("release-info") => match release::run(&mut args) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
