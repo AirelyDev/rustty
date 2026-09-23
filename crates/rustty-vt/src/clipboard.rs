@@ -14,12 +14,24 @@
 /// C: RusttyClipboardLocation (R2) — checked by the A5 enum-discriminant arm.
 /// The clipboard destination for a write.
 // pub const Location = enum(c_int) { standard = 0, selection = 1, primary = 2, _ };
-#[repr(i32)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Location {
-    Standard = 0,
-    Selection = 1,
-    Primary = 2,
+// PORT NOTE: the reference enum is NON-exhaustive (`_`), so any `c_int` is a
+// `Location` and an unnamed one passes through to the handler. Ported like
+// `WriteStatus`/`ReadStatus` below: a `#[repr(transparent)]` newtype over
+// `i32` with an associated const per named value, so a `match` needs the
+// reference's `_`/`else` arm.
+// CORRECTION (parity S150-F2): this was a closed `#[repr(i32)] enum`, which
+// made the C boundary reject every unnamed location (`paste.rs`, S174-F4).
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Location(pub i32);
+
+// Associated consts keep the variant spellings; silence the naming lint (same
+// shape as `WriteStatus`).
+#[allow(non_upper_case_globals)]
+impl Location {
+    pub const Standard: Location = Location(0);
+    pub const Selection: Location = Location(1);
+    pub const Primary: Location = Location(2);
 }
 
 /// MIME types that name plain text across the platforms terminals run
@@ -166,6 +178,7 @@ impl Write<'_> {
     }
 }
 
+/// C: RusttyClipboardWriteResult (R2)
 /// The status of a clipboard write reply.
 ///
 /// This crosses the C embedding boundary (`RusttyClipboardWriteResult`), so
@@ -302,6 +315,7 @@ impl Read<'_> {
     }
 }
 
+/// C: RusttyClipboardReadResult (R2)
 /// The status of a clipboard read reply.
 // pub const Status = enum(c_int) {
 //     success = 0, denied = 1, unsupported = 2, busy = 3, io_error = 4, _,

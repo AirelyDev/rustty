@@ -54,7 +54,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** test "RGB.parse" port drops 6 of the reference assertions
   - **Oracle:** `src/terminal/color.zig:927-976` → **Rustty:** `crates/rustty-vt/src/color.rs:1930-2044`
   - **Audit's suggested fix:** Add to `rgb_parse`: assert_eq!(Ok(RGB{r:34,g:139,b:34}), RGB::parse(b"\tForestGreen\t")); and assert_eq!(Err(InvalidFormat), RGB::parse(b"")) / b"  " / b"#12345" / b"12345" / b"nosuchcolor".
-- [ ] **S150-F2** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S150-F2** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** clipboard.Location is a closed enum; reference is non-exhaustive enum(c_int){_}
   - **Oracle:** `src/terminal/clipboard.zig:4-9` → **Rustty:** `crates/rustty-vt/src/clipboard.rs:14-23`
   - **Audit's suggested fix:** Either model Location like WriteStatus/ReadStatus (a #[repr(transparent)] i32 newtype with associated consts) so unknown values round-trip, or explicitly accept the D11 divergence and document it in clipboard.rs next to the type.
@@ -86,7 +86,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** C-created OSC parser does not use the caller-supplied allocator for its dynamic payloads
   - **Oracle:** `src/terminal/c/osc.zig:18-36` → **Rustty:** `crates/rustty-vt-c/src/osc.rs:34, 66-89`
   - **Audit's suggested fix:** Apply the terminal.rs F-008 pattern: heap-hold the resolved C allocator (Box::into_raw of a dyn ZigAllocator) inside OscParserWrapper, build the parser's ZigAllocatorRef from that pointee, and reclaim it last in `free`.
-- [ ] **S174-F4** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S174-F4** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** terminal_paste rejects an out-of-range clipboard location that the oracle accepts
   - **Oracle:** `src/terminal/c/paste.zig:70-73` → **Rustty:** `crates/rustty-vt-c/src/paste.rs:159-175`
   - **Audit's suggested fix:** Model the C-boundary location as an open value (a c_int newtype threaded through to the paste path, or an Unknown(c_int) variant) so an unrecognized location behaves like the oracle's open enum instead of failing the paste.

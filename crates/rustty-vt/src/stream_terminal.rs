@@ -2979,7 +2979,7 @@ impl ClipboardReadState {
             clipboard::Location::Selection => b's',
             clipboard::Location::Primary => b'p',
             // .standard, _ => 'c',
-            clipboard::Location::Standard => b'c',
+            _ => b'c',
         };
         let mut aw = crate::snapshot::io::AllocatingWriter::new();
         // try aw.writer.print("\x1b]52;{c};", .{kind});
