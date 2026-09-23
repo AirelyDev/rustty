@@ -74,7 +74,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
 
 ## Low (14)
 
-- [ ] **S63-F10** · CONFIRMED · `INDIV` · missing-branch
+- [x] **S63-F10** · CONFIRMED · `INDIV` · missing-branch
   - **What:** lib-vt tarball does not apply the lib_vt_excludes pathspecs
   - **Oracle:** `src/build/GhosttyDist.zig:95-102, 184-209` → **Rustty:** `xtask/src/dist.rs:285-427`
   - **Audit's suggested fix:** Remove the equivalent directories (macos, images, po, example, test, flatpak, snap, dist/{doxygen,linux,macos,windows}, crates/*/assets large binaries) from the staged tree in `prune_to_lib_vt`, mirroring lib_vt_excludes.
