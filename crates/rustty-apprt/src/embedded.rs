@@ -1237,50 +1237,14 @@ impl Surface {
             // if (wd.len > 0) wd: {
             if !wd.is_empty() {
                 'wd: {
-                    // var dir = std.fs.openDirAbsolute(wd, .{}) catch |err| {
-                    //     log.warn("error opening requested working directory dir={s} err={}", .{ wd, err });
-                    //     break :wd;
-                    // };
-                    // defer dir.close();
-                    // const stat = dir.stat() catch |err| {
-                    //     log.warn("failed to stat requested working directory dir={s} err={}", .{ wd, err });
-                    //     break :wd;
-                    // };
+                    // var dir = std.Io.Dir.openDirAbsolute(global.io(), wd, .{}) catch |err| { ...; break :wd; };
+                    // defer dir.close(global.io());
+                    // const stat = dir.stat(global.io()) catch |err| { ...; break :wd; };
+                    // if (stat.kind != .directory) { ...; break :wd; }
                     //
-                    // PORT NOTE: `openDirAbsolute` + `dir.stat()` collapse to one
-                    // `std::fs::metadata` (follows symlinks; opens+stats atomically),
-                    // so the separate stat-error `break :wd` cannot occur once
-                    // metadata succeeds — the single error maps to the open-error
-                    // arm. `wd` is a byte path → `OsStr::from_bytes` (rustty-os
-                    // `path.rs` precedent).
-                    //
-                    // PORT NOTE (S46-F5): `{s}` on the reference's `wd` byte slice
-                    // prints the bytes verbatim; `wd` is a C string from the host and
-                    // is not guaranteed UTF-8, so it is rendered lossily here — the
-                    // same choice `rustty-os`'s byte-path diagnostics make.
-                    use std::os::unix::ffi::OsStrExt;
-                    let wd_display = String::from_utf8_lossy(wd);
-                    let stat = match std::fs::metadata(std::ffi::OsStr::from_bytes(wd)) {
-                        Ok(md) => md,
-                        Err(err) => {
-                            // log.warn("error opening requested working directory dir={s} err={}", .{ wd, err });
-                            log::warn!(
-                                target: LOG_SCOPE,
-                                "error opening requested working directory dir={wd_display} err={err:?}",
-                            );
-                            break 'wd;
-                        }
-                    };
-
-                    // if (stat.kind != .directory) {
-                    //     log.warn("requested working directory is not a directory dir={s}", .{wd});
-                    //     break :wd;
-                    // }
-                    if !stat.is_dir() {
-                        log::warn!(
-                            target: LOG_SCOPE,
-                            "requested working directory is not a directory dir={wd_display}",
-                        );
+                    // The three checks and their three diagnostics are in
+                    // `requested_working_directory_is_usable` (task tail-s1b).
+                    if !requested_working_directory_is_usable(wd) {
                         break 'wd;
                     }
 
@@ -3723,6 +3687,171 @@ pub struct ClipboardConfirm {
     /// session grant, reported back through the completion's
     /// remember field.
     pub can_remember: bool,
+}
+
+/// PORTS: `embedded.zig:529-553` — the requested-working-directory checks of
+/// `Surface.init`: open the directory, stat the OPEN directory, and require a
+/// directory. Returns `false` (the reference's `break :wd`) after logging the
+/// failing step, `true` when `wd` may become the surface's working directory.
+///
+/// PORT NOTE (task tail-s1b): this used to be ONE `std::fs::metadata(wd)`, so
+/// the reference's second diagnostic (`failed to stat requested working
+/// directory`, `:540`) had no arm, and a path naming a regular FILE took the
+/// `is not a directory` branch — where the reference's `openDirAbsolute` fails
+/// at the open with `error.NotDir` and logs `error opening requested working
+/// directory`. The open now carries `openDirAbsolute`'s flags (Zig 0.16
+/// `dirOpenDirPosix`: `O_RDONLY | O_DIRECTORY | O_CLOEXEC`, plus `O_PATH`
+/// where the platform has it, as `.iterate = false` requests), and the stat is
+/// an `fstat` of that descriptor, so each step fails where the reference's
+/// does. The `is not a directory` check is kept as the reference keeps it,
+/// although after an `O_DIRECTORY` open only a race can reach it.
+///
+/// PORT NOTE (S46-F5): `{s}` on the reference's `wd` byte slice prints the
+/// bytes verbatim; `wd` is a C string from the host and is not guaranteed
+/// UTF-8, so it is rendered lossily here — the same choice `rustty-os`'s
+/// byte-path diagnostics make.
+fn requested_working_directory_is_usable(wd: &[u8]) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::OpenOptionsExt;
+    let wd_display = String::from_utf8_lossy(wd);
+
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    let flags = libc::O_DIRECTORY | libc::O_PATH;
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    let flags = libc::O_DIRECTORY;
+
+    // var dir = std.Io.Dir.openDirAbsolute(global.io(), wd, .{}) catch |err| {
+    let dir = match std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(flags)
+        .open(std::ffi::OsStr::from_bytes(wd))
+    {
+        Ok(dir) => dir,
+        Err(err) => {
+            // log.warn("error opening requested working directory dir={s} err={}", .{ wd, err });
+            log::warn!(
+                target: LOG_SCOPE,
+                "error opening requested working directory dir={wd_display} err={err:?}",
+            );
+            // break :wd;
+            return false;
+        }
+    };
+    // defer dir.close(global.io());  (the `File` closes on drop)
+
+    // const stat = dir.stat(global.io()) catch |err| {
+    let stat = match dir.metadata() {
+        Ok(md) => md,
+        Err(err) => {
+            // log.warn("failed to stat requested working directory dir={s} err={}", .{ wd, err });
+            log::warn!(
+                target: LOG_SCOPE,
+                "failed to stat requested working directory dir={wd_display} err={err:?}",
+            );
+            // break :wd;
+            return false;
+        }
+    };
+
+    // if (stat.kind != .directory) {
+    //     log.warn("requested working directory is not a directory dir={s}", .{wd});
+    //     break :wd;
+    // }
+    if !stat.is_dir() {
+        log::warn!(
+            target: LOG_SCOPE,
+            "requested working directory is not a directory dir={wd_display}",
+        );
+        return false;
+    }
+    true
+}
+
+#[cfg(test)]
+mod requested_working_directory_tests {
+    use super::{requested_working_directory_is_usable, LOG_SCOPE};
+    use crate::log_capture;
+    use std::os::unix::ffi::OsStrExt;
+
+    /// A unique scratch directory, removed on drop.
+    struct Scratch(std::path::PathBuf);
+    impl Scratch {
+        fn new(tag: &str) -> Self {
+            let p = std::env::temp_dir()
+                .join(format!("rustty-embedded-wd-{}-{tag}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&p);
+            std::fs::create_dir_all(&p).unwrap();
+            Scratch(p)
+        }
+        fn path(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn warns(cap: &log_capture::Capture) -> Vec<String> {
+        cap.messages()
+            .into_iter()
+            .filter(|(level, target, _)| *level == log::Level::Warn && target == LOG_SCOPE)
+            .map(|(_, _, msg)| msg)
+            .collect()
+    }
+
+    /// A directory is usable and logs nothing.
+    #[test]
+    fn a_directory_is_usable_without_a_diagnostic() {
+        let dir = Scratch::new("dir");
+        let cap = log_capture::start();
+        assert!(requested_working_directory_is_usable(
+            dir.path().as_os_str().as_bytes()
+        ));
+        assert_eq!(warns(&cap), Vec::<String>::new());
+    }
+
+    /// A missing path fails at the OPEN (`embedded.zig:531`).
+    #[test]
+    fn a_missing_path_fails_at_the_open() {
+        let dir = Scratch::new("missing");
+        let missing = dir.path().join("nope");
+        let cap = log_capture::start();
+        assert!(!requested_working_directory_is_usable(
+            missing.as_os_str().as_bytes()
+        ));
+        let got = warns(&cap);
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert!(
+            got[0].starts_with(&format!(
+                "error opening requested working directory dir={} err=",
+                missing.display()
+            )),
+            "{got:?}"
+        );
+    }
+
+    /// A regular FILE fails at the open with ENOTDIR, as `openDirAbsolute`
+    /// does — NOT at the `is not a directory` check, which is what the old
+    /// single `std::fs::metadata` produced.
+    #[test]
+    fn a_regular_file_fails_at_the_open_not_the_kind_check() {
+        let dir = Scratch::new("file");
+        let file = dir.path().join("f");
+        std::fs::write(&file, b"x").unwrap();
+        let cap = log_capture::start();
+        assert!(!requested_working_directory_is_usable(
+            file.as_os_str().as_bytes()
+        ));
+        let got = warns(&cap);
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert!(
+            got[0].starts_with("error opening requested working directory dir=")
+                && got[0].contains("NotADirectory"),
+            "{got:?}"
+        );
+    }
 }
 
 /// PORT NOTE: no reference analogue — the reference's laziness is visible in

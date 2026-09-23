@@ -48,13 +48,6 @@ pub fn launchedBySystemd() -> bool {
         // a user systemd daemon. Do that by checking the `/proc/<ppid>/comm`
         // to see if it ends with `systemd`.
         let comm_path = format!("/proc/{ppid}/comm");
-        let comm_data_buf = match std::fs::read(&comm_path) {
-            Ok(d) => d,
-            Err(_) => {
-                log_err(&format!("unable to open '{comm_path}' for reading"));
-                return false;
-            }
-        };
 
         // The maximum length of the command name is defined by
         // `TASK_COMM_LEN` in the Linux kernel. This is usually 16
@@ -62,7 +55,25 @@ pub fn launchedBySystemd() -> bool {
         // Also, since we only care to compare to "systemd", anything
         // longer can be assumed to not be systemd.
         const TASK_COMM_LEN: usize = 16;
-        let comm_size = std::cmp::min(comm_data_buf.len(), TASK_COMM_LEN);
+        let mut comm_data_buf = [0u8; TASK_COMM_LEN];
+
+        // PORT NOTE (task tail-s1b, N192): the open and the `readAll` are two
+        // steps with two diagnostics, as in the reference. This used to be one
+        // `std::fs::read`, which reported a failed READ with the OPEN failure's
+        // text and left `systemd.zig:51` with no counterpart.
+        let comm_size = match read_comm(&comm_path, &mut comm_data_buf) {
+            Ok(n) => n,
+            Err(CommReadError::Open) => {
+                // log.err("unable to open '{s}' for reading", .{comm_path});
+                log_err(&format!("unable to open '{comm_path}' for reading"));
+                return false;
+            }
+            Err(CommReadError::Read) => {
+                // log.err("problems reading from '{s}'", .{comm_path});
+                log_err(&format!("problems reading from '{comm_path}'"));
+                return false;
+            }
+        };
         let comm_data = &comm_data_buf[0..comm_size];
 
         trim_right(comm_data, b"\n") == b"systemd"
@@ -260,6 +271,68 @@ pub mod notify {
                 libc::close(self.0);
             }
         }
+    }
+}
+
+/// Which step of `launchedBySystemd`'s `/proc/<ppid>/comm` read failed.
+#[cfg(target_os = "linux")]
+#[derive(Debug, PartialEq, Eq)]
+enum CommReadError {
+    /// `std.Io.Dir.openFileAbsolute(...)` failed (`systemd.zig:37-40`).
+    Open,
+    /// `comm_file.readAll(&comm_data_buf)` failed (`systemd.zig:50-53`).
+    Read,
+}
+
+/// PORTS: `systemd.zig:37-53` — `openFileAbsolute(comm_path, .{ .mode =
+/// .read_only })`, then `readAll` into the caller's `TASK_COMM_LEN` buffer:
+/// read until the buffer is full or end of file, returning the byte count.
+#[cfg(target_os = "linux")]
+fn read_comm(comm_path: &str, buf: &mut [u8]) -> Result<usize, CommReadError> {
+    use std::io::Read;
+    let mut file = std::fs::File::open(comm_path).map_err(|_| CommReadError::Open)?;
+    // defer comm_file.close();  (the `File` closes on drop)
+    let mut n = 0;
+    while n < buf.len() {
+        match file.read(&mut buf[n..]) {
+            Ok(0) => break,
+            Ok(k) => n += k,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => return Err(CommReadError::Read),
+        }
+    }
+    Ok(n)
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod read_comm_tests {
+    use super::{read_comm, CommReadError};
+
+    /// The live path: this process's own `comm` reads, capped at the buffer.
+    #[test]
+    fn reads_proc_self_comm_into_the_buffer() {
+        let mut buf = [0u8; 16];
+        let n = read_comm("/proc/self/comm", &mut buf).expect("readable");
+        assert!(n > 0 && n <= 16, "n={n}");
+    }
+
+    /// A missing file fails at the OPEN (`systemd.zig:38`).
+    #[test]
+    fn a_missing_file_fails_at_the_open() {
+        let mut buf = [0u8; 16];
+        assert_eq!(
+            read_comm("/proc/self/definitely-not-a-file", &mut buf),
+            Err(CommReadError::Open)
+        );
+    }
+
+    /// A path that OPENS but cannot be read fails at the READ
+    /// (`systemd.zig:51`): a directory opens read-only and its `read` is
+    /// EISDIR. Before N192 both failures were one arm with the open's text.
+    #[test]
+    fn a_directory_opens_and_then_fails_at_the_read() {
+        let mut buf = [0u8; 16];
+        assert_eq!(read_comm("/proc/self", &mut buf), Err(CommReadError::Read));
     }
 }
 
