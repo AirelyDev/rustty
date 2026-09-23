@@ -1375,7 +1375,10 @@ impl DerivedConfig {
     // (one-cell grid, the "Is your padding reasonable?" warning). A NaN dpi
     // gives 0 in both trees. What made the saturated value safe downstream is
     // the saturating padding sums in `rustty-render-types` (`sub_padding`,
-    // `blank_padding`, `balance_padding`), which overflowed before.
+    // `blank_padding`, `balance_padding`), which overflowed before, and the
+    // saturating cursor-position sums in `imePoint` and the custom-shader
+    // cursor uniforms (UD76, task R13-C2), which a saturated padding stored by
+    // `contentScaleCallback` reached before the IO thread's resize.
     fn scaledPadding(&self, x_dpi: f32, y_dpi: f32) -> rendererpkg::size::Padding {
         // const padding_top: u32 = padding_top: {
         //     const padding_top: f32 = @floatFromInt(self.window_padding_top);
@@ -5792,8 +5795,18 @@ where
         let x: f64 = {
             // Simple x * cell width gives the top-left corner, then add padding offset
             // var x: f64 = @floatFromInt(cursor.x * self.size.cell.width + self.size.padding.left);
-            let mut x: f64 =
-                f64::from(u32::from(cursor.x) * self.size.cell.width + self.size.padding.left);
+            //
+            // PORT NOTE: reference defect (R13), UD76 (task R13-C2). The
+            // reference's `u32` product and sum are unchecked; a saturated
+            // `padding.left` (UD71) stored by `contentScaleCallback` overflows
+            // them for any `cursor.x >= 1` until the IO thread's resize
+            // shrinks the grid. Saturate, as the padding sums do (UD71): the
+            // point is only an IME position.
+            let mut x: f64 = f64::from(
+                u32::from(cursor.x)
+                    .saturating_mul(self.size.cell.width)
+                    .saturating_add(self.size.padding.left),
+            );
 
             // We want the midpoint
             // x += @as(f64, @floatFromInt(self.size.cell.width)) / 2;
@@ -5811,8 +5824,12 @@ where
         let y: f64 = {
             // Simple y * cell height gives the top-left corner, then add padding offset
             // var y: f64 = @floatFromInt(cursor.y * self.size.cell.height + self.size.padding.top);
-            let mut y: f64 =
-                f64::from(u32::from(cursor.y) * self.size.cell.height + self.size.padding.top);
+            // (R13, UD76: saturating, as for `x` above.)
+            let mut y: f64 = f64::from(
+                u32::from(cursor.y)
+                    .saturating_mul(self.size.cell.height)
+                    .saturating_add(self.size.padding.top),
+            );
 
             // We want the bottom
             // y += @floatFromInt(self.size.cell.height);

@@ -4226,10 +4226,17 @@ impl Renderer {
             // `grid_pos[0] * cell.width + padding.left` relies on Zig's implicit
             // widening. Rust has no implicit widening, so widen `grid_pos` to `u32`
             // BEFORE the `as f32`.
-            let mut pixel_x: f32 = (cursor.grid_pos[0] as u32 * cell.width + padding.left) as f32;
+            //
+            // PORT NOTE: reference defect (R13), UD76 (task R13-C2): saturating,
+            // as in `generic.rs` (macOS).
+            let mut pixel_x: f32 = (cursor.grid_pos[0] as u32)
+                .saturating_mul(cell.width)
+                .saturating_add(padding.left) as f32;
             // Top edge, relative to the top of the
             // screen, of the cell the cursor is in.
-            let mut pixel_y: f32 = (cursor.grid_pos[1] as u32 * cell.height + padding.top) as f32;
+            let mut pixel_y: f32 = (cursor.grid_pos[1] as u32)
+                .saturating_mul(cell.height)
+                .saturating_add(padding.top) as f32;
 
             // If +Y is up in our shaders, we need to flip the coordinate
             // so that it's instead the top edge of the cell relative to
@@ -5712,6 +5719,44 @@ mod tests {
         );
 
         t.deinit(Global);
+        r.deinit();
+    }
+
+    // UD76 (R13, task R13-C2): the OpenGL twin of `macos_impl`'s
+    // `custom_shader_cursor_uniform_saturates_with_a_saturated_padding`. A
+    // saturated padding (UD71) with the cursor off the first column and row
+    // overflowed the reference's unchecked `grid_pos * cell + padding`.
+    #[test]
+    fn custom_shader_cursor_uniform_saturates_with_a_saturated_padding() {
+        let _guard = test_support::gl_lock();
+
+        let mut r = match golden_renderer(10, 3) {
+            Some(r) => r,
+            None => return, // GL-context skip
+        };
+        r.has_custom_shaders = true;
+        r.size.padding.left = u32::MAX;
+        r.size.padding.top = u32::MAX;
+        let glyph = crate::shaders::CellText {
+            atlas: Atlas::Grayscale,
+            bools: crate::shaders::CellTextBools {
+                is_cursor_glyph: true,
+                ..Default::default()
+            },
+            grid_pos: [3, 2],
+            color: [0, 0, 0, 255],
+            ..Default::default()
+        };
+        r.cells.set_cursor(Some(glyph), Some(cursor::Style::Block));
+        assert_eq!(Some(glyph), r.cells.get_cursor_glyph(), "precondition");
+
+        r.update_custom_shader_uniforms_for_frame();
+
+        // +Y is up in OpenGL: y is measured from the bottom of the screen.
+        let c = r.custom_shader_uniforms.current_cursor.0;
+        let h = r.size.screen.height as f32;
+        assert_eq!(u32::MAX as f32, c[0], "x saturates: {c:?}");
+        assert!(c[1] <= h - u32::MAX as f32, "y saturates: {c:?}");
         r.deinit();
     }
 
