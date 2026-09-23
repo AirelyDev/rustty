@@ -79,6 +79,33 @@ pub enum Error {
     /// records `unknown error error.NotImplemented`; this variant carries it
     /// there (LEDGER S76-F2).
     NotImplemented,
+    /// `CommaSplitter.Error` — NOT members of `args.Error` either. The
+    /// reference's `parseAutoStruct` propagates them unchanged from
+    /// `while (try iter.next())`, so they are in its inferred error set and in
+    /// every `parseIntoField` that reaches it. A caller that switches on
+    /// `error.InvalidValue` therefore does not treat them as one, and `parse`
+    /// renders them through its `else => "unknown error {}"` arm (parity
+    /// S67-F5; the port used to collapse all three into `InvalidValue`).
+    UnclosedQuote,
+    UnfinishedEscape,
+    IllegalEscape,
+}
+
+impl From<crate::comma_splitter::Error> for Error {
+    fn from(e: crate::comma_splitter::Error) -> Error {
+        match e {
+            crate::comma_splitter::Error::UnclosedQuote => Error::UnclosedQuote,
+            crate::comma_splitter::Error::UnfinishedEscape => Error::UnfinishedEscape,
+            crate::comma_splitter::Error::IllegalEscape => Error::IllegalEscape,
+        }
+    }
+}
+
+/// `std.fmt.allocPrintSentinel(arena_alloc, "unknown error {}", .{err}, 0)` —
+/// the `else` arm of `parse`'s diagnostic switch. `{}` on a Zig error value
+/// prints `error.<Name>` (MEASURED with Zig 0.16.0: `error.FileNotFound`).
+fn format_unknown_error(err: Error) -> Vec<u8> {
+    format!("unknown error error.{err:?}").into_bytes()
 }
 
 /// PORTS: the union of base `Error` plus the `OutOfMemory`/`Unknown` extras and
@@ -558,17 +585,21 @@ where
                     // else => try std.fmt.allocPrintSentinel(arena_alloc, "unknown error {}", .{err}, 0),
                     //
                     // PORT NOTE: the `else` arm covers type-specific errors
-                    // beyond the base set; every parse failure from
-                    // `parse_into_field` maps to one of the base variants above,
-                    // so this arm is unreachable HERE (the `ActionHelpRequested`
-                    // sentinel is returned by `help()` before field parsing, never
-                    // by `parse_into_field`). It is retained as the catch-all the
-                    // reference's open error set requires.
+                    // beyond the base set: the three `CommaSplitter` errors a
+                    // `parseAutoStruct` field propagates, and `RepeatableLink`'s
+                    // `NotImplemented` (S76-F2). `ActionHelpRequested`
+                    // is returned by `help()` before field parsing, never by
+                    // `parse_into_field`, so it never reaches here.
                     //
-                    // `{}` of a Zig error prints `error.<Name>`.
-                    Error::ActionHelpRequested | Error::NotImplemented => {
-                        format!("unknown error error.{err:?}").into_bytes()
-                    }
+                    // CORRECTION (parity S67-F5, task T-C): this note used to say
+                    // "every parse failure from `parse_into_field` maps to one of
+                    // the base variants above, so this arm is unreachable HERE";
+                    // that was the collapse S67-F5 records, now removed.
+                    Error::UnclosedQuote
+                    | Error::UnfinishedEscape
+                    | Error::IllegalEscape
+                    | Error::ActionHelpRequested
+                    | Error::NotImplemented => format_unknown_error(err),
                 };
 
                 // Add our diagnostic
@@ -738,9 +769,11 @@ where
                     Error::InvalidValue => format_invalid_value(dst, key, value),
                     // See the `parse` twin: the help sentinel is emitted by
                     // `help()` before field parsing, so it never reaches here.
-                    Error::ActionHelpRequested | Error::NotImplemented => {
-                        format!("unknown error error.{err:?}").into_bytes()
-                    }
+                    Error::UnclosedQuote
+                    | Error::UnfinishedEscape
+                    | Error::IllegalEscape
+                    | Error::ActionHelpRequested
+                    | Error::NotImplemented => format_unknown_error(err),
                 };
 
                 let location = iter.location_self().unwrap_or(Location::None);
@@ -998,7 +1031,7 @@ pub fn parse_auto_struct<T: AutoStruct>(result: &mut T, v: &[u8]) -> Result<(), 
     // var iter: CommaSplitter = .init(v);
     let mut iter = CommaSplitter::init(v);
     // loop: while (try iter.next()) |entry| {
-    'loop_: while let Some(entry) = iter.next().map_err(|_| Error::InvalidValue)? {
+    'loop_: while let Some(entry) = iter.next().map_err(Error::from)? {
         // Find the key/value, trimming whitespace. The value may be quoted
         // which we strip the quotes from.
         // const idx = mem.indexOf(u8, entry, ":") orelse return error.InvalidValue;

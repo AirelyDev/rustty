@@ -13018,6 +13018,38 @@ mod integration_tests {
         );
     }
 
+    // parity S67-F5: a `CommaSplitter` error in `mouse-scroll-multiplier` is not
+    // `InvalidValue`, so `MouseScrollMultiplier.parseCLI` does not take its
+    // bare-float fallback and `parse` reports `unknown error error.<Name>`.
+    // MEASURED: Ghostty 1.3.1 `+validate-config` prints exactly these four
+    // messages for these four lines.
+    #[test]
+    fn auto_struct_comma_splitter_errors_are_not_invalid_value() {
+        let mut cfg = Config::default_config();
+        let mut it = TestIterator::new(&[
+            b"--mouse-scroll-multiplier=precision:\"1",
+            b"--mouse-scroll-multiplier=precision:1\\q",
+            b"--mouse-scroll-multiplier=precision:1\\",
+            b"--mouse-scroll-multiplier=bogus",
+        ]);
+        cfg.load_iter(&mut it).unwrap();
+        let messages: Vec<&[u8]> = cfg
+            ._diagnostics
+            .items()
+            .iter()
+            .map(|d| d.message.as_slice())
+            .collect();
+        assert_eq!(
+            vec![
+                &b"unknown error error.UnclosedQuote"[..],
+                &b"unknown error error.IllegalEscape"[..],
+                &b"unknown error error.UnfinishedEscape"[..],
+                &b"invalid value \"bogus\""[..],
+            ],
+            messages
+        );
+    }
+
     // test "compatibility: gtk-single-instance desktop" {
     #[test]
     fn compatibility_gtk_single_instance_desktop() {

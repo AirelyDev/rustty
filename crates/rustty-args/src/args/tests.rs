@@ -1769,6 +1769,88 @@ fn line_iterator_is_silent_on_lines_that_fit() {
     assert_eq!(Vec::<CapturedRecord>::new(), messages);
 }
 
+// parity S67-F5: `parseAutoStruct`'s `while (try iter.next())` propagates the
+// three `CommaSplitter` errors unchanged, and `parse` renders them through its
+// `else => "unknown error {}"` arm. The texts match Ghostty 1.3.1's
+// `+validate-config` for `mouse-scroll-multiplier = precision:"1` etc.
+#[test]
+fn parse_auto_struct_propagates_comma_splitter_errors() {
+    fn fresh() -> BasicValue {
+        BasicValue {
+            a: Vec::new(),
+            b: 0,
+            c: 0,
+        }
+    }
+    assert_eq!(
+        Err(Error::UnclosedQuote),
+        parse_auto_struct(&mut fresh(), b"a:\"hello")
+    );
+    assert_eq!(
+        Err(Error::IllegalEscape),
+        parse_auto_struct(&mut fresh(), b"a:\"h\\qi\"")
+    );
+    assert_eq!(
+        Err(Error::UnfinishedEscape),
+        parse_auto_struct(&mut fresh(), b"a:\"h\\")
+    );
+
+    struct Data {
+        value: BasicValue,
+        diags: DiagnosticList,
+    }
+    impl Target for Data {
+        fn diagnostics_mut(&mut self) -> Option<&mut DiagnosticList> {
+            Some(&mut self.diags)
+        }
+        fn parse_into_field(&mut self, key: &[u8], value: Option<&[u8]>) -> Result<(), ParseError> {
+            match key {
+                b"value" => parse_auto_struct(&mut self.value, value.ok_or(Error::ValueRequired)?),
+                _ => Err(Error::InvalidField),
+            }
+        }
+    }
+    struct VecArgs(std::vec::IntoIter<Vec<u8>>);
+    impl ArgIterator for VecArgs {
+        type Item = Vec<u8>;
+        fn next(&mut self) -> Option<Vec<u8>> {
+            self.0.next()
+        }
+    }
+    impl LocationProvider for VecArgs {}
+
+    let mut data = Data {
+        value: fresh(),
+        diags: DiagnosticList::default(),
+    };
+    let mut it = VecArgs(
+        vec![
+            b"--value=a:\"hello".to_vec(),
+            b"--value=a:\"h\\qi\"".to_vec(),
+            b"--value=a:\"h\\".to_vec(),
+            b"--value=bogus".to_vec(),
+        ]
+        .into_iter(),
+    );
+    parse(&mut data, &mut it).unwrap();
+    let messages: Vec<&[u8]> = data
+        .diags
+        .items()
+        .iter()
+        .map(|d| d.message.as_slice())
+        .collect();
+    assert_eq!(
+        vec![
+            &b"unknown error error.UnclosedQuote"[..],
+            &b"unknown error error.IllegalEscape"[..],
+            &b"unknown error error.UnfinishedEscape"[..],
+            // The base-set control: a malformed entry is still InvalidValue.
+            &b"invalid value \"bogus\""[..],
+        ],
+        messages
+    );
+}
+
 // parity S67-F3: `parseIntoField`'s integer arm is `std.fmt.parseInt(Int, v, 0)`,
 // which ignores `_` digit separators. Values MEASURED against Zig 0.16.0.
 #[test]
