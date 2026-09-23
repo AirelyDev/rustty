@@ -730,14 +730,40 @@ _LEDGER_ROW = re.compile(
     r"^\|\s*`([^`]+)`\s*\|\s*`([0-9a-f]{7,40})`\s*\|([^|]*)\|", re.M)
 
 
+def oracle_root(checkout=RUSTTY_ROOT):
+    """The read-only ghostty oracle checkout: `ghostty` BESIDE THE MAIN checkout.
+
+    The one resolver every sibling-oracle gate uses. `checkout/../ghostty` is
+    wrong inside a git worktree — from `.claude/worktrees/<wt>` it names
+    `.claude/worktrees/ghostty`, which does not exist (G-LOGFILE reported
+    BLOCKED from every agent worktree until a stopgap symlink was planted
+    there). `--git-common-dir` names the MAIN repository's `.git` from inside
+    any worktree, so its parent is the real checkout.
+
+    R5 — nothing here is caller-settable. There is no environment override, and
+    git runs with every `GIT_*` variable removed: `GIT_DIR` would otherwise
+    redirect `--git-common-dir` to a decoy repository and, with it, the oracle.
+    `checkout` exists for the gates' own self-tests; production callers pass
+    their script-relative root. If git cannot answer, the fallback is the
+    checkout's own sibling — the pre-worktree behaviour, which from a worktree
+    names a missing directory and so reaches the caller's BLOCKED path rather
+    than a vacuous green.
+    """
+    import subprocess
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    try:
+        common = subprocess.run(
+            ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+            cwd=checkout, capture_output=True, text=True, env=env).stdout.strip()
+    except OSError:
+        common = ""
+    main_checkout = os.path.dirname(common) if common else checkout
+    return os.path.abspath(os.path.join(main_checkout, "..", "ghostty"))
+
+
 def _oracle_src():
     """`../ghostty/src` beside the MAIN checkout (correct inside a worktree)."""
-    import subprocess
-    common = subprocess.run(
-        ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
-        cwd=RUSTTY_ROOT, capture_output=True, text=True).stdout.strip()
-    main_checkout = os.path.dirname(common) if common else RUSTTY_ROOT
-    return os.path.abspath(os.path.join(main_checkout, "..", "ghostty", "src"))
+    return os.path.join(oracle_root(), "src")
 
 
 def _test_decl_re(name, prefix=""):

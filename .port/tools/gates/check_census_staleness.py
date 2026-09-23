@@ -39,20 +39,16 @@ ROOT = subprocess.run(["git", "rev-parse", "--show-toplevel"],
                       capture_output=True, text=True, check=True).stdout.strip()
 # The oracle sits BESIDE THE MAIN CHECKOUT, which is NOT `ROOT` when this runs
 # inside a git worktree: `ROOT/../ghostty` resolves to
-# `.claude/worktrees/ghostty`, which does not exist. Measured on a scratch
-# worktree, the old form died with
-# `FileNotFoundError: ... '/…/tmp/ghostty'` — loud, at least, but it made these
-# tools unrunnable from every agent worktree, and one lane worked around it by
-# creating a symlink. A tool that needs a symlink to be correct is one that will
-# be wrong the next time nobody makes one. `--git-common-dir` points at the MAIN
-# repo's .git from inside any worktree, so its parent is always the real
-# checkout; falling back to ROOT keeps the non-worktree case identical.
+# `.claude/worktrees/ghostty`, which does not exist. `--git-common-dir` points at
+# the MAIN repo's .git from inside any worktree; the shared resolver
+# `_gatelib.oracle_root` does that (no env override, `GIT_*` stripped) and is
+# covered by G-LOGFILE's self-test.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _gatelib as G  # noqa: E402
+
+
 def _oracle_root():
-    common = subprocess.run(
-        ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
-        cwd=ROOT, capture_output=True, text=True).stdout.strip()
-    main_checkout = os.path.dirname(common) if common else ROOT
-    return os.path.abspath(os.path.join(main_checkout, "..", "ghostty"))
+    return G.oracle_root(ROOT)
 
 
 ORACLE = _oracle_root()

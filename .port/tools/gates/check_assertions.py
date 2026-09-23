@@ -79,15 +79,11 @@ EXTRACT_TESTS = os.path.join(G.INVENTORY_DIR, "extract_tests.py")
 def _oracle_root():
     """The oracle checkout, which sits BESIDE THE MAIN checkout.
 
-    Copied from check_census_staleness.py: inside a git worktree `ROOT/..` is
-    `.claude/worktrees/`, not the parent of the real checkout, so `--git-common-dir`
-    is what makes these tools runnable from an agent worktree without a symlink.
+    Delegates to the shared `_gatelib.oracle_root` (worktree-correct via
+    `--git-common-dir`, no caller-settable input; G-LOGFILE's self-test covers
+    the worktree and missing-oracle arms).
     """
-    common = subprocess.run(
-        ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
-        cwd=G.RUSTTY_ROOT, capture_output=True, text=True).stdout.strip()
-    main_checkout = os.path.dirname(common) if common else G.RUSTTY_ROOT
-    return os.path.abspath(os.path.join(main_checkout, "..", "ghostty"))
+    return G.oracle_root(G.RUSTTY_ROOT)
 
 
 def load_drift_ledger():

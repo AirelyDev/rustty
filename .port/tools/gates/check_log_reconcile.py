@@ -20,9 +20,10 @@ R5 — this gate never lowers its own bar:
   * an allowance that is LARGER than the measured deficit is RED, not green: it
     is a ratchet, so restoring a site must tighten the allowance in the same
     commit and can never leave slack behind for a future regression to hide in;
-  * NOTHING here is env-settable. The oracle path is the one `check_test_counts.py`
-    uses (R3: the oracle is an external read-only reference), and an absent oracle
-    is BLOCKED (3), never a vacuous green.
+  * NOTHING here is env-settable. The oracle is the checkout beside the MAIN
+    checkout, resolved by the shared `_gatelib.oracle_root` (R3: the oracle is an
+    external read-only reference; correct from a git worktree), and an absent
+    oracle is BLOCKED (3), never a vacuous green.
 
 VACUITY: the reference side binds against an external checkout. With it absent
 every count would be 0 and every file would "reconcile". Three defenses, all
@@ -73,8 +74,16 @@ DEAD_SITES = os.path.join(PORT_DIR, "parity-closure", "LOG-DEAD-SITES.tsv")
 LEDGER = os.path.join(PORT_DIR, "parity-closure", "LEDGER.tsv")
 
 # R3: the oracle is an EXTERNAL read-only checkout, never shipped into the repo.
-# Same location `check_test_counts.py` and every other oracle-reading gate uses.
-ORACLE = os.path.join(os.path.dirname(ROOT), "ghostty")
+# It sits beside the MAIN checkout, which is not `ROOT` inside a git worktree
+# (`ROOT/../ghostty` from `.claude/worktrees/<wt>` names a directory that does not
+# exist). `_gatelib.oracle_root` resolves the main checkout through
+# `--git-common-dir` — the resolver G2, G-CENSUS and the contract-deletions ledger
+# share — with no environment override and `GIT_*` stripped (R5). The
+# `oracle_resolution_check` self-test arm drives it from a real worktree.
+sys.path.insert(0, GATES_DIR)
+import _gatelib as G  # noqa: E402
+
+ORACLE = G.oracle_root(ROOT)
 ORACLE_PIN = "20abdb50a6216c450d6d4d010c41c7edf5ab15b2"
 
 # ---------------------------------------------------------------------------
@@ -1955,6 +1964,131 @@ def live_scanner_check():
     return ok, out
 
 
+def oracle_resolution_check():
+    """(ok, lines) — the oracle is found beside the MAIN checkout from a worktree,
+    and an absent or off-pin oracle is BLOCKED, never a vacuous green.
+
+    Builds a throwaway repository `<tmp>/rustty` with a linked worktree at
+    `<tmp>/rustty/.claude/worktrees/wt` (the agent layout), copies this gate and
+    `_gatelib.py` into the worktree, and RUNS THE COPY there end to end. The
+    fixture is fresh, so the worktree-sibling path the old formula used
+    (`.claude/worktrees/ghostty`) cannot exist; the arm asserts that before
+    relying on it, so no stopgap symlink can make it pass.
+    """
+    import shutil
+    import subprocess
+    import tempfile
+
+    out, ok = [], True
+
+    def case(name, good, detail=""):
+        nonlocal ok
+        if not good:
+            ok = False
+        out.append(f"  [{'ok ' if good else 'FAIL'}] oracle resolution: {name}"
+                   + (f"\n         ({detail})" if detail and not good else ""))
+
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    git_cfg = ["-c", "user.name=selftest", "-c", "user.email=selftest@invalid",
+               "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null",
+               "-c", "init.defaultBranch=main"]
+
+    def git(cwd, *args):
+        return subprocess.run(["git", *git_cfg, *args], cwd=cwd, env=env,
+                              capture_output=True, text=True, check=True)
+
+    base = os.path.realpath(tempfile.mkdtemp(prefix="glogfile_oracle_"))
+    try:
+        main_co = os.path.join(base, "rustty")
+        wt = os.path.join(main_co, ".claude", "worktrees", "wt")
+        oracle = os.path.join(base, "ghostty")
+        stale = os.path.join(main_co, ".claude", "worktrees", "ghostty")
+        os.makedirs(main_co)
+        git(main_co, "init", "-q")
+        git(main_co, "commit", "-q", "--allow-empty", "-m", "fixture")
+        git(main_co, "worktree", "add", "-q", "--detach", wt)
+        gates = os.path.join(wt, ".port", "tools", "gates")
+        os.makedirs(gates)
+        os.makedirs(os.path.join(wt, ".port", "parity-closure"))
+        for f in ("check_log_reconcile.py", "_gatelib.py"):
+            shutil.copy(os.path.join(GATES_DIR, f), gates)
+        # A present-but-empty portmap: the gate's first check passes and the
+        # oracle checks are the next thing it reaches.
+        open(os.path.join(wt, ".port", "parity-closure", "LOG-PORTMAP.tsv"), "w").close()
+
+        old_formula = os.path.join(os.path.dirname(wt), "ghostty")
+        case("fixture has no worktree-sibling oracle (no stopgap)",
+             old_formula == stale and not os.path.lexists(stale), old_formula)
+
+        def write_head(root, head):
+            os.makedirs(os.path.join(root, "src"), exist_ok=True)
+            os.makedirs(os.path.join(root, ".git"), exist_ok=True)
+            with open(os.path.join(root, ".git", "HEAD"), "w") as fh:
+                fh.write(head + "\n")
+
+        def gate(extra_env=None):
+            e = dict(env)
+            e.update(extra_env or {})
+            r = subprocess.run([sys.executable, os.path.join(gates, "check_log_reconcile.py")],
+                               cwd=wt, env=e, capture_output=True, text=True)
+            return r.returncode, r.stderr
+
+        # 1. the resolver, called on the worktree path
+        got = G.oracle_root(wt)
+        case("resolver from a worktree names the MAIN checkout's sibling",
+             got == oracle, f"got {got}, want {oracle}")
+        # 2. oracle absent -> BLOCKED, naming the main-checkout sibling
+        rc, err = gate()
+        case("absent oracle is BLOCKED (exit 3) at the main-checkout sibling",
+             rc == 3 and f"oracle checkout is absent at {oracle}.\n" in err,
+             f"rc={rc} stderr={err.strip()!r}")
+        # 3. oracle present off the pin -> BLOCKED
+        write_head(oracle, "0" * 40)
+        rc, err = gate()
+        case("off-pin oracle is BLOCKED (exit 3)",
+             rc == 3 and "not the pin" in err, f"rc={rc} stderr={err.strip()!r}")
+        # 4. GIT_DIR cannot redirect the oracle: a decoy repository whose sibling
+        #    IS at the pin must not turn the off-pin real oracle into a pass.
+        decoy = os.path.join(base, "decoy", "rustty")
+        os.makedirs(decoy)
+        git(decoy, "init", "-q")
+        write_head(os.path.join(base, "decoy", "ghostty"), ORACLE_PIN)
+        rc, err = gate({"GIT_DIR": os.path.join(decoy, ".git")})
+        case("GIT_DIR in the environment does not redirect the oracle",
+             rc == 3 and "not the pin" in err, f"rc={rc} stderr={err.strip()!r}")
+        # 5. oracle at the pin -> the oracle checks pass (the run then stops at
+        #    the deliberately empty portmap)
+        write_head(oracle, ORACLE_PIN)
+        rc, err = gate()
+        case("pinned oracle beside the main checkout passes the oracle checks",
+             rc == 3 and "oracle checkout" not in err and "portmap" in err,
+             f"rc={rc} stderr={err.strip()!r}")
+    except (OSError, subprocess.CalledProcessError) as exc:
+        case("fixture could not be built", False, str(exc))
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+
+    # 6. the live run: inside a linked worktree the resolved oracle must be the
+    #    main checkout's sibling, not the worktree's own (a string compare, so a
+    #    stopgap symlink at the worktree sibling cannot satisfy it).
+    genv = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    try:
+        gd = subprocess.run(["git", "rev-parse", "--path-format=absolute", "--git-dir",
+                             "--git-common-dir"], cwd=ROOT, env=genv,
+                            capture_output=True, text=True).stdout.split()
+    except OSError:
+        gd = []
+    if len(gd) == 2 and os.path.realpath(gd[0]) != os.path.realpath(gd[1]):
+        want = os.path.join(os.path.dirname(os.path.dirname(gd[1])), "ghostty")
+        case("live worktree run resolves to the main checkout's sibling",
+             ORACLE == want and ORACLE != os.path.join(os.path.dirname(ROOT), "ghostty"),
+             f"got {ORACLE}, want {want}")
+    else:
+        out.append("  [ok ] oracle resolution: live run is from the main checkout "
+                   "(the worktree case is the fixture above)")
+    return ok, out
+
+
 # ---------------------------------------------------------------------------
 # Self-test
 # ---------------------------------------------------------------------------
@@ -2356,8 +2490,9 @@ def self_test():
 
     lit_ok, lit_lines = literal_shape_check()
     live_ok, live_lines = live_scanner_check()
-    ok = lit_ok and live_ok
-    for line in lit_lines + live_lines:
+    orc_ok, orc_lines = oracle_resolution_check()
+    ok = lit_ok and live_ok and orc_ok
+    for line in lit_lines + live_lines + orc_lines:
         print(line)
     for name, got, want in cases:
         mark = "ok " if got == want else "FAIL"
@@ -2373,7 +2508,9 @@ def self_test():
         "respaced message text, a comment quoting a call the reference does not have,\n"
         "an UNDECLARED reference\n"
         "file with live log sites and an uncategorised exclusion — and the scanner agrees\n"
-        "with a naive grep on every mapped port file and on every Rust literal shape."
+        "with a naive grep on every mapped port file and on every Rust literal shape;\n"
+        "the oracle is found beside the MAIN checkout from a worktree, and an absent,\n"
+        "off-pin or GIT_DIR-redirected oracle is BLOCKED."
         if ok
         else "SELF-TEST RED: the gate did not flip."
     )
