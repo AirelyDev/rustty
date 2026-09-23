@@ -9716,6 +9716,18 @@ impl Target for Config {
         Some(&mut self._diagnostics)
     }
 
+    /// PORTS: `formatValues(Config, key, writer)` (`cli/args.zig`): for the field
+    /// named `key`, if its `@typeInfo` is `.@"enum"`, the `, valid values are:
+    /// ...` suffix. `config_completion_kind`'s `Enum` arm is exactly that set of
+    /// fields (the same `@typeInfo(field.type)` switch drives the reference's
+    /// completions), with each list in declaration order (parity S67-F1).
+    fn format_values(&self, key: &[u8]) -> Vec<u8> {
+        match Key::string_to_enum(key).map(config_completion_kind) {
+            Some(ConfigCompletionKind::Enum(names)) => rustty_args::args::format_enum_values(names),
+            _ => Vec::new(),
+        }
+    }
+
     /// PORTS: `pub const compatibility = std.StaticStringMap(...).initComptime(&.{...})`
     /// + `@hasDecl(Config, "compatibility")` lookup in `parseIntoField`.
     ///
@@ -12974,6 +12986,36 @@ mod integration_tests {
         cfg.load_iter(&mut it).unwrap();
         assert!(cfg._diagnostics.empty());
         assert_eq!(MiddleClickAction::ClipboardPaste, cfg.middle_click_action);
+    }
+
+    // parity S67-F1: `cli/args.zig` `formatInvalidValue`/`formatValueRequired`
+    // append `formatValues`' `, valid values are: ...` for an enum-typed field.
+    // The cursor-style text is the one MEASURED from Ghostty's
+    // `+validate-config` (installed release build, not the pin).
+    #[test]
+    fn enum_field_diagnostics_list_the_valid_values() {
+        let mut cfg = Config::default_config();
+        let mut it = TestIterator::new(&[
+            b"--cursor-style=blah",
+            b"--cursor-style",
+            b"--font-size=bogus",
+        ]);
+        cfg.load_iter(&mut it).unwrap();
+        let messages: Vec<&[u8]> = cfg
+            ._diagnostics
+            .items()
+            .iter()
+            .map(|d| d.message.as_slice())
+            .collect();
+        assert_eq!(
+            vec![
+                &b"invalid value \"blah\", valid values are: bar, block, underline, block_hollow"[..],
+                &b"value required, valid values are: bar, block, underline, block_hollow"[..],
+                // A non-enum field gets no suffix.
+                &b"invalid value \"bogus\""[..],
+            ],
+            messages
+        );
     }
 
     // test "compatibility: gtk-single-instance desktop" {

@@ -171,6 +171,17 @@ impl args::Target for Options {
         Some(&mut self._diagnostics)
     }
 
+    // formatValues(Options, key, writer): of the four fields only `style`
+    // (`font.Style`) is `.@"enum"`; `presentation` is `?font.Presentation`,
+    // whose `@typeInfo` is `.optional`, so it gets no suffix (parity S67-F1).
+    fn format_values(&self, key: &[u8]) -> Vec<u8> {
+        match key {
+            // pub const Style = enum(u3) { regular, bold, italic, bold_italic };
+            b"style" => args::format_enum_values(&[b"regular", b"bold", b"italic", b"bold_italic"]),
+            _ => Vec::new(),
+        }
+    }
+
     // @hasDecl(Options, "help") == true.
     fn has_help_decl(&self) -> bool {
         true
@@ -708,5 +719,44 @@ fn font_shared_grid_set_derived_config(config: &Config) -> font::shared_grid_set
         //   arm — exact); the config value flows on freetype targets when that DI
         //   lands with the Linux backend.
         freetype_load_flags: rustty_font_shaper::face::FREETYPE_LOAD_FLAGS_DEFAULT,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct VecArgs(std::vec::IntoIter<Vec<u8>>);
+    impl args::ArgIterator for VecArgs {
+        type Item = Vec<u8>;
+        fn next(&mut self) -> Option<Vec<u8>> {
+            self.0.next()
+        }
+    }
+    impl rustty_args::diagnostics::LocationProvider for VecArgs {}
+
+    // parity S67-F1: `formatValues(Options, "style", ...)` appends the
+    // `font.Style` names; `presentation` (`?font.Presentation`, `.optional`)
+    // gets none. The style text is the one MEASURED from Ghostty's
+    // `+show-face --cp=65 --style=bogus` (installed release build, not the pin).
+    #[test]
+    fn enum_option_diagnostic_lists_the_valid_values() {
+        let mut opts = Options::default();
+        let mut it =
+            VecArgs(vec![b"--style=bogus".to_vec(), b"--presentation=bogus".to_vec()].into_iter());
+        args::parse(&mut opts, &mut it).unwrap();
+        let messages: Vec<&[u8]> = opts
+            ._diagnostics
+            .items()
+            .iter()
+            .map(|d| d.message.as_slice())
+            .collect();
+        assert_eq!(
+            vec![
+                &b"invalid value \"bogus\", valid values are: regular, bold, italic, bold_italic"[..],
+                &b"invalid value \"bogus\""[..],
+            ],
+            messages
+        );
     }
 }

@@ -840,6 +840,32 @@ fn format_invalid_value<T: Target>(dst: &T, key: &[u8], value: Option<&[u8]>) ->
 // destination implements (it knows its own enum fields); the default returns no
 // suffix (no matching enum field), exactly as the reference writes nothing for
 // non-enum fields.
+//
+// CORRECTION (parity S67-F1, task T-C): the note above used to be the whole
+// story, and no destination implemented `format_values`, so the suffix was
+// never emitted. `format_enum_values` below is the `.@"enum"` arm; the two
+// destinations with enum-typed fields AND `_diagnostics` (the only ones that
+// reach `formatValues`) call it: `rustty-config`'s `Config` and
+// `rustty-cli`'s `show_face::Options` (`style`).
+
+/// The `.@"enum" => |e|` arm of `formatValues`: `, valid values are: ` then
+/// each variant name in declaration order, comma-separated. `names` is
+/// `e.fields |field| field.name`.
+pub fn format_enum_values(names: &[&[u8]]) -> Vec<u8> {
+    let mut writer: Vec<u8> = Vec::new();
+    // try writer.print(", valid values are: ", .{});
+    writer.extend_from_slice(b", valid values are: ");
+    // inline for (e.fields, 0..) |field, i| {
+    for (i, name) in names.iter().enumerate() {
+        // if (i != 0) try writer.print(", ", .{});
+        if i != 0 {
+            writer.extend_from_slice(b", ");
+        }
+        // try writer.print("{s}", .{field.name});
+        writer.extend_from_slice(name);
+    }
+    writer
+}
 
 // Parse a single key/value pair into the destination type T.
 //
