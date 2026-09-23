@@ -2487,3 +2487,18 @@ owned by the surface and freed on the next `newSurfaceOptions` or on `deinit`; t
 Reference defect: `UPSTREAM-DEFECTS.md` UD68.
 
 **state**: CLOSED by task R13-C.
+
+## N57 — a failed keymap reload made `deinit` call `CFRelease(NULL)`, and a failed `init` leaked the source
+
+- **id**: N57. Inventory M19.
+- **found by**: records F13 (LIFETIMES L14) and the inventory consolidation; fixed by task R13-C.
+- **severity**: low. **kind**: missing-branch (reference defect, R13).
+- **oracle**: `src/input/KeymapDarwin.zig:60-119`.
+- **rustty**: `crates/rustty-input/src/keymap_darwin.rs` (`reload`, `reinit`).
+
+The port stored the `TISCopy…` result before checking it, so after a failed reload `deinit` released
+NULL (a crash where the reference double-releases), and a layout-less source leaked on the init error
+path. The copy is now committed only on success, released on the error path, and the old source is
+released only after a successful reload. Reference defect: `UPSTREAM-DEFECTS.md` UD69.
+
+**state**: CLOSED by task R13-C.

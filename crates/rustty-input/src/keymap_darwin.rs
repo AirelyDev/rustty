@@ -117,9 +117,35 @@ impl Keymap {
 
     /// Reload the keymap. This must be called if the user changes their
     /// keyboard layout.
+    //
+    // PORT NOTE: reference defect (R13), UD69. The reference releases
+    // `self.source` FIRST and then `reinit`s; if `reinit` fails, the keymap keeps
+    // either the released pointer (a null `TISCopy…` returns before the store),
+    // which `deinit` then releases a second time, or a new source whose
+    // `unicode_layout` still points into the released one. The port reinits
+    // first and releases the old source only once the new one is committed, so
+    // a failed reload leaves the keymap on its previous, still-owned layout and
+    // `deinit` releases exactly what the keymap holds. Reachable when the OS
+    // hands back no current layout, or one without `uchr` data, after the user
+    // switches input source. The error still propagates, as in the reference.
     pub fn reload(&mut self) -> Result<(), Error> {
-        unsafe { CFRelease(self.source as *mut std::ffi::c_void) };
-        self.reinit()
+        self.reload_with(
+            || unsafe { TISCopyCurrentKeyboardLayoutInputSource() },
+            |source| unsafe { TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData) },
+        )
+    }
+
+    /// [`reload`](Self::reload) with the two TIS calls passed in, so a test can
+    /// make either return null. Production passes the real calls.
+    fn reload_with(
+        &mut self,
+        copy_source: impl FnOnce() -> *mut TISInputSource,
+        layout_data: impl FnOnce(*mut TISInputSource) -> *mut std::ffi::c_void,
+    ) -> Result<(), Error> {
+        let old = self.source;
+        self.reinit_with(copy_source, layout_data)?;
+        unsafe { CFRelease(old as *mut std::ffi::c_void) };
+        Ok(())
     }
 
     /// Get the input source ID for the current keyboard layout. The input
@@ -144,17 +170,41 @@ impl Keymap {
 
     /// Reinit reinitializes the keymap. It assumes that all the memory associated
     /// with the keymap is already freed.
+    //
+    // PORT NOTE: reference defect (R13), UD69. The reference stores the +1
+    // `TISCopy…` result into `self.source` and then returns
+    // `GetInputSourceFailed` if the source has no `kTISPropertyUnicodeKeyLayoutData`,
+    // so `init` (which then discards the keymap) leaks the source, and `reload`
+    // is left holding a source whose layout was never read. The port copies into
+    // a local, releases it on that error path, and commits `source` and
+    // `unicode_layout` together only on success; on any error the keymap's
+    // fields are untouched. (`reload` now releases the previous source after
+    // this succeeds, so the "already freed" precondition above is kept by the
+    // caller's ordering rather than before the call.)
     fn reinit(&mut self) -> Result<(), Error> {
-        self.source = unsafe { TISCopyCurrentKeyboardLayoutInputSource() };
-        if self.source.is_null() {
+        self.reinit_with(
+            || unsafe { TISCopyCurrentKeyboardLayoutInputSource() },
+            |source| unsafe { TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData) },
+        )
+    }
+
+    /// [`reinit`](Self::reinit) with the two TIS calls passed in (see
+    /// [`reload_with`](Self::reload_with)).
+    fn reinit_with(
+        &mut self,
+        copy_source: impl FnOnce() -> *mut TISInputSource,
+        layout_data: impl FnOnce(*mut TISInputSource) -> *mut std::ffi::c_void,
+    ) -> Result<(), Error> {
+        let source = copy_source();
+        if source.is_null() {
             return Err(Error::GetInputSourceFailed);
         }
 
-        self.unicode_layout = {
+        let unicode_layout = {
             // This returns a CFDataRef
-            let data_raw =
-                unsafe { TISGetInputSourceProperty(self.source, kTISPropertyUnicodeKeyLayoutData) };
+            let data_raw = layout_data(source);
             if data_raw.is_null() {
+                unsafe { CFRelease(source as *mut std::ffi::c_void) };
                 return Err(Error::GetInputSourceFailed);
             }
             let data = data_raw as *const CFData;
@@ -162,6 +212,8 @@ impl Keymap {
             // The CFDataRef contains a UCKeyboardLayout pointer
             unsafe { cf_data_get_pointer(data) as *const UCKeyboardLayout }
         };
+        self.source = source;
+        self.unicode_layout = unicode_layout;
 
         // if (comptime builtin.mode == .Debug) id: { ... }
         if cfg!(debug_assertions) {
@@ -556,6 +608,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn anonymous() {
+        let _tis = TIS_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         // var keymap = try init();
         // defer keymap.deinit();
         let keymap = Keymap::init().unwrap();
@@ -591,5 +644,171 @@ mod tests {
 
         // PORT NOTE: `defer keymap.deinit();` runs here at scope end.
         keymap.deinit();
+    }
+
+    // UD69 (R13) tests. The two TIS calls are replaced through `reinit_with` /
+    // `reload_with` (production passes the real calls), so a test can make the
+    // copy or the layout lookup return null. The "input sources" are plain
+    // CFData objects: on every path these tests take, nothing hands them to a
+    // TIS function (the success path's debug `source_id` is never reached), and
+    // a fresh CF object's retain count is exact, so a leak (+1) or an extra
+    // release (-1) is observable.
+    #[cfg(target_os = "macos")]
+    #[link(name = "CoreFoundation", kind = "framework")]
+    extern "C" {
+        fn CFDataCreate(
+            allocator: *const std::ffi::c_void,
+            bytes: *const u8,
+            length: std::os::raw::c_long,
+        ) -> *mut std::ffi::c_void;
+        fn CFRetain(cf: *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+        fn CFGetRetainCount(cf: *mut std::ffi::c_void) -> std::os::raw::c_long;
+    }
+
+    // HIToolbox's TIS calls are not thread-safe: two libtest workers calling
+    // `TISCopyCurrentKeyboardLayoutInputSource` at once abort inside
+    // HIToolbox (the same finding as `rustty-apprt-c/tests/macos_window_host.rs`).
+    // The app calls them from one thread; the tests that make real TIS calls
+    // take this lock to keep that contract.
+    #[cfg(target_os = "macos")]
+    static TIS_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[cfg(target_os = "macos")]
+    fn fake_source() -> *mut TISInputSource {
+        let bytes = [1u8, 2, 3, 4];
+        let obj = unsafe { CFDataCreate(std::ptr::null(), bytes.as_ptr(), 4) };
+        assert!(!obj.is_null());
+        obj.cast()
+    }
+
+    #[cfg(target_os = "macos")]
+    fn retain_count(obj: *mut TISInputSource) -> std::os::raw::c_long {
+        unsafe { CFGetRetainCount(obj.cast()) }
+    }
+
+    /// `init`'s leak: the copy succeeds (+1), the layout lookup fails. The copy
+    /// must be released and the keymap fields left untouched.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_source_without_layout_data_is_released_on_the_error_path() {
+        let s = fake_source();
+        let before = retain_count(s);
+        let mut looked_up = false;
+        let mut keymap = Keymap {
+            source: std::ptr::null_mut(),
+            unicode_layout: std::ptr::null(),
+        };
+        let got = keymap.reinit_with(
+            || unsafe { CFRetain(s.cast()) }.cast(),
+            |src| {
+                assert_eq!(src, s);
+                looked_up = true;
+                std::ptr::null_mut()
+            },
+        );
+        assert_eq!(Err(Error::GetInputSourceFailed), got);
+        assert!(looked_up, "the layout lookup ran on the copied source");
+        assert_eq!(
+            before,
+            retain_count(s),
+            "the +1 copy was released, not leaked"
+        );
+        assert!(keymap.source.is_null() && keymap.unicode_layout.is_null());
+        unsafe { CFRelease(s.cast()) };
+    }
+
+    /// `reload`'s double release: the new copy returns null. The keymap must
+    /// keep its old source, NOT released, so `deinit` releases it exactly once.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_failed_reload_keeps_the_old_source_owned() {
+        let old = fake_source();
+        // Our own +1, so the object outlives the keymap's release and its count
+        // can still be read afterwards.
+        unsafe { CFRetain(old.cast()) };
+        let layout = 0x1000 as *const UCKeyboardLayout;
+        let mut keymap = Keymap {
+            source: old,
+            unicode_layout: layout,
+        };
+        let before = retain_count(old);
+        let mut copied = false;
+
+        let got = keymap.reload_with(
+            || {
+                copied = true;
+                std::ptr::null_mut()
+            },
+            |_| unreachable!("no source to look up"),
+        );
+        assert_eq!(Err(Error::GetInputSourceFailed), got);
+        assert!(copied, "the reload reached the copy");
+        assert_eq!(old, keymap.source, "the keymap keeps its source, not null");
+        assert_eq!(layout, keymap.unicode_layout);
+        assert_eq!(before, retain_count(old), "the old source was not released");
+
+        keymap.deinit();
+        assert_eq!(before - 1, retain_count(old), "deinit releases it once");
+        unsafe { CFRelease(old.cast()) };
+    }
+
+    /// `reload` where the new source has no layout data: the new copy is
+    /// released, and the keymap keeps the old source and layout.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_reload_to_a_source_without_layout_data_keeps_the_old_layout() {
+        let old = fake_source();
+        unsafe { CFRetain(old.cast()) };
+        let new = fake_source();
+        let layout = 0x1000 as *const UCKeyboardLayout;
+        let mut keymap = Keymap {
+            source: old,
+            unicode_layout: layout,
+        };
+        let (old_before, new_before) = (retain_count(old), retain_count(new));
+
+        let got = keymap.reload_with(
+            || unsafe { CFRetain(new.cast()) }.cast(),
+            |_| std::ptr::null_mut(),
+        );
+        assert_eq!(Err(Error::GetInputSourceFailed), got);
+        assert_eq!((old, layout), (keymap.source, keymap.unicode_layout));
+        assert_eq!(
+            old_before,
+            retain_count(old),
+            "the old source was not released"
+        );
+        assert_eq!(new_before, retain_count(new), "the new copy was released");
+
+        keymap.deinit();
+        unsafe {
+            CFRelease(old.cast());
+            CFRelease(new.cast());
+        }
+    }
+
+    /// A successful reload through the real TIS calls still commits a source
+    /// and releases the previous one (the reference's behaviour on success).
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_successful_reload_replaces_the_source() {
+        let _tis = TIS_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let old = fake_source();
+        unsafe { CFRetain(old.cast()) };
+        let mut keymap = Keymap {
+            source: old,
+            unicode_layout: std::ptr::null(),
+        };
+        let before = retain_count(old);
+        keymap.reload().expect("the current keyboard layout loads");
+        assert_ne!(old, keymap.source);
+        assert!(!keymap.unicode_layout.is_null());
+        assert_eq!(
+            before - 1,
+            retain_count(old),
+            "the previous source was released"
+        );
+        keymap.deinit();
+        unsafe { CFRelease(old.cast()) };
     }
 }
