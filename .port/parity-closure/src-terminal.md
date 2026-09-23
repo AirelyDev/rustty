@@ -46,7 +46,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** resize failure-path test compares only subsets of flags, tabstops and cursor
   - **Oracle:** `src/terminal/Terminal.zig:4528-4569` → **Rustty:** `crates/rustty-vt/src/terminal.rs:19136-19306`
   - **Audit's suggested fix:** Snapshot `t.flags` (derive/impl PartialEq on Flags), clone the full `Tabstops` table (or compare all `get(i)` for i in 0..cols), and compare the full `Cursor` value (derive PartialEq or compare every field) before/after the failed resize.
-- [ ] **S149-F1** · CONFIRMED · `INDIV` · missing-branch
+- [x] **S149-F1** · CONFIRMED · `INDIV` · missing-branch
   - **What:** apc Handler does not gate the glyph protocol on build_options.glyph_protocol
   - **Oracle:** `src/terminal/apc.zig:84-97, 134-140, 200-207, 237-246, 280-283, 294-297, 432-435, 446-449, 661, 727` → **Rustty:** `crates/rustty-vt/src/apc/mod.rs:174-191, 255-261, 355-362, 427-433, 477, 502, 722, 749, 1069-1086, 1152-1163`
   - **Audit's suggested fix:** Mirror the kitty gating: in feed (identify `;` arm, Glyph arm), feed_slice (Glyph arm), end (Glyph arm), State::deinit and Command::deinit, wrap with `if crate::options::GLYPH_PROTOCOL { ... } else { self.state = State::Ignore / unreachable!() }` exactly as the oracle does; add `if !crate::options::GLYPH_PROTOCOL { return; }` to valid_glyph_command and feed_slice_valid_glyph_command.

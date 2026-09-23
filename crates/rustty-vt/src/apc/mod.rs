@@ -18,7 +18,7 @@ use allocator_api2::alloc::Global as Allocator;
 // const kitty_gfx = @import("kitty/graphics.zig");
 pub mod glyph;
 use crate::kitty::graphics as kitty_gfx;
-use crate::options::KITTY_GRAPHICS;
+use crate::options::{GLYPH_PROTOCOL, KITTY_GRAPHICS};
 
 // const log = std.log.scoped(.terminal_apc);
 const LOG_SCOPE: &str = "terminal_apc";
@@ -165,8 +165,12 @@ impl Handler {
                 // if (byte == ';') {
                 //     const str = id.buf[0..id.len];
                 //     if (std.mem.eql(u8, str, glyph.identifier)) {
-                //         if (self.enabled.contains(.glyph)) { ... }
-                //         else { self.state = .ignore; }
+                //         if (comptime build_options.glyph_protocol) {
+                //             if (self.enabled.contains(.glyph)) { ... }
+                //             else { self.state = .ignore; }
+                //         } else {
+                //             self.state = .ignore;
+                //         }
                 //     } else {
                 //         self.beginUnknown(alloc, str, &.{byte});
                 //     }
@@ -177,10 +181,16 @@ impl Handler {
                     let prefix_len = id.len as usize;
                     let str = &prefix_buf[0..prefix_len];
                     if str == glyph::IDENTIFIER {
-                        if self.enabled[Protocol::Glyph as usize] {
-                            self.state = State::Glyph(glyph::CommandParser::init(
-                                self.max_bytes[Protocol::Glyph as usize],
-                            ));
+                        // CORRECTION (parity S149-F1): the build-option gate
+                        // was missing here and in the glyph arms below.
+                        if GLYPH_PROTOCOL {
+                            if self.enabled[Protocol::Glyph as usize] {
+                                self.state = State::Glyph(glyph::CommandParser::init(
+                                    self.max_bytes[Protocol::Glyph as usize],
+                                ));
+                            } else {
+                                self.state = State::Ignore;
+                            }
                         } else {
                             self.state = State::Ignore;
                         }
@@ -248,16 +258,22 @@ impl Handler {
                 }
             }
 
-            // .glyph => |*p| p.feed(byte) catch |err| {
-            //     log.warn("glyph protocol error: {}", .{err});
-            //     p.deinit();
-            //     self.state = .ignore;
-            // },
+            // .glyph => |*p| if (comptime build_options.glyph_protocol) {
+            //     p.feed(byte) catch |err| {
+            //         log.warn("glyph protocol error: {}", .{err});
+            //         p.deinit();
+            //         self.state = .ignore;
+            //     };
+            // } else unreachable,
             State::Glyph(p) => {
-                if let Err(err) = p.feed(byte) {
-                    log::warn!(target: LOG_SCOPE, "glyph protocol error: {err:?}");
-                    p.deinit();
-                    self.state = State::Ignore;
+                if GLYPH_PROTOCOL {
+                    if let Err(err) = p.feed(byte) {
+                        log::warn!(target: LOG_SCOPE, "glyph protocol error: {err:?}");
+                        p.deinit();
+                        self.state = State::Ignore;
+                    }
+                } else {
+                    unreachable!();
                 }
             }
         }
@@ -352,14 +368,18 @@ impl Handler {
                     }
                 }
 
-                // .glyph => |*p| { p.feedSlice(rem) catch ...; return; },
+                // .glyph => |*p| if (comptime build_options.glyph_protocol) { ... } else unreachable,
                 State::Glyph(p) => {
-                    if let Err(err) = p.feed_slice(rem) {
-                        log::warn!(target: LOG_SCOPE, "glyph protocol error: {err:?}");
-                        p.deinit();
-                        self.state = State::Ignore;
+                    if GLYPH_PROTOCOL {
+                        if let Err(err) = p.feed_slice(rem) {
+                            log::warn!(target: LOG_SCOPE, "glyph protocol error: {err:?}");
+                            p.deinit();
+                            self.state = State::Ignore;
+                        }
+                        return;
+                    } else {
+                        unreachable!();
                     }
-                    return;
                 }
             }
         }
@@ -419,19 +439,26 @@ impl Handler {
             }
 
             // .glyph => |*p| glyph_cmd: {
+            //     if (comptime !build_options.glyph_protocol) unreachable;
             //     const command = p.complete(p.alloc) catch |err| {
             //         log.warn("glyph protocol error: {}", .{err});
             //         break :glyph_cmd null;
             //     };
             //     break :glyph_cmd .{ .glyph = command };
             // },
-            State::Glyph(mut p) => match p.complete() {
-                Ok(command) => Some(Command::Glyph(command)),
-                Err(err) => {
-                    log::warn!(target: LOG_SCOPE, "glyph protocol error: {err:?}");
-                    None
+            State::Glyph(mut p) => {
+                if !GLYPH_PROTOCOL {
+                    unreachable!();
                 }
-            },
+
+                match p.complete() {
+                    Ok(command) => Some(Command::Glyph(command)),
+                    Err(err) => {
+                        log::warn!(target: LOG_SCOPE, "glyph protocol error: {err:?}");
+                        None
+                    }
+                }
+            }
         }
     }
 }
@@ -474,7 +501,12 @@ pub enum State {
     Kitty(kitty_gfx::CommandParser),
 
     /// Glyph protocol
-    // glyph: glyph.CommandParser,
+    // glyph: if (build_options.glyph_protocol)
+    //     glyph.CommandParser
+    // else
+    //     void,
+    // PORT NOTE: always carries the parser, as `Kitty` does (see above); the
+    // `!GLYPH_PROTOCOL` arms keep the reference's `unreachable` guards.
     Glyph(glyph::CommandParser),
 
     /// An unsupported APC retained for the optional unknown callback.
@@ -489,7 +521,10 @@ impl State {
     //     switch (self.*) {
     //         .inactive, .ignore, .identify => {},
     //         .unknown => |*v| v.deinit(),
-    //         .glyph => |*v| v.deinit(),
+    //         .glyph => |*v| if (comptime build_options.glyph_protocol)
+    //             v.deinit()
+    //         else
+    //             unreachable,
     //         .kitty => |*v| if (comptime build_options.kitty_graphics)
     //             v.deinit()
     //         else
@@ -500,7 +535,13 @@ impl State {
         match self {
             State::Inactive | State::Ignore | State::Identify(_) => {}
             State::Unknown(v) => v.deinit(),
-            State::Glyph(v) => v.deinit(),
+            State::Glyph(v) => {
+                if GLYPH_PROTOCOL {
+                    v.deinit();
+                } else {
+                    unreachable!();
+                }
+            }
             State::Kitty(_v) => {
                 if KITTY_GRAPHICS {
                     // v.deinit();
@@ -714,7 +755,7 @@ impl Protocol {
 /// A recognized or unsupported APC command.
 // pub const Command = union(enum) {
 //     kitty: if (build_options.kitty_graphics) kitty_gfx.Command else void,
-//     glyph: glyph.Request,
+//     glyph: if (build_options.glyph_protocol) glyph.Request else void,
 //     unknown: Unknown,
 //     ...
 // };
@@ -731,7 +772,11 @@ impl Command {
     //             v.deinit(alloc)
     //         else
     //             unreachable,
-    //         .glyph => |*v| v.deinit(alloc),
+    //         .glyph => |*v| if (comptime build_options.glyph_protocol)
+    //             v.deinit(alloc)
+    //         else
+    //             unreachable,
+    //         .unknown => |*v| v.deinit(alloc),
     //     }
     // }
     // PORT NOTE: both the kitty `Command` and the glyph `Request` own their bytes
@@ -747,7 +792,12 @@ impl Command {
                 let _ = alloc;
             }
             // v.deinit(alloc) — `Request::deinit` frees on drop; no-op.
-            Command::Glyph(v) => v.deinit(),
+            Command::Glyph(v) => {
+                if !GLYPH_PROTOCOL {
+                    unreachable!();
+                }
+                v.deinit();
+            }
             // .unknown => |*v| v.deinit(alloc),
             Command::Unknown(v) => v.deinit(alloc),
         }
@@ -776,6 +826,11 @@ mod tests {
     // `log.warn("glyph protocol error: {}", .{err})` (apc.zig:241-244).
     #[test]
     fn glyph_protocol_error_at_end_logs() {
+        // The glyph parser only exists with `build_options.glyph_protocol`.
+        if !GLYPH_PROTOCOL {
+            return;
+        }
+
         let alloc = Global;
         let mut h: Handler = Handler::default();
         h.start();
@@ -1102,6 +1157,11 @@ mod tests {
     // test "valid glyph command"
     #[test]
     fn valid_glyph_command() {
+        // if (comptime !build_options.glyph_protocol) return error.SkipZigTest;
+        if !GLYPH_PROTOCOL {
+            return;
+        }
+
         let alloc = Global;
 
         let mut h: Handler = Handler::default();
@@ -1118,6 +1178,33 @@ mod tests {
         // try testing.expect(result.glyph == .query);
         assert!(matches!(result, Command::Glyph(glyph::Request::Query(_))));
         result.deinit(alloc);
+    }
+
+    // Parity S149-F1 (no reference test): with `build_options.glyph_protocol`
+    // off, the reference's identify arm takes `self.state = .ignore` for the
+    // glyph identifier even while `.glyph` is enabled at runtime, so the APC
+    // ends with no command.
+    #[test]
+    fn glyph_protocol_build_option_off_ignores_glyph_command() {
+        if GLYPH_PROTOCOL {
+            return;
+        }
+
+        let alloc = Global;
+        let mut h: Handler = Handler::default();
+        assert!(h.enabled[Protocol::Glyph as usize]);
+        h.start();
+        for c in *b"25a1;" {
+            h.feed(alloc, c);
+        }
+        assert!(matches!(h.state, State::Ignore));
+        h.feed_slice(alloc, b"q;cp=E0A0");
+        assert!(h.end(alloc).is_none());
+
+        h.start();
+        h.feed_slice(alloc, b"25a1;q;cp=E0A0");
+        assert!(matches!(h.state, State::Ignore));
+        assert!(h.end(alloc).is_none());
     }
 
     // test "feedSlice valid Kitty command"
@@ -1186,6 +1273,11 @@ mod tests {
     // test "feedSlice valid glyph command"
     #[test]
     fn feed_slice_valid_glyph_command() {
+        // if (comptime !build_options.glyph_protocol) return error.SkipZigTest;
+        if !GLYPH_PROTOCOL {
+            return;
+        }
+
         let alloc = Global;
 
         let mut h: Handler = Handler::default();
