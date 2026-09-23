@@ -59,6 +59,12 @@ impl args::Target for Options {
         match key {
             // clear: bool
             b"clear" => {
+                // An empty (set-but-empty) value resets to the default (false),
+                // as the generic `parseIntoField` rule does (parity S70-F3).
+                if args::is_reset_to_default(value) {
+                    self.clear = false;
+                    return Ok(());
+                }
                 self.clear = args::parse_field_bool(value)?;
                 Ok(())
             }
@@ -904,6 +910,19 @@ mod tests {
         // build (the reference's anonymous reify `test { _ = DiskCache; _ = Entry; }`).
         let _: fn(&[u8]) -> bool = DiskCache::is_valid_cache_key;
         let _ = Entry::parse(b"a|1|b");
+    }
+
+    // parity S70-F3: `--clear=` (set but empty) resets `clear` to its default
+    // (`false`), the generic `parseIntoField` rule, instead of failing as a bool.
+    #[test]
+    fn empty_clear_resets_to_default() {
+        use args::Target;
+        let mut opts = Options::default();
+        opts.parse_into_field(b"clear", Some(b"true")).unwrap();
+        // Positive reach: `clear` really left its default first.
+        assert!(opts.clear);
+        opts.parse_into_field(b"clear", Some(b"")).unwrap();
+        assert!(!opts.clear);
     }
 
     // test "runInner rejects multiple actions"

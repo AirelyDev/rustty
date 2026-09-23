@@ -128,6 +128,25 @@ impl cli_args::Target for Options {
         key: &[u8],
         value: Option<&[u8]>,
     ) -> Result<(), cli_args::ParseError> {
+        // If the value is empty string (set but empty string),
+        // then we reset the value to the default.
+        // `if (value) |v| default: { if (v.len != 0) break :default; ... }`
+        //
+        // PORT NOTE (parity S70-F2): the generic `parseIntoField` applies this to
+        // every field; this Target's arms used to skip it, so `--ssh=` ran an
+        // empty program and `--verbose=` was an invalid bool.
+        if cli_args::is_reset_to_default(value) {
+            let default = Options::default();
+            match key {
+                b"forward-env" => self.forward_env = default.forward_env,
+                b"terminfo" => self.terminfo = default.terminfo,
+                b"cache" => self.cache = default.cache,
+                b"ssh" => self.ssh = default.ssh,
+                b"verbose" => self.verbose = default.verbose,
+                _ => return Err(cli_args::Error::InvalidField),
+            }
+            return Ok(());
+        }
         match key {
             // @"forward-env": bool
             b"forward-env" => {
@@ -1172,6 +1191,38 @@ mod tests {
         assert_eq!(b"2222".as_slice(), opts._ssh_args[1].as_slice());
         // try testing.expectEqualStrings("user@example.com", opts._ssh_args.items[2]);
         assert_eq!(b"user@example.com".as_slice(), opts._ssh_args[2].as_slice());
+        opts.deinit();
+    }
+
+    // parity S70-F2: `args.zig` `parseIntoField` resets a field to its declared
+    // default when the value is set but empty (`--flag=`).
+    #[test]
+    #[allow(clippy::bool_assert_comparison)]
+    fn empty_value_resets_each_flag_to_its_default() {
+        let mut opts = Options::default();
+        parse_test_args(
+            &mut opts,
+            b"--forward-env=false --terminfo=false --cache=false --ssh=/bin/x --verbose",
+        )
+        .unwrap();
+        // Positive reach: every flag really left its default first.
+        assert_eq!(false, opts.forward_env);
+        assert_eq!(false, opts.terminfo);
+        assert_eq!(false, opts.cache);
+        assert_eq!(b"/bin/x".as_slice(), opts.ssh.as_slice());
+        assert_eq!(true, opts.verbose);
+
+        parse_test_args(
+            &mut opts,
+            b"--forward-env= --terminfo= --cache= --ssh= --verbose=",
+        )
+        .unwrap();
+        assert!(opts._diagnostics.empty());
+        assert_eq!(true, opts.forward_env);
+        assert_eq!(true, opts.terminfo);
+        assert_eq!(true, opts.cache);
+        assert_eq!(b"ssh".as_slice(), opts.ssh.as_slice());
+        assert_eq!(false, opts.verbose);
         opts.deinit();
     }
 
