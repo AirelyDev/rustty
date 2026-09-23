@@ -22543,6 +22543,14 @@ mod tests {
     /// used up, or a probe sequence reached the last `psl_stats` bucket),
     /// every later `add` of a new value fails the same way, which is the
     /// state the probe reached.
+    ///
+    /// NOTE (R13W2 review): this fabricated fill stops when it trips the
+    /// last `psl_stats` bucket, which its structured RGB values reach about
+    /// 189 ids BEFORE the ids are actually exhausted — not on true id
+    /// exhaustion as the organic probe does. Both surface the same
+    /// `AddError::OutOfMemory`, and the item states are the same kind (all
+    /// pinned orphans, no cells), so the mitigation exercises the same path;
+    /// only the failure trigger differs by those ~189 ids.
     fn ud80_fill_with_orphans(page: *mut Page, tag: u8) -> usize {
         let mut n = 0u32;
         unsafe {
@@ -22794,6 +22802,14 @@ mod tests {
         assert!(
             unsafe { (*page).styles.count() } < 10,
             "the orphans were dropped"
+        );
+        // The re-clone is at the SAME capacity: the ceiling is unchanged
+        // (a smaller-capacity re-clone would still drop the orphans but is a
+        // divergence the reclaim asserts alone do not catch; R13W2 review).
+        assert_eq!(
+            unsafe { (*page).capacity.styles },
+            size::CellCountInt::MAX,
+            "the style capacity stays at the ceiling"
         );
         t.deinit(Global);
     }

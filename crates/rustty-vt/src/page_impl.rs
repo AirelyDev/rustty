@@ -25,6 +25,24 @@ pub struct Layout {
     pub capacity: Capacity,
 }
 
+/// Count of cells that `Page::clone_partial_row_degrade` could not store and
+/// dropped to the default (no style / hyperlink / grapheme). PORT-ONLY (R13,
+/// UPSTREAM-DEFECTS.md UD131): the reference crashes instead of degrading, so
+/// it has no analogue. See `clone_partial_row_degrade`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RowDegrade {
+    pub styles: usize,
+    pub hyperlinks: usize,
+    pub graphemes: usize,
+}
+
+impl RowDegrade {
+    /// Whether any cell degraded.
+    pub fn any(&self) -> bool {
+        self.styles != 0 || self.hyperlinks != 0 || self.graphemes != 0
+    }
+}
+
 /// `Page.IntegrityError`
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IntegrityError {
@@ -1163,6 +1181,236 @@ impl Page {
         self.pause_integrity_checks(false);
         self.assert_integrity();
         result
+    }
+
+    /// Best-effort variant of `clone_partial_row_from` for the row-copy retry
+    /// loops (`Screen::clone_partial_row_grow_capacity`,
+    /// `PageList::clone_row_grow_capacity`) when the page's style set (or any
+    /// other managed set) is full at its capacity ceiling and cannot grow.
+    ///
+    /// PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD131. The
+    /// reference's retry loops `@panic("increaseCapacity OutOfSpace")` here
+    /// (Screen.zig:747, PageList.zig:5108): the callers have already rotated
+    /// rows, so the copy cannot be unwound and a crash is chosen over a
+    /// half-mutated page list. This is reachable from real VT input on a wide
+    /// terminal (>= 47,932 cols on shipped macOS) whose page holds a genuinely
+    /// full set of 53,247 distinct LIVE styles, followed by an IL/DL, scroll,
+    /// or erase that pulls a row carrying a new style across a page boundary
+    /// (measured: ReleaseSafe SIGABRT, ReleaseFast `panic:` trap). Following
+    /// the reference's own precedent for an unstorable style
+    /// (`Screen.increaseCapacity` / `manualStyleUpdate` degrade the cursor to
+    /// the default style; UD65's decoder degrade), this finishes the copy with
+    /// every cell whose managed memory cannot be stored falling back to the
+    /// default (no style, no hyperlink, no grapheme) while keeping its
+    /// codepoint and every row flag. Cells whose styles/links already exist in
+    /// the destination set are stored normally, so only the genuinely
+    /// unstorable cells degrade. The caller logs the returned counts once per
+    /// copy, never once per cell.
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
+    pub fn clone_partial_row_degrade(
+        &mut self,
+        other: *const Page,
+        dst_row: *mut Row,
+        src_row: *const Row,
+        x_start: usize,
+        x_end_req: usize,
+    ) -> RowDegrade {
+        debug_assert!(
+            !std::ptr::eq(other, self as *const Page),
+            "clone_partial_row_degrade is only used across pages by the row-copy loops"
+        );
+        self.pause_integrity_checks(true);
+        let mut rep = RowDegrade::default();
+
+        let self_base = self.memory_ptr();
+        let other_base = unsafe { Page::memory_ptr_of(other) };
+        let other_size = unsafe { Page::size_of(other) };
+        let cell_len = core::cmp::min(self.size.cols as usize, other_size.cols as usize);
+        let x_end = core::cmp::min(x_end_req, cell_len);
+        assert!(x_start <= x_end);
+        let other_cells_ptr = unsafe { (*src_row).cells().ptr(other_base).add(x_start) };
+        let dst_cells_off_ptr = unsafe { (*dst_row).cells().ptr(self_base).add(x_start) };
+        let span = x_end - x_start;
+
+        // Release the partial state left by the failed clone, freeing the
+        // managed memory it did store (exactly as `clone_partial_row_from`).
+        if unsafe { (*dst_row).managed_memory() } {
+            self.clear_cells(dst_row, x_start, x_end);
+        }
+
+        // Copy the row metadata, preserving the destination's own flags on a
+        // partial-width copy (verbatim from `clone_partial_row_from_inner`).
+        {
+            let mut copy = unsafe { *src_row };
+            if (x_end - x_start) < self.size.cols as usize {
+                let d = unsafe { *dst_row };
+                copy.set_wrap(d.wrap());
+                copy.set_wrap_continuation(d.wrap_continuation());
+                copy.set_grapheme(d.grapheme());
+                copy.set_hyperlink(d.hyperlink());
+                copy.set_styled(d.styled());
+                copy.set_dirty(copy.dirty() | d.dirty());
+            }
+            copy.set_cells(unsafe { (*dst_row).cells() });
+            unsafe { *dst_row = copy };
+        }
+
+        // Fast path: no managed memory in the source, a plain copy that can
+        // never fail (nothing to degrade).
+        if !unsafe { (*src_row).managed_memory() } {
+            let dst_cells =
+                unsafe { core::slice::from_raw_parts_mut(dst_cells_off_ptr, span) };
+            let other_cells = unsafe { core::slice::from_raw_parts(other_cells_ptr, span) };
+            fastmem::copy(dst_cells, other_cells);
+            self.pause_integrity_checks(false);
+            self.assert_integrity();
+            return rep;
+        }
+
+        // Slow path: per cell, store what fits and degrade the rest.
+        for i in 0..span {
+            let dst_cell: *mut Cell = unsafe { dst_cells_off_ptr.add(i) };
+            let src_cell: *const Cell = unsafe { other_cells_ptr.add(i) };
+            unsafe { *dst_cell = (*src_cell).copy_with_managed_reset() };
+            let src = unsafe { *src_cell };
+
+            if src.has_grapheme()
+                && self
+                    .clone_cell_graphemes_from(other, false, dst_row, dst_cell, src_cell)
+                    .is_err()
+            {
+                // set_graphemes sets the cell's grapheme markers only on
+                // success, so the reset cell is still clean here.
+                rep.graphemes += 1;
+            }
+            if src.hyperlink()
+                && self
+                    .clone_cell_hyperlink_from(other, false, dst_row, dst_cell, src_cell)
+                    .is_err()
+            {
+                // set_hyperlink is the last step of that helper and runs only
+                // on success, so the reset cell carries no hyperlink marker.
+                rep.hyperlinks += 1;
+            }
+            if src.style_id() != stylepkg::DEFAULT_ID {
+                unsafe { (*dst_row).set_styled(true) };
+                let src_style_id = src.style_id();
+                let other_style = unsafe { Page::style_get_ptr_of(other, src_style_id) };
+                match unsafe {
+                    self.styles
+                        .add_with_id_ptr(self_base, other_style, src_style_id)
+                } {
+                    Ok(added) => unsafe {
+                        (*dst_cell).set_style_id(added.unwrap_or(src_style_id))
+                    },
+                    // Unstorable: leave the cell on the default style.
+                    Err(_) => rep.styles += 1,
+                }
+            }
+            if KITTY_GRAPHICS && src.codepoint() == KITTY_PLACEHOLDER {
+                unsafe { (*dst_row).set_kitty_virtual_placeholder(true) };
+            }
+        }
+
+        self.pause_integrity_checks(false);
+        self.assert_integrity();
+        rep
+    }
+
+    /// Test helper (UD131): fill this page's style set with distinct LIVE
+    /// styles across `rows` until `add` fails, so the set is genuinely full at
+    /// its capacity ceiling — the reference's crash precondition and the
+    /// port's degrade precondition. The FIRST style is placed on `u16::MAX`
+    /// cells, so it stays saturated (pinned) when a clone recounts the set
+    /// from the cells; that keeps `styles_hold_pinned` true across the one
+    /// re-clone, which is what makes the row-copy loops' one-shot re-clone
+    /// flag observable (dropping it turns the loop into an unbounded re-clone).
+    /// Returns the number of distinct live styles placed and the pinned id.
+    ///
+    /// This fabricates the ceiling state directly instead of driving billions
+    /// of cell writes: the review-R13W probe needed ~8.5 billion writes to
+    /// reach it organically. The set's item states are the same kind the probe
+    /// accumulates (all live, one saturated); pre-sizing is used only for
+    /// speed.
+    #[cfg(test)]
+    pub(crate) fn test_fill_full_live_pinned(
+        &mut self,
+        rows: core::ops::Range<usize>,
+        pin: bool,
+    ) -> (usize, StyleId) {
+        // `pin` false: the first style gets a single cell like the rest, so no
+        // style stays saturated across a recount (`styles_hold_pinned` false),
+        // and the loop degrades on the first `OutOfSpace` with no re-clone —
+        // the cheap path for the degrade-correctness test. `pin` true: the
+        // first style is placed on `u16::MAX` cells so it stays saturated,
+        // keeping `styles_hold_pinned` true across the one re-clone (for the
+        // one-shot-flag test).
+        let pin_target = if pin { u16::MAX as usize } else { 1 };
+        // Operate through a raw self pointer so the per-cell `&mut` (derived
+        // from `get_cells`) and the `styles` field mutations don't fight the
+        // borrow checker — the established pattern for these page-internal
+        // fabrications (see the UD80 fill helpers).
+        let this: *mut Page = self;
+        unsafe {
+            (*this).pause_integrity_checks(true);
+            let base = (*this).memory_ptr();
+
+            // The pinned style, placed on the first `u16::MAX` cells.
+            let pinned = stylepkg::Style {
+                flags: stylepkg::Flags {
+                    italic: true,
+                    ..Default::default()
+                },
+                fg_color: stylepkg::Color::Rgb(crate::color::RGB { r: 1, g: 2, b: 3 }),
+                ..Default::default()
+            };
+            let pinned_id = (*this).styles.add(base, pinned).unwrap();
+            let mut pinned_cells: usize = 0;
+            let mut count: usize = 1;
+
+            'outer: for y in rows {
+                let row = (*this).get_row(y);
+                let cells = &mut *(*this).get_cells(row);
+                for c in cells.iter_mut() {
+                    if pinned_cells < pin_target {
+                        if pinned_cells > 0 {
+                            (*this).styles.use_id(base, pinned_id);
+                        }
+                        c.set_content_codepoint('P' as u21);
+                        c.set_style_id(pinned_id);
+                        (*row).set_styled(true);
+                        pinned_cells += 1;
+                        continue;
+                    }
+                    // Distinct live styles, one cell each. `count` fits in the
+                    // 24 bits of an RGB, so every value is unique.
+                    let st = stylepkg::Style {
+                        fg_color: stylepkg::Color::Rgb(crate::color::RGB {
+                            r: (count & 0xFF) as u8,
+                            g: ((count >> 8) & 0xFF) as u8,
+                            b: (((count >> 16) & 0xFF) as u8) | 0x80,
+                        }),
+                        ..Default::default()
+                    };
+                    let Ok(id) = (*this).styles.add(base, st) else {
+                        break 'outer;
+                    };
+                    c.set_content_codepoint('Q' as u21);
+                    c.set_style_id(id);
+                    (*row).set_styled(true);
+                    count += 1;
+                }
+            }
+
+            (*this).pause_integrity_checks(false);
+            (*this).assert_integrity();
+            assert_eq!(
+                (*this).styles.ref_count_saturated(base, pinned_id),
+                pin,
+                "the first style's pinned state matches `pin`"
+            );
+            (count, pinned_id)
+        }
     }
 
     fn clone_partial_row_from_inner(

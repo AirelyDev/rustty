@@ -1495,16 +1495,44 @@ impl Screen {
                         Err(_) => panic!("increaseCapacity system allocator OOM"),
                     }
                 }
-                // We can't gracefully recover from either of these
-                // here: our callers have already rotated or shifted
-                // rows, so returning an error would leave the page
-                // list half-mutated (and corrupt), so a crash is
-                // better.
+                // A real system-allocator OOM: our callers have already
+                // rotated or shifted rows, so returning an error would leave
+                // the page list half-mutated (and corrupt); a crash is better.
                 Err(pagelist::grow::IncreaseCapacityError::OutOfMemory) => {
                     panic!("increaseCapacity system allocator OOM")
                 }
+                // PORT NOTE: reference defect (R13), UD131. The reference
+                // `@panic("increaseCapacity OutOfSpace")` here (Screen.zig:
+                // 747). Reachable from real VT input (IL/DL, scroll, erase
+                // across a page boundary) on a wide terminal whose page's
+                // managed set is genuinely full at its capacity ceiling (no
+                // orphaned pinned styles to reclaim, or the one re-clone above
+                // already dropped them). The rows are already rotated, so
+                // instead of crashing we finish the copy best-effort: cells
+                // whose style/hyperlink/grapheme cannot be stored fall back to
+                // the default, keeping their codepoints and the row flags.
                 Err(pagelist::grow::IncreaseCapacityError::OutOfSpace) => {
-                    panic!("increaseCapacity OutOfSpace")
+                    let rep = unsafe {
+                        (*cur_page).clone_partial_row_degrade(
+                            src_page,
+                            cur_rows.add(dst_y),
+                            src_row,
+                            x_start,
+                            x_end,
+                        )
+                    };
+                    if rep.any() {
+                        log::warn!(
+                            target: crate::page::LOG_SCOPE,
+                            "row copy at style-set capacity ceiling: {} cell(s) degraded to \
+                             default (styles={}, hyperlinks={}, graphemes={}); see UD131",
+                            rep.styles + rep.hyperlinks + rep.graphemes,
+                            rep.styles,
+                            rep.hyperlinks,
+                            rep.graphemes,
+                        );
+                    }
+                    return current;
                 }
             };
         }
@@ -15972,6 +16000,170 @@ mod tests {
             let contents = selstr(&mut s, sel, false);
             assert_eq!(contents, b"world");
             sel.deinit(&mut s);
+        }
+        s.deinit();
+    }
+
+    // UD131 (R13): the IL/DL/scroll row-copy retry loop
+    // (`Screen::clone_partial_row_grow_capacity`) when the destination page's
+    // style set is genuinely FULL of LIVE styles at the `u16` capacity ceiling
+    // and the row pulled across the page boundary carries a style the set does
+    // not have. The reference `@panic("increaseCapacity OutOfSpace")` here
+    // (Screen.zig:747); measured reachable from real VT input (IL/DL, a scroll,
+    // or a scroll-region shift crossing a page boundary). The port finishes the
+    // copy: the unstorable style degrades to the default while the codepoint,
+    // the storable grapheme and hyperlink, and the row flags are kept.
+    //
+    // Reaching the loop: the same loop is driven by real VT in the W2 orphan
+    // test (`ud80_delete_lines_..._reclaims_them`); here it is called directly
+    // so the full-LIVE-set precondition can be fabricated. Two pages are made
+    // with `split` so each keeps a small `size.rows` (a full 53,247-style set
+    // fits on wide rows), which keeps the page clones cheap. The first style is
+    // genuinely pinned, so the loop re-clones once (reclaiming nothing) then
+    // degrades — the path W2's one-shot flag bounds; dropping that flag makes
+    // the loop re-clone forever.
+    #[test]
+    fn ud131_clone_partial_row_loop_full_live_set_degrades_new_style_to_default() {
+        let mut s = Screen::init(
+            Allocator,
+            Options {
+                cols: 50000,
+                rows: 8,
+                max_scrollback_bytes: Some(1 << 30),
+                max_scrollback_lines: None,
+                kitty_image_storage_limit: 0,
+                kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
+            },
+        )
+        .unwrap();
+        s.pages
+            .split(Pin {
+                node: s.pages.pages.first,
+                y: 4,
+                x: 0,
+                garbage: false,
+            })
+            .unwrap();
+        assert_eq!(2, s.pages.total_pages());
+        let dst_node = s.pages.pages.first;
+        let src_node = s.pages.pages.last;
+        assert!(!std::ptr::eq(dst_node, src_node));
+
+        let mk = |cp: u32| -> Cell {
+            let mut c = Cell::zeroed();
+            c.set_content_tag(crate::page::ContentTag::Codepoint);
+            c.set_content_codepoint(cp);
+            c
+        };
+
+        // Source row on the second page: a NEW style ('A'), a grapheme ('B'), a
+        // hyperlink ('C'), a plain cell ('D'), and the row flags.
+        let src_page: *mut Page = unsafe { pagelist::Node::page(src_node) };
+        let src_row: *const Row = unsafe { (*src_page).get_row(0) };
+        let link_id = unsafe {
+            (*src_page).insert_hyperlink(hyperlink::Hyperlink {
+                id: hyperlink::HyperlinkId::Implicit(0),
+                uri: b"https://ud131.example/".to_vec(),
+            })
+        }
+        .unwrap();
+        let new_style = style::Style {
+            flags: style::Flags {
+                bold: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        unsafe {
+            let base = (*src_page).memory_ptr();
+            let new_id = (*src_page).styles.add(base, new_style).unwrap();
+            let row = (*src_page).get_row(0);
+            (*row).set_wrap(true);
+            (*row).set_semantic_prompt(crate::page::SemanticPrompt::Prompt);
+
+            let c0 = (*src_page).get_row_and_cell(0, 0).cell;
+            *c0 = mk('A' as u32);
+            (*c0).set_style_id(new_id);
+            (*row).set_styled(true);
+
+            let c1 = (*src_page).get_row_and_cell(1, 0).cell;
+            *c1 = mk('B' as u32);
+            (*src_page).set_graphemes(row, c1, &[0x0301u32]).unwrap();
+
+            let c2 = (*src_page).get_row_and_cell(2, 0).cell;
+            *c2 = mk('C' as u32);
+            (*src_page).set_hyperlink(row, c2, link_id).unwrap();
+
+            let c3 = (*src_page).get_row_and_cell(3, 0).cell;
+            *c3 = mk('D' as u32);
+        }
+
+        // Destination page: style capacity grown to the ceiling, then a full
+        // LIVE set on rows 1..4 (row 0 blank = clone target), first style pinned.
+        while unsafe { pagelist::Node::capacity(s.pages.pages.first).styles }
+            < size::CellCountInt::MAX
+        {
+            let _ = s
+                .pages
+                .increase_capacity(
+                    s.pages.pages.first,
+                    Some(pagelist::grow::IncreaseCapacity::Styles),
+                )
+                .unwrap();
+        }
+        let dst_node = s.pages.pages.first;
+        let (live, _pinned) =
+            unsafe { (*pagelist::Node::page(dst_node)).test_fill_full_live_pinned(1..4, true) };
+        assert!(live > 50_000, "the set is full of live styles: {live}");
+        assert!(pagelist::grow::styles_hold_pinned(unsafe {
+            pagelist::Node::page(dst_node)
+        }));
+
+        let out = s.clone_partial_row_grow_capacity(dst_node, 0, src_page, src_row, 0, 50000);
+        let page: *mut Page = unsafe { pagelist::Node::page(out) };
+
+        unsafe {
+            let row = (*page).get_row(0);
+            assert!((*row).wrap(), "the row wrap flag is kept");
+            assert_eq!(
+                (*row).semantic_prompt(),
+                crate::page::SemanticPrompt::Prompt,
+                "the row semantic prompt is kept"
+            );
+
+            let c0 = (*page).get_row_and_cell(0, 0).cell;
+            assert_eq!((*c0).codepoint(), 'A' as u32);
+            assert_eq!(
+                (*c0).style_id(),
+                style::DEFAULT_ID,
+                "the unstorable style degrades to the default"
+            );
+
+            let c1 = (*page).get_row_and_cell(1, 0).cell;
+            assert_eq!((*c1).codepoint(), 'B' as u32);
+            assert!((*c1).has_grapheme(), "the grapheme is kept");
+            assert_eq!((*page).lookup_grapheme(c1).unwrap(), &[0x0301u32]);
+
+            let c2 = (*page).get_row_and_cell(2, 0).cell;
+            assert_eq!((*c2).codepoint(), 'C' as u32);
+            assert!((*c2).hyperlink(), "the hyperlink is kept");
+
+            let c3 = (*page).get_row_and_cell(3, 0).cell;
+            assert_eq!((*c3).codepoint(), 'D' as u32);
+            assert_eq!((*c3).style_id(), style::DEFAULT_ID);
+
+            assert!(
+                (*page).styles.count() > 50_000,
+                "the live styles are kept: {}",
+                (*page).styles.count()
+            );
+            assert!(pagelist::grow::styles_hold_pinned(page));
+        }
+
+        let mut node_ = s.pages.pages.first;
+        while !node_.is_null() {
+            unsafe { (*pagelist::Node::page(node_)).assert_integrity() };
+            node_ = unsafe { (*node_).next };
         }
         s.deinit();
     }

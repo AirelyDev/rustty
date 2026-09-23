@@ -594,15 +594,43 @@ impl PageList {
                         Err(_) => panic!("increaseCapacity system allocator OOM"),
                     }
                 }
-                // We can't gracefully recover from either of these
-                // here: our callers have already rotated rows, so
-                // returning an error would leave the page list
-                // half-mutated (and corrupt), so a crash is better.
+                // A real system-allocator OOM: our callers have already
+                // rotated rows, so returning an error would leave the page
+                // list half-mutated (and corrupt); a crash is better.
                 Err(IncreaseCapacityError::OutOfMemory) => {
                     panic!("increaseCapacity system allocator OOM")
                 }
+                // PORT NOTE: reference defect (R13), UD131. The reference
+                // `@panic("increaseCapacity OutOfSpace")` here (PageList.zig:
+                // 5108). Reachable from real VT input on a wide terminal whose
+                // page's managed set is genuinely full at its capacity ceiling
+                // (no orphaned pinned styles to reclaim, or the one re-clone
+                // above already dropped them). The rows are already rotated, so
+                // instead of crashing we finish the copy best-effort: cells
+                // whose style/hyperlink/grapheme cannot be stored fall back to
+                // the default, keeping their codepoints and the row flags.
                 Err(IncreaseCapacityError::OutOfSpace) => {
-                    panic!("increaseCapacity OutOfSpace")
+                    let rep = unsafe {
+                        (*cur_page).clone_partial_row_degrade(
+                            src_page,
+                            cur_rows.add(dst_y),
+                            src_row,
+                            0,
+                            (*cur_page).size.cols as usize,
+                        )
+                    };
+                    if rep.any() {
+                        log::warn!(
+                            target: crate::page::LOG_SCOPE,
+                            "row copy at style-set capacity ceiling: {} cell(s) degraded to \
+                             default (styles={}, hyperlinks={}, graphemes={}); see UD131",
+                            rep.styles + rep.hyperlinks + rep.graphemes,
+                            rep.styles,
+                            rep.hyperlinks,
+                            rep.graphemes,
+                        );
+                    }
+                    return current;
                 }
             };
 

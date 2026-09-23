@@ -3022,3 +3022,28 @@ per-style clone path through `add_with_id_ptr` / `use_multiple`, and its hashing
 R13-L2 with the same method, after against before: 0.998 / 1.004 / 0.999, no change.
 
 **state**: OPEN (performance; for the perf owner).
+
+## N80 — the row-copy retry loops degrade unstorable cells to defaults instead of crashing at the style-set ceiling
+
+- **id**: N80. Not in the inventory.
+- **found by**: task R13-X, when a reference probe confirmed the crash the R13-W2 review flagged.
+- **severity**: low–medium. **kind**: missing-branch (reference defect, R13).
+- **oracle**: `src/terminal/Screen.zig:747` (`clonePartialRowGrowCapacity`) and
+  `src/terminal/PageList.zig:5108` (`cloneRowGrowCapacity`), both `@panic("increaseCapacity OutOfSpace")`.
+- **rustty**: `crates/rustty-vt/src/screen.rs` (`clone_partial_row_grow_capacity`),
+  `crates/rustty-vt/src/pagelist/grow.rs` (`clone_row_grow_capacity`),
+  `crates/rustty-vt/src/page_impl.rs` (`clone_partial_row_degrade`).
+
+On a very wide terminal (>= 47,932 columns, shipped macOS) whose page's style set is genuinely full of
+live styles at the `u16` ceiling (65,535), the reference's row-copy retry loops `@panic` when
+`increaseCapacity(.styles)` returns `OutOfSpace`: the callers (IL/DL, a scroll, an erase across a page
+boundary) have already rotated rows, so a crash is chosen over a half-mutated page list. MEASURED
+reachable in both ReleaseSafe (SIGABRT) and ReleaseFast (`panic:` trap) against a scratch
+`libghostty-vt` build (task R13-X). A normal-width terminal cannot reach it (the set rehashes/compacts
+below the ceiling). The port instead finishes the copy after W2's one-shot re-clone: every cell whose
+style, hyperlink or grapheme cannot be stored falls back to the default, keeping its codepoint and the
+row flags; only the genuinely unstorable cells degrade, logged once per copy. This mirrors the
+reference's own degrade-to-default precedent (`increaseCapacity` / `manualStyleUpdate`, UD65). Reference
+defect: `UPSTREAM-DEFECTS.md` UD131.
+
+**state**: CLOSED by task R13-X.

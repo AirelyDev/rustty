@@ -17999,6 +17999,177 @@ fn ud80_erase_row_into_a_page_full_of_orphaned_pinned_styles_reclaims_them() {
         unsafe { (*page).styles.count() } < 10,
         "the orphans were dropped"
     );
+    // The re-clone is at the SAME capacity: the ceiling is unchanged (a
+    // smaller-capacity re-clone would still drop the orphans but is a
+    // divergence the reclaim asserts alone do not catch; R13W2 review).
+    assert_eq!(
+        unsafe { (*page).capacity.styles },
+        size::CellCountInt::MAX,
+        "the style capacity stays at the ceiling"
+    );
+    let mut node_ = s.pages.first;
+    while !node_.is_null() {
+        unsafe { (*super::Node::page(node_)).assert_integrity() };
+        node_ = unsafe { (*node_).next };
+    }
+    s.deinit();
+}
+
+const HYPERLINK_URI: &[u8] = b"https://ud131.example/";
+
+// UD131 (R13): the `eraseRow`/`eraseRowBounded` row-copy retry loop
+// (`PageList::clone_row_grow_capacity`) when the destination page's style set
+// is genuinely FULL of LIVE styles at the `u16` capacity ceiling (no orphaned
+// pinned styles for the W2 re-clone to reclaim) and the row pulled across the
+// page boundary carries a style the set does not have. The reference
+// `@panic("increaseCapacity OutOfSpace")` here (PageList.zig:5108); measured
+// reachable from real VT input on a wide terminal (a LF/scroll on the
+// alternate screen). The port instead finishes the copy: the unstorable style
+// degrades to the default while the codepoint, the storable grapheme and
+// hyperlink, and the row flags are kept.
+//
+// Reaching the loop: the same loop is driven by real VT in the W2 orphan tests
+// (`ud80_erase_row_..._reclaims_them`); here the loop is called directly so the
+// full-LIVE-set precondition can be fabricated (`test_fill_full_live_pinned`)
+// instead of writing the ~8.5 billion cells the review probe needed. A wide
+// (50,000-col) page is required because a full set is 53,247 distinct styles,
+// each needing a live cell -- more cells than any standard-width page holds. To
+// keep it fast, the two pages are made with `split` so each keeps a SMALL
+// `size.rows` (the full set fits on two 50,000-wide rows); page clones copy
+// `size.rows`, so a full 215-row page would make every capacity growth a
+// 10.75M-cell copy.
+#[test]
+fn ud131_erase_row_loop_full_live_set_degrades_new_style_to_default() {
+    let mut s = PageList::init(Options::new(50000, 8)).unwrap();
+    // Two pages of four rows each, both with a small `size.rows`.
+    s.split(Pin {
+        node: s.pages.first,
+        y: 4,
+        x: 0,
+        garbage: false,
+    })
+    .unwrap();
+    assert_eq!(2, s.total_pages());
+    let dst_node = s.pages.first;
+    let src_node = s.pages.last;
+    assert!(!std::ptr::eq(dst_node, src_node));
+
+    // The source row (top of the second page) carries: a NEW style ('A'), a
+    // grapheme ('B' + combining acute), a hyperlink ('C'), a plain cell ('D'),
+    // and the row flags (wrap + a semantic prompt).
+    let src_page: *mut Page = unsafe { super::Node::page(src_node) };
+    let src_row: *const crate::page::Row = unsafe { (*src_page).get_row(0) };
+    let link_id = unsafe {
+        (*src_page).insert_hyperlink(hyperlink::Hyperlink {
+            id: hyperlink::HyperlinkId::Implicit(0),
+            uri: HYPERLINK_URI.to_vec(),
+        })
+    }
+    .unwrap();
+    let new_style = Style {
+        flags: stylepkg::Flags {
+            bold: true,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    unsafe {
+        let base = (*src_page).memory_ptr();
+        let new_id = (*src_page).styles.add(base, new_style).unwrap();
+        let row = (*src_page).get_row(0);
+        (*row).set_wrap(true);
+        (*row).set_semantic_prompt(SemanticPrompt::Prompt);
+
+        let c0 = (*src_page).get_row_and_cell(0, 0).cell;
+        *c0 = cell_codepoint('A' as u32);
+        (*c0).set_style_id(new_id);
+        (*row).set_styled(true);
+
+        let c1 = (*src_page).get_row_and_cell(1, 0).cell;
+        *c1 = cell_codepoint('B' as u32);
+        (*src_page).set_graphemes(row, c1, &[0x0301u32]).unwrap();
+
+        let c2 = (*src_page).get_row_and_cell(2, 0).cell;
+        *c2 = cell_codepoint('C' as u32);
+        (*src_page).set_hyperlink(row, c2, link_id).unwrap();
+
+        let c3 = (*src_page).get_row_and_cell(3, 0).cell;
+        *c3 = cell_codepoint('D' as u32);
+    }
+
+    // The destination page: style capacity grown to the ceiling, then filled
+    // with a full LIVE set on rows 5.., with row 0 left blank as the clone
+    // target. One style is pinned genuinely so `styles_hold_pinned` stays true
+    // across the one re-clone (which is what makes W2's one-shot flag matter:
+    // without it, the loop re-clones forever).
+    // `increase_capacity` REPLACES the node, so re-fetch `pages.first` each
+    // iteration (as the UD80 presize helper does).
+    while unsafe { super::Node::capacity(s.pages.first).styles } < size::CellCountInt::MAX {
+        let _ = s
+            .increase_capacity(s.pages.first, Some(IncreaseCapacity::Styles))
+            .unwrap();
+    }
+    let dst_node = s.pages.first;
+    // A full LIVE set across rows 1..4 (row 0 stays blank as the clone target),
+    // with the first style genuinely pinned (saturated by its cells). The pin
+    // keeps `styles_hold_pinned` true across the one re-clone, so the loop
+    // re-clones once (reclaiming nothing), then degrades — which is exactly the
+    // path W2's one-shot flag bounds. Removing that flag turns this into an
+    // unbounded re-clone (verified out of band; it would hang the test).
+    let (live, _pinned) =
+        unsafe { (*super::Node::page(dst_node)).test_fill_full_live_pinned(1..4, true) };
+    assert!(live > 50_000, "the set is full of live styles: {live}");
+    assert!(super::grow::styles_hold_pinned(unsafe {
+        super::Node::page(dst_node)
+    }));
+
+    // Drive the loop directly.
+    let out = s.clone_row_grow_capacity(dst_node, 0, src_page, src_row);
+    let page: *mut Page = unsafe { super::Node::page(out) };
+
+    unsafe {
+        let row = (*page).get_row(0);
+        assert!((*row).wrap(), "the row wrap flag is kept");
+        assert_eq!(
+            (*row).semantic_prompt(),
+            SemanticPrompt::Prompt,
+            "the row semantic prompt is kept"
+        );
+
+        let c0 = (*page).get_row_and_cell(0, 0).cell;
+        assert_eq!((*c0).codepoint(), 'A' as u32);
+        assert_eq!(
+            (*c0).style_id(),
+            stylepkg::DEFAULT_ID,
+            "the unstorable style degrades to the default"
+        );
+
+        let c1 = (*page).get_row_and_cell(1, 0).cell;
+        assert_eq!((*c1).codepoint(), 'B' as u32);
+        assert!((*c1).has_grapheme(), "the grapheme is kept");
+        assert_eq!(
+            (*page).lookup_grapheme(c1).unwrap(),
+            &[0x0301u32],
+            "the grapheme codepoints are kept"
+        );
+
+        let c2 = (*page).get_row_and_cell(2, 0).cell;
+        assert_eq!((*c2).codepoint(), 'C' as u32);
+        assert!((*c2).hyperlink(), "the hyperlink is kept");
+
+        let c3 = (*page).get_row_and_cell(3, 0).cell;
+        assert_eq!((*c3).codepoint(), 'D' as u32);
+        assert_eq!((*c3).style_id(), stylepkg::DEFAULT_ID);
+
+        // The live set is untouched: still full, still pinned.
+        assert!(
+            (*page).styles.count() > 50_000,
+            "the live styles are kept: {}",
+            (*page).styles.count()
+        );
+        assert!(super::grow::styles_hold_pinned(page));
+    }
+
     let mut node_ = s.pages.first;
     while !node_.is_null() {
         unsafe { (*super::Node::page(node_)).assert_integrity() };
