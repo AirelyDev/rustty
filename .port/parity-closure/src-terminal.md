@@ -261,7 +261,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** PageEntry.hash uses std SipHash DefaultHasher instead of seed-0 Wyhash autoHash/autoHashStrat
   - **Oracle:** `src/terminal/hyperlink.zig:143-160` → **Rustty:** `crates/rustty-vt/src/hyperlink.rs:355-377`
   - **Audit's suggested fix:** Use `rustty_zigstd::wyhash::Wyhash::init(0)` and feed exactly what Zig autoHash/autoHashStrat(.Deep) write: the tag as its enum integer (u1/u8 per Zig's autoHash of an enum: it hashes @intFromEnum as the tag's backing int), the implicit u32 bytes, the explicit slice bytes with the slice length prefix that autoHashStrat(.Deep) on a []const u8 emits, then the uri likewise — and pin it with a golden test like HashMap_auto_context_matches_reference_wyhash_layout.
-- [ ] **S155-F2** · CONFIRMED · `INDIV` · missing-function
+- [x] **S155-F2** · CONFIRMED · `INDIV` · missing-function
   - **What:** KeyIterator/ValueIterator (FieldIterator) and keyIterator()/valueIterator() not ported
   - **Oracle:** `src/terminal/hash_map.zig:313-336, 415-445` → **Rustty:** `crates/rustty-vt/src/hash_map.rs:642-644`
   - **Audit's suggested fix:** Add `FieldIterator<T>` with `next(&mut self) -> Option<*mut T>` plus `key_iterator()`/`value_iterator()` on HashMapUnmanaged mirroring lines 316-336 and 415-445.
