@@ -2473,3 +2473,17 @@ a zombie with `ESRCH` (measured), and the registration is only submitted on the 
 `processExitCommon` with libxev's no-status code 0. Reference defect: `UPSTREAM-DEFECTS.md` UD67.
 
 **state**: CLOSED by task R13-C.
+
+## N56 — the inherited working directory handed to the host leaked on every inherited surface
+
+- **id**: N56. Inventory M15.
+- **found by**: records F14; fixed by task R13-C.
+- **severity**: low. **kind**: leak (reference defect, R13).
+- **oracle**: `src/apprt/embedded.zig:1160-1178`.
+- **rustty**: `crates/rustty-apprt/src/embedded.rs` (`newSurfaceOptions`, `InheritedWorkingDirectory`, `Surface::deinit`).
+
+The port leaked a `CString` (`into_raw`) exactly as the reference leaks its `dupeZ`. The string is now
+owned by the surface and freed on the next `newSurfaceOptions` or on `deinit`; the C ABI is unchanged.
+Reference defect: `UPSTREAM-DEFECTS.md` UD68.
+
+**state**: CLOSED by task R13-C.

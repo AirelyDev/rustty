@@ -1120,6 +1120,21 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - proposed fix:    in `processExit`, handle `error.NoSuchProcess` by calling `processExitCommon(td, 0)` (or reap with `waitpid` to recover the status); alternatively libxev's kqueue proc op could `waitpid(WNOHANG)` on `ESRCH` and deliver the status.
 - upstream status: not reported
 
+### UD68 — every inherited tab, split or window leaks the working-directory string `newSurfaceOptions` hands the host
+- kind:            leak
+- upstream project: ghostty
+- severity:        low (a path-sized allocation per inherited new surface)
+- reference:       `src/apprt/embedded.zig:1160-1178` (`newSurfaceOptions`: `break :wd self.app.core_app.alloc.dupeZ(u8, cwd) catch null;` at `:1171`), returned by `ghostty_surface_inherited_config`; consumer `macos/Sources/Ghostty/Surface View/SurfaceView.swift:606-607` (`String.init(cString: workingDirectory, encoding: .utf8)`), called from `macos/Sources/Ghostty/Ghostty.App.swift:937`, `:973`, `:1001`; at 20abdb50a
+- defect:          `newSurfaceOptions` allocates a NUL-terminated copy of the pwd on the core app's GPA and returns it inside the by-value `ghostty_surface_config_s`. The C ABI has no function to free it, the macOS host only copies it into a Swift `String`, and nothing on the Zig side keeps the pointer, so the allocation is never freed.
+- ReleaseSafe:     a leak (the GPA reports it at exit in a Debug build).
+- ReleaseFast:     a leak.
+- reachability:    ordinary use: every new tab, split or window that inherits the working directory (`window-inherit-working-directory`, default true) from a surface whose shell reported a pwd.
+- port handling:   `crates/rustty-apprt/src/embedded.rs` keeps the C ABI unchanged (the same `const char*` in the same by-value struct; `check_embed_h_abi.sh` and `check_rustty_h_abi.sh` PASS) but keeps ownership on the surface: `InheritedWorkingDirectory` holds the string, frees the previous one on each `newSurfaceOptions`, and frees the last in `Surface::deinit`. The pointer stays valid until the next call on the same surface or the surface's destruction; the host copies it at once. PORT NOTEs at the field, the call and the type.
+- parity row(s):   NEW-FINDINGS N56. Inventory M15.
+- test:            `the_inherited_working_directory_is_freed_by_the_next_call_and_by_deinit` (rustty-apprt) watches the allocation with a test-only forwarding `#[global_allocator]`: the string is readable and not freed until the next `hand_out`, is freed by it, is freed by a `hand_out(None)` too, and the last is freed by `clear`. The probe's own free detection is checked first. Negative controls, macOS 2026-09-22, one at a time: `hand_out` reinstating the reference's hand-over (`into_raw`, nothing kept) fails with "the next call frees the previous string"; `clear` forgetting instead of freeing fails with "deinit frees the last string". Restored. NOT covered: the `clear()` call in `Surface::deinit` and the `hand_out` call in `newSurfaceOptions` themselves, because an embedded `Surface` cannot be built in a test (it needs a live core surface); both are one-line reads.
+- proposed fix:    keep the string on the `Surface` and free it on the next call and in `deinit`, as the port does; or add a `ghostty_surface_config_free`-style function to the C ABI for the host to call after copying.
+- upstream status: not reported
+
 ## Candidates pending verification
 
 Assembled from this plan's progress notes on 2026-09-11. **Not verified** — do not cite as fact.

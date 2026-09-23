@@ -1067,6 +1067,13 @@ pub struct Surface {
     // PORT NOTE: `?[:0]const u8` → an owned NUL-terminated `Option<CString>`
     // (written by `App::performPreAction`'s `set_title` arm via `rt_surface`).
     pub title: Option<CString>,
+
+    // PORT NOTE: reference defect (R13), UD68. No reference field: the
+    // reference's `newSurfaceOptions` hands the host a GPA `dupeZ` of the
+    // inherited cwd that nothing ever frees. The port keeps that string here,
+    // surface-side, and frees it on the next `newSurfaceOptions` or on
+    // `deinit`. See [`InheritedWorkingDirectory`].
+    inherited_working_directory: InheritedWorkingDirectory,
 }
 
 /// Surface initialization options.
@@ -1196,6 +1203,11 @@ impl Surface {
             // (field defaults) inspector: ?*Inspector = null, title: ?[:0]const u8 = null
             std::ptr::write(&raw mut (*surface).inspector, None);
             std::ptr::write(&raw mut (*surface).title, None);
+            // (no reference field — UD68)
+            std::ptr::write(
+                &raw mut (*surface).inherited_working_directory,
+                InheritedWorkingDirectory::default(),
+            );
         }
 
         // Add ourselves to the list of surfaces on the app.
@@ -2141,24 +2153,32 @@ impl Surface {
         //
         // PORT NOTE: rustty `pwd` is infallible (`Option<Vec<u8>>`; the reference's
         // `catch null` collapses to the `None` arm). `cwd` is an owned `Vec<u8>`
-        // dropped at scope end (the reference `defer …free(cwd)`); `dupeZ` → a leaked
-        // NUL-terminated `CString` owned by the C host (the reference leaks the GPA
-        // `dupeZ` result the same way — this is `newSurfaceOptions`'s inherited-config
-        // contract). An interior-NUL `cwd` is REACHABLE (OSC 7 `%00`) — see
-        // `inherited_working_directory_c`.
-        let working_directory: *const c_char = 'wd: {
+        // dropped at scope end (the reference `defer …free(cwd)`). An interior-NUL
+        // `cwd` is REACHABLE (OSC 7 `%00`) — see `inherited_working_directory_c`.
+        //
+        // PORT NOTE: reference defect (R13), UD68. The reference's `dupeZ` is a
+        // GPA allocation that nobody frees: the macOS host copies it
+        // (`String(cString:)`, `SurfaceView.swift:606`) and the C ABI gives it no
+        // free function, so every inherited tab, split and window leaks one. The
+        // port keeps the C ABI (the same `const char*` in the same by-value
+        // struct) but keeps OWNERSHIP surface-side: the string lives in
+        // `self.inherited_working_directory` until the next call on this surface
+        // or its `deinit`, whichever comes first. The host reads it before
+        // either can happen.
+        let working_directory: Option<CString> = 'wd: {
             if !should_inherit_working_directory(context, config) {
-                break 'wd core::ptr::null();
+                break 'wd None;
             }
             let cwd = match self
                 .core_surface
                 .pwd(unsafe { (*(*self.app).core_app).alloc })
             {
                 Some(v) => v,
-                None => break 'wd core::ptr::null(),
+                None => break 'wd None,
             };
             inherited_working_directory_c(cwd)
         };
+        let working_directory = self.inherited_working_directory.hand_out(working_directory);
 
         // return .{
         //     .font_size = font_size,
@@ -3304,6 +3324,10 @@ impl ApprtSurface for Surface {
         // (PORT NOTE: drop the owned `CString`.)
         self.title = None;
 
+        // PORT NOTE: reference defect (R13), UD68 — free the last inherited
+        // working directory handed to the host (the reference leaks it).
+        self.inherited_working_directory.clear();
+
         // Remove ourselves from the list of known surfaces in the app.
         // self.app.core_app.deleteSurface(self);
         //
@@ -3718,12 +3742,41 @@ pub struct ClipboardConfirm {
 /// directory if it exists. This returned `null` instead, which dropped the
 /// override entirely. Cut at the first NUL, so the host sees what it sees in
 /// the reference.
-fn inherited_working_directory_c(cwd: Vec<u8>) -> *const c_char {
+fn inherited_working_directory_c(cwd: Vec<u8>) -> Option<CString> {
     let end = cwd.iter().position(|&b| b == 0).unwrap_or(cwd.len());
-    match CString::new(&cwd[..end]) {
-        Ok(c) => c.into_raw().cast_const(),
-        // R7: the bytes before the first NUL hold no NUL.
-        Err(_) => core::ptr::null(),
+    // R7: the bytes before the first NUL hold no NUL, so this is never `Err`.
+    CString::new(&cwd[..end]).ok()
+}
+
+/// The inherited working directory [`Surface::newSurfaceOptions`] last handed
+/// to the host, owned by the surface.
+///
+/// PORT NOTE: reference defect (R13), UD68. The reference returns
+/// `alloc.dupeZ(u8, cwd)` (`embedded.zig:1167-1172`) through the C ABI's
+/// `const char* working_directory` and never frees it; the host has no free
+/// function to call, so the string leaks on every inherited tab, split and
+/// window. Changing the C ABI (a free function, or an owned return) was ruled
+/// out, so ownership stays here: each [`hand_out`](Self::hand_out) frees the
+/// previous string, and [`clear`](Self::clear) (from `Surface::deinit`) frees
+/// the last. The pointer stays valid until the next `newSurfaceOptions` on the
+/// same surface or the surface's destruction — the host copies it at once
+/// (`SurfaceView.swift:606`), or passes it straight to `rustty_surface_new`,
+/// which reads it synchronously.
+#[derive(Default)]
+struct InheritedWorkingDirectory(core::cell::Cell<Option<CString>>);
+
+impl InheritedWorkingDirectory {
+    /// Keep `cwd`, free the string handed out before it, and return the
+    /// pointer the host reads (`null` for `None`).
+    fn hand_out(&self, cwd: Option<CString>) -> *const c_char {
+        let ptr = cwd.as_ref().map_or(core::ptr::null(), |c| c.as_ptr());
+        drop(self.0.replace(cwd));
+        ptr
+    }
+
+    /// Free the last string handed out.
+    fn clear(&self) {
+        drop(self.0.take());
     }
 }
 
@@ -3731,13 +3784,8 @@ fn inherited_working_directory_c(cwd: Vec<u8>) -> *const c_char {
 mod inherited_working_directory_tests {
     use super::*;
 
-    fn take(p: *const c_char) -> Option<Vec<u8>> {
-        if p.is_null() {
-            return None;
-        }
-        // SAFETY: `p` came from `CString::into_raw` just above the call.
-        let owned = unsafe { CString::from_raw(p.cast_mut()) };
-        Some(owned.into_bytes())
+    fn take(c: Option<CString>) -> Option<Vec<u8>> {
+        c.map(CString::into_bytes)
     }
 
     /// The OSC 7 `%00` pwd: the host gets the same C string the reference's
@@ -3760,6 +3808,106 @@ mod inherited_working_directory_tests {
     fn a_pwd_that_starts_with_a_nul_is_empty() {
         let got = take(inherited_working_directory_c(b"\x00b".to_vec()));
         assert_eq!(Some(Vec::new()), got);
+    }
+
+    // UD68 probe. A `#[global_allocator]` that forwards every call to `System`
+    // and, on `dealloc`, notes whether the freed pointer is one this THREAD
+    // asked it to watch. Thread-local, so frees on parallel test threads cannot
+    // set it; and a watched string is live until freed, so its address cannot
+    // be reused by a later allocation to fake the free.
+    struct DeallocWatch;
+
+    thread_local! {
+        static WATCHED: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+        static WATCHED_FREED: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
+    }
+
+    unsafe impl std::alloc::GlobalAlloc for DeallocWatch {
+        unsafe fn alloc(&self, layout: std::alloc::Layout) -> *mut u8 {
+            unsafe { std::alloc::System.alloc(layout) }
+        }
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: std::alloc::Layout) {
+            // `try_with`: never touch a thread-local that is being torn down.
+            let _ = WATCHED.try_with(|w| {
+                if w.get() != 0 && w.get() == ptr as usize {
+                    let _ = WATCHED_FREED.try_with(|f| f.set(true));
+                }
+            });
+            unsafe { std::alloc::System.dealloc(ptr, layout) }
+        }
+        unsafe fn realloc(
+            &self,
+            ptr: *mut u8,
+            layout: std::alloc::Layout,
+            new_size: usize,
+        ) -> *mut u8 {
+            unsafe { std::alloc::System.realloc(ptr, layout, new_size) }
+        }
+        unsafe fn alloc_zeroed(&self, layout: std::alloc::Layout) -> *mut u8 {
+            unsafe { std::alloc::System.alloc_zeroed(layout) }
+        }
+    }
+
+    // D6-ALLOW(watching shim, not an allocator substitution): this lives inside
+    // `#[cfg(test)] mod inherited_working_directory_tests`, so it exists only in
+    // this crate's test binary and can never enter a shipped build. Every arm
+    // forwards to `std::alloc::System`, i.e. plain `malloc`/`free`, which the
+    // ASan/LSan interceptors still see; `dealloc` only compares a pointer
+    // against a thread-local first. Same shape as `rustty-font-shaper`'s
+    // `face/freetype.rs` probe.
+    #[global_allocator]
+    static DEALLOC_WATCH: DeallocWatch = DeallocWatch;
+
+    fn watch(p: *const c_char) {
+        WATCHED_FREED.with(|f| f.set(false));
+        WATCHED.with(|w| w.set(p as usize));
+    }
+
+    fn freed() -> bool {
+        let f = WATCHED_FREED.with(|f| f.get());
+        WATCHED.with(|w| w.set(0));
+        f
+    }
+
+    /// UD68 (R13): the string handed to the host is freed by the next
+    /// `newSurfaceOptions` on the surface (here the next `hand_out`) and by the
+    /// surface's `deinit` (here `clear`), where the reference leaks every one.
+    /// It is readable, unchanged, until then.
+    #[test]
+    fn the_inherited_working_directory_is_freed_by_the_next_call_and_by_deinit() {
+        // The probe observes a free of the watched pointer, and only then.
+        let sentinel = CString::new("sentinel").unwrap();
+        watch(sentinel.as_ptr());
+        assert!(!WATCHED_FREED.with(|f| f.get()));
+        drop(sentinel);
+        assert!(freed(), "the probe observes the free");
+
+        let slot = InheritedWorkingDirectory::default();
+
+        let first = slot.hand_out(inherited_working_directory_c(b"/tmp/first".to_vec()));
+        assert!(!first.is_null());
+        watch(first);
+        // SAFETY: `first` is owned by `slot` until the next `hand_out`/`clear`.
+        assert_eq!(b"/tmp/first", unsafe { CStr::from_ptr(first) }.to_bytes());
+        assert!(
+            !WATCHED_FREED.with(|f| f.get()),
+            "the host's string is live until the next call"
+        );
+
+        let second = slot.hand_out(inherited_working_directory_c(b"/tmp/second".to_vec()));
+        assert!(freed(), "the next call frees the previous string");
+        // SAFETY: as above, for `second`.
+        assert_eq!(b"/tmp/second", unsafe { CStr::from_ptr(second) }.to_bytes());
+
+        // A call that inherits nothing still frees what was handed out before.
+        watch(second);
+        assert!(slot.hand_out(None).is_null());
+        assert!(freed(), "a null hand-out frees the previous string");
+
+        let third = slot.hand_out(inherited_working_directory_c(b"/tmp/third".to_vec()));
+        watch(third);
+        slot.clear();
+        assert!(freed(), "deinit frees the last string");
     }
 }
 
