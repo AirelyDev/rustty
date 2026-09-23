@@ -1745,6 +1745,7 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - parity row(s):   S71-F3 (the port now uses the reference's IPv6 grammar, which is what brings this code path in).
 - test:            `long_scoped_ipv6_is_rejected_without_crashing` (rustty-cli). Negative control (macOS, task T-C): casting the length through `u8::try_from(..).unwrap()` as the reference's `@intCast` does makes it panic (`TryFromIntError`).
 - proposed fix:    upstream in Zig, make `text_i` a `usize` (or reject text longer than 255 bytes up front). In ghostty, until then, reject a key longer than a hostname can be (`HostName.max_len` plus the `user@` prefix) in `isValidCacheKey` before calling `parseIp6`.
+- upstream status: not reported
 
 
 ### UD180 — `+list-keybinds --docs` never prints a keybind action's help

@@ -3188,6 +3188,12 @@ UNVERIFIED.
 **proposed fix** (NOT applied here): make `value_types.rs` call `rustty_args::std_fmt::parse_float` and
 delete its `pf_*` copy and `parse_float_f32`, in the config area.
 
+**addendum (T-C rebase onto T-E, 2026-09-23)**: T-E (S78-F2, `549b63fd`) added a third partial port,
+of `std.fmt.parseInt` for unsigned types with base 0: `value_types.rs` `parse_int_u8_base0` /
+`parse_unsigned_base0`. `rustty_args::std_fmt::parse_int` is also a port of that function (base 0 included),
+so the same consolidation applies to it. Not compared value by value; UNVERIFIED whether the two agree
+on every input.
+
 **state**: OPEN.
 
 ## N121 — five `+show-face` error lines print a Rust Debug value where the reference prints `error.<Name>`
