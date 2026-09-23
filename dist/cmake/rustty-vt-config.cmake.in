@@ -9,9 +9,9 @@ if(NOT TARGET rustty-vt::rustty-vt)
     add_library(rustty-vt::rustty-vt SHARED IMPORTED)
 
     if(WIN32)
-        set(_rustty_vt_shared_location "${PACKAGE_PREFIX_DIR}/@CMAKE_INSTALL_BINDIR@/@RUSTTY_VT_REALNAME@")
+        set(_rustty_vt_shared_location "${PACKAGE_PREFIX_DIR}/@CMAKE_INSTALL_BINDIR@/@RUSTTY_VT_INSTALL_REALNAME@")
     else()
-        set(_rustty_vt_shared_location "${_rustty_vt_libdir}/@RUSTTY_VT_REALNAME@")
+        set(_rustty_vt_shared_location "${_rustty_vt_libdir}/@RUSTTY_VT_INSTALL_REALNAME@")
     endif()
 
     set_target_properties(rustty-vt::rustty-vt PROPERTIES
@@ -22,7 +22,7 @@ if(NOT TARGET rustty-vt::rustty-vt)
 
     if(APPLE)
         set_target_properties(rustty-vt::rustty-vt PROPERTIES
-            IMPORTED_SONAME "@rpath/@RUSTTY_VT_SONAME@"
+            IMPORTED_SONAME "@rpath/@RUSTTY_VT_INSTALL_LINKNAME@"
             INTERFACE_LINK_DIRECTORIES "${_rustty_vt_libdir}"
         )
         # Ensure consumers can find the @rpath dylib at runtime
@@ -35,7 +35,7 @@ if(NOT TARGET rustty-vt::rustty-vt)
         )
     else()
         set_target_properties(rustty-vt::rustty-vt PROPERTIES
-            IMPORTED_SONAME "@RUSTTY_VT_SONAME@"
+            IMPORTED_SONAME "@RUSTTY_VT_INSTALL_SONAME@"
         )
     endif()
 endif()
@@ -52,7 +52,7 @@ if(NOT TARGET rustty-vt::rustty-vt-static)
     add_library(rustty-vt::rustty-vt-static STATIC IMPORTED)
 
     set_target_properties(rustty-vt::rustty-vt-static PROPERTIES
-        IMPORTED_LOCATION "${_rustty_vt_libdir}/@RUSTTY_VT_STATIC_REALNAME@"
+        IMPORTED_LOCATION "${_rustty_vt_libdir}/@RUSTTY_VT_STATIC_INSTALL_NAME@"
         INTERFACE_INCLUDE_DIRECTORIES "${PACKAGE_PREFIX_DIR}/@CMAKE_INSTALL_INCLUDEDIR@"
         INTERFACE_COMPILE_DEFINITIONS "RUSTTY_STATIC"
     )

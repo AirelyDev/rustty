@@ -1,6 +1,8 @@
 //! Build script for rustty-vt-c.
 //!
-//! Its ONLY job is to reflect the Cargo profile's optimization level into cfgs
+//! It sets the shared library's versioned identity (`dylib_identity`, S64-F5;
+//! CORRECTION 2026-09-23: this header used to say "Its ONLY job" was the
+//! cfgs below). Its other job is to reflect the Cargo profile's optimization level into cfgs
 //! so `build_info::optimize_mode()` can answer the C-ABI `RUSTTY_BUILD_INFO_
 //! OPTIMIZE` query with the faithful four-way analog of the reference's
 //! `builtin.mode` (`src/terminal/c/build_info.zig:72-77`).
@@ -38,5 +40,45 @@ fn main() {
     }
     if opt_level == "s" || opt_level == "z" {
         println!("cargo::rustc-cfg=rustty_opt_small");
+    }
+
+    dylib_identity();
+}
+
+/// The shared library's versioned identity (S64-F5), which the reference's
+/// Apple native link sets at `GhosttyLibVt.zig:420-437` and Zig's own shared
+/// link sets elsewhere:
+///
+/// - Apple: `-current_version <X.Y.Z>` ("Record the exact package version
+///   for runtime inspection"), `-compatibility_version 1.0.0` ("Preserve
+///   compatibility with the initial public ABI") and
+///   `-headerpad_max_install_names` ("Leave room for packaging tools to
+///   rewrite install names"). The install name itself is left as cargo sets
+///   it (`@rpath/librustty_vt_c.dylib`) so the build tree keeps working; the
+///   CMake install renames the file and rewrites the install name to
+///   `@rpath/librustty-vt.dylib`.
+/// - ELF: the soname `librustty-vt.so.<X>` (Zig's `libghostty-vt.so.<X>`),
+///   only when `RUSTTY_VT_SONAME` asks for it. The CMake build sets it and
+///   links the build-tree name; a plain `cargo build` leaves the cdylib
+///   without a soname, so the examples that link `-lrustty_vt_c` straight
+///   from `target/` keep resolving.
+fn dylib_identity() {
+    let os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    let version = format!(
+        "{}.{}.{}",
+        std::env::var("CARGO_PKG_VERSION_MAJOR").unwrap_or_default(),
+        std::env::var("CARGO_PKG_VERSION_MINOR").unwrap_or_default(),
+        std::env::var("CARGO_PKG_VERSION_PATCH").unwrap_or_default(),
+    );
+    if os == "macos" || os == "ios" {
+        println!("cargo::rustc-cdylib-link-arg=-Wl,-current_version,{version}");
+        println!("cargo::rustc-cdylib-link-arg=-Wl,-compatibility_version,1.0.0");
+        println!("cargo::rustc-cdylib-link-arg=-Wl,-headerpad_max_install_names");
+    }
+    println!("cargo::rerun-if-env-changed=RUSTTY_VT_SONAME");
+    if let Ok(soname) = std::env::var("RUSTTY_VT_SONAME") {
+        if !soname.is_empty() && os != "macos" && os != "ios" && os != "windows" {
+            println!("cargo::rustc-cdylib-link-arg=-Wl,-soname,{soname}");
+        }
     }
 }

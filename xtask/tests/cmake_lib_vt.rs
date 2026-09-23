@@ -73,3 +73,87 @@ fn static_pc_needs_no_libintl_and_no_absolute_paths() {
         "absolute path in Libs.private: {private:?}"
     );
 }
+
+/// S64-F5: the install layout of `GhosttyLibVt.zig:384-490` and Zig's shared
+/// install. The shared library is installed under a fully versioned real name,
+/// with a major-version link and an unversioned link. On Apple its install
+/// name is `@rpath/lib<name>.dylib`, with `-compatibility_version 1.0.0` and
+/// `-current_version X.Y.Z`. The static archive is `lib<name>.a`, and the
+/// `.pc` links `-l<name>`. Builds and installs into a temporary prefix.
+#[test]
+fn install_layout_is_versioned_like_the_reference() {
+    let Some(dir) = configure("install") else {
+        return;
+    };
+    let prefix = dir.join("prefix");
+    for args in [
+        vec!["--build".into(), dir.display().to_string()],
+        vec![
+            "--install".into(),
+            dir.display().to_string(),
+            "--prefix".into(),
+            prefix.display().to_string(),
+        ],
+    ] {
+        let out = Command::new("cmake").args(&args).output().unwrap();
+        assert!(
+            out.status.success(),
+            "cmake {args:?} failed:\n{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    let lib = prefix.join("lib");
+    let v = env!("CARGO_PKG_VERSION");
+    let major = v.split('.').next().unwrap();
+    let (real, so, link) = if cfg!(target_os = "macos") {
+        (
+            format!("librustty-vt.{v}.dylib"),
+            format!("librustty-vt.{major}.dylib"),
+            "librustty-vt.dylib".to_string(),
+        )
+    } else {
+        (
+            format!("librustty-vt.so.{v}"),
+            format!("librustty-vt.so.{major}"),
+            "librustty-vt.so".to_string(),
+        )
+    };
+    let meta = std::fs::symlink_metadata(lib.join(&real)).expect("real name installed");
+    assert!(meta.file_type().is_file());
+    assert_eq!(
+        std::fs::read_link(lib.join(&so)).unwrap(),
+        Path::new(&real)
+    );
+    assert_eq!(std::fs::read_link(lib.join(&link)).unwrap(), Path::new(&so));
+    assert!(lib.join("librustty-vt.a").is_file());
+    assert!(!lib.join("librustty_vt_c.a").exists());
+
+    if cfg!(target_os = "macos") {
+        let out = Command::new("otool")
+            .arg("-L")
+            .arg(lib.join(&real))
+            .output()
+            .unwrap();
+        let text = String::from_utf8_lossy(&out.stdout);
+        // The first entry after the path line is the library's own id.
+        let id = text.lines().nth(1).unwrap_or_default().trim().to_string();
+        assert!(
+            id.starts_with("@rpath/librustty-vt.dylib (compatibility version 1.0.0, current version")
+                && id.contains(&format!("current version {v}")),
+            "{text}"
+        );
+    }
+
+    let pc = std::fs::read_to_string(lib.join("pkgconfig/librustty-vt.pc"))
+        .or_else(|_| std::fs::read_to_string(prefix.join("share/pkgconfig/librustty-vt.pc")))
+        .unwrap();
+    assert_eq!(field(&pc, "Libs:"), "-L${libdir} -lrustty-vt");
+    let pcs = std::fs::read_to_string(lib.join("pkgconfig/librustty-vt-static.pc"))
+        .or_else(|_| {
+            std::fs::read_to_string(prefix.join("share/pkgconfig/librustty-vt-static.pc"))
+        })
+        .unwrap();
+    assert_eq!(field(&pcs, "Libs:"), "${libdir}/librustty-vt.a");
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -9,6 +9,6 @@ URL: https://github.com/AirelyDev/rustty
 Description: Rustty VT library (static)
 Version: @PROJECT_VERSION@
 Cflags: -I${includedir} -DRUSTTY_STATIC
-Libs: ${libdir}/@RUSTTY_VT_STATIC_REALNAME@
+Libs: ${libdir}/@RUSTTY_VT_STATIC_INSTALL_NAME@
 Libs.private: @RUSTTY_VT_PC_LIBS_PRIVATE@
 Requires.private: @RUSTTY_VT_PC_REQUIRES_PRIVATE@
