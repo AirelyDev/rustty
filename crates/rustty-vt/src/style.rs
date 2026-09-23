@@ -1139,6 +1139,23 @@ const _: () = assert!(
         <= <Style as crate::ref_counted_set::RefItemGeometry>::REF_ITEM_SIZE
 );
 
+// The shadows pinned on a 32-bit `usize` to the G-REFGEOM golden's
+// `wasm32-wasi` lines (task R13-L3), as `hyperlink.rs` does for its own. No
+// field here is pointer-sized, so this holds by construction today; it keeps
+// holding if one ever becomes so. The wasm32 builds (G-XTARGET) compile it.
+#[cfg(target_pointer_width = "32")]
+const _: () = {
+    use core::mem::{align_of, size_of};
+    // wasm32-wasi style.Style.Color 8 4
+    assert!(size_of::<RefShadowColor>() == 8 && align_of::<RefShadowColor>() == 4);
+    // wasm32-wasi style.Style 28 4
+    assert!(size_of::<RefShadowStyle>() == 28 && align_of::<RefShadowStyle>() == 4);
+    // wasm32-wasi style.Set.Item 36 4
+    assert!(size_of::<RefShadowItem>() == 36 && align_of::<RefShadowItem>() == 4);
+    assert!(<Style as crate::ref_counted_set::RefItemGeometry>::REF_ITEM_SIZE == 36);
+    assert!(<Style as crate::ref_counted_set::RefItemGeometry>::REF_ITEM_ALIGN == 4);
+};
+
 // PORT NOTE: `std.hash.int` on a u64 dispatches to `uint64` (mx3). Ported
 // verbatim so the deferred `Set` hashing matches when RefCountedSet lands.
 // PERF(port): `#[inline]` — the reference calls it `@call(.always_inline, ...)`.

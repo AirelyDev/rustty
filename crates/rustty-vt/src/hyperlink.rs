@@ -587,6 +587,100 @@ const _: () = assert!(
         <= <PageEntry as crate::ref_counted_set::RefItemGeometry>::REF_ITEM_SIZE
 );
 
+// The shadows themselves, pinned on a 32-bit `usize` to the G-REFGEOM golden's
+// `wasm32-wasi` lines (task R13-L3). The host-run `ref_geometry_golden_tests`
+// checks the wasm32 lines only through a hand-written model of these fields,
+// which cannot see a field's real 32-bit type (a `len: u64` would pass it and
+// make the wasm32 item 32/8 against the reference's 28/4). The wasm32 builds
+// (G-XTARGET, `check_cross_targets.sh`) compile these.
+#[cfg(target_pointer_width = "32")]
+const _: () = {
+    use core::mem::{align_of, size_of};
+    // wasm32-wasi size.Offset(u8).Slice 8 4
+    assert!(size_of::<RefShadowSlice>() == 8 && align_of::<RefShadowSlice>() == 4);
+    // wasm32-wasi hyperlink.PageEntry.Id 12 4
+    assert!(size_of::<RefShadowPageEntryId>() == 12 && align_of::<RefShadowPageEntryId>() == 4);
+    // wasm32-wasi hyperlink.Set.Item 28 4
+    assert!(size_of::<RefShadowItem>() == 28 && align_of::<RefShadowItem>() == 4);
+    assert!(<PageEntry as crate::ref_counted_set::RefItemGeometry>::REF_ITEM_SIZE == 28);
+    assert!(<PageEntry as crate::ref_counted_set::RefItemGeometry>::REF_ITEM_ALIGN == 4);
+};
+
+// rustty-only tests of `PageEntry.eql`'s first line (`hyperlink.zig:165`):
+// `if (std.meta.activeTag(self.id) != std.meta.activeTag(other.id)) return
+// false;`. An implicit link (OSC 8 with no `id=`) and an explicit one with the
+// same URI are different hyperlinks, so the set must keep both. No other test
+// adds the two with one URI, so an `eql` that ignored a tag mismatch and fell
+// through to the URI compare stayed green (the R13-L2 review's mutation M1).
+#[cfg(test)]
+mod page_entry_eql_tests {
+    use super::*;
+    use crate::page::Capacity;
+
+    const URI: &[u8] = b"https://example.com";
+
+    /// The page with an implicit and an explicit link on one URI, and their
+    /// set ids. The explicit id's bytes are `"0"`, and the implicit id is 0:
+    /// the two agree on everything but the tag.
+    fn page_with_both() -> (Page, Id, Id) {
+        let mut page = Page::init(Capacity::new(10, 10)).unwrap();
+        let implicit = page
+            .insert_hyperlink(Hyperlink {
+                id: HyperlinkId::Implicit(0),
+                uri: URI.to_vec(),
+            })
+            .unwrap();
+        let explicit = page
+            .insert_hyperlink(Hyperlink {
+                id: HyperlinkId::Explicit(b"0".to_vec()),
+                uri: URI.to_vec(),
+            })
+            .unwrap();
+        (page, implicit, explicit)
+    }
+
+    #[test]
+    fn eql_is_false_when_only_the_tag_differs() {
+        let (mut page, implicit, explicit) = page_with_both();
+        let base = page.memory_ptr();
+        let a = unsafe { *page.hyperlink_set.get(base, implicit) };
+        let b = unsafe { *page.hyperlink_set.get(base, explicit) };
+        assert_eq!(PageEntryIdTag::Implicit, a.id.tag());
+        assert_eq!(PageEntryIdTag::Explicit, b.id.tag());
+        unsafe {
+            assert_eq!(a.uri.slice(base), b.uri.slice(base));
+            // Different tags, same URI: not equal, in both directions.
+            assert!(!a.eql(base, &b, base));
+            assert!(!b.eql(base, &a, base));
+            // Each still equals itself.
+            assert!(a.eql(base, &a, base));
+            assert!(b.eql(base, &b, base));
+        }
+        page.deinit();
+    }
+
+    #[test]
+    fn the_set_keeps_an_implicit_and_an_explicit_link_with_one_uri() {
+        let (mut page, implicit, explicit) = page_with_both();
+        assert_ne!(implicit, explicit);
+        assert_eq!(2, page.hyperlink_set.count());
+        // A lookup of each finds its own entry, not the other.
+        let base = page.memory_ptr();
+        for (want, name) in [(implicit, "implicit"), (explicit, "explicit")] {
+            let entry = unsafe { *page.hyperlink_set.get(base, want) };
+            let page_ptr: *mut Page = &mut page;
+            page.hyperlink_set.context.set_page(page_ptr);
+            page.hyperlink_set.context.set_src_page(None);
+            assert_eq!(
+                Some(want),
+                unsafe { page.hyperlink_set.lookup(base, entry) },
+                "{name}"
+            );
+        }
+        page.deinit();
+    }
+}
+
 // rustty-only tests (the reference's `dupe` contract is carried by its
 // `Allocator.Error!Hyperlink` signature, which Zig callers must `try`): pin that
 // the ported `dupe` is FALLIBLE rather than an aborting `Vec::clone`, and that
