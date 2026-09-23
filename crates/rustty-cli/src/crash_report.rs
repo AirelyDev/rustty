@@ -193,8 +193,20 @@ fn run_inner<W: Write>(
         let since: Vec<u8> = if diff <= 0 {
             b"now".to_vec()
         } else {
+            // PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD99.
+            // `@intCast(diff)` into the `u64` nanoseconds of a `Duration` traps
+            // in ReleaseSafe when a report's mtime is more than 2^64 ns (about
+            // 584 years) before now, and wraps in ReleaseFast. The mtime comes
+            // from the filesystem, and Linux tmpfs and btrfs store an mtime in
+            // the year 1400 (measured), so `+crash-report` can trap on a file
+            // in the crash directory. This port used to truncate with `as u64`
+            // (a silently wrong age, inventory P3). A future mtime already takes
+            // the reference's own "now" arm above; an age too large for a
+            // `Duration` saturates to the largest one it holds, a lower bound on
+            // the true age, instead of trapping or wrapping. The reference has
+            // no error path here and no message to reuse.
             let d = Duration {
-                duration: diff as u64,
+                duration: u64::try_from(diff).unwrap_or(u64::MAX),
             };
             let mut s = Vec::new();
             d.round(NS_PER_S).format(&mut s);
@@ -228,5 +240,108 @@ fn nano_timestamp() -> i128 {
     match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
         Ok(d) => d.as_nanos() as i128,
         Err(e) => -(e.duration().as_nanos() as i128),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{Duration as StdDuration, SystemTime, UNIX_EPOCH};
+
+    /// The label `run_inner` prints for an age, computed the way it computes it.
+    fn label(duration: u64) -> String {
+        let mut s = Vec::new();
+        Duration { duration }.round(NS_PER_S).format(&mut s);
+        String::from_utf8(s).unwrap()
+    }
+
+    /// UD99 (R13): a crash report whose mtime lies further in the past than a
+    /// `Duration` can hold. The reference's `@intCast(diff)` traps there; the port
+    /// used to truncate with `as u64` and print a wrong age (inventory P3). Linux
+    /// tmpfs and btrfs store an mtime in the year 1400 (measured), so this drives
+    /// the real `run_inner` over a real crash directory. macOS APFS clamps any
+    /// earlier mtime to 1677, whose age still fits, so there the ancient report
+    /// only checks the ordinary arm; the saturating arm is asserted on Linux.
+    #[test]
+    fn a_report_too_old_for_a_duration_saturates_instead_of_trapping() {
+        let root = std::env::temp_dir().join(format!(
+            "rustty-r13d-crash-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let dir = root.join(format!("{}/crash", rustty_identity::APP_NAME));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // The year 1400 (the probe value), a report written a minute ago, and one
+        // dated in the future (2200), which takes the reference's own "now" arm.
+        let ancient = UNIX_EPOCH - StdDuration::from_secs(17_987_443_200);
+        let recent = SystemTime::now() - StdDuration::from_secs(60);
+        let future = UNIX_EPOCH + StdDuration::from_secs(7_258_118_400);
+        for (name, mtime) in [("ancient", ancient), ("recent", recent), ("future", future)] {
+            let f = std::fs::File::create(dir.join(name)).unwrap();
+            f.set_modified(mtime).unwrap();
+        }
+
+        let mut env = rustty_global::EnvMap::new();
+        env.insert(
+            b"XDG_STATE_HOME".to_vec(),
+            root.as_os_str().as_encoded_bytes().to_vec(),
+        );
+        let mut out: Vec<u8> = Vec::new();
+        let rc = run_inner(&env, false, &mut out).expect("run_inner");
+        let now = nano_timestamp();
+        assert_eq!(rc, 0);
+        let text = String::from_utf8(out).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 3, "three reports listed: {text:?}");
+
+        // Descending mtime: the future report first, then the recent one.
+        assert_eq!(lines[0], "future (now)");
+        assert!(
+            lines[1].starts_with("recent (") && lines[1].ends_with(" ago)"),
+            "{text:?}"
+        );
+
+        // The ancient report: its age as the filesystem stored it.
+        let stored = std::fs::metadata(dir.join("ancient"))
+            .unwrap()
+            .modified()
+            .unwrap();
+        let stored_ns: i128 = match stored.duration_since(UNIX_EPOCH) {
+            Ok(d) => d.as_nanos() as i128,
+            Err(e) => -(e.duration().as_nanos() as i128),
+        };
+        let age = now - stored_ns;
+        if cfg!(target_os = "linux") {
+            assert!(
+                age > i128::from(u64::MAX),
+                "precondition: the filesystem kept an mtime older than a Duration \
+                 holds (age {age} ns); without it the saturating arm is not reached"
+            );
+        }
+        let expected = match u64::try_from(age) {
+            Ok(ns) => label(ns),
+            Err(_) => label(u64::MAX),
+        };
+        // `now` was read after `run_inner`, so an ordinary age may differ by the
+        // rounding second; the saturated one is exact.
+        let got = lines[2]
+            .strip_prefix("ancient (")
+            .and_then(|s| s.strip_suffix(" ago)"))
+            .unwrap_or_else(|| panic!("the ancient report's line: {text:?}"));
+        if age > i128::from(u64::MAX) {
+            assert_eq!(got, label(u64::MAX), "the age saturates, it does not wrap");
+            assert!(got.starts_with("584y"), "{got:?}");
+        } else {
+            assert!(
+                got.starts_with(&expected[..expected.len().min(8)]),
+                "{got:?} vs {expected:?}"
+            );
+        }
+
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }
