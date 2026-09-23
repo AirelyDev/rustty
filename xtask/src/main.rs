@@ -16,6 +16,8 @@ mod release;
 
 mod patchelf;
 
+mod install_lib;
+
 mod archives;
 
 use std::path::{Path, PathBuf};
@@ -116,6 +118,12 @@ SUBCOMMANDS:
                        `cmake --build` from the extracted tree. Port of ghostty's
                        `zig build test-lib-vt -Demit-lib-vt=true` + CMake check steps
                        (GhosttyDist.zig:126-147, 156-171).
+    install-lib [--prefix <dir>] [--target <triple>] [--profile <p>]
+                       Non-Darwin install of the embedding library (rustty-apprt-c) as
+                       lib/rustty-internal.{so,a} (Windows: .dll / -static.lib), its header
+                       include/rustty-embed.h, and share/pkgconfig/rustty-internal{,-static}.pc.
+                       Port of build.zig's app_runtime=none install (GhosttyLib.zig). On
+                       Apple targets the library ships in the xcframework instead.
     patchelf [--patch-interp <path>] [--patch-rpath <paths>] <binary>
                        Port of Config.zig's patch-interp/patch-rpath + addPatchElf: run
                        `patchelf --set-interpreter/--set-rpath` on a built binary. On native
@@ -238,6 +246,16 @@ fn main() -> ExitCode {
             }
             Err(e) => {
                 eprintln!("xtask: distcheck-lib-vt failed: {e}");
+                ExitCode::FAILURE
+            }
+        },
+        Some("install-lib") => match install_lib::run(&mut args) {
+            Ok(out) => {
+                println!("installed into {}", out.display());
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("xtask: install-lib failed: {e}");
                 ExitCode::FAILURE
             }
         },
