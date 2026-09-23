@@ -4477,7 +4477,7 @@ pub struct Config {
     ///
     /// "Secure Input" is a macOS security feature that prevents applications from
     /// reading keyboard events. This can always be enabled manually using the
-    /// `rustty > Secure Keyboard Entry` menu item.
+    /// `Rustty > Secure Keyboard Entry` menu item.
     ///
     /// Note that automatic password prompt detection is based on heuristics
     /// and may not always work as expected. Specifically, it does not work
@@ -4548,7 +4548,7 @@ pub struct Config {
     /// The absolute path to the custom icon file.
     /// Supported formats include PNG, JPEG, and ICNS.
     ///
-    /// Defaults to `~/.config/rustty/rustty.icns`
+    /// Defaults to `~/.config/rustty/Rustty.icns`
     pub macos_custom_icon: Option<Vec<u8>>,
     // @"macos-icon-frame": MacAppIconFrame = .aluminum,
     /// The material to use for the frame of the macOS app icon.
@@ -4692,7 +4692,7 @@ pub struct Config {
     /// each new `rustty` process launched will result in a new window if there is
     /// already a running process.
     ///
-    /// If `false`, each new Rustty process will launch a separate application.
+    /// If `false`, each new rustty process will launch a separate application.
     ///
     /// If `detect`, Rustty will assume true (single instance) unless one of
     /// the following scenarios is found:
@@ -13144,5 +13144,33 @@ mod integration_tests {
         assert!(out.contains("font-variation = wght=nan\n"), "{out}");
         assert!(out.contains("font-variation = wdth=nan\n"), "{out}");
         assert!(out.contains("font-variation = slnt=-inf\n"), "{out}");
+    }
+
+    // No reference test. LEDGER S73-F1: the generated help text (the
+    // `+show-config --docs` source) must carry the reference's doc text under
+    // the per-token rename (`Ghostty`->`Rustty`, `ghostty`->`rustty`,
+    // `.port/tools/PARITY_NAMING.md`). Reference lines: `Config.zig:3493`
+    // `Ghostty > Secure Keyboard Entry`, `:3564` `~/.config/ghostty/Ghostty.icns`,
+    // `:3707` `each new ghostty process`.
+    #[test]
+    fn help_text_keeps_the_reference_token_casing() {
+        let help = |key: Key| {
+            String::from_utf8(crate::help_strings::config_help(key).unwrap().to_vec()).unwrap()
+        };
+        let secure = help(Key::MacosAutoSecureInput);
+        assert!(
+            secure.contains("`Rustty > Secure Keyboard Entry` menu item."),
+            "{secure}"
+        );
+        let icon = help(Key::MacosCustomIcon);
+        assert!(
+            icon.contains("Defaults to `~/.config/rustty/Rustty.icns`"),
+            "{icon}"
+        );
+        let single = help(Key::GtkSingleInstance);
+        assert!(
+            single.contains("each new rustty process will launch"),
+            "{single}"
+        );
     }
 }
