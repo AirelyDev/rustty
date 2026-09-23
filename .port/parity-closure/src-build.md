@@ -110,7 +110,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** GTK x11/wayland target defaults are static (both on) instead of probed from `pkg-config --variable=targets gtk4`
   - **Oracle:** `src/build/gtk.zig:9-27` → **Rustty:** `crates/rustty/Cargo.toml:38-59`
   - **Audit's suggested fix:** Probe `pkg-config --variable=targets gtk4` in rustty-apprt/build.rs and emit cfgs (`rustty_gtk_x11`/`rustty_gtk_wayland`) that gate the winproto arms when the features are default-selected.
-- [ ] **S65-F7** · CONFIRMED · `INDIV` · missing-error-path
+- [x] **S65-F7** · CONFIRMED · `INDIV` · missing-error-path
   - **What:** wasm patcher accepts extra trailing arguments instead of failing the `args.len != 3` usage check
   - **Oracle:** `src/build/wasm_patch_growable_table.zig:21-26` → **Rustty:** `xtask/src/main.rs:772-781`
   - **Audit's suggested fix:** After taking input/output, `if args.next().is_some() { return Err(usage) }`.
@@ -122,7 +122,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** dcimgui `backend-osx` (imgui_impl_osx.mm) not compiled on macOS
   - **Oracle:** `src/build/SharedDeps.zig:597-614` → **Rustty:** `crates-sys/dcimgui-sys/build.rs:165-185`
   - **Audit's suggested fix:** Add a second ObjC++ cc::Build for backends/imgui_impl_osx.mm on macOS if symbol-set parity of the shipped library is required.
-- [ ] **S66-F1** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S66-F1** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** mdgen section headers emit one extra trailing newline
   - **Oracle:** `src/build/mdgen/mdgen.zig:22-27, 52-57, 87-92` → **Rustty:** `crates/rustty-extra/src/mdgen.rs:103, 129, 155`
   - **Audit's suggested fix:** Change the three header literals to end with "\n\n" instead of "\n\n\n".

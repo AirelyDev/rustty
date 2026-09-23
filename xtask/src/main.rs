@@ -816,12 +816,13 @@ fn wasm_patch_growable_table_cmd(
     args: &mut impl Iterator<Item = String>,
 ) -> Result<PathBuf, String> {
     // Parse args: input output
-    let input = args
-        .next()
-        .ok_or("usage: wasm-patch-growable-table <input.wasm> <output.wasm>")?;
-    let output = args
-        .next()
-        .ok_or("usage: wasm-patch-growable-table <input.wasm> <output.wasm>")?;
+    //
+    // The reference checks `args.len != 3`, so a surplus argument is the
+    // same usage error as a missing one (S65-F7).
+    let usage = "usage: wasm-patch-growable-table <input.wasm> <output.wasm>";
+    let (Some(input), Some(output), None) = (args.next(), args.next(), args.next()) else {
+        return Err(usage.to_string());
+    };
 
     // Patch the file.
     let bytes = std::fs::read(&input).map_err(|e| format!("read {input}: {e}"))?;
@@ -833,4 +834,46 @@ fn wasm_patch_growable_table_cmd(
     std::fs::write(&output, patched.as_ref())
         .map_err(|e| format!("write {}: {e}", output.display()))?;
     Ok(output)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const WASM_PATCH_USAGE: &str = "usage: wasm-patch-growable-table <input.wasm> <output.wasm>";
+
+    /// `wasm_patch_growable_table.zig:21-26`: `if (args.len != 3)` logs the
+    /// usage line and exits 1, so too MANY arguments is the same usage error
+    /// as too few (S65-F7). The input path does not exist, so reaching the
+    /// read would yield a `read …` error instead; asserting the usage text
+    /// proves the arity check itself rejected the call.
+    #[test]
+    fn wasm_patch_rejects_extra_trailing_argument() {
+        let mut args = ["no-such-in.wasm", "no-such-out.wasm", "junk"]
+            .into_iter()
+            .map(String::from);
+        let err = wasm_patch_growable_table_cmd(&mut args).unwrap_err();
+        assert_eq!(err, WASM_PATCH_USAGE);
+    }
+
+    /// Positive control for the test above: with exactly two arguments the
+    /// arity check passes and the command proceeds to the read, which fails
+    /// on the missing input. So the usage error above comes from the arity
+    /// check, not from some earlier rejection of every call.
+    #[test]
+    fn wasm_patch_exact_arity_reaches_the_read() {
+        let mut args = ["no-such-in.wasm", "no-such-out.wasm"]
+            .into_iter()
+            .map(String::from);
+        let err = wasm_patch_growable_table_cmd(&mut args).unwrap_err();
+        assert!(err.starts_with("read no-such-in.wasm: "), "{err}");
+    }
+
+    /// Too few arguments is still the usage error.
+    #[test]
+    fn wasm_patch_rejects_missing_output_argument() {
+        let mut args = ["no-such-in.wasm"].into_iter().map(String::from);
+        let err = wasm_patch_growable_table_cmd(&mut args).unwrap_err();
+        assert_eq!(err, WASM_PATCH_USAGE);
+    }
 }

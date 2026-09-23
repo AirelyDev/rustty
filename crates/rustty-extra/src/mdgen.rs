@@ -100,7 +100,7 @@ fn write_help_block(out: &mut Vec<u8>, help: &[u8]) {
 /// `cli == true` emits the man(1) flavor, where each option is spelled with its
 /// `--` CLI prefix; `false` is the man(5) config-file flavor.
 pub fn gen_config(out: &mut Vec<u8>, cli: bool) {
-    out.extend_from_slice(b"\n# CONFIGURATION OPTIONS\n\n\n");
+    out.extend_from_slice(b"\n# CONFIGURATION OPTIONS\n\n");
 
     for (name, key) in rustty_config::config_struct::config_fields() {
         // `if (field.name[0] == '_') continue;`
@@ -126,7 +126,7 @@ pub fn gen_config(out: &mut Vec<u8>, cli: bool) {
 pub fn gen_actions(out: &mut Vec<u8>) {
     use rustty_cli::rustty::Action;
 
-    out.extend_from_slice(b"\n# COMMAND LINE ACTIONS\n\n\n");
+    out.extend_from_slice(b"\n# COMMAND LINE ACTIONS\n\n");
 
     for action in Action::ALL {
         // `.help => "**`--help`**"`, `.version => "**`--version`**"`, else `+name`.
@@ -152,7 +152,7 @@ pub fn gen_actions(out: &mut Vec<u8>) {
 
 /// PORTS: `mdgen.zig:85-117` `genKeybindActions`.
 pub fn gen_keybind_actions(out: &mut Vec<u8>) {
-    out.extend_from_slice(b"\n# KEYBIND ACTIONS\n\n\n");
+    out.extend_from_slice(b"\n# KEYBIND ACTIONS\n\n");
 
     for name in rustty_input::binding::Action::FIELD_NAMES {
         let name = name.as_bytes();
@@ -393,5 +393,36 @@ mod tests {
         assert!(!s.contains("@@VERSION@@"), "unsubstituted version marker");
         // The man(5) flavor must NOT carry the `--` CLI prefix (`genConfig(false)`).
         assert!(!s.contains("**`--font-family`**"));
+    }
+
+    /// The three section headers are Zig multiline literals whose last line
+    /// is an empty `\\` line (`mdgen.zig:22-27, 52-57, 87-92`). Zig joins the
+    /// lines with `\n` and adds none after the last one, so each header is
+    /// `"\n# NAME\n\n"`: exactly ONE blank line before the first entry
+    /// (S66-F1; measured with `zig test` on the literal at zig 0.16.0).
+    #[test]
+    #[cfg_attr(miri, ignore)]
+    fn section_headers_match_the_reference_multiline_literals() {
+        let mut cfg = Vec::new();
+        gen_config(&mut cfg, false);
+        assert!(
+            cfg.starts_with(b"\n# CONFIGURATION OPTIONS\n\n**`"),
+            "{:?}",
+            String::from_utf8_lossy(&cfg[..40])
+        );
+        let mut act = Vec::new();
+        gen_actions(&mut act);
+        assert!(
+            act.starts_with(b"\n# COMMAND LINE ACTIONS\n\n**`"),
+            "{:?}",
+            String::from_utf8_lossy(&act[..40])
+        );
+        let mut kb = Vec::new();
+        gen_keybind_actions(&mut kb);
+        assert!(
+            kb.starts_with(b"\n# KEYBIND ACTIONS\n\n**`"),
+            "{:?}",
+            String::from_utf8_lossy(&kb[..40])
+        );
     }
 }
