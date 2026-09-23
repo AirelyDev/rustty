@@ -11957,7 +11957,10 @@ mod tests {
             10 * 1000 * 1000
         );
         assert_eq!(crate::options::ARTIFACT, Artifact::Ghostty);
-        assert_eq!(Options::default().kitty_image_storage_limit, 320 * 1000 * 1000);
+        assert_eq!(
+            Options::default().kitty_image_storage_limit,
+            320 * 1000 * 1000
+        );
         let mut s = Screen::init(Allocator, Options::default()).unwrap();
         if crate::options::KITTY_GRAPHICS {
             assert_eq!(s.kitty_images.total_limit, 320 * 1000 * 1000);

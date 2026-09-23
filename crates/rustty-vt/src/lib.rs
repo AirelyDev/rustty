@@ -163,6 +163,12 @@ pub mod fraction;
 // switch is a later wave.
 pub mod fastprint;
 
+// PORT NOTE: Zig's `std.fmt.parseInt`, which the terminal parsers call on
+// untrusted input and which Rust's `str::parse` does not match (digit
+// separators, `-0` for unsigned types, error kinds). No reference file; the
+// reference calls the std function directly.
+pub(crate) mod zig_parse_int;
+
 /// Unicode utilities that match the terminal's text layout semantics.
 pub mod unicode {
     pub use rustty_unicode::codepoint_width;

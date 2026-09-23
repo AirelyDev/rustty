@@ -348,35 +348,23 @@ pub enum VariableParseError {
     FormatError,
 }
 
-/// Faithful map of `std.fmt.parseInt(usize, value, 10)`: an empty or
-/// non-decimal-digit string is `InvalidCharacter`, a value exceeding `usize`
-/// (including any leading `-`, which is invalid for an unsigned type and which
-/// Zig reports as `Overflow`) is `Overflow`.
+/// Faithful map of `std.fmt.parseInt(usize, value, 10)`, through the port of
+/// the std function in `crate::zig_parse_int`: an empty or non-digit string is
+/// `InvalidCharacter`, and a value exceeding `usize` (including a leading `-`
+/// followed by a nonzero digit, which Zig reports as `Overflow` for an
+/// unsigned type) is `Overflow`.
 //
-// PORT NOTE: Rust's `usize::from_str_radix` lumps both the empty string and a
-// stray sign/letter into a single `ParseIntError`; we re-derive the Zig
-// distinction by inspecting the input the way `std.fmt.parseInt` does — a
-// leading `+`/`-` sign with no following error otherwise classifies as Overflow
-// for the unsigned target (Zig: parsing "-1" as `usize` is `error.Overflow`),
-// and `PosOverflow` from the radix parse is also Overflow; everything else
-// (empty, non-digit byte) is InvalidCharacter.
+// CORRECTION (parity N100): this used `str::parse::<usize>()` and re-derived
+// the Zig error kinds, reporting any `-`-prefixed failure as `Overflow`. That
+// rejected the `_` digit separators and `-0` (which Zig parses as 0) and
+// reported `-a` as `Overflow` where Zig reports `InvalidCharacter`.
 fn parse_int(value: &str) -> Result<usize, VariableParseError> {
-    use std::num::IntErrorKind;
-    match value.parse::<usize>() {
-        Ok(v) => Ok(v),
-        Err(e) => match e.kind() {
-            IntErrorKind::PosOverflow => Err(VariableParseError::Overflow),
-            // A leading `-` makes Rust report `InvalidDigit` for an unsigned
-            // target, but Zig's `parseInt` reports `error.Overflow` for a
-            // negative value parsed into an unsigned type (see the `-1` cases in
-            // the window width/height tests). Re-classify the signed-negative
-            // case here so the asserted error matches the reference.
-            IntErrorKind::InvalidDigit if value.starts_with('-') => {
-                Err(VariableParseError::Overflow)
-            }
-            _ => Err(VariableParseError::InvalidCharacter),
-        },
-    }
+    crate::zig_parse_int::parse::<usize>(value.as_bytes(), 10).map_err(|e| match e {
+        crate::zig_parse_int::ParseIntError::Overflow => VariableParseError::Overflow,
+        crate::zig_parse_int::ParseIntError::InvalidCharacter => {
+            VariableParseError::InvalidCharacter
+        }
+    })
 }
 
 /// Faithful map of `std.mem.splitScalar(u8, str, delimiter)`: yields each
@@ -574,6 +562,23 @@ mod tests {
         assert_eq!(
             Err(VariableParseError::Overflow),
             pu(Variable::WindowWidth, "-1")
+        );
+    }
+
+    // Parity N100 (no reference test): `std.fmt.parseInt(usize, value, 10)`
+    // accepts `_` digit separators and `-0`, and reports a non-digit after a
+    // `-` as `InvalidCharacter`.
+    #[test]
+    fn parse_integer_variables_use_zig_parse_int() {
+        assert_eq!(Ok(80), pu(Variable::WindowWidth, "8_0"));
+        assert_eq!(Ok(0), pu(Variable::WindowWidth, "-0"));
+        assert_eq!(
+            Err(VariableParseError::InvalidCharacter),
+            pu(Variable::WindowWidth, "-a")
+        );
+        assert_eq!(
+            Err(VariableParseError::InvalidCharacter),
+            pu(Variable::WindowWidth, "80_")
         );
     }
 

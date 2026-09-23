@@ -422,11 +422,14 @@ fn index_of_any(slice: &[u8], values: &[u8]) -> Option<usize> {
 }
 
 /// Faithful map of `std.fmt.parseInt(usize, str, 10)` as the layout parser uses
-/// it: any non-decimal-digit content (including the empty string) is an error.
-/// The layout parser collapses every such error into `SyntaxError`, so the error
+/// it, through the port of the std function in `crate::zig_parse_int`.
+/// The layout parser collapses every error into `SyntaxError`, so the error
 /// payload is irrelevant here (unlike `output.rs`, which distinguishes them).
+// CORRECTION (parity N100): this was `str.parse::<usize>()`, documented as
+// "any non-decimal-digit content (including the empty string) is an error";
+// the reference also accepts `_` digit separators and `-0`.
 fn parse_int(str: &str) -> Result<usize, ()> {
-    str.parse::<usize>().map_err(|_| ())
+    crate::zig_parse_int::parse::<usize>(str.as_bytes(), 10).map_err(|_| ())
 }
 
 #[cfg(test)]
@@ -447,6 +450,19 @@ mod tests {
         assert_eq!(0, layout.x);
         assert_eq!(0, layout.y);
         assert_eq!(Content::Pane(42), layout.content);
+    }
+
+    // Parity N100 (no reference test): the numbers are parsed with
+    // `std.fmt.parseInt(usize, .., 10)`, which accepts `_` digit separators
+    // and `-0`.
+    #[test]
+    fn numbers_use_zig_parse_int() {
+        let layout = Layout::parse("8_0x2_4,-0,0,4_2").unwrap();
+        assert_eq!(80, layout.width);
+        assert_eq!(24, layout.height);
+        assert_eq!(0, layout.x);
+        assert_eq!(Content::Pane(42), layout.content);
+        assert!(Layout::parse("80_x24,0,0,42").is_err());
     }
 
     #[test]

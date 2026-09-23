@@ -99,15 +99,19 @@ impl OSC {
     fn update(&mut self, key: u8, value: &[u8]) -> Result<(), UpdateError> {
         // All values are numeric, so we can do a small hack here
         // PORT NOTE: `std.fmt.parseInt(u4, value, 10)` parses a base-10 unsigned
-        // value into a u4 (0 - 15); any parse failure (incl. overflow) =>
+        // value into a u4 (0 - 15), through the port of the std function in
+        // `crate::zig_parse_int`; any parse failure (incl. overflow) =>
         // InvalidValue.
-        let value_str = match std::str::from_utf8(value) {
-            Ok(s) => s,
+        // CORRECTION (parity S195-F2): this used `str::parse::<u8>()` plus a
+        // range check, which rejects the `_` digit separators and the `-0`
+        // that `std.fmt.parseInt` accepts.
+        let v: u8 = match crate::zig_parse_int::parse_int(
+            crate::zig_parse_int::IntType::unsigned(4),
+            value,
+            10,
+        ) {
+            Ok(v) => u8::try_from(v).expect("a u4 fits in u8"),
             Err(_) => return Err(UpdateError::InvalidValue),
-        };
-        let v: u8 = match value_str.parse::<u8>() {
-            Ok(v) if v <= 15 => v,
-            _ => return Err(UpdateError::InvalidValue),
         };
 
         match key {
@@ -403,6 +407,28 @@ mod tests {
             ),
         }
         assert_eq!(Vec::<crate::log_capture::CapturedRecord>::new(), messages);
+    }
+
+    // Parity S195-F2: no reference test. `update` parses every value with
+    // `std.fmt.parseInt(u4, value, 10)`, which accepts interior `_` digit
+    // separators and a leading `+`, and rejects a leading or trailing `_`
+    // (the field then keeps its default).
+    #[test]
+    fn osc_66_values_accept_zig_digit_separators() {
+        let mut p: Parser = Parser::init(None);
+        for ch in b"66;n=1_2:d=+1_5:s=_2:w=2_;bobr" {
+            p.next(*ch);
+        }
+        match p.end(Some(0x1b)).map(|c| c.clone()) {
+            Some(Command::KittyTextSizing(osc)) => {
+                assert_eq!(12u8, osc.numerator);
+                assert_eq!(15u8, osc.denominator);
+                assert_eq!(1u8, osc.scale);
+                assert_eq!(0u8, osc.width);
+                assert_eq!(b"bobr", osc.text.as_slice());
+            }
+            other => panic!("the OSC did not parse ({other:?})"),
+        }
     }
 
     #[test]

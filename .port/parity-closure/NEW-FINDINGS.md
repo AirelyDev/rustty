@@ -3389,3 +3389,38 @@ does for `Config.loadFile`), and print through that.
   legitimately lacks the corpus. The same reason is why the `.git`-probing xtask tests were
   allow-listed in G-SKIP rather than given a strict variable.
 - **state**: CLOSED by task T-B (commit `fab80ad0`, merged via `tail-b2`): the distcheck cargo steps drop `RUSTTY_REQUIRE_FUZZ_CORPUS`, pinned by a test whose negative control (removal line deleted) fails for the stated reason; confirmed by the T-B and T-B2 reviews.
+
+## N100 — nine more `std.fmt.parseInt` sites in `src/terminal` parsed with Rust's `str::parse`
+
+- **id**: N100. Not in the inventory.
+- **found by**: batch T-A (tail wave), while closing S170-F1 / S186-F1 / S194-F3 / S195-F2 / S197-F1,
+  by grepping the reference's `src/terminal` for every `std.fmt.parseInt` / `parseUnsigned` call and
+  reading each port counterpart.
+- **severity**: low. **kind**: behavioral-difference (same class as the five rows).
+- **oracle**: `src/terminal/osc/parsers/osc9.zig:28, 196` (`parseUnsigned`);
+  `src/terminal/tmux/layout.zig:99, 113, 127, 141, 163`; `src/terminal/tmux/output.zig:194-204`;
+  `src/terminal/tmux/viewer.zig:1031`; `src/terminal/tmux/control.zig:178-180` (plus the regex
+  id captures at `:234-470`, which only ever see `[0-9]+`).
+- **rustty**: `crates/rustty-vt/src/osc/parsers/osc9.rs` (sleep and progress arms),
+  `crates/rustty-vt/src/tmux/{layout,output,viewer,control}.rs`.
+
+Zig's `std.fmt.parseInt` accepts interior `_` digit separators and `-0` for unsigned types, and
+`parseUnsigned` rejects any sign byte; Rust's `str::parse` rejects `_` and `-0` and accepts a leading
+`+`. None of these sites belonged to a ledger row. The five rows' sites and these now all go through one
+port of the std function, `crates/rustty-vt/src/zig_parse_int.rs`, which carries the std test table
+(`std_fmt_parse_int_table`). Observable before the fix: `OSC 9;1;4_20` slept 100 ms instead of 420,
+`OSC 9;1;+420` slept 420 instead of 100, a tmux `%end 1_0 2 0` guard line did not end its block, a
+`list-panes` `pane_tabs` entry `1_0` set no tab stop, and `output.rs` reported `-a` as `Overflow`
+where the reference reports `InvalidCharacter`.
+
+Checked and left unchanged: `kitty_desktop_notification.rs` (`w=`) filters `_` first, as the reference
+does, and its remaining forms agree; `context_signal.rs` accepts only `[0-9]` bytes before parsing;
+`x11_color.zig`'s calls run over the built-in `rgb.txt`, not input; `color.zig:65`/`:663` already have
+Zig-faithful ports in `crates/rustty-vt/src/color.rs`.
+
+**tests**: `osc_9_numbers_use_zig_parse_unsigned`, `numbers_use_zig_parse_int` (layout),
+`parse_integer_variables_use_zig_parse_int` (output), `pane_state_tab_stops_use_zig_parse_int`
+(viewer, `--features oniguruma`), `block_terminator_numbers_use_zig_parse_int` (control). Each failed
+before its site's change, on the `_`-separated input.
+
+**state**: FIXED (batch T-A).

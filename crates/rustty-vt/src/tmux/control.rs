@@ -948,23 +948,16 @@ fn trim_right_len(slice: &[u8], strip: &[u8]) -> usize {
     len
 }
 
-// PORT NOTE: `std.fmt.parseInt(usize, bytes, 10)` — base-10 parse of an ASCII
-// byte slice into a `usize`. The error mirrors `std.fmt.ParseIntError`
+// PORT NOTE: `std.fmt.parseInt(usize, bytes, 10)`, through the port of the std
+// function in `crate::zig_parse_int`. The error is `std.fmt.ParseIntError`
 // (`Overflow` / `InvalidCharacter`) so a caller that logs it renders the
 // reference's error name.
-fn parse_int_usize(bytes: &[u8]) -> Result<usize, ParseIntError> {
-    let s = std::str::from_utf8(bytes).map_err(|_| ParseIntError::InvalidCharacter)?;
-    s.parse::<usize>().map_err(|err| match err.kind() {
-        core::num::IntErrorKind::PosOverflow => ParseIntError::Overflow,
-        _ => ParseIntError::InvalidCharacter,
-    })
-}
-
-/// PORTS: `std.fmt.ParseIntError`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ParseIntError {
-    Overflow,
-    InvalidCharacter,
+// CORRECTION (parity N100): this used `str::parse::<usize>()` with a local
+// copy of `ParseIntError`; that rejects the `_` digit separators and `-0` that
+// `std.fmt.parseInt` accepts, which `parse_block_terminator`'s unconstrained
+// fields can carry.
+fn parse_int_usize(bytes: &[u8]) -> Result<usize, crate::zig_parse_int::ParseIntError> {
+    crate::zig_parse_int::parse::<usize>(bytes, 10)
 }
 
 // PORT NOTE: reference defect (R13, UPSTREAM-DEFECTS.md UD7). Every id capture
@@ -1180,6 +1173,19 @@ fn trim_both<'a>(slice: &'a [u8], strip: &[u8]) -> &'a [u8] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Parity N100 (no reference test): the guard line's three numbers are
+    // checked with `std.fmt.parseInt(usize, .., 10)`, which accepts `_` digit
+    // separators and `-0`.
+    #[test]
+    fn block_terminator_numbers_use_zig_parse_int() {
+        assert!(matches!(
+            parse_block_terminator(b"%end 1_578 2_69 -0"),
+            Some(BlockTerminator::End)
+        ));
+        assert!(parse_block_terminator(b"%end 1578_ 269 1").is_none());
+        assert!(parse_block_terminator(b"%end 1578 269 +").is_none());
+    }
 
     // PORT NOTE: no reference test; this pins the fallible-allocation contract
     // of `init_options`, the mirror of the reference's

@@ -337,7 +337,10 @@ pub mod option {
         is_exit_code: true,
         decode: |full| {
             // std.fmt.parseInt(i32, full, 10) catch null
-            core::str::from_utf8(full).ok()?.parse::<i32>().ok()
+            // CORRECTION (parity S197-F1): this was
+            // `core::str::from_utf8(full).ok()?.parse::<i32>().ok()`, which
+            // rejects the `_` digit separators `std.fmt.parseInt` accepts.
+            crate::zig_parse_int::parse::<i32>(full, 10).ok()
         },
     };
 }
@@ -1602,5 +1605,16 @@ mod tests {
         assert!(option::EXIT_CODE.read(b"-1").unwrap() == -1);
         assert!(option::EXIT_CODE.read(b"abc").is_none());
         assert!(option::EXIT_CODE.read(b"127;aid=foo").unwrap() == 127);
+    }
+
+    // Parity S197-F1: no reference test. The exit code is parsed with
+    // `std.fmt.parseInt(i32, full, 10)`, which accepts interior `_` digit
+    // separators and rejects a leading or trailing `_`.
+    #[test]
+    fn option_read_exit_code_accepts_zig_digit_separators() {
+        assert_eq!(Some(12), option::EXIT_CODE.read(b"1_2"));
+        assert_eq!(Some(-12), option::EXIT_CODE.read(b"-1_2;aid=foo"));
+        assert_eq!(None, option::EXIT_CODE.read(b"_12"));
+        assert_eq!(None, option::EXIT_CODE.read(b"12_"));
     }
 }

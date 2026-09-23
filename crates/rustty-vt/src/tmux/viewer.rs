@@ -1696,10 +1696,14 @@ impl Viewer {
                 // while (tabs_it.next()) |tab_str| {
                 for tab_str in data.pane_tabs.split(',') {
                     // const col = std.fmt.parseInt(usize, tab_str, 10) catch continue;
-                    let col: usize = match tab_str.parse::<usize>() {
-                        Ok(v) => v,
-                        Err(_) => continue,
-                    };
+                    // CORRECTION (parity N100): this was
+                    // `tab_str.parse::<usize>()`, which rejects the `_` digit
+                    // separators and `-0` that `std.fmt.parseInt` accepts.
+                    let col: usize =
+                        match crate::zig_parse_int::parse::<usize>(tab_str.as_bytes(), 10) {
+                            Ok(v) => v,
+                            Err(_) => continue,
+                        };
                     // const col_cell = std.math.cast(size.CellCountInt, col) orelse continue;
                     let col_cell = match cast_cell(col) {
                         Some(v) => v,
@@ -3879,6 +3883,34 @@ mod tests {
         let active = pane_dump(s.handler.viewer(), 7, crate::point::Tag::Active);
         s.deinit();
         (region.0, region.1, active.contains("xxxxxxxxxx"))
+    }
+
+    /// Parity N100 (no reference test): each `pane_tabs` entry is parsed with
+    /// `std.fmt.parseInt(usize, tab_str, 10) catch continue`, which accepts `_`
+    /// digit separators and skips an entry with a trailing `_`.
+    #[cfg(feature = "oniguruma")]
+    #[test]
+    fn pane_state_tab_stops_use_zig_parse_int() {
+        use crate::tmux::test_host;
+        let mut s = test_host::stream();
+        test_host::attach(&mut s);
+        let line = test_host::list_windows_line(0, 80, 24, b"80x24,0,0,7");
+        s.next_slice(&test_host::block(3, &line));
+        for n in 4..8 {
+            s.next_slice(&test_host::block(n, b""));
+        }
+        s.next_slice(&test_host::block(
+            8,
+            b"%7;0;0;1;;;;0;4294967295;4294967295;0;1;0;0;0;0;0;0;0;0;0;;;0;23;1_0,2_0,3_,4",
+        ));
+        let pane = s.handler.viewer().panes.get_ptr(&7).unwrap();
+        let tabs = &pane.terminal.tabstops;
+        assert!(tabs.get(4), "the list-panes reply was applied");
+        assert!(tabs.get(10));
+        assert!(tabs.get(20));
+        assert!(!tabs.get(30));
+        assert!(!tabs.get(8));
+        s.deinit();
     }
 
     #[cfg(feature = "oniguruma")]

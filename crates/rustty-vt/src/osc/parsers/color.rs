@@ -478,15 +478,17 @@ impl<'a> TokenizeScalar<'a> {
     }
 }
 
-// PORT NOTE: glue for `std.fmt.parseInt(u9, s, 10)`. Returns `None` on any parse
-// failure or when the value overflows `u9` (0..=511), mirroring the Zig integer
-// width. Parses ASCII bytes only (the tokenizer yields byte slices).
+// PORT NOTE: glue for `std.fmt.parseInt(u9, s, 10)`, through the port of the
+// std function in `crate::zig_parse_int` at the reference's `u9` width.
+// Returns `None` on any parse failure or when the value overflows `u9`
+// (0..=511); the value is widened to `u16`.
+// CORRECTION (parity S194-F3): this used `str::parse::<u16>()` plus a range
+// check, which rejects the `_` digit separators and the `-0` that
+// `std.fmt.parseInt` accepts.
 fn parse_int_u9(s: &[u8]) -> Option<u16> {
-    let text = str_from_bytes(s)?;
-    match text.parse::<u16>() {
-        Ok(v) if v <= 511 => Some(v),
-        _ => None,
-    }
+    let v =
+        crate::zig_parse_int::parse_int(crate::zig_parse_int::IntType::unsigned(9), s, 10).ok()?;
+    Some(u16::try_from(v).expect("a u9 fits in u16"))
 }
 
 // PORT NOTE: glue for `std.math.cast(u8, color)` — returns the value if it fits
@@ -520,17 +522,6 @@ fn int_to_special(v: u8) -> Option<SpecialColor> {
         4 => Some(SpecialColor::Italic),
         _ => None,
     }
-}
-
-// PORT NOTE: glue to view a byte slice as `&str` for the `str`-based Rust
-// integer parse in `parse_int_u9`. Non-UTF-8 bytes yield `None`, which folds
-// into the reference's parse-failure path (`std.fmt.parseInt` rejects any
-// non-ASCII byte too). `RGB::parse` does NOT go through here: it takes
-// `&[u8]` like the reference's `parse(value: []const u8)`, because its
-// sub-slices are chosen by byte index and a `&str` view would panic on a
-// mid-scalar cut instead of failing the parse (see `color.rs`).
-fn str_from_bytes(s: &[u8]) -> Option<&str> {
-    std::str::from_utf8(s).ok()
 }
 
 #[cfg(test)]
@@ -708,6 +699,39 @@ mod tests {
     }
 
     // test "OSC 4: multiple requests" {
+    // Parity S194-F3: no reference test. The color index is parsed with
+    // `std.fmt.parseInt(u9, color_str, 10)`, which accepts interior `_` digit
+    // separators, a leading `+` and `-0`, and rejects a leading or trailing
+    // `_` and anything past `u9`.
+    #[test]
+    fn osc_4_104_color_index_accepts_zig_digit_separators() {
+        let list = parse_color(Operation::osc_4, b"1_0;red;+1_1;blue");
+        assert_eq!(2, list.len());
+        assert_eq!(
+            Request::Set(ColoredTarget {
+                target: Target::Palette(10),
+                color: RGB { r: 255, g: 0, b: 0 },
+            }),
+            list[0]
+        );
+        assert_eq!(
+            Request::Set(ColoredTarget {
+                target: Target::Palette(11),
+                color: RGB { r: 0, g: 0, b: 255 },
+            }),
+            list[1]
+        );
+
+        let list = parse_color(Operation::osc_104, b"1_2;_3;3_;-0;5_12;4");
+        assert_eq!(3, list.len());
+        assert_eq!(Request::Reset(Target::Palette(12)), list[0]);
+        assert_eq!(Request::Reset(Target::Palette(0)), list[1]);
+        assert_eq!(Request::Reset(Target::Palette(4)), list[2]);
+
+        // A leading `_` fails the parse, which ends an OSC 4 list.
+        assert_eq!(0, parse_color(Operation::osc_4, b"_1;red").len());
+    }
+
     #[test]
     fn osc_4_multiple_requests() {
         // printf '\e]4;0;red;1;blue\e\\'

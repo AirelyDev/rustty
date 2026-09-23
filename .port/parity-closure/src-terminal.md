@@ -66,7 +66,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** Shape.getGObjectType (GhosttyMouseShape GObject enum) stripped; GTK mouse-shape property is a plain int
   - **Oracle:** `src/terminal/mouse.zig:77-92` → **Rustty:** `crates/rustty-apprt/src/gtk/class/surface.rs:247-257`
   - **Audit's suggested fix:** Register a `RusttyMouseShape` glib enum type (glib::Enum derive over rustty_vt::mouse::Shape or a wrapper) and type the `mouse-shape` property with it, matching surface.zig:222-240.
-- [ ] **S170-F1** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S170-F1** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** parse_u21/parse_u32 reject interior '_' digit separators that Zig std.fmt.parseInt accepts
   - **Oracle:** `src/terminal/apc/glyph/request.zig:106, 217, 220-222, 372` → **Rustty:** `crates/rustty-vt/src/apc/glyph/request.rs:1051-1064`
   - **Audit's suggested fix:** In parse_u21/parse_u32, reject leading/trailing '_' then strip interior '_' bytes before from_str_radix (mirroring parseIntWithSign), and add a test such as `r;cp=e0_a0;QQ==` -> get_cp()==Some(0xE0A0).
@@ -130,7 +130,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** ABI manifest omits CLIPBOARD_WRITE_MAX_BYTES (40) from RusttyTerminalData
   - **Oracle:** `src/terminal/c/types.zig:314 (row) / src/terminal/c/terminal.zig:1595` → **Rustty:** `crates/rustty-vt-c/src/types.rs:2387-2436`
   - **Audit's suggested fix:** Append `("clipboard_write_max_bytes", ClipboardWriteMaxBytes),` to the RusttyTerminalData enum_values! row.
-- [ ] **S186-F1** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S186-F1** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** Integer control values containing '_' digit separators are rejected where the reference accepts them
   - **Oracle:** `src/terminal/kitty/graphics_command.zig:318-324` → **Rustty:** `crates/rustty-vt/src/kitty/graphics_command.rs:437-499`
   - **Audit's suggested fix:** Port Zig's `_`-separator handling to the non-negative branches of `parse_int_u32` and `parse_int_i32` (skip interior `_`, reject a leading or trailing `_` with InvalidFormat before the digit scan), mirroring what `parse_int_u32_negative_magnitude` already does, and add table rows for `"1_0" -> Ok(10)`, `"-1_0" -> Ok(-10)` (i32), `"_10"/"10_" -> InvalidFormat`.
@@ -146,7 +146,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** test "OSC 52: get/set clipboard with allocator" ported without an allocator, making it a duplicate of the non-allocator test
   - **Oracle:** `src/terminal/osc/parsers/clipboard_operation.zig:94-107` → **Rustty:** `crates/rustty-vt/src/osc/parsers/clipboard_operation.rs:130-152`
   - **Audit's suggested fix:** Construct the parser with an allocator (ZigAllocatorRef) in this test so the allocating capture backing is actually covered, restoring the distinction from the preceding test.
-- [ ] **S194-F3** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S194-F3** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** parse_int_u9 rejects the '_' digit separators that Zig's std.fmt.parseInt accepts
   - **Oracle:** `src/terminal/osc/parsers/color.zig:177-181, 250-254` → **Rustty:** `crates/rustty-vt/src/osc/parsers/color.rs:482-488`
   - **Audit's suggested fix:** Mirror std.fmt.parseInt's separator handling: strip '_' characters that are neither leading nor trailing (and reject a leading/trailing or doubled '_') before the numeric parse.
@@ -154,7 +154,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** OSC 5522 Option_::read hand-rolls prefix key matching instead of using the ported ValueIterator (exact-key, skip-field) semantics
   - **Oracle:** `src/terminal/osc/parsers/kitty_clipboard_protocol.zig:97-115 (Option.read) + src/terminal/osc/kitty_metadata.zig:39-72 (ValueIterator.next)` → **Rustty:** `crates/rustty-vt/src/osc/parsers/kitty_clipboard_protocol.rs:226-292`
   - **Audit's suggested fix:** Replace the hand-rolled scan in `Option_::read` with `kitty_metadata::ValueIterator::init(self.tag_name(), None, metadata).next()` (mirroring kitty_desktop_notification.rs:376-395), delete the now-dead local `trim_whitespace`, and add the prefix-key regression case (e.g. `5522;password=A:pw=B`) as a test.
-- [ ] **S195-F2** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S195-F2** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** OSC 66 update() rejects '_' digit separators that Zig's std.fmt.parseInt accepts
   - **Oracle:** `src/terminal/osc/parsers/kitty_text_sizing.zig:49-54` → **Rustty:** `crates/rustty-vt/src/osc/parsers/kitty_text_sizing.rs:95-105`
   - **Audit's suggested fix:** Strip/accept '_' digit separators the way Zig's parseInt does before `parse::<u8>()` in `OSC::update` (or share a small `parse_int_zig` helper), so `n=1_2` parses to 12 as in the oracle.
@@ -409,7 +409,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** rxvt_extension scoped logger and its two warn() calls are commented out
   - **Oracle:** `src/terminal/osc/parsers/rxvt_extension.zig:6,27-32` → **Rustty:** `crates/rustty-vt/src/osc/parsers/rxvt_extension.rs:7-11,34,41`
   - **Audit's suggested fix:** If/when a logging facade is wired into rustty-vt, restore both warnings with the same message text and the `osc_rxvt_extension` scope.
-- [ ] **S197-F1** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S197-F1** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** exit_code parsing: Zig std.fmt.parseInt accepts '_' digit separators, Rust str::parse does not
   - **Oracle:** `src/terminal/osc/parsers/semantic_prompt.zig:160-166` → **Rustty:** `crates/rustty-vt/src/osc/parsers/semantic_prompt.rs:323-333`
   - **Audit's suggested fix:** Strip interior `_` separators (rejecting leading/trailing `_` and an all-`_`/empty remainder) before calling `parse::<i32>()`, mirroring Zig's parseIntWithSign, and add a regression assertion to `option_read_exit_code`.

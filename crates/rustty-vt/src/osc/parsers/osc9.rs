@@ -33,9 +33,15 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut Comman
                     // OSC 9;1 sleep
                     b';' => {
                         parser.command = Command::ConemuSleep {
-                            duration_ms: match std::str::from_utf8(&data[2..])
-                                .ok()
-                                .and_then(|s| s.parse::<u16>().ok())
+                            // CORRECTION (parity N100): this parsed with
+                            // `str::parse::<u16>()`, which accepts a `+` sign
+                            // and rejects the `_` digit separators, where
+                            // `std.fmt.parseUnsigned` does the opposite.
+                            duration_ms: match crate::zig_parse_int::parse_unsigned::<u16>(
+                                &data[2..],
+                                10,
+                            )
+                            .ok()
                             {
                                 Some(num) => num.min(10_000),
                                 None => 100,
@@ -242,9 +248,11 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut Comman
                         }
                         // parse the progress value
                         let value: Option<u8> = (|| {
-                            let parsed = std::str::from_utf8(&data[4..])
-                                .ok()
-                                .and_then(|s| s.parse::<usize>().ok())?;
+                            // CORRECTION (parity N100): this parsed with
+                            // `str::parse::<usize>()`; see the sleep arm.
+                            let parsed =
+                                crate::zig_parse_int::parse_unsigned::<usize>(&data[4..], 10)
+                                    .ok()?;
                             // @intCast(std.math.clamp(..., 0, 100))
                             Some(parsed.clamp(0, 100) as u8)
                         })();
@@ -480,6 +488,36 @@ mod tests {
         match cmd {
             Command::ConemuSleep { duration_ms } => assert_eq!(10000, duration_ms),
             _ => unreachable!(),
+        }
+    }
+
+    // Parity N100 (no reference test): the sleep duration and the progress
+    // value are parsed with `std.fmt.parseUnsigned`, which accepts interior
+    // `_` digit separators and rejects any sign byte.
+    #[test]
+    fn osc_9_numbers_use_zig_parse_unsigned() {
+        fn parse(input: &str) -> Command {
+            let mut p: Parser = Parser::init(None);
+            for ch in input.bytes() {
+                p.next(ch);
+            }
+            p.end(Some(0x1b)).unwrap().clone()
+        }
+        match parse("9;1;4_20") {
+            Command::ConemuSleep { duration_ms } => assert_eq!(420, duration_ms),
+            other => panic!("expected sleep, got {other:?}"),
+        }
+        match parse("9;1;+420") {
+            Command::ConemuSleep { duration_ms } => assert_eq!(100, duration_ms),
+            other => panic!("expected sleep, got {other:?}"),
+        }
+        match parse("9;4;1;4_2") {
+            Command::ConemuProgressReport(r) => assert_eq!(Some(42), r.progress),
+            other => panic!("expected progress, got {other:?}"),
+        }
+        match parse("9;4;1;+42") {
+            Command::ConemuProgressReport(r) => assert_eq!(None, r.progress),
+            other => panic!("expected progress, got {other:?}"),
         }
     }
 
