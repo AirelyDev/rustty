@@ -5907,11 +5907,14 @@ impl RepeatableLink {
         // return error.NotImplemented;
         //
         // PORT NOTE: the reference's `parseCLI` is an explicit stub that always
-        // returns `error.NotImplemented` ("This currently can't be set"). The base
-        // args `Error` set has no `NotImplemented`; the link field is never
-        // settable, so the error collapses to `InvalidValue` (the closest base
-        // variant) — preserving the "cannot be set" behavior.
-        Err(Error::InvalidValue)
+        // returns `error.NotImplemented` ("This currently can't be set").
+        //
+        // CORRECTION (LEDGER S76-F2): this used to say "The base args `Error`
+        // set has no `NotImplemented` ... so the error collapses to
+        // `InvalidValue`". That changed the recorded diagnostic from the
+        // reference's `unknown error error.NotImplemented` to the invalid-value
+        // message; `rustty-args` now carries `Error::NotImplemented`.
+        Err(Error::NotImplemented)
     }
 
     /// Deep copy of the struct. Required by Config.

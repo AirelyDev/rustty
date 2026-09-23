@@ -71,6 +71,13 @@ pub enum Error {
     /// (its `From<ParseError>` impl). It never reaches the field-parse error
     /// handlers below (help is matched before `parse_into_field`).
     ActionHelpRequested,
+    /// PORT NOTE: NOT a member of the reference `args.Error` set either. It is
+    /// the `error.NotImplemented` that `Config.RepeatableLink.parseCLI` returns
+    /// (`Config.zig:8719-8724`, "This currently can't be set"). The reference's
+    /// open error set lets it reach the diagnostic switch's `else` arm, which
+    /// records `unknown error error.NotImplemented`; this variant carries it
+    /// there (LEDGER S76-F2).
+    NotImplemented,
 }
 
 /// PORTS: the union of base `Error` plus the `OutOfMemory`/`Unknown` extras and
@@ -556,7 +563,11 @@ where
                     // sentinel is returned by `help()` before field parsing, never
                     // by `parse_into_field`). It is retained as the catch-all the
                     // reference's open error set requires.
-                    Error::ActionHelpRequested => format!("unknown error {err:?}").into_bytes(),
+                    //
+                    // `{}` of a Zig error prints `error.<Name>`.
+                    Error::ActionHelpRequested | Error::NotImplemented => {
+                        format!("unknown error error.{err:?}").into_bytes()
+                    }
                 };
 
                 // Add our diagnostic
@@ -726,7 +737,9 @@ where
                     Error::InvalidValue => format_invalid_value(dst, key, value),
                     // See the `parse` twin: the help sentinel is emitted by
                     // `help()` before field parsing, so it never reaches here.
-                    Error::ActionHelpRequested => format!("unknown error {err:?}").into_bytes(),
+                    Error::ActionHelpRequested | Error::NotImplemented => {
+                        format!("unknown error error.{err:?}").into_bytes()
+                    }
                 };
 
                 let location = iter.location_self().unwrap_or(Location::None);

@@ -13173,4 +13173,27 @@ mod integration_tests {
             "{single}"
         );
     }
+
+    // No reference test. LEDGER S76-F2: `RepeatableLink.parseCLI` returns
+    // `error.NotImplemented` (`Config.zig:8719-8724`), which is outside the
+    // args base set, so `cli/args.zig:158-170` records it through the `else`
+    // arm: `"unknown error {}"` of the error, i.e. `unknown error
+    // error.NotImplemented`. (Before the fix the port returned `InvalidValue`
+    // and recorded the invalid-value message instead.)
+    #[test]
+    fn link_key_records_the_reference_not_implemented_diagnostic() {
+        let mut cfg = Config::default_config();
+        let links_before = cfg.link.links.len();
+        let mut it = TestIterator::new(&[b"--link=foo"]);
+        cfg.load_iter(&mut it).unwrap();
+        let items = cfg._diagnostics.items();
+        assert_eq!(1, items.len(), "{items:?}");
+        assert_eq!(b"link".as_slice(), items[0].key.as_slice());
+        assert_eq!(
+            "unknown error error.NotImplemented",
+            String::from_utf8_lossy(&items[0].message)
+        );
+        // The value is still not applied.
+        assert_eq!(links_before, cfg.link.links.len());
+    }
 }
