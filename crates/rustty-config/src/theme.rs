@@ -756,19 +756,21 @@ mod tests {
             format!("failed to load theme from the path \"{not_dir}\": error.NotDir").as_bytes(),
             not_dir_msg.as_slice()
         );
-        if readable {
-            eprintln!("skipping the AccessDenied arm: running with read access to a 0o000 file");
-            assert!(opened);
-        } else {
-            assert_eq!(
-                Some(
-                    format!(
-                        "failed to load theme from the path \"{locked_str}\": error.AccessDenied"
-                    )
+        // R14: the AccessDenied arm needs a process without read access to a
+        // 0o000 file, which every CI lane and developer checkout has (only
+        // root has it). There is no skip: under root this fails, naming why.
+        assert!(
+            !readable,
+            "this test must run without root: a 0o000 file was readable, so the \
+             AccessDenied arm cannot be reached"
+        );
+        assert!(!opened);
+        assert_eq!(
+            Some(
+                format!("failed to load theme from the path \"{locked_str}\": error.AccessDenied")
                     .into_bytes()
-                ),
-                locked_msg
-            );
-        }
+            ),
+            locked_msg
+        );
     }
 }

@@ -13300,17 +13300,20 @@ mod integration_tests {
         cfg.load_recursive_files().unwrap();
         let messages = diagnostic_messages(&cfg);
 
-        // Only meaningful when the file really is unreadable (not as root).
-        if std::fs::File::open(&locked).is_err() {
-            assert!(
-                messages.contains(&format!(
-                    "error opening config-file {locked}: error.AccessDenied"
-                )),
-                "{messages:?}"
-            );
-        } else {
-            eprintln!("skipping the AccessDenied arm: running with read access to a 0o000 file");
-        }
+        // R14: the AccessDenied arm needs a process without read access to a
+        // 0o000 file, which every CI lane and developer checkout has (only
+        // root has it). There is no skip: under root this fails, naming why.
+        assert!(
+            std::fs::File::open(&locked).is_err(),
+            "this test must run without root: a 0o000 file was readable, so the \
+             AccessDenied arm cannot be reached"
+        );
+        assert!(
+            messages.contains(&format!(
+                "error opening config-file {locked}: error.AccessDenied"
+            )),
+            "{messages:?}"
+        );
         assert!(
             messages.contains(&format!(
                 "error opening config-file {not_dir}: error.NotDir"
