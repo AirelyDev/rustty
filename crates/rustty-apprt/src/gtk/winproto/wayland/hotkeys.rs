@@ -131,7 +131,7 @@ impl Entry {
         // future `bind` regressed the guard.
         //
         // PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD91. The
-        // guarantee does not hold: `keysymFromTrigger` is also null for the 43
+        // guarantee does not hold: `keysymFromTrigger` is also null for the 44
         // `input.Key` values GTK's keymap does not map (counting `unidentified`;
         // e.g. `audio_volume_up`,
         // `browser_back`, `intl_backslash`), so `keybind = global:<one of them>`
@@ -985,7 +985,7 @@ mod tests {
     }
 
     /// UD91 (R13, task R13-D): a `global:` bind on one of the physical keys GTK's
-    /// keymap has no keysym for (`audio_volume_up` here; 43 `input.Key` values
+    /// keymap has no keysym for (`audio_volume_up` here; 44 `input.Key` values
     /// at the pin, counting `unidentified`). The reference's `Entry.bind` says only `catch_all` lacks a keysym
     /// and spells it `orelse unreachable` (`Hotkeys.zig:40`), so such a config
     /// line traps once a compositor offers `vicinae_hotkey_manager_v1`. The port

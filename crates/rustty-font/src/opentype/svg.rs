@@ -246,8 +246,9 @@ mod tests {
     // UD92 (R13, task R13-D): `numEntries == 0`. The reference reads
     // `records[0]` past the end of this table, then computes `len - 1` on a
     // `u16` 0 (ReleaseSafe traps "integer overflow"; ReleaseFast reads
-    // `records[65535]`, about 786 KiB past it). The port returns `EndOfStream`.
-    // The positive control is the same table with one real record.
+    // `records[65535]`, 786,420 bytes or about 768 KiB past it). The port
+    // returns `EndOfStream`. The positive control is the same table with one
+    // real record.
     #[test]
     fn svg_document_list_with_no_records_is_end_of_stream() {
         let empty = [

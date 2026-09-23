@@ -321,10 +321,15 @@ mod coretext_payload {
                 // The reference never releases this +1 copy (nor the display
                 // name's in `name`, nor `Face.name`'s), on the `cstringPtr`
                 // return or the `cstring(buf)` one: each call leaks a retain on
-                // the name string (measured on a font loaded from data; a system
-                // font's names are immortal). `CFRetained` releases it at scope
-                // end; the bytes are copied into `buf` first, so nothing borrows
-                // the string (LEDGER S85-F6 / S90-F3: the port therefore has no
+                // the name string (measured on a font loaded from data). A
+                // discovered font's names are immortal constants (measured,
+                // including a non-system font installed in /Library/Fonts), and
+                // the reference's `DeferredFace.ct` only comes from discovery, so
+                // there this is a retain on an immortal string, not an observed
+                // leak; the real leak is `Face.name` on an embedded face.
+                // Releasing is correct either way. `CFRetained` releases it at
+                // scope end; the bytes are copied into `buf` first, so nothing
+                // borrows the string (LEDGER S85-F6 / S90-F3: the port therefore has no
                 // zero-copy return for a name longer than `buf`).
                 let s = family_name.to_string();
                 let bytes = s.as_bytes();
@@ -1512,7 +1517,11 @@ mod tests {
     /// `DeferredFace.name`/`familyName` and CoreText `Face.name` call. For a font
     /// loaded from data CoreText hands back the SAME string object on each copy
     /// (measured), so a leaked +1 shows up as a rising retain count. The port
-    /// must leave it where it was after many calls.
+    /// must leave it where it was after many calls. Only `Face.name` on a
+    /// data-loaded (embedded) face leaks in the reference: a discovered font's
+    /// names are immortal, and the reference's `DeferredFace` is always
+    /// discovered. The data-backed `DeferredFace` here exists only so that a
+    /// leaked retain would be visible; it proves the port releases its copies.
     #[cfg(target_os = "macos")]
     #[test]
     fn coretext_name_lookups_release_the_copied_name_string() {
