@@ -514,6 +514,9 @@ pub struct Options {
     //     // usage by default.
     //     .lib => 10 * 1000 * 1000, // 10MB
     // },
+    // PORT NOTE: a Rust struct field has no default initializer; the
+    // reference's artifact-selected field default is
+    // `Options::kitty_image_storage_limit_default(artifact)` below.
     pub kitty_image_storage_limit: usize,
 
     /// The limits for what medium types are allowed for Kitty image loading.
@@ -525,6 +528,24 @@ pub struct Options {
     // else
     //     void
     pub kitty_image_loading_limits: kitty::graphics_image::Limits,
+}
+
+impl Options {
+    /// The reference's field default for `kitty_image_storage_limit`, which
+    /// depends on the build artifact (see the field's comment above).
+    // PORT NOTE: the reference's `switch (build_options.artifact)` field
+    // initializer, as a const fn over the artifact. rustty-vt is built once
+    // for the whole workspace with `crate::options::ARTIFACT == .ghostty`, so
+    // the `.lib` artifact (rustty-vt-c, the libghostty-vt C API, whose
+    // `terminal_new` relies on this default) selects `Artifact::Lib` here.
+    pub const fn kitty_image_storage_limit_default(
+        artifact: crate::build_options::Artifact,
+    ) -> usize {
+        match artifact {
+            crate::build_options::Artifact::Ghostty => 320 * 1000 * 1000, // 320MB
+            crate::build_options::Artifact::Lib => 10 * 1000 * 1000,      // 10MB
+        }
+    }
 }
 
 /// The semantic prompt type. This is used when tracking a line type and

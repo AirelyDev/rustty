@@ -30,7 +30,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** Screen.clearCells does not clear the row's kitty_virtual_placeholder flag
   - **Oracle:** `src/terminal/Screen.zig:1818-1828` → **Rustty:** `crates/rustty-vt/src/screen.rs:2739-2742`
   - **Audit's suggested fix:** Add after the styled block in Screen::clear_cells: `if crate::options::KITTY_GRAPHICS && unsafe{(*row).kitty_virtual_placeholder()} && cells_len == unsafe{(*page).size.cols} as usize { let found = (0..cells_len).any(|i| unsafe{(*cells_base.add(i)).codepoint()} == kitty::graphics_unicode::PLACEHOLDER); if !found { unsafe{(*row).set_kitty_virtual_placeholder(false)} } }` (mirror page_impl.rs:1975-1990), and delete the stale deferral note.
-- [ ] **S133-F2** · CONFIRMED · `INDIV` · different-constant
+- [x] **S133-F2** · CONFIRMED · `INDIV` · different-constant
   - **What:** Screen.Options.default uses kitty_image_storage_limit = 0 instead of 320MB (ghostty artifact) / 10MB (lib)
   - **Oracle:** `src/terminal/Screen.zig:273-293` → **Rustty:** `crates/rustty-vt/src/screen.rs:400-423`
   - **Audit's suggested fix:** Set `kitty_image_storage_limit: 320 * 1000 * 1000` (or select by an artifact/`lib` build option matching `build_options.artifact`) in `Options::default()`, and remove the stale vt-12 deferral note.
@@ -38,7 +38,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** cursorCopy does not restore the old cursor when manualStyleUpdate fails; error set collapsed to OutOfMemory
   - **Oracle:** `src/terminal/Screen.zig:1430-1451` → **Rustty:** `crates/rustty-vt/src/screen.rs:2341-2380`
   - **Audit's suggested fix:** Capture `let old = self.cursor;` (Cursor is Copy) before the overwrite and on `Err(e)` from manual_style_update do `self.cursor = old; return Err(e)`; change the return type to `Result<(), IncreaseCapacityError>` (or keep the mapping but document it) so OutOfSpace is not reported as OutOfMemory.
-- [ ] **S141-F1** · CONFIRMED · `INDIV` · different-constant
+- [x] **S141-F1** · CONFIRMED · `INDIV` · different-constant
   - **What:** libghostty-vt default kitty_image_storage_limit is 320MB instead of the .lib artifact's 10MB
   - **Oracle:** `src/terminal/Terminal.zig:266-274` → **Rustty:** `crates/rustty-vt-c/src/terminal.rs:1547-1560`
   - **Audit's suggested fix:** Add an `Options` constructor/`Default` in rustty-vt carrying the reference field defaults (max_scrollback_bytes=Some(10_000), max_scrollback_lines=None, colors=default, default_modes=default, Block/Some(false), storage limit per artifact, loading_limits=DIRECT) and have rustty-vt-c use 10 * 1000 * 1000 for the lib artifact.
@@ -106,7 +106,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** instant_from_ns can panic on a large time_ns value where the reference cannot
   - **Oracle:** `src/terminal/c/selection_gesture.zig:739-741` → **Rustty:** `crates/rustty-vt-c/src/selection_gesture.rs:1758-1764`
   - **Audit's suggested fix:** Use `base.checked_add(Duration::from_nanos(ns)).unwrap_or(base)` (or saturate to `base + Duration::MAX`-clamped value) so the conversion is total, matching the reference's inability to fail.
-- [ ] **S179-F1** · CONFIRMED · `INDIV` · different-constant
+- [x] **S179-F1** · CONFIRMED · `INDIV` · different-constant
   - **What:** C-API terminal_new uses the 320MB app kitty-image storage limit instead of the 10MB lib default
   - **Oracle:** `src/terminal/Terminal.zig:289-298 (default used by src/terminal/c/terminal.zig:856-901 `new_`)` → **Rustty:** `crates/rustty-vt-c/src/terminal.rs:1548-1562`
   - **Audit's suggested fix:** In `crates/rustty-vt-c/src/terminal.rs::new_`, pass `10 * 1000 * 1000` (the `.lib` artifact default) — or derive it from an artifact constant — so a C-created terminal matches libghostty-vt.

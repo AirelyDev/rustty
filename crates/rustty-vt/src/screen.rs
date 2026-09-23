@@ -456,6 +456,13 @@ pub struct Options {
 
     /// The total storage limit for Kitty images in bytes for this
     /// screen. Kitty image storage is per-screen.
+    // kitty_image_storage_limit: usize = switch (build_options.artifact) {
+    //     .ghostty => 320 * 1000 * 1000, // 320MB
+    //     .lib => 10 * 1000 * 1000, // 10MB
+    // },
+    // PORT NOTE: a Rust struct field has no default initializer; the
+    // reference's artifact-selected field default is
+    // `Options::kitty_image_storage_limit_default(artifact)` below.
     pub kitty_image_storage_limit: usize,
 
     /// The limits for what medium types are allowed for Kitty image loading.
@@ -468,6 +475,21 @@ pub struct Options {
 }
 
 impl Options {
+    /// The reference's field default for `kitty_image_storage_limit`, which
+    /// depends on the build artifact.
+    // PORT NOTE: the reference's `switch (build_options.artifact)` field
+    // initializer, as a const fn over the artifact so that a caller building a
+    // different artifact than `crate::options::ARTIFACT` (rustty-vt-c is the
+    // `.lib` artifact) can select its own default.
+    pub const fn kitty_image_storage_limit_default(
+        artifact: crate::build_options::Artifact,
+    ) -> usize {
+        match artifact {
+            crate::build_options::Artifact::Ghostty => 320 * 1000 * 1000, // 320MB
+            crate::build_options::Artifact::Lib => 10 * 1000 * 1000,      // 10MB
+        }
+    }
+
     /// A simple, default terminal. If you rely on specific dimensions or
     /// scrollback (or lack of) then do not use this directly. This is just
     /// for callers that need some defaults.
@@ -480,14 +502,20 @@ impl Options {
         // PORT NOTE: the reference `Options.default` only sets cols/rows/
         // max_scrollback_bytes; the remaining fields take their struct-default values
         // (kitty_image_storage_limit per artifact; kitty_image_loading_limits
-        // `.direct`). The kitty graphics fields are the deferred placeholders
-        // (kitty graphics is DEFERRED to vt-12), so they default trivially here.
+        // `.direct`), written out here.
+        // CORRECTION (parity S133-F2): this note used to end "The kitty
+        // graphics fields are the deferred placeholders (kitty graphics is
+        // DEFERRED to vt-12), so they default trivially here", and the limit was
+        // `0`, a zero-byte image budget. Kitty graphics is ported and
+        // `Screen::init` hands this value to `ImageStorage::set_limit`.
         Options {
             cols: 80,
             rows: 24,
             max_scrollback_bytes: Some(0),
             max_scrollback_lines: None,
-            kitty_image_storage_limit: 0,
+            kitty_image_storage_limit: Options::kitty_image_storage_limit_default(
+                crate::options::ARTIFACT,
+            ),
             kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
         }
     }
@@ -11910,6 +11938,30 @@ mod tests {
             .unwrap();
         assert_eq!(str, b"");
 
+        s.deinit();
+    }
+
+    // PORT NOTE (parity S133-F2): no reference test. Pins that
+    // `Options.default` carries the artifact field default for the kitty image
+    // storage limit (320MB for `.ghostty`) and that `Screen.init` hands it to
+    // the image storage, rather than a zero-byte budget.
+    #[test]
+    fn screen_options_default_kitty_image_storage_limit() {
+        use crate::build_options::Artifact;
+        assert_eq!(
+            Options::kitty_image_storage_limit_default(Artifact::Ghostty),
+            320 * 1000 * 1000
+        );
+        assert_eq!(
+            Options::kitty_image_storage_limit_default(Artifact::Lib),
+            10 * 1000 * 1000
+        );
+        assert_eq!(crate::options::ARTIFACT, Artifact::Ghostty);
+        assert_eq!(Options::default().kitty_image_storage_limit, 320 * 1000 * 1000);
+        let mut s = Screen::init(Allocator, Options::default()).unwrap();
+        if crate::options::KITTY_GRAPHICS {
+            assert_eq!(s.kitty_images.total_limit, 320 * 1000 * 1000);
+        }
         s.deinit();
     }
 

@@ -1550,14 +1550,21 @@ fn new_(
             max_scrollback_bytes: Some(10_000),
             max_scrollback_lines: None,
             // PORT NOTE: the reference relies on the `Options` field defaults for
-            // the remaining fields. rustty-vt has no `Default` for `Options`; we
+            // the remaining fields. rustty-vt has no `Default` for `Options`, so
+            // they are written out. This crate is the reference's `.lib`
+            // artifact (libghostty-vt), so the artifact-selected kitty image
+            // storage default is the `.lib` one (10MB).
+            // CORRECTION (parity S141-F1 / S179-F1): this note used to say "we
             // replicate the (ghostty-artifact) defaults that rustty-vt's source
-            // of truth produces.
+            // of truth produces", and the limit was the application's
+            // `320 * 1000 * 1000`.
             colors: Colors::default(),
             default_modes: rustty_vt::modes::ModePacked::default(),
             default_cursor_style: rustty_vt::screen::CursorStyle::Block,
             default_cursor_blink: Some(false),
-            kitty_image_storage_limit: 320 * 1000 * 1000,
+            kitty_image_storage_limit: ZigTerminalOptions::kitty_image_storage_limit_default(
+                rustty_vt::build_options::Artifact::Lib,
+            ),
             kitty_image_loading_limits: rustty_vt::kitty::graphics_image::Limits::DIRECT,
         },
     ) {
@@ -10798,6 +10805,33 @@ mod tests {
             return Vec::new();
         }
         unsafe { core::slice::from_raw_parts(out.ptr, out.len) }.to_vec()
+    }
+
+    // Parity S141-F1 / S179-F1: no reference test. `new_` relies on
+    // `Terminal.Options`'s field default, and this crate is the `.lib`
+    // artifact, whose default is 10MB (`Terminal.zig`'s
+    // `.lib => 10 * 1000 * 1000`), not the application's 320MB.
+    #[test]
+    fn kitty_image_storage_limit_defaults_to_lib_artifact_value() {
+        if !rustty_vt::options::KITTY_GRAPHICS {
+            return;
+        }
+        with_test_allocator(|alloc| {
+            let (r, t) = new_t(alloc, 80, 24);
+            assert_eq!(Result::Success, r);
+
+            let mut out: u64 = 0;
+            assert_eq!(Result::Success, unsafe {
+                get(
+                    t,
+                    TerminalData::KittyImageStorageLimit,
+                    &mut out as *mut u64 as *mut c_void,
+                )
+            });
+            assert_eq!(10 * 1000 * 1000, out);
+
+            unsafe { free(t) };
+        });
     }
 
     // W33-B07-32BIT-01: the reference narrows the `uint64_t` storage limit with
