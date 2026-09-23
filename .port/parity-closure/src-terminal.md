@@ -429,7 +429,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** PORT NOTE states ModePacked::BITS is 42; it is 43
   - **Oracle:** `src/terminal/snapshot/terminal.zig:247-249` → **Rustty:** `crates/rustty-vt/src/snapshot/terminal.rs:285-291`
   - **Audit's suggested fix:** Change the parenthetical to 43.
-- [ ] **S208-F1** · CONFIRMED · `LOG` · behavioral-difference
+- [x] **S208-F1** · CONFIRMED · `LOG` · behavioral-difference
   - **What:** Notification format/Display output text differs from the reference's comptime-reflected format
   - **Oracle:** `src/terminal/tmux/control.zig:568-590` → **Rustty:** `crates/rustty-vt/src/tmux/control.rs:878-975`
   - **Audit's suggested fix:** Emit `terminal.tmux.control.Notification` as the type name, print `void` for the payload-less tags, and render the struct payloads the way Zig's `{any}` does (byte-array members), or accept the divergence explicitly in the PORT NOTE since the only consumer is a log line.
