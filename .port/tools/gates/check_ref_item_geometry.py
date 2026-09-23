@@ -40,7 +40,9 @@ repository, or git unavailable).
 `--self-test` runs a COPY of this gate end to end in a throwaway main checkout
 with a linked worktree, a fixture oracle and a stand-in `zig`, and requires
 BLOCKED for an absent oracle, an off-pin HEAD, a missing or malformed pin
-file, a dirty oracle, an oracle that is not a repository and a missing git;
+file, a dirty oracle, a failing `git status` at the pin (a corrupt index), an
+oracle that git answers from an enclosing repository at the pin, an oracle
+that is not a repository and a missing git;
 GREEN at the pin (also from a worktree without the stopgap symlink, and under
 a `GIT_DIR` + `GIT_WORK_TREE` decoy with a decoy cwd); and RED on a measured
 difference.
@@ -369,6 +371,38 @@ def self_test():
         # run reaches the oracle's own git reads.
         expect("a missing git is BLOCKED", 3, "git could not run", path=fakebin)
 
+        # A failing `status` at the pin (a corrupt index): `rev-parse` still
+        # answers the right toplevel and the pin, and `status` exits 128. That
+        # proves nothing about the tree, so it is BLOCKED, never read as clean.
+        index = os.path.join(oracle, ".git", "index")
+        with open(index, "rb") as fh:
+            saved_index = fh.read()
+        with open(index, "wb") as fh:
+            fh.write(b"garbage")
+        expect("a corrupt index (rev-parse ok, status exits non-zero) is BLOCKED",
+               3, "status failed")
+        with open(index, "wb") as fh:
+            fh.write(saved_index)
+        expect("restored index is GREEN again", 0, "G-REFGEOM GREEN")
+
+        # Not the top level of its own repository: the oracle has no `.git`
+        # and sits inside an enclosing repository whose HEAD IS the pin and
+        # whose tree is clean. Only the `--show-toplevel` check can tell: the
+        # pin and status checks both pass on the enclosing repository's
+        # answers. (Realistic: an unpacked source tree inside a checkout.)
+        os.rename(os.path.join(oracle, ".git"), os.path.join(base, "oracle.git"))
+        git(base, "init", "-q")
+        git(base, "add", os.path.join("ghostty", "src", "terminal", "page.zig"))
+        git(base, "commit", "-q", "-m", "enclosing")
+        pin_file(gates_main, git(base, "rev-parse", "HEAD") + "\n")
+        expect("an oracle answered by an enclosing repository at the pin is "
+               "BLOCKED", 3, "not the top level of its own repository")
+        shutil.rmtree(os.path.join(base, ".git"))
+        pin_file(gates_main, pin + "\n")
+        os.rename(os.path.join(base, "oracle.git"), os.path.join(oracle, ".git"))
+        expect("oracle restored after the enclosing-repository arm is GREEN", 0,
+               "G-REFGEOM GREEN")
+
         # Not a repository: HEAD file says the pin, but there is no repository.
         os.rename(os.path.join(oracle, ".git"), os.path.join(base, "oracle.git"))
         os.makedirs(os.path.join(oracle, ".git"))
@@ -411,7 +445,8 @@ def self_test():
               "the fixture above)")
 
     print("SELF-TEST GREEN: an absent, off-pin, dirty, non-repository or git-less\n"
-          "oracle and a missing or malformed ORACLE_PIN are BLOCKED; a GIT_DIR decoy\n"
+          "oracle, a failing status, an enclosing repository at the pin and a\n"
+          "missing or malformed ORACLE_PIN are BLOCKED; a GIT_DIR decoy\n"
           "redirects nothing; a worktree resolves the main checkout's sibling; a\n"
           "measured difference is RED."
           if ok else "SELF-TEST RED: an arm above did not hold.")
