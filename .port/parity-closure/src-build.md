@@ -39,7 +39,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** GitVersion.detect not ported: branch/tag/dirty detection and the derived pre-release version are absent
   - **Oracle:** `src/build/GitVersion.zig:19-86` → **Rustty:** `crates/rustty-cli/build.rs:49-94`
   - **Audit's suggested fix:** Add a build-time git probe (in rustty-build-config's build.rs) that reproduces detect(): sanitised branch, short hash, exact tag, and the Config.zig composition rules (tag must equal v<manifest>, `dev+0000000` fallback), exposing VERSION/VERSION_STRING with the `-<branch>+<hash>` pre-release so release_channel() becomes Tip on untagged builds.
-- [ ] **S64-F2** · CONFIRMED · `INDIV` · missing-branch
+- [x] **S64-F2** · CONFIRMED · `INDIV` · missing-branch
   - **What:** metal compile omits -mmacos-version-min=<os_version_min>
   - **Oracle:** `src/build/MetallibStep.zig:36-56` → **Rustty:** `crates/rustty-renderer/build.rs:70-79`
   - **Audit's suggested fix:** Add `.arg("-mmacos-version-min=13.0")` (read MACOSX_DEPLOYMENT_TARGET when set, defaulting to the 13.0 floor xtask already pins) to the metal compile command.

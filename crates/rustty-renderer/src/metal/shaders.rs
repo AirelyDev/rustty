@@ -570,3 +570,24 @@ fn check_error(nserr: &objc2_foundation::NSError) {
     // log.err("metal error={s}", .{str.cstringPtr(.ascii).?});
     log::error!(target: LOG_SCOPE, "metal error={}", nserr.localizedDescription());
 }
+
+#[cfg(all(test, rustty_metallib))]
+mod metallib_tests {
+    /// S64-F2: `MetallibStep.zig:51-56` compiles the shaders with
+    /// `-mmacos-version-min=<os_version_min>`, 13.0.0 by default
+    /// (`Config.zig:789-797`). The embedded metallib records the minimum OS
+    /// major at header byte 12 (measured: 13 with `-mmacos-version-min=13.0.0`,
+    /// 14 with `=14.0.0`, and the host SDK's 26 with no flag), so this checks
+    /// the flag reached the compile.
+    #[test]
+    fn embedded_metallib_carries_the_macos_version_min() {
+        const METALLIB: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/rustty.metallib"));
+        assert_eq!(&METALLIB[..4], b"MTLB");
+        let requested = env!("RUSTTY_METALLIB_VERSION_MIN");
+        let major: u8 = requested.split('.').next().unwrap().parse().unwrap();
+        assert_eq!(METALLIB[12], major, "requested {requested}");
+        if option_env!("MACOSX_DEPLOYMENT_TARGET").is_none() {
+            assert_eq!(requested, "13.0.0");
+        }
+    }
+}
