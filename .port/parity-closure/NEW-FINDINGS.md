@@ -2576,6 +2576,36 @@ self-pipe and a dispatcher thread runs the callbacks. Reference defect: `UPSTREA
 
 **state**: CLOSED by task R13-C.
 
+## N62 — the renderer thread's `stopCallback` trapped on an `Async` wait error
+
+- **id**: N62. Not in the inventory (review of task R13-C, observation 7).
+- **found by**: the review of task R13-C; fixed by task R13-C2.
+- **severity**: low. **kind**: missing-branch (reference defect, R13).
+- **oracle**: `src/renderer/Thread.zig:722-731`.
+- **rustty**: `crates/rustty-core/src/renderer_seam.rs` (`stopCallback`).
+
+The port kept the reference's `_ = r catch unreachable` as `unreachable!()`. On the epoll fallback
+backend the stop eventfd's registration can fail (`ENOSPC` from the per-user epoll watch limit,
+`ENOMEM`), and that error reaches the callback. It now re-arms, as `wakeupCallback` does for the same
+error type. Reference defect: `UPSTREAM-DEFECTS.md` UD75.
+
+**state**: CLOSED by task R13-C2.
+
+## N63 — the IME point and the custom-shader cursor uniforms panicked on a saturated padding
+
+- **id**: N63. Not in the inventory (review of task R13-C, observation 3).
+- **found by**: the review of task R13-C; fixed by task R13-C2.
+- **severity**: low. **kind**: missing-branch (reference defect, R13).
+- **oracle**: `src/Surface.zig:2134`, `:2147`; `src/renderer/generic.zig:2351`, `:2356`.
+- **rustty**: `crates/rustty-core/src/surface.rs` (`imePoint`); `crates/rustty-renderer/src/generic.rs`
+  and `crates/rustty-renderer/src/generic/linux_impl.rs` (`update_custom_shader_uniforms_for_frame`).
+
+After N59 the padding sums saturate, but the cursor-position sums did not. A saturated padding stored
+by `contentScaleCallback` before the IO thread's resize, with the cursor off the first column or row,
+overflowed them. They now saturate too. Reference defect: `UPSTREAM-DEFECTS.md` UD76.
+
+**state**: CLOSED by task R13-C2.
+
 ## N70 — `+crash-report` truncated the age of a very old crash file instead of handling it
 
 - **id**: N70. Inventory P3 (with M30).
