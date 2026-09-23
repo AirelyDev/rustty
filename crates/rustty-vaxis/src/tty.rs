@@ -254,6 +254,11 @@ static HANDLER_INSTALLED: AtomicBool = AtomicBool::new(false);
 #[cfg(not(windows))]
 static WINCH_PIPE_WRITE: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(-1);
 
+/// The read end of the self-pipe, kept only for the tests, which measure how
+/// many wake-up bytes are queued (`FIONREAD`).
+#[cfg(all(test, not(windows)))]
+static WINCH_PIPE_READ: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(-1);
+
 /// Creates the self-pipe and its dispatcher thread, once per process.
 #[cfg(not(windows))]
 static WINCH_DISPATCHER: std::sync::OnceLock<Result<(), TtyError>> = std::sync::OnceLock::new();
@@ -434,7 +439,10 @@ impl PosixTty {
     /// flags; only its body moves out of signal context. The dispatcher lives
     /// for the process, like the handler table it serves. `init` propagates a
     /// failure to create the pipe or the thread (an errno), as it does for its
-    /// other syscalls.
+    /// other syscalls. UD74 also records the design's two limits: a `fork()`
+    /// without `exec` shares the pipe with the child (whose SIGWINCH then
+    /// wakes this process's dispatcher), and a panicking callback aborts the
+    /// process (callbacks are `extern "C"`), as it did in signal context.
     pub(crate) fn install_winch_handler() -> Result<(), TtyError> {
         (*WINCH_DISPATCHER.get_or_init(Self::start_winch_dispatcher))?;
 
@@ -480,6 +488,8 @@ impl PosixTty {
             }
             return Err(TtyError::Errno(e.raw_os_error().unwrap_or(libc::EAGAIN)));
         }
+        #[cfg(test)]
+        WINCH_PIPE_READ.store(r, Ordering::SeqCst);
         WINCH_PIPE_WRITE.store(w, Ordering::SeqCst);
         Ok(())
     }
@@ -1725,6 +1735,84 @@ mod tests {
         );
 
         PosixTty::deregister_winsize(ctx);
+    }
+
+    /// Bytes queued in the self-pipe, read on its read end.
+    fn winch_pipe_queued() -> c_int {
+        let r = WINCH_PIPE_READ.load(Ordering::SeqCst);
+        assert!(r >= 0, "the self-pipe exists");
+        let mut n: c_int = 0;
+        assert_eq!(0, unsafe { libc::ioctl(r, libc::FIONREAD, &mut n) });
+        n
+    }
+
+    /// UD74 (R13), the two async-signal-safety details of the handler
+    /// (task R13-C2). The dispatcher is kept off the pipe by holding the
+    /// handlers mutex (it reads at most one buffer and then waits on the
+    /// lock), so the handler's writes fill the pipe.
+    ///
+    /// 1. The write end is non-blocking: a handler that runs on a full pipe
+    ///    returns at once. With a blocking write end it would block in
+    ///    signal context until the dispatcher drains the pipe, which here it
+    ///    cannot until the mutex is released.
+    /// 2. `errno` survives the handler: a real SIGWINCH delivered to a thread
+    ///    whose `errno` holds a sentinel, while the pipe is full, so the
+    ///    handler's `write(2)` fails with `EAGAIN` and would overwrite it.
+    #[test]
+    fn the_sigwinch_handler_neither_blocks_on_a_full_pipe_nor_clobbers_errno() {
+        let _serial = HANDLERS_TEST.lock().unwrap_or_else(|e| e.into_inner());
+        PosixTty::install_winch_handler().unwrap();
+        let w = WINCH_PIPE_WRITE.load(Ordering::SeqCst);
+        assert!(w >= 0, "the self-pipe exists");
+
+        // More writes than any pipe holds (64 KiB on Linux and macOS).
+        const WRITES: usize = 256 * 1024;
+        const SENTINEL: c_int = libc::EDOM;
+
+        let guard = HANDLERS.lock().unwrap_or_else(|e| e.into_inner());
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            for _ in 0..WRITES {
+                PosixTty::handle_winch(libc::SIGWINCH);
+            }
+            // The pipe is full: one more byte is refused.
+            let byte = 1u8;
+            let rc = unsafe { libc::write(w, (&byte as *const u8).cast(), 1) };
+            let full = rc == -1 && errno() == libc::EAGAIN;
+
+            // A real SIGWINCH to this thread, with a sentinel in `errno`.
+            unsafe { *errno_location() = SENTINEL };
+            unsafe { libc::pthread_kill(libc::pthread_self(), libc::SIGWINCH) };
+            let after = unsafe { *errno_location() };
+            let _ = tx.send((full, after));
+        });
+        let got = rx.recv_timeout(std::time::Duration::from_secs(5));
+        let queued = winch_pipe_queued();
+        drop(guard);
+        let (full, after) =
+            got.expect("the SIGWINCH handler blocked on a full pipe (write end not O_NONBLOCK)");
+        assert!(
+            full,
+            "precondition: the pipe is full ({queued} bytes queued)"
+        );
+        assert_eq!(
+            SENTINEL,
+            after,
+            "the handler restores errno after its failed write (EAGAIN = {})",
+            libc::EAGAIN
+        );
+
+        // Let the dispatcher drain the pipe before the next test registers a
+        // handler, so no stale wake-up reaches it.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while winch_pipe_queued() > 0 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the dispatcher drains the pipe"
+            );
+            std::thread::yield_now();
+        }
+        drop(HANDLERS.lock().unwrap_or_else(|e| e.into_inner()));
     }
 
     // PORT NOTE (rustty-only, VALIDATION_REPORT §3c.5): pins the
