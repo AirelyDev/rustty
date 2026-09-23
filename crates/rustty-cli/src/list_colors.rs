@@ -144,6 +144,11 @@ pub fn run() -> Result<u8, Error> {
         //   flushes on this path (it falls straight to `return 0`); the Rust
         //   `BufWriter` owns its buffer and is flushed explicitly below (and again
         //   on drop), so the output is observably delivered.
+        //   Reference defect, not ported: UPSTREAM-DEFECTS.md UD22, whose
+        //   proposed upstream fix is this flush. Zig 0.16.0 drops the unflushed
+        //   tail (MEASURED, task T-C: 782 lines of 22 bytes through this writer
+        //   deliver 16399 of 17204 bytes, and 10 lines deliver none). Parity row
+        //   S68-F3 is WAIVED on that ground; see its LEDGER cell.
         let mut stdout_writer = std::io::BufWriter::new(std::io::stdout().lock());
         let writer = &mut stdout_writer;
         // for (keys.items) |name| {

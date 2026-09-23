@@ -43,6 +43,15 @@ const ELLIPSIS: Character<'static> = Character {
     width: 1,
 };
 
+/// Rust-only: the `TextInput` fields `draw_with_style` leaves, returned so a
+/// caller can read them while the widget stays borrowed by the screen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Drawn {
+    pub draw_offset: u16,
+    pub prev_cursor_col: u16,
+    pub prev_cursor_idx: u16,
+}
+
 /// The single-line text-input widget.
 pub struct TextInput {
     // Index of our cursor
@@ -270,7 +279,7 @@ impl TextInput {
     }
 
     pub fn draw<'s>(&'s mut self, win: Window<'s>) {
-        self.draw_with_style(win, Style::default());
+        let _ = self.draw_with_style(win, Style::default());
     }
 
     // PORT NOTE (draw record-then-replay, VAXIS_C4B_DESIGN §6): `win.write_cell` stores the
@@ -286,7 +295,14 @@ impl TextInput {
     // `showCursor`); the single decision loop is written once (Pass A). Cost: one small
     // `Vec<Op>` alloc per `draw` — a benign divergence (Zig streams; the tests do not
     // exercise `draw`).
-    pub fn draw_with_style<'s>(&'s mut self, win: Window<'s>, style: Style) {
+    //
+    // PORT NOTE (Rust-only return value, parity S69-F1): Zig's `drawWithStyle`
+    // returns `void`, and its caller reads the updated fields afterwards. Here
+    // `self` stays borrowed for the screen's `'s`, so a caller cannot read
+    // them once this returns; the `Drawn` copy of the three fields Pass A
+    // leaves is how a caller that draws a per-frame copy (rustty-cli's
+    // `+list-themes` search box) carries them back. It changes nothing drawn.
+    pub fn draw_with_style<'s>(&'s mut self, win: Window<'s>, style: Style) -> Drawn {
         // A recorded draw op: an absolute `start/len` range into `self.buf.buffer` (so replay
         // needs no first-/second-half bookkeeping), or the ellipsis marker.
         enum Op {
@@ -307,7 +323,7 @@ impl TextInput {
             self.draw_offset = cursor_idx;
         }
         if win.width == 0 {
-            return;
+            return self.drawn();
         }
         loop {
             let width = self.width_to_cursor(win);
@@ -389,6 +405,7 @@ impl TextInput {
             ops.push(Op::Ellipsis { col: 0 });
         }
         self.prev_cursor_col = prev_cursor_col;
+        let drawn = self.drawn();
 
         // ---- Pass B: replay, read self shared for `'s` ----
         let this: &'s TextInput = self;
@@ -425,6 +442,16 @@ impl TextInput {
             }
         }
         win.show_cursor(this.prev_cursor_col, 0);
+        drawn
+    }
+
+    /// The fields `draw_with_style` updates (see its Rust-only return value).
+    fn drawn(&self) -> Drawn {
+        Drawn {
+            draw_offset: self.draw_offset,
+            prev_cursor_col: self.prev_cursor_col,
+            prev_cursor_idx: self.prev_cursor_idx,
+        }
     }
 
     pub fn clear_and_free(&mut self) {

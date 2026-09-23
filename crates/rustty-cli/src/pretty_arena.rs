@@ -163,6 +163,26 @@ pub struct Arena {
     // `Vec` does not retag its pointee, so outstanding `dupe` references stay
     // valid under Stacked Borrows.
     chunks: RefCell<Vec<Vec<u8>>>,
+    // `alloc`'s values: each is its own `Box` allocation, held as a raw pointer
+    // (moving a raw pointer retags nothing) with the function that frees it.
+    objects: RefCell<Vec<ArenaObject>>,
+}
+
+struct ArenaObject {
+    ptr: *mut (),
+    free: unsafe fn(*mut ()),
+}
+
+impl Drop for Arena {
+    fn drop(&mut self) {
+        for object in self.objects.get_mut().drain(..) {
+            // SAFETY: `ptr` came from `Box::into_raw` of the type `free` was
+            // instantiated with, and is freed exactly once, here; every
+            // `&'a mut` handed out by `alloc` has ended because `'a` cannot
+            // outlive the arena.
+            unsafe { (object.free)(object.ptr) }
+        }
+    }
 }
 
 impl Arena {
@@ -170,7 +190,29 @@ impl Arena {
     pub fn init() -> Arena {
         Arena {
             chunks: RefCell::new(Vec::new()),
+            objects: RefCell::new(Vec::new()),
         }
+    }
+
+    /// `arena.allocator().create(T)` + store: move `value` into the arena and
+    /// return it, living as long as the arena. Used for a per-frame widget
+    /// copy that the screen borrows for the arena's lifetime (`list_themes`'
+    /// search box, parity S69-F1).
+    #[allow(clippy::mut_from_ref)] // each call returns a distinct allocation
+    pub fn alloc<T: 'static>(&self, value: T) -> &mut T {
+        unsafe fn free<T>(ptr: *mut ()) {
+            // SAFETY: the caller (`Drop`) passes a pointer `alloc::<T>` made
+            // with `Box::into_raw`, once.
+            drop(unsafe { Box::from_raw(ptr.cast::<T>()) });
+        }
+        let ptr: *mut T = Box::into_raw(Box::new(value));
+        self.objects.borrow_mut().push(ArenaObject {
+            ptr: ptr.cast(),
+            free: free::<T>,
+        });
+        // SAFETY: `ptr` is a fresh, unaliased heap allocation that the arena
+        // frees only in its own `Drop`, after this borrow has ended.
+        unsafe { &mut *ptr }
     }
 
     /// `std.fmt.allocPrint(arena.allocator(), ...)` / `arena.allocator().dupe(...)`:

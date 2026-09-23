@@ -372,6 +372,12 @@ pub fn run() -> Result<u8, Error> {
             "No themes found, check to make sure that the themes were installed correctly."
         )?;
         // return 1;
+        //   PORT NOTE: the reference never flushes its buffered stderr, so this
+        //   message and the resources-directory warning above never reach the
+        //   terminal (Zig 0.16.0, MEASURED by task T-C: an unflushed 4096-byte
+        //   File.Writer delivers nothing of a short message). Reference defect,
+        //   not ported: UPSTREAM-DEFECTS.md UD23, whose proposed upstream fix
+        //   is this flush. Parity row S69-F4 is WAIVED on that ground.
         stderr.flush()?;
         return Ok(1);
     }
@@ -549,9 +555,11 @@ fn os_name_bytes(name: &std::ffi::OsStr) -> &[u8] {
 //    memory-only divergence).
 //  * `text_input.drawWithStyle` needs `&'a mut TextInput` + `Window<'a>` (invariant
 //    screen lifetime forces `'s == 'a`), which the per-frame `&mut` cannot supply;
-//    the search box renders the buffer bytes directly (arena-duped) — the visible
-//    search string is identical (the widget cursor glyph is the only omission).
-//    Documented forced divergence.
+//    each frame draws an arena-held copy of the widget and carries its scroll and
+//    cursor fields back (CORRECTION, parity S69-F1: this line said the search box
+//    renders the buffer bytes directly as a "documented forced divergence" whose
+//    only omission was the cursor glyph; it also lost the scrolling, the ellipsis
+//    and the terminal cursor).
 //  * Owned-`KeyOwned` across the queue → `borrow_key`; clipboard has NO `alloc` arg
 //    (Rust sig divergence); `TerminalColor` cell-* arms resolve to the reference's
 //    missing-value fallback; Wyhash digest short-circuit → an equal-`Vec<usize>`
@@ -568,7 +576,7 @@ use rustty_vaxis::key::{self, Key, KeyOwned, Modifiers};
 use rustty_vaxis::loop_::LoopEvent;
 use rustty_vaxis::mouse::{Button, Mouse, Shape, Type as MouseType};
 use rustty_vaxis::vaxis::Options as VaxisOptions;
-use rustty_vaxis::widgets::text_input::{Event as TiEvent, TextInput};
+use rustty_vaxis::widgets::text_input::{Buffer as TiBuffer, Event as TiEvent, TextInput};
 use rustty_vaxis::window::{BorderOptions, ChildOptions, PrintOptions, Where, Window, Wrap};
 use rustty_vaxis::{Loop, Tty, Vaxis, Winsize};
 use rustty_zf::zf::{rank as zf_rank, RankOptions};
@@ -1384,16 +1392,33 @@ fn draw<'a>(vx: &mut Vaxis<'a>, st: &mut DrawState<'a>) {
                 ..Default::default()
             });
             // self.text_input.drawWithStyle(child, self.ui_standard());
-            //   PORT NOTE (forced divergence): `drawWithStyle` needs `&'a mut TextInput`
-            //   + `Window<'a>` (the invariant `*mut Screen<'a>` forces `'s == 'a`), which
-            //   the per-frame `&mut` cannot supply. Render the buffer bytes directly
-            //   (arena-duped, `first_half ++ second_half`) — the visible search string is
-            //   identical; only the widget's cursor glyph is omitted.
-            let mut buffer: Vec<u8> = Vec::new();
-            buffer.extend_from_slice(st.text_input.buf.first_half());
-            buffer.extend_from_slice(st.text_input.buf.second_half());
-            let text = arena.dupe(&buffer);
-            let _ = child.print_segment(styled(text, ui_standard(scheme)), propt(0, 0));
+            //   PORT NOTE: `drawWithStyle` needs `&'a mut TextInput` + `Window<'a>`
+            //   (the invariant `*mut Screen<'a>` forces `'s == 'a`), and the screen
+            //   keeps borrowing the widget's buffer, so the widget itself cannot be
+            //   lent: the key handlers mutate it before the next frame. The frame
+            //   draws a COPY moved into the session arena (as the other per-frame
+            //   bytes are), then carries back the three fields the draw updates.
+            //   CORRECTION (parity S69-F1, task T-C): this printed the buffer bytes
+            //   at column 0 instead, under the note "the visible search string is
+            //   identical; only the widget's cursor glyph is omitted", which was
+            //   wrong: a query wider than the box did not scroll or show the
+            //   ellipsis, and the terminal cursor was not shown.
+            let ti = &st.text_input;
+            let frame: &'a mut TextInput = arena.alloc(TextInput {
+                buf: TiBuffer {
+                    buffer: ti.buf.buffer.clone(),
+                    cursor: ti.buf.cursor,
+                    gap_size: ti.buf.gap_size,
+                },
+                draw_offset: ti.draw_offset,
+                prev_cursor_col: ti.prev_cursor_col,
+                prev_cursor_idx: ti.prev_cursor_idx,
+                scroll_offset: ti.scroll_offset,
+            });
+            let drawn = frame.draw_with_style(child, ui_standard(scheme));
+            st.text_input.draw_offset = drawn.draw_offset;
+            st.text_input.prev_cursor_col = drawn.prev_cursor_col;
+            st.text_input.prev_cursor_idx = drawn.prev_cursor_idx;
         }
         // .save => 92x17 child + the 14-line save_instructions
         Mode::Save => {
@@ -1433,6 +1458,22 @@ fn draw<'a>(vx: &mut Vaxis<'a>, st: &mut DrawState<'a>) {
             } else {
                 b""
             };
+            // "For more details on configuration and themes, visit the Ghostty documentation:",
+            // "",
+            // "https://ghostty.org/docs/config/reference",
+            //   R2 (parity S69-F2): only the product identity is renamed: the
+            //   title-case product name, and the product website
+            //   (`rustty_identity::WEBSITE`, the reference's `https://ghostty.org`
+            //   under `identity-oracle`) before the unchanged `/docs/config/reference`.
+            let docs_line: &[u8] = arena.dupe(
+                format!(
+                    "For more details on configuration and themes, visit the {} documentation:",
+                    rustty_identity::APP_NAME_TITLECASE
+                )
+                .as_bytes(),
+            );
+            let docs_url: &[u8] = arena
+                .dupe(format!("{}/docs/config/reference", rustty_identity::WEBSITE).as_bytes());
             let save_instructions: [&[u8]; 14] = [
                 "To apply this theme, add the following line to your Rustty configuration:"
                     .as_bytes(),
@@ -1447,10 +1488,9 @@ fn draw<'a>(vx: &mut Vaxis<'a>, st: &mut DrawState<'a>) {
                 b"",
                 "config-file = ?auto/theme.rustty".as_bytes(),
                 b"",
-                "For more details on configuration and themes, visit the config reference:"
-                    .as_bytes(),
+                docs_line,
                 b"",
-                "https://rustty.org/docs/config/reference".as_bytes(),
+                docs_url,
             ];
             // for (save_instructions, 0..) |instruction, captured_i| { instruction@2 }
             for (captured_i, instruction) in save_instructions.iter().enumerate() {
@@ -2709,6 +2749,64 @@ mod picker_tests {
         vx.render(&mut out).unwrap();
         // No theme found in the preview pane; the save pane rendered its instructions.
         assert!(find_bytes(&out, b"Rustty configuration"));
+    }
+
+    /// parity S69-F1: the search box is drawn by `TextInput.drawWithStyle`
+    /// (`list_themes.zig:835`): a query wider than the box scrolls, the first
+    /// column shows the ellipsis, the terminal cursor sits after the last
+    /// grapheme, and the widget's scroll state persists into the next frame.
+    #[test]
+    fn search_box_is_drawn_by_the_text_input_widget() {
+        let arena = Arena::init();
+        let themes: Vec<ThemeListElement> = Vec::new();
+        let mut vx = smoke_vx();
+        let mut st = smoke_state(&arena, &themes, Mode::Search);
+        st.filtered.clear();
+        st.text_input.insert_slice_at_cursor(&[b'a'; 100]);
+        draw(&mut vx, &mut st);
+
+        // The 120x40 window's search child: x_off 20, y_off 40 - 5, width
+        // 120 - 40, bordered, so its inner area starts at column 21, row 36
+        // and is 78 columns wide. 100 graphemes with the cursor at the end
+        // scroll by 100 - 78 + 1 = 23, leaving 77 visible before the cursor.
+        assert_eq!(23, st.text_input.draw_offset, "scroll state kept");
+        assert_eq!(77, st.text_input.prev_cursor_col);
+        assert_eq!(100, st.text_input.prev_cursor_idx);
+        let ellipsis = vx.screen.read_cell(21, 36).expect("cell");
+        assert_eq!("…".as_bytes(), ellipsis.char.grapheme);
+        let next = vx.screen.read_cell(22, 36).expect("cell");
+        assert_eq!(b"a", next.char.grapheme);
+        assert!(vx.screen.cursor_vis, "the cursor is shown");
+        assert_eq!((21 + 77, 36), (vx.screen.cursor_col, vx.screen.cursor_row));
+    }
+
+    /// parity S69-F2: the last two save instructions are the reference's
+    /// (`list_themes.zig:877`, `:879`) with only the product identity renamed:
+    /// "visit the Ghostty documentation:" and the product website's
+    /// `/docs/config/reference`.
+    #[test]
+    fn save_pane_docs_lines_rename_only_the_product() {
+        let arena = Arena::init();
+        let themes: Vec<ThemeListElement> = Vec::new();
+        let mut vx = smoke_vx();
+        let mut st = smoke_state(&arena, &themes, Mode::Save);
+        st.filtered.clear();
+        draw(&mut vx, &mut st);
+        let mut out: Vec<u8> = Vec::new();
+        vx.render(&mut out).unwrap();
+        let line12 = format!(
+            "For more details on configuration and themes, visit the {} documentation:",
+            rustty_identity::APP_NAME_TITLECASE
+        );
+        let line14 = format!("{}/docs/config/reference", rustty_identity::WEBSITE);
+        assert!(
+            find_bytes(&out, line12.as_bytes()),
+            "line 12 is not {line12:?}"
+        );
+        assert!(
+            find_bytes(&out, line14.as_bytes()),
+            "line 14 is not {line14:?}"
+        );
     }
 
     fn find_bytes(haystack: &[u8], needle: &[u8]) -> bool {
