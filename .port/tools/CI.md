@@ -53,6 +53,14 @@ local iteration.
 | **D8** | `check_clone_injection.sh` | (advisory review list) | PROGRESS |
 | **D9** | `check_stale_comments.sh` | `.port/audits/stale-comments-D9.tsv`, `D9_STALE_COMMENT_CHECKLIST.md` | PROGRESS |
 
+> **G-REFGEOM** (`check_ref_item_geometry.py`, task R13-L2, NEW-FINDINGS N88/N91) is
+> NOT run by ci.sh: it needs Zig and the local pinned oracle. It re-measures the
+> reference's set-item geometry (the style and hyperlink `RefCountedSet.Item` and
+> their parts) with `fixtures/ref_item_geometry_probe.zig` for aarch64-macos,
+> aarch64-linux-gnu and wasm32-wasi, against `fixtures/ref_item_geometry_golden.txt`,
+> which `crates/rustty-vt/src/ref_geometry_golden_tests.rs` also checks the port
+> against. Exit 0 GREEN / 1 RED / 3 BLOCKED. Run it whenever the oracle pin moves.
+
 > **G5 (differential fuzz)** and **G6 (leak-free)** are wired progress-mode
 > runners now. G5: if `cargo fuzz` + the `vt_diff` target in
 > `crates/rustty-vt/fuzz/` exist it runs a short smoke budget and fails on any

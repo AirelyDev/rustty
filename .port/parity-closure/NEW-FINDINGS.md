@@ -2776,7 +2776,11 @@ stays: it states an invariant that now holds. Reference defect: `UPSTREAM-DEFECT
   `Capacity.availableBitsForGrid` / `adjust` / `maxCols`, `std_capacity`).
 - **rustty**: `crates/rustty-vt/src/ref_counted_set.rs` (`RefItemGeometry`, `ItemStride`, `item_at`,
   `Layout::init`, `base_align`), `crates/rustty-vt/src/style.rs` and `crates/rustty-vt/src/hyperlink.rs`
-  (the geometry impls), `crates/rustty-vt/src/page.rs` (`hyperlink_set_item_size`).
+  (the geometry impls), `crates/rustty-vt/src/page.rs` (`hyperlink_set_item_size`); on wasm32,
+  `crates/rustty-vt/src/hyperlink.rs` `PageEntryId` (N91); the drift guard
+  `.port/tools/gates/check_ref_item_geometry.py` (G-REFGEOM) with
+  `.port/tools/gates/fixtures/ref_item_geometry_{probe.zig,golden.txt}` and
+  `crates/rustty-vt/src/ref_geometry_golden_tests.rs` (task R13-L2).
 
 The port's `Style` is 21 bytes at align 1 (`Color` 4/1, `color.RGB` 3/1, `Flags` 9/1) where the reference's
 is 28 at align 4 (`Color` 8/4, `RGB` 4/4, `Flags` 2/2), so its style-set `Item` was 28/2 against 36/4. The
@@ -2827,14 +2831,39 @@ matching other than once, file restored after each): addressing one path with `i
 `item_at` — `get`, `get_at`, the iterator, `use_id`, `ref_count`, `insert`'s placement, `lookup`, `init`'s
 metadata loop, or `item_at` itself — turns the addressing test red; laying the set out with
 `size_of::<Item>()` turns the geometry and page tests red; with `align_of::<Item>()` the `Layout.init(1)`
-check goes red.
+check goes red. Drift guard (task R13-L2): G-REFGEOM re-measures the reference's item geometry (the style
+and hyperlink `Set.Item`, `Style`, `Style.Color`, `color.RGB`, `Style.Flags`, `PageEntry`, `PageEntry.Id`,
+`Offset(u8).Slice`, the item metadata) with a checked-in Zig probe against the pinned oracle, for
+aarch64-macos, aarch64-linux-gnu and wasm32-wasi, and compares it with a checked-in golden;
+`ref_geometry_golden_tests` checks the port's shadows, both strides and its own types against the same
+golden (64-bit lines on the host, wasm32 lines through a layout model checked against the host). Negative
+controls: a golden line edited (wasm32 hyperlink item 28 -> 32) turns the gate red on exactly that line
+and the test red ("the port's reference shadow", 32 against 28); an aarch64-macos style item edited 36 ->
+40 turns the test red.
+
+**wasm32** (task R13-L2, N91): on a 4-byte `usize` the reference's hyperlink `Set.Item` is 28/4
+(`PageEntry.Id` 12/4, `PageEntry` 20/4, `Offset(u8).Slice` 8/4) and its style item is 36/4, as on
+64-bit. The port's hyperlink item is 28/4 there too since `PageEntryId` shares its payload bytes (N91),
+so the wasm32 page layout uses the reference's geometry for both sets; `ItemStride`'s fit assert is what
+caught the 32-byte item, and G-XTARGET (`check_cross_targets.sh`) builds the target.
 
 **performance** (macOS arm64, `rustty-bench` release-fast, r13-w base against the fix, alternating runs):
 `+terminal-stream` medians within ±1.3% on ascii, two SGR-heavy corpora and a truecolor corpus with
-thousands of distinct styles; `+screen-clone` render ns/op (loops 1 and 5) +1.1% on SGR, −2.6% on
-truecolor; `+screen-clone` clone on the truecolor corpus +6.4%, which a build with the reference layout but
-the old 28-byte addressing reproduces (+5.0% against base, parity with the fix): it is the reference's
-larger page for a page with thousands of styles, not the stride.
+thousands of distinct styles; `+screen-clone` render ns/op (loops 1 and 5; render modes honour `--loops`)
++1.1% on SGR, −2.6% on truecolor. The clone figures are WALL TIME, not ns/op: `--loops` does not apply to
+`--mode=clone` (it always runs 1,000 clones), so a loops sweep there is meaningless; the R13-L review
+measured clone as clone minus noop wall time (N = 21, rotated), which isolates the 1,000 clones. On the
+truecolor corpus the fix is +5.1% against base (the author's plain wall time: +6.4%); a build with the
+reference layout but the old 28-byte addressing is at parity with the fix (0.991), and the fix's code at
+the old geometry is at parity with base (1.005): the cost is the reference's larger page for a page with
+thousands of styles, not the stride. SGR mix and ascii are unchanged (±1%). Against Ghostty at the pin
+(`ghostty-bench` ReleaseFast, same method): on the standard ws10 clone corpus (`ascii-small.bin`) the
+port is 2.70x faster (15.7 against 42.3 ms per 1,000 clones), but on style-heavy screens Ghostty is faster
+at clone — about 6% on truecolor (93.9 against 100.3 ms) and about 16% on an SGR mix (55.5 against 66.3) —
+a gap that PREDATES this task (at `r13-w` Ghostty was already about 2% and 16% faster); N88 widened the
+truecolor gap by its +5%. Recorded as N93 (open). Task R13-L2's `PageEntryId` and `delete_item` changes
+leave the native sizes at 48/8 and cost nothing: clone minus noop, N = 21, rotated, after against before
+0.998 / 1.004 / 0.999 (truecolor / SGR / ascii).
 
 **state**: CLOSED by task R13-L.
 
@@ -2870,3 +2899,105 @@ correct; the test needs its boundary budget found per target (the smallest budge
 `MAX_PAGE_SIZE`) instead of a constant.
 
 **state**: OPEN (for the owner of task R13-W's test).
+
+Update (task R13-L2): task R13-W2 replaced the constant with a binary search over the platform's own
+`Page::layout` that asserts it reaches exactly 2^32, so the test no longer depends on the page size; its
+remaining macOS arm64 pin is now the reference's 1,382,747,137 (a Zig probe of `Page.layout` at the pin;
+1,382,748,161 was the port's value before N88). Not yet re-run on Linux aarch64, so the state stays OPEN
+until a VM run confirms it.
+
+## N91 — on wasm32 the port's hyperlink set item was 32 bytes against the reference's 28
+
+- **id**: N91 (range N91–N93, task R13-L2).
+- **found by**: the R13-L review (blocking item 1: `cargo build -p rustty-vt-c --target
+  wasm32-unknown-unknown` failed on `ItemStride`'s fit assert once N88 laid the set out at the reference's
+  stride); fixed by task R13-L2.
+- **severity**: medium. **kind**: layout divergence (R1), wasm32 only.
+- **oracle**: `src/terminal/hyperlink.zig:84` (`PageEntry.Id = union(enum) { explicit: Offset(u8).Slice,
+  implicit: size.OffsetInt }`), `:80` (`PageEntry`), `:211` (`Set`); `src/terminal/size.zig`
+  (`Offset(T).Slice`).
+- **rustty**: `crates/rustty-vt/src/hyperlink.rs` (`PageEntryId`).
+
+The port's `PageEntryId` was a byte-complete `#[repr(C)]` struct (P3 F1) holding BOTH payloads side by
+side plus the tag: 16 + 4 + 1 + 3 = 24 on 64-bit, equal to the union's 24 only by coincidence, and
+8 + 4 + 1 + 3 = 16 on wasm32 against the union's 12. MEASURED (Zig 0.16.0 probe of `20abdb50a` for
+`wasm32-wasi`, by the review and again by G-REFGEOM): `PageEntry.Id` 12/4, `PageEntry` 20/4, `Set.Item`
+28/4; the port's were 16/4, 24/4 and 32/4. So on wasm32, before N88, the hyperlink section was laid out
+at 32 bytes per item (`hyperlink_bytes_default` 4 x 32 = 128 against 112), and after N88 the port's
+32-byte item did not fit the reference's 28-byte slot, which the compile-time assert refused.
+
+**fix**: `PageEntryId` holds ONE `OffsetSlice` payload, a raw `u8` tag and named tail padding
+(`[u8; size_of::<usize>() - 1]`): `.explicit` is the slice, `.implicit` is its `u32` offset field — the
+union's byte 0, where the reference puts the `u32` too — with `len` zero. No `union` and no `unsafe`:
+both payloads are plain `u32`s at the same place, every read stays behind the tag-checked accessors, and
+every byte stays initialized (the P3 F1 requirement). Sizes: 24/8 on 64-bit (unchanged), 12/4 on wasm32;
+`PageEntry` 40/8 and 20/4; the hyperlink item 48/8 and 28/4, the reference's on both. Users checked: the
+constructors and accessors are the only field access (the fields are private); `dupe`, `hash`, `eql` and
+`free` (tag, then the payload through the accessor); snapshot encode (`snapshot/page.rs`, through
+`HyperlinkId`) and decode (`snapshot/hyperlink.rs`, through the constructors); page clone (a whole-memory
+copy, or `dupe` through `add_with_id_ptr`); `page_impl.rs`, `screen.rs`, `pagelist/resize.rs`; the
+inspector (`widgets/page.rs`, `widgets/pagelist.rs`, accessors only). The C ABI has no `PageEntry`.
+
+**tests**: `const` asserts beside the type (size `3 * size_of::<usize>()`, align, and the tag directly
+after the payload, which the side-by-side shape fails on 64-bit too); `ItemStride` on wasm32;
+`ref_geometry_golden_tests` (`the_port_matches_the_reference_geometry_golden`,
+`the_wasm32_hyperlink_item_is_the_references`, `the_layout_model_reproduces_the_host`) against the
+G-REFGEOM golden. wasm32 tests cannot run on the host, so the wasm32 geometry is pinned by a layout model
+computed from constants (the fields' size/align pairs, `repr(C)` in order, default repr sorted by
+alignment) that is itself checked against the host's real layouts at `usize` = 8. Negative control: the
+side-by-side shape restored turns the host build red (the tag-offset assert) and the wasm32 build red
+(the size assert, the hyperlink item assert and `ItemStride::SIZE`). `check_cross_targets.sh`: GREEN,
+wasm32-unknown-unknown and wasm32-wasip1 built (the Windows, FreeBSD and Android legs skip on this host
+for want of a toolchain, as before); `rustty-wasm` and `rustty-web-canvas` build for wasm32.
+
+**state**: CLOSED by task R13-L2.
+
+## N92 — `delete_item` reset a dead set item with a whole-`Item` typed write
+
+- **id**: N92.
+- **found by**: the R13-L review (§1, non-blocking; pre-existing at `r13-w`); fixed by task R13-L2.
+- **severity**: low. **kind**: memory initialization (Rust-side), no reference counterpart.
+- **rustty**: `crates/rustty-vt/src/ref_counted_set.rs` (`delete_item`).
+
+`delete_item` wrote `*item_at(items, id) = Item::default()`. A typed write of the whole item stores the
+default value's unspecified padding over the item's padding byte (the port's `Style` is 21/1 and the
+metadata 6/2, so each 28-byte style item has one) — de-initializing it inside the page mapping that
+`CompressedPage::init` and every whole-page copy read as raw bytes. `insert`'s reap and final placement
+were already field-wise for exactly this reason (its PORT NOTE and `init`'s). `delete_item` now writes
+`value` and `meta` separately, so the item's other bytes keep their initialized value.
+
+**tests**: `delete_item_leaves_the_item_padding_byte_alone` (`style.rs`): item 2's padding bytes are set to
+a sentinel, `add`'s trim loop deletes the dead item 2, and the sentinel must survive. Without Miri an
+uninitialized byte cannot be observed, so the test asserts the stronger "untouched". Negative control: the
+typed write restored turns it red in a debug build ("item 2 padding byte 27").
+
+**state**: CLOSED by task R13-L2.
+
+## N93 — on style-heavy screens Ghostty clones faster than the port
+
+- **id**: N93.
+- **found by**: the R13-L review (§5), measuring task R13-L's clone cost.
+- **severity**: low. **kind**: performance.
+- **oracle**: `src/terminal/page.zig` (`Page.clone`, `cloneFrom`), `src/terminal/ref_counted_set.zig`.
+- **rustty**: `crates/rustty-vt/src/page_impl.rs` (page clone), `crates/rustty-vt/src/ref_counted_set.rs`,
+  `crates/rustty-bench` (`+screen-clone`).
+
+MEASURED by the R13-L review (macOS arm64; `rustty-bench` release-fast against `ghostty-bench` ReleaseFast
+built from `20abdb50a`; `+screen-clone --mode=clone` minus `--mode=noop` wall time, which isolates the
+1,000 clones because `--loops` does not apply to `--mode=clone`; N = 21 runs, binaries rotated; medians,
+ms per 1,000 clones):
+
+| corpus | port `r13-w` | port `r13-l` | Ghostty `20abdb50a` |
+|---|---:|---:|---:|
+| truecolor, thousands of distinct styles (`styles-small.bin`) | 95.4 | 100.3 | 93.9 |
+| SGR mix (`sgr-small.bin`) | 66.0 | 66.3 | 55.5 |
+| `ascii-small.bin` (the ws10 `screen-clone.clone/small` corpus) | 15.8 | 15.7 | 42.3 |
+
+On the standard corpus the port is 2.70x faster (2.78x against the historical oracle `4749c4e93`), but on
+style-heavy screens Ghostty is faster: about 6% on truecolor and about 16% on the SGR mix. The SGR gap
+predates N88 (it is present at `r13-w`); on truecolor Ghostty was about 2% faster at `r13-w`, and N88's
+reference-sized style section added about 5%. The cause is not investigated yet (candidates: the port's
+per-style clone path through `add_with_id_ptr` / `use_multiple`, and its hashing). Re-measured by task
+R13-L2 with the same method, after against before: 0.998 / 1.004 / 0.999, no change.
+
+**state**: OPEN (performance; for the perf owner).

@@ -118,6 +118,10 @@ agent depends on that tree standing still. Advancing therefore requires:
 3. A recorded **before** state for the tree-reading gates — at minimum G3b
    (`check_comment_coverage.py`) and G1b (`check_test_counts.py`).
 4. A recorded **after** state and a per-crate delta in **both** directions.
+   After the advance also run G-REFGEOM (`.port/tools/gates/check_ref_item_geometry.py`):
+   RED means upstream changed the set-item geometry the port's page layout is tied to
+   (NEW-FINDINGS N88); update the shadows in `style.rs` / `hyperlink.rs` and the golden
+   together.
 5. `.port/tools/gates/ORACLE_PIN` (the full 40-hex SHA, one line), `.port/ORACLE_SYNC.md`,
    `.port/PORT_RULES.md` (R12) and `.port/cycle-analysis.md` are updated **together in one
    commit**, and the commit message states which range the advance absorbed. Until `ORACLE_PIN`
