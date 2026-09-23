@@ -2649,7 +2649,72 @@ defect (a hardening proposal): `UPSTREAM-DEFECTS.md` UD113.
 The port's post-spawn unwind stopped and joined the renderer thread, which the reference does not, but
 only after `self.io.deinit()` had freed the terminal the renderer reads, and it never stopped the io
 thread. A failed io-thread spawn reached it. Both threads are now stopped and joined first, in
-`deinit`'s order. Covered by reading only: `Surface::init` cannot run in a unit test, and no port
-apprt's `set_title` can fail. Reference defect: `UPSTREAM-DEFECTS.md` UD104.
+`deinit`'s order. Reference defect: `UPSTREAM-DEFECTS.md` UD104.
 
-**state**: CLOSED by task R13-D.
+Correction (task R13-D2): task R13-D recorded this as "covered by reading only: `Surface::init` cannot
+run in a unit test". That was wrong: six non-ignored tests in
+`crates/rustty-apprt-c/tests/macos_window_host.rs` already run the full `rustty_surface_new` →
+`Surface::init` with both threads spawned. What was missing was a way to fail the io-thread spawn. Task
+R13-D2 added one (rustty-core's test-only `init-fault-inject` feature, enabled only from
+rustty-apprt-c's dev-dependencies) and the test
+`init_error_path_joins_both_threads_before_freeing_their_state`, which requires every spawned thread to
+be stopped and joined before any of their state is freed, for a failed io spawn and for a failure after
+it. Negative controls: the pre-R13-D order, and the io join alone removed, each fail it.
+
+**state**: CLOSED by task R13-D (fix) and R13-D2 (test).
+
+## N73 — the web-canvas `rustty_wc_face_new` export took the point size as `f32`, not `u16`
+
+- **id**: N73. Not in the inventory (review of task R13-D, second new candidate).
+- **found by**: task R13-D (concern 5) and its review; fixed by task R13-D2.
+- **severity**: low. **kind**: signature divergence (R1).
+- **oracle**: `src/font/face/web_canvas.zig:494` (`export fn face_new(ptr: [*]const u8, len: usize,
+  pts: u16, p: u16) ?*Face`); only the inner `face_new_` (`:498`) takes `pts: f32`.
+- **rustty**: `crates/rustty-font-shaper/src/face/web_canvas.rs` (`rustty_wc_face_new`, the
+  `rustty_web_canvas.wasm` export; the `ghostty-wasm-abi` `face_new` already took `u16`).
+
+The export took `pts: f32`, so a JS caller could pass a fractional size the reference cannot receive.
+It now takes `u16` and widens it into `DesiredSize.points`, as the reference does. Consumers found: the
+JS glue in `example/wasm-web-canvas/index.html` (`32.0`), `.port/tools/web-canvas-instantiate.mjs`
+(three calls, `16.0`), and the symbol-retention table in `crates/rustty-web-canvas/src/lib.rs` (a
+function-pointer cast, signature-agnostic). None depends on `f32`: each passes a whole number, which a
+wasm `i32` parameter receives unchanged. `web-canvas-instantiate.mjs` passes after the change
+(`ALL OK`, macOS, `wasm32-unknown-unknown` release). A `const` item pins the signature; negative
+control: `pts: f32` restored fails to compile ("expected fn pointer `extern "C" fn(_, _, u16, _) -> _`",
+wasm32 check). Not a reference defect: web_canvas is not built upstream at the pin (UD37, UD38).
+
+**state**: CLOSED by task R13-D2.
+
+## N74 — CoreText `Face::name` panicked on a font with no family name
+
+- **id**: N74. Not in the inventory (review of task R13-D, first new candidate).
+- **found by**: task R13-D (concern 4), measured by its review; fixed by task R13-D2.
+- **severity**: low. **kind**: missing-branch (reference defect, R13).
+- **oracle**: `src/font/face/coretext.zig:204-212`; `pkg/macos/text/font.zig:166-168`.
+- **rustty**: `crates/rustty-font-shaper/src/face/coretext.rs` (`Face::name`).
+
+`Face::name` used objc2's non-null `CTFont::family_name()`, which panics when `CTFontCopyFamilyName`
+returns NULL, as it does for a font file with no `name` table (`Face::init` accepts such a font). The
+lookup is now nullable and a missing name gives "unknown", `DeferredFace.familyName`'s answer for the
+same NULL (task R13-C's S85-F2 fix made `DeferredFace` nullable the same way). Reference defect:
+`UPSTREAM-DEFECTS.md` UD114.
+
+**state**: CLOSED by task R13-D2.
+
+## N75 — a failed `Surface::init` kept its font-grid reference, and the app's teardown then aborted
+
+- **id**: N75. Not in the inventory.
+- **found by**: task R13-D2, when the UD104 test freed its app after a failed `rustty_surface_new`.
+- **severity**: low. **kind**: missing-branch (reference defect, R13).
+- **oracle**: `src/Surface.zig:523` (`ref` with no `errdefer … deref`); `src/App.zig:141`.
+- **rustty**: `crates/rustty-core/src/surface.rs` (`init`, `initErrdefers`); `crates/rustty-core/src/app.rs`
+  (`deinit`).
+
+Like the reference, the port released the grid reference only in `Surface::deinit`, so every
+`Surface::init` failure after the `ref` leaked it. `App::deinit`'s `debug_assert!(font_grid_set.count()
+== 0)` then fired at `rustty_app_free`, which (debug and `release-safe` builds) aborted across the C ABI:
+"assertion failed: self.font_grid_set.count() == 0", then "panic in a function that cannot unwind".
+Every error path after the `ref` now releases it, in the missing errdefer's LIFO slot. The assertion
+stays: it states an invariant that now holds. Reference defect: `UPSTREAM-DEFECTS.md` UD115.
+
+**state**: CLOSED by task R13-D2.
