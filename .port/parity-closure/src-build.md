@@ -11,7 +11,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** update-translations drops the command-palette source and the N_ keyword from xgettext
   - **Oracle:** `src/build/GhosttyI18n.zig:64-71, 152-155` → **Rustty:** `xtask/src/translations.rs:79-92, 196-219`
   - **Audit's suggested fix:** Add `crates/rustty-input/src/command.rs` (and `--keyword=N_`) to the GTK xgettext leg in translations.rs, matching GhosttyI18n.zig:152-155.
-- [ ] **S63-F2** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S63-F2** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** Version pre-release/build are never derived from git, so dev builds report the `stable` release channel
   - **Oracle:** `src/build/Config.zig:276-339, 693-701` → **Rustty:** `crates/rustty-build-config/src/lib.rs:93-103, 131-141, 159-181`
   - **Audit's suggested fix:** In a build.rs (identity or build-config) detect git branch/short hash like GitVersion.detect, expose `VERSION_STRING` as `X.Y.Z-<branch>+<hash>` (or `-dev+0000000` without git) and derive ReleaseChannel from it; keep bare X.Y.Z only for `vX.Y.Z` tags / an explicit override.
@@ -35,7 +35,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** Workspace distcheck builds the extracted tarball instead of running the test suite
   - **Oracle:** `src/build/GhosttyDist.zig:128-131` → **Rustty:** `xtask/src/dist.rs:264-279`
   - **Audit's suggested fix:** Run `cargo test --workspace --offline --locked` (at least `--no-run` plus the fast lanes) in the extracted tree.
-- [ ] **S64-F1** · CONFIRMED · `INDIV` · missing-function
+- [x] **S64-F1** · CONFIRMED · `INDIV` · missing-function
   - **What:** GitVersion.detect not ported: branch/tag/dirty detection and the derived pre-release version are absent
   - **Oracle:** `src/build/GitVersion.zig:19-86` → **Rustty:** `crates/rustty-cli/build.rs:49-94`
   - **Audit's suggested fix:** Add a build-time git probe (in rustty-build-config's build.rs) that reproduces detect(): sanitised branch, short hash, exact tag, and the Config.zig composition rules (tag must equal v<manifest>, `dev+0000000` fallback), exposing VERSION/VERSION_STRING with the `-<branch>+<hash>` pre-release so release_channel() becomes Tip on untagged builds.

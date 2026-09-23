@@ -39,8 +39,11 @@
 pub mod apprt;
 pub mod build;
 pub mod font;
+#[cfg(test)]
+mod git_version;
 pub mod os;
 pub mod renderer;
+pub mod version;
 
 pub use apprt::Runtime;
 pub use build::{Config, ExeEntrypoint, ReleaseChannel};
@@ -95,9 +98,9 @@ const HOST_WASM_TARGET: WasmTarget = WasmTarget::Browser;
 /// Reference: `release_channel = std.meta.stringToEnum(ReleaseChannel,
 /// @tagName(options.release_channel)).?`. In the reference this is resolved
 /// from the `build_options` generated at `zig build` time; here the release
-/// channel is derived from the identity version string in the same way the
-/// build script computes it (see [`ReleaseChannel::from_version`]): a version
-/// with no pre-release component is `stable`, otherwise `tip`.
+/// channel is derived from the composed [`VERSION`] in the same way
+/// `Config.zig:693-701` does (see [`ReleaseChannel::from_version_pre`]): a
+/// version with no pre-release component is `stable`, otherwise `tip`.
 pub const fn release_channel() -> ReleaseChannel {
     ReleaseChannel::from_version_pre(version_pre())
 }
@@ -164,15 +167,28 @@ pub const fn mode_string_for(opt_level: &str, debug_assertions: bool) -> &'stati
 
 /// The semantic version of this build.
 ///
-/// Reference: `pub const version = options.app_version;`. Pulled from the
-/// `rustty-identity` source-of-truth crate (R2) rather than the Zig
-/// `build_options`.
-pub const VERSION: &str = rustty_identity::VERSION;
+/// Reference: `pub const version = options.app_version;`. The app version
+/// `X.Y.Z` comes from the `rustty-identity` source-of-truth crate (R2); the
+/// pre-release and build metadata come from git, composed as `Config.zig`
+/// does (see [`version`]). CORRECTION (S63-F2 / S64-F1, 2026-09-23): this used
+/// to be `rustty_identity::VERSION` verbatim, so every build reported `0.1.0`
+/// on the `stable` channel.
+pub const VERSION: &str = VERSION_STRING;
+
+/// The composed version (`Config.zig:276-339`), from what `build.rs` found.
+const COMPOSED: version::Composed = version::compose(
+    rustty_identity::VERSION,
+    env!("RUSTTY_VERSION_KIND"),
+    env!("RUSTTY_VERSION_EXPLICIT"),
+    env!("RUSTTY_VERSION_TAG"),
+    env!("RUSTTY_VERSION_BRANCH"),
+    env!("RUSTTY_VERSION_HASH"),
+);
 
 /// The semantic version of this build, as a string.
 ///
 /// Reference: `pub const version_string = options.app_version_string;`.
-pub const VERSION_STRING: &str = rustty_identity::VERSION;
+pub const VERSION_STRING: &str = COMPOSED.as_str();
 
 /// The Rust toolchain version this build was compiled with (bare version, e.g.
 /// `1.93.1 (…)`).
@@ -385,6 +401,51 @@ impl Artifact {
 
 #[cfg(test)]
 mod tests {
+    /// S63-F2 / S64-F1: in a git checkout, with no `RUSTTY_VERSION_STRING`,
+    /// the version is `X.Y.Z-<branch>+<short hash>` from `GitVersion.detect`
+    /// (`Config.zig:332-338`), and a pre-release makes the channel `tip`
+    /// (`Config.zig:693-701`). The expectation is computed here by running
+    /// the same detection, so the test checks the build script's result
+    /// reached the constants.
+    #[test]
+    fn version_is_derived_from_git() {
+        if option_env!("RUSTTY_VERSION_STRING").is_some_and(|v| !v.is_empty()) {
+            return; // the explicit arm, covered by `version`'s own tests
+        }
+        let core = crate::version::core_version(rustty_identity::VERSION);
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let Ok(v) = crate::git_version::detect(&root) else {
+            assert_eq!(crate::VERSION_STRING, format!("{core}-dev+0000000"));
+            return;
+        };
+        let expected = match v.tag.as_deref() {
+            Some(t) if t != "tip" => core.to_string(),
+            _ => format!("{core}-{}+{}", v.branch, v.short_hash),
+        };
+        assert_eq!(crate::VERSION_STRING, expected);
+        assert_eq!(crate::VERSION, crate::VERSION_STRING);
+        if expected.contains('-') {
+            assert_eq!(crate::release_channel(), crate::ReleaseChannel::Tip);
+        }
+    }
+
+    /// `GitVersion.zig:30-35` sanitizes the RAW `rev-parse` output, trailing
+    /// newline included, so the branch ends in `-`. Measured on the
+    /// reference: its cached build options carry
+    /// `app_version_string = "1.3.2-HEAD-+4540d499a"`.
+    #[test]
+    fn git_branch_keeps_the_reference_trailing_dash() {
+        assert_eq!(
+            crate::git_version::sanitize_branch("feature/x_y.2\n"),
+            "feature-x-y-2-"
+        );
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        if let Ok(v) = crate::git_version::detect(&root) {
+            assert!(v.branch.ends_with('-'), "{v:?}");
+            assert!(!v.short_hash.is_empty());
+        }
+    }
+
     /// WS3-B: the toolchain version captured by build.rs. The workspace pins
     /// rustc via rust-toolchain.toml, so the string starts with a 1.x version
     /// and carries no "rustc " prefix (mirrors `builtin.zig_version_string`

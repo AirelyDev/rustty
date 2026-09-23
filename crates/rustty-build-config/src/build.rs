@@ -8,8 +8,9 @@
 //! enums and the comptime [`Config`] view produced by `fromOptions()` — are
 //! relocated HERE so build-config has no upward dependency on the build script
 //! (R4). The pure build-time machinery (`init`, `addOptions`, `terminalOptions`,
-//! target resolution, git version detection) stays in the `rustty-xtask`
-//! build tooling.
+//! target resolution) stays in the `rustty-xtask` build tooling; git version
+//! detection is `crate::git_version`, run by this crate's `build.rs`, and the
+//! composition is `crate::version`.
 
 use crate::apprt::Runtime as ApprtRuntime;
 use crate::font::Backend as FontBackend;
@@ -145,9 +146,9 @@ const fn i18n_default(target: Target) -> bool {
     }
 }
 
-/// The semantic version of this build, parsed from the `rustty-identity`
-/// source-of-truth string (R2). Reference: `options.app_version`.
-const APP_VERSION: SemanticVersion = SemanticVersion::parse(rustty_identity::VERSION);
+/// The semantic version of this build, parsed from the composed
+/// [`crate::VERSION_STRING`] (S63-F2). Reference: `options.app_version`.
+const APP_VERSION: SemanticVersion = SemanticVersion::parse(crate::VERSION_STRING);
 
 /// A semantic version `MAJOR.MINOR.PATCH`, mirroring the reference
 /// `std.SemanticVersion` fields read at runtime.
