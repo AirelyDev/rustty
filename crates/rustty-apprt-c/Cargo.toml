@@ -188,6 +188,12 @@ objc2-core-foundation = { version = "0.3", features = ["CFBase", "CFNumber", "CF
 
 [dev-dependencies]
 rustty-xev = { workspace = true }
+# Task R13-D2 (UD104): `tests/macos_window_host.rs` drives `Surface::init`'s
+# post-spawn error path through the test-only `init-fault-inject` hook. A
+# dev-dependency feature, so (`resolver = "2"`) it is compiled only into
+# builds of test targets, never into `cargo build -p rustty` or the
+# release/xcframework artifacts; inert unless a test arms it.
+rustty-core = { workspace = true, features = ["init-fault-inject"] }
 
 # W4-4 macos_window_host.rs. The HEADLESS proof hands a plain-NSObject MockHostView
 # layer-host double across the C-ABI (renderer golden_presents_frame_on_screen

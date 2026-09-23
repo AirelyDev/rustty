@@ -15,6 +15,15 @@ authors.workspace = true
 [lints]
 workspace = true
 
+[features]
+# Task R13-D2 (UD104): test-only fault injection for `Surface::init`'s
+# post-spawn error path (`src/init_fault.rs`). Enabled ONLY from
+# rustty-apprt-c's `[dev-dependencies]`, so with `resolver = "2"` no
+# production build (`cargo build -p rustty`, `--workspace`, the release and
+# xcframework profiles) compiles it; where it is compiled it is inert until a
+# test arms it on its own thread.
+init-fault-inject = []
+
 [dependencies]
 # The `LOG` findings-class facade (task-14a review CRITICAL 2,
 # `.port/parity-closure/DECISION-logging.md` §6): the app-build counterpart of

@@ -2173,6 +2173,16 @@ where
                     return Err(err.into());
                 }
             };
+        // PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD115. The
+        // reference arms no `errdefer app.font_grid_set.deref(font_grid_key)`
+        // after this `ref` (Surface.zig:523), so any later `init` failure keeps
+        // the grid's reference forever: the grid leaks, and the app's teardown
+        // `assert(self.font_grid_set.count() == 0)` (App.zig:141) traps in
+        // safety-checked builds. The port releases it on every error path below
+        // (in that errdefer's LIFO slot: after the renderer teardown, before
+        // `derived_config.deinit()`), as `Surface.deinit` does
+        // (Surface.zig:840) and as `setFontSize`'s own `ref` does with its
+        // errdefer (Surface.zig:2446).
 
         // Build our size struct which has all the sizes we need.
         // const size: rendererpkg.Size = size: { ... };
@@ -2190,6 +2200,8 @@ where
                     let surface_size = match unsafe { &*rt_surface }.get_size() {
                         Ok(v) => v,
                         Err(err) => {
+                            // (errdefer app.font_grid_set.deref — UD115)
+                            unsafe { (*app).font_grid_set.deref(font_grid_key) };
                             // (errdefer derived_config.deinit() — Surface.zig:490)
                             derived_config.deinit();
                             return Err(err.into());
@@ -2244,6 +2256,8 @@ where
         let renderer_config = match rendererpkg::DerivedConfig::init(alloc, config) {
             Ok(v) => v,
             Err(err) => {
+                // (errdefer app.font_grid_set.deref — UD115)
+                unsafe { (*app).font_grid_set.deref(font_grid_key) };
                 // (errdefer derived_config.deinit() — Surface.zig:490)
                 derived_config.deinit();
                 return Err(err.into());
@@ -2265,6 +2279,8 @@ where
         ) {
             Ok(v) => v,
             Err(err) => {
+                // (errdefer app.font_grid_set.deref — UD115)
+                unsafe { (*app).font_grid_set.deref(font_grid_key) };
                 // (errdefer derived_config.deinit() — Surface.zig:490; the
                 // renderer DerivedConfig moved into the failed init's options)
                 derived_config.deinit();
@@ -2311,6 +2327,8 @@ where
                 unsafe { drop(Box::from_raw(mutex)) };
                 // errdefer renderer_impl.deinit();
                 renderer_impl.deinit();
+                // (errdefer app.font_grid_set.deref — UD115)
+                unsafe { (*app).font_grid_set.deref(font_grid_key) };
                 // errdefer derived_config.deinit();
                 derived_config.deinit();
                 return Err(err.into());
@@ -2343,6 +2361,8 @@ where
                 unsafe { drop(Box::from_raw(mutex)) };
                 // errdefer renderer_impl.deinit();
                 renderer_impl.deinit();
+                // (errdefer app.font_grid_set.deref — UD115)
+                unsafe { (*app).font_grid_set.deref(font_grid_key) };
                 // errdefer derived_config.deinit();
                 derived_config.deinit();
                 return Err(err.into());
@@ -2797,6 +2817,8 @@ where
             });
         let renderer_thr = unsafe { Self::initTry(self_, true, spawn_result) }?;
         unsafe { (*self_).renderer_thr = Some(renderer_thr) };
+        #[cfg(feature = "init-fault-inject")]
+        crate::init_fault::record(crate::init_fault::Event::RendererSpawned);
 
         // Start our IO thread
         // self.io_thr = try std.Thread.spawn(
@@ -2811,21 +2833,34 @@ where
             thread: unsafe { &raw mut (*self_).io_thread },
             io: unsafe { &raw mut (*self_).io },
         };
-        let spawn_result = std::thread::Builder::new()
-            .name("io".to_string())
-            .spawn(move || {
-                // (whole-wrapper capture — same note as the renderer spawn
-                // above.)
-                let args = args;
-                // [ADV-FIX F2]: `Thread::threadMain` is an associated fn taking RAW
-                // `*mut Thread`/`*mut Termio<M>` (NOT `&mut`) — a `&mut` arg would be
-                // a protected `Unique` retag for the whole `loop.run` (shell life),
-                // aliasing the concurrent ReadThread + the parent's pre-join
-                // `io_thread.stop.notify()`. Pass the raw pointers straight through.
-                unsafe { termio::Thread::threadMain(args.thread, args.io) }
-            });
+        let io_main = move || {
+            // (whole-wrapper capture — same note as the renderer spawn
+            // above.)
+            let args = args;
+            // [ADV-FIX F2]: `Thread::threadMain` is an associated fn taking RAW
+            // `*mut Thread`/`*mut Termio<M>` (NOT `&mut`) — a `&mut` arg would be
+            // a protected `Unique` retag for the whole `loop.run` (shell life),
+            // aliasing the concurrent ReadThread + the parent's pre-join
+            // `io_thread.stop.notify()`. Pass the raw pointers straight through.
+            unsafe { termio::Thread::threadMain(args.thread, args.io) }
+        };
+        let io_builder = std::thread::Builder::new().name("io".to_string());
+        // Test-only (UD104, task R13-D2): an armed fault fails the spawn
+        // without starting the thread. Not compiled into production builds.
+        #[cfg(feature = "init-fault-inject")]
+        let spawn_result = if crate::init_fault::inject(crate::init_fault::Fault::IoSpawn) {
+            Err(std::io::Error::other(
+                "init-fault-inject: the io thread spawn failed",
+            ))
+        } else {
+            io_builder.spawn(io_main)
+        };
+        #[cfg(not(feature = "init-fault-inject"))]
+        let spawn_result = io_builder.spawn(io_main);
         let io_thr = unsafe { Self::initTry(self_, true, spawn_result) }?;
         unsafe { (*self_).io_thr = Some(io_thr) };
+        #[cfg(feature = "init-fault-inject")]
+        crate::init_fault::record(crate::init_fault::Event::IoSpawned);
 
         // Determine our initial window size if configured. We need to do this
         // quite late in the process because our height/width are in grid dimensions,
@@ -2840,6 +2875,22 @@ where
             // an initial size shouldn't stop our terminal from working.
             // log.warn("unable to set initial window size: {}", .{err});
             log::warn!(target: LOG_SCOPE, "unable to set initial window size: {err:?}");
+        }
+
+        // Test-only (UD104, task R13-D2): an armed fault fails here, where the
+        // first `set_title` `try` below would, with both threads running. Not
+        // compiled into production builds.
+        #[cfg(feature = "init-fault-inject")]
+        if crate::init_fault::inject(crate::init_fault::Fault::AfterIoSpawn) {
+            unsafe {
+                Self::initTry(
+                    self_,
+                    true,
+                    Err::<(), _>(InitError::Spawn(std::io::Error::other(
+                        "init-fault-inject: a step after the io thread spawn failed",
+                    ))),
+                )
+            }?;
         }
 
         // if (config.title) |title| {
@@ -2977,31 +3028,55 @@ where
             // the renderer thread reads the terminal that `self.io.deinit()`
             // frees, so joining it only after that deinit (as this function
             // used to) left the same race in the port. Task R13-D moved the
-            // renderer join here and added the io join.
+            // renderer join here and added the io join. Test (task R13-D2):
+            // `init_error_path_joins_both_threads_before_freeing_their_state`
+            // (rustty-apprt-c `tests/macos_window_host.rs`).
+            //
+            // Unlike `deinit`, this path does not re-enter the renderer
+            // (`threadEnter`, Surface.zig:811) before `renderer.deinit()`. That
+            // is harmless at the pin: OpenGL's `threadEnter` does nothing for
+            // GTK or embedded (OpenGL.zig:197-216), and Metal defines none.
             //
             // Stop the renderer via a NARROW Copy handle (no whole-struct read
             // while it may still be live — §2.2 rule 4; Async::notify(&self)
             // touches only the mach port). Join the spawned handle if init
             // still holds it on this path; else the never-started child is
             // simply absent.
+            //
+            // (The `init_fault` lines are the test-only probe, task R13-D2: they
+            // log each stop and join, and at each free end the process first if
+            // a spawned thread is still unjoined. Not compiled into production
+            // builds.)
             if let Some(handle) = (*self_).renderer_thr.take() {
                 let _ = (*self_).renderer_thread.stop.notify();
+                #[cfg(feature = "init-fault-inject")]
+                crate::init_fault::record(crate::init_fault::Event::RendererStopped);
                 let _ = handle.join();
+                #[cfg(feature = "init-fault-inject")]
+                crate::init_fault::record(crate::init_fault::Event::RendererJoined);
             }
             // The io thread, if it was spawned (`io_thr` is stored straight
             // after its spawn succeeds), the same way `deinit` stops it.
             if let Some(handle) = (*self_).io_thr.take() {
                 let _ = (*self_).io_thread.stop.notify();
+                #[cfg(feature = "init-fault-inject")]
+                crate::init_fault::record(crate::init_fault::Event::IoStopped);
                 let _ = handle.join();
+                #[cfg(feature = "init-fault-inject")]
+                crate::init_fault::record(crate::init_fault::Event::IoJoined);
             }
 
             // errdefer self.io.deinit(); (Surface.zig:682 — armed only after
             // the io block; consuming receiver, read back out.)
             if io_live {
+                #[cfg(feature = "init-fault-inject")]
+                crate::init_fault::before_free("io");
                 std::ptr::read(&raw const (*self_).io).deinit();
             }
             // errdefer io_thread.deinit(); (Surface.zig:579 — consuming
             // receiver, read back out.)
+            #[cfg(feature = "init-fault-inject")]
+            crate::init_fault::before_free("io_thread");
             std::ptr::read(&raw const (*self_).io_thread).deinit();
             // errdefer render_thread.deinit(); (Surface.zig:575)
             //
@@ -3010,23 +3085,29 @@ where
             // `&mut renderer_thread` — E2's aliasing discipline) and deinit,
             // matching the io half above.
             {
+                #[cfg(feature = "init-fault-inject")]
+                crate::init_fault::before_free("renderer_thread");
                 let mut rt = std::ptr::read(&raw const (*self_).renderer_thread);
                 rt.deinit();
             }
             // errdefer alloc.destroy(mutex); (Surface.zig:564)
+            #[cfg(feature = "init-fault-inject")]
+            crate::init_fault::before_free("renderer_state.mutex");
             drop(Box::from_raw((*self_).renderer_state.mutex));
             // errdefer renderer_impl.deinit(); (Surface.zig:559)
             (*self_).renderer.deinit();
+            // PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD115: the
+            // missing `errdefer app.font_grid_set.deref(font_grid_key)` (see the
+            // `ref` site). The by-value Key is read out of `self_`, as
+            // `deinit` does, which also releases the port's owned copy of it.
+            (*(*self_).app)
+                .font_grid_set
+                .deref(std::ptr::read(&raw const (*self_).font_grid_key));
             // errdefer derived_config.deinit(); (Surface.zig:490 — the
             // explicit regex teardown + the collapsed-arena ownership drop.)
             let mut derived_config = std::ptr::read(&raw const (*self_).config);
             derived_config.deinit();
             drop(derived_config);
-            // PORT NOTE (Rust-only ownership): the Rustty `SharedGridSet.ref`
-            // Key is OWNED (the reference key's memory belongs to the set's
-            // map — the shared_grid_set PORT NOTE), so the moved-in copy is
-            // dropped to avoid a Rust-side leak the reference doesn't have.
-            drop(std::ptr::read(&raw const (*self_).font_grid_key));
         }
     }
 

@@ -968,3 +968,152 @@ fn shows_visible_window_on_device() {
     };
     let _keep = (window, view);
 }
+
+// Task R13-D2 (UD104, M35): `Surface::init`'s post-spawn error path must stop
+// and join the renderer and io threads before it frees the state they use.
+// The reference's errdefers free the thread loops and the terminal under the
+// running threads; the port's `initErrdefers` joins first (task R13-D).
+//
+// Driven through the REAL `rustty_surface_new` on a live host (the harness
+// above), with rustty-core's test-only `init-fault-inject` hook (a
+// dev-dependency feature of this crate; see `rustty_core::init_fault`):
+// - `IoSpawn` fails the io thread's spawn, with the renderer thread running;
+// - `AfterIoSpawn` fails the next fallible step, where the `set_title` `try`
+//   sits, with both threads running.
+// The hook logs each spawn, stop, join and free on the init thread, and the
+// test requires the exact sequence: every spawned thread stopped and joined,
+// then the frees. At each free the probe also checks that no spawned thread
+// is still unjoined; if one is (the old order), it prints why and `_exit`s
+// BEFORE the free, so the failure is reported without touching freed memory.
+// That is why each case runs in a child process: the parent asserts the
+// child's exit status and output, and a violation fails the parent's
+// assertion with the probe's reason instead of crashing the test runner.
+#[test]
+fn init_error_path_joins_both_threads_before_freeing_their_state() {
+    use rustty_core::init_fault::{self, Event, Fault};
+    const CHILD: &str = "RUSTTY_R13D2_INIT_FAULT_CHILD";
+    const NAME: &str = "init_error_path_joins_both_threads_before_freeing_their_state";
+
+    if let Some(which) = std::env::var_os(CHILD) {
+        let fault = match which.to_str() {
+            Some("io-spawn") => Fault::IoSpawn,
+            Some("after-io-spawn") => Fault::AfterIoSpawn,
+            other => panic!("unknown fault {other:?}"),
+        };
+        let quiet = || {
+            let cfg = make_config_transparent_blur();
+            // SAFETY: `cfg` is a live Config; `command` is a plain pub field.
+            unsafe {
+                (*cfg).command = Some(rustty_config::Command::Direct(vec![
+                    b"/bin/sleep".to_vec(),
+                    b"600".to_vec(),
+                ]));
+            }
+            cfg
+        };
+        // Positive control: the same host with nothing armed creates a live
+        // surface (no Metal device means there is nothing to test).
+        let Some(host) = HostedSurface::spawn_with(quiet()) else {
+            println!("R13D2-CHILD-SKIP no Metal device / app_new failed");
+            return;
+        };
+        drop(host);
+
+        ensure_init();
+        let view = make_host_view();
+        // SAFETY: `test_options`/config are live for the call.
+        let app = unsafe { app_new_serialized(&test_options(), quiet()) };
+        assert!(!app.is_null(), "app_new");
+        // SAFETY: default surface options built by the live C-ABI export.
+        let mut opts: SurfaceOptions = unsafe { rustty_surface_config_new() };
+        opts.platform_tag = 1; // PlatformTag::MacOS
+        opts.platform = PlatformC {
+            macos: PlatformCMacOS {
+                nsview: Retained::as_ptr(&view) as *mut c_void,
+            },
+        };
+        opts.scale_factor = 2.0;
+
+        init_fault::arm(fault);
+        // SAFETY: `app` is live; `opts` is a fully-initialized SurfaceOptions.
+        let surface = unsafe { rustty_surface_new(app, &opts) };
+        let log = init_fault::take_log();
+        assert!(
+            surface.is_null(),
+            "the injected fault fails rustty_surface_new"
+        );
+
+        let frees = [
+            Event::Freed("io"),
+            Event::Freed("io_thread"),
+            Event::Freed("renderer_thread"),
+            Event::Freed("renderer_state.mutex"),
+        ];
+        let mut expected = match fault {
+            // The io thread never started; the renderer is stopped and joined.
+            Fault::IoSpawn => vec![
+                Event::RendererSpawned,
+                Event::Injected(Fault::IoSpawn),
+                Event::RendererStopped,
+                Event::RendererJoined,
+            ],
+            // Both are stopped and joined, renderer first as in `deinit`.
+            Fault::AfterIoSpawn => vec![
+                Event::RendererSpawned,
+                Event::IoSpawned,
+                Event::Injected(Fault::AfterIoSpawn),
+                Event::RendererStopped,
+                Event::RendererJoined,
+                Event::IoStopped,
+                Event::IoJoined,
+            ],
+        };
+        expected.extend(frees);
+        assert_eq!(
+            expected, log,
+            "every spawned thread is stopped and joined before its state is freed"
+        );
+
+        // UD115: the failed init released its font-grid reference, so the app
+        // holds no grid (the reference keeps it, and the app's teardown
+        // `assert(font_grid_set.count() == 0)` then traps). Checked before
+        // `rustty_app_free`, whose own check aborts across the C ABI.
+        // SAFETY: `app` is live and no surface exists; `core_app` is its core.
+        let grids = unsafe { (*(*app).core_app).font_grid_set.count() };
+        assert_eq!(
+            0, grids,
+            "the failed Surface::init released its font-grid reference"
+        );
+
+        // SAFETY: `app` is the live pointer from `rustty_app_new`; freed once.
+        unsafe { rustty_app_free(app) };
+        drop(view);
+        println!("R13D2-CHILD-OK {}", which.to_string_lossy());
+        return;
+    }
+
+    let exe = std::env::current_exe().expect("current_exe");
+    for which in ["io-spawn", "after-io-spawn"] {
+        let out = std::process::Command::new(&exe)
+            .args(["--exact", NAME, "--test-threads=1", "--nocapture"])
+            .env(CHILD, which)
+            .output()
+            .expect("re-execute the test binary");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        if stdout.contains("R13D2-CHILD-SKIP") {
+            eprintln!("{which}: no Metal device / app_new failed; skipping");
+            continue;
+        }
+        let violation = out.status.code() == Some(init_fault::VIOLATION_EXIT);
+        assert!(
+            !violation,
+            "{which}: Surface::init's error path freed state under a running thread:\n{stderr}"
+        );
+        assert!(
+            out.status.success() && stdout.contains(&format!("R13D2-CHILD-OK {which}")),
+            "{which}: the child did not complete (status {:?}):\nstdout:\n{stdout}\nstderr:\n{stderr}",
+            out.status
+        );
+    }
+}

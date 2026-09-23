@@ -38,6 +38,12 @@ pub mod renderer_seam;
 // function bodies land C6..C15 IN PLACE.
 pub mod surface;
 
+// Test-only fault injection and teardown-order probe for `Surface::init`'s
+// error path (UD104, task R13-D2). Behind a feature that only rustty-apprt-c's
+// `[dev-dependencies]` enable, so no production build compiles it.
+#[cfg(feature = "init-fault-inject")]
+pub mod init_fault;
+
 // PORT NOTE (WS4): src/main_ghostty.zig `logFn` — the shared process log sink,
 // hosted at the core wiring tier (below apprt/apprt-c/bin, above os/global).
 pub mod logging;
