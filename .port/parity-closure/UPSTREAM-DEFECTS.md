@@ -1732,6 +1732,21 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - proposed fix:    trim before sanitizing: `const raw = std.mem.trimEnd(u8, tmp, "\r\n ");` and run the loop over `raw` (or move the `trimEnd` from `:84` to just before the loop).
 - upstream status: not reported
 
+### UD160 — the ssh-cache host check traps on a scoped IPv6 address longer than 255 bytes
+- kind:            crash (safety-checked trap)
+- upstream project: zig (the standard library's IPv6 parser), reached through ghostty
+- severity:        low (a CLI process the user runs, on input the user supplies)
+- reference:       `src/cli/ssh-cache/DiskCache.zig:428-443` (`isValidHost` calls `std.Io.net.IpAddress.parseIp6(host, 0)` once `HostName.validate` has rejected the text), at 20abdb50a; the trap is in Zig 0.16.0 `lib/std/Io/net.zig` `Ip6Address.Unresolved.parse`, `%` arm: `text_i = @intCast(text.len);` with `var text_i: u8`
+- defect:          `Unresolved.parse` indexes the text with a `u8`. After a `%` (a scope id) it casts the whole text length into that index, which does not fit once the text is longer than 255 bytes. Nothing before it bounds the length: `isValidCacheKey` checks only that the key is non-empty, and `HostName.validate` fails on the `%` and `:` without stopping the fallback.
+- ReleaseSafe:     panic "integer does not fit in destination type" at `net.zig:577` (MEASURED with Zig 0.16.0 ReleaseSafe, calling `std.Io.net.IpAddress.parseIp6("fe80::1%" ++ "a" ** 300, 0)`: exit 134). Not measured through a ghostty binary built at the pin.
+- ReleaseFast:     undefined behaviour (the `@intCast` is unchecked); the likely outcome is a wrapped index and a wrong verdict, UNVERIFIED.
+- reachability:    CLI: `ghostty +ssh-cache --add=fe80::1%<more than 247 bytes>` (also `--remove=`, and a positional query), and any caller that hands a destination to `DiskCache.add`/`remove`/`contains` (the shell-integration ssh wrapper and `+ssh`, which pass the destination the user typed or `ssh -G` resolved). The caller is the user, so this is a self-inflicted crash of a short-lived CLI process.
+- port handling:   `crates/rustty-cli/src/ssh_cache/disk_cache.rs` `ip6_parse` (a port of `Unresolved.parse`) keeps a `usize` index, so any scoped address, long or short, is rejected the way the reference rejects a short one (`Ip6Address.parse` returns `error.UnresolvedScope` for any scope id, so `isValidHost` returns false). PORT NOTE at the `%` arm.
+- parity row(s):   S71-F3 (the port now uses the reference's IPv6 grammar, which is what brings this code path in).
+- test:            `long_scoped_ipv6_is_rejected_without_crashing` (rustty-cli). Negative control (macOS, task T-C): casting the length through `u8::try_from(..).unwrap()` as the reference's `@intCast` does makes it panic (`TryFromIntError`).
+- proposed fix:    upstream in Zig, make `text_i` a `usize` (or reject text longer than 255 bytes up front). In ghostty, until then, reject a key longer than a hostname can be (`HostName.max_len` plus the `user@` prefix) in `isValidCacheKey` before calling `parseIp6`.
+
+
 ### UD180 — `+list-keybinds --docs` never prints a keybind action's help
 - kind:            latent (functional: documentation output silently empty)
 - upstream project: ghostty
