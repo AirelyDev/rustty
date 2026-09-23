@@ -114,7 +114,39 @@ pub fn build_request_path(unique_name: &str, token: usize) -> String {
 /// of a request path; `None` when the trailing component is not hex.
 pub fn parse_request_path_token(request_path: &str) -> Option<usize> {
     let (_, token) = request_path.rsplit_once('/')?;
-    usize::from_str_radix(token, 16).ok()
+    // return std.fmt.parseUnsigned(usize, token, 16) catch return null;
+    parse_unsigned_hex(token.as_bytes())
+}
+
+/// `std.fmt.parseUnsigned(usize, buf, 16)` (Zig 0.16, the reference's toolchain),
+/// with every error mapped to `None`.
+///
+/// CORRECTION (task T-D, S48-F3): this was `usize::from_str_radix(token, 16)`,
+/// which disagrees with Zig on two characters: Rust accepts a leading `'+'`, which
+/// Zig rejects (`parseUnsigned` has no sign handling), and Rust rejects `'_'`
+/// digit separators, which Zig skips anywhere except the first and last byte.
+/// The rules below were MEASURED with Zig 0.16.0 (`std.fmt.parseUnsigned(usize,
+/// in, 16)` over the inputs of `portal_parse_request_path_token_matches_zig`),
+/// not inferred.
+fn parse_unsigned_hex(buf: &[u8]) -> Option<usize> {
+    // `if (buf.len == 0) return error.InvalidCharacter;`
+    let (&first, &last) = (buf.first()?, buf.last()?);
+    // `if (buf[0] == '_' or buf[buf.len - 1] == '_') return error.InvalidCharacter;`
+    if first == b'_' || last == b'_' {
+        return None;
+    }
+    let mut x: usize = 0;
+    for &c in buf {
+        // `if (c == '_') continue;`
+        if c == b'_' {
+            continue;
+        }
+        // `charToDigit(c, 16)` → `error.InvalidCharacter`.
+        let digit = char::from(c).to_digit(16)?;
+        // `math.mul` / `math.add` → `error.Overflow`.
+        x = x.checked_mul(16)?.checked_add(digit as usize)?;
+    }
+    Some(x)
 }
 
 #[cfg(test)]
@@ -194,6 +226,46 @@ mod tests {
         );
         // No `/` at all.
         assert_eq!(parse_request_path_token("75af01a79c6fea34"), None);
+    }
+
+    /// S48-F3: `parseRequestPathToken`'s `std.fmt.parseUnsigned(usize, token, 16)`
+    /// over edge inputs, each expected value MEASURED with Zig 0.16.0 (the
+    /// reference's `minimum_zig_version`) on the same strings: `_` separators are
+    /// skipped except at either end, a sign is never accepted, `0x` is not a
+    /// prefix at an explicit base, and overflow is an error. (64-bit `usize`, the
+    /// only width the GTK apprt builds for.)
+    #[test]
+    fn portal_parse_request_path_token_matches_zig() {
+        let cases: &[(&str, Option<usize>)] = &[
+            ("", None),
+            ("+", None),
+            ("-", None),
+            ("+1", None),
+            ("-1", None),
+            ("_", None),
+            ("_1", None),
+            ("1_", None),
+            ("1_0", Some(0x10)),
+            ("1__0", Some(0x10)),
+            ("a_b_c", Some(0xabc)),
+            ("0x10", None),
+            ("10", Some(0x10)),
+            ("ff", Some(0xff)),
+            ("FF", Some(0xff)),
+            ("fG", None),
+            (" 1", None),
+            ("1 ", None),
+            ("ffffffffffffffff", Some(usize::MAX)),
+            ("10000000000000000", None),
+            ("0000000000000000000042", Some(0x42)),
+            ("1_ffffffffffffffff", None),
+            ("+_1", None),
+            ("\u{e9}", None),
+        ];
+        for &(token, want) in cases {
+            let path = format!("/org/freedesktop/portal/desktop/request/1_42/{token}");
+            assert_eq!(parse_request_path_token(&path), want, "token {token:?}");
+        }
     }
 
     /// The round trip the protocol actually depends on: a path we BUILD must parse

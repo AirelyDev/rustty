@@ -3146,3 +3146,42 @@ style-set work aligned the style item layout), so the port and reference cluster
 Not fixed in this round; recorded for adjudication.
 
 **state**: OPEN (R1 candidate).
+
+## N130 — the GTK apprt decodes title BYTES lossily at every GObject-string boundary, where the reference passes them raw
+
+- **id**: N130. Not in the inventory.
+- **found by**: task T-D (tail wave), closing S57-F3 (WAIVED, pointing here).
+- **severity**: low. **kind**: R1 fidelity gap with a Rust-type constraint; recorded, not fixed.
+- **oracle**: the reference carries titles as `[:0]const u8` and hands the bytes to G_TYPE_STRING
+  properties and GTK setters unconverted: `src/apprt/gtk/class/tab.zig:496-509` (`closureComputedTitle`,
+  the config `title`), and the apprt `set_title` / window-title paths.
+- **rustty**: `String::from_utf8_lossy` at `crates/rustty-apprt/src/gtk/class/tab.rs:362-366`
+  (`computed_title`, config `title`), `class/window.rs:312` (window title from config),
+  `class/surface.rs:1959` (the notification title), `class/application.rs:4772, 4799, 4831` (the
+  `set_title` / prompt-title actions, whose bytes come from the VT stream, OSC 0/2). The S57-F3 audit
+  said "all other title sources are already UTF-8 GTK strings"; the four `application.rs`/`surface.rs`
+  sites show that is not so (the OSC title is raw VT bytes).
+
+What differs, MEASURED where stated. A non-UTF-8 title reaches GTK as U+FFFD in the port and as its raw
+bytes in the reference. What the reference's bytes then do is GTK's business: Pango, which renders a tab
+or window label, logs `Pango-WARNING: Invalid UTF-8 string passed to pango_layout_set_text()` and keeps the
+invalid byte as `0xff` (MEASURED, Pango 1.57.1 on the VM: `caf\xe9!` → `63 61 66 ff 21`), so the user sees a
+replacement glyph in both, drawn differently. Other consumers of the property values (accessibility over
+D-Bus, the window-manager title) were NOT measured.
+
+Why this is not fixed row by row. Carrying non-UTF-8 in these properties needs every Rust reader of them to
+avoid glib-rs's string types: `Value::get::<String>()` panics on non-UTF-8 ("Invalid UTF-8"), and
+`GStr`/`GString` built from a C pointer assume UTF-8. The tab `title` property alone is stored as
+`RefCell<Option<String>>` (`tab.rs:84`, via the `Properties` derive) and read back by `prompt_tab_title`
+(`tab.rs:263`) into the title dialog; the window and surface titles have the same shape. Changing one site
+(S57-F3) while the others stay lossy would make the chain inconsistent, and changing the property storage
+is a cross-file change with crash risk (a missed reader panics on user input). S56-F3 shows the contained
+version of the same fix (a raw `G_TYPE_STRING` `GValue` and a raw reader, `surface.rs`
+`raw_string_value`/`raw_string_bytes`) for a signal with ONE receiver.
+
+**proposed remedy** (NOT implemented): store the title properties as raw bytes behind hand-written
+G_TYPE_STRING pspecs (set/get through `g_value_set_string`/`g_value_get_string`), route every Rust reader
+through `raw_string_bytes`, and pass GTK setters the raw C string, then close this finding site by site with
+a non-UTF-8 test per reader.
+
+**state**: OPEN (R1 candidate; S57-F3 WAIVED to this entry).

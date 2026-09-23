@@ -172,39 +172,132 @@ impl App {
 /// PORTS: `ipc/DBus.zig` `init`'s target switch: `.detect` uses the build-info app
 /// id / object path; `.class` derives the object path from the class name
 /// (`"/" + class`, then `.`→`/` and `-`→`_`).
-fn ipc_bus_target(target: &ipc::Target<'_>) -> Result<(String, String), ipc::Errors> {
-    let (bus_name, object_path) = match target {
+///
+/// Both names are BYTES, as the reference's `[:0]const u8` are, and the validity
+/// checks and the diagnostics see the user's bytes. CORRECTION (task T-D, S59-F2):
+/// the class was `String::from_utf8_lossy`'d first, so an invalid name was printed
+/// with U+FFFD in place of the bytes the user passed to `--class`. `stderr` is the
+/// reference's `stderr_writer` (`DBus.zig:37-39`); production passes the process
+/// stderr.
+fn ipc_bus_target(
+    target: &ipc::Target<'_>,
+    stderr: &mut impl std::io::Write,
+) -> Result<(Vec<u8>, Vec<u8>), ipc::Errors> {
+    let (bus_name, object_path): (Vec<u8>, Vec<u8>) = match target {
         ipc::Target::Detect => (
-            super::build_info::APPLICATION_ID.to_string(),
-            super::build_info::OBJECT_PATH.to_string(),
+            super::build_info::APPLICATION_ID.as_bytes().to_vec(),
+            super::build_info::OBJECT_PATH.as_bytes().to_vec(),
         ),
         ipc::Target::Class(class) => {
-            let class = String::from_utf8_lossy(class).into_owned();
-            let object_path = format!("/{class}").replace('.', "/").replace('-', "_");
-            (class, object_path)
+            // const object_path = try std.fmt.allocPrintSentinel(alloc, "/{s}", .{class}, 0);
+            // std.mem.replaceScalar(u8, object_path, '.', '/');
+            // std.mem.replaceScalar(u8, object_path, '-', '_');
+            let mut object_path = Vec::with_capacity(class.len() + 1);
+            object_path.push(b'/');
+            object_path.extend(class.iter().map(|&b| match b {
+                b'.' => b'/',
+                b'-' => b'_',
+                b => b,
+            }));
+            (class.to_vec(), object_path)
         }
     };
-    if !gio::Application::id_is_valid(&bus_name) {
-        eprintln!("D-Bus bus name is not valid: {bus_name}");
+    // if (gio.Application.idIsValid(bus_name.ptr) == 0) {
+    //     try stderr.print("D-Bus bus name is not valid: {s}\n", .{bus_name});
+    if !c_predicate(&bus_name, gio::ffi::g_application_id_is_valid) {
+        let _ = stderr.write_all(b"D-Bus bus name is not valid: ");
+        let _ = stderr.write_all(&bus_name);
+        let _ = stderr.write_all(b"\n");
+        let _ = stderr.flush();
         return Err(ipc::Errors::IPCFailed);
     }
-    if !glib::Variant::is_object_path(&object_path) {
-        eprintln!("D-Bus object path is not valid: {object_path}");
+    // if (glib.Variant.isObjectPath(object_path.ptr) == 0) {
+    //     try stderr.print("D-Bus object path is not valid: {s}\n", .{object_path});
+    if !c_predicate(&object_path, glib::ffi::g_variant_is_object_path) {
+        let _ = stderr.write_all(b"D-Bus object path is not valid: ");
+        let _ = stderr.write_all(&object_path);
+        let _ = stderr.write_all(b"\n");
+        let _ = stderr.flush();
         return Err(ipc::Errors::IPCFailed);
     }
     Ok((bus_name, object_path))
 }
 
+/// Call a GLib `gboolean f(const gchar *)` predicate on `bytes` the way the
+/// reference passes `slice.ptr`: C reads the bytes up to the first NUL.
+fn c_predicate(
+    bytes: &[u8],
+    f: unsafe extern "C" fn(*const std::ffi::c_char) -> glib::ffi::gboolean,
+) -> bool {
+    let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+    let c = std::ffi::CString::new(&bytes[..end]).expect("no interior NUL before `end`");
+    // SAFETY: `c` is a valid NUL-terminated string that outlives the call; both
+    // predicates only read it.
+    unsafe { f(c.as_ptr()) != glib::ffi::GFALSE }
+}
+
+/// Build an `as` of CLI arguments for `new-window-command` / `new-tab`.
+///
+/// PORTS: `ipc/new_window.zig:33-56` and `ipc/new_tab.zig:44-61`: each argument's
+/// raw bytes become an `"s"` via `glib.Variant.newFromBytes(s, bytes, trusted =
+/// true)`. For UTF-8 arguments the port builds the byte-identical `s` values.
+///
+/// PORT NOTE: reference defect (R13), `UPSTREAM-DEFECTS.md` UD170. `newFromBytes`
+/// with `trusted = true` does not validate, so a non-UTF-8 argument (a Latin-1
+/// file name after `+new-window -e`) builds an `s` that is not UTF-8, and GLib then
+/// ABORTS the process when it serializes the D-Bus message:
+/// `GLib-GIO:ERROR:../gio/gdbusmessage.c:2691:append_value_to_blob: assertion
+/// failed: (g_utf8_validate (v, -1, &end) && (end == v + len))`, SIGABRT —
+/// MEASURED on GLib 2.88.2 (Fedora, the VM) by a C probe that builds the payload
+/// exactly as `newWindow` does and calls `g_dbus_message_to_blob`. The port does
+/// not send such an argument. It fails the IPC with `IPCFailed` before the call,
+/// which is the reference's own failure return for this function
+/// (`apprt.ipc.Errors.IPCFailed`); the CLI caller documents that the apprt has
+/// already "printed a more specific error message" for it (`cli/new_window.zig:
+/// 249-252`), so one line naming the argument's bytes is printed. That line is
+/// NEW text (the reference has none for this case). CORRECTION: the port used to
+/// `String::from_utf8_lossy` each argument, which forwarded U+FFFD-mangled
+/// arguments to the running instance and reported success (S59-F1).
+fn ipc_arguments_variant(
+    arguments: &[&[u8]],
+    stderr: &mut impl std::io::Write,
+) -> Result<glib::Variant, ipc::Errors> {
+    use glib::prelude::*;
+    let mut strings: Vec<glib::Variant> = Vec::with_capacity(arguments.len());
+    for argument in arguments {
+        let Ok(s) = std::str::from_utf8(argument) else {
+            let _ = stderr.write_all(b"D-Bus IPC argument is not valid UTF-8: ");
+            let _ = stderr.write_all(argument);
+            let _ = stderr.write_all(b"\n");
+            let _ = stderr.flush();
+            return Err(ipc::Errors::IPCFailed);
+        };
+        strings.push(s.to_variant());
+    }
+    Ok(glib::Variant::array_from_iter_with_type(
+        glib::VariantTy::STRING,
+        strings,
+    ))
+}
+
 /// Send an `org.gtk.Actions.Activate` D-Bus call to the running instance.
 /// PORTS: `ipc/DBus.zig` `send` — builds the `(sava{sv})` payload (action name,
 /// an `av` of parameters, empty `a{sv}` platform data) and `callSync`s it.
+///
+/// `param` builds the action's parameter. It runs AFTER the target checks and the
+/// session-bus connection, where the reference's `newWindow`/`newTab` build their
+/// parameter (after `DBus.init`), so the diagnostics come in the reference's order.
 fn ipc_send(
     target: &ipc::Target<'_>,
     action: &str,
-    param: Option<glib::Variant>,
+    param: impl FnOnce(&mut std::io::Stderr) -> Result<Option<glib::Variant>, ipc::Errors>,
 ) -> Result<bool, ipc::Errors> {
     use gio::prelude::*;
-    let (bus_name, object_path) = ipc_bus_target(target)?;
+    let mut stderr = std::io::stderr();
+    let (bus_name, object_path) = ipc_bus_target(target, &mut stderr)?;
+    // Both passed the GLib validity checks above, which accept ASCII only.
+    let bus_name = String::from_utf8(bus_name).expect("a valid bus name is ASCII");
+    let object_path = String::from_utf8(object_path).expect("a valid object path is ASCII");
 
     let conn = match gio::bus_get_sync(gio::BusType::Session, gio::Cancellable::NONE) {
         Ok(c) => c,
@@ -213,6 +306,8 @@ fn ipc_send(
             return Err(ipc::Errors::IPCFailed);
         }
     };
+
+    let param = param(&mut stderr)?;
 
     // parameters: `av`. Each ipc file builds its own parameter variant
     // (`DBus.zig` `addParameter`): `new-window-command` an `as` of CLI
@@ -246,7 +341,6 @@ fn ipc_send(
 /// PORTS: `ipc/new_window.zig` `newWindow` — the `new-window` (or
 /// `new-window-command` when CLI args are present) D-Bus IPC.
 fn ipc_new_window(target: ipc::Target<'_>, value: ipc::NewWindow<'_>) -> Result<bool, ipc::Errors> {
-    use glib::prelude::*;
     let action = if value.arguments.is_none() {
         "new-window"
     } else {
@@ -254,14 +348,12 @@ fn ipc_new_window(target: ipc::Target<'_>, value: ipc::NewWindow<'_>) -> Result<
     };
     // The `as` array of CLI arguments (`ipc/new_window.zig:33-59`); no
     // parameter at all for the bare `new-window` action.
-    let param = value.arguments.map(|args| {
-        let arg_strings: Vec<String> = args
-            .iter()
-            .map(|a| String::from_utf8_lossy(a).into_owned())
-            .collect();
-        arg_strings.to_variant()
-    });
-    ipc_send(&target, action, param)
+    ipc_send(&target, action, |stderr| {
+        value
+            .arguments
+            .map(|args| ipc_arguments_variant(args, stderr))
+            .transpose()
+    })
 }
 
 // Use a D-Bus method call to open a new tab on GTK.
@@ -282,6 +374,19 @@ fn ipc_new_window(target: ipc::Target<'_>, value: ipc::NewWindow<'_>) -> Result<
 /// is always present: a `(tas)` tuple of the target surface ID and the CLI
 /// argument array (empty when no arguments were specified).
 fn ipc_new_tab(target: ipc::Target<'_>, value: ipc::NewTab<'_>) -> Result<bool, ipc::Errors> {
+    ipc_send(&target, "new-tab", |stderr| {
+        ipc_new_tab_param(value, stderr).map(Some)
+    })?;
+
+    // return true;
+    Ok(true)
+}
+
+/// The `(tas)` parameter of `new-tab` (`ipc/new_tab.zig:31-67`).
+fn ipc_new_tab_param(
+    value: ipc::NewTab<'_>,
+    stderr: &mut impl std::io::Write,
+) -> Result<glib::Variant, ipc::Errors> {
     use glib::prelude::*;
     // {
     //     // Add the target surface ID to the parameter.
@@ -294,25 +399,19 @@ fn ipc_new_tab(target: ipc::Target<'_>, value: ipc::NewTab<'_>) -> Result<bool, 
     //     // main Rustty instance and interpreted as CLI arguments.
     //     ...
     // }
-    let arg_strings: Vec<String> = value
-        .arguments
-        .unwrap_or(&[])
-        .iter()
-        .map(|a| String::from_utf8_lossy(a).into_owned())
-        .collect();
-    // `(tas)`: the VariantBuilder init/addValue/end sequence collapses to the
-    // tuple `ToVariant` impl (u64 -> `t`, Vec<String> -> `as`).
-    let param = (value.surface_id, arg_strings).to_variant();
-    ipc_send(&target, "new-tab", Some(param))?;
-
-    // return true;
-    Ok(true)
+    let args = ipc_arguments_variant(value.arguments.unwrap_or(&[]), stderr)?;
+    // `(tas)`: the VariantBuilder init/addValue/end sequence collapses to a
+    // two-element tuple (u64 -> `t`, the `as` above).
+    Ok(glib::Variant::tuple_from_iter([
+        value.surface_id.to_variant(),
+        args,
+    ]))
 }
 
 /// PORTS: `ipc/toggle_quick_terminal.zig` `toggleQuickTerminal` — the
 /// `toggle-quick-terminal` D-Bus IPC.
 fn ipc_toggle_quick_terminal(target: ipc::Target<'_>) -> Result<bool, ipc::Errors> {
-    ipc_send(&target, "toggle-quick-terminal", None)
+    ipc_send(&target, "toggle-quick-terminal", |_| Ok(None))
 }
 
 impl ApprtApp for App {
@@ -403,6 +502,117 @@ impl ApprtApp for App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The reference's own construction of an `as` of CLI arguments
+    /// (`ipc/new_window.zig:45-54`, `ipc/new_tab.zig:44-61`): one
+    /// `glib.Variant.newFromBytes("s", Bytes(arg ++ NUL), trusted = true)` per
+    /// argument, added to an `as` builder. Built through the same C calls so the
+    /// port's variant can be compared against it byte for byte.
+    fn reference_as(arguments: &[&[u8]]) -> glib::Variant {
+        use glib::translate::{FromGlibPtrNone, ToGlibPtr};
+        unsafe {
+            let as_ty = glib::VariantTy::new("as").unwrap();
+            let builder = glib::ffi::g_variant_builder_new(as_ty.to_glib_none().0);
+            for argument in arguments {
+                let mut with_nul = argument.to_vec();
+                with_nul.push(0);
+                let bytes = glib::ffi::g_bytes_new(with_nul.as_ptr().cast(), with_nul.len());
+                let s = glib::ffi::g_variant_new_from_bytes(
+                    glib::VariantTy::STRING.to_glib_none().0,
+                    bytes,
+                    glib::ffi::GTRUE,
+                );
+                glib::ffi::g_bytes_unref(bytes);
+                glib::ffi::g_variant_builder_add_value(builder, s);
+            }
+            let v = glib::ffi::g_variant_builder_end(builder);
+            glib::ffi::g_variant_builder_unref(builder);
+            glib::Variant::from_glib_none(v)
+        }
+    }
+
+    /// S59-F1: for UTF-8 arguments the port's `as` is the reference's, byte for
+    /// byte (type, serialized data, and `g_variant_equal`), including non-ASCII
+    /// UTF-8 and an empty argument. Display-free, no D-Bus.
+    #[test]
+    fn ipc_arguments_variant_matches_the_reference_bytes() {
+        let args: &[&[u8]] = &[b"-e", b"echo", "h\u{e9}llo".as_bytes(), b""];
+        let mut stderr = Vec::new();
+        let Ok(port) = ipc_arguments_variant(args, &mut stderr) else {
+            panic!("UTF-8 arguments must build");
+        };
+        let reference = reference_as(args);
+        assert_eq!(port.type_().as_str(), "as");
+        assert_eq!(port, reference);
+        assert_eq!(&*port.data_as_bytes(), &*reference.data_as_bytes());
+        assert!(stderr.is_empty());
+
+        // `new-tab`'s `(tas)`, with and without arguments.
+        for arguments in [Some(args), None] {
+            let Ok(param) = ipc_new_tab_param(
+                ipc::NewTab {
+                    surface_id: 42,
+                    arguments,
+                },
+                &mut stderr,
+            ) else {
+                panic!("UTF-8 arguments must build");
+            };
+            assert_eq!(param.type_().as_str(), "(tas)");
+            assert_eq!(param.child_value(0).get::<u64>(), Some(42));
+            assert_eq!(param.child_value(1), reference_as(arguments.unwrap_or(&[])));
+        }
+    }
+
+    /// S59-F1 / UD170 (R13): a non-UTF-8 argument fails the IPC with `IPCFailed`
+    /// and a diagnostic carrying the argument's own bytes, instead of being
+    /// U+FFFD-mangled and sent (the port's old behaviour) or reaching GLib's
+    /// `append_value_to_blob` UTF-8 assertion, which aborts (the reference's,
+    /// measured on GLib 2.88.2). Both callers (`new-window-command`, `new-tab`) go
+    /// through this function.
+    #[test]
+    fn ipc_arguments_variant_rejects_non_utf8() {
+        let args: &[&[u8]] = &[b"-e", b"caf\xe9"];
+        let mut stderr = Vec::new();
+        let result = ipc_arguments_variant(args, &mut stderr);
+        assert!(
+            matches!(result, Err(ipc::Errors::IPCFailed)),
+            "a non-UTF-8 argument must fail the IPC"
+        );
+        assert_eq!(stderr, b"D-Bus IPC argument is not valid UTF-8: caf\xe9\n");
+
+        let mut stderr = Vec::new();
+        let result = ipc_new_tab_param(
+            ipc::NewTab {
+                surface_id: 0,
+                arguments: Some(args),
+            },
+            &mut stderr,
+        );
+        assert!(matches!(result, Err(ipc::Errors::IPCFailed)));
+        assert_eq!(stderr, b"D-Bus IPC argument is not valid UTF-8: caf\xe9\n");
+    }
+
+    /// S59-F2: `--class` is validated and printed as the user's BYTES
+    /// (`ipc/DBus.zig:42-66`). An invalid class names its raw bytes in the
+    /// diagnostic; a valid one yields the reference's derived object path.
+    #[test]
+    fn ipc_bus_target_uses_the_class_bytes() {
+        let mut stderr = Vec::new();
+        let result = ipc_bus_target(&ipc::Target::Class(b"caf\xe9.app"), &mut stderr);
+        assert!(matches!(result, Err(ipc::Errors::IPCFailed)));
+        assert_eq!(stderr, b"D-Bus bus name is not valid: caf\xe9.app\n");
+
+        let mut stderr = Vec::new();
+        let Ok((bus_name, object_path)) =
+            ipc_bus_target(&ipc::Target::Class(b"com.example.my-app"), &mut stderr)
+        else {
+            panic!("a valid class must resolve");
+        };
+        assert_eq!(bus_name, b"com.example.my-app");
+        assert_eq!(object_path, b"/com/example/my_app");
+        assert!(stderr.is_empty());
+    }
 
     /// The `gtk::App` shim's API surface exists with the intended signatures.
     /// Non-display: a `GhosttyApplication` is an `adw::Application` subclass whose
