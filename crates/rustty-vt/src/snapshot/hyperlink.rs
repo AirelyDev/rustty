@@ -489,62 +489,172 @@ mod tests {
     // hyperlink, allocates its `u32` ID and URI lengths before comparing them
     // with the bytes left in the record. `decodeCursorHyperlink` then swallows
     // the resulting out-of-memory as "no cursor hyperlink", so the misreport
-    // is silent. Both lengths are now bounded by the record's own payload.
+    // is silent. All three lengths (the implicit URI, the explicit ID and the
+    // explicit URI) are now bounded by the record's own payload.
+    //
+    // Every case runs on BOTH routes `record::Reader::payload_remaining`
+    // serves: borrowed (the whole record already buffered, as with
+    // `decoder_new_buf`) and streaming (a 7-byte source buffer, as with a
+    // `decoder_new` callback), and always with a second record behind the
+    // first, so a bound taken from the whole source buffer rather than from
+    // the record is caught.
     #[test]
     fn decode_rejects_a_string_length_the_record_cannot_contain() {
         use crate::snapshot::record;
         use crate::snapshot::tw;
+        use rustty_util::tripwire::ResetMode;
 
-        /// One framed record whose payload is a single implicit hyperlink.
-        fn framed(uri_len: u32, uri: &[u8]) -> Vec<u8> {
+        /// One framed record carrying `payload`.
+        fn framed(payload: &[u8]) -> Vec<u8> {
             let mut destination = io::AllocatingWriter::new();
             {
                 let mut stream = record::Writer::init(&mut destination);
-                {
-                    let payload = stream.begin(record::Tag::Screen);
-                    payload.write_byte(Kind::Implicit as u8).unwrap();
-                    io::write_int::<u32>(payload, 7).unwrap();
-                    io::write_int::<u32>(payload, uri_len).unwrap();
-                    payload.write_all(uri).unwrap();
-                }
+                stream
+                    .begin(record::Tag::Screen)
+                    .write_all(payload)
+                    .unwrap();
                 stream.finish().unwrap();
                 stream.deinit();
             }
             destination.written().to_vec()
         }
 
-        // A 4 GiB URI declared by a nine-byte payload.
-        //
-        // The error alone is NOT enough to prove the fix: the unbounded code
-        // also ends at `EndOfStream`, after reserving and zero-filling 4 GiB
-        // (measured: ~15s, against ~0.01s here). The allocation tripwire is
-        // therefore armed to fire on the URI allocation, and the test asserts
-        // it was NEVER reached — the positive statement that the length was
-        // rejected before anything was allocated or zeroed.
-        let lying = framed(u32::MAX, b"");
-        let mut lying_source = io::FixedReader::new(&lying);
-        let mut lying_record = record::Reader::init(&mut lying_source).unwrap();
-        tw::error_always(tw::SnapshotFp::Alloc);
-        assert_eq!(
-            Err(DecodeError::EndOfStream),
-            decode(lying_record.payload_reader()).map(|_| ()),
-        );
-        assert!(
-            tw::end(rustty_util::tripwire::ResetMode::Reset).is_err(),
-            "the URI allocation was reached: the declared length was not rejected first",
-        );
-
-        // POSITIVE: a truthful record still decodes.
-        let honest = framed(3, b"abc");
-        let mut honest_source = io::FixedReader::new(&honest);
-        let mut honest_record = record::Reader::init(&mut honest_source).unwrap();
-        let value = decode(honest_record.payload_reader()).unwrap();
-        // `HyperlinkId` implements neither PartialEq nor Debug.
-        match value.id {
-            terminal_hyperlink::HyperlinkId::Implicit(id) => assert_eq!(7u32, id),
-            terminal_hyperlink::HyperlinkId::Explicit(_) => panic!("expected an implicit id"),
+        /// An implicit hyperlink payload whose URI length may be a lie.
+        fn implicit(uri_len: u32, uri: &[u8]) -> Vec<u8> {
+            let mut payload = vec![Kind::Implicit as u8];
+            payload.extend_from_slice(&7u32.to_le_bytes());
+            payload.extend_from_slice(&uri_len.to_le_bytes());
+            payload.extend_from_slice(uri);
+            payload
         }
-        assert_eq!(b"abc", value.uri.as_slice());
+
+        /// An explicit hyperlink payload whose ID and URI lengths may be lies.
+        fn explicit(id_len: u32, id: &[u8], uri_len: u32, uri: &[u8]) -> Vec<u8> {
+            let mut payload = vec![Kind::Explicit as u8];
+            payload.extend_from_slice(&id_len.to_le_bytes());
+            payload.extend_from_slice(id);
+            payload.extend_from_slice(&uri_len.to_le_bytes());
+            payload.extend_from_slice(uri);
+            payload
+        }
+
+        /// `payload` framed, followed by a complete second record, so the
+        /// source holds more bytes than the first record's payload.
+        fn source_bytes(payload: &[u8]) -> Vec<u8> {
+            let mut bytes = framed(payload);
+            bytes.extend_from_slice(&framed(&implicit(4, b"next")));
+            bytes
+        }
+
+        /// Decode the first record, borrowed or streaming, and report how many
+        /// times the allocation fail point was reached.
+        fn run(
+            bytes: &[u8],
+            streaming: bool,
+        ) -> (Result<terminal_hyperlink::Hyperlink, DecodeError>, usize) {
+            let mut fixed = io::FixedReader::new(bytes);
+            let mut buffer = [0u8; 7];
+            let mut limited;
+            let source: &mut dyn io::Reader = if streaming {
+                limited = io::LimitedReader::new(&mut fixed, io::Limit::Unlimited, &mut buffer);
+                &mut limited
+            } else {
+                &mut fixed
+            };
+            let mut record = record::Reader::init(source).unwrap();
+            let _ = tw::take_reached();
+            let result = decode(record.payload_reader());
+            (result, tw::take_reached())
+        }
+
+        // Honest strings longer than the 7-byte streaming buffer, so their
+        // lengths are compared while payload bytes are already buffered.
+        let long = [b'u'; 300];
+
+        // Each lie with the number of allocations the decode performs before
+        // the lying string's. "One byte longer" is the boundary: the length
+        // is exactly one more than the bytes the record still holds after it.
+        let lies: [(&str, Vec<u8>, usize); 6] = [
+            ("a 4 GiB implicit URI", implicit(u32::MAX, b"abc"), 0),
+            (
+                "an implicit URI one byte longer than the record",
+                implicit(4, b"abc"),
+                0,
+            ),
+            (
+                "a 4 GiB explicit ID",
+                explicit(u32::MAX, b"abc", 3, b"abc"),
+                0,
+            ),
+            (
+                "an explicit ID one byte longer than the record",
+                // What follows the ID length: the ID, the URI length, the URI.
+                explicit(3 + 4 + 3 + 1, b"abc", 3, b"abc"),
+                0,
+            ),
+            (
+                "a 4 GiB explicit URI",
+                explicit(3, b"abc", u32::MAX, b"abc"),
+                1,
+            ),
+            (
+                "an explicit URI one byte longer than the record",
+                explicit(3, b"abc", 4, b"abc"),
+                1,
+            ),
+        ];
+
+        for streaming in [false, true] {
+            let route = if streaming { "streaming" } else { "borrowed" };
+
+            for (what, payload, before) in &lies {
+                // The error alone is NOT enough to prove the fix: the
+                // unbounded code also ends at `EndOfStream`, after reserving
+                // and zero-filling up to 4 GiB (measured: ~15s, against ~0.01s
+                // here). So the allocation tripwire is armed to fire on the
+                // lying string's allocation, and the test asserts it was
+                // never TRIPPED yet was REACHED exactly `before` times. For
+                // the lies that come first (`before == 0`) the honest decodes
+                // below show the same framing does reach the allocation.
+                tw::error_after(tw::SnapshotFp::Alloc, *before);
+                let (result, reached) = run(&source_bytes(payload), streaming);
+                assert_eq!(
+                    Err(DecodeError::EndOfStream),
+                    result.map(|_| ()),
+                    "{route}: {what}",
+                );
+                assert!(
+                    tw::end(ResetMode::Reset).is_err(),
+                    "{route}: {what}: the string allocation was reached; \
+                     the declared length was not rejected first",
+                );
+                assert_eq!(*before, reached, "{route}: {what}: allocations reached");
+            }
+
+            // POSITIVE: truthful records decode, with every allocation
+            // performed. Each URI's length equals the bytes left in its
+            // record, so the bound is not off by one.
+            let (value, reached) = run(&source_bytes(&implicit(300, &long)), streaming);
+            let value = value.unwrap_or_else(|err| panic!("{route}: honest implicit: {err:?}"));
+            assert_eq!(1, reached, "{route}: honest implicit: allocations reached");
+            // `HyperlinkId` implements neither PartialEq nor Debug.
+            match value.id {
+                terminal_hyperlink::HyperlinkId::Implicit(id) => assert_eq!(7u32, id),
+                terminal_hyperlink::HyperlinkId::Explicit(_) => panic!("expected an implicit id"),
+            }
+            assert_eq!(long.as_slice(), value.uri.as_slice(), "{route}");
+
+            let (value, reached) = run(&source_bytes(&explicit(300, &long, 3, b"abc")), streaming);
+            let value = value.unwrap_or_else(|err| panic!("{route}: honest explicit: {err:?}"));
+            assert_eq!(2, reached, "{route}: honest explicit: allocations reached");
+            match value.id {
+                terminal_hyperlink::HyperlinkId::Explicit(id) => {
+                    assert_eq!(long.as_slice(), id.as_slice(), "{route}")
+                }
+                terminal_hyperlink::HyperlinkId::Implicit(_) => panic!("expected an explicit id"),
+            }
+            assert_eq!(b"abc", value.uri.as_slice(), "{route}");
+        }
     }
 
     // test "golden implicit encoding"

@@ -1438,6 +1438,129 @@ mod tests {
         });
     }
 
+    // rustty-only (R13, UPSTREAM-DEFECTS.md UD66): the TERMINAL string-length
+    // bound on the `decoder_new` callback route. There the record payload
+    // streams through the decoder's hashing buffer, so the bytes the record
+    // can still supply are what the payload limit permits PLUS what is
+    // already buffered. A bound that forgot the buffered part rejects an
+    // honest snapshot whenever a string's first bytes arrived together with
+    // its length, which depends on how the callback happens to chunk its
+    // reads. So the same honest snapshot (a 300-byte pwd and a title) is
+    // decoded with the callback handing over 1 to 8 bytes at a time, as a
+    // pipe or socket reader might, and every chunking must restore it.
+    #[test]
+    fn callback_decoder_restores_strings_whatever_the_read_size() {
+        use rustty_lib::String as LibString;
+
+        struct ReadContext<'a> {
+            source: &'a [u8],
+            offset: usize,
+            chunk: usize,
+        }
+        extern "C" fn read(
+            userdata: *mut c_void,
+            destination: *mut u8,
+            capacity: usize,
+            out_read: *mut usize,
+        ) -> bool {
+            let ctx = unsafe { &mut *(userdata as *mut ReadContext<'_>) };
+            let remaining = &ctx.source[ctx.offset..];
+            let len = remaining.len().min(capacity).min(ctx.chunk);
+            unsafe {
+                std::ptr::copy_nonoverlapping(remaining.as_ptr(), destination, len);
+                *out_read = len;
+            }
+            ctx.offset += len;
+            true
+        }
+
+        /// Read one string datum of `t` as an owned byte vector.
+        fn string_of(t: terminal_c::Terminal, key: TerminalData) -> Vec<u8> {
+            let mut value = LibString {
+                ptr: std::ptr::null(),
+                len: 0,
+            };
+            assert_eq!(Result::Success, unsafe {
+                terminal_c::get(t, key, &mut value as *mut _ as *mut c_void)
+            });
+            if value.len == 0 {
+                return Vec::new();
+            }
+            unsafe { core::slice::from_raw_parts(value.ptr, value.len) }.to_vec()
+        }
+
+        with_test_allocator(|alloc| {
+            let (new_result, source) = new_t(alloc, 20, 4);
+            assert_eq!(Result::Success, new_result);
+            let pwd = [b'p'; 300];
+            let title = b"snapshot title";
+            for (option, bytes) in [
+                (Option_::Pwd, pwd.as_slice()),
+                (Option_::Title, title.as_slice()),
+            ] {
+                let value = LibString {
+                    ptr: bytes.as_ptr(),
+                    len: bytes.len(),
+                };
+                assert_eq!(Result::Success, unsafe {
+                    terminal_c::set(source, option, &value as *const _ as *const c_void)
+                });
+            }
+
+            let mut encoded_ptr: *mut u8 = std::ptr::null_mut();
+            let mut encoded_len: usize = 0;
+            assert_eq!(Result::Success, unsafe {
+                encode_alloc(source, Some(alloc), &mut encoded_ptr, &mut encoded_len)
+            });
+            // SAFETY: the allocation returned above; copied out and freed here.
+            let bytes: Vec<u8> =
+                unsafe { core::slice::from_raw_parts(encoded_ptr, encoded_len) }.to_vec();
+            free_alloc(alloc, encoded_ptr, encoded_len);
+
+            for chunk in 1..=8 {
+                let mut read_context = ReadContext {
+                    source: &bytes,
+                    offset: 0,
+                    chunk,
+                };
+                let mut decoder: Decoder = std::ptr::null_mut();
+                assert_eq!(Result::Success, unsafe {
+                    decoder_new(
+                        Some(alloc),
+                        &mut decoder,
+                        io_c::Reader {
+                            read: Some(read),
+                            userdata: &mut read_context as *mut ReadContext<'_> as *mut c_void,
+                        },
+                    )
+                });
+                let mut restored: terminal_c::Terminal = std::ptr::null_mut();
+                assert_eq!(
+                    Result::Success,
+                    unsafe { decoder_decode(decoder, &mut restored) },
+                    "{chunk}-byte reads",
+                );
+                assert_eq!(bytes.len(), read_context.offset, "{chunk}-byte reads");
+                assert_eq!(
+                    pwd.as_slice(),
+                    string_of(restored, TerminalData::Pwd),
+                    "{chunk}-byte reads",
+                );
+                assert_eq!(
+                    title.as_slice(),
+                    string_of(restored, TerminalData::Title),
+                    "{chunk}-byte reads",
+                );
+                unsafe {
+                    terminal_c::free(restored);
+                    decoder_free(decoder);
+                }
+            }
+
+            unsafe { terminal_c::free(source) };
+        });
+    }
+
     // test "snapshot C API full round trip restores continuation"
     #[test]
     fn snapshot_c_api_full_round_trip_restores_continuation() {

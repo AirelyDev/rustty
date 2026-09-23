@@ -1911,12 +1911,20 @@ mod tests {
     // sub-kilobyte record can request 4 GiB and report out-of-memory instead
     // of malformed input; the port additionally zero-filled that length.
     // Both are now bounded by the bytes left in the record.
+    //
+    // Every case runs on BOTH routes `record::Reader::payload_remaining`
+    // serves: borrowed (the whole record already buffered, as with
+    // `decoder_new_buf`) and streaming (a 7-byte source buffer, as with a
+    // `decoder_new` callback), and always with a second record behind the
+    // first, so a bound taken from the whole source buffer rather than from
+    // the record is caught.
     #[test]
     fn terminal_decode_rejects_a_string_length_the_record_cannot_contain() {
         use crate::snapshot::tw;
+        use rustty_util::tripwire::ResetMode;
 
-        /// One framed TERMINAL record whose pwd length may be a lie.
-        fn framed(pwd_len: u32, pwd: &[u8], title: &[u8]) -> Vec<u8> {
+        /// One framed TERMINAL record whose string lengths may be lies.
+        fn framed(pwd_len: u32, pwd: &[u8], title_len: u32, title: &[u8]) -> Vec<u8> {
             let header = test_header();
             let mut destination = io::AllocatingWriter::new();
             {
@@ -1930,7 +1938,7 @@ mod tests {
                     payload.splat_byte_all(0, 32).unwrap(); // override mask
                     io::write_int::<u32>(payload, pwd_len).unwrap();
                     payload.write_all(pwd).unwrap();
-                    io::write_int::<u32>(payload, title.len() as u32).unwrap();
+                    io::write_int::<u32>(payload, title_len).unwrap();
                     payload.write_all(title).unwrap();
                 }
                 stream.finish().unwrap();
@@ -1939,36 +1947,120 @@ mod tests {
             destination.written().to_vec()
         }
 
-        // A 4 GiB pwd inside a ~1 KiB record is malformed input.
-        //
-        // The error alone is NOT enough to prove the fix: the unbounded code
-        // also ends at `EndOfStream`, after reserving and zero-filling 4 GiB
-        // (measured: ~15s, against ~0.01s here). So the allocation tripwire is
-        // armed to fire on the pwd allocation — the first reach is the
-        // tab-stop allocation, the second would be the pwd — and the test
-        // asserts it was NEVER reached. That is the positive statement that
-        // the length was rejected before anything was allocated or zeroed.
-        let lying = framed(u32::MAX, b"", b"");
-        assert!(lying.len() < 2048);
-        let mut lying_source = io::FixedReader::new(&lying);
-        tw::error_after(tw::SnapshotFp::Alloc, 1);
-        assert_eq!(
-            Err(DecodeError::EndOfStream),
-            decode(&mut lying_source, Allocator).map(|mut t| t.deinit(Allocator)),
-        );
-        assert!(
-            tw::end(rustty_util::tripwire::ResetMode::Reset).is_err(),
-            "the pwd allocation was reached: the declared length was not rejected first",
-        );
+        /// `first` followed by a complete second record, so the source holds
+        /// more bytes than the first record's payload.
+        fn with_trailing_record(first: Vec<u8>) -> Vec<u8> {
+            let mut bytes = first;
+            bytes.extend_from_slice(&framed(4, b"next", 0, b""));
+            bytes
+        }
 
-        // POSITIVE: a truthful record still decodes, strings intact, so the
-        // bound rejects only lengths the record cannot contain.
-        let honest = framed(3, b"abc", b"ti");
-        let mut honest_source = io::FixedReader::new(&honest);
-        let mut decoded = decode(&mut honest_source, Allocator).unwrap();
-        // `Terminal.pwd` keeps the NUL sentinel; `get_pwd` strips it.
-        assert_eq!(Some(b"abc".as_slice()), decoded.get_pwd());
-        decoded.deinit(Allocator);
+        /// Decode the first record, borrowed or streaming, and report how many
+        /// times the allocation fail point was reached.
+        fn run(bytes: &[u8], streaming: bool) -> (Result<(), DecodeError>, usize) {
+            let mut fixed = io::FixedReader::new(bytes);
+            let mut buffer = [0u8; 7];
+            let mut limited;
+            let source: &mut dyn io::Reader = if streaming {
+                limited = io::LimitedReader::new(&mut fixed, io::Limit::Unlimited, &mut buffer);
+                &mut limited
+            } else {
+                &mut fixed
+            };
+            let _ = tw::take_reached();
+            let result = decode(source, Allocator).map(|mut t| t.deinit(Allocator));
+            (result, tw::take_reached())
+        }
+
+        // The honest record's strings: a 300-byte pwd (more than the 7-byte
+        // streaming buffer and the 256-byte hashing buffer hold, so its
+        // length is compared while payload bytes are already buffered) and a
+        // title whose length is EXACTLY the bytes left in the record.
+        let pwd = [b'p'; 300];
+        let title = b"ti";
+        // After a pwd length is read, the record still holds the pwd, the
+        // title length and the title.
+        let after_pwd_len = (pwd.len() + 4 + title.len()) as u32;
+        let after_title_len = title.len() as u32;
+
+        // Each lie with the number of allocations the decode performs before
+        // the lying string's (the tab stops, then the pwd).
+        let lies: [(&str, Vec<u8>, usize); 4] = [
+            (
+                "a 4 GiB pwd",
+                framed(u32::MAX, &pwd, after_title_len, title),
+                1,
+            ),
+            (
+                "a pwd one byte longer than the record",
+                framed(after_pwd_len + 1, &pwd, after_title_len, title),
+                1,
+            ),
+            (
+                "a 4 GiB title",
+                framed(pwd.len() as u32, &pwd, u32::MAX, title),
+                2,
+            ),
+            (
+                "a title one byte longer than the record",
+                framed(pwd.len() as u32, &pwd, after_title_len + 1, title),
+                2,
+            ),
+        ];
+
+        for streaming in [false, true] {
+            let route = if streaming { "streaming" } else { "borrowed" };
+
+            for (what, record, before) in &lies {
+                let bytes = with_trailing_record(record.clone());
+
+                // The error alone is NOT enough to prove the fix: the
+                // unbounded code also ends at `EndOfStream`, after reserving
+                // and zero-filling up to 4 GiB (measured: ~15s, against ~0.01s
+                // here). So the allocation tripwire is armed to fire on the
+                // lying string's allocation, and the test asserts it was
+                // never TRIPPED yet was REACHED exactly `before` times: the
+                // decode got as far as that string, and rejected its length
+                // before anything was allocated or zeroed.
+                tw::error_after(tw::SnapshotFp::Alloc, *before);
+                let (result, reached) = run(&bytes, streaming);
+                assert_eq!(Err(DecodeError::EndOfStream), result, "{route}: {what}");
+                assert!(
+                    tw::end(ResetMode::Reset).is_err(),
+                    "{route}: {what}: the string allocation was reached; \
+                     the declared length was not rejected first",
+                );
+                assert_eq!(*before, reached, "{route}: {what}: allocations reached");
+            }
+
+            // POSITIVE: a truthful record decodes, strings intact, with every
+            // allocation performed. The title's length equals the
+            // bytes left in the record, so the bound is not off by one, and
+            // on the streaming route the pwd's bytes already buffered count
+            // towards what the record can still supply.
+            let honest =
+                with_trailing_record(framed(pwd.len() as u32, &pwd, after_title_len, title));
+            let mut fixed = io::FixedReader::new(&honest);
+            let mut buffer = [0u8; 7];
+            let mut limited;
+            let source: &mut dyn io::Reader = if streaming {
+                limited = io::LimitedReader::new(&mut fixed, io::Limit::Unlimited, &mut buffer);
+                &mut limited
+            } else {
+                &mut fixed
+            };
+            let _ = tw::take_reached();
+            let mut decoded = decode(source, Allocator)
+                .unwrap_or_else(|err| panic!("{route}: the honest record failed: {err:?}"));
+            // Seven: the payload's three (tab stops, pwd, title), then
+            // `Terminal.init`, the alternate screen, and the native pwd and
+            // title strings.
+            assert_eq!(7, tw::take_reached(), "{route}: allocations reached");
+            // `Terminal.pwd` keeps the NUL sentinel; `get_pwd` strips it.
+            assert_eq!(Some(pwd.as_slice()), decoded.get_pwd(), "{route}");
+            assert_eq!(Some(title.as_slice()), decoded.get_title(), "{route}");
+            decoded.deinit(Allocator);
+        }
     }
 
     // test "TERMINAL payload rejects noncanonical state"
