@@ -8080,161 +8080,26 @@ where
             self.showMouse();
         }
 
-        // const y: ScrollAmount = if (yoff == 0) .{} else y: {
-        let y: ScrollAmount = if yoff == 0.0 {
-            ScrollAmount::default()
-        } else {
-            'y: {
-                // We use cell_size to determine if we have accumulated enough to trigger a scroll
-                // const cell_size: f64 = @floatFromInt(self.size.cell.height);
-                let cell_size: f64 = f64::from(self.size.cell.height);
-
-                // If we have precision scroll, yoff is the number of pixels to scroll. In non-precision
-                // scroll, yoff is the number of wheel ticks. Some mice are capable of reporting fractional
-                // wheel ticks, which don't necessarily get reported as precision scrolls. We normalize all
-                // scroll events to pixels by multiplying the wheel tick value and the cell size. This means
-                // that a wheel tick of 1 results in single scroll event.
-                // const yoff_adjusted: f64 = if (scroll_mods.precision)
-                //     yoff * self.config.mouse_scroll_multiplier.precision
-                // else yoff_adjusted: {
-                let yoff_adjusted: f64 = if scroll_mods.precision {
-                    yoff * self.config.mouse_scroll_multiplier.precision
-                } else {
-                    'yoff_adjusted: {
-                        // if (comptime builtin.target.os.tag.isDarwin()) {
-                        //
-                        // (`cfg!` — the childExitedAbnormally isDarwin
-                        // precedent.)
-                        if cfg!(target_vendor = "apple") {
-                            // Round out the yoff to an absolute minimum of 1. macos tries to
-                            // simulate precision scrolling with non precision events by
-                            // ramping up the magnitude of the offsets as it detects faster
-                            // scrolling. Single click (very slow) scrolls are reported with a
-                            // magnitude of 0.1 which would normally require a few clicks
-                            // before we register an actual scroll event (depending on cell
-                            // height and the mouse_scroll_multiplier setting).
-                            // const yoff_max: f64 = if (yoff > 0)
-                            //     @max(yoff, 1)
-                            // else
-                            //     @min(yoff, -1);
-                            let yoff_max: f64 = if yoff > 0.0 {
-                                yoff.max(1.0)
-                            } else {
-                                yoff.min(-1.0)
-                            };
-
-                            // break :yoff_adjusted yoff_max * cell_size * self.config.mouse_scroll_multiplier.discrete;
-                            break 'yoff_adjusted yoff_max
-                                * cell_size
-                                * self.config.mouse_scroll_multiplier.discrete;
-                        } else {
-                            // break :yoff_adjusted yoff * cell_size * self.config.mouse_scroll_multiplier.discrete;
-                            break 'yoff_adjusted yoff
-                                * cell_size
-                                * self.config.mouse_scroll_multiplier.discrete;
-                        }
-                    }
-                };
-
-                // Add our previously saved pending amount to the offset to get the
-                // new offset value. The signs of the pending and yoff should match
-                // so that we move further away from zero, but we don't assert
-                // this because in theory a user could scroll in the opposite
-                // direction and undo a pending scroll.
-                // const poff: f64 = self.mouse.pending_scroll_y + yoff_adjusted;
-                let poff: f64 = self.mouse.pending_scroll_y + yoff_adjusted;
-
-                // If the new offset is less than a single unit of scroll, we save
-                // the new pending value and do not scroll yet.
-                // if (@abs(poff) < cell_size) {
-                if poff.abs() < cell_size {
-                    // self.mouse.pending_scroll_y = poff;
-                    self.mouse.pending_scroll_y = poff;
-                    // break :y .{};
-                    break 'y ScrollAmount::default();
-                }
-
-                // We scroll by the number of rows in the offset and save the remainder
-                // const amount = poff / cell_size;
-                let amount = poff / cell_size;
-                // assert(@abs(amount) >= 1);
-                debug_assert!(amount.abs() >= 1.0);
-                // Round towards zero.
-                // const delta: isize = @intFromFloat(@trunc(amount));
-                //
-                // PORT NOTE (R13, UD62): an amount with no `isize` representation
-                // (a non-finite or astronomically large offset from the OS or a
-                // C-ABI embedder) is not scrolled at all — the `.{}` arm this
-                // function already takes for an offset too small to act on. It is
-                // taken BEFORE the pending store, so `pending_scroll_y` can never
-                // hold a NaN that poisons every later scroll, and BEFORE the
-                // `delta` assert below, which holds for every value that gets
-                // past here. Saturating would be worse than the crash it
-                // replaces: the callers below loop `0..delta` writing one report
-                // per row.
-                let Some(delta) = isize_from_float(amount.trunc()) else {
-                    break 'y ScrollAmount::default();
-                };
-                // self.mouse.pending_scroll_y = poff - (amount * cell_size);
-                self.mouse.pending_scroll_y = poff - (amount * cell_size);
-                // assert(@abs(delta) >= 1);
-                debug_assert!(delta.unsigned_abs() >= 1);
-
-                // break :y .{ .delta = delta };
-                break 'y ScrollAmount { delta };
-            }
-        };
+        // const y: ScrollAmount = if (yoff == 0) .{} else y: { ... };
+        //
+        // PORT NOTE (task R13-P2, UD62): the block body is `scroll_amount_y`,
+        // lifted out verbatim so its float cast can be driven by a test
+        // (`Surface::init` needs a live apprt). It reads exactly the three
+        // fields the block reads: the mouse state, the cell size and the
+        // scroll multiplier.
+        let y: ScrollAmount = scroll_amount_y(
+            &mut self.mouse,
+            self.size.cell,
+            self.config.mouse_scroll_multiplier,
+            yoff,
+            scroll_mods,
+        );
 
         // For detailed comments see the y calculation above.
-        // const x: ScrollAmount = if (xoff == 0) .{} else x: {
-        let x: ScrollAmount = if xoff == 0.0 {
-            ScrollAmount::default()
-        } else {
-            'x: {
-                // if (!scroll_mods.precision) {
-                if !scroll_mods.precision {
-                    // const x_delta_isize: isize = @intFromFloat(@round(xoff));
-                    //
-                    // (R13, UD62 — see the y calculation's note.)
-                    let Some(x_delta_isize) = isize_from_float(xoff.round()) else {
-                        break 'x ScrollAmount::default();
-                    };
-                    // break :x .{ .delta = x_delta_isize };
-                    break 'x ScrollAmount {
-                        delta: x_delta_isize,
-                    };
-                }
-
-                // const poff: f64 = self.mouse.pending_scroll_x + xoff;
-                let poff: f64 = self.mouse.pending_scroll_x + xoff;
-                // const cell_size: f64 = @floatFromInt(self.size.cell.width);
-                let cell_size: f64 = f64::from(self.size.cell.width);
-                // if (@abs(poff) < cell_size) {
-                if poff.abs() < cell_size {
-                    // self.mouse.pending_scroll_x = poff;
-                    self.mouse.pending_scroll_x = poff;
-                    // break :x .{};
-                    break 'x ScrollAmount::default();
-                }
-
-                // const amount = poff / cell_size;
-                let amount = poff / cell_size;
-                // assert(@abs(amount) >= 1);
-                debug_assert!(amount.abs() >= 1.0);
-                // const delta: isize = @intFromFloat(@trunc(amount));
-                //
-                // (R13, UD62 — see the y calculation's note.)
-                let Some(delta) = isize_from_float(amount.trunc()) else {
-                    break 'x ScrollAmount::default();
-                };
-                // self.mouse.pending_scroll_x = poff - (amount * cell_size);
-                self.mouse.pending_scroll_x = poff - (amount * cell_size);
-                // assert(@abs(delta) >= 1);
-                debug_assert!(delta.unsigned_abs() >= 1);
-                // break :x .{ .delta = delta };
-                break 'x ScrollAmount { delta };
-            }
-        };
+        // const x: ScrollAmount = if (xoff == 0) .{} else x: { ... };
+        //
+        // (task R13-P2 — lifted into `scroll_amount_x`, as the y block is.)
+        let x: ScrollAmount = scroll_amount_x(&mut self.mouse, self.size.cell, xoff, scroll_mods);
 
         // log.info("SCROLL: delta_y={} delta_x={}", .{ y.delta, x.delta });
         // (COMMENT-ONLY BY DESIGN: commented out in the ORACLE too, Surface.zig:3548.)
@@ -14626,6 +14491,183 @@ fn isize_from_float_saturating(v: f64) -> isize {
     }
 }
 
+/// `scrollCallback`'s `const y: ScrollAmount = if (yoff == 0) .{} else y: {
+/// ... }` block (`Surface.zig:3469-3524`), unchanged but for its receiver.
+///
+/// PORT NOTE (task R13-P2, UD62): lifted out of `scrollCallback` so the
+/// block's float cast is driven by a test — `Surface::init` needs a live
+/// apprt, so the callback itself cannot run in one. `self.mouse`,
+/// `self.size.cell` and `self.config.mouse_scroll_multiplier` are the only
+/// `self` state the block touches, and they are its parameters.
+fn scroll_amount_y(
+    mouse: &mut Mouse,
+    cell: rendererpkg::size::CellSize,
+    multiplier: configpkg::value_types::MouseScrollMultiplier,
+    yoff: f64,
+    scroll_mods: input_mouse::ScrollMods,
+) -> ScrollAmount {
+    // const y: ScrollAmount = if (yoff == 0) .{} else y: {
+    if yoff == 0.0 {
+        ScrollAmount::default()
+    } else {
+        'y: {
+            // We use cell_size to determine if we have accumulated enough to trigger a scroll
+            // const cell_size: f64 = @floatFromInt(self.size.cell.height);
+            let cell_size: f64 = f64::from(cell.height);
+
+            // If we have precision scroll, yoff is the number of pixels to scroll. In non-precision
+            // scroll, yoff is the number of wheel ticks. Some mice are capable of reporting fractional
+            // wheel ticks, which don't necessarily get reported as precision scrolls. We normalize all
+            // scroll events to pixels by multiplying the wheel tick value and the cell size. This means
+            // that a wheel tick of 1 results in single scroll event.
+            // const yoff_adjusted: f64 = if (scroll_mods.precision)
+            //     yoff * self.config.mouse_scroll_multiplier.precision
+            // else yoff_adjusted: {
+            let yoff_adjusted: f64 = if scroll_mods.precision {
+                yoff * multiplier.precision
+            } else {
+                'yoff_adjusted: {
+                    // if (comptime builtin.target.os.tag.isDarwin()) {
+                    //
+                    // (`cfg!` — the childExitedAbnormally isDarwin
+                    // precedent.)
+                    if cfg!(target_vendor = "apple") {
+                        // Round out the yoff to an absolute minimum of 1. macos tries to
+                        // simulate precision scrolling with non precision events by
+                        // ramping up the magnitude of the offsets as it detects faster
+                        // scrolling. Single click (very slow) scrolls are reported with a
+                        // magnitude of 0.1 which would normally require a few clicks
+                        // before we register an actual scroll event (depending on cell
+                        // height and the mouse_scroll_multiplier setting).
+                        // const yoff_max: f64 = if (yoff > 0)
+                        //     @max(yoff, 1)
+                        // else
+                        //     @min(yoff, -1);
+                        let yoff_max: f64 = if yoff > 0.0 {
+                            yoff.max(1.0)
+                        } else {
+                            yoff.min(-1.0)
+                        };
+
+                        // break :yoff_adjusted yoff_max * cell_size * self.config.mouse_scroll_multiplier.discrete;
+                        break 'yoff_adjusted yoff_max * cell_size * multiplier.discrete;
+                    } else {
+                        // break :yoff_adjusted yoff * cell_size * self.config.mouse_scroll_multiplier.discrete;
+                        break 'yoff_adjusted yoff * cell_size * multiplier.discrete;
+                    }
+                }
+            };
+
+            // Add our previously saved pending amount to the offset to get the
+            // new offset value. The signs of the pending and yoff should match
+            // so that we move further away from zero, but we don't assert
+            // this because in theory a user could scroll in the opposite
+            // direction and undo a pending scroll.
+            // const poff: f64 = self.mouse.pending_scroll_y + yoff_adjusted;
+            let poff: f64 = mouse.pending_scroll_y + yoff_adjusted;
+
+            // If the new offset is less than a single unit of scroll, we save
+            // the new pending value and do not scroll yet.
+            // if (@abs(poff) < cell_size) {
+            if poff.abs() < cell_size {
+                // self.mouse.pending_scroll_y = poff;
+                mouse.pending_scroll_y = poff;
+                // break :y .{};
+                break 'y ScrollAmount::default();
+            }
+
+            // We scroll by the number of rows in the offset and save the remainder
+            // const amount = poff / cell_size;
+            let amount = poff / cell_size;
+            // assert(@abs(amount) >= 1);
+            debug_assert!(amount.abs() >= 1.0);
+            // Round towards zero.
+            // const delta: isize = @intFromFloat(@trunc(amount));
+            //
+            // PORT NOTE (R13, UD62): an amount with no `isize` representation
+            // (a non-finite or astronomically large offset from the OS or a
+            // C-ABI embedder) is not scrolled at all — the `.{}` arm this
+            // function already takes for an offset too small to act on. It is
+            // taken BEFORE the pending store, so `pending_scroll_y` can never
+            // hold a NaN that poisons every later scroll, and BEFORE the
+            // `delta` assert below, which holds for every value that gets
+            // past here. Saturating would be worse than the crash it
+            // replaces: `scrollCallback`'s consumers of this amount loop
+            // `0..delta` writing one report per row.
+            let Some(delta) = isize_from_float(amount.trunc()) else {
+                break 'y ScrollAmount::default();
+            };
+            // self.mouse.pending_scroll_y = poff - (amount * cell_size);
+            mouse.pending_scroll_y = poff - (amount * cell_size);
+            // assert(@abs(delta) >= 1);
+            debug_assert!(delta.unsigned_abs() >= 1);
+
+            // break :y .{ .delta = delta };
+            break 'y ScrollAmount { delta };
+        }
+    }
+}
+
+/// `scrollCallback`'s `const x: ScrollAmount = if (xoff == 0) .{} else x: {
+/// ... }` block (`Surface.zig:3527-3546`), lifted out for the same reason as
+/// `scroll_amount_y`. It holds two of the three gesture casts.
+fn scroll_amount_x(
+    mouse: &mut Mouse,
+    cell: rendererpkg::size::CellSize,
+    xoff: f64,
+    scroll_mods: input_mouse::ScrollMods,
+) -> ScrollAmount {
+    // const x: ScrollAmount = if (xoff == 0) .{} else x: {
+    if xoff == 0.0 {
+        ScrollAmount::default()
+    } else {
+        'x: {
+            // if (!scroll_mods.precision) {
+            if !scroll_mods.precision {
+                // const x_delta_isize: isize = @intFromFloat(@round(xoff));
+                //
+                // (R13, UD62 — see the y calculation's note.)
+                let Some(x_delta_isize) = isize_from_float(xoff.round()) else {
+                    break 'x ScrollAmount::default();
+                };
+                // break :x .{ .delta = x_delta_isize };
+                break 'x ScrollAmount {
+                    delta: x_delta_isize,
+                };
+            }
+
+            // const poff: f64 = self.mouse.pending_scroll_x + xoff;
+            let poff: f64 = mouse.pending_scroll_x + xoff;
+            // const cell_size: f64 = @floatFromInt(self.size.cell.width);
+            let cell_size: f64 = f64::from(cell.width);
+            // if (@abs(poff) < cell_size) {
+            if poff.abs() < cell_size {
+                // self.mouse.pending_scroll_x = poff;
+                mouse.pending_scroll_x = poff;
+                // break :x .{};
+                break 'x ScrollAmount::default();
+            }
+
+            // const amount = poff / cell_size;
+            let amount = poff / cell_size;
+            // assert(@abs(amount) >= 1);
+            debug_assert!(amount.abs() >= 1.0);
+            // const delta: isize = @intFromFloat(@trunc(amount));
+            //
+            // (R13, UD62 — see the y calculation's note.)
+            let Some(delta) = isize_from_float(amount.trunc()) else {
+                break 'x ScrollAmount::default();
+            };
+            // self.mouse.pending_scroll_x = poff - (amount * cell_size);
+            mouse.pending_scroll_x = poff - (amount * cell_size);
+            // assert(@abs(delta) >= 1);
+            debug_assert!(delta.unsigned_abs() >= 1);
+            // break :x .{ .delta = delta };
+            break 'x ScrollAmount { delta };
+        }
+    }
+}
+
 // The amount to scroll. This structure is always normalized so that
 // negative is down, left and positive is up, right. Note that INTERNALLY,
 // vertical scroll on our terminal uses positive for down (right is not
@@ -15365,6 +15407,135 @@ mod scroll_page_fractional_saturation_tests {
         term.scroll_viewport(terminal::terminal::ScrollViewport::Delta(0));
 
         term.deinit(Allocator);
+    }
+}
+
+// rustty-only (task R13-P2, UPSTREAM-DEFECTS.md UD62): the three gesture float
+// casts in `scrollCallback` — `Surface.zig:3520` (y), `:3529` (x, discrete) and
+// `:3543` (x, precision). `Surface::init` cannot run without an apprt, so these
+// drive `scroll_amount_y` / `scroll_amount_x`, the callback's own y and x blocks,
+// with the mods decoded by `ScrollMods::from_int` as the C-ABI entry
+// `rustty_surface_mouse_scroll` decodes them. Each test pins ONE cast: a value
+// the reference traps on must take the no-scroll arm (a saturating cast would
+// return `isize::MAX`/`MIN` here, which the callback's per-row loops would then
+// walk), the pending offset must be left as it was, and an in-range offset must
+// still scroll by the exact amount.
+#[cfg(test)]
+mod scroll_gesture_cast_tests {
+    use super::*;
+
+    const CELL: rendererpkg::size::CellSize = rendererpkg::size::CellSize {
+        width: 10,
+        height: 20,
+    };
+
+    /// `ScrollMods` as the C-ABI entry decodes the host's `int` (bit 0 is
+    /// `precision`).
+    fn mods(precision: bool) -> input_mouse::ScrollMods {
+        input_mouse::ScrollMods::from_int(u8::from(precision))
+    }
+
+    /// Offsets the reference traps on at the cast (measured: 1e300 and inf).
+    const TRAPPING: [f64; 4] = [1e300, -1e300, f64::INFINITY, f64::NEG_INFINITY];
+
+    fn none() -> ScrollAmount {
+        ScrollAmount::default()
+    }
+
+    #[test]
+    fn y_gesture_cast_out_of_range_scrolls_nothing() {
+        let multiplier = configpkg::value_types::MouseScrollMultiplier::default();
+        let mut mouse = Mouse::default();
+
+        // Positive control: 45 px of precision scroll over 20 px cells.
+        assert_eq!(
+            ScrollAmount { delta: 2 },
+            scroll_amount_y(&mut mouse, CELL, multiplier, 45.0, mods(true))
+        );
+        assert_eq!(
+            ScrollAmount { delta: -2 },
+            scroll_amount_y(&mut mouse, CELL, multiplier, -45.0, mods(true))
+        );
+
+        for precision in [true, false] {
+            for v in TRAPPING {
+                mouse.pending_scroll_y = 5.0;
+                assert_eq!(
+                    none(),
+                    scroll_amount_y(&mut mouse, CELL, multiplier, v, mods(precision)),
+                    "yoff {v} (precision {precision}) scrolls nothing"
+                );
+                assert_eq!(
+                    5.0, mouse.pending_scroll_y,
+                    "yoff {v} (precision {precision}) leaves the pending offset alone"
+                );
+            }
+        }
+
+        // Not poisoned: the next ordinary scroll still adds to the kept 5 px.
+        assert_eq!(
+            ScrollAmount { delta: 2 },
+            scroll_amount_y(&mut mouse, CELL, multiplier, 40.0, mods(true))
+        );
+    }
+
+    #[test]
+    fn x_discrete_gesture_cast_out_of_range_scrolls_nothing() {
+        let mut mouse = Mouse::default();
+
+        // Positive control: a discrete x offset is rounded, not accumulated.
+        assert_eq!(
+            ScrollAmount { delta: 3 },
+            scroll_amount_x(&mut mouse, CELL, 2.6, mods(false))
+        );
+        assert_eq!(
+            ScrollAmount { delta: -2 },
+            scroll_amount_x(&mut mouse, CELL, -2.4, mods(false))
+        );
+
+        // 9.3e18 is just past `isize::MAX`. NaN does not trap in the reference
+        // (0 on arm64, `isize::MIN` on x86_64, measured) and has no assert on
+        // this path, so it is driven here too.
+        for v in TRAPPING.into_iter().chain([9.3e18, f64::NAN]) {
+            mouse.pending_scroll_x = 3.0;
+            assert_eq!(
+                none(),
+                scroll_amount_x(&mut mouse, CELL, v, mods(false)),
+                "discrete xoff {v} scrolls nothing"
+            );
+            assert_eq!(3.0, mouse.pending_scroll_x);
+        }
+    }
+
+    #[test]
+    fn x_precision_gesture_cast_out_of_range_scrolls_nothing() {
+        let mut mouse = Mouse::default();
+
+        // Positive control: 3 px pending + 25 px over 10 px cells.
+        mouse.pending_scroll_x = 3.0;
+        assert_eq!(
+            ScrollAmount { delta: 2 },
+            scroll_amount_x(&mut mouse, CELL, 25.0, mods(true))
+        );
+
+        for v in TRAPPING {
+            mouse.pending_scroll_x = 3.0;
+            assert_eq!(
+                none(),
+                scroll_amount_x(&mut mouse, CELL, v, mods(true)),
+                "precision xoff {v} scrolls nothing"
+            );
+            assert_eq!(
+                3.0, mouse.pending_scroll_x,
+                "precision xoff {v} leaves the pending offset alone"
+            );
+        }
+
+        // Not poisoned.
+        assert_eq!(
+            ScrollAmount { delta: 2 },
+            scroll_amount_x(&mut mouse, CELL, 25.0, mods(true))
+        );
     }
 }
 
