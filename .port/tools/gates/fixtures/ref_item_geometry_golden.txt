@@ -1,8 +1,8 @@
 # G-REFGEOM golden: the reference's set-item geometry at the pin.
 #
 # The output of `ref_item_geometry_probe.zig` (this directory) run by
-# `.port/tools/gates/check_ref_item_geometry.py` against the pinned ghostty
-# oracle, 20abdb50a6216c450d6d4d010c41c7edf5ab15b2, with Zig 0.16.0:
+# `.port/tools/gates/check_ref_item_geometry.py` against the ghostty oracle
+# at the commit in `.port/tools/gates/ORACLE_PIN`, with Zig 0.16.0:
 # `zig build test-lib-vt-build -Dtarget=<t>` for aarch64-macos (the macOS
 # arm64 host's native target), aarch64-linux-gnu and wasm32-wasi.
 #

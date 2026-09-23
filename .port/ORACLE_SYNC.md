@@ -24,8 +24,9 @@ tracked file in `.port/tools/gates` holds a 40-hex constant. Untracked and ignor
 `__pycache__/*.pyc`, say) are not scanned: they are not the repository's content. The SHA in the block above is the human record;
 `ORACLE_PIN` is what the gates enforce, and the two must always be equal.
 
-- **G-EOL arm 3, G4's staleness guard and G-LOGFILE** require the oracle's HEAD to equal
-  `ORACLE_PIN`; G-EOL also requires a clean `test/fuzz-libghostty/corpus`. On a mismatch they
+- **G-EOL arm 3, G4's staleness guard, G-LOGFILE and G-REFGEOM** require the oracle's HEAD
+  to equal `ORACLE_PIN`; G-EOL also requires a clean `test/fuzz-libghostty/corpus`, and
+  G-REFGEOM a clean oracle (no modified tracked file). On a mismatch they
   report BLOCKED (exit 3), which ci.sh shows as a WARNING, never GREEN.
 - **D10** reads `src/stb/*` at the `ORACLE_PIN` commit (`git show "$PIN:…"`), whatever the oracle's
   HEAD is. It reports BLOCKED only when the oracle does not have that commit, so it does **not**
@@ -125,7 +126,7 @@ agent depends on that tree standing still. Advancing therefore requires:
 5. `.port/tools/gates/ORACLE_PIN` (the full 40-hex SHA, one line), `.port/ORACLE_SYNC.md`,
    `.port/PORT_RULES.md` (R12) and `.port/cycle-analysis.md` are updated **together in one
    commit**, and the commit message states which range the advance absorbed. Until `ORACLE_PIN`
-   names the new HEAD, G-EOL, G4 and G-LOGFILE report BLOCKED on every local run. D10 does not,
+   names the new HEAD, G-EOL, G4, G-LOGFILE and G-REFGEOM report BLOCKED on every local run. D10 does not,
    and keeps reading the old pin's `src/stb`. Then:
    - rebuild the oracle's `zig-out/include` and re-run `.port/phase-0/harness/build_ref_driver.sh`
      at the new pin. G4's guard checks only HEAD == `ORACLE_PIN`, and cannot tell that

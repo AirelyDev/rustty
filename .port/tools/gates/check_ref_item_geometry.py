@@ -21,20 +21,34 @@ R3). The probe reports `@sizeOf` / `@alignOf` through `@compileError`, so
 without running anything: aarch64-macos (the macOS arm64 host's native
 target), aarch64-linux-gnu and wasm32-wasi. The copy is deleted afterwards.
 
-ORACLE. Resolved the way `check_log_reconcile.py` resolves it: the checkout
-beside the rustty root (`<root>/../ghostty`; a worktree under
-`.claude/worktrees/` sees it through the `ghostty` symlink there), and its
-HEAD must be `ORACLE_PIN`. (There is no shared resolver or pin file on this
-branch: `_gatelib.py` has none, and `_oracle_root.sh` / `ORACLE_PIN` do not
-exist yet.)
+ORACLE. The shared resolver, `_gatelib.oracle_root`: the `ghostty` checkout
+beside the MAIN checkout, correct from a git worktree with no stopgap symlink
+(R3: external and read-only). Nothing here is env-settable (R5). The pin is
+the one checked-in file `.port/tools/gates/ORACLE_PIN`, read by
+`_gatelib.oracle_pin`; a missing or malformed pin file is BLOCKED. Every git
+call on the oracle goes through `_gatelib.oracle_git`, which strips `GIT_*`,
+so a `GIT_DIR` decoy cannot answer for it. The oracle must be the top level of
+its own repository, its HEAD must equal `ORACLE_PIN`, and it must have no
+modified tracked files. A git that is missing or exits non-zero is BLOCKED,
+never read as "clean".
 
 Exit contract (`.port/tools/CI.md`): 0 GREEN, 1 RED (a difference, or the
 probe no longer compiles against the pinned reference), 3 BLOCKED (no Zig, no
-oracle, oracle not at the pin or modified).
+oracle, no usable pin file, the oracle off the pin, modified or not a git
+repository, or git unavailable).
+
+`--self-test` runs a COPY of this gate end to end in a throwaway main checkout
+with a linked worktree, a fixture oracle and a stand-in `zig`, and requires
+BLOCKED for an absent oracle, an off-pin HEAD, a missing or malformed pin
+file, a dirty oracle, an oracle that is not a repository and a missing git;
+GREEN at the pin (also from a worktree without the stopgap symlink, and under
+a `GIT_DIR` + `GIT_WORK_TREE` decoy with a decoy cwd); and RED on a measured
+difference.
 
 Usage:
   .port/tools/gates/check_ref_item_geometry.py
-  .port/tools/gates/check_ref_item_geometry.py --print   # print the measured lines
+  .port/tools/gates/check_ref_item_geometry.py --print      # print the measured lines
+  .port/tools/gates/check_ref_item_geometry.py --self-test  # the oracle arms, on fixtures
 """
 import os
 import shutil
@@ -48,9 +62,13 @@ ROOT = os.path.dirname(PORT_DIR)
 PROBE = os.path.join(GATES_DIR, "fixtures", "ref_item_geometry_probe.zig")
 GOLDEN = os.path.join(GATES_DIR, "fixtures", "ref_item_geometry_golden.txt")
 
-# Same location and pin as `check_log_reconcile.py` (R3: external, read-only).
-ORACLE = os.path.join(os.path.dirname(ROOT), "ghostty")
-ORACLE_PIN = "20abdb50a6216c450d6d4d010c41c7edf5ab15b2"
+# The shared resolver and the ONE pin file (`.port/ORACLE_SYNC.md`). ROOT is
+# script-relative, so neither the cwd nor `GIT_DIR` can move the oracle.
+sys.path.insert(0, GATES_DIR)
+import _gatelib as G  # noqa: E402
+
+ORACLE = G.oracle_root(ROOT)
+ORACLE_PIN = G.oracle_pin()
 
 TARGETS = ["aarch64-macos", "aarch64-linux-gnu", "wasm32-wasi"]
 BEGIN = "RUSTTY-REF-ITEM-GEOMETRY-PROBE BEGIN"
@@ -66,31 +84,46 @@ def blocked(msg):
     return 3
 
 
-def oracle_head():
-    head = os.path.join(ORACLE, ".git", "HEAD")
+def oracle_check():
+    """None when the oracle is the pinned reference, else the BLOCKED reason.
+
+    Every git read goes through `G.oracle_git` (`GIT_*` stripped). A git that
+    cannot run or exits non-zero is BLOCKED: it proves nothing about the tree.
+    `--show-toplevel` rejects a directory that is not a repository of its own,
+    which git would otherwise answer from an enclosing repository."""
+    if ORACLE_PIN is None:
+        return (f"the oracle pin file {G.ORACLE_PIN_FILE} is missing or not a "
+                "40-hex commit, so the oracle's commit cannot be checked")
+    if not os.path.isfile(os.path.join(ORACLE, "src", "terminal", "page.zig")):
+        return f"the read-only ghostty oracle checkout is absent at {ORACLE}"
     try:
-        with open(head, encoding="utf-8") as fh:
-            ref = fh.read().strip()
-        if ref.startswith("ref: "):
-            with open(os.path.join(ORACLE, ".git", ref[5:]), encoding="utf-8") as fh:
-                ref = fh.read().strip()
-        return ref
-    except OSError:
-        return ""
-
-
-def oracle_modified():
-    """The oracle's modified or untracked files, or None if git is absent."""
-    if shutil.which("git") is None:
-        return None
-    r = subprocess.run(
-        ["git", "-C", ORACLE, "status", "--porcelain", "--untracked-files=no"],
-        capture_output=True,
-        text=True,
-    )
+        r = G.oracle_git(ORACLE, "rev-parse", "--show-toplevel", "HEAD", text=True)
+    except OSError as exc:
+        return f"git could not run on the oracle at {ORACLE} ({exc})"
     if r.returncode != 0:
-        return None
-    return [l for l in r.stdout.splitlines() if l.strip()]
+        return (f"the oracle at {ORACLE} is not a git repository "
+                f"(rev-parse exit {r.returncode}: {r.stderr.strip()})")
+    out = r.stdout.split()
+    if len(out) != 2:
+        return f"rev-parse gave an unexpected answer for the oracle: {r.stdout!r}"
+    top, head = out
+    if os.path.realpath(top) != os.path.realpath(ORACLE):
+        return (f"the oracle at {ORACLE} is not the top level of its own "
+                f"repository (git answered from {top})")
+    if head != ORACLE_PIN:
+        return f"the oracle is at {head}, not the pin {ORACLE_PIN}"
+    try:
+        r = G.oracle_git(ORACLE, "status", "--porcelain", "--untracked-files=no", text=True)
+    except OSError as exc:
+        return f"git could not run on the oracle at {ORACLE} ({exc})"
+    if r.returncode != 0:
+        return (f"status failed on the oracle at {ORACLE} "
+                f"(exit {r.returncode}: {r.stderr.strip()})")
+    modified = [l for l in r.stdout.splitlines() if l.strip()]
+    if modified:
+        return ("the oracle has modified files, so it is not the pinned reference:\n  "
+                + "\n  ".join(modified[:10]))
+    return None
 
 
 def copy_oracle(dst):
@@ -157,20 +190,242 @@ def load_golden():
         ]
 
 
+# ---------------------------------------------------------------------------
+# Self-test: the oracle arms, run on a COPY of this gate in hermetic fixtures
+# ---------------------------------------------------------------------------
+# The stand-in `zig` answers `version`, and for `build ... -Dtarget=<t>` prints
+# one probe line for <t> between the markers, as the real probe's compile
+# error does. `$REFGEOM_SELFTEST_SIZE` (read by the stand-in only, never by the
+# gate) changes the size it reports, for the RED arm.
+FAKE_ZIG = """#!/bin/sh
+case "$1" in version) echo 0.16.0-selftest; exit 0;; esac
+t=
+for a in "$@"; do case "$a" in -Dtarget=*) t="${a#-Dtarget=}";; esac; done
+echo "error: %s"
+echo "$t selftest.Item ${REFGEOM_SELFTEST_SIZE:-4} 4"
+echo "%s"
+exit 1
+"""
+FIXTURE_GOLDEN = "# self-test golden\n" + "".join(
+    f"{t} selftest.Item 4 4\n" for t in TARGETS)
+
+
+def self_test():
+    """Build a throwaway main checkout `<tmp>/rustty` with a linked worktree
+    at `.claude/worktrees/wt` (the agent layout) and a fixture oracle at
+    `<tmp>/ghostty`, copy this gate, `_gatelib.py`, a fixture `ORACLE_PIN`
+    naming the fixture oracle's commit, a fixture golden and the probe into
+    both checkouts, and RUN THE COPIES. The fixture is fresh, so the
+    worktree-sibling path (`.claude/worktrees/ghostty`) cannot exist; the first
+    arm asserts that, so no stopgap symlink can make the worktree arms pass."""
+    import tempfile
+
+    print("=== G-REFGEOM SELF-TEST ===")
+    ok = True
+
+    def case(name, good, detail=""):
+        nonlocal ok
+        if not good:
+            ok = False
+        print(f"  [{'ok ' if good else 'FAIL'}] {name}"
+              + (f"\n         ({detail})" if detail and not good else ""))
+
+    env = G.git_env()
+    git_cfg = ["-c", "user.name=selftest", "-c", "user.email=selftest@invalid",
+               "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null",
+               "-c", "init.defaultBranch=main"]
+
+    def git(where, *args):
+        return subprocess.run(["git", *git_cfg, *args], cwd=where, env=env,
+                              capture_output=True, text=True, check=True).stdout.strip()
+
+    base = os.path.realpath(tempfile.mkdtemp(prefix="grefgeom_selftest_"))
+    try:
+        main_co = os.path.join(base, "rustty")
+        wt = os.path.join(main_co, ".claude", "worktrees", "wt")
+        oracle = os.path.join(base, "ghostty")
+        stale = os.path.join(main_co, ".claude", "worktrees", "ghostty")
+        fakebin = os.path.join(base, "fakebin")
+        os.makedirs(main_co)
+        git(main_co, "init", "-q")
+        git(main_co, "commit", "-q", "--allow-empty", "-m", "fixture")
+        git(main_co, "worktree", "add", "-q", "--detach", wt)
+
+        # The fixture oracle: a repository of its own with a tracked page.zig.
+        os.makedirs(os.path.join(oracle, "src", "terminal"))
+        with open(os.path.join(oracle, "src", "terminal", "page.zig"), "w") as fh:
+            fh.write("// fixture\n")
+        git(oracle, "init", "-q")
+        git(oracle, "add", "-A")
+        git(oracle, "commit", "-q", "-m", "pinned")
+        pin = git(oracle, "rev-parse", "HEAD")
+
+        os.makedirs(fakebin)
+        with open(os.path.join(fakebin, "zig"), "w") as fh:
+            fh.write(FAKE_ZIG % (BEGIN, END))
+        os.chmod(os.path.join(fakebin, "zig"), 0o755)
+
+        def install(checkout):
+            gates = os.path.join(checkout, ".port", "tools", "gates")
+            os.makedirs(os.path.join(gates, "fixtures"))
+            for f in ("check_ref_item_geometry.py", "_gatelib.py"):
+                shutil.copy(os.path.join(GATES_DIR, f), gates)
+            shutil.copy(PROBE, os.path.join(gates, "fixtures"))
+            with open(os.path.join(gates, "fixtures", os.path.basename(GOLDEN)), "w") as fh:
+                fh.write(FIXTURE_GOLDEN)
+            with open(os.path.join(gates, "ORACLE_PIN"), "w") as fh:
+                fh.write(pin + "\n")
+            return gates
+
+        gates_main = install(main_co)
+        gates_wt = install(wt)
+
+        # A decoy repository OUTSIDE the fixture, with a modified tracked file
+        # and a sibling `ghostty` at the pin. A gate that consulted the cwd or
+        # honoured GIT_DIR would read the decoy's HEAD (not the pin) or its
+        # dirty status instead of the fixture oracle's.
+        decoy = os.path.join(base, "decoy", "rustty")
+        os.makedirs(decoy)
+        git(decoy, "init", "-q")
+        with open(os.path.join(decoy, "f"), "w") as fh:
+            fh.write("a\n")
+        git(decoy, "add", "f")
+        git(decoy, "commit", "-q", "-m", "decoy")
+        with open(os.path.join(decoy, "f"), "w") as fh:
+            fh.write("b\n")
+        shutil.copytree(oracle, os.path.join(base, "decoy", "ghostty"), symlinks=True)
+        decoy_env = {"GIT_DIR": os.path.join(decoy, ".git"), "GIT_WORK_TREE": decoy}
+
+        def gate(gates=gates_main, extra_env=None, cwd=decoy, path=None):
+            e = dict(env)
+            e["PATH"] = path if path is not None else fakebin + os.pathsep + env.get("PATH", "")
+            e.update(extra_env or {})
+            r = subprocess.run(
+                [sys.executable, os.path.join(gates, "check_ref_item_geometry.py")],
+                cwd=cwd, env=e, capture_output=True, text=True)
+            return r.returncode, r.stdout + r.stderr
+
+        def expect(name, rc_want, needle, **kw):
+            rc, out = gate(**kw)
+            case(name, rc == rc_want and needle in out,
+                 f"rc={rc} want {rc_want} and {needle!r}; output={out.strip()!r}")
+
+        def pin_file(gates, text):
+            p = os.path.join(gates, "ORACLE_PIN")
+            if text is None:
+                os.remove(p)
+            else:
+                with open(p, "w") as fh:
+                    fh.write(text)
+
+        case("fixture has no worktree-sibling oracle (no stopgap)",
+             not os.path.lexists(stale), stale)
+
+        # GREEN at the pin, from both checkouts; the worktree one resolves the
+        # MAIN checkout's sibling.
+        expect("pinned clean oracle is GREEN (main checkout, decoy cwd)", 0,
+               "G-REFGEOM GREEN")
+        expect("from a worktree without the stopgap symlink it resolves the main "
+               "checkout's sibling and is GREEN", 0, "G-REFGEOM GREEN", gates=gates_wt)
+        # A measured difference is RED.
+        expect("a measured difference is RED", 1, "differs from the golden",
+               extra_env={"REFGEOM_SELFTEST_SIZE": "8"})
+
+        # The pin file.
+        pin_file(gates_main, None)
+        expect("missing ORACLE_PIN is BLOCKED", 3, "is missing or not a 40-hex commit")
+        for label, text in (("empty", ""), ("39-hex", pin[:39] + "\n"),
+                            ("upper-case", pin.upper() + "\n"),
+                            ("two lines", pin + "\n" + pin + "\n")):
+            pin_file(gates_main, text)
+            expect(f"malformed ORACLE_PIN ({label}) is BLOCKED", 3,
+                   "is missing or not a 40-hex commit")
+        pin_file(gates_main, pin + "\n")
+
+        # GIT_DIR + GIT_WORK_TREE name the dirty, off-pin decoy: no effect.
+        expect("a GIT_DIR + GIT_WORK_TREE decoy (dirty, off the pin) does not "
+               "redirect HEAD or status (GREEN)", 0, "G-REFGEOM GREEN",
+               extra_env=decoy_env)
+        expect("... nor from a worktree", 0, "G-REFGEOM GREEN", gates=gates_wt,
+               extra_env=decoy_env)
+
+        # Off the pin.
+        git(oracle, "commit", "-q", "--allow-empty", "-m", "past the pin")
+        expect("an off-pin HEAD is BLOCKED", 3, "not the pin")
+        git(oracle, "reset", "-q", "--hard", pin)
+
+        # Dirty; and a clean decoy cannot mask it.
+        with open(os.path.join(oracle, "src", "terminal", "page.zig"), "a") as fh:
+            fh.write("// edit\n")
+        expect("a dirty oracle is BLOCKED", 3, "modified files")
+        git(decoy, "checkout", "-q", "--", "f")
+        expect("a clean GIT_DIR decoy does not mask a dirty oracle", 3,
+               "modified files", extra_env=decoy_env)
+        git(oracle, "checkout", "-q", "--", ".")
+        expect("restored oracle is GREEN again", 0, "G-REFGEOM GREEN")
+
+        # No git on PATH (the stand-in zig only): BLOCKED, never "clean". From
+        # the main checkout the resolver's fallback is the same sibling, so the
+        # run reaches the oracle's own git reads.
+        expect("a missing git is BLOCKED", 3, "git could not run", path=fakebin)
+
+        # Not a repository: HEAD file says the pin, but there is no repository.
+        os.rename(os.path.join(oracle, ".git"), os.path.join(base, "oracle.git"))
+        os.makedirs(os.path.join(oracle, ".git"))
+        with open(os.path.join(oracle, ".git", "HEAD"), "w") as fh:
+            fh.write(pin + "\n")
+        expect("an oracle that is not a git repository is BLOCKED (not RED)", 3,
+               "not a git repository")
+        shutil.rmtree(os.path.join(oracle, ".git"))
+        expect("an oracle with no .git at all is BLOCKED (not RED)", 3,
+               "not a git repository")
+        os.rename(os.path.join(base, "oracle.git"), os.path.join(oracle, ".git"))
+
+        # Absent.
+        os.rename(oracle, oracle + ".away")
+        expect("an absent oracle is BLOCKED, naming the main checkout's sibling", 3,
+               f"oracle checkout is absent at {oracle}")
+        expect("... also from a worktree", 3, f"oracle checkout is absent at {oracle}",
+               gates=gates_wt)
+    except (OSError, subprocess.CalledProcessError) as exc:
+        case("fixture could not be built", False, str(exc))
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+
+    # The live run: inside a linked worktree the resolved oracle must be the
+    # main checkout's sibling, not the worktree's own (a string compare, so a
+    # stopgap symlink at the worktree sibling cannot satisfy it).
+    try:
+        gd = subprocess.run(["git", "rev-parse", "--path-format=absolute", "--git-dir",
+                             "--git-common-dir"], cwd=ROOT, env=G.git_env(),
+                            capture_output=True, text=True).stdout.split()
+    except OSError:
+        gd = []
+    if len(gd) == 2 and os.path.realpath(gd[0]) != os.path.realpath(gd[1]):
+        want = os.path.join(os.path.dirname(os.path.dirname(gd[1])), "ghostty")
+        case("live worktree run resolves to the main checkout's sibling",
+             ORACLE == want and ORACLE != os.path.join(os.path.dirname(ROOT), "ghostty"),
+             f"got {ORACLE}, want {want}")
+    else:
+        print("  [ok ] live run is from the main checkout (the worktree case is "
+              "the fixture above)")
+
+    print("SELF-TEST GREEN: an absent, off-pin, dirty, non-repository or git-less\n"
+          "oracle and a missing or malformed ORACLE_PIN are BLOCKED; a GIT_DIR decoy\n"
+          "redirects nothing; a worktree resolves the main checkout's sibling; a\n"
+          "measured difference is RED."
+          if ok else "SELF-TEST RED: an arm above did not hold.")
+    return 0 if ok else 1
+
+
 def main():
+    if "--self-test" in sys.argv:
+        return self_test()
+    reason = oracle_check()
+    if reason:
+        return blocked(reason)
     if shutil.which("zig") is None:
         return blocked("zig is not installed (the probe needs the reference's own toolchain)")
-    if not os.path.isfile(os.path.join(ORACLE, "src", "terminal", "page.zig")):
-        return blocked(f"the read-only ghostty oracle checkout is absent at {ORACLE}")
-    head = oracle_head()
-    if head != ORACLE_PIN:
-        return blocked(f"the oracle is at {head or '<unknown>'}, not the pin {ORACLE_PIN}")
-    modified = oracle_modified()
-    if modified:
-        return blocked(
-            "the oracle has modified files, so it is not the pinned reference:\n  "
-            + "\n  ".join(modified[:10])
-        )
     for path in (PROBE, GOLDEN):
         if not os.path.isfile(path):
             return blocked(f"missing {path}")

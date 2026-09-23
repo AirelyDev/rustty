@@ -294,8 +294,10 @@ jobs:
       # checkout is absent on CI, so ci.sh's probe reports BLOCKED (exit 3).
       # G-EOL (its arm 3 compares the fuzz corpus against the oracle at
       # `.port/tools/gates/ORACLE_PIN`), D10 (reads the oracle's src/stb at that
-      # pin) and G-LOGFILE (needs the oracle at that pin) are BLOCKED here for
-      # the same reason. G-EOL's arms 1-2 still run, and a RED in them is exit 1.
+      # pin), G-LOGFILE and G-REFGEOM (both need the oracle at that pin;
+      # G-REFGEOM also needs Zig) are BLOCKED here for the same reason.
+      # G-REFGEOM-SELF needs neither and runs. G-EOL's arms 1-2 still run, and
+      # a RED in them is exit 1.
       # All of these bind locally, where the oracle exists at the pin. ci.sh
       # prints each BLOCKED gate's reason line in the WARNINGS summary, so a new
       # reason is visible even when the gate id is an expected warning.
@@ -303,7 +305,7 @@ jobs:
         run: |
           echo "G4: local-only (R3 — oracle not on CI); expect 'G4 BLOCKED (exit 3)' as a WARNING in the ci.sh summary below."
           echo "G1b: local-only for the same reason (ghostty oracle checkout absent on CI)."
-          echo "G-EOL, D10, G-LOGFILE: expect BLOCKED (exit 3) WARNINGs too (no oracle at ORACLE_PIN on CI); check each one's reason line."
+          echo "G-EOL, D10, G-LOGFILE, G-REFGEOM: expect BLOCKED (exit 3) WARNINGs too (no oracle at ORACLE_PIN on CI); check each one's reason line."
           echo "G-ORACLE-SH-SELF needs node (set up above); a BLOCKED there means node is missing."
 
       # The single entry. ci.sh runs (collecting all failures):

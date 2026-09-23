@@ -129,6 +129,15 @@
 #                                    scan for plain `git -C "$ORACLE"`, and
 #                                    each fixed-path reader's
 #                                    --self-test-oracle.)
+#   G-REFGEOM check_ref_item_geometry.py
+#                                    the reference's set-item geometry
+#                                    (Zig probe, 3 targets) == the golden
+#                                    the port's shadows are pinned to
+#                                    -> HARD-FAIL (oracle absent, off the
+#                                    pin or dirty, bad ORACLE_PIN, or no
+#                                    Zig -> exit 3 BLOCKED, a WARNING);
+#                                    G-REFGEOM-SELF (--self-test) its
+#                                    oracle arms on fixtures -> HARD-FAIL.
 #   G-WINPROTO-DEFAULT               the DEFAULT GUI dep graph per target
 #     check_default_linux_winproto.sh (Linux + FreeBSD: gtk4/libadwaita and both
 #                                    winproto arms; macOS: none)     -> HARD-FAIL
@@ -836,6 +845,22 @@ GATE_REGISTRY=(
   # vacuous green.
   "G-LOGFILE-SELF|HARD|$PY $GATES/check_log_reconcile.py --self-test"
   "G-LOGFILE|HARD|$PY $GATES/check_log_reconcile.py"
+  # G-REFGEOM (tasks R13-L2, R13-L3; NEW-FINDINGS N88/N91) — the reference's
+  # style and hyperlink set-item geometry, re-measured by compiling a probe into
+  # a scratch copy of the pinned oracle for aarch64-macos, aarch64-linux-gnu and
+  # wasm32-wasi, against fixtures/ref_item_geometry_golden.txt. The port's
+  # page layout is tied to that geometry through the shadows in style.rs and
+  # hyperlink.rs, and `ref_geometry_golden_tests` checks the port side against
+  # the same golden. Registered like G-LOGFILE and G-EOL, which also need the
+  # local oracle: HARD, and BLOCKED (a WARNING) where the oracle at ORACLE_PIN
+  # or Zig is absent, as on CI. It runs on every local ci.sh, not only when the
+  # pin moves, because the golden is an input too: an edit that changes a
+  # shadow AND the golden together keeps the Rust test green, and only a
+  # re-measurement of the reference catches it (about 90 s). The self-test
+  # needs neither Zig nor the oracle (a stand-in zig and a fixture oracle), so
+  # it binds on CI too.
+  "G-REFGEOM-SELF|HARD|$PY $GATES/check_ref_item_geometry.py --self-test"
+  "G-REFGEOM|HARD|$PY $GATES/check_ref_item_geometry.py"
   # G8b — the real perf regression fence (paired, same-session, vs a stored
   # binary). BLOCKS (2/3) rather than passing when the box is loaded or the
   # untracked oracle binary/corpora are absent. MUST precede G8: it emits the

@@ -53,13 +53,26 @@ local iteration.
 | **D8** | `check_clone_injection.sh` | (advisory review list) | PROGRESS |
 | **D9** | `check_stale_comments.sh` | `.port/audits/stale-comments-D9.tsv`, `D9_STALE_COMMENT_CHECKLIST.md` | PROGRESS |
 
-> **G-REFGEOM** (`check_ref_item_geometry.py`, task R13-L2, NEW-FINDINGS N88/N91) is
-> NOT run by ci.sh: it needs Zig and the local pinned oracle. It re-measures the
-> reference's set-item geometry (the style and hyperlink `RefCountedSet.Item` and
-> their parts) with `fixtures/ref_item_geometry_probe.zig` for aarch64-macos,
-> aarch64-linux-gnu and wasm32-wasi, against `fixtures/ref_item_geometry_golden.txt`,
-> which `crates/rustty-vt/src/ref_geometry_golden_tests.rs` also checks the port
-> against. Exit 0 GREEN / 1 RED / 3 BLOCKED. Run it whenever the oracle pin moves.
+> **G-REFGEOM** (`check_ref_item_geometry.py`, tasks R13-L2 and R13-L3, NEW-FINDINGS
+> N88/N91) re-measures the reference's set-item geometry (the style and hyperlink
+> `RefCountedSet.Item` and their parts) with `fixtures/ref_item_geometry_probe.zig`
+> for aarch64-macos, aarch64-linux-gnu and wasm32-wasi, against
+> `fixtures/ref_item_geometry_golden.txt`, which
+> `crates/rustty-vt/src/ref_geometry_golden_tests.rs` also checks the port against.
+> Exit 0 GREEN / 1 RED / 3 BLOCKED.
+>
+> It is a HARD gate in ci.sh, registered like G-LOGFILE and G-EOL, which also need
+> the local oracle: without Zig or the oracle at `ORACLE_PIN` it is BLOCKED (a
+> WARNING), as on CI. It runs on every local ci.sh, not only when the pin moves,
+> because the golden is an input: a shadow edited together with the golden keeps the
+> Rust test green, and only a re-measurement of the reference catches that. It finds
+> the oracle through `_gatelib.oracle_root`, reads the pin from `ORACLE_PIN`, and
+> reads the oracle only through `_gatelib.oracle_git`. `G-REFGEOM-SELF`
+> (`--self-test`) runs a copy of the gate against fixture oracles with a stand-in
+> `zig`: BLOCKED for an absent, off-pin, dirty or non-repository oracle, a missing
+> git, and a missing or malformed pin file; a `GIT_DIR` decoy moves nothing; a
+> worktree finds the main checkout's sibling; a measured difference is RED. It needs
+> neither Zig nor the oracle, so it binds on CI too.
 
 > **G5 (differential fuzz)** and **G6 (leak-free)** are wired progress-mode
 > runners now. G5: if `cargo fuzz` + the `vt_diff` target in
@@ -88,14 +101,14 @@ local iteration.
 
 In the `WARNINGS` summary each BLOCKED gate is followed by up to three
 `reason:` lines, copied from the `BLOCKED` lines the gate printed. A gate that
-is an expected warning on a lane (G4, G-EOL, D10, G-LOGFILE on CI) can
+is an expected warning on a lane (G4, G-EOL, D10, G-LOGFILE, G-REFGEOM on CI) can
 therefore not hide a new, different reason behind the same gate id: read the
 reason, not just the id.
 
 For the oracle gates, exit 3 means the oracle is **absent, off the pin
 (`.port/tools/gates/ORACLE_PIN`), or dirty**, or the pin file itself is missing
-or malformed: G-EOL arm 3, G4's staleness guard and G-LOGFILE need the oracle's
-HEAD to equal `ORACLE_PIN`; D10 needs the oracle to have that commit (it reads
+or malformed: G-EOL arm 3, G4's staleness guard, G-LOGFILE and G-REFGEOM need the
+oracle's HEAD to equal `ORACLE_PIN` (G-REFGEOM is also BLOCKED without Zig); D10 needs the oracle to have that commit (it reads
 `src/stb` at the pin, whatever HEAD is). See `.port/ORACLE_SYNC.md`.
 
 ---
@@ -149,8 +162,8 @@ fails ci.sh. (G1b `check_test_counts.py` is local-only for the same R3 reason:
 the ghostty oracle checkout is absent on CI ⇒ probe exits 3 BLOCKED.) Locally,
 G4's driver-source staleness guard also BLOCKS (exit 3) when the oracle is
 absent, is not at `ORACLE_PIN`, lacks a built `zig-out/include`, or there is no
-C compiler, and when `ORACLE_PIN` is missing or malformed. G-EOL, D10 and
-G-LOGFILE are BLOCKED on CI for the same no-oracle reason; `ci.yml`'s policy
+C compiler, and when `ORACLE_PIN` is missing or malformed. G-EOL, D10,
+G-LOGFILE and G-REFGEOM are BLOCKED on CI for the same no-oracle reason; `ci.yml`'s policy
 note names all of them.
 
 ---
