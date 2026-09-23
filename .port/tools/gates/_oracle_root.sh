@@ -27,18 +27,21 @@
 # (`--print-oracle`) with each retired override variable and a GIT_DIR +
 # GIT_WORK_TREE decoy set, from a working directory outside the fixture.
 
-# `--git-common-dir` for $1, asked of git with every exported GIT_* removed.
-# The body is a subshell, so the unsets never reach the caller.
-_rustty_git_common_dir() (
+# `git "$@"` with every exported GIT_* variable removed — for any git call that
+# locates a checkout or reads the oracle (`git -C "$ORACLE" show ...`), which
+# GIT_DIR would otherwise answer from another repository. The body is a
+# subshell, so the unsets never reach the caller.
+rustty_oracle_git() (
   for _v in $(compgen -e); do
     case "$_v" in GIT_*) unset "$_v" ;; esac
   done
-  git -C "$1" rev-parse --path-format=absolute --git-common-dir 2>/dev/null
+  git "$@"
 )
 
 rustty_oracle_root() {
   local checkout="$1" common="" rc=0 main_checkout
-  common="$(_rustty_git_common_dir "$checkout")" || rc=$?
+  common="$(rustty_oracle_git -C "$checkout" rev-parse --path-format=absolute \
+    --git-common-dir 2>/dev/null)" || rc=$?
   if [ "$rc" -eq 0 ] && [ -n "$common" ]; then
     main_checkout="$(dirname "$common")"
   else
@@ -55,6 +58,7 @@ _RUSTTY_ORACLE_CONSUMERS=(
   ".port/tools/gates/check_eol_fidelity.sh"
   ".port/tools/gates/run_differential.sh"
   ".port/tools/macos-parity/menu-shortcut-parity.sh"
+  ".port/tools/stb-resize-oracle/run.sh"
 )
 
 _rustty_oracle_self_test() {
@@ -132,6 +136,14 @@ _rustty_oracle_self_test() {
   got="$(GIT_DIR="$decoy/.git" GIT_WORK_TREE="$decoy" rustty_oracle_root "$wt")"
   if [ "$got" = "$oracle" ]; then r=0; else r=1; fi
   arm "$r" "GIT_DIR + GIT_WORK_TREE do not redirect the oracle" "got $got, want $oracle"
+
+  # 3b. oracle reads through rustty_oracle_git (D10's `git -C "$ORACLE" show`)
+  #     are not answered by a GIT_DIR decoy.
+  got="$(GIT_DIR="$decoy/.git" GIT_WORK_TREE="$decoy" \
+    rustty_oracle_git -C "$main_co" rev-parse --absolute-git-dir 2>/dev/null)"
+  want="$main_co/.git"
+  if [ "$got" = "$want" ]; then r=0; else r=1; fi
+  arm "$r" "rustty_oracle_git ignores GIT_DIR + GIT_WORK_TREE" "got $got, want $want"
 
   # 4. git's stdout is trusted only on exit 0: a git that prints the decoy's
   #    common dir but fails must give the fallback, not the decoy's sibling.

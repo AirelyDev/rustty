@@ -47,6 +47,7 @@
 #                                # resize, and freetype.rs multiplies by
 #                                # `factor = 255/(num_grays-1)` AFTER it. So the
 #                                # in-crate fixture is 255x the raw resize output.
+#   run.sh --print-oracle        # print the oracle repo arm 2 reads, and exit
 #
 # EXIT CONTRACT (matches .port/tools/gates/README.md — never a silent green)
 #   0  GREEN     every assertion held
@@ -68,7 +69,21 @@ set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$DIR/../../.." && pwd)"
 VENDOR="$ROOT/crates/rustty-font-shaper/vendor"
-ORACLE_REPO="${GHOSTTY_ORACLE:-/Users/gael/projects/ghostty}"
+# The oracle repository for arm 2: `ghostty` beside the MAIN checkout, resolved
+# by the shared shell resolver (the twin of `_gatelib.oracle_root`). D10 runs
+# this script, so R5 applies: the former `GHOSTTY_ORACLE` override is gone, and
+# the oracle's git reads go through `rustty_oracle_git` (GIT_* stripped) so a
+# GIT_DIR decoy cannot answer `git show HEAD:src/stb/...` either.
+# `--print-oracle` prints the result and exits; G-ORACLE-SH-SELF
+# (`_oracle_root.sh --self-test`) runs a copy of this script that way with the
+# old override and a GIT_DIR decoy set.
+# shellcheck source=.port/tools/gates/_oracle_root.sh
+source "$ROOT/.port/tools/gates/_oracle_root.sh" || { echo "BLOCKED: cannot source _oracle_root.sh"; exit 3; }
+ORACLE_REPO="$(rustty_oracle_root "$ROOT")"
+if [[ "${1:-}" == "--print-oracle" ]]; then
+  echo "$ORACLE_REPO"
+  exit 0
+fi
 
 CC="${CC:-}"
 if [[ -z "$CC" ]]; then
@@ -204,15 +219,15 @@ for spec in "${CASES[@]}"; do
     if ! command -v zig >/dev/null 2>&1; then
       echo "  BLOCKED: zig not installed — ghostty-recipe arm skipped"
       BLOCKED=1; ZIG_OK=0
-    elif ! git -C "$ORACLE_REPO" rev-parse HEAD >/dev/null 2>&1; then
+    elif ! rustty_oracle_git -C "$ORACLE_REPO" rev-parse HEAD >/dev/null 2>&1; then
       echo "  BLOCKED: oracle repo $ORACLE_REPO absent — ghostty-recipe arm skipped"
       BLOCKED=1; ZIG_OK=0
     else
       ZIG_OK=1
-      ORACLE_REV="$(git -C "$ORACLE_REPO" rev-parse --short HEAD)"
+      ORACLE_REV="$(rustty_oracle_git -C "$ORACLE_REPO" rev-parse --short HEAD)"
       mkdir -p "$WORK/oracle"
       for f in stb.c stb_image.h stb_image_resize.h; do
-        git -C "$ORACLE_REPO" show "HEAD:src/stb/$f" > "$WORK/oracle/$f" || { echo "  BLOCKED: git show src/stb/$f failed"; BLOCKED=1; ZIG_OK=0; }
+        rustty_oracle_git -C "$ORACLE_REPO" show "HEAD:src/stb/$f" > "$WORK/oracle/$f" || { echo "  BLOCKED: git show src/stb/$f failed"; BLOCKED=1; ZIG_OK=0; }
       done
       echo "  oracle: $ORACLE_REPO @ $ORACLE_REV ; zig $(zig version)"
       if [[ "$ZIG_OK" == "1" ]]; then
