@@ -3147,6 +3147,37 @@ Not fixed in this round; recorded for adjudication.
 
 **state**: OPEN (R1 candidate).
 
+## N140 — the XDG helpers collapse `homedir.home`'s `error.BufferTooSmall` into `NoHomeDir`
+
+- **id**: N140. Not in the inventory. Found by the T-E reviewer (review-T-E "S74-F1 error name"),
+  recorded by the T-E fix round (tail-e2).
+- **severity**: low. **kind**: behavioral-difference (error identity).
+- **what**: `homedir.zig:28` (`homeUnix`) returns `error.BufferTooSmall` when `$HOME` is longer than
+  the caller's buffer, and `xdg.zig:91-92` passes it on with `try homedir.home(io, environ_map, &buf)`
+  over a 1024-byte buffer. The port's `crates/rustty-os/src/xdg.rs:157` does
+  `homedir::home(..).map_err(|_| DirError::NoHomeDir)?`, and `DirError` has no other variant
+  (the module header at `xdg.rs:10-16` records the collapse). Since S74-F1 (T-E, b7407d17)
+  `loadDefaultFiles` propagates this error, as the reference does, so it is now observable:
+  - `ghostty_config_load_default_files` logs `error loading config err=error.BufferTooSmall` in the
+    reference (`CApi.zig:63-66`, `{}` of the error) and `error loading config err=FileLoad(NoHomeDir)`
+    in the port (`crates/rustty-config/src/c_api.rs:124-125`, `{err:?}`). By reading; the port's
+    error value is pinned by `crates/rustty-config/tests/load_path_errors_propagate.rs:46-52`
+    (HOME longer than 1024 bytes).
+  - A sibling, same cause: `theme.zig` `Location.dir` maps `error.BufferTooSmall` from `xdg.config`
+    to `error.OutOfMemory` (`:51`), while the port's `theme.rs` `dir` treats every `DirError` as
+    "the directory doesn't exist" (`None`). UNVERIFIED what the reference's theme loading then
+    does with that `OutOfMemory`.
+- **why not fixed here**: not small. It needs a `BufferTooSmall` variant in `rustty-os`'s `DirError`
+  (area `src/os`, not this batch's), a matching `FileLoadError` variant and its consumers
+  (`file_load.rs`, `theme.rs`'s OOM arm, `rustty-cli`, `rustty-crash`'s `InitThreadError::Dir`), and
+  the log line would still differ in form, because the C-API sites print the Rust `Debug` form
+  (`FileLoad(..)`) rather than Zig's `error.<Name>` for every error, not only this one.
+- **proposed fix**: add `DirError::BufferTooSmall` and propagate it through `FileLoadError`; port the
+  theme `.user` arm's `BufferTooSmall => OutOfMemory` mapping; and decide separately whether the
+  C-API `err={}` sites should print Zig error names (as T-E's `zig_error.rs` does for config
+  diagnostics).
+- **state**: OPEN.
+
 ## N196 — tests passed without testing anything when their environment was missing
 
 - **id**: N196. Not in the inventory. Found by the tail-s3 task (silent-skip audit), 2026-09-23.

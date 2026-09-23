@@ -15,3 +15,5 @@ progress; until it lands, `UPSTREAM-DEFECTS.md` is the complete list.
 
 | Area | Ghostty | Rustty | Record |
 |---|---|---|---|
+| Crash reporting (macOS) | The Sentry database goes to `~/Library/Caches` when `XDG_CACHE_HOME` is set, and to the XDG cache when it is not: the reverse of what its own comment says. | Uses the XDG cache when `XDG_CACHE_HOME` is set and non-empty, and `~/Library/Caches` otherwise, as the comment says. | UD21 |
+| Crash reporting | Writing out a crash-report envelope whose headers are nested more than 256 levels deep crashes (the JSON writer asserts its depth limit instead of returning an error). | Returns an error instead of crashing, and still reads such an envelope. | UD182 |
