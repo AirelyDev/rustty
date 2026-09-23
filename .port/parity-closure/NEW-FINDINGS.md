@@ -3190,7 +3190,7 @@ the missing sites (`LOG-PORTMAP.tsv`):
 |---|---|---|---|
 | `src/apprt/embedded.zig` | 54/55, 0 | 54/52, 2 | 7 unrestored with PORT NOTEs (:353 :540 :559 :828 :883 :899 :1983); the arm still carries `main_c.zig`'s 5 emissions (declared overlap, see below) |
 | `src/apprt/gtk/class/global_shortcuts.zig` | 14/12, 2 | 14/9, 5 | :239 :345 :365 :567 :580, infallible catch arms (PORT NOTE at `fn refresh`) |
-| `src/apprt/gtk/class/surface.zig` | 63/62, 1 | 63/58, 5 | not re-adjudicated site by site; sites whose text is absent from `surface.rs`: :1065 :1922 :1929 :1936 (folded into `remove_source_id`), :2735 :2762 :3618 :4307 |
+| `src/apprt/gtk/class/surface.zig` | 63/62, 1 | 63/57, 6 (corrected by tail-s1b; tail-s1 read 58, 5) | `set_clipboard`'s `failed to set clipboard content` was a fifth, undeclared port-only line (review tail-s1 B1). Missing: three of the four `unable to remove ...` sites (:1065 :1922 :1929 :1936 fold into `remove_source_id`, counted once), :2735 and :2762 (OutOfMemory arms) and :3618 (`bufPrintZ`). :4307 is NOT missing: it pairs with `clipboard_confirmation_confirm` (surface.rs:2526) |
 | `src/apprt/gtk/portal/OpenURI.zig` | 19/13, 6 | 19/12, 7 | :225 :369 :373 :393 :454 :512 :532 (the row's reason already named 7) |
 | `src/apprt/gtk/winproto/wayland/Globals.zig` | 6/10, 0 | 6/4, 2 | :157 :239, infallible in wayland-rs / owned String (PORT NOTEs) |
 | `src/os/systemd.zig` | 10/8, 2 | 10/7, 3 | :34 :188 `bufPrint` arms; :51 is a real gap, N192 |
@@ -3230,8 +3230,40 @@ file, so declaring it port-only would be false):
   `parse_capture_usize` helper's `failed to match notification`, which may be a fold of several
   reference sites); `pkg/macos/video/display_link.zig` reads 0/1 (nothing to mask).
 
-**state**: OPEN for the application.zig attribution and the vt-c `lib.rs` mapping; the 11 files above
-are reconciled honestly (allowance = measured deficit, reasons updated) and `main_ghostty.zig` is fixed.
+Update (task tail-s1b). Every item above is resolved, and every file in the table is at allowance 0:
+- **Shared-file overlap** is no longer counted twice. `LOG-ATTRIBUTION.tsv` (new, capped, self-tested)
+  requires a `default-owner` for any port file in two or more reference files' arms, and `owner` rows move
+  single emissions, plausibility-checked (a literal must match the named file's sites at least as well as
+  any other holder's, or the call must be a `log_*` emitter defined in the named file's arm). MEASURED
+  before: `src/main_c.zig` 27 port against 3 reference sites, `opengl/Frame.zig` 25 against 1; after:
+  3/3 and 1/1.
+- **The `application.zig` credits** (`log_version` ×2 and a split `error opening gtk-custom-css file`)
+  are owned by `gtk_version.zig`/`adw_version.zig` (whose allowances 1 -> 0) and declared `expansion`.
+  `application.zig` therefore RISES 15 -> 18: 93 of 111. Its PORT NOTE names 14 sites and a message
+  pairing leaves a different 18 unmatched; the site list is not re-adjudicated here (the row's reason
+  names both lists, UNVERIFIED) and is the one remaining allowance this batch touched.
+- **vt-c `lib.rs`** is in the arms of the seven `c/*.zig` files whose `extern "C"` guards it holds, each
+  emission owned by its file: `c/render.zig`, `c/build_info.zig`, `c/key_event.zig`, `c/mouse_event.zig`,
+  `c/selection.zig`, `c/selection_gesture.zig` go to 0; `c/terminal.zig` 4 -> 0 (its three
+  `stackFallback` OOM arms are declared absent).
+- **tmux/control.zig** (review N2): `parse_capture_usize`'s reuse of `failed to match notification` is the
+  UD7 R13 handling and is declared port-only (`r13-handling`); 19/19.
+- **display_link.zig** (review N1): cvdisplaylink.rs's one emission is generic.zig:991, now in generic.zig's
+  macOS arm and owned there; display_link.zig reads 0/0.
+- **Test-only reference sites** (review N3): the gate now drops reference sites the reference compiles
+  only into its tests, the mirror of the port side's `#[cfg(test)]` rule; `viewer.zig:1497` and 12
+  others in 6 more files (whose allowances go to 0).
+- **The infallible catch arms** are declared per site and per arm in `LOG-ABSENT-SITES.tsv` (new, capped,
+  RED if the reference line is not a live production site, the named port fn does not exist, or the arm
+  still emits the message), and four sites the reference itself cannot reach go to `LOG-DEAD-SITES.tsv`
+  (`dead-branch`).
+- **The real gaps are ported**: embedded.zig:540, systemd.zig:51 (N192), OpenURI.zig:512 (N204).
+
+Allowances over the whole portmap: 201 over 79 files -> 137 over 53. The remaining 52 files other than
+`application.zig` were outside review tail-s1's list and were not examined, except where one of the
+mechanisms above settled them.
+
+**state**: CLOSED by task tail-s1b.
 
 ## N191 — the GTK surface logs a `winproto failed to add subprocess env` warning the reference does not have, and continues where the reference fails
 
@@ -3250,7 +3282,17 @@ not and swallows an error the reference propagates. Not fixed here (GTK, another
 the function's error contract). The emission is declared `open-finding` in `LOG-PORT-ONLY.tsv`, so it is
 not counted as a reference site; delete that row when this is fixed.
 
-**state**: OPEN.
+Update (task tail-s1b): decided under R1 — NOT changed, for a verified reason. The reference's
+`addSubprocessEnv` can fail only in `x11.zig:331-340` (`bufPrint` of a decimal XID into 64 bytes, which
+cannot overflow, and `env.put`'s OutOfMemory); `noop.zig` and `wayland.zig` return nothing. Every port
+arm of `add_subprocess_env` (`winproto/x11.rs:581`, `wayland.rs:780`, `noop.rs:171`) returns `Ok(())`
+unconditionally. The `Err` arm in `default_termio_env` is therefore unreachable in the port, just as the
+reference's propagation is unreachable in practice, and logging-and-continuing there differs from
+propagating on no reachable path. Mirroring the `try` would make `default_termio_env` fallible and change
+its callers' contract for no observable behaviour. The `LOG-PORT-ONLY.tsv` row is reclassified from
+`open-finding` to `rust-only-path` with this reason.
+
+**state**: CLOSED (task tail-s1b; no behaviour change, reason verified at both sides).
 
 ## N192 — `launchedBySystemd` folds the open and the read of `/proc/<ppid>/comm` into one call, so `systemd.zig:51` can never be logged
 
@@ -3269,4 +3311,71 @@ its own reference text), but the code is `#[cfg(target_os = "linux")]` and this 
 compile it (`cargo check --target aarch64-unknown-linux-gnu` needs a cross C compiler for rustty-os's
 build script), so it is recorded rather than changed blind. `systemd.zig`'s allowance is 3 and names it.
 
-**state**: OPEN (needs the Linux lane).
+Update (task tail-s1b): FIXED. `launchedBySystemd` opens the file and `readAll`s it into the
+`TASK_COMM_LEN` buffer in two steps (`read_comm`, which returns which step failed), and logs :38's and
+:51's texts from their own arms. Tests (`read_comm_tests`, Linux): `/proc/self/comm` reads; a missing
+file fails at the open; a directory opens and fails at the read (EISDIR). G-LOGFILE: systemd.zig 8/8
+(:34 and :188 are `bufPrint` arms the reference cannot reach, now `LOG-DEAD-SITES.tsv`), allowance 0;
+deleting the :51 line turns it RED (`reference=8 port=7`). Linux verification: see the task report.
+
+**state**: CLOSED by task tail-s1b.
+
+## N203 — the GTK surface warned on source-removal and clipboard failures the reference discards
+
+- **id**: N203. Not in the inventory.
+- **found by**: task tail-s1b, while making `remove_source_id` a declared facade.
+- **severity**: low. **kind**: extra-behavior (the port says something the reference does not).
+- **oracle**: `src/apprt/gtk/class/surface.zig:3116-3121` and `:3133-3136` (the horizontal tab-scroll
+  handler): `_ = glib.Source.remove(v);` — result discarded, no log. `:4111`: `_ = clipboard.setContent(all);`.
+- **rustty**: `crates/rustty-apprt/src/gtk/class/surface.rs` `scroll_horizontal` routed both removals
+  through `remove_source_id`, which warns `unable to remove pending horizontal scroll reset source` (that
+  text is `dispose`'s, :1936); `set_clipboard` warned `failed to set clipboard content err=` on gdk4-rs's
+  `Err` (review tail-s1 B1 had declared that line `rust-only-path`).
+
+Fixed: `scroll_horizontal` calls a new `discard_source_id` (`g_source_remove`, result ignored), and
+`set_clipboard` discards `set_content`'s result. The two `open-finding` rows and the B1 `rust-only-path`
+row are deleted from `LOG-PORT-ONLY.tsv`; with `remove_source_id` declared a facade, its four remaining
+calls are exactly surface.zig's four `unable to remove` sites. Verified by build and by the gate
+(surface.zig 60/60 after the declared absent and dead sites, allowance 0). No behavioural test: driving
+`scroll_horizontal` needs a realized widget and a touchpad-unit scroll event (UNVERIFIED by test).
+
+**state**: CLOSED by task tail-s1b.
+
+## N204 — OpenURI's `stop_cleanup_timer` panicked on a stale timer where the reference warns
+
+- **id**: N204. Not in the inventory.
+- **found by**: task tail-s1b, restoring `OpenURI.zig:512`.
+- **severity**: low (a panic inside a GTK callback on a path the port's own `cleanup` normally prevents by
+  clearing the field). **kind**: behavioral-difference.
+- **oracle**: `src/apprt/gtk/portal/OpenURI.zig:507-516`: `if (glib.Source.remove(timer) == 0)
+  log.warn("unable to remove cleanup timer source={d}", .{timer});`.
+- **rustty**: `crates/rustty-apprt/src/gtk/portal/open_uri.rs` `stop_cleanup_timer` called glib-rs
+  `SourceId::remove`, whose body is `result_from_gboolean!(g_source_remove(..)).unwrap()`
+  (glib-0.22.8 `src/source.rs:29-36`): a stale id panics. Its PORT NOTE said the call "returns `()` — it
+  has no failure report", which was wrong.
+
+Fixed: `g_source_remove` is called directly and FALSE logs the reference's warning. Test
+`stopping_a_stale_cleanup_timer_warns_instead_of_panicking` drives a live source (removed, no record)
+and a stale one (one `openuri` warn with the reference text). Linux verification: see the task report.
+
+**state**: CLOSED by task tail-s1b.
+
+## N205 — a requested working directory naming a regular file took the wrong diagnostic
+
+- **id**: N205. Not in the inventory.
+- **found by**: task tail-s1b, restoring `embedded.zig:540`.
+- **severity**: low. **kind**: behavioral-difference (log text).
+- **oracle**: `src/apprt/embedded.zig:529-553`: `openDirAbsolute(wd)` (flags `O_RDONLY | O_DIRECTORY |
+  O_CLOEXEC`, plus `O_PATH` on Linux, per Zig 0.16 `dirOpenDirPosix`) fails on a regular file with
+  `error.NotDir` and logs `error opening requested working directory`; the `dir.stat` failure logs
+  `failed to stat requested working directory` (:540).
+- **rustty**: `crates/rustty-apprt/src/embedded.rs` used one `std::fs::metadata`, so a regular file
+  passed the "open", then logged `requested working directory is not a directory`, and :540 had no arm.
+
+Fixed: `requested_working_directory_is_usable` opens with the reference's flags and `fstat`s the open
+descriptor. Tests: a directory (usable, no record), a missing path and a regular file (both fail at the
+open; the file's error is `NotADirectory`). Negative control: without `O_DIRECTORY` the regular-file test
+fails. The stat-failure arm itself is not driven (an `fstat` of a just-opened descriptor does not fail on
+demand): UNVERIFIED by test, present by reading and by G-LOGFILE.
+
+**state**: CLOSED by task tail-s1b.

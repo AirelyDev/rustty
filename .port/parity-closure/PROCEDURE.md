@@ -381,6 +381,22 @@ point is that they become proposable upstream rather than lost in a task report.
      line — in the commit that adds it; the gate subtracts it and RED-flags a row that selects
      none or several emissions, and the list is capped. **Never raise an allowance to absorb a
      port-only line, and never let one cancel a restored site.**
+   - **An allowance is the last resort, not the ledger of why a site is missing (task
+     tail-s1b).** Each missing reference site now has a checked home, and prose in an
+     allowance's `reason` is only for what none of them fits:
+     - a site the reference compiles only into its tests is not counted at all (the gate
+       applies the port side's `#[cfg(test)]` rule to the reference);
+     - a site the reference never reaches goes in `LOG-DEAD-SITES.tsv`;
+     - a site the reference reaches on a condition the port (or one platform arm) cannot
+       produce — the catch arm of an allocation or a `bufPrint` the port writes as `format!`,
+       a guard on a null pointer a typed closure cannot hold, a site `comptime`-gated off
+       that platform — goes in `LOG-ABSENT-SITES.tsv`, per arm, naming the port fn; the gate
+       REDs a row whose arm still emits the message;
+     - an emission in a Rust file that ports SEVERAL reference files counts for one of them,
+       declared in `LOG-ATTRIBUTION.tsv` (`default-owner` / `owner`); a helper that folds
+       several reference sites (`remove_source_id`) is a `facade` whose call sites count.
+     Before declaring, check that the site is not simply unported: `systemd.zig:51`,
+     `embedded.zig:540` and `OpenURI.zig:512` looked like "infallible" arms and were real gaps.
    - **Ratchet EVERY number a stage can move, including the escape hatch.** Completing the
      portmap (N15) created a new lever: an EXCLUSION retires a reference file instead of
      reconciling it, so it erases that file's whole deficit. Reclassifying
