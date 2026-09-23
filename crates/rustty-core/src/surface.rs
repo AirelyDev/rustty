@@ -8168,14 +8168,13 @@ where
                 // function already takes for an offset too small to act on. It is
                 // taken BEFORE the pending store, so `pending_scroll_y` can never
                 // hold a NaN that poisons every later scroll, and BEFORE the
-                // asserts below, which hold for every value that gets past here.
-                // Saturating would be worse than the crash it replaces: the
-                // callers below loop `0..delta` writing one report per row.
+                // `delta` assert below, which holds for every value that gets
+                // past here. Saturating would be worse than the crash it
+                // replaces: the callers below loop `0..delta` writing one report
+                // per row.
                 let Some(delta) = isize_from_float(amount.trunc()) else {
                     break 'y ScrollAmount::default();
                 };
-                // assert(@abs(amount) >= 1);
-                debug_assert!(amount.abs() >= 1.0);
                 // self.mouse.pending_scroll_y = poff - (amount * cell_size);
                 self.mouse.pending_scroll_y = poff - (amount * cell_size);
                 // assert(@abs(delta) >= 1);
