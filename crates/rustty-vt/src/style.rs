@@ -1975,6 +1975,66 @@ mod tests {
         check(&set, &kept);
     }
 
+    // Rustty-only (task R13-L2): `delete_item` resets a dead item FIELD BY
+    // FIELD, so the item's padding byte (the port's `Style` is 21/1 and the
+    // metadata 6/2, so each 28-byte item has one byte of padding) keeps the
+    // initialized value it had. A whole-`Item` typed write would de-initialize
+    // it, and the page compressor and every page copy read the item array as
+    // raw bytes. Without Miri an uninitialized byte cannot be observed
+    // directly, so the test marks the padding byte with a sentinel before the
+    // delete and asserts that the delete leaves it alone: a typed write stores
+    // the default item's own (unspecified) padding byte over it.
+    //
+    // NEGATIVE CONTROL: `*item_at(items, id) = Item::default()` in
+    // `delete_item` turns this red in a debug build.
+    #[test]
+    fn delete_item_leaves_the_item_padding_byte_alone() {
+        use crate::ref_counted_set::{Item, ItemStride};
+        type SetItem = Item<Style, Id, size::CellCountInt>;
+        let stride = ItemStride::<Style, Id, size::CellCountInt>::SIZE;
+        // The item's padding: the bytes neither field covers.
+        let value = core::mem::offset_of!(SetItem, value);
+        let value = value..value + core::mem::size_of::<Style>();
+        let meta = core::mem::offset_of!(SetItem, meta);
+        let meta = meta..meta
+            + core::mem::size_of::<crate::ref_counted_set::Metadata<Id, size::CellCountInt>>();
+        let pad: Vec<usize> = (0..core::mem::size_of::<SetItem>())
+            .filter(|b| !value.contains(b) && !meta.contains(b))
+            .collect();
+        assert!(!pad.is_empty(), "the test needs a padding byte in the item");
+
+        let layout = crate::ref_counted_set::Layout::<Id>::init::<Style, size::CellCountInt>(16);
+        let buf = AlignedBuf::new(layout.total_size, Set::base_align());
+        let mut set = unsafe { Set::init(buf.offset_buf(), layout, SetContext) };
+        let base = buf.base();
+
+        let style = |bold: bool, italic: bool| Style {
+            flags: Flags {
+                bold,
+                italic,
+                ..Flags::default()
+            },
+            ..Style::default()
+        };
+        let id1 = unsafe { set.add(base, style(true, false)) }.unwrap();
+        let id2 = unsafe { set.add(base, style(false, true)) }.unwrap();
+        assert_eq!((1, 2), (id1, id2));
+        unsafe { set.release(base, id2) };
+
+        // Mark item 2's padding, then add a new value: `add`'s trim loop
+        // deletes the dead item 2 at the end of the list (`delete_item`), and
+        // the new value is placed there field-wise by `insert`.
+        let slot = unsafe { buf.ptr.add(layout.items_start + id2 as usize * stride) };
+        for &b in &pad {
+            unsafe { *slot.add(b) = 0x5A };
+        }
+        let id3 = unsafe { set.add(base, style(true, true)) }.unwrap();
+        assert_eq!(id2, id3, "the trim reused the deleted id");
+        for b in pad {
+            assert_eq!(0x5A, unsafe { *slot.add(b) }, "item {id2} padding byte {b}");
+        }
+    }
+
     #[test]
     fn set_basic_usage() {
         // const layout: Set.Layout = .init(16);

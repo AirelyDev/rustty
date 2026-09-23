@@ -1142,9 +1142,17 @@ where
 
         self.psl_stats[item.meta.psl.to_usize()] =
             self.psl_stats[item.meta.psl.to_usize()].sub(Id::ONE);
+        // `items[id] = .{}` — but FIELD-WISE, like the reap and the final
+        // placement in `insert` (see the PORT NOTE in `init`): a whole-`Item`
+        // typed write de-initializes the item's trailing padding byte inside
+        // the page mapping, which `CompressedPage::init` and every page copy
+        // then read as raw bytes (task R13-L2, found by the R13-L review).
         unsafe {
             *table.add(item.meta.bucket.to_usize()) = Id::ZERO;
-            *item_at(items, id.to_usize()) = Item::default();
+            let d = Item::<T, Id, RefCount>::default();
+            let dst = item_at(items, id.to_usize());
+            (*dst).value = d.value;
+            (*dst).meta = d.meta;
         }
 
         let mut p: Id = item.meta.bucket;
