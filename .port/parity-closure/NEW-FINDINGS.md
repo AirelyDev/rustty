@@ -2422,6 +2422,12 @@ that error with `?` and dropped the half-built `Face`, which has no `Drop`, so b
 freetype comment claiming "no fallible op follows" was wrong. Both backends now free them on that arm,
 in the reference's reverse-declaration order, leaving the FT face to the caller that owns it.
 
+Proof on FreeType: `a_failed_variation_axes_step_destroys_the_harfbuzz_font` (a HarfBuzz destroy
+callback) and, added by task R13-P2, `a_failed_variation_axes_step_frees_the_ft_mutex` (a test-only
+global allocator that flags the free of the exact `ft_mutex` pointer). Negative control for the latter,
+macOS 2026-09-22: with only the `ft_mutex` free removed, it fails ("the boxed ft_mutex is freed on the
+error path, not leaked").
+
 **state**: CLOSED by task R13-P (`b2ac07ec`).
 
 ## N54 — the snapshot decoder zero-filled an attacker-declared string length before reading it
