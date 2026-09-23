@@ -1278,6 +1278,10 @@ pub unsafe extern "C" fn rustty_surface_app(surface: *mut Surface) -> *mut App {
 ///
 /// Returns the config to use for surfaces that inherit from this one.
 ///
+/// The returned `working_directory`, when set, is owned by `surface`: it
+/// stays valid until the next call to this function on the same surface or
+/// until the surface is freed. Copy it before either happens.
+///
 /// # Safety
 /// `surface` must be a valid pointer returned by [`rustty_surface_new`].
 #[allow(improper_ctypes_definitions)]

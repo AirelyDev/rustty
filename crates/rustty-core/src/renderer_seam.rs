@@ -2079,9 +2079,12 @@ where
         // error is not impossible: on Linux the stop `Async` is an eventfd
         // `poll`, and the epoll backend (Ghostty's `xev.Dynamic` falls back to
         // it when io_uring is unavailable) starts it with
-        // `epoll_ctl(EPOLL_CTL_ADD)`, which fails with `ENOSPC` once the
-        // user's `fs.epoll.max_user_watches` is used up (a per-user limit
-        // any of the user's processes can exhaust) or with `ENOMEM`; that
+        // `epoll_ctl(EPOLL_CTL_ADD)`. If the user's per-user
+        // `fs.epoll.max_user_watches` is already used up at thread start, the
+        // loop's own eventfd registration fails first and `run` errors out, so
+        // this callback is not reached; it is reached when the limit is
+        // crossed between that registration and this one (another of the
+        // user's processes can use it up), or on a transient `ENOMEM`. That
         // arrives here as an error, and the reference traps. Disarming would
         // leave the thread with no stop watcher, so `deinit`'s join would hang
         // forever; stopping the loop would stop the renderer on an error that
@@ -2089,8 +2092,10 @@ where
         // same file's `wakeupCallback` does for the same `Async.WaitError`
         // (without its message, which names the wakeup; the reference has
         // none here). The eventfd (a mach port on macOS) keeps the
-        // notification, so a stop notified while
-        // the wait cannot register is delivered once it does.
+        // notification, so a stop notified while the wait cannot register is
+        // delivered once it does. The retry happens once per tick, paced by
+        // the loop's other work: the wakeup wait or the cursor timer is always
+        // active here, so it does not spin.
         if r.is_err() {
             return xev::CallbackAction::Rearm;
         }

@@ -877,6 +877,10 @@ RUSTTY_API App *rustty_surface_app(Surface *surface);
  *
  * Returns the config to use for surfaces that inherit from this one.
  *
+ * The returned `working_directory`, when set, is owned by `surface`: it
+ * stays valid until the next call to this function on the same surface or
+ * until the surface is freed. Copy it before either happens.
+ *
  * # Safety
  * `surface` must be a valid pointer returned by [`rustty_surface_new`].
  */
