@@ -904,9 +904,21 @@ fn parse_mouse(input: &[u8], full_input: &[u8]) -> ParseResult<'static> {
     let xterm: bool;
     if input.len() == 3 && input[2] == b'M' && full_input.len() >= 6 {
         xterm = true;
-        button_mask = (full_input[3] - 32) as u16;
-        px = (full_input[4] - 32) as u16;
-        py = (full_input[5] - 32) as u16;
+        // PORT NOTE: reference defect (R13), UD72. The reference subtracts 32
+        // from each raw byte in `u8` (`full_input[3] - 32`), which traps for a
+        // byte below 32 (typed or pasted after `ESC [ M`) in safe builds and
+        // wraps in ReleaseFast. Such an event is skipped whole (all six bytes),
+        // as for an invalid button below.
+        let (Some(b), Some(x), Some(y)) = (
+            full_input[3].checked_sub(32),
+            full_input[4].checked_sub(32),
+            full_input[5].checked_sub(32),
+        ) else {
+            return ParseResult { event: None, n: 6 };
+        };
+        button_mask = b as u16;
+        px = x as u16;
+        py = y as u16;
     } else if input.len() >= 4 && input[2] == b'<' {
         xterm = false;
         let delim1 = match index_of_scalar_pos(input, 3, b';') {
@@ -944,7 +956,19 @@ fn parse_mouse(input: &[u8], full_input: &[u8]) -> ParseResult<'static> {
         };
     }
 
-    let button = mouse::Button::from_u8((button_mask & mouse_bits::BUTTONS as u16) as u8);
+    // const button: Mouse.Button = @enumFromInt(button_mask & mouse_bits.buttons);
+    //
+    // PORT NOTE: reference defect (R13), UD72 — a masked value that names no
+    // button (192..=195) skips the event, consuming exactly what the event
+    // would have (the reference's own `n` for a mouse event), so the bytes are
+    // not re-read as keys. See `Button::from_u8`.
+    let Some(button) = mouse::Button::from_u8((button_mask & mouse_bits::BUTTONS as u16) as u8)
+    else {
+        return ParseResult {
+            event: None,
+            n: if xterm { 6 } else { input.len() },
+        };
+    };
     let motion = button_mask & mouse_bits::MOTION as u16 > 0;
     let shift = button_mask & mouse_bits::SHIFT as u16 > 0;
     let alt = button_mask & mouse_bits::ALT as u16 > 0;
@@ -1622,6 +1646,53 @@ mod tests {
 
         assert_eq!(input.len(), result.n);
         assert_eq!(Some(expected), result.event);
+    }
+
+    /// UD72 (R13): a button mask with both wheel bits set (192..=195) names no
+    /// `Button`; libvaxis's `@enumFromInt` panics. The event is skipped, and the
+    /// whole sequence consumed. Also X10 bytes below 32, which underflow the
+    /// reference's `- 32`.
+    #[test]
+    fn a_mouse_event_with_an_invalid_button_or_byte_is_skipped() {
+        let mut buf = [0u8; 1];
+
+        // Positive controls: the neighbours of the invalid range still decode.
+        for (input, button) in [
+            (&b"\x1b[<131;1;1M"[..], mouse::Button::Button11),
+            (&b"\x1b[<67;1;1M"[..], mouse::Button::WheelLeft),
+            (&b"\x1b[M\xa3\x21\x21"[..], mouse::Button::Button11),
+        ] {
+            let result = parse_csi(input, &mut buf);
+            assert_eq!(input.len(), result.n);
+            match result.event {
+                Some(Event::Mouse(m)) => assert_eq!(button, m.button),
+                other => panic!("{input:?} decoded to {other:?}"),
+            }
+        }
+
+        // SGR: 192..=195, plus modifier/motion bits on top (they are masked off).
+        for input in [
+            &b"\x1b[<192;1;1M"[..],
+            &b"\x1b[<195;5;7m"[..],
+            &b"\x1b[<228;1;1M"[..],
+        ] {
+            let result = parse_csi(input, &mut buf);
+            assert_eq!(None, result.event, "{input:?} is skipped");
+            assert_eq!(input.len(), result.n, "{input:?} is consumed whole");
+        }
+
+        // X10 (`ESC [ M` + three raw bytes): button byte 192 + 32 = 0xE0, and a
+        // byte below 32 in each of the three positions.
+        for input in [
+            &b"\x1b[M\xe0\x21\x21"[..],
+            &b"\x1b[M\x10\x21\x21"[..],
+            &b"\x1b[M\x20\x05\x21"[..],
+            &b"\x1b[M\x20\x21\x00"[..],
+        ] {
+            let result = parse_csi(input, &mut buf);
+            assert_eq!(None, result.event, "{input:?} is skipped");
+            assert_eq!(6, result.n, "{input:?} is consumed whole");
+        }
     }
 
     #[test]

@@ -1181,6 +1181,21 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - proposed fix:    `std.math.lossyCast(u32, @floor(padding * dpi / 72))` in `scaledPadding`, and `+|` for the padding sums in `size.zig` (or clamp `window-padding-*` in `Config.finalize`).
 - upstream status: not reported
 
+### UD72 — libvaxis's mouse decode panics on a button mask with both wheel bits, and on an X10 byte below 32
+- kind:            crash (safety-checked trap) / undefined behaviour
+- upstream project: libvaxis
+- severity:        low (tty input to a CLI TUI)
+- reference:       libvaxis 0.6.0 (the version Ghostty pins) `src/Parser.zig:688-746` (`parseMouse`): `const button: Mouse.Button = @enumFromInt(button_mask & mouse_bits.buttons);` at `:714`, with `buttons = 0b11000011`, into the exhaustive `Mouse.Button` (`src/Mouse.zig:16-29`); and the X10 branch `button_mask = full_input[3] - 32; px = full_input[4] - 32; py = full_input[5] - 32;` (`:697-699`, `u8` arithmetic)
+- defect:          (1) the mask keeps bits 0-1 and 6-7, so 192..=195 (both wheel bits set) are values `Mouse.Button` does not name, and `@enumFromInt` of one is illegal behaviour. (2) An X10 mouse sequence (`ESC [ M` plus three raw bytes) with any of those bytes below 32 underflows the `u8` subtraction.
+- ReleaseSafe:     (1) panic "invalid enum value"; (2) panic "integer overflow". Measured with Zig 0.16.0 on the two expressions (mask 192; byte 16), Debug and ReleaseSafe identical.
+- ReleaseFast:     (1) a `Button` holding 192, which no `switch` on the type expects (undefined behaviour); (2) the byte wraps (16 - 32 = 240, measured), giving a bogus coordinate or mask.
+- reachability:    tty input to a libvaxis TUI (in Ghostty: the CLI's TUIs, such as `+list-themes` and `+boo`): a buggy or hostile host terminal, or the bytes typed or pasted, e.g. `ESC [ < 192 ; 1 ; 1 M`.
+- port handling:   `crates/rustty-vaxis/src/mouse.rs` `Button::from_u8` returns `None` for a value no button has, and `crates/rustty-vaxis/src/parser.rs` `parse_mouse` skips such an event, and an X10 event with a byte below 32 (`checked_sub`), returning no event while consuming exactly what the event would have (`6` for X10, the sequence length for SGR — the function's own `n` for a mouse event), so the bytes are not re-read as keys. Skipping rather than mapping to `.none` invents no event. PORT NOTEs at both sites.
+- parity row(s):   NEW-FINDINGS N60. Inventory M23 (records F7); the X10 underflow is not in the inventory (found by task R13-C in the same function).
+- test:            `a_mouse_event_with_an_invalid_button_or_byte_is_skipped` (rustty-vaxis): SGR masks 192, 195 and 228 (modifier bits on top) and four X10 sequences (button byte 0xE0, and a byte below 32 in each of the three positions) give no event and are consumed whole; the neighbours 131 and 67 (SGR) and 0xA3 (X10) still decode to `button_11`/`wheel_left`/`button_11`. Negative controls, macOS 2026-09-22, one at a time: `unreachable!()` restored in `from_u8` panics "entered unreachable code"; the plain `- 32` restored panics "attempt to subtract with overflow". Restored.
+- proposed fix:    decode with `std.meta.intToEnum(Mouse.Button, …) catch return null_event` (consuming the sequence), or make `Mouse.Button` non-exhaustive; and use `std.math.sub(u8, full_input[i], 32) catch return null_event` in the X10 branch.
+- upstream status: not reported
+
 ## Candidates pending verification
 
 Assembled from this plan's progress notes on 2026-09-11. **Not verified** — do not cite as fact.

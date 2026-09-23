@@ -58,12 +58,17 @@ pub enum Button {
 
 impl Button {
     /// `@enumFromInt(v)` — the SGR/xterm mouse `button_mask & buttons` decode
-    /// (Parser). PORT NOTE (Chunk 3a): faithful to Zig's checked `@enumFromInt`
-    /// illegal-behavior — a masked value with both wheel bits (6+7) set is an
-    /// invalid button (192..195); Zig safe-mode panics there, so we `unreachable!()`.
-    /// Provably not hit by the SGR corpus (button masks never set both wheel bits).
-    pub fn from_u8(v: u8) -> Button {
-        match v {
+    /// (Parser).
+    ///
+    /// PORT NOTE: reference defect (R13), UD72. The reference converts the
+    /// masked value with `@enumFromInt` into the exhaustive `Button`. The mask
+    /// `0b1100_0011` keeps both wheel bits, so 192..=195 (a button byte with bits
+    /// 6 and 7 both set) name no button: libvaxis panics "invalid enum value" in
+    /// safe builds and has undefined behaviour in ReleaseFast. The bytes come
+    /// from the tty (a buggy or hostile host terminal, or escape bytes typed or
+    /// pasted into a TUI), so this returns `None` and the parser skips the event.
+    pub fn from_u8(v: u8) -> Option<Button> {
+        Some(match v {
             0 => Button::Left,
             1 => Button::Middle,
             2 => Button::Right,
@@ -76,8 +81,8 @@ impl Button {
             129 => Button::Button9,
             130 => Button::Button10,
             131 => Button::Button11,
-            _ => unreachable!(),
-        }
+            _ => return None,
+        })
     }
 }
 

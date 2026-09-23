@@ -2534,3 +2534,17 @@ The port's saturating `as u32` in `scaledPadding` looked safe, but two paddings 
 padding sums now saturate, leaving a one-cell grid. Reference defect: `UPSTREAM-DEFECTS.md` UD71.
 
 **state**: CLOSED by task R13-C.
+
+## N60 — a mouse button mask of 192..=195, or an X10 byte below 32, panicked the vaxis parser
+
+- **id**: N60. Inventory M23.
+- **found by**: records F7; the X10 half by task R13-C; fixed by task R13-C.
+- **severity**: low. **kind**: missing-branch (reference defect, R13; upstream libvaxis).
+- **oracle**: libvaxis 0.6.0 `src/Parser.zig:688-746`.
+- **rustty**: `crates/rustty-vaxis/src/mouse.rs` (`Button::from_u8`), `crates/rustty-vaxis/src/parser.rs` (`parse_mouse`).
+
+The port's `Button::from_u8` hit `unreachable!()` for a masked value no button names, and the X10
+branch's `- 32` underflowed for a raw byte below 32, both from tty input. Such events are now skipped,
+consuming the whole sequence. Reference defect: `UPSTREAM-DEFECTS.md` UD72.
+
+**state**: CLOSED by task R13-C.
