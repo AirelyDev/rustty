@@ -931,6 +931,13 @@ pub extern "C" fn rustty_wc_face_new(
     install_wasm_log_backend();
     // fn face_new_(...) !*Face { … } catch null
     let raw = unsafe { core::slice::from_raw_parts(ptr, len) };
+    // PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD106 (LEDGER
+    // S91-F6). The reference's `@enumFromInt(presentation)` narrows the `u16`
+    // into `enum(u1)` unchecked: 2 or more traps in ReleaseSafe ("invalid enum
+    // value") and truncates in ReleaseFast (2 becomes `.text`, measured, Zig
+    // 0.16.0). Only the JS glue calls this, with 0 or 1. The port maps any
+    // nonzero value to emoji, which agrees with the reference on both values it
+    // defines.
     let pres = if presentation == 0 {
         Presentation::Text
     } else {

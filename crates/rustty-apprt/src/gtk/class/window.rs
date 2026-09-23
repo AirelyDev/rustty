@@ -333,13 +333,16 @@ mod imp {
                 "handle active state source",
             );
 
-            // PORT NOTE (invariant 11, sound divergence): the reference's `dispose`
-            // does NOT remove `tab_overview_focus_timer` (only `tabOverviewOpen`/
+            // PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD103
+            // (invariant 11; LEDGER S58-F5). The reference's `dispose` does NOT
+            // remove `tab_overview_focus_timer` (only `tabOverviewOpen`/
             // `tabOverviewFocusTimer` manage it), so a pending 500ms timer can
-            // outlive the window and fire against a finalized `self` — a latent
-            // use-after-free in the reference. In rustty the timer closure captures
-            // the window; removing the source here (invariant 11: source ⇔ object
-            // lifetime) is the sound re-expression.
+            // outlive the window and fire against a finalized `self` (its userdata
+            // is the raw `*Window`) — a use-after-free when a window is closed
+            // within 500 ms of leaving the tab overview. In rustty the timer
+            // closure captures the window; removing the source here (invariant
+            // 11: source ⇔ object lifetime) is the safe handling
+            // (`window_dispose_removes_source_ids`).
             remove_source_id(
                 self.tab_overview_focus_timer.take(),
                 "tab overview focus timer",

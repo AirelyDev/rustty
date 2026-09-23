@@ -205,6 +205,9 @@ impl Collection {
         // We have some special indexes so we must never pass those.
         let idx = self.faces.get(opts.style).count();
         if idx >= (Index::SPECIAL_START as usize) - 1 {
+            // PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD111: the
+            // reference's `SharedGridSet` callers build each built-in face inline
+            // in `c.add(...)`, so when `add` fails nothing frees it.
             // PORT NOTE (W9F-02): the collection refused ownership of the moved
             // face, and `Drop` does not run the backend `deinit` (the HarfBuzz
             // font — plus the FT face/mutex on FreeType — are raw handles), so

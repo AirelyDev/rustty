@@ -1271,7 +1271,9 @@ mod tests {
         // defer for (fs.fonts()) |font| font.destroy();
         //
         // UPSTREAM BUG — NOT PORTED AS WRITTEN (P4-U3, .port/phase-4/
-        // UPSTREAM_BUGS.md): the reference's defer PAIR double-destroys every
+        // UPSTREAM_BUGS.md; reference defect (R13), UPSTREAM-DEFECTS.md UD109,
+        // re-verified at the pin by task R13-D): the reference's defer PAIR
+        // double-destroys every
         // member — `FcFontSetDestroy` itself calls `FcPatternDestroy` on each
         // pattern in the set, so the per-font `destroy()` loop drops each
         // refcount to zero (freeing the pattern) and the subsequent

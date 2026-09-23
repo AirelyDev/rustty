@@ -3856,6 +3856,11 @@ const DRAIN_BUDGET: std::time::Duration = std::time::Duration::from_millis(50);
 /// **Bounded, so it can never become the hang it prevents:** every iteration
 /// re-checks a `DRAIN_BUDGET` deadline, and each read is gated by a
 /// zero-timeout `poll` so nothing ever blocks on a quiet master.
+///
+/// PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD102 (the
+/// `threadEnter` errdefers that stop the child with no reader), with UD93 (the
+/// unbounded `killPid` wait it would hang on). The wedge itself was measured on
+/// the port side at an earlier date, not re-measured at the pin.
 #[cfg(not(windows))]
 fn drain_pty_master_once(fd: libc::c_int) -> usize {
     let deadline = std::time::Instant::now() + DRAIN_BUDGET;
