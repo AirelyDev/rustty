@@ -164,7 +164,7 @@ src/os/locale.zig	crates/rustty-os/src/locale.rs	0	0	task-14e-2: closes S111-F5 
 src/os/mouse.zig	crates/rustty-os/src/mouse.rs	0	0	
 src/os/open.zig	crates/rustty-os/src/open.rs	0	0	
 src/os/passwd.zig	crates/rustty-os/src/passwd.rs	0	0	
-src/os/systemd.zig	crates/rustty-os/src/systemd.rs	2	0	N15: this file was OUTSIDE the portmap until 2026-09-10 — the portmap was seeded from the audit's LOG rows and inherited its blind spots, so no row names it. Measured, not adjudicated: deficit 2.
+src/os/systemd.zig	crates/rustty-os/src/systemd.rs	1	0	N15: this file was OUTSIDE the portmap until 2026-09-10 — the portmap was seeded from the audit's LOG rows and inherited its blind spots, so no row names it. Measured, not adjudicated: deficit 2. T-G (2026-09-23, LEDGER S112-F8) restored `problems reading from '{s}'`: deficit 1, the `unable to format comm path for pid {d}` arm (`bufPrint` into a max_path_bytes buffer; the port's `format!` cannot fail).
 src/pty.zig	crates/rustty-os/src/pty.rs	0	0	
 src/renderer/Metal.zig	crates/rustty-renderer/src/metal/metal_impl.rs	0	0	
 src/renderer/OpenGL.zig	crates/rustty-renderer/src/opengl/opengl_impl.rs+crates/rustty-renderer/src/opengl/gl/sys.rs	0	0	Arm sums opengl_impl.rs and opengl/gl/sys.rs: OpenGL.zig's head (the GL debug-callback switch and prepareContext) ports to sys.rs, not to the file its name suggests.
