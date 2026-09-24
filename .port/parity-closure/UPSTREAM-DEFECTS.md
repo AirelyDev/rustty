@@ -495,9 +495,9 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - ReleaseSafe:     no crash; wrong key events in the inspector UI.
 - ReleaseFast:     same.
 - reachability:    keyboard in the inspector: on GTK, keypad navigation keys with NumLock off produce these keyvals. macOS reachability not checked.
-- port handling:   faithful at both copies: `crates/rustty-vt/src/input/key.rs:970,975` and `crates/rustty-apprt/src/embedded.rs:3159,3164`.
+- port handling:   (1) fixed (R13, extended 2026-09-23; task tail-s6) at both copies: `.numpad_page_down` maps to `ImGuiKey_PageDown`, as `.page_down` does, in `crates/rustty-vt/src/input/key.rs` `Key::imgui_key` (the GTK inspector's mapping, `imgui` feature) and `crates/rustty-apprt/src/embedded.rs` `key_to_imgui_key` (the embedded/macOS inspector's), each with a PORT NOTE: reference defect (R13). Listed in `docs/ghostty-bug-fixes.md`. (2) and (3) stay faithful: imgui has no Begin key, so what keypad Begin should send is not evident (the proposed fix below offers two answers), and the orphaned comment is prose. Before task tail-s6 all three were faithful.
 - parity row(s):   none; inventory M74.
-- test:            n/a (record only).
+- test:            `input::key::tests::imgui_key_numpad_page_down_is_page_down` (rustty-vt, `--features imgui`) and `embedded::imgui_key_tests::numpad_page_down_maps_to_page_down` (rustty-apprt): keypad Page Down maps to `ImGuiKey_PageDown` and to the same value as Page Down, and keypad Page Up still maps to `ImGuiKey_PageUp`. Negative control (macOS, task tail-s6, each run alone before the fix, i.e. with the reference's mapping): both fail `left: Some(517), right: Some(518)` (`ImGuiKey_PageUp` where `ImGuiKey_PageDown` is expected).
 - proposed fix:    Map `.numpad_page_down => ImGuiKey_PageDown`. Map `.numpad_begin` to `null` (imgui has no Begin key) or to `ImGuiKey_Keypad5`. Either restore `.numpad_separator => ImGuiKey_Comma` under the comment or delete the comment. A test that `imguiKey` is injective over mapped keys, except intentional aliases such as `numpad_left`/`arrow_left`, would catch (1).
 - upstream status: not reported
 
