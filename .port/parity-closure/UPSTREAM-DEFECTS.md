@@ -1823,6 +1823,21 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - proposed fix:    in `sentry_envelope.zig`, reject headers nested deeper than 256 levels when parsing (a depth count over the parsed `Value`, or a token-level count), so every parsed `Envelope` can be serialized; or check the depth in `serialize` and return an error. Upstream zig could also make `Stringify` return an error rather than assert on the documented limit.
 - upstream status: not reported
 
+### UD190 — FreeType `Face.name` overflows its buffer on a long UTF-16 family name
+- kind:            crash (safety-checked trap) / undefined behaviour
+- upstream project: ghostty
+- severity:        low (a font file with an unusual family name)
+- reference:       `src/font/face/freetype.zig:158-183` (`Face.name`: for a Windows Unicode family record of even length and at most 1024 bytes, `std.unicode.utf16LeToUtf8(buf, tmp[0..max]) catch return string`); zig 0.16.0 `std/unicode.zig:1000-1052` (`utf16LeToUtf8Impl` writes `utf8[dest_index..]` with no room check; `utf8Encode` asserts the room), at 20abdb50a
+- defect:          `utf16LeToUtf8` reports decode errors but not a full output buffer: running out of room is an assertion. The record may hold 512 UTF-16 units, whose UTF-8 form can reach 1536 bytes (3 per BMP character from U+0800), and every caller passes a 1024-byte buffer, so a family name of 342 or more such characters overflows it. The function's own answer for a name it cannot decode is the raw record (`catch return string`).
+- ReleaseSafe:     panic "reached unreachable code". Measured (Zig 0.16.0, `utf16LeToUtf8` of 400 x U+6C34 into a 1024-byte buffer).
+- ReleaseFast:     the same call returned 1200, having written 176 bytes past the buffer (measured), and `name` then returns `buf[0..1200]`, a slice past the end of the caller's stack buffer: undefined behaviour.
+- reachability:    a font whose first family (`nameID` 1) record is Windows / Unicode BMP with 342 or more characters at or above U+0800, loaded on a FreeType backend (Linux, FreeBSD, Windows), then any `Face.name` caller: Collection's synthetic bold/italic log, `+show-face`, the CJK-width warning, the SharedGridSet logs. The name is read from the font file.
+- port handling:   fixed (R13): `crates/rustty-font-shaper/src/face/freetype.rs` `Face::name` decodes with a bounded helper that fails when the output does not fit, and answers that failure as the reference answers a decode error, with the raw record. PORT NOTE: reference defect (R13) at the decode. Listed in `docs/ghostty-bug-fixes.md`.
+- parity row(s):   LEDGER S91-F9.
+- test:            `face::freetype::tests::face_name_utf16_record_too_long_for_the_buffer_is_returned_raw` (rustty-font-shaper; JetBrains Mono with a rebuilt `name` table): 10 x U+6C34 is decoded; 400 x U+6C34 (800 bytes, 1200 as UTF-8) returns the raw record. Negative control, macOS 2026-09-23: the fallback replaced by the reference's panic fails the test with it. Restored.
+- proposed fix:    size `tmp` and the output together: decode into a buffer of `max * 3` bytes (or check `std.unicode.calcUtf8Len` against `buf.len` first) and `return string` when the name does not fit.
+- upstream status: not reported
+
 ## Candidates pending verification
 
 Assembled from this plan's progress notes on 2026-09-11. **Not verified** — do not cite as fact.
