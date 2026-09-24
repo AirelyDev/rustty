@@ -23,6 +23,26 @@ use crate::options::{GLYPH_PROTOCOL, KITTY_GRAPHICS};
 // const log = std.log.scoped(.terminal_apc);
 const LOG_SCOPE: &str = "terminal_apc";
 
+/// The identify arm's `comptime build_options.glyph_protocol` gate.
+///
+/// PORT NOTE (parity S149-F1): in every non-test build this is exactly the
+/// const `options::GLYPH_PROTOCOL`. The `cfg(test)` arm is a test seam: this
+/// crate's tests never build with the `glyph-protocol` feature off
+/// (rustty-synthetic's dev-dependency unifies the default features back on,
+/// and `check_vt_features.py` records that a trimmed build is a build
+/// configuration, not a test one), so a thread-local lets
+/// `glyph_protocol_build_option_off_ignores_glyph_command` take the gate's off
+/// arm. It gates only the identify arm; with it off no `State::Glyph` is ever
+/// entered, so the other arms' `GLYPH_PROTOCOL` guards are not reached.
+#[inline(always)]
+fn glyph_protocol_build_option() -> bool {
+    #[cfg(test)]
+    if tests::GLYPH_PROTOCOL_FORCED_OFF.with(|off| off.get()) {
+        return false;
+    }
+    GLYPH_PROTOCOL
+}
+
 /// APC command handler. This should be hooked into a terminal.Stream handler.
 /// The start/feed/end functions are meant to be called from the terminal.Stream
 /// apcStart, apcPut, and apcEnd functions, respectively.
@@ -183,7 +203,7 @@ impl Handler {
                     if str == glyph::IDENTIFIER {
                         // CORRECTION (parity S149-F1): the build-option gate
                         // was missing here and in the glyph arms below.
-                        if GLYPH_PROTOCOL {
+                        if glyph_protocol_build_option() {
                             if self.enabled[Protocol::Glyph as usize] {
                                 self.state = State::Glyph(glyph::CommandParser::init(
                                     self.max_bytes[Protocol::Glyph as usize],
@@ -806,6 +826,28 @@ impl Command {
 
 #[cfg(test)]
 mod tests {
+    thread_local! {
+        /// Test seam for `glyph_protocol_build_option` (parity S149-F1).
+        pub(super) static GLYPH_PROTOCOL_FORCED_OFF: core::cell::Cell<bool> =
+            const { core::cell::Cell::new(false) };
+    }
+
+    /// Forces the glyph build option off on this test thread until dropped.
+    struct ForceGlyphProtocolOff;
+
+    impl ForceGlyphProtocolOff {
+        fn new() -> Self {
+            GLYPH_PROTOCOL_FORCED_OFF.with(|off| off.set(true));
+            ForceGlyphProtocolOff
+        }
+    }
+
+    impl Drop for ForceGlyphProtocolOff {
+        fn drop(&mut self) {
+            GLYPH_PROTOCOL_FORCED_OFF.with(|off| off.set(false));
+        }
+    }
+
     use super::*;
     use allocator_api2::alloc::Global;
 
@@ -825,11 +867,12 @@ mod tests {
     // S149-F2: glyph-protocol parse failures at `end()` log
     // `log.warn("glyph protocol error: {}", .{err})` (apc.zig:241-244).
     #[test]
+    #[cfg_attr(
+        not(feature = "glyph-protocol"),
+        ignore = "SkipZigTest: needs options::GLYPH_PROTOCOL (R14)"
+    )]
     fn glyph_protocol_error_at_end_logs() {
         // The glyph parser only exists with `build_options.glyph_protocol`.
-        if !GLYPH_PROTOCOL {
-            return;
-        }
 
         let alloc = Global;
         let mut h: Handler = Handler::default();
@@ -1156,11 +1199,12 @@ mod tests {
 
     // test "valid glyph command"
     #[test]
+    #[cfg_attr(
+        not(feature = "glyph-protocol"),
+        ignore = "SkipZigTest: needs options::GLYPH_PROTOCOL (R14)"
+    )]
     fn valid_glyph_command() {
         // if (comptime !build_options.glyph_protocol) return error.SkipZigTest;
-        if !GLYPH_PROTOCOL {
-            return;
-        }
 
         let alloc = Global;
 
@@ -1183,13 +1227,24 @@ mod tests {
     // Parity S149-F1 (no reference test): with `build_options.glyph_protocol`
     // off, the reference's identify arm takes `self.state = .ignore` for the
     // glyph identifier even while `.glyph` is enabled at runtime, so the APC
-    // ends with no command.
+    // ends with no command. The build option is forced off through the
+    // `glyph_protocol_build_option` test seam, so this runs in every lane (in a
+    // genuinely trimmed build the const is already false).
     #[test]
     fn glyph_protocol_build_option_off_ignores_glyph_command() {
-        if GLYPH_PROTOCOL {
-            return;
+        // Control: without the seam the same bytes identify as glyph exactly
+        // when the build option is on.
+        {
+            let alloc = Global;
+            let mut h: Handler = Handler::default();
+            h.start();
+            h.feed_slice(alloc, b"25a1;");
+            assert_eq!(GLYPH_PROTOCOL, matches!(h.state, State::Glyph(_)));
+            h.deinit();
         }
 
+        let _off = ForceGlyphProtocolOff::new();
+        assert!(!super::glyph_protocol_build_option());
         let alloc = Global;
         let mut h: Handler = Handler::default();
         assert!(h.enabled[Protocol::Glyph as usize]);
@@ -1272,11 +1327,12 @@ mod tests {
 
     // test "feedSlice valid glyph command"
     #[test]
+    #[cfg_attr(
+        not(feature = "glyph-protocol"),
+        ignore = "SkipZigTest: needs options::GLYPH_PROTOCOL (R14)"
+    )]
     fn feed_slice_valid_glyph_command() {
         // if (comptime !build_options.glyph_protocol) return error.SkipZigTest;
-        if !GLYPH_PROTOCOL {
-            return;
-        }
 
         let alloc = Global;
 

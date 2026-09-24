@@ -10812,10 +10812,11 @@ mod tests {
     // artifact, whose default is 10MB (`Terminal.zig`'s
     // `.lib => 10 * 1000 * 1000`), not the application's 320MB.
     #[test]
+    #[cfg_attr(
+        not(feature = "kitty-graphics"),
+        ignore = "needs the kitty-graphics vt feature: the storage limit query is gated on it (R14)"
+    )]
     fn kitty_image_storage_limit_defaults_to_lib_artifact_value() {
-        if !rustty_vt::options::KITTY_GRAPHICS {
-            return;
-        }
         with_test_allocator(|alloc| {
             let (r, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, r);
