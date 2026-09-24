@@ -306,7 +306,7 @@ pub fn init_with_action(action_detected: bool) -> Result<rustty_core::Logging, I
     log_with(
         Level::Info,
         "default",
-        &format!("rustty version={}", build_config::VERSION_STRING),
+        &format!("rustty version={}", rustty_version::VERSION_STRING),
         &logging,
     );
     log_with(

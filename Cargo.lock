@@ -1214,6 +1214,7 @@ dependencies = [
  "rustty-os",
  "rustty-renderer",
  "rustty-termio",
+ "rustty-version",
  "rustty-vt",
  "rustty-xev",
  "wayland-backend",
@@ -1267,6 +1268,7 @@ dependencies = [
  "rustty-input",
  "rustty-os",
  "rustty-renderer",
+ "rustty-version",
  "rustty-vt",
  "rustty-xev",
 ]
@@ -1336,6 +1338,7 @@ dependencies = [
  "rustty-os",
  "rustty-terminfo",
  "rustty-vaxis",
+ "rustty-version",
  "rustty-vt",
  "rustty-xev",
  "rustty-zf",
@@ -1361,6 +1364,7 @@ dependencies = [
  "rustty-render-types",
  "rustty-renderer",
  "rustty-util",
+ "rustty-version",
  "rustty-vt",
  "rustty-zigstd",
 ]
@@ -1404,6 +1408,7 @@ dependencies = [
  "rustty-global",
  "rustty-identity",
  "rustty-os",
+ "rustty-version",
  "sentry-sys",
 ]
 
@@ -1424,6 +1429,7 @@ dependencies = [
  "rustty-config",
  "rustty-identity",
  "rustty-input",
+ "rustty-version",
 ]
 
 [[package]]
@@ -1640,6 +1646,7 @@ dependencies = [
  "rustty-renderer",
  "rustty-terminfo",
  "rustty-util",
+ "rustty-version",
  "rustty-vt",
  "rustty-xev",
  "rustty-zigstd",
@@ -1661,6 +1668,14 @@ dependencies = [
  "libc",
  "rustty-wuffs",
  "rustty-zigimg",
+]
+
+[[package]]
+name = "rustty-version"
+version = "0.1.0"
+dependencies = [
+ "rustty-build-config",
+ "rustty-identity",
 ]
 
 [[package]]
@@ -2119,6 +2134,7 @@ version = "0.1.0"
 dependencies = [
  "rustty-extra",
  "rustty-terminfo",
+ "rustty-version",
  "serde_json",
 ]
 

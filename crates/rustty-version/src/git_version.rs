@@ -82,12 +82,29 @@ pub fn sanitize_branch(branch: &str) -> String {
         .collect()
 }
 
+/// The branch name from `git rev-parse --abbrev-ref HEAD`'s raw stdout:
+/// trimmed of `"\r\n "`, then sanitized.
+//
+// PORT NOTE: reference defect (R13), UD150. `GitVersion.zig:22-41` sanitizes
+// the RAW output first, so git's trailing newline becomes `-`, and the
+// `trimEnd(u8, branch, "\r\n ")` at `:84` then has nothing left to trim: every
+// dev version reads `X.Y.Z-<branch>-+<hash>` (measured on the reference's own
+// cached build options: `1.3.2-HEAD-+4540d499a`). The trim can only be meant
+// to strip that newline, and before upstream `ad9225a4c` (which replaced the
+// `/`-only rewrite with the full sanitizing loop) versions came out
+// `X.Y.Z-main+hash`. Reachable on every untagged build from a git checkout.
+// The port trims first and then sanitizes, which is the reference's own two
+// steps in the order that makes the trim effective: `main\n` -> `main`.
+pub fn branch_from_rev_parse(raw: &str) -> String {
+    sanitize_branch(trim_end(raw))
+}
+
 /// Initialize the version and detect it from the Git environment rooted at
 /// `root` (the reference's `b.build_root`).
 pub fn detect(root: &Path) -> Result<Version, Error> {
     // Execute a bunch of git commands to determine the automatic version.
     let branch = match run_allow_fail(root, &["rev-parse", "--abbrev-ref", "HEAD"])? {
-        Run::Ok(s) => sanitize_branch(&s),
+        Run::Ok(s) => branch_from_rev_parse(&s),
         Run::ExitCodeFailure => return Err(Error::GitNotRepository),
     };
 
@@ -125,11 +142,9 @@ pub fn detect(root: &Path) -> Result<Version, Error> {
         } else {
             Some(trim_end(&tag).to_string())
         },
-        // PORT NOTE: reference defect, ported faithfully (latent, UD150). The
-        // sanitizing loop runs over the untrimmed output, turning its trailing
-        // newline into `-`, and `trimEnd` then finds nothing to trim, so
-        // `main\n` becomes `main-`. Measured on the reference's cached build
-        // options: `1.3.2-HEAD-+4540d499a`.
-        branch: trim_end(&branch).to_string(),
+        // The reference's `std.mem.trimEnd(u8, branch, "\r\n ")` sits here;
+        // `branch_from_rev_parse` has already trimmed (UD150), so it is moved,
+        // not dropped.
+        branch,
     })
 }

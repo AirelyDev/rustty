@@ -2432,7 +2432,7 @@ impl Subprocess {
         // try env.put("TERM_PROGRAM_VERSION", build_config.version_string);
         env.put(
             b"TERM_PROGRAM_VERSION",
-            rustty_build_config::VERSION_STRING.as_bytes(),
+            rustty_version::VERSION_STRING.as_bytes(),
         );
 
         // VTE_VERSION is set by gnome-terminal and other VTE-based terminals.

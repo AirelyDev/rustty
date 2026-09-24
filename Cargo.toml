@@ -22,6 +22,11 @@ members = [
     "crates/rustty-util",          #  1
     "crates/rustty-build-config",  #  2
     "crates/rustty-identity",      #  3
+    # The git-derived app version (`build_config.version_string`/`release_channel`),
+    # split out of rustty-build-config because it changes on every commit: only
+    # the crates that report it depend on it (review T-B). Above build-config +
+    # identity, below everything that reads it.
+    "crates/rustty-version",
     "crates/rustty-datastruct",    #  4
     "crates/rustty-unicode",       #  5
     "crates/rustty-simd",          #  6
@@ -185,6 +190,7 @@ authors = ["rustty contributors"]
 rustty-util = { path = "crates/rustty-util" }
 rustty-build-config = { path = "crates/rustty-build-config" }
 rustty-identity = { path = "crates/rustty-identity" }
+rustty-version = { path = "crates/rustty-version" }
 rustty-datastruct = { path = "crates/rustty-datastruct" }
 rustty-unicode = { path = "crates/rustty-unicode" }
 rustty-simd = { path = "crates/rustty-simd" }

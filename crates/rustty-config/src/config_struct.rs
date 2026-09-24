@@ -7708,7 +7708,7 @@ impl Config {
         // if (self.@"auto-update-channel" == null) {
         if self.auto_update_channel.is_none() {
             // self.@"auto-update-channel" = build_config.release_channel;
-            self.auto_update_channel = Some(rustty_build_config::release_channel());
+            self.auto_update_channel = Some(rustty_version::release_channel());
         }
 
         // self.@"faint-opacity" = std.math.clamp(self.@"faint-opacity", 0.0, 1.0);

@@ -442,8 +442,8 @@ fn initThread(environ_map: rustty_global::EnvMap) -> Result<(), InitThreadError>
     unsafe {
         sentry::c::sentry_options_set_release_n(
             opts,
-            build_config::VERSION_STRING.as_ptr().cast(),
-            build_config::VERSION_STRING.len(),
+            rustty_version::VERSION_STRING.as_ptr().cast(),
+            rustty_version::VERSION_STRING.len(),
         )
     };
     // sentry.c.sentry_options_set_transport(opts, @ptrCast(transport));

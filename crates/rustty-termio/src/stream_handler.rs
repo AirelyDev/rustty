@@ -1981,7 +1981,7 @@ impl<M: AppMailbox> StreamHandler<M> {
             target: LOG_SCOPE,
             "reporting XTVERSION: {} {}",
             rustty_identity::XTVERSION_NAME,
-            rustty_build_config::VERSION_STRING
+            rustty_version::VERSION_STRING
         );
         // var buf: [288]u8 = undefined;
         // const resp = try std.fmt.bufPrint(
@@ -2000,7 +2000,7 @@ impl<M: AppMailbox> StreamHandler<M> {
             format_args!(
                 "\x1BP>|{} {}\x1B\\",
                 rustty_identity::XTVERSION_NAME,
-                rustty_build_config::VERSION_STRING,
+                rustty_version::VERSION_STRING,
             ),
         )?;
         // const msg = try termio.Message.writeReq(self.alloc, resp);

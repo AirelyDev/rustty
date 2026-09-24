@@ -63,7 +63,7 @@ const VERSION_MARKER: &[u8] = b"@@VERSION@@";
 /// just the first), so this does too.
 #[must_use]
 pub fn substitute(input: &[u8]) -> Vec<u8> {
-    let version = rustty_build_config::VERSION_STRING.as_bytes();
+    let version = rustty_version::VERSION_STRING.as_bytes();
     let mut out = Vec::with_capacity(input.len());
     let mut i = 0usize;
     while i < input.len() {
@@ -203,7 +203,7 @@ mod tests {
         let out = substitute(b"a @@VERSION@@ b @@VERSION@@");
         let s = String::from_utf8(out).unwrap();
         assert!(!s.contains("@@VERSION@@"), "left a marker behind: {s}");
-        assert_eq!(s.matches(rustty_build_config::VERSION_STRING).count(), 2);
+        assert_eq!(s.matches(rustty_version::VERSION_STRING).count(), 2);
         // Control: text with no marker is passed through byte-identically.
         assert_eq!(substitute(b"no marker here"), b"no marker here");
     }

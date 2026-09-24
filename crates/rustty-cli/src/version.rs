@@ -82,19 +82,14 @@ fn libxev_backend_tag() -> &'static str {
 /// Reference: `build_config.version.build` — the `+BUILD` metadata (commit hash)
 /// of the SemanticVersion, which `build.zig` fills in from the source checkout.
 ///
-/// The Rust runtime SemanticVersion view has no `+BUILD` channel, so `build.rs`
-/// captures the commit (`git rev-parse --short HEAD`, overridable via
-/// `RUSTTY_COMMIT_HASH`) and bakes it into the crate env instead. It is EMPTY —
-/// hence `None` here, hence no hyperlink — when the source is not a git checkout
-/// (release tarball / vendored crate / docs.rs), which is exactly the reference's
-/// own `build_config.version.build == null` case.
+/// It is the `+BUILD` part of the composed version (`rustty_version`): the short
+/// hash for an untagged checkout, `0000000` without git, and `None` (no
+/// hyperlink) for a `vX.Y.Z`-tagged release, exactly the reference's cases.
+/// CORRECTION (review T-B): this used to be a separate `git rev-parse --short
+/// HEAD` capture in this crate's `build.rs` (`RUSTTY_COMMIT_HASH`), which also
+/// linked a tagged release and never linked a build without git.
 fn commit_hash() -> Option<&'static str> {
-    let hash = env!("RUSTTY_COMMIT_HASH");
-    if hash.is_empty() {
-        None
-    } else {
-        Some(hash)
-    }
+    rustty_version::version_build()
 }
 
 /// The web URL for a source commit: the product's repo commit-URL prefix
@@ -272,7 +267,7 @@ fn write_version<W: std::io::Write>(stdout: &mut W, tty: bool) -> Result<u8, Err
         stdout,
         "{} {}",
         rustty_identity::APP_NAME_TITLECASE,
-        build_config::VERSION_STRING
+        rustty_version::VERSION_STRING
     )?;
     writeln!(stdout)?;
     writeln!(stdout)?;
@@ -284,12 +279,12 @@ fn write_version<W: std::io::Write>(stdout: &mut W, tty: bool) -> Result<u8, Err
     // try stdout.print("Version\n", .{});
     writeln!(stdout, "Version")?;
     // try stdout.print("  - version: {s}\n", .{build_config.version_string});
-    writeln!(stdout, "  - version: {}", build_config::VERSION_STRING)?;
+    writeln!(stdout, "  - version: {}", rustty_version::VERSION_STRING)?;
     // try stdout.print("  - channel: {t}\n", .{build_config.release_channel});
     writeln!(
         stdout,
         "  - channel: {}",
-        release_channel_tag(build_config::release_channel())
+        release_channel_tag(rustty_version::release_channel())
     )?;
 
     // try stdout.print("Build Config\n", .{});
@@ -392,48 +387,27 @@ fn write_version<W: std::io::Write>(stdout: &mut W, tty: bool) -> Result<u8, Err
 mod tests {
     use super::*;
 
-    /// Whether the crate source tree is a live git checkout — the exact condition
-    /// under which `build.rs` bakes a hash. Keeps the assertion below from being
-    /// vacuous in a checkout AND from being wrong in a tarball build.
-    fn source_is_git_checkout() -> bool {
-        std::process::Command::new("git")
-            .args(["rev-parse", "--short", "HEAD"])
-            .current_dir(env!("CARGO_MANIFEST_DIR"))
-            .output()
-            .map(|o| o.status.success() && !o.stdout.is_empty())
-            .unwrap_or(false)
-    }
-
-    /// The `+BUILD`-metadata analog must actually CARRY a commit when built from a
-    /// git checkout. This is the assertion that was dead before WS19 T12
-    /// (`commit_hash()` returned `None` unconditionally).
+    /// The hyperlink carries the version's own `+BUILD` metadata, and in a
+    /// git build that is a real short hash. This is the assertion that was
+    /// dead before WS19 T12 (`commit_hash()` returned `None` unconditionally).
     #[test]
-    // MIRI EXCEPTION (rustty-cli version, process/file-I/O class): the test asks
-    // the environment whether it IS a git checkout by running `git rev-parse`,
-    // which Miri's isolation forbids ("`open` not available when isolation is
-    // enabled"), aborting the whole rustty-cli lib binary. Removing the probe
-    // would make the test vacuous in a tarball build — the exact hole WS19 T12
-    // closed. Same class as `rustty-vaxis/tests/ucd_provenance.rs`. Registered
-    // in .port/phase-2/MIRI_EXCEPTIONS.md ("rustty-cli — the 2026-07-31 CI triage").
-    #[cfg_attr(
-        miri,
-        ignore = "MIRI EXCEPTION (rustty-cli): spawns `git rev-parse`; \
-         Miri isolation forbids it — see MIRI_EXCEPTIONS.md"
-    )]
-    fn commit_hash_is_captured_in_a_git_checkout() {
-        if !source_is_git_checkout() {
-            // Not a checkout: the reference's own `version.build == null` case.
-            assert_eq!(commit_hash(), None);
-            return;
+    fn commit_hash_is_the_version_build_metadata() {
+        assert_eq!(commit_hash(), rustty_version::version_build());
+        let v = rustty_version::VERSION_STRING;
+        match v.split_once('+') {
+            None => assert_eq!(commit_hash(), None, "{v}"),
+            Some((_, build)) => assert_eq!(commit_hash(), Some(build), "{v}"),
         }
-        let hash = commit_hash().expect(
-            "built from a git checkout, so build.rs must have baked RUSTTY_COMMIT_HASH; \
-             `commit_hash()` returning None means the +BUILD metadata analog is dead again",
-        );
-        assert!(
-            hash.len() >= 7 && hash.chars().all(|c| c.is_ascii_hexdigit()),
-            "commit hash should be a short hex object name, got {hash:?}"
-        );
+        // A pre-release built from git (`X.Y.Z-<branch>+<hash>`, not the
+        // `-dev+0000000` of a build without git): the hash is a hex object name.
+        if let Some(hash) = commit_hash().filter(|_| !v.contains("-dev+")) {
+            if option_env!("RUSTTY_VERSION_STRING").is_none_or(str::is_empty) {
+                assert!(
+                    hash.len() >= 7 && hash.chars().all(|c| c.is_ascii_hexdigit()),
+                    "commit hash should be a short hex object name, got {hash:?}"
+                );
+            }
+        }
     }
 
     /// The hyperlink URL is the PRODUCT's repo (R2), with the hash appended.
@@ -482,7 +456,7 @@ mod tests {
         let header = format!(
             "{} {}",
             rustty_identity::APP_NAME_TITLECASE,
-            build_config::VERSION_STRING
+            rustty_version::VERSION_STRING
         );
         assert!(
             out.starts_with(&format!("{open}{header}\n\n\x1b]8;;\x1b\\")),

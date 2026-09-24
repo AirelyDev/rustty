@@ -87,6 +87,9 @@ rustty-crash = { workspace = true }
 # rustty-renderer edge needed — the renderer.zig selection switch is data);
 # the libxev line reads rustty-xev's `backend()` (the reference `xev.backend`).
 rustty-build-config = { workspace = true }
+# `build_config.version_string` / `release_channel`: the version derived from
+# the checkout, in its own leaf crate so a commit rebuilds only its readers.
+rustty-version = { workspace = true }
 rustty-identity = { workspace = true }
 rustty-xev = { workspace = true }
 # C2 (CLI_BLUEPRINT.md §7): show_config streams `config.FileFormatter` output and

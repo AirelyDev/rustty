@@ -1033,7 +1033,7 @@ pub enum BuildMode {
 // already collapses the four Zig modes to ("Debug" xor "ReleaseFast"). So a debug build
 // reports `.Debug` and an optimized build `.ReleaseFast` — the two modes rustty can
 // actually be built in; the `release_safe`/`release_small` arms have no rustty analog.
-// `version` is `rustty_build_config::VERSION_STRING` (the reference
+// `version` is `rustty_version::VERSION_STRING` (the reference
 // `build_config.version_string`): a `&'static str` whose `.as_ptr()`/`.len()` map the
 // reference `[*]const u8` `.ptr`/`.len` — a plain (NON-NUL-terminated) byte pointer the
 // host reads for exactly `version_len` bytes. The pointer is into static storage, valid
@@ -1050,9 +1050,9 @@ pub extern "C" fn rustty_info() -> Info {
             BuildMode::ReleaseFast
         },
         // .version = build_config.version_string.ptr,
-        version: rustty_build_config::VERSION_STRING.as_ptr(),
+        version: rustty_version::VERSION_STRING.as_ptr(),
         // .version_len = build_config.version_string.len,
-        version_len: rustty_build_config::VERSION_STRING.len(),
+        version_len: rustty_version::VERSION_STRING.len(),
     }
 }
 

@@ -138,7 +138,7 @@ libc = "0.2"
 rustty-renderer = { workspace = true, features = ["freetype", "harfbuzz", "fontconfig"] }
 rustty-datastruct = { workspace = true }
 # `ghostty_info` reads `build_config.version_string` + `builtin.mode` (main_c.zig:131);
-# rustty-build-config supplies `VERSION_STRING` + `mode_string()`. Forward edge (member 2,
+# rustty-version supplies `VERSION_STRING`, rustty-build-config `mode_string()`. Forward edge (member 2,
 # far below apprt-c the top sink) — check_acyclic.sh stays GREEN.
 #
 # `artifact-lib`: this crate IS the librustty artifact (cdylib/staticlib), i.e. the
@@ -147,6 +147,9 @@ rustty-datastruct = { workspace = true }
 # `cli.diagnostics`' `precompute_enabled` is TRUE for the C ABI (`rustty_config_get_diagnostic`
 # hands out real message pointers instead of `""`), matching `config/CApi.zig:128-133`.
 rustty-build-config = { workspace = true, features = ["artifact-lib"] }
+# `build_config.version_string` / `release_channel`: the version derived from
+# the checkout, in its own leaf crate so a commit rebuilds only its readers.
+rustty-version = { workspace = true }
 # WS13: `rustty_translate` forwards to the gettext `_` wrapper
 # (`main_c.zig:150` -> `internal_os.i18n._`), i.e. `rustty_os::i18n::gettext_`, which
 # WS9's vendored libintl (`crates-sys/gettext-sys` -> `librustty_intl.a`) makes

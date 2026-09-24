@@ -54,6 +54,9 @@ rustty-os = { workspace = true }
 # `build_config = @import("../build_config.zig")` — version_string + the
 # setTag build-mode/app-runtime/font-backend/renderer values.
 rustty-build-config = { workspace = true }
+# `build_config.version_string` / `release_channel`: the version derived from
+# the checkout, in its own leaf crate so a commit rebuilds only its readers.
+rustty-version = { workspace = true }
 # R2: the app-name segment of the reference's `"ghostty/crash"`/`"ghostty/sentry"`
 # XDG subdirs (and the `.ghosttycrash` report extension) comes from the identity
 # source-of-truth crate instead of being hardcoded.

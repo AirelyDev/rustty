@@ -1,4 +1,4 @@
-//! build.rs — three build-time generators.
+//! build.rs — two build-time generators.
 //!
 //! 1. `help_strings.Action` (`action_help`) by scanning each CLI action module's
 //!    `pub fn run` doc block.
@@ -26,71 +26,6 @@ use std::path::Path;
 fn main() {
     gen_action_help();
     gen_framedata();
-    gen_commit_hash();
-}
-
-/// 3. `RUSTTY_COMMIT_HASH` — the source commit of this build, for `+version`'s
-///    OSC-8 hyperlink.
-///
-/// PORTS: the reference reads it from `build_config.version.build` — the `+BUILD`
-/// metadata of the `std.SemanticVersion` that `build.zig` fills in from the source
-/// checkout. Rust's runtime has no `+BUILD` channel, so it is captured here and
-/// baked into the crate env; `version.rs`'s `commit_hash()` reads it back.
-///
-/// Degrades to EMPTY (→ `None` at runtime → the hyperlink is simply not emitted,
-/// exactly the reference's `if (build_config.version.build) |hash|` optional) when
-/// the source is not a git checkout — a release tarball, a vendored crate, docs.rs.
-/// A source build must never FAIL for want of git, and must never bake a wrong
-/// hash.
-///
-/// `RUSTTY_COMMIT_HASH` in the environment wins, so a packager doing a
-/// reproducible build can pin the value explicitly (or set it empty to omit it)
-/// without a git checkout present.
-fn gen_commit_hash() {
-    println!("cargo:rerun-if-env-changed=RUSTTY_COMMIT_HASH");
-    let hash = match std::env::var("RUSTTY_COMMIT_HASH") {
-        Ok(v) => v.trim().to_string(),
-        Err(_) => git_short_head().unwrap_or_default(),
-    };
-    println!("cargo:rustc-env=RUSTTY_COMMIT_HASH={hash}");
-}
-
-/// `git rev-parse --short HEAD`, or `None` if this is not a git checkout (or git
-/// is unavailable). Also registers the HEAD/ref files with cargo so a new commit
-/// re-bakes the value instead of leaving a stale one.
-fn git_short_head() -> Option<String> {
-    let git = |args: &[&str]| -> Option<String> {
-        let out = std::process::Command::new("git").args(args).output().ok()?;
-        if !out.status.success() {
-            return None;
-        }
-        let s = String::from_utf8(out.stdout).ok()?.trim().to_string();
-        if s.is_empty() {
-            None
-        } else {
-            Some(s)
-        }
-    };
-
-    let hash = git(&["rev-parse", "--short", "HEAD"])?;
-
-    // Re-run when HEAD moves. `--git-path` is what makes this correct inside a
-    // git WORKTREE, where `.git` is a file and the real HEAD lives under
-    // `.git/worktrees/<name>/`. Only register paths that EXIST: a
-    // `rerun-if-changed` on a missing path makes cargo rebuild unconditionally,
-    // and these paths are absolute and can outlive the checkout that produced
-    // them (worktrees in this repo share one `target/`).
-    let mut watch = vec![git(&["rev-parse", "--git-path", "HEAD"])];
-    if let Some(ref_name) = git(&["rev-parse", "--symbolic-full-name", "HEAD"]) {
-        watch.push(git(&["rev-parse", "--git-path", &ref_name]));
-    }
-    for p in watch.into_iter().flatten() {
-        if Path::new(&p).exists() {
-            println!("cargo:rerun-if-changed={p}");
-        }
-    }
-
-    Some(hash)
 }
 
 fn gen_action_help() {

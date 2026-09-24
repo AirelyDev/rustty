@@ -77,6 +77,9 @@ identity-oracle = ["rustty-identity/identity-oracle"]
 
 [dependencies]
 rustty-build-config = { workspace = true }
+# `build_config.version_string` / `release_channel`: the version derived from
+# the checkout, in its own leaf crate so a commit rebuilds only its readers.
+rustty-version = { workspace = true }
 rustty-datastruct = { workspace = true }
 rustty-identity = { workspace = true }
 rustty-os = { workspace = true }

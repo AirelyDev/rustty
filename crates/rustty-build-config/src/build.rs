@@ -9,8 +9,7 @@
 //! relocated HERE so build-config has no upward dependency on the build script
 //! (R4). The pure build-time machinery (`init`, `addOptions`, `terminalOptions`,
 //! target resolution) stays in the `rustty-xtask` build tooling; git version
-//! detection is `crate::git_version`, run by this crate's `build.rs`, and the
-//! composition is `crate::version`.
+//! detection and the version composition are the `rustty-version` crate's.
 
 use crate::apprt::Runtime as ApprtRuntime;
 use crate::font::Backend as FontBackend;
@@ -146,9 +145,22 @@ const fn i18n_default(target: Target) -> bool {
     }
 }
 
-/// The semantic version of this build, parsed from the composed
-/// [`crate::VERSION_STRING`] (S63-F2). Reference: `options.app_version`.
-const APP_VERSION: SemanticVersion = SemanticVersion::parse(crate::VERSION_STRING);
+/// The semantic version of this build: `MAJOR.MINOR.PATCH` of
+/// `options.app_version` (S63-F2). Reference: `options.app_version`.
+///
+/// That is the explicit `RUSTTY_VERSION_STRING` (`-Dversion-string`) when one
+/// is set, and otherwise the `rustty-identity` app version (R2): the git-derived
+/// arms of `Config.zig:290-338` add only a pre-release and build metadata, which
+/// [`SemanticVersion`] does not carry. The full composed string is
+/// `rustty_version::VERSION_STRING`, kept in that leaf crate so that a commit
+/// does not recompile every dependent of this one.
+const APP_VERSION: SemanticVersion = SemanticVersion::parse(APP_VERSION_SOURCE);
+
+const APP_VERSION_SOURCE: &str = if env!("RUSTTY_VERSION_EXPLICIT").is_empty() {
+    rustty_identity::VERSION
+} else {
+    env!("RUSTTY_VERSION_EXPLICIT")
+};
 
 /// A semantic version `MAJOR.MINOR.PATCH`, mirroring the reference
 /// `std.SemanticVersion` fields read at runtime.

@@ -1717,6 +1717,21 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 
 - upstream status: NOT YET REPORTED. Report PRIVATELY through Ghostty's GitHub security advisory process (a repository Security Advisory / private vulnerability report), NOT a public issue: this is a remotely reachable denial-of-service — about 1.2 KB of ordinary terminal output crashes Ghostty at a standard 80×24 size — so it should be disclosed privately and given time to fix before any public description.
 
+### UD150 — `GitVersion.detect` turns the branch's trailing newline into `-`, so every dev version reads `X.Y.Z-<branch>-+<hash>`
+- kind:            latent (functional: a mangled value that visibly breaks the code's evident intent; no crash). RECLASSIFIED 2026-09-23 (review T-B) from "latent, ported faithfully" to fixed under the extended R13.
+- upstream project: ghostty
+- severity:        low
+- reference:       `src/build/GitVersion.zig:22-41` (the sanitizing loop over `runAllowFail`'s raw stdout) and `:84` (`.branch = std.mem.trimEnd(u8, branch, "\r\n ")`), at 20abdb50a. Introduced by upstream `ad9225a4c` ("build: sanitize all invalid chars in branch name for version", 2026-04-09, fixing #11990), read with `git show`.
+- defect:          `b.runAllowFail` returns `git rev-parse --abbrev-ref HEAD`'s raw stdout, trailing `\n` included (zig 0.16.0 `std/Build.zig:1862-1900`, read). The loop that rewrites every non-`[0-9A-Za-z-]` byte to `-` runs BEFORE the `trimEnd` at `:84`, so the newline has already become `-` and the trim finds nothing. The pre-release identifier ends in a stray `-`. The `trimEnd` can only be meant to strip git's newline, and it did so before `ad9225a4c`: that commit replaced a `/`-only `std.mem.replaceScalar` (which left the newline for the trim) with the full loop, whose stated purpose was making dotted branch names valid semver, not changing every version. MEASURED: the reference's own cached build options at `.zig-cache` carry `app_version_string = "1.3.2-HEAD-+4540d499a"`.
+- ReleaseSafe:     no trap; the version string, `+version`, XTVERSION, `TERM_PROGRAM_VERSION`, the Sentry release and dist tarball names carry the extra `-`.
+- ReleaseFast:     same.
+- reachability:    every untagged build from a git checkout.
+- port handling:   fixed (R13, extended 2026-09-23): `crates/rustty-version/src/git_version.rs` `branch_from_rev_parse` trims `"\r\n "` first and then sanitizes (PORT NOTE: reference defect (R13) there), so the port reports `0.1.0-<branch>+<hash>` (this worktree's build: `0.1.0-tail-b2+<hash>`). Listed in `docs/ghostty-bug-fixes.md`. (Batch T-B first ported it faithfully, in `crates/rustty-build-config/src/git_version.rs`; the git-derived version has since moved to the `rustty-version` crate.)
+- parity row(s):   LEDGER S64-F1 / S63-F2 (batch T-B); review-T-B blocking item 5.
+- test:            `rustty-version` `tests::git_branch_is_trimmed_before_it_is_sanitized` (`feature/x_y.2\n` -> `feature-x-y-2`, `main\r\n` -> `main`, interior characters still sanitized, and the built `VERSION_STRING` carries no `-+`). Negative control: `branch_from_rev_parse` changed to sanitize and then trim (the reference's order) fails with `left: "feature-x-y-2-"`, `right: "feature-x-y-2"`.
+- proposed fix:    trim before sanitizing: `const raw = std.mem.trimEnd(u8, tmp, "\r\n ");` and run the loop over `raw` (or move the `trimEnd` from `:84` to just before the loop).
+- upstream status: not reported
+
 ### UD180 — `+list-keybinds --docs` never prints a keybind action's help
 - kind:            latent (functional: documentation output silently empty)
 - upstream project: ghostty
@@ -1760,20 +1775,6 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - parity row(s):   LEDGER S79-F3 / S79-F4 (the std.json port); review-T-E blocking item 1.
 - test:            `json::tests::stringify_rejects_depth_257_with_an_error` (negative control: the depth check removed from `stringify`, then separately from `stringify_object`, each fails on `unwrap_err`); `json::tests::stringify_round_trips_the_documented_256_levels`; `json::tests::parse_and_drop_any_depth_without_stack_overflow` (200,000 levels, arrays and objects; negative control: the iterative drop disabled aborts the test binary with "has overflowed its stack", SIGABRT); `sentry_envelope::tests::serialize_rejects_a_header_deeper_than_256_levels` (256-level header round-trips; 257 parses, `serialize` errors with nothing written; negative control: the `stringify_object` check removed fails on `unwrap_err`).
 - proposed fix:    in `sentry_envelope.zig`, reject headers nested deeper than 256 levels when parsing (a depth count over the parsed `Value`, or a token-level count), so every parsed `Envelope` can be serialized; or check the depth in `serialize` and return an error. Upstream zig could also make `Stringify` return an error rather than assert on the documented limit.
-- upstream status: not reported
-
-### UD150 — `GitVersion.detect` turns the branch's trailing newline into `-`, so every dev version reads `X.Y.Z-<branch>-+<hash>`
-- kind:            latent (cosmetic; wrong text, no crash)
-- upstream project: ghostty
-- severity:        low
-- reference:       `src/build/GitVersion.zig:22-41` (the sanitizing loop), at 20abdb50a
-- defect:          `b.runAllowFail` returns `git rev-parse --abbrev-ref HEAD`'s raw stdout, trailing `\n` included (zig 0.16.0 `std/Build.zig:1862-1900`, read). The loop that rewrites every non-`[0-9A-Za-z-]` byte to `-` runs BEFORE the `std.mem.trimEnd(u8, branch, "\r\n ")` at `:84`, so the newline has already become `-` and the trim finds nothing. The pre-release identifier ends in a stray `-`. MEASURED: the reference's own cached build options at `.zig-cache` carry `app_version_string = "1.3.2-HEAD-+4540d499a"`.
-- ReleaseSafe:     no trap; the version string, `+version`, XTVERSION and the Sentry release carry the extra `-`.
-- ReleaseFast:     same.
-- reachability:    every untagged build from a git checkout.
-- port handling:   ported faithfully (a non-crash defect keeps R1): `crates/rustty-build-config/src/git_version.rs` `detect` sanitizes the raw output the same way, so the port reports `0.1.0-<branch>-+<hash>`. Test `git_branch_keeps_the_reference_trailing_dash` (rustty-build-config).
-- parity row(s):   LEDGER S64-F1 / S63-F2 (batch T-B).
-- proposed fix:    trim before sanitizing: `const raw = std.mem.trimEnd(u8, tmp, "\r\n ");` and run the loop over `raw`.
 - upstream status: not reported
 
 ## Candidates pending verification

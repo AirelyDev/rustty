@@ -3147,6 +3147,25 @@ Not fixed in this round; recorded for adjudication.
 
 **state**: OPEN (R1 candidate).
 
+## N110 — `+version`'s commit hyperlink came from a separate `git rev-parse`, not from the version's `+BUILD`
+
+- **id**: N110. Not in the inventory. Found by the review T-B fix round (tail-b2) while moving the
+  git-derived version into its own crate.
+- **severity**: low. **kind**: behavioral-difference (`+version` output on a TTY).
+- **what**: the reference's `+version` wraps its header in an OSC-8 link to
+  `.../commit/<build_config.version.build>` (`src/cli/version.zig`), where `version.build` is the
+  `+BUILD` metadata of the composed version (`Config.zig:290-338`): the short hash for an untagged
+  checkout, `0000000` without git, `null` (no link) for a `vX.Y.Z`-tagged release, and whatever an
+  explicit `-Dversion-string` carries. `rustty-cli` captured the hash separately in its build script
+  (`git rev-parse --short HEAD`, `RUSTTY_COMMIT_HASH`), so a tagged release was linked, a build
+  without git was not, and an explicit `RUSTTY_VERSION_STRING`'s build metadata was ignored.
+- **fix**: `rustty-cli` `commit_hash()` returns `rustty_version::version_build()`, the `+BUILD` of the
+  composed `VERSION_STRING`; the separate capture and its HEAD watch are gone. Test
+  `version::tests::commit_hash_is_the_version_build_metadata` (hash == the version's `+BUILD`, a real
+  hex hash in a git build). `rustty-version` `tests::version_is_derived_from_git` checks
+  `version_build()` per arm (git: the short hash; tagged: `None`; no git: `0000000`).
+- **state**: CLOSED (tail-b2).
+
 ## N140 — the XDG helpers collapse `homedir.home`'s `error.BufferTooSmall` into `NoHomeDir`
 
 - **id**: N140. Not in the inventory. Found by the T-E reviewer (review-T-E "S74-F1 error name"),
