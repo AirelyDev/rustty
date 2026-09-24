@@ -263,4 +263,18 @@ mod tests {
         assert!(Entry::parse(b"host|_1700|term").is_none());
         assert!(Entry::parse(b"host|1700_|term").is_none());
     }
+
+    // The `err={}` of the invalid-timestamp warning names the parse error.
+    // `std.fmt.parseInt` fails with `Overflow` at the first digit that leaves
+    // i64, before it reaches the later `x`. MEASURED with Zig 0.16.0:
+    // `parseInt(i64, "99999999999999999999x", 10)` is `error.Overflow`, so
+    // the reference logs `err=error.Overflow` for this line.
+    #[test]
+    fn cache_entry_timestamp_overflow_is_named_before_a_later_bad_character() {
+        assert!(Entry::parse(b"host|99999999999999999999x|term").is_none());
+        assert_eq!(
+            Err(rustty_args::std_fmt::ParseIntError::Overflow),
+            parse_int_i64(b"99999999999999999999x")
+        );
+    }
 }
