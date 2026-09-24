@@ -225,9 +225,7 @@ pub fn init_with_action(action_detected: bool) -> Result<rustty_core::Logging, I
     //   which can see both — does the discovery and publishes it. This is what
     //   makes `file::randomTmpPath` a cached lookup instead of a per-call
     //   `allocTmpDir` + `freeTmpDir` pair.
-    rustty_global::set_tmp_dir_path(
-        rustty_os::file::allocTmpDir(&rustty_global::environ()).into_bytes(),
-    );
+    rustty_global::set_tmp_dir_path(rustty_os::file::allocTmpDir(&rustty_global::environ()));
 
     // We first try to parse any action that we may be executing.
     //   (done by the caller; `action_detected` carries the result.)

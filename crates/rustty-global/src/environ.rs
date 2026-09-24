@@ -403,25 +403,48 @@ fn default_tmp_dir_path() -> Vec<u8> {
     }
     #[cfg(not(windows))]
     {
-        let env = environ();
-        let Some(v) = env
-            .get_posix(b"TMPDIR")
-            .or_else(|| env.get_posix(b"TMP"))
-            .filter(|v| !v.is_empty())
-        else {
-            return b"/tmp".to_vec();
-        };
-        let mut bytes = v.to_vec();
-        while bytes.last() == Some(&b'/') {
-            bytes.pop();
-        }
-        bytes
+        posix_tmp_dir_path(&environ())
     }
+}
+
+/// The POSIX arm of the `allocTmpDir` rule, on a given environment:
+/// `environ.getPosix("TMPDIR") orelse environ.getPosix("TMP") orelse "/tmp"`,
+/// trailing `/` trimmed.
+///
+/// PORT NOTE (parity S111-F1): `orelse` falls through only on a MISSING
+/// variable, so a present-but-empty `TMPDIR` yields `""` and does not fall
+/// through to `TMP`. (This used to filter out empty values, in step with the
+/// same filter in `rustty-os`'s `allocTmpDir`.)
+#[cfg(not(windows))]
+fn posix_tmp_dir_path(env: &Environ) -> Vec<u8> {
+    let Some(v) = env.get_posix(b"TMPDIR").or_else(|| env.get_posix(b"TMP")) else {
+        return b"/tmp".to_vec();
+    };
+    let mut bytes = v.to_vec();
+    while bytes.last() == Some(&b'/') {
+        bytes.pop();
+    }
+    bytes
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Parity S111-F1: the fallback applies the reference rule to an empty
+    /// value: present-but-empty is a value, not an absence. Same table as
+    /// `rustty-os`'s `alloc_tmp_dir_takes_empty_and_non_utf8_values_verbatim`.
+    #[test]
+    #[cfg(not(windows))]
+    fn posix_tmp_dir_path_keeps_empty_and_non_utf8_values() {
+        let env =
+            |entries: &[&[u8]]| Environ::from_entries(entries.iter().map(|e| e.to_vec()).collect());
+        assert_eq!(posix_tmp_dir_path(&env(&[b"TMPDIR="])), b"");
+        assert_eq!(posix_tmp_dir_path(&env(&[b"TMPDIR=", b"TMP=/x"])), b"");
+        assert_eq!(posix_tmp_dir_path(&env(&[b"TMP=/x//"])), b"/x");
+        assert_eq!(posix_tmp_dir_path(&env(&[b"TMPDIR=/a\xff/"])), b"/a\xff");
+        assert_eq!(posix_tmp_dir_path(&env(&[])), b"/tmp");
+    }
 
     #[test]
     fn environ_get_posix_and_map_are_byte_typed() {
