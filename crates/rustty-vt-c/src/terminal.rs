@@ -11306,15 +11306,29 @@ mod tests {
     /// drag and drop state, wide tab stops after a resize past 512 columns, a
     /// tracked grid ref (a pin and the tracked-pin set), and a full reset.
     fn sweep_corpus(t: Terminal) -> Vec<Result> {
+        // A smaller corpus under Miri (the design's "small-corpus instance");
+        // it still reaches every family below.
+        let (lines, more_lines) = if cfg!(miri) { (4, 2) } else { (60, 40) };
         let mut results = Vec::new();
-        for i in 0..60 {
+        for i in 0..lines {
             vtw(
                 t,
                 format!("line {i:03} the quick brown fox jumps over the lazy dog\r\n").as_bytes(),
             );
         }
         vtw(t, b"\x1B]0;a window title\x1B\\");
+        // A longer title grows a non-empty list: `remap`, then the fallback.
+        vtw(
+            t,
+            b"\x1B]2;a considerably longer window title, past the first capacity of the list: 0123456789012345678901234567890123456789012345678901234567890123456789\x1B\\",
+        );
         vtw(t, b"\x1B]7;file:///tmp/sweep\x1B\\");
+        // An OSC longer than the parser's fixed buffer: the stream's capture
+        // grows through the caller's allocator by `remap`.
+        let mut osc = b"\x1B]52;c;".to_vec();
+        osc.extend(std::iter::repeat_n(b'A', rustty_vt::osc::MAX_BUF * 3));
+        osc.extend_from_slice(b"\x1B\\");
+        vtw(t, &osc);
         vtw(
             t,
             b"\x1B]8;id=one;https://example.com/one\x1B\\link\x1B]8;;\x1B\\",
@@ -11340,7 +11354,7 @@ mod tests {
                 &mut ref_,
             )
         });
-        for i in 0..40 {
+        for i in 0..more_lines {
             vtw(t, format!("more {i:03}\r\n").as_bytes());
         }
         results.push(unsafe { resize(t, 80, 24, 8, 16) });
@@ -11352,6 +11366,54 @@ mod tests {
         results
     }
 
+    /// One sweep scenario over `failing`: `new`, the corpus, `free`. Asserts
+    /// the result set and that every byte taken from the caller's allocator is
+    /// returned. Returns (whether `new` failed, API calls that reported OOM).
+    fn sweep_once(
+        failing: &rustty_vt::alloc::testing::FailingAllocator,
+        what: &str,
+    ) -> (bool, usize) {
+        let calloc = failing.allocator();
+        let mut t: Terminal = std::ptr::null_mut();
+        let r = unsafe { new(&calloc as *const CAllocator, &mut t, 80, 24) };
+        let mut new_failed = false;
+        let mut call_failures = 0usize;
+        match r {
+            Result::Success => {
+                assert!(!t.is_null());
+                for r in sweep_corpus(t) {
+                    assert!(
+                        matches!(r, Result::Success | Result::OutOfMemory),
+                        "{what}: unexpected result {r:?}"
+                    );
+                    if r == Result::OutOfMemory {
+                        call_failures += 1;
+                    }
+                }
+                unsafe { free(t) };
+            }
+            Result::OutOfMemory => {
+                assert!(
+                    t.is_null(),
+                    "{what}: a failed new must not return a terminal"
+                );
+                new_failed = true;
+            }
+            other => panic!("{what}: new returned {other:?}"),
+        }
+        assert_eq!(
+            failing.allocated_bytes.get(),
+            failing.freed_bytes.get(),
+            "{what}: every byte taken from the caller's allocator is returned"
+        );
+        assert_eq!(
+            failing.allocations.get(),
+            failing.deallocations.get(),
+            "{what}"
+        );
+        (new_failed, call_failures)
+    }
+
     // Parity tail S7-3 (T2, no reference counterpart — the Zig
     // `checkAllAllocationFailures` idea applied to the C API): for every n, a
     // `FailingAllocator` that refuses its n-th allocation drives `new`, a write
@@ -11360,6 +11422,11 @@ mod tests {
     // log-and-drop), and every byte the terminal took is returned by `free`.
     // The sweep ends at the first n that induces no failure: every allocation
     // the scenario makes has then been failed once.
+    //
+    // A second sweep (S7-3b, review F3) refuses `remap`/`resize` from their
+    // n-th call on (`resize_fail_index`; sticky as in Zig, whose index only
+    // advances on success), so every later growth takes the alloc+copy+free
+    // fallback, with the same checks. Under Miri the corpus is smaller.
     #[test]
     fn allocation_failure_sweep_through_the_c_api() {
         use rustty_vt::alloc::testing::{Config, FailingAllocator};
@@ -11372,42 +11439,9 @@ mod tests {
                 fail_index: n,
                 ..Config::default()
             });
-            let calloc = failing.allocator();
-            let mut t: Terminal = std::ptr::null_mut();
-            let r = unsafe { new(&calloc as *const CAllocator, &mut t, 80, 24) };
-            match r {
-                Result::Success => {
-                    assert!(!t.is_null());
-                    for r in sweep_corpus(t) {
-                        assert!(
-                            matches!(r, Result::Success | Result::OutOfMemory),
-                            "n={n}: unexpected result {r:?}"
-                        );
-                        if r == Result::OutOfMemory {
-                            call_failures += 1;
-                        }
-                    }
-                    unsafe { free(t) };
-                }
-                Result::OutOfMemory => {
-                    assert!(
-                        t.is_null(),
-                        "n={n}: a failed new must not return a terminal"
-                    );
-                    new_failures += 1;
-                }
-                other => panic!("n={n}: new returned {other:?}"),
-            }
-            assert_eq!(
-                failing.allocated_bytes.get(),
-                failing.freed_bytes.get(),
-                "n={n}: every byte taken from the caller's allocator is returned"
-            );
-            assert_eq!(
-                failing.allocations.get(),
-                failing.deallocations.get(),
-                "n={n}"
-            );
+            let (new_failed, calls) = sweep_once(&failing, &format!("alloc n={n}"));
+            new_failures += usize::from(new_failed);
+            call_failures += calls;
             if !failing.has_induced_failure.get() {
                 break;
             }
@@ -11417,8 +11451,33 @@ mod tests {
         // The sweep reached into the terminal's internals: more allocations
         // than `new`'s own storage, some of them failing `new` itself and some
         // failing later API calls.
-        assert!(n > 20, "only {n} allocations were swept");
+        let min_swept = if cfg!(miri) { 10 } else { 20 };
+        assert!(n > min_swept, "only {n} allocations were swept");
         assert!(new_failures > 2, "new failed at {new_failures} indices");
         assert!(call_failures > 0, "no API call reported OUT_OF_MEMORY");
+
+        // The remap/resize sweep. A clean run counts the scenario's successful
+        // remap/resize calls (R); refusing from each n in 0..=R reaches every
+        // one of them (and n = R refuses none).
+        let clean = FailingAllocator::over_heap(Config::default());
+        let _ = sweep_once(&clean, "remap clean run");
+        let remaps = clean.resize_index.get();
+        assert!(remaps > 0, "the corpus makes no remap/resize call");
+        for n in 0..=remaps {
+            let failing = FailingAllocator::over_heap(Config {
+                resize_fail_index: n,
+                ..Config::default()
+            });
+            let (new_failed, _) = sweep_once(&failing, &format!("remap n={n}"));
+            // A refused remap never fails the scenario: the fallback allocates.
+            assert!(
+                !new_failed,
+                "remap n={n}: new must not fail on a refused remap"
+            );
+            assert!(
+                failing.resize_index.get() <= n,
+                "remap n={n}: no remap/resize succeeded past the refusal"
+            );
+        }
     }
 }
