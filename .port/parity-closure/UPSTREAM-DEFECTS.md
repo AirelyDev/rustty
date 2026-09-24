@@ -1356,7 +1356,7 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - ReleaseFast:     the same.
 - reachability:    ordinary use: a `command` whose process ignores SIGHUP (the port's test uses `SIG_IGN` inherited across `exec`). The `?Es` wedge was reproduced on the port side, 12/12, at an older pin (`.port/tools/repro_subprocess_hang.sh`); it was not re-measured at this pin (UNVERIFIED at the pin). Its trigger is UD102.
 - port handling:   `crates/rustty-termio/src/exec.rs` bounds the same loop with `KILL_ABANDON` (10 s) and returns `KillError::Abandoned`, which `stop` treats as non-fatal; the child is left running, never SIGKILLed (the rationale is in the `[R1-DIVERGENCE: bounded kill wait]` note). The deadline is a parameter of `kill_pid_until` (production passes `KILL_ABANDON`). PORT NOTE at `exec.rs:3952`.
-- parity row(s):   `.port/phase-2/DEFERRALS.md` "killPid bounded wait"; inventory M13.
+- parity row(s):   `.port/phase-2/DEFERRALS.md` "killPid bounded wait"; inventory M13; LEDGER S211-F4 (closed by T-G, 2026-09-23, which re-ran the test and the negative control below on macOS with the same result).
 - test:            `kill_pid_abandons_a_child_that_ignores_sighup` (rustty-termio, macOS and the VM): a real child in its own session that ignores SIGHUP from before `exec`; a 300 ms deadline returns `Abandoned` after at least 300 ms with the child still alive; a 10 s watchdog SIGKILLs the child if the loop is stuck. Negative control, macOS 2026-09-22: the deadline check disabled (the reference's loop) fails with "killPid did not return within 10 s for a child that ignores SIGHUP". Restored.
 - proposed fix:    bound the loop (the port abandons after 10 s without escalating), and drain the pty before stopping on the `threadEnter` error path (UD102).
 - upstream status: not reported
@@ -1491,8 +1491,8 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - ReleaseFast:     the same.
 - reachability:    a `threadEnter` failure after the child is spawned: `xev.Process.init`, pipe or timer creation, or the read-thread spawn (fd or thread exhaustion).
 - port handling:   `crates/rustty-termio/src/exec.rs` drains the pty master once, bounded (`drain_pty_master_once`, `DRAIN_BUDGET` 50 ms), before `stop()` on each of these error arms, and `killPid` is bounded anyway (UD93). PORT NOTE at `exec.rs:3860`.
-- parity row(s):   `.port/phase-3/assessments/E-os-termio-platform.md` §5.3; inventory M33.
-- test:            `drain_pty_master_once_consumes_pending_and_returns_on_a_quiet_master` (rustty-termio) proves the drain; the error arms themselves are not driven (they need a failing `xev.Process.init` or thread spawn). No new test in this task.
+- parity row(s):   `.port/phase-3/assessments/E-os-termio-platform.md` §5.3; inventory M33; LEDGER S211-F5 (closed by T-G, 2026-09-23).
+- test:            `drain_pty_master_once_consumes_pending_and_returns_on_a_quiet_master` (rustty-termio) proves the drain; the error arms themselves are not driven (they need a failing `xev.Process.init` or thread spawn). No new test in this task. ADDED by T-G (2026-09-23): `exec::tests::threadenter_read_thread_spawn_failure_drains_before_stop` drives the read-thread spawn arm for real (a test-only switch gives the spawn a stack no thread can get) with a `/bin/sh` child that writes to the pty and keeps running, and asserts `threadEnter` fails, the drain ran once, and `stop()` cleared the process; 0.66 s. Negative control (macOS): that arm's drain removed fails on the drain count, and the run takes 10.03 s, because `killPid` could not reap the undrained (login-wrapped) child and hit `KILL_ABANDON`, the wedge this entry describes, observed at this pin on the port side (one run).
 - proposed fix:    start the reader before anything that can fail after the spawn, or drain (or close) the pty master before `stop()` on the error path; and bound `killPid` (UD93).
 - upstream status: not reported
 

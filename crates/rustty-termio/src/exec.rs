@@ -601,14 +601,21 @@ impl Exec {
         // (surface.rs), whose sole toucher of `*io` for `processOutput` is this
         // read thread, between spawn and `threadExit`'s `join()`; blueprint §3.)
         let read_args = ReadThreadArgs::<M>(pty_fds.read, io, pipe[0]);
-        let read_thread = match std::thread::Builder::new()
-            .name("io-reader".to_string())
-            .spawn(move || {
-                let args = read_args;
-                // SAFETY: `args.1` (`*mut Termio<M>`) is valid for the read
-                // thread's life; this thread is its sole `processOutput` toucher.
-                ReadThread::threadMainPosix::<M>(args.0, args.1, args.2);
-            }) {
+        let read_thread_builder = std::thread::Builder::new().name("io-reader".to_string());
+        // (Test builds only: `tests::FAIL_READ_THREAD_SPAWN` makes this spawn
+        // fail for real, with a stack no thread can get, to drive the error arm.)
+        #[cfg(test)]
+        let read_thread_builder = if tests::FAIL_READ_THREAD_SPAWN.with(std::cell::Cell::get) {
+            read_thread_builder.stack_size(usize::MAX / 2)
+        } else {
+            read_thread_builder
+        };
+        let read_thread = match read_thread_builder.spawn(move || {
+            let args = read_args;
+            // SAFETY: `args.1` (`*mut Termio<M>`) is valid for the read
+            // thread's life; this thread is its sole `processOutput` toucher.
+            ReadThread::threadMainPosix::<M>(args.0, args.1, args.2);
+        }) {
             Ok(t) => t,
             Err(_) => {
                 // errdefer (reverse): termios_timer.deinit(); stream.deinit();
@@ -3863,6 +3870,8 @@ const DRAIN_BUDGET: std::time::Duration = std::time::Duration::from_millis(50);
 /// the port side at an earlier date, not re-measured at the pin.
 #[cfg(not(windows))]
 fn drain_pty_master_once(fd: libc::c_int) -> usize {
+    #[cfg(test)]
+    tests::DRAIN_CALLS.with(|c| c.set(c.get() + 1));
     let deadline = std::time::Instant::now() + DRAIN_BUDGET;
     let mut buf = [0u8; 4096];
     let mut total: usize = 0;
@@ -5875,6 +5884,18 @@ mod tests {
     use super::*;
     use rustty_os::passwd::Entry as PasswdEntry;
 
+    // Test-only instrumentation of the `threadEnter` read-thread spawn error
+    // arm (S211-F5 / UD102). Thread-local, so it only affects the test thread
+    // that sets it (threadEnter and its error arm run on the calling thread).
+    thread_local! {
+        /// Calls of `drain_pty_master_once` on this thread.
+        pub(super) static DRAIN_CALLS: std::cell::Cell<usize> =
+            const { std::cell::Cell::new(0) };
+        /// Make `threadEnter`'s read-thread spawn fail on this thread.
+        pub(super) static FAIL_READ_THREAD_SPAWN: std::cell::Cell<bool> =
+            const { std::cell::Cell::new(false) };
+    }
+
     // ---- MOVED FROM `rustty-os`'s `env.rs` (P3-W7 T2 / area-E `E13`) --------
     // Upstream `e8525c0fd` moved `appendEnv`/`appendEnvAlways` into
     // `src/termio/Exec.zig` when it deleted `src/os/env.zig`; their two tests
@@ -7465,6 +7486,92 @@ mod tests {
         loop_.deinit();
         exec.deinit();
         // The read thread is joined; deinit the harness Termio last.
+        t.teardown();
+    }
+
+    /// S211-F5 / UD102: drive one of `threadEnter`'s error arms for real, the
+    /// read-thread spawn failure (a thread that cannot get its stack), and
+    /// check that it drains the pty master before `subprocess.stop()` and
+    /// fails `threadEnter`. The reference's arm is the bare `errdefer
+    /// self.subprocess.stop()`; the drain is the port's R13 handling. The child
+    /// is a real `/bin/sh` that writes to the pty and keeps running.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn threadenter_read_thread_spawn_failure_drains_before_stop() {
+        use allocator_api2::alloc::Global;
+        use std::time::Instant;
+
+        let _serial = FORK_KAT_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+
+        let cfg = Config {
+            command: Some(configpkg::command::Command::Direct(vec![
+                b"/bin/sh".to_vec(),
+                b"-c".to_vec(),
+                b"printf PENDING-OUTPUT; exec /bin/sleep 5".to_vec(),
+            ])),
+            env: EnvMap::new(),
+            env_override: configpkg::RepeatableStringMap::default(),
+            shell_integration: configpkg::value_types::ShellIntegration::Detect,
+            shell_integration_features: configpkg::value_types::ShellIntegrationFeatures::default(),
+            cursor_blink: None,
+            working_directory: None,
+            resources_dir: None,
+            term: b"xterm-256color".to_vec(),
+            rt_pre_exec_info: RtPreExecInfo::default(),
+            rt_post_fork_info: RtPostForkInfo::default(),
+        };
+        let mut exec = Exec::init(Global, cfg).expect("Exec::init");
+        let mut loop_ = xev::Loop::init(xev::Options::default()).expect("Loop::init");
+        let loop_ptr: *mut xev::Loop = std::ptr::addr_of_mut!(loop_);
+        let t = TestTermio::build();
+        let mut td: crate::termio_impl::ThreadData<TestMailbox> = crate::termio_impl::ThreadData {
+            alloc: Global,
+            loop_: loop_ptr,
+            renderer_state: t.state,
+            surface_mailbox: TestMailbox,
+            backend: crate::backend::ThreadData::Exec(ThreadData {
+                start: Instant::now(),
+                exited: false,
+                write_stream: xev::Stream::init_fd(-1),
+                process: None,
+                write_pool: MemoryPool::init(Global),
+                write_queue: xev::WriteQueue::default(),
+                process_wait_c: xev::Completion::default(),
+                flatpak_wait_c: FlatpakHostCommandCompletion::default(),
+                read_thread: std::thread::spawn(|| {}),
+                read_thread_pipe: -1,
+                read_thread_fd: -1,
+                termios_timer: xev::Timer::init().expect("placeholder Timer::init"),
+                termios_timer_c: xev::Completion::default(),
+                termios_timer_running: false,
+                termios_mode: ptypkg::Mode::default(),
+            }),
+            mailbox: std::ptr::null_mut(),
+        };
+
+        DRAIN_CALLS.with(|c| c.set(0));
+        FAIL_READ_THREAD_SPAWN.with(|f| f.set(true));
+        let result = unsafe { exec.threadEnter(Global, t.io, &mut td) };
+        FAIL_READ_THREAD_SPAWN.with(|f| f.set(false));
+
+        assert!(
+            result.is_err(),
+            "a failed read-thread spawn fails threadEnter"
+        );
+        assert_eq!(
+            DRAIN_CALLS.with(std::cell::Cell::get),
+            1,
+            "the error arm drains the pty master once before stop()"
+        );
+        // `stop()` ran: the subprocess has been torn down.
+        assert!(
+            exec.subprocess.process.is_none(),
+            "the error arm stops the subprocess"
+        );
+
+        td.deinit();
+        loop_.deinit();
+        exec.deinit();
         t.teardown();
     }
 
