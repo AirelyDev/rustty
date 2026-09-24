@@ -94,7 +94,7 @@ import tempfile
 
 GATES_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, GATES_DIR)
-from _gatelib import _find_balanced_block, _strip_rust  # noqa: E402
+from _gatelib import _find_balanced_block, _strip_rust, git_env  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(GATES_DIR)))
 SCAN_DIRS = ["crates", "crates-sys", "xtask"]
@@ -238,19 +238,16 @@ def lineno(text, idx):
     return text.count("\n", 0, idx) + 1
 
 
-def git_env():
-    """The environment for git with every GIT_* variable removed, so GIT_DIR /
-    GIT_WORK_TREE cannot redirect the file list to a decoy repository."""
-    return {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
-
-
 def iter_files(root):
-    """Every TRACKED `.rs` file under SCAN_DIRS (`git ls-files`). A root that is
-    not a git work tree is an error, never a fallback to walking the disk."""
+    """Every TRACKED `.rs` file under SCAN_DIRS (`git ls-files`, run in `root`
+    with every GIT_* variable removed -- `_gatelib.git_env` -- so GIT_DIR /
+    GIT_WORK_TREE cannot redirect the file list to a decoy repository). A root
+    that is not a git work tree is an error, never a fallback to walking the
+    disk."""
     try:
         out = subprocess.run(
-            ["git", "-C", root, "ls-files", "-z", "--", *SCAN_DIRS],
-            capture_output=True, env=git_env(), check=False,
+            ["git", "ls-files", "-z", "--", *SCAN_DIRS],
+            cwd=root, capture_output=True, env=git_env(), check=False,
         )
     except OSError as e:
         raise GateError(f"cannot run git: {e}") from e
@@ -1643,10 +1640,10 @@ def git_tree(tmp, files, untracked=()):
         with open(full, "w") as fh:
             fh.write(src)
     env = git_env()
-    subprocess.run(["git", "-C", tmp, "init", "-q"], check=True, env=env)
+    subprocess.run(["git", "init", "-q"], cwd=tmp, check=True, env=env)
     tracked = [r for r in files if r not in untracked]
     if tracked:
-        subprocess.run(["git", "-C", tmp, "add", "--", *tracked], check=True, env=env)
+        subprocess.run(["git", "add", "--", *tracked], cwd=tmp, check=True, env=env)
 
 
 def self_test():
