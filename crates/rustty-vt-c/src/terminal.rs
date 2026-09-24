@@ -1747,6 +1747,15 @@ unsafe fn wrap(
         )
     };
 
+    // The stream's OSC captures allocate through the same caller allocator
+    // (`.initAlloc(alloc, handler)`; see `osc::Parser.capture_alloc`, parity
+    // S174-F3). The holder outlives the stream: `free` reclaims it last.
+    // SAFETY: `wrapper_ptr` was initialized just above; raw place write.
+    unsafe {
+        (*wrapper_ptr).stream.parser.osc_parser.capture_alloc =
+            rustty_vt::osc::CaptureAllocator::Zig(alloc);
+    }
+
     // return wrapper;
     // PROVENANCE: expose the whole wrapper allocation so the effect trampolines
     // can recover it (siblings of the stream handler) via
@@ -4640,6 +4649,33 @@ mod tests {
             stats.live_bytes.get(),
             "free must balance the caller allocator"
         );
+    }
+
+    // Parity S174-F3 (no reference test): the stream's OSC capture allocates
+    // through the terminal's caller allocator (`.initAlloc(alloc, handler)`),
+    // so a long OSC 52 grows through it and `free` returns every byte.
+    #[test]
+    fn stream_osc_capture_uses_the_caller_allocator() {
+        let stats = crate::test_util::CountingCAllocator::new();
+        let calloc = stats.c_allocator();
+        let mut t: Terminal = std::ptr::null_mut();
+        assert_eq!(Result::Success, unsafe {
+            new(&calloc as *const CAllocator, &mut t, 80, 24)
+        });
+        let before = stats.alloc_calls.get();
+        let mut osc = b"\x1B]52;c;".to_vec();
+        osc.extend(std::iter::repeat_n(b'A', rustty_vt::osc::MAX_BUF * 2));
+        osc.extend_from_slice(b"\x1B\\");
+        vtw(t, &osc);
+        // The capture's initial MAX_BUF and at least one growth.
+        assert!(
+            stats.alloc_calls.get() >= before + 2,
+            "the OSC capture went elsewhere ({} -> {} allocs)",
+            before,
+            stats.alloc_calls.get()
+        );
+        unsafe { free(t) };
+        assert_eq!(0, stats.live_bytes.get());
     }
 
     #[test]

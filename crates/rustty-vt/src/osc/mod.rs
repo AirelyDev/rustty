@@ -580,6 +580,21 @@ pub struct Parser<'a> {
     /// smaller policy than the default.
     pub max_allocating_bytes: usize,
 
+    /// Where an allocating capture's memory comes from.
+    // PORT NOTE (parity S174-F3): not a reference field. The reference's
+    // allocating capture uses `alloc` itself
+    // (`std.Io.Writer.Allocating.initCapacity(alloc, ..)`, osc.zig:509), but
+    // `alloc` is a `ZigAllocatorRef<'a>` here and a capture that borrowed it
+    // would give every `Stream` (whose parser shares the stream's lifetime)
+    // drop glue over `'a`. So the capture's allocator is set separately, and
+    // only to an allocator that outlives the parser: `alloc`'s own allocator
+    // for the C-created parsers (vt-c's `rustty_osc_new` and the
+    // `rustty_terminal_new` stream), whose embedder allocator is where the
+    // reference would put the capture. Every other parser keeps the Rust
+    // global heap, which is where their `alloc` (the process-global zig
+    // allocator) allocates anyway.
+    pub capture_alloc: CaptureAllocator,
+
     /// Current state of the parser.
     pub state: State,
 
@@ -689,7 +704,74 @@ pub enum CaptureBacking {
     /// The count of bytes captured so far into `Parser.buffer` — the Zig fixed
     /// writer's `end` index over `&self.buffer` (osc.zig:462-467).
     Fixed(usize),
-    Allocating(Vec<u8>),
+    /// `std.Io.Writer.Allocating`, over `Parser.capture_alloc`.
+    Allocating(allocator_api2::vec::Vec<u8, CaptureAllocator>),
+}
+
+/// The allocator of an allocating capture (see `Parser.capture_alloc`).
+///
+/// CORRECTION (parity S174-F3): the allocating capture used to be a plain
+/// global-heap `Vec<u8>` that aborted on allocation failure. It now
+/// allocates, grows and frees through this allocator, and a failure takes
+/// the reference's paths (the fixed fallback for `initCapacity`,
+/// `error.WriteFailed` for a `realloc`) instead of aborting.
+#[derive(Clone, Copy, Default)]
+pub enum CaptureAllocator {
+    /// The Rust global heap.
+    #[default]
+    Global,
+    /// An allocator that outlives the parser (a C embedder's).
+    Zig(&'static dyn rustty_lib::allocator::ZigAllocator),
+}
+
+// SAFETY: `Global` forwards to allocator_api2's `Global`. `Zig` forwards each
+// request 1:1 to the `ZigAllocator` (the `std.mem.Allocator` analog), which
+// returns memory of at least `len` bytes at the requested alignment, or null,
+// and frees exactly what it handed out; zero-sized requests never reach it
+// (Zig's typed helpers skip them too).
+unsafe impl allocator_api2::alloc::Allocator for CaptureAllocator {
+    fn allocate(
+        &self,
+        layout: core::alloc::Layout,
+    ) -> Result<core::ptr::NonNull<[u8]>, allocator_api2::alloc::AllocError> {
+        let alloc = match self {
+            CaptureAllocator::Global => return allocator_api2::alloc::Global.allocate(layout),
+            CaptureAllocator::Zig(alloc) => *alloc,
+        };
+        if layout.size() == 0 {
+            let dangling = core::ptr::without_provenance_mut::<u8>(layout.align());
+            // SAFETY: an alignment is never zero.
+            let dangling = unsafe { core::ptr::NonNull::new_unchecked(dangling) };
+            return Ok(core::ptr::NonNull::slice_from_raw_parts(dangling, 0));
+        }
+        let ptr = alloc.alloc(
+            layout.size(),
+            rustty_lib::allocator::Alignment::from_byte_units(layout.align()),
+            0,
+        );
+        match core::ptr::NonNull::new(ptr) {
+            Some(p) => Ok(core::ptr::NonNull::slice_from_raw_parts(p, layout.size())),
+            None => Err(allocator_api2::alloc::AllocError),
+        }
+    }
+
+    unsafe fn deallocate(&self, ptr: core::ptr::NonNull<u8>, layout: core::alloc::Layout) {
+        let alloc = match self {
+            // SAFETY: forwarded under the caller's contract.
+            CaptureAllocator::Global => {
+                return unsafe { allocator_api2::alloc::Global.deallocate(ptr, layout) };
+            }
+            CaptureAllocator::Zig(alloc) => *alloc,
+        };
+        if layout.size() == 0 {
+            return;
+        }
+        alloc.free(
+            rustty_lib::allocator::ZigSlice::new(ptr.as_ptr(), layout.size()),
+            rustty_lib::allocator::Alignment::from_byte_units(layout.align()),
+            0,
+        );
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -776,10 +858,13 @@ impl Capture {
                     // zero-capacity buffer growable.
                     let new_capacity = self.max_bytes.min(w.capacity().saturating_mul(2).max(1));
                     // w.writer.buffer = w.allocator.realloc(w.writer.buffer, new_capacity)
-                    // PORT NOTE: `reserve_exact` grows the Vec's backing to
+                    //     catch return error.WriteFailed;
+                    // PORT NOTE: `try_reserve_exact` grows the Vec's backing to
                     // exactly `new_capacity` (len + additional), mirroring the
-                    // bounded realloc.
-                    w.reserve_exact(new_capacity - w.len());
+                    // bounded realloc (S174-F3).
+                    if w.try_reserve_exact(new_capacity - w.len()).is_err() {
+                        return false;
+                    }
                 }
                 w.push(c);
                 true
@@ -841,11 +926,11 @@ impl Capture {
                     //     w.writer.buffer,
                     //     new_capacity,
                     // ) catch return error.WriteFailed;
-                    // PORT NOTE: `reserve_exact` mirrors the bounded realloc
-                    // (allocation failure aborts in Rust rather than
-                    // surfacing `error.WriteFailed`; the reference's OOM arm
-                    // is unreachable through the ported allocator).
-                    w.reserve_exact(new_capacity - w.len());
+                    // PORT NOTE: `try_reserve_exact` mirrors the bounded
+                    // realloc (S174-F3).
+                    if w.try_reserve_exact(new_capacity - w.len()).is_err() {
+                        return false;
+                    }
                 }
                 // try self.writer.writeAll(bytes[0..n]);
                 w.extend_from_slice(&bytes[..n]);
@@ -878,6 +963,7 @@ impl<'a> Parser<'a> {
         Parser {
             alloc,
             max_allocating_bytes: MAX_ALLOCATING_BUF,
+            capture_alloc: CaptureAllocator::Global,
             state: State::Start,
             capture: None,
             command: Command::Invalid,
@@ -1014,14 +1100,21 @@ impl<'a> Parser<'a> {
                     return;
                 }
 
-                // PORT NOTE: the allocating writer's
-                // `initCapacity(alloc, @min(MAX_BUF, max_bytes))` failure path
-                // also falls back to the fixed buffer; here the backing `Vec`
-                // is grown on demand (bounded by `max_bytes`).
+                // Capture.allocating(&self.capture, alloc, self.max_allocating_bytes) catch {
+                //     // The allocator failed for some reason, fall back to a fixed buffer
+                //     // and hope that it's big enough.
+                //     self.captureTrailing(.fixed);
+                //     return;
+                // };
+                let mut w = allocator_api2::vec::Vec::new_in(self.capture_alloc);
+                if w.try_reserve_exact(MAX_BUF.min(self.max_allocating_bytes))
+                    .is_err()
+                {
+                    self.capture_trailing(CaptureMode::Fixed);
+                    return;
+                }
                 self.capture = Some(Capture {
-                    backing: CaptureBacking::Allocating(Vec::with_capacity(
-                        MAX_BUF.min(self.max_allocating_bytes),
-                    )),
+                    backing: CaptureBacking::Allocating(w),
                     max_bytes: self.max_allocating_bytes,
                 });
             }
@@ -1128,7 +1221,12 @@ impl<'a> Parser<'a> {
                             // R7: `*|` saturating multiply, `@max(.., 1)` floor.
                             let new_capacity =
                                 cap.max_bytes.min(w.capacity().saturating_mul(2).max(1));
-                            w.reserve_exact(new_capacity - w.len());
+                            // `realloc(..) catch return error.WriteFailed`,
+                            // which `next` turns into `.invalid` (S174-F3).
+                            if w.try_reserve_exact(new_capacity - w.len()).is_err() {
+                                self.state = State::Invalid;
+                                return;
+                            }
                         }
                         w.push(c);
                     }

@@ -21,7 +21,7 @@
 // `std.log.scoped(.osc)`.
 pub(crate) const LOG_SCOPE: &str = "osc";
 use crate::result::Result;
-use rustty_lib::allocator::{Allocator as CAllocator, GlobalZigAllocator, ZigAllocatorRef};
+use rustty_lib::allocator::{Allocator as CAllocator, ZigAllocator, ZigAllocatorRef};
 use rustty_vt::osc;
 use std::ffi::c_void;
 use std::os::raw::c_int;
@@ -29,24 +29,31 @@ use std::os::raw::c_int;
 use crate::cwrap::{create, destroy};
 
 // PORT NOTE (lifetime/allocator): the reference `osc.Parser` carries its own
-// `std.mem.Allocator` (`parser.alloc`) and `free` reconstructs it from the
-// stored field. rustty's `osc::Parser<'a>` is parameterized by the allocator
-// lifetime; following the same choice `terminal::new_` makes for its embedded
-// OSC parser, the C-built parser is backed by the process-static global zig
-// allocator, which supports the dynamic OSC growth the parser needs. The
-// `OscParserWrapper` mirrors the sgr `ParserWrapper`: it stores a
-// `osc::Parser<'static>` plus the original (possibly null) C `alloc_` (a `Copy`
-// C struct; see `cwrap` PORT NOTE) so `free` can release the wrapper through the
+// `std.mem.Allocator` (`parser.alloc`, `.init(alloc)` with the resolved
+// `lib.alloc.default(alloc_)`) and `free` reconstructs it from the stored
+// field. rustty's `osc::Parser<'a>` borrows its allocator, so the wrapper owns
+// the resolved allocator (`parser_alloc`) and the parser borrows it, the same
+// shape `terminal::new_` uses for its stream's OSC parser (`alloc_holder`).
+// CORRECTION (parity S174-F3): the C-built parser used to be backed by a
+// process-static global allocator whatever `alloc_` the caller passed.
+//
+// The wrapper also keeps the original (possibly null) C `alloc_` (a `Copy` C
+// struct; see `cwrap` PORT NOTE) so `free` releases the wrapper through the
 // SAME allocator the reference's `parser.alloc.?` would select.
-static GLOBAL_ZIG_ALLOCATOR: GlobalZigAllocator = GlobalZigAllocator;
 
 /// Wrapper around the parser that tracks the allocator for C API usage.
 // PORT NOTE: the reference stores `parser.alloc` inside `osc.Parser` itself
-// (`.init(alloc)`). rustty's `osc::Parser<'static>` is backed by the static
-// global allocator, so the wrapper additionally carries the original C `alloc_`
-// used to allocate the wrapper struct, matching `free`'s `parser.alloc.?`.
+// (`.init(alloc)`).
 pub struct OscParserWrapper {
+    /// Declared first: it borrows `parser_alloc`, which `free` reclaims only
+    /// after the wrapper (and so this parser) has been dropped.
     parser: osc::Parser<'static>,
+    /// The resolved caller allocator (`lib.alloc.default(alloc_)`) the parser
+    /// allocates its captures through. Held as a raw `Box::into_raw` pointer,
+    /// like `TerminalWrapper.alloc`, so the parser's shared borrow of it is
+    /// not invalidated when the wrapper is moved into its C allocation;
+    /// `free` (or `new`'s failure arm) reclaims it.
+    parser_alloc: *mut dyn ZigAllocator,
     alloc: Option<CAllocator>,
 }
 
@@ -73,21 +80,33 @@ pub unsafe fn new(alloc_: Option<&CAllocator>, result: *mut Parser) -> Result {
     // const alloc = lib.alloc.default(alloc_);
     // const ptr = alloc.create(osc.Parser) catch return .out_of_memory;
     // ptr.* = .init(alloc);
-    // PORT NOTE: `.init(alloc)` is the parser's own embedded allocator. We back
-    // it with the process-static global zig allocator (see module PORT NOTE) and
-    // store the original C `alloc_` for `free`.
+    // PORT NOTE: `.init(alloc)` is the parser's own embedded allocator, the
+    // resolved caller allocator (see module PORT NOTE); the original C
+    // `alloc_` is stored for `free`.
+    let parser_alloc: *mut dyn ZigAllocator = Box::into_raw(rustty_lib::allocator::default(alloc_));
+    // SAFETY: `parser_alloc` is a live heap allocation until `free` (or the
+    // failure arm below) reclaims it, after the parser borrowing it is gone.
+    let parser_alloc_ref: &'static dyn ZigAllocator = unsafe { &*parser_alloc };
     let ptr = unsafe {
         create(
             alloc_,
             OscParserWrapper {
-                parser: osc::Parser::init(Some(ZigAllocatorRef::new(&GLOBAL_ZIG_ALLOCATOR))),
+                parser: osc::Parser::init(Some(ZigAllocatorRef::new(parser_alloc_ref))),
+                parser_alloc,
                 alloc: alloc_.copied(),
             },
         )
     };
     if ptr.is_null() {
+        // `create` dropped the unplaced wrapper (and its parser) already.
+        // SAFETY: nothing borrows the holder any more.
+        drop(unsafe { Box::from_raw(parser_alloc) });
         return Result::OutOfMemory;
     }
+    // The capture allocates through the same resolved allocator (see
+    // `osc::Parser.capture_alloc`); it outlives the parser, as `free` shows.
+    // SAFETY: `ptr` is the live wrapper just created.
+    unsafe { (*ptr).parser.capture_alloc = osc::CaptureAllocator::Zig(parser_alloc_ref) };
     // result.* = ptr;
     // SAFETY: `result` is writable per the caller contract.
     unsafe { *result = ptr };
@@ -114,12 +133,17 @@ pub unsafe fn free(parser_: Parser) {
     // const alloc = parser.alloc.?;
     // SAFETY: `parser_` is a live wrapper handle (caller contract).
     let alloc = unsafe { (*parser_).alloc };
+    // SAFETY: as above.
+    let parser_alloc = unsafe { (*parser_).parser_alloc };
     // parser.deinit();
     // SAFETY: `parser_` is a live wrapper handle (caller contract).
     unsafe { (*parser_).parser.deinit() };
     // alloc.destroy(parser);
     // SAFETY: `parser_` was produced by `create` with the same `alloc_`.
     unsafe { destroy(alloc.as_ref(), parser_) };
+    // The parser that borrowed the resolved allocator is gone.
+    // SAFETY: `parser_alloc` came from `Box::into_raw` in `new`.
+    drop(unsafe { Box::from_raw(parser_alloc) });
 }
 
 // pub fn reset(parser_: Parser) ... void {
@@ -325,6 +349,95 @@ mod tests {
             // free(p);
             unsafe { free(p) };
         });
+    }
+
+    // Parity S174-F3 (no reference test): a C-created parser allocates its
+    // OSC capture through the caller's allocator (`osc.Parser.init(alloc)`,
+    // `Capture.allocating(.., alloc, ..)`), not the Rust heap. An OSC 52
+    // longer than the fixed buffer must grow through it, and everything it
+    // handed out must come back by `free`.
+    #[test]
+    fn c_parser_captures_through_the_caller_allocator() {
+        let counting = crate::test_util::CountingCAllocator::new();
+        let calloc = counting.c_allocator();
+        let mut p: Parser = std::ptr::null_mut();
+        assert_eq!(Result::Success, unsafe { new(Some(&calloc), &mut p) });
+        let after_new = counting.alloc_calls.get();
+        assert_eq!(1, after_new, "only the parser wrapper itself");
+
+        for &b in b"52;c;" {
+            unsafe { next(p, b) };
+        }
+        for _ in 0..(osc::MAX_BUF * 2) {
+            unsafe { next(p, b'A') };
+        }
+        // The initial capture (MAX_BUF) and at least one growth past it.
+        assert!(
+            counting.alloc_calls.get() >= after_new + 2,
+            "capture allocations went elsewhere: {} calls",
+            counting.alloc_calls.get()
+        );
+        let cmd = unsafe { end(p, 0) };
+        assert_eq!(osc::CommandKey::ClipboardContents, unsafe {
+            command_type(cmd)
+        });
+
+        unsafe { free(p) };
+        assert_eq!(0, counting.live_bytes.get());
+        assert_eq!(counting.alloc_calls.get(), counting.free_calls.get());
+    }
+
+    // Parity S174-F3: when the caller's allocator refuses the capture, the
+    // parser falls back to the fixed buffer, as the reference's
+    // `Capture.allocating(..) catch { self.captureTrailing(.fixed); }` does:
+    // a short OSC 52 still parses, a longer one is invalid, and nothing aborts.
+    // A refused growth of an allocating capture makes the OSC invalid.
+    #[test]
+    fn c_parser_capture_falls_back_to_fixed_when_the_caller_allocator_fails() {
+        let counting = crate::test_util::CountingCAllocator::new();
+        let calloc = counting.c_allocator();
+        let mut p: Parser = std::ptr::null_mut();
+        assert_eq!(Result::Success, unsafe { new(Some(&calloc), &mut p) });
+        counting.reject.set(true);
+
+        for &b in b"52;c;aGk=" {
+            unsafe { next(p, b) };
+        }
+        assert_eq!(2, counting.alloc_calls.get(), "the refused capture");
+        let cmd = unsafe { end(p, 0) };
+        assert_eq!(osc::CommandKey::ClipboardContents, unsafe {
+            command_type(cmd)
+        });
+
+        unsafe { reset(p) };
+        for &b in b"52;c;" {
+            unsafe { next(p, b) };
+        }
+        for _ in 0..(osc::MAX_BUF * 2) {
+            unsafe { next(p, b'A') };
+        }
+        let cmd = unsafe { end(p, 0) };
+        assert_eq!(osc::CommandKey::Invalid, unsafe { command_type(cmd) });
+
+        // A refused GROWTH (`realloc(..) catch return error.WriteFailed`)
+        // makes the OSC invalid.
+        counting.reject.set(false);
+        unsafe { reset(p) };
+        for &b in b"52;c;" {
+            unsafe { next(p, b) };
+        }
+        let before = counting.alloc_calls.get();
+        counting.reject.set(true);
+        for _ in 0..(osc::MAX_BUF * 2) {
+            unsafe { next(p, b'A') };
+        }
+        assert!(counting.alloc_calls.get() > before, "the refused growth");
+        let cmd = unsafe { end(p, 0) };
+        assert_eq!(osc::CommandKey::Invalid, unsafe { command_type(cmd) });
+
+        counting.reject.set(false);
+        unsafe { free(p) };
+        assert_eq!(0, counting.live_bytes.get());
     }
 
     // test "command type null" {
