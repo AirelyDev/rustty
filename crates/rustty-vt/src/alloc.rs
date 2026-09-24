@@ -228,11 +228,15 @@ impl From<ApiGlobal> for VtAllocator {
 // out (the Zig allocator contract); zero-sized requests never reach it (Zig's
 // typed helpers skip them too), and `grow`/`shrink` are Zig's `realloc`.
 //
-// PERF(port): every method is `#[inline]` and its C arm is out of line, so the
-// inlined body is a null test plus the `Global` call. With both
-// `allocate`/`deallocate` out of line, the OSC capture's fenced config was
-// about 7% slower (T-A3 report, the `osc::CaptureAllocator` this handle
-// replaces).
+// PERF(port): `allocate`/`deallocate` are `#[inline]` and their C arm is out of
+// line, so the inlined body is a null test plus the `Global` call. With both out
+// of line, the OSC capture's fenced config was about 7% slower (T-A3 report,
+// the `osc::CaptureAllocator` this handle replaces). `allocate_zeroed`, `grow`,
+// `grow_zeroed` and `shrink` are `#[inline(never)]`: growth is amortized, and
+// with them `#[inline]` the extra code inlined through the OSC capture into the
+// vt `Parser::next` callers cost `terminal-parser/utf8` +17% (paired CPU-time
+// median, N=11-21, load 13-31, S7-12); out of line it measured -5.5% against
+// the pre-S7 base in the same run, i.e. at or below it.
 unsafe impl ApiAllocator for VtAllocator {
     #[inline]
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
@@ -242,7 +246,7 @@ unsafe impl ApiAllocator for VtAllocator {
         }
     }
 
-    #[inline]
+    #[inline(never)]
     fn allocate_zeroed(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
         match self.c {
             None => ApiGlobal.allocate_zeroed(layout),
@@ -259,7 +263,7 @@ unsafe impl ApiAllocator for VtAllocator {
         }
     }
 
-    #[inline]
+    #[inline(never)]
     unsafe fn grow(
         &self,
         ptr: NonNull<u8>,
@@ -274,7 +278,7 @@ unsafe impl ApiAllocator for VtAllocator {
         }
     }
 
-    #[inline]
+    #[inline(never)]
     unsafe fn grow_zeroed(
         &self,
         ptr: NonNull<u8>,
@@ -289,7 +293,7 @@ unsafe impl ApiAllocator for VtAllocator {
         }
     }
 
-    #[inline]
+    #[inline(never)]
     unsafe fn shrink(
         &self,
         ptr: NonNull<u8>,
