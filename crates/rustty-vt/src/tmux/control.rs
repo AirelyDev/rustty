@@ -66,10 +66,11 @@ pub struct Parser {
 
     /// The buffer used to store in-progress notifications, output, etc.
     //
-    // PORT NOTE: `buffer: std.Io.Writer.Allocating` -> an owning `Vec<u8>`.
-    // `buffer.written()` -> `&self.buffer`, `clearRetainingCapacity()` ->
-    // `clear()`, `buffer.writer.writeByte(byte)` -> `push(byte)`.
-    buffer: Vec<u8>,
+    // PORT NOTE: `buffer: std.Io.Writer.Allocating` -> a byte list over the
+    // allocator it was created with (parity tail S7-4). `buffer.written()` ->
+    // `&self.buffer`, `clearRetainingCapacity()` -> `clear()`,
+    // `buffer.writer.writeByte(byte)` -> a fallible push.
+    buffer: crate::alloc::Bytes,
 
     /// The maximum size in bytes of the buffer. This is used to limit
     /// memory usage. If the buffer exceeds this size, the client will
@@ -105,9 +106,14 @@ impl Parser {
     // constructor that takes the buffer (an empty `Vec`) and applies the same
     // defaults; tests build it via `Parser::init()`.
     pub fn init() -> Parser {
+        Parser::init_in(crate::alloc::Global)
+    }
+
+    /// `.{ .buffer = .init(alloc) }` with the field defaults.
+    pub fn init_in(alloc: crate::alloc::Allocator) -> Parser {
         Parser {
             state: State::Idle,
-            buffer: Vec::new(),
+            buffer: crate::alloc::Bytes::new_in(alloc),
             max_bytes: 1024 * 1024,
         }
     }
@@ -117,15 +123,17 @@ impl Parser {
     //   .{ .max_bytes = self.max_bytes,
     //      .buffer = try .initCapacity(alloc, 128) }
     // `Parser`'s fields are private to this module, so the DCS handler uses
-    // this constructor mirror. This Parser's buffer is an owning
-    // global-allocator `Vec` (see the `buffer` field PORT NOTE above), so the
-    // allocator does not thread through — but the `try` DOES: the reference's
-    // `initCapacity` is a fallible allocation whose `error.OutOfMemory`
-    // propagates out of `dcs.hook`, so we reserve with `try_reserve_exact`
-    // (like `dcs::Allocating::init_capacity`) instead of the aborting
-    // `Vec::with_capacity`, and return `OutOfMemory` to the DCS hook site.
-    pub fn init_options(max_bytes: usize, capacity: usize) -> Result<Parser, OutOfMemory> {
-        let mut buffer: Vec<u8> = Vec::new();
+    // this constructor mirror. The buffer is allocated through `alloc`, and
+    // the reference's `initCapacity` is a fallible allocation whose
+    // `error.OutOfMemory` propagates out of `dcs.hook`, so we reserve with
+    // `try_reserve_exact` (like `dcs::Allocating::init_capacity`) and return
+    // `OutOfMemory` to the DCS hook site.
+    pub fn init_options(
+        alloc: crate::alloc::Allocator,
+        max_bytes: usize,
+        capacity: usize,
+    ) -> Result<Parser, OutOfMemory> {
+        let mut buffer = crate::alloc::Bytes::new_in(alloc);
         buffer
             .try_reserve_exact(capacity)
             .map_err(|_| OutOfMemory)?;
@@ -145,9 +153,10 @@ impl Parser {
 
         // self.buffer.deinit();
         //
-        // PORT NOTE: `self.buffer` is an owning `Vec`; dropping its storage is
-        // the faithful equivalent of `buffer.deinit()`.
-        self.buffer = Vec::new();
+        // PORT NOTE: dropping the list frees it through its allocator, the
+        // faithful equivalent of `buffer.deinit()`.
+        let alloc = *self.buffer.allocator();
+        self.buffer = crate::alloc::Bytes::new_in(alloc);
     }
 
     // Handle a byte of input.
@@ -255,10 +264,10 @@ impl Parser {
         //     error.WriteFailed => return error.OutOfMemory,
         // };
         //
-        // PORT NOTE: pushing onto an owning `Vec` cannot fail short of a global
-        // allocation abort, which is the Rust analogue of the `WriteFailed ->
-        // OutOfMemory` mapping; the byte-limit check above is the faithful guard.
-        self.buffer.push(byte);
+        {
+            use crate::alloc::TryPushExt;
+            self.buffer.try_push(byte).map_err(|_| OutOfMemory)?;
+        }
 
         Ok(None)
     }
@@ -860,9 +869,10 @@ impl Parser {
         self.state = State::Broken;
         // self.buffer.deinit();
         //
-        // PORT NOTE: `self.buffer` is an owning `Vec`; dropping its storage is
-        // the faithful equivalent of `buffer.deinit()`.
-        self.buffer = Vec::new();
+        // PORT NOTE: dropping the list frees it through its allocator, the
+        // faithful equivalent of `buffer.deinit()`.
+        let alloc = *self.buffer.allocator();
+        self.buffer = crate::alloc::Bytes::new_in(alloc);
     }
 }
 
@@ -1352,7 +1362,7 @@ mod tests {
     #[test]
     fn tmux_init_options_reports_allocation_failure() {
         // The nominal capacity succeeds and the options are applied.
-        let mut p = Parser::init_options(4096, 128).unwrap();
+        let mut p = Parser::init_options(crate::alloc::Global, 4096, 128).unwrap();
         assert_eq!(4096, p.max_bytes);
         assert!(p.buffer.capacity() >= 128);
         p.deinit();
@@ -1360,7 +1370,7 @@ mod tests {
         // A capacity that cannot be satisfied is reported, not aborted.
         assert_eq!(
             Err(OutOfMemory),
-            Parser::init_options(4096, usize::MAX / 2).map(|_| ())
+            Parser::init_options(crate::alloc::Global, 4096, usize::MAX / 2).map(|_| ())
         );
     }
 

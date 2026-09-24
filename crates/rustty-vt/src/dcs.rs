@@ -88,7 +88,9 @@ impl<A: Allocator> Default for Handler<A> {
     }
 }
 
-impl<A: Allocator> Handler<A> {
+// (`Into<crate::alloc::Allocator>`: the tmux control parser's buffer is
+// allocated through the runtime handle, parity tail S7-4.)
+impl<A: Allocator + Into<crate::alloc::Allocator>> Handler<A> {
     pub fn deinit(&mut self) {
         self.discard();
     }
@@ -139,13 +141,13 @@ impl<A: Allocator> Handler<A> {
                     // literal (`.max_bytes = self.max_bytes, .buffer = try
                     // .initCapacity(alloc, 128)`); `ControlParser`'s fields are
                     // private, so `init_options` is its constructor mirror. The
-                    // parser's buffer is an owning global `Vec` per its own PORT
-                    // NOTE, so the `alloc` does not thread through here, but the
-                    // `try` does: `init_options` reserves fallibly and its
-                    // `OutOfMemory` propagates out of `hook` like the reference's.
+                    // buffer is allocated through `alloc` (parity tail S7-4),
+                    // fallibly: `init_options`'s `OutOfMemory` propagates out
+                    // of `hook` like the reference's.
                     break 'tmux Some(Hook {
                         state: State::Tmux(
                             TmuxState::init_options(
+                                alloc.into(),
                                 self.max_bytes,
                                 128, // Arbitrary choice to limit initial reallocs
                             )
