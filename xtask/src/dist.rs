@@ -704,6 +704,47 @@ mod tests {
     /// resources `rustty-font` embeds (D1 puts that crate below `rustty-vt`).
     #[test]
     fn lib_vt_archive_applies_the_reference_excludes() {
+        // The list itself: the reference's 17 (`GhosttyDist.zig:184-209`, in
+        // order) minus exactly the six omissions `LIB_VT_EXCLUDES` documents.
+        // Asserted as a whole, because the archive checks below iterate the
+        // port's own list and so cannot notice an entry dropped from it.
+        const REFERENCE: [&str; 17] = [
+            "images",
+            "macos",
+            "dist/doxygen",
+            "dist/linux",
+            "dist/macos",
+            "dist/windows",
+            "flatpak",
+            "snap",
+            "po",
+            "example",
+            "test",
+            "src/font/res",
+            "src/crash/testdata",
+            "pkg/wuffs/src/too_big.jpg",
+            "pkg/wuffs/src/too_big.png",
+            "pkg/breakpad/vendor",
+            "vendor",
+        ];
+        const OMITTED: [&str; 6] = [
+            "src/font/res",
+            "src/crash/testdata",
+            "pkg/wuffs/src/too_big.jpg",
+            "pkg/wuffs/src/too_big.png",
+            "pkg/breakpad/vendor",
+            "vendor",
+        ];
+        let expected: Vec<&str> = REFERENCE
+            .into_iter()
+            .filter(|e| !OMITTED.contains(e))
+            .collect();
+        assert_eq!(LIB_VT_EXCLUDES, expected.as_slice());
+        let args = git_archive_args("p/", Path::new("o.tar"), Scope::LibVt);
+        for e in &expected {
+            assert!(args.contains(&format!(":(exclude){e}")), "{args:?}");
+        }
+
         let lib_vt = archive_listing(Scope::LibVt);
         let full = archive_listing(Scope::Workspace);
         for dir in LIB_VT_EXCLUDES {
