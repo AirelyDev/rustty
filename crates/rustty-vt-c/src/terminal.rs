@@ -11390,8 +11390,12 @@ mod tests {
     /// transmit, an animation frame and a composition, a display and an
     /// uppercase delete), a glyph protocol registration (the request bytes and
     /// the decoded outline), an OSC 52 write and a Kitty clipboard write
-    /// transaction (both through the installed clipboard effect), a color
-    /// response larger than its stack buffer, and XTGETTCAP / DECRQSS.
+    /// transaction (both through the installed clipboard effect), a
+    /// five-representation Kitty clipboard write (the C trampoline's array past
+    /// its four stack slots) and a Kitty clipboard read whose reply spills the
+    /// reply trampoline's stack buffer, continuation tracking (the tracker's
+    /// reservation and growth), a color response larger than its stack buffer,
+    /// and XTGETTCAP / DECRQSS.
     fn sweep_corpus(t: Terminal, before_reset: &dyn Fn(Terminal)) -> Vec<Result> {
         // A smaller corpus under Miri (the design's "small-corpus instance");
         // it still reaches every family below.
@@ -11450,6 +11454,33 @@ mod tests {
             b"\x1B]5522;type=wdata:mime=dGV4dC9wbGFpbg==;R2hvc3Q=\x1B\\",
         );
         vtw(t, b"\x1B]5522;type=wdata\x1B\\");
+        vtw(t, b"\x1B]5522;type=write\x1B\\");
+        for mime in ["dGV4dC9h", "dGV4dC9i", "dGV4dC9j", "dGV4dC9k", "dGV4dC9l"] {
+            vtw(
+                t,
+                format!("\x1B]5522;type=wdata:mime={mime};eA==\x1B\\").as_bytes(),
+            );
+        }
+        vtw(t, b"\x1B]5522;type=wdata\x1B\\");
+        vtw(t, b"\x1B]5522;type=read;dGV4dC9wbGFpbg==\x1B\\");
+        // Continuation tracking: past 4096 bytes the suffix grows beyond the
+        // tracker's initial reservation (under Miri only the reservation).
+        let (max, unfinished) = if cfg!(miri) {
+            (64usize, 40)
+        } else {
+            (8192, 5000)
+        };
+        results.push(unsafe {
+            set(
+                t,
+                Option_::ContinuationMaxBytes,
+                &max as *const usize as *const c_void,
+            )
+        });
+        let mut csi = b"\x1B[".to_vec();
+        csi.extend(std::iter::repeat_n(b'1', unfinished));
+        vtw(t, &csi);
+        vtw(t, b"m");
         // A color response past its 1024-byte stack buffer.
         let mut queries = b"\x1B]4".to_vec();
         for i in 0..64 {
@@ -11488,6 +11519,8 @@ mod tests {
     thread_local! {
         /// Clipboard writes the sweep's effect accepted (this thread's).
         static SWEEP_CLIPBOARD_WRITES: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+        /// Clipboard reads the sweep's effect served (this thread's).
+        static SWEEP_CLIPBOARD_READS: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
     }
 
     // Parity tail S7-4 (routing evidence, no reference counterpart): the
@@ -11688,6 +11721,7 @@ mod tests {
         });
         sweep_install_effects(t);
         SWEEP_CLIPBOARD_WRITES.with(|c| c.set(0));
+        SWEEP_CLIPBOARD_READS.with(|c| c.set(0));
         let reached = |t: Terminal| {
             // SAFETY: `t` is the live wrapper; raw reads of its terminal and
             // active screen.
@@ -11708,14 +11742,22 @@ mod tests {
                     (*term).glyph_glossary.contains(0xE0A0),
                     "the glyph is registered"
                 );
+                let tracker = (*t)
+                    .stream
+                    .continuation
+                    .as_ref()
+                    .expect("continuation tracking is on");
+                assert!(!tracker.broken);
+                assert!(tracker.bytes.capacity() > 4096, "the suffix grew");
             }
         };
         for r in sweep_corpus(t, &reached) {
             assert_eq!(Result::Success, r);
         }
-        // OSC 52 twice (the long capture and the short write) and the Kitty
-        // clipboard commit.
-        assert_eq!(3, SWEEP_CLIPBOARD_WRITES.with(|c| c.get()));
+        // OSC 52 twice (the long capture and the short write) and the two
+        // Kitty clipboard commits; the Kitty read.
+        assert_eq!(4, SWEEP_CLIPBOARD_WRITES.with(|c| c.get()));
+        assert_eq!(1, SWEEP_CLIPBOARD_READS.with(|c| c.get()));
         let calls_before_free = counting.alloc_calls.get();
         unsafe { free(t) };
         // (S7-3's corpus made 33 allocations; the families above add theirs.)
@@ -11726,9 +11768,32 @@ mod tests {
         assert_eq!(0, counting.live_bytes.get(), "free returns every byte");
     }
 
-    /// The effects the sweep corpus exercises: a pty sink and a clipboard
-    /// writer that accepts every write. Setting them allocates nothing.
+    /// The effects the sweep corpus exercises: a pty sink, a clipboard writer
+    /// that accepts every write, and a clipboard reader that answers with nine
+    /// contents. Setting them allocates nothing.
     fn sweep_install_effects(t: Terminal) {
+        extern "C" fn clipboard_read(_: Terminal, _: *mut c_void, request: *const ClipboardRead) {
+            SWEEP_CLIPBOARD_READS.with(|c| c.set(c.get() + 1));
+            let contents = [ClipboardContent {
+                mime: LibString::init(b"text/plain"),
+                data: LibString::init(b"x"),
+            }; 9];
+            // SAFETY: `request` is valid for the callback.
+            unsafe {
+                ((*request).reply)(
+                    request,
+                    &ClipboardReadReply {
+                        size: std::mem::size_of::<ClipboardReadReply>(),
+                        result: clipboard::ReadStatus::Success,
+                        contents: contents.as_ptr(),
+                        contents_len: contents.len(),
+                        available: std::ptr::null(),
+                        available_len: 0,
+                        remember: false,
+                    },
+                )
+            };
+        }
         extern "C" fn write_pty(_: Terminal, _: *mut c_void, _: *const u8, _: usize) {}
         extern "C" fn clipboard_write(_: Terminal, _: *mut c_void, request: *const ClipboardWrite) {
             SWEEP_CLIPBOARD_WRITES.with(|c| c.set(c.get() + 1));
@@ -11749,6 +11814,9 @@ mod tests {
         });
         assert_eq!(Result::Success, unsafe {
             set(t, Option_::ClipboardWrite, clipboard_write as *const c_void)
+        });
+        assert_eq!(Result::Success, unsafe {
+            set(t, Option_::ClipboardRead, clipboard_read as *const c_void)
         });
     }
 
