@@ -335,9 +335,9 @@ pub trait AppMailbox {
     fn crash_surface(&self) -> *const dyn rustty_crash::sentry::ThreadStateSurface;
 }
 
-// DEFERRED (needs rustty-core `App`/`Surface`; see module doc). The reference
+// RELOCATED (needs rustty-core `App`/`Surface`; see module doc). The reference
 // `newConfig` function + its comments are preserved verbatim here so nothing is
-// lost (R1); the implementation lands in rustty-apprt/rustty-core.
+// lost (R1); the implementation is `rustty_core::app::new_config` (R4).
 //
 // /// Returns a new config for a surface for the given app that should be
 // /// used for any new surfaces. The resulting config should be deinitialized

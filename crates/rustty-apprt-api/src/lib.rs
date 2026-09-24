@@ -6,20 +6,18 @@
 //! `src/apprt/` as a pure INTERFACE crate (break #8, breaks apprt<->core;
 //! ambiguity A5 resolved here).
 //!
-//! PORT STATUS: in progress
+//! PORT STATUS: done
 //!
-//! (The A5 interface seam is COMPLETE — all 5 reference files ported, all 20
-//! reference test{} blocks pass. "in progress" — not "done" — mirrors the
-//! renderer/config precedent for a crate carrying documented *additive*
-//! deferrals to future milestones: the gtk `getGObjectType` GObject
-//! registrations and the byte-exact `CValue` C-ABI pinning, both landing in the
-//! rustty-apprt gtk backend / embedded C-API milestone. No reference logic,
-//! comment, or test is dropped.)
+//! (The A5 interface seam is COMPLETE — all 5 reference files ported, every
+//! reference comment present (G3b 323/323), all 20 reference test{} blocks
+//! pass. This crate was held at "in progress" for three *additive* deferrals
+//! to later milestones; all three have since landed in other crates (R4), see
+//! DEFERRALS below. Status realigned 2026-09-24, parity tail S-8a.)
 //!
 //! No whole reference file moves intact: this is the trait+types SEAM carved out
-//! of `apprt/`. The bulk of `apprt/` (the concrete gtk/embedded backends,
-//! `newConfig`, the GObject registrations, the byte-exact C-ABI projection) stays
-//! for the future `rustty-apprt` crate.
+//! of `apprt/`. The bulk of `apprt/` (the concrete gtk/embedded backends, the
+//! GObject registrations) lives in `rustty-apprt`, the C-ABI projection's
+//! header freeze in `rustty-apprt-c`, and `newConfig` in `rustty-core`.
 //!
 //! THE CYCLE BREAK: rustty-core depends on THIS interface, never on the concrete
 //! apprt. [`Target::cval`](action::Target::cval) reaches the opaque `rt_surface`
@@ -35,16 +33,22 @@
 //! the faithful model. A `dyn App` would both misrepresent the reference and
 //! forbid the generic `perform_action`.
 //!
-//! DEFERRALS (additive, documented, R1-safe — see each module):
-//! - GObject boxed-type registration (`getGObjectType` on InitialSize/Clipboard/
-//!   ClipboardRequest/Message::ChildExited) lands in rustty-apprt's gtk backend.
-//! - Byte-exact C-ABI pinning of the `CValue` unions to `rustty.h` (the vt-c D2
-//!   cbindgen + pinned-padding pattern) is deferred to the apprt embedded C-API
-//!   milestone; the `const _` size-asserts here pin the ACTUAL Rust layout only.
-//! - `surface.newConfig` traces to rustty-core and lands when core does. (The
-//!   `AppMailbox` queue types `Timeout`/`Size` were RESOLVED concrete by core
-//!   C0 — CORE_BLUEPRINT §3: they are rustty-datastruct's module-level
-//!   `blocking_queue::{Timeout, Size}`.)
+//! DEFERRALS (additive, documented, R1-safe) — all RESOLVED in other crates:
+//! - GObject boxed/enum-type registration (`getGObjectType` on InitialSize/
+//!   Clipboard/ClipboardRequest/Message::ChildExited): landed in rustty-apprt's
+//!   gtk backend (`gtk/class/gtypes.rs`, `clipboard_confirmation_dialog.rs`
+//!   `ClipboardRequestBoxed`, `surface_child_exited.rs`).
+//! - C-ABI pinning of the `CValue` unions to the embedding header: the
+//!   `rustty_target_s`/`rustty_action_u`/`rustty_action_s` sizes are frozen
+//!   against `include/rustty-embed.h` (`rustty-apprt-c/tests/abi_layout.rs`
+//!   `@embed-abi`, cross-checked by `check_embed_h_abi.sh`). Per-arm INTERIOR
+//!   field offsets of the action union are not pinned; the reference asserts
+//!   only the union size too, so that is an additive check beyond it (see
+//!   `abi_layout.rs`).
+//! - `surface.newConfig` traces to rustty-core: ported as
+//!   `rustty_core::app::new_config`. (The `AppMailbox` queue types
+//!   `Timeout`/`Size` were RESOLVED concrete by core C0 — CORE_BLUEPRINT §3:
+//!   they are rustty-datastruct's module-level `blocking_queue::{Timeout, Size}`.)
 
 pub mod action;
 pub mod ipc;
