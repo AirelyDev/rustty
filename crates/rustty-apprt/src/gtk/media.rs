@@ -108,13 +108,21 @@ fn gerror_parts(err: &glib::Error, no_message: &str) -> (String, i32, String) {
     }
 }
 
-/// PORTS: `media.zig:59-90` `bellMediaFile`. Get-or-create the reusable bell
-/// `MediaFile` targeting `path`.
+/// Get-or-create a reusable bell MediaFile targeting `path`.
 ///
-/// `current` is the surface's currently-cached `MediaFile` (or `None`). If it
-/// already targets `path` it is returned unchanged; otherwise it is dropped
-/// (unref'd) and a fresh one is built for `path`. Returns `None` (after freeing
-/// `current`) if `path` is inaccessible, leaving the caller's slot empty.
+/// `current` is the surface's currently-cached MediaFile (or null). If it
+/// already targets `path` it is returned unchanged; otherwise it is unref'd and
+/// a fresh MediaFile is built for `path`. Returns null (after freeing `current`)
+/// if `path` is inaccessible, leaving the caller's slot empty.
+///
+/// Reusing one MediaFile per surface is what prevents the GStreamer pipeline
+/// leak: `gtk.MediaFile.newForFilename` spins up a full pipeline (and, via the
+/// GTK4 GStreamer backend's GL sink, gstglcontext/gldisplay-event threads) that
+/// is never torn down on the happy path, so allocating one per bell leaked a
+/// pipeline + its threads on every ring. See the caller in surface.zig.
+///
+/// PORTS: `media.zig:59-90` `bellMediaFile`. In Rust, null is `None` and the
+/// unref is the owned handle's drop.
 pub fn bell_media_file(
     current: Option<gtk4::MediaFile>,
     path: &Path,
@@ -130,14 +138,14 @@ pub fn bell_media_file(
 
     let media_file = from_filename(path)?;
 
-    // If the audio file is marked as required, emit an error if playback fails;
-    // otherwise there is silence. Connected once, here, because the `MediaFile`
-    // is reused across bells (`media.zig:79-87`).
+    // If the audio file is marked as required, we'll emit an error if there
+    // was a problem playing it. Otherwise there will be silence. We connect
+    // this once, here, because the MediaFile is reused across bells.
     //
     // NOTE: we intentionally do NOT connect notify::ended to unref. The
-    // `MediaFile` is owned by the surface and replayed via `seek(0)` for every
-    // bell; unref'ing on `ended` is precisely what previously leaked a pipeline
-    // per ring.
+    // MediaFile is owned by the surface and replayed via `seek(0)` for every
+    // bell; unref'ing on `ended` is precisely what previously discarded (and
+    // leaked) a pipeline per ring.
     if required {
         media_file.connect_error_notify(media_file_error);
     }
@@ -145,17 +153,20 @@ pub fn bell_media_file(
     Some(media_file)
 }
 
-/// PORTS: `media.zig:92-100` `playBell`. (Re)play `media_file` at `volume`.
-/// `seek(0)` rewinds first so a previously-ended stream plays again (#8957);
-/// safe on a freshly-created stream too.
+/// (Re)play `media_file` at `volume`. `seek(0)` rewinds first so that a
+/// previously-ended stream plays again; without it playback only ever happens
+/// once (see #8957). Safe on a freshly-created stream as well.
+///
+/// PORTS: `media.zig:92-100` `playBell`.
 pub fn play_bell(media_file: &gtk4::MediaFile, volume: f64) {
     media_file.set_volume(volume);
     media_file.seek(0);
     media_file.play();
 }
 
-/// PORTS: `media.zig:102-108` `isForPath`. Whether `media_file` was created for
-/// `path`.
+/// Whether `media_file` was created for `path`.
+///
+/// PORTS: `media.zig:102-108` `isForPath`.
 fn is_for_path(media_file: &gtk4::MediaFile, path: &Path) -> bool {
     let Some(file) = media_file.file() else {
         return false;
@@ -273,6 +284,12 @@ mod tests {
     #[test]
     #[ignore = "requires a display; run via GDK_BACKEND=broadway (with broadwayd) or xvfb-run -a cargo test -p rustty-apprt --features gtk,x11,wayland bell_media_file -- --ignored"]
     fn bell_media_file_reuses_one_per_path() {
+        // Regression guard for the audio-bell thread leak: each bell must replay a
+        // single cached MediaFile, not allocate a fresh GStreamer pipeline (which
+        // leaked gstglcontext/gldisplay-event threads) per ring. We assert the
+        // reuse contract of bellMediaFile directly; this needs no display and no
+        // playback (MediaFile is lazy), only that the path comparison drives reuse.
+        //
         // GTK must be initialized for `MediaFile` construction.
         //
         // FIX (task 19 fix round 1): this was `if gtk4::init().is_err() {
@@ -288,8 +305,10 @@ mod tests {
         // constructors assert `gtk4::init()` has succeeded.
         crate::gtk::init_for_display_test("bell_media_file_reuses_one_per_path");
 
-        // The files need not exist for reuse, but `from_filename` checks
-        // accessibility, so create two real temp files.
+        // The files need not exist: MediaFile only records the path until played.
+        //
+        // PORT NOTE: the port's `from_filename` checks accessibility first (as the
+        // reference's `fromFilename` does), so create two real temp files.
         let dir = std::env::temp_dir();
         let path_a = dir.join("rustty-bell-test-a.oga");
         let path_b = dir.join("rustty-bell-test-b.oga");

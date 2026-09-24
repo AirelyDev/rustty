@@ -29,6 +29,9 @@ use rustty_input::keyboard::Layout;
 use super::class::application::{Application, RunError};
 use super::surface::Surface;
 
+/// This is the main entrypoint to the apprt for Rustty. Rustty will
+/// initialize this in main to start the application..
+///
 /// PORTS: `App.zig:1-3` `const App = @This()` — the apprt entrypoint. Wraps the
 /// process-wide [`Application`] GObject and OWNS the sole created ref.
 pub struct App {
@@ -73,6 +76,10 @@ impl App {
     /// now. Both pointers stay `*mut c_void` (the Application GObject is
     /// non-generic and cannot name `App<A>`; see its field notes).
     pub fn init(core_app: *mut c_void) -> Result<Self, InitError> {
+        // Required by the apprt interface but we don't use it.
+        // PORT NOTE: that is the reference's `opts: struct {}` parameter
+        // (`App.zig:39-40`, discarded by `_ = opts;`); the Rust `init` has none.
+        //
         // `const app: *Application = try .new(self, core_app);` (`App.zig:43`).
         // rt_app is null until the stable-address bind step runs (PORT NOTE).
         // `errdefer app.unref()` (`App.zig:44`) is discharged by Rust drop glue:
@@ -131,6 +138,9 @@ impl App {
     /// unref because other things tend to have a reference at this point, so this
     /// just forces the disposal now.
     pub fn terminate(&self) {
+        // We force deinitialize the app. We don't unref because other things
+        // tend to have a reference at this point, so this just forces the
+        // disposal now.
         // `self.app.deinit();` (`App.zig:57`).
         self.app.deinit();
     }
@@ -183,12 +193,16 @@ fn ipc_bus_target(
     target: &ipc::Target<'_>,
     stderr: &mut impl std::io::Write,
 ) -> Result<(Vec<u8>, Vec<u8>), ipc::Errors> {
+    // Get the appropriate bus name and object path for contacting the
+    // Rustty instance we're interested in.
     let (bus_name, object_path): (Vec<u8>, Vec<u8>) = match target {
         ipc::Target::Detect => (
             super::build_info::APPLICATION_ID.as_bytes().to_vec(),
             super::build_info::OBJECT_PATH.as_bytes().to_vec(),
         ),
         ipc::Target::Class(class) => {
+            // Force the usage of the class specified on the CLI to determine the
+            // bus name and object path.
             // const object_path = try std.fmt.allocPrintSentinel(alloc, "/{s}", .{class}, 0);
             // std.mem.replaceScalar(u8, object_path, '.', '/');
             // std.mem.replaceScalar(u8, object_path, '-', '_');
@@ -281,6 +295,10 @@ fn ipc_arguments_variant(
 }
 
 /// Send an `org.gtk.Actions.Activate` D-Bus call to the running instance.
+///
+/// Send the IPC to the remote Rustty. Once it completes, nothing further
+/// should be done with this object other than call `deinit`.
+///
 /// PORTS: `ipc/DBus.zig` `send` — builds the `(sava{sv})` payload (action name,
 /// an `av` of parameters, empty `a{sv}` platform data) and `callSync`s it.
 ///
@@ -293,12 +311,23 @@ fn ipc_send(
     param: impl FnOnce(&mut std::io::Stderr) -> Result<Option<glib::Variant>, ipc::Errors>,
 ) -> Result<bool, ipc::Errors> {
     use gio::prelude::*;
+    // PORT NOTE: the reference's `DBus` struct (`ipc/DBus.zig:14-30`) is these
+    // locals; its fields' docs, verbatim:
+    //   `target`: The target for this IPC.
+    //   `dbus`: Connection to the DBus session bus.
+    //   `bus_name`: The bus name of the Rustty instance that we are calling.
+    //   `object_path`: The object path of the Rustty instance that we are calling.
+    //   `payload_builder`: Used to build the DBus payload.
+    //   `parameters_builder`: Used to build the parameters for the IPC.
+    // `deinit` ("Free/unref any data held by this instance.", `DBus.zig:190`) is
+    // Rust drop glue.
     let mut stderr = std::io::stderr();
     let (bus_name, object_path) = ipc_bus_target(target, &mut stderr)?;
     // Both passed the GLib validity checks above, which accept ASCII only.
     let bus_name = String::from_utf8(bus_name).expect("a valid bus name is ASCII");
     let object_path = String::from_utf8(object_path).expect("a valid object path is ASCII");
 
+    // Get a connection to the DBus session bus.
     let conn = match gio::bus_get_sync(gio::BusType::Session, gio::Cancellable::NONE) {
         Ok(c) => c,
         Err(err) => {
@@ -309,8 +338,14 @@ fn ipc_send(
 
     let param = param(&mut stderr)?;
 
+    // Set up the payload builder. (`(sava{sv})`, built below as one tuple.)
+    // Add the action name to the payload. (`action.to_variant()` below.)
+    //
+    // Set up the parameter builder.
+    //
     // parameters: `av`. Each ipc file builds its own parameter variant
-    // (`DBus.zig` `addParameter`): `new-window-command` an `as` of CLI
+    // (`DBus.zig` `addParameter`, "Add a parameter to the IPC call."):
+    // `new-window-command` an `as` of CLI
     // arguments (`ipc/new_window.zig:33-59`), `new-tab` a `(tas)` tuple
     // (`ipc/new_tab.zig:31-67`).
     let params: Vec<glib::Variant> = match param {
@@ -318,6 +353,10 @@ fn ipc_send(
         None => vec![],
     };
     let params_v = glib::Variant::array_from_iter_with_type(glib::VariantTy::VARIANT, params);
+    // Add the parameters to the payload.
+    //
+    // Add the platform data to the payload.
+    // We have no platform data.
     let platform_v = std::collections::HashMap::<String, glib::Variant>::new().to_variant();
     let payload = glib::Variant::tuple_from_iter([action.to_variant(), params_v, platform_v]);
 
@@ -327,7 +366,7 @@ fn ipc_send(
         "org.gtk.Actions",
         "Activate",
         Some(&payload),
-        None,
+        None, // We don't care about the return type, we don't do anything with it.
         gio::DBusCallFlags::NONE,
         -1,
         gio::Cancellable::NONE,
@@ -348,6 +387,11 @@ fn ipc_new_window(target: ipc::Target<'_>, value: ipc::NewWindow<'_>) -> Result<
     };
     // The `as` array of CLI arguments (`ipc/new_window.zig:33-59`); no
     // parameter at all for the bare `new-window` action.
+    //
+    // If any arguments were specified on the command line, the first
+    // parameter is an array of strings that contain the arguments. They
+    // will be sent to the main Rustty instance and interpreted as CLI
+    // arguments.
     ipc_send(&target, action, |stderr| {
         value
             .arguments
@@ -408,6 +452,27 @@ fn ipc_new_tab_param(
     ]))
 }
 
+/// Use a D-Bus method call to toggle the quick terminal on GTK.
+///
+/// `rustty +toggle-quick-terminal` is equivalent to the following command
+/// (on a release build):
+///
+/// ```sh
+/// gdbus call --session \
+///   --dest io.airely.rustty \
+///   --object-path /io/airely/rustty \
+///   --method org.gtk.Actions.Activate \
+///   toggle-quick-terminal [] []
+/// ```
+///
+/// PORT NOTE: Rustty's release identity replaces the reference's
+/// (`toggle_quick_terminal.zig:14-15`), which reads:
+///
+/// ```text
+///   --dest com.mitchellh.ghostty \
+///   --object-path /com/mitchellh/ghostty \
+/// ```
+///
 /// PORTS: `ipc/toggle_quick_terminal.zig` `toggleQuickTerminal` — the
 /// `toggle-quick-terminal` D-Bus IPC.
 fn ipc_toggle_quick_terminal(target: ipc::Target<'_>) -> Result<bool, ipc::Errors> {
@@ -415,6 +480,10 @@ fn ipc_toggle_quick_terminal(target: ipc::Target<'_>) -> Result<bool, ipc::Error
 }
 
 impl ApprtApp for App {
+    /// This is detected by the Renderer, in which case it sends a `redraw_surface`
+    /// message so that we can call `drawFrame` ourselves from the app thread,
+    /// because GTK's `GLArea` does not support drawing from a different thread.
+    ///
     /// PORTS: `App.zig:20-23` `pub const must_draw_from_app_thread = true`
     /// (invariant 1): GTK's `GLArea` cannot draw off the app thread, so the
     /// renderer sends a `redraw_surface` message instead of drawing inline. This
@@ -459,6 +528,8 @@ impl ApprtApp for App {
         App::perform_ipc(target, action)
     }
 
+    /// Called by CoreApp to wake up the event loop.
+    ///
     /// PORTS: `App.zig:60-63` `wakeup`. Wakes the event loop
     /// (`class/application.zig:1286-1289`).
     fn wakeup(&self) {

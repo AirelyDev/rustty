@@ -1,5 +1,7 @@
 //! rustty-apprt::gtk::winproto::x11
 //!
+//! X11 window protocol implementation for the Rustty GTK apprt.
+//!
 //! PORTS: ghostty `src/apprt/gtk/winproto/x11.zig` (509 loc) — the X11
 //! window-protocol backend. Two types: [`App`] (per-application: the xlib
 //! `Display` GDK owns, plus the interned [`Atoms`]) and [`Window`] (per-surface:
@@ -71,6 +73,14 @@ const MWM_DECOR_ALL: c_ulong = 1 << 0;
 /// the client API (`x11.zig:471,477`). Both properties this arm writes
 /// (`_MOTIF_WM_HINTS`, `_KDE_NET_WM_BLUR_BEHIND_REGION`) use format 32.
 const FORMAT_32: c_int = 32;
+// PORT NOTE: the reference's `PropertyFormat.bufferType` (`x11.zig:481-488`) has no
+// counterpart: the port passes `*const c_uchar` built from `#[repr(C)]` `c_long`
+// words, so the alignment it guards is the source type's. Its comment, verbatim:
+// The buffer type has to be a multi-pointer to bytes
+// *aligned to the element type* (very important,
+// otherwise you'll read garbage!)
+//
+// I know this is really ugly. X11 is ugly. I consider it apropos.
 
 /// `XkbUseCoreKbd` (`X11/XKBlib.h`, via `X11/extensions/XKB.h`) — the core-keyboard
 /// device spec (`x11.zig:95`). `x11-dl` does not export it, so it is spelled here.
@@ -172,6 +182,10 @@ impl Atoms {
     }
 }
 
+// See Xm/MwmUtil.h, packaged with the Motif Window Manager
+//
+// We don't really care about the other flags
+// (the reference's `_rest` padding of both `flags` and `decorations`).
 /// PORTS: `x11.zig:491-509` `MotifWMHints`. See `Xm/MwmUtil.h`. `#[repr(C)]` of
 /// five machine words; the reference expresses `flags`/`decorations` as `c_ulong`
 /// packed bitfields, but the only bits this arm touches are
@@ -226,6 +240,7 @@ impl App {
         app_id: &str,
         config: &CoreConfig,
     ) -> Result<Option<App>, WinprotoError> {
+        // If the display isn't X11, then we don't need to do anything.
         // `gobject.ext.cast(gdk_x11.X11Display, gdk_display) orelse return null`
         // (`x11.zig:39-42`).
         let Some(x11d) = gdk_display.downcast_ref::<gdk4_x11::X11Display>() else {
@@ -361,24 +376,29 @@ impl App {
     #[allow(clippy::unused_self)]
     pub fn deinit(&mut self) {}
 
-    /// PORTS: `x11.zig:115-160` `App.eventMods`. Checks for an IMMEDIATE pending XKB
-    /// state-update event and derives the keyboard modifiers from it. This is
-    /// necessary because the standard GTK X11 API (and X11 generally) does not
-    /// include the just-pressed key in the modifier snapshot carried by that key's
-    /// own event — so pressing e.g. Shift does not show `shift` set.
+    /// Checks for an immediate pending XKB state update event, and returns the
+    /// keyboard state based on if it finds any. This is necessary as the
+    /// standard GTK X11 API (and X11 in general) does not include the current
+    /// key pressed in any modifier state snapshot for that event (e.g. if the
+    /// pressed key is a modifier, that is not necessarily reflected in the
+    /// modifiers).
     ///
-    /// Returns `None` when there is no such event; the caller
-    /// ([`super::App::event_mods`]) then falls back to the plain GDK modifier state
-    /// via `key::translate_mods` (`winproto.zig:62`).
+    /// Returns null if there is no event. In this case, the caller should fall
+    /// back to the standard GDK modifier state (this likely means the key
+    /// event did not result in a modifier change).
     ///
-    /// The approach is the reference's, which credits Firefox/Gecko's
-    /// `widget/gtk/nsGtkKeyUtils.cpp` (`x11.zig:133-134`).
+    /// PORTS: `x11.zig:115-160` `App.eventMods`. The caller
+    /// ([`super::App::event_mods`]) falls back via `key::translate_mods`
+    /// (`winproto.zig:62`).
     #[must_use]
     pub fn event_mods(
         &self,
         _device: Option<&gdk4::Device>,
         _gtk_mods: gdk4::ModifierType,
     ) -> Option<rustty_vt::input::key_mods::Mods> {
+        // Shoutout to Mozilla for figuring out a clean way to do this, this is
+        // paraphrased from Firefox/Gecko in widget/gtk/nsGtkKeyUtils.cpp.
+        //
         // `if (XEventsQueued(display, QueuedAfterReading) == 0) return null`
         // (`x11.zig:135-138`). This guard is load-bearing: XPeekEvent BLOCKS when
         // the queue is empty.
@@ -416,6 +436,7 @@ impl App {
                 std::ptr::from_ref(&next_event).cast::<xlib::XkbStateNotifyEvent>(),
             )
         };
+        // Check the state according to XKB masks.
         let lookup_mods = c_uint::from(state.lookup_mods);
 
         // `log.debug("X11: found extra XkbStateNotify event w/lookup_mods: {b}")`
@@ -514,9 +535,10 @@ pub struct Window {
 
     /// PORTS: `x11.zig:186` `blur_region`.
     blur_region: BlurRegion,
-    /// PORTS: `x11.zig:191` `last_applied_decoration_hints`. Cache the last applied
-    /// `_MOTIF_WM_HINTS` to avoid redundant property writes, which glitch some WMs
-    /// (ghostty PR #8075, `x11.zig:188-191`).
+    // Cache last applied values to avoid redundant X11 property updates.
+    // Redundant property updates seem to cause some visual glitches
+    // with some window managers: https://github.com/ghostty-org/ghostty/pull/8075
+    /// PORTS: `x11.zig:191` `last_applied_decoration_hints`.
     last_applied_decoration_hints: Option<MotifWmHints>,
 }
 
@@ -572,6 +594,7 @@ impl Window {
     /// PORTS: `x11.zig:218-223` `Window.resizeEvent`. The blur region must track
     /// window resizes.
     pub fn resize_event(&mut self) -> Result<(), WinprotoError> {
+        // The blur region must update with window resizes
         // self.syncBlur() catch |err| { log.err("failed to sync blur={}", .{err}); };
         if let Err(err) = self.sync_blur() {
             log::error!(target: LOG_SCOPE, "failed to sync blur={err:?}");
@@ -582,6 +605,8 @@ impl Window {
     /// PORTS: `x11.zig:225-234` `Window.syncAppearance`. Re-derive both the blur
     /// region (CSD toggles change its offset) and the decoration hints.
     pub fn sync_appearance(&mut self) -> Result<(), WinprotoError> {
+        // The user could have toggled between CSDs and SSDs,
+        // therefore we need to recalculate the blur region offset.
         // self.syncBlur() catch |err| { log.err("failed to sync blur={}", .{err}); };
         if let Err(err) = self.sync_blur() {
             log::error!(target: LOG_SCOPE, "failed to sync blur={err:?}");
@@ -642,6 +667,7 @@ impl Window {
         let Some(config) = apprt.get_config() else {
             return Ok(());
         };
+        // When blur is disabled, remove the property if it was previously set
         let blur = config.get().background_blur;
 
         // `if (blur.enabled()) calcForWindow(..., true) else .empty` (`x11.zig:249-257`).
@@ -654,7 +680,7 @@ impl Window {
             BlurRegion::empty()
         };
 
-        // Only touch X11 when the region actually changes (`x11.zig:260-264`).
+        // Only update X11 properties when the blur region actually changes
         if region.eql(&self.blur_region) {
             return Ok(());
         }
@@ -702,6 +728,7 @@ impl Window {
         // `getWindowProperty(...)` catching PropertyNotFound (`x11.zig:292-307`).
         let mut hints = match self.get_motif_hints() {
             Ok(Some(h)) => h,
+            // motif_wm_hints is already initialized, so this is fine
             // PropertyNotFound => default (already-zeroed) hints (`x11.zig:300-301`).
             Ok(None) => MotifWmHints::default(),
             // RequestFailed / type / format mismatch: the reference PROPAGATES,
@@ -719,13 +746,15 @@ impl Window {
             hints.decorations &= !MWM_DECOR_ALL;
         }
 
-        // Only update when the hints actually change (`x11.zig:315-318`).
+        // Only update decoration hints when they actually change
         if self.last_applied_decoration_hints == Some(hints) {
             return Ok(());
         }
 
         // `changeProperty(MotifWMHints, motif_wm_hints, motif_wm_hints, ._32, .replace, &.{hints})`
         // (`x11.zig:320-327`). One element of five `c_long` words => nelements = 5.
+        // The reference computes it as `words_per_elem`:
+        // The number of "words" that each element `T` occupies.
         let data = std::ptr::addr_of!(hints).cast::<c_uchar>();
         unsafe {
             self.change_property(
@@ -900,6 +929,10 @@ impl Window {
                 nelements,
             )
         });
+        // For some godforsaken reason Xlib alternates between
+        // error values (0 = success) and booleans (1 = success), and they look exactly
+        // the same in the signature (just `int`, since Xlib is written in C89)...
+        //
         // `if (status == 0) return error.RequestFailed` (`x11.zig:421`); a trapped
         // X error takes the same path (R13, [`Self::trap_x_errors`]).
         #[cfg(test)]

@@ -967,3 +967,5 @@ unless the row proves, `MIXED-CARRIED`, that the port carries its fact).
 - `apprt/gtk/class/global_shortcuts.zig:406`: a closing quip, no fact.
 - `apprt/gtk/winproto/BlurRegion.zig:58`: an insult, no fact; `:59-61` (the
   ~30% CSD fact) are carried verbatim in `blur_region.rs`.
+- `apprt/gtk/class/application.zig:3486`: MIXED (parity tail L-2). The jab is
+  dropped; `:3484-3485` (`isActive` returns 1, 0 means equality) are carried verbatim.

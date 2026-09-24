@@ -29,8 +29,9 @@ pub const TOKEN_HEX_LEN: usize = size_of::<usize>() * 2;
 /// PORTS: `portal.zig:46` — the portal `Request` object-path prefix.
 const REQUEST_PATH_PREFIX: &str = "/org/freedesktop/portal/desktop/request";
 
-/// PORTS: `portal.zig:13-17` `generateToken`. A random token suitable for use in
-/// requests to the XDG Desktop Portal.
+/// Generate a token suitable for use in requests to the XDG Desktop Portal
+///
+/// PORTS: `portal.zig:13-17` `generateToken`.
 ///
 /// CORRECTION (task-18, closes S48-F4). The note that stood here said "the
 /// reference reaches `std.crypto.random`. The port has no CSPRNG dependency in
@@ -74,8 +75,9 @@ pub fn generate_token() -> usize {
     usize::from_ne_bytes(buf)
 }
 
-/// PORTS: `portal.zig:18-20` `formatToken`. Format a request token consistently
-/// for use in portal object paths and payloads: lowercase hex, zero-padded to
+/// Format a request token consistently for use in portal object paths and payloads.
+///
+/// PORTS: `portal.zig:18-20` `formatToken`: lowercase hex, zero-padded to
 /// [`TOKEN_HEX_LEN`].
 pub fn format_token(token: usize) -> String {
     format!("{token:0width$x}", width = TOKEN_HEX_LEN)
@@ -94,24 +96,28 @@ pub fn request_path(dbus: &gio::DBusConnection, token: usize) -> Option<String> 
     Some(build_request_path(unique_name, token))
 }
 
-/// PORTS: `portal.zig:38-58` `buildRequestPath`.
+/// Build the XDG portal request path for given unique name and token.
 ///
-/// The unique name is sanitized by replacing every `.` with `_`, turning a unique
-/// name like `1.192` into `1_192`. This sounds arbitrary, but it is part of the
-/// `Request` protocol (`portal.zig:52-55`).
+/// PORTS: `portal.zig:38-58` `buildRequestPath`.
 pub fn build_request_path(unique_name: &str, token: usize) -> String {
     let joined = format!(
         "{REQUEST_PATH_PREFIX}/{unique_name}/{token}",
         token = format_token(token),
     );
+    // Sanitize the unique name by replacing every `.` with `_`. In effect, this
+    // will turn a unique name like `1.192` into `1_192`.
+    // This sounds arbitrary, but it's part of the Request protocol.
+    //
     // `std.mem.replaceScalar(u8, object_path, '.', '_')` (`portal.zig:55`). The
     // reference replaces over the WHOLE joined path; the prefix contains no `.`,
     // so this is equivalent and is spelled the same way.
     joined.replace('.', "_")
 }
 
-/// PORTS: `portal.zig:61-65` `parseRequestPathToken`. Try and parse the token out
-/// of a request path; `None` when the trailing component is not hex.
+/// Try and parse the token out of a request path.
+///
+/// PORTS: `portal.zig:61-65` `parseRequestPathToken`; `None` when the trailing
+/// component is not hex.
 pub fn parse_request_path_token(request_path: &str) -> Option<usize> {
     let (_, token) = request_path.rsplit_once('/')?;
     // return std.fmt.parseUnsigned(usize, token, 16) catch return null;

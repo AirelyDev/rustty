@@ -1,5 +1,7 @@
 //! rustty-apprt::gtk::winproto::wayland
 //!
+//! Wayland protocol implementation for the Rustty GTK apprt.
+//!
 //! PORTS: ghostty `src/apprt/gtk/winproto/wayland.zig` (487 loc) — the Wayland
 //! window-protocol backend. Two types: [`App`] (per-application: the `wl_display`
 //! plus the bound [`globals::Globals`]) and [`Window`] (per-surface: the owned
@@ -142,7 +144,9 @@ impl From<Error> for WinprotoError {
     }
 }
 
-/// PORTS: `wayland.zig:27-89` `App`. Application-wide Wayland state.
+/// Wayland state that contains application-wide Wayland objects (e.g. wl_display).
+///
+/// PORTS: `wayland.zig:27-89` `App`.
 pub struct App {
     /// PORTS: `wayland.zig:28` `display: *wl.Display`. GDK owns the `wl_display`;
     /// this proxy is a BORROW (§1.11) — never destroyed here. Kept for parity and
@@ -228,7 +232,11 @@ impl App {
             .roundtrip(&mut boxed)
             .map_err(|_| Error::RoundtripFailed)?;
         // Second roundtrip if a bound global emits initial-state events
-        // (`Globals.zig:89-91`).
+        // (`Globals.zig:89-91`):
+        //
+        // Do another roundtrip to process events emitted by globals we bound
+        // during registry discovery (e.g. default decoration mode, output
+        // order). Listeners are installed at bind time in registryListener.
         if boxed.needs_roundtrip {
             event_queue
                 .roundtrip(&mut boxed)
@@ -454,6 +462,7 @@ impl App {
 
 /// Resolve the `quick-terminal-screen` config to a specific monitor.
 /// Returns `None` to let the compositor decide (used for `.mouse` mode).
+/// Caller owns the returned ref and must unref it.
 ///
 /// PORTS: `wayland.zig:449-483` `resolveQuickTerminalMonitor`. Divergence: the
 /// reference takes `*Globals` and reads `globals.state.primary_output_name`; rustty
@@ -494,7 +503,9 @@ fn resolve_quick_terminal_monitor(
     monitors.item(0)?.downcast::<gdk4::Monitor>().ok()
 }
 
-/// PORTS: `wayland.zig:91-444` `Window`. Per-surface Wayland state.
+/// Per-window (wl_surface) state for the Wayland protocol.
+///
+/// PORTS: `wayland.zig:91-444` `Window`.
 ///
 /// Divergence: the reference holds `globals: *Globals` and reads it live at sync
 /// time (`wayland.zig:99,250,294`). rustty captures cheap clones of the manager
@@ -510,6 +521,8 @@ pub struct Window {
     /// non-owning). Upgraded at sync time to read config.
     apprt_window: glib::WeakRef<ApprtWindow>,
 
+    /// The Wayland surface for this window.
+    ///
     /// PORTS: `wayland.zig:96` `surface: *wl.Surface`. GDK owns it (§1.11) — BORROW,
     /// never destroyed here.
     surface: WlSurface,
@@ -526,6 +539,8 @@ pub struct Window {
     /// The KDE `org_kde_kwin_slide_manager`, used by `sync_quick_terminal` to
     /// create the quick-terminal slide animation (absent on GNOME/sway/wlroots).
     slide_manager: Option<OrgKdeKwinSlideManager>,
+    /// The context from the app where we can load our Wayland interfaces.
+    ///
     /// PORTS: `wayland.zig:99` `globals: *Globals` — the reference holds a LIVE pointer
     /// to the app's `Globals` and re-reads it at every `getDecorationMode`
     /// (`:303`), `clientSideDecorationEnabled` (`:222`) and `syncBlur` (`:252`) call.
@@ -551,15 +566,24 @@ pub struct Window {
     bg_blur_supported: Cell<bool>,
 
     // The four owned proxies (`wayland.zig:102-114`), destroyed in `deinit`.
+    /// Object that controls background effects like background blur.
+    ///
     /// PORTS: `wayland.zig:102-103` `bg_effect`.
     bg_effect: Option<ExtBackgroundEffectSurfaceV1>,
+    /// Object that controls the decoration mode (client/server/auto)
+    /// of the window.
+    ///
     /// PORTS: `wayland.zig:106-107` `decoration`.
     decoration: Option<OrgKdeKwinServerDecoration>,
-    /// PORTS: `wayland.zig:108-111` `slide`. Object that controls the
-    /// slide-in/slide-out animations of the quick terminal. Always `None` for
-    /// windows other than the quick terminal (and when the compositor lacks the
-    /// KDE slide manager). Set in `sync_quick_terminal`.
+    /// Object that controls the slide-in/slide-out animations of the
+    /// quick terminal. Always null for windows other than the quick terminal.
+    ///
+    /// PORTS: `wayland.zig:108-111` `slide`. Also `None` when the compositor lacks
+    /// the KDE slide manager. Set in `sync_quick_terminal`.
     slide: Option<OrgKdeKwinSlide>,
+    /// Object that, when present, denotes that the window is currently
+    /// requesting attention from the user.
+    ///
     /// PORTS: `wayland.zig:114` `activation_token`.
     activation_token: Option<XdgActivationTokenV1>,
 
@@ -597,6 +621,9 @@ impl Window {
             return Err(Error::NoWaylandSurface.into());
         };
 
+        // This should never fail, because if we're being called at this point
+        // then we've already asserted that our app state is Wayland.
+        //
         // `gobject.ext.cast(gdk_wayland.WaylandSurface, ...)` +
         // `getWlSurface() orelse return error.NoWaylandSurface`
         // (`wayland.zig:130-137`). We use the RAW accessor (no `wayland_crate`
@@ -619,6 +646,9 @@ impl Window {
 
         let qh = g.qh().clone();
 
+        // Get our decoration object so we can control the
+        // CSD vs SSD status of this surface.
+        //
         // `mgr.create(wl_surface)` — the decoration object (`wayland.zig:141-153`).
         //
         // PORT NOTE (task-14d-3, UNRESTORED SITE `wayland.zig:170`): the reference
@@ -764,9 +794,9 @@ impl Window {
         // (`wayland.zig:222`).
         match self.decoration_mode() {
             Mode::Client => true,
-            // If we support SSDs (KDE deco manager present) do NOT enable CSDs when
-            // SSD is preferred; if we do NOT (GNOME) enable CSDs even then
-            // (`wayland.zig:219-223`).
+            // If we support SSDs, then we should *not* enable CSDs if we prefer SSDs.
+            // However, if we do not support SSDs (e.g. GNOME) then we should enable
+            // CSDs even if the user prefers SSDs.
             Mode::Server => !self.kde_deco_present.get(),
             Mode::None => false,
             // `Mode` is `#[non_exhaustive]`; the reference's `else => unreachable`.
@@ -811,6 +841,8 @@ impl Window {
         Ok(())
     }
 
+    /// Update the blur state of the window.
+    ///
     /// PORTS: `wayland.zig:249-291` `Window.syncBlur`.
     ///
     /// PORT NOTE: faithful port, but on GNOME/mutter `bg_effect`/`compositor`'s blur
@@ -850,7 +882,7 @@ impl Window {
         let native: &gtk4::Native = apprt.upcast_ref();
         let region = BlurRegion::calc_for_window(native, csd, false);
 
-        // Region didn't change — don't do anything (`wayland.zig:274-278`).
+        // Region didn't change. Don't do anything.
         if region.eql(&self.blur_region) {
             return;
         }
@@ -881,7 +913,8 @@ impl Window {
         let Some(deco) = self.decoration.as_ref() else {
             return;
         };
-        // The protocol requests a uint, not the enum (`wayland.zig:296-298`).
+        // The protocol requests uint instead of enum so we have
+        // to convert it.
         deco.request_mode(self.decoration_mode() as u32);
     }
 
