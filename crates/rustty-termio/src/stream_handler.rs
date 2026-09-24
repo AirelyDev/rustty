@@ -2440,11 +2440,26 @@ impl<M: AppMailbox> StreamHandler<M> {
         // var fba: std.heap.FixedBufferAllocator = .init(&buffer);
         // const alloc = fba.allocator();
         //
-        // var response: std.ArrayListUnmanaged(u8) = .empty;
-        // const writer = response.writer(alloc);
+        // var response: std.Io.Writer.Allocating = .init(alloc);
         //
-        // (PORT NOTE: the fixed-buffer allocator + unmanaged list collapse into the
-        // owned response Vec/String accumulator.)
+        // CORRECTION (S214-F1): this block quoted `var response:
+        // std.ArrayListUnmanaged(u8) = .empty; const writer =
+        // response.writer(alloc);`, an older reference; the pin uses
+        // `std.Io.Writer.Allocating` (`stream_handler.zig:1554-1557`).
+        //
+        // PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD205. The
+        // reports accumulate in an allocating writer over a 1024-byte fixed
+        // buffer, and once it cannot grow, `try response.writer.print(...)`
+        // fails: `colorOperation` returns the error, NO report is sent, and
+        // every request after the one that failed, sets and resets included,
+        // is skipped. The writer's growth (`growCapacity`, `2*n + 1` bytes asked
+        // for a write that does not fit) puts the point well below 1024 bytes:
+        // measured with zig 0.16.0 (aarch64-macos and x86_64-macos), the 25th
+        // 16-bit palette report fails (640 bytes accepted). An OSC 4
+        // or OSC 104 is bounded only by the OSC parser, so a program querying
+        // its palette in one sequence gets no answer. The port accumulates in a
+        // `Vec`, so every report is sent and every request is applied, which is
+        // what the function is for. S214-F1.
         let mut response: Vec<u8> = Vec::new();
 
         // var it = requests.constIterator(0);
@@ -4460,6 +4475,85 @@ pub(crate) mod tests {
             Message::WriteAlloc(v) => v.data.to_vec(),
             _ => panic!("expected a write message"),
         }
+    }
+
+    /// S214-F1 / UD205 (no reference counterpart): an OSC 4 that queries all
+    /// 256 palette entries and then sets one gets every report, in one write,
+    /// and the set after the reports is applied. The reference's response
+    /// buffer fails on the 25th 16-bit report (measured, zig 0.16.0
+    /// aarch64-macos), sends nothing, and skips the set.
+    #[test]
+    fn color_operation_reports_every_query_and_applies_later_requests() {
+        let mut term = Terminal::init(Global, terminal_opts(Some(false))).unwrap();
+        let mailbox: *mut Mailbox = Box::into_raw(Box::new(
+            crate::mailbox::Mailbox::initSPSC().expect("Mailbox::initSPSC"),
+        ));
+        let mutex: *mut rustty_zigstd::thread::Mutex =
+            Box::into_raw(Box::new(rustty_zigstd::thread::Mutex::new()));
+        let state: *mut State = Box::into_raw(Box::new(State {
+            mutex,
+            terminal: &raw mut term,
+            inspector: None,
+            inspector_ptr: None,
+            preedit: None,
+            mouse: rustty_renderer::state::Mouse::default(),
+            demand: Default::default(),
+            handoff_gen: Default::default(),
+            handoff_park: Default::default(),
+        }));
+        let mut h = handler_for(&raw mut term, mailbox, state);
+
+        let mut requests: osc::color::List = (0..=255u8)
+            .map(|i| osc::color::Request::Query(osc::color::Target::Palette(i)))
+            .collect();
+        let new_color = color::RGB {
+            r: 0x12,
+            g: 0x34,
+            b: 0x56,
+        };
+        requests.push(osc::color::Request::Set(osc::color::ColoredTarget {
+            target: osc::color::Target::Palette(7),
+            color: new_color,
+        }));
+
+        let mut expected: Vec<u8> = Vec::new();
+        for i in 0..=255u8 {
+            let c = term.colors.palette.current[usize::from(i)];
+            expected.extend_from_slice(
+                format!(
+                    "\x1b]4;{};rgb:{:0>4x}/{:0>4x}/{:0>4x}",
+                    i,
+                    u16::from(c.r) * 257,
+                    u16::from(c.g) * 257,
+                    u16::from(c.b) * 257,
+                )
+                .as_bytes(),
+            );
+            expected.extend_from_slice(b"\x1b\\");
+        }
+        assert!(
+            expected.len() > 1024,
+            "the case exceeds the reference's buffer"
+        );
+
+        h.colorOperation(osc::color::Operation::osc_4, &requests, osc::Terminator::St)
+            .expect("colorOperation");
+
+        let msg = mailbox_pop(mailbox).expect("one report message");
+        assert_eq!(write_bytes(&msg), expected, "all 256 reports, in order");
+        assert!(mailbox_pop(mailbox).is_none(), "exactly one message");
+        assert_eq!(
+            term.colors.palette.current[7], new_color,
+            "the set after the reports is applied"
+        );
+
+        h.renderer_wakeup.deinit();
+        unsafe {
+            drop(Box::from_raw(state));
+            drop(Box::from_raw(mutex));
+            drop(Box::from_raw(mailbox));
+        }
+        term.deinit(Global);
     }
 
     // `dcsCommand`'s tmux control-mode arm (`fix-freetype-tmux` lane). This arm

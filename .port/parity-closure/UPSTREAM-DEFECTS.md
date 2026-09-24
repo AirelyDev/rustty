@@ -1913,6 +1913,21 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - proposed fix:    skip a flag already present (append `--norc` / `--noprofile` at most once each), or size the buffer for the longest distinct combination and ignore repeats.
 - upstream status: not reported
 
+### UD205 — an OSC 4/10-19 color query of more than about 24 colors gets no answer, and the requests after it are skipped
+- kind:            functional (output silently lost)
+- upstream project: ghostty
+- severity:        low
+- reference:       `src/termio/stream_handler.zig:1545-1772` (`colorOperation`: `var buffer: [1024]u8`, `FixedBufferAllocator`, `var response: std.Io.Writer.Allocating = .init(alloc)` at :1554-1557; every report `try response.writer.print(...)` / `try response.writer.writeAll(terminator.string())`; the write request at :1764-1770), at 20abdb50a; zig 0.16.0 `std/Io/Writer.zig:2615-2644, 2698-2723` (`Allocating.ensureTotalCapacity` grows to `growCapacity(n)` = `n + n/2 + init_capacity`; `drain` asks for `bytes.len + splat_len + 1`).
+- defect:          the reports go into an allocating writer backed by a 1024-byte buffer. When the writer cannot grow, the `try` returns `error.WriteFailed` from `colorOperation`: no report is written to the pty, and the rest of the request list, including any set or reset after the failing query, is never processed. Because of the growth policy the failure comes well before 1024 bytes. MEASURED with zig 0.16.0 (aarch64-macos, and x86_64-macos under Rosetta), the reference's own accumulation of 16-bit palette reports: the 25th fails (640 bytes accepted with BEL, 665 with ST); plain writes fail after 627 (1-byte writes) to 912 (24-byte writes) bytes. Not measured through a Ghostty binary.
+- ReleaseSafe:     no crash; the query is unanswered (a program waiting for the reply stalls or times out), and later requests in the same sequence are dropped.
+- ReleaseFast:     same.
+- reachability:    any program writing an OSC 4 (or OSC 10-19) with about 25 or more `?` queries, e.g. one that reads the whole 256-color palette in a single sequence.
+- port handling:   fixed (R13, extended 2026-09-23): `crates/rustty-termio/src/stream_handler.rs` `colorOperation` (PORT NOTE: reference defect (R13)) accumulates in a `Vec`, so every report is sent and every request is applied. The port already did this; T-G recorded it as a deliberate fix (the audit had suggested porting the cap). The request list is bounded by the OSC parser's input limit. Listed in `docs/ghostty-bug-fixes.md`.
+- parity row(s):   LEDGER S214-F1.
+- test:            `stream_handler::tests::color_operation_reports_every_query_and_applies_later_requests` (rustty-termio): 256 queries then a set; one write carrying all 256 reports, and the set applied. Negative control (macOS, 2026-09-23): a 1024-byte cap on the accumulator returning an error (the reference's shape, at the nominal size) fails the test with "colorOperation: Error".
+- proposed fix:    accumulate with the surface's allocator (`self.alloc`) instead of the fixed buffer, or send the reports in chunks as each one is formatted; at the least, do not let a failed report stop the remaining requests.
+- upstream status: not reported
+
 ## Candidates pending verification
 
 Assembled from this plan's progress notes on 2026-09-11. **Not verified** — do not cite as fact.
