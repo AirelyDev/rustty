@@ -3502,8 +3502,13 @@ independently, so their test sets should be merged, not just one kept.
   `std.fmt.parseInt(u16, s, 10)` / `(u8, s, 16)`: by reading, both reject the `_` separators and
   the `-0` that Zig accepts; rustty-os is also T-G's area), and `crates/rustty-vaxis/src/cell.rs`
   `parse_unsigned_u8` / `char_to_digit` and `crates/rustty-vaxis/src/parser.rs` `parse_unsigned`
-  (libvaxis's `std.fmt.parseUnsigned` calls; no `_` handling). UNVERIFIED whether any of their
-  inputs can carry `_`. `osc/parsers/kitty_desktop_notification.rs` (OSC 99) and
+  (libvaxis's `std.fmt.parseUnsigned` calls; no `_` handling). Verdicts (review of tail-s9, measured
+  with Zig 0.16.0): `uri.rs` IS an R1 gap — the reference is `std.Uri`, which calls `std.fmt.parseInt`
+  directly, so `file://host:8_0/x` gives port 80, `:-0` gives 0 and `[::1]:1_0` gives 10 where the port
+  rejects all three (reachable through OSC 7); `vaxis/parser.rs` IS an R1 gap — libvaxis 0.6.0 calls
+  `parseUnsigned` / `parseInt`, so the port also wrongly rejects `+5` and `-0`; `vaxis/cell.rs` is NOT a
+  gap — the reference checks the length first, so its input is always exactly two hex bytes, on which
+  the two agree. Both gaps are tracked as N206. `osc/parsers/kitty_desktop_notification.rs` (OSC 99) and
   `context_signal.rs` use Rust's parser after the reference's own `_` / digits-only filter, which
   leaves no input on which the two grammars differ; `kitty/dnd_command.rs` `parse_unsigned` ports
   a reference helper, not the std function.
@@ -3625,3 +3630,18 @@ fix: 0 of 50 of the same sequential runs failed; see the task T-F2 report for th
   legitimately lacks the corpus. The same reason is why the `.git`-probing xtask tests were
   allow-listed in G-SKIP rather than given a strict variable.
 - **state**: CLOSED by task T-B (commit `fab80ad0`, merged via `tail-b2`): the distcheck cargo steps drop `RUSTTY_REQUIRE_FUZZ_CORPUS`, pinned by a test whose negative control (removal line deleted) fails for the stated reason; confirmed by the T-B and T-B2 reviews.
+
+## N206 — the URL port and the vaxis CSI parameters use Rust's number parser, not Zig's `std.fmt`
+
+- **id**: N206. Not in the inventory. Found by the review of tail-s9 (the Zig number-parser
+  consolidation), which measured both with Zig 0.16.0.
+- **severity**: low. **kind**: behavioral-difference.
+- **oracle**: Zig 0.16.0 `std/Uri.zig` (`parseInt(u16, …, 10)` for the port) as used by Ghostty's OSC 7
+  handling; libvaxis 0.6.0 `src/Parser.zig` (`parseUnsigned` / `parseInt` for CSI parameters).
+- **rustty**: `crates/rustty-os/src/uri.rs` `parse_int_u16` / `parse_int_u8_hex` and
+  `crates/rustty-vaxis/src/parser.rs` `parse_unsigned` use Rust's `str::parse` / `from_str_radix`, which
+  reject the `_` separators, the leading `+` and the `-0` that Zig accepts: `file://host:8_0/x` is port 80
+  in the reference and an InvalidPort in the port.
+- **fix**: route both through `rustty_zigstd::fmt` (rustty-os already depends on it). Whether `%-0`
+  decoding to NUL in `std.Uri` should be reproduced is a separate R13 question.
+- **state**: OPEN.
