@@ -12,6 +12,13 @@ reference is an external oracle only.
 
 ## Scope of this vendor slice
 
+CORRECTION (task T-F, S39-F5): the text below describes the Phase-1 slice and
+is out of date. This directory now holds all 15 translation units the
+reference's `pkg/zlib/build.zig:61-77` compiles, plus zlib's own headers, each
+byte-identical to the zlib 1.3.1 tarball the reference fetches (checked with
+`cmp` against the Zig package cache copy). `zlib.h` and `zconf.h` are the full
+upstream headers, not subsets.
+
 This is the **vendor-pattern proof slice** for Phase-1: it vendors zlib's
 checksum unit (`adler32`) — a small, fully self-contained translation unit that
 depends only on `zlib.h`/`zconf.h` and produces bit-exact, known-answer output.

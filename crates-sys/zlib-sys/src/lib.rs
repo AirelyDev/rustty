@@ -464,4 +464,131 @@ mod tests {
         let out = inflate_raw(&compressed, 1024).unwrap();
         assert_eq!(out.as_slice(), b"");
     }
+
+    // S39-F5: the reference's `libz` compiles all 15 zlib units
+    // (`pkg/zlib/build.zig:61-77`). The two surfaces the port used to omit are
+    // declared here, test-only: nothing in the tree calls them, so this crate
+    // exposes no Rust API for them.
+    extern "C" {
+        fn gzopen(path: *const c_char, mode: *const c_char) -> *mut c_void;
+        fn gzwrite(file: *mut c_void, buf: *const u8, len: c_uint) -> c_int;
+        fn gzread(file: *mut c_void, buf: *mut u8, len: c_uint) -> c_int;
+        fn gzclose(file: *mut c_void) -> c_int;
+        fn inflateBackInit_(
+            strm: *mut z_stream,
+            window_bits: c_int,
+            window: *mut u8,
+            version: *const c_char,
+            stream_size: c_int,
+        ) -> c_int;
+        fn inflateBack(
+            strm: *mut z_stream,
+            in_fn: unsafe extern "C" fn(*mut c_void, *mut *mut u8) -> c_uint,
+            in_desc: *mut c_void,
+            out_fn: unsafe extern "C" fn(*mut c_void, *mut u8, c_uint) -> c_int,
+            out_desc: *mut c_void,
+        ) -> c_int;
+        fn inflateBackEnd(strm: *mut z_stream) -> c_int;
+    }
+
+    /// `gzwrite` a gzip file (`gzlib`/`gzwrite`/`gzclose`), then `gzread` it
+    /// back (`gzread`): the `gz*` units are compiled into this `libz` and work.
+    #[test]
+    fn gz_file_api_round_trips() {
+        let path = std::env::temp_dir().join(format!("rustty-s39-f5-{}.gz", std::process::id()));
+        let cpath = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()).unwrap();
+        let payload: &[u8] = b"the gz file API is compiled into libz, as in the reference";
+
+        // SAFETY: valid NUL-terminated path and mode; the handle is closed once.
+        unsafe {
+            let w = gzopen(cpath.as_ptr(), c"wb".as_ptr());
+            assert!(!w.is_null(), "gzopen for writing");
+            assert_eq!(
+                gzwrite(w, payload.as_ptr(), payload.len() as c_uint),
+                payload.len() as c_int
+            );
+            assert_eq!(gzclose(w), Z_OK);
+        }
+        // A gzip member on disk: the 1f 8b magic.
+        let raw = std::fs::read(&path).unwrap();
+        assert_eq!(&raw[..2], &[0x1f, 0x8b]);
+
+        let mut back = vec![0u8; payload.len() + 16];
+        // SAFETY: as above; `back` has room for `back.len()` bytes.
+        let n = unsafe {
+            let r = gzopen(cpath.as_ptr(), c"rb".as_ptr());
+            assert!(!r.is_null(), "gzopen for reading");
+            let n = gzread(r, back.as_mut_ptr(), back.len() as c_uint);
+            assert_eq!(gzclose(r), Z_OK);
+            n
+        };
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(n, payload.len() as c_int);
+        assert_eq!(&back[..payload.len()], payload);
+    }
+
+    struct BackIn<'a> {
+        data: &'a [u8],
+        given: bool,
+    }
+
+    unsafe extern "C" fn back_in(desc: *mut c_void, buf: *mut *mut u8) -> c_uint {
+        // SAFETY: `desc` is the `BackIn` passed to `inflateBack` below.
+        let src = unsafe { &mut *(desc as *mut BackIn<'_>) };
+        if src.given {
+            return 0;
+        }
+        src.given = true;
+        // SAFETY: zlib only reads through this pointer.
+        unsafe { *buf = src.data.as_ptr() as *mut u8 };
+        src.data.len() as c_uint
+    }
+
+    unsafe extern "C" fn back_out(desc: *mut c_void, buf: *mut u8, len: c_uint) -> c_int {
+        // SAFETY: `desc` is the output `Vec` passed to `inflateBack` below, and
+        // zlib hands `len` readable bytes at `buf`.
+        let out = unsafe { &mut *(desc as *mut Vec<u8>) };
+        out.extend_from_slice(unsafe { core::slice::from_raw_parts(buf, len as usize) });
+        0
+    }
+
+    /// `inflateBack` (`infback.c`) decodes a raw DEFLATE stream.
+    #[test]
+    fn infback_decodes_a_raw_deflate_stream() {
+        let original: &[u8] = b"inflateBack is compiled into libz, as in the reference";
+        let compressed = deflate_raw(original).unwrap();
+
+        let mut window = vec![0u8; 1 << MAX_WBITS];
+        // SAFETY: a zeroed z_stream is the documented pre-init state.
+        let mut strm: z_stream = unsafe { core::mem::zeroed() };
+        let mut input = BackIn {
+            data: &compressed,
+            given: false,
+        };
+        let mut out: Vec<u8> = Vec::new();
+        // SAFETY: `window` is 2^15 bytes as windowBits 15 requires; the
+        // descriptors outlive the call; the stream is ended once.
+        unsafe {
+            assert_eq!(
+                inflateBackInit_(
+                    &mut strm,
+                    MAX_WBITS,
+                    window.as_mut_ptr(),
+                    ZLIB_VERSION.as_ptr() as *const c_char,
+                    core::mem::size_of::<z_stream>() as c_int,
+                ),
+                Z_OK
+            );
+            let rc = inflateBack(
+                &mut strm,
+                back_in,
+                (&mut input as *mut BackIn<'_>).cast(),
+                back_out,
+                (&mut out as *mut Vec<u8>).cast(),
+            );
+            assert_eq!(inflateBackEnd(&mut strm), Z_OK);
+            assert_eq!(rc, Z_STREAM_END);
+        }
+        assert_eq!(out.as_slice(), original);
+    }
 }
