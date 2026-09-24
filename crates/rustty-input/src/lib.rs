@@ -11,7 +11,7 @@
 //! KeymapNoop, Link, command, keyboard, keycodes, helpgen_actions, and the
 //! config-dependent halves of config.zig / key_mods.zig.
 //!
-//! PORT STATUS: stub
+//! PORT STATUS: in progress
 //!
 //! Carved incrementally: `Binding.zig` is FULLY ported in `binding.rs` (PORT
 //! STATUS: done — every line/comment/test{}, all 85 tests, R1). The input
@@ -21,10 +21,16 @@
 //! that the `rustty-vt` partial port deferred behind `config.OptionAsAlt` + the
 //! config `formatter`) is ported in `key_mods.rs` now that both seams exist
 //! (`config::OptionAsAlt` + `rustty-cfg-fmt`); the VT-Mods half stays in
-//! `rustty-vt`. The crate-level status stays `stub` because the crate's
-//! remaining mapped reference file (input.zig) is not yet carved (R1: every
+//! `rustty-vt`. The crate-level status stays below `done` because the crate's
+//! remaining mapped reference file (input.zig — the `input` namespace's
+//! re-export decls and its `refAllDecls` test) is not yet carved (R1: every
 //! line/comment/test{} ported as the crate is carved, leaves-first, under the
-//! acyclicity gate per R4).
+//! acyclicity gate per R4). A done claim would also need R4 relocation support
+//! in G1/G2 (`_gatelib`'s per-crate Rust scan), since the rustty-vt slice's
+//! tests live there. G3b already binds that slice through its R4 relocation map
+//! (`--crate input`: 1114/1114 reference comments). (Status word corrected from
+//! `stub` 2026-09-24, parity tail S-8a: 12 of the 13 mapped files are ported,
+//! here or in the rustty-vt slice.)
 
 pub mod binding;
 pub mod command;

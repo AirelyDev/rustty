@@ -1,5 +1,16 @@
 //! rustty-apprt
 //!
+//! "apprt" is the "application runtime" package. This abstracts the
+//! application runtime and lifecycle management such as creating windows,
+//! getting user input (mouse/keyboard), etc.
+//!
+//! This enables compile-time interfaces to be built to swap out the underlying
+//! application runtime. For example: pure macOS Cocoa, GTK+, browser, etc.
+//!
+//! The goal is to have different implementations share as much of the core
+//! logic as possible, and to only reach out to platform-specific implementation
+//! code when absolutely necessary.
+//!
 //! PORTS: ghostty src/apprt/ (gtk/, embedded, none, browser, action, surface, ipc, structs,
 //! runtime, ...) minus the apprt-api iface seam; links gtk-rs/gobject, objc, wayland
 //! (bindings, not reimplementations, per R3). Consumes breaks #8, #10, #13, #14.
@@ -10,12 +21,18 @@
 //! `embedded` (the FIRST concrete `apprt_api` trait backend, §2) is FILLED
 //! (E1 App backend, E2 Surface backend, E3 event-sink callbacks, E4 Inspector
 //! inhabited placeholder, E6–E10 CAPI wiring, E11 C-ABI smoke KAT + finale).
-//! The honest residual = the 13 tracked Phase-3 leaves in `embedded.rs` (ALL
-//! dcimgui/Metal Inspector surface: `Surface::queueInspectorRender` +
-//! `Inspector::{init,deinit,initMetal,renderMetal}` + `Backend::deinit` + the
-//! 6 IO callbacks + `newFrame` — DEFERRALS.md "rustty-apprt embedded E4"), and
-//! GTK (a whole unported subsystem, GAP_ANALYSIS §3.7 — why the crate is not
-//! `done`). The libghostty C ABI wrappers live in the separate `rustty-apprt-c`
+//! ~~The honest residual = the 13 tracked Phase-3 leaves in `embedded.rs` (ALL
+//! dcimgui/Metal Inspector surface ...) and GTK (a whole unported subsystem,
+//! GAP_ANALYSIS §3.7 — why the crate is not `done`).~~ Stale (parity tail S-8b,
+//! 2026-09-24): the E4 Inspector leaves are RESOLVED (DEFERRALS.md "rustty-apprt
+//! embedded E4", WS6) and the GTK apprt is ported under `gtk/`. What still keeps
+//! this crate `in-progress`: G3b comment coverage for the GTK files the parity
+//! tail's T-D batch rewrites (`gtk/app.rs`, `class/{application,surface,window}.rs`,
+//! `media.rs`, `portal.rs`, `portal/open_uri.rs`, `winproto/{wayland,x11}.rs`,
+//! `winproto/wayland/hotkeys.rs` — ~730 dropped reference comments, restored after
+//! that merge), and two unported, unrecorded reference fns
+//! (`class/config.zig` `getMut`, `gsettings.zig` `getAlloc`; neither has a caller
+//! in the reference GTK code). The libghostty C ABI wrappers live in the separate `rustty-apprt-c`
 //! top-sink crate (vt-c precedent, §3). This crate also hosts the global-state
 //! precursor [`init`] the C ABI's `rustty_init` calls.
 //!
@@ -29,6 +46,28 @@
 // binds `A = embedded::App`, EMBEDDED_BLUEPRINT §2). The `apprt.ipc`/`action`/
 // `surface`/`runtime`/`structs` interface seam already lives in
 // `rustty-apprt-api` (break #8); this crate carries the concrete backends.
+//
+// The reference selector and its companion constant, carried verbatim:
+//
+// /// The implementation to use for the app runtime. This is comptime chosen
+// /// so that every build has exactly one application runtime implementation.
+// /// Note: it is very rare to use Runtime directly; most usage will use
+// /// Window or something.
+// pub const runtime = switch (build_config.artifact) { ... };
+//
+// /// True if all GPU operations (drawing, resource creation and
+// /// destruction) must happen on the app thread. This is the case
+// /// when the graphics context is owned by the app thread (GTK's
+// /// GLArea). When false, the render thread performs GPU operations
+// /// itself.
+// pub const must_draw_from_app_thread =
+//     @hasDecl(App, "must_draw_from_app_thread") and
+//     App.must_draw_from_app_thread;
+//
+// PORT NOTE: `must_draw_from_app_thread` is the
+// `rustty_apprt_api::App::MUST_DRAW_FROM_APP_THREAD` associated const (the
+// `@hasDecl` probe becomes a defaulted trait const each backend may
+// override; the GTK `App` sets it to `true`).
 pub mod browser;
 pub mod embedded;
 // PORT NOTE (R5): the reference re-exports `gtk` unconditionally (`apprt.zig:17`

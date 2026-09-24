@@ -135,8 +135,9 @@ mod imp {
     impl ObjectImpl for Config {}
 
     impl Config {
-        /// PORTS: `config.zig:103-106` `hasDiagnostics`. `true` iff the wrapped
-        /// config carries any diagnostics.
+        /// Returns whether this configuration has any diagnostics.
+        ///
+        /// PORTS: `config.zig:103-106` `hasDiagnostics`.
         fn has_diagnostics(&self) -> bool {
             match self.config.get() {
                 // `!config._diagnostics.empty()` (`config.zig:105`).
@@ -147,6 +148,9 @@ mod imp {
             }
         }
 
+        /// Reads the diagnostics of this configuration as a TextBuffer,
+        /// or returns null if there are no diagnostics.
+        ///
         /// PORTS: `config.zig:110-134` `diagnosticsBuffer`. Renders the wrapped
         /// config's diagnostics into a fresh `gtk4::TextBuffer`, one per line,
         /// or `None` when there are none (`config.zig:112`
@@ -200,22 +204,30 @@ mod imp {
 }
 
 glib::wrapper! {
-    /// Wraps a loaded [`rustty_config::Config`] in a `glib::Object` so it can be
-    /// reference counted and shared across the tier. PORTS: `config.zig:23-164`
-    /// `pub const Config`.
+    /// Wraps a `Rustty.Config` object in a GObject so it can be reference
+    /// counted. When this object is freed, the underlying config is also freed.
     ///
-    /// It is highly recommended NOT to hold a reference to this object longer
-    /// than necessary — a config is (relatively) large. Receivers that need to
-    /// outlive it should copy what they need out of [`Config::get`] instead
-    /// (`config.zig:13-22`).
+    /// It is highly recommended to NOT take a reference to this object,
+    /// since configuration takes up a lot of memory (relatively). Instead,
+    /// receivers of this should usually create a `DerivedConfig` struct from
+    /// this, copy any memory they require, and own that structure instead.
+    ///
+    /// This can also expose helpers to access configuration in ways that
+    /// may be more ergonomic to GTK primitives.
+    ///
+    /// PORTS: `config.zig:23-164` `pub const Config` (wraps a loaded
+    /// [`rustty_config::Config`]).
     pub struct Config(ObjectSubclass<imp::Config>);
 }
 
 impl Config {
-    /// PORTS: `config.zig:78-86` `new`. Creates a new `GhosttyConfig` from a
-    /// loaded configuration. This **clones** the given configuration
-    /// (`config.zig:83` `priv.config = try config.clone(alloc)`), so it is safe
-    /// for the caller to drop the original after this call.
+    /// Create a new GhosttyConfig from a loaded configuration.
+    ///
+    /// This clones the given configuration, so it is safe for the
+    /// caller to free the original configuration after this call.
+    ///
+    /// PORTS: `config.zig:78-86` `new` (`config.zig:83`
+    /// `priv.config = try config.clone(alloc)`).
     #[must_use]
     pub fn new(config: &CoreConfig) -> Self {
         // `gobject.ext.newInstance(Self, .{})` (`config.zig:79`) sinks the
@@ -232,9 +244,10 @@ impl Config {
         obj
     }
 
-    /// PORTS: `config.zig:90-92` `get`. Borrows the wrapped configuration. It is
-    /// unsafe to store this or use it beyond the lifetime of this object; the
-    /// borrow is tied to `&self`.
+    /// Get the wrapped configuration. It's unsafe to store this or access
+    /// it in any way that may live beyond the lifetime of this object.
+    ///
+    /// PORTS: `config.zig:90-92` `get`; the borrow is tied to `&self`.
     #[must_use]
     pub fn get(&self) -> &CoreConfig {
         self.imp()
@@ -248,6 +261,9 @@ impl Config {
 mod tests {
     use super::*;
 
+    // This test verifies our memory management works as expected. Since
+    // we use the testing allocator any leaks are detected.
+    //
     /// PORTS: `config.zig:168` `test "GhosttyConfig"`. Non-display: a plain
     /// `glib::Object` subclass (parent `glib::Object`, not a `Widget`)
     /// instantiates headless — no `gtk4::init`/display required — so this runs

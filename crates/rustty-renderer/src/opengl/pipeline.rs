@@ -173,6 +173,7 @@ impl Pipeline {
     pub fn init(vertex_attributes: Option<VertexLayout>, opts: Options<'_>) -> Result<Self, Error> {
         let stride = vertex_attributes.map_or(0, |l| l.stride);
 
+        // Load and compile our shaders.
         // const program = try gl.Program.createVF(...); errdefer program.destroy();
         let program = Program::create_vf(opts.vertex_fn, opts.fragment_fn)?;
 

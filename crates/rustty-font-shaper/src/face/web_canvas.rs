@@ -202,9 +202,13 @@ impl Canvas {
 }
 
 pub struct Face {
+    // /// The web canvas face makes use of an allocator when interacting
+    // /// with the JS environment.
+    // alloc: Allocator,
     // PORT NOTE: the reference holds `alloc: Allocator`; rustty uses the global
     // allocator everywhere, so no allocator handle is threaded on the struct.
     /// See `grapheme_to_glyph` for details.
+    // /// See graphemes field for more details.
     // const grapheme_start: u32 = 0x10FFFF + 1;
     // const grapheme_end: u32 = std.math.maxInt(u32);
 
@@ -223,6 +227,8 @@ pub struct Face {
     presentation: Presentation,
 
     /// Face metrics computed from the Canvas measurements (see `calc_metrics`).
+    // /// Metrics for this font face. These are useful for renderers.
+    // metrics: font.Metrics,
     // PORT NOTE (divergence 2): the reference stores a final `font.Metrics`; the
     // modern pipeline reads raw `FaceMetrics` via `get_metrics`, so we cache that.
     face_metrics: FaceMetrics,
@@ -376,12 +382,12 @@ impl Face {
             }
         }
 
-        // Render the glyph to determine if it is colored or not. We have to do
-        // this because the browser will always try to render whatever we give it
-        // and we have no API to determine color.
+        // Render the glyph to determine if it is colored or not. We
+        // have to do this because the browser will always try to render
+        // whatever we give it and we have no API to determine color.
         //
-        // We don't want to say yes to the wrong presentation because it will go
-        // into the wrong Atlas.
+        // We don't want to say yes to the wrong presentation because
+        // it will go into the wrong Atlas.
         // const p: font.Presentation = if (cp <= 255) .text else …;
         let p: Presentation = if cp <= 255 {
             Presentation::Text
@@ -400,9 +406,10 @@ impl Face {
         Some(cp)
     }
 
-    /// This determines the presentation of the glyph by literally inspecting the
-    /// image data to look for any color. This isn't super performant but we
-    /// don't have a better choice given the canvas APIs.
+    /// This determines the presentation of the glyph by literally
+    /// inspecting the image data to look for any color. This isn't
+    /// super performant but we don't have a better choice given the
+    /// canvas APIs.
     // fn glyphPresentation(self: Face, cp: u32) !font.Presentation {
     fn glyph_presentation(&self, cp: u32) -> Result<Presentation, Error> {
         // Render the glyph
@@ -443,6 +450,11 @@ impl Face {
         // Copy the cluster for our reverse mapping.
         // const copy = try self.alloc.dupe(u8, cluster);
         let copy = cluster.to_vec();
+
+        // Grow space for the reverse mapping
+        // try self.glyph_to_grapheme.ensureUnusedCapacity(self.alloc, 1);
+        // PORT NOTE: `HashMap::insert` below grows on demand (aborting on OOM,
+        // the Rust allocator contract), so there is no separate reserve step.
 
         // Store it (forward + reverse mapping).
         let idx = self.grapheme_next;
@@ -522,8 +534,9 @@ impl Face {
         // Cell width is the width of our M text.
         // const cell_width: f32 = cell_width: { … };
         let m = measure_text(ctx, b"M");
-        // We prefer the bounding box since it is tighter but certain text such as
-        // emoji do not have a bounding box set so we use the full run width.
+        // We prefer the bounding box since it is tighter but certain
+        // text such as emoji do not have a bounding box set so we use
+        // the full run width instead.
         let cell_width: f32 = if m[M_BOX_RIGHT] > 0.0 {
             m[M_BOX_RIGHT]
         } else {
@@ -540,6 +553,12 @@ impl Face {
         // const cell_height = asc + desc; const cell_baseline = desc;
         let cell_height = asc + desc;
 
+        // There isn't a declared underline position for canvas measurements
+        // so we just go 1 under the cell height to match freetype logic
+        // at this time (our freetype logic).
+        // const underline_position = cell_height - 1;
+        // const underline_thickness: f32 = 1;
+        //
         // PORT NOTE (divergence 2): the reference builds a final `font.Metrics`
         // here (including a hand-picked `underline_position = cell_height - 1`).
         // The modern pipeline instead consumes raw `FaceMetrics` and derives the
@@ -669,8 +688,9 @@ impl Face {
         // Get the width and height of the render.
         // const metrics = try measure_ctx.call(js.Object, "measureText", .{glyph_str});
         let metrics = measure_text(measure_ctx, glyph_str);
-        // We prefer the bounding box since it is tighter but certain text such as
-        // emoji do not have a bounding box set so we use the full run width.
+        // We prefer the bounding box since it is tighter but certain
+        // text such as emoji do not have a bounding box set so we use
+        // the full run width instead.
         let width_f: f32 = if metrics[M_BOX_RIGHT] > 0.0 {
             metrics[M_BOX_RIGHT]
         } else {
@@ -737,10 +757,29 @@ impl Face {
         };
 
         // Read the image data and get it into a []u8 on our side.
+        //
+        // Read the raw bitmap data and get the "data" value which is a
+        // Uint8ClampedArray.
         // const data = try ctx.call(js.Object, "getImageData", .{ 0, 0, width, height });
-        // const src_array = try data.get(js.Object, "data"); // Uint8ClampedArray
+        // const src_array = try data.get(js.Object, "data");
+        //
+        // Allocate our local memory to copy the data to.
         // const len = try src_array.get(u32, "length");
-        // … copy src_array into our wasm memory via a Uint8Array view …
+        // const bitmap = try alloc.alloc(u8, @intCast(len));
+        //
+        // Create our target Uint8Array that we can use to copy from src.
+        //   // Get our runtime memory
+        //   const mem = try js.runtime.get(js.Object, "memory");
+        //   const buf = try mem.get(js.Object, "buffer");
+        //   // Construct our array to peer into our memory
+        //   const Uint8Array = try js.global.get(js.Object, "Uint8Array");
+        //   const mem_array = try Uint8Array.new(.{ buf, bitmap.ptr });
+        //
+        // Copy
+        // try mem_array.call(void, "set", .{src_array});
+        //
+        // PORT NOTE: the `rustty_wc_context_get_image_data` FFI does the
+        // getImageData read AND the copy into our buffer in one call.
         let len = (width as usize) * (height as usize) * 4;
         let mut bitmap = vec![0u8; len];
         let copied = unsafe {

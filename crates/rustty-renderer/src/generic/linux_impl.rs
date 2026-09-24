@@ -1235,8 +1235,27 @@ impl Renderer {
     #[allow(clippy::not_unsafe_ptr_arg_deref)]
     pub fn surface_init<S>(rt_surface: *mut S) -> Result<(), Error> {
         let _ = rt_surface;
-        // try prepareContext(null); (OpenGL.zig:170) — load GL against GDK's current
+        // If our API has to do things here, let it.
+        //
+        // (OpenGL.zig:166-170) GTK uses global OpenGL context so we load from null.
+        // try prepareContext(null); — load GL against GDK's current
         // GLArea context. A version-gate / GL failure folds to `Error::GlFailed`.
+        //
+        // OpenGL.zig:172-176, the `apprt.embedded` arm (not built here — the GTK
+        // apprt is the only OpenGL host):
+        //     // TODO(mitchellh): this does nothing today to allow librustty
+        //     // to compile for OpenGL targets but librustty is strictly
+        //     // broken for rendering on this platforms.
+        //
+        // OpenGL.zig:179-186, kept commented as in the reference:
+        //     // These are very noisy so this is commented, but easy to uncomment
+        //     // whenever we need to check the OpenGL extension list
+        //     // if (builtin.mode == .Debug) {
+        //     //     var ext_iter = try gl.ext.iterator();
+        //     //     while (try ext_iter.next()) |ext| {
+        //     //         log.debug("OpenGL extension available name={s}", .{ext});
+        //     //     }
+        //     // }
         crate::opengl::gl::sys::prepare_context_windowed().map_err(|_| Error::GlFailed)?;
         Ok(())
     }
@@ -1250,6 +1269,9 @@ impl Renderer {
     #[allow(clippy::not_unsafe_ptr_arg_deref)]
     pub fn finalize_surface_init<S>(&mut self, rt_surface: *mut S) -> Result<(), Error> {
         let _ = rt_surface;
+        // If our API has to do things to finalize surface init, let it.
+        // (OpenGL.zig:189-195: "This is called just prior to spinning up the renderer
+        // thread for final main thread setup requirements." — a no-op body.)
         Ok(())
     }
 
@@ -1262,6 +1284,13 @@ impl Renderer {
     #[allow(clippy::not_unsafe_ptr_arg_deref)]
     pub fn thread_enter<S>(&self, rt_surface: *mut S) -> Result<(), Error> {
         let _ = rt_surface;
+        // If our API has to do things on thread enter, let it.
+        //
+        // OpenGL.zig:204-209, the `apprt.gtk` arm:
+        // GTK doesn't support threaded OpenGL operations as far as I can
+        // tell, so we use the renderer thread to setup all the state
+        // but then do the actual draws and texture syncs and all that
+        // on the main thread. As such, we don't do anything here.
         Ok(())
     }
 
@@ -1270,7 +1299,13 @@ impl Renderer {
     // PORTS: generic.zig:889-894 `threadExit`; macos_impl generic.rs:2261.
     // `OpenGL::threadExit` (OpenGL.zig:220-234) is a no-op for GTK ("we may be
     // sharing the global bindings with other windows").
-    pub fn thread_exit(&self) {}
+    pub fn thread_exit(&self) {
+        // If our API has to do things on thread exit, let it.
+        //
+        // OpenGL.zig:226-229, the `apprt.gtk` arm:
+        // We don't need to do any unloading for GTK because we may
+        // be sharing the global bindings with other windows.
+    }
 
     /// Run our loop start callback if the renderer cares.
     //
@@ -1662,8 +1697,10 @@ impl Renderer {
                     break 'load_background None;
                 }
             };
+            // Read it
             // const contents = file.readToEndAlloc(self.alloc, std.math.maxInt(u32))
             //     catch |err| { log.warn(...); break; };
+            //   (`std.math.maxInt(u32), // Max size of 4 GiB, for now.`)
             // defer self.alloc.free(contents);
             let contents: Vec<u8> = {
                 let mut buf: Vec<u8> = Vec::new();
@@ -1797,10 +1834,13 @@ impl Renderer {
         self.shaders.deinit();
     }
 
-    /// Called by the GTK apprt (via `glareaRealize`) after the surface is
-    /// reinitialized due to any of the events mentioned in the doc comment for
-    /// [`Renderer::display_unrealized`]. It tells the renderer the GL context
-    /// became available again so it can rebuild its GL-context-bound resources.
+    /// This is called by the GTK apprt after the surface is
+    /// reinitialized due to any of the events mentioned in
+    /// the doc comment for `displayUnrealized`.
+    ///
+    /// (Via `glareaRealize`; see [`Renderer::display_unrealized`].) It tells the
+    /// renderer the GL context became available again so it can rebuild its
+    /// GL-context-bound resources.
     //
     // PORTS: generic.zig:935-962 `displayRealized`.
     //
@@ -1821,6 +1861,7 @@ impl Renderer {
     // [`Error`] if `init_shaders` or `SwapChain::init` fails while rebuilding the
     // GL-context-bound resources (the reference `try` sites).
     pub fn display_realized(&mut self) -> Result<(), Error> {
+        // If our API has to do things on realize, let it.
         // if (@hasDecl(GraphicsAPI, "displayRealized")) self.api.displayRealized();
         //   (generic.zig:939-942)
         //
@@ -1848,6 +1889,8 @@ impl Renderer {
         // generic.zig:939-947.)
         self.api.display_realized();
 
+        // Lock the draw mutex so that we can
+        // safely reinitialize our GPU resources.
         // self.draw_mutex.lock(); defer self.draw_mutex.unlock(); (generic.zig:946-947)
         //
         // The ported `Mutex` is bare lock/unlock with no RAII guard, and the body
@@ -1889,11 +1932,12 @@ impl Renderer {
         Ok(())
     }
 
-    /// Called by the GTK apprt (via `glareaUnrealize`) when the surface is being
-    /// destroyed. This can happen because the surface is being closed but also when
-    /// moving the window between displays or splitting. It tears down the
-    /// GL-context-bound resources (marking them defunct) before the context goes
-    /// away.
+    /// This is called by the GTK apprt when the surface is being destroyed.
+    /// This can happen because the surface is being closed but also when
+    /// moving the window between displays or splitting.
+    ///
+    /// (Via `glareaUnrealize`.) It tears down the GL-context-bound resources
+    /// (marking them defunct) before the context goes away.
     //
     // PORTS: generic.zig:964-984 `displayUnrealized`.
     //
@@ -1907,6 +1951,7 @@ impl Renderer {
     // }
     // ```
     pub fn display_unrealized(&mut self) {
+        // If our API has to do things on unrealize, let it.
         // if (@hasDecl(GraphicsAPI, "displayUnrealized")) self.api.displayUnrealized();
         //   (generic.zig:969-971)
         //
@@ -1915,6 +1960,8 @@ impl Renderer {
         // the `@hasDecl` guard is statically FALSE and there is no api call. Faithful
         // elision (R1).
 
+        // Lock the draw mutex so that we can
+        // safely deinitialize our GPU resources.
         // self.draw_mutex.lock(); defer self.draw_mutex.unlock(); (generic.zig:975-976)
         //
         // The body is infallible (no `?`), so the `defer` collapses to a plain lock
@@ -3572,6 +3619,9 @@ impl Renderer {
 
     // fn rebuildOverlay(self, features: []const Overlay.Feature) Overlay.InitError!void
     //
+    /// Build the overlay as configured. Returns null if there is no
+    /// overlay currently configured.
+    //
     // PORTS: generic.zig:2230-… `rebuildOverlay`; macos_impl generic.rs:4539-4622.
     // PURE CPU/z2d — no graphics-API surface at all (the `Overlay` is a z2d software
     // surface; the GPU only ever sees it later via `images.overlay_update`), so this
@@ -4637,9 +4687,9 @@ impl Renderer {
         // assert(!self.shaders.defunct);
         assert!(!unsafe { (*self_ptr).shaders.defunct });
 
-        // If we have custom shaders, make sure we have the custom shader state in
-        // our frame state, otherwise if we have a state but don't need it we remove
-        // it.
+        // If we have custom shaders, make sure we have the
+        // custom shader state in our frame state, otherwise
+        // if we have a state but don't need it we remove it.
         // PORTS: generic.zig:1305-1324; macos_impl generic.rs:5588-5621.
         {
             let frame: *mut FrameState = unsafe {
@@ -4878,15 +4928,16 @@ impl Renderer {
             }];
             let mut pass = frame_ctx.render_pass(&attachments);
 
-            // First we draw our background image, if we have one. The bg image
-            // shader also draws the main bg color. Otherwise, if we don't have a
-            // background image, we draw the background color by itself in its own
-            // step.
+            // First we draw our background image, if we have one.
+            // The bg image shader also draws the main bg color.
             //
-            // NOTE: We don't use the clear_color for this because that would require
-            //       us to do color space conversion on the CPU-side. In the future
-            //       when we have utilities for that we should remove this step and
-            //       use clear_color.
+            // Otherwise, if we don't have a background image, we
+            // draw the background color by itself in its own step.
+            //
+            // NOTE: We don't use the clear_color for this because that
+            //       would require us to do color space conversion on the
+            //       CPU-side. In the future when we have utilities for
+            //       that we should remove this step and use clear_color.
             //
             // PORTS: generic.zig:1611-1628; macos_impl generic.rs:6069-6100.
             // if (self.bg_image) |img| switch (img) {
@@ -4926,8 +4977,8 @@ impl Renderer {
                 }
             }
 
-            // Then we draw any kitty images that need to be behind text AND cell
-            // backgrounds.
+            // Then we draw any kitty images that need
+            // to be behind text AND cell backgrounds.
             // self.images.draw(&self.api, self.shaders.pipelines.image, &pass, .kitty_below_bg);
             //
             // PORTS: generic.zig:1628-1635; macos_impl generic.rs:6105-6113.

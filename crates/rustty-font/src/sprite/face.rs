@@ -870,6 +870,7 @@ mod tests {
     // on a pixel difference. CORRECTION (task T-F): this note said both were
     // "debugging aids with no analogue here".
     fn test_diff_atlas(atlas: &Surface, i: u32, width: u32, height: u32, thickness: u32) -> bool {
+        // Get the reference file contents to compare.
         // const ref_path = "./src/font/sprite/testdata/U+{X}...U+{X}-{d}x{d}+{d}.png"
         let ref_path = format!(
             "{}/res/U+{:X}...U+{:X}-{}x{}+{}.png",
@@ -1001,7 +1002,11 @@ mod tests {
         let info = reader.next_frame(&mut ref_gray).unwrap();
         ref_gray.truncate(info.buffer_size());
 
+        // We'll make a visual representation of the diff using
+        // red for removed pixels and green for added. We make
+        // a z2d surface for that here.
         // var diff = try z2d.Surface.init(.image_surface_rgb, alloc, w, h);
+        // PORT NOTE: a plain RGB byte buffer stands in for the z2d surface.
         let test_gray = atlas.alpha8_buf();
         let mut diff_pix = vec![0u8; test_gray.len() * 3];
         for j in 0..test_gray.len() {
@@ -1057,7 +1062,11 @@ mod tests {
             return AtlasDiff::BytesMatch;
         }
 
-        // Use the pure-Rust `png` decoder to decode the reference PNG to raw
+        // Use wuffs to decode the reference PNG to raw pixels.
+        // These will be RGBA, so when diffing we can just compare
+        // every fourth byte.
+        //
+        // PORT NOTE: the pure-Rust `png` decoder decodes the reference PNG to raw
         // pixels (replacing `wuffs.png.decode`). The references are 8-bit
         // grayscale, so one decoded byte per pixel is exactly the alpha8
         // coverage we compare against.

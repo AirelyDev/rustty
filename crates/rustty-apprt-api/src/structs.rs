@@ -179,6 +179,13 @@ pub enum ClipboardRequest {
 /// owns all of its memory.
 // pub const KittyRead = struct { arena: std.heap.ArenaAllocator, ... };
 //
+// The reference doc (structs.zig:120-123), whose arena clause the owned port
+// below does not keep:
+//   /// State for one in-flight Kitty clipboard protocol read. This is
+//   /// created on the IO thread and completed on the app thread, so it
+//   /// owns all of its memory: everything, including the struct itself,
+//   /// is allocated from the arena.
+//
 // PORT NOTE (nested `ClipboardRequest.KittyRead`, hoisted; assessment E
 // hazard #1): the reference allocates the request struct FROM an arena and
 // moves the arena INTO the struct ("The arena must be copied in last"), then
@@ -197,6 +204,11 @@ pub struct KittyRead {
     /// The requested MIME types in request order, already capped at
     /// terminal.kitty.clipboard.max_read_mimes by the sender. Only
     /// these representations may be served in the response.
+    // The reference doc's last sentence (structs.zig:133-135), dropped with
+    // the sentinels (see the `KittyRead` PORT NOTE):
+    //   /// these representations may be served in the response. The
+    //   /// values are sentinel-terminated so they can cross a C apprt
+    //   /// boundary without copies.
     pub mimes: Vec<Vec<u8>>,
 
     /// True when the targets ('.') listing was requested.
@@ -212,6 +224,10 @@ pub struct KittyRead {
 
     /// The human friendly name of the requesting program, shown in
     /// permission prompts. Empty when absent.
+    // The reference doc's last sentence, dropped with the sentinels (see the
+    // `KittyRead` PORT NOTE):
+    //   /// permission prompts. Empty when absent. Sentinel-terminated
+    //   /// so it can cross a C apprt boundary without copies.
     pub name: Vec<u8>,
 
     /// True when a stored session grant already covers this
@@ -248,6 +264,11 @@ impl KittyRead {
 /// transaction. Like KittyRead, this is created on the IO thread
 /// and completed on the app thread, so it owns all of its memory.
 // pub const KittyWrite = struct { arena: std.heap.ArenaAllocator, ... };
+// The reference doc (structs.zig:168-171):
+//   /// State for one committed Kitty clipboard protocol write
+//   /// transaction. Like KittyRead, this is created on the IO thread
+//   /// and completed on the app thread, so everything, including the
+//   /// struct itself, is allocated from the arena.
 // PORT NOTE: see `KittyRead` — same arena-to-ownership mapping.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KittyWrite {
@@ -259,6 +280,11 @@ pub struct KittyWrite {
     /// contents of the write: completions apply these rather than
     /// any contents echoed back by the apprt. Data is binary-safe
     /// via its length.
+    // The reference doc's last sentence (structs.zig:182-184), dropped with
+    // the sentinels (see the `KittyRead` PORT NOTE):
+    //   /// any contents echoed back by the apprt. The values are
+    //   /// sentinel-terminated so they can cross a C apprt boundary
+    //   /// without copies; data is binary-safe via its length.
     // contents: []const ClipboardContent,
     // PORT NOTE: `apprt.ClipboardContent` is the crate's BORROWED pair; the
     // owned analog carries the arena-owned bytes.
@@ -274,6 +300,10 @@ pub struct KittyWrite {
 
     /// The human friendly name of the requesting program, shown in
     /// permission prompts. Empty when absent.
+    // The reference doc's last sentence, dropped with the sentinels (see the
+    // `KittyRead` PORT NOTE):
+    //   /// permission prompts. Empty when absent. Sentinel-terminated
+    //   /// so it can cross a C apprt boundary without copies.
     pub name: Vec<u8>,
 
     /// True when a stored session grant already covers this

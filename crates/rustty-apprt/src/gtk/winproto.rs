@@ -88,8 +88,10 @@ pub enum Protocol {
     X11,
 }
 
-/// PORTS: `winproto.zig:22-81` `App` — the per-application windowing state. One
-/// instance per [`Application`](crate::gtk::class::application::Application),
+/// App-state for the underlying windowing protocol. There should be one
+/// instance of this struct per application.
+///
+/// PORTS: `winproto.zig:22-81` `App`. One instance per [`Application`](crate::gtk::class::application::Application),
 /// stored in its private state (`application.zig:176`).
 #[derive(Debug)]
 pub enum App {
@@ -216,10 +218,11 @@ impl App {
         }
     }
 
-    /// PORTS: `winproto.zig:82-92` `App.bindGlobalShortcuts`. "Bind all global
-    /// keybinds through a mechanism native to the windowing protocol. Returns false
-    /// if there is none; the caller should then fall back to the XDG desktop
-    /// portal."
+    /// Bind all global keybinds through a mechanism native to the
+    /// windowing protocol. Returns false if there is none; the caller
+    /// should then fall back to the XDG desktop portal.
+    ///
+    /// PORTS: `winproto.zig:82-92` `App.bindGlobalShortcuts`.
     ///
     /// Only the `wayland` arm can return `true`, and only when the compositor
     /// advertises `vicinae_hotkey_manager_v1`; `noop` and `x11` return `false`
@@ -251,6 +254,12 @@ impl App {
         }
     }
 
+    /// Set up necessary support for the quick terminal that must occur
+    /// *before* the window-level winproto object is created.
+    ///
+    /// Only has an effect on the Wayland backend, where the gtk4-layer-shell
+    /// library is initialized.
+    ///
     /// PORTS: `winproto.zig:71-81` `App.initQuickTerminal`. Dispatch to the active
     /// arm — [`class::window::Window`]'s `propQuickTerminal` (`window.zig:1204`)
     /// initializes the quick terminal at the app layer. On a noop-only build this
@@ -271,18 +280,22 @@ impl App {
     }
 }
 
-/// PORTS: `winproto.zig:83-155` `Window` — the per-window windowing state. In
-/// Wayland terms this is really "Surface"-specific state, but ghostty uses
-/// "Surface" for something else, so the reference calls it "Window"
-/// (`winproto.zig:83-88`). One instance per window (`window.zig:238`).
+/// Per-Window state for the underlying windowing protocol.
 ///
-/// PORT STATUS: the `Window` arms carry only the surface this task needs — the
-/// tagged union shape, `deinit`, and `clientSideDecorationEnabled`. The reference's
-/// `init` (`winproto.zig:94-118`) and the `resizeEvent`/`syncAppearance`/
-/// `addSubprocessEnv`/`setUrgent` methods (`winproto.zig:126-154`) take the
-/// `class/window.zig` `Window` (`ApprtWindow`) and `std.process.EnvMap`, whose
-/// ports land with the GTK `Window` class (later L5/L6 tasks); they are added to
-/// this union and to [`noop::Window`] when that consumer exists.
+/// In Wayland, the terminology used is "Surface" and for it, this is
+/// really "Surface"-specific state. But Rustty uses the term "Surface"
+/// heavily to mean something completely different, so we use "Window" here
+/// to better match what it generally maps to in the Rustty codebase.
+///
+/// PORTS: `winproto.zig:83-155` `Window`. One instance per window
+/// (`window.zig:238`).
+///
+/// PORT STATUS: complete — the union carries every reference method: `init`,
+/// `deinit`, `resizeEvent`, `syncAppearance`, `clientSideDecorationEnabled`,
+/// `addSubprocessEnv` and `setUrgent` (`winproto.zig:115-175`). (Corrected
+/// 2026-09-24, parity tail S-8b: this note used to say `init` and the four
+/// event methods were not here yet and would land with the GTK `Window`
+/// class; they have.)
 #[derive(Debug)]
 pub enum Window {
     /// `none: noop.Window` (`winproto.zig:90`). The default arm — a fresh window

@@ -197,27 +197,30 @@ impl HandoffPark {
 }
 
 /// How long [`State::yield_to_demand`] sleeps waiting for a demanding waiter to
-/// take its turn before giving up. This bounds how long the IO parse thread can
-/// stall if a wake is lost or the waiter is descheduled; a demanding critical
-/// section (the renderer's frame snapshot) is microseconds, so one millisecond
-/// is generous.
+/// take its turn before giving up. This bounds how long the IO parse
+/// thread can stall if a wake is lost or the waiter is descheduled; a
+/// demanding critical section (the renderer's frame snapshot) is
+/// microseconds, so one millisecond is generous.
 //
 // Zig: `const handoff_timeout_ns = 1 * std.time.ns_per_ms;`
 const HANDOFF_TIMEOUT: Duration = Duration::from_millis(1);
 
 impl State {
     /// Acquire `mutex` while signaling demand for it. Use this instead of
-    /// locking the mutex directly on threads that must not be starved by a hot
-    /// lock/unlock loop (the renderer's frame snapshot). Must be released with
-    /// [`State::unlock_demand`]; releasing with `mutex.unlock` keeps the data
-    /// safe but makes parked [`State::yield_to_demand`] callers wait out their
-    /// full timeout.
+    /// locking the mutex directly on threads that must not be starved by
+    /// a hot lock/unlock loop (the renderer's frame snapshot). Must be
+    /// released with `unlock_demand`; releasing with `mutex.unlock` keeps
+    /// the data safe but makes parked `yield_to_demand` callers wait out
+    /// their full timeout.
     ///
-    /// Both `std.Thread.Mutex` and os_unfair_lock are unfair: a running thread
-    /// that unlocks and immediately relocks beats a sleeping waiter every time,
-    /// because the waiter must first be woken and scheduled. Under sustained pty
-    /// output the IO parse thread is exactly such a loop, so without this signal
-    /// the renderer can starve for as long as the output lasts.
+    /// Both `std.Thread.Mutex` and os_unfair_lock are unfair: a running
+    /// thread that unlocks and immediately relocks beats a sleeping
+    /// waiter every time, because the waiter must first be woken and
+    /// scheduled. Under sustained pty output the IO parse thread is
+    /// exactly such a loop, so without this signal the renderer can
+    /// starve for as long as the output lasts.
+    ///
+    /// See [`State::unlock_demand`] and [`State::yield_to_demand`].
     ///
     /// PORT NOTE: rustty's `mutex` field is a RAW pointer to the guard-less
     /// `rustty_zigstd::thread::Mutex` (the core-tier mutex model), so — unlike

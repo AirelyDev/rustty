@@ -70,6 +70,8 @@ pub struct Frame {
 }
 
 impl Frame {
+    /// Begin encoding a frame.
+    ///
     /// PORTS: `Frame.zig:23-38`.
     ///
     /// ```zig
@@ -79,10 +81,14 @@ impl Frame {
     /// }
     /// ```
     ///
-    /// `renderer` is the type-erased `*mut GenericRenderer` (renderer task); once
-    /// the frame completes, its `frameCompleted` is called with the frame's health,
-    /// and `target` is presented via the renderer's API. `on_completed` is the
-    /// concrete tail the renderer task supplies. Raw `*mut` per the module note.
+    /// `renderer`: Once the frame has been completed, the `frameCompleted` method
+    /// on the renderer is called with the health status of the frame.
+    ///
+    /// `target`: The target is presented via the provided renderer's API when completed.
+    ///
+    /// PORT NOTE: `renderer` is the type-erased `*mut GenericRenderer` (renderer
+    /// task); `on_completed` is the concrete tail the renderer task supplies. Raw
+    /// `*mut` per the module note.
     ///
     /// PORT NOTE (`!Self`): the reference's error set is EMPTY (`begin` has no
     /// fallible call), so unlike `metal/frame.rs::begin` — which can fail creating a
@@ -100,6 +106,9 @@ impl Frame {
         }
     }
 
+    /// Add a render pass to this frame with the provided attachments.
+    /// Returns a RenderPass which allows render steps to be added.
+    ///
     /// PORTS: `Frame.zig:40-48`.
     ///
     /// ```zig
@@ -127,9 +136,13 @@ impl Frame {
     /// }
     /// ```
     ///
-    /// If `sync` is true, this will block until the frame is presented — NOTE (the
-    /// reference's own, `Frame.zig:54`): for OpenGL, `sync` is ignored and we always
-    /// block. The present + `frameCompleted` tail is [`on_completed`](Self::on_completed).
+    /// Complete this frame and present the target.
+    ///
+    /// If `sync` is true, this will block until the frame is presented.
+    ///
+    /// NOTE: For OpenGL, `sync` is ignored and we always block.
+    ///
+    /// The present + `frameCompleted` tail is [`on_completed`](Self::on_completed).
     pub fn complete(&self, _sync: bool) {
         super::gl::finish();
 
@@ -141,8 +154,11 @@ impl Frame {
             Health::Unhealthy
         };
 
-        // The present-if-healthy + `frameCompleted(health)` tail (the renderer task
-        // authors the body — see [`CompletionFn`]).
+        // If the frame is healthy, present it.
+        // Report the health to the renderer.
+        //
+        // PORT NOTE: the present-if-healthy + `frameCompleted(health)` tail (the
+        // renderer task authors the body — see [`CompletionFn`]).
         //
         // SAFETY: the renderer pointer is live for the duration of `drawFrame`;
         // single-threaded on this path (we just blocked on `gl.finish()`); the

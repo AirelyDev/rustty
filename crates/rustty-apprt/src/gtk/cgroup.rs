@@ -131,8 +131,10 @@ pub fn fmt_scope(buf: &mut [u8], pid: u32) -> &[u8] {
     &buf[..n]
 }
 
-/// "Create a transient systemd scope unit for the given process and move the
-/// process into it." PORTS: `cgroup.zig:28-115` `createScope`.
+/// Create a transient systemd scope unit for the given process and
+/// move the process into it.
+///
+/// PORTS: `cgroup.zig:28-115` `createScope`.
 ///
 /// # Errors
 /// [`DbusCallFailed`] if the `StartTransientUnit` call fails
@@ -193,6 +195,8 @@ pub fn create_scope(
         std::iter::empty::<glib::Variant>(),
     );
 
+    // Initialize our builder to build up our parameters
+    //
     // `builder_type = "(ssa(sv)a(sa(sv)))"` (`cgroup.zig:37`), filled with
     // `.add("s", name)` / `.add("s", "fail")` (`cgroup.zig:43-44`) and the two
     // opened sub-arrays; `builder.end()` (`cgroup.zig:92`) is this tuple.

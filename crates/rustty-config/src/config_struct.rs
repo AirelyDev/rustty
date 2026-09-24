@@ -118,6 +118,12 @@ pub use rustty_vt::cursor::Style as CursorStyle;
 /// test (added in the fill sub-batch) asserts every `Key` variant has a
 /// parse+format+clone+changed arm, replacing Zig's comptime completeness check.
 // pub const Key = key: { ... derived from Config fields ... };
+//     for (field_infos, &names, &raw_values) |field, *name, *raw| {
+//         // Ignore fields starting with "_" since they're internal and
+//         // not copied ever.
+//         if (field.name[0] == '_') continue;
+//         ...
+//     }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Key {
     Language,
@@ -575,6 +581,8 @@ impl Key {
 // the match covers all variants).
 // ===========================================================================
 
+/// Returns the value type for a key
+///
 /// PORTS: `pub fn Value(comptime key: Key) type` (key.zig:35).
 // pub fn Value(comptime key: Key) type {
 //     const field = comptime field: {

@@ -1653,11 +1653,13 @@ pub type ImageMap = HashMap<Id, ImageEntry>;
 pub struct ImageEntry {
     pub image: Image,
 
-    /// The generation of the terminal image this was created from (see
-    /// `rustty_vt::kitty::graphics_image::Image::generation`). Used to detect
-    /// staleness: a differing generation for the same ID means the contents
-    /// changed and the texture must be replaced. Zero is never a valid stored
-    /// generation so it marks "not yet uploaded".
+    /// The generation of the terminal image this was created from
+    /// (see terminal.kitty.graphics.Image.generation). Used to detect
+    /// staleness: a differing generation for the same ID means the
+    /// contents changed and the texture must be replaced. Zero is
+    /// never a valid stored generation so it marks "not yet uploaded".
+    ///
+    /// (In the port: `rustty_vt::kitty::graphics_image::Image::generation`.)
     pub generation: u64,
 }
 
@@ -2017,10 +2019,12 @@ impl Image {
         }
         // `img.getPending().?` — a `Pending` (Copy), shared into the replace/pending.
         let new_pending = img.get_pending().unwrap();
-        // If we have an existing texture, use it in the replace. Otherwise we
-        // just become a pending image. (`get_texture` returns a borrow for
-        // `draw`/`has_texture`; here we must MOVE the owned `Texture` out of the
-        // old value — see `into_texture` — because `Texture` is not `Copy`.)
+        // If we have an existing texture, use it in the replace.
+        // Otherwise we just become a pending image.
+        //
+        // PORT NOTE: `get_texture` returns a borrow for `draw`/`has_texture`;
+        // here we must MOVE the owned `Texture` out of the old value — see
+        // `into_texture` — because `Texture` is not `Copy`.
         map_in_place(self, |old| match old.into_texture() {
             Some(texture) => Image::Replace(Replace {
                 texture,

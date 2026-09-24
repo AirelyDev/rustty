@@ -25,8 +25,9 @@
 //! so [`get_bool`] is the ported reader; the allocating `getAlloc` path lands
 //! with its first consumer (none at this pin).
 
-/// PORTS: `gsettings.zig:6-9` `pub const Key`. GTK Settings keys with
-/// well-defined types. The `@"…"`-quoted Zig identifiers (the literal GObject
+/// GTK Settings keys with well-defined types.
+///
+/// PORTS: `gsettings.zig:6-9` `pub const Key`. The `@"…"`-quoted Zig identifiers (the literal GObject
 /// property names) become ordinary Rust variants; [`Key::name`] recovers the
 /// wire name (`@tagName`, `gsettings.zig:64`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -97,9 +98,11 @@ impl Key {
         }
     }
 
-    /// PORTS: `gsettings.zig:30-36` `requiresAllocation()`. "Types that do not
-    /// need allocation must be explicitly marked." `bool`/`c_int` do not; every
-    /// other type does.
+    /// Returns true if this setting type requires memory allocation.
+    /// Types that do not need allocation must be explicitly marked.
+    ///
+    /// PORTS: `gsettings.zig:30-36` `requiresAllocation()`. `bool`/`c_int` do
+    /// not; every other type does.
     #[must_use]
     pub const fn requires_allocation(self) -> bool {
         match self.value_type() {
@@ -109,6 +112,10 @@ impl Key {
     }
 }
 
+/// Reads a GTK setting for non-allocating types.
+/// Automatically uses XDG Desktop Portal in Flatpak environments.
+/// Returns null if the setting is unavailable.
+///
 /// PORTS: `gsettings.zig:42-48` `get` (the non-allocating reader) specialized to
 /// the sole boolean key the tier consumes. Reads `gtk.Settings.getDefault()`
 /// (`:46`) and, per `getImpl` (`:66-67`), interprets the value as `!= 0`. Returns

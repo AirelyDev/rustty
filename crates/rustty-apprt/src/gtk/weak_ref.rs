@@ -26,7 +26,8 @@
 
 use glib::object::ObjectType;
 
-/// A type-safe weak reference to a single GObject type `T`.
+/// A lightweight wrapper around gobject.WeakRef to make it type-safe
+/// to hold a single type of value.
 ///
 /// PORTS: `weak_ref.zig:7` `pub fn WeakRef(comptime T: type) type`. The generic
 /// `struct { ref: gobject.WeakRef }` becomes a newtype over [`glib::WeakRef<T>`]
@@ -45,9 +46,10 @@ impl<T: ObjectType> WeakRef<T> {
         Self(glib::WeakRef::new())
     }
 
-    /// PORTS: `weak_ref.zig:17` `set`. "Set the weak reference to the given
-    /// object. This will not increase the reference count of the object."
-    /// (`weak_ref.zig:15-16`). gtk4-rs's `set` is the same `g_weak_ref_set`;
+    /// Set the weak reference to the given object. This will not
+    /// increase the reference count of the object.
+    ///
+    /// PORTS: `weak_ref.zig:17` `set`. gtk4-rs's `set` is the same `g_weak_ref_set`;
     /// passing `None` clears it (the reference's `else` arm, `:21`).
     pub fn set(&self, v: Option<&T>) {
         self.0.set(v);
@@ -89,13 +91,18 @@ impl<T: ObjectType> WeakRef<T> {
         self.set(None);
     }
 
-    /// PORTS: `weak_ref.zig:27` `get`. "Get a strong reference to the object, or
-    /// null if the object has been finalized. This increases the reference count
-    /// by one." (`weak_ref.zig:25-26`) — Invariant 4. The returned `T` owns that
+    /// Get a strong reference to the object, or null if the object
+    /// has been finalized. This increases the reference count by one.
+    ///
+    /// PORTS: `weak_ref.zig:27` `get` — Invariant 4. The returned `T` owns that
     /// strong reference; its `Drop` discharges the reference's `defer unref` (see
     /// the module doc).
     #[must_use]
     pub fn get(&self) -> Option<T> {
+        // We can't use `as` because `as` guarantees conversion and
+        // that can't be statically guaranteed.
+        // (PORT NOTE: `glib::WeakRef<T>::upgrade` is already typed `T`, so the
+        // reference's checked `gobject.ext.cast` has no separate Rust step.)
         self.0.upgrade()
     }
 }

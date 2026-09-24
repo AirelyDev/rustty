@@ -133,6 +133,11 @@ mod imp {
 }
 
 glib::wrapper! {
+    /// A wrapper widget that embeds a Surface inside a GtkScrolledWindow.
+    /// This provides scrollbar functionality for the terminal surface.
+    /// The surface property can be set during initialization or changed
+    /// dynamically via the surface property.
+    ///
     /// PORTS: `surface_scrolled_window.zig:18` `pub const SurfaceScrolledWindow`.
     pub struct SurfaceScrolledWindow(ObjectSubclass<imp::SurfaceScrolledWindow>)
         @extends libadwaita::Bin, gtk4::Widget,
@@ -175,6 +180,9 @@ impl SurfaceScrolledWindow {
     /// Disable `EventControllerScroll.kinetic` on the scrolled window's
     /// controllers as a workaround for the pre-4.20.1 trackpad behavior.
     fn disable_kinetic_scroll(&self) {
+        // Until gtk 4.20.1 trackpads have kinetic scrolling behavior regardless
+        // of `Gtk.ScrolledWindow.kinetic_scrolling`. As a workaround, disable
+        // EventControllerScroll.kinetic
         let controllers = self.imp().scrolled_window.observe_controllers();
         let mut i = 0u32;
         while let Some(obj) = controllers.item(i) {

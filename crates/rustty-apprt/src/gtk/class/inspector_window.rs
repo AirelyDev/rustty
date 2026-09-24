@@ -61,8 +61,9 @@ mod imp {
         #[property(name = "debug", get = Self::debug_prop)]
         pub debug_prop: PhantomData<bool>,
 
-        /// PORTS: `inspector_window.zig:70-71` `surface` — the surface that we are
-        /// attached to, held WEAKLY (**invariant 4**: the referent can finalize out
+        /// The surface that we are attached to
+        ///
+        /// PORTS: `inspector_window.zig:70-71` `surface` — held WEAKLY (**invariant 4**: the referent can finalize out
         /// from under us). The `surface` property's backing store.
         pub surface: WeakRef<Surface>,
 
@@ -115,20 +116,22 @@ mod imp {
                 obj.add_css_class("devel");
             }
 
-            // Set our window icon. We can't set this in the blueprint file because
-            // it's dependent on the build config (`inspector_window.zig:90-92`). R2:
-            // the rustty identity, not the hardcoded reference id.
+            // Set our window icon. We can't set this in the blueprint file
+            // because its dependent on the build config.
+            // (`inspector_window.zig:90-92`) R2: the rustty identity, not the
+            // hardcoded reference id.
             obj.set_icon_name(Some(rustty_identity::BUNDLE_ID));
         }
 
-        /// PORTS: `inspector_window.zig:95-112` `dispose`. You MUST clear all weak
-        /// refs in dispose, otherwise it causes memory corruption on dispose on the
-        /// TARGET (weak referenced) object. The only way we caught this is via
-        /// Valgrind. It's not a leak, it's an invalid memory read. In practice, we
-        /// found this sometimes caused hanging! The parent
+        /// PORTS: `inspector_window.zig:95-112` `dispose`. The parent
         /// (`AdwApplicationWindow` → `GtkWidget` → `GObject`) dispose chains after
         /// we return via the gtk4-rs dispose trampoline (`:103-111`).
         fn dispose(&self) {
+            // You MUST clear all weak refs in dispose, otherwise it causes
+            // memory corruption on dispose on the TARGET (weak referenced)
+            // object. The only way we caught this is via Valgrind. Its not a leak,
+            // its an invalid memory read. In practice, I found this sometimes
+            // caused hanging!
             self.set_surface(None);
             self.dispose_template();
         }
@@ -148,6 +151,8 @@ mod imp {
             self.surface.set(newvalue);
         }
 
+        /// Important: get() refs, so we take to not increase ref twice
+        ///
         /// PORTS: `inspector_window.zig:142-148` `getSurfaceValue`. `get()` refs, so
         /// we hand the caller that fresh strong ref (getter transfer `.none`) — the
         /// gtk4-rs `to_value` on the returned `Option<Surface>` performs the same
@@ -208,15 +213,16 @@ impl InspectorWindow {
 #[gtk4::template_callbacks]
 impl InspectorWindow {
     /// PORTS: `inspector_window.zig:160-171` `propInspectorSurface`. Bound to the
-    /// embedded widget's `notify::surface` (`inspector-window.blp:33`). If the
-    /// inspector's surface went away, we destroy the window. The inspector has a
-    /// weak notify on the surface so it knows if it goes nil.
+    /// embedded widget's `notify::surface` (`inspector-window.blp:33`).
     #[template_callback(name = "notify_inspector_surface")]
     fn on_notify_inspector_surface(
         inspector: &InspectorWidget,
         _pspec: &glib::ParamSpec,
         this: &InspectorWindow,
     ) {
+        // If the inspector's surface went away, we destroy the window.
+        // The inspector has a weak notify on the surface so it knows
+        // if it goes nil.
         if inspector.get_surface().is_none() {
             this.destroy();
         }
