@@ -110,7 +110,7 @@ use rustty_zigstd::memory_pool::DynamicMemoryPoolAligned;
 use rustty_zigstd::memory_pool::MemoryPool as ZigMemoryPool;
 
 use crate::alloc::Allocator;
-use allocator_api2::alloc::{Allocator as _, Global as ApiGlobal};
+use allocator_api2::alloc::Allocator as _;
 use core::alloc::Layout;
 use core::ptr::NonNull;
 
@@ -294,11 +294,11 @@ pub enum Storage {
 ///
 /// PORTS: oracle@main PageList.zig `Node.PreservedPage`.
 ///
-/// PORT NOTE (WS7 B6): the oracle's `owned` arm carries the `Allocator` that
-/// produced the decode buffer. rustty allocates it from the global allocator,
-/// so the arm carries the raw pointer/length needed to release it instead —
-/// forming a `&mut [u8]` over a decoded page would alias the `Page` value that
-/// names the same bytes.
+/// PORT NOTE (WS7 B6, parity tail S7-3): the oracle's `owned` arm carries the
+/// `Allocator` that produced the decode buffer, and so does this one. It also
+/// carries the raw pointer/length needed to release it, because forming a
+/// `&mut [u8]` over a decoded page would alias the `Page` value that names the
+/// same bytes.
 ///
 /// PORT NOTE (WS7 M2): `#[must_use]` rather than a `Drop` impl. The oracle's
 /// `PreservedPage` is released by an explicit `deinit()` (its `owned` arm holds
@@ -323,6 +323,7 @@ pub enum PreservedPage {
         page: Page,
         ptr: *mut u8,
         len: usize,
+        alloc: Allocator,
     },
 }
 
@@ -338,13 +339,18 @@ impl PreservedPage {
 
     /// Release storage owned by this preserved page.
     pub fn deinit(&mut self) {
-        if let PreservedPage::Owned { ptr, len, .. } = *self {
-            // The clone buffer came from the global allocator rather than the
-            // page allocator, so it must not use `Page::deinit`.
+        if let PreservedPage::Owned {
+            ptr, len, alloc, ..
+        } = *self
+        {
+            // The clone buffer came from the caller's allocator rather than
+            // Page's OS allocator, so it must not use Page.deinit.
+            // .owned => |*owned| owned.alloc.free(owned.page.memory),
             let layout = Layout::from_size_align(len, PAGE_SIZE_MIN).unwrap();
             // SAFETY: `ptr`/`layout` are the pair `page_preserving_state`
-            // allocated below, and the decoded `Page` is dropped with `self`.
-            unsafe { std::alloc::dealloc(ptr, layout) };
+            // allocated through `alloc` below, and the decoded `Page` is dropped
+            // with `self`.
+            unsafe { alloc.deallocate(NonNull::new_unchecked(ptr), layout) };
         }
         // self.* = undefined;
         *self = PreservedPage::Borrowed(core::ptr::null());
@@ -530,16 +536,17 @@ impl Node {
     /// failure this returns `Err(OutOfMemory)` and leaves the node and its
     /// compressed representation untouched.
     ///
-    /// PORTS: oracle@main PageList.zig `Node.pagePreservingState`. This port
-    /// takes no `alloc` parameter: the decode buffer comes from the global
-    /// allocator (see the `PreservedPage` PORT NOTE). The oracle's
-    /// `Allocator.Error!PreservedPage` is preserved: the raw `alloc_zeroed`
-    /// reports failure with a null pointer, which is a real fallible seam.
+    /// PORTS: oracle@main PageList.zig `Node.pagePreservingState`, including
+    /// its `alloc` parameter (parity tail S7-3): the decode buffer comes from
+    /// `alloc` and is freed through it by `PreservedPage::deinit`.
     ///
     /// # Safety
     /// `node` must point at a live `Node` and the caller must retain exclusive
     /// access to the owning PageList for the lifetime of the result.
-    pub unsafe fn page_preserving_state(node: *const Node) -> Result<PreservedPage, OutOfMemory> {
+    pub unsafe fn page_preserving_state(
+        node: *const Node,
+        alloc: Allocator,
+    ) -> Result<PreservedPage, OutOfMemory> {
         let data = unsafe { core::ptr::addr_of!((*node).data) };
         match unsafe { NodeData::tag(data) } {
             NodeData::TAG_RESIDENT => Ok(PreservedPage::Borrowed(unsafe {
@@ -552,25 +559,37 @@ impl Node {
                 let compressed = unsafe { &*NodeData::compressed_payload(data) };
                 let len = compressed.page.memory_len();
                 let layout = Layout::from_size_align(len, PAGE_SIZE_MIN).unwrap();
-                // const memory = try alloc.alignedAlloc(...);
-                #[cfg(test)]
-                page_preserving_state_tw_check(PagePreservingStateFp::Buffer)?;
-                // SAFETY: `len > 0` and the layout is valid.
-                let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
-                if ptr.is_null() {
-                    return Err(OutOfMemory);
-                }
+                // const memory = try alloc.alignedAlloc(
+                //     u8,
+                //     .fromByteUnits(std.heap.page_size_min),
+                //     compressed.page.memory.len,
+                // );
+                //
+                // PORT NOTE: zeroed so the decoder never forms a slice over
+                // uninitialized bytes; the caller's allocator sees the same
+                // single aligned allocation.
+                let ptr = alloc
+                    .allocate_zeroed(layout)
+                    .map_err(|_| OutOfMemory)?
+                    .cast::<u8>()
+                    .as_ptr();
 
                 // SAFETY: `ptr` is a live, page-aligned, unaliased buffer of
                 // exactly `len` bytes.
                 match unsafe { compressed.clone_buf(ptr, len) } {
-                    Ok(page) => Ok(PreservedPage::Owned { page, ptr, len }),
+                    Ok(page) => Ok(PreservedPage::Owned {
+                        page,
+                        ptr,
+                        len,
+                        alloc,
+                    }),
                     Err(err) => {
                         // The encoded data was produced by our codec and remains
                         // immutable while compressed. Failure is internal
                         // corruption, matching the normal restoration boundary.
+                        // alloc.free(memory);
                         // SAFETY: `ptr`/`layout` are the pair allocated above.
-                        unsafe { std::alloc::dealloc(ptr, layout) };
+                        unsafe { alloc.deallocate(NonNull::new_unchecked(ptr), layout) };
                         log::error!(target: LOG_SCOPE, "failed to clone compressed page err={err:?}");
                         panic!("failed to clone compressed terminal page");
                     }
@@ -700,8 +719,9 @@ impl rustty_datastruct::intrusive_linked_list::Node for Node {
 /// The memory pool we get page nodes from.
 //
 // PORT NOTE: the reference `NodePool = std.heap.MemoryPool(List.Node)`. We use
-// the faithful `rustty_zigstd::MemoryPool<Node>` (LIFO free-list reuse).
-type NodePool = ZigMemoryPool<Node>;
+// the faithful `rustty_zigstd::MemoryPool<Node>` (LIFO free-list reuse), over
+// the general-purpose allocator handle (`gen_alloc`, parity tail S7-3).
+type NodePool = ZigMemoryPool<Node, Allocator>;
 
 // /// The standard page capacity that we use as a starting point for
 // /// all pages. This is chosen as a sane default that fits most terminal
@@ -982,15 +1002,17 @@ pub mod page_tracking {
 /// up to date automatically through page-modifying operations.
 //
 // PORT NOTE: the reference `PinSet = std.AutoArrayHashMapUnmanaged(*Pin, void)`
-// ports to `rustty_zigstd::AutoArrayHashMapUnmanaged<*mut Pin, ()>` (insertion-
-// order iteration, `putNoClobber`/`keys`/`swapRemove`). It is "Unmanaged" in
-// name only — the Rust port owns its backing `Vec`, so there is no
-// `deinit(alloc)` call; dropping the map frees its storage.
-pub type PinSet = AutoArrayHashMapUnmanaged<*mut Pin, ()>;
+// ports to `rustty_zigstd::AutoArrayHashMapUnmanaged<*mut Pin, (), Allocator>`
+// (insertion-order iteration, `putNoClobber`/`keys`/`swapRemove`). The
+// reference passes `pool.alloc` to every growing call; the Rust map binds that
+// allocator at construction (`PinSet::new_in(pool.alloc)`) and frees through it
+// on drop, so there is no `deinit(alloc)` call.
+pub type PinSet = AutoArrayHashMapUnmanaged<*mut Pin, (), Allocator>;
 /// The memory pool we get pins from.
 //
-// PORT NOTE: the reference `PinPool = std.heap.MemoryPool(Pin)`.
-type PinPool = ZigMemoryPool<Pin>;
+// PORT NOTE: the reference `PinPool = std.heap.MemoryPool(Pin)`, over the
+// general-purpose allocator handle (`gen_alloc`, parity tail S7-3).
+type PinPool = ZigMemoryPool<Pin, Allocator>;
 
 /// The pool of memory used for a pagelist. This can be shared between
 /// multiple pagelists but it is not threadsafe.
@@ -1000,10 +1022,10 @@ pub struct MemoryPool {
     // PORT NOTE: the reference stores the general-purpose allocator (`alloc`)
     // used for the node/pin pools and the tracked-pin hashmap, plus the page
     // allocator is captured inside `pages.arena.child_allocator`. The handle is
-    // stored as the reference stores it (parity tail S7-2, N264). The node/pin
-    // pools and the tracked-pin map still run on the Rust global heap
-    // (`allocator_api2::alloc::Global`) until S7-3 routes them through it; every
-    // caller passes the Global handle today, so that is the same allocator.
+    // stored as the reference stores it (parity tail S7-2, N264), and the
+    // node/pin pools and every `PinSet` built over this pool grow through it
+    // (parity tail S7-3). Page memory never does: it stays on the page
+    // allocator, as in the reference on every non-freestanding target.
     pub alloc: Allocator,
     nodes: NodePool,
     pages: PagePool,
@@ -1050,18 +1072,16 @@ impl MemoryPool {
     // `MemoryPool.init(gen_alloc, page_alloc, preheat)` threads the
     // general-purpose allocator into the Node/Pin pools and the page allocator
     // into the PagePool. The signature is the reference's (parity tail S7-2,
-    // N264): `gen_alloc` is stored as `alloc`, and `page_alloc` is the page
-    // pool's child, `page_backing_alloc()` (the reference `pageAllocator()` —
-    // mmap, page-aligned, LAZILY OS-zeroed). The Node/Pin pools still take the
-    // Rust global heap (`ApiGlobal`, exactly the prior `std::alloc` path) until
-    // S7-3 builds them over `gen_alloc`; every caller passes the Global handle,
-    // so the routing is unchanged.
+    // N264): `gen_alloc` is stored as `alloc` and is the Node/Pin pools' arena
+    // child (parity tail S7-3), and `page_alloc` is the page pool's child,
+    // `page_backing_alloc()` (the reference `pageAllocator()` — mmap,
+    // page-aligned, LAZILY OS-zeroed).
     pub fn init(
         gen_alloc: Allocator,
         page_alloc: PageBackingAlloc,
         preheat: usize,
     ) -> Result<MemoryPool, OutOfMemory> {
-        let node_pool = NodePool::init_preheated(ApiGlobal, preheat).map_err(|_| OutOfMemory)?;
+        let node_pool = NodePool::init_preheated(gen_alloc, preheat).map_err(|_| OutOfMemory)?;
         // errdefer node_pool.deinit();
         //
         // PORT NOTE (`492c26067`): the two arms below are the runtime spelling
@@ -1077,7 +1097,7 @@ impl MemoryPool {
         let page_pool = PagePool::init_capacity(page_alloc, &PAGE_FREE_LIST, std_size(), preheat)
             .map_err(|_| OutOfMemory)?;
         // errdefer page_pool.deinit();
-        let pin_pool = PinPool::init_preheated(ApiGlobal, 8).map_err(|_| OutOfMemory)?;
+        let pin_pool = PinPool::init_preheated(gen_alloc, 8).map_err(|_| OutOfMemory)?;
         // errdefer pin_pool.deinit();
         Ok(MemoryPool {
             alloc: gen_alloc,
@@ -1401,33 +1421,6 @@ fn init_tw_check(point: InitFp) -> Result<(), OutOfMemory> {
 #[inline]
 fn init_pages_tw_check(point: InitPagesFp) -> Result<(), OutOfMemory> {
     INIT_PAGES_TW.with(|tw| tw.borrow_mut().check(point))
-}
-
-/// Failure injection for `Node::page_preserving_state`'s decode buffer.
-///
-/// PORT NOTE (F-015): the oracle exercises this branch by handing
-/// `pagePreservingState` a `testing.FailingAllocator`. rustty's version takes
-/// no allocator (the buffer comes from the global allocator), so the injectable
-/// seam is a tripwire fail point placed immediately before the fallible
-/// `alloc_zeroed`, the same idiom as the `init`/`initPages` modules above.
-#[cfg(test)]
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub(crate) enum PagePreservingStateFp {
-    /// The `try alloc.alignedAlloc(...)` decode buffer.
-    Buffer,
-}
-
-#[cfg(test)]
-thread_local! {
-    pub(crate) static PAGE_PRESERVING_STATE_TW: core::cell::RefCell<
-        rustty_util::tripwire::Module<PagePreservingStateFp, OutOfMemory>,
-    > = core::cell::RefCell::new(rustty_util::tripwire::module());
-}
-
-#[cfg(test)]
-#[inline]
-fn page_preserving_state_tw_check(point: PagePreservingStateFp) -> Result<(), OutOfMemory> {
-    PAGE_PRESERVING_STATE_TW.with(|tw| tw.borrow_mut().check(point))
 }
 
 /// `PageList.Options`
@@ -1767,13 +1760,16 @@ impl PageList {
                 garbage: false,
             });
         }
-        let mut tracked_pins: PinSet = PinSet::new();
+        let mut tracked_pins: PinSet = PinSet::new_in(pool.alloc);
         // errdefer tracked_pins.deinit(pool.alloc);
 
         // try tw.check(.viewport_pin_track);
         #[cfg(test)]
         init_tw_check(InitFp::ViewportPinTrack)?;
-        tracked_pins.put_no_clobber(viewport_pin.as_ptr(), ());
+        // try tracked_pins.putNoClobber(pool.alloc, viewport_pin, {});
+        tracked_pins
+            .try_put_no_clobber(viewport_pin.as_ptr(), ())
+            .map_err(|_| OutOfMemory)?;
 
         // errdefer comptime unreachable;
         let result: PageList = PageList {
@@ -2119,9 +2115,9 @@ impl PageList {
         // Always deallocate our hashmap.
         //
         // PORT NOTE: the reference `tracked_pins.deinit(self.pool.alloc)`; the
-        // Rust `PinSet` owns its backing storage, so dropping `self.tracked_pins`
-        // frees it. We clear it here to mirror the explicit deinit ordering.
-        self.tracked_pins = PinSet::new();
+        // Rust `PinSet` frees through the allocator it was built with. We free it
+        // here to mirror the explicit deinit ordering.
+        self.tracked_pins.clear_and_free();
 
         // Go through our linked list and release every page: heap-owned
         // pages are freed directly and pool-owned pages are reclaimed.

@@ -128,16 +128,20 @@ impl Tabstops<Global> {
     //     return res;
     // }
     //
-    // PORT NOTE: the default-constructed `Tabstops{}` (`.{}`) is `default()`
-    // over `Global`. Threading a non-`Global` allocator would use
-    // `init_in`/`new_in` analogues; the reference only ever uses the default
-    // allocator path here.
+    // PORT NOTE (parity tail S7-3): the default-constructed `Tabstops{}`
+    // (`.{}`) is `default()`, with its (empty) `dynamic_stops` bound to
+    // `alloc`: allocator_api2's `Box` carries its allocator, so this is what
+    // makes the `resize(alloc, ...)` growth and the eventual free go through the
+    // caller's allocator handle, as the reference's per-call `alloc` does.
     pub fn init(
         alloc: Global,
         cols: usize,
         interval: usize,
     ) -> Result<Tabstops<Global>, OutOfMemory> {
-        let mut res: Tabstops<Global> = Tabstops::default();
+        let mut res: Tabstops<Global> = Tabstops {
+            dynamic_stops: allocator_api2::vec::Vec::new_in(alloc).into_boxed_slice(),
+            ..Tabstops::default()
+        };
         res.resize(alloc, cols)?;
         res.reset(interval);
         Ok(res)

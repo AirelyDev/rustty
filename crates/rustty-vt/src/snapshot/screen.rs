@@ -406,7 +406,9 @@ pub fn encode<W: io::Writer + ?Sized>(
     while !node.is_null() {
         // SAFETY: `node` is live (see above); encode does not mutate the list.
         let mut preserved =
-            unsafe { Node::page_preserving_state(node) }.map_err(|_| EncodeError::OutOfMemory)?;
+            // var preserved = try current.pagePreservingState(screen.alloc);
+            unsafe { Node::page_preserving_state(node, screen.alloc) }
+                .map_err(|_| EncodeError::OutOfMemory)?;
         // defer preserved.deinit();
         // SAFETY: `preserved.page()` is a live page for the preserved scope.
         let result = page::encode(unsafe { &*preserved.page() }, destination);
@@ -1621,8 +1623,9 @@ fn encode_payload(
     // const cursor_hyperlink: ?TerminalHyperlink =
     //     if (screen.cursor.hyperlink) |entry| entry.* else null;
     // SAFETY: the cursor's heap hyperlink pointer is live while the screen is
-    // (owned via `Box::into_raw`; see `Cursor.hyperlink`); shared read only.
-    let cursor_hyperlink: Option<&TerminalHyperlink> =
+    // (allocated through `screen.alloc`; see `Cursor.hyperlink`); shared read
+    // only.
+    let cursor_hyperlink: Option<&terminal_hyperlink::Hyperlink<terminal_hyperlink::AllocBytes>> =
         screen.cursor.hyperlink.map(|entry| unsafe { &*entry });
     encode_cursor_hyperlink(cursor_hyperlink, writer)?;
     Ok(())
@@ -1633,8 +1636,8 @@ fn encode_payload(
 pub type CursorHyperlink = Option<TerminalHyperlink>;
 
 /// Encode the optional cursor hyperlink at the end of a SCREEN payload.
-pub fn encode_cursor_hyperlink(
-    value: Option<&TerminalHyperlink>,
+pub fn encode_cursor_hyperlink<B: core::ops::Deref<Target = [u8]>>(
+    value: Option<&terminal_hyperlink::Hyperlink<B>>,
     writer: &mut dyn io::Writer,
 ) -> Result<(), hyperlink::EncodeError> {
     if let Some(entry) = value {
@@ -2288,7 +2291,7 @@ mod tests {
         let mut none_encoded = [0u8; 1];
         let buffered_len = {
             let mut none_writer = io::FixedWriter::new(&mut none_encoded);
-            encode_cursor_hyperlink(None, &mut none_writer).unwrap();
+            encode_cursor_hyperlink::<Vec<u8>>(None, &mut none_writer).unwrap();
             assert_eq!(b"\x00", none_writer.buffered());
             none_writer.end
         };
@@ -2632,7 +2635,7 @@ mod tests {
                 compression::page::required_scratch((*resident).memory_len()).unwrap();
             let mut scratch = vec![0u8; scratch_len];
             let mut table: compression::lz4::HashTable = [0; compression::lz4::HASH_TABLE_LEN];
-            compression::page::CompressedPage::init(&*resident, &mut scratch, &mut table)
+            compression::page::CompressedPage::init(Allocator, &*resident, &mut scratch, &mut table)
                 .unwrap()
                 .unwrap()
         };
@@ -2879,25 +2882,25 @@ mod tests {
 
         // Native PageList construction is transactional on allocation failure.
         //
-        // PORT NOTE: `FailingAllocator{ .fail_index = 0 }` → the pagelist
-        // Builder's finish tripwire (`FINISH_TW`, the crate's established
-        // failure-injection seam for native PageList construction).
+        // Ported as written (parity tail S7-3): `FailingAllocator{ .fail_index
+        // = 0 }` fails the PageList builder's first pool allocation. (This
+        // replaced the builder tripwire stand-in.)
         {
-            crate::pagelist::builder::FINISH_TW.with(|tw| {
-                tw.borrow_mut().errorAlways(
-                    crate::pagelist::builder::FinishFp::ViewportPinTrack,
-                    crate::pagelist::OutOfMemory,
-                )
+            use crate::alloc::testing::{with_handle, Config, FailingAllocator};
+            let failing = FailingAllocator::over_heap(Config {
+                fail_index: 0,
+                ..Config::default()
             });
+            let c = failing.allocator();
             let mut source = io::FixedReader::new(&written);
-            assert_eq!(
-                Err(DecodeError::OutOfMemory),
-                decode(&mut source, Allocator, screen_options(2, 2, Some(0)))
-                    .map(|mut d| d.deinit()),
-            );
-            crate::pagelist::builder::FINISH_TW
-                .with(|tw| tw.borrow_mut().end(rustty_util::tripwire::ResetMode::Reset))
-                .unwrap();
+            with_handle(&c, |failing_alloc| {
+                assert_eq!(
+                    Err(DecodeError::OutOfMemory),
+                    decode(&mut source, failing_alloc, screen_options(2, 2, Some(0)))
+                        .map(|mut d| d.deinit()),
+                );
+            });
+            assert!(failing.has_induced_failure.get());
         }
 
         // A syntactically valid SCREEN cannot declare an empty PAGE sequence.

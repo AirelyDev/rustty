@@ -540,9 +540,23 @@ impl ZigAllocator for GlobalZigAllocator {
     }
 
     fn resize(&self, memory: ZigSlice, _alignment: Alignment, new_len: usize, _ra: usize) -> bool {
-        // In-place resize: only succeed when shrinking-or-equal, matching a
-        // conservative allocator that cannot grow in place.
-        new_len <= memory.len
+        // PORT NOTE (N270): an in-place resize succeeds only for the same
+        // length. The reference `std.heap.c_allocator.resize` answers `true` for
+        // every shrink ("in-place shrink always works") and, for a growth, `true`
+        // when `malloc_size`/`malloc_usable_size` says the block already has
+        // room — both legal there because C `free` takes no size. This backend
+        // is the Rust global heap (the port's documented mapping of
+        // `c_allocator`; see `default`), and `GlobalAlloc::dealloc` must be
+        // given the layout the block was allocated with. A block therefore
+        // cannot be recorded as shorter (or longer) without moving it: the
+        // later `free(new_len)` below would hand `dealloc` a smaller layout,
+        // which is undefined behaviour under the `GlobalAlloc` contract (Miri
+        // reports it; a sized-dealloc global allocator corrupts its heap). The
+        // Rust heap has no usable-size query either, which is the reference's
+        // own `return false` arm ("we don't know how much space is actually
+        // available"). Refusing is always within the Zig contract: callers fall
+        // back to `remap` (`realloc`, which may move) or alloc+copy+free.
+        new_len == memory.len
     }
 
     fn remap(&self, memory: ZigSlice, alignment: Alignment, new_len: usize, _ra: usize) -> *mut u8 {

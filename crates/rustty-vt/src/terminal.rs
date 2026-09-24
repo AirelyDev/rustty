@@ -793,13 +793,14 @@ pub struct Terminal {
 
     /// The last reported pwd, if any.
     // pwd: std.ArrayList(u8)
-    // PORT NOTE: Zig `std.ArrayList(u8)` byte payload -> `Vec<u8>` with a
-    // trailing-0 sentinel (NEVER lossy String). Getter returns `Option<&[u8]>`
-    // (NUL-stripped).
-    pub pwd: Vec<u8>,
+    // PORT NOTE: Zig `std.ArrayList(u8)` (unmanaged) byte payload ->
+    // `alloc::ArrayListUnmanaged<u8>` with a trailing-0 sentinel (NEVER lossy
+    // String), growing through `self.gpa()` per call as the reference does
+    // (parity tail S7-3). Getter returns `Option<&[u8]>` (NUL-stripped).
+    pub pwd: crate::alloc::ArrayListUnmanaged<u8>,
 
     /// The title of the terminal as set by escape sequences (e.g. OSC 0/2).
-    pub title: Vec<u8>,
+    pub title: crate::alloc::ArrayListUnmanaged<u8>,
 
     /// The color state for this terminal.
     pub colors: Colors,
@@ -828,10 +829,11 @@ pub struct Terminal {
     /// so a terminal that never runs a drag and drop aware program pays
     /// nothing for it. Non-null means a client currently accepts drops.
     // kitty_dnd: ?*kitty.dnd.State = null,
-    // PORT NOTE (af8d28a94): `?*State` (heap create/destroy) maps to
-    // `Option<Box<State>>` — `kitty::dnd::handle_command` allocates into and
-    // frees from this slot.
-    pub kitty_dnd: Option<Box<kitty::dnd::State>>,
+    // PORT NOTE (af8d28a94, parity tail S7-3): `?*State` (heap create/destroy)
+    // maps to `Option<StateBox>`, a box allocated through the terminal's
+    // allocator — `kitty::dnd::handle_command` allocates into and frees from
+    // this slot.
+    pub kitty_dnd: Option<kitty::dnd::StateBox>,
 
     /// The I/O implementation we should use for this terminal.
     // PORT NOTE (io-stand-in, W1 sys.rs decision): the reference threads
@@ -1010,8 +1012,8 @@ impl Terminal {
                 left: 0,
                 right: cols - 1,
             },
-            pwd: Vec::new(),
-            title: Vec::new(),
+            pwd: crate::alloc::ArrayListUnmanaged::EMPTY,
+            title: crate::alloc::ArrayListUnmanaged::EMPTY,
             colors: opts.colors,
             previous_char: None,
             modes: modespkg::ModeState {
@@ -1025,7 +1027,7 @@ impl Terminal {
                 ..Cursor::default()
             },
             mouse_shape: mouse::Shape::Text,
-            glyph_glossary: glyph::Glossary::empty(),
+            glyph_glossary: glyph::Glossary::empty_in(alloc),
             kitty_dnd: None,
             io: crate::sys::io_native,
             flags: Flags::default(),
@@ -1042,17 +1044,18 @@ impl Terminal {
         core::mem::take(&mut self.tabstops).deinit(alloc);
         self.screens.deinit(alloc);
         // self.pwd.deinit(alloc); self.title.deinit(alloc);
-        // PORT NOTE: `pwd`/`title` are `Vec<u8>`; their backing frees on drop. We
-        // clear+shrink to mirror the reference freeing the ArrayList storage.
-        self.pwd = Vec::new();
-        self.title = Vec::new();
+        self.pwd.deinit(alloc);
+        self.title.deinit(alloc);
         // self.glyph_glossary.deinit(alloc);
-        // PORT NOTE: the real `glyph::Glossary::deinit` drops the alloc param (its
-        // entries free on drop); the reference passes `alloc`.
+        // PORT NOTE (parity tail S7-3): the glossary map frees through the
+        // allocator it was bound to at `init` (its entries on drop); the
+        // reference's `alloc` is that allocator, checked here in debug builds.
+        self.glyph_glossary.allocator().debug_assert_same(alloc);
         self.glyph_glossary.deinit();
         // if (self.kitty_dnd) |dnd| dnd.destroy(alloc);
-        // PORT NOTE: dropping the Box frees the state and everything it holds.
-        self.kitty_dnd = None;
+        if let Some(dnd) = self.kitty_dnd.take() {
+            kitty::dnd::State::destroy(dnd, alloc);
+        }
         // self.* = undefined;
     }
 
@@ -5780,15 +5783,17 @@ impl Terminal {
     //     }
     //     return resp;
     // }
-    // PORT NOTE: the real `glyph::execute` drops the alloc param (entries own
-    // their decoded outlines as `Vec`s); the reference threads `alloc`. `alloc`
-    // is retained on the signature for call-site fidelity.
+    // PORT NOTE (parity tail S7-3): `glyph::execute` takes no allocator: the
+    // glossary map grows through the allocator it was bound to at `init`, and
+    // the entries' decoded outlines are `Vec`s on the Rust heap (N272). The
+    // reference's per-call `alloc` is that bound allocator, checked here in
+    // debug builds (callers pass `terminal.gpa()` or termio's allocator).
     pub fn glyph_protocol(
         &mut self,
         alloc: Allocator,
         req: &glyph::Request,
     ) -> Option<glyph::Response> {
-        let _ = alloc;
+        self.glyph_glossary.allocator().debug_assert_same(alloc);
         let resp = glyph::execute(&mut self.glyph_glossary, req);
         match req {
             glyph::Request::Register(_) | glyph::Request::Clear(_) => {
@@ -6440,7 +6445,7 @@ impl Terminal {
         let pwd_len = src_len;
         // if (pwd.len == 0) { self.pwd.clearRetainingCapacity(); return; }
         if pwd_len == 0 {
-            self.pwd.clear();
+            self.pwd.clear_retaining_capacity();
             return Ok(());
         }
 
@@ -6453,24 +6458,21 @@ impl Terminal {
 
         // try self.pwd.ensureTotalCapacity(self.gpa(), capacity);
         //
-        // PORT NOTE: `ensureTotalCapacity` is GROW-ONLY and amortized, so this
-        // is `reserve`, NOT `reserve_exact`. Rust's `reserve` aborts rather
-        // than returning on real OOM, so the failure path is exercised by the
-        // `Reserve` tripwire point (see the terminal.rs tripwire PORT NOTE).
+        // PORT NOTE: `ensureTotalCapacity` is GROW-ONLY and amortized
+        // (`growCapacity`), and fallible: it grows through `self.gpa()`, the
+        // active screen's allocator, looked up at call time (parity tail S7-3).
         // Growing can reallocate, which would invalidate an aliased `pwd` —
         // that cannot happen in the aliasing case, because an aliased source is
         // a subslice of `self.pwd`, hence `capacity <= self.pwd.capacity()`.
-        #[cfg(any(test, debug_assertions, feature = "tripwire-test"))]
-        set_string_tw_check(SetStringFp::Reserve)?;
-        let v: *mut Vec<u8> = core::ptr::addr_of_mut!(self.pwd);
+        let gpa = self.gpa();
+        let v: *mut crate::alloc::ArrayListUnmanaged<u8> = core::ptr::addr_of_mut!(self.pwd);
         // SAFETY: `v` is the live `self.pwd`; `src` is readable for `src_len`
         // bytes and may overlap `*v`'s buffer, which `core::ptr::copy`
         // (memmove) tolerates. `set_len` exposes `capacity` bytes that are all
         // written before any read, and `u8` has no drop glue.
         unsafe {
-            if (*v).capacity() < capacity {
-                (*v).reserve(capacity - (*v).len());
-            }
+            (*v).ensure_total_capacity(gpa, capacity)
+                .map_err(|_| OutOfMemory)?;
             let dst: *mut u8 = (*v).as_mut_ptr();
             // self.pwd.items.len = capacity;
             (*v).set_len(capacity);
@@ -6526,7 +6528,7 @@ impl Terminal {
         let t_len = src_len;
         // if (t.len == 0) { self.title.clearRetainingCapacity(); return; }
         if t_len == 0 {
-            self.title.clear();
+            self.title.clear_retaining_capacity();
             return Ok(());
         }
 
@@ -6539,15 +6541,13 @@ impl Terminal {
 
         // try self.title.ensureTotalCapacity(self.gpa(), capacity);
         //
-        // PORT NOTE: grow-only + amortized => `reserve`, NOT `reserve_exact`.
-        #[cfg(any(test, debug_assertions, feature = "tripwire-test"))]
-        set_string_tw_check(SetStringFp::Reserve)?;
-        let v: *mut Vec<u8> = core::ptr::addr_of_mut!(self.title);
+        // PORT NOTE: grow-only + amortized, through `self.gpa()` (as `set_pwd`).
+        let gpa = self.gpa();
+        let v: *mut crate::alloc::ArrayListUnmanaged<u8> = core::ptr::addr_of_mut!(self.title);
         // SAFETY: as in `set_pwd` above.
         unsafe {
-            if (*v).capacity() < capacity {
-                (*v).reserve(capacity - (*v).len());
-            }
+            (*v).ensure_total_capacity(gpa, capacity)
+                .map_err(|_| OutOfMemory)?;
             let dst: *mut u8 = (*v).as_mut_ptr();
             // self.title.items.len = capacity;
             (*v).set_len(capacity);
@@ -6943,12 +6943,17 @@ impl Terminal {
         };
         self.tabstops.reset(TABSTOP_INTERVAL as usize);
         self.previous_char = None;
-        // PORT NOTE: `std.ArrayList.clearRetainingCapacity` keeps the allocation
-        // and sets len to 0; `Vec::clear` is the faithful equivalent.
-        self.pwd.clear();
-        self.title.clear();
-        // PORT NOTE: the real `glyph::Glossary::clear_and_free` drops the alloc
-        // param (the reference passes `self.gpa()`); entries free on drop.
+        // self.pwd.clearRetainingCapacity();
+        // self.title.clearRetainingCapacity();
+        self.pwd.clear_retaining_capacity();
+        self.title.clear_retaining_capacity();
+        // self.glyph_glossary.clearAndFree(self.gpa());
+        // PORT NOTE (parity tail S7-3): `clear_and_free` takes no allocator: it
+        // frees every entry and the map's storage through the allocator the
+        // map was bound to at `init` (`Glossary::empty_in(alloc)`), which is
+        // `self.gpa()` (checked in debug builds).
+        let gpa = self.gpa();
+        self.glyph_glossary.allocator().debug_assert_same(gpa);
         self.glyph_glossary.clear_and_free();
         // A reset only interrupts an in-progress chunked OSC 72 command;
         // drag and drop registration survives, matching kitty.
@@ -7013,64 +7018,11 @@ impl Terminal {
     }
 }
 
-// PORT NOTE: upstream's `setTitle`/`setPwd` allocation-failure tests
-// (fdd255c78, 1d5b6f90e) use `std.testing.FailingAllocator`. This port's
-// `Allocator` is the infallible `allocator_api2::Global` handle, so the crate's
-// established failure-injection seam is a `rustty_util::tripwire` fail-point
-// module held in a `#[cfg(test)] thread_local!` (same idiom as `tabstops.rs`'s
-// `RESIZE_TW`, `screen.rs`'s `SELECTION_STRING_TW` and `pagelist/mod.rs`'s
-// `INIT_TW`). The single `Reserve` point sits exactly where the reference's
-// `ensureTotalCapacity` can fail, in both `set_pwd` and `set_title`.
-//
-// PORT NOTE (P3-W4 T5, revised for parity S166-F2): the gate WIDENED from
-// `cfg(test)` to `cfg(any(test, debug_assertions, feature = "tripwire-test"))`.
-// Reason: `439d35e27`'s C-API test (`get vt_processing_error`) forces a
-// `setTitle` allocation failure through the PUBLIC `vt_write` path and lives in
-// `rustty-vt-c`, a DIFFERENT crate. `cfg(test)` is only true for the crate
-// currently compiled with `--test`, so the fail point would never trip from
-// there and the test would be VACUOUS.
-//
-// The gate was `cfg(debug_assertions)` alone, which ALSO deleted the fail point
-// from the RELEASE TEST lane — where Zig's `builtin.is_test` is still true —
-// and so forced `semantic_failure_is_sticky_while_processing_continues` and the
-// C-API test above to be `#[cfg(debug_assertions)]`-compiled-out there. The
-// disjunction is exactly the one `tripwire::Module::enabled()` itself uses; the
-// `tripwire-test` feature is off-by-default and reaches this crate only as a
-// downstream DEV-dependency feature, so production `set_pwd`/`set_title` are
-// unchanged.
-#[cfg(any(test, debug_assertions, feature = "tripwire-test"))]
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub enum SetStringFp {
-    Reserve,
-}
-
-#[cfg(any(test, debug_assertions, feature = "tripwire-test"))]
-thread_local! {
-    pub(crate) static SET_STRING_TW:
-        core::cell::RefCell<rustty_util::tripwire::Module<SetStringFp, OutOfMemory>> =
-        core::cell::RefCell::new(rustty_util::tripwire::module());
-}
-
-// `try setString_tw.check(point)`.
-#[cfg(any(test, debug_assertions, feature = "tripwire-test"))]
-#[inline]
-fn set_string_tw_check(point: SetStringFp) -> Result<(), OutOfMemory> {
-    SET_STRING_TW.with(|tw| tw.borrow_mut().check(point))
-}
-
-/// `setString_tw.errorAlways(point, error.OutOfMemory)` — cross-crate accessor.
-#[cfg(any(test, debug_assertions, feature = "tripwire-test"))]
-pub fn set_string_tw_error_always(point: SetStringFp) {
-    SET_STRING_TW.with(|tw| tw.borrow_mut().errorAlways(point, OutOfMemory));
-}
-
-/// `setString_tw.end(mode)` — cross-crate accessor.
-#[cfg(any(test, debug_assertions, feature = "tripwire-test"))]
-pub fn set_string_tw_end(
-    mode: rustty_util::tripwire::ResetMode,
-) -> Result<(), rustty_util::tripwire::UntrippedError> {
-    SET_STRING_TW.with(|tw| tw.borrow_mut().end(mode))
-}
+// PORT NOTE (parity tail S7-3): upstream's `setTitle`/`setPwd` allocation-
+// failure tests (fdd255c78, 1d5b6f90e) and the C-API `get vt_processing_error`
+// test (439d35e27) use `std.testing.FailingAllocator` / `failing_allocator`,
+// and so does the port now that `pwd`/`title` grow through `self.gpa()`. The
+// port-only `SetStringFp` tripwire stand-in that used to sit here is gone.
 
 // const resize_tw = tripwire.module(enum {
 //     tabstops,
@@ -7079,8 +7031,10 @@ pub fn set_string_tw_end(
 //     alternate_screen_init,
 // }, resize);
 //
-// PORT NOTE: same instance-vs-comptime-type idiom as `SET_STRING_TW` above; the
-// fail-point NAMES are the reference's verbatim. Distinct from
+// PORT NOTE: the Zig `tripwire.module(P, E)` is a comptime function returning a
+// type with type-static state; `rustty_util::tripwire::Module<P, E>` is an
+// INSTANCE, held here in a `thread_local!`. The fail-point NAMES are the
+// reference's verbatim. Distinct from
 // `tabstops::RESIZE_TW` (which injects inside `Tabstops::init`) and from
 // `screen::RESIZE_TW` (which injects inside `Screen::resize`).
 #[cfg(test)]
@@ -7148,79 +7102,36 @@ mod tests {
     use super::*;
     use crate::alloc::Global;
 
-    // Self-test for the terminal.rs tripwire seam introduced for the
-    // set_title/set_pwd allocation-failure tests (WS8 T5). Mirrors the
-    // tabstops.rs `RESIZE_TW` usage exactly.
-    #[test]
-    // WS18 release lane (CORRECTED — fix round 1 of parity S166-F2): the sentence
-    // that used to stand here, "`tripwire::Module::enabled()` is
-    // `cfg!(debug_assertions)`", is FALSE and had this test `#[ignore]`d in
-    // release for a reason that did not exist. `enabled()` is
-    // `cfg!(any(test, debug_assertions, feature = "tripwire-test"))`, and
-    // rustty-vt turns `rustty-util/tripwire-test` on as a dev-dependency feature
-    // precisely so this crate's fail points trip in the RELEASE test lane too —
-    // which is what Zig's `builtin.is_test` does at every optimize mode. Verified:
-    // this test RUNS and PASSES under `cargo test -p rustty-vt --release`.
-    // The P3-W5 repair that used to sit here gated the TEST out of release with
-    // `#[cfg(debug_assertions)]`, because the seam it drives (`SET_STRING_TW`,
-    // `SetStringFp`, `set_string_tw_*`) was itself `#[cfg(debug_assertions)]`
-    // and an `ignore` would still have to compile. That was treating the
-    // symptom: the seam's gate is now
-    // `cfg(any(test, debug_assertions, feature = "tripwire-test"))`, so both
-    // the seam and this test exist under `cargo test -p rustty-vt --release`.
-    fn terminal_set_string_tripwire_seam_arms_and_resets() {
-        SET_STRING_TW.with(|tw| {
-            tw.borrow_mut()
-                .errorAlways(SetStringFp::Reserve, OutOfMemory)
-        });
-        assert_eq!(Err(OutOfMemory), set_string_tw_check(SetStringFp::Reserve));
-        SET_STRING_TW.with(|tw| {
-            tw.borrow_mut()
-                .end(rustty_util::tripwire::ResetMode::Reset)
-                .unwrap()
-        });
-        assert_eq!(Ok(()), set_string_tw_check(SetStringFp::Reserve));
-    }
-
     // test "Terminal: setPwd preserves a sentinel on allocation failure"
     #[test]
-    // WS18 release lane (CORRECTED — fix round 1 of parity S166-F2): the sentence
-    // that used to stand here, "`tripwire::Module::enabled()` is
-    // `cfg!(debug_assertions)`", is FALSE and had this test `#[ignore]`d in
-    // release for a reason that did not exist. `enabled()` is
-    // `cfg!(any(test, debug_assertions, feature = "tripwire-test"))`, and
-    // rustty-vt turns `rustty-util/tripwire-test` on as a dev-dependency feature
-    // precisely so this crate's fail points trip in the RELEASE test lane too —
-    // which is what Zig's `builtin.is_test` does at every optimize mode. Verified:
-    // this test RUNS and PASSES under `cargo test -p rustty-vt --release`.
-    // The P3-W5 repair that used to sit here gated the TEST out of release with
-    // `#[cfg(debug_assertions)]`, because the seam it drives (`SET_STRING_TW`,
-    // `SetStringFp`, `set_string_tw_*`) was itself `#[cfg(debug_assertions)]`
-    // and an `ignore` would still have to compile. That was treating the
-    // symptom: the seam's gate is now
-    // `cfg(any(test, debug_assertions, feature = "tripwire-test"))`, so both
-    // the seam and this test exist under `cargo test -p rustty-vt --release`.
     fn terminal_set_pwd_preserves_a_sentinel_on_allocation_failure() {
-        let mut t = Terminal::init(Global, opts(5, 1)).unwrap();
+        // var failing = testing.FailingAllocator.init(testing.allocator, .{});
+        // const alloc = failing.allocator();
+        let failing = crate::alloc::testing::FailingAllocator::over_heap(
+            crate::alloc::testing::Config::default(),
+        );
+        let c = failing.allocator();
+        crate::alloc::testing::with_handle(&c, |alloc| {
+            let mut t = Terminal::init(alloc, opts(5, 1)).unwrap();
+            // defer t.deinit(alloc);
 
-        // PORT NOTE: the reference primes the list with
-        // `ensureTotalCapacityPrecise(alloc, 3)` and then fails the NEXT
-        // allocation via `FailingAllocator`. Here the injectable seam is the
-        // `Reserve` tripwire point (see the terminal.rs tripwire PORT NOTE).
-        SET_STRING_TW.with(|tw| {
-            tw.borrow_mut()
-                .errorAlways(SetStringFp::Reserve, OutOfMemory)
+            // try t.pwd.ensureTotalCapacityPrecise(alloc, 3);
+            t.pwd.ensure_total_capacity_precise(alloc, 3).unwrap();
+            // failing.fail_index = failing.alloc_index;
+            failing.fail_index.set(failing.alloc_index.get());
+            // PORT NOTE: the growth tries `remap` first. The reference's inner
+            // `testing.allocator` (DebugAllocator) cannot remap a 3-byte
+            // size-class slot to the grown capacity, so its remap is null and
+            // the growth reaches the failing `alloc`. This test's inner heap
+            // remaps with `realloc`, which may move, so the remap is refused
+            // here explicitly to reproduce that answer.
+            failing.resize_fail_index.set(failing.resize_index.get());
+            assert_eq!(Err(OutOfMemory), t.set_pwd(b"pwd"));
+            assert!(failing.has_induced_failure.get());
+            assert!(t.get_pwd().is_none());
+
+            t.deinit(alloc);
         });
-        assert_eq!(Err(OutOfMemory), t.set_pwd(b"pwd"));
-        SET_STRING_TW.with(|tw| {
-            tw.borrow_mut()
-                .end(rustty_util::tripwire::ResetMode::Reset)
-                .unwrap()
-        });
-
-        assert!(t.get_pwd().is_none());
-
-        t.deinit(Global);
     }
 
     // test "Terminal: setPwd accepts its current value"
@@ -7251,39 +7162,32 @@ mod tests {
 
     // test "Terminal: setTitle preserves a sentinel on allocation failure"
     #[test]
-    // WS18 release lane (CORRECTED — fix round 1 of parity S166-F2): the sentence
-    // that used to stand here, "`tripwire::Module::enabled()` is
-    // `cfg!(debug_assertions)`", is FALSE and had this test `#[ignore]`d in
-    // release for a reason that did not exist. `enabled()` is
-    // `cfg!(any(test, debug_assertions, feature = "tripwire-test"))`, and
-    // rustty-vt turns `rustty-util/tripwire-test` on as a dev-dependency feature
-    // precisely so this crate's fail points trip in the RELEASE test lane too —
-    // which is what Zig's `builtin.is_test` does at every optimize mode. Verified:
-    // this test RUNS and PASSES under `cargo test -p rustty-vt --release`.
-    // The P3-W5 repair that used to sit here gated the TEST out of release with
-    // `#[cfg(debug_assertions)]`, because the seam it drives (`SET_STRING_TW`,
-    // `SetStringFp`, `set_string_tw_*`) was itself `#[cfg(debug_assertions)]`
-    // and an `ignore` would still have to compile. That was treating the
-    // symptom: the seam's gate is now
-    // `cfg(any(test, debug_assertions, feature = "tripwire-test"))`, so both
-    // the seam and this test exist under `cargo test -p rustty-vt --release`.
     fn terminal_set_title_preserves_a_sentinel_on_allocation_failure() {
-        let mut t = Terminal::init(Global, opts(5, 1)).unwrap();
+        let failing = crate::alloc::testing::FailingAllocator::over_heap(
+            crate::alloc::testing::Config::default(),
+        );
+        let c = failing.allocator();
+        crate::alloc::testing::with_handle(&c, |alloc| {
+            let mut t = Terminal::init(alloc, opts(5, 1)).unwrap();
+            // defer t.deinit(alloc);
 
-        SET_STRING_TW.with(|tw| {
-            tw.borrow_mut()
-                .errorAlways(SetStringFp::Reserve, OutOfMemory)
+            // try t.title.ensureTotalCapacityPrecise(alloc, 5);
+            t.title.ensure_total_capacity_precise(alloc, 5).unwrap();
+            // failing.fail_index = failing.alloc_index;
+            failing.fail_index.set(failing.alloc_index.get());
+            // PORT NOTE: the growth tries `remap` first. The reference's inner
+            // `testing.allocator` (DebugAllocator) cannot remap a 5-byte
+            // size-class slot to the grown capacity, so its remap is null and
+            // the growth reaches the failing `alloc`. This test's inner heap
+            // remaps with `realloc`, which may move, so the remap is refused
+            // here explicitly to reproduce that answer.
+            failing.resize_fail_index.set(failing.resize_index.get());
+            assert_eq!(Err(OutOfMemory), t.set_title(b"title"));
+            assert!(failing.has_induced_failure.get());
+            assert!(t.get_title().is_none());
+
+            t.deinit(alloc);
         });
-        assert_eq!(Err(OutOfMemory), t.set_title(b"title"));
-        SET_STRING_TW.with(|tw| {
-            tw.borrow_mut()
-                .end(rustty_util::tripwire::ResetMode::Reset)
-                .unwrap()
-        });
-
-        assert!(t.get_title().is_none());
-
-        t.deinit(Global);
     }
 
     // test "Terminal: setTitle accepts its current value"
@@ -19283,44 +19187,43 @@ mod tests {
 
     // test "Terminal: resize preserves tabstops on allocation failure"
     #[test]
-    // WS18 release lane (CORRECTED — fix round 1 of parity S166-F2): the sentence
-    // that used to stand here, "`tripwire::Module::enabled()` is
-    // `cfg!(debug_assertions)`", is FALSE and had this test `#[ignore]`d in
-    // release for a reason that did not exist. `enabled()` is
-    // `cfg!(any(test, debug_assertions, feature = "tripwire-test"))`, and
-    // rustty-vt turns `rustty-util/tripwire-test` on as a dev-dependency feature
-    // precisely so this crate's fail points trip in the RELEASE test lane too —
-    // which is what Zig's `builtin.is_test` does at every optimize mode. Verified:
-    // this test RUNS and PASSES under `cargo test -p rustty-vt --release`.
     fn terminal_resize_preserves_tabstops_on_allocation_failure() {
-        let alloc = Global;
-        let mut t = Terminal::init(alloc, opts(10, 1)).unwrap();
-
-        // PORT NOTE: the reference swaps in a `testing.FailingAllocator`. This
-        // port's seam is the `Tabstops::resize` tripwire, whose only fail point
-        // (`DynamicAlloc`) sits exactly at the dynamic-stops allocation that
-        // `Tabstops::init` reaches from `Terminal::resize`. 513 columns is past
-        // `PREALLOC_COLUMNS`, so the allocation IS attempted.
-        crate::tabstops::resize_tw_error_always(crate::tabstops::ResizeFp::DynamicAlloc);
-        assert_eq!(
-            Err(ResizeError::OutOfMemory),
-            t.resize(
-                alloc,
-                Resize {
-                    cols: 513,
-                    rows: 1,
-                    cell_size_px: None
-                }
-            )
+        // var failing = testing.FailingAllocator.init(testing.allocator, .{});
+        // const alloc = failing.allocator();
+        //
+        // Ported as written (parity tail S7-3; a `Tabstops` tripwire stood in
+        // while the stops lived on the Rust heap). 513 columns is past
+        // `PREALLOC_COLUMNS`, so the dynamic-stops allocation IS attempted.
+        let failing = crate::alloc::testing::FailingAllocator::over_heap(
+            crate::alloc::testing::Config::default(),
         );
-        crate::tabstops::resize_tw_end(rustty_util::tripwire::ResetMode::Reset).unwrap();
+        let c = failing.allocator();
+        crate::alloc::testing::with_handle(&c, |alloc| {
+            let mut t = Terminal::init(alloc, opts(10, 1)).unwrap();
+            // defer t.deinit(alloc);
 
-        // The original Tabstops was never replaced: cols is unchanged and the
-        // original interval-8 stop is still present.
-        assert_eq!(10 as size::CellCountInt, t.cols);
-        assert!(t.tabstops.get(8));
+            // failing.fail_index = failing.alloc_index;
+            failing.fail_index.set(failing.alloc_index.get());
+            assert_eq!(
+                Err(ResizeError::OutOfMemory),
+                t.resize(
+                    alloc,
+                    Resize {
+                        cols: 513,
+                        rows: 1,
+                        cell_size_px: None
+                    }
+                )
+            );
+            assert!(failing.has_induced_failure.get());
 
-        t.deinit(alloc);
+            // The original Tabstops was never replaced: cols is unchanged and the
+            // original interval-8 stop is still present.
+            assert_eq!(10 as size::CellCountInt, t.cols);
+            assert!(t.tabstops.get(8));
+
+            t.deinit(alloc);
+        });
     }
 
     // test "Terminal: resize failure paths preserve consistent state"
@@ -23253,5 +23156,88 @@ mod tests {
         assert!(o.y_found, "'Y' is present");
         assert!(!o.y_degraded, "'Y' keeps its new style");
         assert!(o.logs.is_empty(), "no degrade: {:?}", o.logs);
+    }
+
+    // Parity tail S7-3 routing evidence (Rust-only; the reference routes by
+    // construction): the terminal-owned containers in S7-3's scope reach the
+    // terminal's allocator — the tabstops' dynamic stops (> 512 columns) and
+    // the pwd/title lists (grown through `gpa()`) — and `deinit` returns every
+    // byte. (The screens and PageLists are covered by the Screen and PageList
+    // routing tests; the glyph glossary map by glossary.rs's.)
+    #[test]
+    fn terminal_internals_route_through_the_allocator_handle() {
+        use crate::alloc::testing::{with_handle, CountingAllocator};
+        use crate::alloc::ArrayListUnmanaged;
+
+        let counting = CountingAllocator::over_heap();
+        let c = counting.allocator();
+        with_handle(&c, |alloc| {
+            // Baseline: 80 columns fit the preallocated tabstops.
+            let mut t = Terminal::init(alloc, opts(80, 5)).unwrap();
+            let base_calls = counting.alloc_calls.get();
+            let base_live = counting.live_bytes.get();
+            t.deinit(alloc);
+            drop(t);
+            assert_eq!(0, counting.live_bytes.get());
+
+            // 600 columns: exactly one more allocation, the dynamic stops
+            // (`divCeil(600 - 512, 8)` = 11 bytes).
+            let before = counting.alloc_calls.get();
+            let mut t = Terminal::init(alloc, opts(600, 5)).unwrap();
+            assert_eq!(
+                base_calls + 1,
+                counting.alloc_calls.get() - before,
+                "Tabstops.init(alloc, 600, ...) grows its dynamic stops through alloc"
+            );
+            assert_eq!(base_live + 11, counting.live_bytes.get());
+
+            // pwd/title: `ensureTotalCapacity(self.gpa(), len + 1)`, rounded up
+            // by `growCapacity`.
+            let live = counting.live_bytes.get();
+            t.set_pwd(b"/tmp").unwrap();
+            assert_eq!(
+                Some((ArrayListUnmanaged::<u8>::grow_capacity(5), 0)),
+                counting.last_alloc.get(),
+                "setPwd grows through gpa()"
+            );
+            t.set_title(b"title").unwrap();
+            assert_eq!(
+                Some((ArrayListUnmanaged::<u8>::grow_capacity(6), 0)),
+                counting.last_alloc.get(),
+                "setTitle grows through gpa()"
+            );
+            assert_eq!(
+                live + ArrayListUnmanaged::<u8>::grow_capacity(5)
+                    + ArrayListUnmanaged::<u8>::grow_capacity(6),
+                counting.live_bytes.get()
+            );
+
+            t.deinit(alloc);
+        });
+        assert_eq!(0, counting.live_bytes.get(), "deinit returns every byte");
+    }
+
+    // Parity tail S7-3b (review F5, Rust-only): the glossary is bound to the
+    // terminal's allocator at `init`; the reference grows it through the
+    // per-call `alloc` of `glyphProtocol`, so a different allocator there is a
+    // caller bug the port now reports instead of silently ignoring.
+    #[test]
+    #[cfg_attr(
+        not(debug_assertions),
+        ignore = "debug_assert_same is a debug-build check (R14)"
+    )]
+    #[should_panic(expected = "allocator mismatch")]
+    fn glyph_protocol_checks_the_glossary_allocator() {
+        use crate::alloc::testing::{with_handle, CountingAllocator};
+
+        let counting = CountingAllocator::over_heap();
+        let c = counting.allocator();
+        with_handle(&c, |alloc| {
+            let mut t = Terminal::init(alloc, opts(10, 2)).unwrap();
+            // The matching allocator is accepted...
+            let _ = t.glyph_protocol(alloc, &glyph::Request::Support);
+            // ...a different one is not.
+            let _ = t.glyph_protocol(Global, &glyph::Request::Support);
+        });
     }
 }

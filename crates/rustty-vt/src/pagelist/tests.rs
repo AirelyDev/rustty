@@ -30,6 +30,7 @@ use super::{
     std_capacity, std_size, IntegrityError, Key, Limits, NodeData, Options, OutOfMemory, Owned,
     PageList, Pin, PreservedPage, Storage, Viewport,
 };
+use crate::alloc::testing::{with_handle, Config as FailingConfig, FailingAllocator};
 use crate::alloc::Global;
 use crate::page::{Capacity, Cell, CellRgb, ContentTag, Page, SemanticContent, SemanticPrompt};
 use crate::style::{self as stylepkg, Style};
@@ -3221,10 +3222,14 @@ fn pagelist_node_restore_preserve_recovers_the_same_mapping() {
 
         let mut scratch = vec![0u8; crate::compress::required_scratch(len).unwrap()];
         let mut table: crate::compress::lz4::HashTable = [0; crate::compress::lz4::HASH_TABLE_LEN];
-        let compressed =
-            crate::compress::CompressedPage::init(page as *const Page, &mut scratch, &mut table)
-                .unwrap()
-                .unwrap();
+        let compressed = crate::compress::CompressedPage::init(
+            Global,
+            page as *const Page,
+            &mut scratch,
+            &mut table,
+        )
+        .unwrap()
+        .unwrap();
 
         // Model a successful decommit, then publish the compressed state.
         core::ptr::write_bytes(ptr, 0, len);
@@ -3261,14 +3266,18 @@ fn pagelist_page_preserving_state_leaves_a_compressed_node_compressed() {
 
         let mut scratch = vec![0u8; crate::compress::required_scratch(len).unwrap()];
         let mut table: crate::compress::lz4::HashTable = [0; crate::compress::lz4::HASH_TABLE_LEN];
-        let compressed =
-            crate::compress::CompressedPage::init(page as *const Page, &mut scratch, &mut table)
-                .unwrap()
-                .unwrap();
+        let compressed = crate::compress::CompressedPage::init(
+            Global,
+            page as *const Page,
+            &mut scratch,
+            &mut table,
+        )
+        .unwrap()
+        .unwrap();
         core::ptr::write_bytes(ptr, 0, len);
         (*node).data = NodeData::Compressed(compressed);
 
-        let mut preserved = super::Node::page_preserving_state(node).unwrap();
+        let mut preserved = super::Node::page_preserving_state(node, Global).unwrap();
         let p = preserved.page();
         assert_ne!((*p).memory_ptr(), ptr as *const u8);
         assert_eq!(
@@ -3312,10 +3321,14 @@ fn pagelist_page_preserving_state_logs_and_panics_on_decode_failure() {
         let len = (*page).memory_len();
         let mut scratch = vec![0u8; crate::compress::required_scratch(len).unwrap()];
         let mut table: crate::compress::lz4::HashTable = [0; crate::compress::lz4::HASH_TABLE_LEN];
-        let compressed =
-            crate::compress::CompressedPage::init(page as *const Page, &mut scratch, &mut table)
-                .unwrap()
-                .unwrap();
+        let compressed = crate::compress::CompressedPage::init(
+            Global,
+            page as *const Page,
+            &mut scratch,
+            &mut table,
+        )
+        .unwrap()
+        .unwrap();
         (*node).data = NodeData::Compressed(compressed);
     }
     compressed_encoded_fill_for_test(node, 0xFF);
@@ -3323,7 +3336,7 @@ fn pagelist_page_preserving_state_logs_and_panics_on_decode_failure() {
     let cap = crate::log_capture::start();
     let node_addr = node as usize;
     let result = std::panic::catch_unwind(move || unsafe {
-        super::Node::page_preserving_state(node_addr as *const super::Node)
+        super::Node::page_preserving_state(node_addr as *const super::Node, Global)
     });
     assert!(result.is_err(), "expected the corrupted decode to panic");
     let messages = cap.messages();
@@ -3364,10 +3377,14 @@ fn pagelist_node_page_logs_and_panics_on_restore_decode_failure() {
         let len = (*page).memory_len();
         let mut scratch = vec![0u8; crate::compress::required_scratch(len).unwrap()];
         let mut table: crate::compress::lz4::HashTable = [0; crate::compress::lz4::HASH_TABLE_LEN];
-        let compressed =
-            crate::compress::CompressedPage::init(page as *const Page, &mut scratch, &mut table)
-                .unwrap()
-                .unwrap();
+        let compressed = crate::compress::CompressedPage::init(
+            Global,
+            page as *const Page,
+            &mut scratch,
+            &mut table,
+        )
+        .unwrap()
+        .unwrap();
         (*node).data = NodeData::Compressed(compressed);
     }
     compressed_encoded_fill_for_test(node, 0xFF);
@@ -3406,23 +3423,18 @@ fn compressed_encoded_for_test(node: *const super::Node) -> Vec<u8> {
     unsafe {
         let data = core::ptr::addr_of!((*node).data);
         assert_eq!(NodeData::tag(data), NodeData::TAG_COMPRESSED);
-        (*NodeData::compressed_payload(data)).encoded.clone()
+        (*NodeData::compressed_payload(data)).encoded.to_vec()
     }
 }
 
 /// PORTS: oracle@main PageList.zig `test "PageList preserved page keeps
 /// compressed storage"` (9156ada16).
 ///
-/// PORT NOTE (revised by F-015): the reference brackets `pagePreservingState`
-/// with two `testing.FailingAllocator` arms — one proving the RESIDENT case
-/// never allocates, one proving that a failed decode allocation leaves the node
-/// and its stats untouched. rustty's `page_preserving_state` takes no allocator
-/// (the decode buffer comes from the global allocator), so BOTH arms are ported
-/// against a `PagePreservingStateFp::Buffer` tripwire fail point standing in for
-/// the failing allocator. The first arm additionally survives structurally: the
-/// resident case returns `PreservedPage::Borrowed` pointing at the live page, a
-/// variant that owns no buffer and therefore cannot have allocated or copied
-/// anything.
+/// The reference brackets `pagePreservingState` with two
+/// `testing.FailingAllocator` arms — one proving the RESIDENT case never
+/// allocates, one proving that a failed decode allocation leaves the node and
+/// its stats untouched. Both are ported as written (parity tail S7-3: the
+/// function takes the reference's `alloc`; this replaced a tripwire stand-in).
 #[cfg_attr(
     miri,
     ignore = "MIRI EXCEPTION (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): TIMEOUT in BOTH Miri lanes — the cost is page-mapping/LZ4 volume, not assertion overhead, so the debug-assertions-off G6c lane does not rescue it either. Covered natively + by ASan."
@@ -3440,24 +3452,27 @@ fn pagelist_preserved_page_keeps_compressed_storage() {
 
     // Resident nodes can be borrowed without allocating an unnecessary copy.
     {
-        // The reference arms the FailingAllocator's very first request here and
-        // asserts `!failing.has_induced_failure` afterwards. The port's
-        // equivalent is the `Buffer` fail point: arming it and still getting
-        // `Ok` proves the resident arm never reached the allocation at all.
-        super::PAGE_PRESERVING_STATE_TW.with(|tw| {
-            tw.borrow_mut()
-                .errorAlways(super::PagePreservingStateFp::Buffer, OutOfMemory)
+        // var failing = testing.FailingAllocator.init(alloc, .{
+        //     .fail_index = 0,
+        // });
+        let failing = FailingAllocator::over_heap(FailingConfig {
+            fail_index: 0,
+            ..FailingConfig::default()
         });
-        let mut preserved = unsafe { super::Node::page_preserving_state(node) }
-            .expect("a resident page must not allocate");
-        match preserved {
-            PreservedPage::Borrowed(p) => assert_eq!(p, resident as *const Page),
-            PreservedPage::Owned { .. } => panic!("a resident page must be borrowed, not copied"),
-        }
-        preserved.deinit();
-        // `end` would report the expectation as untripped, which is precisely
-        // what this arm asserts, so clear it with `reset` instead.
-        super::PAGE_PRESERVING_STATE_TW.with(|tw| tw.borrow_mut().reset());
+        let c = failing.allocator();
+        with_handle(&c, |failing_alloc| {
+            let mut preserved = unsafe { super::Node::page_preserving_state(node, failing_alloc) }
+                .expect("a resident page must not allocate");
+            // defer preserved.deinit();
+            match preserved {
+                PreservedPage::Borrowed(p) => assert_eq!(p, resident as *const Page),
+                PreservedPage::Owned { .. } => {
+                    panic!("a resident page must be borrowed, not copied")
+                }
+            }
+            preserved.deinit();
+        });
+        assert!(!failing.has_induced_failure.get());
     }
 
     let (retained_ptr, memory_len, expected) = unsafe {
@@ -3480,35 +3495,28 @@ fn pagelist_preserved_page_keeps_compressed_storage() {
 
     // Preserved-page allocation is opportunistic for callers. Failure leaves
     // the node and its compressed representation untouched.
-    //
-    // WS18 release lane: this arm injects a failure through a
-    // `rustty_util::tripwire` fail point, and `tripwire::Module::enabled()` is
-    // `cfg!(debug_assertions)`. Without `debug_assertions` the fail point never
-    // trips, so only this ARM is compiled out; the rest of the test still runs.
-    #[cfg(debug_assertions)]
     {
-        super::PAGE_PRESERVING_STATE_TW.with(|tw| {
-            tw.borrow_mut()
-                .errorAlways(super::PagePreservingStateFp::Buffer, OutOfMemory)
+        let failing = FailingAllocator::over_heap(FailingConfig {
+            fail_index: 0,
+            ..FailingConfig::default()
         });
-        match unsafe { super::Node::page_preserving_state(node) } {
-            Err(OutOfMemory) => {}
-            Ok(mut p) => {
-                p.deinit();
-                panic!("a failed decode-buffer allocation must be reported");
+        let c = failing.allocator();
+        with_handle(&c, |failing_alloc| {
+            match unsafe { super::Node::page_preserving_state(node, failing_alloc) } {
+                Err(OutOfMemory) => {}
+                Ok(mut p) => {
+                    p.deinit();
+                    panic!("a failed decode-buffer allocation must be reported");
+                }
             }
-        }
-        super::PAGE_PRESERVING_STATE_TW.with(|tw| {
-            tw.borrow_mut()
-                .end(rustty_util::tripwire::ResetMode::Reset)
-                .unwrap()
         });
+        assert!(failing.has_induced_failure.get());
         assert_eq!(unsafe { super::Node::storage(node) }, Storage::Compressed);
         assert_eq!(stats, s.memory_stats());
         assert_eq!(expected_encoded, compressed_encoded_for_test(node));
     }
 
-    let mut preserved = unsafe { super::Node::page_preserving_state(node) }.unwrap();
+    let mut preserved = unsafe { super::Node::page_preserving_state(node, Global) }.unwrap();
     match preserved {
         PreservedPage::Borrowed(_) => {
             panic!("a compressed page must be decoded into an owned copy")
@@ -4450,52 +4458,41 @@ fn pagelist_oversized_page_is_heap_owned() {
 /// PORTS: oracle@main PageList.zig
 /// `test "PageList incremental compression advances after allocation failure"`.
 ///
-/// PORT NOTE (F-015): the oracle wraps the whole PageList in a
-/// `testing.FailingAllocator` and fails the allocator's very next request,
-/// which lands on `compressPage`'s exact-sized encoded allocation. rustty's
-/// encoded buffer is a `Vec<u8>` on the global allocator, so the failing
-/// allocator is replaced by the `compress::page::InitFp::Encoded` tripwire fail
-/// point, which sits immediately before the same fallible allocation (now a
-/// `try_reserve_exact` rather than an aborting `to_vec`). This test was
-/// previously recorded as NOT PORTED on the grounds that the branch could not
-/// occur; the branch now exists, and this is its proof.
-///
-/// The `has_induced_failure` assertion is spelled as `end(.reset)`: it fails
-/// unless the fail point actually tripped.
-///
-/// PORT NOTE (WS7 B10 convention): tripwire injection is compiled out when
-/// `debug_assertions` is off, so this test is ignored under `--release` rather
-/// than left to fail.
+/// Ported as written (parity tail S7-3): the PageList runs over a
+/// `FailingAllocator` and the allocator's very next request, `compressPage`'s
+/// exact-sized encoded allocation, is failed. (This replaced a tripwire
+/// stand-in used while the encoding lived on the Rust heap.)
 #[test]
 fn pagelist_incremental_compression_advances_after_allocation_failure() {
-    use rustty_util::tripwire::ResetMode;
+    // var failing = testing.FailingAllocator.init(testing.allocator, .{});
+    // const alloc = failing.allocator();
+    let failing = FailingAllocator::over_heap(FailingConfig::default());
+    let c = failing.allocator();
+    with_handle(&c, |alloc| {
+        let mut s = PageList::init(alloc, Options::new(80, 24)).unwrap();
+        // defer s.deinit();
+        grow_cold_pages_for_test(&mut s, 2);
+        let first = s.pages.first;
+        let second = unsafe { (*first).next };
 
-    let mut s = PageList::init(Global, Options::new(80, 24)).unwrap();
-    grow_cold_pages_for_test(&mut s, 2);
-    let first = s.pages.first;
-    let second = unsafe { (*first).next };
+        // Pool preheating supplies compression scratch. Failing the allocator's
+        // next request therefore rejects the exact encoded allocation while the
+        // source page and pass remain valid.
+        failing.fail_index.set(failing.alloc_index.get());
+        let failed = s.compress(CompressionMode::Incremental);
+        assert!(failing.has_induced_failure.get());
+        assert_eq!(IncrementalCompressionResult::Pending, failed);
+        assert!(!unsafe { super::Node::is_compressed(first) });
 
-    // Pool preheating supplies compression scratch. Failing the allocator's
-    // next request therefore rejects the exact encoded allocation while the
-    // source page and pass remain valid.
-    crate::compress::page::INIT_TW.with(|tw| {
-        tw.borrow_mut().errorAlways(
-            crate::compress::page::InitFp::Encoded,
-            crate::compress::InitError::OutOfMemory,
-        )
+        // Allow allocations again. The pass must continue with the following page
+        // rather than retrying the failed candidate.
+        failing.fail_index.set(usize::MAX);
+        let continued = s.compress(CompressionMode::Incremental);
+        assert_eq!(IncrementalCompressionResult::Pending, continued);
+        assert!(unsafe { super::Node::is_compressed(second) });
+
+        s.deinit();
     });
-    let failed = s.compress(CompressionMode::Incremental);
-    assert_eq!(IncrementalCompressionResult::Pending, failed);
-    assert!(!unsafe { super::Node::is_compressed(first) });
-
-    // Allow allocations again. The pass must continue with the following page
-    // rather than retrying the failed candidate.
-    crate::compress::page::INIT_TW.with(|tw| tw.borrow_mut().end(ResetMode::Reset).unwrap());
-    let continued = s.compress(CompressionMode::Incremental);
-    assert_eq!(IncrementalCompressionResult::Pending, continued);
-    assert!(unsafe { super::Node::is_compressed(second) });
-
-    s.deinit();
 }
 
 /// PORTS: oracle@main PageList.zig
@@ -17776,50 +17773,44 @@ fn pagelist_builder_validates_the_finished_list() {
 }
 
 // ref: test "PageList Builder finish is transactional on allocation failure"
+//
+// Ported as written (parity tail S7-3): the builder runs over a
+// `FailingAllocator`. (This replaced a port-only tripwire stand-in.)
 #[test]
-// PORT NOTE: the reference wraps the builder in a `testing.FailingAllocator`
-// and fails the allocator's next request; the Rust pools are infallible, so
-// the same failure is injected through the `FINISH_TW` tripwire fail point at
-// the same allocation site (see the builder.rs module PORT NOTE). Tripwire
-// injection is compiled out without `debug_assertions`, so the test is inert
-// under `--release` and ignored there — same convention as
-// `pagelist_init_error`. NOT disabled to hide a failure.
 fn pagelist_builder_finish_is_transactional_on_allocation_failure() {
-    use super::builder::{FinishError, FinishFp, FINISH_TW};
-    use super::{Builder, OutOfMemory};
-    use rustty_util::tripwire::ResetMode;
+    use super::builder::FinishError;
+    use super::Builder;
 
     // Construct a valid builder so finish reaches its fallible bookkeeping
     // allocations after all page and geometry validation succeeds.
-    let mut builder = Builder::init(Global, Options::new(1, 1)).unwrap();
-    // defer builder.deinit();
-    let page = builder
-        .allocate_page(Capacity {
-            cols: 1,
-            rows: 1,
-            ..Capacity::default()
-        })
-        .unwrap();
-    unsafe { (*page).size.rows = 1 };
+    // var failing = testing.FailingAllocator.init(testing.allocator, .{});
+    let failing = FailingAllocator::over_heap(FailingConfig::default());
+    let c = failing.allocator();
+    with_handle(&c, |alloc| {
+        let mut builder = Builder::init(alloc, Options::new(1, 1)).unwrap();
+        // defer builder.deinit();
+        let page = builder
+            .allocate_page(Capacity {
+                cols: 1,
+                rows: 1,
+                ..Capacity::default()
+            })
+            .unwrap();
+        unsafe { (*page).size.rows = 1 };
 
-    // The pools are preheated, so the next general allocation is the tracked
-    // viewport pin map created by finish.
-    // (failing.fail_index = failing.alloc_index;)
-    FINISH_TW.with(|tw| {
-        tw.borrow_mut()
-            .errorAlways(FinishFp::ViewportPinTrack, OutOfMemory)
+        // The pools are preheated, so the next general allocation is the tracked
+        // viewport pin map created by finish.
+        failing.fail_index.set(failing.alloc_index.get());
+        assert!(matches!(builder.finish(), Err(FinishError::OutOfMemory)));
+        assert!(failing.has_induced_failure.get());
+
+        // Failed finish leaves page ownership with the builder so its normal
+        // deinit path can release the still-linked page.
+        assert!(!builder.pages.first.is_null());
+        assert_eq!(builder.pages.first, builder.pages.last);
+
+        builder.deinit();
     });
-    assert!(matches!(builder.finish(), Err(FinishError::OutOfMemory)));
-    // try testing.expect(failing.has_induced_failure); — `end` errors if the
-    // armed expectation never tripped.
-    FINISH_TW.with(|tw| tw.borrow_mut().end(ResetMode::Reset).unwrap());
-
-    // Failed finish leaves page ownership with the builder so its normal
-    // deinit path can release the still-linked page.
-    assert!(!builder.pages.first.is_null());
-    assert_eq!(builder.pages.first, builder.pages.last);
-
-    builder.deinit();
 }
 
 // ref: test "PageList PageAllocation finalizes pages and preserves live state"
@@ -18117,23 +18108,21 @@ fn pagelist_page_allocation_rejects_limits_before_modifying_the_destination() {
 
 // ref: test "PageList PageAllocation allocation failure leaves list unchanged"
 #[test]
-// PORT NOTE: the reference wraps the whole PageList in a
-// `testing.FailingAllocator` and fails the allocator's next request, which
-// lands on node-pool growth once the preheated slots run out; the Rust pools
-// are infallible, so the same failure is injected through the
-// `ALLOCATE_PAGE_TW` tripwire fail point above the transitive `createPageExt`
-// call (see the builder.rs module PORT NOTE), armed to let `PAGE_PREHEAT`
-// allocations succeed first — the pool-capacity implementation detail the
-// reference deliberately tolerates with its 64-iteration bound. Ignored
-// without `debug_assertions` (tripwire compiled out), same convention as
-// `pagelist_init_error`.
+//
+// Ported as written (parity tail S7-3): the PageList runs over a
+// `FailingAllocator` and the allocator's next request, node-pool growth once
+// the preheated slots run out, fails. (This replaced a port-only tripwire
+// stand-in.)
 fn pagelist_page_allocation_allocation_failure_leaves_list_unchanged() {
-    use super::builder::{AllocatePageFp, ALLOCATE_PAGE_TW};
-    use super::{OutOfMemory, PageAllocation, PAGE_PREHEAT};
-    use rustty_util::tripwire::ResetMode;
+    use super::{OutOfMemory, PageAllocation};
 
+    // var failing = testing.FailingAllocator.init(testing.allocator, .{});
+    let failing = FailingAllocator::over_heap(FailingConfig::default());
+    let c = failing.allocator();
+    // SAFETY: `c` and `failing` outlive `result`, which is deinited below.
+    let alloc = unsafe { crate::alloc::VtAllocator::from_c(core::ptr::NonNull::from(&c)) };
     let mut result = PageList::init(
-        Global,
+        alloc,
         Options {
             cols: 1,
             rows: 1,
@@ -18150,11 +18139,7 @@ fn pagelist_page_allocation_allocation_failure_leaves_list_unchanged() {
 
     // Existing pool capacity is deliberately an implementation detail. Allow
     // preheated slots to succeed until allocation reaches node-pool growth.
-    // (failing.fail_index = failing.alloc_index;)
-    ALLOCATE_PAGE_TW.with(|tw| {
-        tw.borrow_mut()
-            .errorAfter(AllocatePageFp::PageNode, OutOfMemory, PAGE_PREHEAT)
-    });
+    failing.fail_index.set(failing.alloc_index.get());
 
     // var allocations: [64]PageAllocation = undefined;
     // var allocation_count: usize = 0;
@@ -18187,9 +18172,7 @@ fn pagelist_page_allocation_allocation_failure_leaves_list_unchanged() {
         }
     }
     assert!(failed);
-    // try testing.expect(failing.has_induced_failure); — `end` errors if the
-    // armed expectation never tripped.
-    ALLOCATE_PAGE_TW.with(|tw| tw.borrow_mut().end(ResetMode::Reset).unwrap());
+    assert!(failing.has_induced_failure.get());
 
     // Detached allocations and failed pool growth never publish into the live
     // list; the deferred cleanup returns every successful allocation.
@@ -18965,4 +18948,123 @@ fn pagelist_diagram_writes_replacement_for_unencodable_codepoints() {
     s.diagram(&mut out).unwrap();
     assert!(out.contains("A\u{FFFD}\u{FFFD}"), "{out}");
     s.deinit();
+}
+
+// Parity tail S7-3 routing evidence (Rust-only; the reference has no unit test
+// for this, its routing is by construction): every PageList allocation the
+// reference makes through `alloc` (the node and pin pools, every tracked-pin
+// set, the compressed-page encoding, `pagePreservingState`'s buffer, the clone's
+// pools and pin remap) reaches the caller's allocator, and page memory does
+// not (it stays on the page allocator). `deinit` returns every byte.
+#[test]
+fn pagelist_internals_route_through_the_allocator_handle() {
+    use crate::alloc::testing::{with_handle, CountingAllocator};
+
+    let counting = CountingAllocator::over_heap();
+    let c = counting.allocator();
+    with_handle(&c, |alloc| {
+        // init: the node pool's preheated arena, the pin pool's preheated
+        // arena and the tracked-pin set (entries array + index).
+        //
+        // The pools alone: the node pool arena (2 chunks for `PAGE_PREHEAT`
+        // nodes) and the pin pool arena (2 chunks for its 8 pins), all
+        // returned when the pools are dropped (`MemoryPool.deinit`).
+        {
+            let pool =
+                super::MemoryPool::init(alloc, super::page_backing_alloc(), super::PAGE_PREHEAT)
+                    .unwrap();
+            assert_eq!(4, counting.alloc_calls.get(), "node + pin pool arenas");
+            drop(pool);
+            assert_eq!(0, counting.live_bytes.get());
+        }
+        let pools = counting.alloc_calls.get();
+        let mut s = PageList::init(alloc, Options::new(80, 24)).unwrap();
+        assert_eq!(
+            pools + 4 + 2,
+            counting.alloc_calls.get(),
+            "PageList.init: the pools (4) plus the tracked-pin set (entries + index)"
+        );
+        // Page memory is NOT routed: the caller's allocator holds far less than
+        // one standard page.
+        assert!(
+            counting.live_bytes.get() < super::std_size(),
+            "page memory reached the caller's allocator ({} live bytes)",
+            counting.live_bytes.get()
+        );
+
+        // track/untrack: a tracked pin comes from the (preheated) pin pool and
+        // the set already has room, so this makes no new caller allocation;
+        // the pin is returned to the pool on untrack.
+        let p = s
+            .track_pin(
+                s.pin(point::Point::Active(point::Coordinate { x: 0, y: 0 }))
+                    .unwrap(),
+            )
+            .unwrap();
+        s.untrack_pin(p);
+
+        // Compression: the exact-sized encoding is allocated through `alloc`.
+        grow_cold_pages_for_test(&mut s, 1);
+        let before = counting.alloc_calls.get();
+        let first = s.pages.first;
+        assert!(s.compress_page(first));
+        let encoded_len = compressed_encoded_for_test(first).len();
+        assert_eq!(
+            before + 1,
+            counting.alloc_calls.get(),
+            "one exact-sized encoding"
+        );
+        assert_eq!(Some((encoded_len, 0)), counting.last_alloc.get());
+
+        // pagePreservingState(alloc): one page-aligned decode buffer, freed by
+        // `deinit` through the same allocator.
+        let before = counting.alloc_calls.get();
+        let mut preserved = unsafe { super::Node::page_preserving_state(first, alloc) }.unwrap();
+        assert_eq!(before + 1, counting.alloc_calls.get());
+        let (len, align_log2) = counting.last_alloc.get().unwrap();
+        assert_eq!(1usize << align_log2, crate::page::PAGE_SIZE_MIN);
+        preserved.deinit();
+        assert_eq!(Some((len, align_log2)), counting.last_free.get());
+
+        // clone(alloc): the clone's pools (sized to its page count) and its
+        // tracked-pin set. First without a pin remap, as the baseline...
+        let before = counting.alloc_calls.get();
+        let mut plain = super::access::Clone {
+            top: point::Point::Screen(point::Coordinate { x: 0, y: 0 }),
+            bot: None,
+            tracked_pins: None,
+        };
+        let mut baseline = s.clone(alloc, &mut plain).unwrap();
+        let clone_calls = counting.alloc_calls.get() - before;
+        assert_eq!(
+            4 + 2,
+            clone_calls,
+            "the clone's pools (4) and tracked-pin set (entries + index)"
+        );
+        baseline.deinit();
+
+        // ...then with one: exactly one more allocation, the remap map's
+        // table (`TrackedPinsRemap.init(alloc)`, grown by `putNoClobber`). The
+        // remapped viewport pin fits the clone's pin set as built.
+        let before = counting.alloc_calls.get();
+        let mut opts = super::access::Clone {
+            top: point::Point::Screen(point::Coordinate { x: 0, y: 0 }),
+            bot: None,
+            tracked_pins: Some(super::access::TrackedPinsRemap::with_hasher_in(
+                Default::default(),
+                alloc,
+            )),
+        };
+        let mut cloned = s.clone(alloc, &mut opts).unwrap();
+        assert_eq!(
+            clone_calls + 1,
+            counting.alloc_calls.get() - before,
+            "the pin remap allocates through alloc"
+        );
+        drop(opts);
+        cloned.deinit();
+
+        s.deinit();
+    });
+    assert_eq!(0, counting.live_bytes.get(), "deinit returns every byte");
 }

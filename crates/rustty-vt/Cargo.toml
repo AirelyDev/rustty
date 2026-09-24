@@ -233,6 +233,10 @@ rustty-zigstd = { workspace = true }
 # zigstd MemoryPool/ArenaAllocator). `Global` reproduces the prior `std::alloc`
 # path, so PageList behavior is unchanged.
 allocator-api2 = { workspace = true }
+# Allocator-aware hash maps over the `alloc::VtAllocator` handle (the managed
+# `std.AutoHashMap`s the reference builds over the caller's allocator, e.g.
+# `PageList.Clone.TrackedPinsRemap`). Declared once in the workspace.
+hashbrown = { workspace = true }
 # Same libc the reference's std.posix binds (R3). Used by kitty/graphics_image
 # for the POSIX shared-memory medium (shm_open/mmap/fstat/munmap/shm_unlink).
 libc = "0.2"

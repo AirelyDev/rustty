@@ -340,6 +340,14 @@ dcimgui-sys = { path = "crates-sys/dcimgui-sys", default-features = false }
 # / `deallocate` map to Zig `rawAlloc`/`rawFree`. `Global` == the current
 # `std::alloc` path, so threading it as the child allocator is behavior-preserving.
 allocator-api2 = "0.2"
+# Allocator-aware hash maps over an allocator_api2 `Allocator` (the stable
+# route to std's `HashMap` with a custom allocator): the index of
+# rustty-zigstd's `AutoArrayHashMapUnmanaged` and rustty-vt's
+# `TrackedPinsRemap`, both over the `VtAllocator` handle (parity tail S7-3).
+# No default features: callers supply the hasher (std `RandomState` where the
+# map used `std::collections::HashMap`), and `inline-more` stays off, as it is
+# for std's own hashbrown and for indexmap's, the workspace's other user.
+hashbrown = { version = "0.17", default-features = false, features = ["allocator-api2"] }
 # Zig `std.json` equivalent for the crash-envelope port (rustty-crash): the
 # reference's `std.json.ObjectMap` is a `StringArrayHashMap(Value)` — an
 # INSERTION-ORDER-preserving string map — so `serde_json` is pinned with the

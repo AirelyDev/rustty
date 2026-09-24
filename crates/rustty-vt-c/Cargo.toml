@@ -179,15 +179,17 @@ log = { workspace = true }
 log = { workspace = true, features = ["release_max_level_off"] }
 
 [dev-dependencies]
-# Test-only: the `rustty_util::tripwire` reset mode used by the
-# `get vt_processing_error` C-API test (rustty-vt's `set_string_tw_end`
-# accessor names it). rustty-util is a leaf below rustty-vt (R4 acyclic).
+# Test-only: the `rustty_util::tripwire` reset mode used by this crate's own
+# fail-point tests (grid-ref tracking, search registry). rustty-util is a leaf
+# below rustty-vt (R4 acyclic).
 rustty-util = { workspace = true }
-# TEST-ONLY (parity S166-F2): turn on rustty-vt's `tripwire-test` feature so the
-# `set_title` fail point that `get vt_processing_error` arms EXISTS in the
-# release test lane too. As a dev-dependency it unifies only into
-# test/bench/example builds, so `cargo build --release` still compiles the fail
-# point away.
+# TEST-ONLY (parity S166-F2): turn on rustty-vt's `tripwire-test` feature (and
+# with it `rustty-util/tripwire-test`) so tripwire fail points are armed in the
+# release test lane too, as Zig's `builtin.is_test` is at every optimize mode.
+# As a dev-dependency it unifies only into test/bench/example builds, so
+# `cargo build --release` still compiles the fail points away. (The `set_title`
+# fail point it was first added for is gone: parity tail S7-3 ports that test
+# with a failing allocator.)
 #
 # TEST-ONLY (parity tail S7-1): `test-allocators` exposes
 # `rustty_vt::alloc::testing` (the `std.testing.FailingAllocator` port and a

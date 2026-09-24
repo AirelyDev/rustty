@@ -584,6 +584,175 @@ impl<T, A: ApiAllocator> TryPushExt<T> for allocator_api2::vec::Vec<T, A> {
     }
 }
 
+/// `std.ArrayListUnmanaged(T)` for `Copy` elements: a list that does NOT store
+/// its allocator; every growing call and `deinit` take it, as the reference's
+/// do.
+///
+/// PORT NOTE (parity tail S7-3): allocator_api2 containers bind their allocator
+/// at construction. Where the reference grows a list through an allocator it
+/// looks up at call time (`Terminal.pwd`/`title` grow through `self.gpa()`,
+/// the ACTIVE screen's allocator, and the reference's own C-API test swaps that
+/// allocator to make the growth fail), binding would change which allocator is
+/// called. This type keeps the reference's per-call allocator.
+///
+/// Growth is Zig 0.16's: `ensureTotalCapacity` rounds up with `growCapacity`
+/// (`minimum +| (minimum / 2 + init_capacity)`, `init_capacity =
+/// max(1, cache_line / @sizeOf(T))`) and `ensureTotalCapacityPrecise` tries
+/// `remap` first, then allocates, copies and frees (the handle's `grow`).
+pub struct ArrayListUnmanaged<T: Copy> {
+    ptr: NonNull<T>,
+    len: usize,
+    cap: usize,
+}
+
+// SAFETY: the list owns its `Copy` elements outright; the raw pointer is a
+// unique owning pointer, as a `Vec`'s is.
+unsafe impl<T: Copy + Send> Send for ArrayListUnmanaged<T> {}
+// SAFETY: shared access only reads the elements.
+unsafe impl<T: Copy + Sync> Sync for ArrayListUnmanaged<T> {}
+
+impl<T: Copy> Default for ArrayListUnmanaged<T> {
+    fn default() -> Self {
+        Self::EMPTY
+    }
+}
+
+impl<T: Copy> core::ops::Deref for ArrayListUnmanaged<T> {
+    type Target = [T];
+    #[inline]
+    fn deref(&self) -> &[T] {
+        self.items()
+    }
+}
+
+/// `std.atomic.cache_line` for the targets the port builds.
+const CACHE_LINE: usize = if cfg!(any(
+    target_arch = "x86_64",
+    target_arch = "aarch64",
+    target_arch = "powerpc64"
+)) {
+    128
+} else {
+    64
+};
+
+impl<T: Copy> ArrayListUnmanaged<T> {
+    /// `.empty`: allocates nothing.
+    pub const EMPTY: ArrayListUnmanaged<T> = ArrayListUnmanaged {
+        ptr: NonNull::dangling(),
+        len: 0,
+        cap: 0,
+    };
+
+    /// `items`.
+    #[inline]
+    pub fn items(&self) -> &[T] {
+        // SAFETY: `ptr` is valid for `len` initialized elements (dangling and
+        // aligned when `len == 0`).
+        unsafe { core::slice::from_raw_parts(self.ptr.as_ptr(), self.len) }
+    }
+
+    /// `items` (mutable).
+    #[inline]
+    pub fn items_mut(&mut self) -> &mut [T] {
+        // SAFETY: as `items`, and `&mut self` is exclusive.
+        unsafe { core::slice::from_raw_parts_mut(self.ptr.as_ptr(), self.len) }
+    }
+
+    /// `items` as a slice (the `Vec::as_slice` spelling).
+    #[inline]
+    pub fn as_slice(&self) -> &[T] {
+        self.items()
+    }
+
+    /// `capacity`.
+    #[inline]
+    pub fn capacity(&self) -> usize {
+        self.cap
+    }
+
+    /// The start of the allocated slice, for raw writes.
+    #[inline]
+    pub fn as_mut_ptr(&mut self) -> *mut T {
+        self.ptr.as_ptr()
+    }
+
+    /// `items.len = new_len`.
+    ///
+    /// # Safety
+    /// `new_len <= capacity()`, and the first `new_len` elements are
+    /// initialized before they are read.
+    #[inline]
+    pub unsafe fn set_len(&mut self, new_len: usize) {
+        debug_assert!(new_len <= self.cap);
+        self.len = new_len;
+    }
+
+    /// `clearRetainingCapacity`.
+    #[inline]
+    pub fn clear_retaining_capacity(&mut self) {
+        self.len = 0;
+    }
+
+    fn layout(cap: usize) -> Option<Layout> {
+        Layout::array::<T>(cap).ok()
+    }
+
+    /// `growCapacity(minimum)`.
+    pub fn grow_capacity(minimum: usize) -> usize {
+        let init_capacity = (CACHE_LINE / core::mem::size_of::<T>().max(1)).max(1);
+        minimum.saturating_add(minimum / 2 + init_capacity)
+    }
+
+    /// `try list.ensureTotalCapacity(gpa, new_capacity)`.
+    pub fn ensure_total_capacity(
+        &mut self,
+        gpa: VtAllocator,
+        new_capacity: usize,
+    ) -> Result<(), OutOfMemory> {
+        if self.cap >= new_capacity {
+            return Ok(());
+        }
+        self.ensure_total_capacity_precise(gpa, Self::grow_capacity(new_capacity))
+    }
+
+    /// `try list.ensureTotalCapacityPrecise(gpa, new_capacity)`.
+    pub fn ensure_total_capacity_precise(
+        &mut self,
+        gpa: VtAllocator,
+        new_capacity: usize,
+    ) -> Result<(), OutOfMemory> {
+        if self.cap >= new_capacity {
+            return Ok(());
+        }
+        let new_layout = Self::layout(new_capacity).ok_or(OutOfMemory)?;
+        let new_memory = if self.cap == 0 {
+            // `remap` of an empty allocation is null: `alignedAlloc`.
+            gpa.allocate(new_layout).map_err(|_| OutOfMemory)?
+        } else {
+            let old_layout = Self::layout(self.cap).expect("a live allocation has a valid layout");
+            // SAFETY: `ptr` is the live allocation of `old_layout` made
+            // through `gpa` (the caller's contract: one allocator per list,
+            // as in the reference), and `new_layout` is larger.
+            unsafe { gpa.grow(self.ptr.cast(), old_layout, new_layout) }.map_err(|_| OutOfMemory)?
+        };
+        self.ptr = new_memory.cast();
+        self.cap = new_capacity;
+        Ok(())
+    }
+
+    /// `list.deinit(gpa)`, leaving the list `.empty` (the port's
+    /// `self.* = undefined` is a reusable empty list).
+    pub fn deinit(&mut self, gpa: VtAllocator) {
+        if self.cap != 0 {
+            let layout = Self::layout(self.cap).expect("a live allocation has a valid layout");
+            // SAFETY: the live allocation of `layout`, made through `gpa`.
+            unsafe { gpa.deallocate(self.ptr.cast(), layout) };
+        }
+        *self = Self::EMPTY;
+    }
+}
+
 /// Test allocators on the C `RusttyAllocator` ABI, so the handle's C arm (and
 /// the C API) see them exactly as an embedder's allocator.
 ///
@@ -608,11 +777,11 @@ pub mod testing {
     /// A C allocator over the Rust global heap, the port's `std.testing.allocator`
     /// for the wrappers below (leaks are Miri's job, R6).
     ///
-    /// PORT NOTE: unlike `rustty_lib::allocator::c_allocator()`, whose
-    /// `resize` reports success for any shrink, this one resizes in place only
-    /// to the same length: `std::alloc::dealloc` must be given the layout the
-    /// block was allocated with, so a block cannot be recorded as shorter
-    /// without moving it. `remap` is `realloc` (it may move).
+    /// PORT NOTE: like `rustty_lib::allocator::c_allocator()` (N270), this one
+    /// resizes in place only to the same length: `std::alloc::dealloc` must be
+    /// given the layout the block was allocated with, so a block cannot be
+    /// recorded as shorter without moving it. `remap` is `realloc` (it may
+    /// move).
     pub fn heap() -> CAllocator {
         CAllocator {
             ctx: core::ptr::null_mut(),
@@ -690,7 +859,11 @@ pub mod testing {
     /// conditions are handled correctly.
     ///
     /// PORT NOTE: the fields are `Cell`s because the C vtable reaches the state
-    /// through a shared `ctx` pointer. Zig's `stack_addresses:
+    /// through a shared `ctx` pointer. That includes `fail_index` and
+    /// `resize_fail_index`, which the reference's tests move mid-test
+    /// (`failing.fail_index = failing.alloc_index;`) while objects built over
+    /// the allocator are live: a write through `&mut FailingAllocator` there
+    /// would invalidate the `ctx` pointer those objects hold. Zig's `stack_addresses:
     /// [num_stack_frames]usize` (the current stack captured at the first
     /// induced failure, starting at the failing call's `return_address`) is
     /// `stack_trace`, a `std::backtrace::Backtrace` force-captured at the same
@@ -708,8 +881,8 @@ pub mod testing {
         pub deallocations: Cell<usize>,
         pub stack_trace: RefCell<Option<Backtrace>>,
         pub has_induced_failure: Cell<bool>,
-        pub fail_index: usize,
-        pub resize_fail_index: usize,
+        pub fail_index: Cell<usize>,
+        pub resize_fail_index: Cell<usize>,
     }
 
     /// `FailingAllocator.Config`.
@@ -750,8 +923,8 @@ pub mod testing {
                 // .stack_addresses = undefined,
                 stack_trace: RefCell::new(None),
                 has_induced_failure: Cell::new(false),
-                fail_index: config.fail_index,
-                resize_fail_index: config.resize_fail_index,
+                fail_index: Cell::new(config.fail_index),
+                resize_fail_index: Cell::new(config.resize_fail_index),
             }
         }
 
@@ -801,7 +974,7 @@ pub mod testing {
         // const self: *FailingAllocator = @ptrCast(@alignCast(ctx));
         // SAFETY: `ctx` came from `allocator()`.
         let s = unsafe { fa(ctx) };
-        if s.alloc_index.get() == s.fail_index {
+        if s.alloc_index.get() == s.fail_index.get() {
             if !s.has_induced_failure.get() {
                 // const st = std.debug.captureCurrentStackTrace(.{ .first_address = return_address }, &self.stack_addresses);
                 // @memset(self.stack_addresses[@min(st.return_addresses.len, self.stack_addresses.len)..], 0);
@@ -830,7 +1003,7 @@ pub mod testing {
     ) -> bool {
         // SAFETY: `ctx` came from `allocator()`.
         let s = unsafe { fa(ctx) };
-        if s.resize_index.get() == s.resize_fail_index {
+        if s.resize_index.get() == s.resize_fail_index.get() {
             return false;
         }
         if !internal!(s, resize(memory, len, alignment, new_len, ra)) {
@@ -856,7 +1029,7 @@ pub mod testing {
     ) -> *mut u8 {
         // SAFETY: `ctx` came from `allocator()`.
         let s = unsafe { fa(ctx) };
-        if s.resize_index.get() == s.resize_fail_index {
+        if s.resize_index.get() == s.resize_fail_index.get() {
             return core::ptr::null_mut();
         }
         let new_ptr = internal!(s, remap(memory, len, alignment, new_len, ra));

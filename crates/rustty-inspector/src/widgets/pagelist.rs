@@ -357,7 +357,20 @@ impl Inspector {
                     // `_tree_pop` here), so the arm is expressed as a `match`
                     // rather than a `continue` — the loop's advance step lives
                     // at the END of this body, not in a continue-expression.
-                    match unsafe { rustty_vt::pagelist::Node::page_preserving_state(page_node) } {
+                    // var preserved = page_node.pagePreservingState(
+                    //     std.heap.page_allocator,
+                    // ) catch { ... };
+                    //
+                    // PORT NOTE (parity tail S7-3): `std.heap.page_allocator` ->
+                    // the Rust heap handle. The allocator handle has no page-
+                    // allocator arm; the buffer's page alignment is in its
+                    // `Layout`, and the inspector is outside the C API.
+                    match unsafe {
+                        rustty_vt::pagelist::Node::page_preserving_state(
+                            page_node,
+                            rustty_vt::alloc::Global,
+                        )
+                    } {
                         Err(_) => unsafe {
                             dcimgui_sys::ImGui_TextDisabled(
                                 c"(unable to copy compressed page)".as_ptr(),
@@ -1765,7 +1778,9 @@ impl CellChooser {
         // exclusive access to the PageList for the duration (display-only reads under
         // the renderer-state mutex), which is `page_preserving_state`'s contract.
         let mut preserved = match unsafe {
-            rustty_vt::pagelist::Node::page_preserving_state(pin.node)
+            // pin.node.pagePreservingState(std.heap.page_allocator): see the
+            // PORT NOTE on the first call site (the Rust heap handle).
+            rustty_vt::pagelist::Node::page_preserving_state(pin.node, rustty_vt::alloc::Global)
         } {
             Ok(preserved) => preserved,
             Err(_) => {

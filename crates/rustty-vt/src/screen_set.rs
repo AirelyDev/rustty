@@ -20,9 +20,66 @@
 use crate::screen::Screen;
 
 // PORT NOTE: the reference `Allocator.Error` maps to `pagelist::OutOfMemory`;
-// the general-purpose allocator maps to `crate::alloc::Global`.
+// `std.mem.Allocator` maps to the runtime handle `crate::alloc::Allocator` (the
+// caller's allocator, or the Rust heap), which the screens are created and
+// destroyed through (parity tail S7-3).
 use crate::alloc::Allocator;
 use crate::pagelist::OutOfMemory;
+use allocator_api2::alloc::Allocator as _;
+use core::alloc::Layout;
+use core::ptr::NonNull;
+
+/// `const screen = try alloc.create(Screen); errdefer alloc.destroy(screen);
+/// screen.* = try .init(alloc, opts);`
+///
+/// PORT NOTE (parity tail S7-3): the Screen's own storage comes from the
+/// caller's allocator, as in the reference, in the reference's order (storage
+/// first, then `init`, whose failure frees the storage).
+fn create_screen(
+    alloc: Allocator,
+    opts: crate::screen::Options,
+) -> Result<*mut Screen, OutOfMemory> {
+    let layout = Layout::new::<Screen>();
+    let screen = alloc
+        .allocate(layout)
+        .map_err(|_| OutOfMemory)?
+        .cast::<Screen>();
+    match Screen::init(alloc, opts) {
+        Ok(value) => {
+            // SAFETY: fresh storage of `Screen`'s layout.
+            unsafe { screen.as_ptr().write(value) };
+            Ok(screen.as_ptr())
+        }
+        Err(e) => {
+            // errdefer alloc.destroy(screen);
+            // SAFETY: the pair allocated above, never written.
+            unsafe { alloc.deallocate(screen.cast(), layout) };
+            Err(e)
+        }
+    }
+}
+
+/// `screen.deinit(); alloc.destroy(screen);`
+///
+/// PORT NOTE: the storage is freed through the allocator the screen was built
+/// with (`Screen.alloc`), which is the reference's `alloc` argument by
+/// contract; the argument is checked against it in debug builds.
+///
+/// # Safety
+/// `screen` came from [`create_screen`] and is not used afterwards.
+unsafe fn destroy_screen(alloc: Allocator, screen: *mut Screen) {
+    // SAFETY: the caller's contract.
+    unsafe {
+        let own = (*screen).alloc;
+        own.debug_assert_same(alloc);
+        (*screen).deinit();
+        core::ptr::drop_in_place(screen);
+        own.deallocate(
+            NonNull::new_unchecked(screen).cast(),
+            Layout::new::<Screen>(),
+        );
+    }
+}
 
 /// C: RusttyTerminalScreen (R2) — checked by the A5 enum-discriminant arm.
 /// The possible keys for screens in the screen set.
@@ -71,14 +128,7 @@ impl ScreenSet {
         // const screen = try alloc.create(Screen);
         // errdefer alloc.destroy(screen);
         // screen.* = try .init(alloc, opts);
-        // PORT NOTE: the reference `alloc.create(Screen)` allocates uninitialized
-        // storage and the following `screen.* = try .init(...)` populates it (with
-        // an `errdefer alloc.destroy(screen)` covering the init failure). `Screen`
-        // has no self-referential pointers that require a fixed address before
-        // init, so the faithful Rust ordering is to construct the value first and
-        // only heap-allocate on success — that subsumes the `errdefer` (no leak on
-        // the init-error path).
-        let screen: *mut Screen = Box::into_raw(Box::new(Screen::init(alloc, opts)?));
+        let screen: *mut Screen = create_screen(alloc, opts)?;
         let mut all: [Option<*mut Screen>; Key::COUNT] = [None; Key::COUNT];
         all[Key::Primary as usize] = Some(screen);
         Ok(ScreenSet {
@@ -90,7 +140,6 @@ impl ScreenSet {
     }
 
     pub fn deinit(&mut self, alloc: Allocator) {
-        let _ = alloc;
         // Destroy all initialized screens
         // var it = self.all.iterator();
         // while (it.next()) |entry| {
@@ -99,13 +148,9 @@ impl ScreenSet {
         // }
         for slot in self.all.iter_mut() {
             if let Some(screen) = *slot {
-                // SAFETY: `screen` was produced by `Box::into_raw` in
-                // `init`/`get_init` and has not yet been freed; reclaim ownership
-                // so the `Box` drop both `deinit`s and frees it. `deinit` takes
-                // `&mut Screen`.
-                let mut boxed = unsafe { Box::from_raw(screen) };
-                boxed.deinit();
-                drop(boxed);
+                // SAFETY: `screen` came from `create_screen` in `init`/`get_init`
+                // and has not yet been freed.
+                unsafe { destroy_screen(alloc, screen) };
             }
         }
     }
@@ -133,16 +178,13 @@ impl ScreenSet {
         // const screen = try alloc.create(Screen);
         // errdefer alloc.destroy(screen);
         // screen.* = try .init(alloc, opts);
-        // PORT NOTE: same create+init ordering as `init` (construct first, only
-        // heap-allocate on success — subsumes the reference's `errdefer`).
-        let screen: *mut Screen = Box::into_raw(Box::new(Screen::init(alloc, opts)?));
+        let screen: *mut Screen = create_screen(alloc, opts)?;
         self.all[key as usize] = Some(screen);
         Ok(screen)
     }
 
     /// Remove a key from the set. The primary screen cannot be removed (asserted).
     pub fn remove(&mut self, alloc: Allocator, key: Key) {
-        let _ = alloc;
         debug_assert!(key != Key::Primary);
         // if (self.all.fetchRemove(key)) |screen| {
         //     self.generations.put(key, self.generation(key) +% 1);
@@ -151,12 +193,9 @@ impl ScreenSet {
         // }
         if let Some(screen) = self.all[key as usize].take() {
             self.generations[key as usize] = self.generation(key).wrapping_add(1);
-            // SAFETY: `screen` was produced by `Box::into_raw` and removed from
-            // `all` via `take`, so this is the unique owner; reclaim it to
-            // `deinit` and free.
-            let mut boxed = unsafe { Box::from_raw(screen) };
-            boxed.deinit();
-            drop(boxed);
+            // SAFETY: `screen` came from `create_screen` and was removed from
+            // `all` via `take`, so this is the unique owner.
+            unsafe { destroy_screen(alloc, screen) };
         }
     }
 

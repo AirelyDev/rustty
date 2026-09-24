@@ -58,22 +58,32 @@ pub type Map = AutoOffsetHashMap<Offset<Cell>, Id, 80>;
 /// memory within a page. The memory location of this is dependent
 /// on the context so users should check with the source of the
 /// hyperlink.
+//
+// PORT NOTE (parity tail S7-3): the reference's `uri`/`id` are byte slices
+// whose memory "is dependent on the context". The port owns them, in `B`:
+// `Vec<u8>` (the default: a value on the Rust heap, as every page and snapshot
+// path uses) or [`AllocBytes`] (a copy made through an allocator handle, which
+// is what `Screen.cursor.hyperlink` holds: the reference `alloc.create` +
+// `source.dupe(alloc)` on the screen's allocator).
 #[derive(Clone)]
-pub struct Hyperlink {
-    pub id: HyperlinkId,
-    pub uri: Vec<u8>,
+pub struct Hyperlink<B = Vec<u8>> {
+    pub id: HyperlinkId<B>,
+    pub uri: B,
 }
+
+/// Hyperlink bytes allocated through an allocator handle ([`Hyperlink::dupe_in`]).
+pub type AllocBytes = allocator_api2::vec::Vec<u8, crate::alloc::Allocator>;
 
 /// See PageEntry.Id
 // PORT NOTE: the reference is `Hyperlink.Id`, a nested union. Rust nested type
 // names can't shadow the field name `id`, so it is hoisted to `HyperlinkId`.
 #[derive(Clone)]
-pub enum HyperlinkId {
-    Explicit(Vec<u8>),
+pub enum HyperlinkId<B = Vec<u8>> {
+    Explicit(B),
     Implicit(size::OffsetInt),
 }
 
-impl Hyperlink {
+impl<B: core::ops::Deref<Target = [u8]>> Hyperlink<B> {
     /// Deinit and deallocate all the pointers using the given
     /// allocator.
     ///
@@ -107,11 +117,54 @@ impl Hyperlink {
         let uri = try_dupe_bytes(&self.uri)?;
         // errdefer alloc.free(uri) — the owned Vec is dropped on the `?` below.
         let id: HyperlinkId = match &self.id {
-            HyperlinkId::Implicit(_) => self.id.clone(),
+            HyperlinkId::Implicit(v) => HyperlinkId::Implicit(*v),
             HyperlinkId::Explicit(v) => HyperlinkId::Explicit(try_dupe_bytes(v)?),
         };
         Ok(Hyperlink { id, uri })
     }
+
+    /// `dupe(alloc)` through an allocator handle: every copy is made (and
+    /// later freed) through `alloc`, as the reference's `alloc.dupe` calls are.
+    pub fn dupe_in(
+        &self,
+        alloc: crate::alloc::Allocator,
+    ) -> Result<Hyperlink<AllocBytes>, OutOfMemory> {
+        // const uri = try alloc.dupe(u8, self.uri);
+        let uri = try_dupe_bytes_in(&self.uri, alloc)?;
+        // errdefer alloc.free(uri) — dropped (through `alloc`) on the `?` below.
+        let id = match &self.id {
+            HyperlinkId::Implicit(v) => HyperlinkId::Implicit(*v),
+            HyperlinkId::Explicit(v) => HyperlinkId::Explicit(try_dupe_bytes_in(v, alloc)?),
+        };
+        Ok(Hyperlink { id, uri })
+    }
+
+    /// An infallible Rust-heap copy (`Clone` into the default byte storage).
+    /// Port-only: used where the reference passes the value by (borrowed)
+    /// value and allocates nothing, so the copy must not reach the caller's
+    /// allocator.
+    pub fn to_heap(&self) -> Hyperlink {
+        Hyperlink {
+            id: match &self.id {
+                HyperlinkId::Implicit(v) => HyperlinkId::Implicit(*v),
+                HyperlinkId::Explicit(v) => HyperlinkId::Explicit(v.to_vec()),
+            },
+            uri: self.uri.to_vec(),
+        }
+    }
+}
+
+/// `alloc.dupe(u8, src)` through an allocator handle: one exact-sized,
+/// fallible allocation.
+pub(crate) fn try_dupe_bytes_in(
+    src: &[u8],
+    alloc: crate::alloc::Allocator,
+) -> Result<AllocBytes, OutOfMemory> {
+    use crate::alloc::CopyVecExt;
+    let mut v = AllocBytes::new_in(alloc);
+    v.try_reserve_exact(src.len()).map_err(|_| OutOfMemory)?;
+    v.extend_copy(src);
+    Ok(v)
 }
 
 /// `alloc.dupe(u8, src)` — a fallible byte-slice copy.

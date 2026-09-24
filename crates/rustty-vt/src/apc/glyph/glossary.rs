@@ -74,7 +74,15 @@ pub struct Glossary {
     /// I'm also operating under the assumption that full glossaries
     /// for a session will be rare, so the eviction cost shouldn't
     /// happen regularly.
-    entries: AutoArrayHashMapUnmanaged<u32, Entry>,
+    //
+    // PORT NOTE (parity tail S7-3): the map grows and frees through the
+    // terminal's allocator handle, bound at construction (`empty_in`). The
+    // reference passes that allocator per call (`self.gpa()`); the two are the
+    // same allocator unless a caller swaps the screen's allocator mid-life,
+    // which no API path does. The entries' decoded `Outline`s are built by the
+    // glyph decoder in rustty-font and stay on the Rust heap (the APC/glyph
+    // decode path is S7-4's).
+    entries: AutoArrayHashMapUnmanaged<u32, Entry, crate::alloc::Allocator>,
 }
 
 impl Glossary {
@@ -83,8 +91,18 @@ impl Glossary {
     // Exposed as a constructor (`AutoArrayHashMapUnmanaged::new` is not `const`).
     #[allow(clippy::should_implement_trait)]
     pub fn empty() -> Glossary {
+        Glossary::empty_in(crate::alloc::Global)
+    }
+
+    /// The allocator the glossary's storage grows and frees through.
+    pub fn allocator(&self) -> crate::alloc::Allocator {
+        *self.entries.allocator()
+    }
+
+    /// [`Glossary::empty`] whose storage grows through `alloc`.
+    pub fn empty_in(alloc: crate::alloc::Allocator) -> Glossary {
         Glossary {
-            entries: AutoArrayHashMapUnmanaged::new(),
+            entries: AutoArrayHashMapUnmanaged::new_in(alloc),
         }
     }
 
@@ -128,7 +146,7 @@ impl Glossary {
             // self.entries.putAssumeCapacity(cp, entry);
             // PORT NOTE: `put` re-appends at the end since `cp` is now absent,
             // matching `putAssumeCapacity` after the `orderedRemove` (newest
-            // position).
+            // position); the removal left the capacity, so it cannot allocate.
             self.entries.put(cp, entry);
             // return;
             return Ok(());
@@ -136,7 +154,13 @@ impl Glossary {
 
         // Array hash maps preserve insertion order so always immediately insert.
         // gop.value_ptr.* = entry;
-        self.entries.put(cp, entry);
+        //
+        // PORT NOTE: the reference's `try self.entries.getOrPut(alloc, cp)` is
+        // the fallible step; `try_put` reserves first, so a failure leaves the
+        // map unchanged and drops `entry`.
+        self.entries
+            .try_put(cp, entry)
+            .map_err(|_| RegisterError::OutOfMemory)?;
 
         // Fast, typical path: we fit within the glossary, just return.
         // if (self.entries.count() <= max_entries) return;
@@ -177,9 +201,10 @@ impl Glossary {
         // for (self.entries.values()) |*entry| entry.deinit(alloc);
         // self.entries.deinit(alloc);
         // self.entries = .empty;
-        // PORT NOTE: replacing the map drops every `Entry` (freeing each
-        // `Outline`), reproducing the per-entry `deinit` + map `deinit` + reset.
-        self.entries = AutoArrayHashMapUnmanaged::new();
+        // PORT NOTE: `clear_and_free` drops every `Entry` (freeing each
+        // `Outline`) and frees the map's storage through its allocator,
+        // reproducing the per-entry `deinit` + map `deinit` + reset.
+        self.entries.clear_and_free();
     }
 
     /// Contains returns true if the codepoint is covered by the glossary.
@@ -761,5 +786,50 @@ mod tests {
             .unwrap();
         assert!(glossary.contains(0xE000));
         assert!(!glossary.contains(0xE001));
+    }
+
+    // Parity tail S7-3 routing evidence (Rust-only): the glossary's map grows
+    // and frees through the terminal's allocator (`Glossary::empty_in`), and a
+    // refused growth is `error.OutOfMemory` with the glossary unchanged.
+    #[test]
+    fn glossary_map_routes_through_the_allocator_handle() {
+        use crate::alloc::testing::{with_handle, Config, CountingAllocator, FailingAllocator};
+
+        let counting = CountingAllocator::over_heap();
+        let c = counting.allocator();
+        with_handle(&c, |alloc| {
+            let mut glossary = Glossary::empty_in(alloc);
+            assert_eq!(0, counting.alloc_calls.get(), ".empty allocates nothing");
+            glossary
+                .register(0xE000, test_register_entry(0xE000))
+                .unwrap();
+            // The entries array and its index.
+            assert_eq!(
+                2,
+                counting.alloc_calls.get(),
+                "entries + index come from alloc"
+            );
+            glossary.clear_and_free();
+            assert_eq!(
+                0,
+                counting.live_bytes.get(),
+                "clearAndFree returns the storage"
+            );
+        });
+
+        let failing = FailingAllocator::over_heap(Config {
+            fail_index: 0,
+            ..Config::default()
+        });
+        let c = failing.allocator();
+        with_handle(&c, |alloc| {
+            let mut glossary = Glossary::empty_in(alloc);
+            assert_eq!(
+                Err(RegisterError::OutOfMemory),
+                glossary.register(0xE000, test_register_entry(0xE000))
+            );
+            assert!(failing.has_induced_failure.get());
+            assert!(!glossary.contains(0xE000));
+        });
     }
 }

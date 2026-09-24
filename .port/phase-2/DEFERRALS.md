@@ -8143,10 +8143,18 @@ counting/rejecting arms in `terminal.rs`, `render/tests.rs`,
 **Tier 2 REMAINS OPEN** (structural, cross-crate — the reference threads
 `alloc` into `t.init(alloc, ...)` and every owned growth path):
 
-1. `rustty-vt` `Terminal`/`Screen`/`PageList`/`RenderState` internals hardwire
-   `allocator_api2::alloc::Global` (`rustty-vt/src/terminal.rs:94`,
-   `rustty-vt/src/render.rs:47`), so screen/pagelist/render-row growth and
-   `update`/`begin_update` bypass the caller allocator (oracle: `state.alloc`).
+1. PARTLY FIXED (parity tail S7-3, `.port/parity-closure/S7-ALLOCATOR-DESIGN.md`
+   option B): `rustty_terminal_new` passes the caller's allocator into
+   `Terminal::init` through the `rustty_vt::alloc::VtAllocator` handle, and the
+   PageList node/pin pools, tracked-pin sets, compressed pages, preserved-page
+   buffers, clone pin remap, the Screen storage, the cursor hyperlink, Tabstops,
+   pwd/title, the glyph glossary map and the kitty drag-and-drop state grow and
+   free through it, fallibly (NEW-FINDINGS N272). STILL on the Rust heap, owned by
+   S7-4..S7-7: kitty graphics storage and PNG decode, the APC/DCS builders and
+   the glyph entries' decoded outlines, the stream's own buffers, clipboard state,
+   the wrapper's `tracked_grid_refs`/`searches` maps, `from_decoded`'s terminal
+   (built by the snapshot decoder), `RenderState` contents (`update`/
+   `begin_update`; oracle `state.alloc`) and search state.
 2. FIXED (tail-a2, parity S179-F3, 4717bccc): `grid_ref_track`'s
    `TrackedGridRef` is created and destroyed through a copy of the caller's C
    allocator (`TerminalWrapper.c_alloc`), with both reference OOM arms. The
@@ -8158,10 +8166,11 @@ counting/rejecting arms in `terminal.rs`, `render/tests.rs`,
    request lists the oracle allocates through `parser.alloc`, and owned text
    payload copies) are Global values (parity S174-F3, OPEN).
 
-Unblocking requires making rustty-vt runtime-allocator-polymorphic (an
-`allocator_api2::Allocator` adapter over `ZigAllocator` threaded through
-`Terminal::init`). Until then, a caller allocator observes only the
-wrapper-level lifecycle (macOS app path — null allocator — is unaffected).
+The runtime handle that unblocks this exists (parity tail S7-1/S7-2) and is
+threaded through `Terminal::init` (S7-3); the remaining families are routed by
+S7-4..S7-7. Until then a caller allocator observes the wrapper lifecycle plus
+the S7-3 terminal internals above (macOS app path — null allocator — is
+unaffected).
 Vet record: `.port/codex-vet/STATE.json` F-008/W12-01 fix_plans (Tier split).
 
 ## `std.fs.path.resolveWindows` not ported — `config/path.zig` `expand`'s two-component `resolve` stays POSIX-shaped [W10-02, 2026-08-11]

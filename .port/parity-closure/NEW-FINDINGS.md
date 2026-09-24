@@ -4400,6 +4400,117 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
     tests under `coretext_freetype` and `freetype`. N285 is settled (stale reference values,
     UD281).
 
+## N270 — `GlobalZigAllocator::resize` reported success for any shrink, so the later free reached `dealloc` with a smaller layout
+
+- **id**: N270. Not a ledger row: review S7-12 F4 (confirmed by probe), fixed in task S7-3.
+- **severity**: medium. **kind**: port soundness defect (not a reference defect).
+- **oracle**: Zig 0.16 `lib/std/heap.zig` `c_allocator_impl.resize`: `if (new_len <= memory.len)
+  return true; // in-place shrink always works`, otherwise `new_len <= malloc_size(ptr)`, or `return
+  false` where no usable-size query exists. Legal there because C `free` takes no size.
+- **rustty**: `crates/rustty-lib/src/allocator.rs` `GlobalZigAllocator::resize` (backs
+  `c_allocator()`, `default(NULL)`, and the vt-c test allocators).
+- **description**: the port maps `std.heap.c_allocator` onto the Rust global heap (the documented
+  mapping, shared with `rustty_vt::alloc::VtAllocator`'s Global arm and zigstd's `impl ResizeInPlace
+  for Global`). `resize` answered `new_len <= memory.len` without moving the block, so the caller's
+  later `free(new_len)` called `std::alloc::dealloc` with a smaller `Layout` than `alloc` used:
+  undefined behaviour under the `GlobalAlloc` contract, harmless only because the macOS/glibc
+  `System` allocator ignores the size. A zigstd arena over the handle's C arm (S7-3/S7-5) reaches it
+  through `reset(.retain_with_limit)`.
+- **decision**: `resize` now succeeds only for `new_len == memory.len`. Backing the allocator with
+  libc `malloc`/`posix_memalign`/`free` + `malloc_size` would reproduce the reference's in-place
+  answers, but it would split the port's single "NULL allocator" into two heaps (the VtAllocator
+  Global arm stays the Rust heap) and add a libc surface Miri cannot model (`malloc_size`). Refusing
+  is within the Zig allocator contract (the reference's own no-usable-size arm returns `false`);
+  callers fall back to `remap` (`realloc`) or alloc+copy+free. `remap` is unchanged.
+- **verification**: `crates/rustty-lib/tests/global_zig_allocator_resize.rs` (own binary, a
+  size-checking `#[global_allocator]`): alloc 64, shrink-resize, free with the length the contract
+  implies; asserts zero layout mismatches, then that the shrink was refused. Negative control
+  (`new_len <= memory.len` reinstated): fails with "left: 0, right: 1" mismatches.
+- **siblings**: the same answer over the Rust heap sat in `rustty_vt::sys::GlobalRawAllocator` (the
+  kitty PNG decode seam's allocator) and in rustty-datastruct's test-only `GlobalAllocator`; both are
+  fixed as N273. With N273 no Rust-heap Zig-style allocator in the workspace reports an in-place shrink.
+- **state**: CLOSED (task S7-3).
+
+## N271 — six port-only tripwire stand-ins for the reference's `FailingAllocator` tests are retired
+
+- **id**: N271. Not a ledger row: S-7 design §7 S7-3 ("the ported reference `FailingAllocator` tests,
+  assertion for assertion"; "retires about 66 adaptation notes").
+- **severity**: low. **kind**: test fidelity (R1).
+- **oracle**: `PageList.zig` tests "Builder finish is transactional on allocation failure", "PageAllocation
+  allocation failure leaves list unchanged", "incremental compression advances after allocation failure",
+  "preserved page keeps compressed storage"; `compress/Page.zig` "rejects a representation without
+  savings"; `Screen.zig` "implicit hyperlink ID wraps"; `Terminal.zig` "setPwd/setTitle preserves a
+  sentinel on allocation failure", "resize preserves tabstops on allocation failure";
+  `stream_terminal.zig` "semantic failure is sticky while processing continues"; `snapshot/screen.zig`
+  SCREEN restoration; `c/terminal.zig` "get vt_processing_error".
+- **rustty**: the tests of the same names in `crates/rustty-vt/src/{pagelist/tests.rs, compress/page.rs,
+  screen.rs, terminal.rs, stream_terminal.rs, snapshot/screen.rs}` and `crates/rustty-vt-c/src/terminal.rs`.
+- **description**: while the PageList pools, compressed pages, cursor hyperlink and pwd/title lived on the
+  Rust heap, these tests injected their failures through port-only tripwire modules (`FinishFp`,
+  `AllocatePageFp`, `PagePreservingStateFp`, compress `InitFp`, `StartHyperlinkFp`, `SetStringFp`) that
+  the reference does not have. With those allocations on the allocator handle (S7-3), each test now runs
+  over `alloc::testing::FailingAllocator` (or `alloc::failing()`) exactly as written, asserting
+  `has_induced_failure` where the reference does, and the six modules are deleted. The reference's own
+  tripwires (`init_tw`, `initPages_tw`, `compressPage_tw`, Tabstops/Terminal `resize_tw`) stay.
+- **deviation (test-only)**: the setPwd/setTitle tests also set `resize_fail_index = resize_index`. The
+  reference's inner `testing.allocator` (DebugAllocator) cannot remap a 3- or 5-byte size-class slot to
+  the grown capacity, so its growth reaches the failing `alloc`; the port's inner heap remaps with
+  `realloc`, which would move and succeed. PORT NOTE at both sites.
+- **state**: CLOSED (task S7-3).
+
+## N272 — S7-3 routing: what goes through the allocator handle, what is bound at construction, and what is left
+
+- **id**: N272. Not a ledger row: records the S7-3 scope decisions (S179-F2 closes in S7-4).
+- **severity**: informational. **kind**: allocator routing (T1/T2/T3 of the S-7 design).
+- **routed (T1, with T2 at every reference `try`)**: PageList node + pin pools, every tracked-pin set,
+  the compressed-page encoding, `Node.pagePreservingState(alloc)` buffers, the clone's pools and
+  `TrackedPinsRemap`; `ScreenSet`'s `alloc.create(Screen)`; the cursor hyperlink (`alloc.create` + `dupe`);
+  `Tabstops.dynamic_stops`; `Terminal.pwd`/`title`; the glyph glossary map; the kitty drag-and-drop state
+  (box, MIME lists, offered list, held drop copies). vt-c `new` passes `lib.alloc.default(alloc_)` into
+  `Terminal.init`. Page memory stays on the page allocator.
+- **per-call vs bound**: `pwd`/`title` keep the reference's per-call allocator
+  (`alloc::ArrayListUnmanaged`, grown through `gpa()`; the reference's C-API test swaps the active
+  screen's allocator to make that growth fail). The glossary map, the DnD state and the Tabstops box bind
+  the allocator when created, as allocator_api2 containers do; the reference passes the same allocator
+  per call, and the DnD methods debug-assert that it is the bound one.
+- **left for S7-4 (not routed here, on the Rust heap as before; no new abort)**: the glyph `Entry`
+  payloads (the `Outline` decoded in rustty-font, and the decode scratch), vt-c `from_decoded` (the
+  terminal comes from the snapshot decoder, whose allocator S7-4 routes; `from_decoded` now frees with
+  the decoded terminal's own `gpa()`), and the inspector's two `pagePreservingState(std.heap.page_allocator)`
+  calls, which take the Rust heap handle (the handle has no page-allocator arm; outside the C API).
+- **T3 (call shape) residuals**: the zigstd `AutoArrayHashMapUnmanaged` is an allocator_api2 `Vec` of
+  entries plus a hashbrown index (Zig: a `MultiArrayList` plus an index header above a linear-scan
+  threshold), so the counts differ; the routing tests pin the port's (PageList.init: pools 4 + pin set 2).
+  `Hyperlink` is generic over its byte storage (`Vec<u8>` default; `AllocBytes` for the cursor copy);
+  `startHyperlink`'s port-only copies (the up-front and per-attempt `dupe`) stay on the Rust heap, and the
+  extra `insert_arg` copy is gone (the per-attempt value is moved into the page insert).
+- **verification**: routing tests with counting allocators and exact counts per family
+  (`pagelist_internals_route_through_the_allocator_handle`, `screen_internals_route_…`,
+  `terminal_internals_route_…`, `glossary_map_routes_…`, `dnd_state_routes_…`), each with a negative
+  control that routes one site to Global; `allocation_failure_sweep_through_the_c_api` (vt-c).
+- **state**: OPEN as a record until S7-4/S7-9 (S179-F2's remainder).
+
+## N273 — `sys::GlobalRawAllocator::raw_resize` reported success for any shrink (the sibling of N270)
+
+- **id**: N273. Not a ledger row: review S7-3 F1. Sibling of N270, fixed in task S7-3b.
+- **severity**: medium. **kind**: port soundness defect (not a reference defect).
+- **oracle**: as N270 (Zig 0.16 `c_allocator.resize`); the reference hands the decoder a `LimitedAllocator`
+  over its general-purpose allocator (`kitty/graphics_image.zig` `decodePng`, `590d669c4`).
+- **rustty**: `crates/rustty-vt/src/sys.rs` `GlobalRawAllocator::raw_resize`; the test-only copy
+  `crates/rustty-datastruct/src/limited_allocator.rs` `tests::GlobalAllocator::raw_resize`.
+- **description**: `GlobalRawAllocator` is the Rust-heap `RawAllocator` behind the kitty PNG decode seam
+  (`graphics_image.rs` `LimitedAllocator::init(sys::GlobalRawAllocator, ...)`, handed to the embedder's
+  decoder through vt-c `sys.rs`). `raw_resize` answered `new_len <= memory.len` without moving the block,
+  so a decoder that shrank a buffer with `resize` and freed it with the new length reached
+  `std::alloc::dealloc` with a smaller `Layout` than `alloc` used: the same undefined behaviour as N270.
+- **fix**: both now succeed in place only for `new_len == memory.len`, with N270's reasoning (PORT NOTE
+  at the production site). Refusing is within the Zig allocator contract; `LimitedAllocator` forwards.
+- **verification**: `crates/rustty-vt/tests/global_raw_allocator_resize.rs` (own binary, a size-checking
+  `#[global_allocator]`): alloc 64, shrink-resize, free with the contract's length, directly and through
+  `LimitedAllocator`; asserts zero layout mismatches, then that the shrinks were refused. Negative control
+  (`new_len <= memory.len` reinstated in sys.rs): fails with "left: 0, right: 2" mismatches.
+- **state**: CLOSED (task S7-3b).
+
 ## N280 — `macosLogger`'s per-scope `os_log` cache (upstream `3225e9ebb`) was never ported
 
 - **id**: N280. Not a ledger row: found by G3b while closing bin's comment coverage (task tail-s8d).
