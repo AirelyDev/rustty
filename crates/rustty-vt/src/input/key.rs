@@ -979,7 +979,13 @@ impl Key {
             Key::NumpadEnd => dcimgui_sys::ImGuiKey_End,
             Key::NumpadInsert => dcimgui_sys::ImGuiKey_Insert,
             Key::NumpadDelete => dcimgui_sys::ImGuiKey_Delete,
-            Key::NumpadBegin => dcimgui_sys::ImGuiKey_NamedKey_BEGIN,
+            // PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD27 (2). The reference
+            // maps `.numpad_begin` to `ImGuiKey_NamedKey_BEGIN` (key.zig:659), the start-of-range
+            // marker of imgui's named keys, which equals `ImGuiKey_Tab`: keypad 5 with NumLock
+            // off moved inspector focus like Tab. imgui has no Begin key, so the port leaves it
+            // unmapped, the reference's own answer (its `=> null` arm) for keys imgui lacks.
+            // Test `imgui_key_numpad_begin_is_unmapped`.
+            Key::NumpadBegin => return None,
 
             Key::ShiftLeft => dcimgui_sys::ImGuiKey_LeftShift,
             Key::ControlLeft => dcimgui_sys::ImGuiKey_LeftCtrl,
@@ -1313,6 +1319,7 @@ const W3C_NAMES: &[&str] = &[
 //   .numpad_insert => cimgui.c.ImGuiKey_Insert,
 //   .numpad_delete => cimgui.c.ImGuiKey_Delete,
 //   .numpad_begin => cimgui.c.ImGuiKey_NamedKey_BEGIN,
+//     (the port leaves this one unmapped: reference defect, R13, UD27 (2))
 //   .shift_left => cimgui.c.ImGuiKey_LeftShift,
 //   .control_left => cimgui.c.ImGuiKey_LeftCtrl,
 //   .alt_left => cimgui.c.ImGuiKey_LeftAlt,
@@ -1446,6 +1453,17 @@ mod tests {
             Key::NumpadPageDown.imgui_key(),
             Key::NumpadPageUp.imgui_key()
         );
+    }
+
+    // UD27 (2) (PORT NOTE: reference defect (R13), at `imgui_key`): keypad Begin is
+    // unmapped, as every key imgui lacks is. The reference maps it to
+    // `ImGuiKey_NamedKey_BEGIN`, a range marker equal to `ImGuiKey_Tab`, so keypad 5
+    // (NumLock off) moved inspector focus like Tab.
+    #[cfg(feature = "imgui")]
+    #[test]
+    fn imgui_key_numpad_begin_is_unmapped() {
+        assert_eq!(Key::NumpadBegin.imgui_key(), None);
+        assert_ne!(Key::Tab.imgui_key(), None, "Tab itself is still mapped");
     }
 
     #[test]
