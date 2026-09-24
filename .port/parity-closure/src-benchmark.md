@@ -30,7 +30,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
 
 ## Low (2)
 
-- [ ] **S62-F6** · CONFIRMED · `INDIV` · missing-error-path
+- [x] **S62-F6** · CONFIRMED · `INDIV` · missing-error-path
   - **What:** read_slice_short treats EINTR (io::ErrorKind::Interrupted) as a read failure
   - **Oracle:** `src/benchmark/TerminalParser.zig:87-90` → **Rustty:** `crates/rustty-bench/src/options.rs:104-114`
   - **Audit's suggested fix:** In `read_slice_short`, `continue` on `e.kind() == ErrorKind::Interrupted`.
