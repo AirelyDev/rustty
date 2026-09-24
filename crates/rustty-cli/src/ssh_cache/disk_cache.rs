@@ -1699,11 +1699,17 @@ mod tests {
     #[test]
     fn add_does_not_chmod_an_existing_cache_file() {
         use std::os::unix::fs::PermissionsExt;
-        // Root ignores directory permissions, so the rewrite would not fail.
+        // Root ignores directory permissions, so the rewrite would not fail and
+        // the test could not observe anything. No supported test environment
+        // runs as root (CI runners, the Linux VM and the nix sandbox all use an
+        // ordinary user), so R14: fail loudly there instead of skipping.
         // SAFETY(ffi-boundary/test): `geteuid` has no preconditions.
-        if unsafe { libc::geteuid() } == 0 {
-            return;
-        }
+        assert_ne!(
+            0,
+            unsafe { libc::geteuid() },
+            "add_does_not_chmod_an_existing_cache_file needs a non-root user: \
+             root ignores the read-only directory it relies on"
+        );
         let tmp = TmpDir::new();
         let dir = tmp.join("ro");
         std::fs::create_dir_all(&dir).unwrap();
