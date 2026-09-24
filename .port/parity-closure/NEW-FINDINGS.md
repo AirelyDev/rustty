@@ -4193,7 +4193,10 @@ fix: 0 of 50 of the same sequential runs failed; see the task T-F2 report for th
 
 The port's capture commands differ from the reference's by `-C`, and the port decodes tmux's `\ooo`
 and `\\` escapes before writing a capture. Without it, the first ESC of a coloured capture ends the
-control-mode DCS and the session. The pane receives the same bytes `-e` alone produces. Reference
+control-mode DCS and the session. For the grid text the pane receives the same bytes `-e` alone
+produces; a hyperlink's URI and id, which tmux 3.4+ stores vis-encoded (`hyperlinks.c:148`, `:154`),
+are decoded back to the application's own bytes, where `-e` alone would give the pane the vis form
+(read from tmux's source; review F1). Reference
 defect: `UPSTREAM-DEFECTS.md` UD12; tests `coloured_pane_captures_keep_the_control_session_and_reach_the_pane`
 and `unescape_capture_inverts_tmux_capture_escaping`.
 
