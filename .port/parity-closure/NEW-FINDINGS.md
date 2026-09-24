@@ -3467,8 +3467,8 @@ the image's) and `kittygfx_animation_compose_rgba_conversion_oom_is_enomem`, thr
 - **severity**: medium (heap corruption; test-harness-visible, and reachable by any multi-threaded
   host of rustty-vt that has not initialized Oniguruma). **kind**: concurrency / C-init race.
 - **what**: `cargo test -p rustty-vt --lib --features oniguruma tmux::` crashed the test binary
-  intermittently in parallel mode: MEASURED 27 of 1,500 runs at tail-a2 before the fix (SIGTRAP 21,
-  SIGABRT 5, SIGSEGV 1), 0 single-threaded per the reviewer. Under lldb the faulting thread was
+  intermittently in parallel mode: MEASURED 27 of 1,500 runs at tail-a2 before the fix (SIGTRAP 20,
+  SIGABRT 6, SIGSEGV 1), 0 single-threaded per the reviewer. Under lldb the faulting thread was
   `tmux::control::tests::tmux_client_session_changed` in `libsystem_malloc` `mfm_free` (a malloc
   assertion), called from `callout_func_list_add` (`regparse.c:1340`) <- `onig_set_callout_of_name`
   <- the ASCII encoding's `init` (`ascii.c:64`) <- `onig_initialize_encoding` <- `onig_initialize`
