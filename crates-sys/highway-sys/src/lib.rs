@@ -575,13 +575,7 @@ mod tests {
             0
         );
         // AVX10.1-256 only: nothing.
-        assert_eq!(
-            avx512(X86Leaves {
-                leaf24_ebx: 0,
-                ..l
-            }),
-            0
-        );
+        assert_eq!(avx512(X86Leaves { leaf24_ebx: 0, ..l }), 0);
         // No AVX10 bit: leaf 0x24 is not consulted.
         assert_eq!(
             avx512(X86Leaves {
@@ -633,10 +627,7 @@ mod tests {
             TGT_NEON | TGT_NEON_BF16
         );
         // BF16 is nested under AES.
-        assert_eq!(
-            aarch64_linux(HWCAP_FPHP | HWCAP_ASIMDDP, HWCAP2_BF16, 0),
-            0
-        );
+        assert_eq!(aarch64_linux(HWCAP_FPHP | HWCAP_ASIMDDP, HWCAP2_BF16, 0), 0);
     }
 
     #[test]
