@@ -1248,6 +1248,116 @@ fn posix_call(mut call: impl FnMut() -> libc::c_int) -> Result<usize, Error> {
     }
 }
 
+/// The syscalls `setupFd` issues, as the test-only fail-point names them.
+#[cfg(not(windows))]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum SetupFdCall {
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    Dup3,
+    #[cfg_attr(target_os = "linux", allow(dead_code))]
+    GetFd,
+    #[cfg_attr(target_os = "linux", allow(dead_code))]
+    SetFd,
+    #[cfg_attr(target_os = "linux", allow(dead_code))]
+    Dup2,
+}
+
+/// Issue one of `setupFd`'s syscalls. In production this is the call itself.
+#[cfg(all(not(windows), not(test)))]
+#[inline(always)]
+fn setup_fd_syscall(_which: SetupFdCall, call: impl FnOnce() -> libc::c_int) -> libc::c_int {
+    call()
+}
+
+/// RUSTTY-ONLY, TEST-ONLY (task T-F2, S39-F4): the same, plus a per-thread
+/// fail-point. While armed (`setup_fd_fault::arm`), each call is recorded, and
+/// a call whose turn in the fault list has come fails with that errno instead
+/// of being issued. Unarmed, it reads only a `Cell<bool>` (no allocation, no
+/// TLS destructor), so the forking tests that reach `setupFd` in a child are
+/// unaffected.
+#[cfg(all(not(windows), test))]
+fn setup_fd_syscall(which: SetupFdCall, call: impl FnOnce() -> libc::c_int) -> libc::c_int {
+    match setup_fd_fault::next(which) {
+        Some(errno) => {
+            // SAFETY: writes this thread's errno.
+            unsafe {
+                #[cfg(any(target_os = "freebsd", target_os = "ios", target_os = "macos"))]
+                {
+                    *libc::__error() = errno;
+                }
+                #[cfg(target_os = "linux")]
+                {
+                    *libc::__errno_location() = errno;
+                }
+            }
+            -1
+        }
+        None => call(),
+    }
+}
+
+// Only the macOS/FreeBSD arm's test arms it.
+#[cfg(all(not(windows), test))]
+#[cfg_attr(target_os = "linux", allow(dead_code))]
+mod setup_fd_fault {
+    use super::SetupFdCall;
+    use std::cell::Cell;
+
+    const MAX: usize = 16;
+    type Faults = [Option<(SetupFdCall, i32)>; MAX];
+    type Log = ([Option<SetupFdCall>; MAX], usize);
+    thread_local! {
+        static ARMED: Cell<bool> = const { Cell::new(false) };
+        static FAULTS: Cell<Faults> = const { Cell::new([None; MAX]) };
+        static LOG: Cell<Log> = const { Cell::new(([None; MAX], 0)) };
+    }
+
+    /// Arm the fail-point: the faults are used in order, each failing the
+    /// next call of its kind once the earlier ones are used. Clears the log.
+    pub(super) fn arm(faults: &[(SetupFdCall, i32)]) {
+        assert!(faults.len() <= MAX);
+        let mut f = [None; MAX];
+        for (slot, &fault) in f.iter_mut().zip(faults) {
+            *slot = Some(fault);
+        }
+        FAULTS.set(f);
+        LOG.set(([None; MAX], 0));
+        ARMED.set(true);
+    }
+
+    /// Disarm, returning the calls attempted since `arm` and whether every
+    /// fault was used.
+    pub(super) fn disarm() -> (Vec<SetupFdCall>, bool) {
+        ARMED.set(false);
+        let (log, n) = LOG.get();
+        let used = FAULTS.get().iter().all(Option::is_none);
+        (log[..n].iter().map(|c| c.unwrap()).collect(), used)
+    }
+
+    pub(super) fn next(which: SetupFdCall) -> Option<i32> {
+        if !ARMED.get() {
+            return None;
+        }
+        let (mut log, n) = LOG.get();
+        assert!(
+            n < MAX,
+            "setupFd made more calls than the fail-point records"
+        );
+        log[n] = Some(which);
+        LOG.set((log, n + 1));
+        let mut faults = FAULTS.get();
+        let first = faults.iter().position(Option::is_some)?;
+        match faults[first] {
+            Some((call, errno)) if call == which => {
+                faults[first] = None;
+                FAULTS.set(faults);
+                Some(errno)
+            }
+            _ => None,
+        }
+    }
+}
+
 // fn setupFd(src: File.Handle, target: i32) !void
 #[cfg(not(windows))]
 fn setupFd(src: RawFd, target: i32) -> Result<(), Error> {
@@ -1259,7 +1369,9 @@ fn setupFd(src: RawFd, target: i32) -> Result<(), Error> {
         // file descriptor to be closed on exec since we're exactly exec-ing after
         // this.
         // _ = try PosixCall.f(linux.dup3, .{ src, target, 0 });
-        posix_call(|| unsafe { libc::dup3(src, target, 0) })?;
+        posix_call(|| {
+            setup_fd_syscall(SetupFdCall::Dup3, || unsafe { libc::dup3(src, target, 0) })
+        })?;
         Ok(())
     }
     #[cfg(any(target_os = "freebsd", target_os = "ios", target_os = "macos"))]
@@ -1267,15 +1379,23 @@ fn setupFd(src: RawFd, target: i32) -> Result<(), Error> {
         // Mac doesn't support dup3 so we use dup2. We purposely clear
         // CLO_ON_EXEC for this fd.
         // const flags = try PosixCall.f(posix.system.fcntl, .{ src, posix.F.GETFD });
-        let flags = posix_call(|| unsafe { libc::fcntl(src, libc::F_GETFD) })? as libc::c_int;
+        let flags = posix_call(|| {
+            setup_fd_syscall(SetupFdCall::GetFd, || unsafe {
+                libc::fcntl(src, libc::F_GETFD)
+            })
+        })? as libc::c_int;
         if flags & libc::FD_CLOEXEC != 0 {
             // _ = try PosixCall.f(posix.system.fcntl,
             //     .{ src, posix.F.SETFD, flags & ~@as(u32, posix.FD_CLOEXEC) });
-            posix_call(|| unsafe { libc::fcntl(src, libc::F_SETFD, flags & !libc::FD_CLOEXEC) })?;
+            posix_call(|| {
+                setup_fd_syscall(SetupFdCall::SetFd, || unsafe {
+                    libc::fcntl(src, libc::F_SETFD, flags & !libc::FD_CLOEXEC)
+                })
+            })?;
         }
 
         // _ = try PosixCall.f(posix.system.dup2, .{ src, target });
-        posix_call(|| unsafe { libc::dup2(src, target) })?;
+        posix_call(|| setup_fd_syscall(SetupFdCall::Dup2, || unsafe { libc::dup2(src, target) }))?;
         Ok(())
     }
     #[cfg(not(any(
@@ -2440,6 +2560,87 @@ mod tests {
             0
         );
         unsafe { libc::close(target) };
+    }
+
+    /// S39-F4, through `setupFd` itself (task T-F2): each of the macOS arm's
+    /// syscalls goes through `PosixCall.f` (`Command.zig:475-483`). A
+    /// test-only fail-point fails chosen calls with chosen errnos before they
+    /// are issued, and records every call attempted:
+    /// - `EINTR` on `fcntl(F_GETFD)`, `fcntl(F_SETFD)` and `dup2` is retried,
+    ///   and the fd round trip then completes (the port's bare `fcntl`s
+    ///   answered `Unexpected`);
+    /// - `EBUSY` on `dup2` is `error.FileBusy` after one attempt (the port's
+    ///   `dup2` shim retried it);
+    /// - the `fcntl`s map their errnos as `PosixCall.f` does.
+    #[test]
+    #[cfg(any(target_os = "freebsd", target_os = "ios", target_os = "macos"))]
+    #[cfg_attr(miri, ignore)] // real fcntl/dup2 syscalls
+    fn setup_fd_retries_eintr_and_fails_on_ebusy_through_posix_call() {
+        use super::setup_fd_fault;
+        use super::SetupFdCall::{Dup2, GetFd, SetFd};
+        use std::os::fd::AsRawFd as _;
+
+        let cloexec = |fd| unsafe { libc::fcntl(fd, libc::F_GETFD) } & libc::FD_CLOEXEC;
+        let fresh = || {
+            let src = std::fs::File::open("/dev/null").unwrap(); // O_CLOEXEC
+                                                                 // SAFETY: plain dup of an fd this test owns.
+            let target = unsafe { libc::dup(src.as_raw_fd()) };
+            assert!(target >= 0);
+            assert_ne!(cloexec(src.as_raw_fd()), 0);
+            (src, target)
+        };
+
+        // EINTR everywhere is retried; the round trip completes.
+        let (src, target) = fresh();
+        setup_fd_fault::arm(&[
+            (GetFd, libc::EINTR),
+            (GetFd, libc::EINTR),
+            (SetFd, libc::EINTR),
+            (Dup2, libc::EINTR),
+        ]);
+        let got = setupFd(src.as_raw_fd(), target);
+        let (calls, used) = setup_fd_fault::disarm();
+        assert_eq!(got, Ok(()));
+        assert!(used, "every injected EINTR was hit");
+        assert_eq!(calls, [GetFd, GetFd, GetFd, SetFd, SetFd, Dup2, Dup2]);
+        assert_eq!(cloexec(src.as_raw_fd()), 0, "FD_CLOEXEC cleared");
+        assert_eq!(cloexec(target), 0, "dup2 ran");
+        unsafe { libc::close(target) };
+
+        // EBUSY on dup2 is FileBusy at once, not retried.
+        let (src, target) = fresh();
+        setup_fd_fault::arm(&[(Dup2, libc::EBUSY)]);
+        let got = setupFd(src.as_raw_fd(), target);
+        let (calls, used) = setup_fd_fault::disarm();
+        assert!(used);
+        assert_eq!(got, Err(Error::FileBusy));
+        assert_eq!(calls, [GetFd, SetFd, Dup2]);
+        unsafe { libc::close(target) };
+
+        // The fcntls' errnos map as PosixCall.f maps them.
+        for (fault, want, want_calls) in [
+            ((GetFd, libc::EAGAIN), Error::Locked, &[GetFd][..]),
+            (
+                (GetFd, libc::EMFILE),
+                Error::ProcessFdQuotaExceeded,
+                &[GetFd][..],
+            ),
+            (
+                (SetFd, libc::EPERM),
+                Error::PermissionDenied,
+                &[GetFd, SetFd][..],
+            ),
+            ((SetFd, libc::EDEADLK), Error::DeadLock, &[GetFd, SetFd][..]),
+        ] {
+            let (src, target) = fresh();
+            setup_fd_fault::arm(&[fault]);
+            let got = setupFd(src.as_raw_fd(), target);
+            let (calls, used) = setup_fd_fault::disarm();
+            assert!(used);
+            assert_eq!(got, Err(want), "{fault:?}");
+            assert_eq!(calls, want_calls, "{fault:?}");
+            unsafe { libc::close(target) };
+        }
     }
 
     // [T8] Every test below forks. Take the crate-wide fork-serialization lock
