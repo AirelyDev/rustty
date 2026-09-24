@@ -340,6 +340,10 @@ pub mod option {
             // CORRECTION (parity S197-F1): this was
             // `core::str::from_utf8(full).ok()?.parse::<i32>().ok()`, which
             // rejects the `_` digit separators `std.fmt.parseInt` accepts.
+            // PORT NOTE: reference defect (R13), UD141: a `_` digit separator is refused
+            // before parsing, as Ghostty's own OSC 99 parser does; see
+            // `zig_parse_int::reject_digit_separators`.
+            crate::zig_parse_int::reject_digit_separators(full).ok()?;
             crate::zig_parse_int::parse::<i32>(full, 10).ok()
         },
     };
@@ -1608,12 +1612,15 @@ mod tests {
     }
 
     // Parity S197-F1: no reference test. The exit code is parsed with
-    // `std.fmt.parseInt(i32, full, 10)`, which accepts interior `_` digit
-    // separators and rejects a leading or trailing `_`.
+    // `std.fmt.parseInt(i32, full, 10)`, which accepts a leading `+`. UD141
+    // (R13): its `_` digit separators are refused, as Ghostty's own OSC 99
+    // parser refuses them (the reference reads `1_2` as 12).
     #[test]
-    fn option_read_exit_code_accepts_zig_digit_separators() {
-        assert_eq!(Some(12), option::EXIT_CODE.read(b"1_2"));
-        assert_eq!(Some(-12), option::EXIT_CODE.read(b"-1_2;aid=foo"));
+    fn option_read_exit_code_follows_zig_parse_int_but_refuses_digit_separators() {
+        assert_eq!(Some(12), option::EXIT_CODE.read(b"+12"));
+        assert_eq!(Some(-12), option::EXIT_CODE.read(b"-12;aid=foo"));
+        assert_eq!(None, option::EXIT_CODE.read(b"1_2"));
+        assert_eq!(None, option::EXIT_CODE.read(b"-1_2;aid=foo"));
         assert_eq!(None, option::EXIT_CODE.read(b"_12"));
         assert_eq!(None, option::EXIT_CODE.read(b"12_"));
     }

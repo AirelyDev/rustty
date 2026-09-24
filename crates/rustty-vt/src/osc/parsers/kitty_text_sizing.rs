@@ -105,11 +105,12 @@ impl OSC {
         // CORRECTION (parity S195-F2): this used `str::parse::<u8>()` plus a
         // range check, which rejects the `_` digit separators and the `-0`
         // that `std.fmt.parseInt` accepts.
-        let v: u8 = match crate::zig_parse_int::parse_int(
-            crate::zig_parse_int::IntType::unsigned(4),
-            value,
-            10,
-        ) {
+        // PORT NOTE: reference defect (R13), UD141: a `_` digit separator is refused
+        // before parsing, as Ghostty's own OSC 99 parser does; see
+        // `zig_parse_int::reject_digit_separators`.
+        let v: u8 = match crate::zig_parse_int::reject_digit_separators(value).and_then(|()| {
+            crate::zig_parse_int::parse_int(crate::zig_parse_int::IntType::unsigned(4), value, 10)
+        }) {
             Ok(v) => u8::try_from(v).expect("a u4 fits in u8"),
             Err(_) => return Err(UpdateError::InvalidValue),
         };
@@ -410,18 +411,31 @@ mod tests {
     }
 
     // Parity S195-F2: no reference test. `update` parses every value with
-    // `std.fmt.parseInt(u4, value, 10)`, which accepts interior `_` digit
-    // separators and a leading `+`, and rejects a leading or trailing `_`
-    // (the field then keeps its default).
+    // `std.fmt.parseInt(u4, value, 10)`, which accepts a leading `+`. UD141
+    // (R13): its `_` digit separators are refused, as Ghostty's own OSC 99
+    // parser refuses them (the field then keeps its default, the reference's
+    // `InvalidValue` path).
     #[test]
-    fn osc_66_values_accept_zig_digit_separators() {
+    fn osc_66_values_follow_zig_parse_int_but_refuse_digit_separators() {
         let mut p: Parser = Parser::init(None);
-        for ch in b"66;n=1_2:d=+1_5:s=_2:w=2_;bobr" {
+        for ch in b"66;n=12:d=+15;bobr" {
             p.next(*ch);
         }
         match p.end(Some(0x1b)).map(|c| c.clone()) {
             Some(Command::KittyTextSizing(osc)) => {
                 assert_eq!(12u8, osc.numerator);
+                assert_eq!(15u8, osc.denominator);
+            }
+            other => panic!("the OSC did not parse ({other:?})"),
+        }
+
+        let mut p: Parser = Parser::init(None);
+        for ch in b"66;n=1_2:d=+15:s=_2:w=2_;bobr" {
+            p.next(*ch);
+        }
+        match p.end(Some(0x1b)).map(|c| c.clone()) {
+            Some(Command::KittyTextSizing(osc)) => {
+                assert_eq!(0u8, osc.numerator);
                 assert_eq!(15u8, osc.denominator);
                 assert_eq!(1u8, osc.scale);
                 assert_eq!(0u8, osc.width);

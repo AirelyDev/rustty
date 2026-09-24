@@ -486,6 +486,10 @@ impl<'a> TokenizeScalar<'a> {
 // check, which rejects the `_` digit separators and the `-0` that
 // `std.fmt.parseInt` accepts.
 fn parse_int_u9(s: &[u8]) -> Option<u16> {
+    // PORT NOTE: reference defect (R13), UD141: a `_` digit separator is refused
+    // before parsing, as Ghostty's own OSC 99 parser does; see
+    // `zig_parse_int::reject_digit_separators`.
+    crate::zig_parse_int::reject_digit_separators(s).ok()?;
     let v =
         crate::zig_parse_int::parse_int(crate::zig_parse_int::IntType::unsigned(9), s, 10).ok()?;
     Some(u16::try_from(v).expect("a u9 fits in u16"))
@@ -700,12 +704,16 @@ mod tests {
 
     // test "OSC 4: multiple requests" {
     // Parity S194-F3: no reference test. The color index is parsed with
-    // `std.fmt.parseInt(u9, color_str, 10)`, which accepts interior `_` digit
-    // separators, a leading `+` and `-0`, and rejects a leading or trailing
-    // `_` and anything past `u9`.
+    // `std.fmt.parseInt(u9, color_str, 10)`, which accepts a leading `+` and
+    // `-0`, and rejects anything past `u9`. UD141 (R13): its `_` digit
+    // separators are refused, as Ghostty's own OSC 99 parser refuses them,
+    // taking the same failure path as any bad index.
     #[test]
-    fn osc_4_104_color_index_accepts_zig_digit_separators() {
-        let list = parse_color(Operation::osc_4, b"1_0;red;+1_1;blue");
+    fn osc_4_104_color_index_follows_zig_parse_int_but_refuses_digit_separators() {
+        // A `_` fails the parse, which ends an OSC 4 list.
+        assert_eq!(0, parse_color(Operation::osc_4, b"1_0;red;+11;blue").len());
+
+        let list = parse_color(Operation::osc_4, b"10;red;+11;blue");
         assert_eq!(2, list.len());
         assert_eq!(
             Request::Set(ColoredTarget {
@@ -722,11 +730,12 @@ mod tests {
             list[1]
         );
 
-        let list = parse_color(Operation::osc_104, b"1_2;_3;3_;-0;5_12;4");
+        // OSC 104 skips a bad index and goes on.
+        let list = parse_color(Operation::osc_104, b"1_2;_3;3_;-0;5_12;4;12");
         assert_eq!(3, list.len());
-        assert_eq!(Request::Reset(Target::Palette(12)), list[0]);
-        assert_eq!(Request::Reset(Target::Palette(0)), list[1]);
-        assert_eq!(Request::Reset(Target::Palette(4)), list[2]);
+        assert_eq!(Request::Reset(Target::Palette(0)), list[0]);
+        assert_eq!(Request::Reset(Target::Palette(4)), list[1]);
+        assert_eq!(Request::Reset(Target::Palette(12)), list[2]);
 
         // A leading `_` fails the parse, which ends an OSC 4 list.
         assert_eq!(0, parse_color(Operation::osc_4, b"_1;red").len());
