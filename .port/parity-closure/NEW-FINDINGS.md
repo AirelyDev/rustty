@@ -3636,12 +3636,21 @@ fix: 0 of 50 of the same sequential runs failed; see the task T-F2 report for th
 - **oracle**: `src/os/TempDir.zig:32-34` `cwd.openDir(global.io(), tmp_dir, .{})`. With `tmp_dir = ""`
   (a present-but-empty `TMPDIR`, which `allocTmpDir` returns verbatim) this fails with `FileNotFound`,
   MEASURED with zig 0.16.0 on macOS (`Dir.cwd().openDir(io, "", .{})` → `error.FileNotFound`).
-- **rustty**: `crates/rustty-os/src/tempdir.rs` `Dir::openDirPath` is `open_dir_abs(&self.path.join(sub_path))`,
-  and `Path::join("")` is the current directory itself, so `TempDir::init` succeeds and creates its
-  directory under the current working directory. By reading; not run.
-- **proposed fix**: make `openDir`/`openDirPath` fail with `NotFound` for an empty `sub_path`, as `openat`
-  does. Left to the `src/os` owner (not this batch's area).
-- **state**: OPEN.
+- **rustty**: `crates/rustty-os/src/tempdir.rs` `Dir::openDirPath` was `open_dir_abs(&self.path.join(sub_path))`,
+  and `Path::join("")` is the current directory itself, so `TempDir::init` succeeded and created its
+  directory under the current working directory (MEASURED by the T-H2 review: `openDirPath("")` returned
+  `Ok("./")`). Reachable in production: `Surface.writeScreenFile` (`Surface.zig:5699`, the
+  `write_screen_file` actions) starts with `TempDir.init()`, so with `TMPDIR=` Ghostty fails the action
+  and the port wrote the scrollback under the cwd.
+- **fix** (R1, task T-H3): `Dir::openDir` and `Dir::openDirPath` fail with `NotFound` for an empty
+  `sub_path` (`reject_empty_sub_path`, PORT NOTE on it). Re-MEASURED in task T-H3 (zig 0.16.0, macOS, the
+  exact `trimEnd` + `std.Io.Dir.cwd().openDir(io, t, .{})`): `""`, `/` and `//` give
+  `error.FileNotFound`; `/tmp/` and `.` open. Tests `tempdir::tests::open_dir_fails_with_not_found_on_an_empty_sub_path`
+  and `tempdir::tests::init_fails_with_not_found_when_tmpdir_is_empty` (a child with `TMPDIR=` and a fresh
+  cwd; asserts the child ran one test, `TempDir::init` failed with `NotFound`, and the cwd stayed empty).
+  Negative control: the check disabled fails both, the second with "TempDir::init succeeded with an
+  empty TMPDIR (created .. under the cwd)".
+- **state**: CLOSED (task T-H3).
 
 ## N173 — after S43-F3, `codepoint-width --mode=wcwidth` is no longer comparable to the pinned perf oracle
 

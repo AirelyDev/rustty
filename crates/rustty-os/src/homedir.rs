@@ -181,8 +181,9 @@ fn homeUnix<'a>(
 /// UNVERIFIED, but the allocation happens in generic std code. The port
 /// implements the 512-byte limit the reference asks for: a home path of 361
 /// to 511 bytes is returned, not an error. Stderr already behaves as the
-/// limit says (same probe: 509 bytes of stderr come back with exit 1, 514
-/// bytes fail with `StreamTooLong`), and the port matches it.
+/// limit says, exactly at the edge: 512 bytes of stderr come back with exit
+/// 1, 513 bytes fail with `StreamTooLong`; the port matches it. ReleaseFast
+/// was measured too and is identical on both streams.
 #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "macos"))]
 #[cfg_attr(target_os = "macos", allow(dead_code))] // tested on macOS; reached on Linux/FreeBSD
 fn home_from_shell<'a>(
