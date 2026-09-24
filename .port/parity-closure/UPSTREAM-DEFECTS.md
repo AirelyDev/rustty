@@ -1717,6 +1717,21 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 
 - upstream status: NOT YET REPORTED. Report PRIVATELY through Ghostty's GitHub security advisory process (a repository Security Advisory / private vulnerability report), NOT a public issue: this is a remotely reachable denial-of-service — about 1.2 KB of ordinary terminal output crashes Ghostty at a standard 80×24 size — so it should be disclosed privately and given time to fix before any public description.
 
+### UD140 — a kitty graphics file (or zlib payload) of exactly `max_size` bytes is rejected, one byte short of the inclusive limit used everywhere else
+- kind:            functional (off-by-one against the file's evident intent)
+- upstream project: ghostty
+- severity:        low
+- reference:       src/terminal/kitty/graphics_image.zig:21 (`max_size = 400 * 1024 * 1024`), :440 (`readFile`, no `s=`: `reader.appendRemaining(alloc, &managed, .limited(max_size))`), :608 (`decompressZlib`: `stream.reader.appendRemaining(alloc, &list, .limited(max_size))`); the inclusive checks at :323 (`data_size > max_size`), :428 (`size > max_size`), :506 (`len + data.len > max_size`), :642 (`result.data.len > max_size`). zig 0.16.0 `std/Io/Reader.zig` `appendRemainingAligned` doc: "If `limit` is reached or exceeded, `error.StreamTooLong` is returned instead". At 20abdb50a.
+- defect:          `.limited(n)` fails once `n` bytes have been read, so both `appendRemaining` sites reject a payload of exactly `max_size` bytes, while every other `max_size` check in the file accepts exactly `max_size` and rejects more. The same 400 MiB file therefore loads when sent with `s=` and fails with `InvalidData` without it. The limit semantics were read in the pinned stdlib and pinned by the port's faithful `append_remaining_limited` test; not measured on a Ghostty build.
+- ReleaseSafe:     no crash; the transmission fails (`InvalidData` for the file path, `DecompressionFailed` for zlib), answered with an error response.
+- ReleaseFast:     same.
+- reachability:    any program that sends a file-medium image of exactly 419,430,400 bytes without `s=`, or a zlib payload that inflates to exactly that size.
+- port handling:   fixed (R13, extended 2026-09-23): `readFile` reads with a limit of `max_size + 1` (`crates/rustty-vt/src/kitty/graphics_image.rs`, PORT NOTE: reference defect (R13) at the call), so exactly `max_size` loads and one byte more is still `InvalidData`. The zlib path was already inclusive: `zlib_sys::inflate_zlib` accepts exactly its limit and rejects more (MEASURED on the 128x96 fixture at limit = its 36,864-byte output, and limit - 1); a PORT NOTE at `decompressZlib` now records that this differs from the reference. Listed in `docs/ghostty-bug-fixes.md`.
+- parity row(s):   LEDGER S189-F2 (T-A ported the off-by-one faithfully; review-T-A "extended R13" item 1).
+- test:            `image_load_file_of_max_size_without_size_loads` (negative control: the limit back to `max_size` fails, "a file of exactly max_size bytes must load"); `image_load_file_over_max_size_without_size_is_invalid_data` (negative control: limit `max_size + 2` fails); `zlib_inflate_accepts_exactly_the_limit` (negative control: `inflate_zlib` made to reject a stream ending at the limit fails on the exact-limit `unwrap`). `append_remaining_limited_matches_zig_limit_semantics` still pins the faithful Zig semantics of the helper itself.
+- proposed fix:    use `.limited(max_size + 1)` at both sites (or check `list.items.len > max_size` after an unlimited-but-bounded read), matching the file's other checks.
+- upstream status: not reported
+
 ### UD150 — `GitVersion.detect` turns the branch's trailing newline into `-`, so every dev version reads `X.Y.Z-<branch>-+<hash>`
 - kind:            latent (functional: a mangled value that visibly breaks the code's evident intent; no crash). RECLASSIFIED 2026-09-23 (review T-B) from "latent, ported faithfully" to fixed under the extended R13.
 - upstream project: ghostty
