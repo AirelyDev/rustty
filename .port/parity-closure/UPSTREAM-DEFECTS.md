@@ -1973,6 +1973,21 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - proposed fix:    in `allocTmpDir`, keep one separator when the trimmed value would be empty and the original was not: `const t = std.mem.trimEnd(u8, tmpdir, "/"); return if (t.len == 0 and tmpdir.len > 0) "/" else t;`.
 - upstream status: not reported
 
+### UD230 — `std.Uri` percent-decodes `%-0` to a NUL byte and `%+X` to the byte `X`, in an OSC 7 path or host
+- kind:            non-crash (evident intent broken)
+- upstream project: zig (the standard library's URI decoder), reached through ghostty
+- severity:        low
+- reference:       Zig 0.16.0 `lib/std/Uri.zig:86-104` (`Component.formatRaw`: `std.fmt.parseInt(u8, percent_encoded[index..][0..2], 16) catch continue;`), also `:172-190` (`percentDecodeBackwards`, doc comment "Percent decodes all %XX where XX is a valid hex number", not reached from Ghostty); Ghostty `src/termio/stream_handler.zig:1493-1537` (`reportPwd`: `internal_os.uri.parse`, then `uri.getHost` and `uri.path.toRawMaybeAlloc`, both of which format through `formatRaw`). At 20abdb50a.
+- defect:          RFC 3986's `pct-encoded` is `"%" HEXDIG HEXDIG`, and `formatRaw` passes every other invalid escape through unchanged (`catch continue`), but `parseInt` also takes a leading sign: `+` followed by one hex digit, and `-0`, are read as numbers. MEASURED with a probe over `Component.toRawMaybeAlloc` (Zig 0.16.0 ReleaseSafe and ReleaseFast, macOS, identical): `/a%-0b` -> `/a\x00b`, `/a%+Fb` -> `/a\x0fb`, `/a%+b` -> `/a\x0b`; `%_1`, `%1_`, `%-1`, `%zz` pass through. Over the task's 1940-input probe corpus placed after a `%`, 116 inputs decode through a sign.
+- ReleaseSafe:     a malformed escape becomes a byte the sender never wrote: a NUL or a control character in the terminal's pwd (then in the title while none was set, in the surface's pwd, and in a new tab's or split's `working-directory`; for a NUL the port's `exec.rs` test `osc7_percent_00_pwd_is_ignored_as_a_cwd_instead_of_panicking` records the reference's `cannot access cwd, ignoring` arm, UNVERIFIED here through a Ghostty binary). A `%-0` in the host makes the host not local, as `%00` would.
+- ReleaseFast:     the same (no safety check is involved; MEASURED identical).
+- reachability:    any program that writes OSC 7 with a malformed escape (`ESC ] 7 ; file://<local host>/tmp/a%-0b BEL`); a correct sender writes a literal `%` as `%25`. `kitty-shell-cwd://` paths are not decoded (`raw_path`), only their host.
+- port handling:   fixed (R13): `crates/rustty-os/src/uri.rs` `parse_int_u8_hex` decodes an escape only when both bytes are hex digits, then parses them with `rustty_zigstd::fmt::parse_int::<u8>` (PORT NOTE: reference defect (R13) on the function). Every escape of two hex digits decodes as in the reference. Listed in `docs/ghostty-bug-fixes.md`.
+- parity row(s):   NEW-FINDINGS N206 (the separate R13 question it raised); LEDGER S112-F9 had kept this faithfully.
+- test:            `uri::tests::percent_escapes_decode_only_two_hex_digits` and `uri::tests::osc7_path_keeps_a_signed_escape` (the OSC 7 `parse` options, then the path formatted as `toRawMaybeAlloc` does; `%41` in the same path proves decoding ran). Negative control (macOS, task tail-s9b): the hex-digit check disabled, both fail with `left: [.., 97, 0, 98, ..]` (the NUL) where `[.., 97, 37, 45, 48, 98, ..]` (`a%-0b`) is expected.
+- proposed fix:    in `formatRaw` and `percentDecodeBackwards`, decode only when both bytes pass `std.ascii.isHex` (or parse with `std.fmt.charToDigit` per byte instead of `parseInt`).
+- upstream status: not reported
+
 ## Candidates pending verification
 
 Assembled from this plan's progress notes on 2026-09-11. **Not verified** — do not cite as fact.
