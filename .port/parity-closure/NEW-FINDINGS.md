@@ -3587,6 +3587,38 @@ fix: 0 of 50 of the same sequential runs failed; see the task T-F2 report for th
   UD202/UD203. The Linux-only `send` arm that calls it is not compiled on macOS.
 - **state**: OPEN — fix written, Linux run pending (same as S112-F8).
 
+## N170 — `randomTmpPath` renders the temp dir through `String::from_utf8_lossy`
+
+- **id**: N170. Not in the inventory. Found by task T-H while closing S111-F12 (the same conversion in
+  `allocTmpDir`); outside that row's cited anchors (`file.zig:85-86`).
+- **severity**: low. **kind**: behavioral-difference (byte-slice → lossy `String`).
+- **oracle**: `src/os/file.zig:121-132` `randomTmpPath` returns `[]u8` from
+  `allocPrint("{s}{c}{s}{s}", .{ global.tmpDirPath(), sep, prefix, basename })`: the temp dir's bytes
+  verbatim.
+- **rustty**: `crates/rustty-os/src/file.rs` `randomTmpPath` returns `String` and formats
+  `String::from_utf8_lossy(rustty_global::tmp_dir_path())`, so a non-UTF-8 `TMPDIR` yields a path naming
+  a different directory. Its one caller is `crates/rustty-cli/src/ssh.rs` (the ssh control path).
+- **proposed fix**: return `Vec<u8>` and pass it to the ssh `Command` as an `OsStr` (touches
+  `rustty-cli`, area `src/cli`).
+- **state**: OPEN.
+
+## N171 — `flatpakExit` can now receive the timer error its `catch unreachable` assumes away
+
+- **id**: N171. Not in the inventory. Found by task T-H while closing S111-F3.
+- **severity**: low. **kind**: R13 candidate (a reference `catch unreachable` on an externally
+  produced error), for the `src/termio` owner.
+- **oracle**: `src/termio/Exec.zig` `flatpakExit`: `const exit_code = r catch unreachable;` over
+  `FlatpakHostCommand.WaitError!u8`, and `WaitError = xev.Timer.RunError || Error` (`os/flatpak.zig:110`).
+  The completion's result is `Error.FlatpakMustBeStarted`/`FlatpakSpawnFail` when `waitXev` runs before
+  a successful start, and the timer's own `RunError` (`Canceled`, `Unexpected`) when the loop fails.
+- **rustty**: `crates/rustty-termio/src/exec.rs` `flatpakExit` is `r.unwrap()`. Since S111-F3 the
+  `WaitError::Timer(..)` variant reaches it verbatim, as in the reference; before, the port turned it into
+  `Flatpak(FlatpakSpawnFail)`, which the `unwrap` also panicked on. Reachability not measured (flatpak
+  only, Linux).
+- **proposed fix**: decide under R13 (the `src/termio` batch) whether a failed wait should be handled
+  like a process exit, not a panic.
+- **state**: OPEN.
+
 ## N196 — tests passed without testing anything when their environment was missing
 
 - **id**: N196. Not in the inventory. Found by the tail-s3 task (silent-skip audit), 2026-09-23.
