@@ -3053,10 +3053,12 @@ source id (assertion), the old predicate ("remapped runs batched: 0").
 regenerated: `sgr-small.bin` = `ghostty-gen +styled --seed=42 --style-rate=0.8`, `styles-small.bin` =
 random 24-bit foreground per 4-16-character run, Python `random.Random(93)`, both 262,144 B; the
 originals were not kept): instructions retired, clone minus noop, per 1,000 clones: SGR mix 1,581M before,
-550M after, Ghostty 1,321M; truecolor 1,752M before, 642M after, Ghostty 1,484M. CPU time (user+sys,
-interleaved rounds, N=21, load 21-25), clone minus noop: SGR mix 72.7 ms before, 28.5 ms after, Ghostty
+550M after, Ghostty 1,321M; truecolor 1,752M before, 642M after, Ghostty 1,484M (instruction counts are
+deterministic and carry the closure). PROVISIONAL (load 21-25, above `IDLE_MAX` 2.0): CPU time (user+sys,
+interleaved rounds, N=21), clone minus noop: SGR mix 72.7 ms before, 28.5 ms after, Ghostty
 66.4 ms (0.43x); truecolor 83.3 ms before, 38.5 ms after, Ghostty 79.7 ms (0.48x). `screen-clone.clone/small`
-unchanged (instructions 1.001x, cycles 0.997x over 41 rounds).
+unchanged (instructions 1.001x, cycles 0.997x over 41 rounds). The authoritative idle ws10 run is still
+owed (task S-4 report).
 
 **state**: CLOSED (task S-4).
 
@@ -3948,15 +3950,21 @@ fix: 0 of 50 of the same sequential runs failed; see the task T-F2 report for th
 - **resolution** (task S-4, MEASURED; measured on the merge of `tail-s2`, so with N82's Wyhash hash):
   the gap is the retired oracle, not the port. Against Ghostty's bench built at the pin (N173's
   rebuilt oracle), on the same `osc8.bin` (the file itself, copied from the tail-s2
-  scratch): wall, interleaved N=15, load 17-19: pin oracle 357.1 ms, rustty 356.8 ms (paired ratio
-  1.002), retired `4749c4e93` oracle 109.4 ms; CPU time: pin oracle 357.7, rustty 358.3 ms (paired 0.992); instructions retired
-  rustty 5,029M vs pin oracle 5,240M (0.965). Both log the same diagnostics: 126,363
+  scratch): PROVISIONAL (load 17-19, above `IDLE_MAX` 2.0) wall, interleaved N=15: pin oracle 357.1 ms,
+  rustty 356.8 ms (paired ratio 1.002), retired `4749c4e93` oracle 109.4 ms; CPU time: pin oracle 357.7,
+  rustty 358.3 ms (paired 0.992). Deterministic: instructions retired rustty 5,029M vs pin oracle 5,240M
+  (0.965). Both log the same diagnostics: 126,363
   `start_hyperlink err=OutOfSpace` warnings and 1,004 `adjusting page capacity` lines each (the page
   reaches the 65,535-byte hyperlink ceiling and the reference drops further links there too), so both
   do the same work; Ghostty itself became about 3.3x slower on this corpus between `4749c4e93` and the
-  pin. An xctrace profile of rustty puts 32% of samples in writing those warnings and 29% in
+  pin. Why (measured by review S-4): the retired binary writes 0 diagnostic lines on this corpus (its
+  bench never ran `global.init`, so logging was never enabled), the pin's writes 127,375, because
+  `benchmark/cli.zig:55` now runs `global.init(.{ .tool = ... })`, which turns on the stderr and macOS
+  unified-log sinks, and `main_ghostty.zig`'s `logFn` creates an `os_log` logger per message. Controller
+  ruling: the warning per dropped hyperlink is the reference's intended behaviour (a diagnostic at a
+  designed capacity ceiling), not an R13 defect, and the port does not diverge. An xctrace profile of rustty puts 32% of samples in writing those warnings and 29% in
   `increase_capacity` (the reference was not profiled). Re-measured at the end of task S-4
-  (N=21, CPU): rustty 356.3 ms, pin oracle 365.4 ms (paired 0.98).
+  (PROVISIONAL, N=21, CPU, load 21-25): rustty 356.3 ms, pin oracle 365.4 ms (paired 0.98).
 - **state**: CLOSED (task S-4; not a port gap).
 
 ## N208 — `Offset(T).Slice` field order differs from the reference on 64-bit targets
@@ -4002,7 +4010,8 @@ fix: 0 of 50 of the same sequential runs failed; see the task T-F2 report for th
      reference's 12). The reference tests the group with `@reduce` alone and builds the bitmask only
      on the group that ends the run. Both scans now do the same, the reduction spelled as an unsigned
      min/max so LLVM emits one vector op and an across-lanes reduce (a boolean-AND spelling still
-     lowered to a partly scalar sequence): 1,389.6M -> 1,254.9M -> 1,095.5M.
+     lowered to a partly scalar sequence): 1,389.6M -> 1,254.9M -> 1,095.5M (intermediate builds;
+     the final candidate, with cause 2 fixed too, measured 1,095.7M, below).
   2. the bench read the corpus through `DataFile`'s 256 KiB `BufReader`, which a 64 KiB request does not
      bypass, so the whole corpus was memcpy'd once (about 3% of samples). The reference's
      `TerminalStream` reads unbuffered (`f.reader(io, &.{})`); `DataFile::unbuffered` is that, and the
@@ -4012,9 +4021,11 @@ fix: 0 of 50 of the same sequential runs failed; see the task T-F2 report for th
   `stream_print_slice_batches_printable_runs` and the print-vs-`print_slice` differential fuzz
   (controls: stream stop never detected -> "expected exactly two printable runs"; scan threshold widened
   past 0xFF -> the differential's cursor mismatch).
-- **measured**: instructions 1,095.7M (pin oracle 1,097.4M); wall, interleaved N=31, load 13: 59.0 ms
-  before, 51.8 ms after (0.879), pin oracle 52.9 ms; CPU N=25: 49.9 ms vs pin oracle 53.7 ms (0.93).
-  Every other ws10 config: instructions within 1% of before (`screen-clone.noop` -1.8%).
+- **measured**: instructions (deterministic) 1,095.7M for the final candidate (pin oracle 1,097.4M).
+  PROVISIONAL (above `IDLE_MAX` 2.0): wall, interleaved N=31, load 13: 59.0 ms before, 51.8 ms after
+  (0.879), pin oracle 52.9 ms; CPU N=25, load 21-28: 49.9 ms vs pin oracle 53.7 ms (0.93). Every other
+  ws10 config: instructions within 1% of before (`screen-clone.noop` -1.8%). The authoritative idle ws10
+  run is still owed (task S-4 report).
 - **state**: CLOSED (task S-4).
 
 ## N220 — the deferred uucode revision bump (`NON_PORTS.md` §G1): CI still pinned Zig 0.15.2, which cannot build the harness's uucode
