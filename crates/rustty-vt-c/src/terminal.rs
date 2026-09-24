@@ -198,6 +198,14 @@ pub struct TerminalWrapper {
     // that reference under Stacked Borrows. `free` reclaims it LAST.
     pub alloc: *mut dyn rustty_lib::allocator::ZigAllocator,
 
+    // PORT NOTE (parity S179-F3, internal): a copy of the caller's C allocator
+    // (`alloc_`, null for the default) for objects that can OUTLIVE this
+    // wrapper and must be freed through the caller's allocator, as the
+    // reference's `t.gpa()` is: a `TrackedGridRef` (`grid_ref_track`). Such an
+    // object keeps its own copy, as `OscParserWrapper` does, since `alloc`
+    // above is gone once the terminal is freed.
+    pub c_alloc: Option<CAllocator>,
+
     // /// C construction has no I/O argument, so the wrapper retains the owner
     // /// created by `new` or transferred from snapshot decoding until `free`.
     // /// Freestanding owners contain no native allocation and expose failing I/O.
@@ -1622,7 +1630,14 @@ fn new_(
     // return try wrap(alloc, t, io, default_continuation_max_bytes);
     // (reference errdefers on wrap failure: t.deinit + destroy(t) + io.deinit —
     // the explicit unwind below; `io` is N/A, see the `Io` PORT NOTE.)
-    match unsafe { wrap(alloc_holder, terminal_ptr, DEFAULT_CONTINUATION_MAX_BYTES) } {
+    match unsafe {
+        wrap(
+            alloc_holder,
+            alloc_.copied(),
+            terminal_ptr,
+            DEFAULT_CONTINUATION_MAX_BYTES,
+        )
+    } {
         Ok(wrapper) => Ok(wrapper),
         Err(_oom) => {
             // SAFETY: `terminal_ptr` holds the initialized terminal written
@@ -1660,6 +1675,7 @@ struct WrapOutOfMemory;
 // point to an initialized, heap-stable `ZigTerminal` allocated through it.
 unsafe fn wrap(
     alloc_holder: *mut dyn rustty_lib::allocator::ZigAllocator,
+    c_alloc: Option<CAllocator>,
     terminal_ptr: *mut ZigTerminal,
     continuation_max_bytes: usize,
 ) -> std::result::Result<Terminal, WrapOutOfMemory> {
@@ -1731,6 +1747,7 @@ unsafe fn wrap(
             TerminalWrapper {
                 terminal: terminal_ptr,
                 alloc: alloc_holder,
+                c_alloc,
                 // .terminfo_name_buf = undefined,
                 // (a zeroed seed — never observed before `set(.terminfo_name)`
                 // overwrites the prefix it then publishes)
@@ -1905,7 +1922,14 @@ pub unsafe fn from_decoded(
         continuation.len()
     };
     // const terminal = wrap(alloc, native, io, tracker_max_bytes) catch |err| { ... };
-    let terminal = match unsafe { wrap(alloc_holder, terminal_ptr, tracker_max_bytes) } {
+    let terminal = match unsafe {
+        wrap(
+            alloc_holder,
+            alloc_.copied(),
+            terminal_ptr,
+            tracker_max_bytes,
+        )
+    } {
         Ok(terminal) => terminal,
         Err(_oom) => {
             // native.deinit(alloc); alloc.destroy(native); io.deinit(alloc);
@@ -4376,43 +4400,102 @@ pub unsafe fn grid_ref_track(
     };
 
     // const alloc = t.gpa();
-    // PORT NOTE (Miri SB+TB): `t.gpa()` is `fn gpa(&mut self)` and would form a
-    // `&Terminal`/`&mut Terminal` reborrow over `*t`, freezing/aliasing the
-    // `tracked_pin` tag created above through the `&mut Terminal` path and causing
-    // a Tree-Borrows protector violation when the pin is later written during a
-    // terminal scroll. `gpa()` merely reads `self.screens.active.alloc` (a `Global`
-    // ZST copy), so we read that field through the existing `active: *mut Screen`
-    // raw pointer, keeping the access window to a single field read and never
-    // forming a reference to `*t`.
-    let alloc = unsafe { (*active).alloc };
-    // const ref = alloc.create(grid_ref_tracked_c.TrackedGridRef) catch { list.untrackPin(tracked_pin); return .out_of_memory; };
-    // PORT NOTE: `alloc.create` is the per-terminal allocator; rustty heap-boxes
-    // the `TrackedGridRef` (the `gpa()` is `Global`). `Box::new` does not return a
-    // recoverable OOM (it aborts), so the `catch return .out_of_memory` arm is
-    // unreachable — matching the reference's only-on-OOM cleanup path.
+    // PORT NOTE (parity S179-F3): the reference's `t.gpa()` is the caller's
+    // allocator (`t.init(alloc, ..)`). The port's terminal internals are still
+    // on the Rust heap (S179-F2), so the ref takes the wrapper's copy of the
+    // caller's C allocator instead (`TerminalWrapper.c_alloc`), read through
+    // the raw wrapper pointer (no reference to `*t` is formed; Miri SB+TB).
+    // The ref keeps its own copy, so it can be freed after the terminal.
+    let alloc: Option<CAllocator> = unsafe { (*terminal_).c_alloc };
     let active_key = unsafe { (*t).screens.active_key };
     let generation = unsafe { (*t).screens.generation(active_key) };
+    // const ref = alloc.create(grid_ref_tracked_c.TrackedGridRef) catch { list.untrackPin(tracked_pin); return .out_of_memory; };
     // ref.* = .{ .alloc, .terminal = wrapper, .screen_key, .screen_generation, .pin = tracked_pin };
-    let ref_ptr: *mut TrackedGridRef = Box::into_raw(Box::new(TrackedGridRef {
-        alloc,
-        terminal: terminal_,
-        screen_key: active_key,
-        screen_generation: generation,
-        pin: tracked_pin,
-    }));
+    // SAFETY: `alloc`, if set, is the caller's allocator (C contract: valid
+    // for as long as objects created with it live).
+    let ref_ptr: *mut TrackedGridRef = unsafe {
+        crate::cwrap::create(
+            alloc.as_ref(),
+            TrackedGridRef {
+                alloc,
+                terminal: terminal_,
+                screen_key: active_key,
+                screen_generation: generation,
+                pin: tracked_pin,
+            },
+        )
+    };
+    if ref_ptr.is_null() {
+        // SAFETY: `list` is the live active PageList that tracked the pin.
+        unsafe { (*list).untrack_pin(tracked_pin) };
+        return Result::OutOfMemory;
+    }
 
     // Store the tracked ref in the terminal so that when we free
     // the terminal the tracked ref can be detached safely.
-    // wrapper.tracked_grid_refs.putNoClobber(alloc, ref, {}) catch { ... };
+    // wrapper.tracked_grid_refs.putNoClobber(alloc, ref, {}) catch {
+    //     list.untrackPin(tracked_pin);
+    //     alloc.destroy(ref);
+    //     return .out_of_memory;
+    // };
     // PORT NOTE: `putNoClobber` asserts the key is absent (a fresh heap ptr is
     // always unique); the rustty `HashSet::insert` returns `true` for new keys.
+    // PORT NOTE (parity S179-F3): `try_reserve` is the fallible half of the
+    // map's growth, so the reference's `catch` arm is reachable, as in
+    // `search::new` (S4-F3). The registry itself stays on the Rust heap
+    // (S176-F1's allocator adapter).
+    #[cfg(test)]
+    let reserved = track_tw_check().and_then(|()| unsafe {
+        (*terminal_)
+            .tracked_grid_refs
+            .try_reserve(1)
+            .map_err(|_| TrackRegistryFull)
+    });
+    #[cfg(not(test))]
+    let reserved = unsafe { (*terminal_).tracked_grid_refs.try_reserve(1) };
+    if reserved.is_err() {
+        // SAFETY: as above; `ref_ptr` was just created with `alloc` and has
+        // not been handed out.
+        unsafe { (*list).untrack_pin(tracked_pin) };
+        unsafe { crate::cwrap::destroy(alloc.as_ref(), ref_ptr) };
+        return Result::OutOfMemory;
+    }
     // SAFETY: `tracked_grid_refs` is a sibling field of the live wrapper.
-    unsafe { (*terminal_).tracked_grid_refs.insert(ref_ptr) };
+    let inserted = unsafe { (*terminal_).tracked_grid_refs.insert(ref_ptr) };
+    debug_assert!(inserted);
 
     // out.* = ref;
     unsafe { *out_ref = ref_ptr };
     // return .success;
     Result::Success
+}
+
+// PORT NOTE: tripwire fail-point for the tracked-ref registry's growth in
+// `grid_ref_track` (`wrapper.tracked_grid_refs.putNoClobber(alloc, ref, {})`),
+// standing in for `std.testing.FailingAllocator`, as `search.rs`'s
+// `REGISTER_TW` does for S4-F3 (parity S179-F3).
+#[cfg(test)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub(crate) enum TrackFp {
+    Reserve,
+}
+
+/// The tripwire's error value (Zig `Allocator.Error`).
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct TrackRegistryFull;
+
+#[cfg(test)]
+thread_local! {
+    pub(crate) static TRACK_TW: core::cell::RefCell<
+        rustty_util::tripwire::Module<TrackFp, TrackRegistryFull>,
+    > = core::cell::RefCell::new(rustty_util::tripwire::module());
+}
+
+#[cfg(test)]
+#[inline]
+fn track_tw_check() -> core::result::Result<(), TrackRegistryFull> {
+    TRACK_TW.with(|tw| tw.borrow_mut().check(TrackFp::Reserve))
 }
 
 // pub fn point_from_grid_ref(terminal_, ref: *const grid_ref_c.CGridRef, tag: point.Tag, out: ?*point.Coordinate) ... {
