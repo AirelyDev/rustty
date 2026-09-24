@@ -24,13 +24,18 @@
 use gdk4::prelude::*;
 use gtk4::prelude::*;
 
+// X11 compatibility. Ideally this should just be an `i32` like Wayland,
+// but XLib requires `c_long`.
+//
 /// PORTS: `BlurRegion.zig:25` `const Pos = c_long`. XLib compatibility width; on
 /// the 64-bit Linux targets rustty builds for, `c_long` is `i64`. Wayland itself
 /// only needs `i32` (the slices are cast down at the `wl_region.add` call site).
 pub type Pos = i64;
 
-/// PORTS: `BlurRegion.zig:16-21` `Slice` — one rectangular slice of the blur
-/// region. `#[repr(C)]` mirrors the reference's `extern struct` so the X11 arm
+/// A rectangular slice of the blur region.
+// Marked `extern` since we want to be able to use this in X11 directly.
+//
+/// PORTS: `BlurRegion.zig:16-21` `Slice`. `#[repr(C)]` mirrors the reference's `extern struct` so the X11 arm
 /// (L6) can reuse it across the XLib FFI boundary unchanged.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,15 +80,21 @@ impl BlurRegion {
         &self.slices
     }
 
-    /// PORTS: `BlurRegion.zig:124-130` `eql`. Whether two sets of blur regions are
-    /// equal.
+    /// Whether two sets of blur regions are equal.
+    ///
+    /// PORTS: `BlurRegion.zig:124-130` `eql`.
     #[must_use]
     pub fn eql(&self, other: &BlurRegion) -> bool {
         self.slices == other.slices
     }
 
-    /// PORTS: `BlurRegion.zig:41-121` `calcForWindow`. Compute the blur region for
-    /// a window, carving out the rounded corners so blur does not bleed past them.
+    // Calculate the blur regions for a window.
+    //
+    // Since we have rounded corners by default, we need to carve out the
+    // pixels on each corner to avoid the "korners bug".
+    // (cf. https://github.com/cutefishos/fishui/blob/41d4ba194063a3c7fff4675619b57e6ac0504f06/src/platforms/linux/blurhelper/windowblur.cpp#L134)
+    //
+    /// PORTS: `BlurRegion.zig:41-121` `calcForWindow`.
     ///
     /// `native` is the window as a [`gtk4::Native`] (the reference's
     /// `window.as(gtk.Native)`); `csd` is whether client-side decorations are
@@ -101,9 +112,16 @@ impl BlurRegion {
             return BlurRegion::empty();
         };
 
-        // NOTE(pluiedev, ported verbatim): CSDs make GNOME report a window ~30%
-        // bigger than it really is (shadows + rounded corners). We trim those
-        // offsets. (`BlurRegion.zig:58-72`)
+        // Calculate the primary blur region
+        // (the one that covers most of the screen).
+        // It's easier to do this inside a vector since we have to scale
+        // everything by the scale factor anyways.
+
+        // NOTE(pluiedev; editorializing stripped): GNOME's CSDs make a window
+        // ~30% bigger
+        // internally than how they really are just for your shadows and
+        // rounded corners and all that fluff. We trim those offsets.
+        // (`BlurRegion.zig:58-72`)
         let (x, y): (Pos, Pos) = {
             // `native.getSurfaceTransform(&x, &y)` (`BlurRegion.zig:65`).
             let (mut xf, mut yf) = native.surface_transform();
@@ -115,8 +133,8 @@ impl BlurRegion {
             (xf as Pos, yf as Pos)
         };
 
-        // `BlurRegion.zig:74-80` — trim the CSD offsets off both ends (folded into
-        // the initializer; be careful not to go negative).
+        // Trim off the offsets. Be careful not to get negative.
+        // (`BlurRegion.zig:74-80`, folded into the initializer.)
         let width = Pos::from(surface.width()) - x * 2;
         let height = Pos::from(surface.height()) - y * 2;
         if width <= 0 || height <= 0 {
@@ -125,8 +143,9 @@ impl BlurRegion {
 
         // Empirically determined (`BlurRegion.zig:82-97`).
         let are_corners_rounded = {
-            // This cast should always succeed as all of our windows should be
-            // toplevel (`:85-90`).
+            // This cast should always succeed as all of our windows
+            // should be toplevel. If this fails, something very strange
+            // is going on. (`:85-90`)
             if let Some(toplevel) = surface.downcast_ref::<gdk4::Toplevel>() {
                 let state = toplevel.state();
                 if state.contains(gdk4::ToplevelState::FULLSCREEN)
@@ -168,9 +187,9 @@ impl BlurRegion {
     }
 }
 
-/// PORTS: `BlurRegion.zig:132-187` `approxRoundedRect`. Approximate a rounded
-/// rectangle with many smaller rectangles. Honestly quite cursed (the reference
-/// says so at `:154`), but ported faithfully.
+/// Approximate a rounded rectangle with many smaller rectangles.
+///
+/// PORTS: `BlurRegion.zig:132-187` `approxRoundedRect`.
 fn approx_rounded_rect(x: Pos, y: Pos, width: Pos, height: Pos, radius: Pos) -> Vec<Slice> {
     let r_f = radius as f32;
 
@@ -184,7 +203,8 @@ fn approx_rounded_rect(x: Pos, y: Pos, width: Pos, height: Pos, radius: Pos) -> 
         height: height - 2 * radius,
     });
 
-    // Add the corner rows (`BlurRegion.zig:154-184`).
+    // Add the corner rows. This is honestly quite cursed.
+    // (`BlurRegion.zig:154-184`)
     let mut row: Pos = 0;
     while row < radius {
         // y distance from this row to the center corner circle (`:157-158`).

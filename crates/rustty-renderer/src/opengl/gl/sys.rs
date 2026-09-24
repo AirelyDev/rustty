@@ -520,8 +520,11 @@ fn has_extension(extensions: &str, name: &str) -> bool {
 /// PORTS: `OpenGL.zig:72-130`.
 ///
 /// PORT NOTE: `gl_debug_proc_callconv` (`OpenGL.zig:62-70`) computes the calling
-/// convention by reflecting through glad's `GLDEBUGPROC` typedef, to work around
-/// a 32-bit-Windows cross-compilation quirk. The `gl` crate's `types::GLDEBUGPROC`
+/// convention by reflecting through glad's `GLDEBUGPROC` typedef. Its reference
+/// doc:
+/// 32-bit windows cross-compilation breaks with `.c` for some reason, so...
+///
+/// The `gl` crate's `types::GLDEBUGPROC`
 /// pins that same convention as `extern "system"`, which resolves to the identical
 /// ABI on every target, so the reflection has no analogue and is not needed.
 extern "system" fn gl_debug_message_callback(

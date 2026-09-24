@@ -96,6 +96,7 @@ pub fn log_with(level: Level, scope: &str, message: &str, logging: &Logging) {
     } else {
         format!("({scope}): ")
     };
+    // Lock so we are thread-safe
     let mut stderr = std::io::stderr().lock();
     let _ = writeln!(stderr, "{}{prefix}{message}", level.as_text());
     let _ = stderr.flush();

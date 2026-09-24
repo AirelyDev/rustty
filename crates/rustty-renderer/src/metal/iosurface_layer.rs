@@ -151,11 +151,12 @@ pub struct IOSurfaceLayer {
 
 impl IOSurfaceLayer {
     pub fn init() -> Result<IOSurfaceLayer, Error> {
-        // PORT NOTE (lines 21-30): The layer returned by `[CALayer layer]` is
-        // autoreleased, which means that at the end of the current autorelease pool
-        // it will be deallocated if it isn't retained, so we retain it here manually
-        // an extra time. In objc2 `alloc().set_ivars(..).init()` nets the same
-        // +1-owned subclass instance with no autorelease pool — behavior-equivalent.
+        // The layer returned by `[CALayer layer]` is autoreleased, which means
+        // that at the end of the current autorelease pool it will be deallocated
+        // if it isn't retained, so we retain it here manually an extra time.
+        //
+        // PORT NOTE (lines 21-30): in objc2 `alloc().set_ivars(..).init()` nets the
+        // same +1-owned subclass instance with no autorelease pool — behavior-equivalent.
         let this = IOSurfaceLayerClass::alloc().set_ivars(Ivars {
             // The ivars default to null, matching the reference's explicit
             // post-init `setInstanceVariable("display_cb"/"display_ctx", null)`
@@ -165,9 +166,9 @@ impl IOSurfaceLayer {
         });
         let layer: Retained<IOSurfaceLayerClass> = unsafe { msg_send![super(this), init] };
 
-        // PORT NOTE (lines 32-34): The layer gravity is set to top-left so that the
-        // contents aren't stretched during resize operations before a new frame has
-        // been drawn.
+        // The layer gravity is set to top-left so that the contents aren't
+        // stretched during resize operations before a new frame has been drawn.
+        // (lines 32-34)
         layer.setContentsGravity(unsafe { kCAGravityTopLeft });
 
         Ok(IOSurfaceLayer { layer })

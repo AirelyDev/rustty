@@ -3565,6 +3565,18 @@ bin is the top sink over cli+apprt). New bin Cargo deps: `rustty-global`,
   block — is the rustty-apprt-c E-series' concern, not C6). The C6 scoped-G3b on the
   two files the bin actually ports (main.zig + main_ghostty.zig) is missing=0.
 
+  > **UPDATE [parity tail S-8b, 2026-09-24].** No longer "expected": G3b's
+  > `RELOCATED_PORTS` table (`check_comment_coverage.py`) now checks each re-homed
+  > reference file against its named port files (main_c → apprt-c `lib.rs`; lib_vt →
+  > vt-c `lib.rs`/`panic.rs`/`sys.rs` + vt `lib.rs`; main_ghostty → core `logging.rs`;
+  > main_gen/main_wasm/main_build_data → their crates), and the comments those sites
+  > had dropped were restored. What `--crate rustty` still reports is only reference
+  > code with no Rust counterpart, each with a record: TinyIo (phase-4 NON_PORTS),
+  > the MSVC `_fltused` marker (phase-3 C-capi-headers `84254a9d8` N/A),
+  > `quirks_memset` (phase-3 NON_PORTS §E34), `std_options_debug_io` and `DllMain`
+  > (phase-4 NON_PORTS rows added by S-8b), and the `macosLogger` per-scope cache
+  > (`docs/parity-audit/src.md` accepted equivalence).
+
 - **`main_gen.zig` / `main_wasm.zig` / `main_build_data.zig` (0t each) DEFERRED.**
   These are standalone build-tool / wasm-module entrypoints, NOT on the `rustty`
   exe's `exe_entrypoint` switch (main.zig selects only `.ghostty` → main_ghostty for

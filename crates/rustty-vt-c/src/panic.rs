@@ -67,6 +67,14 @@
 
 /// Installs [`tiny_panic_impl`] as the panic hook in builds without the debug
 /// machinery. Idempotent.
+///
+/// The reference doc on `pub const panic` (`lib_vt.zig:495-499`):
+///
+/// The panic handler for when this file is the root module.
+///
+/// In ReleaseFast and ReleaseSmall builds we print the panic message to
+/// stderr and trap, but do not attempt to unwind the stack to print a
+/// stack trace.
 pub fn install() {
     // wasm has no stderr (`os/stderr.zig` `.freestanding => {}`), and a wasm
     // panic already ends in a trap.

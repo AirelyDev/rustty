@@ -553,6 +553,11 @@ pub fn log_fn(level: StdLevel, scope: &str, args: core::fmt::Arguments) {
         let _ = (level, scope, args);
     }
 
+    // } else if (terminal.options.c_abi) {
+    //     // For C ABI builds, use a custom log function that dispatches to an
+    //     // embedder-provided callback (or silently discards when none is set).
+    //     options.logFn = @import("terminal/c/sys.zig").logFn;
+    // }
     #[cfg(not(target_arch = "wasm32"))]
     log_fn_c_abi(level, scope, args);
 }

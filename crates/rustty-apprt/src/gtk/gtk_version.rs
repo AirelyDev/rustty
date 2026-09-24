@@ -117,8 +117,22 @@ pub fn log_version() {
     ));
 }
 
-/// `gtk_version.zig:49` `atLeast` — verifies the GTK version is at least the
-/// given version.
+/// `gtk_version.zig:49` `atLeast`.
+///
+/// Verifies that the GTK version is at least the given version.
+///
+/// This can be run in both a comptime and runtime context. If it is run in a
+/// comptime context, it will only check the version in the headers. If it is
+/// run in a runtime context, it will check the actual version of the library we
+/// are linked against.
+///
+/// This function should be used in cases where the version check would affect
+/// code generation, such as using symbols that are only available beyond a
+/// certain version. For checks which only depend on GTK's runtime behavior,
+/// use `runtimeAtLeast`.
+///
+/// This is inlined so that the comptime checks will disable the runtime checks
+/// if the comptime checks fail.
 ///
 /// # This is a live runtime check, NOT a comptime fold
 ///
@@ -148,12 +162,19 @@ pub fn at_least(major: u16, minor: u16, micro: u16) -> bool {
     runtime_at_least(major, minor, micro)
 }
 
-/// `gtk_version.zig:75` `runtimeAtLeast` — verifies the GTK version AT RUNTIME
-/// is at least the given version.
+/// `gtk_version.zig:75` `runtimeAtLeast`.
+///
+/// Verifies that the GTK version at runtime is at least the given version.
+///
+/// This function should be used in cases where the only the runtime behavior
+/// is affected by the version check. For checks which would affect code
+/// generation, use `atLeast`.
 ///
 /// Oracle: `runtime_version.order(threshold) != .lt` (`:85-89`).
 #[inline]
 pub fn runtime_at_least(major: u16, minor: u16, micro: u16) -> bool {
+    // We use the functions instead of the constants such as c.GTK_MINOR_VERSION
+    // because the function gets the actual runtime version.
     !matches!(
         order(runtime_version(), (major, minor, micro)),
         std::cmp::Ordering::Less
