@@ -344,6 +344,15 @@ mod tests {
                 &mut first,
             )
         });
+        // The registry holds the ref and is bound to the caller's allocator.
+        // SAFETY: `term` is live; a shared read of its registry.
+        unsafe {
+            assert_eq!(1, (*term).tracked_grid_refs.count());
+            assert_eq!(
+                rustty_vt::alloc::default(Some(&calloc)),
+                *(*term).tracked_grid_refs.allocator()
+            );
+        }
         let before = stats.alloc_calls.get();
         let mut ref_: CTrackedGridRef = std::ptr::null_mut();
         assert_eq!(Result::Success, unsafe {
