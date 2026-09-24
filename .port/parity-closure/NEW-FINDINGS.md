@@ -3171,7 +3171,7 @@ Not fixed in this round; recorded for adjudication.
   exact). 25 of the rows are kept in `differential_against_zig`.
 - **What the reference hashes** (`hyperlink.zig:143`, `lib/std/hash/auto_hash.zig`): the tag as one
   byte in the union's declaration order (`explicit` 0, `implicit` 1; the port's `PageEntryIdTag`
-  discriminants are the reverse, so the bytes are literals); `.implicit` as its 4 native bytes; each
+  discriminants are the reverse, so the bytes are literals (superseded by the S-2b follow-up below)); `.implicit` as its 4 native bytes; each
   `.Deep` slice (`.explicit` id, then `uri`) as its bytes FOLLOWED BY its `len` as a native `usize`.
   The old port also dropped the two lengths, so `(id "ab", uri "x")` and `(id "a", uri "bx")` hashed
   alike; they no longer do.
@@ -3202,12 +3202,17 @@ Not fixed in this round; recorded for adjudication.
 
 The ledger row for the same finding, `S155-F1` (DISPUTED, WAIVED as not observable), is not this task's
 row and is left as it is; its premise ("any self-consistent hash preserves every observable result") no
-longer describes the code.
+longer describes the code. (Superseded by the S-2b follow-up below: the row was handed to this task and
+re-marked CLOSED.)
 
 **Follow-up, task tail-s2 (S-2b)**: the port's `PageEntryIdTag` discriminants were the reverse of the
 reference's tag (`implicit` 0). They now follow the reference (`explicit` 0, `implicit` 1), so the tag
 byte stored in the page mapping matches: MEASURED with the same probe, byte 16 of `PageEntry.Id` is 01
-for an implicit link and 00 for an explicit one, and an all-zero id is `.explicit`
+for an implicit link and 00 for an explicit one, and an all-zero id is `.explicit`. (That covers live
+entries and a fresh, zero-filled set slot. A reaped slot is written with `Item::default()`, whose
+`PageEntry::default()` is `.implicit` 0, so it is not byte-identical to a fresh one; the reference leaves
+`Item.value` `undefined` in both cases (`ref_counted_set.zig:85`) and never reads it, so neither has
+reference-defined bytes and the default is left as it was.)
 (`hyperlink::page_entry_tag_byte_tests`; negative control: the old numbering fails both tests). No C
 header, snapshot format (it has its own `Kind` byte) or compression golden depends on the numbering. The
 ledger row S155-F1 is re-marked CLOSED with this evidence. The probe also found N208 (the payload
@@ -3921,4 +3926,13 @@ fix: 0 of 50 of the same sequential runs failed; see the task T-F2 report for th
   through `payload.offset`).
 - **not done**: `OffsetSlice` is shared across areas (render-types, grapheme map, hyperlinks); out of
   task tail-s2's scope.
-- **state**: OPEN.
+- **review (S-2)**: confirmed with an independent mock: `len` @0 / `offset` @8 on aarch64-macos (Debug,
+  ReleaseSafe, ReleaseFast) and x86_64-linux; `offset` @0 / `len` @4 on wasm32-wasi. A fix would also
+  have to rework `PageEntryId` and audit every other auto-layout struct in page memory.
+- **ruling** (controller, 2026-09-23): WAIVED as not observable. The field order of a non-`extern` Zig
+  struct is unspecified by the language and differs per target; the raw page bytes are never persisted
+  or compared with the oracle's; size, alignment and stride parity are already enforced (N88, R13-L).
+  By contrast the union tag numbering fixed under N82 is language-defined (declaration order), so it
+  stays fixed. The PORT NOTE at `crates/rustty-render-types/src/term_size.rs` that claimed "the same 4
+  padding bytes" now gives the real positions. `ADJUDICATION.md#n208`.
+- **state**: WAIVED (task tail-s2, S-2c).
