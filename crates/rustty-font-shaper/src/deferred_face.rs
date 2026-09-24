@@ -55,7 +55,11 @@ const LOG_SCOPE: &str = "deferred_face";
 pub struct DeferredFace {
     /// CoreText
     // ct: if (font.Discover == font.discovery.CoreText) ?CoreText else void = ...,
-    #[cfg(target_os = "macos")]
+    //
+    // PORT NOTE: `Discover == CoreText` exactly on the `hasCoretext()` backends
+    // (`rustty_font_has_coretext`): `coretext`, `coretext_freetype`,
+    // `coretext_harfbuzz`, `coretext_noshape`.
+    #[cfg(rustty_font_has_coretext)]
     pub ct: Option<CoreTextData>,
 
     /// Fontconfig (Linux default `fontconfig_freetype`).
@@ -64,11 +68,7 @@ pub struct DeferredFace {
     // PORT NOTE: this is the freetype-active (`not(any(macos, wasm32))`) payload,
     // mirroring the macOS `ct` shape. `FontconfigData` is the port of the
     // reference `DeferredFace.Fontconfig` struct (`DeferredFace.zig:38-56`).
-    #[cfg(all(
-        not(target_os = "macos"),
-        not(target_os = "windows"),
-        not(target_arch = "wasm32")
-    ))]
+    #[cfg(rustty_font_has_fontconfig)]
     pub fc: Option<FontconfigData>,
 
     /// Windows (FreeType directory scan).
@@ -77,7 +77,7 @@ pub struct DeferredFace {
     // PORT NOTE: this is the `freetype_windows` payload, mirroring the macOS `ct` /
     // Linux `fc` shape. `WindowsData` is the port of the reference
     // `DeferredFace.Windows` struct (`DeferredFace.zig:58-90`).
-    #[cfg(all(target_os = "windows", not(target_arch = "wasm32")))]
+    #[cfg(rustty_font_backend = "freetype_windows")]
     pub win: Option<WindowsData>,
 
     /// Canvas (wasm `web_canvas` backend).
@@ -86,9 +86,13 @@ pub struct DeferredFace {
     // PORT NOTE: this is the wasm32 (`web_canvas`-active) payload, mirroring the
     // macOS `ct` / Linux `fc` shape. `WebCanvasData` is the port of the reference
     // `DeferredFace.WebCanvas` struct (`DeferredFace.zig:106-124`).
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(rustty_font_backend = "web_canvas")]
     pub wc: Option<WebCanvasData>,
 }
+// PORT NOTE (S-14, N266): each payload field is keyed on the backend predicate
+// the reference declaration names (`options.backend == ...` / `Discover ==
+// CoreText`), not on the target OS. On `.freetype` ("no font discovery") all
+// four are `void`, so the struct is empty — see `no_payload` below.
 
 // ---------------------------------------------------------------------------
 // PORT NOTE (backend payloads): the Fontconfig / Windows / WebCanvas structs are
@@ -161,10 +165,10 @@ pub struct DeferredFace {
 // };
 // ---------------------------------------------------------------------------
 
-#[cfg(target_os = "macos")]
+#[cfg(rustty_font_has_coretext)]
 pub use coretext_payload::{new_cfstring, new_cfstring_bytes, CoreTextData};
 
-#[cfg(target_os = "macos")]
+#[cfg(rustty_font_has_coretext)]
 mod coretext_payload {
     use super::DeferredFace;
     use crate::face::coretext::{cstring_ptr_utf8, cstring_utf8};
@@ -422,10 +426,18 @@ mod coretext_payload {
             //     // proper configuration for one of the other deferred mechanisms.
             //     .freetype => unreachable,
             // };
-            self.load_coretext(lib, opts)
+            //
+            // PORT NOTE: this impl is the `hasCoretext()` payload, so only the
+            // two CoreText arms can be live; `options.backend` picks between them
+            // at compile time exactly as the comptime `switch` does.
+            #[cfg(rustty_font_backend = "coretext_freetype")]
+            return self.load_coretext_freetype(lib, opts);
+            #[cfg(not(rustty_font_backend = "coretext_freetype"))]
+            return self.load_coretext(lib, opts);
         }
 
         // fn loadCoreText(self, lib, opts) !Face {
+        #[cfg(not(rustty_font_backend = "coretext_freetype"))]
         fn load_coretext(&mut self, _lib: Library, opts: Options) -> Result<Face, FaceError> {
             // _ = lib;
             let ct = self.ct.as_ref().unwrap();
@@ -440,6 +452,91 @@ mod coretext_payload {
                 face.deinit();
                 return Err(e);
             }
+            Ok(face)
+        }
+
+        // fn loadCoreTextFreetype(self, lib, opts) !Face {
+        //
+        // PORT NOTE (S-14, N266): ported live for `-Dfont-backend=
+        // coretext_freetype` (CoreText discovery, FreeType faces); it was a
+        // quoted comment while the option was folded to `.coretext`. `Face` is
+        // `freetype::Face` in that build, so `FaceError` is `freetype::Error`,
+        // which carries the two local errors in that build only.
+        #[cfg(rustty_font_backend = "coretext_freetype")]
+        fn load_coretext_freetype(
+            &mut self,
+            lib: Library,
+            opts: Options,
+        ) -> Result<Face, FaceError> {
+            use objc2_core_foundation::CFURL;
+
+            // const ct = self.ct.?;
+            let ct = self.ct.as_ref().unwrap();
+
+            // Get the URL for the font so we can get the filepath
+            // const url = ct.font.copyAttribute(.url) orelse
+            //     return error.FontHasNoFile;
+            // defer url.release();
+            //
+            // PORT NOTE: `CTFontCopyAttribute(font, kCTFontURLAttribute)`, nullable
+            // (the reference `pkg/macos` `copyAttribute`); the `CFRetained` is the
+            // `defer url.release()`.
+            // SAFETY: `ct.font` is a live retained CTFont and the key is
+            // CoreText's own constant; the Copy rule gives +1, owned here.
+            let url = unsafe { ct.font.attribute(objc2_core_text::kCTFontURLAttribute) }
+                .and_then(|attr| attr.downcast::<CFURL>().ok())
+                .ok_or(FaceError::FontHasNoFile)?;
+
+            // Get the path from the URL
+            // const path = url.copyPath() orelse return error.FontHasNoFile;
+            // defer path.release();
+            let path = url.path().ok_or(FaceError::FontHasNoFile)?;
+
+            // URL decode the path
+            // const blank = try macos.foundation.String.createWithBytes("", .utf8, false);
+            // defer blank.release();
+            let blank = new_cfstring("").ok_or_else(oom)?;
+            // const decoded = try macos.foundation.URL.createStringByReplacingPercentEscapes(
+            //     path,
+            //     blank,
+            // );
+            // defer decoded.release();
+            let decoded =
+                CFURL::new_string_by_replacing_percent_escapes(None, Some(&path), Some(&blank))
+                    .ok_or_else(oom)?;
+
+            // Decode into a c string. 1024 bytes should be enough for anybody.
+            // var buf: [1024]u8 = undefined;
+            // const path_slice = decoded.cstring(buf[0..1023], .utf8) orelse
+            //     return error.FontPathCantDecode;
+            let mut buf = [0u8; 1024];
+            let path_len = cstring_utf8(&decoded, &mut buf[0..1023])
+                .ok_or(FaceError::FontPathCantDecode)?
+                .len();
+
+            // Freetype requires null-terminated. We always leave space at
+            // the end for a zero so we set that up here.
+            // buf[path_slice.len] = 0;
+            buf[path_len] = 0;
+
+            // Face index 0 is not always correct. We don't ship this configuration
+            // in a release build. Users should use the pure CoreText builds.
+            //std.log.warn("path={s}", .{path_slice});
+            // var face = try Face.initFile(lib, buf[0..path_slice.len :0], 0, opts);
+            // errdefer face.deinit();
+            //
+            // PORT NOTE: `cstring` stops at the first NUL (`sliceTo`), so
+            // `buf[..=path_len]` holds exactly one NUL, at its end.
+            let c_path = core::ffi::CStr::from_bytes_with_nul(&buf[..=path_len])
+                .expect("cstring stops at the first NUL");
+            let mut face = Face::init_file(lib, c_path, 0, opts)?;
+            // try face.setVariations(ct.variations, opts);
+            if let Err(e) = face.set_variations(&ct.variations, opts) {
+                face.deinit();
+                return Err(e);
+            }
+
+            // return face;
             Ok(face)
         }
 
@@ -501,8 +598,10 @@ mod coretext_payload {
 
     /// Build a backend-face `OutOfMemory` error (the reference `error.OutOfMemory`
     /// returned by `name`/`familyName` when the name doesn't fit the buffer).
+    // PORT NOTE (S-14): `FaceError` — the active face's error set, which is
+    // `freetype::Error` in a `coretext_freetype` build; both have the variant.
     fn oom() -> FaceError {
-        crate::face::coretext::Error::OutOfMemory
+        FaceError::OutOfMemory
     }
 }
 
@@ -511,8 +610,9 @@ mod coretext_payload {
 // `hasCodepoint` are recorded verbatim here; the Fontconfig, Windows and
 // WebCanvas arms are ported in their backends' impls below, and the wasm
 // `Wasm` C-ABI struct in the `ghostty_wasm_abi` module. The `coretext_freetype`
-// arm (`loadCoreTextFreetype`) is not live: `options::BACKEND` resolves only
-// the per-OS default backend.
+// arm (`loadCoreTextFreetype`) is ported live in `coretext_payload` above
+// (S-14, N266; it was the quoted copy kept below while `options::BACKEND`
+// resolved only the per-OS default).
 //
 //   .freetype_windows => if (self.win) |w| return try w.peek.name(buf),
 //   .fontconfig_freetype => if (self.fc) |fc| return (try fc.pattern.get(.fullname, 0)).string,
@@ -626,18 +726,10 @@ mod coretext_payload {
 // (`loadFontconfig`) fontconfig arms below. (CORRECTION, 2026-09-24, parity
 // tail S-8a: this note still called those three arms DEFERRED
 // `unimplemented!()` leaves; they are ported.)
-#[cfg(all(
-    not(target_os = "macos"),
-    not(target_os = "windows"),
-    not(target_arch = "wasm32")
-))]
+#[cfg(rustty_font_has_fontconfig)]
 pub use fontconfig_payload::FontconfigData;
 
-#[cfg(all(
-    not(target_os = "macos"),
-    not(target_os = "windows"),
-    not(target_arch = "wasm32")
-))]
+#[cfg(rustty_font_has_fontconfig)]
 mod fontconfig_payload {
     use super::DeferredFace;
     use crate::face::{Face, FaceError, Options, Variation};
@@ -889,10 +981,10 @@ mod fontconfig_payload {
 // verbatim reference comment.
 // ---------------------------------------------------------------------------
 
-#[cfg(all(target_os = "windows", not(target_arch = "wasm32")))]
+#[cfg(rustty_font_backend = "freetype_windows")]
 pub use windows_payload::WindowsData;
 
-#[cfg(all(target_os = "windows", not(target_arch = "wasm32")))]
+#[cfg(rustty_font_backend = "freetype_windows")]
 mod windows_payload {
     use super::DeferredFace;
     use crate::face::{Face, FaceError, Options, Variation};
@@ -1065,10 +1157,94 @@ mod windows_payload {
 // where `face::Face` IS `face::web_canvas::Face`.
 // ---------------------------------------------------------------------------
 
-#[cfg(target_arch = "wasm32")]
+// ---------------------------------------------------------------------------
+// `.freetype` ("FreeType for font rendering with no font discovery enabled"):
+// every payload is `void`, so each `switch (options.backend)` in
+// `DeferredFace.zig` takes its `.freetype` arm. Ported live by S-14 (N266).
+// ---------------------------------------------------------------------------
+#[cfg(rustty_font_backend = "freetype")]
+mod no_payload {
+    use super::DeferredFace;
+    use crate::face::{Face, FaceError, Options};
+    use crate::library::Library;
+    use crate::Presentation;
+
+    impl DeferredFace {
+        // pub fn deinit(self: *DeferredFace) void {
+        //     switch (options.backend) { ... .freetype => {}, ... }
+        //     self.* = undefined;
+        // }
+        pub fn deinit(&mut self) {}
+
+        /// A `DeferredFace` with no payload. Used only where the reference passes
+        /// `undefined` (the `add deferred without loading options` test), where the
+        /// payload is guaranteed never to be accessed.
+        pub fn undefined() -> DeferredFace {
+            DeferredFace {}
+        }
+
+        /// Returns the family name of the font.
+        // pub fn familyName(self: DeferredFace, buf: []u8) ![]const u8 {
+        //     switch (options.backend) { .freetype => {}, ... }
+        //     return "";
+        // }
+        pub fn family_name<'a>(&self, _buf: &'a mut [u8]) -> Result<&'a [u8], FaceError> {
+            Ok(&[])
+        }
+
+        /// Returns the name of this face. The memory is always owned by the
+        /// face so it doesn't have to be freed.
+        // pub fn name(self: DeferredFace, buf: []u8) ![]const u8 {
+        //     switch (options.backend) { .freetype => {}, ... }
+        //     return "";
+        // }
+        pub fn name<'a>(&self, _buf: &'a mut [u8]) -> Result<&'a [u8], FaceError> {
+            Ok(&[])
+        }
+
+        /// Load the deferred font face. This does nothing if the face is loaded.
+        // pub fn load(self: *DeferredFace, lib: Library, opts: font.face.Options) !Face {
+        //     return switch (options.backend) {
+        //         ...
+        //         // Unreachable because we must be already loaded or have the
+        //         // proper configuration for one of the other deferred mechanisms.
+        //         .freetype => unreachable,
+        //     };
+        // }
+        //
+        // PORT NOTE (R7): an invariant `unreachable`: with no discovery there is
+        // no way to obtain a deferred face (every `DeferredFace` comes from a
+        // discoverer; the only other constructor is the test-only `undefined`,
+        // whose payload is never accessed), so this is checked, not R13.
+        pub fn load(&mut self, _lib: Library, _opts: Options) -> Result<Face, FaceError> {
+            unreachable!()
+        }
+
+        /// Returns true if this face can satisfy the given codepoint and
+        /// presentation. If presentation is null, then it just checks if the
+        /// codepoint is present at all.
+        ///
+        /// This should not require the face to be loaded IF we're using a
+        /// discovery mechanism (i.e. fontconfig). If no discovery is used,
+        /// the face is always expected to be loaded.
+        // pub fn hasCodepoint(self: DeferredFace, cp: u32, p: ?Presentation) bool {
+        //     switch (options.backend) { ... .freetype => {}, ... }
+        //     // This is unreachable because discovery mechanisms terminate, and
+        //     // if we're not using a discovery mechanism, the face MUST be loaded.
+        //     unreachable;
+        // }
+        pub fn has_codepoint(&self, _cp: u32, _p: Option<Presentation>) -> bool {
+            // This is unreachable because discovery mechanisms terminate, and
+            // if we're not using a discovery mechanism, the face MUST be loaded.
+            unreachable!()
+        }
+    }
+}
+
+#[cfg(rustty_font_backend = "web_canvas")]
 pub use web_canvas_payload::WebCanvasData;
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(rustty_font_backend = "web_canvas")]
 mod web_canvas_payload {
     use super::DeferredFace;
     use crate::face::{DesiredSize, Face, FaceError, Options, DEFAULT_DPI};
@@ -1395,20 +1571,15 @@ mod tests {
     // which only exists on that target. That `cfg` is the whole skip: a runtime
     // `!= fontconfig_freetype` guard inside it could never fire, and an early
     // `return` would be a silent pass anyway (R14).
-    #[cfg(all(
-        not(target_os = "macos"),
-        not(target_os = "windows"),
-        not(target_arch = "wasm32")
-    ))]
+    #[cfg(rustty_font_backend = "fontconfig_freetype")]
     #[test]
     fn fontconfig() {
         // Shared: fontconfig's global state must not be torn down under us
         // (see `fc::FC_GLOBAL`).
         let _fc = crate::fc::global_shared();
         // if (options.backend != .fontconfig_freetype) return error.SkipZigTest;
-        // (the `#[cfg]` above IS that skip: `options::BACKEND` is
-        // `FontconfigFreetype` on exactly that target set, so a runtime guard
-        // could never fire; R14 — no silent early return)
+        // (the `#[cfg]` above IS that skip, keyed on the backend itself; R14 —
+        // no silent early return)
 
         use crate::discovery;
         use crate::face::DesiredSize;
@@ -1474,12 +1645,17 @@ mod tests {
     }
 
     // test "coretext"
-    #[cfg(target_os = "macos")]
+    #[cfg(rustty_font_has_coretext)]
+    #[cfg_attr(
+        not(rustty_font_backend = "coretext"),
+        ignore = "SkipZigTest: `options.backend != .coretext` (R14)"
+    )]
     #[test]
     fn coretext() {
         // if (options.backend != .coretext) return error.SkipZigTest;
-        // (the `#[cfg(target_os = "macos")]` above IS that skip: `options::BACKEND`
-        // is `Coretext` on every macOS build; R14 — no silent early return)
+        // (the `cfg_attr(.., ignore)` above IS that skip, made visible — R14, no
+        // silent early return. The `#[cfg]` scopes the body to the builds where
+        // `discovery.CoreText` exists, the `hasCoretext()` backends.)
 
         use crate::discovery;
         use crate::face::DesiredSize;
@@ -1533,7 +1709,7 @@ mod tests {
     }
 
     /// A CoreText `DeferredFace` for `bytes` (a font file in memory).
-    #[cfg(target_os = "macos")]
+    #[cfg(rustty_font_has_coretext)]
     fn coretext_deferred(bytes: &[u8]) -> super::DeferredFace {
         use objc2_core_foundation::CFData;
         use objc2_core_text::{CTFont, CTFontManagerCreateFontDescriptorFromData};
@@ -1552,7 +1728,7 @@ mod tests {
     /// caller's buffer is returned whole, not an error. Here the buffer holds 4
     /// bytes; the names are ASCII, for which `CFStringGetCStringPtr` succeeds
     /// (asserted as a precondition, so the pointer path is the one tested).
-    #[cfg(target_os = "macos")]
+    #[cfg(rustty_font_has_coretext)]
     #[test]
     fn coretext_names_longer_than_the_buffer_are_returned_whole() {
         use crate::face::coretext::cstring_ptr_utf8;
@@ -1614,7 +1790,7 @@ mod tests {
     /// pointer (`pkg/macos/foundation/string.zig:60-68`): the bytes and a NUL
     /// must fit in `buf`, else null (the callers' `error.OutOfMemory`). A
     /// non-ASCII string is stored as UTF-16, so it has no UTF-8 pointer.
-    #[cfg(target_os = "macos")]
+    #[cfg(rustty_font_has_coretext)]
     #[test]
     fn cstring_needs_room_for_the_nul() {
         use crate::face::coretext::{cstring_ptr_utf8, cstring_utf8};
@@ -1631,7 +1807,13 @@ mod tests {
     /// 248-258`): when `setVariations` fails, the freshly created face is torn
     /// down through `deinit` before the error returns. The fail-point makes
     /// `set_variations` fail; the probe counts `Face::deinit` calls.
-    #[cfg(target_os = "macos")]
+    // Scoped to the builds whose `load` takes `loadCoreText` (not
+    // `coretext_freetype`, which loads by file path — see the
+    // `load_coretext_freetype_*` tests below).
+    #[cfg(all(
+        rustty_font_has_coretext,
+        not(rustty_font_backend = "coretext_freetype")
+    ))]
     #[test]
     fn load_coretext_deinits_the_face_when_set_variations_fails() {
         use crate::face::test_probe;
@@ -1670,6 +1852,154 @@ mod tests {
         def.deinit();
     }
 
+    /// S-14 (N266) fixture: a CoreText font backed by a FILE, as discovery
+    /// yields (a data-backed font has no `kCTFontURLAttribute`, so
+    /// `loadCoreTextFreetype` could not load it). The file is the embedded
+    /// variable JetBrains Mono, written under a directory whose name needs
+    /// percent-escaping (a space and a literal `%41`), so `CFURLCopyPath`'s
+    /// escaped path must be decoded — `createStringByReplacingPercentEscapes` —
+    /// before FreeType can open it. Returns the deferred face and the temp dir
+    /// (removed by the caller).
+    #[cfg(rustty_font_backend = "coretext_freetype")]
+    fn coretext_freetype_file_deferred() -> (super::DeferredFace, std::path::PathBuf) {
+        use core::ptr::NonNull;
+        use objc2_core_foundation::{CFArray, CFRetained, CFURL};
+        use objc2_core_text::{
+            CTFont, CTFontDescriptor, CTFontManagerCreateFontDescriptorsFromURL,
+        };
+
+        let dir = std::env::temp_dir().join(format!(
+            "rustty s14 %41 {}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("JetBrains Mono.ttf");
+        std::fs::write(&path, rustty_font::embedded::VARIABLE).unwrap();
+
+        let bytes = path.to_str().unwrap().as_bytes();
+        // SAFETY: `bytes` is readable for its length.
+        let url = unsafe {
+            CFURL::from_file_system_representation(
+                None,
+                bytes.as_ptr(),
+                bytes.len() as isize,
+                false,
+            )
+        }
+        .expect("file URL");
+        // SAFETY: `url` is a live file URL.
+        let descs = unsafe { CTFontManagerCreateFontDescriptorsFromURL(&url) }
+            .expect("CoreText reads the font file");
+        assert!(CFArray::count(&descs) > 0, "one descriptor per face");
+        // SAFETY: index 0 < count; the element is a CTFontDescriptor, retained
+        // here because the array is released at scope end.
+        let desc: CFRetained<CTFontDescriptor> = unsafe {
+            let p = CFArray::value_at_index(&descs, 0);
+            CFRetained::retain(NonNull::new(p as *mut CTFontDescriptor).unwrap())
+        };
+        let font = unsafe { CTFont::with_font_descriptor(&desc, 12.0, std::ptr::null()) };
+        (
+            super::DeferredFace {
+                ct: Some(super::CoreTextData::new(font, Vec::new())),
+            },
+            dir,
+        )
+    }
+
+    #[cfg(rustty_font_backend = "coretext_freetype")]
+    fn ft_opts() -> crate::face::Options {
+        crate::face::Options {
+            size: crate::face::DesiredSize {
+                points: 12.0,
+                xdpi: crate::face::DEFAULT_DPI,
+                ydpi: crate::face::DEFAULT_DPI,
+            },
+            freetype_load_flags: crate::face::FREETYPE_LOAD_FLAGS_DEFAULT,
+        }
+    }
+
+    /// S-14 (N266): `loadCoreTextFreetype` (`DeferredFace.zig:260-302`) loads
+    /// the CoreText-discovered font's FILE into a FreeType face: URL -> path ->
+    /// percent-decoded C string -> `Face.initFile(lib, path, 0, opts)`. The
+    /// fixture's path only opens if the decode ran (negative control: skipping
+    /// `createStringByReplacingPercentEscapes` makes FreeType fail to open the
+    /// still-escaped path).
+    #[cfg(rustty_font_backend = "coretext_freetype")]
+    #[test]
+    fn load_coretext_freetype_loads_the_font_file_with_freetype() {
+        let mut lib = crate::library::Library::init().unwrap();
+        let (mut def, dir) = coretext_freetype_file_deferred();
+
+        let mut face = def.load(lib, ft_opts()).expect("loadCoreTextFreetype");
+        // It IS a FreeType face (the `Face` of this build), holding the file's
+        // glyphs.
+        let _: &crate::face::freetype::Face = &face;
+        assert!(face.glyph_index(u32::from('A')).is_some());
+        assert!(
+            face.face.has_multiple_masters(),
+            "the variable font, not a fallback"
+        );
+
+        face.deinit();
+        def.deinit();
+        lib.deinit();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// S-14 (N266): a font with no file (`copyAttribute(.url)` is null — a
+    /// data-backed CoreText font) is `error.FontHasNoFile`.
+    #[cfg(rustty_font_backend = "coretext_freetype")]
+    #[test]
+    fn load_coretext_freetype_without_a_file_is_font_has_no_file() {
+        let mut lib = crate::library::Library::init().unwrap();
+        let mut def = coretext_deferred(rustty_font::embedded::VARIABLE);
+        let got = def.load(lib, ft_opts());
+        assert!(
+            matches!(got, Err(crate::face::FaceError::FontHasNoFile)),
+            "no URL -> FontHasNoFile"
+        );
+        def.deinit();
+        lib.deinit();
+    }
+
+    /// S-14 (N266): `loadCoreTextFreetype`'s `errdefer face.deinit()` — when
+    /// `setVariations` fails, the FreeType face it opened is torn down through
+    /// `deinit` before the error returns (the S85-F3 fail-point + probe).
+    #[cfg(rustty_font_backend = "coretext_freetype")]
+    #[test]
+    fn load_coretext_freetype_deinits_the_face_when_set_variations_fails() {
+        use crate::face::test_probe;
+        let mut lib = crate::library::Library::init().unwrap();
+        let (mut def, dir) = coretext_freetype_file_deferred();
+        def.ct.as_mut().unwrap().variations = vec![crate::face::Variation {
+            id: crate::face::Id::init(b"wght"),
+            value: 700.0,
+        }];
+
+        // Positive control: disarmed, the load (with its variations) succeeds
+        // and nothing is deinit'ed.
+        let before = test_probe::face_deinits();
+        let mut face = def.load(lib, ft_opts()).expect("load with variations");
+        assert_eq!(test_probe::face_deinits(), before);
+        face.deinit();
+
+        test_probe::arm_set_variations_failpoint();
+        let before = test_probe::face_deinits();
+        assert!(def.load(lib, ft_opts()).is_err(), "set_variations failed");
+        // The fail-point was consumed, so set_variations really ran.
+        assert!(!test_probe::set_variations_failpoint_should_fail());
+        assert_eq!(
+            test_probe::face_deinits(),
+            before + 1,
+            "the face was deinit'ed on the error path"
+        );
+
+        def.deinit();
+        lib.deinit();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     /// UD110 (R13, task R13-D): the reference leaks the +1 name string on every
     /// `DeferredFace.name`/`familyName` and CoreText `Face.name` call. For a font
     /// loaded from data CoreText hands back the SAME string object on each copy
@@ -1684,7 +2014,7 @@ mod tests {
     /// that a `cstringPtr` result can borrow it: the first call adds exactly
     /// one retain, later calls add none, and dropping the held copy gives it
     /// back (the face then holds nothing else).
-    #[cfg(target_os = "macos")]
+    #[cfg(rustty_font_has_coretext)]
     #[test]
     fn coretext_name_lookups_release_the_copied_name_string() {
         use objc2_core_foundation::CFString;
@@ -1784,7 +2114,7 @@ mod tests {
     /// table's Mac Roman and UTF-16BE records) replaced by `to`, so CoreText
     /// reports `to` as its family name. CoreText does not check the table
     /// checksums (as the S85-F2 fixture below also relies on).
-    #[cfg(target_os = "macos")]
+    #[cfg(rustty_font_has_coretext)]
     fn renamed_jetbrains_mono(to: &[u8; 14]) -> Vec<u8> {
         let mut bytes = rustty_font::embedded::VARIABLE.to_vec();
         let from = b"JetBrains Mono";
@@ -1812,7 +2142,7 @@ mod tests {
     /// "unknown"`, where objc2's non-null `family_name()` panicked. `name` falls
     /// back to the family name (the display name is NULL too), so it reaches
     /// the same arm.
-    #[cfg(target_os = "macos")]
+    #[cfg(rustty_font_has_coretext)]
     #[test]
     fn a_coretext_font_without_a_family_name_is_unknown() {
         // The body runs in a child process (`crate::test_child`): after a test
@@ -1829,7 +2159,7 @@ mod tests {
         );
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(rustty_font_has_coretext)]
     fn a_coretext_font_without_a_family_name_is_unknown_child() {
         // Positive control: the unmodified font has its real family name.
         let mut def = coretext_deferred(rustty_font::embedded::VARIABLE);

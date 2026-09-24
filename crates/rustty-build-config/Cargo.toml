@@ -11,6 +11,10 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
+# Not a native library: `links` is Cargo's only channel for handing a build
+# script's result to a DEPENDENT's build script (`DEP_RUSTTY_BUILD_CONFIG_*`).
+# It carries the resolved `-Dfont-backend` value (see `font-backend-*` below).
+links = "rustty_build_config"
 
 [lints]
 workspace = true
@@ -48,6 +52,37 @@ flatpak = []
 # snap-confinement handling of `xdg-open`. No type-swap partner, so unlike
 # `flatpak` this one is safe to enable on its own.
 snap = []
+
+# `build_config.font_backend` — the port of `-Dfont-backend`
+# (`src/build/Config.zig:191-195`): "The font backend to use for discovery and
+# rasterization.", defaulting to `FontBackend.default(target, wasm_target)`.
+#
+# One feature per `font.Backend` arm a native target can build. They are
+# MUTUALLY EXCLUSIVE (the reference option is a single enum value): `build.rs`
+# refuses more than one. With none set, the per-target default is used verbatim
+# (`coretext` on macOS, `freetype_windows` on Windows, `fontconfig_freetype`
+# elsewhere), so every existing build is unchanged. `web_canvas` has no feature:
+# `font/main.zig:50` forces it on every wasm build and nothing else can build it.
+#
+# The option swaps TYPES in the font shaper tier (`Face`, `Shaper`, `Library`,
+# `Discover`), so it cannot be a plain `cfg!` read: `build.rs` publishes the
+# resolved backend as `links` metadata (`DEP_RUSTTY_BUILD_CONFIG_FONT_BACKEND`),
+# and `rustty-font-shaper`'s build script turns it into the `rustty_font_backend`
+# cfg its selectors are keyed on. One knob, one value, everywhere.
+#
+# Pass it the way the reference CI does (`zig build test
+# -Dfont-backend=coretext_freetype`):
+#   cargo test -p rustty-font-shaper --features rustty-build-config/font-backend-coretext-freetype
+# or through the `rustty` / `rustty-apprt-c` pass-through features of the same
+# name. `build.rs` also refuses a backend the port cannot build on the target
+# (see its table), loudly, never by silently falling back to the default.
+font-backend-freetype = []
+font-backend-freetype-windows = []
+font-backend-fontconfig-freetype = []
+font-backend-coretext = []
+font-backend-coretext-freetype = []
+font-backend-coretext-harfbuzz = []
+font-backend-coretext-noshape = []
 
 [dependencies]
 # Version/identity source-of-truth (R2). identity has no deps so this adds no

@@ -169,31 +169,29 @@ mod install_contract_tests {
 
 // RUSTTY-ONLY guard (no oracle analogue; the reference selects its font backend
 // by build option and a mismatched one simply fails to compile). The
-// `freetype`/`harfbuzz`/`fontconfig` features exist so an EMBEDDER on macOS can
-// drop the vendored-C font stack from its resolve graph — `Backend::default()` is
-// `.coretext` there, which needs none of it. On every other native target the
-// default backend DOES need it (`.fontconfig_freetype` on Linux/BSD,
-// `.freetype_windows` on Windows), so turning the features off would otherwise
-// produce a cascade of missing-module errors instead of one honest message.
-#[cfg(all(
-    not(target_os = "macos"),
-    not(target_arch = "wasm32"),
-    not(all(feature = "freetype", feature = "harfbuzz"))
-))]
+// `freetype`/`harfbuzz`/`fontconfig` features exist so an EMBEDDER can drop the
+// vendored-C font stack from its resolve graph when the selected backend needs
+// none of it (`.coretext`, the macOS default, or `.coretext_noshape`). A backend
+// that DOES need it (`hasFreetype()`/`hasHarfbuzz()`/`hasFontconfig()`: every
+// non-macOS default, and `-Dfont-backend=coretext_freetype`/`coretext_harfbuzz`
+// on macOS) would otherwise produce a cascade of missing-module errors instead
+// of one honest message. `build.rs` refuses the same combinations first; these
+// keep the rule visible at the crate root. (S-14: keyed on the backend cfgs; they
+// were keyed on the target OS while the option was folded to its default.)
+#[cfg(all(rustty_font_has_freetype, not(feature = "freetype")))]
 compile_error!(
-    "rustty-font-shaper: this target's default font backend needs FreeType and \
-     HarfBuzz (`Backend::default()` is `.fontconfig_freetype` off Windows, \
-     `.freetype_windows` on Windows). The `freetype`/`harfbuzz`/`fontconfig` \
-     features may only be turned off for a macOS build, whose default backend is \
-     `.coretext`."
+    "rustty-font-shaper: the selected font backend has FreeType (`hasFreetype()`), \
+     which needs the `freetype` feature."
 );
-#[cfg(all(
-    not(any(target_os = "macos", target_os = "windows", target_arch = "wasm32")),
-    not(feature = "fontconfig")
-))]
+#[cfg(all(rustty_font_has_harfbuzz, not(feature = "harfbuzz")))]
 compile_error!(
-    "rustty-font-shaper: this target's default font backend is \
-     `.fontconfig_freetype`, which needs the `fontconfig` feature."
+    "rustty-font-shaper: the selected font backend shapes with HarfBuzz \
+     (`hasHarfbuzz()`), which needs the `harfbuzz` feature."
+);
+#[cfg(all(rustty_font_has_fontconfig, not(feature = "fontconfig")))]
+compile_error!(
+    "rustty-font-shaper: the selected font backend is `.fontconfig_freetype`, \
+     which needs the `fontconfig` feature."
 );
 
 pub mod backend;
@@ -323,14 +321,160 @@ pub use rustty_font::sprite::Sprite;
 //
 // PORT NOTE: the reference `options` is an anonymous struct with one `backend`
 // field, set from `build_config.font_backend` (or `.web_canvas` for wasm). Here
-// it is a module holding the `BACKEND` const, resolved from `cfg` via
-// `Backend::default()` (the same decision `build.zig` makes). Parity targets both
-// defaults (macOS `coretext`, Linux `fontconfig_freetype`).
+// it is a module holding the `BACKEND` const. `build_config.font_backend` is the
+// `-Dfont-backend` option (`rustty-build-config`'s `font-backend-*` features,
+// defaulting to `Backend.default`); `build.rs` receives it as that crate's
+// `links` metadata and emits the `rustty_font_backend` cfg read here, the same
+// cfg every type selector in this crate (`Face`, `Shaper`, `Library`,
+// `Discover`, the `DeferredFace` payloads) is keyed on — so the value and the
+// selected types can never disagree.
+// (N266 CLOSED by S-14: this used to be `Backend::default()`, folding the
+// option to the per-OS default.)
 pub mod options {
     use crate::backend::Backend;
 
     /// The active font backend for this build.
-    pub const BACKEND: Backend = Backend::default();
+    // .backend = if (builtin.target.cpu.arch.isWasm()) .web_canvas else build_config.font_backend,
+    pub const BACKEND: Backend = if cfg!(rustty_font_backend = "freetype") {
+        Backend::Freetype
+    } else if cfg!(rustty_font_backend = "freetype_windows") {
+        Backend::FreetypeWindows
+    } else if cfg!(rustty_font_backend = "fontconfig_freetype") {
+        Backend::FontconfigFreetype
+    } else if cfg!(rustty_font_backend = "coretext") {
+        Backend::Coretext
+    } else if cfg!(rustty_font_backend = "coretext_freetype") {
+        Backend::CoretextFreetype
+    } else if cfg!(rustty_font_backend = "coretext_harfbuzz") {
+        Backend::CoretextHarfbuzz
+    } else if cfg!(rustty_font_backend = "coretext_noshape") {
+        Backend::CoretextNoshape
+    } else if cfg!(rustty_font_backend = "web_canvas") {
+        Backend::WebCanvas
+    } else {
+        panic!("rustty-font-shaper: build.rs emitted no `rustty_font_backend` cfg")
+    };
+
+    /// `build_config.font_backend` as this crate's `Backend` (the two enums
+    /// are the same `backend.zig` type in the reference; the port defines it
+    /// twice, BREAK #3).
+    pub const fn build_config_backend() -> Backend {
+        use rustty_build_config::font::Backend as B;
+        match rustty_build_config::font_backend() {
+            B::Freetype => Backend::Freetype,
+            B::FreetypeWindows => Backend::FreetypeWindows,
+            B::FontconfigFreetype => Backend::FontconfigFreetype,
+            B::Coretext => Backend::Coretext,
+            B::CoretextFreetype => Backend::CoretextFreetype,
+            B::CoretextHarfbuzz => Backend::CoretextHarfbuzz,
+            B::CoretextNoshape => Backend::CoretextNoshape,
+            B::WebCanvas => Backend::WebCanvas,
+        }
+    }
+
+    // `build_config.font_backend` and `options.backend` must be one value off
+    // wasm (`main.zig:50`). The cfg comes from build-config's build script and
+    // the const from its features; this proves the two channels agree.
+    #[cfg(not(target_arch = "wasm32"))]
+    const _: () = assert!(
+        BACKEND as u8 == build_config_backend() as u8,
+        "font options.backend disagrees with build_config.font_backend"
+    );
+}
+
+/// RUSTTY-ONLY (S-14, N266): the backend selectors (`face.zig`, `shape.zig`,
+/// `library.zig`, `discovery.zig`) are cfg-keyed type aliases; this restates each
+/// reference `switch (options.backend)` against the runtime `options::BACKEND`
+/// and checks the alias the build actually resolved. `RUSTTY_EXPECT_FONT_BACKEND`
+/// (set by the G-FONTBACKEND lane for every backend it builds) must then name
+/// `@tagName(options.backend)`, so a lane whose `-Dfont-backend` feature did not
+/// reach the build fails instead of re-testing the default.
+#[cfg(test)]
+mod backend_selection_tests {
+    use crate::{options, Backend};
+    use core::any::type_name;
+
+    fn tag(b: Backend) -> &'static str {
+        match b {
+            Backend::Freetype => "freetype",
+            Backend::FreetypeWindows => "freetype_windows",
+            Backend::FontconfigFreetype => "fontconfig_freetype",
+            Backend::Coretext => "coretext",
+            Backend::CoretextFreetype => "coretext_freetype",
+            Backend::CoretextHarfbuzz => "coretext_harfbuzz",
+            Backend::CoretextNoshape => "coretext_noshape",
+            Backend::WebCanvas => "web_canvas",
+        }
+    }
+
+    #[test]
+    fn selectors_follow_options_backend() {
+        use Backend::*;
+        let b = options::BACKEND;
+
+        if let Ok(want) = std::env::var("RUSTTY_EXPECT_FONT_BACKEND") {
+            assert_eq!(want, tag(b), "the lane's -Dfont-backend reached the build");
+        }
+        assert_eq!(b, options::build_config_backend());
+
+        // face.zig `Face`
+        let face = match b {
+            Freetype | FreetypeWindows | FontconfigFreetype | CoretextFreetype => {
+                "face::freetype::Face"
+            }
+            Coretext | CoretextHarfbuzz | CoretextNoshape => "face::coretext::Face",
+            WebCanvas => "face::web_canvas::Face",
+        };
+        assert!(
+            type_name::<crate::Face>().ends_with(face),
+            "{}",
+            type_name::<crate::Face>()
+        );
+
+        // shape.zig `Shaper`
+        let shaper = match b {
+            Freetype | FreetypeWindows | FontconfigFreetype | CoretextFreetype
+            | CoretextHarfbuzz => "harfbuzz::Shaper",
+            Coretext => "coretext::Shaper",
+            CoretextNoshape => "noop::Shaper",
+            WebCanvas => "web_canvas::Shaper",
+        };
+        assert!(
+            type_name::<crate::Shaper>().ends_with(shaper),
+            "{}",
+            type_name::<crate::Shaper>()
+        );
+
+        // library.zig `Library`
+        let library = match b {
+            Freetype | FreetypeWindows | FontconfigFreetype | CoretextFreetype => "FreetypeLibrary",
+            Coretext | CoretextHarfbuzz | CoretextNoshape | WebCanvas => "NoopLibrary",
+        };
+        assert!(
+            type_name::<crate::Library>().ends_with(library),
+            "{}",
+            type_name::<crate::Library>()
+        );
+
+        // discovery.zig `Discover` (`void` arms: the port's no-op discoverer)
+        let discover = match b {
+            Freetype => "NoDiscovery",
+            WebCanvas => "NoDiscovery",
+            FreetypeWindows => "Windows",
+            FontconfigFreetype => "Fontconfig",
+            Coretext | CoretextFreetype | CoretextHarfbuzz | CoretextNoshape => "CoreText",
+        };
+        assert!(
+            type_name::<crate::Discover>().ends_with(discover),
+            "{}",
+            type_name::<crate::Discover>()
+        );
+        assert_eq!(
+            matches!(b, Freetype | WebCanvas),
+            crate::discovery::DISCOVER_IS_VOID,
+            "Discover == void"
+        );
+    }
 }
 
 /// The styles that a family can take.

@@ -38,4 +38,107 @@ fn main() {
     let explicit = std::env::var("RUSTTY_VERSION_STRING").unwrap_or_default();
     println!("cargo:rustc-env=RUSTTY_VERSION_EXPLICIT={explicit}");
     println!("cargo:rerun-if-changed=build.rs");
+
+    font_backend();
+}
+
+/// `-Dfont-backend` (`src/build/Config.zig:191-195`):
+///
+/// ```text
+/// config.font_backend = b.option(
+///     FontBackend,
+///     "font-backend",
+///     "The font backend to use for discovery and rasterization.",
+/// ) orelse FontBackend.default(target.result, wasm_target);
+/// ```
+///
+/// The option is the `font-backend-*` feature set (at most one). This resolves
+/// it, falls back to `Backend.default` (`src/font/backend.zig:39-63`) when none
+/// is set, and publishes the tag as `links` metadata `font_backend`, which
+/// reaches every DIRECT dependent's build script as
+/// `DEP_RUSTTY_BUILD_CONFIG_FONT_BACKEND`. `rustty-font-shaper` keys its
+/// `Face`/`Shaper`/`Library`/`Discover` selectors on it. (The crate itself reads
+/// the same features through `cfg!` in `build::FONT_BACKEND_OPTION`; this script
+/// is where the at-most-one and per-target checks live.)
+fn font_backend() {
+    // (feature env suffix, `@tagName(Backend)`), in `backend.zig` order.
+    const FEATURES: [(&str, &str); 7] = [
+        ("FONT_BACKEND_FREETYPE", "freetype"),
+        ("FONT_BACKEND_FREETYPE_WINDOWS", "freetype_windows"),
+        ("FONT_BACKEND_FONTCONFIG_FREETYPE", "fontconfig_freetype"),
+        ("FONT_BACKEND_CORETEXT", "coretext"),
+        ("FONT_BACKEND_CORETEXT_FREETYPE", "coretext_freetype"),
+        ("FONT_BACKEND_CORETEXT_HARFBUZZ", "coretext_harfbuzz"),
+        ("FONT_BACKEND_CORETEXT_NOSHAPE", "coretext_noshape"),
+    ];
+    let selected: Vec<&str> = FEATURES
+        .iter()
+        .filter(|(env, _)| std::env::var_os(format!("CARGO_FEATURE_{env}")).is_some())
+        .map(|&(_, tag)| tag)
+        .collect();
+    if selected.len() > 1 {
+        panic!(
+            "rustty-build-config: `-Dfont-backend` takes ONE value, but the features \
+             select {selected:?}. Enable at most one `font-backend-*` feature."
+        );
+    }
+
+    let os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    let arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
+    let is_wasm = arch == "wasm32";
+    // `Backend.default(target, wasm_target)`.
+    let default = if is_wasm {
+        // `.browser => .web_canvas` (the only `WasmTarget`).
+        "web_canvas"
+    } else if os == "windows" {
+        "freetype_windows"
+    } else if os == "macos" || os == "ios" {
+        // `target.os.tag.isDarwin()`.
+        "coretext"
+    } else {
+        "fontconfig_freetype"
+    };
+
+    let backend = match selected.first() {
+        None => default,
+        Some(&tag) => {
+            // The backends this port can build per target. The reference enum
+            // lets any value through to the compiler; the arms outside this
+            // table either cannot link on the target (CoreText off Darwin) or
+            // are not built by the port there (`fontconfig_freetype` on macOS:
+            // the vendored `fontconfig-sys` is gated off Darwin, as upstream CI
+            // never builds it there either; `freetype_windows` off Windows: its
+            // font-directory scanner is Windows-only code). Refused LOUDLY
+            // rather than silently replaced by the default (R14 spirit).
+            //
+            // wasm is exempt: `font/main.zig:50` ignores the option there
+            // (`.backend = if (wasm) .web_canvas else build_config.font_backend`),
+            // so the value only reaches `build_config.font_backend` itself.
+            let supported: &[&str] = if is_wasm {
+                &[tag]
+            } else if os == "macos" || os == "ios" {
+                &[
+                    "freetype",
+                    "coretext",
+                    "coretext_freetype",
+                    "coretext_harfbuzz",
+                    "coretext_noshape",
+                ]
+            } else if os == "windows" {
+                &["freetype", "freetype_windows"]
+            } else {
+                &["freetype", "fontconfig_freetype"]
+            };
+            if !supported.contains(&tag) {
+                panic!(
+                    "rustty-build-config: `-Dfont-backend={tag}` is not buildable by the \
+                     port for target os `{os}` arch `{arch}`; supported here: {supported:?} \
+                     (default `{default}`)."
+                );
+            }
+            tag
+        }
+    };
+
+    println!("cargo:font_backend={backend}");
 }

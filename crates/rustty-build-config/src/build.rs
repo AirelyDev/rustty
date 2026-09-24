@@ -97,7 +97,10 @@ impl Config {
             renderer: RendererBackend::default(target, wasm_target),
             // Reference `init()`: `config.font_backend = ... orelse
             // FontBackend.default(target.result, wasm_target);`.
-            font_backend: FontBackend::default(target, wasm_target),
+            font_backend: match FONT_BACKEND_OPTION {
+                Some(backend) => backend,
+                None => FontBackend::default(target, wasm_target),
+            },
             // Reference `init()`: `config.i18n = ... orelse switch
             // (target.result.os.tag) { .macos, .ios => true, .linux, .freebsd =>
             // target.result.isGnuLibC(), else => false };`. `isGnuLibC()` maps
@@ -125,6 +128,29 @@ impl Config {
         }
     }
 }
+
+/// The explicit `-Dfont-backend=<tag>` value, or `None` when the option is not
+/// passed (then `from_options` takes `FontBackend.default`). Reference
+/// `Config.zig:191-195`: `b.option(FontBackend, "font-backend", ...) orelse
+/// FontBackend.default(target.result, wasm_target)`. The `font-backend-*`
+/// features are this option; `build.rs` guarantees at most one is on.
+pub const FONT_BACKEND_OPTION: Option<FontBackend> = if cfg!(feature = "font-backend-freetype") {
+    Some(FontBackend::Freetype)
+} else if cfg!(feature = "font-backend-freetype-windows") {
+    Some(FontBackend::FreetypeWindows)
+} else if cfg!(feature = "font-backend-fontconfig-freetype") {
+    Some(FontBackend::FontconfigFreetype)
+} else if cfg!(feature = "font-backend-coretext") {
+    Some(FontBackend::Coretext)
+} else if cfg!(feature = "font-backend-coretext-freetype") {
+    Some(FontBackend::CoretextFreetype)
+} else if cfg!(feature = "font-backend-coretext-harfbuzz") {
+    Some(FontBackend::CoretextHarfbuzz)
+} else if cfg!(feature = "font-backend-coretext-noshape") {
+    Some(FontBackend::CoretextNoshape)
+} else {
+    None
+};
 
 /// `target.result.isGnuLibC()` — whether the compilation target links glibc.
 /// Rust spells this as the `target_env = "gnu"` cfg; it is named here (rather

@@ -796,7 +796,10 @@ mod tests {
             //     _ = try c.add(alloc, try .init(lib, testEmoji, ...), ...);
             // }
             if !options::BACKEND.has_coretext() {
-                #[cfg(not(target_os = "macos"))]
+                // (S-14: the `cfg` is the same `hasCoretext()` predicate; it
+                // used to be `not(target_os = "macos")`, which skipped this add
+                // for a macOS `.freetype` build.)
+                #[cfg(not(rustty_font_has_coretext))]
                 c.add(
                     Face::init(
                         lib,

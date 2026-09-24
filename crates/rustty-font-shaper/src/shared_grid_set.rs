@@ -33,8 +33,9 @@
 // #9 — the real `rustty-config` is a HIGHER crate; see `config.rs`). `ArenaAllocator`
 // is dropped: rustty models the derived-config/key allocations as owned `Vec`s that
 // free themselves (RAII), so no arena is threaded. `builtin.target.os.tag.isDarwin()`
-// → `cfg!(target_os = "macos")`, and `Discover != void` is comptime-true on both
-// parity backends (CoreText/Fontconfig), so those `if` blocks are always active.
+// → `cfg!(target_os = "macos")`, and `Discover != void` is
+// `!discovery::DISCOVER_IS_VOID` (false only on the `.freetype`/`.web_canvas`
+// "no discovery" backends; S-14, N266 — it was folded to `true`).
 use crate::codepoint_resolver::{CodepointResolver, StyleStatus};
 use crate::collection::{self, AddOptions, Collection, LoadOptions, SizeAdjustment};
 use crate::config::{FontStyle, RepeatableCodepointMap, RepeatableFontVariation, RepeatableString};
@@ -93,11 +94,14 @@ pub struct SharedGridSet<A: Allocator + Copy = Global> {
 // PORT NOTE: the backend `Library`'s init error. On the macOS coretext backend
 // `Library` is the `NoopLibrary` whose `InitError` is the uninhabited
 // `LibraryError` (init never fails); on the freetype backend it is `ft::FtError`.
-// macOS coretext + wasm web_canvas → `NoopLibrary` whose `InitError` is the
-// uninhabited `LibraryError` (init never fails); the freetype backend → `ft::FtError`.
-#[cfg(any(target_os = "macos", target_arch = "wasm32"))]
+// Keyed on `hasFreetype()` (the `Library` selector's own switch): the
+// non-FreeType backends (coretext, coretext_harfbuzz, coretext_noshape,
+// web_canvas) → `NoopLibrary` whose `InitError` is the uninhabited
+// `LibraryError` (init never fails); the FreeType backends (including
+// `coretext_freetype` on macOS) → `ft::FtError`.
+#[cfg(not(rustty_font_has_freetype))]
 pub type InitError = crate::library::LibraryError;
-#[cfg(not(any(target_os = "macos", target_arch = "wasm32")))]
+#[cfg(rustty_font_has_freetype)]
 pub type InitError = crate::ft::FtError;
 
 /// The combined error set for `ref`/`collection` (the reference's inferred error
@@ -167,8 +171,10 @@ impl<A: Allocator + Copy> SharedGridSet<A> {
         // self.map.deinit(self.alloc); — `HashMap` frees on drop.
 
         // if (comptime Discover != void) { if (self.font_discover) |*v| v.deinit(); }
-        if let Some(v) = self.font_discover.as_mut() {
-            v.deinit();
+        if !discovery::DISCOVER_IS_VOID {
+            if let Some(v) = self.font_discover.as_mut() {
+                v.deinit();
+            }
         }
 
         self.font_lib.deinit();
@@ -359,6 +365,9 @@ impl<A: Allocator + Copy> SharedGridSet<A> {
         // Search for fonts
         // if (Discover != void) discover: { ... }
         'discover: {
+            if discovery::DISCOVER_IS_VOID {
+                break 'discover;
+            }
             // const disco = try self.discover() orelse { log.warn(...); break :discover; };
             let disco = match discover_impl(font_discover, font_lib) {
                 Some(d) => d,
@@ -581,7 +590,13 @@ impl<A: Allocator + Copy> SharedGridSet<A> {
         // prefer the official one. Users can override this by explicitly
         // specifying a font-family for emoji.
         // if (comptime builtin.target.os.tag.isDarwin() and Discover != void) apple_emoji: { ... }
-        #[cfg(target_os = "macos")]
+        //
+        // PORT NOTE (S-14, N266): `Discover != void` is live — it is false for the
+        // `.freetype` (no discovery) and `.web_canvas` backends.
+        #[cfg(all(
+            target_os = "macos",
+            not(any(rustty_font_backend = "freetype", rustty_font_backend = "web_canvas"))
+        ))]
         'apple_emoji: {
             // const disco = try self.discover() orelse break :apple_emoji;
             let disco = match discover_impl(font_discover, font_lib) {
@@ -645,7 +660,10 @@ impl<A: Allocator + Copy> SharedGridSet<A> {
         // Emoji fallback. We don't include this on Mac since Mac is expected
         // to always have the Apple Emoji available on the system.
         // if (comptime !builtin.target.os.tag.isDarwin() or Discover == void) { ... }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(all(
+            target_os = "macos",
+            not(any(rustty_font_backend = "freetype", rustty_font_backend = "web_canvas"))
+        )))]
         {
             c.add(
                 Face::init(
@@ -720,13 +738,17 @@ impl<A: Allocator + Copy> SharedGridSet<A> {
 //
 // PORT NOTE: the reference method returns `!?*Discover`, but the body never errors
 // (backend `Discover.init` is infallible in rustty), so this returns
-// `Option<*mut Discover>`. The `Discover == void` early-return is elided
-// (`Discover` is always a concrete backend on the parity targets). It is a free
+// `Option<*mut Discover>`. The `Discover == void` early-return is live
+// (`discovery::DISCOVER_IS_VOID`; S-14, N266 — it was elided while every native
+// build had a concrete discoverer). It is a free
 // function over the `font_discover`/`font_lib` fields (not a `&mut self` method) so
 // callers can invoke it while holding the `lock` guard (see `ref`'s PORT NOTE).
 fn discover_impl(font_discover: &mut Option<Discover>, font_lib: Library) -> Option<*mut Discover> {
     // If we're built without a font discovery mechanism, return null
-    // if (comptime Discover == void) return null; — elided.
+    // if (comptime Discover == void) return null;
+    if discovery::DISCOVER_IS_VOID {
+        return None;
+    }
 
     // If we initialized, use it
     // if (self.font_discover) |*v| return v;
@@ -1362,11 +1384,12 @@ mod tests {
         //   +1 — the second `add`'s moved face (deinit in `add`'s error arm),
         //   +1 — the first entry's loaded face (the error-path `c.deinit()`).
         // The CoreText backend's `set_size` additionally deinits the face it
-        // replaces on the ONE successful resize (+1, macOS only; FreeType
-        // resizes in place).
-        #[cfg(target_os = "macos")]
+        // replaces on the ONE successful resize (+1, CoreText face only;
+        // FreeType resizes in place — keyed on the active `Face`, so
+        // `coretext_freetype` on macOS takes the FreeType count).
+        #[cfg(not(rustty_font_has_freetype))]
         let expected = deinits_before + 3;
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(rustty_font_has_freetype)]
         let expected = deinits_before + 2;
         assert_eq!(crate::face::test_probe::face_deinits(), expected);
 
@@ -1386,6 +1409,10 @@ mod tests {
     // Windows — so the test is ungated on native exactly like the reference.
     // The only skip the reference has is `Discover == void`, which is the
     // `.web_canvas => void` wasm arm; that is the `not(wasm32)` gate below.
+    // CORRECTION (S-14): `test SharedGridSet` (`SharedGridSet.zig:822`) has no
+    // skip at all; on the `.freetype => void` native backend it runs, and
+    // `discover()` returning null only logs (`DISCOVER_IS_VOID`), so it runs
+    // here too. The wasm gate is this crate's own (no `SharedGridSet` on wasm).
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn shared_grid_set() {

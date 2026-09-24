@@ -22,9 +22,23 @@
 // and `shape.Cell`/`shape.Options`). The remaining imports (`Group`/`GroupCache`
 // don't exist in rustty; `DeferredFace`/`Library`/`Style`/`Presentation` are
 // unused here) are preserved above as comments.
-use allocator_api2::alloc::Allocator;
-
 use crate::shape;
+
+/// The error set of [`Shaper::shape`]: the `getFace` failures (`try
+/// run.grid.resolver.collection.getFace(...)`), the only fallible call in the
+/// file. RUSTTY-ONLY name: the reference leaves it inferred. A distinct type
+/// (not an alias of `collection::Error`) so that callers holding both, as the
+/// renderer's `RebuildRowError` does for every shaper, can convert each.
+#[derive(Debug)]
+pub enum Error {
+    Collection(crate::collection::Error),
+}
+
+impl From<crate::collection::Error> for Error {
+    fn from(e: crate::collection::Error) -> Self {
+        Error::Collection(e)
+    }
+}
 
 // const log = std.log.scoped(.font_shaper);
 // PORT NOTE: the reference declares `log` but never USES it in this file, so
@@ -83,19 +97,24 @@ impl Shaper {
     /// This should be at least the number of columns in the terminal.
     // pub fn init(alloc: Allocator, opts: font.shape.Options) !Shaper {
     //
-    // PORT NOTE: the reference `!Shaper` return is infallible (no fallible op in
-    // the body); rustty returns `Shaper`. `alloc` is accepted for parity but
-    // unused (see the `alloc` field note); `opts` is discarded exactly as the
-    // reference does (`_ = opts;`).
-    pub fn init<A: Allocator>(_alloc: A, opts: shape::Options) -> Shaper {
+    // PORT NOTE: the reference `!Shaper` return has an empty inferred error set
+    // (no fallible op in the body); it keeps the `Result` shape so that, as the
+    // `.coretext_noshape` arm of the `Shape` selector, it is called exactly like
+    // the HarfBuzz and CoreText shapers (`Shaper::init(opts)?`), and it never
+    // returns `Err`. `alloc` is dropped as in those two ports (see the `alloc`
+    // field note); `opts` is discarded exactly as the reference does
+    // (`_ = opts;`). CORRECTION (S-14, N266): this took an unused allocator and
+    // returned a bare `Shaper`, which no caller could reach while the
+    // `coretext_noshape` backend was folded away.
+    pub fn init(opts: shape::Options) -> Result<Shaper, Error> {
         let _ = opts;
 
-        Shaper {
+        Ok(Shaper {
             cell_buf: Vec::new(),
             run_state: RunState {
                 codepoints: Vec::new(),
             },
-        }
+        })
     }
 
     // pub fn deinit(self: *Shaper) void {
@@ -125,10 +144,7 @@ impl Shaper {
     }
 
     // pub fn shape(self: *Shaper, run: font.shape.TextRun) ![]const font.shape.Cell {
-    pub fn shape(
-        &mut self,
-        run: shape::TextRun,
-    ) -> Result<&[shape::Cell], crate::collection::Error> {
+    pub fn shape(&mut self, run: shape::TextRun) -> Result<&[shape::Cell], Error> {
         // const state = &self.run_state;
 
         // Special fonts aren't shaped and their codepoint == glyph so we
@@ -227,10 +243,9 @@ mod tests {
     fn ref_all_decls() {
         let _ = core::mem::size_of::<Shaper>();
         let _ = core::mem::size_of::<RunIteratorHook>();
-        let _ = Shaper::init::<allocator_api2::alloc::Global> as fn(_, _) -> Shaper;
+        let _ = Shaper::init as fn(_) -> Result<Shaper, Error>;
         let _ = Shaper::deinit as fn(&mut Shaper);
         let _ = Shaper::end_frame as fn(&Shaper);
-        let _ = Shaper::shape
-            as fn(&mut Shaper, shape::TextRun) -> Result<&[shape::Cell], crate::collection::Error>;
+        let _ = Shaper::shape as fn(&mut Shaper, shape::TextRun) -> Result<&[shape::Cell], Error>;
     }
 }

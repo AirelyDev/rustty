@@ -50,13 +50,18 @@ pub mod noop;
 //       `hasHarfbuzz() == true`.
 //
 // (b) is what "faithful" means here: `cfg` is rustty's stand-in for Zig's
-// laziness, and it reproduces the reference's OBSERVABLE content — on macOS the
-// HarfBuzz shaper is unreachable code in ghostty too (the `Shaper` selector
-// below resolves to `coretext.Shaper`, and `build/SharedDeps.zig:267` does not
-// even link HarfBuzz for a `.coretext` build). Nothing is lost: the file, every
-// comment in it, and all 25 of its ported `test {}` blocks stay in the tree and
-// compile and run on every target whose default backend selects them (Linux,
-// FreeBSD, Windows), which is the same set the reference type-checks them on.
+// laziness, and it reproduces the reference's OBSERVABLE content — in a
+// `.coretext` build the HarfBuzz shaper is unreachable code in ghostty too (the
+// `Shaper` selector below resolves to `coretext.Shaper`, and
+// `build/SharedDeps.zig:267` does not even link HarfBuzz for a `.coretext`
+// build). Nothing is lost: the file, every comment in it, and all 25 of its
+// ported `test {}` blocks stay in the tree and compile and run in every build
+// whose backend selects them — `hasHarfbuzz()`, the `rustty_font_has_harfbuzz`
+// cfg: the Linux/FreeBSD/Windows defaults, and on macOS `-Dfont-backend=
+// coretext_freetype` / `coretext_harfbuzz` — which is the same set the
+// reference type-checks them on (`shape.zig`'s `test { _ = Shaper; }`).
+// CORRECTION (S-14, N266): this gate used to be `not(target_os = "macos")`,
+// which was only right while the backend option was folded to its default.
 //
 // WASM DIVERGENCE: the HarfBuzz shaper is not compiled on the `wasm32` web_canvas
 // backend (no HarfBuzz on freestanding wasm); the `web_canvas` shaper is active.
@@ -65,15 +70,16 @@ pub mod noop;
 // owns; on the non-macOS targets the crate's `lib.rs` `compile_error!` already
 // requires the feature to be on, so the gate never silently drops the shaper
 // where it is the active one.
-#[cfg(all(
-    not(target_arch = "wasm32"),
-    not(target_os = "macos"),
-    feature = "harfbuzz"
-))]
+#[cfg(all(rustty_font_has_harfbuzz, feature = "harfbuzz"))]
 #[path = "shaper/harfbuzz.rs"]
 pub mod harfbuzz;
 // pub const coretext = @import("shaper/coretext.zig");
-#[cfg(target_os = "macos")]
+//
+// PORT NOTE: the same laziness rule, for the `.coretext` arm alone: "Note that
+// coretext_freetype cannot use the coretext shaper because the coretext shaper
+// requests CoreText font faces" (the selector below) — so the reference only
+// analyses this file, and runs its tests, in a `.coretext` build.
+#[cfg(rustty_font_backend = "coretext")]
 #[path = "shaper/coretext.rs"]
 pub mod coretext;
 // pub const web_canvas = @import("shaper/web_canvas.zig");
@@ -123,21 +129,39 @@ pub use feature::DEFAULT_FEATURES;
 // };
 //
 // PORT NOTE (selector): the reference selects the active shaper from
-// `options.backend`, which defaults (per `font/backend.zig` `Backend.default`)
-// to `.coretext` on macOS/Darwin and `.fontconfig_freetype` elsewhere. The
-// `.coretext` arm resolves to `coretext.Shaper` (CoreText-native shaping); the
-// `fontconfig_freetype`/`freetype`/`coretext_harfbuzz` arms resolve to
-// `harfbuzz.Shaper`. We mirror those defaults with a cfg split: macOS lands on
-// the CoreText shaper, every other target on the HarfBuzz shaper. The
-// `coretext_noshape` (`noop`) arm is still built and tested via its own
-// submodule.
-#[cfg(target_os = "macos")]
-pub type Shaper = coretext::Shaper;
-// `.web_canvas => web_canvas.Shaper` (wasm browser backend).
-#[cfg(target_arch = "wasm32")]
-pub type Shaper = web_canvas::Shaper;
-#[cfg(not(any(target_os = "macos", target_arch = "wasm32")))]
+// `options.backend` — here the `rustty_font_backend` cfg (`-Dfont-backend`,
+// default `Backend.default`: `.coretext` on Darwin, `.fontconfig_freetype`
+// elsewhere). The HarfBuzz arms are exactly `hasHarfbuzz()`. The
+// `coretext_noshape` (`noop`) arm is always built and tested via its own
+// submodule (`shape.zig`: "Always test noop"). (N266 CLOSED by S-14: this was a
+// `target_os` split that could only express the two defaults.)
+//
+// .freetype, .freetype_windows, .fontconfig_freetype, .coretext_freetype,
+// .coretext_harfbuzz, => harfbuzz.Shaper,
+#[cfg(rustty_font_has_harfbuzz)]
 pub type Shaper = harfbuzz::Shaper;
+// .coretext => coretext.Shaper,
+#[cfg(rustty_font_backend = "coretext")]
+pub type Shaper = coretext::Shaper;
+// .coretext_noshape => noop.Shaper,
+#[cfg(rustty_font_backend = "coretext_noshape")]
+pub type Shaper = noop::Shaper;
+// `.web_canvas => web_canvas.Shaper` (wasm browser backend).
+#[cfg(rustty_font_backend = "web_canvas")]
+pub type Shaper = web_canvas::Shaper;
+
+/// The error type of the active [`Shaper`]'s fallible calls (`init`/`shape`).
+/// RUSTTY-ONLY: the reference threads the shaper's inferred error set through
+/// `!` unions at each caller (`renderer/generic.zig`); Rust callers name it
+/// once, here, so they need not know which backend was built.
+#[cfg(rustty_font_has_harfbuzz)]
+pub type ShaperError = harfbuzz::Error;
+#[cfg(rustty_font_backend = "coretext")]
+pub type ShaperError = coretext::Error;
+#[cfg(rustty_font_backend = "coretext_noshape")]
+pub type ShaperError = noop::Error;
+#[cfg(rustty_font_backend = "web_canvas")]
+pub type ShaperError = web_canvas::Error;
 
 /// A cell is a single glyph within a terminal that should be rendered
 /// for a shaping call. Not all terminal cells may be present; only

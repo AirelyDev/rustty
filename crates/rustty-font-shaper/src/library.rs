@@ -28,10 +28,10 @@ pub type Mutex = std::sync::Mutex<()>;
 
 /// Library implementation for the compile options.
 // PORT NOTE: `library.zig`'s `pub const Library = switch (options.backend) { ...
-// FreetypeLibrary ... NoopLibrary ... }`. Modeled with `cfg(target_os)` matching
-// `Backend.default`: macOS → `NoopLibrary`, everything else → `FreetypeLibrary`.
-// macOS (coretext) AND wasm (web_canvas) → `NoopLibrary`; everything else
-// (Linux fontconfig_freetype) → `FreetypeLibrary`.
+// FreetypeLibrary ... NoopLibrary ... }`. The FreeType arms are exactly
+// `hasFreetype()`, so the switch is keyed on the `rustty_font_has_freetype` cfg
+// (`options.backend`, i.e. `-Dfont-backend`). CORRECTION (S-14, N266): this was
+// a `target_os` split (macOS → `NoopLibrary`), which dropped `coretext_freetype`.
 //
 //   // Freetype requires a state library
 //   .freetype, .freetype_windows, .fontconfig_freetype, .coretext_freetype,
@@ -40,9 +40,9 @@ pub type Mutex = std::sync::Mutex<()>;
 //   // Some backends such as CT and Canvas don't have a "library"
 //   .coretext, .coretext_harfbuzz, .coretext_noshape, .web_canvas,
 //   => NoopLibrary,
-#[cfg(any(target_os = "macos", target_arch = "wasm32"))]
+#[cfg(not(rustty_font_has_freetype))]
 pub type Library = NoopLibrary;
-#[cfg(not(any(target_os = "macos", target_arch = "wasm32")))]
+#[cfg(rustty_font_has_freetype)]
 pub type Library = FreetypeLibrary;
 
 /// Library implementation for the freetype backend.
@@ -106,14 +106,15 @@ pub struct NoopLibrary;
 /// `NoopLibrary.InitError = error{}`.
 // PORT NOTE: on the freetype arm this is `ft::FtError`; the two arms share the
 // `Library::init() -> Result<Library, _>` call shape.
-#[cfg(any(target_os = "macos", target_arch = "wasm32"))]
+#[cfg(not(rustty_font_has_freetype))]
 #[derive(Debug)]
 pub enum LibraryError {}
 
 impl NoopLibrary {
     /// Initialize the (noop) library.
-    // PORT NOTE: `NoopLibrary.init`. Active on macOS (coretext) + wasm (web_canvas).
-    #[cfg(any(target_os = "macos", target_arch = "wasm32"))]
+    // PORT NOTE: `NoopLibrary.init`. Active on the backends without FreeType
+    // (`coretext`, `coretext_harfbuzz`, `coretext_noshape`, `web_canvas`).
+    #[cfg(not(rustty_font_has_freetype))]
     pub fn init() -> Result<NoopLibrary, LibraryError> {
         Ok(NoopLibrary)
     }

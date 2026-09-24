@@ -135,6 +135,11 @@ rustty-font = { workspace = true }
 rustty-render-types = { workspace = true }
 # Base utilities leaf.
 rustty-util = { workspace = true }
+# `build_config.font_backend` (`-Dfont-backend`). A leaf. Its build script
+# publishes the resolved backend as `links` metadata, which only a DIRECT
+# dependent's build script receives: `build.rs` turns it into the
+# `rustty_font_backend` cfg every backend selector here is keyed on.
+rustty-build-config = { workspace = true }
 # Zig std equivalents: `fmt::format_float_d` is the `{d}` the wasm `web_canvas`
 # face formats its CSS font size with (S91-F2). A leaf (already a transitive
 # dep via rustty-font).
@@ -223,7 +228,10 @@ fontconfig-sys = { path = "../../crates-sys/fontconfig-sys", optional = true }
 # matching-descriptor array; the codepoint search builds a character set).
 # `CFAttributedString` is added for the CoreText shaper (`shape` builds a
 # `CFAttributedString` over the run's UTF-16 string before typesetting).
-objc2-core-foundation = { version = "0.3", features = ["CFBase", "CFData", "CFString", "CFNumber", "CFCGTypes", "CFDictionary", "CFArray", "CFCharacterSet", "CFAttributedString"] }
+# `CFURL` is added for `DeferredFace.loadCoreTextFreetype` (the
+# `coretext_freetype` backend: `url.copyPath()` +
+# `URL.createStringByReplacingPercentEscapes`).
+objc2-core-foundation = { version = "0.3", features = ["CFBase", "CFData", "CFString", "CFNumber", "CFCGTypes", "CFDictionary", "CFArray", "CFCharacterSet", "CFAttributedString", "CFURL"] }
 objc2-core-graphics = { version = "0.3", features = ["CGContext", "CGColorSpace", "CGBitmapContext", "CGImage", "CGFont", "CGAffineTransform", "CGGeometry"] }
 # `CTFontCollection` is added for the CoreText discoverer's font-collection search.
 # `CTLine`/`CTRun`/`CTTypesetter`/`CTStringAttributes` are added for the CoreText
