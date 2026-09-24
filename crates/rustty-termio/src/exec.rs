@@ -4746,6 +4746,12 @@ impl ReadThread {
                 // if (comptime !builtin.os.tag.isDarwin()) gather_thread.setName("io-gather");
                 builder = builder.name("io-gather".to_string());
             }
+            // (Test builds only: `tests::FAIL_GATHER_SPAWN` makes this spawn
+            // fail for real, with a stack no thread can get.)
+            #[cfg(test)]
+            if tests::FAIL_GATHER_SPAWN.with(std::cell::Cell::get) {
+                builder = builder.stack_size(usize::MAX / 2);
+            }
             if let Err(err) = builder.spawn_scoped(scope, move || {
                 Self::gatherMainPosix(gather_fd, gather_quit, pipeline);
             }) {
@@ -5893,6 +5899,10 @@ mod tests {
             const { std::cell::Cell::new(0) };
         /// Make `threadEnter`'s read-thread spawn fail on this thread.
         pub(super) static FAIL_READ_THREAD_SPAWN: std::cell::Cell<bool> =
+            const { std::cell::Cell::new(false) };
+        /// Make `threadMainPosix`'s gather-thread spawn fail on this thread
+        /// (S211-F6).
+        pub(super) static FAIL_GATHER_SPAWN: std::cell::Cell<bool> =
             const { std::cell::Cell::new(false) };
     }
 
@@ -7861,6 +7871,60 @@ mod tests {
         assert!(
             found,
             "pty bytes did not land in the terminal Screen within the deadline"
+        );
+    }
+
+    /// S211-F6: when the gather thread cannot be spawned, `threadMainPosix`
+    /// logs the reference's error and returns (`Exec.zig:1470-1479`); it does
+    /// not panic. The spawn fails for real (a test-only switch asks for a stack
+    /// no thread can get). `threadMainPosix` runs on the test thread itself, so
+    /// the thread-local switch and the thread-owned log capture both see it.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn readthread_gather_spawn_failure_logs_and_returns() {
+        let _serial = FORK_KAT_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+
+        let t = TestTermio::build();
+        let pty = Pty::open(ptypkg::winsize {
+            ws_row: 24,
+            ws_col: 80,
+            ws_xpixel: 800,
+            ws_ypixel: 480,
+        })
+        .expect("Pty::open");
+        let mut pipefds = [0 as std::os::fd::RawFd; 2];
+        assert_eq!(unsafe { libc::pipe(pipefds.as_mut_ptr()) }, 0, "pipe()");
+        let (quit_read, quit_write) = (pipefds[0], pipefds[1]);
+
+        let cap = crate::log_capture::start();
+        FAIL_GATHER_SPAWN.with(|f| f.set(true));
+        let io = t.io;
+        let master = pty.master;
+        let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            ReadThread::threadMainPosix::<TestMailbox>(master, io, quit_read);
+        }));
+        FAIL_GATHER_SPAWN.with(|f| f.set(false));
+        let errors: Vec<String> = cap
+            .messages()
+            .into_iter()
+            .filter(|(level, target, _)| *level == log::Level::Error && target == LOG_SCOPE)
+            .map(|(_, _, message)| message)
+            .collect();
+        drop(cap);
+
+        // `quit_read` was closed by the read thread's guard on return.
+        unsafe {
+            libc::close(quit_write);
+            libc::close(pty.master);
+            libc::close(pty.slave);
+        }
+        t.teardown();
+
+        assert!(ran.is_ok(), "threadMainPosix must return, not panic");
+        assert_eq!(errors.len(), 1, "one error logged: {errors:?}");
+        assert!(
+            errors[0].starts_with("read thread exiting, failed to spawn gather thread err="),
+            "the reference's message: {errors:?}"
         );
     }
 
