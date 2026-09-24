@@ -75,6 +75,8 @@ rustty-os = { workspace = true }
 rustty-global = { workspace = true }
 rustty-terminfo = { workspace = true }
 rustty-args = { workspace = true }
+# `std.fmt.parseInt` / `parseUnsigned`: the one port (NEW-FINDINGS N120/N150).
+rustty-zigstd = { workspace = true }
 rustty-apprt = { workspace = true }
 rustty-core = { workspace = true }
 rustty-crash = { workspace = true }

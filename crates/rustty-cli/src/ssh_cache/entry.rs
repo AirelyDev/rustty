@@ -156,8 +156,8 @@ impl<'a> TokenizeScalar<'a> {
 // `_` digit separators `std.fmt.parseInt` skips (`1_700_000_000` is a valid
 // timestamp to the reference). It now calls the port of the reference's own
 // parser, whose error is the reference's error set.
-fn parse_int_i64(s: &[u8]) -> Result<i64, rustty_args::std_fmt::ParseIntError> {
-    rustty_args::std_fmt::parse_int::<i64>(s, 10)
+fn parse_int_i64(s: &[u8]) -> Result<i64, rustty_zigstd::fmt::ParseIntError> {
+    rustty_zigstd::fmt::parse_int::<i64>(s, 10)
 }
 
 // std.log.scoped default: warnings surface on stderr. Mirrors the os/open.rs
@@ -273,7 +273,7 @@ mod tests {
     fn cache_entry_timestamp_overflow_is_named_before_a_later_bad_character() {
         assert!(Entry::parse(b"host|99999999999999999999x|term").is_none());
         assert_eq!(
-            Err(rustty_args::std_fmt::ParseIntError::Overflow),
+            Err(rustty_zigstd::fmt::ParseIntError::Overflow),
             parse_int_i64(b"99999999999999999999x")
         );
     }

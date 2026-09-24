@@ -100,16 +100,16 @@ impl OSC {
         // All values are numeric, so we can do a small hack here
         // PORT NOTE: `std.fmt.parseInt(u4, value, 10)` parses a base-10 unsigned
         // value into a u4 (0 - 15), through the port of the std function in
-        // `crate::zig_parse_int`; any parse failure (incl. overflow) =>
+        // `rustty_zigstd::fmt`; any parse failure (incl. overflow) =>
         // InvalidValue.
         // CORRECTION (parity S195-F2): this used `str::parse::<u8>()` plus a
         // range check, which rejects the `_` digit separators and the `-0`
         // that `std.fmt.parseInt` accepts.
         // PORT NOTE: reference defect (R13), UD141: a `_` digit separator is refused
         // before parsing, as Ghostty's own OSC 99 parser does; see
-        // `zig_parse_int::reject_digit_separators`.
-        let v: u8 = match crate::zig_parse_int::reject_digit_separators(value).and_then(|()| {
-            crate::zig_parse_int::parse_int(crate::zig_parse_int::IntType::unsigned(4), value, 10)
+        // `protocol_int::reject_digit_separators`.
+        let v: u8 = match crate::protocol_int::reject_digit_separators(value).and_then(|()| {
+            rustty_zigstd::fmt::parse_int_type(rustty_zigstd::fmt::IntType::unsigned(4), value, 10)
         }) {
             Ok(v) => u8::try_from(v).expect("a u4 fits in u8"),
             Err(_) => return Err(UpdateError::InvalidValue),

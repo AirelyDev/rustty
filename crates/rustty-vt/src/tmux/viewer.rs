@@ -1700,7 +1700,7 @@ impl Viewer {
                     // `tab_str.parse::<usize>()`, which rejects the `_` digit
                     // separators and `-0` that `std.fmt.parseInt` accepts.
                     let col: usize =
-                        match crate::zig_parse_int::parse::<usize>(tab_str.as_bytes(), 10) {
+                        match rustty_zigstd::fmt::parse_int::<usize>(tab_str.as_bytes(), 10) {
                             Ok(v) => v,
                             Err(_) => continue,
                         };

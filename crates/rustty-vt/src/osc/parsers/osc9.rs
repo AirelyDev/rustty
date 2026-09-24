@@ -39,12 +39,12 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut Comman
                             // `std.fmt.parseUnsigned` does the opposite.
                             // PORT NOTE: reference defect (R13), UD141: a `_` digit separator is refused
                             // before parsing, as Ghostty's own OSC 99 parser does; see
-                            // `zig_parse_int::reject_digit_separators`.
-                            duration_ms: match crate::zig_parse_int::reject_digit_separators(
+                            // `protocol_int::reject_digit_separators`.
+                            duration_ms: match crate::protocol_int::reject_digit_separators(
                                 &data[2..],
                             )
                             .and_then(|()| {
-                                crate::zig_parse_int::parse_unsigned::<u16>(&data[2..], 10)
+                                rustty_zigstd::fmt::parse_unsigned::<u16>(&data[2..], 10)
                             })
                             .ok()
                             {
@@ -257,11 +257,10 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut Comman
                             // `str::parse::<usize>()`; see the sleep arm.
                             // PORT NOTE: reference defect (R13), UD141: a `_` digit separator is refused
                             // before parsing, as Ghostty's own OSC 99 parser does; see
-                            // `zig_parse_int::reject_digit_separators`.
-                            crate::zig_parse_int::reject_digit_separators(&data[4..]).ok()?;
+                            // `protocol_int::reject_digit_separators`.
+                            crate::protocol_int::reject_digit_separators(&data[4..]).ok()?;
                             let parsed =
-                                crate::zig_parse_int::parse_unsigned::<usize>(&data[4..], 10)
-                                    .ok()?;
+                                rustty_zigstd::fmt::parse_unsigned::<usize>(&data[4..], 10).ok()?;
                             // @intCast(std.math.clamp(..., 0, 100))
                             Some(parsed.clamp(0, 100) as u8)
                         })();

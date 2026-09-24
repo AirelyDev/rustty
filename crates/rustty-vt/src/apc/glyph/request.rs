@@ -1044,7 +1044,7 @@ fn option_value<'a>(raw: &'a [u8], key: &[u8]) -> Option<&'a [u8]> {
 
 /// `std.fmt.parseInt(u21, value, radix) catch null` — parse and bound to u21.
 // PORT NOTE: Rust has no `u21`; the port of `std.fmt.parseInt` in
-// `crate::zig_parse_int` parses at the reference's `u21` width (so an
+// `rustty_zigstd::fmt` parses at the reference's `u21` width (so an
 // out-of-range value is `error.Overflow` → `null`) and the value is returned
 // widened to `u32`.
 // CORRECTION (parity S170-F1): this used `u32::from_str_radix` plus a range
@@ -1055,10 +1055,10 @@ fn option_value<'a>(raw: &'a [u8], key: &[u8]) -> Option<&'a [u8]> {
 fn parse_u21(value: &[u8], radix: u8) -> Option<u32> {
     // PORT NOTE: reference defect (R13), UD141: a `_` digit separator is refused
     // before parsing, as Ghostty's own OSC 99 parser does; see
-    // `zig_parse_int::reject_digit_separators`.
-    crate::zig_parse_int::reject_digit_separators(value).ok()?;
+    // `protocol_int::reject_digit_separators`.
+    crate::protocol_int::reject_digit_separators(value).ok()?;
     let parsed =
-        crate::zig_parse_int::parse_int(crate::zig_parse_int::IntType::unsigned(21), value, radix)
+        rustty_zigstd::fmt::parse_int_type(rustty_zigstd::fmt::IntType::unsigned(21), value, radix)
             .ok()?;
     Some(u32::try_from(parsed).expect("a u21 fits in u32"))
 }
@@ -1069,9 +1069,9 @@ fn parse_u21(value: &[u8], radix: u8) -> Option<u32> {
 fn parse_u32(value: &[u8], radix: u8) -> Option<u32> {
     // PORT NOTE: reference defect (R13), UD141: a `_` digit separator is refused
     // before parsing, as Ghostty's own OSC 99 parser does; see
-    // `zig_parse_int::reject_digit_separators`.
-    crate::zig_parse_int::reject_digit_separators(value).ok()?;
-    crate::zig_parse_int::parse::<u32>(value, radix).ok()
+    // `protocol_int::reject_digit_separators`.
+    crate::protocol_int::reject_digit_separators(value).ok()?;
+    rustty_zigstd::fmt::parse_int::<u32>(value, radix).ok()
 }
 
 // PORT NOTE (`946422dbc`): the `parse_float` helper (`std.fmt.parseFloat(f64,

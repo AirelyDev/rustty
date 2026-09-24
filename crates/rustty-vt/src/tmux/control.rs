@@ -966,15 +966,15 @@ fn trim_right_len(slice: &[u8], strip: &[u8]) -> usize {
 }
 
 // PORT NOTE: `std.fmt.parseInt(usize, bytes, 10)`, through the port of the std
-// function in `crate::zig_parse_int`. The error is `std.fmt.ParseIntError`
+// function in `rustty_zigstd::fmt`. The error is `std.fmt.ParseIntError`
 // (`Overflow` / `InvalidCharacter`) so a caller that logs it renders the
 // reference's error name.
 // CORRECTION (parity N100): this used `str::parse::<usize>()` with a local
 // copy of `ParseIntError`; that rejects the `_` digit separators and `-0` that
 // `std.fmt.parseInt` accepts, which `parse_block_terminator`'s unconstrained
 // fields can carry.
-fn parse_int_usize(bytes: &[u8]) -> Result<usize, crate::zig_parse_int::ParseIntError> {
-    crate::zig_parse_int::parse::<usize>(bytes, 10)
+fn parse_int_usize(bytes: &[u8]) -> Result<usize, rustty_zigstd::fmt::ParseIntError> {
+    rustty_zigstd::fmt::parse_int::<usize>(bytes, 10)
 }
 
 // PORT NOTE: reference defect (R13, UPSTREAM-DEFECTS.md UD7). Every id capture

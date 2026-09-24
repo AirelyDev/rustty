@@ -342,9 +342,9 @@ pub mod option {
             // rejects the `_` digit separators `std.fmt.parseInt` accepts.
             // PORT NOTE: reference defect (R13), UD141: a `_` digit separator is refused
             // before parsing, as Ghostty's own OSC 99 parser does; see
-            // `zig_parse_int::reject_digit_separators`.
-            crate::zig_parse_int::reject_digit_separators(full).ok()?;
-            crate::zig_parse_int::parse::<i32>(full, 10).ok()
+            // `protocol_int::reject_digit_separators`.
+            crate::protocol_int::reject_digit_separators(full).ok()?;
+            rustty_zigstd::fmt::parse_int::<i32>(full, 10).ok()
         },
     };
 }

@@ -80,11 +80,11 @@ macro_rules! impl_limit_int {
             // was `parse_field_int` (rustty-args' `from_str_radix` path), which
             // rejects the `_` separators and `-0` that `parseInt` accepts, so
             // `scrollback-limit-bytes = 50_000_000` was a config error.
-            // It calls `rustty_args::std_fmt::parse_int`, the port of
+            // It calls `rustty_zigstd::fmt::parse_int`, the port of
             // `std.fmt.parseInt` itself (NEW-FINDINGS N120).
             fn parse_limit(input: &[u8]) -> Result<$t, ParseError> {
                 // .value = std.fmt.parseInt(T, input, 0) catch return error.InvalidValue,
-                rustty_args::std_fmt::parse_int::<$t>(input, 0).map_err(|_| Error::InvalidValue)
+                rustty_zigstd::fmt::parse_int::<$t>(input, 0).map_err(|_| Error::InvalidValue)
             }
         }
     )*};
@@ -2563,14 +2563,14 @@ pub(crate) fn background_blur_format_entry<W: Writer>(
 //
 // PORT NOTE (NEW-FINDINGS N120, task T-C3): this crate carried its own partial
 // copies of `std.fmt.parseInt` / `parseUnsigned` / `parseFloat`. They now call
-// the one port in `rustty_args::std_fmt` (this crate already depends on
-// rustty-args), whose tests are Zig 0.16.0's std tables.
-pub use rustty_args::std_fmt::ParseIntError;
+// the one port, `rustty_zigstd::fmt` (task tail-s9 moved it there from
+// `rustty_args::std_fmt`), whose tests are Zig 0.16.0's std tables.
+pub use rustty_zigstd::fmt::ParseIntError;
 
 /// PORTS: `std.fmt.parseInt(u8, input, 0)` — base-0 means the radix is detected
 /// from the prefix (`0x`/`0o`/`0b`).
 fn parse_int_u8_base0(input: &[u8]) -> Result<u8, ParseIntError> {
-    rustty_args::std_fmt::parse_int::<u8>(input, 0)
+    rustty_zigstd::fmt::parse_int::<u8>(input, 0)
 }
 
 // ===========================================================================
@@ -5560,60 +5560,20 @@ fn buf_print_parts<'a>(buf: &'a mut [u8], parts: &[&[u8]]) -> Option<&'a [u8]> {
 
 /// PORTS: `std.fmt.parseInt(u21, str, 16)` — a 21-bit unsigned hex parse.
 //
-// PORT NOTE: `parseInt` is not a bare hex-digit scan: it accepts an optional
-// leading sign (std/fmt.zig:328-329) and `_` digit separators, rejecting `_`
-// only as the first or last char of the post-sign digit run (std/fmt.zig:439).
-// For an unsigned result a '-' sign only parses when the magnitude is zero
-// (std/fmt.zig:447-451 casts the negated first digit into the unsigned
-// accumulator). All error paths collapse to `error.InvalidValue` at the call
-// sites, which do `parseInt(...) catch return error.InvalidValue`.
+// PORT NOTE (NEW-FINDINGS N120, task tail-s9): Rust has no `u21`, so this calls
+// the one port of `std.fmt.parseInt` at the reference's width
+// (`rustty_zigstd::fmt::parse_int_type` with `IntType::unsigned(21)`). It was a
+// local copy (optional sign, `_` separators, `-` only at magnitude zero) that
+// agreed with Zig on every input task tail-s9 probed. All error paths collapse
+// to `error.InvalidValue` at the call sites, which do `parseInt(...) catch
+// return error.InvalidValue`.
 fn parse_int_u21_base16(input: &[u8]) -> Result<u21, ParseError> {
-    // if (buf.len == 0) return error.InvalidCharacter;
-    if input.is_empty() {
-        return Err(Error::InvalidValue);
-    }
-
-    // if (buf[0] == '+') ... .pos; if (buf[0] == '-') ... .neg;
-    let (negative, digits) = match input[0] {
-        b'+' => (false, &input[1..]),
-        b'-' => (true, &input[1..]),
-        _ => (false, input),
-    };
-    // parseIntWithSign re-checks emptiness ("+"/"-" alone are invalid).
-    if digits.is_empty() {
-        return Err(Error::InvalidValue);
-    }
-    // if (buf_start[0] == '_' or buf_start[buf_start.len - 1] == '_') return error.InvalidCharacter;
-    if digits[0] == b'_' || digits[digits.len() - 1] == b'_' {
-        return Err(Error::InvalidValue);
-    }
-
-    let mut acc: u32 = 0;
-    for &c in digits {
-        // if (c == '_') continue;
-        if c == b'_' {
-            continue;
-        }
-        let digit = match c {
-            b'0'..=b'9' => (c - b'0') as u32,
-            b'a'..=b'f' => (c - b'a' + 10) as u32,
-            b'A'..=b'F' => (c - b'A' + 10) as u32,
-            _ => return Err(Error::InvalidValue),
-        };
-        acc = acc
-            .checked_mul(16)
-            .and_then(|v| v.checked_add(digit))
-            .ok_or(Error::InvalidValue)?;
-        // u21 max is 0x1F_FFFF.
-        if acc > 0x1F_FFFF {
-            return Err(Error::InvalidValue);
-        }
-    }
-    // A '-' sign against an unsigned result only survives at magnitude zero.
-    if negative && acc != 0 {
-        return Err(Error::InvalidValue);
-    }
-    Ok(acc)
+    use rustty_zigstd::fmt::{parse_int_type, IntType};
+    const U21: IntType = IntType::unsigned(21);
+    parse_int_type(U21, input, 16)
+        // A `u21` value always fits the `u32`-backed `u21` alias.
+        .map(|v| v as u21)
+        .map_err(|_| Error::InvalidValue)
 }
 
 /// Parses the list of Unicode codepoint ranges. Valid syntax:
@@ -6321,10 +6281,10 @@ impl FormatEntry for MouseScrollMultiplier {
 // separators between two digits (`wght=1_000`, `precision:1_0`) and hex floats
 // with an OPTIONAL `p` exponent (`0x1p8`, `0x1.8p0`, `0x1.8`), and Rust rejects
 // both. S75-F1 then ported the grammar here as a private `pf_*` copy; it now
-// calls the single port, `rustty_args::std_fmt::parse_float`, which carries the
+// calls the single port, `rustty_zigstd::fmt::parse_float`, which carries the
 // same grammar, the ported `convert_hex`, and Zig 0.16.0's std test tables.
 fn parse_float_f64(input: &[u8]) -> Result<f64, ParseError> {
-    rustty_args::std_fmt::parse_float::<f64>(input).map_err(|_| Error::InvalidValue)
+    rustty_zigstd::fmt::parse_float::<f64>(input).map_err(|_| Error::InvalidValue)
 }
 
 /// PORTS: the `{d}` float formatter — shortest round-trippable decimal. Rust's
@@ -6449,7 +6409,7 @@ impl QuickTerminalSizeSize {
 }
 
 /// PORTS: `std.fmt.parseInt(u32, input, 10)`, through the single port of
-/// `std.fmt.parseInt` (`rustty_args::std_fmt`, NEW-FINDINGS N120).
+/// `std.fmt.parseInt` (`rustty_zigstd::fmt`, NEW-FINDINGS N120).
 //
 // PORT NOTE: Rust's `str::parse::<u32>()` is NOT a faithful stand-in: the
 // reference accepts a leading `+`, accepts `_` digit separators anywhere except
@@ -6459,7 +6419,7 @@ impl QuickTerminalSizeSize {
 // All call sites collapse both `Overflow` and `InvalidCharacter` into
 // `error.InvalidValue`, so only the accept/reject boundary is observable.
 fn parse_int_u32_base10(input: &[u8]) -> Result<u32, ParseIntError> {
-    rustty_args::std_fmt::parse_int::<u32>(input, 10)
+    rustty_zigstd::fmt::parse_int::<u32>(input, 10)
 }
 
 /// PORTS: `std.fmt.parseFloat(f32, input)`.
@@ -6468,9 +6428,9 @@ fn parse_int_u32_base10(input: &[u8]) -> Result<u32, ParseIntError> {
 // separators and then called Rust's `str::parse::<f32>()`, which has no hex
 // float grammar, so a hex-float percentage (`quick-terminal-size = 0x1p4%`)
 // that the reference loads was rejected. It now calls the single port of
-// `std.fmt.parseFloat` (`rustty_args::std_fmt`, NEW-FINDINGS N120).
+// `std.fmt.parseFloat` (`rustty_zigstd::fmt`, NEW-FINDINGS N120).
 fn parse_float_f32(input: &[u8]) -> Result<f32, ParseError> {
-    rustty_args::std_fmt::parse_float::<f32>(input).map_err(|_| Error::InvalidValue)
+    rustty_zigstd::fmt::parse_float::<f32>(input).map_err(|_| Error::InvalidValue)
 }
 
 // pub const Dimensions = struct { width: u32, height: u32 };
@@ -7183,7 +7143,7 @@ fn is_ascii_whitespace(c: u8) -> bool {
 }
 
 /// PORTS: `std.fmt.parseUnsigned(u64, buf, 10)`, through the single port
-/// (`rustty_args::std_fmt`, NEW-FINDINGS N120).
+/// (`rustty_zigstd::fmt`, NEW-FINDINGS N120).
 //
 // PORT NOTE: the former copy rejected every `_`, where `parseUnsigned` skips an
 // interior one. The only caller (`Duration.parseCLI`'s longest-number loop)
@@ -7191,7 +7151,7 @@ fn is_ascii_whitespace(c: u8) -> bool {
 // always fails, so no `_` ever reaches a successful parse: the two agree on
 // every input that caller can pass.
 fn parse_unsigned_u64_base10(buf: &[u8]) -> Result<u64, ParseIntError> {
-    rustty_args::std_fmt::parse_unsigned::<u64>(buf, 10)
+    rustty_zigstd::fmt::parse_unsigned::<u64>(buf, 10)
 }
 
 // pub const WindowPadding = struct { top_left: u32 = 0, bottom_right: u32 = 0 };
