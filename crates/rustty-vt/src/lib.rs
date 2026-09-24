@@ -57,6 +57,18 @@
 // `terminal/main.zig`'s re-exports below, plus `lib_vt.zig`'s extra `input`/
 // `unicode` namespaces. `lib_vt.zig`'s `TinyIo` re-export (a Zig `std.Io`
 // implementation) is a NON-PORT (`.port/phase-4/NON_PORTS.md`, TinyIo row).
+// Its reference doc (`lib_vt.zig:41-49`), quoted:
+//
+//   /// A tiny, blocking `std.Io` implementation optimized for binary size.
+//   ///
+//   /// Constructing a `Terminal` requires a `std.Io` for features that touch
+//   /// the filesystem (e.g. Kitty graphics file transmission). Embedders that
+//   /// don't have their own `Io` can use `TinyIo` (e.g.
+//   /// `(TinyIo.init).io()`) instead of `std.Io.Threaded` to avoid linking
+//   /// Threaded's full vtable (networking, process spawning, async
+//   /// machinery, etc.), which is worth roughly 110KB of binary size. See
+//   /// the TinyIo docs for the exact tradeoffs.
+//   pub const TinyIo = @import("lib/TinyIo.zig");
 
 // const charsets = @import("charsets.zig");
 pub mod charsets;

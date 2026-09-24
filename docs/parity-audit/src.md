@@ -332,7 +332,7 @@ The reference's `std_options.log_level` (Debug⇒debug, ReleaseSmall⇒warn, els
 - file_type: `inline for` over the comptime table → runtime loop over a const slice; same order and semantics.
 - helpgen: doc extraction scans Rust source lines rather than a Zig AST token stream; the `[3..]` strip and common-prefix dedent are byte-identical.
 - global: Zig GPA-vs-c_allocator selection and `std.Io.Threaded` setup collapse to Rust's process allocator/std (`seam::Allocator = ()`); no observable behaviour beyond debug leak diagnostics.
-- `macosLogger` caches one `os_log` object per scope in an atomic for the process lifetime; `rustty-core/src/logging.rs:70-77` calls `Log::create`/`release` per log call. Identical unified-log output.
+- `macosLogger` caches one `os_log` object per scope in an atomic for the process lifetime; `rustty-core/src/logging.rs:70-77` calls `Log::create`/`release` per log call. Identical unified-log output. **Superseded (parity tail S-8d, N280): the cache is now ported (`logging.rs` `macos_logger`).**
 - `quirks_memset`: hand-vectorized strong `memset` export (aarch64 `dc zva` path) replaced by the platform libc memset rustc links; identical fill semantics.
 - tripwire: type-static `std.EnumMap` per comptime module vs per-instance `HashMap`; only the order of the "untripped point=" warning lines in `end` can differ.
 - math: `@Vector(4, f32)` vs `[f32; 4]` — same element values.

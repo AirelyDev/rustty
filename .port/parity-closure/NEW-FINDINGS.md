@@ -4388,6 +4388,102 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
     `face metrics` FreeType arm disagrees on one value (N285); combinations refused by name
     (N286). The `font` crate key's `done` flip is left to the controller (G6 Miri/ASan lanes).
 
+
+## N280 — `macosLogger`'s per-scope `os_log` cache (upstream `3225e9ebb`) was never ported
+
+- **id**: N280. Not a ledger row: found by G3b while closing bin's comment coverage (task tail-s8d).
+- **severity**: low (performance; identical unified-log output). **kind**: missing upstream change.
+- **oracle**: `src/main_ghostty.zig:170-199` `macosLogger`, called from `logFn` at `:143`.
+- **rustty (pre-fix)**: `crates/rustty-core/src/logging.rs` `log_with` created and released an
+  `os_log` object on every log call, under the pre-`3225e9ebb` comment "Initialize a logger. This is
+  slow to do on every operation but we shouldn't be logging too much." — which the pin no longer
+  has. `docs/parity-audit/src.md` recorded the difference as an accepted equivalence, but the
+  reference's reason for the change (os_log creation shows up in startup profiles) is a behaviour
+  the port simply lacked; it was a missed upstream commit, not a decision.
+- **fix**: `macos_logger(scope)` caches one `Log` per scope for the process lifetime: an acquire
+  load, create, `compare_exchange(null, created, AcqRel, Acquire)` and release of the losing logger,
+  as the reference does. The reference's comptime-per-scope static becomes a per-scope slot from a
+  mutex-guarded registry (Rust scopes are runtime strings). The seven reference comment lines are
+  restored.
+- **verification**: `logging::tests::macos_logger_is_created_once_per_scope` (same scope returns the
+  same object, different scopes differ, 8 racing threads settle on one). Negative control: a
+  per-call `Log::create` in `macos_logger` fails it with "same scope must reuse the cached logger".
+- **state**: CLOSED (task tail-s8d).
+
+## N281 — `class/config.zig` `getMut` had no port and no record
+
+- **id**: N281. Not a ledger row: S-8b report concern 2.
+- **severity**: low. **kind**: unrecorded non-port.
+- **oracle**: `src/apprt/gtk/class/config.zig:94-100` `getMut`. No caller anywhere in `src/` at the
+  pin (`git grep getMut 20abdb50a -- src`: the definition only).
+- **rustty**: `crates/rustty-apprt/src/gtk/class/config.rs` has `get` only.
+- **disposition**: recorded NON-PORT, `.port/phase-4/NON_PORTS.md` (a `&mut CoreConfig` from a
+  shared, refcounted GObject handle is unsound without changing the storage to a `RefCell` and
+  every `get` caller to a guard). Its three doc lines are `no-counterpart` rows of
+  `.port/parity-closure/COMMENT-NOT-CARRIED.tsv` (decl `Config.getMut`).
+- **S-8e (review)**: the record now also names the declined sound alternative, `unsafe fn
+  get_mut(&self) -> *mut CoreConfig` over `UnsafeCell` storage, and why (an uncheckable aliasing
+  contract for a function nothing calls; it is the shape to use if a caller appears).
+- **state**: CLOSED (task tail-s8d; record completed tail-s8e).
+
+## N282 — `gsettings.zig` `getAlloc` had no port and no record
+
+- **id**: N282. Not a ledger row: S-8b report concern 2.
+- **severity**: low. **kind**: missing function (no caller in the reference GTK tree at the pin).
+- **oracle**: `src/apprt/gtk/gsettings.zig:50-57` `getAlloc` + `getImpl`'s `[]const u8` arm `:69-74`.
+- **fix**: `crates/rustty-apprt/src/gtk/gsettings.rs` `get_alloc(key) -> Option<SettingValue>`, with
+  its four reference doc lines restored verbatim. S-8e (review): like the reference it accepts every
+  key (`SettingValue::{Bool, CInt, Str}` reifies `?key.Type()`), and the string arm reads the raw
+  `GValue` (`property_value` + `g_value_get_string` + `CStr::to_bytes`) so non-UTF-8 bytes are
+  returned, not a panic (the S-8d `property::<Option<String>>` form panicked on them).
+- **verification**: UNVERIFIED — the GTK module is `cfg(linux|freebsd, feature = "gtk")` and was
+  not compiled here (macOS, no VM for this batch). Needs the Linux lane (`--features
+  gtk,x11,wayland` clippy).
+- **state**: fix written, Linux build pending.
+
+## N283 — G3b had no audited way to mark a deliberately-not-carried comment
+
+- **id**: N283. Not a ledger row: S-8b report concern 3.
+- **severity**: low (gate). **kind**: gate gap.
+- **description**: comments on code the port does not have by a recorded decision, and stripped
+  gag prose, stayed MISSING permanently, so `--crate bin` / `--crate apprt` could never reach 0 and
+  real drops hid among them. G3b now reads `.port/parity-closure/COMMENT-NOT-CARRIED.tsv`, whose
+  rows are validated mechanically (`.port/tools/gates/_g3b_not_carried.py`): the text must be the
+  oracle line at the pin; still MISSING/REVIEW in the port (a carried row is STALE, RED); for
+  `no-counterpart` attached to the named reference code, with no Rust counterpart anywhere in the
+  workspace and an unstruck evidence record naming it; for `gag-prose` free of digits, identifiers,
+  backticks and ALL-CAPS tokens and at most 20 words; with a two-way cap. Excused comments are
+  printed as `NOT-CARRIED (<class>)`.
+- **S-8e (review CHANGES-REQUIRED, attacks A-1..A-3 went GREEN)**: hardened. `decl` must be DECLARED in
+  the oracle file (fn/const/var, field, enum member) and not a Zig/Rust keyword or common local
+  (`priv`, `self`, `alloc`, ...); a `///` doc or `PORTS:` comment citing it, or a Rust field of its
+  name, is a counterpart (catches `BASELINE` = `comptime_version`); the evidence record (unique
+  needle, at most 30 lines, a heading resolving to its own section only) must name the decl AND
+  the oracle file and carry no strike/RESOLVED/PORTED ANYWHERE; a gag row's record must list its
+  `file:line`, and its text may use no technical term or word of the surrounding oracle code unless
+  `MIXED-CARRIED: "<port comment>"` names a comment the port carries. Rows the stricter rules would
+  not admit, or that have a Rust site, are QUOTED there instead (port convention). 35 rows: bin 21
+  (std_options_debug_io 6, DllMain 15), apprt 14 (adw_c 3, gtk_c 3, supportsDialogs 1,
+  `Config.getMut` 3, gag-prose 4).
+- **verification**: `check_comment_coverage.py --self-test` (69 ledger arms, synthetic and real,
+  the review's A-1/A-2/A-3 planted verbatim); a mutation run (each W1-W4 rule weakened in-process)
+  turns the matching arms FAIL; the review's NC-1..NC-4 and A-1..A-3 re-run on disk are all RED;
+  `--not-carried-check` GREEN.
+- **state**: CLOSED (task tail-s8d, hardened tail-s8e).
+
+## N284 — two BlurRegion CSD-note lines stripped as gag prose carried a fact
+
+- **id**: N284. Not a ledger row: found while classifying S-8b's stripped lines (task tail-s8d).
+- **severity**: low (comment fidelity). **kind**: over-stripped comment.
+- **oracle**: `src/apprt/gtk/winproto/BlurRegion.zig:59-61`.
+- **description**: S-8b stripped `:59` ("... making a window ~30% bigger") and reworded `:61` as gag
+  prose, but `:59` carries the fact the code acts on (CSD windows are ~30% bigger internally), and
+  under the ledger's rule a line with technical content can never be gag prose (the self-test holds
+  a real-row negative control for exactly this line). `:59-61` are restored verbatim in
+  `crates/rustty-apprt/src/gtk/winproto/blur_region.rs`; only `:58` (an insult with no fact) is a
+  `gag-prose` row.
+- **state**: CLOSED (task tail-s8d).
+
 ## N285 — the FreeType arm of `test "face metrics"` expects `cell_width` 8.0 for CozetteVector; the port measures 7.0
 
 - **id**: N285. Not a ledger row (task tail-s14, found running N265's live body under the newly

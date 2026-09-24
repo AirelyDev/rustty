@@ -117,11 +117,15 @@ impl BlurRegion {
         // It's easier to do this inside a vector since we have to scale
         // everything by the scale factor anyways.
 
-        // NOTE(pluiedev; editorializing stripped): GNOME's CSDs make a window
-        // ~30% bigger
+        // NOTE(pluiedev):
+        // Please, GNOME, stop this nonsense of making a window ~30% bigger
         // internally than how they really are just for your shadows and
-        // rounded corners and all that fluff. We trim those offsets.
-        // (`BlurRegion.zig:58-72`)
+        // rounded corners and all that fluff. Please. I beg of you.
+        // (`BlurRegion.zig:58-61`. PORT NOTE: the note's opening insult, `:58`,
+        // is stripped per `strip-ghostty-gag-prose` and declared in
+        // `.port/parity-closure/COMMENT-NOT-CARRIED.tsv`; the rest carries the
+        // fact the code below acts on — CSD windows are larger than they look,
+        // so the surface-transform offsets are trimmed.)
         let (x, y): (Pos, Pos) = {
             // `native.getSurfaceTransform(&x, &y)` (`BlurRegion.zig:65`).
             let (mut xf, mut yf) = native.surface_transform();

@@ -19,6 +19,12 @@
 //! drop the comptime gate entirely — `remember_choice` is always bound and always
 //! read in `response`. The `can-remember` property survives (the `.blp` binds
 //! `visible: bind template.can-remember`), toggling only the row's *visibility*.
+//! The dropped file-level constant, quoted (`clipboard_confirmation_dialog.zig:16-17`):
+//!
+//! ```text
+//! /// Whether we're able to have the remember switch
+//! const can_remember = adw_version.supportsSwitchRow();
+//! ```
 
 use std::cell::{Cell, RefCell};
 use std::sync::OnceLock;
