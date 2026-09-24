@@ -855,7 +855,10 @@ mod tests {
                     break;
                 }
             }
-            assert!(failed, "growth past capacity must reach the refusing allocator");
+            assert!(
+                failed,
+                "growth past capacity must reach the refusing allocator"
+            );
             let before = m.count();
             // An existing key needs no allocation.
             assert!(m.try_put(1, 11).is_ok());
