@@ -384,6 +384,16 @@ fn setupBash(
     // try inject.writeAll("1");
     //
     // (PORT NOTE: the fixed 32-byte writer collapses into a `String`.)
+    //
+    // PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD204. The 32
+    // bytes hold every DISTINCT flag ("1 --norc --noprofile" is 20), but each
+    // repeat of `--norc` / `--noprofile` is appended again, and the fifth
+    // ` --norc` of `bash --norc --norc --norc --norc --norc` makes `writeAll`
+    // fail (`error.WriteFailed`, measured with zig 0.16.0). `setup` passes the
+    // error on and `Exec.zig:800` `try`s it, so the surface fails to start over
+    // a flag the user repeated. The `String` keeps every flag (the script reads
+    // them as words, so a repeat is harmless), which is what the flag list is
+    // for. S213-F2.
     let mut inject = String::from("1");
 
     // Walk through the rest of the given arguments. If we see an option that
@@ -1338,6 +1348,33 @@ mod tests {
                 env.getv(&env_name("BASH_INJECT")).unwrap()
             );
         }
+
+        res.deinit();
+    }
+
+    /// S213-F2 / UD204 (no reference counterpart): repeated inject flags that
+    /// overflow the reference's 32-byte buffer (36 bytes here) still set up
+    /// the integration, with every flag passed on, instead of failing
+    /// `setupBash` and with it the surface.
+    #[test]
+    fn bash_repeated_inject_flags_do_not_fail_setup() {
+        let mut res = TmpResourcesDir::init(Shell::Bash);
+        let mut env = EnvMap::new();
+
+        let command = setupBash(
+            &configpkg::command::Command::Shell(
+                b"bash --norc --norc --norc --noprofile --norc".to_vec(),
+            ),
+            &res.path,
+            &mut env,
+        )
+        .expect("repeated flags must not fail setupBash");
+        assert!(
+            matches!(command, Some(configpkg::command::Command::Shell(ref v)) if v == b"bash --posix")
+        );
+        let inject = env.getv(&env_name("BASH_INJECT")).unwrap();
+        assert_eq!(b"1 --norc --norc --norc --noprofile --norc", inject);
+        assert!(inject.len() > 32, "the case exceeds the reference's buffer");
 
         res.deinit();
     }

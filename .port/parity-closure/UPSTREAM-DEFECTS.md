@@ -1898,6 +1898,21 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - proposed fix:    `if (socket_path[0] == '@') socket_address.path[0] = 0;` and connect with `@offsetOf(sockaddr.un, "path") + socket_path.len` for that case.
 - upstream status: not reported
 
+### UD204 — repeating `--norc` or `--noprofile` in a bash `command` fails the surface: the inject flag buffer is 32 bytes
+- kind:            functional (a terminal that fails to start)
+- upstream project: ghostty
+- severity:        low
+- reference:       `src/termio/shell_integration.zig:302-326` (`setupBash`: `var buf: [32]u8`, `var inject: std.Io.Writer = .fixed(&buf)`, `try inject.writeAll(" --norc")` / `(" --noprofile")` once per occurrence of the flag); `src/termio/Exec.zig:800` (`const integration = try shell_integration.setup(...)`), at 20abdb50a.
+- defect:          the buffer fits every distinct flag (`1 --norc --noprofile` is 20 bytes), but a repeated flag is appended again, and once the text passes 32 bytes `writeAll` fails. The error goes through `setup` and `Exec.zig:800`'s `try`, so the subprocess, and with it the surface, fails to start instead of starting bash with integration. MEASURED with zig 0.16.0: the fifth ` --norc` after `"1"` returns `error.WriteFailed` with `end=32`.
+- ReleaseSafe:     no crash; the new window, tab or split fails to open with an error.
+- ReleaseFast:     same.
+- reachability:    a `command` (or default shell command) such as `bash --norc --norc --norc --norc --norc`, i.e. a user's own configuration, with automatic shell integration on (the default).
+- port handling:   fixed (R13, extended 2026-09-23): `crates/rustty-termio/src/shell_integration.rs` `setupBash` (PORT NOTE: reference defect (R13)) accumulates the flags in a `String`, so every flag is passed on (the script splits them into words; a repeat is harmless) and setup succeeds. The port already did this; T-G recorded it as a deliberate fix. Listed in `docs/ghostty-bug-fixes.md`.
+- parity row(s):   LEDGER S213-F2.
+- test:            `shell_integration::tests::bash_repeated_inject_flags_do_not_fail_setup` (rustty-termio): 41 bytes of flags, setup succeeds with all of them. Negative control (macOS, 2026-09-23): a 32-byte cap on the accumulator returning an error (the reference's shape; the port's `Error` has no `WriteFailed`, so the control used its only variant) fails the test with "repeated flags must not fail setupBash".
+- proposed fix:    skip a flag already present (append `--norc` / `--noprofile` at most once each), or size the buffer for the longest distinct combination and ignore repeats.
+- upstream status: not reported
+
 ## Candidates pending verification
 
 Assembled from this plan's progress notes on 2026-09-11. **Not verified** — do not cite as fact.
