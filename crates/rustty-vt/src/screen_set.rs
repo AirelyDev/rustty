@@ -20,7 +20,9 @@
 use crate::screen::Screen;
 
 // PORT NOTE: the reference `Allocator.Error` maps to `pagelist::OutOfMemory`;
-// the general-purpose allocator maps to `crate::alloc::Global`.
+// `std.mem.Allocator` maps to the runtime handle `crate::alloc::Allocator` (the
+// caller's allocator, or the Rust heap), which the screens are created and
+// destroyed through (parity tail S7-3).
 use crate::alloc::Allocator;
 use crate::pagelist::OutOfMemory;
 use allocator_api2::alloc::Allocator as _;

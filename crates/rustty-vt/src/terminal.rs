@@ -1047,8 +1047,10 @@ impl Terminal {
         self.pwd.deinit(alloc);
         self.title.deinit(alloc);
         // self.glyph_glossary.deinit(alloc);
-        // PORT NOTE: the real `glyph::Glossary::deinit` drops the alloc param (its
-        // entries free on drop); the reference passes `alloc`.
+        // PORT NOTE (parity tail S7-3): the glossary map frees through the
+        // allocator it was bound to at `init` (its entries on drop); the
+        // reference's `alloc` is that allocator, checked here in debug builds.
+        self.glyph_glossary.allocator().debug_assert_same(alloc);
         self.glyph_glossary.deinit();
         // if (self.kitty_dnd) |dnd| dnd.destroy(alloc);
         if let Some(dnd) = self.kitty_dnd.take() {
@@ -5781,15 +5783,17 @@ impl Terminal {
     //     }
     //     return resp;
     // }
-    // PORT NOTE: the real `glyph::execute` drops the alloc param (entries own
-    // their decoded outlines as `Vec`s); the reference threads `alloc`. `alloc`
-    // is retained on the signature for call-site fidelity.
+    // PORT NOTE (parity tail S7-3): `glyph::execute` takes no allocator: the
+    // glossary map grows through the allocator it was bound to at `init`, and
+    // the entries' decoded outlines are `Vec`s on the Rust heap (N272). The
+    // reference's per-call `alloc` is that bound allocator, checked here in
+    // debug builds (callers pass `terminal.gpa()` or termio's allocator).
     pub fn glyph_protocol(
         &mut self,
         alloc: Allocator,
         req: &glyph::Request,
     ) -> Option<glyph::Response> {
-        let _ = alloc;
+        self.glyph_glossary.allocator().debug_assert_same(alloc);
         let resp = glyph::execute(&mut self.glyph_glossary, req);
         match req {
             glyph::Request::Register(_) | glyph::Request::Clear(_) => {
@@ -6939,14 +6943,17 @@ impl Terminal {
         };
         self.tabstops.reset(TABSTOP_INTERVAL as usize);
         self.previous_char = None;
-        // PORT NOTE: `std.ArrayList.clearRetainingCapacity` keeps the allocation
-        // and sets len to 0; `Vec::clear` is the faithful equivalent.
+        // self.pwd.clearRetainingCapacity();
+        // self.title.clearRetainingCapacity();
         self.pwd.clear_retaining_capacity();
         self.title.clear_retaining_capacity();
-        // PORT NOTE: the real `glyph::Glossary::clear_and_free` drops the alloc
-        // param (the reference passes `self.gpa()`); entries free on drop.
-        // PORT NOTE: the glossary frees through the allocator it was built
-        // with (`Glossary::empty_in(alloc)` in `init`), which is `self.gpa()`.
+        // self.glyph_glossary.clearAndFree(self.gpa());
+        // PORT NOTE (parity tail S7-3): `clear_and_free` takes no allocator: it
+        // frees every entry and the map's storage through the allocator the
+        // map was bound to at `init` (`Glossary::empty_in(alloc)`), which is
+        // `self.gpa()` (checked in debug builds).
+        let gpa = self.gpa();
+        self.glyph_glossary.allocator().debug_assert_same(gpa);
         self.glyph_glossary.clear_and_free();
         // A reset only interrupts an in-progress chunked OSC 72 command;
         // drag and drop registration survives, matching kitty.
@@ -23208,5 +23215,29 @@ mod tests {
             t.deinit(alloc);
         });
         assert_eq!(0, counting.live_bytes.get(), "deinit returns every byte");
+    }
+
+    // Parity tail S7-3b (review F5, Rust-only): the glossary is bound to the
+    // terminal's allocator at `init`; the reference grows it through the
+    // per-call `alloc` of `glyphProtocol`, so a different allocator there is a
+    // caller bug the port now reports instead of silently ignoring.
+    #[test]
+    #[cfg_attr(
+        not(debug_assertions),
+        ignore = "debug_assert_same is a debug-build check (R14)"
+    )]
+    #[should_panic(expected = "allocator mismatch")]
+    fn glyph_protocol_checks_the_glossary_allocator() {
+        use crate::alloc::testing::{with_handle, CountingAllocator};
+
+        let counting = CountingAllocator::over_heap();
+        let c = counting.allocator();
+        with_handle(&c, |alloc| {
+            let mut t = Terminal::init(alloc, opts(10, 2)).unwrap();
+            // The matching allocator is accepted...
+            let _ = t.glyph_protocol(alloc, &glyph::Request::Support);
+            // ...a different one is not.
+            let _ = t.glyph_protocol(Global, &glyph::Request::Support);
+        });
     }
 }

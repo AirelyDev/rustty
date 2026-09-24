@@ -4595,8 +4595,11 @@ pub unsafe fn free(terminal_: Terminal) {
     // SAFETY: `terminal_` is a `new`-returned wrapper pointer, not yet freed
     // (caller contract); raw-ptr reads of its sibling fields.
     let t: *mut ZigTerminal = unsafe { (*terminal_).terminal };
-    // const alloc = t.gpa(); — rustty: the INTERNALS (Global) allocator for
-    // `t.deinit`; the storage-owning C allocator is the wrapper's `alloc`.
+    // const alloc = t.gpa();
+    // PORT NOTE (parity tail S7-3): this is the caller's allocator, the one
+    // `new` passed to `Terminal.init` (or the Rust heap for NULL); the
+    // terminal and wrapper storage are freed through the wrapper's `alloc`
+    // holder, the same allocator.
     // SAFETY: `t` is the wrapper's live, owned terminal.
     let alloc = unsafe { (*t).gpa() };
     let alloc_holder: *mut dyn rustty_lib::allocator::ZigAllocator = unsafe { (*terminal_).alloc };

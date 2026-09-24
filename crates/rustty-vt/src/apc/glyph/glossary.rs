@@ -94,6 +94,11 @@ impl Glossary {
         Glossary::empty_in(crate::alloc::Global)
     }
 
+    /// The allocator the glossary's storage grows and frees through.
+    pub fn allocator(&self) -> crate::alloc::Allocator {
+        *self.entries.allocator()
+    }
+
     /// [`Glossary::empty`] whose storage grows through `alloc`.
     pub fn empty_in(alloc: crate::alloc::Allocator) -> Glossary {
         Glossary {
