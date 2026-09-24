@@ -8046,7 +8046,10 @@ The three still-live instances are reopened above.
   ~~`MIRI_EXCEPTIONS.md` missing annotations~~ (discharged by the Miri re-audit).
 * **M:** `stream.zig` `Action` C-ABI union; `vt -> xev` fake module
   (`rustty-vt/src/search/thread.rs:1740`); macOS `xev.File`/`TCP`/`UDP`; libxev
-  `c_api.zig`; uucode bump (G1); Windows termio spawn arms.
+  `c_api.zig`; ~~uucode bump (G1)~~ (DISCHARGED 2026-09-23, parity tail S-10a:
+  CI Zig pin 0.16.0, tables regenerated at the pin and identical, G4-uni 0-diff —
+  `.port/phase-3/NON_PORTS.md` §G1 item 5, `NEW-FINDINGS.md` N220); Windows termio
+  spawn arms.
 * **L:** vaxis 0.6.0 / zf 0.11.0 upstream delta (G2); 13 unported vxfw widgets.
 * **Verification-only** (code present, host absent): V2–V7, V15–V19, V21(b).
 

@@ -6,7 +6,7 @@
 
 /// Grapheme break property.
 ///
-/// PARITY: mirrors `uucode.x.types.GraphemeBreakNoControl` (an `enum(u5)`),
+/// PARITY: mirrors `uucode.types.GraphemeBreakNoControl` (an `enum(u5)`),
 /// the grapheme-break property uucode produces for non-control code points.
 /// rustty embeds the reference's generated tables (R1) so this enum's
 /// discriminants must match uucode's `enum(u5)` ordering exactly.
