@@ -1716,6 +1716,120 @@ mod tests {
     // relying on the reference `Terminal.Options` field defaults. Rust `Options`
     // has no field defaults, so this helper supplies them verbatim, mirroring the
     // reference `Options` declaration (see terminal.rs / graphics_storage.rs).
+    // Parity tail S7-4 (routing evidence, no reference counterpart): every
+    // Kitty graphics allocation goes to the allocator the terminal was built
+    // with (a counting C allocator here), with the counts the reference's
+    // containers make: the command payload list, the loading data, the image
+    // map, the placement map, the animation box, the RGBA conversions, the
+    // frame canvas and the frame list; `deinit` returns every byte.
+    #[test]
+    fn kitty_graphics_route_through_the_allocator_handle() {
+        use crate::alloc::testing::CountingAllocator;
+        let counting = CountingAllocator::over_heap();
+        let c = counting.allocator();
+        crate::alloc::testing::with_handle(&c, |alloc| {
+            let calls = || counting.alloc_calls.get();
+            let live = || counting.live_bytes.get();
+            let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
+            let (base_calls, base_live) = (calls(), live());
+
+            // The command: its payload list grows once (4 base64 bytes).
+            let cmd = command::Parser::parse_string(alloc, b"a=t,f=24,s=1,v=1,i=1;/wAA").unwrap();
+            assert_eq!(base_calls + 1, calls(), "the command payload list");
+            assert_eq!(
+                Some((8, 0)),
+                counting.last_alloc.get(),
+                "allocator_api2's first u8 growth"
+            );
+
+            // Transmit: the loading data (3 decoded bytes) and the image map.
+            let c0 = calls();
+            assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
+            assert_eq!(c0 + 2, calls(), "loading data + images map");
+            cmd.deinit(alloc);
+
+            // Display: the placement map (and the placement's tracked pin,
+            // from the screen's pin pool, which already has room).
+            let c1 = calls();
+            let cmd = command::Parser::parse_string(alloc, b"a=p,i=1").unwrap();
+            assert_eq!(c1, calls(), "no payload, no list");
+            assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
+            assert_eq!(c1 + 1, calls(), "the placements map");
+
+            // An RGB animation frame over the RGB image: the frame's payload
+            // list, its loading data, its RGBA conversion, the image's RGBA
+            // conversion, the animation box, the canvas and the frame list.
+            let cmd = command::Parser::parse_string(alloc, b"a=f,i=1,f=24,s=1,v=1;AAD/").unwrap();
+            let c2 = calls();
+            assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
+            assert_eq!(
+                c2 + 6,
+                calls(),
+                "loading data, 2 RGBA conversions, box, canvas, frames"
+            );
+            cmd.deinit(alloc);
+            {
+                let storage = unsafe { &(*t.screens.active).kitty_images };
+                let img = storage.images.get(&1).unwrap();
+                assert_eq!(command::Format::Rgba, img.format);
+                assert_eq!(1, img.animation.as_ref().unwrap().frames.len());
+            }
+
+            // Uppercase delete frees the image, its data and its animation.
+            let live_before_delete = live();
+            let cmd = command::Parser::parse_string(alloc, b"a=d,d=I,i=1").unwrap();
+            assert!(execute(alloc, &mut t, &cmd).is_none());
+            assert!(
+                live() < live_before_delete,
+                "the image's allocations are freed"
+            );
+
+            t.deinit(alloc);
+            assert_eq!(0, live(), "deinit returns every byte");
+            let _ = base_live;
+        });
+    }
+
+    // Parity tail S7-4: a chunked transmission's loading state is
+    // `alloc.create(LoadingImage)` through the same allocator, and a delete
+    // aborts it (`loading.destroy(alloc)`).
+    #[test]
+    fn kitty_chunked_loading_routes_through_the_allocator_handle() {
+        use crate::alloc::testing::CountingAllocator;
+        let counting = CountingAllocator::over_heap();
+        let c = counting.allocator();
+        crate::alloc::testing::with_handle(&c, |alloc| {
+            let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
+            let cmd =
+                command::Parser::parse_string(alloc, b"a=t,f=24,s=2,v=1,i=2,m=1;/wAA").unwrap();
+            let c0 = counting.alloc_calls.get();
+            assert!(execute(alloc, &mut t, &cmd).is_none());
+            // The loading data and the boxed loading state.
+            assert_eq!(c0 + 2, counting.alloc_calls.get());
+            assert_eq!(
+                Some((
+                    core::mem::size_of::<LoadingImage>(),
+                    core::mem::align_of::<LoadingImage>().trailing_zeros() as u8
+                )),
+                counting.last_alloc.get(),
+                "alloc.create(LoadingImage)"
+            );
+            cmd.deinit(alloc);
+            let f0 = counting.free_calls.get();
+            let cmd = command::Parser::parse_string(alloc, b"a=d,d=a").unwrap();
+            let _ = execute(alloc, &mut t, &cmd);
+            assert!(unsafe { &(*t.screens.active).kitty_images }
+                .loading
+                .is_none());
+            assert!(
+                counting.free_calls.get() >= f0 + 2,
+                "the loading data and its box are freed"
+            );
+            t.deinit(alloc);
+            assert_eq!(0, counting.live_bytes.get());
+        });
+    }
+
     fn opts(cols: size::CellCountInt, rows: size::CellCountInt) -> crate::terminal::Options {
         crate::terminal::Options {
             cols,

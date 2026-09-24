@@ -3243,6 +3243,60 @@ mod tests {
         *sys::decode_png.write().unwrap() = original_decode_png;
     }
 
+    // Parity tail S7-4 (routing evidence): the PNG decoder allocates through
+    // the `LimitedAllocator` whose child is the allocator `complete` is given
+    // (`LimitedAllocator.init(alloc, max_size)`), and the decoded pixels are
+    // copied into data allocated through that same allocator.
+    #[test]
+    fn image_load_png_decode_routes_through_the_allocator_handle() {
+        use rustty_datastruct::limited_allocator::RawAllocator;
+        fn small_decoder(
+            alloc: &dyn RawAllocator,
+            _data: &[u8],
+        ) -> core::result::Result<sys::Image, sys::DecodeError> {
+            // const data = try alloc.alloc(u8, 4);
+            let data = alloc
+                .alloc_bytes(4)
+                .map_err(|_| sys::DecodeError::OutOfMemory)?;
+            // SAFETY: a live 4-byte allocation from `alloc`.
+            unsafe { core::ptr::write_bytes(data.ptr, 9, 4) };
+            let bytes = unsafe { std::slice::from_raw_parts(data.ptr, data.len) }.to_vec();
+            alloc.free_bytes(data);
+            Ok(sys::Image {
+                width: 1,
+                height: 1,
+                data: bytes,
+            })
+        }
+
+        let _png_lock = sys::decode_png_test_lock
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let original_decode_png = *sys::decode_png.read().unwrap();
+        *sys::decode_png.write().unwrap() = Some(small_decoder);
+
+        let counting = crate::alloc::testing::CountingAllocator::over_heap();
+        let c = counting.allocator();
+        crate::alloc::testing::with_handle(&c, |alloc| {
+            let mut loading = LoadingImage {
+                data: crate::alloc::try_dupe(alloc, b"png").unwrap(),
+                ..shm_loading(0, 0, command::Format::Png)
+            };
+            let c0 = counting.alloc_calls.get();
+            let mut img = loading.complete(alloc).unwrap();
+            // The decoder's 4-byte buffer (through the limiter, then freed)
+            // and the image data it is copied into.
+            assert_eq!(c0 + 2, counting.alloc_calls.get());
+            assert_eq!(Some((4, 0)), counting.last_alloc.get());
+            assert_eq!(Some(&[9u8, 9, 9, 9][..]), img.data.bytes());
+            img.deinit(alloc);
+            loading.deinit(alloc);
+        });
+        assert_eq!(0, counting.live_bytes.get(), "every byte is returned");
+
+        *sys::decode_png.write().unwrap() = original_decode_png;
+    }
+
     // test "image load: png rejects oversized Wuffs image before allocation"
     #[test]
     #[cfg_attr(

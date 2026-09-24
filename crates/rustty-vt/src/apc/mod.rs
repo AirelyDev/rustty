@@ -1443,4 +1443,76 @@ mod tests {
         }
         assert!(h.end(alloc).is_none());
     }
+
+    // Parity tail S7-4 (routing evidence, no reference counterpart): the
+    // parsers and the unknown capture are created with the `feed` allocator
+    // and complete with their own, so every buffer and every completed
+    // command's bytes go to it; the glyph registration's decoded outline
+    // (its contours and points) is allocated through the registering
+    // allocator. `deinit` returns every byte.
+    #[test]
+    fn apc_builders_route_through_the_allocator_handle() {
+        use super::*;
+        use crate::alloc::testing::CountingAllocator;
+        let counting = CountingAllocator::over_heap();
+        let c = counting.allocator();
+        crate::alloc::testing::with_handle(&c, |alloc| {
+            let mut h = Handler::default();
+
+            // Kitty: the payload list grows through `alloc` and the command
+            // owns it.
+            h.start();
+            h.feed_slice(alloc, b"Ga=t,f=24,s=1,v=1;/wAA");
+            assert_eq!(1, counting.alloc_calls.get(), "the kitty payload list");
+            let mut cmd = h.end(alloc).unwrap();
+            assert!(matches!(&cmd, Command::Kitty(k) if k.data.as_slice() == [255, 0, 0]));
+            cmd.deinit(alloc);
+            assert_eq!(0, counting.live_bytes.get());
+
+            // Glyph: the request buffer, then the decoded outline.
+            h.start();
+            h.feed_slice(
+                alloc,
+                b"25a1;r;cp=e0a0;AAEAAAAAAGQAZAACAAABAQEAAABk/84AAAAAAGQ=",
+            );
+            assert!(counting.alloc_calls.get() > 1, "the glyph request buffer");
+            let mut cmd = h.end(alloc).unwrap();
+            let Command::Glyph(glyph::Request::Register(reg)) = &cmd else {
+                panic!("a glyph registration");
+            };
+            let c0 = counting.alloc_calls.get();
+            let entry = glyph::glossary::Entry::init(alloc, reg).unwrap();
+            assert_eq!(
+                c0 + 2,
+                counting.alloc_calls.get(),
+                "the outline's contours and points"
+            );
+            assert_eq!(
+                Some((
+                    3 * core::mem::size_of::<rustty_font::opentype::glyf::Point>(),
+                    core::mem::align_of::<rustty_font::opentype::glyf::Point>().trailing_zeros()
+                        as u8
+                )),
+                counting.last_alloc.get(),
+                "the three points"
+            );
+            drop(entry);
+            cmd.deinit(alloc);
+            assert_eq!(0, counting.live_bytes.get());
+
+            // Unknown capture (when enabled) grows through `alloc` too.
+            h.unknown_max_bytes = 64;
+            h.start();
+            h.feed_slice(alloc, b"Xunknown");
+            let mut cmd = h.end(alloc).unwrap();
+            assert!(matches!(&cmd, Command::Unknown(u) if u.content.as_slice() == b"Xunknown"));
+            assert!(
+                counting.live_bytes.get() > 0,
+                "the capture is on the handle"
+            );
+            cmd.deinit(alloc);
+            h.deinit();
+            assert_eq!(0, counting.live_bytes.get(), "every byte is returned");
+        });
+    }
 }
