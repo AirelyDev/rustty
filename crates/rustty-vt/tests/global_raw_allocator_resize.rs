@@ -104,7 +104,10 @@ fn global_raw_allocator_shrink_resize_never_frees_with_a_smaller_layout() {
          `dealloc` was given a smaller layout than `alloc`",
     );
     // And it got there because the shrink was refused, not by luck.
-    assert!(!direct && !wrapped, "the Rust heap cannot shrink a block in place");
+    assert!(
+        !direct && !wrapped,
+        "the Rust heap cannot shrink a block in place"
+    );
 
     // Same-length resize is the one in-place answer; a growth is refused;
     // `remap` still shrinks by moving (`realloc`) and frees cleanly.
@@ -114,6 +117,13 @@ fn global_raw_allocator_shrink_resize_never_frees_with_a_smaller_layout() {
     assert!(!GlobalRawAllocator.raw_resize(RawSlice { ptr, len: 64 }, a, 128, 0));
     let moved = GlobalRawAllocator.raw_remap(RawSlice { ptr, len: 64 }, a, 16, 0);
     assert!(!moved.is_null());
-    GlobalRawAllocator.raw_free(RawSlice { ptr: moved, len: 16 }, a, 0);
+    GlobalRawAllocator.raw_free(
+        RawSlice {
+            ptr: moved,
+            len: 16,
+        },
+        a,
+        0,
+    );
     assert_eq!(before, MISMATCHES.load(Ordering::Relaxed));
 }
