@@ -197,18 +197,17 @@ fn capture_has_escape_flag(cmd: &[u8]) -> bool {
 /// `\033`, SO and SI as `\016` and `\017`, and `grid_string_cells` writes a
 /// one-byte `\` cell as `\\` (tmux 1.8, where `-C` arrived, through master
 /// `72e83b00`). The grid holds no other C0 byte (a tab cell is written as a raw
-/// `\t` either way), so mapping every byte of `raw` is the same transformation.
+/// `\t` either way), so mapping every byte of `raw` is the same transformation,
+/// with one caveat: a hyperlink's URI and id arrive already vis-encoded
+/// (`hyperlinks.c` `utf8_stravis`, tmux 3.4 onward) and `-C` copies them
+/// verbatim, so this models tmux only while `raw`'s URIs and ids contain no
+/// `\` (as in the tests that use it).
 pub(crate) fn capture_reply(cmd: &[u8], raw: &[u8]) -> Vec<u8> {
     assert!(
         cmd.starts_with(b"capture-pane "),
         "not a capture: {:?}",
         String::from_utf8_lossy(cmd)
     );
-    // The flag detection itself, both ways.
-    assert!(capture_has_escape_flag(b"capture-pane -peC -t %1\n"));
-    assert!(!capture_has_escape_flag(
-        b"capture-pane -p -e -q -S - -E -1 -t %1\n"
-    ));
     if !capture_has_escape_flag(cmd) {
         return raw.to_vec();
     }
@@ -229,4 +228,17 @@ pub(crate) fn capture_reply(cmd: &[u8], raw: &[u8]) -> Vec<u8> {
         }
     }
     out
+}
+
+/// `capture_reply` escapes only for a command carrying `-C`, alone or in a
+/// flag cluster, and never mistakes an option argument for it.
+#[test]
+fn capture_escape_flag_detection() {
+    assert!(capture_has_escape_flag(b"capture-pane -peC -t %1\n"));
+    assert!(capture_has_escape_flag(
+        b"capture-pane -p -e -C -q -S - -E -1 -t %1\n"
+    ));
+    assert!(!capture_has_escape_flag(
+        b"capture-pane -p -e -q -S - -E -1 -t %1\n"
+    ));
 }

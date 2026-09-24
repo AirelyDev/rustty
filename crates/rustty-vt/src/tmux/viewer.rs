@@ -2428,10 +2428,16 @@ fn terminal_opts(cols: size::CellCountInt, rows: size::CellCountInt) -> terminal
 /// octal `\xxx`: `grid.c` writes every ESC of an SGR or OSC 8 sequence as the
 /// four characters `\033`, SO and SI as `\016` and `\017`, and a one-byte `\`
 /// cell as `\\`. The reply then has no ESC, the DCS stays hooked, and this
-/// function restores exactly the `-e` bytes: `\` then three octal digits
-/// (at most `\377`) is that byte, `\\` is one `\`, and any other `\` is kept
-/// as it is (tmux writes a `\` that is part of a longer grapheme cluster
-/// unescaped). A redesign that reads control mode outside the VT parser (the
+/// function decodes it: `\` then three octal digits (at most `\377`) is that
+/// byte, `\\` is one `\`, and any other `\` is kept as it is (tmux writes a
+/// `\` that is part of a longer grapheme cluster unescaped, and the next byte
+/// is always 0x80 or above). For the grid text that gives exactly the `-e`
+/// bytes. A hyperlink's URI and id differ: tmux stores them already
+/// vis-encoded (`hyperlinks.c` `utf8_stravis(..., VIS_OCTAL|VIS_CSTYLE)`,
+/// tmux 3.4 onward), so a `\` in them is `\\` and a non-printable byte `\ooo`
+/// with or without `-C`. This function turns that back into the bytes the
+/// application sent, where `-e` alone would have given the pane the vis form
+/// (read from tmux's source, not run). A redesign that reads control mode outside the VT parser (the
 /// upstream proposal in UD12) was not needed: the change stays in the viewer,
 /// and an ESC still ends the DCS, so a tmux that dies mid-reply cannot leave
 /// the terminal swallowing its output.
