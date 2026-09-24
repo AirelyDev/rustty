@@ -78,8 +78,17 @@ impl RawAllocator for GlobalRawAllocator {
         new_len: usize,
         _ra: usize,
     ) -> bool {
-        // Conservative in-place resize: only succeed when shrinking-or-equal.
-        new_len <= memory.len
+        // PORT NOTE (N273, the sibling of N270): an in-place resize succeeds
+        // only for the same length. This allocator is the Rust global heap,
+        // whose `dealloc` must be given the layout the block was allocated
+        // with: reporting a shrink as done in place would make the caller's
+        // later `raw_free(new_len)` hand `dealloc` a smaller layout (undefined
+        // behaviour under the `GlobalAlloc` contract). The embedder's PNG
+        // decoder reaches this through the decode seam's `LimitedAllocator`.
+        // Refusing is within the Zig allocator contract (`c_allocator`'s own
+        // no-usable-size arm); callers fall back to `remap` (`realloc`) or
+        // alloc+copy+free.
+        new_len == memory.len
     }
 
     fn raw_remap(

@@ -4368,6 +4368,9 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   size-checking `#[global_allocator]`): alloc 64, shrink-resize, free with the length the contract
   implies; asserts zero layout mismatches, then that the shrink was refused. Negative control
   (`new_len <= memory.len` reinstated): fails with "left: 0, right: 1" mismatches.
+- **siblings**: the same answer over the Rust heap sat in `rustty_vt::sys::GlobalRawAllocator` (the
+  kitty PNG decode seam's allocator) and in rustty-datastruct's test-only `GlobalAllocator`; both are
+  fixed as N273. With N273 no Rust-heap Zig-style allocator in the workspace reports an in-place shrink.
 - **state**: CLOSED (task S7-3).
 
 ## N271 — six port-only tripwire stand-ins for the reference's `FailingAllocator` tests are retired
@@ -4428,6 +4431,27 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   `terminal_internals_route_…`, `glossary_map_routes_…`, `dnd_state_routes_…`), each with a negative
   control that routes one site to Global; `allocation_failure_sweep_through_the_c_api` (vt-c).
 - **state**: OPEN as a record until S7-4/S7-9 (S179-F2's remainder).
+
+## N273 — `sys::GlobalRawAllocator::raw_resize` reported success for any shrink (the sibling of N270)
+
+- **id**: N273. Not a ledger row: review S7-3 F1. Sibling of N270, fixed in task S7-3b.
+- **severity**: medium. **kind**: port soundness defect (not a reference defect).
+- **oracle**: as N270 (Zig 0.16 `c_allocator.resize`); the reference hands the decoder a `LimitedAllocator`
+  over its general-purpose allocator (`kitty/graphics_image.zig` `decodePng`, `590d669c4`).
+- **rustty**: `crates/rustty-vt/src/sys.rs` `GlobalRawAllocator::raw_resize`; the test-only copy
+  `crates/rustty-datastruct/src/limited_allocator.rs` `tests::GlobalAllocator::raw_resize`.
+- **description**: `GlobalRawAllocator` is the Rust-heap `RawAllocator` behind the kitty PNG decode seam
+  (`graphics_image.rs` `LimitedAllocator::init(sys::GlobalRawAllocator, ...)`, handed to the embedder's
+  decoder through vt-c `sys.rs`). `raw_resize` answered `new_len <= memory.len` without moving the block,
+  so a decoder that shrank a buffer with `resize` and freed it with the new length reached
+  `std::alloc::dealloc` with a smaller `Layout` than `alloc` used: the same undefined behaviour as N270.
+- **fix**: both now succeed in place only for `new_len == memory.len`, with N270's reasoning (PORT NOTE
+  at the production site). Refusing is within the Zig allocator contract; `LimitedAllocator` forwards.
+- **verification**: `crates/rustty-vt/tests/global_raw_allocator_resize.rs` (own binary, a size-checking
+  `#[global_allocator]`): alloc 64, shrink-resize, free with the contract's length, directly and through
+  `LimitedAllocator`; asserts zero layout mismatches, then that the shrinks were refused. Negative control
+  (`new_len <= memory.len` reinstated in sys.rs): fails with "left: 0, right: 2" mismatches.
+- **state**: CLOSED (task S7-3b).
 
 ## N280 — `macosLogger`'s per-scope `os_log` cache (upstream `3225e9ebb`) was never ported
 
