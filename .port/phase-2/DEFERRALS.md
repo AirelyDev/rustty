@@ -8239,6 +8239,41 @@ divergence so it is registered rather than silent.
 
 ## FreeBSD — the platform's explicit ledger row [W2D / F-002 + F-003 + F-004, 2026-08-11]
 
+**DISPOSITION [parity tail S-13, 2026-09-24]: RESOLVED / RECLASSIFIED item by item;
+nothing in this row is left without an owner or a disposition.**
+
+- Items 1 and 2 (running anything on FreeBSD; the gtk-featured FreeBSD build) are
+  **RECLASSIFIED as VERIFICATION DEBT**: `.port/phase-2/VERIFICATION_DEBT.md` **V23**,
+  ENVIRONMENT-BLOCKED on a FreeBSD >= 13 host, with the ported artifacts named and the
+  runnable recipe. This is the disposition G-P2 defines for work that is ported and blocked
+  only on a machine the project does not have, and the one every other missing-host
+  platform row already uses (V8 Windows/WASI, V9-V11 Windows, V12 flatpak). It is not
+  routed to a workstream: on 2026-09-24 G-P2 derives exactly one open workstream, WS19
+  (the Phase 2 closeout, whose plan holds no platform bring-up and must not be held open
+  for hardware), and `Phase 3` is accepted only for BEYOND-PIN work, which this is not.
+- Item 3 (the loop-wakeup `@panic` stub): **RESOLVED, stays faithful (R1)**. S-13
+  re-verified against libxev `9ce8e8e6` (the tarball ghostty@20abdb50a pins) that the stub
+  is unreachable, not merely hard to reach: `Loop.wakeup` is not `pub`
+  (`kqueue.zig:973`), its only caller is the Darwin-gated `thread_perform` (`:965-968`),
+  `xev.Async` on FreeBSD is `AsyncEventFd` (`watcher/async.zig:22-25`) and never calls it,
+  and Ghostty neither names `Loop.wakeup` nor creates an `xev.ThreadPool`. R13 applies only
+  to a reachable defect, so the stub is recorded upstream as `kind: latent` (UD275) and
+  pinned by a FreeBSD test. The text of item 3 below ("fires only on an explicit
+  `Loop::wakeup()`") overstated it: no caller can make that call. NEW-FINDINGS N255.
+- Item 4 (ios/visionos): **RESOLVED earlier and the item was stale**. `318af0f6`
+  (2026-08-26) widened every kqueue-family gate in `rustty-xev` to the reference's set
+  (`macos + ios + visionos + freebsd`); S-13 corrected the six module comments that still
+  said `macos + freebsd`, and gave the three pty stream tests the reference's
+  `.linux, .macos` scope as an R14 `ignore` (they would otherwise have run on FreeBSD and
+  iOS, where the reference skips them). `cargo check -p rustty-xev --tests --target
+  aarch64-apple-ios` is green; `visionos` has no rustup std, so that arm is unchecked.
+  NEW-FINDINGS N256.
+- Item 5 (libc ABI pin): **NO ACTION**. Re-checked: the freebsd arms still never name
+  `ext` (`kevent_init` zero-initializes it), so the note stays true as written.
+- Item 6 (`cli_smoke.rs`): **RESOLVED** — `version_plus` has a `cfg(target_os = "freebsd")`
+  arm asserting what the reference prints there (`renderer.generic.Renderer(renderer.OpenGL)`,
+  `kqueue`). NEW-FINDINGS N257.
+
 FreeBSD was never a named deferral: it was only ever *implicitly* covered by the
 macOS-first plan's "GTK last" tier (GAP_ANALYSIS.md §3.7) and by
 XEV_BLUEPRINT.md's "keep the FreeBSD `posix.Kevent` fast-path cfg-gated for
@@ -8275,7 +8310,8 @@ resolves).**
 - `rustty-renderer` (**F-003**) is the sibling W2D item; it is tracked by its own
   batch and is NOT part of this row's evidence.
 
-**STILL OPEN (nothing below is scheduled; this row is where it is registered).**
+~~**STILL OPEN (nothing below is scheduled; this row is where it is registered).**~~
+**The items as W2D registered them (dispositions above).**
 
 1. **Runtime bring-up on a real FreeBSD >= 13 host.** Nothing here has ever been
    executed on FreeBSD. The follow-up is the concrete command set: `cargo test -p

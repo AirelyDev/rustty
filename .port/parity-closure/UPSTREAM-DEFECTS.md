@@ -2108,6 +2108,21 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - proposed fix:    signal on every push and pop (`not_empty.signal()` after each push, `not_full.signal()` after each pop), or `broadcast` on the edge.
 - upstream status: not reported
 
+### UD275 — libxev's kqueue backend has no loop wakeup on FreeBSD: `Wakeup.wakeup` is a `@panic` stub
+- kind:            latent
+- upstream project: libxev
+- severity:        low (unreachable today; a crash on FreeBSD the moment anything calls it)
+- reference:       libxev `9ce8e8e6` (pinned by ghostty@20abdb50a `build.zig.zon:19-22`) `src/backend/kqueue.zig:1488-1510` (the non-Darwin `Wakeup`: `init`/`deinit`/`setup` do nothing, `wakeup` is `@panic("wakeup not implemented on this platform")`, under `// TODO: We should use eventfd for FreeBSD. Until this is implemented, loop wakeup will crash on BSD.`); its only caller `Loop.wakeup`, `:973-975`, which is not `pub`; that function's only call site, `thread_perform`, `:965-968`, inside `if (comptime builtin.target.os.tag.isDarwin())`.
+- defect:          on FreeBSD the kqueue loop has no way to be woken from another thread. libxev keeps the stub from firing by not calling it: thread-pool completions are pushed to `thread_pool_completions` without a wakeup, so a loop blocked in `kevent` collects them only when some other event arrives. Any future caller of `Loop.wakeup` on FreeBSD (or a `thread_perform` that dropped the Darwin gate) would abort the process.
+- ReleaseSafe:     no effect today (no caller reaches it); if reached, the panic aborts the process.
+- ReleaseFast:     the same (`@panic` is not optimized out).
+- reachability:    none, verified at the pin: `Loop.wakeup` is private to `kqueue.zig`; its one call site is Darwin-only; `xev.Async` on FreeBSD is `AsyncEventFd` (`watcher/async.zig:22-25`), its own eventfd, and never calls it; neither the static kqueue `Api()` nor `dynamic.zig` exposes it; and Ghostty neither calls a loop wakeup nor creates an `xev.ThreadPool` (a grep of ghostty@20abdb50a `src/` for `ThreadPool` and `thread_pool` finds nothing). The latency cost of the pushed-only pool completions is likewise unreached, since Ghostty has no pool.
+- port handling:   faithful (R1): `crates/rustty-xev/src/kqueue.rs` keeps the FreeBSD `Wakeup` as the same panic stub and `thread_perform`'s wakeup Darwin-gated; its PORT NOTE records the reachability argument. `Loop::wakeup` is private in the port too and has no caller on any target. No docs row: behaviour is unchanged.
+- parity row(s):   NEW-FINDINGS N255; `.port/phase-2/DEFERRALS.md` "FreeBSD — the platform's explicit ledger row", item 3.
+- test:            `kqueue::tests::freebsd_wakeup_stub_is_the_reference_panic` (`cfg(target_os = "freebsd")`, `should_panic`): `init` and `setup` succeed and `wakeup` panics with the reference's message. Type-checked from macOS (`cargo check -p rustty-xev --tests --target x86_64-unknown-freebsd`; a planted type error in its body fails that check and not the macOS one, so it is compiled for FreeBSD); not run (no FreeBSD host, `VERIFICATION_DEBT.md` V23).
+- proposed fix:    what the TODO names: on FreeBSD (13+ has `eventfd(2)`), give `Wakeup` an eventfd created with `EFD_CLOEXEC | EFD_NONBLOCK`, register it in `setup` as `EVFILT_READ` with `udata = 0` (the tick loop already skips `udata == 0` events, as it does for the Darwin mach port), write `1` to it in `wakeup`, and drain it on each tick; then drop the `isDarwin()` gate on `thread_perform`'s wakeup. (`EVFILT_USER` with `NOTE_TRIGGER` is the eventfd-free alternative on every BSD.)
+- upstream status: not reported
+
 ## Candidates pending verification
 
 Assembled from this plan's progress notes on 2026-09-11. **Not verified** — do not cite as fact.

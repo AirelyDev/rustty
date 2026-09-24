@@ -4180,3 +4180,67 @@ fix: 0 of 50 of the same sequential runs failed; see the task T-F2 report for th
   port. Only the `d7b7ab0b` side of the diff remains unread. The vxfw doctest test (`All widgets have a
   doctest`, a source scan) is not ported (it was not before either).
 - **state**: CLOSED (task tail-s10b).
+
+## N255 — libxev's FreeBSD loop-wakeup `@panic` stub is unreachable, not "reachable only through an explicit `Loop::wakeup()`"
+
+- **id**: N255. Not a ledger row: the item lived in `.port/phase-2/DEFERRALS.md` ("FreeBSD — the
+  platform's explicit ledger row", item 3). Settled by task tail-s13.
+- **severity**: low. **kind**: reachability correction (reference defect recorded, not fixed).
+- **oracle**: libxev `9ce8e8e6` (ghostty@20abdb50a `build.zig.zon:19-22`; the cached tarball
+  `libxev-0.0.0-86vtcwIRFADbH4hk-…`) `src/backend/kqueue.zig:965-968, 973-975, 1488-1510`,
+  `src/watcher/async.zig:10-30`, `src/dynamic.zig:34-39`; ghostty `src/global.zig:30`.
+- **rustty**: `crates/rustty-xev/src/kqueue.rs` (the FreeBSD `Wakeup`, `Loop::wakeup`,
+  `thread_perform`).
+- **description**: the W2D row said the stub "fires only on an explicit `Loop::wakeup()`" and that
+  an eventfd wakeup "must land upstream first, or be recorded here as an R1 divergence". At the pin
+  no caller can make that call: `Loop.wakeup` is not `pub`, its one call site in `kqueue.zig` is
+  Darwin-gated, `xev.Async` on FreeBSD is `AsyncEventFd` and never calls it, and Ghostty neither
+  names it nor creates an `xev.ThreadPool`. R13 applies only to a reachable defect, so the stub
+  stays faithful; it is recorded upstream as UD275 (`kind: latent`) with the eventfd fix the TODO
+  names. In the port `Loop::wakeup` is also private with no caller on any target.
+- **how found**: task tail-s13, grepping every `wakeup`/`notify` caller in the pinned libxev and in
+  ghostty `src/`.
+- **test**: `kqueue::tests::freebsd_wakeup_stub_is_the_reference_panic` (FreeBSD-only, type-checked
+  from macOS, not run; `VERIFICATION_DEBT.md` V23).
+- **state**: CLOSED (task tail-s13).
+
+## N256 — the FreeBSD row's ios/visionos item was stale, and the three pty stream tests ran where the reference skips them
+
+- **id**: N256. Not a ledger row: `.port/phase-2/DEFERRALS.md` FreeBSD row, item 4.
+- **severity**: low. **kind**: stale record + skip scope (R14).
+- **oracle**: libxev `src/backend/kqueue.zig:29-36` (`.ios, .macos, .visionos => true`, `.freebsd
+  => true`); `src/watcher/stream.zig:1145-1150, 1208-1213, 1272-1277` (`switch (builtin.os.tag) {
+  .linux, .macos => {}, else => return error.SkipZigTest }` in the three pty tests).
+- **rustty**: `crates/rustty-xev/src/lib.rs` (module gates), the module comments of `kqueue.rs`,
+  `async.rs`, `net.rs`, `process.rs`, `stream.rs`, `timer.rs`; `stream.rs` `pty_child_to_parent`,
+  `pty_parent_to_child`, `pty_queued_writes`.
+- **description**: item 4 said rustty gates the kqueue family `any(macos, freebsd)` only.
+  `318af0f6` (2026-08-26) had already widened every gate to `macos + ios + visionos + freebsd`; only
+  six module comments still said otherwise, and they are corrected. Checking the widened module
+  turned up one real gap: the three pty stream tests carried the reference's `.linux, .macos` skip
+  only as a comment claiming "this module is macOS-gated", so on FreeBSD and iOS they would have run
+  where the reference skips them. They now carry the scope as
+  `cfg_attr(all(not(miri), not(any(linux, macos))), ignore = "SkipZigTest: …(R14)")`, with the
+  reference's switch kept as a comment in each.
+- **verification**: `cargo check -p rustty-xev --tests` for `aarch64-apple-ios` and
+  `x86_64-unknown-freebsd` green; `visionos` has no rustup std and is unchecked.
+- **state**: CLOSED (task tail-s13).
+
+## N257 — `cli_smoke.rs`'s `version_plus` asserted nothing about the renderer and libxev lines on FreeBSD
+
+- **id**: N257. Not a ledger row: `.port/phase-2/DEFERRALS.md` FreeBSD row, item 6.
+- **severity**: low. **kind**: missing test arm.
+- **oracle**: `src/cli/version.zig:47-48`; `src/renderer/backend.zig:20-21` (non-Darwin native =>
+  `.opengl`); libxev `src/backend.zig:20,38` (FreeBSD's only candidate is kqueue) and
+  `src/dynamic.zig:39` (one candidate => the static `Api()`, whose `backend` is `.kqueue`).
+- **rustty**: `crates/rustty/tests/cli_smoke.rs` `version_plus`.
+- **description**: the test checked those two lines on macOS and Linux only. It now has a
+  `cfg(target_os = "freebsd")` arm asserting `renderer.generic.Renderer(renderer.OpenGL)` and
+  `libxev        : kqueue`, which is what `crates/rustty-cli/src/version.rs`
+  (`renderer_type_name`, `libxev_backend_tag`) produces from `rustty-build-config` and
+  `rustty_xev::backend()` on FreeBSD.
+- **verification**: `rustty` cannot be type-checked for FreeBSD from macOS (`rustty-os`'s build
+  script compiles `cbits/pty.c`, which needs the target's headers), so the new arm was
+  compile-checked by flipping its `cfg` to macOS for one `cargo check -p rustty --test cli_smoke`
+  (green), then restored. It runs on a FreeBSD host (`VERIFICATION_DEBT.md` V23).
+- **state**: CLOSED (task tail-s13).
