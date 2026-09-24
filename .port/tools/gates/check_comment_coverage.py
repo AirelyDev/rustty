@@ -95,86 +95,52 @@ def words(t):
     return WORD_RE.findall(t)
 
 
-def comment_bodies(path):
+def comment_bodies_text(text):
+    """Comment bodies per line of `text` (split on "\\n" exactly as iterating
+    the file did; the text was read with universal newlines)."""
     out = []
-    try:
-        for line in open(path, encoding="utf-8", errors="replace"):
-            idx = CC.find_comment_start(line)
-            if idx is None:
-                continue
-            body = line[idx:].rstrip("\n")
-            if body.strip():
-                out.append(body)
-    except OSError:
-        pass
+    lines = text.split("\n")
+    for line in [ln + "\n" for ln in lines[:-1]] + ([lines[-1]] if lines[-1] else []):
+        idx = CC.find_comment_start(line)
+        if idx is None:
+            continue
+        body = line[idx:].rstrip("\n")
+        if body.strip():
+            out.append(body)
     return out
+
+
+def comment_bodies(path):
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            return comment_bodies_text(fh.read())
+    except OSError:
+        return []
 
 
 def crate_ref_files(crate, cm):
     return [os.path.join(GHOSTTY_SRC, f) for f, _ in cm[crate]["files"]]
 
 
-def _rs_under(path):
-    """Every .rs file at/under `path` (a directory or a single .rs file)."""
-    if os.path.isfile(path):
-        return [path] if path.endswith(".rs") else []
-    out = []
-    for root, _, files in os.walk(path):
-        for fn in files:
-            if fn.endswith(".rs"):
-                out.append(os.path.join(root, fn))
-    return out
+def crate_rust_sources(crate):
+    """(path, text) for the crate's OWN src/ only (no relocations)."""
+    return list(G.iter_rust_sources(crate, relocations={}))
 
 
-def crate_rust_files(crate):
-    d = G.crate_src_dir(crate)
-    if not d or not os.path.isdir(d):
-        return []
-    return _rs_under(d)
-
-
-# R4 RELOCATIONS (S-8a, 2026-09-24). The crate map partitions the ORACLE files
-# by crate key, but R4 moved some of those files' ports into a DIFFERENT crate
-# (to break a dependency cycle or honour a layering decision). The crate's own
-# `src/` then lacks the port and every comment of the relocated file reads as a
-# MISSING drop that was never dropped: `--crate font` reported 1767 of its 1795
-# MISSING against code living in `rustty-font-shaper`, `--crate input` all 68
-# against `rustty-vt/src/input/`. Each entry below names the EXACT extra port
-# location (never a whole foreign crate when a subtree suffices) plus the
-# decision that put it there. The comparison then runs against the crate's own
-# `src/` PLUS these paths: the same logic, the correct port side.
-#
-# A reference comment still has to appear in the port that implements it, so
-# this admits no comment the crate's port does not carry. A listed path that
-# does not exist is BLOCKED (exit 2), never a silent fall-back (a vanished
-# relocation would otherwise hide that the port moved again).
-EXTRA_PORT_PATHS = {
-    # D1 three-tier font split (memory `apc-glyf-font-layering-d1`): the
-    # shaper/backend-face tier of src/font/ (face*, shape/shaper*, Collection,
-    # CodepointResolver, DeferredFace, discovery, SharedGrid*, library, backend
-    # and the main.zig glue) lives ABOVE rustty-vt in rustty-font-shaper.
-    "font": ["crates/rustty-font-shaper/src"],
-    # The VT slice of src/input/ (function_keys.zig, kitty.zig and the VT
-    # halves of key_mods.zig/config.zig) is owned by rustty-vt (see the
-    # ownership doc in crates/rustty-input/src/lib.rs).
-    "input": ["crates/rustty-vt/src/input"],
-    # config/key.zig's `Key` enum and `Value` fn are ported with the `Config`
-    # struct they reflect over (rustty-cfg-fmt stays a near-leaf, R4 break #6).
-    "cfg-fmt": ["crates/rustty-config/src/config_struct.rs"],
-}
-
-
-def crate_port_files(crate, extra=None):
-    """The port side for `crate`: its own src/ plus its R4 relocations.
-    Raises FileNotFoundError naming a relocation path that does not exist."""
-    extra = EXTRA_PORT_PATHS if extra is None else extra
-    out = crate_rust_files(crate)
-    for rel in extra.get(crate, []):
-        full = rel if os.path.isabs(rel) else os.path.join(G.RUSTTY_ROOT, rel)
-        if not os.path.exists(full):
-            raise FileNotFoundError(full)
-        out += _rs_under(full)
-    return out
+# R4 RELOCATIONS. The map lives in `_gatelib.RELOCATIONS`: S-8a introduced it
+# here as `EXTRA_PORT_PATHS`, and S-8c hoisted it so that every crate-scanning
+# gate honours the same entries. Before the map, `--crate font` reported 1767
+# of its 1795 MISSING against code living in `rustty-font-shaper`, and
+# `--crate input` reported all 68 against `rustty-vt/src/input/`. The
+# comparison runs against the crate's own `src/` PLUS the relocated locations:
+# the same logic, the correct port side. A reference comment still has to
+# appear in the port that implements it, so a relocation admits no comment the
+# crate's port does not carry. A listed path or item that does not exist is
+# BLOCKED (exit 2), never a silent fall-back.
+def crate_port_sources(crate, relocations=None):
+    """(path, text) for the port side of `crate`: its own src/ plus its R4
+    relocations. Raises G.RelocationMissing for a stale relocation."""
+    return list(G.iter_rust_sources(crate, relocations))
 
 
 def classify(ref_norm, port_norm):
@@ -344,13 +310,12 @@ def run(args):
     skipped = []
     for crate in crates:
         if scope_port is not None:
-            rust_files = scope_port
+            rust_sources = [(f, None) for f in scope_port]
         else:
             try:
-                rust_files = crate_port_files(crate)
-            except FileNotFoundError as e:
-                print(f"BLOCKED: R4 relocation path for [{crate}] does not exist: "
-                      f"{e} (EXTRA_PORT_PATHS is stale)", file=sys.stderr)
+                rust_sources = crate_port_sources(crate)
+            except G.RelocationMissing as e:
+                print(f"BLOCKED: {e}", file=sys.stderr)
                 return 2
         # only meaningful for crates that have been ported (non-stub).
         # H5 fix: unified done-detection via _gatelib.is_claimed_done — the same
@@ -386,13 +351,13 @@ def run(args):
         # dedupe identical reference comments
         ref_norm = sorted(set(ref_norm))
         port_norm = []
-        for f in rust_files:
-            for b in comment_bodies(f):
+        for f, text in rust_sources:
+            for b in (comment_bodies(f) if text is None else comment_bodies_text(text)):
                 port_norm.append(norm(b, idmap))
 
         missing, review = classify(ref_norm, port_norm)
 
-        if not rust_files:
+        if not rust_sources:
             print(f"G3b [{crate}]: no ported Rust yet (progress)")
             continue
         print(f"G3b [{crate}]: distinctive ref comments={len(ref_norm)} "
@@ -475,24 +440,49 @@ def self_test_relocations():
                norm("// This comment moved with the relocated port code", idmap),
                norm("// A comment the port genuinely dropped on the floor", idmap)]
 
-        def port(files):
-            return [norm(b, idmap) for f in files for b in comment_bodies(f)]
+        # `demo-s8c` has no crates/ dir, so its own src/ is empty; the `own`
+        # directory stands in for it as a first relocation entry.
+        crate = "demo-s8c"
 
-        m_own, _ = classify(ref, port(_rs_under(own)))
-        m_all, _ = classify(ref, port(_rs_under(own) + _rs_under(moved)))
+        def port(entries):
+            return [norm(b, idmap) for _f, t in
+                    crate_port_sources(crate, {crate: entries})
+                    for b in comment_bodies_text(t)]
+
+        m_own, _ = classify(ref, port(({"path": own},)))
+        m_all, _ = classify(ref, port(({"path": own}, {"path": moved})))
         arm1 = sorted(m_own) == sorted([ref[1], ref[2]]) and m_all == [ref[2]]
         print(f"self-test: relocation covers the moved comment, drop still caught "
               f"= {arm1} (own-only missing={len(m_own)}, with relocation={m_all})")
         ok &= arm1
 
-        # (2) A relocation path that does not exist raises (BLOCKED in run()).
-        try:
-            crate_port_files("font", {"font": [os.path.join(td, "gone")]})
-            arm2 = False
-        except FileNotFoundError:
-            arm2 = True
-        print(f"self-test: missing relocation path is an error = {arm2}")
-        ok &= arm2
+        # (1b) An item-scoped relocation covers only its items' comments: the
+        # moved comment sits OUTSIDE the named item and stays MISSING.
+        with open(os.path.join(moved, "c.rs"), "w") as fh:
+            fh.write("// zebra quartz banjo lighthouse mercury volcano outside\n\n"
+                     "/// a comment inside the relocated item stays covered\n"
+                     "pub mod kept {}\n")
+        ref_items = [norm("// zebra quartz banjo lighthouse mercury volcano outside", idmap),
+                     norm("/// a comment inside the relocated item stays covered", idmap)]
+        m_items, _ = classify(ref_items, port(
+            ({"path": os.path.join(moved, "c.rs"), "items": (r"^pub mod kept\b",)},)))
+        arm1b = m_items == [ref_items[0]]
+        print(f"self-test: item-scoped relocation covers only the item = {arm1b} "
+              f"(missing={m_items})")
+        ok &= arm1b
+
+        # (2) A relocation path (or item) that does not exist raises
+        # RelocationMissing (BLOCKED, exit 2, in run()).
+        for label, entry in (("path", {"path": os.path.join(td, "gone")}),
+                             ("item", {"path": os.path.join(moved, "c.rs"),
+                                       "items": (r"^pub mod gone\b",)})):
+            try:
+                crate_port_sources(crate, {crate: (entry,)})
+                arm2 = False
+            except G.RelocationMissing:
+                arm2 = True
+            print(f"self-test: missing relocation {label} is an error = {arm2}")
+            ok &= arm2
 
     # (3) Real tree: every mapped path exists, and each real row is MISSING
     # without its relocation and covered with it.
@@ -502,13 +492,14 @@ def self_test_relocations():
         in_oracle = any(norm(b, idmap) == rc for b in
                         comment_bodies(os.path.join(GHOSTTY_SRC, ref_file)))
         try:
-            with_files = crate_port_files(crate)
-        except FileNotFoundError as e:
-            print(f"self-test: [{crate}] relocation path missing: {e}")
+            with_sources = crate_port_sources(crate)
+        except G.RelocationMissing as e:
+            print(f"self-test: [{crate}] relocation missing: {e}")
             ok = False
             continue
-        own_norm = [norm(b, idmap) for f in crate_rust_files(crate) for b in comment_bodies(f)]
-        all_norm = [norm(b, idmap) for f in with_files for b in comment_bodies(f)]
+        own_norm = [norm(b, idmap) for _f, t in crate_rust_sources(crate)
+                    for b in comment_bodies_text(t)]
+        all_norm = [norm(b, idmap) for _f, t in with_sources for b in comment_bodies_text(t)]
         before, _ = classify([rc], own_norm)
         after, _ = classify([rc], all_norm)
         arm3 = in_oracle and before == [rc] and after == []

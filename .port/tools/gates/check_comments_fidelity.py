@@ -105,17 +105,32 @@ def run(args):
         G.emit(G.RED, f"unknown crate '{args.crate}' (not in crate_map)")
         return 2
 
+    # R4 relocations (_gatelib.RELOCATIONS): a stale entry is BLOCKED up front.
+    try:
+        G.check_relocations(crates)
+    except G.Blocked as b:
+        G.emit(G.BLOCKED_STATE, str(b))
+        return 3
+
     red = False
     rows = []
     grand_ref = 0
     grand_rust = 0
+    # Workspace total counts each comment ONCE by (file, index): a relocated
+    # comment is also scanned by its host crate.
+    seen_comments = set()
     for crate in crates:
         ref = ref_per_crate.get(crate, {"total": 0, "doc-module": 0, "doc-decl": 0, "line": 0})
-        rust = G.census_rust_comments(crate)
+        rust = {"doc-module": 0, "doc-decl": 0, "line": 0}
+        for path, idx, kind, lines in G.census_rust_comments_located(crate):
+            rust[kind] += lines
+            if (path, idx) not in seen_comments:
+                seen_comments.add((path, idx))
+                grand_rust += lines
+        rust["total"] = rust["doc-module"] + rust["doc-decl"] + rust["line"]
         claimed_done = G.is_claimed_done(crate)
         delta = rust["total"] - ref["total"]
         grand_ref += ref["total"]
-        grand_rust += rust["total"]
 
         crate_red = False
         if claimed_done and delta < 0:
@@ -227,6 +242,73 @@ def self_test():
     r = invoke()
     print(f"[c] done 6>=5 -> exit {r.returncode} (expect 0)")
     ok &= (r.returncode == 0)
+
+    # ---- R4 relocation arms (S-8c): 3 of demo's 5 reference comment lines are
+    # ported in a HOST crate file its relocation names; the host scans that file
+    # too, so the workspace total must count them once.
+    host_src = os.path.join(tmp, "crates", "rustty-host", "src")
+    os.makedirs(host_src)
+    summary["crate_map"]["host"] = {"files": [{"file": "host.zig", "test_blocks": 0}],
+                                    "test_blocks": 0, "file_count": 1}
+    with open(os.path.join(inv, "tests-summary.json"), "w") as fh:
+        json.dump(summary, fh)
+    census["per_file"]["host.zig"] = {"doc-module": 2, "doc-decl": 0, "line": 0, "total": 2}
+    census["totals"]["total_comment_lines"] = 7
+    with open(os.path.join(inv, "comments-census.json"), "w") as fh:
+        json.dump(census, fh)
+    with open(os.path.join(host_src, "lib.rs"), "w") as fh:
+        fh.write("//! host\n//! PORT STATUS: done\n")
+    moved = os.path.join(host_src, "moved.rs")
+
+    def write_moved(text):
+        with open(moved, "w") as fh:
+            fh.write(text)
+
+    write_moved("// moved one\n// moved two\n// moved three\n")
+    write_lib("done", 0)  # the 2 //! lines of demo's own src/
+    reloc = {"demo": ({"path": "crates/rustty-host/src/moved.rs"},)}
+
+    # (d) without the relocation demo has 2 < 5 => RED
+    G.selftest_install_gatelib(gates, {})
+    r = invoke()
+    arm = r.returncode != 0 and "DROPPED: demo ref_total=5 rust_total=2" in r.stdout
+    print(f"[d] relocated comments, no relocation -> exit {r.returncode} "
+          f"(expect non-zero): {arm}")
+    ok &= arm
+
+    # (e) with it: GREEN, and the global total counts the moved lines ONCE
+    # (demo 5 + host 5 per crate, but 7 distinct lines, never 10).
+    G.selftest_install_gatelib(gates, reloc)
+    r = invoke()
+    arm = r.returncode == 0 and "comment-lines rust=7 ref=7" in r.stdout
+    print(f"[e] same + relocation -> exit {r.returncode} (expect 0), global "
+          f"counted once (rust=7): {arm}")
+    ok &= arm
+
+    # (f) with the relocation, a genuine drop is still caught
+    write_moved("// moved one\n// moved two\n")
+    r = invoke()
+    arm = r.returncode != 0 and "DROPPED: demo ref_total=5 rust_total=4" in r.stdout
+    print(f"[f] relocation present, one moved line dropped -> exit "
+          f"{r.returncode} (expect non-zero): {arm}")
+    ok &= arm
+
+    # (g) an item-scoped relocation counts ONLY its items' comments
+    write_moved("// outside one\n// outside two\n\n// kept\nmod kept {\n    // in\n}\n")
+    G.selftest_install_gatelib(gates, {"demo": (
+        {"path": "crates/rustty-host/src/moved.rs", "items": (r"^mod kept\b",)},)})
+    r = invoke()
+    arm = r.returncode != 0 and "DROPPED: demo ref_total=5 rust_total=4" in r.stdout
+    print(f"[g] item-scoped relocation counts only the item's 2 lines -> exit "
+          f"{r.returncode} (expect non-zero): {arm}")
+    ok &= arm
+
+    # (h) a relocation path that does not exist => BLOCKED (exit 3)
+    G.selftest_install_gatelib(gates, {"demo": ({"path": "crates/gone.rs"},)})
+    r = invoke()
+    arm = r.returncode == 3 and "BLOCKED" in r.stdout
+    print(f"[h] relocation path missing -> exit {r.returncode} (expect 3): {arm}")
+    ok &= arm
 
     shutil.rmtree(tmp, ignore_errors=True)
     print("SELF-TEST:", "PASS" if ok else "FAIL")

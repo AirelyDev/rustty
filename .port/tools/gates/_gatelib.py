@@ -9,7 +9,9 @@ gate needs:
   * The authoritative file -> crate map (from tests-summary.json's `crate_map`,
     which is exactly PORT_PLAN's file->crate partition and sums to the 3234
     contract; see PORT_PLAN Section 0).
-  * Discovering each rustty crate's ported Rust sources under crates/<crate>/src.
+  * Discovering each rustty crate's ported Rust sources under crates/<crate>/src,
+    plus its R4 relocations (`RELOCATIONS`, the single map every
+    crate-scanning gate reads; see `iter_rust_sources`).
   * Detecting whether a crate is "claimed-done" (its lib.rs no longer says
     `PORT STATUS: stub`). Per DEFINITION_OF_PARITY a *claimed-done* crate that is
     missing tests/comments/assertions is RED; an unclaimed (stub) crate is
@@ -231,6 +233,8 @@ def is_claimed_done(crate):
 # Rust source scanning
 # ---------------------------------------------------------------------------
 def iter_rust_files(crate):
+    """The .rs files under the crate's OWN `crates/<dir>/src` only. Gates scan
+    through `iter_rust_sources`, which adds the crate's R4 relocations."""
     src = crate_src_dir(crate)
     if src is None:
         return
@@ -238,6 +242,214 @@ def iter_rust_files(crate):
         for fn in fnames:
             if fn.endswith(".rs"):
                 yield os.path.join(dirpath, fn)
+
+
+# ---------------------------------------------------------------------------
+# R4 RELOCATIONS — the single source of truth (S-8a introduced it in G3b as
+# `EXTRA_PORT_PATHS`; S-8c hoisted it here so every crate-scanning gate reads
+# the same map).
+# ---------------------------------------------------------------------------
+# The crate map partitions the ORACLE files by crate key, but R4 moved some of
+# those files' ports into a DIFFERENT crate (to break a dependency cycle or to
+# honour a layering decision). The crate's own `src/` then lacks the port, and
+# every gate that scans only `src/` reads the relocated tests, assertions,
+# comments, constants and surface ids as drops that were never dropped. Each
+# entry names the EXACT extra port location — a subtree, a file, or named items
+# inside a file, never a whole foreign crate when less suffices — plus the
+# decision that put it there. Every gate then scans the crate's own `src/` PLUS
+# these locations: the same logic, the correct port side.
+#
+# NOT A WEAKENING (R5):
+#   * A relocation adds only code that implements the crate's own reference
+#     files; the reference side (contract, census, surface) is unchanged, so a
+#     reference item still has to appear in the port that implements it.
+#   * A listed path that does not exist, or an item that cannot be found in it,
+#     raises `RelocationMissing` (a `Blocked`): every gate reports BLOCKED, never
+#     a silent fall-back — a vanished relocation would otherwise hide that the
+#     port moved again.
+#   * A relocated location is usually ALSO scanned by its host crate (the vt
+#     input slice is in rustty-vt's `src/`). Workspace-wide totals therefore
+#     count each (file, offset) ONCE (`*_located` scanners below), so a
+#     relocation can never inflate a global floor by double counting.
+#
+# `items` (optional): regexes, each matching the first line of ONE top-level
+# item in the file (`^pub enum Key\b`). The item's span runs from the contiguous
+# comment/attribute block directly above that line (up to a blank line) to the
+# end of the item's balanced braces. Everything outside the spans is blanked
+# (newlines kept, so line numbers stay true); only the named items count.
+RELOCATIONS = {
+    # D1 three-tier font split (memory `apc-glyf-font-layering-d1`): the
+    # shaper/backend-face tier of src/font/ (face*, shape/shaper*, Collection,
+    # CodepointResolver, DeferredFace, discovery, SharedGrid*, library, backend
+    # and the main.zig glue) lives ABOVE rustty-vt in rustty-font-shaper, which
+    # has no crate-map key of its own (every file it ports is a `font` file).
+    "font": (
+        {"path": "crates/rustty-font-shaper/src"},
+    ),
+    # The VT slice of src/input/ is owned by rustty-vt (see the ownership doc in
+    # crates/rustty-input/src/lib.rs). Only the files that port INPUT's mapped
+    # oracle files are listed: function_keys.zig and kitty.zig in full, and the
+    # VT halves of key_mods.zig (the VT-Mods half) and config.zig
+    # (`OptionAsAlt`). key.zig, key_encode.zig, mouse*.zig and paste.zig are
+    # rustty-vt's own crate-map files and are NOT relocated.
+    "input": (
+        {"path": "crates/rustty-vt/src/input/function_keys.rs"},
+        {"path": "crates/rustty-vt/src/input/kitty.rs"},
+        {"path": "crates/rustty-vt/src/input/key_mods.rs"},
+        {"path": "crates/rustty-vt/src/input/config.rs"},
+    ),
+    # config/key.zig's `Key` enum and `Value` fn are ported with the `Config`
+    # struct they reflect over (rustty-cfg-fmt stays a near-leaf, R4 break #6).
+    # Only key.zig's three items count: `Key`, `value_type` (the `Value` port)
+    # and the `test "Value"` module — never the rest of config_struct.rs, which
+    # ports config/Config.zig for the `config` crate.
+    "cfg-fmt": (
+        {"path": "crates/rustty-config/src/config_struct.rs",
+         "items": (r"^pub enum Key\b", r"^pub fn value_type\b",
+                   r"^mod key_tests\b")},
+    ),
+}
+
+
+class RelocationMissing(Blocked):
+    """An R4 relocation names a path or item that does not exist (stale map)."""
+
+
+def _relocation_abs(path):
+    return path if os.path.isabs(path) else os.path.join(RUSTTY_ROOT, path)
+
+
+def _rs_under(path):
+    """Every .rs file at/under `path` (a directory or a single .rs file), in a
+    deterministic order."""
+    if os.path.isfile(path):
+        return [path] if path.endswith(".rs") else []
+    out = []
+    for dirpath, _dirs, fnames in os.walk(path):
+        for fn in fnames:
+            if fn.endswith(".rs"):
+                out.append(os.path.join(dirpath, fn))
+    return sorted(out)
+
+
+def _item_spans(text, patterns, path="<text>"):
+    """[(start, end)] character spans of the named top-level items in `text`.
+    Raises RelocationMissing if a pattern matches no line or opens no block."""
+    clean, _ = _strip_rust(text)
+    lines = text.split("\n")
+    offsets = []
+    pos = 0
+    for ln in lines:
+        offsets.append(pos)
+        pos += len(ln) + 1
+    spans = []
+    for pat in patterns:
+        rx = re.compile(pat)
+        hit = None
+        for i, ln in enumerate(lines):
+            # match against the comment-blanked line so a quoted item in a
+            # comment can never stand in for the real one
+            if rx.search(clean[offsets[i]:offsets[i] + len(ln)]):
+                hit = i
+                break
+        if hit is None:
+            raise RelocationMissing(
+                f"R4 relocation item {pat!r} not found in {path} (stale map)")
+        first = hit
+        while first > 0:
+            prev = lines[first - 1].strip()
+            if prev.startswith("//") or prev.startswith("#["):
+                first -= 1
+                continue
+            break
+        brace = clean.find("{", offsets[hit])
+        semi = clean.find(";", offsets[hit])
+        if brace == -1 or (semi != -1 and semi < brace):
+            raise RelocationMissing(
+                f"R4 relocation item {pat!r} in {path} opens no block (stale map)")
+        spans.append((offsets[first], _find_balanced_block(clean, brace)))
+    return sorted(spans)
+
+
+def _mask_to_spans(text, spans):
+    """`text` with every character outside `spans` blanked (newlines kept)."""
+    out = []
+    pos = 0
+    for s, e in spans:
+        if s > pos:
+            out.append(re.sub(r"[^\n]", " ", text[pos:s]))
+        out.append(text[max(s, pos):e])
+        pos = max(pos, e)
+    out.append(re.sub(r"[^\n]", " ", text[pos:]))
+    return "".join(out)
+
+
+def relocation_sources(crate, relocations=None):
+    """[(abs_path, text)] for `crate`'s R4 relocations (see RELOCATIONS).
+    `relocations` overrides the map (self-tests only). Raises RelocationMissing
+    for a path or item that does not exist."""
+    rel_map = RELOCATIONS if relocations is None else relocations
+    out = []
+    for entry in rel_map.get(crate, ()):
+        full = _relocation_abs(entry["path"])
+        if not os.path.exists(full):
+            raise RelocationMissing(
+                f"R4 relocation path for [{crate}] does not exist: {full} "
+                f"(RELOCATIONS is stale)")
+        items = entry.get("items")
+        for p in _rs_under(full):
+            try:
+                with open(p, encoding="utf-8", errors="replace") as fh:
+                    text = fh.read()
+            except OSError as e:
+                raise RelocationMissing(f"R4 relocation file unreadable: {p}: {e}")
+            if items:
+                text = _mask_to_spans(text, _item_spans(text, items, p))
+            out.append((p, text))
+    return out
+
+
+def check_relocations(crates=None, relocations=None):
+    """Resolve every relocation of `crates` (default: every mapped crate) and
+    raise RelocationMissing on the first stale one. Gates call this up front so
+    a stale map is BLOCKED before any verdict is printed."""
+    rel_map = RELOCATIONS if relocations is None else relocations
+    for crate in (rel_map if crates is None else crates):
+        relocation_sources(crate, rel_map)
+
+
+def selftest_install_gatelib(gates_dir, relocations=None):
+    """Self-test fixture helper: copy THIS module into a synthetic root's
+    `.port/tools/gates/`, optionally replacing RELOCATIONS (paths relative to
+    that root). Used by every gate's relocation self-test arm; the override is
+    an appended module-level assignment, so the live map is never edited."""
+    with open(os.path.abspath(__file__), encoding="utf-8") as fh:
+        text = fh.read()
+    if relocations is not None:
+        text += "\n\n# SELF-TEST FIXTURE OVERRIDE\nRELOCATIONS = %r\n" % (relocations,)
+    with open(os.path.join(gates_dir, "_gatelib.py"), "w", encoding="utf-8") as fh:
+        fh.write(text)
+
+
+def iter_rust_sources(crate, relocations=None):
+    """(path, text) for the crate's port side: every .rs under its own `src/`,
+    then its R4 relocations (a relocated file already under the crate's own
+    `src/` is not yielded twice). This is what every crate-scanning gate
+    reads."""
+    seen = set()
+    for path in iter_rust_files(crate):
+        try:
+            with open(path, encoding="utf-8", errors="replace") as fh:
+                text = fh.read()
+        except Exception:  # noqa: BLE001
+            continue
+        seen.add(os.path.realpath(path))
+        yield path, text
+    for path, text in relocation_sources(crate, relocations):
+        if os.path.realpath(path) in seen:
+            continue
+        seen.add(os.path.realpath(path))
+        yield path, text
 
 
 def _strip_rust(text, keep_strings=False):
@@ -579,26 +791,30 @@ ASSERTION_PATTERNS = [
 ]
 
 
-def scan_rust_tests(crate):
-    """Return a list of ported test fn names found in the crate's Rust sources.
-
-    A "test" is a `fn` immediately preceded (ignoring other attributes/whitespace)
-    by a `#[test]`-family attribute. Anonymous-block equivalents follow the fixed
-    convention `test_anon_<n>` and are matched by name like any other."""
-    names = []
-    for path in iter_rust_files(crate):
-        try:
-            with open(path, encoding="utf-8", errors="replace") as fh:
-                text = fh.read()
-        except Exception:  # noqa: BLE001
-            continue
+def scan_rust_tests_located(crate, relocations=None):
+    """[(path, offset, name)] for every ported test fn in the crate's port side
+    (own `src/` plus R4 relocations). The (path, offset) pair identifies a test
+    uniquely across crates, which is how workspace totals avoid counting a
+    relocated test twice (once for its host crate, once for its owner)."""
+    out = []
+    for path, text in iter_rust_sources(crate, relocations):
         clean, _ = _strip_rust(text)
         for m in TEST_ATTR_RE.finditer(clean):
             # find the next `fn NAME` after the attribute
             fm = FN_NAME_RE.search(clean, m.end())
             if fm:
-                names.append(fm.group(1))
-    return names
+                out.append((os.path.realpath(path), fm.start(), fm.group(1)))
+    return out
+
+
+def scan_rust_tests(crate, relocations=None):
+    """Return a list of ported test fn names found in the crate's Rust sources
+    (its own `src/` plus its R4 relocations).
+
+    A "test" is a `fn` immediately preceded (ignoring other attributes/whitespace)
+    by a `#[test]`-family attribute. Anonymous-block equivalents follow the fixed
+    convention `test_anon_<n>` and are matched by name like any other."""
+    return [name for _p, _o, name in scan_rust_tests_located(crate, relocations)]
 
 
 def _find_balanced_block(text, open_idx):
@@ -617,7 +833,7 @@ def _find_balanced_block(text, open_idx):
     return n
 
 
-def scan_rust_test_assertions(crate):
+def scan_rust_test_assertions(crate, relocations=None):
     """Return {test_name: [assertion_count, ...]} for each ported test fn —
     a LIST because the same fn name may legitimately appear in several test
     modules (e.g. utf8.rs and cli/utf8.rs both define `fn utf8()`); a plain
@@ -629,12 +845,18 @@ def scan_rust_test_assertions(crate):
     test body. `.unwrap()`/`.expect(..)`/`?` are deliberately NOT counted
     (M7): they are Zig-`try` plumbing, not assertions — see ASSERTION_PATTERNS."""
     result = {}
-    for path in iter_rust_files(crate):
-        try:
-            with open(path, encoding="utf-8", errors="replace") as fh:
-                text = fh.read()
-        except Exception:  # noqa: BLE001
-            continue
+    for _path, _off, name, count in scan_rust_test_assertions_located(crate, relocations):
+        result.setdefault(name, []).append(count)
+    return result
+
+
+def scan_rust_test_assertions_located(crate, relocations=None):
+    """[(path, offset, name, assertion_count)] per ported test fn, over the
+    crate's own `src/` plus its R4 relocations (see scan_rust_tests_located for
+    why the location is carried)."""
+    result = []
+    for path, text in iter_rust_sources(crate, relocations):
+        loc = os.path.realpath(path)
         clean, _ = _strip_rust(text)
         for m in TEST_ATTR_RE.finditer(clean):
             fm = FN_NAME_RE.search(clean, m.end())
@@ -650,7 +872,7 @@ def scan_rust_test_assertions(crate):
             should_panic = bool(SHOULD_PANIC_RE.search(attr_block))
             brace = clean.find("{", fm.end())
             if brace == -1:
-                result.setdefault(name, []).append(1 if should_panic else 0)
+                result.append((loc, fm.start(), name, 1 if should_panic else 0))
                 continue
             end = _find_balanced_block(clean, brace)
             body = clean[brace:end]
@@ -659,35 +881,41 @@ def scan_rust_test_assertions(crate):
                 count += len(pat.findall(body))
             if should_panic:
                 count += 1
-            result.setdefault(name, []).append(count)
+            result.append((loc, fm.start(), name, count))
     return result
 
 
-def census_rust_comments(crate):
+def census_rust_comments(crate, relocations=None):
     """Return {"doc-module": n, "doc-decl": n, "line": n, "total": n} comment-line
     counts over the crate's Rust sources, mirroring comments-census classes.
 
     A comment *unit* is counted per-line (matching the census, which counts
     `total_comment_lines`)."""
     counts = {"doc-module": 0, "doc-decl": 0, "line": 0}
-    for path in iter_rust_files(crate):
-        try:
-            with open(path, encoding="utf-8", errors="replace") as fh:
-                text = fh.read()
-        except Exception:  # noqa: BLE001
-            continue
+    for _path, _idx, kind, lines in census_rust_comments_located(crate, relocations):
+        counts[kind] += lines
+    counts["total"] = counts["doc-module"] + counts["doc-decl"] + counts["line"]
+    return counts
+
+
+def census_rust_comments_located(crate, relocations=None):
+    """[(path, comment_index, kind, lines)] per comment over the crate's own
+    `src/` plus its R4 relocations (the location lets workspace totals count a
+    relocated comment once). A masked (item-scoped) relocation keeps only the
+    comments inside its items: everything else was blanked."""
+    out = []
+    for path, text in iter_rust_sources(crate, relocations):
+        loc = os.path.realpath(path)
         _, comments = _strip_rust(text)
-        for kind, ctext in comments:
+        for idx, (kind, ctext) in enumerate(comments):
             # count one unit per physical line of the comment
-            lines = max(1, ctext.count("\n") + (0 if ctext.endswith("\n") else 1))
             # line comments are single-line; block comments may span many
             if "\n" in ctext:
                 lines = ctext.count("\n") + 1
             else:
                 lines = 1
-            counts[kind] += lines
-    counts["total"] = counts["doc-module"] + counts["doc-decl"] + counts["line"]
-    return counts
+            out.append((loc, idx, kind, lines))
+    return out
 
 
 # ---------------------------------------------------------------------------
