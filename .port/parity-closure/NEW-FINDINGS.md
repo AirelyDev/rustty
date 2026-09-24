@@ -3151,6 +3151,102 @@ Not fixed in this round; recorded for adjudication.
 
 **state**: OPEN (R1 candidate).
 
+## N100 — nine more `std.fmt.parseInt` sites in `src/terminal` parsed with Rust's `str::parse`
+
+- **id**: N100. Not in the inventory.
+- **found by**: batch T-A (tail wave), while closing S170-F1 / S186-F1 / S194-F3 / S195-F2 / S197-F1,
+  by grepping the reference's `src/terminal` for every `std.fmt.parseInt` / `parseUnsigned` call and
+  reading each port counterpart.
+- **severity**: low. **kind**: behavioral-difference (same class as the five rows).
+- **oracle**: `src/terminal/osc/parsers/osc9.zig:28, 196` (`parseUnsigned`);
+  `src/terminal/tmux/layout.zig:99, 113, 127, 141, 163`; `src/terminal/tmux/output.zig:194-204`;
+  `src/terminal/tmux/viewer.zig:1031`; `src/terminal/tmux/control.zig:178-180` (plus the regex
+  id captures at `:234-470`, which only ever see `[0-9]+`).
+- **rustty**: `crates/rustty-vt/src/osc/parsers/osc9.rs` (sleep and progress arms),
+  `crates/rustty-vt/src/tmux/{layout,output,viewer,control}.rs`.
+
+Zig's `std.fmt.parseInt` accepts interior `_` digit separators and `-0` for unsigned types, and
+`parseUnsigned` rejects any sign byte; Rust's `str::parse` rejects `_` and `-0` and accepts a leading
+`+`. None of these sites belonged to a ledger row. The five rows' sites and these now all go through one
+port of the std function, `crates/rustty-vt/src/zig_parse_int.rs`, which carries the std test table
+(`std_fmt_parse_int_table`). Observable before the fix: `OSC 9;1;4_20` slept 100 ms instead of 420,
+`OSC 9;1;+420` slept 420 instead of 100, a tmux `%end 1_0 2 0` guard line did not end its block, a
+`list-panes` `pane_tabs` entry `1_0` set no tab stop, and `output.rs` reported `-a` as `Overflow`
+where the reference reports `InvalidCharacter`.
+
+Checked and left unchanged: `kitty_desktop_notification.rs` (`w=`) filters `_` first, as the reference
+does, and its remaining forms agree; `context_signal.rs` accepts only `[0-9]` bytes before parsing;
+`x11_color.zig`'s calls run over the built-in `rgb.txt`, not input; `color.zig:65`/`:663` already have
+Zig-faithful ports in `crates/rustty-vt/src/color.rs`.
+
+**tests**: `osc_9_numbers_use_zig_parse_unsigned`, `numbers_use_zig_parse_int` (layout),
+`parse_integer_variables_use_zig_parse_int` (output), `pane_state_tab_stops_use_zig_parse_int`
+(viewer, `--features oniguruma`), `block_terminator_numbers_use_zig_parse_int` (control). Each failed
+before its site's change, on the `_`-separated input.
+
+**state**: FIXED (batch T-A).
+
+**update (tail-a2, extended R13)**: the two osc9 arms now refuse a `_` before `parseUnsigned` (UD141,
+following Ghostty's own OSC 99 filter), so `osc_9_numbers_use_zig_parse_unsigned` now asserts that
+`9;1;4_20` sleeps the default 100 ms and `9;4;1;4_2` has no progress. The tmux sites stay faithful
+(their input is tmux's own generated output; see UD141 "port handling").
+
+## N101 — the a=f frame's own RGBA conversion could not answer ENOMEM
+
+- **id**: N101. Not in the inventory.
+- **found by**: batch T-A (tail wave), while closing S190-F2, by reading every caller of
+  `pixel.rgbaFromFormat`.
+- **severity**: low. **kind**: missing-error-path (same class as S190-F2).
+- **oracle**: `src/terminal/kitty/graphics_exec.zig:600-612` (`pixel.rgbaFromFormat(...) catch
+  |err| { encodeError(&result, err); return result; }` for a non-RGBA frame image);
+  `src/terminal/kitty/graphics_pixel.zig:18-40` (`Allocator.Error![]u8`).
+- **rustty**: `crates/rustty-vt/src/kitty/graphics_exec.rs` (frame load, the `frame_img.format
+  != Rgba` block); `crates/rustty-vt/src/kitty/graphics_pixel.rs` (`rgba_from_format`).
+
+S190-F2 cites only `convertImageToRgba`, but its one failure is `rgbaFromFormat`'s allocation,
+and the frame load calls `rgbaFromFormat` directly on the frame image just before it. The port's
+`rgba_from_format` was infallible (`Vec::with_capacity`, `to_vec`), so this arm was carried as a
+comment and an allocation failure aborted instead of answering `ENOMEM: out of memory`.
+`rgba_from_format` now returns `Result<Vec<u8>, OutOfMemory>` through `try_reserve_exact` (both
+the scalar and the wuffs arms), and all three callers answer ENOMEM.
+
+**tests**: `kittygfx_animation_frame_rgba_conversion_oom_is_enomem` (the frame's conversion, then
+the image's) and `kittygfx_animation_compose_rgba_conversion_oom_is_enomem`, through the
+`cfg(test)` fail point `RGBA_FROM_FORMAT_TW`. Both failed with the ENOMEM arms disabled.
+
+**state**: FIXED (batch T-A).
+
+## N102 — tmux control-mode parsers raced Oniguruma's lazy global init (the intermittent `tmux::` test crashes)
+
+- **id**: N102. Not in the inventory. Reported by the T-A reviewer (review-T-A "Pre-existing"),
+  investigated and fixed by the T-A fix round (tail-a2).
+- **severity**: medium (heap corruption; test-harness-visible, and reachable by any multi-threaded
+  host of rustty-vt that has not initialized Oniguruma). **kind**: concurrency / C-init race.
+- **what**: `cargo test -p rustty-vt --lib --features oniguruma tmux::` crashed the test binary
+  intermittently in parallel mode: MEASURED 27 of 1,500 runs at tail-a2 before the fix (SIGTRAP 20,
+  SIGABRT 6, SIGSEGV 1), 0 single-threaded per the reviewer. Under lldb the faulting thread was
+  `tmux::control::tests::tmux_client_session_changed` in `libsystem_malloc` `mfm_free` (a malloc
+  assertion), called from `callout_func_list_add` (`regparse.c:1340`) <- `onig_set_callout_of_name`
+  <- the ASCII encoding's `init` (`ascii.c:64`) <- `onig_initialize_encoding` <- `onig_initialize`
+  (`regcomp.c:7773`) <- `onig_reg_init` (`regcomp.c:7671`) <- `onig_new` <- `oni::Regex::init` <-
+  `Parser::parse_notification_oni`. `onig_new` initializes Oniguruma's process-global tables lazily
+  on first use, with no synchronization, so several parser threads reaching their first regex
+  together raced inside `onig_initialize`. The reference never runs that path concurrently: the app
+  calls `oni.init(&.{oni.Encoding.utf8})` at startup (`global.zig:215`; the port's
+  `rustty-apprt` does the same through `oni::testing::ensure_init`), `zig test` is serial, and
+  libghostty-vt is built without Oniguruma. Same class as the earlier `ensure_init` race (memory
+  note "parallel cargo test exposes C init races").
+- **fix**: `Parser::parse_notification_oni` (`crates/rustty-vt/src/tmux/control.rs`, PORT NOTE N102)
+  calls `oni::testing::ensure_init()` (a `OnceLock` around the same UTF-8-only `onig_initialize`)
+  before any regex; after the app's own call it is a no-op, and an init error still surfaces through
+  the reference's `regex init failed` path. A stale note there that said the `oni` binding crate did
+  not exist was corrected.
+- **tests**: `tmux::control::tests::concurrent_first_notifications_do_not_race_oniguruma_init`
+  (parent/child: 16 threads parse their first notification together in a fresh child process, 40
+  times). Negative control: without the fix the first child aborted (SIGABRT). After the fix, 1,500
+  parallel runs of `tmux::`: 0 failures.
+- **state**: FIXED (tail-a2, 249d174a).
+
 ## N110 — `+version`'s commit hyperlink came from a separate `git rev-parse`, not from the version's `+BUILD`
 
 - **id**: N110. Not in the inventory. Found by the review T-B fix round (tail-b2) while moving the
@@ -3393,100 +3489,3 @@ does for `Config.loadFile`), and print through that.
   legitimately lacks the corpus. The same reason is why the `.git`-probing xtask tests were
   allow-listed in G-SKIP rather than given a strict variable.
 - **state**: CLOSED by task T-B (commit `fab80ad0`, merged via `tail-b2`): the distcheck cargo steps drop `RUSTTY_REQUIRE_FUZZ_CORPUS`, pinned by a test whose negative control (removal line deleted) fails for the stated reason; confirmed by the T-B and T-B2 reviews.
-
-## N100 — nine more `std.fmt.parseInt` sites in `src/terminal` parsed with Rust's `str::parse`
-
-- **id**: N100. Not in the inventory.
-- **found by**: batch T-A (tail wave), while closing S170-F1 / S186-F1 / S194-F3 / S195-F2 / S197-F1,
-  by grepping the reference's `src/terminal` for every `std.fmt.parseInt` / `parseUnsigned` call and
-  reading each port counterpart.
-- **severity**: low. **kind**: behavioral-difference (same class as the five rows).
-- **oracle**: `src/terminal/osc/parsers/osc9.zig:28, 196` (`parseUnsigned`);
-  `src/terminal/tmux/layout.zig:99, 113, 127, 141, 163`; `src/terminal/tmux/output.zig:194-204`;
-  `src/terminal/tmux/viewer.zig:1031`; `src/terminal/tmux/control.zig:178-180` (plus the regex
-  id captures at `:234-470`, which only ever see `[0-9]+`).
-- **rustty**: `crates/rustty-vt/src/osc/parsers/osc9.rs` (sleep and progress arms),
-  `crates/rustty-vt/src/tmux/{layout,output,viewer,control}.rs`.
-
-Zig's `std.fmt.parseInt` accepts interior `_` digit separators and `-0` for unsigned types, and
-`parseUnsigned` rejects any sign byte; Rust's `str::parse` rejects `_` and `-0` and accepts a leading
-`+`. None of these sites belonged to a ledger row. The five rows' sites and these now all go through one
-port of the std function, `crates/rustty-vt/src/zig_parse_int.rs`, which carries the std test table
-(`std_fmt_parse_int_table`). Observable before the fix: `OSC 9;1;4_20` slept 100 ms instead of 420,
-`OSC 9;1;+420` slept 420 instead of 100, a tmux `%end 1_0 2 0` guard line did not end its block, a
-`list-panes` `pane_tabs` entry `1_0` set no tab stop, and `output.rs` reported `-a` as `Overflow`
-where the reference reports `InvalidCharacter`.
-
-Checked and left unchanged: `kitty_desktop_notification.rs` (`w=`) filters `_` first, as the reference
-does, and its remaining forms agree; `context_signal.rs` accepts only `[0-9]` bytes before parsing;
-`x11_color.zig`'s calls run over the built-in `rgb.txt`, not input; `color.zig:65`/`:663` already have
-Zig-faithful ports in `crates/rustty-vt/src/color.rs`.
-
-**tests**: `osc_9_numbers_use_zig_parse_unsigned`, `numbers_use_zig_parse_int` (layout),
-`parse_integer_variables_use_zig_parse_int` (output), `pane_state_tab_stops_use_zig_parse_int`
-(viewer, `--features oniguruma`), `block_terminator_numbers_use_zig_parse_int` (control). Each failed
-before its site's change, on the `_`-separated input.
-
-**state**: FIXED (batch T-A).
-
-**update (tail-a2, extended R13)**: the two osc9 arms now refuse a `_` before `parseUnsigned` (UD141,
-following Ghostty's own OSC 99 filter), so `osc_9_numbers_use_zig_parse_unsigned` now asserts that
-`9;1;4_20` sleeps the default 100 ms and `9;4;1;4_2` has no progress. The tmux sites stay faithful
-(their input is tmux's own generated output; see UD141 "port handling").
-
-## N101 — the a=f frame's own RGBA conversion could not answer ENOMEM
-
-- **id**: N101. Not in the inventory.
-- **found by**: batch T-A (tail wave), while closing S190-F2, by reading every caller of
-  `pixel.rgbaFromFormat`.
-- **severity**: low. **kind**: missing-error-path (same class as S190-F2).
-- **oracle**: `src/terminal/kitty/graphics_exec.zig:600-612` (`pixel.rgbaFromFormat(...) catch
-  |err| { encodeError(&result, err); return result; }` for a non-RGBA frame image);
-  `src/terminal/kitty/graphics_pixel.zig:18-40` (`Allocator.Error![]u8`).
-- **rustty**: `crates/rustty-vt/src/kitty/graphics_exec.rs` (frame load, the `frame_img.format
-  != Rgba` block); `crates/rustty-vt/src/kitty/graphics_pixel.rs` (`rgba_from_format`).
-
-S190-F2 cites only `convertImageToRgba`, but its one failure is `rgbaFromFormat`'s allocation,
-and the frame load calls `rgbaFromFormat` directly on the frame image just before it. The port's
-`rgba_from_format` was infallible (`Vec::with_capacity`, `to_vec`), so this arm was carried as a
-comment and an allocation failure aborted instead of answering `ENOMEM: out of memory`.
-`rgba_from_format` now returns `Result<Vec<u8>, OutOfMemory>` through `try_reserve_exact` (both
-the scalar and the wuffs arms), and all three callers answer ENOMEM.
-
-**tests**: `kittygfx_animation_frame_rgba_conversion_oom_is_enomem` (the frame's conversion, then
-the image's) and `kittygfx_animation_compose_rgba_conversion_oom_is_enomem`, through the
-`cfg(test)` fail point `RGBA_FROM_FORMAT_TW`. Both failed with the ENOMEM arms disabled.
-
-**state**: FIXED (batch T-A).
-
-
-## N102 — tmux control-mode parsers raced Oniguruma's lazy global init (the intermittent `tmux::` test crashes)
-
-- **id**: N102. Not in the inventory. Reported by the T-A reviewer (review-T-A "Pre-existing"),
-  investigated and fixed by the T-A fix round (tail-a2).
-- **severity**: medium (heap corruption; test-harness-visible, and reachable by any multi-threaded
-  host of rustty-vt that has not initialized Oniguruma). **kind**: concurrency / C-init race.
-- **what**: `cargo test -p rustty-vt --lib --features oniguruma tmux::` crashed the test binary
-  intermittently in parallel mode: MEASURED 27 of 1,500 runs at tail-a2 before the fix (SIGTRAP 20,
-  SIGABRT 6, SIGSEGV 1), 0 single-threaded per the reviewer. Under lldb the faulting thread was
-  `tmux::control::tests::tmux_client_session_changed` in `libsystem_malloc` `mfm_free` (a malloc
-  assertion), called from `callout_func_list_add` (`regparse.c:1340`) <- `onig_set_callout_of_name`
-  <- the ASCII encoding's `init` (`ascii.c:64`) <- `onig_initialize_encoding` <- `onig_initialize`
-  (`regcomp.c:7773`) <- `onig_reg_init` (`regcomp.c:7671`) <- `onig_new` <- `oni::Regex::init` <-
-  `Parser::parse_notification_oni`. `onig_new` initializes Oniguruma's process-global tables lazily
-  on first use, with no synchronization, so several parser threads reaching their first regex
-  together raced inside `onig_initialize`. The reference never runs that path concurrently: the app
-  calls `oni.init(&.{oni.Encoding.utf8})` at startup (`global.zig:215`; the port's
-  `rustty-apprt` does the same through `oni::testing::ensure_init`), `zig test` is serial, and
-  libghostty-vt is built without Oniguruma. Same class as the earlier `ensure_init` race (memory
-  note "parallel cargo test exposes C init races").
-- **fix**: `Parser::parse_notification_oni` (`crates/rustty-vt/src/tmux/control.rs`, PORT NOTE N102)
-  calls `oni::testing::ensure_init()` (a `OnceLock` around the same UTF-8-only `onig_initialize`)
-  before any regex; after the app's own call it is a no-op, and an init error still surfaces through
-  the reference's `regex init failed` path. A stale note there that said the `oni` binding crate did
-  not exist was corrected.
-- **tests**: `tmux::control::tests::concurrent_first_notifications_do_not_race_oniguruma_init`
-  (parent/child: 16 threads parse their first notification together in a fresh child process, 40
-  times). Negative control: without the fix the first child aborted (SIGABRT). After the fix, 1,500
-  parallel runs of `tmux::`: 0 failures.
-- **state**: FIXED (tail-a2, d8b82e09).
