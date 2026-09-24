@@ -1799,8 +1799,24 @@ mod tests {
     /// fixture is the S85-F2 one (`deferred_face.rs`
     /// `a_coretext_font_without_a_family_name_is_unknown`): the embedded
     /// JetBrains Mono with its `name` table's directory tag renamed.
+    ///
+    /// The body runs in a child process (`crate::test_child`): after another
+    /// test builds a variation instance of the same font data, CoreText can
+    /// name this nameless font "JetBrains Mono" for the rest of the process.
     #[test]
-    fn a_face_without_a_family_name_is_unknown() -> Result<(), Error> {
+    fn a_face_without_a_family_name_is_unknown() {
+        const CHILD: &str = "RUSTTY_T_F2_NAMELESS_FACE_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            a_face_without_a_family_name_is_unknown_child().unwrap();
+            return;
+        }
+        crate::test_child::run_isolated(
+            "face::coretext::tests::a_face_without_a_family_name_is_unknown",
+            CHILD,
+        );
+    }
+
+    fn a_face_without_a_family_name_is_unknown_child() -> Result<(), Error> {
         let mut buf = [0u8; 1024];
 
         // Positive control: the unmodified font has its real family name.

@@ -29,6 +29,11 @@
 #[cfg(test)]
 mod log_capture;
 
+// RUSTTY-ONLY, TEST-ONLY (task T-F2): re-run one test in a fresh child process
+// (CoreText's process-wide font state). See the module header.
+#[cfg(all(test, target_os = "macos"))]
+mod test_child;
+
 /// RUSTTY-ONLY (no oracle analogue): install `rustty-os`'s wasm `log::Log`
 /// backend for the wasm artifacts this crate is linked into.
 ///

@@ -1812,6 +1812,22 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn a_coretext_font_without_a_family_name_is_unknown() {
+        // The body runs in a child process (`crate::test_child`): after a test
+        // builds a variation instance of the same font data, CoreText can name
+        // this nameless font "JetBrains Mono" for the rest of the process.
+        const CHILD: &str = "RUSTTY_T_F2_NAMELESS_DEFERRED_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            a_coretext_font_without_a_family_name_is_unknown_child();
+            return;
+        }
+        crate::test_child::run_isolated(
+            "deferred_face::tests::a_coretext_font_without_a_family_name_is_unknown",
+            CHILD,
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    fn a_coretext_font_without_a_family_name_is_unknown_child() {
         // Positive control: the unmodified font has its real family name.
         let mut def = coretext_deferred(rustty_font::embedded::VARIABLE);
         let mut buf = [0u8; 1024];
