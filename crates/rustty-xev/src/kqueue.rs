@@ -4222,6 +4222,10 @@ mod tests {
         miri,
         ignore = "MIRI EXCEPTION (rustty-xev C3, .port/phase-2/MIRI_EXCEPTIONS.md): live kqueue/kevent64/mach/socket syscalls -- Miri cannot execute foreign functions; runs natively (ci.sh HARD `cargo test --workspace`) + the G6 ASan companion arm (check_leaks.sh `live_ffi_unit_filters`, re-verified 2026-07-31: 31 tests, 0 findings)."
     )]
+    #[cfg_attr(
+        not(target_os = "macos"),
+        ignore = "SkipZigTest: upstream runs `kqueue: mach port` on .macos only (R14)"
+    )]
     fn kqueue_mach_port() {
         // if (builtin.os.tag != .macos) return error.SkipZigTest;
 
