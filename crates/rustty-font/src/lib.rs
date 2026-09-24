@@ -4,7 +4,7 @@
 //! discovery, embedded, sprite/, opentype/, ...); links freetype/harfbuzz/fontconfig-sys,
 //! CoreText; config via DI (break #9).
 //!
-//! PORT STATUS: in progress
+//! PORT STATUS: done
 //!
 //! Carved leaves-first (R1: every line/comment/test{} ported as the crate is
 //! carved, under the acyclicity gate per R4). This crate is the PURE leaf of
@@ -35,9 +35,10 @@
 //! `font-backend-*` features, the `rustty_font_backend` cfg every selector in
 //! `rustty-font-shaper` is keyed on, the non-default arms live, and the
 //! G-FONTBACKEND lane) and CLOSED N266; see `rustty-font-shaper`'s header for
-//! what is and is not built. The `done` flip itself is left to the controller:
-//! it needs the G6 lanes (Miri/ASan) run on the new code. This crate
-//! (`rustty-font`) has no backend-dependent code of its own.
+//! what is and is not built. This crate (`rustty-font`) has no
+//! backend-dependent code of its own. Flipped to `done` by the controller on
+//! 2026-09-24 after the G6 lane for this crate and every done-bound gate ran
+//! green on the merged tree (parity tail, after S-14).
 
 pub mod atlas;
 pub mod codepoint_map;
