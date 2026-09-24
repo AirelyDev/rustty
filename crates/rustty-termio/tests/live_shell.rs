@@ -340,9 +340,14 @@ fn live_shell_echo_round_trips_into_the_screen() {
     // Keeping the shell alive for a beat AFTER the write decouples POLLIN from
     // POLLHUP, so the read thread drains on a HUP-free wakeup exactly as on macOS.
     // The command stays a real, self-terminating shell with bounded output; the
-    // sleep removes only the exit RACE, not any part of the proof. The reference's
-    // own trailing-output-at-exit behavior is preserved UNTOUCHED — "fixing" the
-    // read loop would be an R1 divergence (DEFERRALS.md).
+    // sleep removes only the exit RACE, not any part of the proof.
+    //
+    // UPDATE (task tail-s6): the port no longer drops that output. The read
+    // loop's outer poll now reads once more on POLLIN|POLLHUP (reference defect,
+    // R13, UPSTREAM-DEFECTS.md UD19; `ReadThread::outer_poll_hup_exits` and its
+    // tests in exec.rs), so the paragraphs above describe the reference. The
+    // sleep stays: this KAT proves the live stack, not the UD19 handling, whose
+    // Linux end-to-end run is still pending.
     //
     // `/bin/sleep` is spelled ABSOLUTE on purpose: this harness's `Config.env` is a
     // deliberately empty `EnvMap`, so there is no PATH for the shell to search — a
