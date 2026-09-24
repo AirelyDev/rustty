@@ -617,8 +617,13 @@ impl<'a> Vaxis<'a> {
         // secondary cursor is not shown, and the state never records it. MEASURED with
         // Zig 0.16.0 against libvaxis 0.6.0 (S-10b probe `render`: a visible cursor
         // re-renders 40 bytes with no change; adding a secondary cursor renders 0 bytes).
-        // The port negates the comparison.
+        // The port negates the comparison, and gates it on `caps.multi_cursor`: the only
+        // place the rendered slice is recorded (and the only output it drives) is under
+        // `cursor_vis and caps.multi_cursor` below, so without the gate a secondary cursor
+        // added on a terminal without the capability would stay "changed" forever and
+        // repaint every frame (S-10c, review F1).
         let cursor_secondary_changed = self.screen.cursor_vis
+            && self.caps.multi_cursor
             && !self
                 .screen
                 .cursor_secondary
@@ -2187,6 +2192,38 @@ mod tests {
         );
         // 11. unchanged (UD261: the reference repaints here)
         step(&mut vx, "");
+    }
+
+    /// UD261 (S-10c, review F1): the secondary-cursor change is recorded only when the
+    /// terminal has the multi-cursor capability, so "changed" must be gated on it too.
+    /// Without the gate, one `add_terminal_secondary_cursor` on a terminal without the
+    /// capability makes every later render with the cursor shown repaint the frame.
+    #[test]
+    fn secondary_cursor_without_multi_cursor_does_not_repaint() {
+        let mut vx = Vaxis::init(Options::default());
+        let mut sink: Vec<u8> = Vec::new();
+        vx.resize(
+            &mut sink,
+            Winsize {
+                rows: 3,
+                cols: 5,
+                x_pixel: 0,
+                y_pixel: 0,
+            },
+        )
+        .unwrap();
+        vx.window().show_cursor(2, 1);
+        let mut out: Vec<u8> = Vec::new();
+        vx.render(&mut out).unwrap();
+        assert!(!out.is_empty(), "the cursor is drawn once");
+
+        assert!(!vx.caps.multi_cursor);
+        vx.add_terminal_secondary_cursor(0, 3);
+        for i in 0..3 {
+            let mut out: Vec<u8> = Vec::new();
+            vx.render(&mut out).unwrap();
+            assert_eq!("", hex(&out), "render {i} after the secondary cursor");
+        }
     }
 
     /// libvaxis 0.6.0 `translateMouse` reads `i16` coordinates: pixel positions left of

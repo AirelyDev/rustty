@@ -1,7 +1,7 @@
 //! rustty-zigimg — the six-operation `zigimg` surface `libvaxis` instantiates (0.5.1; 0.6.0
 //! reaches the same six through `convertNoFree` and an allocator-taking `writeToMemory`,
-//! over zigimg `d695acd9` — that zigimg revision delta is NOT audited here, see the
-//! parity tail S-10b report),
+//! over zigimg `d695acd9`; its two conversions were checked against `convert.rs` by the
+//! S-10b review, the `d7b7ab0b` side of the revision diff is unread — NEW-FINDINGS N240),
 //! re-homed onto ghostty's own vendored codecs.
 //!
 //! See `Cargo.toml`'s header for the full scope statement, the measured size of the

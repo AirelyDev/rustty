@@ -193,6 +193,9 @@ impl<T, const N: usize> Queue<T, N> {
         g.is_full_lh()
     }
 
+    // Edge-only signalling (`not_empty` only when the queue was empty, `not_full` only
+    // when it was full) is the reference's, kept faithfully; with two waiters at once it
+    // can leave the second waiting (UPSTREAM-DEFECTS UD267, kind: latent).
     fn push_and_signal_lh(&self, g: &mut MutexGuard<'_, Inner<T, N>>, item: T) {
         let was_empty = g.is_empty_lh();
         let write_index = g.write_index;

@@ -468,9 +468,11 @@ fn insertion_sort<T: Copy>(items: &mut [T], less_than: impl Fn(&T, &T) -> bool) 
 /// so that negative positions can be reported, but `MouseHandler` still `@intCast`s them to
 /// the `u16` `vxfw.Point`: a negative position traps in safe builds (undefined behaviour
 /// in ReleaseFast). The parser produces one from any SGR report with a coordinate of 0 or
-/// below (`CSI < 0 ; 0 ; 0 M` is column -1, MEASURED with libvaxis 0.6.0), which a
-/// terminal sends while the pointer is dragged outside the window, and which a
-/// buggy or hostile terminal (or typed input) can send at any time; `+boo` enables mouse
+/// below (`CSI < 0 ; 0 ; 0 M` is column -1, MEASURED with libvaxis 0.6.0). vxfw turns
+/// SGR-pixel reporting off before enabling the mouse (`App.zig:78-80`), so `+boo` receives
+/// cell reports, which conforming terminals clamp to the grid (Ghostty's own encoder does,
+/// `mouse_encode.zig:256-266`); a coordinate of 0 or below therefore comes from a
+/// non-conforming terminal, or from bytes injected into the tty. `+boo` enables mouse
 /// reporting. A negative position is outside every surface, which is what the
 /// reference's own `containsPoint` guard decides for any other point outside the frame,
 /// so the port returns `None` and the caller hit-tests nothing (the widgets last under
