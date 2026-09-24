@@ -143,6 +143,11 @@ mod imp {
     #[template(resource = "/io/airely/rustty/ui/1.5/split-tree.ui")]
     #[properties(wrapper_type = super::SplitTree)]
     pub struct SplitTree {
+        /// The active surface is the surface that should be receiving all
+        /// surface-targeted actions. This is usually the focused surface,
+        /// but may also not be focused if the user has selected a non-surface
+        /// widget.
+        ///
         /// PORTS: `split_tree.zig:40-56` `active-surface` (computed).
         #[property(name = "active-surface", get = Self::get_active_surface_prop, nullable)]
         pub active_surface_prop: PhantomData<Option<Surface>>,
@@ -163,6 +168,8 @@ mod imp {
         #[property(name = "is-split", get = Self::get_is_split)]
         pub is_split_prop: PhantomData<bool>,
 
+        /// The tree datastructure containing all of our surface views.
+        ///
         /// PORTS: `split_tree.zig:147-148` `tree` — the owned surface tree.
         pub tree: RefCell<Option<super::Tree>>,
 
@@ -170,15 +177,30 @@ mod imp {
         #[template_child]
         pub tree_bin: TemplateChild<libadwaita::Bin>,
 
+        /// Last focused surface in the tree. We need this to handle various
+        /// tree change states.
+        ///
         /// PORTS: `split_tree.zig:153-155` `last_focused` (Invariant 4).
         pub last_focused: WeakRef<Surface>,
 
+        /// The source that we use to rebuild the tree. This is also
+        /// used to debounce updates.
+        ///
         /// PORTS: `split_tree.zig:157-159` `rebuild_source` (Invariant 11).
         pub rebuild_source: RefCell<Option<glib::SourceId>>,
 
+        /// The source that we use to restore focus. With enough nested
+        /// splits, some surfaces might initially be allocated a width or
+        /// height of 0 which causes them to get unmapped and lose focus.
+        /// We can reliably restore focus to the last focused surface only
+        /// once it is mapped again.
+        ///
         /// PORTS: `split_tree.zig:161-166` `restore_focus_source` (Invariant 11).
         pub restore_focus_source: RefCell<Option<glib::SourceId>>,
 
+        /// Used to store state about a pending surface close for the
+        /// close dialog.
+        ///
         /// PORTS: `split_tree.zig:168-170` `pending_close`.
         pub pending_close: RefCell<Option<Handle>>,
 
@@ -236,6 +258,8 @@ mod imp {
         fn signals() -> &'static [glib::subclass::Signal] {
             static SIGNALS: OnceLock<Vec<glib::subclass::Signal>> = OnceLock::new();
             SIGNALS.get_or_init(|| {
+                // Emitted whenever the tree property has changed, with access
+                // to the previous and new values.
                 vec![glib::subclass::Signal::builder("changed")
                     .param_types([super::Tree::static_type(), super::Tree::static_type()])
                     .build()]
@@ -245,7 +269,9 @@ mod imp {
         /// PORTS: `split_tree.zig:175-184` `init` — action map + initial state.
         fn constructed(&self) {
             self.parent_constructed();
+            // Initialize our actions
             self.obj().init_action_map();
+            // Initialize some basic state
             *self.pending_close.borrow_mut() = None;
         }
 
@@ -317,6 +343,8 @@ impl SplitTree {
         use crate::gtk::ext::actions::{add_as_group, Action};
         let s = glib::VariantType::new("s").expect("valid variant type");
         let actions = [
+            // All of these will eventually take a target surface parameter.
+            // For now all our targets originate from the focused surface.
             Action::init("new-split", action_new_split, Some(s)),
             Action::init("equalize", action_equalize, None),
             Action::init("zoom", action_zoom, None),
@@ -325,6 +353,16 @@ impl SplitTree {
         let _ = add_as_group(self, "split-tree", &actions);
     }
 
+    /// Create a new split in the given direction from the currently
+    /// active surface.
+    ///
+    /// If the tree is empty this will create a new tree with a new surface
+    /// and ignore the direction.
+    ///
+    /// The parent will be used as the parent of the surface regardless of
+    /// if that parent is in this split tree or not. This allows inheriting
+    /// surface properties from anywhere.
+    ///
     /// PORTS: `split_tree.zig:211-286` `newSplit`.
     pub fn new_split(
         &self,
@@ -337,7 +375,8 @@ impl SplitTree {
         // `refSink` + `defer unref` collapse to normal Rust ownership.
         let surface = Surface::new(overrides);
 
-        // Inherit from the parent if asked (`:235-239`).
+        // Inherit properly if we were asked to.
+        // (`:235-239`)
         if let Some(p) = parent {
             if let Some(core) = p.core() {
                 // SAFETY: `core` is a live core surface owned by `p`.
@@ -350,23 +389,33 @@ impl SplitTree {
         // cross-tree move can unbind the stale binding before re-binding).
         surface.bind_is_split(self);
 
-        // Build the single-node tree (`:250`).
+        // Create our tree
+        // (the single-node tree, `:250`).
         let single = Tree::init_single(&surface)?;
 
-        // Move focus to the new surface, restoring on failure (`:255-258`).
+        // We want to move our focus to the new surface no matter what.
+        // But we need to be careful to restore state if we fail.
+        // (`:255-258`)
+        //
+        // The reference's `defer ... v.unref(); // unref strong ref from get`
+        // is the drop of `old_last`.
         let old_last = self.imp().last_focused.get();
         self.imp().last_focused.set(Some(&surface));
 
-        // If we have no tree yet, this becomes our tree (`:261-264`).
+        // If we have no tree yet, then this becomes our tree and we're done.
+        // (`:261-264`)
         if self.imp().tree.borrow().is_none() {
             self.set_tree_inner(Some(&single));
             return Ok(());
         }
 
-        // The handle we split relative to (`:268`).
+        // The handle we create the split relative to. Today this is the active
+        // surface but this might be the handle of the given parent if we want.
+        // (`:268`)
         let handle = self.get_active_surface_handle().unwrap_or(Handle::ROOT);
 
-        // Create the split (`:271-277`).
+        // Create our split!
+        // (`:271-277`; `0.5` = Always split equally for new splits)
         let new_tree = {
             let tref = self.imp().tree.borrow();
             let old = tref.as_ref().expect("tree present (checked above)");
@@ -404,18 +453,22 @@ impl SplitTree {
             new_tree.format(),
         );
 
+        // Replace our tree
         self.set_tree_inner(Some(&Tree(new_tree)));
         Ok(())
     }
 
     /// PORTS: `split_tree.zig:288-331` `resize`.
     pub fn resize(&self, direction: Direction, amount: u16) -> Result<bool, DsError> {
+        // Avoid useless work
         if amount == 0 {
             return Ok(false);
         }
         let Some(active) = self.get_active_surface_handle() else {
             return Ok(false);
         };
+        // Get all our dimensions we're going to need to turn our
+        // amount into a percentage.
         let width = self.imp().tree_bin.width();
         let height = self.imp().tree_bin.height();
         if width == 0 || height == 0 {
@@ -424,6 +477,7 @@ impl SplitTree {
         let width_f = f64::from(width);
         let height_f = f64::from(height);
         let amount_f = f64::from(amount);
+        // Get our ratio and use positive/neg for directions.
         let ratio = match direction {
             Direction::Right => amount_f / width_f,
             Direction::Left => -(amount_f / width_f),
@@ -445,6 +499,9 @@ impl SplitTree {
         Ok(true)
     }
 
+    /// Move focus from the currently focused surface to the given
+    /// direction. Returns true if focus switched to a new surface.
+    ///
     /// PORTS: `split_tree.zig:335-388` `goto`.
     pub fn goto(&self, to: Goto) -> bool {
         let Some(active) = self.get_active_surface_handle() else {
@@ -459,11 +516,16 @@ impl SplitTree {
             };
             let target = match tree.0.goto(active, to) {
                 Ok(Some(h)) => h,
+                // Nothing we can do in this scenario. This is highly unlikely
+                // since split trees don't use that much memory. The application
+                // is probably about to crash in other ways.
                 _ => return false,
             };
+            // If we aren't changing targets then we did nothing.
             if active == target {
                 return false;
             }
+            // Get the surface at the target location and grab focus.
             let surface = match &tree.0.nodes[target.idx()] {
                 // SAFETY: leaf pointers are live tree-owned boxes.
                 Node::Leaf(v) => unsafe { &**v }.clone(),
@@ -474,7 +536,11 @@ impl SplitTree {
 
         surface.grab_focus();
 
-        // last_focused (`:362-365`).
+        // We also need to setup our last_focused to this because if we
+        // trigger a tree change like below, the grab focus above never
+        // actually triggers in time to set this and this ensures we
+        // grab focus to the right thing.
+        // (`:362-365`)
         let _old_last = self.imp().last_focused.get();
         self.imp().last_focused.set(Some(&surface));
 
@@ -499,6 +565,9 @@ impl SplitTree {
                     }
                 }
             }
+            // When the zoom state changes our tree state changes and
+            // we need to send the proper notifications to trigger
+            // relayout.
             self.notify("tree");
             self.notify("is-zoomed");
         }
@@ -655,6 +724,9 @@ impl SplitTree {
     //---------------------------------------------------------------
     // Properties
 
+    /// Returns true if this split tree needs confirmation before quitting based
+    /// on the various Rustty configurations.
+    ///
     /// PORTS: `split_tree.zig:441-453` `getNeedsConfirmQuit`.
     #[must_use]
     pub fn get_needs_confirm_quit(&self) -> bool {
@@ -676,6 +748,9 @@ impl SplitTree {
         false
     }
 
+    /// Get the currently active surface. See the "active-surface" property.
+    /// This does not ref the value.
+    ///
     /// PORTS: `split_tree.zig:457-461` `getActiveSurface`. Does not add a ref
     /// beyond the property clone.
     #[must_use]
@@ -701,8 +776,13 @@ impl SplitTree {
                 return Some(entry.handle);
             }
         }
-        // Fall back to the most-previously-focused surface (`:474-482`).
+        // If none are currently focused, the most previously focused
+        // surface (if it exists) is our active surface. This lets things
+        // like apprt actions and bell ringing continue to work in the
+        // background.
+        // (`:474-482`)
         if let Some(v) = self.imp().last_focused.get() {
+            // We need to find the handle of the last focused surface.
             let mut it = tree.0.iterator();
             while let Some(entry) = it.next() {
                 // SAFETY: leaf pointers are live tree-owned boxes.
@@ -714,12 +794,24 @@ impl SplitTree {
         None
     }
 
+    /// Returns the last focused surface in the tree.
+    ///
     /// PORTS: `split_tree.zig:488-494` `getLastFocusedSurface`.
+    //
+    // The reference then unrefs (here the returned strong wrapper is the
+    // caller's reference instead):
+    // We unref because get() refs the surface. We don't use the weakref
+    // in a multi-threaded context so this is safe.
     #[must_use]
     pub fn get_last_focused_surface(&self) -> Option<Surface> {
         self.imp().last_focused.get()
     }
 
+    /// Get the tree data model that we're showing in this widget. This
+    /// does not clone the tree.
+    ///
+    /// PORT NOTE: unlike the reference's live pointer, this port returns a copy.
+    ///
     /// PORTS: `split_tree.zig:506-510` `getTree`. Returns a copy of the tree
     /// (the property/boxed semantics; see the `Tree` doc).
     #[must_use]
@@ -727,17 +819,25 @@ impl SplitTree {
         self.imp().tree.borrow().clone()
     }
 
+    /// Set the tree data model that we're showing in this widget. This
+    /// will clone the given tree.
+    ///
     /// PORTS: `split_tree.zig:512-549` `setTree`. Clones the given tree in.
     pub fn set_tree_inner(&self, tree_: Option<&Tree>) {
         let imp = self.imp();
 
-        // Normalize empty → None (`:520-524`).
+        // We always normalize our tree parameter so that empty trees
+        // become null so that we don't have to deal with callers being
+        // confused about that.
+        // (`:520-524`)
         let new_norm: Option<Tree> = match tree_ {
             Some(t) if !t.0.is_empty() => Some(t.clone()),
             _ => None,
         };
 
-        // Emit `changed(old, new)` so handlers see both values (`:528-533`).
+        // Emit the signal so that handlers can witness both the before and
+        // after values of the tree.
+        // (`:528-533`)
         let old_for_signal = imp.tree.borrow().clone();
         self.emit_by_name::<()>("changed", &[&old_for_signal, &new_norm]);
 
@@ -766,6 +866,7 @@ impl SplitTree {
         let Some(core) = surface.core() else {
             return;
         };
+        // Reset our pending close state
         let imp = self.imp();
         *imp.pending_close.borrow_mut() = None;
 
@@ -786,7 +887,8 @@ impl SplitTree {
         };
         *imp.pending_close.borrow_mut() = Some(handle);
 
-        // Close immediately if no confirmation is needed (`:720-727`).
+        // If we don't need to confirm then just close immediately.
+        // (`:720-727`)
         // SAFETY: `core` is a live core surface owned by `surface`.
         if !unsafe { &mut *core }.needsConfirmQuit() {
             self.close_confirmation_close();
@@ -809,11 +911,16 @@ impl SplitTree {
 
     /// PORTS: `split_tree.zig:741-782` `closeConfirmationClose`.
     fn close_confirmation_close(&self) {
+        // Get the handle we're closing
         let imp = self.imp();
         let Some(handle) = imp.pending_close.borrow_mut().take() else {
             return;
         };
 
+        // Figure out our next focus target. The next focus target is
+        // always the "previous" surface unless we're the leftmost then
+        // its the next.
+        //
         // Compute the next focus target + the new tree (read-only borrow).
         let (new_tree, next_focus) = {
             let tref = imp.tree.borrow();
@@ -827,6 +934,10 @@ impl SplitTree {
                 .flatten()
                 .or_else(|| tree.0.goto(handle, Goto::Next).ok().flatten());
             let next_focus: Option<Surface> = match next_handle {
+                // Note: we don't need to ref this or anything because its
+                // guaranteed to remain in the new tree since its not part
+                // of the handle we're removing. (Here the clone is the
+                // wrapper's own strong ref.)
                 Some(nh) if nh != handle => match &tree.0.nodes[nh.idx()] {
                     // SAFETY: leaf pointers are live tree-owned boxes.
                     Node::Leaf(v) => Some(unsafe { &**v }.clone()),
@@ -834,6 +945,7 @@ impl SplitTree {
                 },
                 _ => None,
             };
+            // Remove it from the tree.
             let new_tree = match tree.0.remove(handle) {
                 Ok(t) => t,
                 Err(e) => {
@@ -846,7 +958,9 @@ impl SplitTree {
 
         self.set_tree_inner(Some(&Tree(new_tree)));
 
-        // Grab focus via last_focused (redrawn later) (`:779-781`).
+        // Grab focus. We have to set this on the "last focused" because our
+        // focus will be set when the tree is redrawn.
+        // (`:779-781`)
         if let Some(v) = next_focus {
             imp.last_focused.set(Some(&v));
         }
@@ -854,10 +968,15 @@ impl SplitTree {
 
     /// PORTS: `split_tree.zig:784-797` `propSurfaceFocused`.
     fn prop_surface_focused(&self, surface: &Surface) {
+        // We never CLEAR our last_focused because the property is specifically
+        // the last focused surface. We let the weakref clear itself when
+        // the surface is destroyed.
         if !surface.focused() {
             return;
         }
         self.imp().last_focused.set(Some(surface));
+
+        // Our active surface probably changed
         self.notify("active-surface");
     }
 
@@ -866,6 +985,11 @@ impl SplitTree {
         if !surface.mapped() {
             return;
         }
+
+        // We could add the idle callback only if this is actually the last
+        // focused surface. But we can avoid that check because usually all
+        // the surfaces get mapped at once, so the idle callback will run
+        // only once anyway.
         let imp = self.imp();
         if imp.restore_focus_source.borrow().is_none() {
             let weak = self.downgrade();
@@ -885,24 +1009,33 @@ impl SplitTree {
     fn on_notify_tree(_emitter: &gtk4::Box, _pspec: &glib::ParamSpec, this: &SplitTree) {
         let imp = this.imp();
 
+        // No matter what we notify
         let _guard = this.freeze_notify();
         this.notify("has-surfaces");
         this.notify("is-zoomed");
 
-        // Drop any pending rebuild/restore sources (`:832-843`).
+        // If we were planning a rebuild or focus restore, always remove
+        // that so we can start from a clean slate.
+        // (`:832-843`)
         remove_source_id(imp.rebuild_source.borrow_mut().take(), "rebuild source");
         remove_source_id(
             imp.restore_focus_source.borrow_mut().take(),
             "restore_focus source",
         );
 
-        // Empty tree → clear immediately (`:845-851`).
+        // If we transitioned to an empty tree, clear immediately instead of
+        // waiting for an idle callback. Delaying teardown can keep the last
+        // surface alive during shutdown if the main loop exits first.
+        // (`:845-851`)
         if imp.tree.borrow().is_none() {
             imp.tree_bin.set_child(gtk4::Widget::NONE);
             return;
         }
 
-        // Otherwise, rebuild on idle so rapid changes debounce (`:853-860`).
+        // Build on an idle callback so rapid tree changes are debounced.
+        // We keep the existing tree attached until the rebuild runs,
+        // which avoids transient empty frames.
+        // (`:853-860`)
         debug_assert!(imp.rebuild_source.borrow().is_none());
         let weak = this.downgrade();
         let id = glib::idle_add_local(move || {
@@ -916,9 +1049,11 @@ impl SplitTree {
 
     /// PORTS: `split_tree.zig:863-897` `onRebuild`.
     fn on_rebuild(&self) {
+        // Always mark our rebuild source as null since we're done.
         let imp = self.imp();
         imp.rebuild_source.borrow_mut().take();
 
+        // Rebuild our tree
         {
             let tref = imp.tree.borrow();
             let is_empty = tref.as_ref().is_none_or(|t| t.0.is_empty());
@@ -933,19 +1068,30 @@ impl SplitTree {
             }
         }
 
-        // Restore focus to the last-focused surface (`:883-888`).
+        // Replacing our tree widget hierarchy can reset focus state.
+        // If we have a last-focused surface, restore focus to it.
+        // (`:883-888`)
         if let Some(v) = imp.last_focused.get() {
             v.grab_focus();
         }
 
+        // Our split status may have changed
         self.notify("is-split");
+
+        // Our active surface may have changed
         self.notify("active-surface");
     }
 
     /// PORTS: `split_tree.zig:899-917` `onRestoreFocus`.
     fn on_restore_focus(&self) {
+        // Always mark our source as null since we're done.
         let imp = self.imp();
         imp.restore_focus_source.borrow_mut().take();
+
+        // If we have a last-focused surface and it is mapped, restore focus
+        // to it. Depending on the available size, the surface might already
+        // have focus because it never got unmapped. In that case grabbing
+        // focus will have no effect.
         if let Some(v) = imp.last_focused.get() {
             if v.mapped() {
                 v.grab_focus();
@@ -953,6 +1099,14 @@ impl SplitTree {
         }
     }
 
+    /// Builds the widget tree associated with a surface split tree.
+    ///
+    /// Returned widgets are expected to be attached to a parent by the caller.
+    ///
+    /// If `release_ref` is true then `widget` has an extra temporary
+    /// reference that must be released once it is parented in the rebuilt
+    /// tree.
+    ///
     /// PORTS: `split_tree.zig:954-991` `buildTree`.
     ///
     /// PORT NOTE: the reference's `BuildTreeResult { widget, release_ref }`
@@ -967,15 +1121,29 @@ impl SplitTree {
                 let surface = unsafe { &**v };
                 match ext::ancestor::<SurfaceScrolledWindow>(surface) {
                     None => {
-                        // Not in a window yet — no reuse concern (`:964-970`).
+                        // The surface isn't in a window already so we don't
+                        // have to worry about reuse.
+                        // (`:964-970`)
                         glib::Object::builder::<SurfaceScrolledWindow>()
                             .property("surface", surface)
                             .build()
                             .upcast::<gtk4::Widget>()
                     }
                     Some(window) => {
-                        // Keep alive while detaching from the old tree (`:973-975`).
+                        // Keep this widget alive while we detach it from the
+                        // old tree and adopt it into the new one.
+                        // (`:973-975`)
+                        //
+                        // `BuildTreeResult.initReused`:
+                        // We add a temporary ref to the widget to ensure it doesn't
+                        // get destroyed while we're rebuilding the tree and detaching
+                        // it from its old parent. The caller is expected to release
+                        // this ref once the widget is attached to its new parent.
+                        // (Here: the owned `widget` value is that ref; the caller
+                        // drops it after re-parenting.)
                         let widget = window.upcast::<gtk4::Widget>();
+                        // Detach after we ref it so that this doesn't mark the
+                        // widget for destruction.
                         Self::detach_widget(&widget);
                         widget
                     }
@@ -985,19 +1153,28 @@ impl SplitTree {
                 let left = self.build_tree(tree, s.left);
                 let right = self.build_tree(tree, s.right);
                 let split = SplitTreeSplit::new(current, s, &left, &right);
-                // `left`/`right` (our refs) drop here after being parented.
+                // `left`/`right` (our refs) drop here after being parented
+                // (`BuildTreeResult.deinit`: If we have to release a ref, do it.).
                 split.upcast::<gtk4::Widget>()
             }
         }
     }
 
+    /// Detach a split widget from its current parent.
+    ///
+    /// We intentionally use parent-specific child APIs when possible
+    /// (`GtkPaned.setStartChild/setEndChild`, `AdwBin.setChild`) instead of
+    /// calling `gtk.Widget.unparent` directly. Container implementations track
+    /// child pointers/properties internally, and those setters are the path
+    /// that keeps container state and notifications in sync.
+    ///
     /// PORTS: `split_tree.zig:1000-1033` `detachWidget`.
     fn detach_widget(widget: &gtk4::Widget) {
         let Some(parent) = widget.parent() else {
             return;
         };
 
-        // Split → a Paned start/end child.
+        // Surface will be in a paned when it is split.
         if let Ok(paned) = parent.clone().downcast::<gtk4::Paned>() {
             if paned.start_child().as_ref() == Some(widget) {
                 paned.set_start_child(gtk4::Widget::NONE);
@@ -1009,7 +1186,7 @@ impl SplitTree {
             }
         }
 
-        // Unsplit → an Adw.Bin child.
+        // Surface will be in a bin when it is not split.
         if let Ok(bin) = parent.downcast::<libadwaita::Bin>() {
             if bin.child().as_ref() == Some(widget) {
                 bin.set_child(gtk4::Widget::NONE);
@@ -1017,7 +1194,8 @@ impl SplitTree {
             }
         }
 
-        // Fallback.
+        // Fallback for unexpected parents where we don't have a typed
+        // container API available.
         widget.unparent();
     }
 }
@@ -1039,6 +1217,7 @@ fn action_new_split(_a: &gio::SimpleAction, args: Option<&glib::Variant>, this: 
         "down" => Direction::Down,
         "up" => Direction::Up,
         other => {
+            // Need to be defensive here since actions can be triggered externally.
             log::warn!(target: LOG_SCOPE, "invalid split direction for split-tree.new-split: {other}");
             return;
         }
@@ -1111,11 +1290,27 @@ impl Default for SplitTree {
 mod split_imp {
     use super::*;
 
+    /// This is an internal-only widget that represents a split in the
+    /// split tree. This is a wrapper around gtk.Paned that allows us to handle
+    /// ratio (0 to 1) based positioning of the split, and also allows us to
+    /// write back the updated ratio to the split tree when the user manually
+    /// adjusts the split position.
+    ///
+    /// Since this is internal, it expects to be nested within a SplitTree and
+    /// will use `getAncestor` to find the SplitTree it belongs to.
+    ///
+    /// This is an _immutable_ widget. It isn't meant to be updated after
+    /// creation. As such, there are no properties or APIs to change the split,
+    /// access the paned, etc.
+    ///
     /// PORTS: `split_tree.zig:1113-1131` `SplitTreeSplit.Private`. The reference
     /// is an immutable widget with no GObject properties (`:1135-1137`).
     #[derive(CompositeTemplate)]
     #[template(resource = "/io/airely/rustty/ui/1.5/split-tree-split.ui")]
     pub struct SplitTreeSplit {
+        /// The handle of the node in the tree that this split represents.
+        /// Assumed to be correct.
+        ///
         /// PORTS: `split_tree.zig:1116` `handle`.
         pub handle: Cell<Handle>,
         /// Cache the split ratio. Looking it up is relatively expensive
@@ -1125,8 +1320,14 @@ mod split_imp {
         /// PORTS: `split_tree.zig:1177-1180` `ratio` (90da3aba5, the split
         /// flicker fix).
         pub ratio: Cell<f64>,
+        /// Source to handle repositioning the split when properties change.
+        ///
         /// PORTS: `split_tree.zig:1183` `idle` source (Invariant 11).
         pub idle: RefCell<Option<glib::SourceId>>,
+        /// Whether the max-position/position property of the gtk.Paned widget
+        /// changed. We use these to distinguish between a resize and the user
+        /// manually moving the split divider. See the "onIdle" function.
+        ///
         /// PORTS: `split_tree.zig:1124` `max_changed`.
         pub max_changed: Cell<bool>,
         /// PORTS: `split_tree.zig:1125` `pos_changed`.
@@ -1198,6 +1399,12 @@ enum SyncDirection {
 
 #[gtk4::template_callbacks]
 impl SplitTreeSplit {
+    /// Create a new split.
+    ///
+    /// The reason we don't use GObject properties here is because this is
+    /// an immutable widget and we don't want to deal with the overhead of
+    /// all the boilerplate for properties, signals, bindings, etc.
+    ///
     /// PORTS: `split_tree.zig:1202-1237` `new` (90da3aba5 end state).
     fn new(
         handle: Handle,
@@ -1213,6 +1420,7 @@ impl SplitTreeSplit {
         // `@floatCast`).
         imp.ratio.set(f64::from(split.ratio.to_f32()));
 
+        // Setup our paned fields
         let paned = imp.paned.get();
         paned.set_start_child(Some(start_child));
         paned.set_end_child(Some(end_child));
@@ -1249,7 +1457,9 @@ impl SplitTreeSplit {
         let min: i32 = paned.property("min-position");
         let max: i32 = paned.property("max-position");
 
-        // We don't use min but assert it's zero (`:1272`).
+        // We don't actually use min, but we don't expect this to ever
+        // be non-zero, so let's add an assert to ensure that.
+        // (`:1272`)
         debug_assert_eq!(min, 0);
 
         // If our max is zero then we can't do any math. I don't know
@@ -1267,6 +1477,7 @@ impl SplitTreeSplit {
 
         // If our ratio is close enough to our desired ratio, then
         // we ignore the update. This is to avoid constant split updates
+        // for lossy floating point math.
         // (`std.math.approxEqAbs(f64, ..., 0.001)`, `:1298-1303`).
         if (current_ratio - desired_ratio).abs() <= 0.001 {
             return;
