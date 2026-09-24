@@ -1261,9 +1261,12 @@ pub mod windows_tty {
                         0x73 => key::f4 as u16,
                         0x74 => key::f5 as u16,
                         0x75 => key::f6 as u16,
-                        // PORT NOTE (upstream typo, preserved): `0x76 => Key.f8` —
-                        // VK_F7 maps to `f8` upstream. R1 keeps the behaviour.
-                        0x76 => key::f8 as u16,
+                        // PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD245.
+                        // Upstream maps `0x76` (VK_F7) to `Key.f8` (tty.zig:437), a
+                        // typo in an otherwise one-to-one F1-F24 table, so F7 reads as
+                        // F8. Mapped to `f7`. Windows-only code, neither compiled nor run on
+                        // Windows here (UD245).
+                        0x76 => key::f7 as u16,
                         0x77 => key::f8 as u16,
                         0x78 => key::f9 as u16,
                         0x79 => key::f10 as u16,

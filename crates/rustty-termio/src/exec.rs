@@ -4968,6 +4968,11 @@ impl ReadThread {
             },
         ];
 
+        // Set once an outer poll has reported the hangup together with
+        // unread data and the loop went back to read it (UD19; see
+        // `outer_poll_hup_exits`).
+        let mut drained_after_hup = false;
+
         loop {
             // Claim the next free buffer. This blocks only when the
             // parse stage is a full ring behind, which is exactly when
@@ -5218,6 +5223,11 @@ impl ReadThread {
             // Wait for data. The idle fd is sliced off: the parse
             // stage only writes to it while we're bridging.
             // _ = posix.poll(pollfds[0..2], -1) catch |err| { ... return; };
+            //
+            // (Test builds only: `tests::before_outer_poll` lets a test change
+            // the fd's state at this exact point, UD19.)
+            #[cfg(test)]
+            tests::before_outer_poll(fd);
             let rc = unsafe { libc::poll(pollfds.as_mut_ptr(), 2, -1) };
             if rc < 0 {
                 if errno() == libc::EINTR {
@@ -5243,12 +5253,45 @@ impl ReadThread {
             // If our pty fd is closed, then we're also done with our
             // read thread.
             // if (pollfds[0].revents & posix.POLL.HUP != 0) { ... return; }
-            if pollfds[0].revents & libc::POLLHUP != 0 {
+            //
+            // PORT NOTE: reference defect (R13): see `outer_poll_hup_exits`.
+            if Self::outer_poll_hup_exits(pollfds[0].revents, &mut drained_after_hup) {
                 // log.info("pty fd closed, read thread exiting", .{});
                 log::info!(target: LOG_SCOPE, "pty fd closed, read thread exiting");
                 return;
             }
         }
+    }
+
+    /// Whether the gather stage's outer poll ends the read thread on a
+    /// hangup.
+    ///
+    /// PORT NOTE: reference defect (R13). The reference returns as soon as
+    /// `POLLHUP` is set (`Exec.zig:1727-1730`), without looking at `POLLIN`.
+    /// On Linux a pty master reports both in one word (`0x11`, measured on
+    /// the port in phase 2) when the child writes and exits while this stage
+    /// is parked in the poll, and the bytes still queued on the pty are never
+    /// read: the last output of a command that exits at once can be missing
+    /// from the terminal. The same function's bridge poll states the intent,
+    /// "HUP without IN means no more data is coming" (`Exec.zig:1657-1662`).
+    /// So a hangup with `POLLIN` sends the loop back to read once more; the
+    /// next outer poll that reports the hangup ends it, whatever `POLLIN`
+    /// says. That second rule matters: once the data is read the fd still
+    /// reports `POLLIN | POLLHUP` where a read returns 0 (measured on macOS
+    /// for a pty master and for a pipe), and on Linux the read after the
+    /// data fails with EIO, which the gather loop already treats as the end.
+    /// A hangup without `POLLIN` ends the thread at once, as in the
+    /// reference. `.port/parity-closure/UPSTREAM-DEFECTS.md` UD19.
+    #[cfg(not(windows))]
+    fn outer_poll_hup_exits(revents: libc::c_short, drained_after_hup: &mut bool) -> bool {
+        if revents & libc::POLLHUP == 0 {
+            return false;
+        }
+        if revents & libc::POLLIN != 0 && !*drained_after_hup {
+            *drained_after_hup = true;
+            return false;
+        }
+        true
     }
 
     /// Clears the bridging flag armed before a bridge poll, closing
@@ -5956,6 +5999,153 @@ mod tests {
         /// (S211-F6).
         pub(super) static FAIL_GATHER_SPAWN: std::cell::Cell<bool> =
             const { std::cell::Cell::new(false) };
+    }
+
+    /// Test-only hook run by `gatherMainPosix` right before its outer
+    /// `poll(-1)`, for the one fd it was installed for (the gather stage runs
+    /// on its own thread, so a thread-local cannot reach it; keying on the fd
+    /// keeps concurrent tests out of it). UD19.
+    #[cfg(not(windows))]
+    type OuterPollHook = (std::os::fd::RawFd, Box<dyn FnMut() + Send>);
+    #[cfg(not(windows))]
+    static BEFORE_OUTER_POLL: std::sync::Mutex<Option<OuterPollHook>> = std::sync::Mutex::new(None);
+
+    #[cfg(not(windows))]
+    pub(super) fn before_outer_poll(fd: std::os::fd::RawFd) {
+        let mut hook = BEFORE_OUTER_POLL.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((hook_fd, f)) = hook.as_mut() {
+            if *hook_fd == fd {
+                f();
+            }
+        }
+    }
+
+    /// UD19: the outer-poll decision on its own. A hangup without data ends
+    /// the thread at once (the reference's behaviour); a hangup with data
+    /// sends it back to read once, and the next hangup ends it.
+    #[cfg(not(windows))]
+    #[test]
+    fn outer_poll_hangup_with_data_reads_once_more() {
+        let mut drained = false;
+        assert!(!ReadThread::outer_poll_hup_exits(
+            libc::POLLIN,
+            &mut drained
+        ));
+        assert!(!drained, "no hangup, nothing to drain");
+        assert!(ReadThread::outer_poll_hup_exits(
+            libc::POLLHUP,
+            &mut drained
+        ));
+
+        let mut drained = false;
+        let both = libc::POLLIN | libc::POLLHUP;
+        assert!(!ReadThread::outer_poll_hup_exits(both, &mut drained));
+        assert!(drained);
+        assert!(ReadThread::outer_poll_hup_exits(both, &mut drained));
+    }
+
+    /// UD19 (PORT NOTE: reference defect (R13), at `outer_poll_hup_exits`):
+    /// output that arrives together with the hangup, while the gather stage is
+    /// parked in its outer poll, is still read. The hook writes `second` and
+    /// shuts down the writing side right before that poll, so the poll reports
+    /// `POLLIN | POLLHUP` with `second` unread (measured on macOS for a Unix
+    /// socket pair after `shutdown(SHUT_WR)`, and for a pipe after `close`:
+    /// `revents == 0x11`; on Linux a pty master reports the same word when the
+    /// child writes and exits, UD19). The reference returns on `POLLHUP` alone
+    /// and drops `second`.
+    #[cfg(not(windows))]
+    #[test]
+    fn gather_stage_reads_output_that_arrives_with_the_hangup() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        // The data fd is a socket pair, not a pipe: the hangup is made with
+        // `shutdown(SHUT_WR)`, which acts on the socket itself. Closing a pipe's
+        // write end is not enough in this binary, where other tests fork
+        // children that can hold a copy of it for a moment, and then the poll
+        // can see the data before the hangup (measured: an extra outer poll).
+        let mut fds = [0 as libc::c_int; 2];
+        assert_eq!(
+            unsafe { libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, fds.as_mut_ptr()) },
+            0
+        );
+        let (data_r, data_w) = (fds[0], fds[1]);
+        assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+        let (quit_r, quit_w) = (fds[0], fds[1]);
+        // The gather stage expects a non-blocking fd (`threadMainPosix` sets it).
+        unsafe {
+            let fl = libc::fcntl(data_r, libc::F_GETFL);
+            assert!(fl >= 0);
+            assert_eq!(libc::fcntl(data_r, libc::F_SETFL, fl | libc::O_NONBLOCK), 0);
+        }
+        let first = b"first";
+        assert_eq!(
+            unsafe { libc::write(data_w, first.as_ptr().cast(), first.len()) },
+            first.len() as isize
+        );
+
+        let polls = Arc::new(AtomicUsize::new(0));
+        {
+            let polls = Arc::clone(&polls);
+            *BEFORE_OUTER_POLL.lock().unwrap() = Some((
+                data_r,
+                Box::new(move || {
+                    if polls.fetch_add(1, Ordering::SeqCst) == 0 {
+                        let second = b"second";
+                        assert_eq!(
+                            unsafe { libc::write(data_w, second.as_ptr().cast(), second.len()) },
+                            second.len() as isize
+                        );
+                        assert_eq!(unsafe { libc::shutdown(data_w, libc::SHUT_WR) }, 0);
+                    }
+                }),
+            ));
+        }
+
+        // `'static` so a hung gather stage cannot hang the test: the test waits
+        // with a timeout instead of joining.
+        let pipeline: &'static Pipeline = Box::leak(Box::new(Pipeline::new()));
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            ReadThread::gatherMainPosix(data_r, quit_r, pipeline);
+            let _ = tx.send(());
+        });
+        let finished = rx.recv_timeout(std::time::Duration::from_secs(10));
+        *BEFORE_OUTER_POLL.lock().unwrap() = None;
+        assert!(
+            finished.is_ok(),
+            "the gather stage must end after the hangup"
+        );
+
+        let mut got = Vec::new();
+        {
+            let mut m = pipeline.mutex.lock().unwrap();
+            assert!(m.done, "the gather stage marks the stream done");
+            while m.count > 0 {
+                let slot = m.tail;
+                let len = m.lens[slot];
+                got.extend_from_slice(unsafe {
+                    std::slice::from_raw_parts(pipeline.slot_ptr(slot), len)
+                });
+                m.tail = (m.tail + 1) % ReadThread::BUFFER_COUNT;
+                m.count -= 1;
+            }
+        }
+        unsafe {
+            libc::close(data_r);
+            libc::close(data_w);
+            libc::close(quit_r);
+            libc::close(quit_w);
+        }
+        assert_eq!(
+            got, b"firstsecond",
+            "the output that came with the hangup must be delivered"
+        );
+        assert_eq!(
+            polls.load(Ordering::SeqCst),
+            2,
+            "one outer poll saw POLLIN|POLLHUP and drained; the next saw the hangup again and ended"
+        );
     }
 
     // ---- MOVED FROM `rustty-os`'s `env.rs` (P3-W7 T2 / area-E `E13`) --------

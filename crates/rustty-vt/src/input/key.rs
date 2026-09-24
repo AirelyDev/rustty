@@ -967,12 +967,25 @@ impl Key {
             Key::NumpadUp => dcimgui_sys::ImGuiKey_UpArrow,
             Key::NumpadDown => dcimgui_sys::ImGuiKey_DownArrow,
             Key::NumpadPageUp => dcimgui_sys::ImGuiKey_PageUp,
-            Key::NumpadPageDown => dcimgui_sys::ImGuiKey_PageUp,
+            // PORT NOTE: reference defect (R13). The reference maps `.numpad_page_down`
+            // to `ImGuiKey_PageUp` (key.zig:654), the line above's value, so keypad
+            // Page Down (GTK `KP_Page_Down`, NumLock off) acts as Page Up in the
+            // inspector. Mapped to Page Down, as `.page_down` is. Test
+            // `imgui_key_numpad_page_down_is_page_down`. UPSTREAM-DEFECTS.md UD27.
+            // (`.numpad_begin` below stays as the reference has it: UD27 records it,
+            // and which key imgui should see for it is not evident.)
+            Key::NumpadPageDown => dcimgui_sys::ImGuiKey_PageDown,
             Key::NumpadHome => dcimgui_sys::ImGuiKey_Home,
             Key::NumpadEnd => dcimgui_sys::ImGuiKey_End,
             Key::NumpadInsert => dcimgui_sys::ImGuiKey_Insert,
             Key::NumpadDelete => dcimgui_sys::ImGuiKey_Delete,
-            Key::NumpadBegin => dcimgui_sys::ImGuiKey_NamedKey_BEGIN,
+            // PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD27 (2). The reference
+            // maps `.numpad_begin` to `ImGuiKey_NamedKey_BEGIN` (key.zig:659), the start-of-range
+            // marker of imgui's named keys, which equals `ImGuiKey_Tab`: keypad 5 with NumLock
+            // off moved inspector focus like Tab. imgui has no Begin key, so the port leaves it
+            // unmapped, the reference's own answer (its `=> null` arm) for keys imgui lacks.
+            // Test `imgui_key_numpad_begin_is_unmapped`.
+            Key::NumpadBegin => return None,
 
             Key::ShiftLeft => dcimgui_sys::ImGuiKey_LeftShift,
             Key::ControlLeft => dcimgui_sys::ImGuiKey_LeftCtrl,
@@ -1301,10 +1314,12 @@ const W3C_NAMES: &[&str] = &[
 //   .numpad_down => cimgui.c.ImGuiKey_DownArrow,
 //   .numpad_page_up => cimgui.c.ImGuiKey_PageUp,
 //   .numpad_page_down => cimgui.c.ImGuiKey_PageUp,
+//     (the port maps this one to ImGuiKey_PageDown: reference defect, R13, UD27)
 //   .numpad_home => cimgui.c.ImGuiKey_Home, .numpad_end => cimgui.c.ImGuiKey_End,
 //   .numpad_insert => cimgui.c.ImGuiKey_Insert,
 //   .numpad_delete => cimgui.c.ImGuiKey_Delete,
 //   .numpad_begin => cimgui.c.ImGuiKey_NamedKey_BEGIN,
+//     (the port leaves this one unmapped: reference defect, R13, UD27 (2))
 //   .shift_left => cimgui.c.ImGuiKey_LeftShift,
 //   .control_left => cimgui.c.ImGuiKey_LeftCtrl,
 //   .alt_left => cimgui.c.ImGuiKey_LeftAlt,
@@ -1418,6 +1433,38 @@ pub fn ctrl_or_super(mods: Mods) -> Mods {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // UD27 (PORT NOTE: reference defect (R13), at `imgui_key`): keypad Page Down
+    // reaches the inspector as Page Down. The reference maps it to Page Up.
+    #[cfg(feature = "imgui")]
+    #[test]
+    fn imgui_key_numpad_page_down_is_page_down() {
+        use std::os::raw::c_int;
+        assert_eq!(
+            Key::NumpadPageDown.imgui_key(),
+            Some(dcimgui_sys::ImGuiKey_PageDown as c_int)
+        );
+        assert_eq!(Key::NumpadPageDown.imgui_key(), Key::PageDown.imgui_key());
+        assert_eq!(
+            Key::NumpadPageUp.imgui_key(),
+            Some(dcimgui_sys::ImGuiKey_PageUp as c_int)
+        );
+        assert_ne!(
+            Key::NumpadPageDown.imgui_key(),
+            Key::NumpadPageUp.imgui_key()
+        );
+    }
+
+    // UD27 (2) (PORT NOTE: reference defect (R13), at `imgui_key`): keypad Begin is
+    // unmapped, as every key imgui lacks is. The reference maps it to
+    // `ImGuiKey_NamedKey_BEGIN`, a range marker equal to `ImGuiKey_Tab`, so keypad 5
+    // (NumLock off) moved inspector focus like Tab.
+    #[cfg(feature = "imgui")]
+    #[test]
+    fn imgui_key_numpad_begin_is_unmapped() {
+        assert_eq!(Key::NumpadBegin.imgui_key(), None);
+        assert_ne!(Key::Tab.imgui_key(), None, "Tab itself is still mapped");
+    }
 
     #[test]
     fn from_ascii_should_not_return_keypad_keys() {

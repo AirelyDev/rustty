@@ -3058,9 +3058,12 @@ impl Inspector {
 // Reference body (key.zig `imguiKey`), reproduced faithfully — every arm below is
 // a direct transliteration; the final `=> null` arm's variant list is preserved
 // 1:1 (including the reference's own stale-looking "We map KP_SEPARATOR to Comma"
-// comment ahead of the `numpad_left`/`numpad_right`/... arms, and the
-// `numpad_page_up`/`numpad_page_down` arms BOTH mapping to `ImGuiKey_PageUp` — a
-// reference quirk kept as-is, R1).
+// comment ahead of the `numpad_left`/`numpad_right`/... arms). Two arms differ:
+// the reference maps BOTH `numpad_page_up` and `numpad_page_down` to
+// `ImGuiKey_PageUp`; the port maps `numpad_page_down` to `ImGuiKey_PageDown`
+// (reference defect, R13, UD27; PORT NOTE at the arm). And `numpad_begin`, which
+// the reference maps to the range marker `ImGuiKey_NamedKey_BEGIN` (== Tab), is
+// unmapped (UD27 (2)).
 fn key_to_imgui_key(key: key::Key) -> Option<c_int> {
     use key::Key;
     Some(match key {
@@ -3173,12 +3176,23 @@ fn key_to_imgui_key(key: key::Key) -> Option<c_int> {
         Key::NumpadUp => dcimgui_sys::ImGuiKey_UpArrow,
         Key::NumpadDown => dcimgui_sys::ImGuiKey_DownArrow,
         Key::NumpadPageUp => dcimgui_sys::ImGuiKey_PageUp,
-        Key::NumpadPageDown => dcimgui_sys::ImGuiKey_PageUp,
+        // PORT NOTE: reference defect (R13). The reference maps `.numpad_page_down`
+        // to `ImGuiKey_PageUp` (key.zig:654), so keypad Page Down acts as Page Up in
+        // the inspector. Mapped to Page Down, as `.page_down` is (same fix as
+        // rustty-vt's `Key::imgui_key`). Test `numpad_page_down_maps_to_page_down`.
+        // UPSTREAM-DEFECTS.md UD27.
+        Key::NumpadPageDown => dcimgui_sys::ImGuiKey_PageDown,
         Key::NumpadHome => dcimgui_sys::ImGuiKey_Home,
         Key::NumpadEnd => dcimgui_sys::ImGuiKey_End,
         Key::NumpadInsert => dcimgui_sys::ImGuiKey_Insert,
         Key::NumpadDelete => dcimgui_sys::ImGuiKey_Delete,
-        Key::NumpadBegin => dcimgui_sys::ImGuiKey_NamedKey_BEGIN,
+        // PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD27 (2). The reference
+        // maps `.numpad_begin` to `ImGuiKey_NamedKey_BEGIN` (key.zig:659), the start-of-range
+        // marker of imgui's named keys, which equals `ImGuiKey_Tab`: keypad 5 with NumLock
+        // off moved inspector focus like Tab. imgui has no Begin key, so the port leaves it
+        // unmapped, the reference's own answer (its `=> null` arm) for keys imgui lacks.
+        // Test `numpad_begin_is_unmapped`.
+        Key::NumpadBegin => return None,
 
         Key::ShiftLeft => dcimgui_sys::ImGuiKey_LeftShift,
         Key::ControlLeft => dcimgui_sys::ImGuiKey_LeftCtrl,
@@ -4173,5 +4187,45 @@ mod inspector_style_tests {
 
             dcimgui_sys::ImGui_DestroyContext(ig_ctx);
         }
+    }
+}
+
+// UD27 (PORT NOTE: reference defect (R13), at `key_to_imgui_key`): keypad Page
+// Down reaches the inspector as Page Down. The reference maps it to Page Up.
+#[cfg(test)]
+mod imgui_key_tests {
+    use super::*;
+
+    #[test]
+    fn numpad_page_down_maps_to_page_down() {
+        use key::Key;
+        assert_eq!(
+            key_to_imgui_key(Key::NumpadPageDown),
+            Some(dcimgui_sys::ImGuiKey_PageDown as c_int)
+        );
+        assert_eq!(
+            key_to_imgui_key(Key::NumpadPageDown),
+            key_to_imgui_key(Key::PageDown)
+        );
+        assert_eq!(
+            key_to_imgui_key(Key::NumpadPageUp),
+            Some(dcimgui_sys::ImGuiKey_PageUp as c_int)
+        );
+        assert_ne!(
+            key_to_imgui_key(Key::NumpadPageDown),
+            key_to_imgui_key(Key::NumpadPageUp)
+        );
+    }
+
+    // UD27 (2): keypad Begin is unmapped (the reference sends it as Tab).
+    #[test]
+    fn numpad_begin_is_unmapped() {
+        use key::Key;
+        assert_eq!(key_to_imgui_key(Key::NumpadBegin), None);
+        assert_ne!(
+            key_to_imgui_key(Key::Tab),
+            None,
+            "Tab itself is still mapped"
+        );
     }
 }

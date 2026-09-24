@@ -135,7 +135,7 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - ReleaseSafe:     no crash; a lost URL open.
 - ReleaseFast:     same.
 - reachability:    peer process, same user: the subscription has a null sender, but the request path embeds a random `usize` token (`portal.generateToken`) and exists only while a request is in flight, so the peer must be watching the bus.
-- port handling:   faithful (R1, a non-crash defect). `crates/rustty-apprt/src/gtk/portal/open_uri.rs` `response_received` makes the same `g_variant_get` call and reads code 0, which also removed the port's former PANIC on `()` (S59-F3).
+- port handling:   faithful (R1, a non-crash defect). `crates/rustty-apprt/src/gtk/portal/open_uri.rs` `response_received` makes the same `g_variant_get` call and reads code 0, which also removed the port's former PANIC on `()` (S59-F3). Controller ruling (task S-6b, under R13 as extended 2026-09-23): stays faithful, because reaching it needs a hostile session-bus peer and choosing the fallback for a malformed body would be new behaviour.
 - parity row(s):   S59-F3.
 - test:            `malformed_response_bodies_read_as_code_zero_without_panicking` pins the faithful behaviour (code 0, no fallback, `open uri successful`).
 - proposed fix:    Check the body's type first — `const ty = glib.VariantType.new("(ua{sv})"); defer ty.free(); if (params.isOfType(ty) == 0) { ... }` (C: `g_variant_is_of_type (params, G_VARIANT_TYPE ("(ua{sv})"))`) — and on a mismatch take the `2` ("ended unexpectedly") path so `openUrlFallback` still opens the URL; filter the subscription to the portal's bus name (spoof-proof on GLib 2.78.5 or 2.80.1+, see UD1). (Fix round 2: the Zig first read `params.isOfType("(ua{sv})")`, which does not compile against the binding, and the GLib floor said 2.80.1 only.)
@@ -195,7 +195,7 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - ReleaseSafe:     panic on the assert (Debug too); the terminal process aborts.
 - ReleaseFast:     no check, and the history is damaged, not merely left in the active area: with the cursor stuck on the last row below the scroll region, `index()` never scrolls, so each history line overwrites the previous one on that row and the scrollback the capture was meant to fill is garbled or lost. The pane's `capture-pane` visible reply then runs `eraseDisplay(.complete)` over the active area. (Fix round 1, task R13-A review: this line first said only that the active area "keeps the text".)
 - reachability:    VT stream (a forged exchange), and plausibly a real tmux: a split created during attach, in a pane running a program with a scroll region above the cursor row (vim's command line, for example).
-- port handling:   no check, as ReleaseFast — `crates/rustty-vt/src/tmux/viewer.rs:1787` (PORT NOTE).
+- port handling:   no check, as ReleaseFast — `crates/rustty-vt/src/tmux/viewer.rs:1787` (PORT NOTE). Under R13 as extended 2026-09-23 the remaining history damage (the port writes it as Ghostty's release build does) is a fix candidate: fix assigned to S-12 (controller ruling in task S-6b).
 - parity row(s):   NEW-FINDINGS N43 (no LEDGER row).
 - test:            `pane_history_below_the_scroll_region_does_not_trip_the_empty_active_area_check` (bytes through the VT stream: list-windows with pane 7, a `%layout-change` adding pane 8, pane 7's captures, a `list-panes` giving pane 8 cursor row 23 and region 0-10, then pane 8's history; asserts the viewer is not defunct and the history text is in pane 8's active area). Negative control, macOS 2026-09-11: with the port's former `debug_assertions` check the test panics in `inlineAssert` from `received_pane_history` (backtrace confirmed).
 - proposed fix:    Drop the assert, or make the intent true: reset the scroll region (and origin mode) before the `index()` loop, or clear the active area with `eraseDisplay(.complete, false)` instead of scrolling it.
@@ -240,7 +240,7 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - ReleaseSafe:     no crash; the tmux session ends as soon as any captured pane has coloured content, and later control-mode lines are processed as normal output.
 - ReleaseFast:     same.
 - reachability:    ordinary use: `tmux -CC attach` to a session with any coloured text in a pane's history or visible area.
-- port handling:   faithful (R13 non-crash defect): the port's parser and DCS handler behave the same. Not changed; the right handling (for example a line-based control-mode reader outside the VT parser, or dropping `-e`) is a design question for upstream.
+- port handling:   faithful (R13 non-crash defect): the port's parser and DCS handler behave the same. Not changed; the right handling (for example a line-based control-mode reader outside the VT parser, or dropping `-e`) is a design question for upstream. Re-decided under R13 as extended 2026-09-23: fix assigned to S-12 (controller ruling in task S-6b).
 - parity row(s):   none.
 - test:            none (recorded only).
 - proposed fix:    Consume tmux control mode outside the VT parser once `ESC P 1000 p` is seen (reading raw lines until `%exit` and ST, as other tmux control-mode clients do), or request captures without `-e` and apply styles another way.
@@ -371,9 +371,9 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - ReleaseSafe:     no crash; the last output of a short-lived command can be missing from the terminal.
 - ReleaseFast:     same.
 - reachability:    ordinary use on Linux: a command that prints and exits immediately (`ghostty -e …`, or a shell's final output at exit), most visible with `wait-after-command`. Timing-dependent: only when the output lands while the reader is parked in the outer poll.
-- port handling:   faithful ("PRESERVED REFERENCE QUIRK"): `crates/rustty-termio/src/exec.rs:5088-5092`. The port's live-shell test sidesteps it with a trailing `sleep 1` (`crates/rustty-termio/tests/live_shell.rs:297-332`).
+- port handling:   fixed (R13, extended 2026-09-23; task tail-s6; Linux run pending): `crates/rustty-termio/src/exec.rs` `ReadThread::outer_poll_hup_exits` (PORT NOTE: reference defect (R13)), called by the gather stage's outer poll, returns only on a hangup without `POLLIN`, or on the second hangup after the loop went back to read once (a flag set the first time a hangup came with `POLLIN`). So bytes queued with the hangup are read, and the thread still ends: after the data a pipe or a macOS pty master keeps reporting `POLLIN | POLLHUP` while `read` returns 0 (MEASURED on macOS 2026-09-23 for both, `revents == 0x11`), and on Linux the read after the data fails with EIO, which the gather loop already treats as the end. A macOS pty master whose slave closes with bytes still queued returned 0 on read in the same probe, so the drain changes nothing there; the port's `live_shell` KAT keeps its trailing `sleep 1` (its comment now points here). The end-to-end Linux run (a `/bin/sh -c 'printf done'` child, repeated) has not been done: no VM in task tail-s6. Before task tail-s6 the port was faithful ("PRESERVED REFERENCE QUIRK"). Listed in `docs/ghostty-bug-fixes.md`.
 - parity row(s):   none (phase-2 DEFERRALS reclassified entry; `.port/phase-3/DEFERRAL_REAUDIT.md:255`); inventory M14.
-- test:            n/a (record only).
+- test:            `exec::tests::gather_stage_reads_output_that_arrives_with_the_hangup` (rustty-termio) runs the production `gatherMainPosix` on a non-blocking Unix socket pair holding `first`; a test-only hook (`#[cfg(test)]`, keyed on the fd) writes `second` and shuts down the writing side (`shutdown(SHUT_WR)`) right before the outer poll, so that poll reports `POLLIN | POLLHUP` with `second` unread (MEASURED on macOS: `revents == 0x11`). A socket pair rather than a pipe, because the first version closed a pipe's write end and failed twice in nine runs of the whole suite: other tests in the binary fork children that briefly hold a copy of the write end, so the poll saw the data before the hangup (three outer polls instead of two). It asserts the published batches read `firstsecond` and that exactly two outer polls ran (one drained, the next ended the thread), with a 10 s timeout in case the thread never ends. `exec::tests::outer_poll_hangup_with_data_reads_once_more` pins the decision's truth table. Negative control (macOS, task tail-s6, run alone): with the reference's decision (return on any `POLLHUP`) the first test fails `the output that came with the hangup must be delivered` with `left: [102, 105, 114, 115, 116]` (`first` only).
 - proposed fix:    On wake, if `POLLIN` is set, loop back into the gather stage before honouring `POLLHUP`; return only when `POLLHUP` is set and `POLLIN` is clear (or a read returns 0 or EIO), mirroring the bridge-poll arm.
 - upstream status: not reported (blocked on the Linux measurement above)
 
@@ -386,9 +386,9 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - ReleaseSafe:     no crash; the two selection colours are exchanged in custom shaders. Visible whenever either option is set: a set colour appears under the other name, and the name the user expects reads the zero default (both slots start `@splat(0)`, generic.zig:776-777).
 - ReleaseFast:     same.
 - reachability:    config: `custom-shader` plus `selection-foreground` and/or `selection-background`, with a shader that reads either uniform.
-- port handling:   faithful, byte-identical on both sides: `crates/rustty-renderer/src/shaders/shadertoy_prefix.glsl:29-30` and `crates/rustty-renderer/src/shadertoy.rs:158-159`, with a PORT NOTE at the Rust fields (added in task R13-R).
+- port handling:   fixed (R13, extended 2026-09-23; task tail-s6): the port declares `Uniforms.selection_foreground_color` before `selection_background_color`, the GLSL order, so each uniform receives the colour it is named for (`crates/rustty-renderer/src/shadertoy.rs`, PORT NOTE: reference defect (R13) at the two fields; the layout pins now read 4464 for the foreground and 4480 for the background). The GLSL prefix stays byte-identical to the reference (`cmp` against the pin), so user shaders, which bind by name, need no change. Both renderers share the struct. Before task tail-s6 the port was faithful (task R13-R's PORT NOTE). Listed in `docs/ghostty-bug-fixes.md`.
 - parity row(s):   none; inventory M44.
-- test:            n/a (record only).
+- test:            `shadertoy::tests::globals_block_members_receive_the_uniform_fields_they_are_named_for` (rustty-renderer) compiles the prefix with the production `spirv_from_glsl` (glslang), reads every `Globals` member's `Offset` decoration from the SPIR-V, and asserts that each of the 27 members sits at the offset of the `Uniforms` field of the same name. Negative control (macOS, task tail-s6, run alone): with the reference's field order it fails `GLSL member iSelectionForegroundColor sits at std140 offset 4464, but its Uniforms field is at 4480` (the 25 members before it match).
 - proposed fix:    Swap lines 29 and 30 of `shadertoy_prefix.glsl` so the GLSL order matches `shadertoy.zig` and the documentation order. User shaders bind by name, so no user shader changes. A test pairing each GLSL `Globals` member with the Zig field at the same offset would stop a recurrence.
 - upstream status: not reported
 
@@ -495,9 +495,9 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - ReleaseSafe:     no crash; wrong key events in the inspector UI.
 - ReleaseFast:     same.
 - reachability:    keyboard in the inspector: on GTK, keypad navigation keys with NumLock off produce these keyvals. macOS reachability not checked.
-- port handling:   faithful at both copies: `crates/rustty-vt/src/input/key.rs:970,975` and `crates/rustty-apprt/src/embedded.rs:3159,3164`.
+- port handling:   (1) fixed (R13, extended 2026-09-23; task tail-s6) at both copies: `.numpad_page_down` maps to `ImGuiKey_PageDown`, as `.page_down` does, in `crates/rustty-vt/src/input/key.rs` `Key::imgui_key` (the GTK inspector's mapping, `imgui` feature) and `crates/rustty-apprt/src/embedded.rs` `key_to_imgui_key` (the embedded/macOS inspector's), each with a PORT NOTE: reference defect (R13). Listed in `docs/ghostty-bug-fixes.md`. (2) fixed (R13; controller ruling in task S-6c, which accepted the review's challenge): `.numpad_begin` is unmapped (`None`) at both copies, the reference's own answer (its `=> null` arm) for keys imgui lacks; `ImGuiKey_NamedKey_BEGIN` is the start-of-range marker of imgui's named keys and equals `ImGuiKey_Tab`, so the reference sent keypad Begin (keypad 5, NumLock off) as Tab. PORT NOTE: reference defect (R13) at both arms. (3) stays faithful (prose). Before task tail-s6 all three were faithful. (Task S-6b first ruled (2) faithful; task S-6c reversed that.)
 - parity row(s):   none; inventory M74.
-- test:            n/a (record only).
+- test:            `input::key::tests::imgui_key_numpad_page_down_is_page_down` (rustty-vt, `--features imgui`) and `embedded::imgui_key_tests::numpad_page_down_maps_to_page_down` (rustty-apprt): keypad Page Down maps to `ImGuiKey_PageDown` and to the same value as Page Down, and keypad Page Up still maps to `ImGuiKey_PageUp`. Negative control (macOS, task tail-s6, each run alone before the fix, i.e. with the reference's mapping): both fail `left: Some(517), right: Some(518)` (`ImGuiKey_PageUp` where `ImGuiKey_PageDown` is expected). (2): `input::key::tests::imgui_key_numpad_begin_is_unmapped` (`--features imgui`) and `embedded::imgui_key_tests::numpad_begin_is_unmapped`; negative control (macOS, task S-6c, each run alone with the reference's arm): both fail `left: Some(512), right: None` (512 is `ImGuiKey_Tab`).
 - proposed fix:    Map `.numpad_page_down => ImGuiKey_PageDown`. Map `.numpad_begin` to `null` (imgui has no Begin key) or to `ImGuiKey_Keypad5`. Either restore `.numpad_separator => ImGuiKey_Comma` under the comment or delete the comment. A test that `imguiKey` is injective over mapped keys, except intentional aliases such as `numpad_left`/`arrow_left`, would catch (1).
 - upstream status: not reported
 
@@ -1986,6 +1986,126 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - parity row(s):   NEW-FINDINGS N206 (the separate R13 question it raised); LEDGER S112-F9 had kept this faithfully.
 - test:            `uri::tests::percent_escapes_decode_only_two_hex_digits` and `uri::tests::osc7_path_keeps_a_signed_escape` (the OSC 7 `parse` options, then the path formatted as `toRawMaybeAlloc` does; `%41` in the same path proves decoding ran). Negative control (macOS, task tail-s9b): the hex-digit check disabled, both fail with `left: [.., 97, 0, 98, ..]` (the NUL) where `[.., 97, 37, 45, 48, 98, ..]` (`a%-0b`) is expected.
 - proposed fix:    in `formatRaw` and `percentDecodeBackwards`, decode only when both bytes pass `std.ascii.isHex` (or parse with `std.fmt.charToDigit` per byte instead of `parseInt`).
+- upstream status: not reported
+
+### UD245 — libvaxis's Windows key table sends F8 for F7
+- kind:            latent (functional: a wrong key event)
+- upstream project: libvaxis
+- severity:        low
+- reference:       `zig-pkg/vaxis-0.6.0-BWNV_CrbCQCscGpzsAlR402rYQ_tV3aAl081c2iRRkka/src/tty.zig:437` (`0x76 => Key.f8`, next to `0x77 => Key.f8` at :438), in the Windows console-input translation, the vaxis version Ghostty pins at 20abdb50a
+- defect:          `0x76` is `VK_F7`, but the arm returns `Key.f8`; every other function key from `VK_F1` (`0x70`) to `VK_F24` (`0x87`) maps to its own key. By reading.
+- ReleaseSafe:     no crash; on Windows a vaxis TUI receives F8 when the user presses F7, and cannot tell the two apart.
+- ReleaseFast:     same.
+- reachability:    keyboard input to a libvaxis TUI on Windows. Ghostty's own TUIs (`+list-themes`, `+boo`) bind neither F7 nor F8 (their `key.matches` calls, `src/cli/list_themes.zig:449-530`, `src/cli/boo.zig:59-60`, name letters, `/` and Escape), so neither Ghostty's nor Rustty's TUIs see a difference.
+- port handling:   fixed (R13; controller ruling in task S-6b): `crates/rustty-vaxis/src/tty.rs` maps `0x76` to `key::f7` (PORT NOTE: reference defect (R13) at the arm). **Windows run pending**, and the Windows compile was not run either: the arm is inside the `#[cfg(windows)]` `event_from_record`, and a `--target x86_64-pc-windows-msvc` check of rustty-vaxis stops in `wuffs-sys`'s C build on this host (no Windows `stdlib.h`); `key::f7` is the same `u32` constant family as the neighbouring arms. Applied on the port's libvaxis 0.6.0 key table (after merging `tail-s10b`); the typo is in the pin's 0.6.0 source (`tty.zig:437`). Task tail-s6 had first kept it faithful. Listed in `docs/ghostty-bug-fixes.md`.
+- parity row(s):   none; found by task tail-s6's sweep of PORT NOTEs.
+- test:          none runnable here: the key table is inside Windows-only code that is not plain data, so no cross-platform test reaches it (controller ruling: mark Windows run pending).
+- proposed fix:    `0x76 => Key.f7`.
+- upstream status: not reported
+
+### UD246 — libvaxis's `Loop.stop` waits forever when the terminal does not answer a status report
+- kind:            deadlock (a TUI that never exits)
+- upstream project: libvaxis
+- severity:        low (the host terminal must not answer `ESC[5n`)
+- reference:       `zig-pkg/vaxis-0.6.0-BWNV_CrbCQCscGpzsAlR402rYQ_tV3aAl081c2iRRkka/src/Loop.zig:63-75` (`stop`: set `should_quit`, write `deviceStatusReport`, then `thread.await`), the reader at :174-176 (`read_loop: while (!self.should_quit) { const n = try self.tty.read(...)`), `Vaxis.zig:1209-1212` (`ESC[5n`); callers `src/cli/list_themes.zig:308` (`defer loop.stop()`) and vxfw `App.zig:58` (`defer loop.stop()`, used by `src/cli/boo.zig`), at 20abdb50a
+- defect:          the reader thread is blocked in a blocking `read` of the tty. `stop` wakes it only by asking the terminal for a device status report and relying on the reply to make `read` return; it then waits for the thread with no timeout. A terminal that does not answer `ESC[5n` never unblocks the read, so `stop` never returns.
+- ReleaseSafe:     the TUI hangs when it exits, until more input reaches the tty (a keypress makes the `read` return and the reader sees `should_quit`). By reading at the pin; MEASURED on the port, whose loop is a faithful port: `crates/rustty-cli/tests/boo_pty_e2e.rs` arm B suppresses only the `ESC[0n` reply and the process is still alive 4.4 s after Escape, against 0.04 s to exit with the reply (`crates/rustty-cli/src/boo.rs:26-33`).
+- ReleaseFast:     same.
+- reachability:    the host terminal: running a Ghostty CLI TUI in a terminal or pty harness that does not implement DSR 5 (every mainstream terminal does). Any later input unblocks the read, so the hang ends at the next keypress.
+- port handling:   fixed (R13; controller ruling in task S-6b): `crates/rustty-vaxis/src/loop_.rs`. `Loop::start` creates a close-on-exec wake pipe; the read thread (`tty_run`, POSIX arm) waits with `select` on the tty and the pipe's read end before each blocking `read`, and returns when the pipe is readable. `Loop::stop` still sets `should_quit` and writes the reference's `ESC[5n` first, then waits up to `STOP_DSR_GRACE` (1 s) for the read thread to end; only if it has not does it write one byte to the pipe; then it joins and closes the pipe. So a terminal that answers within the grace shuts down exactly as in the reference (the reader reads the `ESC[0n`), and one that never answers makes `stop` return after about 1 s instead of never. `select`, not `poll`: macOS `poll` reports `POLLNVAL` for `/dev/tty` (MEASURED 2026-09-24 with a pty child opening `/dev/tty`: `poll` revents 32, `select` works); the first version used `poll` and the reader still blocked. An fd at or above `FD_SETSIZE` keeps the reference's plain blocking read. The Windows arm (`ReadConsoleInputW`) is unchanged. A terminal that answers more than 1 s late (a slow remote link, for example) has its `ESC[0n` left on the tty for the next program, usually the shell, where the reference would have waited for it; this is the cost of any bounded wait. `EINTR` retries the `select` itself (task S-6c, review n3), so the loop condition is tested only where the reference tests it. The wait and the grace are the helpers `wait_tty_or_wake` and `wake_reader_after_grace` since task S-6c. PORT NOTEs: reference defect (R13) at the field, `start`, `stop`, the helpers and the read loop. Task tail-s6 had first kept it faithful. Listed in `docs/ghostty-bug-fixes.md`.
+- parity row(s):   none; the port's `boo_pty_e2e` KAT used the hang as its negative control and now measures the bounded stop.
+- test:            Unit (not ignored, task S-6c): `loop_::stop_wake_tests::a_terminal_that_never_answers_is_woken_after_the_grace` runs `wait_tty_or_wake` on a thread over a pipe standing in for a terminal that never answers, calls `wake_reader_after_grace` with a 200 ms grace, and asserts it used the pipe and the reader ended within 5 s; `a_terminal_that_answers_ends_the_read_without_the_wake` writes `ESC[0n` and asserts the pipe is not used. Negative control (macOS, task S-6c, run alone, `wake_reader_after_grace` not writing the pipe, i.e. the reference's plain wait): fails `the reader is still blocked 5 s after the wake: stop would hang (UD246)`. (`tty_run` returns at once in test builds, as the reference's does, so the unit tests drive the helpers.) KAT (manual, `#[ignore]`d, no CI lane runs it): `crates/rustty-cli/tests/boo_pty_e2e.rs` (`#[ignore]`d for runtime; run with `--ignored` after `cargo build -p rustty --bin rustty`). Arm A (harness answers `ESC[5n`): exits 0 with `ELAPSED_AFTER_QUIT < 0.5` s (measured 0.018 s), so an answering terminal is not delayed by the grace. Arm B, renamed `boo_without_dsr_reply_exits_after_the_grace` (reply suppressed): exits 0 with `ELAPSED_AFTER_QUIT >= 0.9` s (measured 1.011 s) and at least 10 frames, which shows the wake pipe ended the read. Negative control (macOS, task S-6b, arm B run alone with `loop_.rs` reverted to the reference behaviour and the binary rebuilt): FAILS `with the ESC[5n reply suppressed +boo did not exit` (`EXITED=0`, still alive 4.402 s after ESC). Re-run after merging `tail-s10b` (the port's move to libvaxis 0.6.0, whose `Loop` this fix is applied to; the defect is verified in the pin's 0.6.0 source, `Loop.zig:63-75`): the fixed tree passes both arms 3 of 3 (arm B 1.003-1.049 s, arm A 0.024-0.052 s), and the reverted tree fails arm B the same way (4.397 s). `.port/tools/boo_pty_kat.py`'s docstring notes the change.
+- proposed fix:    have the reader thread wait on the tty together with a self-pipe that `stop` writes to (with `select` or kqueue on macOS, where `poll` does not support `/dev/tty`), instead of relying only on the terminal's reply; the port keeps the reply as the first wake and uses the pipe after a grace.
+- upstream status: not reported
+
+### UD247 — `pkg/opengl` `Program.createVF` leaks its shader objects when compilation fails, and the program when linking fails
+- kind:            leak
+- upstream project: ghostty
+- severity:        low (a driver-side compile or link failure)
+- reference:       `pkg/opengl/Program.zig:29-44` (`createVF`), reached from `src/renderer/opengl/Pipeline.zig:42` for every pipeline, including custom shaders, at 20abdb50a
+- defect:          each `defer x.destroy()` is registered only after that shader's `try setSourceAndCompile` succeeds, so a vertex-shader compile failure leaks `vs`, and a fragment-shader failure leaks `fs`. There is no `errdefer p.destroy()`, so a failing `attachShader` or `link` leaks the program object. By reading.
+- ReleaseSafe:     no crash; GL shader and program objects leak in the GL context, once per failing pipeline creation.
+- ReleaseFast:     same.
+- reachability:    a GLSL shader that glslang accepts but the GL driver fails to compile or link (a driver limit or bug), for example a custom shader recompiled on each config reload. Whether a real driver rejects a shader glslang accepted is UNVERIFIED. The objects belong to the surface's GL context and go away with it.
+- port handling:   fixed (R13; controller ruling in task S-6b): `crates/rustty-renderer/src/opengl/gl/program.rs` `Program::create_vf` destroys `vs` when its compile fails, `fs` when its compile fails, and the program when an attach or the link fails; the success path is unchanged (PORT NOTE: reference defect (R13) above the function). **GL lane / Linux run pending**: the `opengl` module is compiled only for Linux and FreeBSD, and this host has no GL context. Checked here only by a temporary, reverted macOS build of the module (the target-gated `gl`/`khronos-egl` deps and `pub mod opengl` enabled for macOS, the build-generated GLSL stubbed): `cargo check --tests` and `cargo clippy --all-targets -D warnings` of rustty-renderer were clean. Task tail-s6 had first kept it faithful. Listed in `docs/ghostty-bug-fixes.md`.
+- parity row(s):   none; found by task tail-s6's sweep of PORT NOTEs.
+- test:          `opengl::gl::program::create_vf_leak_tests::create_vf_failures_leave_no_shader_or_program_behind` (live GL, `test_support::offscreen_gl`, so it runs on the Ubuntu GL lane under `RUSTTY_REQUIRE_GL=1` and does not exist on macOS): records the shader and program names GL reports live (`glIsShader` / `glIsProgram` over 1..=512), checks a valid pair links and its destroy restores that set, then asserts a vertex compile failure, a fragment compile failure and a link failure (a fragment input no vertex stage writes) each leave it unchanged. NOT RUN (no GL lane in task S-6b); its negative control (the reference's error paths) is pending with it.
+- proposed fix:    register `defer vs.destroy()` / `defer fs.destroy()` right after each `Shader.create`, and add `errdefer p.destroy()` after `create()`.
+- upstream status: not reported
+
+### UD248 — synthetic bold and italic faces compute the regular face's size and then ignore it
+- kind:            latent (a comment the code contradicts; unobservable at the pin)
+- upstream project: ghostty
+- severity:        low
+- reference:       `src/font/Collection.zig:480-484` (`syntheticBold`) and `:505-509` (`syntheticItalic`), at 20abdb50a
+- defect:          both functions say "Inherit size from regular; it may be different than opts.size due to scaling adjustments", build `face_opts` with `face_opts.size = regular.size`, and then pass `opts.faceOptions()` instead of `face_opts` to `regular.syntheticBold` / `syntheticItalic`, so the synthetic face gets the collection's size, not the regular face's.
+- ReleaseSafe:     none at the pin: `completeStyles` synthesizes only from style faces discovered before any fallback is added, and those are added with `size_adjustment = .none` (`src/font/SharedGridSet.zig:208`, `:239`), so their scale factor is 1 and `regular.size` equals the collection's size (by reading `Collection.add`, `:113-150`, and `scaleFactor`, `:593-599`). A synthetic face would get the wrong size only if a scaled face were ever synthesized from.
+- ReleaseFast:     same.
+- reachability:    none today.
+- port handling:   faithful: `crates/rustty-font-shaper/src/collection.rs` keeps the dead `face_opts` in both functions with PORT NOTEs (`let _ = face_opts;`). Decided by task tail-s6: unobservable, so not changed.
+- parity row(s):   none; found by task tail-s6's sweep of PORT NOTEs.
+- test:            n/a (record only).
+- proposed fix:    pass `face_opts` to `syntheticBold` / `syntheticItalic`, or delete it and the comment.
+- upstream status: not reported
+
+### UD249 — libvaxis `Key.matchShiftedCodepoint` clears the lock modifiers on a copy it never reads
+- kind:            latent (a dead store; unobservable in Ghostty)
+- upstream project: libvaxis
+- severity:        low
+- reference:       `zig-pkg/vaxis-0.6.0-BWNV_CrbCQCscGpzsAlR402rYQ_tV3aAl081c2iRRkka/src/Key.zig:90-101`, the vaxis version Ghostty pins at 20abdb50a
+- defect:          the function builds `tgt_mods` from the caller's `mods` with `caps_lock` and `num_lock` cleared, then compares `self_mods` against the original `mods` (`std.meta.eql(self_mods, mods)`), so a pattern that names a lock modifier can never match a shifted codepoint. By reading.
+- ReleaseSafe:     none in Ghostty: its TUIs never pass a lock modifier in a pattern (`src/cli/list_themes.zig:449-530`, `src/cli/boo.zig:59-60`); the event's own lock bits are cleared on `self_mods`, as intended.
+- ReleaseFast:     same.
+- reachability:    a libvaxis application that matches a shifted key with `caps_lock` or `num_lock` set in the pattern. None in Ghostty.
+- port handling:   faithful: `crates/rustty-vaxis/src/key.rs` `Key::match_shifted_codepoint` keeps the dead store with a PORT NOTE. Decided by task tail-s6: unobservable in the product.
+- parity row(s):   none; found by task tail-s6's sweep of PORT NOTEs.
+- test:            n/a (record only).
+- proposed fix:    compare against `tgt_mods`: `std.meta.eql(self_mods, tgt_mods)`.
+- upstream status: not reported
+
+### UD250 — `pkg/opengl` `Framebuffer.bind` saves the draw binding whatever target it binds, and `present` binds the read target
+- kind:            latent (unobservable where Ghostty calls it)
+- upstream project: ghostty
+- severity:        low
+- reference:       `pkg/opengl/Framebuffer.zig:23-31` (`bind` queries `GL_FRAMEBUFFER_BINDING`, the draw binding, for every target) and `:66-71` (`unbind` restores that value on the bound target); caller `src/renderer/OpenGL.zig:312` (`present`: `target.framebuffer.bind(.read)`), at 20abdb50a
+- defect:          binding `.read` saves the DRAW framebuffer name and `unbind` then writes it to the READ target, so after `present` the read binding is whatever the draw binding was, not what it was before.
+- ReleaseSafe:     no visible effect expected: whenever the read and draw bindings are the same framebuffer before `present`, the restored value is the right one. That they are the same on every apprt and driver is UNVERIFIED (by reading; not measured on a driver). The other callers (`src/renderer/opengl/Target.zig:45`, `Pipeline.zig:53`, `RenderPass.zig:72,74`) bind `.framebuffer`, where the two coincide.
+- ReleaseFast:     same.
+- reachability:    none known.
+- port handling:   faithful: `crates/rustty-renderer/src/opengl/gl/framebuffer.rs` `Framebuffer::bind`, and the port's `present` binds `Target::READ` as the reference does (`crates/rustty-renderer/src/opengl/opengl_impl.rs`). Task tail-s6 corrected the PORT NOTE there, which said every reference caller binds `.framebuffer`: `present` binds `.read`.
+- parity row(s):   none; found by task tail-s6's sweep of PORT NOTEs.
+- test:            n/a (record only).
+- proposed fix:    query `GL_READ_FRAMEBUFFER_BINDING` for `.read` and `GL_DRAW_FRAMEBUFFER_BINDING` for `.draw` (and `.framebuffer`).
+- upstream status: not reported
+
+### UD251 — the OpenGL `Pipeline.deinit` destroys the program but not the framebuffer and vertex array it created
+- kind:            leak
+- upstream project: ghostty
+- severity:        low (two GL object names per pipeline, per shader rebuild)
+- reference:       `src/renderer/opengl/Pipeline.zig:40-70` (`init` creates `program`, `fbo` at :51 and `vao` at :56, each with an `errdefer ... destroy()`) and `:72-74` (`deinit` destroys only `program`); callers `src/renderer/opengl/shaders.zig:137-153` (`Shaders.deinit`), which `src/renderer/generic.zig:1695-1699` runs when `reinitialize_shaders` is set, i.e. after a config change of the blending mode (`:2106-2112`) or of the custom shaders (`:2118-2119`), at 20abdb50a
+- defect:          `init` owns three GL objects, as its errdefers show, but `deinit` releases one. Every time the shaders are rebuilt in the same GL context, each old pipeline's framebuffer and vertex array names stay allocated.
+- ReleaseSafe:     no crash; GL objects leak in the surface's GL context on each rebuild. By reading; not measured on a driver.
+- ReleaseFast:     same.
+- reachability:    config reload on the OpenGL renderer (Linux, FreeBSD): changing `alpha-blending` or `custom-shader`. The objects go away when the surface's GL context is destroyed.
+- port handling:   fixed (R13; controller ruling in task S-6b): `crates/rustty-renderer/src/opengl/pipeline.rs` `Pipeline::deinit` destroys `vao` and `fbo` after the program (PORT NOTE: reference defect (R13) at `deinit`). **GL lane / Linux run pending**; checked here only by the same temporary macOS build as UD247 (`cargo check --tests`, `cargo clippy --all-targets -D warnings` clean). Task tail-s6 had first kept it faithful. Listed in `docs/ghostty-bug-fixes.md`.
+- parity row(s):   none; found by task tail-s6's sweep of PORT NOTEs.
+- test:          `opengl::pipeline::deinit_leak_tests::deinit_releases_the_framebuffer_and_vertex_array` (live GL, runs on the Ubuntu GL lane): builds a pipeline from a minimal valid shader pair, asserts `glIsFramebuffer`/`glIsVertexArray` are true for its names, calls `deinit`, and asserts the program, framebuffer and vertex array are all gone. NOT RUN (no GL lane in task S-6b); its negative control (the reference's program-only `deinit`) is pending with it.
+- proposed fix:    destroy `fbo` and `vao` in `deinit` as well (after the program, the reverse of `init`'s order).
+- upstream status: not reported
+
+### UD252 — libvaxis's read loop carries a partial sequence one byte too far and then parses only the new bytes
+- kind:            crash (safety-checked trap) / undefined behaviour; and non-crash (input lost or garbled)
+- upstream project: libvaxis
+- severity:        low (tty input to a CLI TUI)
+- reference:       `zig-pkg/vaxis-0.6.0-BWNV_CrbCQCscGpzsAlR402rYQ_tV3aAl081c2iRRkka/src/Loop.zig:172-196` (`_ttyRun`: `var buf: [1024]u8`, `read_start`; `const n = try self.tty.read(buf[read_start..])` at :176; `parser.parse(buf[seq_start..n], ...)` at :179; the carry and `read_start = seq_start - initial_start + 1` at :181-188), the libvaxis version the pin's `build.zig.zon` names (20abdb50a)
+- defect:          when the parser needs more input (`result.n == 0`) the loop copies the unparsed tail to the front of `buf` ("copy the read to the beginning") and sets `read_start` to ONE PAST the carried length. The next `read` fills `buf[read_start..]` and returns `n`, the count of NEW bytes, and parsing then covers `buf[0..n]`: the carried bytes, one stale byte, and only the first `n - carried - 1` new ones. Two consequences. (1) A sequence split across two reads is parsed with a stale byte in it and its last bytes cut off, so the key or report is lost or garbled. (2) A full 1024-byte read that is all one unfinished sequence (the parser answers `n: 0` for an OSC, DCS or APC until its terminator arrives) carries 1024 bytes and sets `read_start = 1025`, and the next `buf[read_start..]` is out of range. By reading the pinned source; measured on the port's line-for-line translation (see test).
+- ReleaseSafe:     (2) panics on the slice ("index out of bounds") on the TUI's read thread and the process aborts; (1) no crash, lost or garbled input.
+- ReleaseFast:     (2) undefined behaviour (a slice start past the end); (1) the same as ReleaseSafe.
+- reachability:    tty input to a libvaxis TUI (`+list-themes`, `+boo`): a key or report sequence that the kernel delivers in two reads (a slow link, or a large paste), or more than 1 KiB inside an unterminated `ESC ]` / `ESC P` / `ESC _` from the terminal or pasted by the user.
+- port handling:   fixed (R13; controller ruling in task S-6c): `crates/rustty-vaxis/src/loop_.rs` `ReadCarry` (the pair `buf` / `read_start`) with `read_buf` (where the next read goes) and `process` (the reference's inner parse loop): it parses the carried bytes plus the new ones (`buf[0..read_start + n]`) and carries exactly the unparsed tail (`read_start = carried`). A carried sequence that fills the whole buffer cannot grow, so it is dropped (`read_start = 0`) and parsing restarts with the next read: its bytes are lost and the rest of that sequence is parsed as ordinary input, where the reference crashes. The parser itself answers a UTF-8 character split between reads with U+FFFD rather than asking for more (measured in the port's test; not changed here). PORT NOTE: reference defect (R13) at `ReadCarry` and the read loop. The Windows arm has no carry and is unchanged. Listed in `docs/ghostty-bug-fixes.md`.
+- parity row(s):   none; found by the review of task S-6 (item 6.2).
+- test:            `loop_::read_carry_tests::a_sequence_split_across_reads_parses_whole` (an Up arrow split after `ESC[`, and Ctrl+Up split inside its parameters, each followed by a letter: every key arrives) and `a_full_buffer_of_one_unfinished_osc_does_not_panic` (1024 bytes of an unterminated OSC, then its end, then `ESC[A`: no panic, the buffer is whole again, and the Up key arrives). Negative control (macOS, task S-6c, each run alone, `process` given the reference's arithmetic: parse `[0..n]`, `read_start = carried + 1`): the first fails `left: [], right: [57352, 98]` (the Up key and the `b` after it lost), the second panics `range start index 1025 out of range for slice of length 1024`.
+- proposed fix:    set `read_start = seq_start - initial_start` (no `+ 1`) and parse `buf[seq_start..read_start + n]` on the next pass (or keep a separate `end = read_start + n`); decide what to do when a partial sequence fills the whole buffer (grow the buffer, or drop the sequence) instead of slicing past it.
 - upstream status: not reported
 
 ### UD260 — libvaxis's grapheme start is the re-encoded length of U+FFFD back from the cursor: an invalid byte that starts a cluster underflows or re-includes the bytes before it

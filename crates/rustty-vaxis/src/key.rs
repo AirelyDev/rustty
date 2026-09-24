@@ -201,7 +201,8 @@ impl Key<'_> {
         self_mods.num_lock = false;
         // PORT NOTE (faithful quirk): Zig clears caps_lock/num_lock on `tgt_mods` here
         // but then compares `self_mods` against the ORIGINAL `mods` (not `tgt_mods`).
-        // Reproduced exactly — this is a real asymmetry, not a bug to "fix".
+        // Reproduced exactly — this is a real asymmetry, not a bug to "fix"
+        // (unobservable in the CLI TUIs; UPSTREAM-DEFECTS.md UD249).
         let mut tgt_mods = mods;
         tgt_mods.caps_lock = false;
         tgt_mods.num_lock = false;
