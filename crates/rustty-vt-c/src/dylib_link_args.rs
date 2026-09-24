@@ -12,9 +12,12 @@
 ///   ("Preserve compatibility with the initial public ABI") and
 ///   `-headerpad_max_install_names` ("Leave room for packaging tools to
 ///   rewrite install names"), `GhosttyLibVt.zig:420-437`. The install name is
-///   left as cargo sets it (`@rpath/librustty_vt_c.dylib`) so the build tree
-///   keeps working; the CMake install renames the file and rewrites the
-///   install name to `@rpath/librustty-vt.dylib`.
+///   left as cargo sets it, the ABSOLUTE path of the linked file (measured with
+///   `otool -D`: `<target>/<profile>/deps/librustty_vt_c.dylib`), so build-tree
+///   consumers keep resolving it; the CMake install renames the file and
+///   rewrites the install name to `@rpath/librustty-vt.dylib` (the reference's
+///   `-install_name`). CORRECTION (review T-B): this said cargo sets
+///   `@rpath/librustty_vt_c.dylib`.
 /// - ELF (S64-F5): the soname `librustty-vt.so.<X>` (Zig's
 ///   `libghostty-vt.so.<X>`), only when `RUSTTY_VT_SONAME` asks for it. The
 ///   CMake build sets it and links the build-tree name; a plain `cargo build`
