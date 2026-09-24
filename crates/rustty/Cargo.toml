@@ -107,6 +107,19 @@ sentry = ["rustty-apprt/sentry"]
 # one is not silently portable, so `G-FEATMATRIX` exercises it on Linux only.
 flatpak = ["gtk", "rustty-apprt/flatpak"]
 snap = ["rustty-build-config/snap"]
+# `-Dfont-backend=<tag>` (`src/build/Config.zig:191-195`), passed through to
+# `rustty-build-config`, which owns the option (at most one; the per-target
+# default when none is set — see its Cargo.toml). The option swaps types in the
+# font shaper tier, which reads it from build-config's `links` metadata, so no
+# second switch is needed here. `rustty-build-config` refuses a backend the port
+# cannot build on the target (e.g. a CoreText backend off macOS).
+font-backend-freetype = ["rustty-build-config/font-backend-freetype"]
+font-backend-freetype-windows = ["rustty-build-config/font-backend-freetype-windows"]
+font-backend-fontconfig-freetype = ["rustty-build-config/font-backend-fontconfig-freetype"]
+font-backend-coretext = ["rustty-build-config/font-backend-coretext"]
+font-backend-coretext-freetype = ["rustty-build-config/font-backend-coretext-freetype"]
+font-backend-coretext-harfbuzz = ["rustty-build-config/font-backend-coretext-harfbuzz"]
+font-backend-coretext-noshape = ["rustty-build-config/font-backend-coretext-noshape"]
 
 [dependencies]
 # Entry points fan out only: cli, apprt, core.
