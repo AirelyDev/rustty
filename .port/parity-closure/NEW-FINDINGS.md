@@ -3332,7 +3332,10 @@ copies (`crates/rustty-vt/src/color.rs` `parse_int_u8` / `parse_unsigned_u8`,
 `rustty_args::std_fmt`, should become ONE port in a shared crate at the lowest layer (below rustty-vt)
 that every crate calls, with `std_fmt`'s std-table tests moved with it.
 
-**state**: OPEN, for the rustty-vt consolidation only. The rustty-config part is done.
+**state**: CLOSED (task tail-s9, 2026-09-23): one port, in `rustty_zigstd::fmt`; see N150's closing entry for
+the comparison, the moves and the test merge. The rustty-config part was done by T-C3; tail-s9 moved rustty-config
+(including the `u21` hex parser, now `parse_int_type(IntType::unsigned(21), .., 16)`), rustty-args, rustty-cli and
+rustty-vt onto `rustty_zigstd::fmt` and deleted `rustty_args::std_fmt`.
 
 ## N121 — five `+show-face` error lines print a Rust Debug value where the reference prints `error.<Name>`
 
@@ -3479,9 +3482,70 @@ N120), which records that the copies should be merged "into a single crate at th
 and now of `rustty-font` and `rustty-font-shaper`). After both tasks merge there are two full
 ports (`rustty_args::std_fmt`, `rustty_zigstd::fmt`) plus rustty-vt's partial copies.
 
-**state**: OPEN. The N120 follow-up can move `rustty-args` and `rustty-config` onto
+**state (before tail-s9)**: OPEN. The N120 follow-up can move `rustty-args` and `rustty-config` onto
 `rustty_zigstd::fmt` (or the reverse) and delete the other copy; the two were written
 independently, so their test sets should be merged, not just one kept.
+
+**Closed by task tail-s9 (2026-09-23)** (N120 too). ONE port of `std.fmt.parseInt` /
+`parseUnsigned` / `parseFloat` remains: `crates/rustty-zigstd/src/fmt.rs`.
+
+- **Copies found** (workspace-wide search for `parseInt` / `parseUnsigned` / `parseFloat` /
+  `charToDigit` ports): `rustty_args::std_fmt` (full), `rustty_zigstd::fmt` (full),
+  `crates/rustty-vt/src/zig_parse_int.rs` (integers, any width through a runtime `IntType`),
+  `crates/rustty-vt/src/color.rs` (`parse_int_u8`, `parse_unsigned_u8`, `parse_unsigned_u16`,
+  `parse_int_u8_with_sign`, `char_to_digit`), `crates/rustty-config/src/value_types.rs`
+  `parse_int_u21_base16`. Callers already on a shared port: rustty-input, rustty-font,
+  rustty-font-shaper (zigstd); rustty-config and rustty-cli (args).
+- **Not merged (they are not ports of the std function, or not faithful ones; changing them is a
+  behaviour change, outside this structural task)**: `crates/rustty-os/src/uri.rs`
+  `parse_int_u16` / `parse_int_u8_hex` (Rust `str::parse` / `from_str_radix` standing in for
+  `std.fmt.parseInt(u16, s, 10)` / `(u8, s, 16)`: by reading, both reject the `_` separators and
+  the `-0` that Zig accepts; rustty-os is also T-G's area), and `crates/rustty-vaxis/src/cell.rs`
+  `parse_unsigned_u8` / `char_to_digit` and `crates/rustty-vaxis/src/parser.rs` `parse_unsigned`
+  (libvaxis's `std.fmt.parseUnsigned` calls; no `_` handling). UNVERIFIED whether any of their
+  inputs can carry `_`. `osc/parsers/kitty_desktop_notification.rs` (OSC 99) and
+  `context_signal.rs` use Rust's parser after the reference's own `_` / digits-only filter, which
+  leaves no input on which the two grammars differ; `kitty/dnd_command.rs` `parse_unsigned` ports
+  a reference helper, not the std function.
+- **Comparison** (MEASURED): each port run against Zig 0.16.0 over a fresh probe of 3120 integer
+  inputs x 22 types (`u1 u2 u4 u7 u8 u9 u16 u21 u32 u64 usize i1 i2 i3 i4 i5 i8 i16 i32 i43 i64
+  isize`, each port on the types it supports) x bases 0/2/8/10/16/36 x `parseInt`/`parseUnsigned`
+  (823,680 Zig results), and 1138 float inputs x f32/f64 bit patterns; the inputs include the union
+  of the three ports' tables, the zigstd corpora, signs, `_` placement, prefixes, overflow before a
+  bad character, non-ASCII bytes, hex floats, special values and subnormals. **No port differed
+  from Zig on any input, and so no two ports differed in value.** The differences were in reach and
+  in the tests: only the rustty-vt copy handled Zig's odd widths (so zigstd and args skipped the
+  `i1`/`i2`/`i4`/`i5`/`i43`/`u1`/`u2`/`u7` std-table rows); zigstd lacked nothing args had; args'
+  parseFloat table asserted `is_err()` where Zig says `expectError(error.InvalidCharacter, ..)`;
+  zigstd's compared `approxEqAbs` in `f64` where Zig compares in `T`. A harness negative control
+  (Accumulate width = result width; the `many_digits` sticky bit dropped) produced 10,287 and 1
+  mismatches, so the probe detects both. Probe and harness: task tail-s9 report.
+- **Fix**: `rustty_zigstd::fmt` keeps its float grammar and takes rustty-vt's arbitrary-width
+  integer core (`IntType`, `parse_int_type`, `parse_unsigned_type`; `parse_int::<T>` /
+  `parse_unsigned::<T>` for native `T`, `isize` included). Deleted: `rustty_args::std_fmt`, the
+  rustty-vt `zig_parse_int.rs` parser (the file is now `protocol_int.rs` with only the UD141
+  `reject_digit_separators` filter, unchanged, still called first at every protocol site), the
+  `color.rs` copies, the config `u21` copy. Callers (rustty-args `args.rs`, rustty-config
+  `value_types.rs`, rustty-cli `new_tab.rs` / `ssh_cache/entry.rs`, and 12 rustty-vt files) call
+  `rustty_zigstd::fmt`; rustty-args and rustty-cli gained a `rustty-zigstd` edge (a leaf over
+  `rustty-util`; `check_acyclic.sh` and `cargo_cycle_check.py` GREEN).
+- **Tests**: the zigstd copy of Zig's tables is the one kept, now with the odd-width rows (so
+  `test parseInt` and `test parseUnsigned` are ported in full) and `approxEqAbs` over `T`. Moved
+  into it: args' `parse_int_sign_and_separator_edges`, `parse_int_overflows_before_a_later_bad_character`,
+  `hex_many_digits_sticky_bit_rounds_up`; rustty-vt's `digit_separators_and_accumulate_width`;
+  `color.rs`'s `parse_unsigned_u8_base10_zig_semantics`, `parse_unsigned_u16_base16_zig_semantics`.
+  Removed as duplicates (twin in `crates/rustty-zigstd/src/fmt/tests.rs`): args `std_parse_int`
+  (`test_parse_int`), `std_parse_unsigned` (`test_parse_unsigned`), `std_parse_u64_digit_too_big`
+  (`test_parse_u64_digit_too_big`), `std_parse_unsigned_comptime` (`test_parse_unsigned_comptime`),
+  `std_parse_float_f32` + `std_parse_float_f64` (`test_parse_float` + `nan_and_inf`),
+  `std_largest_normals` (`largest_normals`), `std_hex_special` (`hex_special`), `std_hex_zero`
+  (`hex_zero`), `std_hex_f32` (`hex_f32`), `std_hex_f64` (`hex_f64`), `std_many_digits_hex`
+  (`many_digits_hex`); rustty-vt `std_fmt_parse_int_table` (`test_parse_int`),
+  `std_fmt_parse_unsigned_table` (`test_parse_unsigned`). Every caller's own tests are unchanged.
+- **Perf**: see the task tail-s9 report (`#[inline]` on the integer core cost `+terminal-parser`
+  about 10% through a codegen-unit reshuffle and was dropped; PERF(port) note in `fmt.rs`).
+
+**state**: CLOSED (task tail-s9).
 
 ## N151 — CoreText keeps naming a font after a variation instance of the same data was built
 
