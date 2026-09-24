@@ -2607,7 +2607,7 @@ where
                     resources_dir: crate::global_state()
                         .resources_dir
                         .host()
-                        .map(|v| v.as_bytes().to_vec()),
+                        .map(<[u8]>::to_vec),
                     term: config.term.clone(),
                     rt_pre_exec_info: termio::command::RtPreExecInfo::init(config),
                     rt_post_fork_info: termio::command::RtPostForkInfo::init(config),

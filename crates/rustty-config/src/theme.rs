@@ -59,7 +59,7 @@ pub fn set_resources_dir(dir: ResourcesDir) -> Result<(), ResourcesDir> {
 /// Read the process-global resources directory's `app()` path, or `None` if the
 /// seam is unset or the dir has no app path. Equivalent to the reference's
 /// `global_state.resources_dir.app()`.
-fn resources_dir_app() -> Option<String> {
+fn resources_dir_app() -> Option<Vec<u8>> {
     // WS14 T6 (wasm32 arm): no resources directory exists in a browser — the same
     // "seam unset" state the doc comment above already describes as valid.
     #[cfg(target_family = "wasm")]
@@ -68,7 +68,9 @@ fn resources_dir_app() -> Option<String> {
     }
     #[cfg(not(target_family = "wasm"))]
     {
-        RESOURCES_DIR.get().and_then(|d| d.app().map(String::from))
+        RESOURCES_DIR
+            .get()
+            .and_then(|d| d.app().map(<[u8]>::to_vec))
     }
 }
 
@@ -189,7 +191,7 @@ impl Location {
             // }),
             Location::Resources => {
                 let app = resources_dir_app()?;
-                Some(join(&[app.as_bytes(), b"themes"]))
+                Some(join(&[&app, b"themes"]))
             }
         }
     }
