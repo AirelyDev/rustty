@@ -21,8 +21,15 @@ Conservative by design (catches drops, tolerates retargeting/light adaptation):
     Between MISS and THRESHOLD it is reported as REVIEW (soft) but not RED, to
     avoid false positives on reworded comments.
 
+Deliberately-not-carried comments (no Rust counterpart by a recorded decision;
+stripped gag prose) are excused ONLY by a validated row of
+`.port/parity-closure/COMMENT-NOT-CARRIED.tsv` and are printed as NOT-CARRIED —
+see the NOT-CARRIED LEDGER section below and `_g3b_not_carried.py`.
+
 Usage: check_comment_coverage.py --crate <name> [--strict] [--self-test]
-Exit 0 = GREEN/REVIEW-only ; 1 = RED (dropped reference comment) ; 2 = usage/blocked.
+       check_comment_coverage.py --not-carried-check   (every ledger row, stale check included)
+Exit 0 = GREEN/REVIEW-only ; 1 = RED (dropped reference comment or invalid ledger
+row) ; 2 = usage/blocked.
 """
 import argparse, os, re, sys, difflib, bisect, glob as _glob
 from collections import Counter
@@ -30,6 +37,7 @@ from collections import Counter
 GATES = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, GATES)
 import _gatelib as G  # noqa: E402
+import _g3b_not_carried as NC  # noqa: E402  (S-8d NOT-CARRIED ledger)
 
 # NOT env-overridable, deliberately. This used to be
 # `os.environ.get("GHOSTTY_SRC", ...)`, which is a spoof hole of exactly the
@@ -54,72 +62,6 @@ import census_comments as CC  # noqa: E402  (reuse string-aware find_comment_sta
 THRESHOLD = 0.80
 MISS = 0.62
 WORD_RE = re.compile(r"[a-z0-9_]{2,}")
-
-# R4 RELOCATIONS (parity tail S-8b, 2026-09-24). The crate map (tests-summary.json
-# `crate_map`, the Phase-0 PORT_PLAN partition) assigns each reference file to ONE
-# crate, but R4 cycle breaks moved some files' ports into a DIFFERENT crate. A
-# whole-crate run then compared those reference comments against the wrong port
-# tree and reported them MISSING even where the port carries them verbatim (the
-# DEFERRALS "main_c.zig (3t) re-homed ..." row called that "EXPECTED"; it made
-# `--crate bin` 146-missing noise that hid the real drops).
-#
-# Each entry names the reference file (relative to GHOSTTY_SRC) and the EXACT Rust
-# files (relative to the rustty root) that port it. Their comments are ADDED to
-# the port pool of the crate that owns the reference file — no threshold changes,
-# no whole-crate widening: only the named files, which are the real port sites.
-# A comment genuinely dropped from the relocated port is still MISSING. Every
-# target must exist (BLOCKED otherwise), so a stale entry cannot silently turn
-# into a no-op, and --self-test exercises both arms.
-RELOCATED_PORTS = {
-    # bin (`crates/rustty`): the non-exe artifact roots live in their own crates.
-    # lib_vt.zig: the librustty-vt root — the C-lib root/panic/log sink in vt-c,
-    # the Zig-module public API in rustty-vt's crate root (ADV-FIX 6).
-    "lib_vt.zig": [
-        "crates/rustty-vt-c/src/lib.rs",
-        "crates/rustty-vt-c/src/panic.rs",
-        "crates/rustty-vt-c/src/sys.rs",
-        "crates/rustty-vt/src/lib.rs",
-    ],
-    # main_c.zig: the C API hub, re-homed to rustty-apprt-c (ADV-FIX 6).
-    "main_c.zig": ["crates/rustty-apprt-c/src/lib.rs"],
-    # main_ghostty.zig: `logFn`/`std_options` moved to the core wiring tier (the
-    # lib root re-uses them too); the rest stays in the bin's main_rustty.rs.
-    "main_ghostty.zig": ["crates/rustty-core/src/logging.rs"],
-    # main_gen.zig / main_wasm.zig / main_build_data.zig: separate artifacts.
-    "main_gen.zig": ["crates/rustty-synthetic/src/main_gen.rs"],
-    "main_wasm.zig": ["crates/rustty-wasm/src/lib.rs"],
-    "main_build_data.zig": ["xtask/src/main_build_data.rs"],
-    # renderer: Thread.zig's run loop lives in core (it names configpkg and core's
-    # App.Mailbox, both cycles from rustty-renderer); backend.zig's `Backend` enum
-    # is defined in build-config (break #3).
-    "renderer/Thread.zig": ["crates/rustty-core/src/renderer_seam.rs"],
-    "renderer/backend.zig": ["crates/rustty-build-config/src/renderer.rs"],
-    # apprt: embedded.zig's `CAPI` block (the libghostty C exports + their extern
-    # structs) lives in the rustty-apprt-c top-sink crate (vt-c precedent,
-    # EMBEDDED_BLUEPRINT §3); the GTK build helpers blueprint.zig/gresource.zig
-    # are the crate's build script, outside `src/`.
-    "apprt/embedded.zig": [
-        "crates/rustty-apprt-c/src/lib.rs",
-        "crates/rustty-apprt-c/src/capi.rs",
-    ],
-    "apprt/gtk/build/blueprint.zig": ["crates/rustty-apprt/build.rs"],
-    "apprt/gtk/build/gresource.zig": ["crates/rustty-apprt/build.rs"],
-}
-
-
-def relocated_port_files(ref_rels, relocations=None):
-    """Absolute port files that R4 relocations add for these reference files.
-    Raises FileNotFoundError naming a relocation target that does not exist."""
-    relocations = RELOCATED_PORTS if relocations is None else relocations
-    out = []
-    for rel in ref_rels:
-        for p in relocations.get(rel, ()):
-            full = os.path.join(G.RUSTTY_ROOT, p)
-            if not os.path.isfile(full):
-                raise FileNotFoundError(f"relocation target for {rel!r} does not exist: {p!r}")
-            if full not in out:
-                out.append(full)
-    return out
 
 
 def load_idmap():
@@ -161,86 +103,52 @@ def words(t):
     return WORD_RE.findall(t)
 
 
-def comment_bodies(path):
+def comment_bodies_text(text):
+    """Comment bodies per line of `text` (split on "\\n" exactly as iterating
+    the file did; the text was read with universal newlines)."""
     out = []
-    try:
-        for line in open(path, encoding="utf-8", errors="replace"):
-            idx = CC.find_comment_start(line)
-            if idx is None:
-                continue
-            body = line[idx:].rstrip("\n")
-            if body.strip():
-                out.append(body)
-    except OSError:
-        pass
+    lines = text.split("\n")
+    for line in [ln + "\n" for ln in lines[:-1]] + ([lines[-1]] if lines[-1] else []):
+        idx = CC.find_comment_start(line)
+        if idx is None:
+            continue
+        body = line[idx:].rstrip("\n")
+        if body.strip():
+            out.append(body)
     return out
+
+
+def comment_bodies(path):
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            return comment_bodies_text(fh.read())
+    except OSError:
+        return []
 
 
 def crate_ref_files(crate, cm):
     return [os.path.join(GHOSTTY_SRC, f) for f, _ in cm[crate]["files"]]
 
 
-def _rs_under(path):
-    """Every .rs file at/under `path` (a directory or a single .rs file)."""
-    if os.path.isfile(path):
-        return [path] if path.endswith(".rs") else []
-    out = []
-    for root, _, files in os.walk(path):
-        for fn in files:
-            if fn.endswith(".rs"):
-                out.append(os.path.join(root, fn))
-    return out
+def crate_rust_sources(crate):
+    """(path, text) for the crate's OWN src/ only (no relocations)."""
+    return list(G.iter_rust_sources(crate, relocations={}))
 
 
-def crate_rust_files(crate):
-    d = G.crate_src_dir(crate)
-    if not d or not os.path.isdir(d):
-        return []
-    return _rs_under(d)
-
-
-# R4 RELOCATIONS (S-8a, 2026-09-24). The crate map partitions the ORACLE files
-# by crate key, but R4 moved some of those files' ports into a DIFFERENT crate
-# (to break a dependency cycle or honour a layering decision). The crate's own
-# `src/` then lacks the port and every comment of the relocated file reads as a
-# MISSING drop that was never dropped: `--crate font` reported 1767 of its 1795
-# MISSING against code living in `rustty-font-shaper`, `--crate input` all 68
-# against `rustty-vt/src/input/`. Each entry below names the EXACT extra port
-# location (never a whole foreign crate when a subtree suffices) plus the
-# decision that put it there. The comparison then runs against the crate's own
-# `src/` PLUS these paths: the same logic, the correct port side.
-#
-# A reference comment still has to appear in the port that implements it, so
-# this admits no comment the crate's port does not carry. A listed path that
-# does not exist is BLOCKED (exit 2), never a silent fall-back (a vanished
-# relocation would otherwise hide that the port moved again).
-EXTRA_PORT_PATHS = {
-    # D1 three-tier font split (memory `apc-glyf-font-layering-d1`): the
-    # shaper/backend-face tier of src/font/ (face*, shape/shaper*, Collection,
-    # CodepointResolver, DeferredFace, discovery, SharedGrid*, library, backend
-    # and the main.zig glue) lives ABOVE rustty-vt in rustty-font-shaper.
-    "font": ["crates/rustty-font-shaper/src"],
-    # The VT slice of src/input/ (function_keys.zig, kitty.zig and the VT
-    # halves of key_mods.zig/config.zig) is owned by rustty-vt (see the
-    # ownership doc in crates/rustty-input/src/lib.rs).
-    "input": ["crates/rustty-vt/src/input"],
-    # config/key.zig's `Key` enum and `Value` fn are ported with the `Config`
-    # struct they reflect over (rustty-cfg-fmt stays a near-leaf, R4 break #6).
-    "cfg-fmt": ["crates/rustty-config/src/config_struct.rs"],
-}
-
-
-def crate_port_files(crate, extra=None):
-    """The port side for `crate`: its own src/ plus its R4 relocations.
-    Raises FileNotFoundError naming a relocation path that does not exist."""
-    extra = EXTRA_PORT_PATHS if extra is None else extra
-    out = crate_rust_files(crate)
-    for rel in extra.get(crate, []):
-        full = rel if os.path.isabs(rel) else os.path.join(G.RUSTTY_ROOT, rel)
-        if not os.path.exists(full):
-            raise FileNotFoundError(full)
-        out += _rs_under(full)
-    return out
+# R4 RELOCATIONS. The map lives in `_gatelib.RELOCATIONS`: S-8a introduced it
+# here as `EXTRA_PORT_PATHS`, and S-8c hoisted it so that every crate-scanning
+# gate honours the same entries. Before the map, `--crate font` reported 1767
+# of its 1795 MISSING against code living in `rustty-font-shaper`, and
+# `--crate input` reported all 68 against `rustty-vt/src/input/`. The
+# comparison runs against the crate's own `src/` PLUS the relocated locations:
+# the same logic, the correct port side. A reference comment still has to
+# appear in the port that implements it, so a relocation admits no comment the
+# crate's port does not carry. A listed path or item that does not exist is
+# BLOCKED (exit 2), never a silent fall-back.
+def crate_port_sources(crate, relocations=None):
+    """(path, text) for the port side of `crate`: its own src/ plus its R4
+    relocations. Raises G.RelocationMissing for a stale relocation."""
+    return list(G.iter_rust_sources(crate, relocations))
 
 
 def classify(ref_norm, port_norm):
@@ -406,27 +314,19 @@ def run(args):
         )
         return 2
 
-    overall_red = 0
+    nc = not_carried_setup()
+    if nc is None:
+        return 2
+    overall_red = 1 if nc["errors"] else 0
     skipped = []
     for crate in crates:
         if scope_port is not None:
-            rust_files = scope_port
+            rust_sources = [(f, None) for f in scope_port]
         else:
             try:
-                rust_files = crate_port_files(crate)
-            except FileNotFoundError as e:
-                print(f"BLOCKED: R4 relocation path for [{crate}] does not exist: "
-                      f"{e} (EXTRA_PORT_PATHS is stale)", file=sys.stderr)
-                return 2
-            # R4 relocations: add the named port files of this crate's reference
-            # files that were ported into another crate (see RELOCATED_PORTS).
-            try:
-                for p in relocated_port_files([f for f, _ in cm[crate]["files"]]):
-                    if p not in rust_files:
-                        rust_files.append(p)
-            except FileNotFoundError as e:
-                print(f"BLOCKED: {e} (a stale RELOCATED_PORTS entry would be a "
-                      f"silent no-op, so this is a hard error).", file=sys.stderr)
+                rust_sources = crate_port_sources(crate)
+            except G.RelocationMissing as e:
+                print(f"BLOCKED: {e}", file=sys.stderr)
                 return 2
         # only meaningful for crates that have been ported (non-stub).
         # H5 fix: unified done-detection via _gatelib.is_claimed_done — the same
@@ -462,13 +362,17 @@ def run(args):
         # dedupe identical reference comments
         ref_norm = sorted(set(ref_norm))
         port_norm = []
-        for f in rust_files:
-            for b in comment_bodies(f):
+        for f, text in rust_sources:
+            for b in (comment_bodies(f) if text is None else comment_bodies_text(text)):
                 port_norm.append(norm(b, idmap))
 
         missing, review = classify(ref_norm, port_norm)
+        missing, review, nc_red = not_carried_apply(
+            nc, crate, cm, idmap, missing, review, port_norm,
+            scope_ref if scope_ref is not None else crate_ref_files(crate, cm))
+        overall_red |= nc_red
 
-        if not rust_files:
+        if not rust_sources:
             print(f"G3b [{crate}]: no ported Rust yet (progress)")
             continue
         print(f"G3b [{crate}]: distinctive ref comments={len(ref_norm)} "
@@ -491,7 +395,8 @@ def run(args):
               "--crate <name> to include a skipped crate.")
 
     if overall_red:
-        G.emit(G.RED, "dropped reference comment(s) — see MISSING above (R1 violation)")
+        G.emit(G.RED, "dropped reference comment(s) or an invalid NOT-CARRIED row — see "
+               "MISSING / NOT-CARRIED-INVALID above (R1 violation)")
         return 1
     G.emit(G.GREEN, "every distinctive reference comment has a match in the port (G3b)")
     return 0
@@ -514,7 +419,8 @@ def self_test():
             missing.append(rc)
     ok = missing == ["returns a circular buffer containing type t"]
     print(f"self-test: dropped-comment detected = {ok} (missing={missing})")
-    return 0 if (ok and self_test_relocations() == 0 and self_test_relocated_ports()) else 1
+    reloc_ok = self_test_relocations() == 0 and self_test_relocated_ports()
+    return 0 if (ok and reloc_ok and self_test_not_carried()) else 1
 
 
 # One REAL reference comment per R4 relocation: (crate, oracle file, the
@@ -551,24 +457,49 @@ def self_test_relocations():
                norm("// This comment moved with the relocated port code", idmap),
                norm("// A comment the port genuinely dropped on the floor", idmap)]
 
-        def port(files):
-            return [norm(b, idmap) for f in files for b in comment_bodies(f)]
+        # `demo-s8c` has no crates/ dir, so its own src/ is empty; the `own`
+        # directory stands in for it as a first relocation entry.
+        crate = "demo-s8c"
 
-        m_own, _ = classify(ref, port(_rs_under(own)))
-        m_all, _ = classify(ref, port(_rs_under(own) + _rs_under(moved)))
+        def port(entries):
+            return [norm(b, idmap) for _f, t in
+                    crate_port_sources(crate, {crate: entries})
+                    for b in comment_bodies_text(t)]
+
+        m_own, _ = classify(ref, port(({"path": own},)))
+        m_all, _ = classify(ref, port(({"path": own}, {"path": moved})))
         arm1 = sorted(m_own) == sorted([ref[1], ref[2]]) and m_all == [ref[2]]
         print(f"self-test: relocation covers the moved comment, drop still caught "
               f"= {arm1} (own-only missing={len(m_own)}, with relocation={m_all})")
         ok &= arm1
 
-        # (2) A relocation path that does not exist raises (BLOCKED in run()).
-        try:
-            crate_port_files("font", {"font": [os.path.join(td, "gone")]})
-            arm2 = False
-        except FileNotFoundError:
-            arm2 = True
-        print(f"self-test: missing relocation path is an error = {arm2}")
-        ok &= arm2
+        # (1b) An item-scoped relocation covers only its items' comments: the
+        # moved comment sits OUTSIDE the named item and stays MISSING.
+        with open(os.path.join(moved, "c.rs"), "w") as fh:
+            fh.write("// zebra quartz banjo lighthouse mercury volcano outside\n\n"
+                     "/// a comment inside the relocated item stays covered\n"
+                     "pub mod kept {}\n")
+        ref_items = [norm("// zebra quartz banjo lighthouse mercury volcano outside", idmap),
+                     norm("/// a comment inside the relocated item stays covered", idmap)]
+        m_items, _ = classify(ref_items, port(
+            ({"path": os.path.join(moved, "c.rs"), "items": (r"^pub mod kept\b",)},)))
+        arm1b = m_items == [ref_items[0]]
+        print(f"self-test: item-scoped relocation covers only the item = {arm1b} "
+              f"(missing={m_items})")
+        ok &= arm1b
+
+        # (2) A relocation path (or item) that does not exist raises
+        # RelocationMissing (BLOCKED, exit 2, in run()).
+        for label, entry in (("path", {"path": os.path.join(td, "gone")}),
+                             ("item", {"path": os.path.join(moved, "c.rs"),
+                                       "items": (r"^pub mod gone\b",)})):
+            try:
+                crate_port_sources(crate, {crate: (entry,)})
+                arm2 = False
+            except G.RelocationMissing:
+                arm2 = True
+            print(f"self-test: missing relocation {label} is an error = {arm2}")
+            ok &= arm2
 
     # (3) Real tree: every mapped path exists, and each real row is MISSING
     # without its relocation and covered with it.
@@ -578,13 +509,14 @@ def self_test_relocations():
         in_oracle = any(norm(b, idmap) == rc for b in
                         comment_bodies(os.path.join(GHOSTTY_SRC, ref_file)))
         try:
-            with_files = crate_port_files(crate)
-        except FileNotFoundError as e:
-            print(f"self-test: [{crate}] relocation path missing: {e}")
+            with_sources = crate_port_sources(crate)
+        except G.RelocationMissing as e:
+            print(f"self-test: [{crate}] relocation missing: {e}")
             ok = False
             continue
-        own_norm = [norm(b, idmap) for f in crate_rust_files(crate) for b in comment_bodies(f)]
-        all_norm = [norm(b, idmap) for f in with_files for b in comment_bodies(f)]
+        own_norm = [norm(b, idmap) for _f, t in crate_rust_sources(crate)
+                    for b in comment_bodies_text(t)]
+        all_norm = [norm(b, idmap) for _f, t in with_sources for b in comment_bodies_text(t)]
         before, _ = classify([rc], own_norm)
         after, _ = classify([rc], all_norm)
         arm3 = in_oracle and before == [rc] and after == []
@@ -596,46 +528,56 @@ def self_test_relocations():
 
 
 def self_test_relocated_ports():
-    """RELOCATED_PORTS arms: (1) a comment ported only into the relocation target
-    is covered WITH the entry and MISSING without it (the entry is what covers it,
-    and it adds only the named file); (2) a comment dropped from the relocated port
-    stays MISSING with the entry; (3) a nonexistent target raises (BLOCKED, never a
-    silent no-op); (4) every real entry names a reference file the crate map knows
-    and targets that exist."""
+    """Per-reference-file relocation arms (S-8b's RELOCATED_PORTS, now the
+    `ref`-carrying entries of `_gatelib.RELOCATIONS`): (1) a comment ported only
+    into the relocation target is covered WITH the entry and MISSING without it
+    (the entry is what covers it, and it adds only the named file); (2) a comment
+    dropped from the relocated port stays MISSING with the entry; (3) a
+    nonexistent target raises (BLOCKED, never a silent no-op); (4) every real
+    `ref` entry names a reference file the crate map assigns to THAT crate, and
+    every target exists."""
     import tempfile
     idmap = [("ghostty", "rustty")]
     kept = "this is the main file for the c api used to embed ghostty"
     dropped = "some comptime assertions that our c api depends on here"
+    crate = "demo-s8c"  # no crates/ dir: its own src/ is empty
     with tempfile.TemporaryDirectory() as d:
         tgt = os.path.join(d, "relocated.rs")
+        other = os.path.join(d, "other.rs")
         with open(tgt, "w", encoding="utf-8") as fh:
             fh.write("// This is the main file for the C API used to embed rustty\nfn f() {}\n")
-        reloc = {"main_c.zig": [tgt]}
+        with open(other, "w", encoding="utf-8") as fh:
+            fh.write("// an unrelated file that no entry names\n")
+        reloc = {crate: ({"ref": "main_c.zig", "path": tgt},)}
 
-        def verdict(rc, ports):
+        def verdict(rc, sources):
             nrc = norm(rc, idmap)
-            pool = [norm(b, idmap) for p in ports for b in comment_bodies(p)]
+            pool = [norm(b, idmap) for _p, t in sources for b in comment_bodies_text(t)]
             if nrc in " \n ".join(pool):
                 return "covered"
             best = max((difflib.SequenceMatcher(None, nrc, pc).ratio() for pc in pool),
                        default=0.0)
             return "missing" if best < MISS else "covered"
 
-        with_entry = relocated_port_files(["main_c.zig"], reloc)
-        a1 = (with_entry == [tgt] and verdict(kept, with_entry) == "covered"
-              and verdict(kept, relocated_port_files(["main_c.zig"], {})) == "missing"
-              and relocated_port_files(["lib_vt.zig"], reloc) == [])
+        with_entry = crate_port_sources(crate, reloc)
+        a1 = ([p for p, _t in with_entry] == [tgt] and verdict(kept, with_entry) == "covered"
+              and verdict(kept, crate_port_sources(crate, {})) == "missing")
         a2 = verdict(dropped, with_entry) == "missing"
         try:
-            relocated_port_files(["main_c.zig"], {"main_c.zig": [os.path.join(d, "nope.rs")]})
+            crate_port_sources(crate, {crate: ({"ref": "main_c.zig",
+                                                "path": os.path.join(d, "nope.rs")},)})
             a3 = False
-        except FileNotFoundError:
+        except G.RelocationMissing:
             a3 = True
     try:
         known = G.file_to_crate()
-        a4 = (all(k in known for k in RELOCATED_PORTS)
-              and len(relocated_port_files(list(RELOCATED_PORTS))) > 0)
-    except FileNotFoundError as e:
+        ref_entries = [(c, e) for c, es in G.RELOCATIONS.items() for e in es if "ref" in e]
+        a4 = (len(ref_entries) > 0
+              and all(known.get(e["ref"]) == c for c, e in ref_entries)
+              and all(os.path.isfile(os.path.join(G.RUSTTY_ROOT, e["path"]))
+                      for _c, e in ref_entries))
+        G.check_relocations()
+    except G.RelocationMissing as e:
         print(f"self-test: {e}")
         a4 = False
     ok = a1 and a2 and a3 and a4
@@ -644,14 +586,504 @@ def self_test_relocated_ports():
     return ok
 
 
+# ===========================================================================
+# NOT-CARRIED LEDGER (parity tail S-8d, 2026-09-24) — kept in its own section.
+#
+# `.port/parity-closure/COMMENT-NOT-CARRIED.tsv` declares reference comments
+# that are deliberately not carried (code with no Rust counterpart by a
+# recorded decision; stripped gag prose). The rules, and why each is
+# machine-checked, are in `_g3b_not_carried.py`'s module doc. Three properties
+# matter here:
+#   * an invalid row is RED and excuses nothing;
+#   * a row the port now carries (STALE) is RED;
+#   * an excused comment is PRINTED as `NOT-CARRIED (<class>)`, never hidden.
+# ===========================================================================
+def _distinctive(body, idmap=None):
+    idmap = load_idmap() if idmap is None else idmap
+    return len(words(norm(body, idmap))) >= 5 and not CC.is_ascii_diagram(strip_marker(body))
+
+
+def _nc_port_pool(crate, idmap):
+    """The crate's normalized port comments, exactly as `run` builds them: its
+    own src/ plus its `_gatelib.RELOCATIONS` entries (no second mechanism)."""
+    return [norm(b, idmap) for f, text in crate_port_sources(crate)
+            for b in (comment_bodies(f) if text is None else comment_bodies_text(text))]
+
+
+def not_carried_setup(path=None, read_oracle=None, blobs=None):
+    """Load and validate the ledger. Returns {"rows", "errors"}, or None when
+    it is BLOCKED (missing file, missing cap directive, malformed row, or an
+    unreadable oracle): the caller exits 2, never a pass."""
+    path = path or NC.ledger_path(G.RUSTTY_ROOT)
+    try:
+        rows, cap = NC.load(path)
+        if rows is None:
+            print(f"BLOCKED: the NOT-CARRIED ledger {path} does not exist.", file=sys.stderr)
+            return None
+        if cap is None:
+            print(f"BLOCKED: {path} carries no `#!not-carried-cap entries=N` directive.",
+                  file=sys.stderr)
+            return None
+        read_oracle = read_oracle or NC.oracle_reader_at_pin(G)
+        idmap = load_idmap()
+        if blobs is None:
+            blobs = NC.workspace_rust_items(G.RUSTTY_ROOT, G)
+        errors = NC.validate(rows, cap, root=G.RUSTTY_ROOT, G=G, CC=CC,
+                             strip_marker=strip_marker, norm=norm, idmap=idmap,
+                             distinctive=lambda b: _distinctive(b, idmap),
+                             read_oracle=read_oracle, blobs=blobs)
+    except NC.LedgerError as e:
+        print(f"BLOCKED: NOT-CARRIED ledger: {e}", file=sys.stderr)
+        return None
+    for e in errors:
+        print(f"NOT-CARRIED-INVALID: {e}")
+    return {"rows": rows, "errors": errors}
+
+
+def not_carried_apply(nc, crate, cm, idmap, missing, review, port_norm, ref_files):
+    """Apply the ledger rows of these reference files to one crate's result.
+    Returns (missing, review, red)."""
+    rels = {os.path.relpath(f, GHOSTTY_SRC) for f in ref_files}
+    rows = [r for r in nc["rows"] if r["file"] in rels]
+    if not rows:
+        return missing, review, 0
+    red = 0
+    ok_rows = [r for r in rows if r.get("ok")]
+    for r in NC.stale_rows(ok_rows, classify, port_norm):
+        print(f"NOT-CARRIED-INVALID: COMMENT-NOT-CARRIED.tsv:{r['lineno']} "
+              f"({r['file']}:{r['line']}): STALE — the port now carries this comment; "
+              f"delete the row")
+        r["ok"] = False
+        red = 1
+    for r in NC.mixed_unproven(ok_rows, norm, idmap, port_norm):
+        print(f"NOT-CARRIED-INVALID: COMMENT-NOT-CARRIED.tsv:{r['lineno']} "
+              f"({r['file']}:{r['line']}): its MIXED-CARRIED phrase is not in the port's "
+              f"comments — the line's fact is not carried")
+        r["ok"] = False
+        red = 1
+    ref_lines = []
+    for f in ref_files:
+        try:
+            ref_lines.append((os.path.relpath(f, GHOSTTY_SRC),
+                              open(f, encoding="utf-8", errors="replace").read().split("\n")))
+        except OSError:
+            pass
+    occ = NC.occurrences(ref_lines, norm, idmap, lambda b: _distinctive(b, idmap), CC)
+    missing, review, applied = NC.apply(rows, occ, missing, review)
+    for r, was in sorted(applied, key=lambda a: (a[0]["file"], a[0]["line"])):
+        print(f"    NOT-CARRIED ({r['class']}, was {was}): {r['file']}:{r['line']} "
+              f"{r['text'][:90]}")
+    if applied:
+        print(f"    ({len(applied)} reference comment(s) excused by "
+              f"COMMENT-NOT-CARRIED.tsv; each row is validated above)")
+    return missing, review, red
+
+
+_NC_ORACLE = """const std = @import("std");
+
+/// The frobnicator exists only for the widget build on plan nine.
+pub const Frob = struct {
+    // Only the plan nine linker needs this particular frob here.
+    x: u8,
+};
+
+// Honestly this whole thing is a silly waste of everybody's time.
+const y = 1;
+// The ratio is 42 and the buffer must stay aligned to that.
+const z = 2;
+// Pull in the wibble module so its exports get emitted here.
+_ = @import("wibble.zig");
+// short one
+/// Get the mutable frob. Not recommended for anyone at all really.
+pub fn getMut(self: *Frob) *Frob {
+    return self;
+}
+
+pub fn handler(self: *Frob) void {
+    const priv = self;
+    // We will check the flag again in each handler later on, fine.
+    _ = priv;
+}
+""".split("\n")
+
+
+def _nc_line(text):
+    return next(i for i, ln in enumerate(_NC_ORACLE, 1) if text in ln)
+
+
+_NC_P4 = """# fake phase-4
+| item | verdict |
+|---|---|
+| `Frob` and `Frob.getMut` in `lib_vt.zig` | **NON-PORT** synthetic row for the self-test |
+| `Frob` with no oracle file named | NON-PORT naming no file |
+| ~~`Struck`~~ `Frob` in lib_vt.zig | struck long ago |
+| `Other` in lib_vt.zig | NON-PORT naming something else |
+| dup-needle `Frob` lib_vt.zig one |
+| dup-needle `Frob` lib_vt.zig two |
+
+Paragraph anchor for `Frob` in lib_vt.zig: a decision record.
+RESOLVED: all of the above is now PORTED.
+
+## big section naming Frob in lib_vt.zig
+""" + "".join(f"line {i} of a long section\n" for i in range(40))
+
+_NC_P3 = """# fake phase-3
+
+# gag lines (`strip-ghostty-gag-prose`)
+
+- `lib_vt.zig:9`: a joke.
+- `lib_vt.zig:23`: a mixed line.
+
+# rule-only section (`strip-ghostty-gag-prose`)
+
+Mentions the rule, lists no line.
+
+# unrelated section
+
+Nothing here names the rule.
+"""
+
+
+def self_test_not_carried():
+    """NOT-CARRIED ledger arms (S-8d, hardened S-8e): every acceptance and
+    rejection rule, first on synthetic rows (a fake oracle file, fake evidence
+    docs, fake Rust blobs), then on the REAL ledger and REAL oracle/port —
+    including the S-8d review's attacks A-1..A-3 planted verbatim, and negative
+    controls that mutate a real row and must flip it RED for the stated reason."""
+    import shutil
+    import tempfile
+    ok = True
+    idmap = load_idmap()
+    dist = lambda b: _distinctive(b, idmap)  # noqa: E731
+
+    def check(name, cond):
+        nonlocal ok
+        ok &= bool(cond)
+        print(f"  [{'ok ' if cond else 'FAIL'}] not-carried: {name}")
+
+    with tempfile.TemporaryDirectory() as root:
+        for rel, body in ((".port/phase-4/NON_PORTS.md", _NC_P4),
+                          (".port/phase-3/NON_PORTS.md", _NC_P3)):
+            os.makedirs(os.path.join(root, os.path.dirname(rel)), exist_ok=True)
+            with open(os.path.join(root, rel), "w", encoding="utf-8") as fh:
+                fh.write(body)
+        reader = lambda rel: _NC_ORACLE if rel == "lib_vt.zig" else None  # noqa: E731
+        P4 = ".port/phase-4/NON_PORTS.md#| `Frob` and"
+        P3 = ".port/phase-3/NON_PORTS.md## gag lines"
+        REASON = "synthetic self-test row with a sufficiently long reason"
+
+        def row(text, cls, decl, ev, reason=REASON, file="lib_vt.zig"):
+            ln = _nc_line(text)
+            return {"file": file, "line": ln, "class": cls, "decl": decl,
+                    "evidence": ev, "text": text, "reason": reason, "lineno": ln}
+
+        A = row("The frobnicator exists only for the widget build on plan nine.",
+                "no-counterpart", "Frob", P4)
+        B = row("Only the plan nine linker needs this particular frob here.",
+                "no-counterpart", "Frob", P4)
+        C = row("Honestly this whole thing is a silly waste of everybody's time.",
+                "gag-prose", "-", P3)
+        D = row("Pull in the wibble module so its exports get emitted here.",
+                "no-counterpart", "wibble", P4)
+        E = row("Get the mutable frob. Not recommended for anyone at all really.",
+                "no-counterpart", "Frob.getMut", P4)
+        TXT = "We will check the flag again in each handler later on, fine."
+        clean = [("crates/x/src/lib.rs", "fn unrelated() {}\nimpl Other { fn get_mut() {} }\n",
+                  ["/// an unrelated doc"])]
+
+        def v(rows, cap="n", blobs=clean):
+            rows = [dict(r) for r in rows]
+            errs = NC.validate(rows, len(rows) if cap == "n" else cap, root=root, G=G,
+                               CC=CC, strip_marker=strip_marker, norm=norm, idmap=idmap,
+                               distinctive=dist, read_oracle=reader, blobs=blobs)
+            return errs, rows
+
+        def red(rows, needle, **kw):
+            errs, _ = v(rows, **kw)
+            return any(needle in e for e in errs)
+
+        errs, rows = v([A, B, C, E])
+        check("ACCEPT: valid no-counterpart (doc above / inside span / qualified) and gag "
+              f"rows prove themselves (errors={errs})",
+              not errs and all(r["ok"] for r in rows))
+        check("REJECT: cap below the row count", red([A, B], "cap mismatch", cap=1))
+        check("REJECT: cap above the row count (stale ratchet)", red([A], "cap mismatch", cap=2))
+        check("REJECT: missing cap directive", red([A], "BLOCKED", cap=None))
+        check("REJECT: text differs from the oracle line (stale in oracle)",
+              red([dict(A, text=A["text"] + " x")], "STALE"))
+        check("REJECT: row points at a non-distinctive comment",
+              red([dict(C, line=_nc_line("// short one"), text="short one")], "not distinctive"))
+        check("REJECT: unknown class", red([dict(A, **{"class": "because"})], "unknown class"))
+        check("REJECT: reason too short", red([dict(A, reason="trust me")], "reason"))
+        check("REJECT: oracle file not in the crate map",
+              red([dict(A, file="nope/nope.zig")], "crate map"))
+        check("REJECT: oracle file absent at the pin",
+              red([dict(A, file="main_c.zig")], "does not exist at the pin"))
+        check("REJECT: duplicate row", red([A, dict(A)], "duplicate"))
+        # `std` is declared at :1, above the comment and with no block, and the
+        # code after :9 never names it.
+        check("REJECT: comment not attached to decl",
+              red([dict(C, **{"class": "no-counterpart", "decl": "std", "evidence": P4})],
+                  "not attached"))
+        # W1 — the review's A-1 shape: a local binding / keyword as decl.
+        a1 = row(TXT, "no-counterpart", "priv", P4)
+        check("REJECT (W1, A-1 synthetic): decl `priv` (a local binding) is denylisted",
+              red([a1], "keyword or a common local name"))
+        for kw_ in ("orelse", "comptime", "errdefer", "try", "self", "alloc"):
+            check(f"REJECT (W1): decl `{kw_}` is denylisted",
+                  red([dict(a1, decl=kw_)], "keyword or a common local name"))
+        check("REJECT (W1): a used-but-not-declared identifier (`wibble`) is not a decl",
+              red([D], "not DECLARED"))
+        check("REJECT: declared decl has a Rust ITEM anywhere in the workspace",
+              red([A], "HAS a Rust counterpart",
+                  blobs=clean + [("crates/y/src/f.rs", "pub struct Frob;", [])]))
+        check("REJECT (W1): declared decl has a Rust FIELD of that name",
+              red([A], "HAS a Rust counterpart",
+                  blobs=clean + [("crates/y/src/f.rs", "struct S {\n    pub frob: u8,\n}", [])]))
+        check("REJECT (W1, renamed counterpart): a `///` doc cites the decl",
+              red([A], "doc/PORTS citation",
+                  blobs=clean + [("crates/y/src/f.rs", "pub const BASE: u8 = 1;",
+                                  ["/// `lib_vt.zig:4` `Frob` — the renamed port"])]))
+        check("REJECT (W1, renamed counterpart): a `// PORTS:` comment cites the decl",
+              red([A], "doc/PORTS citation",
+                  blobs=clean + [("crates/y/src/f.rs", "", ["    // PORTS: `Frob` (lib_vt.zig:4)"])]))
+        check("ACCEPT: a declared decl merely USED in Rust code (not an item) does not count",
+              not v([A], blobs=clean + [("crates/y/src/f.rs", "let x = frob + 1;", [])])[0])
+        check("REJECT: qualified member declared inside `impl Container`",
+              red([E], "HAS a Rust counterpart",
+                  blobs=clean + [("crates/y/src/f.rs", "impl Frob { pub fn get_mut(&self) {} }", [])]))
+        check("REJECT: evidence doc outside the allowed records",
+              red([dict(A, evidence="README.md#Frob")], "not an allowed record"))
+        check("REJECT: evidence needle not found",
+              red([dict(A, evidence=".port/phase-4/NON_PORTS.md#no such needle")], "not found"))
+        check("REJECT (W4): an ambiguous evidence needle",
+              red([dict(A, evidence=".port/phase-4/NON_PORTS.md#dup-needle")], "ambiguous"))
+        check("REJECT: evidence record does not name the decl",
+              red([dict(A, evidence=".port/phase-4/NON_PORTS.md#| `Other`")], "does not name"))
+        check("REJECT (W1): evidence record does not name the ORACLE FILE",
+              red([dict(A, evidence=".port/phase-4/NON_PORTS.md#no oracle file named")],
+                  "does not name the oracle file"))
+        check("REJECT: struck evidence record cannot vote",
+              red([dict(A, evidence=".port/phase-4/NON_PORTS.md#| ~~`Struck`~~")], "struck"))
+        check("REJECT (W3, A-3 synthetic): RESOLVED/PORTED in the record BODY cannot vote",
+              red([dict(A, evidence=".port/phase-4/NON_PORTS.md#Paragraph anchor for")], "struck"))
+        check("REJECT (W4): a heading needle whose record exceeds the size cap",
+              red([dict(A, evidence=".port/phase-4/NON_PORTS.md### big section")],
+                  f"> {NC.RECORD_MAX_LINES}"))
+        check("REJECT: gag evidence record that does not name the rule",
+              red([dict(C, evidence=".port/phase-3/NON_PORTS.md## unrelated section")],
+                  "does not name strip-ghostty-gag-prose"))
+        check("REJECT (W2, A-2 synthetic): gag evidence that names the rule but not this line",
+              red([dict(C, evidence=".port/phase-3/NON_PORTS.md## rule-only section")],
+                  "does not list this line"))
+        check("REJECT: gag row with a decl", red([dict(C, decl="Frob")], "carry decl"))
+        g_tech = row(TXT, "gag-prose", "-", P3)
+        check("REJECT (W2): gag text with technical words (flag, handler)",
+              red([g_tech], "technical word"))
+        mixed_ok = dict(g_tech, reason='MIXED-CARRIED: "we check the flag in each handler" ' + REASON)
+        mixed_short = dict(g_tech, reason='MIXED-CARRIED: "we check the flag again" ' + REASON)
+        check("ACCEPT (W2): a MIXED-CARRIED gag row whose phrase carries the technical words",
+              not v([mixed_ok])[0])
+        check("REJECT (W2): a MIXED-CARRIED phrase missing a technical word",
+              red([mixed_short], "does not carry"))
+        _, mrows = v([mixed_ok])
+        pool_with = [norm("// we check the flag in each handler", idmap)]
+        check("REJECT (W2): MIXED-CARRIED phrase absent from the port pool is unproven; "
+              "present, it is proven",
+              NC.mixed_unproven(mrows, norm, idmap, ["unrelated"]) == mrows
+              and NC.mixed_unproven(mrows, norm, idmap, pool_with) == [])
+        for bad_text, why in (("The ratio is 42 and the buffer must stay aligned to that.", "digit"),
+                              ("this uses the frob_count thing badly", "snake_case"),
+                              ("this uses the frobCount thing badly", "camelCase"),
+                              ("this uses `frob` thing badly today", "backtick"),
+                              ("this returns EINTR way too often honestly", "ALL-CAPS")):
+            check(f"REJECT: gag text containing a {why} (technical content)",
+                  any(why.split("_")[0] in e or why in e
+                      for e in NC.gag_violations(bad_text, REASON)))
+        check("REJECT (W2): gag text using a word of the surrounding oracle code",
+              any("technical word" in e for e in
+                  NC.gag_violations("that frobnicator is silly", REASON, {"frobnicator"})))
+        check("ACCEPT: gag text with only allowlisted capitals (NOTE, XDG, GNOME)",
+              not NC.gag_violations("NOTE(someone): XDG and GNOME are a mess", REASON))
+        long = " ".join(["word"] * (NC.GAG_MAX_WORDS + 1))
+        check("REJECT: gag text over the word limit",
+              any("longer than" in e for e in NC.gag_violations(long, REASON)))
+        check("ACCEPT: over the limit with a JUSTIFIED-LONG: reason",
+              not NC.gag_violations(long, "JUSTIFIED-LONG: " + REASON))
+
+        # apply(): excuse only on ok rows, only when every occurrence is covered.
+        _, vrows = v([A, C])
+        occ = NC.occurrences([("lib_vt.zig", _NC_ORACLE)], norm, idmap, dist, CC)
+        nA, nC = vrows[0]["norm"], vrows[1]["norm"]
+        other = norm("// The ratio is 42 and the buffer must stay aligned to that.", idmap)
+        m2, r2, applied = NC.apply(vrows, occ, [nA, other], [(nC, 0.7)])
+        check("APPLY: a valid row excuses its MISSING and REVIEW comment; others stay",
+              m2 == [other] and r2 == [] and len(applied) == 2)
+        bad = [dict(r, ok=False) for r in vrows]
+        m2, r2, applied = NC.apply(bad, occ, [nA], [(nC, 0.7)])
+        check("APPLY: an invalid row excuses nothing", m2 == [nA] and len(r2) == 1 and not applied)
+        occ2 = {k: set(s) for k, s in occ.items()}
+        occ2[nA].add(("main_c.zig", 999))
+        m2, _, applied = NC.apply(vrows, occ2, [nA], [])
+        check("APPLY: a text that also occurs at an uncovered site stays MISSING",
+              m2 == [nA] and not applied)
+        check("STALE: a row whose comment the port pool now carries is stale",
+              NC.stale_rows(vrows[:1], classify, [nA]) == vrows[:1]
+              and NC.stale_rows(vrows[:1], classify, ["unrelated port comment text here"]) == [])
+
+    # ---- REAL rows: the committed ledger against the real oracle and workspace.
+    try:
+        rows, cap = NC.load(NC.ledger_path(G.RUSTTY_ROOT))
+        reader = NC.oracle_reader_at_pin(G)
+    except NC.LedgerError as e:
+        print(f"  [FAIL] not-carried: real ledger BLOCKED: {e}")
+        return False
+    if rows is None:
+        print("  [FAIL] not-carried: the real ledger is missing")
+        return False
+    blobs = NC.workspace_rust_items(G.RUSTTY_ROOT, G)
+
+    def real(rs, c="n", root=G.RUSTTY_ROOT):
+        rs = [dict(r) for r in rs]
+        return NC.validate(rs, len(rs) if c == "n" else c, root=root, G=G, CC=CC,
+                           strip_marker=strip_marker, norm=norm, idmap=idmap,
+                           distinctive=dist, read_oracle=reader, blobs=blobs), rs
+
+    def oracle_text(f, ln):
+        src = reader(f)[ln - 1]
+        return strip_marker(src[CC.find_comment_start(src):])
+
+    errs, vrows = real(rows, cap)
+    classes = {r["class"] for r in rows}
+    check(f"REAL: all {len(rows)} committed rows prove themselves (errors={len(errs)})",
+          rows and not errs and classes == set(NC.CLASSES))
+    by = {(r["file"], r["line"]): r for r in rows}
+    getmut = by.get(("apprt/gtk/class/config.zig", 94))
+    dll = by.get(("main_c.zig", 179))
+    gag = by.get(("apprt/gtk/winproto/BlurRegion.zig", 58))
+    adwc = by.get(("apprt/gtk/adw_version.zig", 3))
+    if not (getmut and dll and gag and adwc):
+        print("  [FAIL] not-carried: the real control rows are missing from the ledger")
+        return False
+    # The review's attacks, planted verbatim.
+    w883 = {"file": "apprt/gtk/class/window.zig", "line": 883, "class": "no-counterpart",
+            "decl": "priv", "text": oracle_text("apprt/gtk/class/window.zig", 883),
+            "evidence": ".port/parity-closure/ADJUDICATION.md#priv.global_shortcuts.setDbusConnection",
+            "reason": "review attack A-1: a tail-d MISSING comment on ported code", "lineno": 0}
+    check("REAL ATTACK A-1: window.zig:883 declared no-counterpart with decl `priv` is RED",
+          any("keyword or a common local name" in e for e in real([w883])[0]))
+    check("REAL ATTACK A-1': the same row with a non-denylisted used identifier is still RED "
+          "(not declared / evidence names neither it nor window.zig)",
+          any(("not DECLARED" in e) or ("does not name" in e)
+              for e in real([dict(w883, decl="surface_init")])[0]))
+    w882 = {"file": "apprt/gtk/class/window.zig", "line": 882, "class": "gag-prose", "decl": "-",
+            "text": oracle_text("apprt/gtk/class/window.zig", 882),
+            "evidence": ".port/phase-3/NON_PORTS.md#Two upstream bugs that must NOT be reproduced",
+            "reason": "review attack A-2: plain-English technical text as gag prose", "lineno": 0}
+    e882 = real([w882])[0]
+    check("REAL ATTACK A-2: window.zig:882 as gag-prose citing a record that merely mentions "
+          "the rule is RED (the record lists no such line; the text is technical)",
+          any("does not list this line" in e for e in e882)
+          and any("technical word" in e for e in e882))
+    with tempfile.TemporaryDirectory() as troot:
+        for d in NC.EVIDENCE_DOCS:
+            src = os.path.join(G.RUSTTY_ROOT, d)
+            if os.path.exists(src):
+                os.makedirs(os.path.dirname(os.path.join(troot, d)), exist_ok=True)
+                shutil.copy(src, os.path.join(troot, d))
+        clean_ok = not real([adwc], root=troot)[0]
+        p = os.path.join(troot, ".port/phase-2/DEFERRALS.md")
+        txt = open(p, encoding="utf-8").read()
+        anchor = "**AD-3 deletion set — G3b NOT-CARRIED anchor"
+        i = txt.index("\n", txt.index(anchor))
+        with open(p, "w", encoding="utf-8") as fh:
+            fh.write(txt[:i] + "\nRESOLVED: all of the above is now PORTED." + txt[i:])
+        attacked = real([adwc], root=troot)[0]
+        check("REAL ATTACK A-3: RESOLVED appended to the BODY of the AD-3 anchor paragraph "
+              "stops it voting (and the unmodified copy votes)",
+              clean_ok and any("struck" in e for e in attacked))
+    check("REAL NEG (W1 renamed counterpart): adw_version.zig:50 as a `comptime_version` row "
+          "is RED — `BASELINE`'s doc cites it",
+          any("doc/PORTS citation" in e for e in real([dict(
+              adwc, line=50, decl="comptime_version",
+              text=oracle_text("apprt/gtk/adw_version.zig", 50))])[0]))
+    check("REAL NEG (W4): a heading needle on the big `L5 GTK baseline pin (AD-3)` section "
+          "is over the record cap",
+          any(f"> {NC.RECORD_MAX_LINES}" in e for e in real([dict(
+              adwc, evidence=".port/phase-2/DEFERRALS.md### L5 GTK baseline pin (AD-3)")])[0]))
+    check("REAL NEG: mutated text of a real row is STALE",
+          any("STALE" in e for e in real([dict(dll, text=dll["text"] + "!")])[0]))
+    check("REAL NEG: the getMut row unqualified hits `ScreenMap::get_mut` (qualification is "
+          "what proves absence, per Config)",
+          any("HAS a Rust counterpart" in e for e in real([dict(getmut, decl="getMut")])[0]))
+    check("REAL NEG: a real row whose evidence record does not name its decl",
+          any("does not name" in e for e in real([dict(dll, evidence=".port/phase-4/NON_PORTS.md"
+                                                               "#`src/lib/TinyIo.zig`")])[0]))
+    check("REAL NEG: a real row re-pointed at a decl it is not attached to (DllMain's doc "
+          "claimed for `ghostty_string_free`, the fn just above it)",
+          any("not attached" in e for e in real([dict(dll, decl="ghostty_string_free")])[0]))
+    blur59 = dict(gag, line=59, text=oracle_text("apprt/gtk/winproto/BlurRegion.zig", 59))
+    check("REAL NEG: BlurRegion.zig:59 (\"~30% bigger\") can never be gag prose (digit)",
+          any("digit" in e for e in real([blur59])[0]))
+    # A real comment the port DOES carry, declared as a row, is STALE (rule 2).
+    carried_row = dict(dll, line=185, file="lib_vt.zig", decl="quirks_memset",
+                       text=oracle_text("lib_vt.zig", 185))
+    _, crs = real([carried_row])
+    pool = _nc_port_pool("bin", idmap)
+    check("REAL NEG: lib_vt.zig:185 (carried by the port) declared as a row is STALE",
+          crs[0]["norm"] and NC.stale_rows(crs, classify, pool) == crs)
+    real_ok = [r for r in vrows if r["file"] == "lib_vt.zig"]
+    check("REAL: the committed lib_vt.zig rows are NOT stale against the real bin pool",
+          real_ok and NC.stale_rows(real_ok, classify, pool) == [])
+    mixed = [r for r in vrows if NC.MIXED_RE.match(r["reason"])]
+    check("REAL: the committed MIXED-CARRIED row's phrase is in the apprt port",
+          mixed and NC.mixed_unproven(mixed, norm, idmap, _nc_port_pool("apprt", idmap)) == [])
+    return ok
+
+
+def not_carried_check():
+    """`--not-carried-check`: validate EVERY row, including rule 2 (stale) against
+    each row's own crate port pool, whatever the crates' PORT STATUS."""
+    nc = not_carried_setup()
+    if nc is None:
+        return 2
+    red = 1 if nc["errors"] else 0
+    idmap = load_idmap()
+    for crate in sorted({r["crate"] for r in nc["rows"] if r.get("ok")}):
+        try:
+            pool = _nc_port_pool(crate, idmap)
+        except G.RelocationMissing as e:
+            print(f"BLOCKED: {e}", file=sys.stderr)
+            return 2
+        rows = [r for r in nc["rows"] if r.get("ok") and r["crate"] == crate]
+        for r in NC.stale_rows(rows, classify, pool):
+            print(f"NOT-CARRIED-INVALID: COMMENT-NOT-CARRIED.tsv:{r['lineno']} "
+                  f"({r['file']}:{r['line']}): STALE — the port now carries this comment")
+            red = 1
+        for r in NC.mixed_unproven(rows, norm, idmap, pool):
+            print(f"NOT-CARRIED-INVALID: COMMENT-NOT-CARRIED.tsv:{r['lineno']} "
+                  f"({r['file']}:{r['line']}): its MIXED-CARRIED phrase is not in the port")
+            red = 1
+        print(f"NOT-CARRIED [{crate}]: {len(rows)} row(s) checked")
+    if red:
+        G.emit(G.RED, "COMMENT-NOT-CARRIED.tsv has invalid or stale rows")
+        return 1
+    G.emit(G.GREEN, f"COMMENT-NOT-CARRIED.tsv: all {len(nc['rows'])} row(s) prove themselves")
+    return 0
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--crate")
     ap.add_argument("--strict", action="store_true")
     ap.add_argument("--self-test", action="store_true")
+    ap.add_argument("--not-carried-check", action="store_true",
+                    help="validate every COMMENT-NOT-CARRIED.tsv row, stale check included")
     ap.add_argument("--ref-files", help="comma-separated reference files (scope override, e.g. one module)")
     ap.add_argument("--port-glob", help="glob of ported .rs files (scope override, pairs with --ref-files)")
     a = ap.parse_args()
     if a.self_test:
         sys.exit(self_test())
+    if a.not_carried_check:
+        sys.exit(not_carried_check())
     sys.exit(run(a))

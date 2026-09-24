@@ -143,6 +143,17 @@ pub fn log_version() {
 /// [`crate::gtk::gtk_version::at_least`]: rustty has no header fold to apply.
 #[inline]
 pub fn at_least(major: u16, minor: u16, micro: u16) -> bool {
+    // PORT NOTE: the header fold is absent (no header version in rustty; the live
+    // delegate is recorded in DEFERRALS L5.0 T2 and AD-3). The reference body's
+    // two fold steps, quoted (`adw_version.zig:50-60`):
+    //
+    //   // If our header has lower versions than the given version, we can return
+    //   // false immediately. This prevents us from compiling against unknown
+    //   // symbols and makes runtime checks very slightly faster.
+    //   if (comptime comptime_version.order(.{ ... }) == .lt) return false;
+    //
+    //   // If we're in comptime then we can't check the runtime version.
+    //   if (@inComptime()) return true;
     runtime_at_least(major, minor, micro)
 }
 

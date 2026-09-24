@@ -30,9 +30,10 @@
 //! tail's T-D batch rewrites (`gtk/app.rs`, `class/{application,surface,window}.rs`,
 //! `media.rs`, `portal.rs`, `portal/open_uri.rs`, `winproto/{wayland,x11}.rs`,
 //! `winproto/wayland/hotkeys.rs` — ~730 dropped reference comments, restored after
-//! that merge), and two unported, unrecorded reference fns
-//! (`class/config.zig` `getMut`, `gsettings.zig` `getAlloc`; neither has a caller
-//! in the reference GTK code). The libghostty C ABI wrappers live in the separate `rustty-apprt-c`
+//! that merge). (Parity tail S-8d, 2026-09-24: of the two unported reference fns
+//! S-8b named, `gsettings.zig` `getAlloc` is now ported as `gtk::gsettings::get_alloc`,
+//! and `class/config.zig` `getMut` is a recorded NON-PORT — `.port/phase-4/NON_PORTS.md`.)
+//! The libghostty C ABI wrappers live in the separate `rustty-apprt-c`
 //! top-sink crate (vt-c precedent, §3). This crate also hosts the global-state
 //! precursor [`init`] the C ABI's `rustty_init` calls.
 //!

@@ -16,6 +16,21 @@
 //! reference it (`dialog.zig:32-36`); in gtk4-rs that is the inherited
 //! `AdwAlertDialogImpl::response` vfunc, which our subclassable wiring below
 //! propagates to any `DialogImpl`.
+//!
+//! The dropped `adw.MessageDialog` arm of `present` (`dialog.zig:42-57`), quoted:
+//!
+//! ```text
+//! adw.MessageDialog => {
+//!     // Reset the previous parent window
+//!     self.as(gtk.Window).setTransientFor(null);
+//!
+//!     // We need to get the window for the parent in order
+//!     // to set the transient-for property on the MessageDialog.
+//!     if (parent) |widget| parent: { ... self.as(gtk.Window).setTransientFor(window); }
+//!
+//!     self.as(gtk.Window).present();
+//! },
+//! ```
 
 use glib::subclass::types::IsSubclassable;
 use gtk4::subclass::prelude::*;

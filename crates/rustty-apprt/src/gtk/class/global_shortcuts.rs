@@ -129,7 +129,8 @@ mod imp {
     /// (`:59`) — plus the portal session state: `map` (`:68`), `handle` (`:72`),
     /// `response_subscription` (`:76`), `activate_subscription` (`:80`). The
     /// reference's `arena` (`:62`) has no counterpart: it exists only to own the
-    /// map's key strings, which Rust owns in the `Vec` itself.
+    /// map's key strings, which Rust owns in the `Vec` itself. Its reference doc:
+    /// "An arena allocator that is present for each refresh."
     #[derive(Default, Properties)]
     #[properties(wrapper_type = super::GlobalShortcuts)]
     pub struct GlobalShortcuts {
@@ -227,7 +228,10 @@ mod imp {
             }
 
             // Adopt the new connection (the stored value holds the ref, mirroring
-            // the reference `v.ref()`) and refresh (`:526-537`).
+            // the reference `v.ref()`) and refresh (`:526-537`). The reference
+            // remarks on that call:
+            //   v.ref(); // Weird this doesn't return self
+            // (a gobject-zig binding quirk; the owned `v` here IS the ref).
             if let Some(v) = dbus_connection {
                 self.dbus_connection.replace(Some(v));
                 obj.refresh();
@@ -533,7 +537,9 @@ impl GlobalShortcuts {
         // source code.
         //
         // (`:379-406`; the note's editorializing is stripped per the port's
-        // prose policy.)
+        // prose policy, `strip-ghostty-gag-prose` — the three dropped lines,
+        // `:380`, `:396` and `:406`, are declared in
+        // `.port/parity-closure/COMMENT-NOT-CARRIED.tsv`.)
         let imp = self.imp();
 
         let dbus = { imp.dbus_connection.borrow().clone() };
@@ -831,6 +837,11 @@ pub(crate) fn generate_token() -> String {
     rustty_os::file::crypto_random_bytes(&mut buf);
     // `std.crypto.random.int(u28)`
     let v = u32::from_ne_bytes(buf) & 0x0fff_ffff;
+    // u28 takes up 7 bytes in hex, 8 bytes for "ghostty_" and 1 byte for NUL
+    // 7 + 8 + 1 = 16
+    // (PORT NOTE: that sizes the reference's `[16]u8` `Token` buffer. R2: the
+    // rustty prefix is 7 bytes, and Rust formats into a `String`, so there is
+    // no fixed buffer to size; the reference arithmetic is kept as written.)
     format!("rustty_{v:0<7x}")
 }
 
@@ -1030,7 +1041,17 @@ fn app_default() -> Option<super::application::Application> {
 /// has a `error.WriteFailed` arm that warns and skips; `xdg_shortcut_from_trigger`
 /// returns a growable `String` here so only the `null` arm (an untranslatable
 /// trigger — `catch_all`, or a key with no GDK keysym name) can skip a bind.
+/// The reference's comment on that arm (`:235-237`):
+///
+/// ```text
+/// If there isn't space to translate the trigger, then our
+/// buffer might be too small (but 1024 is insane!). In any case
+/// we don't want to stop registering globals.
+/// ```
 pub(crate) fn build_shortcut_map(config: &rustty_config::Config) -> Vec<(String, Action)> {
+    // Setup our new arena that we'll use for memory allocations.
+    // (PORT NOTE: `:203-206` — no arena here, see below.)
+    //
     // Our map starts out empty again. We don't need to worry about
     // memory because its part of the arena we clear.
     // (PORT NOTE: no arena here — the `Vec` owns its strings.)

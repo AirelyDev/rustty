@@ -100,7 +100,7 @@ def surface_ids(surface):
     return out
 
 
-def crate_token_corpus(crates):
+def crate_token_corpus(crates, relocations=None):
     """Concatenate all ported Rust source of the given crates, comment-stripped
     but with STRING LITERALS KEPT, for token presence checks. Cap/action ids
     live in `b"..."` literals (id_variants' documented quoted-string form);
@@ -110,18 +110,14 @@ def crate_token_corpus(crates):
     coverage (tightening preserved)."""
     blobs = []
     for crate in crates:
-        for path in G.iter_rust_files(crate):
-            try:
-                with open(path, encoding="utf-8", errors="replace") as fh:
-                    text = fh.read()
-            except Exception:  # noqa: BLE001
-                continue
+        # Own src/ plus the crate's R4 relocations (_gatelib.RELOCATIONS).
+        for _path, text in G.iter_rust_sources(crate, relocations):
             clean, _ = G._strip_rust(text, keep_strings=True)
             blobs.append(clean)
     return "\n".join(blobs)
 
 
-def crate_test_corpus(crates):
+def crate_test_corpus(crates, relocations=None):
     """Same as crate_token_corpus but only the bodies of #[test] fns (so a
     surface id is 'test-covered' if it appears inside a ported test).
 
@@ -131,12 +127,8 @@ def crate_test_corpus(crates):
     offset-preserving, so the spans map 1:1)."""
     blobs = []
     for crate in crates:
-        for path in G.iter_rust_files(crate):
-            try:
-                with open(path, encoding="utf-8", errors="replace") as fh:
-                    text = fh.read()
-            except Exception:  # noqa: BLE001
-                continue
+        # Own src/ plus the crate's R4 relocations (_gatelib.RELOCATIONS).
+        for _path, text in G.iter_rust_sources(crate, relocations):
             clean, _ = G._strip_rust(text)
             kept, _ = G._strip_rust(text, keep_strings=True)
             for m in G.TEST_ATTR_RE.finditer(clean):
@@ -238,6 +230,13 @@ def run(args):
         if k not in OWNERS:
             G.emit(G.RED, f"unknown surface kind '{k}'")
             return 2
+
+    # R4 relocations (_gatelib.RELOCATIONS): a stale entry is BLOCKED up front.
+    try:
+        G.check_relocations(sorted({o for k in kinds for o in OWNERS[k]}))
+    except G.Blocked as b:
+        G.emit(G.BLOCKED_STATE, str(b))
+        return 3
 
     require_tests = args.require_tests or args.strict
     red = False
@@ -386,6 +385,45 @@ def self_test():
     r = invoke("--strict")
     print(f"[d] strict stub 1/2 -> exit {r.returncode} (expect non-zero)")
     ok &= (r.returncode != 0)
+
+    # ---- R4 relocation arms (S-8c): 'background' is ported only in a HOST
+    # crate's file that the config crate's relocation names.
+    host_src = os.path.join(tmp, "crates", "rustty-host", "src")
+    os.makedirs(host_src)
+    with open(os.path.join(host_src, "moved.rs"), "w") as fh:
+        fh.write("pub struct M { pub background: u32 }\n#[test]\n"
+                 "fn t_background() { let _ = M { background: 0 }; }\n")
+    reloc = {"config": ({"path": "crates/rustty-host/src/moved.rs"},)}
+    write_cfg("done", ["font-size"])
+
+    # (e) no relocation: the moved id is UNCOVERED => RED
+    G.selftest_install_gatelib(gates, {})
+    r = invoke()
+    print(f"[e] done, id only in relocated file, no relocation -> exit "
+          f"{r.returncode} (expect non-zero)")
+    ok &= (r.returncode != 0 and "UNCOVERED config: background" in r.stdout)
+
+    # (f) with the relocation: covered => GREEN (also under --strict)
+    G.selftest_install_gatelib(gates, reloc)
+    r = invoke()
+    r2 = invoke("--strict")
+    print(f"[f] same + relocation -> exit {r.returncode}/{r2.returncode} (expect 0/0)")
+    ok &= (r.returncode == 0 and r2.returncode == 0)
+
+    # (g) with the relocation, a genuine drop is still caught
+    write_cfg("done", [])
+    r = invoke()
+    print(f"[g] relocation present, 'font-size' dropped -> exit {r.returncode} "
+          f"(expect non-zero)")
+    ok &= (r.returncode != 0 and "UNCOVERED config: font-size" in r.stdout
+           and "UNCOVERED config: background" not in r.stdout)
+
+    # (h) a relocation path that does not exist => BLOCKED (exit 3)
+    G.selftest_install_gatelib(gates, {"config": ({"path": "crates/gone.rs"},)})
+    write_cfg("done", ["font-size", "background"])
+    r = invoke()
+    print(f"[h] relocation path missing -> exit {r.returncode} (expect 3)")
+    ok &= (r.returncode == 3 and "BLOCKED" in r.stdout)
 
     shutil.rmtree(tmp, ignore_errors=True)
     print("SELF-TEST:", "PASS" if ok else "FAIL")

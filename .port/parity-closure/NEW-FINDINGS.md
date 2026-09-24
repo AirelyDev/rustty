@@ -4284,6 +4284,64 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   (green), then restored. It runs on a FreeBSD host (`VERIFICATION_DEBT.md` V23).
 - **state**: CLOSED (task tail-s13).
 
+## N265 — the reference's `test "face metrics"` never checks anything: its backend guard is inverted
+
+- **id**: N265. Not a ledger row: found by G2 once the `font` crate key was graded with its
+  R4 relocation (task tail-s8c).
+- **severity**: low. **kind**: reference test-weakness (R13: stays faithful; needs a
+  `UPSTREAM-DEFECTS.md` entry, whose UD id the controller assigns — this batch had none).
+- **oracle**: `src/font/Collection.zig:1396-1523` at 20abdb50a. `:1397-1398`: "The web canvas
+  backend doesn't calculate face metrics, only cell metrics" followed by
+  `if (options.backend != .web_canvas) return error.SkipZigTest;`, so the test is skipped on
+  every backend except the one its comment excludes. On `web_canvas`, every expected-value
+  switch (`:1438-1502`) takes its `.web_canvas => unreachable` prong. The switches also have no
+  `freetype_windows` prong, so they would not compile if analyzed on that backend.
+- **rustty**: `crates/rustty-font-shaper/src/collection.rs` `face_metrics`. Before this task the
+  body was only comments, and the test had zero assertions. The body is now ported live. The skip
+  is kept as `cfg_attr(not(wasm32), ignore)`, because `options::BACKEND` is `WebCanvas` exactly on
+  wasm32 (R14 form 1).
+- **evidence**: run with `--ignored` on macOS (the `coretext` backend), the live body passes
+  against the reference's own coretext expected values, for both CozetteVector and Geist Mono.
+  Negative control: changing the narrow font's coretext `cell_width` from 7.3828125 to 7.5 makes
+  it fail at the `expect_approx_equal` assertion. The `fontconfig_freetype` values are
+  UNVERIFIED here, because no Linux run was made.
+- **proposed upstream fix**: `if (options.backend == .web_canvas) return error.SkipZigTest;`, plus a
+  `freetype_windows` prong or an `else` in the four switches.
+- **state**: RECORDED as `UPSTREAM-DEFECTS.md` UD276 (controller, 2026-09-24).
+
+## N266 — the font backend build option is folded to the per-OS default: the `coretext_freetype`, `coretext_harfbuzz`, `coretext_noshape` and `freetype` arms are not live
+
+- **id**: N266. Not a ledger row (task tail-s8c, residual of the `font` done-flip).
+- **severity**: medium. **kind**: R8 build-switch fold / R1 missing code paths.
+- **oracle** (20abdb50a): `src/build/Config.zig:191-195` (`-Dfont-backend`, which defaults to
+  `FontBackend.default(target)`); `src/font/main.zig:50`
+  (`.backend = ... build_config.font_backend`). `.github/workflows/test.yml:1383-1428`
+  (`build-macos-freetype`) builds AND tests `-Dfont-backend=coretext_freetype` on macOS, so
+  Ghostty at the pin can be built with a non-default backend on this platform. There are 53
+  `options.backend` / `font_backend` / `backend.has*` sites in 18 files: `font/{face,library,
+  shape,discovery,DeferredFace,Collection,CodepointResolver,main}.zig`,
+  `font/face/coretext.zig`, `font/shaper/{coretext,harfbuzz}.zig`, `apprt/embedded.zig`,
+  `cli/version.zig`, `crash/sentry.zig`, `global.zig`, and `build/{Config,SharedDeps}.zig`.
+- **rustty**: `crates/rustty-font-shaper/src/lib.rs` `options::BACKEND = Backend::default()` (a
+  `cfg(target_os)` decision with no override); `face/mod.rs:88-93`, `shape.rs:135-140` and
+  `discovery.rs:71-83` choose `Face`/`Shaper`/`Discover` by `target_os`. `deferred_face.rs`
+  records `loadCoreTextFreetype` as a comment only. There is no cargo feature that selects a
+  backend. The existing `freetype`/`harfbuzz`/`fontconfig` features gate link edges only.
+- **stale records**: `docs/parity-audit/src-font.md:15` ("`loadCoreTextFreetype` is
+  not-applicable") and `docs/superpowers/specs/2026-08-25-build-system-gap-audit.md:539-542` (it
+  re-classifies `-Dfont-backend` as "correctly absent" on the premise that `rustty-font` has no
+  FreeType/fontconfig/CoreText dependency, which is false for `rustty-font-shaper`) both rest
+  on the fold.
+- **what closing needs**: one mutually exclusive cargo feature per backend on
+  `rustty-font-shaper` (default = the per-OS default, so existing builds are unchanged), with
+  `options::BACKEND` derived from it. Every type alias and `cfg(target_os)` backend gate must be
+  re-keyed on that `BACKEND` (face, shaper, discovery, library, deferred-face arms, collection,
+  resolver, the coretext face's `hasHarfbuzz` shaper font, and the consumers in apprt/cli/crash/
+  global). `loadCoreTextFreetype` has to be ported live. A CI lane (or local run) must build and
+  test `coretext_freetype` on macOS, as the oracle does. This is a multi-crate port, not a
+  gate-tail item.
+- **state**: OPEN. `font` stays `PORT STATUS: in progress` until it closes.
+
 ## N270 — `GlobalZigAllocator::resize` reported success for any shrink, so the later free reached `dealloc` with a smaller layout
 
 - **id**: N270. Not a ledger row: review S7-12 F4 (confirmed by probe), fixed in task S7-3.
@@ -4370,3 +4428,98 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   `terminal_internals_route_…`, `glossary_map_routes_…`, `dnd_state_routes_…`), each with a negative
   control that routes one site to Global; `allocation_failure_sweep_through_the_c_api` (vt-c).
 - **state**: OPEN as a record until S7-4/S7-9 (S179-F2's remainder).
+
+## N280 — `macosLogger`'s per-scope `os_log` cache (upstream `3225e9ebb`) was never ported
+
+- **id**: N280. Not a ledger row: found by G3b while closing bin's comment coverage (task tail-s8d).
+- **severity**: low (performance; identical unified-log output). **kind**: missing upstream change.
+- **oracle**: `src/main_ghostty.zig:170-199` `macosLogger`, called from `logFn` at `:143`.
+- **rustty (pre-fix)**: `crates/rustty-core/src/logging.rs` `log_with` created and released an
+  `os_log` object on every log call, under the pre-`3225e9ebb` comment "Initialize a logger. This is
+  slow to do on every operation but we shouldn't be logging too much." — which the pin no longer
+  has. `docs/parity-audit/src.md` recorded the difference as an accepted equivalence, but the
+  reference's reason for the change (os_log creation shows up in startup profiles) is a behaviour
+  the port simply lacked; it was a missed upstream commit, not a decision.
+- **fix**: `macos_logger(scope)` caches one `Log` per scope for the process lifetime: an acquire
+  load, create, `compare_exchange(null, created, AcqRel, Acquire)` and release of the losing logger,
+  as the reference does. The reference's comptime-per-scope static becomes a per-scope slot from a
+  mutex-guarded registry (Rust scopes are runtime strings). The seven reference comment lines are
+  restored.
+- **verification**: `logging::tests::macos_logger_is_created_once_per_scope` (same scope returns the
+  same object, different scopes differ, 8 racing threads settle on one). Negative control: a
+  per-call `Log::create` in `macos_logger` fails it with "same scope must reuse the cached logger".
+- **state**: CLOSED (task tail-s8d).
+
+## N281 — `class/config.zig` `getMut` had no port and no record
+
+- **id**: N281. Not a ledger row: S-8b report concern 2.
+- **severity**: low. **kind**: unrecorded non-port.
+- **oracle**: `src/apprt/gtk/class/config.zig:94-100` `getMut`. No caller anywhere in `src/` at the
+  pin (`git grep getMut 20abdb50a -- src`: the definition only).
+- **rustty**: `crates/rustty-apprt/src/gtk/class/config.rs` has `get` only.
+- **disposition**: recorded NON-PORT, `.port/phase-4/NON_PORTS.md` (a `&mut CoreConfig` from a
+  shared, refcounted GObject handle is unsound without changing the storage to a `RefCell` and
+  every `get` caller to a guard). Its three doc lines are `no-counterpart` rows of
+  `.port/parity-closure/COMMENT-NOT-CARRIED.tsv` (decl `Config.getMut`).
+- **S-8e (review)**: the record now also names the declined sound alternative, `unsafe fn
+  get_mut(&self) -> *mut CoreConfig` over `UnsafeCell` storage, and why (an uncheckable aliasing
+  contract for a function nothing calls; it is the shape to use if a caller appears).
+- **state**: CLOSED (task tail-s8d; record completed tail-s8e).
+
+## N282 — `gsettings.zig` `getAlloc` had no port and no record
+
+- **id**: N282. Not a ledger row: S-8b report concern 2.
+- **severity**: low. **kind**: missing function (no caller in the reference GTK tree at the pin).
+- **oracle**: `src/apprt/gtk/gsettings.zig:50-57` `getAlloc` + `getImpl`'s `[]const u8` arm `:69-74`.
+- **fix**: `crates/rustty-apprt/src/gtk/gsettings.rs` `get_alloc(key) -> Option<SettingValue>`, with
+  its four reference doc lines restored verbatim. S-8e (review): like the reference it accepts every
+  key (`SettingValue::{Bool, CInt, Str}` reifies `?key.Type()`), and the string arm reads the raw
+  `GValue` (`property_value` + `g_value_get_string` + `CStr::to_bytes`) so non-UTF-8 bytes are
+  returned, not a panic (the S-8d `property::<Option<String>>` form panicked on them).
+- **verification**: UNVERIFIED — the GTK module is `cfg(linux|freebsd, feature = "gtk")` and was
+  not compiled here (macOS, no VM for this batch). Needs the Linux lane (`--features
+  gtk,x11,wayland` clippy).
+- **state**: fix written, Linux build pending.
+
+## N283 — G3b had no audited way to mark a deliberately-not-carried comment
+
+- **id**: N283. Not a ledger row: S-8b report concern 3.
+- **severity**: low (gate). **kind**: gate gap.
+- **description**: comments on code the port does not have by a recorded decision, and stripped
+  gag prose, stayed MISSING permanently, so `--crate bin` / `--crate apprt` could never reach 0 and
+  real drops hid among them. G3b now reads `.port/parity-closure/COMMENT-NOT-CARRIED.tsv`, whose
+  rows are validated mechanically (`.port/tools/gates/_g3b_not_carried.py`): the text must be the
+  oracle line at the pin; still MISSING/REVIEW in the port (a carried row is STALE, RED); for
+  `no-counterpart` attached to the named reference code, with no Rust counterpart anywhere in the
+  workspace and an unstruck evidence record naming it; for `gag-prose` free of digits, identifiers,
+  backticks and ALL-CAPS tokens and at most 20 words; with a two-way cap. Excused comments are
+  printed as `NOT-CARRIED (<class>)`.
+- **S-8e (review CHANGES-REQUIRED, attacks A-1..A-3 went GREEN)**: hardened. `decl` must be DECLARED in
+  the oracle file (fn/const/var, field, enum member) and not a Zig/Rust keyword or common local
+  (`priv`, `self`, `alloc`, ...); a `///` doc or `PORTS:` comment citing it, or a Rust field of its
+  name, is a counterpart (catches `BASELINE` = `comptime_version`); the evidence record (unique
+  needle, at most 30 lines, a heading resolving to its own section only) must name the decl AND
+  the oracle file and carry no strike/RESOLVED/PORTED ANYWHERE; a gag row's record must list its
+  `file:line`, and its text may use no technical term or word of the surrounding oracle code unless
+  `MIXED-CARRIED: "<port comment>"` names a comment the port carries. Rows the stricter rules would
+  not admit, or that have a Rust site, are QUOTED there instead (port convention). 35 rows: bin 21
+  (std_options_debug_io 6, DllMain 15), apprt 14 (adw_c 3, gtk_c 3, supportsDialogs 1,
+  `Config.getMut` 3, gag-prose 4).
+- **verification**: `check_comment_coverage.py --self-test` (69 ledger arms, synthetic and real,
+  the review's A-1/A-2/A-3 planted verbatim); a mutation run (each W1-W4 rule weakened in-process)
+  turns the matching arms FAIL; the review's NC-1..NC-4 and A-1..A-3 re-run on disk are all RED;
+  `--not-carried-check` GREEN.
+- **state**: CLOSED (task tail-s8d, hardened tail-s8e).
+
+## N284 — two BlurRegion CSD-note lines stripped as gag prose carried a fact
+
+- **id**: N284. Not a ledger row: found while classifying S-8b's stripped lines (task tail-s8d).
+- **severity**: low (comment fidelity). **kind**: over-stripped comment.
+- **oracle**: `src/apprt/gtk/winproto/BlurRegion.zig:59-61`.
+- **description**: S-8b stripped `:59` ("... making a window ~30% bigger") and reworded `:61` as gag
+  prose, but `:59` carries the fact the code acts on (CSD windows are ~30% bigger internally), and
+  under the ledger's rule a line with technical content can never be gag prose (the self-test holds
+  a real-row negative control for exactly this line). `:59-61` are restored verbatim in
+  `crates/rustty-apprt/src/gtk/winproto/blur_region.rs`; only `:58` (an insult with no fact) is a
+  `gag-prose` row.
+- **state**: CLOSED (task tail-s8d).

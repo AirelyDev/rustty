@@ -22,6 +22,10 @@
 //! Compiles a blueprint file using `blueprint-compiler`. This performs
 //! additional checks to ensure that various minimum versions are met.
 //!
+//! Usage: blueprint.zig <major> <minor> <output> <input>
+//!
+//! Example: blueprint.zig 1 5 output.ui input.blp
+//!
 //! `gresource.zig:1-5`:
 //! This file contains a binary helper that builds our gresource XML
 //! file that we can then use with `glib-compile-resources`.
@@ -31,7 +35,8 @@
 //!
 //! (PORT NOTE: here both helpers run inside this build script rather than as
 //! separate binaries, so there is no argv — the `blueprint.zig:4-6`
-//! `Usage:`/`Example:` lines describe a command line rustty does not have —
+//! `Usage:`/`Example:` lines above describe a command line rustty does not have;
+//! its `<major> <minor> <output> <input>` are `compile_blueprint`'s inputs here —
 //! and no cwd precondition: paths are resolved against `--sourcedir`, see
 //! "R2 / paths" below.)
 //!
@@ -481,7 +486,12 @@ fn gen_xml(resource_path: &str, base_app_id: &str, ui_files: &[(&Blueprint, Path
     //
     // genUi (gresource.zig:242-277): each compiled .ui, compressed +
     // xml-stripblanks, aliased {maj}.{min}/{name}.ui; the body is the absolute
-    // OUT_DIR path (outside --sourcedir).
+    // OUT_DIR path (outside --sourcedir). The reference's per-file manifest
+    // lookup ends in a not-found arm (`gresource.zig:264-268`) that cannot fire
+    // here, because each `ui` is already paired with its `Blueprint` (step 1):
+    //   // The for loop never broke which means it didn't find
+    //   // a matching blueprint for this input.
+    //   return error.BlueprintNotFound;
     s.push_str(&format!("  <gresource prefix=\"{resource_path}/ui\">\n"));
     for (bp, ui) in ui_files {
         s.push_str(&format!(

@@ -685,6 +685,14 @@ re-open it.
 4. **What holds the line.** Those two `-sys` crate builds, which are part of
    every workspace build.
 
+**`src/lib_vt.zig`'s MSVC `_fltused` marker [added 2026-09-24, parity tail S-8d].**
+The `lib_vt.zig` part of this range is `var msvc_fltused: c_int = 1;` plus the
+root-guarded `@export(&msvc_fltused, .{ .name = "_fltused" })` for static MSVC
+builds — Windows/MSVC-only, so N/A on the same terms as the rest of this row.
+Its reference comment lines (`:166`, `:173-174`) are quoted at the Rust site
+that records the block, `crates/rustty-vt-c/src/lib.rs` (the root export-block
+note), with the `quirks_memset` force-reference comment beside them.
+
 ## G10 — `1fe1b2d23`, `patch_rpath` -> `patchelf`, `terminalOptions(.., optimize)`, `10e6ace6b` — N/A (with two things recorded, not dismissed)
 
 1. **Upstream.** `1fe1b2d23` fixes static `libghostty-vt` linking on Windows.
@@ -937,3 +945,25 @@ config's 4 remaining G3b misses and global's 31.
    control **vacuous** — `slice::get(pos..pos+n)` already yields `EndOfStream`
    for any out-of-range `pos`, so the oracle's explicit guard is R1-faithful but
    observably redundant here.
+
+# G3b NOT-CARRIED — stripped gag prose in code comments (`strip-ghostty-gag-prose`) [parity tail S-8d, 2026-09-24; revised S-8e]
+
+**PENDING USER RATIFICATION.** The user's rule (memory `strip-ghostty-gag-prose`)
+covers prose/prompt files, "not code". Applying it to CODE COMMENTS follows the
+WS16 precedent (`docs/superpowers/plans/2026-07-29-ws16-x11-winproto.md:21`, the
+`x11.zig` comment rewrites) but extends the user's wording, so the controller asks
+the user to ratify it; until then these rows stand on WS16 alone.
+
+Each dropped line is listed below and is a `gag-prose` row of
+`.port/parity-closure/COMMENT-NOT-CARRIED.tsv`, which G3b validates (the text is
+the oracle line at the pin; no digit, identifier, ALL-CAPS token or technical term
+unless the row proves, `MIXED-CARRIED`, that the port carries its fact).
+
+- `apprt/gtk/class/global_shortcuts.zig:380`: opinion only; the XDG-portal note's
+  facts are carried verbatim in `global_shortcuts.rs` `request`.
+- `apprt/gtk/class/global_shortcuts.zig:396`: MIXED. The joke is dropped; its fact
+  (clients must construct the request path themselves) is carried, reworded, on
+  the next line of `request`.
+- `apprt/gtk/class/global_shortcuts.zig:406`: a closing quip, no fact.
+- `apprt/gtk/winproto/BlurRegion.zig:58`: an insult, no fact; `:59-61` (the
+  ~30% CSD fact) are carried verbatim in `blur_region.rs`.

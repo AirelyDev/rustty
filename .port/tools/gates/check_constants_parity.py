@@ -124,16 +124,16 @@ def strip_line_comment(line):
     return line, None
 
 
-def scan_markers(crate):
+def scan_markers(crate, relocations=None):
     """Return list of (relpath, lineno, kind, text) marker hits in a crate's
     Rust sources. `kind` is 'port-marker' or 'placeholder-const'."""
     hits = []
-    for path in g.iter_rust_files(crate):
-        try:
-            with open(path, encoding="utf-8", errors="replace") as fh:
-                lines = fh.readlines()
-        except OSError:
-            continue
+    # Own src/ plus the crate's R4 relocations (_gatelib.RELOCATIONS).
+    for path, text in g.iter_rust_sources(crate, relocations):
+        # Split exactly as `readlines()` did (on "\n" only; the text was read
+        # with universal newlines), so line numbers are unchanged.
+        lines = text.split("\n")
+        lines = [ln + "\n" for ln in lines[:-1]] + ([lines[-1]] if lines[-1] else [])
         rel = os.path.relpath(path, g.RUSTTY_ROOT)
         for idx, raw in enumerate(lines, start=1):
             line = raw.rstrip("\n")
@@ -244,7 +244,7 @@ def classify_zig_rhs(rhs):
     return "expr-literal", set()
 
 
-def rust_consts(crate):
+def rust_consts(crate, relocations=None):
     """Return {NAME: (rhs_text, is_bare_literal, relpath, lineno)} over all Rust
     const/static defs in the crate. NAME is the raw Rust identifier."""
     out = {}
@@ -253,12 +253,8 @@ def rust_consts(crate):
         r"(?:pub\s*(?:\([^)]*\)\s*)?)?(?:const|static)\s+(?:mut\s+)?"
         r"([A-Za-z_]\w*)\s*:\s*[^=]+=\s*([^;]+);"
     )
-    for path in g.iter_rust_files(crate):
-        try:
-            with open(path, encoding="utf-8", errors="replace") as fh:
-                text = fh.read()
-        except OSError:
-            continue
+    # Own src/ plus the crate's R4 relocations (_gatelib.RELOCATIONS).
+    for path, text in g.iter_rust_sources(crate, relocations):
         rel = os.path.relpath(path, g.RUSTTY_ROOT)
         for lineno, raw in enumerate(text.splitlines(), start=1):
             code, _ = strip_line_comment(raw)
@@ -411,6 +407,13 @@ def main(argv):
     else:
         crates = [c for c in g.workspace_crates(cm) if g.is_claimed_done(c)]
 
+    # R4 relocations (_gatelib.RELOCATIONS): a stale entry is BLOCKED up front.
+    try:
+        g.check_relocations(crates)
+    except g.Blocked as e:
+        print(f"BLOCKED: {e}", file=sys.stderr)
+        return 3
+
     print("== D3 constants-by-expression parity ==")
     print(f"   oracle: {ORACLE_SRC} {'(present)' if oracle_ok else '(ABSENT)'}")
     print(f"   crates: {', '.join(crates) if crates else '(none)'}")
@@ -526,6 +529,8 @@ def run_selftest():
                       "architectural 'placeholder' prose (no const literal) -> clean",
                       f"got {clean}")
 
+    ok &= relocation_selftest()
+
     print()
     if ok:
         print(">> D3 self-test PASS: detector fires on folded-literal + surviving "
@@ -533,6 +538,65 @@ def run_selftest():
         return 0
     print(">> D3 self-test FAIL: detector logic is broken.", file=sys.stderr)
     return 1
+
+
+def relocation_selftest():
+    """R4 relocation arms (S-8c): the crate `demo-s8c` has no own src/; its port
+    lives at a relocated path. A marker / const twin there is seen ONLY with the
+    relocation, a genuine fold in it is still RED, an item-scoped relocation sees
+    only its items, and a relocation path that does not exist is BLOCKED."""
+    ok = True
+    crate = "demo-s8c"  # no crates/rustty-demo-s8c: own src/ is empty
+    with tempfile.TemporaryDirectory() as td:
+        moved = _write(td, "moved.rs",
+                       "// TODO(port): relocated marker\n"
+                       "pub const COUNT: usize = 8192;\n"
+                       "pub const CAP: usize = 64;\n")
+        scoped = _write(td, "scoped.rs",
+                        "// TODO(port): outside the item\n"
+                        "pub const OUTSIDE: usize = 1;\n"
+                        "\n"
+                        "/// the relocated item\n"
+                        "pub mod kept {\n"
+                        "    pub const INSIDE: usize = 2;\n"
+                        "}\n")
+        reloc = {crate: ({"path": moved},)}
+        none = {crate: ()}
+        m0 = scan_markers(crate, none)
+        m1 = scan_markers(crate, reloc)
+        ok &= _expect(m0 == [] and [k for _r, _l, k, _t in m1] == ["port-marker"],
+                      "relocated TODO(port) is seen only with the relocation",
+                      f"without={m0} with={m1}")
+        c0 = rust_consts(crate, none)
+        c1 = rust_consts(crate, reloc)
+        ok &= _expect("CAP" not in c0 and c1.get("CAP", ("", False))[1] is True,
+                      "relocated const twin is seen only with the relocation, and "
+                      "its folded literal is still a FOLD candidate",
+                      f"without={sorted(c0)} with={c1.get('CAP')}")
+        zig = "const count = 8192;\npub const cap = count / 4;\n"
+        with open(moved, encoding="utf-8") as fh:
+            reds = _diff_text(zig, fh.read())
+        ok &= _expect(len(reds) == 1 and "FOLD" in reds[0],
+                      "a genuine fold in the relocated file is still RED",
+                      f"got {reds}")
+        s1 = rust_consts(crate, {crate: ({"path": scoped, "items": (r"^pub mod kept\b",)},)})
+        sm = scan_markers(crate, {crate: ({"path": scoped, "items": (r"^pub mod kept\b",)},)})
+        ok &= _expect(sorted(s1) == ["INSIDE"] and sm == [],
+                      "item-scoped relocation sees only the named item",
+                      f"consts={sorted(s1)} markers={sm}")
+        try:
+            scan_markers(crate, {crate: ({"path": os.path.join(td, "gone")},)})
+            blocked = False
+        except g.RelocationMissing:
+            blocked = True
+        ok &= _expect(blocked, "a relocation path that does not exist is BLOCKED")
+        try:
+            rust_consts(crate, {crate: ({"path": scoped, "items": (r"^pub mod gone\b",)},)})
+            blocked = False
+        except g.RelocationMissing:
+            blocked = True
+        ok &= _expect(blocked, "a relocation item that does not exist is BLOCKED")
+    return ok
 
 
 # ---- self-test helpers: run the core logic over in-memory text -------------
