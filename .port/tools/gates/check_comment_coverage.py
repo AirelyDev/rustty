@@ -55,6 +55,72 @@ THRESHOLD = 0.80
 MISS = 0.62
 WORD_RE = re.compile(r"[a-z0-9_]{2,}")
 
+# R4 RELOCATIONS (parity tail S-8b, 2026-09-24). The crate map (tests-summary.json
+# `crate_map`, the Phase-0 PORT_PLAN partition) assigns each reference file to ONE
+# crate, but R4 cycle breaks moved some files' ports into a DIFFERENT crate. A
+# whole-crate run then compared those reference comments against the wrong port
+# tree and reported them MISSING even where the port carries them verbatim (the
+# DEFERRALS "main_c.zig (3t) re-homed ..." row called that "EXPECTED"; it made
+# `--crate bin` 146-missing noise that hid the real drops).
+#
+# Each entry names the reference file (relative to GHOSTTY_SRC) and the EXACT Rust
+# files (relative to the rustty root) that port it. Their comments are ADDED to
+# the port pool of the crate that owns the reference file — no threshold changes,
+# no whole-crate widening: only the named files, which are the real port sites.
+# A comment genuinely dropped from the relocated port is still MISSING. Every
+# target must exist (BLOCKED otherwise), so a stale entry cannot silently turn
+# into a no-op, and --self-test exercises both arms.
+RELOCATED_PORTS = {
+    # bin (`crates/rustty`): the non-exe artifact roots live in their own crates.
+    # lib_vt.zig: the librustty-vt root — the C-lib root/panic/log sink in vt-c,
+    # the Zig-module public API in rustty-vt's crate root (ADV-FIX 6).
+    "lib_vt.zig": [
+        "crates/rustty-vt-c/src/lib.rs",
+        "crates/rustty-vt-c/src/panic.rs",
+        "crates/rustty-vt-c/src/sys.rs",
+        "crates/rustty-vt/src/lib.rs",
+    ],
+    # main_c.zig: the C API hub, re-homed to rustty-apprt-c (ADV-FIX 6).
+    "main_c.zig": ["crates/rustty-apprt-c/src/lib.rs"],
+    # main_ghostty.zig: `logFn`/`std_options` moved to the core wiring tier (the
+    # lib root re-uses them too); the rest stays in the bin's main_rustty.rs.
+    "main_ghostty.zig": ["crates/rustty-core/src/logging.rs"],
+    # main_gen.zig / main_wasm.zig / main_build_data.zig: separate artifacts.
+    "main_gen.zig": ["crates/rustty-synthetic/src/main_gen.rs"],
+    "main_wasm.zig": ["crates/rustty-wasm/src/lib.rs"],
+    "main_build_data.zig": ["xtask/src/main_build_data.rs"],
+    # renderer: Thread.zig's run loop lives in core (it names configpkg and core's
+    # App.Mailbox, both cycles from rustty-renderer); backend.zig's `Backend` enum
+    # is defined in build-config (break #3).
+    "renderer/Thread.zig": ["crates/rustty-core/src/renderer_seam.rs"],
+    "renderer/backend.zig": ["crates/rustty-build-config/src/renderer.rs"],
+    # apprt: embedded.zig's `CAPI` block (the libghostty C exports + their extern
+    # structs) lives in the rustty-apprt-c top-sink crate (vt-c precedent,
+    # EMBEDDED_BLUEPRINT §3); the GTK build helpers blueprint.zig/gresource.zig
+    # are the crate's build script, outside `src/`.
+    "apprt/embedded.zig": [
+        "crates/rustty-apprt-c/src/lib.rs",
+        "crates/rustty-apprt-c/src/capi.rs",
+    ],
+    "apprt/gtk/build/blueprint.zig": ["crates/rustty-apprt/build.rs"],
+    "apprt/gtk/build/gresource.zig": ["crates/rustty-apprt/build.rs"],
+}
+
+
+def relocated_port_files(ref_rels, relocations=None):
+    """Absolute port files that R4 relocations add for these reference files.
+    Raises FileNotFoundError naming a relocation target that does not exist."""
+    relocations = RELOCATED_PORTS if relocations is None else relocations
+    out = []
+    for rel in ref_rels:
+        for p in relocations.get(rel, ()):
+            full = os.path.join(G.RUSTTY_ROOT, p)
+            if not os.path.isfile(full):
+                raise FileNotFoundError(f"relocation target for {rel!r} does not exist: {p!r}")
+            if full not in out:
+                out.append(full)
+    return out
+
 
 def load_idmap():
     """ghostty->rustty token map (R2). Optional; absent => identity."""
@@ -183,7 +249,20 @@ def run(args):
     overall_red = 0
     skipped = []
     for crate in crates:
-        rust_files = scope_port if scope_port is not None else crate_rust_files(crate)
+        if scope_port is not None:
+            rust_files = scope_port
+        else:
+            rust_files = crate_rust_files(crate)
+            # R4 relocations: add the named port files of this crate's reference
+            # files that were ported into another crate (see RELOCATED_PORTS).
+            try:
+                for p in relocated_port_files([f for f, _ in cm[crate]["files"]]):
+                    if p not in rust_files:
+                        rust_files.append(p)
+            except FileNotFoundError as e:
+                print(f"BLOCKED: {e} (a stale RELOCATED_PORTS entry would be a "
+                      f"silent no-op, so this is a hard error).", file=sys.stderr)
+                return 2
         # only meaningful for crates that have been ported (non-stub).
         # H5 fix: unified done-detection via _gatelib.is_claimed_done — the same
         # signal G1/G2 bind on (statuses done|complete|parity|ported|final all
@@ -371,7 +450,56 @@ def self_test():
             missing.append(rc)
     ok = missing == ["returns a circular buffer containing type t"]
     print(f"self-test: dropped-comment detected = {ok} (missing={missing})")
-    return 0 if ok else 1
+    return 0 if (ok and self_test_relocations()) else 1
+
+
+def self_test_relocations():
+    """RELOCATED_PORTS arms: (1) a comment ported only into the relocation target
+    is covered WITH the entry and MISSING without it (the entry is what covers it,
+    and it adds only the named file); (2) a comment dropped from the relocated port
+    stays MISSING with the entry; (3) a nonexistent target raises (BLOCKED, never a
+    silent no-op); (4) every real entry names a reference file the crate map knows
+    and targets that exist."""
+    import tempfile
+    idmap = [("ghostty", "rustty")]
+    kept = "this is the main file for the c api used to embed ghostty"
+    dropped = "some comptime assertions that our c api depends on here"
+    with tempfile.TemporaryDirectory() as d:
+        tgt = os.path.join(d, "relocated.rs")
+        with open(tgt, "w", encoding="utf-8") as fh:
+            fh.write("// This is the main file for the C API used to embed rustty\nfn f() {}\n")
+        reloc = {"main_c.zig": [tgt]}
+
+        def verdict(rc, ports):
+            nrc = norm(rc, idmap)
+            pool = [norm(b, idmap) for p in ports for b in comment_bodies(p)]
+            if nrc in " \n ".join(pool):
+                return "covered"
+            best = max((difflib.SequenceMatcher(None, nrc, pc).ratio() for pc in pool),
+                       default=0.0)
+            return "missing" if best < MISS else "covered"
+
+        with_entry = relocated_port_files(["main_c.zig"], reloc)
+        a1 = (with_entry == [tgt] and verdict(kept, with_entry) == "covered"
+              and verdict(kept, relocated_port_files(["main_c.zig"], {})) == "missing"
+              and relocated_port_files(["lib_vt.zig"], reloc) == [])
+        a2 = verdict(dropped, with_entry) == "missing"
+        try:
+            relocated_port_files(["main_c.zig"], {"main_c.zig": [os.path.join(d, "nope.rs")]})
+            a3 = False
+        except FileNotFoundError:
+            a3 = True
+    try:
+        known = G.file_to_crate()
+        a4 = (all(k in known for k in RELOCATED_PORTS)
+              and len(relocated_port_files(list(RELOCATED_PORTS))) > 0)
+    except FileNotFoundError as e:
+        print(f"self-test: {e}")
+        a4 = False
+    ok = a1 and a2 and a3 and a4
+    print(f"self-test: relocations covered-only-via-entry={a1} dropped-still-missing={a2} "
+          f"missing-target-blocks={a3} real-entries-valid={a4}")
+    return ok
 
 
 if __name__ == "__main__":
