@@ -14,22 +14,6 @@ pub enum Method {
     NoZwj,
 }
 
-/// `std.unicode.utf8CodepointSequenceLength` — the UTF-8 byte length of a scalar
-/// (gwidth uses this with a `catch 1` fallback for out-of-range values).
-fn utf8_codepoint_sequence_length(cp: u32) -> usize {
-    if cp < 0x80 {
-        1
-    } else if cp < 0x800 {
-        2
-    } else if cp < 0x10000 {
-        3
-    } else if cp <= 0x10FFFF {
-        4
-    } else {
-        1 // Zig returns an error here; gwidth's `catch 1` maps it to 1.
-    }
-}
-
 /// Calculate width from east asian width property and Unicode properties
 fn eaw_to_width(cp: u32, eaw: EastAsianWidth) -> i16 {
     // Based on wcwidth implementation
@@ -100,11 +84,29 @@ pub fn gwidth(str: &[u8], method: Method) -> u16 {
             let mut grapheme_start: usize = 0;
             let mut prev_break: bool = true;
 
-            while let Some(result) = grapheme_iter.next() {
+            loop {
+                // The iterator's `i` before `nextCodePoint` is where the code point it
+                // returns starts (grapheme.zig `nextCodePoint` advances `i` to the end
+                // of the returned code point). Used by the UD260 repair below.
+                let cp_start = grapheme_iter.i;
+                let Some(result) = grapheme_iter.next_code_point() else {
+                    break;
+                };
                 if prev_break && !result.is_break {
                     // Start of a new grapheme
-                    let cp_len: usize = utf8_codepoint_sequence_length(result.cp);
-                    grapheme_start = grapheme_iter.i - cp_len;
+                    // PORT NOTE: reference defect (R13, UD260). The reference computes
+                    //     const cp_len: usize = std.unicode.utf8CodepointSequenceLength(result.code_point) catch 1;
+                    //     grapheme_start = grapheme_iter.i - cp_len;
+                    // `cp_len` is the RE-ENCODED length of the decoded code point, not the
+                    // bytes the decoder consumed: an invalid byte decodes to U+FFFD (3
+                    // bytes re-encoded) after consuming 1. At the start of a string that
+                    // underflows (a trap in Debug/ReleaseSafe; in ReleaseFast a wrapped
+                    // start that the slice below then indexes out of bounds), reachable
+                    // with any non-UTF-8 text a TUI draws (a theme file name on Linux, a
+                    // key or a paste). Elsewhere it silently moves the start back into the
+                    // previous grapheme. The evident intent is "where this code point
+                    // started", which is `cp_start`; for valid UTF-8 it is the same value.
+                    grapheme_start = cp_start;
                 }
 
                 if result.is_break {
@@ -307,5 +309,22 @@ mod tests {
         // Dual negative pin — @missing does not leak beyond its ranges: an unassigned
         // non-CJK cp stays Neutral (width 1).
         assert_eq!(gwidth("\u{0378}".as_bytes(), Method::Unicode), 1); // Cn, eaw Neutral
+    }
+
+    /// UD260 (R13): an invalid byte that decodes to U+FFFD and STARTS a multi-code-point
+    /// cluster. The reference recomputes the cluster start as `iter.i - cp_len` with
+    /// `cp_len = utf8CodepointSequenceLength(0xFFFD) = 3` although the decoder consumed
+    /// one byte, so `1 - 3` underflows (`panic: integer overflow` in Debug/ReleaseSafe,
+    /// measured with Zig 0.16.0 against libvaxis 0.6.0 + uucode 2826a37a). The port
+    /// starts the cluster where the code point started.
+    #[test]
+    fn gwidth_invalid_byte_starting_a_cluster() {
+        // U+FFFD (EastAsianWidth Ambiguous, width 1) + U+0301 (Mn, width 0).
+        assert_eq!(gwidth(b"\xFF\xCC\x81", Method::Unicode), 1);
+        assert_eq!(gwidth(b"a\xFF\xCC\x81", Method::Unicode), 2);
+        // The NoZwj arm routes each piece through `.unicode`.
+        assert_eq!(gwidth(b"\xFF\xCC\x81", Method::NoZwj), 1);
+        // Valid input is unchanged: a cluster after a 3-byte code point.
+        assert_eq!(gwidth("中e\u{301}".as_bytes(), Method::Unicode), 3);
     }
 }

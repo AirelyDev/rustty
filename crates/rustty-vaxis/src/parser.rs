@@ -194,7 +194,7 @@ fn parse_ground(input: &[u8]) -> Result<ParseResult<'_>, ParseError> {
             let mut grapheme_len: usize = 0;
             let mut cp_count: usize = 0;
 
-            while let Some(result) = grapheme_iter.next() {
+            while let Some(result) = grapheme_iter.next_code_point() {
                 cp_count += 1;
                 if result.is_break {
                     // Found the first grapheme boundary
