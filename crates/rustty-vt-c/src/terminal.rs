@@ -67,7 +67,6 @@ use rustty_vt::size_report;
 use rustty_vt::stream_terminal::{Handler, Stream};
 use rustty_vt::terminal::{Colors, Terminal as ZigTerminal};
 use rustty_vt::terminal::{Options as ZigTerminalOptions, ScrollViewport as ZigScrollViewport};
-use std::collections::HashSet;
 use std::ffi::c_void;
 use std::mem::{align_of, offset_of, size_of};
 use std::os::raw::c_int;
@@ -240,10 +239,19 @@ pub struct TerminalWrapper {
     pub terminfo_name_buf: [u8; rustty_vt::stream_terminal::MAX_TERMINFO_NAME_BYTES],
     pub stream: Stream<'static>,
     pub effects: Effects,
-    pub tracked_grid_refs: HashSet<*mut TrackedGridRef>,
+    // tracked_grid_refs: std.AutoArrayHashMapUnmanaged(*TrackedGridRef, void) = .{},
+    // PORT NOTE (parity tail S7-4): grown through the terminal's allocator
+    // (`t.gpa()`, the caller's), which the map is bound to in `wrap`.
+    pub tracked_grid_refs: WrapperSet<*mut TrackedGridRef>,
     // searches: std.AutoArrayHashMapUnmanaged(*search_c.SearchWrapper, void) = .{},
-    pub searches: HashSet<*mut SearchWrapper>,
+    // (the terminal's allocator too: the search's registration is charged to
+    // the terminal, N262.)
+    pub searches: WrapperSet<*mut SearchWrapper>,
 }
+
+/// `std.AutoArrayHashMapUnmanaged(K, void)` over the terminal's allocator
+/// handle: the wrapper's registries of live tracked refs and searches.
+pub type WrapperSet<K> = rustty_vt::alloc::AArrayHashMap<K, ()>;
 
 /// C callback state for terminal effects. Most trampolines are always
 /// installed on the stream handler; they check these fields and no-op when
@@ -1768,8 +1776,8 @@ unsafe fn wrap(
                     continuation_max_bytes: Some(continuation_max_bytes),
                 }),
                 effects: Effects::default(),
-                tracked_grid_refs: HashSet::new(),
-                searches: HashSet::new(),
+                tracked_grid_refs: WrapperSet::new_in(capture_alloc),
+                searches: WrapperSet::new_in(capture_alloc),
             },
         )
     };
@@ -1885,7 +1893,11 @@ pub enum FromDecodedError {
 // arm) is N/A — see the `Io` PORT NOTE. The reference `alloc` is the decoder's
 // resolved allocator; rustty passes the decoder's stored C-allocator COPY and
 // builds a fresh F-008 holder here, so the produced terminal owns its own
-// holder exactly like a `new`-created one (`free` reclaims it).
+// holder exactly like a `new`-created one (`free` reclaims it). The decoded
+// terminal was built over the same allocator as the runtime handle (parity
+// tail S7-4: the snapshot decoder passes `lib.alloc.default(alloc_)` to
+// `ready`), so its internals, like a `new`-created terminal's, grow through
+// the caller's allocator.
 ///
 /// # Safety
 /// `alloc_`, if provided, must reference a valid `CAllocator`.
@@ -1910,6 +1922,14 @@ pub unsafe fn from_decoded(
     // native.* = decoded.toOwned();
     // SAFETY: `terminal_ptr` is valid uninitialized `ZigTerminal` storage.
     unsafe { std::ptr::write(terminal_ptr, decoded.to_owned()) };
+    // The decoded terminal's allocator is the one the wrapper stores below.
+    // SAFETY: `terminal_ptr` holds the transferred terminal; `alloc_` is the
+    // caller's allocator (the function's contract).
+    unsafe {
+        (*terminal_ptr)
+            .gpa()
+            .debug_assert_same(rustty_vt::alloc::default(alloc_))
+    };
 
     // const continuation = switch (decoded.continuation) {
     //     .ground => "",
@@ -1946,8 +1966,8 @@ pub unsafe fn from_decoded(
         Err(_oom) => {
             // native.deinit(alloc); alloc.destroy(native); io.deinit(alloc);
             // PORT NOTE: `deinit` takes the allocator the decoded terminal was
-            // built with (the snapshot decoder's; routing it is S7-4's), which
-            // the terminal records as `gpa()`.
+            // built with (the snapshot decoder's, the caller's), which the
+            // terminal records as `gpa()`.
             // SAFETY: `terminal_ptr` holds the transferred terminal.
             unsafe {
                 let gpa = (*terminal_ptr).gpa();
@@ -4465,11 +4485,15 @@ pub unsafe fn grid_ref_track(
     let reserved = track_tw_check().and_then(|()| unsafe {
         (*terminal_)
             .tracked_grid_refs
-            .try_reserve(1)
+            .try_put_no_clobber(ref_ptr, ())
             .map_err(|_| TrackRegistryFull)
     });
     #[cfg(not(test))]
-    let reserved = unsafe { (*terminal_).tracked_grid_refs.try_reserve(1) };
+    let reserved = unsafe {
+        (*terminal_)
+            .tracked_grid_refs
+            .try_put_no_clobber(ref_ptr, ())
+    };
     if reserved.is_err() {
         // SAFETY: as above; `ref_ptr` was just created with `alloc` and has
         // not been handed out.
@@ -4477,9 +4501,6 @@ pub unsafe fn grid_ref_track(
         unsafe { crate::cwrap::destroy(alloc.as_ref(), ref_ptr) };
         return Result::OutOfMemory;
     }
-    // SAFETY: `tracked_grid_refs` is a sibling field of the live wrapper.
-    let inserted = unsafe { (*terminal_).tracked_grid_refs.insert(ref_ptr) };
-    debug_assert!(inserted);
 
     // out.* = ref;
     unsafe { *out_ref = ref_ptr };
@@ -4608,12 +4629,12 @@ pub unsafe fn free(terminal_: Terminal) {
     // SAFETY: each tracked-ref pointer was inserted by `grid_ref_track` and
     // is still live (it back-references this wrapper); detach it so a later
     // tracked-ref free does not dereference the freed terminal.
-    for &ref_ in unsafe { (*terminal_).tracked_grid_refs.iter() } {
+    for &ref_ in unsafe { (*terminal_).tracked_grid_refs.keys() } {
         unsafe { (*ref_).terminal = std::ptr::null_mut() };
     }
     // wrapper.tracked_grid_refs.deinit(alloc); — the HashSet frees when the
     // wrapper value drops below.
-    unsafe { (*terminal_).tracked_grid_refs.clear() };
+    unsafe { (*terminal_).tracked_grid_refs.clear_and_free() };
 
     // for (wrapper.searches.keys()) |search| search.terminal = null;
     // PORT NOTE (`f0c918fc4`): detach every registered search so a later
@@ -4623,12 +4644,12 @@ pub unsafe fn free(terminal_: Terminal) {
     // (no `&mut SearchWrapper` exists anywhere; `search.rs` SB note).
     // SAFETY: each search pointer was inserted by `search::new` and is still
     // live (a freed search unregisters itself first).
-    for &search in unsafe { (*terminal_).searches.iter() } {
+    for &search in unsafe { (*terminal_).searches.keys() } {
         unsafe { (*search).terminal = std::ptr::null_mut() };
     }
     // wrapper.searches.deinit(alloc); — the HashSet frees when the wrapper
     // value drops below.
-    unsafe { (*terminal_).searches.clear() };
+    unsafe { (*terminal_).searches.clear_and_free() };
 
     // wrapper.stream.deinit();
     unsafe { (*terminal_).stream.deinit() };
@@ -11308,7 +11329,14 @@ mod tests {
     /// the alternate screen (a second `Screen` from `ScreenSet.getInit`), kitty
     /// drag and drop state, wide tab stops after a resize past 512 columns, a
     /// tracked grid ref (a pin and the tracked-pin set), and a full reset.
-    fn sweep_corpus(t: Terminal) -> Vec<Result> {
+    ///
+    /// Parity tail S7-4 adds: Kitty graphics (a transmit-and-display, a chunked
+    /// transmit, an animation frame and a composition, a display and an
+    /// uppercase delete), a glyph protocol registration (the request bytes and
+    /// the decoded outline), an OSC 52 write and a Kitty clipboard write
+    /// transaction (both through the installed clipboard effect), a color
+    /// response larger than its stack buffer, and XTGETTCAP / DECRQSS.
+    fn sweep_corpus(t: Terminal, before_reset: &dyn Fn(Terminal)) -> Vec<Result> {
         // A smaller corpus under Miri (the design's "small-corpus instance");
         // it still reaches every family below.
         let (lines, more_lines) = if cfg!(miri) { (4, 2) } else { (60, 40) };
@@ -11345,6 +11373,37 @@ mod tests {
         // destroyed by `free`.
         vtw(t, b"\x1B]72;t=a;text/plain text/uri-list\x1B\\");
         vtw(t, b"\x1B]72;t=m:o=1;text/plain\x1B\\");
+        // Kitty graphics.
+        vtw(t, b"\x1B_Ga=T,f=24,s=1,v=1,i=1;/wAA\x1B\\");
+        vtw(t, b"\x1B_Ga=t,f=24,s=2,v=1,i=2,m=1;/wAA\x1B\\");
+        vtw(t, b"\x1B_Gm=0;AAD/\x1B\\");
+        vtw(t, b"\x1B_Ga=f,i=1,f=24,s=1,v=1;AAD/\x1B\\");
+        vtw(t, b"\x1B_Ga=c,i=1,r=1,c=2,w=1,h=1\x1B\\");
+        vtw(t, b"\x1B_Ga=p,i=2\x1B\\");
+        vtw(t, b"\x1B_Ga=d,d=I,i=2\x1B\\");
+        // A glyph protocol registration: a one-contour, three-point outline.
+        vtw(
+            t,
+            b"\x1B_25a1;r;cp=e0a0;AAEAAAAAAGQAZAACAAABAQEAAABk/84AAAAAAGQ=\x1B\\",
+        );
+        // Clipboard writes (the sweep installs a clipboard effect).
+        vtw(t, b"\x1B]52;c;aGVsbG8=\x1B\\");
+        vtw(t, b"\x1B]5522;type=write\x1B\\");
+        vtw(
+            t,
+            b"\x1B]5522;type=wdata:mime=dGV4dC9wbGFpbg==;R2hvc3Q=\x1B\\",
+        );
+        vtw(t, b"\x1B]5522;type=wdata\x1B\\");
+        // A color response past its 1024-byte stack buffer.
+        let mut queries = b"\x1B]4".to_vec();
+        for i in 0..64 {
+            queries.extend_from_slice(format!(";{i};?").as_bytes());
+        }
+        queries.extend_from_slice(b"\x1B\\");
+        vtw(t, &queries);
+        // DCS: XTGETTCAP ("TN") and DECRQSS (SGR).
+        vtw(t, b"\x1BP+q544e\x1B\\");
+        vtw(t, b"\x1BP$qm\x1B\\");
         results.push(unsafe { resize(t, 600, 30, 8, 16) });
         vtw(t, b"\x1B[3g\x1B[1;590H\x1BH\r\t\tafter tabs\r\n");
         let mut ref_: crate::grid_ref_tracked::CTrackedGridRef = std::ptr::null_mut();
@@ -11361,12 +11420,97 @@ mod tests {
             vtw(t, format!("more {i:03}\r\n").as_bytes());
         }
         results.push(unsafe { resize(t, 80, 24, 8, 16) });
+        before_reset(t);
         vtw(t, b"\x1Bc");
         vtw(t, b"\x1B]2;after reset\x1B\\done");
         if !ref_.is_null() {
             unsafe { crate::grid_ref_tracked::tracked_grid_ref_free(ref_) };
         }
         results
+    }
+
+    thread_local! {
+        /// Clipboard writes the sweep's effect accepted (this thread's).
+        static SWEEP_CLIPBOARD_WRITES: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+    }
+
+    // Parity tail S7-4: the sweep corpus is not vacuous. On a clean run over a
+    // counting C allocator it stores a Kitty image with an animation frame
+    // (and deletes the chunked one), registers the glyph, and hands both
+    // clipboard writes to the effect; every byte it took is returned by `free`.
+    #[test]
+    fn sweep_corpus_reaches_the_s7_4_families() {
+        use rustty_vt::alloc::testing::CountingAllocator;
+        let counting = CountingAllocator::over_heap();
+        let calloc = counting.allocator();
+        let mut t: Terminal = std::ptr::null_mut();
+        assert_eq!(Result::Success, unsafe {
+            new(&calloc as *const CAllocator, &mut t, 80, 24)
+        });
+        sweep_install_effects(t);
+        SWEEP_CLIPBOARD_WRITES.with(|c| c.set(0));
+        let reached = |t: Terminal| {
+            // SAFETY: `t` is the live wrapper; raw reads of its terminal and
+            // active screen.
+            unsafe {
+                let term = (*t).terminal;
+                let storage = &(*(*term).screens.active).kitty_images;
+                let img = storage.images.get(&1).expect("image 1 is stored");
+                assert_eq!(
+                    1,
+                    img.animation
+                        .as_ref()
+                        .expect("image 1 animates")
+                        .frames
+                        .len()
+                );
+                assert!(storage.images.get(&2).is_none(), "image 2 was deleted");
+                assert!(
+                    (*term).glyph_glossary.contains(0xE0A0),
+                    "the glyph is registered"
+                );
+            }
+        };
+        for r in sweep_corpus(t, &reached) {
+            assert_eq!(Result::Success, r);
+        }
+        // OSC 52 twice (the long capture and the short write) and the Kitty
+        // clipboard commit.
+        assert_eq!(3, SWEEP_CLIPBOARD_WRITES.with(|c| c.get()));
+        let calls_before_free = counting.alloc_calls.get();
+        unsafe { free(t) };
+        // (S7-3's corpus made 33 allocations; the families above add theirs.)
+        assert!(
+            calls_before_free > 33,
+            "the corpus allocates: {calls_before_free}"
+        );
+        assert_eq!(0, counting.live_bytes.get(), "free returns every byte");
+    }
+
+    /// The effects the sweep corpus exercises: a pty sink and a clipboard
+    /// writer that accepts every write. Setting them allocates nothing.
+    fn sweep_install_effects(t: Terminal) {
+        extern "C" fn write_pty(_: Terminal, _: *mut c_void, _: *const u8, _: usize) {}
+        extern "C" fn clipboard_write(_: Terminal, _: *mut c_void, request: *const ClipboardWrite) {
+            SWEEP_CLIPBOARD_WRITES.with(|c| c.set(c.get() + 1));
+            // SAFETY: `request` is valid for the callback.
+            unsafe {
+                ((*request).reply)(
+                    request,
+                    &ClipboardWriteReply {
+                        size: std::mem::size_of::<ClipboardWriteReply>(),
+                        result: clipboard::WriteStatus::Success,
+                        remember: false,
+                    },
+                )
+            };
+        }
+        assert_eq!(Result::Success, unsafe {
+            set(t, Option_::WritePty, write_pty as *const c_void)
+        });
+        assert_eq!(Result::Success, unsafe {
+            set(t, Option_::ClipboardWrite, clipboard_write as *const c_void)
+        });
     }
 
     /// One sweep scenario over `failing`: `new`, the corpus, `free`. Asserts
@@ -11384,7 +11528,8 @@ mod tests {
         match r {
             Result::Success => {
                 assert!(!t.is_null());
-                for r in sweep_corpus(t) {
+                sweep_install_effects(t);
+                for r in sweep_corpus(t, &|_| {}) {
                     assert!(
                         matches!(r, Result::Success | Result::OutOfMemory),
                         "{what}: unexpected result {r:?}"

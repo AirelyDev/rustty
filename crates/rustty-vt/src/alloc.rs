@@ -232,6 +232,11 @@ pub type AVec<T> = allocator_api2::vec::Vec<T, VtAllocator>;
 /// dropping it is `alloc.destroy`.
 pub type ABox<T> = allocator_api2::boxed::Box<T, VtAllocator>;
 
+/// `std.AutoArrayHashMapUnmanaged(K, V)` over a [`VtAllocator`] bound at
+/// construction (zigstd's port, S7-3).
+pub type AArrayHashMap<K, V> =
+    rustty_zigstd::array_hash_map::AutoArrayHashMapUnmanaged<K, V, VtAllocator>;
+
 /// Owned bytes allocated through a [`VtAllocator`] (`[]u8` from
 /// `alloc.alloc`/`alloc.dupe`/`toOwnedSlice`).
 pub type Bytes = AVec<u8>;

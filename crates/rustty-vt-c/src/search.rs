@@ -413,11 +413,11 @@ pub unsafe fn new(
     let reserved = register_tw_check().and_then(|()| unsafe {
         (*terminal_wrapper)
             .searches
-            .try_reserve(1)
+            .try_put_no_clobber(wrapper, ())
             .map_err(|_| RegistryFull)
     });
     #[cfg(not(test))]
-    let reserved = unsafe { (*terminal_wrapper).searches.try_reserve(1) };
+    let reserved = unsafe { (*terminal_wrapper).searches.try_put_no_clobber(wrapper, ()) };
     if reserved.is_err() {
         // alloc.destroy(wrapper);
         // PORT NOTE: the `free` pattern — `alloc` was moved into the wrapper by
@@ -433,9 +433,6 @@ pub unsafe fn new(
         // return .out_of_memory;
         return Result::OutOfMemory;
     }
-    // SAFETY: `searches` is a sibling field of the live terminal wrapper.
-    let inserted = unsafe { (*terminal_wrapper).searches.insert(wrapper) };
-    debug_assert!(inserted);
 
     // out.* = wrapper;
     // SAFETY: `out_search` is a non-null valid writable `Search`.
@@ -493,7 +490,7 @@ pub unsafe fn free(search_: Search) {
         //     _ = terminal_wrapper.searches.swapRemove(wrapper);
         // SAFETY: a non-null `terminal` is a live terminal wrapper (it nulls
         // this field before it dies); `searches` is a sibling field.
-        unsafe { (*terminal_wrapper).searches.remove(&search_) };
+        unsafe { (*terminal_wrapper).searches.swap_remove(&search_) };
         //     if (wrapper.search) |*s| s.deinit(terminal_wrapper.terminal);
         let t = unsafe { (*terminal_wrapper).terminal };
         if let Some(s) = unsafe { &mut (*search_).search }.as_mut() {
