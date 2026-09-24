@@ -182,3 +182,42 @@ fn install_layout_is_versioned_like_the_reference() {
     assert_eq!(field(&pcs, "Libs:"), "${libdir}/librustty-vt.a");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// S64-F5, Windows: the `.pc` links `-lrustty-vt`, so the installed import
+/// library must be the file that flag names, `rustty-vt.lib`, as Zig installs
+/// the reference's `ghostty-vt.lib` for its `-lghostty-vt`
+/// (`GhosttyLibVt.zig:227-228`, `:529`). The DLL keeps cargo's name (an import
+/// library records its DLL's name), but the import library's own file name is
+/// free. Read from `CMakeLists.txt`, because the WIN32 branch cannot be
+/// configured on this host; the final link is unverified until a Windows run.
+#[test]
+fn windows_import_library_is_installed_under_the_pc_link_name() {
+    let cmake = std::fs::read_to_string(workspace_root().join("CMakeLists.txt")).unwrap();
+    let set_value = |var: &str| -> String {
+        let key = format!("set({var} \"");
+        let at = cmake
+            .find(&key)
+            .unwrap_or_else(|| panic!("no `{key}` in CMakeLists.txt"));
+        let rest = &cmake[at + key.len()..];
+        rest[..rest.find('"').unwrap()].to_string()
+    };
+    let link_name = set_value("RUSTTY_VT_PC_LINK_NAME");
+    assert_eq!(link_name, "rustty-vt");
+    assert_eq!(
+        set_value("RUSTTY_VT_INSTALL_IMPLIB"),
+        format!("{link_name}.lib")
+    );
+    assert!(
+        cmake.contains(
+            "install(FILES \"${RUSTTY_OUT_DIR}/${RUSTTY_VT_IMPLIB}\" TYPE LIB RENAME \"${RUSTTY_VT_INSTALL_IMPLIB}\")"
+        ),
+        "the WIN32 install must rename the import library"
+    );
+    let config =
+        std::fs::read_to_string(workspace_root().join("dist/cmake/rustty-vt-config.cmake.in"))
+            .unwrap();
+    assert!(
+        config.contains("IMPORTED_IMPLIB \"${_rustty_vt_libdir}/@RUSTTY_VT_INSTALL_IMPLIB@\""),
+        "the installed package config must point at the installed import library"
+    );
+}

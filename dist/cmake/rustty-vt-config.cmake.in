@@ -31,7 +31,7 @@ if(NOT TARGET rustty-vt::rustty-vt)
         )
     elseif(WIN32)
         set_target_properties(rustty-vt::rustty-vt PROPERTIES
-            IMPORTED_IMPLIB "${_rustty_vt_libdir}/@RUSTTY_VT_IMPLIB@"
+            IMPORTED_IMPLIB "${_rustty_vt_libdir}/@RUSTTY_VT_INSTALL_IMPLIB@"
         )
     else()
         set_target_properties(rustty-vt::rustty-vt PROPERTIES

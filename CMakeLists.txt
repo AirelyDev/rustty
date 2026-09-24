@@ -158,10 +158,14 @@ if(APPLE)
     set(RUSTTY_VT_INSTALL_LINKNAME "librustty-vt.dylib")
 elseif(WIN32)
     # A DLL cannot be renamed after linking: its import library names it. So
-    # the DLL and import library keep cargo's names.
+    # the DLL keeps cargo's name. The import library's FILE name is free (the
+    # DLL name is recorded inside it), so it is installed as `rustty-vt.lib`,
+    # the file `-lrustty-vt` in the .pc resolves to: Zig installs the
+    # reference's as `ghostty-vt.lib`, which its `-lghostty-vt` names.
     set(RUSTTY_VT_INSTALL_REALNAME "${RUSTTY_VT_REALNAME}")
     set(RUSTTY_VT_INSTALL_SONAME "${RUSTTY_VT_REALNAME}")
     set(RUSTTY_VT_INSTALL_LINKNAME "${RUSTTY_VT_REALNAME}")
+    set(RUSTTY_VT_INSTALL_IMPLIB "rustty-vt.lib")
 else()
     set(RUSTTY_VT_INSTALL_REALNAME "librustty-vt.so.${PROJECT_VERSION}")
     set(RUSTTY_VT_INSTALL_SONAME "${RUSTTY_VT_SONAME}")
@@ -306,7 +310,7 @@ include(GNUInstallDirs)
 # SONAME->REALNAME symlink dance".
 if(WIN32)
     install(FILES "${RUSTTY_VT_SHARED_LIBRARY}" TYPE BIN)
-    install(FILES "${RUSTTY_OUT_DIR}/${RUSTTY_VT_IMPLIB}" TYPE LIB)
+    install(FILES "${RUSTTY_OUT_DIR}/${RUSTTY_VT_IMPLIB}" TYPE LIB RENAME "${RUSTTY_VT_INSTALL_IMPLIB}")
 else()
     install(FILES "${RUSTTY_VT_SHARED_LIBRARY}" TYPE LIB RENAME "${RUSTTY_VT_INSTALL_REALNAME}")
     # Resolved when the install script runs, so `cmake --install --prefix`
