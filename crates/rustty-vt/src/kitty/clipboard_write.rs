@@ -889,11 +889,12 @@ mod tests {
                 .alias(alloc, &alias_meta, b"VEVYVCBVVEY4X1NUUklORw==")
                 .unwrap();
             // The decoded payload (freed), the shared target, the targets
-            // list, the alias dupe and the aliases list.
-            assert_eq!(9, counting.alloc_calls.get());
+            // list, the aliases list and one dupe per alias ("TEXT",
+            // "UTF8_STRING").
+            assert_eq!(10, counting.alloc_calls.get());
             let committed = state.commit(alloc).unwrap();
-            assert_eq!(10, counting.alloc_calls.get(), "the committed contents");
-            assert_eq!(2, committed.contents.len());
+            assert_eq!(11, counting.alloc_calls.get(), "the committed contents");
+            assert_eq!(3, committed.contents.len());
             committed.deinit(alloc);
             state.deinit(alloc);
             assert_eq!(0, counting.live_bytes.get(), "every byte is returned");

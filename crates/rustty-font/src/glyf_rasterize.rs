@@ -86,8 +86,8 @@ impl From<z2d::surface::Error> for Error {
 /// backends.
 ///
 /// The caller owns the returned bitmap.
-pub fn rasterize(
-    outline: &Outline,
+pub fn rasterize<A: allocator_api2::alloc::Allocator>(
+    outline: &Outline<A>,
     design: DesignMetrics,
     opts: RenderOptions,
 ) -> Result<Bitmap, Error> {
@@ -547,8 +547,8 @@ mod tests {
     fn empty_outline_returns_empty_bitmap() {
         let bm = rasterize(
             &Outline {
-                points: vec![],
-                contours: vec![],
+                points: allocator_api2::vec![],
+                contours: allocator_api2::vec![],
             },
             DesignMetrics {
                 units_per_em: 1000,
@@ -570,7 +570,7 @@ mod tests {
     #[test]
     fn square_fills_bitmap_center() {
         let outline = Outline {
-            points: vec![
+            points: allocator_api2::vec![
                 GP {
                     x: 0,
                     y: 0,
@@ -592,7 +592,7 @@ mod tests {
                     on_curve: true,
                 },
             ],
-            contours: vec![3],
+            contours: allocator_api2::vec![3],
         };
 
         let bm = rasterize(
@@ -612,7 +612,7 @@ mod tests {
     #[test]
     fn quadratic_contour_renders() {
         let outline = Outline {
-            points: vec![
+            points: allocator_api2::vec![
                 GP {
                     x: 0,
                     y: 0,
@@ -629,7 +629,7 @@ mod tests {
                     on_curve: true,
                 },
             ],
-            contours: vec![2],
+            contours: allocator_api2::vec![2],
         };
 
         let bm = rasterize(
@@ -653,7 +653,7 @@ mod tests {
     #[test]
     fn consecutive_off_curve_points_render() {
         let outline = Outline {
-            points: vec![
+            points: allocator_api2::vec![
                 GP {
                     x: 0,
                     y: 0,
@@ -675,7 +675,7 @@ mod tests {
                     on_curve: true,
                 },
             ],
-            contours: vec![3],
+            contours: allocator_api2::vec![3],
         };
 
         let bm = rasterize(
@@ -699,7 +699,7 @@ mod tests {
     #[test]
     fn units_per_em_controls_baseline_scale() {
         let outline = Outline {
-            points: vec![
+            points: allocator_api2::vec![
                 GP {
                     x: 0,
                     y: 0,
@@ -721,7 +721,7 @@ mod tests {
                     on_curve: true,
                 },
             ],
-            contours: vec![3],
+            contours: allocator_api2::vec![3],
         };
 
         let bm = rasterize(
@@ -745,7 +745,7 @@ mod tests {
     #[test]
     fn degenerate_outline_returns_full_empty_bitmap() {
         let outline = Outline {
-            points: vec![
+            points: allocator_api2::vec![
                 GP {
                     x: 0,
                     y: 0,
@@ -762,7 +762,7 @@ mod tests {
                     on_curve: true,
                 },
             ],
-            contours: vec![2],
+            contours: allocator_api2::vec![2],
         };
 
         let bm = rasterize(
@@ -787,7 +787,7 @@ mod tests {
     #[test]
     fn contour_can_start_off_curve_with_final_on_curve_point() {
         let outline = Outline {
-            points: vec![
+            points: allocator_api2::vec![
                 GP {
                     x: 500,
                     y: 1000,
@@ -804,7 +804,7 @@ mod tests {
                     on_curve: true,
                 },
             ],
-            contours: vec![2],
+            contours: allocator_api2::vec![2],
         };
 
         let bm = rasterize(
@@ -828,7 +828,7 @@ mod tests {
     #[test]
     fn contour_can_start_with_implied_midpoint() {
         let outline = Outline {
-            points: vec![
+            points: allocator_api2::vec![
                 GP {
                     x: 250,
                     y: 1000,
@@ -850,7 +850,7 @@ mod tests {
                     on_curve: true,
                 },
             ],
-            contours: vec![3],
+            contours: allocator_api2::vec![3],
         };
 
         let bm = rasterize(
@@ -874,7 +874,7 @@ mod tests {
     #[test]
     fn multiple_contours_render_independently() {
         let outline = Outline {
-            points: vec![
+            points: allocator_api2::vec![
                 GP {
                     x: 0,
                     y: 0,
@@ -916,7 +916,7 @@ mod tests {
                     on_curve: true,
                 },
             ],
-            contours: vec![3, 7],
+            contours: allocator_api2::vec![3, 7],
         };
 
         let bm = rasterize(
@@ -938,7 +938,7 @@ mod tests {
     #[test]
     fn non_zero_bearings_preserve_declared_whitespace() {
         let outline = Outline {
-            points: vec![
+            points: allocator_api2::vec![
                 GP {
                     x: 250,
                     y: 0,
@@ -960,7 +960,7 @@ mod tests {
                     on_curve: true,
                 },
             ],
-            contours: vec![3],
+            contours: allocator_api2::vec![3],
         };
 
         let bm = rasterize(
@@ -982,7 +982,7 @@ mod tests {
     #[test]
     fn negative_y_coordinates_descend_below_baseline() {
         let outline = Outline {
-            points: vec![
+            points: allocator_api2::vec![
                 GP {
                     x: 0,
                     y: -250,
@@ -1004,7 +1004,7 @@ mod tests {
                     on_curve: true,
                 },
             ],
-            contours: vec![3],
+            contours: allocator_api2::vec![3],
         };
 
         let bm = rasterize(
@@ -1026,7 +1026,7 @@ mod tests {
     #[test]
     fn two_cell_bitmap_and_constraint_render_within_width() {
         let outline = Outline {
-            points: vec![
+            points: allocator_api2::vec![
                 GP {
                     x: 0,
                     y: 0,
@@ -1048,7 +1048,7 @@ mod tests {
                     on_curve: true,
                 },
             ],
-            contours: vec![3],
+            contours: allocator_api2::vec![3],
         };
 
         let bm = rasterize(
@@ -1083,7 +1083,7 @@ mod tests {
     #[test]
     fn line_height_does_not_change_unconstrained_em_scale() {
         let outline = Outline {
-            points: vec![
+            points: allocator_api2::vec![
                 GP {
                     x: 0,
                     y: 0,
@@ -1105,7 +1105,7 @@ mod tests {
                     on_curve: true,
                 },
             ],
-            contours: vec![3],
+            contours: allocator_api2::vec![3],
         };
 
         let bm = rasterize(

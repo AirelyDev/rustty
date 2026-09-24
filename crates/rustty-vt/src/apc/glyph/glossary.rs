@@ -234,9 +234,11 @@ pub struct Entry {
 
 /// Stored glyph payload variants.
 // PORT NOTE: reference nested `Entry.Glyph = union(enum) { glyf: Glyf.Outline }`.
-// Hoisted to a sibling enum; the single `glyf` variant carries an owned `Outline`.
+// Hoisted to a sibling enum; the single `glyf` variant carries an owned
+// `Outline` whose vectors were allocated through the registering allocator
+// (parity tail S7-4).
 pub enum Glyph {
-    Glyf(Outline),
+    Glyf(Outline<crate::alloc::Allocator>),
 }
 
 /// Errors that can occur while constructing a glossary entry from a
@@ -281,7 +283,10 @@ impl Entry {
     /// decodes the base64 glyph payload, and stores the decoded outline. The
     /// returned entry owns decoded glyph memory and must be released with
     /// `deinit`.
-    pub fn init(req: &RegisterReq) -> Result<Entry, EntryInitError> {
+    pub fn init(
+        alloc: crate::alloc::Allocator,
+        req: &RegisterReq,
+    ) -> Result<Entry, EntryInitError> {
         // Validate format
         // const fmt = req.get(.fmt) orelse return error.InvalidOptions;
         let fmt = req.get_fmt().ok_or(EntryInitError::InvalidOptions)?;
@@ -313,7 +318,9 @@ impl Entry {
         //     .colrv0, .colrv1 => return error.UnsupportedFormat,
         // };
         let glyph: Glyph = match fmt {
-            request::Format::Glyf => Glyph::Glyf(req.decode_glyf_payload(MAX_GLYF_ALLOCATION)?),
+            request::Format::Glyf => {
+                Glyph::Glyf(req.decode_glyf_payload(alloc, MAX_GLYF_ALLOCATION)?)
+            }
             request::Format::Colrv0 | request::Format::Colrv1 => {
                 return Err(EntryInitError::UnsupportedFormat);
             }
@@ -443,7 +450,7 @@ mod tests {
     // an owned `Vec<u8>` here; parsing consumes it.
     fn test_parse_register(data: &[u8]) -> RegisterReq {
         // const raw = try alloc.dupe(u8, data);
-        let raw = data.to_vec();
+        let raw = crate::alloc::heap_bytes(data);
         // const req = try request.Request.parse(alloc, raw);
         let req = Request::parse(raw).unwrap();
         // switch (req) { .register => |reg| return reg, else => unreachable }
@@ -469,7 +476,7 @@ mod tests {
         .into_bytes();
 
         // const req = try request.Request.parse(alloc, data);
-        let req = Request::parse(data).unwrap();
+        let req = Request::parse(crate::alloc::heap_bytes(&data)).unwrap();
         match req {
             Request::Register(reg) => reg,
             _ => unreachable!(),
@@ -481,7 +488,7 @@ mod tests {
         let req = test_register_req(cp);
         // defer alloc.free(req.raw);
         // return try Entry.init(alloc, req);
-        Entry::init(&req).unwrap()
+        Entry::init(crate::alloc::Global, &req).unwrap()
     }
 
     #[test]
@@ -490,7 +497,7 @@ mod tests {
         let req = test_register_req(0xE000);
 
         // var entry = try Entry.init(alloc, req);
-        let entry = Entry::init(&req).unwrap();
+        let entry = Entry::init(crate::alloc::Global, &req).unwrap();
 
         // try testing.expectEqual(@as(u32, 2048), entry.design.units_per_em);
         assert_eq!(2048u32, entry.design.units_per_em);
@@ -532,7 +539,7 @@ mod tests {
         // an `Outline`), so the result is mapped to `()` before comparison.
         assert_eq!(
             Err(EntryInitError::MalformedPayload),
-            Entry::init(&req).map(|_| ())
+            Entry::init(crate::alloc::Global, &req).map(|_| ())
         );
     }
 
@@ -627,7 +634,7 @@ mod tests {
         // try testing.expectError(error.PayloadTooLarge, Entry.init(alloc, req));
         assert_eq!(
             Err(EntryInitError::PayloadTooLarge),
-            Entry::init(&req).map(|_| ())
+            Entry::init(crate::alloc::Global, &req).map(|_| ())
         );
     }
 
@@ -641,7 +648,7 @@ mod tests {
 
         // var entry = try Entry.init(alloc, req);
         // defer entry.deinit(alloc);
-        let mut entry = Entry::init(&req).unwrap();
+        let mut entry = Entry::init(crate::alloc::Global, &req).unwrap();
         // try testing.expectEqual(@as(usize, 5461), entry.glyph.glyf.points.len);
         // try testing.expectEqual(@as(usize, 2), entry.glyph.glyf.contours.len);
         let Glyph::Glyf(outline) = &entry.glyph;

@@ -7267,7 +7267,9 @@ mod tests {
         let img = storage.image_by_id(7).expect("image 7 must be stored");
         let expected: Vec<u8> = (5..17).map(|i| (i % 251) as u8).collect();
         match &img.data {
-            kitty::graphics_image::Data::Complete(d) => assert_eq!(&expected, d),
+            kitty::graphics_image::Data::Complete(d) => {
+                assert_eq!(expected.as_slice(), d.as_slice())
+            }
             other => panic!("unexpected image data: {other:?}"),
         }
 

@@ -265,6 +265,22 @@ pub fn bind<T>(v: &mut AVec<T>, alloc: VtAllocator) {
     }
 }
 
+/// A copy of `src` on the Rust heap (the Global arm), aborting on allocation
+/// failure like `<[u8]>::to_vec`. Rust-only convenience for code that builds
+/// allocator-aware byte fields outside any reference allocation site (tests,
+/// the application's Global-arm fixtures).
+pub fn heap_bytes(src: &[u8]) -> Bytes {
+    let mut v = Bytes::new_in(VtAllocator::GLOBAL);
+    v.extend_copy(src);
+    v
+}
+
+/// A box on the Rust heap (the Global arm), aborting on allocation failure
+/// like `Box::new`; the [`heap_bytes`] counterpart for single objects.
+pub fn heap_box<T>(value: T) -> ABox<T> {
+    ABox::new_in(value, VtAllocator::GLOBAL)
+}
+
 /// `try alloc.create(T)` + initialization: one fallible allocation through
 /// `alloc`. On failure `value` is dropped.
 pub fn try_create<T>(alloc: VtAllocator, value: T) -> Result<ABox<T>, OutOfMemory> {
@@ -354,6 +370,92 @@ unsafe impl ApiAllocator for VtAllocator {
             None => unsafe { ApiGlobal.shrink(ptr, old_layout, new_layout) },
             // SAFETY: forwarded under the caller's contract.
             Some(c) => unsafe { c_realloc(c, ptr, old_layout, new_layout) },
+        }
+    }
+}
+
+/// The handle behind the raw `std.mem.Allocator` vtable interface of
+/// rustty-datastruct (`rawAlloc`/`rawResize`/`rawRemap`/`rawFree`), so a
+/// `LimitedAllocator` can wrap it as its child: the kitty PNG decode seam's
+/// `LimitedAllocator.init(alloc, max_size)` (parity tail S7-4).
+///
+/// The C arm forwards each raw call to the caller's vtable unchanged (Zig's
+/// `Allocator.rawAlloc` etc. do exactly that). The Global arm is
+/// `sys::GlobalRawAllocator` (the Rust heap, the same heap the handle's Global
+/// arm uses).
+impl rustty_datastruct::limited_allocator::RawAllocator for VtAllocator {
+    fn raw_alloc(
+        &self,
+        len: usize,
+        alignment: rustty_datastruct::limited_allocator::Alignment,
+        ret_addr: usize,
+    ) -> *mut u8 {
+        match self.c {
+            None => crate::sys::GlobalRawAllocator.raw_alloc(len, alignment, ret_addr),
+            Some(c) => {
+                // SAFETY: `from_c`'s contract keeps the struct alive and its
+                // vtable valid; read by value.
+                let CAllocator { ctx, vtable } = unsafe { c.read() };
+                // SAFETY: the vtable contract.
+                unsafe { ((*vtable).alloc)(ctx, len, alignment.0, ret_addr) }
+            }
+        }
+    }
+
+    fn raw_resize(
+        &self,
+        memory: rustty_datastruct::limited_allocator::RawSlice,
+        alignment: rustty_datastruct::limited_allocator::Alignment,
+        new_len: usize,
+        ret_addr: usize,
+    ) -> bool {
+        match self.c {
+            None => crate::sys::GlobalRawAllocator.raw_resize(memory, alignment, new_len, ret_addr),
+            Some(c) => {
+                // SAFETY: as in `raw_alloc`.
+                let CAllocator { ctx, vtable } = unsafe { c.read() };
+                // SAFETY: the vtable contract; `memory` came from this allocator.
+                unsafe {
+                    ((*vtable).resize)(ctx, memory.ptr, memory.len, alignment.0, new_len, ret_addr)
+                }
+            }
+        }
+    }
+
+    fn raw_remap(
+        &self,
+        memory: rustty_datastruct::limited_allocator::RawSlice,
+        alignment: rustty_datastruct::limited_allocator::Alignment,
+        new_len: usize,
+        ret_addr: usize,
+    ) -> *mut u8 {
+        match self.c {
+            None => crate::sys::GlobalRawAllocator.raw_remap(memory, alignment, new_len, ret_addr),
+            Some(c) => {
+                // SAFETY: as in `raw_alloc`.
+                let CAllocator { ctx, vtable } = unsafe { c.read() };
+                // SAFETY: the vtable contract; `memory` came from this allocator.
+                unsafe {
+                    ((*vtable).remap)(ctx, memory.ptr, memory.len, alignment.0, new_len, ret_addr)
+                }
+            }
+        }
+    }
+
+    fn raw_free(
+        &self,
+        memory: rustty_datastruct::limited_allocator::RawSlice,
+        alignment: rustty_datastruct::limited_allocator::Alignment,
+        ret_addr: usize,
+    ) {
+        match self.c {
+            None => crate::sys::GlobalRawAllocator.raw_free(memory, alignment, ret_addr),
+            Some(c) => {
+                // SAFETY: as in `raw_alloc`.
+                let CAllocator { ctx, vtable } = unsafe { c.read() };
+                // SAFETY: the vtable contract; `memory` came from this allocator.
+                unsafe { ((*vtable).free)(ctx, memory.ptr, memory.len, alignment.0, ret_addr) }
+            }
         }
     }
 }

@@ -74,7 +74,8 @@ mod tests {
         // Reference each available re-exported declaration so its symbol must
         // exist with the expected shape, mirroring `refAllDecls` over the
         // aggregator's members.
-        let _ = super::CommandParser::init as fn(usize) -> super::CommandParser;
+        let _ = super::CommandParser::init
+            as fn(crate::alloc::Allocator, usize) -> super::CommandParser;
         let _ = super::Image::withoutData as fn(&super::Image) -> super::Image;
         let _ = super::unicode::placement_iterator;
         let _ = super::RenderPlacement::from_top_left;

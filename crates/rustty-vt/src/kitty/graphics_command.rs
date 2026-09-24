@@ -3,6 +3,7 @@
 // const Allocator = std.mem.Allocator;
 // const simd = @import("../../simd/main.zig");
 // const lib = @import("../lib.zig");
+use crate::alloc::{Allocator, Bytes, CopyVecExt, TryPushExt};
 use rustty_lib::r#enum::EnumType;
 use rustty_lib::target::Target;
 use rustty_simd as simd;
@@ -124,12 +125,11 @@ impl Default for Kv {
 
 /// Command parser parses the Kitty graphics protocol escape sequence.
 ///
-/// PORT NOTE: The reference keeps `alloc: Allocator` to grow `data` (the `kv`
-/// table is a plain value, no allocation). Rust's `Vec` carries its own
-/// allocator, so the field is elided; `kv`, `max_bytes`, and the parser
-/// `state` are preserved verbatim.
+/// PORT NOTE (parity tail S7-4): `data` is allocated through `alloc` (the
+/// allocator `init` is given; the stream handler's is the terminal's `gpa()`),
+/// fallibly; the `kv` table is a plain value, no allocation.
 pub struct Parser {
-    // alloc: Allocator,
+    alloc: Allocator,
     /// This is the list of KV pairs that we're building up.
     kv: Kv,
 
@@ -145,7 +145,7 @@ pub struct Parser {
     /// payload content of a single command should never exceed 4096 bytes,
     /// but Kitty itself supports larger payloads, so we use an ArrayList
     /// here instead of a fixed buffer so that we can too.
-    data: Vec<u8>,
+    data: Bytes,
 
     /// Maximum bytes the data payload can take. This is to prevent
     /// malicious input from causing us to allocate too much memory.
@@ -171,10 +171,11 @@ enum State {
 impl Parser {
     /// Initialize the parser. The allocator given will be used for both
     /// temporary data and long-lived values such as the final image blob.
-    pub fn init(max_bytes: usize) -> Parser {
+    pub fn init(alloc: Allocator, max_bytes: usize) -> Parser {
         let result: Parser = Parser {
-            // .alloc = alloc,
-            data: Vec::new(),
+            alloc,
+            // .data = .empty,
+            data: Bytes::new_in(alloc),
             // .kv = .{},
             kv: Kv::default(),
             kv_temp_len: 0,
@@ -193,20 +194,24 @@ impl Parser {
         result
     }
 
-    // PORT NOTE: `deinit` is the `Drop` glue in Zig. Rust drops `kv`/`data`
-    // automatically, so there is no explicit `deinit`.
     // pub fn deinit(self: *Parser) void {
     //     self.data.deinit(self.alloc);
     // }
+    // PORT NOTE: `data` frees through `self.alloc` when the parser is dropped.
+
+    /// `self.alloc`: the allocator the parser was created with.
+    pub fn allocator(&self) -> Allocator {
+        self.alloc
+    }
 
     /// Parse a complete command string.
-    pub fn parse_string(data: &[u8]) -> Result<Command, Error> {
-        let mut parser = Parser::init(1024 * 1024);
-        // defer parser.deinit();
+    pub fn parse_string(alloc: Allocator, data: &[u8]) -> Result<Command, Error> {
+        let mut parser = Parser::init(alloc, 1024 * 1024);
+        // defer parser.deinit(); (the drop at return)
         for c in data.iter() {
             parser.feed(*c)?;
         }
-        parser.complete()
+        parser.complete(alloc)
     }
 
     /// Feed a single byte to the parser.
@@ -265,7 +270,8 @@ impl Parser {
                 if self.data.len() >= self.max_bytes {
                     return Err(Error::OutOfMemory);
                 }
-                self.data.push(c);
+                // try self.data.append(self.alloc, c);
+                self.data.try_push(c).map_err(|_| Error::OutOfMemory)?;
             }
         }
 
@@ -289,7 +295,9 @@ impl Parser {
                     return Err(Error::OutOfMemory);
                 }
                 // try self.data.appendSlice(self.alloc, rem);
-                self.data.extend_from_slice(rem);
+                self.data
+                    .try_extend_copy(rem)
+                    .map_err(|_| Error::OutOfMemory)?;
                 return Ok(());
             }
 
@@ -306,7 +314,7 @@ impl Parser {
     ///
     /// The allocator given will be used for the long-lived data
     /// of the final command.
-    pub fn complete(self: &mut Parser) -> Result<Command, Error> {
+    pub fn complete(self: &mut Parser, alloc: Allocator) -> Result<Command, Error> {
         match self.state {
             // We can't ever end in the control key state and be valid.
             // This means the command looked something like "a=1,b"
@@ -362,16 +370,19 @@ impl Parser {
         Ok(Command {
             control,
             quiet,
-            data: self.decode_data()?,
+            data: self.decode_data(alloc)?,
         })
     }
 
     /// Decodes the payload data from base64 and returns it as a slice.
     /// This function will destroy the contents of self.data, it should
     /// only be used once we are done collecting payload bytes.
-    fn decode_data(self: &mut Parser) -> Result<Vec<u8>, Error> {
+    fn decode_data(self: &mut Parser, alloc: Allocator) -> Result<Bytes, Error> {
+        // (`toOwnedSlice(alloc)` of a list grown through `self.alloc`: one
+        // allocator, as the reference's callers guarantee.)
+        self.alloc.debug_assert_same(alloc);
         if self.data.is_empty() {
-            return Ok(Vec::new());
+            return Ok(Bytes::new_in(alloc));
         }
 
         let max_len = simd::base64::max_len(&self.data);
@@ -382,15 +393,14 @@ impl Parser {
         // and any bytes in areas that are written to will have already
         // been used (assuming scalar decoding).
         //
-        // PORT NOTE: the reference decodes in place, slicing `self.data.items`
-        // as both source and destination. Rust's borrow checker forbids
-        // aliasing the same `Vec` as both `&` source and `&mut` destination,
-        // so we copy the source bytes first, decode into the original buffer's
-        // first `max_len` bytes, then truncate. The observable result (decoded
-        // bytes, length, and the InvalidData error on failure) is identical.
-        let src = self.data.clone();
-        let decoded_len = match simd::base64::decode(&src, &mut self.data[0..max_len]) {
-            Ok(decoded) => decoded.len(),
+        // PORT NOTE (parity tail S7-4): `decode_in_place` is the reference's
+        // `decode(self.data.items, self.data.items[0..max_len])` (the SIMD
+        // kernel gets the same buffer as input and output). This replaces a
+        // full copy of the payload the port used to make, which would now be
+        // an allocation through the caller's allocator that the reference
+        // never makes.
+        let decoded_len = match simd::base64::decode_in_place(&mut self.data, max_len) {
+            Ok(decoded_len) => decoded_len,
             Err(_err) => {
                 // log.warn("failed to decode base64 payload data: {}", .{err});
                 return Err(Error::InvalidData);
@@ -401,7 +411,13 @@ impl Parser {
         // Remove the extra bytes.
         self.data.truncate(decoded_len);
 
-        Ok(std::mem::take(&mut self.data))
+        // return try self.data.toOwnedSlice(alloc);
+        // PORT NOTE: the list itself is handed over (no shrinking copy; a T3
+        // call-shape residual) and the parser is left `.empty`.
+        Ok(core::mem::replace(
+            &mut self.data,
+            Bytes::new_in(self.alloc),
+        ))
     }
 
     fn accumulate_value(self: &mut Parser, c: u8, overflow_state: State) -> Result<(), Error> {
@@ -590,7 +606,9 @@ impl Response {
 pub struct Command {
     pub control: Control,
     pub quiet: Quiet,
-    pub data: Vec<u8>,
+    /// PORT NOTE (parity tail S7-4): allocated through the allocator given to
+    /// `Parser.complete` (freed by `deinit(alloc)`, or on drop).
+    pub data: Bytes,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -684,8 +702,9 @@ impl Control {
 impl Command {
     /// Take ownership over the data in this command. If the returned value
     /// has a length of zero, then the data was empty and need not be freed.
-    pub fn to_owned_data(self: &mut Command) -> Vec<u8> {
-        std::mem::take(&mut self.data)
+    pub fn to_owned_data(self: &mut Command) -> Bytes {
+        let alloc = *self.data.allocator();
+        core::mem::replace(&mut self.data, Bytes::new_in(alloc))
     }
 
     /// Returns the transmission data if it has any.
@@ -708,11 +727,16 @@ impl Command {
         }
     }
 
-    // PORT NOTE: the reference frees `self.data` if non-empty. Rust drops the
-    // owning `Vec<u8>` automatically, so there is no explicit `deinit`.
     // pub fn deinit(self: Command, alloc: Allocator) void {
     //     if (self.data.len > 0) alloc.free(self.data);
     // }
+    // PORT NOTE: `data` frees through the allocator it was allocated with on
+    // drop; `deinit` consumes the command and checks that allocator.
+    pub fn deinit(self, alloc: Allocator) {
+        if self.data.capacity() != 0 {
+            self.data.allocator().debug_assert_same(alloc);
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1702,13 +1726,13 @@ mod tests {
 
     #[test]
     fn transmission_command() {
-        let mut p = Parser::init(1024 * 1024);
+        let mut p = Parser::init(crate::alloc::Global, 1024 * 1024);
 
         let input = b"f=24,s=10,v=20";
         for c in input.iter() {
             p.feed(*c).unwrap();
         }
-        let command = p.complete().unwrap();
+        let command = p.complete(crate::alloc::Global).unwrap();
 
         assert!(matches!(command.control, Control::Transmit(_)));
         let v = match command.control {
@@ -1728,7 +1752,7 @@ mod tests {
     // `InvalidCharacter` path) and never a number.
     #[test]
     fn integer_values_refuse_zig_digit_separators() {
-        let command = Parser::parse_string(b"f=24,s=10,v=20").unwrap();
+        let command = Parser::parse_string(crate::alloc::Global, b"f=24,s=10,v=20").unwrap();
         let v = match command.control {
             Control::Transmit(v) => v,
             _ => panic!("expected a transmit command"),
@@ -1738,18 +1762,24 @@ mod tests {
 
         assert_eq!(
             Error::InvalidFormat,
-            Parser::parse_string(b"f=24,s=1_0,v=20").err().unwrap()
+            Parser::parse_string(crate::alloc::Global, b"f=24,s=1_0,v=20")
+                .err()
+                .unwrap()
         );
         assert_eq!(
             Error::InvalidFormat,
-            Parser::parse_string(b"f=24,s=10,v=2__0").err().unwrap()
+            Parser::parse_string(crate::alloc::Global, b"f=24,s=10,v=2__0")
+                .err()
+                .unwrap()
         );
         assert_eq!(
             Error::InvalidFormat,
-            Parser::parse_string(b"a=p,i=1,z=-1_0").err().unwrap()
+            Parser::parse_string(crate::alloc::Global, b"a=p,i=1,z=-1_0")
+                .err()
+                .unwrap()
         );
         // The sign handling stays `std.fmt.parseInt`'s.
-        let command = Parser::parse_string(b"a=p,i=+1,z=-10").unwrap();
+        let command = Parser::parse_string(crate::alloc::Global, b"a=p,i=+1,z=-10").unwrap();
         let d = match command.control {
             Control::Display(d) => d,
             _ => panic!("expected a display command"),
@@ -1759,24 +1789,28 @@ mod tests {
 
         assert_eq!(
             Error::InvalidFormat,
-            Parser::parse_string(b"f=24,s=10_").err().unwrap()
+            Parser::parse_string(crate::alloc::Global, b"f=24,s=10_")
+                .err()
+                .unwrap()
         );
         assert_eq!(
             Error::InvalidFormat,
-            Parser::parse_string(b"a=p,i=1,z=_1").err().unwrap()
+            Parser::parse_string(crate::alloc::Global, b"a=p,i=1,z=_1")
+                .err()
+                .unwrap()
         );
     }
 
     // test "transmission command with transient hint"
     #[test]
     fn transmission_command_with_transient_hint() {
-        let mut p = Parser::init(1024 * 1024);
+        let mut p = Parser::init(crate::alloc::Global, 1024 * 1024);
 
         let input = b"f=24,s=10,v=20,N=1";
         for c in input.iter() {
             p.feed(*c).unwrap();
         }
-        let command = p.complete().unwrap();
+        let command = p.complete(crate::alloc::Global).unwrap();
 
         assert!(matches!(command.control, Control::Transmit(_)));
         let v = match command.control {
@@ -1796,11 +1830,11 @@ mod tests {
     #[test]
     fn transmission_usage_transient_is_bit_zero() {
         fn usage_of(input: &[u8]) -> Usage {
-            let mut p = Parser::init(1024 * 1024);
+            let mut p = Parser::init(crate::alloc::Global, 1024 * 1024);
             for c in input.iter() {
                 p.feed(*c).unwrap();
             }
-            match p.complete().unwrap().control {
+            match p.complete(crate::alloc::Global).unwrap().control {
                 Control::Transmit(v) => v.usage,
                 _ => unreachable!(),
             }
@@ -1826,15 +1860,15 @@ mod tests {
     fn feed_slice_matches_per_byte_feed() {
         let input = b"f=24,s=10,v=20;aGVsbG8gd29ybGQ=";
 
-        let mut p1 = Parser::init(1024 * 1024);
+        let mut p1 = Parser::init(crate::alloc::Global, 1024 * 1024);
         for c in input.iter() {
             p1.feed(*c).unwrap();
         }
-        let c1 = p1.complete().unwrap();
+        let c1 = p1.complete(crate::alloc::Global).unwrap();
 
-        let mut p2 = Parser::init(1024 * 1024);
+        let mut p2 = Parser::init(crate::alloc::Global, 1024 * 1024);
         p2.feed_slice(input).unwrap();
-        let c2 = p2.complete().unwrap();
+        let c2 = p2.complete(crate::alloc::Global).unwrap();
 
         assert!(matches!(c1.control, Control::Transmit(_)));
         assert!(matches!(c2.control, Control::Transmit(_)));
@@ -1844,12 +1878,12 @@ mod tests {
     // test "feedSlice across slice boundaries"
     #[test]
     fn feed_slice_across_slice_boundaries() {
-        let mut p = Parser::init(1024 * 1024);
+        let mut p = Parser::init(crate::alloc::Global, 1024 * 1024);
 
         p.feed_slice(b"f=24,s=10").unwrap();
         p.feed_slice(b",v=20;aGVsbG8g").unwrap();
         p.feed_slice(b"d29ybGQ=").unwrap();
-        let command = p.complete().unwrap();
+        let command = p.complete(crate::alloc::Global).unwrap();
 
         assert!(matches!(command.control, Control::Transmit(_)));
 
@@ -1860,7 +1894,7 @@ mod tests {
     // test "feedSlice respects max_bytes"
     #[test]
     fn feed_slice_respects_max_bytes() {
-        let mut p = Parser::init(4);
+        let mut p = Parser::init(crate::alloc::Global, 4);
 
         p.feed_slice(b"f=24;ab").unwrap();
         assert_eq!(Err(Error::OutOfMemory), p.feed_slice(b"cde"));
@@ -1868,13 +1902,13 @@ mod tests {
 
     #[test]
     fn transmission_ignores_m_if_medium_is_not_direct() {
-        let mut p = Parser::init(1024 * 1024);
+        let mut p = Parser::init(crate::alloc::Global, 1024 * 1024);
 
         let input = b"a=t,t=t,m=1";
         for c in input.iter() {
             p.feed(*c).unwrap();
         }
-        let command = p.complete().unwrap();
+        let command = p.complete(crate::alloc::Global).unwrap();
 
         assert!(matches!(command.control, Control::Transmit(_)));
         let v = match command.control {
@@ -1887,13 +1921,13 @@ mod tests {
 
     #[test]
     fn transmission_respects_m_if_medium_is_direct() {
-        let mut p = Parser::init(1024 * 1024);
+        let mut p = Parser::init(crate::alloc::Global, 1024 * 1024);
 
         let input = b"a=t,t=d,m=1";
         for c in input.iter() {
             p.feed(*c).unwrap();
         }
-        let command = p.complete().unwrap();
+        let command = p.complete(crate::alloc::Global).unwrap();
 
         assert!(matches!(command.control, Control::Transmit(_)));
         let v = match command.control {
@@ -1906,13 +1940,13 @@ mod tests {
 
     #[test]
     fn query_command() {
-        let mut p = Parser::init(1024 * 1024);
+        let mut p = Parser::init(crate::alloc::Global, 1024 * 1024);
 
         let input = b"i=31,s=1,v=1,a=q,t=d,f=24;QUFBQQ";
         for c in input.iter() {
             p.feed(*c).unwrap();
         }
-        let command = p.complete().unwrap();
+        let command = p.complete(crate::alloc::Global).unwrap();
 
         assert!(matches!(command.control, Control::Query(_)));
         let v = match command.control {
@@ -1928,13 +1962,13 @@ mod tests {
 
     #[test]
     fn display_command() {
-        let mut p = Parser::init(1024 * 1024);
+        let mut p = Parser::init(crate::alloc::Global, 1024 * 1024);
 
         let input = b"a=p,U=1,i=31,c=80,r=120";
         for c in input.iter() {
             p.feed(*c).unwrap();
         }
-        let command = p.complete().unwrap();
+        let command = p.complete(crate::alloc::Global).unwrap();
 
         assert!(matches!(command.control, Control::Display(_)));
         let v = match command.control {
@@ -1948,13 +1982,13 @@ mod tests {
 
     #[test]
     fn delete_command() {
-        let mut p = Parser::init(1024 * 1024);
+        let mut p = Parser::init(crate::alloc::Global, 1024 * 1024);
 
         let input = b"a=d,d=p,x=3,y=4";
         for c in input.iter() {
             p.feed(*c).unwrap();
         }
-        let command = p.complete().unwrap();
+        let command = p.complete(crate::alloc::Global).unwrap();
 
         assert!(matches!(command.control, Control::Delete(_)));
         let v = match command.control {
@@ -1973,13 +2007,13 @@ mod tests {
 
     #[test]
     fn no_control_data() {
-        let mut p = Parser::init(1024 * 1024);
+        let mut p = Parser::init(crate::alloc::Global, 1024 * 1024);
 
         let input = b";QUFBQQ";
         for c in input.iter() {
             p.feed(*c).unwrap();
         }
-        let command = p.complete().unwrap();
+        let command = p.complete(crate::alloc::Global).unwrap();
 
         assert!(matches!(command.control, Control::Transmit(_)));
         assert_eq!(b"AAAA".as_slice(), command.data.as_slice());
@@ -1987,13 +2021,13 @@ mod tests {
 
     #[test]
     fn ignore_unknown_keys_long() {
-        let mut p = Parser::init(1024 * 1024);
+        let mut p = Parser::init(crate::alloc::Global, 1024 * 1024);
 
         let input = b"f=24,s=10,v=20,hello=world";
         for c in input.iter() {
             p.feed(*c).unwrap();
         }
-        let command = p.complete().unwrap();
+        let command = p.complete(crate::alloc::Global).unwrap();
 
         assert!(matches!(command.control, Control::Transmit(_)));
         let v = match command.control {
@@ -2008,13 +2042,13 @@ mod tests {
     // test "ignore unknown keys (non-letter)"
     #[test]
     fn ignore_unknown_keys_non_letter() {
-        let mut p = Parser::init(1024 * 1024);
+        let mut p = Parser::init(crate::alloc::Global, 1024 * 1024);
 
         let input = b"f=24,s=10,v=20,!=1";
         for c in input.iter() {
             p.feed(*c).unwrap();
         }
-        let command = p.complete().unwrap();
+        let command = p.complete(crate::alloc::Global).unwrap();
 
         assert!(matches!(command.control, Control::Transmit(_)));
         let v = match command.control {
@@ -2028,13 +2062,13 @@ mod tests {
 
     #[test]
     fn ignore_very_long_values() {
-        let mut p = Parser::init(1024 * 1024);
+        let mut p = Parser::init(crate::alloc::Global, 1024 * 1024);
 
         let input = b"f=24,s=10,v=2000000000000000000000000000000000000000";
         for c in input.iter() {
             p.feed(*c).unwrap();
         }
-        let command = p.complete().unwrap();
+        let command = p.complete(crate::alloc::Global).unwrap();
 
         assert!(matches!(command.control, Control::Transmit(_)));
         let v = match command.control {
@@ -2048,13 +2082,13 @@ mod tests {
 
     #[test]
     fn ensure_very_large_negative_values_dont_get_skipped() {
-        let mut p = Parser::init(1024 * 1024);
+        let mut p = Parser::init(crate::alloc::Global, 1024 * 1024);
 
         let input = b"a=p,i=1,z=-2000000000";
         for c in input.iter() {
             p.feed(*c).unwrap();
         }
-        let command = p.complete().unwrap();
+        let command = p.complete(crate::alloc::Global).unwrap();
 
         assert!(matches!(command.control, Control::Display(_)));
         let v = match command.control {
@@ -2067,13 +2101,13 @@ mod tests {
 
     #[test]
     fn ensure_proper_overflow_error_for_u32() {
-        let mut p = Parser::init(1024 * 1024);
+        let mut p = Parser::init(crate::alloc::Global, 1024 * 1024);
 
         let input = b"a=p,i=10000000000";
         for c in input.iter() {
             p.feed(*c).unwrap();
         }
-        assert_eq!(Err(Error::Overflow), p.complete());
+        assert_eq!(Err(Error::Overflow), p.complete(crate::alloc::Global));
     }
 
     /// PORT NOTE: the unsigned control fields go through
@@ -2160,11 +2194,15 @@ mod tests {
             b"a=p,i=-1a".as_slice(),
             b"a=p,i=-1 ".as_slice(),
         ] {
-            let mut p = Parser::init(1024 * 1024);
+            let mut p = Parser::init(crate::alloc::Global, 1024 * 1024);
             for c in input.iter() {
                 p.feed(*c).unwrap();
             }
-            assert_eq!(Err(Error::Overflow), p.complete(), "input: {input:?}");
+            assert_eq!(
+                Err(Error::Overflow),
+                p.complete(crate::alloc::Global),
+                "input: {input:?}"
+            );
         }
     }
 
@@ -2173,11 +2211,11 @@ mod tests {
     #[test]
     fn negative_zero_is_accepted_for_u32() {
         for input in [b"a=p,i=-0,q=2".as_slice(), b"a=p,i=-000,q=2".as_slice()] {
-            let mut p = Parser::init(1024 * 1024);
+            let mut p = Parser::init(crate::alloc::Global, 1024 * 1024);
             for c in input.iter() {
                 p.feed(*c).unwrap();
             }
-            let command = p.complete().unwrap();
+            let command = p.complete(crate::alloc::Global).unwrap();
             let v = match command.control {
                 Control::Display(v) => v,
                 _ => unreachable!(),
@@ -2208,35 +2246,39 @@ mod tests {
             b"a=p,i=-1_2".as_slice(),
             b"a=p,i=-0_0".as_slice(),
         ] {
-            let mut p = Parser::init(1024 * 1024);
+            let mut p = Parser::init(crate::alloc::Global, 1024 * 1024);
             for c in input.iter() {
                 p.feed(*c).unwrap();
             }
-            assert_eq!(Err(Error::InvalidFormat), p.complete(), "input: {input:?}");
+            assert_eq!(
+                Err(Error::InvalidFormat),
+                p.complete(crate::alloc::Global),
+                "input: {input:?}"
+            );
         }
     }
 
     #[test]
     fn ensure_proper_overflow_error_for_i32() {
-        let mut p = Parser::init(1024 * 1024);
+        let mut p = Parser::init(crate::alloc::Global, 1024 * 1024);
 
         let input = b"a=p,i=1,z=-9999999999";
         for c in input.iter() {
             p.feed(*c).unwrap();
         }
-        assert_eq!(Err(Error::Overflow), p.complete());
+        assert_eq!(Err(Error::Overflow), p.complete(crate::alloc::Global));
     }
 
     #[test]
     fn all_i32_values() {
         {
             // 'z' (usually z-axis values)
-            let mut p = Parser::init(1024 * 1024);
+            let mut p = Parser::init(crate::alloc::Global, 1024 * 1024);
             let input = b"a=p,i=1,z=-1";
             for c in input.iter() {
                 p.feed(*c).unwrap();
             }
-            let command = p.complete().unwrap();
+            let command = p.complete(crate::alloc::Global).unwrap();
 
             assert!(matches!(command.control, Control::Display(_)));
             let v = match command.control {
@@ -2249,12 +2291,12 @@ mod tests {
 
         {
             // 'H' (relative placement, horizontal offset)
-            let mut p = Parser::init(1024 * 1024);
+            let mut p = Parser::init(crate::alloc::Global, 1024 * 1024);
             let input = b"a=p,i=1,H=-1";
             for c in input.iter() {
                 p.feed(*c).unwrap();
             }
-            let command = p.complete().unwrap();
+            let command = p.complete(crate::alloc::Global).unwrap();
 
             assert!(matches!(command.control, Control::Display(_)));
             let v = match command.control {
@@ -2267,12 +2309,12 @@ mod tests {
 
         {
             // 'V' (relative placement, vertical offset)
-            let mut p = Parser::init(1024 * 1024);
+            let mut p = Parser::init(crate::alloc::Global, 1024 * 1024);
             let input = b"a=p,i=1,V=-1";
             for c in input.iter() {
                 p.feed(*c).unwrap();
             }
-            let command = p.complete().unwrap();
+            let command = p.complete(crate::alloc::Global).unwrap();
 
             assert!(matches!(command.control, Control::Display(_)));
             let v = match command.control {
@@ -2332,13 +2374,13 @@ mod tests {
 
     #[test]
     fn delete_range_command_1() {
-        let mut p = Parser::init(1024 * 1024);
+        let mut p = Parser::init(crate::alloc::Global, 1024 * 1024);
 
         let input = b"a=d,d=r,x=3,y=4";
         for c in input.iter() {
             p.feed(*c).unwrap();
         }
-        let command = p.complete().unwrap();
+        let command = p.complete(crate::alloc::Global).unwrap();
 
         assert!(matches!(command.control, Control::Delete(_)));
         let v = match command.control {
@@ -2361,13 +2403,13 @@ mod tests {
 
     #[test]
     fn delete_range_command_2() {
-        let mut p = Parser::init(1024 * 1024);
+        let mut p = Parser::init(crate::alloc::Global, 1024 * 1024);
 
         let input = b"a=d,d=R,x=5,y=11";
         for c in input.iter() {
             p.feed(*c).unwrap();
         }
-        let command = p.complete().unwrap();
+        let command = p.complete(crate::alloc::Global).unwrap();
 
         assert!(matches!(command.control, Control::Delete(_)));
         let v = match command.control {
@@ -2393,13 +2435,13 @@ mod tests {
         // An inverted range is accepted; it simply matches no images. This
         // matches kitty, which does no validation and filters with
         // `x <= image_id <= y`.
-        let mut p = Parser::init(1024 * 1024);
+        let mut p = Parser::init(crate::alloc::Global, 1024 * 1024);
 
         let input = b"a=d,d=R,x=5,y=4";
         for c in input.iter() {
             p.feed(*c).unwrap();
         }
-        let command = p.complete().unwrap();
+        let command = p.complete(crate::alloc::Global).unwrap();
 
         assert!(matches!(command.control, Control::Delete(_)));
         let v = match command.control {
@@ -2424,13 +2466,13 @@ mod tests {
     fn delete_range_command_4() {
         // An omitted upper bound defaults to zero, which matches no images
         // since image IDs are always non-zero.
-        let mut p = Parser::init(1024 * 1024);
+        let mut p = Parser::init(crate::alloc::Global, 1024 * 1024);
 
         let input = b"a=d,d=R,x=5";
         for c in input.iter() {
             p.feed(*c).unwrap();
         }
-        let command = p.complete().unwrap();
+        let command = p.complete(crate::alloc::Global).unwrap();
 
         assert!(matches!(command.control, Control::Delete(_)));
         let v = match command.control {
@@ -2453,13 +2495,13 @@ mod tests {
 
     #[test]
     fn delete_range_command_5() {
-        let mut p = Parser::init(1024 * 1024);
+        let mut p = Parser::init(crate::alloc::Global, 1024 * 1024);
 
         let input = b"a=d,d=R,y=5";
         for c in input.iter() {
             p.feed(*c).unwrap();
         }
-        let command = p.complete().unwrap();
+        let command = p.complete(crate::alloc::Global).unwrap();
 
         assert!(matches!(command.control, Control::Delete(_)));
         let v = match command.control {
@@ -2483,13 +2525,13 @@ mod tests {
     #[test]
     fn delete_range_command_6() {
         // Both bounds omitted defaults to the empty range [0, 0].
-        let mut p = Parser::init(1024 * 1024);
+        let mut p = Parser::init(crate::alloc::Global, 1024 * 1024);
 
         let input = b"a=d,d=r";
         for c in input.iter() {
             p.feed(*c).unwrap();
         }
-        let command = p.complete().unwrap();
+        let command = p.complete(crate::alloc::Global).unwrap();
 
         assert!(matches!(command.control, Control::Delete(_)));
         let v = match command.control {
@@ -2517,7 +2559,7 @@ mod tests {
 
     #[test]
     fn unknown_format_value_is_deferred_to_execution() {
-        let command = Parser::parse_string(b"a=t,f=42,i=31,s=1,v=1").unwrap();
+        let command = Parser::parse_string(crate::alloc::Global, b"a=t,f=42,i=31,s=1,v=1").unwrap();
 
         assert!(matches!(command.control, Control::Transmit(_)));
         let v = match command.control {
@@ -2530,7 +2572,7 @@ mod tests {
 
     #[test]
     fn zero_format_value_is_rgba() {
-        let command = Parser::parse_string(b"a=t,f=0,i=31,s=1,v=1").unwrap();
+        let command = Parser::parse_string(crate::alloc::Global, b"a=t,f=0,i=31,s=1,v=1").unwrap();
 
         assert!(matches!(command.control, Control::Transmit(_)));
         let v = match command.control {
@@ -2548,7 +2590,7 @@ mod tests {
             (b"f=32".as_slice(), Format::Rgba),
             (b"f=100".as_slice(), Format::Png),
         ] {
-            let command = Parser::parse_string(input).unwrap();
+            let command = Parser::parse_string(crate::alloc::Global, input).unwrap();
 
             let v = match command.control {
                 Control::Transmit(v) => v,
@@ -2561,14 +2603,14 @@ mod tests {
 
     #[test]
     fn quiet_value_above_two_suppresses_all_responses() {
-        let command = Parser::parse_string(b"a=t,q=3,i=31,s=1,v=1").unwrap();
+        let command = Parser::parse_string(crate::alloc::Global, b"a=t,q=3,i=31,s=1,v=1").unwrap();
 
         assert_eq!(Quiet::Failures, command.quiet);
     }
 
     #[test]
     fn cursor_movement_value_above_one_moves_the_cursor() {
-        let command = Parser::parse_string(b"a=p,i=31,C=2").unwrap();
+        let command = Parser::parse_string(crate::alloc::Global, b"a=p,i=31,C=2").unwrap();
 
         assert!(matches!(command.control, Control::Display(_)));
         let v = match command.control {
@@ -2580,7 +2622,7 @@ mod tests {
 
     #[test]
     fn virtual_placement_value_above_one_is_virtual() {
-        let command = Parser::parse_string(b"a=p,i=31,U=2").unwrap();
+        let command = Parser::parse_string(crate::alloc::Global, b"a=p,i=31,U=2").unwrap();
 
         assert!(matches!(command.control, Control::Display(_)));
         let v = match command.control {
@@ -2592,7 +2634,7 @@ mod tests {
 
     #[test]
     fn animation_frame_composition_value_above_one_alpha_blends() {
-        let command = Parser::parse_string(b"a=f,i=31,X=2").unwrap();
+        let command = Parser::parse_string(crate::alloc::Global, b"a=f,i=31,X=2").unwrap();
 
         assert!(matches!(
             command.control,
@@ -2607,7 +2649,7 @@ mod tests {
 
     #[test]
     fn animation_compose_value_above_one_overwrites() {
-        let command = Parser::parse_string(b"a=c,i=31,C=2").unwrap();
+        let command = Parser::parse_string(crate::alloc::Global, b"a=c,i=31,C=2").unwrap();
 
         assert!(matches!(command.control, Control::ComposeAnimation(_)));
         let v = match command.control {
@@ -2619,7 +2661,7 @@ mod tests {
 
     #[test]
     fn animation_control_action_above_three_is_ignored() {
-        let command = Parser::parse_string(b"a=a,i=31,s=4").unwrap();
+        let command = Parser::parse_string(crate::alloc::Global, b"a=a,i=31,s=4").unwrap();
 
         assert!(matches!(command.control, Control::ControlAnimation(_)));
         let v = match command.control {
@@ -2640,7 +2682,7 @@ mod tests {
         ] {
             assert_eq!(
                 Err(Error::InvalidFormat),
-                Parser::parse_string(input),
+                Parser::parse_string(crate::alloc::Global, input),
                 "input: {input:?}"
             );
         }
@@ -2654,7 +2696,7 @@ mod tests {
     #[test]
     fn gap_ms_is_a_bit_pattern_cast() {
         // z=-5 → parse_int_i32 = -5i32 → stored as 0xFFFF_FFFB.
-        let cmd = Parser::parse_string(b"a=f,z=-5").unwrap();
+        let cmd = Parser::parse_string(crate::alloc::Global, b"a=f,z=-5").unwrap();
         let f = match cmd.control {
             Control::TransmitAnimationFrame(f) => f,
             _ => unreachable!(),
@@ -2662,7 +2704,7 @@ mod tests {
         assert_eq!(-5i32, f.gap_ms);
         assert_eq!(0xFFFF_FFFBu32, f.gap_ms as u32);
 
-        let cmd = Parser::parse_string(b"a=a,i=1,z=-1").unwrap();
+        let cmd = Parser::parse_string(crate::alloc::Global, b"a=a,i=1,z=-1").unwrap();
         let a = match cmd.control {
             Control::ControlAnimation(a) => a,
             _ => unreachable!(),
@@ -2692,7 +2734,7 @@ mod tests {
         assert_eq!(0x11223344, bg.to_int());
 
         // Parsed through the real KV path.
-        let cmd = Parser::parse_string(b"a=f,Y=4278190335").unwrap();
+        let cmd = Parser::parse_string(crate::alloc::Global, b"a=f,Y=4278190335").unwrap();
         let f = match cmd.control {
             Control::TransmitAnimationFrame(f) => f,
             _ => unreachable!(),

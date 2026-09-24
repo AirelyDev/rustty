@@ -264,7 +264,56 @@ pub struct InflateError;
 /// bytes with a size limit) and returns [`InflateError`] on any malformed input
 /// or if the decompressed size would exceed `max_size`.
 pub fn inflate_zlib(data: &[u8], max_size: usize) -> Result<Vec<u8>, InflateError> {
-    inflate_impl(data, max_size, MAX_WBITS)
+    let mut out: Vec<u8> = Vec::new();
+    inflate_impl(data, max_size, MAX_WBITS, &mut out)?;
+    Ok(out)
+}
+
+/// The growable output an inflate appends to: a caller-owned byte list, so
+/// the caller decides which allocator the decompressed bytes live in.
+pub trait InflateOut {
+    /// The current length.
+    fn len(&self) -> usize;
+    /// Whether the output is empty.
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+    /// Grow to `new_len` bytes (the new tail's contents are unspecified;
+    /// inflate overwrites what it reports), or fail. A failure ends the
+    /// inflate with [`InflateError`].
+    fn try_grow(&mut self, new_len: usize) -> Result<(), InflateError>;
+    /// Shrink to `new_len` bytes.
+    fn truncate(&mut self, new_len: usize);
+    /// The start of the buffer, valid for `len()` bytes.
+    fn as_mut_ptr(&mut self) -> *mut u8;
+}
+
+impl InflateOut for Vec<u8> {
+    fn len(&self) -> usize {
+        Vec::len(self)
+    }
+    fn try_grow(&mut self, new_len: usize) -> Result<(), InflateError> {
+        self.resize(new_len, 0);
+        Ok(())
+    }
+    fn truncate(&mut self, new_len: usize) {
+        Vec::truncate(self, new_len)
+    }
+    fn as_mut_ptr(&mut self) -> *mut u8 {
+        Vec::as_mut_ptr(self)
+    }
+}
+
+/// [`inflate_zlib`], appending the decompressed bytes to `out` (which must
+/// be empty): the reference's `stream.reader.appendRemaining(alloc, &list,
+/// .limited(max_size))` into a list the caller allocates. A failed growth of
+/// `out` is an [`InflateError`], as a failed `appendRemaining` is.
+pub fn inflate_zlib_into<O: InflateOut>(
+    data: &[u8],
+    max_size: usize,
+    out: &mut O,
+) -> Result<(), InflateError> {
+    inflate_impl(data, max_size, MAX_WBITS, out)
 }
 
 /// Decompress a **raw** DEFLATE stream (no zlib/gzip wrapper) into a freshly
@@ -275,12 +324,19 @@ pub fn inflate_zlib(data: &[u8], max_size: usize) -> Result<Vec<u8>, InflateErro
 /// by the negative window bits [`RAW_WBITS`] (`-15`). Used to decompress the
 /// `framedata` asset produced by the framegen raw-DEFLATE step.
 pub fn inflate_raw(data: &[u8], max_size: usize) -> Result<Vec<u8>, InflateError> {
-    inflate_impl(data, max_size, RAW_WBITS)
+    let mut out: Vec<u8> = Vec::new();
+    inflate_impl(data, max_size, RAW_WBITS, &mut out)?;
+    Ok(out)
 }
 
 /// Shared streaming-inflate core, parameterized by `window_bits`
 /// ([`MAX_WBITS`] = zlib-wrapped, [`RAW_WBITS`] = raw DEFLATE).
-fn inflate_impl(data: &[u8], max_size: usize, window_bits: c_int) -> Result<Vec<u8>, InflateError> {
+fn inflate_impl<O: InflateOut>(
+    data: &[u8],
+    max_size: usize,
+    window_bits: c_int,
+    out: &mut O,
+) -> Result<(), InflateError> {
     // SAFETY: a fully zeroed z_stream is the documented pre-init state; all
     // pointer fields are NULL so zlib installs its own allocator.
     let mut strm: z_stream = unsafe { std::mem::zeroed() };
@@ -314,7 +370,7 @@ fn inflate_impl(data: &[u8], max_size: usize, window_bits: c_int) -> Result<Vec<
     strm.next_in = data.as_ptr();
     strm.avail_in = data.len() as c_uint;
 
-    let mut out: Vec<u8> = Vec::new();
+    debug_assert_eq!(0, out.len());
     // Decompress in chunks, growing the output until the stream ends.
     let chunk: usize = 64 * 1024;
     loop {
@@ -325,7 +381,7 @@ fn inflate_impl(data: &[u8], max_size: usize, window_bits: c_int) -> Result<Vec<
             // Probe whether more output remains by attempting one more byte.
         }
         let grow = chunk.min(max_size.saturating_sub(prev_len).max(1));
-        out.resize(prev_len + grow, 0);
+        out.try_grow(prev_len + grow)?;
 
         // SAFETY: out has `prev_len + grow` bytes; next_out points at the free
         // tail and avail_out is the free length.
@@ -339,7 +395,7 @@ fn inflate_impl(data: &[u8], max_size: usize, window_bits: c_int) -> Result<Vec<
         out.truncate(prev_len + produced);
 
         match rc {
-            Z_STREAM_END => return Ok(out),
+            Z_STREAM_END => return Ok(()),
             Z_OK => {
                 if strm.avail_out != 0 {
                     // inflate made no forward progress with output space left

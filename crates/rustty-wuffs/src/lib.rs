@@ -122,8 +122,11 @@ impl<A: Allocator> RawBuf<A> {
     }
 
     /// Consume the buffer WITHOUT freeing (`mem::forget` the `Drop`), returning the
-    /// raw `(ptr, len)`. The caller owns the allocation from here.
-    fn into_raw(self) -> (NonNull<u8>, usize) {
+    /// raw `(ptr, len)`. The caller owns the allocation from here: `len` bytes at
+    /// alignment 1, allocated through the allocator the buffer was built with
+    /// (the reference hands the `[]u8` itself to its caller). `pub` for the
+    /// kitty graphics swizzles, which keep the buffer as the image data.
+    pub fn into_raw(self) -> (NonNull<u8>, usize) {
         let out = (self.ptr, self.len);
         core::mem::forget(self);
         out

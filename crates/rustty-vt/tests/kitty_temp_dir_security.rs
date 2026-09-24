@@ -51,7 +51,7 @@ fn transmit_cmd(path: &std::path::Path) -> command::Command {
             ..Default::default()
         }),
         quiet: command::Quiet::No,
-        data: path_bytes(path),
+        data: rustty_vt::alloc::heap_bytes(&path_bytes(path)),
     }
 }
 
@@ -105,7 +105,12 @@ fn kitty_temp_file_medium_ignores_the_process_tmpdir() {
     // The attacker's file is outside the configured directory: REJECTED.
     assert_eq!(
         Err(Error::TemporaryFileNotInTempDir),
-        LoadingImage::init(&transmit_cmd(&attacker_file), &limits).map(|_| ()),
+        LoadingImage::init(
+            rustty_vt::alloc::Global,
+            &transmit_cmd(&attacker_file),
+            &limits
+        )
+        .map(|_| ()),
         "a temp-file transmission outside the configured directory must be \
          rejected even when the process TMPDIR names that directory"
     );
@@ -119,9 +124,15 @@ fn kitty_temp_file_medium_ignores_the_process_tmpdir() {
 
     // The positive arm: a file inside the configured directory still loads,
     // and is unlinked on success (the `defer posix.unlink` behaviour).
-    let mut loading = LoadingImage::init(&transmit_cmd(&allowed_file), &limits)
-        .expect("in-directory transmission must be accepted");
-    let img = loading.complete().expect("complete");
+    let mut loading = LoadingImage::init(
+        rustty_vt::alloc::Global,
+        &transmit_cmd(&allowed_file),
+        &limits,
+    )
+    .expect("in-directory transmission must be accepted");
+    let img = loading
+        .complete(rustty_vt::alloc::Global)
+        .expect("complete");
     assert_eq!(command::Compression::None, img.compression);
     assert!(
         !allowed_file.exists(),
@@ -135,7 +146,12 @@ fn kitty_temp_file_medium_ignores_the_process_tmpdir() {
     std::fs::write(&attacker_file, IMAGE_DATA).unwrap();
     let attacker_limits = Limits::all_with_temp_dir(&path_bytes(&attacker));
     assert!(
-        LoadingImage::init(&transmit_cmd(&attacker_file), &attacker_limits).is_ok(),
+        LoadingImage::init(
+            rustty_vt::alloc::Global,
+            &transmit_cmd(&attacker_file),
+            &attacker_limits
+        )
+        .is_ok(),
         "the same path must be accepted when the configured directory allows it"
     );
 }

@@ -8,15 +8,15 @@
 // const Allocator = std.mem.Allocator;
 // const assert = std.debug.assert;
 // const Glyf = @import("../../../font/opentype/glyf.zig").Glyf;
-// PORT NOTE: `Allocator` is not threaded through the port. Zig's `CommandParser`
-// buffers bytes via an allocator-backed `std.ArrayList(u8)` and the parsed
-// `Request` variants own their `raw` bytes via `alloc`; here the buffer is an
-// owned `Vec<u8>` and each request variant owns its `raw: Vec<u8>`, freed on
-// drop. The reference `deinit`/`alloc.free(raw)` calls therefore have no
-// port-side equivalent (handled by `Drop`). `Glyf` is `rustty_font::opentype::
+// PORT NOTE (parity tail S7-4): `Allocator` is the runtime allocator handle.
+// `CommandParser` buffers through the allocator it is created with, and the
+// parsed `Request` variants own their `raw` bytes (the handed-over buffer) and
+// the decoded outline through it; `deinit(alloc)` releases them (they also
+// free through their allocator on drop). `Glyf` is `rustty_font::opentype::
 // glyf::Glyf` (D1 Option C: rustty-font is a direct, mandatory dependency). The
 // reference's `Glyf.Entry` / `Glyf.Outline` (nested types in Zig) are the
 // sibling types `Entry` / `Outline` in the port.
+use crate::alloc::{Allocator, Bytes, CopyVecExt, TryPushExt};
 use rustty_font::opentype::glyf::{DecodeError as GlyfDecodeError, Entry as GlyfEntry, Outline};
 
 /// Maximum decoded glyph payload size accepted by the protocol.
@@ -39,10 +39,10 @@ pub enum CommandParserError {
 
 /// Stateful parser for a single glyph APC payload after the `25a1;` prefix.
 // PORT NOTE: reference `pub const CommandParser = struct { alloc, data: ArrayList,
-// max_bytes }`. The `alloc` field and the `data: std.ArrayList(u8) = .empty`
-// allocator-backed buffer collapse to an owned `Vec<u8>` here.
+// max_bytes }`; `data` grows through `alloc`.
 pub struct CommandParser {
-    data: Vec<u8>,
+    alloc: Allocator,
+    data: Bytes,
 
     /// Maximum bytes the data payload can buffer. This is to prevent
     /// malicious input from causing us to allocate too much memory.
@@ -51,20 +51,26 @@ pub struct CommandParser {
 
 impl CommandParser {
     /// Create a glyph APC parser that buffers the raw command bytes.
-    // PORT NOTE: reference `init(alloc, max_bytes)`; the `alloc` parameter is
-    // dropped (no allocator threading) and `data` starts empty.
-    pub fn init(max_bytes: usize) -> CommandParser {
+    // pub fn init(alloc: Allocator, max_bytes: usize) CommandParser {
+    //     return .{ .alloc = alloc, .max_bytes = max_bytes };
+    // }
+    pub fn init(alloc: Allocator, max_bytes: usize) -> CommandParser {
         CommandParser {
-            data: Vec::new(),
+            alloc,
+            data: Bytes::new_in(alloc),
             max_bytes,
         }
     }
 
+    /// `self.alloc`: the allocator the parser was created with.
+    pub fn allocator(&self) -> Allocator {
+        self.alloc
+    }
+
     /// Release any buffered command bytes owned by the parser.
-    // PORT NOTE: reference `deinit` frees `self.data`; here the `Vec<u8>` is
-    // freed on drop, so this is a no-op retained for call-site fidelity.
     pub fn deinit(&mut self) {
         // self.data.deinit(self.alloc);
+        self.data = Bytes::new_in(self.alloc);
     }
 
     /// Append one more byte of APC payload to the buffered command.
@@ -76,7 +82,9 @@ impl CommandParser {
             return Err(CommandParserError::OutOfMemory);
         }
         // try self.data.append(self.alloc, byte);
-        self.data.push(byte);
+        self.data
+            .try_push(byte)
+            .map_err(|_| CommandParserError::OutOfMemory)?;
         Ok(())
     }
 
@@ -89,17 +97,22 @@ impl CommandParser {
             return Err(CommandParserError::OutOfMemory);
         }
         // try self.data.appendSlice(self.alloc, bytes);
-        self.data.extend_from_slice(bytes);
+        self.data
+            .try_extend_copy(bytes)
+            .map_err(|_| CommandParserError::OutOfMemory)?;
         Ok(())
     }
 
     /// Finish parsing and return an owned request that can outlive the parser.
-    pub fn complete(&mut self) -> Result<Request, CommandParserError> {
+    // pub fn complete(self: *CommandParser, alloc: Allocator) Error!Request {
+    pub fn complete(&mut self, alloc: Allocator) -> Result<Request, CommandParserError> {
         // Normalize bare single-byte verbs like `s` into `s;` so the parsed
         // command always has the standard `verb;...` layout.
         // if (self.data.items.len == 1) try self.data.append(self.alloc, ';');
         if self.data.len() == 1 {
-            self.data.push(b';');
+            self.data
+                .try_push(b';')
+                .map_err(|_| CommandParserError::OutOfMemory)?;
         }
 
         // const raw = try self.data.toOwnedSlice(alloc);
@@ -108,12 +121,13 @@ impl CommandParser {
         // array list before we build the final command value.
         // self.data = .empty;
         // errdefer alloc.free(raw);
-        // PORT NOTE: `toOwnedSlice` transfers the buffer out and leaves the list
-        // empty; `std::mem::take` reproduces this exactly. `Request::parse` takes
-        // ownership of `raw`, so the reference `errdefer alloc.free(raw)` (which
-        // only runs on the `'s'` free or an error before ownership transfer) is
-        // subsumed by Rust ownership/drop.
-        let raw = std::mem::take(&mut self.data);
+        // PORT NOTE: `toOwnedSlice` transfers the buffer out (the list itself,
+        // not a shrunk copy: a T3 call-shape residual) and leaves the list
+        // empty. `Request::parse` takes ownership of `raw`, so the reference
+        // `errdefer alloc.free(raw)` (which only runs on the `'s'` free or an
+        // error before ownership transfer) is subsumed by Rust ownership/drop.
+        self.alloc.debug_assert_same(alloc);
+        let raw = core::mem::replace(&mut self.data, Bytes::new_in(self.alloc));
         Request::parse(raw).map_err(|_| CommandParserError::InvalidFormat)
     }
 }
@@ -152,7 +166,7 @@ impl Request {
     /// end in a semicolon (even if there are no options). The spec itself
     /// does not require this but we artificially insert it in our parser
     /// to simplify parsing later.
-    pub fn parse(raw: Vec<u8>) -> Result<Request, InvalidFormat> {
+    pub fn parse(raw: Bytes) -> Result<Request, InvalidFormat> {
         // if (raw.len < 2) return error.InvalidFormat;
         if raw.len() < 2 {
             return Err(InvalidFormat);
@@ -185,24 +199,35 @@ impl Request {
     }
 
     /// Free the raw bytes retained by any request variant.
-    // PORT NOTE: reference `deinit` frees the `raw` slice of each non-support
-    // variant; here those bytes are owned `Vec<u8>` freed on drop, so this is a
-    // no-op retained for call-site fidelity.
-    pub fn deinit(&mut self) {
-        // switch (self.*) { .support => {}, inline else => |*cmd|
-        //     if (cmd.raw.len > 0) alloc.free(cmd.raw) }
+    // pub fn deinit(self: *Request, alloc: Allocator) void {
+    //     switch (self.*) { .support => {}, inline else => |*cmd|
+    //         if (cmd.raw.len > 0) alloc.free(cmd.raw) }
+    // }
+    // PORT NOTE: frees each variant's `raw` (through the allocator it was
+    // allocated with, checked against `alloc`).
+    pub fn deinit(&mut self, alloc: Allocator) {
+        let raw = match self {
+            Request::Support => return,
+            Request::Query(cmd) => &mut cmd.raw,
+            Request::Register(cmd) => &mut cmd.raw,
+            Request::Clear(cmd) => &mut cmd.raw,
+        };
+        if raw.capacity() != 0 {
+            raw.allocator().debug_assert_same(alloc);
+        }
+        *raw = Bytes::new_in(alloc);
     }
 }
 
 /// Query verb payload with lazily-decoded options.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Query {
-    raw: Vec<u8>,
+    raw: Bytes,
 }
 
 impl Query {
     /// Initialize a query command from owned raw command bytes.
-    pub fn init(raw: Vec<u8>) -> Query {
+    pub fn init(raw: Bytes) -> Query {
         Query { raw }
     }
 
@@ -259,13 +284,13 @@ impl QueryOption {
 /// Register verb payload with lazily-decoded options and optional base64 data.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Register {
-    raw: Vec<u8>,
+    raw: Bytes,
     payload_idx: usize,
 }
 
 impl Register {
     /// Initialize a register command from owned raw command bytes.
-    pub fn init(raw: Vec<u8>) -> Option<Register> {
+    pub fn init(raw: Bytes) -> Option<Register> {
         // if (raw.len < 2) return null;
         if raw.len() < 2 {
             return None;
@@ -440,7 +465,11 @@ impl Register {
     // Decoder` (alphabet + `'='` pad). `Glyf.Entry` borrows `data` only for the
     // `decode` call; `Glyf.Entry::decode` returns an owned `Outline` (Rust:
     // owned `Vec`s), so the scratch buffer is freed after `decode` returns.
-    pub fn decode_glyf_payload(&self, max_allocation_bytes: usize) -> Result<Outline, DecodeError> {
+    pub fn decode_glyf_payload(
+        &self,
+        alloc: Allocator,
+        max_allocation_bytes: usize,
+    ) -> Result<Outline<Allocator>, DecodeError> {
         // Prep base64 decoding, initial validation.
         // const Decoder = std.base64.standard.Decoder;
         let decoder = std_base64_standard_decoder();
@@ -485,18 +514,21 @@ impl Register {
         // from expanding into an unbounded persistent outline.
         // var limited: LimitedAllocator = .init(alloc, max_allocation_bytes);
         // return glyf_entry.decode(limited.allocator()) catch |err| switch (err) { ... };
-        match glyf_entry.decode_limited(max_allocation_bytes) {
+        let mut limit_exceeded = false;
+        match glyf_entry.decode_limited_in(max_allocation_bytes, alloc, &mut limit_exceeded) {
             Ok(outline) => Ok(outline),
             Err(err) => Err(match err {
                 // error.OutOfMemory => if (limited.limit_exceeded)
                 //     error.PayloadTooLarge
                 // else
                 //     error.OutOfMemory,
-                // PORT NOTE: `decode_limited` only produces `OutOfMemory` when
-                // the per-allocation limit is exceeded (real OOM aborts), so
-                // the reference's `limit_exceeded` discriminant collapses to
-                // the `PayloadTooLarge` arm.
-                GlyfDecodeError::OutOfMemory => DecodeError::PayloadTooLarge,
+                GlyfDecodeError::OutOfMemory => {
+                    if limit_exceeded {
+                        DecodeError::PayloadTooLarge
+                    } else {
+                        DecodeError::OutOfMemory
+                    }
+                }
                 // error.CompositeNotSupported => error.CompositeUnsupported,
                 GlyfDecodeError::CompositeNotSupported => DecodeError::CompositeUnsupported,
                 // error.InstructionsNotSupported => error.HintingUnsupported,
@@ -676,12 +708,12 @@ impl RegisterOption {
 /// Clear verb payload with lazily-decoded options.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Clear {
-    raw: Vec<u8>,
+    raw: Bytes,
 }
 
 impl Clear {
     /// Initialize a clear command from owned raw command bytes.
-    pub fn init(raw: Vec<u8>) -> Clear {
+    pub fn init(raw: Bytes) -> Clear {
         Clear { raw }
     }
 
@@ -1299,14 +1331,14 @@ mod tests {
     // `Request`. The `alloc` parameter is dropped (no allocator threading).
     fn test_parse(data: &[u8]) -> Result<Request, CommandParserError> {
         // var parser = CommandParser.init(alloc, 1024 * 1024);
-        let mut parser = CommandParser::init(1024 * 1024);
+        let mut parser = CommandParser::init(crate::alloc::Global, 1024 * 1024);
         // defer parser.deinit();
         // for (data) |byte| try parser.feed(byte);
         for &byte in data {
             parser.feed(byte)?;
         }
         // return try parser.complete(alloc);
-        parser.complete()
+        parser.complete(crate::alloc::Global)
     }
 
     #[test]
@@ -1591,7 +1623,9 @@ mod tests {
         //     testing.allocator,
         //     std.math.maxInt(usize),
         // );
-        let outline = reg.decode_glyf_payload(usize::MAX).unwrap();
+        let outline = reg
+            .decode_glyf_payload(crate::alloc::Global, usize::MAX)
+            .unwrap();
         // try testing.expectEqual(@as(usize, 0), outline.points.len);
         assert_eq!(0usize, outline.points.len());
         // try testing.expectEqual(@as(usize, 0), outline.contours.len);
@@ -1614,7 +1648,8 @@ mod tests {
         // the result is mapped to `()` before the `assert_eq!` error comparison.
         assert_eq!(
             Err(DecodeError::MalformedPayload),
-            reg.decode_glyf_payload(usize::MAX).map(|_| ())
+            reg.decode_glyf_payload(crate::alloc::Global, usize::MAX)
+                .map(|_| ())
         );
     }
 

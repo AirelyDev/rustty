@@ -81,6 +81,35 @@ pub fn decode<'a>(input: &[u8], output: &'a mut [u8]) -> Result<&'a [u8], Base64
     decode_scalar(input, output)
 }
 
+/// `decode(buf, buf[0..max_len])`: decode `buf` on top of itself and return
+/// the decoded length. The reference's Kitty graphics payload decode passes
+/// the same buffer as input and output ("guaranteed that the encoded size is
+/// larger"); Rust cannot alias `&[u8]` with `&mut [u8]`, so this takes the
+/// buffer once. `max_len` must be `max_len(buf)` (at most `buf.len()`).
+///
+/// PORT NOTE: the SIMD kernel receives the same pointer for input and output,
+/// exactly as the reference's call does. The scalar lane (wasm32, Miri) decodes
+/// from a copy, because the Rust scalar decoder takes its input and output as
+/// separate slices.
+pub fn decode_in_place(buf: &mut [u8], max_len: usize) -> Result<usize, Base64Invalid> {
+    assert(max_len <= buf.len());
+    #[cfg(not(target_arch = "wasm32"))]
+    if SIMD && !cfg!(miri) {
+        let p = buf.as_mut_ptr();
+        // SAFETY: `p` is valid for `buf.len()` reads and writes; the kernel
+        // writes at most `max_len <= buf.len()` bytes and, like the reference,
+        // is given one buffer as both input and output.
+        let res = unsafe { rustty_simd_base64_decode(p, buf.len(), p) };
+        if res < 0 {
+            return Err(Base64Invalid);
+        }
+        return Ok(res as usize);
+    }
+
+    let src = buf.to_vec();
+    decode_scalar(&src, &mut buf[..max_len]).map(|decoded| decoded.len())
+}
+
 fn decode_scalar<'a>(input_raw: &[u8], output: &'a mut [u8]) -> Result<&'a [u8], Base64Invalid> {
     let input = scalar_input(input_raw);
     let size = max_len_scalar(input);
@@ -321,6 +350,29 @@ mod tests {
     // (camelCase `maxLen` preserved); spaces are not valid in a Rust fn name.
     #![allow(non_snake_case)]
     use super::*;
+
+    // Rust-only (parity tail S7-4): decoding a buffer on top of itself gives
+    // the same bytes and the same errors as decoding it into a separate
+    // buffer, on the SIMD lane (Miri: the scalar lane).
+    #[test]
+    fn decode_in_place_matches_decode() {
+        let cases: [&[u8]; 6] = [
+            b"",
+            b"aGVsbG8=",
+            b"aGVsbG8",
+            b"////",
+            b"SGVsbG8gd29ybGQsIHRoaXMgaXMgYSBsb25nZXIgcGF5bG9hZCBmb3IgdGhlIFNJTUQgbGFuZQ==",
+            b"!!!!",
+        ];
+        for case in cases {
+            let max = max_len(case);
+            let mut out = vec![0u8; max];
+            let expected = decode(case, &mut out).map(|d| d.to_vec());
+            let mut buf = case.to_vec();
+            let got = decode_in_place(&mut buf, max).map(|n| buf[..n].to_vec());
+            assert_eq!(expected, got, "case {:?}", String::from_utf8_lossy(case));
+        }
+    }
 
     // ---- task-14e-2 / S120-F2 ------------------------------------------------
 

@@ -33,6 +33,7 @@
 
 #![allow(non_snake_case)]
 
+use crate::alloc::{ABox, Allocator, Bytes, CopyVecExt};
 use crate::kitty::graphics_command as command;
 use crate::pagelist as PageList;
 use crate::sys;
@@ -107,8 +108,10 @@ pub struct LoadingImage {
     pub image: Image,
 
     /// The data that is being built up.
-    // PORT NOTE: `std.ArrayListUnmanaged(u8) = .{}` → an owning `Vec<u8>`.
-    pub data: Vec<u8>,
+    // PORT NOTE (parity tail S7-4): `std.ArrayListUnmanaged(u8) = .{}`, grown
+    // through the allocator `init` was given (every later `alloc` argument is
+    // that one: the storage's).
+    pub data: Bytes,
 
     /// This is non-null when a transmit and display command is given
     /// so that we display the image after it is fully loaded.
@@ -221,6 +224,8 @@ enum PreadOutcome {
     Unsupported,
     /// A short read (the object shrank) or a read error.
     Failed,
+    /// The destination could not grow (parity tail S7-4).
+    OutOfMemory,
 }
 
 /// PORT NOTE: the reference nests `const SharedMemoryRange = struct { start:
@@ -239,7 +244,11 @@ impl LoadingImage {
     // here. `Limits` stopped being `Copy` when `temporary_file` gained its
     // owned directory bytes; upstream's by-value pass is free because the Zig
     // union holds a borrowed slice.
-    pub fn init(cmd: &command::Command, limits: &Limits) -> Result<LoadingImage, Error> {
+    pub fn init(
+        alloc: Allocator,
+        cmd: &command::Command,
+        limits: &Limits,
+    ) -> Result<LoadingImage, Error> {
         // Build our initial image from the properties sent via the control.
         // These can be overwritten by the data loading process. For example,
         // PNG loading sets the width/height from the data.
@@ -266,7 +275,7 @@ impl LoadingImage {
                 ..Image::default()
             },
 
-            data: Vec::new(),
+            data: Bytes::new_in(alloc),
             display: cmd.display(),
             frame: None,
             quiet: cmd.quiet,
@@ -293,7 +302,7 @@ impl LoadingImage {
 
         // Special case for the direct medium, we just add the chunk directly.
         if t.medium == command::Medium::Direct {
-            result.addData(&cmd.data)?;
+            result.addData(alloc, &cmd.data)?;
             return Ok(result);
         }
 
@@ -345,18 +354,25 @@ impl LoadingImage {
         // Depending on the medium, load the data from the path.
         match t.medium {
             command::Medium::Direct => unreachable!(), // handled above
-            command::Medium::File => result.readFile(command::Medium::File, &t, &cmd.data)?,
-            command::Medium::TemporaryFile => {
-                result.readFile(command::Medium::TemporaryFile, &t, &cmd.data)?
+            command::Medium::File => {
+                result.readFile(command::Medium::File, alloc, &t, &cmd.data)?
             }
-            command::Medium::SharedMemory => result.readSharedMemory(&t, &cmd.data)?,
+            command::Medium::TemporaryFile => {
+                result.readFile(command::Medium::TemporaryFile, alloc, &t, &cmd.data)?
+            }
+            command::Medium::SharedMemory => result.readSharedMemory(alloc, &t, &cmd.data)?,
         }
 
         Ok(result)
     }
 
     /// Reads the data from a shared memory segment.
-    fn readSharedMemory(&mut self, t: &command::Transmission, path: &[u8]) -> Result<(), Error> {
+    fn readSharedMemory(
+        &mut self,
+        alloc: Allocator,
+        t: &command::Transmission,
+        path: &[u8],
+    ) -> Result<(), Error> {
         // android does not support POSIX shared memory.
         // windows is currently unsupported, does it support shm?
         // PORT NOTE: `if (comptime builtin.abi.isAndroid() or
@@ -370,21 +386,23 @@ impl LoadingImage {
         // `UnsupportedMedium` gate), so wasm takes the unsupported arm too.
         #[cfg(any(windows, target_os = "android", target_arch = "wasm32"))]
         {
-            let _ = (t, path);
+            let _ = (alloc, t, path);
             return Err(Error::UnsupportedMedium);
         }
         #[cfg(not(any(windows, target_os = "android", target_arch = "wasm32")))]
         {
-            self.readSharedMemoryPosix(t, path)
+            self.readSharedMemoryPosix(alloc, t, path)
         }
     }
 
     #[cfg(not(any(windows, target_os = "android", target_arch = "wasm32")))]
     fn readSharedMemoryPosix(
         &mut self,
+        alloc: Allocator,
         t: &command::Transmission,
         path: &[u8],
     ) -> Result<(), Error> {
+        self.data.allocator().debug_assert_same(alloc);
         use std::os::raw::c_int;
 
         // POSIX shared memory names must begin with a slash, contain at
@@ -509,6 +527,8 @@ impl LoadingImage {
                 self.data.clear();
                 return Err(Error::InvalidData);
             }
+            // The allocation `appendSlice` would make failed.
+            PreadOutcome::OutOfMemory => return Err(Error::OutOfMemory),
             PreadOutcome::Unsupported => {}
         }
 
@@ -555,7 +575,10 @@ impl LoadingImage {
         // P6: no `&[u8]` over the peer-writable mapping; copy through a raw
         // pointer. `sharedMemoryRange` guarantees `range.end <= stat_size`.
         let len = range.end - range.start;
-        self.data.reserve_exact(len);
+        // try self.data.appendSlice(alloc, map[range.start..range.end]);
+        self.data
+            .try_reserve_exact(len)
+            .map_err(|_| Error::OutOfMemory)?;
         // SAFETY: the mapping is `stat_size` readable bytes and
         // `range.start + len == range.end <= stat_size`; `self.data` is empty
         // with at least `len` bytes of capacity, and the two do not overlap.
@@ -580,9 +603,11 @@ impl LoadingImage {
         fd: std::os::raw::c_int,
         start: usize,
         len: usize,
-        dst: &mut Vec<u8>,
+        dst: &mut Bytes,
     ) -> PreadOutcome {
-        dst.reserve_exact(len);
+        if dst.try_reserve_exact(len).is_err() {
+            return PreadOutcome::OutOfMemory;
+        }
         let mut done: usize = 0;
         while done < len {
             let Ok(offset) = libc::off_t::try_from(start + done) else {
@@ -699,6 +724,7 @@ impl LoadingImage {
     fn readFile(
         &mut self,
         medium: command::Medium,
+        alloc: Allocator,
         t: &command::Transmission,
         path: &[u8],
     ) -> Result<(), Error> {
@@ -815,7 +841,9 @@ impl LoadingImage {
         // PORT NOTE: the reference reads through a 4096-byte buffered reader.
         // We read with the same semantics into a `Vec<u8>`.
         // Read the file
-        let mut managed: Vec<u8> = Vec::new();
+        // var managed: std.ArrayList(u8) = .empty;
+        // errdefer managed.deinit(alloc);
+        let mut managed: Bytes = Bytes::new_in(alloc);
         if t.size > 0 {
             // S is the exact number of bytes to read, not a maximum:
             // https://sw.kovidgoyal.net/kitty/graphics-protocol/#local-client
@@ -833,8 +861,20 @@ impl LoadingImage {
             // failure other than OOM maps to `error.InvalidData`. `read_exact`
             // reproduces that contract (Vec growth aborts on OOM, which is the
             // Rust-global OOM policy).
+            // const data = reader.readAlloc(alloc, size) catch |err| {
+            //     log.warn("failed to read image file: {}", .{err});
+            //     return switch (err) {
+            //         error.OutOfMemory => error.OutOfMemory,
+            //         else => error.InvalidData,
+            //     };
+            // };
             use std::io::Read;
-            managed.resize(size, 0);
+            if managed.try_reserve_exact(size).is_err() {
+                log::warn!(target: LOG_SCOPE, "failed to read image file: OutOfMemory");
+                return Err(Error::OutOfMemory);
+            }
+            // The capacity is reserved, so this never allocates.
+            managed.resize_copy(size, 0);
             if let Err(err) = file.read_exact(&mut managed) {
                 // log.warn("failed to read image file: {}", .{err});
                 log::warn!(target: LOG_SCOPE, "failed to read image file: {err}");
@@ -863,6 +903,7 @@ impl LoadingImage {
                 let err: String = match err {
                     AppendRemainingError::ReadFailed(err) => err.to_string(),
                     AppendRemainingError::StreamTooLong => String::from("null"),
+                    AppendRemainingError::OutOfMemory => String::from("OutOfMemory"),
                 };
                 log::warn!(target: LOG_SCOPE, "failed to read image file: {err}");
                 return Err(Error::InvalidData);
@@ -938,21 +979,32 @@ impl LoadingImage {
         false
     }
 
-    // PORT NOTE: `deinit` frees `self.image` and `self.data`; Rust drops both
-    // (the image's `data` Vec and `self.data`) automatically. `destroy`
-    // additionally `alloc.destroy(self)` — that is the caller dropping the box.
     // pub fn deinit(self: *LoadingImage, alloc: Allocator) void {
     //     self.image.deinit(alloc);
     //     self.data.deinit(alloc);
     // }
+    // PORT NOTE: `self.image` and `self.data` free through the allocator they
+    // were allocated with when dropped; `deinit` releases them now and checks
+    // that allocator.
+    pub fn deinit(&mut self, alloc: Allocator) {
+        self.image.deinit(alloc);
+        self.data.allocator().debug_assert_same(alloc);
+        self.data = Bytes::new_in(alloc);
+    }
+
     // pub fn destroy(self: *LoadingImage, alloc: Allocator) void {
     //     self.deinit(alloc);
     //     alloc.destroy(self);
     // }
+    pub fn destroy(this: ABox<LoadingImage>, alloc: Allocator) {
+        ABox::allocator(&this).debug_assert_same(alloc);
+        let mut loading = ABox::into_inner(this);
+        loading.deinit(alloc);
+    }
 
     /// Adds a chunk of data to the image. Use this if the image
     /// is coming in chunks (the "m" parameter in the protocol).
-    pub fn addData(&mut self, data: &[u8]) -> Result<(), Error> {
+    pub fn addData(&mut self, alloc: Allocator, data: &[u8]) -> Result<(), Error> {
         // If no data, skip
         if data.is_empty() {
             return Ok(());
@@ -967,24 +1019,29 @@ impl LoadingImage {
 
         // Ensure we have enough room to add the data
         // to the end of the ArrayList before doing so.
-        self.data.reserve(data.len());
+        // try self.data.ensureUnusedCapacity(alloc, data.len);
+        self.data.allocator().debug_assert_same(alloc);
+        self.data
+            .try_reserve(data.len())
+            .map_err(|_| Error::OutOfMemory)?;
 
         // PORT NOTE: `fastmem.copy(u8, self.data.items[start_i..], data)` after
-        // bumping the length. We grow the Vec then memcpy into the tail.
+        // bumping the length. The capacity is reserved, so growing the list
+        // never allocates; then memcpy into the tail.
         let start_i = self.data.len();
-        self.data.resize(start_i + data.len(), 0);
+        self.data.resize_copy(start_i + data.len(), 0);
         fastmem::copy(&mut self.data[start_i..], data);
         Ok(())
     }
 
     /// Complete the chunked image, returning a completed image.
-    pub fn complete(&mut self) -> Result<Image, Error> {
+    pub fn complete(&mut self, alloc: Allocator) -> Result<Image, Error> {
         // Decompress the data if it is compressed.
-        self.decompress()?;
+        self.decompress(alloc)?;
 
         // Decode the png if we have to
         if self.image.format == command::Format::Png {
-            self.decodePng()?;
+            self.decodePng(alloc)?;
         }
 
         // Validate our dimensions.
@@ -1045,10 +1102,12 @@ impl LoadingImage {
 
         // Everything looks good, copy the image data over.
         // PORT NOTE: `result.data = .{ .complete = try self.data.toOwnedSlice(alloc) };`
-        // then `self.image = .{}`. We move our data into the result image and
-        // reset `self.image` to its default so a later drop frees nothing twice.
+        // then `self.image = .{}`. We move our data into the result image (the
+        // list itself, not a shrunk copy: a T3 call-shape residual) and reset
+        // `self.image` to its default so a later drop frees nothing twice.
+        self.data.allocator().debug_assert_same(alloc);
         let mut result = std::mem::take(&mut self.image);
-        result.data = Data::Complete(std::mem::take(&mut self.data));
+        result.data = Data::Complete(core::mem::replace(&mut self.data, Bytes::new_in(alloc)));
         Ok(result)
     }
 
@@ -1120,10 +1179,10 @@ impl LoadingImage {
     }
 
     /// Decompress the data in-place.
-    fn decompress(&mut self) -> Result<(), Error> {
+    fn decompress(&mut self, alloc: Allocator) -> Result<(), Error> {
         match self.image.compression {
             command::Compression::None => Ok(()),
-            command::Compression::ZlibDeflate => self.decompressZlib(),
+            command::Compression::ZlibDeflate => self.decompressZlib(alloc),
         }
     }
 
@@ -1137,12 +1196,12 @@ impl LoadingImage {
     // signature are unchanged; only the body diverges. Native/other targets keep
     // the real C-zlib inflate below. (`zlib-sys` is `cfg(not(wasm32))` in Cargo.)
     #[cfg(target_arch = "wasm32")]
-    fn decompressZlib(&mut self) -> Result<(), Error> {
+    fn decompressZlib(&mut self, _alloc: Allocator) -> Result<(), Error> {
         Err(Error::DecompressionFailed)
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn decompressZlib(&mut self) -> Result<(), Error> {
+    fn decompressZlib(&mut self, alloc: Allocator) -> Result<(), Error> {
         // PORT NOTE: the reference opens a `std.compress.flate.Decompress` in
         // zlib mode over `self.data.items`, then appends the remaining
         // decompressed bytes (limited to `max_size`) into a managed list. We
@@ -1157,8 +1216,14 @@ impl LoadingImage {
         // `zlib_inflate_accepts_exactly_the_limit`.
         //
         // Write it to an array list
-        let list = match zlib_sys::inflate_zlib(&self.data, MAX_SIZE) {
-            Ok(list) => list,
+        // var list: std.ArrayList(u8) = .empty;
+        // errdefer list.deinit(alloc);
+        // PORT NOTE (parity tail S7-4): the list grows through `alloc`; a
+        // refused growth fails the inflate, which is the reference's
+        // catch-all `DecompressionFailed`.
+        let mut list = InflateBytes(Bytes::new_in(alloc));
+        let list = match zlib_sys::inflate_zlib_into(&self.data, MAX_SIZE, &mut list) {
+            Ok(()) => list.0,
             Err(err) => {
                 // log.warn("failed to read decompressed data: {?}", .{stream.err});
                 //
@@ -1179,7 +1244,7 @@ impl LoadingImage {
     }
 
     /// Decode the data as PNG. This will also updated the image dimensions.
-    fn decodePng(&mut self) -> Result<(), Error> {
+    fn decodePng(&mut self, alloc: Allocator) -> Result<(), Error> {
         assert(self.image.format == command::Format::Png);
 
         // PORT NOTE: `const decode_png_fn = sys.decode_png orelse return
@@ -1192,13 +1257,13 @@ impl LoadingImage {
         // var limited: LimitedAllocator = .init(alloc, max_size);
         // const decode_alloc = limited.allocator();
         //
-        // PORT NOTE: the reference's `alloc` (the caller's allocator) is the
-        // Rust global allocator here, wrapped by the same
+        // PORT NOTE (parity tail S7-4): the child is the caller's allocator
+        // (the handle's raw vtable), wrapped by the same
         // `datastruct/limited_allocator` the reference wraps. The decoder
         // performs every allocation through the limited allocator, so an
         // oversized decode is rejected BEFORE the memory is requested from the
         // child.
-        let limited = LimitedAllocator::init(sys::GlobalRawAllocator, MAX_SIZE);
+        let limited = LimitedAllocator::init(alloc, MAX_SIZE);
         let decode_alloc = limited.allocator();
         let result = match decode_png_fn(decode_alloc, &self.data) {
             Ok(r) => r,
@@ -1234,13 +1299,21 @@ impl LoadingImage {
         }
 
         // Replace our data
-        // PORT NOTE: the reference re-allocates `self.data` from the parent
-        // allocator and `appendSlice`s the decode-allocator bytes in (then the
-        // deferred free releases the decode buffer). The seam already produced
-        // `result.data` as a parent-(global-)allocator `Vec` — that copy IS the
-        // `appendSlice` copy (see `sys::decode_png` PORT NOTE) — so it is moved
-        // in here rather than copied a second time.
-        self.data = result.data;
+        // self.data.deinit(alloc);
+        // self.data = .empty;
+        // try self.data.ensureUnusedCapacity(alloc, result.data.len);
+        // try self.data.appendSlice(alloc, result.data[0..result.data.len]);
+        // PORT NOTE (parity tail S7-4): the new data is allocated through
+        // `alloc` and the decoded pixels copied in, as the reference does. The
+        // seam hands the pixels over in a Rust-heap `Vec` (its decode buffer
+        // was freed through the decode allocator inside the seam, see
+        // `sys::decode_png`), so that transient copy is the port's, off the
+        // caller's allocator.
+        self.data = Bytes::new_in(alloc);
+        self.data
+            .try_reserve_exact(result.data.len())
+            .map_err(|_| Error::OutOfMemory)?;
+        self.data.extend_copy(&result.data);
 
         // Store updated image dimensions
         self.image.width = result.width;
@@ -1298,7 +1371,7 @@ pub struct Image {
     // `data`, so this is `Option<Box<Animation>>` under the same sanctioned
     // shape: `Drop` frees it at every removal site and clones deep-copy —
     // observably identical for every read (see graphics_animation.rs).
-    pub animation: Option<Box<crate::kitty::graphics_animation::Animation>>,
+    pub animation: Option<ABox<crate::kitty::graphics_animation::Animation>>,
 }
 
 /// PORT NOTE: the reference is an anonymous `metadata: packed struct(u32) {
@@ -1336,7 +1409,9 @@ impl Metadata {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Data {
     /// Owned, decoded image bytes. The empty default is not allocated.
-    Complete(Vec<u8>),
+    // PORT NOTE (parity tail S7-4): allocated through the storage's
+    // allocator (freed by `deinit(alloc)`, or on drop).
+    Complete(Bytes),
 
     /// Expected decoded byte length for a payload that has not arrived.
     Pending(usize),
@@ -1366,20 +1441,28 @@ impl Data {
         matches!(self, Data::Pending(_))
     }
 
-    // PORT NOTE: `deinit` frees the complete bytes if non-empty; Rust drops the
-    // owning `Vec<u8>` automatically.
     // pub fn deinit(self: *Data, alloc: Allocator) void {
     //     switch (self.*) {
     //         .complete => |data| if (data.len > 0) alloc.free(data),
     //         .pending => {},
     //     }
     // }
+    // PORT NOTE: frees the complete bytes (through the allocator they were
+    // allocated with, checked against `alloc`) and leaves the empty default.
+    pub fn deinit(&mut self, alloc: Allocator) {
+        if let Data::Complete(data) = self {
+            if data.capacity() != 0 {
+                data.allocator().debug_assert_same(alloc);
+            }
+            *data = Bytes::new_in(alloc);
+        }
+    }
 }
 
 impl Default for Data {
     // data: Data = .{ .complete = "" },
     fn default() -> Self {
-        Data::Complete(Vec::new())
+        Data::Complete(Bytes::new_in(crate::alloc::Global))
     }
 }
 
@@ -1392,7 +1475,7 @@ impl Default for Image {
             height: 0,
             format: command::Format::Rgb,
             compression: command::Compression::None,
-            data: Data::Complete(Vec::new()),
+            data: Data::default(),
             metadata: Metadata::default(),
             generation: 0,
             animation: None,
@@ -1436,9 +1519,6 @@ impl<'a> RenderData<'a> {
 }
 
 impl Image {
-    // PORT NOTE: `deinit` forwards to `self.data.deinit(alloc)` and frees
-    // `self.animation` (`anim.deinit(alloc); alloc.destroy(anim)`); Rust drops
-    // the owning `Data` and `Option<Box<Animation>>` automatically.
     // pub fn deinit(self: *Image, alloc: Allocator) void {
     //     self.data.deinit(alloc);
     //     if (self.animation) |anim| {
@@ -1447,6 +1527,17 @@ impl Image {
     //         self.animation = null;
     //     }
     // }
+    // PORT NOTE: the owning `Data` and animation box free through the
+    // allocator they were allocated with; `deinit` releases them now (leaving
+    // the empty default) and checks that allocator.
+    pub fn deinit(&mut self, alloc: Allocator) {
+        self.data.deinit(alloc);
+        if let Some(anim) = self.animation.take() {
+            ABox::allocator(&anim).debug_assert_same(alloc);
+            let mut anim = ABox::into_inner(anim);
+            anim.deinit(alloc);
+        }
+    }
 
     /// The pixel data that should be displayed for this image. For an
     /// animated image this is the current animation frame; otherwise
@@ -1499,13 +1590,28 @@ impl Image {
     }
 
     /// Mostly for logging
+    // PORT NOTE (parity tail S7-4): the reference copies the struct by value
+    // (the copy shares the animation pointer and allocates nothing). The copy
+    // here is field by field: no pixel data and no animation (the port's
+    // animation is owned, so a copy cannot share it), so it allocates nothing
+    // either. Callers read only the metadata.
     pub fn withoutData(&self) -> Image {
-        let mut copy = self.clone();
-        // if (copy.data == .complete) copy.data = .{ .complete = "" };
-        if matches!(copy.data, Data::Complete(_)) {
-            copy.data = Data::Complete(Vec::new());
+        Image {
+            id: self.id,
+            number: self.number,
+            width: self.width,
+            height: self.height,
+            format: self.format,
+            compression: self.compression,
+            // if (copy.data == .complete) copy.data = .{ .complete = "" };
+            data: match self.data {
+                Data::Complete(_) => Data::default(),
+                Data::Pending(len) => Data::Pending(len),
+            },
+            metadata: self.metadata,
+            generation: self.generation,
+            animation: None,
         }
-        copy
     }
 }
 
@@ -1544,6 +1650,8 @@ const NAME_MAX: usize = 255;
 enum AppendRemainingError {
     /// `error.StreamTooLong`: `limit` bytes were read.
     StreamTooLong,
+    /// `error.OutOfMemory`: the list could not grow.
+    OutOfMemory,
     /// `error.ReadFailed`, with the reader's error.
     ReadFailed(std::io::Error),
 }
@@ -1557,21 +1665,62 @@ enum AppendRemainingError {
 // CORRECTION (parity S189-F2): `readFile` used `take(MAX_SIZE).read_to_end`,
 // which stops silently at the limit, so a file of `max_size` bytes or more
 // loaded truncated instead of failing with `InvalidData`.
+//
+// PORT NOTE (parity tail S7-4): `list` grows through its own allocator (the
+// caller's `gpa`), fallibly: a refused growth is `error.OutOfMemory`, which
+// the caller's catch-all reports like any other failure. The growth pattern
+// (one reserve per 4 KiB read) is not Zig's (a T3 call-shape residual).
 fn append_remaining_limited(
     reader: &mut impl std::io::Read,
-    list: &mut Vec<u8>,
+    list: &mut Bytes,
     limit: usize,
 ) -> Result<(), AppendRemainingError> {
-    use std::io::Read;
     let start = list.len();
-    reader
-        .take(limit as u64)
-        .read_to_end(list)
-        .map_err(AppendRemainingError::ReadFailed)?;
-    if list.len() - start >= limit {
-        return Err(AppendRemainingError::StreamTooLong);
+    let mut buf = [0u8; 4096];
+    loop {
+        // Read at most up to the limit (and one past it is never needed:
+        // reaching the limit is already the error).
+        let room = limit - (list.len() - start);
+        if room == 0 {
+            return Err(AppendRemainingError::StreamTooLong);
+        }
+        let want = room.min(buf.len());
+        let n = match reader.read(&mut buf[..want]) {
+            Ok(0) => return Ok(()),
+            Ok(n) => n,
+            Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(err) => return Err(AppendRemainingError::ReadFailed(err)),
+        };
+        list.try_extend_copy(&buf[..n])
+            .map_err(|_| AppendRemainingError::OutOfMemory)?;
     }
-    Ok(())
+}
+
+/// The zlib inflate's output list, grown through its allocator (a local
+/// newtype so the foreign `InflateOut` trait can be implemented for it).
+#[cfg(not(target_arch = "wasm32"))]
+struct InflateBytes(Bytes);
+
+#[cfg(not(target_arch = "wasm32"))]
+impl zlib_sys::InflateOut for InflateBytes {
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+    fn try_grow(&mut self, new_len: usize) -> Result<(), zlib_sys::InflateError> {
+        let extra = new_len - self.0.len();
+        self.0
+            .try_reserve(extra)
+            .map_err(|_| zlib_sys::InflateError)?;
+        // The capacity is reserved, so this never allocates.
+        self.0.resize_copy(new_len, 0);
+        Ok(())
+    }
+    fn truncate(&mut self, new_len: usize) {
+        self.0.truncate(new_len)
+    }
+    fn as_mut_ptr(&mut self) -> *mut u8 {
+        self.0.as_mut_ptr()
+    }
 }
 
 /// Returns whether a name follows the POSIX shared memory name format.
@@ -1952,7 +2101,7 @@ mod tests {
                 compression: command::Compression::ZlibDeflate,
                 ..Image::default()
             },
-            data: Vec::new(),
+            data: crate::alloc::Bytes::new_in(crate::alloc::Global),
             display: None,
             frame: None,
             quiet: command::Quiet::No,
@@ -2044,12 +2193,13 @@ mod tests {
                 ..Default::default()
             }),
             quiet: command::Quiet::No,
-            data: b"kitty-without-leading-slash".to_vec(),
+            data: crate::alloc::heap_bytes(b"kitty-without-leading-slash"),
         };
 
         assert_eq!(
             Err(Error::InvalidData),
             LoadingImage::init(
+                crate::alloc::Global,
                 &cmd,
                 &Limits {
                     file: false,
@@ -2081,11 +2231,12 @@ mod tests {
                 ..Default::default()
             }),
             quiet: command::Quiet::No,
-            data: b"kitty-without-leading-slash".to_vec(),
+            data: crate::alloc::heap_bytes(b"kitty-without-leading-slash"),
         };
 
         let cap = crate::log_capture::start();
         let out = LoadingImage::init(
+            crate::alloc::Global,
             &cmd,
             &Limits {
                 file: false,
@@ -2116,10 +2267,10 @@ mod tests {
     fn an_unexpected_data_length_warns_under_the_default_scope() {
         // 2x1 RGB => 6 bytes expected; supply 3.
         let mut loading = shm_loading(2, 1, command::Format::Rgb);
-        loading.data = vec![0u8; 3];
+        loading.data = crate::alloc::heap_bytes(&[0u8; 3]);
 
         let cap = crate::log_capture::start();
-        let out = loading.complete().map(|_| ());
+        let out = loading.complete(crate::alloc::Global).map(|_| ());
         let messages = cap.messages();
         drop(cap);
 
@@ -2143,10 +2294,10 @@ mod tests {
     #[test]
     fn a_correctly_sized_image_completes_silently() {
         let mut loading = shm_loading(2, 1, command::Format::Rgb);
-        loading.data = vec![0u8; 6];
+        loading.data = crate::alloc::heap_bytes(&[0u8; 6]);
 
         let cap = crate::log_capture::start();
-        let out = loading.complete();
+        let out = loading.complete(crate::alloc::Global);
         let messages = cap.messages();
         drop(cap);
 
@@ -2172,7 +2323,7 @@ mod tests {
                 format,
                 ..Image::default()
             },
-            data: Vec::new(),
+            data: crate::alloc::Bytes::new_in(crate::alloc::Global),
             display: None,
             frame: None,
             quiet: command::Quiet::No,
@@ -2258,9 +2409,9 @@ mod tests {
                 ..Default::default()
             }),
             quiet: command::Quiet::No,
-            data: b"AAAA".to_vec(),
+            data: crate::alloc::heap_bytes(b"AAAA"),
         };
-        let _loading = LoadingImage::init(&cmd, &Limits::DIRECT).unwrap();
+        let _loading = LoadingImage::init(crate::alloc::Global, &cmd, &Limits::DIRECT).unwrap();
     }
 
     #[test]
@@ -2274,10 +2425,13 @@ mod tests {
                 ..Default::default()
             }),
             quiet: command::Quiet::No,
-            data: b"AAAA".to_vec(),
+            data: crate::alloc::heap_bytes(b"AAAA"),
         };
-        let mut loading = LoadingImage::init(&cmd, &Limits::DIRECT).unwrap();
-        assert_eq!(Err(Error::DimensionsTooLarge), loading.complete());
+        let mut loading = LoadingImage::init(crate::alloc::Global, &cmd, &Limits::DIRECT).unwrap();
+        assert_eq!(
+            Err(Error::DimensionsTooLarge),
+            loading.complete(crate::alloc::Global)
+        );
     }
 
     #[test]
@@ -2291,10 +2445,13 @@ mod tests {
                 ..Default::default()
             }),
             quiet: command::Quiet::No,
-            data: b"AAAA".to_vec(),
+            data: crate::alloc::heap_bytes(b"AAAA"),
         };
-        let mut loading = LoadingImage::init(&cmd, &Limits::DIRECT).unwrap();
-        assert_eq!(Err(Error::DimensionsTooLarge), loading.complete());
+        let mut loading = LoadingImage::init(crate::alloc::Global, &cmd, &Limits::DIRECT).unwrap();
+        assert_eq!(
+            Err(Error::DimensionsTooLarge),
+            loading.complete(crate::alloc::Global)
+        );
     }
 
     // rustty-only capacity regression (no Zig test{} counterpart) for the DG2/
@@ -2322,10 +2479,13 @@ mod tests {
                 ..Default::default()
             }),
             quiet: command::Quiet::No,
-            data: b"AAAA".to_vec(),
+            data: crate::alloc::heap_bytes(b"AAAA"),
         };
-        let mut loading = LoadingImage::init(&cmd, &Limits::DIRECT).unwrap();
-        assert_eq!(Err(Error::DimensionsTooLarge), loading.complete());
+        let mut loading = LoadingImage::init(crate::alloc::Global, &cmd, &Limits::DIRECT).unwrap();
+        assert_eq!(
+            Err(Error::DimensionsTooLarge),
+            loading.complete(crate::alloc::Global)
+        );
     }
 
     #[cfg_attr(
@@ -2345,11 +2505,12 @@ mod tests {
                 ..Default::default()
             }),
             quiet: command::Quiet::No,
-            data: include_bytes!("testdata/image-rgb-zlib_deflate-128x96-2147483647-raw.data")
-                .to_vec(),
+            data: crate::alloc::heap_bytes(include_bytes!(
+                "testdata/image-rgb-zlib_deflate-128x96-2147483647-raw.data"
+            )),
         };
-        let mut loading = LoadingImage::init(&cmd, &Limits::DIRECT).unwrap();
-        let img = loading.complete().unwrap();
+        let mut loading = LoadingImage::init(crate::alloc::Global, &cmd, &Limits::DIRECT).unwrap();
+        let img = loading.complete(crate::alloc::Global).unwrap();
 
         // should be decompressed
         assert!(img.compression == command::Compression::None);
@@ -2368,10 +2529,12 @@ mod tests {
                 ..Default::default()
             }),
             quiet: command::Quiet::No,
-            data: include_bytes!("testdata/image-rgb-none-20x15-2147483647-raw.data").to_vec(),
+            data: crate::alloc::heap_bytes(include_bytes!(
+                "testdata/image-rgb-none-20x15-2147483647-raw.data"
+            )),
         };
-        let mut loading = LoadingImage::init(&cmd, &Limits::DIRECT).unwrap();
-        let img = loading.complete().unwrap();
+        let mut loading = LoadingImage::init(crate::alloc::Global, &cmd, &Limits::DIRECT).unwrap();
+        let img = loading.complete(crate::alloc::Global).unwrap();
 
         // should be decompressed
         assert!(img.compression == command::Compression::None);
@@ -2398,16 +2561,18 @@ mod tests {
                 ..Default::default()
             }),
             quiet: command::Quiet::No,
-            data: data[0..1024].to_vec(),
+            data: crate::alloc::heap_bytes(&data[0..1024]),
         };
-        let mut loading = LoadingImage::init(&cmd, &Limits::DIRECT).unwrap();
+        let mut loading = LoadingImage::init(crate::alloc::Global, &cmd, &Limits::DIRECT).unwrap();
 
         // Read our remaining chunks
         let mut pos = 1024;
         loop {
             let end = std::cmp::min(pos + 1024, data.len());
             let size = end - pos;
-            loading.addData(&data[pos..end]).unwrap();
+            loading
+                .addData(crate::alloc::Global, &data[pos..end])
+                .unwrap();
             pos = end;
             if size < 1024 {
                 break;
@@ -2415,7 +2580,7 @@ mod tests {
         }
 
         // Complete
-        let img = loading.complete().unwrap();
+        let img = loading.complete(crate::alloc::Global).unwrap();
         assert!(img.compression == command::Compression::None);
     }
 
@@ -2440,16 +2605,18 @@ mod tests {
                 ..Default::default()
             }),
             quiet: command::Quiet::No,
-            data: Vec::new(),
+            data: crate::alloc::Bytes::new_in(crate::alloc::Global),
         };
-        let mut loading = LoadingImage::init(&cmd, &Limits::DIRECT).unwrap();
+        let mut loading = LoadingImage::init(crate::alloc::Global, &cmd, &Limits::DIRECT).unwrap();
 
         // Read our remaining chunks
         let mut pos = 0;
         loop {
             let end = std::cmp::min(pos + 1024, data.len());
             let size = end - pos;
-            loading.addData(&data[pos..end]).unwrap();
+            loading
+                .addData(crate::alloc::Global, &data[pos..end])
+                .unwrap();
             pos = end;
             if size < 1024 {
                 break;
@@ -2457,7 +2624,7 @@ mod tests {
         }
 
         // Complete
-        let img = loading.complete().unwrap();
+        let img = loading.complete(crate::alloc::Global).unwrap();
         assert!(img.compression == command::Compression::None);
     }
 
@@ -2482,11 +2649,12 @@ mod tests {
                 ..Default::default()
             }),
             quiet: command::Quiet::No,
-            data: path_bytes,
+            data: crate::alloc::heap_bytes(&path_bytes),
         };
         assert_eq!(
             Err(Error::TemporaryFileNotNamedCorrectly),
             LoadingImage::init(
+                crate::alloc::Global,
                 &cmd,
                 &Limits::all_with_temp_dir(&tmp_dir_realpath(&tmp_dir))
             )
@@ -2538,11 +2706,12 @@ mod tests {
                 ..Default::default()
             }),
             quiet: command::Quiet::No,
-            data: path_to_bytes(&outside_path),
+            data: crate::alloc::heap_bytes(&path_to_bytes(&outside_path)),
         };
         assert_eq!(
             Err(Error::TemporaryFileNotInTempDir),
             LoadingImage::init(
+                crate::alloc::Global,
                 &cmd,
                 &Limits::all_with_temp_dir(&path_to_bytes(&trusted_path))
             )
@@ -2583,14 +2752,15 @@ mod tests {
                 ..Default::default()
             }),
             quiet: command::Quiet::No,
-            data: path_bytes,
+            data: crate::alloc::heap_bytes(&path_bytes),
         };
         let mut loading = LoadingImage::init(
+            crate::alloc::Global,
             &cmd,
             &Limits::all_with_temp_dir(&tmp_dir_realpath(&tmp_dir)),
         )
         .unwrap();
-        let img = loading.complete().unwrap();
+        let img = loading.complete(crate::alloc::Global).unwrap();
         assert!(img.compression == command::Compression::None);
 
         // Temporary file should be gone
@@ -2622,14 +2792,15 @@ mod tests {
                 ..Default::default()
             }),
             quiet: command::Quiet::No,
-            data: path_bytes,
+            data: crate::alloc::heap_bytes(&path_bytes),
         };
         let mut loading = LoadingImage::init(
+            crate::alloc::Global,
             &cmd,
             &Limits::all_with_temp_dir(&tmp_dir_realpath(&tmp_dir)),
         )
         .unwrap();
-        let img = loading.complete().unwrap();
+        let img = loading.complete(crate::alloc::Global).unwrap();
         assert!(img.compression == command::Compression::None);
         tmp_dir.dir().access(&path).unwrap();
         tmp_dir.deinit();
@@ -2641,12 +2812,12 @@ mod tests {
     #[test]
     fn append_remaining_limited_matches_zig_limit_semantics() {
         let run = |input: &[u8], limit: usize| {
-            let mut list = b"x".to_vec();
+            let mut list = crate::alloc::heap_bytes(b"x");
             let mut reader = input;
             let r = append_remaining_limited(&mut reader, &mut list, limit);
             (
                 r.map_err(|e| matches!(e, AppendRemainingError::StreamTooLong)),
-                list,
+                list.to_vec(),
             )
         };
         assert_eq!((Ok(()), b"xabc".to_vec()), run(b"abc", 4));
@@ -2677,9 +2848,10 @@ mod tests {
                 ..Default::default()
             }),
             quiet: command::Quiet::No,
-            data: path_to_bytes(&path),
+            data: crate::alloc::heap_bytes(&path_to_bytes(&path)),
         };
         let result = LoadingImage::init(
+            crate::alloc::Global,
             &cmd,
             &Limits::all_with_temp_dir(&tmp_dir_realpath(&tmp_dir)),
         );
@@ -2769,7 +2941,7 @@ mod tests {
                 ..Default::default()
             }),
             quiet: command::Quiet::No,
-            data: rel_path.as_bytes().to_vec(),
+            data: crate::alloc::heap_bytes(rel_path.as_bytes()),
         };
 
         // The scratch directory is removed on EVERY exit, including a panic —
@@ -2785,6 +2957,7 @@ mod tests {
         let _scratch = Scratch(rel_dir.clone());
 
         let mut loading = LoadingImage::init(
+            crate::alloc::Global,
             &cmd,
             &Limits {
                 file: true,
@@ -2793,7 +2966,7 @@ mod tests {
             },
         )
         .unwrap();
-        let img = loading.complete().unwrap();
+        let img = loading.complete(crate::alloc::Global).unwrap();
         assert!(img.compression == command::Compression::None);
     }
 
@@ -2837,10 +3010,11 @@ mod tests {
                     ..Default::default()
                 }),
                 quiet: command::Quiet::No,
-                data: path_bytes.clone(),
+                data: crate::alloc::heap_bytes(&path_bytes.clone()),
             };
 
             let mut loading = LoadingImage::init(
+                crate::alloc::Global,
                 &cmd,
                 &Limits {
                     file: true,
@@ -2849,7 +3023,7 @@ mod tests {
                 },
             )
             .unwrap();
-            let img = loading.complete().unwrap();
+            let img = loading.complete(crate::alloc::Global).unwrap();
 
             let Data::Complete(bytes) = &img.data else {
                 unreachable!()
@@ -2880,12 +3054,13 @@ mod tests {
                 ..Default::default()
             }),
             quiet: command::Quiet::No,
-            data: path_bytes,
+            data: crate::alloc::heap_bytes(&path_bytes),
         };
 
         assert_eq!(
             Err(Error::InvalidData),
             LoadingImage::init(
+                crate::alloc::Global,
                 &cmd,
                 &Limits {
                     file: true,
@@ -2977,14 +3152,15 @@ mod tests {
                 ..Default::default()
             }),
             quiet: command::Quiet::No,
-            data: path_bytes,
+            data: crate::alloc::heap_bytes(&path_bytes),
         };
         let mut loading = LoadingImage::init(
+            crate::alloc::Global,
             &cmd,
             &Limits::all_with_temp_dir(&tmp_dir_realpath(&tmp_dir)),
         )
         .unwrap();
-        let img = loading.complete().unwrap();
+        let img = loading.complete(crate::alloc::Global).unwrap();
         assert!(img.compression == command::Compression::None);
         assert!(img.format == command::Format::Rgba);
         tmp_dir.dir().access(&path).unwrap();
@@ -2993,19 +3169,13 @@ mod tests {
 
     // test "image load: png rejects oversized decoder allocation"
     //
-    // PORT NOTE (restructured, same assertions): the reference threads the
-    // testing `FailingAllocator` in as the allocator `complete(alloc)` hands to
-    // `decodePng`, then asserts `error.InvalidData` AND
-    // `!failing.has_induced_failure` (the limiter rejected the request BEFORE
-    // it reached the child). rustty's `complete()` carries no allocator
-    // parameter (the Rust global backs it), so the two assertions are split:
-    // part A drives the SAME oversized decoder through a
-    // `LimitedAllocator(FailingAllocator)` directly, proving the request is
-    // rejected before the child; part B installs the decoder in the global slot
-    // and asserts `loading.complete()` maps it to `InvalidData`.
+    // PORT NOTE (parity tail S7-4): ported as written. The decode seam's
+    // `LimitedAllocator` wraps the allocator `complete(alloc)` is given, so
+    // the testing `FailingAllocator` sits under the limiter exactly as in the
+    // reference.
     #[test]
     fn image_load_png_rejects_oversized_decoder_allocation() {
-        use rustty_datastruct::limited_allocator::{Alignment, RawAllocator, RawSlice};
+        use rustty_datastruct::limited_allocator::RawAllocator;
 
         // const oversized_decoder = struct { fn decode(alloc, _) { ... } }.decode;
         fn oversized_decoder(
@@ -3030,66 +3200,6 @@ mod tests {
             })
         }
 
-        // PORT NOTE: the rustty analog of `std.testing.FailingAllocator`
-        // restricted to what this test observes (see the datastruct
-        // limited_allocator tests for the canonical copy).
-        struct FailingAllocator {
-            fail_index: usize,
-            index: std::cell::Cell<usize>,
-            has_induced_failure: std::cell::Cell<bool>,
-        }
-        impl RawAllocator for FailingAllocator {
-            fn raw_alloc(&self, len: usize, alignment: Alignment, ra: usize) -> *mut u8 {
-                if self.index.get() >= self.fail_index {
-                    self.has_induced_failure.set(true);
-                    return std::ptr::null_mut();
-                }
-                self.index.set(self.index.get() + 1);
-                sys::GlobalRawAllocator.raw_alloc(len, alignment, ra)
-            }
-            fn raw_resize(
-                &self,
-                memory: RawSlice,
-                alignment: Alignment,
-                new_len: usize,
-                ra: usize,
-            ) -> bool {
-                sys::GlobalRawAllocator.raw_resize(memory, alignment, new_len, ra)
-            }
-            fn raw_remap(
-                &self,
-                memory: RawSlice,
-                alignment: Alignment,
-                new_len: usize,
-                ra: usize,
-            ) -> *mut u8 {
-                sys::GlobalRawAllocator.raw_remap(memory, alignment, new_len, ra)
-            }
-            fn raw_free(&self, memory: RawSlice, alignment: Alignment, ra: usize) {
-                sys::GlobalRawAllocator.raw_free(memory, alignment, ra);
-            }
-        }
-
-        // Part A: fail any allocation which reaches the underlying allocator.
-        // The size limiter should reject the decoder's request before it gets
-        // that far.
-        // var failing = testing.FailingAllocator.init(testing.allocator, .{ .fail_index = 0 });
-        let failing = FailingAllocator {
-            fail_index: 0,
-            index: std::cell::Cell::new(0),
-            has_induced_failure: std::cell::Cell::new(false),
-        };
-        let limited = LimitedAllocator::init(failing, MAX_SIZE);
-        assert_eq!(
-            Err(sys::DecodeError::OutOfMemory),
-            oversized_decoder(limited.allocator(), b"").map(|_| ())
-        );
-        assert!(limited.limit_exceeded.get());
-        // try testing.expect(!failing.has_induced_failure);
-        assert!(!limited.child.has_induced_failure.get());
-
-        // Part B: with the decoder installed, `complete()` maps the
-        // limit-rejected decode to `InvalidData`.
         let _png_lock = sys::decode_png_test_lock
             .lock()
             .unwrap_or_else(|e| e.into_inner());
@@ -3099,8 +3209,36 @@ mod tests {
         let original_decode_png = *sys::decode_png.read().unwrap();
         *sys::decode_png.write().unwrap() = Some(oversized_decoder);
 
-        let mut loading = shm_loading(0, 0, command::Format::Png);
-        assert_eq!(Err(Error::InvalidData), loading.complete().map(|_| ()));
+        // Fail any allocation which reaches the underlying allocator. The size
+        // limiter should reject the decoder's request before it gets that far.
+        // var failing = testing.FailingAllocator.init(testing.allocator, .{
+        //     .fail_index = 0,
+        // });
+        // const alloc = failing.allocator();
+        let failing =
+            crate::alloc::testing::FailingAllocator::over_heap(crate::alloc::testing::Config {
+                fail_index: 0,
+                ..crate::alloc::testing::Config::default()
+            });
+        let failing_c = failing.allocator();
+        crate::alloc::testing::with_handle(&failing_c, |alloc| {
+            // var loading: LoadingImage = .{
+            //     .image = .{ .format = .png },
+            //     .quiet = .no,
+            //     .temporary_directory = null,
+            // };
+            // defer loading.deinit(alloc);
+            let mut loading = LoadingImage {
+                data: crate::alloc::Bytes::new_in(alloc),
+                ..shm_loading(0, 0, command::Format::Png)
+            };
+
+            // try testing.expectError(error.InvalidData, loading.complete(alloc));
+            assert_eq!(Err(Error::InvalidData), loading.complete(alloc).map(|_| ()));
+            loading.deinit(alloc);
+        });
+        // try testing.expect(!failing.has_induced_failure);
+        assert!(!failing.has_induced_failure.get());
 
         *sys::decode_png.write().unwrap() = original_decode_png;
     }
@@ -3142,11 +3280,14 @@ mod tests {
                 ..Default::default()
             }),
             quiet: command::Quiet::No,
-            data,
+            data: crate::alloc::heap_bytes(&data),
         };
-        let mut loading = LoadingImage::init(&cmd, &Limits::DIRECT).unwrap();
+        let mut loading = LoadingImage::init(crate::alloc::Global, &cmd, &Limits::DIRECT).unwrap();
 
-        assert_eq!(Err(Error::InvalidData), loading.complete().map(|_| ()));
+        assert_eq!(
+            Err(Error::InvalidData),
+            loading.complete(crate::alloc::Global).map(|_| ())
+        );
     }
 
     /// PORT NOTE: `std.hash.Crc32.hash` (the IEEE polynomial, as PNG chunk CRCs
@@ -3178,11 +3319,11 @@ mod tests {
                 ..Default::default()
             }),
             quiet: command::Quiet::No,
-            data: b"AAAA".to_vec(),
+            data: crate::alloc::heap_bytes(b"AAAA"),
         };
 
         // Direct medium should work even with the most restrictive limits
-        let _loading = LoadingImage::init(&cmd, &Limits::DIRECT).unwrap();
+        let _loading = LoadingImage::init(crate::alloc::Global, &cmd, &Limits::DIRECT).unwrap();
     }
 
     #[test]
@@ -3206,11 +3347,11 @@ mod tests {
                 ..Default::default()
             }),
             quiet: command::Quiet::No,
-            data: path_bytes,
+            data: crate::alloc::heap_bytes(&path_bytes),
         };
         assert_eq!(
             Err(Error::UnsupportedMedium),
-            LoadingImage::init(&cmd, &Limits::DIRECT).map(|_| ())
+            LoadingImage::init(crate::alloc::Global, &cmd, &Limits::DIRECT).map(|_| ())
         );
         tmp_dir.deinit();
     }
@@ -3236,9 +3377,10 @@ mod tests {
                 ..Default::default()
             }),
             quiet: command::Quiet::No,
-            data: path_bytes,
+            data: crate::alloc::heap_bytes(&path_bytes),
         };
         let _loading = LoadingImage::init(
+            crate::alloc::Global,
             &cmd,
             &Limits {
                 file: true,
@@ -3277,11 +3419,12 @@ mod tests {
                 ..Default::default()
             }),
             quiet: command::Quiet::No,
-            data: path_bytes,
+            data: crate::alloc::heap_bytes(&path_bytes),
         };
         assert_eq!(
             Err(Error::UnsupportedMedium),
             LoadingImage::init(
+                crate::alloc::Global,
                 &cmd,
                 &Limits {
                     file: true,
@@ -3327,9 +3470,10 @@ mod tests {
                 ..Default::default()
             }),
             quiet: command::Quiet::No,
-            data: path_bytes,
+            data: crate::alloc::heap_bytes(&path_bytes),
         };
         let _loading = LoadingImage::init(
+            crate::alloc::Global,
             &cmd,
             &Limits {
                 file: false,

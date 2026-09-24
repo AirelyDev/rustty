@@ -5800,7 +5800,7 @@ impl Terminal {
         req: &glyph::Request,
     ) -> Option<glyph::Response> {
         self.glyph_glossary.allocator().debug_assert_same(alloc);
-        let resp = glyph::execute(&mut self.glyph_glossary, req);
+        let resp = glyph::execute(alloc, &mut self.glyph_glossary, req);
         match req {
             glyph::Request::Register(_) | glyph::Request::Clear(_) => {
                 self.flags.dirty.glyph_glossary = true;
@@ -18924,14 +18924,14 @@ mod tests {
 
         // var register_parser = glyph.CommandParser.init(alloc, 1024 * 1024);
         // defer register_parser.deinit();
-        let mut register_parser = glyph::CommandParser::init(1024 * 1024);
+        let mut register_parser = glyph::CommandParser::init(crate::alloc::Global, 1024 * 1024);
         // for ("r;cp=e0a0;AAAAAAAAAAAAAA==") |byte| try register_parser.feed(byte);
         for byte in *b"r;cp=e0a0;AAAAAAAAAAAAAA==" {
             register_parser.feed(byte).unwrap();
         }
         // var register_req = try register_parser.complete(alloc);
         // defer register_req.deinit(alloc);
-        let register_req = register_parser.complete().unwrap();
+        let register_req = register_parser.complete(crate::alloc::Global).unwrap();
 
         // try testing.expectEqual(glyph.Response{ .register = .{ .cp = 0xE0A0 } },
         //     t.glyphProtocol(alloc, &register_req).?);
@@ -18946,14 +18946,14 @@ mod tests {
 
         // var query_parser = glyph.CommandParser.init(alloc, 1024 * 1024);
         // defer query_parser.deinit();
-        let mut query_parser = glyph::CommandParser::init(1024 * 1024);
+        let mut query_parser = glyph::CommandParser::init(crate::alloc::Global, 1024 * 1024);
         // for ("q;cp=e0a0") |byte| try query_parser.feed(byte);
         for byte in *b"q;cp=e0a0" {
             query_parser.feed(byte).unwrap();
         }
         // var query_req = try query_parser.complete(alloc);
         // defer query_req.deinit(alloc);
-        let query_req = query_parser.complete().unwrap();
+        let query_req = query_parser.complete(crate::alloc::Global).unwrap();
 
         // try testing.expectEqual(glyph.Response{ .query = .{
         //     .cp = 0xE0A0, .status = .{ .glossary = true } } },
