@@ -18,6 +18,8 @@
 //! Adapted: `"parse unsigned comptime"` runs its assertion at run time
 //! (`parse_unsigned` is not a `const fn`).
 //!
+//! `"float.special"`: ported (a float's `{}` is the same call as a bare `{d}`).
+//!
 //! `"float.decimal"`: only its four rows that format with a bare `{d}` are
 //! ported (`format_float_d`); the rest give a precision, which
 //! `format_float_d` does not take.
@@ -480,6 +482,24 @@ fn parse_float_matches_zig_over_the_corpus() {
             String::from_utf8_lossy(input)
         );
     }
+}
+
+// test "float.special" (std/fmt.zig:991-1000). For a float, `{}` reaches the
+// same `printFloat(.decimal)` call as a bare `{d}`, which `format_float_d`
+// ports. The reference skips the `-nan` row on 32-bit arm only (ARM
+// normalizes a negative NaN); no Rust target here is that arch.
+#[test]
+fn test_float_special() {
+    assert_eq!(format!("f64: {}", format_float_d(f64::NAN)), "f64: nan");
+    assert_eq!(format!("f64: {}", format_float_d(-f64::NAN)), "f64: -nan");
+    assert_eq!(
+        format!("f64: {}", format_float_d(f64::INFINITY)),
+        "f64: inf"
+    );
+    assert_eq!(
+        format!("f64: {}", format_float_d(f64::NEG_INFINITY)),
+        "f64: -inf"
+    );
 }
 
 // test "float.decimal" (std/fmt.zig:1056-1077): the rows with a bare `{d}`.
