@@ -19,8 +19,9 @@
 //! re-establishes the NUL there (`CString`). No such consumer exists in this
 //! task, so the storage stays plain `String`.
 
-/// PORTS: `slice.zig:8` `pub const StringList`. A boxed type holding a list of
-/// strings, registered as `"GhosttyStringList"` (`slice.zig:47`).
+/// A boxed type that holds a list of string slices.
+///
+/// PORTS: `slice.zig:8` `pub const StringList`, registered as `"GhosttyStringList"` (`slice.zig:47`).
 #[derive(Clone, Debug, glib::Boxed)]
 #[boxed_type(name = "GhosttyStringList", nullable)]
 pub struct StringList {

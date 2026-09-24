@@ -89,17 +89,26 @@
 
 use super::build_info;
 
-/// The path (relative to the crate) to the Blueprint files, laid out as
-/// `{version}/{name}.blp`. Reference: `gresource.zig:15` (`ui_path`); rustty
-/// vendors the tree under `assets/ui` rather than `src/apprt/gtk/ui`.
+/// The path to the Blueprint files. The folder structure is expected to be
+/// `{version}/{name}.blp` where `version` is the major and minor
+/// minimum adwaita version.
+///
+/// Reference: `gresource.zig:15` (`ui_path`); rustty vendors the tree under
+/// `assets/ui` (relative to the crate) rather than `src/apprt/gtk/ui`.
 pub const UI_PATH: &str = "assets/ui";
 
-/// The path (relative to the crate) to the CSS files. Reference:
-/// `gresource.zig:18` (`css_path`).
+/// The path to the CSS files.
+///
+/// Reference: `gresource.zig:18` (`css_path`), relative to the crate here.
 pub const CSS_PATH: &str = "assets/css";
 
-/// The icon sizes embedded into the gresource file (each yields a 1x `{size}`
-/// and a 2x `{size*2}` source). Reference: `gresource.zig:24` (`icon_sizes`).
+/// The possible icon sizes we'll embed into the gresource file.
+/// If any size doesn't exist then it will be an error. We could
+/// infer this completely from available files but we wouldn't be
+/// able to error when they don't exist that way.
+///
+/// Each yields a 1x `{size}` and a 2x `{size*2}` source. Reference:
+/// `gresource.zig:24` (`icon_sizes`).
 pub const ICON_SIZES: &[u32] = &[16, 32, 128, 256, 512, 1024];
 
 /// CSS files in [`CSS_PATH`]. Reference: `gresource.zig:58-63` (`css`).
@@ -151,9 +160,17 @@ const fn resource_join<const N: usize>(suffix: &str) -> [u8; N] {
 /// suffix cannot drift from the `major`/`minor`/`name` it is built from).
 macro_rules! blueprints {
     ( $( ($maj:literal, $min:literal, $name:literal) ),+ $(,)? ) => {
-        /// The blueprint files embedded into the gresource file. Reference:
-        /// `gresource.zig:33-55`, minus the two AD-3-dropped legacy entries —
-        /// **19**, not 21. Asserted to exist on disk by `tests/gtk_assets.rs`.
+        /// The blueprint files that we will embed into the gresource file.
+        /// We can't look these up at runtime \[easily\] because we require the
+        /// compiled UI files as input. We can refactor this lator to maybe do
+        /// all of this automatically and ensure we have the right dependencies
+        /// setup in the build system.
+        ///
+        /// These will be asserted to exist at runtime.
+        ///
+        /// Reference: `gresource.zig:33-55`, minus the two AD-3-dropped legacy
+        /// entries — **19**, not 21. Asserted to exist on disk by
+        /// `tests/gtk_assets.rs`.
         pub const BLUEPRINTS: &[Blueprint; 19] = &[
             $(
                 Blueprint {
@@ -217,8 +234,14 @@ const fn str_eq(a: &str, b: &str) -> bool {
     true
 }
 
-/// Returns the resource path (`{resource_path}/ui/{major}.{minor}/{name}.ui`) for
-/// the given blueprint. Reference: `gresource.zig:103-123`.
+/// Returns the matching blueprint resource path for the given blueprint
+/// definition. This will fail at compile time if the blueprint is not
+/// found.
+///
+/// Must be called at comptime.
+///
+/// The path is `{resource_path}/ui/{major}.{minor}/{name}.ui`. Reference:
+/// `gresource.zig:103-123`.
 ///
 /// This is `const`: calling it with a blueprint not in [`BLUEPRINTS`] from a
 /// `const` context is a *compile* error (the `panic!` fires at const-eval),
@@ -228,6 +251,10 @@ const fn str_eq(a: &str, b: &str) -> bool {
 /// Panics if `(major, minor, name)` is not a manifest entry.
 #[must_use]
 pub const fn blueprint(major: u16, minor: u16, name: &str) -> &'static str {
+    // The comptime block around this whole thing forces an error if
+    // the caller attempts to call this function at runtime.
+    // (PORT NOTE: a `const fn` CAN be called at runtime; there the miss is a
+    // `panic!` instead — the call sites are `const` items, which fold it.)
     let mut i = 0;
     while i < BLUEPRINTS.len() {
         let bp = &BLUEPRINTS[i];

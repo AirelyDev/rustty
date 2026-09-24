@@ -494,15 +494,17 @@ fn init_post_pipelines(
         return Ok(Vec::new()); // Zig `return &.{}`
     }
 
+    // Keeps track of how many shaders we successfully wrote.
+    //
     // Initialize our result set. If any error happens, we undo everything.
     //
     // PORT NOTE: Zig keeps an explicit `i` + `errdefer` to release the successfully
-    // built pipelines on a later failure ("we don't use \"0..\" to build our index
-    // because we need to keep track of our length to clean up above"). That unwinding
-    // dissolves into `?` early-return + `Vec`/`Retained` Drop.
+    // built pipelines on a later failure. Here the `Vec`'s `len()` is that count, and
+    // the unwinding dissolves into `?` early-return + `Vec`/`Retained` Drop.
     let mut pipelines = Vec::with_capacity(shaders.len()); // Zig `alloc.alloc(Pipeline, shaders.len)`
 
-    // Build each shader.
+    // Build each shader. Note we don't use "0.." to build our index
+    // because we need to keep track of our length to clean up above.
     for source in shaders {
         pipelines.push(init_post_pipeline(device, library, source, pixel_format)?);
     }

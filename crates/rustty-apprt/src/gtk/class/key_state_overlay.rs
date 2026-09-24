@@ -61,6 +61,8 @@ mod imp {
         #[property(name = "has-sequence", get = Self::get_has_sequence)]
         pub has_sequence_prop: std::marker::PhantomData<bool>,
 
+        /// Target vertical alignment for the overlay.
+        ///
         /// PORTS: `key_state_overlay.zig:106-117,128` property/field
         /// `valign-target` (default `.end`) — the target vertical alignment; the
         /// template binds `valign: bind template.valign-target`
@@ -172,6 +174,10 @@ mod imp {
 }
 
 glib::wrapper! {
+    /// An overlay that displays the current key table stack and pending key sequence.
+    /// This helps users understand what key bindings are active and what keys they've
+    /// pressed in a multi-key sequence.
+    ///
     /// PORTS: `key_state_overlay.zig:17` `pub const KeyStateOverlay`. The overlay
     /// showing the pending key-table stack + key sequence for leader-key feedback.
     pub struct KeyStateOverlay(ObjectSubclass<imp::KeyStateOverlay>)
@@ -245,6 +251,8 @@ impl KeyStateOverlay {
         offset_y: f64,
         this: &KeyStateOverlay,
     ) {
+        // Key state overlay only moves between top-center and bottom-center.
+        // Horizontal alignment is always center.
         let widget = this.upcast_ref::<gtk4::Widget>();
         let Some(parent) = widget.parent() else {
             return;

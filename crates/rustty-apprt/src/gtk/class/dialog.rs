@@ -47,6 +47,13 @@ mod imp {
 }
 
 glib::wrapper! {
+    /// Dialog is a simple abstraction over the `adw.AlertDialog` and
+    /// `adw.MessageDialog` widgets, chosen at comptime based on the linked
+    /// Adwaita version.
+    ///
+    /// Once we drop support for Adwaita <= 1.2, this can be fully removed
+    /// and we can use `adw.AlertDialog` directly.
+    ///
     /// PORTS: `dialog.zig:17` `pub const Dialog`. A subclassable base over
     /// `adw::AlertDialog`; see [`DialogImpl`] for how subclasses attach.
     pub struct Dialog(ObjectSubclass<imp::Dialog>)
@@ -60,6 +67,10 @@ glib::wrapper! {
 /// no vfuncs of its own, so the trait body is empty and the `IsSubclassable`
 /// impl just chains to `adw::AlertDialog` (which installs the `response` vfunc
 /// the reference forwards at `dialog.zig:32-36`).
+//
+// Reference `virtual_methods.response` (dialog.zig:33-35):
+// Forwarded from parent so subclasses can reference this
+// directly. This will make it easier to remove Dialog in the future.
 pub trait DialogImpl: AdwAlertDialogImpl {}
 
 unsafe impl<T: DialogImpl> IsSubclassable<T> for Dialog {}

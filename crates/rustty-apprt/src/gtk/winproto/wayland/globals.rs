@@ -95,13 +95,19 @@ enum Tag {
 /// globals' events (as opposed to the proxies themselves).
 #[derive(Debug, Default)]
 pub struct State {
-    /// PORTS: `Globals.zig:51-53` `primary_output_name`. Connector name of the
-    /// primary output as reported by `kde_output_order_v1`.
+    /// Connector name of the primary output (e.g., "DP-1") as reported
+    /// by kde_output_order_v1. The first output in each priority list
+    /// is the primary.
+    ///
+    /// PORTS: `Globals.zig:51-53` `primary_output_name`.
     pub primary_output_name: Option<String>,
 
-    /// PORTS: `Globals.zig:55-58` `output_order_done`. Tracks the output-order
-    /// event cycle; initialized to `true` so the first `output` after binding is
-    /// captured.
+    /// Tracks the output order event cycle. Set to true after a `done`
+    /// event so the next `output` event is captured as the new primary.
+    /// Initialized to true so the first event after binding is captured.
+    ///
+    /// PORTS: `Globals.zig:55-58` `output_order_done` (the `true` initializer
+    /// is set in [`Globals::new`]; `Default` would give `false`).
     output_order_done: bool,
 
     /// PORTS: `Globals.zig:60` `default_deco_mode`.
@@ -113,6 +119,8 @@ pub struct State {
 }
 
 impl State {
+    /// Reset cached state derived from kde_output_order_v1.
+    ///
     /// PORTS: `Globals.zig:65-69` `resetOutputOrder`.
     fn reset_output_order(&mut self) {
         self.primary_output_name = None;
@@ -123,7 +131,10 @@ impl State {
 /// PORTS: `Globals.zig` (the `@This()` struct) — the app-wide Wayland registry
 /// binder + bound-global store. Held in a `Box` by [`super::App`] so its address
 /// is stable across the app's lifetime, matching the reference's heap allocation
-/// (`Globals.zig:72-80`, "the listener expects a stable memory address").
+/// in `init` (`Globals.zig:76-78`):
+///
+/// We need to allocate here since the listener
+/// expects a stable memory address.
 pub struct Globals {
     /// The wayland-client connection wrapping GDK's foreign `wl_display`. Owned so
     /// the underlying libwayland event queue created by
@@ -139,6 +150,9 @@ pub struct Globals {
     /// The `wl_registry`. Kept alive so `global`/`global_remove` keep dispatching.
     _registry: WlRegistry,
 
+    /// Used in the initial roundtrip to determine whether more
+    /// roundtrips are required to fetch the initial state.
+    ///
     /// PORTS: `Globals.zig:19-21` `needs_roundtrip`. Set when a bound global will
     /// emit initial-state events that a second roundtrip must drain.
     pub needs_roundtrip: bool,
@@ -148,6 +162,10 @@ pub struct Globals {
 
     // The bound proxies. Each is `None` when the compositor did not advertise the
     // corresponding global (`Globals.zig:100-103`'s unset `EnumMap` entries).
+    //
+    // `Globals.zig:25` `Binding.proxy`:
+    // All globals can be casted into a wl.Proxy object.
+    // (Here each keeps its concrete type instead.)
     compositor: Option<WlCompositor>,
     xdg_activation: Option<XdgActivationV1>,
     kde_decoration_manager: Option<OrgKdeKwinServerDecorationManager>,
@@ -320,6 +338,12 @@ impl Globals {
         name: u32,
         interface: &str,
     ) {
+        // Install listeners immediately at bind time. This
+        // keeps listener setup and object lifetime in one
+        // place and also supports globals that appear later.
+        // (`Globals.zig:108-130` `onGlobalAttached`; in wayland-rs the listener
+        // IS the `Dispatch` impl chosen by `qh`, so `bind` installs it, and each
+        // arm below sets `needs_roundtrip` exactly where the reference does.)
         if interface == WlCompositor::interface().name {
             let v = GENERATED_VERSION;
             // log.debug("matched {}", .{T});
@@ -396,6 +420,8 @@ impl Globals {
     /// than adding a second one, and it runs `onGlobalRemoved(tag)` +
     /// `old.proxy.destroy()` first.
     fn record_binding(&mut self, tag: Tag, name: u32, superseded: Option<ObjectId>) {
+        // If this global was already bound,
+        // then we also need to destroy the old binding.
         if self.names.insert(tag, name).is_some() {
             self.on_global_removed(tag);
             if let Some(id) = superseded {
@@ -501,6 +527,9 @@ impl Dispatch<WlRegistry, ()> for Globals {
                 log::debug!(target: LOG_SCOPE, "found global {interface}");
                 state.bind_global(registry, qh, name, &interface);
             }
+            // This should be a rare occurrence, but in case a global
+            // is suddenly no longer available, we destroy and unset it
+            // as the protocol mandates.
             wl_registry::Event::GlobalRemove { name } => {
                 state.remove_global(name);
             }
@@ -586,8 +615,9 @@ impl Dispatch<KdeOutputOrderV1, ()> for Globals {
             }
             kde_output_order_v1::Event::Done => {
                 if state.state.output_order_done {
-                    // No output arrived since the previous done — drop any stale
-                    // cached primary (`Globals.zig:243-247`).
+                    // No output arrived since the previous done. Treat this as
+                    // an empty update and drop any stale cached primary.
+                    // (`Globals.zig:243-247`)
                     state.state.reset_output_order();
                 } else {
                     state.state.output_order_done = true;

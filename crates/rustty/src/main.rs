@@ -67,11 +67,31 @@ fn main() {
 // `main_rustty` (`std_options` + `log_fn` — a deferred log-facade seam,
 // consistent with the rest of the tree; see there).
 
+// comptime {
+//     // Force-reference our memset override so its export is emitted.
+//     // See quirks_memset.zig for details on why this exists.
+//     _ = @import("quirks_memset.zig");
+// }
+//
+// NON-PORT (`.port/phase-3/NON_PORTS.md` §E34): `quirks_memset.zig` is a
+// Zig-toolchain workaround with no Rust counterpart (rustc lowers memset to the
+// platform libc), so this wiring block is deliberately absent, not dropped —
+// the `rustty-bench` `main_bench.rs` precedent.
+
 #[cfg(test)]
 mod tests {
     // test {
+    //     // Zig 0.16.0 has made test logging more strict. Now, *anything* that gets
+    //     // printed to stderr results in a "failed command" message, even if the
+    //     // tests ultimately passed. To reduce confusion here (and honestly, test
+    //     // log spam in general), we bump the default testing log level to error.
+    //     std.testing.log_level = std.log.Level.err;
     //     _ = entrypoint;
+    //     _ = @import("quirks_memset.zig");
     // }
+    //
+    // PORT NOTE: libtest has no log level to bump (the Zig 0.16 stderr rule is a
+    // Zig test-runner behaviour), and the memset import is the §E34 non-port.
     //
     // PORT NOTE: the reference's anonymous `test { _ = entrypoint; }` forces the
     // selected entrypoint to be semantically analyzed. The Rust analogue references

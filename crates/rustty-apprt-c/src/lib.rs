@@ -52,6 +52,17 @@
 //! Carved incrementally (R1: every line/comment/test{} ported as the crate is
 //! carved, leaves-first, under the acyclicity gate per R4).
 
+// reference (main_c.zig:1-8), the C API hub's file header:
+//
+// This is the main file for the C API. The C API is used to embed Rustty
+// within other applications. Depending on the build settings some APIs
+// may not be available (i.e. embedding into macOS exposes various Metal
+// support).
+//
+// This currently isn't supported as a general purpose embedding API.
+// This is currently used only to embed rustty within a macOS app. However,
+// it could be expanded to be general purpose in the future.
+
 use core::ffi::{c_void, CStr};
 use std::mem::ManuallyDrop;
 
@@ -156,13 +167,48 @@ type CoreSurface = rustty_core::surface::Surface<App>;
 // field type) stays in `rustty-apprt`; `capi` only re-asserts its ABI.
 pub mod capi;
 
-// reference (main_c.zig:31-46): the C API hub's `comptime` block force-references
+// reference (main_c.zig:21-32), verbatim:
+//
+//   // Some comptime assertions that our C API depends on.
+//   comptime {
+//       // We allow tests to reference this file because we unit test
+//       // some of the C API. At runtime though we should never get these
+//       // functions unless we are building librustty.
+//       if (!builtin.is_test) {
+//           assert(apprt.runtime == apprt.embedded);
+//       }
+//   }
+//
+//   /// Global options so we can log. This is identical to main.
+//   pub const std_options = main.std_options;
+//
+// PORT NOTE: the runtime assertion is structural here — this crate binds
+// `A = rustty_apprt::embedded::App` for every export, so no other runtime can
+// reach it. `std_options` is `rustty_core::logging` (installed by `rustty_init`).
+//
+// reference (main_c.zig:34-50): the C API hub's `comptime` block force-references
 // the sibling C-API decls so their `export` fns are truly emitted by the C API lib:
 //   comptime {
-//       _ = @import("config.zig").CApi;                              // Config C ABI
-//       if (@hasDecl(apprt.runtime, "CAPI")) _ = apprt.runtime.CAPI; // apprt.embedded
-//       _ = @import("benchmark/main.zig").CApi;                      // benchmark
+//       // These structs need to be referenced so the `export` functions
+//       // are truly exported by the C API lib.
+//
+//       // Our config API
+//       _ = @import("config.zig").CApi;
+//
+//       // Any apprt-specific C API, mainly librustty for apprt.embedded.
+//       if (@hasDecl(apprt.runtime, "CAPI")) _ = apprt.runtime.CAPI;
+//
+//       // Our benchmark API. We probably want to gate this on a build
+//       // config in the future but for now we always just export it.
+//       _ = @import("benchmark/main.zig").CApi;
+//
+//       // Force-reference our memset override so its export is emitted.
+//       // See quirks_memset.zig for details on why this exists.
+//       _ = @import("quirks_memset.zig");
 //   }
+//
+// The memset force-reference is a NON-PORT (`.port/phase-3/NON_PORTS.md` §E34:
+// a Zig-toolchain workaround; rustc lowers memset to the platform libc).
 //
 // In rustty: `config.CApi` is force-linked already (this crate USES
 // `rustty_config::Config`, pulling its rlib — incl. the `rustty_config_*`
@@ -270,6 +316,20 @@ pub unsafe extern "C" fn rustty_init(argc: usize, argv: *mut *mut c_char) -> c_i
 
     // reference: assert(builtin.link_libc);  (Rust `std` always links libc.)
 
+    // reference (main_c.zig:112-128), the environ half of `global.init(.{ .c = ... })`:
+    //
+    //   .environ = if (std.process.Environ.Block == std.process.Environ.PosixBlock)
+    //       // Asserting libc means that we can fast-path all POSIX blocks
+    //       .{ .block = .{ .slice = std.c.environ[0..env_len: { ... } :null] } }
+    //   else
+    //       // Anything that is not using PosixBlock is a global block for
+    //       // purposes of initialization.
+    //       .{ .block = .{ .use_global = true } },
+    //
+    // PORT NOTE: both arms name the process's own libc `environ`; rustty reads
+    // that same block through `rustty_global::environ::Environ::from_process()`
+    // inside the init below (`GlobalState::new_with_environ`'s PORT NOTE).
+
     // The `.c` arm of `global.init`'s `args` field (`global.zig:62-77`, `e8525c0fd`):
     //
     //   // TODO: Using the C API from Windows is unsupported at this time.
@@ -355,8 +415,11 @@ pub unsafe extern "C" fn rustty_init(argc: usize, argv: *mut *mut c_char) -> c_i
 /// C: rustty_cli_try_action
 ///
 /// Runs an action if it is specified. If there is no action this returns
-/// (the GUI-launch path). If there is an action then this doesn't return
-/// (it `posix.exit`s with the action's result code).
+/// false. If there is an action then this doesn't return.
+///
+/// PORT NOTE: "returns false" is the reference doc's wording; the reference fn
+/// returns `void` (the GUI-launch path simply returns), and with an action it
+/// `posix.exit`s with the action's result code.
 ///
 /// PORT NOTE: rustty analogue of `ghostty_cli_try_action` (main_c.zig:120):
 /// ```zig

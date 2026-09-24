@@ -73,6 +73,8 @@ mod imp {
     #[repr(C)]
     pub struct ImguiWidgetClass {
         pub parent_class: libadwaita::ffi::AdwBinClass,
+        /// Function pointers for virtual methods.
+        ///
         /// PORTS: `imgui_widget.zig:502` `setup: ?*const fn (*Self) …`.
         pub imgui_setup: fn(&super::ImguiWidget),
         /// PORTS: `imgui_widget.zig:503` `render: ?*const fn (*Self) …`.
@@ -87,31 +89,37 @@ mod imp {
     #[derive(CompositeTemplate)]
     #[template(resource = "/io/airely/rustty/ui/1.5/imgui-widget.ui")]
     pub struct ImguiWidget {
-        /// PORTS: `imgui_widget.zig:53-54` `gl_area`. GL area where we display
-        /// the Dear ImGui application.
+        /// GL area where we display the Dear ImGui application.
+        ///
+        /// PORTS: `imgui_widget.zig:53-54` `gl_area`.
         #[template_child]
         pub gl_area: TemplateChild<gtk4::GLArea>,
 
-        /// PORTS: `imgui_widget.zig:56-57` `im_context`. GTK input method
-        /// context.
+        /// GTK input method context
+        ///
+        /// PORTS: `imgui_widget.zig:56-57` `im_context`.
         #[template_child]
         pub im_context: TemplateChild<gtk4::IMMulticontext>,
 
-        /// PORTS: `imgui_widget.zig:59-61` `ig_context`. Dear ImGui context. We
-        /// create a context per widget so that we can have multiple active imgui
-        /// views in the same application. Null until `realize`.
+        /// Dear ImGui context. We create a context per widget so that we can
+        /// have multiple active imgui views in the same application.
+        ///
+        /// PORTS: `imgui_widget.zig:59-61` `ig_context`. Null until `realize`.
         pub ig_context: Cell<*mut cimgui::ImGuiContext>,
 
-        /// PORTS: `imgui_widget.zig:63-64` `instant`. Our previous instant used
-        /// to calculate delta time for animations.
+        /// Our previous instant used to calculate delta time for animations.
+        ///
+        /// PORTS: `imgui_widget.zig:63-64` `instant`.
         pub instant: Cell<Option<Instant>>,
 
-        /// PORTS: `imgui_widget.zig:66-67` `tick_callback_id`. Tick callback ID
-        /// for timed updates.
+        /// Tick callback ID for timed updates.
+        ///
+        /// PORTS: `imgui_widget.zig:66-67` `tick_callback_id`.
         pub tick_callback_id: Cell<Option<gtk4::TickCallbackId>>,
 
-        /// PORTS: `imgui_widget.zig:69-70` `last_render_time`. Last render time
-        /// for throttling to 30 FPS.
+        /// Last render time for throttling to 30 FPS.
+        ///
+        /// PORTS: `imgui_widget.zig:69-70` `last_render_time`.
         pub last_render_time: Cell<Option<Instant>>,
     }
 
@@ -166,22 +174,30 @@ mod imp {
     impl WidgetImpl for ImguiWidget {}
     impl BinImpl for ImguiWidget {}
 
-    /// PORTS: `imgui_widget.zig:480-483` `defaultSetup`. Does nothing but log a
-    /// warning.
+    /// Default setup function. Does nothing but log a warning.
+    ///
+    /// PORTS: `imgui_widget.zig:480-483` `defaultSetup`.
     fn default_imgui_setup(_this: &super::ImguiWidget) {
         eprintln!("warn(gtk): default Dear ImGui setup called, this is a bug.");
     }
 
-    /// PORTS: `imgui_widget.zig:485-488` `defaultRender`. Does nothing but log a
-    /// warning.
+    /// Default render function. Does nothing but log a warning.
+    ///
+    /// PORTS: `imgui_widget.zig:485-488` `defaultRender`.
     fn default_imgui_render(_this: &super::ImguiWidget) {
         eprintln!("warn(gtk): default Dear ImGui render called, this is a bug.");
     }
 }
 
 glib::wrapper! {
-    /// A widget for embedding a Dear ImGui application. PORTS:
-    /// `imgui_widget.zig:24` `pub const ImguiWidget`.
+    /// A widget for embedding a Dear ImGui application.
+    ///
+    /// It'd be a lot cleaner to use inheritance here but zig-gobject doesn't
+    /// currently have a way to define virtual methods, so we have to use
+    /// composition and signals instead.
+    ///
+    /// PORTS: `imgui_widget.zig:24` `pub const ImguiWidget` (see the module
+    /// doc: gtk4-rs has real virtual methods, so the port uses them).
     pub struct ImguiWidget(ObjectSubclass<imp::ImguiWidget>)
         @extends libadwaita::Bin, gtk4::Widget,
         @implements gtk4::Accessible, gtk4::Buildable, gtk4::ConstraintTarget;
@@ -201,16 +217,20 @@ impl Default for ImguiWidget {
 /// default impls chain up to the parent vfunc (ultimately the base-class
 /// warning). PORTS: `imgui_widget.zig:40-50` `virtual_methods`.
 pub trait ImguiWidgetImpl: BinImpl {
-    /// This virtual method will be called to allow the Dear ImGui application to
-    /// do one-time setup of the context. The correct context will be current
-    /// when the virtual method is called. PORTS: `imgui_widget.zig:41-44`.
+    /// This virtual method will be called to allow the Dear ImGui
+    /// application to do one-time setup of the context. The correct context
+    /// will be current when the virtual method is called.
+    ///
+    /// PORTS: `imgui_widget.zig:41-44`.
     fn imgui_setup(&self) {
         self.parent_imgui_setup();
     }
 
-    /// This virtual method will be called at each frame to allow the Dear ImGui
-    /// application to draw the application. The correct context will be current
-    /// when the virtual method is called. PORTS: `imgui_widget.zig:46-49`.
+    /// This virtual method will be called at each frame to allow the Dear
+    /// ImGui application to draw the application. The correct context will
+    /// be current when the virtual method is called.
+    ///
+    /// PORTS: `imgui_widget.zig:46-49`.
     fn imgui_render(&self) {
         self.parent_imgui_render();
     }
@@ -268,21 +288,31 @@ fn imgui_render_trampoline<T: ImguiWidgetImpl>(this: &ImguiWidget) {
 // Public methods + private helpers.
 
 impl ImguiWidget {
-    /// This should be called anytime the underlying data for the UI changes so
-    /// that the UI can be refreshed. PORTS: `imgui_widget.zig:97-102`
-    /// `queueRender`.
+    /// This should be called anytime the underlying data for the UI changes
+    /// so that the UI can be refreshed.
+    ///
+    /// PORTS: `imgui_widget.zig:97-102` `queueRender`.
     pub fn queue_render(&self) {
         self.imp().gl_area.queue_render();
     }
 
+    // Public wrappers for virtual methods
+
+    /// This virtual method will be called to allow the Dear ImGui application
+    /// to do one-time setup of the context. The correct context will be current
+    /// when the virtual method is called.
+    ///
     /// Call the `setup` virtual method through the class vtable. PORTS:
-    /// `imgui_widget.zig:107-113` `setup` (the public wrapper). The correct
-    /// context must be current before this is called.
+    /// `imgui_widget.zig:107-113` `setup` (the public wrapper).
     pub fn imgui_setup(&self) {
         let klass = self.class();
         (klass.as_ref().imgui_setup)(self);
     }
 
+    /// This virtual method will be called at each frame to allow the Dear ImGui
+    /// application to draw the application. The correct context will be current
+    /// when the virtual method is called.
+    ///
     /// Call the `render` virtual method through the class vtable. PORTS:
     /// `imgui_widget.zig:115-121` `render` (the public wrapper).
     pub fn imgui_render(&self) {
@@ -705,10 +735,11 @@ impl ImguiWidget {
         }
     }
 
-    /// Tick callback for timed updates. This drives periodic redraws. Redraws
-    /// are limited to 30 FPS max since our imgui widgets don't usually need
-    /// higher frame rates than that. PORTS: `imgui_widget.zig:449-475`
-    /// `tickCallback`.
+    /// Tick callback for timed updates. This drives periodic redraws.
+    /// Redraws are limited to 30 FPS max since our imgui widgets don't
+    /// usually need higher frame rates than that.
+    ///
+    /// PORTS: `imgui_widget.zig:449-475` `tickCallback`.
     fn tick_callback(widget: &ImguiWidget, _clock: &gdk4::FrameClock) -> glib::ControlFlow {
         let now = Instant::now();
 

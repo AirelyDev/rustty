@@ -2426,9 +2426,11 @@ mod macos_impl {
         // `surface` for the Metal monomorphization.
         //
         // pub fn surfaceInit(surface: *apprt.Surface) !void {
+        //     // If our API has to do things here, let it.
         //     if (@hasDecl(GraphicsAPI, "surfaceInit"))
         //         try GraphicsAPI.surfaceInit(surface);
         // }
+        /// This is called early right after surface creation.
         #[allow(clippy::not_unsafe_ptr_arg_deref)]
         pub fn surface_init<S>(rt_surface: *mut S) -> Result<(), Error> {
             let _ = rt_surface;
@@ -2439,9 +2441,12 @@ mod macos_impl {
         // "finalizeSurfaceInit")` is FALSE for `Metal` ⇒ no-op (see `surface_init`).
         //
         // pub fn finalizeSurfaceInit(self: *Self, surface: *apprt.Surface) !void {
+        //     // If our API has to do things to finalize surface init, let it.
         //     if (@hasDecl(GraphicsAPI, "finalizeSurfaceInit"))
         //         try self.api.finalizeSurfaceInit(surface);
         // }
+        /// This is called just prior to spinning up the renderer thread for
+        /// final main thread setup requirements.
         #[allow(clippy::not_unsafe_ptr_arg_deref)]
         pub fn finalize_surface_init<S>(&mut self, rt_surface: *mut S) -> Result<(), Error> {
             let _ = rt_surface;
@@ -2486,8 +2491,10 @@ mod macos_impl {
         // (Metal declares only loopEnter) ⇒ no api call; `surface` is the apprt
         // surface the hook is generic over (never named, R4).
         //   pub fn threadEnter(self, surface: *apprt.Surface) !void {
+        //       // If our API has to do things on thread enter, let it.
         //       if (@hasDecl(GraphicsAPI, "threadEnter")) try self.api.threadEnter(surface);
         //   }
+        /// Callback called by renderer.Thread when it begins.
         #[allow(clippy::not_unsafe_ptr_arg_deref)]
         pub fn thread_enter<S>(&self, rt_surface: *mut S) -> Result<(), Error> {
             let _ = rt_surface;
@@ -2496,8 +2503,10 @@ mod macos_impl {
 
         // generic.zig:889-894 threadExit. `@hasDecl(Metal,"threadExit")` FALSE ⇒ no-op.
         //   pub fn threadExit(self) void {
+        //       // If our API has to do things on thread exit, let it.
         //       if (@hasDecl(GraphicsAPI, "threadExit")) self.api.threadExit();
         //   }
+        /// Callback called by renderer.Thread when it exits.
         pub fn thread_exit(&self) {}
 
         // generic.zig:891-903 loopEnter. Adapted for R4: the reference takes
@@ -2505,10 +2514,13 @@ mod macos_impl {
         // `renderer.Thread` (R4), so the caller passes the `draw_now: xev::Async`
         // field directly (Copy+Send handle — NOT an apprt type).
         //   pub fn loopEnter(self, thr: *renderer.Thread) !void {
+        //       // If our API has to do things on loop enter, let it.
         //       if (@hasDecl(GraphicsAPI, "loopEnter")) self.api.loopEnter();
+        //       // If we don't support a display link we have no work to do.
         //       if (comptime DisplayLink == void) return;      // (macOS: never)
         //       self.syncDisplayLink(null, &thr.draw_now);
         //   }
+        /// Called by renderer.Thread when it starts the main loop.
         pub fn loop_enter(&mut self, draw_now: Async) -> Result<(), Error> {
             // Metal DECLARES loopEnter ⇒ this hook fires. It installs the
             // IOSurfaceLayer display callback (W5). container_of needs WHOLE-Renderer
@@ -2531,12 +2543,18 @@ mod macos_impl {
         // generic.zig:919-933 loopExit. `@hasDecl(Metal,"loopExit")` FALSE ⇒ no api
         // call ⇒ FULLY runnable (unlike loopEnter). Stop the link; error ignored.
         //   pub fn loopExit(self) void {
+        //       // If our API has to do things on loop exit, let it.
         //       if (@hasDecl(GraphicsAPI, "loopExit")) self.api.loopExit();
+        //       // If we don't support a display link we have no work to do.
         //       if (comptime DisplayLink == void) return;
         //       const display_link = self.display_link orelse return;
         //       display_link.stop() catch {};
         //   }
+        /// Called by renderer.Thread when it exits the main loop.
         pub fn loop_exit(&self) {
+            // Stop our display link. If this fails its okay it just means
+            // that we either never started it or the view its attached to
+            // is gone which is fine.
             if let Some(display_link) = self.display_link.as_ref() {
                 let _ = display_link.stop(); // catch {}
             }
@@ -2569,6 +2587,7 @@ mod macos_impl {
         // needs both the mutable field and the output-callback userdata. The R4
         // adaptation of `*xev.Async` matches `loop_enter`'s: the Copy+Send handle
         // by value.
+        /// Called when we get an updated display ID for our display link.
         pub fn set_macos_display_id(&mut self, id: u32, draw_now: Async) -> Result<(), Error> {
             self.sync_display_link(Some(id), Some(draw_now));
             Ok(())
@@ -2580,6 +2599,9 @@ mod macos_impl {
         //       const display_link = self.display_link orelse return false;
         //       return display_link.isRunning();
         //   }
+        /// True if our renderer is using vsync. If true, the renderer or apprt
+        /// is responsible for triggering draw_now calls to the render thread.
+        /// That is the only way to trigger a drawFrame.
         pub fn has_vsync(&self) -> bool {
             match self.display_link.as_ref() {
                 Some(display_link) => display_link.is_running(),
@@ -2598,6 +2620,9 @@ mod macos_impl {
         //
         //       self.syncDisplayLink(null, null);
         //   }
+        /// Callback when the focus changes for the terminal this is rendering.
+        ///
+        /// Must be called on the render thread.
         pub fn set_focus(&mut self, focus: bool) -> Result<(), Error> {
             assert!(self.focused != focus);
             self.focused = focus;
@@ -3191,7 +3216,9 @@ mod macos_impl {
                         break 'load_background None;
                     }
                 };
+                // Read it
                 // const contents = file.readToEndAlloc(self.alloc, std.math.maxInt(u32)) catch |err| { log.warn(...); break; };
+                //   (`std.math.maxInt(u32), // Max size of 4 GiB, for now.`)
                 // defer self.alloc.free(contents);
                 let contents: Vec<u8> = {
                     let mut buf: Vec<u8> = Vec::new();
@@ -4923,6 +4950,9 @@ mod macos_impl {
 
         // fn rebuildOverlay(self, features: []const Overlay.Feature) Overlay.InitError!void
         //
+        /// Build the overlay as configured. Returns null if there is no
+        /// overlay currently configured.
+        //
         // WIDENED to `pub` for dead-code exemption (its only non-test caller,
         // `updateFrame`, is deferred to 3c; GPU_RD_CHUNK3B_DESIGN §F).
         pub fn rebuild_overlay(
@@ -5138,6 +5168,9 @@ mod macos_impl {
 
             // Update all our data as tightly as possible within the mutex.
             let mut critical: Critical = {
+                // NOTE: This code needs be updated to 0.16.0 before you
+                // un-comment it ;)
+                //
                 // const start = try std.time.Instant.now();
                 // const start_micro = std.time.microTimestamp();
                 // defer {
@@ -6489,9 +6522,10 @@ mod macos_impl {
             // assert(!self.shaders.defunct);
             assert!(!unsafe { (*self_ptr).shaders.defunct });
 
-            // If we have custom shaders, make sure we have the custom shader state in
-            // our frame state, otherwise if we have a state but don't need it we remove
-            // it. (Golden: has_custom_shaders=false + custom_shader_state=None ⇒ no-op.)
+            // If we have custom shaders, make sure we have the
+            // custom shader state in our frame state, otherwise
+            // if we have a state but don't need it we remove it.
+            // (Golden: has_custom_shaders=false + custom_shader_state=None ⇒ no-op.)
             {
                 let frame: *mut FrameState = unsafe {
                     // Narrow projection through the `Option` (a fresh,
@@ -6546,9 +6580,9 @@ mod macos_impl {
                 }
             }
 
-            // If this frame's target isn't the correct size, or the target config has
-            // changed (such as when the blending mode changes), remove it and replace
-            // it with a new one with the right values.
+            // If this frame's target isn't the correct size, or the target
+            // config has changed (such as when the blending mode changes),
+            // remove it and replace it with a new one with the right values.
             // if (frame.target.width != self.size.screen.width or
             //     frame.target.height != self.size.screen.height or
             //     frame.target_config_modified != self.target_config_modified) {
@@ -6744,15 +6778,16 @@ mod macos_impl {
                     clear_color: Some([0.0, 0.0, 0.0, 0.0]),
                 }]);
 
-                // First we draw our background image, if we have one. The bg image
-                // shader also draws the main bg color. Otherwise, if we don't have a
-                // background image, we draw the background color by itself in its own
-                // step.
+                // First we draw our background image, if we have one.
+                // The bg image shader also draws the main bg color.
                 //
-                // NOTE: We don't use the clear_color for this because that would require
-                //       us to do color space conversion on the CPU-side. In the future
-                //       when we have utilities for that we should remove this step and
-                //       use clear_color.
+                // Otherwise, if we don't have a background image, we
+                // draw the background color by itself in its own step.
+                //
+                // NOTE: We don't use the clear_color for this because that
+                //       would require us to do color space conversion on the
+                //       CPU-side. In the future when we have utilities for
+                //       that we should remove this step and use clear_color.
                 // if (self.bg_image) |img| switch (img) {
                 //     .ready => |texture| pass.step(.{ .pipeline = bg_image, ... }),
                 //     else => {},
@@ -6787,8 +6822,8 @@ mod macos_impl {
                     }
                 }
 
-                // Then we draw any kitty images that need to be behind text AND cell
-                // backgrounds.
+                // Then we draw any kitty images that need
+                // to be behind text AND cell backgrounds.
                 // self.images.draw(&self.api, self.shaders.pipelines.image, &pass, .kitty_below_bg);
                 unsafe {
                     (*self_ptr).images.draw(

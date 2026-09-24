@@ -20,10 +20,17 @@
 
 use glib::prelude::*;
 
-/// PORTS: `actions.zig:20` `gActionNameIsValid`. "Reimplementation of
-/// `g_action_name_is_valid()` so that it can be used at comptime."
-/// (`actions.zig:16-17`). In rustty this is a plain `const fn` — usable in
-/// `const` context exactly as the oracle uses it at comptime.
+/// Check that an action name is valid.
+///
+/// Reimplementation of `g_action_name_is_valid()` so that it can be
+/// used at comptime.
+///
+/// See:
+/// <https://docs.gtk.org/gio/type_func.Action.name_is_valid.html>
+///
+/// PORTS: `actions.zig:20` `gActionNameIsValid`. In rustty this is a plain
+/// `const fn` — usable in `const` context exactly as the oracle uses it at
+/// comptime.
 #[must_use]
 pub const fn g_action_name_is_valid(name: &str) -> bool {
     let bytes = name.as_bytes();
@@ -53,8 +60,10 @@ pub const fn g_action_name_is_valid(name: &str) -> bool {
 /// borrowed action, a borrowed optional parameter, and a borrowed target.
 pub type Callback<T> = fn(&gio::SimpleAction, Option<&glib::Variant>, &T);
 
-/// PORTS: `actions.zig:41` `pub fn Action(comptime T: type) type` — the struct
-/// "describing an action" (`:40`). `T` is the target widget type.
+/// Function to create a structure for describing an action.
+///
+/// PORTS: `actions.zig:41` `pub fn Action(comptime T: type) type`. `T` is the
+/// target widget type.
 pub struct Action<T> {
     /// PORTS: `actions.zig:47` `name`.
     pub name: &'static str,
@@ -67,8 +76,10 @@ pub struct Action<T> {
 }
 
 impl<T> Action<T> {
-    /// PORTS: `actions.zig:53` `init`. "initialize a new action so that we can
-    /// comptime check the name." (`:52-53`). The oracle's
+    /// Function to initialize a new action so that we can comptime check
+    /// the name.
+    ///
+    /// PORTS: `actions.zig:53` `init`. The oracle's
     /// `comptime assert(gActionNameIsValid(name))` (`:58`) becomes a
     /// `debug_assert!` — the same check, active in dev builds.
     #[must_use]
@@ -86,6 +97,9 @@ impl<T> Action<T> {
         }
     }
 
+    /// Function to initialize a new stateful action so that we can comptime
+    /// check the name.
+    ///
     /// PORTS: `actions.zig:69` `initStateful`. As [`Action::init`] but carries
     /// initial `state` (`:74-81`).
     #[must_use]
@@ -105,8 +119,9 @@ impl<T> Action<T> {
     }
 }
 
-/// PORTS: `actions.zig:87` `add`. "Add actions to a widget that implements
-/// `gio.ActionMap`." Delegates to [`add_to_map`] on `self` upcast to
+/// Add actions to a widget that implements gio.ActionMap.
+///
+/// PORTS: `actions.zig:87` `add`. Delegates to [`add_to_map`] on `self` upcast to
 /// `gio.ActionMap` (`:88`).
 pub fn add<T>(self_obj: &T, actions: &[Action<T>])
 where
@@ -115,6 +130,8 @@ where
     add_to_map(self_obj, self_obj.upcast_ref::<gio::ActionMap>(), actions);
 }
 
+/// Add actions to the given map.
+///
 /// PORTS: `actions.zig:92` `addToMap`. For each action: build a `SimpleAction`
 /// (stateful or not, `:95-107`), wire its `activate` signal to the callback with
 /// the target as userdata (`:109-115`), and register it on `map` (`:116`). The
@@ -153,8 +170,9 @@ where
     }
 }
 
-/// PORTS: `actions.zig:121` `addAsGroup`. "Add actions to a widget that doesn't
-/// implement ActionGroup directly." Builds a fresh `SimpleActionGroup`, fills it
+/// Add actions to a widget that doesn't implement ActionGroup directly.
+///
+/// PORTS: `actions.zig:121` `addAsGroup`. Builds a fresh `SimpleActionGroup`, fills it
 /// via [`add_to_map`], inserts it into the widget under `name` (`:131-134`), and
 /// returns it. The caller MUST store the returned group: `insert_action_group`
 /// keeps it alive through the widget, and the actions' closures hold a weak
@@ -168,6 +186,8 @@ where
 
     debug_assert!(g_action_name_is_valid(name), "invalid group name: {name}");
 
+    // Collect our actions into a group since we're just a plain widget that
+    // doesn't implement ActionGroup directly.
     let group = gio::SimpleActionGroup::new();
     add_to_map(self_obj, group.upcast_ref::<gio::ActionMap>(), actions);
     self_obj.insert_action_group(name, Some(&group));
@@ -201,6 +221,8 @@ mod tests {
     fn adding_actions_to_an_object() {
         use gtk4::prelude::*;
 
+        // This test requires a connection to an active display environment.
+        //
         // CORRECTION (task 20): this was `if gtk4::init().is_err() { return; }`,
         // which reports `1 passed` for a test that never ran when there is no display.
         crate::gtk::init_for_display_test("adding_actions_to_an_object");
