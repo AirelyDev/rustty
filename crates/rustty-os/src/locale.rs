@@ -373,69 +373,114 @@ fn setLangFromCocoa() {
 fn preferredLanguageFromCocoa(buf: &mut [u8]) -> Result<Option<Vec<u8>>, NoSpaceLeft> {
     use objc2_foundation::NSLocale;
 
-    // PORT NOTE: the reference uses a `std.io.fixedBufferStream(buf)` + writer and
-    // tracks `fbs.pos`. We build the result into a `Vec` (the canonicalize step
-    // still writes into the remaining `buf` for parity with the reference's
-    // in-buffer canonicalization), then return an owned copy.
-    let mut out: Vec<u8> = Vec::new();
-
     // We need to get our app's preferred languages. These may not
     // match the system locale (NSLocale.currentLocale).
     let preferred = NSLocale::preferredLanguages();
-    for i in 0..preferred.count() {
-        // PORT NOTE: `var str_buf: [255:0]u8` used by `str.cstring(&str_buf, .utf8)`.
+    let languages = (0..preferred.count()).map(|i| {
+        // var str_buf: [255:0]u8 = undefined;
+        // const str = preferred.getValueAtIndex(macos.foundation.String, i);
+        // const c_str = str.cstring(&str_buf, .utf8) orelse { ... continue; };
+        //
+        // PORT NOTE (parity S111-F6): `cstring` is `CFStringGetCString` into
+        // the 255-byte `str_buf`, which fails (null) unless the UTF-8 form AND
+        // its NUL fit, i.e. for more than 254 bytes. `UTF8String` has no such
+        // bound, so the bound is applied to its length here; a null or non-UTF-8
+        // result takes the same `orelse` branch.
         let str = preferred.objectAtIndex(i);
         let c_str = str.UTF8String();
         if c_str.is_null() {
+            return None;
+        }
+        cstring_255(unsafe { std::ffi::CStr::from_ptr(c_str) }.to_bytes())
+    });
+    joinPreferredLanguages(buf, languages)
+}
+
+/// `str.cstring(&str_buf, .utf8)` with `var str_buf: [255:0]u8`, given the
+/// string's UTF-8 bytes: `CFStringGetCString` fails unless the bytes and a NUL
+/// fit in the 255-byte buffer (parity S111-F6).
+#[cfg(target_os = "macos")]
+fn cstring_255(utf8: &[u8]) -> Option<String> {
+    if utf8.len() + 1 > 255 {
+        return None;
+    }
+    std::str::from_utf8(utf8).ok().map(str::to_owned)
+}
+
+/// The writer half of `preferredLanguageFromCocoa`: joins the (already
+/// converted) preferred languages into `buf` as `lang.UTF-8[:lang.UTF-8...]`
+/// plus a NUL, `None` standing for a language whose `cstring` conversion
+/// failed.
+///
+/// PORT NOTE (parity S111-F6): every write goes through the reference's
+/// `std.Io.Writer.fixed(buf)`, so the separator, each canonicalized locale,
+/// each `.UTF-8`, and the final NUL are all bounded by `buf.len()` and return
+/// `NoSpaceLeft` when they do not fit. CORRECTION: this used to accumulate
+/// into an unbounded `Vec` (only the canonicalize step was bounded) and did not
+/// count the NUL. The NUL is written into `buf` as the reference does; the
+/// returned bytes exclude it (`slice[0 .. slice.len - 1 :0]`), and the caller's
+/// `CString` supplies it again.
+#[cfg(target_os = "macos")]
+fn joinPreferredLanguages(
+    buf: &mut [u8],
+    languages: impl Iterator<Item = Option<String>>,
+) -> Result<Option<Vec<u8>>, NoSpaceLeft> {
+    // var writer: std.Io.Writer = .fixed(buf);
+    // `writer.end`
+    let mut end: usize = 0;
+    fn write_all(buf: &mut [u8], end: &mut usize, bytes: &[u8]) -> Result<(), NoSpaceLeft> {
+        if buf.len() - *end < bytes.len() {
+            return Err(NoSpaceLeft);
+        }
+        buf[*end..*end + bytes.len()].copy_from_slice(bytes);
+        *end += bytes.len();
+        Ok(())
+    }
+
+    for c_str in languages {
+        let Some(c_str) = c_str else {
             // I don't think this can happen but if it does then I want
             // to know about it if a user has translation issues.
             // log.warn("failed to convert a preferred language to UTF-8", .{});
             log::warn!(target: LOG_SCOPE, "failed to convert a preferred language to UTF-8");
             continue;
-        }
-        let c_str = unsafe { std::ffi::CStr::from_ptr(c_str) };
+        };
 
         // Append our separator if we have any previous languages
-        if !out.is_empty() {
-            out.push(b':');
+        if end > 0 {
+            // _ = writer.writeByte(':') catch return error.NoSpaceLeft;
+            write_all(buf, &mut end, b":")?;
         }
 
         // Apple languages are in BCP-47 format, and we need to
         // canonicalize them to the POSIX format.
-        // PORT NOTE: `i18n.canonicalizeLocale(fbs.buffer[fbs.pos..], c_str)`. We
-        // canonicalize into the tail of `buf` (after the bytes written so far)
-        // exactly like the reference, then append the result to `out`.
-        let pos = out.len();
-        if pos > buf.len() {
-            return Err(NoSpaceLeft);
-        }
-        let canon =
-            i18n::canonicalizeLocale(&mut buf[pos..], c_str.to_str().map_err(|_| NoSpaceLeft)?)
-                .map_err(|_| NoSpaceLeft)?;
-        let canon = canon.to_vec();
-        out.extend_from_slice(&canon);
+        // const canon = try i18n.canonicalizeLocale(writer.buffer[writer.end..], c_str);
+        // writer.end += canon.len;
+        let canon_len = i18n::canonicalizeLocale(&mut buf[end..], &c_str)
+            .map_err(|_| NoSpaceLeft)?
+            .len();
+        end += canon_len;
 
         // The canonicalized locale never contains the encoding and
         // all of our translations require UTF-8 so we add that.
-        out.extend_from_slice(b".UTF-8");
+        // _ = writer.writeAll(".UTF-8") catch return error.NoSpaceLeft;
+        write_all(buf, &mut end, b".UTF-8")?;
     }
 
     // If we had no preferred languages then we return nothing.
-    if out.is_empty() {
+    if end == 0 {
         return Ok(None);
     }
 
     // Null terminate it
-    // PORT NOTE: the reference writes a trailing NUL byte into the buffer
-    // (`writer.writeByte(0)`). In Rust the caller converts the returned bytes to
-    // a `CString`, which appends the NUL; we therefore do not push it here.
+    // _ = writer.writeByte(0) catch return error.NoSpaceLeft;
+    write_all(buf, &mut end, &[0])?;
 
     // Get our slice, this won't be null terminated so we have to
     // reslice it with the null terminator.
-    // PORT NOTE: the reference does `slice[0 .. slice.len - 1 :0]` to return a
-    // sentinel-terminated `[:0]const u8`. We return the bytes (no trailing NUL);
-    // the caller converts to a `CString`.
-    Ok(Some(out))
+    // const slice = writer.buffered();
+    // return slice[0 .. slice.len - 1 :0];
+    Ok(Some(buf[0..end - 1].to_vec()))
 }
 
 /// PORT NOTE: `error{NoSpaceLeft}` — the error of `preferredLanguageFromCocoa`.
@@ -637,5 +682,57 @@ mod tests {
     fn the_nslocale_class_lookup_resolves() {
         assert!(objc2::runtime::AnyClass::get(c"NSLocale").is_some());
         assert!(objc2::runtime::AnyClass::get(c"NSLocaleTypoGuard").is_none());
+    }
+
+    /// Parity S111-F6: the joined LANGUAGE value is bounded by the reference's
+    /// 1024-byte fixed writer, NUL included, and a language whose UTF-8 form
+    /// does not fit the 255-byte `cstring` buffer is skipped.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn preferred_languages_are_bounded_by_the_fixed_buffer_and_nul() {
+        use super::{cstring_255, joinPreferredLanguages, NoSpaceLeft};
+        let langs = |v: &[Option<&str>]| {
+            v.iter()
+                .map(|o| o.map(str::to_owned))
+                .collect::<Vec<_>>()
+                .into_iter()
+        };
+        // Positive control.
+        let mut buf = [0u8; 1024];
+        assert_eq!(
+            joinPreferredLanguages(&mut buf, langs(&[Some("en"), None, Some("fr")])),
+            Ok(Some(b"en.UTF-8:fr.UTF-8".to_vec()))
+        );
+        assert_eq!(joinPreferredLanguages(&mut buf, langs(&[])), Ok(None));
+
+        // 200 x "en.UTF-8" plus separators is 1799 bytes: over the buffer.
+        let many = vec![Some("en"); 200];
+        assert_eq!(
+            joinPreferredLanguages(&mut buf, langs(&many)),
+            Err(NoSpaceLeft)
+        );
+
+        // A 16-byte locale is 22 bytes with ".UTF-8" and 23 with the NUL.
+        // (canonicalizeLocale itself needs 17 bytes of room for it.)
+        let long = [Some("abcdefghijklmnop")];
+        let mut b23 = [0u8; 23];
+        assert_eq!(
+            joinPreferredLanguages(&mut b23, langs(&long)),
+            Ok(Some(b"abcdefghijklmnop.UTF-8".to_vec()))
+        );
+        let mut b22 = [0u8; 22];
+        assert_eq!(
+            joinPreferredLanguages(&mut b22, langs(&long)),
+            Err(NoSpaceLeft)
+        );
+        let mut b21 = [0u8; 21];
+        assert_eq!(
+            joinPreferredLanguages(&mut b21, langs(&long)),
+            Err(NoSpaceLeft)
+        );
+
+        // The 255-byte `cstring` buffer holds 254 bytes and the NUL.
+        assert_eq!(cstring_255(&[b'a'; 254]).map(|s| s.len()), Some(254));
+        assert_eq!(cstring_255(&[b'a'; 255]), None);
     }
 }

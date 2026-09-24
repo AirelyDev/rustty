@@ -59,7 +59,7 @@ pub enum InitError {
 //
 // PORT NOTE (S112-F1): `resources_dir` is `[]const u8` in the reference and
 // bytes here (it was `&str`), since `ResourcesDir.app()` is raw bytes. The
-// share dir is `std.fs.path.dirname` (`path::dirname_posix`) and the locale
+// share dir is `std.fs.path.dirname` (`rustty_zigstd::fs_path::dirname_posix`) and the locale
 // path is built from bytes, not from `Path::display`, which is lossy.
 pub fn init(resources_dir: impl AsRef<[u8]>) -> Result<(), InitError> {
     let resources_dir = resources_dir.as_ref();
@@ -80,8 +80,8 @@ pub fn init(resources_dir: impl AsRef<[u8]>) -> Result<(), InitError> {
         // is standard for translations.
         // const share_dir = std.fs.path.dirname(resources_dir) orelse
         //     return error.InvalidResourcesDir;
-        let share_dir =
-            crate::path::dirname_posix(resources_dir).ok_or(InitError::InvalidResourcesDir)?;
+        let share_dir = rustty_zigstd::fs_path::dirname_posix(resources_dir)
+            .ok_or(InitError::InvalidResourcesDir)?;
 
         // Build our locale path
         // PORT NOTE: the reference formats into a `[std.fs.max_path_bytes]u8` stack

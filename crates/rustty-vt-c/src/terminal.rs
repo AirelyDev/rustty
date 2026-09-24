@@ -11021,6 +11021,39 @@ mod tests {
         unsafe { core::slice::from_raw_parts(out.ptr, out.len) }.to_vec()
     }
 
+    /// Parity S6-F2 (Decision A): `terminal_new` marks the process as the lib
+    /// artifact, so mode 5522 is recognized on every OS
+    /// (`.disabled = artifact != .lib and os != .macos`), and its DECRQM
+    /// report is set/reset, not "not recognized". On macOS the OS half alone
+    /// enables the mode, so the artifact assertion is what tells the two
+    /// artifacts apart there; on Linux all three assertions do.
+    #[test]
+    fn new_terminal_marks_the_process_as_the_lib_artifact_for_mode_5522() {
+        with_test_allocator(|alloc| {
+            // Through the C export, whose first step is
+            // `sys::install_log_backend` (`new_t` calls the inner `new`).
+            let mut t: Terminal = std::ptr::null_mut();
+            let r =
+                unsafe { crate::rustty_terminal_new(alloc as *const CAllocator, &mut t, 80, 24) };
+            assert_eq!(Result::Success.to_c_int(), r);
+            assert_eq!(
+                rustty_vt::options::runtime_artifact(),
+                rustty_vt::build_options::Artifact::Lib
+            );
+            assert_eq!(
+                rustty_vt::modes::mode_from_int(5522, false),
+                Some(rustty_vt::modes::Mode::KittyPasteEvents)
+            );
+            let report =
+                unsafe { &(*zig_terminal(t)).modes }.get_report(rustty_vt::modes::ModeTag {
+                    value: 5522,
+                    ansi: false,
+                });
+            assert_eq!(report.state, rustty_vt::modes::State::Reset);
+            unsafe { free(t) };
+        });
+    }
+
     // Parity S141-F1 / S179-F1: no reference test. `new_` relies on
     // `Terminal.Options`'s field default, and this crate is the `.lib`
     // artifact, whose default is 10MB (`Terminal.zig`'s

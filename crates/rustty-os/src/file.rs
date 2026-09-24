@@ -113,7 +113,7 @@ pub fn restoreMaxFiles(lim: rlimit) {
 // `rustty_global::environ::set_tmp_dir_path`, which the app initializer feeds
 // from here.
 #[allow(non_snake_case)]
-pub fn allocTmpDir(environ: &rustty_global::Environ) -> String {
+pub fn allocTmpDir(environ: &rustty_global::Environ) -> Vec<u8> {
     #[cfg(windows)]
     {
         let _ = environ;
@@ -125,33 +125,54 @@ pub fn allocTmpDir(environ: &rustty_global::Environ) -> String {
             // returned slice's length matches its underlying allocation.
             let trimmed = trim_end_u16(&buf[0..len as usize], PATH_SEP_U16);
             match String::from_utf16(trimmed) {
-                Ok(utf8) => return utf8,
+                Ok(utf8) => return utf8.into_bytes(),
                 Err(e) => log_warn(&format!(
                     "failed to convert temp dir path from windows string: {e}"
                 )),
             }
         }
-        "C:\\Windows\\Temp".to_string()
+        b"C:\\Windows\\Temp".to_vec()
     }
     #[cfg(not(windows))]
     {
+        // const tmpdir = environ.getPosix("TMPDIR") orelse environ.getPosix("TMP") orelse return "/tmp";
+        // PORT NOTE (parity S111-F1): `orelse` falls through only on a MISSING
+        // variable; a present-but-empty `TMPDIR` is returned as `""` and does
+        // not fall through to `TMP`. (This used to filter out empty values.)
         let tmpdir = match environ
             .get_posix(b"TMPDIR")
             .or_else(|| environ.get_posix(b"TMP"))
-            .filter(|v| !v.is_empty())
         {
             Some(v) => v,
-            None => return "/tmp".to_string(),
+            None => return b"/tmp".to_vec(),
         };
-        let tmpdir = String::from_utf8_lossy(tmpdir);
-        trim_end_str(&tmpdir, PATH_SEP).to_string()
+        // return std.mem.trimEnd(u8, tmpdir, &.{std.fs.path.sep});
+        // PORT NOTE (parity S111-F12): a POSIX path is bytes; the value is
+        // returned byte-exact (this used to go through `String::from_utf8_lossy`,
+        // which renamed a non-UTF-8 directory).
+        //
+        // PORT NOTE: reference defect (R13), UD211. `trimEnd` also strips the
+        // root directory's only byte, so `TMPDIR=/` (or `//`) becomes `""`,
+        // which is not a path: the reference's own `TempDir.init` then fails
+        // with `FileNotFound` on `openDir("")` (measured with zig 0.16.0 on
+        // macOS; `openDir("/")` succeeds). The doc comment above asks only
+        // for a trailing separator to be stripped so callers can join with
+        // their own. The port keeps the root: a value made only of
+        // separators returns `/`. A present-but-empty value is not affected
+        // and stays `""` (S111-F1: its intent is ambiguous, so it is
+        // faithful). Same rule in `rustty-global`'s `posix_tmp_dir_path`.
+        let trimmed = trim_end_bytes(tmpdir, PATH_SEP);
+        if trimmed.is_empty() && !tmpdir.is_empty() {
+            return vec![PATH_SEP];
+        }
+        trimmed.to_vec()
     }
 }
 
 /// Free a path returned by `allocTmpDir` if it allocated memory.
 /// This is a no-op on POSIX.
 #[allow(non_snake_case)]
-pub fn freeTmpDir(_dir: &str) {
+pub fn freeTmpDir(_dir: &[u8]) {
     // PORT NOTE: in Rust the returned `String` owns its allocation on all platforms
     // and is freed by Drop; the reference frees only on Windows. The comment is
     // preserved verbatim above.
@@ -395,8 +416,12 @@ pub fn random_secure(buffer: &mut [u8]) -> Result<(), EntropyUnavailable> {
 }
 
 #[cfg(not(windows))]
-fn trim_end_str(s: &str, byte: u8) -> &str {
-    s.trim_end_matches(byte as char)
+fn trim_end_bytes(s: &[u8], byte: u8) -> &[u8] {
+    let mut end = s.len();
+    while end > 0 && s[end - 1] == byte {
+        end -= 1;
+    }
+    &s[..end]
 }
 
 #[cfg(windows)]
@@ -449,10 +474,48 @@ mod tests {
         let from_os = allocTmpDir(&rustty_global::environ());
         let from_global = rustty_global::tmp_dir_path();
         assert_eq!(
-            from_os.as_bytes(),
+            from_os.as_slice(),
             from_global,
             "rustty-os allocTmpDir and rustty-global's tmp_dir_path fallback diverged"
         );
+    }
+
+    /// R13 (UD211): the root directory survives the trailing-separator trim.
+    /// The reference returns `""` for `TMPDIR=/`, which its `TempDir.init`
+    /// cannot open. An empty value still comes back as `""` (S111-F1).
+    #[test]
+    #[cfg(not(windows))]
+    #[allow(non_snake_case)]
+    fn alloc_tmp_dir_keeps_the_root_directory() {
+        let env = |entries: &[&[u8]]| {
+            rustty_global::Environ::from_entries(entries.iter().map(|e| e.to_vec()).collect())
+        };
+        assert_eq!(allocTmpDir(&env(&[b"TMPDIR=/"])), b"/");
+        assert_eq!(allocTmpDir(&env(&[b"TMPDIR=///"])), b"/");
+        assert_eq!(allocTmpDir(&env(&[b"TMP=/"])), b"/");
+        assert_eq!(allocTmpDir(&env(&[b"TMPDIR="])), b"");
+        // The value is a directory the temp-dir code can open.
+        let root = allocTmpDir(&env(&[b"TMPDIR=/"]));
+        assert!(std::path::Path::new(std::str::from_utf8(&root).unwrap()).is_dir());
+    }
+
+    /// Parity S111-F1 / S111-F12: `allocTmpDir`'s POSIX arm is
+    /// `getPosix("TMPDIR") orelse getPosix("TMP") orelse "/tmp"`, trimmed of
+    /// trailing separators (`file.zig:85-86`). An empty `TMPDIR` is a value
+    /// (`""`, with no fall-through to `TMP`), and a non-UTF-8 value comes back
+    /// byte-exact.
+    #[test]
+    #[cfg(not(windows))]
+    #[allow(non_snake_case)]
+    fn alloc_tmp_dir_takes_empty_and_non_utf8_values_verbatim() {
+        let env = |entries: &[&[u8]]| {
+            rustty_global::Environ::from_entries(entries.iter().map(|e| e.to_vec()).collect())
+        };
+        assert_eq!(allocTmpDir(&env(&[b"TMPDIR="])), b"");
+        assert_eq!(allocTmpDir(&env(&[b"TMPDIR=", b"TMP=/x"])), b"");
+        assert_eq!(allocTmpDir(&env(&[b"TMP=/x//"])), b"/x");
+        assert_eq!(allocTmpDir(&env(&[b"TMPDIR=/a\xff/"])), b"/a\xff");
+        assert_eq!(allocTmpDir(&env(&[])), b"/tmp");
     }
 
     /// P3-W7 T4 (area-E `E20`) — `randomTmpPath` uses the CACHED temp dir and

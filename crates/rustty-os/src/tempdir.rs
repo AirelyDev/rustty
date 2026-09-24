@@ -46,7 +46,7 @@ impl TempDir {
             // PORT NOTE (P3-W7 T3 / area-E `E15`):
             // `file.allocTmpDir(std.heap.page_allocator, global.environ())`.
             let tmp_dir = file::allocTmpDir(&rustty_global::environ());
-            let r = cwd.openDirPath(Path::new(&tmp_dir));
+            let r = cwd.openDirPath(Path::new(os_str_from_bytes(&tmp_dir)));
             file::freeTmpDir(&tmp_dir);
             r?
         };
@@ -148,6 +148,7 @@ impl Dir {
 
     /// `std.fs.Dir.openDir`: open a subdirectory by relative `sub_path`.
     fn openDir(&self, sub_path: &[u8]) -> std::io::Result<Dir> {
+        reject_empty_sub_path(sub_path.is_empty())?;
         let path = self.path.join(os_str_from_bytes(sub_path));
         open_dir_abs(&path)
     }
@@ -155,6 +156,7 @@ impl Dir {
     /// Open a subdirectory by absolute/relative `Path` (used for the root tmp
     /// dir which is an OS path string, not a basename slice).
     fn openDirPath(&self, sub_path: &Path) -> std::io::Result<Dir> {
+        reject_empty_sub_path(sub_path.as_os_str().is_empty())?;
         open_dir_abs(&self.path.join(sub_path))
     }
 
@@ -225,6 +227,23 @@ impl Dir {
         };
         std::fs::metadata(full).map(|_| ())
     }
+}
+
+/// `openDir("")` fails: the reference opens `sub_path` with `openat(dirfd, "")`,
+/// which the kernel answers with `ENOENT`, surfaced as `error.FileNotFound`.
+/// MEASURED (zig 0.16.0, macOS, `std.Io.Dir.cwd().openDir(io, "", .{})`):
+/// `error.FileNotFound`, while `"."` and `/tmp` open.
+///
+/// PORT NOTE (parity N172): the port models a `Dir` as a path, and
+/// `PathBuf::join("")` is the directory itself, so without this check an empty
+/// `sub_path` opened the parent: `TempDir.init` with `TMPDIR=` (present, empty)
+/// created its directory under the process cwd where the reference fails
+/// (reachable through `Surface.writeScreenFile`, `Surface.zig:5699`).
+fn reject_empty_sub_path(empty: bool) -> std::io::Result<()> {
+    if empty {
+        return Err(std::io::Error::from(std::io::ErrorKind::NotFound));
+    }
+    Ok(())
 }
 
 fn open_dir_abs(path: &Path) -> std::io::Result<Dir> {
@@ -373,5 +392,86 @@ mod tests {
 
         // (the deferred deleteDirAbsolute.)
         let _ = Dir::deleteDirAbsolute(&path_buf);
+    }
+
+    /// Parity N172: `openDir("")` fails with `FileNotFound` in the reference
+    /// (`openat(dirfd, "")` is `ENOENT`), where `PathBuf::join("")` would name
+    /// the directory itself. `"."` still opens, so the failure is the
+    /// empty-path rule, not the directory.
+    #[test]
+    #[cfg_attr(miri, ignore)] // real-OS stat
+    fn open_dir_fails_with_not_found_on_an_empty_sub_path() {
+        let cwd = std_fs_cwd();
+        assert_eq!(
+            cwd.openDir(b"").unwrap_err().kind(),
+            std::io::ErrorKind::NotFound
+        );
+        assert_eq!(
+            cwd.openDirPath(Path::new("")).unwrap_err().kind(),
+            std::io::ErrorKind::NotFound
+        );
+        let tmp = Dir::openDirAbsolute(&std::env::temp_dir()).unwrap();
+        assert_eq!(
+            tmp.openDir(b"").unwrap_err().kind(),
+            std::io::ErrorKind::NotFound
+        );
+        cwd.openDir(b".").unwrap();
+        cwd.openDirPath(Path::new(".")).unwrap();
+    }
+
+    /// Parity N172: with `TMPDIR` present but empty, the reference's
+    /// `TempDir.init` fails with `FileNotFound` (`allocTmpDir` returns `""`,
+    /// then `cwd.openDir("")`); the port used to create its directory under
+    /// the process cwd. The parent re-runs this test in a child whose
+    /// environment has `TMPDIR=` and whose cwd is a fresh empty directory, and
+    /// asserts that the child ran the test, passed, and left the cwd empty.
+    #[test]
+    #[cfg_attr(miri, ignore)] // spawns a child process
+    fn init_fails_with_not_found_when_tmpdir_is_empty() {
+        const CHILD: &str = "RUSTTY_N172_TEMPDIR_CHILD";
+        const NAME: &str = "tempdir::tests::init_fails_with_not_found_when_tmpdir_is_empty";
+        if std::env::var_os(CHILD).is_some() {
+            // Child arm: the environment is captured from this process.
+            assert_eq!(
+                std::env::var_os("TMPDIR").as_deref(),
+                Some(std::ffi::OsStr::new(""))
+            );
+            assert_eq!(file::allocTmpDir(&rustty_global::environ()), b"");
+            match TempDir::init() {
+                Ok(mut td) => {
+                    let name = td.name().to_vec();
+                    td.deinit();
+                    panic!(
+                        "TempDir::init succeeded with an empty TMPDIR (created {:?} under the cwd)",
+                        String::from_utf8_lossy(&name)
+                    );
+                }
+                Err(e) => assert_eq!(e.kind(), std::io::ErrorKind::NotFound),
+            }
+            return;
+        }
+        let mut name_buf = [0u8; file::random_basename_len + 1];
+        let Ok(base) = file::randomBasename(&mut name_buf).map(<[u8]>::to_vec) else {
+            panic!("randomBasename failed");
+        };
+        let cwd =
+            std::env::temp_dir().join(format!("rustty-n172-{}", String::from_utf8_lossy(&base)));
+        std::fs::create_dir(&cwd).unwrap();
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", NAME, "--nocapture", "--test-threads=1"])
+            .env(CHILD, "1")
+            .env("TMPDIR", "")
+            .current_dir(&cwd)
+            .output()
+            .expect("spawn the child test");
+        let left: Vec<_> = std::fs::read_dir(&cwd).unwrap().collect();
+        let _ = std::fs::remove_dir_all(&cwd);
+        assert!(out.status.success(), "child failed: {out:?}");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            stdout.contains("test result: ok. 1 passed"),
+            "the child did not run exactly one test: {stdout}"
+        );
+        assert!(left.is_empty(), "the child created {left:?} under its cwd");
     }
 }

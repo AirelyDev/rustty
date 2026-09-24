@@ -143,10 +143,10 @@ pub fn get() -> Result<Entry, Error> {
                 // `Default::default()` + field assignment — same resulting value.
                 let mut cmd = crate::flatpak::FlatpakHostCommand::default();
                 cmd.argv = vec![
-                    "/bin/sh".to_string(),
-                    "-l".to_string(),
-                    "-c".to_string(),
-                    format!("getent passwd {}", slice_to_str(pw.pw_name),),
+                    b"/bin/sh".to_vec(),
+                    b"-l".to_vec(),
+                    b"-c".to_vec(),
+                    format!("getent passwd {}", slice_to_str(pw.pw_name),).into_bytes(),
                 ];
                 cmd.stdin = pty.slave;
                 cmd.stdout = pty.slave;

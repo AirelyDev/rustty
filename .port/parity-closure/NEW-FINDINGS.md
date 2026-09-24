@@ -3635,6 +3635,88 @@ fix: 0 of 50 of the same sequential runs failed; see the task T-F2 report for th
   UD202/UD203. The Linux-only `send` arm that calls it is not compiled on macOS.
 - **state**: OPEN — fix written, Linux run pending (same as S112-F8).
 
+## N170 — `randomTmpPath` renders the temp dir through `String::from_utf8_lossy`
+
+- **id**: N170. Not in the inventory. Found by task T-H while closing S111-F12 (the same conversion in
+  `allocTmpDir`); outside that row's cited anchors (`file.zig:85-86`).
+- **severity**: low. **kind**: behavioral-difference (byte-slice → lossy `String`).
+- **oracle**: `src/os/file.zig:121-132` `randomTmpPath` returns `[]u8` from
+  `allocPrint("{s}{c}{s}{s}", .{ global.tmpDirPath(), sep, prefix, basename })`: the temp dir's bytes
+  verbatim.
+- **rustty**: `crates/rustty-os/src/file.rs` `randomTmpPath` returns `String` and formats
+  `String::from_utf8_lossy(rustty_global::tmp_dir_path())`, so a non-UTF-8 `TMPDIR` yields a path naming
+  a different directory. Its one caller is `crates/rustty-cli/src/ssh.rs` (the ssh control path).
+- **proposed fix**: return `Vec<u8>` and pass it to the ssh `Command` as an `OsStr` (touches
+  `rustty-cli`, area `src/cli`).
+- **state**: OPEN.
+
+## N171 — `flatpakExit` can now receive the timer error its `catch unreachable` assumes away
+
+- **id**: N171. Not in the inventory. Found by task T-H while closing S111-F3.
+- **severity**: low. **kind**: R13 candidate (a reference `catch unreachable` on an externally
+  produced error), for the `src/termio` owner.
+- **oracle**: `src/termio/Exec.zig` `flatpakExit`: `const exit_code = r catch unreachable;` over
+  `FlatpakHostCommand.WaitError!u8`, and `WaitError = xev.Timer.RunError || Error` (`os/flatpak.zig:115`;
+  CORRECTION by task T-H2: this said `:110`).
+  The completion's result is `Error.FlatpakMustBeStarted`/`FlatpakSpawnFail` when `waitXev` runs before
+  a successful start, and the timer's own `RunError` (`Canceled`, `Unexpected`) when the loop fails.
+- **rustty**: `crates/rustty-termio/src/exec.rs` `flatpakExit` is `r.unwrap()`. Since S111-F3 the
+  `WaitError::Timer(..)` variant reaches it verbatim, as in the reference; before, the port turned it into
+  `Flatpak(FlatpakSpawnFail)`, which the `unwrap` also panicked on. Reachability not measured (flatpak
+  only, Linux).
+- **proposed fix**: decide under R13 (the `src/termio` batch) whether a failed wait should be handled
+  like a process exit, not a panic.
+- **resolution (task T-H2, controller ruling on review-T-H)**: not reachable, so an R7 invariant, not
+  R13. The `Error` half is set only in states `.init`/`.err` (`flatpak.zig:198-199`); `Exec.threadEnter`
+  calls `waitXev` only after `spawn` succeeded, `spawn` waits for the state to leave `.init` and fails
+  on `.err` (`:143-150`), so the state is `.started` or `.exited`. The timer half needs a cancel of the
+  wait completion (nothing issues one) or an io_uring timeout result other than ETIME/ECANCELED (the
+  kernel produces none; kqueue and epoll timers never return `Unexpected`). By reading, per the review
+  (the pinned libxev `watcher/timer.zig`, `io_uring.zig:757-761`). The port keeps the checked unwrap as
+  `.expect(..)` with a message naming the invariant, and a PORT NOTE at the site
+  (`crates/rustty-termio/src/exec.rs` `flatpakExit`).
+- **state**: CLOSED.
+
+## N172 — the port's `TempDir` opens the current directory for an empty temp-dir path
+
+- **id**: N172. Not in the inventory. Found by task T-H2 while fixing UD211 (S111-F1, `TMPDIR=/`).
+- **severity**: low. **kind**: behavioral-difference (area `src/os`).
+- **oracle**: `src/os/TempDir.zig:32-34` `cwd.openDir(global.io(), tmp_dir, .{})`. With `tmp_dir = ""`
+  (a present-but-empty `TMPDIR`, which `allocTmpDir` returns verbatim) this fails with `FileNotFound`,
+  MEASURED with zig 0.16.0 on macOS (`Dir.cwd().openDir(io, "", .{})` → `error.FileNotFound`).
+- **rustty**: `crates/rustty-os/src/tempdir.rs` `Dir::openDirPath` was `open_dir_abs(&self.path.join(sub_path))`,
+  and `Path::join("")` is the current directory itself, so `TempDir::init` succeeded and created its
+  directory under the current working directory (MEASURED by the T-H2 review: `openDirPath("")` returned
+  `Ok("./")`). Reachable in production: `Surface.writeScreenFile` (`Surface.zig:5699`, the
+  `write_screen_file` actions) starts with `TempDir.init()`, so with `TMPDIR=` Ghostty fails the action
+  and the port wrote the scrollback under the cwd.
+- **fix** (R1, task T-H3): `Dir::openDir` and `Dir::openDirPath` fail with `NotFound` for an empty
+  `sub_path` (`reject_empty_sub_path`, PORT NOTE on it). Re-MEASURED in task T-H3 (zig 0.16.0, macOS, the
+  exact `trimEnd` + `std.Io.Dir.cwd().openDir(io, t, .{})`): `""`, `/` and `//` give
+  `error.FileNotFound`; `/tmp/` and `.` open. Tests `tempdir::tests::open_dir_fails_with_not_found_on_an_empty_sub_path`
+  and `tempdir::tests::init_fails_with_not_found_when_tmpdir_is_empty` (a child with `TMPDIR=` and a fresh
+  cwd; asserts the child ran one test, `TempDir::init` failed with `NotFound`, and the cwd stayed empty).
+  Negative control: the check disabled fails both, the second with "TempDir::init succeeded with an
+  empty TMPDIR (created .. under the cwd)".
+- **state**: CLOSED (task T-H3).
+
+## N173 — after S43-F3, `codepoint-width --mode=wcwidth` is no longer comparable to the pinned perf oracle
+
+- **id**: N173. Found by task T-H2 while measuring S43-F3 (controller Decision B).
+- **severity**: low. **kind**: perf-measurement (no behaviour defect).
+- **what**: `rustty-bench`'s `cli::main` now runs the global init (`init_with_action(false)`, the
+  reference's `global.init(.{ .tool = .. })`), whose `ensureLocale` sets the process locale from the
+  environment (en_US.UTF-8 on this host). libc `wcwidth` is much slower under a UTF-8 locale.
+  MEASURED (paired, N=9, load ~12, provisional): 238 ms before, 749 ms after; with `LANG=C LC_ALL=C` both
+  are 236 ms. The pinned perf oracle (`4749c4e93`, `ws10_suite.py`) predates the `.tool` init and runs
+  in the "C" locale, so Fence 1 now reports that config LOST (zig 267 ms, rust 753 ms). The reference at
+  `20abdb50a` runs `ensureLocale` in its bench too (`global.zig:208`), so the port matches the current
+  reference; the comparison, not the port, is what changed.
+- **options for the controller**: record the config in `ws10_suite.py`'s `INCOMPARABLE` with these
+  numbers (as `screen-clone.render/small` is), or run the perf lanes with `LC_ALL=C`. Not done here:
+  editing a fence is the controller's call (R5).
+- **state**: OPEN.
+
 ## N196 — tests passed without testing anything when their environment was missing
 
 - **id**: N196. Not in the inventory. Found by the tail-s3 task (silent-skip audit), 2026-09-23.

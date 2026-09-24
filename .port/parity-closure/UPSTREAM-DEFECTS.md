@@ -1943,6 +1943,36 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - proposed fix:    delete `Backend.childExitedAbnormally` (Surface handles abnormal exits itself), or add the Exec method it expects.
 - upstream status: not reported
 
+### UD210 — the shell fallback for the home directory fails on a home path of 361 bytes or more, well inside its own 512-byte limit
+- kind:            non-crash (evident intent broken)
+- upstream project: ghostty
+- severity:        low
+- reference:       src/os/homedir.zig:49-67 (`homeUnix`: `var tempBuf: [1024]u8` at :49, `fba.reset()` at :61, `std.process.run(fba.allocator(), io, .{ ..., .stdout_limit = .limited(fba.buffer.len / 2), .stderr_limit = .limited(fba.buffer.len / 2) })`); :119-130 (`expandHomeUnix` maps any `home` error to `HomeDetectionFailed`). zig 0.16.0 `std/process.zig:496-530` (`run`: a `MultiReader` over stdout and stderr, allocating through the same allocator). At 20abdb50a.
+- defect:          the call sets a limit of 512 bytes per stream (`fba.buffer.len / 2`), but `run` allocates the growing stream buffers from the same 1024-byte `FixedBufferAllocator`, which runs out first. MEASURED with a probe over the exact call (zig 0.16.0, ReleaseSafe, macOS, `HOME` set in the child's environment map): a home path of 300 and 360 bytes comes back (361 bytes of `pwd` output); 361, 362, 400, 450, 511, 512, 513 and 600 bytes fail with `error.OutOfMemory`. Stderr follows the limit exactly: 512 bytes of stderr return exit status 1, 513 bytes fail with `StreamTooLong` (MEASURED in task T-H3 with the same `run` options and a command writing exactly N bytes to stderr and exiting 1, the shape of a failing `cd`: 300, 511 and 512 OK; 513 and 514 `StreamTooLong`; the review of T-H2 found the same edge with the exact `cd && pwd` call). So on stdout the 512-byte limit is never reached.
+- ReleaseSafe:     `home` returns `error.OutOfMemory`; `expandHome` returns `HomeDetectionFailed`, so `~/` paths are not expanded.
+- ReleaseFast:     the same (no safety check is involved). MEASURED, identical to ReleaseSafe: 361 bytes of stdout OK and 362 or 512 bytes `OutOfMemory`; 512 bytes of stderr OK and 513 `StreamTooLong` (task T-H3's probe; the review of T-H2 measured the same with the exact call).
+- reachability:    Linux and FreeBSD, when `HOME` is unset and passwd has no home directory for the user, and the shell's `cd` lands in a directory whose path is 361 to 511 bytes long. Rare. The Linux threshold is UNVERIFIED (the allocation happens in generic std code, so it is expected to be the same).
+- port handling:   fixed (R13): `crates/rustty-os/src/homedir.rs` `home_from_shell` reads each pipe to at most 513 bytes and fails with `StreamTooLong` only past 512, so a home path up to 511 bytes is returned (PORT NOTE: reference defect (R13) on the function). Listed in `docs/ghostty-bug-fixes.md`.
+- parity row(s):   LEDGER S111-F11; review-T-H blocking item 1.
+- test:            `homedir::tests::home_from_shell_returns_a_400_byte_home_the_reference_runs_out_of_memory_on` (a real 400-byte directory; negative control: the stdout cap lowered to 361 bytes, the reference's measured failure point, fails with `Err(StreamTooLong)` where `Ok(Some(path))` is expected). `homedir::tests::home_from_shell_limits_stdout_and_stderr_to_512_bytes` still covers the limit itself.
+- proposed fix:    give `run` an allocator that can hold both streams at their limit (a larger `tempBuf`, for example 4096 bytes, or the general-purpose allocator), or lower the limits so they fit: the buffers need more than `limit` bytes each while growing.
+- upstream status: not reported
+
+### UD211 — `TMPDIR=/` becomes an empty temp-dir path that the reference's own temp-dir code cannot open
+- kind:            non-crash (evident intent broken)
+- upstream project: ghostty
+- severity:        low
+- reference:       src/os/file.zig:58-66 (doc comment: "Any trailing path separator is stripped so callers can safely join with their own separator"), :85-86 (`return std.mem.trimEnd(u8, tmpdir, &.{std.fs.path.sep});`); src/os/TempDir.zig:32-34 (`cwd.openDir(global.io(), tmp_dir, .{})`). At 20abdb50a.
+- defect:          `trimEnd` removes every trailing `/`, including the root directory's only one, so `TMPDIR=/` (or `TMP=/`, or `//`) yields `""`. MEASURED with zig 0.16.0 on macOS: `trimEnd("/")` has length 0; `Dir.cwd().openDir("")` fails with `FileNotFound`, while `openDir("/")` succeeds. So `TempDir.init` fails for a valid temp directory.
+- ReleaseSafe:     `TempDir.init` returns `FileNotFound`. `randomTmpPath` still builds `"/<name>"`, which happens to work.
+- ReleaseFast:     the same.
+- reachability:    a user or environment that sets `TMPDIR=/` or `TMP=/`. Unusual, but a legal value.
+- port handling:   fixed (R13): `crates/rustty-os/src/file.rs` `allocTmpDir` and `crates/rustty-global/src/environ.rs` `posix_tmp_dir_path` return `/` when the value is made only of separators (PORT NOTE: reference defect (R13) at both). A present-but-empty value still returns `""`, as in the reference (its intent is ambiguous; S111-F1), and `TempDir.init` then fails with `NotFound` as the reference's fails with `FileNotFound` (N172, task T-H3: `Dir::openDir`/`openDirPath` in `crates/rustty-os/src/tempdir.rs` reject an empty path; before, the port created the directory under the cwd). Listed in `docs/ghostty-bug-fixes.md`.
+- parity row(s):   LEDGER S111-F1; review-T-H R13 section, controller ruling.
+- test:            `file::tests::alloc_tmp_dir_keeps_the_root_directory` and `environ::tests::posix_tmp_dir_path_keeps_the_root_directory` (`/`, `///`, `TMP=/` all give `/`; empty stays `""`). Negative controls, one copy at a time: the root check disabled fails with `left: []`, `right: [47]`.
+- proposed fix:    in `allocTmpDir`, keep one separator when the trimmed value would be empty and the original was not: `const t = std.mem.trimEnd(u8, tmpdir, "/"); return if (t.len == 0 and tmpdir.len > 0) "/" else t;`.
+- upstream status: not reported
+
 ## Candidates pending verification
 
 Assembled from this plan's progress notes on 2026-09-11. **Not verified** — do not cite as fact.

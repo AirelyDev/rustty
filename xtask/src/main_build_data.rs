@@ -90,19 +90,63 @@ impl Action {
         "terminfo",
     ];
 
-    /// PORTS: `cli.action.detectArgs(Action, …)` — match a `+<name>` argument
-    /// against the action set. The `+` sigil is the reference's own CLI
-    /// convention (`ghostty +gen-bash`-style invocation via `+bash`), and a
-    /// bare name is accepted too so the binary is usable directly.
+    /// `std.meta.stringToEnum(Action, name)`: the action whose field name is
+    /// exactly `name` (no `+`).
     #[must_use]
-    pub fn detect(arg: &str) -> Option<Action> {
-        let name = arg.strip_prefix('+').unwrap_or(arg);
+    pub fn from_name(name: &str) -> Option<Action> {
         Action::CLI_NAMES
             .iter()
             .position(|n| *n == name)
             .map(|i| Action::ALL[i])
     }
+}
 
+/// `cli.action.DetectError`.
+#[derive(Debug, PartialEq, Eq)]
+pub enum DetectError {
+    /// Multiple actions were detected. You can specify at most one
+    /// action on the CLI otherwise the behavior desired is ambiguous.
+    MultipleActions,
+
+    /// An unknown action was specified.
+    InvalidAction,
+}
+
+/// Local replica of `cli.action.detectArgs(Action, alloc, args)` /
+/// `detectIter` (the `rustty-bench/src/cli.rs` `detect_args` pattern; xtask
+/// has no `rustty-cli` edge). `Action` has no `detectSpecialCase`, so there is
+/// no fallback.
+///
+/// PORT NOTE (parity S43-F5): only a `+`-prefixed argument is an action; an
+/// unknown `+name` is `InvalidAction` and a second `+` argument is
+/// `MultipleActions`. CORRECTION: this used to strip an optional `+` (so a
+/// bare `bash` was accepted) and take the first recognised argument, silently
+/// skipping unknown and extra ones.
+pub fn detect_args<I: Iterator<Item = String>>(args: I) -> Result<Option<Action>, DetectError> {
+    // var pending: ?E = null;
+    let mut pending: Option<Action> = None;
+    // while (iter.next()) |arg| {
+    for arg in args {
+        // Commands must start with "+"
+        // if (arg.len == 0 or arg[0] != '+') continue;
+        let Some(name) = arg.strip_prefix('+') else {
+            continue;
+        };
+        // if (pending != null) return DetectError.MultipleActions;
+        if pending.is_some() {
+            return Err(DetectError::MultipleActions);
+        }
+        // pending = std.meta.stringToEnum(E, arg[1..]) orelse
+        //     return DetectError.InvalidAction;
+        pending = Some(Action::from_name(name).ok_or(DetectError::InvalidAction)?);
+    }
+    // if (pending != null) return pending;
+    // if (fallback) |a| return a;
+    // return null;
+    Ok(pending)
+}
+
+impl Action {
     /// The bytes this action emits. PORTS: `main_build_data.zig:36-46`'s
     /// `switch (action)`.
     ///
@@ -139,7 +183,9 @@ impl Action {
 /// `const action = action_ orelse return error.NoAction;` — a missing or
 /// unrecognised action is an error, not a silent empty stdout.
 pub fn run<I: Iterator<Item = String>>(args: I) -> Result<(), String> {
-    let action = args.filter_map(|a| Action::detect(&a)).next();
+    // const action_ = try cli.action.detectArgs(Action, alloc, init.minimal.args);
+    let action = detect_args(args).map_err(|e| format!("{e:?}"))?;
+    // const action = action_ orelse return error.NoAction;
     let Some(action) = action else {
         return Err(format!(
             "NoAction — expected one of: {}",
@@ -160,25 +206,56 @@ pub fn run<I: Iterator<Item = String>>(args: I) -> Result<(), String> {
 mod tests {
     use super::*;
 
-    /// Every reference action name is recognised, with and without the `+`
-    /// sigil, and nothing else is.
+    fn args(line: &str) -> impl Iterator<Item = String> + '_ {
+        line.split_whitespace().map(str::to_owned)
+    }
+
+    /// Every reference action name is recognised as `+<name>`, and nothing
+    /// else is.
     #[test]
     fn detect_matches_exactly_the_reference_action_set() {
         assert_eq!(Action::ALL.len(), Action::CLI_NAMES.len());
         for (i, name) in Action::CLI_NAMES.iter().enumerate() {
-            assert_eq!(Action::detect(name), Some(Action::ALL[i]), "{name}");
+            assert_eq!(Action::from_name(name), Some(Action::ALL[i]), "{name}");
             assert_eq!(
-                Action::detect(&format!("+{name}")),
-                Some(Action::ALL[i]),
+                detect_args(args(&format!("+{name}"))),
+                Ok(Some(Action::ALL[i])),
                 "+{name}"
             );
         }
         // Negative controls: near-misses and empty input must NOT resolve.
-        assert_eq!(Action::detect("vim"), None);
-        assert_eq!(Action::detect("vim_syntax"), None);
-        assert_eq!(Action::detect("Bash"), None);
-        assert_eq!(Action::detect(""), None);
-        assert_eq!(Action::detect("+"), None);
+        assert_eq!(Action::from_name("vim"), None);
+        assert_eq!(Action::from_name("vim_syntax"), None);
+        assert_eq!(Action::from_name("Bash"), None);
+        assert_eq!(Action::from_name(""), None);
+        assert_eq!(Action::from_name("+bash"), None);
+    }
+
+    /// Parity S43-F5: `detectIter`'s cases (`cli/action.zig`'s "detect direct
+    /// match" / "detect invalid match" / "detect multiple actions" / "detect
+    /// no match", over this `Action` set), plus a bare name, which is not an
+    /// action.
+    #[test]
+    fn detect_args_follows_detect_iter() {
+        assert_eq!(detect_args(args("+bash")), Ok(Some(Action::Bash)));
+        assert_eq!(
+            detect_args(args("+invalid")),
+            Err(DetectError::InvalidAction)
+        );
+        assert_eq!(
+            detect_args(args("+bash +zsh")),
+            Err(DetectError::MultipleActions)
+        );
+        assert_eq!(detect_args(args("--some-flag")), Ok(None));
+        assert_eq!(detect_args(args("bash")), Ok(None));
+        assert_eq!(detect_args(args("bash +zsh")), Ok(Some(Action::Zsh)));
+        // A bare `+` is an action with an empty name: `stringToEnum(E, "")`
+        // is null, so `InvalidAction` (review-T-H M2).
+        assert_eq!(detect_args(args("+")), Err(DetectError::InvalidAction));
+        assert_eq!(
+            detect_args(args("+ +bash")),
+            Err(DetectError::InvalidAction)
+        );
     }
 
     /// Every action emits non-empty bytes, and no two actions emit the same

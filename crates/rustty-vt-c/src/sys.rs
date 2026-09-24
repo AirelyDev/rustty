@@ -712,6 +712,19 @@ static LOGGER: Logger = Logger;
 /// completely alone — the correct behavior when a host/embedder already
 /// owns the `log` crate's global registration is containment, not clobber.
 pub fn install_log_backend() {
+    // This process is the lib artifact (libghostty-vt's analog): rustty-vt
+    // compiled it with `terminal_options.artifact = .lib` in the reference
+    // (`GhosttyZig.zig:67-72`). The port records that at run time, here,
+    // because this is the first thing every `*_new` entry point does, and
+    // every route to a mode lookup goes through a `*_new` (parity S6-F2,
+    // Decision A; see `rustty_vt::options::runtime_artifact`). The only
+    // caller of the setter; gate `check_runtime_artifact_setter.py`.
+    rustty_vt::options::set_runtime_artifact_lib();
+    // `lib_vt.zig`'s `pub const panic` (the `tinyPanicImpl` arm in release
+    // builds): a Rust panic hook can only be installed at run time, and this is
+    // the first thing every `*_new` entry point does (parity S43-F6). It is
+    // installed together with the artifact above; see `panic.rs`.
+    crate::panic::install();
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {
         // task-14a review round 2 (same class as CRITICAL 1): the wasm-release
@@ -1550,5 +1563,71 @@ pub(crate) mod tests {
         assert_eq!(Result::Success, unsafe {
             set(Option_::DecodePng, std::ptr::null())
         });
+    }
+
+    /// Parity S5-F2: the built-in stderr sink writes the scope and message
+    /// BYTES verbatim, as the reference's `bufPrint("{s}")` does, including
+    /// bytes that are not UTF-8. The parent re-runs this test in a child whose
+    /// stderr it captures, so the assertion is on the real fd-2 output of the
+    /// `rustty_sys_log_stderr` export, not on a helper.
+    #[test]
+    fn log_stderr_writes_non_utf8_scope_and_message_bytes_verbatim() {
+        const CHILD: &str = "RUSTTY_T_H_LOG_STDERR_CHILD";
+        const NAME: &str =
+            "sys::tests::log_stderr_writes_non_utf8_scope_and_message_bytes_verbatim";
+        let scope: &[u8] = b"sc\xffpe";
+        let message: &[u8] = b"m\xc3\x28sg \xfe";
+        if std::env::var_os(CHILD).is_some() {
+            // Child arm: the parent asserts on this process's stderr.
+            // SAFETY: both byte ranges are live slices.
+            unsafe {
+                crate::rustty_sys_log_stderr(
+                    std::ptr::null_mut(),
+                    LogLevel::Warning as std::os::raw::c_int,
+                    scope.as_ptr(),
+                    scope.len(),
+                    message.as_ptr(),
+                    message.len(),
+                );
+                crate::rustty_sys_log_stderr(
+                    std::ptr::null_mut(),
+                    LogLevel::Error as std::os::raw::c_int,
+                    scope.as_ptr(),
+                    0,
+                    message.as_ptr(),
+                    message.len(),
+                );
+            }
+            return;
+        }
+        let bb = std::hint::black_box;
+        assert!(
+            std::str::from_utf8(bb(scope)).is_err() && std::str::from_utf8(bb(message)).is_err()
+        );
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", NAME, "--nocapture", "--test-threads=1"])
+            .env(CHILD, "1")
+            .output()
+            .expect("spawn the child test");
+        assert!(out.status.success(), "child failed: {out:?}");
+        let mut warning = b"[warning](".to_vec();
+        warning.extend_from_slice(scope);
+        warning.extend_from_slice(b"): ");
+        warning.extend_from_slice(message);
+        warning.push(b'\n');
+        let mut error = b"[error]: ".to_vec();
+        error.extend_from_slice(message);
+        error.push(b'\n');
+        let find = |needle: &[u8]| out.stderr.windows(needle.len()).any(|w| w == needle);
+        assert!(
+            find(&warning),
+            "scoped line not verbatim in the child's stderr: {:?}",
+            out.stderr
+        );
+        assert!(
+            find(&error),
+            "unscoped line not verbatim in the child's stderr: {:?}",
+            out.stderr
+        );
     }
 }

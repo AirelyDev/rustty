@@ -2,7 +2,7 @@
 //!
 //! PORTS: Zig stdlib types AS THE PORT USES THEM — std.heap.ArenaAllocator,
 //! std.heap.MemoryPool / MemoryPoolAligned, std.array_hash_map.AutoArrayHashMap,
-//! std.Thread.Mutex, std.hash.Wyhash.
+//! std.Thread.Mutex, std.hash.Wyhash, std.fs.path.dirnamePosix.
 //!
 //! PORT STATUS: done (infra; Zig stdlib equivalents; not in the 3234 contract)
 //!
@@ -37,6 +37,7 @@
 pub mod arena_allocator;
 pub mod array_hash_map;
 pub mod fmt;
+pub mod fs_path;
 pub mod memory_pool;
 pub mod thread;
 pub mod wyhash;

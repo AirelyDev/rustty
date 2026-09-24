@@ -13917,9 +13917,9 @@ where
                 });
             }
         };
-        unsafe { (*self.renderer_state.mutex).unlock() };
         // if (!pasted) return false;
         if !pasted {
+            unsafe { (*self.renderer_state.mutex).unlock() };
             return Ok(false);
         }
 
@@ -13928,12 +13928,20 @@ where
         //     .data = try aw.toOwnedSlice(),
         // } }, .locked);
         // return true;
+        //
+        // PORT NOTE (parity S42-F1): the `defer ... unlock` above runs at
+        // function exit, so the reference queues with the renderer mutex STILL
+        // HELD, which is what `.locked` tells the mailbox: on a full queue it
+        // unlocks that mutex while it waits and relocks it after. CORRECTION:
+        // the port used to unlock before this call, so the full-queue path
+        // unlocked a mutex nobody held and returned with it locked.
         self.queueIo(
             termio::Message::WriteAlloc(Alloc {
                 data: aw.written().to_vec().into_boxed_slice(),
             }),
             termio::termio_impl::MutexState::Locked,
         );
+        unsafe { (*self.renderer_state.mutex).unlock() };
         Ok(true)
     }
 
@@ -16593,6 +16601,224 @@ mod diagnostics_tests {
                 "key table not found: nav".to_string()
             )],
             messages
+        );
+    }
+}
+
+// Parity S42-F1: `completeClipboardPasteEvent` queues its Kitty paste event
+// with `.locked` while it still holds the renderer mutex (`Surface.zig`'s
+// `defer ... unlock` runs after `queueIo`). The case that shows it is a FULL
+// IO mailbox: `Mailbox.send` then unlocks the renderer mutex so the writer
+// thread can drain, blocks, and relocks it. Fabricated with the
+// `MaybeUninit<Surface>` recipe (only the fields this path reads are written).
+#[cfg(test)]
+mod paste_event_mutex_tests {
+    use super::*;
+    use crate::app::test_runtime::TestApp;
+    use std::mem::MaybeUninit;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    #[test]
+    #[cfg_attr(miri, ignore = "spawns a thread and waits on real time")]
+    fn paste_event_queues_while_holding_the_renderer_mutex_on_a_full_mailbox() {
+        let mut terminal = rustty_vt::terminal::Terminal::init(
+            Allocator,
+            rustty_vt::terminal::Options {
+                cols: 80,
+                rows: 24,
+                max_scrollback_bytes: Some(1000),
+                max_scrollback_lines: None,
+                colors: rustty_vt::terminal::Colors::default(),
+                default_modes: rustty_vt::modes::ModePacked::default(),
+                default_cursor_style: rustty_vt::screen::CursorStyle::Block,
+                default_cursor_blink: Some(false),
+                kitty_image_storage_limit: 0,
+                kitty_image_loading_limits: rustty_vt::kitty::graphics_image::Limits::DIRECT,
+            },
+        )
+        .expect("Terminal::init");
+        terminal
+            .modes
+            .set(rustty_vt::modes::Mode::KittyPasteEvents, true);
+
+        let mut mailbox = termio::mailbox::Mailbox::initSPSC().expect("mailbox");
+        let queue: *const termio::mailbox::Queue = match &mut mailbox {
+            termio::mailbox::Mailbox::Spsc { queue, .. } => {
+                // Fill the queue so the paste event takes the slow path.
+                while queue
+                    .push_or_return(
+                        termio::Message::WriteAlloc(Alloc {
+                            data: b"filler".to_vec().into_boxed_slice(),
+                        }),
+                        rustty_datastruct::blocking_queue::Timeout::Instant,
+                    )
+                    .is_ok()
+                {}
+                &**queue
+            }
+        };
+
+        // The writer's wakeup (a `Copy` handle): `Mailbox.send` notifies it on
+        // the slow path right before it releases the renderer mutex and blocks.
+        let wakeup: rustty_xev::Async = match &mailbox {
+            termio::mailbox::Mailbox::Spsc { wakeup, .. } => *wakeup,
+        };
+
+        let renderer_mutex = Box::into_raw(Box::new(rustty_zigstd::thread::Mutex::new()));
+
+        let mut mu: Box<MaybeUninit<Surface<TestApp>>> = Box::new(MaybeUninit::uninit());
+        let sp = mu.as_mut_ptr();
+        unsafe {
+            std::ptr::addr_of_mut!((*sp).readonly).write(false);
+            std::ptr::addr_of_mut!((*sp).renderer_state.mutex).write(renderer_mutex);
+            std::ptr::addr_of_mut!((*sp).io.renderer_state)
+                .write(std::ptr::addr_of_mut!((*sp).renderer_state));
+            std::ptr::addr_of_mut!((*sp).io.terminal).write(terminal);
+            std::ptr::addr_of_mut!((*sp).io.terminal_stream.handler.kitty_clipboard_grants)
+                .write(rustty_vt::kitty::clipboard::Grants::default());
+            std::ptr::addr_of_mut!((*sp).io.mailbox).write(mailbox);
+        }
+
+        // The writer-thread stand-in: once the sender is parked on the full
+        // queue it must be able to take the renderer mutex (the mailbox
+        // released it), then it drains until the paste event arrives.
+        //
+        // It waits for the mailbox's wakeup, as the real writer thread does,
+        // so it never tests the mutex before the sender has locked it; then
+        // it polls `try_lock` against a deadline (no fixed sleep, so a slow
+        // host cannot make it look too early; review-T-H item 3). The queue
+        // stays full until this thread pops, so the sender cannot finish
+        // before this thread has looked.
+        //
+        // Every wait is bounded (review-T-H2 blocking 2): a 10 s timer is armed
+        // on the same loop as the wakeup wait, so `run(Once)` returns even if
+        // the sender parks without notifying. On that timeout the drainer
+        // skips the mutex poll but still drains, which releases the parked
+        // sender; nothing is asserted on this thread (a panic here would leave
+        // the sender parked forever). The main thread asserts `woke` after
+        // `join`.
+        struct SendPtr<T>(*const T);
+        unsafe impl<T> Send for SendPtr<T> {}
+        let q = SendPtr(queue);
+        let m = SendPtr(renderer_mutex as *const rustty_zigstd::thread::Mutex);
+        let done = Arc::new(AtomicBool::new(false));
+        let done2 = done.clone();
+        let drainer = std::thread::spawn(move || {
+            let (q, m) = (q, m);
+            let mut loop_ = rustty_xev::Loop::init(rustty_xev::Options::default()).unwrap();
+            let mut woke = false;
+            let mut timed_out = false;
+            let mut c_wait = rustty_xev::Completion::default();
+            let mut c_timer = rustty_xev::Completion::default();
+            let cb = |ud: *mut bool,
+                      _l: *mut rustty_xev::Loop,
+                      _c: *mut rustty_xev::Completion,
+                      r: core::result::Result<(), rustty_xev::WaitError>| {
+                if r.is_ok() {
+                    unsafe { *ud = true };
+                }
+                rustty_xev::CallbackAction::Disarm
+            };
+            let timer_cb =
+                |ud: *mut bool,
+                 _l: *mut rustty_xev::Loop,
+                 _c: *mut rustty_xev::Completion,
+                 _r: core::result::Result<(), rustty_xev::TimerRunError>| {
+                    unsafe { *ud = true };
+                    rustty_xev::CallbackAction::Disarm
+                };
+            // SAFETY: `loop_`, `c_wait`, `c_timer`, `woke` and `timed_out`
+            // outlive both completions: `run(Once)` returns after the first
+            // of them fires, and the loop is deinitialized before any of them
+            // goes out of scope, so the other never fires later.
+            let timer = rustty_xev::Timer::init().unwrap();
+            unsafe {
+                wakeup.wait(
+                    &mut loop_ as *mut rustty_xev::Loop,
+                    std::ptr::addr_of_mut!(c_wait),
+                    std::ptr::addr_of_mut!(woke),
+                    cb,
+                );
+                timer.run(
+                    &mut loop_ as *mut rustty_xev::Loop,
+                    std::ptr::addr_of_mut!(c_timer),
+                    10_000,
+                    std::ptr::addr_of_mut!(timed_out),
+                    timer_cb,
+                );
+            }
+            let ran = loop_.run(rustty_xev::RunMode::Once);
+            loop_.deinit();
+            let woke = woke && ran.is_ok();
+
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            let mut took_mutex_while_parked = false;
+            while woke && std::time::Instant::now() < deadline {
+                if unsafe { (*m.0).try_lock() } {
+                    unsafe { (*m.0).unlock() };
+                    took_mutex_while_parked = true;
+                    break;
+                }
+                std::thread::yield_now();
+            }
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            let mut event: Option<Vec<u8>> = None;
+            while event.is_none() && std::time::Instant::now() < deadline {
+                while let Some(msg) = unsafe { (*q.0).pop() } {
+                    if let termio::Message::WriteAlloc(a) = msg {
+                        if &*a.data != b"filler" {
+                            event = Some(a.data.to_vec());
+                        }
+                    }
+                }
+                if done2.load(Ordering::SeqCst) {
+                    break;
+                }
+                std::thread::yield_now();
+            }
+            (woke, timed_out, took_mutex_while_parked, event)
+        });
+
+        let surface = unsafe { &mut *sp };
+        let result = surface
+            .completeClipboardPasteEvent(apprt::Clipboard::Standard, &[b"text/plain".as_slice()]);
+        done.store(true, Ordering::SeqCst);
+        // If the sender never took the slow path, the drainer is still
+        // waiting for the wakeup; release it so the test fails instead of
+        // hanging.
+        let _ = wakeup.notify();
+        let (woke, timed_out, took_mutex_while_parked, event) = drainer.join().expect("drainer");
+        let unlocked_after = unsafe { (*renderer_mutex).try_lock() };
+
+        // Teardown.
+        unsafe {
+            (*sp).io.terminal.deinit(Allocator);
+            std::ptr::drop_in_place(std::ptr::addr_of_mut!(
+                (*sp).io.terminal_stream.handler.kitty_clipboard_grants
+            ));
+            std::ptr::read(std::ptr::addr_of!((*sp).io.mailbox)).deinit();
+            drop(Box::from_raw(renderer_mutex));
+        }
+
+        assert!(
+            woke,
+            "the mailbox never signalled its wakeup (timed out after 10 s: {timed_out})"
+        );
+        assert_eq!(result.ok(), Some(true), "the paste event was not produced");
+        let event = event.expect("the paste event never reached the IO mailbox");
+        assert!(
+            event.starts_with(b"\x1b]5522;"),
+            "unexpected paste event bytes: {:?}",
+            String::from_utf8_lossy(&event)
+        );
+        assert!(
+            took_mutex_while_parked,
+            "the renderer mutex was not free while the sender waited on the full queue"
+        );
+        assert!(
+            unlocked_after,
+            "completeClipboardPasteEvent returned with the renderer mutex still locked"
         );
     }
 }
