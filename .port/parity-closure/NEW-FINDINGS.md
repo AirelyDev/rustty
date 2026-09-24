@@ -4374,19 +4374,24 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   shared, refcounted GObject handle is unsound without changing the storage to a `RefCell` and
   every `get` caller to a guard). Its three doc lines are `no-counterpart` rows of
   `.port/parity-closure/COMMENT-NOT-CARRIED.tsv` (decl `Config.getMut`).
-- **state**: CLOSED (task tail-s8d).
+- **S-8e (review)**: the record now also names the declined sound alternative, `unsafe fn
+  get_mut(&self) -> *mut CoreConfig` over `UnsafeCell` storage, and why (an uncheckable aliasing
+  contract for a function nothing calls; it is the shape to use if a caller appears).
+- **state**: CLOSED (task tail-s8d; record completed tail-s8e).
 
 ## N282 — `gsettings.zig` `getAlloc` had no port and no record
 
 - **id**: N282. Not a ledger row: S-8b report concern 2.
 - **severity**: low. **kind**: missing function (no caller in the reference GTK tree at the pin).
 - **oracle**: `src/apprt/gtk/gsettings.zig:50-57` `getAlloc` + `getImpl`'s `[]const u8` arm `:69-74`.
-- **fix**: `crates/rustty-apprt/src/gtk/gsettings.rs` `get_alloc(key) -> Option<Vec<u8>>`, with its
-  four reference doc lines restored verbatim.
+- **fix**: `crates/rustty-apprt/src/gtk/gsettings.rs` `get_alloc(key) -> Option<SettingValue>`, with
+  its four reference doc lines restored verbatim. S-8e (review): like the reference it accepts every
+  key (`SettingValue::{Bool, CInt, Str}` reifies `?key.Type()`), and the string arm reads the raw
+  `GValue` (`property_value` + `g_value_get_string` + `CStr::to_bytes`) so non-UTF-8 bytes are
+  returned, not a panic (the S-8d `property::<Option<String>>` form panicked on them).
 - **verification**: UNVERIFIED — the GTK module is `cfg(linux|freebsd, feature = "gtk")` and was
-  not compiled here (macOS, no VM for this batch). It uses only `gtk4::Settings::default()` and
-  `ObjectExt::property::<Option<String>>`, the same calls as the file's existing readers plus the
-  standard nullable-string form. Needs the Linux lane (`--features gtk,x11,wayland` clippy).
+  not compiled here (macOS, no VM for this batch). Needs the Linux lane (`--features
+  gtk,x11,wayland` clippy).
 - **state**: fix written, Linux build pending.
 
 ## N283 — G3b had no audited way to mark a deliberately-not-carried comment
@@ -4401,10 +4406,23 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   `no-counterpart` attached to the named reference code, with no Rust counterpart anywhere in the
   workspace and an unstruck evidence record naming it; for `gag-prose` free of digits, identifiers,
   backticks and ALL-CAPS tokens and at most 20 words; with a two-way cap. Excused comments are
-  printed as `NOT-CARRIED (<class>)`. 64 rows: bin 35, apprt 29 (25 no-counterpart, 4 gag-prose).
-- **verification**: `check_comment_coverage.py --self-test` (42 ledger arms, synthetic and real,
-  including real-row negative controls); `--not-carried-check` GREEN.
-- **state**: CLOSED (task tail-s8d).
+  printed as `NOT-CARRIED (<class>)`.
+- **S-8e (review CHANGES-REQUIRED, attacks A-1..A-3 went GREEN)**: hardened. `decl` must be DECLARED in
+  the oracle file (fn/const/var, field, enum member) and not a Zig/Rust keyword or common local
+  (`priv`, `self`, `alloc`, ...); a `///` doc or `PORTS:` comment citing it, or a Rust field of its
+  name, is a counterpart (catches `BASELINE` = `comptime_version`); the evidence record (unique
+  needle, at most 30 lines, a heading resolving to its own section only) must name the decl AND
+  the oracle file and carry no strike/RESOLVED/PORTED ANYWHERE; a gag row's record must list its
+  `file:line`, and its text may use no technical term or word of the surrounding oracle code unless
+  `MIXED-CARRIED: "<port comment>"` names a comment the port carries. Rows the stricter rules would
+  not admit, or that have a Rust site, are QUOTED there instead (port convention). 35 rows: bin 21
+  (std_options_debug_io 6, DllMain 15), apprt 14 (adw_c 3, gtk_c 3, supportsDialogs 1,
+  `Config.getMut` 3, gag-prose 4).
+- **verification**: `check_comment_coverage.py --self-test` (69 ledger arms, synthetic and real,
+  the review's A-1/A-2/A-3 planted verbatim); a mutation run (each W1-W4 rule weakened in-process)
+  turns the matching arms FAIL; the review's NC-1..NC-4 and A-1..A-3 re-run on disk are all RED;
+  `--not-carried-check` GREEN.
+- **state**: CLOSED (task tail-s8d, hardened tail-s8e).
 
 ## N284 — two BlurRegion CSD-note lines stripped as gag prose carried a fact
 

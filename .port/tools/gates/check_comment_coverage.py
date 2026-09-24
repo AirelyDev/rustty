@@ -655,6 +655,12 @@ def not_carried_apply(nc, crate, cm, idmap, missing, review, port_norm, ref_file
               f"delete the row")
         r["ok"] = False
         red = 1
+    for r in NC.mixed_unproven(ok_rows, norm, idmap, port_norm):
+        print(f"NOT-CARRIED-INVALID: COMMENT-NOT-CARRIED.tsv:{r['lineno']} "
+              f"({r['file']}:{r['line']}): its MIXED-CARRIED phrase is not in the port's "
+              f"comments — the line's fact is not carried")
+        r["ok"] = False
+        red = 1
     ref_lines = []
     for f in ref_files:
         try:
@@ -692,20 +698,45 @@ _ = @import("wibble.zig");
 pub fn getMut(self: *Frob) *Frob {
     return self;
 }
+
+pub fn handler(self: *Frob) void {
+    const priv = self;
+    // We will check the flag again in each handler later on, fine.
+    _ = priv;
+}
 """.split("\n")
+
+
+def _nc_line(text):
+    return next(i for i, ln in enumerate(_NC_ORACLE, 1) if text in ln)
+
 
 _NC_P4 = """# fake phase-4
 | item | verdict |
 |---|---|
-| `Frob` and `wibble` and `Frob.getMut` | **NON-PORT** synthetic row for the self-test |
-| ~~`Struck`~~ `Frob` | RESOLVED long ago |
-| `Other` | NON-PORT naming something else |
-"""
+| `Frob` and `Frob.getMut` in `lib_vt.zig` | **NON-PORT** synthetic row for the self-test |
+| `Frob` with no oracle file named | NON-PORT naming no file |
+| ~~`Struck`~~ `Frob` in lib_vt.zig | struck long ago |
+| `Other` in lib_vt.zig | NON-PORT naming something else |
+| dup-needle `Frob` lib_vt.zig one |
+| dup-needle `Frob` lib_vt.zig two |
+
+Paragraph anchor for `Frob` in lib_vt.zig: a decision record.
+RESOLVED: all of the above is now PORTED.
+
+## big section naming Frob in lib_vt.zig
+""" + "".join(f"line {i} of a long section\n" for i in range(40))
+
 _NC_P3 = """# fake phase-3
 
 # gag lines (`strip-ghostty-gag-prose`)
 
-Stripped editorializing.
+- `lib_vt.zig:9`: a joke.
+- `lib_vt.zig:23`: a mixed line.
+
+# rule-only section (`strip-ghostty-gag-prose`)
+
+Mentions the rule, lists no line.
 
 # unrelated section
 
@@ -714,10 +745,12 @@ Nothing here names the rule.
 
 
 def self_test_not_carried():
-    """NOT-CARRIED ledger arms (S-8d): every acceptance and rejection rule, first
-    on synthetic rows (a fake oracle file, fake evidence docs, fake Rust blobs),
-    then on the REAL ledger and REAL oracle/port — including negative controls
-    that mutate a real row and must flip it RED for the stated reason."""
+    """NOT-CARRIED ledger arms (S-8d, hardened S-8e): every acceptance and
+    rejection rule, first on synthetic rows (a fake oracle file, fake evidence
+    docs, fake Rust blobs), then on the REAL ledger and REAL oracle/port —
+    including the S-8d review's attacks A-1..A-3 planted verbatim, and negative
+    controls that mutate a real row and must flip it RED for the stated reason."""
+    import shutil
     import tempfile
     ok = True
     idmap = load_idmap()
@@ -739,21 +772,24 @@ def self_test_not_carried():
         P3 = ".port/phase-3/NON_PORTS.md## gag lines"
         REASON = "synthetic self-test row with a sufficiently long reason"
 
-        def row(line, cls, decl, ev, text, reason=REASON, file="lib_vt.zig"):
-            return {"file": file, "line": line, "class": cls, "decl": decl,
-                    "evidence": ev, "text": text, "reason": reason, "lineno": line}
+        def row(text, cls, decl, ev, reason=REASON, file="lib_vt.zig"):
+            ln = _nc_line(text)
+            return {"file": file, "line": ln, "class": cls, "decl": decl,
+                    "evidence": ev, "text": text, "reason": reason, "lineno": ln}
 
-        A = row(3, "no-counterpart", "Frob", P4,
-                "The frobnicator exists only for the widget build on plan nine.")
-        B = row(5, "no-counterpart", "Frob", P4,
-                "Only the plan nine linker needs this particular frob here.")
-        C = row(9, "gag-prose", "-", P3,
-                "Honestly this whole thing is a silly waste of everybody's time.")
-        D = row(13, "no-counterpart", "wibble", P4,
-                "Pull in the wibble module so its exports get emitted here.")
-        E = row(16, "no-counterpart", "Frob.getMut", P4,
-                "Get the mutable frob. Not recommended for anyone at all really.")
-        clean = [("crates/x/src/lib.rs", "fn unrelated() {}\nimpl Other { fn get_mut() {} }\n")]
+        A = row("The frobnicator exists only for the widget build on plan nine.",
+                "no-counterpart", "Frob", P4)
+        B = row("Only the plan nine linker needs this particular frob here.",
+                "no-counterpart", "Frob", P4)
+        C = row("Honestly this whole thing is a silly waste of everybody's time.",
+                "gag-prose", "-", P3)
+        D = row("Pull in the wibble module so its exports get emitted here.",
+                "no-counterpart", "wibble", P4)
+        E = row("Get the mutable frob. Not recommended for anyone at all really.",
+                "no-counterpart", "Frob.getMut", P4)
+        TXT = "We will check the flag again in each handler later on, fine."
+        clean = [("crates/x/src/lib.rs", "fn unrelated() {}\nimpl Other { fn get_mut() {} }\n",
+                  ["/// an unrelated doc"])]
 
         def v(rows, cap="n", blobs=clean):
             rows = [dict(r) for r in rows]
@@ -766,9 +802,9 @@ def self_test_not_carried():
             errs, _ = v(rows, **kw)
             return any(needle in e for e in errs)
 
-        errs, rows = v([A, B, C, D, E])
-        check("ACCEPT: valid no-counterpart (doc above / inside span / used identifier / "
-              f"qualified) and gag rows prove themselves (errors={errs})",
+        errs, rows = v([A, B, C, E])
+        check("ACCEPT: valid no-counterpart (doc above / inside span / qualified) and gag "
+              f"rows prove themselves (errors={errs})",
               not errs and all(r["ok"] for r in rows))
         check("REJECT: cap below the row count", red([A, B], "cap mismatch", cap=1))
         check("REJECT: cap above the row count (stale ratchet)", red([A], "cap mismatch", cap=2))
@@ -776,7 +812,7 @@ def self_test_not_carried():
         check("REJECT: text differs from the oracle line (stale in oracle)",
               red([dict(A, text=A["text"] + " x")], "STALE"))
         check("REJECT: row points at a non-distinctive comment",
-              red([row(15, "gag-prose", "-", P3, "short one")], "not distinctive"))
+              red([dict(C, line=_nc_line("// short one"), text="short one")], "not distinctive"))
         check("REJECT: unknown class", red([dict(A, **{"class": "because"})], "unknown class"))
         check("REJECT: reason too short", red([dict(A, reason="trust me")], "reason"))
         check("REJECT: oracle file not in the crate map",
@@ -789,29 +825,73 @@ def self_test_not_carried():
         check("REJECT: comment not attached to decl",
               red([dict(C, **{"class": "no-counterpart", "decl": "std", "evidence": P4})],
                   "not attached"))
+        # W1 — the review's A-1 shape: a local binding / keyword as decl.
+        a1 = row(TXT, "no-counterpart", "priv", P4)
+        check("REJECT (W1, A-1 synthetic): decl `priv` (a local binding) is denylisted",
+              red([a1], "keyword or a common local name"))
+        for kw_ in ("orelse", "comptime", "errdefer", "try", "self", "alloc"):
+            check(f"REJECT (W1): decl `{kw_}` is denylisted",
+                  red([dict(a1, decl=kw_)], "keyword or a common local name"))
+        check("REJECT (W1): a used-but-not-declared identifier (`wibble`) is not a decl",
+              red([D], "not DECLARED"))
         check("REJECT: declared decl has a Rust ITEM anywhere in the workspace",
               red([A], "HAS a Rust counterpart",
-                  blobs=clean + [("crates/y/src/f.rs", "pub struct Frob;")]))
-        check("ACCEPT: a declared decl merely USED in Rust (not an item) does not count",
-              not v([A], blobs=clean + [("crates/y/src/f.rs", "let frob = 1;")])[0])
-        check("REJECT: used-not-declared identifier appears in Rust code",
-              red([D], "HAS a Rust counterpart",
-                  blobs=clean + [("crates/y/src/f.rs", "fn g() { wibble(); }")]))
+                  blobs=clean + [("crates/y/src/f.rs", "pub struct Frob;", [])]))
+        check("REJECT (W1): declared decl has a Rust FIELD of that name",
+              red([A], "HAS a Rust counterpart",
+                  blobs=clean + [("crates/y/src/f.rs", "struct S {\n    pub frob: u8,\n}", [])]))
+        check("REJECT (W1, renamed counterpart): a `///` doc cites the decl",
+              red([A], "doc/PORTS citation",
+                  blobs=clean + [("crates/y/src/f.rs", "pub const BASE: u8 = 1;",
+                                  ["/// `lib_vt.zig:4` `Frob` — the renamed port"])]))
+        check("REJECT (W1, renamed counterpart): a `// PORTS:` comment cites the decl",
+              red([A], "doc/PORTS citation",
+                  blobs=clean + [("crates/y/src/f.rs", "", ["    // PORTS: `Frob` (lib_vt.zig:4)"])]))
+        check("ACCEPT: a declared decl merely USED in Rust code (not an item) does not count",
+              not v([A], blobs=clean + [("crates/y/src/f.rs", "let x = frob + 1;", [])])[0])
         check("REJECT: qualified member declared inside `impl Container`",
               red([E], "HAS a Rust counterpart",
-                  blobs=clean + [("crates/y/src/f.rs", "impl Frob { pub fn get_mut(&self) {} }")]))
+                  blobs=clean + [("crates/y/src/f.rs", "impl Frob { pub fn get_mut(&self) {} }", [])]))
         check("REJECT: evidence doc outside the allowed records",
               red([dict(A, evidence="README.md#Frob")], "not an allowed record"))
         check("REJECT: evidence needle not found",
               red([dict(A, evidence=".port/phase-4/NON_PORTS.md#no such needle")], "not found"))
+        check("REJECT (W4): an ambiguous evidence needle",
+              red([dict(A, evidence=".port/phase-4/NON_PORTS.md#dup-needle")], "ambiguous"))
         check("REJECT: evidence record does not name the decl",
               red([dict(A, evidence=".port/phase-4/NON_PORTS.md#| `Other`")], "does not name"))
-        check("REJECT: struck/RESOLVED evidence record cannot vote",
+        check("REJECT (W1): evidence record does not name the ORACLE FILE",
+              red([dict(A, evidence=".port/phase-4/NON_PORTS.md#no oracle file named")],
+                  "does not name the oracle file"))
+        check("REJECT: struck evidence record cannot vote",
               red([dict(A, evidence=".port/phase-4/NON_PORTS.md#| ~~`Struck`~~")], "struck"))
+        check("REJECT (W3, A-3 synthetic): RESOLVED/PORTED in the record BODY cannot vote",
+              red([dict(A, evidence=".port/phase-4/NON_PORTS.md#Paragraph anchor for")], "struck"))
+        check("REJECT (W4): a heading needle whose record exceeds the size cap",
+              red([dict(A, evidence=".port/phase-4/NON_PORTS.md### big section")],
+                  f"> {NC.RECORD_MAX_LINES}"))
         check("REJECT: gag evidence record that does not name the rule",
               red([dict(C, evidence=".port/phase-3/NON_PORTS.md## unrelated section")],
                   "does not name strip-ghostty-gag-prose"))
+        check("REJECT (W2, A-2 synthetic): gag evidence that names the rule but not this line",
+              red([dict(C, evidence=".port/phase-3/NON_PORTS.md## rule-only section")],
+                  "does not list this line"))
         check("REJECT: gag row with a decl", red([dict(C, decl="Frob")], "carry decl"))
+        g_tech = row(TXT, "gag-prose", "-", P3)
+        check("REJECT (W2): gag text with technical words (flag, handler)",
+              red([g_tech], "technical word"))
+        mixed_ok = dict(g_tech, reason='MIXED-CARRIED: "we check the flag in each handler" ' + REASON)
+        mixed_short = dict(g_tech, reason='MIXED-CARRIED: "we check the flag again" ' + REASON)
+        check("ACCEPT (W2): a MIXED-CARRIED gag row whose phrase carries the technical words",
+              not v([mixed_ok])[0])
+        check("REJECT (W2): a MIXED-CARRIED phrase missing a technical word",
+              red([mixed_short], "does not carry"))
+        _, mrows = v([mixed_ok])
+        pool_with = [norm("// we check the flag in each handler", idmap)]
+        check("REJECT (W2): MIXED-CARRIED phrase absent from the port pool is unproven; "
+              "present, it is proven",
+              NC.mixed_unproven(mrows, norm, idmap, ["unrelated"]) == mrows
+              and NC.mixed_unproven(mrows, norm, idmap, pool_with) == [])
         for bad_text, why in (("The ratio is 42 and the buffer must stay aligned to that.", "digit"),
                               ("this uses the frob_count thing badly", "snake_case"),
                               ("this uses the frobCount thing badly", "camelCase"),
@@ -820,6 +900,9 @@ def self_test_not_carried():
             check(f"REJECT: gag text containing a {why} (technical content)",
                   any(why.split("_")[0] in e or why in e
                       for e in NC.gag_violations(bad_text, REASON)))
+        check("REJECT (W2): gag text using a word of the surrounding oracle code",
+              any("technical word" in e for e in
+                  NC.gag_violations("that frobnicator is silly", REASON, {"frobnicator"})))
         check("ACCEPT: gag text with only allowlisted capitals (NOTE, XDG, GNOME)",
               not NC.gag_violations("NOTE(someone): XDG and GNOME are a mess", REASON))
         long = " ".join(["word"] * (NC.GAG_MAX_WORDS + 1))
@@ -860,11 +943,15 @@ def self_test_not_carried():
         return False
     blobs = NC.workspace_rust_items(G.RUSTTY_ROOT, G)
 
-    def real(rs, c="n"):
+    def real(rs, c="n", root=G.RUSTTY_ROOT):
         rs = [dict(r) for r in rs]
-        return NC.validate(rs, len(rs) if c == "n" else c, root=G.RUSTTY_ROOT, G=G, CC=CC,
+        return NC.validate(rs, len(rs) if c == "n" else c, root=root, G=G, CC=CC,
                            strip_marker=strip_marker, norm=norm, idmap=idmap,
                            distinctive=dist, read_oracle=reader, blobs=blobs), rs
+
+    def oracle_text(f, ln):
+        src = reader(f)[ln - 1]
+        return strip_marker(src[CC.find_comment_start(src):])
 
     errs, vrows = real(rows, cap)
     classes = {r["class"] for r in rows}
@@ -874,9 +961,56 @@ def self_test_not_carried():
     getmut = by.get(("apprt/gtk/class/config.zig", 94))
     dll = by.get(("main_c.zig", 179))
     gag = by.get(("apprt/gtk/winproto/BlurRegion.zig", 58))
-    if not (getmut and dll and gag):
+    adwc = by.get(("apprt/gtk/adw_version.zig", 3))
+    if not (getmut and dll and gag and adwc):
         print("  [FAIL] not-carried: the real control rows are missing from the ledger")
         return False
+    # The review's attacks, planted verbatim.
+    w883 = {"file": "apprt/gtk/class/window.zig", "line": 883, "class": "no-counterpart",
+            "decl": "priv", "text": oracle_text("apprt/gtk/class/window.zig", 883),
+            "evidence": ".port/parity-closure/ADJUDICATION.md#priv.global_shortcuts.setDbusConnection",
+            "reason": "review attack A-1: a tail-d MISSING comment on ported code", "lineno": 0}
+    check("REAL ATTACK A-1: window.zig:883 declared no-counterpart with decl `priv` is RED",
+          any("keyword or a common local name" in e for e in real([w883])[0]))
+    check("REAL ATTACK A-1': the same row with a non-denylisted used identifier is still RED "
+          "(not declared / evidence names neither it nor window.zig)",
+          any(("not DECLARED" in e) or ("does not name" in e)
+              for e in real([dict(w883, decl="surface_init")])[0]))
+    w882 = {"file": "apprt/gtk/class/window.zig", "line": 882, "class": "gag-prose", "decl": "-",
+            "text": oracle_text("apprt/gtk/class/window.zig", 882),
+            "evidence": ".port/phase-3/NON_PORTS.md#Two upstream bugs that must NOT be reproduced",
+            "reason": "review attack A-2: plain-English technical text as gag prose", "lineno": 0}
+    e882 = real([w882])[0]
+    check("REAL ATTACK A-2: window.zig:882 as gag-prose citing a record that merely mentions "
+          "the rule is RED (the record lists no such line; the text is technical)",
+          any("does not list this line" in e for e in e882)
+          and any("technical word" in e for e in e882))
+    with tempfile.TemporaryDirectory() as troot:
+        for d in NC.EVIDENCE_DOCS:
+            src = os.path.join(G.RUSTTY_ROOT, d)
+            if os.path.exists(src):
+                os.makedirs(os.path.dirname(os.path.join(troot, d)), exist_ok=True)
+                shutil.copy(src, os.path.join(troot, d))
+        clean_ok = not real([adwc], root=troot)[0]
+        p = os.path.join(troot, ".port/phase-2/DEFERRALS.md")
+        txt = open(p, encoding="utf-8").read()
+        anchor = "**AD-3 deletion set — G3b NOT-CARRIED anchor"
+        i = txt.index("\n", txt.index(anchor))
+        with open(p, "w", encoding="utf-8") as fh:
+            fh.write(txt[:i] + "\nRESOLVED: all of the above is now PORTED." + txt[i:])
+        attacked = real([adwc], root=troot)[0]
+        check("REAL ATTACK A-3: RESOLVED appended to the BODY of the AD-3 anchor paragraph "
+              "stops it voting (and the unmodified copy votes)",
+              clean_ok and any("struck" in e for e in attacked))
+    check("REAL NEG (W1 renamed counterpart): adw_version.zig:50 as a `comptime_version` row "
+          "is RED — `BASELINE`'s doc cites it",
+          any("doc/PORTS citation" in e for e in real([dict(
+              adwc, line=50, decl="comptime_version",
+              text=oracle_text("apprt/gtk/adw_version.zig", 50))])[0]))
+    check("REAL NEG (W4): a heading needle on the big `L5 GTK baseline pin (AD-3)` section "
+          "is over the record cap",
+          any(f"> {NC.RECORD_MAX_LINES}" in e for e in real([dict(
+              adwc, evidence=".port/phase-2/DEFERRALS.md### L5 GTK baseline pin (AD-3)")])[0]))
     check("REAL NEG: mutated text of a real row is STALE",
           any("STALE" in e for e in real([dict(dll, text=dll["text"] + "!")])[0]))
     check("REAL NEG: the getMut row unqualified hits `ScreenMap::get_mut` (qualification is "
@@ -888,21 +1022,22 @@ def self_test_not_carried():
     check("REAL NEG: a real row re-pointed at a decl it is not attached to (DllMain's doc "
           "claimed for `ghostty_string_free`, the fn just above it)",
           any("not attached" in e for e in real([dict(dll, decl="ghostty_string_free")])[0]))
-    blur59 = dict(gag, line=59,
-                  text=strip_marker(reader("apprt/gtk/winproto/BlurRegion.zig")[58]))
+    blur59 = dict(gag, line=59, text=oracle_text("apprt/gtk/winproto/BlurRegion.zig", 59))
     check("REAL NEG: BlurRegion.zig:59 (\"~30% bigger\") can never be gag prose (digit)",
           any("digit" in e for e in real([blur59])[0]))
     # A real comment the port DOES carry, declared as a row, is STALE (rule 2).
     carried_row = dict(dll, line=185, file="lib_vt.zig", decl="quirks_memset",
-                       evidence=".port/phase-3/NON_PORTS.md## E34 — `src/quirks_memset.zig`",
-                       text=strip_marker(reader("lib_vt.zig")[184]))
-    errs, crs = real([carried_row])
+                       text=oracle_text("lib_vt.zig", 185))
+    _, crs = real([carried_row])
     pool = _nc_port_pool("bin", idmap)
     check("REAL NEG: lib_vt.zig:185 (carried by the port) declared as a row is STALE",
-          not errs and NC.stale_rows(crs, classify, pool) == crs)
+          crs[0]["norm"] and NC.stale_rows(crs, classify, pool) == crs)
     real_ok = [r for r in vrows if r["file"] == "lib_vt.zig"]
     check("REAL: the committed lib_vt.zig rows are NOT stale against the real bin pool",
           real_ok and NC.stale_rows(real_ok, classify, pool) == [])
+    mixed = [r for r in vrows if NC.MIXED_RE.match(r["reason"])]
+    check("REAL: the committed MIXED-CARRIED row's phrase is in the apprt port",
+          mixed and NC.mixed_unproven(mixed, norm, idmap, _nc_port_pool("apprt", idmap)) == [])
     return ok
 
 
@@ -924,6 +1059,10 @@ def not_carried_check():
         for r in NC.stale_rows(rows, classify, pool):
             print(f"NOT-CARRIED-INVALID: COMMENT-NOT-CARRIED.tsv:{r['lineno']} "
                   f"({r['file']}:{r['line']}): STALE — the port now carries this comment")
+            red = 1
+        for r in NC.mixed_unproven(rows, norm, idmap, pool):
+            print(f"NOT-CARRIED-INVALID: COMMENT-NOT-CARRIED.tsv:{r['lineno']} "
+                  f"({r['file']}:{r['line']}): its MIXED-CARRIED phrase is not in the port")
             red = 1
         print(f"NOT-CARRIED [{crate}]: {len(rows)} row(s) checked")
     if red:

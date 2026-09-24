@@ -3579,7 +3579,9 @@ bin is the top sink over cli+apprt). New bin Cargo deps: `rustty-global`,
   >
   > **UPDATE [parity tail S-8d, 2026-09-24].** `--crate rustty` is now missing=0
   > review=0. The `macosLogger` cache is PORTED (NEW-FINDINGS N280), not an
-  > equivalence; the other five items' comments are validated `no-counterpart` rows
+  > equivalence. TinyIo, `_fltused` and `quirks_memset` are quoted at their Rust
+  > sites (`rustty-vt/src/lib.rs`, `rustty-vt-c/src/lib.rs`; S-8e); the
+  > `std_options_debug_io` and `DllMain` comments are validated `no-counterpart` rows
   > of `.port/parity-closure/COMMENT-NOT-CARRIED.tsv`, printed by G3b as NOT-CARRIED.
 
 - **`main_gen.zig` / `main_wasm.zig` / `main_build_data.zig` (0t each) DEFERRED.**
@@ -5000,21 +5002,19 @@ reinforcing findings from the implementation:
 over BASELINE)`" to "live delegate to `runtime_at_least`", or reverse T2. Left
 as a flagged deviation rather than a silent one.
 
-**AD-3 deletion set — G3b NOT-CARRIED anchor [added 2026-09-24, parity tail S-8d].**
-The reference code AD-3 removes from the port, whose distinctive comments are
-declared in `.port/parity-closure/COMMENT-NOT-CARRIED.tsv` rather than restored
-as orphans: the header fold of `gtk_version.zig`/`adw_version.zig` — the
-`gtk_c`/`adw_c` header imports, the `if (comptime comptime_version.order(..) ==
-.lt) return false;` fold in `atLeast` and its `@inComptime` short-circuit (the
-port has no header version, so `at_least` is the live delegate ratified above);
-`adw_version.zig`'s `supportsDialogs` (with the other four
-`supports_*` helpers, see the scope note above);
-`clipboard_confirmation_dialog.zig`'s file-level `const can_remember =
-adw_version.supportsSwitchRow()` (always true at the adw >= 1.5 floor, so the
-remember switch is unconditional); `dialog.zig`'s `Parent` alternative
-`adw.MessageDialog` and its `present` arm (`Parent` is `adw.AlertDialog` at the
-floor); and `surface_child_exited.zig`'s `SurfaceChildExitedNoop` fallback widget
-(the banner-capable `adw` widget always exists at the floor).
+**AD-3 deletion set — G3b NOT-CARRIED anchor [added 2026-09-24, parity tail S-8d; revised S-8e].**
+Reference code AD-3 removes from the port whose distinctive comments are declared in
+`.port/parity-closure/COMMENT-NOT-CARRIED.tsv` rather than restored as orphans:
+`adw_version.zig`'s `adw_c` and `gtk_version.zig`'s `gtk_c` header imports (they
+exist only to feed `comptime_version`; rustty includes no header, and its
+`at_least` is the live delegate recorded by L5.0 T2 / ADJUDICATION S47-F3 — the
+plan-owner action on plan:96 above is still open), and `adw_version.zig`'s
+`supportsDialogs` (with the other four `supports_*` helpers, see the scope note
+above). The other AD-3-collapsed sites — the `atLeast` header fold and its
+`@inComptime` short-circuit, `clipboard_confirmation_dialog.zig`'s `can_remember`
+constant, `dialog.zig`'s `adw.MessageDialog` arm and `surface_child_exited.zig`'s
+`SurfaceChildExitedNoop` fallback — have a Rust site, so their reference comments
+are quoted there with a PORT NOTE instead.
 
 ## ~~GlobalShortcuts XDG-portal round-trip (L6 portals)~~ [added 2026-07-18, T26 GlobalShortcuts]
 

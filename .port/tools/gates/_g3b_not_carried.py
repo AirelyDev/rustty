@@ -95,6 +95,32 @@ REASON_MIN_WORDS = 6
 ATTACH_CODE_LINES = 8
 GAG_RULE = "strip-ghostty-gag-prose"
 RUST_ITEM_KW = r"(?:fn|const|static|struct|enum|type|mod|trait|union)"
+# W4 (S-8e review): an evidence record is at most this many lines — a heading
+# needle yields its own section up to the NEXT heading of any level, and a
+# larger record is RED (a big section "names" almost any identifier).
+RECORD_MAX_LINES = 30
+# W1 (S-8e review): identifiers that can never be a Rust item name, or that are
+# too common a local binding to stand for one reference declaration. A decl on
+# this list is RED whatever else holds (review attack A-1 used `priv`).
+ZIG_KEYWORDS = frozenset("""
+addrspace align allowzero and anyframe anytype asm async await break callconv catch
+comptime const continue defer else enum errdefer error export extern fn for if inline
+linksection noalias noinline nosuspend opaque or orelse packed pub resume return
+struct suspend switch test threadlocal try union unreachable usingnamespace var
+volatile while
+""".split())
+RUST_KEYWORDS = frozenset("""
+as async await break const continue crate dyn else enum extern false fn for if impl
+in let loop match mod move mut pub ref return self Self static struct super trait
+true type unsafe use where while abstract become box do final macro override priv
+typeof unsized virtual yield try
+""".split())
+LOCAL_NAMES = frozenset("""
+self alloc allocator arena priv obj it value result err buf len i j n x y v s ptr
+data list map key item entry node args opts options config cfg state ctx context
+gpa app surface window widget parent child
+""".split())
+DECL_DENYLIST = ZIG_KEYWORDS | RUST_KEYWORDS | LOCAL_NAMES
 
 
 class LedgerError(Exception):
@@ -176,8 +202,14 @@ def _strip_zig_strings(code):
 
 
 def decl_lines(lines, decl):
-    pat = re.compile(r"\b(?:fn|const|var)\s+" + re.escape(decl) + r"\b")
-    return [i for i, ln in enumerate(lines, 1) if pat.search(ln.split("//", 1)[0])]
+    """Lines where the oracle file DECLARES `decl`: `fn|const|var <decl>`, a
+    container field `<decl>: T`, or an enum member `<decl>,` / `@"<decl>",`."""
+    e = re.escape(decl)
+    pats = [re.compile(r"\b(?:fn|const|var)\s+" + e + r"\b"),
+            re.compile(r"^\s*(?:pub\s+)?" + e + r"\s*:\s*[^=\s]"),
+            re.compile(r'^\s*(?:' + e + r'|@"' + e + r'")\s*(?:,|=[^=>])')]
+    return [i for i, ln in enumerate(lines, 1)
+            if any(p.search(ln.split("//", 1)[0]) for p in pats)]
 
 
 def brace_span_end(lines, d, CC):
@@ -250,32 +282,42 @@ def evidence_record(root, evidence):
     hits = [i for i, ln in enumerate(lines) if needle in ln]
     if not hits:
         return None, None, f"evidence needle {needle!r} not found in {doc}"
+    if len(hits) > 1:
+        return None, None, (f"evidence needle {needle!r} is ambiguous in {doc} "
+                            f"({len(hits)} lines) — use a needle that names one record")
     i = hits[0]
     line = lines[i]
     if line.lstrip().startswith("|"):
-        return doc, line, None
-    h = re.match(r"^(#+)\s", line)
-    if h:
-        lvl = len(h.group(1))
+        rec = [line]
+    elif re.match(r"^#+\s", line):
+        # W4: the SMALLEST enclosing record — up to the next heading of ANY level.
         end = i + 1
-        while end < len(lines):
-            m = re.match(r"^(#+)\s", lines[end])
-            if m and len(m.group(1)) <= lvl:
-                break
+        while end < len(lines) and not re.match(r"^#+\s", lines[end]):
             end += 1
-        return doc, "\n".join(lines[i:end]), None
-    s = i
-    while s > 0 and lines[s - 1].strip():
-        s -= 1
-    e = i
-    while e + 1 < len(lines) and lines[e + 1].strip():
-        e += 1
-    return doc, "\n".join(lines[s:e + 1]), None
+        rec = lines[i:end]
+    else:
+        s = i
+        while s > 0 and lines[s - 1].strip():
+            s -= 1
+        e = i
+        while e + 1 < len(lines) and lines[e + 1].strip():
+            e += 1
+        rec = lines[s:e + 1]
+    while rec and not rec[-1].strip():
+        rec.pop()
+    if len(rec) > RECORD_MAX_LINES:
+        return None, None, (f"evidence record in {doc} is {len(rec)} lines (> "
+                            f"{RECORD_MAX_LINES}); cite a table row, a paragraph or a small section")
+    return doc, "\n".join(rec), None
+
+
+STATUS_RE = re.compile(r"~~|\bRESOLVED\b|\bPORTED\b")
 
 
 def record_is_struck(record):
-    first = record.split("\n", 1)[0]
-    return "~~" in first or bool(re.search(r"\b(RESOLVED|PORTED)\b", first))
+    """W3: a strike-through or a RESOLVED/PORTED status marker ANYWHERE in the
+    record (not only its first line) means the record no longer votes."""
+    return bool(STATUS_RE.search(record))
 
 
 # ---------------------------------------------------------------------------
@@ -298,9 +340,27 @@ def workspace_rust_items(root, G, cache={}):
                             text = open(p, encoding="utf-8", errors="replace").read()
                         except OSError:
                             continue
-                        blobs.append((os.path.relpath(p, root), G._strip_rust(text)[0]))
+                        blobs.append((os.path.relpath(p, root), G._strip_rust(text)[0],
+                                      _citing_comment_lines(text)))
         cache[key] = blobs
     return cache[key]
+
+
+def _citing_comment_lines(text):
+    """The comment lines that can CITE a reference name as the thing a Rust item
+    ports: `///` item docs (e.g. `BASELINE`'s "`adw_version.zig:15`
+    `comptime_version`") and any comment line carrying a `PORTS:` marker."""
+    out = []
+    for ln in text.split("\n"):
+        t = ln.lstrip()
+        if t.startswith("///") or ("//" in ln and "PORTS:" in ln.split("//", 1)[1]):
+            out.append(ln)
+    return out
+
+
+def _blob(t):
+    """(rel, stripped code, citing comment lines) from a 2- or 3-tuple."""
+    return t[0], t[1], (t[2] if len(t) > 2 else [])
 
 
 def _ident_cands(name, G):
@@ -319,7 +379,8 @@ def rust_member_counterpart(container, member, blobs, G):
     mem = [re.compile(r"\b" + RUST_ITEM_KW + r"\s+" + re.escape(c) + r"\b")
            for c in _ident_cands(member, G)]
     impl_re = re.compile(r"\bimpl\b([^{;]*)\{")
-    for rel, blob in blobs:
+    for t in blobs:
+        rel, blob, _ = _blob(t)
         for m in impl_re.finditer(blob):
             if not any(rx.search(m.group(1)) for rx in ctn):
                 continue
@@ -331,22 +392,31 @@ def rust_member_counterpart(container, member, blobs, G):
     return None
 
 
-def rust_counterpart(decl, blobs, G, item_only=True):
-    """First (file, name) proving `decl` HAS a Rust counterpart, else None.
-
-    item_only=True (`decl` is a declaration of the oracle file): a Rust ITEM
-    named by any G1 name candidate of `decl` exists. (Its uses are not counted:
-    `getMut`'s snake form `get_mut` is called all over the workspace on std
-    types, which says nothing about the reference fn.)
-    item_only=False (`decl` is an identifier the oracle code USES — a switch arm's
-    type, an imported file): any occurrence in Rust code at all."""
-    cands = _ident_cands(decl, G)
-    pats = [re.compile((r"\b" + RUST_ITEM_KW + r"\s+" if item_only else r"\b")
-                       + re.escape(c) + r"\b") for c in cands]
-    for rel, blob in blobs:
-        for c, rx in zip(cands, pats):
-            if rx.search(blob):
-                return rel, c
+def rust_counterpart(decl, blobs, G):
+    """First (file, what) proving `decl` HAS a Rust counterpart, else None:
+      * a Rust ITEM (fn/const/static/struct/enum/type/mod/trait/union) or a
+        FIELD (`name: T`) named by any G1 name candidate of `decl`; or
+      * a RENAMED counterpart (W1, S-8e review): a `///` item doc or a `PORTS:`
+        comment anywhere in the workspace that names `decl` itself — the Rust
+        item it documents stands for the reference declaration
+        (`BASELINE`'s doc cites `comptime_version`).
+    Uses are not counted (`getMut`'s snake form `get_mut` is called all over
+    the workspace on std types, which says nothing about the reference fn)."""
+    alt = "|".join(re.escape(c) for c in _ident_cands(decl, G))
+    item = re.compile(r"\b" + RUST_ITEM_KW + r"\s+(" + alt + r")\b")
+    field = re.compile(r"(?m)^[ \t]*(?:pub(?:\([^)]*\))?\s+)?(" + alt + r")[ \t]*:(?!:)")
+    cite = re.compile(r"\b" + re.escape(decl) + r"\b")
+    for t in blobs:
+        rel, blob, docs = _blob(t)
+        m = item.search(blob)
+        if m:
+            return rel, m.group(1)
+        m = field.search(blob)
+        if m:
+            return rel, f"field {m.group(1)}"
+        for ln in docs:
+            if cite.search(ln):
+                return rel, f"doc/PORTS citation: {ln.strip()[:80]}"
     return None
 
 
@@ -370,11 +440,69 @@ ALL_CAPS_RE = re.compile(r"\b[A-Z][A-Z0-9_]+\b")
 ALL_CAPS_PROSE = frozenset({"NOTE", "XDG", "GNOME"})
 
 
-def gag_violations(text, reason):
+# W2 (S-8e review): plain-English technical words. A gag line may not use one
+# of these, nor any word that is also an identifier (or an identifier part) of
+# the oracle code around it — unless the row proves the line is MIXED and its
+# fact is carried (see `mixed_unproven`). Growing or shrinking this list is a
+# gate change (R5).
+TECH_TERMS = frozenset("""
+address alloc allocate allocated allocation allocator arena argument array atomic
+buffer byte bytes cache call callback callbacks client code compile compiler config
+connection crash data deadlock decode encode error errors event events field file
+files flag flags function handle handler header heap index input key keys layout
+leak length lock memory message method mutex null object output overflow packet
+parse parser path pixel pixels pointer process protocol queue race request requests
+response return runtime server session signal signals size socket stack state string
+struct surface symbol symbols syscall thread threads timeout token type value
+version vtable window
+""".split())
+CODE_WINDOW = 15
+MIXED_RE = re.compile(r'^MIXED-CARRIED:\s*"([^"]+)"')
+
+
+def _words_of(text):
+    return {w for w in re.findall(r"[a-z]+", text.lower()) if len(w) >= 4}
+
+
+def code_words(lines, L, CC):
+    """Identifier words (whole identifiers and their camel/snake parts, >= 4
+    letters, lower-cased) of the oracle code within CODE_WINDOW lines of L."""
+    out = set()
+    for ln in lines[max(0, L - 1 - CODE_WINDOW):L + CODE_WINDOW]:
+        for ident in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", _zig_code(ln, CC)):
+            parts = re.split(r"_|(?<=[a-z0-9])(?=[A-Z])", ident)
+            for w in [ident] + parts:
+                if len(w) >= 4:
+                    out.add(w.lower())
+    return out
+
+
+def technical_words(text, near_code):
+    vocab = TECH_TERMS | set(near_code)
+    out = []
+    for w in sorted(_words_of(text)):
+        if w in vocab or (w.endswith("s") and w[:-1] in vocab):
+            out.append(w)
+    return out
+
+
+def gag_violations(text, reason, near_code=frozenset()):
     out = [f"gag-prose text contains {what}" for rx, what in TECHNICAL_RES if rx.search(text)]
     caps = [w for w in ALL_CAPS_RE.findall(text) if w not in ALL_CAPS_PROSE]
     if caps:
         out.append(f"gag-prose text contains ALL-CAPS token(s) {caps}")
+    tech = technical_words(text, near_code)
+    if tech:
+        m = MIXED_RE.match(reason)
+        if not m:
+            out.append(f"gag-prose text uses technical word(s) {tech} (a technical term, or "
+                       f"an identifier of the surrounding oracle code); a mixed line needs a "
+                       f'`MIXED-CARRIED: "<the port comment carrying its fact>"` reason')
+        else:
+            carried = _words_of(m.group(1))
+            missing = [w for w in tech if w not in carried and w[:-1] not in carried]
+            if missing:
+                out.append(f"MIXED-CARRIED phrase does not carry the technical word(s) {missing}")
     if len(text.split()) > GAG_MAX_WORDS and not reason.startswith("JUSTIFIED-LONG:"):
         out.append(f"gag-prose text is longer than {GAG_MAX_WORDS} words without a "
                    f"`JUSTIFIED-LONG:` reason")
@@ -438,21 +566,30 @@ def validate(rows, cap, *, root, G, CC, strip_marker, norm, idmap, distinctive,
             bad("the comment is not distinctive (G3b never counts it)")
             continue
         r["norm"] = norm(src[idx:], idmap)
+        base = os.path.basename(r["file"])
         if r["class"] == "no-counterpart":
             m = re.fullmatch(r"(?:([A-Za-z_][A-Za-z0-9_]*)\.)?([A-Za-z_][A-Za-z0-9_]*)", r["decl"])
             if not m:
                 bad(f"decl {r['decl']!r} is not an identifier or `Container.member`")
                 continue
             container, d = m.group(1), m.group(2)
-            declared = bool(decl_lines(lines, d))
-            if container and not declared:
-                bad(f"qualified decl member {d!r} is not declared in {r['file']}")
+            if d in DECL_DENYLIST or (container or "") in DECL_DENYLIST:
+                bad(f"decl {r['decl']!r} is a keyword or a common local name — it can "
+                    f"stand for no single reference declaration")
+                continue
+            if not decl_lines(lines, d):
+                bad(f"decl {d!r} is not DECLARED in {r['file']} (fn/const/var, field or "
+                    f"enum member)")
             if not attached(lines, r["line"], d, CC):
                 bad(f"the comment is not attached to {d!r} in the oracle")
             if container:
-                hit = rust_member_counterpart(container, d, blobs, G)
+                # A qualified member: its (generic) name may be an item elsewhere;
+                # only a doc/PORTS citation of it or an item inside `impl Container`
+                # counts.
+                hit = rust_counterpart(d, [(_blob(t)[0], "", _blob(t)[2]) for t in blobs], G) \
+                    or rust_member_counterpart(container, d, blobs, G)
             else:
-                hit = rust_counterpart(d, blobs, G, item_only=declared)
+                hit = rust_counterpart(d, blobs, G)
             if hit:
                 bad(f"{r['decl']!r} HAS a Rust counterpart (`{hit[1]}` in {hit[0]}) — "
                     f"carry the comment there")
@@ -462,21 +599,40 @@ def validate(rows, cap, *, root, G, CC, strip_marker, norm, idmap, distinctive,
                 bad(e)
             elif not all(re.search(r"\b" + re.escape(x) + r"\b", rec) for x in named):
                 bad(f"evidence record in {doc} does not name {' and '.join(map(repr, named))}")
+            elif base not in rec:
+                bad(f"evidence record in {doc} does not name the oracle file {base!r}")
             elif record_is_struck(rec):
-                bad(f"evidence record in {doc} is struck/RESOLVED — it cannot vote")
+                bad(f"evidence record in {doc} is struck/RESOLVED/PORTED — it cannot vote")
         else:  # gag-prose
             if r["decl"] != "-":
                 bad("gag-prose rows carry decl `-`")
             doc, rec, e = evidence_record(root, r["evidence"])
+            site = f"{r['file']}:{r['line']}"
             if e:
                 bad(e)
             elif GAG_RULE not in rec:
                 bad(f"evidence record in {doc} does not name {GAG_RULE}")
+            elif site not in rec:
+                bad(f"evidence record in {doc} does not list this line ({site}) — each "
+                    f"gag line needs its own entry in the record")
             elif record_is_struck(rec):
-                bad(f"evidence record in {doc} is struck/RESOLVED — it cannot vote")
-            for v in gag_violations(r["text"], r["reason"]):
+                bad(f"evidence record in {doc} is struck/RESOLVED/PORTED — it cannot vote")
+            for v in gag_violations(r["text"], r["reason"], code_words(lines, r["line"], CC)):
                 bad(v)
     return errs
+
+
+def mixed_unproven(rows, norm, idmap, port_norm):
+    """Gag rows whose `MIXED-CARRIED: "<phrase>"` reason names a phrase the
+    crate's port comments do NOT contain (normalized substring). Each is an
+    error: the line's fact must actually be carried next to the stripped joke."""
+    blob = " \n ".join(port_norm)
+    out = []
+    for r in rows:
+        m = MIXED_RE.match(r.get("reason", ""))
+        if r.get("class") == "gag-prose" and m and norm("// " + m.group(1), idmap) not in blob:
+            out.append(r)
+    return out
 
 
 def stale_rows(rows, classify, port_norm):
