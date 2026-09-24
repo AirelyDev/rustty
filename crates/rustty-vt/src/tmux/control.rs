@@ -1864,6 +1864,7 @@ mod tests {
     // notification together; the parent runs it 40 times.
     #[cfg(feature = "oniguruma")]
     #[test]
+    #[cfg_attr(miri, ignore)] // spawns child processes; Oniguruma is C (FFI)
     fn concurrent_first_notifications_do_not_race_oniguruma_init() {
         const CHILD: &str = "RUSTTY_VT_ONIG_INIT_RACE_CHILD";
         if std::env::var_os(CHILD).is_some() {

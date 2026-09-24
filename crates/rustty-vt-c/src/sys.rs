@@ -966,6 +966,7 @@ pub(crate) mod tests {
     // the redirection away from the other tests' stderr.
     #[test]
     #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg_attr(miri, ignore)] // spawns a child process and redirects fd 2
     fn log_stderr_production_sink_writes_each_fitting_line_once_to_fd_2() {
         const CHILD: &str = "RUSTTY_VTC_LOG_STDERR_SINK_CHILD";
         if std::env::var_os(CHILD).is_some() {
