@@ -1396,11 +1396,13 @@ impl<'a> Handler<'a> {
         // terminal, so it uses the terminal's allocator, not the
         // response's.
         let event = {
+            // self.terminal.gpa()
+            let gpa = self.term().gpa();
             // SAFETY: `self.terminal` aliases the Terminal that created this
             // Handler (see `term()`); the `&mut` on its `kitty_dnd` slot lives
             // only for this call and does not overlap another Terminal borrow.
             let slot = unsafe { &mut (*self.terminal).kitty_dnd };
-            kitty::dnd::handle_command(slot, &mut aw, v)?
+            kitty::dnd::handle_command(slot, gpa, &mut aw, v)?
         };
 
         if !aw.is_empty() {
@@ -9091,6 +9093,7 @@ mod tests {
             unsafe { (*ptr).kitty_dnd.as_mut() }
                 .unwrap()
                 .drag_drop(
+                    Global,
                     &mut aw,
                     kitty::dnd::MoveEvent {
                         cell_x: 2,
@@ -9260,6 +9263,7 @@ mod tests {
             unsafe { (*ptr).kitty_dnd.as_mut() }
                 .unwrap()
                 .drag_drop(
+                    Global,
                     &mut aw,
                     kitty::dnd::MoveEvent {
                         cell_x: 0,

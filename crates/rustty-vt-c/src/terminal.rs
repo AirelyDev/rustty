@@ -11301,9 +11301,9 @@ mod tests {
     /// The corpus the allocation-failure sweep drives through the C API: text
     /// that scrolls into history (node allocation), titles and pwds (the
     /// `gpa()`-grown lists), OSC 8 hyperlinks (the cursor's heap hyperlink),
-    /// the alternate screen (a second `Screen` from `ScreenSet.getInit`), wide
-    /// tab stops after a resize past 512 columns, a tracked grid ref (a pin and
-    /// the tracked-pin set), and a full reset.
+    /// the alternate screen (a second `Screen` from `ScreenSet.getInit`), kitty
+    /// drag and drop state, wide tab stops after a resize past 512 columns, a
+    /// tracked grid ref (a pin and the tracked-pin set), and a full reset.
     fn sweep_corpus(t: Terminal) -> Vec<Result> {
         let mut results = Vec::new();
         for i in 0..60 {
@@ -11322,6 +11322,11 @@ mod tests {
         vtw(t, b"\x1B[?1049h");
         vtw(t, b"alternate screen text\r\n\x1B]2;alt title\x1B\\");
         vtw(t, b"\x1B[?1049l");
+        // Kitty drag and drop: registration (the state and its MIME list) and
+        // an acceptance status; the registration outlives RIS and is
+        // destroyed by `free`.
+        vtw(t, b"\x1B]72;t=a;text/plain text/uri-list\x1B\\");
+        vtw(t, b"\x1B]72;t=m:o=1;text/plain\x1B\\");
         results.push(unsafe { resize(t, 600, 30, 8, 16) });
         vtw(t, b"\x1B[3g\x1B[1;590H\x1BH\r\t\tafter tabs\r\n");
         let mut ref_: crate::grid_ref_tracked::CTrackedGridRef = std::ptr::null_mut();

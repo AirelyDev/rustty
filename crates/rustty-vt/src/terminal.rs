@@ -829,10 +829,11 @@ pub struct Terminal {
     /// so a terminal that never runs a drag and drop aware program pays
     /// nothing for it. Non-null means a client currently accepts drops.
     // kitty_dnd: ?*kitty.dnd.State = null,
-    // PORT NOTE (af8d28a94): `?*State` (heap create/destroy) maps to
-    // `Option<Box<State>>` — `kitty::dnd::handle_command` allocates into and
-    // frees from this slot.
-    pub kitty_dnd: Option<Box<kitty::dnd::State>>,
+    // PORT NOTE (af8d28a94, parity tail S7-3): `?*State` (heap create/destroy)
+    // maps to `Option<StateBox>`, a box allocated through the terminal's
+    // allocator — `kitty::dnd::handle_command` allocates into and frees from
+    // this slot.
+    pub kitty_dnd: Option<kitty::dnd::StateBox>,
 
     /// The I/O implementation we should use for this terminal.
     // PORT NOTE (io-stand-in, W1 sys.rs decision): the reference threads
@@ -1050,8 +1051,9 @@ impl Terminal {
         // entries free on drop); the reference passes `alloc`.
         self.glyph_glossary.deinit();
         // if (self.kitty_dnd) |dnd| dnd.destroy(alloc);
-        // PORT NOTE: dropping the Box frees the state and everything it holds.
-        self.kitty_dnd = None;
+        if let Some(dnd) = self.kitty_dnd.take() {
+            kitty::dnd::State::destroy(dnd, alloc);
+        }
         // self.* = undefined;
     }
 

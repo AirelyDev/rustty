@@ -67,6 +67,7 @@ pub use dnd_response::Errno;
 pub use dnd_response::RequestKeys;
 
 pub use dnd_drop::State;
+pub use dnd_drop::StateBox;
 // pub const Item = dnd_drop.State.Item;
 // pub const MoveEvent = dnd_drop.State.MoveEvent;
 // PORT NOTE: `Item`/`MoveEvent` are nested in `State` upstream; hoisted to
