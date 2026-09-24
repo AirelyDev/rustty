@@ -884,38 +884,80 @@ where
         unsafe { self.add_context(base, value) }.map(Some)
     }
 
-    /// True iff `add_with_id(base, *value, id)` would take its pure
-    /// "existing live equal item" fast path: `id` is in range, the item at
-    /// `id` is alive, and it compares equal to `*value`. On that path the
-    /// call's ONLY effects are `context.deleted(*value)` and a +1 on the
-    /// item's ref count, and it returns `Ok(None)` — and since none of those
-    /// change this predicate, it stays true for any number of repeated
-    /// identical calls.
+    /// If `add_with_id(base, *value, id)` would be a PURE ref bump, the id it
+    /// would bump; otherwise `None`.
+    ///
+    /// A call is pure when its ONLY effects are `context.deleted(*value)` and a
+    /// +1 on one live item's ref count, and the id it hands back (`Ok(None)`
+    /// meaning `id` itself, `Ok(Some(x))` meaning `x`) is that item's id. This
+    /// mirrors `add_with_id_ptr`'s branch selection exactly, taking each
+    /// branch's pure case:
+    ///
+    ///   - `id` in range and alive and equal to `*value`: the "existing live
+    ///     equal item" arm, bumps `id`, returns `Ok(None)`;
+    ///   - `id` in range but dead: the dead-id arm when `lookup_context` finds
+    ///     the value under another id, bumps and returns that id;
+    ///   - otherwise `add_context`, when its trim loop is a no-op (the top id
+    ///     is alive, or `next_id <= 1`) and `lookup_context` finds the value,
+    ///     bumps and returns that id.
+    ///
+    /// Every other outcome (a trim, an insert, a delete, an error) is not
+    /// pure and yields `None`. A pure call changes nothing this predicate
+    /// reads (a ref count that was nonzero stays nonzero), so once it holds it
+    /// holds for any number of repeated identical calls, all bumping the same
+    /// id.
     ///
     /// Callers use this to batch a run of identical `add_with_id` calls into
     /// a single `use_multiple` (PERF(port) (reshape), see the clone chain in
     /// `page_impl.rs`). That is only behavior-preserving when
     /// `Context::deleted` is a no-op (true for the style set context, whose
     /// `deleted` is the trait default) — a context with a real `deleted`
-    /// (e.g. the hyperlink set) would observe the skipped callbacks.
+    /// (e.g. the hyperlink set) would observe the skipped callbacks. The ref
+    /// bump saturates (`bump_ref`, UD80), so one `+n` equals `n` times `+1`.
+    ///
+    /// Before task S-4 (N93) only the first arm was recognised, so a run whose
+    /// style landed on a different id in the destination page (the usual case
+    /// on a style-heavy screen: a fresh page numbers styles in first-seen
+    /// order) fell back to one full `add_with_id` (hash and probe) per cell.
     ///
     /// # Safety: `base` must be the true base of the backing buffer; `value`
     /// must be valid for reads.
-    pub(crate) unsafe fn add_with_id_is_pure_ref_bump<B: IntFromBase + Copy>(
+    pub(crate) unsafe fn add_with_id_pure_ref_bump_target<B: IntFromBase + Copy>(
         &self,
         base: B,
         value: *const T,
         id: Id,
-    ) -> bool {
-        if !(id > Id::ZERO && id < self.next_id) {
-            return false;
+    ) -> Option<Id> {
+        // `add_with_id` asserts `id > 0`; such a call is not a pure bump.
+        if id <= Id::ZERO {
+            return None;
         }
         let items = unsafe { self.items.ptr(base) };
-        let item = unsafe { item_at(items, id.to_usize()) };
-        let live = unsafe { (*item).meta.ref_count } > RefCount::ZERO;
-        live && self
-            .context
-            .eql(unsafe { *value }, unsafe { (*item).value })
+        if id < self.next_id {
+            let item = unsafe { item_at(items, id.to_usize()) };
+            if unsafe { (*item).meta.ref_count } == RefCount::ZERO {
+                // The dead-id arm: pure only when the value exists elsewhere.
+                return unsafe { self.lookup_context(base, value) };
+            } else if self
+                .context
+                .eql(unsafe { *value }, unsafe { (*item).value })
+            {
+                return Some(id);
+            }
+        }
+
+        // `add_context`: its trim loop must not run...
+        if self.next_id > Id::ONE
+            && unsafe {
+                (*item_at(items, self.next_id.sub(Id::ONE).to_usize()))
+                    .meta
+                    .ref_count
+            } == RefCount::ZERO
+        {
+            return None;
+        }
+        // ...and the value must already be present.
+        unsafe { self.lookup_context(base, value) }
     }
 
     /// Increment an item's reference count by 1.
@@ -1708,6 +1750,204 @@ mod tests {
             // defer alloc.free(buf);
             std::alloc::dealloc(buf, alloc_layout);
         }
+    }
+
+    /// rustty-only (task S-4b, review F2): `add_with_id_pure_ref_bump_target`
+    /// against `add_with_id` itself, in every arm. For each set state (built
+    /// the same way twice), `Some(x)` must mean the call returns the id `x`
+    /// (`None` when `x` is the requested id) and changes NOTHING but `x`'s
+    /// count by +1: `next_id`, `living`, `max_psl`, `psl_stats` and every
+    /// buffer byte are equal once that one reference is released again.
+    /// `None` must mean the call is NOT such a pure bump (an error, or some
+    /// other state change). The trim arm is the one the clone chain cannot
+    /// reach (its first call has already trimmed), so it is only covered here.
+    ///
+    /// NEGATIVE CONTROL: drop the predicate's trim guard -> the "dead top"
+    /// state claims a pure bump while the call trims (`next_id` differs).
+    #[test]
+    fn pure_ref_bump_target_matches_add_with_id_in_every_arm() {
+        type Build = fn(&mut TestSet, OffsetBuf) -> (u32, u16);
+
+        // Fill with distinct values from 100 until `next_id` reaches the cap.
+        unsafe fn fill_to_cap(set: &mut TestSet, base: OffsetBuf) {
+            let mut v = 100u32;
+            while (set.next_id as usize) < set.layout.cap {
+                unsafe { set.add(base, v) }.unwrap();
+                v += 1;
+            }
+        }
+
+        let states: &[(&str, usize, Option<bool>, Build)] = &[
+            ("live and equal", 8, Some(true), |s, b| unsafe {
+                let a = s.add(b, 11).unwrap();
+                (11, a)
+            }),
+            ("dead, value live elsewhere", 8, Some(true), |s, b| unsafe {
+                s.add(b, 11).unwrap();
+                let d = s.add(b, 22).unwrap();
+                s.add(b, 33).unwrap();
+                s.release(b, d);
+                (11, d)
+            }),
+            (
+                "dead, value absent (insert)",
+                8,
+                Some(false),
+                |s, b| unsafe {
+                    s.add(b, 11).unwrap();
+                    let d = s.add(b, 22).unwrap();
+                    s.add(b, 33).unwrap();
+                    s.release(b, d);
+                    (44, d)
+                },
+            ),
+            (
+                "alive not equal, value present, live top",
+                8,
+                Some(true),
+                |s, b| unsafe {
+                    let a = s.add(b, 11).unwrap();
+                    s.add(b, 22).unwrap();
+                    (22, a)
+                },
+            ),
+            (
+                "alive not equal, value present, dead top (trim)",
+                8,
+                Some(false),
+                |s, b| unsafe {
+                    let a = s.add(b, 11).unwrap();
+                    s.add(b, 22).unwrap();
+                    let top = s.add(b, 33).unwrap();
+                    s.release(b, top);
+                    (22, a)
+                },
+            ),
+            (
+                "alive not equal, value absent (insert)",
+                8,
+                Some(false),
+                |s, b| unsafe {
+                    let a = s.add(b, 11).unwrap();
+                    (22, a)
+                },
+            ),
+            (
+                "id >= next_id, value present",
+                8,
+                Some(true),
+                |s, b| unsafe {
+                    s.add(b, 11).unwrap();
+                    s.add(b, 22).unwrap();
+                    (22, 5)
+                },
+            ),
+            (
+                "id >= next_id, value absent (insert)",
+                8,
+                Some(false),
+                |s, b| unsafe {
+                    s.add(b, 11).unwrap();
+                    (22, 5)
+                },
+            ),
+            ("at cap, value present", 8, Some(true), |s, b| unsafe {
+                fill_to_cap(s, b);
+                (101, 1)
+            }),
+            (
+                "at cap, all live, value absent (OutOfMemory)",
+                8,
+                Some(false),
+                |s, b| unsafe {
+                    fill_to_cap(s, b);
+                    (7, 1)
+                },
+            ),
+            (
+                "at cap, below the living threshold, value absent (NeedsRehash)",
+                8,
+                Some(false),
+                |s, b| unsafe {
+                    fill_to_cap(s, b);
+                    // Release two ids that are not the top, so no trim reaps them.
+                    s.release(b, 1);
+                    s.release(b, 2);
+                    (7, 3)
+                },
+            ),
+            ("zero-capacity set", 0, Some(false), |_s, _b| (7, 1)),
+        ];
+
+        let mut claimed = 0;
+        for &(label, cap, expect_pure, build) in states {
+            let layout: Layout<u16> = Layout::init::<u32, u16>(cap);
+            let size = layout.total_size.max(1);
+            let alloc_layout =
+                core::alloc::Layout::from_size_align(size, TestSet::base_align()).unwrap();
+            // SAFETY: non-zero size; freed at the end of the iteration.
+            let buf = unsafe { std::alloc::alloc_zeroed(alloc_layout) };
+            assert!(!buf.is_null());
+            let base = OffsetBuf::init(buf);
+            // SAFETY: `buf` is a live, aligned allocation of `size` bytes and
+            // the base of every call below.
+            unsafe {
+                let mut set: TestSet = TestSet::init(base, layout, TestContext);
+                let (value, id) = build(&mut set, base);
+
+                let target = set.add_with_id_pure_ref_bump_target(base, &raw const value, id);
+
+                let bytes = |p: *mut u8| core::slice::from_raw_parts(p, size).to_vec();
+                let before = bytes(buf);
+                let hdr = |s: &TestSet| (s.next_id, s.living, s.max_psl, s.psl_stats);
+                let hdr_before = hdr(&set);
+
+                let result = set.add_with_id(base, value, id);
+                // Was the call a pure +1 on one id `y`, handing back `y`?
+                let pure_bump = match result {
+                    Err(_) => None,
+                    Ok(r) => {
+                        let y = r.unwrap_or(id);
+                        let pure = hdr(&set) == hdr_before
+                            && (y as usize) < set.layout.cap
+                            && set.ref_count(base, y) >= 2
+                            && {
+                                set.release(base, y);
+                                bytes(buf) == before
+                            };
+                        pure.then_some(y)
+                    }
+                };
+
+                match target {
+                    Some(x) => {
+                        claimed += 1;
+                        assert_eq!(
+                            Some(x),
+                            pure_bump,
+                            "{label}: predicate claimed a pure bump of {x}"
+                        );
+                        assert_eq!(
+                            result.unwrap(),
+                            if x == id { None } else { Some(x) },
+                            "{label}"
+                        );
+                    }
+                    None => {
+                        assert_eq!(None, pure_bump, "{label}: a pure bump the predicate missed")
+                    }
+                }
+                if let Some(p) = expect_pure {
+                    assert_eq!(
+                        p,
+                        target.is_some(),
+                        "{label}: state did not exercise its arm"
+                    );
+                }
+                std::alloc::dealloc(buf, alloc_layout);
+            }
+        }
+        assert_eq!(5, claimed);
     }
 
     // ref: test "iterator visits live entries in ID order"

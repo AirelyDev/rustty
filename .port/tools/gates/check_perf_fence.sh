@@ -2,9 +2,10 @@
 # check_perf_fence.sh — GATE G8b (paired same-session perf fence) [R5]
 #
 # DoP id:  G8b (companion to G8; DEFINITION_OF_PARITY §1 perf axis)
-# Reads:   the pinned oracle bench binary + the four corpora (BOTH UNTRACKED,
-#          shared checkout only), a candidate rustty-bench, and optionally the
-#          stored entry binary in .perf-bins/.
+# Reads:   the pinned oracle bench binary (~/rustty-oracle-artifacts, checked
+#          against ws10_suite.py's ORACLE_SHA256) + the four corpora (BOTH
+#          UNTRACKED; the corpora live in the shared checkout only), a candidate
+#          rustty-bench, and optionally the stored entry binary in .perf-bins/.
 # Pass:    rustty beats the pinned oracle on all 14 configs (Fence 1) and has
 #          not self-regressed against the entry binary (Fence 2).
 #
@@ -50,7 +51,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-echo "=== G8b :: paired same-session perf fence (oracle 4749c4e93 only) ==="
+echo "=== G8b :: paired same-session perf fence (the pinned oracle only) ==="
 
 if [ ! -x "$RUST" ]; then
   echo "BLOCKED: candidate bench binary not found: $RUST"
