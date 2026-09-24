@@ -171,3 +171,62 @@ pub(crate) fn list_windows_line(
     out.extend_from_slice(&with_checksum(layout));
     out
 }
+
+/// Whether a `capture-pane` command asks for `-C`: a flag cluster (`-C`,
+/// `-peC`, ...) containing `C`. Option arguments (`-S -`, `-E -1`, `-t %7`)
+/// are never all-alphabetic clusters containing `C`, so they cannot match.
+fn capture_has_escape_flag(cmd: &[u8]) -> bool {
+    cmd.split(|b| b.is_ascii_whitespace()).any(|tok| {
+        tok.len() > 1
+            && tok[0] == b'-'
+            && tok[1..].iter().all(u8::is_ascii_alphabetic)
+            && tok[1..].contains(&b'C')
+    })
+}
+
+/// The reply tmux writes to a control client for `cmd`, a `capture-pane -p -e`
+/// command, when the pane's `-e` capture is `raw` (grid text with its SGR,
+/// SO/SI and OSC 8 sequences, lines joined by `\n`, the final newline already
+/// stripped as `-p` does).
+///
+/// tmux writes the capture into the `%begin`/`%end` block as-is
+/// (`cmd-capture-pane.c` `cmd_capture_pane_exec`: `control_write(c, "%.*s",
+/// ...)`), so without `-C` every sequence arrives with a raw ESC. With `-C`,
+/// `grid.c` `grid_string_cells_code`, `grid_string_cells_add_code` and
+/// `grid_string_cells_add_hyperlink` write each ESC as the four characters
+/// `\033`, SO and SI as `\016` and `\017`, and `grid_string_cells` writes a
+/// one-byte `\` cell as `\\` (tmux 1.8, where `-C` arrived, through master
+/// `72e83b00`). The grid holds no other C0 byte (a tab cell is written as a raw
+/// `\t` either way), so mapping every byte of `raw` is the same transformation.
+pub(crate) fn capture_reply(cmd: &[u8], raw: &[u8]) -> Vec<u8> {
+    assert!(
+        cmd.starts_with(b"capture-pane "),
+        "not a capture: {:?}",
+        String::from_utf8_lossy(cmd)
+    );
+    // The flag detection itself, both ways.
+    assert!(capture_has_escape_flag(b"capture-pane -peC -t %1\n"));
+    assert!(!capture_has_escape_flag(
+        b"capture-pane -p -e -q -S - -E -1 -t %1\n"
+    ));
+    if !capture_has_escape_flag(cmd) {
+        return raw.to_vec();
+    }
+    let mut out = Vec::with_capacity(raw.len() * 2);
+    for &b in raw {
+        match b {
+            0x1B => out.extend_from_slice(b"\\033"),
+            0x0E => out.extend_from_slice(b"\\016"),
+            0x0F => out.extend_from_slice(b"\\017"),
+            b'\\' => out.extend_from_slice(b"\\\\"),
+            _ => {
+                assert!(
+                    b >= b' ' || b == b'\t' || b == b'\n',
+                    "not grid text: {b:#x}"
+                );
+                out.push(b);
+            }
+        }
+    }
+    out
+}
