@@ -3675,6 +3675,34 @@ impl Renderer {
         state: &state::State,
         cursor_blink_visible: bool,
     ) -> Result<(), VtOutOfMemory> {
+        // CoreText shaping accumulates objects for deferred release over
+        // the course of a frame. Always flush those objects, including
+        // when rebuilding the frame fails due to memory pressure.
+        // defer self.font_shaper.endFrame();
+        //
+        // PORT NOTE (parity S115-F1): the reference's first statement is
+        // this `defer`, so `endFrame` runs on every exit: the
+        // synchronized-output early `return`, a failed `beginUpdate`, and
+        // the normal end. The body is `update_frame_impl`; running
+        // `end_frame` after it here is that defer. It also keeps the
+        // reference's order at the normal end: the later-registered `defer
+        // self.terminal_state.dirty = .false` (the impl's last statement)
+        // runs before `endFrame`. CORRECTION: `end_frame` used to be a plain
+        // statement at the end of the success path only.
+        // UNVERIFIED on Linux: written on macOS, compile and suite pending on
+        // rvm (NEW-FINDINGS N181).
+        let result = self.update_frame_impl(state, cursor_blink_visible);
+        self.font_shaper.end_frame();
+        result
+    }
+
+    /// The body of [`Self::update_frame`], which runs
+    /// `font_shaper.end_frame()` after it on every exit.
+    fn update_frame_impl(
+        &mut self,
+        state: &state::State,
+        cursor_blink_visible: bool,
+    ) -> Result<(), VtOutOfMemory> {
         // We fully deinit and reset the terminal state every so often so that a
         // particularly large terminal state doesn't cause the renderer to hold on to
         // retained memory. Frame count is ~12 minutes at 120Hz.
@@ -4048,9 +4076,6 @@ impl Renderer {
 
             self.draw_mutex.unlock();
         }
-
-        // Notify our shaper we're done for the frame.
-        self.font_shaper.end_frame();
 
         // Reset our dirty state after updating (the reference `defer
         // self.terminal_state.dirty = .false`, fired at fn scope exit — §C.4).

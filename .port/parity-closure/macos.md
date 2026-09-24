@@ -26,11 +26,11 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
 
 ## Low (4)
 
-- [ ] **S15-F1** · CONFIRMED · `INDIV` · other
+- [x] **S15-F1** · CONFIRMED · `INDIV` · other
   - **What:** Comment cites upstream GitHub issue as "Rustty #560" instead of "Ghostty #560"
   - **Oracle:** `macos/Sources/Features/Terminal/BaseTerminalController.swift:483` → **Rustty:** `macos/Sources/Features/Terminal/BaseTerminalController.swift:483`
   - **Audit's suggested fix:** Restore "Ghostty #560" (or "ghostty-org/ghostty#560") in the comment; upstream issue references are proper nouns and should be exempt from the rename.
-- [ ] **S17-F2** · CONFIRMED · `INDIV` · other
+- [x] **S17-F2** · CONFIRMED · `INDIV` · other
   - **What:** Doc comment on glassEffectView differs from oracle (doc-only)
   - **Oracle:** `macos/Sources/Features/Terminal/TerminalViewContainer.swift:9` → **Rustty:** `macos/Sources/Features/Terminal/TerminalViewContainer.swift:9`
   - **Audit's suggested fix:** Restore the oracle wording at rustty TerminalViewContainer.swift:9 for R1 comment fidelity (or leave as-is; no behavioural effect).

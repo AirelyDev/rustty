@@ -5032,6 +5032,32 @@ mod macos_impl {
             state: &state::State,
             cursor_blink_visible: bool,
         ) -> Result<(), VtOutOfMemory> {
+            // CoreText shaping accumulates objects for deferred release over
+            // the course of a frame. Always flush those objects, including
+            // when rebuilding the frame fails due to memory pressure.
+            // defer self.font_shaper.endFrame();
+            //
+            // PORT NOTE (parity S115-F1): the reference's first statement is
+            // this `defer`, so `endFrame` runs on every exit: the
+            // synchronized-output early `return`, a failed `beginUpdate`, and
+            // the normal end. The body is `update_frame_impl`; running
+            // `end_frame` after it here is that defer. It also keeps the
+            // reference's order at the normal end: the later-registered `defer
+            // self.terminal_state.dirty = .false` (the impl's last statement)
+            // runs before `endFrame`. CORRECTION: `end_frame` used to be a plain
+            // statement at the end of the success path only.
+            let result = self.update_frame_impl(state, cursor_blink_visible);
+            self.font_shaper.end_frame();
+            result
+        }
+
+        /// The body of [`Self::update_frame`], which runs
+        /// `font_shaper.end_frame()` after it on every exit.
+        fn update_frame_impl(
+            &mut self,
+            state: &state::State,
+            cursor_blink_visible: bool,
+        ) -> Result<(), VtOutOfMemory> {
             // const start = std.time.Instant.now() catch unreachable;
             // const start_micro = std.time.microTimestamp();
             // defer {
@@ -5410,10 +5436,12 @@ mod macos_impl {
             // defer self.terminal_state.dirty = .false;
             //
             // PORT NOTE (§C.4/RISK-3): the reference `defer` fires at function scope
-            // exit — i.e. AFTER `updateCustomShaderUniformsFromState` (:1418, which
-            // GATES on `dirty != .false`) and `endFrame` (:1423). So the reset is the
-            // LAST statement of this fn (after `end_frame`), NOT here; the post-region
-            // is infallible so a plain final assignment is faithful.
+            // exit — i.e. AFTER `updateCustomShaderUniformsFromState` (which GATES on
+            // `dirty != .false`). So the reset is the LAST statement of this body,
+            // NOT here; the post-region is infallible so a plain final assignment is
+            // faithful. CORRECTION (parity S115-F1): this used to say the reset runs
+            // after `endFrame`; the `endFrame` defer is registered FIRST, so it runs
+            // LAST, after this reset (in `update_frame`, after this body returns).
 
             // Rebuild the overlay image if we have one. We can do this
             // outside of any critical areas.
@@ -5508,12 +5536,9 @@ mod macos_impl {
             // Start the display link now that the rebuilt frame is ready.
             // (`6688aa072`: the link is parked while idle, so the rebuild that
             // set `cells_rebuilt` is what un-parks it; runs before the deferred
-            // `font_shaper.endFrame()` below, as in the reference.)
+            // `font_shaper.endFrame()`, which `update_frame` runs after this body,
+            // as in the reference.)
             self.sync_display_link(None, None);
-
-            // Notify our shaper we're done for the frame. For some shapers,
-            // such as CoreText, this triggers off-thread cleanup logic.
-            self.font_shaper.end_frame();
 
             // Reset our dirty state after updating (the reference `defer
             // self.terminal_state.dirty = .false`, fired at fn scope exit — §C.4).
@@ -8869,6 +8894,62 @@ mod macos_impl {
             // scrollbar (recomputed from the same PageList).
             let expected_scrollbar = unsafe { (*t.screens.active).pages.scrollbar() };
             assert!(r.scrollbar.eql(expected_scrollbar));
+
+            t.deinit(Global);
+        }
+
+        // Parity S115-F1: `defer self.font_shaper.endFrame()` is updateFrame's
+        // first statement, so a frame skipped for synchronized output still
+        // hands the shaper's CoreText objects to the release thread.
+        #[test]
+        fn update_frame_ends_the_shaper_frame_on_the_sync_output_return() {
+            let mut r = match test_renderer(10, 3) {
+                Some(r) => r,
+                None => return,
+            };
+
+            // Shape a row outside `update_frame`, so the shaper's release pool
+            // holds this frame's CoreText objects.
+            let mut t = Terminal::init(Global, opts(10, 3)).unwrap();
+            {
+                let mut s = t.vt_stream();
+                s.next_slice(b"Ab");
+                s.deinit();
+            }
+            r.terminal_state.update(Global, &mut t).unwrap();
+            let cs = cursor::style(
+                &r.terminal_state,
+                cursor::StyleOptions {
+                    preedit: false,
+                    focused: true,
+                    blink_visible: true,
+                },
+            );
+            r.rebuild_cells(None, cs, &CellSet::new());
+            assert!(r.font_shaper.release_pool_len() > 0);
+            assert_ne!(r.terminal_state.dirty, Dirty::False);
+
+            t.modes.set(Mode::SynchronizedOutput, true);
+            let mut mutex = Mutex::new();
+            let st = state::State {
+                mutex: &mut mutex,
+                terminal: &mut t,
+                inspector: None,
+                inspector_ptr: None,
+                preedit: None,
+                mouse: state::Mouse::default(),
+                demand: Default::default(),
+                handoff_gen: Default::default(),
+                handoff_park: Default::default(),
+            };
+            r.update_frame(&st, true).unwrap();
+
+            // The early return was taken: the dirty reset at the end of the
+            // body did not run (it is registered after that return in the
+            // reference too).
+            assert_ne!(r.terminal_state.dirty, Dirty::False);
+            // ...and the shaper's frame was still ended.
+            assert_eq!(0, r.font_shaper.release_pool_len());
 
             t.deinit(Global);
         }

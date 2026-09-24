@@ -3726,6 +3726,53 @@ fix: 0 of 50 of the same sequential runs failed; see the task T-F2 report for th
   editing a fence is the controller's call (R5).
 - **state**: OPEN.
 
+## N180 — `+page-compression --mode=report` printed to stdout (the S62-F3/F4/F5 class, unlisted)
+
+- **id**: N180. Not in the inventory. Found by T-I (tail wave), 2026-09-23, while working LEDGER
+  S62-F3/F4/F5: a grep for `std.debug.print` in `src/benchmark/` at the pin finds nine sites; the
+  audit listed seven. The other two are `PageCompression.zig:436` (per-page line) and `:442` (total).
+- **severity**: medium (same as S62-F3). **kind**: behavioral-difference (stdout instead of stderr).
+- **what**: `crates/rustty-bench/src/page_compression.rs` ported both as `println!`.
+- **fix**: all nine sites now use the crate's `debug_print!` macro (`crates/rustty-bench/src/lib.rs`):
+  stderr, under the stderr lock, write errors dropped as `std.debug.print`'s `catch return` does
+  (`eprintln!` would panic on a failed write). Test
+  `crates/rustty-bench/tests/report_output_goes_to_stderr.rs::page_compression_report_goes_to_stderr`
+  runs the binary and asserts the lines are on stderr and stdout is empty; negative control
+  (`print!` restored in `page_compression.rs` only) fails with "no stderr line starts with
+  \"page-compression page=0 \"".
+- **state**: CLOSED (T-I).
+
+## N181 — the S115-F1 `end_frame` wrapper in the Linux renderer twin has never been compiled
+
+- **id**: N181. Not in the inventory. Recorded by T-I2 (tail wave), 2026-09-23, from review T-I F3.
+  Outside LEDGER S115-F1's cited anchors, which name only the macOS `generic.rs`.
+- **severity**: low. **kind**: verification gap (unverified port change).
+- **what**: `crates/rustty-renderer/src/generic/linux_impl.rs:3673-3697` (the wrapper) got the same shape as the macOS
+  fix: `update_frame` runs `update_frame_impl` and then `font_shaper.end_frame()` on every exit
+  (`generic.zig:1271-1274`). HarfBuzz's `end_frame` is a no-op, so the behaviour cannot change, but the
+  edit was written on macOS: `cargo check --target aarch64-unknown-linux-gnu -p rustty-renderer` stops
+  at cc-rs (no `aarch64-linux-gnu-g++` here) and rvm is down. The site's PORT NOTE says so.
+- **fix**: run `cargo build --workspace --features gtk,x11,wayland` and `cargo test -p rustty-renderer`
+  on rvm.
+- **state**: OPEN — fix written, Linux run pending.
+
+## N182 — `expectApproxEqual`'s `expectEqual` fallback arms printed nothing in the port
+
+- **id**: N182. Not in the inventory. Found by review T-I (F8), 2026-09-23; outside LEDGER S80-F2's
+  anchors (`comparison.zig:113,128,137-139,192-199`).
+- **severity**: low. **kind**: missing diagnostic (test-support text).
+- **what**: the reference's `.optional`, tagged-`.@"union"` and `else` arms call
+  `testing.expectEqual`, which prints `expected {any}, found {any}` on a mismatch. The port's `i32`,
+  `u32` and `Option` impls (and the test-local union) returned the error silently. MEASURED with the
+  pinned `comparison.zig` under zig 0.16.0: `expected 1, found 2`, `expected 7, found 9`,
+  `expected null, found 1.5`, `expected 3, found null`, `expected .a, found .b`.
+- **fix**: `crates/rustty-datastruct/src/comparison.rs` `expect_equal_mismatch` prints that line through
+  `print`, used by the `i32`/`u32`/`Option` impls and the test union; `FmtAny` gains `Option` (`null`).
+  Test `comparison::tests::expectApproxEqual_expect_equal_fallbacks_print_std_diagnostics` asserts the
+  five measured lines; negative control (`expect_equal_mismatch` not printing) fails on the first,
+  `["expected 1, found 2\n"]` vs `[]`.
+- **state**: CLOSED (T-I2).
+
 ## N196 — tests passed without testing anything when their environment was missing
 
 - **id**: N196. Not in the inventory. Found by the tail-s3 task (silent-skip audit), 2026-09-23.
@@ -3783,7 +3830,56 @@ fix: 0 of 50 of the same sequential runs failed; see the task T-F2 report for th
   in the reference and an InvalidPort in the port.
 - **fix**: route both through `rustty_zigstd::fmt` (rustty-os already depends on it). Whether `%-0`
   decoding to NUL in `std.Uri` should be reproduced is a separate R13 question.
-- **state**: OPEN.
+- **verification** (task tail-s9b, MEASURED): a Zig 0.16.0 probe built against the pinned libvaxis
+  0.6.0 (`vaxis-0.6.0-BWNV_CrbCQCscGpzsAlR402rYQ_tV3aAl081c2iRRkka`) and `std.Uri`, and a Rust
+  harness over the port's public API, ran the same 1940 inputs (every 1-3 byte string over
+  `0 1 5 9 a f F _ + - space 0xFF`, plus overflow edges, `8_0`, `+80`, `-0`, prefixes) through 19
+  shapes: `parseInt(u16, .., 10)` and `parseInt(u8, .., 16)`, the port of `file://host:<s>/x`, the
+  decode of `/a%<s>b`, and the vaxis parser on OSC 4 / OSC 10-12 numbers, an OSC 4 channel, the
+  XTWINOPS size, kitty keys (codepoint, modifiers, alternates), CSI `~`, CSI modifiers, DECRPM, DSR
+  and SGR mouse (36,860 results, plus 31 exact sequences, 38,831 in all).
+  - **URL half: refuted as stated.** At the base (ff351484) `uri.rs` no longer used `str::parse`:
+    task T-G (37d69654, S112-F9) had already given it a hand-written copy of Zig's `parseInt`. The
+    base port matched Zig on all 3880 URL results (0 mismatches). What remained was a fourth copy of
+    the parser, now deleted: `parse_int_u16` / `parse_int_u8_hex` call `rustty_zigstd::fmt::parse_int`,
+    and its `parseInt` table test is dropped as the twin of `rustty_zigstd::fmt::tests::test_parse_int`.
+  - **vaxis half: confirmed.** 263 mismatches at the base: `_` refused in the OSC numbers
+    (`ESC ] 4 ; 1_0 ; ..` is index 10 in the reference); `+N` / `-0` refused in every `parseParam`
+    CSI number, which libvaxis 0.6.0 reads with `parseInt` (0.5.1, which the crate otherwise follows,
+    used `parseUnsigned`). In a CSI a `_` is a final byte, so `_` reaches only the OSC numbers, and the
+    `parseUnsigned` CSI sites refuse a sign in both. Fixed: `parser.rs` `parse_unsigned` /
+    `parse_param` and `cell.rs` `parse_unsigned_u8` call `rustty_zigstd::fmt`
+    (`parse_unsigned_type` / `parse_int_type` / `parse_unsigned::<u8>`), and rustty-vaxis gains a
+    `rustty-zigstd` edge (`check_acyclic.sh`, `cargo_cycle_check.py` GREEN).
+  - **After the fix: 152 mismatches, all explained.** 116 are the R13 fix below (every input the
+    reference decodes through a sign). 36 are SGR mouse coordinates: libvaxis 0.6.0 reads them as
+    `i16` into an `i16` `Mouse.col`/`row` (so `0` is column -1, `-5` column -6, `40000` refused),
+    while the port keeps 0.5.1's `u16`. That type change is part of the deferred vaxis bump
+    (`.port/phase-3/NON_PORTS.md` §G2, which names `Mouse.zig` `u16 -> i16`), noted at `parse_param`.
+    No other result differs.
+- **R13 decisions**:
+  - `%-0` / `%+X` in `std.Uri` percent decoding: **fixed (UD230)**. RFC 3986 escapes are two hex
+    digits, and the decoder's own `catch continue` keeps every other malformed escape as written; the
+    sign is an accident of reusing `parseInt`, and it puts a NUL or a control byte into an OSC 7 pwd
+    the sender never wrote. Listed in `docs/ghostty-bug-fixes.md`. (RFC 3986 also rules out `+80` as
+    a port, so the RFC alone does not separate the two cases: the reason is that decoding a sign
+    invents bytes and corrupts the data, while a lenient port parse yields the number the sender
+    meant.)
+  - `_`, `+` and `-0` in the URI port number: **faithful**. It is std's grammar, Ghostty has no port
+    grammar of its own, and Ghostty never reads the port except in the MAC-address repair of
+    `os/uri.zig` `parse`, whose outcome does not change (`12:34:56:78:90:+9` fails
+    `isValidMacAddress` whether or not the port parses).
+  - `_`, `+` and `-0` in the vaxis numbers: **faithful**. libvaxis has no parser of its own that
+    refuses them, so there is no UD141-style in-reference evidence; the peer is the terminal.
+- **tests** (fail first, negative controls one at a time, task tail-s9b): rustty-os
+  `percent_escapes_decode_only_two_hex_digits` (replaces `percent_escapes_follow_zig_parse_int`) and
+  `osc7_path_keeps_a_signed_escape` (control: hex check disabled, NUL where `%-0` expected);
+  `port_numbers_follow_zig_parse_int` (unchanged; control: `str::parse`, `Err(InvalidPort)` for
+  `8_0`). rustty-vaxis `osc_numbers_take_zig_digit_separators` (control: `_` refused, `None` where
+  index 10 expected), `csi_params_take_zig_parse_int_signs` (control: `parseUnsigned`, `None` for
+  `ESC [ +97 u`), `csi_unsigned_numbers_refuse_a_sign` and `rgb_from_spec_channels_are_zig_parse_unsigned`
+  (both passed at the base; controls: `parseInt` at those sites, the sign accepted).
+- **state**: CLOSED (task tail-s9b).
 
 ## N207 — `+terminal-stream` on an OSC 8-heavy corpus is about 3.3x slower than the oracle
 

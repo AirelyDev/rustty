@@ -7,7 +7,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
 
 ## Low (5)
 
-- [ ] **S80-F2** · CONFIRMED · `INDIV` · other
+- [x] **S80-F2** · CONFIRMED · `INDIV` · other
   - **What:** Mismatch diagnostics (`print(...)`) of expectApproxEqual are silenced in the Rust port
   - **Oracle:** `src/datastruct/comparison.zig:113,128,137-139,192-199` → **Rustty:** `crates/rustty-datastruct/src/comparison.rs:165,215,308-317`
   - **Audit's suggested fix:** Emit the same messages with eprintln! (gated on cfg(test) or an equivalent of testing.backend_can_print) in the f32/f64 and [T;N] failure paths.
