@@ -884,38 +884,80 @@ where
         unsafe { self.add_context(base, value) }.map(Some)
     }
 
-    /// True iff `add_with_id(base, *value, id)` would take its pure
-    /// "existing live equal item" fast path: `id` is in range, the item at
-    /// `id` is alive, and it compares equal to `*value`. On that path the
-    /// call's ONLY effects are `context.deleted(*value)` and a +1 on the
-    /// item's ref count, and it returns `Ok(None)` — and since none of those
-    /// change this predicate, it stays true for any number of repeated
-    /// identical calls.
+    /// If `add_with_id(base, *value, id)` would be a PURE ref bump, the id it
+    /// would bump; otherwise `None`.
+    ///
+    /// A call is pure when its ONLY effects are `context.deleted(*value)` and a
+    /// +1 on one live item's ref count, and the id it hands back (`Ok(None)`
+    /// meaning `id` itself, `Ok(Some(x))` meaning `x`) is that item's id. This
+    /// mirrors `add_with_id_ptr`'s branch selection exactly, taking each
+    /// branch's pure case:
+    ///
+    ///   - `id` in range and alive and equal to `*value`: the "existing live
+    ///     equal item" arm, bumps `id`, returns `Ok(None)`;
+    ///   - `id` in range but dead: the dead-id arm when `lookup_context` finds
+    ///     the value under another id, bumps and returns that id;
+    ///   - otherwise `add_context`, when its trim loop is a no-op (the top id
+    ///     is alive, or `next_id <= 1`) and `lookup_context` finds the value,
+    ///     bumps and returns that id.
+    ///
+    /// Every other outcome (a trim, an insert, a delete, an error) is not
+    /// pure and yields `None`. A pure call changes nothing this predicate
+    /// reads (a ref count that was nonzero stays nonzero), so once it holds it
+    /// holds for any number of repeated identical calls, all bumping the same
+    /// id.
     ///
     /// Callers use this to batch a run of identical `add_with_id` calls into
     /// a single `use_multiple` (PERF(port) (reshape), see the clone chain in
     /// `page_impl.rs`). That is only behavior-preserving when
     /// `Context::deleted` is a no-op (true for the style set context, whose
     /// `deleted` is the trait default) — a context with a real `deleted`
-    /// (e.g. the hyperlink set) would observe the skipped callbacks.
+    /// (e.g. the hyperlink set) would observe the skipped callbacks. The ref
+    /// bump saturates (`bump_ref`, UD80), so one `+n` equals `n` times `+1`.
+    ///
+    /// Before task S-4 (N93) only the first arm was recognised, so a run whose
+    /// style landed on a different id in the destination page (the usual case
+    /// on a style-heavy screen: a fresh page numbers styles in first-seen
+    /// order) fell back to one full `add_with_id` (hash and probe) per cell.
     ///
     /// # Safety: `base` must be the true base of the backing buffer; `value`
     /// must be valid for reads.
-    pub(crate) unsafe fn add_with_id_is_pure_ref_bump<B: IntFromBase + Copy>(
+    pub(crate) unsafe fn add_with_id_pure_ref_bump_target<B: IntFromBase + Copy>(
         &self,
         base: B,
         value: *const T,
         id: Id,
-    ) -> bool {
-        if !(id > Id::ZERO && id < self.next_id) {
-            return false;
+    ) -> Option<Id> {
+        // `add_with_id` asserts `id > 0`; such a call is not a pure bump.
+        if id <= Id::ZERO {
+            return None;
         }
         let items = unsafe { self.items.ptr(base) };
-        let item = unsafe { item_at(items, id.to_usize()) };
-        let live = unsafe { (*item).meta.ref_count } > RefCount::ZERO;
-        live && self
-            .context
-            .eql(unsafe { *value }, unsafe { (*item).value })
+        if id < self.next_id {
+            let item = unsafe { item_at(items, id.to_usize()) };
+            if unsafe { (*item).meta.ref_count } == RefCount::ZERO {
+                // The dead-id arm: pure only when the value exists elsewhere.
+                return unsafe { self.lookup_context(base, value) };
+            } else if self
+                .context
+                .eql(unsafe { *value }, unsafe { (*item).value })
+            {
+                return Some(id);
+            }
+        }
+
+        // `add_context`: its trim loop must not run...
+        if self.next_id > Id::ONE
+            && unsafe {
+                (*item_at(items, self.next_id.sub(Id::ONE).to_usize()))
+                    .meta
+                    .ref_count
+            } == RefCount::ZERO
+        {
+            return None;
+        }
+        // ...and the value must already be present.
+        unsafe { self.lookup_context(base, value) }
     }
 
     /// Increment an item's reference count by 1.

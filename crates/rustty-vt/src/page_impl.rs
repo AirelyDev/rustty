@@ -1608,17 +1608,24 @@ impl Page {
             //     same order, same error mapping, so an error exit leaves the
             //     identical prefix state.
             //   - The remaining k-1 identical `add_with_id` calls collapse
-            //     into ONE `use_multiple(id, k-1)` iff they would provably
-            //     take the pure ref-bump fast path
-            //     (`add_with_id_is_pure_ref_bump`; the style context's
+            //     into ONE `use_multiple(d, k-1)` iff they would provably
+            //     each be a pure ref bump of the id `d` the first cell got
+            //     (`add_with_id_pure_ref_bump_target`; the style context's
             //     `deleted` is the trait-default no-op, so the only per-call
-            //     effect is the +1). The run-mate cell writes then collapse
-            //     into a bulk copy: per cell they would be `reset(src)` +
-            //     `set_style_id(src.style_id())`, which reproduces the source
-            //     bits verbatim (machine-checked by `cell_style_run_facts`).
-            //     If the fast path is not provable (dead/foreign item at that
-            //     id — the paths that also mutate `living`/`next_id`), the
-            //     run-mates fall back to the verbatim per-cell body.
+            //     effect is the +1 on `d`). `d` is the source id when the
+            //     destination holds the same style there, and otherwise the
+            //     id the destination found or placed it under (N93: on a
+            //     style-heavy screen a fresh page numbers styles in first-seen
+            //     order, so most runs remap). The run-mate cell writes then
+            //     collapse into a bulk copy: per cell they would be
+            //     `reset(src)` + `set_style_id(d)`, and `reset(src)` +
+            //     `set_style_id(src.style_id())` reproduces the source bits
+            //     verbatim (machine-checked by `cell_style_run_facts`), so a
+            //     verbatim copy is exact when `d` is the source id and a copy
+            //     with the style id replaced by `d` otherwise. If the pure
+            //     path is not provable (the calls would trim, insert, delete
+            //     or fail), the run-mates fall back to the verbatim per-cell
+            //     body.
             //   - Default-style runs are the degenerate case with no set
             //     calls at all: the reset alone is the identity, one bulk
             //     copy.
@@ -1664,6 +1671,8 @@ impl Page {
                 let dst_cell: *mut Cell = unsafe { dst_cells_off_ptr.add(i) };
                 unsafe { *dst_cell = first.copy_with_managed_reset() };
                 let mut batch_mates = true;
+                // The style id every cell of the run gets in this page.
+                let mut dst_style_id = run_style_id;
                 if run_style_id != stylepkg::DEFAULT_ID {
                     unsafe { (*dst_row).set_styled(true) };
 
@@ -1686,22 +1695,23 @@ impl Page {
                             CloneFromError::StyleSetNeedsRehash
                         }
                     })?;
-                    unsafe { (*dst_cell).set_style_id(added.unwrap_or(run_style_id)) };
+                    dst_style_id = added.unwrap_or(run_style_id);
+                    unsafe { (*dst_cell).set_style_id(dst_style_id) };
 
                     if j - i > 1 {
                         batch_mates = unsafe {
-                            self.styles.add_with_id_is_pure_ref_bump(
+                            self.styles.add_with_id_pure_ref_bump_target(
                                 self_base,
                                 other_style,
                                 run_style_id,
                             )
-                        };
+                        } == Some(dst_style_id);
                         if batch_mates {
                             // The k-1 pure ref bumps in one call.
                             unsafe {
                                 self.styles.use_multiple(
                                     self_base,
-                                    run_style_id,
+                                    dst_style_id,
                                     RefCountIntTrait::from_usize(j - i - 1),
                                 )
                             };
@@ -1721,7 +1731,17 @@ impl Page {
                         };
                         let src_cells =
                             unsafe { core::slice::from_raw_parts(other_cells_ptr.add(i + 1), n) };
-                        fastmem::copy(dst_cells, src_cells);
+                        if dst_style_id == run_style_id {
+                            fastmem::copy(dst_cells, src_cells);
+                        } else {
+                            #[cfg(test)]
+                            REMAPPED_STYLE_RUNS_BATCHED.with(|c| c.set(c.get() + 1));
+                            for (d, s) in dst_cells.iter_mut().zip(src_cells) {
+                                let mut c = *s;
+                                c.set_style_id(dst_style_id);
+                                *d = c;
+                            }
+                        }
                         if mates_kitty {
                             unsafe { (*dst_row).set_kitty_virtual_placeholder(true) };
                         }
@@ -3117,6 +3137,15 @@ impl StaticBitSet {
     fn count(&self) -> usize {
         self.count
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Test-only evidence that the N93 batched path ran: the number of style
+    /// runs whose run-mates were batched onto a REMAPPED destination id (task
+    /// S-4).
+    pub(crate) static REMAPPED_STYLE_RUNS_BATCHED: core::cell::Cell<usize> =
+        const { core::cell::Cell::new(0) };
 }
 
 /// Test support for the UD131 row-copy degrade tests (`pagelist/tests.rs` and
