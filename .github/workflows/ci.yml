@@ -110,13 +110,18 @@ jobs:
           cargo +nightly miri setup
 
       # G4-uni (run_unicode_diff.sh) builds the uucode oracle with zig; the
-      # version is pinned to match the harness requirement (0.15.2 — the same
-      # pin the script's BLOCKED message names). Harness tooling only, R3:
+      # version is pinned to match the harness requirement (0.16.0 — the
+      # harness build.zig.zon's minimum_zig_version, the reference's own
+      # minimum at pin 20abdb50a, and the pin the script's BLOCKED message
+      # names). The oracle's uucode is the reference's revision 2826a37a,
+      # which does not build under 0.15.x (and the pre-bump revision does not
+      # build under 0.16), so the zig pin and the uucode revision move
+      # together (.port/phase-3/NON_PORTS.md §G1). Harness tooling only, R3:
       # no rustty crate depends on zig or uucode.
-      - name: Install zig 0.15.2 (pinned — G4-uni uucode oracle)
+      - name: Install zig 0.16.0 (pinned — G4-uni uucode oracle)
         uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         with:
-          version: 0.15.2
+          version: 0.16.0
 
       # W8-03: the live-GL renderer tests clean-skip when no GL 4.3-core
       # context exists, and this leg previously shipped NO GL stack — so a

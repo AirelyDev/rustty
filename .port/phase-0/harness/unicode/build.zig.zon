@@ -16,6 +16,11 @@
         // is_symbol FORMULAS are unchanged by that commit — only the API
         // shape — so the expected table contents are identical and this gate
         // stays exactly as strict as before.
+        //
+        // MEASURED, not assumed (S-10a, NON_PORTS.md §G1 discharge): the
+        // reference pin's own props-unigen / symbols-unigen, built against
+        // this revision, emit stage1/stage2/stage3 arrays identical element
+        // for element to rustty's committed tables, and this gate is 0-diff.
         .uucode = .{
             .url = "https://deps.files.ghostty.org/uucode-2826a37a4562284fdacd8fa029d49509cc9bffcd.tar.gz",
             .hash = "uucode-0.2.0-ZZjBPlK5VADj7fdoq7G8LIHzD5o6FSkcBXXrRWr4jnrA",

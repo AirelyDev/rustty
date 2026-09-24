@@ -35,7 +35,7 @@ exhaustive differential ≥ the reference. This is NOT a weakening (R5); see
 ## Design
 
 ```
-        uucode 0.2.0  (live, independent oracle — ORACLE #2)
+        uucode 0.2.0 @ 2826a37a  (live, independent oracle — ORACLE #2)
         + ghostty's src/build/uucode_config.zig  (copied verbatim, pinned)
                  |
         uucode_oracle.zig  (zig build -> uucode-oracle)
@@ -72,7 +72,7 @@ Or step by step:
 
 ```sh
 cd .port/phase-0/harness/unicode
-zig build                                   # builds uucode-oracle (needs zig 0.15.2)
+zig build                                   # builds uucode-oracle (needs zig 0.16.0)
 ./zig-out/bin/uucode-oracle /tmp/oracle     # dump live uucode, full range
 cd /Users/gael/projects/rustty
 cargo run --example dump_tables -p rustty-unicode -- /tmp/rust
@@ -84,8 +84,8 @@ python3 .port/phase-0/harness/unicode/diff_unicode.py /tmp/oracle /tmp/rust
 | File | Role |
 |---|---|
 | `uucode_oracle.zig` | the independent oracle generator (queries live uucode) |
-| `uucode_config.zig` | ghostty's `src/build/uucode_config.zig`, copied verbatim (pinned @ 4749c4e) |
-| `build.zig` / `build.zig.zon` | builds `uucode-oracle` against uucode 0.2.0 |
+| `uucode_config.zig` | ghostty's `src/build/uucode_config.zig`, copied verbatim (pinned @ 20abdb50a) |
+| `build.zig` / `build.zig.zon` | builds `uucode-oracle` against uucode 0.2.0 @ 2826a37a (the reference pin's revision) |
 | `diff_unicode.py` | byte-diffs oracle vs rust dumps; per-field 0-diff assertion |
 | `run_unicode_diff.sh` | the gate runner (build → oracle → rust dumper → diff) |
 | `../../../../crates/rustty-unicode/examples/dump_tables.rs` | rust-side dumper |

@@ -322,12 +322,18 @@ the remaining workstreams must assign them, or `.port/phase-2/DEFERRALS.md` /
 the `G-P2` closure gate can see them. Do not let this paragraph be the only
 thing holding them.
 
+**Update 2026-09-23 (parity tail S-10a): `G1` is DISCHARGED** — see its item 5
+below and `NEW-FINDINGS.md` N220. **`G2` remains OPEN** (owned by parity tail
+S-10b).
+
 Appended by **`P3-W9` Task 6 and Task 7**. Same 4-criterion basis as above.
 Source of the verdicts: `.port/phase-3/assessments/G-config-build-i18n.md`.
 
-## G1 — `uucode` revision bump (`e8525c0fd` / `f2a7652ab`) — DEFERRED, NOT non-ported
+## G1 — `uucode` revision bump (`e8525c0fd` / `f2a7652ab`) — DISCHARGED 2026-09-23 (was DEFERRED, never non-ported)
 
-**This row is the ONE open item in this file.** It is recorded here rather than
+**DISCHARGED by parity tail S-10a; items 1–4 are the deferral as written,
+kept for the record, and item 5 is the discharge with its evidence.** It was
+recorded here rather than
 silently dropped because `P3-W9 T6 step 2` explicitly sanctions "defer the
 uucode bump with a written reason" as an outcome, and because deferring a
 dependency bump without the reason is how a table goes stale unnoticed.
@@ -383,6 +389,54 @@ dependency bump without the reason is how a table goes stale unnoticed.
       `props_data.rs` / `symbols_data.rs` / `grapheme_data.rs` against the
       committed ones. A non-empty diff is a REAL data change and must be
       reviewed codepoint-by-codepoint, not blessed.
+5. **Discharge (parity tail S-10a, 2026-09-23; `NEW-FINDINGS.md` N220).** The
+   recipe, step by step:
+   1. `.github/workflows/ci.yml`'s G4-uni step now installs **Zig 0.16.0**.
+      Nothing else in that job needed 0.15.2: every other gate that runs zig
+      (`check_lz4_byte_exact.sh`, `check_ref_item_geometry.py`,
+      `stb-resize-oracle/run.sh`, …) also needs the ghostty oracle checkout,
+      which CI does not have, so they report BLOCKED there whatever the zig;
+      locally they already run on 0.16.0. Before this, the CI pin could not
+      build the harness at all (its `build.zig.zon` already said
+      `minimum_zig_version = "0.16.0"`), so G4-uni was RED on CI.
+   2. The harness had already been moved to uucode 2826a37a, the pin's
+      `uucode_config.zig` (byte-identical to ghostty@20abdb50a's, `diff`
+      empty) and `uucode.types` / `uucode.grapheme` by `986d90c8`
+      (ci-triage); this row was not updated then. S-10a corrected the
+      harness's stale version text (the BLOCKED message still said 0.15.2).
+   3. **Tables regenerated and compared.** The reference's own generators,
+      `src/unicode/props_uucode.zig` / `symbols_uucode.zig` at 20abdb50a
+      (with `lut.zig`, `props.zig`), were built exactly as
+      `src/build/UnicodeTables.zig` + `SharedDeps.zig` build them (uucode
+      2826a37a, `build_config_path` = the pin's `uucode_config.zig`,
+      `tables_path` = that dependency's `tables.zig`) and run. Their
+      `stage1`/`stage2`/`stage3` arrays were compared element for element
+      with `props_data.rs` (8192 / 31744 / 30) and `symbols_data.rs` (8192 /
+      1792 / 2): **0 differences in every array**. `grapheme_data.rs`'s 8192
+      entries are regenerated independently by the harness through
+      `uucode.grapheme.computeGraphemeBreakNoControl`: 0 differences. So the
+      restructured wcwidth derivation (`src/x/config_x/wcwidth.zig` ->
+      `src/components.zig`) and grapheme logic (`src/x/grapheme.zig` ->
+      `src/grapheme.zig`) produce the same values over the byte-identical UCD
+      input: **no code point changed in any class**, and the checksums in
+      `checksum.rs` stand unchanged. `run_unicode_diff.sh` (G4-uni) is GREEN
+      under Zig 0.16.0: 0 diffs for width, is_symbol, props flags,
+      grapheme_break_no_control over 0..=0x10FFFF and the 8192 precompute
+      entries. Negative controls: one flipped `STAGE3` field in a copy of
+      `props_data.rs` and one flipped `STAGE2` entry in a copy of
+      `symbols_data.rs` each reported 1 difference.
+   4. **The other uucode-derived data in the workspace**, probed the same way
+      against uucode 2826a37a + the pin's config: `case_folding_full`
+      (`rustty-unicode` `case_folding_data.rs`, 1585 code points) and
+      `is_emoji_presentation` (`rustty-font-shaper` `uucode.rs`, 1219 code
+      points) — 0 differences each (negative controls: one dropped and one
+      altered entry each reported). `ascii.zig`, `utf8.zig` and
+      `code_point.zig` are byte-identical between the two revisions, and
+      `BreakState` / `GraphemeBreakNoControl` keep their order. The one
+      uucode consumer this does NOT settle is `rustty-vaxis`'s vendored
+      uucode 0.1.0 subset: at the pin, libvaxis 0.6.0 imports Ghostty's
+      uucode 2826a37a (`external_uucode`, the `libvaxis_only` table), so
+      moving it is part of `G2`, below, not of this row.
 
 ## G2 — `vaxis` 0.5.1 -> 0.6.0 and `zf` 0.10.3 -> 0.11.0 — DEFERRED with a measured delta
 
