@@ -114,16 +114,176 @@ def crate_ref_files(crate, cm):
     return [os.path.join(GHOSTTY_SRC, f) for f, _ in cm[crate]["files"]]
 
 
-def crate_rust_files(crate):
-    d = G.crate_src_dir(crate)
-    if not d or not os.path.isdir(d):
-        return []
+def _rs_under(path):
+    """Every .rs file at/under `path` (a directory or a single .rs file)."""
+    if os.path.isfile(path):
+        return [path] if path.endswith(".rs") else []
     out = []
-    for root, _, files in os.walk(d):
+    for root, _, files in os.walk(path):
         for fn in files:
             if fn.endswith(".rs"):
                 out.append(os.path.join(root, fn))
     return out
+
+
+def crate_rust_files(crate):
+    d = G.crate_src_dir(crate)
+    if not d or not os.path.isdir(d):
+        return []
+    return _rs_under(d)
+
+
+# R4 RELOCATIONS (S-8a, 2026-09-24). The crate map partitions the ORACLE files
+# by crate key, but R4 moved some of those files' ports into a DIFFERENT crate
+# (to break a dependency cycle or honour a layering decision). The crate's own
+# `src/` then lacks the port and every comment of the relocated file reads as a
+# MISSING drop that was never dropped: `--crate font` reported 1767 of its 1795
+# MISSING against code living in `rustty-font-shaper`, `--crate input` all 68
+# against `rustty-vt/src/input/`. Each entry below names the EXACT extra port
+# location (never a whole foreign crate when a subtree suffices) plus the
+# decision that put it there. The comparison then runs against the crate's own
+# `src/` PLUS these paths: the same logic, the correct port side.
+#
+# A reference comment still has to appear in the port that implements it, so
+# this admits no comment the crate's port does not carry. A listed path that
+# does not exist is BLOCKED (exit 2), never a silent fall-back (a vanished
+# relocation would otherwise hide that the port moved again).
+EXTRA_PORT_PATHS = {
+    # D1 three-tier font split (memory `apc-glyf-font-layering-d1`): the
+    # shaper/backend-face tier of src/font/ (face*, shape/shaper*, Collection,
+    # CodepointResolver, DeferredFace, discovery, SharedGrid*, library, backend
+    # and the main.zig glue) lives ABOVE rustty-vt in rustty-font-shaper.
+    "font": ["crates/rustty-font-shaper/src"],
+    # The VT slice of src/input/ (function_keys.zig, kitty.zig and the VT
+    # halves of key_mods.zig/config.zig) is owned by rustty-vt (see the
+    # ownership doc in crates/rustty-input/src/lib.rs).
+    "input": ["crates/rustty-vt/src/input"],
+    # config/key.zig's `Key` enum and `Value` fn are ported with the `Config`
+    # struct they reflect over (rustty-cfg-fmt stays a near-leaf, R4 break #6).
+    "cfg-fmt": ["crates/rustty-config/src/config_struct.rs"],
+}
+
+
+def crate_port_files(crate, extra=None):
+    """The port side for `crate`: its own src/ plus its R4 relocations.
+    Raises FileNotFoundError naming a relocation path that does not exist."""
+    extra = EXTRA_PORT_PATHS if extra is None else extra
+    out = crate_rust_files(crate)
+    for rel in extra.get(crate, []):
+        full = rel if os.path.isabs(rel) else os.path.join(G.RUSTTY_ROOT, rel)
+        if not os.path.exists(full):
+            raise FileNotFoundError(full)
+        out += _rs_under(full)
+    return out
+
+
+def classify(ref_norm, port_norm):
+    """(missing, review) for normalized reference vs port comments; `review`
+    holds (comment, rounded best ratio) pairs."""
+    port_blob = " \n ".join(port_norm)
+
+    # The original inner loop is best = max over EVERY port comment of
+    # difflib's SequenceMatcher(None, rc, pc).ratio(). On the 14803-loc
+    # PageList.zig reference that is ~7k fuzzy ref comments x ~6k port comments
+    # of full Ratcliff-Obershelp matching, which times out. We compute a result
+    # IDENTICAL to the original far faster by exploiting (a) difflib's guaranteed
+    # upper bound quick_ratio() and (b) the fact that this gate only needs the
+    # EXACT best when it lands in [MISS, THRESHOLD) (to flag REVIEW and round its
+    # ratio) or >= THRESHOLD (covered); whenever best < MISS the only observable
+    # output is "MISSING", for which the exact value is irrelevant.
+    #
+    #   quick_ratio(rc, pc) = 2 * sum_c min(cnt_rc[c], cnt_pc[c]) / (la + lb)
+    #
+    # is a guaranteed upper bound on ratio() (a char present in rc but not pc can
+    # never be matched, so matched chars M <= the per-char multiset minimum) and
+    # is SYMMETRIC. Two consequences make the computed classification IDENTICAL:
+    #   1) Any pc with quick_ratio < MISS has ratio() < MISS, so it can neither
+    #      lift best to >= MISS nor be the witness of a REVIEW/covered best — it
+    #      is irrelevant to every observable outcome and is skipped. (If NO pc
+    #      reaches quick_ratio >= MISS, best < MISS and rc is MISSING outright,
+    #      with zero ratio() calls.)
+    #   2) Among the remaining pc (quick_ratio >= MISS) we compute the EXACT best
+    #      via real ratio(), visiting them in descending quick_ratio order and
+    #      breaking once quick_ratio <= best (sorted desc => no later pc can beat
+    #      best). The resulting best is exact on [MISS, 1], so MISSING/REVIEW/
+    #      covered and the rounded REVIEW ratio are byte-identical to the original.
+    # ratio() is computed in the SAME orientation as the original,
+    # SequenceMatcher(None, rc, pc), because ratio() is not symmetric.
+    port_cnt = [Counter(pc) for pc in port_norm]
+    # Port indices sorted by length (with the parallel sorted-length list) so we
+    # can binary-search the only length band that can yield quick_ratio >= MISS.
+    order_by_len = sorted(range(len(port_norm)), key=lambda j: len(port_norm[j]))
+    sorted_lens = [len(port_norm[j]) for j in order_by_len]
+
+    missing, review = [], []
+    for rc in ref_norm:
+        if rc in port_blob:
+            continue
+        la = len(rc)
+        rc_cnt = Counter(rc)
+        rc_items = list(rc_cnt.items())
+        rc_get = rc_cnt.get
+        lrc = len(rc_cnt)
+
+        # Pass 1: collect only the pc whose quick_ratio upper bound reaches MISS
+        # (cheap char-multiset arithmetic, no SequenceMatcher). pc below MISS are
+        # provably below MISS in ratio() too and cannot affect any outcome.
+        #
+        # First prune by length: quick_ratio <= real_quick_ratio =
+        # 2*min(la,lb)/(la+lb), so quick_ratio >= MISS requires
+        # 2*min(la,lb)/(la+lb) >= MISS, i.e. lb in
+        # [la*MISS/(2-MISS), la*(2-MISS)/MISS]. pc outside that contiguous band
+        # have real_quick_ratio < MISS hence quick_ratio < MISS, and are skipped
+        # WITHOUT the per-char sum (this is the dominant saving: most port
+        # comments differ enough in length to be excluded). We binary-search the
+        # band in the length-sorted order; the char-multiset test inside still
+        # decides membership exactly, so the band only narrows work, never alters
+        # which pc qualify.
+        lo_len = la * MISS / (2.0 - MISS)
+        hi_len = la * (2.0 - MISS) / MISS
+        lo = bisect.bisect_left(sorted_lens, lo_len)
+        hi = bisect.bisect_right(sorted_lens, hi_len)
+        cands = []
+        for k in range(lo, hi):
+            j = order_by_len[k]
+            lb = sorted_lens[k]
+            denom = la + lb
+            if denom == 0:
+                continue
+            cnt = port_cnt[j]
+            if lrc <= len(cnt):
+                cg = cnt.get
+                m = sum(min(n, cg(c, 0)) for c, n in rc_items)
+            else:
+                m = sum(min(n, rc_get(c, 0)) for c, n in cnt.items())
+            qr = 2.0 * m / denom
+            if qr >= MISS:
+                cands.append((qr, j))
+
+        if not cands:
+            # No pc can even reach MISS, so best < MISS exactly => MISSING.
+            missing.append(rc)
+            continue
+
+        # Pass 2: exact best over those candidates, in descending quick_ratio
+        # order with early break (sorted desc: once qr <= best, no later
+        # candidate can beat best either).
+        cands.sort(reverse=True)
+        sm = difflib.SequenceMatcher(None, rc)
+        best = 0.0
+        for qr, j in cands:
+            if qr <= best:
+                break
+            sm.set_seq2(port_norm[j])
+            r = sm.ratio()
+            if r > best:
+                best = r
+
+        if best < MISS:
+            missing.append(rc)
+        elif best < THRESHOLD:
+            review.append((rc, round(best, 2)))
+    return missing, review
 
 
 def run(args):
@@ -183,7 +343,15 @@ def run(args):
     overall_red = 0
     skipped = []
     for crate in crates:
-        rust_files = scope_port if scope_port is not None else crate_rust_files(crate)
+        if scope_port is not None:
+            rust_files = scope_port
+        else:
+            try:
+                rust_files = crate_port_files(crate)
+            except FileNotFoundError as e:
+                print(f"BLOCKED: R4 relocation path for [{crate}] does not exist: "
+                      f"{e} (EXTRA_PORT_PATHS is stale)", file=sys.stderr)
+                return 2
         # only meaningful for crates that have been ported (non-stub).
         # H5 fix: unified done-detection via _gatelib.is_claimed_done — the same
         # signal G1/G2 bind on (statuses done|complete|parity|ported|final all
@@ -221,109 +389,8 @@ def run(args):
         for f in rust_files:
             for b in comment_bodies(f):
                 port_norm.append(norm(b, idmap))
-        port_blob = " \n ".join(port_norm)
 
-        # The original inner loop is best = max over EVERY port comment of
-        # difflib's SequenceMatcher(None, rc, pc).ratio(). On the 14803-loc
-        # PageList.zig reference that is ~7k fuzzy ref comments x ~6k port comments
-        # of full Ratcliff-Obershelp matching, which times out. We compute a result
-        # IDENTICAL to the original far faster by exploiting (a) difflib's guaranteed
-        # upper bound quick_ratio() and (b) the fact that this gate only needs the
-        # EXACT best when it lands in [MISS, THRESHOLD) (to flag REVIEW and round its
-        # ratio) or >= THRESHOLD (covered); whenever best < MISS the only observable
-        # output is "MISSING", for which the exact value is irrelevant.
-        #
-        #   quick_ratio(rc, pc) = 2 * sum_c min(cnt_rc[c], cnt_pc[c]) / (la + lb)
-        #
-        # is a guaranteed upper bound on ratio() (a char present in rc but not pc can
-        # never be matched, so matched chars M <= the per-char multiset minimum) and
-        # is SYMMETRIC. Two consequences make the computed classification IDENTICAL:
-        #   1) Any pc with quick_ratio < MISS has ratio() < MISS, so it can neither
-        #      lift best to >= MISS nor be the witness of a REVIEW/covered best — it
-        #      is irrelevant to every observable outcome and is skipped. (If NO pc
-        #      reaches quick_ratio >= MISS, best < MISS and rc is MISSING outright,
-        #      with zero ratio() calls.)
-        #   2) Among the remaining pc (quick_ratio >= MISS) we compute the EXACT best
-        #      via real ratio(), visiting them in descending quick_ratio order and
-        #      breaking once quick_ratio <= best (sorted desc => no later pc can beat
-        #      best). The resulting best is exact on [MISS, 1], so MISSING/REVIEW/
-        #      covered and the rounded REVIEW ratio are byte-identical to the original.
-        # ratio() is computed in the SAME orientation as the original,
-        # SequenceMatcher(None, rc, pc), because ratio() is not symmetric.
-        port_cnt = [Counter(pc) for pc in port_norm]
-        # Port indices sorted by length (with the parallel sorted-length list) so we
-        # can binary-search the only length band that can yield quick_ratio >= MISS.
-        order_by_len = sorted(range(len(port_norm)), key=lambda j: len(port_norm[j]))
-        sorted_lens = [len(port_norm[j]) for j in order_by_len]
-
-        missing, review = [], []
-        for rc in ref_norm:
-            if rc in port_blob:
-                continue
-            la = len(rc)
-            rc_cnt = Counter(rc)
-            rc_items = list(rc_cnt.items())
-            rc_get = rc_cnt.get
-            lrc = len(rc_cnt)
-
-            # Pass 1: collect only the pc whose quick_ratio upper bound reaches MISS
-            # (cheap char-multiset arithmetic, no SequenceMatcher). pc below MISS are
-            # provably below MISS in ratio() too and cannot affect any outcome.
-            #
-            # First prune by length: quick_ratio <= real_quick_ratio =
-            # 2*min(la,lb)/(la+lb), so quick_ratio >= MISS requires
-            # 2*min(la,lb)/(la+lb) >= MISS, i.e. lb in
-            # [la*MISS/(2-MISS), la*(2-MISS)/MISS]. pc outside that contiguous band
-            # have real_quick_ratio < MISS hence quick_ratio < MISS, and are skipped
-            # WITHOUT the per-char sum (this is the dominant saving: most port
-            # comments differ enough in length to be excluded). We binary-search the
-            # band in the length-sorted order; the char-multiset test inside still
-            # decides membership exactly, so the band only narrows work, never alters
-            # which pc qualify.
-            lo_len = la * MISS / (2.0 - MISS)
-            hi_len = la * (2.0 - MISS) / MISS
-            lo = bisect.bisect_left(sorted_lens, lo_len)
-            hi = bisect.bisect_right(sorted_lens, hi_len)
-            cands = []
-            for k in range(lo, hi):
-                j = order_by_len[k]
-                lb = sorted_lens[k]
-                denom = la + lb
-                if denom == 0:
-                    continue
-                cnt = port_cnt[j]
-                if lrc <= len(cnt):
-                    cg = cnt.get
-                    m = sum(min(n, cg(c, 0)) for c, n in rc_items)
-                else:
-                    m = sum(min(n, rc_get(c, 0)) for c, n in cnt.items())
-                qr = 2.0 * m / denom
-                if qr >= MISS:
-                    cands.append((qr, j))
-
-            if not cands:
-                # No pc can even reach MISS, so best < MISS exactly => MISSING.
-                missing.append(rc)
-                continue
-
-            # Pass 2: exact best over those candidates, in descending quick_ratio
-            # order with early break (sorted desc: once qr <= best, no later
-            # candidate can beat best either).
-            cands.sort(reverse=True)
-            sm = difflib.SequenceMatcher(None, rc)
-            best = 0.0
-            for qr, j in cands:
-                if qr <= best:
-                    break
-                sm.set_seq2(port_norm[j])
-                r = sm.ratio()
-                if r > best:
-                    best = r
-
-            if best < MISS:
-                missing.append(rc)
-            elif best < THRESHOLD:
-                review.append((rc, round(best, 2)))
+        missing, review = classify(ref_norm, port_norm)
 
         if not rust_files:
             print(f"G3b [{crate}]: no ported Rust yet (progress)")
@@ -371,6 +438,84 @@ def self_test():
             missing.append(rc)
     ok = missing == ["returns a circular buffer containing type t"]
     print(f"self-test: dropped-comment detected = {ok} (missing={missing})")
+    return 0 if (ok and self_test_relocations() == 0) else 1
+
+
+# One REAL reference comment per R4 relocation: (crate, oracle file, the
+# comment as it reads in the oracle). Each must be MISSING against the crate's
+# own src/ alone and covered once the relocation is added: proof that the
+# mapping is what closes it, on the real tree, not on a synthetic stand-in.
+RELOCATION_REAL_ROWS = [
+    ("font", "font/Collection.zig",
+     "The available faces we have. This shouldn't be modified manually."),
+    ("input", "input/function_keys.zig", "A single entry in the table of keys."),
+    ("cfg-fmt", "config/key.zig",
+     "Key is an enum of all the available configuration keys. This is used"),
+]
+
+
+def self_test_relocations():
+    """R4 relocation arm of the self-test (S-8a)."""
+    import tempfile
+    ok = True
+
+    # (1) Synthetic: a relocated comment is covered only with the relocation,
+    # and a genuine drop stays MISSING with it (the mapping masks nothing).
+    with tempfile.TemporaryDirectory() as td:
+        own = os.path.join(td, "own")
+        moved = os.path.join(td, "moved")
+        os.makedirs(own)
+        os.makedirs(moved)
+        with open(os.path.join(own, "a.rs"), "w") as fh:
+            fh.write("/// the crate keeps this comment in its own sources\n")
+        with open(os.path.join(moved, "b.rs"), "w") as fh:
+            fh.write("// this comment moved with the relocated port code\n")
+        idmap = [("ghostty", "rustty")]
+        ref = [norm("/// The crate keeps this comment in its own sources", idmap),
+               norm("// This comment moved with the relocated port code", idmap),
+               norm("// A comment the port genuinely dropped on the floor", idmap)]
+
+        def port(files):
+            return [norm(b, idmap) for f in files for b in comment_bodies(f)]
+
+        m_own, _ = classify(ref, port(_rs_under(own)))
+        m_all, _ = classify(ref, port(_rs_under(own) + _rs_under(moved)))
+        arm1 = sorted(m_own) == sorted([ref[1], ref[2]]) and m_all == [ref[2]]
+        print(f"self-test: relocation covers the moved comment, drop still caught "
+              f"= {arm1} (own-only missing={len(m_own)}, with relocation={m_all})")
+        ok &= arm1
+
+        # (2) A relocation path that does not exist raises (BLOCKED in run()).
+        try:
+            crate_port_files("font", {"font": [os.path.join(td, "gone")]})
+            arm2 = False
+        except FileNotFoundError:
+            arm2 = True
+        print(f"self-test: missing relocation path is an error = {arm2}")
+        ok &= arm2
+
+    # (3) Real tree: every mapped path exists, and each real row is MISSING
+    # without its relocation and covered with it.
+    idmap = load_idmap()
+    for crate, ref_file, text in RELOCATION_REAL_ROWS:
+        rc = norm("// " + text, idmap)
+        in_oracle = any(norm(b, idmap) == rc for b in
+                        comment_bodies(os.path.join(GHOSTTY_SRC, ref_file)))
+        try:
+            with_files = crate_port_files(crate)
+        except FileNotFoundError as e:
+            print(f"self-test: [{crate}] relocation path missing: {e}")
+            ok = False
+            continue
+        own_norm = [norm(b, idmap) for f in crate_rust_files(crate) for b in comment_bodies(f)]
+        all_norm = [norm(b, idmap) for f in with_files for b in comment_bodies(f)]
+        before, _ = classify([rc], own_norm)
+        after, _ = classify([rc], all_norm)
+        arm3 = in_oracle and before == [rc] and after == []
+        print(f"self-test: [{crate}] real row {ref_file} MISSING without relocation, "
+              f"covered with it = {arm3} (in oracle={in_oracle}, "
+              f"before={len(before)}, after={len(after)})")
+        ok &= arm3
     return 0 if ok else 1
 
 
