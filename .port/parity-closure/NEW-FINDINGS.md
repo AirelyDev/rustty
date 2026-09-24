@@ -3156,7 +3156,64 @@ observable); `hyperlink.rs:376` vs `hyperlink.zig` (`DefaultHasher` vs `Wyhash.i
 style-set work aligned the style item layout), so the port and reference cluster hyperlinks identically.
 Not fixed in this round; recorded for adjudication.
 
-**state**: OPEN (R1 candidate).
+**state (before tail-s2)**: OPEN (R1 candidate).
+
+**Closed by task tail-s2 (2026-09-23)**: fixed per R1. `PageEntry.hash`
+(`crates/rustty-vt/src/hyperlink.rs`) now produces the reference's 64-bit value.
+
+- **Wyhash**: the port already existed (`crates/rustty-zigstd/src/wyhash.rs`, used by the page hash
+  maps); its body matches Zig 0.16.0's `lib/std/hash/wyhash.zig` line for line. Its tests now carry all
+  five of Zig's `wyhash.zig` tests (`smhasher` and `iterative api`, with `verify.zig`'s helpers, were
+  missing; `test vectors at comptime` has no Rust compile-time form and is noted, not ported). A
+  differential against a Zig 0.16.0 probe: 602 random inputs, lengths 0-300 (each twice), seed 0 then
+  random seeds, one-shot and iterative in random 1-64-byte chunks. MEASURED: 602/602 one-shot and
+  602/602 iterative hashes equal the probe's, before and after this change (the Wyhash port was already
+  exact). 25 of the rows are kept in `differential_against_zig`.
+- **What the reference hashes** (`hyperlink.zig:143`, `lib/std/hash/auto_hash.zig`): the tag as one
+  byte in the union's declaration order (`explicit` 0, `implicit` 1; the port's `PageEntryIdTag`
+  discriminants are the reverse, so the bytes are literals); `.implicit` as its 4 native bytes; each
+  `.Deep` slice (`.explicit` id, then `uri`) as its bytes FOLLOWED BY its `len` as a native `usize`.
+  The old port also dropped the two lengths, so `(id "ab", uri "x")` and `(id "a", uri "bx")` hashed
+  alike; they no longer do.
+- **Differential through the reference's own `hash`** (a probe built from `20abdb50a`'s `src/` with
+  `Page.insertHyperlink`, `hyperlink.Set.get`, `PageEntry.hash` and the set context's `hash`): 600
+  random entries (tag 50/50, ids 1-40 bytes, URIs 1-300 bytes, raw bytes) plus 14 readable ones.
+  MEASURED: before, 0/600 matched; after, 600/600 and 14/14 match on both `entry.hash` and the
+  context's `hash`.
+- **Bucket placement**: both sets take the bucket as `(hash +% i) & table_mask`
+  (`ref_counted_set.zig:569`, `:629`; `ref_counted_set.rs:1223`, `:1318`), so the same hash gives
+  the same placement. MEASURED: 16 insert sequences (set counts 4/8/16/32, 4 seeds each, each run
+  past capacity) and one readable count-16 sequence: before, all 16 random sequences differed from the
+  reference in table or PSLs; after, every add result (id or `SetOutOfMemory`), the whole table, every
+  item's bucket/PSL/refcount, `max_psl`, `living` and `next_id` are identical. The R13-L item stride is
+  unchanged (`@sizeOf(hyperlink.Set.Item)` 48 on the probe).
+- **Performance**: the reference's shape (six short `update`s on a streaming hasher) measured 3x the
+  one-shot `Wyhash.hash` on OSC 8-sized entries and a paired +4..7% on an OSC 8-heavy
+  `+terminal-stream` corpus, so an entry of at most 256 bytes of hash input is gathered into a stack
+  buffer and hashed one-shot (the same value: Wyhash's iterative API is concatenation-exact, and both
+  paths are in the differential and in the tests). Numbers in the task tail-s2 report; measured under
+  load, so PROVISIONAL.
+- **Tests**: `hyperlink::page_entry_hash_tests` (`hash_matches_the_reference`: 14 probe values, including
+  both sides of the 256-byte edge and the two "abx" entries; `set_placement_matches_the_reference`: the
+  count-16 table and PSLs); `wyhash::tests::{test_smhasher, test_iterative_api,
+  differential_against_zig}`. Negative controls (one at a time, each failing for its stated reason):
+  lengths dropped, tag bytes swapped, the streaming path's seed changed (fails only on the long rows),
+  Wyhash's `total_len` dropped from `final2`, `total_len` skipped on buffered `update`s.
+
+The ledger row for the same finding, `S155-F1` (DISPUTED, WAIVED as not observable), is not this task's
+row and is left as it is; its premise ("any self-consistent hash preserves every observable result") no
+longer describes the code.
+
+**Follow-up, task tail-s2 (S-2b)**: the port's `PageEntryIdTag` discriminants were the reverse of the
+reference's tag (`implicit` 0). They now follow the reference (`explicit` 0, `implicit` 1), so the tag
+byte stored in the page mapping matches: MEASURED with the same probe, byte 16 of `PageEntry.Id` is 01
+for an implicit link and 00 for an explicit one, and an all-zero id is `.explicit`
+(`hyperlink::page_entry_tag_byte_tests`; negative control: the old numbering fails both tests). No C
+header, snapshot format (it has its own `Kind` byte) or compression golden depends on the numbering. The
+ledger row S155-F1 is re-marked CLOSED with this evidence. The probe also found N208 (the payload
+slice's field order).
+
+**state**: CLOSED (task tail-s2).
 
 ## N100 — nine more `std.fmt.parseInt` sites in `src/terminal` parsed with Rust's `str::parse`
 
@@ -3776,3 +3833,45 @@ fix: 0 of 50 of the same sequential runs failed; see the task T-F2 report for th
   `ESC [ +97 u`), `csi_unsigned_numbers_refuse_a_sign` and `rgb_from_spec_channels_are_zig_parse_unsigned`
   (both passed at the base; controls: `parseInt` at those sites, the sign accepted).
 - **state**: CLOSED (task tail-s9b).
+
+## N207 — `+terminal-stream` on an OSC 8-heavy corpus is about 3.3x slower than the oracle
+
+- **id**: N207. Found by task tail-s2 (S-2b) while measuring the N82 fix. Not in the inventory.
+- **severity**: medium (performance). **kind**: perf gap; not a fidelity defect.
+- **corpus**: 16 MiB (16777216 B), generated once to a file and truncated (never piped into the
+  bench), like the ws10 corpora. The generator (`gen_osc8.py`, task tail-s2 scratch, reproduced in the
+  task tail-s2 report) follows the reference generator's `hyperlink_start` / `hyperlink_end` grammar
+  (`src/synthetic/Osc.zig`) in the `--style=streaming` framing: `ESC ] 8;` + `id=<alnum 0-16>` half
+  the time + `;https://localhost` + 2-5 `/<alnum 0-16>` segments + `ESC \`, then 1-8 printable
+  alphanumerics, then `ESC ] 8;; ESC \`, and `\r\n` after 10% of links. Python `random.Random(82)`.
+- **method**: `ws10_suite.measure` (one warmup, then n timed runs, stdout/stderr discarded), `+terminal-stream
+  --data=osc8.bin`, the pinned oracle `.port/phase-0/baseline/bench-releasefast/bin/ghostty-bench`
+  against `target/release-fast/rustty-bench`, alternating which goes first each round.
+- **measured** (PROVISIONAL: 1-minute load 17-25 on every run; other agents were building): oracle median
+  110-132 ms; rustty 368-444 ms, i.e. +215% to +303% over five runs (4 rounds x n=9, or 2 x n=5), both
+  before and after N82's fix. The hash is not the cause (N82's change moved rustty by -17% to +7%).
+  The page grows its hyperlink and string capacity repeatedly on this corpus (`info(page_list):
+  adjusting page capacity` lines on stderr); whether that path, the logging, or something else is the
+  cost is UNVERIFIED.
+- **not done**: no fix attempted; the perf batch owns it. Re-measure at load below `IDLE_MAX` first.
+- **state**: OPEN.
+
+## N208 — `Offset(T).Slice` field order differs from the reference on 64-bit targets
+
+- **id**: N208. Found by task tail-s2 (S-2b) while probing the hyperlink tag byte. Not in the inventory.
+- **severity**: low. **kind**: R1 fidelity candidate (page-mapping bytes; no behaviour shown to differ).
+- **oracle**: `src/terminal/size.zig` `Offset(T).Slice = struct { offset: Offset(T), len: usize }` is a
+  Zig auto-layout struct. MEASURED with Zig 0.16.0 at `20abdb50a`: on aarch64-macos it is 16 bytes with
+  `len` at 0 and `offset` at 8 (Zig puts the 8-aligned field first); on wasm32-wasi it is 8 bytes with
+  `offset` at 0 and `len` at 4.
+- **rustty**: `crates/rustty-render-types/src/term_size.rs` `OffsetSlice<T>` is `#[repr(C)]` in the
+  declared order: `offset` at 0, `_padding` at 4, `len` at 8 on 64-bit. So every slice stored in a page
+  mapping (a hyperlink's `.explicit` id and `uri`, grapheme-map values) has its two words swapped
+  relative to the reference on 64-bit. wasm32 matches.
+- **interaction**: the hyperlink `.implicit` `u32` sits at bytes 0-4 in both (the reference's union
+  starts every field at byte 0), which in the reference overlaps the low bytes of `len`. A fix that
+  reorders `OffsetSlice` must keep `PageEntryId::Implicit` writing bytes 0-4 (today it writes them
+  through `payload.offset`).
+- **not done**: `OffsetSlice` is shared across areas (render-types, grapheme map, hyperlinks); out of
+  task tail-s2's scope.
+- **state**: OPEN.
