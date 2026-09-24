@@ -319,6 +319,30 @@ mod tests {
         events.iter().position(|e| e == ev)
     }
 
+    /// Asserts that `vx.deinit` ran after event `after` (from the start when
+    /// `None`) and before the final `tty.deinit`: `Vaxis::deinit` ->
+    /// `reset_state` always writes `show_cursor` then `sgr_reset` first,
+    /// whatever the vaxis state.
+    fn assert_vx_deinit_between(events: &[Ev], after: Option<usize>) {
+        let show = events
+            .iter()
+            .enumerate()
+            .skip(after.map_or(0, |a| a + 1))
+            .find(|(_, e)| **e == Ev::Write(ctlseqs::show_cursor.to_vec()))
+            .map(|(i, _)| i)
+            .expect("vx.deinit's show_cursor write is missing");
+        assert_eq!(
+            Some(&Ev::Write(ctlseqs::sgr_reset.to_vec())),
+            events.get(show + 1),
+            "vx.deinit's sgr_reset write must follow show_cursor"
+        );
+        let tty_deinit = index(events, &Ev::TtyDeinit).expect("tty.deinit is missing");
+        assert!(
+            show + 1 < tty_deinit,
+            "vx.deinit must run before tty.deinit"
+        );
+    }
+
     // parity S68-F1 / S68-F2: `try tty.getWinsize()` failing still runs the
     // three defers registered before it, LIFO: `unicode_reset`, `vx.deinit`,
     // `tty.deinit` (which restores the termios).
@@ -333,6 +357,7 @@ mod tests {
         assert!(set.is_some() && winsize > set);
         assert_eq!(None, index(&events, &Ev::Body));
         assert!(reset > winsize);
+        assert_vx_deinit_between(&events, reset);
         assert_eq!(1, deinits);
         assert_eq!(Some(&Ev::TtyDeinit), events.last());
     }
@@ -349,6 +374,13 @@ mod tests {
             None,
             index(&events, &Ev::Write(ctlseqs::unicode_reset.to_vec()))
         );
+        // The failed `unicode_set` write is not logged, so `vx.deinit`'s
+        // writes are the first events: nothing precedes them.
+        assert_eq!(
+            Some(&Ev::Write(ctlseqs::show_cursor.to_vec())),
+            events.first()
+        );
+        assert_vx_deinit_between(&events, None);
         assert_eq!(1, deinits);
         assert_eq!(Some(&Ev::TtyDeinit), events.last());
     }
@@ -362,6 +394,7 @@ mod tests {
         let body = index(&events, &Ev::Body);
         let reset = index(&events, &Ev::Write(ctlseqs::unicode_reset.to_vec()));
         assert!(set.is_some() && body > set && reset > body);
+        assert_vx_deinit_between(&events, reset);
         assert_eq!(1, deinits);
         assert_eq!(Some(&Ev::TtyDeinit), events.last());
     }

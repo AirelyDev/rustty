@@ -2791,6 +2791,18 @@ mod picker_tests {
         assert_eq!(b"a", next.char.grapheme);
         assert!(vx.screen.cursor_vis, "the cursor is shown");
         assert_eq!((21 + 77, 36), (vx.screen.cursor_col, vx.screen.cursor_row));
+
+        // Second frame, after `Left`: the frame copy starts from the carried
+        // `draw_offset` (23). The cursor (grapheme 99) is still inside the
+        // view, so the view does not move and the cursor steps one column
+        // left. A copy that started from 0 would scroll afresh to
+        // 99 - 78 + 1 = 22, so the view would jump by one column.
+        st.text_input.cursor_left();
+        draw(&mut vx, &mut st);
+        assert_eq!(23, st.text_input.draw_offset, "the view did not jump");
+        assert_eq!(76, st.text_input.prev_cursor_col);
+        assert_eq!(99, st.text_input.prev_cursor_idx);
+        assert_eq!((21 + 76, 36), (vx.screen.cursor_col, vx.screen.cursor_row));
     }
 
     /// parity S69-F2: the last two save instructions are the reference's

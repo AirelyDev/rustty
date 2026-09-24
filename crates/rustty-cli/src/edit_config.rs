@@ -493,6 +493,10 @@ mod exec_tests {
     /// whose pipeline writer loops until the reader has gone: with SIGPIPE
     /// ignored its `echo` fails and it writes `ignored`; with SIGPIPE at its
     /// default the writer is killed. Either way the script then writes `ran`.
+    ///
+    /// The editor also receives the process environment (`envp =
+    /// std.c.environ`): the parent exports `RUSTTY_T_C_ENV_PROBE` to the child,
+    /// and the script writes back the value it sees.
     #[test]
     fn the_editor_inherits_the_ignored_sigpipe() {
         const CHILD: &str = "RUSTTY_T_C_EDIT_CONFIG_EXEC_CHILD";
@@ -513,6 +517,7 @@ mod exec_tests {
                 "--test-threads=1",
             ])
             .env(CHILD, &out)
+            .env(ENV_PROBE, ENV_PROBE_VALUE)
             .output()
             .expect("re-exec the test binary");
         let log = format!(
@@ -531,7 +536,16 @@ mod exec_tests {
             got.contains("ignored\n"),
             "the editor's pipeline writer was killed by SIGPIPE: {got:?}\n{log}"
         );
+        assert!(
+            got.contains(&format!("env={ENV_PROBE_VALUE}\n")),
+            "the editor did not receive the process environment: {got:?}\n{log}"
+        );
     }
+
+    /// A variable the parent exports to the exec child; the editor script
+    /// echoes it back, so an editor exec'd without `environ` is caught.
+    const ENV_PROBE: &str = "RUSTTY_T_C_ENV_PROBE";
+    const ENV_PROBE_VALUE: &str = "inherited-7f3a";
 
     fn exec_child(out: &std::path::Path) -> ! {
         let script = out.with_file_name("editor.sh");
@@ -539,6 +553,7 @@ mod exec_tests {
             &script,
             "#!/bin/sh\n\
              { while :; do echo x || { echo ignored > \"$1\"; exit 0; }; done; } | head -n 1 > /dev/null\n\
+             echo \"env=$RUSTTY_T_C_ENV_PROBE\" >> \"$1\"\n\
              echo ran >> \"$1\"\n",
         )
         .unwrap();

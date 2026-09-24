@@ -1683,6 +1683,9 @@ mod tests {
             ("::ffff:", false),
             ("ffff::1.2.3.4", false),
             ("0:0:0:0:0:ffff:1.2.3.4", false),
+            // Uncompressed and short: `.incomplete` (MEASURED with Zig 0.16.0).
+            ("1:2:3", false),
+            ("1:2:3:4:5:6:7", false),
         ];
         for &(host, want) in cases {
             assert_eq!(want, is_valid_host(host.as_bytes()), "{host}");
