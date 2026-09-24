@@ -134,8 +134,7 @@ pub fn run(args: &mut impl Iterator<Item = String>) -> Result<PathBuf, String> {
         &include.join("rustty-embed.h"),
     )?;
 
-    let version = rustty_build_config_version();
-    let (pc, pc_static) = pkg_config_files(&prefix.to_string_lossy(), &version, target_os);
+    let (pc, pc_static) = pkg_config_files(&prefix.to_string_lossy(), pc_version(), target_os);
     write(&pkgconfig.join("rustty-internal.pc"), &pc)?;
     write(&pkgconfig.join("rustty-internal-static.pc"), &pc_static)?;
     Ok(prefix)
@@ -151,9 +150,15 @@ fn write(path: &Path, body: &str) -> Result<(), String> {
     std::fs::write(path, format!("{body}\n")).map_err(|e| format!("write {}: {e}", path.display()))
 }
 
-/// The version the `.pc` files carry: the workspace version.
-fn rustty_build_config_version() -> String {
-    crate::dist::workspace_version(&workspace_root()).unwrap_or_else(|_| "0.0.0".into())
+/// The version the `.pc` files carry: `deps.config.version`
+/// (`GhosttyLib.zig:265`, `:279`), which is the app version composed from the
+/// checkout (`Config.zig:276-339`), pre-release and build metadata included:
+/// `rustty_version::VERSION_STRING`.
+//
+// CORRECTION (review T-B): this was the workspace `Cargo.toml` version, the bare
+// `X.Y.Z`, which only matches the reference for a `vX.Y.Z`-tagged build.
+fn pc_version() -> &'static str {
+    rustty_version::VERSION_STRING
 }
 
 /// The host triple, from `rustc -vV`.
@@ -238,6 +243,18 @@ mod tests {
         assert!(pcs.contains("Libs: ${libdir}/rustty-internal.a\n"));
         let (_, win) = pkg_config_files("C:/p", "0.1.0", "windows");
         assert!(win.contains("Libs: ${libdir}/rustty-internal-static.lib\n"));
+    }
+
+    /// The `.pc` `Version:` is the composed app version, not the workspace
+    /// `X.Y.Z` (`GhosttyLib.zig:265`: `deps.config.version`).
+    #[test]
+    fn pc_version_is_the_composed_app_version() {
+        assert_eq!(pc_version(), rustty_version::VERSION_STRING);
+        let (pc, _) = pkg_config_files("/p", pc_version(), "linux");
+        assert!(
+            pc.contains(&format!("\nVersion: {}\n", rustty_version::VERSION_STRING)),
+            "{pc}"
+        );
     }
 
     #[test]
