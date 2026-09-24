@@ -3518,6 +3518,22 @@ fix: 0 of 50 of the same sequential runs failed; see the task T-F2 report for th
   UD202/UD203. The Linux-only `send` arm that calls it is not compiled on macOS.
 - **state**: OPEN — fix written, Linux run pending (same as S112-F8).
 
+## N180 — `+page-compression --mode=report` printed to stdout (the S62-F3/F4/F5 class, unlisted)
+
+- **id**: N180. Not in the inventory. Found by T-I (tail wave), 2026-09-23, while working LEDGER
+  S62-F3/F4/F5: a grep for `std.debug.print` in `src/benchmark/` at the pin finds nine sites; the
+  audit listed seven. The other two are `PageCompression.zig:436` (per-page line) and `:442` (total).
+- **severity**: medium (same as S62-F3). **kind**: behavioral-difference (stdout instead of stderr).
+- **what**: `crates/rustty-bench/src/page_compression.rs` ported both as `println!`.
+- **fix**: all nine sites now use the crate's `debug_print!` macro (`crates/rustty-bench/src/lib.rs`):
+  stderr, under the stderr lock, write errors dropped as `std.debug.print`'s `catch return` does
+  (`eprintln!` would panic on a failed write). Test
+  `crates/rustty-bench/tests/report_output_goes_to_stderr.rs::page_compression_report_goes_to_stderr`
+  runs the binary and asserts the lines are on stderr and stdout is empty; negative control
+  (`print!` restored in `page_compression.rs` only) fails with "no stderr line starts with
+  \"page-compression page=0 \"".
+- **state**: CLOSED (T-I).
+
 ## N196 — tests passed without testing anything when their environment was missing
 
 - **id**: N196. Not in the inventory. Found by the tail-s3 task (silent-skip audit), 2026-09-23.
