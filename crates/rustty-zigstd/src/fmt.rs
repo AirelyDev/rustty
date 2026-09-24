@@ -210,6 +210,8 @@ fn parse_int_with_sign<T: ZigInt>(buf: &[u8], base: u8, neg: bool) -> Result<T, 
 pub trait ZigFloat: Copy + PartialEq + fmt::Display {
     /// The sign bit (`std.math.signbit`).
     fn sign_bit(self) -> bool;
+    /// `std.math.isNan`.
+    fn nan(self) -> bool;
     /// `math.floatExponentMax(T)`.
     const MAX_EXP: i64;
     /// `math.floatExponentMin(T)`.
@@ -235,6 +237,9 @@ impl ZigFloat for f64 {
     fn sign_bit(self) -> bool {
         self.is_sign_negative()
     }
+    fn nan(self) -> bool {
+        self.is_nan()
+    }
     const MAX_EXP: i64 = 1023;
     const MIN_EXP: i64 = -1022;
     const MANTISSA_BITS: u32 = 52;
@@ -256,6 +261,9 @@ impl ZigFloat for f64 {
 impl ZigFloat for f32 {
     fn sign_bit(self) -> bool {
         self.is_sign_negative()
+    }
+    fn nan(self) -> bool {
+        self.is_nan()
     }
     const MAX_EXP: i64 = 127;
     const MIN_EXP: i64 = -126;
@@ -590,7 +598,7 @@ fn parse_partial_number(s: &[u8], negative: bool, n: &mut usize) -> Option<Numbe
     debug_assert!(!s.is_empty());
     *n = 0;
 
-    if s.len() >= 2 && s[0] == b'0' && s[1].to_ascii_lowercase() == b'x' {
+    if s.len() >= 2 && s[0] == b'0' && s[1].eq_ignore_ascii_case(&b'x') {
         let mut stream = FloatStream::init(&s[2..]);
         *n += 2;
         parse_partial_number_base(
@@ -797,7 +805,7 @@ pub fn parse_float<T: ZigFloat>(s: &[u8]) -> Result<T, ParseFloatError> {
 /// `copySpecialStr` prints the sign). Checked against Zig 0.16.0 over
 /// `zig_float_d_corpus.rs`.
 pub fn format_float_d<T: ZigFloat>(v: T) -> String {
-    if v != v {
+    if v.nan() {
         return if v.sign_bit() { "-nan" } else { "nan" }.to_string();
     }
     format!("{v}")

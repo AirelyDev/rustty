@@ -1690,7 +1690,7 @@ mod tests {
         table.extend_from_slice(&storage);
 
         let mut font = embedded::VARIABLE.to_vec();
-        while font.len() % 4 != 0 {
+        while !font.len().is_multiple_of(4) {
             font.push(0);
         }
         let offset = font.len() as u32;

@@ -15,6 +15,9 @@
 //!   `f32`; the `f128` side is replaced by its value, `2^64` (the `f32`
 //!   nearest to `0xffffffffffffffff`).
 
+// The float literals are Zig's test literals, verbatim.
+#![allow(clippy::approx_constant, clippy::excessive_precision)]
+
 use super::zig_corpus::{FLOATS, INTS};
 use super::*;
 

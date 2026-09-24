@@ -78,6 +78,8 @@ fn hypot_fused(x: f64, y: f64) -> f64 {
 }
 
 #[cfg(test)]
+// The expected values are Zig's `hypot_test_cases`, verbatim.
+#[allow(clippy::excessive_precision)]
 mod tests {
     use super::hypot;
 
