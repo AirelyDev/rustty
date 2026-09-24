@@ -3643,6 +3643,23 @@ fix: 0 of 50 of the same sequential runs failed; see the task T-F2 report for th
   does. Left to the `src/os` owner (not this batch's area).
 - **state**: OPEN.
 
+## N173 — after S43-F3, `codepoint-width --mode=wcwidth` is no longer comparable to the pinned perf oracle
+
+- **id**: N173. Found by task T-H2 while measuring S43-F3 (controller Decision B).
+- **severity**: low. **kind**: perf-measurement (no behaviour defect).
+- **what**: `rustty-bench`'s `cli::main` now runs the global init (`init_with_action(false)`, the
+  reference's `global.init(.{ .tool = .. })`), whose `ensureLocale` sets the process locale from the
+  environment (en_US.UTF-8 on this host). libc `wcwidth` is much slower under a UTF-8 locale.
+  MEASURED (paired, N=9, load ~12, provisional): 238 ms before, 749 ms after; with `LANG=C LC_ALL=C` both
+  are 236 ms. The pinned perf oracle (`4749c4e93`, `ws10_suite.py`) predates the `.tool` init and runs
+  in the "C" locale, so Fence 1 now reports that config LOST (zig 267 ms, rust 753 ms). The reference at
+  `20abdb50a` runs `ensureLocale` in its bench too (`global.zig:208`), so the port matches the current
+  reference; the comparison, not the port, is what changed.
+- **options for the controller**: record the config in `ws10_suite.py`'s `INCOMPARABLE` with these
+  numbers (as `screen-clone.render/small` is), or run the perf lanes with `LC_ALL=C`. Not done here:
+  editing a fence is the controller's call (R5).
+- **state**: OPEN.
+
 ## N196 — tests passed without testing anything when their environment was missing
 
 - **id**: N196. Not in the inventory. Found by the tail-s3 task (silent-skip audit), 2026-09-23.
