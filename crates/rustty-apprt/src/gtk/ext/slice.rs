@@ -14,6 +14,11 @@
 //! (glib-0.22 `subclass/boxed.rs:50-63`), giving byte-for-byte the oracle's
 //! deep-copy boxed semantics.
 //!
+//! With the arena gone, the oracle's `allocator` accessor (`slice.zig:39-42`)
+//! has nothing to return and is not ported. Its reference doc:
+//!
+//! Returns the general-purpose allocator used by this StringList.
+//!
 //! Sentinel note: the oracle stores `[:0]const u8` because these feed C APIs.
 //! rustty holds owned `String`; a future consumer that hands one to a C boundary
 //! re-establishes the NUL there (`CString`). No such consumer exists in this

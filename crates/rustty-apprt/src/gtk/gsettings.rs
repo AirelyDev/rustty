@@ -20,10 +20,10 @@
 //! The oracle's `get`/`getAlloc`/`getImpl` (`:42-77`) split on
 //! `requiresAllocation()` at comptime: non-allocating keys (`bool`/`c_int`) read
 //! straight out of a `GValue`; the allocating key (`gtk-font-name`) needs an
-//! allocator. Only the non-allocating **bool** path is consumed by the tier so
-//! far — `Surface.init` reads `gtk-enable-primary-paste` (`surface.zig:1816`) —
-//! so [`get_bool`] is the ported reader; the allocating `getAlloc` path lands
-//! with its first consumer (none at this pin).
+//! allocator. The non-allocating readers are [`get_bool`] (`Surface.init`
+//! reads `gtk-enable-primary-paste`, `surface.zig:1816`) and [`get_c_int`]
+//! (`gtk-xft-dpi`); the allocating reader is [`get_alloc`] (parity tail S-8d,
+//! N282 — it has no caller in the reference GTK tree at the pin, and none here).
 
 /// GTK Settings keys with well-defined types.
 ///
@@ -169,6 +169,47 @@ pub fn get_c_int(key: Key) -> Option<i32> {
 
     let settings = gtk4::Settings::default()?;
     Some(settings.property::<i32>(key.name()))
+}
+
+/// Reads a GTK setting, allocating memory if necessary.
+/// Automatically uses XDG Desktop Portal in Flatpak environments.
+/// Caller must free returned memory with the provided allocator.
+/// Returns null if the setting is unavailable.
+///
+/// PORTS: `gsettings.zig:50-57` `getAlloc` with `getImpl`'s allocating arm
+/// (`:69-74`: `[]const u8 => { const ptr = value.getString() orelse break :blk
+/// null; ... try alloc.dupe(u8, str) }`), for the allocating (`[]const u8`)
+/// keys — the reference's `getAlloc` also accepts the non-allocating keys, whose
+/// readers here are [`get_bool`] / [`get_c_int`]. Returns `None` when no default
+/// `Settings` is available (`:55` `orelse return null`) or the string is NULL.
+///
+/// PORT NOTE: the returned bytes are an owned copy (the `alloc.dupe`); "caller
+/// must free" is discharged by `Vec`'s drop, and the `std.mem.Allocator`
+/// parameter collapses with it. The only error the reference can return is
+/// `alloc.dupe`'s `OutOfMemory`, which Rust's global allocator turns into an
+/// abort, so the error union collapses too. Bytes, not `String` (the reference
+/// returns a `[]const u8` slice).
+#[must_use]
+pub fn get_alloc(key: Key) -> Option<Vec<u8>> {
+    use glib::prelude::ObjectExt as _;
+
+    debug_assert!(
+        key.requires_allocation(),
+        "get_alloc reads an allocating key; {} is not one",
+        key.name()
+    );
+    debug_assert!(
+        matches!(key.value_type(), KeyType::Str),
+        "get_alloc reads a []const u8 key; {} is not one",
+        key.name()
+    );
+
+    let settings = gtk4::Settings::default()?;
+    // `gsettings.zig:69-74`: a NULL string reads as `null`; otherwise the
+    // bytes are duplicated into caller-owned memory.
+    settings
+        .property::<Option<String>>(key.name())
+        .map(String::into_bytes)
 }
 
 #[cfg(test)]
