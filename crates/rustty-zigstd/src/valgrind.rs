@@ -22,9 +22,22 @@
 /// `@compileError` of the value): true in `Debug` for x86_64-linux,
 /// aarch64-linux, x86_64/aarch64-freebsd, x86_64-windows, arm-linux and
 /// riscv64-linux; false in `ReleaseSafe` and `ReleaseFast`; false on
-/// aarch64-macos and x86_64-macos in every mode. Zig `Debug` maps to
-/// `debug_assertions` (the workspace precedent, e.g. `keymap_darwin.rs`).
-pub const VALGRIND_SUPPORT: bool = cfg!(debug_assertions) && !cfg!(target_os = "macos");
+/// aarch64-macos and x86_64-macos in every mode.
+//
+// Zig `Debug` is the Cargo opt-level 0 (the mode mapping in
+// `rustty-build-config`'s `mode_string_for`), passed in by `build.rs`.
+// CORRECTION (review T-I F6): this was `cfg!(debug_assertions) && !macos`,
+// which made it true under the `release-safe` profile (DG4:
+// `debug-assertions = true` at opt-level 3), where Zig ReleaseSafe's is false.
+pub const VALGRIND_SUPPORT: bool =
+    valgrind_support_for(env!("RUSTTY_ZIGSTD_OPT_LEVEL"), cfg!(target_os = "macos"));
+
+/// The `valgrind_support` decision over its inputs: Debug (opt-level 0) and
+/// not macOS.
+const fn valgrind_support_for(opt_level: &str, macos: bool) -> bool {
+    let opt_level = opt_level.as_bytes();
+    opt_level.len() == 1 && opt_level[0] == b'0' && !macos
+}
 
 /// `Valgrind.ClientRequest.RunningOnValgrind`.
 const RUNNING_ON_VALGRIND: usize = 4097;
@@ -144,6 +157,26 @@ pub fn running_on_valgrind() -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Review T-I F6: `valgrind_support` is true only for Debug (opt-level 0)
+    /// off macOS, matching the measured zig 0.16.0 value for each of Debug,
+    /// ReleaseSafe (opt-level 1-3 with `debug-assertions`, the `release-safe`
+    /// profile), ReleaseFast and ReleaseSmall ("s"/"z").
+    #[test]
+    fn valgrind_support_is_debug_only_and_never_on_macos() {
+        assert!(valgrind_support_for("0", false));
+        for opt in ["1", "2", "3", "s", "z"] {
+            assert!(!valgrind_support_for(opt, false), "opt-level {opt}");
+        }
+        for opt in ["0", "1", "2", "3", "s", "z"] {
+            assert!(!valgrind_support_for(opt, true), "macOS opt-level {opt}");
+        }
+        // This build's constant is the same decision over its own inputs.
+        assert_eq!(
+            valgrind_support_for(env!("RUSTTY_ZIGSTD_OPT_LEVEL"), cfg!(target_os = "macos")),
+            VALGRIND_SUPPORT
+        );
+    }
 
     /// Natively the magic sequence is a no-op: the request returns its
     /// default. This executes the x86_64/aarch64 sequence on the host even
