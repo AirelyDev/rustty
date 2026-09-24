@@ -1,6 +1,6 @@
 //! The generated stage1/stage2 tables + the `Data` value + the 2-stage lookup
 //! (VAXIS_C1B_DESIGN.md §3.2). `STAGE1`/`STAGE2` are emitted by `build.rs` into
-//! `OUT_DIR/uucode_tables.rs` from the vendored UCD 16.0.0 corpus; this module wraps
+//! `OUT_DIR/uucode_tables.rs` from the vendored UCD 17.0.0 corpus; this module wraps
 //! them with the typed `Data` decode. Statics only ⇒ Miri-clean (R6).
 
 use super::types::{EastAsianWidth, GeneralCategory, GraphemeBreak};
@@ -50,7 +50,7 @@ mod tests {
         }
     }
 
-    /// Spot-check a few code points' EAW/GC against known Unicode 16.0.0 facts.
+    /// Spot-check a few code points' EAW/GC against known Unicode 17.0.0 facts.
     #[test]
     fn spot_check() {
         // 'a' — Ll, narrow.
@@ -72,17 +72,22 @@ mod tests {
         // U+200C ZERO WIDTH NON-JOINER — grapheme_break Zwnj.
         assert_eq!(data(0x200C).grapheme_break, GraphemeBreak::Zwnj);
 
-        // U+1F469 WOMAN — extended_pictographic, emoji presentation, Wide.
+        // U+1F469 WOMAN — Emoji_Modifier_Base (so, in uucode 2826a37a,
+        // `emoji_modifier_base` rather than `extended_pictographic`), emoji presentation, Wide.
         let woman = data(0x1F469);
-        assert_eq!(woman.grapheme_break, GraphemeBreak::ExtendedPictographic);
+        assert_eq!(woman.grapheme_break, GraphemeBreak::EmojiModifierBase);
         assert!(woman.is_emoji_presentation);
         assert_eq!(woman.east_asian_width, EastAsianWidth::Wide);
 
-        // U+1F3FF EMOJI MODIFIER FITZPATRICK TYPE-6 — InCB Extend ⇒ indic_conjunct_break_extend.
+        // U+1F600 GRINNING FACE — extended_pictographic, not a modifier base.
         assert_eq!(
-            data(0x1F3FF).grapheme_break,
-            GraphemeBreak::IndicConjunctBreakExtend
+            data(0x1F600).grapheme_break,
+            GraphemeBreak::ExtendedPictographic
         );
+
+        // U+1F3FF EMOJI MODIFIER FITZPATRICK TYPE-6 — Emoji_Modifier ⇒ `emoji_modifier`
+        // (uucode 0.1.0 derived it from its InCB Extend as `indic_conjunct_break_extend`).
+        assert_eq!(data(0x1F3FF).grapheme_break, GraphemeBreak::EmojiModifier);
 
         // U+1F1FA REGIONAL INDICATOR SYMBOL LETTER U — regional_indicator.
         assert_eq!(

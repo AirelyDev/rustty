@@ -1,13 +1,14 @@
-//! `uucode/src/types.zig` — the enum subset vaxis's width/grapheme surface needs
-//! (VAXIS_C1B_DESIGN.md §5). Discriminants are PINNED (`#[repr(u8)]` + explicit
-//! values) because the 1620-entry grapheme-break precompute indexes by
-//! `state*324 + gb1*18 + gb2` — any drift silently corrupts the table.
+//! `uucode/src/types.zig` (uucode 2826a37a) — the enum subset vaxis's width/grapheme
+//! surface needs (VAXIS_C1B_DESIGN.md §5). Discriminants are PINNED (`#[repr(u8)]` +
+//! explicit values) because the 2000-entry grapheme-break precompute indexes by
+//! `state*400 + gb1*20 + gb2` — any drift silently corrupts the table. They are also
+//! the `@intFromEnum` values the S-10b differential compares against the Zig oracle.
 //!
 //! `OriginalGraphemeBreak` / `IndicConjunctBreak` are build-time-only inputs to the
 //! `grapheme_break` derivation and live entirely in `build.rs`; only the three runtime
 //! table enums + the derived `GraphemeBreak` (+ `BreakState`, in `grapheme.rs`) appear here.
 
-/// `EastAsianWidth` `enum(u3)` (types.zig:101-108).
+/// `EastAsianWidth` `enum(u3)` (types.zig:95-102).
 #[repr(u8)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum EastAsianWidth {
@@ -34,7 +35,7 @@ impl EastAsianWidth {
     }
 }
 
-/// `GeneralCategory` `enum(u5)` — 30 variants Lu..Cn (types.zig:6-37).
+/// `GeneralCategory` `enum(u5)` — 30 variants Lu..Cn (types.zig:1-32).
 #[repr(u8)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum GeneralCategory {
@@ -109,9 +110,10 @@ impl GeneralCategory {
     }
 }
 
-/// `GraphemeBreak` `enum(u5)` — 18 variants, discriminants pinned to types.zig:127-150.
-/// Note `extend` is decomposed into `Zwnj` + `IndicConjunctBreak{Extend,Linker}` (the
-/// derivation in `build.rs`), so this order differs from `OriginalGraphemeBreak`'s.
+/// `GraphemeBreak` `enum(u5)` — 20 variants, discriminants pinned to types.zig:121-144
+/// (uucode 2826a37a). `extend` is decomposed into `Zwnj` + `IndicConjunctBreak{Extend,
+/// Linker}` and the emoji modifier / modifier base are split out (the derivation in
+/// `build.rs`), so this order differs from `OriginalGraphemeBreak`'s.
 #[repr(u8)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum GraphemeBreak {
@@ -130,18 +132,20 @@ pub enum GraphemeBreak {
     Zwj = 12,
     Zwnj = 13,
     ExtendedPictographic = 14,
-    // extend ==
+    EmojiModifierBase = 15,
+    EmojiModifier = 16,
+    // extend, ==
     //   zwnj +
     //   indic_conjunct_break_extend +
     //   indic_conjunct_break_linker
-    IndicConjunctBreakExtend = 15,
-    IndicConjunctBreakLinker = 16,
-    IndicConjunctBreakConsonant = 17,
+    IndicConjunctBreakExtend = 17,
+    IndicConjunctBreakLinker = 18,
+    IndicConjunctBreakConsonant = 19,
 }
 
 impl GraphemeBreak {
     /// Number of variants — the grapheme-break precompute's `gb` dimension.
-    pub const COUNT: usize = 18;
+    pub const COUNT: usize = 20;
 
     /// Decode a stored discriminant (from the packed stage2 `u16`).
     pub const fn from_u8(v: u8) -> Self {
@@ -161,9 +165,11 @@ impl GraphemeBreak {
             12 => Self::Zwj,
             13 => Self::Zwnj,
             14 => Self::ExtendedPictographic,
-            15 => Self::IndicConjunctBreakExtend,
-            16 => Self::IndicConjunctBreakLinker,
-            17 => Self::IndicConjunctBreakConsonant,
+            15 => Self::EmojiModifierBase,
+            16 => Self::EmojiModifier,
+            17 => Self::IndicConjunctBreakExtend,
+            18 => Self::IndicConjunctBreakLinker,
+            19 => Self::IndicConjunctBreakConsonant,
             _ => unreachable!(),
         }
     }

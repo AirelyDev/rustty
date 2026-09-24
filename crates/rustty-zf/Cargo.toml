@@ -1,13 +1,13 @@
-# rustty-zf — pure-Rust port of the vendored `zf` 0.10.3 fuzzy finder (R3 vendored dep).
+# rustty-zf — pure-Rust port of the vendored `zf` 0.11.0 fuzzy finder (R3 vendored dep).
 #
-# Crate IDENTITY is `rustty-zf` (R4). `zf` (natecraddock/zf 0.10.3, MIT) is a
+# Crate IDENTITY is `rustty-zf` (R4). `zf` (natecraddock/zf 0.11.0, MIT; 0.10.3 until parity tail S-10b) is a
 # DEPENDENCY package of ghostty — `cli/list_themes.zig` fuzzy-sorts the theme
-# picker with `zf.rank(name, tokens, .{})` (`?f64`; lower = better, `null` drops a
+# picker with `zf.rank(name, tokens, .{ .case_sensitive = false, .plain = true })` (`?f64`; lower = better, `null` drops a
 # non-match) — NOT ghostty source. Like `rustty-z2d` / `rustty-wuffs` this is the
 # vendored-dep-port pattern: a PURE-RUST LEAF, no `rustty-*` deps.
 #
 # Source of truth (READ-ONLY oracle):
-#   /Users/gael/.cache/zig/p/zf-0.10.3-OIRy8RuJAACKA3Lohoumrt85nRbHwbpMcUaLES8vxDnh/src/zf/{zf,filter,clib}.zig
+#   /Users/gael/.cache/zig/p/zf-0.11.0-OIRy8X-RAAAwaRXHMYpj2uvBnuGTZWEE_3V7acqHQNtW/src/zf/{zf,filter,clib}.zig
 #
 # R1 fidelity: every line / comment / `test {}` ported assertion-for-assertion.
 # The fuzzy-RANK algorithm is BIT-FAITHFUL — `list_themes` sorts on the exact `f64`

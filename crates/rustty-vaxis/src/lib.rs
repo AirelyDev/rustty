@@ -1,4 +1,5 @@
-//! rustty-vaxis — pure-Rust port of the vendored `libvaxis` 0.5.1 subset (R3).
+//! rustty-vaxis — pure-Rust port of the vendored `libvaxis` 0.6.0 subset (R3; 0.5.1 until
+//! parity tail S-10b, `NON_PORTS.md` §G2).
 //!
 //! CHUNK 1a — the CORE VALUE TYPES only. Module-per-Zig-file layout:
 //! - [`cell`] — `Cell.zig` (`Style`/`Color`/`Segment`/`Cell` + SGR bits)
@@ -11,8 +12,8 @@
 //! CHUNK 1b adds the width/grapheme surface:
 //! - [`gwidth`] — `gwidth.zig` (grapheme-width Method/eawToWidth/gwidth, 11-test pin)
 //! - [`unicode`] — `unicode.zig` (Old-API grapheme iterator wrapper)
-//! - [`uucode`] — the vendored `uucode` 0.1.0 runtime subset (types/get/grapheme/utf8
-//!   + the stage1/stage2 tables `build.rs` reproduces from the vendored UCD 16.0.0)
+//! - [`uucode`] — the vendored `uucode` runtime subset (2826a37a since S-10b; types/get/grapheme/utf8
+//!   + the stage1/stage2 tables `build.rs` reproduces from the vendored UCD 17.0.0)
 //!
 //! CHUNK 2 adds the RENDERING layer:
 //! - [`screen`] — `Screen.zig` (the flat `Vec<Cell<'a>>` cell buffer)

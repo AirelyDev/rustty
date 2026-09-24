@@ -3983,3 +3983,90 @@ fix: 0 of 50 of the same sequential runs failed; see the task T-F2 report for th
   table: `east_asian_width`, `general_category`, `grapheme_break`, plus `runtime`'s
   `is_emoji_presentation`), so moving it belongs to §G2 (vaxis 0.5.1 -> 0.6.0), task S-10b.
 - **state**: CLOSED (task tail-s10a).
+
+## N240 — the deferred `vaxis` 0.5.1 -> 0.6.0 and `zf` 0.10.3 -> 0.11.0 bumps (`NON_PORTS.md` §G2), with vaxis's uucode 0.1.0 -> 2826a37a
+
+- **id**: N240. Not a ledger row: the deferral lived in `.port/phase-3/NON_PORTS.md` §G2,
+  `.port/phase-2/DEFERRALS.md` ("Still open — summary", and the Chunk 1b uucode entry) and
+  `.port/phase-3/DEFERRAL_REAUDIT.md`. Discharged by task tail-s10b at the user's instruction to address
+  every parity gap.
+- **severity**: medium (behaviour of the CLI TUIs; four reachable crashes found). **kind**:
+  dependency-revision.
+- **oracle**: ghostty@20abdb50a `build.zig.zon` (vaxis `vaxis-0.6.0-BWNV_CrbCQCsc…`, zf
+  `zf-0.11.0-OIRy8X-RAAA…`, uucode `2826a37a` `ZZjBPlK5…`; the three cached tarballs re-hashed with
+  `zig fetch` to exactly these), `src/build/SharedDeps.zig:24-78, 512-519` (vaxis built with
+  `external_uucode = true` over the singleton uucode module and `src/build/uucode_config.zig`),
+  `src/cli/{list_themes,list_colors,list_keybinds,boo}.zig`.
+- **what was ported** (per file, 0.5.1 -> 0.6.0; `std.Io` / allocator / `std.ArrayList` churn noted but
+  not reproduced, as the port has no `std.Io`):
+  - `uucode` (vendored subset in `rustty-vaxis/src/uucode/`): 2826a37a's `grapheme.zig` (20-variant
+    `GraphemeBreak` with `emoji_modifier_base` / `emoji_modifier`, the UTS #51 modifier tailoring in
+    `computeGraphemeBreak`, the 2000-entry precompute, `nextCodePoint` / `.code_point`,
+    `peekCodePoint`, `nextGrapheme` / `peekGrapheme`, `utf8Iterator`), `types.zig`, `utf8.zig` tests;
+    `build.rs` follows `components.zig` (`EmojiData`, `GraphemeBreakDerived`, `" \t\r"` trims) over the
+    vendored UCD 17.0.0 (the same tarball as G4-uni; `ucd/PROVENANCE.md` re-digested).
+  - `gwidth.zig`, `unicode.zig`, `Parser.zig` (the uucode rename; `CSI Z` is shift+tab; SGR mouse
+    coordinates are `parseParam(i16, ..)`, closing the 36 mouse results N206 left open), `Mouse.zig`
+    (`col`/`row` `i16`), `ctlseqs.zig` (the three multi-cursor sequences), `Screen.zig` (`Cursor`,
+    `cursor_secondary`), `InternalScreen.zig` (cursor fields removed; bounds `<=`; its new test),
+    `Window.zig`, `Vaxis.zig` (the render writes nothing when nothing changed, `startRender`,
+    multi-cursor output and `setTerminalCursorSecondaryColor` / `resetAllTerminalSecondaryCursors` /
+    `addTerminalSecondaryCursor`, `translateMouse` over `i16`, `queryTerminal(Duration)`,
+    `transmitImage` over a copy of a `*const` image, the env map; its new test), `Key.zig`
+    (`matchText` on empty text), `queue.zig` (`tryPush` / `tryPop` under one lock, `popAndSignalLH` /
+    `pushAndSignalLH`, `drain` signals `not_full`), `Loop.zig` (`init` is the constructor,
+    `installResizeHandler`, `tty.getWinsize()`), `tty.zig` (the SIGWINCH action installed once,
+    `getWinsize` methods, Windows AltGr, `0xDF` and `i16` mouse), `widgets/TextInput.zig` (the
+    readline word motions, Ctrl+W `deleteWordBeforeWhitespace`, 13 new tests), `vxfw/vxfw.zig` (`Tick`
+    on the monotonic clock, `copyToClipboard` / `setTitle` copy), `vxfw/App.zig` (`init(buffer)`,
+    frame pacing on the monotonic clock, `resetEventState` around timer ticks, its new test),
+    `vxfw/Text.zig`. Unchanged apart from anonymous `refAllDecls` tests: `Cell`, `event`,
+    `GraphemeCache`, `Image`, `widgets.zig`, `vxfw/Center.zig`.
+  - `zf` (`filter.zig`, `zf.zig`, `clib.zig`): `token` -> `needle`, `rankToken` / `highlightToken` ->
+    `rankNeedle` / `highlightNeedle` (Zig and C exports), `RankOptions.to_lower = true` ->
+    `case_sensitive = true` (the default FLIPS to case-sensitive), `indexOfInsensitive` lowers the needle
+    too, `highlight` sorts and deduplicates for several needles (`deduplicateMatches` and its test).
+- **the zf polarity decision**: ghostty@20abdb50a `list_themes.zig:377-386` passes
+  `.case_sensitive = false, .plain = true` explicitly (with a NOTE that it replaces `.to_lower = true`);
+  `rustty-cli` passes exactly that. Its tokens are lowercased before ranking, so the new needle
+  lowering cannot change a result there. MEASURED: 470 names (Ghostty.app's 463 themes + 7 path-like
+  strings) x 1521 queries, four columns (ghostty's call, the default options, insensitive raw
+  needles, `highlight`): 714,870 rows bit-identical to a Zig 0.16.0 build of zf 0.11.0. Negative
+  controls: `case_sensitive: true` at the call site fails `rank_filtered_inclusion` /
+  `rank_filtered_ordering`; the default flipped back fails `rank_library_interface` and
+  `rank_options_default_is_case_sensitive`; the needle not lowered fails the latter.
+- **uucode differential** (vaxis's four fields, the S-10a recipe): a Zig 0.16.0 probe against uucode
+  2826a37a with ghostty's `uucode_config.zig`, wired as `SharedDeps.zig` wires it, dumped
+  `east_asian_width`, `general_category`, `grapheme_break`, `is_emoji_presentation` for
+  0..=0x10FFFF: **0 differences** from `rustty_vaxis::uucode::get` (negative control: one flipped byte,
+  1 difference). Against the 0.1.0 / UCD 16.0.0 tables the move changed 157 `east_asian_width`, 4804
+  `general_category`, 1556 `grapheme_break` (689 extended_pictographic -> other, 671 other -> InCB
+  consonant, 134 extended_pictographic -> emoji_modifier_base, 39 other -> InCB extend, 14 InCB extend
+  -> linker, 5 InCB extend -> emoji_modifier, 3 other -> spacing_mark, 1 prepend -> other) and 7
+  `is_emoji_presentation` values; each is the oracle's. `GraphemeBreakTest-17.0.0.txt`: 766 cases, all
+  pass with the modifier tailoring.
+- **gwidth / grapheme differential**: vaxis `gwidth` (`.unicode`, `.wcwidth`, `.no_zwj`) and
+  `unicode.graphemeIterator` over 1,334,878 inputs (every code point alone, surrogates as WTF-8, the 766
+  test sequences, 200,000 random sequences over emoji / modifier / ZWJ / flag / Hangul / Indic /
+  control code points, 20,000 random byte strings): identical to the Zig oracle except 36 inputs on which
+  the reference traps and 35 on which its grapheme ranges overlap, all UD260. (A ReleaseSafe build of
+  the probe trapped at `utf8.zig:35` on the single-code-point section where the Debug build did not;
+  the Debug build was used as the oracle. UNVERIFIED cause.)
+- **parser / render differentials**: 4,204 SGR / X10 mouse and `CSI Z` sequences (every 1-3 byte
+  string over `0 1 5 9 a f F _ + - SP 0xFF` in each coordinate, `i16` edges, X10 bytes): parsed events
+  identical to libvaxis 0.6.0. Eleven render steps (cell, cursor, secondary cursor, hide, reset):
+  byte-identical to a libvaxis 0.6.0 built with the UD261 fix; the unpatched reference differs exactly
+  at the four UD261 steps. libvaxis 0.6.0's own test suite, built against ghostty's uucode: 151 of 152
+  pass (the failure is the cwd-dependent `vxfw` doctest).
+- **reference defects found** (R13, all fixed with tests and negative controls): UD260 (gwidth /
+  grapheme start on invalid UTF-8; since 0.5.1), UD261 (inverted secondary-cursor comparison), UD262
+  (`translateMouse` `@intCast`), UD263 (vxfw `@intCast` of a negative mouse position), UD264
+  (TextInput word motions reach `unreachable` in `std.unicode.utf8Decode`), UD265 (`trimEnd` for
+  `trimLeft` in `Text` soft wrap), UD266 (`+list-themes` stopped installing the resize handler in the
+  Zig 0.16 migration). All in `docs/ghostty-bug-fixes.md`.
+- **not settled here**: libvaxis 0.6.0 also moved zigimg `d7b7ab0b` -> `d695acd9`; the older tarball is
+  not in the local cache, so that delta was not diffed. It reaches only vaxis's image tier
+  (`transmitImage` / `loadImage`), which no Ghostty code calls, and `rustty-zigimg` is a documented
+  re-home onto Ghostty's codecs rather than a zigimg port. The vxfw doctest test (`All widgets have a
+  doctest`, a source scan) is not ported (it was not before either).
+- **state**: CLOSED (task tail-s10b).

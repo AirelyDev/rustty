@@ -1,4 +1,4 @@
-//! Port of `libvaxis` `tty.zig` (749 LOC, 0 `test{}`) — the TTY backend FFI. The
+//! Port of `libvaxis` `tty.zig` (libvaxis 0.6.0: 847 LOC, 0 named `test{}`) — the TTY backend FFI. The
 //! primary implementation is [`PosixTty`]: open `/dev/tty`, `make_raw` (the EXACT
 //! termios flag clears/sets), the SIGWINCH `sigaction` global handler (with the
 //! `handler_mutex` + handlers array), `read`/`writer`, `get_winsize` (`TIOCGWINSZ`
@@ -291,7 +291,11 @@ impl PosixTty {
         // Set the termios of the tty
         let termios = Self::make_raw(fd)?;
 
-        Self::install_winch_handler()?;
+        // libvaxis 0.6.0 installs the SIGWINCH action only once per process
+        // (`if (!handler_installed)`); 0.5.1 re-ran `sigaction` on every `init`.
+        if !HANDLER_INSTALLED.load(Ordering::SeqCst) {
+            Self::install_winch_handler()?;
+        }
 
         let self_ = PosixTty {
             fd,
@@ -571,7 +575,10 @@ impl PosixTty {
     }
 
     /// Get the window size from the kernel
-    pub fn get_winsize(fd: c_int) -> Result<Winsize, TtyError> {
+    ///
+    /// libvaxis 0.6.0: a method (`getWinsize(self: *PosixTty)`); 0.5.1 took the fd.
+    pub fn get_winsize(&self) -> Result<Winsize, TtyError> {
+        let fd = self.fd;
         let mut winsize = libc::winsize {
             ws_row: 0,
             ws_col: 0,
@@ -976,10 +983,22 @@ pub mod windows_tty {
         const alt: DWORD = left_alt | right_alt;
         const ctrl: DWORD = left_ctrl | right_ctrl;
 
+        // libvaxis 0.6.0: AltGr is reported by Windows as right-Alt + left-Ctrl; while
+        // it is held, only the OTHER Alt / Ctrl key counts as a modifier.
+        let alt_gr = (mods & right_alt > 0) && (mods & left_ctrl > 0);
+
         key::Modifiers {
             shift: mods & shift > 0,
-            alt: mods & alt > 0,
-            ctrl: mods & ctrl > 0,
+            alt: if alt_gr {
+                mods & left_alt > 0
+            } else {
+                mods & alt > 0
+            },
+            ctrl: if alt_gr {
+                mods & right_ctrl > 0
+            } else {
+                mods & ctrl > 0
+            },
             caps_lock: mods & caps > 0,
             num_lock: mods & num_lock > 0,
             ..Default::default()
@@ -1290,6 +1309,7 @@ pub mod windows_tty {
                         0xc0 => b'`' as u16,
                         0xdb => b'[' as u16,
                         0xdc => b'\\' as u16,
+                        0xdf => b'\\' as u16,
                         0xe2 => b'\\' as u16,
                         0xdd => b']' as u16,
                         0xde => b'\'' as u16,
@@ -1462,8 +1482,9 @@ pub mod windows_tty {
                     };
 
                     let m = Mouse {
-                        col: event.dwMousePosition.X as u16, // Windows reports with 0 index
-                        row: event.dwMousePosition.Y as u16, // Windows reports with 0 index
+                        // `@as(i16, @bitCast(X))` (0.6.0; 0.5.1 bit-cast to `u16`)
+                        col: event.dwMousePosition.X, // Windows reports with 0 index
+                        row: event.dwMousePosition.Y, // Windows reports with 0 index
                         // PORT NOTE: upstream's `Mouse` literal omits
                         // `xoffset`/`yoffset`, which default to 0.
                         xoffset: 0,
@@ -1516,22 +1537,20 @@ pub mod windows_tty {
             unsafe { core::slice::from_raw_parts(std::ptr::addr_of!((*this).buf) as *const u8, n) }
         }
 
-        /// Get the window size from the kernel.
-        ///
-        /// PORT NOTE: upstream has NO `WindowsTty.getWinsize` (see the module PORT
-        /// NOTE); the `Tty` alias must expose one, and this is exactly the query the
-        /// resize arm of `event_from_record` makes. `fd` is unused — the console has
-        /// no fd; the stdout console handle is fetched directly.
-        pub fn get_winsize(_fd: libc::c_int) -> Result<Winsize, TtyError> {
-            let stdout = unsafe { GetStdHandle(STD_OUTPUT_HANDLE) };
+        /// `pub fn getWinsize(self: *WindowsTty) !Winsize` (libvaxis 0.6.0; 0.5.1 had
+        /// none, and the port had added a free function doing this query).
+        pub fn get_winsize(&self) -> Result<Winsize, TtyError> {
             let mut console_info: CONSOLE_SCREEN_BUFFER_INFO = unsafe { core::mem::zeroed() };
-            if unsafe { GetConsoleScreenBufferInfo(stdout, &mut console_info) } == 0 {
-                return Err(TtyError::IoctlError);
+            if unsafe { GetConsoleScreenBufferInfo(self.stdout, &mut console_info) } == 0 {
+                return unexpectedError(unsafe { GetLastError() });
             }
-            let r = console_info.srWindow;
+            let window_rect = console_info.srWindow;
+            let width = window_rect.Right - window_rect.Left + 1;
+            let height = window_rect.Bottom - window_rect.Top + 1;
             Ok(Winsize {
-                cols: (r.Right - r.Left + 1) as u16,
-                rows: (r.Bottom - r.Top + 1) as u16,
+                // `@intCast` — a console window is at least one cell (R7: checked).
+                cols: u16::try_from(width).unwrap(),
+                rows: u16::try_from(height).unwrap(),
                 x_pixel: 0,
                 y_pixel: 0,
             })
@@ -1551,6 +1570,14 @@ pub mod windows_tty {
 /// PORT NOTE: Zig's `tty_writer` is an allocating `Vec` sink; the Rust port uses the
 /// same [`TtyWriter`] type as `PosixTty` (over the `pipe_write` fd) so `writer()` has
 /// ONE return type across ttys and the generic Loop compiles uniformly.
+///
+/// PORT NOTE (libvaxis 0.6.0): `TestTty` is now `switch (builtin.os.tag)`: on Linux the
+/// same pipe-backed struct (through `std.os.linux.pipe`/`close`), on every other target a
+/// struct over a `std.Io.Writer.Discarding` with no `fd`/`read`/`resetSignalHandler` —
+/// Zig 0.16 dropped the `std.posix.pipe`/`close` the 0.5.1 struct used. The port keeps
+/// the pipe-backed struct on every non-Windows target: `libc::pipe` is available on all
+/// of them, the Loop test and the SIGWINCH tests need the fd, and a sink that records
+/// what was written is a superset of one that discards it for the tests that only write.
 #[cfg(all(test, not(windows)))]
 pub struct TestTty {
     /// Used for API compat
@@ -1626,7 +1653,7 @@ impl TestTty {
     }
 
     /// Get the window size from the kernel
-    pub fn get_winsize(_fd: c_int) -> Result<Winsize, TtyError> {
+    pub fn get_winsize(&self) -> Result<Winsize, TtyError> {
         Ok(Winsize {
             rows: 40,
             cols: 80,

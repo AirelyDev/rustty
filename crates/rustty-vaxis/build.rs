@@ -1,9 +1,20 @@
-//! CHUNK 1b table generator — a faithful, Zig-free port of uucode 0.1.0's
-//! `src/build/Ucd.zig` (the UCD parsers) + `src/build/tables.zig` (the 256-block
-//! stage1/stage2 packer), restricted to the four fields vaxis instantiates:
+//! CHUNK 1b table generator — a faithful, Zig-free port of the uucode UCD parsers and
+//! the `grapheme_break` derivation, restricted to the four fields vaxis instantiates:
 //! `east_asian_width`, `grapheme_break`, `general_category`, `is_emoji_presentation`
-//! (VAXIS_C1B_DESIGN.md §3). It parses the vendored UCD 16.0.0 corpus under `ucd/`
-//! and writes `uucode_tables.rs` into `OUT_DIR`, `include!`d by `src/uucode/tables.rs`.
+//! (VAXIS_C1B_DESIGN.md §3). It parses the vendored UCD corpus under `ucd/` and writes
+//! `uucode_tables.rs` into `OUT_DIR`, `include!`d by `src/uucode/tables.rs`.
+//!
+//! REVISION (parity tail S-10b, NON_PORTS.md §G2): at the reference pin 20abdb50a,
+//! libvaxis 0.6.0 does not build its own uucode; ghostty passes `external_uucode = true`
+//! and wires in its singleton uucode module, uucode **2826a37a** built with ghostty's
+//! `src/build/uucode_config.zig` (`SharedDeps.zig:24-78, 512-519`; the four fields come
+//! from its `libvaxis_only` + `runtime` tables and the config does not alter them). So
+//! this generator follows uucode 2826a37a's `src/components.zig` (`UnicodeData`,
+//! `EastAsianWidth`, `GraphemeBreak`, `DerivedCoreProperties`, `EmojiData`,
+//! `GraphemeBreakDerived`) over its UCD **17.0.0** corpus, no longer uucode 0.1.0's
+//! `src/build/Ucd.zig` + `src/build/tables.zig` over UCD 16.0.0. The per-code-point
+//! values are proven equal to the Zig oracle's `uucode.get` over 0..=0x10FFFF (S-10b
+//! differential, NEW-FINDINGS.md N240).
 //!
 //! Representation freedom (design §3.3): the uucode table is *unpacked*, so there is
 //! no canonical stage2 bit layout to reproduce — only the per-cp *values* must be
@@ -24,24 +35,24 @@ const N: usize = (MAX_CODE_POINT + 1) as usize;
 const ZERO_WIDTH_NON_JOINER: u32 = 0x200C;
 const ZERO_WIDTH_JOINER: u32 = 0x200D;
 
-// ---- GeneralCategory discriminants (types.zig:6-37, order pinned) ----
+// ---- GeneralCategory discriminants (types.zig:1-32, order pinned) ----
 const GC_CN: u8 = 29; // other_not_assigned (Cn) — the default
 
-// ---- EastAsianWidth discriminants (types.zig:101-108) ----
+// ---- EastAsianWidth discriminants (types.zig:95-102) ----
 const EAW_NEUTRAL: u8 = 0;
 const EAW_WIDE: u8 = 3;
 
-// ---- OriginalGraphemeBreak discriminants (types.zig:110-125) ----
+// ---- OriginalGraphemeBreak discriminants (types.zig:104-119) ----
 const OGB_OTHER: u8 = 0;
 const OGB_EXTEND: u8 = 5;
 
-// ---- IndicConjunctBreak discriminants (types.zig:94-99) ----
+// ---- IndicConjunctBreak discriminants (types.zig:88-93) ----
 const INCB_NONE: u8 = 0;
 const INCB_LINKER: u8 = 1;
 const INCB_CONSONANT: u8 = 2;
 const INCB_EXTEND: u8 = 3;
 
-// ---- GraphemeBreak discriminants (types.zig:127-150, order pinned) ----
+// ---- GraphemeBreak discriminants (types.zig:121-144, order pinned) ----
 const GB_OTHER: u8 = 0;
 const GB_CONTROL: u8 = 1;
 const GB_PREPEND: u8 = 2;
@@ -57,9 +68,11 @@ const GB_LVT: u8 = 11;
 const GB_ZWJ: u8 = 12;
 const GB_ZWNJ: u8 = 13;
 const GB_EXTENDED_PICTOGRAPHIC: u8 = 14;
-const GB_INDIC_CONJUNCT_BREAK_EXTEND: u8 = 15;
-const GB_INDIC_CONJUNCT_BREAK_LINKER: u8 = 16;
-const GB_INDIC_CONJUNCT_BREAK_CONSONANT: u8 = 17;
+const GB_EMOJI_MODIFIER_BASE: u8 = 15;
+const GB_EMOJI_MODIFIER: u8 = 16;
+const GB_INDIC_CONJUNCT_BREAK_EXTEND: u8 = 17;
+const GB_INDIC_CONJUNCT_BREAK_LINKER: u8 = 18;
+const GB_INDIC_CONJUNCT_BREAK_CONSONANT: u8 = 19;
 
 fn main() {
     let ucd = Path::new(env!("CARGO_MANIFEST_DIR")).join("ucd");
@@ -83,16 +96,18 @@ fn main() {
     let eaw = parse_east_asian_width(&read("extracted/DerivedEastAsianWidth.txt"));
     let ogb = parse_grapheme_break(&read("auxiliary/GraphemeBreakProperty.txt"));
     let incb = parse_derived_core_properties(&read("DerivedCoreProperties.txt"));
-    let (emoji_pres, ext_picto) = parse_emoji_data(&read("emoji/emoji-data.txt"));
+    let emoji = parse_emoji_data(&read("emoji/emoji-data.txt"));
 
     // Derive grapheme_break per cp, then pack Data into a 14-bit u16.
     let mut packed = vec![0u16; N];
     for cp in 0..N {
-        let gb = derive_grapheme_break(cp as u32, ext_picto[cp], incb[cp], ogb[cp]);
-        packed[cp] = pack(eaw[cp], gb, gc[cp], emoji_pres[cp]);
+        let gb = derive_grapheme_break(cp as u32, &emoji, incb[cp], ogb[cp]);
+        packed[cp] = pack(eaw[cp], gb, gc[cp], emoji.is_emoji_presentation[cp]);
     }
 
-    // 256-block dedup (tables.zig:1001-1014). Offsets assigned in scan order.
+    // 256-block dedup (the 2-stage layout of uucode 0.1.0's tables.zig:1001-1014, kept as
+    // the port's own representation: 2826a37a's generate.zig layout is not reproduced,
+    // only the per-cp values are pinned). Offsets assigned in scan order.
     let mut stage1: Vec<u32> = Vec::with_capacity(N / 256);
     let mut stage2: Vec<u16> = Vec::new();
     let mut block_map: HashMap<[u16; 256], u32> = HashMap::new();
@@ -128,14 +143,16 @@ fn main() {
     emit(&stage1, &stage2);
 }
 
-// ---- shared parse helpers (Ucd.zig:106-142) ----
+// ---- shared parse helpers (components.zig:182-225) ----
 
-/// `parseCp` — hex u21 scalar (Ucd.zig:106-108).
+/// `parseCp` — hex u21 scalar (components.zig:182-184).
 fn parse_cp(s: &str) -> u32 {
     u32::from_str_radix(s, 16).unwrap_or_else(|_| panic!("parseCp({s:?})"))
 }
 
-/// `parseRange` — `AAAA..BBBB` or a single cp (Ucd.zig:110-119).
+/// `parseRange` — `AAAA..BBBB` or a single cp (components.zig:191-200; there `end` is
+/// exclusive, `end + 1`, and the loops run `start..end`; here it is inclusive and the loops
+/// run `start..=end` — the same code points).
 fn parse_range(s: &str) -> (u32, u32) {
     if let Some(idx) = s.find("..") {
         (parse_cp(&s[..idx]), parse_cp(&s[idx + 2..]))
@@ -145,12 +162,12 @@ fn parse_range(s: &str) -> (u32, u32) {
     }
 }
 
-/// `trim` (Ucd.zig:137-142) — strip a `#`-comment (cut at the FIRST `#`) then
-/// whitespace-trim. NOTE: applied to `# …` this yields the empty string.
+/// `trim` (components.zig:220-225) — strip a `#`-comment (cut at the FIRST `#`) then
+/// trim `" \t\r"`. NOTE: applied to `# …` this yields the empty string.
 fn trim_comment(line: &str) -> &str {
     match line.find('#') {
-        Some(idx) => line[..idx].trim_matches([' ', '\t']),
-        None => line.trim_matches([' ', '\t']),
+        Some(idx) => line[..idx].trim_matches([' ', '\t', '\r']),
+        None => line.trim_matches([' ', '\t', '\r']),
     }
 }
 
@@ -161,7 +178,7 @@ fn lines(bytes: &[u8]) -> impl Iterator<Item = &str> {
         .split('\n')
 }
 
-// ---- parseUnicodeData → general_category (Ucd.zig:144-311) ----
+// ---- UnicodeData → general_category (components.zig `UnicodeData`) ----
 
 fn parse_unicode_data(bytes: &[u8]) -> Vec<u8> {
     let mut gc = vec![GC_CN; N];
@@ -250,13 +267,13 @@ fn general_category_map(s: &str) -> u8 {
     }
 }
 
-// ---- parseEastAsianWidth (Ucd.zig:658-723; the @missing whitespace-trim trap, design §3.5.1) ----
+// ---- EastAsianWidth (components.zig `EastAsianWidth`; the @missing whitespace-trim trap, design §3.5.1) ----
 
 fn parse_east_asian_width(bytes: &[u8]) -> Vec<u8> {
     let mut eaw = vec![EAW_NEUTRAL; N];
     for line in lines(bytes) {
         // WHITESPACE-only trim (NOT comment-strip) — load-bearing for @missing.
-        let trimmed = line.trim_matches([' ', '\t']);
+        let trimmed = line.trim_matches([' ', '\t', '\r']);
         if trimmed.is_empty() {
             continue;
         }
@@ -264,8 +281,8 @@ fn parse_east_asian_width(bytes: &[u8]) -> Vec<u8> {
         // Handle @missing directives first, detected on the whitespace-trimmed line.
         if let Some(missing_line) = trimmed.strip_prefix("# @missing:") {
             let mut parts = missing_line.split(';');
-            let cp_str = parts.next().unwrap().trim_matches([' ', '\t']);
-            let width_str = parts.next().unwrap().trim_matches([' ', '\t']);
+            let cp_str = parts.next().unwrap().trim_matches([' ', '\t', '\r']);
+            let width_str = parts.next().unwrap().trim_matches([' ', '\t', '\r']);
             let (start, end) = parse_range(cp_str);
 
             // Skip `Neutral` as it's the default.
@@ -287,8 +304,8 @@ fn parse_east_asian_width(bytes: &[u8]) -> Vec<u8> {
             continue;
         }
         let mut parts = data_line.split(';');
-        let cp_str = parts.next().unwrap().trim_matches([' ', '\t']);
-        let width_str = parts.next().unwrap().trim_matches([' ', '\t']);
+        let cp_str = parts.next().unwrap().trim_matches([' ', '\t', '\r']);
+        let width_str = parts.next().unwrap().trim_matches([' ', '\t', '\r']);
         let (start, end) = parse_range(cp_str);
         let width = east_asian_width_map(width_str);
         for cp in start..=end {
@@ -310,7 +327,7 @@ fn east_asian_width_map(s: &str) -> u8 {
     }
 }
 
-// ---- parseGraphemeBreak → original_grapheme_break (Ucd.zig:734-766) ----
+// ---- GraphemeBreak → original_grapheme_break (components.zig `GraphemeBreak`) ----
 
 fn parse_grapheme_break(bytes: &[u8]) -> Vec<u8> {
     let mut gb = vec![OGB_OTHER; N];
@@ -320,8 +337,8 @@ fn parse_grapheme_break(bytes: &[u8]) -> Vec<u8> {
             continue;
         }
         let mut parts = trimmed.split(';');
-        let cp_str = parts.next().unwrap().trim_matches([' ', '\t']);
-        let prop_str = parts.next().unwrap().trim_matches([' ', '\t']);
+        let cp_str = parts.next().unwrap().trim_matches([' ', '\t', '\r']);
+        let prop_str = parts.next().unwrap().trim_matches([' ', '\t', '\r']);
         let (start, end) = parse_range(cp_str);
         // unknown ⇒ .other
         let prop = grapheme_break_property_map(prop_str).unwrap_or(OGB_OTHER);
@@ -351,7 +368,7 @@ fn grapheme_break_property_map(s: &str) -> Option<u8> {
     })
 }
 
-// ---- parseDerivedCoreProperties → indic_conjunct_break (InCB only) (Ucd.zig:543-590) ----
+// ---- DerivedCoreProperties → indic_conjunct_break (InCB only) (components.zig `DerivedCoreProperties`) ----
 
 fn parse_derived_core_properties(bytes: &[u8]) -> Vec<u8> {
     let mut incb = vec![INCB_NONE; N];
@@ -361,15 +378,15 @@ fn parse_derived_core_properties(bytes: &[u8]) -> Vec<u8> {
             continue;
         }
         let mut parts = trimmed.split(';');
-        let cp_str = parts.next().unwrap().trim_matches([' ', '\t']);
-        let property_str = parts.next().unwrap().trim_matches([' ', '\t']);
+        let cp_str = parts.next().unwrap().trim_matches([' ', '\t', '\r']);
+        let property_str = parts.next().unwrap().trim_matches([' ', '\t', '\r']);
         // Only the `InCB` lines matter (design §3.5); ignore all other properties.
         if property_str != "InCB" {
             continue;
         }
         let value_str = parts
             .next()
-            .map(|v| v.trim_matches([' ', '\t']))
+            .map(|v| v.trim_matches([' ', '\t', '\r']))
             .unwrap_or("");
         let (start, end) = parse_range(cp_str);
         let value = match value_str {
@@ -385,44 +402,91 @@ fn parse_derived_core_properties(bytes: &[u8]) -> Vec<u8> {
     incb
 }
 
-// ---- parseEmojiData → is_emoji_presentation + is_extended_pictographic (Ucd.zig:784-823) ----
+// ---- EmojiData → the six emoji flags (components.zig `EmojiData`, 2826a37a) ----
 
-fn parse_emoji_data(bytes: &[u8]) -> (Vec<bool>, Vec<bool>) {
-    let mut emoji_pres = vec![false; N];
-    let mut ext_picto = vec![false; N];
+/// The `EmojiData` component's rows, restricted to the flags the `grapheme_break`
+/// derivation and the `is_emoji_presentation` field read (`is_emoji` is parsed and
+/// validated like the reference but not stored: no vaxis field reads it).
+struct EmojiFlags {
+    is_emoji_presentation: Vec<bool>,
+    is_emoji_modifier: Vec<bool>,
+    is_emoji_modifier_base: Vec<bool>,
+    is_emoji_component: Vec<bool>,
+    is_extended_pictographic: Vec<bool>,
+}
+
+fn parse_emoji_data(bytes: &[u8]) -> EmojiFlags {
+    let mut flags = EmojiFlags {
+        is_emoji_presentation: vec![false; N],
+        is_emoji_modifier: vec![false; N],
+        is_emoji_modifier_base: vec![false; N],
+        is_emoji_component: vec![false; N],
+        is_extended_pictographic: vec![false; N],
+    };
     for line in lines(bytes) {
         let trimmed = trim_comment(line);
         if trimmed.is_empty() {
             continue;
         }
         let mut parts = trimmed.split(';');
-        let cp_str = parts.next().unwrap().trim_matches([' ', '\t']);
-        let prop_str = parts.next().unwrap().trim_matches([' ', '\t']);
+        let cp_str = parts.next().unwrap().trim_matches([' ', '\t', '\r']);
+        let prop_str = parts.next().unwrap().trim_matches([' ', '\t', '\r']);
         let (start, end) = parse_range(cp_str);
-        match prop_str {
-            "Emoji_Presentation" => {
-                for cp in start..=end {
-                    emoji_pres[cp as usize] = true;
-                }
-            }
-            "Extended_Pictographic" => {
-                for cp in start..=end {
-                    ext_picto[cp as usize] = true;
-                }
-            }
-            // Known but unused emoji properties (we only store the two above).
-            "Emoji" | "Emoji_Modifier" | "Emoji_Modifier_Base" | "Emoji_Component" => {}
+        let field = match prop_str {
+            "Emoji" => None,
+            "Emoji_Presentation" => Some(&mut flags.is_emoji_presentation),
+            "Emoji_Modifier" => Some(&mut flags.is_emoji_modifier),
+            "Emoji_Modifier_Base" => Some(&mut flags.is_emoji_modifier_base),
+            "Emoji_Component" => Some(&mut flags.is_emoji_component),
+            "Extended_Pictographic" => Some(&mut flags.is_extended_pictographic),
             _ => panic!("Unknown EmojiData property: {prop_str}"),
+        };
+        if let Some(field) = field {
+            for cp in start..=end {
+                field[cp as usize] = true;
+            }
         }
     }
-    (emoji_pres, ext_picto)
+    flags
 }
 
-// ---- grapheme_break derivation (tables.zig:927-971; design §3.4) ----
+// ---- grapheme_break derivation (components.zig `GraphemeBreakDerived`, 2826a37a) ----
 
-fn derive_grapheme_break(cp: u32, ext_picto: bool, incb: u8, ogb: u8) -> u8 {
-    if ext_picto {
-        // is_extended_pictographic ⇒ extended_pictographic (tables.zig:929-931).
+fn derive_grapheme_break(cp: u32, emoji: &EmojiFlags, incb: u8, ogb: u8) -> u8 {
+    let i = cp as usize;
+    let is_emoji_modifier = emoji.is_emoji_modifier[i];
+    let is_emoji_modifier_base = emoji.is_emoji_modifier_base[i];
+    let is_extended_pictographic = emoji.is_extended_pictographic[i];
+    let is_emoji_component = emoji.is_emoji_component[i];
+
+    if is_emoji_modifier {
+        // inlineAssert(original_grapheme_break == .extend);
+        assert!(
+            ogb == OGB_EXTEND,
+            "emoji_modifier cp {cp:x} is not original `extend`"
+        );
+        // inlineAssert(!is_extended_pictographic and is_emoji_component);
+        assert!(
+            !is_extended_pictographic && is_emoji_component,
+            "emoji_modifier cp {cp:x}: extended_pictographic or not an emoji component"
+        );
+        return GB_EMOJI_MODIFIER;
+    }
+    if is_emoji_modifier_base {
+        // inlineAssert(original_grapheme_break == .other);
+        assert!(
+            ogb == OGB_OTHER,
+            "emoji_modifier_base cp {cp:x} is not original `other`"
+        );
+        // inlineAssert(is_extended_pictographic);
+        assert!(
+            is_extended_pictographic,
+            "emoji_modifier_base cp {cp:x} is not extended_pictographic"
+        );
+        return GB_EMOJI_MODIFIER_BASE;
+    }
+    if is_extended_pictographic {
+        // inlineAssert(original_grapheme_break == .other);
         assert!(
             ogb == OGB_OTHER,
             "extended_pictographic cp {cp:x} has non-`other` original grapheme break"
@@ -433,7 +497,7 @@ fn derive_grapheme_break(cp: u32, ext_picto: bool, incb: u8, ogb: u8) -> u8 {
         INCB_NONE => {
             if ogb == OGB_EXTEND {
                 // GraphemeBreak has no `extend`; it decomposes into zwnj + InCB
-                // extend/linker (tables.zig:936-946).
+                // extend/linker.
                 if cp == ZERO_WIDTH_NON_JOINER {
                     GB_ZWNJ
                 } else {
@@ -443,8 +507,8 @@ fn derive_grapheme_break(cp: u32, ext_picto: bool, incb: u8, ogb: u8) -> u8 {
                     );
                 }
             } else {
-                // The `inline else` same-name fan-out (tables.zig:947-950),
-                // made explicit + exhaustive (design §3.4).
+                // The `inline else` same-name fan-out, made explicit + exhaustive
+                // (design §3.4).
                 match ogb {
                     OGB_OTHER => GB_OTHER,
                     1 => GB_PREPEND,            // prepend
@@ -465,6 +529,7 @@ fn derive_grapheme_break(cp: u32, ext_picto: bool, incb: u8, ogb: u8) -> u8 {
         }
         INCB_EXTEND => {
             if cp == ZERO_WIDTH_JOINER {
+                assert!(ogb == 13, "U+200D is not original `zwj`");
                 GB_ZWJ
             } else {
                 assert!(
@@ -504,8 +569,8 @@ fn pack(eaw: u8, gb: u8, gc: u8, emoji_pres: bool) -> u16 {
 fn emit(stage1: &[u32], stage2: &[u16]) {
     let mut out = String::with_capacity(stage2.len() * 6 + stage1.len() * 6 + 4096);
     out.push_str(
-        "// @generated by build.rs from the vendored UCD 16.0.0 corpus. DO NOT EDIT.\n\
-         // Faithful reproduction of uucode 0.1.0's 2-stage/unpacked stage1/stage2 tables\n\
+        "// @generated by build.rs from the vendored UCD 17.0.0 corpus. DO NOT EDIT.\n\
+         // The per-cp values of uucode 2826a37a's four vaxis fields, as 2-stage tables\n\
          // (VAXIS_C1B_DESIGN.md §3): stage2 holds each `Data` packed as a 14-bit u16\n\
          // (eaw:3 | grapheme_break:5 | general_category:5 | is_emoji_presentation:1).\n\n",
     );
@@ -532,7 +597,7 @@ fn emit(stage1: &[u32], stage2: &[u16]) {
     std::fs::write(&dest, out).unwrap_or_else(|e| panic!("write {}: {e}", dest.display()));
 }
 
-// ---- build-time unit tests (ported from Ucd.zig `parseCp` / `parseRange`) ----
+// ---- build-time unit tests (ported from components.zig `parseCp` / `parseRange`) ----
 
 #[cfg(test)]
 mod tests {

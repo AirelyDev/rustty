@@ -451,8 +451,10 @@ pub fn run() -> Result<u8, Error> {
     // var frame_iter = std.mem.splitScalar(u8, decompressed_data, '\x01');
     let frames: Vec<&[u8]> = decompressed_data.split(|&b| b == 0x01).collect();
 
-    // var app = try vxfw.App.init(gpa);  defer app.deinit();
-    let mut app = App::init()?;
+    // var app = try vxfw.App.init(global.io(), gpa, &env_map, &.{});  defer app.deinit();
+    // (libvaxis 0.6.0: the last argument is the tty write buffer, which the reference
+    // passes empty; `io`, `gpa` and `env_map` are not parameters of the port.)
+    let mut app = App::init(Vec::new())?;
 
     // var boo: Boo = undefined;
     // boo.frame = 0;

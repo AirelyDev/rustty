@@ -1,6 +1,7 @@
 //! clib.zig — the C ABI over `filter`.
 //!
-//! Zig `export fn {rank,rankToken,highlight,highlightToken}` → Rust
+//! Zig `export fn {rank,rankNeedle,highlight,highlightNeedle}` (zf 0.11.0; 0.10.3 had
+//! `rankToken`/`highlightToken`) → Rust
 //! `#[no_mangle] pub unsafe extern "C" fn rustty_zf_*` (R2 export names). The
 //! `ghostty_zf_*` / `zf_*` alias exports are DEFERRED to a later chunk — this
 //! crate ships only the `rustty_zf_*` names.
@@ -8,8 +9,8 @@
 //! `?f64` collapses to the C sentinel `-1.0` on no-match; the `?usize` slice
 //! length collapses to the number of matches. The null-terminated inputs
 //! (`[*:0]const u8`) are rebuilt with `CStr::from_ptr(..).to_bytes()` (the
-//! faithful `std.mem.span`). The token pointer array is walked lazily with
-//! pointer arithmetic — mirroring Zig's `tokens[index]` — so a `num_tokens`
+//! faithful `std.mem.span`). The needle pointer array is walked lazily with
+//! pointer arithmetic — mirroring Zig's `needles[index]` — so a `num_needles`
 //! larger than the backing array (the `zig`/2 no-match test) never forms an
 //! out-of-bounds slice and stays Miri-clean (Zig bails before the OOB index too).
 
@@ -19,16 +20,16 @@
 use crate::filter;
 use std::ffi::{c_char, CStr};
 
-/// rank a given string against a slice of tokens
+/// rank a given haystack against a slice of needles
 #[no_mangle]
 pub unsafe extern "C" fn rustty_zf_rank(
-    str: *const c_char,
-    tokens: *const *const c_char,
-    num_tokens: usize,
+    haystack: *const c_char,
+    needles: *const *const c_char,
+    num_needles: usize,
     case_sensitive: bool,
     plain: bool,
 ) -> f64 {
-    let string = unsafe { CStr::from_ptr(str) }.to_bytes();
+    let string = unsafe { CStr::from_ptr(haystack) }.to_bytes();
     let filename = if plain {
         None
     } else {
@@ -37,10 +38,11 @@ pub unsafe extern "C" fn rustty_zf_rank(
 
     let mut total_rank: f64 = 0.0;
     let mut index: usize = 0;
-    while index < num_tokens {
-        let token = unsafe { CStr::from_ptr(*tokens.add(index)) }.to_bytes();
-        let strict_path = filter::has_separator(token);
-        if let Some(r) = filter::rank_token(string, filename, token, case_sensitive, strict_path) {
+    while index < num_needles {
+        let needle = unsafe { CStr::from_ptr(*needles.add(index)) }.to_bytes();
+        let strict_path = filter::has_separator(needle);
+        if let Some(r) = filter::rank_needle(string, filename, needle, case_sensitive, strict_path)
+        {
             total_rank += r;
         } else {
             return -1.0;
@@ -50,37 +52,37 @@ pub unsafe extern "C" fn rustty_zf_rank(
     total_rank
 }
 
-/// rank a given string against a single token
+/// rank a given haystack against a single needle
 #[no_mangle]
-pub unsafe extern "C" fn rustty_zf_rank_token(
-    str: *const c_char,
+pub unsafe extern "C" fn rustty_zf_rank_needle(
+    haystack: *const c_char,
     filename: *const c_char,
-    token: *const c_char,
+    needle: *const c_char,
     case_sensitive: bool,
     strict_path: bool,
 ) -> f64 {
-    let string = unsafe { CStr::from_ptr(str) }.to_bytes();
+    let string = unsafe { CStr::from_ptr(haystack) }.to_bytes();
     let name = if filename.is_null() {
         None
     } else {
         Some(unsafe { CStr::from_ptr(filename) }.to_bytes())
     };
-    let tok = unsafe { CStr::from_ptr(token) }.to_bytes();
-    // Zig `if (rankToken(...)) |r| return r else return -1.0;` — the C -1.0 sentinel.
-    filter::rank_token(string, name, tok, case_sensitive, strict_path).unwrap_or(-1.0)
+    let n = unsafe { CStr::from_ptr(needle) }.to_bytes();
+    // Zig `if (rankNeedle(...)) |r| return r else return -1.0;` — the C -1.0 sentinel.
+    filter::rank_needle(string, name, n, case_sensitive, strict_path).unwrap_or(-1.0)
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn rustty_zf_highlight(
-    str: *const c_char,
-    tokens: *const *const c_char,
-    tokens_len: usize,
+    haystack: *const c_char,
+    needles: *const *const c_char,
+    needles_len: usize,
     case_sensitive: bool,
     plain: bool,
     matches: *mut usize,
     matches_len: usize,
 ) -> usize {
-    let string = unsafe { CStr::from_ptr(str) }.to_bytes();
+    let string = unsafe { CStr::from_ptr(haystack) }.to_bytes();
     let filename = if plain {
         None
     } else {
@@ -89,51 +91,45 @@ pub unsafe extern "C" fn rustty_zf_highlight(
     let matches_slice = unsafe { std::slice::from_raw_parts_mut(matches, matches_len) };
 
     let mut index: usize = 0;
-    let mut token_index: usize = 0;
-    while token_index < tokens_len {
-        let token = unsafe { CStr::from_ptr(*tokens.add(token_index)) }.to_bytes();
-        let strict_path = filter::has_separator(token);
-        let matched = filter::highlight_token(
+    let mut needle_index: usize = 0;
+    while needle_index < needles_len {
+        let needle = unsafe { CStr::from_ptr(*needles.add(needle_index)) }.to_bytes();
+        let strict_path = filter::has_separator(needle);
+        let matched = filter::highlight_needle(
             string,
             filename,
-            token,
+            needle,
             case_sensitive,
             strict_path,
             &mut matches_slice[index..],
         );
         index += matched.len();
-        token_index += 1;
+        needle_index += 1;
     }
 
     index
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn rustty_zf_highlight_token(
-    str: *const c_char,
+pub unsafe extern "C" fn rustty_zf_highlight_needle(
+    haystack: *const c_char,
     filename: *const c_char,
-    token: *const c_char,
+    needle: *const c_char,
     case_sensitive: bool,
     strict_path: bool,
     matches: *mut usize,
     matches_len: usize,
 ) -> usize {
-    let string = unsafe { CStr::from_ptr(str) }.to_bytes();
+    let string = unsafe { CStr::from_ptr(haystack) }.to_bytes();
     let name = if filename.is_null() {
         None
     } else {
         Some(unsafe { CStr::from_ptr(filename) }.to_bytes())
     };
-    let tok = unsafe { CStr::from_ptr(token) }.to_bytes();
+    let n = unsafe { CStr::from_ptr(needle) }.to_bytes();
     let matches_slice = unsafe { std::slice::from_raw_parts_mut(matches, matches_len) };
-    let matched = filter::highlight_token(
-        string,
-        name,
-        tok,
-        case_sensitive,
-        strict_path,
-        matches_slice,
-    );
+    let matched =
+        filter::highlight_needle(string, name, n, case_sensitive, strict_path, matches_slice);
     matched.len()
 }
 
@@ -145,48 +141,58 @@ mod tests {
     fn rank_exported_c_library_interface() {
         unsafe {
             {
-                let tokens: [*const c_char; 2] = [c"a".as_ptr(), c"z".as_ptr()];
+                let needles: [*const c_char; 2] = [c"a".as_ptr(), c"z".as_ptr()];
                 assert!(
-                    rustty_zf_rank(c"abcdefg".as_ptr(), tokens.as_ptr(), 2, false, false) == -1.0
+                    rustty_zf_rank(c"abcdefg".as_ptr(), needles.as_ptr(), 2, false, false) == -1.0
                 );
             }
             {
-                let tokens: [*const c_char; 2] = [c"a".as_ptr(), c"b".as_ptr()];
+                let needles: [*const c_char; 2] = [c"a".as_ptr(), c"b".as_ptr()];
                 assert!(
-                    rustty_zf_rank(c"abcdefg".as_ptr(), tokens.as_ptr(), 2, false, false) != -1.0
+                    rustty_zf_rank(c"abcdefg".as_ptr(), needles.as_ptr(), 2, false, false) != -1.0
                 );
             }
             {
-                let tokens: [*const c_char; 2] = [c"a".as_ptr(), c"B".as_ptr()];
+                let needles: [*const c_char; 2] = [c"a".as_ptr(), c"B".as_ptr()];
                 assert!(
-                    rustty_zf_rank(c"abcdefg".as_ptr(), tokens.as_ptr(), 2, true, false) == -1.0
+                    rustty_zf_rank(c"abcdefg".as_ptr(), needles.as_ptr(), 2, true, false) == -1.0
                 );
             }
             {
-                let tokens: [*const c_char; 2] = [c"a".as_ptr(), c"B".as_ptr()];
+                let needles: [*const c_char; 2] = [c"a".as_ptr(), c"B".as_ptr()];
                 assert!(
-                    rustty_zf_rank(c"aBcdefg".as_ptr(), tokens.as_ptr(), 2, true, false) != -1.0
+                    rustty_zf_rank(c"aBcdefg".as_ptr(), needles.as_ptr(), 2, true, false) != -1.0
                 );
             }
             {
-                // `num_tokens = 2` over a 1-element array: `zig` fails to match, so
-                // `rank` returns -1 before ever indexing `tokens[1]` (Zig quirk).
-                let tokens: [*const c_char; 1] = [c"zig".as_ptr()];
+                // `num_needles = 2` over a 1-element array: `zig` fails to match, so
+                // `rank` returns -1 before ever indexing `needles[1]` (Zig quirk).
+                let needles: [*const c_char; 1] = [c"zig".as_ptr()];
                 assert!(
-                    rustty_zf_rank(c"a/path/to/file".as_ptr(), tokens.as_ptr(), 2, false, false)
-                        == -1.0
+                    rustty_zf_rank(
+                        c"a/path/to/file".as_ptr(),
+                        needles.as_ptr(),
+                        2,
+                        false,
+                        false
+                    ) == -1.0
                 );
             }
             {
-                let tokens: [*const c_char; 2] = [c"path".as_ptr(), c"file".as_ptr()];
+                let needles: [*const c_char; 2] = [c"path".as_ptr(), c"file".as_ptr()];
                 assert!(
-                    rustty_zf_rank(c"a/path/to/file".as_ptr(), tokens.as_ptr(), 2, false, false)
-                        != -1.0
+                    rustty_zf_rank(
+                        c"a/path/to/file".as_ptr(),
+                        needles.as_ptr(),
+                        2,
+                        false,
+                        false
+                    ) != -1.0
                 );
             }
 
             assert!(
-                rustty_zf_rank_token(
+                rustty_zf_rank_needle(
                     c"abcdefg".as_ptr(),
                     std::ptr::null(),
                     c"a".as_ptr(),
@@ -195,7 +201,7 @@ mod tests {
                 ) != -1.0
             );
             assert!(
-                rustty_zf_rank_token(
+                rustty_zf_rank_needle(
                     c"abcdefg".as_ptr(),
                     std::ptr::null(),
                     c"z".as_ptr(),
@@ -204,7 +210,7 @@ mod tests {
                 ) == -1.0
             );
             assert!(
-                rustty_zf_rank_token(
+                rustty_zf_rank_needle(
                     c"abcdefG".as_ptr(),
                     std::ptr::null(),
                     c"G".as_ptr(),
@@ -213,7 +219,7 @@ mod tests {
                 ) != -1.0
             );
             assert!(
-                rustty_zf_rank_token(
+                rustty_zf_rank_needle(
                     c"abcdefg".as_ptr(),
                     std::ptr::null(),
                     c"A".as_ptr(),
@@ -222,7 +228,7 @@ mod tests {
                 ) == -1.0
             );
             assert!(
-                rustty_zf_rank_token(
+                rustty_zf_rank_needle(
                     c"a/path/to/file".as_ptr(),
                     c"file".as_ptr(),
                     c"file".as_ptr(),
@@ -231,7 +237,7 @@ mod tests {
                 ) != -1.0
             );
             assert!(
-                rustty_zf_rank_token(
+                rustty_zf_rank_needle(
                     c"a/path/to/file".as_ptr(),
                     c"file".as_ptr(),
                     c"zig".as_ptr(),
@@ -240,21 +246,21 @@ mod tests {
                 ) == -1.0
             );
 
-            // zero length strings and tokens
+            // zero length haystacks and needles
             {
-                let tokens: [*const c_char; 1] = [c"a".as_ptr()];
-                assert!(rustty_zf_rank(c"".as_ptr(), tokens.as_ptr(), 1, false, false) == -1.0);
+                let needles: [*const c_char; 1] = [c"a".as_ptr()];
+                assert!(rustty_zf_rank(c"".as_ptr(), needles.as_ptr(), 1, false, false) == -1.0);
             }
             assert!(
-                rustty_zf_rank_token(c"".as_ptr(), std::ptr::null(), c"a".as_ptr(), false, false)
+                rustty_zf_rank_needle(c"".as_ptr(), std::ptr::null(), c"a".as_ptr(), false, false)
                     == -1.0
             );
             {
-                let tokens: [*const c_char; 1] = [c"".as_ptr()];
-                assert!(rustty_zf_rank(c"a".as_ptr(), tokens.as_ptr(), 1, false, false) == -1.0);
+                let needles: [*const c_char; 1] = [c"".as_ptr()];
+                assert!(rustty_zf_rank(c"a".as_ptr(), needles.as_ptr(), 1, false, false) == -1.0);
             }
             assert!(
-                rustty_zf_rank_token(c"a".as_ptr(), std::ptr::null(), c"".as_ptr(), false, false)
+                rustty_zf_rank_needle(c"a".as_ptr(), std::ptr::null(), c"".as_ptr(), false, false)
                     == -1.0
             );
         }
@@ -263,17 +269,17 @@ mod tests {
     // Mirrors clib.zig's `testHighlight` helper.
     unsafe fn test_highlight(
         expected: &[usize],
-        str: *const c_char,
-        tokens: &[*const c_char],
+        haystack: *const c_char,
+        needles: &[*const c_char],
         case_sensitive: bool,
         plain: bool,
         matches_buf: &mut [usize],
     ) {
         let len = unsafe {
             rustty_zf_highlight(
-                str,
-                tokens.as_ptr(),
-                tokens.len(),
+                haystack,
+                needles.as_ptr(),
+                needles.len(),
                 case_sensitive,
                 plain,
                 matches_buf.as_mut_ptr(),
@@ -313,7 +319,7 @@ mod tests {
                 &mut matches_buf,
             );
 
-            let mut len = rustty_zf_highlight_token(
+            let mut len = rustty_zf_highlight_needle(
                 c"abcdef".as_ptr(),
                 std::ptr::null(),
                 c"a".as_ptr(),
@@ -323,7 +329,7 @@ mod tests {
                 matches_buf.len(),
             );
             assert_eq!(&matches_buf[0..len], &[0][..]);
-            len = rustty_zf_highlight_token(
+            len = rustty_zf_highlight_needle(
                 c"abcdeF".as_ptr(),
                 std::ptr::null(),
                 c"F".as_ptr(),
@@ -333,7 +339,7 @@ mod tests {
                 matches_buf.len(),
             );
             assert_eq!(&matches_buf[0..len], &[5][..]);
-            len = rustty_zf_highlight_token(
+            len = rustty_zf_highlight_needle(
                 c"a/path/to/file".as_ptr(),
                 c"file".as_ptr(),
                 c"file".as_ptr(),
@@ -345,7 +351,7 @@ mod tests {
             assert_eq!(&matches_buf[0..len], &[10, 11, 12, 13][..]);
 
             // highlights with basename trailing slashes
-            len = rustty_zf_highlight_token(
+            len = rustty_zf_highlight_needle(
                 c"s/".as_ptr(),
                 c"s".as_ptr(),
                 c"s".as_ptr(),
@@ -355,7 +361,7 @@ mod tests {
                 matches_buf.len(),
             );
             assert_eq!(&matches_buf[0..len], &[0][..]);
-            len = rustty_zf_highlight_token(
+            len = rustty_zf_highlight_needle(
                 c"/this/is/path/not/a/file/".as_ptr(),
                 c"file".as_ptr(),
                 c"file".as_ptr(),
@@ -400,7 +406,7 @@ mod tests {
                 &mut matches_buf,
             );
 
-            // small buffer to ensure highlighting doesn't go out of range when the tokens overflow
+            // small buffer to ensure highlighting doesn't go out of range when the needles overflow
             let mut small_buf: [usize; 4] = [0; 4];
             test_highlight(
                 &[0, 1, 2, 3],
@@ -419,7 +425,7 @@ mod tests {
                 &mut small_buf,
             );
 
-            // zero length strings and tokens
+            // zero length haystacks and needles
             test_highlight(
                 &[],
                 c"".as_ptr(),
@@ -428,7 +434,7 @@ mod tests {
                 false,
                 &mut matches_buf,
             );
-            len = rustty_zf_highlight_token(
+            len = rustty_zf_highlight_needle(
                 c"".as_ptr(),
                 std::ptr::null(),
                 c"a".as_ptr(),
@@ -446,7 +452,7 @@ mod tests {
                 false,
                 &mut matches_buf,
             );
-            len = rustty_zf_highlight_token(
+            len = rustty_zf_highlight_needle(
                 c"a".as_ptr(),
                 std::ptr::null(),
                 c"".as_ptr(),

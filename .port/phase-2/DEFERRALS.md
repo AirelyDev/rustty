@@ -5200,6 +5200,21 @@ WASM-artifact milestone for `main_wasm.zig`.
 > silently — a 40-line corpus drives 16 cases and is now caught), and
 > `crates/rustty-vaxis/tests/ucd_provenance.rs` verifies all six vendored UCD inputs against
 > SHA-256 digests recorded in `ucd/PROVENANCE.md`.
+>
+> **PREMISE CORRECTED (parity tail S-10b, 2026-09-23; `NEW-FINDINGS.md` N240).** This entry
+> and the options below assume that "vaxis pins uucode 0.1.0". That was true of libvaxis
+> 0.5.1, but at the reference pin (ghostty 20abdb50a) libvaxis is 0.6.0, and ghostty builds
+> it with `external_uucode = true` over its OWN singleton uucode module: uucode **2826a37a**
+> with ghostty's `src/build/uucode_config.zig` (`SharedDeps.zig:24-78, 512-519`); vaxis
+> 0.6.0's own `build.zig.zon` pins the same revision (task S-10a found the premise false).
+> Option B's structure is kept (vaxis still has its own table generator, because
+> `rustty-unicode` does not hold `east_asian_width` / `general_category` / the full
+> `grapheme_break`), but `build.rs` now follows 2826a37a's `components.zig` over the UCD
+> 17.0.0 corpus, the vendored uucode subset follows 2826a37a's `grapheme.zig` (20 break
+> classes, the emoji-modifier tailoring, `nextCodePoint`), and the per-code-point values are
+> proven equal to the Zig oracle's (0 differences over 0..=0x10FFFF for all four fields).
+> The "0.1.0" / "16.0.0" numbers in the banner above and the record below describe the
+> state before S-10b.
 
 ### Historical record — the original blocker write-up (2026-07-10)
 
@@ -8050,7 +8065,11 @@ The three still-live instances are reopened above.
   CI Zig pin 0.16.0, tables regenerated at the pin and identical, G4-uni 0-diff —
   `.port/phase-3/NON_PORTS.md` §G1 item 5, `NEW-FINDINGS.md` N220); Windows termio
   spawn arms.
-* **L:** vaxis 0.6.0 / zf 0.11.0 upstream delta (G2); 13 unported vxfw widgets.
+* **L:** ~~vaxis 0.6.0 / zf 0.11.0 upstream delta (G2)~~ (DISCHARGED 2026-09-23, parity
+  tail S-10b: every delta of the ported files, vaxis's uucode moved to 2826a37a / UCD
+  17.0.0 with a 0-diff Zig-oracle differential, zf's polarity flip matched at the
+  `list-themes` call site, UD260–UD266 — `.port/phase-3/NON_PORTS.md` §G2 item 5,
+  `NEW-FINDINGS.md` N240); 13 unported vxfw widgets.
 * **Verification-only** (code present, host absent): V2–V7, V15–V19, V21(b).
 
 ## Implemented in this pass
