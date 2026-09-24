@@ -3,7 +3,7 @@
 # backend.
 #
 # PORTS: ghostty `.github/workflows/test.yml`'s `build-macos-freetype` job
-# (pin 20abdb50a, lines 1383-1428):
+# (at the oracle pin, `ORACLE_PIN`; lines 1383-1428):
 #
 #   zig build test -Drenderer=metal -Dfont-backend=coretext_freetype -Dtest-filter=""
 #   zig build -Demit-macos-app=false -Drenderer=metal -Dfont-backend=coretext_freetype

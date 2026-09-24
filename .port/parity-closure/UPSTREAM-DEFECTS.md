@@ -2305,6 +2305,21 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - proposed fix:    what the TODO names: on FreeBSD (13+ has `eventfd(2)`), give `Wakeup` an eventfd created with `EFD_CLOEXEC | EFD_NONBLOCK`, register it in `setup` as `EVFILT_READ` with `udata = 0` (the tick loop already skips `udata == 0` events, as it does for the Darwin mach port), write `1` to it in `wakeup`, and drain it on each tick; then drop the `isDarwin()` gate on `thread_perform`'s wakeup. (`EVFILT_USER` with `NOTE_TRIGGER` is the eventfd-free alternative on every BSD.)
 - upstream status: not reported
 
+### UD280 — with `-Dfont-backend=coretext_freetype`, a font shipped as a collection (`.ttc`) loads the collection's first face
+- kind:            non-crash (evident intent broken)
+- upstream project: ghostty
+- severity:        low (a non-default, self-compiled backend; the reference's own comment admits it)
+- reference:       `src/font/DeferredFace.zig:301-304` at 20abdb50a (`loadCoreTextFreetype`: "Face index 0 is not always correct. We don't ship this configuration in a release build." then `Face.initFile(lib, path, 0, opts)`)
+- defect:          CoreText discovery yields the right face (for example `Menlo-Bold`), but the FreeType load opens face index 0 of its font FILE. For a collection file that is another face: `Menlo-Bold` is in `/System/Library/Fonts/Menlo.ttc`, whose face 0 is `Menlo-Regular`, so bold text (measured; italic takes the same path) of a collection-shipped family renders with the regular face.
+- ReleaseSafe:     wrong face (no crash).
+- ReleaseFast:     the same.
+- reachability:    a `coretext_freetype` build (the reference's `build-macos-freetype` CI job; "people who want to self-compile Ghostty and prefer the freetype aesthetic") with any `font-family` whose styles ship in one `.ttc` (Menlo, and many system families). MEASURED on macOS 26 by the rustty test below before the fix.
+- port handling:   fixed: `crates/rustty-font-shaper/src/deferred_face.rs` `load_coretext_freetype` opens the face whose PostScript name equals the CoreText font's (`collection_face_index`), keeping index 0 when the file holds one face or none matches. PORT NOTE: reference defect (R13). Listed in `docs/ghostty-bug-fixes.md`.
+- parity row(s):   NEW-FINDINGS N288 (and N266, which made the arm live).
+- test:            `deferred_face::tests::load_coretext_freetype_opens_the_discovered_face_of_a_collection` (`-Dfont-backend=coretext_freetype`): CoreText `Menlo-Bold` loads a FreeType face whose PostScript name is `Menlo-Bold`, with preconditions that the file has more than one face and the chosen index is not 0. Negative control (the reference's index 0, run before the fix, 2026-09-24): "left: Menlo-Bold, right: Menlo-Regular".
+- proposed fix:    pick the face index by matching `FT_Get_Postscript_Name` of each face in the file against `CTFontCopyPostScriptName` (or use `kCTFontURLAttribute` together with the descriptor's collection index where CoreText exposes it).
+- upstream status: not reported
+
 ## Candidates pending verification
 
 Assembled from this plan's progress notes on 2026-09-11. **Not verified** — do not cite as fact.
@@ -2329,19 +2344,4 @@ Assembled from this plan's progress notes on 2026-09-11. **Not verified** — do
 - parity row(s):   NEW-FINDINGS N265.
 - test:            `face_metrics` (`crates/rustty-font-shaper/src/collection.rs`), ignored by default as upstream.
 - proposed fix:    `if (options.backend == .web_canvas) return error.SkipZigTest;`, plus a `freetype_windows` prong (or an `else`) in the four switches.
-- upstream status: not reported
-
-### UD280 — with `-Dfont-backend=coretext_freetype`, a font shipped as a collection (`.ttc`) loads the collection's first face
-- kind:            non-crash (evident intent broken)
-- upstream project: ghostty
-- severity:        low (a non-default, self-compiled backend; the reference's own comment admits it)
-- reference:       `src/font/DeferredFace.zig:301-304` at 20abdb50a (`loadCoreTextFreetype`: "Face index 0 is not always correct. We don't ship this configuration in a release build." then `Face.initFile(lib, path, 0, opts)`)
-- defect:          CoreText discovery yields the right face (for example `Menlo-Bold`), but the FreeType load opens face index 0 of its font FILE. For a collection file that is another face: `Menlo-Bold` is in `/System/Library/Fonts/Menlo.ttc`, whose face 0 is `Menlo-Regular`, so bold text (measured; italic takes the same path) of a collection-shipped family renders with the regular face.
-- ReleaseSafe:     wrong face (no crash).
-- ReleaseFast:     the same.
-- reachability:    a `coretext_freetype` build (the reference's `build-macos-freetype` CI job; "people who want to self-compile Ghostty and prefer the freetype aesthetic") with any `font-family` whose styles ship in one `.ttc` (Menlo, and many system families). MEASURED on macOS 26 by the rustty test below before the fix.
-- port handling:   fixed: `crates/rustty-font-shaper/src/deferred_face.rs` `load_coretext_freetype` opens the face whose PostScript name equals the CoreText font's (`collection_face_index`), keeping index 0 when the file holds one face or none matches. PORT NOTE: reference defect (R13). Listed in `docs/ghostty-bug-fixes.md`.
-- parity row(s):   NEW-FINDINGS N288 (and N266, which made the arm live).
-- test:            `deferred_face::tests::load_coretext_freetype_opens_the_discovered_face_of_a_collection` (`-Dfont-backend=coretext_freetype`): CoreText `Menlo-Bold` loads a FreeType face whose PostScript name is `Menlo-Bold`, with preconditions that the file has more than one face and the chosen index is not 0. Negative control (the reference's index 0, run before the fix, 2026-09-24): "left: Menlo-Bold, right: Menlo-Regular".
-- proposed fix:    pick the face index by matching `FT_Get_Postscript_Name` of each face in the file against `CTFontCopyPostScriptName` (or use `kCTFontURLAttribute` together with the descriptor's collection index where CoreText exposes it).
 - upstream status: not reported
