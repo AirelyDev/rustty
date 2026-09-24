@@ -80,6 +80,16 @@ pub fn load_error(e: &rustty_config::config_struct::LoadError) -> String {
             match f {
                 FileLoadError::NoHomeDir => "error.NoHomeDir".to_string(),
                 FileLoadError::BufferTooSmall => "error.BufferTooSmall".to_string(),
+                FileLoadError::StreamTooLong => "error.StreamTooLong".to_string(),
+                // The port keeps only the `io::ErrorKind` of a failed shell
+                // fallback, so the `SpawnError` name is approximated from it
+                // (the two kinds `std.process.spawn` names directly, else
+                // `Unexpected`). Never reached from `loadFile` (above).
+                FileLoadError::Spawn(kind) => match kind {
+                    io::ErrorKind::NotFound => "error.FileNotFound".to_string(),
+                    io::ErrorKind::PermissionDenied => "error.AccessDenied".to_string(),
+                    _ => "error.Unexpected".to_string(),
+                },
                 FileLoadError::AppleApiFailed => "error.AppleApiFailed".to_string(),
                 FileLoadError::Io(_) => "error.ReadFailed".to_string(),
             }
