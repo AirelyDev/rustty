@@ -390,15 +390,20 @@ impl Face {
                         // const len = std.unicode.utf16LeToUtf8(buf, tmp[0..max]) catch return string;
                         //
                         // PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD190.
-                        // `utf16LeToUtf8` does not check that `buf` can hold the
-                        // result: it asserts (`utf8Encode`), or writes past the
-                        // slice, so a family record of up to 512 UTF-16 units
-                        // whose UTF-8 form exceeds `buf` (342 or more CJK
-                        // characters against the callers' 1024 bytes) is a
-                        // safety panic in ReleaseSafe and undefined behaviour in
-                        // ReleaseFast. The name comes from a font file. The port
-                        // takes the reference's own fallback for a name it
-                        // cannot decode, `catch return string`: the raw record.
+                        // `utf16LeToUtf8` does not check that `buf` can hold the result. When the
+                        // UTF-8 form of a family record (at most 512 UTF-16 units) does not fit,
+                        // Debug and ReleaseSafe panic, at `utf8Encode`'s assertion ("reached
+                        // unreachable code") or, for a long enough ASCII run, at the bounds check
+                        // of the vectorized ASCII fast path ("index out of bounds"); ReleaseFast
+                        // writes past `buf` and returns a slice past its end, which is undefined
+                        // behaviour. Callers pass 1024 bytes, or 256 (Collection's synthetic
+                        // bold/italic log, and the `DeferredFace.name` callers on
+                        // `freetype_windows`). Measured (Zig 0.16.0, aarch64-macos, a copy of
+                        // `freetype.zig:170-178`): a 256-byte buffer overflows from 86 CJK
+                        // characters (U+6C34), 129 two-byte characters (U+00E9) or 257 ASCII
+                        // characters; a 1024-byte buffer from 342 CJK characters. The name comes
+                        // from a font file. The port takes the reference's own fallback for a name
+                        // it cannot decode, `catch return string`: the raw record.
                         let len = match utf16_le_to_utf8(buf, &tmp[..max]) {
                             Some(len) => len,
                             None => return Ok(string),
@@ -1724,33 +1729,53 @@ mod tests {
 
     /// UD190 (R13): a Windows Unicode family record whose UTF-8 form does not
     /// fit the caller's buffer. The reference's `std.unicode.utf16LeToUtf8`
-    /// asserts there (ReleaseSafe panic, ReleaseFast writes past the buffer;
-    /// measured, Zig 0.16.0: 400 x U+6C34 into 1024 bytes); the port answers
-    /// with the raw record, the reference's own fallback for a name it cannot
-    /// decode. Positive control: the same record short enough is decoded.
+    /// panics there in Debug and ReleaseSafe and writes past the buffer in
+    /// ReleaseFast. Measured with Zig 0.16.0 on aarch64-macos, with a copy of
+    /// `freetype.zig:170-178` and 1024 canary bytes after the buffer:
+    /// - 256-byte buffer (Collection's synthetic bold/italic log,
+    ///   `DeferredFace.name` callers): from 86 x U+6C34, 129 x U+00E9 or
+    ///   257 x 'L';
+    /// - 1024-byte buffer: from 342 x U+6C34 (ASCII and 2-byte characters
+    ///   cannot overflow it, since the record holds at most 512 units).
+    ///
+    /// The port answers with the raw record, the reference's own fallback for
+    /// a name it cannot decode. Each boundary is checked on both sides: one
+    /// character fewer is decoded.
     #[test]
     fn face_name_utf16_record_too_long_for_the_buffer_is_returned_raw() -> Result<(), Error> {
         let lib = Library::init()?;
         let utf16be =
             |s: &str| -> Vec<u8> { s.encode_utf16().flat_map(|u| u.to_be_bytes()).collect() };
 
-        let short = "水".repeat(10);
-        let data = font_with_names(&[(3, 1, 0x409, 1, utf16be(&short))]);
-        let mut face = Face::init(lib, &data, opts(size(14.0, 96, 96)))?;
-        let mut buf = [0u8; 1024];
-        assert_eq!(face.name(&mut buf)?, short.as_bytes(), "decoded");
-        face.deinit();
-
-        let long = "水".repeat(400);
-        let record = utf16be(&long);
-        // Preconditions: the record takes the decode path (even length, at
-        // most 1024 bytes), and its UTF-8 form does not fit 1024 bytes.
-        assert!(record.len() % 2 == 0 && record.len() <= 1024);
-        assert!(long.len() > buf.len());
-        let data = font_with_names(&[(3, 1, 0x409, 1, record.clone())]);
-        let mut face = Face::init(lib, &data, opts(size(14.0, 96, 96)))?;
-        assert_eq!(face.name(&mut buf)?, record.as_slice(), "the raw record");
-        face.deinit();
+        // (character, count, buffer size, decoded)
+        let cases: [(&str, usize, usize, bool); 8] = [
+            ("水", 85, 256, true),
+            ("水", 86, 256, false),
+            ("é", 128, 256, true),
+            ("é", 129, 256, false),
+            ("L", 256, 256, true),
+            ("L", 257, 256, false),
+            ("水", 341, 1024, true),
+            ("水", 342, 1024, false),
+        ];
+        for (ch, n, buf_len, decoded) in cases {
+            let buf = &mut vec![0u8; buf_len][..];
+            let name = ch.repeat(n);
+            let record = utf16be(&name);
+            // Precondition: the record takes the decode path (even length, at
+            // most 1024 bytes).
+            assert!(record.len() % 2 == 0 && record.len() <= 1024);
+            let data = font_with_names(&[(3, 1, 0x409, 1, record.clone())]);
+            let mut face = Face::init(lib, &data, opts(size(14.0, 96, 96)))?;
+            let got = face.name(buf)?.to_vec();
+            assert_eq!(decoded, name.len() <= buf.len(), "precondition: {n} x {ch}");
+            if decoded {
+                assert_eq!(got, name.as_bytes(), "{n} x {ch} is decoded");
+            } else {
+                assert_eq!(got, record, "{n} x {ch} returns the raw record");
+            }
+            face.deinit();
+        }
         Ok(())
     }
 
