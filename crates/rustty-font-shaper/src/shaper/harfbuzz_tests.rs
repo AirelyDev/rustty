@@ -4,15 +4,19 @@
 //! attached as the `tests` submodule of `harfbuzz.rs`.
 //!
 //! PORT NOTE (backend): these tests run wherever this shaper is the ACTIVE one —
-//! i.e. on the targets whose `Backend::default()` has `hasHarfbuzz() == true`:
-//! `fontconfig_freetype` (Linux/BSD) and `freetype_windows` (Windows), with
-//! FreeType faces carrying an `hb_font` (`face/freetype.rs`). They do NOT run on
-//! macOS: the Darwin default backend is `.coretext`, whose `hasHarfbuzz()` is
-//! false, so `shape.rs` gates this whole module off macOS — the same set the
-//! reference type-checks it on (see the `pub mod harfbuzz` PORT NOTE in
-//! `shape.rs` for the Zig-lazy-vs-Rust-eager reasoning). They previously ran on
-//! macOS against a CoreText face given an `hb_font` it does not have in the
-//! ported configuration; that was the departure, not the coverage. The
+//! i.e. in every build whose `options.backend` has `hasHarfbuzz() == true`: the
+//! defaults `fontconfig_freetype` (Linux/BSD) and `freetype_windows` (Windows),
+//! and `-Dfont-backend=freetype` anywhere, all with FreeType faces carrying an
+//! `hb_font` (`face/freetype.rs`); and on macOS `-Dfont-backend=
+//! coretext_freetype` (FreeType faces) and `coretext_harfbuzz` (CoreText faces
+//! whose `harfbuzz_shaper` arm builds the `hb_font`). They do NOT run in a
+//! default macOS build: `.coretext` has `hasHarfbuzz()` false, so `shape.rs`
+//! gates this whole module off — the same set the reference type-checks it on
+//! (see the `pub mod harfbuzz` PORT NOTE in `shape.rs` for the
+//! Zig-lazy-vs-Rust-eager reasoning). They once ran on macOS against a CoreText
+//! face given an `hb_font` it does not have in the default configuration; that
+//! was the departure, not the coverage. (S-14, N266: the macOS non-default
+//! builds are exercised by the G-FONTBACKEND lane.) The
 //! assertions are structural (cell counts and grid X positions driven by
 //! clusters, plus relative offset orderings) so they hold across every
 //! HarfBuzz-shaping backend, exactly as the reference's do.
@@ -176,7 +180,11 @@ fn test_shaper_with_font(font_req: TestFont) -> TestShaper {
     //     ...
     //     _ = try c.addDeferred(alloc, face, .{ ... });
     // }
-    #[cfg(not(target_os = "macos"))]
+    //
+    // PORT NOTE (S-14, N266): keyed on `hasCoretext()` (the
+    // `rustty_font_has_coretext` cfg), not the OS: this helper runs on macOS in
+    // the `coretext_freetype`/`coretext_harfbuzz` builds, both `hasCoretext()`.
+    #[cfg(not(rustty_font_has_coretext))]
     {
         c.add(
             Face::init(lib, rustty_font::embedded::EMOJI, face_opts()).unwrap(),
@@ -184,7 +192,7 @@ fn test_shaper_with_font(font_req: TestFont) -> TestShaper {
         )
         .unwrap();
     }
-    #[cfg(target_os = "macos")]
+    #[cfg(rustty_font_has_coretext)]
     {
         use crate::discovery::{Descriptor, Discover};
         let mut disco = Discover::init(lib);
@@ -280,7 +288,17 @@ fn system_font_pivot_panics_when_required() {
 fn test_shaper_with_discovered_font(font_req: &str) -> Option<TestShaper> {
     use crate::discovery::{Descriptor, Discover};
 
-    // if (font.Discover == void) return error.SkipZigTest; — Discover exists here.
+    // if (font.Discover == void) return error.SkipZigTest;
+    //
+    // PORT NOTE (S-14, N266): compile-time scope, so R14 form 1 — every test
+    // that calls this helper carries `cfg_attr(rustty_font_backend =
+    // "freetype", ignore)`, the one native backend where `Discover` is `void`
+    // (`web_canvas` is the `not(wasm32)` gate on this helper). The assert keeps
+    // the two in step: reaching here on a `void` backend is a missing attribute.
+    assert!(
+        !crate::discovery::DISCOVER_IS_VOID,
+        "a discovered-font test ran on a `Discover == void` backend without its ignore attribute"
+    );
     // var lib = try Library.init(alloc); errdefer lib.deinit();
     let lib = Library::init().unwrap();
 
@@ -1156,6 +1174,10 @@ fn shape_combining_characters() {
 // test "shape Devanagari string" {
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
+#[cfg_attr(
+    rustty_font_backend = "freetype",
+    ignore = "SkipZigTest: `font.Discover == void` on the .freetype backend (R14)"
+)]
 fn shape_devanagari_string() {
     // We need a font that supports devanagari for this to work, if we can't
     // find Arial Unicode MS, which is a system font on macOS, we just skip
@@ -1438,6 +1460,10 @@ fn shape_javanese_ligatures() {
 // test "shape Chakma vowel sign with ligature (vowel sign renders first)" {
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
+#[cfg_attr(
+    rustty_font_backend = "freetype",
+    ignore = "SkipZigTest: `font.Discover == void` on the .freetype backend (R14)"
+)]
 fn shape_chakma_vowel_sign_with_ligature_vowel_sign_renders_first() {
     // We need a font that supports Chakma for this to work, if we can't find
     // Noto Sans Chakma Regular, which is a system font on macOS, we just skip
@@ -1511,6 +1537,10 @@ fn shape_chakma_vowel_sign_with_ligature_vowel_sign_renders_first() {
 // test "shape Bengali ligatures with out of order vowels" {
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
+#[cfg_attr(
+    rustty_font_backend = "freetype",
+    ignore = "SkipZigTest: `font.Discover == void` on the .freetype backend (R14)"
+)]
 fn shape_bengali_ligatures_with_out_of_order_vowels() {
     // Whereas this test in CoreText had everything shaping into one giant
     // ligature, HarfBuzz splits it into a few clusters. It still looks okay

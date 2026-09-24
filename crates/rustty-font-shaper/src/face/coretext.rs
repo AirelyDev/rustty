@@ -23,10 +23,13 @@
 //   * `macos.text.*`       -> `objc2_core_text` (CTFont/CTFontDescriptor/
 //     CTFontManager).
 //   * `assert = quirks.inlineAssert` is `rustty_util::quirks::inlineAssert`.
-//   * `harfbuzz` is unused here: the macOS default backend is `coretext`, whose
-//     `backend.hasHarfbuzz()` is false, so `harfbuzz_shaper` is comptime-false and
-//     every `if (comptime harfbuzz_shaper)` arm is ported as a comment (the
-//     `coretext_harfbuzz` backend's Harfbuzz font lands with that backend).
+//   * `harfbuzz` -> `crate::hb` (the `pkg/harfbuzz` port), used only when
+//     `harfbuzz_shaper` (`options.backend.hasHarfbuzz()`) is true: in a
+//     `-Dfont-backend=coretext_harfbuzz` build, where this face is the active
+//     `Face` and HarfBuzz shapes through its `hb_font`. On the default `coretext`
+//     backend it is comptime-false and every `if (comptime harfbuzz_shaper)` arm
+//     compiles away, as in the reference. (S-14, N266: those arms were comments
+//     while the option was folded to `.coretext`; they are live now.)
 //   * `font.*` shared types (`Atlas`, `Glyph`, `Metrics`, glyph `RenderOptions`)
 //     and the `opentype.*` table parsers live in the PURE `rustty-font` leaf.
 //   * `log` is a scoped logger; it maps onto the `log` facade crate with the
@@ -79,7 +82,12 @@ use rustty_util::quirks::inlineAssert as assert;
 // The build backend (`font.options.backend`), read at compile time by
 // `HARFBUZZ_SHAPER` below — the port of the reference's
 // `const font = @import("../main.zig")` + `font.options.backend`.
-use crate::backend::Backend;
+use crate::options;
+// const harfbuzz = @import("harfbuzz");
+#[cfg(rustty_font_has_harfbuzz)]
+use crate::hb;
+#[cfg(rustty_font_has_harfbuzz)]
+use rustty_font::opentype::sfnt::F26Dot6;
 
 use super::{DesiredSize, Options, Variation};
 
@@ -215,6 +223,17 @@ pub enum Error {
     InvalidAtlasFormat,
     AtlasFull,
     InvalidSVGTable,
+    /// `harfbuzz.coretext.createFont`'s failure (`try` in `initFont`). In the
+    /// reference it joins the inferred error set only when `harfbuzz_shaper`.
+    #[cfg(rustty_font_has_harfbuzz)]
+    HarfbuzzFailed,
+}
+
+#[cfg(rustty_font_has_harfbuzz)]
+impl From<hb::HarfbuzzFailed> for Error {
+    fn from(_: hb::HarfbuzzFailed) -> Self {
+        Error::HarfbuzzFailed
+    }
 }
 
 impl From<rustty_font::atlas::OutOfMemory> for Error {
@@ -254,13 +273,13 @@ pub struct Face {
     /// if we're using Harfbuzz.
     // hb_font: if (harfbuzz_shaper) harfbuzz.Font else void,
     //
-    // PORT NOTE: `harfbuzz_shaper` is false for every backend this file is the
-    // active `Face` for in a rustty build (see `HARFBUZZ_SHAPER` below — the
-    // Darwin default backend is `.coretext`, whose `hasHarfbuzz()` is false), so
-    // the field takes the reference declaration's OTHER arm: `void`, i.e. Rust
-    // `()`. It is kept as a field rather than deleted precisely because the
-    // reference keeps it: `if (harfbuzz_shaper) harfbuzz.Font else void` is one
-    // declaration with two arms, and this is the arm rustty builds.
+    // PORT NOTE: one declaration, two arms, chosen by `harfbuzz_shaper`
+    // (`HARFBUZZ_SHAPER` below, i.e. the `rustty_font_has_harfbuzz` cfg). Of the
+    // backends this file is the active `Face` for, only `coretext_harfbuzz` has
+    // it; `coretext` and `coretext_noshape` take the `void` arm, Rust `()`.
+    #[cfg(rustty_font_has_harfbuzz)]
+    pub hb_font: hb::Font,
+    #[cfg(not(rustty_font_has_harfbuzz))]
     pub hb_font: (),
 
     /// Set quirks.disableDefaultFontFeatures
@@ -327,18 +346,15 @@ pub(crate) fn cstring_utf8<'a>(s: &CFString, buf: &'a mut [u8]) -> Option<&'a [u
 
 // RUSTTY-ONLY compile-time anchor (no oracle analogue; the reference needs none
 // because Zig's `comptime` collapse is visible in the source itself). Every
-// `if (comptime harfbuzz_shaper)` arm in this file is ported as a COMMENT, which
-// is only faithful while `HARFBUZZ_SHAPER` is false. This `const` assertion is
-// what keeps the two in step: if `Backend::default()` ever stops being
-// `.coretext` on a target that builds this file, the build fails here instead of
-// silently shipping a CoreText face whose HarfBuzz arms were dropped. It is also
-// the guard the earlier hard-coded `true` / `cfg!(feature = "harfbuzz")`
-// spellings lacked, which is how the code and its own PORT NOTE came to disagree.
+// `if (comptime harfbuzz_shaper)` arm in this file is a `cfg(rustty_font_has_harfbuzz)`
+// item (Rust cannot branch a field's TYPE on a `const`). This assertion keeps
+// the cfg and the reference's own derivation (`HARFBUZZ_SHAPER`, from
+// `options.backend`) in step, so neither can drift from the other.
+// (S-14: it used to assert `!HARFBUZZ_SHAPER`, i.e. that the arms were comments.)
 const _: () = assert!(
-    !Face::HARFBUZZ_SHAPER,
-    "face/coretext.rs ports every `if (comptime harfbuzz_shaper)` arm as a \
-     comment; that is only correct while `Backend::default().has_harfbuzz()` is \
-     false (the Darwin default backend is `.coretext`)."
+    Face::HARFBUZZ_SHAPER == cfg!(rustty_font_has_harfbuzz),
+    "face/coretext.rs: `harfbuzz_shaper` (options.backend.hasHarfbuzz()) disagrees \
+     with the `rustty_font_has_harfbuzz` cfg its arms are compiled under"
 );
 
 impl Face {
@@ -348,21 +364,18 @@ impl Face {
     //
     // PORT NOTE: ported as the reference's own DERIVATION, not as a folded
     // literal and not as a cargo feature (R8: a derived constant ports as the
-    // same const EXPRESSION). `font.options.backend` is the build backend, which
-    // rustty resolves through `Backend::default()` (the port of
-    // `backend.zig`'s `Backend.default`, `backend.rs`), and `hasHarfbuzz()` is
-    // `Backend::has_harfbuzz` — both `const fn`, so the whole expression is
-    // comptime exactly as the reference's is.
+    // same const EXPRESSION). `font.options.backend` is `options::BACKEND` (the
+    // `-Dfont-backend` option, default `Backend.default`), and `hasHarfbuzz()` is
+    // `Backend::has_harfbuzz` — both `const`, so the whole expression is comptime
+    // exactly as the reference's is.
     //
-    // This file is macOS-only (`face/mod.rs` gates the module), and
-    // `Backend::default()` is `.coretext` on Darwin — "CoreText for font
-    // discovery, rendering, and shaping" — whose `hasHarfbuzz()` is false
-    // (`backend.zig:113-125`). So the const is FALSE here and every
-    // `if (comptime harfbuzz_shaper)` arm below collapses to a comment, matching
-    // the reference's own macOS build. Corroboration that this is the reference's
-    // real value: `build/SharedDeps.zig:267,271,292` gate the HarfBuzz, FreeType
-    // and Fontconfig link edges on the same predicates, so a default macOS
-    // ghostty links no HarfBuzz at all.
+    // On the default Darwin backend `.coretext` — "CoreText for font discovery,
+    // rendering, and shaping" — `hasHarfbuzz()` is false (`backend.zig:113-125`),
+    // so every `if (comptime harfbuzz_shaper)` arm below compiles away, matching
+    // the reference's own default macOS build (`build/SharedDeps.zig:267` does
+    // not even link HarfBuzz there). With `-Dfont-backend=coretext_harfbuzz` it
+    // is TRUE and the arms are live. (S-14, N266: this was
+    // `Backend::default().has_harfbuzz()`, which folded the option away.)
     //
     // History (fidelity correction): this was first written as a hard-coded
     // `true` — modelling the non-default `.coretext_harfbuzz` backend while the
@@ -371,8 +384,8 @@ impl Face {
     // `.coretext_harfbuzz` again. Both were departures; the PORT NOTE that
     // claimed the const "is reproduced as false" was right about the reference
     // and wrong about the code. Deriving it removes the ability to be
-    // inconsistent with `Backend::default()`.
-    const HARFBUZZ_SHAPER: bool = Backend::default().has_harfbuzz();
+    // inconsistent with the build's backend (`options::BACKEND` since S-14).
+    const HARFBUZZ_SHAPER: bool = options::BACKEND.has_harfbuzz();
 
     /// Initialize a CoreText-based font from a TTF/TTC in memory.
     // PORT NOTE: the reference signature is `init(lib: font.Library, source, opts)`
@@ -435,27 +448,39 @@ impl Face {
         let traits = unsafe { ct_font.symbolic_traits() };
 
         // var hb_font = if (comptime harfbuzz_shaper) font: {
-        //     var hb_font = try harfbuzz.coretext.createFont(ct_font);
-        //     const pixels: opentype.sfnt.F26Dot6 = .from(opts.size.pixels());
-        //     hb_font.setScale(@bitCast(pixels), @bitCast(pixels));
-        //     break :font hb_font;
+        #[cfg(rustty_font_has_harfbuzz)]
+        let hb_font = {
+            // var hb_font = try harfbuzz.coretext.createFont(ct_font);
+            let hb_font =
+                hb::create_font_coretext(CFRetained::as_ptr(&ct_font).as_ptr() as *const c_void)?;
+            // const pixels: opentype.sfnt.F26Dot6 = .from(opts.size.pixels());
+            let pixels = F26Dot6::from(opts.size.pixels() as f64);
+            // hb_font.setScale(@bitCast(pixels), @bitCast(pixels));
+            // (`@bitCast` i32 -> u32: a same-width reinterpret, which `as` is.)
+            hb_font.set_scale(pixels.to_raw() as u32, pixels.to_raw() as u32);
+            // break :font hb_font;
+            hb_font
+        };
         // } else {};
+        #[cfg(not(rustty_font_has_harfbuzz))]
+        let hb_font = ();
         // errdefer if (comptime harfbuzz_shaper) hb_font.destroy();
         //
-        // PORT NOTE (`harfbuzz_shaper == false`): the reference's `else {}` arm —
-        // the empty `void` value. `HARFBUZZ_SHAPER` is
-        // `Backend::default().has_harfbuzz()`, false on Darwin, so the whole
-        // labelled block (`harfbuzz.coretext.createFont` + the
-        // `opentype.sfnt.F26Dot6` scale) and its `errdefer` are the comments
-        // above, exactly as they compile away in the reference's own macOS build.
-        // `F26Dot6.from(pixels)` would round `pixels*64` to a 26.6 fixed-point
-        // `i32` and `@bitCast` it to the `u32` scale argument.
-        let hb_font = ();
+        // PORT NOTE: the `errdefer` is the `destroy_hb_font_on_err` calls on the
+        // two fallible steps below (`ColorState.init`, the debug variation-axes
+        // log); on the `void` arm it is the reference's own no-op.
+        #[cfg(rustty_font_has_harfbuzz)]
+        let destroy_hb_font_on_err = |e: Error| {
+            hb_font.destroy();
+            e
+        };
+        #[cfg(not(rustty_font_has_harfbuzz))]
+        let destroy_hb_font_on_err = |e: Error| e;
 
         let color: Option<ColorState> = if traits.0 & CTFontSymbolicTraits::TraitColorGlyphs.0 != 0
         {
             // try .init(ct_font)
-            Some(ColorState::init(&ct_font)?)
+            Some(ColorState::init(&ct_font).map_err(destroy_hb_font_on_err)?)
         } else {
             None
         };
@@ -489,7 +514,18 @@ impl Face {
         // first is a no-op (there is no HarfBuzz font in this face), and `font`
         // and `color` own their data and release on `Drop`, so `?` discharges
         // both arms. See the `init_font` doc comment.
-        result.log_variation_axes(DEBUG_MODE)?;
+        if let Err(e) = result.log_variation_axes(DEBUG_MODE) {
+            // errdefer if (comptime harfbuzz_shaper) hb_font.destroy();
+            // (`result` owns `hb_font` now; `font`/`color` release on drop.)
+            return Err(destroy_hb_font_on_err(e));
+        }
+        // Test-only fail-point (S-14, N53's proof for this face): stands in for a
+        // failure of the fallible step above, handing the hook the live
+        // HarfBuzz font first so a test can watch it being destroyed.
+        #[cfg(all(test, rustty_font_has_harfbuzz))]
+        if crate::face::test_probe::ct_hb_font_hook_should_fail(&result.hb_font) {
+            return Err(destroy_hb_font_on_err(Error::OutOfMemory));
+        }
 
         Ok(result)
     }
@@ -497,17 +533,17 @@ impl Face {
     pub fn deinit(&mut self) {
         // self.font.release();
         // if (comptime harfbuzz_shaper) self.hb_font.destroy();
+        #[cfg(rustty_font_has_harfbuzz)]
+        self.hb_font.destroy();
         // if (self.color) |v| v.deinit();
         // self.* = undefined;
         //
         // PORT NOTE: `self.font` (`CFRetained<CTFont>`) and `self.color`
         // (`ColorState`, which owns its bytes) release/free on `Drop`, reproducing
         // the reference's manual `release`/`deinit` + `self.* = undefined`. The
-        // `if (comptime harfbuzz_shaper) self.hb_font.destroy()` line is
-        // comptime-false here (`HARFBUZZ_SHAPER == false`; `hb_font` is the
-        // reference's `void` arm), so it collapses to the comment above —
-        // `face/freetype.rs`'s `deinit` carries the live destroy for the
-        // backends whose `hasHarfbuzz()` is true. All faces are torn down
+        // `if (comptime harfbuzz_shaper) self.hb_font.destroy()` line is live
+        // exactly when `hb_font` is a HarfBuzz font (`coretext_harfbuzz`); on
+        // the `void` arm it compiles away as in the reference. All faces are torn down
         // through `deinit` (the Collection walks entries calling `deinit`; the
         // face tests call it explicitly), so this runs once.
         #[cfg(test)]
@@ -1730,6 +1766,74 @@ mod tests {
         }
     }
 
+    /// S-14 (N266): on `-Dfont-backend=coretext_harfbuzz` the `harfbuzz_shaper`
+    /// arms are live — `initFont` builds `hb_font` with
+    /// `harfbuzz.coretext.createFont` and scales it to the face's 26.6 pixel
+    /// size (`setScale(@bitCast(pixels), ...)`). Proven by reading the scale
+    /// back from HarfBuzz.
+    #[cfg(rustty_font_has_harfbuzz)]
+    #[test]
+    fn harfbuzz_shaper_face_carries_a_scaled_hb_font() -> Result<(), Error> {
+        let ct_font = named_font("Monaco", 12.0);
+        let mut face = Face::init_font_copy(&ct_font, opts(12.0))?;
+        let (mut x, mut y) = (0i32, 0i32);
+        // SAFETY: `face.hb_font` is live until `deinit`.
+        unsafe { harfbuzz_sys::hb_font_get_scale(face.hb_font.handle, &mut x, &mut y) };
+        let want = F26Dot6::from(opts(12.0).size.pixels() as f64).to_raw();
+        assert_eq!((want, want), (x, y), "setScale(pixels, pixels) in 26.6");
+        assert!(want > 0);
+        face.deinit();
+        Ok(())
+    }
+
+    /// S-14 (N266 / N53): `initFont`'s `errdefer if (comptime harfbuzz_shaper)
+    /// hb_font.destroy()` — a failure after the HarfBuzz font exists destroys
+    /// it. Proven POSITIVELY with a HarfBuzz user-data destroy callback, which
+    /// runs only when the font object is destroyed (the `face/freetype.rs` N53
+    /// probe). Negative control: dropping the `destroy()` from
+    /// `destroy_hb_font_on_err` leaves the counter unchanged.
+    #[cfg(rustty_font_has_harfbuzz)]
+    #[test]
+    fn a_failed_init_font_step_destroys_the_harfbuzz_font() {
+        use core::sync::atomic::{AtomicUsize, Ordering};
+
+        static DESTROYED: AtomicUsize = AtomicUsize::new(0);
+        unsafe extern "C" fn on_destroy(data: *mut core::ffi::c_void) {
+            DESTROYED.fetch_add(1, Ordering::SeqCst);
+            // SAFETY: the only `data` ever attached is the leaked box below.
+            drop(unsafe { Box::from_raw(data.cast::<u8>()) });
+        }
+        fn attach_and_fail(f: &crate::hb::Font) -> bool {
+            let key: *mut harfbuzz_sys::hb_user_data_key_t =
+                // SAFETY: the key is an opaque token HarfBuzz only compares by
+                // address; zeroed is a valid value for it.
+                Box::into_raw(Box::new(unsafe {
+                    core::mem::zeroed::<harfbuzz_sys::hb_user_data_key_t>()
+                }));
+            let data = Box::into_raw(Box::new(0u8)).cast::<core::ffi::c_void>();
+            // SAFETY: `f` is live for the call; `key`/`data` are leaked so they
+            // outlive the font.
+            let ok = unsafe {
+                harfbuzz_sys::hb_font_set_user_data(f.handle, key, data, Some(on_destroy), 1)
+            };
+            assert_ne!(0, ok, "the destroy probe must attach");
+            true
+        }
+
+        let before = DESTROYED.load(Ordering::SeqCst);
+        crate::face::test_probe::set_ct_hb_font_hook(attach_and_fail);
+        let got = Face::init_font_copy(&named_font("Monaco", 12.0), opts(12.0));
+        assert!(
+            matches!(got, Err(Error::OutOfMemory)),
+            "the failure propagates"
+        );
+        assert_eq!(
+            before + 1,
+            DESTROYED.load(Ordering::SeqCst),
+            "the HarfBuzz font is destroyed on the error path, not leaked"
+        );
+    }
+
     /// Build a CTFont for a named system font at the given size (test helper).
     // PORT NOTE: the shared `String -> FontDescriptor -> Font` dance the tests repeat.
     fn named_font(name: &str, size: f64) -> CFRetained<CTFont> {
@@ -2070,16 +2174,15 @@ mod tests {
     /// HarfBuzz user-data destroy callback to `Face.hb_font`, failed the
     /// variation-axes step through the `init_font_with` seam, and proved the
     /// font was destroyed rather than leaked. `HARFBUZZ_SHAPER` is now the
-    /// reference's derivation, `Backend::default().has_harfbuzz()` — false on
-    /// Darwin — so this face has NO HarfBuzz font, the reference's
-    /// `errdefer if (comptime harfbuzz_shaper) hb_font.destroy()` is its own
-    /// no-op, and there is nothing for the test to probe. It was removed rather
-    /// than left asserting a property the ported configuration cannot have; the
-    /// N53 proof itself is not lost — the identical test still runs in
-    /// `face/freetype.rs`, whose backends really do have
-    /// `hasHarfbuzz() == true`. This test has no `test {}` counterpart in the
-    /// reference, so the `check_test_counts.py` contract (rust >= zig) is
-    /// unaffected.
+    /// reference's derivation, `options.backend.hasHarfbuzz()` — false on the
+    /// default `.coretext` — so there this face has NO HarfBuzz font and the
+    /// reference's `errdefer if (comptime harfbuzz_shaper) hb_font.destroy()` is
+    /// its own no-op. UPDATE (S-14, N266): `-Dfont-backend=coretext_harfbuzz` is
+    /// now a real build, where the arm is live; its N53 proof is
+    /// `a_failed_init_font_step_destroys_the_harfbuzz_font` above (compiled
+    /// only there), next to the `face/freetype.rs` one. This test has no
+    /// `test {}` counterpart in the reference, so the `check_test_counts.py`
+    /// contract (rust >= zig) is unaffected.
     #[test]
     fn log_variation_axes_is_silent_when_not_debug_mode() -> Result<(), Error> {
         let mut face = Face::init(

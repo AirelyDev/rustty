@@ -56,6 +56,9 @@ impl Backend {
     // decision tree from `cfg` (there is no runtime `std.Target` here). The wasm
     // arm (`.browser => .web_canvas`) and Windows arm (`.freetype_windows`) are
     // preserved; the final line's Darwin/other split matches `cfg(target_os)`.
+    // (S-14, N266: the BUILD's backend is `options::BACKEND` — `-Dfont-backend`,
+    // resolved by `rustty-build-config`, which applies this same default when
+    // the option is not passed; `backend_selection_tests` checks the two agree.)
     pub const fn default() -> Backend {
         // if (target.cpu.arch == .wasm32) {
         //     return switch (wasm_target) { .browser => .web_canvas };

@@ -50,6 +50,28 @@
 // config<->cli); the re-exports below name that crate's items to preserve the
 // reference `cli.*` surface.
 
+// RUSTTY-ONLY (S-14b, N1): `build.rs` re-derives the font backend cfgs from
+// rustty-build-config's `links` metadata; these asserts pin that copy to the
+// shaper tier's own `options.backend` so the two can never drift.
+const _: () = {
+    use rustty_font_shaper::{options::BACKEND, Backend};
+    assert!(cfg!(rustty_font_has_freetype) == BACKEND.has_freetype());
+    let tag_matches = match BACKEND {
+        Backend::Freetype => cfg!(rustty_font_backend = "freetype"),
+        Backend::FreetypeWindows => cfg!(rustty_font_backend = "freetype_windows"),
+        Backend::FontconfigFreetype => cfg!(rustty_font_backend = "fontconfig_freetype"),
+        Backend::Coretext => cfg!(rustty_font_backend = "coretext"),
+        Backend::CoretextFreetype => cfg!(rustty_font_backend = "coretext_freetype"),
+        Backend::CoretextHarfbuzz => cfg!(rustty_font_backend = "coretext_harfbuzz"),
+        Backend::CoretextNoshape => cfg!(rustty_font_backend = "coretext_noshape"),
+        Backend::WebCanvas => cfg!(rustty_font_backend = "web_canvas"),
+    };
+    assert!(
+        tag_matches,
+        "build.rs's rustty_font_backend disagrees with options::BACKEND"
+    );
+};
+
 pub mod action;
 
 pub mod help_strings;

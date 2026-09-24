@@ -4341,6 +4341,64 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   test `coretext_freetype` on macOS, as the oracle does. This is a multi-crate port, not a
   gate-tail item.
 - **state**: OPEN. `font` stays `PORT STATUS: in progress` until it closes.
+- **closed by** (task tail-s14, 2026-09-24): CLOSED.
+  - **option**: `-Dfont-backend` is `rustty-build-config`'s `font-backend-{freetype,
+    freetype-windows,fontconfig-freetype,coretext,coretext-freetype,coretext-harfbuzz,
+    coretext-noshape}` features (at most one — its build script refuses two; none = the
+    per-target `Backend.default`, so every existing build is unchanged). Its build script
+    publishes the resolved tag as `links` metadata; `rustty-font-shaper`'s build script turns it
+    into `rustty_font_backend="<tag>"` + `rustty_font_has_{freetype,coretext,fontconfig,
+    harfbuzz}` (`backend.zig`'s `has*`), and `options::BACKEND` is read from that cfg, with a
+    const assert that it equals `build_config::font_backend()`. `rustty` and `rustty-apprt-c`
+    forward the same features. A backend the port does not build on the target is refused by
+    name (N286).
+  - **sites made live**: `Face`, `FaceError`, `FreetypeLoadFlags`/`Options`, `Shaper` (+ a
+    `ShaperError` alias for callers), `Library`/`InitError`, `Discover` (+ `DISCOVER_IS_VOID` for
+    every `Discover == void` site in SharedGridSet, CodepointResolver (fallback and override —
+    actually applied in tail-s14b), list_fonts and show_face (tail-s14b), and
+    `DISCOVER_WARMUP` for App's `@hasDecl(Discover, "warmup")`), the `DeferredFace` payloads
+    (`ct`/`fc`/`win`/`wc` keyed on their own predicates; the `.freetype` no-payload arms),
+    `loadCoreTextFreetype`, `discoverCodepoint`'s `hasFreetype()` early return, the CoreText
+    face's `harfbuzz_shaper` arms (`hb_font` via `hb_coretext_font_create`, `setScale`,
+    `errdefer`/`deinit` destroy), the noop shaper as the `.coretext_noshape` `Shaper`, the apple-
+    emoji `isDarwin() and Discover != void` pair, `apprt/embedded.zig`'s quicklook `backend !=
+    .coretext => null`, `Surface.DerivedConfig`'s `FreetypeLoadFlags != void` arm (core and
+    `+show-face`), and every backend-keyed test gate. `+version`/sentry/global log read
+    `build_config.font_backend`, which now reflects the option. The renderer and core read the
+    same `links` metadata in their build scripts for their few type-level uses.
+  - **evidence (macOS, 2026-09-24)**: the G-FONTBACKEND lane (`check_font_backends.sh`, HARD in
+    ci.sh — the reference's `build-macos-freetype` job) is GREEN: arm 0 (a default build against
+    `RUSTTY_EXPECT_FONT_BACKEND=coretext_freetype` is RED for the stated reason); font / font-
+    shaper / renderer lib+integration tests pass under `coretext_freetype` 88 / 135 (+6 ignored) /
+    117+3, `coretext_harfbuzz` 88 / 130 (+8) / 117+3, `coretext_noshape` 88 / 102 (+7) / 117+3,
+    `freetype` 88 / 115 (+7) / 117+3 (default `coretext`: 88 / 136 (+4) / 118+3); the workspace
+    builds under `coretext_freetype`. `cargo clippy --workspace --all-targets -D warnings` is clean
+    for all five macOS backends. core + cli + apprt-c tests pass under `coretext_freetype`. The
+    built `rustty` binary reports `font engine : .coretext_freetype` and `+list-fonts` / `+show-
+    face` work. New tests: `backend_selection_tests::selectors_follow_options_backend` (restates
+    each `switch (options.backend)` against the resolved alias types), three
+    `load_coretext_freetype_*` tests + UD280's, and two `coretext_harfbuzz` `hb_font` tests;
+    negative controls (each run alone, reverted): no percent-decode → FreeType
+    `CannotOpenResource`; `FontHasNoFile` → `OutOfMemory` fails its test; dropping the
+    `errdefer face.deinit()` → "the face was deinit'ed on the error path"; dropping the CoreText
+    face's `hb_font.destroy()` → "the HarfBuzz font is destroyed on the error path, not leaked".
+    Cross type-checks (`cargo check --tests`, zig cc sysroots): `aarch64-unknown-linux-gnu` default
+    and `freetype`, `x86_64-pc-windows-gnu` default (`freetype_windows`, after N287) and
+    `freetype`, `wasm32-unknown-unknown` (font-shaper, web-canvas, wasm).
+  - **remainder** (not N266): Linux/Windows arms type-checked only (no VM run this batch); the
+    `face metrics` FreeType arm disagrees on one value (N285); combinations refused by name
+    (N286). The `font` crate key's `done` flip is left to the controller (G6 Miri/ASan lanes).
+  - **tail-s14b (review of S-14)**: three sites the S-14 record called live were not: the
+    CodepointResolver fallback and override `Discover == void` pair (the edit had not been
+    applied) and `+show-face`'s void arm (still `cfg(wasm32)`, M1; now `DISCOVER_IS_VOID`, with
+    tests on both arms). Also keyed on the backend: SharedGridSet's `@hasDecl(Discover,
+    "discoverExactFamily")` (CoreText only), the `fc` module / `toFcPattern` / Fontconfig tests
+    (`hasFontconfig()`), cli's `DerivedConfig` load-flags test (`hasFreetype()`, via a cli
+    `build.rs`). `fontconfig_freetype` and `freetype_windows` are now built and tested on macOS
+    (N286). The core and cli build scripts' cfgs are const-asserted against `options::BACKEND`.
+    G-FONTBACKEND gains the manifest lint (arm L), per-backend clippy, and core/cli/apprt-c
+    tests under `coretext_freetype` and `freetype`. N285 is settled (stale reference values,
+    UD281).
 
 ## N280 — `macosLogger`'s per-scope `os_log` cache (upstream `3225e9ebb`) was never ported
 
@@ -4436,3 +4494,92 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   `crates/rustty-apprt/src/gtk/winproto/blur_region.rs`; only `:58` (an insult with no fact) is a
   `gag-prose` row.
 - **state**: CLOSED (task tail-s8d).
+
+## N285 — the FreeType arm of `test "face metrics"` has stale expectations (reference test-weakness)
+
+- **id**: N285. Not a ledger row (task tail-s14, found running N265's live body under the newly
+  selectable FreeType backends; settled by the S-14 review).
+- **severity**: low (a reference test that never runs upstream — N265/UD276). **kind**: reference
+  test-weakness (R13: stays faithful) — recorded as `UPSTREAM-DEFECTS.md` UD281.
+- **oracle**: `src/font/Collection.zig:1402,1439-1502` at 20abdb50a — the FreeType arms
+  (`.freetype`, `.fontconfig_freetype`, `.coretext_freetype`) expect, at 12 pt / 96 dpi, narrow
+  (`embedded.cozette`) `cell_width` 8.0 / `ascii_height` 18.0625 and wide (`embedded.geist_mono`)
+  `cell_width` 10.0 / `ascii_height` 16.0.
+- **history (oracle git)**: `03a707b2c` (2025-09-17) wrote those values while the test ran;
+  `4af4e1872` (next day, same PR) inverted its guard, so it has been skipped since (UD276);
+  `ad9f9dc11` (2025-10-17, "font: Default to light hinting in FreeType") made `light = true` the
+  default `FreetypeLoadFlags` (`FT_LOAD_TARGET_LIGHT`) and updated a RUNNING FreeType test, not this
+  skipped one.
+- **measurement** (port, `-Dfont-backend=coretext_freetype`; the S-14 review's probe, reverted):
+  default flags (light) → narrow `cell_width` 7.0, `ascii_height` 18.0625; wide 10.0, 15.5.
+  `light = false` → 8.0, 18.0625, 10.0, 16.0 — exactly the reference's expectations. The measuring
+  code (`face/freetype.rs` `getGlyphSize`, the ASCII advance/bbox loop, `glyphLoadFlags`) is
+  line-for-line the reference's at the pin, over the same FreeType 2.13.2. CORRECTION (S-14b): the
+  first version of this entry said "the wide font (Geist Mono) matches"; its `ascii_height` does
+  not (15.5 vs 16.0) — the assert loop panicked on the narrow pair first, so the wide pair had not
+  been compared.
+- **conclusion**: the expectations are stale; Ghostty at the pin, running its own test on a
+  FreeType backend, would measure the same 7.0 / 15.5 (inferred from identical code and library,
+  not run in Zig). Not a port bug.
+- **state**: CLOSED (task tail-s14b). No code change; `face_metrics` stays a faithful skip.
+
+## N286 — `-Dfont-backend`: which backends the port builds per target
+
+- **id**: N286. Not a ledger row (task tail-s14; corrected by tail-s14b, review M3).
+- **severity**: low. **kind**: R1 (Ghostty accepts every backend on every target); one OPEN gap.
+- **oracle**: `src/build/Config.zig:191-195` validates nothing; `SharedDeps.zig:267-310` links
+  HarfBuzz/FreeType/Fontconfig from source on any target whose backend has them. The reference's
+  CI builds the per-OS defaults plus `coretext_freetype` on macOS (`test.yml:1383-1428`).
+- **rustty (tail-s14b)**: `crates/rustty-build-config/build.rs` `font_backend()` accepts, on macOS,
+  all seven native backends (`freetype`, `freetype_windows`, `fontconfig_freetype`, `coretext`,
+  `coretext_freetype`, `coretext_harfbuzz`, `coretext_noshape`); on Linux/BSD `freetype`,
+  `freetype_windows`, `fontconfig_freetype`; on Windows `freetype`, `freetype_windows`. It still
+  refuses, loudly and by name:
+  - the CoreText backends off Darwin — no CoreText there, in the reference too (justified);
+  - `fontconfig_freetype` on Windows — **OPEN R1 gap**: the port gates `fontconfig-sys` off
+    Windows (WS20) and has not built it there; not attempted (no Windows host here).
+  A native `web_canvas` has no feature at all (its face and shaper call browser externs;
+  `font/main.zig:50` forces it on wasm), so it is not "refused by name" — it cannot be named.
+- **correction**: tail-s14 refused `fontconfig_freetype` on macOS ("`fontconfig-sys` is gated off
+  Darwin") and `freetype_windows` off Windows ("the directory scanner is Windows-only code"). Both
+  reasons were wrong: `fontconfig-sys` builds on macOS (the `rustty-apprt` edge already built it
+  there), and the scanner is portable Rust, as the reference's is portable Zig
+  (`discovery.zig:1089-1115`). tail-s14b keys the `fc` module, `Descriptor.toFcPattern`, the
+  Fontconfig tests and SharedGridSet's `@hasDecl(Discover, "discoverExactFamily")` on the backend,
+  and allows both.
+- **evidence (macOS, tail-s14b)**: the G-FONTBACKEND lane's `fontconfig_freetype` arm (a generated
+  fonts.conf over the macOS font directories, since the vendored fontconfig looks in `/etc/fonts`
+  like the reference's) passes font-shaper 142 (+3 ignored), including the `fc` package tests and the
+  reference `fontconfig` / `fontconfig codepoint` tests; its `freetype_windows` arm (a `SYSTEMROOT`
+  fixture whose `root\Fonts` holds Arial, Arial Unicode and Noto Sans Chakma) passes 119 (+3),
+  including the reference `windows` test. Clippy `-D warnings` is clean for both.
+- **state**: OPEN only for `fontconfig_freetype` on Windows; everything else in this entry CLOSED.
+
+## N287 — the `freetype_windows` `DeferredFace` name accessors did not type-check
+
+- **id**: N287. Not a ledger row (task tail-s14; the lines predate it).
+- **severity**: medium (every `x86_64-pc-windows-*` build of `rustty-font-shaper` failed).
+  **kind**: port defect (compile error on the Windows default backend).
+- **rustty**: `crates/rustty-font-shaper/src/deferred_face.rs` `windows_payload` `family_name` /
+  `name` returned `w.peek.name(buf)` — which may borrow the FreeType face — from a `&self` method
+  whose result was tied only to `buf`: E0521-class "lifetime may not live long enough".
+- **fix**: both take `&'a self`, as the CoreText payload's do. Found and verified by
+  `cargo check --tests --target x86_64-pc-windows-gnu` (zig cc, mingw headers), default and
+  `-Dfont-backend=freetype`. Not run on Windows.
+- **state**: CLOSED (task tail-s14).
+
+## N288 — `loadCoreTextFreetype` opens face 0 of a font collection (reference defect)
+
+- **id**: N288. Not a ledger row (task tail-s14).
+- **severity**: medium. **kind**: reference defect, non-crash, evident intent broken (the user's
+  R13 extension) — `UPSTREAM-DEFECTS.md` UD280.
+- **oracle**: `src/font/DeferredFace.zig:301-304` at 20abdb50a: "Face index 0 is not always
+  correct. We don't ship this configuration in a release build." then `Face.initFile(lib, path, 0,
+  opts)`.
+- **evidence**: CoreText's `Menlo-Bold` lives in `/System/Library/Fonts/Menlo.ttc`; with index 0
+  the FreeType face loaded is `Menlo-Regular` (measured, macOS 26, test below before the fix).
+- **rustty**: `deferred_face.rs` `collection_face_index` picks the face whose PostScript name is
+  the CoreText font's (index 0 when the file holds one face or none matches). Test
+  `load_coretext_freetype_opens_the_discovered_face_of_a_collection`; negative control = the
+  reference's index 0 ("Menlo-Bold" != "Menlo-Regular").
+- **state**: CLOSED (task tail-s14), recorded as UD280.

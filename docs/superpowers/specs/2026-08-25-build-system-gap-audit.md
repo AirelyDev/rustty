@@ -536,10 +536,16 @@ matrix grows. G5 and G6 grow the matrix; this is the moment.
 
 ### Re-classified as correctly absent
 
-- **`-Dfont-backend`** — the oracle's `build-macos-freetype` job keeps
+- ~~**`-Dfont-backend`**~~ — WRONG, corrected by parity tail S-14 (NEW-FINDINGS
+  N266). This said: "the oracle's `build-macos-freetype` job keeps
   `coretext_freetype` compiling. rustty's `rustty-font` is a **pure-Rust** port
   with no FreeType, fontconfig or CoreText dependency at all, so the `Backend`
-  enum carries no build-graph meaning and there is nothing to matrix.
+  enum carries no build-graph meaning and there is nothing to matrix." The
+  premise is false: the backend-dependent code (faces, shapers, discovery, the
+  FreeType/HarfBuzz/Fontconfig `-sys` edges) lives in `rustty-font-shaper`, not
+  in `rustty-font`. `-Dfont-backend` is now the `rustty-build-config`
+  `font-backend-*` feature set, and the `build-macos-freetype` job is mirrored
+  by the G-FONTBACKEND lane (`.port/tools/gates/check_font_backends.sh`).
 - **`-Drenderer`** — `metal` is `cfg(target_os = "macos")` and `opengl` is
   `cfg(any(linux, freebsd))`; the selection is target-derived with no override
   in the oracle's CI either.

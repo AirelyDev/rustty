@@ -85,6 +85,15 @@ pub enum Error {
     /// Only used by the bitmap-font tests' `glyphIndex(...) orelse return
     /// error.GlyphNotFound`.
     GlyphNotFound,
+    /// `DeferredFace.loadCoreTextFreetype`'s `error.FontHasNoFile`: the
+    /// discovered CoreText font has no URL / path. In the reference this joins
+    /// the `load` error union only in a `coretext_freetype` build.
+    #[cfg(rustty_font_backend = "coretext_freetype")]
+    FontHasNoFile,
+    /// `DeferredFace.loadCoreTextFreetype`'s `error.FontPathCantDecode`: the
+    /// decoded path does not fit its 1023-byte buffer as UTF-8.
+    #[cfg(rustty_font_backend = "coretext_freetype")]
+    FontPathCantDecode,
 }
 
 impl From<ft::FtError> for Error {
@@ -576,6 +585,14 @@ impl Face {
         // If this font doesn't support variations, we can't do anything.
         if !self.face.has_multiple_masters() || vs.is_empty() {
             return Ok(());
+        }
+
+        // Test-only fail-point (S85-F3's, shared with the CoreText face; S-14):
+        // forces this fallible step so a caller's `errdefer face.deinit()` —
+        // `DeferredFace.loadCoreTextFreetype`'s — can be proven.
+        #[cfg(test)]
+        if crate::face::test_probe::set_variations_failpoint_should_fail() {
+            return Err(Error::OutOfMemory);
         }
 
         // Freetype requires that we send ALL coordinates in at once so the

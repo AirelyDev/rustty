@@ -36,6 +36,28 @@ fn main() {
     // warn about an unexpected cfg name.
     println!("cargo::rustc-check-cfg=cfg(rustty_metallib)");
 
+    // `font.options.backend` (`-Dfont-backend`), for the few renderer items whose
+    // shape depends on WHICH shaper is built (S-14, N266) — e.g. the CoreText
+    // shaper's release pool. `rustty-build-config` publishes the resolved
+    // backend as `links` metadata, which reaches a DIRECT dependent's build
+    // script only; this is the same value `rustty-font-shaper`'s build script
+    // keys its `Face`/`Shaper` selectors on.
+    println!(
+        "cargo::rustc-check-cfg=cfg(rustty_font_backend, values(\"freetype\", \
+         \"freetype_windows\", \"fontconfig_freetype\", \"coretext\", \
+         \"coretext_freetype\", \"coretext_harfbuzz\", \"coretext_noshape\", \
+         \"web_canvas\"))"
+    );
+    println!("cargo::rerun-if-env-changed=DEP_RUSTTY_BUILD_CONFIG_FONT_BACKEND");
+    let font_backend = if std::env::var("CARGO_CFG_TARGET_ARCH").as_deref() == Ok("wasm32") {
+        // `font/main.zig:50`: wasm is always `.web_canvas`.
+        "web_canvas".to_string()
+    } else {
+        std::env::var("DEP_RUSTTY_BUILD_CONFIG_FONT_BACKEND")
+            .expect("rustty-build-config publishes `font_backend` (links metadata)")
+    };
+    println!("cargo::rustc-cfg=rustty_font_backend=\"{font_backend}\"");
+
     // Recompile the metallib when the shader source changes.
     println!("cargo::rerun-if-changed={SHADER_SRC}");
 

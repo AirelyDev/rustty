@@ -102,6 +102,20 @@
 #                                    without `sentry`             -> HARD-FAIL.
 #                                    The reference's test-pkg-linux +
 #                                    test-sentry-linux.
+#   G-FONTBACKEND check_font_backends.sh  `-Dfont-backend` (the
+#                                    rustty-build-config/font-backend-*
+#                                    features): a manifest lint (font-backend-*
+#                                    only in [features], self-tested), then per
+#                                    non-default macOS backend (coretext_freetype,
+#                                    coretext_harfbuzz, coretext_noshape,
+#                                    freetype, fontconfig_freetype,
+#                                    freetype_windows) font-shaper clippy and
+#                                    font/font-shaper/renderer tests (+ core/cli/
+#                                    apprt-c for coretext_freetype and freetype),
+#                                    and the workspace built under
+#                                    coretext_freetype      -> HARD-FAIL.
+#                                    The reference's build-macos-freetype.
+#                                    BLOCKED off macOS (after the lint).
 #   G-THEMES check_theme_corpus.py   the 606 vendored iterm2 theme files match
 #                                    a committed per-file SHA-256 manifest
 #                                    -> HARD-FAIL. res_themes.rs only counts
@@ -547,6 +561,12 @@ GATE_REGISTRY=(
   # forgets one of its own still compiles there and breaks for anyone who
   # depends on it alone.
   "G-FEATMATRIX|HARD|bash $GATES/check_feature_matrix.sh"
+  # G-FONTBACKEND (S-14, N266) — the reference's `build-macos-freetype` job:
+  # `-Dfont-backend=coretext_freetype` tested and the tree built, plus every
+  # other backend the port builds on macOS (coretext_harfbuzz, coretext_noshape,
+  # freetype, fontconfig_freetype, freetype_windows) clippy'd and tested. Each run asserts, through RUSTTY_EXPECT_FONT_BACKEND, that
+  # its feature really selected that backend. macOS-only; BLOCKED elsewhere.
+  "G-FONTBACKEND|HARD|bash $GATES/check_font_backends.sh"
   # G-EOL (2026-08-26) — byte fidelity of the corpora, fixtures and vendored
   # trees. `.gitattributes` opens with `* text=auto` and guarded the byte-exact
   # fixtures by EXTENSION, but fuzz corpus seeds have none — so git normalized

@@ -315,8 +315,13 @@ impl Collection {
     // calls it) and the Linux fontconfig_freetype backend (whose discoverer is an
     // `unimplemented!()` stub until L3 Task 6/7; note the reference's
     // `Fontconfig.discoverFallback` discards `collection` entirely, so the real
-    // Fontconfig discoverer will not call this either).
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    // Fontconfig discoverer will not call this either). (S-14: keyed on the
+    // backend, not the OS — the caller is `discoverCodepoint`'s CoreText body,
+    // which exists only on the CoreText backends without FreeType.)
+    #[cfg_attr(
+        not(all(rustty_font_has_coretext, not(rustty_font_has_freetype))),
+        allow(dead_code)
+    )]
     pub(crate) fn style_face_count(&self, style: Style) -> usize {
         self.faces.get(style).count()
     }
@@ -1580,9 +1585,11 @@ mod tests {
     // the deferred face loads but the post-load `set_size` (scale != 1.0) fails,
     // the freshly loaded face must be deinitialized before the error propagates.
     // Fails without the materialized errdefer in `get_face_from_entry`.
-    // (macOS-only: it builds the deferred face from a CTFont; the Linux
-    // Fontconfig deferred payload requires a live fontconfig pattern.)
-    #[cfg(target_os = "macos")]
+    // (CoreText-backends only: it builds the deferred face's `ct` payload from
+    // a CTFont; the Linux Fontconfig deferred payload requires a live
+    // fontconfig pattern. Under `coretext_freetype` the load takes the
+    // FreeType-by-path arm, which Menlo — a system font file — satisfies.)
+    #[cfg(rustty_font_has_coretext)]
     #[test]
     fn get_face_deferred_set_size_failure_deinits_face() {
         use crate::deferred_face::{new_cfstring, CoreTextData};
@@ -1967,7 +1974,7 @@ mod tests {
     // test "hasCodepoint emoji default graphical"
     #[test]
     #[cfg_attr(
-        any(target_os = "macos", target_os = "windows", target_arch = "wasm32"),
+        not(rustty_font_backend = "fontconfig_freetype"),
         ignore = "SkipZigTest: fontconfig_freetype backend only (R14)"
     )]
     fn has_codepoint_emoji_default_graphical() {
@@ -1976,10 +1983,10 @@ mod tests {
         // PORT NOTE: the reference early-returns `SkipZigTest` when the backend
         // isn't `fontconfig_freetype`; here the body runs only when it is (an
         // inverted guard, equivalent to the skip and clippy-clean). Where the
-        // condition is false (`Backend::default()`: macOS, Windows, wasm32) the
+        // condition is false (every other `-Dfont-backend`) the
         // `cfg_attr(.., ignore)` above reports the test `ignored` instead of an
-        // empty pass (R14).
-        #[cfg(not(target_os = "macos"))]
+        // empty pass (R14). The `#[cfg]` keys the body on the same backend.
+        #[cfg(rustty_font_backend = "fontconfig_freetype")]
         if options::BACKEND == Backend::FontconfigFreetype {
             let test_emoji = embedded::EMOJI;
 
@@ -2291,13 +2298,17 @@ mod tests {
     // prong of every expected-value switch (`Collection.zig:1440-1502`). So the
     // test checks nothing upstream. That is a reference test-weakness, recorded as
     // NEW-FINDINGS N265 (it needs a UD id); per R13 it stays faithful here. The
-    // skip is compile-time scope (`options::BACKEND` is `WebCanvas` exactly on
-    // wasm32), so it is the `cfg_attr` ignore below (R14 form 1). Run with
-    // `--ignored`, the body measures the host backend against the reference's
-    // own expected values for it.
+    // skip is compile-time scope (`options::BACKEND`, the `rustty_font_backend`
+    // cfg), so it is the `cfg_attr` ignore below (R14 form 1). Run with
+    // `--ignored`, the body measures the built backend against the reference's
+    // own expected values for it (S-14: including `coretext_freetype`'s FreeType
+    // arm on macOS). Those FreeType values are stale upstream (they predate the
+    // light-hinting default; NEW-FINDINGS N285, UPSTREAM-DEFECTS UD281): under a
+    // FreeType backend the body fails on narrow `cell_width` (7.0 vs 8.0) and
+    // wide `ascii_height` (15.5 vs 16.0), as Ghostty's would. Kept faithful.
     #[test]
     #[cfg_attr(
-        not(target_arch = "wasm32"),
+        not(rustty_font_backend = "web_canvas"),
         ignore = "SkipZigTest: the reference runs this only on web_canvas \
                   (Collection.zig:1398; inverted guard, N265) (R14)"
     )]

@@ -27,6 +27,9 @@
 
 #[cfg(target_arch = "wasm32")]
 pub use wasm::Shaper;
+// The shaper's error set, named by `shape::ShaperError` (S-14).
+#[cfg(target_arch = "wasm32")]
+pub use wasm::Error;
 // Re-export the C-ABI exports by path so the browser cdylib deliverable can
 // force-retain them (`#[used]`), and so they participate in the public API.
 #[cfg(target_arch = "wasm32")]

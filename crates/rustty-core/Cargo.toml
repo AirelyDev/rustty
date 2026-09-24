@@ -98,6 +98,11 @@ rustty-oniguruma = { workspace = true }
 # `rustty-renderer` can expose the opt-out an embedder needs, so every other
 # consumer names them here and builds byte-identically (R5).
 rustty-font-shaper = { workspace = true, features = ["freetype", "harfbuzz", "fontconfig"] }
+# `-Dfont-backend` (S-14, N266): a DIRECT edge so `build.rs` receives
+# rustty-build-config's `links` metadata (`DEP_RUSTTY_BUILD_CONFIG_FONT_BACKEND`)
+# and emits the `rustty_font_backend`/`rustty_font_has_freetype` cfgs. A leaf;
+# already a transitive dependency.
+rustty-build-config = { workspace = true }
 rustty-datastruct = { workspace = true }
 rustty-zigstd = { workspace = true }
 rustty-xev = { workspace = true }

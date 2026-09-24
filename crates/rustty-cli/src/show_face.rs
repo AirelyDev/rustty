@@ -256,13 +256,14 @@ where
     // Its possible to build Ghostty without font discovery!
     // if (comptime font.Discover == void) { try stderr.print(...); return 1; }
     //
-    // PORT NOTE: rustty's `font::Discover` is a real discoverer on every native
-    // target — CoreText on macOS, Fontconfig on Linux/BSD (both fully ported in
-    // the shaper's `discovery.rs`) — so this arm is skipped there and the live
-    // lookup body below runs. The `font.Discover == void` arm maps ONLY to the
-    // wasm `web_canvas` backend, whose browser has no font-file discovery.
-    #[cfg(target_arch = "wasm32")]
-    {
+    // PORT NOTE: `font.Discover == void` is `font::discovery::DISCOVER_IS_VOID`:
+    // true on the wasm `web_canvas` backend (no font-file discovery in the
+    // browser) and on `-Dfont-backend=freetype` ("no font discovery"); every
+    // other backend has a live discoverer and runs the lookup body below.
+    // CORRECTION (S-14b, review M1): this arm was `cfg(target_arch = "wasm32")`,
+    // so a native `.freetype` build ran the lookup where Ghostty prints this
+    // message and returns 1 (the sibling `list_fonts` site was converted in S-14).
+    if font::discovery::DISCOVER_IS_VOID {
         let _ = (&args_iter, &stdout);
         // R2: oracle prints the capitalized product name at both positions here.
         write!(
@@ -406,18 +407,17 @@ where
         //     return 1;
         // };
         // errdefer font_grid_set.deinit();
-        //   PORT NOTE: on macOS `SharedGridSet.init`'s error set is uninhabited (the
-        //   `NoopLibrary` `error{}` arm), so the `catch` print is statically
-        //   unreachable (`match e {}` discharges it). On Linux/BSD the set opens the
-        //   `FreetypeLibrary`, so `init` returns a real `ft::FtError` — the reference
-        //   `catch |err| { print; return 1; }` is reproduced literally there. The
+        //   PORT NOTE: `SharedGridSet.init`'s error set is the backend `Library`'s
+        //   (`shared_grid_set::InitError`): uninhabited for `NoopLibrary` (the
+        //   `error{}` arm — the `catch` print is then statically unreachable), a
+        //   real `ft::FtError` for `FreetypeLibrary`. The reference
+        //   `catch |err| { print; return 1; }` is reproduced literally for both
+        //   (S-14, N266: it was split by `target_os`). The
         //   reference has only an `errdefer` (no unconditional `defer deinit`): no
         //   error propagates after this point (every failure below is caught →
         //   `return Ok(1)`), so the set is dropped by RAII at scope end (the
         //   reference leaks it on success).
-        #[cfg(target_os = "macos")]
-        let mut font_grid_set = font::SharedGridSet::init(Global).unwrap_or_else(|e| match e {});
-        #[cfg(not(target_os = "macos"))]
+        #[allow(unreachable_patterns)] // `Err` is uninhabited on `NoopLibrary` backends
         let mut font_grid_set = match font::SharedGridSet::init(Global) {
             Ok(set) => set,
             Err(err) => {
@@ -748,20 +748,18 @@ fn font_shared_grid_set_derived_config(config: &Config) -> font::shared_grid_set
 }
 
 /// `if (font.face.FreetypeLoadFlags != void) config.@"freetype-load-flags" else {}`.
-/// macOS's backend is `coretext`, whose `FreetypeLoadFlags` is `void` (`()`).
-#[cfg(target_os = "macos")]
-fn derived_freetype_load_flags(
-    _c: &rustty_config::value_types::FreetypeLoadFlags,
-) -> rustty_font_shaper::face::FreetypeLoadFlags {
-}
-
-/// Linux/BSD's default backend is `fontconfig_freetype`, so the configured
-/// flags flow through.
-#[cfg(not(any(target_os = "macos", target_arch = "wasm32")))]
+/// The shaper tier decides `hasFreetype()` (`face::freetype_load_flags_if_active`):
+/// `void` (`()`) on the macOS default `coretext`, the configured flags on the
+/// FreeType backends (the Linux/BSD default `fontconfig_freetype`, and
+/// `-Dfont-backend=coretext_freetype`). (S-14, N266: it was split by
+/// `target_os`.)
+#[cfg(not(target_arch = "wasm32"))]
 fn derived_freetype_load_flags(
     c: &rustty_config::value_types::FreetypeLoadFlags,
 ) -> rustty_font_shaper::face::FreetypeLoadFlags {
-    rustty_core::surface::freetype_load_flags_from_config(c)
+    rustty_font_shaper::face::freetype_load_flags_if_active(|| {
+        rustty_core::surface::freetype_load_flags_from_config(c)
+    })
 }
 
 /// The wasm `web_canvas` backend has no FreeType either.
@@ -787,8 +785,10 @@ mod tests {
 
     // parity S70-F5: on a FreeType target `DerivedConfig.init` copies
     // `config.@"freetype-load-flags"`; every flag is flipped from its default so
-    // a dropped copy cannot pass. LINUX-ONLY (macOS's type is `void`).
-    #[cfg(not(any(target_os = "macos", target_arch = "wasm32")))]
+    // a dropped copy cannot pass. Only on the `hasFreetype()` backends (elsewhere
+    // the type is `void`) — S-14b: keyed on the backend (`build.rs`), not the OS,
+    // so it also runs for macOS `-Dfont-backend=coretext_freetype`/`freetype`.
+    #[cfg(all(rustty_font_has_freetype, not(target_arch = "wasm32")))]
     #[test]
     fn derived_config_carries_the_configured_freetype_load_flags() {
         let mut config = Config::default_config();
@@ -815,6 +815,41 @@ mod tests {
                 got.light
             )
         );
+    }
+
+    // S-14b (review M1): `if (comptime font.Discover == void)` — the `.freetype`
+    // ("no font discovery") build prints the reference's message and returns 1
+    // before parsing anything. `--help` tells the arms apart: the void arm never
+    // reaches `args.parse`, the other arm returns `ActionHelpRequested` from it.
+    #[cfg(rustty_font_backend = "freetype")]
+    #[test]
+    fn without_font_discovery_show_face_says_so_and_returns_1() {
+        let mut it = VecArgs(vec![b"--help".to_vec()].into_iter());
+        let (mut out, mut err) = (Vec::<u8>::new(), Vec::<u8>::new());
+        let got = run_args(&mut it, &mut out, &mut err).expect("the void arm returns Ok(1)");
+        assert_eq!(1, got);
+        let err = String::from_utf8(err).unwrap();
+        assert!(
+            err.starts_with(&format!(
+                "{} was built without a font discovery mechanism. This is a compile-time\n",
+                rustty_identity::APP_NAME_TITLECASE
+            )),
+            "{err:?}"
+        );
+        assert!(out.is_empty());
+    }
+
+    /// The other side of the `Discover == void` test: a build WITH discovery
+    /// parses the arguments (`--help` → `ActionHelpRequested`) and prints no
+    /// "without a font discovery mechanism" message.
+    #[cfg(not(any(rustty_font_backend = "freetype", target_arch = "wasm32")))]
+    #[test]
+    fn with_font_discovery_show_face_parses_its_arguments() {
+        let mut it = VecArgs(vec![b"--help".to_vec()].into_iter());
+        let (mut out, mut err) = (Vec::<u8>::new(), Vec::<u8>::new());
+        let got = run_args(&mut it, &mut out, &mut err);
+        assert!(matches!(got, Err(Error::ActionHelpRequested)), "{got:?}");
+        assert!(!String::from_utf8_lossy(&err).contains("without a font discovery mechanism"));
     }
 
     // parity S67-F1: `formatValues(Options, "style", ...)` appends the

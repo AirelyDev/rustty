@@ -27,15 +27,17 @@
 //! claim would bind is green for `font`: G1 `--strict` 278/178 with no MISSING
 //! name, G2 970/619 with no WEAKENED test, G3, G3b 3357/3357, and D3.
 //!
-//! Why the status is still not `done`: the reference selects the font backend
-//! with a BUILD OPTION (`-Dfont-backend`, `src/build/Config.zig:191-195`), and
-//! its CI builds and tests `coretext_freetype` on macOS (`build-macos-freetype`
-//! in `.github/workflows/test.yml`). Here `options::BACKEND` is folded to the
-//! per-OS default (`Backend::default()`), and the Face/Shaper/Discover/Library
-//! types are chosen by `target_os`, not by the backend. So the non-default arms
-//! (`loadCoreTextFreetype`, the `coretext_harfbuzz`/`coretext_noshape`/
-//! `freetype` selections) exist only as quoted comments. That is an R8
-//! build-switch fold, recorded OPEN as NEW-FINDINGS N266.
+//! The status was held below `done` for NEW-FINDINGS N266: the reference selects
+//! the font backend with a BUILD OPTION (`-Dfont-backend`,
+//! `src/build/Config.zig:191-195`) and its CI builds and tests
+//! `coretext_freetype` on macOS, while the port folded `options::BACKEND` to the
+//! per-OS default. S-14 made the option real (`rustty-build-config`'s
+//! `font-backend-*` features, the `rustty_font_backend` cfg every selector in
+//! `rustty-font-shaper` is keyed on, the non-default arms live, and the
+//! G-FONTBACKEND lane) and CLOSED N266; see `rustty-font-shaper`'s header for
+//! what is and is not built. The `done` flip itself is left to the controller:
+//! it needs the G6 lanes (Miri/ASan) run on the new code. This crate
+//! (`rustty-font`) has no backend-dependent code of its own.
 
 pub mod atlas;
 pub mod codepoint_map;
