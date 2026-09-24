@@ -43,18 +43,16 @@ pub fn log_with(level: Level, scope: &str, message: &str, logging: &Logging) {
     // macOS logging is thread safe so no need for locks/mutexes
     // macos: {
     //     if (comptime !builtin.target.os.tag.isDarwin()) break :macos;
-    //     if (!state.logging.macos) break :macos;
+    //     if (!global.logging().macos) break :macos;
     //     const prefix = if (scope == .default) "" else @tagName(scope) ++ ": ";
     //     const mac_level: macos.os.LogType = switch (level) {
     //         .debug => .debug, .info => .info, .warn => .err, .err => .fault,
     //     };
-    //     const logger = macos.os.Log.create(build_config.bundle_id, @tagName(scope));
-    //     defer logger.release();
-    //     logger.log(std.heap.c_allocator, mac_level, prefix ++ format, args);
+    //     macosLogger(scope).log(std.heap.c_allocator, mac_level, prefix ++ format, args);
     // }
     #[cfg(target_os = "macos")]
     if logging.macos {
-        use rustty_os::macos::{Log, LogType};
+        use rustty_os::macos::LogType;
         let prefix = if scope == "default" {
             String::new()
         } else {
@@ -67,14 +65,7 @@ pub fn log_with(level: Level, scope: &str, message: &str, logging: &Logging) {
             Level::Warn => LogType::Err,
             Level::Err => LogType::Fault,
         };
-        // Initialize a logger. This is slow to do on every operation
-        // but we shouldn't be logging too much.
-        let subsystem =
-            std::ffi::CString::new(rustty_identity::BUNDLE_ID).expect("bundle id is NUL-free");
-        let category = std::ffi::CString::new(scope).unwrap_or_default();
-        let logger = Log::create(&subsystem, &category);
-        logger.log(mac_level, &format!("{prefix}{message}"));
-        logger.release();
+        macos_logger(scope).log(mac_level, &format!("{prefix}{message}"));
     }
 
     // stderr: {
@@ -100,6 +91,81 @@ pub fn log_with(level: Level, scope: &str, message: &str, logging: &Logging) {
     let mut stderr = std::io::stderr().lock();
     let _ = writeln!(stderr, "{}{prefix}{message}", level.as_text());
     let _ = stderr.flush();
+}
+
+/// Returns the macOS unified logging logger for the given scope. The
+/// logger is created once per scope and cached for the lifetime of the
+/// process, because os_log object creation is slow (it shows up in
+/// startup profiles when done per log call) and Apple's guidance is to
+/// create loggers once and reuse them.
+///
+/// PORTS: `main_ghostty.zig:170-199` `macosLogger` (upstream `3225e9ebb`;
+/// parity tail S-8d, N280). PORT NOTE: the reference's cache slot is a
+/// `struct { var cached: std.atomic.Value(?*macos.os.Log) }` instantiated once
+/// per comptime `scope`. A Rust scope is a runtime `&str`, so
+/// [`macos_logger_slot`] hands out the one process-lifetime slot for each
+/// scope; everything after the lookup — the acquire load, the create, the
+/// `cmpxchgStrong(null, created, .acq_rel, .acquire)` and the release of the
+/// losing logger — is the reference's.
+#[cfg(target_os = "macos")]
+fn macos_logger(scope: &str) -> &'static rustty_os::macos::Log {
+    use std::sync::atomic::Ordering;
+    let cached = macos_logger_slot(scope);
+
+    let v = cached.load(Ordering::Acquire);
+    if !v.is_null() {
+        // SAFETY: a non-null slot holds a leaked `Box<Log>` that is never
+        // freed (the reference caches it "for the lifetime of the process").
+        return unsafe { &*v };
+    }
+
+    // Create and attempt to store our logger. If we race with another
+    // thread then we use theirs and release ours.
+    let subsystem =
+        std::ffi::CString::new(rustty_identity::BUNDLE_ID).expect("bundle id is NUL-free");
+    let category = std::ffi::CString::new(scope).unwrap_or_default();
+    let created = Box::into_raw(Box::new(rustty_os::macos::Log::create(
+        &subsystem, &category,
+    )));
+    match cached.compare_exchange(
+        std::ptr::null_mut(),
+        created,
+        Ordering::AcqRel,
+        Ordering::Acquire,
+    ) {
+        // SAFETY: `created` is now the slot's leaked, never-freed logger.
+        Ok(_) => unsafe { &*created },
+        Err(existing) => {
+            // SAFETY: the exchange failed, so `created` was never published;
+            // this thread still owns it exclusively.
+            unsafe { Box::from_raw(created) }.release();
+            // SAFETY: `existing` is the winner's leaked, never-freed logger.
+            unsafe { &*existing }
+        }
+    }
+}
+
+/// The per-scope cache slot of [`macos_logger`] — the Rust stand-in for the
+/// reference's comptime-per-scope `S.cached` static. Each slot is allocated
+/// once per distinct scope and leaked (the set of scopes is the fixed set of
+/// log targets, as the reference's set of comptime scopes is).
+#[cfg(target_os = "macos")]
+fn macos_logger_slot(scope: &str) -> &'static std::sync::atomic::AtomicPtr<rustty_os::macos::Log> {
+    use std::sync::atomic::AtomicPtr;
+    use std::sync::Mutex;
+    type Slots = Vec<(Box<str>, &'static AtomicPtr<rustty_os::macos::Log>)>;
+    static SLOTS: Mutex<Slots> = Mutex::new(Vec::new());
+
+    let mut slots = SLOTS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some((_, slot)) = slots.iter().find(|(s, _)| &**s == scope) {
+        return slot;
+    }
+    let slot: &'static AtomicPtr<rustty_os::macos::Log> =
+        Box::leak(Box::new(AtomicPtr::new(std::ptr::null_mut())));
+    slots.push((scope.into(), slot));
+    slot
 }
 
 /// The STATE-reading variant — the reference `logFn` reads the process-global
@@ -278,6 +344,37 @@ pub fn install_app_log_backend() {
 mod tests {
     use super::*;
     use rustty_global::Logging;
+
+    // rustty-only proving test (N280): `macosLogger` has no reference test.
+    // The property the reference states is "created once per scope and
+    // cached for the lifetime of the process", so the same scope must yield
+    // the SAME logger object on every call (a per-call `Log::create`, the
+    // pre-N280 port, returns a fresh one each time), and a different scope a
+    // different one. The unique scope names keep this independent of any
+    // other test that logs.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_logger_is_created_once_per_scope() {
+        let a1 = macos_logger("s8d-n280-scope-a");
+        let a2 = macos_logger("s8d-n280-scope-a");
+        let b = macos_logger("s8d-n280-scope-b");
+        assert!(
+            std::ptr::eq(a1, a2),
+            "same scope must reuse the cached logger"
+        );
+        assert!(!std::ptr::eq(a1, b), "each scope has its own logger");
+        // Racing first use of a fresh scope from many threads still settles on
+        // exactly one logger (the losers release theirs and adopt the winner's).
+        let addrs: Vec<usize> = (0..8)
+            .map(|_| {
+                std::thread::spawn(|| std::ptr::from_ref(macos_logger("s8d-n280-race")) as usize)
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|h| h.join().expect("logger thread"))
+            .collect();
+        assert!(addrs.windows(2).all(|w| w[0] == w[1]), "{addrs:?}");
+    }
 
     // task-14a review CRITICAL 2 (rustty-only proving tests, NOT reference
     // tests — `AppLogger` has no oracle analog, see its own PORT NOTE).
