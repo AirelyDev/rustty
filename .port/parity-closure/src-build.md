@@ -82,7 +82,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** The `ghostty-gen` data generator binary is named `rustty-synthetic`, not `rustty-gen`
   - **Oracle:** `src/build/GhosttyBench.zig:16-31` → **Rustty:** `crates/rustty-synthetic/Cargo.toml:31-34`
   - **Audit's suggested fix:** Rename the bin to `rustty-gen` (or add a second [[bin]] alias) so the bench docs and the oracle name line up.
-- [x] **S63-F5** · CONFIRMED · `INDIV` · missing-branch
+- [ ] **S63-F5** · CONFIRMED · `INDIV` · missing-branch
   - **What:** Windows build lacks the GUI subsystem and the .rc resource (icon/manifest) embedding
   - **Oracle:** `src/build/GhosttyExe.zig:43-52` → **Rustty:** `crates/rustty/Cargo.toml:1-40`
   - **Audit's suggested fix:** Add `#![cfg_attr(windows, windows_subsystem = "windows")]` to crates/rustty/src/main.rs and a build.rs that compiles dist/windows/rustty.rc (e.g. via embed-resource) on `target_os = "windows"`.
@@ -98,7 +98,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** emit_terminfo / emit_termcap / emit_themes build gates are unconditional in xtask
   - **Oracle:** `src/build/GhosttyResources.zig:43-53,60-77,125-136` → **Rustty:** `xtask/src/res_terminfo.rs:132-141,168-170`
   - **Audit's suggested fix:** Add `--emit-terminfo/--emit-termcap/--emit-themes` flags to `xtask resources` defaulting to the oracle's profile-dependent values (true for debug, false for release; themes true).
-- [x] **S64-F9** · CONFIRMED · `ABI` · missing-branch
+- [ ] **S64-F9** · CONFIRMED · `ABI` · missing-branch
   - **What:** Android lib-vt arm (16 KiB max page size, NDK paths) not represented
   - **Oracle:** `src/build/GhosttyLibVt.zig:261-266` → **Rustty:** `CMakeLists.txt:391-552`
   - **Audit's suggested fix:** Add an Android arm to rustty_vt_add_target that passes `-C link-arg=-Wl,-z,max-page-size=16384` via CARGO_TARGET_<T>_RUSTFLAGS.
