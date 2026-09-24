@@ -816,6 +816,21 @@ impl<'a, H: Handler> Stream<'a, H> {
     /// when the stream is deinitialized.
     // pub fn init(options: Options) Self {
     pub fn init(options: Options<'a, H>) -> Stream<'a, H> {
+        Stream::init_in(options, crate::alloc::Global)
+    }
+
+    /// `init`, with the continuation tracker on `tracker_alloc`.
+    ///
+    /// PORT NOTE (parity tail S7-4): the reference builds the tracker over
+    /// `options.allocator`. The port's `Options.allocator` is the OSC parser's
+    /// `ZigAllocatorRef` (whose presence gates tracking); the tracker grows
+    /// through the runtime handle, which the caller passes here: the C API's
+    /// `wrap` passes the terminal's allocator, as `Stream.init(.{ .allocator =
+    /// alloc, ... })` does. `init` passes the Rust heap.
+    pub fn init_in(
+        options: Options<'a, H>,
+        tracker_alloc: crate::alloc::Allocator,
+    ) -> Stream<'a, H> {
         // Initialize the parser
         // var parser: Parser = .init();
         // if (options.allocator) |alloc| parser.osc_parser.alloc = alloc;
@@ -831,14 +846,13 @@ impl<'a, H: Handler> Stream<'a, H> {
         //         if (max_bytes > 0) tracker = .init(alloc, max_bytes);
         //     }
         // }
-        // PORT NOTE: the Rust `Tracker` allocates on the global allocator (see
-        // its `alloc` PORT NOTE), so the gate consumes `options.allocator`'s
-        // presence only.
+        // PORT NOTE: the gate consumes `options.allocator`'s presence; the
+        // tracker grows through `tracker_alloc` (see `init_in`).
         let mut tracker: Option<continuationpkg::Tracker> = None;
         if options.allocator.is_some() {
             if let Some(max_bytes) = options.continuation_max_bytes {
                 if max_bytes > 0 {
-                    tracker = Some(continuationpkg::Tracker::init(max_bytes));
+                    tracker = Some(continuationpkg::Tracker::init(tracker_alloc, max_bytes));
                 }
             }
         }
@@ -7233,12 +7247,10 @@ mod tests {
     // ---------------------------------------------------------------------
 
     use crate::stream_continuation::FixedIoWriter;
-    #[cfg(debug_assertions)]
-    use crate::stream_continuation::{tracker_tw_end, tracker_tw_error_always, TrackerFp};
 
     /// `testing.allocator` for the `Options.allocator` gate: the tests only
-    /// need the allocator's *presence* (the Rust `Tracker` allocates on the
-    /// global allocator; see its PORT NOTE), backed by the process-global zig
+    /// need the allocator's *presence* (the tracker grows through the handle
+    /// `Stream::init_in` is given), backed by the process-global zig
     /// allocator exactly as `Terminal::vt_stream` does.
     static CONTINUATION_TEST_ALLOC: rustty_lib::allocator::GlobalZigAllocator =
         rustty_lib::allocator::GlobalZigAllocator;
@@ -7541,15 +7553,21 @@ mod tests {
         // var failing = testing.FailingAllocator.init(testing.allocator, .{
         //     .fail_index = 0,
         // });
-        // PORT NOTE: FailingAllocator → the TRACKER_TW tripwire seam.
-        #[cfg(debug_assertions)]
-        {
-            tracker_tw_error_always(TrackerFp::Alloc);
-            let mut failing_stream: Stream<ContinuationNullHandler> = Stream::init(Options {
-                allocator: Some(testing_allocator()),
-                handler: ContinuationNullHandler,
-                continuation_max_bytes: Some(64),
+        let failing =
+            crate::alloc::testing::FailingAllocator::over_heap(crate::alloc::testing::Config {
+                fail_index: 0,
+                ..Default::default()
             });
+        let c = failing.allocator();
+        crate::alloc::testing::with_handle(&c, |alloc| {
+            let mut failing_stream: Stream<ContinuationNullHandler> = Stream::init_in(
+                Options {
+                    allocator: Some(testing_allocator()),
+                    handler: ContinuationNullHandler,
+                    continuation_max_bytes: Some(64),
+                },
+                alloc,
+            );
             // defer failing_stream.deinit();
             failing_stream.next_slice(b"\x1b[");
             let mut unavailable_buf = [0u8; 1];
@@ -7558,9 +7576,8 @@ mod tests {
                 failing_stream.write_continuation(&mut unavailable_writer),
                 Err(WriteContinuationError::ContinuationUnavailable)
             ));
-            tracker_tw_end(rustty_util::tripwire::ResetMode::Reset).unwrap();
             failing_stream.deinit();
-        }
+        });
 
         tracked.deinit();
         no_allocator.deinit();
@@ -7981,18 +7998,22 @@ mod tests {
 
     // test "stream: continuation allocation failure recovers"
     #[test]
-    #[cfg_attr(
-        not(debug_assertions),
-        ignore = "the body only exists under cfg(debug_assertions) (R14)"
-    )]
     fn stream_continuation_allocation_failure_recovers() {
-        #[cfg(debug_assertions)]
-        {
-            let mut stream: Stream<ContinuationNullHandler> = Stream::init(Options {
-                allocator: Some(testing_allocator()),
-                handler: ContinuationNullHandler,
-                continuation_max_bytes: Some(16 * 1024),
-            });
+        // var failing = testing.FailingAllocator.init(testing.allocator, .{});
+        // const alloc = failing.allocator();
+        let failing = crate::alloc::testing::FailingAllocator::over_heap(
+            crate::alloc::testing::Config::default(),
+        );
+        let c = failing.allocator();
+        crate::alloc::testing::with_handle(&c, |alloc| {
+            let mut stream: Stream<ContinuationNullHandler> = Stream::init_in(
+                Options {
+                    allocator: Some(testing_allocator()),
+                    handler: ContinuationNullHandler,
+                    continuation_max_bytes: Some(16 * 1024),
+                },
+                alloc,
+            );
             // defer stream.deinit();
 
             let mut input = vec![0u8; 12 * 1024];
@@ -8000,7 +8021,13 @@ mod tests {
             input[2..].fill(b'1');
 
             // failing.fail_index = failing.alloc_index;
-            tracker_tw_error_always(TrackerFp::Alloc);
+            // PORT NOTE (test-only, as N271's setPwd/setTitle tests): also
+            // `resize_fail_index = resize_index`. The reference's inner
+            // `testing.allocator` cannot remap the 4096-byte reservation to
+            // 12 KiB, so the growth reaches the failing `alloc`; the port's
+            // inner heap remaps with `realloc`, which would succeed.
+            failing.fail_index.set(failing.alloc_index.get());
+            failing.resize_fail_index.set(failing.resize_index.get());
             stream.next_slice(&input);
             let mut unavailable_buf = [0u8; 1];
             let mut unavailable_writer = FixedIoWriter::new(&mut unavailable_buf);
@@ -8010,7 +8037,8 @@ mod tests {
             ));
 
             // failing.fail_index = std.math.maxInt(usize);
-            tracker_tw_end(rustty_util::tripwire::ResetMode::Reset).unwrap();
+            failing.fail_index.set(usize::MAX);
+            failing.resize_fail_index.set(usize::MAX);
             stream.next(b'm');
             let mut recovered_buf = [0u8; 1];
             let mut recovered_writer = FixedIoWriter::new(&mut recovered_buf);
@@ -8018,7 +8046,7 @@ mod tests {
             assert_eq!(0, recovered_writer.end);
 
             stream.deinit();
-        }
+        });
     }
 
     // test "stream: continuation every-byte cuts preserve future behavior"

@@ -1820,11 +1820,16 @@ unsafe fn wrap(
                 // (a zeroed seed — never observed before `set(.terminfo_name)`
                 // overwrites the prefix it then publishes)
                 terminfo_name_buf: [0; rustty_vt::stream_terminal::MAX_TERMINFO_NAME_BYTES],
-                stream: Stream::init(rustty_vt::stream::Options {
-                    allocator: Some(rustty_lib::allocator::ZigAllocatorRef::new(alloc)),
-                    handler,
-                    continuation_max_bytes: Some(continuation_max_bytes),
-                }),
+                // (parity tail S7-4: the continuation tracker grows through
+                // the same caller allocator, `Stream::init_in`.)
+                stream: Stream::init_in(
+                    rustty_vt::stream::Options {
+                        allocator: Some(rustty_lib::allocator::ZigAllocatorRef::new(alloc)),
+                        handler,
+                        continuation_max_bytes: Some(continuation_max_bytes),
+                    },
+                    capture_alloc,
+                ),
                 effects: Effects::default(),
                 tracked_grid_refs: WrapperSet::new_in(capture_alloc),
                 searches: WrapperSet::new_in(capture_alloc),
@@ -2500,10 +2505,12 @@ unsafe fn set_continuation_max_bytes(wrapper: *mut TerminalWrapper, max_bytes: u
     // Enabling from zero starts an empty tracker owned by the terminal's
     // allocator. It can immediately track only if no earlier bytes are needed.
     // wrapper.stream.continuation = .init(wrapper.terminal.gpa(), max_bytes);
-    // SAFETY: `wrapper` is live (caller contract).
+    // SAFETY: `wrapper` is live (caller contract); raw reads of its terminal.
     unsafe {
-        (*wrapper).stream.continuation =
-            Some(rustty_vt::stream_continuation::Tracker::init(max_bytes));
+        let gpa = (*(*(*wrapper).terminal).screens.active).alloc;
+        (*wrapper).stream.continuation = Some(rustty_vt::stream_continuation::Tracker::init(
+            gpa, max_bytes,
+        ));
         if !(*wrapper).stream.ground() {
             // The parser was already mid-sequence while tracking was disabled, so
             // exporting now would omit an unknown prefix.
@@ -11613,6 +11620,58 @@ mod tests {
         unsafe { free(t) };
         assert_eq!(0, counting_alloc.live_bytes.get(), "every byte is returned");
         COUNTING.with(|c| c.set(std::ptr::null()));
+    }
+
+    // Parity tail S7-4 (routing evidence, no reference counterpart): enabling
+    // continuation tracking builds the tracker over the terminal's allocator
+    // (`.init(wrapper.terminal.gpa(), max_bytes)`): its best-effort 4096-byte
+    // reservation and its growth reach the caller's allocator, and disabling
+    // or `free` returns every byte.
+    #[test]
+    fn continuation_tracker_routes_through_the_terminals_allocator() {
+        use rustty_vt::alloc::testing::CountingAllocator;
+        let counting = CountingAllocator::over_heap();
+        let calloc = counting.allocator();
+        let mut t: Terminal = std::ptr::null_mut();
+        assert_eq!(Result::Success, unsafe {
+            new(&calloc as *const CAllocator, &mut t, 80, 24)
+        });
+        let live = counting.live_bytes.get();
+        let before = counting.alloc_calls.get();
+        let max: usize = 8192;
+        assert_eq!(Result::Success, unsafe {
+            set(
+                t,
+                Option_::ContinuationMaxBytes,
+                &max as *const usize as *const c_void,
+            )
+        });
+        assert_eq!(before + 1, counting.alloc_calls.get(), "the reservation");
+        assert_eq!(Some((4096, 0)), counting.last_alloc.get());
+
+        let mut input = vec![b'1'; 5000];
+        input[0..2].copy_from_slice(b"\x1b[");
+        vtw(t, &input);
+        assert!(
+            counting.live_bytes.get() >= live + 5000,
+            "the retained suffix is on the caller's allocator"
+        );
+
+        let zero: usize = 0;
+        assert_eq!(Result::Success, unsafe {
+            set(
+                t,
+                Option_::ContinuationMaxBytes,
+                &zero as *const usize as *const c_void,
+            )
+        });
+        assert_eq!(
+            live,
+            counting.live_bytes.get(),
+            "disabling frees the suffix"
+        );
+        unsafe { free(t) };
+        assert_eq!(0, counting.live_bytes.get());
     }
 
     // Parity tail S7-4: the sweep corpus is not vacuous. On a clean run over a
