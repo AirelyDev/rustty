@@ -162,7 +162,12 @@ impl ApproxEqual for f32 {
     fn approx_equal(&self, actual: &Self) -> Result<(), Error> {
         let sqrt_eps = f32::EPSILON.sqrt();
         if !approx_eq_rel_f32(*self, *actual, sqrt_eps) {
-            // print("expected approximately {any}, found {any}\n", ...)
+            // print("expected approximately {any}, found {any}\n", .{ expected, actual });
+            print(format_args!(
+                "expected approximately {}, found {}\n",
+                self.fmt_any(),
+                actual.fmt_any()
+            ));
             return Err(Error::TestExpectedApproxEqual);
         }
         Ok(())
@@ -173,19 +178,22 @@ impl ApproxEqual for f64 {
     fn approx_equal(&self, actual: &Self) -> Result<(), Error> {
         let sqrt_eps = f64::EPSILON.sqrt();
         if !approx_eq_rel_f64(*self, *actual, sqrt_eps) {
+            // print("expected approximately {any}, found {any}\n", .{ expected, actual });
+            print(format_args!(
+                "expected approximately {}, found {}\n",
+                self.fmt_any(),
+                actual.fmt_any()
+            ));
             return Err(Error::TestExpectedApproxEqual);
         }
         Ok(())
     }
 }
 
-// recurse into containers (arrays / vectors)
+// recurse into containers
 //   .array => { ... expectApproxEqual(actual[i], expected[i]) ... }
-//   .vector => { ... }
-// In Rust both fixed arrays `[T; N]` and "vectors" (`@Vector(N, f32)`) map to
-// `[T; N]`, so a single impl covers both reference arms. Note: the reference's
-// array arm computes a `diff_index` and prints it on mismatch; the resulting
-// error is the same `error.TestExpectedApproxEqual` in every path.
+// A Zig `@Vector(N, T)` is the separate [`Vector`] newtype below, so each
+// reference arm keeps its own diagnostic (parity S80-F2).
 impl<T: ApproxEqual, const N: usize> ApproxEqual for [T; N] {
     fn approx_equal(&self, actual: &Self) -> Result<(), Error> {
         let expected = self;
@@ -211,9 +219,88 @@ impl<T: ApproxEqual, const N: usize> ApproxEqual for [T; N] {
                 }
             }
         }
-        let _diff_index = diff.unwrap();
-        // print("slices not approximately equal. first significant difference ...");
+        let diff_index = diff.unwrap();
+        // print("slices not approximately equal. first significant difference occurs at index {d} (0x{X})\n", .{ diff_index, diff_index });
+        print(format_args!(
+            "slices not approximately equal. first significant difference occurs at index {diff_index} (0x{diff_index:X})\n"
+        ));
         Err(Error::TestExpectedApproxEqual)
+    }
+}
+
+/// A Zig `@Vector(N, T)`, for the reference's `.vector` arm.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Vector<T, const N: usize>(pub [T; N]);
+
+//   .vector => |info| {
+//       var i: usize = 0;
+//       const expected_array: [info.len]info.child = expected;
+//       const actual_array: [info.len]info.child = actual;
+//       while (i < info.len) : (i += 1) {
+//           expectApproxEqual(expected_array[i], actual_array[i]) catch {
+//               print("index {d} incorrect. expected approximately {any}, found {any}\n", .{
+//                   i, expected_array[i], actual_array[i],
+//               });
+//               return error.TestExpectedApproxEqual;
+//           };
+//       }
+//   },
+impl<T: ApproxEqual + FmtAny, const N: usize> ApproxEqual for Vector<T, N> {
+    fn approx_equal(&self, actual: &Self) -> Result<(), Error> {
+        let (expected_array, actual_array) = (&self.0, &actual.0);
+        for i in 0..N {
+            if expect_approx_equal(&expected_array[i], &actual_array[i]).is_err() {
+                print(format_args!(
+                    "index {i} incorrect. expected approximately {}, found {}\n",
+                    expected_array[i].fmt_any(),
+                    actual_array[i].fmt_any()
+                ));
+                return Err(Error::TestExpectedApproxEqual);
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Zig's `{any}` for the scalar types the diagnostics print: an integer in
+/// decimal, a float as `{d}` (the shortest round-trip decimal, never in
+/// exponent form, `nan`/`-nan`/`inf`/`-inf`; MEASURED with zig 0.16.0, e.g.
+/// `1.5e300` prints all 301 digits and `3.25e-7` prints `0.000000325`).
+pub trait FmtAny {
+    fn fmt_any(&self) -> String;
+}
+
+macro_rules! fmt_any_float {
+    ($t:ty) => {
+        impl FmtAny for $t {
+            fn fmt_any(&self) -> String {
+                // Rust's `Display` is the same shortest decimal without an
+                // exponent; it spells NaN `NaN` for either sign.
+                if self.is_nan() {
+                    return if self.is_sign_negative() {
+                        "-nan"
+                    } else {
+                        "nan"
+                    }
+                    .to_string();
+                }
+                format!("{self}")
+            }
+        }
+    };
+}
+fmt_any_float!(f32);
+fmt_any_float!(f64);
+
+impl FmtAny for i32 {
+    fn fmt_any(&self) -> String {
+        format!("{self}")
+    }
+}
+
+impl FmtAny for u32 {
+    fn fmt_any(&self) -> String {
+        format!("{self}")
     }
 }
 
@@ -306,15 +393,33 @@ fn assert_ne_debug64(_tolerance: f64) {
 }
 
 /// Copy of testing.print (not public)
+// fn print(comptime fmt: []const u8, args: anytype) void {
+//     if (@inComptime()) {
+//         @compileError(std.fmt.comptimePrint(fmt, args));
+//     } else if (testing.backend_can_print) {
+//         std.debug.print(fmt, args);
+//     }
+// }
 //
-// PORT NOTE: `print` is a debug helper in the reference that writes a mismatch
-// diagnostic to stderr (or `@compileError` at comptime). It is purely
-// diagnostic and never affects the boolean/Result outcome; the reference's
-// failure paths all return `error.TestExpectedApproxEqual` regardless. We keep
-// it as a no-op shim to preserve the source's structure without spamming test
-// output.
-#[allow(dead_code)]
-fn print(_fmt: &str) {}
+// PORT NOTE (parity S80-F2): the `@inComptime` arm has no Rust counterpart
+// (these run only at run time). `testing.backend_can_print` is true for the
+// test runners this is used under, so the message goes to stderr through
+// `eprint!`, which libtest captures per test and shows for a failing one, as
+// the Zig runner shows the test's stderr. CORRECTION: this was a no-op shim
+// that dropped every diagnostic. Under `cfg(test)` each message is also kept
+// in `PRINTED` so this module's tests can assert it; that copy is not compiled
+// into other builds.
+fn print(args: core::fmt::Arguments<'_>) {
+    let msg = args.to_string();
+    #[cfg(test)]
+    PRINTED.with(|p| p.borrow_mut().push(msg.clone()));
+    eprint!("{msg}");
+}
+
+#[cfg(test)]
+thread_local! {
+    static PRINTED: core::cell::RefCell<Vec<String>> = const { core::cell::RefCell::new(Vec::new()) };
+}
 
 #[cfg(test)]
 #[allow(non_snake_case)]
@@ -374,8 +479,9 @@ mod tests {
 
     #[test]
     fn expectApproxEqual_vector() -> Result<(), Error> {
-        let a: [f32; 4] = [4.0; 4];
-        let b: [f32; 4] = [4.000001; 4];
+        // const a: @Vector(4, f32) = @splat(4.0);
+        let a: Vector<f32, 4> = Vector([4.0; 4]);
+        let b: Vector<f32, 4> = Vector([4.000001; 4]);
 
         expect_approx_equal(&a, &b)?;
         Ok(())
@@ -812,5 +918,65 @@ mod tests {
             &Data { values: [1, 2, 3] },
             &Data { values: [1, 2, 4] }
         ));
+    }
+
+    // Takes (and clears) the messages `print` wrote on this thread.
+    fn take_printed() -> Vec<String> {
+        PRINTED.with(|p| core::mem::take(&mut *p.borrow_mut()))
+    }
+
+    /// Parity S80-F2: every failure arm prints the reference's diagnostic.
+    /// The expected lines were MEASURED: the pinned `comparison.zig` under
+    /// `zig test` (0.16.0) with the same inputs.
+    #[test]
+    fn expectApproxEqual_failures_print_the_reference_diagnostics() {
+        take_printed();
+
+        assert!(expect_approx_equal(&1.0f32, &1.1f32).is_err());
+        assert_eq!(
+            vec!["expected approximately 1, found 1.1\n"],
+            take_printed()
+        );
+
+        assert!(expect_approx_equal(&1.5e300f64, &3.25e-7f64).is_err());
+        assert_eq!(
+            vec![format!(
+                "expected approximately 15{}, found 0.000000325\n",
+                "0".repeat(299)
+            )],
+            take_printed()
+        );
+
+        // The array arm compares `actual[i]` against `expected[i]` (swapped),
+        // so the inner float line names 20 as "expected".
+        let mut expected = [0f32; 19];
+        let mut actual = [0f32; 19];
+        for i in 0..19 {
+            expected[i] = (i + 1) as f32;
+            actual[i] = (i + 1) as f32;
+        }
+        actual[18] = 20.0;
+        assert!(expect_approx_equal(&expected, &actual).is_err());
+        assert_eq!(
+            vec![
+                "expected approximately 20, found 19\n".to_string(),
+                "slices not approximately equal. first significant difference occurs at index 18 (0x12)\n"
+                    .to_string(),
+            ],
+            take_printed()
+        );
+
+        assert!(expect_approx_equal(&Vector([1f32, 2.0, 3.0]), &Vector([1f32, 2.5, 3.0])).is_err());
+        assert_eq!(
+            vec![
+                "expected approximately 2, found 2.5\n".to_string(),
+                "index 1 incorrect. expected approximately 2, found 2.5\n".to_string(),
+            ],
+            take_printed()
+        );
+
+        // A passing comparison prints nothing.
+        assert!(expect_approx_equal(&1.0f32, &1.0000001f32).is_ok());
+        assert!(take_printed().is_empty());
     }
 }
