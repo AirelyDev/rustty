@@ -7,7 +7,7 @@
 //!
 //! PORT NOTE (R3, no ghostty/Zig-std dependency): the reference wraps `std.Uri`.
 //! Rust's `url` crate has DIFFERENT (WHATWG) semantics, so it is NOT used. We
-//! faithfully reimplement the subset of Zig 0.15.2 `std.Uri` that `os/uri.zig`
+//! faithfully reimplement the subset of Zig 0.16.0 `std.Uri` that `os/uri.zig`
 //! relies on — `parse`, `parseAfterScheme`, the `Component` union (`raw` /
 //! `percent_encoded`, `isEmpty`, `toRaw`, `percentEncode`), the `ParseError`
 //! set, and the scheme/authority/path scanning algorithm — directly from the
@@ -22,7 +22,7 @@ use crate::string_encoding::Writer;
 
 // ===========================================================================
 // std.Uri reimplementation (the portion os/uri.zig depends on).
-// Mirrors Zig 0.15.2 lib/std/Uri.zig:
+// Mirrors Zig 0.16.0 lib/std/Uri.zig:
 //   "Uniform Resource Identifier (URI) parsing roughly adhering to
 //    <https://tools.ietf.org/html/rfc3986>.
 //    Does not do perfect grammar and character class checking, but should be

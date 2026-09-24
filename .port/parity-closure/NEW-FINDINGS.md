@@ -3757,7 +3757,10 @@ fix: 0 of 50 of the same sequential runs failed; see the task T-F2 report for th
   - `%-0` / `%+X` in `std.Uri` percent decoding: **fixed (UD230)**. RFC 3986 escapes are two hex
     digits, and the decoder's own `catch continue` keeps every other malformed escape as written; the
     sign is an accident of reusing `parseInt`, and it puts a NUL or a control byte into an OSC 7 pwd
-    the sender never wrote. Listed in `docs/ghostty-bug-fixes.md`.
+    the sender never wrote. Listed in `docs/ghostty-bug-fixes.md`. (RFC 3986 also rules out `+80` as
+    a port, so the RFC alone does not separate the two cases: the reason is that decoding a sign
+    invents bytes and corrupts the data, while a lenient port parse yields the number the sender
+    meant.)
   - `_`, `+` and `-0` in the URI port number: **faithful**. It is std's grammar, Ghostty has no port
     grammar of its own, and Ghostty never reads the port except in the MAC-address repair of
     `os/uri.zig` `parse`, whose outcome does not change (`12:34:56:78:90:+9` fails

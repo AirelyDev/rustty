@@ -410,6 +410,12 @@ port was **not** completed, and the size is the reason.
      `cursor_secondary: []Cursor`; `Window.zig` follows at its two write sites.
    * `Mouse.zig`: `col`/`row` change type **`u16` -> `i16`** (negative
      coordinates now representable). A silent-truncation hazard if half-ported.
+     The mouse fields are now half on 0.6.0: see the `Parser.zig` bullet below
+     and `parse_param`'s PORT NOTE in `crates/rustty-vaxis/src/parser.rs`.
+   * `Parser.zig`: `parseParam` reads CSI parameters with `parseInt` instead of
+     `parseUnsigned` (accepting a leading `+` and `-0`). **Absorbed by N206**
+     (tail S-9b): the port's `parse_param` already follows 0.6.0's grammar; only
+     the mouse `i16` type change above is still deferred.
    * `zf`: `token` -> `needle` throughout, `rankToken` -> `rankNeedle`,
      `highlightToken` -> `highlightNeedle`, and — the one that is NOT a rename —
      `RankOptions.to_lower: bool = true` becomes
