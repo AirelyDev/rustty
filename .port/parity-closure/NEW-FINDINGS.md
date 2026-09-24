@@ -3619,6 +3619,20 @@ fix: 0 of 50 of the same sequential runs failed; see the task T-F2 report for th
   like a process exit, not a panic.
 - **state**: OPEN.
 
+## N172 — the port's `TempDir` opens the current directory for an empty temp-dir path
+
+- **id**: N172. Not in the inventory. Found by task T-H2 while fixing UD211 (S111-F1, `TMPDIR=/`).
+- **severity**: low. **kind**: behavioral-difference (area `src/os`).
+- **oracle**: `src/os/TempDir.zig:32-34` `cwd.openDir(global.io(), tmp_dir, .{})`. With `tmp_dir = ""`
+  (a present-but-empty `TMPDIR`, which `allocTmpDir` returns verbatim) this fails with `FileNotFound`,
+  MEASURED with zig 0.16.0 on macOS (`Dir.cwd().openDir(io, "", .{})` → `error.FileNotFound`).
+- **rustty**: `crates/rustty-os/src/tempdir.rs` `Dir::openDirPath` is `open_dir_abs(&self.path.join(sub_path))`,
+  and `Path::join("")` is the current directory itself, so `TempDir::init` succeeds and creates its
+  directory under the current working directory. By reading; not run.
+- **proposed fix**: make `openDir`/`openDirPath` fail with `NotFound` for an empty `sub_path`, as `openat`
+  does. Left to the `src/os` owner (not this batch's area).
+- **state**: OPEN.
+
 ## N196 — tests passed without testing anything when their environment was missing
 
 - **id**: N196. Not in the inventory. Found by the tail-s3 task (silent-skip audit), 2026-09-23.

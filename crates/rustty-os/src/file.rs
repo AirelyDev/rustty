@@ -150,7 +150,22 @@ pub fn allocTmpDir(environ: &rustty_global::Environ) -> Vec<u8> {
         // PORT NOTE (parity S111-F12): a POSIX path is bytes; the value is
         // returned byte-exact (this used to go through `String::from_utf8_lossy`,
         // which renamed a non-UTF-8 directory).
-        trim_end_bytes(tmpdir, PATH_SEP).to_vec()
+        //
+        // PORT NOTE: reference defect (R13), UD211. `trimEnd` also strips the
+        // root directory's only byte, so `TMPDIR=/` (or `//`) becomes `""`,
+        // which is not a path: the reference's own `TempDir.init` then fails
+        // with `FileNotFound` on `openDir("")` (measured with zig 0.16.0 on
+        // macOS; `openDir("/")` succeeds). The doc comment above asks only
+        // for a trailing separator to be stripped so callers can join with
+        // their own. The port keeps the root: a value made only of
+        // separators returns `/`. A present-but-empty value is not affected
+        // and stays `""` (S111-F1: its intent is ambiguous, so it is
+        // faithful). Same rule in `rustty-global`'s `posix_tmp_dir_path`.
+        let trimmed = trim_end_bytes(tmpdir, PATH_SEP);
+        if trimmed.is_empty() && !tmpdir.is_empty() {
+            return vec![PATH_SEP];
+        }
+        trimmed.to_vec()
     }
 }
 
@@ -463,6 +478,25 @@ mod tests {
             from_global,
             "rustty-os allocTmpDir and rustty-global's tmp_dir_path fallback diverged"
         );
+    }
+
+    /// R13 (UD211): the root directory survives the trailing-separator trim.
+    /// The reference returns `""` for `TMPDIR=/`, which its `TempDir.init`
+    /// cannot open. An empty value still comes back as `""` (S111-F1).
+    #[test]
+    #[cfg(not(windows))]
+    #[allow(non_snake_case)]
+    fn alloc_tmp_dir_keeps_the_root_directory() {
+        let env = |entries: &[&[u8]]| {
+            rustty_global::Environ::from_entries(entries.iter().map(|e| e.to_vec()).collect())
+        };
+        assert_eq!(allocTmpDir(&env(&[b"TMPDIR=/"])), b"/");
+        assert_eq!(allocTmpDir(&env(&[b"TMPDIR=///"])), b"/");
+        assert_eq!(allocTmpDir(&env(&[b"TMP=/"])), b"/");
+        assert_eq!(allocTmpDir(&env(&[b"TMPDIR="])), b"");
+        // The value is a directory the temp-dir code can open.
+        let root = allocTmpDir(&env(&[b"TMPDIR=/"]));
+        assert!(std::path::Path::new(std::str::from_utf8(&root).unwrap()).is_dir());
     }
 
     /// Parity S111-F1 / S111-F12: `allocTmpDir`'s POSIX arm is

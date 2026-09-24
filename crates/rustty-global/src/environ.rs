@@ -415,6 +415,11 @@ fn default_tmp_dir_path() -> Vec<u8> {
 /// variable, so a present-but-empty `TMPDIR` yields `""` and does not fall
 /// through to `TMP`. (This used to filter out empty values, in step with the
 /// same filter in `rustty-os`'s `allocTmpDir`.)
+///
+/// PORT NOTE: reference defect (R13), UD211. The reference's `trimEnd` turns
+/// `TMPDIR=/` into `""`, which its own `TempDir.init` cannot open. A value
+/// made only of `/` keeps the root and returns `/`. See `rustty-os`'s
+/// `allocTmpDir` for the full note.
 #[cfg(not(windows))]
 fn posix_tmp_dir_path(env: &Environ) -> Vec<u8> {
     let Some(v) = env.get_posix(b"TMPDIR").or_else(|| env.get_posix(b"TMP")) else {
@@ -423,6 +428,9 @@ fn posix_tmp_dir_path(env: &Environ) -> Vec<u8> {
     let mut bytes = v.to_vec();
     while bytes.last() == Some(&b'/') {
         bytes.pop();
+    }
+    if bytes.is_empty() && !v.is_empty() {
+        return b"/".to_vec();
     }
     bytes
 }
@@ -444,6 +452,20 @@ mod tests {
         assert_eq!(posix_tmp_dir_path(&env(&[b"TMP=/x//"])), b"/x");
         assert_eq!(posix_tmp_dir_path(&env(&[b"TMPDIR=/a\xff/"])), b"/a\xff");
         assert_eq!(posix_tmp_dir_path(&env(&[])), b"/tmp");
+    }
+
+    /// R13 (UD211): a value made only of `/` keeps the root instead of
+    /// becoming `""` as in the reference. Same table as `rustty-os`'s
+    /// `alloc_tmp_dir_keeps_the_root_directory`.
+    #[test]
+    #[cfg(not(windows))]
+    fn posix_tmp_dir_path_keeps_the_root_directory() {
+        let env =
+            |entries: &[&[u8]]| Environ::from_entries(entries.iter().map(|e| e.to_vec()).collect());
+        assert_eq!(posix_tmp_dir_path(&env(&[b"TMPDIR=/"])), b"/");
+        assert_eq!(posix_tmp_dir_path(&env(&[b"TMPDIR=///"])), b"/");
+        assert_eq!(posix_tmp_dir_path(&env(&[b"TMP=/"])), b"/");
+        assert_eq!(posix_tmp_dir_path(&env(&[b"TMPDIR="])), b"");
     }
 
     #[test]
@@ -594,7 +616,11 @@ mod tests {
     fn global_tmp_dir_path_is_absolute_and_unsuffixed() {
         let p = tmp_dir_path();
         assert!(!p.is_empty(), "tmp_dir_path() must never be empty");
-        assert_ne!(p.last(), Some(&b'/'), "trailing separator must be stripped");
+        // The root directory keeps its only `/` (R13, UD211).
+        assert!(
+            p == b"/" || p.last() != Some(&b'/'),
+            "trailing separator must be stripped"
+        );
         #[cfg(not(windows))]
         assert_eq!(p.first(), Some(&b'/'), "POSIX tmp dir must be absolute");
     }
