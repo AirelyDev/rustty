@@ -519,7 +519,13 @@ mod tests {
         #[cfg(target_os = "macos")]
         {
             assert!(out.contains("  - app runtime   : .none\n"), "{out:?}");
-            assert!(out.contains("  - font engine   : .coretext\n"), "{out:?}");
+            // Ghostty's own default-build line; with `-Dfont-backend` set
+            // (S-14, N266) the line names that backend instead.
+            let fe = match build_config::build::FONT_BACKEND_OPTION {
+                None => "  - font engine   : .coretext\n".to_string(),
+                Some(b) => format!("  - font engine   : .{}\n", font_backend_tag(b)),
+            };
+            assert!(out.contains(&fe), "{out:?}");
         }
         #[cfg(not(target_os = "macos"))]
         {

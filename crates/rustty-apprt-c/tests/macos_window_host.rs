@@ -842,15 +842,25 @@ fn quicklook_exports_are_abort_free_on_live_surface() {
     // CFRelease — modeled as CFRetained::from_raw + drop (the P2.2 KAT's inverse).
     // SAFETY: `host.surface` is the live surface from `rustty_surface_new`.
     let font = unsafe { rustty_surface_quicklook_font(host.surface) };
-    assert!(
-        !font.is_null(),
-        "primary CoreText face must resolve on a live surface"
-    );
-    // SAFETY: `font` is the +1 CTFontRef the export handed over; reclaiming it
-    // consumes exactly that one reference (the host's CFRelease).
-    drop(unsafe {
-        CFRetained::<CFType>::from_raw(std::ptr::NonNull::new(font.cast::<CFType>()).unwrap())
-    });
+    // `if (comptime font.options.backend != .coretext) return null;` — a
+    // `-Dfont-backend` other than `.coretext` (S-14, N266) gets NULL, exactly as
+    // the reference's quicklook export returns there.
+    if rustty_font_shaper::options::BACKEND == rustty_font_shaper::Backend::Coretext {
+        assert!(
+            !font.is_null(),
+            "primary CoreText face must resolve on a live surface"
+        );
+        // SAFETY: `font` is the +1 CTFontRef the export handed over; reclaiming it
+        // consumes exactly that one reference (the host's CFRelease).
+        drop(unsafe {
+            CFRetained::<CFType>::from_raw(std::ptr::NonNull::new(font.cast::<CFType>()).unwrap())
+        });
+    } else {
+        assert!(
+            font.is_null(),
+            "a non-.coretext backend's quicklook font is null"
+        );
+    }
 
     // quicklook_word: MUST return without abort. `true` ⇒ `text` owns a heap
     // C-string freed via rustty_surface_free_text; `false` (no word under the

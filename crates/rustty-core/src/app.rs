@@ -217,18 +217,16 @@ where
         //
         // PORT NOTE (`c454a3bf4`..`931a538a3` warmup chain, END STATE — the
         // intermediate `threadedWarmup` shape was dissolved and is NOT
-        // ported): the `@hasDecl` probe is a comptime backend fold — of the
-        // monomorphic backends only CoreText declares `warmup`
-        // (discovery.zig; fontconfig does not), and `font.Discover` IS
-        // CoreText exactly on macOS (`discovery::Discover`), so the probe
-        // folds to `cfg(target_os = "macos")` (the renderer_seam `@hasDecl`
-        // two-case-fold precedent). Detach == dropping the `JoinHandle`.
-        #[cfg(target_os = "macos")]
-        {
-            if let Err(err) = std::thread::Builder::new()
-                .spawn(rustty_font_shaper::discovery::Discover::warmup)
-                .map(drop)
-            {
+        // ported): the `@hasDecl` probe is a comptime backend test — of the
+        // backends only CoreText declares `warmup` (discovery.zig; fontconfig
+        // does not). The shaper tier answers it as the const
+        // `discovery::DISCOVER_WARMUP` (`Some(CoreText::warmup)` exactly on the
+        // `hasCoretext()` backends). CORRECTION (S-14, N266): this was folded to
+        // `cfg(target_os = "macos")`, which cannot compile for a macOS
+        // `-Dfont-backend=freetype` build (no discoverer, no `warmup`). Detach ==
+        // dropping the `JoinHandle`.
+        if let Some(warmup) = rustty_font_shaper::discovery::DISCOVER_WARMUP {
+            if let Err(err) = std::thread::Builder::new().spawn(warmup).map(drop) {
                 // log.warn("font warmup thread spawn failed err={}", .{err});
                 log::warn!(target: LOG_SCOPE, "font warmup thread spawn failed err={err:?}");
             }

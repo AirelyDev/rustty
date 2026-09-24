@@ -2898,8 +2898,11 @@ pub unsafe extern "C" fn rustty_surface_set_display_id(ptr: *mut Surface, displa
 // .0.font_grid`) AND messages CoreText via objc2-core-text (`Face.font.attribute`/
 // `copy_with_attributes`). The returned CTFont is +1 — the host balances it with a
 // CFRelease (I16). The reference non-CoreText early return (`return null`) is
-// elided: this export is Darwin-gated and the coretext backend is the Darwin
-// default, so there is never a non-CoreText grid here. Body ported faithfully.
+// live (S-14, N266): `-Dfont-backend` can select a non-`.coretext` backend on
+// macOS (`coretext_freetype`/`coretext_harfbuzz`/`coretext_noshape`/`freetype`),
+// and there the export returns NULL exactly as the reference does. It used to be
+// elided on the premise that the Darwin default is the only Darwin backend.
+// Body ported faithfully.
 #[cfg(any(target_os = "macos", target_os = "ios"))] // isDarwin()
 #[no_mangle]
 pub unsafe extern "C" fn rustty_surface_quicklook_font(ptr: *mut Surface) -> *mut c_void {
@@ -2911,13 +2914,12 @@ pub unsafe extern "C" fn rustty_surface_quicklook_font(ptr: *mut Surface) -> *mu
     use rustty_font_shaper::collection::Index;
     use rustty_font_shaper::{SharedGrid, Style};
 
-    // // For non-CoreText we just return null.
+    // For non-CoreText we just return null.
     // if (comptime font.options.backend != .coretext) {
-    //     return null;
-    // }
-    //
-    // (Elided — see the PORT NOTE above: this Darwin-gated export IS the CoreText
-    // build, so the non-CoreText early return can never fire.)
+    if rustty_font_shaper::options::BACKEND != rustty_font_shaper::Backend::Coretext {
+        // return null;
+        return core::ptr::null_mut();
+    }
 
     // We'll need content scale so fail early if we can't get it.
     // const content_scale = ptr.getContentScale() catch return null;
@@ -2955,6 +2957,13 @@ pub unsafe extern "C" fn rustty_surface_quicklook_font(ptr: *mut Surface) -> *mu
         Ok(f) => f,
         Err(_) => return core::ptr::null_mut(),
     };
+    // `face.font` — the CoreText face's font. Rust-only spelling: this crate
+    // cannot see the backend cfg that makes `Face` the CoreText face, so it asks
+    // the shaper tier, which answers `Some` exactly on `.coretext` — the only
+    // backend the early return above lets reach here.
+    // SAFETY: `face` is the `*mut Face` just returned, live under the read lock.
+    let face_font: &CTFont = rustty_font_shaper::face::coretext_font(unsafe { &*face })
+        .expect("options.backend == .coretext, checked above");
 
     // We need to unscale the content scale. We apply the
     // content scale to our font stack because we are rendering
@@ -2974,7 +2983,7 @@ pub unsafe extern "C" fn rustty_surface_quicklook_font(ptr: *mut Surface) -> *mu
     // `CFRetained<CFType>` that releases on drop = the reference `defer
     // num.release()`); `getValue(.float, &v)` → `CFNumberType::FloatType` (the C
     // `float`). A missing/non-number attribute leaves the default 12.
-    let size: f32 = match unsafe { (*face).font.attribute(kCTFontSizeAttribute) } {
+    let size: f32 = match unsafe { face_font.attribute(kCTFontSizeAttribute) } {
         None => 12.0,
         Some(num) => {
             let mut v: f32 = 12.0;
@@ -3019,11 +3028,11 @@ pub unsafe extern "C" fn rustty_surface_quicklook_font(ptr: *mut Surface) -> *mu
             attributes: *const core::ffi::c_void,
         ) -> *mut CTFont;
     }
-    // SAFETY: `(*face).font` is a live CTFont; `matrix`/`attributes` are the
-    // reference's NULLs.
+    // SAFETY: `face_font` (`(*face).font`) is a live CTFont; `matrix`/
+    // `attributes` are the reference's NULLs.
     let raw = unsafe {
         CTFontCreateCopyWithAttributes(
-            CFRetained::as_ptr(&(*face).font).as_ptr(),
+            face_font as *const CTFont,
             (size / content_scale.y) as f64,
             core::ptr::null(),
             core::ptr::null(),

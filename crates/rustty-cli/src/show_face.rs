@@ -406,18 +406,17 @@ where
         //     return 1;
         // };
         // errdefer font_grid_set.deinit();
-        //   PORT NOTE: on macOS `SharedGridSet.init`'s error set is uninhabited (the
-        //   `NoopLibrary` `error{}` arm), so the `catch` print is statically
-        //   unreachable (`match e {}` discharges it). On Linux/BSD the set opens the
-        //   `FreetypeLibrary`, so `init` returns a real `ft::FtError` — the reference
-        //   `catch |err| { print; return 1; }` is reproduced literally there. The
+        //   PORT NOTE: `SharedGridSet.init`'s error set is the backend `Library`'s
+        //   (`shared_grid_set::InitError`): uninhabited for `NoopLibrary` (the
+        //   `error{}` arm — the `catch` print is then statically unreachable), a
+        //   real `ft::FtError` for `FreetypeLibrary`. The reference
+        //   `catch |err| { print; return 1; }` is reproduced literally for both
+        //   (S-14, N266: it was split by `target_os`). The
         //   reference has only an `errdefer` (no unconditional `defer deinit`): no
         //   error propagates after this point (every failure below is caught →
         //   `return Ok(1)`), so the set is dropped by RAII at scope end (the
         //   reference leaks it on success).
-        #[cfg(target_os = "macos")]
-        let mut font_grid_set = font::SharedGridSet::init(Global).unwrap_or_else(|e| match e {});
-        #[cfg(not(target_os = "macos"))]
+        #[allow(unreachable_patterns)] // `Err` is uninhabited on `NoopLibrary` backends
         let mut font_grid_set = match font::SharedGridSet::init(Global) {
             Ok(set) => set,
             Err(err) => {
@@ -748,20 +747,18 @@ fn font_shared_grid_set_derived_config(config: &Config) -> font::shared_grid_set
 }
 
 /// `if (font.face.FreetypeLoadFlags != void) config.@"freetype-load-flags" else {}`.
-/// macOS's backend is `coretext`, whose `FreetypeLoadFlags` is `void` (`()`).
-#[cfg(target_os = "macos")]
-fn derived_freetype_load_flags(
-    _c: &rustty_config::value_types::FreetypeLoadFlags,
-) -> rustty_font_shaper::face::FreetypeLoadFlags {
-}
-
-/// Linux/BSD's default backend is `fontconfig_freetype`, so the configured
-/// flags flow through.
-#[cfg(not(any(target_os = "macos", target_arch = "wasm32")))]
+/// The shaper tier decides `hasFreetype()` (`face::freetype_load_flags_if_active`):
+/// `void` (`()`) on the macOS default `coretext`, the configured flags on the
+/// FreeType backends (the Linux/BSD default `fontconfig_freetype`, and
+/// `-Dfont-backend=coretext_freetype`). (S-14, N266: it was split by
+/// `target_os`.)
+#[cfg(not(target_arch = "wasm32"))]
 fn derived_freetype_load_flags(
     c: &rustty_config::value_types::FreetypeLoadFlags,
 ) -> rustty_font_shaper::face::FreetypeLoadFlags {
-    rustty_core::surface::freetype_load_flags_from_config(c)
+    rustty_font_shaper::face::freetype_load_flags_if_active(|| {
+        rustty_core::surface::freetype_load_flags_from_config(c)
+    })
 }
 
 /// The wasm `web_canvas` backend has no FreeType either.

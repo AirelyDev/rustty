@@ -61,14 +61,16 @@ pub enum Error {
     /// so the shaper defines no `discovery::Error` there.
     #[cfg(not(target_arch = "wasm32"))]
     FontDiscover(rustty_font_shaper::discovery::Error),
-    /// A FreeType library-init failure propagated from `list_fonts`'
+    /// A font library-init failure propagated from `list_fonts`'
     /// `try font.Library.init(alloc)` (reference `list_fonts.zig:106`), folded
-    /// into the inferred `!u8` error set. Linux/BSD only — the
-    /// `fontconfig_freetype` backend's `Library` is `FreetypeLibrary`, whose
-    /// `init` returns `ft::FtError`; on macOS/wasm `Library` is the `NoopLibrary`
-    /// whose `InitError` is uninhabited (that arm is discharged with `match e {}`).
-    #[cfg(not(any(target_os = "macos", target_arch = "wasm32")))]
-    FontLibrary(rustty_font_shaper::ft::FtError),
+    /// into the inferred `!u8` error set. The error is the active backend's
+    /// `Library.InitError` (`shared_grid_set::InitError`): `ft::FtError` on the
+    /// `hasFreetype()` backends (`FreetypeLibrary`), the uninhabited
+    /// `LibraryError` on the others (`NoopLibrary`, `error{}`). (S-14, N266: this
+    /// was `ft::FtError` gated `not(macos)`, which could not express a macOS
+    /// `coretext_freetype` build.)
+    #[cfg(not(target_arch = "wasm32"))]
+    FontLibrary(rustty_font_shaper::shared_grid_set::InitError),
     /// A vaxis tty failure propagated from the interactive `prettyPrint` render
     /// paths (`list_colors`/`list_keybinds`). Reference: `vaxis.Tty.init` /
     /// `vaxis.Tty.getWinsize` `try`d into the inferred `!u8` error set.
@@ -145,9 +147,9 @@ impl From<rustty_font_shaper::discovery::Error> for Error {
     }
 }
 
-#[cfg(not(any(target_os = "macos", target_arch = "wasm32")))]
-impl From<rustty_font_shaper::ft::FtError> for Error {
-    fn from(e: rustty_font_shaper::ft::FtError) -> Self {
+#[cfg(not(target_arch = "wasm32"))]
+impl From<rustty_font_shaper::shared_grid_set::InitError> for Error {
+    fn from(e: rustty_font_shaper::shared_grid_set::InitError) -> Self {
         Error::FontLibrary(e)
     }
 }

@@ -1575,25 +1575,19 @@ pub fn freetype_load_flags_from_config(
 }
 
 /// `if (font.face.FreetypeLoadFlags != void) config.@"freetype-load-flags" else {}`
-/// — the reference's comptime backend selector, modeled with `cfg(target_os)`
-/// exactly as `face/mod.rs` models `options.backend.hasFreetype()`.
-//
-// macOS default backend is `coretext` → `hasFreetype()` is false → `void`
-// (Rust `()`), and the config value is legitimately dropped, matching the
-// reference `else {}` arm.
-#[cfg(target_os = "macos")]
-fn derived_freetype_load_flags(
-    _c: &configpkg::value_types::FreetypeLoadFlags,
-) -> rustty_font_shaper::face::FreetypeLoadFlags {
-}
-
-// Linux default backend is `fontconfig_freetype` → `hasFreetype()` is true →
-// the configured value flows through.
-#[cfg(not(any(target_os = "macos", target_arch = "wasm32")))]
+/// — the reference's comptime backend selector. The shaper tier owns the
+/// `options.backend.hasFreetype()` decision (`face::freetype_load_flags_if_active`):
+/// on the macOS default `coretext` backend it is false → `void` (Rust `()`) and
+/// the config value is legitimately dropped (the reference `else {}` arm); on
+/// the Linux default `fontconfig_freetype` and on `-Dfont-backend=
+/// coretext_freetype` it is true and the configured value flows through.
+/// (S-14, N266: this was two `cfg(target_os)` arms, which dropped the user's
+/// `freetype-load-flags` in a macOS `coretext_freetype` build.)
+#[cfg(not(target_arch = "wasm32"))]
 fn derived_freetype_load_flags(
     c: &configpkg::value_types::FreetypeLoadFlags,
 ) -> rustty_font_shaper::face::FreetypeLoadFlags {
-    freetype_load_flags_from_config(c)
+    rustty_font_shaper::face::freetype_load_flags_if_active(|| freetype_load_flags_from_config(c))
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -16041,19 +16035,22 @@ mod freetype_load_flags_tests {
         );
     }
 
-    // The reference's `else {}` (void) arm: on the macOS `coretext` backend
+    // The reference's `else {}` (void) arm: on the backends without FreeType
+    // (the macOS default `coretext`, `coretext_harfbuzz`, `coretext_noshape`)
     // `hasFreetype()` is false, so the config value IS legitimately dropped and
     // the shaper type is `()`. There is nothing runtime to assert (a `#[test]`
     // comparing two unit values always succeeds — a worthless test), so the arm
     // is pinned at COMPILE time instead: the selected type must be zero-sized.
-    #[cfg(target_os = "macos")]
+    // (S-14, N266: keyed on `hasFreetype()` via `build.rs`, not `target_os`.)
+    #[cfg(all(target_os = "macos", not(rustty_font_has_freetype)))]
     const _: () = assert!(size_of::<rustty_font_shaper::face::FreetypeLoadFlags>() == 0);
 
     // THE ORIGINAL BUG, at the exact site that had it. Only compiles/runs on the
-    // freetype-active backends (Linux `fontconfig_freetype`), because on macOS
-    // the reference itself takes the `void` arm and there is nothing to thread.
+    // freetype-active backends (Linux `fontconfig_freetype`, and on macOS
+    // `-Dfont-backend=coretext_freetype`/`freetype`), because elsewhere the
+    // reference itself takes the `void` arm and there is nothing to thread.
     #[test]
-    #[cfg(not(any(target_os = "macos", target_arch = "wasm32")))]
+    #[cfg(all(rustty_font_has_freetype, not(target_arch = "wasm32")))]
     fn derived_config_carries_the_configured_flags() {
         let config = configpkg::Config {
             freetype_load_flags: all_flipped(),

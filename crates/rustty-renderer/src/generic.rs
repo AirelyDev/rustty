@@ -1307,11 +1307,14 @@ mod macos_impl {
         }
     }
     // `font.Shaper.init` (`changeConfig`, and the deferred `Renderer::init`) fails
-    // with the platform shaper's error (`shape::coretext::Error` — an atlas OOM or a
-    // font `Collection` failure). It folds into the aggregate `OutOfMemory` member of
-    // the reference `!void` inferred union (a font-resource failure, not a Metal one).
-    impl From<shape::coretext::Error> for Error {
-        fn from(_: shape::coretext::Error) -> Self {
+    // with the active shaper's error (`shape::ShaperError` — `coretext::Error` on
+    // the default `.coretext` backend: an atlas OOM or a font `Collection`
+    // failure; the HarfBuzz/noop shaper's on `-Dfont-backend=coretext_freetype`/
+    // `coretext_harfbuzz`/`coretext_noshape`, S-14). It folds into the aggregate
+    // `OutOfMemory` member of the reference `!void` inferred union (a
+    // font-resource failure, not a Metal one).
+    impl From<shape::ShaperError> for Error {
+        fn from(_: shape::ShaperError) -> Self {
             Error::OutOfMemory
         }
     }
@@ -3371,7 +3374,7 @@ mod macos_impl {
     #[allow(dead_code)]
     enum RebuildRowError {
         Collection(collection::Error),
-        Shape(shape::coretext::Error),
+        Shape(shape::ShaperError),
     }
 
     impl From<collection::Error> for RebuildRowError {
@@ -3379,8 +3382,8 @@ mod macos_impl {
             RebuildRowError::Collection(e)
         }
     }
-    impl From<shape::coretext::Error> for RebuildRowError {
-        fn from(e: shape::coretext::Error) -> Self {
+    impl From<shape::ShaperError> for RebuildRowError {
+        fn from(e: shape::ShaperError) -> Self {
             RebuildRowError::Shape(e)
         }
     }
@@ -8936,6 +8939,11 @@ mod macos_impl {
         // Parity S115-F1: `defer self.font_shaper.endFrame()` is updateFrame's
         // first statement, so a frame skipped for synchronized output still
         // hands the shaper's CoreText objects to the release thread.
+        //
+        // Scoped (S-14, N266) to the `.coretext` backend: the release pool is
+        // the CoreText shaper's (`shaper/coretext.zig`); the HarfBuzz and noop
+        // shapers' `endFrame` are no-ops with nothing to observe.
+        #[cfg(rustty_font_backend = "coretext")]
         #[test]
         fn update_frame_ends_the_shaper_frame_on_the_sync_output_return() {
             let mut r = match test_renderer(10, 3) {
