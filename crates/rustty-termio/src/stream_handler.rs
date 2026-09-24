@@ -2454,8 +2454,10 @@ impl<M: AppMailbox> StreamHandler<M> {
         // every request after the one that failed, sets and resets included,
         // is skipped. The writer's growth (`growCapacity`, `2*n + 1` bytes asked
         // for a write that does not fit) puts the point well below 1024 bytes:
-        // measured with zig 0.16.0 (aarch64-macos and x86_64-macos), the 25th
-        // 16-bit palette report fails (640 bytes accepted). An OSC 4
+        // measured with zig 0.16.0 (aarch64-macos and x86_64-macos), 25 16-bit
+        // palette reports for indices 0, 1, 2, ... fit (640 bytes with BEL,
+        // 665 with ST) and the 26th fails; the number depends on how many
+        // digits the indices have (24th to 27th measured). An OSC 4
         // or OSC 104 is bounded only by the OSC parser, so a program querying
         // its palette in one sequence gets no answer. The port accumulates in a
         // `Vec`, so every report is sent and every request is applied, which is
@@ -4484,8 +4486,10 @@ pub(crate) mod tests {
     /// S214-F1 / UD205 (no reference counterpart): an OSC 4 that queries all
     /// 256 palette entries and then sets one gets every report, in one write,
     /// and the set after the reports is applied. The reference's response
-    /// buffer fails on the 25th 16-bit report (measured, zig 0.16.0
-    /// aarch64-macos), sends nothing, and skips the set.
+    /// buffer holds 25 16-bit reports for indices 0.. (640 bytes with BEL,
+    /// 665 with ST) and fails on the 26th (measured, zig 0.16.0 aarch64-macos;
+    /// 24th to 27th depending on the indices' digit count), sends nothing,
+    /// and skips the set.
     #[test]
     fn color_operation_reports_every_query_and_applies_later_requests() {
         let mut term = Terminal::init(Global, terminal_opts(Some(false))).unwrap();
