@@ -842,7 +842,18 @@ impl LoadingImage {
             }
         } else {
             // reader.appendRemaining(alloc, &managed, .limited(max_size)) catch {
-            if let Err(err) = append_remaining_limited(&mut file, &mut managed, MAX_SIZE) {
+            //
+            // PORT NOTE: reference defect (R13), UD140 (parity S189-F2).
+            // `.limited(max_size)` fails "if `limit` is reached or exceeded",
+            // so the reference rejects a file of EXACTLY `max_size` bytes,
+            // while every other `max_size` check in this file is inclusive
+            // (`> max_size`: the `s=` size above, the direct/chunked data
+            // accumulation, the PNG result), and the same 400 MB file loads
+            // when sent with `s=`. Reachable by any program that can send a
+            // file-medium transmission without `s=`. The port reads with a
+            // limit of `max_size + 1`, so exactly `max_size` bytes load and
+            // anything longer still fails with `InvalidData`.
+            if let Err(err) = append_remaining_limited(&mut file, &mut managed, MAX_SIZE + 1) {
                 // log.warn("failed to read image file: {?}", .{buf_reader.err});
                 //
                 // PORT NOTE: the reference renders the buffered reader's
@@ -1137,6 +1148,13 @@ impl LoadingImage {
         // decompressed bytes (limited to `max_size`) into a managed list. We
         // call the vendored zlib's streaming inflate (same C library) with the
         // same `max_size` cap; any failure maps to `DecompressionFailed`.
+        //
+        // PORT NOTE: reference defect (R13), UD140. The reference's
+        // `.limited(max_size)` rejects EXACTLY `max_size` decompressed bytes
+        // (the same off-by-one as `readFile`'s no-`s=` path); `inflate_zlib`
+        // accepts exactly `max_size` and rejects more, the inclusive limit
+        // every other `max_size` check in this file uses. Pinned by
+        // `zlib_inflate_accepts_exactly_the_limit`.
         //
         // Write it to an array list
         let list = match zlib_sys::inflate_zlib(&self.data, MAX_SIZE) {
@@ -2637,12 +2655,9 @@ mod tests {
         assert_eq!(Err(true), run(b"", 0).0);
     }
 
-    // Parity S189-F2, through `readFile`: a file with no `s=` size and
-    // `max_size` bytes is rejected with `InvalidData` rather than loaded
-    // truncated. The file is sparse, so it takes no disk space.
-    #[test]
-    #[cfg_attr(miri, ignore)] // real-OS temp-file filesystem syscalls
-    fn image_load_file_of_max_size_without_size_is_invalid_data() {
+    /// A sparse file of `len` bytes (no disk space) in a fresh temp dir,
+    /// loaded as a file-medium RGB transmission with no `s=` size.
+    fn load_sparse_file_without_size(len: u64) -> Result<LoadingImage, Error> {
         let mut tmp_dir = temp_dir::TempDir::init().unwrap();
         tmp_dir.dir().writeFile("image.data", b"").unwrap();
         let path = tmp_dir.dir().realpath("image.data").unwrap();
@@ -2650,7 +2665,7 @@ mod tests {
             .write(true)
             .open(&path)
             .unwrap()
-            .set_len(MAX_SIZE as u64)
+            .set_len(len)
             .unwrap();
 
         let cmd: command::Command = command::Command {
@@ -2668,12 +2683,56 @@ mod tests {
             &cmd,
             &Limits::all_with_temp_dir(&tmp_dir_realpath(&tmp_dir)),
         );
+        tmp_dir.deinit();
+        result
+    }
+
+    // Parity S189-F2 / UD140 (R13; no reference test): a file with no `s=`
+    // size and EXACTLY `max_size` bytes loads, as it does with `s=`. The
+    // reference's `.limited(max_size)` rejects it (reference defect). The
+    // file is sparse, so it takes no disk space.
+    #[test]
+    #[cfg_attr(miri, ignore)] // real-OS temp-file filesystem syscalls
+    fn image_load_file_of_max_size_without_size_loads() {
+        let result = load_sparse_file_without_size(MAX_SIZE as u64);
+        let loading = match result {
+            Ok(loading) => loading,
+            Err(err) => panic!("a file of exactly max_size bytes must load: {err:?}"),
+        };
+        assert_eq!(MAX_SIZE, loading.data.len());
+    }
+
+    // Parity S189-F2 / UD140, the other side of the boundary: one byte more
+    // than `max_size` is still `InvalidData`, rather than loaded truncated.
+    #[test]
+    #[cfg_attr(miri, ignore)] // real-OS temp-file filesystem syscalls
+    fn image_load_file_over_max_size_without_size_is_invalid_data() {
+        let result = load_sparse_file_without_size(MAX_SIZE as u64 + 1);
         assert!(
             matches!(result, Err(Error::InvalidData)),
             "{:?}",
             result.as_ref().err()
         );
-        tmp_dir.deinit();
+    }
+
+    // Parity S189-F2 / UD140, the zlib path: the reference's
+    // `decompressZlib` reads the decompressed stream with the same
+    // `.limited(max_size)`, so it rejects EXACTLY `max_size` output bytes.
+    // The port's inflate (`zlib_sys::inflate_zlib`) already accepts exactly
+    // the limit and rejects one byte more; this pins that, at a limit equal
+    // to the fixture's decompressed length (the production call passes
+    // `MAX_SIZE`).
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn zlib_inflate_accepts_exactly_the_limit() {
+        let data = include_bytes!("testdata/image-rgb-zlib_deflate-128x96-2147483647-raw.data");
+        let full = 128 * 96 * 3;
+        assert_eq!(
+            full,
+            zlib_sys::inflate_zlib(data, usize::MAX / 2).unwrap().len()
+        );
+        assert_eq!(full, zlib_sys::inflate_zlib(data, full).unwrap().len());
+        assert!(zlib_sys::inflate_zlib(data, full - 1).is_err());
     }
 
     // test "image load: rgb, not compressed, relative regular file"
