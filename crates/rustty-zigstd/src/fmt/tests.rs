@@ -14,6 +14,18 @@
 //! - `"many_digits hex"` compares the `f32` parse with an `f128` parse cast to
 //!   `f32`; the `f128` side is replaced by its value, `2^64` (the `f32`
 //!   nearest to `0xffffffffffffffff`).
+//!
+//! Adapted: `"parse unsigned comptime"` runs its assertion at run time
+//! (`parse_unsigned` is not a `const fn`).
+//!
+//! `"float.decimal"`: only its four rows that format with a bare `{d}` are
+//! ported (`format_float_d`); the rest give a precision, which
+//! `format_float_d` does not take.
+//!
+//! The other tests of `fmt.zig` are for functions this module does not port
+//! (`parseIntSizeSuffix`, the general formatter). CORRECTION (task T-F2): this
+//! header said every representable test was ported while `"parse u64 digit
+//! too big"` and `"parse unsigned comptime"` were missing.
 
 // The float literals are Zig's test literals, verbatim.
 #![allow(clippy::approx_constant, clippy::excessive_precision)]
@@ -192,6 +204,24 @@ fn test_parse_unsigned() {
         parse_unsigned::<u8>(b"", 10),
         Err(ParseIntError::InvalidCharacter)
     );
+}
+
+// test "parse u64 digit too big" (std/fmt.zig:673-679): any result other than
+// `error.InvalidCharacter` reaches `unreachable`.
+#[test]
+fn test_parse_u64_digit_too_big() {
+    assert_eq!(
+        parse_unsigned::<u64>(b"123a", 10),
+        Err(ParseIntError::InvalidCharacter)
+    );
+}
+
+// test "parse unsigned comptime" (std/fmt.zig:681-685). The reference
+// evaluates it at comptime; `parse_unsigned` is not a `const fn`, so the same
+// assertion runs at run time.
+#[test]
+fn test_parse_unsigned_comptime() {
+    assert_eq!(parse_unsigned::<usize>(b"2", 10), Ok(2));
 }
 
 /// `test parseFloat`'s body for one float type (`inline for` over the types).
@@ -450,6 +480,24 @@ fn parse_float_matches_zig_over_the_corpus() {
             String::from_utf8_lossy(input)
         );
     }
+}
+
+// test "float.decimal" (std/fmt.zig:1056-1077): the rows with a bare `{d}`.
+#[test]
+fn test_float_decimal_bare_d_rows() {
+    assert_eq!(
+        format_float_d(1.52314e29f64),
+        "152314000000000000000000000000"
+    );
+    assert_eq!(format_float_d(0.0f32), "0");
+    assert_eq!(
+        format_float_d(1e37f64),
+        "10000000000000000000000000000000000000"
+    );
+    assert_eq!(
+        format_float_d(1e38f64),
+        "100000000000000000000000000000000000000"
+    );
 }
 
 /// `format_float_d` gives Zig 0.16.0's own `{d}` text, character for
