@@ -933,7 +933,29 @@ impl Capture {
                     }
                 }
                 // try self.writer.writeAll(bytes[0..n]);
-                w.extend_from_slice(&bytes[..n]);
+                // PERF(port): allocator_api2 0.2's `Vec::extend_from_slice` is
+                // `extend(iter().cloned())`, a byte-at-a-time push loop with no
+                // memcpy specialization (review-T-A2 blocking item 1: OSC 52
+                // stream 16.4 -> 40.0 ms). The reference's `writeAll` is a
+                // memcpy into the already-sized buffer; do the same.
+                // R7: the branch above guarantees `needed <= capacity` (either
+                // it already held, or `try_reserve_exact` succeeded with
+                // `new_capacity >= needed`: `max_bytes >= needed` because
+                // `n <= avail`). Release-checked, not a debug assert.
+                assert!(needed <= w.capacity());
+                let len = w.len();
+                // SAFETY: `len + n == needed <= w.capacity()` (asserted
+                // above), so the destination `[len, len + n)` lies inside
+                // the Vec's allocation. `bytes` is a `&[u8]` borrow distinct
+                // from `w` (we hold `&mut` to `w` through `self.backing`, and
+                // `bytes` is a separate argument), so the two ranges cannot
+                // overlap. `u8` is `Copy` with no invalid bit patterns, so
+                // the `n` copied bytes are initialized before `set_len`
+                // exposes them.
+                unsafe {
+                    core::ptr::copy_nonoverlapping(bytes.as_ptr(), w.as_mut_ptr().add(len), n);
+                    w.set_len(needed);
+                }
             }
         }
 
@@ -1707,6 +1729,55 @@ mod capture_tests {
         }
 
         p.deinit();
+    }
+
+    // Port-only (no reference test): pins the bytes, length and capacity of
+    // `Capture::write_slice`'s allocating arm, whose append is a raw
+    // `copy_nonoverlapping` + `set_len` (review-T-A2 blocking item 1). It
+    // covers the three shapes: an append that fits in the spare capacity, an
+    // append that grows the buffer (doubling, then clamped to `max_bytes`),
+    // and an append truncated at `max_bytes`. Distinct bytes per position
+    // catch a wrong offset or a stale length.
+    #[test]
+    fn capture_write_slice_allocating_arm_appends_exact_bytes() {
+        let mut buffer = [0u8; MAX_BUF];
+        let mut w = allocator_api2::vec::Vec::new_in(CaptureAllocator::Global);
+        w.try_reserve_exact(4).unwrap();
+        let mut cap = Capture {
+            backing: CaptureBacking::Allocating(w),
+            max_bytes: 10,
+        };
+        let cap_of = |cap: &Capture| match &cap.backing {
+            CaptureBacking::Allocating(w) => w.capacity(),
+            CaptureBacking::Fixed(_) => unreachable!(),
+        };
+        let initial = cap_of(&cap);
+        assert!(initial >= 4);
+
+        // Fits in the reserved capacity: no growth.
+        assert!(cap.write_slice(&mut buffer, b"ab"));
+        assert_eq!(b"ab".as_slice(), cap.trailing(&buffer));
+        assert_eq!(initial, cap_of(&cap));
+
+        // Empty append is a no-op.
+        assert!(cap.write_slice(&mut buffer, b""));
+        assert_eq!(b"ab".as_slice(), cap.trailing(&buffer));
+
+        // Needs growth: needed = 2 + 5 = 7.
+        assert!(cap.write_slice(&mut buffer, b"cdefg"));
+        assert_eq!(b"abcdefg".as_slice(), cap.trailing(&buffer));
+        assert!(cap_of(&cap) >= 7 && cap_of(&cap) <= 10);
+
+        // Truncated at max_bytes: the first 3 bytes land, the write fails.
+        assert!(!cap.write_slice(&mut buffer, b"hijkl"));
+        assert_eq!(b"abcdefghij".as_slice(), cap.trailing(&buffer));
+        assert_eq!(10, cap_of(&cap));
+
+        // Full: nothing more lands.
+        assert!(!cap.write_slice(&mut buffer, b"z"));
+        assert_eq!(b"abcdefghij".as_slice(), cap.trailing(&buffer));
+        // The fixed buffer was never touched by the allocating arm.
+        assert!(buffer.iter().all(|&b| b == 0));
     }
 
     // test "Parser nextSlice matches per-byte parsing"
