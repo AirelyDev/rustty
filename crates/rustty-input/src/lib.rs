@@ -40,11 +40,13 @@ pub mod link;
 
 // PORT NOTE: `input.zig:39-44` —
 //   // Keymap is only available on macOS right now. We could implement it
-//   // in theory for XKB too on Linux but we don't as of writing this.
+//   // in theory for XKB too on Linux but we don't need it right now.
 //   pub const Keymap = switch (builtin.os.tag) {
 //       .macos => @import("input/KeymapDarwin.zig"),
 //       else => @import("input/KeymapNoop.zig"),
 //   };
+// (CORRECTION, parity S43-F7: the quote's second line used to read "but we
+// don't as of writing this.", which is not the pinned reference text.)
 // The platform-selected keymap type (`input.Keymap`). macOS uses the
 // Carbon-backed [`keymap_darwin::Keymap`]; every other target uses the
 // [`keymap_noop::KeymapNoop`]. This single `input.zig` public decl is ported here
