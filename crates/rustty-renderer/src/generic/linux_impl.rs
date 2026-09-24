@@ -3689,6 +3689,8 @@ impl Renderer {
         // self.terminal_state.dirty = .false` (the impl's last statement)
         // runs before `endFrame`. CORRECTION: `end_frame` used to be a plain
         // statement at the end of the success path only.
+        // UNVERIFIED on Linux: written on macOS, compile and suite pending on
+        // rvm (NEW-FINDINGS N181).
         let result = self.update_frame_impl(state, cursor_blink_visible);
         self.font_shaper.end_frame();
         result

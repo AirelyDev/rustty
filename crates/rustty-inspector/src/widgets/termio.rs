@@ -1312,9 +1312,15 @@ fn encode_esc(writer: &mut String, esc: &rustty_vt::parser::ESC) {
 // for `.dcs_hook = .{ .intermediates = "$", .params = &.{ 1, 2 }, .final = 'q' }`
 // and the same for an empty DCS: at depth 1 the two slices collapse to
 // `{ ... }` and `final` (a `u8` field, not the top-level payload) prints as a
-// decimal. The `@typeName` is `terminal.Parser.Action` in that layout; that
-// the real app build gives the same name is UNVERIFIED. CORRECTION: this used
-// the prefix `Parser.Action` and Rust's `{:?}` of the DCS struct.
+// decimal. The `@typeName` is `terminal.Parser.Action` in that layout.
+// VERIFIED by review (T-I): `terminal.Parser.Action` is present in the
+// oracle's built `macos/build/ReleaseLocal/ghostty-internal.a` and
+// `zig-out/bin/ghostty-bench`; the app's root module is `src/main.zig`
+// (`GhosttyExe.zig:17`) and `inspector/widgets/termio.zig:5` imports
+// `../../terminal/main.zig`, so the parser is in the same module. (CORRECTION:
+// this used to say that the real app build gives the same name was
+// UNVERIFIED.) CORRECTION: this used the prefix `Parser.Action` and Rust's
+// `{:?}` of the DCS struct.
 fn format_action_default(writer: &mut String, action: &Action) {
     let _ = writer.write_str("terminal.Parser.Action{ .");
     match action {
