@@ -2244,3 +2244,80 @@ together with the corresponding interface version bump."* A future incompatible 
 is EXPECTED: re-vendor `crates/rustty-apprt/protocols/vicinae-hotkey-v1.xml` verbatim
 from the oracle and re-run the gates. Both the client bindings AND this harness's
 server bindings are generated from that one file, so they cannot drift apart.
+
+---
+
+## V23. FreeBSD: type-checked from macOS only, never built natively or EXECUTED — **ENVIRONMENT-BLOCKED** [parity tail S-13, 2026-09-24]
+
+**Blocked on:** a FreeBSD >= 13 host (amd64 or arm64) with the GTK4 stack from ports. The
+project has none; the porting host is macOS aarch64 and the Linux VM does not discharge it.
+
+```
+PORTED: crates/rustty-xev/src/kqueue.rs
+PORTED: crates/rustty-xev/src/async.rs
+PORTED: crates/rustty-xev/src/thread_pool.rs
+PORTED: crates/rustty-os/src/pty.rs
+PORTED: crates/rustty-apprt/src/gtk.rs
+PORTED: crates/rustty/src/main_rustty.rs
+PORTED: crates/rustty/tests/cli_smoke.rs
+PORTED: .port/tools/gates/check_default_linux_winproto.sh
+```
+
+**Where this comes from.** Items 1 and 2 of `DEFERRALS.md`'s "FreeBSD — the platform's
+explicit ledger row", reclassified here by S-13. W2D (2026-08-11) made a FreeBSD build
+resolve the names the oracle resolves: the real kqueue backend with its FreeBSD `kevent`
+arms, `AsyncEventFd`, the `_umtx_op` futex, the `IUTF8` shim, and every GTK gate widened to
+`any(linux, freebsd)`. The remaining items of that row were settled by S-13 (see its
+disposition block); what is left is only what needs the machine.
+
+**What WAS run here, and passed (macOS aarch64, 2026-09-24):**
+```
+rustup target add x86_64-unknown-freebsd
+cargo check  -p rustty-xev --target x86_64-unknown-freebsd --tests
+cargo clippy -p rustty-xev --target x86_64-unknown-freebsd --all-targets -- -D warnings
+cargo tree   -p rustty     --target x86_64-unknown-freebsd   # gtk4/libadwaita/gdk4-* resolve
+bash .port/tools/gates/check_default_linux_winproto.sh      # its FreeBSD arm
+```
+
+**What is NOT shown.** Nothing has run on FreeBSD. In particular: the kqueue loop's
+FreeBSD `kevent(2)` path and `EVFILT_PROC` delivery (`NOTE_EXIT` only, no
+`NOTE_EXITSTATUS`); the thread-pool futex over `_umtx_op`; `AsyncEventFd` over FreeBSD's
+`eventfd(2)` (FreeBSD 13+); `openpty` and the `IUTF8` shim in `rustty-os`; and the GTK launch.
+It is also not shown that the crates above `rustty-xev` even compile for FreeBSD: from macOS,
+`cargo check --target x86_64-unknown-freebsd -p rustty` stops in `rustty-os`'s build script
+(`cbits/pty.c` needs the target's `termios.h`), and the gtk4-rs `-sys` crates probe
+pkg-config for the target, so the gtk-featured build needs a FreeBSD sysroot with GTK4
+installed. `crates/rustty/tests/cli_smoke.rs`'s FreeBSD arm of `version_plus` was
+compile-checked only by flipping its `cfg` to macOS for one `cargo check`.
+
+**Recipe (on a FreeBSD >= 13 host):**
+```
+# Toolchain and the GTK stack. The package names are the FreeBSD ports names as
+# understood on 2026-09-24 and are UNVERIFIED; adjust to what `pkg search` shows.
+pkg install rust pkgconf gtk4 libadwaita gtk4-layer-shell blueprint-compiler \
+    gettext-tools wayland libX11 fontconfig freetype2 harfbuzz oniguruma
+
+# 1. The event loop, pty and futex layers.
+cargo test -p rustty-xev
+cargo test -p rustty-os
+
+# 2. The whole default (gtk) build, the version line and the gtk apprt.
+cargo build -p rustty
+cargo test  -p rustty --test cli_smoke
+cargo check -p rustty-apprt --features gtk
+./target/debug/rustty +version        # expect: renderer.generic.Renderer(renderer.OpenGL), libxev: kqueue
+
+# 3. The GUI, inside an X11 or Wayland session.
+cargo run -p rustty
+```
+Expected: `rustty-xev` passes including `kqueue::tests::freebsd_wakeup_stub_is_the_reference_panic`
+(a `should_panic` test pinning libxev's unreachable FreeBSD wakeup stub, UD275), and reports
+the three `stream::tests::pty_*` tests `ignored` (the reference skips them outside
+`.linux`/`.macos`); `process::tests` skips its FreeBSD-skipped test the same way. The GUI opens a
+window with a working shell; typing, resizing and closing the window work; a child that exits
+closes its surface.
+
+**Negative control (what makes the run non-vacuous):** make the FreeBSD `kevent_syscall`
+arm in `crates/rustty-xev/src/kqueue.rs` return `Ok(0)` without calling `kevent(2)` and
+confirm the timer and process tests in `rustty-xev` FAIL (hang or report no completion). A
+green suite with a no-op `kevent` would mean the loop was never driven.

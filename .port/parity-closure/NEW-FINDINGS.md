@@ -4075,6 +4075,112 @@ fix: 0 of 50 of the same sequential runs failed; see the task T-F2 report for th
   `is_emoji_presentation`), so moving it belongs to §G2 (vaxis 0.5.1 -> 0.6.0), task S-10b.
 - **state**: CLOSED (task tail-s10a).
 
+## N240 — the deferred `vaxis` 0.5.1 -> 0.6.0 and `zf` 0.10.3 -> 0.11.0 bumps (`NON_PORTS.md` §G2), with vaxis's uucode 0.1.0 -> 2826a37a
+
+- **id**: N240. Not a ledger row: the deferral lived in `.port/phase-3/NON_PORTS.md` §G2,
+  `.port/phase-2/DEFERRALS.md` ("Still open — summary", and the Chunk 1b uucode entry) and
+  `.port/phase-3/DEFERRAL_REAUDIT.md`. Discharged by task tail-s10b at the user's instruction to address
+  every parity gap.
+- **severity**: medium (behaviour of the CLI TUIs; four reachable crashes found). **kind**:
+  dependency-revision.
+- **oracle**: ghostty@20abdb50a `build.zig.zon` (vaxis `vaxis-0.6.0-BWNV_CrbCQCsc…`, zf
+  `zf-0.11.0-OIRy8X-RAAA…`, uucode `2826a37a` `ZZjBPlK5…`; the three cached tarballs re-hashed with
+  `zig fetch` to exactly these), `src/build/SharedDeps.zig:24-78, 512-519` (vaxis built with
+  `external_uucode = true` over the singleton uucode module and `src/build/uucode_config.zig`),
+  `src/cli/{list_themes,list_colors,list_keybinds,boo}.zig`.
+- **what was ported** (per file, 0.5.1 -> 0.6.0; `std.Io` / allocator / `std.ArrayList` churn noted but
+  not reproduced, as the port has no `std.Io`):
+  - `uucode` (vendored subset in `rustty-vaxis/src/uucode/`): 2826a37a's `grapheme.zig` (20-variant
+    `GraphemeBreak` with `emoji_modifier_base` / `emoji_modifier`, the UTS #51 modifier tailoring in
+    `computeGraphemeBreak`, the 2000-entry precompute, `nextCodePoint` / `.code_point`,
+    `peekCodePoint`, `nextGrapheme` / `peekGrapheme`, `utf8Iterator`), `types.zig`, `utf8.zig` tests;
+    `build.rs` follows `components.zig` (`EmojiData`, `GraphemeBreakDerived`, `" \t\r"` trims) over the
+    vendored UCD 17.0.0 (the same tarball as G4-uni; `ucd/PROVENANCE.md` re-digested).
+  - `gwidth.zig`, `unicode.zig`, `Parser.zig` (the uucode rename; `CSI Z` is shift+tab; SGR mouse
+    coordinates are `parseParam(i16, ..)`, closing the 36 mouse results N206 left open), `Mouse.zig`
+    (`col`/`row` `i16`), `ctlseqs.zig` (the three multi-cursor sequences), `Screen.zig` (`Cursor`,
+    `cursor_secondary`), `InternalScreen.zig` (cursor fields removed; bounds `<=`; its new test),
+    `Window.zig`, `Vaxis.zig` (the render writes nothing when nothing changed, `startRender`,
+    multi-cursor output and `setTerminalCursorSecondaryColor` / `resetAllTerminalSecondaryCursors` /
+    `addTerminalSecondaryCursor`, `translateMouse` over `i16`, `queryTerminal(Duration)`,
+    `transmitImage` over a copy of a `*const` image, the env map; its new test), `Key.zig`
+    (`matchText` on empty text), `queue.zig` (`tryPush` / `tryPop` under one lock, `popAndSignalLH` /
+    `pushAndSignalLH`, `drain` signals `not_full`), `Loop.zig` (`init` is the constructor,
+    `installResizeHandler`, `tty.getWinsize()`), `tty.zig` (the SIGWINCH action installed once,
+    `getWinsize` methods, Windows AltGr, `0xDF` and `i16` mouse), `widgets/TextInput.zig` (the
+    readline word motions, Ctrl+W `deleteWordBeforeWhitespace`, 13 new tests), `vxfw/vxfw.zig` (`Tick`
+    on the monotonic clock, `copyToClipboard` / `setTitle` copy), `vxfw/App.zig` (`init(buffer)`,
+    frame pacing on the monotonic clock, `resetEventState` around timer ticks, its new test),
+    `vxfw/Text.zig`. Unchanged apart from anonymous `refAllDecls` tests: `Cell`, `event`,
+    `GraphemeCache`, `Image`, `widgets.zig`, `vxfw/Center.zig`.
+  - `zf` (`filter.zig`, `zf.zig`, `clib.zig`): `token` -> `needle`, `rankToken` / `highlightToken` ->
+    `rankNeedle` / `highlightNeedle` (Zig and C exports), `RankOptions.to_lower = true` ->
+    `case_sensitive = true` (the default FLIPS to case-sensitive), `indexOfInsensitive` lowers the needle
+    too, `highlight` sorts and deduplicates for several needles (`deduplicateMatches` and its test).
+- **the zf polarity decision**: ghostty@20abdb50a `list_themes.zig:377-386` passes
+  `.case_sensitive = false, .plain = true` explicitly (with a NOTE that it replaces `.to_lower = true`);
+  `rustty-cli` passes exactly that. Its tokens are lowercased before ranking, so the new needle
+  lowering cannot change a result there. MEASURED: 470 names (Ghostty.app's 463 themes + 7 path-like
+  strings) x 1521 queries, four columns (ghostty's call, the default options, insensitive raw
+  needles, `highlight`): 714,870 rows bit-identical to a Zig 0.16.0 build of zf 0.11.0. Negative
+  controls: `case_sensitive: true` at the call site fails `rank_filtered_inclusion` /
+  `rank_filtered_ordering`; the default flipped back fails `rank_library_interface` and
+  `rank_options_default_is_case_sensitive`; the needle not lowered fails the latter.
+- **uucode differential** (vaxis's four fields, the S-10a recipe): a Zig 0.16.0 probe against uucode
+  2826a37a with ghostty's `uucode_config.zig`, wired as `SharedDeps.zig` wires it, dumped
+  `east_asian_width`, `general_category`, `grapheme_break`, `is_emoji_presentation` for
+  0..=0x10FFFF: **0 differences** from `rustty_vaxis::uucode::get` (negative control: one flipped byte,
+  1 difference). Against the 0.1.0 / UCD 16.0.0 tables the move changed 157 `east_asian_width`, 4804
+  `general_category`, 1556 `grapheme_break` (689 extended_pictographic -> other, 671 other -> InCB
+  consonant, 134 extended_pictographic -> emoji_modifier_base, 39 other -> InCB extend, 14 InCB extend
+  -> linker, 5 InCB extend -> emoji_modifier, 3 other -> spacing_mark, 1 prepend -> other) and 7
+  `is_emoji_presentation` values; each is the oracle's. `GraphemeBreakTest-17.0.0.txt`: 766 cases, all
+  pass with the modifier tailoring.
+- **gwidth / grapheme differential**: vaxis `gwidth` (`.unicode`, `.wcwidth`, `.no_zwj`) and
+  `unicode.graphemeIterator` over 1,334,878 inputs (every code point alone, surrogates as WTF-8, the 766
+  test sequences, 200,000 random sequences over emoji / modifier / ZWJ / flag / Hangul / Indic /
+  control code points, 20,000 random byte strings): identical to the Zig oracle except 36 inputs on which
+  the reference traps and 35 on which its grapheme ranges overlap, all UD260. (A ReleaseSafe build of
+  the probe trapped at `utf8.zig:35` on the single-code-point section where the Debug build did not;
+  the Debug build was used as the oracle. The S-10b review did NOT reproduce it: its own ReleaseSafe
+  probe ran libvaxis 0.6.0 `gwidth` over every code point alone with all three methods, with no trap
+  and 0 differences from the port; and the cast at `utf8.zig:35`, `@intCast(utf8d[byte])` into
+  `IntFittingRange(0, 11)`, cannot fail because every table entry is at most 11. Treated as an artifact
+  of the S-10b probe, not a reference defect.)
+- **parser / render differentials**: 4,204 SGR / X10 mouse and `CSI Z` sequences (every 1-3 byte
+  string over `0 1 5 9 a f F _ + - SP 0xFF` in each coordinate, `i16` edges, X10 bytes): parsed events
+  identical to libvaxis 0.6.0. Eleven render steps (cell, cursor, secondary cursor, hide, reset):
+  byte-identical to a libvaxis 0.6.0 built with the UD261 fix; the unpatched reference differs exactly
+  at the four UD261 steps. libvaxis 0.6.0's own test suite, built against ghostty's uucode: 151 of 152
+  pass (the failure is the cwd-dependent `vxfw` doctest).
+- **reference defects found** (R13, all fixed with tests and negative controls): UD260 (gwidth /
+  grapheme start on invalid UTF-8; since 0.5.1), UD261 (inverted secondary-cursor comparison), UD262
+  (`translateMouse` `@intCast`), UD263 (vxfw `@intCast` of a negative mouse position), UD264
+  (TextInput word motions reach `unreachable` in `std.unicode.utf8Decode`), UD265 (`trimEnd` for
+  `trimLeft` in `Text` soft wrap), UD266 (`+list-themes` stopped installing the resize handler in the
+  Zig 0.16 migration). All in `docs/ghostty-bug-fixes.md`. Recorded faithfully: UD267 (`kind: latent`,
+  the queue's edge-only signalling can leave a second blocked producer or consumer waiting; found by
+  the S-10b review).
+- **review follow-up (task tail-s10c)**: UD261's fix is gated on `caps.multi_cursor` (without it, a
+  secondary cursor added on a terminal lacking the capability made every render repaint; test
+  `secondary_cursor_without_multi_cursor_does_not_repaint` + negative control); UD263's reachability
+  is restated (vxfw turns pixel reporting off, so a coordinate of 0 or below comes from a non-conforming
+  terminal or injected bytes, not an ordinary drag); `check_test_counts.py`'s vaxis row now also covers
+  `Vaxis.zig` and `vxfw/{vxfw,App,Text,Center}.zig` (zig 105, one allowance for the vxfw doctest source
+  scan), with `--self-test` arms binding the row and the per-row verdict (each negative-controlled).
+- **not settled here**: libvaxis 0.6.0 also moved zigimg `d7b7ab0b` -> `d695acd9`; the older tarball is
+  not in the local cache, so that delta was not diffed. It reaches only vaxis's image tier
+  (`transmitImage` / `loadImage`), which no Ghostty code calls. What WAS checked (S-10b review F4): the
+  two conversions libvaxis 0.6.0 reaches (`Vaxis.zig:1066-1070`, `convertNoFree` to `.rgb24` /
+  `.rgba32`) in `d695acd9` (`PixelFormatConverter.zig:532, 561, 772-778`; `color.zig:19-75, 478-505`:
+  `rgbToRgba` copies the colour, `rgbaToRgb` premultiplies alpha in f32 with `@round` and clamp) are the
+  formulas `crates/rustty-zigimg/src/convert.rs` implements; `convertNoFree` differs from `convert` only
+  in not freeing the old pixels, which is irrelevant to the port's owned `Vec`; and the decode / PNG
+  encode paths are re-homed onto Ghostty's codecs by design, so a zigimg delta there cannot reach the
+  port. Only the `d7b7ab0b` side of the diff remains unread. The vxfw doctest test (`All widgets have a
+  doctest`, a source scan) is not ported (it was not before either).
+- **state**: CLOSED (task tail-s10b).
+
 ## N250 — the tmux viewer's pane captures ask tmux for `-C` and are decoded (R13 fix, UD12)
 
 - **id**: N250.
@@ -4110,3 +4216,67 @@ queued after its captures, applies the state. Reference defect: `UPSTREAM-DEFECT
 earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_queued_waits_for_its_own_reply`.
 
 **state**: CLOSED by task S-12.
+
+## N255 — libxev's FreeBSD loop-wakeup `@panic` stub is unreachable, not "reachable only through an explicit `Loop::wakeup()`"
+
+- **id**: N255. Not a ledger row: the item lived in `.port/phase-2/DEFERRALS.md` ("FreeBSD — the
+  platform's explicit ledger row", item 3). Settled by task tail-s13.
+- **severity**: low. **kind**: reachability correction (reference defect recorded, not fixed).
+- **oracle**: libxev `9ce8e8e6` (ghostty@20abdb50a `build.zig.zon:19-22`; the cached tarball
+  `libxev-0.0.0-86vtcwIRFADbH4hk-…`) `src/backend/kqueue.zig:965-968, 973-975, 1488-1510`,
+  `src/watcher/async.zig:10-30`, `src/dynamic.zig:34-39`; ghostty `src/global.zig:30`.
+- **rustty**: `crates/rustty-xev/src/kqueue.rs` (the FreeBSD `Wakeup`, `Loop::wakeup`,
+  `thread_perform`).
+- **description**: the W2D row said the stub "fires only on an explicit `Loop::wakeup()`" and that
+  an eventfd wakeup "must land upstream first, or be recorded here as an R1 divergence". At the pin
+  no caller can make that call: `Loop.wakeup` is not `pub`, its one call site in `kqueue.zig` is
+  Darwin-gated, `xev.Async` on FreeBSD is `AsyncEventFd` and never calls it, and Ghostty neither
+  names it nor creates an `xev.ThreadPool`. R13 applies only to a reachable defect, so the stub
+  stays faithful; it is recorded upstream as UD275 (`kind: latent`) with the eventfd fix the TODO
+  names. In the port `Loop::wakeup` is also private with no caller on any target.
+- **how found**: task tail-s13, grepping every `wakeup`/`notify` caller in the pinned libxev and in
+  ghostty `src/`.
+- **test**: `kqueue::tests::freebsd_wakeup_stub_is_the_reference_panic` (FreeBSD-only, type-checked
+  from macOS, not run; `VERIFICATION_DEBT.md` V23).
+- **state**: CLOSED (task tail-s13).
+
+## N256 — the FreeBSD row's ios/visionos item was stale, and the three pty stream tests ran where the reference skips them
+
+- **id**: N256. Not a ledger row: `.port/phase-2/DEFERRALS.md` FreeBSD row, item 4.
+- **severity**: low. **kind**: stale record + skip scope (R14).
+- **oracle**: libxev `src/backend/kqueue.zig:29-36` (`.ios, .macos, .visionos => true`, `.freebsd
+  => true`); `src/watcher/stream.zig:1145-1150, 1208-1213, 1272-1277` (`switch (builtin.os.tag) {
+  .linux, .macos => {}, else => return error.SkipZigTest }` in the three pty tests).
+- **rustty**: `crates/rustty-xev/src/lib.rs` (module gates), the module comments of `kqueue.rs`,
+  `async.rs`, `net.rs`, `process.rs`, `stream.rs`, `timer.rs`; `stream.rs` `pty_child_to_parent`,
+  `pty_parent_to_child`, `pty_queued_writes`.
+- **description**: item 4 said rustty gates the kqueue family `any(macos, freebsd)` only.
+  `318af0f6` (2026-08-26) had already widened every gate to `macos + ios + visionos + freebsd`; only
+  six module comments still said otherwise, and they are corrected. Checking the widened module
+  turned up one real gap: the three pty stream tests carried the reference's `.linux, .macos` skip
+  only as a comment claiming "this module is macOS-gated", so on FreeBSD and iOS they would have run
+  where the reference skips them. They now carry the scope as
+  `cfg_attr(all(not(miri), not(any(linux, macos))), ignore = "SkipZigTest: …(R14)")`, with the
+  reference's switch kept as a comment in each.
+- **verification**: `cargo check -p rustty-xev --tests` for `aarch64-apple-ios` and
+  `x86_64-unknown-freebsd` green; `visionos` has no rustup std and is unchecked.
+- **state**: CLOSED (task tail-s13).
+
+## N257 — `cli_smoke.rs`'s `version_plus` asserted nothing about the renderer and libxev lines on FreeBSD
+
+- **id**: N257. Not a ledger row: `.port/phase-2/DEFERRALS.md` FreeBSD row, item 6.
+- **severity**: low. **kind**: missing test arm.
+- **oracle**: `src/cli/version.zig:47-48`; `src/renderer/backend.zig:20-21` (non-Darwin native =>
+  `.opengl`); libxev `src/backend.zig:20,38` (FreeBSD's only candidate is kqueue) and
+  `src/dynamic.zig:39` (one candidate => the static `Api()`, whose `backend` is `.kqueue`).
+- **rustty**: `crates/rustty/tests/cli_smoke.rs` `version_plus`.
+- **description**: the test checked those two lines on macOS and Linux only. It now has a
+  `cfg(target_os = "freebsd")` arm asserting `renderer.generic.Renderer(renderer.OpenGL)` and
+  `libxev        : kqueue`, which is what `crates/rustty-cli/src/version.rs`
+  (`renderer_type_name`, `libxev_backend_tag`) produces from `rustty-build-config` and
+  `rustty_xev::backend()` on FreeBSD.
+- **verification**: `rustty` cannot be type-checked for FreeBSD from macOS (`rustty-os`'s build
+  script compiles `cbits/pty.c`, which needs the target's headers), so the new arm was
+  compile-checked by flipping its `cfg` to macOS for one `cargo check -p rustty --test cli_smoke`
+  (green), then restored. It runs on a FreeBSD host (`VERIFICATION_DEBT.md` V23).
+- **state**: CLOSED (task tail-s13).

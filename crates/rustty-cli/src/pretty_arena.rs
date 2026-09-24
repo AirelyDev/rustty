@@ -38,10 +38,10 @@ pub fn winsize_for(tty: &rustty_vaxis::Tty) -> Result<Winsize, Error> {
             y_pixel: 768,
         })
     }
-    // else => try vaxis.Tty.getWinsize(tty.fd),
+    // else => try tty.getWinsize(),
     #[cfg(not(windows))]
     {
-        Ok(rustty_vaxis::Tty::get_winsize(tty.fd())?)
+        Ok(tty.get_winsize()?)
     }
 }
 

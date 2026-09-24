@@ -312,8 +312,9 @@ this workstream's.
 
 # Area G — `P3-W9` (config / CLI / build / i18n / synthetic)
 
-**READ FIRST — two rows here are OPEN, and this file is otherwise a CLOSED
-record.** `G1` (uucode) and `G2` (vaxis/zf) are `P3-W9 T6` work that was
+**READ FIRST — `G1` and `G2` are both DISCHARGED (parity tail, 2026-09-23); this
+area is now a CLOSED record like the rest of the file.** The paragraph below is
+kept as written in `P3-W9`. `G1` (uucode) and `G2` (vaxis/zf) are `P3-W9 T6` work that was
 **measured and decided but NOT completed**. They are written up with full
 evidence instead of being quietly dropped, but they have **NO OWNER**: `P3-W9`
 closes with this commit and no other workstream claims them. Whoever sequences
@@ -323,8 +324,8 @@ the `G-P2` closure gate can see them. Do not let this paragraph be the only
 thing holding them.
 
 **Update 2026-09-23 (parity tail S-10a): `G1` is DISCHARGED** — see its item 5
-below and `NEW-FINDINGS.md` N220. **`G2` remains OPEN** (owned by parity tail
-S-10b).
+below and `NEW-FINDINGS.md` N220. **Update 2026-09-23 (parity tail S-10b): `G2` is
+DISCHARGED** — see its item 5 below and `NEW-FINDINGS.md` N240.
 
 Appended by **`P3-W9` Task 6 and Task 7**. Same 4-criterion basis as above.
 Source of the verdicts: `.port/phase-3/assessments/G-config-build-i18n.md`.
@@ -438,7 +439,11 @@ dependency bump without the reason is how a table goes stale unnoticed.
       uucode 2826a37a (`external_uucode`, the `libvaxis_only` table), so
       moving it is part of `G2`, below, not of this row.
 
-## G2 — `vaxis` 0.5.1 -> 0.6.0 and `zf` 0.10.3 -> 0.11.0 — DEFERRED with a measured delta
+## G2 — `vaxis` 0.5.1 -> 0.6.0 and `zf` 0.10.3 -> 0.11.0 — DISCHARGED 2026-09-23 (was DEFERRED with a measured delta)
+
+**DISCHARGED by parity tail S-10b; items 1–4 are the deferral as written, kept for
+the record, and item 5 is the discharge with its evidence.**
+
 
 Also open, also recorded rather than dropped. `P3-W9 T6 step 1` asks for the
 tarball diff and the port of the deltas; the diff was produced and read, the
@@ -489,6 +494,35 @@ port was **not** completed, and the size is the reason.
    `#[ignore]`-on-device (it needs a real `/dev/tty`), so it is exercised by NO
    CI test and the guard there is compile-time only. Do not read the green
    `rustty-vaxis`/`rustty-zf` suites as coverage of the CLI integration.
+5. **Discharge (parity tail S-10b, 2026-09-23; `NEW-FINDINGS.md` N240).**
+   * **What was ported.** Every 0.5.1 -> 0.6.0 delta of the vaxis files the crate
+     ports (the file list is in N240) and every 0.10.3 -> 0.11.0 delta of
+     `zf/{zf,filter,clib}.zig`, with the tests 0.6.0 / 0.11.0 add (Parser 2,
+     InternalScreen 1, Vaxis 1, TextInput 13, App 1, zf `deduplicateMatches`).
+     The `std.Io` / allocator churn is not reproduced (the port has no `std.Io`;
+     `error.Canceled` returns are PORT NOTEs). The four SEMANTIC changes of item 3:
+     multi-cursor ctlseqs + `Screen.Cursor` / `cursor_secondary` + the render and
+     API around them (`vaxis.rs`); `Mouse.col`/`row` `i16` together with
+     `parseParam(i16, ..)` and every consumer (`translateMouse`, `Window.hasMouse`,
+     vxfw `App`, the Windows decode, `list_themes`'s clamps from `d320cd7df`), so
+     no half-applied type change remains (the 36 N206 mouse results now match);
+     zf's rename with the polarity check below; the uucode API
+     (`nextCodePoint` / `.code_point`).
+   * **uucode for vaxis.** At the pin vaxis uses ghostty's uucode 2826a37a with
+     ghostty's config (`SharedDeps.zig:24-78, 512-519`). `rustty-unicode`'s tables
+     are not the same fields (they hold ghostty's derived width / is_symbol /
+     grapheme_break_no_control, not `east_asian_width` / `general_category` /
+     the full `grapheme_break`), so reusing them was not an option and no new
+     crate edge was added; `rustty-vaxis`'s own `build.rs` now follows 2826a37a's
+     `components.zig` over the vendored UCD 17.0.0. Zig-oracle differential over
+     0..=0x10FFFF of the four fields: 0 differences (negative control: 1).
+   * **zf polarity.** The pin's `list_themes.zig:377-386` passes
+     `.case_sensitive = false, .plain = true`; `rustty-cli` passes the same, and
+     714,870 ranked rows are bit-identical to zf 0.11.0.
+   * **Reference defects**, not ported (R13): UD260 (also in 0.5.1) and UD261–UD266.
+   * **Residual, recorded in N240:** the zigimg revision libvaxis 0.6.0 pins
+     (`d695acd9`, was `d7b7ab0b`) was not diffed (the old tarball is not cached);
+     it reaches only vaxis's image tier, which Ghostty never calls.
 
 ## G3 — `libxev` bump (`e8525c0fd`) — nothing semantic for rustty; the 3 QUIRKs RE-AFFIRMED
 

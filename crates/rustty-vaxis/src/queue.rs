@@ -1,4 +1,4 @@
-//! Port of `libvaxis` `queue.zig` (349 LOC, 7 `test{}`) — a thread-safe, fixed-size,
+//! Port of `libvaxis` `queue.zig` (0.6.0: 376 LOC, 7 `test{}`) — a thread-safe, fixed-size,
 //! BLOCKING ring buffer (the concurrency channel between the Loop read thread and the
 //! main thread). Faithful Rust: the lock-guarded mutable state lives in a
 //! `Mutex<Inner>` and the two condition variables sit beside it.
@@ -20,7 +20,15 @@
 //!
 //! PORT NOTE (`lock`/`unlock`/`drain`): Rust RAII makes Zig's split `lock()` +
 //! `unlock()` awkward, so `drain` takes/returns the guard (the externally-held-lock
-//! drain API; no test exercises it).
+//! drain API).
+//!
+//! PORT NOTE (libvaxis 0.6.0, `std.Io`): the queue now holds an `io: std.Io` and uses
+//! `std.Io.Mutex` / `std.Io.Condition`, so `pop`/`push`/`tryPush`/`tryPop`/`poll`/`lock`/
+//! `isEmpty`/`isFull` return `error.Canceled` when the calling `std.Io` task is canceled.
+//! The port keeps `std::sync` and plain `std::thread`s, which have no cancelation, so these
+//! stay infallible and `init(io)` is `Default`. The 0.6.0 behaviour changes ARE ported:
+//! `tryPush`/`tryPop` check and act under one lock, `pop`/`push` signal through
+//! `popAndSignalLH`/`pushAndSignalLH`, and `drain` now signals `not_full`.
 
 use std::sync::{Condvar, Mutex, MutexGuard};
 
@@ -99,13 +107,7 @@ impl<T, const N: usize> Queue<T, N> {
             g = self.not_empty.wait(g).unwrap();
         }
         debug_assert!(!g.is_empty_lh());
-        if g.is_full_lh() {
-            // If we are full, wake up a push that might be
-            // waiting here.
-            self.not_full.notify_one();
-        }
-
-        g.pop_lh()
+        self.pop_and_signal_lh(&mut g)
     }
 
     /// Push an item into the queue. Blocks until an item has been
@@ -116,43 +118,34 @@ impl<T, const N: usize> Queue<T, N> {
             g = self.not_full.wait(g).unwrap();
         }
         debug_assert!(!g.is_full_lh());
-        let was_empty = g.is_empty_lh();
-
-        let write_index = g.write_index;
-        let slot = g.mask(write_index);
-        g.buf[slot] = Some(item);
-        g.write_index = g.mask2(write_index + 1);
-
-        // If we were empty, wake up a pop if it was waiting.
-        if was_empty {
-            self.not_empty.notify_one();
-        }
+        self.push_and_signal_lh(&mut g, item);
     }
 
     /// Push an item into the queue. Returns true when the item
     /// was successfully placed in the queue, false if the queue
     /// was full.
+    ///
+    /// libvaxis 0.6.0 holds the lock across the check and the push (0.5.1 unlocked
+    /// after the check and called the blocking `push`, which could then block).
     pub fn try_push(&self, item: T) -> bool {
-        let g = self.inner.lock().unwrap();
+        let mut g = self.inner.lock().unwrap();
         if g.is_full_lh() {
-            drop(g);
             return false;
         }
-        drop(g);
-        self.push(item);
+        self.push_and_signal_lh(&mut g, item);
         true
     }
 
     /// Pop an item from the queue. Returns null when no item is
     /// available.
+    ///
+    /// libvaxis 0.6.0 holds the lock across the check and the pop (see `try_push`).
     pub fn try_pop(&self) -> Option<T> {
-        let g = self.inner.lock().unwrap();
+        let mut g = self.inner.lock().unwrap();
         if g.is_empty_lh() {
-            drop(g);
             return None;
         }
-        drop(g);
-        Some(self.pop())
+        Some(self.pop_and_signal_lh(&mut g))
     }
 
     /// Poll the queue. This call blocks until events are in the queue
@@ -177,7 +170,15 @@ impl<T, const N: usize> Queue<T, N> {
         if guard.is_empty_lh() {
             return None;
         }
-        Some(guard.pop_lh())
+        // Preserve queue push wakeups when draining under external lock.
+        // If the queue was full before this pop, a producer may be blocked
+        // waiting on not_full.
+        let was_full = guard.is_full_lh();
+        let item = guard.pop_lh();
+        if was_full {
+            self.not_full.notify_one();
+        }
+        Some(item)
     }
 
     /// Returns `true` if the queue is empty and `false` otherwise.
@@ -190,6 +191,29 @@ impl<T, const N: usize> Queue<T, N> {
     pub fn is_full(&self) -> bool {
         let g = self.inner.lock().unwrap();
         g.is_full_lh()
+    }
+
+    // Edge-only signalling (`not_empty` only when the queue was empty, `not_full` only
+    // when it was full) is the reference's, kept faithfully; with two waiters at once it
+    // can leave the second waiting (UPSTREAM-DEFECTS UD267, kind: latent).
+    fn push_and_signal_lh(&self, g: &mut MutexGuard<'_, Inner<T, N>>, item: T) {
+        let was_empty = g.is_empty_lh();
+        let write_index = g.write_index;
+        let slot = g.mask(write_index);
+        g.buf[slot] = Some(item);
+        g.write_index = g.mask2(write_index + 1);
+        if was_empty {
+            self.not_empty.notify_one();
+        }
+    }
+
+    fn pop_and_signal_lh(&self, g: &mut MutexGuard<'_, Inner<T, N>>) -> T {
+        let was_full = g.is_full_lh();
+        let result = g.pop_lh();
+        if was_full {
+            self.not_full.notify_one();
+        }
+        result
     }
 }
 
@@ -361,6 +385,45 @@ mod tests {
             state.store(1, Ordering::Release);
             assert_eq!(queue.pop(), 2);
         });
+    }
+
+    /// libvaxis 0.6.0 `drain`: "Preserve queue push wakeups when draining under external
+    /// lock. If the queue was full before this pop, a producer may be blocked waiting on
+    /// not_full." (0.5.1's `drain` did not signal, so that producer stayed blocked.)
+    #[test]
+    fn drain_wakes_a_blocked_producer() {
+        let queue: Queue<u8, 1> = Queue::default();
+        queue.push(1);
+        let pushed = std::sync::atomic::AtomicBool::new(false);
+        std::thread::scope(|s| {
+            s.spawn(|| {
+                queue.push(2); // blocks: the queue is full
+                pushed.store(true, Ordering::Release);
+            });
+            // Give the producer time to block on `not_full`.
+            std::thread::sleep(Duration::from_millis(20));
+            assert!(!pushed.load(Ordering::Acquire));
+
+            let mut g = queue.lock();
+            assert_eq!(queue.drain(&mut g), Some(1));
+            queue.unlock(g);
+
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while !pushed.load(Ordering::Acquire) && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            let woke = pushed.load(Ordering::Acquire);
+            if !woke {
+                // Unblock the producer so the scope can end, then fail.
+                let _ = queue.try_pop();
+                queue.not_full.notify_one();
+            }
+            assert!(
+                woke,
+                "drain did not wake the producer blocked on a full queue"
+            );
+        });
+        assert_eq!(queue.pop(), 2);
     }
 
     #[test]

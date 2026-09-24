@@ -518,14 +518,13 @@ fn transmit_image_rgb_emits_exact_escape() {
     let src = vec![
         10, 20, 30, 255, 40, 50, 60, 255, 70, 80, 90, 255, 100, 110, 120, 255,
     ];
-    let mut img =
-        rustty_zigimg::Image::from_raw_pixels(2, 2, src, rustty_zigimg::PixelFormat::Rgba32)
-            .unwrap();
+    let img = rustty_zigimg::Image::from_raw_pixels(2, 2, src, rustty_zigimg::PixelFormat::Rgba32)
+        .unwrap();
 
     let mut vx = vaxis_with_kitty(true);
     let mut sink: Vec<u8> = Vec::new();
     let out = vx
-        .transmit_image(&mut sink, &mut img, TransmitFormat::Rgb)
+        .transmit_image(&mut sink, &img, TransmitFormat::Rgb)
         .expect("transmit must succeed");
 
     // The converted rgb24 bytes are 10,20,30,40,50,60,70,80,90,100,110,120 (12 bytes),
@@ -546,8 +545,10 @@ fn transmit_image_rgb_emits_exact_escape() {
     assert_eq!(out.height, 2);
     // `next_img_id` advanced exactly once (the reference's `defer self.next_img_id += 1`).
     assert_eq!(vx.next_img_id, 2);
-    // The image really was converted in place, as `img.convert(.rgb24)` does upstream.
-    assert_eq!(img.pixel_format(), rustty_zigimg::PixelFormat::Rgb24);
+    // libvaxis 0.6.0 takes `img: *const zigimg.Image` and converts a copy
+    // (`var img_modifiable = img.*; try img_modifiable.convertNoFree(arena, .rgb24)`), so the
+    // caller's image is left as it was (0.5.1 converted it in place).
+    assert_eq!(img.pixel_format(), rustty_zigimg::PixelFormat::Rgba32);
 }
 
 #[test]
@@ -555,7 +556,7 @@ fn transmit_image_rgba_converts_then_emits() {
     let src = vec![
         10, 20, 30, 255, 40, 50, 60, 254, 70, 80, 90, 253, 100, 110, 120, 252,
     ];
-    let mut img = rustty_zigimg::Image::from_raw_pixels(
+    let img = rustty_zigimg::Image::from_raw_pixels(
         2,
         2,
         src.clone(),
@@ -565,7 +566,7 @@ fn transmit_image_rgba_converts_then_emits() {
 
     let mut vx = vaxis_with_kitty(true);
     let mut sink: Vec<u8> = Vec::new();
-    vx.transmit_image(&mut sink, &mut img, TransmitFormat::Rgba)
+    vx.transmit_image(&mut sink, &img, TransmitFormat::Rgba)
         .unwrap();
 
     // f=32 for Rgba.
@@ -600,13 +601,13 @@ fn transmit_image_png_round_trips() {
     for _ in 0..(w * h) {
         px.extend_from_slice(&[0x20, 0x40, 0x60, 0xFF]);
     }
-    let mut img =
+    let img =
         rustty_zigimg::Image::from_raw_pixels(w, h, px.clone(), rustty_zigimg::PixelFormat::Rgba32)
             .unwrap();
 
     let mut vx = vaxis_with_kitty(true);
     let mut sink: Vec<u8> = Vec::new();
-    vx.transmit_image(&mut sink, &mut img, TransmitFormat::Png)
+    vx.transmit_image(&mut sink, &img, TransmitFormat::Png)
         .unwrap();
 
     // f=100 for Png.
@@ -632,7 +633,7 @@ fn transmit_image_png_round_trips() {
 /// NEGATIVE CONTROL: no capability => `Err` AND an untouched sink.
 #[test]
 fn transmit_image_without_kitty_graphics_writes_nothing() {
-    let mut img = rustty_zigimg::Image::from_raw_pixels(
+    let img = rustty_zigimg::Image::from_raw_pixels(
         1,
         1,
         vec![1, 2, 3, 4],
@@ -642,7 +643,7 @@ fn transmit_image_without_kitty_graphics_writes_nothing() {
 
     let mut vx = vaxis_with_kitty(false);
     let mut sink: Vec<u8> = Vec::new();
-    let r = vx.transmit_image(&mut sink, &mut img, TransmitFormat::Rgb);
+    let r = vx.transmit_image(&mut sink, &img, TransmitFormat::Rgb);
 
     assert!(matches!(r, Err(ImageError::NoGraphicsCapability)));
     assert!(sink.is_empty(), "no bytes may be written: {sink:?}");

@@ -1,4 +1,4 @@
-//! Port of `libvaxis` `Parser.zig` (1285 LOC, 34 test) — the ANSI input parser: the
+//! Port of `libvaxis` `Parser.zig` (libvaxis 0.6.0: 1331 LOC, 36 test) — the ANSI input parser: the
 //! ground/escape/csi/osc/dcs/sos/pm/apc/ss2/ss3 state machine, the Kitty keyboard
 //! protocol (`u21` codepoint + modifier decode), SGR + legacy xterm mouse, bracketed
 //! paste + OSC-52 clipboard paste, the legacy/tilde/SS3 key tables, XTWINOPS in-band
@@ -194,7 +194,7 @@ fn parse_ground(input: &[u8]) -> Result<ParseResult<'_>, ParseError> {
             let mut grapheme_len: usize = 0;
             let mut cp_count: usize = 0;
 
-            while let Some(result) = grapheme_iter.next() {
+            while let Some(result) = grapheme_iter.next_code_point() {
                 cp_count += 1;
                 if result.is_break {
                     // Found the first grapheme boundary
@@ -504,6 +504,20 @@ fn parse_csi<'b>(input: &[u8], text_buf: &'b mut [u8]) -> ParseResult<'b> {
             };
             ParseResult {
                 event: Some(event),
+                n: sequence.len(),
+            }
+        }
+        b'Z' => {
+            // Legacy keys
+            // CSI Z
+            ParseResult {
+                event: Some(Event::KeyPress(Key {
+                    mods: Modifiers {
+                        shift: true,
+                        ..Default::default()
+                    },
+                    ..key_with_codepoint(key::tab)
+                })),
                 n: sequence.len(),
             }
         }
@@ -887,10 +901,11 @@ fn parse_csi<'b>(input: &[u8], text_buf: &'b mut [u8]) -> ParseResult<'b> {
 /// PORT NOTE (N206): libvaxis 0.6.0 (the pinned vaxis) reads a param with
 /// `std.fmt.parseInt(T, buf, 10)`, 0.5.1 with `parseUnsigned`; for the unsigned
 /// types here the difference is that `parseInt` takes a leading `+` and reads
-/// `-0` as zero. The pin's `parseInt` is followed. The mouse coordinates are
-/// `parseParam(i16, ..)` in 0.6.0, with `Mouse.col`/`row` widened to `i16`;
-/// that type change is part of the deferred vaxis 0.6.0 bump
-/// (`.port/phase-3/NON_PORTS.md` §G2), so they are still read as `u16` here.
+/// `-0` as zero. The pin's `parseInt` is followed.
+///
+/// The Zig function is generic over `comptime T`; its instantiations are the
+/// unsigned ones (this function, returning the value widened to `u32`) and the
+/// mouse coordinates' `i16` ([`parse_param_i16`], parity tail S-10b).
 fn parse_param(buf: &[u8], default: Option<u32>, t: IntType) -> Option<u32> {
     // if (buf.len == 0) return default;
     if buf.is_empty() {
@@ -898,6 +913,17 @@ fn parse_param(buf: &[u8], default: Option<u32>, t: IntType) -> Option<u32> {
     }
     // return std.fmt.parseInt(T, buf, 10) catch return null;
     parse_int_type(t, buf, 10).ok().map(|v| v as u32)
+}
+
+/// `parseParam(i16, buf, default)` — the SGR mouse coordinates (libvaxis 0.6.0
+/// `Parser.zig:705-706`; `Mouse.col`/`row` are `i16` since 0.6.0).
+fn parse_param_i16(buf: &[u8], default: Option<i16>) -> Option<i16> {
+    // if (buf.len == 0) return default;
+    if buf.is_empty() {
+        return default;
+    }
+    // return std.fmt.parseInt(T, buf, 10) catch return null;
+    rustty_zigstd::fmt::parse_int::<i16>(buf, 10).ok()
 }
 
 /// Parse a mouse event
@@ -908,8 +934,8 @@ fn parse_mouse(input: &[u8], full_input: &[u8]) -> ParseResult<'static> {
     };
 
     let button_mask: u16;
-    let px: u16;
-    let py: u16;
+    let px: i16;
+    let py: i16;
     let xterm: bool;
     if input.len() == 3 && input[2] == b'M' && full_input.len() >= 6 {
         xterm = true;
@@ -926,8 +952,9 @@ fn parse_mouse(input: &[u8], full_input: &[u8]) -> ParseResult<'static> {
             return ParseResult { event: None, n: 6 };
         };
         button_mask = b as u16;
-        px = x as u16;
-        py = y as u16;
+        // `px = full_input[4] - 32`: a `u8` coerced to the `i16` (always fits).
+        px = i16::from(x);
+        py = i16::from(y);
     } else if input.len() >= 4 && input[2] == b'<' {
         xterm = false;
         let delim1 = match index_of_scalar_pos(input, 3, b';') {
@@ -942,12 +969,12 @@ fn parse_mouse(input: &[u8], full_input: &[u8]) -> ParseResult<'static> {
             Some(i) => i,
             None => return null_event,
         };
-        px = match parse_param(&input[delim1 + 1..delim2], Some(1), U16) {
-            Some(v) => v as u16,
+        px = match parse_param_i16(&input[delim1 + 1..delim2], Some(1)) {
+            Some(v) => v,
             None => return null_event,
         };
-        py = match parse_param(&input[delim2 + 1..input.len() - 1], Some(1), U16) {
-            Some(v) => v as u16,
+        py = match parse_param_i16(&input[delim2 + 1..input.len() - 1], Some(1)) {
+            Some(v) => v,
             None => return null_event,
         };
     } else {
@@ -1277,6 +1304,24 @@ mod tests {
         let expected_event = Event::KeyPress(expected_key);
 
         assert_eq!(6, result.n);
+        assert_eq!(Some(expected_event), result.event);
+    }
+
+    #[test]
+    fn xterm_shift_tab() {
+        let input = b"\x1b[Z";
+        let mut parser = Parser::default();
+        let result = parser.parse(input).unwrap();
+        let expected_key = Key {
+            mods: Modifiers {
+                shift: true,
+                ..Default::default()
+            },
+            ..key_with_codepoint(key::tab)
+        };
+        let expected_event = Event::KeyPress(expected_key);
+
+        assert_eq!(3, result.n);
         assert_eq!(Some(expected_event), result.event);
     }
 
@@ -1693,6 +1738,55 @@ mod tests {
             assert_eq!(None, result.event, "{input:?} is skipped");
             assert_eq!(6, result.n, "{input:?} is consumed whole");
         }
+    }
+
+    /// libvaxis 0.6.0 `test "parse(csi): mouse (negative)"`: `Mouse.col`/`row` are
+    /// `i16`, read with `parseParam(i16, ..)`, so a negative coordinate is kept.
+    #[test]
+    fn csi_mouse_negative() {
+        let mut buf = [0u8; 1];
+        let input = b"\x1b[<35;-50;-100m";
+        let result = parse_csi(input, &mut buf);
+        let expected = Event::Mouse(Mouse {
+            col: -51,
+            row: -101,
+            xoffset: 0,
+            yoffset: 0,
+            button: mouse::Button::None,
+            r#type: mouse::Type::Motion,
+            mods: mouse::Modifiers::default(),
+        });
+
+        assert_eq!(input.len(), result.n);
+        assert_eq!(Some(expected), result.event);
+    }
+
+    /// S-10b (the 36 SGR mouse results N206 left open): the coordinates are
+    /// `parseParam(i16, ..) -| 1`, so `0` is column -1, `-5` is -6, `-0` is -1, the
+    /// i16 floor saturates, and a value past `i16` is refused (null event, sequence
+    /// consumed). Expected values MEASURED with libvaxis 0.6.0 built with Zig 0.16.0
+    /// (S-10b probe `mouse` mode).
+    #[test]
+    fn sgr_mouse_coordinates_are_i16() {
+        let at = |input: &[u8]| {
+            let mut buf = [0u8; 1];
+            let r = parse_csi(input, &mut buf);
+            assert_eq!(input.len(), r.n, "{input:?} is consumed whole");
+            match r.event {
+                Some(Event::Mouse(m)) => Some((m.col, m.row)),
+                None => None,
+                other => panic!("{input:?} decoded to {other:?}"),
+            }
+        };
+        assert_eq!(Some((-1, -1)), at(b"\x1b[<0;0;0M"));
+        assert_eq!(Some((-6, 4)), at(b"\x1b[<0;-5;5M"));
+        assert_eq!(Some((-1, -1)), at(b"\x1b[<0;-0;-0M"));
+        assert_eq!(Some((32766, -32768)), at(b"\x1b[<0;32767;-32768M"));
+        assert_eq!(None, at(b"\x1b[<0;40000;1M"));
+        assert_eq!(None, at(b"\x1b[<0;1;32768M"));
+        assert_eq!(None, at(b"\x1b[<0;-32769;1M"));
+        // Empty coordinates take the default 1, i.e. column / row 0.
+        assert_eq!(Some((0, 0)), at(b"\x1b[<0;;M"));
     }
 
     #[test]

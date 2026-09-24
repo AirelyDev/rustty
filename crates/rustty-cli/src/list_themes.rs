@@ -552,7 +552,7 @@ fn os_name_bytes(name: &std::ffi::OsStr) -> &[u8] {
 //    read thread runs. The Rust port maps this to the PROVEN C3b/loop_-lifecycle
 //    shape: `tty`/`vx` are SEPARATE run-scope locals (stable addresses, never moved
 //    for the read thread's life) and the reference `Preview`'s remaining fields
-//    become a `DrawState` local. `Loop::new(&mut tty, &mut vx)` + the disjoint-field
+//    become a `DrawState` local. `Loop::init(&mut tty, &mut vx)` (`Loop::new` before S-10b) + the disjoint-field
 //    `update`/`draw` free fns are exactly the `loop_::tests::loop_lifecycle`
 //    (Miri-green) idiom — no whole-object `&mut` is ever formed over the aliased
 //    bytes. The fresh `.port/phase-2/mirihar-wire2` harness re-pins this under
@@ -780,7 +780,7 @@ fn run_preview<'a>(
     // raw `*mut Tty`/`*mut Vaxis` and its read thread DEREFS them for the loop's life.
     // Deriving the raw ptrs via `&raw mut` (a `SharedReadWrite` place-projection) and
     // then accessing `tty`/`vx` ONLY through those raw ptrs (TRANSIENT `&mut *ptr`
-    // reborrows) keeps the read thread's tag live — whereas `Loop::new(&mut tty, ..)`
+    // reborrows) keeps the read thread's tag live — whereas `Loop::init(&mut tty, ..)`
     // + a later `tty.writer()` on the LOCAL pushes a `Unique` that POPS the read
     // thread's raw tag off the borrow stack (SB UB; the mirihar reproduces + rejects
     // exactly that shape). So: raw ptrs once, transient reborrows thereafter; the
@@ -789,61 +789,65 @@ fn run_preview<'a>(
     let tty_ptr: *mut Tty = &raw mut tty;
     let vx_ptr: *mut Vaxis<'a> = &raw mut vx;
 
-    // var loop: vaxis.Loop(Event) = .{ .tty = &self.tty, .vaxis = &self.vx };
-    let loop_ = Loop::<Event>::new(tty_ptr, vx_ptr);
-    // try loop.init();
-    loop_.init()?;
-    // try loop.start();
-    loop_.start()?;
+    // var loop: vaxis.Loop(Event) = .init(global.io(), &self.tty, &self.vx);
+    //   (+ the resize handler the reference no longer installs, UD266: see
+    //   `with_preview_loop`)
+    with_preview_loop(tty_ptr, vx_ptr, |loop_| {
+        // try loop.start();
+        loop_.start()?;
 
-    // const writer = self.tty.writer();  (all `tty`/`vx` access via the raw ptrs)
-    // SAFETY (each `unsafe` below): `tty_ptr`/`vx_ptr` are the `&raw mut` of the still-
-    // live run-scope locals; every reborrow is transient (dropped at the call) and
-    // shares the read thread's `SharedReadWrite` parent — no `Unique` outlives a call.
-    // try self.vx.enterAltScreen(writer);
-    unsafe { (*vx_ptr).enter_alt_screen((*tty_ptr).writer()) }?;
-    // try self.vx.setTitle(writer, "👻 Ghostty Theme Preview 👻");
-    // R2 IDENTITY NOTE (Task 16): window title carries the Rustty product
-    // identity (user-visible terminal-window title, not oracle data).
-    unsafe {
-        (*vx_ptr).set_title((*tty_ptr).writer(), "👻 Rustty Theme Preview 👻".as_bytes())
-    }?;
-    // try self.vx.queryTerminal(writer, 1 * std.time.ns_per_s);
-    unsafe { (*vx_ptr).query_terminal((*tty_ptr).writer(), 1_000_000_000) }?;
-    // try self.vx.setMouseMode(writer, true);
-    unsafe { (*vx_ptr).set_mouse_mode((*tty_ptr).writer(), true) }?;
-    // if (self.vx.caps.color_scheme_updates) try self.vx.subscribeToColorSchemeUpdates(writer);
-    if unsafe { (*vx_ptr).caps.color_scheme_updates } {
-        unsafe { (*vx_ptr).subscribe_to_color_scheme_updates((*tty_ptr).writer()) }?;
-    }
-
-    // while (!self.should_quit) {
-    while !st.should_quit {
-        // (the reference's per-iteration arena is the session arena here — see note.)
-        // loop.pollEvent();
-        loop_.poll_event();
-        // while (loop.tryEvent()) |event| try self.update(event, alloc);
-        while let Some(event) = loop_.try_event() {
-            // update(vx, tty, st, event) — transient disjoint reborrows via the raw ptrs.
-            update(
-                unsafe { &mut *vx_ptr },
-                unsafe { &mut *tty_ptr },
-                &mut st,
-                event,
-            )?;
+        // const writer = self.tty.writer();  (all `tty`/`vx` access via the raw ptrs)
+        // SAFETY (each `unsafe` below): `tty_ptr`/`vx_ptr` are the `&raw mut` of the still-
+        // live run-scope locals; every reborrow is transient (dropped at the call) and
+        // shares the read thread's `SharedReadWrite` parent — no `Unique` outlives a call.
+        // try self.vx.enterAltScreen(writer);
+        unsafe { (*vx_ptr).enter_alt_screen((*tty_ptr).writer()) }?;
+        // try self.vx.setTitle(writer, "👻 Ghostty Theme Preview 👻");
+        // R2 IDENTITY NOTE (Task 16): window title carries the Rustty product
+        // identity (user-visible terminal-window title, not oracle data).
+        unsafe {
+            (*vx_ptr).set_title((*tty_ptr).writer(), "👻 Rustty Theme Preview 👻".as_bytes())
+        }?;
+        // try self.vx.queryTerminal(writer, .fromSeconds(1));
+        unsafe {
+            (*vx_ptr).query_terminal((*tty_ptr).writer(), std::time::Duration::from_secs(1))
+        }?;
+        // try self.vx.setMouseMode(writer, true);
+        unsafe { (*vx_ptr).set_mouse_mode((*tty_ptr).writer(), true) }?;
+        // if (self.vx.caps.color_scheme_updates) try self.vx.subscribeToColorSchemeUpdates(writer);
+        if unsafe { (*vx_ptr).caps.color_scheme_updates } {
+            unsafe { (*vx_ptr).subscribe_to_color_scheme_updates((*tty_ptr).writer()) }?;
         }
-        // try self.draw(alloc);
-        draw(unsafe { &mut *vx_ptr }, &mut st);
-        // try self.vx.render(writer);
-        unsafe { (*vx_ptr).render((*tty_ptr).writer()) }?;
-        // try writer.flush();
-        unsafe { (*tty_ptr).writer().flush() }?;
-    }
 
-    // PORT NOTE: join the read thread before teardown (the reference relies on
-    // process exit; Rust must stop/join so no `*mut tty`/`*mut vx` outlives the
-    // locals). `stop` posts a DSR to unblock the blocking read, then joins.
-    loop_.stop();
+        // while (!self.should_quit) {
+        while !st.should_quit {
+            // (the reference's per-iteration arena is the session arena here — see note.)
+            // try loop.pollEvent();
+            loop_.poll_event();
+            // while (try loop.tryEvent()) |event| try self.update(event, alloc);
+            while let Some(event) = loop_.try_event() {
+                // update(vx, tty, st, event) — transient disjoint reborrows via the raw ptrs.
+                update(
+                    unsafe { &mut *vx_ptr },
+                    unsafe { &mut *tty_ptr },
+                    &mut st,
+                    event,
+                )?;
+            }
+            // try self.draw(alloc);
+            draw(unsafe { &mut *vx_ptr }, &mut st);
+            // try self.vx.render(writer);
+            unsafe { (*vx_ptr).render((*tty_ptr).writer()) }?;
+            // try writer.flush();
+            unsafe { (*tty_ptr).writer().flush() }?;
+        }
+
+        // PORT NOTE: join the read thread before teardown (the reference relies on
+        // process exit; Rust must stop/join so no `*mut tty`/`*mut vx` outlives the
+        // locals). `stop` posts a DSR to unblock the blocking read, then joins.
+        loop_.stop();
+        Ok(())
+    })?;
 
     // === Preview.deinit ===  (filtered/text_input drop on their own)
     //   The reader is joined/dead now, so whole-`tty`/`vx` access is sound again.
@@ -852,6 +856,28 @@ fn run_preview<'a>(
     // self.tty.deinit();
     tty.deinit();
     Ok(())
+}
+
+/// `var loop: vaxis.Loop(Event) = .init(global.io(), &self.tty, &self.vx);` — the Loop
+/// `run` drives, pinned on this frame for `body`.
+///
+/// PORT NOTE: reference defect (R13, UD266). Before ghostty `e8525c0fd` ("Update to Zig
+/// 0.16.0") `run` built the Loop with `.{ .tty = &self.tty, .vaxis = &self.vx }` and then
+/// called `try loop.init()`, which installed the SIGWINCH resize handler. libvaxis 0.6.0
+/// renamed that function to `installResizeHandler` and made `init` a constructor, and the
+/// migration replaced both lines with the constructor alone, so at the pin nothing
+/// installs the handler. `run` still handles `.winsize` events (`update`), which on a
+/// terminal without in-band resize reports only come from that handler: resizing the
+/// window no longer re-lays-out the picker there. The port keeps installing it, before
+/// `start`, where the pre-migration code did (vxfw's `App.run` shows the 0.6.0 pattern).
+fn with_preview_loop<'a, R>(
+    tty_ptr: *mut Tty,
+    vx_ptr: *mut Vaxis<'a>,
+    body: impl FnOnce(&Loop<'a, Event>) -> Result<R, Error>,
+) -> Result<R, Error> {
+    let loop_ = Loop::<Event>::init(tty_ptr, vx_ptr);
+    loop_.install_resize_handler()?;
+    body(&loop_)
 }
 
 // fn up(self: *Preview, count: usize) void  — pure integer nav over DrawState.
@@ -1221,25 +1247,28 @@ fn draw<'a>(vx: &mut Vaxis<'a>, st: &mut DrawState<'a>) {
                 // Working around it in this case, but putting this here in
                 // case there are issues.
                 //
-                // PORT NOTE (`d320cd7df`, `.port/phase-3/NON_PORTS.md` §G2):
-                // upstream clamps because libvaxis 0.6.0 widened `Mouse.row`
-                // to a SIGNED type. rustty-vaxis is pinned at 0.5.1, where
-                // `Mouse::row` is `u16` (`crates/rustty-vaxis/src/mouse.rs:19`)
-                // and a negative row is unrepresentable, so the clamp
-                // (`@max(0, ...)`) is a provable no-op here. It becomes live
-                // when the deferred vaxis bump lands — do not drop this note
-                // then, port the clamp.
+                // (`d320cd7df`; `Mouse.row` is `i16` since the libvaxis 0.6.0 port,
+                // parity tail S-10b, so the clamps below are live.)
                 // if (mouse.button == .left and mouse.type == .release) {
                 if mouse.button == Button::Left && mouse.r#type == MouseType::Release {
-                    // const selection = self.window + mouse.row;
-                    let selection = st.window + mouse.row as usize;
+                    // const selection: usize = selection: {
+                    //     var window: i32 = @min(self.window, std.math.maxInt(i32));
+                    //     window += mouse.row;
+                    //     break :selection @max(0, window);
+                    // };
+                    let selection: usize = {
+                        let mut window: i32 =
+                            i32::try_from(st.window.min(i32::MAX as usize)).unwrap();
+                        window += i32::from(mouse.row);
+                        usize::try_from(window.max(0)).unwrap()
+                    };
                     // if (selection < self.filtered.items.len) self.current = selection;
                     if selection < st.filtered.len() {
                         st.current = selection;
                     }
                 }
-                // highlight = mouse.row;
-                highlight = Some(mouse.row as usize);
+                // highlight = @max(0, mouse.row);
+                highlight = Some(usize::try_from(mouse.row.max(0)).unwrap());
             }
         }
     }
@@ -2326,7 +2355,7 @@ fn path_bytes(p: &std::path::Path) -> Vec<u8> {
 //  has_query == true : tokens ← lowercased(buffer) split on ' ' (empty runs
 //    skipped, so an ALL-SPACES buffer yields ZERO tokens but STILL takes this
 //    branch); per theme keep i iff color_pass[i] && zf::rank(name, &tokens,
-//    {to_lower, plain}).is_some() — `zf::rank` IS CALLED even when tokens is empty.
+//    {case_sensitive: false, plain}).is_some() — `zf::rank` IS CALLED even when tokens is empty.
 //  has_query == false: per theme keep i iff color_pass[i]; ranks_out[i] = None.
 // Byte-faithful (`&[u8]`, never `String`).
 fn rank_filtered(
@@ -2361,12 +2390,16 @@ fn rank_filtered(
                     // ".to_lower = true" implies, but this comment serves as a
                     // hint if there's a regression.
                     //
-                    // PORT NOTE (`e8525c0fd`, `.port/phase-3/NON_PORTS.md` §G2):
-                    // the rename to `.case_sensitive = false` is a zf 0.11.0 API
-                    // change. rustty-zf is pinned at 0.10.3, where the field is
-                    // still `to_lower`; the two spellings request the SAME
-                    // case-insensitive ranking. Rename with the deferred bump.
-                    to_lower: true,
+                    // PORT NOTE (zf 0.10.3 -> 0.11.0, `.port/phase-3/NON_PORTS.md` §G2,
+                    // parity tail S-10b): this is the reference pin's call verbatim
+                    // (list_themes.zig:377-386). The rename flipped the DEFAULT
+                    // (`.{}` is now case-sensitive), so the explicit `false` here is
+                    // load-bearing. zf 0.11.0's insensitive mode also lowers the
+                    // needle, which cannot change a result here: the tokens are
+                    // already lowercased above (`allocLowerString`). Measured: over
+                    // the reference's theme names x a query corpus, these ranks are
+                    // bit-identical to the Zig oracle (NEW-FINDINGS N240).
+                    case_sensitive: false,
                     plain: true,
                 },
             );
@@ -2546,7 +2579,7 @@ mod picker_tests {
         let mut ranks = [None; 2];
         let f = rank_filtered(&names, b"   ", true, &pass, &mut ranks);
 
-        // explicit reference: zf::rank(name, &[], {to_lower, plain}) for each name.
+        // explicit reference: zf::rank(name, &[], {case_sensitive: false, plain}) for each name.
         let expect: Vec<usize> = names
             .iter()
             .enumerate()
@@ -2555,7 +2588,7 @@ mod picker_tests {
                     n,
                     &[],
                     RankOptions {
-                        to_lower: true,
+                        case_sensitive: false,
                         plain: true,
                     },
                 )
@@ -2790,7 +2823,7 @@ mod picker_tests {
         let next = vx.screen.read_cell(22, 36).expect("cell");
         assert_eq!(b"a", next.char.grapheme);
         assert!(vx.screen.cursor_vis, "the cursor is shown");
-        assert_eq!((21 + 77, 36), (vx.screen.cursor_col, vx.screen.cursor_row));
+        assert_eq!((21 + 77, 36), (vx.screen.cursor.col, vx.screen.cursor.row));
 
         // Second frame, after `Left`: the frame copy starts from the carried
         // `draw_offset` (23). The cursor (grapheme 99) is still inside the
@@ -2802,7 +2835,7 @@ mod picker_tests {
         assert_eq!(23, st.text_input.draw_offset, "the view did not jump");
         assert_eq!(76, st.text_input.prev_cursor_col);
         assert_eq!(99, st.text_input.prev_cursor_idx);
-        assert_eq!((21 + 76, 36), (vx.screen.cursor_col, vx.screen.cursor_row));
+        assert_eq!((21 + 76, 36), (vx.screen.cursor.col, vx.screen.cursor.row));
     }
 
     /// parity S69-F2: the last two save instructions are the reference's
@@ -3004,6 +3037,128 @@ mod picker_tests {
         tty.deinit();
         std::fs::remove_dir_all(&dir).unwrap();
         println!("r13d: every key handled on an empty filter");
+    }
+
+    /// UD266 (R13): the picker's Loop installs the SIGWINCH resize handler, so a window
+    /// resize reaches `update` as a `.winsize` event on a terminal without in-band resize
+    /// reports. The reference stopped installing it in the Zig 0.16 migration (the
+    /// `loop.init()` it called became libvaxis 0.6.0's constructor). Runs in a re-executed
+    /// copy of this test binary whose controlling terminal is a fresh pty: the child
+    /// builds the Loop with `with_preview_loop` (the function `run_preview` uses), resizes
+    /// its pty, raises SIGWINCH, and waits for the event.
+    #[cfg(unix)]
+    #[test]
+    fn the_preview_loop_delivers_a_resize() {
+        const CHILD: &str = "RUSTTY_S10B_LIST_THEMES_RESIZE_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            resize_child();
+            return;
+        }
+
+        let (mut master, mut slave) = (0, 0);
+        let rc = unsafe {
+            libc::openpty(
+                &mut master,
+                &mut slave,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        assert_eq!(0, rc, "openpty");
+
+        use std::os::fd::FromRawFd as _;
+        use std::os::unix::process::CommandExt as _;
+        let mut cmd = std::process::Command::new(std::env::current_exe().unwrap());
+        cmd.args([
+            "--exact",
+            "list_themes::picker_tests::the_preview_loop_delivers_a_resize",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(CHILD, "1")
+        .stdin(unsafe { std::process::Stdio::from_raw_fd(libc::dup(slave)) });
+        // SAFETY: `setsid` and `ioctl` are async-signal-safe; fd 0 is the slave.
+        unsafe {
+            cmd.pre_exec(|| {
+                libc::setsid();
+                if libc::ioctl(0, libc::TIOCSCTTY as _, 0) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let mut child = cmd
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("re-exec the test binary");
+        unsafe {
+            libc::close(slave);
+        }
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        let status = loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                break Some(status);
+            }
+            if std::time::Instant::now() >= deadline {
+                let _ = child.kill();
+                break None;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+        let out = child.wait_with_output().unwrap();
+        unsafe {
+            libc::close(master);
+        }
+        let log = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let status = status.unwrap_or_else(|| panic!("the child hung:\n{log}"));
+        assert!(status.success(), "the child failed ({status}):\n{log}");
+        assert!(
+            log.contains("ud266: the resize reached the picker's Loop as 33x77"),
+            "the child ran the body:\n{log}"
+        );
+    }
+
+    #[cfg(unix)]
+    fn resize_child() {
+        let mut tty = Tty::init(Vec::new()).expect("the pty is the controlling terminal");
+        let mut vx: Vaxis<'_> = Vaxis::init(VaxisOptions::default());
+        let tty_ptr: *mut Tty = &raw mut tty;
+        let vx_ptr: *mut Vaxis<'_> = &raw mut vx;
+
+        let got = with_preview_loop(tty_ptr, vx_ptr, |loop_| {
+            let ws = libc::winsize {
+                ws_row: 33,
+                ws_col: 77,
+                ws_xpixel: 0,
+                ws_ypixel: 0,
+            };
+            // SAFETY: fd 0 is the pty slave; `ws` is a valid `winsize`.
+            assert_eq!(0, unsafe { libc::ioctl(0, libc::TIOCSWINSZ, &ws) });
+            // SAFETY: signalling ourselves; the handler only writes its self-pipe (UD74).
+            unsafe { libc::kill(libc::getpid(), libc::SIGWINCH) };
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            loop {
+                if let Some(Event::Winsize(w)) = loop_.try_event() {
+                    return Ok(Some((w.rows, w.cols)));
+                }
+                if std::time::Instant::now() >= deadline {
+                    return Ok(None);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        })
+        .unwrap();
+        assert_eq!(Some((33, 77)), got, "no winsize event reached the Loop");
+        drop(vx);
+        tty.deinit();
+        println!("ud266: the resize reached the picker's Loop as 33x77");
     }
 
     // Interactive Loop path — needs a real `/dev/tty` (absent in the sandbox).

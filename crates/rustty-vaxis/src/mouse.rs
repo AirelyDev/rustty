@@ -1,4 +1,4 @@
-//! Port of `libvaxis` `Mouse.zig` (50 LOC) — the `Mouse` value struct + its nested
+//! Port of `libvaxis` `Mouse.zig` (libvaxis 0.6.0: 55 LOC) — the `Mouse` value struct + its nested
 //! `Shape`/`Button`/`Modifiers`/`Type`.
 //!
 //! PORT NOTE: Zig field `type: Type` → Rust `r#type` (verbatim fidelity — `type` is a
@@ -15,8 +15,11 @@
 /// `Mouse` (Zig `testing.expectEqual`); all fields already compare by value.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Mouse {
-    pub col: u16,
-    pub row: u16,
+    // libvaxis 0.6.0: `col: i16`, `row: i16` (0.5.1: `u16`), so a negative
+    // coordinate (a pixel-mouse position left of or above the window, or an SGR
+    // report of 0 or below) is representable.
+    pub col: i16,
+    pub row: i16,
     pub xoffset: u16,
     pub yoffset: u16,
     pub button: Button,

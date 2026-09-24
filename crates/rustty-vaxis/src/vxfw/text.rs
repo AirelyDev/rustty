@@ -364,6 +364,20 @@ impl<'a> SoftwrapIterator<'a> {
             if let Some(max) = self.ctx.max.width {
                 if cur_width as usize + next_width > max as usize {
                     // Trim the word to see if it can fit on a line by itself
+                    //
+                    // PORT NOTE: reference defect (R13, UD265). libvaxis 0.6.0 has
+                    //     const trimmed = std.mem.trimEnd(u8, word, " \t");
+                    // where 0.5.1 had `std.mem.trimLeft` (Zig 0.15 renamed `trimLeft` /
+                    // `trimRight` to `trimStart` / `trimEnd`, and both became `trimEnd`
+                    // here). `word` is the separators BEFORE the next word plus the word
+                    // (`nextWrap` stops at the first separator after it), so it never ends
+                    // in whitespace: `trimEnd` removes nothing, `trimmed_bytes` is always
+                    // 0, and a word that fits a line by itself once its leading space is
+                    // dropped is judged too long and split mid-word. MEASURED (Zig 0.16.0,
+                    // libvaxis 0.6.0, max width 5): "ab hello" wraps as "ab he" / "llo"
+                    // instead of "ab" / "hello". The comment above and the byte count
+                    // below both describe removing the LEADING separators, so the port keeps
+                    // trimming the start.
                     let trimmed = trim_left(word, b" \t");
                     let trimmed_bytes = word.len() - trimmed.len();
                     // The number of bytes we trimmed is equal to the reduction in length
@@ -434,7 +448,7 @@ fn index_of_none_pos(buf: &[u8], start: usize, set: &[u8]) -> Option<usize> {
     (start..buf.len()).find(|&i| !set.contains(&buf[i]))
 }
 
-/// `std.mem.trimRight(u8, buf, set)`
+/// `std.mem.trimEnd(u8, buf, set)` (0.5.1: `trimRight`)
 fn trim_right<'b>(buf: &'b [u8], set: &[u8]) -> &'b [u8] {
     let mut end = buf.len();
     while end > 0 && set.contains(&buf[end - 1]) {
@@ -443,7 +457,7 @@ fn trim_right<'b>(buf: &'b [u8], set: &[u8]) -> &'b [u8] {
     &buf[..end]
 }
 
-/// `std.mem.trimLeft(u8, buf, set)`
+/// `std.mem.trimStart(u8, buf, set)` (0.5.1: `trimLeft`; see UD265)
 fn trim_left<'b>(buf: &'b [u8], set: &[u8]) -> &'b [u8] {
     let mut start = 0;
     while start < buf.len() && set.contains(&buf[start]) {
@@ -576,6 +590,32 @@ mod tests {
         let second = iter.next();
         assert_eq!(second.as_ref().unwrap().bytes, b" world");
         assert_eq!(second.as_ref().unwrap().width, 6);
+
+        assert!(iter.next().is_none());
+    }
+
+    /// UD265 (R13): a word that fits a line by itself once its leading space is dropped
+    /// wraps whole. libvaxis 0.6.0 (`trimEnd` where `trimLeft` was meant) splits it:
+    /// "ab he" / "llo" (MEASURED with Zig 0.16.0).
+    #[test]
+    fn softwrap_word_that_fits_alone_after_a_space_wraps_whole() {
+        DrawContext::init(Method::Unicode);
+        let arena = VxfwArena::new();
+        let ctx = ctx_with(
+            &arena,
+            MaxSize {
+                width: Some(5),
+                height: Some(10),
+            },
+        );
+        let mut iter = SoftwrapIterator::init(b"ab hello", ctx);
+        let first = iter.next();
+        assert_eq!(first.as_ref().unwrap().bytes, b"ab");
+        assert_eq!(first.as_ref().unwrap().width, 2);
+
+        let second = iter.next();
+        assert_eq!(second.as_ref().unwrap().bytes, b"hello");
+        assert_eq!(second.as_ref().unwrap().width, 5);
 
         assert!(iter.next().is_none());
     }

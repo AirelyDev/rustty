@@ -7,13 +7,15 @@
 // PORT NOTE: SCOPE (XEV_BLUEPRINT §0): on macOS AND on FreeBSD `xev.Dynamic` IS the
 // static kqueue `Api()` (the single-candidate `Backend.candidates()` collapses
 // `dynamic.zig` at comptime — `backend.zig:20,38`), so this is the concrete flat
-// loop on both. The module is `#[cfg(any(target_os = "macos", target_os =
-// "freebsd"))]` (W2D/F-004): the reference's own `switch (builtin.os.tag)` arms —
+// loop on both. The module is `#[cfg(any(target_os = "macos", target_os = "ios",
+// target_os = "visionos", target_os = "freebsd"))]` (W2D/F-004; the Darwin set
+// widened 2026-08-26, `318af0f6`): the reference's own `switch (builtin.os.tag)` arms —
 // the FreeBSD `posix.Kevent` fast paths (`kqueue.zig:1863/1935/1876`), the
 // `NOTE_EXIT_FLAGS` split (`:45-49`), the `isDarwin()`-only machport op
 // (`:1674/1081`) and the non-Darwin `Wakeup` stub (`:1488-1510`) — are ported as
-// real `#[cfg]` arms rather than elided. `darwin.rs`/mach stays macOS-only, exactly
-// as `builtin.os.tag.isDarwin()` gates it in the reference.
+// real `#[cfg]` arms rather than elided. `darwin.rs`/mach stays Darwin-only
+// (`macos + ios + visionos`), exactly as `builtin.os.tag.isDarwin()` gates it in
+// the reference.
 //
 // PORT NOTE (the three load-bearing disciplines, §2):
 //  - RAW POINTERS end-to-end: the `Loop` holds `*mut Completion` into caller
@@ -28,7 +30,7 @@
 //    sound (documented at each impl).
 //  - hand-written `Default` for `Completion` (§2 F3): fn-ptr + raw-ptr fields.
 
-// (module is `#[cfg(any(target_os = "macos", target_os = "freebsd"))]`-gated in lib.rs)
+// (module is `#[cfg(any(target_os = "macos", target_os = "ios", target_os = "visionos", target_os = "freebsd"))]`-gated in lib.rs)
 #![allow(non_upper_case_globals)]
 // PORT NOTE: `posix.fd_t`/`socket_t`/`pid_t`/`socklen_t` keep their Zig/C snake_case
 // type names (they mirror `std.posix` identifiers, R2 identifier-fidelity).
@@ -2512,13 +2514,20 @@ impl Wakeup {
 //   // TODO: We should use eventfd for FreeBSD. Until this is
 //   // implemented, loop wakeup will crash on BSD.
 //
-// BLAST RADIUS (adversary-verified): this panic is reachable ONLY through an
-// explicit `Loop::wakeup()`. The pool-completion path does NOT reach it —
-// `thread_perform`'s wakeup call sits inside `if (comptime
-// builtin.target.os.tag.isDarwin())` (`kqueue.zig:965-968`), so on FreeBSD the
-// worker just pushes to `thread_pool_completions` and the loop picks it up on
-// the next tick. Fixing this with a real eventfd wakeup would be an
-// R1-divergence from upstream libxev; it is ledgered in DEFERRALS.md instead.
+// REACHABILITY (S-13, UD275 / N255, re-verified against libxev 9ce8e8e6 pinned
+// by ghostty@20abdb50a): this panic is UNREACHABLE, so R13 does not apply and
+// the stub stays faithful (R1). Its only caller is `Loop.wakeup`, which is
+// `fn wakeup` — NOT `pub` — in `kqueue.zig:973`, so nothing outside kqueue.zig
+// can call it; inside kqueue.zig its one call site is `thread_perform`'s,
+// behind `if (comptime builtin.target.os.tag.isDarwin())` (`:965-968`). On
+// FreeBSD the pool worker just pushes to `thread_pool_completions` and the loop
+// picks it up on its next tick. `xev.Async` does not route through it either:
+// on non-Darwin kqueue it is `AsyncEventFd` (`watcher/async.zig:22-25`), its
+// own eventfd registered with the loop. Ghostty never names `Loop.wakeup` (it is
+// not in the static kqueue `Api()` nor in `dynamic.zig`), and never creates an
+// `xev.ThreadPool`. In this port `Loop::wakeup` is likewise private and has no
+// caller on any target (the Darwin pool path notifies the cached
+// `task_wakeup` handle instead). Test: `tests::freebsd_wakeup_stub_is_the_reference_panic`.
 #[cfg(target_os = "freebsd")]
 struct Wakeup;
 
@@ -3238,6 +3247,26 @@ mod tests {
         // The disarm sites zero it back; the tick loops then skip the event.
         kev_set_udata(&mut k, 0);
         assert_eq!(kev_udata(&k), 0);
+    }
+
+    /// S-13 (UD275, N255): the non-Darwin `Wakeup` is the reference's own
+    /// `@panic("wakeup not implemented on this platform")` stub
+    /// (`kqueue.zig:1488-1510`), kept faithful because no caller reaches it (see
+    /// the PORT NOTE on the FreeBSD `Wakeup`). This pins the ported shape: `init`
+    /// and `setup` succeed and register nothing, and `wakeup` is the panic, so a
+    /// future caller that starts reaching it fails here on a FreeBSD host
+    /// instead of in the field. rustty-added (the reference has no such test).
+    #[cfg(target_os = "freebsd")]
+    #[test]
+    #[should_panic(expected = "wakeup not implemented on this platform")]
+    fn freebsd_wakeup_stub_is_the_reference_panic() {
+        let mut w = Wakeup::init().expect("the FreeBSD Wakeup::init is infallible");
+        let kq = unsafe { libc::kqueue() };
+        assert!(kq >= 0, "kqueue() failed");
+        w.setup(kq)
+            .expect("the FreeBSD Wakeup::setup registers nothing");
+        unsafe { libc::close(kq) };
+        let _ = w.wakeup();
     }
 
     fn read_slice(buf: &mut [u8]) -> ReadBuffer {
@@ -4192,6 +4221,10 @@ mod tests {
     #[cfg_attr(
         miri,
         ignore = "MIRI EXCEPTION (rustty-xev C3, .port/phase-2/MIRI_EXCEPTIONS.md): live kqueue/kevent64/mach/socket syscalls -- Miri cannot execute foreign functions; runs natively (ci.sh HARD `cargo test --workspace`) + the G6 ASan companion arm (check_leaks.sh `live_ffi_unit_filters`, re-verified 2026-07-31: 31 tests, 0 findings)."
+    )]
+    #[cfg_attr(
+        not(target_os = "macos"),
+        ignore = "SkipZigTest: upstream runs `kqueue: mach port` on .macos only (R14)"
     )]
     fn kqueue_mach_port() {
         // if (builtin.os.tag != .macos) return error.SkipZigTest;

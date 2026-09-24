@@ -108,6 +108,22 @@ fn version_plus() {
             "libxev line missing/wrong: {stdout}"
         );
     }
+    // S-13 (N257; DEFERRALS FreeBSD row item 6): what the reference prints on
+    // FreeBSD. `renderer/backend.zig:20-21` gives every non-Darwin native target
+    // `.opengl`, and libxev's `backend.zig:20,38` makes kqueue FreeBSD's only
+    // candidate, so `global.xev` (`xev.Dynamic`) collapses to the static kqueue
+    // `Api()` (`dynamic.zig:39`) and `{t}` of its `backend` prints `kqueue`.
+    #[cfg(target_os = "freebsd")]
+    {
+        assert!(
+            stdout.contains("  - renderer      : renderer.generic.Renderer(renderer.OpenGL)"),
+            "renderer line missing/wrong: {stdout}"
+        );
+        assert!(
+            stdout.contains("  - libxev        : kqueue"),
+            "libxev line missing/wrong: {stdout}"
+        );
+    }
 }
 
 // `rustty --version` -> exit 0 (special-case, same output as `+version`).

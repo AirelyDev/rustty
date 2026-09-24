@@ -1,13 +1,22 @@
-//! `uucode/src/grapheme.zig` — the UAX #29 grapheme-break `Iterator` + the full
-//! GB3..GB999 rule ladder (`computeGraphemeBreak`) + the 1620-entry precompute
-//! (VAXIS_C1B_DESIGN.md §7). Ported line-for-line; every rule comment preserved (R1).
+//! `uucode/src/grapheme.zig` (uucode 2826a37a, the revision ghostty@20abdb50a wires into
+//! libvaxis 0.6.0) — the UAX #29 grapheme-break `Iterator` + the full GB3..GB999 rule
+//! ladder (`computeGraphemeBreak`) + the 2000-entry precompute. Ported line-for-line;
+//! every rule comment preserved (R1).
 //!
-//! The Zig `CustomIterator` is generic over the code-point iterator via a comptime
-//! type param; here [`Iterator`] is generic over the [`CodePointIterator`] trait
-//! (`.next()`/`.i`), monomorphized by vaxis to `utf8::Iterator`.
+//! SUBSET: vaxis reaches only `Iterator(utf8.Iterator)` (`nextCodePoint`, `.code_point`,
+//! `.is_break`, `.i`), so the `NoControl` family, the `wcwidth*` functions and their tests
+//! (grapheme.zig:750-1512) are not ported here; Ghostty's own copy of those lives in
+//! `rustty-unicode`.
+//!
+//! The Zig `CustomIterator` is generic over the code-point iterator, the break enum, the
+//! state enum, the field and the break function (comptime params); vaxis only ever
+//! instantiates `Iterator(utf8.Iterator)` = `CustomIterator(.., types.GraphemeBreak,
+//! BreakState, .grapheme_break, precomputedGraphemeBreak)`, so [`Iterator`] is generic
+//! over the [`CodePointIterator`] trait only (`.next()`/`.i`).
 
 use super::get;
 use super::types::GraphemeBreak;
+use super::utf8;
 
 /// The code-point source the grapheme `Iterator` walks (the `.next()`/`.i` surface the
 /// Zig `CustomIterator` reads off its iterator field).
@@ -18,14 +27,24 @@ pub trait CodePointIterator {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct IteratorResult {
-    pub cp: u32,
+    pub code_point: u32,
     pub is_break: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Grapheme {
+    pub start: usize,
+    pub end: usize,
 }
 
 #[derive(Clone)]
 pub struct Iterator<I: CodePointIterator + Clone> {
-    pub state: BreakState,
+    // This "i" is part of the documented API of this iterator, pointing to
+    // the current location of the iterator in the underlying bytes (the
+    // `i` of the CodePointIterator).
     pub i: usize,
+
+    pub state: BreakState,
     next_cp_it: I,
     next_cp: Option<u32>,
     next_gb: GraphemeBreak,
@@ -40,8 +59,8 @@ impl<I: CodePointIterator + Clone> Iterator<I> {
         Self {
             state: BreakState::Default,
             i,
-            next_gb: if let Some(cp) = next_cp {
-                get::grapheme_break(cp)
+            next_gb: if let Some(code_point) = next_cp {
+                get::grapheme_break(code_point)
             } else {
                 GraphemeBreak::Other
             },
@@ -50,10 +69,7 @@ impl<I: CodePointIterator + Clone> Iterator<I> {
         }
     }
 
-    // Faithful port of Zig `CustomIterator.next`; not the std `Iterator` trait
-    // (this type also exposes `peek`/`next_break` + is generic over its own trait).
-    #[allow(clippy::should_implement_trait)]
-    pub fn next(&mut self) -> Option<IteratorResult> {
+    pub fn next_code_point(&mut self) -> Option<IteratorResult> {
         self.next_cp?;
 
         let cp1 = self.next_cp.unwrap();
@@ -64,32 +80,45 @@ impl<I: CodePointIterator + Clone> Iterator<I> {
         if let Some(cp2) = self.next_cp {
             self.next_gb = get::grapheme_break(cp2);
             let is_break = precomputed_grapheme_break(gb1, self.next_gb, &mut self.state);
-            Some(IteratorResult { cp: cp1, is_break })
+            Some(IteratorResult {
+                code_point: cp1,
+                is_break,
+            })
         } else {
             Some(IteratorResult {
-                cp: cp1,
+                code_point: cp1,
                 is_break: true,
             })
         }
     }
 
-    pub fn peek(&self) -> Option<IteratorResult> {
+    pub fn peek_code_point(&self) -> Option<IteratorResult> {
         let mut it = self.clone();
-        it.next()
+        it.next_code_point()
     }
 
-    pub fn next_break(&mut self) -> Option<usize> {
-        while let Some(result) = self.next() {
+    pub fn next_grapheme(&mut self) -> Option<Grapheme> {
+        let start = self.i;
+        while let Some(result) = self.next_code_point() {
             if result.is_break {
-                return Some(self.i);
+                return Some(Grapheme { start, end: self.i });
             }
         }
         None
     }
+
+    pub fn peek_grapheme(&self) -> Option<Grapheme> {
+        let mut it = self.clone();
+        it.next_grapheme()
+    }
 }
 
-/// `BreakState` `enum(u3)` — 5 variants, discriminants pinned to grapheme.zig:157-163.
-/// Indexes the precompute's `state` dimension (`state*324 + …`).
+pub fn utf8_iterator(bytes: &[u8]) -> Iterator<utf8::Iterator<'_>> {
+    Iterator::init(utf8::Iterator::init(bytes))
+}
+
+/// `BreakState` `enum(u3)` — 5 variants, discriminants pinned to grapheme.zig:197-203.
+/// Indexes the precompute's `state` dimension (`state*400 + …`).
 #[repr(u8)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum BreakState {
@@ -115,22 +144,6 @@ impl BreakState {
     }
 }
 
-const fn is_indic_conjunct_break_extend(gb: GraphemeBreak) -> bool {
-    matches!(
-        gb,
-        GraphemeBreak::IndicConjunctBreakExtend | GraphemeBreak::Zwj
-    )
-}
-
-const fn is_extend(gb: GraphemeBreak) -> bool {
-    matches!(
-        gb,
-        GraphemeBreak::Zwnj
-            | GraphemeBreak::IndicConjunctBreakExtend
-            | GraphemeBreak::IndicConjunctBreakLinker
-    )
-}
-
 pub const fn compute_grapheme_break(
     gb1: GraphemeBreak,
     gb2: GraphemeBreak,
@@ -152,7 +165,9 @@ pub const fn compute_grapheme_break(
                 | GraphemeBreak::IndicConjunctBreakLinker // extend
                 | GraphemeBreak::Zwnj // extend
                 | GraphemeBreak::Zwj
-                | GraphemeBreak::ExtendedPictographic => {}
+                | GraphemeBreak::ExtendedPictographic
+                | GraphemeBreak::EmojiModifierBase
+                | GraphemeBreak::EmojiModifier => {}
 
                 _ => *state = BreakState::Default,
             }
@@ -163,7 +178,9 @@ pub const fn compute_grapheme_break(
                 | GraphemeBreak::IndicConjunctBreakLinker // extend
                 | GraphemeBreak::Zwnj // extend
                 | GraphemeBreak::Zwj
-                | GraphemeBreak::ExtendedPictographic => {}
+                | GraphemeBreak::ExtendedPictographic
+                | GraphemeBreak::EmojiModifierBase
+                | GraphemeBreak::EmojiModifier => {}
 
                 _ => *state = BreakState::Default,
             }
@@ -254,7 +271,7 @@ pub const fn compute_grapheme_break(
 
         // In normal operation, we'll be in this state, but
         // buildGraphemeBreakTable iterates all states.
-        //std.debug.assert(state.* == .default);
+        //inlineAssert(state.* == .default);
 
         if is_indic_conjunct_break_extend(gb2) {
             *state = BreakState::IndicConjunctBreakConsonant;
@@ -297,28 +314,38 @@ pub const fn compute_grapheme_break(
         }
     }
 
-    // GB11: Emoji ZWJ sequence
-    if matches!(gb1, GraphemeBreak::ExtendedPictographic) {
+    // GB11: Emoji ZWJ sequence and Emoji modifier sequence
+    if is_extended_pictographic(gb1) {
         // start of sequence:
 
         // In normal operation, we'll be in this state, but
         // buildGraphemeBreakTable iterates all states.
-        // std.debug.assert(state.* == .default);
+        // inlineAssert(state.* == .default);
 
         if is_extend(gb2) || matches!(gb2, GraphemeBreak::Zwj) {
             *state = BreakState::ExtendedPictographic;
             return false;
         }
+
+        // The `emoji_modifier_sequence` case is described in the comment for
+        // `isExtend` above, from UTS #51.
+        if matches!(gb1, GraphemeBreak::EmojiModifierBase)
+            && matches!(gb2, GraphemeBreak::EmojiModifier)
+        {
+            *state = BreakState::ExtendedPictographic;
+            return false;
+        }
+
         // else, not an Emoji ZWJ sequence
     } else if matches!(*state, BreakState::ExtendedPictographic) {
         // continue or end sequence:
 
-        if is_extend(gb1) && (is_extend(gb2) || matches!(gb2, GraphemeBreak::Zwj)) {
+        if (is_extend(gb1) || matches!(gb1, GraphemeBreak::EmojiModifier))
+            && (is_extend(gb2) || matches!(gb2, GraphemeBreak::Zwj))
+        {
             // continue extend* ZWJ sequence
             return false;
-        } else if matches!(gb1, GraphemeBreak::Zwj)
-            && matches!(gb2, GraphemeBreak::ExtendedPictographic)
-        {
+        } else if matches!(gb1, GraphemeBreak::Zwj) && is_extended_pictographic(gb2) {
             // ZWJ -> end of sequence
             *state = BreakState::Default;
             return false;
@@ -350,15 +377,54 @@ pub const fn compute_grapheme_break(
     true
 }
 
-// The precompute: 5 BreakState x 18 GraphemeBreak x 18 GraphemeBreak = 1620 entries.
-const N_GB: usize = GraphemeBreak::COUNT; // 18
-const N_GB_2: usize = N_GB * N_GB; // 324
-const N_STATE: usize = BreakState::COUNT; // 5
-const N: usize = N_STATE * N_GB_2; // 1620
+const fn is_indic_conjunct_break_extend(gb: GraphemeBreak) -> bool {
+    matches!(
+        gb,
+        GraphemeBreak::IndicConjunctBreakExtend | GraphemeBreak::Zwj
+    )
+}
 
-// grapheme.zig:514 asserts `@sizeOf(table) == 1620` — there the packed `Result`
-// (bool + u3 state) is 1 byte, so bytes == entries. We pin the entry COUNT instead.
-const _: () = assert!(N == 1620);
+// Despite `emoji_modifier` being `extend` according to
+// GraphemeBreakProperty.txt and UAX #29 (in addition to tests in
+// GraphemeBreakTest.txt), UTS #51 states: `emoji_modifier_sequence :=
+// emoji_modifier_base emoji_modifier` in ED-13 (emoji modifier sequence) under
+// 1.4.4 (Emoji Modifiers), and: "When used alone, the default representation
+// of these modifier characters is a color swatch... To have an effect on an
+// emoji, an emoji modifier must immediately follow that base emoji
+// character." in 2.4 (Diversity). Additionally it states "Skin tone
+// modifiers and hair components should be
+// displayed even in isolation" in ED-20 (basic emoji set) under 1.4.6 (Emoji
+// Sets). See this revision of UAX #29 when the grapheme cluster break
+// properties were simplified to remove `E_Base` and `E_Modifier`:
+// http://www.unicode.org/reports/tr29/tr29-32.html
+// Here we decide to diverge from the grapheme break spec, which is allowed
+// under "tailored" grapheme clusters.
+const fn is_extend(gb: GraphemeBreak) -> bool {
+    matches!(
+        gb,
+        GraphemeBreak::Zwnj
+            | GraphemeBreak::IndicConjunctBreakExtend
+            | GraphemeBreak::IndicConjunctBreakLinker
+    )
+}
+
+const fn is_extended_pictographic(gb: GraphemeBreak) -> bool {
+    matches!(
+        gb,
+        GraphemeBreak::ExtendedPictographic | GraphemeBreak::EmojiModifierBase
+    )
+}
+
+// The precompute: 5 BreakState x 20 GraphemeBreak x 20 GraphemeBreak = 2000 entries.
+const N_GB: usize = GraphemeBreak::COUNT; // 20
+const N_GB_2: usize = N_GB * N_GB; // 400
+const N_STATE: usize = BreakState::COUNT; // 5
+const N: usize = N_STATE * N_GB_2; // 2000
+
+// grapheme.zig:607 asserts `@sizeOf(@TypeOf(table)) == 2000` ("5 BreakState fields x
+// (20 GraphemeBreak fields)^2 = 2000") — there the packed `Result` (bool + u3 state) is 1
+// byte, so bytes == entries. We pin the entry COUNT instead.
+const _: () = assert!(N == 2000);
 
 #[derive(Clone, Copy)]
 struct TableResult {
@@ -421,88 +487,127 @@ pub fn is_break(cp1: u32, cp2: u32, state: &mut BreakState) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::uucode::utf8;
+
+    /// One `nextCodePoint` step and its two `expect`s (`result.?.code_point == cp`,
+    /// `result.?.is_break == is_break`).
+    #[track_caller]
+    fn step(it: &mut Iterator<utf8::Iterator<'_>>, cp: u32, is_break: bool) {
+        let result = it.next_code_point().expect("result.?");
+        assert_eq!(result.code_point, cp);
+        assert_eq!(result.is_break, is_break);
+    }
 
     #[test]
-    fn iterator_next_peek() {
-        let str = "👩‍🍼😀";
+    fn iterator_next_code_point_peek_code_point() {
+        let str = "👩🏽‍🚀🇨🇭";
         let mut it = Iterator::init(utf8::Iterator::init(str.as_bytes()));
         assert_eq!(it.i, 0);
 
-        let mut result = it.peek();
+        let mut result = it.peek_code_point();
         assert_eq!(it.i, 0);
-        assert!(result.is_some());
-        assert_eq!(result.unwrap().cp, 0x1F469); // 👩
+        assert_eq!(result.unwrap().code_point, 0x1F469); // 👩
         assert!(!result.unwrap().is_break);
 
-        result = it.next();
+        result = it.next_code_point();
         assert_eq!(it.i, 4);
-        assert!(result.is_some());
-        assert_eq!(result.unwrap().cp, 0x1F469); // 👩
+        assert_eq!(result.unwrap().code_point, 0x1F469); // 👩
         assert!(!result.unwrap().is_break);
 
-        result = it.next();
-        assert!(result.is_some());
-        assert_eq!(result.unwrap().cp, 0x200D); // Zero width joiner
+        result = it.next_code_point();
+        assert_eq!(result.unwrap().code_point, 0x1F3FD); // 🏽
         assert!(!result.unwrap().is_break);
 
-        result = it.next();
-        assert!(result.is_some());
-        assert_eq!(result.unwrap().cp, 0x1F37C); // 🍼
+        result = it.next_code_point();
+        assert_eq!(result.unwrap().code_point, 0x200D); // Zero width joiner
+        assert!(!result.unwrap().is_break);
+
+        result = it.peek_code_point();
+        assert_eq!(result.unwrap().code_point, 0x1F680); // 🚀
         assert!(result.unwrap().is_break);
 
-        result = it.peek();
-        assert!(result.is_some());
-        assert_eq!(result.unwrap().cp, 0x1F600); // 😀
+        result = it.next_code_point();
+        assert_eq!(it.i, 15);
+        assert_eq!(result.unwrap().code_point, 0x1F680); // 🚀
         assert!(result.unwrap().is_break);
+        assert_eq!(&str.as_bytes()[..it.i], "👩🏽‍🚀".as_bytes());
 
-        result = it.next();
+        result = it.next_code_point();
+        assert_eq!(result.unwrap().code_point, 0x1F1E8); // Regional Indicator "C"
+        assert!(!result.unwrap().is_break);
+
+        result = it.next_code_point();
         assert_eq!(it.i, str.len());
-        assert!(result.is_some());
-        assert_eq!(result.unwrap().cp, 0x1F600); // 😀
+        assert_eq!(result.unwrap().code_point, 0x1F1ED); // Regional Indicator "H"
         assert!(result.unwrap().is_break);
 
-        assert!(it.peek().is_none());
-        assert!(it.next().is_none());
-        assert!(it.next().is_none());
+        assert!(it.peek_code_point().is_none());
+        assert!(it.next_code_point().is_none());
+        assert!(it.next_code_point().is_none());
     }
 
     #[test]
-    fn iterator_next_break() {
-        let str = "👩‍🍼😀";
-        let mut it = Iterator::init(utf8::Iterator::init(str.as_bytes()));
+    fn utf8_iterator_next_grapheme_peek_grapheme() {
+        let str = "👩🏽‍🚀🇨🇭👨🏻‍🍼";
+        let s = str.as_bytes();
+        let mut it = utf8_iterator(s);
+        assert_eq!(it.i, 0);
 
-        assert_eq!(it.next_break(), Some(11));
-        assert_eq!(it.i, 11);
+        let mut result = it.peek_grapheme();
+        assert_eq!(result.unwrap().start, 0);
+        assert_eq!(result.unwrap().end, 15);
+        assert_eq!(it.i, 0);
 
-        let result = it.peek();
-        assert!(result.is_some());
-        assert_eq!(result.unwrap().cp, 0x1F600); // 😀
-        assert!(result.unwrap().is_break);
+        result = it.next_grapheme();
+        assert_eq!(result.unwrap().start, 0);
+        assert_eq!(result.unwrap().end, 15);
+        assert_eq!(it.i, 15);
+        assert_eq!(
+            &s[result.unwrap().start..result.unwrap().end],
+            "👩🏽‍🚀".as_bytes()
+        );
 
-        let start_i = it.i;
-        assert_eq!(it.next_break(), Some(str.len()));
-        assert_eq!(it.i, str.len());
-        assert_eq!(&str.as_bytes()[start_i..it.i], "😀".as_bytes());
-        assert_eq!(it.next_break(), None);
-        assert_eq!(it.next_break(), None);
+        result = it.next_grapheme();
+        assert_eq!(result.unwrap().start, 15);
+        assert_eq!(result.unwrap().end, 23);
+        assert_eq!(it.i, 23);
+        assert_eq!(
+            &s[result.unwrap().start..result.unwrap().end],
+            "🇨🇭".as_bytes()
+        );
+
+        result = it.peek_grapheme();
+        assert_eq!(result.unwrap().start, 23);
+        assert_eq!(result.unwrap().end, s.len());
+        assert_eq!(
+            &s[result.unwrap().start..result.unwrap().end],
+            "👨🏻‍🍼".as_bytes()
+        );
+
+        result = it.next_grapheme();
+        assert_eq!(result.unwrap().start, 23);
+        assert_eq!(result.unwrap().end, s.len());
+        assert_eq!(it.i, s.len());
+
+        assert!(it.peek_grapheme().is_none());
+        assert!(it.next_grapheme().is_none());
+        assert!(it.next_grapheme().is_none());
     }
 
-    // ---- GraphemeBreakTest.txt conformance (design §7/§10.1) ----
+    // ---- GraphemeBreakTest.txt conformance ----
 
     fn test_parse_cp(s: &str) -> u32 {
         u32::from_str_radix(s, 16).unwrap()
     }
 
-    /// `Ucd.trim` — strip a `#`-comment then whitespace-trim.
+    /// `components.trim` — strip a `#`-comment then trim `" \t\r"`.
     fn test_trim(line: &str) -> &str {
         match line.find('#') {
-            Some(idx) => line[..idx].trim_matches([' ', '\t']),
-            None => line.trim_matches([' ', '\t']),
+            Some(idx) => line[..idx].trim_matches([' ', '\t', '\r']),
+            None => line.trim_matches([' ', '\t', '\r']),
         }
     }
 
-    fn test_grapheme_break(get_actual: fn(u32, u32, &mut BreakState) -> bool) {
+    fn test_grapheme_break(get_actual_is_break: fn(u32, u32, &mut BreakState) -> bool) {
         // Embedded at compile time (not read at runtime) so the UAX #29
         // conformance corpus also runs under Miri, which cannot do file I/O
         // under isolation (the canonical G6 gate runs `cargo +nightly miri
@@ -518,6 +623,9 @@ mod tests {
         // ever resolved to an empty or comment-only file. Count the cases actually
         // driven and assert a non-zero floor below.
         let mut cases = 0usize;
+        // S-10b: the emoji-modifier divergence below must actually be exercised by the
+        // corpus, or the tailoring it documents is untested.
+        let mut modifier_overrides = 0usize;
         for (i, line) in content.split('\n').enumerate() {
             let line_num = i + 1;
             let trimmed = test_trim(line);
@@ -525,52 +633,66 @@ mod tests {
                 continue;
             }
 
-            let mut parts = trimmed.split(' ');
+            let mut parts = trimmed.split(' ').peekable();
             let start = parts.next().unwrap();
             assert_eq!(start, "÷");
 
             cases += 1;
             let mut state = BreakState::Default;
             let mut cp1 = test_parse_cp(parts.next().unwrap());
+            let mut gb1 = get::grapheme_break(cp1);
             let mut expected_str = parts.next().unwrap();
             let mut cp2 = test_parse_cp(parts.next().unwrap());
+            let mut gb2 = get::grapheme_break(cp2);
             let mut next_expected_str = parts.next().unwrap();
 
             loop {
-                let gb1 = get::grapheme_break(cp1);
-                let gb2 = get::grapheme_break(cp2);
-                let expected = expected_str == "÷";
-                let actual = get_actual(cp1, cp2, &mut state);
-                assert!(expected || expected_str == "×");
-                if actual != expected {
+                let mut expected_is_break = expected_str == "÷";
+                let actual_is_break = get_actual_is_break(cp1, cp2, &mut state);
+                assert!(expected_is_break || expected_str == "×");
+                // GraphemeBreakTest.txt has tests for UAX #29 treating emoji
+                // modifier as extend, always, but we diverge from that (see
+                // comment above `isExtend`).
+                if gb2 == GraphemeBreak::EmojiModifier && gb1 != GraphemeBreak::EmojiModifierBase {
+                    assert!(!expected_is_break);
+                    expected_is_break = true;
+                    modifier_overrides += 1;
+                }
+                if actual_is_break != expected_is_break {
                     eprintln!(
                         "line={line_num} cp1={cp1:x}, cp2={cp2:x}: gb1={gb1:?}, gb2={gb2:?}, \
-                         state={state:?}, expected={expected}, actual={actual}"
+                         state={state:?}, expected={expected_is_break}, actual={actual_is_break}"
                     );
                     success = false;
                 }
 
-                if parts.clone().next().is_none() {
+                if parts.peek().is_none() {
                     break;
                 }
 
                 cp1 = cp2;
+                gb1 = gb2;
                 expected_str = next_expected_str;
                 cp2 = test_parse_cp(parts.next().unwrap());
+                gb2 = get::grapheme_break(cp2);
                 next_expected_str = parts.next().unwrap();
             }
 
             assert_eq!(next_expected_str, "÷");
         }
 
-        // UAX #29 `GraphemeBreakTest.txt` for Unicode 16.0.0 carries 1093 non-comment
+        // UAX #29 `GraphemeBreakTest.txt` for Unicode 17.0.0 carries 766 non-comment
         // cases. Pin a floor (not the exact number, so a legitimate Unicode bump does not
         // spuriously fail) that is high enough that a truncated or wrong corpus is caught.
         assert!(
-            cases >= 1000,
-            "UAX #29 conformance corpus drove only {cases} cases — expected >= 1000. \
+            cases >= 700,
+            "UAX #29 conformance corpus drove only {cases} cases — expected >= 700. \
              The GraphemeBreakTest.txt embed is empty, truncated or misparsed, which \
              would make this test vacuously green."
+        );
+        assert!(
+            modifier_overrides > 0,
+            "the emoji-modifier tailoring was never exercised by the corpus"
         );
 
         assert!(success);
@@ -590,5 +712,65 @@ mod tests {
     #[test]
     fn grapheme_break_test_is_break() {
         test_grapheme_break(is_break);
+    }
+
+    #[test]
+    fn long_emoji_zwj_sequences() {
+        // 👩‍👩‍👧‍👦 (family: woman, woman, girl, boy)
+        let mut it = utf8_iterator(
+            "\u{1F469}\u{200D}\u{1F469}\u{200D}\u{1F467}\u{200D}\u{1F466}_".as_bytes(),
+        );
+        step(&mut it, 0x1F469, false); // 👩
+        step(&mut it, 0x200D, false);
+        step(&mut it, 0x1F469, false); // 👩
+        step(&mut it, 0x200D, false);
+        step(&mut it, 0x1F467, false); // 👧
+        step(&mut it, 0x200D, false);
+        step(&mut it, 0x1F466, true); // 👦 // break
+        step(&mut it, b'_' as u32, true); // break
+    }
+
+    #[test]
+    fn long_emoji_zwj_sequences_with_emoji_modifiers() {
+        // 👨🏻‍❤️‍👨🏿 Kiss: man, man, light skin tone, dark skin tone
+        let mut it = utf8_iterator(
+            "\u{1F468}\u{1F3FB}\u{200D}\u{2764}\u{FE0F}\u{200D}\u{1F48B}\u{200D}\u{1F468}\u{1F3FF}_"
+                .as_bytes(),
+        );
+        step(&mut it, 0x1F468, false); // Man
+        step(&mut it, 0x1F3FB, false); // Light Skin Tone
+        step(&mut it, 0x200D, false); // ZWJ
+        step(&mut it, 0x2764, false); // Heart
+        step(&mut it, 0xFE0F, false); // VS16
+        step(&mut it, 0x200D, false); // ZWJ
+        step(&mut it, 0x1F48B, false); // Kiss Mark
+        step(&mut it, 0x200D, false); // ZWJ
+        step(&mut it, 0x1F468, false); // Man
+        step(&mut it, 0x1F3FF, true); // Dark Skin Tone // break
+        step(&mut it, b'_' as u32, true); // break (emoji_mod)
+    }
+
+    #[test]
+    fn sequence_of_regional_indicators() {
+        // 🇺🇸🇦🇹🇼_🇳_
+        let mut it =
+            utf8_iterator("\u{1F1FA}\u{1F1F8}\u{1F1E6}\u{1F1F9}\u{1F1FC}_\u{1F1F3}_".as_bytes());
+
+        let result = it.next_code_point();
+        assert_eq!(result.unwrap().code_point, 0x1F1FA); // U
+        assert_eq!(it.state, BreakState::RegionalIndicator);
+        assert!(!result.unwrap().is_break);
+
+        let result = it.next_code_point();
+        assert_eq!(result.unwrap().code_point, 0x1F1F8); // S
+        assert_eq!(it.state, BreakState::Default);
+        assert!(result.unwrap().is_break); // break
+
+        step(&mut it, 0x1F1E6, false); // A
+        step(&mut it, 0x1F1F9, true); // T // break
+        step(&mut it, 0x1F1FC, true); // W // break
+        step(&mut it, b'_' as u32, true); // break
+        step(&mut it, 0x1F1F3, true); // N // break
+        step(&mut it, b'_' as u32, true); // break
     }
 }
