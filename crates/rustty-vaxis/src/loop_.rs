@@ -53,10 +53,19 @@ use crate::tty::{Tty, TtyError};
 use crate::vaxis::Vaxis;
 use crate::Winsize;
 #[cfg(not(windows))]
+use std::os::fd::RawFd;
+
+#[cfg(not(windows))]
 use core::ffi::c_void;
 use std::cell::Cell;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
+
+/// Whether the last libc call failed with `EINTR`.
+#[cfg(not(windows))]
+fn errno_is_eintr() -> bool {
+    std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR)
+}
 
 #[cfg(all(not(windows), not(test)))]
 use crate::tty::SignalHandler;
@@ -130,7 +139,19 @@ pub struct Loop<'a, T> {
     /// reference's plain `bool` is written by `stop` on the caller's thread and
     /// read by the read thread's loop condition with no synchronization.
     should_quit: AtomicBool,
+    /// Rust-only: the `(read, write)` ends of the stop wake pipe, created by `start` and
+    /// closed by `stop` (MAIN-THREAD-ONLY, like `thread`). The read thread gets its own
+    /// copy of the read end. PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md
+    /// UD246 — see `stop`.
+    #[cfg(not(windows))]
+    wake: Cell<Option<(RawFd, RawFd)>>,
 }
+
+/// How long `stop` waits for the terminal's `ESC[0n` reply to end the read before it
+/// wakes the read thread through the wake pipe (UD246). A terminal that answers does so
+/// well within this, so its shutdown is exactly the reference's.
+#[cfg(not(windows))]
+pub const STOP_DSR_GRACE: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// A `Send` newtype carrying the raw `*mut Loop<T>` into the read thread (§4.2). Sound:
 /// the pointee is pinned for the thread's life and only ever touched via narrow field
@@ -162,6 +183,8 @@ impl<'a, T: LoopEvent> Loop<'a, T> {
             queue: Queue::default(),
             thread: Cell::new(None),
             should_quit: AtomicBool::new(false),
+            #[cfg(not(windows))]
+            wake: Cell::new(None),
         }
     }
 
@@ -197,14 +220,51 @@ impl<'a, T: LoopEvent> Loop<'a, T> {
         // are invariant, so `*mut Loop<'a, T>` does NOT coerce to `*mut Loop<'static, T>`.
         #[allow(clippy::unnecessary_cast)]
         let send = SendLoop(self_ptr as *mut Loop<'static, T>);
+        // PORT NOTE: reference defect (R13), UD246: the stop wake pipe (see `stop`).
+        // Close-on-exec so a child spawned by the TUI does not inherit it.
+        #[cfg(not(windows))]
+        let wake_r = {
+            let mut fds = [0 as libc::c_int; 2];
+            if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            for fd in fds {
+                unsafe {
+                    libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC);
+                }
+            }
+            self.wake.set(Some((fds[0], fds[1])));
+            fds[0]
+        };
+        #[cfg(windows)]
+        let wake_r = ();
         // PORT NOTE: Zig passes `self.vaxis.opts.system_clipboard_allocator` as the paste
         // allocator; dropped here (paste owns its `Vec`, §5/3a precedent).
-        let handle = std::thread::Builder::new().spawn(move || {
+        let spawned = std::thread::Builder::new().spawn(move || {
             let s = send;
-            Self::tty_run(s);
-        })?;
+            Self::tty_run(s, wake_r);
+        });
+        let handle = match spawned {
+            Ok(h) => h,
+            Err(e) => {
+                #[cfg(not(windows))]
+                self.close_wake();
+                return Err(e);
+            }
+        };
         self.thread.set(Some(handle));
         Ok(())
+    }
+
+    /// Closes both ends of the stop wake pipe, if open (UD246).
+    #[cfg(not(windows))]
+    fn close_wake(&self) {
+        if let Some((r, w)) = self.wake.take() {
+            unsafe {
+                libc::close(r);
+                libc::close(w);
+            }
+        }
     }
 
     /// stops reading from the tty.
@@ -230,8 +290,31 @@ impl<'a, T: LoopEvent> Loop<'a, T> {
             let w = Tty::writer_raw(tty);
             let _ = Vaxis::device_status_report(&mut *w);
         }
+        // PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD246. The reference
+        // joins right away (`thread.await`), so a terminal that never answers `ESC[5n`
+        // leaves the read thread blocked in `read` and `stop` never returns: the TUI
+        // hangs on exit until more input arrives. The DSR stays the wake, exactly as in
+        // the reference, for `STOP_DSR_GRACE`; only if the read thread has not ended by
+        // then does `stop` write one byte to the wake pipe the read thread polls beside
+        // the tty, and the thread returns without another read. A terminal that answers
+        // within the grace therefore shuts down exactly as in Ghostty (its reply is read
+        // by the reader); one that never answers makes `stop` return after the grace.
+        #[cfg(not(windows))]
+        {
+            let deadline = std::time::Instant::now() + STOP_DSR_GRACE;
+            while !handle.is_finished() && std::time::Instant::now() < deadline {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            if !handle.is_finished() {
+                if let Some((_, w)) = self.wake.get() {
+                    let _ = unsafe { libc::write(w, b"q".as_ptr().cast(), 1) };
+                }
+            }
+        }
         // join, leave the Cell None, reset should_quit
         handle.join().ok();
+        #[cfg(not(windows))]
+        self.close_wake();
         self.should_quit.store(false, Ordering::Relaxed);
     }
 
@@ -294,7 +377,11 @@ impl<'a, T: LoopEvent> Loop<'a, T> {
     }
 
     /// read input from the tty. This is run in a separate thread
-    fn tty_run(loop_ptr: SendLoop<T>) {
+    fn tty_run(
+        loop_ptr: SendLoop<T>,
+        #[cfg(not(windows))] wake_r: RawFd,
+        #[cfg(windows)] _wake_r: (),
+    ) {
         // Return early if we're in test mode to avoid infinite loops
         if cfg!(test) {
             return;
@@ -318,7 +405,41 @@ impl<'a, T: LoopEvent> Loop<'a, T> {
             let mut buf = [0u8; 1024];
             let mut read_start: usize = 0;
             // read loop
+            let tty_fd = (*(*sp).tty).fd();
             'read_loop: while !(*sp).should_quit.load(Ordering::Relaxed) {
+                // PORT NOTE: reference defect (R13), UD246: wait for the tty OR the stop
+                // wake pipe. `stop` writes the pipe only when the terminal has not
+                // answered its `ESC[5n` within `STOP_DSR_GRACE`; the thread then ends
+                // without another read. Everything else is the reference's blocking read.
+                // `select`, not `poll`: macOS `poll` answers `POLLNVAL` for `/dev/tty`
+                // (measured, task tail-s6), `select` works on both. An fd beyond
+                // `FD_SETSIZE` (never the case for a CLI TUI) keeps the reference's plain
+                // blocking read.
+                if (tty_fd as usize) < libc::FD_SETSIZE as usize
+                    && (wake_r as usize) < libc::FD_SETSIZE as usize
+                {
+                    let mut readfds: libc::fd_set = std::mem::zeroed();
+                    libc::FD_ZERO(&mut readfds);
+                    libc::FD_SET(tty_fd, &mut readfds);
+                    libc::FD_SET(wake_r, &mut readfds);
+                    let nfds = tty_fd.max(wake_r) + 1;
+                    let rc = libc::select(
+                        nfds,
+                        &mut readfds,
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                    );
+                    if rc < 0 {
+                        if errno_is_eintr() {
+                            continue 'read_loop;
+                        }
+                        return;
+                    }
+                    if libc::FD_ISSET(wake_r, &readfds) {
+                        return;
+                    }
+                }
                 // Raw-receiver read (H1): the thread BLOCKS here while `stop()` writes
                 // the DSR wake into `tty_writer`; `Tty::read(this: *const _)` holds no
                 // whole-Tty borrow across the blocked syscall (see tty.rs).
