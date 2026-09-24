@@ -529,7 +529,19 @@ mod coretext_payload {
             // `buf[..=path_len]` holds exactly one NUL, at its end.
             let c_path = core::ffi::CStr::from_bytes_with_nul(&buf[..=path_len])
                 .expect("cstring stops at the first NUL");
-            let mut face = Face::init_file(lib, c_path, 0, opts)?;
+            // PORT NOTE: reference defect (R13 / the user's evident-intent rule),
+            // UPSTREAM-DEFECTS.md UD280. The reference always opens face index 0,
+            // which its own comment calls "not always correct": for a font file
+            // holding several faces (a `.ttc` collection such as the system's
+            // `Menlo.ttc`) it loads the collection's FIRST face instead of the
+            // one CoreText discovered, so e.g. `font-family = Menlo` renders its
+            // bold style with Menlo Regular. Reachable by any config that names a
+            // font shipped as a collection, in a `coretext_freetype` build. The
+            // port opens the face whose PostScript name is the CoreText font's
+            // (`collection_face_index`), and keeps the reference's index 0 when
+            // the file is not a collection or no face matches.
+            let face_index = collection_face_index(lib, c_path, &ct.font);
+            let mut face = Face::init_file(lib, c_path, face_index, opts)?;
             // try face.setVariations(ct.variations, opts);
             if let Err(e) = face.set_variations(&ct.variations, opts) {
                 face.deinit();
@@ -594,6 +606,50 @@ mod coretext_payload {
             // unreachable;
             unreachable!()
         }
+    }
+
+    /// UD280 (see `load_coretext_freetype`): the index, in the font file at
+    /// `path`, of the face CoreText resolved `font` to — the first face whose
+    /// PostScript name equals the CoreText font's. `0` (the reference's index)
+    /// when the file holds one face, when no face matches, or when a probe
+    /// fails (the real open that follows then reports that failure itself).
+    /// RUSTTY-ONLY.
+    #[cfg(rustty_font_backend = "coretext_freetype")]
+    fn collection_face_index(lib: Library, path: &core::ffi::CStr, font: &CTFont) -> i32 {
+        let want = unsafe { font.post_script_name() }.to_string();
+        // "Mutex to be held any time the library is being used to create or
+        // destroy a face" (`FreetypeLibrary.mutex`).
+        // SAFETY: `lib.mutex` is the library's live boxed mutex.
+        let _guard = unsafe { (*lib.mutex).lock().unwrap() };
+        let probe = |index: i32| -> Option<(i64, bool)> {
+            let face = lib.lib.init_face(path, index).ok()?;
+            // SAFETY: `face.handle` is the live `FT_Face` just opened; the
+            // PostScript name (NULL-able) is owned by the face.
+            let (num_faces, matches) = unsafe {
+                let ps = freetype_sys::FT_Get_Postscript_Name(face.handle);
+                (
+                    (*face.handle).num_faces as i64,
+                    !ps.is_null() && core::ffi::CStr::from_ptr(ps).to_bytes() == want.as_bytes(),
+                )
+            };
+            face.deinit();
+            Some((num_faces, matches))
+        };
+        let Some((num_faces, first_matches)) = probe(0) else {
+            return 0;
+        };
+        if num_faces <= 1 || first_matches {
+            return 0;
+        }
+        for index in 1..num_faces {
+            let Ok(index) = i32::try_from(index) else {
+                break;
+            };
+            if let Some((_, true)) = probe(index) {
+                return index;
+            }
+        }
+        0
     }
 
     /// Build a backend-face `OutOfMemory` error (the reference `error.OutOfMemory`
@@ -1951,6 +2007,59 @@ mod tests {
         def.deinit();
         lib.deinit();
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// UD280 (R13-style, S-14): `loadCoreTextFreetype` opens face index 0 of
+    /// the discovered font's file ("Face index 0 is not always correct"). In a
+    /// collection file that is the wrong face: CoreText's "Menlo Bold" lives in
+    /// `Menlo.ttc`, whose face 0 is Menlo Regular, so a bold style loaded
+    /// regular. The port opens the face whose PostScript name is the CoreText
+    /// font's. Precondition asserted: the file really is a multi-face
+    /// collection and Menlo Bold is not its face 0. Negative control: forcing
+    /// index 0 (the reference) loads "Menlo-Regular" and fails.
+    #[cfg(rustty_font_backend = "coretext_freetype")]
+    #[test]
+    fn load_coretext_freetype_opens_the_discovered_face_of_a_collection() {
+        use objc2_core_text::CTFont;
+        let mut lib = crate::library::Library::init().unwrap();
+        let name = super::new_cfstring("Menlo-Bold").unwrap();
+        let font = unsafe { CTFont::with_name(&name, 12.0, core::ptr::null()) };
+        assert_eq!(
+            "Menlo-Bold",
+            unsafe { font.post_script_name() }.to_string(),
+            "precondition: CoreText resolved Menlo Bold"
+        );
+        let mut def = super::DeferredFace {
+            ct: Some(super::CoreTextData::new(font, Vec::new())),
+        };
+
+        let mut face = def.load(lib, ft_opts()).expect("loadCoreTextFreetype");
+        // SAFETY: `face.face` is the live FT face the load opened.
+        let (num_faces, index, ps) = unsafe {
+            let h = face.face.handle;
+            let ps = freetype_sys::FT_Get_Postscript_Name(h);
+            (
+                (*h).num_faces,
+                (*h).face_index,
+                std::ffi::CStr::from_ptr(ps).to_string_lossy().into_owned(),
+            )
+        };
+        assert!(
+            num_faces > 1,
+            "precondition: Menlo's file is a collection ({num_faces})"
+        );
+        assert_eq!(
+            "Menlo-Bold", ps,
+            "the discovered face, not face 0 (index {index})"
+        );
+        assert_ne!(
+            0, index,
+            "precondition: Menlo Bold is not the collection's face 0"
+        );
+
+        face.deinit();
+        def.deinit();
+        lib.deinit();
     }
 
     /// S-14 (N266): a font with no file (`copyAttribute(.url)` is null — a
