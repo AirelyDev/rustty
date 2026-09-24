@@ -5,10 +5,12 @@
 //!
 //! PORT NOTE: Zig selects a root module's panic handler at compile time:
 //!
-//!     pub const panic: type = if (debug_machinery)
-//!         std.debug.FullPanic(std.debug.defaultPanic)
-//!     else
-//!         std.debug.FullPanic(tinyPanicImpl);
+//! ```text
+//! pub const panic: type = if (debug_machinery)
+//!     std.debug.FullPanic(std.debug.defaultPanic)
+//! else
+//!     std.debug.FullPanic(tinyPanicImpl);
+//! ```
 //!
 //! Rust has no per-artifact panic handler for a `std` library; the analog is a
 //! process panic hook, installed by [`install`] when `DEBUG_MACHINERY` is false
