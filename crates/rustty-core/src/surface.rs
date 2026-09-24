@@ -13874,6 +13874,9 @@ where
         let pasted = match rustty_vt::paste::paste(
             rustty_vt::paste::Context {
                 terminal: &self.io.terminal,
+                // .alloc = self.alloc: the application's allocator, which is
+                // the terminal's (the Rust heap; the grants are freed with it).
+                alloc: rustty_vt::alloc::Global,
                 writer: &mut aw,
                 kitty_clipboard: Some(rustty_vt::paste::KittyClipboard {
                     grants: &mut self.io.terminal_stream.handler.kitty_clipboard_grants,

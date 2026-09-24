@@ -1082,15 +1082,21 @@ impl Terminal {
         // into the stream options. Rustty's `stream::Options.allocator` wants a
         // `ZigAllocatorRef`; `gpa()` is the global allocator, so we back the OSC
         // parser with the process-static `GLOBAL_ZIG_ALLOCATOR` (see its note).
-        let _gpa = self.gpa();
+        //
+        // PORT NOTE (parity tail S7-4): the OSC parser's captures (its dynamic
+        // allocations) run on the runtime handle `capture_alloc`, which is set
+        // to `gpa()` here, as the reference's `.allocator = self.gpa()` does.
+        let gpa = self.gpa();
         let handler = self.vt_handler();
-        Stream::init(crate::stream::Options {
+        let mut stream = Stream::init(crate::stream::Options {
             allocator: Some(rustty_lib::allocator::ZigAllocatorRef::new(
                 &GLOBAL_ZIG_ALLOCATOR,
             )),
             handler,
             continuation_max_bytes: None,
-        })
+        });
+        stream.parser.osc_parser.capture_alloc = gpa;
+        stream
     }
 
     /// This is the handler-side only for vtStream.

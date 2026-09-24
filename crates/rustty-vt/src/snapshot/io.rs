@@ -317,7 +317,9 @@ pub struct StackFallbackWriter<const N: usize> {
     len: usize,
     /// `Some` once the payload has spilled to the heap; the inline buffer is
     /// then unused.
-    heap: Option<Vec<u8>>,
+    heap: Option<crate::alloc::Bytes>,
+    /// The fallback allocator (`stackFallback(N, alloc)`'s `alloc`).
+    alloc: crate::alloc::Allocator,
 }
 
 impl<const N: usize> Default for StackFallbackWriter<N> {
@@ -327,12 +329,28 @@ impl<const N: usize> Default for StackFallbackWriter<N> {
 }
 
 impl<const N: usize> StackFallbackWriter<N> {
-    /// `.init(stack_alloc.get())`
+    /// `.init(stack_alloc.get())` over the Rust heap.
     pub fn new() -> StackFallbackWriter<N> {
+        StackFallbackWriter::new_in(crate::alloc::Global)
+    }
+
+    /// `.init(std.heap.stackFallback(N, alloc).get())`: payloads that outgrow
+    /// the inline buffer spill through `alloc`, fallibly (a refused
+    /// allocation is `error.WriteFailed`, as `Writer.Allocating`'s is).
+    ///
+    /// PORT NOTE (parity tail S7-4, T3 residual): the spill point is the
+    /// payload length crossing `N`. Zig's `Writer.Allocating` grows an
+    /// `ArrayList` (`growCapacity`) inside the stack-fallback allocator, so a
+    /// payload a little under `N` can already reach `alloc`, and each later
+    /// growth is a `remap` or an alloc+copy+free. The routing (small payloads
+    /// never reach `alloc`, large ones only reach `alloc`) is the reference's;
+    /// the exact call sizes are not.
+    pub fn new_in(alloc: crate::alloc::Allocator) -> StackFallbackWriter<N> {
         StackFallbackWriter {
             inline: [0u8; N],
             len: 0,
             heap: None,
+            alloc,
         }
     }
 
@@ -380,24 +398,55 @@ impl<const N: usize> StackFallbackWriter<N> {
 
 impl<const N: usize> Writer for StackFallbackWriter<N> {
     fn write_all(&mut self, bytes: &[u8]) -> Result<(), WriteFailed> {
+        use crate::alloc::CopyVecExt;
         if let Some(heap) = &mut self.heap {
-            heap.extend_from_slice(bytes);
-            return Ok(());
+            return heap.try_extend_copy(bytes).map_err(|_| WriteFailed);
         }
-        let new_len = self.len + bytes.len();
+        let new_len = match self.len.checked_add(bytes.len()) {
+            Some(v) => v,
+            None => return Err(WriteFailed),
+        };
         if new_len <= N {
             self.inline[self.len..new_len].copy_from_slice(bytes);
             self.len = new_len;
             return Ok(());
         }
         // Spill: the stack-fallback allocator's first heap allocation copies
-        // the buffered prefix and continues on the heap.
-        let mut heap = Vec::with_capacity(new_len);
-        heap.extend_from_slice(&self.inline[..self.len]);
-        heap.extend_from_slice(bytes);
+        // the buffered prefix and continues on the heap. A refused allocation
+        // leaves the writer unchanged (`error.WriteFailed`).
+        let mut heap = crate::alloc::Bytes::new_in(self.alloc);
+        heap.try_reserve(new_len).map_err(|_| WriteFailed)?;
+        heap.extend_copy(&self.inline[..self.len]);
+        heap.extend_copy(bytes);
         self.heap = Some(heap);
         self.len = 0;
         Ok(())
+    }
+}
+
+/// The same writer behind `std::io::Write` (for encoders written against it);
+/// a refused allocation is `ErrorKind::OutOfMemory`.
+impl<const N: usize> std::io::Write for StackFallbackWriter<N> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        Writer::write_all(self, buf)
+            .map(|()| buf.len())
+            .map_err(|_| std::io::ErrorKind::OutOfMemory.into())
+    }
+
+    fn write_all(&mut self, buf: &[u8]) -> std::io::Result<()> {
+        Writer::write_all(self, buf).map_err(|_| std::io::ErrorKind::OutOfMemory.into())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// The same writer behind `core::fmt::Write` (for the text encoders); a
+/// refused allocation is `fmt::Error`.
+impl<const N: usize> core::fmt::Write for StackFallbackWriter<N> {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        Writer::write_all(self, s.as_bytes()).map_err(|_| core::fmt::Error)
     }
 }
 

@@ -222,6 +222,55 @@ impl From<ApiGlobal> for VtAllocator {
     }
 }
 
+/// A vector whose storage is allocated (and freed) through a [`VtAllocator`]
+/// bound at construction: the port's `std.ArrayListUnmanaged(T)` where the
+/// reference always passes the same allocator, and its owned slices (`[]T`
+/// from `alloc.alloc`/`dupe`/`toOwnedSlice`).
+pub type AVec<T> = allocator_api2::vec::Vec<T, VtAllocator>;
+
+/// A single object allocated through a [`VtAllocator`] (`alloc.create(T)`);
+/// dropping it is `alloc.destroy`.
+pub type ABox<T> = allocator_api2::boxed::Box<T, VtAllocator>;
+
+/// Owned bytes allocated through a [`VtAllocator`] (`[]u8` from
+/// `alloc.alloc`/`alloc.dupe`/`toOwnedSlice`).
+pub type Bytes = AVec<u8>;
+
+/// `try alloc.dupe(u8, src)`: one exact-sized, fallible allocation through
+/// `alloc`. An empty `src` allocates nothing (Zig's `alloc(u8, 0)` returns a
+/// zero-length slice without calling the vtable).
+pub fn try_dupe(alloc: VtAllocator, src: &[u8]) -> Result<Bytes, OutOfMemory> {
+    let mut v = Bytes::new_in(alloc);
+    v.try_reserve_exact(src.len()).map_err(|_| OutOfMemory)?;
+    v.extend_copy(src);
+    Ok(v)
+}
+
+/// Bind an unmanaged list to the allocator a reference call site passes.
+///
+/// Zig's `.empty` unmanaged containers hold no allocator: every growing call
+/// passes one, and the contract is that it is always the same. An
+/// allocator_api2 vector binds its allocator at construction, so a list that
+/// starts `.empty` (a `Default` field) is rebound to `alloc` while it owns no
+/// allocation, and afterwards `alloc` is debug-asserted to be the allocator
+/// it was bound to (the design's "bind on first growth", S-7 §4 (B) risk 3).
+#[inline]
+pub fn bind<T>(v: &mut AVec<T>, alloc: VtAllocator) {
+    if v.capacity() == 0 {
+        if *v.allocator() != alloc {
+            *v = AVec::new_in(alloc);
+        }
+    } else {
+        v.allocator().debug_assert_same(alloc);
+    }
+}
+
+/// `try alloc.create(T)` + initialization: one fallible allocation through
+/// `alloc`. On failure `value` is dropped.
+pub fn try_create<T>(alloc: VtAllocator, value: T) -> Result<ABox<T>, OutOfMemory> {
+    ABox::try_new_in(value, alloc).map_err(|_| OutOfMemory)
+}
+
 // SAFETY: the Global arm forwards verbatim to allocator_api2's `Global`. The C
 // arm forwards to the caller's vtable, which returns memory of at least `len`
 // bytes at the requested alignment, or null, and frees exactly what it handed
