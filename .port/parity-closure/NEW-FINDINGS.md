@@ -4142,7 +4142,11 @@ fix: 0 of 50 of the same sequential runs failed; see the task T-F2 report for th
   control code points, 20,000 random byte strings): identical to the Zig oracle except 36 inputs on which
   the reference traps and 35 on which its grapheme ranges overlap, all UD260. (A ReleaseSafe build of
   the probe trapped at `utf8.zig:35` on the single-code-point section where the Debug build did not;
-  the Debug build was used as the oracle. UNVERIFIED cause.)
+  the Debug build was used as the oracle. The S-10b review did NOT reproduce it: its own ReleaseSafe
+  probe ran libvaxis 0.6.0 `gwidth` over every code point alone with all three methods, with no trap
+  and 0 differences from the port; and the cast at `utf8.zig:35`, `@intCast(utf8d[byte])` into
+  `IntFittingRange(0, 11)`, cannot fail because every table entry is at most 11. Treated as an artifact
+  of the S-10b probe, not a reference defect.)
 - **parser / render differentials**: 4,204 SGR / X10 mouse and `CSI Z` sequences (every 1-3 byte
   string over `0 1 5 9 a f F _ + - SP 0xFF` in each coordinate, `i16` edges, X10 bytes): parsed events
   identical to libvaxis 0.6.0. Eleven render steps (cell, cursor, secondary cursor, hide, reset):
@@ -4154,10 +4158,25 @@ fix: 0 of 50 of the same sequential runs failed; see the task T-F2 report for th
   (`translateMouse` `@intCast`), UD263 (vxfw `@intCast` of a negative mouse position), UD264
   (TextInput word motions reach `unreachable` in `std.unicode.utf8Decode`), UD265 (`trimEnd` for
   `trimLeft` in `Text` soft wrap), UD266 (`+list-themes` stopped installing the resize handler in the
-  Zig 0.16 migration). All in `docs/ghostty-bug-fixes.md`.
+  Zig 0.16 migration). All in `docs/ghostty-bug-fixes.md`. Recorded faithfully: UD267 (`kind: latent`,
+  the queue's edge-only signalling can leave a second blocked producer or consumer waiting; found by
+  the S-10b review).
+- **review follow-up (task tail-s10c)**: UD261's fix is gated on `caps.multi_cursor` (without it, a
+  secondary cursor added on a terminal lacking the capability made every render repaint; test
+  `secondary_cursor_without_multi_cursor_does_not_repaint` + negative control); UD263's reachability
+  is restated (vxfw turns pixel reporting off, so a coordinate of 0 or below comes from a non-conforming
+  terminal or injected bytes, not an ordinary drag); `check_test_counts.py`'s vaxis row now also covers
+  `Vaxis.zig` and `vxfw/{vxfw,App,Text,Center}.zig` (zig 105, one allowance for the vxfw doctest source
+  scan), with `--self-test` arms binding the row and the per-row verdict (each negative-controlled).
 - **not settled here**: libvaxis 0.6.0 also moved zigimg `d7b7ab0b` -> `d695acd9`; the older tarball is
   not in the local cache, so that delta was not diffed. It reaches only vaxis's image tier
-  (`transmitImage` / `loadImage`), which no Ghostty code calls, and `rustty-zigimg` is a documented
-  re-home onto Ghostty's codecs rather than a zigimg port. The vxfw doctest test (`All widgets have a
+  (`transmitImage` / `loadImage`), which no Ghostty code calls. What WAS checked (S-10b review F4): the
+  two conversions libvaxis 0.6.0 reaches (`Vaxis.zig:1066-1070`, `convertNoFree` to `.rgb24` /
+  `.rgba32`) in `d695acd9` (`PixelFormatConverter.zig:532, 561, 772-778`; `color.zig:19-75, 478-505`:
+  `rgbToRgba` copies the colour, `rgbaToRgb` premultiplies alpha in f32 with `@round` and clamp) are the
+  formulas `crates/rustty-zigimg/src/convert.rs` implements; `convertNoFree` differs from `convert` only
+  in not freeing the old pixels, which is irrelevant to the port's owned `Vec`; and the decode / PNG
+  encode paths are re-homed onto Ghostty's codecs by design, so a zigimg delta there cannot reach the
+  port. Only the `d7b7ab0b` side of the diff remains unread. The vxfw doctest test (`All widgets have a
   doctest`, a source scan) is not ported (it was not before either).
 - **state**: CLOSED (task tail-s10b).
