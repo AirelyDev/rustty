@@ -266,10 +266,20 @@ mod tests {
     use super::*;
     use ParseIntError::{InvalidCharacter, Overflow};
 
-    // PORT NOTE: the assertions of zig 0.16.0 `std/fmt.zig`'s `test parseInt`
-    // that this module's widths can express (`i1`/`i43` are covered through
-    // `parse_int` with an `IntType`), so the port is checked against the
-    // reference's own table rather than against Rust's parser.
+    // PORT NOTE: zig 0.16.0 `std/fmt.zig`'s `test parseInt` (:334-392, all 45
+    // assertions, including its duplicated `1_1_1` line) and `test
+    // parseUnsigned` (:477-511, all 22), ported verbatim and in order, so the
+    // port is checked against the reference's own tables rather than against
+    // Rust's parser. Zig's odd-width result types (`i1`, `i2`, `i4`, `i5`,
+    // `i43`, `u1`, `u2`, `u7`) are the runtime `IntType` of the same width
+    // and signedness; the native widths go through `parse`/`parse_unsigned`.
+
+    /// `parseUnsigned` for an odd-width Zig type (`u1`, `u2`, `u7`).
+    fn parse_unsigned_t(t: IntType, buf: &[u8], base: u8) -> Result<i128, ParseIntError> {
+        parse_int_with_sign(t, buf, base, false)
+    }
+
+    // test parseInt
     #[test]
     fn std_fmt_parse_int_table() {
         assert_eq!(parse::<i32>(b"-10", 10), Ok(-10));
@@ -290,12 +300,11 @@ mod tests {
         assert_eq!(parse::<u8>(b"+0", 10), Ok(0));
 
         // ensure minInt is parsed correctly
-        assert_eq!(parse_int(IntType::signed(1), b"-1", 10), Ok(-1));
-        assert_eq!(parse::<i8>(b"-128", 10), Ok(-128));
-        assert_eq!(
-            parse_int(IntType::signed(43), b"-4398046511104", 10),
-            Ok(-4398046511104)
-        );
+        let i1 = IntType::signed(1);
+        assert_eq!(parse_int(i1, b"-1", 10), Ok(i1.min()));
+        assert_eq!(parse::<i8>(b"-128", 10), Ok(i8::MIN));
+        let i43 = IntType::signed(43);
+        assert_eq!(parse_int(i43, b"-4398046511104", 10), Ok(i43.min()));
 
         // empty string or bare +- is invalid
         assert_eq!(parse::<u32>(b"", 10), Err(InvalidCharacter));
@@ -308,6 +317,7 @@ mod tests {
         // autodectect the base
         assert_eq!(parse::<i32>(b"111", 0), Ok(111));
         assert_eq!(parse::<i32>(b"1_1_1", 0), Ok(111));
+        assert_eq!(parse::<i32>(b"1_1_1", 0), Ok(111));
         assert_eq!(parse::<i32>(b"+0b111", 0), Ok(7));
         assert_eq!(parse::<i32>(b"+0B111", 0), Ok(7));
         assert_eq!(parse::<i32>(b"+0b1_11", 0), Ok(7));
@@ -317,6 +327,70 @@ mod tests {
         assert_eq!(parse::<i32>(b"+0x111", 0), Ok(273));
         assert_eq!(parse::<i32>(b"-0b111", 0), Ok(-7));
         assert_eq!(parse::<i32>(b"-0b11_1", 0), Ok(-7));
+        assert_eq!(parse::<i32>(b"-0o111", 0), Ok(-73));
+        assert_eq!(parse::<i32>(b"-0x111", 0), Ok(-273));
+        assert_eq!(parse::<i32>(b"-0X111", 0), Ok(-273));
+        assert_eq!(parse::<i32>(b"-0x1_11", 0), Ok(-273));
+
+        // bare binary/octal/decimal prefix is invalid
+        assert_eq!(parse::<u32>(b"0b", 0), Err(InvalidCharacter));
+        assert_eq!(parse::<u32>(b"0o", 0), Err(InvalidCharacter));
+        assert_eq!(parse::<u32>(b"0x", 0), Err(InvalidCharacter));
+
+        // edge cases which previously errored due to base overflowing T
+        assert_eq!(parse_int(IntType::signed(2), b"-10", 2), Ok(-2));
+        assert_eq!(parse_int(IntType::signed(4), b"-10", 8), Ok(-8));
+        assert_eq!(parse_int(IntType::signed(5), b"-10", 16), Ok(-16));
+    }
+
+    // test parseUnsigned
+    #[test]
+    fn std_fmt_parse_unsigned_table() {
+        assert_eq!(parse_unsigned::<u16>(b"050124", 10), Ok(50124));
+        assert_eq!(parse_unsigned::<u16>(b"65535", 10), Ok(65535));
+        assert_eq!(parse_unsigned::<u16>(b"65_535", 10), Ok(65535));
+        assert_eq!(parse_unsigned::<u16>(b"65536", 10), Err(Overflow));
+
+        assert_eq!(
+            parse_unsigned::<u64>(b"0ffffffffffffffff", 16),
+            Ok(0xffffffffffffffff)
+        );
+        assert_eq!(
+            parse_unsigned::<u64>(b"0f_fff_fff_fff_fff_fff", 16),
+            Ok(0xffffffffffffffff)
+        );
+        assert_eq!(
+            parse_unsigned::<u64>(b"10000000000000000", 16),
+            Err(Overflow)
+        );
+
+        assert_eq!(parse_unsigned::<u32>(b"DeadBeef", 16), Ok(0xDEADBEEF));
+
+        let u7 = IntType::unsigned(7);
+        assert_eq!(parse_unsigned_t(u7, b"1", 10), Ok(1));
+        assert_eq!(parse_unsigned_t(u7, b"1000", 2), Ok(8));
+
+        assert_eq!(parse_unsigned::<u32>(b"f", 10), Err(InvalidCharacter));
+        assert_eq!(parse_unsigned::<u8>(b"109", 8), Err(InvalidCharacter));
+
+        assert_eq!(parse_unsigned::<u32>(b"NUMBER", 36), Ok(1442151747));
+
+        // these numbers should fit even though the base itself doesn't fit in the destination type
+        let u1 = IntType::unsigned(1);
+        assert_eq!(parse_unsigned_t(u1, b"0", 10), Ok(0));
+        assert_eq!(parse_unsigned_t(u1, b"1", 10), Ok(1));
+        assert_eq!(parse_unsigned_t(u1, b"2", 10), Err(Overflow));
+        assert_eq!(parse_unsigned_t(u1, b"001", 16), Ok(1));
+        let u2 = IntType::unsigned(2);
+        assert_eq!(parse_unsigned_t(u2, b"3", 16), Ok(3));
+        assert_eq!(parse_unsigned_t(u2, b"4", 16), Err(Overflow));
+
+        // parseUnsigned does not expect a sign
+        assert_eq!(parse_unsigned::<u8>(b"+0", 10), Err(InvalidCharacter));
+        assert_eq!(parse_unsigned::<u8>(b"-0", 10), Err(InvalidCharacter));
+
+        // test empty string error
+        assert_eq!(parse_unsigned::<u8>(b"", 10), Err(InvalidCharacter));
     }
 
     // The digit separators and the Accumulate width, which are what the
