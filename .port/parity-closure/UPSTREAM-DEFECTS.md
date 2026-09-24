@@ -2320,6 +2320,21 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - proposed fix:    pick the face index by matching `FT_Get_Postscript_Name` of each face in the file against `CTFontCopyPostScriptName` (or use `kCTFontURLAttribute` together with the descriptor's collection index where CoreText exposes it).
 - upstream status: not reported
 
+### UD281 — `test "face metrics"`'s FreeType expectations predate the light-hinting default, so they would fail if the test ran
+- kind:            test-weakness
+- upstream project: ghostty
+- severity:        low
+- reference:       `src/font/Collection.zig:1439-1502` at 20abdb50a (the `.freetype`/`.fontconfig_freetype`/`.coretext_freetype` prongs: narrow `cell_width` 8.0, `ascii_height` 18.0625; wide `cell_width` 10.0, `ascii_height` 16.0)
+- defect:          The values were written by `03a707b2c` while the test ran; `4af4e1872` (the next day) inverted the test's guard (UD276), and `ad9f9dc11` later made `light = true` the default `FreetypeLoadFlags` (`FT_LOAD_TARGET_LIGHT`), updating a running FreeType test but not this skipped one. Under today's default the FreeType face measures narrow `cell_width` 7.0 and wide `ascii_height` 15.5; with `light = false` it reproduces all four expectations. The inverted guard (UD276) hides the drift.
+- ReleaseSafe:     no product effect; the test is inert.
+- ReleaseFast:     same.
+- reachability:    none (test code); it would surface as a failure the day UD276's guard is fixed.
+- port handling:   faithful (R13 keeps test weaknesses faithful): `crates/rustty-font-shaper/src/collection.rs` `face_metrics` keeps the reference's values and its skip. MEASURED (S-14 review, `-Dfont-backend=coretext_freetype`, reverted probe): default flags 7.0 / 18.0625 / 10.0 / 15.5; `light = false` 8.0 / 18.0625 / 10.0 / 16.0. The port's measuring code is line-for-line the reference's over the same FreeType 2.13.2, so Ghostty would measure the same (inferred, not run in Zig).
+- parity row(s):   NEW-FINDINGS N285 (and N265 / UD276).
+- test:            `face_metrics` run with `--ignored` under a FreeType backend fails on exactly those two values.
+- proposed fix:    update the FreeType prongs to 7.0 (narrow `cell_width`) and 15.5 (wide `ascii_height`) together with fixing UD276's guard, or pin `.freetype_load_flags = .{ .light = false }` in the test.
+- upstream status: not reported
+
 ## Candidates pending verification
 
 Assembled from this plan's progress notes on 2026-09-11. **Not verified** — do not cite as fact.
