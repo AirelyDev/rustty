@@ -2249,3 +2249,65 @@ fn shape_high_plane_sprite_font_codepoint() {
     t.deinit(Global);
     testdata.deinit();
 }
+
+/// S94-F1: `endFrame` hands the frame's pool to the dedicated release thread,
+/// the reference's `os.CFReleaseThread`: pushed into its mailbox, the thread
+/// woken through its `wakeup` async, and each ref `CFRelease`d there
+/// (`coretext.zig:264-297`, `os/cf_release_thread.zig`). A heap string with one
+/// extra retain goes into the pool; its count must come back down, on another
+/// thread, and only after `endFrame`.
+#[test]
+fn end_frame_releases_the_pool_on_the_cf_release_thread() {
+    use objc2_core_foundation::{CFGetRetainCount, CFRetained, CFString};
+
+    let mut shaper = Shaper::init(shape::Options::default()).unwrap();
+    let kept: CFRetained<CFString> = CFString::from_str("rustty-s94-f1");
+    let raw: *mut c_void = CFRetained::into_raw(kept.clone()).as_ptr().cast();
+    assert_eq!(CFGetRetainCount(Some(kept.as_ref())), 2);
+
+    shaper.cf_release_pool.push(raw);
+    // Nothing is released before the frame ends.
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    assert_eq!(CFGetRetainCount(Some(kept.as_ref())), 2);
+
+    shaper.end_frame();
+    assert!(
+        shaper.cf_release_pool.is_empty(),
+        "the pool went to the thread"
+    );
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while CFGetRetainCount(Some(kept.as_ref())) != 1 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the release thread did not release the pool"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+
+    // `deinit` stops and joins the thread, then frees it (a second `deinit`
+    // is a no-op).
+    shaper.deinit();
+    assert!(shaper.cf_release_thread.is_null() && shaper.cf_release_thr.is_none());
+    shaper.deinit();
+    drop(kept);
+}
+
+/// S94-F2: `Shaper.init` spawns the release thread with `try`
+/// (`coretext.zig:224-229`), so a failed spawn is an error from `init`; the
+/// port panicked (`.expect`). The test fail-point makes the spawn fail.
+#[test]
+fn init_returns_an_error_when_the_release_thread_cannot_spawn() {
+    super::spawn_failpoint::arm();
+    let result = Shaper::init(shape::Options::default());
+    // The fail-point was consumed: the spawn really was attempted and failed.
+    assert!(!super::spawn_failpoint::take());
+    assert!(
+        matches!(result, Err(Error::CfReleaseThreadSpawn)),
+        "init returned {:?}",
+        result.as_ref().err()
+    );
+
+    // Positive control: disarmed, init succeeds.
+    let mut shaper = Shaper::init(shape::Options::default()).unwrap();
+    shaper.deinit();
+}

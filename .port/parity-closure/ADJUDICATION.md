@@ -768,6 +768,15 @@ site and is excluded — the counts below say so where it matters.
 - **The swap itself was NOT done** — it is a runtime refactor, not a logging
   change, and out of this stage's scope. The row stays OPEN with an `owner`
   recording that the blocker it rested on does not exist.
+- **Swap done, row CLOSED (task T-F, 2026-09-23).** The shaper creates the
+  heap `CFReleaseThread`, spawns `threadMain` (a spawn failure is now an `init`
+  error, S94-F2), pushes each frame's pool into its 64-slot mailbox with
+  `.forever` and notifies `wakeup`, and on `deinit` notifies `stop`, joins and
+  deinits it. The `mpsc` stand-in module is deleted. Aliasing: the release
+  thread's `threadMain` holds `&mut Thread`; the shaper side reads only copies
+  of the two `Async` handles and a pointer to the heap mailbox taken before
+  the spawn, and frees the struct only after the join (NOT Miri-checked: the
+  kqueue/mach-port calls are FFI).
 
 ### N6 — `discovery.zig`'s two table-parse warns (no ledger row; RESTORED)
 - Added in task-14c-4 fix round 1 (review item F4). `src/font/discovery.zig` has

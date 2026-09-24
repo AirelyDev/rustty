@@ -1406,6 +1406,13 @@ the defect the 14e-1 review caught (a waiver contradicted by an open `missing-er
 here the ledger does not contradict the waiver, it *dates* it.
 
 **state**: OPEN as a dependency. Discharged by whoever closes `S94-F1`, in the same change.
+
+**DISCHARGED (task T-F, 2026-09-23, in the change that closes `S94-F1`).** The shaper now runs
+the real `CFReleaseThread`. The `wakeup.notify` arm (`:291`) came back and is restored, and
+`LOG-PORTMAP.tsv`'s allowance for the file is tightened 2 -> 1. The `toOwnedSlice` arm (`:277`)
+did not come back: the port still moves the pool out with `std::mem::take`, which allocates
+nothing and returns no `Result`, so that site's waiver now rests on a language property, like
+the other four in the table. The table row above is kept as the record of what was believed.
 ## N25 — five `rustty-font` diagnostics live only in test code, and were counted as if they were the port
 
 - **id**: N25 (next free id checked 2026-09-11 against `NEW-FINDINGS.md` headings, a
