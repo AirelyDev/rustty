@@ -5,7 +5,7 @@ const uucode = @import("uucode");
 // rustty unicode differential oracle (ORACLE #2) — harness-only tooling.
 //
 // This is the INDEPENDENT external oracle for the rustty-unicode tables. It is
-// built against uucode 0.2.0 (the exact dependency ghostty uses) with ghostty's
+// built against uucode 0.2.0 @ 2826a37a (the exact dependency ghostty uses) with ghostty's
 // own src/build/uucode_config.zig, and dumps — for EVERY code point in
 // 0..=0x10FFFF — the same fields ghostty's reference tests read out of uucode:
 //

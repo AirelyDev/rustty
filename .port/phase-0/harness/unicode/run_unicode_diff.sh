@@ -9,7 +9,8 @@
 # uucode oracle is an INDEPENDENT second source built in a separate process.
 #
 # Pipeline:
-#   1. zig build the `uucode-oracle` (uucode 0.2.0 + ghostty's uucode_config.zig)
+#   1. zig build the `uucode-oracle` (uucode 0.2.0 @ 2826a37a, the revision the
+#      reference pin 20abdb50a uses, + ghostty's uucode_config.zig at that pin)
 #   2. run it: dump width / is_symbol / Properties fields / grapheme_break /
 #      8192-entry grapheme precompute for every cp 0..=0x10FFFF -> oracle dir
 #   3. cargo run --example dump_tables: dump rustty's EMBEDDED tables, same range
@@ -39,7 +40,7 @@ echo "=================================================================="
 
 if ! command -v zig >/dev/null 2>&1; then
   echo ">> BLOCKED: zig toolchain not found — cannot build the uucode oracle." >&2
-  echo "   (install zig 0.15.2; this is harness tooling, R3, not a rustty dep)" >&2
+  echo "   (install zig 0.16.0; this is harness tooling, R3, not a rustty dep)" >&2
   exit 3
 fi
 

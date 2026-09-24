@@ -3936,3 +3936,50 @@ fix: 0 of 50 of the same sequential runs failed; see the task T-F2 report for th
   stays fixed. The PORT NOTE at `crates/rustty-render-types/src/term_size.rs` that claimed "the same 4
   padding bytes" now gives the real positions. `ADJUDICATION.md#n208`.
 - **state**: WAIVED (task tail-s2, S-2c).
+
+## N220 — the deferred uucode revision bump (`NON_PORTS.md` §G1): CI still pinned Zig 0.15.2, which cannot build the harness's uucode
+
+- **id**: N220. Not a ledger row: the deferral lived only in `.port/phase-3/NON_PORTS.md` §G1,
+  `.port/phase-2/DEFERRALS.md` ("Still open — summary") and `.port/phase-3/DEFERRAL_REAUDIT.md` row 13.
+  Discharged by task tail-s10a at the user's instruction to address every parity gap.
+- **severity**: medium (CI lane), none (data). **kind**: dependency-revision / CI-toolchain.
+- **oracle**: ghostty@20abdb50a `build.zig.zon` (uucode `2826a37a…`, hash `ZZjBPlK5…`),
+  `src/build/uucode_config.zig`, `src/build/UnicodeTables.zig`, `src/build/SharedDeps.zig:64-78`,
+  `src/unicode/{props_uucode,symbols_uucode,lut,props,grapheme}.zig`.
+- **what was found**: the harness (`.port/phase-0/harness/unicode/`) had already been moved to uucode
+  2826a37a, the pin's config and the `uucode.types` / `uucode.grapheme` API by `986d90c8`, but
+  `.github/workflows/ci.yml` still installed Zig 0.15.2 for the G4-uni job while the harness's
+  `build.zig.zon` requires 0.16.0. So on CI G4-uni could not build its oracle: RED without comparing
+  anything. §G1 still read DEFERRED.
+- **fix**: CI installs Zig 0.16.0 for that job. No other gate in that job depends on 0.15.2: every other
+  zig consumer (`check_lz4_byte_exact.sh`, `check_ref_item_geometry.py`, `stb-resize-oracle/run.sh`, …)
+  also needs the ghostty oracle checkout, absent on CI, and locally they already run on 0.16.0. The
+  harness's stale version text (the BLOCKED message said "install zig 0.15.2") and the provenance
+  headers of the three generated tables, `lib.rs` and `props.rs` (`uucode.x.types` ->
+  `uucode.types`) now name the revision.
+- **table differential** (the recipe's step 3), all against uucode 2826a37a + the pin's config:
+  - the pin's own `props-unigen` / `symbols-unigen`, built as `UnicodeTables.zig` builds them and run:
+    `props_data.rs` STAGE1/2/3 (8192 / 31744 / 30) and `symbols_data.rs` (8192 / 1792 / 2) are identical
+    element for element. Negative controls: one flipped STAGE3 field / one flipped STAGE2 entry in a copy
+    each reported exactly 1 difference.
+  - G4-uni (`run_unicode_diff.sh`) under Zig 0.16.0: 0 diffs for width, is_symbol, props flags and
+    grapheme_break_no_control over 0..=0x10FFFF and the 8192 grapheme precompute entries
+    (`uucode.grapheme.computeGraphemeBreakNoControl`).
+  - `case_folding_full` (1585 code points, `rustty-unicode` `case_folding_data.rs`) and
+    `is_emoji_presentation` (1219, `rustty-font-shaper` `uucode.rs`), dumped from the live uucode over
+    the full range: 0 differences each (negative controls: a dropped and an altered entry each
+    reported).
+  - Codepoints changed, per class: **none**. The UCD inputs are byte-identical between the two
+    revisions (`diff -rq ucd/`: only a new `BidiMirroring.txt` and `.gitignore`), and the restructured
+    derivations (`x/config_x/wcwidth.zig` -> `components.zig`, `x/grapheme.zig` -> `grapheme.zig`)
+    produce the same values. `ascii.zig`, `utf8.zig`, `code_point.zig` are byte-identical; `BreakState`
+    and `GraphemeBreakNoControl` keep their order. `checksum.rs` is unchanged because the arrays are.
+- **perf**: the `release-fast` `rustty-bench` binary is byte-identical before and after (sha256
+  `ea2e5b2b…`; only comments changed). Paired interleaved sweep anyway (N=9, utf8 corpus, `LC_ALL=C`,
+  load average ~20–22 on a shared host): codepoint-width.table −1.1%, .simd −0.0%, grapheme-break.table
+  −1.8%, is-symbol.table +0.1%, all within noise.
+- **not settled here**: `rustty-vaxis`'s vendored uucode 0.1.0 subset (UCD 16.0.0). At the pin
+  libvaxis 0.6.0 imports Ghostty's uucode 2826a37a through `external_uucode` (the `libvaxis_only`
+  table: `east_asian_width`, `general_category`, `grapheme_break`, plus `runtime`'s
+  `is_emoji_presentation`), so moving it belongs to §G2 (vaxis 0.5.1 -> 0.6.0), task S-10b.
+- **state**: CLOSED (task tail-s10a).
