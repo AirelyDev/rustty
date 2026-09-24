@@ -3451,7 +3451,17 @@ does for `Config.loadFile`), and print through that.
   theme `.user` arm's `BufferTooSmall => OutOfMemory` mapping; and decide separately whether the
   C-API `err={}` sites should print Zig error names (as T-E's `zig_error.rs` does for config
   diagnostics).
-- **state**: OPEN.
+- **state**: PARTIALLY RESOLVED by S112-F11 (T-G, 2026-09-23): `DirError::BufferTooSmall` and
+  `FileLoadError::BufferTooSmall` now carry the reference's error, and
+  `load_path_errors_propagate` pins it (so the "what" bullet's `xdg.rs:157` collapse and its
+  `NoHomeDir` pin are historical). Still OPEN:
+  - (a) the `theme.rs` `Location.dir` sibling: the reference maps `BufferTooSmall` to
+    `OutOfMemory` (`theme.zig:51`), and the port returns `None`. Not fixed in T-G2 because it is
+    not small: `Location::dir`, `LocationIterator::next` and `theme::open` would all become
+    fallible, `Config::load_theme` / `finalize` would need an out-of-memory `LoadError` variant
+    that every consumer then handles, and `rustty-cli`'s `list_themes` would need the same.
+  - (b) the C-API `err=` sites print the Rust `Debug` form (`FileLoad(BufferTooSmall)`, by
+    reading), not `error.BufferTooSmall`.
 
 ## N150 — a third port of Zig's number parsers, now at the lowest layer (`rustty-zigstd::fmt`)
 
