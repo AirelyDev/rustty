@@ -1476,16 +1476,13 @@ impl<M: AppMailbox> StreamHandler<M> {
     // ) error{OutOfMemory}!void {
     //     try self.kitty_clipboard_grants.grant(self.alloc, pw, dir, false);
     // }
-    // (the `error{OutOfMemory}` is logged here: the port's callers have no
-    // error channel.)
-    pub fn kittyClipboardGrant(&mut self, pw: &[u8], dir: rustty_vt::kitty::clipboard::Direction) {
-        if self
-            .kitty_clipboard_grants
+    pub fn kittyClipboardGrant(
+        &mut self,
+        pw: &[u8],
+        dir: rustty_vt::kitty::clipboard::Direction,
+    ) -> Result<(), rustty_vt::alloc::OutOfMemory> {
+        self.kitty_clipboard_grants
             .grant(self.alloc.into(), pw, dir, false)
-            .is_err()
-        {
-            log::warn!(target: LOG_SCOPE, "error recording clipboard grant err=OutOfMemory");
-        }
     }
 
     /// Handle one Kitty clipboard protocol (OSC 5522) packet.
