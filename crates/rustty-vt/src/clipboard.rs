@@ -163,18 +163,33 @@ pub struct Write<'a> {
     // PORT NOTE (R9 callback-ctx): `*anyopaque` context + fn-pointer pair; the
     // ctx points at stack state on the terminal side and is borrowed only for
     // the duration of the effect callback (LIFETIMES.tsv: borrowed-during-call).
+    // `reply_fn`'s second argument is the handler `reply` was given; see
+    // `reply`.
     pub reply_ctx: *mut core::ffi::c_void,
-    pub reply_fn: fn(*mut core::ffi::c_void, WriteResult),
+    pub reply_fn: fn(*mut core::ffi::c_void, *mut core::ffi::c_void, WriteResult),
 }
 
 impl Write<'_> {
     /// Answer the write. May be called at most once; later calls are
-    /// ignored.
+    /// ignored. `handler` is the handler the effect callback was given.
     // pub fn reply(self: Write, result: Result) void {
     //     self.reply_fn(self.reply_ctx, result);
     // }
-    pub fn reply(&self, result: WriteResult) {
-        (self.reply_fn)(self.reply_ctx, result);
+    //
+    // PORT NOTE (soundness, parity S166-F1): the reference's reply state
+    // holds `handler: *Handler` and applies the reply's side effects (a
+    // `remember` grant; for reads, the pty response) inside `reply`, while
+    // the callback runs. In Rust the callback holds `&mut Handler`, a
+    // protected argument for the whole call, so a handler pointer stored in
+    // the reply state before the call would be invalidated by that argument's
+    // retag, and writing through it would be undefined behavior. The callback
+    // therefore hands its own `&mut Handler` to `reply`, and the reply state
+    // reaches the handler through a pointer derived from it (a child of the
+    // protected tag, which is sound). The observable behaviour is the
+    // reference's: the side effects happen inside `reply`.
+    pub fn reply(&self, handler: &mut crate::stream_terminal::Handler<'_>, result: WriteResult) {
+        let handler: *mut crate::stream_terminal::Handler<'_> = handler;
+        (self.reply_fn)(self.reply_ctx, handler.cast(), result);
     }
 }
 
@@ -300,18 +315,21 @@ pub struct Read<'a> {
     // `reply_fn` is the Rust spelling of "Result memory is borrowed only for
     // the duration of this call".
     pub reply_ctx: *mut core::ffi::c_void,
-    pub reply_fn: for<'b> fn(*mut core::ffi::c_void, ReadResult<'b>),
+    pub reply_fn: for<'b> fn(*mut core::ffi::c_void, *mut core::ffi::c_void, ReadResult<'b>),
 }
 
 impl Read<'_> {
     /// Answer the read. May be called at most once; later calls are
     /// ignored. Result memory is borrowed only for the duration of this
-    /// call.
+    /// call. `handler` is the handler the effect callback was given.
     // pub fn reply(self: Read, result: Result) void {
     //     self.reply_fn(self.reply_ctx, result);
     // }
-    pub fn reply(&self, result: ReadResult<'_>) {
-        (self.reply_fn)(self.reply_ctx, result);
+    // PORT NOTE (soundness, parity S166-F1): the `handler` argument; see
+    // `Write::reply`.
+    pub fn reply(&self, handler: &mut crate::stream_terminal::Handler<'_>, result: ReadResult<'_>) {
+        let handler: *mut crate::stream_terminal::Handler<'_> = handler;
+        (self.reply_fn)(self.reply_ctx, handler.cast(), result);
     }
 }
 

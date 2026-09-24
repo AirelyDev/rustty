@@ -261,19 +261,21 @@ pub struct Effects<'a> {
     // clipboard_write: ?*const fn (*Handler, clipboard.Write) void
     // PORT NOTE (7ae9b1113): the pre-range `-> WriteResult` return became the
     // reply-based `clipboard.Write.reply` carried on the request.
-    // PORT NOTE (R7 soundness override, parity S166-F1): the reference's reply
-    // state holds `handler: *Handler` and applies the reply's side effects
-    // (the pty response, and a `remember` grant) INSIDE `reply`, while the
-    // callback is still running. Here the callback holds `&mut Handler`, a
-    // protected argument for the whole call, so any write through another
-    // alias of the handler during the call is undefined behavior
-    // (`rust-mut-args-strongly-protected`). The reply therefore only records
-    // into the request's stack state, and the handler applies the effects
-    // right after the callback returns. The contract this gives an effect
-    // implementation, and the one place it differs from the reference: pty
-    // bytes the callback writes itself come BEFORE the reply's response, and
-    // a grant recorded by `reply` is not visible until the callback returns.
-    // Pinned by `clipboard_read_reply_is_written_after_the_callback_returns`.
+    // PORT NOTE (soundness, parity S166-F1): the reference's reply state holds
+    // `handler: *Handler` and applies the reply's side effects (the pty
+    // response, and a `remember` grant) INSIDE `reply`, while the callback is
+    // still running. Here the callback holds `&mut Handler`, a protected
+    // argument for the whole call, so a handler pointer stored in the reply
+    // state before the call could not be written through during it
+    // (`rust-mut-args-strongly-protected`). Instead the callback passes its
+    // own handler to `write.reply(handler, result)` / `read.reply(handler,
+    // result)`, and the reply applies the side effects through a pointer
+    // derived from that argument, inside `reply`, as the reference does. The
+    // observable order is the reference's: the reply's response precedes pty
+    // bytes the callback writes after replying, and a `remember` grant is
+    // visible to the callback as soon as `reply` returns. Pinned by
+    // `clipboard_read_reply_side_effects_happen_inside_reply` and
+    // `kitty_clipboard_write_reply_grant_is_visible_inside_the_callback`.
     pub clipboard_write: Option<fn(&mut Handler<'a>, clipboard::Write)>,
 
     /// Called when the running program requests clipboard contents
@@ -301,7 +303,7 @@ pub struct Effects<'a> {
     /// the program's follow-up read arrives here with `granted` set
     /// since the user already pasted. See `paste`.
     // clipboard_read: ?*const fn (*Handler, clipboard.Read) void
-    // PORT NOTE: the reply-ordering contract on `clipboard_write` above
+    // PORT NOTE: the `reply(handler, result)` note on `clipboard_write` above
     // applies here too.
     pub clipboard_read: Option<fn(&mut Handler<'a>, clipboard::Read)>,
 
@@ -928,10 +930,10 @@ impl<'a> Handler<'a> {
 
         // var state: ClipboardReadState = .{ ... };
         let mut state = ClipboardReadState {
+            handler: core::ptr::from_ref(&*self).cast(),
             location,
             terminator,
             replied: false,
-            response: Vec::new(),
         };
         func(
             self,
@@ -952,20 +954,7 @@ impl<'a> Handler<'a> {
         // than silence.
         // if (!state.replied) state.respond("") catch ...;
         if !state.replied {
-            state.respond(b"");
-        }
-        // PORT NOTE (SB discipline): the reference reply state carries
-        // `handler: *Handler` and writes the pty from INSIDE the effect
-        // callback; the port's reply only ENCODES into the stack state (no
-        // Handler alias while the callback's `&mut Handler` is live) and the
-        // handler delivers the bytes here, immediately after the callback.
-        // CORRECTION (parity S166-F1): this note used to say the observable
-        // pty write sequence is unchanged. It is unchanged only when the
-        // callback writes nothing itself; see the contract on
-        // `Effects::clipboard_write`.
-        let response = core::mem::take(&mut state.response);
-        if !response.is_empty() {
-            self.write_pty(&response);
+            state.respond(self, b"");
         }
     }
 
@@ -1088,16 +1077,14 @@ impl<'a> Handler<'a> {
 
         // var state: KittyClipboardReadState = .{ ... };
         let mut state = KittyClipboardReadState {
+            handler: core::ptr::from_ref(&*self).cast(),
             primary: meta.loc == clipboard::Location::Primary,
-            id: meta.id.clone(),
-            pw: pw.to_vec(),
-            mimes: mimes.iter().map(|m| m.to_vec()).collect(),
+            id: &meta.id,
+            pw,
+            mimes,
             list,
             terminator,
-            write_pty_some: self.effects.write_pty.is_some(),
             replied: false,
-            remember: false,
-            response: Vec::new(),
         };
         func(
             self,
@@ -1117,23 +1104,7 @@ impl<'a> Handler<'a> {
         // without a reply is answered as a denial rather than silence.
         // if (!state.replied) state.respondStatus(.EPERM);
         if !state.replied {
-            state.respond_status(kitty::clipboard::Status::Eperm);
-        }
-
-        // PORT NOTE (SB discipline): the reference reply state carries
-        // `handler: *Handler` and grants/writes from INSIDE the effect
-        // callback; the port's reply only records into the stack state and
-        // the handler applies the grant + pty write here, immediately after
-        // the callback (see `do_clipboard_read`, and the ordering contract on
-        // `Effects::clipboard_write`, parity S166-F1).
-        if state.remember && !state.pw.is_empty() {
-            // self.handler.kitty_clipboard_grants.grant(..., self.pw, .read, false)
-            self.kitty_clipboard_grants
-                .grant(&state.pw, kitty::clipboard::Direction::Read, false);
-        }
-        let response = core::mem::take(&mut state.response);
-        if !response.is_empty() {
-            self.write_pty(&response);
+            state.respond_status(self, kitty::clipboard::Status::Eperm);
         }
     }
 
@@ -1273,15 +1244,10 @@ impl<'a> Handler<'a> {
         // const committed = state.commit(alloc) catch |err| switch (err) { ... };
         // defer committed.deinit(alloc);
         //
-        // PORT NOTE: `commit` borrows the transaction, so the reply capture is
-        // recorded first and the effect invoked while `committed` is live;
-        // the grant + response ride after (see the SB discipline note on
-        // `kitty_clipboard_read`).
-        let mut reply_state = KittyClipboardWriteReplyState {
-            status: None,
-            remember: false,
-        };
-        let pw_owned: Vec<u8> = {
+        // PORT NOTE: `commit` borrows the transaction, so the effect is
+        // invoked while `committed` is live and the replied status is carried
+        // out of that scope.
+        let status: Option<kitty::clipboard::Status> = {
             let committed = match state.commit() {
                 Ok(committed) => committed,
                 Err(kitty::clipboard::CommitError::OutOfMemory) => {
@@ -1321,6 +1287,12 @@ impl<'a> Handler<'a> {
                 .kitty_clipboard_grants
                 .use_(pw, kitty::clipboard::Direction::Write);
 
+            // var reply_state: KittyClipboardWriteReplyState = .{ .handler = self, .pw = pw };
+            let mut reply_state = KittyClipboardWriteReplyState {
+                handler: core::ptr::from_ref(&*self).cast(),
+                pw,
+                status: None,
+            };
             func(
                 self,
                 clipboard::Write {
@@ -1335,25 +1307,15 @@ impl<'a> Handler<'a> {
                 },
             );
 
-            pw.to_vec()
+            reply_state.status
         };
-
-        // Remembering is only offered when the request carried a usable
-        // password. (Recorded by the reply; applied here — see the SB
-        // discipline note on `kitty_clipboard_read`.)
-        if reply_state.remember && !pw_owned.is_empty() {
-            self.kitty_clipboard_grants
-                .grant(&pw_owned, kitty::clipboard::Direction::Write, false);
-        }
 
         // The program is waiting on the commit status, so a callback
         // that returned without a reply is answered as a denial rather
         // than silence.
         self.kitty_clipboard_finish(
             &state,
-            reply_state
-                .status
-                .unwrap_or(kitty::clipboard::Status::Eperm),
+            status.unwrap_or(kitty::clipboard::Status::Eperm),
             terminator,
         );
     }
@@ -2929,31 +2891,67 @@ impl crate::snapshot::io::Writer for PtyChunker {
 /// acknowledgement (OSC 52, OSC 1337 Copy): the reply is accepted
 /// and discarded.
 // fn ignoreWriteReply(_: *anyopaque, _: clipboard.Write.Result) void {}
-fn ignore_write_reply(_: *mut core::ffi::c_void, _: clipboard::WriteResult) {}
+fn ignore_write_reply(
+    _: *mut core::ffi::c_void,
+    _: *mut core::ffi::c_void,
+    _: clipboard::WriteResult,
+) {
+}
+
+/// Recovers the handler a reply was given (`clipboard::Read::reply` /
+/// `clipboard::Write::reply`) and checks it is the one the request was made
+/// on.
+///
+/// PORT NOTE (soundness, parity S166-F1): the reference reply states hold
+/// `handler: *Handler` and use it inside `reply`. The port's states record
+/// only the handler's address (never dereferenced), and the reply reaches
+/// the handler through the pointer `reply` derived from the callback's own
+/// `&mut Handler`; see `clipboard::Write::reply`. The assert is an invariant
+/// (R7): an effect callback replies with the handler it was given.
+///
+/// # Safety
+///
+/// `handler` is the pointer `clipboard::{Read,Write}::reply` derived from a
+/// live `&mut Handler`, and no other reference to the handler is used while
+/// the returned one is.
+unsafe fn reply_handler<'h>(
+    handler: *mut core::ffi::c_void,
+    expected: *const (),
+) -> &'h mut Handler<'h> {
+    assert!(
+        core::ptr::eq(handler.cast_const().cast::<()>(), expected),
+        "clipboard reply given a different handler than the request's"
+    );
+    // SAFETY: see the function's contract.
+    unsafe { &mut *handler.cast::<Handler<'h>>() }
+}
 
 /// Reply state for one synchronous clipboard read. This lives on the
 /// do_clipboard_read stack frame, so it is only valid during the callback.
 // const ClipboardReadState = struct { handler, location, terminator, replied };
-//
-// PORT NOTE (SB discipline): the reference carries `handler: *Handler` and
-// writes the pty from inside `reply`; the port's reply only encodes the
-// response into this stack state — see the PORT NOTE in `do_clipboard_read`.
 struct ClipboardReadState {
+    /// The handler's address, compared only (see `reply_handler`).
+    // handler: *Handler,
+    handler: *const (),
     location: clipboard::Location,
     terminator: osc::Terminator,
     replied: bool,
-    /// The encoded response, delivered by the handler after the callback.
-    response: Vec<u8>,
 }
 
 impl ClipboardReadState {
     // fn reply(ctx: *anyopaque, result: clipboard.Read.Result) void {
-    fn reply(ctx: *mut core::ffi::c_void, result: clipboard::ReadResult<'_>) {
+    fn reply(
+        ctx: *mut core::ffi::c_void,
+        handler: *mut core::ffi::c_void,
+        result: clipboard::ReadResult<'_>,
+    ) {
         // const self: *ClipboardReadState = @ptrCast(@alignCast(ctx));
         // SAFETY: `ctx` is the `&mut ClipboardReadState` the caller passed as
         // `reply_ctx`, valid for the duration of the effect callback; no other
         // reference to the state exists while the callback runs.
         let state = unsafe { &mut *(ctx as *mut ClipboardReadState) };
+        // SAFETY: `handler` comes from `clipboard::Read::reply`.
+        let handler = unsafe { reply_handler(handler, state.handler) };
         if state.replied {
             log::warn!(target: LOG_SCOPE, "clipboard read replied more than once, ignoring");
             return;
@@ -2981,7 +2979,7 @@ impl ClipboardReadState {
         // };
         // self.replied = true;
         // (the ported respond cannot fail; see `respond`.)
-        state.respond(data);
+        state.respond(handler, data);
         state.replied = true;
     }
 
@@ -2989,9 +2987,10 @@ impl ClipboardReadState {
     //     error{ OutOfMemory, WriteFailed }!void
     //
     // PORT NOTE (R10): the reference encodes over stackFallback(256) +
-    // Allocating writer; the port encodes into the owned response buffer
-    // (PERF(port): stackFallback). Infallible by construction.
-    fn respond(&mut self, data: &[u8]) {
+    // Allocating writer; the port encodes into an owned buffer
+    // (PERF(port): stackFallback). Infallible by construction. `handler` is
+    // the reference's `self.handler`.
+    fn respond(&self, handler: &mut Handler<'_>, data: &[u8]) {
         use crate::snapshot::io::Writer as _;
         let kind: u8 = match self.location {
             clipboard::Location::Selection => b's',
@@ -3008,7 +3007,8 @@ impl ClipboardReadState {
         crate::kitty::clipboard_response::b64_encode_writer(&mut aw, data).unwrap();
         // try aw.writer.writeAll(self.terminator.string());
         aw.write_all(self.terminator.string()).unwrap();
-        self.response = aw.written().to_vec();
+        // handler.writePty(written);
+        handler.write_pty(aw.written());
     }
 }
 
@@ -3017,42 +3017,36 @@ impl ClipboardReadState {
 /// the callback.
 // const KittyClipboardReadState = struct { handler, primary, id, pw, mimes,
 //     list, terminator, replied };
-//
-// PORT NOTE (SB discipline): no `handler: *Handler` — the reply encodes the
-// response and records the grant intent into this stack state; the handler
-// applies both right after the callback (see `kitty_clipboard_read`). The
-// borrowed `id`/`pw`/`mimes` slices become owned copies for the same reason.
-struct KittyClipboardReadState {
+struct KittyClipboardReadState<'s> {
+    /// The handler's address, compared only (see `reply_handler`).
+    // handler: *Handler,
+    handler: *const (),
     primary: bool,
-    id: Vec<u8>,
+    id: &'s [u8],
 
     /// The effective password, empty when the request had none.
-    pw: Vec<u8>,
+    pw: &'s [u8],
 
     /// The requested types; only these are served from a reply.
-    mimes: Vec<Vec<u8>>,
+    mimes: &'s [&'s [u8]],
     list: bool,
     terminator: osc::Terminator,
-
-    /// Whether the handler has a write_pty effect (the respond gate the
-    /// reference reads through `handler.effects`).
-    write_pty_some: bool,
     replied: bool,
-
-    /// Grant intent recorded by a success reply with `remember` set.
-    remember: bool,
-
-    /// The encoded response, delivered by the handler after the callback.
-    response: Vec<u8>,
 }
 
-impl KittyClipboardReadState {
+impl KittyClipboardReadState<'_> {
     // fn reply(ctx: *anyopaque, result: clipboard.Read.Result) void {
-    fn reply(ctx: *mut core::ffi::c_void, result: clipboard::ReadResult<'_>) {
+    fn reply(
+        ctx: *mut core::ffi::c_void,
+        handler: *mut core::ffi::c_void,
+        result: clipboard::ReadResult<'_>,
+    ) {
         // SAFETY: `ctx` is the `&mut KittyClipboardReadState` the caller
         // passed as `reply_ctx`, valid for the duration of the effect
         // callback; no other reference to the state exists while it runs.
-        let state = unsafe { &mut *(ctx as *mut KittyClipboardReadState) };
+        let state = unsafe { &mut *(ctx as *mut KittyClipboardReadState<'_>) };
+        // SAFETY: `handler` comes from `clipboard::Read::reply`.
+        let handler = unsafe { reply_handler(handler, state.handler) };
         if state.replied {
             log::warn!(target: LOG_SCOPE, "clipboard read replied more than once, ignoring");
             return;
@@ -3061,54 +3055,54 @@ impl KittyClipboardReadState {
 
         let success = match result {
             clipboard::ReadResult::Denied => {
-                return state.respond_status(kitty::clipboard::Status::Eperm);
+                return state.respond_status(handler, kitty::clipboard::Status::Eperm);
             }
             clipboard::ReadResult::Unsupported => {
-                return state.respond_status(kitty::clipboard::Status::Enosys);
+                return state.respond_status(handler, kitty::clipboard::Status::Enosys);
             }
             clipboard::ReadResult::Busy => {
-                return state.respond_status(kitty::clipboard::Status::Ebusy);
+                return state.respond_status(handler, kitty::clipboard::Status::Ebusy);
             }
             clipboard::ReadResult::IoError => {
-                return state.respond_status(kitty::clipboard::Status::Eio);
+                return state.respond_status(handler, kitty::clipboard::Status::Eio);
             }
             clipboard::ReadResult::Success(s) => s,
         };
 
         // Remembering is only offered when the request carried a
-        // usable password. (Recorded here; the handler records the
-        // grant after the callback returns.)
+        // usable password.
+        // if (success.remember and self.pw.len > 0) {
+        //     self.handler.kitty_clipboard_grants.grant(gpa, self.pw, .read, false) catch ...;
+        // }
+        // (PORT NOTE: the ported `grant` cannot fail, so the reference's
+        // `log.warn("error recording clipboard grant ...")` arm has no
+        // counterpart.)
         if success.remember && !state.pw.is_empty() {
-            state.remember = true;
+            handler.kitty_clipboard_grants.grant(
+                state.pw,
+                kitty::clipboard::Direction::Read,
+                false,
+            );
         }
 
         // self.respondSuccess(&success) catch |err| { ...; self.respondStatus(.EIO); };
         // (the ported respond_success cannot fail; see its note.)
-        state.respond_success(&success);
+        state.respond_success(handler, &success);
     }
 
     /// Answer with a single status packet.
     // fn respondStatus(self, status: kitty_clipboard.Status) void
-    fn respond_status(&mut self, status: kitty::clipboard::Status) {
-        // (handler.kittyClipboardRespond's write_pty gate.)
-        if !self.write_pty_some {
-            return;
-        }
-        let mut aw = crate::snapshot::io::AllocatingWriter::new();
-        if (kitty::clipboard::Response {
-            id: &self.id,
+    fn respond_status(&self, handler: &mut Handler<'_>, status: kitty::clipboard::Status) {
+        // self.handler.kittyClipboardRespond(&.{ .op = .read, .status = status,
+        //     .id = self.id, .terminator = self.terminator });
+        handler.kitty_clipboard_respond(&kitty::clipboard::Response {
+            id: self.id,
             terminator: self.terminator,
             ..kitty::clipboard::Response::new(
                 crate::osc::parsers::kitty_clipboard_protocol::Operation::Read,
                 status,
             )
-        })
-        .encode(&mut aw)
-        .is_err()
-        {
-            return;
-        }
-        self.response = aw.written().to_vec();
+        });
     }
 
     /// Answer with the full success sequence (OK, listing, DATA
@@ -3116,9 +3110,14 @@ impl KittyClipboardReadState {
     /// in request order.
     // fn respondSuccess(self, success: *const clipboard.Read.Result.Success)
     //     error{ OutOfMemory, WriteFailed }!void
-    fn respond_success(&mut self, success: &clipboard::ReadResultSuccess<'_>) {
+    fn respond_success(
+        &self,
+        handler: &mut Handler<'_>,
+        success: &clipboard::ReadResultSuccess<'_>,
+    ) {
+        // const handler = self.handler;
         // if (handler.effects.write_pty == null) return;
-        if !self.write_pty_some {
+        if handler.effects.write_pty.is_none() {
             return;
         }
 
@@ -3129,9 +3128,9 @@ impl KittyClipboardReadState {
                 data: b"",
             }; kitty::clipboard::max_read_mimes];
         let mut served_len: usize = 0;
-        for mime in &self.mimes {
+        for mime in self.mimes {
             for content in success.contents {
-                if content.mime != &mime[..] {
+                if content.mime != *mime {
                     continue;
                 }
                 served_buf[served_len] = *content;
@@ -3147,7 +3146,7 @@ impl KittyClipboardReadState {
         let mut aw = crate::snapshot::io::AllocatingWriter::new();
         if (kitty::clipboard::ReadSuccess {
             primary: self.primary,
-            id: &self.id,
+            id: self.id,
             list: self.list,
             available: success.available,
             contents: &served_buf[0..served_len],
@@ -3159,7 +3158,8 @@ impl KittyClipboardReadState {
         {
             return;
         }
-        self.response = aw.written().to_vec();
+        // handler.writePty(written);
+        handler.write_pty(aw.written());
     }
 }
 
@@ -3167,26 +3167,32 @@ impl KittyClipboardReadState {
 /// on the kitty_clipboard_commit stack frame, so it is only valid
 /// during the callback.
 // const KittyClipboardWriteReplyState = struct { handler, pw, status };
-//
-// PORT NOTE (SB discipline): no `handler: *Handler`; the grant intent is
-// recorded and applied by the handler after the callback (see
-// `kitty_clipboard_commit`).
-struct KittyClipboardWriteReplyState {
+struct KittyClipboardWriteReplyState<'s> {
+    /// The handler's address, compared only (see `reply_handler`).
+    // handler: *Handler,
+    handler: *const (),
+
+    /// The effective password, empty when the request had none.
+    pw: &'s [u8],
+
     /// The replied commit status, mapped 1:1 from the reply result;
     /// null until the callback replies.
     status: Option<kitty::clipboard::Status>,
-
-    /// Grant intent recorded by a success reply with `remember` set.
-    remember: bool,
 }
 
-impl KittyClipboardWriteReplyState {
+impl KittyClipboardWriteReplyState<'_> {
     // fn reply(ctx: *anyopaque, result: clipboard.Write.Result) void {
-    fn reply(ctx: *mut core::ffi::c_void, result: clipboard::WriteResult) {
+    fn reply(
+        ctx: *mut core::ffi::c_void,
+        handler: *mut core::ffi::c_void,
+        result: clipboard::WriteResult,
+    ) {
         // SAFETY: `ctx` is the `&mut KittyClipboardWriteReplyState` the caller
         // passed as `reply_ctx`, valid for the duration of the effect
         // callback; no other reference to the state exists while it runs.
-        let state = unsafe { &mut *(ctx as *mut KittyClipboardWriteReplyState) };
+        let state = unsafe { &mut *(ctx as *mut KittyClipboardWriteReplyState<'_>) };
+        // SAFETY: `handler` comes from `clipboard::Write::reply`.
+        let handler = unsafe { reply_handler(handler, state.handler) };
         if state.status.is_some() {
             log::warn!(target: LOG_SCOPE, "clipboard write replied more than once, ignoring");
             return;
@@ -3198,11 +3204,14 @@ impl KittyClipboardWriteReplyState {
             clipboard::WriteResult::InvalidData => kitty::clipboard::Status::Einval,
             clipboard::WriteResult::IoError => kitty::clipboard::Status::Eio,
             clipboard::WriteResult::Success(success) => {
-                // Remembering is only offered when the request carried a
-                // usable password. (Recorded here; the handler applies the
-                // grant after the callback returns.)
-                if success.remember {
-                    state.remember = true;
+                // Remembering is only offered when the request
+                // carried a usable password.
+                if success.remember && !state.pw.is_empty() {
+                    handler.kitty_clipboard_grants.grant(
+                        state.pw,
+                        kitty::clipboard::Direction::Write,
+                        false,
+                    );
                 }
                 kitty::clipboard::Status::Done
             }
@@ -6097,7 +6106,7 @@ mod tests {
 
     // fn clipboardWrite(_: *Handler, write: clipboard.Write) void { ...
     //     write.reply(result); }
-    fn cap_clipboard_write(_: &mut Handler, write: clipboard::Write) {
+    fn cap_clipboard_write(handler: &mut Handler, write: clipboard::Write) {
         clip_clear_capture();
         CLIP_COUNT.with(|c| c.set(c.get() + 1));
         CLIP_LOCATION.with(|c| c.set(write.location));
@@ -6106,7 +6115,7 @@ mod tests {
             CLIP_MIME.with(|c| *c.borrow_mut() = Some(write.contents[0].mime.to_vec()));
             CLIP_DATA.with(|c| *c.borrow_mut() = Some(write.contents[0].data.to_vec()));
         }
-        write.reply(CLIP_RESULT.with(|c| c.get()));
+        write.reply(handler, CLIP_RESULT.with(|c| c.get()));
     }
 
     // test "clipboard_write effect callback" (oracle 634ef7198)
@@ -7359,12 +7368,13 @@ mod tests {
         fn desktop_notification(_: &mut Handler, _: stream::ShowDesktopNotification) {
             NOTIFICATION_COUNT.with(|c| c.set(c.get() + 1));
         }
-        fn clipboard_write(_: &mut Handler, write: clipboard::Write) {
+        fn clipboard_write(handler: &mut Handler, write: clipboard::Write) {
             CLIPBOARD_COUNT.with(|c| c.set(c.get() + 1));
             // write.reply(.{ .success = .{} });
-            write.reply(clipboard::WriteResult::Success(
-                clipboard::WriteResultSuccess::default(),
-            ));
+            write.reply(
+                handler,
+                clipboard::WriteResult::Success(clipboard::WriteResultSuccess::default()),
+            );
         }
         fn reset() {
             BELL_COUNT.with(|c| c.set(0));
@@ -7555,12 +7565,14 @@ mod tests {
 
     impl KcReadResult {
         /// Build the borrowed reply and deliver it.
-        fn reply_with(&self, read: &clipboard::Read) {
+        fn reply_with(&self, handler: &mut Handler, read: &clipboard::Read) {
             match self {
-                KcReadResult::Denied => read.reply(clipboard::ReadResult::Denied),
-                KcReadResult::Unsupported => read.reply(clipboard::ReadResult::Unsupported),
-                KcReadResult::Busy => read.reply(clipboard::ReadResult::Busy),
-                KcReadResult::IoError => read.reply(clipboard::ReadResult::IoError),
+                KcReadResult::Denied => read.reply(handler, clipboard::ReadResult::Denied),
+                KcReadResult::Unsupported => {
+                    read.reply(handler, clipboard::ReadResult::Unsupported)
+                }
+                KcReadResult::Busy => read.reply(handler, clipboard::ReadResult::Busy),
+                KcReadResult::IoError => read.reply(handler, clipboard::ReadResult::IoError),
                 KcReadResult::Success {
                     contents,
                     available,
@@ -7571,13 +7583,14 @@ mod tests {
                         .map(|(mime, data)| clipboard::Content { mime, data })
                         .collect();
                     let available_b: Vec<&[u8]> = available.iter().map(|a| a.as_slice()).collect();
-                    read.reply(clipboard::ReadResult::Success(
-                        clipboard::ReadResultSuccess {
+                    read.reply(
+                        handler,
+                        clipboard::ReadResult::Success(clipboard::ReadResultSuccess {
                             contents: &contents_b,
                             available: &available_b,
                             remember: *remember,
-                        },
-                    ));
+                        }),
+                    );
                 }
             }
         }
@@ -7606,7 +7619,7 @@ mod tests {
     }
 
     // fn clipboardWrite(_: *Handler, write: clipboard.Write) void { ... }
-    fn kc_clipboard_write(_: &mut Handler, write: clipboard::Write) {
+    fn kc_clipboard_write(handler: &mut Handler, write: clipboard::Write) {
         let (result, twice) = KC.with(|c| {
             let mut cap = c.borrow_mut();
             cap.write_count += 1;
@@ -7622,15 +7635,15 @@ mod tests {
             (cap.write_result, cap.write_reply_twice)
         });
         if let Some(r) = result {
-            write.reply(r);
+            write.reply(handler, r);
         }
         if twice {
-            write.reply(clipboard::WriteResult::IoError);
+            write.reply(handler, clipboard::WriteResult::IoError);
         }
     }
 
     // fn clipboardRead(_: *Handler, read: clipboard.Read) void { ... }
-    fn kc_clipboard_read(_: &mut Handler, read: clipboard::Read) {
+    fn kc_clipboard_read(handler: &mut Handler, read: clipboard::Read) {
         let (result, twice) = KC.with(|c| {
             let mut cap = c.borrow_mut();
             cap.read_count += 1;
@@ -7643,10 +7656,10 @@ mod tests {
             (cap.read_result.clone(), cap.read_reply_twice)
         });
         if let Some(r) = &result {
-            r.reply_with(&read);
+            r.reply_with(handler, &read);
         }
         if twice {
-            read.reply(clipboard::ReadResult::Denied);
+            read.reply(handler, clipboard::ReadResult::Denied);
         }
     }
 
@@ -8642,7 +8655,7 @@ mod tests {
         CR_WRITTEN.with(|c| c.borrow_mut().extend_from_slice(data));
     }
 
-    fn cr_clipboard_read(_: &mut Handler, read: clipboard::Read) {
+    fn cr_clipboard_read(handler: &mut Handler, read: clipboard::Read) {
         CR_COUNT.with(|c| c.set(c.get() + 1));
         CR_LOCATION.with(|c| c.set(Some(read.location)));
         CR_MIMES.with(|c| *c.borrow_mut() = read.mimes.iter().map(|m| m.to_vec()).collect());
@@ -8652,18 +8665,19 @@ mod tests {
         CR_CAN_REMEMBER.with(|c| c.set(read.can_remember));
         let result = CR_RESULT.with(|c| c.borrow().clone());
         if let Some(r) = &result {
-            r.reply_with(&read);
+            r.reply_with(handler, &read);
         }
         if CR_REPLY_TWICE.with(|c| c.get()) {
-            read.reply(clipboard::ReadResult::Success(
-                clipboard::ReadResultSuccess {
+            read.reply(
+                handler,
+                clipboard::ReadResult::Success(clipboard::ReadResultSuccess {
                     contents: &[clipboard::Content {
                         mime: b"text/plain",
                         data: b"again",
                     }],
                     ..clipboard::ReadResultSuccess::default()
-                },
-            ));
+                }),
+            );
         }
     }
 
@@ -8672,25 +8686,26 @@ mod tests {
     }
 
     fn cr_clipboard_read_then_write_pty(handler: &mut Handler, read: clipboard::Read) {
-        read.reply(clipboard::ReadResult::Success(
-            clipboard::ReadResultSuccess {
+        read.reply(
+            handler,
+            clipboard::ReadResult::Success(clipboard::ReadResultSuccess {
                 contents: &[clipboard::Content {
                     mime: b"text/plain",
                     data: b"hello",
                 }],
                 ..clipboard::ReadResultSuccess::default()
-            },
-        ));
+            }),
+        );
         handler.write_pty(b"X");
     }
 
-    // Parity S166-F1 (no reference test; pins the port's documented contract,
-    // see `Effects::clipboard_write`): the reply's response is written when
-    // the callback returns, so bytes the callback writes itself come first.
-    // The reference writes the response inside `reply`, which would give
-    // "\x1B]52;c;aGVsbG8=\x1B\\X".
+    // Parity S166-F1 (no reference test): the reference writes a read reply's
+    // response INSIDE `reply` (`ClipboardReadState.reply` -> `respond` ->
+    // `handler.writePty`), so pty bytes the callback writes after replying
+    // come after the response. The port used to deliver the response after
+    // the callback returned ("X" first).
     #[test]
-    fn clipboard_read_reply_is_written_after_the_callback_returns() {
+    fn clipboard_read_reply_side_effects_happen_inside_reply() {
         let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
         CR_WRITTEN.with(|c| c.borrow_mut().clear());
 
@@ -8699,7 +8714,101 @@ mod tests {
         s.handler.effects.clipboard_read = Some(cr_clipboard_read_then_write_pty);
         s.next_slice(b"\x1B]52;c;?\x1B\\");
         assert_eq!(
-            b"X\x1B]52;c;aGVsbG8=\x1B\\".as_slice(),
+            b"\x1B]52;c;aGVsbG8=\x1B\\X".as_slice(),
+            cr_written().as_slice()
+        );
+
+        s.deinit();
+        t.deinit(Global);
+    }
+
+    thread_local! {
+        /// `kitty_clipboard_grants.len()` as the callback saw it right after
+        /// its `reply` returned.
+        static S166_GRANTS_AFTER_REPLY: core::cell::Cell<Option<usize>> =
+            const { core::cell::Cell::new(None) };
+    }
+
+    fn s166_kitty_read_remember_then_write_pty(handler: &mut Handler, read: clipboard::Read) {
+        read.reply(
+            handler,
+            clipboard::ReadResult::Success(clipboard::ReadResultSuccess {
+                contents: &[clipboard::Content {
+                    mime: b"text/plain",
+                    data: b"hi",
+                }],
+                remember: true,
+                ..clipboard::ReadResultSuccess::default()
+            }),
+        );
+        let seen = handler.kitty_clipboard_grants.len();
+        S166_GRANTS_AFTER_REPLY.with(|c| c.set(Some(seen)));
+        handler.write_pty(b"X");
+    }
+
+    fn s166_kitty_write_remember(handler: &mut Handler, write: clipboard::Write) {
+        write.reply(
+            handler,
+            clipboard::WriteResult::Success(clipboard::WriteResultSuccess { remember: true }),
+        );
+        let seen = handler.kitty_clipboard_grants.len();
+        S166_GRANTS_AFTER_REPLY.with(|c| c.set(Some(seen)));
+    }
+
+    // Parity S166-F1 (no reference test): a Kitty read reply that asks to
+    // remember records the grant and writes the whole success sequence
+    // inside `reply` (`KittyClipboardReadState.reply`), so the callback sees
+    // the grant as soon as `reply` returns and its own pty bytes follow the
+    // response.
+    #[test]
+    fn kitty_clipboard_read_reply_grant_and_response_happen_inside_reply() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        CR_WRITTEN.with(|c| c.borrow_mut().clear());
+        S166_GRANTS_AFTER_REPLY.with(|c| c.set(None));
+
+        let mut s = t.vt_stream();
+        s.handler.effects.write_pty = Some(cr_write_pty);
+        s.handler.effects.clipboard_read = Some(s166_kitty_read_remember_then_write_pty);
+        assert_eq!(0, s.handler.kitty_clipboard_grants.len());
+        s.next_slice(b"\x1B]5522;type=read:pw=c2VjcmV0:name=YXBw;dGV4dC9wbGFpbg==\x1B\\");
+
+        assert_eq!(Some(1), S166_GRANTS_AFTER_REPLY.with(|c| c.get()));
+        let written = cr_written();
+        assert!(
+            written.starts_with(b"\x1B]5522;type=read:status=OK"),
+            "{:?}",
+            String::from_utf8_lossy(&written)
+        );
+        assert!(
+            written.ends_with(b"\x1B]5522;type=read:status=DONE\x1B\\X"),
+            "{:?}",
+            String::from_utf8_lossy(&written)
+        );
+
+        s.deinit();
+        t.deinit(Global);
+    }
+
+    // Parity S166-F1 (no reference test): a Kitty write reply that asks to
+    // remember records the grant inside `reply`
+    // (`KittyClipboardWriteReplyState.reply`), so it is visible to the
+    // callback as soon as `reply` returns.
+    #[test]
+    fn kitty_clipboard_write_reply_grant_is_visible_inside_the_callback() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        CR_WRITTEN.with(|c| c.borrow_mut().clear());
+        S166_GRANTS_AFTER_REPLY.with(|c| c.set(None));
+
+        let mut s = t.vt_stream();
+        s.handler.effects.write_pty = Some(cr_write_pty);
+        s.handler.effects.clipboard_write = Some(s166_kitty_write_remember);
+        s.next_slice(b"\x1B]5522;type=write:pw=c2VjcmV0:name=YXBw\x1B\\");
+        s.next_slice(b"\x1B]5522;type=wdata\x1B\\");
+
+        assert_eq!(Some(1), S166_GRANTS_AFTER_REPLY.with(|c| c.get()));
+        assert_eq!(1, s.handler.kitty_clipboard_grants.len());
+        assert_eq!(
+            b"\x1B]5522;type=write:status=DONE\x1B\\".as_slice(),
             cr_written().as_slice()
         );
 
@@ -9227,7 +9336,7 @@ mod tests {
     }
 
     // fn clipboardRead(_: *Handler, read: clipboard.Read) void { ... }
-    fn pc_clipboard_read(_: &mut Handler, read: clipboard::Read) {
+    fn pc_clipboard_read(handler: &mut Handler, read: clipboard::Read) {
         PASTE_CAP.with(|c| {
             let mut cap = c.borrow_mut();
             cap.read_count += 1;
@@ -9237,15 +9346,16 @@ mod tests {
             }
             cap.last_read_name = read.name.to_vec();
         });
-        read.reply(clipboard::ReadResult::Success(
-            clipboard::ReadResultSuccess {
+        read.reply(
+            handler,
+            clipboard::ReadResult::Success(clipboard::ReadResultSuccess {
                 contents: &[clipboard::Content {
                     mime: b"text/plain",
                     data: b"Ghostty",
                 }],
                 ..clipboard::ReadResultSuccess::default()
-            },
-        ));
+            }),
+        );
     }
 
     // test "paste: no write_pty effect is an error"

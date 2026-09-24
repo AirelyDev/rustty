@@ -731,8 +731,17 @@ fn wrapper_from_handler(handler: *mut Handler<'static>) -> *mut TerminalWrapper 
 // Stack-lifetime: `ClipboardWrite.ctx` points at this inside the trampoline
 // frame and the C callback must call `reply` before returning (documented
 // contract). Only ever read back as `*const`.
+//
+// PORT NOTE (soundness, parity S166-F1): `handler` is not in the reference.
+// `clipboard::Write::reply` takes the handler the effect callback was given
+// (see its note), and the C reply arrives through `ClipboardWrite.reply`
+// with only this ctx, so the trampoline stores a pointer derived from its own
+// `&mut Handler` argument here. The trampoline does not touch its `handler`
+// again until the C callback has returned, so the reply's use of this
+// pointer is a use of a child of that argument's tag.
 struct ClipboardWriteCtx<'a> {
     write: clipboard::Write<'a>,
+    handler: *mut Handler<'static>,
 }
 
 // /// Opaque context behind ClipboardRead.ctx for the reply trampoline.
@@ -748,10 +757,13 @@ struct ClipboardWriteCtx<'a> {
 // never re-borrowed as `&mut` (the wrapper's stream-handler call chain is
 // live on the same wrapper — the interleaved-alias shape of the
 // `shaper-hook-sb-clean-interleave` memory).
+//
+// PORT NOTE (soundness, parity S166-F1): `handler` as in `ClipboardWriteCtx`.
 struct ClipboardReadCtx<'a> {
     read: clipboard::Read<'a>,
     #[allow(dead_code)]
     wrapper: *mut TerminalWrapper,
+    handler: *mut Handler<'static>,
 }
 
 impl Effects {
@@ -969,7 +981,7 @@ impl Effects {
         let wrapper = wrapper_from_handler(handler);
         let func = match unsafe { (*wrapper).effects.clipboard_write } {
             Some(f) => f,
-            None => return write.reply(clipboard::WriteResult::Unsupported),
+            None => return write.reply(handler, clipboard::WriteResult::Unsupported),
         };
         let userdata = unsafe { (*wrapper).effects.userdata };
 
@@ -1012,7 +1024,11 @@ impl Effects {
         };
 
         // const ctx: ClipboardWriteCtx = .{ .write = write };
-        let ctx = ClipboardWriteCtx { write };
+        // (Derived last: nothing touches `handler` again until `func` returns.)
+        let ctx = ClipboardWriteCtx {
+            write,
+            handler: core::ptr::from_mut(handler),
+        };
         let request = ClipboardWrite {
             size: std::mem::size_of::<ClipboardWrite>(),
             location: write.location,
@@ -1053,22 +1069,27 @@ impl Effects {
             unsafe { (*request).ctx as *const ClipboardWriteCtx<'_> };
         // const write = ctx.write;
         let write = unsafe { (*ctx).write };
+        // SAFETY: `ctx.handler` was derived from the trampoline's live
+        // `&mut Handler`, which is not used while the C callback runs (see
+        // `ClipboardWriteCtx`); this is the only reference made from it.
+        let handler = unsafe { &mut *(*ctx).handler };
         // switch (reply.result) { ... }
         //
         // (`.unsupported, _ =>` — an out-of-range C value is well-defined by
         // the open status type and maps to unsupported, like the reference's
         // catch-all arm.)
         match unsafe { (*reply).result } {
-            WriteStatus::Success => write.reply(clipboard::WriteResult::Success(
-                clipboard::WriteResultSuccess {
+            WriteStatus::Success => write.reply(
+                handler,
+                clipboard::WriteResult::Success(clipboard::WriteResultSuccess {
                     remember: unsafe { (*reply).remember },
-                },
-            )),
-            WriteStatus::Denied => write.reply(clipboard::WriteResult::Denied),
-            WriteStatus::Busy => write.reply(clipboard::WriteResult::Busy),
-            WriteStatus::InvalidData => write.reply(clipboard::WriteResult::InvalidData),
-            WriteStatus::IoError => write.reply(clipboard::WriteResult::IoError),
-            _ => write.reply(clipboard::WriteResult::Unsupported),
+                }),
+            ),
+            WriteStatus::Denied => write.reply(handler, clipboard::WriteResult::Denied),
+            WriteStatus::Busy => write.reply(handler, clipboard::WriteResult::Busy),
+            WriteStatus::InvalidData => write.reply(handler, clipboard::WriteResult::InvalidData),
+            WriteStatus::IoError => write.reply(handler, clipboard::WriteResult::IoError),
+            _ => write.reply(handler, clipboard::WriteResult::Unsupported),
         }
     }
 
@@ -1100,7 +1121,12 @@ impl Effects {
         let mimes: Vec<LibString> = read.mimes.iter().map(|m| LibString::init(m)).collect();
 
         // const ctx: ClipboardReadCtx = .{ .read = read, .wrapper = wrapper };
-        let ctx = ClipboardReadCtx { read, wrapper };
+        // (Derived last: nothing touches `handler` again until `func` returns.)
+        let ctx = ClipboardReadCtx {
+            read,
+            wrapper,
+            handler: core::ptr::from_mut(handler),
+        };
         let request = ClipboardRead {
             size: std::mem::size_of::<ClipboardRead>(),
             location: read.location,
@@ -1140,6 +1166,8 @@ impl Effects {
             unsafe { (*request).ctx as *const ClipboardReadCtx<'_> };
         // const read = ctx.read;
         let read = unsafe { (*ctx).read };
+        // SAFETY: as in `clipboard_write_reply_trampoline`.
+        let handler = unsafe { &mut *(*ctx).handler };
         // switch (reply.result) {
         //     .success => {},
         //     .denied => return read.reply(.denied), ...
@@ -1147,10 +1175,10 @@ impl Effects {
         // }
         match unsafe { (*reply).result } {
             ReadStatus::Success => {}
-            ReadStatus::Denied => return read.reply(clipboard::ReadResult::Denied),
-            ReadStatus::Busy => return read.reply(clipboard::ReadResult::Busy),
-            ReadStatus::IoError => return read.reply(clipboard::ReadResult::IoError),
-            _ => return read.reply(clipboard::ReadResult::Unsupported),
+            ReadStatus::Denied => return read.reply(handler, clipboard::ReadResult::Denied),
+            ReadStatus::Busy => return read.reply(handler, clipboard::ReadResult::Busy),
+            ReadStatus::IoError => return read.reply(handler, clipboard::ReadResult::IoError),
+            _ => return read.reply(handler, clipboard::ReadResult::Unsupported),
         }
 
         // const c_contents: []const ClipboardContent = if (reply.contents) |ptr| ptr[0..reply.contents_len] else &.{};
@@ -1193,13 +1221,14 @@ impl Effects {
             .collect();
 
         // read.reply(.{ .success = .{ .contents = contents, .available = available, .remember = reply.remember } });
-        read.reply(clipboard::ReadResult::Success(
-            clipboard::ReadResultSuccess {
+        read.reply(
+            handler,
+            clipboard::ReadResult::Success(clipboard::ReadResultSuccess {
                 contents: &contents,
                 available: &available,
                 remember: unsafe { (*reply).remember },
-            },
-        ));
+            }),
+        );
     }
 
     // fn desktopNotificationTrampoline(handler: *Handler, notification: Action.ShowDesktopNotification) void {
@@ -8457,7 +8486,7 @@ mod tests {
 
         // const Reply = struct { var last: ?clipboard.Write.Result = null; ... };
         // Captures the trampoline's reply for the direct-invoke checks below.
-        fn capture_reply(_: *mut c_void, result: clipboard::WriteResult) {
+        fn capture_reply(_: *mut c_void, _: *mut c_void, result: clipboard::WriteResult) {
             unsafe { REPLY_RESULT = Some(result) };
         }
 
@@ -9145,6 +9174,72 @@ mod tests {
 
             unsafe {
                 LAST_DATA = None;
+                free(t);
+            }
+        });
+    }
+
+    // Parity S166-F1 (no reference test): the reference writes an OSC 52
+    // read reply's response from inside the reply (`ClipboardReadState.reply`
+    // -> `respond` -> `handler.writePty`), so a C embedder sees its
+    // write_pty callback run before its `reply` call returns. The C reply
+    // trampoline reaches the handler through the pointer the read trampoline
+    // stored in `ClipboardReadCtx`.
+    #[test]
+    fn clipboard_read_c_reply_writes_the_response_inside_reply() {
+        static mut LOG: Vec<u8> = Vec::new();
+        static mut LOG_LEN_AFTER_REPLY: Option<usize> = None;
+
+        extern "C" fn write_pty(_: Terminal, _: *mut c_void, ptr: *const u8, len: usize) {
+            unsafe {
+                (&mut *std::ptr::addr_of_mut!(LOG))
+                    .extend_from_slice(std::slice::from_raw_parts(ptr, len));
+            }
+        }
+
+        extern "C" fn clipboard_read(_: Terminal, _: *mut c_void, request: *const ClipboardRead) {
+            unsafe {
+                let contents = [ClipboardContent {
+                    mime: LibString::init(b"text/plain"),
+                    data: LibString::init(b"hello"),
+                }];
+                ((*request).reply)(
+                    request,
+                    &ClipboardReadReply {
+                        size: std::mem::size_of::<ClipboardReadReply>(),
+                        result: clipboard::ReadStatus::Success,
+                        contents: contents.as_ptr(),
+                        contents_len: contents.len(),
+                        available: std::ptr::null(),
+                        available_len: 0,
+                        remember: false,
+                    },
+                );
+                LOG_LEN_AFTER_REPLY = Some((&*std::ptr::addr_of!(LOG)).len());
+            }
+        }
+
+        with_test_allocator(|alloc| {
+            let (new_result, t) = new_t(alloc, 80, 24);
+            assert_eq!(Result::Success, new_result);
+            unsafe {
+                LOG = Vec::new();
+                LOG_LEN_AFTER_REPLY = None;
+            }
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::WritePty, write_pty as *const c_void)
+            });
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::ClipboardRead, clipboard_read as *const c_void)
+            });
+
+            vtw(t, b"\x1B]52;c;?\x1B\\");
+            let expected: &[u8] = b"\x1B]52;c;aGVsbG8=\x1B\\";
+            assert_eq!(Some(expected.len()), unsafe { LOG_LEN_AFTER_REPLY });
+            assert_eq!(expected, unsafe { (&*std::ptr::addr_of!(LOG)).as_slice() });
+
+            unsafe {
+                LOG = Vec::new();
                 free(t);
             }
         });
