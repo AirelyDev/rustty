@@ -926,6 +926,162 @@ pub(crate) mod tests {
         assert_eq!(writes, vec![b"[info]: \xc3\n".to_vec()]);
     }
 
+    /// The length of the message that makes `[warning](s): <message>\n`
+    /// exactly fill the `LogEmitter.buffer_size + 128` line buffer.
+    const EXACT_FIT_MESSAGE_LEN: usize =
+        LOG_EMITTER_BUFFER_SIZE + 128 - b"[warning](s): ".len() - b"\n".len();
+
+    // Parity S178-F2: the single-write/piecewise boundary is the buffer size
+    // `LogEmitter.buffer_size + 128` exactly: a line of that many bytes is one
+    // write, one byte more is the piecewise fallback.
+    #[test]
+    fn log_stderr_single_write_boundary_is_the_buffer_size() {
+        let mut writes: Vec<Vec<u8>> = Vec::new();
+        let message = vec![b'y'; EXACT_FIT_MESSAGE_LEN];
+        log_stderr_to(
+            &mut |b: &[u8]| writes.push(b.to_vec()),
+            "warning",
+            b"s",
+            &message,
+        );
+        assert_eq!(1, writes.len());
+        assert_eq!(LOG_EMITTER_BUFFER_SIZE + 128, writes[0].len());
+
+        writes.clear();
+        let message = vec![b'y'; EXACT_FIT_MESSAGE_LEN + 1];
+        log_stderr_to(
+            &mut |b: &[u8]| writes.push(b.to_vec()),
+            "warning",
+            b"s",
+            &message,
+        );
+        assert_eq!(9, writes.len(), "one byte over the buffer is piecewise");
+        assert_eq!(message, writes[7]);
+    }
+
+    // Parity S178-F2, the production sink: `log_stderr` hands each line to
+    // `stderr.write` (`rustty_os::stderr::write`, one `write(2)` on fd 2).
+    // The child points fd 2 at a Unix datagram socket, where every `write(2)`
+    // is one datagram, so it can count the writes; a parent/child split keeps
+    // the redirection away from the other tests' stderr.
+    #[test]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    fn log_stderr_production_sink_writes_each_fitting_line_once_to_fd_2() {
+        const CHILD: &str = "RUSTTY_VTC_LOG_STDERR_SINK_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            log_stderr_sink_child();
+            return;
+        }
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "sys::tests::log_stderr_production_sink_writes_each_fitting_line_once_to_fd_2",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            out.status.success() && stdout.contains("LOG_STDERR_SINK_CHILD_OK"),
+            "child failed: {:?}\nstdout: {stdout}\nstderr: {}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    fn log_stderr_sink_child() {
+        use std::ffi::{c_int, c_void};
+        use std::os::unix::io::AsRawFd;
+        use std::os::unix::net::UnixDatagram;
+        extern "C" {
+            fn dup(fd: c_int) -> c_int;
+            fn dup2(fd: c_int, fd2: c_int) -> c_int;
+            fn close(fd: c_int) -> c_int;
+            fn setsockopt(
+                socket: c_int,
+                level: c_int,
+                name: c_int,
+                value: *const c_void,
+                len: u32,
+            ) -> c_int;
+        }
+        #[cfg(target_os = "macos")]
+        const SOL_SOCKET: c_int = 0xffff;
+        #[cfg(target_os = "macos")]
+        const SO_SNDBUF: c_int = 0x1001;
+        #[cfg(target_os = "macos")]
+        const SO_RCVBUF: c_int = 0x1002;
+        #[cfg(target_os = "linux")]
+        const SOL_SOCKET: c_int = 1;
+        #[cfg(target_os = "linux")]
+        const SO_SNDBUF: c_int = 7;
+        #[cfg(target_os = "linux")]
+        const SO_RCVBUF: c_int = 8;
+
+        let (tx, rx) = UnixDatagram::pair().unwrap();
+        let size: c_int = 64 * 1024;
+        for (sock, opt) in [(tx.as_raw_fd(), SO_SNDBUF), (rx.as_raw_fd(), SO_RCVBUF)] {
+            // SAFETY: a valid socket and a live `c_int` option value.
+            let rc = unsafe {
+                setsockopt(
+                    sock,
+                    SOL_SOCKET,
+                    opt,
+                    &size as *const c_int as *const c_void,
+                    std::mem::size_of::<c_int>() as u32,
+                )
+            };
+            assert_eq!(0, rc);
+        }
+
+        let log = |message: &[u8]| {
+            // SAFETY: fd 2 is saved, pointed at the socket for this one call,
+            // and restored; the byte slices are live.
+            unsafe {
+                let saved = dup(2);
+                assert!(saved >= 0);
+                assert_eq!(2, dup2(tx.as_raw_fd(), 2));
+                log_stderr(
+                    std::ptr::null_mut(),
+                    LogLevel::Warning,
+                    b"s".as_ptr(),
+                    1,
+                    message.as_ptr(),
+                    message.len(),
+                );
+                assert_eq!(2, dup2(saved, 2));
+                close(saved);
+            }
+            rx.set_nonblocking(true).unwrap();
+            let mut grams: Vec<Vec<u8>> = Vec::new();
+            let mut buf = vec![0u8; 64 * 1024];
+            while let Ok(n) = rx.recv(&mut buf) {
+                grams.push(buf[..n].to_vec());
+            }
+            grams
+        };
+
+        let message = vec![b'y'; EXACT_FIT_MESSAGE_LEN];
+        let mut line = b"[warning](s): ".to_vec();
+        line.extend_from_slice(&message);
+        line.push(b'\n');
+        assert_eq!(vec![line], log(&message), "a fitting line is one write(2)");
+
+        let message = vec![b'y'; EXACT_FIT_MESSAGE_LEN + 1];
+        let grams = log(&message);
+        assert_eq!(
+            9,
+            grams.len(),
+            "an oversized line is the piecewise fallback"
+        );
+        assert_eq!(message, grams[7]);
+
+        println!("LOG_STDERR_SINK_CHILD_OK");
+    }
+
     // The reference's fallback: a line that does not fit is written piecewise.
     #[test]
     fn log_stderr_writes_an_oversized_line_in_pieces() {
