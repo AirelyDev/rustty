@@ -3429,6 +3429,11 @@ before its site's change, on the `_`-separated input.
 
 **state**: FIXED (batch T-A).
 
+**update (tail-a2, extended R13)**: the two osc9 arms now refuse a `_` before `parseUnsigned` (UD141,
+following Ghostty's own OSC 99 filter), so `osc_9_numbers_use_zig_parse_unsigned` now asserts that
+`9;1;4_20` sleeps the default 100 ms and `9;4;1;4_2` has no progress. The tmux sites stay faithful
+(their input is tmux's own generated output; see UD141 "port handling").
+
 ## N101 — the a=f frame's own RGBA conversion could not answer ENOMEM
 
 - **id**: N101. Not in the inventory.
