@@ -192,9 +192,9 @@ pub struct PageEntryId {
     /// exactly one byte image.
     payload: OffsetSlice<u8>,
 
-    /// A `PageEntryIdTag` held as a raw `u8` (see the PORT NOTE above).
-    /// The mapping arrives zeroed and `0` is `PageEntryIdTag::Implicit`, which
-    /// is also `PageEntry::default()`'s tag.
+    /// A `PageEntryIdTag` held as a raw `u8` (see the PORT NOTE above), with
+    /// the reference's numbering: `0` is `.explicit`, so a zeroed mapping
+    /// reads as the reference's zeroed union does (an empty `.explicit`).
     tag: u8,
 
     /// The tail-padding bytes the fields above imply (7 on 64-bit, 3 on
@@ -224,15 +224,21 @@ const _: () =
     assert!(core::mem::offset_of!(PageEntryId, tag) == core::mem::size_of::<OffsetSlice<u8>>());
 
 /// `std.meta.activeTag(PageEntry.Id)` — the reference's union tag.
+// PORT NOTE (task tail-s2 / S-2b): the reference's tag is an `enum(u1)` in
+// declaration order, `explicit` 0 then `implicit` 1, and that value is the byte
+// the union leaves in the page mapping (byte 16 on 64-bit, MEASURED with a Zig
+// 0.16.0 probe at `20abdb50a`). The discriminants and the variant order follow
+// it, so the stored byte matches (`page_entry_tag_byte_tests`); they were once
+// the reverse.
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PageEntryIdTag {
+    /// An explicitly provided ID via the OSC8 sequence.
+    Explicit = 0,
+
     /// No ID was provided so we auto-generate the ID based on an
     /// incrementing counter attached to the screen.
-    Implicit = 0,
-
-    /// An explicitly provided ID via the OSC8 sequence.
-    Explicit = 1,
+    Implicit = 1,
 }
 
 impl PageEntryId {
@@ -264,12 +270,12 @@ impl PageEntryId {
     #[inline]
     pub fn tag(self) -> PageEntryIdTag {
         // Only 0/1 are constructible (every write goes through the two
-        // constructors above, and a zeroed mapping reads as `.implicit`), so
+        // constructors above, and a zeroed mapping reads as `.explicit`), so
         // the fallback arm is unreachable and is `debug_assert`ed rather than
         // trapping — the same contract as `style::Color::tag`.
-        debug_assert!(self.tag <= PageEntryIdTag::Explicit as u8);
+        debug_assert!(self.tag <= PageEntryIdTag::Implicit as u8);
         match self.tag {
-            1 => PageEntryIdTag::Explicit,
+            0 => PageEntryIdTag::Explicit,
             _ => PageEntryIdTag::Implicit,
         }
     }
@@ -418,7 +424,7 @@ impl PageEntry {
     /// `update` (`autoHash` / `autoHashStrat(.., .Deep)`,
     /// `lib/std/hash/auto_hash.zig`, Zig 0.16):
     ///   - the tag: `PageEntry.Id`'s tag is an `enum(u1)` in declaration order
-    ///     (`explicit` 0, `implicit` 1; NOT `PageEntryIdTag`'s discriminants),
+    ///     (`explicit` 0, `implicit` 1, which `PageEntryIdTag`'s discriminants follow),
     ///     and a `u1` is fed as its one byte;
     ///   - `.implicit`: the `size.OffsetInt` (`u32`) as its native bytes;
     ///   - a `.Deep` slice (the `.explicit` id, then `uri`): each `u8` element,
@@ -437,13 +443,13 @@ impl PageEntry {
         // autoHash(&hasher, std.meta.activeTag(self.id));
         match self.id.tag() {
             PageEntryIdTag::Implicit => {
-                update(&[1]); // tag: implicit
-                              // .implicit => |v| autoHash(&hasher, v),
+                update(&[PageEntryIdTag::Implicit as u8]); // tag: implicit (1)
+                                                           // .implicit => |v| autoHash(&hasher, v),
                 update(&self.id.implicit().to_ne_bytes());
             }
             PageEntryIdTag::Explicit => {
-                update(&[0]); // tag: explicit
-                              // .explicit => |slice| autoHashStrat(&hasher, slice.slice(base), .Deep),
+                update(&[PageEntryIdTag::Explicit as u8]); // tag: explicit (0)
+                                                           // .explicit => |slice| autoHashStrat(&hasher, slice.slice(base), .Deep),
                 let s = unsafe { self.id.explicit().slice(base) };
                 update(s);
                 update(&s.len().to_ne_bytes());
@@ -664,6 +670,86 @@ const _: () = {
     assert!(<PageEntry as crate::ref_counted_set::RefItemGeometry>::REF_ITEM_SIZE == 28);
     assert!(<PageEntry as crate::ref_counted_set::RefItemGeometry>::REF_ITEM_ALIGN == 4);
 };
+
+// rustty-only test of the tag byte `PageEntry.Id` leaves in the page mapping
+// (task tail-s2 / S-2b). The reference's `union(enum)` tag is an `enum(u1)` in
+// declaration order, `explicit` 0 and `implicit` 1, stored in the byte after the
+// 16-byte payload. MEASURED with a Zig 0.16.0 probe built from `20abdb50a`
+// (`probe_n82.zig`, `Page.insertHyperlink` then `std.mem.asBytes(&entry.id)`):
+//   implicit 0x11223344 -> 44 33 22 11 .. .. | 01 at byte 16
+//   explicit "my-id"    -> ..                | 00 at byte 16
+// and an all-zero `PageEntry.Id` is `.explicit` (offset 0, len 0).
+// The probe measured the 64-bit layout (`usize` 8).
+#[cfg(all(test, target_pointer_width = "64"))]
+mod page_entry_tag_byte_tests {
+    use super::*;
+    use crate::page::Capacity;
+
+    /// The bytes of a `PageEntryId`. It has no padding (every byte is a
+    /// named field, see the asserts above), so all of them are initialized.
+    fn id_bytes(id: &PageEntryId) -> [u8; core::mem::size_of::<PageEntryId>()] {
+        let mut out = [0u8; core::mem::size_of::<PageEntryId>()];
+        // SAFETY: `PageEntryId` is `repr(C)` with no implicit padding, so
+        // reading its bytes reads initialized memory.
+        let src = unsafe {
+            core::slice::from_raw_parts(
+                (id as *const PageEntryId).cast::<u8>(),
+                core::mem::size_of::<PageEntryId>(),
+            )
+        };
+        out.copy_from_slice(src);
+        out
+    }
+
+    #[test]
+    fn the_stored_tag_byte_is_the_references() {
+        const TAG: usize = core::mem::offset_of!(PageEntryId, tag);
+        // The probe's 64-bit layout: the tag follows the 16-byte payload.
+        assert_eq!(16, TAG);
+
+        let mut cap = Capacity::new(10, 10);
+        cap.string_bytes = 1 << 16;
+        let mut page = Page::init(cap).unwrap();
+        let implicit = page
+            .insert_hyperlink(Hyperlink {
+                id: HyperlinkId::Implicit(0x1122_3344),
+                uri: b"https://example.com".to_vec(),
+            })
+            .unwrap();
+        let explicit = page
+            .insert_hyperlink(Hyperlink {
+                id: HyperlinkId::Explicit(b"my-id".to_vec()),
+                uri: b"https://example.com".to_vec(),
+            })
+            .unwrap();
+        let base = page.memory_ptr();
+
+        // Read back out of the mapping, as the compressor sees it.
+        let imp = id_bytes(unsafe { &(*page.hyperlink_set.get(base, implicit)).id });
+        assert_eq!(1, imp[TAG], "implicit tag byte");
+        assert_eq!([0x44, 0x33, 0x22, 0x11], imp[0..4], "implicit payload");
+        let exp = id_bytes(unsafe { &(*page.hyperlink_set.get(base, explicit)).id });
+        assert_eq!(0, exp[TAG], "explicit tag byte");
+
+        // The constructors agree with the mapping.
+        assert_eq!(1, id_bytes(&PageEntryId::Implicit(0))[TAG]);
+        assert_eq!(
+            0,
+            id_bytes(&PageEntryId::Explicit(OffsetSlice::default()))[TAG]
+        );
+        page.deinit();
+    }
+
+    /// A zeroed id (a dead item's value, a zeroed mapping) is the reference's
+    /// tag 0, `.explicit`, with an empty slice.
+    #[test]
+    fn a_zeroed_id_is_explicit() {
+        let zero = PageEntryId::Explicit(OffsetSlice::default());
+        assert!(id_bytes(&zero).iter().all(|&b| b == 0));
+        assert_eq!(PageEntryIdTag::Explicit, zero.tag());
+        assert_eq!(0, zero.explicit().len);
+    }
+}
 
 // rustty-only tests of `PageEntry.hash` (`hyperlink.zig:143`) against the
 // reference (NEW-FINDINGS N82, task tail-s2). The expected values were produced
