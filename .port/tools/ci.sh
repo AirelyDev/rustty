@@ -725,6 +725,16 @@ GATE_REGISTRY=(
   # entry's green means nothing.
   "G-VTCLIB-SELF|HARD|bash $GATES/check_vtc_lib_isolation.sh --self-test"
   "G-VTCLIB|HARD|bash $GATES/check_vtc_lib_isolation.sh"
+  # G-ARTIFACT (2026-09-23, parity S6-F2 Decision A) — the other half of the
+  # artifact split. rustty-vt carries a process-wide RUN-TIME artifact value
+  # (`options::runtime_artifact()`) that rustty-vt-c sets to `Lib` in
+  # `install_log_backend`; mode 5522's `.disabled` reads it. That is sound only
+  # while no app-tier code can set it, so the setter may be called from
+  # `crates/rustty-vt-c/src/` alone, the call inside `install_log_backend` must
+  # exist (anti-vacuity), and nothing else may write the cell. STATIC, every
+  # OS, milliseconds. SELF first: six synthetic arms prove each RED and GREEN.
+  "G-ARTIFACT-SELF|HARD|$PY $GATES/check_runtime_artifact_setter.py --self-test"
+  "G-ARTIFACT|HARD|$PY $GATES/check_runtime_artifact_setter.py"
   # G-GTKFEAT (2026-07-31) — the same hole as G-ONIG, one crate over. The
   # workspace clippy lane above builds with DEFAULT features, and rustty-apprt's
   # gtk/wayland/x11 features are default-OFF, so ~30k lines of ported GTK4/

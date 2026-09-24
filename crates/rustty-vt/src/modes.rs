@@ -384,6 +384,11 @@ pub fn mode_from_int(v: u16, ansi: bool) -> Option<Mode> {
     // }
     for (i, entry) in ENTRIES.iter().enumerate() {
         if !entry.disabled && entry.value == v && entry.ansi == ansi {
+            // The artifact-dependent `.disabled` (parity S6-F2), checked only
+            // once the entry matches; see `ModeEntry::disabled_by_artifact`.
+            if entry.disabled_by_artifact && kitty_paste_events_disabled() {
+                continue;
+            }
             let tag = ModeTag {
                 ansi,
                 value: entry.value,
@@ -484,6 +489,14 @@ struct ModeEntry {
     /// Modes that perform a transition or mirror additional terminal state
     /// must use their semantic configuration API instead.
     default_configurable: bool,
+
+    // PORT NOTE (R8 deviation, parity S6-F2): the one `.disabled` predicate
+    // that reads `build_options.artifact` (`kitty_paste_events`,
+    // `modes.zig:341`) is evaluated at run time against
+    // `options::runtime_artifact()`, and only when an entry's value and
+    // `ansi` already match, so the cost is one relaxed load on that single
+    // path. True only for that entry; see `kitty_paste_events_disabled`.
+    disabled_by_artifact: bool,
 }
 
 /// Return whether a mode can safely be configured as a reset default by an
@@ -507,6 +520,7 @@ const fn e(name: &'static str, value: u16) -> ModeEntry {
         ansi: false,
         disabled: false,
         default_configurable: true,
+        disabled_by_artifact: false,
     }
 }
 
@@ -518,6 +532,7 @@ const fn e_ansi(name: &'static str, value: u16) -> ModeEntry {
         ansi: true,
         disabled: false,
         default_configurable: true,
+        disabled_by_artifact: false,
     }
 }
 
@@ -534,9 +549,12 @@ const fn e_not_default_configurable(mut entry: ModeEntry) -> ModeEntry {
 }
 
 // PORT NOTE: mirrors the reference's per-entry `.disabled = <predicate>`
-// override (the `kitty_paste_events` entry is the only user).
-const fn e_disabled_if(mut entry: ModeEntry, disabled: bool) -> ModeEntry {
-    entry.disabled = disabled;
+// override (the `kitty_paste_events` entry is the only user). Its predicate
+// reads the artifact, which the port knows only at run time (parity S6-F2),
+// so the entry is marked and `mode_from_int` evaluates
+// `kitty_paste_events_disabled()` when it matches.
+const fn e_disabled_by_artifact(mut entry: ModeEntry) -> ModeEntry {
+    entry.disabled_by_artifact = true;
     entry
 }
 
@@ -616,20 +634,33 @@ const ENTRIES: &[ModeEntry] = &[
     //     // Kitty clipboard read that a paste event grants.
     //     .disabled = build_options.artifact != .lib and builtin.os.tag != .macos,
     // },
-    e_disabled_if(e("kitty_paste_events", 5522), KITTY_PASTE_EVENTS_DISABLED),
+    e_disabled_by_artifact(e("kitty_paste_events", 5522)),
 ];
 
 // The macOS app and libghostty-vt can both serve the follow-up
 // Kitty clipboard read that a paste event grants.
 // PORT NOTE (R8, cfg not folded): the reference predicate is
-// `build_options.artifact != .lib and builtin.os.tag != .macos`. `artifact`
-// maps to `options::ARTIFACT` (the crate's comptime artifact, `.lib` kept for
-// the lib-artifact seam — see sys.rs `decode_png`) and `builtin.os.tag` to
-// `cfg!(target_os)`; both halves are carried, never collapsed to a constant.
-const KITTY_PASTE_EVENTS_DISABLED: bool = !matches!(
-    crate::options::ARTIFACT,
-    crate::build_options::Artifact::Lib
-) && !cfg!(target_os = "macos");
+// `build_options.artifact != .lib and builtin.os.tag != .macos`.
+// `builtin.os.tag` maps to `cfg!(target_os)`. `artifact` maps to
+// `options::runtime_artifact()`, NOT the comptime `options::ARTIFACT`
+// (R8 deviation, parity S6-F2, Decision A: a comptime switch cannot differ
+// between the app and `rustty-vt-c` in one cargo build; the PORT NOTE on
+// `options::runtime_artifact` argues why no other artifact can observe the
+// run-time value). Both halves are carried, never collapsed to a constant.
+// The OS half is tested first, so macOS pays nothing.
+#[inline]
+fn kitty_paste_events_disabled() -> bool {
+    !cfg!(target_os = "macos")
+        && kitty_paste_events_disabled_for(crate::options::runtime_artifact(), false)
+}
+
+/// The predicate itself, over explicit inputs (testable on every host).
+const fn kitty_paste_events_disabled_for(
+    artifact: crate::build_options::Artifact,
+    os_is_macos: bool,
+) -> bool {
+    !matches!(artifact, crate::build_options::Artifact::Lib) && !os_is_macos
+}
 
 // PORT NOTE: the Mode variant for each `ENTRIES` index, in the same order. This
 // pairs the bit-indexed `ENTRIES` table with the generated `Mode` enum (the
@@ -730,6 +761,54 @@ mod tests {
         assert!(mode_from_int(9, true).is_none());
         assert!(mode_from_int(9, false).unwrap() == Mode::MouseEventX10);
         assert!(mode_from_int(14, true).is_none());
+    }
+
+    /// Parity S6-F2: mode 5522's `.disabled` is
+    /// `artifact != .lib and os != .macos`, over both inputs.
+    #[test]
+    fn kitty_paste_events_disabled_predicate_reads_artifact_and_os() {
+        use crate::build_options::Artifact;
+        assert!(kitty_paste_events_disabled_for(Artifact::Ghostty, false));
+        assert!(!kitty_paste_events_disabled_for(Artifact::Ghostty, true));
+        assert!(!kitty_paste_events_disabled_for(Artifact::Lib, false));
+        assert!(!kitty_paste_events_disabled_for(Artifact::Lib, true));
+        // Only the 5522 entry depends on the artifact.
+        for entry in ENTRIES {
+            assert_eq!(
+                entry.disabled_by_artifact,
+                entry.value == 5522,
+                "{}",
+                entry.name
+            );
+        }
+    }
+
+    /// Parity S6-F2: in this crate's tests the process is the application
+    /// (`options::runtime_artifact()` is `Ghostty`), so mode 5522 is not
+    /// recognized off macOS and recognized on macOS, as in the reference's
+    /// `.ghostty` build. `rustty-vt-c`'s `terminal` tests cover the lib side.
+    #[test]
+    fn mode_5522_follows_the_application_artifact() {
+        assert_eq!(
+            crate::options::runtime_artifact(),
+            crate::build_options::Artifact::Ghostty
+        );
+        let expected = if cfg!(target_os = "macos") {
+            Some(Mode::KittyPasteEvents)
+        } else {
+            None
+        };
+        assert_eq!(mode_from_int(5522, false), expected);
+        let state = ModeState::default();
+        let report = state.get_report(ModeTag {
+            value: 5522,
+            ansi: false,
+        });
+        assert_eq!(
+            report.state == State::NotRecognized,
+            expected.is_none(),
+            "DECRQM must follow mode_from_int"
+        );
     }
 
     #[test]

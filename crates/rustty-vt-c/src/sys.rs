@@ -712,9 +712,18 @@ static LOGGER: Logger = Logger;
 /// completely alone — the correct behavior when a host/embedder already
 /// owns the `log` crate's global registration is containment, not clobber.
 pub fn install_log_backend() {
+    // This process is the lib artifact (libghostty-vt's analog): rustty-vt
+    // compiled it with `terminal_options.artifact = .lib` in the reference
+    // (`GhosttyZig.zig:67-72`). The port records that at run time, here,
+    // because this is the first thing every `*_new` entry point does, and
+    // every route to a mode lookup goes through a `*_new` (parity S6-F2,
+    // Decision A; see `rustty_vt::options::runtime_artifact`). The only
+    // caller of the setter; gate `check_runtime_artifact_setter.py`.
+    rustty_vt::options::set_runtime_artifact_lib();
     // `lib_vt.zig`'s `pub const panic` (the `tinyPanicImpl` arm in release
     // builds): a Rust panic hook can only be installed at run time, and this is
-    // the first thing every `*_new` entry point does (parity S43-F6).
+    // the first thing every `*_new` entry point does (parity S43-F6). It is
+    // installed together with the artifact above; see `panic.rs`.
     crate::panic::install();
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {

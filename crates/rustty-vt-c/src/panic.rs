@@ -17,8 +17,49 @@
 //! (and left as std's default otherwise, the `defaultPanic` arm). A hook can only
 //! run once a C entry point has installed it, so [`install`] is called from
 //! `sys::install_log_backend`, which every `*_new` entry point already calls
-//! first. The `rustty-vt-c` library is linked by C hosts only (no workspace
-//! crate depends on it except as a comment), so the hook reaches no Rust host.
+//! first.
+//!
+//! PORT NOTE (divergences, review-T-H S43-F6). CORRECTION: this note used to
+//! say no workspace crate depends on `rustty-vt-c`, so the hook reaches no
+//! Rust host. `rustty-web-canvas` does depend on it (as an rlib); that is
+//! harmless today only because [`install`] does nothing on wasm32, and that
+//! crate is itself a lib-vt artifact. What actually differs from the
+//! reference:
+//!
+//! - **Scope.** The reference's handler applies "when this file is the root
+//!   module" (`lib_vt.zig:495`): a Zig program that imports the module as a
+//!   dependency keeps its own root's handler. The port's hook is
+//!   process-wide. In a cdylib or staticlib that is still the library's own
+//!   concern, because the library carries its own copy of Rust `std` and a
+//!   C or Swift host has no Rust hook to lose; both handlers end in an
+//!   abort. But a Rust program that links the `rlib` and calls any `*_new`
+//!   in a build without debug assertions has its own panic hook replaced
+//!   without notice. No such host exists outside wasm.
+//! - **Timing.** The reference's handler is chosen at compile time and
+//!   covers every panic. The port's covers only panics after the first
+//!   `*_new`; entry points that need no terminal (paste, focus, size report,
+//!   unicode, build info, `sys_log_stderr`) keep std's hook until then. The
+//!   hook is deliberately not installed at load time (a constructor in
+//!   `__mod_init_func`/`.init_array`): replacing a host's hook merely because
+//!   the library was loaded would widen the scope divergence above to every
+//!   process that links the library, including ones that never call it
+//!   (controller ruling on the review).
+//! - **Build mode.** `DEBUG_MACHINERY` maps Zig's Debug/ReleaseSafe to
+//!   `debug_assertions`. So the plain `release` profile, which DG2 keeps at
+//!   ReleaseSafe's overflow-trap parity, gets the tiny handler, and only the
+//!   `release-safe` profile (debug assertions on) keeps std's, as the
+//!   reference's ReleaseSafe does.
+//!
+//! Should the hook also require that this process is the lib artifact
+//! (`rustty_vt::options::runtime_artifact() == Lib`, parity S6-F2)? It
+//! already does, by construction: `sys::install_log_backend` marks the
+//! process as the lib artifact and then calls [`install`], and nothing else
+//! calls either. The run-time artifact is the port's record of "this process
+//! is libghostty-vt", which is the closest thing it has to the reference's
+//! "`lib_vt.zig` is the root module", and the hook exists exactly when that
+//! record says `Lib`. A check inside the hook could never fail, so none is
+//! added; the gate that restricts the artifact setter to this crate
+//! (`check_runtime_artifact_setter.py`) is what keeps the two tied.
 
 /// Installs [`tiny_panic_impl`] as the panic hook in builds without the debug
 /// machinery. Idempotent.
