@@ -2326,7 +2326,7 @@ fn path_bytes(p: &std::path::Path) -> Vec<u8> {
 //  has_query == true : tokens ← lowercased(buffer) split on ' ' (empty runs
 //    skipped, so an ALL-SPACES buffer yields ZERO tokens but STILL takes this
 //    branch); per theme keep i iff color_pass[i] && zf::rank(name, &tokens,
-//    {to_lower, plain}).is_some() — `zf::rank` IS CALLED even when tokens is empty.
+//    {case_sensitive: false, plain}).is_some() — `zf::rank` IS CALLED even when tokens is empty.
 //  has_query == false: per theme keep i iff color_pass[i]; ranks_out[i] = None.
 // Byte-faithful (`&[u8]`, never `String`).
 fn rank_filtered(
@@ -2361,12 +2361,16 @@ fn rank_filtered(
                     // ".to_lower = true" implies, but this comment serves as a
                     // hint if there's a regression.
                     //
-                    // PORT NOTE (`e8525c0fd`, `.port/phase-3/NON_PORTS.md` §G2):
-                    // the rename to `.case_sensitive = false` is a zf 0.11.0 API
-                    // change. rustty-zf is pinned at 0.10.3, where the field is
-                    // still `to_lower`; the two spellings request the SAME
-                    // case-insensitive ranking. Rename with the deferred bump.
-                    to_lower: true,
+                    // PORT NOTE (zf 0.10.3 -> 0.11.0, `.port/phase-3/NON_PORTS.md` §G2,
+                    // parity tail S-10b): this is the reference pin's call verbatim
+                    // (list_themes.zig:377-386). The rename flipped the DEFAULT
+                    // (`.{}` is now case-sensitive), so the explicit `false` here is
+                    // load-bearing. zf 0.11.0's insensitive mode also lowers the
+                    // needle, which cannot change a result here: the tokens are
+                    // already lowercased above (`allocLowerString`). Measured: over
+                    // the reference's theme names x a query corpus, these ranks are
+                    // bit-identical to the Zig oracle (NEW-FINDINGS N240).
+                    case_sensitive: false,
                     plain: true,
                 },
             );
@@ -2546,7 +2550,7 @@ mod picker_tests {
         let mut ranks = [None; 2];
         let f = rank_filtered(&names, b"   ", true, &pass, &mut ranks);
 
-        // explicit reference: zf::rank(name, &[], {to_lower, plain}) for each name.
+        // explicit reference: zf::rank(name, &[], {case_sensitive: false, plain}) for each name.
         let expect: Vec<usize> = names
             .iter()
             .enumerate()
@@ -2555,7 +2559,7 @@ mod picker_tests {
                     n,
                     &[],
                     RankOptions {
-                        to_lower: true,
+                        case_sensitive: false,
                         plain: true,
                     },
                 )

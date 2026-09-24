@@ -199,15 +199,16 @@ RSXEV = f"{RS_ROOT}/crates/rustty-xev/src"
 GHWUFFS = "/Users/gael/projects/ghostty/pkg/wuffs/src"
 RSWUFFS = f"{RS_ROOT}/crates/rustty-wuffs/src"
 
-# rustty-zf: the vendored `zf` 0.10.3 fuzzy-finder parity crate (the theme-picker
+# rustty-zf: the vendored `zf` 0.11.0 (0.10.3 until parity tail S-10b) fuzzy-finder parity crate (the theme-picker
 # rank/highlight `cli/list_themes.zig` sorts on). GH base = the content-addressed
 # zig-cache dep dir (NOT ghostty src/), so it is not in the 3234-test src/ contract;
 # scoped-mapped here. zf.zig carries 2 named `test "..."` (rank/highlight library
-# interface) + 1 anonymous refAllDecls `test {}` (skipped by zig_count); filter.zig
-# carries 4 (path iterator, segmentLen, rankToken, FixedArrayList); clib.zig carries
-# 2 (rank/highlight exported C library interface). zig=8; the Rust side adds the
-# ref_all_decls compile-touch (rust=9 >= 8).
-GHZF = "/Users/gael/.cache/zig/p/zf-0.10.3-OIRy8RuJAACKA3Lohoumrt85nRbHwbpMcUaLES8vxDnh/src/zf"
+# interface) + the named `test deduplicateMatches` (0.11.0) + 1 anonymous refAllDecls
+# `test {}` (skipped by zig_count); filter.zig carries 4 (path iterator, segmentLen,
+# rankNeedle, FixedArrayList); clib.zig carries 2 (rank/highlight exported C library
+# interface). zig=9; the Rust side adds the ref_all_decls compile-touch and the
+# default-polarity pin (rust=11 >= 9).
+GHZF = "/Users/gael/.cache/zig/p/zf-0.11.0-OIRy8X-RAAAwaRXHMYpj2uvBnuGTZWEE_3V7acqHQNtW/src/zf"
 RSZF = f"{RS_ROOT}/crates/rustty-zf/src"
 
 # rustty-vaxis: the vendored `libvaxis` 0.5.1 TUI-lib parity crate (the interactive
