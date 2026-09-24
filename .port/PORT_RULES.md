@@ -412,7 +412,7 @@ Every skip takes exactly one of these forms:
    | `RUSTTY_REQUIRE_GL` | a headless GL 4.3 core context (llvmpipe) | the Ubuntu leg |
    | `RUSTTY_REQUIRE_FUZZ_CORPUS` | the mirrored fuzz corpus (`.port/`) | every repo-checkout job |
    | `RUSTTY_REQUIRE_SYSTEM_FONTS` | the stock macOS Supplemental fonts the shaping tests name | the macOS leg |
-   | `RUSTTY_REQUIRE_DISPLAY` | an active display for a CoreVideo display link (macOS) | nobody yet (runner not established) |
+   | `RUSTTY_REQUIRE_DISPLAY` | an active display for a CoreVideo display link (macOS) | the macOS leg (S-15; the hosted runner's display is UNVERIFIED — a runner without one now fails the leg instead of skipping) |
    | `RUSTTY_REQUIRE_CMAKE` | `cmake` on `PATH` (xtask's CMake install / pkg-config tests) | both `ci` legs |
    | `RUSTTY_REQUIRE_XGETTEXT` | `xgettext` on `PATH` (xtask's real GTK-leg extraction) | both `ci` legs |
 
@@ -430,12 +430,20 @@ already asserted. A statically dead guard kept verbatim for R1 (`ARTIFACT == .li
 listed in G-SKIP's guard allow-list, which re-verifies the constant on every run.
 
 **Enforcement:** G-SKIP (`.port/tools/gates/check_silent_skips.py`, HARD in `ci.sh`, with a
-`--self-test`) scans every `#[test]` under `crates/`, `crates-sys/` and `xtask/` and fails on
-an early return with no pivot or assertion, a cfg-only body with no scoped ignore, a test
-whose every assertion sits inside one else-less `if`, and a "skipping" line in any test
-helper with no pivot before it. Its allow-list is capped (6 sites, 2 guards) and every entry
-carries a reason. It is a lexical lint, not a proof: a skip it cannot see (for example a
-`continue` out of a loop that was the whole test) is still an R14 violation.
+`--self-test`) scans every test fn (`#[test]`, `#[<path>::test]`, `#[rstest]`,
+`#[test_case(..)]`) in the tracked (`git ls-files`) files under `crates/`, `crates-sys/` and
+`xtask/` and fails on an early return with no pivot or assertion in its own guard (also a
+bare return in a closure or nested fn that skips a later assertion), a cfg-only body with no
+scoped ignore, a test whose every assertion sits in one `if` with a silent path (no `else`,
+or an `else` that only prints), a `match` whose `None`/`Err` arm is silent in a test that
+asserts nowhere else, a test whose every assertion runs inside a loop or `.map`-style
+closure over a probe result, a "skipping" line in any test helper with no pivot before it,
+and a `require_<x>_or_skip` that does not both read its `RUSTTY_REQUIRE_<X>` variable and
+fail. `debug_assert!` and assertions that cannot fail (`assert!(true)`) excuse nothing.
+Test-only files are found by resolving `#[cfg(test)] mod ..;` declarations, never by file
+name (S-15 hardening, review of S-3). Its allow-list is capped (6 sites, 2 guards) and every
+entry carries a reason. It is a lexical lint, not a proof: a skip it cannot see (for example
+a `continue` out of a loop that was the whole test) is still an R14 violation.
 
 ## Pre-port tier checklist (binding, 2026-07-10)
 

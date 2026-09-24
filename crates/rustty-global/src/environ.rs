@@ -576,6 +576,7 @@ mod tests {
         let e = Environ::from_process();
         // Every capture must be reachable through `get_posix` with the same
         // bytes `vars_os` reported.
+        let mut checked = 0usize;
         for (k, v) in std::env::vars_os() {
             let kb = os_bytes(&k);
             if kb.contains(&b'=') {
@@ -586,7 +587,15 @@ mod tests {
                 Some(os_bytes(&v).to_vec()),
                 "key {k:?} did not round-trip"
             );
+            checked += 1;
         }
+        // R14 (G-SKIP LOOP, task S-15): an empty environment would run no
+        // assertion above and report `ok`. `cargo test` always sets `CARGO_*`
+        // variables, so an empty capture here is a broken harness, not a skip.
+        assert!(
+            checked > 0,
+            "the process environment was empty, so nothing was round-tripped"
+        );
     }
 
     #[test]

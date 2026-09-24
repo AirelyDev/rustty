@@ -163,14 +163,30 @@ jobs:
       # ships in a stock macOS install (/System/Library/Fonts/Supplemental), so on
       # this leg a skip means the image changed, and RUSTTY_REQUIRE_SYSTEM_FONTS=1
       # makes it a failure. NOT set on Ubuntu: a stock runner has none of these
-      # fonts, and the HarfBuzz twins skip there by design (the one non-stock
-      # font, Noto Serif Tibetan, is an #[ignore]d test on every leg).
-      # RUSTTY_REQUIRE_DISPLAY (the CoreVideo display-link test) is deliberately
-      # NOT set: whether the hosted runner has an active display is unverified.
+      # fonts, and the HarfBuzz twins skip there by design. The one non-stock
+      # font, Noto Serif Tibetan, is asked for only by the HarfBuzz test
+      # `shape_tibetan_characters`, which is not compiled on macOS (CoreText is
+      # the shaper there) and is an #[ignore]d test on the other legs.
       # Env setup, not a check — the check sequence stays solely in ci.sh.
       - name: Require the stock macOS shaping fonts (macOS only, R14)
         if: runner.os == 'macOS'
         run: echo "RUSTTY_REQUIRE_SYSTEM_FONTS=1" >> "$GITHUB_ENV"
+
+      # PORT_RULES R14 (task S-15, the S-3 review's display follow-up): the
+      # renderer's CoreVideo display-link test
+      # (`sync_parks_the_link_while_idle_and_runs_it_while_dirty`) creates a
+      # real `CVDisplayLink` and skips when `createWithActiveCGDisplays` fails
+      # (no active display). GitHub's hosted macOS runners run a logged-in GUI
+      # session, so the link should exist; RUSTTY_REQUIRE_DISPLAY=1 makes the
+      # skip a failure, so `cargo test --workspace` in ci.sh runs that test as
+      # enforced evidence on this leg. UNVERIFIED on the hosted image when this
+      # step was added: if the leg fails with "active display required but
+      # unavailable (RUSTTY_REQUIRE_DISPLAY=1)", the runner has no display and
+      # that is the finding to record, not a reason to drop the variable.
+      # Env setup, not a check — the check sequence stays solely in ci.sh.
+      - name: Require an active display (macOS only, R14)
+        if: runner.os == 'macOS'
+        run: echo "RUSTTY_REQUIRE_DISPLAY=1" >> "$GITHUB_ENV"
 
       # parity S63-F8: the mirrored fuzz corpus lives under `.port/`, which is
       # deliberately absent from the SOURCE TARBALL — so the five corpus-replay

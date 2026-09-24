@@ -4464,6 +4464,62 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   `gag-prose` row.
 - **state**: CLOSED (task tail-s8d).
 
+## N290 — G-SKIP hardened against the S-3 review's eight bypasses (S-3b)
+
+- **id**: N290. Not a ledger row: the S-3 review's non-blocking G-SKIP findings (task S-15, item A).
+- **severity**: medium (gate). **kind**: gate gap.
+- **what**: `check_silent_skips.py` accepted these silent skips: (1) any earlier assertion in the
+  fn body excused a later top-level `return` (and a trivially-true or `debug_assert!` one excused
+  a guarded return); (2) a `match` with an empty `None =>`/`Err(_) =>` arm; (3) an `else` that only
+  prints, without the word "skip" (and an if-let wrapper beside a trivial assertion); (4) a
+  `return` inside a closure / nested fn that is the whole test; (5) any fn NAMED
+  `require_<x>_or_skip` counted as a pivot; (6) every assertion inside a `for` / `.map(..)` over a
+  possibly-empty probe result; (7) `#[rstest]` / `#[test_case]` tests were not scanned; (8) the lint
+  walked the filesystem (untracked files changed the verdict) and treated any `*test*` basename as
+  test code.
+- **fix**: (1) the excusing assertion must sit in the guard's own block (the statement for a
+  top-level return, the arm for an unbraced match arm), at its top nesting level, and be
+  non-trivial (`debug_assert*` and assertions naming no identifier but `true`/`false`, or comparing
+  identical operands, never count); (2) new ARM rule; (3) WRAP now covers any `if` whose assertions
+  leave a silent path (no `else`, or an `else` without assertion/pivot), with trivial outside
+  assertions discounted; (4) bare returns in closures / nested fns are checked when an assertion
+  follows them in that body; (5) a `require_<x>_or_skip` must transitively (same file) both read
+  a `"RUSTTY_REQUIRE_<X>"` literal and fail, else a PIVOT finding, and pivot / pivoting-helper
+  acceptance requires that pair; (6) new LOOP rule (literal tables exempt); (7) `TEST_ATTR` covers
+  `#[rstest]` and `#[test_case(..)]`; (8) `git ls-files` (a non-git root is an ERROR, exit 1), and
+  test-only files are the `tests/` tree plus files loaded by `cfg(test)`-scoped `mod` declarations
+  (`#[path]` resolved, transitively; `cfg(any(test, ..))` included).
+- **self-test**: 59 arms (was 21), each RED arm checked for its exact finding kind; per bypass a
+  planted RED arm and a clean arm, plus the review's missing accept arms (MSG after a pivot, WRAP
+  with a scoped ignore, `ALLOW_GUARDS` over its cap). Mutation run (each new rule weakened
+  in-process, scratch `s15/mutate.py`): every weakening turns its arms FAIL (B1 ×3 mutations, B2,
+  B3, B4, B5, B6, B7, B8 ×2).
+- **real tree**: two silent skips found and fixed (not allow-listed):
+  `rustty-global` `environ_from_process_matches_vars_os` (LOOP: now counts the round-tripped keys and
+  asserts at least one) and `rustty-xev` `kqueue_file_io_on_thread_pool` (RET: returned `ok`
+  having asserted only the deferral ledger, inside a conditional; now `#[ignore]`d and FAILS when run,
+  naming the unported macOS `xev.File` watcher, with the ledger tripwire split into the always-run
+  `kqueue_file_watcher_deferral_is_ledgered`). No allow-list change (4/6 sites, 2/2 guards).
+  Test-only file set vs the old basename rule: `rustty-oniguruma/src/testing.rs` (production) is no
+  longer test code; 26 declared test modules not named `*test*` (the `log_capture.rs` files,
+  `lz4_differential.rs`, `snapshot/fixture.rs`, ...) now are.
+- **state**: CLOSED (task S-15).
+
+## N291 — the display-link test is enforced on the macOS leg; stale "Noto Serif Tibetan" comments
+
+- **id**: N291. Not a ledger row: the S-3 review's follow-ups 2 and 4 (task S-15, item A).
+- **what / fix**: `.github/workflows/ci.yml` now exports `RUSTTY_REQUIRE_DISPLAY=1` on the macOS leg
+  (env step beside METAL / SYSTEM_FONTS), so `cargo test --workspace` in `ci.sh` runs
+  `sync_parks_the_link_while_idle_and_runs_it_while_dirty` as enforced evidence; `PORT_RULES.md`
+  R14's table says so. Local check: `RUSTTY_REQUIRE_DISPLAY=1 RUSTTY_REQUIRE_METAL=1 cargo test -p
+  rustty-renderer --lib sync_parks_the_link` passes (the link exists). UNVERIFIED: whether the hosted
+  macOS image has an active display; if the leg then fails with "active display required but
+  unavailable", that is the finding. The `ci.yml`, `coretext_tests.rs` and `harfbuzz_tests.rs`
+  comments said Noto Serif Tibetan is an `#[ignore]`d test "on every leg" / among the macOS tests;
+  it is only the HarfBuzz `shape_tibetan_characters`, which is not compiled on macOS and is
+  `#[ignore]`d elsewhere. Comments corrected (comment-only edits in `rustty-font-shaper`).
+- **state**: CLOSED (task S-15).
+
 ## N292 — theme lookup `BufferTooSmall` → `OutOfMemory`, and the C API's `err=` form (N140 closed)
 
 - **id**: N292. Not a ledger row: the closure of NEW-FINDINGS N140 (a) and (b) (task S-15, item B).
