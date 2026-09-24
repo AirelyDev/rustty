@@ -34,7 +34,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
 
 ## Low (9)
 
-- [ ] **S114-F1** · CONFIRMED · `INDIV` · missing-branch
+- [x] **S114-F1** · CONFIRMED · `INDIV` · missing-branch
   - **What:** cursorBlinkInterval Valgrind x5 branch is inert
   - **Oracle:** `src/renderer/Thread.zig:735-748` → **Rustty:** `crates/rustty-core/src/renderer_seam.rs:1868-1887`
   - **Audit's suggested fix:** Add a `rustty_os::valgrind::running_on_valgrind()` probe (RUNNING_ON_VALGRIND client-request sequence) and re-arm the branch.
