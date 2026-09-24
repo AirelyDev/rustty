@@ -224,34 +224,48 @@ impl Program {
     // during a panic unwind, whereas a Zig `defer` does not run on panic (Zig
     // panics abort). The closures match the reference on both paths.
     //
-    // PORT NOTE (the shader leak on a compile failure): note WHERE the reference
-    // registers each `defer` — AFTER the corresponding `setSourceAndCompile`. So
-    // if the vertex stage fails to compile, `defer vs.destroy()` was never
-    // registered and `vs` leaks; if the fragment stage fails, `fs` leaks (`vs`
-    // does not). Likewise there is no `errdefer p.destroy()`, so a link failure
-    // leaks the program object. All three are the reference's behaviour and are
-    // ported as-is rather than quietly fixed: this is a faithful port, and
-    // `createVF` failing means shader compilation is broken, which aborts renderer
-    // init anyway. Flagged upward rather than patched here
-    // (`.port/parity-closure/UPSTREAM-DEFECTS.md` UD247).
+    // PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD247. The reference
+    // registers each `defer x.destroy()` only AFTER that shader's
+    // `setSourceAndCompile` succeeds, so a vertex-stage compile failure leaks `vs`
+    // and a fragment-stage failure leaks `fs`; and it has no `errdefer p.destroy()`,
+    // so a failing attach or link leaks the program. `Pipeline.init`'s own
+    // `errdefer`s show the intended ownership. The port releases each object on the
+    // error path that would otherwise leak it; the success path is unchanged (the
+    // shaders are deleted after the link, the program is returned). Test
+    // `create_vf_failures_leave_no_shader_or_program_behind` (live GL; GL lane /
+    // Linux run pending, it skips on macOS).
     pub fn create_vf(vsrc: &CStr, fsrc: &CStr) -> Result<Self, Error> {
         let vs = Shader::create(gl::VERTEX_SHADER)?;
-        // `vs` leaks if this fails — see the note above; the reference's `defer`
-        // is registered only on the next line.
-        vs.set_source_and_compile(vsrc)?;
+        // The reference's `defer vs.destroy()` comes only after this line, so it
+        // leaks `vs` when the compile fails (UD247): release it here.
+        if let Err(err) = vs.set_source_and_compile(vsrc) {
+            vs.destroy();
+            return Err(err.into());
+        }
 
         // defer vs.destroy();
         let result = (|| -> Result<Self, Error> {
             let fs = Shader::create(gl::FRAGMENT_SHADER)?;
-            // `fs` leaks if this fails — see the note above.
-            fs.set_source_and_compile(fsrc)?;
+            // Same for `fs` (UD247).
+            if let Err(err) = fs.set_source_and_compile(fsrc) {
+                fs.destroy();
+                return Err(err.into());
+            }
 
             // defer fs.destroy();
             let result = (|| -> Result<Self, Error> {
                 let p = Self::create()?;
-                p.attach_shader(vs)?;
-                p.attach_shader(fs)?;
-                p.link()?;
+                // The reference has no `errdefer p.destroy()` (UD247).
+                let linked = (|| -> Result<(), Error> {
+                    p.attach_shader(vs)?;
+                    p.attach_shader(fs)?;
+                    p.link()?;
+                    Ok(())
+                })();
+                if let Err(err) = linked {
+                    p.destroy();
+                    return Err(err);
+                }
 
                 Ok(p)
             })();
@@ -446,5 +460,71 @@ impl Program {
             );
         }
         msg
+    }
+}
+
+/// UD247 (PORT NOTE: reference defect (R13), at `Program::create_vf`): a failing
+/// `create_vf` leaves no shader or program object behind. Live GL: runs on the
+/// Ubuntu GL lane (`RUSTTY_REQUIRE_GL=1`) and skips on hosts without a headless
+/// GL 4.3 core context (macOS).
+#[cfg(test)]
+mod create_vf_leak_tests {
+    use super::Program;
+    use crate::opengl::gl::test_support;
+
+    const VS_OK: &std::ffi::CStr = c"#version 430 core\nvoid main() { gl_Position = vec4(0.0); }\n";
+    const FS_OK: &std::ffi::CStr =
+        c"#version 430 core\nout vec4 color;\nvoid main() { color = vec4(1.0); }\n";
+    const BROKEN: &std::ffi::CStr = c"#version 430 core\nvoid main() { this does not compile }\n";
+    // Compiles, but the fragment stage reads an input no vertex stage writes, so
+    // the link fails.
+    const FS_UNLINKABLE: &std::ffi::CStr = c"#version 430 core\nin vec4 never_written;\nout vec4 color;\nvoid main() { color = never_written; }\n";
+
+    /// Shader and program names GL reports as live, over the small range a fresh
+    /// context hands out.
+    fn live_names() -> (Vec<u32>, Vec<u32>) {
+        let mut shaders = Vec::new();
+        let mut programs = Vec::new();
+        for id in 1..=512u32 {
+            // SAFETY: plain queries on the current context.
+            unsafe {
+                if gl::IsShader(id) == gl::TRUE {
+                    shaders.push(id);
+                }
+                if gl::IsProgram(id) == gl::TRUE {
+                    programs.push(id);
+                }
+            }
+        }
+        (shaders, programs)
+    }
+
+    #[test]
+    fn create_vf_failures_leave_no_shader_or_program_behind() {
+        let Some(_gl) =
+            test_support::offscreen_gl("create_vf_failures_leave_no_shader_or_program_behind")
+        else {
+            return;
+        };
+        let before = live_names();
+
+        // A working pair links, and destroying the program releases everything.
+        let ok = Program::create_vf(VS_OK, FS_OK).expect("a valid pair links");
+        assert_ne!(live_names(), before, "the linked program is live");
+        ok.destroy();
+        assert_eq!(live_names(), before, "a destroyed program leaves nothing");
+
+        for (what, vs, fs) in [
+            ("vertex compile failure", BROKEN, FS_OK),
+            ("fragment compile failure", VS_OK, BROKEN),
+            ("link failure", VS_OK, FS_UNLINKABLE),
+        ] {
+            assert!(Program::create_vf(vs, fs).is_err(), "{what}: must fail");
+            assert_eq!(
+                live_names(),
+                before,
+                "{what}: create_vf left GL shader or program objects behind"
+            );
+        }
     }
 }
