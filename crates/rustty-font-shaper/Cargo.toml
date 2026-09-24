@@ -62,13 +62,14 @@ ghostty-wasm-abi = ["dep:rustty-os"]
 # WHY IT IS SOUND ON macOS. The Darwin default backend is `.coretext` —
 # "CoreText for font discovery, rendering, and shaping" (`backend.rs`
 # `Backend::default`). FreeType serves only the non-default `coretext_freetype`
-# backend and the Linux/Windows backends, and Fontconfig only
-# `fontconfig_freetype`; macOS never links Fontconfig at all (the `fc` module and
-# `fontconfig-sys` are already `cfg`-gated off Darwin). Ghostty itself selects
-# these stacks by BUILD OPTION (`-Dfont-backend`), so expressing them as cargo
-# features is faithful in spirit (R8: a build switch ports as a switch, never
-# constant-folded). A macOS embedder that turns all three off gets the reference's
-# own default backend, unchanged.
+# / `freetype` backends and the Linux/Windows backends, HarfBuzz additionally
+# `coretext_harfbuzz`, and Fontconfig only `fontconfig_freetype`; macOS never
+# links Fontconfig at all (the `fc` module and `fontconfig-sys` are already
+# `cfg`-gated off Darwin). The BACKEND itself is `-Dfont-backend`, i.e.
+# `rustty-build-config`'s `font-backend-*` features (S-14, N266); these three
+# features only decide which `-sys` crates are in the graph, and `build.rs`
+# refuses a selected backend whose libraries they leave out. A macOS embedder
+# that turns all three off gets the reference's own default backend, unchanged.
 #
 # THE IMPLICATION CHAIN is forced by the code, not by taste:
 #   * `harfbuzz` pulls `dep:freetype-sys` as well, because `harfbuzz-sys` has a
@@ -91,11 +92,12 @@ ghostty-wasm-abi = ["dep:rustty-os"]
 default = ["freetype", "harfbuzz", "fontconfig"]
 
 # HarfBuzz 11.0.0 text shaping: the `hb.rs` package port (`pkg/harfbuzz`), the
-# `shape::harfbuzz` shaper, and the `hb_font` the FreeType face carries. NOT the
-# CoreText face: `Backend::default()` is `.coretext` on Darwin and its
-# `hasHarfbuzz()` is false, so `face/coretext.rs`'s `hb_font` is the reference
-# declaration's `void` arm on every build (see its `HARFBUZZ_SHAPER`). Also pulls
-# `freetype-sys` — see the implication chain above.
+# `shape::harfbuzz` shaper, and the `hb_font` the FreeType face carries. The
+# CoreText face carries one only in a `-Dfont-backend=coretext_harfbuzz` build
+# (its `harfbuzz_shaper` arms; on the default `.coretext` `hasHarfbuzz()` is
+# false and `hb_font` is the reference declaration's `void` arm — see
+# `HARFBUZZ_SHAPER`). Also pulls `freetype-sys` — see the implication chain
+# above. `build.rs` refuses a `hasHarfbuzz()` backend with this feature off.
 harfbuzz = ["dep:harfbuzz-sys", "dep:freetype-sys"]
 # FreeType 2.13.2 glyph rasterization: the `ft` FFI glue, the `face::freetype`
 # backend face, and `library::FreetypeLibrary`. Implies `harfbuzz`.

@@ -8,7 +8,9 @@
 //! shaping, so it may depend on both `rustty-vt` and `rustty-font` plus the
 //! `-sys`/objc2 backends.
 //!
-//! PORT STATUS: ported (the FULL D1 shaper tier — 110 tests; the old
+//! PORT STATUS: ported (the FULL D1 shaper tier — the test count depends on the
+//! backend built, see the G-FONTBACKEND lane; "110 tests" here was stale by
+//! S-14; the old
 //! "F3 — shape.zig lands later" sentence was stale doc drift, realigned per
 //! VALIDATION_REPORT.md §3b): `face.zig` (the backend selector) + the
 //! `face/freetype.zig` and `face/coretext.zig` (macOS) backend faces,
@@ -21,12 +23,22 @@
 //! S-8a: this header still listed the Fontconfig arms/discovery and
 //! `face/web_canvas.zig` as an unported residual; all three are ported —
 //! `deferred_face.rs` `fontconfig_payload`, `discovery.rs` `fontconfig_impl`,
-//! `face/web_canvas.rs`.) Residual: `options::BACKEND` resolves only the per-OS
-//! default backend, so the non-default arms (e.g. `loadCoreTextFreetype` for
-//! the `coretext_freetype` backend, which the reference's CI builds and tests
-//! on macOS) are recorded verbatim in comments, not live. That is an R8
-//! build-switch fold, OPEN as NEW-FINDINGS N266, and it keeps the `font`
-//! crate key below `done` (see `rustty-font`'s header).
+//! `face/web_canvas.rs`.)
+//!
+//! The backend is a real build option (S-14, closing NEW-FINDINGS N266):
+//! `-Dfont-backend` is `rustty-build-config`'s `font-backend-*` feature set,
+//! `options::BACKEND` and every `switch (options.backend)` selector are keyed on
+//! the `rustty_font_backend` cfg `build.rs` derives from it, and the non-default
+//! arms are live — `loadCoreTextFreetype` (`coretext_freetype`), the CoreText
+//! face's `harfbuzz_shaper` arms (`coretext_harfbuzz`), the noop shaper
+//! (`coretext_noshape`) and the no-discovery arms (`freetype`). Built and
+//! tested on macOS for all five macOS backends (the G-FONTBACKEND lane);
+//! type-checked, not run, for Linux and Windows `freetype`. Not built by the
+//! port (refused by `rustty-build-config`, recorded as N286):
+//! `fontconfig_freetype` on macOS, `freetype_windows` off Windows, and a
+//! native `web_canvas`. Open measurement: N285 (the FreeType arm of the
+//! reference's never-run `face metrics` test disagrees with the port on one
+//! value).
 //!
 //! Carved leaves-first (R1: every line/comment/test{} ported as the crate is
 //! carved, under the acyclicity gate per R4).
@@ -416,6 +428,17 @@ mod backend_selection_tests {
             assert_eq!(want, tag(b), "the lane's -Dfont-backend reached the build");
         }
         assert_eq!(b, options::build_config_backend());
+        // No `-Dfont-backend`: `Backend.default` (this crate's `backend.zig`
+        // port), which build-config's build script applies the same way.
+        if rustty_build_config::build::FONT_BACKEND_OPTION.is_none() {
+            assert_eq!(b, Backend::default(), "the per-target default");
+        } else {
+            assert_eq!(
+                Some(b as u8),
+                rustty_build_config::build::FONT_BACKEND_OPTION.map(|o| o as u8),
+                "the option's value"
+            );
+        }
 
         // face.zig `Face`
         let face = match b {

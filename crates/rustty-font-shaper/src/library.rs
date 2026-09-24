@@ -5,10 +5,11 @@
 //! `pub const Library = switch (options.backend)` over `FreetypeLibrary`
 //! (freetype-active backends) and `NoopLibrary` (CoreText/Canvas). Both arms and
 //! the backend `switch` are ported here so the `Library` type resolves to the
-//! backend-appropriate implementation (macOS default `coretext` → `NoopLibrary`,
-//! Linux default `fontconfig_freetype` → `FreetypeLibrary`), matching
-//! `backend.zig`'s `Backend.default`. (The `freetype`/`harfbuzz`/`stb` FFI glue
-//! this file leans on is superseded by the full `pkg/*` ports later.)
+//! backend-appropriate implementation (`hasFreetype()` backends →
+//! `FreetypeLibrary`, the others → `NoopLibrary`), keyed on `options.backend`
+//! (`-Dfont-backend`; S-14, N266 — it was the per-OS default only). (The
+//! `freetype`/`harfbuzz`/`stb` FFI glue this file leans on is superseded by the
+//! full `pkg/*` ports later.)
 
 // WASM DIVERGENCE: the freetype FFI glue (`crate::ft`) is not compiled on the
 // `wasm32` web_canvas backend (no FreeType on freestanding wasm); `Library`

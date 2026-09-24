@@ -4,15 +4,19 @@
 //! attached as the `tests` submodule of `harfbuzz.rs`.
 //!
 //! PORT NOTE (backend): these tests run wherever this shaper is the ACTIVE one —
-//! i.e. on the targets whose `Backend::default()` has `hasHarfbuzz() == true`:
-//! `fontconfig_freetype` (Linux/BSD) and `freetype_windows` (Windows), with
-//! FreeType faces carrying an `hb_font` (`face/freetype.rs`). They do NOT run on
-//! macOS: the Darwin default backend is `.coretext`, whose `hasHarfbuzz()` is
-//! false, so `shape.rs` gates this whole module off macOS — the same set the
-//! reference type-checks it on (see the `pub mod harfbuzz` PORT NOTE in
-//! `shape.rs` for the Zig-lazy-vs-Rust-eager reasoning). They previously ran on
-//! macOS against a CoreText face given an `hb_font` it does not have in the
-//! ported configuration; that was the departure, not the coverage. The
+//! i.e. in every build whose `options.backend` has `hasHarfbuzz() == true`: the
+//! defaults `fontconfig_freetype` (Linux/BSD) and `freetype_windows` (Windows),
+//! and `-Dfont-backend=freetype` anywhere, all with FreeType faces carrying an
+//! `hb_font` (`face/freetype.rs`); and on macOS `-Dfont-backend=
+//! coretext_freetype` (FreeType faces) and `coretext_harfbuzz` (CoreText faces
+//! whose `harfbuzz_shaper` arm builds the `hb_font`). They do NOT run in a
+//! default macOS build: `.coretext` has `hasHarfbuzz()` false, so `shape.rs`
+//! gates this whole module off — the same set the reference type-checks it on
+//! (see the `pub mod harfbuzz` PORT NOTE in `shape.rs` for the
+//! Zig-lazy-vs-Rust-eager reasoning). They once ran on macOS against a CoreText
+//! face given an `hb_font` it does not have in the default configuration; that
+//! was the departure, not the coverage. (S-14, N266: the macOS non-default
+//! builds are exercised by the G-FONTBACKEND lane.) The
 //! assertions are structural (cell counts and grid X positions driven by
 //! clusters, plus relative offset orderings) so they hold across every
 //! HarfBuzz-shaping backend, exactly as the reference's do.

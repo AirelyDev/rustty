@@ -384,7 +384,7 @@ impl Face {
     // `.coretext_harfbuzz` again. Both were departures; the PORT NOTE that
     // claimed the const "is reproduced as false" was right about the reference
     // and wrong about the code. Deriving it removes the ability to be
-    // inconsistent with `Backend::default()`.
+    // inconsistent with the build's backend (`options::BACKEND` since S-14).
     const HARFBUZZ_SHAPER: bool = options::BACKEND.has_harfbuzz();
 
     /// Initialize a CoreText-based font from a TTF/TTC in memory.
@@ -2174,16 +2174,15 @@ mod tests {
     /// HarfBuzz user-data destroy callback to `Face.hb_font`, failed the
     /// variation-axes step through the `init_font_with` seam, and proved the
     /// font was destroyed rather than leaked. `HARFBUZZ_SHAPER` is now the
-    /// reference's derivation, `Backend::default().has_harfbuzz()` — false on
-    /// Darwin — so this face has NO HarfBuzz font, the reference's
-    /// `errdefer if (comptime harfbuzz_shaper) hb_font.destroy()` is its own
-    /// no-op, and there is nothing for the test to probe. It was removed rather
-    /// than left asserting a property the ported configuration cannot have; the
-    /// N53 proof itself is not lost — the identical test still runs in
-    /// `face/freetype.rs`, whose backends really do have
-    /// `hasHarfbuzz() == true`. This test has no `test {}` counterpart in the
-    /// reference, so the `check_test_counts.py` contract (rust >= zig) is
-    /// unaffected.
+    /// reference's derivation, `options.backend.hasHarfbuzz()` — false on the
+    /// default `.coretext` — so there this face has NO HarfBuzz font and the
+    /// reference's `errdefer if (comptime harfbuzz_shaper) hb_font.destroy()` is
+    /// its own no-op. UPDATE (S-14, N266): `-Dfont-backend=coretext_harfbuzz` is
+    /// now a real build, where the arm is live; its N53 proof is
+    /// `a_failed_init_font_step_destroys_the_harfbuzz_font` above (compiled
+    /// only there), next to the `face/freetype.rs` one. This test has no
+    /// `test {}` counterpart in the reference, so the `check_test_counts.py`
+    /// contract (rust >= zig) is unaffected.
     #[test]
     fn log_variation_axes_is_silent_when_not_debug_mode() -> Result<(), Error> {
         let mut face = Face::init(
