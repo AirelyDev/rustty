@@ -768,8 +768,9 @@ struct ClipboardWriteCtx<'a> {
 //
 // PORT NOTE (R9 callback-ctx): stack-lifetime, like `ClipboardWriteCtx` above
 // (and module-scoped for the same reason). `wrapper` is carried so the reply
-// trampoline can allocate through `ctx.wrapper.terminal.gpa()` (rustty: the
-// infallible `Vec`, so the field is a parity carry); it is a raw pointer,
+// trampoline can allocate through `ctx.wrapper.terminal.gpa()` (rustty reads
+// the same allocator through `handler.terminal`, so the field is a parity
+// carry; parity tail S7-4); it is a raw pointer,
 // never re-borrowed as `&mut` (the wrapper's stream-handler call chain is
 // live on the same wrapper — the interleaved-alias shape of the
 // `shaper-hook-sb-clean-interleave` memory).
@@ -1003,10 +1004,8 @@ impl Effects {
 
         // Most protocols currently produce one representation, so keep that
         // path allocation-free while supporting arbitrary multi-MIME writes.
-        // PORT NOTE: the reference's `gpa().alloc(...) catch return
-        // write.reply(.io_error)` OOM arm has no rustty analog — a `Vec`
-        // aborts on OOM (DG5 abort policy), so the past-4 path is an
-        // infallible `Vec`.
+        // (parity tail S7-4: past 4 the array is allocated through the
+        // terminal's `gpa()`, fallibly: `catch return write.reply(.io_error)`.)
         let to_c = |content: &clipboard::Content<'_>| ClipboardContent {
             mime: LibString {
                 ptr: content.mime.as_ptr(),
@@ -1028,14 +1027,28 @@ impl Effects {
                 len: 0,
             },
         }; 4];
-        let heap_contents: Vec<ClipboardContent>;
+        let mut heap_contents: rustty_vt::alloc::AVec<ClipboardContent>;
         let contents: &[ClipboardContent] = if write.contents.len() <= stack_contents.len() {
             for (dst, content) in stack_contents.iter_mut().zip(write.contents) {
                 *dst = to_c(content);
             }
             &stack_contents[..write.contents.len()]
         } else {
-            heap_contents = write.contents.iter().map(to_c).collect();
+            // wrapper.terminal.gpa().alloc(ClipboardContent, write.contents.len)
+            //     catch return write.reply(.io_error);
+            // defer wrapper.terminal.gpa().free(contents);
+            // SAFETY: `handler.terminal` is the live terminal; raw reads.
+            let gpa = unsafe { (*(*handler.terminal).screens.active).alloc };
+            heap_contents = rustty_vt::alloc::AVec::new_in(gpa);
+            if heap_contents
+                .try_reserve_exact(write.contents.len())
+                .is_err()
+            {
+                return write.reply(handler, clipboard::WriteResult::IoError);
+            }
+            for content in write.contents {
+                heap_contents.push(to_c(content));
+            }
             &heap_contents
         };
 
@@ -1130,11 +1143,26 @@ impl Effects {
         // Requests carry a handful of MIME types, so keep the common case
         // allocation-free. On OOM the request goes unanswered and the
         // handler replies with an empty clipboard.
-        // PERF(port): `std.heap.stackFallback(128, gpa)` — the stack-first
-        // allocation is ported as a plain `Vec` (which also makes the
-        // reference's `log.warn` OOM arm unreachable: a `Vec` aborts on OOM,
-        // DG5).
-        let mimes: Vec<LibString> = read.mimes.iter().map(|m| LibString::init(m)).collect();
+        // var sfa = std.heap.stackFallback(128, wrapper.terminal.gpa());
+        // const alloc = sfa.get();
+        // const mimes = alloc.alloc(lib.String, read.mimes.len) catch {
+        //     log.warn("out of memory converting clipboard read request", .{});
+        //     return;
+        // };
+        // defer alloc.free(mimes);
+        // (parity tail S7-4: `alloc::StackFallback` over the terminal's `gpa()`.)
+        // SAFETY: `handler.terminal` is the live terminal; raw reads.
+        let gpa = unsafe { (*(*handler.terminal).screens.active).alloc };
+        let sfa = rustty_vt::alloc::StackFallback::<128>::new(gpa);
+        let mut mimes: allocator_api2::vec::Vec<LibString, &rustty_vt::alloc::StackFallback<128>> =
+            allocator_api2::vec::Vec::new_in(&sfa);
+        if mimes.try_reserve_exact(read.mimes.len()).is_err() {
+            log::warn!(target: LOG_SCOPE, "out of memory converting clipboard read request");
+            return;
+        }
+        for m in read.mimes {
+            mimes.push(LibString::init(m));
+        }
 
         // const ctx: ClipboardReadCtx = .{ .read = read, .wrapper = wrapper };
         // (Derived last: nothing touches `handler` again until `func` returns.)
@@ -1216,25 +1244,47 @@ impl Effects {
         // allocation-free while supporting arbitrary multi-MIME replies.
         // On OOM we don't reply and the handler answers with an empty
         // clipboard.
-        // PERF(port): `std.heap.stackFallback(256, ctx.wrapper.terminal.gpa())`
-        // — ported as plain `Vec`s (whose OOM aborts, DG5, so the reference's
-        // `log.warn`-and-return arms are unreachable). The gpa reached through
-        // `ctx.wrapper` is rustty's Global allocator; no wrapper deref is
-        // needed, and none is performed (no alias interleaving with the live
-        // handler call chain).
+        // var sfa = std.heap.stackFallback(256, ctx.wrapper.terminal.gpa());
+        // const alloc = sfa.get();
+        // const contents = alloc.alloc(clipboard.Content, c_contents.len) catch {
+        //     log.warn("out of memory converting clipboard read reply", .{});
+        //     return;
+        // };
+        // defer alloc.free(contents);
+        // ...
+        // const available = alloc.alloc([]const u8, c_available.len) catch { ...same... };
+        // defer alloc.free(available);
+        // (parity tail S7-4: `alloc::StackFallback` over the terminal's
+        // `gpa()`, read through the handler's raw terminal pointer: no wrapper
+        // deref and no `&mut` alias of the live call chain.)
+        // SAFETY: `handler.terminal` is the live terminal; raw reads.
+        let gpa = unsafe { (*(*handler.terminal).screens.active).alloc };
+        let sfa = rustty_vt::alloc::StackFallback::<256>::new(gpa);
+        let mut contents: allocator_api2::vec::Vec<
+            clipboard::Content<'_>,
+            &rustty_vt::alloc::StackFallback<256>,
+        > = allocator_api2::vec::Vec::new_in(&sfa);
+        if contents.try_reserve_exact(c_contents.len()).is_err() {
+            log::warn!(target: LOG_SCOPE, "out of memory converting clipboard read reply");
+            return;
+        }
         // SAFETY: each `LibString`/`ClipboardContent` names borrowed C memory
         // valid for this call.
-        let contents: Vec<clipboard::Content<'_>> = c_contents
-            .iter()
-            .map(|c_content| clipboard::Content {
+        for c_content in c_contents {
+            contents.push(clipboard::Content {
                 mime: unsafe { std::slice::from_raw_parts(c_content.mime.ptr, c_content.mime.len) },
                 data: unsafe { std::slice::from_raw_parts(c_content.data.ptr, c_content.data.len) },
-            })
-            .collect();
-        let available: Vec<&[u8]> = c_available
-            .iter()
-            .map(|c_mime| unsafe { std::slice::from_raw_parts(c_mime.ptr, c_mime.len) })
-            .collect();
+            });
+        }
+        let mut available: allocator_api2::vec::Vec<&[u8], &rustty_vt::alloc::StackFallback<256>> =
+            allocator_api2::vec::Vec::new_in(&sfa);
+        if available.try_reserve_exact(c_available.len()).is_err() {
+            log::warn!(target: LOG_SCOPE, "out of memory converting clipboard read reply");
+            return;
+        }
+        for c_mime in c_available {
+            available.push(unsafe { std::slice::from_raw_parts(c_mime.ptr, c_mime.len) });
+        }
 
         // read.reply(.{ .success = .{ .contents = contents, .available = available, .remember = reply.remember } });
         read.reply(
@@ -11432,6 +11482,148 @@ mod tests {
     thread_local! {
         /// Clipboard writes the sweep's effect accepted (this thread's).
         static SWEEP_CLIPBOARD_WRITES: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+    }
+
+    // Parity tail S7-4 (routing evidence, no reference counterpart): the
+    // clipboard trampolines allocate their C arrays through the terminal's
+    // `gpa()`. A write of five representations spills past the four stack
+    // slots into one 160-byte array on the caller's allocator; four stay on
+    // the stack. A read reply of nine contents spills past
+    // `stackFallback(256, gpa)` (8 x 32 bytes fit) into exactly one extra
+    // allocation. Every spilled byte is returned.
+    #[test]
+    fn clipboard_trampolines_route_through_the_terminals_allocator() {
+        use rustty_vt::alloc::testing::CountingAllocator;
+        thread_local! {
+            static COUNTING: core::cell::Cell<*const CountingAllocator> =
+                const { core::cell::Cell::new(std::ptr::null()) };
+            static WRITE_LAST_ALLOC: core::cell::Cell<Option<(usize, u8)>> =
+                const { core::cell::Cell::new(None) };
+            static WRITE_CONTENTS: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+            static WRITE_CALLS: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+            static REPLY_CONTENTS: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+            static REPLY_ALLOCS: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+        }
+        fn counting() -> &'static CountingAllocator {
+            // SAFETY: set to the test's live allocator for the test's body.
+            unsafe { &*COUNTING.with(|c| c.get()) }
+        }
+        extern "C" fn write_pty(_: Terminal, _: *mut c_void, _: *const u8, _: usize) {}
+        extern "C" fn clipboard_write(_: Terminal, _: *mut c_void, request: *const ClipboardWrite) {
+            unsafe {
+                WRITE_CONTENTS.with(|c| c.set((*request).contents_len));
+                WRITE_LAST_ALLOC.with(|c| c.set(counting().last_alloc.get()));
+                WRITE_CALLS.with(|c| c.set(counting().alloc_calls.get()));
+                ((*request).reply)(
+                    request,
+                    &ClipboardWriteReply {
+                        size: std::mem::size_of::<ClipboardWriteReply>(),
+                        result: clipboard::WriteStatus::Success,
+                        remember: false,
+                    },
+                );
+            }
+        }
+        extern "C" fn clipboard_read(_: Terminal, _: *mut c_void, request: *const ClipboardRead) {
+            let n = REPLY_CONTENTS.with(|c| c.get());
+            let contents = [ClipboardContent {
+                mime: LibString::init(b"text/plain"),
+                data: LibString::init(b"x"),
+            }; 9];
+            let before = counting().alloc_calls.get();
+            unsafe {
+                ((*request).reply)(
+                    request,
+                    &ClipboardReadReply {
+                        size: std::mem::size_of::<ClipboardReadReply>(),
+                        result: clipboard::ReadStatus::Success,
+                        contents: contents.as_ptr(),
+                        contents_len: n,
+                        available: std::ptr::null(),
+                        available_len: 0,
+                        remember: false,
+                    },
+                );
+            }
+            REPLY_ALLOCS.with(|c| c.set(counting().alloc_calls.get() - before));
+        }
+
+        let counting_alloc = CountingAllocator::over_heap();
+        COUNTING.with(|c| c.set(&counting_alloc));
+        let calloc = counting_alloc.allocator();
+        let mut t: Terminal = std::ptr::null_mut();
+        assert_eq!(Result::Success, unsafe {
+            new(&calloc as *const CAllocator, &mut t, 80, 24)
+        });
+        unsafe {
+            assert_eq!(
+                Result::Success,
+                set(t, Option_::WritePty, write_pty as *const c_void)
+            );
+            assert_eq!(
+                Result::Success,
+                set(t, Option_::ClipboardWrite, clipboard_write as *const c_void)
+            );
+            assert_eq!(
+                Result::Success,
+                set(t, Option_::ClipboardRead, clipboard_read as *const c_void)
+            );
+        }
+        let array = |n: usize| Some((n * std::mem::size_of::<ClipboardContent>(), 3u8));
+        assert_eq!(32, std::mem::size_of::<ClipboardContent>());
+
+        // Writes: four representations stay on the stack, five spill one
+        // allocation more before the callback runs.
+        let mut spills = [0usize; 2];
+        for (i, (n, mimes)) in [0usize, 1].into_iter().zip([
+            (
+                4usize,
+                &["dGV4dC9h", "dGV4dC9i", "dGV4dC9j", "dGV4dC9k"][..],
+            ),
+            (
+                5,
+                &["dGV4dC9h", "dGV4dC9i", "dGV4dC9j", "dGV4dC9k", "dGV4dC9l"][..],
+            ),
+        ]) {
+            vtw(t, b"\x1B]5522;type=write:id=w\x1B\\");
+            for m in mimes {
+                vtw(
+                    t,
+                    format!("\x1B]5522;type=wdata:mime={m};eA==\x1B\\").as_bytes(),
+                );
+            }
+            let live = counting_alloc.live_bytes.get();
+            let before = counting_alloc.alloc_calls.get();
+            vtw(t, b"\x1B]5522;type=wdata\x1B\\");
+            spills[i] = WRITE_CALLS.with(|c| c.get()) - before;
+            assert_eq!(n, WRITE_CONTENTS.with(|c| c.get()));
+            if n == 5 {
+                assert_eq!(
+                    array(5),
+                    WRITE_LAST_ALLOC.with(|c| c.get()),
+                    "the spilled array"
+                );
+            }
+            assert!(
+                counting_alloc.live_bytes.get() <= live,
+                "the array is freed"
+            );
+        }
+        assert_eq!(spills[0] + 1, spills[1], "five representations spill once");
+
+        // Read replies: eight contents fit the 256-byte buffer, nine spill one
+        // allocation more.
+        let mut allocs = [0usize; 2];
+        for (i, n) in [8usize, 9].into_iter().enumerate() {
+            REPLY_CONTENTS.with(|c| c.set(n));
+            vtw(t, b"\x1B]5522;type=read:id=r;dGV4dC9wbGFpbg==\x1B\\");
+            allocs[i] = REPLY_ALLOCS.with(|c| c.get());
+        }
+        assert_eq!(allocs[0] + 1, allocs[1], "nine contents spill once");
+
+        unsafe { free(t) };
+        assert_eq!(0, counting_alloc.live_bytes.get(), "every byte is returned");
+        COUNTING.with(|c| c.set(std::ptr::null()));
     }
 
     // Parity tail S7-4: the sweep corpus is not vacuous. On a clean run over a

@@ -201,6 +201,83 @@ extern "C" fn failing_remap(
 
 extern "C" fn failing_free(_: *mut core::ffi::c_void, _: *mut u8, _: usize, _: u8, _: usize) {}
 
+/// `std.heap.stackFallback(N, fallback)`: an allocator that serves requests
+/// from an inline `N`-byte buffer while they fit (bumping through it, as Zig's
+/// `FixedBufferAllocator` does) and from `fallback` otherwise. Freeing the
+/// most recent in-buffer allocation returns its bytes to the buffer; other
+/// in-buffer frees are no-ops, and fallback allocations are freed through
+/// `fallback`. Use it through `&StackFallback` (allocator_api2's `Allocator`).
+///
+/// Rust-only glue for the reference's `var sfa = std.heap.stackFallback(n,
+/// alloc); const a = sfa.get();` (parity tail S7-4): a request that fits the
+/// buffer reaches no allocator, one that does not reaches `fallback`.
+pub struct StackFallback<const N: usize> {
+    buf: core::cell::UnsafeCell<[core::mem::MaybeUninit<u8>; N]>,
+    end: core::cell::Cell<usize>,
+    fallback: VtAllocator,
+}
+
+impl<const N: usize> StackFallback<N> {
+    /// `std.heap.stackFallback(N, fallback)` (`.get()` starts empty).
+    pub fn new(fallback: VtAllocator) -> StackFallback<N> {
+        StackFallback {
+            buf: core::cell::UnsafeCell::new([core::mem::MaybeUninit::uninit(); N]),
+            end: core::cell::Cell::new(0),
+            fallback,
+        }
+    }
+
+    fn base(&self) -> *mut u8 {
+        self.buf.get() as *mut u8
+    }
+
+    fn owns(&self, ptr: NonNull<u8>) -> bool {
+        let base = self.base() as usize;
+        let p = ptr.as_ptr() as usize;
+        p >= base && p < base + N
+    }
+}
+
+// SAFETY: in-buffer blocks are disjoint ranges of `buf` handed out by bumping
+// `end` (never overlapping a live block), valid while `self` lives, which the
+// `&StackFallback` borrow guarantees; fallback blocks follow the handle's
+// contract. Frees of in-buffer blocks only move `end` back when the block is
+// the last one handed out.
+unsafe impl<const N: usize> ApiAllocator for &StackFallback<N> {
+    fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+        if layout.size() == 0 {
+            return Ok(dangling(layout));
+        }
+        let base = self.base() as usize;
+        let start = (base + self.end.get()).next_multiple_of(layout.align()) - base;
+        if let Some(new_end) = start.checked_add(layout.size()) {
+            if new_end <= N {
+                self.end.set(new_end);
+                // SAFETY: `start..new_end` lies inside `buf` and is not part of
+                // any live block (everything live is below the old `end`).
+                let p = unsafe { NonNull::new_unchecked(self.base().add(start)) };
+                return Ok(NonNull::slice_from_raw_parts(p, layout.size()));
+            }
+        }
+        self.fallback.allocate(layout)
+    }
+
+    unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
+        if layout.size() == 0 {
+            return;
+        }
+        if self.owns(ptr) {
+            let offset = ptr.as_ptr() as usize - self.base() as usize;
+            if offset + layout.size() == self.end.get() {
+                self.end.set(offset);
+            }
+            return;
+        }
+        // SAFETY: a fallback block (the caller's contract).
+        unsafe { self.fallback.deallocate(ptr, layout) };
+    }
+}
+
 /// `std.heap.page_allocator` as a handle: every allocation is its own
 /// page-granular mapping (`rustty_os::page_allocator`), `resize` succeeds
 /// only for the same length and `remap` is refused (Zig's `PageAllocator`
@@ -1728,6 +1805,48 @@ mod tests {
     // Parity tail S7-4: the `std.heap.page_allocator` handle hands out
     // page-aligned memory, grows by alloc + copy + free (its `remap` is
     // refused) and frees with the allocation's own layout.
+    // `stackFallback`: requests that fit the buffer reach no allocator,
+    // larger ones (and the overflow of a growing list) reach the fallback,
+    // and every fallback byte is returned.
+    #[test]
+    fn stack_fallback_serves_the_buffer_then_the_fallback() {
+        let counting = CountingAllocator::over_heap();
+        let c = counting.allocator();
+        with_handle(&c, |alloc| {
+            let sfa = StackFallback::<64>::new(alloc);
+            let mut small: AVec<u64, &StackFallback<64>> = AVec::new_in(&sfa);
+            small.try_reserve_exact(4).unwrap();
+            small.extend([1, 2, 3, 4]);
+            assert_eq!(0, counting.alloc_calls.get(), "32 bytes fit the buffer");
+            let mut more: AVec<u8, &StackFallback<64>> = AVec::new_in(&sfa);
+            more.try_reserve_exact(32).unwrap();
+            assert_eq!(0, counting.alloc_calls.get(), "64 bytes still fit");
+            let mut big: AVec<u8, &StackFallback<64>> = AVec::new_in(&sfa);
+            big.try_reserve_exact(1).unwrap();
+            assert_eq!(1, counting.alloc_calls.get(), "the buffer is full");
+            assert_eq!(Some((1, 0)), counting.last_alloc.get());
+            drop(big);
+            drop(more);
+            // The last in-buffer block was returned; a grow past the buffer
+            // moves the list to the fallback.
+            small.try_reserve_exact(100).unwrap();
+            assert_eq!(2, counting.alloc_calls.get());
+            assert_eq!(&[1, 2, 3, 4], small.as_slice());
+            drop(small);
+            assert_eq!(
+                0,
+                counting.live_bytes.get(),
+                "every fallback byte is returned"
+            );
+
+            // A failing fallback surfaces as the allocation error.
+            let sfa = StackFallback::<8>::new(failing());
+            let mut v: AVec<u8, &StackFallback<8>> = AVec::new_in(&sfa);
+            assert!(v.try_reserve_exact(8).is_ok());
+            assert!(v.try_reserve_exact(9).is_err());
+        });
+    }
+
     #[test]
     fn page_allocator_handle_allocates_grows_and_frees() {
         let h = page_allocator();
