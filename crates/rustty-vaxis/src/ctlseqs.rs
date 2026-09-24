@@ -1,4 +1,4 @@
-//! Port of `libvaxis` `ctlseqs.zig` (151 LOC) — the control-sequence string
+//! Port of `libvaxis` `ctlseqs.zig` (0.6.0: 161 LOC; the three multi-cursor sequences are new) — the control-sequence string
 //! constants (queries, mouse/paste/sync/unicode/color-scheme sets, cursor/erase/alt
 //! screen, SGR colors/underlines/attributes, OSC sequences, kitty graphics, and the
 //! color control sequences).
@@ -78,6 +78,11 @@ pub const ri: &[u8] = b"\x1bM";
 pub const ind: &[u8] = b"\n";
 pub const cuf: &[u8] = b"\x1b[{d}C";
 pub const cub: &[u8] = b"\x1b[{d}D";
+
+// Multi Cursor
+pub const secondary_cursors_rgb: &[u8] = b"\x1b[>40;2:{d}:{d}:{d} q";
+pub const reset_secondary_cursors: &[u8] = b"\x1b[>0;4 q";
+pub const show_secondary_cursor: &[u8] = b"\x1b[>29;2:{d}:{d} q";
 
 // Erase
 pub const erase_below_cursor: &[u8] = b"\x1b[J";

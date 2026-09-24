@@ -1,4 +1,5 @@
-//! rustty-vaxis — pure-Rust port of the vendored `libvaxis` 0.5.1 subset (R3).
+//! rustty-vaxis — pure-Rust port of the vendored `libvaxis` 0.6.0 subset (R3; 0.5.1 until
+//! parity tail S-10b, `NON_PORTS.md` §G2).
 //!
 //! CHUNK 1a — the CORE VALUE TYPES only. Module-per-Zig-file layout:
 //! - [`cell`] — `Cell.zig` (`Style`/`Color`/`Segment`/`Cell` + SGR bits)

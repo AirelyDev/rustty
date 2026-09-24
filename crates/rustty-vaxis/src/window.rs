@@ -352,8 +352,8 @@ impl<'a> Window<'a> {
         }
         unsafe {
             (*self.screen).cursor_vis = true;
-            (*self.screen).cursor_row = (row as i32 + self.y_off) as u16;
-            (*self.screen).cursor_col = (col as i32 + self.x_off) as u16;
+            (*self.screen).cursor.row = (row as i32 + self.y_off) as u16;
+            (*self.screen).cursor.col = (col as i32 + self.x_off) as u16;
         }
     }
 

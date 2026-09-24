@@ -1,4 +1,4 @@
-//! Port of `libvaxis` `Loop.zig` (404 LOC, 1 `test{}`) — the read thread that reads the
+//! Port of `libvaxis` `Loop.zig` (libvaxis 0.6.0: 450 LOC, 1 `test{}`) — the read thread that reads the
 //! tty, feeds the Chunk-3a `Parser`, routes through `handle_event_generic`, and pushes
 //! parsed events to the [`Queue`]. (`loop` is a Rust keyword, so the module is `loop_`;
 //! `lib.rs` re-exports `Loop` so `vaxis::Loop` matches Zig's `vaxis.Loop`.)
@@ -148,11 +148,14 @@ struct SendLoop<T>(*mut Loop<'static, T>);
 unsafe impl<T> Send for SendLoop<T> {}
 
 impl<'a, T: LoopEvent> Loop<'a, T> {
-    /// Construct the Loop over a tty + Vaxis (Zig `.{ .tty = &tty, .vaxis = &vx }`). The
-    /// caller passes raw pointers to a PINNED `tty`/`vaxis` that outlive the Loop. The
-    /// Loop itself must then be pinned (Box/stack held for the read thread's life)
-    /// before `init`/`start` — the intrusive-init requirement below.
-    pub fn new(tty: *mut Tty, vaxis: *mut Vaxis<'a>) -> Self {
+    /// `pub fn init(io: std.Io, tty: *Tty, vx: *Vaxis) Self` (libvaxis 0.6.0; 0.5.1 had no
+    /// constructor and its `init` installed the resize handler, now
+    /// [`Self::install_resize_handler`]). The caller passes raw pointers to a PINNED
+    /// `tty`/`vaxis` that outlive the Loop. The Loop itself must then be pinned (Box/stack
+    /// held for the read thread's life) before `install_resize_handler`/`start` — the
+    /// intrusive requirement below. `io` is dropped (the port's queue and thread are
+    /// `std::sync` / `std::thread`, see [`crate::queue`]).
+    pub fn init(tty: *mut Tty, vaxis: *mut Vaxis<'a>) -> Self {
         Loop {
             tty,
             vaxis,
@@ -162,10 +165,11 @@ impl<'a, T: LoopEvent> Loop<'a, T> {
         }
     }
 
-    /// Initialize the event loop. This is an intrusive init so that we have
-    /// a stable pointer to register signal callbacks with posix TTYs
+    /// `installResizeHandler` (libvaxis 0.6.0; the body of 0.5.1's `init`, whose doc
+    /// read: "Initialize the event loop. This is an intrusive init so that we have a
+    /// stable pointer to register signal callbacks with posix TTYs").
     #[cfg_attr(any(windows, test), allow(clippy::unnecessary_wraps))]
-    pub fn init(&self) -> Result<(), TtyError> {
+    pub fn install_resize_handler(&self) -> Result<(), TtyError> {
         // windows/test → no-op (windows: seam; test: `ttyRun` returns early anyway).
         #[cfg(all(not(windows), not(test)))]
         {
@@ -232,6 +236,11 @@ impl<'a, T: LoopEvent> Loop<'a, T> {
     }
 
     /// returns the next available event, blocking until one is available
+    ///
+    /// PORT NOTE (libvaxis 0.6.0): `nextEvent`, `pollEvent`, `tryEvent`, `postEvent` and
+    /// `tryPostEvent` now return `!T` / `!void`: the only error is the queue's
+    /// `error.Canceled` (an `std.Io` task cancelation), which the port's `std::sync`
+    /// queue cannot produce (see [`crate::queue`]), so they stay infallible here.
     pub fn next_event(&self) -> T {
         self.queue.pop()
     }
@@ -274,7 +283,7 @@ impl<'a, T: LoopEvent> Loop<'a, T> {
             if (*(*self_ptr).vaxis).state.in_band_resize {
                 return;
             }
-            let winsize = match Tty::get_winsize((*(*self_ptr).tty).fd()) {
+            let winsize = match (*(*self_ptr).tty).get_winsize() {
                 Ok(w) => w,
                 Err(_) => return,
             };
@@ -295,7 +304,7 @@ impl<'a, T: LoopEvent> Loop<'a, T> {
         #[cfg(not(windows))]
         unsafe {
             // get our initial winsize
-            let winsize = match Tty::get_winsize((*(*sp).tty).fd()) {
+            let winsize = match (*(*sp).tty).get_winsize() {
                 Ok(w) => w,
                 Err(_) => return,
             };
@@ -684,7 +693,7 @@ mod tests {
     fn queued_key_text_is_owned_not_a_view_of_the_read_buffer() {
         let mut tty = Tty::init(Vec::new()).unwrap();
         let mut vx = Vaxis::default();
-        let mut l: Loop<'_, TestEvent> = Loop::new(&mut tty, &mut vx);
+        let mut l: Loop<'_, TestEvent> = Loop::init(&mut tty, &mut vx);
 
         const EVENTS: usize = 100;
         const LEN: usize = 100; // 100 x 100 bytes > 8 KiB
@@ -718,17 +727,34 @@ mod tests {
         tty.deinit();
     }
 
+    /// libvaxis 0.6.0 `test Loop` (the Loop is constructed by `init` and no resize
+    /// handler is installed; the query waits `.fromSeconds(1)`, 0.5.1 waited 1 ms).
     #[test]
     fn loop_lifecycle() {
         let mut tty = Tty::init(Vec::new()).unwrap();
         let mut vx = Vaxis::default();
+        let tty_ptr: *mut Tty = &raw mut tty;
+        let vx_ptr: *mut Vaxis<'_> = &raw mut vx;
 
-        let l: Loop<'_, TestEvent> = Loop::new(&mut tty, &mut vx);
-        l.init().unwrap();
+        let l: Loop<'_, TestEvent> = Loop::init(tty_ptr, vx_ptr);
 
         l.start().unwrap();
-        l.stop();
 
+        // Optionally enter the alternate screen
+        // SAFETY: the reborrows go through the same pointers the Loop holds; under
+        // cfg(test) the read thread returns at once (`if (builtin.is_test) return;`).
+        unsafe {
+            (*vx_ptr).enter_alt_screen((*tty_ptr).writer()).unwrap();
+            (*vx_ptr)
+                .query_terminal((*tty_ptr).writer(), std::time::Duration::from_secs(1))
+                .unwrap();
+        }
+        // defer loop.stop();
+        l.stop();
+        // defer vx.deinit(std.testing.allocator, tty.writer());
+        unsafe { (*vx_ptr).deinit((*tty_ptr).writer()) };
+        drop(l);
+        // defer tty.deinit();
         tty.deinit();
     }
 }
