@@ -3453,6 +3453,26 @@ does for `Config.loadFile`), and print through that.
   diagnostics).
 - **state**: OPEN.
 
+## N150 — a third port of Zig's number parsers, now at the lowest layer (`rustty-zigstd::fmt`)
+
+**Recorded 2026-09-23 (task T-F).** Closing S85-F1 (`Metrics.Modifier.parse`, in `rustty-font`)
+and S100-F1 (the keybind action numbers, in `rustty-input`) needed Zig 0.16.0's
+`std.fmt.parseInt` / `parseUnsigned` / `parseFloat` below the config and CLI crates. They are
+ported in `crates/rustty-zigstd/src/fmt.rs` (with Zig's own std tests for the Rust-representable
+types, and a 133-input differential corpus checked against Zig's results), plus `format_float_d`
+(Zig's `{d}` for `f32`/`f64`, checked against Zig's text for 57 values) for the `web_canvas` face
+(S91-F2).
+
+Task T-C, running in parallel, ported the same parsers into `rustty_args::std_fmt` (NEW-FINDINGS
+N120), which records that the copies should be merged "into a single crate at the lowest layer".
+`rustty-zigstd` is that layer (a leaf over `rustty-util`, already a dependency of `rustty-input`
+and now of `rustty-font` and `rustty-font-shaper`). After both tasks merge there are two full
+ports (`rustty_args::std_fmt`, `rustty_zigstd::fmt`) plus rustty-vt's partial copies.
+
+**state**: OPEN. The N120 follow-up can move `rustty-args` and `rustty-config` onto
+`rustty_zigstd::fmt` (or the reverse) and delete the other copy; the two were written
+independently, so their test sets should be merged, not just one kept.
+
 ## N196 — tests passed without testing anything when their environment was missing
 
 - **id**: N196. Not in the inventory. Found by the tail-s3 task (silent-skip audit), 2026-09-23.
