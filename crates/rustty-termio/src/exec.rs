@@ -4383,29 +4383,27 @@ impl ReadThread {
     /// stages. The gather stage can run at most this many batches
     /// ahead of the parse stage before it blocks, which (via the
     /// kernel pty queue) is also what preserves flow control to the
-    /// child.
-    ///
-    /// The Darwin value was empirically chosen through measurements on
-    /// an M4 Max. Less than 4 there are minor slowdowns, above 4 there
-    /// are no improvements.
-    ///
-    /// Other POSIX platforms keep fewer batches in flight so terminal
-    /// parsing applies backpressure to bulk writers before frame-style
-    /// output can queue stale frames.
-    // const buffer_count = if (builtin.os.tag.isDarwin()) 4 else 2;
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    /// child. Empirically chosen through measurements on an M4 Max.
+    /// Less than 4 there are minor slowdowns, above 4 there are no
+    /// improvements.
+    // const buffer_count = 4;
+    //
+    // CORRECTION (S211-F1): this was `4` on Darwin and `2` elsewhere, citing
+    // `if (builtin.os.tag.isDarwin()) 4 else 2`. That is upstream bed47168c
+    // ("termio: bound POSIX read-ahead on non-Darwin"), which 60121a039
+    // reverted before the pin; at 20abdb50a both constants are unconditional
+    // (`Exec.zig:1305`, `:1318`). The doc paragraph that went with it ("Other
+    // POSIX platforms keep fewer batches in flight ...") is gone with it.
     pub(crate) const BUFFER_COUNT: usize = 4;
-    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
-    pub(crate) const BUFFER_COUNT: usize = 2;
 
     /// The capacity of each gather buffer. One batch is also the unit
     /// of work the parse stage does per terminal lock acquisition, so
     /// this bounds both gather latency and lock hold time.
-    // const buffer_capacity = if (builtin.os.tag.isDarwin()) 64 * 1024 else 8 * 1024;
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    // const buffer_capacity = 64 * 1024;
+    //
+    // CORRECTION (S211-F1): was `64 * 1024` on Darwin and `8 * 1024` elsewhere
+    // (the same reverted commit).
     pub(crate) const BUFFER_CAPACITY: usize = 64 * 1024;
-    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
-    pub(crate) const BUFFER_CAPACITY: usize = 8 * 1024;
 
     /// How many gathered bytes mark a stream as saturated. The macOS
     /// kernel tty output queue hands the master at most about 1 KiB
@@ -5940,6 +5938,16 @@ mod tests {
     // `command::tests`' fork KATs share it — see the doc there.)
     #[cfg(not(windows))]
     use crate::FORK_KAT_SERIAL;
+
+    /// S211-F1: the read pipeline's ring is the pinned reference's on every
+    /// target (`Exec.zig:1305` `buffer_count = 4`, `:1318` `buffer_capacity =
+    /// 64 * 1024`). It was 2 x 8 KiB off Darwin, which only a non-Darwin run
+    /// of this test observes.
+    #[test]
+    fn read_thread_ring_matches_the_reference_on_every_target() {
+        assert_eq!(ReadThread::BUFFER_COUNT, 4);
+        assert_eq!(ReadThread::BUFFER_CAPACITY, 64 * 1024);
+    }
 
     // WS19 T17a: `drain_pty_master_once` — the helper the `threadEnter` error arms
     // call before `stop()`. Two properties, both load-bearing:
