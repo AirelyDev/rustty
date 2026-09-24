@@ -1,51 +1,82 @@
 # WS10 perf fences (G8 / G8b)
 
-**Every number produced by these tools is comparable to oracle revision
-`4749c4e93` — binary sha256 `0fb47d26…` — and to NO OTHER ORACLE REVISION.**
-That is not a stylistic caution; see "The oracle is irreplaceable" below.
+**Fence 1 (G8b's oracle half) compares against Ghostty's bench built at THE
+ORACLE PIN** (`.port/tools/gates/ORACLE_PIN`), and every number it produces is
+comparable to that binary only. Before task S-4 (2026-09-23) the oracle was the
+older `4749c4e93` binary (sha256 `0fb47d26…`); the series recorded against it
+(PERF_LOG.md, BASELINE.json, which G8 still reads) is a different baseline, and
+a ratio between the two series means nothing.
 
 ## The measurement substrate is UNTRACKED
 
-Neither the oracle bench binary nor the corpora are in git (`.gitignore`:
-"Reference-oracle BUILD outputs under `baseline/` (regenerable; large)"). They
-exist only in the **shared checkout**, never in a worktree:
+Neither the oracle bench binary nor the corpora are in git. The corpora exist
+only in the **shared checkout**; the oracle binary lives in the host's oracle
+artifact directory:
 
 | what | path | size |
 |---|---|---|
-| oracle bench binary | `.port/phase-0/baseline/bench-releasefast/bin/ghostty-bench` | 1 553 824 B |
+| oracle bench binary (the pin) | `~/rustty-oracle-artifacts/ghostty-bench-<first 9 hex of ORACLE_PIN>` | 4 071 728 B |
 | corpus (utf8) | `.port/phase-0/baseline/corpora/utf8.bin` | 67 108 864 B |
 | corpus (ascii) | `.port/phase-0/baseline/corpora/ascii.bin` | 67 108 864 B |
 | corpus (osc) | `.port/phase-0/baseline/corpora/osc-parser.bin` | 67 108 864 B |
 | corpus (ascii-small) | `.port/phase-0/baseline/corpora/ascii-small.bin` | 262 144 B |
 
-`ws10_suite.py` references them by absolute path in the shared checkout, so it
-works from a worktree. If any is absent the gate **BLOCKS (exit 3)** — a missing
-substrate is not a green pass.
+`ws10_suite.py` references them by absolute path (the corpora in the shared
+checkout), so it works from a worktree. If any is absent the gate **BLOCKS
+(exit 3)**, and it also BLOCKS when the oracle binary's sha256 is not
+`ORACLE_SHA256` in `ws10_suite.py` — a missing or different substrate is not a
+green pass.
 
-## The oracle is irreplaceable — do not delete or rebuild it
+## The oracle binary: provenance and rebuild
 
-The pinned oracle **no longer builds on this host.** `4749c4e93` requires Zig
-0.15.2 (`src/build/zig.zig` has a hard `@compileError`, plus real 0.15→0.16 std
-breakage at `build.zig:27`), and the installed Zig is **0.16.0**. So:
+The stored binary (sha256 `46b5adfb6cd4bfcde6a693a3a6d0cc8c94c6cd825ff66e98c6c6b79d1d95fa2a`,
+`ghostty-gen` beside it as `ghostty-gen-<9 hex>`) was built by task S-4 with Zig
+0.16.0 from a `git archive` of the pin, so the oracle checkout was not touched:
 
-- **Never** delete, overwrite, or rebuild
-  `.port/phase-0/baseline/bench-releasefast/bin/ghostty-bench`.
-- A verified-identical backup exists at
-  `~/rustty-oracle-artifacts/ghostty-bench-4749c4e93`.
-- If its sha256 ever differs from `0fb47d268c7b9a7f9f93ed14834ca221383ba189404b69d15f750ff76abf5cdb`,
-  **STOP**: every historical number becomes incomparable. That is a
-  report-and-stop condition, not something to work around.
+```sh
+PIN=$(cat .port/tools/gates/ORACLE_PIN)
+ORACLE=$(python3 -c 'import sys; sys.path.insert(0, ".port/tools/gates"); import _gatelib; print(_gatelib.oracle_root())')
+W=$(mktemp -d) && mkdir "$W/src"
+env -u GIT_DIR -u GIT_WORK_TREE git -C "$ORACLE" archive "$PIN" | tar -x -C "$W/src"
+cp -Rc "$ORACLE/zig-pkg" "$W/src/"          # the fetched dependencies (ignored dir)
+(cd "$W/src" && zig build -Demit-bench=true -Demit-macos-app=false \
+    -Doptimize=ReleaseFast --prefix "$W/out" --cache-dir "$W/cache")
+cp -p "$W/out/bin/ghostty-bench" ~/rustty-oracle-artifacts/ghostty-bench-${PIN:0:9}
+shasum -a 256 ~/rustty-oracle-artifacts/ghostty-bench-${PIN:0:9}
+rm -rf "$W"
+```
 
-`origin/main` *does* build (it wants 0.16.0), but it is **not** a substitute:
-upstream added `src/quirks_memset.zig`, which makes the oracle ~2.8× faster on
-`+terminal-stream`. Comparing rustty against it reads as a phantom rustty
-regression. Filed as verification debt **V6**.
+A rebuild is functionally identical but NOT byte-identical: a second build from
+a fresh archive and cache produced the same `__TEXT,__text`, `__TEXT,__const`
+and `__DATA,__data` (`otool -X -t` sha256 `bda2d764…`), but a different LC_UUID
+and debug map (they record the build directory), so a different file sha256. So
+keep the stored file; a rebuilt one needs `ORACLE_SHA256` updated in the same
+commit, with the section check above as its evidence. The bench needs
+`-Doptimize=ReleaseFast`; a Debug build measures ~57x slower on
+`terminal-stream`. The binary runs the reference's global init (`.tool`),
+including `ensureLocale`, exactly as `rustty-bench` does (N173).
+
+When the pin advances, rebuild at the new pin and update `ORACLE_SHA256`; the
+file name follows the pin, so an un-rebuilt oracle BLOCKS instead of silently
+measuring the old revision.
+
+The retired `4749c4e93` binary stays at
+`.port/phase-0/baseline/bench-releasefast/bin/ghostty-bench` (shared checkout)
+and `~/rustty-oracle-artifacts/ghostty-bench-4749c4e93`, sha256
+`0fb47d268c7b9a7f9f93ed14834ca221383ba189404b69d15f750ff76abf5cdb`. Do not
+delete or overwrite it: it is the anchor of the historical series and of G8's
+BASELINE.json, and that revision needs Zig 0.15.2, which this host no longer
+has.
 
 ## The two fences
 
 ### Fence 1 — ORACLE ("hold the 14/14 wins")
 
 rustty vs the pinned oracle, both measured **alternately in one process**.
+(The spreads and margins quoted below were measured against the retired
+`4749c4e93` binary; against the pinned binary the thinnest margins are
+`terminal-stream` and `screen-clone.render`, about −2% each in task S-4's
+provisional run.)
 
 - **STRICT** (10 large-corpus configs): `rust_median < zig_median`, 0% tolerance.
   Justified by measured intra-session `max/min` spread ≤1.05 on all ten; the
@@ -127,7 +158,5 @@ python3 .port/tools/perf/ws10_suite.py --self-test
 python3 .port/tools/perf/headroom_probe.py /tmp/ws10-metrics.json
 ```
 
-Rebuilding the oracle binary is **only** possible at the pin and **only** with
-Zig 0.15.2 (not installed): `zig build -Doptimize=ReleaseFast`. Note the bench
-binary genuinely needs `-Doptimize=ReleaseFast`; a Debug build measures ~57×
-slower on `terminal-stream` and is what BASELINE.json's second 14 rows contain.
+Rebuilding the oracle binary: see "The oracle binary: provenance and rebuild"
+above. BASELINE.json's second 14 rows are Debug builds of the retired oracle.

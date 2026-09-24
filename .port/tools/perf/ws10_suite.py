@@ -32,11 +32,15 @@ Fence 2 -- SELF   ("no self-regression"):   candidate vs a stored entry binary.
 
 ORACLE COMPARABILITY -- non-negotiable
 --------------------------------------
-Every number this harness produces is comparable to oracle revision `4749c4e93`
-(binary sha256 0fb47d26...) and to NO OTHER ORACLE REVISION. `origin/main` needs
-Zig 0.16.0 and has gained `src/quirks_memset.zig`, which makes it ~2.8x faster on
-+terminal-stream; comparing against it reads as a phantom rustty regression. See
-the WS10 plan's PREMISE CORRECTION section 1 and VERIFICATION_DEBT V6.
+The oracle is Ghostty's `ghostty-bench` built ReleaseFast at THE ORACLE PIN
+(`.port/tools/gates/ORACLE_PIN`), stored at
+`~/rustty-oracle-artifacts/ghostty-bench-<first 9 hex of the pin>` and checked
+against ORACLE_SHA256 before every oracle run (a mismatch is BLOCKED, exit 3).
+Every number is comparable to that binary and to NO OTHER ORACLE REVISION. The
+series recorded before task S-4 (2026-09-23) is anchored on the retired
+`4749c4e93` binary (sha256 0fb47d26..., backup
+`~/rustty-oracle-artifacts/ghostty-bench-4749c4e93`); numbers from the two are
+not a ratio. How the binary is rebuilt: `.port/tools/perf/README.md`.
 
 EXIT CODES
 ----------
@@ -60,9 +64,22 @@ import time
 # Measurement substrate (untracked; shared checkout only -- NOT in worktrees)
 # --------------------------------------------------------------------------
 SHARED = "/Users/gael/projects/rustty"
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "..", "gates"))
+import _gatelib  # noqa: E402  (the one reader of ORACLE_PIN)
+
+#: The oracle pin, read from ORACLE_PIN (never spelled here: G-ORACLE-SH's pin
+#: arm forbids a copy of it in any tracked .port/tools file).
+ORACLE_PIN = _gatelib.oracle_pin()
+ARTIFACTS = os.path.expanduser("~/rustty-oracle-artifacts")
 ORACLE_DEFAULT = os.path.join(
-    SHARED, ".port/phase-0/baseline/bench-releasefast/bin/ghostty-bench")
-ORACLE_SHA256 = "0fb47d268c7b9a7f9f93ed14834ca221383ba189404b69d15f750ff76abf5cdb"
+    ARTIFACTS, "ghostty-bench-" + (ORACLE_PIN or "MISSING-PIN")[:9])
+#: sha256 of the stored oracle binary (built 2026-09-23 by task S-4 from an
+#: archive of the pin; recipe in README.md). Its __TEXT/__DATA contents are
+#: reproducible (a second build from a fresh archive and cache matched them);
+#: the whole-file hash is not, because the linker's LC_UUID and the debug map
+#: record the build directory. So the file is kept, and this pins it.
+ORACLE_SHA256 = "46b5adfb6cd4bfcde6a693a3a6d0cc8c94c6cd825ff66e98c6c6b79d1d95fa2a"
 COR = os.path.join(SHARED, ".port/phase-0/baseline/corpora")
 UTF8 = os.path.join(COR, "utf8.bin")
 ASCII = os.path.join(COR, "ascii.bin")
@@ -142,18 +159,16 @@ ACCEPTED_TRADEOFFS: "dict[str, str]" = {}
 #: binary. Every entry must carry the workload-basis mismatch that causes it and
 #: the normalized comparison, so the exclusion can be checked rather than
 #: trusted. The set is printed on every run.
-INCOMPARABLE: "dict[str, str]" = {
-    "screen-clone.render/small":
-        "WS10 T12 ported 446f80f4e's bench hunk, which re-scaled stepRender from "
-        "1_000 to 50_000 x --loops iterations. The PINNED oracle binary is at "
-        "4749c4e93, i.e. still 1_000 (verified: "
-        "`git -C ../ghostty show 4749c4e93:src/benchmark/ScreenClone.zig` line "
-        "181), so rustty does 50x the oracle's work in this config. Measured "
-        "T21: zig 17.69ms (1_000 iters) vs rust 388.32ms (50_000 iters) = "
-        "7.77ms normalized, i.e. -56% against the oracle -- a WIN, reported as "
-        "+2096% by a raw ratio. Comparability returns when the oracle pin "
-        "advances past 446f80f4e (Phase 3).",
-}
+#:
+#: Empty since task S-4 (2026-09-23). Its one entry, `screen-clone.render/small`
+#: (WS10 T12's port of 446f80f4e's 50x stepRender re-scale against an oracle
+#: still at 1_000 iterations), ended as its own text said it would: the oracle
+#: is now built at the pin, which contains 446f80f4e, so both benches run the
+#: same 50_000 iterations (measured: 3.785e9 vs 3.874e9 instructions retired).
+#: `codepoint-width.wcwidth/utf8` (N173) is NOT listed: both benches now run the
+#: reference's global init and its `ensureLocale`, so both measure libc
+#: `wcwidth` under the same locale and the ratio is a ratio again.
+INCOMPARABLE: "dict[str, str]" = {}
 
 
 # --------------------------------------------------------------------------
@@ -390,6 +405,15 @@ def substrate_missing(oracle, need_oracle):
     return missing
 
 
+def sha256_of(path):
+    import hashlib
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
 def main():
     ap = argparse.ArgumentParser(description="WS10 paired perf fence (G8b)")
     ap.add_argument("--rust", help="candidate rustty-bench")
@@ -416,6 +440,14 @@ def main():
         for m in missing:
             print("   missing:", m)
         sys.exit(3)
+    if need_oracle:
+        got = sha256_of(args.oracle)
+        if ORACLE_PIN is None or got != ORACLE_SHA256:
+            print(f"BLOCKED: the oracle binary {args.oracle} is not the pinned "
+                  f"oracle (sha256 {got}, expected {ORACLE_SHA256}; pin "
+                  f"{ORACLE_PIN}). Numbers against any other binary are not "
+                  f"comparable; see README.md for the rebuild recipe.")
+            sys.exit(3)
 
     load1 = os.getloadavg()[0]
     provisional = load1 > IDLE_MAX
@@ -433,8 +465,9 @@ def main():
             print(f"  {k}: {v}")
     else:
         print("INCOMPARABLE: (none)")
-    print("NOTE: all numbers are comparable to oracle 4749c4e93 "
-          f"(sha256 {ORACLE_SHA256[:8]}...) and to NO other oracle revision.")
+    print(f"NOTE: all numbers are comparable to the pinned oracle "
+          f"{(ORACLE_PIN or '?')[:9]} (sha256 {ORACLE_SHA256[:8]}...) and to NO "
+          f"other oracle revision.")
 
     result = {"load1": load1, "n": args.n, "provisional": provisional,
               "oracle_sha256_expected": ORACLE_SHA256}
