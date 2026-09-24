@@ -57,7 +57,16 @@ rustty-os = { workspace = true }
 # `nextSlice` fast path. The ported `Stream::next_slice` SIMD path is live and
 # test-covered in both modes; without this flag the Rust bench binary was running
 # the scalar fallback (a measured ~24% terminal-stream pessimization vs SIMD).
-rustty-vt = { workspace = true, features = ["simd"] }
+#
+# `oniguruma` + `wuffs` (parity S43-F3, review-T-H Part 2B, Decision B commit
+# 1): `GhosttyBench.zig:31-45` builds ghostty-bench through `deps.add(exe)`,
+# i.e. `SharedDeps.add`, which gives every exe `terminalOptions(.ghostty, ..)`
+# with `oniguruma = true` (so `tmux_control_mode` is on; `SharedDeps.zig:182`,
+# `Config.zig:714`), the oniguruma library (`SharedDeps.zig:345-361`) and wuffs
+# (`:521-526`, the `decodePngWuffs` default). The same set rustty-core turns on
+# for the app. Before this, the Rust bench measured a rustty-vt without the
+# tmux DCS arm or the built-in PNG decoder.
+rustty-vt = { workspace = true, features = ["simd", "oniguruma", "wuffs"] }
 rustty-simd = { workspace = true }
 rustty-unicode = { workspace = true }
 # WS7 D8: the `+scrollback-compression` bench walks the PageList node chain the
@@ -104,4 +113,4 @@ allocator-api2 = { workspace = true }
 # non-64-bit) it would FAIL where upstream's equivalent passes.
 # See .port/phase-3/REVIEW_CLASSES.md section 3.
 [dev-dependencies]
-rustty-vt = { workspace = true, features = ["simd", "test-decommit-sim"] }
+rustty-vt = { workspace = true, features = ["simd", "oniguruma", "wuffs", "test-decommit-sim"] }
