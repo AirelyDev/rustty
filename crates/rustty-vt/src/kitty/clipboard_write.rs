@@ -858,4 +858,67 @@ mod tests {
         let committed = state.commit(G).unwrap();
         assert_eq!(0usize, committed.contents.len());
     }
+
+    // Parity tail S7-4 (routing evidence): the transaction's dupes, lists,
+    // spool and committed contents are allocated through the allocator
+    // given to `init`, and every one is returned when the state is dropped;
+    // a refused spool growth is `error.OutOfMemory`.
+    #[test]
+    fn write_state_routes_through_the_allocator_handle() {
+        use crate::alloc::testing::{Config, CountingAllocator, FailingAllocator};
+        let counting = CountingAllocator::over_heap();
+        let c = counting.allocator();
+        crate::alloc::testing::with_handle(&c, |alloc| {
+            let begin_meta = Metadata {
+                id: crate::alloc::try_dupe(G, b"42").unwrap(),
+                ..Metadata::new(Operation::Write)
+            };
+            let mut state = WriteState::init(alloc, &begin_meta, Options::default()).unwrap();
+            // `arena.dupe(u8, meta.id)`; the empty pw and name allocate nothing.
+            assert_eq!(1, counting.alloc_calls.get());
+            state
+                .data(alloc, &wdata(b"text/plain"), b"R2hvc3R0eQ==")
+                .unwrap();
+            // The mime dupe, the entries list and the spool.
+            assert_eq!(4, counting.alloc_calls.get());
+            let alias_meta = Metadata {
+                mime: crate::alloc::try_dupe(G, b"text/plain").unwrap(),
+                ..Metadata::new(Operation::Walias)
+            };
+            state
+                .alias(alloc, &alias_meta, b"VEVYVCBVVEY4X1NUUklORw==")
+                .unwrap();
+            // The decoded payload (freed), the shared target, the targets
+            // list, the alias dupe and the aliases list.
+            assert_eq!(9, counting.alloc_calls.get());
+            let committed = state.commit(alloc).unwrap();
+            assert_eq!(10, counting.alloc_calls.get(), "the committed contents");
+            assert_eq!(2, committed.contents.len());
+            committed.deinit(alloc);
+            state.deinit(alloc);
+            assert_eq!(0, counting.live_bytes.get(), "every byte is returned");
+        });
+
+        // The spool growth is refused (the id dupe, then mime + entries
+        // succeed): `error.OutOfMemory`.
+        let failing = FailingAllocator::over_heap(Config {
+            fail_index: 3,
+            ..Config::default()
+        });
+        let f = failing.allocator();
+        crate::alloc::testing::with_handle(&f, |alloc| {
+            let begin_meta = Metadata {
+                id: crate::alloc::try_dupe(G, b"42").unwrap(),
+                ..Metadata::new(Operation::Write)
+            };
+            let mut state = WriteState::init(alloc, &begin_meta, Options::default()).unwrap();
+            assert_eq!(
+                Err(DataError::OutOfMemory),
+                state.data(alloc, &wdata(b"text/plain"), b"R2hvc3R0eQ==")
+            );
+            assert!(failing.has_induced_failure.get());
+            state.deinit(alloc);
+        });
+        assert_eq!(failing.allocated_bytes.get(), failing.freed_bytes.get());
+    }
 }

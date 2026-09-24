@@ -719,4 +719,54 @@ mod tests {
         let payload = Payload::init(crate::alloc::Global, b"/w==").unwrap();
         assert!(!payload.is_valid_utf8());
     }
+
+    // Parity tail S7-4 (routing evidence): `parse` allocates every decoded
+    // value (and the sanitized id) through the allocator it is given, and a
+    // refused allocation is `error.OutOfMemory`; `Payload.init` likewise.
+    #[test]
+    fn metadata_and_payload_route_through_the_allocator_handle() {
+        use crate::alloc::testing::{Config, CountingAllocator, FailingAllocator};
+        let counting = CountingAllocator::over_heap();
+        let c = counting.allocator();
+        crate::alloc::testing::with_handle(&c, |alloc| {
+            let meta = Metadata::parse(
+                alloc,
+                b"type=read:id=abc:mime=dGV4dC9wbGFpbg==:pw=cHc=:name=YXBw",
+            )
+            .unwrap()
+            .unwrap();
+            // The id list (grown one byte at a time, one allocation for 3
+            // bytes) and one decode buffer per value.
+            assert_eq!(4, counting.alloc_calls.get());
+            assert_eq!(b"text/plain".as_slice(), meta.mime.as_slice());
+            drop(meta);
+            assert_eq!(0, counting.live_bytes.get());
+
+            let payload = Payload::init(alloc, b"dGV4dC9wbGFpbg==").unwrap();
+            assert_eq!(5, counting.alloc_calls.get());
+            assert_eq!(
+                Some((simd::base64::max_len(b"dGV4dC9wbGFpbg=="), 0)),
+                counting.last_alloc.get()
+            );
+            payload.deinit(alloc);
+            assert_eq!(0, counting.live_bytes.get());
+        });
+
+        let failing = FailingAllocator::over_heap(Config {
+            fail_index: 0,
+            ..Config::default()
+        });
+        let f = failing.allocator();
+        crate::alloc::testing::with_handle(&f, |alloc| {
+            assert_eq!(
+                Err(ParseError::OutOfMemory),
+                Metadata::parse(alloc, b"type=read:mime=dGV4dC9wbGFpbg==")
+            );
+            assert!(matches!(
+                Payload::init(alloc, b"dGV4dC9wbGFpbg=="),
+                Err(PayloadError::OutOfMemory)
+            ));
+        });
+        assert_eq!(0, failing.allocated_bytes.get());
+    }
 }

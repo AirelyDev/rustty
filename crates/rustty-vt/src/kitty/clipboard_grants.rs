@@ -297,6 +297,52 @@ mod tests {
         assert!(grants.use_(alloc, newest.as_bytes(), Direction::Read));
     }
 
+    // Parity tail S7-4 (routing evidence): the entries list and each
+    // password copy are allocated through the `alloc` passed to `grant`,
+    // exactly, and returned by one-time use and by `deinit`; a refused
+    // allocation fails `grant` and leaves the grants unchanged.
+    #[test]
+    fn grants_route_through_the_allocator_handle() {
+        use crate::alloc::testing::{Config, CountingAllocator, FailingAllocator};
+        let counting = CountingAllocator::over_heap();
+        let c = counting.allocator();
+        crate::alloc::testing::with_handle(&c, |alloc| {
+            let mut grants = Grants::default();
+            grants.grant(alloc, b"pw", Direction::Read, false).unwrap();
+            // The list's first growth and `alloc.dupe(u8, "pw")`.
+            assert_eq!(2, counting.alloc_calls.get());
+            assert_eq!(
+                2 + grants.entries.capacity() * core::mem::size_of::<Entry>(),
+                counting.live_bytes.get(),
+                "the list and the 2-byte password copy"
+            );
+            grants.grant(alloc, b"otp", Direction::Read, true).unwrap();
+            assert_eq!(3, counting.alloc_calls.get(), "a second password copy");
+            assert!(grants.use_(alloc, b"otp", Direction::Read));
+            assert_eq!(1, counting.free_calls.get(), "one-time use frees its copy");
+            assert_eq!(Some((3, 0)), counting.last_free.get());
+            grants.deinit(alloc);
+            assert_eq!(0, counting.live_bytes.get(), "deinit returns every byte");
+        });
+
+        // A refused copy fails `grant` without recording anything.
+        let failing = FailingAllocator::over_heap(Config {
+            fail_index: 2,
+            ..Config::default()
+        });
+        let f = failing.allocator();
+        crate::alloc::testing::with_handle(&f, |alloc| {
+            let mut grants = Grants::default();
+            grants.grant(alloc, b"a", Direction::Read, false).unwrap();
+            assert!(grants.grant(alloc, b"b", Direction::Read, false).is_err());
+            assert!(failing.has_induced_failure.get());
+            assert_eq!(1, grants.len());
+            assert!(!grants.use_(alloc, b"b", Direction::Read));
+            grants.deinit(alloc);
+        });
+        assert_eq!(failing.allocated_bytes.get(), failing.freed_bytes.get());
+    }
+
     // test "generateOtp: length and alphabet with a real Io"
     // PORT NOTE: the reference's `testing.io` (a real Io with entropy) maps to
     // `sys::io_native`, which calls the OS CSPRNG — a foreign call, hence the
