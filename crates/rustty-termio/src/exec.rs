@@ -7665,6 +7665,102 @@ mod tests {
         t.teardown();
     }
 
+    /// S212-F1: the pty-exhaustion failure has a real producer. With the
+    /// process's descriptor table full, `Subprocess::start`'s `Pty.open`
+    /// (`openpty`) fails, and `start` returns `Error::OpenptyFailed` (the
+    /// member `Thread.threadMain` turns into the pty-exhaustion screen), not
+    /// the general `Error::Other`. The table is filled in a re-executed child
+    /// copy of this test binary, so no other test runs out of descriptors.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn subprocess_start_with_no_free_descriptor_is_openpty_failed() {
+        use allocator_api2::alloc::Global;
+
+        const CHILD: &str = "RUSTTY_TERMIO_OPENPTY_EXHAUSTION_CHILD";
+        const TEST: &str =
+            "exec::tests::subprocess_start_with_no_free_descriptor_is_openpty_failed";
+        if std::env::var_os(CHILD).is_none() {
+            let out = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", TEST, "--nocapture", "--test-threads=1"])
+                .env(CHILD, "1")
+                .output()
+                .expect("re-exec the test binary");
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            assert!(
+                out.status.success(),
+                "the child run failed ({:?})\nstdout:\n{stdout}\nstderr:\n{stderr}",
+                out.status
+            );
+            assert!(
+                stdout.contains("test result: ok. 1 passed; 0 failed"),
+                "the child ran exactly this test\nstdout:\n{stdout}\nstderr:\n{stderr}"
+            );
+            return;
+        }
+
+        // Child: a fresh process, one test thread.
+        let cfg = Config {
+            command: Some(configpkg::command::Command::Direct(vec![
+                b"/usr/bin/true".to_vec()
+            ])),
+            env: EnvMap::new(),
+            env_override: configpkg::RepeatableStringMap::default(),
+            shell_integration: configpkg::value_types::ShellIntegration::Detect,
+            shell_integration_features: configpkg::value_types::ShellIntegrationFeatures::default(),
+            cursor_blink: None,
+            working_directory: None,
+            resources_dir: None,
+            term: b"xterm-256color".to_vec(),
+            rt_pre_exec_info: RtPreExecInfo::default(),
+            rt_post_fork_info: RtPostForkInfo::default(),
+        };
+        let mut exec = Exec::init(Global, cfg).expect("Exec::init");
+
+        // Fill the descriptor table: a low soft limit, then dup until EMFILE.
+        let mut old = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+        assert_eq!(unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut old) }, 0);
+        let low = libc::rlimit {
+            rlim_cur: 256,
+            rlim_max: old.rlim_max,
+        };
+        assert_eq!(unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &low) }, 0);
+        let mut filler: Vec<libc::c_int> = Vec::new();
+        loop {
+            let fd = unsafe { libc::dup(2) };
+            if fd < 0 {
+                assert_eq!(
+                    std::io::Error::last_os_error().raw_os_error(),
+                    Some(libc::EMFILE),
+                    "the table fills up"
+                );
+                break;
+            }
+            filler.push(fd);
+        }
+        assert!(!filler.is_empty(), "descriptors were taken");
+
+        let result = exec.subprocess.start(Global);
+
+        for fd in filler {
+            unsafe {
+                libc::close(fd);
+            }
+        }
+        assert_eq!(unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &old) }, 0);
+
+        assert!(
+            matches!(result, Err(crate::Error::OpenptyFailed)),
+            "a full descriptor table makes start fail with OpenptyFailed, got {:?}",
+            result.as_ref().map(|_| ()).map_err(|e| *e)
+        );
+        assert!(exec.subprocess.pty.is_none(), "no pty was kept");
+        exec.deinit();
+    }
+
     /// UD67 harness: `threadEnter` a real `/bin/sh -c <script>` child on a real
     /// pty and kqueue loop, run `before_first_tick` (which sees the child's pid)
     /// BEFORE the loop has submitted the `EVFILT_PROC` registration, then pump the
