@@ -175,10 +175,12 @@ impl Window {
         Ok(())
     }
 
+    /// This returns true if CSD is enabled for this window. This
+    /// should be the actual present state of the window, not the
+    /// desired state.
+    ///
     /// PORTS: `noop.zig:62-68` `Window.clientSideDecorationEnabled`. Returns
     /// `true` — the no-op backend always reports client-side decorations enabled.
-    /// This should be the ACTUAL present state of the window, not the desired
-    /// state (`noop.zig:63-64`).
     #[allow(clippy::unused_self)]
     #[must_use]
     pub fn client_side_decoration_enabled(&self) -> bool {
