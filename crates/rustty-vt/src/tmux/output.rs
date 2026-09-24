@@ -368,7 +368,7 @@ pub enum VariableParseError {
 }
 
 /// Faithful map of `std.fmt.parseInt(usize, value, 10)`, through the port of
-/// the std function in `crate::zig_parse_int`: an empty or non-digit string is
+/// the std function in `rustty_zigstd::fmt`: an empty or non-digit string is
 /// `InvalidCharacter`, and a value exceeding `usize` (including a leading `-`
 /// followed by a nonzero digit, which Zig reports as `Overflow` for an
 /// unsigned type) is `Overflow`.
@@ -378,11 +378,9 @@ pub enum VariableParseError {
 // rejected the `_` digit separators and `-0` (which Zig parses as 0) and
 // reported `-a` as `Overflow` where Zig reports `InvalidCharacter`.
 fn parse_int(value: &str) -> Result<usize, VariableParseError> {
-    crate::zig_parse_int::parse::<usize>(value.as_bytes(), 10).map_err(|e| match e {
-        crate::zig_parse_int::ParseIntError::Overflow => VariableParseError::Overflow,
-        crate::zig_parse_int::ParseIntError::InvalidCharacter => {
-            VariableParseError::InvalidCharacter
-        }
+    rustty_zigstd::fmt::parse_int::<usize>(value.as_bytes(), 10).map_err(|e| match e {
+        rustty_zigstd::fmt::ParseIntError::Overflow => VariableParseError::Overflow,
+        rustty_zigstd::fmt::ParseIntError::InvalidCharacter => VariableParseError::InvalidCharacter,
     })
 }
 

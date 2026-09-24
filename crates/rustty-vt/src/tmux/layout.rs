@@ -422,14 +422,14 @@ fn index_of_any(slice: &[u8], values: &[u8]) -> Option<usize> {
 }
 
 /// Faithful map of `std.fmt.parseInt(usize, str, 10)` as the layout parser uses
-/// it, through the port of the std function in `crate::zig_parse_int`.
+/// it, through the port of the std function in `rustty_zigstd::fmt`.
 /// The layout parser collapses every error into `SyntaxError`, so the error
 /// payload is irrelevant here (unlike `output.rs`, which distinguishes them).
 // CORRECTION (parity N100): this was `str.parse::<usize>()`, documented as
 // "any non-decimal-digit content (including the empty string) is an error";
 // the reference also accepts `_` digit separators and `-0`.
 fn parse_int(str: &str) -> Result<usize, ()> {
-    crate::zig_parse_int::parse::<usize>(str.as_bytes(), 10).map_err(|_| ())
+    rustty_zigstd::fmt::parse_int::<usize>(str.as_bytes(), 10).map_err(|_| ())
 }
 
 #[cfg(test)]

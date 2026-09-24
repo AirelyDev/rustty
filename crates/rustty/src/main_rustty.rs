@@ -53,8 +53,9 @@ use std::io::Write;
 //
 // PORT NOTE: the `rustty` exe is the `else => void` arm. `main` never returns
 // normally — every path ends in `std::process::exit` (action / usage banner /
-// init error) or the deferred GUI leaf (`unimplemented!()`), so the Rust `fn main`
-// returns `()` after the (diverging) dispatch.
+// init error) or the GUI leaf (`run_gtk`, which diverges), so the Rust `fn main`
+// returns `()` after the (diverging) dispatch. (CORRECTION, parity S44-F5: this
+// named a deferred `unimplemented!()` GUI leaf, which is gone.)
 
 /// The bin's `state.init()` failure set — a faithful projection of the reference
 /// `GlobalState.init` error union that `main()`'s `state.init() catch` switches
@@ -187,10 +188,13 @@ pub fn main() {
         }
     };
     // defer state.deinit();
-    //   PORT NOTE: every path below ends in `std::process::exit` (or the diverging
-    //   GUI leaf), which — like the reference `posix.exit` — does NOT run deferred
-    //   cleanup, so `state.deinit()` is faithfully skipped on those paths (leak
-    //   diagnostics are the GPA seam, deferred). `state` is dropped otherwise.
+    //   PORT NOTE: every path below ends in `std::process::exit`, which — like
+    //   the reference `posix.exit` — does NOT run deferred cleanup, so
+    //   `global.deinit()` is faithfully skipped on those paths. The GUI leaf is
+    //   the exception: the reference returns from `main` there, so `run_gtk`
+    //   runs `rustty_apprt::deinit()` (the `global.deinit` body) itself before
+    //   its exit. CORRECTION (parity S44-F2): this note used to say the GUI leaf
+    //   skipped it too.
     // const alloc = state.alloc;
     //   PORT NOTE: the reference `alloc` param is dropped tree-wide (Rust uses the
     //   global allocator); actions take no allocator argument.
@@ -318,18 +322,30 @@ pub fn main() {
         run_gtk(&state.logging);
     }
 
-    // Any configured runtime whose backend is NOT compiled into this build — a
-    // Linux/FreeBSD `--no-default-features` build with the GTK backend off, or a
-    // target that is neither `.none` (usage-banner, handled above) nor a built GUI
-    // backend — remains the deferred placeholder leaf. On macOS `app_runtime()`
-    // is `.none`, so this is unreachable there (R5: byte-identical).
-    unimplemented!(
-        "GUI launch has no compiled backend in this build (app_runtime={:?}); the \
-         GTK backend lands via `--features gtk` (default on Linux/FreeBSD), the \
-         headless `rustty` CLI (build_config.app_runtime == .none) runs today",
+    // `apprt.Runtime` is exactly `{ none, gtk }` (`apprt/runtime.zig:5-25`) and
+    // both arms are handled above: `.none` exits after the usage banner, and
+    // `.gtk` (the Linux/FreeBSD default) always has its backend compiled, which
+    // the `compile_error!` below enforces. So this point is unreachable (R7).
+    // PORT NOTE (parity S44-F5): CORRECTION, this used to be an
+    // `unimplemented!("GUI launch has no compiled backend in this build ...")`
+    // leaf, reached by a Linux/FreeBSD build without the `gtk` feature, a
+    // configuration the reference cannot produce.
+    unreachable!(
+        "app_runtime={:?} has no launch arm",
         build_config::app_runtime()
     );
 }
+
+// A Linux/FreeBSD `rustty` binary's runtime is `.gtk` (`apprt/runtime.zig:14-24`,
+// `rustty-build-config/src/apprt.rs` `default_for`), and the reference always
+// compiles that runtime's backend. Building the binary there without the `gtk`
+// feature would give it a runtime with no backend, so it is refused at build
+// time (parity S44-F5).
+#[cfg(all(any(target_os = "linux", target_os = "freebsd"), not(feature = "gtk")))]
+compile_error!(
+    "the rustty binary needs the `gtk` feature on Linux and FreeBSD, where its \
+     app runtime is GTK (pass `--features gtk`, which the default features include)"
+);
 
 /// PORTS: `main_ghostty.zig:96-112` — the GUI launch leaf for the NATIVE gtk4-rs
 /// apprt backend. Faithfully reproduces the reference sequence:
@@ -377,6 +393,8 @@ fn run_gtk(logging: &Logging) -> ! {
                 &format!("failed to initialize the app error={err:?}"),
                 logging,
             );
+            // defer global.deinit();  (the `try` propagates through it)
+            rustty_apprt::deinit();
             std::process::exit(1);
         }
     };
@@ -413,6 +431,13 @@ fn run_gtk(logging: &Logging) -> ! {
     app_runtime.terminate();
     // defer app.destroy();
     core_app.destroy();
+    // defer global.deinit();
+    //   PORT NOTE (parity S43-F4 / S44-F2): `main`'s first `defer`, so it runs
+    //   last, after `destroy`, on the normal return AND when `run` fails. This
+    //   is the one path where the reference reaches it (every other path ends
+    //   in `posix.exit`). CORRECTION: it used to be skipped here, so the crash
+    //   reporter was never flushed on a normal GTK exit.
+    rustty_apprt::deinit();
 
     match result {
         // The reference `main` returns normally after `run` → exit 0.

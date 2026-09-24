@@ -165,9 +165,11 @@ pub mod fastprint;
 
 // PORT NOTE: Zig's `std.fmt.parseInt`, which the terminal parsers call on
 // untrusted input and which Rust's `str::parse` does not match (digit
-// separators, `-0` for unsigned types, error kinds). No reference file; the
+// separators, `-0` for unsigned types, error kinds), is `rustty_zigstd::fmt`
+// (the one port; NEW-FINDINGS N120/N150). This module holds only the UD141 `_`
+// filter the wire-protocol parsers run before it. No reference file; the
 // reference calls the std function directly.
-pub(crate) mod zig_parse_int;
+pub(crate) mod protocol_int;
 
 /// Unicode utilities that match the terminal's text layout semantics.
 pub mod unicode {

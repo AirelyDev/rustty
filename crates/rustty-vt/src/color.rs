@@ -129,258 +129,20 @@ pub fn parse_palette_entry(value: &[u8]) -> Result<PaletteEntry, ParsePaletteEnt
 /// Zig `std.fmt.parseInt(u8, s, 0)`: base-0 = auto-detect 0x/0o/0b prefix,
 /// else decimal. `Overflow` (value > 255) is distinguished from
 /// `InvalidCharacter` (mapped to InvalidFormat), matching the oracle.
+//
+// PORT NOTE (NEW-FINDINGS N120/N150, task tail-s9): `std.fmt.parseInt` is the
+// one port in `rustty_zigstd::fmt`; this module's `u8`/`u16` copies of
+// `parseInt` / `parseUnsigned` / `charToDigit` were deleted (their tests moved
+// to `rustty-zigstd`).
 fn parse_int_u8_base0(s: &[u8]) -> Result<u8, ParsePaletteEntryError> {
     // `catch |err| switch (err) { error.Overflow => return error.Overflow,
     //   error.InvalidCharacter => return error.InvalidFormat }`
-    parse_int_u8(s, 0).map_err(|err| match err {
-        ParseIntError::Overflow => ParsePaletteEntryError::Overflow,
-        ParseIntError::InvalidCharacter => ParsePaletteEntryError::InvalidFormat,
+    rustty_zigstd::fmt::parse_int::<u8>(s, 0).map_err(|err| match err {
+        rustty_zigstd::fmt::ParseIntError::Overflow => ParsePaletteEntryError::Overflow,
+        rustty_zigstd::fmt::ParseIntError::InvalidCharacter => {
+            ParsePaletteEntryError::InvalidFormat
+        }
     })
-}
-
-/// PORTS: `std.fmt.ParseIntError` — the error set of `std.fmt.parseInt` and
-/// `std.fmt.parseUnsigned`.
-// pub const ParseIntError = error{ Overflow, InvalidCharacter };
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ParseIntError {
-    Overflow,
-    InvalidCharacter,
-}
-
-/// PORTS: `std.fmt.parseInt(u8, buf, base)` — an optional leading `+`/`-` sign
-/// followed by `parseIntWithSign`.
-//
-// PORT NOTE: monomorphized to `u8` (`Result`/`Character` are both `u8` at every
-// call site in the ported tree); `Accumulate` is then
-// `std.meta.Int(.unsigned, @max(8, 8))` == `u8`, so every intermediate is
-// checked at `u8` width exactly as the reference does.
-// pub fn parseInt(comptime T: type, buf: []const u8, base: u8) ParseIntError!T {
-//     return parseIntWithGenericCharacter(T, u8, buf, base);
-// }
-pub(crate) fn parse_int_u8(buf: &[u8], base: u8) -> Result<u8, ParseIntError> {
-    // if (buf.len == 0) return error.InvalidCharacter;
-    if buf.is_empty() {
-        return Err(ParseIntError::InvalidCharacter);
-    }
-    // if (buf[0] == '+') return parseIntWithSign(.., buf[1..], base, .pos);
-    if buf[0] == b'+' {
-        return parse_int_u8_with_sign(&buf[1..], base, false);
-    }
-    // if (buf[0] == '-') return parseIntWithSign(.., buf[1..], base, .neg);
-    if buf[0] == b'-' {
-        return parse_int_u8_with_sign(&buf[1..], base, true);
-    }
-    // return parseIntWithSign(.., buf, base, .pos);
-    parse_int_u8_with_sign(buf, base, false)
-}
-
-/// PORTS: `std.fmt.parseUnsigned(u8, buf, base)` — `parseIntWithSign` with a
-/// positive sign and NO sign prefix accepted (`"+1"`/`"-1"` are
-/// `error.InvalidCharacter`).
-// pub fn parseUnsigned(comptime T: type, buf: []const u8, base: u8) ParseIntError!T {
-//     return parseIntWithSign(T, u8, buf, base, .pos);
-// }
-pub(crate) fn parse_unsigned_u8(buf: &[u8], base: u8) -> Result<u8, ParseIntError> {
-    parse_int_u8_with_sign(buf, base, false)
-}
-
-/// PORTS: `std.fmt.parseUnsigned(u16, buf, base)` — `parseIntWithSign` with a
-/// positive sign and NO sign prefix accepted (`"+f"`/`"-f"` are
-/// `error.InvalidCharacter`), and with `_` accepted as an interior digit
-/// separator (but never leading/trailing).
-//
-// PORT NOTE: the `u16` monomorphization of `parseIntWithSign` used by
-// `RGB.fromHex`. `Accumulate` is `std.meta.Int(.unsigned, @max(16, 8))` == `u16`,
-// so every intermediate is checked at `u16` width exactly as the reference does.
-// The `.neg` arm is not instantiated (`parseUnsigned` is always `.pos`), so it is
-// not ported here; see `parse_int_u8_with_sign` for the sign-carrying form.
-// pub fn parseUnsigned(comptime T: type, buf: []const u8, base: u8) ParseIntError!T {
-//     return parseIntWithSign(T, u8, buf, base, .pos);
-// }
-pub(crate) fn parse_unsigned_u16(buf: &[u8], base: u8) -> Result<u16, ParseIntError> {
-    // if (buf.len == 0) return error.InvalidCharacter;
-    if buf.is_empty() {
-        return Err(ParseIntError::InvalidCharacter);
-    }
-
-    // var buf_base = base;
-    // var buf_start = buf;
-    let mut buf_base = base;
-    let mut buf_start = buf;
-    // if (base == 0) {
-    if base == 0 {
-        // Treat is as a decimal number by default.
-        buf_base = 10;
-        // Detect the base by looking at buf prefix.
-        if buf.len() > 2 && buf[0] == b'0' {
-            match buf[1].to_ascii_lowercase() {
-                b'b' => {
-                    buf_base = 2;
-                    buf_start = &buf[2..];
-                }
-                b'o' => {
-                    buf_base = 8;
-                    buf_start = &buf[2..];
-                }
-                b'x' => {
-                    buf_base = 16;
-                    buf_start = &buf[2..];
-                }
-                _ => {}
-            }
-        }
-    }
-
-    // var accumulate: Accumulate = 0;
-    let mut accumulate: u16 = 0;
-
-    // if (buf_start[0] == '_' or buf_start[buf_start.len - 1] == '_') return error.InvalidCharacter;
-    if buf_start[0] == b'_' || buf_start[buf_start.len() - 1] == b'_' {
-        return Err(ParseIntError::InvalidCharacter);
-    }
-
-    // for (buf_start) |c| {
-    for &c in buf_start {
-        // if (c == '_') continue;
-        if c == b'_' {
-            continue;
-        }
-        // const digit = try charToDigit(..., buf_base);
-        let digit = char_to_digit(c, buf_base)?;
-        // if (accumulate != 0) accumulate = try math.mul(Accumulate, accumulate, buf_base);
-        if accumulate != 0 {
-            accumulate = accumulate
-                .checked_mul(u16::from(buf_base))
-                .ok_or(ParseIntError::Overflow)?;
-        }
-        // accumulate = try add(Accumulate, accumulate, digit);
-        accumulate = accumulate
-            .checked_add(u16::from(digit))
-            .ok_or(ParseIntError::Overflow)?;
-    }
-
-    Ok(accumulate)
-}
-
-// fn parseIntWithSign(
-//     comptime Result: type,
-//     comptime Character: type,
-//     buf: []const Character,
-//     base: u8,
-//     comptime sign: enum { pos, neg },
-// ) ParseIntError!Result {
-fn parse_int_u8_with_sign(buf: &[u8], base: u8, neg: bool) -> Result<u8, ParseIntError> {
-    // if (buf.len == 0) return error.InvalidCharacter;
-    if buf.is_empty() {
-        return Err(ParseIntError::InvalidCharacter);
-    }
-
-    // var buf_base = base;
-    // var buf_start = buf;
-    let mut buf_base = base;
-    let mut buf_start = buf;
-    // if (base == 0) {
-    if base == 0 {
-        // Treat is as a decimal number by default.
-        buf_base = 10;
-        // Detect the base by looking at buf prefix.
-        // if (buf.len > 2 and buf[0] == '0') { ... std.ascii.toLower(c) ... }
-        if buf.len() > 2 && buf[0] == b'0' {
-            match buf[1].to_ascii_lowercase() {
-                b'b' => {
-                    buf_base = 2;
-                    buf_start = &buf[2..];
-                }
-                b'o' => {
-                    buf_base = 8;
-                    buf_start = &buf[2..];
-                }
-                b'x' => {
-                    buf_base = 16;
-                    buf_start = &buf[2..];
-                }
-                _ => {}
-            }
-        }
-    }
-
-    // const add = switch (sign) { .pos => math.add, .neg => math.sub };
-    //
-    // accumulate into Accumulate which is always 8 bits or larger.  this prevents
-    // `buf_base` from overflowing Result.
-    // var accumulate: Accumulate = 0;
-    let mut accumulate: u8 = 0;
-
-    // if (buf_start[0] == '_' or buf_start[buf_start.len - 1] == '_') return error.InvalidCharacter;
-    if buf_start[0] == b'_' || buf_start[buf_start.len() - 1] == b'_' {
-        return Err(ParseIntError::InvalidCharacter);
-    }
-
-    // for (buf_start) |c| {
-    for &c in buf_start {
-        // if (c == '_') continue;
-        if c == b'_' {
-            continue;
-        }
-        // const digit = try charToDigit(math.cast(u8, c) orelse return error.InvalidCharacter, buf_base);
-        let digit = char_to_digit(c, buf_base)?;
-        // if (accumulate != 0) {
-        //     accumulate = try math.mul(Accumulate, accumulate, math.cast(Accumulate, buf_base) orelse return error.Overflow);
-        // } else if (sign == .neg) {
-        if accumulate != 0 {
-            // `math.cast(u8, buf_base)`: `buf_base` is at most 36, always
-            // representable in the `u8` accumulator width.
-            accumulate = accumulate
-                .checked_mul(buf_base)
-                .ok_or(ParseIntError::Overflow)?;
-        } else if neg {
-            // The first digit of a negative number.
-            // Consider parsing "-4" as an i3.
-            // This should work, but positive 4 overflows i3, so we can't cast the digit to T and subtract.
-            // accumulate = math.cast(Accumulate, -@as(i8, @intCast(digit))) orelse return error.Overflow;
-            //
-            // `Accumulate` is unsigned here, so the cast of `-digit` only
-            // succeeds for `digit == 0` (`"-0"` parses; `"-1"` overflows).
-            if digit != 0 {
-                return Err(ParseIntError::Overflow);
-            }
-            // continue;
-            continue;
-        }
-        // accumulate = try add(Accumulate, accumulate, math.cast(Accumulate, digit) orelse return error.Overflow);
-        accumulate = if neg {
-            accumulate
-                .checked_sub(digit)
-                .ok_or(ParseIntError::Overflow)?
-        } else {
-            accumulate
-                .checked_add(digit)
-                .ok_or(ParseIntError::Overflow)?
-        };
-    }
-
-    Ok(accumulate)
-}
-
-/// PORTS: `std.fmt.charToDigit(c, base)`.
-// pub fn charToDigit(c: u8, base: u8) (error{InvalidCharacter}!u8) {
-fn char_to_digit(c: u8, base: u8) -> Result<u8, ParseIntError> {
-    // const value = switch (c) { '0'...'9' => c - '0', 'A'...'Z' => c - 'A' + 10,
-    //     'a'...'z' => c - 'a' + 10, else => return error.InvalidCharacter };
-    let value = match c {
-        b'0'..=b'9' => c - b'0',
-        b'A'..=b'Z' => c - b'A' + 10,
-        b'a'..=b'z' => c - b'a' + 10,
-        _ => return Err(ParseIntError::InvalidCharacter),
-    };
-
-    // if (value >= base) return error.InvalidCharacter;
-    if value >= base {
-        return Err(ParseIntError::InvalidCharacter);
-    }
-
-    // return value;
-    Ok(value)
 }
 
 fn trim_space_tab(s: &[u8]) -> &[u8] {
@@ -1265,11 +1027,12 @@ impl RGB {
 
         // const color = std.fmt.parseUnsigned(u16, value, 16) catch return error.InvalidFormat;
         //
-        // PORT NOTE: `parse_unsigned_u16`, NOT `u16::from_str_radix`. The
+        // PORT NOTE: `rustty_zigstd::fmt::parse_unsigned`, NOT `u16::from_str_radix`. The
         // reference rejects a leading sign (`"+f"`/`"-f"`) but accepts `_` as an
         // interior digit separator (`"f_f"` == 255); `from_str_radix` does the
         // opposite on both counts.
-        let color = parse_unsigned_u16(value, 16).map_err(|_| InvalidFormat)?;
+        let color =
+            rustty_zigstd::fmt::parse_unsigned::<u16>(value, 16).map_err(|_| InvalidFormat)?;
 
         let divisor: usize = match value.len() {
             1 => 0xF, // std.math.maxInt(u4)
@@ -1796,34 +1559,6 @@ mod tests {
         );
     }
 
-    // PARITY (rustty-added): the `std.fmt.parseUnsigned(u8, .., 10)` half of the
-    // same helper, used by the Kitty OSC 21 key parser.
-    #[test]
-    fn parse_unsigned_u8_base10_zig_semantics() {
-        assert_eq!(parse_unsigned_u8(b"0", 10), Ok(0));
-        assert_eq!(parse_unsigned_u8(b"255", 10), Ok(255));
-        assert_eq!(parse_unsigned_u8(b"1_2", 10), Ok(12));
-        assert_eq!(parse_unsigned_u8(b"2_5_5", 10), Ok(255));
-        // No sign prefix is accepted.
-        assert_eq!(
-            parse_unsigned_u8(b"+1", 10),
-            Err(ParseIntError::InvalidCharacter)
-        );
-        assert_eq!(
-            parse_unsigned_u8(b"-1", 10),
-            Err(ParseIntError::InvalidCharacter)
-        );
-        assert_eq!(parse_unsigned_u8(b"256", 10), Err(ParseIntError::Overflow));
-        for bad in [&b"_1"[..], &b"1_"[..], &b""[..], &b"0x1"[..], &b" "[..]] {
-            assert_eq!(
-                parse_unsigned_u8(bad, 10),
-                Err(ParseIntError::InvalidCharacter),
-                "expected InvalidCharacter for {:?}",
-                std::str::from_utf8(bad).unwrap()
-            );
-        }
-    }
-
     // new "RGB.parse" assertions (oracle 2970e9a2a)
     #[test]
     fn rgb_parse_bare_hex_and_trim() {
@@ -2201,43 +1936,6 @@ mod tests {
             Err(ParsePaletteEntryError::InvalidFormat),
             parse_palette_entry(b"1=U\x8evv")
         );
-    }
-
-    #[test]
-    fn parse_unsigned_u16_base16_zig_semantics() {
-        assert_eq!(Ok(0xffff), parse_unsigned_u16(b"ffff", 16));
-        assert_eq!(Ok(0x0f), parse_unsigned_u16(b"F", 16));
-        assert_eq!(Ok(0xff), parse_unsigned_u16(b"f_f", 16));
-        // Signs are `charToDigit` failures, not sign prefixes.
-        assert_eq!(
-            Err(ParseIntError::InvalidCharacter),
-            parse_unsigned_u16(b"+f", 16)
-        );
-        assert_eq!(
-            Err(ParseIntError::InvalidCharacter),
-            parse_unsigned_u16(b"-f", 16)
-        );
-        // Leading/trailing separators.
-        assert_eq!(
-            Err(ParseIntError::InvalidCharacter),
-            parse_unsigned_u16(b"_f", 16)
-        );
-        assert_eq!(
-            Err(ParseIntError::InvalidCharacter),
-            parse_unsigned_u16(b"f_", 16)
-        );
-        assert_eq!(
-            Err(ParseIntError::InvalidCharacter),
-            parse_unsigned_u16(b"", 16)
-        );
-        // `u16` width accumulate: overflow, not truncation.
-        assert_eq!(
-            Err(ParseIntError::Overflow),
-            parse_unsigned_u16(b"fffff", 16)
-        );
-        // base 0 prefix detection.
-        assert_eq!(Ok(255), parse_unsigned_u16(b"0xff", 0));
-        assert_eq!(Ok(10), parse_unsigned_u16(b"10", 0));
     }
 
     #[test]

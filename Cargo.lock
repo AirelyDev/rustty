@@ -1283,6 +1283,7 @@ dependencies = [
  "rustty-build-config",
  "rustty-os",
  "rustty-util",
+ "rustty-zigstd",
 ]
 
 [[package]]
@@ -1291,6 +1292,7 @@ version = "0.1.0"
 dependencies = [
  "allocator-api2",
  "log",
+ "rustty-apprt",
  "rustty-args",
  "rustty-build-config",
  "rustty-datastruct",
@@ -1344,6 +1346,7 @@ dependencies = [
  "rustty-vt",
  "rustty-xev",
  "rustty-zf",
+ "rustty-zigstd",
  "zlib-sys",
 ]
 

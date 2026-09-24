@@ -11,7 +11,6 @@ pub mod arg_iterator_general;
 pub mod args;
 pub mod comma_splitter;
 pub mod diagnostics;
-pub mod std_fmt;
 
 // TEST-ONLY `log::Log` capture backend for the restored `log.*` sites
 // (task-14e-2, S67-F2/S67-F9). See the module header.

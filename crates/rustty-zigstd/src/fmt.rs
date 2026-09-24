@@ -1,16 +1,27 @@
-//! PORTS: Zig 0.16.0 `std.fmt.parseInt` (`lib/std/fmt.zig:306-460`,
-//! `charToDigit` `:570-581`) and `std.fmt.parseFloat` (`lib/std/fmt/parse_float.zig`
-//! with `parse_float/{parse,FloatStream,common,convert_hex}.zig`), for the
-//! integer and `f32`/`f64` types the port parses.
+//! PORTS: Zig 0.16.0 `std.fmt.parseInt` / `std.fmt.parseUnsigned`
+//! (`lib/std/fmt.zig:306-460`, `charToDigit` `:570-581`) and
+//! `std.fmt.parseFloat` (`lib/std/fmt/parse_float.zig` with
+//! `parse_float/{parse,FloatStream,common,convert_hex}.zig`), for every integer
+//! width the port parses (the native Rust types, and Zig's odd widths such as
+//! `u4`, `u9`, `u21` through [`IntType`]) and for `f32`/`f64`.
 //!
 //! Rust's `str::parse` accepts a different grammar. Zig's integer parser skips
-//! `_` digit separators and reads `-0` into an unsigned type; its float parser
-//! takes `_` separators between two digits and hex floats (`0x1.8p3`, with an
-//! optional exponent). Every such input is one Ghostty accepts and a port using
-//! `str::parse` rejects (S85-F1 `Metrics.Modifier.parse`, S100-F1 the keybind
-//! action parameters). The same grammar was ported privately into
-//! rustty-config's `value_types.rs` (S75-F1); this module is the shared copy for
-//! crates below the config.
+//! `_` digit separators, reads `-0` into an unsigned type and rejects a second
+//! sign (`+-5`); its float parser takes `_` separators between two digits and
+//! hex floats (`0x1.8p3`, with an optional exponent). Every such input is one
+//! Ghostty accepts and a port using `str::parse` rejects, or the reverse
+//! (S67-F3/F4 `cli/args.zig` `parseIntoField`, S75-F1 the config values,
+//! S85-F1 `Metrics.Modifier.parse`, S100-F1 the keybind action parameters, and
+//! the terminal parsers of S170-F1, S186-F1, S194-F3, S195-F2, S197-F1).
+//!
+//! PORT NOTE (NEW-FINDINGS N120, N150): this is the ONE port of these parsers.
+//! Three batches ported them separately (`rustty_args::std_fmt`, this module,
+//! and rustty-vt's `zig_parse_int.rs`, plus partial copies in rustty-vt's
+//! `color.rs` and rustty-config's `u21` hex parser); task tail-s9 compared them
+//! against Zig 0.16.0 over the union of their tables and a fresh probe (no
+//! value differed), kept the arbitrary-width integer core of the rustty-vt copy
+//! here, and deleted the others. rustty-vt keeps only its UD141 `_` filter
+//! (`protocol_int::reject_digit_separators`), which runs before this parser.
 //!
 //! The float GRAMMAR is ported in full, because that decides acceptance. The
 //! DECIMAL numeric conversion (`convertFast` / `convertEiselLemire` /
@@ -21,6 +32,12 @@
 
 use core::fmt;
 
+// pub const ParseIntError = error{
+//     /// The result cannot fit in the type specified.
+//     Overflow,
+//     /// The input was empty or contained an invalid character.
+//     InvalidCharacter,
+// };
 /// `std.fmt.ParseIntError`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParseIntError {
@@ -52,41 +69,100 @@ impl fmt::Display for ParseFloatError {
     }
 }
 
-/// An integer type `parse_int` produces. Zig accumulates in
-/// `Int(signedness, @max(8, bits))`, which is the type itself for every
-/// implementor here (all are at least 8 bits wide), so overflow is detected
-/// at the same digit as in the reference.
-pub trait ZigInt: Copy + PartialEq + Sized {
-    const ZERO: Self;
-    /// `math.cast(Self, v)`.
-    fn cast_i128(v: i128) -> Option<Self>;
-    fn checked_mul(self, rhs: Self) -> Option<Self>;
-    fn checked_add(self, rhs: Self) -> Option<Self>;
-    fn checked_sub(self, rhs: Self) -> Option<Self>;
+/// A Zig integer type: its bit width and signedness.
+///
+/// Zig's result type is a comptime integer type of any width (`u4`, `u9`,
+/// `u21`, `i43`, ...). Rust has no such types, so [`parse_int_type`] and
+/// [`parse_unsigned_type`] take the width and signedness at run time and return
+/// the value widened to `i128`; [`parse_int`] and [`parse_unsigned`] give the
+/// native-width callers a typed result. Widths from 1 to 64 bits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IntType {
+    pub bits: u32,
+    pub signed: bool,
+}
+
+impl IntType {
+    /// `uN`.
+    pub const fn unsigned(bits: u32) -> IntType {
+        assert!(bits >= 1 && bits <= 64);
+        IntType {
+            bits,
+            signed: false,
+        }
+    }
+
+    /// `iN`.
+    pub const fn signed(bits: u32) -> IntType {
+        assert!(bits >= 1 && bits <= 64);
+        IntType { bits, signed: true }
+    }
+
+    /// `math.minInt(Self)`.
+    pub const fn min(self) -> i128 {
+        if self.signed {
+            -(1i128 << (self.bits - 1))
+        } else {
+            0
+        }
+    }
+
+    /// `math.maxInt(Self)`.
+    pub const fn max(self) -> i128 {
+        if self.signed {
+            (1i128 << (self.bits - 1)) - 1
+        } else {
+            (1i128 << self.bits) - 1
+        }
+    }
+
+    /// `math.cast(Self, v)`: `Some(v)` when `v` fits in this type.
+    #[inline]
+    const fn cast(self, v: i128) -> Option<i128> {
+        if self.min() <= v && v <= self.max() {
+            Some(v)
+        } else {
+            None
+        }
+    }
+}
+
+/// A native Rust integer type `parse_int` produces, with its Zig integer type.
+pub trait ZigInt: Copy + Sized {
+    const TYPE: IntType;
+    /// The parsed value, which [`parse_int_type`] has already range-checked
+    /// against `TYPE`.
+    fn from_i128(v: i128) -> Self;
 }
 
 macro_rules! zig_int {
-    ($($t:ty),*) => {$(
+    ($($t:ty => $it:expr),* $(,)?) => {$(
         impl ZigInt for $t {
-            const ZERO: Self = 0;
-            fn cast_i128(v: i128) -> Option<Self> {
-                <$t>::try_from(v).ok()
-            }
-            fn checked_mul(self, rhs: Self) -> Option<Self> {
-                <$t>::checked_mul(self, rhs)
-            }
-            fn checked_add(self, rhs: Self) -> Option<Self> {
-                <$t>::checked_add(self, rhs)
-            }
-            fn checked_sub(self, rhs: Self) -> Option<Self> {
-                <$t>::checked_sub(self, rhs)
+            const TYPE: IntType = $it;
+            #[inline]
+            fn from_i128(v: i128) -> Self {
+                <$t>::try_from(v).expect("parse_int result fits its type")
             }
         }
     )*};
 }
-zig_int!(i8, i16, i32, i64, isize, u8, u16, u32, u64, usize);
 
+zig_int! {
+    u8 => IntType::unsigned(8),
+    u16 => IntType::unsigned(16),
+    u32 => IntType::unsigned(32),
+    u64 => IntType::unsigned(64),
+    usize => IntType::unsigned(usize::BITS),
+    i8 => IntType::signed(8),
+    i16 => IntType::signed(16),
+    i32 => IntType::signed(32),
+    i64 => IntType::signed(64),
+    isize => IntType::signed(isize::BITS),
+}
+
+// pub fn charToDigit(c: u8, base: u8) (error{InvalidCharacter}!u8) {
 /// `std.fmt.charToDigit`.
+#[inline]
 pub fn char_to_digit(c: u8, base: u8) -> Result<u8, ParseIntError> {
     // const value = switch (c) { '0'...'9' => c - '0', 'A'...'Z' => c - 'A' + 10,
     //     'a'...'z' => c - 'a' + 10, else => return error.InvalidCharacter };
@@ -103,32 +179,99 @@ pub fn char_to_digit(c: u8, base: u8) -> Result<u8, ParseIntError> {
     Ok(value)
 }
 
-/// `std.fmt.parseInt(T, buf, base)`: an optional `+`/`-` sign, then
-/// `parseIntWithSign`. "Ignores '_' character in `buf`." When `base` is zero
-/// the prefix `0b`/`0o`/`0x` selects the base (10 otherwise).
+/// `std.fmt.parseInt(T, buf, base)` for a native Rust integer type.
+///
+/// Parses the string `buf` as signed or unsigned representation in the
+/// specified base of an integral value of type `T`.
+///
+/// When `base` is zero the string prefix is examined to detect the true base:
+///  * A prefix of "0b" implies base=2,
+///  * A prefix of "0o" implies base=8,
+///  * A prefix of "0x" implies base=16,
+///  * Otherwise base=10 is assumed.
+///
+/// Ignores '_' character in `buf`.
+/// See also `parseUnsigned`.
+#[inline]
 pub fn parse_int<T: ZigInt>(buf: &[u8], base: u8) -> Result<T, ParseIntError> {
+    parse_int_type(T::TYPE, buf, base).map(T::from_i128)
+}
+
+/// `std.fmt.parseUnsigned(T, buf, base)` for a native Rust integer type.
+///
+/// Parses the string `buf` as unsigned representation in the specified base
+/// of an integral value of type `T`.
+///
+/// When `base` is zero the string prefix is examined to detect the true base:
+///  * A prefix of "0b" implies base=2,
+///  * A prefix of "0o" implies base=8,
+///  * A prefix of "0x" implies base=16,
+///  * Otherwise base=10 is assumed.
+///
+/// Ignores '_' character in `buf`.
+/// See also `parseInt`.
+#[inline]
+pub fn parse_unsigned<T: ZigInt>(buf: &[u8], base: u8) -> Result<T, ParseIntError> {
+    parse_unsigned_type(T::TYPE, buf, base).map(T::from_i128)
+}
+
+// pub fn parseInt(comptime T: type, buf: []const u8, base: u8) ParseIntError!T {
+//     return parseIntWithGenericCharacter(T, u8, buf, base);
+// }
+/// `std.fmt.parseInt(T, buf, base)` for the Zig integer type `t` (any width),
+/// the value widened to `i128`.
+pub fn parse_int_type(t: IntType, buf: &[u8], base: u8) -> Result<i128, ParseIntError> {
     // if (buf.len == 0) return error.InvalidCharacter;
     if buf.is_empty() {
         return Err(ParseIntError::InvalidCharacter);
     }
     // if (buf[0] == '+') return parseIntWithSign(Result, Character, buf[1..], base, .pos);
-    // if (buf[0] == '-') return parseIntWithSign(Result, Character, buf[1..], base, .neg);
-    // return parseIntWithSign(Result, Character, buf, base, .pos);
-    match buf[0] {
-        b'+' => parse_int_with_sign(&buf[1..], base, false),
-        b'-' => parse_int_with_sign(&buf[1..], base, true),
-        _ => parse_int_with_sign(buf, base, false),
+    if buf[0] == b'+' {
+        return parse_int_with_sign(t, &buf[1..], base, false);
     }
+    // if (buf[0] == '-') return parseIntWithSign(Result, Character, buf[1..], base, .neg);
+    if buf[0] == b'-' {
+        return parse_int_with_sign(t, &buf[1..], base, true);
+    }
+    // return parseIntWithSign(Result, Character, buf, base, .pos);
+    parse_int_with_sign(t, buf, base, false)
 }
 
-/// `std.fmt.parseUnsigned(T, buf, base)`: `parseIntWithSign` with no sign
-/// character accepted.
-pub fn parse_unsigned<T: ZigInt>(buf: &[u8], base: u8) -> Result<T, ParseIntError> {
-    parse_int_with_sign(buf, base, false)
+// pub fn parseUnsigned(comptime T: type, buf: []const u8, base: u8) ParseIntError!T {
+//     return parseIntWithSign(T, u8, buf, base, .pos);
+// }
+/// `std.fmt.parseUnsigned(T, buf, base)` for the Zig integer type `t` (any
+/// width), the value widened to `i128`.
+pub fn parse_unsigned_type(t: IntType, buf: &[u8], base: u8) -> Result<i128, ParseIntError> {
+    parse_int_with_sign(t, buf, base, false)
 }
 
-/// `std.fmt.parseIntWithSign`.
-fn parse_int_with_sign<T: ZigInt>(buf: &[u8], base: u8, neg: bool) -> Result<T, ParseIntError> {
+// fn parseIntWithSign(
+//     comptime Result: type,
+//     comptime Character: type,
+//     buf: []const Character,
+//     base: u8,
+//     comptime sign: enum { pos, neg },
+// ) ParseIntError!Result {
+//
+// PORT NOTE: every step is computed in `i128`, which holds every value of a
+// type of at most 64 bits times any `u8` base, and range-checked against
+// `Accumulate` right away, so `Overflow` is reported at the same digit as in
+// the reference, BEFORE a later invalid character is read
+// (`parseInt(i64, "99999999999999999999x", 10)` and `parseInt(u8, "300x", 0)`
+// are `error.Overflow`, MEASURED with Zig 0.16.0).
+//
+// PERF(port): `parse_int_type`, `parse_unsigned_type` and this function are
+// deliberately NOT `#[inline]`. With the hint, every rustty-vt call site got
+// its own copy, which reshuffled rustty-vt's codegen units and cost the
+// unrelated `+terminal-parser` bench about 10% (paired runs, task tail-s9);
+// without it the benches match the pre-consolidation binary.
+fn parse_int_with_sign(
+    result: IntType,
+    buf: &[u8],
+    base: u8,
+    neg: bool,
+) -> Result<i128, ParseIntError> {
     // if (buf.len == 0) return error.InvalidCharacter;
     if buf.is_empty() {
         return Err(ParseIntError::InvalidCharacter);
@@ -159,8 +302,17 @@ fn parse_int_with_sign<T: ZigInt>(buf: &[u8], base: u8, neg: bool) -> Result<T, 
         }
     }
 
+    // const add = switch (sign) { .pos => math.add, .neg => math.sub };
+
+    // accumulate into Accumulate which is always 8 bits or larger.  this prevents
+    // `buf_base` from overflowing Result.
+    // const Accumulate = std.meta.Int(info.int.signedness, @max(8, info.int.bits));
+    let accumulate_t = IntType {
+        bits: result.bits.max(8),
+        signed: result.signed,
+    };
     // var accumulate: Accumulate = 0;
-    let mut accumulate = T::ZERO;
+    let mut accumulate: i128 = 0;
 
     // if (buf_start[0] == '_' or buf_start[buf_start.len - 1] == '_') return error.InvalidCharacter;
     if buf_start[0] == b'_' || buf_start[buf_start.len() - 1] == b'_' {
@@ -172,32 +324,35 @@ fn parse_int_with_sign<T: ZigInt>(buf: &[u8], base: u8, neg: bool) -> Result<T, 
         if c == b'_' {
             continue;
         }
-        let digit = char_to_digit(c, buf_base)?;
-        if accumulate != T::ZERO {
-            // accumulate = try math.mul(Accumulate, accumulate,
-            //     math.cast(Accumulate, buf_base) orelse return error.Overflow);
-            let b = T::cast_i128(i128::from(buf_base)).ok_or(ParseIntError::Overflow)?;
-            accumulate = accumulate.checked_mul(b).ok_or(ParseIntError::Overflow)?;
+        // const digit = try charToDigit(math.cast(u8, c) orelse return error.InvalidCharacter, buf_base);
+        let digit = i128::from(char_to_digit(c, buf_base)?);
+        if accumulate != 0 {
+            // accumulate = try math.mul(Accumulate, accumulate, math.cast(Accumulate, buf_base) orelse return error.Overflow);
+            let b = accumulate_t
+                .cast(i128::from(buf_base))
+                .ok_or(ParseIntError::Overflow)?;
+            accumulate = accumulate_t
+                .cast(accumulate * b)
+                .ok_or(ParseIntError::Overflow)?;
         } else if neg {
             // The first digit of a negative number.
             // Consider parsing "-4" as an i3.
             // This should work, but positive 4 overflows i3, so we can't cast the digit to T and subtract.
             // accumulate = math.cast(Accumulate, -@as(i8, @intCast(digit))) orelse return error.Overflow;
-            accumulate = T::cast_i128(-i128::from(digit)).ok_or(ParseIntError::Overflow)?;
+            accumulate = accumulate_t.cast(-digit).ok_or(ParseIntError::Overflow)?;
             continue;
         }
-        // accumulate = try add(Accumulate, accumulate,
-        //     math.cast(Accumulate, digit) orelse return error.Overflow);
-        let d = T::cast_i128(i128::from(digit)).ok_or(ParseIntError::Overflow)?;
-        accumulate = if neg {
-            accumulate.checked_sub(d)
-        } else {
-            accumulate.checked_add(d)
-        }
-        .ok_or(ParseIntError::Overflow)?;
+        // accumulate = try add(Accumulate, accumulate, math.cast(Accumulate, digit) orelse return error.Overflow);
+        let d = accumulate_t.cast(digit).ok_or(ParseIntError::Overflow)?;
+        let next = if neg { accumulate - d } else { accumulate + d };
+        accumulate = accumulate_t.cast(next).ok_or(ParseIntError::Overflow)?;
     }
 
-    Ok(accumulate)
+    // return if (Result == Accumulate)
+    //     accumulate
+    // else
+    //     math.cast(Result, accumulate) orelse return error.Overflow;
+    result.cast(accumulate).ok_or(ParseIntError::Overflow)
 }
 
 // ===========================================================================

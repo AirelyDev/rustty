@@ -29,7 +29,9 @@
 // const CommaSplitter = @import("CommaSplitter.zig");
 use crate::comma_splitter::CommaSplitter;
 use crate::diagnostics::{Diagnostic, DiagnosticList, Location, LocationError, LocationProvider};
-use crate::std_fmt::{self, ZigFloat, ZigInt};
+// (`std.fmt.parseInt` / `std.fmt.parseFloat`: the one port, in rustty-zigstd;
+// NEW-FINDINGS N120.)
+use rustty_zigstd::fmt::{self as std_fmt, ZigFloat, ZigInt};
 // PORT NOTE (P3-W7 T4): the reference's `internal_os` import was only used for
 // `internal_os.args`, and upstream DELETED `src/os/args.zig` in `e8525c0fd`.
 // The seam now goes straight to `std::env::args_os()` (see `OsArgIterator`), so

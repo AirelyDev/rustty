@@ -1,12 +1,16 @@
 //! Tests for `fmt`: Zig 0.16.0's own std tests, ported assertion for
-//! assertion for the types this port has, then a differential check against
-//! Zig's results over a wider corpus (`zig_corpus.rs`).
+//! assertion, then a differential check against Zig's results over a wider
+//! corpus (`zig_corpus.rs`), then the tests the other ports of these parsers
+//! carried (task tail-s9, NEW-FINDINGS N120/N150; each says where it came
+//! from).
+//!
+//! The odd-width integer rows of `test parseInt` (`i1`, `i2`, `i4`, `i5`,
+//! `i43`) and `test parseUnsigned` (`u7`, `u1`, `u2`) run through
+//! `parse_int_type` / `parse_unsigned_type` with an `IntType` of the same
+//! width and signedness (they were skipped before task tail-s9, which brought
+//! in rustty-vt's arbitrary-width core).
 //!
 //! Skipped from the reference tests, each because Rust has no such type:
-//! - `test parseInt`: the `i1`, `i2`, `i4`, `i5` and `i43` rows ("ensure minInt
-//!   is parsed correctly", "edge cases which previously errored due to base
-//!   overflowing T");
-//! - `test parseUnsigned`: the `u7`, `u1` and `u2` rows;
 //! - `test parseFloat` / `"nan and inf"`: the `f16`, `f80` and `f128`
 //!   instantiations (the `f32` and `f64` ones are ported);
 //! - `"largest normals"`: the `f16`, `f80` and `f128` rows;
@@ -35,14 +39,28 @@
 use super::zig_corpus::{FLOATS, INTS};
 use super::*;
 
-const EPSILON: f64 = 1e-7;
+/// `std.math.approxEqAbs(T, x, y, tolerance)`, over the enclosing test's `T`.
+///
+/// Zig's `epsilon = 1e-7` and the test's `comptime_float` literal are both
+/// coerced to `T`, and the difference is taken in `T` (the form the rustty-args
+/// copy of these tests used, task T-C3; this module's copy compared in `f64`
+/// before task tail-s9).
+macro_rules! approx_eq_abs {
+    ($x:expr, $y:expr, $tolerance:expr) => {{
+        let x: T = $x;
+        let y: T = $y;
+        let tolerance: T = $tolerance;
+        assert!(tolerance >= 0.0);
 
-/// `std.math.approxEqAbs`.
-fn approx_eq_abs(a: f64, b: f64, tolerance: f64) -> bool {
-    if a == b {
-        return true;
-    }
-    (a - b).abs() <= tolerance
+        // Fast path for equal values (and signed zeros and infinites).
+        if x == y {
+            true
+        } else if x.is_nan() || y.is_nan() {
+            false
+        } else {
+            (x - y).abs() <= tolerance
+        }
+    }};
 }
 
 // test parseInt {
@@ -84,8 +102,11 @@ fn test_parse_int() {
     assert_eq!(parse_int::<u8>(b"+0", 10), Ok(0));
 
     // ensure minInt is parsed correctly
-    // (the i1 and i43 rows are skipped: no such Rust type)
+    let i1 = IntType::signed(1);
+    assert_eq!(parse_int_type(i1, b"-1", 10), Ok(i1.min()));
     assert_eq!(parse_int::<i8>(b"-128", 10), Ok(i8::MIN));
+    let i43 = IntType::signed(43);
+    assert_eq!(parse_int_type(i43, b"-4398046511104", 10), Ok(i43.min()));
 
     // empty string or bare +- is invalid
     assert_eq!(
@@ -146,7 +167,9 @@ fn test_parse_int() {
     );
 
     // edge cases which previously errored due to base overflowing T
-    // (the i2, i4 and i5 rows are skipped: no such Rust type)
+    assert_eq!(parse_int_type(IntType::signed(2), b"-10", 2), Ok(-2));
+    assert_eq!(parse_int_type(IntType::signed(4), b"-10", 8), Ok(-8));
+    assert_eq!(parse_int_type(IntType::signed(5), b"-10", 16), Ok(-16));
 }
 
 // test parseUnsigned {
@@ -175,7 +198,9 @@ fn test_parse_unsigned() {
 
     assert_eq!(parse_unsigned::<u32>(b"DeadBeef", 16), Ok(0xDEADBEEF));
 
-    // (the u7 rows are skipped: no such Rust type)
+    let u7 = IntType::unsigned(7);
+    assert_eq!(parse_unsigned_type(u7, b"1", 10), Ok(1));
+    assert_eq!(parse_unsigned_type(u7, b"1000", 2), Ok(8));
 
     assert_eq!(
         parse_unsigned::<u32>(b"f", 10),
@@ -189,7 +214,20 @@ fn test_parse_unsigned() {
     assert_eq!(parse_unsigned::<u32>(b"NUMBER", 36), Ok(1442151747));
 
     // these numbers should fit even though the base itself doesn't fit in the destination type
-    // (the u1 and u2 rows are skipped: no such Rust type)
+    let u1 = IntType::unsigned(1);
+    assert_eq!(parse_unsigned_type(u1, b"0", 10), Ok(0));
+    assert_eq!(parse_unsigned_type(u1, b"1", 10), Ok(1));
+    assert_eq!(
+        parse_unsigned_type(u1, b"2", 10),
+        Err(ParseIntError::Overflow)
+    );
+    assert_eq!(parse_unsigned_type(u1, b"001", 16), Ok(1));
+    let u2 = IntType::unsigned(2);
+    assert_eq!(parse_unsigned_type(u2, b"3", 16), Ok(3));
+    assert_eq!(
+        parse_unsigned_type(u2, b"4", 16),
+        Err(ParseIntError::Overflow)
+    );
 
     // parseUnsigned does not expect a sign
     assert_eq!(
@@ -250,7 +288,9 @@ macro_rules! parse_float_body {
         assert_eq!(p(b"-1e0").unwrap(), -1.0);
         assert_eq!(p(b"1.234e3").unwrap(), 1234.0);
 
-        let approx = |s: &[u8], v: T| approx_eq_abs(p(s).unwrap() as f64, v as f64, EPSILON);
+        // const epsilon = 1e-7;
+        const EPSILON: T = 1e-7;
+        let approx = |s: &[u8], v: T| approx_eq_abs!(p(s).unwrap(), v, EPSILON);
         assert!(approx(b"3.141", 3.141));
         assert!(approx(b"-3.141", -3.141));
 
@@ -541,4 +581,168 @@ fn format_float_d_matches_zig_over_the_corpus() {
             "f64 {bits:#018x}"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// Tests carried over from the other ports of these parsers (task tail-s9,
+// NEW-FINDINGS N120/N150). Each one's origin is named; none duplicates a
+// reference table row above.
+// ---------------------------------------------------------------------------
+
+// From `rustty_args::std_fmt` (task T-C, parity S67-F3). Inputs the port's
+// former `from_str_radix` front end got wrong, each MEASURED against Zig
+// 0.16.0 `std.fmt.parseInt(T, s, 0)`: `+-5` was accepted, `-0` for an unsigned
+// type was rejected, and a doubled `_` is accepted by the reference.
+#[test]
+fn parse_int_sign_and_separator_edges() {
+    assert!(parse_int::<i32>(b"+-5", 0).is_err());
+    assert_eq!(parse_int::<u32>(b"-0", 0), Ok(0));
+    assert_eq!(parse_int::<u32>(b"1__0", 0), Ok(10));
+    assert_eq!(parse_int::<u64>(b"10_000_000", 0), Ok(10_000_000));
+}
+
+// From `rustty_args::std_fmt` (task T-C3). The reference fails with `Overflow`
+// at the first digit that leaves the range of `T`, before it reads a later
+// invalid character. Each value is MEASURED with Zig 0.16.0
+// (`std.fmt.parseInt`); a port that range-checks only at the end returns
+// `InvalidCharacter` for every one of them.
+#[test]
+fn parse_int_overflows_before_a_later_bad_character() {
+    assert_eq!(
+        parse_int::<i64>(b"99999999999999999999x", 10),
+        Err(ParseIntError::Overflow)
+    );
+    assert_eq!(
+        parse_int::<u8>(b"99999999999999999999x", 0),
+        Err(ParseIntError::Overflow)
+    );
+    assert_eq!(parse_int::<u8>(b"300x", 0), Err(ParseIntError::Overflow));
+    assert_eq!(parse_int::<i8>(b"300x", 0), Err(ParseIntError::Overflow));
+    assert_eq!(parse_int::<i8>(b"-300x", 0), Err(ParseIntError::Overflow));
+    assert_eq!(parse_int::<i8>(b"-129x", 10), Err(ParseIntError::Overflow));
+    assert_eq!(parse_int::<u32>(b"-1x", 10), Err(ParseIntError::Overflow));
+    assert_eq!(parse_int::<u8>(b"0x100x", 0), Err(ParseIntError::Overflow));
+}
+
+// From `rustty_args::std_fmt` (task T-C3). The `many_digits` sticky bit of
+// `convertHex`: more than 16 significant hex digits set `many_digits`, which
+// ORs a 1 into the rounding bits so a value just above a halfway point rounds
+// up. `0x1.000001` is exactly halfway between two f32 values (it would round
+// to even, down to 1.0); the trailing `...0001` puts it above halfway.
+// MEASURED with Zig 0.16.0: `parseFloat(f32, "0x1.000001000000000001p0")` is
+// `0x3f800001`. Zig's own std tests do not cover the sticky bit.
+#[test]
+fn hex_many_digits_sticky_bit_rounds_up() {
+    assert_eq!(
+        parse_float::<f32>(b"0x1.000001000000000001p0")
+            .unwrap()
+            .to_bits(),
+        0x3f80_0001
+    );
+}
+
+// From rustty-vt's `zig_parse_int.rs` (parity S170-F1 and siblings). The
+// digit separators and the Accumulate width, which are what the terminal
+// parsers depend on.
+#[test]
+fn digit_separators_and_accumulate_width() {
+    use ParseIntError::{InvalidCharacter, Overflow};
+    assert_eq!(parse_int::<u32>(b"1_0", 10), Ok(10));
+    assert_eq!(parse_int::<i32>(b"-1_0", 10), Ok(-10));
+    assert_eq!(parse_int::<u32>(b"1__0", 10), Ok(10));
+    assert_eq!(parse_int::<u32>(b"10_", 10), Err(InvalidCharacter));
+    assert_eq!(parse_int::<u32>(b"_10", 10), Err(InvalidCharacter));
+    assert_eq!(parse_int::<u32>(b"_", 10), Err(InvalidCharacter));
+    assert_eq!(parse_int::<i32>(b"2147483647", 10), Ok(i32::MAX));
+    assert_eq!(parse_int::<i32>(b"-2147483648", 10), Ok(i32::MIN));
+    assert_eq!(parse_int::<i32>(b"2147483648", 10), Err(Overflow));
+    assert_eq!(parse_int::<u32>(b"-1a", 10), Err(Overflow));
+
+    // u4 accumulates in u8: "99x" reaches the invalid character before
+    // the final cast, and "20" fits u8 but not u4.
+    let u4 = IntType::unsigned(4);
+    assert_eq!(parse_int_type(u4, b"15", 10), Ok(15));
+    assert_eq!(parse_int_type(u4, b"16", 10), Err(Overflow));
+    assert_eq!(parse_int_type(u4, b"99x", 10), Err(InvalidCharacter));
+    assert_eq!(parse_int_type(u4, b"1_2", 10), Ok(12));
+
+    // parseUnsigned takes no sign byte.
+    assert_eq!(parse_unsigned::<u16>(b"1_0", 10), Ok(10));
+    assert_eq!(parse_unsigned::<u16>(b"+1", 10), Err(InvalidCharacter));
+    assert_eq!(parse_unsigned::<u16>(b"-0", 10), Err(InvalidCharacter));
+    assert_eq!(parse_int::<usize>(b"-0", 10), Ok(0));
+
+    let u21 = IntType::unsigned(21);
+    assert_eq!(parse_int_type(u21, b"1F_FFFF", 16), Ok(0x1F_FFFF));
+    assert_eq!(parse_int_type(u21, b"20_0000", 16), Err(Overflow));
+}
+
+// From rustty-vt's `color.rs` (its `parse_unsigned_u8` copy): the
+// `std.fmt.parseUnsigned(u8, .., 10)` the Kitty OSC 21 key parser calls.
+#[test]
+fn parse_unsigned_u8_base10_zig_semantics() {
+    assert_eq!(parse_unsigned::<u8>(b"0", 10), Ok(0));
+    assert_eq!(parse_unsigned::<u8>(b"255", 10), Ok(255));
+    assert_eq!(parse_unsigned::<u8>(b"1_2", 10), Ok(12));
+    assert_eq!(parse_unsigned::<u8>(b"2_5_5", 10), Ok(255));
+    // No sign prefix is accepted.
+    assert_eq!(
+        parse_unsigned::<u8>(b"+1", 10),
+        Err(ParseIntError::InvalidCharacter)
+    );
+    assert_eq!(
+        parse_unsigned::<u8>(b"-1", 10),
+        Err(ParseIntError::InvalidCharacter)
+    );
+    assert_eq!(
+        parse_unsigned::<u8>(b"256", 10),
+        Err(ParseIntError::Overflow)
+    );
+    for bad in [&b"_1"[..], &b"1_"[..], &b""[..], &b"0x1"[..], &b" "[..]] {
+        assert_eq!(
+            parse_unsigned::<u8>(bad, 10),
+            Err(ParseIntError::InvalidCharacter),
+            "expected InvalidCharacter for {:?}",
+            std::str::from_utf8(bad).unwrap()
+        );
+    }
+}
+
+// From rustty-vt's `color.rs` (its `parse_unsigned_u16` copy): the
+// `std.fmt.parseUnsigned(u16, .., 16)` that `RGB.fromHex` calls.
+#[test]
+fn parse_unsigned_u16_base16_zig_semantics() {
+    assert_eq!(Ok(0xffff), parse_unsigned::<u16>(b"ffff", 16));
+    assert_eq!(Ok(0x0f), parse_unsigned::<u16>(b"F", 16));
+    assert_eq!(Ok(0xff), parse_unsigned::<u16>(b"f_f", 16));
+    // Signs are `charToDigit` failures, not sign prefixes.
+    assert_eq!(
+        Err(ParseIntError::InvalidCharacter),
+        parse_unsigned::<u16>(b"+f", 16)
+    );
+    assert_eq!(
+        Err(ParseIntError::InvalidCharacter),
+        parse_unsigned::<u16>(b"-f", 16)
+    );
+    // Leading/trailing separators.
+    assert_eq!(
+        Err(ParseIntError::InvalidCharacter),
+        parse_unsigned::<u16>(b"_f", 16)
+    );
+    assert_eq!(
+        Err(ParseIntError::InvalidCharacter),
+        parse_unsigned::<u16>(b"f_", 16)
+    );
+    assert_eq!(
+        Err(ParseIntError::InvalidCharacter),
+        parse_unsigned::<u16>(b"", 16)
+    );
+    // `u16` width accumulate: overflow, not truncation.
+    assert_eq!(
+        Err(ParseIntError::Overflow),
+        parse_unsigned::<u16>(b"fffff", 16)
+    );
+    // base 0 prefix detection.
+    assert_eq!(Ok(255), parse_unsigned::<u16>(b"0xff", 0));
+    assert_eq!(Ok(10), parse_unsigned::<u16>(b"10", 0));
 }

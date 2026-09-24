@@ -449,15 +449,15 @@ impl Parser {
 }
 
 /// PORT NOTE: `std.fmt.parseInt(i32, bytes, 10)`, through the port of the
-/// std function in `crate::zig_parse_int`. Returns `error.Overflow` on
+/// std function in `rustty_zigstd::fmt`. Returns `error.Overflow` on
 /// out-of-range and `error.InvalidCharacter` (mapped to `InvalidFormat`) on a
 /// non-numeric byte, mirroring the reference's `try`.
 fn parse_int_i32(bytes: &[u8]) -> Result<i32, Error> {
     // PORT NOTE: reference defect (R13), UD141: a `_` digit separator is refused
     // before parsing, as Ghostty's own OSC 99 parser does; see
-    // `zig_parse_int::reject_digit_separators`.
-    crate::zig_parse_int::reject_digit_separators(bytes).map_err(map_parse_int_error)?;
-    crate::zig_parse_int::parse::<i32>(bytes, 10).map_err(map_parse_int_error)
+    // `protocol_int::reject_digit_separators`.
+    crate::protocol_int::reject_digit_separators(bytes).map_err(map_parse_int_error)?;
+    rustty_zigstd::fmt::parse_int::<i32>(bytes, 10).map_err(map_parse_int_error)
 }
 
 /// PORT NOTE: `std.fmt.parseInt(u32, bytes, 10)`. See `parse_int_i32`.
@@ -483,17 +483,17 @@ fn parse_int_i32(bytes: &[u8]) -> Result<i32, Error> {
 fn parse_int_u32(bytes: &[u8]) -> Result<u32, Error> {
     // PORT NOTE: reference defect (R13), UD141: a `_` digit separator is refused
     // before parsing, as Ghostty's own OSC 99 parser does; see
-    // `zig_parse_int::reject_digit_separators`.
-    crate::zig_parse_int::reject_digit_separators(bytes).map_err(map_parse_int_error)?;
-    crate::zig_parse_int::parse::<u32>(bytes, 10).map_err(map_parse_int_error)
+    // `protocol_int::reject_digit_separators`.
+    crate::protocol_int::reject_digit_separators(bytes).map_err(map_parse_int_error)?;
+    rustty_zigstd::fmt::parse_int::<u32>(bytes, 10).map_err(map_parse_int_error)
 }
 
 /// `error.Overflow` stays `Overflow`; `error.InvalidCharacter` is this
 /// port's `InvalidFormat`.
-fn map_parse_int_error(e: crate::zig_parse_int::ParseIntError) -> Error {
+fn map_parse_int_error(e: rustty_zigstd::fmt::ParseIntError) -> Error {
     match e {
-        crate::zig_parse_int::ParseIntError::Overflow => Error::Overflow,
-        crate::zig_parse_int::ParseIntError::InvalidCharacter => Error::InvalidFormat,
+        rustty_zigstd::fmt::ParseIntError::Overflow => Error::Overflow,
+        rustty_zigstd::fmt::ParseIntError::InvalidCharacter => Error::InvalidFormat,
     }
 }
 

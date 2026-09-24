@@ -152,6 +152,8 @@ pub enum Error {
     Create(CreateError),
     // _ = try b.run(.once);
     Benchmark(benchmark::Error),
+    // try global.init(.{ .tool = minimal });
+    GlobalInit(rustty_apprt::InitError),
 }
 
 impl From<rustty_args::args::ParseError> for Error {
@@ -198,7 +200,19 @@ impl From<benchmark::Error> for Error {
 // replicated locally over `std::env::args_os` (DEFERRALS.md "benchmark: shared
 // detectArgs"). The benchmark `Action` declares no `detectSpecialCase`, so the
 // special-case arm of `detectIter` is elided.
+//
+// PORT NOTE (parity S43-F3, controller Decision B): the reference `main` now
+// begins with `try global.init(.{ .tool = minimal });` (`cli.zig:55`): the full
+// process init (RUSTTY_LOG, signals, rlimits, locale, crash, glslang,
+// oniguruma, resources dir, i18n) with app-action detection skipped, because
+// the tool's `+terminal-stream` etc. are not app actions. The port's global
+// init is `rustty_apprt::init_with_action`, and `false` ("no app action") is
+// that `.tool` arm. The C API reaches `main_action`, not this function, so it
+// keeps relying on `rustty_init` having run, as the reference's `CApi.zig`
+// does. The benchmark timers start inside `Benchmark::run`, after this.
 pub fn main() -> Result<(), Error> {
+    // try global.init(.{ .tool = minimal });
+    rustty_apprt::init_with_action(false).map_err(Error::GlobalInit)?;
     let alloc = Allocator;
     let action_ = detect_args()?;
     // const action = action_ orelse return error.NoAction;

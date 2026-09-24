@@ -49,7 +49,7 @@ const ASCII_WHITESPACE: &[u8] = &[b' ', b'\t', b'\n', 0x0b, 0x0c, b'\r'];
 
 /// `std.fmt.ParseIntError = error{ Overflow, InvalidCharacter }` — the errors
 /// of the reference's `std.fmt.parseUnsigned(u64, buf, 0)` calls.
-use rustty_args::std_fmt::ParseIntError;
+use rustty_zigstd::fmt::ParseIntError;
 
 /// The error set of the reference `checkArg`: `error{InvalidValue} ||
 /// error{Unexpected} || std.fmt.ParseIntError || homedir.ExpandError ||
@@ -632,7 +632,7 @@ fn realpath_bytes(path: &[u8]) -> Result<Vec<u8>, std::io::Error> {
 }
 
 /// PORTS: `std.fmt.parseUnsigned(u64, buf, 0)`, through the ported std parser
-/// (`rustty_args::std_fmt::parse_unsigned`).
+/// (`rustty_zigstd::fmt::parse_unsigned`).
 //
 // PORT NOTE (NEW-FINDINGS N122): this was a hand-written copy that stripped a
 // leading `+`, on the belief that `parseUnsigned` is `parseIntWithSign(.pos)`
@@ -644,7 +644,7 @@ fn realpath_bytes(path: &[u8]) -> Result<Vec<u8>, std::io::Error> {
 // accepted `--surface-id=+5` and a `+5` surface-id env value where the
 // reference rejects them.
 fn parse_unsigned_u64_base0(buf: &[u8]) -> Result<u64, ParseIntError> {
-    rustty_args::std_fmt::parse_unsigned::<u64>(buf, 0)
+    rustty_zigstd::fmt::parse_unsigned::<u64>(buf, 0)
 }
 
 #[cfg(test)]

@@ -479,7 +479,7 @@ impl<'a> TokenizeScalar<'a> {
 }
 
 // PORT NOTE: glue for `std.fmt.parseInt(u9, s, 10)`, through the port of the
-// std function in `crate::zig_parse_int` at the reference's `u9` width.
+// std function in `rustty_zigstd::fmt` at the reference's `u9` width.
 // Returns `None` on any parse failure or when the value overflows `u9`
 // (0..=511); the value is widened to `u16`.
 // CORRECTION (parity S194-F3): this used `str::parse::<u16>()` plus a range
@@ -488,10 +488,10 @@ impl<'a> TokenizeScalar<'a> {
 fn parse_int_u9(s: &[u8]) -> Option<u16> {
     // PORT NOTE: reference defect (R13), UD141: a `_` digit separator is refused
     // before parsing, as Ghostty's own OSC 99 parser does; see
-    // `zig_parse_int::reject_digit_separators`.
-    crate::zig_parse_int::reject_digit_separators(s).ok()?;
+    // `protocol_int::reject_digit_separators`.
+    crate::protocol_int::reject_digit_separators(s).ok()?;
     let v =
-        crate::zig_parse_int::parse_int(crate::zig_parse_int::IntType::unsigned(9), s, 10).ok()?;
+        rustty_zigstd::fmt::parse_int_type(rustty_zigstd::fmt::IntType::unsigned(9), s, 10).ok()?;
     Some(u16::try_from(v).expect("a u9 fits in u16"))
 }
 

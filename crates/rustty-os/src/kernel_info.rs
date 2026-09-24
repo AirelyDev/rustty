@@ -14,19 +14,39 @@ pub fn getKernelInfo() -> Option<Vec<u8>> {
         return None;
     }
     let path = "/proc/sys/kernel/osrelease";
-    let kernel_info = match std::fs::read(path) {
-        Ok(v) => v,
-        Err(_) => return None,
-    };
+    read_kernel_info(std::path::Path::new(path))
+}
+
+/// The body of `getKernelInfo` after the OS check, on a given path.
+fn read_kernel_info(path: &std::path::Path) -> Option<Vec<u8>> {
+    use std::io::Read as _;
+    // var file = std.Io.Dir.openFileAbsolute(global.io(), path, .{}) catch return null;
+    let mut file = std::fs::File::open(path).ok()?;
 
     // 128 bytes should be enough to hold the kernel information
-    // PORT NOTE: `file.readToEndAlloc(alloc, 128)` caps the read at 128 bytes and
-    // returns an error (→ null) if the file is larger; we reproduce the cap by
-    // returning null when more than 128 bytes are present.
-    if kernel_info.len() > 128 {
-        return None;
+    // var kernel_info_buf: [128]u8 = undefined;
+    // const kernel_info = kernel_info_buf[0 .. file.readPositionalAll(
+    //     global.io(),
+    //     &kernel_info_buf,
+    //     0,
+    // ) catch return null];
+    // PORT NOTE (parity S111-F7): `readPositionalAll` fills the buffer until it
+    // is full or the file ends, so a longer file is TRUNCATED to 128 bytes, not
+    // rejected. CORRECTION: this used to read the whole file and return null
+    // above 128 bytes, after the older `readToEndAlloc(alloc, 128)` form.
+    let mut kernel_info_buf = [0u8; 128];
+    let mut len = 0;
+    while len < kernel_info_buf.len() {
+        match file.read(&mut kernel_info_buf[len..]) {
+            Ok(0) => break,
+            Ok(n) => len += n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => return None,
+        }
     }
-    Some(trim_ascii_whitespace(&kernel_info).to_vec())
+    let kernel_info = &kernel_info_buf[0..len];
+    // return alloc.dupe(u8, std.mem.trim(u8, kernel_info, &std.ascii.whitespace)) catch return null;
+    Some(trim_ascii_whitespace(kernel_info).to_vec())
 }
 
 // `std.mem.trim(u8, kernel_info, &std.ascii.whitespace)`: trims ASCII
@@ -58,5 +78,23 @@ mod tests {
         // if something was read from the file
         assert!(!kernel_info.is_empty());
         assert!(kernel_info != b"");
+    }
+
+    /// Parity S111-F7: a file longer than the 128-byte buffer is truncated to
+    /// its first 128 bytes (then trimmed), as `readPositionalAll` does.
+    #[test]
+    #[cfg_attr(miri, ignore)] // real file I/O
+    fn kernel_info_longer_than_the_buffer_is_truncated_to_128_bytes() {
+        let dir =
+            std::env::temp_dir().join(format!("rustty-t-h-kernel-info-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("osrelease");
+        let mut contents = b"  6.1.0-".to_vec();
+        contents.extend(std::iter::repeat_n(b'a', 200));
+        contents.push(b'\n');
+        std::fs::write(&path, &contents).unwrap();
+        let got = read_kernel_info(&path);
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(got.as_deref(), Some(&contents[2..128]));
     }
 }

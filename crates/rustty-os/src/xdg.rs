@@ -28,6 +28,15 @@ pub enum DirError {
     /// `homedir.home`'s `error.BufferTooSmall`: the home directory is longer
     /// than the 1024-byte buffer `dir` reads it into.
     BufferTooSmall,
+    // PORT NOTE (merge of S112-F11 with S111-F11): `try homedir.home` passes on
+    // the whole of `home`'s inferred error set, which also holds the
+    // `std.process.RunError` half of its shell fallback (`homedir::Error`'s
+    // two variants below). They are carried through one-to-one.
+    /// `homedir.home`'s `error.StreamTooLong` (the shell fallback's output
+    /// exceeded its limit).
+    StreamTooLong,
+    /// `homedir.home`'s spawn, read or wait failure of the shell fallback.
+    Spawn(std::io::ErrorKind),
 }
 
 // PORT NOTE (W94-B02-01): the reference fields are `?[]const u8` — raw path
@@ -168,6 +177,8 @@ fn dir(
     // looked like having no home directory.
     let home = homedir::home(environ_map, &mut buf).map_err(|err| match err {
         homedir::Error::BufferTooSmall => DirError::BufferTooSmall,
+        homedir::Error::StreamTooLong => DirError::StreamTooLong,
+        homedir::Error::Spawn(kind) => DirError::Spawn(kind),
     })?;
     if let Some(home) = home {
         // PORT NOTE (W94-B02-01): `homedir.home` returns `[]const u8`; the raw
