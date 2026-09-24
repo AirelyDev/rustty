@@ -3473,6 +3473,27 @@ ports (`rustty_args::std_fmt`, `rustty_zigstd::fmt`) plus rustty-vt's partial co
 `rustty_zigstd::fmt` (or the reverse) and delete the other copy; the two were written
 independently, so their test sets should be merged, not just one kept.
 
+## N151 — CoreText keeps naming a font after a variation instance of the same data was built
+
+**Recorded 2026-09-23 (task T-F2, from the T-F review).** Test isolation, not product behaviour.
+After `deferred_face::tests::load_coretext_deinits_the_face_when_set_variations_fails` (S85-F3)
+builds a `wght=700` variation instance of the data-loaded embedded JetBrains Mono, CoreText can
+answer `CTFontCopyFamilyName` = "JetBrains Mono" for the same font data with its `name` table
+renamed away, for the rest of the process. `face::coretext::tests::
+a_face_without_a_family_name_is_unknown` then fails its precondition. MEASURED on macOS: the two
+nameless-font tests plus the S85-F3 test, run with `--test-threads=1`, failed 20 of 30 runs (always
+the `face::coretext` one); the reviewer measured 11 of 150 full-suite runs on `tail-f` against 1 of
+150 at the base, and 8 of 200 with a lock shared by the two tests, so the state outlives the test
+that made it and a lock does not help.
+
+**Fix**: both nameless-font tests (`face::coretext::tests::a_face_without_a_family_name_is_unknown`
+and `deferred_face::tests::a_coretext_font_without_a_family_name_is_unknown`) run their body in a
+re-executed child of the test binary (`crates/rustty-font-shaper/src/test_child.rs`, the R14
+parent/child form; the parent asserts that the child ran exactly one test and passed). After the
+fix: 0 of 50 of the same sequential runs failed; see the task T-F2 report for the full-suite count.
+
+**state**: CLOSED (task T-F2).
+
 ## N196 — tests passed without testing anything when their environment was missing
 
 - **id**: N196. Not in the inventory. Found by the tail-s3 task (silent-skip audit), 2026-09-23.
