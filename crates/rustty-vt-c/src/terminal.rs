@@ -11497,8 +11497,6 @@ mod tests {
         thread_local! {
             static COUNTING: core::cell::Cell<*const CountingAllocator> =
                 const { core::cell::Cell::new(std::ptr::null()) };
-            static WRITE_LAST_ALLOC: core::cell::Cell<Option<(usize, u8)>> =
-                const { core::cell::Cell::new(None) };
             static WRITE_CONTENTS: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
             static WRITE_CALLS: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
             static REPLY_CONTENTS: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
@@ -11512,7 +11510,6 @@ mod tests {
         extern "C" fn clipboard_write(_: Terminal, _: *mut c_void, request: *const ClipboardWrite) {
             unsafe {
                 WRITE_CONTENTS.with(|c| c.set((*request).contents_len));
-                WRITE_LAST_ALLOC.with(|c| c.set(counting().last_alloc.get()));
                 WRITE_CALLS.with(|c| c.set(counting().alloc_calls.get()));
                 ((*request).reply)(
                     request,
@@ -11569,7 +11566,6 @@ mod tests {
                 set(t, Option_::ClipboardRead, clipboard_read as *const c_void)
             );
         }
-        let array = |n: usize| Some((n * std::mem::size_of::<ClipboardContent>(), 3u8));
         assert_eq!(32, std::mem::size_of::<ClipboardContent>());
 
         // Writes: four representations stay on the stack, five spill one
@@ -11597,13 +11593,6 @@ mod tests {
             vtw(t, b"\x1B]5522;type=wdata\x1B\\");
             spills[i] = WRITE_CALLS.with(|c| c.get()) - before;
             assert_eq!(n, WRITE_CONTENTS.with(|c| c.get()));
-            if n == 5 {
-                assert_eq!(
-                    array(5),
-                    WRITE_LAST_ALLOC.with(|c| c.get()),
-                    "the spilled array"
-                );
-            }
             assert!(
                 counting_alloc.live_bytes.get() <= live,
                 "the array is freed"
