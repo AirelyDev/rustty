@@ -712,7 +712,8 @@ impl Collection {
         let face = regular.synthetic_bold(opts.face_options())?;
         // PORT NOTE: the reference computes `face_opts` (with the inherited size)
         // but then passes `opts.faceOptions()` to `syntheticBold`; `face_opts` is
-        // dead. Preserved faithfully (the assignment is a no-op).
+        // dead. Preserved faithfully (the assignment is a no-op; unobservable at
+        // the pin, UPSTREAM-DEFECTS.md UD248).
         let _ = face_opts;
 
         let mut buf = [0u8; 256];

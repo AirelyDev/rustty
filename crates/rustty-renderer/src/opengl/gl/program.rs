@@ -232,7 +232,8 @@ impl Program {
     // leaks the program object. All three are the reference's behaviour and are
     // ported as-is rather than quietly fixed: this is a faithful port, and
     // `createVF` failing means shader compilation is broken, which aborts renderer
-    // init anyway. Flagged upward rather than patched here.
+    // init anyway. Flagged upward rather than patched here
+    // (`.port/parity-closure/UPSTREAM-DEFECTS.md` UD247).
     pub fn create_vf(vsrc: &CStr, fsrc: &CStr) -> Result<Self, Error> {
         let vs = Shader::create(gl::VERTEX_SHADER)?;
         // `vs` leaks if this fails — see the note above; the reference's `defer`

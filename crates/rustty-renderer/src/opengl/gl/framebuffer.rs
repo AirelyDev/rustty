@@ -81,9 +81,15 @@ impl Framebuffer {
     /// `GL_DRAW_FRAMEBUFFER_BINDING`/`GL_READ_FRAMEBUFFER_BINDING` queries (and
     /// `GL_FRAMEBUFFER_BINDING` is an alias of the DRAW one). So binding with
     /// `.read` and then unbinding restores the saved DRAW name onto the READ
-    /// target. Every call site in the reference binds `.framebuffer`
-    /// (`renderer/opengl/Target.zig`), where the two coincide, so the latent
-    /// mismatch never fires. Carried over as-is rather than "corrected".
+    /// target. The reference's `present` (`renderer/opengl/OpenGL.zig:312`)
+    /// does bind `.read`, and so does the port's (`opengl_impl.rs`); the
+    /// restored value is right there whenever the read and draw bindings are
+    /// the same framebuffer before `present` (expected, not verified on every
+    /// apprt and driver). The other callers (`Target.zig`, `Pipeline.zig`,
+    /// `RenderPass.zig`) bind `.framebuffer`, where the two coincide. Carried
+    /// over as-is rather than "corrected"
+    /// (`.port/parity-closure/UPSTREAM-DEFECTS.md` UD250; this note first said
+    /// every reference caller binds `.framebuffer`, corrected by task tail-s6).
     pub fn bind(self, target: Target) -> Result<Binding, errors::Error> {
         // The default framebuffer is documented as being zero but
         // on multiple OpenGL drivers its not zero, so we grab it

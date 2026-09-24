@@ -1988,6 +1988,96 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - proposed fix:    in `formatRaw` and `percentDecodeBackwards`, decode only when both bytes pass `std.ascii.isHex` (or parse with `std.fmt.charToDigit` per byte instead of `parseInt`).
 - upstream status: not reported
 
+### UD245 — libvaxis's Windows key table sends F8 for F7
+- kind:            latent (functional: a wrong key event)
+- upstream project: libvaxis
+- severity:        low
+- reference:       `zig-pkg/vaxis-0.6.0-BWNV_CrbCQCscGpzsAlR402rYQ_tV3aAl081c2iRRkka/src/tty.zig:437` (`0x76 => Key.f8`, next to `0x77 => Key.f8` at :438), in the Windows console-input translation, the vaxis version Ghostty pins at 20abdb50a
+- defect:          `0x76` is `VK_F7`, but the arm returns `Key.f8`; every other function key from `VK_F1` (`0x70`) to `VK_F24` (`0x87`) maps to its own key. By reading.
+- ReleaseSafe:     no crash; on Windows a vaxis TUI receives F8 when the user presses F7, and cannot tell the two apart.
+- ReleaseFast:     same.
+- reachability:    keyboard input to a libvaxis TUI on Windows. Ghostty's own TUIs (`+list-themes`, `+boo`) bind neither F7 nor F8 (their `key.matches` calls, `src/cli/list_themes.zig:449-530`, `src/cli/boo.zig:59-60`, name letters, `/` and Escape), so neither Ghostty's nor Rustty's TUIs see a difference.
+- port handling:   faithful: `crates/rustty-vaxis/src/tty.rs` keeps `0x76 => key::f8` with a PORT NOTE ("upstream typo, preserved"). Decided by task tail-s6 under R13 as extended 2026-09-23: the intent is evident, but the code is Windows-only, which no lane here runs, and no Rustty or Ghostty TUI binds either key, so nothing user-visible changes and no failing test can be run for it. Listed for the controller as a candidate to fix if a Windows lane appears.
+- parity row(s):   none; found by task tail-s6's sweep of PORT NOTEs.
+- test:            n/a (record only).
+- proposed fix:    `0x76 => Key.f7`.
+- upstream status: not reported
+
+### UD246 — libvaxis's `Loop.stop` waits forever when the terminal does not answer a status report
+- kind:            deadlock (a TUI that never exits)
+- upstream project: libvaxis
+- severity:        low (the host terminal must not answer `ESC[5n`)
+- reference:       `zig-pkg/vaxis-0.6.0-BWNV_CrbCQCscGpzsAlR402rYQ_tV3aAl081c2iRRkka/src/Loop.zig:63-75` (`stop`: set `should_quit`, write `deviceStatusReport`, then `thread.await`), the reader at :174-176 (`read_loop: while (!self.should_quit) { const n = try self.tty.read(...)`), `Vaxis.zig:1209-1212` (`ESC[5n`); callers `src/cli/list_themes.zig:308` (`defer loop.stop()`) and vxfw `App.zig:58` (`defer loop.stop()`, used by `src/cli/boo.zig`), at 20abdb50a
+- defect:          the reader thread is blocked in a blocking `read` of the tty. `stop` wakes it only by asking the terminal for a device status report and relying on the reply to make `read` return; it then waits for the thread with no timeout. A terminal that does not answer `ESC[5n` never unblocks the read, so `stop` never returns.
+- ReleaseSafe:     the TUI hangs when it exits, until more input reaches the tty (a keypress makes the `read` return and the reader sees `should_quit`). By reading at the pin; MEASURED on the port, whose loop is a faithful port: `crates/rustty-cli/tests/boo_pty_e2e.rs` arm B suppresses only the `ESC[0n` reply and the process is still alive 4.4 s after Escape, against 0.04 s to exit with the reply (`crates/rustty-cli/src/boo.rs:26-33`).
+- ReleaseFast:     same.
+- reachability:    the host terminal: running a Ghostty CLI TUI in a terminal or pty harness that does not implement DSR 5 (every mainstream terminal does). Any later input unblocks the read, so the hang ends at the next keypress.
+- port handling:   faithful: `crates/rustty-vaxis/src/loop_.rs` `Loop::stop` writes the same DSR and joins. Decided by task tail-s6: this is a deadlock, which R13 does not let the port keep when realistic input reaches it, but its reach (a terminal without DSR 5) is narrow and a fix needs a design choice the reference never made (a timeout on the join, or a wake-up pipe polled with the tty, which changes the reader loop), so it is listed for the controller rather than fixed here.
+- parity row(s):   none; the port's `boo_pty_e2e` KAT relies on it as its negative control.
+- test:            n/a (record only; the port's `boo_pty_e2e` arm B measures the hang).
+- proposed fix:    have the reader thread `poll` the tty together with a self-pipe that `stop` writes to, instead of relying on the terminal's reply; or bound the wait and detach the reader.
+- upstream status: not reported
+
+### UD247 — `pkg/opengl` `Program.createVF` leaks its shader objects when compilation fails, and the program when linking fails
+- kind:            leak
+- upstream project: ghostty
+- severity:        low (a driver-side compile or link failure)
+- reference:       `pkg/opengl/Program.zig:29-44` (`createVF`), reached from `src/renderer/opengl/Pipeline.zig:42` for every pipeline, including custom shaders, at 20abdb50a
+- defect:          each `defer x.destroy()` is registered only after that shader's `try setSourceAndCompile` succeeds, so a vertex-shader compile failure leaks `vs`, and a fragment-shader failure leaks `fs`. There is no `errdefer p.destroy()`, so a failing `attachShader` or `link` leaks the program object. By reading.
+- ReleaseSafe:     no crash; GL shader and program objects leak in the GL context, once per failing pipeline creation.
+- ReleaseFast:     same.
+- reachability:    a GLSL shader that glslang accepts but the GL driver fails to compile or link (a driver limit or bug), for example a custom shader recompiled on each config reload. Whether a real driver rejects a shader glslang accepted is UNVERIFIED. The objects belong to the surface's GL context and go away with it.
+- port handling:   faithful: `crates/rustty-renderer/src/opengl/gl/program.rs` `Program::create_vf` keeps the reference's order, with a PORT NOTE naming the three leaks. Decided by task tail-s6: a leak is R13 crash-class, but its trigger is unverified and bounded by the context's lifetime, so it is listed for the controller rather than fixed here.
+- parity row(s):   none; found by task tail-s6's sweep of PORT NOTEs.
+- test:            n/a (record only).
+- proposed fix:    register `defer vs.destroy()` / `defer fs.destroy()` right after each `Shader.create`, and add `errdefer p.destroy()` after `create()`.
+- upstream status: not reported
+
+### UD248 — synthetic bold and italic faces compute the regular face's size and then ignore it
+- kind:            latent (a comment the code contradicts; unobservable at the pin)
+- upstream project: ghostty
+- severity:        low
+- reference:       `src/font/Collection.zig:480-484` (`syntheticBold`) and `:505-509` (`syntheticItalic`), at 20abdb50a
+- defect:          both functions say "Inherit size from regular; it may be different than opts.size due to scaling adjustments", build `face_opts` with `face_opts.size = regular.size`, and then pass `opts.faceOptions()` instead of `face_opts` to `regular.syntheticBold` / `syntheticItalic`, so the synthetic face gets the collection's size, not the regular face's.
+- ReleaseSafe:     none at the pin: `completeStyles` synthesizes only from style faces discovered before any fallback is added, and those are added with `size_adjustment = .none` (`src/font/SharedGridSet.zig:208`, `:239`), so their scale factor is 1 and `regular.size` equals the collection's size (by reading `Collection.add`, `:113-150`, and `scaleFactor`, `:593-599`). A synthetic face would get the wrong size only if a scaled face were ever synthesized from.
+- ReleaseFast:     same.
+- reachability:    none today.
+- port handling:   faithful: `crates/rustty-font-shaper/src/collection.rs` keeps the dead `face_opts` in both functions with PORT NOTEs (`let _ = face_opts;`). Decided by task tail-s6: unobservable, so not changed.
+- parity row(s):   none; found by task tail-s6's sweep of PORT NOTEs.
+- test:            n/a (record only).
+- proposed fix:    pass `face_opts` to `syntheticBold` / `syntheticItalic`, or delete it and the comment.
+- upstream status: not reported
+
+### UD249 — libvaxis `Key.matchShiftedCodepoint` clears the lock modifiers on a copy it never reads
+- kind:            latent (a dead store; unobservable in Ghostty)
+- upstream project: libvaxis
+- severity:        low
+- reference:       `zig-pkg/vaxis-0.6.0-BWNV_CrbCQCscGpzsAlR402rYQ_tV3aAl081c2iRRkka/src/Key.zig:90-101`, the vaxis version Ghostty pins at 20abdb50a
+- defect:          the function builds `tgt_mods` from the caller's `mods` with `caps_lock` and `num_lock` cleared, then compares `self_mods` against the original `mods` (`std.meta.eql(self_mods, mods)`), so a pattern that names a lock modifier can never match a shifted codepoint. By reading.
+- ReleaseSafe:     none in Ghostty: its TUIs never pass a lock modifier in a pattern (`src/cli/list_themes.zig:449-530`, `src/cli/boo.zig:59-60`); the event's own lock bits are cleared on `self_mods`, as intended.
+- ReleaseFast:     same.
+- reachability:    a libvaxis application that matches a shifted key with `caps_lock` or `num_lock` set in the pattern. None in Ghostty.
+- port handling:   faithful: `crates/rustty-vaxis/src/key.rs` `Key::match_shifted_codepoint` keeps the dead store with a PORT NOTE. Decided by task tail-s6: unobservable in the product.
+- parity row(s):   none; found by task tail-s6's sweep of PORT NOTEs.
+- test:            n/a (record only).
+- proposed fix:    compare against `tgt_mods`: `std.meta.eql(self_mods, tgt_mods)`.
+- upstream status: not reported
+
+### UD250 — `pkg/opengl` `Framebuffer.bind` saves the draw binding whatever target it binds, and `present` binds the read target
+- kind:            latent (unobservable where Ghostty calls it)
+- upstream project: ghostty
+- severity:        low
+- reference:       `pkg/opengl/Framebuffer.zig:23-31` (`bind` queries `GL_FRAMEBUFFER_BINDING`, the draw binding, for every target) and `:66-71` (`unbind` restores that value on the bound target); caller `src/renderer/OpenGL.zig:312` (`present`: `target.framebuffer.bind(.read)`), at 20abdb50a
+- defect:          binding `.read` saves the DRAW framebuffer name and `unbind` then writes it to the READ target, so after `present` the read binding is whatever the draw binding was, not what it was before.
+- ReleaseSafe:     no visible effect expected: whenever the read and draw bindings are the same framebuffer before `present`, the restored value is the right one. That they are the same on every apprt and driver is UNVERIFIED (by reading; not measured on a driver). The other callers (`src/renderer/opengl/Target.zig:45`, `Pipeline.zig:53`, `RenderPass.zig:72,74`) bind `.framebuffer`, where the two coincide.
+- ReleaseFast:     same.
+- reachability:    none known.
+- port handling:   faithful: `crates/rustty-renderer/src/opengl/gl/framebuffer.rs` `Framebuffer::bind`, and the port's `present` binds `Target::READ` as the reference does (`crates/rustty-renderer/src/opengl/opengl_impl.rs`). Task tail-s6 corrected the PORT NOTE there, which said every reference caller binds `.framebuffer`: `present` binds `.read`.
+- parity row(s):   none; found by task tail-s6's sweep of PORT NOTEs.
+- test:            n/a (record only).
+- proposed fix:    query `GL_READ_FRAMEBUFFER_BINDING` for `.read` and `GL_DRAW_FRAMEBUFFER_BINDING` for `.draw` (and `.framebuffer`).
+- upstream status: not reported
+
 ## Candidates pending verification
 
 Assembled from this plan's progress notes on 2026-09-11. **Not verified** — do not cite as fact.

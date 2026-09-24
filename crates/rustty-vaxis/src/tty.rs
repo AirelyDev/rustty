@@ -1243,7 +1243,8 @@ pub mod windows_tty {
                         0x74 => key::f5 as u16,
                         0x75 => key::f6 as u16,
                         // PORT NOTE (upstream typo, preserved): `0x76 => Key.f8` —
-                        // VK_F7 maps to `f8` upstream. R1 keeps the behaviour.
+                        // VK_F7 maps to `f8` upstream. R1 keeps the behaviour
+                        // (Windows-only, no TUI binds F7/F8; UPSTREAM-DEFECTS.md UD245).
                         0x76 => key::f8 as u16,
                         0x77 => key::f8 as u16,
                         0x78 => key::f9 as u16,
