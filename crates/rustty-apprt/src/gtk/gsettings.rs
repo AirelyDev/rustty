@@ -20,10 +20,10 @@
 //! The oracle's `get`/`getAlloc`/`getImpl` (`:42-77`) split on
 //! `requiresAllocation()` at comptime: non-allocating keys (`bool`/`c_int`) read
 //! straight out of a `GValue`; the allocating key (`gtk-font-name`) needs an
-//! allocator. Only the non-allocating **bool** path is consumed by the tier so
-//! far — `Surface.init` reads `gtk-enable-primary-paste` (`surface.zig:1816`) —
-//! so [`get_bool`] is the ported reader; the allocating `getAlloc` path lands
-//! with its first consumer (none at this pin).
+//! allocator. The non-allocating readers are [`get_bool`] (`Surface.init`
+//! reads `gtk-enable-primary-paste`, `surface.zig:1816`) and [`get_c_int`]
+//! (`gtk-xft-dpi`); the allocating reader is [`get_alloc`] (parity tail S-8d,
+//! N282 — it has no caller in the reference GTK tree at the pin, and none here).
 
 /// GTK Settings keys with well-defined types.
 ///
@@ -169,6 +169,67 @@ pub fn get_c_int(key: Key) -> Option<i32> {
 
     let settings = gtk4::Settings::default()?;
     Some(settings.property::<i32>(key.name()))
+}
+
+/// Reads a GTK setting, allocating memory if necessary.
+/// Automatically uses XDG Desktop Portal in Flatpak environments.
+/// Caller must free returned memory with the provided allocator.
+/// Returns null if the setting is unavailable.
+///
+/// PORTS: `gsettings.zig:50-57` `getAlloc` over `getImpl` (`:59-77`). Like the
+/// reference it accepts EVERY key: `bool`/`c_int` keys read straight out of the
+/// `GValue` (`:67-68`), and the `[]const u8` key duplicates the C string's bytes
+/// (`:69-74`: `const ptr = value.getString() orelse break :blk null; ... try
+/// alloc.dupe(u8, str)`). Returns `None` when no default `Settings` is available
+/// (`:55` `orelse return null`) or the string is NULL.
+///
+/// PORT NOTE: the value is read as the raw `GValue` (`property_value` +
+/// `g_value_get_string`), so the string arm returns the exact bytes the
+/// reference's `std.mem.span` sees — a Rust `String` read would panic on
+/// non-UTF-8 (memory `zig-byteslice-to-rust-rawbytes`). "Caller must free" is
+/// discharged by `Vec`'s drop, and the `std.mem.Allocator` parameter collapses
+/// with it; the only reference error is `alloc.dupe`'s `OutOfMemory`, which the
+/// Rust global allocator turns into an abort, so the error union collapses too.
+/// The reference's comptime return type `?key.Type()` is the [`SettingValue`]
+/// enum.
+#[must_use]
+pub fn get_alloc(key: Key) -> Option<SettingValue> {
+    use glib::prelude::ObjectExt as _;
+    use glib::translate::ToGlibPtr as _;
+
+    let settings = gtk4::Settings::default()?;
+    match key.value_type() {
+        // `bool => value.getInt() != 0` (`:67`).
+        KeyType::Bool => Some(SettingValue::Bool(settings.property::<bool>(key.name()))),
+        // `c_int => value.getInt()` (`:68`).
+        KeyType::CInt => Some(SettingValue::CInt(settings.property::<i32>(key.name()))),
+        KeyType::Str => {
+            let value = settings.property_value(key.name());
+            // SAFETY: `value` is a live, initialized GValue of the property's own
+            // type (`G_TYPE_STRING` for this key); `g_value_get_string` returns
+            // its borrowed, NUL-terminated contents or NULL, valid while `value`
+            // lives. The bytes are copied out before `value` drops.
+            let ptr = unsafe { glib::gobject_ffi::g_value_get_string(value.to_glib_none().0) };
+            if ptr.is_null() {
+                return None;
+            }
+            // SAFETY: non-NULL and NUL-terminated per the above.
+            let bytes = unsafe { std::ffi::CStr::from_ptr(ptr) }.to_bytes().to_vec();
+            Some(SettingValue::Str(bytes))
+        }
+    }
+}
+
+/// A setting value as [`get_alloc`] returns it — the reference's `?key.Type()`
+/// (`bool` / `c_int` / `[]const u8`), reified as data like [`KeyType`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SettingValue {
+    /// `bool` (`gsettings.zig:67`).
+    Bool(bool),
+    /// `c_int` (`gsettings.zig:68`).
+    CInt(i32),
+    /// `[]const u8` (`gsettings.zig:69-74`): raw bytes, never re-validated as UTF-8.
+    Str(Vec<u8>),
 }
 
 #[cfg(test)]

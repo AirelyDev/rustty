@@ -92,7 +92,22 @@ pub const DEBUG_MACHINERY: bool = !NATIVE_FREESTANDING && (cfg!(test) || cfg!(de
 // `#[cfg(feature = ...)]`). The block's `_fltused` MSVC marker and the
 // `quirks_memset.zig` force-reference are Zig-toolchain artefacts, not ported
 // (`.port/phase-3/assessments/C-capi-headers.md` `84254a9d8` N/A;
-// `.port/phase-3/NON_PORTS.md` §E34).
+// `.port/phase-3/NON_PORTS.md` §E34). The two, quoted (`lib_vt.zig:166-167`,
+// `:173-188`):
+//
+//     /// Used for MSVC builds (see below)
+//     var msvc_fltused: c_int = 1;
+//     ...
+//         // MSVC requires this marker whenever floating-point code is present.
+//         // Zig's compiler_rt only provides it when libc is not linked.
+//         if (builtin.os.tag == .windows and builtin.abi == .msvc and
+//             builtin.link_mode == .static) { @export(&msvc_fltused, .{ .name = "_fltused" }); }
+//
+//         // Force-reference our memset override so its export is
+//         // emitted. This must stay inside the root guard so that
+//         // downstream Zig module consumers don't get the override
+//         // injected into their binaries. See quirks_memset.zig.
+//         _ = @import("quirks_memset.zig");
 
 // ----- terminal/c/main.zig: module hub -----
 //
