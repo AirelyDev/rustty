@@ -40,6 +40,11 @@ mod bindings {
 
 pub use bindings::*;
 
+// The module finder `build.rs` selects per OS, tested here (S38-F4);
+// `build.rs` includes the same file through `#[path]`.
+#[cfg(test)]
+mod modulefinder;
+
 #[cfg(test)]
 mod tests {
     use super::*;
