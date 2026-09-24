@@ -1455,6 +1455,14 @@ impl Screen {
     /// finishes the copy (PORT NOTE at the `OutOfSpace` arm below,
     /// UPSTREAM-DEFECTS.md UD131).
     //
+    // PORT NOTE: reference defect (R13), UD131 — the reference doc's last
+    // sentence (Screen.zig:707-709) describes the crash the port does not
+    // keep for the max-capacity case, so it is quoted here rather than in the
+    // doc above:
+    //   /// page list half-mutated (and corrupt). If the capacity can't be
+    //   /// increased (system OOM or the page is already at max capacity),
+    //   /// this panics: a crash is better than corruption.
+    //
     // UB HAZARD (`P3-W2` T4 Step 3): `src_page` and `node.page()` are two raw
     // `*mut Page`s and `increase_capacity` FREES the latter, which would leave
     // `src_row` dangling on the retry if they aliased. The reference enforces
@@ -1560,6 +1568,15 @@ impl Screen {
                 // A real system-allocator OOM: our callers have already
                 // rotated or shifted rows, so returning an error would leave
                 // the page list half-mutated (and corrupt); a crash is better.
+                //
+                // PORT NOTE: reference defect (R13), UD131 — the reference
+                // comment (Screen.zig:738-742) covers both arms; the port keeps
+                // the crash only for OutOfMemory (OutOfSpace degrades below):
+                //   // We can't gracefully recover from either of these
+                //   // here: our callers have already rotated or shifted
+                //   // rows, so returning an error would leave the page
+                //   // list half-mutated (and corrupt), so a crash is
+                //   // better.
                 Err(pagelist::grow::IncreaseCapacityError::OutOfMemory) => {
                     panic!("increaseCapacity system allocator OOM")
                 }

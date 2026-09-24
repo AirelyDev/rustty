@@ -21271,6 +21271,9 @@ mod tests {
     fn terminal_zero_width_character_at_start() {
         let mut t = Terminal::init(Global, opts(80, 80)).unwrap();
 
+        // This used to crash the terminal. This is not allowed so we should
+        // just ignore it.
+        //
         // S141-F4: `print_inner_zero_width`'s `x == 0` guard logs
         // `log.warn("zero-width character with no prior character,
         // ignoring", .{})` (Terminal.zig:1480) — this used to crash the
