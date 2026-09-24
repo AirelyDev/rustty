@@ -18,7 +18,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
 
 ## Medium (3)
 
-- [ ] **S115-F1** · CONFIRMED · `INDIV` · missing-branch
+- [x] **S115-F1** · CONFIRMED · `INDIV` · missing-branch
   - **What:** updateFrame: font_shaper.endFrame() is skipped on the early-return / error paths
   - **Oracle:** `src/renderer/generic.zig:1271-1274, 1319-1322, 1349-1352` → **Rustty:** `crates/rustty-renderer/src/generic.rs:4976-4979, 5018-5019, 5332`
   - **Audit's suggested fix:** Wrap end_frame in a drop guard created at function entry (like the existing `Unlock` guard), or call end_frame explicitly before both early exits.
@@ -34,7 +34,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
 
 ## Low (9)
 
-- [ ] **S114-F1** · CONFIRMED · `INDIV` · missing-branch
+- [x] **S114-F1** · CONFIRMED · `INDIV` · missing-branch
   - **What:** cursorBlinkInterval Valgrind x5 branch is inert
   - **Oracle:** `src/renderer/Thread.zig:735-748` → **Rustty:** `crates/rustty-core/src/renderer_seam.rs:1868-1887`
   - **Audit's suggested fix:** Add a `rustty_os::valgrind::running_on_valgrind()` probe (RUNNING_ON_VALGRIND client-request sequence) and re-arm the branch.

@@ -480,7 +480,7 @@ class BaseTerminalController: NSWindowController,
         }
 
         // Confirm close. We use an NSAlert instead of a SwiftUI confirmationDialog
-        // due to SwiftUI bugs (see Rustty #560). To repeat from #560, the bug is that
+        // due to SwiftUI bugs (see Ghostty #560). To repeat from #560, the bug is that
         // confirmationDialog allows the user to Cmd-W close the alert, but when doing
         // so SwiftUI does not update any of the bindings to note that window is no longer
         // being shown, and provides no callback to detect this.

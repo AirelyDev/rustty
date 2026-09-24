@@ -459,8 +459,8 @@ impl ScrollbackCompression {
 
         // std.debug.print("scrollback-compression compressed={d} raw={d} encoded={d}
         //     ratio={d:.2}% savings={d}\n", ...);
-        println!(
-            "scrollback-compression compressed={} raw={} encoded={} ratio={:.2}% savings={}",
+        debug_print!(
+            "scrollback-compression compressed={} raw={} encoded={} ratio={:.2}% savings={}\n",
             memory.compressed_pages,
             memory.decommitted_raw_bytes,
             memory.encoded_bytes,

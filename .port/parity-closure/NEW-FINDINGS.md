@@ -3669,6 +3669,53 @@ fix: 0 of 50 of the same sequential runs failed; see the task T-F2 report for th
   editing a fence is the controller's call (R5).
 - **state**: OPEN.
 
+## N180 — `+page-compression --mode=report` printed to stdout (the S62-F3/F4/F5 class, unlisted)
+
+- **id**: N180. Not in the inventory. Found by T-I (tail wave), 2026-09-23, while working LEDGER
+  S62-F3/F4/F5: a grep for `std.debug.print` in `src/benchmark/` at the pin finds nine sites; the
+  audit listed seven. The other two are `PageCompression.zig:436` (per-page line) and `:442` (total).
+- **severity**: medium (same as S62-F3). **kind**: behavioral-difference (stdout instead of stderr).
+- **what**: `crates/rustty-bench/src/page_compression.rs` ported both as `println!`.
+- **fix**: all nine sites now use the crate's `debug_print!` macro (`crates/rustty-bench/src/lib.rs`):
+  stderr, under the stderr lock, write errors dropped as `std.debug.print`'s `catch return` does
+  (`eprintln!` would panic on a failed write). Test
+  `crates/rustty-bench/tests/report_output_goes_to_stderr.rs::page_compression_report_goes_to_stderr`
+  runs the binary and asserts the lines are on stderr and stdout is empty; negative control
+  (`print!` restored in `page_compression.rs` only) fails with "no stderr line starts with
+  \"page-compression page=0 \"".
+- **state**: CLOSED (T-I).
+
+## N181 — the S115-F1 `end_frame` wrapper in the Linux renderer twin has never been compiled
+
+- **id**: N181. Not in the inventory. Recorded by T-I2 (tail wave), 2026-09-23, from review T-I F3.
+  Outside LEDGER S115-F1's cited anchors, which name only the macOS `generic.rs`.
+- **severity**: low. **kind**: verification gap (unverified port change).
+- **what**: `crates/rustty-renderer/src/generic/linux_impl.rs:3673-3697` (the wrapper) got the same shape as the macOS
+  fix: `update_frame` runs `update_frame_impl` and then `font_shaper.end_frame()` on every exit
+  (`generic.zig:1271-1274`). HarfBuzz's `end_frame` is a no-op, so the behaviour cannot change, but the
+  edit was written on macOS: `cargo check --target aarch64-unknown-linux-gnu -p rustty-renderer` stops
+  at cc-rs (no `aarch64-linux-gnu-g++` here) and rvm is down. The site's PORT NOTE says so.
+- **fix**: run `cargo build --workspace --features gtk,x11,wayland` and `cargo test -p rustty-renderer`
+  on rvm.
+- **state**: OPEN — fix written, Linux run pending.
+
+## N182 — `expectApproxEqual`'s `expectEqual` fallback arms printed nothing in the port
+
+- **id**: N182. Not in the inventory. Found by review T-I (F8), 2026-09-23; outside LEDGER S80-F2's
+  anchors (`comparison.zig:113,128,137-139,192-199`).
+- **severity**: low. **kind**: missing diagnostic (test-support text).
+- **what**: the reference's `.optional`, tagged-`.@"union"` and `else` arms call
+  `testing.expectEqual`, which prints `expected {any}, found {any}` on a mismatch. The port's `i32`,
+  `u32` and `Option` impls (and the test-local union) returned the error silently. MEASURED with the
+  pinned `comparison.zig` under zig 0.16.0: `expected 1, found 2`, `expected 7, found 9`,
+  `expected null, found 1.5`, `expected 3, found null`, `expected .a, found .b`.
+- **fix**: `crates/rustty-datastruct/src/comparison.rs` `expect_equal_mismatch` prints that line through
+  `print`, used by the `i32`/`u32`/`Option` impls and the test union; `FmtAny` gains `Option` (`null`).
+  Test `comparison::tests::expectApproxEqual_expect_equal_fallbacks_print_std_diagnostics` asserts the
+  five measured lines; negative control (`expect_equal_mismatch` not printing) fails on the first,
+  `["expected 1, found 2\n"]` vs `[]`.
+- **state**: CLOSED (T-I2).
+
 ## N196 — tests passed without testing anything when their environment was missing
 
 - **id**: N196. Not in the inventory. Found by the tail-s3 task (silent-skip audit), 2026-09-23.
