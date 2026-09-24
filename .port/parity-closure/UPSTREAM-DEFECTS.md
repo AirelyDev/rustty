@@ -1853,6 +1853,21 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - proposed fix:    use `reader.takeDelimiter('\n')` (which consumes the delimiter and returns `null` at end of stream) with `orelse break`, or `toss(1)` after each `takeDelimiterExclusive` that did not end at end of stream.
 - upstream status: not reported
 
+### UD201 — zig's `wtf8ToWtf16Le` panics on an overlong 3-byte sequence (`E0 80..9F xx`)
+- kind:            crash (`catch unreachable`)
+- upstream project: zig (the standard library), reached through ghostty on Windows
+- severity:        low
+- reference:       zig 0.16.0 `std/unicode.zig:235-300` (`utf8ValidateSliceImpl`: in `.can_encode_surrogate_half` mode the `E0` lead byte's class `s2` is `0x03`, "accept 0", so any continuation byte `80..BF` passes, where UTF-8 mode's `0x13` restricts it to `A0..BF`), `:1738` (`Wtf8Iterator.nextCodepoint`: `wtf8Decode(slice) catch unreachable`), `:155` (`utf8Decode3AllowSurrogateHalf` returns `error.Utf8OverlongEncoding`), `:1812` (`wtf8ToWtf16Le`). Reached from ghostty at 20abdb50a wherever a byte path is handed to the Windows file API, for example `src/os/path.zig:39-43` (`expand`'s `openFile`).
+- defect:          the WTF-8 validator accepts the overlong form `E0 80..9F 80..BF`, and the decoder that runs after it rejects that form with an error the caller turns into `unreachable`. MEASURED with zig 0.16.0 Debug (`zig run`): `std.unicode.wtf8ToWtf16Le(&buf, "\xe0\x9f\xbf")` panics "attempt to unwrap error: Utf8OverlongEncoding".
+- ReleaseSafe:     panic (by reading: `catch unreachable` is checked in ReleaseSafe). The measurement above is Debug.
+- ReleaseFast:     undefined behaviour (`unreachable` reached). Not measured.
+- reachability:    Windows only: any byte path or argument containing those three bytes that is converted for a Windows API, for example a `PATH` entry or command name in `os/path.zig` `expand`.
+- port handling:   `crates/rustty-os/src/path.rs` `wtf8_to_wtf16le` (the Windows conversion for `expand`'s candidate paths and `open`'s argv, LEDGER S112-F4) rejects overlong forms as `error.InvalidWtf8`, which the reference's error arms already handle. Windows-only code: compile-checked for `x86_64-pc-windows-msvc`, never run (no Windows lane); the decoder itself is tested on every target.
+- parity row(s):   LEDGER S112-F4.
+- test:            `path::tests::wtf8_to_wtf16le_matches_zig` (last row), `wtf8_to_wtf16le_accepts_what_wtf8_validate_slice_accepts` (zig's own `testValidateWtf8Slice` table). Negative control (macOS, 2026-09-23): the overlong check (`cp < min`) removed fails `wtf8_to_wtf16le_matches_zig` with `Some([2047])` for `E0 9F BF`.
+- proposed fix:    in zig, give `E0` its own class in the `.can_encode_surrogate_half` table (accept `A0..BF`, as in UTF-8 mode) so the validator and decoder agree.
+- upstream status: not reported
+
 ## Candidates pending verification
 
 Assembled from this plan's progress notes on 2026-09-11. **Not verified** — do not cite as fact.

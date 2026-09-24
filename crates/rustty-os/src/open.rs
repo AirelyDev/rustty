@@ -93,7 +93,14 @@ pub fn open(kind: Kind, url: &[u8]) -> Result<(), OpenError> {
         {
             let mut c = std::process::Command::new("rundll32");
             c.arg("url.dll,FileProtocolHandler");
-            c.arg(crate::path::os_str_from_bytes(url));
+            // (S112-F4: a URL that is not WTF-8 is spawn's error.InvalidWtf8,
+            // not an empty argument.)
+            c.arg(crate::path::os_string_from_bytes(url).ok_or_else(|| {
+                OpenError::Spawn(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "InvalidWtf8",
+                ))
+            })?);
             c
         }
         #[cfg(target_os = "macos")]
