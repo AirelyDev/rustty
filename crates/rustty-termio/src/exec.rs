@@ -3237,7 +3237,7 @@ impl Subprocess {
                     // const dev_null = try ... openFile("/dev/null", .{ .mode = .read_write });
                     let dev_null = unsafe { libc::open(c"/dev/null".as_ptr(), libc::O_RDWR) };
                     let mut cmd = rustty_os::flatpak::FlatpakHostCommand::default();
-                    cmd.argv = vec!["/bin/sh".to_string(), "-c".to_string(), ":".to_string()];
+                    cmd.argv = vec![b"/bin/sh".to_vec(), b"-c".to_vec(), b":".to_vec()];
                     // (`.cwd = proposed` reaches D-Bus as the `[*:0]` pointer, so
                     // the host sees the bytes up to the first NUL — `cstring`.)
                     cmd.cwd = Some(cstring(proposed));
@@ -3345,11 +3345,9 @@ impl Subprocess {
                 #[cfg(feature = "flatpak")]
                 {
                     let mut fcmd = rustty_os::flatpak::FlatpakHostCommand::default();
-                    fcmd.argv = self
-                        .args
-                        .iter()
-                        .map(|a| String::from_utf8_lossy(a.to_bytes()).into_owned())
-                        .collect();
+                    // (Byte strings since parity S111-F9; this used to go through
+                    // `String::from_utf8_lossy`, renaming a non-UTF-8 argument.)
+                    fcmd.argv = self.args.iter().map(|a| a.to_bytes().to_vec()).collect();
                     // (was `CString::new(c).unwrap()`: unreachable while `cwd` was a
                     // `CString`, reachable once it holds the reference's raw bytes;
                     // the flatpak test spawn above can accept a NUL path.)
