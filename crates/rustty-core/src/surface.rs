@@ -16690,6 +16690,14 @@ mod paste_event_mutex_tests {
         // host cannot make it look too early; review-T-H item 3). The queue
         // stays full until this thread pops, so the sender cannot finish
         // before this thread has looked.
+        //
+        // Every wait is bounded (review-T-H2 blocking 2): a 10 s timer is armed
+        // on the same loop as the wakeup wait, so `run(Once)` returns even if
+        // the sender parks without notifying. On that timeout the drainer
+        // skips the mutex poll but still drains, which releases the parked
+        // sender; nothing is asserted on this thread (a panic here would leave
+        // the sender parked forever). The main thread asserts `woke` after
+        // `join`.
         struct SendPtr<T>(*const T);
         unsafe impl<T> Send for SendPtr<T> {}
         let q = SendPtr(queue);
@@ -16700,17 +16708,31 @@ mod paste_event_mutex_tests {
             let (q, m) = (q, m);
             let mut loop_ = rustty_xev::Loop::init(rustty_xev::Options::default()).unwrap();
             let mut woke = false;
+            let mut timed_out = false;
             let mut c_wait = rustty_xev::Completion::default();
+            let mut c_timer = rustty_xev::Completion::default();
             let cb = |ud: *mut bool,
                       _l: *mut rustty_xev::Loop,
                       _c: *mut rustty_xev::Completion,
                       r: core::result::Result<(), rustty_xev::WaitError>| {
-                r.unwrap();
-                unsafe { *ud = true };
+                if r.is_ok() {
+                    unsafe { *ud = true };
+                }
                 rustty_xev::CallbackAction::Disarm
             };
-            // SAFETY: `loop_`, `c_wait` and `woke` outlive the wait, which
-            // completes (Disarm) inside the `run` below.
+            let timer_cb =
+                |ud: *mut bool,
+                 _l: *mut rustty_xev::Loop,
+                 _c: *mut rustty_xev::Completion,
+                 _r: core::result::Result<(), rustty_xev::TimerRunError>| {
+                    unsafe { *ud = true };
+                    rustty_xev::CallbackAction::Disarm
+                };
+            // SAFETY: `loop_`, `c_wait`, `c_timer`, `woke` and `timed_out`
+            // outlive both completions: `run(Once)` returns after the first
+            // of them fires, and the loop is deinitialized before any of them
+            // goes out of scope, so the other never fires later.
+            let timer = rustty_xev::Timer::init().unwrap();
             unsafe {
                 wakeup.wait(
                     &mut loop_ as *mut rustty_xev::Loop,
@@ -16718,14 +16740,21 @@ mod paste_event_mutex_tests {
                     std::ptr::addr_of_mut!(woke),
                     cb,
                 );
+                timer.run(
+                    &mut loop_ as *mut rustty_xev::Loop,
+                    std::ptr::addr_of_mut!(c_timer),
+                    10_000,
+                    std::ptr::addr_of_mut!(timed_out),
+                    timer_cb,
+                );
             }
-            loop_.run(rustty_xev::RunMode::Once).unwrap();
+            let ran = loop_.run(rustty_xev::RunMode::Once);
             loop_.deinit();
-            assert!(woke, "the mailbox never signalled its wakeup");
+            let woke = woke && ran.is_ok();
 
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
             let mut took_mutex_while_parked = false;
-            while std::time::Instant::now() < deadline {
+            while woke && std::time::Instant::now() < deadline {
                 if unsafe { (*m.0).try_lock() } {
                     unsafe { (*m.0).unlock() };
                     took_mutex_while_parked = true;
@@ -16748,7 +16777,7 @@ mod paste_event_mutex_tests {
                 }
                 std::thread::yield_now();
             }
-            (took_mutex_while_parked, event)
+            (woke, timed_out, took_mutex_while_parked, event)
         });
 
         let surface = unsafe { &mut *sp };
@@ -16759,7 +16788,7 @@ mod paste_event_mutex_tests {
         // waiting for the wakeup; release it so the test fails instead of
         // hanging.
         let _ = wakeup.notify();
-        let (took_mutex_while_parked, event) = drainer.join().expect("drainer");
+        let (woke, timed_out, took_mutex_while_parked, event) = drainer.join().expect("drainer");
         let unlocked_after = unsafe { (*renderer_mutex).try_lock() };
 
         // Teardown.
@@ -16772,6 +16801,10 @@ mod paste_event_mutex_tests {
             drop(Box::from_raw(renderer_mutex));
         }
 
+        assert!(
+            woke,
+            "the mailbox never signalled its wakeup (timed out after 10 s: {timed_out})"
+        );
         assert_eq!(result.ok(), Some(true), "the paste event was not produced");
         let event = event.expect("the paste event never reached the IO mailbox");
         assert!(
