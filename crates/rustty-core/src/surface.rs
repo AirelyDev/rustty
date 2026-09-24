@@ -16659,6 +16659,12 @@ mod paste_event_mutex_tests {
             }
         };
 
+        // The writer's wakeup (a `Copy` handle): `Mailbox.send` notifies it on
+        // the slow path right before it releases the renderer mutex and blocks.
+        let wakeup: rustty_xev::Async = match &mailbox {
+            termio::mailbox::Mailbox::Spsc { wakeup, .. } => *wakeup,
+        };
+
         let renderer_mutex = Box::into_raw(Box::new(rustty_zigstd::thread::Mutex::new()));
 
         let mut mu: Box<MaybeUninit<Surface<TestApp>>> = Box::new(MaybeUninit::uninit());
@@ -16677,6 +16683,13 @@ mod paste_event_mutex_tests {
         // The writer-thread stand-in: once the sender is parked on the full
         // queue it must be able to take the renderer mutex (the mailbox
         // released it), then it drains until the paste event arrives.
+        //
+        // It waits for the mailbox's wakeup, as the real writer thread does,
+        // so it never tests the mutex before the sender has locked it; then
+        // it polls `try_lock` against a deadline (no fixed sleep, so a slow
+        // host cannot make it look too early; review-T-H item 3). The queue
+        // stays full until this thread pops, so the sender cannot finish
+        // before this thread has looked.
         struct SendPtr<T>(*const T);
         unsafe impl<T> Send for SendPtr<T> {}
         let q = SendPtr(queue);
@@ -16685,10 +16698,40 @@ mod paste_event_mutex_tests {
         let done2 = done.clone();
         let drainer = std::thread::spawn(move || {
             let (q, m) = (q, m);
-            std::thread::sleep(std::time::Duration::from_millis(100));
-            let took_mutex_while_parked = unsafe { (*m.0).try_lock() };
-            if took_mutex_while_parked {
-                unsafe { (*m.0).unlock() };
+            let mut loop_ = rustty_xev::Loop::init(rustty_xev::Options::default()).unwrap();
+            let mut woke = false;
+            let mut c_wait = rustty_xev::Completion::default();
+            let cb = |ud: *mut bool,
+                      _l: *mut rustty_xev::Loop,
+                      _c: *mut rustty_xev::Completion,
+                      r: core::result::Result<(), rustty_xev::WaitError>| {
+                r.unwrap();
+                unsafe { *ud = true };
+                rustty_xev::CallbackAction::Disarm
+            };
+            // SAFETY: `loop_`, `c_wait` and `woke` outlive the wait, which
+            // completes (Disarm) inside the `run` below.
+            unsafe {
+                wakeup.wait(
+                    &mut loop_ as *mut rustty_xev::Loop,
+                    std::ptr::addr_of_mut!(c_wait),
+                    std::ptr::addr_of_mut!(woke),
+                    cb,
+                );
+            }
+            loop_.run(rustty_xev::RunMode::Once).unwrap();
+            loop_.deinit();
+            assert!(woke, "the mailbox never signalled its wakeup");
+
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            let mut took_mutex_while_parked = false;
+            while std::time::Instant::now() < deadline {
+                if unsafe { (*m.0).try_lock() } {
+                    unsafe { (*m.0).unlock() };
+                    took_mutex_while_parked = true;
+                    break;
+                }
+                std::thread::yield_now();
             }
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
             let mut event: Option<Vec<u8>> = None;
@@ -16712,6 +16755,10 @@ mod paste_event_mutex_tests {
         let result = surface
             .completeClipboardPasteEvent(apprt::Clipboard::Standard, &[b"text/plain".as_slice()]);
         done.store(true, Ordering::SeqCst);
+        // If the sender never took the slow path, the drainer is still
+        // waiting for the wakeup; release it so the test fails instead of
+        // hanging.
+        let _ = wakeup.notify();
         let (took_mutex_while_parked, event) = drainer.join().expect("drainer");
         let unlocked_after = unsafe { (*renderer_mutex).try_lock() };
 

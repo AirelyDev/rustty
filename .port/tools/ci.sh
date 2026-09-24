@@ -1214,6 +1214,19 @@ run_cargo "cargo build --workspace"  cargo build --workspace
 # does not bite INSIDE ci.sh — only outside it, which is what WS19 T16 addresses for the
 # example/*/build.sh scripts.
 run_cargo "cargo test --workspace"   cargo test --workspace --no-fail-fast
+# review-T-H item 1: rustty-os's flatpak tests (parity S111-F3, S111-F9) ran in
+# no lane, because `--workspace` never turns the `flatpak` feature on and
+# G-FEATMATRIX only BUILDS it. The feature links gio-2.0, which exists on the
+# Linux/FreeBSD legs only (the Ubuntu leg installs libglib2.0-dev); elsewhere
+# the skip is reported by name.
+case "$(uname -s)" in
+  Linux|FreeBSD)
+    run_cargo "cargo test -p rustty-os --features flatpak" \
+      cargo test -p rustty-os --features flatpak --no-fail-fast ;;
+  *)
+    echo "skipped: cargo test -p rustty-os --features flatpak (Linux/FreeBSD only: links gio-2.0)"
+    PROGRESS_NOTES+=("cargo test -p rustty-os --features flatpak (skipped: Linux/FreeBSD only)") ;;
+esac
 
 # ---- 5: parity gates (HARD first, then PROGRESS) ---------------------------
 for phase in HARD PROGRESS; do

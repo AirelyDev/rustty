@@ -249,6 +249,13 @@ mod tests {
         assert_eq!(detect_args(args("--some-flag")), Ok(None));
         assert_eq!(detect_args(args("bash")), Ok(None));
         assert_eq!(detect_args(args("bash +zsh")), Ok(Some(Action::Zsh)));
+        // A bare `+` is an action with an empty name: `stringToEnum(E, "")`
+        // is null, so `InvalidAction` (review-T-H M2).
+        assert_eq!(detect_args(args("+")), Err(DetectError::InvalidAction));
+        assert_eq!(
+            detect_args(args("+ +bash")),
+            Err(DetectError::InvalidAction)
+        );
     }
 
     /// Every action emits non-empty bytes, and no two actions emit the same

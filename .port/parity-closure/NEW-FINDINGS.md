@@ -3608,7 +3608,8 @@ fix: 0 of 50 of the same sequential runs failed; see the task T-F2 report for th
 - **severity**: low. **kind**: R13 candidate (a reference `catch unreachable` on an externally
   produced error), for the `src/termio` owner.
 - **oracle**: `src/termio/Exec.zig` `flatpakExit`: `const exit_code = r catch unreachable;` over
-  `FlatpakHostCommand.WaitError!u8`, and `WaitError = xev.Timer.RunError || Error` (`os/flatpak.zig:110`).
+  `FlatpakHostCommand.WaitError!u8`, and `WaitError = xev.Timer.RunError || Error` (`os/flatpak.zig:115`;
+  CORRECTION by task T-H2: this said `:110`).
   The completion's result is `Error.FlatpakMustBeStarted`/`FlatpakSpawnFail` when `waitXev` runs before
   a successful start, and the timer's own `RunError` (`Canceled`, `Unexpected`) when the loop fails.
 - **rustty**: `crates/rustty-termio/src/exec.rs` `flatpakExit` is `r.unwrap()`. Since S111-F3 the
@@ -3617,7 +3618,16 @@ fix: 0 of 50 of the same sequential runs failed; see the task T-F2 report for th
   only, Linux).
 - **proposed fix**: decide under R13 (the `src/termio` batch) whether a failed wait should be handled
   like a process exit, not a panic.
-- **state**: OPEN.
+- **resolution (task T-H2, controller ruling on review-T-H)**: not reachable, so an R7 invariant, not
+  R13. The `Error` half is set only in states `.init`/`.err` (`flatpak.zig:198-199`); `Exec.threadEnter`
+  calls `waitXev` only after `spawn` succeeded, `spawn` waits for the state to leave `.init` and fails
+  on `.err` (`:143-150`), so the state is `.started` or `.exited`. The timer half needs a cancel of the
+  wait completion (nothing issues one) or an io_uring timeout result other than ETIME/ECANCELED (the
+  kernel produces none; kqueue and epoll timers never return `Unexpected`). By reading, per the review
+  (the pinned libxev `watcher/timer.zig`, `io_uring.zig:757-761`). The port keeps the checked unwrap as
+  `.expect(..)` with a message naming the invariant, and a PORT NOTE at the site
+  (`crates/rustty-termio/src/exec.rs` `flatpakExit`).
+- **state**: CLOSED.
 
 ## N172 — the port's `TempDir` opens the current directory for an empty temp-dir path
 

@@ -1302,7 +1302,20 @@ impl Exec {
         r: core::result::Result<u8, FlatpakHostCommandWaitError>,
     ) {
         // const exit_code = r catch unreachable;
-        let exit_code = r.unwrap();
+        //
+        // PORT NOTE (N171): an R7 invariant, not an R13 defect; nothing
+        // outside the process can produce either half of `WaitError`
+        // (`os/flatpak.zig:115`) here. The `Error` half is stored only while
+        // the state is `.init` or `.err`, but `threadEnter` calls `waitXev`
+        // only after `spawn` succeeded, which means the state is `.started`
+        // or `.exited`. The timer half is `Canceled`, which needs a cancel of
+        // this completion (nothing issues one), or `Unexpected`, which only
+        // an io_uring timeout result other than ETIME/ECANCELED produces (the
+        // kernel does not; kqueue and epoll never do).
+        let exit_code = r.expect(
+            "flatpak wait result is an exit code: waitXev runs only after a \
+             successful spawn and its timer is never canceled",
+        );
         // processExitCommon(td_.?, exit_code);
         Self::processExitCommon::<M>(
             td_.cast::<crate::termio_impl::ThreadData<M>>(),
