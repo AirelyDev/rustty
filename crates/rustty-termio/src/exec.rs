@@ -6020,15 +6020,6 @@ mod tests {
         }
     }
 
-    /// UD19 (PORT NOTE: reference defect (R13), at `outer_poll_hup_exits`):
-    /// output that arrives together with the hangup, while the gather stage is
-    /// parked in its outer poll, is still read. The hook writes `second` and
-    /// shuts down the writing side right before that poll, so the poll reports
-    /// `POLLIN | POLLHUP` with `second` unread (measured on macOS for a Unix
-    /// socket pair after `shutdown(SHUT_WR)`, and for a pipe after `close`:
-    /// `revents == 0x11`; on Linux a pty master reports the same word when the
-    /// child writes and exits, UD19). The reference returns on `POLLHUP` alone
-    /// and drops `second`.
     /// UD19: the outer-poll decision on its own. A hangup without data ends
     /// the thread at once (the reference's behaviour); a hangup with data
     /// sends it back to read once, and the next hangup ends it.
@@ -6053,6 +6044,15 @@ mod tests {
         assert!(ReadThread::outer_poll_hup_exits(both, &mut drained));
     }
 
+    /// UD19 (PORT NOTE: reference defect (R13), at `outer_poll_hup_exits`):
+    /// output that arrives together with the hangup, while the gather stage is
+    /// parked in its outer poll, is still read. The hook writes `second` and
+    /// shuts down the writing side right before that poll, so the poll reports
+    /// `POLLIN | POLLHUP` with `second` unread (measured on macOS for a Unix
+    /// socket pair after `shutdown(SHUT_WR)`, and for a pipe after `close`:
+    /// `revents == 0x11`; on Linux a pty master reports the same word when the
+    /// child writes and exits, UD19). The reference returns on `POLLHUP` alone
+    /// and drops `second`.
     #[cfg(not(windows))]
     #[test]
     fn gather_stage_reads_output_that_arrives_with_the_hangup() {

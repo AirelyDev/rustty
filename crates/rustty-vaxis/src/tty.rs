@@ -1264,8 +1264,8 @@ pub mod windows_tty {
                         // PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD245.
                         // Upstream maps `0x76` (VK_F7) to `Key.f8` (tty.zig:437), a
                         // typo in an otherwise one-to-one F1-F24 table, so F7 reads as
-                        // F8. Mapped to `f7`. Windows-only code: compile-checked for
-                        // `x86_64-pc-windows-msvc`, Windows run pending (no lane).
+                        // F8. Mapped to `f7`. Windows-only code, neither compiled nor run on
+                        // Windows here (UD245).
                         0x76 => key::f7 as u16,
                         0x77 => key::f8 as u16,
                         0x78 => key::f9 as u16,

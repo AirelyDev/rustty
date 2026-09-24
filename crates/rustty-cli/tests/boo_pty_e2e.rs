@@ -7,10 +7,9 @@
 //! ```
 //!
 //! WHY `#[ignore]` BY DEFAULT: each arm forks a pty and drives a real full-screen
-//! animation loop for several seconds, and the negative-control arm deliberately ends in
-//! a `SIGKILL`. That does not belong in the default `cargo test` lane. It is `#[ignore]`d
-//! for RUNTIME, not because it is flaky or unproven — both arms are executed and their
-//! output is recorded in the WS12 task log.
+//! animation for several seconds. That does not belong in the default `cargo test` lane.
+//! It is `#[ignore]`d for RUNTIME, not because it is flaky or unproven — both arms are
+//! executed and their output is recorded in the task logs (WS12, S-6b).
 //!
 //! WHY IT DOES NOT SELF-SKIP: a KAT that quietly passes when its subject is missing
 //! asserts nothing. If the `rustty` binary is absent these tests **panic with build
