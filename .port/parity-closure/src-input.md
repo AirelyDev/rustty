@@ -14,7 +14,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
 
 ## Medium (2)
 
-- [ ] **S101-F1** · CONFIRMED · `INDIV` · missing-branch
+- [x] **S101-F1** · CONFIRMED · `INDIV` · missing-branch
   - **What:** Trigger.foldedCodepoint Unicode slow path (case_folding_full) not ported — non-ASCII triggers are not case-folded
   - **Oracle:** `src/input/Binding.zig:1995-2012` → **Rustty:** `crates/rustty-input/src/binding.rs:3400-3412`
   - **Audit's suggested fix:** Port the Unicode CaseFolding.txt (status C+F, i.e. full case folding) table into rustty-unicode (e.g. a `case_folding_full(cp) -> &[u21]` accessor generated alongside the existing uucode-derived tables) and use it in `folded_codepoint`, copying up to 3 codepoints into the array exactly as the oracle does; add a test with a non-ASCII pair (e.g. 'É'/'é', 'ẞ'/'ss') through `Set::get_event` / `Trigger::folded_equal`.
