@@ -3156,7 +3156,55 @@ observable); `hyperlink.rs:376` vs `hyperlink.zig` (`DefaultHasher` vs `Wyhash.i
 style-set work aligned the style item layout), so the port and reference cluster hyperlinks identically.
 Not fixed in this round; recorded for adjudication.
 
-**state**: OPEN (R1 candidate).
+**state (before tail-s2)**: OPEN (R1 candidate).
+
+**Closed by task tail-s2 (2026-09-23)**: fixed per R1. `PageEntry.hash`
+(`crates/rustty-vt/src/hyperlink.rs`) now produces the reference's 64-bit value.
+
+- **Wyhash**: the port already existed (`crates/rustty-zigstd/src/wyhash.rs`, used by the page hash
+  maps); its body matches Zig 0.16.0's `lib/std/hash/wyhash.zig` line for line. Its tests now carry all
+  five of Zig's `wyhash.zig` tests (`smhasher` and `iterative api`, with `verify.zig`'s helpers, were
+  missing; `test vectors at comptime` has no Rust compile-time form and is noted, not ported). A
+  differential against a Zig 0.16.0 probe: 602 random inputs, lengths 0-300 (each twice), seed 0 then
+  random seeds, one-shot and iterative in random 1-64-byte chunks. MEASURED: 602/602 one-shot and
+  602/602 iterative hashes equal the probe's, before and after this change (the Wyhash port was already
+  exact). 25 of the rows are kept in `differential_against_zig`.
+- **What the reference hashes** (`hyperlink.zig:143`, `lib/std/hash/auto_hash.zig`): the tag as one
+  byte in the union's declaration order (`explicit` 0, `implicit` 1; the port's `PageEntryIdTag`
+  discriminants are the reverse, so the bytes are literals); `.implicit` as its 4 native bytes; each
+  `.Deep` slice (`.explicit` id, then `uri`) as its bytes FOLLOWED BY its `len` as a native `usize`.
+  The old port also dropped the two lengths, so `(id "ab", uri "x")` and `(id "a", uri "bx")` hashed
+  alike; they no longer do.
+- **Differential through the reference's own `hash`** (a probe built from `20abdb50a`'s `src/` with
+  `Page.insertHyperlink`, `hyperlink.Set.get`, `PageEntry.hash` and the set context's `hash`): 600
+  random entries (tag 50/50, ids 1-40 bytes, URIs 1-300 bytes, raw bytes) plus 14 readable ones.
+  MEASURED: before, 0/600 matched; after, 600/600 and 14/14 match on both `entry.hash` and the
+  context's `hash`.
+- **Bucket placement**: both sets take the bucket as `(hash +% i) & table_mask`
+  (`ref_counted_set.zig:569`, `:629`; `ref_counted_set.rs:1223`, `:1318`), so the same hash gives
+  the same placement. MEASURED: 16 insert sequences (set counts 4/8/16/32, 4 seeds each, each run
+  past capacity) and one readable count-16 sequence: before, all 16 random sequences differed from the
+  reference in table or PSLs; after, every add result (id or `SetOutOfMemory`), the whole table, every
+  item's bucket/PSL/refcount, `max_psl`, `living` and `next_id` are identical. The R13-L item stride is
+  unchanged (`@sizeOf(hyperlink.Set.Item)` 48 on the probe).
+- **Performance**: the reference's shape (six short `update`s on a streaming hasher) measured 3x the
+  one-shot `Wyhash.hash` on OSC 8-sized entries and a paired +4..7% on an OSC 8-heavy
+  `+terminal-stream` corpus, so an entry of at most 256 bytes of hash input is gathered into a stack
+  buffer and hashed one-shot (the same value: Wyhash's iterative API is concatenation-exact, and both
+  paths are in the differential and in the tests). Numbers in the task tail-s2 report; measured under
+  load, so PROVISIONAL.
+- **Tests**: `hyperlink::page_entry_hash_tests` (`hash_matches_the_reference`: 14 probe values, including
+  both sides of the 256-byte edge and the two "abx" entries; `set_placement_matches_the_reference`: the
+  count-16 table and PSLs); `wyhash::tests::{test_smhasher, test_iterative_api,
+  differential_against_zig}`. Negative controls (one at a time, each failing for its stated reason):
+  lengths dropped, tag bytes swapped, the streaming path's seed changed (fails only on the long rows),
+  Wyhash's `total_len` dropped from `final2`, `total_len` skipped on buffered `update`s.
+
+The ledger row for the same finding, `S155-F1` (DISPUTED, WAIVED as not observable), is not this task's
+row and is left as it is; its premise ("any self-consistent hash preserves every observable result") no
+longer describes the code.
+
+**state**: CLOSED (task tail-s2).
 
 ## N100 — nine more `std.fmt.parseInt` sites in `src/terminal` parsed with Rust's `str::parse`
 
