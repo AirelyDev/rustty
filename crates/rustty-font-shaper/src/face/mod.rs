@@ -275,10 +275,15 @@ impl DesiredSize {
     //     .none => void,
     // };
     //
-    // PORT NOTE: `build_config.app_runtime` is `.none` in this build (GTK is
-    // deferred; the `.gtk` arm's gobject boxed-type registration is ported when
-    // the apprt-gtk layer lands, retargeting the `GhosttyFontDesiredSize` name to
-    // the rustty identity). `.none` → `void` (Rust `()`).
+    // PORT NOTE: this crate has no GTK edge, so it keeps the `.none` arm
+    // (`void`, Rust `()`). The `.gtk` arm's boxed type is registered in
+    // rustty-apprt as `gtk::class::surface::FontSizeRequest`, under the
+    // reference's name `GhosttyFontDesiredSize` (S87-F4). CORRECTION (task
+    // T-F): this said "GTK is deferred; the `.gtk` arm's gobject boxed-type
+    // registration is ported when the apprt-gtk layer lands, retargeting the
+    // `GhosttyFontDesiredSize` name to the rustty identity"; the GTK layer has
+    // landed, and GType names keep the `Ghostty` prefix like every other boxed
+    // type in rustty-apprt.
     pub const GET_G_OBJECT_TYPE: () = ();
 }
 

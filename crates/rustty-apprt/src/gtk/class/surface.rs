@@ -167,9 +167,12 @@ pub struct Size {
 /// PORTS: `surface.zig:583` `font_size_request: ?*font.face.DesiredSize`. A boxed
 /// wrapper so the requested font size can ride the `font-size-request` GObject
 /// property (the reference boxes `font.face.DesiredSize` directly via
-/// `privateBoxedFieldAccessor`).
+/// `privateBoxedFieldAccessor`). The GType is the reference's
+/// `DesiredSize.getGObjectType`, `defineBoxed(DesiredSize, .{ .name =
+/// "GhosttyFontDesiredSize" })` (`src/font/face.zig:63-68`); S87-F4: it was
+/// registered as `GhosttyFontSizeRequest`.
 #[derive(Debug, Clone, Copy, glib::Boxed)]
-#[boxed_type(name = "GhosttyFontSizeRequest", nullable)]
+#[boxed_type(name = "GhosttyFontDesiredSize", nullable)]
 pub struct FontSizeRequest(pub DesiredSize);
 
 /// PORTS: `surface.zig:747-752` the `new` overrides — the caller-supplied
@@ -4881,6 +4884,18 @@ unsafe fn parent_widget_pwd(rt_surface: *mut ApprtSurface) -> Option<String> {
 mod tests {
     use super::*;
     use crate::gtk::gresource;
+
+    /// S87-F4: the `font-size-request` boxed type is registered under the
+    /// reference's name, `GhosttyFontDesiredSize` (`src/font/face.zig:63-68`).
+    /// Headless: registering a boxed GType needs no display.
+    #[test]
+    fn font_size_request_gtype_name() {
+        use glib::prelude::StaticType as _;
+        assert_eq!(
+            FontSizeRequest::static_type().name(),
+            "GhosttyFontDesiredSize"
+        );
+    }
 
     /// NEGATIVE CONTROL (`P3-W11 T5` = `P3-W8 T5` Step 3, oracle `5ea45919d`).
     ///
