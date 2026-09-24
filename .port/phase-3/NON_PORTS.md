@@ -948,11 +948,11 @@ config's 4 remaining G3b misses and global's 31.
 
 # G3b NOT-CARRIED — stripped gag prose in code comments (`strip-ghostty-gag-prose`) [parity tail S-8d, 2026-09-24; revised S-8e]
 
-**PENDING USER RATIFICATION.** The user's rule (memory `strip-ghostty-gag-prose`)
-covers prose/prompt files, "not code". Applying it to CODE COMMENTS follows the
-WS16 precedent (`docs/superpowers/plans/2026-07-29-ws16-x11-winproto.md:21`, the
-`x11.zig` comment rewrites) but extends the user's wording, so the controller asks
-the user to ratify it; until then these rows stand on WS16 alone.
+**RATIFIED BY THE USER (2026-09-24).** The user's rule (memory `strip-ghostty-gag-prose`)
+originally covered prose/prompt files, "not code". Shown these four lines, the user chose
+"drop jokes, keep facts" for code comments too (following the WS16 precedent,
+`docs/superpowers/plans/2026-07-29-ws16-x11-winproto.md:21`): a joke or insult is
+dropped, and any fact on the same line is carried.
 
 Each dropped line is listed below and is a `gag-prose` row of
 `.port/parity-closure/COMMENT-NOT-CARRIED.tsv`, which G3b validates (the text is
