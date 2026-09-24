@@ -155,6 +155,9 @@ mod tests {
         assert_eq!(0, raw_client_request(0, RUNNING_ON_VALGRIND, 0, 0, 0, 0, 0));
         // The test binary does not run under Valgrind.
         assert_eq!(0, running_on_valgrind());
-        assert_eq!(42, do_client_request(42, RUNNING_ON_VALGRIND, 0, 0, 0, 0, 0));
+        assert_eq!(
+            42,
+            do_client_request(42, RUNNING_ON_VALGRIND, 0, 0, 0, 0, 0)
+        );
     }
 }
