@@ -729,49 +729,78 @@ pub enum CaptureAllocator {
 // returns memory of at least `len` bytes at the requested alignment, or null,
 // and frees exactly what it handed out; zero-sized requests never reach it
 // (Zig's typed helpers skip them too).
+//
+// PERF(port): `allocate` and `deallocate` are `#[inline]`, as
+// allocator_api2's own `Global` methods are, and their `Zig` arms are out of
+// line (`zig_capture_allocate` / `zig_capture_deallocate`). Every allocating
+// capture allocates on `captureTrailing` and frees on `reset`. With both
+// methods out of line, the fenced `osc-parser` config was ~7% slower than
+// before S174-F3 (paired rotated N=31 min: 48.9 -> 52.3 ms). With this shape
+// it was 48.2 ms against a pre-S174-F3 48.7 ms (N=41), the same as an
+// allocator_api2 `Vec` over the zero-sized `Global`. These were measured under
+// load (T-A3 report).
 unsafe impl allocator_api2::alloc::Allocator for CaptureAllocator {
+    #[inline]
     fn allocate(
         &self,
         layout: core::alloc::Layout,
     ) -> Result<core::ptr::NonNull<[u8]>, allocator_api2::alloc::AllocError> {
-        let alloc = match self {
-            CaptureAllocator::Global => return allocator_api2::alloc::Global.allocate(layout),
-            CaptureAllocator::Zig(alloc) => *alloc,
-        };
-        if layout.size() == 0 {
-            let dangling = core::ptr::without_provenance_mut::<u8>(layout.align());
-            // SAFETY: an alignment is never zero.
-            let dangling = unsafe { core::ptr::NonNull::new_unchecked(dangling) };
-            return Ok(core::ptr::NonNull::slice_from_raw_parts(dangling, 0));
-        }
-        let ptr = alloc.alloc(
-            layout.size(),
-            rustty_lib::allocator::Alignment::from_byte_units(layout.align()),
-            0,
-        );
-        match core::ptr::NonNull::new(ptr) {
-            Some(p) => Ok(core::ptr::NonNull::slice_from_raw_parts(p, layout.size())),
-            None => Err(allocator_api2::alloc::AllocError),
+        match self {
+            CaptureAllocator::Global => allocator_api2::alloc::Global.allocate(layout),
+            CaptureAllocator::Zig(alloc) => zig_capture_allocate(*alloc, layout),
         }
     }
 
+    #[inline]
     unsafe fn deallocate(&self, ptr: core::ptr::NonNull<u8>, layout: core::alloc::Layout) {
-        let alloc = match self {
+        match self {
             // SAFETY: forwarded under the caller's contract.
-            CaptureAllocator::Global => {
-                return unsafe { allocator_api2::alloc::Global.deallocate(ptr, layout) };
-            }
-            CaptureAllocator::Zig(alloc) => *alloc,
-        };
-        if layout.size() == 0 {
-            return;
+            CaptureAllocator::Global => unsafe {
+                allocator_api2::alloc::Global.deallocate(ptr, layout)
+            },
+            CaptureAllocator::Zig(alloc) => zig_capture_deallocate(*alloc, ptr, layout),
         }
-        alloc.free(
-            rustty_lib::allocator::ZigSlice::new(ptr.as_ptr(), layout.size()),
-            rustty_lib::allocator::Alignment::from_byte_units(layout.align()),
-            0,
-        );
     }
+}
+
+// PERF(port): the `Zig` arms of `CaptureAllocator` are kept out of line, so
+// the inlined `allocate`/`deallocate` stay a tag test plus the `Global` call.
+#[inline(never)]
+fn zig_capture_allocate(
+    alloc: &'static dyn rustty_lib::allocator::ZigAllocator,
+    layout: core::alloc::Layout,
+) -> Result<core::ptr::NonNull<[u8]>, allocator_api2::alloc::AllocError> {
+    if layout.size() == 0 {
+        let dangling = core::ptr::without_provenance_mut::<u8>(layout.align());
+        // SAFETY: an alignment is never zero.
+        let dangling = unsafe { core::ptr::NonNull::new_unchecked(dangling) };
+        return Ok(core::ptr::NonNull::slice_from_raw_parts(dangling, 0));
+    }
+    let ptr = alloc.alloc(
+        layout.size(),
+        rustty_lib::allocator::Alignment::from_byte_units(layout.align()),
+        0,
+    );
+    match core::ptr::NonNull::new(ptr) {
+        Some(p) => Ok(core::ptr::NonNull::slice_from_raw_parts(p, layout.size())),
+        None => Err(allocator_api2::alloc::AllocError),
+    }
+}
+
+#[inline(never)]
+fn zig_capture_deallocate(
+    alloc: &'static dyn rustty_lib::allocator::ZigAllocator,
+    ptr: core::ptr::NonNull<u8>,
+    layout: core::alloc::Layout,
+) {
+    if layout.size() == 0 {
+        return;
+    }
+    alloc.free(
+        rustty_lib::allocator::ZigSlice::new(ptr.as_ptr(), layout.size()),
+        rustty_lib::allocator::Alignment::from_byte_units(layout.align()),
+        0,
+    );
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
