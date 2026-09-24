@@ -43,6 +43,9 @@ identity-oracle = ["rustty-terminfo/identity-oracle"]
 
 [dependencies]
 rustty-extra = { workspace = true }
+# `install-lib`'s `.pc` `Version:` is the app version composed from the checkout
+# (`deps.config.version`).
+rustty-version = { workspace = true }
 # Default profile: rustty terminfo (`xterm-rustty|rustty|Rustty`). Oracle
 # parity (`xterm-ghostty|ghostty|Ghostty`) is opt-in via this crate's own
 # `identity-oracle` feature (forwarded above), not forced unconditionally —

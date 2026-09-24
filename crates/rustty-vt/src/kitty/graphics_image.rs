@@ -841,16 +841,29 @@ impl LoadingImage {
                 return Err(Error::InvalidData);
             }
         } else {
-            use std::io::Read;
-            // `.limited(max_size)`: read at most `max_size` bytes.
-            let mut limited = (&mut file).take(MAX_SIZE as u64);
-            if let Err(err) = limited.read_to_end(&mut managed) {
+            // reader.appendRemaining(alloc, &managed, .limited(max_size)) catch {
+            //
+            // PORT NOTE: reference defect (R13), UD140 (parity S189-F2).
+            // `.limited(max_size)` fails "if `limit` is reached or exceeded",
+            // so the reference rejects a file of EXACTLY `max_size` bytes,
+            // while every other `max_size` check in this file is inclusive
+            // (`> max_size`: the `s=` size above, the direct/chunked data
+            // accumulation, the PNG result), and the same 400 MB file loads
+            // when sent with `s=`. Reachable by any program that can send a
+            // file-medium transmission without `s=`. The port reads with a
+            // limit of `max_size + 1`, so exactly `max_size` bytes load and
+            // anything longer still fails with `InvalidData`.
+            if let Err(err) = append_remaining_limited(&mut file, &mut managed, MAX_SIZE + 1) {
                 // log.warn("failed to read image file: {?}", .{buf_reader.err});
                 //
                 // PORT NOTE: the reference renders the buffered reader's
-                // OPTIONAL stored error (`{?}` — `null` when unset); here the
-                // failure is always present at this site, so it renders as the
-                // error itself.
+                // OPTIONAL stored error (`{?}`): the file's read error, or
+                // `null` when the failure is `error.StreamTooLong`, which
+                // leaves it unset.
+                let err: String = match err {
+                    AppendRemainingError::ReadFailed(err) => err.to_string(),
+                    AppendRemainingError::StreamTooLong => String::from("null"),
+                };
                 log::warn!(target: LOG_SCOPE, "failed to read image file: {err}");
                 return Err(Error::InvalidData);
             }
@@ -1135,6 +1148,13 @@ impl LoadingImage {
         // decompressed bytes (limited to `max_size`) into a managed list. We
         // call the vendored zlib's streaming inflate (same C library) with the
         // same `max_size` cap; any failure maps to `DecompressionFailed`.
+        //
+        // PORT NOTE: reference defect (R13), UD140. The reference's
+        // `.limited(max_size)` rejects EXACTLY `max_size` decompressed bytes
+        // (the same off-by-one as `readFile`'s no-`s=` path); `inflate_zlib`
+        // accepts exactly `max_size` and rejects more, the inclusive limit
+        // every other `max_size` check in this file uses. Pinned by
+        // `zlib_inflate_accepts_exactly_the_limit`.
         //
         // Write it to an array list
         let list = match zlib_sys::inflate_zlib(&self.data, MAX_SIZE) {
@@ -1520,6 +1540,40 @@ impl Rect {
 #[cfg(not(any(windows, target_os = "android", target_arch = "wasm32")))]
 const NAME_MAX: usize = 255;
 
+/// The failures of [`append_remaining_limited`].
+enum AppendRemainingError {
+    /// `error.StreamTooLong`: `limit` bytes were read.
+    StreamTooLong,
+    /// `error.ReadFailed`, with the reader's error.
+    ReadFailed(std::io::Error),
+}
+
+/// `reader.appendRemaining(gpa, list, .limited(limit))` (zig 0.16
+/// `std/Io/Reader.zig` `appendRemainingAligned`): appends the rest of the
+/// stream to `list`, but "if `limit` is reached or exceeded,
+/// `error.StreamTooLong` is returned instead", so a stream of exactly `limit`
+/// bytes is an error too. (Allocation failure aborts, the Rust global OOM
+/// policy.)
+// CORRECTION (parity S189-F2): `readFile` used `take(MAX_SIZE).read_to_end`,
+// which stops silently at the limit, so a file of `max_size` bytes or more
+// loaded truncated instead of failing with `InvalidData`.
+fn append_remaining_limited(
+    reader: &mut impl std::io::Read,
+    list: &mut Vec<u8>,
+    limit: usize,
+) -> Result<(), AppendRemainingError> {
+    use std::io::Read;
+    let start = list.len();
+    reader
+        .take(limit as u64)
+        .read_to_end(list)
+        .map_err(AppendRemainingError::ReadFailed)?;
+    if list.len() - start >= limit {
+        return Err(AppendRemainingError::StreamTooLong);
+    }
+    Ok(())
+}
+
 /// Returns whether a name follows the POSIX shared memory name format.
 fn validSharedMemoryName(name: &[u8], name_max: usize) -> bool {
     if name.len() < 2 || name.len() > name_max || name[0] != b'/' {
@@ -1644,18 +1698,123 @@ fn realpath_of_handle(file: &std::fs::File) -> std::io::Result<Vec<u8>> {
     Ok(target.into_os_string().into_vec())
 }
 
-// PORT NOTE: remaining targets (windows, other unixes, wasm). Zig's
-// `File.realPath` covers windows via the NT object path; the rustty windows
-// tier has no handle-path binding yet, so the kitty file/temporary-file medium
-// fails closed (`InvalidData` via `validatedFilePath`) there.
-//
-// DEFERRAL: the windows arm (`GetFinalPathNameByHandleW`) is registered in
-// `.port/phase-2/DEFERRALS.md` — "kitty file-medium handle-path on Windows" —
-// with its blast radius, the reason it is host-unverifiable from here, and its
-// reopen trigger. It is a named, owned ledger row rather than an in-code marker
-// precisely because a marker states the gap without ever forcing anyone to act
-// on it (detector D3, `check_constants_parity.py`, rule (a)).
-#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "android")))]
+// Windows: Zig's `File.realPath` is `realPathWindows` (std/Io/Threaded.zig):
+// `GetFinalPathNameByHandle(h_file, .{ .volume_name = .Dos }, buf)`, then
+// `std.unicode.wtf16LeToWtf8`. Zig builds the DOS path from the NT object name
+// and the mount manager and does NOT prepend `\\?\`; a UNC path comes back as
+// `\\server\share\...`. The Win32 `GetFinalPathNameByHandleW` with
+// `VOLUME_NAME_DOS` gives the same path with the `\\?\` (or `\\?\UNC\`) prefix,
+// which `final_path_to_zig_dos` strips.
+// CORRECTION (parity S189-F4): this arm used to return `Unsupported`, so the
+// kitty file and temporary-file media failed closed on Windows.
+#[cfg(windows)]
+fn realpath_of_handle(file: &std::fs::File) -> std::io::Result<Vec<u8>> {
+    use std::os::windows::io::AsRawHandle;
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetFinalPathNameByHandleW(
+            hfile: *mut core::ffi::c_void,
+            lpszfilepath: *mut u16,
+            cchfilepath: u32,
+            dwflags: u32,
+        ) -> u32;
+    }
+    // FILE_NAME_NORMALIZED | VOLUME_NAME_DOS
+    const FLAGS: u32 = 0;
+
+    // `var wide_buf: [windows.PATH_MAX_WIDE]u16`; a longer path is
+    // `error.NameTooLong` there, and an error here.
+    const PATH_MAX_WIDE: usize = 32767;
+    let mut buf = vec![0u16; PATH_MAX_WIDE];
+    // SAFETY(ffi-boundary/graphics_image): `buf` holds `buf.len()` u16s and
+    // the call writes at most that many, NUL included; `file` keeps the
+    // handle open for the duration of the call.
+    let n = unsafe {
+        GetFinalPathNameByHandleW(
+            file.as_raw_handle(),
+            buf.as_mut_ptr(),
+            buf.len() as u32,
+            FLAGS,
+        )
+    } as usize;
+    if n == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // A return value not below the buffer length is the size needed.
+    if n >= buf.len() {
+        return Err(std::io::Error::from(std::io::ErrorKind::InvalidFilename));
+    }
+    Ok(wtf16le_to_wtf8(&final_path_to_zig_dos(&buf[..n])))
+}
+
+/// `GetFinalPathNameByHandleW(.., VOLUME_NAME_DOS)` output in the form Zig's
+/// `GetFinalPathNameByHandle(.., .{ .volume_name = .Dos })` returns it:
+/// `\\?\UNC\server\share\x` becomes `\\server\share\x` and `\\?\C:\x`
+/// becomes `C:\x`.
+#[cfg(any(windows, test))]
+fn final_path_to_zig_dos(wide: &[u16]) -> Vec<u16> {
+    let unc: Vec<u16> = "\\\\?\\UNC\\".encode_utf16().collect();
+    let dos: Vec<u16> = "\\\\?\\".encode_utf16().collect();
+    if wide.starts_with(&unc) {
+        let mut out: Vec<u16> = "\\\\".encode_utf16().collect();
+        out.extend_from_slice(&wide[unc.len()..]);
+        out
+    } else if wide.starts_with(&dos) {
+        wide[dos.len()..].to_vec()
+    } else {
+        wide.to_vec()
+    }
+}
+
+/// `std.unicode.wtf16LeToWtf8`: surrogate pairs combine, and an unpaired
+/// surrogate is encoded as its own three-byte sequence (WTF-8), so no path is
+/// lossy.
+#[cfg(any(windows, test))]
+fn wtf16le_to_wtf8(wide: &[u16]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(wide.len());
+    let mut i = 0;
+    while i < wide.len() {
+        let u = wide[i] as u32;
+        let cp = if (0xD800..0xDC00).contains(&u)
+            && i + 1 < wide.len()
+            && (0xDC00..0xE000).contains(&(wide[i + 1] as u32))
+        {
+            i += 1;
+            0x10000 + ((u - 0xD800) << 10) + (wide[i] as u32 - 0xDC00)
+        } else {
+            u
+        };
+        i += 1;
+        if cp < 0x80 {
+            out.push(cp as u8);
+        } else if cp < 0x800 {
+            out.push(0xC0 | (cp >> 6) as u8);
+            out.push(0x80 | (cp & 0x3F) as u8);
+        } else if cp < 0x10000 {
+            out.push(0xE0 | (cp >> 12) as u8);
+            out.push(0x80 | ((cp >> 6) & 0x3F) as u8);
+            out.push(0x80 | (cp & 0x3F) as u8);
+        } else {
+            out.push(0xF0 | (cp >> 18) as u8);
+            out.push(0x80 | ((cp >> 12) & 0x3F) as u8);
+            out.push(0x80 | ((cp >> 6) & 0x3F) as u8);
+            out.push(0x80 | (cp & 0x3F) as u8);
+        }
+    }
+    out
+}
+
+// PORT NOTE: remaining targets (other unixes, wasm). Zig's `File.realPath`
+// has arms for more unixes than the port's rustty tiers build for; on these
+// the kitty file/temporary-file medium fails closed (`InvalidData` via
+// `validatedFilePath`).
+#[cfg(not(any(
+    target_os = "macos",
+    target_os = "linux",
+    target_os = "android",
+    windows
+)))]
 fn realpath_of_handle(_file: &std::fs::File) -> std::io::Result<Vec<u8>> {
     Err(std::io::Error::from(std::io::ErrorKind::Unsupported))
 }
@@ -1715,6 +1874,62 @@ fn unlink(path: &[u8]) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Parity S189-F4 (no reference test): the host-independent half of the
+    // Windows `realpath_of_handle` arm. The `GetFinalPathNameByHandleW` call
+    // itself only runs on Windows.
+    #[test]
+    fn windows_final_path_takes_zig_dos_form() {
+        let w = |s: &str| s.encode_utf16().collect::<Vec<u16>>();
+        assert_eq!(
+            w("C:\\Users\\a\\img.png"),
+            final_path_to_zig_dos(&w("\\\\?\\C:\\Users\\a\\img.png"))
+        );
+        assert_eq!(
+            w("\\\\server\\share\\img.png"),
+            final_path_to_zig_dos(&w("\\\\?\\UNC\\server\\share\\img.png"))
+        );
+        assert_eq!(w("C:\\x"), final_path_to_zig_dos(&w("C:\\x")));
+    }
+
+    // Runs in CI's `windows` job (`cargo test -p rustty-vt`): the handle path
+    // of a real file is `std::fs::canonicalize`'s answer without the `\\?\`
+    // prefix.
+    #[cfg(windows)]
+    #[test]
+    fn windows_realpath_of_handle_is_the_canonical_path() {
+        use std::os::windows::ffi::OsStrExt;
+        let path = std::env::temp_dir().join("rustty-s189-f4-realpath.txt");
+        std::fs::write(&path, b"x").unwrap();
+        let file = std::fs::File::open(&path).unwrap();
+        let got = realpath_of_handle(&file).unwrap();
+        drop(file);
+        let canon: Vec<u16> = std::fs::canonicalize(&path)
+            .unwrap()
+            .as_os_str()
+            .encode_wide()
+            .collect();
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(wtf16le_to_wtf8(&final_path_to_zig_dos(&canon)), got);
+        assert!(!got.starts_with(b"\\\\?\\"));
+    }
+
+    #[test]
+    fn wtf16le_to_wtf8_matches_zig() {
+        let w = |s: &str| s.encode_utf16().collect::<Vec<u16>>();
+        assert_eq!(b"C:\\a".to_vec(), wtf16le_to_wtf8(&w("C:\\a")));
+        // Two-, three- and four-byte sequences (U+00E9, U+20AC, U+1F600).
+        assert_eq!(
+            "\u{e9}\u{20ac}\u{1f600}".as_bytes().to_vec(),
+            wtf16le_to_wtf8(&w("\u{e9}\u{20ac}\u{1f600}"))
+        );
+        // An unpaired surrogate is kept as WTF-8, not replaced.
+        assert_eq!(
+            vec![b'a', 0xED, 0xA0, 0x80, b'b'],
+            wtf16le_to_wtf8(&[0x61, 0xD800, 0x62])
+        );
+        assert_eq!(vec![0xED, 0xB0, 0x80], wtf16le_to_wtf8(&[0xDC00]));
+    }
 
     // PORT NOTE: the reference's tests construct `command.Command` literals with
     // a `.control = .{ .transmit = ... }` and `.data` slice, then exercise
@@ -2420,6 +2635,106 @@ mod tests {
         tmp_dir.deinit();
     }
 
+    // Parity S189-F2 (no reference test): `appendRemaining(.., .limited(n))`
+    // fails with `error.StreamTooLong` once `n` bytes have been read, so a
+    // stream of exactly `n` bytes fails as well.
+    #[test]
+    fn append_remaining_limited_matches_zig_limit_semantics() {
+        let run = |input: &[u8], limit: usize| {
+            let mut list = b"x".to_vec();
+            let mut reader = input;
+            let r = append_remaining_limited(&mut reader, &mut list, limit);
+            (
+                r.map_err(|e| matches!(e, AppendRemainingError::StreamTooLong)),
+                list,
+            )
+        };
+        assert_eq!((Ok(()), b"xabc".to_vec()), run(b"abc", 4));
+        assert_eq!(Err(true), run(b"abcd", 4).0);
+        assert_eq!(Err(true), run(b"abcdef", 4).0);
+        assert_eq!(Err(true), run(b"", 0).0);
+    }
+
+    /// A sparse file of `len` bytes (no disk space) in a fresh temp dir,
+    /// loaded as a file-medium RGB transmission with no `s=` size.
+    fn load_sparse_file_without_size(len: u64) -> Result<LoadingImage, Error> {
+        let mut tmp_dir = temp_dir::TempDir::init().unwrap();
+        tmp_dir.dir().writeFile("image.data", b"").unwrap();
+        let path = tmp_dir.dir().realpath("image.data").unwrap();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_len(len)
+            .unwrap();
+
+        let cmd: command::Command = command::Command {
+            control: command::Control::Transmit(command::Transmission {
+                format: command::Format::Rgb,
+                medium: command::Medium::File,
+                compression: command::Compression::None,
+                image_id: 31,
+                ..Default::default()
+            }),
+            quiet: command::Quiet::No,
+            data: path_to_bytes(&path),
+        };
+        let result = LoadingImage::init(
+            &cmd,
+            &Limits::all_with_temp_dir(&tmp_dir_realpath(&tmp_dir)),
+        );
+        tmp_dir.deinit();
+        result
+    }
+
+    // Parity S189-F2 / UD140 (R13; no reference test): a file with no `s=`
+    // size and EXACTLY `max_size` bytes loads, as it does with `s=`. The
+    // reference's `.limited(max_size)` rejects it (reference defect). The
+    // file is sparse, so it takes no disk space.
+    #[test]
+    #[cfg_attr(miri, ignore)] // real-OS temp-file filesystem syscalls
+    fn image_load_file_of_max_size_without_size_loads() {
+        let result = load_sparse_file_without_size(MAX_SIZE as u64);
+        let loading = match result {
+            Ok(loading) => loading,
+            Err(err) => panic!("a file of exactly max_size bytes must load: {err:?}"),
+        };
+        assert_eq!(MAX_SIZE, loading.data.len());
+    }
+
+    // Parity S189-F2 / UD140, the other side of the boundary: one byte more
+    // than `max_size` is still `InvalidData`, rather than loaded truncated.
+    #[test]
+    #[cfg_attr(miri, ignore)] // real-OS temp-file filesystem syscalls
+    fn image_load_file_over_max_size_without_size_is_invalid_data() {
+        let result = load_sparse_file_without_size(MAX_SIZE as u64 + 1);
+        assert!(
+            matches!(result, Err(Error::InvalidData)),
+            "{:?}",
+            result.as_ref().err()
+        );
+    }
+
+    // Parity S189-F2 / UD140, the zlib path: the reference's
+    // `decompressZlib` reads the decompressed stream with the same
+    // `.limited(max_size)`, so it rejects EXACTLY `max_size` output bytes.
+    // The port's inflate (`zlib_sys::inflate_zlib`) already accepts exactly
+    // the limit and rejects one byte more; this pins that, at a limit equal
+    // to the fixture's decompressed length (the production call passes
+    // `MAX_SIZE`).
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn zlib_inflate_accepts_exactly_the_limit() {
+        let data = include_bytes!("testdata/image-rgb-zlib_deflate-128x96-2147483647-raw.data");
+        let full = 128 * 96 * 3;
+        assert_eq!(
+            full,
+            zlib_sys::inflate_zlib(data, usize::MAX / 2).unwrap().len()
+        );
+        assert_eq!(full, zlib_sys::inflate_zlib(data, full).unwrap().len());
+        assert!(zlib_sys::inflate_zlib(data, full - 1).is_err());
+    }
+
     // test "image load: rgb, not compressed, relative regular file"
     //
     // PORT NOTE: the reference's `testing.tmpDir` lives under the CWD-relative
@@ -2620,17 +2935,23 @@ mod tests {
 
     #[test]
     #[cfg_attr(miri, ignore)] // real-OS temp-file filesystem syscalls
+    #[cfg_attr(
+        not(feature = "wuffs"),
+        ignore = "SkipZigTest: no PNG decoder without the wuffs feature (R14)"
+    )]
     fn image_load_png_not_compressed_regular_file() {
         // PORT NOTE: `if (sys.decode_png == null) return error.SkipZigTest;`. The
-        // decoder seam is not installed in this VT leaf crate (the wuffs binding
-        // rides a later FFI crate), so this test is skipped, matching the
-        // reference's skip when no decoder is present.
+        // decoder seam is installed exactly when the `wuffs` feature is on
+        // (`sys::tests::default_decoder_matches_artifact_and_feature`), so the
+        // skip is the `cfg_attr(.., ignore)` above and a missing decoder here is
+        // a failure, not an early-return `ok` (R14).
         let _png_lock = sys::decode_png_test_lock
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        if sys::decode_png.read().unwrap().is_none() {
-            return;
-        }
+        assert!(
+            sys::decode_png.read().unwrap().is_some(),
+            "the wuffs feature is on but no PNG decoder is installed"
+        );
 
         let mut tmp_dir = temp_dir::TempDir::init().unwrap();
         let data = include_bytes!("testdata/image-png-none-50x76-2147483647-raw.data");
@@ -2786,14 +3107,21 @@ mod tests {
 
     // test "image load: png rejects oversized Wuffs image before allocation"
     #[test]
+    #[cfg_attr(
+        not(feature = "wuffs"),
+        ignore = "SkipZigTest: no PNG decoder without the wuffs feature (R14)"
+    )]
     fn image_load_png_rejects_oversized_wuffs_image_before_allocation() {
         let _png_lock = sys::decode_png_test_lock
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         // if (sys.decode_png == null) return error.SkipZigTest;
-        if sys::decode_png.read().unwrap().is_none() {
-            return;
-        }
+        // (that skip is the `cfg_attr(.., ignore)` above: the decoder is
+        // installed exactly under `wuffs`; R14)
+        assert!(
+            sys::decode_png.read().unwrap().is_some(),
+            "the wuffs feature is on but no PNG decoder is installed"
+        );
 
         // Turn the small test PNG into a 32768x32767 image. Its decoded RGBA
         // size is just under Wuffs' 4 GiB package limit but over Kitty's 400 MiB

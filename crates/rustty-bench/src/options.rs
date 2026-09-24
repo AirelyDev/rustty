@@ -30,6 +30,29 @@ impl Read for DataFile {
     }
 }
 
+impl DataFile {
+    /// The reference's `f.reader(io, &.{})`: an UNBUFFERED reader over the
+    /// data file (the terminal-stream bench, `TerminalStream.zig` `step`).
+    ///
+    /// PORT NOTE: a file opened by [`data_file`] sits behind the 256 KiB
+    /// `BufReader` above, which the bench's 64 KiB `read_slice_short` requests
+    /// do NOT bypass (`BufReader` only skips its buffer for reads at least as
+    /// large as its capacity), so every byte was copied buffer-to-buffer —
+    /// the per-chunk memcpy the reference removed. This returns the inner
+    /// `File` instead. The buffer must be empty (nothing read through it yet),
+    /// or bytes it holds would be skipped. Stdin keeps `io::Stdin`, whose
+    /// process-wide buffer Rust does not let a reader opt out of.
+    pub fn unbuffered(&mut self) -> &mut dyn Read {
+        match self {
+            DataFile::Stdin(s) => s,
+            DataFile::File(f) => {
+                assert!(f.buffer().is_empty());
+                f.get_mut()
+            }
+        }
+    }
+}
+
 /// Returns the data file for the given path in a way that is consistent
 /// across our CLI. If the path is not set then no file is returned.
 /// If the path is "-", then we will return stdin. If the path is
@@ -101,14 +124,141 @@ impl Default for CacheLineBuf {
 /// number of bytes read; a short read (`n < buf.len`) happens only at EOF, and
 /// `n == 0` means EOF was reached. This loops `Read::read` to fill `buf` until it
 /// is full or the source is exhausted, matching that "n==0 ⇒ break" contract.
+///
+/// An interrupted read (`EINTR`) is retried: Zig 0.16's file reader loops on
+/// `.INTR` inside `fileReadStreamingPosix` (`std/Io/Threaded.zig:9641-9644`),
+/// so it never reaches `readSliceShort`'s caller (parity S62-F6).
 pub fn read_slice_short<R: Read>(r: &mut R, buf: &mut [u8]) -> io::Result<usize> {
     let mut n = 0;
     while n < buf.len() {
-        let got = r.read(&mut buf[n..])?;
+        let got = match r.read(&mut buf[n..]) {
+            Ok(got) => got,
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        };
         if got == 0 {
             break;
         }
         n += got;
     }
     Ok(n)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{self, Read};
+
+    /// Returns `Interrupted` before every chunk, then the chunk.
+    struct Interrupting<'a> {
+        chunks: &'a [&'a [u8]],
+        interrupt_next: bool,
+        interrupts: usize,
+    }
+
+    impl Read for Interrupting<'_> {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            let (first, rest) = match self.chunks.split_first() {
+                Some(split) => split,
+                None => return Ok(0),
+            };
+            if self.interrupt_next {
+                self.interrupt_next = false;
+                self.interrupts += 1;
+                return Err(io::ErrorKind::Interrupted.into());
+            }
+            let n = first.len().min(buf.len());
+            buf[..n].copy_from_slice(&first[..n]);
+            self.chunks = rest;
+            self.interrupt_next = true;
+            Ok(n)
+        }
+    }
+
+    /// Parity S62-F6: `EINTR` is retried, not a read failure.
+    #[test]
+    fn read_slice_short_retries_interrupted_reads() {
+        let mut r = Interrupting {
+            chunks: &[b"abc", b"de"],
+            interrupt_next: true,
+            interrupts: 0,
+        };
+        let mut buf = [0u8; 8];
+        let n = read_slice_short(&mut r, &mut buf).unwrap();
+        assert_eq!(b"abcde", &buf[..n]);
+        // Both chunks were preceded by an interrupted read.
+        assert_eq!(2, r.interrupts);
+    }
+
+    /// Any other error still fails the read.
+    #[test]
+    fn read_slice_short_propagates_other_errors() {
+        struct Failing;
+        impl Read for Failing {
+            fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+                Err(io::ErrorKind::BrokenPipe.into())
+            }
+        }
+        let err = read_slice_short(&mut Failing, &mut [0u8; 4]).unwrap_err();
+        assert_eq!(io::ErrorKind::BrokenPipe, err.kind());
+    }
+
+    /// rustty-only (task S-4): `DataFile::unbuffered` is the reference's
+    /// `f.reader(io, &.{})` for the terminal-stream bench. It must deliver the
+    /// file's bytes exactly, and must NOT route them through the `BufReader`
+    /// (whose buffer a 64 KiB request does not bypass): after each read
+    /// through it, nothing is staged in the buffer.
+    #[test]
+    #[cfg(unix)]
+    #[cfg_attr(
+        miri,
+        ignore = "writes and opens a temp file; Miri isolation forbids `open`"
+    )]
+    fn unbuffered_reads_the_file_directly() {
+        use std::io::Write as _;
+
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "rustty-s4-unbuffered-{}-{:?}.bin",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        // 3 x 64 KiB + 5 bytes, distinct per position.
+        let data: Vec<u8> = (0..3 * 64 * 1024 + 5).map(|i| (i % 251) as u8).collect();
+        std::fs::File::create(&path)
+            .unwrap()
+            .write_all(&data)
+            .unwrap();
+
+        let bytes = {
+            use std::os::unix::ffi::OsStrExt;
+            path.as_os_str().as_bytes().to_vec()
+        };
+        let mut f = data_file(Some(&bytes)).unwrap().unwrap();
+        let mut got = Vec::new();
+        let mut buf = [0u8; 64 * 1024];
+        let mut reads = 0;
+        loop {
+            let mut r = f.unbuffered();
+            let n = read_slice_short(&mut r, &mut buf).unwrap();
+            if n == 0 {
+                break;
+            }
+            reads += 1;
+            got.extend_from_slice(&buf[..n]);
+            // The BufReader was bypassed: nothing is staged in it.
+            match &f {
+                DataFile::File(b) => {
+                    assert!(
+                        b.buffer().is_empty(),
+                        "read {reads} went through the buffer"
+                    )
+                }
+                DataFile::Stdin(_) => unreachable!(),
+            }
+        }
+        assert_eq!(4, reads);
+        assert_eq!(data, got);
+        let _ = std::fs::remove_file(&path);
+    }
 }

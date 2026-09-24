@@ -245,7 +245,7 @@ impl ScrollbackCompression {
     ) -> Result<Box<ScrollbackCompression>, OutOfMemory> {
         let mut topts = terminal_options(opts.terminal_rows, opts.terminal_cols);
         topts.max_scrollback_bytes = Some(opts.max_scrollback);
-        let terminal = Terminal::init(alloc, topts)?;
+        let terminal = Terminal::init(alloc.into(), topts)?;
         Ok(Box::new(ScrollbackCompression { opts, terminal }))
     }
 
@@ -254,7 +254,7 @@ impl ScrollbackCompression {
     //     alloc.destroy(self);
     // }
     pub fn destroy(mut self: Box<ScrollbackCompression>, alloc: Allocator) {
-        self.terminal.deinit(alloc);
+        self.terminal.deinit(alloc.into());
         drop(self);
     }
 
@@ -459,8 +459,8 @@ impl ScrollbackCompression {
 
         // std.debug.print("scrollback-compression compressed={d} raw={d} encoded={d}
         //     ratio={d:.2}% savings={d}\n", ...);
-        println!(
-            "scrollback-compression compressed={} raw={} encoded={} ratio={:.2}% savings={}",
+        debug_print!(
+            "scrollback-compression compressed={} raw={} encoded={} ratio={:.2}% savings={}\n",
             memory.compressed_pages,
             memory.decommitted_raw_bytes,
             memory.encoded_bytes,

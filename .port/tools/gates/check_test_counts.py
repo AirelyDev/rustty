@@ -199,18 +199,19 @@ RSXEV = f"{RS_ROOT}/crates/rustty-xev/src"
 GHWUFFS = "/Users/gael/projects/ghostty/pkg/wuffs/src"
 RSWUFFS = f"{RS_ROOT}/crates/rustty-wuffs/src"
 
-# rustty-zf: the vendored `zf` 0.10.3 fuzzy-finder parity crate (the theme-picker
+# rustty-zf: the vendored `zf` 0.11.0 (0.10.3 until parity tail S-10b) fuzzy-finder parity crate (the theme-picker
 # rank/highlight `cli/list_themes.zig` sorts on). GH base = the content-addressed
 # zig-cache dep dir (NOT ghostty src/), so it is not in the 3234-test src/ contract;
 # scoped-mapped here. zf.zig carries 2 named `test "..."` (rank/highlight library
-# interface) + 1 anonymous refAllDecls `test {}` (skipped by zig_count); filter.zig
-# carries 4 (path iterator, segmentLen, rankToken, FixedArrayList); clib.zig carries
-# 2 (rank/highlight exported C library interface). zig=8; the Rust side adds the
-# ref_all_decls compile-touch (rust=9 >= 8).
-GHZF = "/Users/gael/.cache/zig/p/zf-0.10.3-OIRy8RuJAACKA3Lohoumrt85nRbHwbpMcUaLES8vxDnh/src/zf"
+# interface) + the named `test deduplicateMatches` (0.11.0) + 1 anonymous refAllDecls
+# `test {}` (skipped by zig_count); filter.zig carries 4 (path iterator, segmentLen,
+# rankNeedle, FixedArrayList); clib.zig carries 2 (rank/highlight exported C library
+# interface). zig=9; the Rust side adds the ref_all_decls compile-touch and the
+# default-polarity pin (rust=11 >= 9).
+GHZF = "/Users/gael/.cache/zig/p/zf-0.11.0-OIRy8X-RAAAwaRXHMYpj2uvBnuGTZWEE_3V7acqHQNtW/src/zf"
 RSZF = f"{RS_ROOT}/crates/rustty-zf/src"
 
-# rustty-vaxis: the vendored `libvaxis` 0.5.1 TUI-lib parity crate (the interactive
+# rustty-vaxis: the vendored `libvaxis` 0.6.0 (0.5.1 until parity tail S-10b) TUI-lib parity crate (the interactive
 # CLI's terminal-UI dependency). GH base = the content-addressed zig-cache dep dir
 # (NOT ghostty src/), so it is not in the 3234-test src/ contract; scoped-mapped here.
 # CHUNK 1a ports the core VALUE TYPES: Cell.zig carries 1 named `test "rgbFromSpec"`;
@@ -222,16 +223,27 @@ RSZF = f"{RS_ROOT}/crates/rustty-zf/src"
 # lifecycle test — still a #[test] the glob counts). Chunk 4b landed widgets/TextInput.zig
 # (3 test) — the new `widgets` tier; the rust glob adds {RSVAXIS}/widgets/*.rs (the top-level
 # {RSVAXIS}/*.rs glob is non-recursive and would MISS widgets/text_input.rs). zig = Cell 1 +
-# Key 5 + gwidth 11 + Screen 1 + Window 8 + Parser 34 + queue 7 + Loop 1 + TextInput 3 = 71;
-# the two rust globs pick up every ported #[test], keeping rust >= zig.
-GHVAXIS = "/Users/gael/.cache/zig/p/vaxis-0.5.1-BWNV_LosCQAGmCCNOLljCIw6j6-yt53tji6n6rwJ2BhS/src"
+# Key 5 + gwidth 11 + Screen 1 + Window 8 + Parser 34 + queue 7 + Loop 1 + TextInput 3 = 71
+# at 0.5.1; 0.6.0 adds Parser 2 + InternalScreen 1 + TextInput 13 (= 87; its new anonymous
+# refAllDecls `test {}` blocks are not counted). The two rust
+# globs pick up every ported #[test], keeping rust >= zig.
+# S-10c (review S-10b F6): the row now also covers `Vaxis.zig` (1: "render: no output when
+# no changes") and the vxfw files the crate ports — `vxfw/vxfw.zig` (4, counting the quoted
+# "refAllDecls" and the source-scan "All widgets have a doctest and refAllDecls test"),
+# `vxfw/App.zig` (1), `vxfw/Text.zig` (10), `vxfw/Center.zig` (2) — with the rust glob
+# `{RSVAXIS}/vxfw/*.rs`. zig = 87 + 18 = 105. apc_deferred = 1: the doctest source scan
+# (`vxfw.zig:541`) reads `./src/vxfw/*.zig` at run time and has no Rust counterpart
+# (NEW-FINDINGS N240). `--self-test` binds this row (VAXIS_VXFW_FILES, VAXIS_APC).
+GHVAXIS = "/Users/gael/.cache/zig/p/vaxis-0.6.0-BWNV_CrbCQCscGpzsAlR402rYQ_tV3aAl081c2iRRkka/src"
 RSVAXIS = f"{RS_ROOT}/crates/rustty-vaxis/src"
+VAXIS_VXFW_FILES = ["Vaxis.zig", "vxfw/vxfw.zig", "vxfw/App.zig", "vxfw/Text.zig", "vxfw/Center.zig"]
+VAXIS_APC = 1  # the vxfw doctest source scan, see above
 
 # module -> (list of zig ref globs, list of rust globs, apc_deferred_count)
 MAP = {
     "wuffs":           ([f"{GHWUFFS}/png.zig", f"{GHWUFFS}/jpeg.zig", f"{GHWUFFS}/main.zig", f"{GHWUFFS}/error.zig", f"{GHWUFFS}/swizzle.zig"], [f"{RSWUFFS}/*.rs"], 0),
     "zf":              ([f"{GHZF}/zf.zig", f"{GHZF}/filter.zig", f"{GHZF}/clib.zig"], [f"{RSZF}/*.rs"], 0),
-    "vaxis":           ([f"{GHVAXIS}/Cell.zig", f"{GHVAXIS}/Key.zig", f"{GHVAXIS}/Mouse.zig", f"{GHVAXIS}/GraphemeCache.zig", f"{GHVAXIS}/Image.zig", f"{GHVAXIS}/gwidth.zig", f"{GHVAXIS}/unicode.zig", f"{GHVAXIS}/Screen.zig", f"{GHVAXIS}/InternalScreen.zig", f"{GHVAXIS}/Window.zig", f"{GHVAXIS}/Parser.zig", f"{GHVAXIS}/event.zig", f"{GHVAXIS}/ctlseqs.zig", f"{GHVAXIS}/queue.zig", f"{GHVAXIS}/tty.zig", f"{GHVAXIS}/Loop.zig", f"{GHVAXIS}/widgets/TextInput.zig"], [f"{RSVAXIS}/*.rs", f"{RSVAXIS}/widgets/*.rs"], 0),
+    "vaxis":           ([f"{GHVAXIS}/Cell.zig", f"{GHVAXIS}/Key.zig", f"{GHVAXIS}/Mouse.zig", f"{GHVAXIS}/GraphemeCache.zig", f"{GHVAXIS}/Image.zig", f"{GHVAXIS}/gwidth.zig", f"{GHVAXIS}/unicode.zig", f"{GHVAXIS}/Screen.zig", f"{GHVAXIS}/InternalScreen.zig", f"{GHVAXIS}/Window.zig", f"{GHVAXIS}/Parser.zig", f"{GHVAXIS}/event.zig", f"{GHVAXIS}/ctlseqs.zig", f"{GHVAXIS}/queue.zig", f"{GHVAXIS}/tty.zig", f"{GHVAXIS}/Loop.zig", f"{GHVAXIS}/widgets/TextInput.zig"] + [f"{GHVAXIS}/{f}" for f in VAXIS_VXFW_FILES], [f"{RSVAXIS}/*.rs", f"{RSVAXIS}/widgets/*.rs", f"{RSVAXIS}/vxfw/*.rs"], VAXIS_APC),
     "pagelist":        ([f"{GH}/PageList.zig"], [f"{RS}/pagelist/*.rs"], 0),
     "page":            ([f"{GH}/page.zig"], [f"{RS}/page_impl.rs", f"{RS}/page_tests.rs", f"{RS}/page.rs"], 0),
     "screen":          ([f"{GH}/Screen.zig"], [f"{RS}/screen.rs"], 0),
@@ -969,6 +981,52 @@ def rust_count(files):
         n += sum(1 for ln in open(f, errors="ignore") if re.search(r'#\[test\]', ln))
     return n
 
+def row_ok(z, r, apc):
+    """The per-row verdict `main` applies: rust >= zig - apc_deferred."""
+    return r >= z - apc
+
+
+def self_test_rows():
+    """S-10c arms (review S-10b F6), oracle-free: (1) the counting and the row verdict on
+    fixture files — a zig fixture with 3 quoted tests, one named behavioural test, one
+    named `_ =` reify test and one anonymous `test {}` counts 4, a rust fixture counts its
+    `#[test]` lines, and with apc_deferred 1 three rust tests pass while two are RED;
+    (2) the vaxis row still lists Vaxis.zig and the four vxfw files on the zig side, the
+    vxfw rust glob, and exactly the one documented allowance."""
+    import tempfile
+    fails = []
+    with tempfile.TemporaryDirectory() as d:
+        zf = os.path.join(d, "a.zig")
+        with open(zf, "w") as f:
+            f.write('test "one" {\n}\ntest "two" {\n}\ntest "refAllDecls" {\n}\n'
+                    'test Named {\n    try x();\n}\ntest Reify {\n    _ = X;\n}\ntest {\n}\n')
+        rf = os.path.join(d, "a.rs")
+        with open(rf, "w") as f:
+            f.write("#[test]\nfn a() {}\n#[test]\nfn b() {}\n")
+        z, r = zig_count([zf]), rust_count([rf])
+        if z != 4:
+            fails.append(f"zig_count fixture = {z}, expected 4")
+        if r != 2:
+            fails.append(f"rust_count fixture = {r}, expected 2")
+        if row_ok(z, r, 1):
+            fails.append("rust 2 vs zig 4 - apc 1 passed; expected RED")
+        if not row_ok(z, r + 1, 1):
+            fails.append("rust 3 vs zig 4 - apc 1 was RED; expected ok")
+    zg, rg, apc = MAP["vaxis"]
+    # A literal list, not VAXIS_VXFW_FILES: shrinking that constant must turn this RED.
+    for f in ["Vaxis.zig", "vxfw/vxfw.zig", "vxfw/App.zig", "vxfw/Text.zig", "vxfw/Center.zig"]:
+        if f"{GHVAXIS}/{f}" not in zg:
+            fails.append(f"vaxis row lost {f}")
+    if f"{RSVAXIS}/vxfw/*.rs" not in rg:
+        fails.append("vaxis row lost the vxfw rust glob")
+    if apc != 1:
+        fails.append(f"vaxis apc_deferred = {apc}, expected exactly 1 (the doctest scan)")
+    for m in fails:
+        print(f"  FAIL {m}")
+    print(f"  {'ok  ' if not fails else 'FAIL'} row counting + the vaxis/vxfw row binding")
+    return not fails
+
+
 def self_test():
     """G1b's self-test (oracle-free, so ci.sh runs it before the oracle probe).
 
@@ -982,6 +1040,9 @@ def self_test():
     print(f"  {'ok  ' if ok else 'FAIL'} GIT_DIR + GIT_WORK_TREE do not redirect RS_ROOT")
     if not ok:
         print(f"       ({why})")
+        print("G1b SELF-TEST: RED")
+        return 1
+    if not self_test_rows():
         print("G1b SELF-TEST: RED")
         return 1
     print("G1b SELF-TEST: GREEN")
@@ -1036,7 +1097,7 @@ def main():
             continue
         z = zig_count(expand(zg)); r = rust_count(expand(rg))
         need = z - apc
-        if r < need:
+        if not row_ok(z, r, apc):
             print(f"  {mod:16} {z:4} {r:5}  RED  drop={need-r}" + (f" (apc_deferred={apc})" if apc else ""))
             bad += 1
         else:

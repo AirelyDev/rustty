@@ -12,8 +12,12 @@
 // `homedir = @import("homedir.zig")`, and `env_os = @import("env.zig")`. In Rust
 // we use those ported sibling modules plus the standard library. Allocation in
 // Rust is infallible for the collections used here, so the reference's
-// `Allocator.Error` / `error.NoHomeDir` set collapses to the single
-// `error.NoHomeDir` case kept in `DirError`.
+// `Allocator.Error` member of the error set has no variant in `DirError`.
+//
+// CORRECTION (S112-F11): this used to say the set "collapses to the single
+// `error.NoHomeDir` case kept in `DirError`". `homedir.home`'s
+// `error.BufferTooSmall` is also in the reference's set (`try homedir.home`),
+// and is now `DirError::BufferTooSmall`.
 
 use crate::homedir;
 
@@ -21,6 +25,18 @@ use crate::homedir;
 #[derive(Debug, PartialEq, Eq)]
 pub enum DirError {
     NoHomeDir,
+    /// `homedir.home`'s `error.BufferTooSmall`: the home directory is longer
+    /// than the 1024-byte buffer `dir` reads it into.
+    BufferTooSmall,
+    // PORT NOTE (merge of S112-F11 with S111-F11): `try homedir.home` passes on
+    // the whole of `home`'s inferred error set, which also holds the
+    // `std.process.RunError` half of its shell fallback (`homedir::Error`'s
+    // two variants below). They are carried through one-to-one.
+    /// `homedir.home`'s `error.StreamTooLong` (the shell fallback's output
+    /// exceeded its limit).
+    StreamTooLong,
+    /// `homedir.home`'s spawn, read or wait failure of the shell fallback.
+    Spawn(std::io::ErrorKind),
 }
 
 // PORT NOTE (W94-B02-01): the reference fields are `?[]const u8` — raw path
@@ -154,7 +170,17 @@ fn dir(
 
     // Get our home dir
     let mut buf = [0u8; 1024];
-    if let Some(home) = homedir::home(environ_map, &mut buf).map_err(|_| DirError::NoHomeDir)? {
+    // if (try homedir.home(io, environ_map, &buf)) |home| {
+    //
+    // PORT NOTE (S112-F11): `try` passes `homedir.home`'s own error on. This
+    // used to map it to `NoHomeDir`, so a `$HOME` longer than the buffer
+    // looked like having no home directory.
+    let home = homedir::home(environ_map, &mut buf).map_err(|err| match err {
+        homedir::Error::BufferTooSmall => DirError::BufferTooSmall,
+        homedir::Error::StreamTooLong => DirError::StreamTooLong,
+        homedir::Error::Spawn(kind) => DirError::Spawn(kind),
+    })?;
+    if let Some(home) = home {
         // PORT NOTE (W94-B02-01): `homedir.home` returns `[]const u8`; the raw
         // bytes feed the byte-typed path join directly (the former `&str`
         // round-trip rejected a non-UTF-8 home dir with `NoHomeDir`, which the
@@ -367,11 +393,8 @@ mod tests {
 
     // test "fallback when xdg env empty" {
     #[test]
+    #[cfg_attr(windows, ignore = "SkipZigTest on Windows (R14)")]
     fn fallback_when_xdg_env_empty() {
-        if cfg!(windows) {
-            return; // error.SkipZigTest
-        }
-
         for case in dir_cases() {
             let mut environ_map = EnvMap::new();
             let temp_home = "/tmp/rustty-test-home";
@@ -389,11 +412,8 @@ mod tests {
 
     // test "fallback when xdg env empty and subdir" {
     #[test]
+    #[cfg_attr(windows, ignore = "SkipZigTest on Windows (R14)")]
     fn fallback_when_xdg_env_empty_and_subdir() {
-        if cfg!(windows) {
-            return; // error.SkipZigTest
-        }
-
         for case in dir_cases() {
             let mut environ_map = EnvMap::new();
             let temp_home = "/tmp/rustty-test-home";
@@ -426,11 +446,8 @@ mod tests {
     // silently discarded in favor of the `$HOME` fallback (the pre-fix
     // `String::from_utf8` surface did the latter).
     #[test]
+    #[cfg_attr(windows, ignore = "SkipZigTest on Windows (R14)")]
     fn non_utf8_xdg_env_is_used_raw() {
-        if cfg!(windows) {
-            return; // error.SkipZigTest
-        }
-
         for case in dir_cases() {
             let mut environ_map = EnvMap::new();
             environ_map.insert(b"HOME".to_vec(), b"/tmp/rustty-test-home".to_vec());
@@ -454,14 +471,35 @@ mod tests {
         }
     }
 
+    // S112-F11: `homedir.home`'s `error.BufferTooSmall` (a `$HOME` longer than
+    // the 1024-byte buffer) propagates from every XDG helper under its own
+    // name (`try homedir.home(...)`, xdg.zig:92), not as `NoHomeDir`.
+    #[test]
+    #[cfg_attr(windows, ignore = "SkipZigTest on Windows (R14)")]
+    fn home_longer_than_buffer_is_buffer_too_small() {
+        for case in dir_cases() {
+            let mut environ_map = EnvMap::new();
+            let mut home = b"/".to_vec();
+            home.extend(std::iter::repeat_n(b'h', 1100));
+            environ_map.insert(b"HOME".to_vec(), home);
+            // The home lookup is reached: no XDG variable is set.
+            assert!(!environ_map.contains_key(case.name.as_bytes()));
+
+            let actual = (case.func)(&environ_map, Options::default());
+            assert_eq!(Err(DirError::BufferTooSmall), actual, "{}", case.name);
+        }
+
+        // A home that fits is still used, so the error above is the length.
+        let mut environ_map = EnvMap::new();
+        environ_map.insert(b"HOME".to_vec(), b"/tmp/rustty-test-home".to_vec());
+        assert!(config(&environ_map, Options::default()).is_ok());
+    }
+
     // PROVING TEST (W94-B02-01 companion): a non-UTF-8 `$HOME` also flows
     // through the byte-typed join instead of being rejected as `NoHomeDir`.
     #[test]
+    #[cfg_attr(windows, ignore = "SkipZigTest on Windows (R14)")]
     fn non_utf8_home_fallback_is_used_raw() {
-        if cfg!(windows) {
-            return; // error.SkipZigTest
-        }
-
         for case in dir_cases() {
             let mut environ_map = EnvMap::new();
             environ_map.insert(b"HOME".to_vec(), b"/tmp/w94-\xfe-home".to_vec());

@@ -1190,18 +1190,36 @@ impl<'a, H: Handler> Stream<'a, H> {
                         // earlier early-exit `break` per lane blocked
                         // vectorization and kept a bounds check per lane
                         // (measured 5.3x the reference's instruction count).
-                        // The bitmask accumulate below is the scalar spelling
-                        // of the same reduction and LLVM lowers it back to
-                        // the vector compare + movemask shape.
+                        // The per-group test is the `@reduce(.Or, stop)` alone
+                        // (an OR-accumulate LLVM lowers to a vector compare and
+                        // a horizontal reduce); the lane bitmask is built only
+                        // on the group that stops the run, as the reference
+                        // does. (Task S-4: building the bitmask on EVERY group
+                        // cost a scalar extract per lane — NEON has no
+                        // movemask — and was the larger share of the
+                        // terminal-stream instruction gap to the pinned oracle.)
                         while end + lanes <= cps.len() {
-                            // const stop = (v & mask) == zero;
-                            // if (@reduce(.Or, stop)) { end += @ctz(bits); break :scan; }
+                            // const v: V = cps[end..][0..lanes].*;
                             let window = &cps[end..end + lanes];
-                            let mut stop: u32 = 0;
-                            for (j, &v) in window.iter().enumerate() {
-                                stop |= (((v & !0x9Fu32) == 0) as u32) << j;
+                            // const stop = (v & mask) == zero;
+                            // if (@reduce(.Or, stop)) {
+                            //
+                            // PERF(port): the `.Or` reduction is spelled as an
+                            // unsigned min of `v & mask` (some lane stops iff
+                            // the smallest masked value is zero), which LLVM
+                            // lowers to one vector AND and an across-lanes min.
+                            let mut min_masked: u32 = u32::MAX;
+                            for &v in window {
+                                min_masked = min_masked.min(v & !0x9Fu32);
                             }
-                            if stop != 0 {
+                            if min_masked == 0 {
+                                // const bits: std.meta.Int(.unsigned, lanes) = @bitCast(stop);
+                                // end += @ctz(bits);
+                                // break :scan;
+                                let mut stop: u32 = 0;
+                                for (j, &v) in window.iter().enumerate() {
+                                    stop |= (((v & !0x9Fu32) == 0) as u32) << j;
+                                }
                                 end += stop.trailing_zeros() as usize;
                                 break 'scan;
                             }
@@ -7963,6 +7981,10 @@ mod tests {
 
     // test "stream: continuation allocation failure recovers"
     #[test]
+    #[cfg_attr(
+        not(debug_assertions),
+        ignore = "the body only exists under cfg(debug_assertions) (R14)"
+    )]
     fn stream_continuation_allocation_failure_recovers() {
         #[cfg(debug_assertions)]
         {

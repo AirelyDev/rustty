@@ -59,10 +59,17 @@ mod imp {
     #[template(resource = "/io/airely/rustty/ui/1.5/tab.ui")]
     #[properties(wrapper_type = super::Tab)]
     pub struct Tab {
+        /// The active surface is the surface that should be receiving all
+        /// surface-targeted actions. This is usually the focused surface,
+        /// but may also not be focused if the user has selected a non-surface
+        /// widget.
+        ///
         /// PORTS: `tab.zig:39-55` `active-surface` (computed from the split tree).
         #[property(name = "active-surface", get = Self::get_active_surface_prop, nullable)]
         pub active_surface_prop: std::marker::PhantomData<Option<Surface>>,
 
+        /// The configuration that this surface is using.
+        ///
         /// PORTS: `tab.zig:57-67,160` `config` (`?*Config`, SHARED).
         #[property(get, set, nullable)]
         pub config: RefCell<Option<Config>>,
@@ -75,14 +82,20 @@ mod imp {
         #[property(name = "surface-tree", get = Self::get_surface_tree_prop, nullable)]
         pub surface_tree_prop: std::marker::PhantomData<Option<Tree>>,
 
+        /// The tooltip of this tab. This is usually bound to the active surface.
+        ///
         /// PORTS: `tab.zig:105-116,169` `tooltip`.
         #[property(get, set, nullable)]
         pub tooltip: RefCell<Option<String>>,
 
+        /// The title of this tab. This is usually bound to the active surface.
+        ///
         /// PORTS: `tab.zig:118-129,163` `title`.
         #[property(get, set, nullable)]
         pub title: RefCell<Option<String>>,
 
+        /// The manually overridden title.
+        ///
         /// PORTS: `tab.zig:130-141,166` `title-override`.
         #[property(name = "title-override", get, set, nullable)]
         pub title_override: RefCell<Option<String>>,
@@ -131,6 +144,7 @@ mod imp {
         /// PORTS: `tab.zig:144-156` the `close-request` signal.
         fn signals() -> &'static [glib::subclass::Signal] {
             static SIGNALS: OnceLock<Vec<glib::subclass::Signal>> = OnceLock::new();
+            // Emitted whenever the tab would like to be closed.
             SIGNALS.get_or_init(|| vec![glib::subclass::Signal::builder("close-request").build()])
         }
 
@@ -181,6 +195,9 @@ impl Tab {
         let tab: Self = glib::Object::new();
         let imp = tab.imp();
 
+        // If our configuration is null then we get the configuration
+        // from the application.
+        //
         // config = passed config (ref'd) or the app's config (`:201-208`).
         let cfg = match config {
             Some(c) => Some(c.clone()),
@@ -189,7 +206,7 @@ impl Tab {
         *imp.config.borrow_mut() = cfg;
         tab.notify("config");
 
-        // Create the initial surface in the split tree (`:213-224`).
+        // Create our initial surface in the split tree (`:213-224`).
         imp.split_tree
             .new_split(
                 rustty_datastruct::split_tree::Direction::Right,
@@ -223,6 +240,10 @@ impl Tab {
         let _ = add_as_group(self, "tab", &actions);
     }
 
+    /// Set the parent of this tab page. This only affects the first surface
+    /// ever created for a tab. If a surface was already created this does
+    /// nothing.
+    ///
     /// PORTS: `tab.zig:180-182` `setParent`.
     ///
     /// # Safety
@@ -246,6 +267,9 @@ impl Tab {
         }
     }
 
+    /// Overridden title. This will be generally be shown over the title
+    /// unless this is unset (null).
+    ///
     /// PORTS: `tab.zig:256-262` `setTitleOverride`. Applies the reference's
     /// empty-string → `null` normalization on top of the generated `title-override`
     /// property setter. (Consumed by the title dialog, an INHABITED leaf until T23.)
@@ -286,6 +310,9 @@ impl Tab {
         dialog.present(self.upcast_ref::<gtk4::Widget>());
     }
 
+    /// Get the currently active surface. See the "active-surface" property.
+    /// This does not ref the value.
+    ///
     /// PORTS: `tab.zig:287-289` `getActiveSurface`. Does not add a ref beyond the
     /// property clone.
     #[must_use]
@@ -293,29 +320,40 @@ impl Tab {
         self.get_split_tree().get_active_surface()
     }
 
+    /// Get the surface tree of this tab.
+    ///
     /// PORTS: `tab.zig:292-295` `getSurfaceTree`.
     #[must_use]
     pub fn get_surface_tree(&self) -> Option<Tree> {
         self.imp().split_tree.get_tree()
     }
 
+    /// Get the split tree widget that is in this tab.
+    ///
     /// PORTS: `tab.zig:298-301` `getSplitTree`.
     #[must_use]
     pub fn get_split_tree(&self) -> SplitTree {
         self.imp().split_tree.get()
     }
 
+    /// Returns true if this tab needs confirmation before quitting based
+    /// on the various Rustty configurations.
+    ///
     /// PORTS: `tab.zig:305-308` `getNeedsConfirmQuit`.
     #[must_use]
     pub fn get_needs_confirm_quit(&self) -> bool {
         self.get_split_tree().get_needs_confirm_quit()
     }
 
+    /// Get the tab view holding this tab, if any.
+    ///
     /// PORTS: `tab.zig:311-316` `getTabView`.
     fn get_tab_view(&self) -> Option<adw::TabView> {
         ext::ancestor::<adw::TabView>(self)
     }
 
+    /// Get the tab page holding this tab, if any.
+    ///
     /// PORTS: `tab.zig:319-322` `getTabPage`.
     fn get_tab_page(&self) -> Option<adw::TabPage> {
         let tab_view = self.get_tab_view()?;
@@ -336,7 +374,8 @@ impl Tab {
     fn on_notify_tree(_split_tree: &SplitTree, _pspec: &glib::ParamSpec, this: &Tab) {
         this.notify("surface-tree");
 
-        // If our tree is empty, request close (`:375-385`).
+        // If our tree is empty we close the tab.
+        // (request close, `:375-385`)
         let empty = this.get_surface_tree().is_none_or(|tree| tree.0.is_empty());
         if empty {
             this.emit_by_name::<()>("close-request", &[]);
@@ -356,6 +395,10 @@ impl Tab {
         zoomed: bool,
         bell_ringing: bool,
     ) -> Option<String> {
+        // Our plain title is the manually tab overridden title if it exists,
+        // otherwise the overridden title if it exists, otherwise
+        // the terminal title if it exists, otherwise a default string.
+        //
         // The plain title (`:496-509`). Default sourced from rustty-identity (R2),
         // NOT the reference's hardcoded "Ghostty".
         let default = rustty_identity::APP_NAME_TITLECASE.to_owned();
@@ -369,6 +412,11 @@ impl Tab {
             .or(config_title)
             .unwrap_or(default);
 
+        // We don't need a config in every case, but if we don't have a config
+        // let's just assume something went terribly wrong and use our
+        // default title. Its easier then guarding on the config existing
+        // in every case for something so unlikely.
+        //
         // Without a config, just return the plain title (`:515-518`).
         let Some(config) = config else {
             // log.warn("config unavailable for computed title, likely bug", .{});
@@ -377,11 +425,14 @@ impl Tab {
         };
         let config = config.get();
 
+        // Use an allocator to build up our string as we write it.
         let mut buf = String::new();
+        // If our bell is ringing, then we prefix the bell icon to the title.
         // Bell prefix (`:525-527`).
         if bell_ringing && config.bell_features.title {
             buf.push_str("\u{1f514} ");
         }
+        // If we're zoomed, prefix with the magnifying glass emoji.
         // Zoom prefix (`:530-532`).
         if zoomed {
             buf.push_str("\u{1f50d} ");
@@ -454,6 +505,13 @@ fn action_prompt_tab_title(_a: &gio::SimpleAction, _args: Option<&glib::Variant>
 
 /// PORTS: `tab.zig:443-458` `actionRingBell`.
 fn action_ring_bell(_a: &gio::SimpleAction, _args: Option<&glib::Variant>, this: &Tab) {
+    // Future note: I actually don't like this logic living here at all.
+    // I think a better approach will be for the ring bell action to
+    // specify its sending surface and then do all this in the window.
+
+    // If the page is selected already we don't mark it as needing
+    // attention. We only want to mark unfocused pages. This will then
+    // clear when the page is selected.
     let Some(page) = this.get_tab_page() else {
         return;
     };
@@ -463,6 +521,8 @@ fn action_ring_bell(_a: &gio::SimpleAction, _args: Option<&glib::Variant>, this:
     page.set_needs_attention(true);
 }
 
+/// Select the next tab page.
+///
 /// PORTS: `tab.zig:460-468` `actionNextPage`.
 fn action_next_page(_a: &gio::SimpleAction, _args: Option<&glib::Variant>, this: &Tab) {
     if let Some(tab_view) = this.get_tab_view() {
@@ -470,6 +530,8 @@ fn action_next_page(_a: &gio::SimpleAction, _args: Option<&glib::Variant>, this:
     }
 }
 
+/// Select the previous tab page.
+///
 /// PORTS: `tab.zig:470-478` `actionPreviousPage`.
 fn action_previous_page(_a: &gio::SimpleAction, _args: Option<&glib::Variant>, this: &Tab) {
     if let Some(tab_view) = this.get_tab_view() {

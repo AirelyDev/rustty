@@ -62,6 +62,16 @@ pub enum Config {
 
 /// Backend implementations. A backend is responsible for owning the pty
 /// behavior and providing read/write capabilities.
+///
+/// `Backend` has no `childExitedAbnormally`: as in the reference, where the
+/// method delegates to one `termio.Exec` does not have, calling it does not
+/// compile (S212-F3).
+///
+/// ```compile_fail,E0599
+/// fn call(b: &mut rustty_termio::Backend) {
+///     let _ = b.childExitedAbnormally(todo!(), todo!(), 1u32, 0u64);
+/// }
+/// ```
 //
 // PORT NOTE: reference `pub const Backend = union(Kind)`. Each method is the
 // reference's exhaustive `switch (self.*)` delegation.
@@ -146,12 +156,15 @@ impl Backend {
         }
     }
 
-    // PORT NOTE (Zig lazy compilation): the reference delegates to
-    // `exec.childExitedAbnormally(...)` — a method `termio.Exec` does NOT
+    // PORT NOTE (Zig lazy compilation, S212-F3): the reference delegates to
+    // `exec.childExitedAbnormally(...)`, a method `termio.Exec` does NOT
     // declare at this reference version; `Backend.childExitedAbnormally` has
-    // no callers, so Zig never instantiates (or type-checks) it. The
-    // delegation is preserved verbatim; the marker fires if a future caller
-    // appears before the reference regrows the Exec method:
+    // no callers, so Zig never analyses it, and any caller would be a compile
+    // error. The port therefore has NO such method, which gives a Rust caller
+    // the same compile error (see the `compile_fail` example on [`Backend`]).
+    // CORRECTION (S212-F3): it used to be a public method whose body was
+    // `unimplemented!()`, which compiled and panicked at run time. The
+    // reference is UPSTREAM-DEFECTS.md UD206 (latent). Preserved verbatim:
     //
     // pub fn childExitedAbnormally(
     //     self: *Backend,
@@ -169,20 +182,6 @@ impl Backend {
     //         ),
     //     }
     // }
-    pub fn childExitedAbnormally(
-        &mut self,
-        gpa: Allocator,
-        t: &mut Terminal,
-        exit_code: u32,
-        runtime_ms: u64,
-    ) -> Result<(), Error> {
-        let _ = (gpa, t, exit_code, runtime_ms);
-        match self {
-            Backend::Exec(_exec) => unimplemented!(
-                "Backend.childExitedAbnormally: uninstantiated in the reference (Zig lazy compilation; termio.Exec declares no childExitedAbnormally)"
-            ),
-        }
-    }
 
     /// Get information about the process(es) attached to the backend. Returns
     /// `null` if there was an error getting the information or the information

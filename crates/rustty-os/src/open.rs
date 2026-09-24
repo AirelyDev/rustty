@@ -50,6 +50,8 @@ pub enum OpenError {
     /// producer-controlled terminal output to `open`.
     UnsafeOSC8Link,
     Spawn(std::io::Error),
+    /// `std.Thread.spawn`'s error: the reaper thread could not be created.
+    ThreadSpawn(std::io::Error),
 }
 
 /// Open a URL in the default handling application.
@@ -91,7 +93,14 @@ pub fn open(kind: Kind, url: &[u8]) -> Result<(), OpenError> {
         {
             let mut c = std::process::Command::new("rundll32");
             c.arg("url.dll,FileProtocolHandler");
-            c.arg(crate::path::os_str_from_bytes(url));
+            // (S112-F4: a URL that is not WTF-8 is spawn's error.InvalidWtf8,
+            // not an empty argument.)
+            c.arg(crate::path::os_string_from_bytes(url).ok_or_else(|| {
+                OpenError::Spawn(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "InvalidWtf8",
+                ))
+            })?);
             c
         }
         #[cfg(target_os = "macos")]
@@ -157,13 +166,30 @@ pub fn open(kind: Kind, url: &[u8]) -> Result<(), OpenError> {
 
     // Spawn the process on our same thread so we can detect failure
     // quickly.
-    let mut child = exe.spawn().map_err(OpenError::Spawn)?;
+    let child = exe.spawn().map_err(OpenError::Spawn)?;
 
-    // Create a thread that handles collecting output and reaping the process.
-    // This is done in a separate thread because SOME open implementations block
-    // and some do not. It's easier to just spawn a thread to handle this so
-    // that we never block.
-    let thread = std::thread::spawn(move || openThread(child.stderr.take(), child));
+    // const thread = try std.Thread.spawn(.{}, openThread, .{ global.io(), exe });
+    // thread.detach();
+    spawn_open_thread(std::thread::Builder::new(), child)
+}
+
+/// `const thread = try std.Thread.spawn(.{}, openThread, .{ global.io(), exe });
+/// thread.detach();` — the reaper thread for a spawned opener.
+//
+// PORT NOTE (S112-F7): the reference's `try` returns the spawn error to the
+// caller. This used `std::thread::spawn`, which panics when the thread cannot
+// be created; `Builder::spawn` returns the error, carried as
+// `OpenError::ThreadSpawn`. The builder is a parameter so a test can hand in
+// one that cannot spawn; `open` always passes `Builder::new()`, the reference's
+// default `.{}` spawn config.
+fn spawn_open_thread(
+    builder: std::thread::Builder,
+    mut child: std::process::Child,
+) -> Result<(), OpenError> {
+    let stderr = child.stderr.take();
+    let thread = builder
+        .spawn(move || openThread(stderr, child))
+        .map_err(OpenError::ThreadSpawn)?;
     drop(thread);
     Ok(())
 }
@@ -194,32 +220,192 @@ mod osc8_tests {
 
 #[allow(non_snake_case)]
 fn openThread(stderr: Option<std::process::ChildStderr>, exe_: std::process::Child) {
-    use std::io::BufRead;
-
     // Copy the exe so it is non-const. This is necessary because wait()
     // requires a mutable reference and we can't have one as a thread
     // param.
     let mut exe = exe_;
     if let Some(stderr) = stderr {
-        let mut reader = std::io::BufReader::new(stderr);
-        loop {
-            let mut line = Vec::new();
-            match reader.read_until(b'\n', &mut line) {
-                Ok(0) => break,
-                Ok(_) => {
-                    // Trim the trailing '\n' to match `takeDelimiterExclusive('\n')`.
-                    if line.last() == Some(&b'\n') {
-                        line.pop();
-                    }
-                    log_warn(&format!("open stderr={}", String::from_utf8_lossy(&line)));
-                }
-                Err(_) => break,
-            }
-        }
+        log_stderr_lines(stderr, |line| {
+            log_warn(&format!("open stderr={}", String::from_utf8_lossy(line)));
+        });
     }
     let _ = exe.wait();
 }
 
+/// The stderr loop of `openThread`: one `log` call per line, a line longer
+/// than the 256-byte buffer logged in 256-byte pieces.
+//
+// var buffer: [256]u8 = undefined;
+// var stream = stderr.readerStreaming(io, &buffer);
+// const reader = &stream.interface;
+// while (true) {
+//     const line = reader.takeDelimiterExclusive('\n') catch |outer| switch (outer) {
+//         error.EndOfStream => break,
+//         error.ReadFailed => break,
+//         error.StreamTooLong => reader.take(buffer.len) catch |inner| switch (inner) {
+//             error.ReadFailed => break,
+//             error.EndOfStream => break,
+//         },
+//     };
+//     log.warn("open stderr={s}", .{line});
+// }
+//
+// PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD200. In Zig 0.16,
+// `takeDelimiterExclusive` advances "up to (but not past) the delimiter"
+// (`std/Io/Reader.zig:852-876`), so after the first line every call finds the
+// same `'\n'` at the read position and returns an empty slice: the loop logs
+// `open stderr=` forever, never reads further, and never reaches `exe.wait()`,
+// so the opener is never reaped and the thread spins. Reachable whenever the
+// opener (`open`, `xdg-open`) writes anything to stderr followed by a newline.
+// Measured with the reference loop under zig 0.16.0 on "hello\nworld\n": line
+// 0 is "hello", lines 1.. are empty. The port does what the loop is for: it
+// consumes the delimiter, so each line is logged once, and it keeps the
+// 256-byte buffer's `StreamTooLong => take(buffer.len)` chunking of a long
+// line. (S112-F7: the port had instead logged whole lines of any length.)
+fn log_stderr_lines(stderr: impl std::io::Read, mut log: impl FnMut(&[u8])) {
+    use std::io::BufRead;
+
+    const BUFFER_LEN: usize = 256;
+    let mut reader = std::io::BufReader::with_capacity(BUFFER_LEN, stderr);
+    // `BufReader` refills only when EMPTY; the reference's reader compacts and
+    // tops up a partial buffer before giving up on a delimiter. `pending`
+    // holds the unfinished line so that a line which straddles two reads is
+    // still split at 256 bytes from its own start.
+    let mut pending: Vec<u8> = Vec::with_capacity(BUFFER_LEN);
+    // (`Err` is error.ReadFailed => break.)
+    while let Ok(available) = reader.fill_buf() {
+        if available.is_empty() {
+            // error.EndOfStream: `takeDelimiterExclusive` returns what is left
+            // when it is not empty, and EndOfStream otherwise.
+            if !pending.is_empty() {
+                log(&pending);
+            }
+            break;
+        }
+
+        let room = BUFFER_LEN - pending.len();
+        let window = &available[..available.len().min(room)];
+        if let Some(i) = window.iter().position(|&b| b == b'\n') {
+            pending.extend_from_slice(&window[..i]);
+            reader.consume(i + 1);
+            log(&pending);
+            pending.clear();
+        } else {
+            pending.extend_from_slice(window);
+            let n = window.len();
+            reader.consume(n);
+            if pending.len() == BUFFER_LEN {
+                // error.StreamTooLong => reader.take(buffer.len)
+                log(&pending);
+                pending.clear();
+            }
+        }
+    }
+}
+
 fn log_warn(msg: &str) {
     eprintln!("[warn] [{LOG_SCOPE}] {msg}");
+}
+
+#[cfg(all(test, unix))]
+mod open_thread_tests {
+    use super::*;
+
+    /// Run `log_stderr_lines` over `input` and return the logged lines. More
+    /// than 64 lines means the loop is not consuming its input (UD200: the
+    /// reference logs an empty line forever), so it panics instead of hanging.
+    fn lines_of(input: &[u8]) -> Vec<Vec<u8>> {
+        let mut out: Vec<Vec<u8>> = Vec::new();
+        log_stderr_lines(input, |line| {
+            assert!(
+                out.len() < 64,
+                "stderr loop does not advance past a delimiter"
+            );
+            out.push(line.to_vec());
+        });
+        out
+    }
+
+    /// S112-F7 / UD200: every line is logged once (the delimiter is consumed),
+    /// a line longer than the 256-byte buffer is logged in 256-byte pieces, and
+    /// a last line with no newline is still logged.
+    #[test]
+    fn stderr_lines_are_logged_once_each_in_256_byte_pieces() {
+        let mut input = b"hello\nworld\n".to_vec();
+        input.extend(std::iter::repeat_n(b'x', 300));
+        input.extend_from_slice(b"\nend");
+        assert_eq!(
+            lines_of(&input),
+            vec![
+                b"hello".to_vec(),
+                b"world".to_vec(),
+                vec![b'x'; 256],
+                vec![b'x'; 44],
+                b"end".to_vec(),
+            ]
+        );
+    }
+
+    /// The buffer boundary: a 255-byte line plus its newline fits the 256-byte
+    /// buffer and is one line; a 256-byte line fills it with no newline, so it
+    /// is taken whole and the newline after it ends an empty line.
+    #[test]
+    fn stderr_line_at_the_buffer_boundary() {
+        let mut input = vec![b'a'; 255];
+        input.push(b'\n');
+        assert_eq!(lines_of(&input), vec![vec![b'a'; 255]]);
+
+        let mut input = vec![b'b'; 256];
+        input.push(b'\n');
+        assert_eq!(lines_of(&input), vec![vec![b'b'; 256], Vec::new()]);
+
+        assert_eq!(lines_of(b""), Vec::<Vec<u8>>::new());
+        assert_eq!(lines_of(b"\n\n"), vec![Vec::new(), Vec::new()]);
+    }
+
+    /// Whether `pid` still exists, as a process or as an unreaped zombie.
+    fn exists(pid: libc::pid_t) -> bool {
+        unsafe { libc::kill(pid, 0) == 0 }
+    }
+
+    /// UD200 end to end: an opener that writes lines to stderr is reaped by the
+    /// thread `open` spawns, so the stderr loop ended and `wait` was reached.
+    /// Only that thread waits on the child, so the pid going away proves it.
+    #[test]
+    fn open_thread_reaps_an_opener_that_writes_stderr() {
+        let child = std::process::Command::new("/bin/sh")
+            .args(["-c", "printf 'one\\ntwo\\n' >&2"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn /bin/sh");
+        let pid = child.id() as libc::pid_t;
+        spawn_open_thread(std::thread::Builder::new(), child).expect("reaper thread");
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while exists(pid) && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(!exists(pid), "the opener was not reaped within 10 s");
+    }
+
+    /// S112-F7: a reaper thread that cannot be created is an error, not a
+    /// panic. No stack as large as half the address space can be mapped.
+    #[test]
+    fn open_thread_spawn_failure_is_an_error() {
+        let child = std::process::Command::new("/usr/bin/true")
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn /usr/bin/true");
+        let pid = child.id() as libc::pid_t;
+        let builder = std::thread::Builder::new().stack_size(usize::MAX / 2);
+        let ret = spawn_open_thread(builder, child);
+        assert!(
+            matches!(ret, Err(OpenError::ThreadSpawn(_))),
+            "expected ThreadSpawn, got {ret:?}"
+        );
+        // The failed spawn dropped the child without waiting; reap it here.
+        let mut status = 0;
+        assert_eq!(unsafe { libc::waitpid(pid, &mut status, 0) }, pid);
+    }
 }

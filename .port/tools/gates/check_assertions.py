@@ -290,7 +290,17 @@ def run(args):
         G.emit(G.RED, f"unknown crate '{args.crate}' (not in crate_map)")
         return 2
 
+    # R4 relocations (_gatelib.RELOCATIONS): a stale entry is BLOCKED up front.
+    try:
+        G.check_relocations(crates)
+    except G.Blocked as b:
+        G.emit(G.BLOCKED_STATE, str(b))
+        return 3
+
     grand_rust = 0
+    # Workspace total counts each test's assertions ONCE by (file, offset): a
+    # relocated test is also scanned by its host crate.
+    seen_tests = set()
     grand_ref = 0
     compared_pairs = 0
     named_ref_tests = 0
@@ -312,11 +322,16 @@ def run(args):
     contract_gone, _rejects = G.contract_deletions()
     deleted_notes = []
     for crate in crates:
-        rust_per_test = G.scan_rust_test_assertions(crate)
+        located = G.scan_rust_test_assertions_located(crate)
+        rust_per_test = {}
+        for path, off, name, count in located:
+            rust_per_test.setdefault(name, []).append(count)
+            if (path, off) not in seen_tests:
+                seen_tests.add((path, off))
+                grand_rust += count
         rust_total = sum(sum(counts) for counts in rust_per_test.values())
         ref_crate_total = ref_total.get(crate, 0)
         claimed_done = G.is_claimed_done(crate)
-        grand_rust += rust_total
         grand_ref += ref_crate_total
 
         # Resolve every named reference test to its ported fn(s) (L1-L5).
@@ -450,6 +465,91 @@ def run(args):
     return 0
 
 
+def relocation_self_test(tmp, gates, inv, crate_src, invoke):
+    """R4 relocation arms (S-8c). `demo` ports 'Demo: case two' in a HOST crate
+    file its relocation names; the host scans that file too, so the workspace
+    assertion total must count it once."""
+    ok = True
+    summary = {
+        "total_assertions": 4,
+        "crate_map": {
+            "demo": {"files": [{"file": "demo.zig", "test_blocks": 2}],
+                     "test_blocks": 2, "file_count": 1},
+            "host": {"files": [{"file": "host.zig", "test_blocks": 1}],
+                     "test_blocks": 1, "file_count": 1},
+        },
+    }
+    with open(os.path.join(inv, "tests-summary.json"), "w") as fh:
+        json.dump(summary, fh)
+    with open(os.path.join(inv, "tests.jsonl"), "w") as fh:
+        for f, nm, n in (("demo.zig", "Demo: case one", 2),
+                         ("demo.zig", "Demo: case two", 1),
+                         ("host.zig", "Host: own", 1)):
+            fh.write(json.dumps({"file": f, "name": nm, "anonymous": False,
+                                 "assertion_count": n}) + "\n")
+    host_src = os.path.join(tmp, "crates", "rustty-host", "src")
+    os.makedirs(host_src, exist_ok=True)
+    with open(os.path.join(host_src, "lib.rs"), "w") as fh:
+        fh.write("//! host\n//! PORT STATUS: done\nmod moved;\n"
+                 "#[test]\nfn host_own() { assert!(true); }\n")
+    moved = os.path.join(host_src, "moved.rs")
+
+    def write_moved(text):
+        with open(moved, "w") as fh:
+            fh.write(text)
+
+    with open(os.path.join(crate_src, "lib.rs"), "w") as fh:
+        fh.write("//! demo\n//! PORT STATUS: done\n#[test]\n"
+                 "fn demo_case_one() { assert!(true); assert!(true); }\n")
+    write_moved("#[test]\nfn demo_case_two() { assert!(true); }\n")
+    reloc = {"demo": ({"path": "crates/rustty-host/src/moved.rs"},)}
+
+    # (h) without the relocation the crate total falls short => RED
+    G.selftest_install_gatelib(gates, {})
+    r = invoke()
+    arm = r.returncode != 0 and "WEAKENED: demo::<crate-total> ref=3 rust=2" in r.stdout
+    print(f"[h] relocated test, no relocation -> exit {r.returncode} "
+          f"(expect non-zero, crate total 2<3): {arm}")
+    ok &= arm
+
+    # (i) with it: GREEN, and the workspace total counts the moved test ONCE
+    # (demo 3 + host 2 per crate, but 4 distinct assertions, never 5).
+    G.selftest_install_gatelib(gates, reloc)
+    r = invoke()
+    arm = r.returncode == 0 and "assertions rust=4 ref=4" in r.stdout
+    print(f"[i] same + relocation -> exit {r.returncode} (expect 0), global "
+          f"counted once (rust=4): {arm}")
+    ok &= arm
+
+    # (j) with the relocation, a weakened relocated test is still caught
+    write_moved("#[test]\nfn demo_case_two() { let _ = 1; }\n")
+    r = invoke()
+    arm = r.returncode != 0 and "WEAKENED: demo::Demo: case two ref=1 rust=0" in r.stdout
+    print(f"[j] relocation present, case two weakened -> exit {r.returncode} "
+          f"(expect non-zero): {arm}")
+    ok &= arm
+
+    # (k) an item-scoped relocation counts ONLY its items
+    write_moved("#[test]\nfn demo_case_two() { assert!(true); }\n\n"
+                "#[cfg(test)]\nmod kept {\n    #[test]\n    fn other() {}\n}\n")
+    G.selftest_install_gatelib(gates, {"demo": (
+        {"path": "crates/rustty-host/src/moved.rs", "items": (r"^mod kept\b",)},)})
+    r = invoke()
+    arm = r.returncode != 0 and "WEAKENED: demo::<crate-total> ref=3 rust=2" in r.stdout
+    print(f"[k] item-scoped relocation excludes the out-of-item test -> exit "
+          f"{r.returncode} (expect non-zero): {arm}")
+    ok &= arm
+
+    # (l) a relocation path that does not exist => BLOCKED (exit 3)
+    G.selftest_install_gatelib(gates, {"demo": ({"path": "crates/gone.rs"},)})
+    r = invoke()
+    arm = r.returncode == 3 and "BLOCKED" in r.stdout
+    print(f"[l] relocation path missing -> exit {r.returncode} (expect 3): {arm}")
+    ok &= arm
+    G.selftest_install_gatelib(gates)
+    return ok
+
+
 def self_test():
     import tempfile
     import subprocess
@@ -577,6 +677,8 @@ def self_test():
     print(f"[g] done injected 1+2 with 5 .unwrap() pads -> exit {r.returncode} "
           f"(expect non-zero), undiluted WEAKENED caught: {caught}")
     ok &= (r.returncode != 0 and caught)
+
+    ok &= relocation_self_test(tmp, gates, inv, crate_src, invoke)
 
     shutil.rmtree(tmp, ignore_errors=True)
     ok &= drift_self_test()

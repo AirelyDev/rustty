@@ -29,6 +29,46 @@
 //! NOTE: `terminal/size.zig` is NOT in this crate — its types are hoisted into
 //! `rustty-render-types` (ambiguity A1) and imported from `rustty_render_types`.
 //! `terminal/c/` is NOT here either — that is the `rustty-vt-c` crate.
+//!
+//! ## `lib_vt.zig`
+//!
+//! The reference's librustty-vt module root, `src/lib_vt.zig`, whose public
+//! surface this crate root carries (its C-library half is `rustty-vt-c`). Its
+//! module doc:
+//!
+//! This is the public API of the rustty-vt Zig module.
+//!
+//! WARNING: The API is not guaranteed to be stable.
+//!
+//! The functionality is extremely stable, since it is extracted
+//! directly from Rustty which has been used in real world scenarios
+//! by thousands of users for years. However, the API itself (functions,
+//! types, etc.) may change without warning. We're working on stabilizing
+//! this in the future.
+
+// lib_vt.zig:16-20:
+// The public API below reproduces a lot of terminal/main.zig but
+// is separate because (1) we need our root file to be in `src/`
+// so we can access other directories and (2) we may want to withhold
+// parts of `terminal` that are not ready for public consumption
+// or are too Rustty-internal.
+//
+// PORT NOTE: in rustty the two surfaces are one crate root (this file):
+// `terminal/main.zig`'s re-exports below, plus `lib_vt.zig`'s extra `input`/
+// `unicode` namespaces. `lib_vt.zig`'s `TinyIo` re-export (a Zig `std.Io`
+// implementation) is a NON-PORT (`.port/phase-4/NON_PORTS.md`, TinyIo row).
+// Its reference doc (`lib_vt.zig:41-49`), quoted:
+//
+//   /// A tiny, blocking `std.Io` implementation optimized for binary size.
+//   ///
+//   /// Constructing a `Terminal` requires a `std.Io` for features that touch
+//   /// the filesystem (e.g. Kitty graphics file transmission). Embedders that
+//   /// don't have their own `Io` can use `TinyIo` (e.g.
+//   /// `(TinyIo.init).io()`) instead of `std.Io.Threaded` to avoid linking
+//   /// Threaded's full vtable (networking, process spawning, async
+//   /// machinery, etc.), which is worth roughly 110KB of binary size. See
+//   /// the TinyIo docs for the exact tradeoffs.
+//   pub const TinyIo = @import("lib/TinyIo.zig");
 
 // const charsets = @import("charsets.zig");
 pub mod charsets;
@@ -134,6 +174,25 @@ pub use rustty_render_types::term_size as size;
 // pub const size_report = @import("size_report.zig");
 pub mod size_report;
 // pub const sys = @import("sys.zig");
+//
+// lib_vt.zig re-exports it (`pub const sys = terminal.sys;`) with this doc:
+//
+// System interface for the terminal package.
+//
+// This module provides runtime-swappable function pointers for operations
+// that depend on external implementations. Embedders can use this to
+// provide or override default behaviors. These must be set at startup
+// before any terminal functionality is used.
+//
+// This lets librustty-vt have no runtime dependencies on external
+// libraries, while still allowing rich functionality that may require
+// external libraries (e.g. image decoding or regular expresssions).
+//
+// Setting these will enable various features of the terminal package.
+// For example, setting a PNG decoder will enable support for PNG images in
+// the Kitty Graphics Protocol.
+//
+// Additional functionality will be added here over time as needed.
 pub mod sys;
 // PORT NOTE: `terminal/Tabstops.zig` has no top-level re-export in `main.zig`
 // (it is an internal sibling imported by `Terminal.zig` for tab handling).
@@ -162,6 +221,14 @@ pub mod fraction;
 // no `main.zig` surface entry; ported here as a leaf sibling. The call-site
 // switch is a later wave.
 pub mod fastprint;
+
+// PORT NOTE: Zig's `std.fmt.parseInt`, which the terminal parsers call on
+// untrusted input and which Rust's `str::parse` does not match (digit
+// separators, `-0` for unsigned types, error kinds), is `rustty_zigstd::fmt`
+// (the one port; NEW-FINDINGS N120/N150). This module holds only the UD141 `_`
+// filter the wire-protocol parsers run before it. No reference file; the
+// reference calls the std function directly.
+pub(crate) mod protocol_int;
 
 /// Unicode utilities that match the terminal's text layout semantics.
 pub mod unicode {
@@ -208,6 +275,10 @@ pub mod string_map;
 // pub const Style = style.Style;
 // pub const Terminal = @import("Terminal.zig");
 pub mod terminal;
+// PORT NOTE (parity tail S7-1): Rust-only glue, the runtime allocator handle
+// that maps `std.mem.Allocator` (`alloc.rs`; design
+// `.port/parity-closure/S7-ALLOCATOR-DESIGN.md`).
+pub mod alloc;
 // PORT NOTE: `terminal/UTF8Decoder.zig` has no top-level re-export in `main.zig`
 // (it is an internal sibling imported by the stream path). Declared here so the
 // stream can reference it; ported as a leaf in this sub-batch.
@@ -332,6 +403,15 @@ pub mod options;
 // are ported here: input/{key, key_encode, mouse, mouse_encode, paste}.zig.
 // PORT NOTE: these are grouped under an `input` module to mirror the reference
 // `src/input/` directory.
+//
+// lib_vt.zig's `pub const input = struct { ... }`:
+//
+// Terminal-specific input encoding is also part of librustty-vt.
+//     // We have to be careful to only import targeted files within
+//     // the input package because the full package brings in too many
+//     // other dependencies.
+//
+// (the port carries only the VT input slice in this crate for the same reason.)
 // ---------------------------------------------------------------------------
 pub mod input;
 

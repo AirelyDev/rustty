@@ -42,13 +42,39 @@ pub struct Entry {
 }
 
 /// Errors produced by [`get`].
+//
+// PORT NOTE (S112-F5): the reference's inferred set carries each failing
+// call's own error through its `try`: `Pty.open`, `FlatpakHostCommand.spawn`
+// and `.wait`, and `posix.read`. The first three were all reported as
+// `OutOfMemory`; they now keep their errors (`PtyOpen`, `HostCommand`).
 #[derive(Debug)]
 pub enum Error {
-    /// An OS error encountered while shelling out in the flatpak path.
+    /// An OS error encountered while shelling out in the flatpak path
+    /// (`posix.read` on the pty master).
     Os(i32),
     /// Allocation/format error in the flatpak path.
     OutOfMemory,
+    /// `try Pty.open(.{})` in the flatpak path.
+    #[cfg(all(feature = "flatpak", not(windows)))]
+    PtyOpen(crate::pty::PosixPtyError),
+    /// `try cmd.spawn(alloc)` / `try cmd.wait()` in the flatpak path.
+    #[cfg(feature = "flatpak")]
+    HostCommand(crate::flatpak::Error),
 }
+
+// PORT NOTE (S112-F5): the reference gates the flatpak host-command block on
+// `build_config.flatpak` alone; the port also needs this crate's `flatpak`
+// feature, which compiles the real `FlatpakHostCommand` in. The two must never
+// differ (rustty-termio's `flatpak` feature turns both on, and
+// rustty-build-config's Cargo.toml says so): a build with
+// `build_config::flatpak()` true but no host command would silently skip the
+// block, neither logging "this build doesn't contain flatpak support" nor
+// asking the host. This makes that build fail instead.
+#[cfg(all(not(windows), not(feature = "flatpak")))]
+const _: () = assert!(
+    !build_config::flatpak(),
+    "rustty-build-config's `flatpak` needs rustty-os's `flatpak` feature (enable rustty-termio/flatpak)"
+);
 
 /// Get the passwd entry for the currently executing user.
 #[cfg(not(windows))]
@@ -96,23 +122,37 @@ pub fn get() -> Result<Entry, Error> {
                 // some operating systems (NixOS tested) don't set the PATH for various
                 // utilities properly until we get a login shell.
                 use crate::pty::Pty;
-                let mut pty = Pty::open(Default::default()).map_err(|_| Error::OutOfMemory)?;
+                // var pty = try Pty.open(.{});
+                // defer pty.deinit();
+                //
+                // PORT NOTE (S112-F5): the `defer` closes the pty on EVERY exit,
+                // including the `try`s below. This called `deinit` only after the
+                // read loop, so a failing spawn, wait or read leaked both fds; the
+                // guard's `Drop` is the `defer`.
+                struct PtyDeinit(Pty);
+                impl Drop for PtyDeinit {
+                    fn drop(&mut self) {
+                        self.0.deinit();
+                    }
+                }
+                let pty = PtyDeinit(Pty::open(Default::default()).map_err(Error::PtyOpen)?);
+                let pty = &pty.0;
                 // PORT NOTE: the reference is a struct literal with the remaining
                 // fields defaulted. `FlatpakHostCommand`'s state fields are private
                 // (they are the `state_mutex`-guarded internals), so the Rust map is
                 // `Default::default()` + field assignment — same resulting value.
                 let mut cmd = crate::flatpak::FlatpakHostCommand::default();
                 cmd.argv = vec![
-                    "/bin/sh".to_string(),
-                    "-l".to_string(),
-                    "-c".to_string(),
-                    format!("getent passwd {}", slice_to_str(pw.pw_name),),
+                    b"/bin/sh".to_vec(),
+                    b"-l".to_vec(),
+                    b"-c".to_vec(),
+                    format!("getent passwd {}", slice_to_str(pw.pw_name),).into_bytes(),
                 ];
                 cmd.stdin = pty.slave;
                 cmd.stdout = pty.slave;
                 cmd.stderr = pty.slave;
-                cmd.spawn().map_err(|_| Error::OutOfMemory)?;
-                cmd.wait().map_err(|_| Error::OutOfMemory)?;
+                cmd.spawn().map_err(Error::HostCommand)?;
+                cmd.wait().map_err(Error::HostCommand)?;
 
                 // Once started, we can close the child side. We do this after
                 // wait right now but that is fine too. This lets us read the
@@ -148,8 +188,6 @@ pub fn get() -> Result<Entry, Error> {
 
                     output
                 };
-
-                pty.deinit();
 
                 // Shell and home are the last two entries
                 let trimmed = trim_right(&output, b" \r\n");
@@ -268,11 +306,8 @@ mod tests {
 
     #[test]
     #[cfg_attr(miri, ignore)] // real-OS getpwuid_r syscall
+    #[cfg_attr(windows, ignore = "SkipZigTest on Windows (R14)")]
     fn passwd_entry() {
-        if cfg!(windows) {
-            return; // error.SkipZigTest
-        }
-
         // We should be able to get an entry
         let entry = get().unwrap();
         assert!(entry.shell.is_some());

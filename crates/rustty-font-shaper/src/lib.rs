@@ -8,17 +8,39 @@
 //! shaping, so it may depend on both `rustty-vt` and `rustty-font` plus the
 //! `-sys`/objc2 backends.
 //!
-//! PORT STATUS: ported (the FULL D1 shaper tier — 110 tests; the old
+//! PORT STATUS: ported (the FULL D1 shaper tier — the test count depends on the
+//! backend built, see the G-FONTBACKEND lane; "110 tests" here was stale by
+//! S-14; the old
 //! "F3 — shape.zig lands later" sentence was stale doc drift, realigned per
 //! VALIDATION_REPORT.md §3b): `face.zig` (the backend selector) + the
 //! `face/freetype.zig` and `face/coretext.zig` (macOS) backend faces,
 //! `shape.zig` + the `shaper/` HarfBuzz framework (`run`/`feature`/`Cache`/
 //! `noop`), `discovery.zig` (CoreText discoverer + `Descriptor`),
 //! `Collection.zig`/`CodepointResolver.zig`, and `SharedGrid.zig`/
-//! `SharedGridSet.zig`. Honest residual (macOS-first locked fork — DEFERRALS.md
-//! "rustty-font-shaper"): the 3 Fontconfig `DeferredFace` arms
-//! (`deferred_face.rs`, Linux backend) + the non-macOS Fontconfig discovery
-//! half, and `face/web_canvas.zig` (wasm browser face, unported).
+//! `SharedGridSet.zig`, plus the Fontconfig `DeferredFace` arms and discoverer
+//! (Linux), the Windows arms, and the wasm `face/web_canvas.zig` +
+//! `shaper/web_canvas.zig` backends. (CORRECTION, 2026-09-24, parity tail
+//! S-8a: this header still listed the Fontconfig arms/discovery and
+//! `face/web_canvas.zig` as an unported residual; all three are ported —
+//! `deferred_face.rs` `fontconfig_payload`, `discovery.rs` `fontconfig_impl`,
+//! `face/web_canvas.rs`.)
+//!
+//! The backend is a real build option (S-14, closing NEW-FINDINGS N266):
+//! `-Dfont-backend` is `rustty-build-config`'s `font-backend-*` feature set,
+//! `options::BACKEND` and every `switch (options.backend)` selector are keyed on
+//! the `rustty_font_backend` cfg `build.rs` derives from it, and the non-default
+//! arms are live — `loadCoreTextFreetype` (`coretext_freetype`), the CoreText
+//! face's `harfbuzz_shaper` arms (`coretext_harfbuzz`), the noop shaper
+//! (`coretext_noshape`) and the no-discovery arms (`freetype`). Built and
+//! tested on macOS for all seven native backends — including
+//! `fontconfig_freetype` and `freetype_windows`, with host fixtures (the
+//! G-FONTBACKEND lane); type-checked, not run, for Linux and Windows
+//! `freetype`. Not built: the CoreText backends off Darwin (no CoreText),
+//! `fontconfig_freetype` on Windows (OPEN, N286), and a native `web_canvas`
+//! (no feature). The FreeType arm of the reference's never-run `face metrics`
+//! test holds stale values (N285 / UD281; faithful). (CORRECTION, S-14b: this
+//! listed `fontconfig_freetype` on macOS and `freetype_windows` off Windows as
+//! not built.)
 //!
 //! Carved leaves-first (R1: every line/comment/test{} ported as the crate is
 //! carved, under the acyclicity gate per R4).
@@ -28,6 +50,11 @@
 // production library. See the module header.
 #[cfg(test)]
 mod log_capture;
+
+// RUSTTY-ONLY, TEST-ONLY (task T-F2): re-run one test in a fresh child process
+// (CoreText's process-wide font state). See the module header.
+#[cfg(all(test, target_os = "macos"))]
+mod test_child;
 
 /// RUSTTY-ONLY (no oracle analogue): install `rustty-os`'s wasm `log::Log`
 /// backend for the wasm artifacts this crate is linked into.
@@ -156,31 +183,29 @@ mod install_contract_tests {
 
 // RUSTTY-ONLY guard (no oracle analogue; the reference selects its font backend
 // by build option and a mismatched one simply fails to compile). The
-// `freetype`/`harfbuzz`/`fontconfig` features exist so an EMBEDDER on macOS can
-// drop the vendored-C font stack from its resolve graph — `Backend::default()` is
-// `.coretext` there, which needs none of it. On every other native target the
-// default backend DOES need it (`.fontconfig_freetype` on Linux/BSD,
-// `.freetype_windows` on Windows), so turning the features off would otherwise
-// produce a cascade of missing-module errors instead of one honest message.
-#[cfg(all(
-    not(target_os = "macos"),
-    not(target_arch = "wasm32"),
-    not(all(feature = "freetype", feature = "harfbuzz"))
-))]
+// `freetype`/`harfbuzz`/`fontconfig` features exist so an EMBEDDER can drop the
+// vendored-C font stack from its resolve graph when the selected backend needs
+// none of it (`.coretext`, the macOS default, or `.coretext_noshape`). A backend
+// that DOES need it (`hasFreetype()`/`hasHarfbuzz()`/`hasFontconfig()`: every
+// non-macOS default, and `-Dfont-backend=coretext_freetype`/`coretext_harfbuzz`
+// on macOS) would otherwise produce a cascade of missing-module errors instead
+// of one honest message. `build.rs` refuses the same combinations first; these
+// keep the rule visible at the crate root. (S-14: keyed on the backend cfgs; they
+// were keyed on the target OS while the option was folded to its default.)
+#[cfg(all(rustty_font_has_freetype, not(feature = "freetype")))]
 compile_error!(
-    "rustty-font-shaper: this target's default font backend needs FreeType and \
-     HarfBuzz (`Backend::default()` is `.fontconfig_freetype` off Windows, \
-     `.freetype_windows` on Windows). The `freetype`/`harfbuzz`/`fontconfig` \
-     features may only be turned off for a macOS build, whose default backend is \
-     `.coretext`."
+    "rustty-font-shaper: the selected font backend has FreeType (`hasFreetype()`), \
+     which needs the `freetype` feature."
 );
-#[cfg(all(
-    not(any(target_os = "macos", target_os = "windows", target_arch = "wasm32")),
-    not(feature = "fontconfig")
-))]
+#[cfg(all(rustty_font_has_harfbuzz, not(feature = "harfbuzz")))]
 compile_error!(
-    "rustty-font-shaper: this target's default font backend is \
-     `.fontconfig_freetype`, which needs the `fontconfig` feature."
+    "rustty-font-shaper: the selected font backend shapes with HarfBuzz \
+     (`hasHarfbuzz()`), which needs the `harfbuzz` feature."
+);
+#[cfg(all(rustty_font_has_fontconfig, not(feature = "fontconfig")))]
+compile_error!(
+    "rustty-font-shaper: the selected font backend is `.fontconfig_freetype`, \
+     which needs the `fontconfig` feature."
 );
 
 pub mod backend;
@@ -221,21 +246,19 @@ pub mod shared_grid_set;
 pub mod ft;
 #[cfg(all(not(target_arch = "wasm32"), feature = "harfbuzz"))]
 pub mod hb;
-// Fontconfig binding wrapper (port of `pkg/fontconfig/*.zig`), the Linux/BSD
-// font-discovery seam. Gated OFF on macOS (CoreText discovers fonts; fontconfig
-// is never linked), on Windows (`Backend::default` picks `freetype_windows`
-// precisely to "avoid fontconfig on Windows because its libxml2 dependency
-// isn't available" — WS20; the `fontconfig-sys` dependency is gated off the same
-// way, so leaving this module on would have failed to link) and on wasm (no C
-// deps), matching the `fontconfig-sys` dependency's `cfg` table.
-// EMBEDDER DIVERGENCE (feature `fontconfig`, DEFAULT-ON): also off when the
-// vendored-C font backends are turned off — the `cfg` above already keeps
-// fontconfig out of every macOS build, but it does NOT keep `fontconfig-sys` out
-// of the resolve graph, which is what a colliding `links = "fontconfig"` needs.
-#[cfg(all(
-    not(any(target_os = "macos", target_os = "windows", target_arch = "wasm32")),
-    feature = "fontconfig"
-))]
+// Fontconfig binding wrapper (port of `pkg/fontconfig/*.zig`), the
+// font-discovery seam of the `fontconfig_freetype` backend. Compiled exactly on
+// `hasFontconfig()` (`rustty_font_has_fontconfig`), as the reference imports
+// `pkg/fontconfig` only for that backend (`SharedDeps.zig:292`): the Linux/BSD
+// default, and `-Dfont-backend=fontconfig_freetype` on macOS. CORRECTION (S-14b,
+// review M3): this was gated off macOS/Windows by `target_os`. Windows stays
+// excluded by `rustty-build-config` (N286: the port does not build
+// `fontconfig-sys` for Windows; WS20 gated it off there), wasm has no C deps.
+// EMBEDDER DIVERGENCE (feature `fontconfig`, DEFAULT-ON): an embedder that
+// turns the vendored-C font backends off drops `fontconfig-sys` from the resolve
+// graph, which is what a colliding `links = "fontconfig"` needs; `build.rs`
+// refuses `fontconfig_freetype` without the feature.
+#[cfg(all(rustty_font_has_fontconfig, feature = "fontconfig"))]
 pub mod fc;
 pub mod library;
 #[cfg(not(target_arch = "wasm32"))]
@@ -310,14 +333,171 @@ pub use rustty_font::sprite::Sprite;
 //
 // PORT NOTE: the reference `options` is an anonymous struct with one `backend`
 // field, set from `build_config.font_backend` (or `.web_canvas` for wasm). Here
-// it is a module holding the `BACKEND` const, resolved from `cfg` via
-// `Backend::default()` (the same decision `build.zig` makes). Parity targets both
-// defaults (macOS `coretext`, Linux `fontconfig_freetype`).
+// it is a module holding the `BACKEND` const. `build_config.font_backend` is the
+// `-Dfont-backend` option (`rustty-build-config`'s `font-backend-*` features,
+// defaulting to `Backend.default`); `build.rs` receives it as that crate's
+// `links` metadata and emits the `rustty_font_backend` cfg read here, the same
+// cfg every type selector in this crate (`Face`, `Shaper`, `Library`,
+// `Discover`, the `DeferredFace` payloads) is keyed on — so the value and the
+// selected types can never disagree.
+// (N266 CLOSED by S-14: this used to be `Backend::default()`, folding the
+// option to the per-OS default.)
 pub mod options {
     use crate::backend::Backend;
 
     /// The active font backend for this build.
-    pub const BACKEND: Backend = Backend::default();
+    // .backend = if (builtin.target.cpu.arch.isWasm()) .web_canvas else build_config.font_backend,
+    pub const BACKEND: Backend = if cfg!(rustty_font_backend = "freetype") {
+        Backend::Freetype
+    } else if cfg!(rustty_font_backend = "freetype_windows") {
+        Backend::FreetypeWindows
+    } else if cfg!(rustty_font_backend = "fontconfig_freetype") {
+        Backend::FontconfigFreetype
+    } else if cfg!(rustty_font_backend = "coretext") {
+        Backend::Coretext
+    } else if cfg!(rustty_font_backend = "coretext_freetype") {
+        Backend::CoretextFreetype
+    } else if cfg!(rustty_font_backend = "coretext_harfbuzz") {
+        Backend::CoretextHarfbuzz
+    } else if cfg!(rustty_font_backend = "coretext_noshape") {
+        Backend::CoretextNoshape
+    } else if cfg!(rustty_font_backend = "web_canvas") {
+        Backend::WebCanvas
+    } else {
+        panic!("rustty-font-shaper: build.rs emitted no `rustty_font_backend` cfg")
+    };
+
+    /// `build_config.font_backend` as this crate's `Backend` (the two enums
+    /// are the same `backend.zig` type in the reference; the port defines it
+    /// twice, BREAK #3).
+    pub const fn build_config_backend() -> Backend {
+        use rustty_build_config::font::Backend as B;
+        match rustty_build_config::font_backend() {
+            B::Freetype => Backend::Freetype,
+            B::FreetypeWindows => Backend::FreetypeWindows,
+            B::FontconfigFreetype => Backend::FontconfigFreetype,
+            B::Coretext => Backend::Coretext,
+            B::CoretextFreetype => Backend::CoretextFreetype,
+            B::CoretextHarfbuzz => Backend::CoretextHarfbuzz,
+            B::CoretextNoshape => Backend::CoretextNoshape,
+            B::WebCanvas => Backend::WebCanvas,
+        }
+    }
+
+    // `build_config.font_backend` and `options.backend` must be one value off
+    // wasm (`main.zig:50`). The cfg comes from build-config's build script and
+    // the const from its features; this proves the two channels agree.
+    #[cfg(not(target_arch = "wasm32"))]
+    const _: () = assert!(
+        BACKEND as u8 == build_config_backend() as u8,
+        "font options.backend disagrees with build_config.font_backend"
+    );
+}
+
+/// RUSTTY-ONLY (S-14, N266): the backend selectors (`face.zig`, `shape.zig`,
+/// `library.zig`, `discovery.zig`) are cfg-keyed type aliases; this restates each
+/// reference `switch (options.backend)` against the runtime `options::BACKEND`
+/// and checks the alias the build actually resolved. `RUSTTY_EXPECT_FONT_BACKEND`
+/// (set by the G-FONTBACKEND lane for every backend it builds) must then name
+/// `@tagName(options.backend)`, so a lane whose `-Dfont-backend` feature did not
+/// reach the build fails instead of re-testing the default.
+#[cfg(test)]
+mod backend_selection_tests {
+    use crate::{options, Backend};
+    use core::any::type_name;
+
+    fn tag(b: Backend) -> &'static str {
+        match b {
+            Backend::Freetype => "freetype",
+            Backend::FreetypeWindows => "freetype_windows",
+            Backend::FontconfigFreetype => "fontconfig_freetype",
+            Backend::Coretext => "coretext",
+            Backend::CoretextFreetype => "coretext_freetype",
+            Backend::CoretextHarfbuzz => "coretext_harfbuzz",
+            Backend::CoretextNoshape => "coretext_noshape",
+            Backend::WebCanvas => "web_canvas",
+        }
+    }
+
+    #[test]
+    fn selectors_follow_options_backend() {
+        use Backend::*;
+        let b = options::BACKEND;
+
+        if let Ok(want) = std::env::var("RUSTTY_EXPECT_FONT_BACKEND") {
+            assert_eq!(want, tag(b), "the lane's -Dfont-backend reached the build");
+        }
+        assert_eq!(b, options::build_config_backend());
+        // No `-Dfont-backend`: `Backend.default` (this crate's `backend.zig`
+        // port), which build-config's build script applies the same way.
+        if rustty_build_config::build::FONT_BACKEND_OPTION.is_none() {
+            assert_eq!(b, Backend::default(), "the per-target default");
+        } else {
+            assert_eq!(
+                Some(b as u8),
+                rustty_build_config::build::FONT_BACKEND_OPTION.map(|o| o as u8),
+                "the option's value"
+            );
+        }
+
+        // face.zig `Face`
+        let face = match b {
+            Freetype | FreetypeWindows | FontconfigFreetype | CoretextFreetype => {
+                "face::freetype::Face"
+            }
+            Coretext | CoretextHarfbuzz | CoretextNoshape => "face::coretext::Face",
+            WebCanvas => "face::web_canvas::Face",
+        };
+        assert!(
+            type_name::<crate::Face>().ends_with(face),
+            "{}",
+            type_name::<crate::Face>()
+        );
+
+        // shape.zig `Shaper`
+        let shaper = match b {
+            Freetype | FreetypeWindows | FontconfigFreetype | CoretextFreetype
+            | CoretextHarfbuzz => "harfbuzz::Shaper",
+            Coretext => "coretext::Shaper",
+            CoretextNoshape => "noop::Shaper",
+            WebCanvas => "web_canvas::Shaper",
+        };
+        assert!(
+            type_name::<crate::Shaper>().ends_with(shaper),
+            "{}",
+            type_name::<crate::Shaper>()
+        );
+
+        // library.zig `Library`
+        let library = match b {
+            Freetype | FreetypeWindows | FontconfigFreetype | CoretextFreetype => "FreetypeLibrary",
+            Coretext | CoretextHarfbuzz | CoretextNoshape | WebCanvas => "NoopLibrary",
+        };
+        assert!(
+            type_name::<crate::Library>().ends_with(library),
+            "{}",
+            type_name::<crate::Library>()
+        );
+
+        // discovery.zig `Discover` (`void` arms: the port's no-op discoverer)
+        let discover = match b {
+            Freetype => "NoDiscovery",
+            WebCanvas => "NoDiscovery",
+            FreetypeWindows => "Windows",
+            FontconfigFreetype => "Fontconfig",
+            Coretext | CoretextFreetype | CoretextHarfbuzz | CoretextNoshape => "CoreText",
+        };
+        assert!(
+            type_name::<crate::Discover>().ends_with(discover),
+            "{}",
+            type_name::<crate::Discover>()
+        );
+        assert_eq!(
+            matches!(b, Freetype | WebCanvas),
+            crate::discovery::DISCOVER_IS_VOID,
+            "Discover == void"
+        );
+    }
 }
 
 /// The styles that a family can take.
@@ -356,3 +536,29 @@ pub const SPRITE_INDEX: collection::Index =
 // pub const default_fallback_adjustment: Collection.SizeAdjustment = .ic_width;
 pub const DEFAULT_FALLBACK_ADJUSTMENT: collection::SizeAdjustment =
     collection::SizeAdjustment::IcWidth;
+
+// If we're targeting wasm then we export some wasm APIs.
+// comptime {
+//     if (builtin.target.cpu.arch.isWasm()) {
+//         _ = Atlas.Wasm;
+//         _ = DeferredFace.Wasm;
+//         _ = face.web_canvas.Wasm;
+//         _ = shape.web_canvas.Wasm;
+//     }
+// }
+// PORT NOTE: Rust has no comptime decl-retention; the four `Wasm` export sets
+// are `#[cfg(target_arch = "wasm32")]` `extern "C"` items in their own
+// modules (`rustty_font::atlas`, `deferred_face`, `face::web_canvas`,
+// `shaper::web_canvas`), and the wasm cdylib artifacts retain them.
+
+// test {
+//     // For non-wasm we want to test everything we can
+//     if (!comptime builtin.target.cpu.arch.isWasm()) {
+//         @import("std").testing.refAllDecls(@This());
+//         return;
+//     }
+//
+//     _ = Atlas;
+// }
+// PORT NOTE: `refAllDecls` has no Rust analogue; every module's `#[cfg(test)]`
+// tests are compiled by `cargo test` regardless of which items it references.

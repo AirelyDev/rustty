@@ -32,8 +32,6 @@
 //! immediately before each call. The context here is `SetContext` with the same
 //! two nullable page pointers as the reference's anonymous struct.
 
-use std::hash::Hasher;
-
 use rustty_render_types::term_size as size;
 use rustty_render_types::term_size::{get_offset, Offset, OffsetSlice};
 
@@ -60,22 +58,32 @@ pub type Map = AutoOffsetHashMap<Offset<Cell>, Id, 80>;
 /// memory within a page. The memory location of this is dependent
 /// on the context so users should check with the source of the
 /// hyperlink.
+//
+// PORT NOTE (parity tail S7-3): the reference's `uri`/`id` are byte slices
+// whose memory "is dependent on the context". The port owns them, in `B`:
+// `Vec<u8>` (the default: a value on the Rust heap, as every page and snapshot
+// path uses) or [`AllocBytes`] (a copy made through an allocator handle, which
+// is what `Screen.cursor.hyperlink` holds: the reference `alloc.create` +
+// `source.dupe(alloc)` on the screen's allocator).
 #[derive(Clone)]
-pub struct Hyperlink {
-    pub id: HyperlinkId,
-    pub uri: Vec<u8>,
+pub struct Hyperlink<B = Vec<u8>> {
+    pub id: HyperlinkId<B>,
+    pub uri: B,
 }
+
+/// Hyperlink bytes allocated through an allocator handle ([`Hyperlink::dupe_in`]).
+pub type AllocBytes = allocator_api2::vec::Vec<u8, crate::alloc::Allocator>;
 
 /// See PageEntry.Id
 // PORT NOTE: the reference is `Hyperlink.Id`, a nested union. Rust nested type
 // names can't shadow the field name `id`, so it is hoisted to `HyperlinkId`.
 #[derive(Clone)]
-pub enum HyperlinkId {
-    Explicit(Vec<u8>),
+pub enum HyperlinkId<B = Vec<u8>> {
+    Explicit(B),
     Implicit(size::OffsetInt),
 }
 
-impl Hyperlink {
+impl<B: core::ops::Deref<Target = [u8]>> Hyperlink<B> {
     /// Deinit and deallocate all the pointers using the given
     /// allocator.
     ///
@@ -109,11 +117,54 @@ impl Hyperlink {
         let uri = try_dupe_bytes(&self.uri)?;
         // errdefer alloc.free(uri) — the owned Vec is dropped on the `?` below.
         let id: HyperlinkId = match &self.id {
-            HyperlinkId::Implicit(_) => self.id.clone(),
+            HyperlinkId::Implicit(v) => HyperlinkId::Implicit(*v),
             HyperlinkId::Explicit(v) => HyperlinkId::Explicit(try_dupe_bytes(v)?),
         };
         Ok(Hyperlink { id, uri })
     }
+
+    /// `dupe(alloc)` through an allocator handle: every copy is made (and
+    /// later freed) through `alloc`, as the reference's `alloc.dupe` calls are.
+    pub fn dupe_in(
+        &self,
+        alloc: crate::alloc::Allocator,
+    ) -> Result<Hyperlink<AllocBytes>, OutOfMemory> {
+        // const uri = try alloc.dupe(u8, self.uri);
+        let uri = try_dupe_bytes_in(&self.uri, alloc)?;
+        // errdefer alloc.free(uri) — dropped (through `alloc`) on the `?` below.
+        let id = match &self.id {
+            HyperlinkId::Implicit(v) => HyperlinkId::Implicit(*v),
+            HyperlinkId::Explicit(v) => HyperlinkId::Explicit(try_dupe_bytes_in(v, alloc)?),
+        };
+        Ok(Hyperlink { id, uri })
+    }
+
+    /// An infallible Rust-heap copy (`Clone` into the default byte storage).
+    /// Port-only: used where the reference passes the value by (borrowed)
+    /// value and allocates nothing, so the copy must not reach the caller's
+    /// allocator.
+    pub fn to_heap(&self) -> Hyperlink {
+        Hyperlink {
+            id: match &self.id {
+                HyperlinkId::Implicit(v) => HyperlinkId::Implicit(*v),
+                HyperlinkId::Explicit(v) => HyperlinkId::Explicit(v.to_vec()),
+            },
+            uri: self.uri.to_vec(),
+        }
+    }
+}
+
+/// `alloc.dupe(u8, src)` through an allocator handle: one exact-sized,
+/// fallible allocation.
+pub(crate) fn try_dupe_bytes_in(
+    src: &[u8],
+    alloc: crate::alloc::Allocator,
+) -> Result<AllocBytes, OutOfMemory> {
+    use crate::alloc::CopyVecExt;
+    let mut v = AllocBytes::new_in(alloc);
+    v.try_reserve_exact(src.len()).map_err(|_| OutOfMemory)?;
+    v.extend_copy(src);
+    Ok(v)
 }
 
 /// `alloc.dupe(u8, src)` — a fallible byte-slice copy.
@@ -194,9 +245,9 @@ pub struct PageEntryId {
     /// exactly one byte image.
     payload: OffsetSlice<u8>,
 
-    /// A `PageEntryIdTag` held as a raw `u8` (see the PORT NOTE above).
-    /// The mapping arrives zeroed and `0` is `PageEntryIdTag::Implicit`, which
-    /// is also `PageEntry::default()`'s tag.
+    /// A `PageEntryIdTag` held as a raw `u8` (see the PORT NOTE above), with
+    /// the reference's numbering: `0` is `.explicit`, so a zeroed mapping
+    /// reads as the reference's zeroed union does (an empty `.explicit`).
     tag: u8,
 
     /// The tail-padding bytes the fields above imply (7 on 64-bit, 3 on
@@ -226,15 +277,21 @@ const _: () =
     assert!(core::mem::offset_of!(PageEntryId, tag) == core::mem::size_of::<OffsetSlice<u8>>());
 
 /// `std.meta.activeTag(PageEntry.Id)` — the reference's union tag.
+// PORT NOTE (task tail-s2 / S-2b): the reference's tag is an `enum(u1)` in
+// declaration order, `explicit` 0 then `implicit` 1, and that value is the byte
+// the union leaves in the page mapping (byte 16 on 64-bit, MEASURED with a Zig
+// 0.16.0 probe at `20abdb50a`). The discriminants and the variant order follow
+// it, so the stored byte matches (`page_entry_tag_byte_tests`); they were once
+// the reverse.
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PageEntryIdTag {
+    /// An explicitly provided ID via the OSC8 sequence.
+    Explicit = 0,
+
     /// No ID was provided so we auto-generate the ID based on an
     /// incrementing counter attached to the screen.
-    Implicit = 0,
-
-    /// An explicitly provided ID via the OSC8 sequence.
-    Explicit = 1,
+    Implicit = 1,
 }
 
 impl PageEntryId {
@@ -266,12 +323,12 @@ impl PageEntryId {
     #[inline]
     pub fn tag(self) -> PageEntryIdTag {
         // Only 0/1 are constructible (every write goes through the two
-        // constructors above, and a zeroed mapping reads as `.implicit`), so
+        // constructors above, and a zeroed mapping reads as `.explicit`), so
         // the fallback arm is unreachable and is `debug_assert`ed rather than
         // trapping — the same contract as `style::Color::tag`.
-        debug_assert!(self.tag <= PageEntryIdTag::Explicit as u8);
+        debug_assert!(self.tag <= PageEntryIdTag::Implicit as u8);
         match self.tag {
-            1 => PageEntryIdTag::Explicit,
+            0 => PageEntryIdTag::Explicit,
             _ => PageEntryIdTag::Implicit,
         }
     }
@@ -293,6 +350,12 @@ impl PageEntryId {
     }
 }
 
+// PORT NOTE (task tail-s2, S-2 review N3): the reference's `Item.value` is
+// `undefined` (`ref_counted_set.zig:85`), so neither a fresh slot (zero-filled
+// by `RefCountedSet::init`, which reads as an empty `.explicit`) nor a reaped
+// one (written with `Item::default()`, this `.implicit` 0) has reference-defined
+// bytes, and neither is ever read as a live value. The two therefore need not
+// agree, and this default is left as it was.
 impl Default for PageEntry {
     fn default() -> Self {
         PageEntry {
@@ -373,27 +436,90 @@ impl PageEntry {
     /// `base` must be the true base of the backing memory holding the offsets
     /// referenced by this entry.
     pub unsafe fn hash<B: size::IntFromBase + Copy>(&self, base: B) -> u64 {
-        // PORT NOTE: the reference uses Wyhash + autoHash/autoHashStrat. Since
-        // this hash is only used internally by the ref-counted set (never
-        // oracle-compared / serialized), any self-consistent hash is parity-
-        // preserving. We mirror the structure (active tag, then id payload,
-        // then uri bytes) using the std hasher.
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        // PORT NOTE (NEW-FINDINGS N82, task tail-s2): the reference's hash,
+        // byte for byte (see `feed_hash_input` for what is fed, in order). It
+        // is observable: the set picks buckets as `(hash +% i) & table_mask`,
+        // so the hash decides placement, probe lengths, and which inputs reach
+        // the PSL-overflow arm (UD131). The value was checked against the
+        // reference's own `hash` over 600 random entries and against its set
+        // placement at small capacities (`page_entry_hash_tests`, task tail-s2
+        // report).
+        //
+        // var hasher = Wyhash.init(0);
+        // ...
+        // return hasher.final();
+        //
+        // PERF(port): the reference streams five or six short `update`s into
+        // `Wyhash.init(0)`. Zig inlines that down to almost nothing; the
+        // port's streaming `update`/`final` did not, and measured 3x slower
+        // than the one-shot form on OSC 8-sized entries, a paired +4..7% on an
+        // OSC 8-heavy `+terminal-stream` corpus (task tail-s2 report). So an
+        // entry whose input fits `HASH_BUF` is gathered into one buffer and
+        // hashed with the one-shot `Wyhash.hash(0, ..)`. The value is the same:
+        // Wyhash's iterative API is concatenation-exact (Zig's `iterative api`
+        // and `iterative maintains last sixteen` tests), and both paths are
+        // checked against the reference. A longer entry streams, as the
+        // reference does.
+        const HASH_BUF: usize = 256;
+        let mut len = 0;
+        unsafe { self.feed_hash_input(base, |bytes| len += bytes.len()) };
+        if len <= HASH_BUF {
+            let mut buf = [0u8; HASH_BUF];
+            let mut n = 0;
+            unsafe {
+                self.feed_hash_input(base, |bytes| {
+                    buf[n..n + bytes.len()].copy_from_slice(bytes);
+                    n += bytes.len();
+                })
+            };
+            return rustty_zigstd::wyhash::Wyhash::hash(0, &buf[..n]);
+        }
+        let mut hasher = rustty_zigstd::wyhash::Wyhash::init(0);
+        unsafe { self.feed_hash_input(base, |bytes| hasher.update(bytes)) };
+        hasher.finalize()
+    }
+
+    /// The bytes the reference's `hash` feeds its hasher, in order, passed to
+    /// `update` (`autoHash` / `autoHashStrat(.., .Deep)`,
+    /// `lib/std/hash/auto_hash.zig`, Zig 0.16):
+    ///   - the tag: `PageEntry.Id`'s tag is an `enum(u1)` in declaration order
+    ///     (`explicit` 0, `implicit` 1, which `PageEntryIdTag`'s discriminants follow),
+    ///     and a `u1` is fed as its one byte;
+    ///   - `.implicit`: the `size.OffsetInt` (`u32`) as its native bytes;
+    ///   - a `.Deep` slice (the `.explicit` id, then `uri`): each `u8` element,
+    ///     then the slice's `len` as a native `usize`. The reference's per-byte
+    ///     `update`s equal one `update` of the whole slice (Wyhash's iterative
+    ///     API is concatenation-exact).
+    ///
+    /// # Safety
+    ///
+    /// As for `hash`.
+    unsafe fn feed_hash_input<B: size::IntFromBase + Copy>(
+        &self,
+        base: B,
+        mut update: impl FnMut(&[u8]),
+    ) {
         // autoHash(&hasher, std.meta.activeTag(self.id));
         match self.id.tag() {
             PageEntryIdTag::Implicit => {
-                hasher.write_u8(1); // tag: implicit
-                hasher.write_u32(self.id.implicit());
+                // tag: implicit (1)
+                update(&[PageEntryIdTag::Implicit as u8]);
+                // .implicit => |v| autoHash(&hasher, v),
+                update(&self.id.implicit().to_ne_bytes());
             }
             PageEntryIdTag::Explicit => {
-                hasher.write_u8(0); // tag: explicit
+                // tag: explicit (0)
+                update(&[PageEntryIdTag::Explicit as u8]);
+                // .explicit => |slice| autoHashStrat(&hasher, slice.slice(base), .Deep),
                 let s = unsafe { self.id.explicit().slice(base) };
-                hasher.write(s);
+                update(s);
+                update(&s.len().to_ne_bytes());
             }
         }
+        // autoHashStrat(&hasher, self.uri.slice(base), .Deep);
         let uri = unsafe { self.uri.slice(base) };
-        hasher.write(uri);
-        hasher.finish()
+        update(uri);
+        update(&uri.len().to_ne_bytes());
     }
 
     /// # Safety
@@ -605,6 +731,266 @@ const _: () = {
     assert!(<PageEntry as crate::ref_counted_set::RefItemGeometry>::REF_ITEM_SIZE == 28);
     assert!(<PageEntry as crate::ref_counted_set::RefItemGeometry>::REF_ITEM_ALIGN == 4);
 };
+
+// rustty-only test of the tag byte `PageEntry.Id` leaves in the page mapping
+// (task tail-s2 / S-2b). The reference's `union(enum)` tag is an `enum(u1)` in
+// declaration order, `explicit` 0 and `implicit` 1, stored in the byte after the
+// 16-byte payload. MEASURED with a Zig 0.16.0 probe built from `20abdb50a`
+// (`probe_n82.zig`, `Page.insertHyperlink` then `std.mem.asBytes(&entry.id)`):
+//   implicit 0x11223344 -> 44 33 22 11 .. .. | 01 at byte 16
+//   explicit "my-id"    -> ..                | 00 at byte 16
+// and an all-zero `PageEntry.Id` is `.explicit` (offset 0, len 0).
+// The probe measured the 64-bit layout (`usize` 8).
+#[cfg(all(test, target_pointer_width = "64"))]
+mod page_entry_tag_byte_tests {
+    use super::*;
+    use crate::page::Capacity;
+
+    /// The bytes of a `PageEntryId`. It has no padding (every byte is a
+    /// named field, see the asserts above), so all of them are initialized.
+    fn id_bytes(id: &PageEntryId) -> [u8; core::mem::size_of::<PageEntryId>()] {
+        let mut out = [0u8; core::mem::size_of::<PageEntryId>()];
+        // SAFETY: `PageEntryId` is `repr(C)` with no implicit padding, so
+        // reading its bytes reads initialized memory.
+        let src = unsafe {
+            core::slice::from_raw_parts(
+                (id as *const PageEntryId).cast::<u8>(),
+                core::mem::size_of::<PageEntryId>(),
+            )
+        };
+        out.copy_from_slice(src);
+        out
+    }
+
+    #[test]
+    fn the_stored_tag_byte_is_the_references() {
+        const TAG: usize = core::mem::offset_of!(PageEntryId, tag);
+        // The probe's 64-bit layout: the tag follows the 16-byte payload.
+        assert_eq!(16, TAG);
+
+        let mut cap = Capacity::new(10, 10);
+        cap.string_bytes = 1 << 16;
+        let mut page = Page::init(cap).unwrap();
+        let implicit = page
+            .insert_hyperlink(Hyperlink {
+                id: HyperlinkId::Implicit(0x1122_3344),
+                uri: b"https://example.com".to_vec(),
+            })
+            .unwrap();
+        let explicit = page
+            .insert_hyperlink(Hyperlink {
+                id: HyperlinkId::Explicit(b"my-id".to_vec()),
+                uri: b"https://example.com".to_vec(),
+            })
+            .unwrap();
+        let base = page.memory_ptr();
+
+        // Read back out of the mapping, as the compressor sees it.
+        let imp = id_bytes(unsafe { &(*page.hyperlink_set.get(base, implicit)).id });
+        assert_eq!(1, imp[TAG], "implicit tag byte");
+        assert_eq!([0x44, 0x33, 0x22, 0x11], imp[0..4], "implicit payload");
+        let exp = id_bytes(unsafe { &(*page.hyperlink_set.get(base, explicit)).id });
+        assert_eq!(0, exp[TAG], "explicit tag byte");
+
+        // The constructors agree with the mapping.
+        assert_eq!(1, id_bytes(&PageEntryId::Implicit(0))[TAG]);
+        assert_eq!(
+            0,
+            id_bytes(&PageEntryId::Explicit(OffsetSlice::default()))[TAG]
+        );
+        page.deinit();
+    }
+
+    /// A zeroed id (a dead item's value, a zeroed mapping) is the reference's
+    /// tag 0, `.explicit`, with an empty slice.
+    #[test]
+    fn a_zeroed_id_is_explicit() {
+        let zero = PageEntryId::Explicit(OffsetSlice::default());
+        assert!(id_bytes(&zero).iter().all(|&b| b == 0));
+        assert_eq!(PageEntryIdTag::Explicit, zero.tag());
+        assert_eq!(0, zero.explicit().len);
+    }
+}
+
+// rustty-only tests of `PageEntry.hash` (`hyperlink.zig:143`) against the
+// reference (NEW-FINDINGS N82, task tail-s2). The expected values were produced
+// by the reference's OWN `PageEntry.hash` and `hyperlink.Set`, run through
+// `Page.insertHyperlink` in a Zig 0.16.0 probe built from `20abdb50a`
+// (`probe_n82.zig`, task tail-s2 report); the port must give the same 64-bit
+// value and, from it, the same bucket placement. The probe ran on a 64-bit
+// target (aarch64-macos), and the reference hashes each slice's `len` as a
+// native `usize`, so the expected values hold only where `usize` is 8 bytes.
+#[cfg(all(test, target_pointer_width = "64"))]
+mod page_entry_hash_tests {
+    use super::*;
+    use crate::page::Capacity;
+    use crate::ref_counted_set::item_at;
+
+    type Row = (u8, u32, Vec<u8>, Vec<u8>, u64);
+
+    /// `(tag, implicit, explicit id, uri, reference hash)`. `tag` 1 is
+    /// `.implicit`, 0 is `.explicit` (the reference's declaration order).
+    fn reference_rows() -> Vec<Row> {
+        vec![
+            (
+                1,
+                0,
+                vec![],
+                b"https://example.com".to_vec(),
+                0x0ddc_eb58_fb25_fd66,
+            ),
+            (
+                0,
+                0,
+                b"0".to_vec(),
+                b"https://example.com".to_vec(),
+                0xd4b2_d241_9751_4ed5,
+            ),
+            (
+                1,
+                1,
+                vec![],
+                b"https://example.com".to_vec(),
+                0x9464_0835_9003_474a,
+            ),
+            (1, 0xFFFF_FFFF, vec![], b"a".to_vec(), 0x18d2_a151_74f6_4a67),
+            (0, 0, b"a".to_vec(), b"b".to_vec(), 0xbd7b_2482_c397_7bc0),
+            // The next two feed the same bytes ("abx") and differ only in
+            // where the id ends: `autoHashStrat(.., .Deep)` hashes each
+            // slice's `len` after its bytes, which is what tells them apart.
+            (0, 0, b"ab".to_vec(), b"x".to_vec(), 0x6202_0994_ca19_0075),
+            (0, 0, b"a".to_vec(), b"bx".to_vec(), 0x52fb_9e1d_447e_e0b3),
+            (
+                0,
+                0,
+                b"my-link-id".to_vec(),
+                b"file:///home/user/some/long/path/to/a/file.txt".to_vec(),
+                0x60dd_23cc_dfd6_cd5a,
+            ),
+            (
+                1,
+                42,
+                vec![],
+                [b"http://a.b/".to_vec(), b"x".repeat(100)].concat(),
+                0xf414_efff_e98a_97f8,
+            ),
+            // Longer than `hash`'s 256-byte one-shot buffer: the streaming path.
+            (
+                0,
+                0,
+                b"long".to_vec(),
+                [b"https://localhost/".to_vec(), b"y".repeat(300)].concat(),
+                0xb7ff_dde8_f0b3_b24e,
+            ),
+            // Either side of the buffer's edge: 1 + 1 + 8 + 238 + 8 = 256 bytes
+            // of input (one-shot), then 257 (streaming); the same for an
+            // implicit id, 1 + 4 + 243 + 8 = 256, then 257.
+            (0, 0, b"b".to_vec(), b"z".repeat(238), 0x3878_e69c_4022_9c2f),
+            (0, 0, b"b".to_vec(), b"z".repeat(239), 0x73f7_05bf_72fb_8d3a),
+            (1, 7, vec![], b"z".repeat(243), 0x0ab9_411c_d33b_ca2b),
+            (1, 7, vec![], b"z".repeat(244), 0xf749_c3f3_ae66_8d03),
+        ]
+    }
+
+    fn link(tag: u8, implicit: u32, id: &[u8], uri: &[u8]) -> Hyperlink {
+        Hyperlink {
+            id: if tag == 1 {
+                HyperlinkId::Implicit(implicit)
+            } else {
+                HyperlinkId::Explicit(id.to_vec())
+            },
+            uri: uri.to_vec(),
+        }
+    }
+
+    #[test]
+    fn hash_matches_the_reference() {
+        let mut cap = Capacity::new(10, 10);
+        cap.string_bytes = 1 << 16;
+        let mut page = Page::init(cap).unwrap();
+        let rows = reference_rows();
+        for (tag, implicit, id, uri, want) in &rows {
+            let set_id = page
+                .insert_hyperlink(link(*tag, *implicit, id, uri))
+                .unwrap();
+            let base = page.memory_ptr();
+            let entry = unsafe { *page.hyperlink_set.get(base, set_id) };
+            assert_eq!(*tag == 1, entry.id.tag() == PageEntryIdTag::Implicit);
+            let got = unsafe { entry.hash(base) };
+            assert_eq!(
+                *want,
+                got,
+                "{:?} {:?}",
+                String::from_utf8_lossy(id),
+                String::from_utf8_lossy(uri)
+            );
+
+            // The set's context hashes through the same function.
+            let mut ctx = SetContext::default();
+            ctx.set_page(&mut page as *mut Page);
+            assert_eq!(*want, ctx.hash(entry));
+
+            unsafe { page.hyperlink_set.release(base, set_id) };
+        }
+        // The two "abx" entries stay distinct.
+        assert_ne!(rows[5].4, rows[6].4);
+        page.deinit();
+    }
+
+    /// The set derives the bucket from the hash as the reference does
+    /// (`(hash +% i) & table_mask`, `ref_counted_set.zig:629`), so with the
+    /// reference's hash a sequence of inserts must land in the reference's
+    /// buckets with the reference's probe lengths. Count 16 is a 16-bucket
+    /// table with 13 items (id 0 reserved), so the last two adds fail.
+    #[test]
+    fn set_placement_matches_the_reference() {
+        let mut cap = Capacity::new(10, 10);
+        cap.hyperlink_bytes =
+            (16 * <PageEntry as crate::ref_counted_set::RefItemGeometry>::REF_ITEM_SIZE) as u16;
+        cap.string_bytes = 1 << 16;
+        let mut page = Page::init(cap).unwrap();
+        assert_eq!(16, page.hyperlink_set.layout.table_cap);
+
+        let mut adds = Vec::new();
+        for k in 0..14u32 {
+            let id = format!("id{k}").into_bytes();
+            let uri = format!("u{k}").into_bytes();
+            adds.push(page.insert_hyperlink(link(if k % 2 == 0 { 1 } else { 0 }, k, &id, &uri)));
+        }
+        let want_adds: Vec<Result<Id, crate::page::InsertHyperlinkError>> = (1..=12)
+            .map(Ok)
+            .chain([
+                Err(crate::page::InsertHyperlinkError::SetOutOfMemory),
+                Err(crate::page::InsertHyperlinkError::SetOutOfMemory),
+            ])
+            .collect();
+        assert_eq!(want_adds, adds);
+
+        let base = page.memory_ptr();
+        let set = &page.hyperlink_set;
+        let table: Vec<Id> = (0..set.layout.table_cap)
+            .map(|i| unsafe { *set.table.ptr(base).add(i) })
+            .collect();
+        let items = unsafe { set.items.ptr(base) };
+        let psl: Vec<Id> = table
+            .iter()
+            .map(|&id| {
+                if id == 0 {
+                    0
+                } else {
+                    unsafe { (*item_at(items, id as usize)).meta.psl }
+                }
+            })
+            .collect();
+        assert_eq!(
+            vec![0, 0, 11, 0, 0, 3, 8, 5, 4, 7, 12, 10, 2, 1, 6, 9],
+            table
+        );
+        assert_eq!(vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 2, 1, 1, 0], psl);
+        assert_eq!(2, set.max_psl);
+        page.deinit();
+    }
+}
 
 // rustty-only tests of `PageEntry.eql`'s first line (`hyperlink.zig:165`):
 // `if (std.meta.activeTag(self.id) != std.meta.activeTag(other.id)) return

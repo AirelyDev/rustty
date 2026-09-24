@@ -59,11 +59,11 @@
 // `loop.stop()`/`loop.stopped()`).
 use super::screen::ScreenSearch;
 use super::terminal::{SelectScroll, TerminalSearch, Tick as TerminalSearchTick};
+use crate::alloc::Allocator;
 use crate::highlight::Flattened as FlattenedHighlight;
 use crate::highlight::Untracked as UntrackedHighlight;
 use crate::screen_set::Key as ScreenSetKey;
 use crate::terminal::Terminal;
-use allocator_api2::alloc::Global as Allocator;
 use rustty_datastruct::message_data::MessageData;
 use rustty_datastruct::BlockingQueue;
 // PORT NOTE: the shared search/renderer mutex is now the guard-less

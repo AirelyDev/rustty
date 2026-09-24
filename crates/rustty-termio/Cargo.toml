@@ -134,13 +134,16 @@ rustty-zigstd = { workspace = true }
 # Same opt-out as `rustty-apprt-api` above.
 rustty-inspector = { path = "../rustty-inspector", default-features = false }
 # Integration-tier stage 4 dep wiring (both leaf crates, downward-safe):
-# - rustty-build-config: `build_config.version_string`/`build_config.flatpak`
+# - rustty-build-config: `build_config.flatpak` (the version string is rustty-version's)
 #   (reference `build_config = @import("../build_config.zig")` in Exec.zig /
 #   stream_handler.zig).
 # - rustty-identity: the R2 product-identity source for the `GHOSTTY_*` env
 #   names + shell-integration script/module names (rustty-os resourcesdir
 #   precedent).
 rustty-build-config = { workspace = true }
+# `build_config.version_string` / `release_channel`: the version derived from
+# the checkout, in its own leaf crate so a commit rebuilds only its readers.
+rustty-version = { workspace = true }
 rustty-identity = { workspace = true }
 # `alloc: Allocator` fields/params mirror rustty-vt's Terminal convention
 # (`allocator_api2::alloc::Global as Allocator`).

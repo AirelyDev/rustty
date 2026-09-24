@@ -1,8 +1,10 @@
-# rustty-vaxis — pure-Rust port of the vendored `libvaxis` 0.5.1 subset (R3 vendored dep).
+# rustty-vaxis — pure-Rust port of the vendored `libvaxis` 0.6.0 subset (R3 vendored dep).
 #
 # Crate IDENTITY is `rustty-vaxis` (R4), the vendored-dep-port pattern like
-# `rustty-z2d`/`rustty-zf`. libvaxis (rockorager, 0.5.1, hash
-# `BWNV_LosCQAGmCCNOLljCIw6j6-yt53tji6n6rwJ2BhS`) is the TUI dependency of
+# `rustty-z2d`/`rustty-zf`. libvaxis (rockorager, 0.6.0, hash
+# `vaxis-0.6.0-BWNV_CrbCQCscGpzsAlR402rYQ_tV3aAl081c2iRRkka`, the revision the reference
+# pin 20abdb50a uses; 0.5.1 `BWNV_LosCQAGmCCNOLljCIw6j6-yt53tji6n6rwJ2BhS` until parity
+# tail S-10b, NON_PORTS.md §G2) is the TUI dependency of
 # ghostty's interactive CLI — a DEPENDENCY, not ghostty source; therefore its own
 # `test {}` blocks are not part of the src/ parity test contract and this crate is
 # absent from that crate_map. Its value-type semantics must nonetheless be
@@ -46,8 +48,9 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-# CHUNK 1b: build.rs parses the vendored UCD 16.0.0 corpus (`ucd/`) and emits the
-# uucode-0.1.0 stage1/stage2 width/grapheme tables into OUT_DIR. std-only, NO
+# CHUNK 1b: build.rs parses the vendored UCD corpus (`ucd/`; 17.0.0 from uucode 2826a37a since
+# S-10b, 16.0.0 from uucode 0.1.0 before) and emits the
+# stage1/stage2 width/grapheme tables of the four vaxis uucode fields into OUT_DIR. std-only, NO
 # build-dependencies (keeps rustty-vaxis a dep-free R4 leaf; Miri-clean at runtime).
 build = "build.rs"
 
@@ -65,9 +68,14 @@ workspace = true
 # WS12 adds the SECOND dependency: `rustty-zigimg`, the re-home of the six-operation
 # zigimg surface `Vaxis::transmit_image`/`load_image` need (WS12 Decision 2, Option Z-C).
 # It is a leaf over `rustty-wuffs` + `zlib-sys`, so `rustty-vaxis` stays acyclic (R4).
+#
+# N206 adds the THIRD: `rustty-zigstd`, for Zig's `std.fmt.parseInt` /
+# `parseUnsigned` (the reply numbers the parser reads). It is a leaf over
+# `rustty-util`, so `rustty-vaxis` stays acyclic (R4).
 [dependencies]
 libc = "0.2"
 rustty-zigimg = { workspace = true }
+rustty-zigstd = { workspace = true }
 
 # WS12: `tests/image_tier.rs` decodes the PNG payload it just watched
 # `transmit_image`/`load_image` emit, to prove the escape carries a REAL image rather than

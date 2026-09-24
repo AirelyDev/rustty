@@ -59,7 +59,7 @@ pub fn set_resources_dir(dir: ResourcesDir) -> Result<(), ResourcesDir> {
 /// Read the process-global resources directory's `app()` path, or `None` if the
 /// seam is unset or the dir has no app path. Equivalent to the reference's
 /// `global_state.resources_dir.app()`.
-fn resources_dir_app() -> Option<String> {
+fn resources_dir_app() -> Option<Vec<u8>> {
     // WS14 T6 (wasm32 arm): no resources directory exists in a browser — the same
     // "seam unset" state the doc comment above already describes as valid.
     #[cfg(target_family = "wasm")]
@@ -68,7 +68,9 @@ fn resources_dir_app() -> Option<String> {
     }
     #[cfg(not(target_family = "wasm"))]
     {
-        RESOURCES_DIR.get().and_then(|d| d.app().map(String::from))
+        RESOURCES_DIR
+            .get()
+            .and_then(|d| d.app().map(<[u8]>::to_vec))
     }
 }
 
@@ -102,18 +104,25 @@ impl Location {
     // pub fn dir(
     //     self: Location,
     //     arena_alloc: Allocator,
-    // ) error{OutOfMemory}!?[]const u8 {
+    // ) error{ OutOfMemory, Unexpected }!?[]const u8 {
+    //     var environ_map = try global.environMap();
+    //     defer environ_map.deinit();
     //
-    // PORT NOTE: allocation in Rust is infallible for the owned `String`/`Vec`
-    // collections used here, so the reference's `error{OutOfMemory}` set collapses
-    // away — `dir` returns `Option<Vec<u8>>` directly. The `BufferTooSmall`/iOS
-    // comptime error juggling in the `.user` arm exists only to remap the
-    // platform-specific `xdg.config` error set into `OutOfMemory`; in Rust
-    // `xdg::config` returns the single `DirError::NoHomeDir`, which we treat as
-    // "the XDG directory doesn't exist" (the reference's `else => return null`).
-    pub fn dir(self) -> Option<Vec<u8>> {
+    // PORT NOTE: the error set is [`Error`]. Allocation in Rust aborts rather
+    // than failing, so the only `OutOfMemory` this can return is the `.user`
+    // arm's remapped `error.BufferTooSmall` (below); `error.Unexpected` comes
+    // from `global.environMap()`, whose port (`rustty_global::environ_map`) is
+    // infallible, so it has no variant.
+    //
+    // CORRECTION (S-15, NEW-FINDINGS N140 (a)): this returned
+    // `Option<Vec<u8>>` and treated every `xdg::config` error as "the XDG
+    // directory doesn't exist", including `DirError::BufferTooSmall`, which the
+    // reference maps to `error.OutOfMemory`. It now returns that error, and
+    // `LocationIterator::next`, `open`, `Config::load_theme`/`finalize` and
+    // `rustty-cli`'s `list_themes` pass it on as the reference's `try` does.
+    pub fn dir(self) -> Result<Option<Vec<u8>>, Error> {
         // return switch (self) {
-        match self {
+        Ok(match self {
             // .user => user: {
             Location::User => {
                 // const subdir = std.fs.path.join(arena_alloc, &.{
@@ -162,18 +171,29 @@ impl Location {
                     let _ = subdir;
                     None
                 }
-                // Any other error we treat as the XDG directory not
-                // existing. Windows in particularly can return a LOT
-                // of errors here — hence the blanket `.ok()`.
                 #[cfg(not(target_family = "wasm"))]
-                internal_os::xdg::config(
+                match internal_os::xdg::config(
                     &rustty_global::environ_map(),
                     internal_os::xdg::Options {
                         subdir: Some(&subdir),
                         ..Default::default()
                     },
-                )
-                .ok()
+                ) {
+                    Ok(dir) => Some(dir),
+                    // error.BufferTooSmall => return error.OutOfMemory,
+                    //
+                    // (The `.ios` comptime widening above exists only so this
+                    // prong type-checks where `xdg.config`'s set lacks the
+                    // error; the port's `DirError` always has the variant.)
+                    Err(internal_os::xdg::DirError::BufferTooSmall) => {
+                        return Err(Error::OutOfMemory)
+                    }
+                    // Any other error we treat as the XDG directory not
+                    // existing. Windows in particularly can return a LOT
+                    // of errors here.
+                    // else => return null,
+                    Err(_) => None,
+                }
             }
 
             // .resources => try std.fs.path.join(arena_alloc, &.{
@@ -181,11 +201,25 @@ impl Location {
             //     "themes",
             // }),
             Location::Resources => {
-                let app = resources_dir_app()?;
-                Some(join(&[app.as_bytes(), b"themes"]))
+                let Some(app) = resources_dir_app() else {
+                    return Ok(None);
+                };
+                Some(join(&[&app, b"themes"]))
             }
-        }
+        })
     }
+}
+
+/// The error set of [`Location::dir`], [`LocationIterator::next`] and [`open`]:
+/// the reference's `error{ OutOfMemory, Unexpected }` (see the PORT NOTE on
+/// `dir` for why `Unexpected` has no variant). `Debug` prints the Zig error
+/// name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Error {
+    /// `error.OutOfMemory`. Reachable only as `Location.dir`'s remapping of
+    /// `xdg.config`'s `error.BufferTooSmall` (`$HOME` longer than the XDG
+    /// lookup's 1024-byte buffer).
+    OutOfMemory,
 }
 
 /// PORT NOTE: `std.fs.path.join` for the in-tree uses here joins the components
@@ -242,8 +276,10 @@ impl LocationIterator {
     //     location: Location,
     //     dir: []const u8,
     // } {
+    //
+    // PORT NOTE (S-15, N140 (a)): the `!` is [`Error`], `Location::dir`'s.
     #[allow(clippy::should_implement_trait)]
-    pub fn next(&mut self) -> Option<LocationItem> {
+    pub fn next(&mut self) -> Result<Option<LocationItem>, Error> {
         // const max = @typeInfo(Location).@"enum".fields.len;
         let max = Location::ALL.len();
         // while (self.i < max) {
@@ -257,12 +293,12 @@ impl LocationIterator {
             //         .location = location,
             //         .dir = dir,
             //     };
-            if let Some(dir) = location.dir() {
-                return Some(LocationItem { location, dir });
+            if let Some(dir) = location.dir()? {
+                return Ok(Some(LocationItem { location, dir }));
             }
         }
         // return null;
-        None
+        Ok(None)
     }
 
     // pub fn reset(self: *LocationIterator) void {
@@ -303,20 +339,27 @@ pub struct ThemeFile {
 //     arena_alloc: Allocator,
 //     theme: []const u8,
 //     diags: *cli.DiagnosticList,
-// ) error{OutOfMemory}!?struct {
+// ) error{ OutOfMemory, Unexpected }!?struct {
 //     path: []const u8,
-//     file: std.fs.File,
+//     file: std.Io.File,
 // } {
-pub fn open(theme: &[u8], diags: &mut DiagnosticList) -> Option<ThemeFile> {
+//
+// PORT NOTE (S-15, N140 (a)): the error set is [`Error`]; its one reachable
+// member comes from `try it.next()` (`Location::dir`'s remapped
+// `BufferTooSmall`). The `try`s on `diags.append`/`allocPrintSentinel`/
+// `path.join` are allocation failures, which abort in Rust.
+pub fn open(theme: &[u8], diags: &mut DiagnosticList) -> Result<Option<ThemeFile>, Error> {
     // Absolute themes are loaded a different path.
     // if (std.fs.path.isAbsolute(theme)) {
     if is_absolute(theme) {
-        // const file: std.fs.File = try openAbsolute(
+        // const file: std.Io.File = try openAbsolute(
         //     arena_alloc,
         //     theme,
         //     diags,
         // ) orelse return null;
-        let file: std::fs::File = open_absolute(theme, diags)?;
+        let Some(file) = open_absolute(theme, diags) else {
+            return Ok(None);
+        };
         // const stat = file.stat() catch |err| {
         //     try diags.append(arena_alloc, .{
         //         .message = try std.fmt.allocPrintSentinel(
@@ -331,7 +374,7 @@ pub fn open(theme: &[u8], diags: &mut DiagnosticList) -> Option<ThemeFile> {
         let stat = match file.metadata() {
             Ok(m) => m,
             Err(err) => {
-                let err_str = err.to_string();
+                let err_str = crate::zig_error::fmt_error(&err, crate::zig_error::Call::Stat);
                 diags.append(Diagnostic {
                     message: alloc_print(&[
                         b"not reading theme from \"",
@@ -341,7 +384,7 @@ pub fn open(theme: &[u8], diags: &mut DiagnosticList) -> Option<ThemeFile> {
                     ]),
                     ..Default::default()
                 });
-                return None;
+                return Ok(None);
             }
         };
         // switch (stat.kind) {
@@ -364,17 +407,17 @@ pub fn open(theme: &[u8], diags: &mut DiagnosticList) -> Option<ThemeFile> {
                     b"not reading theme from \"",
                     theme,
                     b"\": it is a ",
-                    kind_name(&stat).as_bytes(),
+                    crate::zig_error::file_kind_tag_name(&stat.file_type()).as_bytes(),
                 ]),
                 ..Default::default()
             });
-            return None;
+            return Ok(None);
         }
         // return .{ .path = theme, .file = file };
-        return Some(ThemeFile {
+        return Ok(Some(ThemeFile {
             path: theme.to_vec(),
             file,
-        });
+        }));
     }
 
     // const basename = std.fs.path.basename(theme);
@@ -398,7 +441,7 @@ pub fn open(theme: &[u8], diags: &mut DiagnosticList) -> Option<ThemeFile> {
             ]),
             ..Default::default()
         });
-        return None;
+        return Ok(None);
     }
 
     // Iterate over the possible locations to try to find the
@@ -407,7 +450,7 @@ pub fn open(theme: &[u8], diags: &mut DiagnosticList) -> Option<ThemeFile> {
     let mut it = LocationIterator::new();
     // const cwd = std.fs.cwd();
     // while (try it.next()) |loc| {
-    while let Some(loc) = it.next() {
+    while let Some(loc) = it.next()? {
         // const path = try std.fs.path.join(arena_alloc, &.{ loc.dir, theme });
         let path = join(&[&loc.dir, theme]);
         // if (cwd.openFile(path, .{})) |file| {
@@ -427,7 +470,8 @@ pub fn open(theme: &[u8], diags: &mut DiagnosticList) -> Option<ThemeFile> {
                 let stat = match file.metadata() {
                     Ok(m) => m,
                     Err(err) => {
-                        let err_str = err.to_string();
+                        let err_str =
+                            crate::zig_error::fmt_error(&err, crate::zig_error::Call::Stat);
                         diags.append(Diagnostic {
                             message: alloc_print(&[
                                 b"not reading theme from \"",
@@ -437,7 +481,7 @@ pub fn open(theme: &[u8], diags: &mut DiagnosticList) -> Option<ThemeFile> {
                             ]),
                             ..Default::default()
                         });
-                        return None;
+                        return Ok(None);
                     }
                 };
                 // switch (stat.kind) {
@@ -455,17 +499,17 @@ pub fn open(theme: &[u8], diags: &mut DiagnosticList) -> Option<ThemeFile> {
                             b"not reading theme from \"",
                             theme,
                             b"\": it is a ",
-                            kind_name(&stat).as_bytes(),
+                            crate::zig_error::file_kind_tag_name(&stat.file_type()).as_bytes(),
                         ]),
                         ..Default::default()
                     });
-                    return None;
+                    return Ok(None);
                 }
                 // return .{
                 //     .path = path,
                 //     .file = file,
                 // };
-                return Some(ThemeFile { path, file });
+                return Ok(Some(ThemeFile { path, file }));
             }
             // } else |err| switch (err) {
             Err(err) => match err.kind() {
@@ -486,7 +530,8 @@ pub fn open(theme: &[u8], diags: &mut DiagnosticList) -> Option<ThemeFile> {
                 //     return null;
                 // },
                 _ => {
-                    let err_str = err.to_string();
+                    let err_str =
+                        crate::zig_error::fmt_error(&err, crate::zig_error::Call::OpenFile);
                     diags.append(Diagnostic {
                         message: alloc_print(&[
                             b"failed to load theme \"",
@@ -498,7 +543,7 @@ pub fn open(theme: &[u8], diags: &mut DiagnosticList) -> Option<ThemeFile> {
                         ]),
                         ..Default::default()
                     });
-                    return None;
+                    return Ok(None);
                 }
             },
         }
@@ -511,7 +556,7 @@ pub fn open(theme: &[u8], diags: &mut DiagnosticList) -> Option<ThemeFile> {
     // it.reset();
     it.reset();
     // while (try it.next()) |loc| {
-    while let Some(loc) = it.next() {
+    while let Some(loc) = it.next()? {
         // const path = try std.fs.path.join(arena_alloc, &.{ loc.dir, theme });
         let path = join(&[&loc.dir, theme]);
         // try diags.append(arena_alloc, .{
@@ -535,7 +580,7 @@ pub fn open(theme: &[u8], diags: &mut DiagnosticList) -> Option<ThemeFile> {
     }
 
     // return null;
-    None
+    Ok(None)
 }
 
 /// Open the given theme from an absolute path. If there are any errors
@@ -583,7 +628,8 @@ pub fn open_absolute(theme: &[u8], diags: &mut DiagnosticList) -> Option<std::fs
                         b"failed to load theme from the path \"",
                         theme,
                         b"\": ",
-                        err.to_string().as_bytes(),
+                        crate::zig_error::fmt_error(&err, crate::zig_error::Call::OpenFile)
+                            .as_bytes(),
                     ]),
                     ..Default::default()
                 }),
@@ -633,21 +679,11 @@ fn alloc_print(parts: &[&[u8]]) -> Vec<u8> {
     out
 }
 
-/// `@tagName(stat.kind)` for the non-file kinds the diagnostics report. Returns
-/// the reference's `std.fs.File.Kind` tag name.
-fn kind_name(meta: &std::fs::Metadata) -> &'static str {
-    let ft = meta.file_type();
-    if ft.is_dir() {
-        "directory"
-    } else if ft.is_symlink() {
-        "sym_link"
-    } else {
-        // Block/char devices, fifos, sockets, etc. We only ever hit this arm for
-        // non-regular files; report the generic "unknown" the reference's Kind
-        // would render for anything not specifically named.
-        "unknown"
-    }
-}
+// PORT NOTE (LEDGER S78-F5): the `{}` error renderings and `@tagName(stat.kind)`
+// above go through `crate::zig_error` (`error.<Name>` and the full
+// `std.Io.File.Kind` tag set). A local `kind_name` used to collapse every kind but
+// `directory`/`sym_link` to `unknown`, and the errors printed the `io::Error`
+// Display.
 
 /// Build an `&OsStr` from raw path bytes without a lossy round-trip (R3/fidelity:
 /// byte-slices stay bytes). POSIX-only, matching the parity harness targets.
@@ -684,7 +720,7 @@ mod tests {
     fn diagnostic_preserves_theme_bytes_separator_rejection() {
         let theme = b"bad\xffname/x";
         let mut diags = DiagnosticList::default();
-        assert!(open(theme, &mut diags).is_none());
+        assert!(matches!(open(theme, &mut diags), Ok(None)));
 
         let items = diags.items();
         assert_eq!(1, items.len());
@@ -716,6 +752,68 @@ mod tests {
         assert!(
             !contains(msg, REPLACEMENT),
             "message replaced invalid bytes with U+FFFD"
+        );
+    }
+
+    // No reference test. LEDGER S78-F5: the theme diagnostics format the
+    // error with `{}` (`error.<Name>`) and a non-file with
+    // `@tagName(stat.kind)` (`theme.zig:129-153, 259-277`). MEASURED on zig
+    // 0.16.0: `/dev/null` is a `character_device`; an unreadable file opens with
+    // `error.AccessDenied`, a path through a regular file with `error.NotDir`.
+    #[cfg(unix)]
+    #[test]
+    fn diagnostics_use_zig_error_and_kind_names() {
+        use std::os::unix::fs::PermissionsExt;
+
+        // `open` of an absolute non-file: the kind's tag name.
+        let mut diags = DiagnosticList::default();
+        assert!(matches!(open(b"/dev/null", &mut diags), Ok(None)));
+        assert_eq!(
+            b"not reading theme from \"/dev/null\": it is a character_device".as_slice(),
+            diags.items()[0].message.as_slice()
+        );
+
+        let dir = std::env::temp_dir().join(format!("rustty-s78f5-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let plain = dir.join("plain");
+        std::fs::write(&plain, b"background = 000000\n").unwrap();
+        let locked = dir.join("locked");
+        std::fs::write(&locked, b"background = 000000\n").unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        // `openAbsolute`'s `else` arm: `error.NotDir`.
+        let not_dir = format!("{}/x", plain.to_str().unwrap());
+        let mut diags = DiagnosticList::default();
+        assert!(open_absolute(not_dir.as_bytes(), &mut diags).is_none());
+        let not_dir_msg = diags.items()[0].message.clone();
+
+        // ... and `error.AccessDenied`, when the file really is unreadable.
+        let locked_str = locked.to_str().unwrap().to_string();
+        let readable = std::fs::File::open(&locked).is_ok();
+        let mut diags = DiagnosticList::default();
+        let opened = open_absolute(locked_str.as_bytes(), &mut diags).is_some();
+        let locked_msg = diags.items().first().map(|d| d.message.clone());
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        assert_eq!(
+            format!("failed to load theme from the path \"{not_dir}\": error.NotDir").as_bytes(),
+            not_dir_msg.as_slice()
+        );
+        // R14: the AccessDenied arm needs a process without read access to a
+        // 0o000 file, which every CI lane and developer checkout has (only
+        // root has it). There is no skip: under root this fails, naming why.
+        assert!(
+            !readable,
+            "this test must run without root: a 0o000 file was readable, so the \
+             AccessDenied arm cannot be reached"
+        );
+        assert!(!opened);
+        assert_eq!(
+            Some(
+                format!("failed to load theme from the path \"{locked_str}\": error.AccessDenied")
+                    .into_bytes()
+            ),
+            locked_msg
         );
     }
 }

@@ -27,6 +27,9 @@
 
 #[cfg(target_arch = "wasm32")]
 pub use wasm::Shaper;
+// The shaper's error set, named by `shape::ShaperError` (S-14).
+#[cfg(target_arch = "wasm32")]
+pub use wasm::Error;
 // Re-export the C-ABI exports by path so the browser cdylib deliverable can
 // force-retain them (`#[used]`), and so they participate in the public API.
 #[cfg(target_arch = "wasm32")]
@@ -91,11 +94,33 @@ mod wasm {
     }
 
     // pub const Shaper = struct {
-    //     const RunBuf = std.MultiArrayList(struct { codepoint: u32, cluster: u32 });
+    //     const RunBuf = std.MultiArrayList(struct {
+    //         /// The codepoint for this cell. This must be used in conjunction
+    //         /// with cluster to find the total set of codepoints for a given
+    //         /// cell. See cluster for more information.
+    //         codepoint: u32,
+    //
+    //         /// Cluster is set to the X value of the cell that this codepoint
+    //         /// is part of. Note that a cell can have multiple codepoints
+    //         /// with zero-width joiners (ZWJ) and such. Note that terminals
+    //         /// do NOT handle full extended grapheme clustering well so it
+    //         /// is possible a single grapheme extends multiple clusters.
+    //         /// For example, skin tone emoji thumbs up may show up as two
+    //         /// clusters: one with thumbs up and the ZWJ, and a second
+    //         /// cluster with the tone block. It is up to the shaper to handle
+    //         /// shaping these together into a single glyph, if it wishes.
+    //         cluster: u32,
+    //     });
+    //
+    //     /// The allocator used for run_buf.
     //     alloc: Allocator,
+    //
     //     cell_buf: []font.shape.Cell,
     //     run_buf: RunBuf,
     // };
+    // PORT NOTE: the `alloc` field has no Rust counterpart (`run_buf` is a
+    // `Vec` that owns its allocator); the RunBuf field docs above describe the
+    // `(codepoint, cluster)` tuple entries of `run_buf` below.
     pub struct Shaper {
         /// The shared memory used for shaping results.
         // PORT NOTE: the reference `cell_buf` is a fixed `[]Cell` slice passed in
@@ -130,9 +155,9 @@ mod wasm {
         // pub fn endFrame(self: *const Shaper) void { _ = self; }
         pub fn end_frame(&self) {}
 
-        /// Returns an iterator that returns one text run at a time for the given
-        /// terminal row. Note that text runs are only valid one at a time for a
-        /// Shaper struct since they share state.
+        /// Returns an iterator that returns one text run at a time for the
+        /// given terminal row. Note that text runs are only valid one at a time
+        /// for a Shaper struct since they share state.
         // pub fn runIterator(self: *Shaper, opts: font.shape.RunOptions) font.shape.RunIterator {
         pub fn run_iterator<'a>(&mut self, opts: shape::RunOptions<'a>) -> RunIterator<'a, Hook> {
             RunIterator {
@@ -144,9 +169,9 @@ mod wasm {
             }
         }
 
-        /// Shape the given text run. The text run must be the immediately previous
-        /// text run that was iterated since the text run does share state with the
-        /// Shaper struct.
+        /// Shape the given text run. The text run must be the immediately
+        /// previous text run that was iterated since the text run does share
+        /// state with the Shaper struct.
         ///
         /// The return value is only valid until the next shape call is called.
         // pub fn shape(self: *Shaper, run: font.shape.TextRun) ![]font.shape.Cell {
@@ -182,13 +207,13 @@ mod wasm {
                 _ => {}
             }
 
-            // We know we have at least two codepoints, so we now go through each
-            // and perform grapheme clustering.
+            // We know we have at least two codepoints, so we now go through
+            // each and perform grapheme clustering.
             //
-            // Note that due to limitations of canvas, we can NOT support font
-            // ligatures. However, we do support grapheme clustering. This means we
-            // can render things like skin tone emoji but we can't render things
-            // like single glyph "=>".
+            // Note that due to limitations of canvas, we can NOT support
+            // font ligatures. However, we do support grapheme clustering.
+            // This means we can render things like skin tone emoji but
+            // we can't render things like single glyph "=>".
             // var break_state: uucode.grapheme.BreakState = .default;
             // var cp1: u21 = @intCast(codepoints[0]);
             let mut break_state: BreakState = BreakState::Default;
@@ -196,9 +221,10 @@ mod wasm {
 
             let mut start: usize = 0;
             let mut i: usize = 1;
-            // We loop to codepoints.len so that we can handle the end case. In the
-            // end case, we always assume it is a grapheme break. This isn't
-            // strictly true but its how terminals work today.
+            // We loop to codepoints.len so that we can handle the end
+            // case. In the end case, we always assume it is a grapheme
+            // break. This isn't strictly true but its how terminals
+            // work today.
             while i <= n {
                 let grapheme_break_here = if i == n {
                     true
@@ -237,6 +263,7 @@ mod wasm {
                     // case we UTF-8 encode the codepoints and send them to the face
                     // to reserve a private glyph index.
                     //
+                    // UTF-8 encode the codepoints in this cluster.
                     // const cluster = cluster: { … utf8 encode codepoints[start..i] … };
                     let mut cluster: Vec<u8> = Vec::new();
                     for k in start..i {
@@ -420,7 +447,7 @@ mod wasm {
     mod ghostty_wasm_abi {
         use super::{collection, shape, Shaper};
         use crate::shared_grid::SharedGrid;
-        use allocator_api2::alloc::Global;
+        use rustty_vt::alloc::Global;
         use rustty_vt::page::ContentTag;
         use rustty_vt::pagelist::Node;
         use rustty_vt::point::{Coordinate, Point};

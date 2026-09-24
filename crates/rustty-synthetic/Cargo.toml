@@ -29,6 +29,8 @@ rustty-args = { workspace = true }
 allocator-api2 = { workspace = true }
 
 # main_gen.zig: `pub const main = synthetic.cli.main;`
+# The executable is `rustty-gen`: `GhosttyBench.zig:19` names it `ghostty-gen`
+# (S63-F12). The crate keeps its `rustty-synthetic` identity (R4).
 [[bin]]
-name = "rustty-synthetic"
+name = "rustty-gen"
 path = "src/main_gen.rs"

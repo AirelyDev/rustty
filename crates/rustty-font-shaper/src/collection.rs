@@ -315,8 +315,13 @@ impl Collection {
     // calls it) and the Linux fontconfig_freetype backend (whose discoverer is an
     // `unimplemented!()` stub until L3 Task 6/7; note the reference's
     // `Fontconfig.discoverFallback` discards `collection` entirely, so the real
-    // Fontconfig discoverer will not call this either).
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    // Fontconfig discoverer will not call this either). (S-14: keyed on the
+    // backend, not the OS — the caller is `discoverCodepoint`'s CoreText body,
+    // which exists only on the CoreText backends without FreeType.)
+    #[cfg_attr(
+        not(all(rustty_font_has_coretext, not(rustty_font_has_freetype))),
+        allow(dead_code)
+    )]
     pub(crate) fn style_face_count(&self, style: Style) -> usize {
         self.faces.get(style).count()
     }
@@ -712,7 +717,8 @@ impl Collection {
         let face = regular.synthetic_bold(opts.face_options())?;
         // PORT NOTE: the reference computes `face_opts` (with the inherited size)
         // but then passes `opts.faceOptions()` to `syntheticBold`; `face_opts` is
-        // dead. Preserved faithfully (the assignment is a no-op).
+        // dead. Preserved faithfully (the assignment is a no-op; unobservable at
+        // the pin, UPSTREAM-DEFECTS.md UD248).
         let _ = face_opts;
 
         let mut buf = [0u8; 256];
@@ -1579,9 +1585,11 @@ mod tests {
     // the deferred face loads but the post-load `set_size` (scale != 1.0) fails,
     // the freshly loaded face must be deinitialized before the error propagates.
     // Fails without the materialized errdefer in `get_face_from_entry`.
-    // (macOS-only: it builds the deferred face from a CTFont; the Linux
-    // Fontconfig deferred payload requires a live fontconfig pattern.)
-    #[cfg(target_os = "macos")]
+    // (CoreText-backends only: it builds the deferred face's `ct` payload from
+    // a CTFont; the Linux Fontconfig deferred payload requires a live
+    // fontconfig pattern. Under `coretext_freetype` the load takes the
+    // FreeType-by-path arm, which Menlo — a system font file — satisfies.)
+    #[cfg(rustty_font_has_coretext)]
     #[test]
     fn get_face_deferred_set_size_failure_deinits_face() {
         use crate::deferred_face::{new_cfstring, CoreTextData};
@@ -1599,10 +1607,7 @@ mod tests {
         let name = new_cfstring("Menlo").unwrap();
         let ct_font = unsafe { CTFont::with_name(&name, 12.0, core::ptr::null()) };
         let deferred = DeferredFace {
-            ct: Some(CoreTextData {
-                font: ct_font,
-                variations: Vec::new(),
-            }),
+            ct: Some(CoreTextData::new(ct_font, Vec::new())),
         };
 
         let idx = c
@@ -1968,14 +1973,20 @@ mod tests {
 
     // test "hasCodepoint emoji default graphical"
     #[test]
+    #[cfg_attr(
+        not(rustty_font_backend = "fontconfig_freetype"),
+        ignore = "SkipZigTest: fontconfig_freetype backend only (R14)"
+    )]
     fn has_codepoint_emoji_default_graphical() {
         // if (options.backend != .fontconfig_freetype) return error.SkipZigTest;
         //
         // PORT NOTE: the reference early-returns `SkipZigTest` when the backend
         // isn't `fontconfig_freetype`; here the body runs only when it is (an
-        // inverted guard, equivalent to the skip and clippy-clean). On the macOS
-        // coretext gate the condition is false, so the test is a no-op skip.
-        #[cfg(not(target_os = "macos"))]
+        // inverted guard, equivalent to the skip and clippy-clean). Where the
+        // condition is false (every other `-Dfont-backend`) the
+        // `cfg_attr(.., ignore)` above reports the test `ignored` instead of an
+        // empty pass (R14). The `#[cfg]` keys the body on the same backend.
+        #[cfg(rustty_font_backend = "fontconfig_freetype")]
         if options::BACKEND == Backend::FontconfigFreetype {
             let test_emoji = embedded::EMOJI;
 
@@ -2279,56 +2290,169 @@ mod tests {
     }
 
     // test "face metrics"
+    //
+    // PORT NOTE (S-8c): the body is ported LIVE and the reference's skip is kept
+    // as scope. The reference skips this test on EVERY backend except
+    // `web_canvas`, which is the backend its own comment excludes. On
+    // `web_canvas` the body would then reach the `.web_canvas => unreachable`
+    // prong of every expected-value switch (`Collection.zig:1440-1502`). So the
+    // test checks nothing upstream. That is a reference test-weakness, recorded as
+    // NEW-FINDINGS N265 (it needs a UD id); per R13 it stays faithful here. The
+    // skip is compile-time scope (`options::BACKEND`, the `rustty_font_backend`
+    // cfg), so it is the `cfg_attr` ignore below (R14 form 1). Run with
+    // `--ignored`, the body measures the built backend against the reference's
+    // own expected values for it (S-14: including `coretext_freetype`'s FreeType
+    // arm on macOS). Those FreeType values are stale upstream (they predate the
+    // light-hinting default; NEW-FINDINGS N285, UPSTREAM-DEFECTS UD281): under a
+    // FreeType backend the body fails on narrow `cell_width` (7.0 vs 8.0) and
+    // wide `ascii_height` (15.5 vs 16.0), as Ghostty's would. Kept faithful.
     #[test]
-    // PORT NOTE (W9-04): the reference reports this test as `SkipZigTest` on
-    // every backend but `web_canvas`; rustty's inverted guard made it report a
-    // green PASS with ZERO assertions instead. `#[ignore]` is the faithful
-    // signal (reported IGNORED, not passed). The body stays deferred: the
-    // upstream oracle is unexecutable even on its only non-skip backend —
-    // `Collection.zig:1448,1468,1482,1502` mark `.web_canvas => unreachable`
-    // for every expected-value switch, and ghostty's `face/web_canvas.zig` has
-    // no `getMetrics`/`FaceMetrics` at all — so a faithful body would need a
-    // browser-hosted wasm runner measuring live Canvas metrics, not ported
-    // constants.
-    #[ignore = "web_canvas-only (reference: SkipZigTest, Collection.zig:1398); needs a browser-hosted wasm runner"]
+    #[cfg_attr(
+        not(rustty_font_backend = "web_canvas"),
+        ignore = "SkipZigTest: the reference runs this only on web_canvas \
+                  (Collection.zig:1398; inverted guard, N265) (R14)"
+    )]
     fn face_metrics() {
         // The web canvas backend doesn't calculate face metrics, only cell metrics
         // if (options.backend != .web_canvas) return error.SkipZigTest;
-        //
-        // PORT NOTE: `web_canvas` is never the active backend for the macOS/Linux
-        // parity targets, so this test always takes the skip path (its body needs
-        // the `cozette`/`geist_mono` embeds + web_canvas measurements). W9-04:
-        // `web_canvas::Face` has since landed (live on wasm32), but the body has
-        // not — and cannot be ported faithfully, because the reference's own
-        // expected values are `.web_canvas => unreachable` (see the `#[ignore]`
-        // rationale above); it needs a browser-hosted wasm runner instead. The
-        // `!= web_canvas` skip is expressed as an inverted `== web_canvas` guard
-        // (clippy-clean).
-        // The reference body (DEFERRED) is preserved verbatim:
-        //
-        //   const narrowFont = font.embedded.cozette;
-        //   const wideFont = font.embedded.geist_mono;
-        //   var lib = try Library.init(alloc); defer lib.deinit();
-        //   var c = init(); defer c.deinit(alloc);
-        //   const size: DesiredSize = .{ .points = 12, .xdpi = 96, .ydpi = 96 };
-        //   c.load_options = .{ .library = lib, .size = size };
-        //   const narrowIndex = try c.add(alloc, try .init(lib, narrowFont, .{ .size = size }), ...);
-        //   const wideIndex = try c.add(alloc, try .init(lib, wideFont, .{ .size = size }), ...);
-        //   const narrowMetrics: font.Metrics.FaceMetrics = (try c.getFace(narrowIndex)).getMetrics();
-        //   const wideMetrics: font.Metrics.FaceMetrics = (try c.getFace(wideIndex)).getMetrics();
-        //   // Verify provided/measured metrics. Measured
-        //   // values are backend-dependent due to hinting.
-        //   const narrowMetricsExpected = font.Metrics.FaceMetrics{ ... };
-        //   const wideMetricsExpected = font.Metrics.FaceMetrics{ ... };
-        //   inline for (.{ narrowMetricsExpected, wideMetricsExpected }, .{ narrowMetrics, wideMetrics })
-        //       |metricsExpected, metricsActual| { try comparison.expectApproxEqual(metricsExpected, metricsActual); }
-        //   // Verify estimated metrics. icWidth() should equal the smaller of
-        //   // 2 * cell_width and ascii_height. For a narrow (wide) font, the
-        //   // smaller quantity is the former (latter).
-        //   try std.testing.expectEqual(2 * narrowMetrics.cell_width, narrowMetrics.icWidth());
-        //   try std.testing.expectEqual(wideMetrics.ascii_height, wideMetrics.icWidth());
-        if options::BACKEND == Backend::WebCanvas {
-            // (body DEFERRED with the web_canvas backend)
+        // (the `cfg_attr` above IS that skip)
+
+        // const narrowFont = font.embedded.cozette;
+        let narrow_font = embedded::COZETTE;
+        // const wideFont = font.embedded.geist_mono;
+        let wide_font = embedded::GEIST_MONO;
+
+        // var lib = try Library.init(alloc);
+        let mut lib = Library::init().unwrap();
+
+        // var c = init();
+        let mut c = Collection::init();
+        // const size: DesiredSize = .{ .points = 12, .xdpi = 96, .ydpi = 96 };
+        let size = DesiredSize {
+            points: 12.0,
+            xdpi: 96,
+            ydpi: 96,
+        };
+        // c.load_options = .{ .library = lib, .size = size };
+        c.load_options = Some(LoadOptions {
+            library: lib,
+            size,
+            ..Default::default()
+        });
+
+        // const narrowIndex = try c.add(alloc, try .init(lib, narrowFont, .{ .size = size }), .{
+        //     .style = .regular, .fallback = false, .size_adjustment = .none });
+        let narrow_index = c
+            .add(
+                Face::init(lib, narrow_font, opts(size)).unwrap(),
+                AddOptions {
+                    style: Style::Regular,
+                    fallback: false,
+                    size_adjustment: SizeAdjustment::None,
+                },
+            )
+            .unwrap();
+        // const wideIndex = try c.add(alloc, try .init(lib, wideFont, .{ .size = size }), .{
+        //     .style = .regular, .fallback = false, .size_adjustment = .none });
+        let wide_index = c
+            .add(
+                Face::init(lib, wide_font, opts(size)).unwrap(),
+                AddOptions {
+                    style: Style::Regular,
+                    fallback: false,
+                    size_adjustment: SizeAdjustment::None,
+                },
+            )
+            .unwrap();
+
+        // const narrowMetrics: font.Metrics.FaceMetrics = (try c.getFace(narrowIndex)).getMetrics();
+        let narrow_metrics: FaceMetrics =
+            unsafe { &*c.get_face(narrow_index).unwrap() }.get_metrics();
+        // const wideMetrics: font.Metrics.FaceMetrics = (try c.getFace(wideIndex)).getMetrics();
+        let wide_metrics: FaceMetrics = unsafe { &*c.get_face(wide_index).unwrap() }.get_metrics();
+
+        // PORT NOTE: the reference's switches name no `freetype_windows` prong
+        // (the enum gained it after the test was written), so Zig would reject
+        // them if ever analyzed there; `unreachable!()` stands in for that
+        // missing prong, next to the reference's own `.web_canvas => unreachable`.
+
+        // Verify provided/measured metrics. Measured
+        // values are backend-dependent due to hinting.
+        let narrow_metrics_expected = FaceMetrics {
+            px_per_em: 16.0,
+            cell_width: match options::BACKEND {
+                Backend::Freetype | Backend::FontconfigFreetype | Backend::CoretextFreetype => 8.0,
+                Backend::Coretext | Backend::CoretextHarfbuzz | Backend::CoretextNoshape => {
+                    7.3828125
+                }
+                Backend::WebCanvas | Backend::FreetypeWindows => unreachable!(),
+            },
+            ascent: 12.3046875,
+            descent: -3.6953125,
+            line_gap: 0.0,
+            underline_position: Some(-1.2265625),
+            underline_thickness: Some(1.2265625),
+            strikethrough_position: Some(6.15625),
+            strikethrough_thickness: Some(1.234375),
+            cap_height: Some(9.84375),
+            ex_height: Some(7.3828125),
+            ascii_height: Some(match options::BACKEND {
+                Backend::Freetype | Backend::FontconfigFreetype | Backend::CoretextFreetype => {
+                    18.0625
+                }
+                Backend::Coretext | Backend::CoretextHarfbuzz | Backend::CoretextNoshape => 16.0,
+                Backend::WebCanvas | Backend::FreetypeWindows => unreachable!(),
+            }),
+            ic_width: None,
+        };
+        let wide_metrics_expected = FaceMetrics {
+            px_per_em: 16.0,
+            cell_width: match options::BACKEND {
+                Backend::Freetype | Backend::FontconfigFreetype | Backend::CoretextFreetype => 10.0,
+                Backend::Coretext | Backend::CoretextHarfbuzz | Backend::CoretextNoshape => 9.6,
+                Backend::WebCanvas | Backend::FreetypeWindows => unreachable!(),
+            },
+            ascent: 14.72,
+            descent: -3.52,
+            line_gap: 1.6,
+            underline_position: Some(-1.6),
+            underline_thickness: Some(0.8),
+            strikethrough_position: Some(4.24),
+            strikethrough_thickness: Some(0.8),
+            cap_height: Some(11.36),
+            ex_height: Some(8.48),
+            ascii_height: Some(match options::BACKEND {
+                Backend::Freetype | Backend::FontconfigFreetype | Backend::CoretextFreetype => 16.0,
+                Backend::Coretext | Backend::CoretextHarfbuzz | Backend::CoretextNoshape => {
+                    15.472000000000001
+                }
+                Backend::WebCanvas | Backend::FreetypeWindows => unreachable!(),
+            }),
+            ic_width: None,
+        };
+
+        // inline for (
+        //     .{ narrowMetricsExpected, wideMetricsExpected },
+        //     .{ narrowMetrics, wideMetrics },
+        // ) |metricsExpected, metricsActual| {
+        //     try comparison.expectApproxEqual(metricsExpected, metricsActual);
+        // }
+        for (metrics_expected, metrics_actual) in [
+            (narrow_metrics_expected, narrow_metrics),
+            (wide_metrics_expected, wide_metrics),
+        ] {
+            assert!(expect_approx_equal(&metrics_expected, &metrics_actual).is_ok());
         }
+
+        // Verify estimated metrics. icWidth() should equal the smaller of
+        // 2 * cell_width and ascii_height. For a narrow (wide) font, the
+        // smaller quantity is the former (latter).
+        // try std.testing.expectEqual(2 * narrowMetrics.cell_width, narrowMetrics.icWidth());
+        assert_eq!(2.0 * narrow_metrics.cell_width, narrow_metrics.ic_width());
+        // try std.testing.expectEqual(wideMetrics.ascii_height, wideMetrics.icWidth());
+        assert_eq!(wide_metrics.ascii_height, Some(wide_metrics.ic_width()));
+
+        c.deinit();
+        lib.deinit();
     }
 }

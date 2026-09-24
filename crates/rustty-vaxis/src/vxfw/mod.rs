@@ -1,5 +1,5 @@
 //! rustty-vaxis::vxfw — the vxfw (vaxis widget framework) SUBSET that `cli +boo`
-//! consumes, ported from the vendored `libvaxis` 0.5.1 `src/vxfw/`.
+//! consumes, ported from the vendored `libvaxis` 0.6.0 `src/vxfw/` (0.5.1 until S-10b).
 //!
 //! PORTS: `vaxis/src/vxfw/vxfw.zig` — the framework core: the value types
 //! (`Size`/`MaxSize`/`Point`/`RelativePoint`/`HitResult`/`CursorState`/`UserEvent`/
@@ -206,7 +206,7 @@ pub enum Event<'a> {
     Tick,                      // An event from a Tick command
     Init,                      // sent when the application starts
     MouseLeave,                // The mouse has left the widget
-    MouseEnter,                // The mouse has enterred the widget
+    MouseEnter,                // The mouse has entered the widget
 }
 
 // SAFETY: the Loop read thread only ever constructs the pointer-free variants
@@ -259,28 +259,31 @@ impl LoopEvent for Event<'static> {
 // Tick + Command
 // ===========================================================================
 
-/// `pub const Tick = struct { deadline_ms: i64, widget: Widget };`
+/// `pub const Tick = struct { deadline: std.Io.Timestamp, widget: Widget };`
+///
+/// PORT NOTE (libvaxis 0.6.0): the deadline is a `std.Io.Timestamp` read from the `.awake`
+/// (monotonic) clock; 0.5.1 kept `deadline_ms: i64` from `std.time.milliTimestamp()` (the
+/// wall clock). `std::time::Instant` is Rust's monotonic clock.
 #[derive(Clone, Copy)]
 pub struct Tick<'a> {
-    pub deadline_ms: i64,
+    pub deadline: std::time::Instant,
     pub widget: Widget<'a>,
 }
 
 impl<'a> Tick<'a> {
-    /// `pub fn lessThan(_: void, lhs: Tick, rhs: Tick) bool { return lhs.deadline_ms > rhs.deadline_ms; }`
+    /// `pub fn lessThan(_: void, lhs: Tick, rhs: Tick) bool { return lhs.deadline.nanoseconds > rhs.deadline.nanoseconds; }`
     ///
     /// PORT-NOTE: DESCENDING by deadline (`>`), so the timer list stays sorted with
     /// the soonest deadline LAST (the reference `checkTimers` pops from the end).
     pub fn less_than(lhs: &Tick, rhs: &Tick) -> bool {
-        lhs.deadline_ms > rhs.deadline_ms
+        lhs.deadline > rhs.deadline
     }
 
+    /// `pub fn in(io: std.Io, ms: u32, widget: Widget) Command` (the `io` is dropped).
     pub fn in_ms(ms: u32, widget: Widget<'a>) -> Command<'a> {
-        let now = now_ms();
-        Command::Tick(Tick {
-            deadline_ms: now + ms as i64,
-            widget,
-        })
+        let now = std::time::Instant::now();
+        let deadline = now + std::time::Duration::from_millis(u64::from(ms));
+        Command::Tick(Tick { deadline, widget })
     }
 }
 
@@ -321,7 +324,8 @@ pub enum Phase {
 
 /// `pub const EventContext = struct { ... }`.
 ///
-/// PORT-NOTE: the Zig `alloc: Allocator` field is dropped — the `cmds` `Vec` and the
+/// PORT-NOTE: the Zig `alloc: Allocator` field (and 0.6.0's `io: std.Io`, used only by
+/// `tick` for the clock) are dropped — the `cmds` `Vec` and the
 /// `sendNotification` dupes own their memory (Rust frees on drop / handler consumes).
 pub struct EventContext<'a> {
     pub phase: Phase,
@@ -363,12 +367,20 @@ impl<'a> EventContext<'a> {
         self.add_cmd(Command::RequestFocus(widget))
     }
 
-    pub fn copy_to_clipboard(&mut self, content: Vec<u8>) -> Result<(), Error> {
-        self.add_cmd(Command::CopyToClipboard(content))
+    /// Copy content to clipboard.
+    /// content is duplicated using self.alloc.
+    /// Caller retains ownership of their copy of content.
+    ///
+    /// (libvaxis 0.6.0; 0.5.1 queued the caller's slice. The port queues an owned copy.)
+    pub fn copy_to_clipboard(&mut self, content: &[u8]) -> Result<(), Error> {
+        self.add_cmd(Command::CopyToClipboard(content.to_vec()))
     }
 
-    pub fn set_title(&mut self, title: Vec<u8>) -> Result<(), Error> {
-        self.add_cmd(Command::SetTitle(title))
+    /// Set window title.
+    /// title is duplicated using self.alloc.
+    /// Caller retains ownership of their copy of title.
+    pub fn set_title(&mut self, title: &[u8]) -> Result<(), Error> {
+        self.add_cmd(Command::SetTitle(title.to_vec()))
     }
 
     pub fn queue_refresh(&mut self) -> Result<(), Error> {
@@ -878,15 +890,6 @@ impl ArenaInner {
 // ===========================================================================
 // helpers
 // ===========================================================================
-
-/// `std.time.milliTimestamp()` — milliseconds since the Unix epoch.
-pub(crate) fn now_ms() -> i64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    match SystemTime::now().duration_since(UNIX_EPOCH) {
-        Ok(d) => d.as_millis() as i64,
-        Err(e) => -(e.duration().as_millis() as i64),
-    }
-}
 
 #[cfg(test)]
 mod tests {

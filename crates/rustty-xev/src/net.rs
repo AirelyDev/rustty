@@ -26,7 +26,7 @@
 // byte-identical to it (Zig's `std/c.zig` gives the two the same shape). So this
 // module needs NO freebsd arm; widening its gate is enough.
 
-// (module is `#[cfg(any(target_os = "macos", target_os = "freebsd"))]`-gated in lib.rs)
+// (module is `#[cfg(any(target_os = "macos", target_os = "ios", target_os = "visionos", target_os = "freebsd"))]`-gated in lib.rs)
 #![allow(non_camel_case_types)]
 
 use core::mem::size_of;

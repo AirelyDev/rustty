@@ -1,5 +1,16 @@
 //! rustty-apprt
 //!
+//! "apprt" is the "application runtime" package. This abstracts the
+//! application runtime and lifecycle management such as creating windows,
+//! getting user input (mouse/keyboard), etc.
+//!
+//! This enables compile-time interfaces to be built to swap out the underlying
+//! application runtime. For example: pure macOS Cocoa, GTK+, browser, etc.
+//!
+//! The goal is to have different implementations share as much of the core
+//! logic as possible, and to only reach out to platform-specific implementation
+//! code when absolutely necessary.
+//!
 //! PORTS: ghostty src/apprt/ (gtk/, embedded, none, browser, action, surface, ipc, structs,
 //! runtime, ...) minus the apprt-api iface seam; links gtk-rs/gobject, objc, wayland
 //! (bindings, not reimplementations, per R3). Consumes breaks #8, #10, #13, #14.
@@ -10,12 +21,19 @@
 //! `embedded` (the FIRST concrete `apprt_api` trait backend, §2) is FILLED
 //! (E1 App backend, E2 Surface backend, E3 event-sink callbacks, E4 Inspector
 //! inhabited placeholder, E6–E10 CAPI wiring, E11 C-ABI smoke KAT + finale).
-//! The honest residual = the 13 tracked Phase-3 leaves in `embedded.rs` (ALL
-//! dcimgui/Metal Inspector surface: `Surface::queueInspectorRender` +
-//! `Inspector::{init,deinit,initMetal,renderMetal}` + `Backend::deinit` + the
-//! 6 IO callbacks + `newFrame` — DEFERRALS.md "rustty-apprt embedded E4"), and
-//! GTK (a whole unported subsystem, GAP_ANALYSIS §3.7 — why the crate is not
-//! `done`). The libghostty C ABI wrappers live in the separate `rustty-apprt-c`
+//! ~~The honest residual = the 13 tracked Phase-3 leaves in `embedded.rs` (ALL
+//! dcimgui/Metal Inspector surface ...) and GTK (a whole unported subsystem,
+//! GAP_ANALYSIS §3.7 — why the crate is not `done`).~~ Stale (parity tail S-8b,
+//! 2026-09-24): the E4 Inspector leaves are RESOLVED (DEFERRALS.md "rustty-apprt
+//! embedded E4", WS6) and the GTK apprt is ported under `gtk/`. What still keeps
+//! this crate `in-progress`: G3b comment coverage for the GTK files the parity
+//! tail's T-D batch rewrites (`gtk/app.rs`, `class/{application,surface,window}.rs`,
+//! `media.rs`, `portal.rs`, `portal/open_uri.rs`, `winproto/{wayland,x11}.rs`,
+//! `winproto/wayland/hotkeys.rs` — ~730 dropped reference comments, restored after
+//! that merge). (Parity tail S-8d, 2026-09-24: of the two unported reference fns
+//! S-8b named, `gsettings.zig` `getAlloc` is now ported as `gtk::gsettings::get_alloc`,
+//! and `class/config.zig` `getMut` is a recorded NON-PORT — `.port/phase-4/NON_PORTS.md`.)
+//! The libghostty C ABI wrappers live in the separate `rustty-apprt-c`
 //! top-sink crate (vt-c precedent, §3). This crate also hosts the global-state
 //! precursor [`init`] the C ABI's `rustty_init` calls.
 //!
@@ -29,6 +47,28 @@
 // binds `A = embedded::App`, EMBEDDED_BLUEPRINT §2). The `apprt.ipc`/`action`/
 // `surface`/`runtime`/`structs` interface seam already lives in
 // `rustty-apprt-api` (break #8); this crate carries the concrete backends.
+//
+// The reference selector and its companion constant, carried verbatim:
+//
+// /// The implementation to use for the app runtime. This is comptime chosen
+// /// so that every build has exactly one application runtime implementation.
+// /// Note: it is very rare to use Runtime directly; most usage will use
+// /// Window or something.
+// pub const runtime = switch (build_config.artifact) { ... };
+//
+// /// True if all GPU operations (drawing, resource creation and
+// /// destruction) must happen on the app thread. This is the case
+// /// when the graphics context is owned by the app thread (GTK's
+// /// GLArea). When false, the render thread performs GPU operations
+// /// itself.
+// pub const must_draw_from_app_thread =
+//     @hasDecl(App, "must_draw_from_app_thread") and
+//     App.must_draw_from_app_thread;
+//
+// PORT NOTE: `must_draw_from_app_thread` is the
+// `rustty_apprt_api::App::MUST_DRAW_FROM_APP_THREAD` associated const (the
+// `@hasDecl` probe becomes a defaulted trait const each backend may
+// override; the GTK `App` sets it to `true`).
 pub mod browser;
 pub mod embedded;
 // PORT NOTE (R5): the reference re-exports `gtk` unconditionally (`apprt.zig:17`
@@ -55,6 +95,17 @@ pub mod embedded;
 #[cfg(all(any(target_os = "linux", target_os = "freebsd"), feature = "gtk"))]
 pub mod gtk;
 pub mod none;
+
+/// Whether the GTK winproto X11 / Wayland arms are built into this crate:
+/// the reference's `build_options.x11` / `build_options.wayland`, whose
+/// defaults come from the system GTK4's targets (`src/build/gtk.zig`,
+/// S65-F6). Decided by `build.rs`; see `gtk_targets.rs`.
+pub const GTK_X11: bool = cfg!(rustty_gtk_x11);
+/// See [`GTK_X11`].
+pub const GTK_WAYLAND: bool = cfg!(rustty_gtk_wayland);
+
+#[cfg(test)]
+mod gtk_targets;
 
 // TEST-ONLY: the capture `log::Log` the restored `LOG`-row sites are asserted
 // against (stage 14d-3). Not part of any published surface.
@@ -214,9 +265,7 @@ pub fn init_with_action(action_detected: bool) -> Result<rustty_core::Logging, I
     //   which can see both — does the discovery and publishes it. This is what
     //   makes `file::randomTmpPath` a cached lookup instead of a per-call
     //   `allocTmpDir` + `freeTmpDir` pair.
-    rustty_global::set_tmp_dir_path(
-        rustty_os::file::allocTmpDir(&rustty_global::environ()).into_bytes(),
-    );
+    rustty_global::set_tmp_dir_path(rustty_os::file::allocTmpDir(&rustty_global::environ()));
 
     // We first try to parse any action that we may be executing.
     //   (done by the caller; `action_detected` carries the result.)
@@ -295,7 +344,7 @@ pub fn init_with_action(action_detected: bool) -> Result<rustty_core::Logging, I
     log_with(
         Level::Info,
         "default",
-        &format!("rustty version={}", build_config::VERSION_STRING),
+        &format!("rustty version={}", rustty_version::VERSION_STRING),
         &logging,
     );
     log_with(
@@ -540,6 +589,44 @@ pub fn init_with_action(action_detected: bool) -> Result<rustty_core::Logging, I
 
     *done = true;
     Ok(logging)
+}
+
+/// Cleans up the global state. This doesn't _need_ to be called but
+/// doing so in dev modes will check for memory leaks.
+///
+/// Asserts that the state exists.
+///
+/// PORTS: `global.zig` `pub fn deinit() void`, the body `rustty_global`'s
+/// leaf `GlobalState::deinit` cannot run because `crash` is above it (R4). Its
+/// one caller is `main_ghostty.zig`'s `defer global.deinit();`, i.e. the
+/// GUI-launch path of the `rustty` binary (parity S43-F4 / S44-F2).
+///
+/// PORT NOTE: `rustty_core::STATE` is a `OnceLock` that is never emptied, so
+/// the owned `resources_dir` and `tmp_dir_path` are released by process exit
+/// rather than here; there is no `std.Io` instance and no GPA (the leak check)
+/// in the port. What remains observable is the crash-log flush.
+pub fn deinit() {
+    // self.resources_dir.deinit(self.alloc);
+    //   (owned by the never-emptied `STATE`; see the PORT NOTE above)
+
+    // Flush our crash logs
+    // crash.deinit();
+    rustty_crash::deinit();
+
+    // Release our tmp_dir_path if needed
+    // if (self.tmp_dir_path) |td| freeTmpDir(self.alloc, td);
+    //   (`freeTmpDir` is a no-op off Windows; the port's path is an owned
+    //   `Vec<u8>` in `rustty_global`, released by process exit.)
+
+    // Release our I/O instance
+    // self.io_impl.deinit();
+    //
+    // if (self.gpa) |*value| {
+    //     // We want to ensure that we deinit the GPA because this is
+    //     // the point at which it will output if there were safety violations.
+    //     _ = value.deinit();
+    // }
+    //   (no `std.Io` or GPA in the port)
 }
 
 /// Compat wrapper — the pre-WS4 `init()` signature (no CLI action detected:

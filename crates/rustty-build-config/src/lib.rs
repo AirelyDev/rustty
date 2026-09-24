@@ -29,7 +29,10 @@
 //! files; their `test {}` blocks remain owned by the apprt/font/renderer
 //! crates per the Phase-0 inventory contract.
 //!
-//! Version/identity are pulled from `rustty-identity` (R2).
+//! Version/identity are pulled from `rustty-identity` (R2). The git-derived
+//! `version` / `version_string` / `release_channel` are the `rustty-version`
+//! crate's: they change on every commit, and only the crates that report them
+//! depend on that crate (review T-B, blocking 1).
 //!
 //! NO dependency on the ghostty tree (R3) — the reference is an external
 //! oracle only. No upward deps (R4).
@@ -89,18 +92,6 @@ const fn host_target() -> Target {
 /// The wasm target platform. In the reference `init()` this is hardcoded to
 /// `.browser` (the only semi-usable runtime); the port mirrors that.
 const HOST_WASM_TARGET: WasmTarget = WasmTarget::Browser;
-
-/// The release channel for this build.
-///
-/// Reference: `release_channel = std.meta.stringToEnum(ReleaseChannel,
-/// @tagName(options.release_channel)).?`. In the reference this is resolved
-/// from the `build_options` generated at `zig build` time; here the release
-/// channel is derived from the identity version string in the same way the
-/// build script computes it (see [`ReleaseChannel::from_version`]): a version
-/// with no pre-release component is `stable`, otherwise `tip`.
-pub const fn release_channel() -> ReleaseChannel {
-    ReleaseChannel::from_version_pre(version_pre())
-}
 
 /// The optimization mode as a string.
 ///
@@ -162,18 +153,6 @@ pub const fn mode_string_for(opt_level: &str, debug_assertions: bool) -> &'stati
     }
 }
 
-/// The semantic version of this build.
-///
-/// Reference: `pub const version = options.app_version;`. Pulled from the
-/// `rustty-identity` source-of-truth crate (R2) rather than the Zig
-/// `build_options`.
-pub const VERSION: &str = rustty_identity::VERSION;
-
-/// The semantic version of this build, as a string.
-///
-/// Reference: `pub const version_string = options.app_version_string;`.
-pub const VERSION_STRING: &str = rustty_identity::VERSION;
-
 /// The Rust toolchain version this build was compiled with (bare version, e.g.
 /// `1.93.1 (…)`).
 ///
@@ -182,37 +161,6 @@ pub const VERSION_STRING: &str = rustty_identity::VERSION;
 /// because build-config is the port's home for build-environment constants.
 /// Captured by `build.rs` from `$RUSTC --version`.
 pub const RUSTC_VERSION: &str = env!("RUSTTY_RUSTC_VERSION");
-
-/// Returns the pre-release component of [`VERSION`], if any.
-///
-/// A semantic version `MAJOR.MINOR.PATCH[-PRE][+BUILD]` has a pre-release
-/// component only when a `-` separator appears before any `+`. This mirrors the
-/// reference channel derivation in `build/Config.zig`'s `addOptions`:
-/// `const pre = self.version.pre orelse break :channel .stable; if (pre.len ==
-/// 0) break :channel .stable; break :channel .tip;`.
-const fn version_pre() -> Option<&'static str> {
-    // `const fn` can't iterate `str` ergonomically, so operate on bytes.
-    let bytes = VERSION.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        match bytes[i] {
-            // A build-metadata separator ends the search with no pre-release.
-            b'+' => return None,
-            // A pre-release separator: everything after it (up to a `+`) is the
-            // pre-release component. We only need to know whether it's
-            // non-empty, so report a non-empty marker.
-            b'-' => {
-                if i + 1 < bytes.len() {
-                    return Some("pre");
-                }
-                return None;
-            }
-            _ => {}
-        }
-        i += 1;
-    }
-    None
-}
 
 /// The artifact we're producing. This can be used to determine if we're
 /// building a standalone exe, an embedded lib, etc.

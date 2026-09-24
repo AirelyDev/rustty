@@ -246,7 +246,7 @@ impl TerminalSnapshot {
     // }
     pub fn destroy(mut self: Box<TerminalSnapshot>, alloc: Allocator) {
         if let Some(t) = self.terminal.as_mut() {
-            t.deinit(self.alloc);
+            t.deinit(self.alloc.into());
         }
         let _ = alloc;
         drop(self);
@@ -289,7 +289,7 @@ impl TerminalSnapshot {
     // fn setupImpl(self: *TerminalSnapshot) !void {
     fn setup_impl(&mut self) -> Result<(), SetupError> {
         if let Some(t) = self.terminal.as_mut() {
-            t.deinit(self.alloc);
+            t.deinit(self.alloc.into());
         }
         self.terminal = None;
         // self.terminal = try Terminal.init(global.io(), self.alloc, .{
@@ -299,7 +299,7 @@ impl TerminalSnapshot {
         //     .max_scrollback_lines = null,
         // });
         self.terminal = Some(Terminal::init(
-            self.alloc,
+            self.alloc.into(),
             rustty_vt::terminal::Options {
                 max_scrollback_bytes: None,
                 max_scrollback_lines: None,
@@ -368,7 +368,7 @@ impl TerminalSnapshot {
     unsafe fn teardown(ptr: *mut c_void) {
         let self_ = unsafe { &mut *(ptr as *mut TerminalSnapshot) };
         if let Some(t) = self_.terminal.as_mut() {
-            t.deinit(self_.alloc);
+            t.deinit(self_.alloc.into());
         }
         self_.terminal = None;
         // self.encoded.shrinkRetainingCapacity(0);
@@ -436,7 +436,7 @@ impl TerminalSnapshot {
             // };
             let mut decoded = match snapshot::decode(
                 &mut reader,
-                self_.alloc,
+                self_.alloc.into(),
                 &snapshot::DecodeOptions {
                     max_continuation_bytes: 1024 * 1024,
                 },
@@ -451,7 +451,7 @@ impl TerminalSnapshot {
             // std.mem.doNotOptimizeAway(&decoded);
             black_box(&decoded);
             // decoded.deinit(self.alloc);
-            decoded.deinit(self_.alloc);
+            decoded.deinit(self_.alloc.into());
         }
         Ok(())
     }
@@ -476,7 +476,7 @@ impl TerminalSnapshot {
             //     return error.BenchmarkFailed;
             // };
             let mut decoded = match decoder.ready(
-                self_.alloc,
+                self_.alloc.into(),
                 &snapshot::DecodeOptions {
                     max_continuation_bytes: 1024 * 1024,
                 },
@@ -491,7 +491,7 @@ impl TerminalSnapshot {
             // std.mem.doNotOptimizeAway(&decoded);
             black_box(&decoded);
             // decoded.deinit(self.alloc);
-            decoded.deinit(self_.alloc);
+            decoded.deinit(self_.alloc.into());
         }
         Ok(())
     }
@@ -569,8 +569,8 @@ impl TerminalSnapshot {
         //     });
         // }
         for tag in TAGS {
-            println!(
-                "terminal-snapshot tag={} records={} payload={}",
+            debug_print!(
+                "terminal-snapshot tag={} records={} payload={}\n",
                 tag.name(),
                 record_counts[tag_index(tag)],
                 payload_totals[tag_index(tag)],
@@ -581,8 +581,8 @@ impl TerminalSnapshot {
         //     record_total * snapshot.record.Header.len + snapshot.envelope.encoded_len,
         //     bytes.len,
         // });
-        println!(
-            "terminal-snapshot total records={} framing={} encoded={}",
+        debug_print!(
+            "terminal-snapshot total records={} framing={} encoded={}\n",
             record_total,
             record_total * snapshot::record::Header::LEN as u64
                 + snapshot::envelope::ENCODED_LEN as u64,

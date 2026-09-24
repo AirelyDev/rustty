@@ -118,6 +118,12 @@ pub use rustty_vt::cursor::Style as CursorStyle;
 /// test (added in the fill sub-batch) asserts every `Key` variant has a
 /// parse+format+clone+changed arm, replacing Zig's comptime completeness check.
 // pub const Key = key: { ... derived from Config fields ... };
+//     for (field_infos, &names, &raw_values) |field, *name, *raw| {
+//         // Ignore fields starting with "_" since they're internal and
+//         // not copied ever.
+//         if (field.name[0] == '_') continue;
+//         ...
+//     }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Key {
     Language,
@@ -575,6 +581,8 @@ impl Key {
 // the match covers all variants).
 // ===========================================================================
 
+/// Returns the value type for a key
+///
 /// PORTS: `pub fn Value(comptime key: Key) type` (key.zig:35).
 // pub fn Value(comptime key: Key) type {
 //     const field = comptime field: {
@@ -4477,7 +4485,7 @@ pub struct Config {
     ///
     /// "Secure Input" is a macOS security feature that prevents applications from
     /// reading keyboard events. This can always be enabled manually using the
-    /// `rustty > Secure Keyboard Entry` menu item.
+    /// `Rustty > Secure Keyboard Entry` menu item.
     ///
     /// Note that automatic password prompt detection is based on heuristics
     /// and may not always work as expected. Specifically, it does not work
@@ -4548,7 +4556,7 @@ pub struct Config {
     /// The absolute path to the custom icon file.
     /// Supported formats include PNG, JPEG, and ICNS.
     ///
-    /// Defaults to `~/.config/rustty/rustty.icns`
+    /// Defaults to `~/.config/rustty/Rustty.icns`
     pub macos_custom_icon: Option<Vec<u8>>,
     // @"macos-icon-frame": MacAppIconFrame = .aluminum,
     /// The material to use for the frame of the macOS app icon.
@@ -4692,7 +4700,7 @@ pub struct Config {
     /// each new `rustty` process launched will result in a new window if there is
     /// already a running process.
     ///
-    /// If `false`, each new Rustty process will launch a separate application.
+    /// If `false`, each new rustty process will launch a separate application.
     ///
     /// If `detect`, Rustty will assume true (single instance) unless one of
     /// the following scenarios is found:
@@ -5362,6 +5370,29 @@ pub enum LoadError {
     Io(std::io::Error),
     /// A parse error propagated from `loadIter`.
     Parse(ParseError),
+    /// A default-path lookup error propagated from `file_load` (the reference's
+    /// `try file_load.defaultXdgPath(alloc)` and siblings in `loadDefaultFiles`).
+    FileLoad(crate::file_load::FileLoadError),
+    /// `error.OutOfMemory` propagated from the theme lookup (`loadTheme`'s
+    /// `try themepkg.open(..)`, reached from `finalize`'s `try
+    /// self.loadTheme(theme.*)`). Its one reachable cause is
+    /// `theme.Location.dir` remapping `xdg.config`'s `error.BufferTooSmall`
+    /// (NEW-FINDINGS N140 (a), task S-15).
+    OutOfMemory,
+}
+
+impl From<crate::theme::Error> for LoadError {
+    fn from(e: crate::theme::Error) -> LoadError {
+        match e {
+            crate::theme::Error::OutOfMemory => LoadError::OutOfMemory,
+        }
+    }
+}
+
+impl From<crate::file_load::FileLoadError> for LoadError {
+    fn from(e: crate::file_load::FileLoadError) -> LoadError {
+        LoadError::FileLoad(e)
+    }
 }
 
 impl LoadError {
@@ -5519,18 +5550,6 @@ fn dirname(path: &[u8]) -> Option<&[u8]> {
         Some(&path[..1])
     } else {
         Some(&path[..idx])
-    }
-}
-
-/// `@tagName(stat.kind)` for a non-file stat used in `config-file` diagnostics.
-fn file_kind_name(meta: &std::fs::Metadata) -> &'static str {
-    let ft = meta.file_type();
-    if ft.is_dir() {
-        "directory"
-    } else if ft.is_symlink() {
-        "sym_link"
-    } else {
-        "unknown"
     }
 }
 
@@ -5913,6 +5932,29 @@ impl<'a> ChangeIterator<'a> {
     }
 }
 
+/// `(comptime !builtin.target.cpu.arch.isWasm()) and (comptime
+/// !builtin.is_test)` — the guard around `finalize`'s default command /
+/// working-directory lookup (`Config.zig:4737-4739`). Called with the
+/// target's `cfg!` values; a function so the decision itself is testable on a
+/// host that is not wasm.
+const fn finalize_looks_up_defaults(is_wasm: bool, is_test: bool) -> bool {
+    !is_wasm && !is_test
+}
+
+/// The Windows arm's `wd == .home` step in `finalize` (`Config.zig:4776-4785`):
+/// `if (try internal_os.home(...)) |home| { wd = .{ .path = home }; } else {
+/// wd = .inherit; }`. The `try` returns `home`'s error from `finalize`.
+#[cfg(any(target_os = "windows", test))]
+fn windows_home_working_directory(
+    home: Result<Option<&[u8]>, rustty_os::homedir::Error>,
+) -> Result<WorkingDirectory, LoadError> {
+    match home {
+        Ok(Some(home)) => Ok(WorkingDirectory::Path(home.to_vec())),
+        Ok(None) => Ok(WorkingDirectory::Inherit),
+        Err(e) => Err(LoadError::Io(std::io::Error::other(format!("{e:?}")))),
+    }
+}
+
 // ===========================================================================
 // Config pass method signatures (the four comptime passes + lifecycle).
 // ===========================================================================
@@ -6157,10 +6199,16 @@ impl Config {
         // const legacy_xdg_path = try file_load.legacyDefaultXdgPath(alloc);
         // defer alloc.free(legacy_xdg_path);
         // (W94-B02-01: the XDG helpers are byte-typed now — no `into_bytes`.)
-        let legacy_xdg_path = crate::file_load::legacy_default_xdg_path().unwrap_or_default();
+        //
+        // PORT NOTE (LEDGER S74-F1): each `try` is a `?`. These four lookups
+        // were `.unwrap_or_default()`, so a failed lookup (e.g. a `$HOME` longer
+        // than the XDG helper's 1024-byte buffer with `XDG_CONFIG_HOME` unset)
+        // loaded an EMPTY path and panicked in `load_file`'s
+        // `assert!(is_absolute)`; the reference returns the error.
+        let legacy_xdg_path = crate::file_load::legacy_default_xdg_path()?;
         // const xdg_path = try file_load.defaultXdgPath(alloc);
         // defer alloc.free(xdg_path);
-        let xdg_path = crate::file_load::default_xdg_path().unwrap_or_default();
+        let xdg_path = crate::file_load::default_xdg_path()?;
         // const xdg_loaded: bool = xdg_loaded: {
         let xdg_loaded: bool = {
             // const legacy_xdg_action = self.loadOptionalFile(alloc, legacy_xdg_path);
@@ -6195,14 +6243,11 @@ impl Config {
         {
             // const legacy_app_support_path = try file_load.legacyDefaultAppSupportPath(alloc);
             // defer alloc.free(legacy_app_support_path);
-            let legacy_app_support_path = crate::file_load::legacy_default_app_support_path()
-                .map(String::into_bytes)
-                .unwrap_or_default();
+            let legacy_app_support_path =
+                crate::file_load::legacy_default_app_support_path()?.into_bytes();
             // const app_support_path = try file_load.preferredAppSupportPath(alloc);
             // defer alloc.free(app_support_path);
-            let app_support_path = crate::file_load::preferred_app_support_path()
-                .map(String::into_bytes)
-                .unwrap_or_default();
+            let app_support_path = crate::file_load::preferred_app_support_path()?.into_bytes();
             // const app_support_loaded: bool = loaded: {
             let app_support_loaded: bool = {
                 // const legacy_app_support_action = self.loadOptionalFile(
@@ -6824,11 +6869,15 @@ impl Config {
         // directory.
         // var buf: [std.fs.max_path_bytes]u8 = undefined;
         // try self.expandPaths(try std.fs.cwd().realpath(".", &buf));
-        let cwd = std::env::current_dir()
-            .ok()
-            .and_then(|p| p.canonicalize().ok())
-            .map(|p| path_to_bytes(&p))
-            .unwrap_or_default();
+        //
+        // PORT NOTE (LEDGER S74-F3): both `try`s propagate. This was
+        // `.ok()...unwrap_or_default()`, so an unresolvable cwd (deleted, or
+        // not searchable) expanded every CLI path against an EMPTY base; the
+        // reference returns the `realPathFile` error before `expandPaths`.
+        // `realPathFile(".")` on `cwd()` is libc `realpath(".")`
+        // (`Io/Threaded.zig` `dirRealPathFilePosix`, the `AT.FDCWD` arm), which
+        // is what `canonicalize` calls.
+        let cwd = path_to_bytes(&std::fs::canonicalize(".")?);
         self.expand_paths(&cwd)?;
 
         Ok(())
@@ -6942,11 +6991,15 @@ impl Config {
                         // const diag: cli.Diagnostic = .{
                         //     .message = ... "error opening config-file {s}: {}" ...
                         // };
+                        //
+                        // PORT NOTE (LEDGER S74-F4): `{}` of the Zig error is
+                        // `error.<Name>` (this printed the `io::Error` Display,
+                        // `Permission denied (os error 13)`).
                         let diag = rustty_args::diagnostics::Diagnostic {
                             message: format!(
                                 "error opening config-file {}: {}",
                                 String::from_utf8_lossy(&path),
-                                err
+                                crate::zig_error::fmt_error(&err, crate::zig_error::Call::OpenFile)
                             )
                             .into_bytes(),
                             ..Default::default()
@@ -6969,12 +7022,16 @@ impl Config {
             //     .file => {},
             //     else => |kind| { ... "config-file {s}: not reading because file type is {s}" ... continue; },
             // }
+            //
+            // PORT NOTE (LEDGER S74-F4): `@tagName(kind)` names every
+            // `File.Kind` (`character_device`, `named_pipe`, ...); this used to
+            // collapse all but `directory`/`sym_link` to `unknown`.
             if !stat.is_file() {
                 let diag = rustty_args::diagnostics::Diagnostic {
                     message: format!(
                         "config-file {}: not reading because file type is {}",
                         String::from_utf8_lossy(&path),
-                        file_kind_name(&stat)
+                        crate::zig_error::file_kind_tag_name(&stat.file_type())
                     )
                     .into_bytes(),
                     ..Default::default()
@@ -7189,7 +7246,7 @@ impl Config {
         //     name,
         //     &self._diagnostics,
         // )) orelse return;
-        let themefile = match crate::theme::open(&name, &mut self._diagnostics) {
+        let themefile = match crate::theme::open(&name, &mut self._diagnostics)? {
             Some(tf) => tf,
             None => return Ok(()),
         };
@@ -7405,8 +7462,13 @@ impl Config {
         // if ((comptime !builtin.target.cpu.arch.isWasm()) and
         //     (comptime !builtin.is_test))
         // {
-        #[cfg(not(test))]
-        {
+        //
+        // PORT NOTE (LEDGER S74-F7): this was `#[cfg(not(test))]`, which kept
+        // the block on wasm, where an embedder-installed environ could set
+        // `command` from `SHELL`. The guard now carries both terms. It is a
+        // `const fn` on `cfg!` values rather than a `#[cfg]`, as the Zig is a
+        // comptime `if`; the body still compiles everywhere.
+        if finalize_looks_up_defaults(cfg!(target_family = "wasm"), cfg!(test)) {
             // if (self.command == null or wd == .home) command: {
             if self.command.is_none() || wd == WorkingDirectory::Home {
                 'command: {
@@ -7493,15 +7555,18 @@ impl Config {
                             // var buf: [std.fs.max_path_bytes]u8 = undefined;
                             let mut buf = [0u8; MAX_PATH_BYTES];
                             // if (try internal_os.home(&buf)) |home| {
-                            if let Ok(Some(home)) =
-                                rustty_os::homedir::home(&rustty_global::environ_map(), &mut buf)
-                            {
-                                // wd = .{ .path = try alloc.dupe(u8, home) };
-                                wd = WorkingDirectory::Path(home.to_vec());
-                            } else {
-                                // wd = .inherit;
-                                wd = WorkingDirectory::Inherit;
-                            }
+                            //     wd = .{ .path = try alloc.dupe(u8, home) };
+                            // } else {
+                            //     wd = .inherit;
+                            // }
+                            //
+                            // PORT NOTE (LEDGER S74-F6): this was `if let
+                            // Ok(Some(home))`, which turned a `home()` error into
+                            // `.inherit`; the `try` returns it.
+                            wd = windows_home_working_directory(rustty_os::homedir::home(
+                                &rustty_global::environ_map(),
+                                &mut buf,
+                            ))?;
                         }
                     }
                     // WS14 T6 (wasm32 arm): a browser has no passwd database, so neither
@@ -7665,7 +7730,7 @@ impl Config {
         // if (self.@"auto-update-channel" == null) {
         if self.auto_update_channel.is_none() {
             // self.@"auto-update-channel" = build_config.release_channel;
-            self.auto_update_channel = Some(rustty_build_config::release_channel());
+            self.auto_update_channel = Some(rustty_version::release_channel());
         }
 
         // self.@"faint-opacity" = std.math.clamp(self.@"faint-opacity", 0.0, 1.0);
@@ -9671,6 +9736,18 @@ impl Target for Config {
     // canTrackDiags(Config) == @hasField(Config, "_diagnostics")
     fn diagnostics_mut(&mut self) -> Option<&mut DiagnosticList> {
         Some(&mut self._diagnostics)
+    }
+
+    /// PORTS: `formatValues(Config, key, writer)` (`cli/args.zig`): for the field
+    /// named `key`, if its `@typeInfo` is `.@"enum"`, the `, valid values are:
+    /// ...` suffix. `config_completion_kind`'s `Enum` arm is exactly that set of
+    /// fields (the same `@typeInfo(field.type)` switch drives the reference's
+    /// completions), with each list in declaration order (parity S67-F1).
+    fn format_values(&self, key: &[u8]) -> Vec<u8> {
+        match Key::string_to_enum(key).map(config_completion_kind) {
+            Some(ConfigCompletionKind::Enum(names)) => rustty_args::args::format_enum_values(names),
+            _ => Vec::new(),
+        }
     }
 
     /// PORTS: `pub const compatibility = std.StaticStringMap(...).initComptime(&.{...})`
@@ -12933,6 +13010,68 @@ mod integration_tests {
         assert_eq!(MiddleClickAction::ClipboardPaste, cfg.middle_click_action);
     }
 
+    // parity S67-F1: `cli/args.zig` `formatInvalidValue`/`formatValueRequired`
+    // append `formatValues`' `, valid values are: ...` for an enum-typed field.
+    // The cursor-style text is the one MEASURED from Ghostty's
+    // `+validate-config` (installed release build, not the pin).
+    #[test]
+    fn enum_field_diagnostics_list_the_valid_values() {
+        let mut cfg = Config::default_config();
+        let mut it = TestIterator::new(&[
+            b"--cursor-style=blah",
+            b"--cursor-style",
+            b"--font-size=bogus",
+        ]);
+        cfg.load_iter(&mut it).unwrap();
+        let messages: Vec<&[u8]> = cfg
+            ._diagnostics
+            .items()
+            .iter()
+            .map(|d| d.message.as_slice())
+            .collect();
+        assert_eq!(
+            vec![
+                &b"invalid value \"blah\", valid values are: bar, block, underline, block_hollow"[..],
+                &b"value required, valid values are: bar, block, underline, block_hollow"[..],
+                // A non-enum field gets no suffix.
+                &b"invalid value \"bogus\""[..],
+            ],
+            messages
+        );
+    }
+
+    // parity S67-F5: a `CommaSplitter` error in `mouse-scroll-multiplier` is not
+    // `InvalidValue`, so `MouseScrollMultiplier.parseCLI` does not take its
+    // bare-float fallback and `parse` reports `unknown error error.<Name>`.
+    // MEASURED: Ghostty 1.3.1 `+validate-config` prints exactly these four
+    // messages for these four lines.
+    #[test]
+    fn auto_struct_comma_splitter_errors_are_not_invalid_value() {
+        let mut cfg = Config::default_config();
+        let mut it = TestIterator::new(&[
+            b"--mouse-scroll-multiplier=precision:\"1",
+            b"--mouse-scroll-multiplier=precision:1\\q",
+            b"--mouse-scroll-multiplier=precision:1\\",
+            b"--mouse-scroll-multiplier=bogus",
+        ]);
+        cfg.load_iter(&mut it).unwrap();
+        let messages: Vec<&[u8]> = cfg
+            ._diagnostics
+            .items()
+            .iter()
+            .map(|d| d.message.as_slice())
+            .collect();
+        assert_eq!(
+            vec![
+                &b"unknown error error.UnclosedQuote"[..],
+                &b"unknown error error.IllegalEscape"[..],
+                &b"unknown error error.UnfinishedEscape"[..],
+                &b"invalid value \"bogus\""[..],
+            ],
+            messages
+        );
+    }
+
     // test "compatibility: gtk-single-instance desktop" {
     #[test]
     fn compatibility_gtk_single_instance_desktop() {
@@ -13038,5 +13177,252 @@ mod integration_tests {
                 cfg.macos_dock_drop_behavior
             );
         }
+    }
+
+    // =======================================================================
+    // Parity tail T-E: rows whose fix changes an observable parse result are
+    // tested here through the real parser (`load_iter`), not only at the value
+    // type.
+    // =======================================================================
+
+    // No reference test. LEDGER S78-F2: `Limit.parseCLI` is
+    // `std.fmt.parseInt(T, input, 0)`, so `_` separators and a radix prefix are
+    // valid in the config (values MEASURED on zig 0.16.0).
+    #[test]
+    fn limit_keys_accept_zig_int_separators_through_the_parser() {
+        let mut cfg = Config::default_config();
+        let mut it = TestIterator::new(&[
+            b"--scrollback-limit-bytes=50_000_000",
+            b"--clipboard-write-limit-bytes=0x4_000_000",
+        ]);
+        cfg.load_iter(&mut it).unwrap();
+        assert!(
+            cfg._diagnostics.empty(),
+            "no diagnostic expected, got {:?}",
+            cfg._diagnostics.items()
+        );
+        assert_eq!(50_000_000, cfg.scrollback_limit_bytes.value);
+        assert_eq!(0x400_0000, cfg.clipboard_write_limit_bytes.value);
+
+        // Still rejected, as the reference rejects it: a trailing separator.
+        let mut cfg = Config::default_config();
+        let mut it = TestIterator::new(&[b"--scrollback-limit-bytes=1_"]);
+        cfg.load_iter(&mut it).unwrap();
+        assert!(!cfg._diagnostics.empty());
+    }
+
+    /// Format `cfg` the way `+show-config` does and return the text.
+    fn show_config(cfg: &Config) -> String {
+        let mut buf = rustty_cfg_fmt::AllocatingWriter::init();
+        crate::formatter_file::FileFormatter::new(cfg)
+            .format(&mut buf)
+            .unwrap();
+        String::from_utf8(buf.written().to_vec()).unwrap()
+    }
+
+    // No reference test. LEDGER S76-F6: `mouse-scroll-multiplier`'s bare
+    // fallback and its `precision:`/`discrete:` fields are all
+    // `std.fmt.parseFloat`, which takes hex floats and `_` separators. (Fixed
+    // by the `parse_float_f64` port under S75-F1, `7a5bbdb8`; this pins the
+    // row's own surface through the parser, including the bare form.)
+    #[test]
+    fn mouse_scroll_multiplier_accepts_zig_float_syntax_through_the_parser() {
+        let mut cfg = Config::default_config();
+        let mut it = TestIterator::new(&[b"--mouse-scroll-multiplier=0x1p1"]);
+        cfg.load_iter(&mut it).unwrap();
+        assert!(cfg._diagnostics.empty(), "{:?}", cfg._diagnostics.items());
+        assert_eq!(
+            (2.0, 2.0),
+            (
+                cfg.mouse_scroll_multiplier.precision,
+                cfg.mouse_scroll_multiplier.discrete
+            )
+        );
+
+        let mut it =
+            TestIterator::new(&[b"--mouse-scroll-multiplier=precision:1_0,discrete:0x1.8"]);
+        cfg.load_iter(&mut it).unwrap();
+        assert!(cfg._diagnostics.empty(), "{:?}", cfg._diagnostics.items());
+        assert!(show_config(&cfg).contains("mouse-scroll-multiplier = precision:10,discrete:1.5\n"));
+    }
+
+    // No reference test. LEDGER S75-F3: `RepeatableFontVariation.formatEntry`
+    // prints the value with `{d}`, which renders NaN as `nan` (MEASURED, zig
+    // 0.16.0: `{d}` of `std.math.nan(f64)` is `nan`; `parseFloat("nan")` and
+    // `parseFloat("-nan")` both give a NaN with the sign bit CLEAR).
+    #[test]
+    fn font_variation_nan_formats_as_zig_nan() {
+        let mut cfg = Config::default_config();
+        let mut it = TestIterator::new(&[
+            b"--font-variation=wght=nan",
+            b"--font-variation=wdth=-nan",
+            b"--font-variation=slnt=-inf",
+        ]);
+        cfg.load_iter(&mut it).unwrap();
+        assert!(cfg._diagnostics.empty(), "{:?}", cfg._diagnostics.items());
+        // The values really are NaN (so the formatting arm under test runs).
+        assert!(cfg.font_variation.list[0].value.is_nan());
+        assert!(cfg.font_variation.list[1].value.is_nan());
+        let out = show_config(&cfg);
+        assert!(out.contains("font-variation = wght=nan\n"), "{out}");
+        assert!(out.contains("font-variation = wdth=nan\n"), "{out}");
+        assert!(out.contains("font-variation = slnt=-inf\n"), "{out}");
+    }
+
+    // No reference test. LEDGER S73-F1: the generated help text (the
+    // `+show-config --docs` source) must carry the reference's doc text under
+    // the per-token rename (`Ghostty`->`Rustty`, `ghostty`->`rustty`,
+    // `.port/tools/PARITY_NAMING.md`). Reference lines: `Config.zig:3493`
+    // `Ghostty > Secure Keyboard Entry`, `:3564` `~/.config/ghostty/Ghostty.icns`,
+    // `:3707` `each new ghostty process`.
+    #[test]
+    fn help_text_keeps_the_reference_token_casing() {
+        let help = |key: Key| {
+            String::from_utf8(crate::help_strings::config_help(key).unwrap().to_vec()).unwrap()
+        };
+        let secure = help(Key::MacosAutoSecureInput);
+        assert!(
+            secure.contains("`Rustty > Secure Keyboard Entry` menu item."),
+            "{secure}"
+        );
+        let icon = help(Key::MacosCustomIcon);
+        assert!(
+            icon.contains("Defaults to `~/.config/rustty/Rustty.icns`"),
+            "{icon}"
+        );
+        let single = help(Key::GtkSingleInstance);
+        assert!(
+            single.contains("each new rustty process will launch"),
+            "{single}"
+        );
+    }
+
+    // No reference test. LEDGER S76-F2: `RepeatableLink.parseCLI` returns
+    // `error.NotImplemented` (`Config.zig:8719-8724`), which is outside the
+    // args base set, so `cli/args.zig:158-170` records it through the `else`
+    // arm: `"unknown error {}"` of the error, i.e. `unknown error
+    // error.NotImplemented`. (Before the fix the port returned `InvalidValue`
+    // and recorded the invalid-value message instead.)
+    #[test]
+    fn link_key_records_the_reference_not_implemented_diagnostic() {
+        let mut cfg = Config::default_config();
+        let links_before = cfg.link.links.len();
+        let mut it = TestIterator::new(&[b"--link=foo"]);
+        cfg.load_iter(&mut it).unwrap();
+        let items = cfg._diagnostics.items();
+        assert_eq!(1, items.len(), "{items:?}");
+        assert_eq!(b"link".as_slice(), items[0].key.as_slice());
+        assert_eq!(
+            "unknown error error.NotImplemented",
+            String::from_utf8_lossy(&items[0].message)
+        );
+        // The value is still not applied.
+        assert_eq!(links_before, cfg.link.links.len());
+    }
+
+    // No reference test. LEDGER S74-F7: the reference skips `finalize`'s whole
+    // default command / working-directory lookup on wasm and in tests
+    // (`Config.zig:4737-4739`); the port gated it on `test` only, so on wasm
+    // an embedder-supplied environ (`rustty_global::environ::set_environ`)
+    // with `TERM_PROGRAM` and `SHELL` set `command` (ADJUDICATION.md S74-F7).
+    #[test]
+    fn finalize_default_lookup_is_skipped_on_wasm_and_in_tests() {
+        assert!(finalize_looks_up_defaults(false, false));
+        assert!(
+            !finalize_looks_up_defaults(true, false),
+            "wasm must skip it"
+        );
+        assert!(
+            !finalize_looks_up_defaults(false, true),
+            "tests must skip it"
+        );
+        assert!(!finalize_looks_up_defaults(true, true));
+    }
+
+    // No reference test. LEDGER S74-F6: the Windows arm's `try
+    // internal_os.home(...)` returns the error from `finalize`; only a `null`
+    // home falls back to `.inherit`.
+    #[test]
+    fn windows_home_lookup_error_propagates() {
+        assert!(matches!(
+            windows_home_working_directory(Ok(Some(b"C:\\Users\\me"))),
+            Ok(WorkingDirectory::Path(p)) if p == b"C:\\Users\\me"
+        ));
+        assert!(matches!(
+            windows_home_working_directory(Ok(None)),
+            Ok(WorkingDirectory::Inherit)
+        ));
+        let err = windows_home_working_directory(Err(rustty_os::homedir::Error::BufferTooSmall));
+        assert!(err.is_err(), "the home() error must propagate, got {err:?}");
+    }
+
+    /// Every diagnostic message in `cfg`, as text.
+    fn diagnostic_messages(cfg: &Config) -> Vec<String> {
+        cfg._diagnostics
+            .items()
+            .iter()
+            .map(|d| String::from_utf8_lossy(&d.message).into_owned())
+            .collect()
+    }
+
+    // No reference test. LEDGER S74-F4: `loadRecursiveFiles` formats the open
+    // error with `{}` (`error.<Name>`) and a non-file with `@tagName(stat.kind)`
+    // (`Config.zig:4413-4448`). MEASURED on zig 0.16.0: `openFileAbsolute` of an
+    // unreadable file is `error.AccessDenied`, of `f/x` with `f` a regular file
+    // `error.NotDir`; `/dev/null` is a `character_device`.
+    #[cfg(unix)]
+    #[test]
+    fn config_file_diagnostics_use_zig_error_and_kind_names() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut td = TempDir::init().unwrap();
+        td.dir().writeFile("locked", b"font-size = 12\n").unwrap();
+        td.dir().writeFile("plain", b"font-size = 12\n").unwrap();
+        let locked = td.dir().realpath("locked").unwrap();
+        let plain = td.dir().realpath("plain").unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let locked = locked.to_str().unwrap().to_string();
+        let not_dir = format!("{}/x", plain.to_str().unwrap());
+
+        let mut cfg = Config::default_config();
+        let args = [
+            format!("--config-file={locked}"),
+            format!("--config-file={not_dir}"),
+            "--config-file=/dev/null".to_string(),
+        ];
+        let arg_refs: Vec<&[u8]> = args.iter().map(|a| a.as_bytes()).collect();
+        let mut it = TestIterator::new(&arg_refs);
+        cfg.load_iter(&mut it).unwrap();
+        cfg.load_recursive_files().unwrap();
+        let messages = diagnostic_messages(&cfg);
+
+        // R14: the AccessDenied arm needs a process without read access to a
+        // 0o000 file, which every CI lane and developer checkout has (only
+        // root has it). There is no skip: under root this fails, naming why.
+        assert!(
+            std::fs::File::open(&locked).is_err(),
+            "this test must run without root: a 0o000 file was readable, so the \
+             AccessDenied arm cannot be reached"
+        );
+        assert!(
+            messages.contains(&format!(
+                "error opening config-file {locked}: error.AccessDenied"
+            )),
+            "{messages:?}"
+        );
+        assert!(
+            messages.contains(&format!(
+                "error opening config-file {not_dir}: error.NotDir"
+            )),
+            "{messages:?}"
+        );
+        assert!(
+            messages.contains(
+                &"config-file /dev/null: not reading because file type is character_device"
+                    .to_string()
+            ),
+            "{messages:?}"
+        );
+        td.deinit();
     }
 }

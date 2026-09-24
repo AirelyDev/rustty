@@ -38,6 +38,9 @@
 use std::env;
 use std::path::PathBuf;
 
+#[path = "src/modulefinder.rs"]
+mod modulefinder;
+
 /// sentry-native translation units compiled on every target.
 ///
 /// This is the verbatim `srcs` list from the reference's pkg/sentry/build.zig
@@ -74,6 +77,7 @@ const SRCS: &[&str] = &[
 ];
 
 fn main() {
+    println!("cargo:rerun-if-changed=src/modulefinder.rs");
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     // Crate `vendor/` root mirrors the upstream root layout, so every
     // upstream-root-relative path below joins directly.
@@ -152,15 +156,16 @@ fn main() {
         );
     }
 
-    // Module finder (per OS).
-    match target_os.as_str() {
-        "windows" => files.push("src/modulefinder/sentry_modulefinder_windows.c".into()),
-        "macos" | "ios" => files.push("src/modulefinder/sentry_modulefinder_apple.c".into()),
-        "linux" => files.push("src/modulefinder/sentry_modulefinder_linux.c".into()),
-        // The reference treats `.freestanding` as "no module finder" and errors
-        // on anything else; here we simply omit it for other targets so the
-        // build still links.
-        _ => {}
+    // Module finder (per OS), chosen by `src/modulefinder.rs` where it is
+    // tested. An unsupported OS fails the build, as the reference's
+    // `error.UnsupportedTarget` does (S38-F4).
+    match modulefinder::modulefinder_source(&target_os) {
+        Ok(Some(file)) => files.push(file.into()),
+        Ok(None) => {}
+        Err(warning) => {
+            println!("cargo:warning={warning}");
+            panic!("UnsupportedTarget: {warning}");
+        }
     }
 
     // Transport: ghostty fixes `transport = .none`.

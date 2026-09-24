@@ -1,6 +1,8 @@
 //! Build script for rustty-vt-c.
 //!
-//! Its ONLY job is to reflect the Cargo profile's optimization level into cfgs
+//! It sets the shared library's versioned identity (`dylib_identity`, S64-F5;
+//! CORRECTION 2026-09-23: this header used to say "Its ONLY job" was the
+//! cfgs below). Its other job is to reflect the Cargo profile's optimization level into cfgs
 //! so `build_info::optimize_mode()` can answer the C-ABI `RUSTTY_BUILD_INFO_
 //! OPTIMIZE` query with the faithful four-way analog of the reference's
 //! `builtin.mode` (`src/terminal/c/build_info.zig:72-77`).
@@ -38,5 +40,29 @@ fn main() {
     }
     if opt_level == "s" || opt_level == "z" {
         println!("cargo::rustc-cfg=rustty_opt_small");
+    }
+
+    dylib_identity();
+}
+
+#[path = "src/dylib_link_args.rs"]
+mod dylib_link_args;
+
+/// The shared library's extra link arguments: its versioned identity
+/// (S64-F5) and Android's 16 KiB page size (S64-F9). See
+/// `src/dylib_link_args.rs`.
+fn dylib_identity() {
+    let os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    let version = format!(
+        "{}.{}.{}",
+        std::env::var("CARGO_PKG_VERSION_MAJOR").unwrap_or_default(),
+        std::env::var("CARGO_PKG_VERSION_MINOR").unwrap_or_default(),
+        std::env::var("CARGO_PKG_VERSION_PATCH").unwrap_or_default(),
+    );
+    println!("cargo::rerun-if-changed=src/dylib_link_args.rs");
+    println!("cargo::rerun-if-env-changed=RUSTTY_VT_SONAME");
+    let soname = std::env::var("RUSTTY_VT_SONAME").ok();
+    for arg in dylib_link_args::dylib_link_args(&os, &version, soname.as_deref()) {
+        println!("cargo::rustc-cdylib-link-arg={arg}");
     }
 }

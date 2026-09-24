@@ -18,10 +18,11 @@
 //! for whoever reads this next: the block compiles ONLY under
 //! `--features gtk` on Linux/FreeBSD, so the macOS lane can never exercise it —
 //! [`write_gtk_block`] exists precisely so the FORMAT is still asserted on every
-//! host; and `libX11`/`libwayland` read `cfg!(feature = ...)` IN THIS CRATE, so
-//! `rustty-cli` needs its own `x11`/`wayland` features (it has them) and
-//! `crates/rustty` must forward them (it does). If you add a build option the
-//! block prints, it has to reach this crate the same way.
+//! host; and `libX11`/`libwayland` read `rustty_apprt::GTK_X11` /
+//! `GTK_WAYLAND`, the arms the apprt actually built (S65-F6). CORRECTION
+//! (2026-09-23): they used to read `cfg!(feature = ...)` in this crate, which
+//! reported the requested features rather than the arms the GTK4 target probe
+//! lets through.
 
 // const std = @import("std");
 // const build_options = @import("build_options");
@@ -66,6 +67,29 @@ fn renderer_type_name() -> &'static str {
     }
 }
 
+/// `@tagName(build_config.app_runtime)` — `apprt/runtime.zig` `Runtime`.
+fn app_runtime_tag(rt: build_config::apprt::Runtime) -> &'static str {
+    match rt {
+        build_config::apprt::Runtime::None => "none",
+        build_config::apprt::Runtime::Gtk => "gtk",
+    }
+}
+
+/// `@tagName(build_config.font_backend)` — `font/backend.zig` `Backend`.
+fn font_backend_tag(b: build_config::font::Backend) -> &'static str {
+    use build_config::font::Backend;
+    match b {
+        Backend::Freetype => "freetype",
+        Backend::FreetypeWindows => "freetype_windows",
+        Backend::FontconfigFreetype => "fontconfig_freetype",
+        Backend::Coretext => "coretext",
+        Backend::CoretextFreetype => "coretext_freetype",
+        Backend::CoretextHarfbuzz => "coretext_harfbuzz",
+        Backend::CoretextNoshape => "coretext_noshape",
+        Backend::WebCanvas => "web_canvas",
+    }
+}
+
 /// The `{t}` tag name of the libxev backend (the reference `@tagName` of
 /// `xev.backend`).
 fn libxev_backend_tag() -> &'static str {
@@ -81,19 +105,14 @@ fn libxev_backend_tag() -> &'static str {
 /// Reference: `build_config.version.build` — the `+BUILD` metadata (commit hash)
 /// of the SemanticVersion, which `build.zig` fills in from the source checkout.
 ///
-/// The Rust runtime SemanticVersion view has no `+BUILD` channel, so `build.rs`
-/// captures the commit (`git rev-parse --short HEAD`, overridable via
-/// `RUSTTY_COMMIT_HASH`) and bakes it into the crate env instead. It is EMPTY —
-/// hence `None` here, hence no hyperlink — when the source is not a git checkout
-/// (release tarball / vendored crate / docs.rs), which is exactly the reference's
-/// own `build_config.version.build == null` case.
+/// It is the `+BUILD` part of the composed version (`rustty_version`): the short
+/// hash for an untagged checkout, `0000000` without git, and `None` (no
+/// hyperlink) for a `vX.Y.Z`-tagged release, exactly the reference's cases.
+/// CORRECTION (review T-B): this used to be a separate `git rev-parse --short
+/// HEAD` capture in this crate's `build.rs` (`RUSTTY_COMMIT_HASH`), which also
+/// linked a tagged release and never linked a build without git.
 fn commit_hash() -> Option<&'static str> {
-    let hash = env!("RUSTTY_COMMIT_HASH");
-    if hash.is_empty() {
-        None
-    } else {
-        Some(hash)
-    }
+    rustty_version::version_build()
 }
 
 /// The web URL for a source commit: the product's repo commit-URL prefix
@@ -271,7 +290,7 @@ fn write_version<W: std::io::Write>(stdout: &mut W, tty: bool) -> Result<u8, Err
         stdout,
         "{} {}",
         rustty_identity::APP_NAME_TITLECASE,
-        build_config::VERSION_STRING
+        rustty_version::VERSION_STRING
     )?;
     writeln!(stdout)?;
     writeln!(stdout)?;
@@ -283,12 +302,12 @@ fn write_version<W: std::io::Write>(stdout: &mut W, tty: bool) -> Result<u8, Err
     // try stdout.print("Version\n", .{});
     writeln!(stdout, "Version")?;
     // try stdout.print("  - version: {s}\n", .{build_config.version_string});
-    writeln!(stdout, "  - version: {}", build_config::VERSION_STRING)?;
+    writeln!(stdout, "  - version: {}", rustty_version::VERSION_STRING)?;
     // try stdout.print("  - channel: {t}\n", .{build_config.release_channel});
     writeln!(
         stdout,
         "  - channel: {}",
-        release_channel_tag(build_config::release_channel())
+        release_channel_tag(rustty_version::release_channel())
     )?;
 
     // try stdout.print("Build Config\n", .{});
@@ -301,23 +320,28 @@ fn write_version<W: std::io::Write>(stdout: &mut W, tty: bool) -> Result<u8, Err
         "  - Rust version  : {}",
         build_config::RUSTC_VERSION
     )?;
+    // PORT NOTE (parity S70-F4, task T-C): these three lines print an enum with
+    // `{}`, which Zig renders as `.` plus the tag name (MEASURED, Zig 0.16.0:
+    // `.Debug`, `.gtk`, `.fontconfig_freetype`; Ghostty 1.3.1's `+version`
+    // prints `.ReleaseFast`, `.none`, `.coretext`). They printed the bare mode
+    // name and the Rust enums' Debug (`Gtk`, `FontconfigFreetype`).
     // try stdout.print("  - build mode    : {}\n", .{builtin.mode});
     writeln!(
         stdout,
-        "  - build mode    : {}",
+        "  - build mode    : .{}",
         build_config::mode_string()
     )?;
     // try stdout.print("  - app runtime   : {}\n", .{build_config.app_runtime});
     writeln!(
         stdout,
-        "  - app runtime   : {:?}",
-        build_config::app_runtime()
+        "  - app runtime   : .{}",
+        app_runtime_tag(build_config::app_runtime())
     )?;
     // try stdout.print("  - font engine   : {}\n", .{build_config.font_backend});
     writeln!(
         stdout,
-        "  - font engine   : {:?}",
-        build_config::font_backend()
+        "  - font engine   : .{}",
+        font_backend_tag(build_config::font_backend())
     )?;
     // try stdout.print("  - renderer      : {}\n", .{renderer.Renderer});
     writeln!(stdout, "  - renderer      : {}", renderer_type_name())?;
@@ -371,8 +395,11 @@ fn write_version<W: std::io::Write>(stdout: &mut W, tty: bool) -> Result<u8, Err
                 gtk_runtime: gtk_version::runtime_version(),
                 adw_build: adw_version::BASELINE,
                 adw_runtime: adw_version::runtime_version(),
-                x11: cfg!(feature = "x11"),
-                wayland: cfg!(feature = "wayland"),
+                // The arms actually built into the apprt (S65-F6): the
+                // feature allows an arm, the GTK4 target probe or an explicit
+                // RUSTTY_GTK_* option decides it.
+                x11: rustty_apprt::GTK_X11,
+                wayland: rustty_apprt::GTK_WAYLAND,
             },
         )?;
     }
@@ -388,48 +415,27 @@ fn write_version<W: std::io::Write>(stdout: &mut W, tty: bool) -> Result<u8, Err
 mod tests {
     use super::*;
 
-    /// Whether the crate source tree is a live git checkout — the exact condition
-    /// under which `build.rs` bakes a hash. Keeps the assertion below from being
-    /// vacuous in a checkout AND from being wrong in a tarball build.
-    fn source_is_git_checkout() -> bool {
-        std::process::Command::new("git")
-            .args(["rev-parse", "--short", "HEAD"])
-            .current_dir(env!("CARGO_MANIFEST_DIR"))
-            .output()
-            .map(|o| o.status.success() && !o.stdout.is_empty())
-            .unwrap_or(false)
-    }
-
-    /// The `+BUILD`-metadata analog must actually CARRY a commit when built from a
-    /// git checkout. This is the assertion that was dead before WS19 T12
-    /// (`commit_hash()` returned `None` unconditionally).
+    /// The hyperlink carries the version's own `+BUILD` metadata, and in a
+    /// git build that is a real short hash. This is the assertion that was
+    /// dead before WS19 T12 (`commit_hash()` returned `None` unconditionally).
     #[test]
-    // MIRI EXCEPTION (rustty-cli version, process/file-I/O class): the test asks
-    // the environment whether it IS a git checkout by running `git rev-parse`,
-    // which Miri's isolation forbids ("`open` not available when isolation is
-    // enabled"), aborting the whole rustty-cli lib binary. Removing the probe
-    // would make the test vacuous in a tarball build — the exact hole WS19 T12
-    // closed. Same class as `rustty-vaxis/tests/ucd_provenance.rs`. Registered
-    // in .port/phase-2/MIRI_EXCEPTIONS.md ("rustty-cli — the 2026-07-31 CI triage").
-    #[cfg_attr(
-        miri,
-        ignore = "MIRI EXCEPTION (rustty-cli): spawns `git rev-parse`; \
-         Miri isolation forbids it — see MIRI_EXCEPTIONS.md"
-    )]
-    fn commit_hash_is_captured_in_a_git_checkout() {
-        if !source_is_git_checkout() {
-            // Not a checkout: the reference's own `version.build == null` case.
-            assert_eq!(commit_hash(), None);
-            return;
+    fn commit_hash_is_the_version_build_metadata() {
+        assert_eq!(commit_hash(), rustty_version::version_build());
+        let v = rustty_version::VERSION_STRING;
+        match v.split_once('+') {
+            None => assert_eq!(commit_hash(), None, "{v}"),
+            Some((_, build)) => assert_eq!(commit_hash(), Some(build), "{v}"),
         }
-        let hash = commit_hash().expect(
-            "built from a git checkout, so build.rs must have baked RUSTTY_COMMIT_HASH; \
-             `commit_hash()` returning None means the +BUILD metadata analog is dead again",
-        );
-        assert!(
-            hash.len() >= 7 && hash.chars().all(|c| c.is_ascii_hexdigit()),
-            "commit hash should be a short hex object name, got {hash:?}"
-        );
+        // A pre-release built from git (`X.Y.Z-<branch>+<hash>`, not the
+        // `-dev+0000000` of a build without git): the hash is a hex object name.
+        if let Some(hash) = commit_hash().filter(|_| !v.contains("-dev+")) {
+            if option_env!("RUSTTY_VERSION_STRING").is_none_or(str::is_empty) {
+                assert!(
+                    hash.len() >= 7 && hash.chars().all(|c| c.is_ascii_hexdigit()),
+                    "commit hash should be a short hex object name, got {hash:?}"
+                );
+            }
+        }
     }
 
     /// The hyperlink URL is the PRODUCT's repo (R2), with the hash appended.
@@ -478,7 +484,7 @@ mod tests {
         let header = format!(
             "{} {}",
             rustty_identity::APP_NAME_TITLECASE,
-            build_config::VERSION_STRING
+            rustty_version::VERSION_STRING
         );
         assert!(
             out.starts_with(&format!("{open}{header}\n\n\x1b]8;;\x1b\\")),
@@ -498,6 +504,41 @@ mod tests {
             "no OSC-8 may be emitted when stdout is not a tty: {out:?}"
         );
         assert!(out.starts_with(rustty_identity::APP_NAME_TITLECASE));
+    }
+
+    /// parity S70-F4: `{}` of an enum is `.` plus the tag name. The expected
+    /// macOS lines are the ones Ghostty 1.3.1's `+version` prints there
+    /// (`.none`, `.coretext`); the mode is this test build's.
+    #[test]
+    fn build_config_enum_lines_use_zig_enum_formatting() {
+        let mut buf: Vec<u8> = Vec::new();
+        write_version(&mut buf, false).expect("write_version");
+        let out = String::from_utf8(buf).expect("+version output is UTF-8");
+        let mode = format!("  - build mode    : .{}\n", build_config::mode_string());
+        assert!(out.contains(&mode), "{out:?}");
+        #[cfg(target_os = "macos")]
+        {
+            assert!(out.contains("  - app runtime   : .none\n"), "{out:?}");
+            // Ghostty's own default-build line; with `-Dfont-backend` set
+            // (S-14, N266) the line names that backend instead.
+            let fe = match build_config::build::FONT_BACKEND_OPTION {
+                None => "  - font engine   : .coretext\n".to_string(),
+                Some(b) => format!("  - font engine   : .{}\n", font_backend_tag(b)),
+            };
+            assert!(out.contains(&fe), "{out:?}");
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let rt = format!(
+                "  - app runtime   : .{}\n",
+                app_runtime_tag(build_config::app_runtime())
+            );
+            let fe = format!(
+                "  - font engine   : .{}\n",
+                font_backend_tag(build_config::font_backend())
+            );
+            assert!(out.contains(&rt) && out.contains(&fe), "{out:?}");
+        }
     }
 
     /// PORTS the FORMAT of `version.zig:49-75` (the `app_runtime == .gtk` block),

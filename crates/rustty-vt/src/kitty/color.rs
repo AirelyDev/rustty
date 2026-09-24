@@ -107,7 +107,7 @@ impl Kind {
         // and accepts `_` digit separators between digits (`"1_2"` == 12), so
         // the faithful `std.fmt` helper is used instead.
         Some(Kind::Palette(
-            match crate::color::parse_unsigned_u8(key.as_bytes(), 10) {
+            match rustty_zigstd::fmt::parse_unsigned::<u8>(key.as_bytes(), 10) {
                 Ok(p) => p,
                 Err(_) => return None,
             },

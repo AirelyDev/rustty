@@ -204,10 +204,29 @@ pub fn setThreadState<S: ThreadStateSurface + 'static>(state: ThreadState<S>) {
     }));
 }
 
+/// PORT NOTE: `crash.sentry.thread_state = .{ .type = ..., .surface = ... };`
+/// for a caller that reaches the surface through the seam trait object:
+/// termio's io and io-reader threads, whose surface is
+/// `io.surface_mailbox.surface` (`AppMailbox::crash_surface`). LEDGER S211-F2,
+/// S212-F2.
+pub fn setThreadStateDyn(type_: Type, surface: *const dyn ThreadStateSurface) {
+    THREAD_STATE.set(Some(ErasedThreadState { type_, surface }));
+}
+
 /// PORT NOTE: `crash.sentry.thread_state = null;` (the callers' paired
 /// `defer crash.sentry.thread_state = null`).
 pub fn clearThreadState() {
     THREAD_STATE.set(None);
+}
+
+/// The calling thread's `thread_state`: its type and surface, or `None`.
+///
+/// PORT NOTE: the read half of the reference's `pub threadlocal var
+/// thread_state`, which any code may read; `beforeSend` reads the thread-local
+/// directly. Added for LEDGER S211-F2 / S212-F2, whose tests check the value
+/// the termio threads set.
+pub fn threadState() -> Option<(Type, *const dyn ThreadStateSurface)> {
+    THREAD_STATE.get().map(|s| (s.type_, s.surface))
 }
 
 /// PORT NOTE: the reified error set of `init`'s `!void` — `std.Thread.spawn`'s
@@ -346,6 +365,13 @@ fn initThread(environ_map: rustty_global::EnvMap) -> Result<(), InitThreadError>
     // }
     // (PORT NOTE: rustty-os gates its macos module on `target_os = "macos"` — the
     // macOS member of the reference's Darwin set this crate builds for.)
+    // (PORT NOTE, LEDGER S79-F5: the thread is still named "sentry-init" on
+    // every Darwin target, not only macOS: `init` spawns it with
+    // `Builder::name("sentry-init")`, and std names a spawned thread from inside
+    // it with `pthread_setname_np(name)` on every `target_vendor = "apple"`
+    // target (rust 1.93.1 `library/std/src/sys/thread/unix.rs:451-458`).
+    // MEASURED on macOS: a thread spawned that way reads back "sentry-init"
+    // through `pthread_getname_np`. This call repeats that on macOS.)
     #[cfg(target_os = "macos")]
     unsafe {
         internal_os::macos::pthread_setname_np(c"sentry-init".as_ptr())
@@ -435,8 +461,8 @@ fn initThread(environ_map: rustty_global::EnvMap) -> Result<(), InitThreadError>
     unsafe {
         sentry::c::sentry_options_set_release_n(
             opts,
-            build_config::VERSION_STRING.as_ptr().cast(),
-            build_config::VERSION_STRING.len(),
+            rustty_version::VERSION_STRING.as_ptr().cast(),
+            rustty_version::VERSION_STRING.len(),
         )
     };
     // sentry.c.sentry_options_set_transport(opts, @ptrCast(transport));
@@ -511,25 +537,27 @@ fn cacheDir(environ_map: &rustty_global::EnvMap) -> Result<Vec<u8>, InitThreadEr
     // a more idiomatic macOS application. But if XDG env vars are set
     // we will respect them.
     //
-    // UPSTREAM BUG — NOT PORTED AS WRITTEN (P4-E35, escalated + ratified; see
-    // .port/phase-4/UPSTREAM_BUGS.md "P4-U1"): upstream `15c50c1db` INVERTED
-    // this check while extracting the fn —
-    //     if (comptime builtin.os.tag == .macos) macos: {
-    //         const xdg_cache_home = environ_map.get("XDG_CACHE_HOME") orelse break :macos;
-    //         if (xdg_cache_home.len > 0) {
-    //             return try internal_os.macos.cacheDir(
-    //                 alloc,
-    //                 "sentry",
-    //             );
-    //         }
+    // if (comptime builtin.os.tag == .macos) macos: {
+    //     const xdg_cache_home = environ_map.get("XDG_CACHE_HOME") orelse break :macos;
+    //     if (xdg_cache_home.len > 0) {
+    //         return try internal_os.macos.cacheDir(
+    //             alloc,
+    //             "sentry",
+    //         );
     //     }
-    // i.e. at upstream HEAD a set-and-nonempty XDG_CACHE_HOME picks
-    // NSCachesDirectory and an unset one picks the XDG path — the exact
-    // opposite of the comment above (and of the pre-range
-    // `containsUnemptyConstant` logic). rustty ports the pre-range,
-    // comment-consistent behavior: set-and-nonempty XDG_CACHE_HOME → respect
-    // XDG (`xdg.cache` below); unset or empty → NSCachesDirectory
-    // (`XDG_CACHE_HOME=""` is treated as UNSET).
+    // }
+    //
+    // PORT NOTE: reference defect (R13), UD21 (LEDGER S79-F1). The condition
+    // above is the inverse of its own comment: upstream `15c50c1db` inverted it
+    // while extracting the fn, so a set-and-nonempty `XDG_CACHE_HOME` picks
+    // NSCachesDirectory and an unset one picks the XDG path. That visibly breaks
+    // the reference's evident intent, so under R13 (as extended 2026-09-23) the
+    // port does what the comment says: set and non-empty `XDG_CACHE_HOME` →
+    // respect XDG (`xdg.cache` below); unset or empty → NSCachesDirectory
+    // (`XDG_CACHE_HOME=""` is treated as unset). This is the phase-4 P4-E35
+    // behaviour; parity tail T-E briefly ported the inversion (under R13 as it
+    // stood before the extension) and this round reverts that. Listed in
+    // `docs/ghostty-bug-fixes.md`. Test `cache_dir_follows_the_intended_condition`.
     #[cfg(target_os = "macos")]
     {
         let respect_xdg = environ_map
@@ -1161,5 +1189,36 @@ mod tests {
         assert!(result.get("tags").is_none());
         assert!(result.get("contexts").is_none());
         result.decref();
+    }
+
+    // No reference test. LEDGER S79-F1, reference defect (R13) UD21: the
+    // reference's macOS `cacheDir` (`sentry.zig:188-207`) returns
+    // `NSCachesDirectory` when `XDG_CACHE_HOME` is set and non-empty, and the
+    // XDG cache otherwise: the inverse of its own comment ("if XDG env vars
+    // are set we will respect them"). The port implements the comment.
+    // Negative control: reinstate the reference's condition (NSCaches when
+    // set and non-empty) and the first assertion fails with the two paths
+    // swapped.
+    #[cfg(all(feature = "sentry", target_os = "macos"))]
+    #[test]
+    fn cache_dir_follows_the_intended_condition() {
+        let map = |pairs: &[(&str, &str)]| -> rustty_global::EnvMap {
+            pairs
+                .iter()
+                .map(|(k, v)| (k.as_bytes().to_vec(), v.as_bytes().to_vec()))
+                .collect()
+        };
+        let ns_caches = internal_os::macos::cacheDir("sentry").unwrap().into_bytes();
+        let xdg = format!("/x/{}/sentry", rustty_identity::APP_NAME).into_bytes();
+        assert_ne!(ns_caches, xdg);
+
+        // Set and non-empty: the XDG cache under `$XDG_CACHE_HOME`.
+        let got = cacheDir(&map(&[("XDG_CACHE_HOME", "/x"), ("HOME", "/h")])).unwrap();
+        assert_eq!(xdg, got);
+        // Unset, or empty: NSCachesDirectory.
+        let got = cacheDir(&map(&[("HOME", "/h")])).unwrap();
+        assert_eq!(ns_caches, got);
+        let got = cacheDir(&map(&[("XDG_CACHE_HOME", ""), ("HOME", "/h")])).unwrap();
+        assert_eq!(ns_caches, got);
     }
 }

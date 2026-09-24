@@ -357,7 +357,20 @@ impl Inspector {
                     // `_tree_pop` here), so the arm is expressed as a `match`
                     // rather than a `continue` — the loop's advance step lives
                     // at the END of this body, not in a continue-expression.
-                    match unsafe { rustty_vt::pagelist::Node::page_preserving_state(page_node) } {
+                    // var preserved = page_node.pagePreservingState(
+                    //     std.heap.page_allocator,
+                    // ) catch { ... };
+                    //
+                    // PORT NOTE (parity tail S7-3): `std.heap.page_allocator` ->
+                    // the Rust heap handle. The allocator handle has no page-
+                    // allocator arm; the buffer's page alignment is in its
+                    // `Layout`, and the inspector is outside the C API.
+                    match unsafe {
+                        rustty_vt::pagelist::Node::page_preserving_state(
+                            page_node,
+                            rustty_vt::alloc::Global,
+                        )
+                    } {
                         Err(_) => unsafe {
                             dcimgui_sys::ImGui_TextDisabled(
                                 c"(unable to copy compressed page)".as_ptr(),
@@ -1765,7 +1778,9 @@ impl CellChooser {
         // exclusive access to the PageList for the duration (display-only reads under
         // the renderer-state mutex), which is `page_preserving_state`'s contract.
         let mut preserved = match unsafe {
-            rustty_vt::pagelist::Node::page_preserving_state(pin.node)
+            // pin.node.pagePreservingState(std.heap.page_allocator): see the
+            // PORT NOTE on the first call site (the Rust heap handle).
+            rustty_vt::pagelist::Node::page_preserving_state(pin.node, rustty_vt::alloc::Global)
         } {
             Ok(preserved) => preserved,
             Err(_) => {
@@ -2663,10 +2678,13 @@ mod ws7_tests {
              cannot be exercised here"
         );
 
-        let mut pages = PageList::init(rustty_vt::pagelist::Options {
-            max_size: Some(10 * 1024 * 1024),
-            ..rustty_vt::pagelist::Options::new(80, 24)
-        })
+        let mut pages = PageList::init(
+            rustty_vt::alloc::Global,
+            rustty_vt::pagelist::Options {
+                max_size: Some(10 * 1024 * 1024),
+                ..rustty_vt::pagelist::Options::new(80, 24)
+            },
+        )
         .unwrap();
         while pages.total_pages() < 6 {
             let _ = pages.grow().unwrap();
@@ -2771,10 +2789,13 @@ mod ws7_tests {
         // `IMGUI_LOCK` (memory: parallel-cargo-test-exposes-c-init-races).
         let _guard = IMGUI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
-        let mut pages = PageList::init(rustty_vt::pagelist::Options {
-            max_size: Some(10 * 1024 * 1024),
-            ..rustty_vt::pagelist::Options::new(80, 24)
-        })
+        let mut pages = PageList::init(
+            rustty_vt::alloc::Global,
+            rustty_vt::pagelist::Options {
+                max_size: Some(10 * 1024 * 1024),
+                ..rustty_vt::pagelist::Options::new(80, 24)
+            },
+        )
         .unwrap();
         while pages.total_pages() < 6 {
             let _ = pages.grow().unwrap();

@@ -33,32 +33,29 @@ use std::path::PathBuf;
 
 /// Vendored zlib translation units compiled into this crate.
 ///
-/// `adler32`/`crc32` provide the checksums; `inftrees`/`inffast`/`inflate`
-/// provide the DEFLATE decompressor; `uncompr` provides the one-shot
-/// `uncompress` entry point; `deflate`/`trees` provide the DEFLATE compressor;
-/// `compress` provides the one-shot `compress`/`compress2` entry point; `zutil`
-/// provides the shared support routines. These are the verbatim upstream zlib
-/// 1.3.1 sources — the full inflate AND deflate surface, so the emitted archive
-/// is self-contained (P3: Sentry's crash reporter links `deflate`).
+/// The reference's `srcs` list, verbatim and in its order
+/// (`pkg/zlib/build.zig:61-77`): all 15 units of zlib 1.3.1, including the
+/// `gz*` file API (`gzclose`, `gzlib`, `gzread`, `gzwrite`) and `infback`
+/// (`inflateBack*`), which the port used to omit (S39-F5). No in-tree consumer
+/// calls those two surfaces; they are compiled because the reference's `libz`
+/// carries them. (This list also used to name `deflate`, `trees` and
+/// `compress` twice.)
 const SOURCES: &[&str] = &[
     "vendor/adler32.c",
+    "vendor/compress.c",
     "vendor/crc32.c",
+    "vendor/deflate.c",
+    "vendor/gzclose.c",
+    "vendor/gzlib.c",
+    "vendor/gzread.c",
+    "vendor/gzwrite.c",
+    "vendor/inflate.c",
+    "vendor/infback.c",
     "vendor/inftrees.c",
     "vendor/inffast.c",
-    "vendor/inflate.c",
+    "vendor/trees.c",
     "vendor/uncompr.c",
-    "vendor/deflate.c",
-    "vendor/trees.c",
-    "vendor/compress.c",
     "vendor/zutil.c",
-    // The DEFLATE (compression) translation units, needed by the framegen asset
-    // step (`cli +boo`): `deflate` is the compressor core, `trees` builds the
-    // Huffman trees it emits, and `compress` provides the `compressBound` size
-    // helper framegen's `main.c` uses. These are the verbatim upstream zlib
-    // 1.3.1 sources (byte-identical to the reference's vendored zlib).
-    "vendor/deflate.c",
-    "vendor/trees.c",
-    "vendor/compress.c",
 ];
 
 fn main() {
@@ -81,6 +78,29 @@ fn main() {
         // Vendored upstream code: do not let its warnings fail the host build.
         .warnings(false)
         .flag_if_supported("-w");
+
+    // The reference's flags (`pkg/zlib/build.zig:28-50`). `Z_HAVE_UNISTD_H`
+    // matters to the `gz*` units: `zconf.h` then includes `<unistd.h>`, which
+    // declares the `read`/`write`/`close`/`lseek` they call.
+    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    let msvc = std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc");
+    build
+        .define("HAVE_SYS_TYPES_H", None)
+        .define("HAVE_STDINT_H", None)
+        .define("HAVE_STDDEF_H", None);
+    if msvc {
+        build
+            .flag("-fno-sanitize=undefined")
+            .flag("-fno-sanitize-trap=undefined");
+    }
+    if target_os != "windows" {
+        build.define("Z_HAVE_UNISTD_H", None);
+    }
+    if msvc {
+        build
+            .define("_CRT_SECURE_NO_DEPRECATE", None)
+            .define("_CRT_NONSTDC_NO_DEPRECATE", None);
+    }
     for src in SOURCES {
         build.file(manifest_dir.join(src));
         println!("cargo:rerun-if-changed={src}");
@@ -102,4 +122,5 @@ fn main() {
     println!("cargo:rerun-if-changed=vendor/zconf.h");
     println!("cargo:rerun-if-changed=vendor/deflate.h");
     println!("cargo:rerun-if-changed=vendor/trees.h");
+    println!("cargo:rerun-if-changed=vendor/gzguts.h");
 }

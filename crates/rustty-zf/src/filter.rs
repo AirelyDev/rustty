@@ -1,8 +1,12 @@
 //! filter.zig — the core zf scorer (a Smith-Waterman-ish greedy gap/bonus walk).
 //!
-//! Ports natecraddock/zf 0.10.3 `src/zf/filter.zig` line-for-line: `indexOf`,
-//! `IndexIterator`, `hasSeparator`, `PathIterator`, `segmentLen`, `rankToken`,
-//! `FixedArrayList`, `highlightToken`, `isStartOfWord`, `ScanResult`, `scanToEnd`.
+//! Ports natecraddock/zf 0.11.0 `src/zf/filter.zig` line-for-line: `indexOf`,
+//! `indexOfInsensitive`,
+//! `IndexIterator`, `hasSeparator`, `PathIterator`, `segmentLen`, `rankNeedle`,
+//! `FixedArrayList`, `highlightNeedle`, `isStartOfWord`, `ScanResult`, `scanToEnd`.
+//! (0.10.3 -> 0.11.0, parity tail S-10b: `str`/`token` became `haystack`/`needle`,
+//! `rankToken`/`highlightToken` became `rankNeedle`/`highlightNeedle`, and the
+//! case-insensitive search lowers the needle byte too, see `index_of_insensitive`.)
 //!
 //! `std.fs.path.{sep,basenamePosix}` are inlined here (pure leaf ⇒ no std shim).
 //!
@@ -63,23 +67,29 @@ fn to_lower(byte: u8) -> u8 {
     }
 }
 
-// `indexOf(comptime T, …, comptime case_sensitive)` — only `T = u8` is
-// instantiated, so this is monomorphized to `u8` with a runtime `case_sensitive`
-// branch (behavior identical to the two comptime instantiations). Note the
-// haystack byte is lowered, NEVER the search `value` — this is why
-// `RankOptions.to_lower` "does not convert the tokens" (the caller hands a
-// lowercase token) and why `case_sensitive = !to_lower`.
-fn index_of(slice: &[u8], start_index: usize, value: u8, case_sensitive: bool) -> Option<usize> {
-    let mut i: usize = start_index;
-    while i < slice.len() {
-        if case_sensitive {
-            if slice[i] == value {
-                return Some(i);
-            }
-        } else if to_lower(slice[i]) == value {
-            return Some(i);
+// `indexOf` = `std.mem.indexOfScalarPos(u8, haystack, start_index, needle)`, which
+// returns null when `start_index >= haystack.len`.
+fn index_of(haystack: &[u8], start_index: usize, needle: u8) -> Option<usize> {
+    if start_index >= haystack.len() {
+        return None;
+    }
+    haystack[start_index..]
+        .iter()
+        .position(|&h| h == needle)
+        .map(|p| p + start_index)
+}
+
+// `indexOfInsensitive` — BOTH the needle byte and each haystack byte are lowered
+// (0.10.3's case-insensitive `indexOf` lowered only the haystack, so an uppercase
+// needle byte never matched). `haystack[start_index..]` traps in Zig when
+// `start_index > haystack.len`; every caller passes at most `haystack.len` (an index
+// found in `haystack`, plus one), so the Rust slice cannot panic either.
+fn index_of_insensitive(haystack: &[u8], start_index: usize, needle: u8) -> Option<usize> {
+    let n = to_lower(needle);
+    for (i, &h) in haystack[start_index..].iter().enumerate() {
+        if to_lower(h) == n {
+            return Some(i + start_index);
         }
-        i += 1;
     }
     None
 }
@@ -105,7 +115,11 @@ impl<'a> IndexIterator<'a> {
     // `while (it.next()) |x|` control flow 1:1.
     #[allow(clippy::should_implement_trait)]
     fn next(&mut self) -> Option<usize> {
-        let index = index_of(self.str, self.index, self.char, self.case_sensitive);
+        let index = if self.case_sensitive {
+            index_of(self.str, self.index, self.char)
+        } else {
+            index_of_insensitive(self.str, self.index, self.char)
+        };
         if let Some(i) = index {
             self.index = i + 1;
         }
@@ -225,14 +239,14 @@ fn segment_len_test() {
     assert_eq!(segment_len(b"a/b", 1), 1);
 }
 
-pub fn rank_token(
-    str: &[u8],
+pub fn rank_needle(
+    haystack: &[u8],
     filename_or_null: Option<&[u8]>,
-    token: &[u8],
+    needle: &[u8],
     case_sensitive: bool,
     strict_path: bool,
 ) -> Option<f64> {
-    if str.is_empty() || token.is_empty() {
+    if haystack.is_empty() || needle.is_empty() {
         return None;
     }
 
@@ -241,15 +255,15 @@ pub fn rank_token(
     let mut best_rank: Option<f64> = None;
 
     if strict_path {
-        let mut iter = PathIterator::init(token);
+        let mut iter = PathIterator::init(needle);
         let mut start: usize = 0;
         while let Some(segment) = iter.next() {
-            let mut it = IndexIterator::init(str, segment[0], case_sensitive);
+            let mut it = IndexIterator::init(haystack, segment[0], case_sensitive);
             it.index = start;
             let mut matched = false;
             while let Some(start_index) = it.next() {
                 if let Some(scan) = scan_to_end(
-                    str,
+                    haystack,
                     &segment[1..],
                     start_index,
                     0,
@@ -257,9 +271,9 @@ pub fn rank_token(
                     case_sensitive,
                     strict_path,
                 ) {
-                    // how much of the query token segment matched the path segment?
+                    // how much of the needle segment matched the path segment?
                     // "mod" would match "module" better than "modules" for example
-                    let path_segment_len = segment_len(str, start_index);
+                    let path_segment_len = segment_len(haystack, start_index);
                     let coverage = 1.0 - (segment.len() as f64 / path_segment_len as f64);
                     let rank = coverage * scan.rank;
 
@@ -271,7 +285,7 @@ pub fn rank_token(
                 }
             }
             // the `while … else` — if the IndexIterator exhausts without a match
-            // for this segment, no candidate matched the whole token.
+            // for this segment, no candidate matched the whole needle.
             if !matched {
                 return None;
             }
@@ -281,11 +295,11 @@ pub fn rank_token(
 
     // perform search on the filename only if requested
     if let Some(filename) = filename_or_null {
-        let mut it = IndexIterator::init(filename, token[0], case_sensitive);
+        let mut it = IndexIterator::init(filename, needle[0], case_sensitive);
         while let Some(start_index) = it.next() {
             if let Some(scan) = scan_to_end(
                 filename,
-                &token[1..],
+                &needle[1..],
                 start_index,
                 0,
                 None,
@@ -304,11 +318,11 @@ pub fn rank_token(
             // was a filename match, give priority
             br /= 2.0;
 
-            // how much of the token matched the filename?
-            if token.len() == filename.len() {
+            // how much of the needle matched the filename?
+            if needle.len() == filename.len() {
                 br /= 2.0;
             } else {
-                let coverage = 1.0 - (token.len() as f64 / filename.len() as f64);
+                let coverage = 1.0 - (needle.len() as f64 / filename.len() as f64);
                 br *= coverage;
             }
 
@@ -317,11 +331,11 @@ pub fn rank_token(
     }
 
     // perform search on the full string if requested or if no match was found on the filename
-    let mut it = IndexIterator::init(str, token[0], case_sensitive);
+    let mut it = IndexIterator::init(haystack, needle[0], case_sensitive);
     while let Some(start_index) = it.next() {
         if let Some(scan) = scan_to_end(
-            str,
-            &token[1..],
+            haystack,
+            &needle[1..],
             start_index,
             0,
             None,
@@ -340,40 +354,40 @@ pub fn rank_token(
 }
 
 #[test]
-fn rank_token_test() {
+fn rank_needle_test() {
     // plain string matching
-    assert_eq!(rank_token(b"", None, b"", false, false), None);
-    assert_eq!(rank_token(b"", None, b"b", false, false), None);
-    assert_eq!(rank_token(b"a", None, b"", false, false), None);
-    assert_eq!(rank_token(b"a", None, b"b", false, false), None);
-    assert_eq!(rank_token(b"aaa", None, b"aab", false, false), None);
-    assert_eq!(rank_token(b"abbba", None, b"abab", false, false), None);
+    assert_eq!(rank_needle(b"", None, b"", false, false), None);
+    assert_eq!(rank_needle(b"", None, b"b", false, false), None);
+    assert_eq!(rank_needle(b"a", None, b"", false, false), None);
+    assert_eq!(rank_needle(b"a", None, b"b", false, false), None);
+    assert_eq!(rank_needle(b"aaa", None, b"aab", false, false), None);
+    assert_eq!(rank_needle(b"abbba", None, b"abab", false, false), None);
 
-    assert!(rank_token(b"a", None, b"a", false, false).is_some());
-    assert!(rank_token(b"abc", None, b"abc", false, false).is_some());
-    assert!(rank_token(b"aaabbbccc", None, b"abc", false, false).is_some());
-    assert!(rank_token(b"azbycx", None, b"x", false, false).is_some());
-    assert!(rank_token(b"azbycx", None, b"ax", false, false).is_some());
-    assert!(rank_token(b"a", None, b"a", false, false).is_some());
+    assert!(rank_needle(b"a", None, b"a", false, false).is_some());
+    assert!(rank_needle(b"abc", None, b"abc", false, false).is_some());
+    assert!(rank_needle(b"aaabbbccc", None, b"abc", false, false).is_some());
+    assert!(rank_needle(b"azbycx", None, b"x", false, false).is_some());
+    assert!(rank_needle(b"azbycx", None, b"ax", false, false).is_some());
+    assert!(rank_needle(b"a", None, b"a", false, false).is_some());
 
     // file name matching
-    assert_eq!(rank_token(b"", Some(b""), b"", false, false), None);
-    assert_eq!(rank_token(b"/a", Some(b"a"), b"b", false, false), None);
-    assert_eq!(rank_token(b"c/a", Some(b"a"), b"b", false, false), None);
+    assert_eq!(rank_needle(b"", Some(b""), b"", false, false), None);
+    assert_eq!(rank_needle(b"/a", Some(b"a"), b"b", false, false), None);
+    assert_eq!(rank_needle(b"c/a", Some(b"a"), b"b", false, false), None);
     assert_eq!(
-        rank_token(b"/file.ext", Some(b"file.ext"), b"z", false, false),
+        rank_needle(b"/file.ext", Some(b"file.ext"), b"z", false, false),
         None
     );
     assert_eq!(
-        rank_token(b"/file.ext", Some(b"file.ext"), b"fext.", false, false),
+        rank_needle(b"/file.ext", Some(b"file.ext"), b"fext.", false, false),
         None
     );
-    assert_eq!(rank_token(b"/a/b/c", Some(b"c"), b"d", false, false), None);
+    assert_eq!(rank_needle(b"/a/b/c", Some(b"c"), b"d", false, false), None);
 
-    assert!(rank_token(b"/b", Some(b"b"), b"b", false, false).is_some());
-    assert!(rank_token(b"/a/b/c", Some(b"c"), b"c", false, false).is_some());
-    assert!(rank_token(b"/file.ext", Some(b"file.ext"), b"ext", false, false).is_some());
-    assert!(rank_token(
+    assert!(rank_needle(b"/b", Some(b"b"), b"b", false, false).is_some());
+    assert!(rank_needle(b"/a/b/c", Some(b"c"), b"c", false, false).is_some());
+    assert!(rank_needle(b"/file.ext", Some(b"file.ext"), b"ext", false, false).is_some());
+    assert!(rank_needle(
         b"path/to/file.ext",
         Some(b"file.ext"),
         b"file",
@@ -381,8 +395,8 @@ fn rank_token_test() {
         false
     )
     .is_some());
-    assert!(rank_token(b"path/to/file.ext", Some(b"file.ext"), b"to", false, false).is_some());
-    assert!(rank_token(
+    assert!(rank_needle(b"path/to/file.ext", Some(b"file.ext"), b"to", false, false).is_some());
+    assert!(rank_needle(
         b"path/to/file.ext",
         Some(b"file.ext"),
         b"path",
@@ -390,7 +404,7 @@ fn rank_token_test() {
         false
     )
     .is_some());
-    assert!(rank_token(
+    assert!(rank_needle(
         b"path/to/file.ext",
         Some(b"file.ext"),
         b"pfile",
@@ -398,8 +412,8 @@ fn rank_token_test() {
         false
     )
     .is_some());
-    assert!(rank_token(b"path/to/file.ext", Some(b"file.ext"), b"ptf", false, false).is_some());
-    assert!(rank_token(
+    assert!(rank_needle(b"path/to/file.ext", Some(b"file.ext"), b"ptf", false, false).is_some());
+    assert!(rank_needle(
         b"path/to/file.ext",
         Some(b"file.ext"),
         b"p/t/f",
@@ -409,10 +423,10 @@ fn rank_token_test() {
     .is_some());
 
     // strict path matching
-    assert_eq!(rank_token(b"a/b", Some(b"b"), b"ab", false, true), None);
-    assert_eq!(rank_token(b"a/b/c", Some(b"c"), b"abc", false, true), None);
+    assert_eq!(rank_needle(b"a/b", Some(b"b"), b"ab", false, true), None);
+    assert_eq!(rank_needle(b"a/b/c", Some(b"c"), b"abc", false, true), None);
     assert_eq!(
-        rank_token(
+        rank_needle(
             b"app/monsters/dungeon/foo/bar/baz.rb",
             Some(b"baz.rb"),
             b"mod/",
@@ -422,7 +436,7 @@ fn rank_token_test() {
         None
     );
     assert_eq!(
-        rank_token(
+        rank_needle(
             b"app/models/foo/bar/baz.rb",
             Some(b"baz.rb"),
             b"mod/barbaz",
@@ -432,13 +446,13 @@ fn rank_token_test() {
         None
     );
     assert_eq!(
-        rank_token(b"/some/path/here", Some(b"here"), b"/somepath", false, true),
+        rank_needle(b"/some/path/here", Some(b"here"), b"/somepath", false, true),
         None
     );
 
-    assert!(rank_token(b"a/b/c", Some(b"c"), b"a/c", false, true).is_some());
-    assert!(rank_token(b"a/b/c", Some(b"c"), b"//", false, true).is_some());
-    assert!(rank_token(
+    assert!(rank_needle(b"a/b/c", Some(b"c"), b"a/c", false, true).is_some());
+    assert!(rank_needle(b"a/b/c", Some(b"c"), b"//", false, true).is_some());
+    assert!(rank_needle(
         b"src/config/__init__.py",
         Some(b"__init__.py"),
         b"con/i",
@@ -446,8 +460,8 @@ fn rank_token_test() {
         true
     )
     .is_some());
-    assert!(rank_token(b"a/b/c/d", Some(b"d"), b"a/b/c", false, true).is_some());
-    assert!(rank_token(
+    assert!(rank_needle(b"a/b/c/d", Some(b"d"), b"a/b/c", false, true).is_some());
+    assert!(rank_needle(
         b"./app/models/foo/bar/baz.rb",
         Some(b"baz.rb"),
         b"a/m/f/b/baz",
@@ -455,7 +469,7 @@ fn rank_token_test() {
         true
     )
     .is_some());
-    assert!(rank_token(
+    assert!(rank_needle(
         b"/app/monsters/dungeon/foo/bar/baz.rb",
         Some(b"baz.rb"),
         b"a/m/f/b/baz",
@@ -463,7 +477,7 @@ fn rank_token_test() {
         true
     )
     .is_some());
-    assert!(rank_token(
+    assert!(rank_needle(
         b"app/models/foo/bar/baz.rb",
         Some(b"baz.rb"),
         b"mod/baz.rb",
@@ -519,24 +533,24 @@ fn fixed_array_list() {
     assert_eq!(list.slice(), &[] as &[usize]);
 }
 
-pub fn highlight_token<'a>(
-    str: &[u8],
+pub fn highlight_needle<'a>(
+    haystack: &[u8],
     filename_or_null: Option<&[u8]>,
-    token: &[u8],
+    needle: &[u8],
     case_sensitive: bool,
     strict_path: bool,
     matches: &'a mut [usize],
 ) -> &'a [usize] {
-    if str.is_empty() || token.is_empty() {
+    if haystack.is_empty() || needle.is_empty() {
         return &[];
     }
 
     // The `best_matched` list is backed by the caller's `matches`; return the
     // filled prefix once the mutable-borrow phase is done (reborrow as shared).
-    let len = highlight_token_len(
-        str,
+    let len = highlight_needle_len(
+        haystack,
         filename_or_null,
-        token,
+        needle,
         case_sensitive,
         strict_path,
         matches,
@@ -544,10 +558,10 @@ pub fn highlight_token<'a>(
     &matches[0..len]
 }
 
-fn highlight_token_len(
-    str: &[u8],
+fn highlight_needle_len(
+    haystack: &[u8],
     filename_or_null: Option<&[u8]>,
-    token: &[u8],
+    needle: &[u8],
     case_sensitive: bool,
     strict_path: bool,
     matches: &mut [usize],
@@ -560,17 +574,17 @@ fn highlight_token_len(
     let mut best_matched = FixedArrayList::init(matches);
 
     if strict_path {
-        let mut iter = PathIterator::init(token);
+        let mut iter = PathIterator::init(needle);
         let mut start: usize = 0;
         while let Some(segment) = iter.next() {
-            let mut it = IndexIterator::init(str, segment[0], case_sensitive);
+            let mut it = IndexIterator::init(haystack, segment[0], case_sensitive);
             it.index = start;
             let mut found = false;
             while let Some(start_index) = it.next() {
                 matched.append(start_index);
 
                 if let Some(scan) = scan_to_end(
-                    str,
+                    haystack,
                     &segment[1..],
                     start_index,
                     0,
@@ -578,9 +592,9 @@ fn highlight_token_len(
                     case_sensitive,
                     strict_path,
                 ) {
-                    // how much of the query token segment matched the path segment?
+                    // how much of the needle segment matched the path segment?
                     // "mod" would match "module" better than "modules" for example
-                    let path_segment_len = segment_len(str, start_index);
+                    let path_segment_len = segment_len(haystack, start_index);
                     let coverage = 1.0 - (segment.len() as f64 / path_segment_len as f64);
                     let rank = coverage * scan.rank;
 
@@ -609,15 +623,16 @@ fn highlight_token_len(
     // highlight on the filename if requested
     if let Some(filename) = filename_or_null {
         // The basename doesn't include trailing slashes so if the string ends in a slash the offset will be off by one
-        let offset = str.len() - filename.len() - usize::from(str[str.len() - 1] == SEP);
+        let offset =
+            haystack.len() - filename.len() - usize::from(haystack[haystack.len() - 1] == SEP);
 
-        let mut it = IndexIterator::init(filename, token[0], case_sensitive);
+        let mut it = IndexIterator::init(filename, needle[0], case_sensitive);
         while let Some(start_index) = it.next() {
             matched.append(start_index + offset);
 
             if let Some(scan) = scan_to_end(
                 filename,
-                &token[1..],
+                &needle[1..],
                 start_index,
                 offset,
                 Some(&mut matched),
@@ -644,13 +659,13 @@ fn highlight_token_len(
     matched.clear();
 
     // highlight the full string if requested or if no match was found on the filename
-    let mut it = IndexIterator::init(str, token[0], case_sensitive);
+    let mut it = IndexIterator::init(haystack, needle[0], case_sensitive);
     while let Some(start_index) = it.next() {
         matched.append(start_index);
 
         if let Some(scan) = scan_to_end(
-            str,
-            &token[1..],
+            haystack,
+            &needle[1..],
             start_index,
             0,
             Some(&mut matched),
@@ -683,10 +698,10 @@ struct ScanResult {
 }
 
 /// this is the core of the ranking algorithm. special precedence is given to
-/// filenames. if a match is found on a filename the candidate is ranked higher
+/// filenames. if a match is found on a filename the rank is better.
 fn scan_to_end(
-    str: &[u8],
-    token: &[u8],
+    haystack: &[u8],
+    needle: &[u8],
     start_index: usize,
     offset: usize,
     mut matched_indices: Option<&mut FixedArrayList<'_>>,
@@ -698,16 +713,20 @@ fn scan_to_end(
     let mut last_sequential = false;
 
     // penalty for not starting on a word boundary
-    if start_index > 0 && !is_start_of_word(str[start_index - 1]) {
+    if start_index > 0 && !is_start_of_word(haystack[start_index - 1]) {
         rank += 2.0;
     }
 
-    for &c in token {
-        let index = index_of(str, last_index + 1, c, case_sensitive);
+    for &c in needle {
+        let index = if case_sensitive {
+            index_of(haystack, last_index + 1, c)
+        } else {
+            index_of_insensitive(haystack, last_index + 1, c)
+        };
 
         if let Some(idx) = index {
             // did the match span a slash in strict path mode?
-            if strict_path && has_separator(&str[last_index..idx + 1]) {
+            if strict_path && has_separator(&haystack[last_index..idx + 1]) {
                 return None;
             }
 
@@ -723,7 +742,7 @@ fn scan_to_end(
                 }
             } else {
                 // penalty for not starting on a word boundary
-                if !is_start_of_word(str[idx - 1]) {
+                if !is_start_of_word(haystack[idx - 1]) {
                     rank += 2.0;
                 }
 

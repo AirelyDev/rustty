@@ -33,11 +33,19 @@ path = "src/main.rs"
 # `#[cfg(all(any(target_os = "linux", target_os = "freebsd"), feature = "gtk"))]`-gated
 # — so on macOS the default `gtk` feature compiles no gtk4-rs and changes no
 # behavior (the None runtime takes the usage-banner path).
-# `--no-default-features` yields the headless / deferred-leaf build.
+# On Linux/FreeBSD a build WITHOUT `gtk` is refused by a `compile_error!` in
+# `main_rustty.rs` (parity S44-F5; CORRECTION: this used to say
+# "`--no-default-features` yields the headless / deferred-leaf build").
 default = ["gtk", "wayland", "x11"]
 gtk = ["rustty-apprt/gtk", "rustty-cli/gtk", "dep:allocator-api2"]
 # Windowing-protocol arms of the GTK apprt's `winproto` union, passed through to
-# rustty-apprt. Both imply `gtk` and are DEFAULT-ON (F-007): ghostty derives its
+# rustty-apprt. Both imply `gtk` and are DEFAULT-ON (F-007). CORRECTION
+# (S65-F6, 2026-09-23): a feature now only ALLOWS its arm. rustty-apprt's
+# build.rs builds it when the system GTK4 has that target (`pkg-config
+# --variable=targets gtk4`, src/build/gtk.zig) or when RUSTTY_GTK_X11 /
+# RUSTTY_GTK_WAYLAND=true asks for it (=false turns it off), which is the
+# reference's `-Dx11=` / `-Dwayland=` with their probed defaults. The text below
+# predates that and describes the feature defaults only. ghostty derives its
 # gtk-wayland/gtk-x11 build defaults from `pkg-config --variable=targets gtk4`
 # (src/build/gtk.zig probing the distro GTK), which on a normal distro GTK
 # enables BOTH arms. Cargo has no declarative pkg-config autodetection, so
@@ -99,6 +107,19 @@ sentry = ["rustty-apprt/sentry"]
 # one is not silently portable, so `G-FEATMATRIX` exercises it on Linux only.
 flatpak = ["gtk", "rustty-apprt/flatpak"]
 snap = ["rustty-build-config/snap"]
+# `-Dfont-backend=<tag>` (`src/build/Config.zig:191-195`), passed through to
+# `rustty-build-config`, which owns the option (at most one; the per-target
+# default when none is set — see its Cargo.toml). The option swaps types in the
+# font shaper tier, which reads it from build-config's `links` metadata, so no
+# second switch is needed here. `rustty-build-config` refuses a backend the port
+# cannot build on the target (e.g. a CoreText backend off macOS).
+font-backend-freetype = ["rustty-build-config/font-backend-freetype"]
+font-backend-freetype-windows = ["rustty-build-config/font-backend-freetype-windows"]
+font-backend-fontconfig-freetype = ["rustty-build-config/font-backend-fontconfig-freetype"]
+font-backend-coretext = ["rustty-build-config/font-backend-coretext"]
+font-backend-coretext-freetype = ["rustty-build-config/font-backend-coretext-freetype"]
+font-backend-coretext-harfbuzz = ["rustty-build-config/font-backend-coretext-harfbuzz"]
+font-backend-coretext-noshape = ["rustty-build-config/font-backend-coretext-noshape"]
 
 [dependencies]
 # Entry points fan out only: cli, apprt, core.

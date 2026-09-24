@@ -99,10 +99,13 @@ fn main() {
     let before = rss_bytes();
 
     // Grow ~10 MiB of scrollback (the default scrollback limit), then clear it.
-    let mut list = PageList::init(Options {
-        max_size: Some(1 << 30),
-        ..Options::new(80, 24)
-    })
+    let mut list = PageList::init(
+        rustty_vt::alloc::Global,
+        Options {
+            max_size: Some(1 << 30),
+            ..Options::new(80, 24)
+        },
+    )
     .unwrap();
     while list.page_size < 10_000_000 {
         let _ = list.grow().unwrap();

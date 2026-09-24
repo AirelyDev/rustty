@@ -367,55 +367,61 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        target_os = "windows",
+        ignore = "escape_outside_quotes is false on Windows (R14)"
+    )]
     fn splitter_9() {
-        if !ESCAPE_OUTSIDE_QUOTES {
-            return;
-        }
         let mut s = CommaSplitter::init(b"\\x");
         assert_eq!(Err(Error::UnfinishedEscape), s.next());
     }
 
     #[test]
+    #[cfg_attr(
+        target_os = "windows",
+        ignore = "escape_outside_quotes is false on Windows (R14)"
+    )]
     fn splitter_10() {
-        if !ESCAPE_OUTSIDE_QUOTES {
-            return;
-        }
         let mut s = CommaSplitter::init(b"\\x5");
         assert_eq!(Err(Error::UnfinishedEscape), s.next());
     }
 
     #[test]
+    #[cfg_attr(
+        target_os = "windows",
+        ignore = "escape_outside_quotes is false on Windows (R14)"
+    )]
     fn splitter_11() {
-        if !ESCAPE_OUTSIDE_QUOTES {
-            return;
-        }
         let mut s = CommaSplitter::init(b"\\u");
         assert_eq!(Err(Error::UnfinishedEscape), s.next());
     }
 
     #[test]
+    #[cfg_attr(
+        target_os = "windows",
+        ignore = "escape_outside_quotes is false on Windows (R14)"
+    )]
     fn splitter_12() {
-        if !ESCAPE_OUTSIDE_QUOTES {
-            return;
-        }
         let mut s = CommaSplitter::init(b"\\u{");
         assert_eq!(Err(Error::UnfinishedEscape), s.next());
     }
 
     #[test]
+    #[cfg_attr(
+        target_os = "windows",
+        ignore = "escape_outside_quotes is false on Windows (R14)"
+    )]
     fn splitter_13() {
-        if !ESCAPE_OUTSIDE_QUOTES {
-            return;
-        }
         let mut s = CommaSplitter::init(b"\\u{}");
         assert_eq!(Err(Error::IllegalEscape), s.next());
     }
 
     #[test]
+    #[cfg_attr(
+        target_os = "windows",
+        ignore = "escape_outside_quotes is false on Windows (R14)"
+    )]
     fn splitter_14() {
-        if !ESCAPE_OUTSIDE_QUOTES {
-            return;
-        }
         let mut s = CommaSplitter::init(b"\\u{h1}");
         assert_eq!(Err(Error::IllegalEscape), s.next());
     }
@@ -428,28 +434,31 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        target_os = "windows",
+        ignore = "escape_outside_quotes is false on Windows (R14)"
+    )]
     fn splitter_16() {
-        if !ESCAPE_OUTSIDE_QUOTES {
-            return;
-        }
         let mut s = CommaSplitter::init(b"\\u{110000}");
         assert_eq!(Err(Error::IllegalEscape), s.next());
     }
 
     #[test]
+    #[cfg_attr(
+        target_os = "windows",
+        ignore = "escape_outside_quotes is false on Windows (R14)"
+    )]
     fn splitter_17() {
-        if !ESCAPE_OUTSIDE_QUOTES {
-            return;
-        }
         let mut s = CommaSplitter::init(b"\\d");
         assert_eq!(Err(Error::IllegalEscape), s.next());
     }
 
     #[test]
+    #[cfg_attr(
+        target_os = "windows",
+        ignore = "escape_outside_quotes is false on Windows (R14)"
+    )]
     fn splitter_18() {
-        if !ESCAPE_OUTSIDE_QUOTES {
-            return;
-        }
         let mut s = CommaSplitter::init(b"\\n\\r\\t\\\"\\'\\\\");
         assert_eq!(
             b"\\n\\r\\t\\\"\\'\\\\".as_slice(),
@@ -516,10 +525,11 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        target_os = "windows",
+        ignore = "escape_outside_quotes is false on Windows (R14)"
+    )]
     fn splitter_25() {
-        if !ESCAPE_OUTSIDE_QUOTES {
-            return;
-        }
         let mut s = CommaSplitter::init(b"a,\\u{10,df}");
         assert_eq!(b"a".as_slice(), s.next().unwrap().unwrap());
         assert_eq!(Err(Error::IllegalEscape), s.next());
@@ -528,10 +538,11 @@ mod tests {
     // Windows-specific tests: backslash is literal outside quotes.
 
     #[test]
+    #[cfg_attr(
+        not(target_os = "windows"),
+        ignore = "Windows-only: escape_outside_quotes is false there (R14)"
+    )]
     fn splitter_windows_paths() {
-        if ESCAPE_OUTSIDE_QUOTES {
-            return;
-        }
         let mut s = CommaSplitter::init(b"light:C:\\Users\\foo\\theme,dark:C:\\Users\\bar\\theme");
         assert_eq!(
             b"light:C:\\Users\\foo\\theme".as_slice(),
@@ -545,10 +556,11 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        not(target_os = "windows"),
+        ignore = "Windows-only: escape_outside_quotes is false there (R14)"
+    )]
     fn splitter_backslash_literal_outside_quotes_on_windows() {
-        if ESCAPE_OUTSIDE_QUOTES {
-            return;
-        }
         // Backslash followed by characters that would be escapes on Unix
         // are treated as literal on Windows outside quotes.
         let mut s = CommaSplitter::init(b"\\n\\r\\t");
@@ -557,10 +569,11 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        not(target_os = "windows"),
+        ignore = "Windows-only: escape_outside_quotes is false there (R14)"
+    )]
     fn splitter_backslash_still_escapes_inside_quotes_on_windows() {
-        if ESCAPE_OUTSIDE_QUOTES {
-            return;
-        }
         // Inside quotes, backslash escapes work on all platforms.
         let mut s = CommaSplitter::init(b"\"hello\\nworld\"");
         assert_eq!(b"\"hello\\nworld\"".as_slice(), s.next().unwrap().unwrap());

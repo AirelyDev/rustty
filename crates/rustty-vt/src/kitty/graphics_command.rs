@@ -448,113 +448,53 @@ impl Parser {
     }
 }
 
-/// PORT NOTE: `std.fmt.parseInt(i32, bytes, 10)`. Returns `error.Overflow` on
+/// PORT NOTE: `std.fmt.parseInt(i32, bytes, 10)`, through the port of the
+/// std function in `rustty_zigstd::fmt`. Returns `error.Overflow` on
 /// out-of-range and `error.InvalidCharacter` (mapped to `InvalidFormat`) on a
 /// non-numeric byte, mirroring the reference's `try`.
 fn parse_int_i32(bytes: &[u8]) -> Result<i32, Error> {
-    let s = std::str::from_utf8(bytes).map_err(|_| Error::InvalidFormat)?;
-    match s.parse::<i32>() {
-        Ok(v) => Ok(v),
-        Err(e) => match e.kind() {
-            std::num::IntErrorKind::PosOverflow | std::num::IntErrorKind::NegOverflow => {
-                Err(Error::Overflow)
-            }
-            _ => Err(Error::InvalidFormat),
-        },
-    }
+    // PORT NOTE: reference defect (R13), UD141: a `_` digit separator is refused
+    // before parsing, as Ghostty's own OSC 99 parser does; see
+    // `protocol_int::reject_digit_separators`.
+    crate::protocol_int::reject_digit_separators(bytes).map_err(map_parse_int_error)?;
+    rustty_zigstd::fmt::parse_int::<i32>(bytes, 10).map_err(map_parse_int_error)
 }
 
 /// PORT NOTE: `std.fmt.parseInt(u32, bytes, 10)`. See `parse_int_i32`.
 ///
-/// PORT NOTE: a leading `-` needs explicit handling because Zig and Rust
-/// classify it differently for unsigned types. The reference's
-/// `parseIntWithGenericCharacter` peels exactly one sign byte and then runs
-/// `parseIntWithSign(u32, u8, rest, 10, .neg)`, which accumulates by
-/// *subtracting* each digit from zero; for an unsigned accumulator the very
-/// first nonzero digit fails the `math.cast(u32, -digit)` and yields
-/// `error.Overflow`, while an all-zero magnitude (`"-0"`, `"-000"`) succeeds
-/// with `0`. Rust's `"-1".parse::<u32>()` instead reports `InvalidDigit`
-/// (which would map to `InvalidFormat`) and rejects `"-0"` outright, so the
-/// negative case is hand-ported byte-for-byte in
-/// `parse_int_u32_negative_magnitude` below. The non-negative case still
-/// delegates to Rust's parser, which agrees with the reference on it.
+/// The reference's `parseIntWithGenericCharacter` peels exactly one sign
+/// byte and then runs `parseIntWithSign(u32, u8, rest, 10, .neg)` for a
+/// leading `-`, which accumulates by *subtracting* each digit from zero; for
+/// an unsigned accumulator the very first nonzero digit fails the
+/// `math.cast(u32, -digit)` and yields `error.Overflow`, while an all-zero
+/// magnitude (`"-0"`, `"-000"`) succeeds with `0`. That ordering is
+/// observable — the reference reports `Overflow` (not an invalid-digit error)
+/// for `"-1a"`, `"-1_2"` and `"-1 "` — and is pinned by
+/// `parse_int_u32_matches_reference_parse_int_with_sign` below (except
+/// `"-1_2"`, which the port refuses as `InvalidFormat` before parsing: UD141).
+///
+/// CORRECTION (parity S186-F1): the negative magnitude used to be hand-ported
+/// in a separate `parse_int_u32_negative_magnitude`, while the non-negative
+/// path delegated to Rust's `str::parse`, whose PORT NOTE said "the reference
+/// also accepts `'_'` digit separators on the *non*-negative path
+/// (`parseInt(u32, "1_0", 10) == 10`) where this port still returns
+/// `InvalidFormat`". Both paths now go through the one port of
+/// `parseIntWithSign`.
 fn parse_int_u32(bytes: &[u8]) -> Result<u32, Error> {
-    // `if (buf[0] == '-') return parseIntWithSign(..., .neg);`
-    if let [b'-', magnitude @ ..] = bytes {
-        return parse_int_u32_negative_magnitude(magnitude);
-    }
-
-    let s = std::str::from_utf8(bytes).map_err(|_| Error::InvalidFormat)?;
-    match s.parse::<u32>() {
-        Ok(v) => Ok(v),
-        Err(e) => match e.kind() {
-            std::num::IntErrorKind::PosOverflow | std::num::IntErrorKind::NegOverflow => {
-                Err(Error::Overflow)
-            }
-            _ => Err(Error::InvalidFormat),
-        },
-    }
+    // PORT NOTE: reference defect (R13), UD141: a `_` digit separator is refused
+    // before parsing, as Ghostty's own OSC 99 parser does; see
+    // `protocol_int::reject_digit_separators`.
+    crate::protocol_int::reject_digit_separators(bytes).map_err(map_parse_int_error)?;
+    rustty_zigstd::fmt::parse_int::<u32>(bytes, 10).map_err(map_parse_int_error)
 }
 
-/// PORT NOTE: byte-for-byte port of `std.fmt.parseIntWithSign(u32, u8, buf,
-/// 10, .neg)` (zig 0.16.0 `std/fmt.zig:394`) for the magnitude that follows a
-/// `-` sign byte. Only the ordering-relevant parts of the reference survive
-/// specialization to `Result = Accumulate = u32` and `base = 10`:
-///
-///   * an empty magnitude (a bare `"-"`) is `error.InvalidCharacter`;
-///   * a leading or trailing `'_'` is `error.InvalidCharacter`, checked
-///     *before* any digit is looked at;
-///   * then, left to right: `'_'` is skipped, a non-digit is
-///     `error.InvalidCharacter` (`charToDigit`), and a digit hits the
-///     `accumulate == 0 and sign == .neg` branch, which does
-///     `math.cast(u32, -@as(i8, digit)) orelse return error.Overflow` and
-///     `continue`.
-///
-/// Because that cast fails for every nonzero digit, the accumulator can never
-/// leave zero, so the multiply/subtract tail of the reference loop is
-/// unreachable for an unsigned result: the *first* nonzero digit returns
-/// `error.Overflow` before the scan ever inspects the rest of the buffer.
-/// That ordering is observable — the reference reports `Overflow` (not an
-/// invalid-digit error) for `"-1a"`, `"-1_2"` and `"-1 "`, whereas deferring
-/// to `"1a".parse::<u32>()` would report `InvalidDigit`.
-///
-/// PORT NOTE: the reference also accepts `'_'` digit separators on the
-/// *non*-negative path (`parseInt(u32, "1_0", 10) == 10`) where this port
-/// still returns `InvalidFormat`; that divergence is out of scope here (it
-/// affects `parse_int_i32` identically) and is tracked separately.
-fn parse_int_u32_negative_magnitude(buf: &[u8]) -> Result<u32, Error> {
-    // `if (buf.len == 0) return error.InvalidCharacter;`
-    if buf.is_empty() {
-        return Err(Error::InvalidFormat);
+/// `error.Overflow` stays `Overflow`; `error.InvalidCharacter` is this
+/// port's `InvalidFormat`.
+fn map_parse_int_error(e: rustty_zigstd::fmt::ParseIntError) -> Error {
+    match e {
+        rustty_zigstd::fmt::ParseIntError::Overflow => Error::Overflow,
+        rustty_zigstd::fmt::ParseIntError::InvalidCharacter => Error::InvalidFormat,
     }
-
-    // `if (buf_start[0] == '_' or buf_start[buf_start.len - 1] == '_')
-    //     return error.InvalidCharacter;`
-    if buf[0] == b'_' || buf[buf.len() - 1] == b'_' {
-        return Err(Error::InvalidFormat);
-    }
-
-    for &c in buf {
-        // `if (c == '_') continue;`
-        if c == b'_' {
-            continue;
-        }
-
-        // `const digit = try charToDigit(c, buf_base);`
-        if !c.is_ascii_digit() {
-            return Err(Error::InvalidFormat);
-        }
-
-        // `accumulate` is still 0 here (see the doc comment), so this is the
-        // reference's first-digit `.neg` branch:
-        // `accumulate = math.cast(Accumulate, -@as(i8, digit)) orelse
-        //     return error.Overflow;`
-        if c != b'0' {
-            return Err(Error::Overflow);
-        }
-    }
-
-    Ok(0)
 }
 
 /// Represents a possible response to a command.
@@ -1781,6 +1721,52 @@ mod tests {
         assert!(!v.usage.transient);
     }
 
+    // Parity S186-F1: no reference test. `finishValue` parses integer values
+    // with `std.fmt.parseInt`, which accepts interior `_` digit separators.
+    // UD141 (R13): the port refuses `_` before parsing, as Ghostty's own OSC 99
+    // parser does, so such a value is `InvalidFormat` (the reference's
+    // `InvalidCharacter` path) and never a number.
+    #[test]
+    fn integer_values_refuse_zig_digit_separators() {
+        let command = Parser::parse_string(b"f=24,s=10,v=20").unwrap();
+        let v = match command.control {
+            Control::Transmit(v) => v,
+            _ => panic!("expected a transmit command"),
+        };
+        assert_eq!(10u32, v.width);
+        assert_eq!(20u32, v.height);
+
+        assert_eq!(
+            Error::InvalidFormat,
+            Parser::parse_string(b"f=24,s=1_0,v=20").err().unwrap()
+        );
+        assert_eq!(
+            Error::InvalidFormat,
+            Parser::parse_string(b"f=24,s=10,v=2__0").err().unwrap()
+        );
+        assert_eq!(
+            Error::InvalidFormat,
+            Parser::parse_string(b"a=p,i=1,z=-1_0").err().unwrap()
+        );
+        // The sign handling stays `std.fmt.parseInt`'s.
+        let command = Parser::parse_string(b"a=p,i=+1,z=-10").unwrap();
+        let d = match command.control {
+            Control::Display(d) => d,
+            _ => panic!("expected a display command"),
+        };
+        assert_eq!(1, d.image_id);
+        assert_eq!(-10, d.z);
+
+        assert_eq!(
+            Error::InvalidFormat,
+            Parser::parse_string(b"f=24,s=10_").err().unwrap()
+        );
+        assert_eq!(
+            Error::InvalidFormat,
+            Parser::parse_string(b"a=p,i=1,z=_1").err().unwrap()
+        );
+    }
+
     // test "transmission command with transient hint"
     #[test]
     fn transmission_command_with_transient_hint() {
@@ -2097,7 +2083,7 @@ mod tests {
     /// 0.16.0 (`std/fmt.zig:394` `parseIntWithSign`).
     ///
     /// The rows that pin the error *ordering* are the ones with a nonzero
-    /// leading digit followed by a non-digit byte (`"-1a"`, `"-1_2"`, `"-1 "`):
+    /// leading digit followed by a non-digit byte (`"-1a"`, `"-1 "`):
     /// the reference returns `Overflow` from the first digit, before the scan
     /// ever reaches the offending byte, so an implementation that classified
     /// the whole magnitude first would report an invalid-digit error instead.
@@ -2115,13 +2101,16 @@ mod tests {
             (b"-9999999999", Err(Error::Overflow)),
             // ORDERING: the first nonzero digit wins over the later garbage.
             (b"-1a", Err(Error::Overflow)),
-            (b"-1_2", Err(Error::Overflow)),
             (b"-1 ", Err(Error::Overflow)),
+            // UD141 (R13): a `_` is refused before the digit loop, so it
+            // beats the first-digit overflow (the reference: `Overflow`).
+            (b"-1_2", Err(Error::InvalidFormat)),
             // All-zero magnitudes survive the negation and yield 0.
             (b"-0", Ok(0)),
             (b"-000", Ok(0)),
-            (b"-0_0", Ok(0)),
-            (b"-00_00", Ok(0)),
+            // UD141 (R13): refused, where the reference reads 0.
+            (b"-0_0", Err(Error::InvalidFormat)),
+            (b"-00_00", Err(Error::InvalidFormat)),
             // `charToDigit` fires first when no nonzero digit precedes.
             (b"-0a", Err(Error::InvalidFormat)),
             (b"-a1", Err(Error::InvalidFormat)),
@@ -2169,7 +2158,6 @@ mod tests {
             // ORDERING: `Overflow` from the leading `1`, not `InvalidFormat`
             // from the trailing non-digit.
             b"a=p,i=-1a".as_slice(),
-            b"a=p,i=-1_2".as_slice(),
             b"a=p,i=-1 ".as_slice(),
         ] {
             let mut p = Parser::init(1024 * 1024);
@@ -2184,11 +2172,7 @@ mod tests {
     /// parser (`parseInt(u8, "-0", 10) == 0`), so it must not be rejected.
     #[test]
     fn negative_zero_is_accepted_for_u32() {
-        for input in [
-            b"a=p,i=-0,q=2".as_slice(),
-            b"a=p,i=-000,q=2".as_slice(),
-            b"a=p,i=-0_0,q=2".as_slice(),
-        ] {
+        for input in [b"a=p,i=-0,q=2".as_slice(), b"a=p,i=-000,q=2".as_slice()] {
             let mut p = Parser::init(1024 * 1024);
             for c in input.iter() {
                 p.feed(*c).unwrap();
@@ -2219,6 +2203,10 @@ mod tests {
             // the table test above instead.
             b"a=p,i=-_1".as_slice(),
             b"a=p,i=-1_".as_slice(),
+            // UD141 (R13): an interior `_` too (the reference: `Overflow` for
+            // the first, 0 for the second).
+            b"a=p,i=-1_2".as_slice(),
+            b"a=p,i=-0_0".as_slice(),
         ] {
             let mut p = Parser::init(1024 * 1024);
             for c in input.iter() {

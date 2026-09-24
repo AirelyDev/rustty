@@ -85,6 +85,15 @@ pub enum Error {
     /// Only used by the bitmap-font tests' `glyphIndex(...) orelse return
     /// error.GlyphNotFound`.
     GlyphNotFound,
+    /// `DeferredFace.loadCoreTextFreetype`'s `error.FontHasNoFile`: the
+    /// discovered CoreText font has no URL / path. In the reference this joins
+    /// the `load` error union only in a `coretext_freetype` build.
+    #[cfg(rustty_font_backend = "coretext_freetype")]
+    FontHasNoFile,
+    /// `DeferredFace.loadCoreTextFreetype`'s `error.FontPathCantDecode`: the
+    /// decoded path does not fit its 1023-byte buffer as UTF-8.
+    #[cfg(rustty_font_backend = "coretext_freetype")]
+    FontPathCantDecode,
 }
 
 impl From<ft::FtError> for Error {
@@ -345,11 +354,13 @@ impl Face {
     /// Returns the font name. If allocation is required, buf will be used,
     /// but sometimes allocation isn't required and a static string is
     /// returned.
-    // PORT NOTE: the reference returns `[]const u8` that may point at `buf`, at
-    // FreeType-owned memory, or at a `""` literal. To unify lifetimes in Rust the
-    // family name is always copied into `buf` and a sub-slice of it is returned
-    // (identical bytes); the empty case returns an empty static slice.
-    pub fn name<'a>(&self, buf: &'a mut [u8]) -> Result<&'a [u8], Error> {
+    // PORT NOTE: the reference returns `[]const u8` that points at `buf` (the
+    // decoded UTF-16 name), at FreeType-owned memory (the raw name record), or
+    // at a `""` literal; so does the port, the result borrowing both `self`
+    // (whose `FT_Face` owns the record) and `buf`. CORRECTION (task T-F,
+    // S91-F9): the port used to copy the raw record into `buf`, truncating a
+    // name longer than `buf`.
+    pub fn name<'a>(&'a self, buf: &'a mut [u8]) -> Result<&'a [u8], Error> {
         let count = self.face.get_sfnt_name_count();
 
         // We look for the font family entry.
@@ -385,14 +396,32 @@ impl Face {
                             tmp[j] =
                                 u16::from_ne_bytes([string[2 * j], string[2 * j + 1]]).swap_bytes();
                         }
+                        // const len = std.unicode.utf16LeToUtf8(buf, tmp[0..max]) catch return string;
+                        //
+                        // PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD190.
+                        // `utf16LeToUtf8` does not check that `buf` can hold the result. When the
+                        // UTF-8 form of a family record (at most 512 UTF-16 units) does not fit,
+                        // Debug and ReleaseSafe panic, at `utf8Encode`'s assertion ("reached
+                        // unreachable code") or, for a long enough ASCII run, at the bounds check
+                        // of the vectorized ASCII fast path ("index out of bounds"); ReleaseFast
+                        // writes past `buf` and returns a slice past its end, which is undefined
+                        // behaviour. Callers pass 1024 bytes, or 256 (Collection's synthetic
+                        // bold/italic log, and the `DeferredFace.name` callers on
+                        // `freetype_windows`). Measured (Zig 0.16.0, aarch64-macos, a copy of
+                        // `freetype.zig:170-178`): a 256-byte buffer overflows from 86 CJK
+                        // characters (U+6C34), 129 two-byte characters (U+00E9) or 257 ASCII
+                        // characters; a 1024-byte buffer from 342 CJK characters. The name comes
+                        // from a font file. The port takes the reference's own fallback for a name
+                        // it cannot decode, `catch return string`: the raw record.
                         let len = match utf16_le_to_utf8(buf, &tmp[..max]) {
                             Some(len) => len,
-                            None => return Ok(copy_into(buf, string)),
+                            None => return Ok(string),
                         };
                         return Ok(&buf[..len]);
                     }
                 }
-                return Ok(copy_into(buf, string));
+                // return string;
+                return Ok(string);
             }
         }
 
@@ -556,6 +585,14 @@ impl Face {
         // If this font doesn't support variations, we can't do anything.
         if !self.face.has_multiple_masters() || vs.is_empty() {
             return Ok(());
+        }
+
+        // Test-only fail-point (S85-F3's, shared with the CoreText face; S-14):
+        // forces this fallible step so a caller's `errdefer face.deinit()` —
+        // `DeferredFace.loadCoreTextFreetype`'s — can be proven.
+        #[cfg(test)]
+        if crate::face::test_probe::set_variations_failpoint_should_fail() {
+            return Err(Error::OutOfMemory);
         }
 
         // Freetype requires that we send ALL coordinates in at once so the
@@ -1607,8 +1644,11 @@ fn f26dot6_to_f64(v: c::FT_F26Dot6) -> f64 {
 
 /// Decode UTF-16 code units into `buf` as UTF-8, returning the byte length.
 // PORT NOTE: models `std.unicode.utf16LeToUtf8(buf, units)` — returns `None` on
-// an invalid surrogate or if the output doesn't fit (the reference `catch`es both
-// and falls back to the raw name string).
+// an invalid surrogate (the reference's errors, which `name` `catch`es and
+// answers with the raw name string) or if the output does not fit. CORRECTION
+// (task T-F): this said the reference `catch`es both; an output that does not
+// fit is an assertion there, not an error (reference defect, UD190), and `name`
+// answers it the same way as a decode error.
 fn utf16_le_to_utf8(buf: &mut [u8], units: &[u16]) -> Option<usize> {
     let mut pos = 0usize;
     for r in char::decode_utf16(units.iter().copied()) {
@@ -1623,15 +1663,6 @@ fn utf16_le_to_utf8(buf: &mut [u8], units: &[u16]) -> Option<usize> {
         pos += sb.len();
     }
     Some(pos)
-}
-
-/// Copy `src` into `buf` (truncating to fit) and return the written sub-slice.
-// PORT NOTE: helper for `name`'s "return the raw family string" paths (see the
-// `name` doc note); font family names are short and always fit the caller's buf.
-fn copy_into<'a>(buf: &'a mut [u8], src: &[u8]) -> &'a [u8] {
-    let n = std::cmp::min(buf.len(), src.len());
-    buf[..n].copy_from_slice(&src[..n]);
-    &buf[..n]
 }
 
 #[cfg(test)]
@@ -1652,6 +1683,117 @@ mod tests {
 
     fn size(points: f32, xdpi: u16, ydpi: u16) -> DesiredSize {
         DesiredSize { points, xdpi, ydpi }
+    }
+
+    /// JetBrains Mono with its `name` table replaced by one holding exactly
+    /// `records` (`(platform, encoding, language, name id, bytes)`), in that
+    /// order. The new table is appended and the directory entry repointed.
+    fn font_with_names(records: &[(u16, u16, u16, u16, Vec<u8>)]) -> Vec<u8> {
+        let mut table = Vec::new();
+        let count = records.len() as u16;
+        let string_offset = 6 + 12 * count;
+        for v in [0u16, count, string_offset] {
+            table.extend_from_slice(&v.to_be_bytes());
+        }
+        let mut storage = Vec::new();
+        for (platform, encoding, language, name_id, bytes) in records {
+            for v in [
+                *platform,
+                *encoding,
+                *language,
+                *name_id,
+                bytes.len() as u16,
+                storage.len() as u16,
+            ] {
+                table.extend_from_slice(&v.to_be_bytes());
+            }
+            storage.extend_from_slice(bytes);
+        }
+        table.extend_from_slice(&storage);
+
+        let mut font = embedded::VARIABLE.to_vec();
+        while !font.len().is_multiple_of(4) {
+            font.push(0);
+        }
+        let offset = font.len() as u32;
+        let num_tables = u16::from_be_bytes([font[4], font[5]]) as usize;
+        let rec = (0..num_tables)
+            .map(|i| 12 + 16 * i)
+            .find(|&r| &font[r..r + 4] == b"name")
+            .expect("JetBrains Mono has a name table");
+        font[rec + 8..rec + 12].copy_from_slice(&offset.to_be_bytes());
+        font[rec + 12..rec + 16].copy_from_slice(&(table.len() as u32).to_be_bytes());
+        font.extend_from_slice(&table);
+        font
+    }
+
+    /// S91-F9: `Face.name` returns the FreeType-owned family record itself
+    /// (`face/freetype.zig:161-181`, `return string`), so a raw name longer than
+    /// the caller's buffer comes back whole; the port copied it into `buf`,
+    /// truncated.
+    #[test]
+    fn face_name_returns_a_raw_record_longer_than_the_buffer() -> Result<(), Error> {
+        let lib = Library::init()?;
+        // A Macintosh Roman family record of 1500 bytes.
+        let long = vec![b'L'; 1500];
+        let data = font_with_names(&[(1, 0, 0, 1, long.clone())]);
+        let mut face = Face::init(lib, &data, opts(size(14.0, 96, 96)))?;
+        let mut buf = [0u8; 1024];
+        assert_eq!(face.name(&mut buf)?, long.as_slice());
+        face.deinit();
+        Ok(())
+    }
+
+    /// UD190 (R13): a Windows Unicode family record whose UTF-8 form does not
+    /// fit the caller's buffer. The reference's `std.unicode.utf16LeToUtf8`
+    /// panics there in Debug and ReleaseSafe and writes past the buffer in
+    /// ReleaseFast. Measured with Zig 0.16.0 on aarch64-macos, with a copy of
+    /// `freetype.zig:170-178` and 1024 canary bytes after the buffer:
+    /// - 256-byte buffer (Collection's synthetic bold/italic log,
+    ///   `DeferredFace.name` callers): from 86 x U+6C34, 129 x U+00E9 or
+    ///   257 x 'L';
+    /// - 1024-byte buffer: from 342 x U+6C34 (ASCII and 2-byte characters
+    ///   cannot overflow it, since the record holds at most 512 units).
+    ///
+    /// The port answers with the raw record, the reference's own fallback for
+    /// a name it cannot decode. Each boundary is checked on both sides: one
+    /// character fewer is decoded.
+    #[test]
+    fn face_name_utf16_record_too_long_for_the_buffer_is_returned_raw() -> Result<(), Error> {
+        let lib = Library::init()?;
+        let utf16be =
+            |s: &str| -> Vec<u8> { s.encode_utf16().flat_map(|u| u.to_be_bytes()).collect() };
+
+        // (character, count, buffer size, decoded)
+        let cases: [(&str, usize, usize, bool); 8] = [
+            ("水", 85, 256, true),
+            ("水", 86, 256, false),
+            ("é", 128, 256, true),
+            ("é", 129, 256, false),
+            ("L", 256, 256, true),
+            ("L", 257, 256, false),
+            ("水", 341, 1024, true),
+            ("水", 342, 1024, false),
+        ];
+        for (ch, n, buf_len, decoded) in cases {
+            let buf = &mut vec![0u8; buf_len][..];
+            let name = ch.repeat(n);
+            let record = utf16be(&name);
+            // Precondition: the record takes the decode path (even length, at
+            // most 1024 bytes).
+            assert!(record.len() % 2 == 0 && record.len() <= 1024);
+            let data = font_with_names(&[(3, 1, 0x409, 1, record.clone())]);
+            let mut face = Face::init(lib, &data, opts(size(14.0, 96, 96)))?;
+            let got = face.name(buf)?.to_vec();
+            assert_eq!(decoded, name.len() <= buf.len(), "precondition: {n} x {ch}");
+            if decoded {
+                assert_eq!(got, name.as_bytes(), "{n} x {ch} is decoded");
+            } else {
+                assert_eq!(got, record, "{n} x {ch} returns the raw record");
+            }
+            face.deinit();
+        }
+        Ok(())
     }
 
     // test "face name"

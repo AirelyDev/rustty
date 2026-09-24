@@ -38,6 +38,7 @@
 // `Style::default()`/`Vec::new()` stores + drop glue. The reference's
 // `.slice().items(.X)` projections become the `CellSlice` column accessors.
 
+use crate::alloc::Allocator;
 use crate::color;
 use crate::cursor;
 use crate::highlight;
@@ -51,7 +52,6 @@ use crate::selection::Selection;
 use crate::size;
 use crate::style::Style;
 use crate::terminal::Terminal;
-use allocator_api2::alloc::Global as Allocator;
 
 /// Contains the state required to render the screen, including optimizing
 /// for repeated render calls and only rendering dirty regions.
@@ -1525,10 +1525,15 @@ fn utf8_codepoint_sequence_length(cp: u32) -> Option<usize> {
     }
 }
 
-/// `writer.print("{u}", .{cp})`: encode a codepoint as UTF-8. We mirror Zig's
-/// `{u}` which encodes the surrogate range losslessly via WTF-8-ish encoding;
-/// for the cell codepoints we see (validated terminal content) this is the
-/// standard UTF-8 encoding.
+/// `writer.print("{u}", .{cp})`: encode a codepoint as UTF-8. Zig 0.16's `{u}`
+/// (`std.Io.Writer.printUnicodeCodepoint`) writes the replacement character
+/// U+FFFD (`EF BF BD`) when `utf8Encode` fails with
+/// `Utf8CannotEncodeSurrogateHalf` or `CodepointTooLarge`.
+// CORRECTION (parity S161-F2): this doc comment used to say Zig's `{u}`
+// "encodes the surrogate range losslessly via WTF-8-ish encoding", and the
+// surrogate arm wrote the 3-byte generalized-UTF-8 encoding of the surrogate
+// (`ED A0 80` for U+D800). The out-of-range arm still returns `Err`: `string`
+// rejects that value with `utf8CodepointSequenceLength` before writing it.
 fn write_codepoint(writer: &mut Vec<u8>, cp: u32) -> Result<(), ()> {
     match char::from_u32(cp) {
         Some(c) => {
@@ -1537,16 +1542,12 @@ fn write_codepoint(writer: &mut Vec<u8>, cp: u32) -> Result<(), ()> {
             Ok(())
         }
         None => {
-            // Surrogate or out-of-range. Encode the low bits as a 3-byte
-            // sequence to mirror Zig's `{u}` permissive behavior for the
-            // surrogate range; truly out-of-range was already rejected by
-            // `utf8_codepoint_sequence_length`.
+            // Surrogate or out-of-range.
             let len = utf8_codepoint_sequence_length(cp).ok_or(())?;
             match len {
+                // buf[0..3].* = std.unicode.replacement_character_utf8;
                 3 => {
-                    writer.push(0xE0 | ((cp >> 12) & 0x0F) as u8);
-                    writer.push(0x80 | ((cp >> 6) & 0x3F) as u8);
-                    writer.push(0x80 | (cp & 0x3F) as u8);
+                    writer.extend_from_slice("\u{FFFD}".as_bytes());
                     Ok(())
                 }
                 _ => Err(()),
@@ -1851,11 +1852,11 @@ use ScreenSet as _ScreenSet;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::alloc::Global;
     use crate::kitty;
     use crate::modes as modespkg;
     use crate::screen_set::Key;
     use crate::terminal::{Colors, Options, ScrollViewport};
-    use allocator_api2::alloc::Global;
 
     // PORT NOTE: the reference `Terminal.init(alloc, .{ .cols, .rows })` relies on
     // `Options` field defaults (`max_scrollback_bytes = 10_000`, `colors = .default`,
@@ -2451,6 +2452,22 @@ mod tests {
 
         state.deinit(alloc);
         t.deinit(alloc);
+    }
+
+    // Parity S161-F2 (no reference test): `string` writes each codepoint with
+    // `writer.print("{u}", ..)`, which in zig 0.16
+    // (`std.Io.Writer.printUnicodeCodepoint`) writes the 3-byte U+FFFD for a
+    // surrogate half. Its byte count still matches the
+    // `utf8CodepointSequenceLength` of 3 that `string` maps.
+    #[test]
+    fn write_codepoint_writes_replacement_for_a_surrogate() {
+        let mut w: Vec<u8> = Vec::new();
+        write_codepoint(&mut w, 'A' as u32).unwrap();
+        write_codepoint(&mut w, 0xD800).unwrap();
+        write_codepoint(&mut w, 0xDFFF).unwrap();
+        assert_eq!(b"A\xEF\xBF\xBD\xEF\xBF\xBD".as_slice(), w.as_slice());
+        assert_eq!(Some(3), utf8_codepoint_sequence_length(0xD800));
+        assert!(write_codepoint(&mut w, 0x11_0000).is_err());
     }
 
     // test "string"

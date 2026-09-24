@@ -705,6 +705,9 @@ name = "hashbrown"
 version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
+dependencies = [
+ "allocator-api2",
+]
 
 [[package]]
 name = "heck"
@@ -1191,6 +1194,7 @@ dependencies = [
  "glib",
  "gtk4",
  "gtk4-layer-shell",
+ "gtk4-layer-shell-sys",
  "harfbuzz-sys",
  "libadwaita",
  "libc",
@@ -1214,6 +1218,7 @@ dependencies = [
  "rustty-os",
  "rustty-renderer",
  "rustty-termio",
+ "rustty-version",
  "rustty-vt",
  "rustty-xev",
  "wayland-backend",
@@ -1231,6 +1236,7 @@ dependencies = [
  "allocator-api2",
  "rustty-build-config",
  "rustty-config",
+ "rustty-crash",
  "rustty-datastruct",
  "rustty-global",
  "rustty-input",
@@ -1267,6 +1273,7 @@ dependencies = [
  "rustty-input",
  "rustty-os",
  "rustty-renderer",
+ "rustty-version",
  "rustty-vt",
  "rustty-xev",
 ]
@@ -1279,6 +1286,7 @@ dependencies = [
  "rustty-build-config",
  "rustty-os",
  "rustty-util",
+ "rustty-zigstd",
 ]
 
 [[package]]
@@ -1287,6 +1295,7 @@ version = "0.1.0"
 dependencies = [
  "allocator-api2",
  "log",
+ "rustty-apprt",
  "rustty-args",
  "rustty-build-config",
  "rustty-datastruct",
@@ -1336,9 +1345,11 @@ dependencies = [
  "rustty-os",
  "rustty-terminfo",
  "rustty-vaxis",
+ "rustty-version",
  "rustty-vt",
  "rustty-xev",
  "rustty-zf",
+ "rustty-zigstd",
  "zlib-sys",
 ]
 
@@ -1346,6 +1357,7 @@ dependencies = [
 name = "rustty-config"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "rustty-args",
  "rustty-build-config",
  "rustty-cfg-fmt",
@@ -1360,6 +1372,7 @@ dependencies = [
  "rustty-render-types",
  "rustty-renderer",
  "rustty-util",
+ "rustty-version",
  "rustty-vt",
  "rustty-zigstd",
 ]
@@ -1372,6 +1385,7 @@ dependencies = [
  "log",
  "rustty-apprt-api",
  "rustty-args",
+ "rustty-build-config",
  "rustty-config",
  "rustty-crash",
  "rustty-datastruct",
@@ -1397,13 +1411,14 @@ dependencies = [
 name = "rustty-crash"
 version = "0.1.0"
 dependencies = [
+ "indexmap",
  "log",
  "rustty-build-config",
  "rustty-global",
  "rustty-identity",
  "rustty-os",
+ "rustty-version",
  "sentry-sys",
- "serde_json",
 ]
 
 [[package]]
@@ -1423,6 +1438,7 @@ dependencies = [
  "rustty-config",
  "rustty-identity",
  "rustty-input",
+ "rustty-version",
 ]
 
 [[package]]
@@ -1437,6 +1453,7 @@ dependencies = [
  "rustty-render-types",
  "rustty-util",
  "rustty-z2d",
+ "rustty-zigstd",
 ]
 
 [[package]]
@@ -1452,6 +1469,7 @@ dependencies = [
  "objc2-core-foundation",
  "objc2-core-graphics",
  "objc2-core-text",
+ "rustty-build-config",
  "rustty-datastruct",
  "rustty-font",
  "rustty-os",
@@ -1459,6 +1477,8 @@ dependencies = [
  "rustty-unicode",
  "rustty-util",
  "rustty-vt",
+ "rustty-xev",
+ "rustty-zigstd",
 ]
 
 [[package]]
@@ -1488,6 +1508,7 @@ dependencies = [
  "rustty-oniguruma",
  "rustty-os",
  "rustty-render-types",
+ "rustty-unicode",
  "rustty-util",
  "rustty-vt",
  "rustty-zigstd",
@@ -1570,6 +1591,7 @@ dependencies = [
  "objc2-metal",
  "objc2-quartz-core",
  "png",
+ "rustty-build-config",
  "rustty-datastruct",
  "rustty-font",
  "rustty-font-shaper",
@@ -1638,6 +1660,7 @@ dependencies = [
  "rustty-renderer",
  "rustty-terminfo",
  "rustty-util",
+ "rustty-version",
  "rustty-vt",
  "rustty-xev",
  "rustty-zigstd",
@@ -1659,6 +1682,15 @@ dependencies = [
  "libc",
  "rustty-wuffs",
  "rustty-zigimg",
+ "rustty-zigstd",
+]
+
+[[package]]
+name = "rustty-version"
+version = "0.1.0"
+dependencies = [
+ "rustty-build-config",
+ "rustty-identity",
 ]
 
 [[package]]
@@ -1667,6 +1699,7 @@ version = "0.1.0"
 dependencies = [
  "allocator-api2",
  "dcimgui-sys",
+ "hashbrown",
  "libc",
  "log",
  "rustty-datastruct",
@@ -1762,6 +1795,7 @@ name = "rustty-zigstd"
 version = "0.1.0"
 dependencies = [
  "allocator-api2",
+ "hashbrown",
  "rustty-util",
 ]
 
@@ -2117,6 +2151,7 @@ version = "0.1.0"
 dependencies = [
  "rustty-extra",
  "rustty-terminfo",
+ "rustty-version",
  "serde_json",
 ]
 

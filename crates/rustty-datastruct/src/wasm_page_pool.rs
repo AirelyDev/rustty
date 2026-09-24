@@ -397,14 +397,17 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg_attr(
+        not(target_arch = "wasm32"),
+        ignore = "SkipZigTest: wasm only (memory.grow) (R14)"
+    )]
     fn wasm_page_pool() {
         // if (!comptime builtin.target.cpu.arch.isWasm()) return error.SkipZigTest;
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            // Skip on non-wasm targets (the reference returns error.SkipZigTest).
-            // The pool's `create`/growth path uses `memory.grow`, which only
-            // exists on wasm; nothing below is instantiated on other targets.
-        }
+        //
+        // Skip on non-wasm targets (the reference returns error.SkipZigTest): the
+        // `cfg_attr(.., ignore)` above reports it `ignored` there (R14). The pool's
+        // `create`/growth path uses `memory.grow`, which only exists on wasm;
+        // nothing below is instantiated on other targets.
 
         #[cfg(target_arch = "wasm32")]
         {

@@ -403,25 +403,70 @@ fn default_tmp_dir_path() -> Vec<u8> {
     }
     #[cfg(not(windows))]
     {
-        let env = environ();
-        let Some(v) = env
-            .get_posix(b"TMPDIR")
-            .or_else(|| env.get_posix(b"TMP"))
-            .filter(|v| !v.is_empty())
-        else {
-            return b"/tmp".to_vec();
-        };
-        let mut bytes = v.to_vec();
-        while bytes.last() == Some(&b'/') {
-            bytes.pop();
-        }
-        bytes
+        posix_tmp_dir_path(&environ())
     }
+}
+
+/// The POSIX arm of the `allocTmpDir` rule, on a given environment:
+/// `environ.getPosix("TMPDIR") orelse environ.getPosix("TMP") orelse "/tmp"`,
+/// trailing `/` trimmed.
+///
+/// PORT NOTE (parity S111-F1): `orelse` falls through only on a MISSING
+/// variable, so a present-but-empty `TMPDIR` yields `""` and does not fall
+/// through to `TMP`. (This used to filter out empty values, in step with the
+/// same filter in `rustty-os`'s `allocTmpDir`.)
+///
+/// PORT NOTE: reference defect (R13), UD211. The reference's `trimEnd` turns
+/// `TMPDIR=/` into `""`, which its own `TempDir.init` cannot open. A value
+/// made only of `/` keeps the root and returns `/`. See `rustty-os`'s
+/// `allocTmpDir` for the full note.
+#[cfg(not(windows))]
+fn posix_tmp_dir_path(env: &Environ) -> Vec<u8> {
+    let Some(v) = env.get_posix(b"TMPDIR").or_else(|| env.get_posix(b"TMP")) else {
+        return b"/tmp".to_vec();
+    };
+    let mut bytes = v.to_vec();
+    while bytes.last() == Some(&b'/') {
+        bytes.pop();
+    }
+    if bytes.is_empty() && !v.is_empty() {
+        return b"/".to_vec();
+    }
+    bytes
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Parity S111-F1: the fallback applies the reference rule to an empty
+    /// value: present-but-empty is a value, not an absence. Same table as
+    /// `rustty-os`'s `alloc_tmp_dir_takes_empty_and_non_utf8_values_verbatim`.
+    #[test]
+    #[cfg(not(windows))]
+    fn posix_tmp_dir_path_keeps_empty_and_non_utf8_values() {
+        let env =
+            |entries: &[&[u8]]| Environ::from_entries(entries.iter().map(|e| e.to_vec()).collect());
+        assert_eq!(posix_tmp_dir_path(&env(&[b"TMPDIR="])), b"");
+        assert_eq!(posix_tmp_dir_path(&env(&[b"TMPDIR=", b"TMP=/x"])), b"");
+        assert_eq!(posix_tmp_dir_path(&env(&[b"TMP=/x//"])), b"/x");
+        assert_eq!(posix_tmp_dir_path(&env(&[b"TMPDIR=/a\xff/"])), b"/a\xff");
+        assert_eq!(posix_tmp_dir_path(&env(&[])), b"/tmp");
+    }
+
+    /// R13 (UD211): a value made only of `/` keeps the root instead of
+    /// becoming `""` as in the reference. Same table as `rustty-os`'s
+    /// `alloc_tmp_dir_keeps_the_root_directory`.
+    #[test]
+    #[cfg(not(windows))]
+    fn posix_tmp_dir_path_keeps_the_root_directory() {
+        let env =
+            |entries: &[&[u8]]| Environ::from_entries(entries.iter().map(|e| e.to_vec()).collect());
+        assert_eq!(posix_tmp_dir_path(&env(&[b"TMPDIR=/"])), b"/");
+        assert_eq!(posix_tmp_dir_path(&env(&[b"TMPDIR=///"])), b"/");
+        assert_eq!(posix_tmp_dir_path(&env(&[b"TMP=/"])), b"/");
+        assert_eq!(posix_tmp_dir_path(&env(&[b"TMPDIR="])), b"");
+    }
 
     #[test]
     fn environ_get_posix_and_map_are_byte_typed() {
@@ -531,6 +576,7 @@ mod tests {
         let e = Environ::from_process();
         // Every capture must be reachable through `get_posix` with the same
         // bytes `vars_os` reported.
+        let mut checked = 0usize;
         for (k, v) in std::env::vars_os() {
             let kb = os_bytes(&k);
             if kb.contains(&b'=') {
@@ -541,7 +587,15 @@ mod tests {
                 Some(os_bytes(&v).to_vec()),
                 "key {k:?} did not round-trip"
             );
+            checked += 1;
         }
+        // R14 (G-SKIP LOOP, task S-15): an empty environment would run no
+        // assertion above and report `ok`. `cargo test` always sets `CARGO_*`
+        // variables, so an empty capture here is a broken harness, not a skip.
+        assert!(
+            checked > 0,
+            "the process environment was empty, so nothing was round-tripped"
+        );
     }
 
     #[test]
@@ -571,7 +625,11 @@ mod tests {
     fn global_tmp_dir_path_is_absolute_and_unsuffixed() {
         let p = tmp_dir_path();
         assert!(!p.is_empty(), "tmp_dir_path() must never be empty");
-        assert_ne!(p.last(), Some(&b'/'), "trailing separator must be stripped");
+        // The root directory keeps its only `/` (R13, UD211).
+        assert!(
+            p == b"/" || p.last() != Some(&b'/'),
+            "trailing separator must be stripped"
+        );
         #[cfg(not(windows))]
         assert_eq!(p.first(), Some(&b'/'), "POSIX tmp dir must be absolute");
     }

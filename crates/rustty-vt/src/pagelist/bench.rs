@@ -34,10 +34,13 @@ use crate::point;
 fn workload() {
     // init(80, 24, large_max). A large max_size lets the ~2000 scrollback rows
     // accumulate without trimming, forcing many page allocations.
-    let mut s = PageList::init(Options {
-        max_size: Some(64 * 1024 * 1024),
-        ..Options::new(80, 24)
-    })
+    let mut s = PageList::init(
+        crate::alloc::Global,
+        Options {
+            max_size: Some(64 * 1024 * 1024),
+            ..Options::new(80, 24)
+        },
+    )
     .unwrap();
 
     // grow_rows to ~2000 scrollback rows (24 active + 2000 scrollback). Each
@@ -59,7 +62,7 @@ fn workload() {
         bot: None,
         tracked_pins: None,
     };
-    let mut s2 = s.clone(&mut clone_opts).unwrap();
+    let mut s2 = s.clone(crate::alloc::Global, &mut clone_opts).unwrap();
 
     // Resize cols: grow (80 -> 120) then shrink (120 -> 40), both with reflow.
     // Reflow re-lays every row across new page geometry, churning pages.
@@ -179,10 +182,13 @@ fn run_workload_sampling_peak() -> usize {
         }
     };
 
-    let mut s = PageList::init(Options {
-        max_size: Some(64 * 1024 * 1024),
-        ..Options::new(80, 24)
-    })
+    let mut s = PageList::init(
+        crate::alloc::Global,
+        Options {
+            max_size: Some(64 * 1024 * 1024),
+            ..Options::new(80, 24)
+        },
+    )
     .unwrap();
     sample(&mut peak);
     s.grow_rows(2000).unwrap();
@@ -200,7 +206,7 @@ fn run_workload_sampling_peak() -> usize {
         bot: None,
         tracked_pins: None,
     };
-    let mut s2 = s.clone(&mut clone_opts).unwrap();
+    let mut s2 = s.clone(crate::alloc::Global, &mut clone_opts).unwrap();
     sample(&mut peak);
 
     s.resize(Resize {

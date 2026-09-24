@@ -1850,6 +1850,10 @@ fn store_cell_ref(cell: &mut TerminalCell, bits: u64) {
 /// aliases. The `seen` bit set is a minimal `DynamicBitSetUnmanaged`
 /// stand-in. Allocation goes through the global allocator (the crate-wide
 /// treatment of plain `Allocator` parameters).
+/// `Allocator.Error` from [`Remap::init`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RemapOutOfMemory;
+
 pub struct Remap {
     /// One slot for every possible encoded ID. (`pub const capacity`.)
     // pub const capacity = std.math.maxInt(Id) + 1;
@@ -1876,11 +1880,35 @@ impl Remap {
         }
     }
 
-    pub fn init() -> Remap {
-        Remap {
-            entries: vec![0u16; Self::CAPACITY],
-            seen: vec![0u64; Self::CAPACITY / 64],
-        }
+    // pub fn init(alloc: Allocator) Allocator.Error!Self {
+    //     const entries = try alloc.alloc(Id, capacity);
+    //     errdefer alloc.free(entries);
+    //     @memset(entries, 0);
+    //     const seen = try std.DynamicBitSetUnmanaged.initEmpty(
+    //         alloc,
+    //         capacity,
+    //     );
+    //     return .{ .entries = entries, .seen = seen };
+    // }
+    // PORT NOTE: both allocations are `try_reserve_exact`, so a failed
+    // allocation is `Err(RemapOutOfMemory)` as in the reference. The
+    // `cfg(test)` `SnapshotFp::Alloc` check in front stands in for the
+    // reference tests' failing allocator (see `snapshot::tw`).
+    // CORRECTION (parity S204-F1 / N30): this was infallible
+    // (`vec![0u16; CAPACITY]`, `vec![0u64; CAPACITY / 64]`).
+    pub fn init() -> Result<Remap, RemapOutOfMemory> {
+        #[cfg(test)]
+        super::tw::check(super::tw::SnapshotFp::Alloc).map_err(|_| RemapOutOfMemory)?;
+        let mut entries: Vec<u16> = Vec::new();
+        entries
+            .try_reserve_exact(Self::CAPACITY)
+            .map_err(|_| RemapOutOfMemory)?;
+        entries.resize(Self::CAPACITY, 0);
+        let mut seen: Vec<u64> = Vec::new();
+        seen.try_reserve_exact(Self::CAPACITY / 64)
+            .map_err(|_| RemapOutOfMemory)?;
+        seen.resize(Self::CAPACITY / 64, 0);
+        Ok(Remap { entries, seen })
     }
 
     // deinit: dropped.
@@ -2233,8 +2261,8 @@ mod tests {
         );
 
         let mut destination = TerminalPage::init(capacity).unwrap();
-        let style_remap = StyleRemap::init();
-        let hyperlink_remap = HyperlinkRemap::init();
+        let style_remap = StyleRemap::init().unwrap();
+        let hyperlink_remap = HyperlinkRemap::init().unwrap();
 
         // Decode the checked-in reference through a one-byte reader buffer.
         let mut fixture_reader = io::FixedReader::new(&test_golden_fixture);
@@ -2371,8 +2399,8 @@ mod tests {
         assert_eq!(3 + (3 + 3 * 1) + (3 + 5 * 8) + 4, writer.buffered().len());
 
         let mut destination = TerminalPage::init(Capacity::new(80, 3)).unwrap();
-        let style_remap = StyleRemap::init();
-        let hyperlink_remap = HyperlinkRemap::init();
+        let style_remap = StyleRemap::init().unwrap();
+        let hyperlink_remap = HyperlinkRemap::init().unwrap();
 
         let buffered = writer.buffered().to_vec();
         let mut reader = io::FixedReader::new(&buffered);
@@ -2406,8 +2434,8 @@ mod tests {
     #[test]
     fn grid_rejects_a_row_cell_count_above_the_column_count() {
         let mut page = TerminalPage::init(Capacity::new(2, 1)).unwrap();
-        let style_remap = StyleRemap::init();
-        let hyperlink_remap = HyperlinkRemap::init();
+        let style_remap = StyleRemap::init().unwrap();
+        let hyperlink_remap = HyperlinkRemap::init().unwrap();
 
         let mut payload = [0u8; 64];
         let mut writer = io::FixedWriter::new(&mut payload);
@@ -2475,8 +2503,8 @@ mod tests {
             io::write_int::<u32>(&mut payload_writer, 0).unwrap();
 
             let mut destination = TerminalPage::init(capacity).unwrap();
-            let style_remap = StyleRemap::init();
-            let hyperlink_remap = HyperlinkRemap::init();
+            let style_remap = StyleRemap::init().unwrap();
+            let hyperlink_remap = HyperlinkRemap::init().unwrap();
 
             let buffered = payload_writer.buffered().to_vec();
             let mut payload_reader = io::FixedReader::new(&buffered);
@@ -2511,8 +2539,8 @@ mod tests {
         // A wide marker whose spacer tail was elided by a short cell count is
         // also normalized, and the trailing cells stay default.
         let mut page = TerminalPage::init(Capacity::new(4, 1)).unwrap();
-        let style_remap = StyleRemap::init();
-        let hyperlink_remap = HyperlinkRemap::init();
+        let style_remap = StyleRemap::init().unwrap();
+        let hyperlink_remap = HyperlinkRemap::init().unwrap();
 
         let mut payload = [0u8; 64];
         let mut writer = io::FixedWriter::new(&mut payload);
@@ -2557,8 +2585,8 @@ mod tests {
     #[test]
     fn grid_normalizes_reserved_cell_values() {
         let mut page = TerminalPage::init(Capacity::new(3, 1)).unwrap();
-        let style_remap = StyleRemap::init();
-        let hyperlink_remap = HyperlinkRemap::init();
+        let style_remap = StyleRemap::init().unwrap();
+        let hyperlink_remap = HyperlinkRemap::init().unwrap();
 
         let mut payload = [0u8; 64];
         let mut writer = io::FixedWriter::new(&mut payload);
@@ -2655,8 +2683,8 @@ mod tests {
             ..Capacity::new(4, 1)
         })
         .unwrap();
-        let style_remap = StyleRemap::init();
-        let hyperlink_remap = HyperlinkRemap::init();
+        let style_remap = StyleRemap::init().unwrap();
+        let hyperlink_remap = HyperlinkRemap::init().unwrap();
 
         let mut payload = [0u8; 128];
         let mut writer = io::FixedWriter::new(&mut payload);
@@ -2765,8 +2793,8 @@ mod tests {
             ..Capacity::new(4, 1)
         })
         .unwrap();
-        let style_remap = StyleRemap::init();
-        let hyperlink_remap = HyperlinkRemap::init();
+        let style_remap = StyleRemap::init().unwrap();
+        let hyperlink_remap = HyperlinkRemap::init().unwrap();
 
         let mut payload = [0u8; 1024];
         let mut writer = io::FixedWriter::new(&mut payload);
@@ -2895,8 +2923,8 @@ mod tests {
             ..Capacity::new(2, 4)
         })
         .unwrap();
-        let mut style_remap = StyleRemap::init();
-        let hyperlink_remap = HyperlinkRemap::init();
+        let mut style_remap = StyleRemap::init().unwrap();
+        let hyperlink_remap = HyperlinkRemap::init().unwrap();
         let native_style = unsafe {
             destination
                 .styles
@@ -2958,8 +2986,8 @@ mod tests {
     #[test]
     fn grid_decodes_non_canonical_cell_widths() {
         let mut page = TerminalPage::init(Capacity::new(2, 1)).unwrap();
-        let style_remap = StyleRemap::init();
-        let hyperlink_remap = HyperlinkRemap::init();
+        let style_remap = StyleRemap::init().unwrap();
+        let hyperlink_remap = HyperlinkRemap::init().unwrap();
 
         // A bare ASCII row encoded at the full width is wasteful but valid.
         let mut payload = [0u8; 64];
@@ -3016,8 +3044,8 @@ mod tests {
     #[test]
     fn grid_normalizes_surrogates_in_two_byte_cells() {
         let mut page = TerminalPage::init(Capacity::new(2, 1)).unwrap();
-        let style_remap = StyleRemap::init();
-        let hyperlink_remap = HyperlinkRemap::init();
+        let style_remap = StyleRemap::init().unwrap();
+        let hyperlink_remap = HyperlinkRemap::init().unwrap();
 
         let mut payload = [0u8; 16];
         let mut writer = io::FixedWriter::new(&mut payload);
@@ -3055,8 +3083,8 @@ mod tests {
             ..Capacity::new(3, 1)
         })
         .unwrap();
-        let style_remap = StyleRemap::init();
-        let hyperlink_remap = HyperlinkRemap::init();
+        let style_remap = StyleRemap::init().unwrap();
+        let hyperlink_remap = HyperlinkRemap::init().unwrap();
 
         let mut payload = [0u8; 32];
         let mut writer = io::FixedWriter::new(&mut payload);

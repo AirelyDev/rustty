@@ -103,7 +103,7 @@ pub fn style(state: &RenderState, opts: StyleOptions) -> Option<Style> {
 #[allow(clippy::partialeq_to_none)]
 mod tests {
     use super::*;
-    use allocator_api2::alloc::Global;
+    use rustty_vt::alloc::Global;
     use rustty_vt::cursor::Style as VtCursorStyle;
     use rustty_vt::kitty;
     use rustty_vt::modes::{self as modespkg, Mode};

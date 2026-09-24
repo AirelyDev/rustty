@@ -70,7 +70,9 @@ const _: () = assert!(std::mem::size_of::<Source>() == std::mem::size_of::<c_int
 // D11 (P3-W6 T2): `location`/`source` are held as the raw C integers, NOT as
 // the closed Rust enums — the struct arrives from C memory, and materializing
 // a `#[repr(C)]` enum from an out-of-range tag is UB before any check could
-// run. `terminal_paste` is the narrowing point.
+// run. `terminal_paste` is the narrowing point for `source`, and wraps
+// `location` in the open `clipboard::Location` without narrowing it (parity
+// S174-F4).
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct Request {
@@ -183,22 +185,17 @@ pub unsafe fn terminal_paste(
     // },
     //
     // PORT NOTE (D11 narrowing; R7 soundness override, recorded): the
-    // reference's `Source` is an exhaustive `enum(c_int)` and its `Location`
-    // is OPEN (`_`) — a safety-checked oracle build TRAPS on an out-of-range
-    // source and passes an unknown location through (paste events report any
-    // non-standard location as primary). rustty's closed enums cannot
-    // materialize unknown tags, so both narrow HERE and an out-of-range value
-    // is `.invalid_value` — the crate-wide closed-enum boundary policy (D11).
+    // reference's `Source` is an exhaustive `enum(c_int)` — a safety-checked
+    // oracle build TRAPS on an out-of-range source — so the source narrows
+    // HERE and an out-of-range value is `.invalid_value` (the crate-wide
+    // closed-enum boundary policy, D11). Its `Location` is OPEN (`_`), and
+    // `clipboard::Location` is an open newtype that holds any `c_int`, so the
+    // location passes through unchecked, as in the reference (paste events
+    // report any non-standard location as primary).
+    // CORRECTION (parity S174-F4): the location used to narrow to 0..=2 as
+    // well, returning `.invalid_value` for any other value.
     let source = match req.source {
-        0 => {
-            let location = match req.location {
-                0 => clipboard::Location::Standard,
-                1 => clipboard::Location::Selection,
-                2 => clipboard::Location::Primary,
-                _ => return Result::InvalidValue,
-            };
-            terminal_paste_pkg::Source::Clipboard(location)
-        }
+        0 => terminal_paste_pkg::Source::Clipboard(clipboard::Location(req.location)),
         1 => terminal_paste_pkg::Source::Text,
         _ => return Result::InvalidValue,
     };
@@ -1017,6 +1014,57 @@ mod tests {
                 terminal_paste(t, &req, &mut written)
             });
             assert_eq!(0, unsafe { s::WRITE_COUNT });
+
+            unsafe { terminal_c::free(t) };
+        });
+    }
+
+    // Parity S174-F4 / S150-F2 (no reference test): `clipboard.Location` is a
+    // non-exhaustive `enum(c_int)`, so the reference forwards an unnamed
+    // location to the paste handler, whose event reports any non-standard
+    // location as primary. It is not `.invalid_value`.
+    #[test]
+    #[cfg_attr(miri, ignore)]
+    fn terminal_paste_forwards_an_unnamed_location() {
+        let _guard = PASTE_TEST_LOCK.lock().unwrap();
+        use capture as s;
+        s::reset();
+        with_test_allocator(|alloc| {
+            let mut t: Terminal = std::ptr::null_mut();
+            assert_eq!(Result::Success, unsafe {
+                terminal_c::new(alloc as *const CAllocator, &mut t, 80, 24)
+            });
+            assert_eq!(Result::Success, unsafe {
+                terminal_c::set(
+                    t,
+                    terminal_c::Option_::WritePty,
+                    s::write_pty as *const c_void,
+                )
+            });
+            unsafe {
+                (*(*t).terminal)
+                    .modes
+                    .set(rustty_vt::modes::Mode::KittyPasteEvents, true)
+            };
+            assert_eq!(Result::Success, unsafe {
+                terminal_c::set(
+                    t,
+                    terminal_c::Option_::ClipboardRead,
+                    s::clipboard_read as *const c_void,
+                )
+            });
+
+            let mut written: bool = false;
+            let mut contents = s::Contents::init(&[(b"text/plain", b"secret")]);
+            let mut req = contents.request();
+            req.location = 7;
+            assert_eq!(Result::Success, unsafe {
+                terminal_paste(t, &req, &mut written)
+            });
+            assert!(written);
+            assert!(
+                s::written_slice().starts_with(b"\x1b]5522;type=read:status=OK:loc=primary:pw=")
+            );
 
             unsafe { terminal_c::free(t) };
         });

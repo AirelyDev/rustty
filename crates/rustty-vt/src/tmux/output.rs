@@ -56,6 +56,8 @@ pub fn parse_format_struct<'a>(
     str: &'a str,
     delimiter: u8,
 ) -> Result<Vec<Value<'a>>, ParseError> {
+    assert_ascii_delimiter(delimiter);
+
     // Parse all our fields
     // const fields = @typeInfo(T).@"struct".fields;
     // var it = std.mem.splitScalar(u8, str, delimiter);
@@ -103,12 +105,16 @@ pub fn comptime_format(vars: &[Variable], delimiter: u8) -> String {
 // PORT NOTE: `writer: *std.Io.Writer` -> return an owned `String`. The byte
 // output (`#{var}` joined by `delimiter`) is identical.
 pub fn format(vars: &[Variable], delimiter: u8) -> String {
+    assert_ascii_delimiter(delimiter);
+
     let mut out = String::new();
     // for (vars, 0..) |variable, i| {
     for (i, variable) in vars.iter().enumerate() {
         // if (i != 0) try writer.writeByte(delimiter);
         if i != 0 {
-            out.push(delimiter as char);
+            // An ASCII byte is its own one-byte `char` (see
+            // `assert_ascii_delimiter`), so this writes exactly one byte.
+            out.push(char::from(delimiter));
         }
         // try writer.print("#{{{t}}}", .{variable});
         out.push_str("#{");
@@ -116,6 +122,19 @@ pub fn format(vars: &[Variable], delimiter: u8) -> String {
         out.push('}');
     }
     out
+}
+
+// PORT NOTE (parity S208-F2): the reference's `delimiter: u8` is a BYTE,
+// which `std.mem.splitScalar(u8, ..)` splits on and `writer.writeByte` writes.
+// The port's text is `&str`/`String`: an ASCII byte is its own one-byte
+// `char`, so splitting and writing it is byte-identical, but a byte >= 0x80
+// never occurs on its own in UTF-8 text and cannot be written into a `String`
+// on its own. The old code widened it with `delimiter as char`, splitting on
+// (and writing) that code point's two-byte encoding instead. Every reference
+// caller passes a comptime ASCII constant (`' '`, `';'`, `','`, `'\t'`), so a
+// non-ASCII delimiter is refused rather than mistranslated.
+fn assert_ascii_delimiter(delimiter: u8) {
+    assert!(delimiter.is_ascii(), "tmux format delimiter must be ASCII");
 }
 
 // Returns a struct type that contains fields for each of the given
@@ -348,35 +367,21 @@ pub enum VariableParseError {
     FormatError,
 }
 
-/// Faithful map of `std.fmt.parseInt(usize, value, 10)`: an empty or
-/// non-decimal-digit string is `InvalidCharacter`, a value exceeding `usize`
-/// (including any leading `-`, which is invalid for an unsigned type and which
-/// Zig reports as `Overflow`) is `Overflow`.
+/// Faithful map of `std.fmt.parseInt(usize, value, 10)`, through the port of
+/// the std function in `rustty_zigstd::fmt`: an empty or non-digit string is
+/// `InvalidCharacter`, and a value exceeding `usize` (including a leading `-`
+/// followed by a nonzero digit, which Zig reports as `Overflow` for an
+/// unsigned type) is `Overflow`.
 //
-// PORT NOTE: Rust's `usize::from_str_radix` lumps both the empty string and a
-// stray sign/letter into a single `ParseIntError`; we re-derive the Zig
-// distinction by inspecting the input the way `std.fmt.parseInt` does — a
-// leading `+`/`-` sign with no following error otherwise classifies as Overflow
-// for the unsigned target (Zig: parsing "-1" as `usize` is `error.Overflow`),
-// and `PosOverflow` from the radix parse is also Overflow; everything else
-// (empty, non-digit byte) is InvalidCharacter.
+// CORRECTION (parity N100): this used `str::parse::<usize>()` and re-derived
+// the Zig error kinds, reporting any `-`-prefixed failure as `Overflow`. That
+// rejected the `_` digit separators and `-0` (which Zig parses as 0) and
+// reported `-a` as `Overflow` where Zig reports `InvalidCharacter`.
 fn parse_int(value: &str) -> Result<usize, VariableParseError> {
-    use std::num::IntErrorKind;
-    match value.parse::<usize>() {
-        Ok(v) => Ok(v),
-        Err(e) => match e.kind() {
-            IntErrorKind::PosOverflow => Err(VariableParseError::Overflow),
-            // A leading `-` makes Rust report `InvalidDigit` for an unsigned
-            // target, but Zig's `parseInt` reports `error.Overflow` for a
-            // negative value parsed into an unsigned type (see the `-1` cases in
-            // the window width/height tests). Re-classify the signed-negative
-            // case here so the asserted error matches the reference.
-            IntErrorKind::InvalidDigit if value.starts_with('-') => {
-                Err(VariableParseError::Overflow)
-            }
-            _ => Err(VariableParseError::InvalidCharacter),
-        },
-    }
+    rustty_zigstd::fmt::parse_int::<usize>(value.as_bytes(), 10).map_err(|e| match e {
+        rustty_zigstd::fmt::ParseIntError::Overflow => VariableParseError::Overflow,
+        rustty_zigstd::fmt::ParseIntError::InvalidCharacter => VariableParseError::InvalidCharacter,
+    })
 }
 
 /// Faithful map of `std.mem.splitScalar(u8, str, delimiter)`: yields each
@@ -396,7 +401,7 @@ struct SplitScalar<'a> {
 impl<'a> SplitScalar<'a> {
     fn new(str: &'a str, delimiter: u8) -> SplitScalar<'a> {
         SplitScalar {
-            inner: str.split(delimiter as char),
+            inner: str.split(char::from(delimiter)),
         }
     }
 
@@ -574,6 +579,23 @@ mod tests {
         assert_eq!(
             Err(VariableParseError::Overflow),
             pu(Variable::WindowWidth, "-1")
+        );
+    }
+
+    // Parity N100 (no reference test): `std.fmt.parseInt(usize, value, 10)`
+    // accepts `_` digit separators and `-0`, and reports a non-digit after a
+    // `-` as `InvalidCharacter`.
+    #[test]
+    fn parse_integer_variables_use_zig_parse_int() {
+        assert_eq!(Ok(80), pu(Variable::WindowWidth, "8_0"));
+        assert_eq!(Ok(0), pu(Variable::WindowWidth, "-0"));
+        assert_eq!(
+            Err(VariableParseError::InvalidCharacter),
+            pu(Variable::WindowWidth, "-a")
+        );
+        assert_eq!(
+            Err(VariableParseError::InvalidCharacter),
+            pu(Variable::WindowWidth, "80_")
         );
     }
 
@@ -870,6 +892,22 @@ mod tests {
         let result = parse_format_struct(t, "$1,", b',').unwrap();
         assert_eq!(Value::Usize(1), result[0]);
         assert_eq!(Value::Str(""), result[1]);
+    }
+
+    // Parity S208-F2 (no reference test): the delimiter is a BYTE. The port's
+    // text is `&str`/`String`, where a byte >= 0x80 is never a standalone
+    // delimiter and cannot be written on its own, so a non-ASCII delimiter is
+    // refused instead of being widened to a two-byte `char`.
+    #[test]
+    #[should_panic(expected = "tmux format delimiter must be ASCII")]
+    fn parse_format_struct_refuses_a_non_ascii_delimiter() {
+        let _ = parse_format_struct(&[Variable::SessionId], "$1", 0xE9);
+    }
+
+    #[test]
+    #[should_panic(expected = "tmux format delimiter must be ASCII")]
+    fn format_refuses_a_non_ascii_delimiter() {
+        let _ = format(&[Variable::SessionId, Variable::WindowId], 0xE9);
     }
 
     // PORT NOTE: the reference `testFormat` checks BOTH `comptimeFormat` and the

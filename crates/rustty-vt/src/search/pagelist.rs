@@ -20,9 +20,9 @@
 // const Terminal = @import("../Terminal.zig");
 // const SlidingWindow = @import("sliding_window.zig").SlidingWindow;
 use super::sliding_window::{Direction, SlidingWindow};
+use crate::alloc::Allocator;
 use crate::highlight::Flattened as FlattenedHighlight;
 use crate::pagelist::{Node, OutOfMemory, PageList, Pin};
-use allocator_api2::alloc::Global as Allocator;
 
 /// Searches for a term in a PageList structure.
 ///
@@ -785,10 +785,13 @@ mod tests {
         //     .rows = 24,
         //     .max_size = 0,
         // });
-        let mut p: PageList = PageList::init(Options {
-            max_size: Some(0),
-            ..Options::new(80, 24)
-        })
+        let mut p: PageList = PageList::init(
+            crate::alloc::Global,
+            Options {
+                max_size: Some(0),
+                ..Options::new(80, 24)
+            },
+        )
         .unwrap();
         // defer p.deinit();
 
@@ -877,7 +880,8 @@ mod tests {
         // test is only that the split successor is SHORTER than the second page;
         // 10 cols yields ~35k rows per page, which makes the row-by-row fill and
         // the formatter passes take ~1 minute in a debug Rust build.
-        let mut pages: PageList = PageList::init(Options::new(80, 2)).unwrap();
+        let mut pages: PageList =
+            PageList::init(crate::alloc::Global, Options::new(80, 2)).unwrap();
 
         // PORT NOTE: the fill loops are wrapped in `pause_integrity_checks`.
         // rustty's debug `verify_integrity` walks every tracked pin on every

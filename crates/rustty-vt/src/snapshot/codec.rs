@@ -49,9 +49,9 @@ use crate::size;
 use crate::terminal::Terminal;
 
 // PORT NOTE: the reference `Allocator.Error` maps to the crate's canonical
-// OOM; the general-purpose allocator maps to `allocator_api2::alloc::Global`
+// OOM; the general-purpose allocator maps to `crate::alloc::Global`
 // (the crate-wide treatment; see `snapshot/screen.rs`).
-use allocator_api2::alloc::Global as Allocator;
+use crate::alloc::Allocator;
 
 /// Re-export continuation to make it a bit more ergonomic to reference.
 // pub const Continuation = continuation.Value;
@@ -1440,11 +1440,14 @@ mod tests {
 
         let primary = t.screens.get(TerminalScreenKey::Primary).unwrap();
         let replacement: TerminalScreen = {
-            let mut builder = Builder::init(pagelist::Options {
-                max_size: None,
-                max_lines: None,
-                ..pagelist::Options::new(t.cols, t.rows)
-            })
+            let mut builder = Builder::init(
+                crate::alloc::Global,
+                pagelist::Options {
+                    max_size: None,
+                    max_lines: None,
+                    ..pagelist::Options::new(t.cols, t.rows)
+                },
+            )
             .unwrap();
             // defer builder.deinit();
 
@@ -1550,11 +1553,14 @@ mod tests {
         // active page. Replacing the Screen in place preserves ScreenSet
         // routing.
         let replacement: TerminalScreen = {
-            let mut builder = Builder::init(pagelist::Options {
-                max_size: None,
-                max_lines: None,
-                ..pagelist::Options::new(t.cols, t.rows)
-            })
+            let mut builder = Builder::init(
+                crate::alloc::Global,
+                pagelist::Options {
+                    max_size: None,
+                    max_lines: None,
+                    ..pagelist::Options::new(t.cols, t.rows)
+                },
+            )
             .unwrap();
             // defer builder.deinit();
 
@@ -2091,11 +2097,12 @@ mod tests {
 
     // test "complete snapshot preserves Kitty virtual placeholders"
     #[test]
+    #[cfg_attr(
+        not(all(feature = "kitty-graphics", not(target_os = "none"))),
+        ignore = "SkipZigTest: needs options::KITTY_GRAPHICS (R14)"
+    )]
     fn complete_snapshot_preserves_kitty_virtual_placeholders() {
         // if (comptime !build_options.kitty_graphics) return error.SkipZigTest;
-        if !crate::options::KITTY_GRAPHICS {
-            return;
-        }
 
         let mut t = Terminal::init(Allocator, terminal_options(2, 1, DEFAULT_MSB, None)).unwrap();
         // defer t.deinit(testing.allocator);
@@ -2591,9 +2598,13 @@ mod tests {
     // FailingAllocator's accounting.
     //
     // PORT NOTE (parity S206-F1, closed under `PROCEDURE.md` blind-spot 1's
-    // carve-out): one decode allocation in this subsystem is still NOT
+    // carve-out): one decode allocation in this subsystem was NOT
     // instrumented — `snapshot/grid.rs`'s `Remap::init`, which the reference
-    // declares `Allocator.Error!Self` and the port made infallible. It lives in
+    // declares `Allocator.Error!Self` and the port made infallible.
+    // UPDATE (batch T-A, S204-F1 closed): `Remap::init` is fallible and
+    // instrumented now, and the fourth fixture below (a styled cell) reaches
+    // the style remap; the hyperlink fixture reaches the hyperlink remap. The
+    // rest of this note is the history of why. It lives in
     // `snapshot/grid.zig`, outside this row's cited oracle anchors
     // (`snapshot.zig:1626-1694`). It is **S204-F1**'s, re-opened 2026-09-11
     // (that row is anchored on the port side, `snapshot/page.rs:561-573`, which
@@ -2742,7 +2753,25 @@ mod tests {
         unsafe { (*active).test_write_string(b"hi") }.unwrap();
         let mut encoded = io::AllocatingWriter::new();
         encode(&mut encoded, &t, test_encode_options()).unwrap();
-        exercise(encoded.written(), 13);
+        exercise(encoded.written(), 14);
+
+        t.deinit(Allocator);
+
+        // A terminal carrying a STYLED cell, so a page's style table is
+        // non-empty and its decode takes `grid::StyleRemap::init`.
+        //
+        // PORT NOTE (parity S204-F1): net-new for the same reason as the
+        // hyperlink fixture above. No other fixture writes a style, so without
+        // this case the style remap's `tw::check` is reached by nothing in
+        // this sweep. (styled_fixture_added)
+        let mut t = Terminal::init(Allocator, terminal_options(10, 3, DEFAULT_MSB, None)).unwrap();
+        {
+            let mut stream = t.vt_stream();
+            stream.next_slice(b"\x1b[1mhi");
+        }
+        let mut encoded = io::AllocatingWriter::new();
+        encode(&mut encoded, &t, test_encode_options()).unwrap();
+        exercise(encoded.written(), 10);
 
         t.deinit(Allocator);
     }

@@ -1320,6 +1320,151 @@ mod tests {
         page.deinit();
     }
 
+    /// rustty-only (task S-4, N93): the batched style-run clone
+    /// (`clone_partial_row_from_inner`'s different-page arm with
+    /// `add_with_id_pure_ref_bump_target`) must leave the destination page
+    /// BYTE-IDENTICAL to the reference's per-cell body (page.zig
+    /// `clonePartialRowFrom`: reset the cell, `addWithId(style, src_id)`,
+    /// store `result orelse src_id`), and with identical set bookkeeping.
+    /// Runs of every length 1..=9 over 12 styles, into a fresh destination
+    /// (styles REMAP: first-seen numbering), one holding live conflicting
+    /// styles at the source ids, and one holding dead ones.
+    #[test]
+    fn page_cloneFrom_style_runs_match_per_cell_reference() {
+        const COLS: usize = 40;
+        const ROWS: usize = 12;
+        let styles: Vec<Style> = (0..12u8)
+            .map(|k| Style {
+                fg_color: stylepkg::Color::Rgb(crate::color::RGB {
+                    r: k.wrapping_mul(37),
+                    g: 200 - k,
+                    b: k,
+                }),
+                ..Style::default()
+            })
+            .collect();
+        let cap = || Capacity {
+            styles: 64,
+            ..Capacity::new(COLS as u16, ROWS as u16)
+        };
+
+        // Source: style ids assigned in a scrambled order, so that the
+        // destination's first-seen numbering differs from them.
+        let mut src = Page::init(cap()).unwrap();
+        let sbase = src.memory_ptr();
+        let mut ids = Vec::new();
+        for k in [7usize, 2, 11, 0, 5, 9, 1, 4, 10, 3, 8, 6] {
+            ids.push((k, unsafe { src.styles.add(sbase, styles[k]) }.unwrap()));
+        }
+        ids.sort();
+        let ids: Vec<u16> = ids.into_iter().map(|(_, id)| id).collect();
+        // Every run length 1..=9, cycling styles, with unstyled gaps.
+        let mut seq: Vec<u16> = Vec::new();
+        let mut z: u64 = 0x93;
+        while seq.len() < COLS * ROWS {
+            z = z.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            let len = 1 + (seq.len() / 7) % 9;
+            let id = if (z >> 60) == 0 { 0 } else { ids[((z >> 33) % 12) as usize] };
+            seq.extend(std::iter::repeat_n(id, len));
+        }
+        for y in 0..ROWS {
+            for x in 0..COLS {
+                let id = seq[y * COLS + x];
+                let rac = src.get_row_and_cell(x, y);
+                unsafe {
+                    let mut c = cell_codepoint((0x41 + (x % 26)) as u21);
+                    if id != 0 {
+                        c.set_style_id(id);
+                        (*rac.row).set_styled(true);
+                        src.styles.use_id(sbase, id);
+                    }
+                    *rac.cell = c;
+                }
+            }
+        }
+        // Drop the creation references so only cell references remain.
+        for &id in &ids {
+            unsafe { src.styles.release(sbase, id) };
+        }
+
+        // Destination pre-states: 0 fresh, 1 live conflicting styles at the
+        // low ids, 2 the same but released (dead, not yet reaped).
+        let prep = |mode: u8| {
+            let mut p = Page::init(cap()).unwrap();
+            let b = p.memory_ptr();
+            if mode > 0 {
+                for k in 0..4u8 {
+                    let other = Style {
+                        bg_color: stylepkg::Color::Rgb(crate::color::RGB { r: 1, g: 2, b: k }),
+                        ..Style::default()
+                    };
+                    let id = unsafe { p.styles.add(b, other) }.unwrap();
+                    if mode == 2 {
+                        unsafe { p.styles.release(b, id) };
+                    }
+                }
+            }
+            p
+        };
+
+        let mut remapped_runs = 0usize;
+        for mode in 0..3u8 {
+            // The port's clone.
+            let mut got = prep(mode);
+            let batched_before = REMAPPED_STYLE_RUNS_BATCHED.with(|c| c.get());
+            got.clone_from(&src, 0, ROWS).unwrap();
+            // Positive evidence that the batched remap path ran.
+            let batched = REMAPPED_STYLE_RUNS_BATCHED.with(|c| c.get()) - batched_before;
+            assert!(batched > 20, "mode {mode}: remapped runs batched: {batched}");
+
+            // The reference's per-cell body.
+            let mut want = prep(mode);
+            let wbase = want.memory_ptr();
+            for y in 0..ROWS {
+                let s_row = src.get_row_and_cell(0, y).row;
+                let d_row = want.get_row_and_cell(0, y).row;
+                unsafe {
+                    let mut copy = *s_row;
+                    copy.set_cells((*d_row).cells());
+                    *d_row = copy;
+                }
+                for x in 0..COLS {
+                    let sc = unsafe { *src.get_row_and_cell(x, y).cell };
+                    let dc = want.get_row_and_cell(x, y).cell;
+                    unsafe {
+                        *dc = sc.copy_with_managed_reset();
+                        if sc.style_id() != stylepkg::DEFAULT_ID {
+                            (*d_row).set_styled(true);
+                            let st = *src.styles.get(sbase, sc.style_id());
+                            let added = want
+                                .styles
+                                .add_with_id(wbase, st, sc.style_id())
+                                .unwrap();
+                            if added.is_some_and(|a| a != sc.style_id()) {
+                                remapped_runs += 1;
+                            }
+                            (*dc).set_style_id(added.unwrap_or(sc.style_id()));
+                        }
+                    }
+                }
+            }
+
+            let g = unsafe { core::slice::from_raw_parts(got.memory_ptr(), got.memory_len()) };
+            let w = unsafe { core::slice::from_raw_parts(want.memory_ptr(), want.memory_len()) };
+            assert!(g == w, "mode {mode}: page bytes differ from the per-cell reference");
+            assert_eq!(want.styles.next_id, got.styles.next_id, "mode {mode}");
+            assert_eq!(want.styles.living, got.styles.living, "mode {mode}");
+            assert_eq!(want.styles.max_psl, got.styles.max_psl, "mode {mode}");
+            assert_eq!(want.styles.psl_stats, got.styles.psl_stats, "mode {mode}");
+
+            got.deinit();
+            want.deinit();
+        }
+        // The case N93 is about was exercised: styles landed on other ids.
+        assert!(remapped_runs > 100, "remapped cells: {remapped_runs}");
+        src.deinit();
+    }
+
     #[test]
     fn page_cloneFrom() {
         let mut page = Page::init(Capacity {

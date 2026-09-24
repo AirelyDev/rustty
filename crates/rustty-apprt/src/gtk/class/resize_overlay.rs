@@ -70,9 +70,10 @@ mod imp {
         #[template_child]
         pub label: TemplateChild<gtk4::Label>,
 
+        /// The text to set on the label when scheduled.
+        ///
         /// PORTS: `resize_overlay.zig:77-91,132` the `label` property, backed by
-        /// the `label_text` private field — the text set on the label when
-        /// scheduled.
+        /// the `label_text` private field.
         ///
         /// CORRECTION (task 20, S52-F1): the attribute was `#[property(get, set,
         /// nullable)]`, so glib-macros registered the property under the FIELD's
@@ -82,17 +83,23 @@ mod imp {
         #[property(name = "label", get, set, nullable)]
         pub label_text: RefCell<Option<String>>,
 
+        /// The time that the overlay appears.
+        ///
         /// PORTS: `resize_overlay.zig:37-54,135` the `duration` property /
-        /// private field — how long the overlay stays visible (ms).
+        /// private field (ms).
         #[property(get, set, minimum = 250, default = 750)]
         pub duration: Cell<u32>,
 
+        /// The first delay before any overlay is shown. Must be specified
+        /// during construction otherwise it has no effect.
+        ///
         /// PORTS: `resize_overlay.zig:56-76,139` the `first-delay` property /
-        /// private field — the first delay before any overlay is shown (ms).
-        /// Must be specified during construction otherwise it has no effect.
+        /// private field (ms).
         #[property(get, set, name = "first-delay", minimum = 250, default = 250)]
         pub first_delay: Cell<u32>,
 
+        /// The alignment of the label
+        ///
         /// PORTS: `resize_overlay.zig:93-108,150` the `overlay-halign` property /
         /// private field — the horizontal alignment of the label.
         #[property(get, set, name = "overlay-halign", builder(gtk4::Align::Center))]
@@ -103,16 +110,20 @@ mod imp {
         #[property(get, set, name = "overlay-valign", builder(gtk4::Align::Center))]
         pub valign: Cell<gtk4::Align>,
 
-        /// PORTS: `resize_overlay.zig:142` the `idler` source id — the idle
-        /// source that updates the label (**invariant 11**).
+        /// The idle source that we use to update the label.
+        ///
+        /// PORTS: `resize_overlay.zig:142` the `idler` source id (**invariant 11**).
         pub idler: RefCell<Option<glib::SourceId>>,
 
-        /// PORTS: `resize_overlay.zig:145` the `timer` source id — the timer for
-        /// dismissing the overlay (**invariant 11**).
+        /// The timer for dismissing the overlay.
+        ///
+        /// PORTS: `resize_overlay.zig:145` the `timer` source id (**invariant 11**).
         pub timer: RefCell<Option<glib::SourceId>>,
 
-        /// PORTS: `resize_overlay.zig:148` the `delay_timer` source id — the
-        /// first-delay timer (**invariant 11**).
+        /// The first delay timer.
+        ///
+        /// PORTS: `resize_overlay.zig:148` the `delay_timer` source id
+        /// (**invariant 11**).
         pub delay_timer: RefCell<Option<glib::SourceId>>,
     }
 
@@ -207,6 +218,19 @@ mod imp {
 }
 
 glib::wrapper! {
+    /// The overlay that shows the current size while a surface is resizing.
+    /// This can be used generically to show pretty much anything with a
+    /// disappearing overlay, but we have no other use at this point so it
+    /// is named specifically for what it does.
+    ///
+    /// General usage:
+    ///
+    ///   1. Add it to an overlay
+    ///   2. Set the label with `setLabel`
+    ///   3. Schedule to show it with `schedule`
+    ///
+    /// Set any properties to change the behavior.
+    ///
     /// PORTS: `resize_overlay.zig:24` `pub const ResizeOverlay`.
     pub struct ResizeOverlay(ObjectSubclass<imp::ResizeOverlay>)
         @extends libadwaita::Bin, gtk4::Widget,
@@ -220,6 +244,9 @@ impl Default for ResizeOverlay {
 }
 
 impl ResizeOverlay {
+    // Set the label for the overlay. This will not show the
+    // overlay if it is currently hidden; you must call schedule.
+    //
     // PORTS: `resize_overlay.zig:170-178` `setLabel` is the `label` property's
     // generated `set_label` setter: it dupes the string and notifies the `label`
     // pspec (`:177`). It does NOT show the overlay if it is currently hidden — the
@@ -228,20 +255,26 @@ impl ResizeOverlay {
     // with the property correctly named `label` the generated setter has that
     // name, so the wrapper is gone.
 
-    /// PORTS: `resize_overlay.zig:180-193` `schedule`. Schedule the overlay to be
-    /// shown on the next idle tick (to avoid flickering during resizes).
+    /// Schedule the overlay to be shown. To avoid flickering during
+    /// resizes we schedule the overlay to be shown on the next idle tick.
+    ///
+    /// PORTS: `resize_overlay.zig:180-193` `schedule`.
     pub fn schedule(&self) {
         let imp = self.imp();
 
-        // If we have a delay timer then we're not showing anything yet, so do
-        // nothing (`:185-186`).
+        // If we have a delay timer then we're not showing anything
+        // yet so do nothing.
+        // (`:185-186`)
         if imp.delay_timer.borrow().is_some() {
             return;
         }
 
-        // When updating a widget, wait until GTK is "idle" — since we are called
-        // in the middle of resizing, doing it now results in warnings and horrible
-        // flickering (`:188-192`).
+        // When updating a widget, wait until GTK is "idle", i.e. not in the middle
+        // of doing any other updates. Since we are called in the middle of resizing
+        // GTK is doing a lot of work rearranging all of the widgets. Not doing this
+        // results in a lot of warnings from GTK and _horrible_ flickering of the
+        // resize overlay.
+        // (`:188-192`)
         if imp.idler.borrow().is_some() {
             return;
         }
@@ -265,8 +298,9 @@ impl ResizeOverlay {
         // Cancel our previous show timer no matter what (`:203-209`).
         remove_source_id(imp.timer.take(), "size overlay timer");
 
-        // If we have a label to show, show ourselves; if we don't have label
-        // text, then hide our label (`:211-217`).
+        // If we have a label to show, show ourselves. If we don't have
+        // label text, then hide our label.
+        // (`:211-217`)
         let Some(text) = self.label() else {
             self.set_visible(false);
             return glib::ControlFlow::Break;

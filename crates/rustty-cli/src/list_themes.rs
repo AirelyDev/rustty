@@ -259,6 +259,12 @@ pub fn run() -> Result<u8, Error> {
         result?;
     }
 
+    run_opts(opts)
+}
+
+/// The rest of the reference `run` after its argument parse, split out so a
+/// test can drive it without the process's argv (task T-C, R13 UD23).
+fn run_opts(opts: Options) -> Result<u8, Error> {
     // var arena = std.heap.ArenaAllocator.init(gpa_alloc);
     // const alloc = arena.allocator();
     //   PORT NOTE: the reference threads an arena for the path/name dupes; the Rust
@@ -284,6 +290,10 @@ pub fn run() -> Result<u8, Error> {
     // global; that collapses into the reference's `resources_dir == null` warning
     // path (rather than dereferencing an uninitialized global), so the observable
     // behavior — print the warning — is preserved.
+    //
+    // PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD23: the
+    // reference's warning is never flushed and so never shown; the port's
+    // reaches stderr (see the `count == 0` arm below).
     let resources_dir = rustty_core::STATE.get().and_then(|s| s.resources_dir.app());
     if resources_dir.is_none() {
         writeln!(
@@ -303,7 +313,7 @@ pub fn run() -> Result<u8, Error> {
     let mut it = LocationIterator::new();
 
     // while (try it.next()) |loc| {
-    while let Some(loc) = it.next() {
+    while let Some(loc) = it.next()? {
         // var dir = std.fs.cwd().openDir(loc.dir, .{ .iterate = true }) catch |err| switch (err) {
         //     error.FileNotFound => continue,
         //     else => {
@@ -372,6 +382,15 @@ pub fn run() -> Result<u8, Error> {
             "No themes found, check to make sure that the themes were installed correctly."
         )?;
         // return 1;
+        //   PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD23. The
+        //   reference never flushes its buffered stderr, so this message and
+        //   the resources-directory warning above never reach the terminal: a
+        //   broken install (no resources directory, or no themes) exits 1 with
+        //   no output (MEASURED with Zig 0.16.0, task T-C: this message through
+        //   an unflushed 4096-byte File.Writer delivers 0 bytes). The evident
+        //   intent is to show them, so the port flushes here (and `stderr`'s
+        //   drop flushes the warning on the other paths). Test:
+        //   `no_themes_messages_reach_stderr`.
         stderr.flush()?;
         return Ok(1);
     }
@@ -533,7 +552,7 @@ fn os_name_bytes(name: &std::ffi::OsStr) -> &[u8] {
 //    read thread runs. The Rust port maps this to the PROVEN C3b/loop_-lifecycle
 //    shape: `tty`/`vx` are SEPARATE run-scope locals (stable addresses, never moved
 //    for the read thread's life) and the reference `Preview`'s remaining fields
-//    become a `DrawState` local. `Loop::new(&mut tty, &mut vx)` + the disjoint-field
+//    become a `DrawState` local. `Loop::init(&mut tty, &mut vx)` (`Loop::new` before S-10b) + the disjoint-field
 //    `update`/`draw` free fns are exactly the `loop_::tests::loop_lifecycle`
 //    (Miri-green) idiom — no whole-object `&mut` is ever formed over the aliased
 //    bytes. The fresh `.port/phase-2/mirihar-wire2` harness re-pins this under
@@ -549,14 +568,18 @@ fn os_name_bytes(name: &std::ffi::OsStr) -> &[u8] {
 //    memory-only divergence).
 //  * `text_input.drawWithStyle` needs `&'a mut TextInput` + `Window<'a>` (invariant
 //    screen lifetime forces `'s == 'a`), which the per-frame `&mut` cannot supply;
-//    the search box renders the buffer bytes directly (arena-duped) — the visible
-//    search string is identical (the widget cursor glyph is the only omission).
-//    Documented forced divergence.
+//    each frame draws an arena-held copy of the widget and carries its scroll and
+//    cursor fields back (CORRECTION, parity S69-F1: this line said the search box
+//    renders the buffer bytes directly as a "documented forced divergence" whose
+//    only omission was the cursor glyph; it also lost the scrolling, the ellipsis
+//    and the terminal cursor).
 //  * Owned-`KeyOwned` across the queue → `borrow_key`; clipboard has NO `alloc` arg
 //    (Rust sig divergence); `TerminalColor` cell-* arms resolve to the reference's
 //    missing-value fallback; Wyhash digest short-circuit → an equal-`Vec<usize>`
 //    compare (byte-observably identical); `std.Uri` → a faithful `file://` escaper;
-//    `LoadError` has no `Display` → `{err:?}` (cosmetic err-pane divergence).
+//    the err pane's `{}` of a `LoadError` is `zig_error::load_error` (CORRECTION,
+//    parity S69-F3: this line said "`LoadError` has no `Display` → `{err:?}`
+//    (cosmetic err-pane divergence)").
 // ===========================================================================
 
 use crate::pretty_arena::{styled, Arena};
@@ -566,7 +589,7 @@ use rustty_vaxis::key::{self, Key, KeyOwned, Modifiers};
 use rustty_vaxis::loop_::LoopEvent;
 use rustty_vaxis::mouse::{Button, Mouse, Shape, Type as MouseType};
 use rustty_vaxis::vaxis::Options as VaxisOptions;
-use rustty_vaxis::widgets::text_input::{Event as TiEvent, TextInput};
+use rustty_vaxis::widgets::text_input::{Buffer as TiBuffer, Event as TiEvent, TextInput};
 use rustty_vaxis::window::{BorderOptions, ChildOptions, PrintOptions, Where, Window, Wrap};
 use rustty_vaxis::{Loop, Tty, Vaxis, Winsize};
 use rustty_zf::zf::{rank as zf_rank, RankOptions};
@@ -757,7 +780,7 @@ fn run_preview<'a>(
     // raw `*mut Tty`/`*mut Vaxis` and its read thread DEREFS them for the loop's life.
     // Deriving the raw ptrs via `&raw mut` (a `SharedReadWrite` place-projection) and
     // then accessing `tty`/`vx` ONLY through those raw ptrs (TRANSIENT `&mut *ptr`
-    // reborrows) keeps the read thread's tag live — whereas `Loop::new(&mut tty, ..)`
+    // reborrows) keeps the read thread's tag live — whereas `Loop::init(&mut tty, ..)`
     // + a later `tty.writer()` on the LOCAL pushes a `Unique` that POPS the read
     // thread's raw tag off the borrow stack (SB UB; the mirihar reproduces + rejects
     // exactly that shape). So: raw ptrs once, transient reborrows thereafter; the
@@ -766,61 +789,65 @@ fn run_preview<'a>(
     let tty_ptr: *mut Tty = &raw mut tty;
     let vx_ptr: *mut Vaxis<'a> = &raw mut vx;
 
-    // var loop: vaxis.Loop(Event) = .{ .tty = &self.tty, .vaxis = &self.vx };
-    let loop_ = Loop::<Event>::new(tty_ptr, vx_ptr);
-    // try loop.init();
-    loop_.init()?;
-    // try loop.start();
-    loop_.start()?;
+    // var loop: vaxis.Loop(Event) = .init(global.io(), &self.tty, &self.vx);
+    //   (+ the resize handler the reference no longer installs, UD266: see
+    //   `with_preview_loop`)
+    with_preview_loop(tty_ptr, vx_ptr, |loop_| {
+        // try loop.start();
+        loop_.start()?;
 
-    // const writer = self.tty.writer();  (all `tty`/`vx` access via the raw ptrs)
-    // SAFETY (each `unsafe` below): `tty_ptr`/`vx_ptr` are the `&raw mut` of the still-
-    // live run-scope locals; every reborrow is transient (dropped at the call) and
-    // shares the read thread's `SharedReadWrite` parent — no `Unique` outlives a call.
-    // try self.vx.enterAltScreen(writer);
-    unsafe { (*vx_ptr).enter_alt_screen((*tty_ptr).writer()) }?;
-    // try self.vx.setTitle(writer, "👻 Ghostty Theme Preview 👻");
-    // R2 IDENTITY NOTE (Task 16): window title carries the Rustty product
-    // identity (user-visible terminal-window title, not oracle data).
-    unsafe {
-        (*vx_ptr).set_title((*tty_ptr).writer(), "👻 Rustty Theme Preview 👻".as_bytes())
-    }?;
-    // try self.vx.queryTerminal(writer, 1 * std.time.ns_per_s);
-    unsafe { (*vx_ptr).query_terminal((*tty_ptr).writer(), 1_000_000_000) }?;
-    // try self.vx.setMouseMode(writer, true);
-    unsafe { (*vx_ptr).set_mouse_mode((*tty_ptr).writer(), true) }?;
-    // if (self.vx.caps.color_scheme_updates) try self.vx.subscribeToColorSchemeUpdates(writer);
-    if unsafe { (*vx_ptr).caps.color_scheme_updates } {
-        unsafe { (*vx_ptr).subscribe_to_color_scheme_updates((*tty_ptr).writer()) }?;
-    }
-
-    // while (!self.should_quit) {
-    while !st.should_quit {
-        // (the reference's per-iteration arena is the session arena here — see note.)
-        // loop.pollEvent();
-        loop_.poll_event();
-        // while (loop.tryEvent()) |event| try self.update(event, alloc);
-        while let Some(event) = loop_.try_event() {
-            // update(vx, tty, st, event) — transient disjoint reborrows via the raw ptrs.
-            update(
-                unsafe { &mut *vx_ptr },
-                unsafe { &mut *tty_ptr },
-                &mut st,
-                event,
-            )?;
+        // const writer = self.tty.writer();  (all `tty`/`vx` access via the raw ptrs)
+        // SAFETY (each `unsafe` below): `tty_ptr`/`vx_ptr` are the `&raw mut` of the still-
+        // live run-scope locals; every reborrow is transient (dropped at the call) and
+        // shares the read thread's `SharedReadWrite` parent — no `Unique` outlives a call.
+        // try self.vx.enterAltScreen(writer);
+        unsafe { (*vx_ptr).enter_alt_screen((*tty_ptr).writer()) }?;
+        // try self.vx.setTitle(writer, "👻 Ghostty Theme Preview 👻");
+        // R2 IDENTITY NOTE (Task 16): window title carries the Rustty product
+        // identity (user-visible terminal-window title, not oracle data).
+        unsafe {
+            (*vx_ptr).set_title((*tty_ptr).writer(), "👻 Rustty Theme Preview 👻".as_bytes())
+        }?;
+        // try self.vx.queryTerminal(writer, .fromSeconds(1));
+        unsafe {
+            (*vx_ptr).query_terminal((*tty_ptr).writer(), std::time::Duration::from_secs(1))
+        }?;
+        // try self.vx.setMouseMode(writer, true);
+        unsafe { (*vx_ptr).set_mouse_mode((*tty_ptr).writer(), true) }?;
+        // if (self.vx.caps.color_scheme_updates) try self.vx.subscribeToColorSchemeUpdates(writer);
+        if unsafe { (*vx_ptr).caps.color_scheme_updates } {
+            unsafe { (*vx_ptr).subscribe_to_color_scheme_updates((*tty_ptr).writer()) }?;
         }
-        // try self.draw(alloc);
-        draw(unsafe { &mut *vx_ptr }, &mut st);
-        // try self.vx.render(writer);
-        unsafe { (*vx_ptr).render((*tty_ptr).writer()) }?;
-        // try writer.flush();
-        unsafe { (*tty_ptr).writer().flush() }?;
-    }
 
-    // PORT NOTE: join the read thread before teardown (the reference relies on
-    // process exit; Rust must stop/join so no `*mut tty`/`*mut vx` outlives the
-    // locals). `stop` posts a DSR to unblock the blocking read, then joins.
-    loop_.stop();
+        // while (!self.should_quit) {
+        while !st.should_quit {
+            // (the reference's per-iteration arena is the session arena here — see note.)
+            // try loop.pollEvent();
+            loop_.poll_event();
+            // while (try loop.tryEvent()) |event| try self.update(event, alloc);
+            while let Some(event) = loop_.try_event() {
+                // update(vx, tty, st, event) — transient disjoint reborrows via the raw ptrs.
+                update(
+                    unsafe { &mut *vx_ptr },
+                    unsafe { &mut *tty_ptr },
+                    &mut st,
+                    event,
+                )?;
+            }
+            // try self.draw(alloc);
+            draw(unsafe { &mut *vx_ptr }, &mut st);
+            // try self.vx.render(writer);
+            unsafe { (*vx_ptr).render((*tty_ptr).writer()) }?;
+            // try writer.flush();
+            unsafe { (*tty_ptr).writer().flush() }?;
+        }
+
+        // PORT NOTE: join the read thread before teardown (the reference relies on
+        // process exit; Rust must stop/join so no `*mut tty`/`*mut vx` outlives the
+        // locals). `stop` posts a DSR to unblock the blocking read, then joins.
+        loop_.stop();
+        Ok(())
+    })?;
 
     // === Preview.deinit ===  (filtered/text_input drop on their own)
     //   The reader is joined/dead now, so whole-`tty`/`vx` access is sound again.
@@ -829,6 +856,28 @@ fn run_preview<'a>(
     // self.tty.deinit();
     tty.deinit();
     Ok(())
+}
+
+/// `var loop: vaxis.Loop(Event) = .init(global.io(), &self.tty, &self.vx);` — the Loop
+/// `run` drives, pinned on this frame for `body`.
+///
+/// PORT NOTE: reference defect (R13, UD266). Before ghostty `e8525c0fd` ("Update to Zig
+/// 0.16.0") `run` built the Loop with `.{ .tty = &self.tty, .vaxis = &self.vx }` and then
+/// called `try loop.init()`, which installed the SIGWINCH resize handler. libvaxis 0.6.0
+/// renamed that function to `installResizeHandler` and made `init` a constructor, and the
+/// migration replaced both lines with the constructor alone, so at the pin nothing
+/// installs the handler. `run` still handles `.winsize` events (`update`), which on a
+/// terminal without in-band resize reports only come from that handler: resizing the
+/// window no longer re-lays-out the picker there. The port keeps installing it, before
+/// `start`, where the pre-migration code did (vxfw's `App.run` shows the 0.6.0 pattern).
+fn with_preview_loop<'a, R>(
+    tty_ptr: *mut Tty,
+    vx_ptr: *mut Vaxis<'a>,
+    body: impl FnOnce(&Loop<'a, Event>) -> Result<R, Error>,
+) -> Result<R, Error> {
+    let loop_ = Loop::<Event>::init(tty_ptr, vx_ptr);
+    loop_.install_resize_handler()?;
+    body(&loop_)
 }
 
 // fn up(self: *Preview, count: usize) void  — pure integer nav over DrawState.
@@ -1198,25 +1247,28 @@ fn draw<'a>(vx: &mut Vaxis<'a>, st: &mut DrawState<'a>) {
                 // Working around it in this case, but putting this here in
                 // case there are issues.
                 //
-                // PORT NOTE (`d320cd7df`, `.port/phase-3/NON_PORTS.md` §G2):
-                // upstream clamps because libvaxis 0.6.0 widened `Mouse.row`
-                // to a SIGNED type. rustty-vaxis is pinned at 0.5.1, where
-                // `Mouse::row` is `u16` (`crates/rustty-vaxis/src/mouse.rs:19`)
-                // and a negative row is unrepresentable, so the clamp
-                // (`@max(0, ...)`) is a provable no-op here. It becomes live
-                // when the deferred vaxis bump lands — do not drop this note
-                // then, port the clamp.
+                // (`d320cd7df`; `Mouse.row` is `i16` since the libvaxis 0.6.0 port,
+                // parity tail S-10b, so the clamps below are live.)
                 // if (mouse.button == .left and mouse.type == .release) {
                 if mouse.button == Button::Left && mouse.r#type == MouseType::Release {
-                    // const selection = self.window + mouse.row;
-                    let selection = st.window + mouse.row as usize;
+                    // const selection: usize = selection: {
+                    //     var window: i32 = @min(self.window, std.math.maxInt(i32));
+                    //     window += mouse.row;
+                    //     break :selection @max(0, window);
+                    // };
+                    let selection: usize = {
+                        let mut window: i32 =
+                            i32::try_from(st.window.min(i32::MAX as usize)).unwrap();
+                        window += i32::from(mouse.row);
+                        usize::try_from(window.max(0)).unwrap()
+                    };
                     // if (selection < self.filtered.items.len) self.current = selection;
                     if selection < st.filtered.len() {
                         st.current = selection;
                     }
                 }
-                // highlight = mouse.row;
-                highlight = Some(mouse.row as usize);
+                // highlight = @max(0, mouse.row);
+                highlight = Some(usize::try_from(mouse.row.max(0)).unwrap());
             }
         }
     }
@@ -1382,16 +1434,33 @@ fn draw<'a>(vx: &mut Vaxis<'a>, st: &mut DrawState<'a>) {
                 ..Default::default()
             });
             // self.text_input.drawWithStyle(child, self.ui_standard());
-            //   PORT NOTE (forced divergence): `drawWithStyle` needs `&'a mut TextInput`
-            //   + `Window<'a>` (the invariant `*mut Screen<'a>` forces `'s == 'a`), which
-            //   the per-frame `&mut` cannot supply. Render the buffer bytes directly
-            //   (arena-duped, `first_half ++ second_half`) — the visible search string is
-            //   identical; only the widget's cursor glyph is omitted.
-            let mut buffer: Vec<u8> = Vec::new();
-            buffer.extend_from_slice(st.text_input.buf.first_half());
-            buffer.extend_from_slice(st.text_input.buf.second_half());
-            let text = arena.dupe(&buffer);
-            let _ = child.print_segment(styled(text, ui_standard(scheme)), propt(0, 0));
+            //   PORT NOTE: `drawWithStyle` needs `&'a mut TextInput` + `Window<'a>`
+            //   (the invariant `*mut Screen<'a>` forces `'s == 'a`), and the screen
+            //   keeps borrowing the widget's buffer, so the widget itself cannot be
+            //   lent: the key handlers mutate it before the next frame. The frame
+            //   draws a COPY moved into the session arena (as the other per-frame
+            //   bytes are), then carries back the three fields the draw updates.
+            //   CORRECTION (parity S69-F1, task T-C): this printed the buffer bytes
+            //   at column 0 instead, under the note "the visible search string is
+            //   identical; only the widget's cursor glyph is omitted", which was
+            //   wrong: a query wider than the box did not scroll or show the
+            //   ellipsis, and the terminal cursor was not shown.
+            let ti = &st.text_input;
+            let frame: &'a mut TextInput = arena.alloc(TextInput {
+                buf: TiBuffer {
+                    buffer: ti.buf.buffer.clone(),
+                    cursor: ti.buf.cursor,
+                    gap_size: ti.buf.gap_size,
+                },
+                draw_offset: ti.draw_offset,
+                prev_cursor_col: ti.prev_cursor_col,
+                prev_cursor_idx: ti.prev_cursor_idx,
+                scroll_offset: ti.scroll_offset,
+            });
+            let drawn = frame.draw_with_style(child, ui_standard(scheme));
+            st.text_input.draw_offset = drawn.draw_offset;
+            st.text_input.prev_cursor_col = drawn.prev_cursor_col;
+            st.text_input.prev_cursor_idx = drawn.prev_cursor_idx;
         }
         // .save => 92x17 child + the 14-line save_instructions
         Mode::Save => {
@@ -1431,6 +1500,22 @@ fn draw<'a>(vx: &mut Vaxis<'a>, st: &mut DrawState<'a>) {
             } else {
                 b""
             };
+            // "For more details on configuration and themes, visit the Ghostty documentation:",
+            // "",
+            // "https://ghostty.org/docs/config/reference",
+            //   R2 (parity S69-F2): only the product identity is renamed: the
+            //   title-case product name, and the product website
+            //   (`rustty_identity::WEBSITE`, the reference's `https://ghostty.org`
+            //   under `identity-oracle`) before the unchanged `/docs/config/reference`.
+            let docs_line: &[u8] = arena.dupe(
+                format!(
+                    "For more details on configuration and themes, visit the {} documentation:",
+                    rustty_identity::APP_NAME_TITLECASE
+                )
+                .as_bytes(),
+            );
+            let docs_url: &[u8] = arena
+                .dupe(format!("{}/docs/config/reference", rustty_identity::WEBSITE).as_bytes());
             let save_instructions: [&[u8]; 14] = [
                 "To apply this theme, add the following line to your Rustty configuration:"
                     .as_bytes(),
@@ -1445,10 +1530,9 @@ fn draw<'a>(vx: &mut Vaxis<'a>, st: &mut DrawState<'a>) {
                 b"",
                 "config-file = ?auto/theme.rustty".as_bytes(),
                 b"",
-                "For more details on configuration and themes, visit the config reference:"
-                    .as_bytes(),
+                docs_line,
                 b"",
-                "https://rustty.org/docs/config/reference".as_bytes(),
+                docs_url,
             ];
             // for (save_instructions, 0..) |instruction, captured_i| { instruction@2 }
             for (captured_i, instruction) in save_instructions.iter().enumerate() {
@@ -1521,9 +1605,13 @@ fn draw_preview<'a>(st: &DrawState<'a>, win: Window<'a>, x_off_unconverted: i32)
                 );
             }
             {
-                // "{}" of the error — PORT NOTE (issue 3): `LoadError` has NO `Display`,
-                // so `{err:?}` (Debug); a documented COSMETIC divergence (err-pane text).
-                let text = arena.dupe(format!("{err:?}").as_bytes());
+                // const text = try std.fmt.allocPrint(alloc, "{}", .{err});
+                //
+                // CORRECTION (parity S69-F3, task T-C): this printed `{err:?}`
+                // under the note "`LoadError` has NO `Display`, so `{err:?}`
+                // (Debug); a documented COSMETIC divergence". `zig_error::load_error`
+                // renders the reference's `error.<Name>`.
+                let text = arena.dupe(crate::zig_error::load_error(&err).as_bytes());
                 let text_len = text.len() as u16;
                 let _ = child.print_segment(
                     styled(text, ui_err(scheme)),
@@ -2267,7 +2355,7 @@ fn path_bytes(p: &std::path::Path) -> Vec<u8> {
 //  has_query == true : tokens ← lowercased(buffer) split on ' ' (empty runs
 //    skipped, so an ALL-SPACES buffer yields ZERO tokens but STILL takes this
 //    branch); per theme keep i iff color_pass[i] && zf::rank(name, &tokens,
-//    {to_lower, plain}).is_some() — `zf::rank` IS CALLED even when tokens is empty.
+//    {case_sensitive: false, plain}).is_some() — `zf::rank` IS CALLED even when tokens is empty.
 //  has_query == false: per theme keep i iff color_pass[i]; ranks_out[i] = None.
 // Byte-faithful (`&[u8]`, never `String`).
 fn rank_filtered(
@@ -2302,12 +2390,16 @@ fn rank_filtered(
                     // ".to_lower = true" implies, but this comment serves as a
                     // hint if there's a regression.
                     //
-                    // PORT NOTE (`e8525c0fd`, `.port/phase-3/NON_PORTS.md` §G2):
-                    // the rename to `.case_sensitive = false` is a zf 0.11.0 API
-                    // change. rustty-zf is pinned at 0.10.3, where the field is
-                    // still `to_lower`; the two spellings request the SAME
-                    // case-insensitive ranking. Rename with the deferred bump.
-                    to_lower: true,
+                    // PORT NOTE (zf 0.10.3 -> 0.11.0, `.port/phase-3/NON_PORTS.md` §G2,
+                    // parity tail S-10b): this is the reference pin's call verbatim
+                    // (list_themes.zig:377-386). The rename flipped the DEFAULT
+                    // (`.{}` is now case-sensitive), so the explicit `false` here is
+                    // load-bearing. zf 0.11.0's insensitive mode also lowers the
+                    // needle, which cannot change a result here: the tokens are
+                    // already lowercased above (`allocLowerString`). Measured: over
+                    // the reference's theme names x a query corpus, these ranks are
+                    // bit-identical to the Zig oracle (NEW-FINDINGS N240).
+                    case_sensitive: false,
                     plain: true,
                 },
             );
@@ -2487,7 +2579,7 @@ mod picker_tests {
         let mut ranks = [None; 2];
         let f = rank_filtered(&names, b"   ", true, &pass, &mut ranks);
 
-        // explicit reference: zf::rank(name, &[], {to_lower, plain}) for each name.
+        // explicit reference: zf::rank(name, &[], {case_sensitive: false, plain}) for each name.
         let expect: Vec<usize> = names
             .iter()
             .enumerate()
@@ -2496,7 +2588,7 @@ mod picker_tests {
                     n,
                     &[],
                     RankOptions {
-                        to_lower: true,
+                        case_sensitive: false,
                         plain: true,
                     },
                 )
@@ -2635,6 +2727,43 @@ mod picker_tests {
         assert!(find_bytes(&out, b"Bogus"), "expected the theme name");
     }
 
+    // parity S69-F3: the error pane's third line is `allocPrint("{}", .{err})`,
+    // Zig's `error.<Name>` rendering of the `loadFile` error: `FileNotFound`
+    // for a missing theme, `FileIsEmpty` for an empty one (file_load.zig:173).
+    #[test]
+    #[cfg_attr(miri, ignore = "opens a file — Miri isolation")]
+    fn draw_error_pane_prints_the_zig_error_name() {
+        let dir = std::env::temp_dir().join(format!("rustty-t-c-themes-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let empty = dir.join("Empty");
+        std::fs::write(&empty, b"").unwrap();
+        let empty_path = empty.to_str().unwrap().as_bytes().to_vec();
+
+        for (path, want) in [
+            (
+                b"/nonexistent/path/to/theme.zzz".to_vec(),
+                &b"error.FileNotFound"[..],
+            ),
+            (empty_path, &b"error.FileIsEmpty"[..]),
+        ] {
+            let arena = Arena::init();
+            let themes = vec![te(b"T", &path)];
+            let mut vx = smoke_vx();
+            let mut st = smoke_state(&arena, &themes, Mode::Normal);
+            draw(&mut vx, &mut st);
+            let mut out: Vec<u8> = Vec::new();
+            vx.render(&mut out).unwrap();
+            // Positive reach: the error pane rendered.
+            assert!(find_bytes(&out, b"Unable to open"));
+            assert!(
+                find_bytes(&out, want),
+                "expected {:?}",
+                String::from_utf8_lossy(want)
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     // draw smoke: Help mode renders a key_help entry. (loads a config file for the
     // preview pane → Miri isolation; ignored under Miri.)
     #[test]
@@ -2666,6 +2795,76 @@ mod picker_tests {
         vx.render(&mut out).unwrap();
         // No theme found in the preview pane; the save pane rendered its instructions.
         assert!(find_bytes(&out, b"Rustty configuration"));
+    }
+
+    /// parity S69-F1: the search box is drawn by `TextInput.drawWithStyle`
+    /// (`list_themes.zig:835`): a query wider than the box scrolls, the first
+    /// column shows the ellipsis, the terminal cursor sits after the last
+    /// grapheme, and the widget's scroll state persists into the next frame.
+    #[test]
+    fn search_box_is_drawn_by_the_text_input_widget() {
+        let arena = Arena::init();
+        let themes: Vec<ThemeListElement> = Vec::new();
+        let mut vx = smoke_vx();
+        let mut st = smoke_state(&arena, &themes, Mode::Search);
+        st.filtered.clear();
+        st.text_input.insert_slice_at_cursor(&[b'a'; 100]);
+        draw(&mut vx, &mut st);
+
+        // The 120x40 window's search child: x_off 20, y_off 40 - 5, width
+        // 120 - 40, bordered, so its inner area starts at column 21, row 36
+        // and is 78 columns wide. 100 graphemes with the cursor at the end
+        // scroll by 100 - 78 + 1 = 23, leaving 77 visible before the cursor.
+        assert_eq!(23, st.text_input.draw_offset, "scroll state kept");
+        assert_eq!(77, st.text_input.prev_cursor_col);
+        assert_eq!(100, st.text_input.prev_cursor_idx);
+        let ellipsis = vx.screen.read_cell(21, 36).expect("cell");
+        assert_eq!("…".as_bytes(), ellipsis.char.grapheme);
+        let next = vx.screen.read_cell(22, 36).expect("cell");
+        assert_eq!(b"a", next.char.grapheme);
+        assert!(vx.screen.cursor_vis, "the cursor is shown");
+        assert_eq!((21 + 77, 36), (vx.screen.cursor.col, vx.screen.cursor.row));
+
+        // Second frame, after `Left`: the frame copy starts from the carried
+        // `draw_offset` (23). The cursor (grapheme 99) is still inside the
+        // view, so the view does not move and the cursor steps one column
+        // left. A copy that started from 0 would scroll afresh to
+        // 99 - 78 + 1 = 22, so the view would jump by one column.
+        st.text_input.cursor_left();
+        draw(&mut vx, &mut st);
+        assert_eq!(23, st.text_input.draw_offset, "the view did not jump");
+        assert_eq!(76, st.text_input.prev_cursor_col);
+        assert_eq!(99, st.text_input.prev_cursor_idx);
+        assert_eq!((21 + 76, 36), (vx.screen.cursor.col, vx.screen.cursor.row));
+    }
+
+    /// parity S69-F2: the last two save instructions are the reference's
+    /// (`list_themes.zig:877`, `:879`) with only the product identity renamed:
+    /// "visit the Ghostty documentation:" and the product website's
+    /// `/docs/config/reference`.
+    #[test]
+    fn save_pane_docs_lines_rename_only_the_product() {
+        let arena = Arena::init();
+        let themes: Vec<ThemeListElement> = Vec::new();
+        let mut vx = smoke_vx();
+        let mut st = smoke_state(&arena, &themes, Mode::Save);
+        st.filtered.clear();
+        draw(&mut vx, &mut st);
+        let mut out: Vec<u8> = Vec::new();
+        vx.render(&mut out).unwrap();
+        let line12 = format!(
+            "For more details on configuration and themes, visit the {} documentation:",
+            rustty_identity::APP_NAME_TITLECASE
+        );
+        let line14 = format!("{}/docs/config/reference", rustty_identity::WEBSITE);
+        assert!(
+            find_bytes(&out, line12.as_bytes()),
+            "line 12 is not {line12:?}"
+        );
+        assert!(
+            find_bytes(&out, line14.as_bytes()),
+            "line 14 is not {line14:?}"
+        );
     }
 
     fn find_bytes(haystack: &[u8], needle: &[u8]) -> bool {
@@ -2840,6 +3039,128 @@ mod picker_tests {
         println!("r13d: every key handled on an empty filter");
     }
 
+    /// UD266 (R13): the picker's Loop installs the SIGWINCH resize handler, so a window
+    /// resize reaches `update` as a `.winsize` event on a terminal without in-band resize
+    /// reports. The reference stopped installing it in the Zig 0.16 migration (the
+    /// `loop.init()` it called became libvaxis 0.6.0's constructor). Runs in a re-executed
+    /// copy of this test binary whose controlling terminal is a fresh pty: the child
+    /// builds the Loop with `with_preview_loop` (the function `run_preview` uses), resizes
+    /// its pty, raises SIGWINCH, and waits for the event.
+    #[cfg(unix)]
+    #[test]
+    fn the_preview_loop_delivers_a_resize() {
+        const CHILD: &str = "RUSTTY_S10B_LIST_THEMES_RESIZE_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            resize_child();
+            return;
+        }
+
+        let (mut master, mut slave) = (0, 0);
+        let rc = unsafe {
+            libc::openpty(
+                &mut master,
+                &mut slave,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        assert_eq!(0, rc, "openpty");
+
+        use std::os::fd::FromRawFd as _;
+        use std::os::unix::process::CommandExt as _;
+        let mut cmd = std::process::Command::new(std::env::current_exe().unwrap());
+        cmd.args([
+            "--exact",
+            "list_themes::picker_tests::the_preview_loop_delivers_a_resize",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(CHILD, "1")
+        .stdin(unsafe { std::process::Stdio::from_raw_fd(libc::dup(slave)) });
+        // SAFETY: `setsid` and `ioctl` are async-signal-safe; fd 0 is the slave.
+        unsafe {
+            cmd.pre_exec(|| {
+                libc::setsid();
+                if libc::ioctl(0, libc::TIOCSCTTY as _, 0) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let mut child = cmd
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("re-exec the test binary");
+        unsafe {
+            libc::close(slave);
+        }
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        let status = loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                break Some(status);
+            }
+            if std::time::Instant::now() >= deadline {
+                let _ = child.kill();
+                break None;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+        let out = child.wait_with_output().unwrap();
+        unsafe {
+            libc::close(master);
+        }
+        let log = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let status = status.unwrap_or_else(|| panic!("the child hung:\n{log}"));
+        assert!(status.success(), "the child failed ({status}):\n{log}");
+        assert!(
+            log.contains("ud266: the resize reached the picker's Loop as 33x77"),
+            "the child ran the body:\n{log}"
+        );
+    }
+
+    #[cfg(unix)]
+    fn resize_child() {
+        let mut tty = Tty::init(Vec::new()).expect("the pty is the controlling terminal");
+        let mut vx: Vaxis<'_> = Vaxis::init(VaxisOptions::default());
+        let tty_ptr: *mut Tty = &raw mut tty;
+        let vx_ptr: *mut Vaxis<'_> = &raw mut vx;
+
+        let got = with_preview_loop(tty_ptr, vx_ptr, |loop_| {
+            let ws = libc::winsize {
+                ws_row: 33,
+                ws_col: 77,
+                ws_xpixel: 0,
+                ws_ypixel: 0,
+            };
+            // SAFETY: fd 0 is the pty slave; `ws` is a valid `winsize`.
+            assert_eq!(0, unsafe { libc::ioctl(0, libc::TIOCSWINSZ, &ws) });
+            // SAFETY: signalling ourselves; the handler only writes its self-pipe (UD74).
+            unsafe { libc::kill(libc::getpid(), libc::SIGWINCH) };
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            loop {
+                if let Some(Event::Winsize(w)) = loop_.try_event() {
+                    return Ok(Some((w.rows, w.cols)));
+                }
+                if std::time::Instant::now() >= deadline {
+                    return Ok(None);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        })
+        .unwrap();
+        assert_eq!(Some((33, 77)), got, "no winsize event reached the Loop");
+        drop(vx);
+        tty.deinit();
+        println!("ud266: the resize reached the picker's Loop as 33x77");
+    }
+
     // Interactive Loop path — needs a real `/dev/tty` (absent in the sandbox).
     // `Tty = PosixTty` in cli's dep graph, so `Tty::init` opens `/dev/tty`.
     #[test]
@@ -2847,5 +3168,121 @@ mod picker_tests {
     fn preview_run_smoke() {
         let themes = vec![te(b"Bogus", b"/nonexistent/theme.zzz")];
         preview(&themes, ColorScheme::All).unwrap();
+    }
+}
+
+/// UD23 (R13, task T-C): with no resources directory and no themes, both of
+/// `run`'s stderr messages reach stderr and the exit code is 1. The reference
+/// never flushes its buffered stderr, so it exits 1 silently. The messages go
+/// to the process's real stderr, so the body runs in a re-executed copy of
+/// this test binary whose stderr is a pipe and whose XDG config directory is
+/// an empty temporary one (no user themes; a test process has no resources
+/// directory).
+#[cfg(all(test, unix))]
+mod r13_flush_tests {
+    use super::*;
+
+    const CHILD: &str = "RUSTTY_T_C_LIST_THEMES_CHILD";
+
+    #[test]
+    fn no_themes_messages_reach_stderr() {
+        if std::env::var_os(CHILD).is_some() {
+            let opts = Options {
+                plain: true,
+                ..Options::default()
+            };
+            let code = run_opts(opts).expect("run_opts");
+            assert_eq!(1, code, "no themes: exit code 1");
+            return;
+        }
+        let dir =
+            std::env::temp_dir().join(format!("rustty-t-c-list-themes-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "list_themes::r13_flush_tests::no_themes_messages_reach_stderr",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(CHILD, "1")
+            .env("XDG_CONFIG_HOME", &dir)
+            .env("HOME", &dir)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("re-exec the test binary");
+        let out = crate::test_util::wait_with_deadline(child, 60);
+        let _ = std::fs::remove_dir_all(&dir);
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(out.status.success(), "the child failed:\n{err}");
+        assert!(
+            err.contains(
+                "Could not find the Rustty resources directory. Please ensure \
+                 that Rustty is installed correctly.\n"
+            ),
+            "the resources-directory warning is missing from stderr:\n{err}"
+        );
+        assert!(
+            err.contains(
+                "No themes found, check to make sure that the themes were installed correctly."
+            ),
+            "the no-themes message is missing from stderr:\n{err}"
+        );
+    }
+
+    const OOM_CHILD: &str = "RUSTTY_S15_LIST_THEMES_OOM_CHILD";
+
+    /// NEW-FINDINGS N140 (a), task S-15: `while (try it.next())` passes on
+    /// `theme.Location.dir`'s `error.OutOfMemory` (its remapping of
+    /// `xdg.config`'s `error.BufferTooSmall`, a `$HOME` longer than the XDG
+    /// lookup's 1024-byte buffer) out of `run`. The port's iterator returned
+    /// `None` and `run` went on to report "No themes found". Re-executed so the
+    /// child's captured environment has only the long `HOME`.
+    #[test]
+    fn a_home_too_long_for_the_xdg_lookup_is_out_of_memory() {
+        if std::env::var_os(OOM_CHILD).is_some() {
+            let opts = Options {
+                plain: true,
+                ..Options::default()
+            };
+            let result = run_opts(opts);
+            assert!(
+                matches!(result, Err(Error::OutOfMemory)),
+                "expected error.OutOfMemory from the theme location lookup, got {result:?}"
+            );
+            println!("s15: list_themes returned error.OutOfMemory");
+            return;
+        }
+        let home = format!("/{}", "h".repeat(1100));
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "list_themes::r13_flush_tests::a_home_too_long_for_the_xdg_lookup_is_out_of_memory",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env_clear()
+            .env(OOM_CHILD, "1")
+            .env("HOME", &home)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("re-exec the test binary");
+        let out = crate::test_util::wait_with_deadline(child, 60);
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            out.status.success(),
+            "the child failed:\n{stdout}\n{stderr}"
+        );
+        assert!(
+            stdout.contains("s15: list_themes returned error.OutOfMemory"),
+            "the child did not reach its assertion:\n{stdout}\n{stderr}"
+        );
+        assert!(
+            !stderr.contains("No themes found"),
+            "run went on past the failed lookup:\n{stderr}"
+        );
     }
 }

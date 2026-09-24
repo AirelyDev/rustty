@@ -5,7 +5,7 @@
 //! `Display` GDK owns, plus the interned [`Atoms`]) and [`Window`] (per-surface:
 //! the `X11Surface` XID plus the CSD/blur property machinery).
 //!
-//! Gated `#[cfg(feature = "x11")]` at the [`super`] module; pulls the `gdk4-x11`
+//! Gated `#[cfg(rustty_gtk_x11)]` at the [`super`] module; pulls the `gdk4-x11`
 //! crate (Cargo `x11` feature). `gdk4-x11` re-exports the `x11-dl` crate as
 //! [`gdk4_x11::x11`]; its `xlib` module gives us the `Display`/`Atom`/`Window`
 //! types (so they MATCH what GDK hands back) plus the `Xlib` dynamically-loaded

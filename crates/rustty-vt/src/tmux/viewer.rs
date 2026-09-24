@@ -50,12 +50,12 @@ use std::collections::VecDeque;
 
 use rustty_util::quirks::inlineAssert as assert;
 
+use crate::alloc::Allocator;
 use crate::cursor::Style as CursorStyle;
 use crate::screen::Screen;
 use crate::screen_set;
 use crate::size;
 use crate::terminal::{self, Terminal};
-use allocator_api2::alloc::Global as Allocator;
 use rustty_zigstd::array_hash_map::AutoArrayHashMapUnmanaged;
 
 use super::control;
@@ -1515,6 +1515,32 @@ impl Viewer {
                     continue;
                 }
             };
+
+            // PORT NOTE: reference defect (R13, UPSTREAM-DEFECTS.md UD9). The
+            // reference means a pane's captures to be written into the pane in
+            // its initial state and its state applied afterwards: `syncLayouts`
+            // queues each new pane's four captures and then a `pane_state` ("If
+            // we added any panes, then we also want to resync the pane state"),
+            // the state diagram at the top of the file runs the captures before
+            // `pane_state`, and `receivedPaneHistory` expects its `index()` loop
+            // to leave the active area empty. But a `list-panes` reply covers
+            // every pane, and one queued for an earlier pane arrives before the
+            // captures of a pane added after it (a split while attaching). The
+            // reference applies it to that pane too, so the pane's scroll region
+            // and cursor are set before its history and visible contents are
+            // written: with the cursor below the region, `index()` never
+            // scrolls, each history line overwrites the last on the cursor row
+            // and nothing reaches the scrollback, and the visible contents
+            // scroll inside the region. The port leaves such a pane alone until
+            // its own `list-panes` reply, which is always queued after its
+            // captures, so nothing it carries is lost. Test:
+            // `pane_state_for_a_pane_with_captures_queued_waits_for_its_own_reply`.
+            let id = data.pane_id;
+            if self.command_queue.iter().any(|c| {
+                matches!(c, Command::PaneHistory(cap) | Command::PaneVisible(cap) if cap.id == id)
+            }) {
+                continue;
+            }
             let t: *mut Terminal = &mut pane.terminal;
 
             // Determine which screen to use based on alternate_on
@@ -1696,10 +1722,14 @@ impl Viewer {
                 // while (tabs_it.next()) |tab_str| {
                 for tab_str in data.pane_tabs.split(',') {
                     // const col = std.fmt.parseInt(usize, tab_str, 10) catch continue;
-                    let col: usize = match tab_str.parse::<usize>() {
-                        Ok(v) => v,
-                        Err(_) => continue,
-                    };
+                    // CORRECTION (parity N100): this was
+                    // `tab_str.parse::<usize>()`, which rejects the `_` digit
+                    // separators and `-0` that `std.fmt.parseInt` accepts.
+                    let col: usize =
+                        match rustty_zigstd::fmt::parse_int::<usize>(tab_str.as_bytes(), 10) {
+                            Ok(v) => v,
+                            Err(_) => continue,
+                        };
                     // const col_cell = std.math.cast(size.CellCountInt, col) orelse continue;
                     let col_cell = match cast_cell(col) {
                         Some(v) => v,
@@ -1757,9 +1787,14 @@ impl Viewer {
         // var stream = t.vtStream();
         // defer stream.deinit();
         // stream.nextSlice(content);
+        //
+        // PORT NOTE: reference defect (R13, UPSTREAM-DEFECTS.md UD12): the
+        // capture is requested with `-C`, so it is decoded back to the bytes
+        // `-e` alone produces before it is written (see `unescape_capture`).
         {
+            let content = unescape_capture(content);
             let mut stream = t.vt_stream();
-            stream.next_slice(content);
+            stream.next_slice(&content);
             stream.deinit();
         }
 
@@ -1798,8 +1833,11 @@ impl Viewer {
         // scrollback the capture was meant to fill is garbled or lost. The
         // pane's `capture-pane` visible reply then erases the active area
         // (`eraseDisplay(.complete)`). The port does what ReleaseFast does: no
-        // check. Test:
-        // `pane_history_below_the_scroll_region_does_not_trip_the_empty_active_area_check`.
+        // check. It also removes the cause: `received_pane_state` leaves a pane
+        // whose captures are still queued to its own later reply (see the UD9
+        // PORT NOTE there), so the history is written with the pane's initial
+        // scroll region and the active area is empty here. Test:
+        // `pane_state_for_a_pane_with_captures_queued_waits_for_its_own_reply`.
         Ok(())
     }
 
@@ -1845,8 +1883,12 @@ impl Viewer {
         // var stream = t.vtStream();
         // defer stream.deinit();
         // stream.nextSlice(content);
+        //
+        // PORT NOTE: reference defect (R13, UPSTREAM-DEFECTS.md UD12): decoded
+        // as in `received_pane_history` (see `unescape_capture`).
+        let content = unescape_capture(content);
         let mut stream = t.vt_stream();
-        stream.next_slice(content);
+        stream.next_slice(&content);
         stream.deinit();
         Ok(())
     }
@@ -2156,13 +2198,15 @@ impl Command {
                 writer,
                 // -p = output to stdout instead of buffer
                 // -e = output escape sequences for SGR
+                // -C = escape those sequences' ESC as octal \033 (the
+                //   R13 UD12 PORT NOTE on `unescape_capture`)
                 // -a = capture alternate screen (only valid for alternate)
                 // -q = quiet, don't error if alternate screen doesn't exist
                 // -S - = start at the top of history ("-")
                 // -E -1 = end at the last line of history (1 before the
                 //   visible area is -1).
                 // -t %{d} = target a specific pane ID
-                "capture-pane -p -e -q {}-S - -E -1 -t %{}\n",
+                "capture-pane -p -e -C -q {}-S - -E -1 -t %{}\n",
                 if cap.screen_key == screen_set::Key::Alternate {
                     "-a "
                 } else {
@@ -2179,11 +2223,13 @@ impl Command {
                 writer,
                 // -p = output to stdout instead of buffer
                 // -e = output escape sequences for SGR
+                // -C = escape those sequences' ESC as octal \033 (the
+                //   R13 UD12 PORT NOTE on `unescape_capture`)
                 // -a = capture alternate screen (only valid for alternate)
                 // -q = quiet, don't error if alternate screen doesn't exist
                 // -t %{d} = target a specific pane ID
                 // (no -S/-E = capture visible area only)
-                "capture-pane -p -e -q {}-t %{}\n",
+                "capture-pane -p -e -C -q {}-t %{}\n",
                 if cap.screen_key == screen_set::Key::Alternate {
                     "-a "
                 } else {
@@ -2361,6 +2407,66 @@ fn terminal_opts(cols: size::CellCountInt, rows: size::CellCountInt) -> terminal
     }
 }
 
+/// Decode a `capture-pane -e -C` reply to the bytes `capture-pane -e` writes.
+///
+/// No reference counterpart. PORT NOTE: reference defect (R13,
+/// UPSTREAM-DEFECTS.md UD12). The reference asks for pane contents with
+/// `capture-pane -p -e` so that the SGR sequences reach the pane's VT stream
+/// ("-e = output escape sequences for SGR", and `receivedPaneHistory` sends the
+/// reply "as-is" into that stream). tmux writes the reply into the
+/// `%begin`/`%end` block unescaped (`cmd-capture-pane.c`
+/// `cmd_capture_pane_exec`: `control_write(c, "%.*s", ...)`), while the control
+/// stream itself arrives inside the `ESC P 1000 p` DCS. The first ESC of the
+/// first coloured cell therefore leaves `dcs_passthrough` (the parse table's
+/// "anywhere" ESC transition), which unhooks the DCS: the control parser emits
+/// `.exit`, the viewer is freed, and the rest of the block and all later
+/// control-mode lines are printed into the terminal as ordinary output. Any
+/// `tmux -CC attach` to a pane with colour in its history or screen does this.
+///
+/// The port asks for `-C` as well, which tmux (since 1.8, the release that
+/// added control mode) documents as escaping non-printable characters as
+/// octal `\xxx`: `grid.c` writes every ESC of an SGR or OSC 8 sequence as the
+/// four characters `\033`, SO and SI as `\016` and `\017`, and a one-byte `\`
+/// cell as `\\`. The reply then has no ESC, the DCS stays hooked, and this
+/// function decodes it: `\` then three octal digits (at most `\377`) is that
+/// byte, `\\` is one `\`, and any other `\` is kept as it is (tmux writes a
+/// `\` that is part of a longer grapheme cluster unescaped, and the next byte
+/// is always 0x80 or above). For the grid text that gives exactly the `-e`
+/// bytes. A hyperlink's URI and id differ: tmux stores them already
+/// vis-encoded (`hyperlinks.c` `utf8_stravis(..., VIS_OCTAL|VIS_CSTYLE)`,
+/// tmux 3.4 onward), so a `\` in them is `\\` and a non-printable byte `\ooo`
+/// with or without `-C`. This function turns that back into the bytes the
+/// application sent, where `-e` alone would have given the pane the vis form
+/// (read from tmux's source, not run). A redesign that reads control mode outside the VT parser (the
+/// upstream proposal in UD12) was not needed: the change stays in the viewer,
+/// and an ESC still ends the DCS, so a tmux that dies mid-reply cannot leave
+/// the terminal swallowing its output.
+fn unescape_capture(content: &[u8]) -> Vec<u8> {
+    let octal = |b: u8| (b'0'..=b'7').contains(&b);
+    let mut out = Vec::with_capacity(content.len());
+    let mut i = 0;
+    while i < content.len() {
+        let b = content[i];
+        if b == b'\\' {
+            if content.get(i + 1) == Some(&b'\\') {
+                out.push(b'\\');
+                i += 2;
+                continue;
+            }
+            if let [d0, d1, d2, ..] = content[i + 1..] {
+                if octal(d0) && octal(d1) && octal(d2) && d0 <= b'3' {
+                    out.push(((d0 - b'0') << 6) | ((d1 - b'0') << 3) | (d2 - b'0'));
+                    i += 4;
+                    continue;
+                }
+            }
+        }
+        out.push(b);
+        i += 1;
+    }
+    out
+}
+
 /// `std.mem.trim(u8, bytes, cutset)`.
 fn trim<'a>(bytes: &'a [u8], cutset: &[u8]) -> &'a [u8] {
     let mut start = 0;
@@ -2494,8 +2600,8 @@ use crate::pagelist::OutOfMemory;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::alloc::Global;
     use crate::tmux::control;
-    use allocator_api2::alloc::Global;
 
     /// PORT NOTE: NOT a reference test (the reference's `Action.format` is
     /// covered only by `testViewer`'s failure log, which the port drops). It
@@ -3737,23 +3843,27 @@ mod tests {
         (created, messages)
     }
 
-    /// R13 (UPSTREAM-DEFECTS UD9). After writing a pane's history the reference
-    /// fills the active area with `rows` `index()` calls, then asserts under
-    /// `runtime_safety` that the active area is empty (`viewer.zig:1070-1077`).
-    /// `index()` below the scroll region only moves the cursor down, so a pane
-    /// whose scroll region and cursor were set before its history arrives keeps
-    /// its text in the active area and the assert fires. History bytes cannot
-    /// carry ESC (it would end the DCS), but `list-panes` sets both: when a
-    /// second pane appears while the first pane's captures are still queued,
-    /// the first pane's `list-panes` reply lands before the second pane's
-    /// history. A real vim in that pane (scroll region above its command line,
-    /// cursor on the last row) is enough. The port does not check. The test
-    /// proves it reached the site by finding the history text still in the
-    /// active area, which is exactly the condition the reference asserts
-    /// against.
+    /// R13 (UPSTREAM-DEFECTS UD9), fixed. The reference queues a new pane's
+    /// four captures and then a `list-panes` (`pane_state`), so the captures
+    /// are written into a pane still in its initial state and the state is
+    /// applied after them (`syncLayouts`: "If we added any panes, then we also
+    /// want to resync the pane state"; the state diagram at the top of
+    /// `viewer.zig`). When a second pane appears while the first pane's
+    /// captures are still queued, the first pane's `list-panes` reply arrives
+    /// before the second pane's captures and covers both panes, so the
+    /// reference applies pane 8's scroll region (0-10) and cursor (row 23)
+    /// first. Its history is then written below the region, where `index()`
+    /// never scrolls: each line overwrites the last on row 23 and nothing
+    /// reaches the scrollback; its visible capture scrolls inside rows 0-10.
+    /// The port leaves a pane with captures still queued to its own
+    /// `list-panes` reply. The test asserts the history lands in the
+    /// scrollback in order with the active area empty (the condition the
+    /// reference asserts), the visible capture lands on rows 0-11 intact, the
+    /// early reply still applies to pane 7, and pane 8's own reply applies its
+    /// state afterwards.
     #[cfg(feature = "oniguruma")]
     #[test]
-    fn pane_history_below_the_scroll_region_does_not_trip_the_empty_active_area_check() {
+    fn pane_state_for_a_pane_with_captures_queued_waits_for_its_own_reply() {
         use crate::tmux::test_host;
         let mut s = test_host::stream();
         test_host::attach(&mut s);
@@ -3770,16 +3880,33 @@ mod tests {
         s.next_slice(&change);
         assert!(s.handler.viewer().panes.contains(&8));
 
+        // The region, and the primary screen's cursor row (the replies say
+        // `alternate_on` 0; the pane's active screen is the alternate one once
+        // its alternate captures ran, as in the reference).
+        let geometry = |s: &mut test_host::HostStream, id: usize| {
+            let t = &s.handler.viewer().panes.get_ptr(&id).unwrap().terminal;
+            let primary = t.screens.get(screen_set::Key::Primary).unwrap();
+            (
+                t.scrolling_region.top,
+                t.scrolling_region.bottom,
+                unsafe { &*primary }.cursor.y,
+            )
+        };
+        let state: &[u8] = b"%7;0;5;1;;;;0;4294967295;4294967295;0;1;0;0;0;0;0;0;0;0;0;;;2;20;8\n\
+              %8;0;23;1;;;;0;4294967295;4294967295;0;1;0;0;0;0;0;0;0;0;0;;;0;10;8";
+
         // Pane 7's four captures, then the list-panes reply, which also carries
-        // pane 8: cursor on row 23, scroll region rows 0-10.
+        // pane 8: pane 7 cursor row 5 and region 2-20, pane 8 cursor row 23 and
+        // region 0-10.
         for n in 4..8 {
             s.next_slice(&test_host::block(n, b""));
         }
-        s.next_slice(&test_host::block(
-            8,
-            b"%7;0;0;1;;;;0;4294967295;4294967295;0;1;0;0;0;0;0;0;0;0;0;;;0;23;8\n\
-              %8;0;23;1;;;;0;4294967295;4294967295;0;1;0;0;0;0;0;0;0;0;0;;;0;10;8",
-        ));
+        s.next_slice(&test_host::block(8, state));
+        assert_eq!(
+            (2, 20, 5),
+            geometry(&mut s, 7),
+            "the early reply still applies to pane 7, whose captures are done"
+        );
         assert!(
             s.handler
                 .commands
@@ -3788,16 +3915,224 @@ mod tests {
             "the viewer must be asking for pane 8's primary history"
         );
 
-        // Pane 8's history.
-        s.next_slice(&test_host::block(9, b"history text"));
+        // Pane 8's history: three lines, all of which reach the scrollback in
+        // order, leaving the active area empty.
+        s.next_slice(&test_host::block(9, b"h1\nh2\nh3"));
         assert_eq!(State::CommandQueue, s.handler.viewer().state);
         assert_eq!(0, s.handler.viewer_exits);
-        let active = pane_dump(s.handler.viewer(), 8, crate::point::Tag::Active);
+        assert_eq!(
+            vec!["h1", "h2", "h3"],
+            trimmed_lines(&pane_dump(s.handler.viewer(), 8, crate::point::Tag::Screen)),
+            "the history reached the scrollback in order"
+        );
+        assert_eq!(
+            "",
+            pane_dump(s.handler.viewer(), 8, crate::point::Tag::Active),
+            "the active area is empty after the history, as the reference asserts"
+        );
+
+        // The visible capture: twelve lines, more than the 0-10 region holds.
+        let visible: Vec<String> = (0..12).map(|i| format!("v{i}")).collect();
+        s.next_slice(&test_host::block(10, visible.join("\n").as_bytes()));
+        assert_eq!(
+            visible,
+            trimmed_lines(&pane_dump(s.handler.viewer(), 8, crate::point::Tag::Active)),
+            "the visible capture is on rows 0-11, unscrolled"
+        );
+
+        // The alternate screen's captures, then pane 8's own list-panes reply.
+        s.next_slice(&test_host::block(11, b""));
+        s.next_slice(&test_host::block(12, b""));
+        s.next_slice(&test_host::block(13, state));
+        assert!(s.handler.viewer().command_queue.is_empty());
+        assert_eq!(
+            (0, 10, 23),
+            geometry(&mut s, 8),
+            "pane 8's own reply applies its state after its captures"
+        );
+        assert_eq!(0, s.handler.viewer_exits);
+        s.deinit();
+    }
+
+    /// A dump's lines with their leading blanks removed (blank lines kept).
+    /// A capture's lines are joined by a bare `\n`, which does not return the
+    /// carriage, so as in the reference each line starts where the one before
+    /// it ended (UPSTREAM-DEFECTS.md UD272, not changed here); the tests that
+    /// use this check which lines landed where, not that indentation.
+    #[cfg(feature = "oniguruma")]
+    fn trimmed_lines(dump: &str) -> Vec<&str> {
+        dump.split('\n').map(str::trim_start).collect()
+    }
+
+    /// `pane_dump`, of pane `id`'s primary screen whichever screen is active.
+    #[cfg(feature = "oniguruma")]
+    fn primary_dump(v: &mut Viewer, id: usize, tag: crate::point::Tag) -> String {
+        let pane: &mut Pane = v.panes.get_ptr(&id).unwrap();
+        let screen = pane.terminal.screens.get(screen_set::Key::Primary).unwrap();
+        let bytes = unsafe { &*screen }
+            .dump_string_alloc(Global, point_for_tag(tag))
+            .unwrap();
+        String::from_utf8(bytes).unwrap()
+    }
+
+    /// Pane `id`'s primary screen as the formatter writes it with `opts` (VT
+    /// for the styles, HTML for the cells' hyperlinks).
+    #[cfg(feature = "oniguruma")]
+    fn pane_formatted(v: &mut Viewer, id: usize, opts: crate::formatter::Options) -> String {
+        let pane: &mut Pane = v.panes.get_ptr(&id).unwrap();
+        let mut out: Vec<u8> = Vec::new();
+        crate::formatter::ScreenFormatter::init(
+            pane.terminal.screens.get(screen_set::Key::Primary).unwrap(),
+            opts,
+        )
+        .format(&mut out)
+        .unwrap();
+        String::from_utf8(out).unwrap()
+    }
+
+    /// What the VT formatter writes for the cells `raw` produces in a fresh
+    /// 80x24 terminal, up to and including `through` (so the styles in effect
+    /// for those cells, and nothing after them).
+    #[cfg(feature = "oniguruma")]
+    fn fresh_vt_through(raw: &[u8], through: &str) -> String {
+        let mut t = Terminal::init(Global, terminal_opts(80, 24)).unwrap();
+        {
+            let mut stream = t.vt_stream();
+            stream.next_slice(raw);
+            stream.deinit();
+        }
+        let mut out: Vec<u8> = Vec::new();
+        crate::formatter::ScreenFormatter::init(t.screens.active, crate::formatter::Options::vt())
+            .format(&mut out)
+            .unwrap();
+        t.deinit(Global);
+        let out = String::from_utf8(out).unwrap();
+        let end = out
+            .find(through)
+            .expect("the text is in the fresh terminal")
+            + through.len();
+        out[..end].to_string()
+    }
+
+    /// R13 (UPSTREAM-DEFECTS UD12), fixed. The reference captures pane
+    /// contents with `capture-pane -p -e`, and tmux writes that reply into the
+    /// `%begin`/`%end` block raw, so the first SGR's ESC leaves
+    /// `dcs_passthrough`, unhooks the DCS and ends the session. The port adds
+    /// `-C`, which makes tmux write each ESC (and SO, SI) as octal `\033` and a
+    /// `\` cell as `\\`, and decodes that before writing the capture into the
+    /// pane, so the pane gets the bytes `-e` alone would have produced. The
+    /// replies here are built by `test_host::capture_reply` from the command
+    /// the viewer actually sent, the way tmux builds them (raw without `-C`).
+    /// Colours, a hyperlink (whose ST is `ESC \`), and backslashes, including
+    /// one followed by `033`, all round-trip, and the session survives to
+    /// deliver later `%output`.
+    #[cfg(feature = "oniguruma")]
+    #[test]
+    fn coloured_pane_captures_keep_the_control_session_and_reach_the_pane() {
+        use crate::tmux::test_host;
+        let mut s = test_host::stream();
+        test_host::attach(&mut s);
+        let line = test_host::list_windows_line(0, 80, 24, b"80x24,0,0,7");
+        s.next_slice(&test_host::block(3, &line));
+
+        let history: &[u8] = b"\x1b[1m\x1b[31mred\x1b[0m plain\nback\\slash \\033 literal";
+        let visible: &[u8] =
+            b"\x1b[32mgreen\x1b[39m \x1b]8;;https://example.com/\x1b\\link\x1b]8;;\x1b\\ end";
+        let replies: [&[u8]; 4] = [history, visible, b"", b""];
+        for (i, raw) in replies.into_iter().enumerate() {
+            let cmd = s.handler.commands.last().unwrap().clone();
+            assert!(
+                cmd.starts_with(b"capture-pane") && cmd.ends_with(b"%7\n"),
+                "capture {i}: {:?}",
+                String::from_utf8_lossy(&cmd)
+            );
+            let reply = test_host::capture_reply(&cmd, raw);
+            s.next_slice(&test_host::block(4 + i, &reply));
+            assert!(
+                s.handler.viewer.is_some() && !s.handler.notifications.contains(&"exit"),
+                "the control session ended at capture {i} ({:?}); notifications {:?}",
+                String::from_utf8_lossy(&cmd),
+                s.handler.notifications
+            );
+        }
+        s.next_slice(&test_host::block(
+            8,
+            b"%7;0;0;1;;;;0;4294967295;4294967295;0;1;0;0;0;0;0;0;0;0;0;;;0;23;8",
+        ));
+        assert!(s.handler.viewer().command_queue.is_empty());
+        s.next_slice(b"%output %7 after\n");
+        assert_eq!(State::CommandQueue, s.handler.viewer().state);
+        assert_eq!(0, s.handler.viewer_exits);
+        assert_eq!(Some(&"output"), s.handler.notifications.last());
+
+        // The text on the primary screen: the history in the scrollback,
+        // backslashes intact, and the visible capture in the active area. The
+        // later output reached the pane's active screen (the alternate one,
+        // where the reference leaves a pane after its alternate captures:
+        // UPSTREAM-DEFECTS.md UD271, not changed here).
+        let all = primary_dump(s.handler.viewer(), 7, crate::point::Tag::Screen);
+        assert_eq!(
+            vec!["red plain", "back\\slash \\033 literal", "green link end"],
+            trimmed_lines(&all)
+        );
+        let active = pane_dump(s.handler.viewer(), 7, crate::point::Tag::Active);
+        assert_eq!("after", active);
+
+        // The styles: the cells carry what the raw `-e` bytes give them.
+        let vt = pane_formatted(s.handler.viewer(), 7, crate::formatter::Options::vt());
+        for (raw, through) in [
+            (&b"\x1b[1m\x1b[31mred"[..], "red"),
+            (&b"\x1b[32mgreen"[..], "green"),
+        ] {
+            let want = fresh_vt_through(raw, through);
+            assert!(vt.contains(&want), "{want:?} not in {vt:?}");
+        }
+        let html = pane_formatted(s.handler.viewer(), 7, crate::formatter::Options::html());
         assert!(
-            active.contains("history text"),
-            "the active area is not empty after the index loop, got {active:?}"
+            html.contains("<a href=\"https://example.com/\">link</a>"),
+            "the hyperlink: {html:?}"
         );
         s.deinit();
+    }
+
+    /// R13 (UD12): `unescape_capture` inverts tmux's `capture-pane -C`
+    /// escaping (`grid.c`: `\033`, `\016`, `\017`, and `\\` for a `\` cell).
+    #[test]
+    fn unescape_capture_inverts_tmux_capture_escaping() {
+        let cases: &[(&[u8], &[u8])] = &[
+            (b"", b""),
+            (b"plain text", b"plain text"),
+            (b"\\033[1;31mred\\033[0m", b"\x1b[1;31mred\x1b[0m"),
+            (b"\\016q\\017", b"\x0eq\x0f"),
+            (
+                b"\\033]8;id=1;https://x/\\033\\\\link\\033]8;;\\033\\\\",
+                b"\x1b]8;id=1;https://x/\x1b\\link\x1b]8;;\x1b\\",
+            ),
+            // A `\` cell, including one followed by digit cells.
+            (b"a\\\\b", b"a\\b"),
+            (b"\\\\033", b"\\033"),
+            (b"\\\\\\033[m", b"\\\x1b[m"),
+            (b"\\\\\\\\", b"\\\\"),
+            // What tmux never writes is kept as it is: a lone or trailing
+            // `\`, fewer than three octal digits, a non-octal digit, a value
+            // above `\377`, and a `\` inside a grapheme cluster.
+            (b"\\", b"\\"),
+            (b"x\\", b"x\\"),
+            (b"\\03", b"\\03"),
+            (b"\\08x", b"\\08x"),
+            (b"\\400", b"\\400"),
+            (b"\\377", b"\xff"),
+            ("\\\u{301}".as_bytes(), "\\\u{301}".as_bytes()),
+            (b"tab\there\nnext", b"tab\there\nnext"),
+        ];
+        for (input, want) in cases {
+            assert_eq!(
+                *want,
+                unescape_capture(input).as_slice(),
+                "{:?}",
+                String::from_utf8_lossy(input)
+            );
+        }
     }
 
     /// R13 (M111). Pane 7 (80x24) gets one `list-panes` reply per entry of
@@ -3879,6 +4214,34 @@ mod tests {
         let active = pane_dump(s.handler.viewer(), 7, crate::point::Tag::Active);
         s.deinit();
         (region.0, region.1, active.contains("xxxxxxxxxx"))
+    }
+
+    /// Parity N100 (no reference test): each `pane_tabs` entry is parsed with
+    /// `std.fmt.parseInt(usize, tab_str, 10) catch continue`, which accepts `_`
+    /// digit separators and skips an entry with a trailing `_`.
+    #[cfg(feature = "oniguruma")]
+    #[test]
+    fn pane_state_tab_stops_use_zig_parse_int() {
+        use crate::tmux::test_host;
+        let mut s = test_host::stream();
+        test_host::attach(&mut s);
+        let line = test_host::list_windows_line(0, 80, 24, b"80x24,0,0,7");
+        s.next_slice(&test_host::block(3, &line));
+        for n in 4..8 {
+            s.next_slice(&test_host::block(n, b""));
+        }
+        s.next_slice(&test_host::block(
+            8,
+            b"%7;0;0;1;;;;0;4294967295;4294967295;0;1;0;0;0;0;0;0;0;0;0;;;0;23;1_0,2_0,3_,4",
+        ));
+        let pane = s.handler.viewer().panes.get_ptr(&7).unwrap();
+        let tabs = &pane.terminal.tabstops;
+        assert!(tabs.get(4), "the list-panes reply was applied");
+        assert!(tabs.get(10));
+        assert!(tabs.get(20));
+        assert!(!tabs.get(30));
+        assert!(!tabs.get(8));
+        s.deinit();
     }
 
     #[cfg(feature = "oniguruma")]

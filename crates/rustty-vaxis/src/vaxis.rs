@@ -1,4 +1,4 @@
-//! Port of `libvaxis` `Vaxis.zig` (1411 LOC, 0 `test{}`) — the main `Vaxis` object plus
+//! Port of `libvaxis` `Vaxis.zig` (libvaxis 0.6.0: 1525 LOC, 1 `test{}`) — the main `Vaxis` object plus
 //! the render diff-and-emit engine (VAXIS_C4A_DESIGN.md). This module REPLACES the
 //! Chunk-3b INHABITED `Vaxis` placeholder with the REAL `Vaxis<'a>`, preserving the
 //! field/method surface `loop_.rs` names (`caps`/`state`/`screen`/`query_futex`/
@@ -36,7 +36,7 @@ use crate::image::{Image, Placement, Source, TransmitFormat, TransmitMedium};
 use crate::internal_screen::InternalScreen;
 use crate::key::KittyFlags;
 use crate::mouse::{Mouse, Shape};
-use crate::screen::Screen;
+use crate::screen::{Cursor, CursorSlice, Screen};
 use crate::window::Window;
 use crate::Winsize;
 // `Cell`/`Character` are used by the render engine via `screen.buf` and by the tests.
@@ -95,15 +95,11 @@ pub enum Sgr {
     Legacy,
 }
 
-/// The nested cursor position (Zig anonymous `cursor: struct { row, col }`).
-#[derive(Clone, Copy, Debug, Default)]
-pub struct CursorPos {
-    pub row: u16,
-    pub col: u16,
-}
-
 /// Zig's anonymous `state: struct {...}`.
-#[derive(Clone, Copy, Debug, Default)]
+///
+/// PORT NOTE: no longer `Copy` (libvaxis 0.6.0 adds the two `[]Cursor` slices, held here
+/// as [`CursorSlice`]s).
+#[derive(Clone, Debug, Default)]
 pub struct State {
     /// if we are in the alt screen
     pub alt_screen: bool,
@@ -117,7 +113,17 @@ pub struct State {
     pub changed_default_fg: bool,
     pub changed_default_bg: bool,
     pub changed_cursor_color: bool,
-    pub cursor: CursorPos,
+    pub cursor: Cursor,
+    pub cursor_secondary: CursorSlice,
+    pub prev_cursor_secondary: CursorSlice,
+}
+
+/// `render`'s `started` / `sync_active` locals, which its `startRender` function sets
+/// through pointers and its `errdefer` reads.
+#[derive(Default)]
+struct RenderStarted {
+    started: bool,
+    sync_active: bool,
 }
 
 pub struct Vaxis<'a> {
@@ -372,9 +378,16 @@ impl<'a> Vaxis<'a> {
     ///
     /// This call will block until Vaxis.query_futex is woken up, or the timeout.
     /// Event loops can wake up this futex when cap_da1 is received
-    pub fn query_terminal<W: Write>(&mut self, tty: &mut W, timeout_ns: u64) -> io::Result<()> {
+    pub fn query_terminal<W: Write>(
+        &mut self,
+        tty: &mut W,
+        timeout: std::time::Duration,
+    ) -> io::Result<()> {
         self.query_terminal_send(tty)?;
-        // 1 second timeout
+        // libvaxis 0.6.0: `timeout: std.Io.Duration` and
+        // `std.Io.futexWaitTimeout(self.io, .., &self.query_futex, .init(0), .{ .duration =
+        // .{ .clock = .real, .raw = timeout } })` (0.5.1: `timeout_ns: u64` and
+        // `std.Thread.Futex.timedWait(.., timeout_ns) catch {}`).
         //
         // PORT NOTE (§8.1): Rust std has no stable `std.Thread.Futex` API. `Futex.timedWait`
         // blocks until the word changes from `expect` (0) or the timeout elapses; the DA1
@@ -382,8 +395,9 @@ impl<'a> Vaxis<'a> {
         // atomic (`query_futex`): `wake_query_futex` stores a non-zero value so the loop
         // observes the change. This is a divergence in *mechanism* (poll-with-deadline vs
         // kernel futex) but identical in observable behavior (block until DA1 or timeout).
-        // The `Futex.timedWait` error is swallowed (`catch {}` — timeout is normal).
-        let deadline = std::time::Instant::now() + std::time::Duration::from_nanos(timeout_ns);
+        // A timeout is a normal return in both revisions; 0.6.0's only error is
+        // `error.Canceled` (an `std.Io` cancelation), which a Rust thread cannot receive.
+        let deadline = std::time::Instant::now() + timeout;
         while self.query_futex.load(Ordering::Relaxed) == 0 && std::time::Instant::now() < deadline
         {
             std::thread::yield_now();
@@ -457,8 +471,13 @@ impl<'a> Vaxis<'a> {
     /// is only for use with a custom main loop. Call Vaxis.queryTerminal() if
     /// you are using Loop.run()
     pub fn enable_detected_features<W: Write>(&mut self, tty: &mut W) -> io::Result<()> {
-        // PORT NOTE: `builtin.os.tag` switch → `#[cfg(windows)]`/`#[cfg(not(windows))]`;
-        // `std.posix.getenv` → `std::env::var_os`.
+        // PORT NOTE: `builtin.os.tag` switch → `#[cfg(windows)]`/`#[cfg(not(windows))]`.
+        // libvaxis 0.6.0 reads `self.env_map.get(..)`, the environment map its caller passes
+        // to `init` (ghostty passes `global.environMap()`, a copy of the process
+        // environment taken at CLI start); 0.5.1 read `std.posix.getenv`. The port reads the
+        // process environment with `std::env::var_os`, which gives the same values: nothing
+        // in the CLI changes the environment between the two reads. `env_map` (and `io`) are
+        // therefore not `Vaxis` fields here.
         #[cfg(windows)]
         {
             // No feature detection on windows. We just hard enable some knowns for ConPTY
@@ -524,35 +543,97 @@ impl<'a> Vaxis<'a> {
         assert!(self.screen.buf.len() == self.screen.width as usize * self.screen.height as usize); // correct size
         assert!(self.screen.buf.len() == self.screen_last.buf.len()); // same size
 
-        // Set up sync before we write anything
-        // TODO: optimize sync so we only sync _when we have changes_. This
-        // requires a smarter buffered writer, we'll probably have to write
-        // our own
-        tty.write_all(ctlseqs::sync_set)?;
-        // errdefer tty.writeAll(ctlseqs.sync_reset) catch {} — fires ONLY on an error return
-        // between here and the normal §779 `sync_reset` (which lives inside `render_diff`).
-        let res = self.render_diff(tty);
-        if res.is_err() {
+        // var started: bool = false;
+        // var sync_active: bool = false;
+        let mut started = RenderStarted::default();
+        // errdefer if (sync_active) tty.writeAll(ctlseqs.sync_reset) catch {};
+        let res = self.render_diff(tty, &mut started);
+        if res.is_err() && started.sync_active {
             let _ = tty.write_all(ctlseqs::sync_reset);
         }
         res
     }
 
-    fn render_diff<W: Write>(&mut self, tty: &mut W) -> io::Result<()> {
+    /// The `startRender` local function of `render` (libvaxis 0.6.0): the frame prologue,
+    /// written only once something is going to be drawn. `cursor_pos` / `reposition` are
+    /// `render`'s locals, reset here as the Zig function does through its pointers.
+    fn start_render<W: Write>(
+        &self,
+        io: &mut W,
+        cursor_pos_row: &mut u16,
+        cursor_pos_col: &mut u16,
+        reposition: &mut bool,
+        started: &mut RenderStarted,
+    ) -> io::Result<()> {
+        if started.started {
+            return Ok(());
+        }
+        started.started = true;
+        started.sync_active = true;
+        // Set up sync before we write anything
+        io.write_all(ctlseqs::sync_set)?;
         // Send the cursor to 0,0
-        // TODO: this needs to move after we optimize writes. We only do
-        // this if we have an update to make. We also need to hide cursor
-        // and then reshow it if needed
-        tty.write_all(ctlseqs::hide_cursor)?;
+        io.write_all(ctlseqs::hide_cursor)?;
         if self.state.alt_screen {
-            tty.write_all(ctlseqs::home)?;
+            io.write_all(ctlseqs::home)?;
         } else {
-            tty.write_all(b"\r")?;
+            io.write_all(b"\r")?;
             for _ in 0..self.state.cursor.row {
-                tty.write_all(ctlseqs::ri)?;
+                io.write_all(ctlseqs::ri)?;
             }
         }
-        tty.write_all(ctlseqs::sgr_reset)?;
+        io.write_all(ctlseqs::sgr_reset)?;
+        *cursor_pos_row = 0;
+        *cursor_pos_col = 0;
+        *reposition = true;
+        // Clear all images
+        if self.caps.kitty_graphics {
+            io.write_all(ctlseqs::kitty_graphics_clear)?;
+        }
+        Ok(())
+    }
+
+    fn render_diff<W: Write>(
+        &mut self,
+        tty: &mut W,
+        started: &mut RenderStarted,
+    ) -> io::Result<()> {
+        let cursor_vis_changed = self.screen.cursor_vis != self.screen_last.cursor_vis;
+        let cursor_shape_changed = self.screen.cursor_shape != self.screen_last.cursor_shape;
+        let mouse_shape_changed = self.screen.mouse_shape != self.screen_last.mouse_shape;
+        let cursor_pos_changed = self.screen.cursor_vis
+            && (self.screen.cursor.row != self.state.cursor.row
+                || self.screen.cursor.col != self.state.cursor.col);
+        // PORT NOTE: reference defect (R13, UD261). libvaxis 0.6.0 computes
+        //     const cursor_secondary_changed = self.screen.cursor_vis and
+        //         std.meta.eql(self.screen.cursor_secondary, self.state.cursor_secondary);
+        // i.e. "changed" is true when the two slices are the SAME (`std.meta.eql` on
+        // slices compares pointer and length). Its own uses show the intent is the
+        // opposite: it forces a render, and `if (cursor_secondary_changed)` below records
+        // the screen's slice as the rendered one. As written, (a) every render with a
+        // visible cursor and no secondary-cursor change repaints the frame (defeating
+        // 0.6.0's "no output when no changes" render), and (b) a render after
+        // `addTerminalSecondaryCursor` with nothing else changed writes NOTHING, so the new
+        // secondary cursor is not shown, and the state never records it. MEASURED with
+        // Zig 0.16.0 against libvaxis 0.6.0 (S-10b probe `render`: a visible cursor
+        // re-renders 40 bytes with no change; adding a secondary cursor renders 0 bytes).
+        // The port negates the comparison, and gates it on `caps.multi_cursor`: the only
+        // place the rendered slice is recorded (and the only output it drives) is under
+        // `cursor_vis and caps.multi_cursor` below, so without the gate a secondary cursor
+        // added on a terminal without the capability would stay "changed" forever and
+        // repaint every frame (S-10c, review F1).
+        let cursor_secondary_changed = self.screen.cursor_vis
+            && self.caps.multi_cursor
+            && !self
+                .screen
+                .cursor_secondary
+                .ptr_eql(&self.state.cursor_secondary);
+        let needs_render = self.refresh
+            || cursor_vis_changed
+            || cursor_shape_changed
+            || mouse_shape_changed
+            || cursor_pos_changed
+            || cursor_secondary_changed;
 
         // initialize some variables
         let mut reposition: bool = false;
@@ -560,18 +641,23 @@ impl<'a> Vaxis<'a> {
         let mut col: u16 = 0;
         let mut cursor: Style = Style::default();
         let mut link: Hyperlink = Hyperlink::default();
-        // the nested `cursor_pos` anon struct → two `u16` locals
+        // the nested `cursor_pos: CursorPos` (a local struct type) → two `u16` locals
         let mut cursor_pos_row: u16 = 0;
         let mut cursor_pos_col: u16 = 0;
-
-        // Clear all images
-        if self.caps.kitty_graphics {
-            tty.write_all(ctlseqs::kitty_graphics_clear)?;
-        }
 
         // Reset skip flag on all last_screen cells
         for last_cell in &mut self.screen_last.buf {
             last_cell.skip = false;
+        }
+
+        if needs_render {
+            self.start_render(
+                tty,
+                &mut cursor_pos_row,
+                &mut cursor_pos_col,
+                &mut reposition,
+                started,
+            )?;
         }
 
         let mut i: usize = 0;
@@ -618,6 +704,15 @@ impl<'a> Vaxis<'a> {
                         tty.write_all(ctlseqs::osc8_clear)?;
                     }
                     break 'body; // ADVANCE only; cursor/link update does NOT run
+                }
+                if !started.started {
+                    self.start_render(
+                        tty,
+                        &mut cursor_pos_row,
+                        &mut cursor_pos_col,
+                        &mut reposition,
+                        started,
+                    )?;
                 }
                 self.screen_last.buf[i].skipped = false;
                 // Set this cell in the last frame
@@ -762,39 +857,55 @@ impl<'a> Vaxis<'a> {
             col += w;
             i += w as usize;
         }
+        if !started.started {
+            return Ok(());
+        }
         if self.screen.cursor_vis {
             if self.state.alt_screen {
                 // ctlseqs::cup
                 write!(
                     tty,
                     "\x1b[{};{}H",
-                    self.screen.cursor_row + 1,
-                    self.screen.cursor_col + 1
+                    self.screen.cursor.row + 1,
+                    self.screen.cursor.col + 1
                 )?;
             } else {
                 // TODO: position cursor relative to current location
                 tty.write_all(b"\r")?;
-                if self.screen.cursor_row >= cursor_pos_row {
-                    for _ in 0..(self.screen.cursor_row - cursor_pos_row) {
+                if self.screen.cursor.row >= cursor_pos_row {
+                    for _ in 0..(self.screen.cursor.row - cursor_pos_row) {
                         tty.write_all(b"\n")?;
                     }
                 } else {
-                    for _ in 0..(cursor_pos_row - self.screen.cursor_row) {
+                    for _ in 0..(cursor_pos_row - self.screen.cursor.row) {
                         tty.write_all(ctlseqs::ri)?;
                     }
                 }
-                if self.screen.cursor_col > 0 {
+                if self.screen.cursor.col > 0 {
                     // ctlseqs::cuf
-                    write!(tty, "\x1b[{}C", self.screen.cursor_col)?;
+                    write!(tty, "\x1b[{}C", self.screen.cursor.col)?;
                 }
             }
-            self.state.cursor.row = self.screen.cursor_row;
-            self.state.cursor.col = self.screen.cursor_col;
+            self.state.cursor.row = self.screen.cursor.row;
+            self.state.cursor.col = self.screen.cursor.col;
             tty.write_all(ctlseqs::show_cursor)?;
         } else {
             self.state.cursor.row = cursor_pos_row;
             self.state.cursor.col = cursor_pos_col;
         }
+        if self.screen.cursor_vis && self.caps.multi_cursor {
+            // ctlseqs::reset_secondary_cursors = "\x1b[>0;4 q"
+            tty.write_all(ctlseqs::reset_secondary_cursors)?;
+            for cur in self.screen.cursor_secondary.as_slice() {
+                // ctlseqs::show_secondary_cursor = "\x1b[>29;2:{d}:{d} q"
+                write!(tty, "\x1b[>29;2:{}:{} q", cur.row + 1, cur.col + 1)?;
+            }
+            if cursor_secondary_changed {
+                self.state.prev_cursor_secondary = self.state.cursor_secondary.clone();
+                self.state.cursor_secondary = self.screen.cursor_secondary.clone();
+            }
+        }
+        self.screen_last.cursor_vis = self.screen.cursor_vis;
         if self.screen.mouse_shape != self.screen_last.mouse_shape {
             // ctlseqs::osc22_mouse_shape = "\x1b]22;{s}\x1b\\" ; @tagName(mouse_shape)
             tty.write_all(b"\x1b]22;")?;
@@ -925,15 +1036,32 @@ impl<'a> Vaxis<'a> {
             let ypos = mouse.row;
             let xextra = self.screen.width_pix % self.screen.width;
             let yextra = self.screen.height_pix % self.screen.height;
-            let xcell = (self.screen.width_pix - xextra) / self.screen.width;
-            let ycell = (self.screen.height_pix - yextra) / self.screen.height;
+            // const xcell: i16 = @intCast((self.screen.width_pix - xextra) / self.screen.width);
+            // const ycell: i16 = @intCast((self.screen.height_pix - yextra) / self.screen.height);
+            //
+            // PORT NOTE: reference defect (R13, UD262). A cell wider or taller than
+            // `i16::MAX` pixels does not fit the `@intCast` (a trap in safe builds,
+            // undefined behaviour in ReleaseFast). The pixel and cell sizes come from the
+            // terminal (the kernel winsize it sets, or its in-band resize report), so a
+            // buggy or hostile terminal reporting, e.g., 40000 pixels for one column
+            // reaches it once pixel mouse reporting is on. Such a cell size is as
+            // degenerate as the zero size the reference already refuses on the next
+            // line, so the port takes that same exit and returns the event untranslated.
+            let (Ok(xcell), Ok(ycell)) = (
+                i16::try_from((self.screen.width_pix - xextra) / self.screen.width),
+                i16::try_from((self.screen.height_pix - yextra) / self.screen.height),
+            ) else {
+                return mouse;
+            };
             if xcell == 0 || ycell == 0 {
                 return mouse;
             }
-            result.col = xpos / xcell;
-            result.row = ypos / ycell;
-            result.xoffset = xpos % xcell;
-            result.yoffset = ypos % ycell;
+            // `@divFloor` / `@mod` with a positive divisor are `div_euclid` / `rem_euclid`;
+            // the remainder is in `0..xcell`, so the `@intCast` to `u16` always fits.
+            result.col = xpos.div_euclid(xcell);
+            result.row = ypos.div_euclid(ycell);
+            result.xoffset = u16::try_from(xpos.rem_euclid(xcell)).unwrap();
+            result.yoffset = u16::try_from(ypos.rem_euclid(ycell)).unwrap();
         }
         result
     }
@@ -995,8 +1123,8 @@ impl<'a> Vaxis<'a> {
     /// PORT NOTE — the `img` parameter is RESTORED. The seam had signature
     /// `(&mut self, tty, format)`, having dropped `img: *zigimg.Image` because the type did
     /// not exist; that is what made the seam un-callable, and a filled body must not keep
-    /// it. `&mut rustty_zigimg::Image` is the faithful map of the reference's `*zigimg.Image`
-    /// (it mutates in place via `convert`).
+    /// it. `&rustty_zigimg::Image` is the faithful map of libvaxis 0.6.0's `*const
+    /// zigimg.Image` (0.5.1 took `*zigimg.Image` and converted it in place).
     ///
     /// PORT NOTE — the arena. The reference wraps the caller's allocator in an
     /// `ArenaAllocator` and `defer arena.deinit()`s it, purely to free the PNG buffer and
@@ -1004,7 +1132,10 @@ impl<'a> Vaxis<'a> {
     /// arena maps to local `Vec`s — the established house pattern for Zig arenas whose only
     /// job is scope-lifetime bulk free.
     ///
-    /// Verbatim Zig body (`libvaxis` 0.5.1 `src/Vaxis.zig:983-1015`), ported line by line
+    /// The Zig body as of libvaxis 0.5.1 (`src/Vaxis.zig:983-1015`); 0.6.0
+    /// (`src/Vaxis.zig:1045-1079`) takes `img: *const zigimg.Image`, adds
+    /// `var img_modifiable = img.*;`, converts with `img_modifiable.convertNoFree(
+    /// arena.allocator(), ..)` and passes the arena to `writeToMemory`. Ported line by line
     /// below:
     ///
     /// ```zig
@@ -1035,7 +1166,7 @@ impl<'a> Vaxis<'a> {
     pub fn transmit_image<W: Write>(
         &mut self,
         tty: &mut W,
-        img: &mut rustty_zigimg::Image,
+        img: &rustty_zigimg::Image,
         format: TransmitFormat,
     ) -> Result<Image, ImageError> {
         // if (!self.caps.kitty_graphics) return error.NoGraphicsCapability;
@@ -1048,11 +1179,17 @@ impl<'a> Vaxis<'a> {
             return Err(ImageError::NoGraphicsCapability);
         }
 
+        // var img_modifiable = img.*;
+        //
+        // libvaxis 0.6.0 converts a COPY (`convertNoFree` into the arena) and leaves the
+        // caller's `*const` image alone; 0.5.1 converted the caller's image in place.
+        let mut img_modifiable: rustty_zigimg::Image;
+
         // const buf = switch (format) { ... };
         //
         // `png_owned` keeps the PNG bytes alive for the borrow below; `.rgb`/`.rgba`
-        // borrow out of `img` itself after converting in place, exactly as the reference's
-        // `img.rawBytes()` does.
+        // borrow out of `img_modifiable` after converting it, as the reference's
+        // `img_modifiable.rawBytes()` does.
         let png_owned: Vec<u8>;
         let buf: &[u8] = match format {
             TransmitFormat::Png => {
@@ -1071,14 +1208,18 @@ impl<'a> Vaxis<'a> {
                 &png_owned
             }
             TransmitFormat::Rgb => {
-                // try img.convert(.rgb24); break :rgb img.rawBytes();
-                img.convert(rustty_zigimg::PixelFormat::Rgb24);
-                img.raw_bytes()
+                // try img_modifiable.convertNoFree(arena.allocator(), .rgb24);
+                // break :rgb img_modifiable.rawBytes();
+                img_modifiable = img.clone();
+                img_modifiable.convert(rustty_zigimg::PixelFormat::Rgb24);
+                img_modifiable.raw_bytes()
             }
             TransmitFormat::Rgba => {
-                // try img.convert(.rgba32); break :rgba img.rawBytes();
-                img.convert(rustty_zigimg::PixelFormat::Rgba32);
-                img.raw_bytes()
+                // try img_modifiable.convertNoFree(arena.allocator(), .rgba32);
+                // break :rgba img_modifiable.rawBytes();
+                img_modifiable = img.clone();
+                img_modifiable.convert(rustty_zigimg::PixelFormat::Rgba32);
+                img_modifiable.raw_bytes()
             }
         };
 
@@ -1139,14 +1280,14 @@ impl<'a> Vaxis<'a> {
         let mut read_buffer = vec![0u8; 1024 * 1024];
 
         // var img = switch (src) { ... };
-        let mut img = match src {
+        let img = match src {
             Source::Path(path) => rustty_zigimg::from_file_path(path, &mut read_buffer)?,
             Source::Mem(bytes) => rustty_zigimg::from_memory(bytes)?,
         };
 
         // defer img.deinit();  — Rust ownership: `img` drops at scope exit.
         // return self.transmitImage(alloc, tty, &img, .png);
-        self.transmit_image(tty, &mut img, TransmitFormat::Png)
+        self.transmit_image(tty, &img, TransmitFormat::Png)
     }
 
     /// deletes an image from the terminal's memory
@@ -1234,6 +1375,62 @@ impl<'a> Vaxis<'a> {
         tty.flush()?;
         self.state.changed_cursor_color = true;
         Ok(())
+    }
+
+    /// Set the terminal secondary cursor color
+    pub fn set_terminal_cursor_secondary_color<W: Write>(
+        &mut self,
+        tty: &mut W,
+        rgb: [u8; 3],
+    ) -> io::Result<()> {
+        if self.caps.multi_cursor {
+            // ctlseqs::secondary_cursors_rgb = "\x1b[>40;2:{d}:{d}:{d} q"
+            write!(tty, "\x1b[>40;2:{}:{}:{} q", rgb[0], rgb[1], rgb[2])?;
+            tty.flush()?;
+            self.state.changed_cursor_color = true;
+        }
+        Ok(())
+    }
+
+    /// PORT NOTE (ownership): the reference frees `prev_cursor_secondary` and the screen's
+    /// slice by hand, comparing pointers to avoid freeing the slice `state.cursor_secondary`
+    /// shares; the same assignments happen here and the `Arc`s free themselves
+    /// ([`CursorSlice`]). `alloc` is dropped and the `error{OutOfMemory}` cannot occur.
+    pub fn reset_all_terminal_secondary_cursors(&mut self) {
+        if !self
+            .state
+            .prev_cursor_secondary
+            .ptr_eql(&self.state.cursor_secondary)
+        {
+            // alloc.free(self.state.prev_cursor_secondary);
+            self.state.prev_cursor_secondary = CursorSlice::EMPTY;
+        }
+        // if (self.screen.cursor_secondary.ptr != self.state.cursor_secondary.ptr)
+        //     alloc.free(self.screen.cursor_secondary);
+        self.screen.cursor_secondary = CursorSlice::EMPTY;
+    }
+
+    /// PORT NOTE: as [`Self::reset_all_terminal_secondary_cursors`]. The new list is always
+    /// a fresh allocation, so it is a different slice from `state.cursor_secondary` (in the
+    /// reference, too: either a `dupe` of the shared slice, or the screen's own unshared
+    /// slice grown by `addOne`).
+    pub fn add_terminal_secondary_cursor(&mut self, y: u16, x: u16) {
+        if !self
+            .state
+            .prev_cursor_secondary
+            .ptr_eql(&self.state.cursor_secondary)
+        {
+            // alloc.free(self.state.prev_cursor_secondary);
+            self.state.prev_cursor_secondary = CursorSlice::EMPTY;
+        }
+        // var cursors: std.ArrayList(Screen.Cursor) = if (screen.ptr == state.ptr)
+        //     .fromOwnedSlice(try alloc.dupe(Cursor, self.screen.cursor_secondary))
+        // else
+        //     .fromOwnedSlice(self.screen.cursor_secondary);
+        let mut cursors: Vec<Cursor> = self.screen.cursor_secondary.as_slice().to_vec();
+
+        cursors.push(Cursor { row: y, col: x });
+        self.screen.cursor_secondary = CursorSlice::from_vec(cursors);
     }
 
     /// Request a color report from the terminal. Note: not all terminals support
@@ -1895,6 +2092,178 @@ mod tests {
         let mut out2 = Vec::new();
         vx.render(&mut out2).unwrap();
         assert!(!contains(&out2, b"A"));
+    }
+
+    /// libvaxis 0.6.0 `test "render: no output when no changes"`.
+    #[test]
+    fn render_no_output_when_no_changes() {
+        let mut vx = Vaxis::init(Options::default());
+        let mut deinit_writer: Vec<u8> = Vec::new();
+
+        let mut render_writer: Vec<u8> = Vec::new();
+        vx.render(&mut render_writer).unwrap();
+        let output = render_writer;
+        assert_eq!(0, output.len());
+        vx.deinit(&mut deinit_writer);
+    }
+
+    fn hex(bytes: &[u8]) -> String {
+        bytes.iter().map(|b| format!("{b:02x}")).collect()
+    }
+
+    /// S-10b: the render prologue is now written only when something changed, and the
+    /// multi-cursor sequences follow the cursor. The expected bytes are the Zig oracle's
+    /// (libvaxis 0.6.0 built with Zig 0.16.0 over ghostty's uucode; S-10b probe `render`),
+    /// with UD261 applied: steps 5, 6, 7 and 11 are where the unpatched reference differs
+    /// (it re-renders 40 / 41 bytes at 5 and 11 and writes nothing at 6).
+    #[test]
+    fn render_scenarios_match_the_reference() {
+        let mut vx = Vaxis::init(Options::default());
+        let mut sink: Vec<u8> = Vec::new();
+        vx.resize(
+            &mut sink,
+            Winsize {
+                rows: 3,
+                cols: 5,
+                x_pixel: 0,
+                y_pixel: 0,
+            },
+        )
+        .unwrap();
+        let step = |vx: &mut Vaxis<'_>, expected: &str| {
+            let mut out: Vec<u8> = Vec::new();
+            vx.render(&mut out).unwrap();
+            assert_eq!(expected, hex(&out));
+        };
+
+        // 1. first render, nothing changed
+        step(&mut vx, "");
+        // 2. write a cell, render
+        vx.window().write_cell(
+            1,
+            1,
+            Cell {
+                char: Character {
+                    grapheme: b"x",
+                    width: 1,
+                },
+                ..Default::default()
+            },
+        );
+        step(
+            &mut vx,
+            "1b5b3f32303236681b5b3f32356c0d1b5b6d0a0d1b5b3143781b5b3f323032366c",
+        );
+        // 3. render again unchanged
+        step(&mut vx, "");
+        // 4. show cursor
+        vx.window().show_cursor(2, 1);
+        step(
+            &mut vx,
+            "1b5b3f32303236681b5b3f32356c0d1b4d1b5b6d0d0a1b5b32431b5b3f3235681b5b3f323032366c",
+        );
+        // 5. cursor visible, nothing changed (UD261: the reference repaints here)
+        step(&mut vx, "");
+        // 6. multi cursor capability, add a secondary cursor (UD261: the reference
+        //    writes nothing here, so the secondary cursor is never shown)
+        vx.caps.multi_cursor = true;
+        vx.add_terminal_secondary_cursor(0, 3);
+        step(
+            &mut vx,
+            "1b5b3f32303236681b5b3f32356c0d1b4d1b5b6d0d0a1b5b32431b5b3f3235681b5b3e303b342071\
+             1b5b3e32393b323a313a3420711b5b3f323032366c",
+        );
+        // 7. unchanged again
+        step(&mut vx, "");
+        // 8. hide cursor
+        vx.window().hide_cursor();
+        step(
+            &mut vx,
+            "1b5b3f32303236681b5b3f32356c0d1b4d1b5b6d1b5b3f323032366c",
+        );
+        // 9. unchanged hidden
+        step(&mut vx, "");
+        // 10. reset secondaries, show cursor
+        vx.reset_all_terminal_secondary_cursors();
+        vx.window().show_cursor(0, 0);
+        step(
+            &mut vx,
+            "1b5b3f32303236681b5b3f32356c0d1b5b6d0d1b5b3f3235681b5b3e303b3420711b5b3f323032366c",
+        );
+        // 11. unchanged (UD261: the reference repaints here)
+        step(&mut vx, "");
+    }
+
+    /// UD261 (S-10c, review F1): the secondary-cursor change is recorded only when the
+    /// terminal has the multi-cursor capability, so "changed" must be gated on it too.
+    /// Without the gate, one `add_terminal_secondary_cursor` on a terminal without the
+    /// capability makes every later render with the cursor shown repaint the frame.
+    #[test]
+    fn secondary_cursor_without_multi_cursor_does_not_repaint() {
+        let mut vx = Vaxis::init(Options::default());
+        let mut sink: Vec<u8> = Vec::new();
+        vx.resize(
+            &mut sink,
+            Winsize {
+                rows: 3,
+                cols: 5,
+                x_pixel: 0,
+                y_pixel: 0,
+            },
+        )
+        .unwrap();
+        vx.window().show_cursor(2, 1);
+        let mut out: Vec<u8> = Vec::new();
+        vx.render(&mut out).unwrap();
+        assert!(!out.is_empty(), "the cursor is drawn once");
+
+        assert!(!vx.caps.multi_cursor);
+        vx.add_terminal_secondary_cursor(0, 3);
+        for i in 0..3 {
+            let mut out: Vec<u8> = Vec::new();
+            vx.render(&mut out).unwrap();
+            assert_eq!("", hex(&out), "render {i} after the secondary cursor");
+        }
+    }
+
+    /// libvaxis 0.6.0 `translateMouse` reads `i16` coordinates: pixel positions left of
+    /// or above the window give negative cells with a non-negative offset (`@divFloor` /
+    /// `@mod`). UD262 (R13): a cell size that does not fit `i16` returns the event
+    /// untranslated, as a zero cell size already does, instead of trapping in the
+    /// reference's `@intCast`.
+    #[test]
+    fn translate_mouse_pixel_coordinates() {
+        let mut vx = Vaxis::init(Options::default());
+        vx.screen = Screen::init(Winsize {
+            rows: 10,
+            cols: 10,
+            x_pixel: 100,
+            y_pixel: 200,
+        });
+        vx.state.pixel_mouse = true;
+        let at = |col: i16, row: i16| Mouse {
+            col,
+            row,
+            xoffset: 0,
+            yoffset: 0,
+            button: crate::mouse::Button::None,
+            mods: crate::mouse::Modifiers::default(),
+            r#type: crate::mouse::Type::Motion,
+        };
+        let m = vx.translate_mouse(at(25, 45));
+        assert_eq!((m.col, m.row, m.xoffset, m.yoffset), (2, 2, 5, 5));
+        let m = vx.translate_mouse(at(-5, -21));
+        assert_eq!((m.col, m.row, m.xoffset, m.yoffset), (-1, -2, 5, 19));
+
+        // UD262: 40000 pixels for one column.
+        vx.screen = Screen::init(Winsize {
+            rows: 1,
+            cols: 1,
+            x_pixel: 40000,
+            y_pixel: 10,
+        });
+        let m = vx.translate_mouse(at(7, 3));
+        assert_eq!((m.col, m.row, m.xoffset, m.yoffset), (7, 3, 0, 0));
     }
 
     #[test]

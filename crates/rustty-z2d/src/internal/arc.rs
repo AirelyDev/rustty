@@ -310,7 +310,8 @@ pub fn transformed_circle_major_axis(matrix: Transformation, radius: f64) -> f64
     let g: f64 = 0.5 * (i - j);
     let h: f64 = a * c + b * d;
 
-    radius * (f + g.hypot(h)).sqrt()
+    // return radius * (f + math.hypot(g, h)); (Zig's hypot, not libm's: S97-F1)
+    radius * (f + crate::internal::zig_math::hypot(g, h)).sqrt()
 
     //
     // we don't need the minor axis length, which is

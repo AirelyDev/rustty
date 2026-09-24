@@ -199,6 +199,9 @@ rustty-crash = { workspace = true }
 rustty-oniguruma = { workspace = true }
 rustty-global = { workspace = true }
 rustty-build-config = { workspace = true }
+# `build_config.version_string` / `release_channel`: the version derived from
+# the checkout, in its own leaf crate so a commit rebuilds only its readers.
+rustty-version = { workspace = true }
 # The init log lines `dependency harfbuzz=...` / `dependency fontconfig=...`
 # (global.zig:133-138), emitted only when the runtime font_backend has them.
 # Path deps like rustty-font-shaper's own edges (already in the build graph).
@@ -408,10 +411,10 @@ bitflags = { version = "2", optional = true }
 # GTK's own toplevel does not expose. 0.8 tracks gtk4-rs 0.11, matching the stack
 # above. Only the wayland winproto arm's quick-terminal paths consume it.
 gtk4-layer-shell = { version = "0.8", optional = true }
-# Its -sys crate (already in the graph as gtk4-layer-shell's own dependency) for
-# gtk_layer_set_namespace on RAW bytes: the safe wrapper takes `&str`, and the
-# reference passes the `gtk-quick-terminal-namespace` config bytes unconverted
-# (S60-F8).
+# The same library's raw C binding, for `gtk_layer_set_namespace` on the config's
+# raw bytes (the reference's `setNamespace` takes `[:0]const u8`; the crate's
+# `set_namespace` takes `&str`, S33-F1). The version gtk4-layer-shell 0.8 itself
+# depends on (one copy in the lock).
 gtk4-layer-shell-sys = { version = "0.6", optional = true }
 # X11 winproto backend (feature = "x11"): gdk4-x11 to reach the xlib Display + the
 # window XID, x11-dl for the XChangeProperty property sets (_MOTIF_WM_HINTS CSD,

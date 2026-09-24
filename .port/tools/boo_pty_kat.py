@@ -21,6 +21,11 @@ works, and two specific traps make a naive harness assert nothing:
    behaviour, not a rustty defect. So this harness acts as a minimal *terminal* and
    answers the queries `+boo` sends, `ESC[5n` -> `ESC[0n` above all.
 
+UPDATE (task tail-s6): rustty no longer ports that deadlock (reference defect, R13,
+`.port/parity-closure/UPSTREAM-DEFECTS.md` UD246): after a 1 s grace `Loop::stop()` wakes
+the reader through a pipe, so with `--no-dsr` the child now exits after about 1 s, and
+`boo_pty_e2e.rs` asserts that. The text below describes the original negative control.
+
 `--no-dsr` suppresses ONLY the `ESC[5n` reply. That is the negative control: it must NOT
 exit, which is what proves the clean exit in the normal arm is caused by the ESC key
 being received and honoured, rather than by a timeout, a crash, or a closed pty.

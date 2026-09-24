@@ -87,6 +87,11 @@ rustty-z2d = { workspace = true }
 # yet touch the shaper directly; the edge is wired now so the glyph-consuming
 # draw path (R-d/Phase 3) has it available. The edge is acyclic.
 rustty-font-shaper = { workspace = true }
+# `-Dfont-backend` (S-14, N266): a DIRECT edge so `build.rs` receives
+# rustty-build-config's `links` metadata (`DEP_RUSTTY_BUILD_CONFIG_FONT_BACKEND`)
+# and can emit the `rustty_font_backend` cfg the shaper tier's selectors use. A
+# leaf; already a transitive dependency, so no new crate in the graph.
+rustty-build-config = { workspace = true }
 # renderer/link.zig imports `../input.zig` (`inputpkg.Link`/`Highlight`) and
 # `oniguruma` (`oni.Regex`). The reference imports oniguruma UNCONDITIONALLY in
 # the renderer link path (same as src/input/Link.zig), so `rustty-oniguruma` is a

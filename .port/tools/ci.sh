@@ -102,6 +102,20 @@
 #                                    without `sentry`             -> HARD-FAIL.
 #                                    The reference's test-pkg-linux +
 #                                    test-sentry-linux.
+#   G-FONTBACKEND check_font_backends.sh  `-Dfont-backend` (the
+#                                    rustty-build-config/font-backend-*
+#                                    features): a manifest lint (font-backend-*
+#                                    only in [features], self-tested), then per
+#                                    non-default macOS backend (coretext_freetype,
+#                                    coretext_harfbuzz, coretext_noshape,
+#                                    freetype, fontconfig_freetype,
+#                                    freetype_windows) font-shaper clippy and
+#                                    font/font-shaper/renderer tests (+ core/cli/
+#                                    apprt-c for coretext_freetype and freetype),
+#                                    and the workspace built under
+#                                    coretext_freetype      -> HARD-FAIL.
+#                                    The reference's build-macos-freetype.
+#                                    BLOCKED off macOS (after the lint).
 #   G-THEMES check_theme_corpus.py   the 606 vendored iterm2 theme files match
 #                                    a committed per-file SHA-256 manifest
 #                                    -> HARD-FAIL. res_themes.rs only counts
@@ -391,6 +405,13 @@ run_webgl_lane() {
     echo ">> FAIL: the wasm log-emission gate exited $rc_log" >&2
     return 1
   fi
+  # Task T-F (S91-F2, S91-F5): the web_canvas face's CSS font value and its
+  # read-back check, executed in the same DEBUG artifact.
+  echo "--- node .port/tools/wasm-web-canvas-font.mjs"
+  if ! node "$ROOT/.port/tools/wasm-web-canvas-font.mjs"; then
+    echo ">> FAIL: the wasm web_canvas font check failed" >&2
+    return 1
+  fi
 
   echo "--- .port/tools/gates/ws14_webgl_browser_gate.sh"
   sh "$GATES/ws14_webgl_browser_gate.sh"
@@ -528,8 +549,11 @@ GATE_REGISTRY=(
   # load commands to inspect, and "only rustty_* is exported" is false by
   # construction for a .a. Checks the bundle shape, the slice architecture, an
   # export FLOOR, R2 identity (no _ghostty_* leaked), and that the module map's
-  # umbrella header resolves. macOS-only; BLOCKED elsewhere.
-  "G-XCF|HARD|bash $GATES/check_xcframework.sh"
+  # umbrella header resolves. macOS-only; BLOCKED elsewhere. Since review T-B
+  # the slices are the reference's Apple universal set (macos-arm64_x86_64,
+  # plus ios-arm64 and ios-arm64-simulator with the iOS SDK), and the gate's
+  # --self-test runs first, in the same step, over synthetic bundles.
+  "G-XCF|HARD|bash $GATES/check_xcframework.sh --self-test && bash $GATES/check_xcframework.sh"
   # G-FEATMATRIX (2026-08-26) — the reference's test-pkg-linux (build a pkg/
   # subproject ALONE) and test-sentry-linux (build both sides of a build
   # option). Standalone builds are not redundant with `cargo build
@@ -537,6 +561,12 @@ GATE_REGISTRY=(
   # forgets one of its own still compiles there and breaks for anyone who
   # depends on it alone.
   "G-FEATMATRIX|HARD|bash $GATES/check_feature_matrix.sh"
+  # G-FONTBACKEND (S-14, N266) — the reference's `build-macos-freetype` job:
+  # `-Dfont-backend=coretext_freetype` tested and the tree built, plus every
+  # other backend the port builds on macOS (coretext_harfbuzz, coretext_noshape,
+  # freetype, fontconfig_freetype, freetype_windows) clippy'd and tested. Each run asserts, through RUSTTY_EXPECT_FONT_BACKEND, that
+  # its feature really selected that backend. macOS-only; BLOCKED elsewhere.
+  "G-FONTBACKEND|HARD|bash $GATES/check_font_backends.sh"
   # G-EOL (2026-08-26) — byte fidelity of the corpora, fixtures and vendored
   # trees. `.gitattributes` opens with `* text=auto` and guarded the byte-exact
   # fixtures by EXTENSION, but fuzz corpus seeds have none — so git normalized
@@ -603,6 +633,23 @@ GATE_REGISTRY=(
   # merge. HARD: green at landing, milliseconds, and BOTH its FAIL arms (doubled
   # init; vacuous zero-match) are mutation-proven.
   "G-GTKINIT|HARD|bash $GATES/check_gtk_one_init.sh"
+  # G-SKIP (PORT_RULES R14, 2026-09-23) — no silent skips in test code. A Rust
+  # test that returns early reports `ok`, so a skip on a missing resource (Metal,
+  # GL, a display, a font, the corpus, a feature, the OS) made a lane that lost
+  # the resource GREEN with nothing run: `macos_window_host.rs` skipped every
+  # hosted-surface KAT with `let Some(host) = spawn() else { return }`, unseen by
+  # RUSTTY_REQUIRE_METAL, and ~100 `if (comptime ..) return error.SkipZigTest`
+  # ports passed in builds without their feature. The audit converted every site
+  # (cfg_attr ignore / strict-mode pivot / #[ignore] + loud failure / deleted).
+  # This lint keeps the class out: an early return with no pivot or assertion, a
+  # cfg-only body, an all-assertions-in-one-`if` body, or an unpivoted "skipping"
+  # line in a test helper is RED; the allow-list is capped and reasoned. STATIC,
+  # so it binds on every OS (it sees Linux-only and Windows-only tests from
+  # macOS). SELF first (the G-CENSUS-SELF convention): 21 synthetic arms prove
+  # each RED and each accept path, the dead-guard re-verification, and the
+  # stale / over-cap allow-list arms. HARD: green at landing, about a second.
+  "G-SKIP-SELF|HARD|$PY $GATES/check_silent_skips.py --self-test"
+  "G-SKIP|HARD|$PY $GATES/check_silent_skips.py"
   # G-P2 (WS19 T19) — the Phase 2 CLOSURE gate, and the standing invariant that keeps
   # Phase 2 closed. It parses the four Phase-2 ledgers and FAILS if any open item lacks
   # an owner in an OPEN workstream, where "open workstream" is DERIVED from the ROADMAP's
@@ -698,6 +745,28 @@ GATE_REGISTRY=(
   # entry's green means nothing.
   "G-VTCLIB-SELF|HARD|bash $GATES/check_vtc_lib_isolation.sh --self-test"
   "G-VTCLIB|HARD|bash $GATES/check_vtc_lib_isolation.sh"
+  # G-ARTIFACT (2026-09-23, parity S6-F2 Decision A) — the other half of the
+  # artifact split. rustty-vt carries a process-wide RUN-TIME artifact value
+  # (`options::runtime_artifact()`) that rustty-vt-c sets to `Lib` in
+  # `install_log_backend`; mode 5522's `.disabled` reads it. That is sound only
+  # while no app-tier code can set it, so the setter may be called from
+  # `crates/rustty-vt-c/src/` alone, the call inside `install_log_backend` must
+  # exist (anti-vacuity), the cell has exactly one writer (the setter's store
+  # in options.rs), and only rustty-web-canvas may depend on rustty-vt-c
+  # (`cargo metadata --no-deps`; review-T-H2 blocking 3). STATIC, every OS,
+  # about a second. SELF first: synthetic arms prove each RED and GREEN.
+  "G-ARTIFACT-SELF|HARD|$PY $GATES/check_runtime_artifact_setter.py --self-test"
+  "G-ARTIFACT|HARD|$PY $GATES/check_runtime_artifact_setter.py"
+  # G-VTALLOC (2026-09-24, parity tail S7-1, N261) — allocator_api2's stable
+  # `Vec::{extend_from_slice, resize}` are per-element loops (+81% on
+  # screen-clone.render when RenderState moved onto them); the vt crates ban
+  # them with clippy `disallowed-methods` (their clippy.toml), which the
+  # workspace clippy step enforces. This gate pins the two configs (present,
+  # identical, both paths, no `allow` escape); the SELF entry proves on a
+  # fixture crate that each config flags exactly the two banned calls and that
+  # no config flags nothing (the ban cannot silently stop resolving).
+  "G-VTALLOC-SELF|HARD|bash $GATES/check_vt_alloc_vec_ban.sh --self-test"
+  "G-VTALLOC|HARD|bash $GATES/check_vt_alloc_vec_ban.sh"
   # G-GTKFEAT (2026-07-31) — the same hole as G-ONIG, one crate over. The
   # workspace clippy lane above builds with DEFAULT features, and rustty-apprt's
   # gtk/wayland/x11 features are default-OFF, so ~30k lines of ported GTK4/
@@ -1187,6 +1256,19 @@ run_cargo "cargo build --workspace"  cargo build --workspace
 # does not bite INSIDE ci.sh — only outside it, which is what WS19 T16 addresses for the
 # example/*/build.sh scripts.
 run_cargo "cargo test --workspace"   cargo test --workspace --no-fail-fast
+# review-T-H item 1: rustty-os's flatpak tests (parity S111-F3, S111-F9) ran in
+# no lane, because `--workspace` never turns the `flatpak` feature on and
+# G-FEATMATRIX only BUILDS it. The feature links gio-2.0, which exists on the
+# Linux/FreeBSD legs only (the Ubuntu leg installs libglib2.0-dev); elsewhere
+# the skip is reported by name.
+case "$(uname -s)" in
+  Linux|FreeBSD)
+    run_cargo "cargo test -p rustty-os --features flatpak" \
+      cargo test -p rustty-os --features flatpak --no-fail-fast ;;
+  *)
+    echo "skipped: cargo test -p rustty-os --features flatpak (Linux/FreeBSD only: links gio-2.0)"
+    PROGRESS_NOTES+=("cargo test -p rustty-os --features flatpak (skipped: Linux/FreeBSD only)") ;;
+esac
 
 # ---- 5: parity gates (HARD first, then PROGRESS) ---------------------------
 for phase in HARD PROGRESS; do

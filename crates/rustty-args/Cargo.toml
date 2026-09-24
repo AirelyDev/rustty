@@ -25,3 +25,6 @@ log = { workspace = true }
 rustty-os = { workspace = true }
 rustty-util = { workspace = true }
 rustty-build-config = { workspace = true }
+# `std.fmt.parseInt` / `parseUnsigned` / `parseFloat`: the one port of Zig's
+# number parsers, at the lowest layer (NEW-FINDINGS N120/N150).
+rustty-zigstd = { workspace = true }

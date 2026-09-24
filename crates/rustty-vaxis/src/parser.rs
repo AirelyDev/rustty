@@ -1,4 +1,4 @@
-//! Port of `libvaxis` `Parser.zig` (1285 LOC, 34 test) — the ANSI input parser: the
+//! Port of `libvaxis` `Parser.zig` (libvaxis 0.6.0: 1331 LOC, 36 test) — the ANSI input parser: the
 //! ground/escape/csi/osc/dcs/sos/pm/apc/ss2/ss3 state machine, the Kitty keyboard
 //! protocol (`u21` codepoint + modifier decode), SGR + legacy xterm mouse, bracketed
 //! paste + OSC-52 clipboard paste, the legacy/tilde/SS3 key tables, XTWINOPS in-band
@@ -24,6 +24,7 @@ use crate::event::Event;
 use crate::key::{self, Key, Modifiers};
 use crate::mouse::{self, Mouse};
 use crate::{cell, uucode, Winsize};
+use rustty_zigstd::fmt::{parse_int_type, parse_unsigned_type, IntType};
 
 /// The return type of our parse method. Contains an Event and the number of
 /// bytes read from the buffer.
@@ -193,7 +194,7 @@ fn parse_ground(input: &[u8]) -> Result<ParseResult<'_>, ParseError> {
             let mut grapheme_len: usize = 0;
             let mut cp_count: usize = 0;
 
-            while let Some(result) = grapheme_iter.next() {
+            while let Some(result) = grapheme_iter.next_code_point() {
                 cp_count += 1;
                 if result.is_break {
                     // Found the first grapheme boundary
@@ -326,7 +327,7 @@ fn parse_osc(input: &[u8]) -> Result<ParseResult<'static>, ParseError> {
         Some(i) => i,
         None => return Ok(null_event),
     };
-    let ps = match parse_unsigned(&input[2..semicolon_idx], u8::MAX as u32) {
+    let ps = match parse_unsigned(&input[2..semicolon_idx], U8) {
         Some(v) => v as u8,
         None => return Ok(null_event),
     };
@@ -337,11 +338,10 @@ fn parse_osc(input: &[u8]) -> Result<ParseResult<'static>, ParseError> {
                 Some(i) => i,
                 None => return Ok(null_event),
             };
-            let ps_idx =
-                match parse_unsigned(&input[semicolon_idx + 1..color_idx_delim], u8::MAX as u32) {
-                    Some(v) => v as u8,
-                    None => return Ok(null_event),
-                };
+            let ps_idx = match parse_unsigned(&input[semicolon_idx + 1..color_idx_delim], U8) {
+                Some(v) => v as u8,
+                None => return Ok(null_event),
+            };
             let color_spec = if bel_terminated {
                 &input[color_idx_delim + 1..sequence.len() - 1]
             } else {
@@ -465,7 +465,7 @@ fn parse_csi<'b>(input: &[u8], text_buf: &'b mut [u8]) -> ParseResult<'b> {
             if let Some(field_buf) = field_iter.next() {
                 let mut param_iter = field_buf.split(|&c| c == b':');
                 let modifier_buf = param_iter.next().unwrap();
-                let modifier_mask = match parse_param(modifier_buf, Some(1), u8::MAX as u32) {
+                let modifier_mask = match parse_param(modifier_buf, Some(1), U8) {
                     Some(v) => v,
                     None => return null_event,
                 };
@@ -481,7 +481,7 @@ fn parse_csi<'b>(input: &[u8], text_buf: &'b mut [u8]) -> ParseResult<'b> {
                 let mut param_iter = field_buf.split(|&c| c == b':');
                 let mut total: usize = 0;
                 for cp_buf in param_iter.by_ref() {
-                    let cp = match parse_param(cp_buf, None, MAX_U21) {
+                    let cp = match parse_param(cp_buf, None, U21) {
                         Some(v) => v,
                         None => return null_event,
                     };
@@ -507,6 +507,20 @@ fn parse_csi<'b>(input: &[u8], text_buf: &'b mut [u8]) -> ParseResult<'b> {
                 n: sequence.len(),
             }
         }
+        b'Z' => {
+            // Legacy keys
+            // CSI Z
+            ParseResult {
+                event: Some(Event::KeyPress(Key {
+                    mods: Modifiers {
+                        shift: true,
+                        ..Default::default()
+                    },
+                    ..key_with_codepoint(key::tab)
+                })),
+                n: sequence.len(),
+            }
+        }
         b'~' => {
             // Legacy keys
             // CSI number ~
@@ -514,7 +528,7 @@ fn parse_csi<'b>(input: &[u8], text_buf: &'b mut [u8]) -> ParseResult<'b> {
             // CSI number ; modifier:event_type ; text_as_codepoint ~
             let mut field_iter = sequence[2..sequence.len() - 1].split(|&c| c == b';');
             let number_buf = field_iter.next().unwrap(); // always will have one field
-            let number = match parse_param(number_buf, None, u16::MAX as u32) {
+            let number = match parse_param(number_buf, None, U16) {
                 Some(v) => v,
                 None => return null_event,
             };
@@ -561,7 +575,7 @@ fn parse_csi<'b>(input: &[u8], text_buf: &'b mut [u8]) -> ParseResult<'b> {
             if let Some(field_buf) = field_iter.next() {
                 let mut param_iter = field_buf.split(|&c| c == b':');
                 let modifier_buf = param_iter.next().unwrap();
-                let modifier_mask = match parse_param(modifier_buf, Some(1), u8::MAX as u32) {
+                let modifier_mask = match parse_param(modifier_buf, Some(1), U8) {
                     Some(v) => v,
                     None => return null_event,
                 };
@@ -577,7 +591,7 @@ fn parse_csi<'b>(input: &[u8], text_buf: &'b mut [u8]) -> ParseResult<'b> {
                 let mut param_iter = field_buf.split(|&c| c == b':');
                 let mut total: usize = 0;
                 for cp_buf in param_iter.by_ref() {
-                    let cp = match parse_param(cp_buf, None, MAX_U21) {
+                    let cp = match parse_param(cp_buf, None, U21) {
                         Some(v) => v,
                         None => return null_event,
                     };
@@ -635,7 +649,7 @@ fn parse_csi<'b>(input: &[u8], text_buf: &'b mut [u8]) -> ParseResult<'b> {
                         Some(i) => i,
                         None => return null_event,
                     };
-                    let ps = match parse_unsigned(&input[3..delim_idx], u16::MAX as u32) {
+                    let ps = match parse_unsigned(&input[3..delim_idx], U16) {
                         Some(v) => v,
                         None => return null_event,
                     };
@@ -681,19 +695,19 @@ fn parse_csi<'b>(input: &[u8], text_buf: &'b mut [u8]) -> ParseResult<'b> {
                 let width_pix = iter.next().unwrap_or(b"0");
 
                 let winsize = Winsize {
-                    rows: match parse_unsigned(height_char, u16::MAX as u32) {
+                    rows: match parse_unsigned(height_char, U16) {
                         Some(v) => v as u16,
                         None => return null_event,
                     },
-                    cols: match parse_unsigned(width_char, u16::MAX as u32) {
+                    cols: match parse_unsigned(width_char, U16) {
                         Some(v) => v as u16,
                         None => return null_event,
                     },
-                    x_pixel: match parse_unsigned(width_pix, u16::MAX as u32) {
+                    x_pixel: match parse_unsigned(width_pix, U16) {
                         Some(v) => v as u16,
                         None => return null_event,
                     },
-                    y_pixel: match parse_unsigned(height_pix, u16::MAX as u32) {
+                    y_pixel: match parse_unsigned(height_pix, U16) {
                         Some(v) => v as u16,
                         None => return null_event,
                     },
@@ -730,16 +744,16 @@ fn parse_csi<'b>(input: &[u8], text_buf: &'b mut [u8]) -> ParseResult<'b> {
                 let field_buf = field_iter.next().unwrap(); // There will always be at least one field
                 let mut param_iter = field_buf.split(|&c| c == b':');
                 let codepoint_buf = param_iter.next().unwrap();
-                key.codepoint = match parse_param(codepoint_buf, None, MAX_U21) {
+                key.codepoint = match parse_param(codepoint_buf, None, U21) {
                     Some(v) => v,
                     None => return null_event,
                 };
 
                 if let Some(shifted_cp_buf) = param_iter.next() {
-                    key.shifted_codepoint = parse_param(shifted_cp_buf, None, MAX_U21);
+                    key.shifted_codepoint = parse_param(shifted_cp_buf, None, U21);
                 }
                 if let Some(base_layout_buf) = param_iter.next() {
-                    key.base_layout_codepoint = parse_param(base_layout_buf, None, MAX_U21);
+                    key.base_layout_codepoint = parse_param(base_layout_buf, None, U21);
                 }
             }
 
@@ -750,7 +764,7 @@ fn parse_csi<'b>(input: &[u8], text_buf: &'b mut [u8]) -> ParseResult<'b> {
             if let Some(field_buf) = field_iter.next() {
                 let mut param_iter = field_buf.split(|&c| c == b':');
                 let modifier_buf = param_iter.next().unwrap();
-                let modifier_mask = match parse_param(modifier_buf, Some(1), u8::MAX as u32) {
+                let modifier_mask = match parse_param(modifier_buf, Some(1), U8) {
                     Some(v) => v,
                     None => return null_event,
                 };
@@ -766,7 +780,7 @@ fn parse_csi<'b>(input: &[u8], text_buf: &'b mut [u8]) -> ParseResult<'b> {
                 let mut param_iter = field_buf.split(|&c| c == b':');
                 let mut total: usize = 0;
                 for cp_buf in param_iter.by_ref() {
-                    let cp = match parse_param(cp_buf, None, MAX_U21) {
+                    let cp = match parse_param(cp_buf, None, U21) {
                         Some(v) => v,
                         None => return null_event,
                     };
@@ -822,12 +836,11 @@ fn parse_csi<'b>(input: &[u8], text_buf: &'b mut [u8]) -> ParseResult<'b> {
                 Some(i) => i,
                 None => return null_event,
             };
-            let ps = match parse_unsigned(&input[3..delim_idx], u16::MAX as u32) {
+            let ps = match parse_unsigned(&input[3..delim_idx], U16) {
                 Some(v) => v,
                 None => return null_event,
             };
-            let pm = match parse_unsigned(&input[delim_idx + 1..sequence.len() - 2], u8::MAX as u32)
-            {
+            let pm = match parse_unsigned(&input[delim_idx + 1..sequence.len() - 2], U8) {
                 Some(v) => v,
                 None => return null_event,
             };
@@ -884,11 +897,33 @@ fn parse_csi<'b>(input: &[u8], text_buf: &'b mut [u8]) -> ParseResult<'b> {
 }
 
 /// Parse a param buffer, returning a default value if the param was empty
-fn parse_param(buf: &[u8], default: Option<u32>, max: u32) -> Option<u32> {
+///
+/// PORT NOTE (N206): libvaxis 0.6.0 (the pinned vaxis) reads a param with
+/// `std.fmt.parseInt(T, buf, 10)`, 0.5.1 with `parseUnsigned`; for the unsigned
+/// types here the difference is that `parseInt` takes a leading `+` and reads
+/// `-0` as zero. The pin's `parseInt` is followed.
+///
+/// The Zig function is generic over `comptime T`; its instantiations are the
+/// unsigned ones (this function, returning the value widened to `u32`) and the
+/// mouse coordinates' `i16` ([`parse_param_i16`], parity tail S-10b).
+fn parse_param(buf: &[u8], default: Option<u32>, t: IntType) -> Option<u32> {
+    // if (buf.len == 0) return default;
     if buf.is_empty() {
         return default;
     }
-    parse_unsigned(buf, max)
+    // return std.fmt.parseInt(T, buf, 10) catch return null;
+    parse_int_type(t, buf, 10).ok().map(|v| v as u32)
+}
+
+/// `parseParam(i16, buf, default)` — the SGR mouse coordinates (libvaxis 0.6.0
+/// `Parser.zig:705-706`; `Mouse.col`/`row` are `i16` since 0.6.0).
+fn parse_param_i16(buf: &[u8], default: Option<i16>) -> Option<i16> {
+    // if (buf.len == 0) return default;
+    if buf.is_empty() {
+        return default;
+    }
+    // return std.fmt.parseInt(T, buf, 10) catch return null;
+    rustty_zigstd::fmt::parse_int::<i16>(buf, 10).ok()
 }
 
 /// Parse a mouse event
@@ -899,8 +934,8 @@ fn parse_mouse(input: &[u8], full_input: &[u8]) -> ParseResult<'static> {
     };
 
     let button_mask: u16;
-    let px: u16;
-    let py: u16;
+    let px: i16;
+    let py: i16;
     let xterm: bool;
     if input.len() == 3 && input[2] == b'M' && full_input.len() >= 6 {
         xterm = true;
@@ -917,15 +952,16 @@ fn parse_mouse(input: &[u8], full_input: &[u8]) -> ParseResult<'static> {
             return ParseResult { event: None, n: 6 };
         };
         button_mask = b as u16;
-        px = x as u16;
-        py = y as u16;
+        // `px = full_input[4] - 32`: a `u8` coerced to the `i16` (always fits).
+        px = i16::from(x);
+        py = i16::from(y);
     } else if input.len() >= 4 && input[2] == b'<' {
         xterm = false;
         let delim1 = match index_of_scalar_pos(input, 3, b';') {
             Some(i) => i,
             None => return null_event,
         };
-        button_mask = match parse_param(&input[3..delim1], None, u16::MAX as u32) {
+        button_mask = match parse_param(&input[3..delim1], None, U16) {
             Some(v) => v as u16,
             None => return null_event,
         };
@@ -933,16 +969,12 @@ fn parse_mouse(input: &[u8], full_input: &[u8]) -> ParseResult<'static> {
             Some(i) => i,
             None => return null_event,
         };
-        px = match parse_param(&input[delim1 + 1..delim2], Some(1), u16::MAX as u32) {
-            Some(v) => v as u16,
+        px = match parse_param_i16(&input[delim1 + 1..delim2], Some(1)) {
+            Some(v) => v,
             None => return null_event,
         };
-        py = match parse_param(
-            &input[delim2 + 1..input.len() - 1],
-            Some(1),
-            u16::MAX as u32,
-        ) {
-            Some(v) => v as u16,
+        py = match parse_param_i16(&input[delim2 + 1..input.len() - 1], Some(1)) {
+            Some(v) => v,
             None => return null_event,
         };
     } else {
@@ -1009,9 +1041,11 @@ fn parse_mouse(input: &[u8], full_input: &[u8]) -> ParseResult<'static> {
 
 // ---- the pure primitives (std-shim ports, VAXIS_C3A_DESIGN §5) ----
 
-/// The maximum value of a Zig `u21` (`std.math.maxInt(u21)`); the codepoint parse
-/// bound (`parseUnsigned(u21, …)` overflows past this → `None`).
-const MAX_U21: u32 = 0x1F_FFFF;
+/// The Zig integer types the reply numbers are parsed into (`u8`, `u16`, and
+/// `u21` for a codepoint).
+const U8: IntType = IntType::unsigned(8);
+const U16: IntType = IntType::unsigned(16);
+const U21: IntType = IntType::unsigned(21);
 
 /// Build a `Key` with just `codepoint` set (Zig `.{ .codepoint = X }`); the rest default.
 fn key_with_codepoint<'a>(codepoint: u32) -> Key<'a> {
@@ -1040,25 +1074,18 @@ fn index_of_scalar_pos(s: &[u8], start: usize, needle: u8) -> Option<usize> {
         .map(|off| start + off)
 }
 
-/// `std.fmt.parseUnsigned(T, buf, 10)` — base-10, digit-only (no `+`/`-` sign, unlike
-/// Rust's `str::parse`); rejects a non-digit or an overflow past `max` (the target type's
-/// max) with `None`.
-fn parse_unsigned(buf: &[u8], max: u32) -> Option<u32> {
-    if buf.is_empty() {
-        return None;
-    }
-    let mut x: u32 = 0;
-    for &c in buf {
-        let digit = match c {
-            b'0'..=b'9' => (c - b'0') as u32,
-            _ => return None,
-        };
-        x = x.checked_mul(10)?.checked_add(digit)?;
-        if x > max {
-            return None;
-        }
-    }
-    Some(x)
+/// `std.fmt.parseUnsigned(T, buf, 10)` for the Zig type `t`; `None` is any of
+/// its errors (every caller does `catch return null_event`).
+///
+/// PORT NOTE (N206): this was a digits-only parser, which refused the `_`
+/// separator Zig skips (`ESC ] 4 ; 1_0 ; ...` is palette index 10 in the
+/// reference). It is `rustty_zigstd::fmt`, the port's one copy of Zig's
+/// parser. Faithful: `_` is the standard library's grammar and libvaxis has no
+/// position of its own on it (compare UD141, where Ghostty's own OSC 99 parser
+/// refuses `_`). In a CSI a `_` (0x5F) is a final byte, so it only reaches the
+/// OSC numbers.
+fn parse_unsigned(buf: &[u8], t: IntType) -> Option<u32> {
+    parse_unsigned_type(t, buf, 10).ok().map(|v| v as u32)
 }
 
 /// `std.unicode.utf8Encode(cp: u21, buf) !usize` — `None` for surrogates + `>0x10FFFF`
@@ -1277,6 +1304,24 @@ mod tests {
         let expected_event = Event::KeyPress(expected_key);
 
         assert_eq!(6, result.n);
+        assert_eq!(Some(expected_event), result.event);
+    }
+
+    #[test]
+    fn xterm_shift_tab() {
+        let input = b"\x1b[Z";
+        let mut parser = Parser::default();
+        let result = parser.parse(input).unwrap();
+        let expected_key = Key {
+            mods: Modifiers {
+                shift: true,
+                ..Default::default()
+            },
+            ..key_with_codepoint(key::tab)
+        };
+        let expected_event = Event::KeyPress(expected_key);
+
+        assert_eq!(3, result.n);
         assert_eq!(Some(expected_event), result.event);
     }
 
@@ -1695,6 +1740,55 @@ mod tests {
         }
     }
 
+    /// libvaxis 0.6.0 `test "parse(csi): mouse (negative)"`: `Mouse.col`/`row` are
+    /// `i16`, read with `parseParam(i16, ..)`, so a negative coordinate is kept.
+    #[test]
+    fn csi_mouse_negative() {
+        let mut buf = [0u8; 1];
+        let input = b"\x1b[<35;-50;-100m";
+        let result = parse_csi(input, &mut buf);
+        let expected = Event::Mouse(Mouse {
+            col: -51,
+            row: -101,
+            xoffset: 0,
+            yoffset: 0,
+            button: mouse::Button::None,
+            r#type: mouse::Type::Motion,
+            mods: mouse::Modifiers::default(),
+        });
+
+        assert_eq!(input.len(), result.n);
+        assert_eq!(Some(expected), result.event);
+    }
+
+    /// S-10b (the 36 SGR mouse results N206 left open): the coordinates are
+    /// `parseParam(i16, ..) -| 1`, so `0` is column -1, `-5` is -6, `-0` is -1, the
+    /// i16 floor saturates, and a value past `i16` is refused (null event, sequence
+    /// consumed). Expected values MEASURED with libvaxis 0.6.0 built with Zig 0.16.0
+    /// (S-10b probe `mouse` mode).
+    #[test]
+    fn sgr_mouse_coordinates_are_i16() {
+        let at = |input: &[u8]| {
+            let mut buf = [0u8; 1];
+            let r = parse_csi(input, &mut buf);
+            assert_eq!(input.len(), r.n, "{input:?} is consumed whole");
+            match r.event {
+                Some(Event::Mouse(m)) => Some((m.col, m.row)),
+                None => None,
+                other => panic!("{input:?} decoded to {other:?}"),
+            }
+        };
+        assert_eq!(Some((-1, -1)), at(b"\x1b[<0;0;0M"));
+        assert_eq!(Some((-6, 4)), at(b"\x1b[<0;-5;5M"));
+        assert_eq!(Some((-1, -1)), at(b"\x1b[<0;-0;-0M"));
+        assert_eq!(Some((32766, -32768)), at(b"\x1b[<0;32767;-32768M"));
+        assert_eq!(None, at(b"\x1b[<0;40000;1M"));
+        assert_eq!(None, at(b"\x1b[<0;1;32768M"));
+        assert_eq!(None, at(b"\x1b[<0;-32769;1M"));
+        // Empty coordinates take the default 1, i.e. column / row 0.
+        assert_eq!(Some((0, 0)), at(b"\x1b[<0;;M"));
+    }
+
     #[test]
     fn csi_xterm_mouse() {
         let mut buf = [0u8; 1];
@@ -1732,5 +1826,137 @@ mod tests {
 
         assert_eq!(7, result.n);
         assert_eq!(Some(expected_event), result.event);
+    }
+
+    // N206: the numbers in the replies vaxis parses go through Zig 0.16.0
+    // `std.fmt`, so they take its grammar. The expected values were measured
+    // with libvaxis 0.6.0 (the pinned vaxis) built with Zig 0.16.0.
+
+    /// OSC numbers are `std.fmt.parseUnsigned(u8, .., 10)`, which skips a `_`
+    /// between digits (`1_0` is 10) and refuses a sign.
+    #[test]
+    fn osc_numbers_take_zig_digit_separators() {
+        let mut parser = Parser::default();
+        let r = parser
+            .parse(b"\x1b]4;1_0;rgb:1111/2222/3333\x1b\\")
+            .unwrap();
+        assert_eq!(28, r.n);
+        assert_eq!(
+            Some(Event::ColorReport(cell::Report {
+                kind: cell::Kind::Index(10),
+                value: [0x11, 0x22, 0x33],
+            })),
+            r.event
+        );
+
+        let mut parser = Parser::default();
+        let r = parser.parse(b"\x1b]1_1;rgb:1111/2222/3333\x1b\\").unwrap();
+        assert_eq!(26, r.n);
+        assert_eq!(
+            Some(Event::ColorReport(cell::Report {
+                kind: cell::Kind::Bg,
+                value: [0x11, 0x22, 0x33],
+            })),
+            r.event
+        );
+
+        for input in [
+            &b"\x1b]4;+10;rgb:1111/2222/3333\x1b\\"[..],
+            &b"\x1b]4;-0;rgb:1111/2222/3333\x1b\\"[..],
+            &b"\x1b]4;_10;rgb:1111/2222/3333\x1b\\"[..],
+            &b"\x1b]4;10_;rgb:1111/2222/3333\x1b\\"[..],
+            &b"\x1b]4;256;rgb:1111/2222/3333\x1b\\"[..],
+        ] {
+            let mut parser = Parser::default();
+            let r = parser.parse(input).unwrap();
+            assert_eq!(None, r.event, "{input:?}");
+            assert_eq!(input.len(), r.n, "{input:?}");
+        }
+    }
+
+    /// CSI parameters read by `parseParam` are `std.fmt.parseInt(T, .., 10)`
+    /// in libvaxis 0.6.0, which takes a leading `+` and reads `-0` as zero.
+    #[test]
+    fn csi_params_take_zig_parse_int_signs() {
+        let parse = |input: &[u8]| {
+            let mut parser = Parser::default();
+            let r = parser.parse(input).unwrap();
+            let key = match r.event {
+                Some(Event::KeyPress(k)) => Some((k.codepoint, k.mods, k.shifted_codepoint)),
+                None => None,
+                other => panic!("{input:?}: {other:?}"),
+            };
+            (key, r.n)
+        };
+        let ctrl = Modifiers {
+            ctrl: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            (Some((97, Modifiers::default(), None)), 6),
+            parse(b"\x1b[+97u")
+        );
+        assert_eq!(
+            (Some((0, Modifiers::default(), None)), 5),
+            parse(b"\x1b[-0u")
+        );
+        assert_eq!((Some((97, ctrl, None)), 8), parse(b"\x1b[97;+5u"));
+        assert_eq!(
+            (Some((97, Modifiers::default(), Some(5))), 8),
+            parse(b"\x1b[97:+5u")
+        );
+        assert_eq!((Some((key::end, ctrl, None)), 7), parse(b"\x1b[1;+5F"));
+        assert_eq!(
+            (Some((key::insert, Modifiers::default(), None)), 5),
+            parse(b"\x1b[+2~")
+        );
+        // `-1` is `error.Overflow` for an unsigned type; a second sign is refused.
+        assert_eq!((None, 5), parse(b"\x1b[-1u"));
+        assert_eq!((None, 6), parse(b"\x1b[+-5u"));
+
+        let mut parser = Parser::default();
+        let r = parser.parse(b"\x1b[<+0;+5;+6M").unwrap();
+        assert_eq!(12, r.n);
+        assert_eq!(
+            Some(Event::Mouse(Mouse {
+                col: 4,
+                row: 5,
+                xoffset: 0,
+                yoffset: 0,
+                button: mouse::Button::Left,
+                r#type: mouse::Type::Press,
+                mods: mouse::Modifiers::default(),
+            })),
+            r.event
+        );
+    }
+
+    /// The CSI numbers libvaxis reads with `std.fmt.parseUnsigned` (window
+    /// size, DECRPM, DSR) still refuse a sign.
+    #[test]
+    fn csi_unsigned_numbers_refuse_a_sign() {
+        let mut parser = Parser::default();
+        let r = parser.parse(b"\x1b[48;97;2;3;4t").unwrap();
+        assert_eq!(
+            Some(Event::Winsize(Winsize {
+                rows: 97,
+                cols: 2,
+                x_pixel: 4,
+                y_pixel: 3,
+            })),
+            r.event
+        );
+        for input in [
+            &b"\x1b[48;+97;2;3;4t"[..],
+            &b"\x1b[48;-0;2;3;4t"[..],
+            &b"\x1b[?+2026;1$y"[..],
+            &b"\x1b[?2026;+1$y"[..],
+            &b"\x1b[?+997;1n"[..],
+        ] {
+            let mut parser = Parser::default();
+            let r = parser.parse(input).unwrap();
+            assert_eq!(None, r.event, "{input:?}");
+            assert_eq!(input.len(), r.n, "{input:?}");
+        }
     }
 }

@@ -129,11 +129,21 @@ fn perform_action_arm_coverage() {
 }
 
 /// Build the real `Application` GObject (the `performAction` receiver) using the
-/// same construction the entrypoint does. Returns `None` when GTK cannot bind
-/// this worker thread as its main thread (multi-threaded harness run — the body
-/// is exercised by running this test with `--exact`).
-fn display_application() -> Option<harness::AppHarness> {
-    harness::AppHarness::init()
+/// same construction the entrypoint does, or FAIL.
+///
+/// R14 (the `init_for_display_test` rule, `crates/rustty-apprt/src/gtk.rs`): the
+/// callers are `#[ignore]`d, so reaching one means it was asked for, and a run
+/// that cannot build the app must not report `ok`. It used to return `None`
+/// and the tests returned early, which is indistinguishable from a pass.
+fn display_application() -> harness::AppHarness {
+    harness::AppHarness::init().unwrap_or_else(|| {
+        panic!(
+            "the GTK Application could not be built, so this #[ignore]d test could \
+             not run. Two causes: (a) no display — export DISPLAY or \
+             WAYLAND_DISPLAY; (b) GTK was already initialized by another test in \
+             this binary (it binds one thread) — run one test with `--exact`."
+        )
+    })
 }
 
 mod harness {
@@ -203,9 +213,7 @@ mod harness {
 #[ignore = "requires a display; run via cargo test -p rustty-apprt --features gtk \
             --test gtk_perform_action -- --ignored --exact"]
 fn perform_action_render_queues_a_render() {
-    let Some(h) = display_application() else {
-        return;
-    };
+    let h = display_application();
     let handled = h
         .application
         .perform_action(Target::<NullHandle>::App, Action::Render)
@@ -220,9 +228,7 @@ fn perform_action_render_queues_a_render() {
 #[ignore = "requires a display; run via cargo test -p rustty-apprt --features gtk \
             --test gtk_perform_action -- --ignored --exact"]
 fn perform_action_unimplemented_returns_false() {
-    let Some(h) = display_application() else {
-        return;
-    };
+    let h = display_application();
 
     // The Unimplemented set, one variant per reference line (`:777-791`).
     let unimplemented: [Action<'_>; 13] = [
@@ -268,9 +274,7 @@ fn perform_action_unimplemented_returns_false() {
 #[ignore = "requires a display; run via cargo test -p rustty-apprt --features gtk \
             --test gtk_perform_action -- --ignored --exact"]
 fn perform_action_new_window_app_does_not_panic() {
-    let Some(h) = display_application() else {
-        return;
-    };
+    let h = display_application();
     let handled = h
         .application
         .perform_action(Target::<NullHandle>::App, Action::NewWindow)
@@ -284,9 +288,7 @@ fn perform_action_new_window_app_does_not_panic() {
 #[ignore = "requires a display; run via cargo test -p rustty-apprt --features gtk \
             --test gtk_perform_action -- --ignored --exact"]
 fn perform_action_selection_changed_returns_true() {
-    let Some(h) = display_application() else {
-        return;
-    };
+    let h = display_application();
     let handled = h
         .application
         .perform_action(Target::<NullHandle>::App, Action::SelectionChanged)

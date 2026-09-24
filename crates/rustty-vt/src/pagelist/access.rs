@@ -22,7 +22,8 @@
 
 use super::iter::{CellIterator, Direction, Limit, PageIterator, PromptIterator, RowIterator};
 use super::OutOfMemory;
-use super::{List, MemoryPool, Node, PageList, Pin, PinSet};
+use super::{page_backing_alloc, List, MemoryPool, Node, PageList, Pin, PinSet};
+use crate::alloc::Allocator;
 use crate::highlight;
 use crate::page as pagepkg;
 use crate::page::{CloneFromError, Page, Row};
@@ -196,14 +197,31 @@ impl PageList {
                                 )?;
                                 continue;
                             }
-                            write!(writer, "{}", char::from_u32(cell.codepoint()).unwrap())?;
+                            // try writer.print("{u}", .{cell.codepoint()});
+                            // PORT NOTE: Zig's `{u}` (`printUnicodeCodepoint`)
+                            // writes U+FFFD for a surrogate half or a value past
+                            // U+10FFFF; `char::from_u32` reports those as `None`.
+                            // CORRECTION (parity S124-F2): this and the grapheme
+                            // write below were `char::from_u32(..).unwrap()`,
+                            // which panicked on those values.
+                            write!(
+                                writer,
+                                "{}",
+                                char::from_u32(cell.codepoint())
+                                    .unwrap_or(char::REPLACEMENT_CHARACTER)
+                            )?;
                             if cell.has_grapheme() {
                                 let grapheme = unsafe {
                                     (*super::Node::page(chunk.node)).lookup_grapheme(cell)
                                 }
                                 .unwrap();
                                 for cp in grapheme {
-                                    write!(writer, "{}", char::from_u32(*cp).unwrap())?;
+                                    // try writer.print("{u}", .{cp});
+                                    write!(
+                                        writer,
+                                        "{}",
+                                        char::from_u32(*cp).unwrap_or(char::REPLACEMENT_CHARACTER)
+                                    )?;
                                 }
                             }
                         }
@@ -716,14 +734,17 @@ pub struct Clone {
     pub tracked_pins: Option<TrackedPinsRemap>,
 }
 
-// PORT NOTE: the reference `TrackedPinsRemap = std.AutoHashMap(*Pin, *Pin)`.
-// Ported to the std `HashMap` keyed by the raw `*mut Pin` pointer identity.
+// PORT NOTE: the reference `TrackedPinsRemap = std.AutoHashMap(*Pin, *Pin)`, a
+// MANAGED map (`TrackedPinsRemap.init(alloc)`). Ported to a `hashbrown` map
+// over the allocator handle, keyed by the raw `*mut Pin` pointer identity:
+// `TrackedPinsRemap::with_hasher_in(Default::default(), alloc)` is
+// `TrackedPinsRemap.init(alloc)` (parity tail S7-3).
 // PERF(port): Zig's `AutoHashMap` hashes a pointer key with a cheap integer
 // autoHash and no per-map random seed; the std default `RandomState`
 // (SipHash-1-3) is a heavyweight keyed hash. Restore the reference's cheap
 // idiom with a small multiply/xor mix over the pointer bits ([`PtrHasher`]).
 pub type TrackedPinsRemap =
-    std::collections::HashMap<*mut Pin, *mut Pin, std::hash::BuildHasherDefault<PtrHasher>>;
+    hashbrown::HashMap<*mut Pin, *mut Pin, std::hash::BuildHasherDefault<PtrHasher>, Allocator>;
 
 /// Pointer-identity hasher for [`TrackedPinsRemap`].
 // PERF(port): see the `TrackedPinsRemap` note above. `*mut Pin` keys hash
@@ -796,12 +817,11 @@ impl PageList {
     /// rows will be added to the bottom of the region to make up the difference.
     //
     // PORT NOTE: the reference `clone(self, alloc, opts)` takes an `Allocator`
-    // for the node/pin pools; per the crate convention all pools are backed by
-    // the Rust system allocator, so no allocator parameter is threaded through
-    // (see `init`). `opts.tracked_pins` is taken by value (the remap map is
+    // for the node/pin pools; so does the port (parity tail S7-2, N264; see
+    // `init`). `opts.tracked_pins` is taken by value (the remap map is
     // populated and ownership passes back via the returned `Clone`-less map);
     // because the reference threads a `*TrackedPinsRemap` we accept `&mut`.
-    pub fn clone(&self, opts: &mut Clone) -> Result<PageList, CloneError> {
+    pub fn clone(&self, alloc: Allocator, opts: &mut Clone) -> Result<PageList, CloneError> {
         let mut it = self.page_iterator(Direction::RightDown, opts.top, opts.bot);
 
         // First, count our pages so our preheat is exactly what we need.
@@ -822,15 +842,23 @@ impl PageList {
         };
 
         // Setup our pool
-        let mut pool: MemoryPool = MemoryPool::init(page_count)?;
+        // var pool: MemoryPool = try .init(
+        //     alloc,
+        //     pageAllocator(alloc),
+        //     page_count,
+        // );
+        let mut pool: MemoryPool = MemoryPool::init(alloc, page_backing_alloc(), page_count)?;
         // errdefer pool.deinit();
 
         // Create our viewport. In a clone, the viewport always goes
         // to the top.
         let viewport_pin = pool.pins.create().map_err(|_| OutOfMemory)?.as_ptr();
-        let mut tracked_pins: PinSet = PinSet::new();
+        let mut tracked_pins: PinSet = PinSet::new_in(pool.alloc);
         // errdefer tracked_pins.deinit(pool.alloc);
-        tracked_pins.put_no_clobber(viewport_pin, ());
+        // try tracked_pins.putNoClobber(pool.alloc, viewport_pin, {});
+        tracked_pins
+            .try_put_no_clobber(viewport_pin, ())
+            .map_err(|_| OutOfMemory)?;
 
         // Our list of pages
         let mut page_list: List = List::default();
@@ -942,12 +970,19 @@ impl PageList {
                         (*new_p).node = node;
                         (*new_p).y -= chunk.start;
                     }
-                    // PORT NOTE: `AutoHashMap.putNoClobber` is `Allocator.Error!void`
-                    // in the reference; the Rust `HashMap`/`PinSet` insertions own
-                    // their backing storage and are infallible. We assert no clobber
-                    // to preserve the `putNoClobber` contract.
+                    // try remap.putNoClobber(p, new_p);
+                    // try tracked_pins.putNoClobber(pool.alloc, new_p, {});
+                    //
+                    // PORT NOTE: both inserts are `Allocator.Error!void`; the
+                    // reservations make the inserts themselves allocation-free.
+                    // `new_p` stays in `pool`, which the error path drops.
+                    if remap.try_reserve(1).is_err() {
+                        clone_err!(CloneError::OutOfMemory);
+                    }
                     assert!(remap.insert(p, new_p).is_none());
-                    tracked_pins.put_no_clobber(new_p, ());
+                    if tracked_pins.try_put_no_clobber(new_p, ()).is_err() {
+                        clone_err!(CloneError::OutOfMemory);
+                    }
                 }
             }
         }

@@ -1,4 +1,4 @@
-//! `vaxis/src/Screen.zig` (73 LOC, 1 test) — the flat cell buffer (VAXIS_C2_DESIGN §2).
+//! `vaxis/src/Screen.zig` (libvaxis 0.6.0: 78 LOC, 1 named test) — the flat cell buffer (VAXIS_C2_DESIGN §2).
 //!
 //! PORT NOTE (ownership): Zig `buf: []Cell` (allocator-owned slice) → `Vec<Cell<'a>>`
 //! (the crate OWNS the flat cell buffer). `Cell<'a>` carries `'a` because
@@ -12,10 +12,64 @@
 //! infallible (aborts on OOM), consistent with the crate's pure-leaf model; `deinit`
 //! becomes `Drop` of the `Vec`.
 
+use std::sync::Arc;
+
 use crate::cell::{Cell, CursorShape};
 use crate::gwidth::Method;
 use crate::mouse::Shape;
 use crate::Winsize;
+
+/// `pub const Cursor = struct { row: u16 = 0, col: u16 = 0 };` (libvaxis 0.6.0; 0.5.1 had
+/// the two `cursor_row` / `cursor_col` fields instead).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Cursor {
+    pub row: u16,
+    pub col: u16,
+}
+
+/// A Zig `[]Cursor` slice as libvaxis 0.6.0 uses it for `cursor_secondary`: an allocation
+/// that `Vaxis` shares between `screen.cursor_secondary` and `state.cursor_secondary`
+/// and compares by IDENTITY (`std.meta.eql` on a slice is `a.ptr == b.ptr and a.len ==
+/// b.len`, not a content comparison).
+///
+/// PORT NOTE (slice identity + ownership): Zig frees and duplicates these slices by hand,
+/// comparing pointers to decide which copy it owns. Here each allocation is an
+/// `Arc<[Cursor]>` (freed when its last holder drops it) and identity is
+/// [`Arc::ptr_eq`]. The empty slice `&.{}` is `None`: every `&.{}` of this type has the same
+/// pointer in Zig (MEASURED with Zig 0.16.0: a default `Screen`'s and a default
+/// `Vaxis.state`'s empty slices compare equal), so two empty slices are identical here too.
+/// `Arc`, not `Rc`, because a `Vaxis` is shared with the `Loop`'s read thread.
+#[derive(Clone, Debug, Default)]
+pub struct CursorSlice(Option<Arc<[Cursor]>>);
+
+impl CursorSlice {
+    /// The empty slice (`&.{}`).
+    pub const EMPTY: CursorSlice = CursorSlice(None);
+
+    /// A fresh allocation holding `cursors` (Zig `toOwnedSlice` / `dupe`).
+    pub fn from_vec(cursors: Vec<Cursor>) -> CursorSlice {
+        if cursors.is_empty() {
+            return CursorSlice::EMPTY;
+        }
+        CursorSlice(Some(Arc::from(cursors)))
+    }
+
+    pub fn as_slice(&self) -> &[Cursor] {
+        match &self.0 {
+            Some(a) => a,
+            None => &[],
+        }
+    }
+
+    /// `std.meta.eql(a, b)` for two slices: same pointer and same length.
+    pub fn ptr_eql(&self, other: &CursorSlice) -> bool {
+        match (&self.0, &other.0) {
+            (None, None) => true,
+            (Some(a), Some(b)) => Arc::ptr_eq(a, b) && a.len() == b.len(),
+            _ => false,
+        }
+    }
+}
 
 pub struct Screen<'a> {
     pub width: u16,
@@ -26,9 +80,9 @@ pub struct Screen<'a> {
 
     pub buf: Vec<Cell<'a>>,
 
-    pub cursor_row: u16,
-    pub cursor_col: u16,
+    pub cursor: Cursor,
     pub cursor_vis: bool,
+    pub cursor_secondary: CursorSlice,
 
     pub width_method: Method,
 
@@ -48,9 +102,9 @@ impl Default for Screen<'_> {
             width_pix: 0,
             height_pix: 0,
             buf: Vec::new(),
-            cursor_row: 0,
-            cursor_col: 0,
+            cursor: Cursor::default(),
             cursor_vis: false,
+            cursor_secondary: CursorSlice::EMPTY,
             width_method: Method::Wcwidth,
             mouse_shape: Shape::Default,
             cursor_shape: CursorShape::Default,

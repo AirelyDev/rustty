@@ -22,6 +22,11 @@ members = [
     "crates/rustty-util",          #  1
     "crates/rustty-build-config",  #  2
     "crates/rustty-identity",      #  3
+    # The git-derived app version (`build_config.version_string`/`release_channel`),
+    # split out of rustty-build-config because it changes on every commit: only
+    # the crates that report it depend on it (review T-B). Above build-config +
+    # identity, below everything that reads it.
+    "crates/rustty-version",
     "crates/rustty-datastruct",    #  4
     "crates/rustty-unicode",       #  5
     "crates/rustty-simd",          #  6
@@ -185,6 +190,7 @@ authors = ["rustty contributors"]
 rustty-util = { path = "crates/rustty-util" }
 rustty-build-config = { path = "crates/rustty-build-config" }
 rustty-identity = { path = "crates/rustty-identity" }
+rustty-version = { path = "crates/rustty-version" }
 rustty-datastruct = { path = "crates/rustty-datastruct" }
 rustty-unicode = { path = "crates/rustty-unicode" }
 rustty-simd = { path = "crates/rustty-simd" }
@@ -334,6 +340,14 @@ dcimgui-sys = { path = "crates-sys/dcimgui-sys", default-features = false }
 # / `deallocate` map to Zig `rawAlloc`/`rawFree`. `Global` == the current
 # `std::alloc` path, so threading it as the child allocator is behavior-preserving.
 allocator-api2 = "0.2"
+# Allocator-aware hash maps over an allocator_api2 `Allocator` (the stable
+# route to std's `HashMap` with a custom allocator): the index of
+# rustty-zigstd's `AutoArrayHashMapUnmanaged` and rustty-vt's
+# `TrackedPinsRemap`, both over the `VtAllocator` handle (parity tail S7-3).
+# No default features: callers supply the hasher (std `RandomState` where the
+# map used `std::collections::HashMap`), and `inline-more` stays off, as it is
+# for std's own hashbrown and for indexmap's, the workspace's other user.
+hashbrown = { version = "0.17", default-features = false, features = ["allocator-api2"] }
 # Zig `std.json` equivalent for the crash-envelope port (rustty-crash): the
 # reference's `std.json.ObjectMap` is a `StringArrayHashMap(Value)` — an
 # INSERTION-ORDER-preserving string map — so `serde_json` is pinned with the
@@ -342,6 +356,10 @@ allocator-api2 = "0.2"
 # std-lib shims in rustty-zigstd, this maps a Zig *stdlib* facility, not
 # ghostty code (R3 concerns C libraries; pure-Rust bindings to stdlib-level
 # functionality are fine).
+# CORRECTION (LEDGER S79-F3, S79-F4, parity tail T-E): rustty-crash no longer
+# uses serde_json; its value model and printer differ from `std.json`, so the
+# crash-envelope port now has its own `std.json` port (crates/rustty-crash/src/
+# json.rs, on `indexmap`). The remaining user is xtask.
 serde_json = { version = "1", features = ["preserve_order"] }
 
 # Workspace-wide lints. Kept conservative for the scaffold phase; tightened as

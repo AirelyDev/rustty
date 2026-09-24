@@ -34,10 +34,11 @@ use rustty_vt::input::key_mods::{ModSide, Mods};
 
 use crate::gtk::winproto;
 
-/// PORTS: `key.zig:11-30` `accelFromTrigger`. Returns a GTK accelerator string
-/// from a trigger (e.g. `"<Ctrl><Shift>a"`), or `None` when the trigger cannot
-/// be formatted (a `catch_all` key). See the module doc for the `buf` → owned
-/// `String` divergence.
+/// Returns a GTK accelerator string from a trigger.
+///
+/// PORTS: `key.zig:11-30` `accelFromTrigger` (e.g. `"<Ctrl><Shift>a"`), or
+/// `None` when the trigger cannot be formatted (a `catch_all` key). See the
+/// module doc for the `buf` → owned `String` divergence.
 #[must_use]
 pub fn accel_from_trigger(trigger: Trigger) -> Option<String> {
     let mut out = String::new();
@@ -61,13 +62,16 @@ pub fn accel_from_trigger(trigger: Trigger) -> Option<String> {
         return None;
     }
 
+    // We need to make the string null terminated.
+    // (PORT NOTE: an owned `String` carries no NUL; see the module doc.)
     Some(out)
 }
 
-/// PORTS: `key.zig:34-58` `xdgShortcutFromTrigger`. Returns an XDG-compliant
-/// shortcuts string from a trigger (spec:
-/// <https://specifications.freedesktop.org/shortcuts-spec/latest/>), or `None`
-/// for a `catch_all` key.
+/// Returns a XDG-compliant shortcuts string from a trigger.
+/// Spec: <https://specifications.freedesktop.org/shortcuts-spec/latest/>
+///
+/// PORTS: `key.zig:34-58` `xdgShortcutFromTrigger`; `None` for a `catch_all`
+/// key.
 #[must_use]
 pub fn xdg_shortcut_from_trigger(trigger: Trigger) -> Option<String> {
     let mut out = String::new();
@@ -86,18 +90,25 @@ pub fn xdg_shortcut_from_trigger(trigger: Trigger) -> Option<String> {
         out.push_str("LOGO+");
     }
 
-    // Write our key (`key.zig:47-52`). NOTE: while the spec specifies only
-    // libxkbcommon keysyms, GTK's keysyms work as they are identical to X11's.
+    // Write our key (`key.zig:47-52`).
+    // NOTE: While the spec specifies that only libxkbcommon keysyms are
+    // expected, using GTK's keysyms should still work as they are identical
+    // to *X11's* keysyms (which I assume is a subset of libxkbcommon's).
+    // I haven't been able to any evidence to back up that assumption but
+    // this works for now
     if !write_trigger_key(&mut out, trigger) {
         return None;
     }
 
+    // We need to make the string null terminated.
+    // (PORT NOTE: an owned `String` carries no NUL; see the module doc.)
     Some(out)
 }
 
-/// PORTS: `key.zig:60-67` `keysymFromTrigger`. Returns the keysym (identical to
-/// a GDK keyval) for a trigger key, or `None` if the trigger has no keysym
-/// representation (a `catch_all`).
+/// Returns the keysym (identical to a GDK keyval) for a trigger key,
+/// or null if the trigger has no keysym representation.
+///
+/// PORTS: `key.zig:60-67` `keysymFromTrigger` (`None` for a `catch_all`).
 ///
 /// This is the trigger→wire conversion the `vicinae_hotkey_v1` bind request needs
 /// ([`winproto::wayland`]'s `Hotkeys`); unlike [`write_trigger_key`] it produces
@@ -180,10 +191,12 @@ pub fn keyval_to_unicode(keyval: u32) -> u32 {
         .map_or(0, |c| c as u32)
 }
 
-/// PORTS: `key.zig:97-139` `keyvalUnicodeUnshifted`. Gets the unshifted unicode
-/// value of the keyval — used by the Kitty keyboard protocol. Consults the
-/// active keyboard layout (`event.layout()`) and returns the level-0 mapping for
-/// the physical `keycode`, or 0 if none.
+// Get the unshifted unicode value of the keyval. This is used
+// by the Kitty keyboard protocol.
+//
+/// PORTS: `key.zig:97-139` `keyvalUnicodeUnshifted`. Consults the active
+/// keyboard layout (`event.layout()`) and returns the level-0 mapping for the
+/// physical `keycode`, or 0 if none.
 #[must_use]
 pub fn keyval_unicode_unshifted(
     widget: &gtk4::Widget,
@@ -192,14 +205,24 @@ pub fn keyval_unicode_unshifted(
 ) -> u32 {
     let display = widget.display();
 
-    // The currently active keyboard layout group (`key.zig:106`).
+    // We need to get the currently active keyboard layout so we know
+    // what group to look at.
     let layout = event.layout();
 
-    // All possible keyboard mappings for this keycode (`key.zig:110-116`). A
-    // keycode is the physical key pressed.
+    // Get all the possible keyboard mappings for this keycode. A keycode is the
+    // physical key pressed.
     let Some(entries) = display.map_keycode(keycode) else {
         return 0;
     };
+
+    // debugging:
+    // std.log.debug("layout={}", .{layout});
+    // for (0..@intCast(n_entries)) |i| {
+    //     std.log.debug("keymap key={} codepoint={x}", .{
+    //         keys[i],
+    //         gdk.keyvalToUnicode(keyvals[i]),
+    //     });
+    // }
 
     for (key, keyval) in entries {
         if key.group() == layout as i32 && key.level() == 0 {
@@ -210,9 +233,11 @@ pub fn keyval_unicode_unshifted(
     0
 }
 
-/// PORTS: `key.zig:144-209` `eventMods`. Returns the mods for a key event.
-/// This requires a lot of context because the `GdkEvent` doesn't contain enough
-/// on its own — the windowing-protocol backend (`app_winproto`) supplies the
+/// Returns the mods to use a key event from a GTK event.
+/// This requires a lot of context because the GdkEvent
+/// doesn't contain enough on its own.
+///
+/// PORTS: `key.zig:144-209` `eventMods`. The windowing-protocol backend (`app_winproto`) supplies the
 /// low-level modifier read, `num_lock` comes from the device, and the physical
 /// key determines the sided modifiers.
 ///
@@ -233,12 +258,15 @@ pub fn event_mods(
         .as_ref()
         .is_some_and(gdk4::prelude::DeviceExt::is_num_locked);
 
-    // We use the physical key to determine sided modifiers. As far as I can tell
-    // there's no other way to reliably determine this.
+    // We use the physical key to determine sided modifiers. As
+    // far as I can tell there's no other way to reliably determine
+    // this.
     //
-    // We also set the main modifier to true if either side is true, since on
-    // both X11/Wayland, GTK doesn't set the main modifier if only the modifier
-    // key is pressed, but our core logic relies on it (`key.zig:159-206`).
+    // We also set the main modifier to true if either side is true,
+    // since on both X11/Wayland, GTK doesn't set the main modifier
+    // if only the modifier key is pressed, but our core logic
+    // relies on it.
+    // (`key.zig:159-206`)
     match physical_key {
         Key::ShiftLeft => {
             mods.shift = action != Action::Release;
@@ -278,8 +306,9 @@ pub fn event_mods(
     mods
 }
 
-/// PORTS: `key.zig:212-218` `keyFromKeyval`. Returns an input key from a keyval
-/// or `None` if we don't have a mapping.
+/// Returns an input key from a keyval or null if we don't have a mapping.
+///
+/// PORTS: `key.zig:212-218` `keyFromKeyval`.
 #[must_use]
 pub fn key_from_keyval(keyval: u32) -> Option<Key> {
     for (kv, key) in KEYMAP {
@@ -290,8 +319,9 @@ pub fn key_from_keyval(keyval: u32) -> Option<Key> {
     None
 }
 
-/// PORTS: `key.zig:221-234` `keyvalFromKey`. Returns a keyval from an input key
-/// or `None` if we don't have a mapping.
+/// Returns a keyval from an input key or null if we don't have a mapping.
+///
+/// PORTS: `key.zig:221-234` `keyvalFromKey`.
 #[must_use]
 fn keyval_from_key(key: Key) -> Option<gdk4::Key> {
     for (kv, k) in KEYMAP {
@@ -302,10 +332,12 @@ fn keyval_from_key(key: Key) -> Option<gdk4::Key> {
     None
 }
 
-/// PORTS: `key.zig:240-252` `labelFromTrigger`. Converts a trigger to a
-/// human-readable label for display in UI (e.g. `"Ctrl+Shift+A"`), using
-/// GTK-accelerator-style formatting. Appends to `out`; returns `false` when the
-/// trigger cannot be formatted (a `catch_all`).
+/// Converts a trigger to a human-readable label for display in UI.
+///
+/// Uses GTK accelerator-style formatting (e.g., "Ctrl+Shift+A").
+/// Returns false if the trigger cannot be formatted (e.g., catch_all).
+///
+/// PORTS: `key.zig:240-252` `labelFromTrigger`. Appends to `out`.
 pub fn label_from_trigger(out: &mut String, trigger: Trigger) -> bool {
     // Modifiers first, using human-readable format (`key.zig:245-248`).
     if trigger.mods.super_ {
@@ -325,9 +357,10 @@ pub fn label_from_trigger(out: &mut String, trigger: Trigger) -> bool {
     write_trigger_key_label(out, trigger)
 }
 
-/// PORTS: `key.zig:255-298` `writeTriggerKeyLabel`. Appends the key portion of a
-/// trigger in human-readable form, capitalizing the first letter for nicer
-/// display. Returns `false` for a `catch_all`.
+/// Writes the key portion of a trigger in human-readable format.
+///
+/// PORTS: `key.zig:255-298` `writeTriggerKeyLabel`. Returns `false` for a
+/// `catch_all`.
 fn write_trigger_key_label(out: &mut String, trigger: Trigger) -> bool {
     match trigger.key {
         TriggerKey::Physical(k) => {
@@ -337,15 +370,20 @@ fn write_trigger_key_label(out: &mut String, trigger: Trigger) -> bool {
             let Some(name) = keyval.name() else {
                 return false;
             };
+            // Capitalize the first letter for nicer display
             push_capitalized(out, name.as_str());
         }
 
         TriggerKey::Unicode(cp) => {
+            // Try to get a nice name from GDK first
+            //
             // SAFETY: see `write_trigger_key` — every `u32` is a valid keyval.
             let key = unsafe { gdk4::Key::from_glib(cp) };
             if let Some(name) = key.name() {
+                // Capitalize the first letter for nicer display
                 push_capitalized(out, name.as_str());
             } else if let Some(c) = char::from_u32(cp) {
+                // Fall back to printing the character
                 out.push(c);
             }
         }
@@ -370,6 +408,9 @@ fn push_capitalized(out: &mut String, name: &str) {
     }
 }
 
+/// A raw entry in the keymap. Our keymap contains mappings between
+/// GDK keys and our own key enum.
+///
 /// PORTS: `key.zig:388-535` the `keymap` table (`RawEntry = struct { c_uint,
 /// input.Key }`). Maps GDK keyvals (`gdk4::Key::*`) to rustty's
 /// [`Key`] enum. Preserved 1:1 with the reference's ordering.

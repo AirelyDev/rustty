@@ -10,7 +10,7 @@
 //!
 //! ONE HEADED TEST PER BINARY (see `gtk_wayland_set_urgent.rs`): `gtk4::init()`
 //! binds GTK to one thread per process.
-#![cfg(all(any(target_os = "linux", target_os = "freebsd"), feature = "wayland"))]
+#![cfg(all(any(target_os = "linux", target_os = "freebsd"), rustty_gtk_wayland))]
 
 use gtk4::glib;
 use gtk4::prelude::*;

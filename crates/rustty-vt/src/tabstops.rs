@@ -19,10 +19,11 @@
 // PORT NOTE: `tripwire` and `quirks.inlineAssert` live in `rustty-util` (the
 // FIRM leaf crate). `std.mem.Allocator` is faithfully modeled by
 // `allocator_api2::alloc::Allocator` (the same map used by PageList); callers
-// pass `allocator_api2::alloc::Global` for the prior `std::alloc` behavior.
+// pass `crate::alloc::Global` for the prior `std::alloc` behavior.
 // (`ac4dc1205` dropped the `fastmem` import along with the alloc+copy+free
 // resize path.)
-use allocator_api2::alloc::{Allocator, Global};
+use crate::alloc::Global;
+use allocator_api2::alloc::Allocator;
 use allocator_api2::boxed::Box;
 use rustty_util::quirks::inlineAssert as assert;
 
@@ -127,16 +128,20 @@ impl Tabstops<Global> {
     //     return res;
     // }
     //
-    // PORT NOTE: the default-constructed `Tabstops{}` (`.{}`) is `default()`
-    // over `Global`. Threading a non-`Global` allocator would use
-    // `init_in`/`new_in` analogues; the reference only ever uses the default
-    // allocator path here.
+    // PORT NOTE (parity tail S7-3): the default-constructed `Tabstops{}`
+    // (`.{}`) is `default()`, with its (empty) `dynamic_stops` bound to
+    // `alloc`: allocator_api2's `Box` carries its allocator, so this is what
+    // makes the `resize(alloc, ...)` growth and the eventual free go through the
+    // caller's allocator handle, as the reference's per-call `alloc` does.
     pub fn init(
         alloc: Global,
         cols: usize,
         interval: usize,
     ) -> Result<Tabstops<Global>, OutOfMemory> {
-        let mut res: Tabstops<Global> = Tabstops::default();
+        let mut res: Tabstops<Global> = Tabstops {
+            dynamic_stops: allocator_api2::vec::Vec::new_in(alloc).into_boxed_slice(),
+            ..Tabstops::default()
+        };
         res.resize(alloc, cols)?;
         res.reset(interval);
         Ok(res)
@@ -329,7 +334,9 @@ impl<A: Allocator> Tabstops<A> {
             self.dynamic_stops = new_vec.into_boxed_slice();
             return Err(OutOfMemory);
         }
-        new_vec.resize(dynamic_count, 0);
+        // (`resize_copy`: allocator_api2's `resize` is a per-element loop,
+        // N261; banned in this crate by clippy.toml.)
+        crate::alloc::CopyVecExt::resize_copy(&mut new_vec, dynamic_count, 0);
         self.dynamic_stops = new_vec.into_boxed_slice();
         self.cols = cols;
         Ok(())
@@ -414,7 +421,7 @@ pub(crate) fn resize_tw_end(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use allocator_api2::alloc::Global;
+    use crate::alloc::Global;
 
     // test "Tabstops: basic"
     #[test]

@@ -613,11 +613,15 @@ fn lz4_differential_exhaustive() {
     //   RUSTTY_LZ4_SLOW=1 cargo test -p rustty-vt --lib --release --ignored lz4_differential_exhaustive
     //
     // PORT NOTE: the oracle returns `error.SkipZigTest`; Rust's harness has no
-    // runtime skip, so the `#[ignore]` above carries that reporting semantic
-    // and this early return remains the value gate.
-    if std::env::var_os("RUSTTY_LZ4_SLOW").is_none() {
-        return;
-    }
+    // runtime skip, so the `#[ignore]` above carries that reporting semantic.
+    // Asked for without the opt-in variable, the test FAILS with how to run it
+    // (R14) instead of returning `ok` having run nothing.
+    assert!(
+        std::env::var_os("RUSTTY_LZ4_SLOW").is_some(),
+        "lz4_differential_exhaustive runs only with RUSTTY_LZ4_SLOW=1 (minutes, \
+         use --release): RUSTTY_LZ4_SLOW=1 cargo test -p rustty-vt --lib --release \
+         -- --ignored lz4_differential_exhaustive"
+    );
 
     // Several independent seeds; the suite is deterministic per seed.
     for seed in 0..4u64 {

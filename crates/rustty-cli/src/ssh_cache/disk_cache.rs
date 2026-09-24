@@ -192,12 +192,19 @@ impl DiskCache {
         // };
         // defer file.close();
         //
-        // PORT NOTE: the port creates the file EXCLUSIVELY (`create_new`) so the
-        // "already exists -> open + fixup" branch is reachable exactly as written.
-        // Observable behavior is identical: a fresh file is created 0600, an
-        // existing one (already 0600 from a prior add) is opened and left at 0600.
-        // `file` is closed on drop (the reference's `defer file.close()`).
-        let file = match create_new_secure(as_path(&self.path)) {
+        // CORRECTION (parity S71-F4, task T-C). The note here used to read: "the
+        // port creates the file EXCLUSIVELY (`create_new`) so the 'already
+        // exists -> open + fixup' branch is reachable exactly as written.
+        // Observable behavior is identical". It was not: at the pin the call is
+        // `std.Io.Dir.createFileAbsolute(io, path, .{ .read = true, .truncate =
+        // false, .permissions = 0o600 })`, whose `exclusive` defaults to `false`
+        // (Zig 0.16.0 `Io/Dir.zig` `CreateFileOptions`), i.e. a plain O_CREAT
+        // open. An existing file is opened as it is, never chmod'ed here, so the
+        // `PathAlreadyExists` arm is unreachable in the reference, and in the
+        // port. Making it reachable added a chmod of an existing file (visible
+        // when `add` then fails) and a create-then-open race. `file` is closed
+        // on drop (the reference's `defer file.close()`).
+        let file = match create_secure(as_path(&self.path)) {
             Ok(f) => f,
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                 let existing_file = open_read_write(as_path(&self.path)).map_err(Error::Io)?;
@@ -665,19 +672,283 @@ fn fixup_permissions(file: &File) -> Result<(), Error> {
 fn is_valid_host(host: &[u8]) -> bool {
     // First check for valid hostnames because this is assumed to be the more
     // likely ssh host format.
-    // if (internal_os.hostname.isValid(host)) { return true; }
-    if rustty_os::hostname::isValid(host) {
+    // if (std.Io.net.HostName.validate(host)) |_| {
+    //     return true;
+    // } else |_| {}
+    //
+    // PORT NOTE (parity S71-F1, task T-C): this called
+    // `rustty_os::hostname::isValid`, a port of the since-deleted
+    // `os/hostname.zig` whose length limit is 253. At the pin the reference
+    // calls the Zig 0.16.0 standard library's `HostName.validate`
+    // (`max_len = 255`), ported below as `host_name_validate`.
+    if host_name_validate(host) {
         return true;
     }
 
     // We also accept valid IP addresses. In practice, IPv4 addresses are also
     // considered valid hostnames due to their overlapping syntax, so we can
     // simplify this check to be IPv6-specific.
-    // if (std.net.Address.parseIp6(host, 0)) |_| { return true; } else |_| { return false; }
-    std::str::from_utf8(host)
-        .ok()
-        .and_then(|s| s.parse::<std::net::Ipv6Addr>().ok())
-        .is_some()
+    // if (std.Io.net.IpAddress.parseIp6(host, 0)) |_| {
+    //     return true;
+    // } else |_| {
+    //     return false;
+    // }
+    //
+    // PORT NOTE (parity S71-F3, task T-C): this used `std::net::Ipv6Addr`'s
+    // parser, whose grammar differs from Zig's `Ip6Address.Unresolved.parse`:
+    // Rust accepts an embedded IPv4 in any address (`::1.2.3.4`,
+    // `64:ff9b::1.2.3.4`), the reference only after a literal `::ffff:`, and the
+    // reference accepts forms Rust rejects (`::1:2:3:4:5:6:7:8`). The reference
+    // parser is ported below as `ip6_parse`.
+    ip6_parse(host)
+}
+
+/// PORTS: Zig 0.16.0 `std.Io.net.HostName.validate` — `true` where the
+/// reference returns without error. Validates a hostname according to
+/// [RFC 1123](https://www.rfc-editor.org/rfc/rfc1123).
+fn host_name_validate(bytes: &[u8]) -> bool {
+    // pub const max_len = 255;
+    const MAX_LEN: usize = 255;
+
+    // if (bytes.len == 0) return error.InvalidHostName;
+    if bytes.is_empty() {
+        return false;
+    }
+
+    // Ignore trailing dot (FQDN). It doesn't count toward our length.
+    let end = if bytes[bytes.len() - 1] == b'.' {
+        bytes.len() - 1
+    } else {
+        bytes.len()
+    };
+
+    // The accepted maximum length of a hostname, including labels and dots.
+    if end > MAX_LEN {
+        return false;
+    }
+
+    // Hostnames are divided into dot-separated "labels", which:
+    //
+    // - Start with a letter or digit
+    // - Can contain letters, digits, or hyphens
+    // - Must end with a letter or digit
+    // - Have a minimum of 1 character and a maximum of 63
+    let mut label_len: usize = 0;
+    for (i, &c) in bytes[0..end].iter().enumerate() {
+        match c {
+            b'.' => {
+                if label_len == 0 || label_len > 63 {
+                    return false;
+                }
+                if !bytes[i - 1].is_ascii_alphanumeric() {
+                    return false;
+                }
+                label_len = 0;
+            }
+            b'-' => {
+                if label_len == 0 {
+                    return false;
+                }
+                label_len += 1;
+            }
+            _ => {
+                if !c.is_ascii_alphanumeric() {
+                    return false;
+                }
+                label_len += 1;
+            }
+        }
+    }
+
+    // Validate the final label
+    if label_len == 0 || label_len > 63 {
+        return false;
+    }
+    bytes[end - 1].is_ascii_alphanumeric()
+}
+
+/// PORTS: Zig 0.16.0 `std.Io.net.IpAddress.parseIp6(text, 0)` succeeding, i.e.
+/// `Ip6Address.Unresolved.parse(text)` returning `.success` with no interface
+/// name (a scope id makes `Ip6Address.parse` return `error.UnresolvedScope`).
+/// Only acceptance is observable here, so the parsed bytes are not built.
+fn ip6_parse(text: &[u8]) -> bool {
+    // if (text.len < 2) return .incomplete;
+    if text.len() < 2 {
+        return false;
+    }
+    // const ip4_prefix = "::ffff:";
+    // if (std.ascii.startsWithIgnoreCase(text, ip4_prefix)) {
+    //     const parsed = Ip4Address.parse(text[ip4_prefix.len..], 0) catch
+    //         return .{ .invalid_ip4_mapping = ip4_prefix.len };
+    //     ...return .{ .success = ... };
+    // }
+    const IP4_PREFIX: &[u8] = b"::ffff:";
+    if text.len() >= IP4_PREFIX.len() && text[..IP4_PREFIX.len()].eq_ignore_ascii_case(IP4_PREFIX) {
+        return ip4_parse(&text[IP4_PREFIX.len()..]);
+    }
+
+    // Has to be u16 elements to handle 3-digit hex numbers from compression.
+    let mut parts: [u16; 8] = [0; 8];
+    let mut parts_i: usize = 0;
+    // var text_i: u8 = 0;
+    let mut text_i: usize = 0;
+    let mut digit_i: u8 = 0;
+    let mut compress_start: Option<usize> = None;
+    let mut interface_name: bool = false;
+
+    // state: switch (State.digit) { .digit => c: switch (text[text_i]) { ... } }
+    let mut c = text[text_i];
+    loop {
+        match c {
+            b'a'..=b'f' | b'A'..=b'F' | b'0'..=b'9' => {
+                // 'A'...'F' => |c| continue :c c - 'A' + 'a',
+                let digit = match c {
+                    b'a'..=b'f' => c - b'a' + 10,
+                    b'A'..=b'F' => c - b'A' + 10,
+                    _ => c - b'0',
+                };
+                // parts[parts_i] = (std.math.mul(u16, parts[parts_i], 16) catch
+                //     return .{ .overflow = text_i }) + digit;
+                match parts[parts_i].checked_mul(16) {
+                    Some(v) => parts[parts_i] = v + u16::from(digit),
+                    None => return false,
+                }
+                // if (digit_i == 4) return .{ .invalid_byte = text_i };
+                if digit_i == 4 {
+                    return false;
+                }
+                digit_i += 1;
+                text_i += 1;
+                if text.len() - text_i == 0 {
+                    parts_i += 1;
+                    break; // continue :state .end;
+                }
+                c = text[text_i];
+            }
+            b':' => {
+                if digit_i == 0 {
+                    // if (compress_start != null) return .{ .invalid_byte = text_i };
+                    if compress_start.is_some() {
+                        return false;
+                    }
+                    if text_i == 0 {
+                        text_i += 1;
+                        if text[text_i] != b':' {
+                            return false;
+                        }
+                        debug_assert!(parts_i == 0);
+                    }
+                    compress_start = Some(parts_i);
+                    text_i += 1;
+                    if text.len() - text_i == 0 {
+                        break; // continue :state .end;
+                    }
+                    c = text[text_i];
+                } else {
+                    parts_i += 1;
+                    if parts.len() - parts_i == 0 {
+                        break; // continue :state .end;
+                    }
+                    digit_i = 0;
+                    text_i += 1;
+                    // if (text.len - text_i == 0) return .incomplete;
+                    if text.len() - text_i == 0 {
+                        return false;
+                    }
+                    c = text[text_i];
+                }
+            }
+            b'%' => {
+                // if (digit_i == 0) return .{ .invalid_byte = text_i };
+                if digit_i == 0 {
+                    return false;
+                }
+                parts_i += 1;
+                text_i += 1;
+                let name = &text[text_i..];
+                // if (name.len == 0) return .incomplete;
+                if name.is_empty() {
+                    return false;
+                }
+                interface_name = true;
+                // text_i = @intCast(text.len);
+                //
+                // PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD160.
+                // The reference's `text_i` is a `u8`, so this `@intCast` traps
+                // (ReleaseSafe) or is undefined behaviour (ReleaseFast) for any
+                // text longer than 255 bytes, which `+ssh-cache --add=` and the
+                // shell-integration ssh wrapper pass through unchecked (MEASURED
+                // with Zig 0.16.0: `fe80::1%` plus 300 bytes panics "integer does
+                // not fit in destination type"). The port keeps a `usize` index,
+                // so a long scoped address reaches the same outcome as a short
+                // one: a scope id is `error.UnresolvedScope`, i.e. not a valid
+                // host.
+                text_i = text.len();
+                break; // continue :state .end;
+            }
+            // else => return .{ .invalid_byte = text_i },
+            _ => return false,
+        }
+    }
+
+    // .end => {
+    // if (text.len - text_i != 0) return .{ .junk_after_end = text_i };
+    if text.len() - text_i != 0 {
+        return false;
+    }
+    let remaining = parts.len() - parts_i;
+    // if (compress_start) |s| { ...memmove/memset... } else { if (remaining != 0) return .incomplete; }
+    if compress_start.is_none() && remaining != 0 {
+        return false;
+    }
+
+    // `Ip6Address.parse`: `.interface = if (p.interface_name != null) return
+    // error.UnresolvedScope else .none`.
+    !interface_name
+}
+
+/// PORTS: Zig 0.16.0 `std.Io.net.Ip4Address.parse(buffer, 0)` succeeding.
+fn ip4_parse(buffer: &[u8]) -> bool {
+    let mut bytes: [u8; 4] = [0; 4];
+    let mut index: usize = 0;
+    let mut saw_any_digits = false;
+    let mut has_zero_prefix = false;
+    for &c in buffer {
+        match c {
+            b'.' => {
+                if !saw_any_digits {
+                    return false;
+                }
+                if index == 3 {
+                    return false;
+                }
+                index += 1;
+                saw_any_digits = false;
+                has_zero_prefix = false;
+            }
+            b'0'..=b'9' => {
+                if c == b'0' && !saw_any_digits {
+                    has_zero_prefix = true;
+                } else if has_zero_prefix {
+                    return false;
+                }
+                saw_any_digits = true;
+                // bytes[index] = try std.math.mul(u8, bytes[index], 10);
+                // bytes[index] = try std.math.add(u8, bytes[index], c - '0');
+                match bytes[index]
+                    .checked_mul(10)
+                    .and_then(|v| v.checked_add(c - b'0'))
+                {
+                    Some(v) => bytes[index] = v,
+                    None => return false,
+                }
+            }
+            _ => return false,
+        }
+    }
+    // if (index == 3 and saw_any_digits) return .{ ... };
+    // return error.Incomplete;
+    index == 3 && saw_any_digits
 }
 
 // fn isValidUser(user: []const u8) bool {
@@ -777,6 +1048,21 @@ fn atomic_temp_path(cache_dir: &[u8]) -> Result<Vec<u8>, Error> {
 fn create_new_secure(path: &Path) -> std::io::Result<File> {
     let mut opts = OpenOptions::new();
     opts.read(true).write(true).create_new(true);
+    #[cfg(not(windows))]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    opts.open(path)
+}
+
+// `std.Io.Dir.createFileAbsolute(io, path, .{ .read = true, .truncate = false,
+// .permissions = 0o600 })` with the default `.exclusive = false`: open
+// read-write, creating the file 0600 if it does not exist, without truncating
+// or re-moding an existing one.
+fn create_secure(path: &Path) -> std::io::Result<File> {
+    let mut opts = OpenOptions::new();
+    opts.read(true).write(true).create(true).truncate(false);
     #[cfg(not(windows))]
     {
         use std::os::unix::fs::OpenOptionsExt;
@@ -1307,6 +1593,164 @@ mod tests {
         assert!(!is_valid_host(b"host_name"));
         assert!(!is_valid_host(b"host@domain"));
         assert!(!is_valid_host(b"host:port"));
+    }
+
+    // Zig 0.16.0 `std.Io.net.HostName` `test validate`, the function the
+    // reference's `isValidHost` calls at the pin (parity S71-F1).
+    #[test]
+    fn host_name_validate_std_test() {
+        fn rep(s: &str, n: usize) -> String {
+            s.repeat(n)
+        }
+        // Valid hostnames
+        assert!(host_name_validate(b"example"));
+        assert!(host_name_validate(b"example.com"));
+        assert!(host_name_validate(b"www.example.com"));
+        assert!(host_name_validate(b"sub.domain.example.com"));
+        assert!(host_name_validate(b"example.com."));
+        assert!(host_name_validate(b"host-name.example.com."));
+        assert!(host_name_validate(b"123.example.com."));
+        assert!(host_name_validate(b"a-b.com"));
+        assert!(host_name_validate(b"a.b.c.d.e.f.g"));
+        assert!(host_name_validate(b"127.0.0.1")); // Also a valid hostname
+        assert!(host_name_validate((rep("a", 63) + ".com").as_bytes())); // Label exactly 63 chars (valid)
+        assert!(host_name_validate((rep("a.", 127) + "a").as_bytes())); // Total length 255 (valid)
+        assert!(host_name_validate((rep("a.", 127) + "a.").as_bytes())); // Total length 255 + trailing dot (valid)
+
+        // Invalid hostnames
+        assert!(!host_name_validate(b""));
+        assert!(!host_name_validate(b".example.com"));
+        assert!(!host_name_validate(b"example.com.."));
+        assert!(!host_name_validate(b"host..domain"));
+        assert!(!host_name_validate(b"-hostname"));
+        assert!(!host_name_validate(b"hostname-"));
+        assert!(!host_name_validate(b"hostname-.com"));
+        assert!(!host_name_validate(b"a.-.b"));
+        assert!(!host_name_validate(b"host_name.com"));
+        assert!(!host_name_validate(b"."));
+        assert!(!host_name_validate(b".."));
+        assert!(!host_name_validate((rep("a", 64) + ".com").as_bytes())); // Label length 64 (too long)
+        assert!(!host_name_validate((rep("a.", 127) + "ab").as_bytes())); // Total length 256 (too long)
+        assert!(!host_name_validate((rep("a.", 127) + "ab.").as_bytes())); // Total length 256 + trailing dot (too long)
+    }
+
+    // parity S71-F1 / S71-F3: `isValidHost` over inputs whose verdicts were
+    // MEASURED by running the reference's `isValidHost` body (HostName.validate
+    // then IpAddress.parseIp6) under Zig 0.16.0.
+    #[test]
+    fn is_valid_host_matches_the_reference_std_parsers() {
+        // 254- and 255-byte hostnames are valid cache keys (the port's former
+        // limit was 253); 256 is not.
+        let h254 = "a.".repeat(126) + "aa";
+        let h255 = "a.".repeat(127) + "a";
+        let h256 = "a.".repeat(127) + "aa";
+        assert_eq!((254, 255, 256), (h254.len(), h255.len(), h256.len()));
+        assert!(is_valid_host(h254.as_bytes()));
+        assert!(is_valid_host(h255.as_bytes()));
+        assert!(!is_valid_host(h256.as_bytes()));
+        assert!(DiskCache::is_valid_cache_key(
+            format!("user@{h255}").as_bytes()
+        ));
+
+        let cases: &[(&str, bool)] = &[
+            ("localhost", true),
+            ("::1", true),
+            ("::", true),
+            ("1::", true),
+            ("::1.2.3.4", false),
+            ("64:ff9b::1.2.3.4", false),
+            ("::ffff:1.2.3.4", true),
+            ("::FFFF:1.2.3.4", true),
+            ("::ffff:1.2.3", false),
+            ("::ffff:01.2.3.4", false),
+            ("1:2:3:4:5:6:7:8", true),
+            ("1:2:3:4:5:6:7:8:9", false),
+            ("1:2:3:4:5:6:7::", true),
+            ("1:2:3:4:5:6:7:8::", false),
+            ("::1:2:3:4:5:6:7:8", true),
+            ("1::2::3", false),
+            ("12345::1", false),
+            ("2001:DB8::1", true),
+            ("fe80::1%eth0", false),
+            (":1", false),
+            ("1:", false),
+            (":::", false),
+            ("1:::2", false),
+            ("abcd:ef01:2345:6789:abcd:ef01:2345:6789", true),
+            ("g::1", false),
+            ("1.2.3.4", true),
+            ("::ffff:1.2.3.4.5", false),
+            ("::ffff:", false),
+            ("ffff::1.2.3.4", false),
+            ("0:0:0:0:0:ffff:1.2.3.4", false),
+            // Uncompressed and short: `.incomplete` (MEASURED with Zig 0.16.0).
+            ("1:2:3", false),
+            ("1:2:3:4:5:6:7", false),
+        ];
+        for &(host, want) in cases {
+            assert_eq!(want, is_valid_host(host.as_bytes()), "{host}");
+        }
+    }
+
+    // parity S71-F4: the reference's `add` opens an existing cache file with a
+    // plain O_CREAT open (`.exclusive = false`) and never chmods it; the mode
+    // only becomes 0600 when the atomic rewrite replaces the file. Observable
+    // when the rewrite then fails: here the directory is read-only, so the
+    // file opens but the temp sibling cannot be created, and the existing
+    // file must keep its 0644.
+    #[cfg(unix)]
+    #[test]
+    fn add_does_not_chmod_an_existing_cache_file() {
+        use std::os::unix::fs::PermissionsExt;
+        // Root ignores directory permissions, so the rewrite would not fail and
+        // the test could not observe anything. No supported test environment
+        // runs as root (CI runners, the Linux VM and the nix sandbox all use an
+        // ordinary user), so R14: fail loudly there instead of skipping.
+        // SAFETY(ffi-boundary/test): `geteuid` has no preconditions.
+        assert_ne!(
+            0,
+            unsafe { libc::geteuid() },
+            "add_does_not_chmod_an_existing_cache_file needs a non-root user: \
+             root ignores the read-only directory it relies on"
+        );
+        let tmp = TmpDir::new();
+        let dir = tmp.join("ro");
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("cache");
+        std::fs::write(&file, b"").unwrap();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let path = std::fs::canonicalize(&file).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+
+        let cache = DiskCache {
+            path: path_bytes(&path),
+        };
+        let res = cache.add(b"example.com", b"v1", timestamp());
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        // Positive reach: `add` opened the file and failed later, at the temp
+        // file in the read-only directory.
+        match res {
+            Err(Error::Io(e)) => assert_eq!(std::io::ErrorKind::PermissionDenied, e.kind()),
+            other => panic!("expected a permission error from the rewrite, got {other:?}"),
+        }
+        assert_eq!(0o644, mode);
+    }
+
+    // R13 (UPSTREAM-DEFECTS.md UD160): the reference's IPv6 parser indexes the
+    // text with a `u8` and `@intCast`s the length into it after a `%`, which
+    // traps for any text over 255 bytes (MEASURED with Zig 0.16.0 ReleaseSafe).
+    // The port rejects it like any scoped address.
+    #[test]
+    fn long_scoped_ipv6_is_rejected_without_crashing() {
+        let long = "fe80::1%".to_string() + &"a".repeat(300);
+        // Positive reach: the text is not a hostname, so the IPv6 parser runs,
+        // and its `%` arm is what rejects it (a short scope is rejected too).
+        assert!(!host_name_validate(long.as_bytes()));
+        assert!(!ip6_parse(long.as_bytes()));
+        assert!(!is_valid_host(long.as_bytes()));
+        assert!(!DiskCache::is_valid_cache_key(long.as_bytes()));
     }
 
     // test isValidUser

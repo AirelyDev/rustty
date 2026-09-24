@@ -23,8 +23,20 @@
 //!     forward — O(n), but PRESERVES iteration order;
 //!   * `fetchSwapRemove` / `fetchOrderedRemove` return the removed key+value.
 //!
-//! Backing memory is the Rust system allocator (`std::alloc`) via `Vec` and
-//! `std::collections::HashMap` for the index — the faithful map of Zig's `gpa`.
+//! Backing memory comes from the map's allocator `A` (allocator-api2's
+//! `Allocator`, the workspace's map of Zig's `std.mem.Allocator`): the entries
+//! array is an allocator_api2 `Vec` and the index is a `hashbrown` table, both
+//! over `A`. `A` defaults to `Global` (the Rust heap), so every existing
+//! `AutoArrayHashMapUnmanaged<K, V>` keeps its prior backing. Zig's unmanaged
+//! map takes the allocator per call; here it is bound at construction
+//! (`new_in`), as allocator_api2 containers are (parity tail S7-3, so rustty-vt
+//! can route `PageList.tracked_pins` and the glyph glossary through the
+//! caller's allocator).
+//!
+//! Growth: the infallible methods (`put`, `put_no_clobber`, `get_or_put_*`)
+//! abort on allocation failure, like std collections. The `try_*` methods are
+//! Zig's `try map.put(alloc, ...)`: they reserve first and return
+//! [`OutOfMemory`] with the map unchanged.
 //!
 //! Implementation choice (parity, sound): the Zig original hand-rolls an
 //! `IndexHeader` open-addressing index alongside the entries array; we reproduce
@@ -32,9 +44,22 @@
 //! plus a `HashMap<K, usize>` mapping key -> entry index. This is pure-safe Rust
 //! (no `unsafe`) and reproduces every documented semantic above exactly. Indices
 //! that shift on removal are repaired so `getIndex`/lookup stay correct.
+//!
+//! PORT NOTE (call shape, T3): the allocation sequence is not Zig's. Zig keeps
+//! the entries in a `MultiArrayList` and builds an index header only above a
+//! small linear-scan threshold; here the entries `Vec` and the hash index grow
+//! by their own policies. Which allocator is called (routing) is exact; the
+//! count and sizes of the calls are not.
 
-use std::collections::HashMap;
-use std::hash::Hash;
+use std::hash::{Hash, RandomState};
+
+use allocator_api2::alloc::{Allocator, Global};
+use allocator_api2::vec::Vec as AVec;
+
+pub use crate::memory_pool::OutOfMemory;
+
+/// The side index: key -> entry index, over the map's allocator.
+type Index<K, A> = hashbrown::HashMap<K, usize, RandomState, A>;
 
 /// A removed key/value pair, returned by `fetch*` removals. Faithful port of the
 /// `KV` struct (`{ key, value }`).
@@ -55,38 +80,56 @@ pub struct GetOrPutResult {
 }
 
 /// Faithful port of `AutoArrayHashMapUnmanaged(K, V)`: an insertion-ordered hash
-/// map. "Unmanaged" in Zig means it does not store its allocator; here we use
-/// the global allocator via `Vec`/`HashMap`, so the managed/unmanaged
-/// distinction collapses — `AutoArrayHashMap` is a type alias.
+/// map. "Unmanaged" in Zig means it does not store its allocator; here the
+/// allocator is bound at construction (see the module docs), so the
+/// managed/unmanaged distinction collapses — `AutoArrayHashMap` is a type alias.
 ///
 /// `K: Eq + Hash + Clone` (Clone is needed for the side index; Zig copies keys
 /// into both the entries array and the index too).
-pub struct AutoArrayHashMapUnmanaged<K, V> {
+pub struct AutoArrayHashMapUnmanaged<K, V, A: Allocator + Clone = Global> {
     /// Entries in insertion order. `keys()`/`values()` read from here.
-    entries: Vec<(K, V)>,
+    entries: AVec<(K, V), A>,
     /// key -> index into `entries`, for O(1) lookup (Zig's IndexHeader).
-    index: HashMap<K, usize>,
+    index: Index<K, A>,
 }
 
-impl<K, V> Default for AutoArrayHashMapUnmanaged<K, V>
+impl<K, V, A> Default for AutoArrayHashMapUnmanaged<K, V, A>
 where
     K: Eq + Hash + Clone,
+    A: Allocator + Clone + Default,
 {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<K, V> AutoArrayHashMapUnmanaged<K, V>
+impl<K, V, A> AutoArrayHashMapUnmanaged<K, V, A>
 where
     K: Eq + Hash + Clone,
+    A: Allocator + Clone + Default,
 {
     /// The empty map. Faithful port of `.empty` / default-init.
     pub fn new() -> Self {
+        Self::new_in(A::default())
+    }
+}
+
+impl<K, V, A> AutoArrayHashMapUnmanaged<K, V, A>
+where
+    K: Eq + Hash + Clone,
+    A: Allocator + Clone,
+{
+    /// The empty map over `alloc`. Allocates nothing (`.empty`).
+    pub fn new_in(alloc: A) -> Self {
         AutoArrayHashMapUnmanaged {
-            entries: Vec::new(),
-            index: HashMap::new(),
+            entries: AVec::new_in(alloc.clone()),
+            index: Index::with_hasher_in(RandomState::new(), alloc),
         }
+    }
+
+    /// The allocator this map grows and frees through.
+    pub fn allocator(&self) -> &A {
+        self.entries.allocator()
     }
 
     /// Returns the number of key/value pairs. Faithful port of `count`.
@@ -156,6 +199,22 @@ where
         self.entries.get(index).map(|(k, v)| (k, v))
     }
 
+    /// Reserve room for one more entry in both the entries array and the index,
+    /// so the append that follows cannot allocate (Zig's `ensureUnusedCapacity`
+    /// inside `getOrPut`).
+    fn try_reserve_one(&mut self) -> Result<(), OutOfMemory> {
+        self.entries.try_reserve(1).map_err(|_| OutOfMemory)?;
+        self.index.try_reserve(1).map_err(|_| OutOfMemory)
+    }
+
+    /// Append a new entry. The caller has checked that `key` is absent.
+    fn append(&mut self, key: K, value: V) -> usize {
+        let i = self.entries.len();
+        self.entries.push((key.clone(), value));
+        self.index.insert(key, i);
+        i
+    }
+
     /// Faithful port of `getOrPut`. If `key` exists, returns its index with
     /// `found_existing = true` and leaves the value untouched. Otherwise appends
     /// a new entry whose value is left uninitialized in Zig; here the caller must
@@ -177,9 +236,7 @@ where
                 found_existing: true,
             }
         } else {
-            let i = self.entries.len();
-            self.entries.push((key.clone(), make_default()));
-            self.index.insert(key, i);
+            let i = self.append(key, make_default());
             GetOrPutResult {
                 index: i,
                 found_existing: false,
@@ -187,23 +244,34 @@ where
         }
     }
 
+    /// `try map.getOrPut(alloc, key)`: [`Self::get_or_put_with`], failing with
+    /// `error.OutOfMemory` (map unchanged) instead of aborting.
+    pub fn try_get_or_put_with<F>(
+        &mut self,
+        key: K,
+        make_default: F,
+    ) -> Result<GetOrPutResult, OutOfMemory>
+    where
+        F: FnOnce() -> V,
+    {
+        if let Some(&i) = self.index.get(&key) {
+            return Ok(GetOrPutResult {
+                index: i,
+                found_existing: true,
+            });
+        }
+        self.try_reserve_one()?;
+        let i = self.append(key, make_default());
+        Ok(GetOrPutResult {
+            index: i,
+            found_existing: false,
+        })
+    }
+
     /// Faithful port of `getOrPutValue`: get-or-insert, and if newly inserted set
     /// the value to `value`. Returns the result (with `found_existing`).
     pub fn get_or_put_value(&mut self, key: K, value: V) -> GetOrPutResult {
-        if let Some(&i) = self.index.get(&key) {
-            GetOrPutResult {
-                index: i,
-                found_existing: true,
-            }
-        } else {
-            let i = self.entries.len();
-            self.entries.push((key.clone(), value));
-            self.index.insert(key, i);
-            GetOrPutResult {
-                index: i,
-                found_existing: false,
-            }
-        }
+        self.get_or_put_with(key, || value)
     }
 
     /// Mutable access to a value by entry index (insertion order). Pairs with
@@ -223,10 +291,20 @@ where
         if let Some(&i) = self.index.get(&key) {
             self.entries[i].1 = value;
         } else {
-            let i = self.entries.len();
-            self.entries.push((key.clone(), value));
-            self.index.insert(key, i);
+            self.append(key, value);
         }
+    }
+
+    /// `try map.put(alloc, key, value)`: [`Self::put`], failing with
+    /// `error.OutOfMemory` (map unchanged) instead of aborting.
+    pub fn try_put(&mut self, key: K, value: V) -> Result<(), OutOfMemory> {
+        if let Some(&i) = self.index.get(&key) {
+            self.entries[i].1 = value;
+        } else {
+            self.try_reserve_one()?;
+            self.append(key, value);
+        }
+        Ok(())
     }
 
     /// Faithful port of `putNoClobber`: asserts `key` is not already present,
@@ -236,9 +314,19 @@ where
             !self.index.contains_key(&key),
             "putNoClobber: key already present"
         );
-        let i = self.entries.len();
-        self.entries.push((key.clone(), value));
-        self.index.insert(key, i);
+        self.append(key, value);
+    }
+
+    /// `try map.putNoClobber(alloc, key, value)`: [`Self::put_no_clobber`],
+    /// failing with `error.OutOfMemory` (map unchanged) instead of aborting.
+    pub fn try_put_no_clobber(&mut self, key: K, value: V) -> Result<(), OutOfMemory> {
+        assert!(
+            !self.index.contains_key(&key),
+            "putNoClobber: key already present"
+        );
+        self.try_reserve_one()?;
+        self.append(key, value);
+        Ok(())
     }
 
     /// Internal: remove the entry at `index` by swapping the last entry into its
@@ -249,6 +337,8 @@ where
         let removed = self.entries.swap_remove(index);
         self.index.remove(&removed.0);
         // If we swapped a different element into `index`, fix its index mapping.
+        // (The moved key is already in the index, so this overwrites in place
+        // and never allocates.)
         if index != last {
             let moved_key = self.entries[index].0.clone();
             self.index.insert(moved_key, index);
@@ -356,6 +446,14 @@ where
         self.index.clear();
     }
 
+    /// Empties the map and frees its storage. Faithful port of `clearAndFree`
+    /// (and of `deinit` followed by `.empty`).
+    pub fn clear_and_free(&mut self) {
+        let alloc = self.entries.allocator().clone();
+        self.entries = AVec::new_in(alloc.clone());
+        self.index = Index::with_hasher_in(RandomState::new(), alloc);
+    }
+
     /// Sorts the entries in place using the given `less_than` comparator, which
     /// is given the entry INDICES (`a_index`, `b_index`) into the current
     /// `keys()`/`values()` arrays — exactly the `Context.lessThan(ctx, a_index,
@@ -366,8 +464,10 @@ where
     //
     // PORT NOTE: Zig's `sort` calls `std.sort.insertionContext` (stable) with the
     // entries' current positions. We snapshot the keys, run a stable sort over
-    // `0..len` with the caller's index comparator, then permute the entries and
-    // rebuild the side index so `getIndex`/lookup stay correct.
+    // `0..len` with the caller's index comparator, then permute the entries in
+    // place and rebuild the side index so `getIndex`/lookup stay correct. The
+    // permutation scratch (`order`) is on the Rust heap; the entries never leave
+    // the map's own storage.
     pub fn sort<F>(&mut self, mut less_than: F)
     where
         F: FnMut(usize, usize) -> bool,
@@ -384,14 +484,17 @@ where
                 std::cmp::Ordering::Equal
             }
         });
-        // Move the entries into the sorted order. Stage each slot through an
-        // `Option` so we can move (not clone) the owned `(K, V)` out exactly once.
-        let mut staging: Vec<Option<(K, V)>> = self.entries.drain(..).map(Some).collect();
-        let mut new_entries: Vec<(K, V)> = Vec::with_capacity(len);
-        for &i in &order {
-            new_entries.push(staging[i].take().expect("sort: each index visited once"));
+        // Apply the permutation in place: slot `i` must receive the entry that
+        // was at `order[i]`. If that slot is already filled (`j < i`), step
+        // `j` swapped its original entry forward along `order`, so follow the
+        // chain until it names a slot at or after `i`.
+        for i in 0..len {
+            let mut j = order[i];
+            while j < i {
+                j = order[j];
+            }
+            self.entries.swap(i, j);
         }
-        self.entries = new_entries;
         self.index.clear();
         for (i, (k, _)) in self.entries.iter().enumerate() {
             self.index.insert(k.clone(), i);
@@ -399,10 +502,11 @@ where
     }
 }
 
-impl<K, V> AutoArrayHashMapUnmanaged<K, V>
+impl<K, V, A> AutoArrayHashMapUnmanaged<K, V, A>
 where
     K: Eq + Hash + Clone,
     V: Clone,
+    A: Allocator + Clone,
 {
     /// Deep copy of the map (entries + index). Faithful port of
     /// `clone(alloc)` — Zig allocates a fresh entries array and index header and
@@ -423,7 +527,7 @@ where
 /// Faithful alias for `AutoArrayHashMap(K, V)`. Since our backing store owns its
 /// allocations via `Vec`/`HashMap`, the managed form is identical to the
 /// unmanaged form (Zig's managed wrapper only threads the allocator).
-pub type AutoArrayHashMap<K, V> = AutoArrayHashMapUnmanaged<K, V>;
+pub type AutoArrayHashMap<K, V, A = Global> = AutoArrayHashMapUnmanaged<K, V, A>;
 
 #[cfg(test)]
 mod tests {
@@ -650,5 +754,123 @@ mod tests {
         assert!(!m.contains(&2));
         assert_eq!(m.pop().unwrap(), KV { key: 1, value: 1 });
         assert_eq!(m.pop(), None);
+    }
+
+    /// `sort` applies the stable index-comparator order in place (every
+    /// permutation of 5 keys).
+    #[test]
+    fn sort_applies_the_permutation_in_place() {
+        fn perms(v: &mut Vec<u32>, k: usize, out: &mut Vec<Vec<u32>>) {
+            if k == v.len() {
+                out.push(v.clone());
+                return;
+            }
+            for i in k..v.len() {
+                v.swap(k, i);
+                perms(v, k + 1, out);
+                v.swap(k, i);
+            }
+        }
+        let mut all = Vec::new();
+        perms(&mut vec![4, 1, 3, 0, 2], 0, &mut all);
+        assert_eq!(all.len(), 120);
+        for keys in all {
+            let mut m: AutoArrayHashMap<u32, u32> = AutoArrayHashMap::new();
+            for &k in &keys {
+                m.put(k, k * 10);
+            }
+            let snapshot = keys.clone();
+            m.sort(|a, b| snapshot[a] < snapshot[b]);
+            assert_eq!(m.keys().copied().collect::<Vec<_>>(), vec![0, 1, 2, 3, 4]);
+            assert_eq!(
+                m.values().copied().collect::<Vec<_>>(),
+                vec![0, 10, 20, 30, 40]
+            );
+            for k in 0..5u32 {
+                assert_eq!(m.get_index(&k), Some(k as usize));
+            }
+        }
+    }
+
+    /// An allocator that counts live blocks and can be told to refuse.
+    #[derive(Clone, Copy)]
+    struct Probe<'a> {
+        live: &'a core::cell::Cell<isize>,
+        allocs: &'a core::cell::Cell<usize>,
+        refuse: &'a core::cell::Cell<bool>,
+    }
+
+    unsafe impl allocator_api2::alloc::Allocator for Probe<'_> {
+        fn allocate(
+            &self,
+            layout: core::alloc::Layout,
+        ) -> Result<core::ptr::NonNull<[u8]>, allocator_api2::alloc::AllocError> {
+            if self.refuse.get() {
+                return Err(allocator_api2::alloc::AllocError);
+            }
+            let p = Global.allocate(layout)?;
+            self.allocs.set(self.allocs.get() + 1);
+            self.live.set(self.live.get() + 1);
+            Ok(p)
+        }
+
+        unsafe fn deallocate(&self, ptr: core::ptr::NonNull<u8>, layout: core::alloc::Layout) {
+            self.live.set(self.live.get() - 1);
+            unsafe { Global.deallocate(ptr, layout) }
+        }
+    }
+
+    /// The map's storage (entries AND index) goes through its allocator, and
+    /// the `try_*` growth returns `OutOfMemory` with the map unchanged.
+    #[test]
+    fn storage_routes_through_the_allocator_and_try_growth_fails_cleanly() {
+        let live = core::cell::Cell::new(0isize);
+        let allocs = core::cell::Cell::new(0usize);
+        let refuse = core::cell::Cell::new(false);
+        let probe = Probe {
+            live: &live,
+            allocs: &allocs,
+            refuse: &refuse,
+        };
+        {
+            let mut m: AutoArrayHashMapUnmanaged<u32, u32, Probe<'_>> =
+                AutoArrayHashMapUnmanaged::new_in(probe);
+            assert_eq!(allocs.get(), 0, "`.empty` allocates nothing");
+            m.try_put_no_clobber(1, 10).unwrap();
+            // One block for the entries array and one for the index.
+            assert_eq!(allocs.get(), 2);
+            assert_eq!(live.get(), 2);
+
+            // Fill, then refuse: the next growth must fail cleanly.
+            while m.count() < 64 {
+                let k = m.count() as u32 + 1;
+                m.try_put(k, k).unwrap();
+            }
+            refuse.set(true);
+            let mut failed = false;
+            for k in 1000..2000u32 {
+                if m.try_put_no_clobber(k, k) == Err(OutOfMemory) {
+                    failed = true;
+                    assert!(!m.contains(&k), "a failed put leaves the map unchanged");
+                    break;
+                }
+            }
+            assert!(
+                failed,
+                "growth past capacity must reach the refusing allocator"
+            );
+            let before = m.count();
+            // An existing key needs no allocation.
+            assert!(m.try_put(1, 11).is_ok());
+            assert_eq!(m.get(&1), Some(&11));
+            assert_eq!(m.count(), before);
+            refuse.set(false);
+
+            m.clear_and_free();
+            assert_eq!(live.get(), 0, "clearAndFree returns the storage");
+            m.try_put(7, 70).unwrap();
+            assert!(live.get() > 0);
+        }
+        assert_eq!(live.get(), 0, "drop frees through the allocator");
     }
 }

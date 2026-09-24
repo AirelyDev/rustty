@@ -100,12 +100,12 @@ impl rustty_vt::stream::Handler for Handler {
     // .apc_put => self.apc.feed(self.alloc, value),
     fn apc_put(&mut self, code: u8) {
         let alloc = self.alloc;
-        self.apc.feed(alloc, code);
+        self.apc.feed(alloc.into(), code);
     }
     // .apc_put_slice => self.apc.feedSlice(self.alloc, value.bytes),
     fn apc_put_slice(&mut self, bytes: &[u8]) {
         let alloc = self.alloc;
-        self.apc.feed_slice(alloc, bytes);
+        self.apc.feed_slice(alloc.into(), bytes);
     }
     // .apc_end => if (self.apc.end()) |result| {
     //     var r = result;
@@ -114,10 +114,10 @@ impl rustty_vt::stream::Handler for Handler {
     // },
     fn apc_end(&mut self, _v: rustty_vt::stream::ApcEnd) {
         let alloc = self.alloc;
-        if let Some(result) = self.apc.end(alloc) {
+        if let Some(result) = self.apc.end(alloc.into()) {
             let mut r = result;
             black_box(&r);
-            r.deinit(alloc);
+            r.deinit(alloc.into());
         }
     }
 }

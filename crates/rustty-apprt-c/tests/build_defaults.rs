@@ -44,10 +44,11 @@ fn default_feature_set_enables_simd() {
 // stops enabling `rustty-vt/simd`.
 #[allow(clippy::assertions_on_constants)]
 #[test]
+#[cfg_attr(
+    not(feature = "default"),
+    ignore = "asserts the DEFAULT feature set (R14)"
+)]
 fn default_feature_set_resolves_terminal_simd_on() {
-    if !cfg!(feature = "default") {
-        return;
-    }
     assert!(
         rustty_vt::options::SIMD,
         "the DEFAULT rustty-apprt-c build resolves \

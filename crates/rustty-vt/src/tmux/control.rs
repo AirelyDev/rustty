@@ -373,8 +373,9 @@ impl Parser {
     // `%window-pane-changed`, `%client-detached`, `%client-session-changed`) live
     // in this helper, gated behind `#[cfg(feature = "oniguruma")]`. With the
     // feature off the helper returns `Ok(None)` so the caller falls through to the
-    // `is_oni_command` recognition + idle cleanup. The `oni` binding crate does
-    // not exist yet, so the gated body is not compiled in the default build.
+    // `is_oni_command` recognition + idle cleanup. The gated body is compiled
+    // only with the feature (CORRECTION: this used to say the `oni` binding
+    // crate did not exist yet; it is `rustty-oniguruma`).
     #[cfg(not(feature = "oniguruma"))]
     fn parse_notification_oni(
         &mut self,
@@ -390,6 +391,22 @@ impl Parser {
         cmd: &[u8],
         line: &[u8],
     ) -> Result<Option<Notification>, ParseError> {
+        // PORT NOTE (N102): `oni.Regex.init` -> `onig_new`, which initializes
+        // Oniguruma's process-global tables LAZILY on first use
+        // (`onig_reg_init` -> `onig_initialize`), without synchronization. The
+        // reference is only ever single-threaded there: the app runs
+        // `oni.init(&.{oni.Encoding.utf8})` at startup (`global.zig:215`), and
+        // `zig test` runs these tests serially. Parsers on several threads that
+        // reach their first regex together (Rust's parallel test harness; any
+        // multi-threaded host of rustty-vt that has not initialized Oniguruma)
+        // raced inside `onig_initialize` and corrupted the C heap. So the
+        // process-global init runs first, exactly once and thread-safely
+        // (`ensure_init` is the same UTF-8-only init the app performs and the
+        // lazy path would; after the app's own call it is a no-op). Its error
+        // is ignored: `Regex::init` below still reports any init failure
+        // through the reference's own `regex init failed` path.
+        let _ = oni::testing::ensure_init();
+
         if cmd == b"%output" {
             let mut re = oni::Regex::init(
                 b"^%output %([0-9]+) (.+)$",
@@ -948,23 +965,16 @@ fn trim_right_len(slice: &[u8], strip: &[u8]) -> usize {
     len
 }
 
-// PORT NOTE: `std.fmt.parseInt(usize, bytes, 10)` — base-10 parse of an ASCII
-// byte slice into a `usize`. The error mirrors `std.fmt.ParseIntError`
+// PORT NOTE: `std.fmt.parseInt(usize, bytes, 10)`, through the port of the std
+// function in `rustty_zigstd::fmt`. The error is `std.fmt.ParseIntError`
 // (`Overflow` / `InvalidCharacter`) so a caller that logs it renders the
 // reference's error name.
-fn parse_int_usize(bytes: &[u8]) -> Result<usize, ParseIntError> {
-    let s = std::str::from_utf8(bytes).map_err(|_| ParseIntError::InvalidCharacter)?;
-    s.parse::<usize>().map_err(|err| match err.kind() {
-        core::num::IntErrorKind::PosOverflow => ParseIntError::Overflow,
-        _ => ParseIntError::InvalidCharacter,
-    })
-}
-
-/// PORTS: `std.fmt.ParseIntError`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ParseIntError {
-    Overflow,
-    InvalidCharacter,
+// CORRECTION (parity N100): this used `str::parse::<usize>()` with a local
+// copy of `ParseIntError`; that rejects the `_` digit separators and `-0` that
+// `std.fmt.parseInt` accepts, which `parse_block_terminator`'s unconstrained
+// fields can carry.
+fn parse_int_usize(bytes: &[u8]) -> Result<usize, rustty_zigstd::fmt::ParseIntError> {
+    rustty_zigstd::fmt::parse_int::<usize>(bytes, 10)
 }
 
 // PORT NOTE: reference defect (R13, UPSTREAM-DEFECTS.md UD7). Every id capture
@@ -1080,86 +1090,151 @@ pub enum Notification {
     },
 }
 
-// PORT NOTE: the reference `pub fn format(self, writer)` uses Zig comptime
-// reflection over the tagged union (`@typeName`, `@tagName`, `inline for` over
-// the fields, special-casing `[]const u8` with `trim`). Rust has no runtime
-// reflection over enum variants; the faithful equivalent is a hand-written
-// `Display` that reproduces the same output shape: `Notification{ .<tag> =
-// <value> }`, with `[]const u8` payloads printed as `"<trimmed>"` (trimming
-// " \t\r\n") and all other payloads via their debug formatting (`{any}`). Tags
-// use the reference's `snake-case`/Zig field names.
+// pub fn format(self: Notification, writer: *std.Io.Writer) !void {
+//     const T = Notification;
+//     const info = @typeInfo(T).@"union";
+//
+//     try writer.writeAll(@typeName(T));
+//     if (info.tag_type) |TagType| {
+//         try writer.writeAll("{ .");
+//         try writer.writeAll(@tagName(@as(TagType, self)));
+//         try writer.writeAll(" = ");
+//
+//         inline for (info.fields) |u_field| {
+//             if (self == @field(TagType, u_field.name)) {
+//                 const value = @field(self, u_field.name);
+//                 switch (u_field.type) {
+//                     []const u8 => try writer.print("\"{s}\"", .{std.mem.trim(u8, value, " \t\r\n")}),
+//                     else => try writer.print("{any}", .{value}),
+//                 }
+//             }
+//         }
+//
+//         try writer.writeAll(" }");
+//     }
+// }
+//
+// PORT NOTE: Rust has no comptime reflection over the union, so each arm
+// writes what the reflection produces for that field type, as MEASURED from
+// zig 0.16 (the strings are pinned by
+// `notification_display_matches_the_reference_format`): `@typeName` is
+// `terminal.tmux.control.Notification`; a `void` payload prints `void` under
+// `{any}`; a top-level `[]const u8` payload takes the trim-and-quote arm; a
+// struct payload prints under `{any}` as `.{ .field = value, ... }`, where a
+// `usize` is decimal and a `[]const u8` member is its bytes in decimal
+// (`{ 104, 105 }`, and `{  }` when empty). `{s}` writes raw bytes but a
+// `fmt::Formatter` takes `str`, so the trimmed quoted payload goes through
+// `from_utf8_lossy`: a byte sequence that is not UTF-8 prints U+FFFD here.
+// CORRECTION (parity S208-F1): this used to print the type name as
+// `control.Notification`, nothing for a `void` payload, and struct payloads
+// as `<tag>{ .field = "<text>" }`.
 impl std::fmt::Display for Notification {
     fn fmt(&self, writer: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // try writer.writeAll(@typeName(T));
-        writer.write_str("control.Notification")?;
+        writer.write_str("terminal.tmux.control.Notification")?;
         // try writer.writeAll("{ .");
         writer.write_str("{ .")?;
+        // try writer.writeAll(@tagName(@as(TagType, self)));
+        writer.write_str(self.tag_name())?;
+        // try writer.writeAll(" = ");
+        writer.write_str(" = ")?;
         match self {
-            Notification::Enter => write!(writer, "enter =  }}"),
-            Notification::Exit => write!(writer, "exit =  }}"),
-            Notification::BlockEnd(v) => {
-                write!(writer, "block_end = \"{}\" }}", trim_display(v))
+            Notification::Enter | Notification::Exit | Notification::SessionsChanged => {
+                writer.write_str("void")?
             }
-            Notification::BlockErr(v) => {
-                write!(writer, "block_err = \"{}\" }}", trim_display(v))
+            Notification::BlockEnd(v) | Notification::BlockErr(v) => {
+                write!(writer, "\"{}\"", trim_display(v))?
             }
-            Notification::Output { pane_id, data } => write!(
-                writer,
-                "output = output{{ .pane_id = {pane_id}, .data = \"{}\" }} }}",
-                trim_display(data)
-            ),
-            Notification::SessionChanged { id, name } => write!(
-                writer,
-                "session_changed = session_changed{{ .id = {id}, .name = \"{}\" }} }}",
-                trim_display(name)
-            ),
-            Notification::SessionsChanged => write!(writer, "sessions_changed =  }}"),
+            Notification::Output { pane_id, data } => {
+                write!(writer, ".{{ .pane_id = {pane_id}, .data = ")?;
+                write_any_bytes(writer, data)?;
+                writer.write_str(" }")?;
+            }
+            Notification::SessionChanged { id, name } => {
+                write!(writer, ".{{ .id = {id}, .name = ")?;
+                write_any_bytes(writer, name)?;
+                writer.write_str(" }")?;
+            }
             Notification::LayoutChange {
                 window_id,
                 layout,
                 visible_layout,
                 raw_flags,
-            } => write!(
-                writer,
-                "layout_change = layout_change{{ .window_id = {window_id}, .layout = \"{}\", .visible_layout = \"{}\", .raw_flags = \"{}\" }} }}",
-                trim_display(layout),
-                trim_display(visible_layout),
-                trim_display(raw_flags),
-            ),
-            Notification::WindowAdd { id } => {
-                write!(writer, "window_add = window_add{{ .id = {id} }} }}")
+            } => {
+                write!(writer, ".{{ .window_id = {window_id}, .layout = ")?;
+                write_any_bytes(writer, layout)?;
+                writer.write_str(", .visible_layout = ")?;
+                write_any_bytes(writer, visible_layout)?;
+                writer.write_str(", .raw_flags = ")?;
+                write_any_bytes(writer, raw_flags)?;
+                writer.write_str(" }")?;
             }
-            Notification::WindowRenamed { id, name } => write!(
-                writer,
-                "window_renamed = window_renamed{{ .id = {id}, .name = \"{}\" }} }}",
-                trim_display(name)
-            ),
+            Notification::WindowAdd { id } => write!(writer, ".{{ .id = {id} }}")?,
+            Notification::WindowRenamed { id, name } => {
+                write!(writer, ".{{ .id = {id}, .name = ")?;
+                write_any_bytes(writer, name)?;
+                writer.write_str(" }")?;
+            }
             Notification::WindowPaneChanged { window_id, pane_id } => write!(
                 writer,
-                "window_pane_changed = window_pane_changed{{ .window_id = {window_id}, .pane_id = {pane_id} }} }}"
-            ),
-            Notification::ClientDetached { client } => write!(
-                writer,
-                "client_detached = client_detached{{ .client = \"{}\" }} }}",
-                trim_display(client)
-            ),
+                ".{{ .window_id = {window_id}, .pane_id = {pane_id} }}"
+            )?,
+            Notification::ClientDetached { client } => {
+                writer.write_str(".{ .client = ")?;
+                write_any_bytes(writer, client)?;
+                writer.write_str(" }")?;
+            }
             Notification::ClientSessionChanged {
                 client,
                 session_id,
                 name,
-            } => write!(
-                writer,
-                "client_session_changed = client_session_changed{{ .client = \"{}\", .session_id = {session_id}, .name = \"{}\" }} }}",
-                trim_display(client),
-                trim_display(name),
-            ),
+            } => {
+                writer.write_str(".{ .client = ")?;
+                write_any_bytes(writer, client)?;
+                write!(writer, ", .session_id = {session_id}, .name = ")?;
+                write_any_bytes(writer, name)?;
+                writer.write_str(" }")?;
+            }
+        }
+        // try writer.writeAll(" }");
+        writer.write_str(" }")
+    }
+}
+
+impl Notification {
+    /// `@tagName` of the active tag.
+    fn tag_name(&self) -> &'static str {
+        match self {
+            Notification::Enter => "enter",
+            Notification::Exit => "exit",
+            Notification::BlockEnd(_) => "block_end",
+            Notification::BlockErr(_) => "block_err",
+            Notification::Output { .. } => "output",
+            Notification::SessionChanged { .. } => "session_changed",
+            Notification::SessionsChanged => "sessions_changed",
+            Notification::LayoutChange { .. } => "layout_change",
+            Notification::WindowAdd { .. } => "window_add",
+            Notification::WindowRenamed { .. } => "window_renamed",
+            Notification::WindowPaneChanged { .. } => "window_pane_changed",
+            Notification::ClientDetached { .. } => "client_detached",
+            Notification::ClientSessionChanged { .. } => "client_session_changed",
         }
     }
 }
 
-// PORT NOTE: helper for the `[]const u8 => writer.print("\"{s}\"",
-// .{std.mem.trim(u8, value, " \t\r\n")})` branch — trims " \t\r\n" from both
-// ends and renders as a UTF-8 lossy string.
+/// `{any}` over a `[]const u8`: `{ ` + the bytes in decimal joined by `, ` +
+/// ` }`.
+fn write_any_bytes(writer: &mut std::fmt::Formatter<'_>, bytes: &[u8]) -> std::fmt::Result {
+    writer.write_str("{ ")?;
+    for (i, b) in bytes.iter().enumerate() {
+        if i > 0 {
+            writer.write_str(", ")?;
+        }
+        write!(writer, "{b}")?;
+    }
+    writer.write_str(" }")
+}
+
 fn trim_display(v: &[u8]) -> String {
     let trimmed = trim_both(v, b" \t\r\n");
     String::from_utf8_lossy(trimmed).into_owned()
@@ -1180,6 +1255,94 @@ fn trim_both<'a>(slice: &'a [u8], strip: &[u8]) -> &'a [u8] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Parity S208-F1 (no reference test): `Notification.format`'s output,
+    // each string MEASURED from zig 0.16 over a verbatim copy of the union
+    // (probe at the matching `terminal/tmux/control.zig` path so `@typeName`
+    // agrees). Payload-less tags print `void`; top-level `[]const u8`
+    // payloads are trimmed and quoted; struct payloads go through `{any}`,
+    // which prints a `[]const u8` member as its bytes in decimal.
+    #[test]
+    fn notification_display_matches_the_reference_format() {
+        let cases: Vec<(Notification, &str)> = vec![
+            (Notification::Enter, "terminal.tmux.control.Notification{ .enter = void }"),
+            (Notification::Exit, "terminal.tmux.control.Notification{ .exit = void }"),
+            (
+                Notification::BlockEnd(b" hello\n".to_vec()),
+                "terminal.tmux.control.Notification{ .block_end = \"hello\" }",
+            ),
+            (
+                Notification::BlockErr(b"err".to_vec()),
+                "terminal.tmux.control.Notification{ .block_err = \"err\" }",
+            ),
+            (
+                Notification::Output { pane_id: 42, data: b"hi\x1b".to_vec() },
+                "terminal.tmux.control.Notification{ .output = .{ .pane_id = 42, .data = { 104, 105, 27 } } }",
+            ),
+            (
+                Notification::SessionChanged { id: 3, name: b"main".to_vec() },
+                "terminal.tmux.control.Notification{ .session_changed = .{ .id = 3, .name = { 109, 97, 105, 110 } } }",
+            ),
+            (
+                Notification::SessionsChanged,
+                "terminal.tmux.control.Notification{ .sessions_changed = void }",
+            ),
+            (
+                Notification::LayoutChange {
+                    window_id: 2,
+                    layout: b"b25d,80x24,0,0,0".to_vec(),
+                    visible_layout: b"v".to_vec(),
+                    raw_flags: b"*".to_vec(),
+                },
+                "terminal.tmux.control.Notification{ .layout_change = .{ .window_id = 2, .layout = { 98, 50, 53, 100, 44, 56, 48, 120, 50, 52, 44, 48, 44, 48, 44, 48 }, .visible_layout = { 118 }, .raw_flags = { 42 } } }",
+            ),
+            (
+                Notification::WindowAdd { id: 7 },
+                "terminal.tmux.control.Notification{ .window_add = .{ .id = 7 } }",
+            ),
+            (
+                Notification::WindowRenamed { id: 7, name: b"vim".to_vec() },
+                "terminal.tmux.control.Notification{ .window_renamed = .{ .id = 7, .name = { 118, 105, 109 } } }",
+            ),
+            (
+                Notification::WindowPaneChanged { window_id: 1, pane_id: 5 },
+                "terminal.tmux.control.Notification{ .window_pane_changed = .{ .window_id = 1, .pane_id = 5 } }",
+            ),
+            (
+                Notification::ClientDetached { client: b"/dev/ttys001".to_vec() },
+                "terminal.tmux.control.Notification{ .client_detached = .{ .client = { 47, 100, 101, 118, 47, 116, 116, 121, 115, 48, 48, 49 } } }",
+            ),
+            (
+                Notification::ClientSessionChanged {
+                    client: b"c".to_vec(),
+                    session_id: 9,
+                    name: b"s".to_vec(),
+                },
+                "terminal.tmux.control.Notification{ .client_session_changed = .{ .client = { 99 }, .session_id = 9, .name = { 115 } } }",
+            ),
+            // `{any}` over an EMPTY slice is `{  }`, two spaces.
+            (
+                Notification::Output { pane_id: 0, data: Vec::new() },
+                "terminal.tmux.control.Notification{ .output = .{ .pane_id = 0, .data = {  } } }",
+            ),
+        ];
+        for (n, want) in cases {
+            assert_eq!(want, format!("{n}"));
+        }
+    }
+
+    // Parity N100 (no reference test): the guard line's three numbers are
+    // checked with `std.fmt.parseInt(usize, .., 10)`, which accepts `_` digit
+    // separators and `-0`.
+    #[test]
+    fn block_terminator_numbers_use_zig_parse_int() {
+        assert!(matches!(
+            parse_block_terminator(b"%end 1_578 2_69 -0"),
+            Some(BlockTerminator::End)
+        ));
+        assert!(parse_block_terminator(b"%end 1578_ 269 1").is_none());
+        assert!(parse_block_terminator(b"%end 1578 269 +").is_none());
+    }
 
     // PORT NOTE: no reference test; this pins the fallible-allocation contract
     // of `init_options`, the mirror of the reference's
@@ -1690,6 +1853,62 @@ mod tests {
         };
         assert_eq!(b"/dev/pts/1" as &[u8], client.as_slice());
         c.deinit();
+    }
+
+    // N102 (no reference test): the first `oni::Regex::init` in a process
+    // makes `onig_new` initialize Oniguruma's process-global tables, lazily and
+    // without synchronization, so several threads parsing their first
+    // notification at once corrupted the C heap (the intermittent SIGTRAP /
+    // SIGABRT / SIGSEGV of this module's tests under the parallel harness).
+    // The child process starts 16 threads that all parse their first
+    // notification together; the parent runs it 40 times.
+    #[cfg(feature = "oniguruma")]
+    #[test]
+    #[cfg_attr(miri, ignore)] // spawns child processes; Oniguruma is C (FFI)
+    fn concurrent_first_notifications_do_not_race_oniguruma_init() {
+        const CHILD: &str = "RUSTTY_VT_ONIG_INIT_RACE_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            let barrier = std::sync::Arc::new(std::sync::Barrier::new(16));
+            let threads: Vec<_> = (0..16)
+                .map(|_| {
+                    let barrier = barrier.clone();
+                    std::thread::spawn(move || {
+                        let mut c = Parser::init();
+                        barrier.wait();
+                        for &byte in b"%client-session-changed /dev/pts/1 $2 mysession" {
+                            assert!(c.put(byte).unwrap().is_none());
+                        }
+                        let n = c.put(b'\n').unwrap().unwrap();
+                        assert!(matches!(n, Notification::ClientSessionChanged { .. }));
+                        c.deinit();
+                    })
+                })
+                .collect();
+            for t in threads {
+                t.join().unwrap();
+            }
+            println!("ONIG_INIT_RACE_CHILD_OK");
+            return;
+        }
+        for run in 0..40 {
+            let out = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "tmux::control::tests::concurrent_first_notifications_do_not_race_oniguruma_init",
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            assert!(
+                out.status.success() && stdout.contains("ONIG_INIT_RACE_CHILD_OK"),
+                "child run {run} failed: {:?}\nstdout: {stdout}\nstderr: {}",
+                out.status,
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
     }
 
     // test "tmux client-session-changed"

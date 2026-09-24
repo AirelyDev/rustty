@@ -25,8 +25,8 @@
 //! One `gtk4::init()` per test binary, always. `VERIFICATION_DEBT.md` V4's recipe
 //! names the new binary.
 //!
-//! R5: gated `all(any(linux, freebsd), feature = "wayland")` (wayland implies gtk).
-#![cfg(all(any(target_os = "linux", target_os = "freebsd"), feature = "wayland"))]
+//! R5: gated `all(any(linux, freebsd), rustty_gtk_wayland)` (wayland implies gtk).
+#![cfg(all(any(target_os = "linux", target_os = "freebsd"), rustty_gtk_wayland))]
 #![allow(non_snake_case)]
 
 use rustty_apprt::gtk::winproto::{App, Protocol};

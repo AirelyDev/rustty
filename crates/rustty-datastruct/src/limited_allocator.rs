@@ -237,8 +237,10 @@ mod tests {
             new_len: usize,
             _ra: usize,
         ) -> bool {
-            // Conservative in-place resize: only succeed when shrinking-or-equal.
-            new_len <= memory.len
+            // In-place resize succeeds only for the same length: the Rust
+            // heap's `dealloc` needs the allocated layout, so a block cannot
+            // be recorded as shorter without moving it (N273, N270).
+            new_len == memory.len
         }
 
         fn raw_remap(

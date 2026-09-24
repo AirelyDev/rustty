@@ -24,9 +24,10 @@ use super::graphics_exec as exec;
 // const image = @import("graphics_image.zig");
 use super::graphics_image as image;
 // const storage = @import("graphics_storage.zig");
-// PORT NOTE: DEFERRED to vt-12 (needs Screen/Terminal). `graphics_storage.zig`
-// (->Screen) is a compiling stub; once ported it will re-export `ImageStorage`
-// below alongside the others.
+// CORRECTION (parity S185-F1): a PORT NOTE here said "DEFERRED to vt-12
+// (needs Screen/Terminal). `graphics_storage.zig` (->Screen) is a compiling
+// stub; once ported it will re-export `ImageStorage` below alongside the
+// others." The module is ported and `ImageStorage` is re-exported below.
 use super::graphics_storage as storage;
 // pub const animation = @import("graphics_animation.zig");
 pub use super::graphics_animation as animation;
@@ -90,7 +91,7 @@ mod tests {
         // over the aggregator's `execute` member.
         let _ = super::execute
             as fn(
-                allocator_api2::alloc::Global,
+                crate::alloc::Global,
                 &mut crate::terminal::Terminal,
                 &super::Command,
             ) -> Option<super::Response>;

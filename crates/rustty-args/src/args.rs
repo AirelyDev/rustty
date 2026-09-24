@@ -29,6 +29,9 @@
 // const CommaSplitter = @import("CommaSplitter.zig");
 use crate::comma_splitter::CommaSplitter;
 use crate::diagnostics::{Diagnostic, DiagnosticList, Location, LocationError, LocationProvider};
+// (`std.fmt.parseInt` / `std.fmt.parseFloat`: the one port, in rustty-zigstd;
+// NEW-FINDINGS N120.)
+use rustty_zigstd::fmt::{self as std_fmt, ZigFloat, ZigInt};
 // PORT NOTE (P3-W7 T4): the reference's `internal_os` import was only used for
 // `internal_os.args`, and upstream DELETED `src/os/args.zig` in `e8525c0fd`.
 // The seam now goes straight to `std::env::args_os()` (see `OsArgIterator`), so
@@ -71,6 +74,40 @@ pub enum Error {
     /// (its `From<ParseError>` impl). It never reaches the field-parse error
     /// handlers below (help is matched before `parse_into_field`).
     ActionHelpRequested,
+    /// PORT NOTE: NOT a member of the reference `args.Error` set either. It is
+    /// the `error.NotImplemented` that `Config.RepeatableLink.parseCLI` returns
+    /// (`Config.zig:8719-8724`, "This currently can't be set"). The reference's
+    /// open error set lets it reach the diagnostic switch's `else` arm, which
+    /// records `unknown error error.NotImplemented`; this variant carries it
+    /// there (LEDGER S76-F2).
+    NotImplemented,
+    /// `CommaSplitter.Error` — NOT members of `args.Error` either. The
+    /// reference's `parseAutoStruct` propagates them unchanged from
+    /// `while (try iter.next())`, so they are in its inferred error set and in
+    /// every `parseIntoField` that reaches it. A caller that switches on
+    /// `error.InvalidValue` therefore does not treat them as one, and `parse`
+    /// renders them through its `else => "unknown error {}"` arm (parity
+    /// S67-F5; the port used to collapse all three into `InvalidValue`).
+    UnclosedQuote,
+    UnfinishedEscape,
+    IllegalEscape,
+}
+
+impl From<crate::comma_splitter::Error> for Error {
+    fn from(e: crate::comma_splitter::Error) -> Error {
+        match e {
+            crate::comma_splitter::Error::UnclosedQuote => Error::UnclosedQuote,
+            crate::comma_splitter::Error::UnfinishedEscape => Error::UnfinishedEscape,
+            crate::comma_splitter::Error::IllegalEscape => Error::IllegalEscape,
+        }
+    }
+}
+
+/// `std.fmt.allocPrintSentinel(arena_alloc, "unknown error {}", .{err}, 0)` —
+/// the `else` arm of `parse`'s diagnostic switch. `{}` on a Zig error value
+/// prints `error.<Name>` (MEASURED with Zig 0.16.0: `error.FileNotFound`).
+fn format_unknown_error(err: Error) -> Vec<u8> {
+    format!("unknown error error.{err:?}").into_bytes()
 }
 
 /// PORTS: the union of base `Error` plus the `OutOfMemory`/`Unknown` extras and
@@ -550,13 +587,21 @@ where
                     // else => try std.fmt.allocPrintSentinel(arena_alloc, "unknown error {}", .{err}, 0),
                     //
                     // PORT NOTE: the `else` arm covers type-specific errors
-                    // beyond the base set; every parse failure from
-                    // `parse_into_field` maps to one of the base variants above,
-                    // so this arm is unreachable HERE (the `ActionHelpRequested`
-                    // sentinel is returned by `help()` before field parsing, never
-                    // by `parse_into_field`). It is retained as the catch-all the
-                    // reference's open error set requires.
-                    Error::ActionHelpRequested => format!("unknown error {err:?}").into_bytes(),
+                    // beyond the base set: the three `CommaSplitter` errors a
+                    // `parseAutoStruct` field propagates, and `RepeatableLink`'s
+                    // `NotImplemented` (S76-F2). `ActionHelpRequested`
+                    // is returned by `help()` before field parsing, never by
+                    // `parse_into_field`, so it never reaches here.
+                    //
+                    // CORRECTION (parity S67-F5, task T-C): this note used to say
+                    // "every parse failure from `parse_into_field` maps to one of
+                    // the base variants above, so this arm is unreachable HERE";
+                    // that was the collapse S67-F5 records, now removed.
+                    Error::UnclosedQuote
+                    | Error::UnfinishedEscape
+                    | Error::IllegalEscape
+                    | Error::ActionHelpRequested
+                    | Error::NotImplemented => format_unknown_error(err),
                 };
 
                 // Add our diagnostic
@@ -726,7 +771,11 @@ where
                     Error::InvalidValue => format_invalid_value(dst, key, value),
                     // See the `parse` twin: the help sentinel is emitted by
                     // `help()` before field parsing, so it never reaches here.
-                    Error::ActionHelpRequested => format!("unknown error {err:?}").into_bytes(),
+                    Error::UnclosedQuote
+                    | Error::UnfinishedEscape
+                    | Error::IllegalEscape
+                    | Error::ActionHelpRequested
+                    | Error::NotImplemented => format_unknown_error(err),
                 };
 
                 let location = iter.location_self().unwrap_or(Location::None);
@@ -826,6 +875,32 @@ fn format_invalid_value<T: Target>(dst: &T, key: &[u8], value: Option<&[u8]>) ->
 // destination implements (it knows its own enum fields); the default returns no
 // suffix (no matching enum field), exactly as the reference writes nothing for
 // non-enum fields.
+//
+// CORRECTION (parity S67-F1, task T-C): the note above used to be the whole
+// story, and no destination implemented `format_values`, so the suffix was
+// never emitted. `format_enum_values` below is the `.@"enum"` arm; the two
+// destinations with enum-typed fields AND `_diagnostics` (the only ones that
+// reach `formatValues`) call it: `rustty-config`'s `Config` and
+// `rustty-cli`'s `show_face::Options` (`style`).
+
+/// The `.@"enum" => |e|` arm of `formatValues`: `, valid values are: ` then
+/// each variant name in declaration order, comma-separated. `names` is
+/// `e.fields |field| field.name`.
+pub fn format_enum_values(names: &[&[u8]]) -> Vec<u8> {
+    let mut writer: Vec<u8> = Vec::new();
+    // try writer.print(", valid values are: ", .{});
+    writer.extend_from_slice(b", valid values are: ");
+    // inline for (e.fields, 0..) |field, i| {
+    for (i, name) in names.iter().enumerate() {
+        // if (i != 0) try writer.print(", ", .{});
+        if i != 0 {
+            writer.extend_from_slice(b", ");
+        }
+        // try writer.print("{s}", .{field.name});
+        writer.extend_from_slice(name);
+    }
+    writer
+}
 
 // Parse a single key/value pair into the destination type T.
 //
@@ -958,7 +1033,7 @@ pub fn parse_auto_struct<T: AutoStruct>(result: &mut T, v: &[u8]) -> Result<(), 
     // var iter: CommaSplitter = .init(v);
     let mut iter = CommaSplitter::init(v);
     // loop: while (try iter.next()) |entry| {
-    'loop_: while let Some(entry) = iter.next().map_err(|_| Error::InvalidValue)? {
+    'loop_: while let Some(entry) = iter.next().map_err(Error::from)? {
         // Find the key/value, trimming whitespace. The value may be quoted
         // which we strip the quotes from.
         // const idx = mem.indexOf(u8, entry, ":") orelse return error.InvalidValue;
@@ -1271,20 +1346,25 @@ pub fn parse_field_bool(value: Option<&[u8]>) -> Result<bool, ParseError> {
 /// `inline u8..isize => |Int| std.fmt.parseInt(Int, value orelse return
 /// error.ValueRequired, 0) catch return error.InvalidValue`.
 //
-// PORT NOTE: base `0` means auto-detect `0x`/`0o`/`0b`/decimal prefix, exactly
-// as `std.fmt.parseInt(..., 0)`. `parse_int_auto` reproduces that prefix
-// handling for unsigned and signed targets.
-pub fn parse_field_int<T: IntFromStrRadix>(value: Option<&[u8]>) -> Result<T, ParseError> {
+// PORT NOTE (parity S67-F3): base `0` auto-detects a `0x`/`0o`/`0b` prefix,
+// and `std.fmt.parseInt` ignores `_` digit separators (`10_000_000`); both are
+// in `std_fmt::parse_int`, a port of the reference's own parser. This helper
+// used to hand the digits to Rust's `from_str_radix`, which rejects every `_`,
+// rejects `-0` for an unsigned type, and accepts a second sign (`+-5`).
+pub fn parse_field_int<T: ZigInt>(value: Option<&[u8]>) -> Result<T, ParseError> {
     let v = value.ok_or(Error::ValueRequired)?;
-    parse_int_auto::<T>(v).map_err(|_| Error::InvalidValue)
+    std_fmt::parse_int::<T>(v, 0).map_err(|_| Error::InvalidValue)
 }
 
 /// `f32, f64 => |Float| std.fmt.parseFloat(Float, value orelse return
 /// error.ValueRequired) catch return error.InvalidValue`.
-pub fn parse_field_float<T: std::str::FromStr>(value: Option<&[u8]>) -> Result<T, ParseError> {
+//
+// PORT NOTE (parity S67-F4): `std.fmt.parseFloat` accepts `_` digit separators
+// and hexadecimal floats (`0x1.8p3`); Rust's `str::parse` accepts neither.
+// `std_fmt::parse_float` ports the reference's grammar.
+pub fn parse_field_float<T: ZigFloat>(value: Option<&[u8]>) -> Result<T, ParseError> {
     let v = value.ok_or(Error::ValueRequired)?;
-    let s = std::str::from_utf8(v).map_err(|_| Error::InvalidValue)?;
-    s.parse::<T>().map_err(|_| Error::InvalidValue)
+    std_fmt::parse_float::<T>(v).map_err(|_| Error::InvalidValue)
 }
 
 /// `.@"enum" => std.meta.stringToEnum(Field, value orelse return
@@ -1300,75 +1380,11 @@ where
     from_name(v).ok_or(Error::InvalidValue)
 }
 
-/// PORTS: the `IntFromStrRadix` capability used by `parse_field_int` — the set
-/// of integer types the reference enumerates (`u8,u16,u21,u32,u64,usize,
-/// i8,i16,i32,i64,isize`). `u21` has no native Rust type; it is represented as
-/// `u32` with the 21-bit range enforced (the reference's `u21` rejects values
-/// `> 0x1F_FFFF` via `parseInt`'s range check).
-pub trait IntFromStrRadix: Sized {
-    // PORT NOTE: the `()` error is intentional — every parse failure collapses to
-    // the same observable outcome (`InvalidValue`) at the call site
-    // (`parse_field_int` maps `Err(())` -> `Error::InvalidValue`), exactly as the
-    // reference's `parseInt(...) catch return error.InvalidValue`.
-    #[allow(clippy::result_unit_err)]
-    fn from_str_radix_auto(s: &str, radix: u32) -> Result<Self, ()>;
-}
-
-macro_rules! impl_int_from_str_radix {
-    ($($t:ty),*) => {$(
-        impl IntFromStrRadix for $t {
-            fn from_str_radix_auto(s: &str, radix: u32) -> Result<Self, ()> {
-                <$t>::from_str_radix(s, radix).map_err(|_| ())
-            }
-        }
-    )*};
-}
-impl_int_from_str_radix!(u8, u16, u32, u64, usize, i8, i16, i32, i64, isize);
-
 // const u21: parse as u32 then range-check (no native u21).
 //
-// PORT NOTE: callers needing a `u21` parse as `u32` via `parse_int_auto` and
+// PORT NOTE: callers needing a `u21` parse as `u32` via `parse_field_int` and
 // then bound-check `<= 0x1F_FFFF`; this matches the reference's `u21` parse
 // returning `error.Overflow` (=> `InvalidValue`) for out-of-range values.
-
-/// `std.fmt.parseInt(T, v, 0)` — base 0 auto-detects the radix from a `0x`/`0o`/
-/// `0b` prefix (and an optional leading sign), defaulting to decimal.
-fn parse_int_auto<T: IntFromStrRadix>(v: &[u8]) -> Result<T, ()> {
-    let s = std::str::from_utf8(v).map_err(|_| ())?;
-
-    // Handle an optional leading sign, mirroring std.fmt.parseInt.
-    let (sign, rest) = match s.strip_prefix('-') {
-        Some(r) => ("-", r),
-        None => match s.strip_prefix('+') {
-            Some(r) => ("", r),
-            None => ("", s),
-        },
-    };
-
-    // Detect the radix prefix.
-    let (radix, digits) =
-        if let Some(r) = rest.strip_prefix("0x").or_else(|| rest.strip_prefix("0X")) {
-            (16, r)
-        } else if let Some(r) = rest.strip_prefix("0o").or_else(|| rest.strip_prefix("0O")) {
-            (8, r)
-        } else if let Some(r) = rest.strip_prefix("0b").or_else(|| rest.strip_prefix("0B")) {
-            (2, r)
-        } else {
-            (10, rest)
-        };
-
-    if digits.is_empty() {
-        return Err(());
-    }
-
-    let combined = if sign.is_empty() {
-        digits.to_string()
-    } else {
-        format!("{sign}{digits}")
-    };
-
-    T::from_str_radix_auto(&combined, radix)
-}
 
 // ---------------------------------------------------------------------------
 // Glue reproducing std functions used above.

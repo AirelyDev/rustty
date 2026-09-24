@@ -10,9 +10,17 @@
 // const assert = std.debug.assert;
 // const Allocator = std.mem.Allocator;
 //
-// PORT NOTE: `std.json` maps to `serde_json` with the `preserve_order` feature —
-// `std.json.ObjectMap` is a `StringArrayHashMap(Value)` (insertion-order
-// preserving), which `serde_json::Map` reproduces (IndexMap-backed). The
+// PORT NOTE: `std.json` maps to `crate::json`, a port of the `std.json.Value`
+// parse and minified stringify this file uses (`std.json.ObjectMap` is a
+// `StringArrayHashMap(Value)`, insertion-order preserving, as `IndexMap` is).
+// CORRECTION (LEDGER S79-F3, S79-F4): this used to say "`std.json` maps to
+// `serde_json` with the `preserve_order` feature". serde_json differs from
+// `std.json` on duplicate keys, out-of-`i64` integers, overflowing floats,
+// float printing and nesting depth; see `crate::json`'s header.
+// CORRECTION (UD182): the nesting-depth difference is not "`std.json` has no
+// limit". `std.json` parses any depth but its `Stringify` panics past its
+// documented 256 levels; the port parses any depth and `serialize` returns an
+// `InvalidInput` error past 256 (reference defect, R13). The
 // `std.Io.Reader` surface (`streamDelimiterLimit`/`discardDelimiterInclusive`/
 // `streamExact`/`takeByte`) is reproduced over `std::io::BufRead` by the
 // private helpers at the bottom of this file, with the reference's exact
@@ -23,7 +31,7 @@ use std::io::BufRead;
 // const log = std.log.scoped(.sentry_envelope);
 
 /// PORT NOTE: `std.json.ObjectMap` — the decoded JSON object map.
-pub type ObjectMap = serde_json::Map<String, serde_json::Value>;
+pub type ObjectMap = crate::json::ObjectMap;
 
 /// PORT NOTE: the Zig error set of the envelope operations (the inferred `!`
 /// unions), reified. The named variants preserve the reference error tags;
@@ -41,7 +49,9 @@ pub enum Error {
     /// envelope header line exceeds its limit.
     StreamTooLong,
     Io(std::io::Error),
-    Json(serde_json::Error),
+    /// A `std.json` parse error (`error.SyntaxError`,
+    /// `error.UnexpectedEndOfInput`, `error.DuplicateField`).
+    Json(crate::json::ParseError),
 }
 
 impl From<std::io::Error> for Error {
@@ -50,8 +60,8 @@ impl From<std::io::Error> for Error {
     }
 }
 
-impl From<serde_json::Error> for Error {
-    fn from(err: serde_json::Error) -> Error {
+impl From<crate::json::ParseError> for Error {
+    fn from(err: crate::json::ParseError) -> Error {
         Error::Json(err)
     }
 }
@@ -155,14 +165,16 @@ impl Envelope {
         //     buf.written(),
         //     .{ .allocate = .alloc_if_needed },
         // );
-        let value: serde_json::Value = serde_json::from_slice(&buf)?;
+        let mut value = crate::json::parse_from_slice(&buf)?;
 
         // return switch (value) {
         //     .object => |map| map,
         //     else => error.EnvelopeMalformedHeaders,
         // };
-        match value {
-            serde_json::Value::Object(map) => Ok(map),
+        // (PORT NOTE: `json::Value` has an iterative `Drop` (UD182), so the
+        // map is taken out of it rather than moved.)
+        match &mut value {
+            crate::json::Value::Object(map) => Ok(std::mem::take(map)),
             _ => Err(Error::EnvelopeMalformedHeaders),
         }
     }
@@ -223,14 +235,14 @@ impl Envelope {
                 return Ok(None);
             }
 
-            let value: serde_json::Value = serde_json::from_slice(line)?;
+            let mut value = crate::json::parse_from_slice(line)?;
 
             // break :headers switch (value) {
             //     .object => |map| map,
             //     else => return error.EnvelopeItemMalformedHeaders,
             // };
-            match value {
-                serde_json::Value::Object(map) => map,
+            match &mut value {
+                crate::json::Value::Object(map) => std::mem::take(map),
                 _ => return Err(Error::EnvelopeItemMalformedHeaders),
             }
         };
@@ -246,7 +258,7 @@ impl Envelope {
         // (PORT NOTE: the reference's `if |v| switch (v)` nesting is collapsed into
         // one match — clippy::collapsible_match — with identical arms.)
         let typ: ItemType = match headers.get("type") {
-            Some(serde_json::Value::String(str)) => {
+            Some(crate::json::Value::String(str)) => {
                 ItemType::stringToEnum(str).unwrap_or(ItemType::Unknown)
             }
             Some(_) => return Err(Error::EnvelopeItemTypeMissing),
@@ -264,8 +276,10 @@ impl Envelope {
         // } else null;
         let len_: Option<u64> = match headers.get("length") {
             Some(v) => match v {
-                serde_json::Value::Number(n) => {
-                    Some(n.as_u64().ok_or(Error::EnvelopeItemLengthMalformed)?)
+                // `.integer` is an `i64`; an integer outside it is a
+                // `.number_string` and takes the `else` arm (S79-F3).
+                crate::json::Value::Integer(int) => {
+                    Some(u64::try_from(*int).map_err(|_| Error::EnvelopeItemLengthMalformed)?)
                 }
                 _ => return Err(Error::EnvelopeItemLengthMalformed),
             },
@@ -370,9 +384,9 @@ impl Envelope {
         //     std.json.Value{ .object = self.headers },
         //     json_opts,
         // )});
-        // (PORT NOTE: `json_opts` == `.whitespace = .minified` == serde_json's
-        // compact default; see the `json_opts` note at the bottom.)
-        serde_json::to_writer(&mut *writer, &self.headers)?;
+        // (PORT NOTE: `json_opts` == `.whitespace = .minified`; see the
+        // `json_opts` note at the bottom.)
+        crate::json::stringify_object(&mut *writer, &self.headers)?;
         writer.write_all(b"\n")?;
 
         // Write each item
@@ -396,7 +410,7 @@ impl Envelope {
             //     ),
             //     encoded.payload,
             // });
-            serde_json::to_writer(&mut *writer, &encoded.headers)?;
+            crate::json::stringify_object(&mut *writer, &encoded.headers)?;
             writer.write_all(b"\n")?;
             writer.write_all(&encoded.payload)?;
         }
@@ -609,7 +623,7 @@ impl Attachment {
             // } else return error.MissingRequiredField,
             filename: match item.headers.get("filename") {
                 Some(v) => match v {
-                    serde_json::Value::String(str) => str.clone(),
+                    crate::json::Value::String(str) => str.clone(),
                     _ => return Err(DecodeError::InvalidFieldType),
                 },
                 None => return Err(DecodeError::MissingRequiredField),
@@ -621,7 +635,7 @@ impl Attachment {
             // } else null,
             type_: match item.headers.get("attachment_type") {
                 Some(v) => match v {
-                    serde_json::Value::String(str) => Some(str.clone()),
+                    crate::json::Value::String(str) => Some(str.clone()),
                     _ => return Err(DecodeError::InvalidFieldType),
                 },
                 None => None,
@@ -649,7 +663,7 @@ impl Attachment {
         // );
         self.headers_extra.insert(
             "filename".to_string(),
-            serde_json::Value::String(self.filename.clone()),
+            crate::json::Value::String(self.filename.clone()),
         );
 
         // if (self.type) |v| {
@@ -664,7 +678,7 @@ impl Attachment {
         if let Some(v) = &self.type_ {
             self.headers_extra.insert(
                 "attachment_type".to_string(),
-                serde_json::Value::String(v.clone()),
+                crate::json::Value::String(v.clone()),
             );
         } else {
             let _ = self.headers_extra.swap_remove("attachment_type");
@@ -699,8 +713,8 @@ pub type ObjectMapUnmanaged = ObjectMap;
 //     // All JSON headers in the envelope must be on a single line.
 //     .whitespace = .minified,
 // };
-// PORT NOTE: serde_json's `to_writer` is minified (compact, no newlines) by
-// default, which is exactly the required option.
+// PORT NOTE: `crate::json::stringify_object` is the `.minified` printer (no
+// whitespace at all), which is exactly the required option.
 
 // ---------------------------------------------------------------------------
 // PORT NOTE: `std.Io.Reader` helpers. Zig 0.15.2 semantics reproduced exactly:
@@ -1032,5 +1046,107 @@ mod tests {
             // std.mem.trim(u8, output.written(), "\n")
             String::from_utf8(output).unwrap().trim_matches('\n'),
         );
+    }
+
+    fn parse_err(reader: &mut &[u8]) -> Error {
+        match Envelope::parse(reader) {
+            Ok(_) => panic!("expected the envelope to be rejected"),
+            Err(e) => e,
+        }
+    }
+
+    // No reference test. LEDGER S79-F3: the headers are parsed with
+    // `std.json.parseFromSliceLeaky(std.json.Value, ..)`, whose defaults reject
+    // a duplicate key (`error.DuplicateField`) and keep an integer outside
+    // `i64` as `.number_string`, which the `length` switch rejects
+    // (`error.EnvelopeItemLengthMalformed`). MEASURED on zig 0.16.0 (the
+    // golden file in `json.rs`).
+    #[test]
+    fn header_parse_follows_std_json_edge_cases() {
+        // A duplicate key in the envelope header, and in an item header.
+        let mut reader: &[u8] = b"{\"a\":1,\"a\":2}\n";
+        let err = parse_err(&mut reader);
+        assert!(format!("{err:?}").contains("DuplicateField"), "{err:?}");
+        let mut reader: &[u8] = b"{}\n{\"type\":\"session\",\"type\":\"event\"}\n{}\n";
+        let err = parse_err(&mut reader);
+        assert!(format!("{err:?}").contains("DuplicateField"), "{err:?}");
+
+        // `length` just past `i64::MAX`, and past `u64::MAX`: both are
+        // `.number_string`, so the length is malformed (not a short payload).
+        for len in ["9223372036854775808", "18446744073709551616"] {
+            let input = format!("{{}}\n{{\"type\":\"session\",\"length\":{len}}}\nx");
+            let mut reader: &[u8] = input.as_bytes();
+            let err = parse_err(&mut reader);
+            assert!(
+                matches!(err, Error::EnvelopeItemLengthMalformed),
+                "length {len}: {err:?}"
+            );
+        }
+
+        // Control: an in-range length still parses.
+        let mut reader: &[u8] = b"{}\n{\"type\":\"session\",\"length\":1}\nx";
+        let v = Envelope::parse(&mut reader).unwrap();
+        assert_eq!(1, v.items.len());
+    }
+
+    // No reference test. LEDGER S79-F4: headers are written with
+    // `std.json.fmt(.., .{ .whitespace = .minified })`, whose number printing
+    // differs from serde_json's (MEASURED on zig 0.16.0: `2.0` -> `2`, `-0.0`
+    // -> `-0`, `1e2` -> `100`, `1e400` and `18446744073709551616` verbatim).
+    #[test]
+    fn header_serialize_prints_numbers_like_std_json() {
+        let mut reader: &[u8] = concat!(
+            "{\"f\":2.0,\"z\":-0.0,\"e\":1e2,\"big\":18446744073709551616,\"inf\":1e400}\n",
+            "{\"type\":\"session\",\"length\":2,\"x\":1.50}\n",
+            "{}",
+        )
+        .as_bytes();
+        let mut v = Envelope::parse(&mut reader).unwrap();
+        let mut output: Vec<u8> = Vec::new();
+        v.serialize(&mut output).unwrap();
+        assert_eq!(
+            concat!(
+                "{\"f\":2,\"z\":-0,\"e\":100,\"big\":18446744073709551616,\"inf\":1e400}\n",
+                "{\"type\":\"session\",\"length\":2,\"x\":1.5}\n",
+                "{}",
+            ),
+            String::from_utf8(output).unwrap(),
+        );
+    }
+
+    // No reference test. Reference defect (R13), UD182: `std.json.fmt` panics
+    // on a header nested deeper than 256 levels (MEASURED on zig 0.16.0
+    // ReleaseSafe, exit 134), while `parseFromSliceLeaky` accepts it. The port
+    // parses it too, and `serialize` returns an `InvalidInput` error instead
+    // of panicking. Negative control: drop the depth check in
+    // `json::stringify_object` and this fails on `unwrap_err`.
+    #[test]
+    fn serialize_rejects_a_header_deeper_than_256_levels() {
+        let header = |depth: usize| {
+            // The header object is itself one level.
+            let inner = depth - 1;
+            format!("{{\"x\":{}0{}}}\n", "[".repeat(inner), "]".repeat(inner))
+        };
+
+        // 256 levels: parses and round-trips.
+        let input = header(256);
+        let mut reader: &[u8] = input.as_bytes();
+        let mut v = Envelope::parse(&mut reader).unwrap();
+        let mut output: Vec<u8> = Vec::new();
+        v.serialize(&mut output).unwrap();
+        assert_eq!(input, String::from_utf8(output).unwrap());
+
+        // 257 levels: parses (as the reference does), serialize errors.
+        let input = header(257);
+        let mut reader: &[u8] = input.as_bytes();
+        let mut v = Envelope::parse(&mut reader).unwrap();
+        assert!(v.headers.contains_key("x"));
+        let mut output: Vec<u8> = Vec::new();
+        let err = v.serialize(&mut output).unwrap_err();
+        assert!(
+            matches!(&err, Error::Io(e) if e.kind() == std::io::ErrorKind::InvalidInput),
+            "{err:?}"
+        );
+        assert!(output.is_empty(), "nothing is written before the error");
     }
 }

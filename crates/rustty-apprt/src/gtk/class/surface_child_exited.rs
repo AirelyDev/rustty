@@ -16,6 +16,20 @@
 //! `search_overlay.rs` (the `clicked` signal callback is NON-swapped, so `this`
 //! comes LAST; the `notify_data` handler's arg0 genuinely IS Self, so it is
 //! `&self`).
+//!
+//! AD-3 COLLAPSE: `SurfaceChildExited` is always the banner widget here
+//! (`supportsBanner()` is `atLeast(1, 3, 0)`, below the adw ≥ 1.5 floor). The
+//! dropped fallback (`surface_child_exited.zig:204-208`), quoted:
+//!
+//! ```text
+//! /// Empty widget that does nothing if we don't have a new enough
+//! /// Adwaita version to support the child exited banner.
+//! const SurfaceChildExitedNoop = extern struct {
+//!     /// Can be detected at comptime
+//!     pub const noop = true;
+//!     ...
+//! };
+//! ```
 
 use std::cell::RefCell;
 use std::sync::OnceLock;
@@ -52,6 +66,8 @@ mod imp {
         #[template_child]
         pub banner: TemplateChild<libadwaita::Banner>,
 
+        /// The child exited data sent by the apprt.
+        ///
         /// PORTS: `surface_child_exited.zig:34-46,64` property/field `data`
         /// (`?*apprt.surface.Message.ChildExited`, OWNED boxed;
         /// `privateBoxedFieldAccessor`). The child-exit payload sent by the apprt;
@@ -96,6 +112,7 @@ mod imp {
         /// the surface template connects (`surface.blp:153`).
         fn signals() -> &'static [glib::subclass::Signal] {
             static SIGNALS: OnceLock<Vec<glib::subclass::Signal>> = OnceLock::new();
+            // Emitted when the banner would like to be closed.
             SIGNALS.get_or_init(|| vec![glib::subclass::Signal::builder("close-request").build()])
         }
 
@@ -113,6 +130,9 @@ mod imp {
 }
 
 glib::wrapper! {
+    /// Child exited overlay based on adw.Banner introduced in
+    /// Adwaita 1.3.
+    ///
     /// PORTS: `surface_child_exited.zig:22` `pub const SurfaceChildExitedBanner`.
     pub struct SurfaceChildExited(ObjectSubclass<imp::SurfaceChildExited>)
         @extends libadwaita::Bin, gtk4::Widget,

@@ -44,9 +44,11 @@
 // with `target: LOG_SCOPE`. Declared just below the imports, where the reference
 // puts the alias.
 //
-// PORT NOTE: `crash`/`internal_os` (the sentry thread-state + Darwin thread
-// naming) and `ArenaAllocator` are only used by the deferred run-loop bodies
-// below; no `use` is bound for them yet.
+// PORT NOTE: `crash` (the sentry thread-state) is reached through
+// `crate::IoCrashThreadState`, `internal_os` (Darwin thread naming) by path,
+// and `ArenaAllocator` collapses into Rust ownership; no `use` is bound for them.
+// (CORRECTION, T-G S212-F2: this said they "are only used by the deferred
+// run-loop bodies below; no `use` is bound for them yet".)
 use rustty_apprt_api::surface::AppMailbox;
 use rustty_apprt_api::surface::Message as SurfaceMessage;
 use rustty_datastruct::blocking_queue::Timeout;
@@ -394,25 +396,12 @@ impl Thread {
             //     else => { const str = std.fmt.allocPrint(...) catch "Out of memory..."; ... },
             // }
             //
-            // PORT NOTE: `crate::Error` is the OPAQUE termio seam error (lib.rs:122);
-            // it carries NO discriminant, so the reference's error switch cannot
-            // dispatch `error.OpenptyFailed`/`InputNotFound`/`InputFailed`. Every
-            // error collapses to the general `else` arm below. The two special-cased
-            // arms (pty-exhaustion + input-path messages) are preserved verbatim in
-            // the deferred comment above; they become reachable when `Error` gains
-            // its real error set at the growth point (lib.rs:115).
-            let str = format!(
-                "error starting IO thread: {err}\n\
-                 \n\
-                 The underlying shell or command was unable to be started.\n\
-                 This error is usually due to exhausting a system resource.\n\
-                 If this looks like a bug, please report it.\n\
-                 \n\
-                 This terminal is non-functional. Please close it and try again."
-            );
-            // (PORT NOTE: Rust `format!` doesn't fail on OOM the way `allocPrint` does, so
-            // the reference `catch "Out of memory..."` fallback is unreachable; the
-            // fallback string is preserved in the comment above.)
+            // CORRECTION (S212-F1): `crate::Error` used to be an opaque unit struct
+            // with no discriminant, so every error took the general `else` arm and
+            // the two special messages existed only in comments. It now carries
+            // the three members this switch names (lib.rs); the switch is
+            // `failure_screen_text`.
+            let str = failure_screen_text(err);
 
             // t.eraseDisplay(.complete, false);
             unsafe { (*t).erase_display(csi::EraseDisplay::Complete, false) };
@@ -797,12 +786,11 @@ impl Thread {
         // };
         // defer crash.sentry.thread_state = null;
         //
-        // DEFERRED (cross-crate crash-sentry seam, not part of B4): the io thread's
-        // crash metadata sets `thread_state.surface = io.surface_mailbox.surface`,
-        // but the `AppMailbox` trait does not yet expose a `.surface` accessor (it
-        // lands with rustty-core's `Surface: ThreadStateSurface` impl — the SAME
-        // deferral as `ReadThread::threadMainPosix`, exec.rs). Preserved verbatim
-        // above; wired when core lands.
+        // CORRECTION (S212-F2): this was "DEFERRED (cross-crate crash-sentry
+        // seam, not part of B4) ... the `AppMailbox` trait does not yet expose a
+        // `.surface` accessor ... wired when core lands." It now does
+        // (`AppMailbox::crash_surface`); the guard's `Drop` is the `defer`.
+        let _crash_thread_state = unsafe { crate::IoCrashThreadState::set(io) };
 
         // Get the mailbox. This must be an SPSC mailbox for threading.
         // const mailbox = switch (io.mailbox) {
@@ -1344,4 +1332,79 @@ pub(crate) struct CallbackData<M: AppMailbox> {
     pub(crate) self_: *mut Thread,
     pub(crate) io: *mut Termio<M>,
     pub(crate) data: core::mem::MaybeUninit<ThreadData<M>>,
+}
+
+/// The text `threadMain` paints when `threadMain_` fails: the reference's
+/// `switch (@as(Err, @errorCast(err)))` (`Thread.zig:167-216`), one message per
+/// arm. `Ghostty` is the product identity (R2, `APP_NAME_TITLECASE`).
+///
+/// PORT NOTE (S212-F1): the reference's `allocPrint(...) catch "Out of
+/// memory. This terminal is non-functional. Please close it and try again."`
+/// fallback has no arm here: Rust's `format!` aborts rather than fail.
+fn failure_screen_text(err: crate::Error) -> String {
+    let app = rustty_identity::APP_NAME_TITLECASE;
+    match err {
+        // error.OpenptyFailed => {
+        crate::Error::OpenptyFailed => format!(
+            "Your system cannot allocate any more pty devices.\n\
+             \n\
+             {app} requires a pty device to launch a new terminal.\n\
+             This error is usually due to having too many terminal\n\
+             windows open or having another program that is using too\n\
+             many pty devices.\n\
+             \n\
+             Please free up some pty devices and try again."
+        ),
+
+        // error.InputNotFound,
+        // error.InputFailed,
+        // => {
+        crate::Error::InputNotFound | crate::Error::InputFailed => format!(
+            "A configured `input` path was not found, was not readable,\n\
+             was too large, or the underlying pty failed to accept\n\
+             the write.\n\
+             \n\
+             {app} can't continue since it can't guarantee that\n\
+             initial terminal state will be as desired. Please review\n\
+             the value of `input` in your configuration file and\n\
+             ensure that all the path values exist and are readable."
+        ),
+
+        // else => {
+        crate::Error::Other => format!(
+            "error starting IO thread: {err}\n\
+             \n\
+             The underlying shell or command was unable to be started.\n\
+             This error is usually due to exhausting a system resource.\n\
+             If this looks like a bug, please report it.\n\
+             \n\
+             This terminal is non-functional. Please close it and try again."
+        ),
+    }
+}
+
+#[cfg(test)]
+mod failure_screen_tests {
+    use super::*;
+
+    /// S212-F1: each member `threadMain` switches on gets its own screen, with
+    /// the reference's text (identity-retargeted); everything else the
+    /// general one.
+    #[test]
+    fn failure_screen_text_has_the_reference_arms() {
+        let app = rustty_identity::APP_NAME_TITLECASE;
+        assert_eq!(
+            failure_screen_text(crate::Error::OpenptyFailed),
+            format!(
+                "Your system cannot allocate any more pty devices.\n\n{app} requires a pty device to launch a new terminal.\nThis error is usually due to having too many terminal\nwindows open or having another program that is using too\nmany pty devices.\n\nPlease free up some pty devices and try again."
+            )
+        );
+        let input = format!(
+            "A configured `input` path was not found, was not readable,\nwas too large, or the underlying pty failed to accept\nthe write.\n\n{app} can't continue since it can't guarantee that\ninitial terminal state will be as desired. Please review\nthe value of `input` in your configuration file and\nensure that all the path values exist and are readable."
+        );
+        assert_eq!(failure_screen_text(crate::Error::InputNotFound), input);
+        assert_eq!(failure_screen_text(crate::Error::InputFailed), input);
+        assert!(failure_screen_text(crate::Error::Other)
+            .starts_with("error starting IO thread: termio operation failed\n\n"));
+    }
 }

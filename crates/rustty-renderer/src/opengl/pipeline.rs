@@ -173,6 +173,7 @@ impl Pipeline {
     pub fn init(vertex_attributes: Option<VertexLayout>, opts: Options<'_>) -> Result<Self, Error> {
         let stride = vertex_attributes.map_or(0, |l| l.stride);
 
+        // Load and compile our shaders.
         // const program = try gl.Program.createVF(...); errdefer program.destroy();
         let program = Program::create_vf(opts.vertex_fn, opts.fragment_fn)?;
 
@@ -264,12 +265,17 @@ impl Pipeline {
     /// }
     /// ```
     ///
-    /// PORT NOTE (only the program is destroyed): the reference's `deinit` destroys
-    /// ONLY `program`, NOT `fbo`/`vao` — those GL objects leak for the process
-    /// lifetime. That is the reference's behaviour (a pipeline outlives its uses and
-    /// is torn down at shutdown), ported as-is rather than "corrected".
+    /// PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD251. The reference's
+    /// `deinit` destroys ONLY `program`, although `init` owns `fbo` and `vao` too
+    /// (its `errdefer`s destroy them on failure). A shader rebuild in the same GL
+    /// context (a blending or custom-shader config change) therefore leaks both
+    /// names per pipeline. The port destroys them as well, after the program (the
+    /// reverse of `init`). Test `deinit_releases_the_framebuffer_and_vertex_array`
+    /// (live GL; GL lane / Linux run pending, it skips on macOS).
     pub fn deinit(&self) {
         self.program.destroy();
+        self.vao.destroy();
+        self.fbo.destroy();
     }
 }
 
@@ -318,4 +324,65 @@ fn auto_attribute(
     }
 
     Ok(())
+}
+
+/// UD251 (PORT NOTE: reference defect (R13), at `Pipeline::deinit`). Live GL: runs
+/// on the Ubuntu GL lane (`RUSTTY_REQUIRE_GL=1`) and skips without a headless GL
+/// 4.3 core context (macOS).
+#[cfg(test)]
+mod deinit_leak_tests {
+    use super::{Options, Pipeline, StepFunction};
+    use crate::opengl::gl::test_support;
+
+    #[test]
+    fn deinit_releases_the_framebuffer_and_vertex_array() {
+        let Some(_gl) =
+            test_support::offscreen_gl("deinit_releases_the_framebuffer_and_vertex_array")
+        else {
+            return;
+        };
+        let pipeline = Pipeline::init(
+            None,
+            Options {
+                vertex_fn: c"#version 430 core\nvoid main() { gl_Position = vec4(0.0); }\n",
+                fragment_fn:
+                    c"#version 430 core\nout vec4 color;\nvoid main() { color = vec4(1.0); }\n",
+                step_fn: StepFunction::PerVertex,
+                blending_enabled: true,
+            },
+        )
+        .expect("a valid pipeline");
+        let (fbo, vao, program) = (pipeline.fbo.id, pipeline.vao.id, pipeline.program.id);
+        // SAFETY: plain queries on the current context.
+        unsafe {
+            assert_eq!(
+                gl::IsFramebuffer(fbo),
+                gl::TRUE,
+                "init bound the framebuffer"
+            );
+            assert_eq!(
+                gl::IsVertexArray(vao),
+                gl::TRUE,
+                "init bound the vertex array"
+            );
+        }
+        pipeline.deinit();
+        unsafe {
+            assert_eq!(
+                gl::IsProgram(program),
+                gl::FALSE,
+                "deinit destroys the program"
+            );
+            assert_eq!(
+                gl::IsFramebuffer(fbo),
+                gl::FALSE,
+                "deinit must destroy the framebuffer init created"
+            );
+            assert_eq!(
+                gl::IsVertexArray(vao),
+                gl::FALSE,
+                "deinit must destroy the vertex array init created"
+            );
+        }
+    }
 }

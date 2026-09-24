@@ -6,7 +6,7 @@
 //! protocol objects that drive CSD, background blur, quick-terminal slide, and
 //! `xdg_activation` urgency).
 //!
-//! Gated `#[cfg(feature = "wayland")]` at the [`super`] module; pulls the
+//! Gated `#[cfg(rustty_gtk_wayland)]` at the [`super`] module; pulls the
 //! `gdk4-wayland` / `wayland-client` / `wayland-backend` / `wayland-protocols` /
 //! `wayland-protocols-plasma` crates (Cargo `wayland` feature). On GNOME/mutter —
 //! the common target — only `wl_compositor` + `xdg_activation_v1` are advertised,
@@ -950,7 +950,13 @@ impl Window {
             QuickTerminalLayer::Background => Layer::Background,
         });
         // layer_shell.setNamespace(window, config.@"gtk-quick-terminal-namespace");
-        set_layer_namespace_raw(window, &config.gtk_quick_terminal_namespace);
+        //
+        // S33-F1: the reference hands the raw config bytes to
+        // `gtk_layer_set_namespace` (`pkg/gtk4-layer-shell/src/main.zig:67-69`);
+        // the port went through the crate's `&str` API with `from_utf8_lossy`,
+        // which rewrote invalid UTF-8 as U+FFFD. Call the C function with the
+        // bytes, as the reference does.
+        set_layer_namespace(window, &config.gtk_quick_terminal_namespace);
 
         // Re-resolve the target monitor on every sync so that config reloads
         // and primary-output changes take effect without recreating the window.
@@ -1067,6 +1073,52 @@ fn entered_monitor(_surface: &gdk4::Surface, monitor: &gdk4::Monitor, apprt_wind
     window.set_default_size(dims.width as i32, dims.height as i32);
 }
 
+/// PORTS: `pkg/gtk4-layer-shell/src/main.zig:67-69` `setNamespace`:
+/// `c.gtk_layer_set_namespace(@ptrCast(window), name.ptr)` on the config's raw
+/// `[:0]const u8` (S33-F1). The bytes reach C unchanged; C reads them up to the
+/// first NUL, so an interior NUL ends the namespace there, as it does for the
+/// reference's sentinel pointer.
+fn set_layer_namespace(window: &gtk4::Window, name: &[u8]) {
+    let name = layer_namespace_cstring(name);
+    // SAFETY: `window` is a live GtkWindow (the borrow keeps it alive for the
+    // call) and `name` a NUL-terminated string that outlives it;
+    // gtk-layer-shell copies the namespace.
+    unsafe {
+        gtk4_layer_shell_sys::gtk_layer_set_namespace(
+            gtk4::glib::translate::ToGlibPtr::to_glib_none(window).0,
+            name.as_ptr(),
+        );
+    }
+}
+
+/// The C string `setNamespace` passes: the bytes before the first NUL (all of
+/// them when there is none), byte for byte.
+fn layer_namespace_cstring(name: &[u8]) -> std::ffi::CString {
+    let end = name.iter().position(|&b| b == 0).unwrap_or(name.len());
+    std::ffi::CString::new(&name[..end]).expect("no NUL before `end`")
+}
+
+#[cfg(test)]
+mod layer_namespace_tests {
+    use super::layer_namespace_cstring;
+
+    /// S33-F1: invalid UTF-8 reaches gtk-layer-shell unchanged (the port used
+    /// to replace it with U+FFFD).
+    #[test]
+    fn namespace_bytes_are_passed_verbatim() {
+        assert_eq!(
+            layer_namespace_cstring(b"rustty-quick-terminal").as_bytes(),
+            b"rustty-quick-terminal"
+        );
+        assert_eq!(
+            layer_namespace_cstring(b"quick-\xff\xfe").as_bytes(),
+            b"quick-\xff\xfe"
+        );
+        // C sees the reference's sentinel string up to its first NUL.
+        assert_eq!(layer_namespace_cstring(b"a\0b").as_bytes(), b"a");
+    }
+}
+
 /// Resolve the `Globals.state.primary_output_name` for the quick terminal by
 /// reaching the wayland winproto [`App`] through the owning [`Application`].
 ///
@@ -1090,29 +1142,6 @@ fn quick_terminal_primary_output_name(apprt_window: &ApprtWindow) -> Option<Stri
     name
 }
 
-/// `layer_shell.setNamespace(window, config.@"gtk-quick-terminal-namespace")`
-/// (`wayland.zig:352`) with the config's raw bytes.
-///
-/// CORRECTION (task T-D, S60-F8): the port went through gtk4-layer-shell's safe
-/// `set_namespace(Option<&str>)` after `String::from_utf8_lossy`, so a non-UTF-8
-/// namespace reached the compositor with U+FFFD in place of its bytes. The
-/// reference hands the `[:0]const u8` config value to `gtk_layer_set_namespace`
-/// unconverted; so does this. C reads up to the first NUL, as it does for the
-/// reference's sentinel-terminated slice.
-fn set_layer_namespace_raw(window: &gtk4::Window, namespace: &[u8]) {
-    use glib::translate::ToGlibPtr;
-    let end = namespace
-        .iter()
-        .position(|&b| b == 0)
-        .unwrap_or(namespace.len());
-    let c = std::ffi::CString::new(&namespace[..end]).expect("no interior NUL before `end`");
-    // SAFETY: `window` is a live GtkWindow for the call; `c` is NUL-terminated and
-    // outlives it (gtk-layer-shell copies the string).
-    unsafe {
-        gtk4_layer_shell_sys::gtk_layer_set_namespace(window.to_glib_none().0, c.as_ptr());
-    }
-}
-
 /// PORTS: `value_types.zig` `BackgroundBlur.enabled` (rustty's
 /// `value_types::background_blur_enabled`, which is `pub(crate)` to rustty-config).
 /// Replicated here since sync_blur needs it. macOS-glass variants imply blur, so
@@ -1131,9 +1160,10 @@ fn background_blur_enabled(v: BackgroundBlur) -> bool {
 mod tests {
     use super::*;
 
-    /// S60-F8: `gtk-quick-terminal-namespace` reaches gtk-layer-shell as its raw
-    /// bytes (`wayland.zig:352`); a non-UTF-8 byte is kept, not replaced by
-    /// U+FFFD. Read back through `gtk_layer_get_namespace`. Needs a Wayland
+    /// S60-F8 (and S33-F1): `gtk-quick-terminal-namespace` reaches gtk-layer-shell
+    /// as its raw bytes (`wayland.zig:352`); a non-UTF-8 byte is kept, not replaced
+    /// by U+FFFD. Read back through `gtk_layer_get_namespace`, end to end through
+    /// the library (`namespace_bytes_are_passed_verbatim` checks the C string only). Needs a Wayland
     /// compositor with wlr-layer-shell (headless sway on the VM); FAILS without one.
     #[test]
     #[ignore = "requires a wlr-layer-shell compositor; run with GDK_BACKEND=wayland WAYLAND_DISPLAY=... cargo test -p rustty-apprt --features gtk,x11,wayland --lib layer_namespace -- --ignored"]
@@ -1147,7 +1177,7 @@ mod tests {
         let window = gtk4::Window::new();
         window.init_layer_shell();
 
-        set_layer_namespace_raw(&window, b"caf\xe9-quick");
+        set_layer_namespace(&window, b"caf\xe9-quick");
 
         // SAFETY: the window is a live layer-shell window; the returned string is
         // owned by gtk-layer-shell and read before the window is destroyed.

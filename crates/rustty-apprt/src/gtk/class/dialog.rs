@@ -16,6 +16,21 @@
 //! reference it (`dialog.zig:32-36`); in gtk4-rs that is the inherited
 //! `AdwAlertDialogImpl::response` vfunc, which our subclassable wiring below
 //! propagates to any `DialogImpl`.
+//!
+//! The dropped `adw.MessageDialog` arm of `present` (`dialog.zig:42-57`), quoted:
+//!
+//! ```text
+//! adw.MessageDialog => {
+//!     // Reset the previous parent window
+//!     self.as(gtk.Window).setTransientFor(null);
+//!
+//!     // We need to get the window for the parent in order
+//!     // to set the transient-for property on the MessageDialog.
+//!     if (parent) |widget| parent: { ... self.as(gtk.Window).setTransientFor(window); }
+//!
+//!     self.as(gtk.Window).present();
+//! },
+//! ```
 
 use glib::subclass::types::IsSubclassable;
 use gtk4::subclass::prelude::*;
@@ -47,6 +62,13 @@ mod imp {
 }
 
 glib::wrapper! {
+    /// Dialog is a simple abstraction over the `adw.AlertDialog` and
+    /// `adw.MessageDialog` widgets, chosen at comptime based on the linked
+    /// Adwaita version.
+    ///
+    /// Once we drop support for Adwaita <= 1.2, this can be fully removed
+    /// and we can use `adw.AlertDialog` directly.
+    ///
     /// PORTS: `dialog.zig:17` `pub const Dialog`. A subclassable base over
     /// `adw::AlertDialog`; see [`DialogImpl`] for how subclasses attach.
     pub struct Dialog(ObjectSubclass<imp::Dialog>)
@@ -60,6 +82,10 @@ glib::wrapper! {
 /// no vfuncs of its own, so the trait body is empty and the `IsSubclassable`
 /// impl just chains to `adw::AlertDialog` (which installs the `response` vfunc
 /// the reference forwards at `dialog.zig:32-36`).
+//
+// Reference `virtual_methods.response` (dialog.zig:33-35):
+// Forwarded from parent so subclasses can reference this
+// directly. This will make it easier to remove Dialog in the future.
 pub trait DialogImpl: AdwAlertDialogImpl {}
 
 unsafe impl<T: DialogImpl> IsSubclassable<T> for Dialog {}

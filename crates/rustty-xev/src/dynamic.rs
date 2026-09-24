@@ -5515,15 +5515,16 @@ mod tests {
     // `if (!xev.dynamic)` (stream.zig:1373), so it is NOT part of the dynamic
     // contract (the outer Completion is embedded differently per arm).
     #[test]
+    #[cfg_attr(
+        target_arch = "x86_64",
+        ignore = "SkipZigTest: upstream skips the dynamic instantiation on x86_64 (R14)"
+    )]
     fn dynamic_pty_queued_writes() {
         // this test fails on x86_64 with a strange error but passes
         // on aarch64. for now, just let it go until we investigate.
         // (`if (xev.dynamic and builtin.cpu.arch == .x86_64) return
         // error.SkipZigTest;` — stream.zig:1281: upstream skips the DYNAMIC
         // instantiation of this test on x86_64.)
-        if cfg!(target_arch = "x86_64") {
-            return;
-        }
 
         let _guard = lock_backend();
 

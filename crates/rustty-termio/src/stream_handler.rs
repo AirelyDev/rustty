@@ -442,7 +442,7 @@ impl<M: AppMailbox> StreamHandler<M> {
         // (PORT NOTE: the trait hands the parser's owned DCS; the dcs Handler takes
         // the borrowed view — the same coercion Zig's `terminal.DCS` does.)
         let mut cmd = match self.dcs.hook(
-            self.alloc,
+            self.alloc.into(),
             rustty_vt::dcs::DCS {
                 intermediates: &dcs.intermediates,
                 params: &dcs.params,
@@ -552,8 +552,8 @@ impl<M: AppMailbox> StreamHandler<M> {
                         // errdefer self.alloc.destroy(viewer);
                         // viewer.* = try .init(global.io(), self.alloc);
                         // errdefer viewer.deinit();
-                        let viewer =
-                            rustty_vt::tmux::Viewer::init(self.alloc).map_err(|_| crate::Error)?;
+                        let viewer = rustty_vt::tmux::Viewer::init(self.alloc.into())
+                            .map_err(|_| crate::Error)?;
                         // self.tmux_viewer = viewer;
                         self.tmux_viewer = Some(Box::new(viewer));
                         // break :tmux;
@@ -702,13 +702,13 @@ impl<M: AppMailbox> StreamHandler<M> {
     // pub fn apcEnd(self: *StreamHandler) !void {
     pub fn apcEnd(&mut self) -> Result<(), crate::Error> {
         // var result = self.apc.end() orelse return;
-        let mut result = match self.apc.end(self.alloc) {
+        let mut result = match self.apc.end(self.alloc.into()) {
             Some(result) => result,
             None => return Ok(()),
         };
         // defer result.deinit(self.alloc);
         let r = self.apcCommand(&mut result);
-        result.deinit(self.alloc);
+        result.deinit(self.alloc.into());
         r
     }
 
@@ -722,7 +722,7 @@ impl<M: AppMailbox> StreamHandler<M> {
             // .kitty => |*kitty_cmd| {
             rustty_vt::apc::Command::Kitty(kitty_cmd) => {
                 // if (self.terminal.kittyGraphics(self.alloc, kitty_cmd)) |resp| {
-                if let Some(resp) = self.term().kitty_graphics(self.alloc, kitty_cmd) {
+                if let Some(resp) = self.term().kitty_graphics(self.alloc.into(), kitty_cmd) {
                     // var buf: [1024]u8 = undefined;
                     // var writer: std.Io.Writer = .fixed(&buf);
                     let mut buf = [0u8; 1024];
@@ -750,7 +750,7 @@ impl<M: AppMailbox> StreamHandler<M> {
             // .glyph => |*glyph_req| {
             rustty_vt::apc::Command::Glyph(glyph_req) => {
                 // const resp = self.terminal.glyphProtocol(self.alloc, glyph_req);
-                let resp = self.term().glyph_protocol(self.alloc, glyph_req);
+                let resp = self.term().glyph_protocol(self.alloc.into(), glyph_req);
                 // switch (glyph_req.*) {
                 //     .register, .clear => try self.queueRender(),
                 //     .support, .query => {},
@@ -1079,7 +1079,7 @@ impl<M: AppMailbox> StreamHandler<M> {
                 // pixel geometry is left alone.
                 let alloc = self.alloc;
                 if let Err(err) = self.term().resize(
-                    alloc,
+                    alloc.into(),
                     rustty_vt::terminal::Resize {
                         cols: grid_size.columns,
                         rows: grid_size.rows,
@@ -1099,7 +1099,7 @@ impl<M: AppMailbox> StreamHandler<M> {
                 let alloc = self.alloc;
                 self.term()
                     .deccolm(
-                        alloc,
+                        alloc.into(),
                         if enabled {
                             rustty_vt::terminal::DeccolmMode::Cols132
                         } else {
@@ -1981,7 +1981,7 @@ impl<M: AppMailbox> StreamHandler<M> {
             target: LOG_SCOPE,
             "reporting XTVERSION: {} {}",
             rustty_identity::XTVERSION_NAME,
-            rustty_build_config::VERSION_STRING
+            rustty_version::VERSION_STRING
         );
         // var buf: [288]u8 = undefined;
         // const resp = try std.fmt.bufPrint(
@@ -2000,7 +2000,7 @@ impl<M: AppMailbox> StreamHandler<M> {
             format_args!(
                 "\x1BP>|{} {}\x1B\\",
                 rustty_identity::XTVERSION_NAME,
-                rustty_build_config::VERSION_STRING,
+                rustty_version::VERSION_STRING,
             ),
         )?;
         // const msg = try termio.Message.writeReq(self.alloc, resp);
@@ -2440,11 +2440,28 @@ impl<M: AppMailbox> StreamHandler<M> {
         // var fba: std.heap.FixedBufferAllocator = .init(&buffer);
         // const alloc = fba.allocator();
         //
-        // var response: std.ArrayListUnmanaged(u8) = .empty;
-        // const writer = response.writer(alloc);
+        // var response: std.Io.Writer.Allocating = .init(alloc);
         //
-        // (PORT NOTE: the fixed-buffer allocator + unmanaged list collapse into the
-        // owned response Vec/String accumulator.)
+        // CORRECTION (S214-F1): this block quoted `var response:
+        // std.ArrayListUnmanaged(u8) = .empty; const writer =
+        // response.writer(alloc);`, an older reference; the pin uses
+        // `std.Io.Writer.Allocating` (`stream_handler.zig:1554-1557`).
+        //
+        // PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD205. The
+        // reports accumulate in an allocating writer over a 1024-byte fixed
+        // buffer, and once it cannot grow, `try response.writer.print(...)`
+        // fails: `colorOperation` returns the error, NO report is sent, and
+        // every request after the one that failed, sets and resets included,
+        // is skipped. The writer's growth (`growCapacity`, `2*n + 1` bytes asked
+        // for a write that does not fit) puts the point well below 1024 bytes:
+        // measured with zig 0.16.0 (aarch64-macos and x86_64-macos), 25 16-bit
+        // palette reports for indices 0, 1, 2, ... fit (640 bytes with BEL,
+        // 665 with ST) and the 26th fails; the number depends on how many
+        // digits the indices have (24th to 27th measured). An OSC 4
+        // or OSC 104 is bounded only by the OSC parser, so a program querying
+        // its palette in one sequence gets no answer. The port accumulates in a
+        // `Vec`, so every report is sent and every request is applied, which is
+        // what the function is for. S214-F1.
         let mut response: Vec<u8> = Vec::new();
 
         // var it = requests.constIterator(0);
@@ -3748,13 +3765,13 @@ impl<M: AppMailbox> stream::Handler for StreamHandler<M> {
     // .apc_put => self.apc.feed(self.alloc, value),
     fn apc_put(&mut self, byte: u8) {
         let alloc = self.alloc;
-        self.apc.feed(alloc, byte);
+        self.apc.feed(alloc.into(), byte);
     }
 
     // .apc_put_slice => self.apc.feedSlice(self.alloc, value.bytes),
     fn apc_put_slice(&mut self, bytes: &[u8]) {
         let alloc = self.alloc;
-        self.apc.feed_slice(alloc, bytes);
+        self.apc.feed_slice(alloc.into(), bytes);
     }
 
     // // Unimplemented
@@ -3895,6 +3912,10 @@ pub(crate) mod tests {
         > {
             Ok(1)
         }
+
+        fn crash_surface(&self) -> *const dyn rustty_crash::sentry::ThreadStateSurface {
+            &crate::TEST_CRASH_SURFACE
+        }
     }
 
     pub(crate) fn terminal_opts(
@@ -3958,7 +3979,7 @@ pub(crate) mod tests {
     #[test]
     fn stream_handler_mode_12_ignored_when_default_blink_is_explicit() {
         // (a) An EXPLICIT configured blink: DEC mode 12 must be ignored.
-        let mut term = Terminal::init(Global, terminal_opts(Some(false))).unwrap();
+        let mut term = Terminal::init(Global.into(), terminal_opts(Some(false))).unwrap();
         assert!(!term.modes.get(modes::Mode::CursorBlinking));
         let mut h = handler_for(&raw mut term, std::ptr::null_mut(), std::ptr::null_mut());
         h.setMode(modes::Mode::CursorBlinking, true).unwrap();
@@ -3967,10 +3988,10 @@ pub(crate) mod tests {
             "DEC mode 12 must be ignored while an explicit default blink is set"
         );
         h.renderer_wakeup.deinit();
-        term.deinit(Global);
+        term.deinit(Global.into());
 
         // (b) NO configured blink (null = emulator default): mode 12 applies.
-        let mut term = Terminal::init(Global, terminal_opts(None)).unwrap();
+        let mut term = Terminal::init(Global.into(), terminal_opts(None)).unwrap();
         // A null default resolves to the emulator default, which is blinking.
         assert!(term.modes.get(modes::Mode::CursorBlinking));
         let mut h = handler_for(&raw mut term, std::ptr::null_mut(), std::ptr::null_mut());
@@ -3980,7 +4001,7 @@ pub(crate) mod tests {
             "DEC mode 12 must apply when no explicit default blink is configured"
         );
         h.renderer_wakeup.deinit();
-        term.deinit(Global);
+        term.deinit(Global.into());
     }
 
     // ---- task-14e-1: the restored `io_handler` diagnostics -----------------
@@ -3994,7 +4015,7 @@ pub(crate) mod tests {
     #[test]
     fn vt_funnel_emits_the_action_name_and_the_error() {
         let cap = crate::log_capture::start();
-        let mut term = Terminal::init(Global, terminal_opts(Some(false))).unwrap();
+        let mut term = Terminal::init(Global.into(), terminal_opts(Some(false))).unwrap();
         let mut h = handler_for(&raw mut term, std::ptr::null_mut(), std::ptr::null_mut());
 
         h.vt("print", Err(crate::Error));
@@ -4005,7 +4026,7 @@ pub(crate) mod tests {
         let messages = cap.messages();
         drop(cap);
         h.renderer_wakeup.deinit();
-        term.deinit(Global);
+        term.deinit(Global.into());
 
         assert_eq!(
             vec![
@@ -4200,7 +4221,7 @@ pub(crate) mod tests {
         use rustty_vt::stream::Handler as _;
 
         let cap = crate::log_capture::start();
-        let mut term = Terminal::init(Global, terminal_opts(Some(false))).unwrap();
+        let mut term = Terminal::init(Global.into(), terminal_opts(Some(false))).unwrap();
         let mailbox: *mut Mailbox = Box::into_raw(Box::new(
             crate::mailbox::Mailbox::initSPSC().expect("Mailbox::initSPSC"),
         ));
@@ -4233,7 +4254,7 @@ pub(crate) mod tests {
         let replied = mailbox_pop(mailbox).is_some();
         drop(cap);
         h.renderer_wakeup.deinit();
-        term.deinit(Global);
+        term.deinit(Global.into());
         drop(unsafe { Box::from_raw(state) });
         drop(unsafe { Box::from_raw(mutex) });
         drop(unsafe { Box::from_raw(mailbox) });
@@ -4265,7 +4286,7 @@ pub(crate) mod tests {
     #[test]
     fn window_title_warns_when_the_title_exceeds_the_buffer() {
         let cap = crate::log_capture::start();
-        let mut term = Terminal::init(Global, terminal_opts(Some(false))).unwrap();
+        let mut term = Terminal::init(Global.into(), terminal_opts(Some(false))).unwrap();
         let mut h = handler_for(&raw mut term, std::ptr::null_mut(), std::ptr::null_mut());
 
         // The reference guards on `title.len >= buf.len` with `buf: [256]u8`.
@@ -4275,7 +4296,7 @@ pub(crate) mod tests {
         let messages = cap.messages();
         drop(cap);
         h.renderer_wakeup.deinit();
-        term.deinit(Global);
+        term.deinit(Global.into());
 
         assert_eq!(
             vec![(
@@ -4306,7 +4327,7 @@ pub(crate) mod tests {
     #[test]
     fn window_title_is_silent_when_the_title_fits() {
         let cap = crate::log_capture::start();
-        let mut term = Terminal::init(Global, terminal_opts(Some(false))).unwrap();
+        let mut term = Terminal::init(Global.into(), terminal_opts(Some(false))).unwrap();
         let mut h = handler_for(&raw mut term, std::ptr::null_mut(), std::ptr::null_mut());
 
         h.windowTitle(b"a short title").unwrap();
@@ -4316,7 +4337,7 @@ pub(crate) mod tests {
         let title_after = term.get_title().map(<[u8]>::to_vec);
         drop(cap);
         h.renderer_wakeup.deinit();
-        term.deinit(Global);
+        term.deinit(Global.into());
 
         assert_eq!(
             Some(b"a short title".to_vec()),
@@ -4342,7 +4363,7 @@ pub(crate) mod tests {
     // every existing termio KAT.
     #[test]
     fn stream_handler_visibility_report_arms_push_forced_messages() {
-        let mut term = Terminal::init(Global, terminal_opts(Some(false))).unwrap();
+        let mut term = Terminal::init(Global.into(), terminal_opts(Some(false))).unwrap();
         term.flags.visible = false;
 
         let mailbox: *mut Mailbox = Box::into_raw(Box::new(
@@ -4398,7 +4419,7 @@ pub(crate) mod tests {
             drop(Box::from_raw(mutex));
             drop(Box::from_raw(mailbox));
         }
-        term.deinit(Global);
+        term.deinit(Global.into());
     }
 
     // The `changeConfig` half of the same move: the handler no longer owns the
@@ -4406,7 +4427,7 @@ pub(crate) mod tests {
     // apply immediately only while the cursor still follows its defaults).
     #[test]
     fn stream_handler_change_config_routes_cursor_defaults_to_the_terminal() {
-        let mut term = Terminal::init(Global, terminal_opts(Some(false))).unwrap();
+        let mut term = Terminal::init(Global.into(), terminal_opts(Some(false))).unwrap();
         // `changeConfig` ends with a `messageWriter` (the mode-2031 color-scheme
         // report), so this handler needs a real termio mailbox.
         let mailbox: *mut Mailbox = Box::into_raw(Box::new(
@@ -4449,7 +4470,7 @@ pub(crate) mod tests {
             drop(Box::from_raw(mutex));
             drop(Box::from_raw(mailbox));
         }
-        term.deinit(Global);
+        term.deinit(Global.into());
     }
 
     // The bytes of a `write_small`/`write_alloc` termio message.
@@ -4460,6 +4481,87 @@ pub(crate) mod tests {
             Message::WriteAlloc(v) => v.data.to_vec(),
             _ => panic!("expected a write message"),
         }
+    }
+
+    /// S214-F1 / UD205 (no reference counterpart): an OSC 4 that queries all
+    /// 256 palette entries and then sets one gets every report, in one write,
+    /// and the set after the reports is applied. The reference's response
+    /// buffer holds 25 16-bit reports for indices 0.. (640 bytes with BEL,
+    /// 665 with ST) and fails on the 26th (measured, zig 0.16.0 aarch64-macos;
+    /// 24th to 27th depending on the indices' digit count), sends nothing,
+    /// and skips the set.
+    #[test]
+    fn color_operation_reports_every_query_and_applies_later_requests() {
+        let mut term = Terminal::init(Global.into(), terminal_opts(Some(false))).unwrap();
+        let mailbox: *mut Mailbox = Box::into_raw(Box::new(
+            crate::mailbox::Mailbox::initSPSC().expect("Mailbox::initSPSC"),
+        ));
+        let mutex: *mut rustty_zigstd::thread::Mutex =
+            Box::into_raw(Box::new(rustty_zigstd::thread::Mutex::new()));
+        let state: *mut State = Box::into_raw(Box::new(State {
+            mutex,
+            terminal: &raw mut term,
+            inspector: None,
+            inspector_ptr: None,
+            preedit: None,
+            mouse: rustty_renderer::state::Mouse::default(),
+            demand: Default::default(),
+            handoff_gen: Default::default(),
+            handoff_park: Default::default(),
+        }));
+        let mut h = handler_for(&raw mut term, mailbox, state);
+
+        let mut requests: osc::color::List = (0..=255u8)
+            .map(|i| osc::color::Request::Query(osc::color::Target::Palette(i)))
+            .collect();
+        let new_color = color::RGB {
+            r: 0x12,
+            g: 0x34,
+            b: 0x56,
+        };
+        requests.push(osc::color::Request::Set(osc::color::ColoredTarget {
+            target: osc::color::Target::Palette(7),
+            color: new_color,
+        }));
+
+        let mut expected: Vec<u8> = Vec::new();
+        for i in 0..=255u8 {
+            let c = term.colors.palette.current[usize::from(i)];
+            expected.extend_from_slice(
+                format!(
+                    "\x1b]4;{};rgb:{:0>4x}/{:0>4x}/{:0>4x}",
+                    i,
+                    u16::from(c.r) * 257,
+                    u16::from(c.g) * 257,
+                    u16::from(c.b) * 257,
+                )
+                .as_bytes(),
+            );
+            expected.extend_from_slice(b"\x1b\\");
+        }
+        assert!(
+            expected.len() > 1024,
+            "the case exceeds the reference's buffer"
+        );
+
+        h.colorOperation(osc::color::Operation::osc_4, &requests, osc::Terminator::St)
+            .expect("colorOperation");
+
+        let msg = mailbox_pop(mailbox).expect("one report message");
+        assert_eq!(write_bytes(&msg), expected, "all 256 reports, in order");
+        assert!(mailbox_pop(mailbox).is_none(), "exactly one message");
+        assert_eq!(
+            term.colors.palette.current[7], new_color,
+            "the set after the reports is applied"
+        );
+
+        h.renderer_wakeup.deinit();
+        unsafe {
+            drop(Box::from_raw(state));
+            drop(Box::from_raw(mutex));
+            drop(Box::from_raw(mailbox));
+        }
+        term.deinit(Global.into());
     }
 
     // `dcsCommand`'s tmux control-mode arm (`fix-freetype-tmux` lane). This arm
@@ -4479,7 +4581,7 @@ pub(crate) mod tests {
     // --features oniguruma` here) the three prongs above must all fire.
     #[test]
     fn stream_handler_dcs_tmux_arm_drives_the_viewer() {
-        let mut term = Terminal::init(Global, terminal_opts(Some(false))).unwrap();
+        let mut term = Terminal::init(Global.into(), terminal_opts(Some(false))).unwrap();
         let mailbox: *mut Mailbox = Box::into_raw(Box::new(
             crate::mailbox::Mailbox::initSPSC().expect("Mailbox::initSPSC"),
         ));
@@ -4523,7 +4625,7 @@ pub(crate) mod tests {
                 drop(Box::from_raw(mutex));
                 drop(Box::from_raw(mailbox));
             }
-            term.deinit(Global);
+            term.deinit(Global.into());
             return;
         }
 
@@ -4585,7 +4687,7 @@ pub(crate) mod tests {
             drop(Box::from_raw(mutex));
             drop(Box::from_raw(mailbox));
         }
-        term.deinit(Global);
+        term.deinit(Global.into());
     }
 
     // R13 (task R13-A, UPSTREAM-DEFECTS UD6): a tmux control-mode block larger
@@ -4734,7 +4836,7 @@ pub(crate) mod tests {
         // PORT NOTE: Rust cannot mirror `undefined`; the minimal constructed
         // handler double (`handler_for`, the module's established seam) stands
         // in — only `kitty_clipboard_grants` is read by the code under test.
-        let mut term = Terminal::init(Global, terminal_opts(Some(false))).unwrap();
+        let mut term = Terminal::init(Global.into(), terminal_opts(Some(false))).unwrap();
         let mut h = handler_for(&raw mut term, std::ptr::null_mut(), std::ptr::null_mut());
         h.kitty_clipboard_grants
             .grant(b"otp", rustty_vt::kitty::clipboard::Direction::Read, true);
@@ -4746,7 +4848,7 @@ pub(crate) mod tests {
         assert!(!h.kittyClipboardReadGranted(b"otp", 1));
 
         h.renderer_wakeup.deinit();
-        term.deinit(Global);
+        term.deinit(Global.into());
     }
 
     // test "kitty clipboard write: oversized text replies EFBIG"
@@ -4755,7 +4857,7 @@ pub(crate) mod tests {
         use rustty_vt::kitty::clipboard as kitty_clipboard;
         use rustty_vt::osc::parsers::kitty_clipboard_protocol::Operation;
 
-        let mut term = Terminal::init(Global, terminal_opts(Some(false))).unwrap();
+        let mut term = Terminal::init(Global.into(), terminal_opts(Some(false))).unwrap();
 
         // var mailbox = try termio.Mailbox.initSPSC(testing.allocator);
         let mailbox: *mut Mailbox = Box::into_raw(Box::new(
@@ -4834,6 +4936,6 @@ pub(crate) mod tests {
             drop(Box::from_raw(mutex));
             drop(Box::from_raw(mailbox));
         }
-        term.deinit(Global);
+        term.deinit(Global.into());
     }
 }

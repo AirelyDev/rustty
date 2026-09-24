@@ -658,13 +658,16 @@ mod tests {
     /// `error.IPCFailed` after logging it). This replaced the stale L6
     /// placeholder pin (`Ok(false)`) that predated the real IPC port.
     ///
-    /// Environment-sensitive by nature (it talks to the real session bus), so it
-    /// SKIPS when a live rustty currently owns the bus name (the call would then
-    /// legitimately succeed with `Ok(true)`).
+    /// Environment-sensitive by nature (it talks to the real session bus): when a
+    /// live rustty currently owns the bus name the call would legitimately succeed
+    /// with `Ok(true)`, so the test cannot judge anything and FAILS with that
+    /// reason (R14: it used to return early, which reported `ok` having checked
+    /// nothing).
     #[test]
     fn perform_ipc_no_instance_fails_with_ipc_failed() {
         use glib::prelude::ToVariant;
-        // Skip if a live instance owns the name (dev instance running).
+        // A live instance owning the name (dev instance running) makes the test
+        // meaningless: fail loudly rather than return `ok` (R14).
         if let Ok(conn) = gio::bus_get_sync(gio::BusType::Session, gio::Cancellable::NONE) {
             let owned = conn
                 .call_sync(
@@ -681,10 +684,11 @@ mod tests {
                 .ok()
                 .and_then(|v| v.child_value(0).get::<bool>())
                 .unwrap_or(false);
-            if owned {
-                eprintln!("skip: a live rustty owns the bus name — IPC would succeed");
-                return;
-            }
+            assert!(
+                !owned,
+                "a live rustty owns the bus name, so the IPC would succeed and this \
+                 test cannot check the no-instance path: quit it and re-run"
+            );
         }
 
         let new_window = ipc::Action::NewWindow(ipc::NewWindow { arguments: None });

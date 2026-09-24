@@ -15,60 +15,18 @@
 use core::mem::ManuallyDrop;
 
 use super::{
-    CreatePage, Key, Limits, List, MemoryPool, Node, Options, OutOfMemory, PageList, Pin, PinSet,
-    Viewport, PAGE_PREHEAT,
+    page_backing_alloc, CreatePage, Key, Limits, List, MemoryPool, Node, Options, OutOfMemory,
+    PageList, Pin, PinSet, Viewport, PAGE_PREHEAT,
 };
+use crate::alloc::Allocator;
 use crate::page::{Capacity, Page};
 use rustty_render_types::term_size as size;
 
-// Failure injection for `Builder::finish` / `PageList::allocate_page`.
-//
-// PORT NOTE (port glue, no oracle tripwire): the reference exercises these
-// failure paths with `std.testing.FailingAllocator` (`fail_index =
-// alloc_index` fails the allocator's next request). The Rust pools are backed
-// by the infallible global allocator, so the same injection seam is provided
-// as `rustty_util::tripwire` fail points placed exactly where the reference
-// allocation would have failed — the same convention as the `init_tw` /
-// `initPages_tw` modules in `mod.rs` (which DO exist upstream) and
-// `compress.rs`'s `COMPRESS_PAGE_TW`.
-
-/// The `finish` fail point: the tracked viewport pin map insertion (the
-/// reference's "next general allocation" after the preheated pin pool).
-#[cfg(test)]
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub(crate) enum FinishFp {
-    ViewportPinTrack,
-}
-
-/// The `allocate_page` fail point: node/page allocation reaching pool growth
-/// (the reference's `createPageExt` → `pool.nodes.create()` growth path).
-#[cfg(test)]
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub(crate) enum AllocatePageFp {
-    PageNode,
-}
-
-#[cfg(test)]
-thread_local! {
-    pub(crate) static FINISH_TW: core::cell::RefCell<
-        rustty_util::tripwire::Module<FinishFp, OutOfMemory>,
-    > = core::cell::RefCell::new(rustty_util::tripwire::module());
-    pub(crate) static ALLOCATE_PAGE_TW: core::cell::RefCell<
-        rustty_util::tripwire::Module<AllocatePageFp, OutOfMemory>,
-    > = core::cell::RefCell::new(rustty_util::tripwire::module());
-}
-
-#[cfg(test)]
-#[inline]
-fn finish_tw_check(point: FinishFp) -> Result<(), OutOfMemory> {
-    FINISH_TW.with(|tw| tw.borrow_mut().check(point))
-}
-
-#[cfg(test)]
-#[inline]
-fn allocate_page_tw_check(point: AllocatePageFp) -> Result<(), OutOfMemory> {
-    ALLOCATE_PAGE_TW.with(|tw| tw.borrow_mut().check(point))
-}
+// PORT NOTE (parity tail S7-3): the reference exercises the `finish` and
+// `allocatePage` failure paths with `std.testing.FailingAllocator`, and so do
+// the port's tests now that the node/pin pools and the tracked-pin map grow
+// through the allocator handle. The port-only tripwire stand-ins that used to
+// sit here are gone.
 
 impl PageList {
     /// Allocate a new page using the PageList's memory pools.
@@ -95,11 +53,6 @@ impl PageList {
         this: *mut PageList,
         capacity: Capacity,
     ) -> Result<PageAllocation, OutOfMemory> {
-        // Port-glue fail point standing in for the reference FailingAllocator
-        // failing `createPageExt`'s pool growth; see the module PORT NOTE.
-        #[cfg(test)]
-        allocate_page_tw_check(AllocatePageFp::PageNode)?;
-
         Ok(PageAllocation {
             destination: this,
             // SAFETY: `this` is live per the contract; the pool/serial field
@@ -276,13 +229,16 @@ impl Builder {
     /// of the PageList and some validation is done on the finish call
     /// to ensure you built up a proper PageList according to those options.
     //
-    // PORT NOTE: the reference takes `alloc: Allocator`; as everywhere in this
-    // module, the Rust pools are backed by the global/page allocators selected
-    // inside `MemoryPool::init` (R1 additive glue boundary), so no allocator
-    // parameter is threaded through.
-    pub fn init(options: Options) -> Result<Builder, OutOfMemory> {
+    // PORT NOTE: the reference takes `alloc: Allocator`, and so does the port
+    // (parity tail S7-2, N264); it reaches `MemoryPool.alloc`.
+    pub fn init(alloc: Allocator, options: Options) -> Result<Builder, OutOfMemory> {
         Ok(Builder {
-            pool: ManuallyDrop::new(MemoryPool::init(PAGE_PREHEAT)?),
+            // .pool = try MemoryPool.init(
+            //     alloc,
+            //     pageAllocator(alloc),
+            //     page_preheat,
+            // ),
+            pool: ManuallyDrop::new(MemoryPool::init(alloc, page_backing_alloc(), PAGE_PREHEAT)?),
             pages: List::default(),
             page_serial: 0,
             page_size: 0,
@@ -411,21 +367,19 @@ impl Builder {
         }
 
         // Setup our one viewport tracked pin
-        let mut tracked_pins: PinSet = PinSet::new();
+        let mut tracked_pins: PinSet = PinSet::new_in(self.pool.alloc);
         // errdefer tracked_pins.deinit(self.pool.alloc); — the Rust `PinSet`
-        // owns its storage; dropping it on an early return frees it.
-        //
-        // Port-glue fail point standing in for the reference FailingAllocator
-        // failing `tracked_pins.putNoClobber`'s map allocation (the Rust
-        // `put_no_clobber` is infallible); see the module PORT NOTE.
-        #[cfg(test)]
-        if let Err(e) = finish_tw_check(FinishFp::ViewportPinTrack) {
+        // frees through its allocator when dropped on an early return.
+        // try tracked_pins.putNoClobber(self.pool.alloc, viewport_pin, {});
+        if tracked_pins
+            .try_put_no_clobber(viewport_pin.as_ptr(), ())
+            .is_err()
+        {
             // errdefer self.pool.pins.destroy(viewport_pin);
             // SAFETY: created above, not yet published anywhere.
             unsafe { self.pool.pins.destroy(viewport_pin) };
-            return Err(e.into());
+            return Err(FinishError::OutOfMemory);
         }
-        tracked_pins.put_no_clobber(viewport_pin.as_ptr(), ());
 
         // Initialize limits
         let mut limits: Limits = Limits::init(self.options.cols, self.options.rows);

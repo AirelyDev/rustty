@@ -865,33 +865,11 @@ mod tests {
     // gray value is exactly the alpha8 coverage, re-encoded with the pinned
     // encoder settings of `encode_alpha8_png` so byte equality holds.
     //
-    // Reference-only (dropped) verbatim lines, preserved for R1 comment
-    // fidelity — the tmp-dir test-PNG copying and the red/green diff-image
-    // emission are debugging aids with no analogue here (regeneration is
-    // instead performed in place via `RUSTTY_REGEN_FONT_KAT_PNGS`):
-    //
-    //     // Copy the test PNG in to the CWD so it isn't
-    //     // cleaned up with the rest of the tmp dir files.
-    //
-    //     // We'll make a visual representation of the diff using
-    //     // red for removed pixels and green for added. We make
-    //     // a z2d surface for that here.
-    //
-    //     // If the pixels match, write it as a faded gray.
-    //
-    //     // Otherwise put the reference value in the red
-    //     // channel and the new value in the green channel.
-    //
-    //     // Drop the diff image as a PNG in the cwd.
+    // The failure artifacts are written as in the reference (S97-F3): the
+    // test PNG copied into the cwd on any failure, and the red/green diff PNG
+    // on a pixel difference. CORRECTION (task T-F): this note said both were
+    // "debugging aids with no analogue here".
     fn test_diff_atlas(atlas: &Surface, i: u32, width: u32, height: u32, thickness: u32) -> bool {
-        // Get the file contents, we compare the PNG data first in
-        // order to ensure that no one smuggles arbitrary binary
-        // data in to the reference PNGs.
-        //
-        // (The reference exports the atlas to a tmp-dir PNG file and reads it
-        // back; here the atlas is encoded to PNG bytes in memory.)
-        let test_bytes = encode_alpha8_png(atlas);
-
         // Get the reference file contents to compare.
         // const ref_path = "./src/font/sprite/testdata/U+{X}...U+{X}-{d}x{d}+{d}.png"
         let ref_path = format!(
@@ -903,12 +881,48 @@ mod tests {
             height,
             thickness,
         );
+        // const cwd_absolute = try std.Io.Dir.cwd().realPathFileAlloc(std.testing.io, ".", alloc);
+        let cwd_absolute = std::env::current_dir().unwrap();
+        test_diff_atlas_at(atlas, &ref_path, &cwd_absolute, i, width, height, thickness)
+    }
 
-        // const ref_file = std.fs.cwd().openFile(ref_path, ...) catch |err| { log; return true; };
-        let ref_bytes = match std::fs::read(&ref_path) {
+    /// `test_diff_atlas` with the reference path and the directory the
+    /// artifacts go to (the reference's cwd) as arguments, so the failure arms
+    /// can be tested.
+    fn test_diff_atlas_at(
+        atlas: &Surface,
+        ref_path: &str,
+        cwd_absolute: &std::path::Path,
+        i: u32,
+        width: u32,
+        height: u32,
+        thickness: u32,
+    ) -> bool {
+        // Get the file contents, we compare the PNG data first in
+        // order to ensure that no one smuggles arbitrary binary
+        // data in to the reference PNGs.
+        //
+        // (The reference exports the atlas to a tmp-dir PNG file and reads it
+        // back; here the atlas is encoded to PNG bytes in memory.)
+        let test_bytes = encode_alpha8_png(atlas);
+
+        // "{s}/sprite_face_test-U+{X}...U+{X}-{d}x{d}+{d}.png"
+        let test_path = cwd_absolute.join(format!(
+            "sprite_face_test-U+{i:X}...U+{:X}-{width}x{height}+{thickness}.png",
+            i + 0xFF,
+        ));
+
+        // const ref_file = std.fs.cwd().openFile(ref_path, ...) catch |err| { ... };
+        let ref_bytes = match std::fs::read(ref_path) {
             Ok(b) => b,
             Err(err) => {
-                eprintln!("error(font_sprite): Can't open reference file {ref_path}: {err}");
+                // log.err("Can't open reference file {s}: {}\n", .{ ref_path, err });
+                eprintln!("error(font_sprite): Can't open reference file {ref_path}: {err}\n");
+
+                // Copy the test PNG in to the CWD so it isn't
+                // cleaned up with the rest of the tmp dir files.
+                std::fs::write(&test_path, &test_bytes).unwrap();
+
                 return true;
             }
         };
@@ -926,7 +940,7 @@ mod tests {
         if std::env::var_os("RUSTTY_REGEN_FONT_KAT_PNGS").is_some()
             && outcome == AtlasDiff::BytesDifferPixelsMatch
         {
-            std::fs::write(&ref_path, &test_bytes).unwrap();
+            std::fs::write(ref_path, &test_bytes).unwrap();
             eprintln!("info(font_sprite): regenerated reference file {ref_path}");
             return false;
         }
@@ -934,8 +948,18 @@ mod tests {
         // failure arm below — regeneration never overwrites a visual
         // change.
 
+        // if (std.mem.eql(u8, test_bytes, ref_bytes)) return false;
+        if outcome == AtlasDiff::BytesMatch {
+            return false;
+        }
+
+        // Copy the test PNG in to the CWD so it isn't
+        // cleaned up with the rest of the tmp dir files.
+        std::fs::write(&test_path, &test_bytes).unwrap();
+        let test_path = test_path.display();
+
         match outcome {
-            AtlasDiff::BytesMatch => false,
+            AtlasDiff::BytesMatch => unreachable!("returned above"),
             AtlasDiff::BytesDifferPixelsMatch => {
                 // If the PNG data differs but not the raw pixels, that's
                 // a big red flag, since it could mean someone is trying to
@@ -943,19 +967,75 @@ mod tests {
                 eprintln!(
                     "error(font_sprite): !!! Test PNG data does not match reference, but pixels \
                      do match! Either the `png` crate's encoder changed or someone is trying to \
-                     smuggle binary data in the test files! reference={ref_path}",
+                     smuggle binary data in the test files!\ntest={test_path}, reference={ref_path}",
                 );
                 true
             }
             AtlasDiff::PixelsDiffer => {
+                // Drop the diff image as a PNG in the cwd.
+                // "./sprite_face_diff-U+{X}...U+{X}-{d}x{d}+{d}.png"
+                let diff_path = cwd_absolute.join(format!(
+                    "sprite_face_diff-U+{i:X}...U+{:X}-{width}x{height}+{thickness}.png",
+                    i + 0xFF,
+                ));
+                std::fs::write(&diff_path, diff_png(atlas, &ref_bytes)).unwrap();
                 eprintln!(
                     "error(font_sprite): One or more glyphs differ from reference file in range \
-                     U+{i:X}...U+{:X}! reference={ref_path}",
+                     U+{i:X}...U+{:X}! test={test_path}, reference={ref_path}, diff={}",
                     i + 0xFF,
+                    diff_path.display(),
                 );
                 true
             }
         }
+    }
+
+    /// The reference's visual diff (`Face.zig:343-375`): an RGB image the size
+    /// of the atlas where a pixel that matches the reference is a faded gray
+    /// (`t / 3`) and one that differs carries the reference value in red and
+    /// the new value in green. Encoded as an 8-bit RGB PNG (the reference
+    /// exports its `image_surface_rgb` z2d surface).
+    fn diff_png(atlas: &Surface, ref_bytes: &[u8]) -> Vec<u8> {
+        let decoder = png::Decoder::new(std::io::Cursor::new(ref_bytes));
+        let mut reader = decoder.read_info().unwrap();
+        let mut ref_gray = vec![0u8; reader.output_buffer_size().unwrap()];
+        let info = reader.next_frame(&mut ref_gray).unwrap();
+        ref_gray.truncate(info.buffer_size());
+
+        // We'll make a visual representation of the diff using
+        // red for removed pixels and green for added. We make
+        // a z2d surface for that here.
+        // var diff = try z2d.Surface.init(.image_surface_rgb, alloc, w, h);
+        // PORT NOTE: a plain RGB byte buffer stands in for the z2d surface.
+        let test_gray = atlas.alpha8_buf();
+        let mut diff_pix = vec![0u8; test_gray.len() * 3];
+        for j in 0..test_gray.len() {
+            let t = test_gray[j].a;
+            let r = ref_gray[j];
+            let px = &mut diff_pix[j * 3..j * 3 + 3];
+            if t == r {
+                // If the pixels match, write it as a faded gray.
+                px.copy_from_slice(&[t / 3, t / 3, t / 3]);
+            } else {
+                // Otherwise put the reference value in the red
+                // channel and the new value in the green channel.
+                px[0] = r;
+                px[1] = t;
+            }
+        }
+
+        let mut out: Vec<u8> = Vec::new();
+        let mut encoder = png::Encoder::new(
+            &mut out,
+            atlas.get_width() as u32,
+            atlas.get_height() as u32,
+        );
+        encoder.set_color(png::ColorType::Rgb);
+        encoder.set_depth(png::BitDepth::Eight);
+        let mut writer = encoder.write_header().unwrap();
+        writer.write_image_data(&diff_pix).unwrap();
+        writer.finish().unwrap();
+        out
     }
 
     /// Outcome of comparing the encoded test atlas against a reference PNG.
@@ -982,7 +1062,11 @@ mod tests {
             return AtlasDiff::BytesMatch;
         }
 
-        // Use the pure-Rust `png` decoder to decode the reference PNG to raw
+        // Use wuffs to decode the reference PNG to raw pixels.
+        // These will be RGBA, so when diffing we can just compare
+        // every fourth byte.
+        //
+        // PORT NOTE: the pure-Rust `png` decoder decodes the reference PNG to raw
         // pixels (replacing `wuffs.png.decode`). The references are 8-bit
         // grayscale, so one decoded byte per pixel is exactly the alpha8
         // coverage we compare against.
@@ -1119,6 +1203,128 @@ mod tests {
             diff_encoded_atlas(&sfc, &test_bytes, &ref_bytes),
             AtlasDiff::PixelsDiffer
         );
+    }
+
+    /// A fresh, empty directory standing in for the reference's cwd.
+    fn artifact_dir(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("rustty-s97-f3-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn file_names(dir: &std::path::Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    const TEST_PNG: &str = "sprite_face_test-U+2500...U+25FF-9x17+1.png";
+    const DIFF_PNG: &str = "sprite_face_diff-U+2500...U+25FF-9x17+1.png";
+
+    /// S97-F3: on every failure `testDiffAtlas` copies the test PNG into the
+    /// cwd (`Face.zig:287-296`, `:307-321`), and on a pixel difference writes
+    /// the red/green diff PNG there too (`:343-395`); a pass writes nothing.
+    #[test]
+    fn diff_atlas_failures_leave_the_reference_artifacts() {
+        let sfc = diff_test_surface();
+        let test_bytes = encode_alpha8_png(&sfc);
+
+        // A pass: nothing is written.
+        let dir = artifact_dir("pass");
+        let ref_path = dir.join("ref.png");
+        std::fs::write(&ref_path, &test_bytes).unwrap();
+        assert!(!test_diff_atlas_at(
+            &sfc,
+            ref_path.to_str().unwrap(),
+            &dir,
+            0x2500,
+            9,
+            17,
+            1
+        ));
+        assert_eq!(file_names(&dir), ["ref.png"]);
+
+        // No reference file: the test PNG, and nothing else.
+        let dir = artifact_dir("missing");
+        let missing = dir.join("absent.png");
+        assert!(test_diff_atlas_at(
+            &sfc,
+            missing.to_str().unwrap(),
+            &dir,
+            0x2500,
+            9,
+            17,
+            1
+        ));
+        assert_eq!(file_names(&dir), [TEST_PNG]);
+        assert_eq!(std::fs::read(dir.join(TEST_PNG)).unwrap(), test_bytes);
+
+        // A pixel difference: the test PNG and the diff PNG.
+        let dir = artifact_dir("pixels");
+        let mut edited = diff_test_surface();
+        edited.alpha8_buf_mut()[42].a ^= 0xFF;
+        let ref_path = dir.join("ref.png");
+        std::fs::write(&ref_path, encode_alpha8_png(&edited)).unwrap();
+        assert!(test_diff_atlas_at(
+            &sfc,
+            ref_path.to_str().unwrap(),
+            &dir,
+            0x2500,
+            9,
+            17,
+            1
+        ));
+        assert_eq!(file_names(&dir), ["ref.png", DIFF_PNG, TEST_PNG]);
+        assert_eq!(std::fs::read(dir.join(TEST_PNG)).unwrap(), test_bytes);
+        // The diff: faded gray where equal, reference in red and new value
+        // in green where not.
+        let diff = std::fs::read(dir.join(DIFF_PNG)).unwrap();
+        let mut reader = png::Decoder::new(std::io::Cursor::new(&diff))
+            .read_info()
+            .unwrap();
+        let mut rgb = vec![0u8; reader.output_buffer_size().unwrap()];
+        let info = reader.next_frame(&mut rgb).unwrap();
+        assert_eq!(
+            (info.color_type, info.width, info.height),
+            (png::ColorType::Rgb, 16, 16)
+        );
+        let t = |j: usize| sfc.alpha8_buf()[j].a;
+        assert_eq!(&rgb[0..3], &[t(0) / 3, t(0) / 3, t(0) / 3]);
+        assert_eq!(&rgb[42 * 3..42 * 3 + 3], &[t(42) ^ 0xFF, t(42), 0]);
+
+        // Bytes differ, pixels match: the test PNG, no diff.
+        let dir = artifact_dir("smuggle");
+        let mut smuggled: Vec<u8> = Vec::new();
+        let mut encoder = png::Encoder::new(&mut smuggled, 16, 16);
+        encoder.set_color(png::ColorType::Grayscale);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder
+            .add_text_chunk("Comment".to_string(), "smuggled".to_string())
+            .unwrap();
+        let mut writer = encoder.write_header().unwrap();
+        let gray: Vec<u8> = sfc.alpha8_buf().iter().map(|px| px.a).collect();
+        writer.write_image_data(&gray).unwrap();
+        writer.finish().unwrap();
+        let ref_path = dir.join("ref.png");
+        std::fs::write(&ref_path, &smuggled).unwrap();
+        assert!(test_diff_atlas_at(
+            &sfc,
+            ref_path.to_str().unwrap(),
+            &dir,
+            0x2500,
+            9,
+            17,
+            1
+        ));
+        assert_eq!(file_names(&dir), ["ref.png", TEST_PNG]);
+
+        for tag in ["pass", "missing", "pixels", "smuggle"] {
+            let _ = std::fs::remove_dir_all(artifact_dir(tag));
+        }
     }
 
     /// Draws all ranges in to a set of 16x16 glyph atlases, checks for regressions

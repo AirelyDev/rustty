@@ -3,7 +3,7 @@
 //! harness over ghostty `src/terminal/PageList.zig`).
 //!
 //! WORKLOAD (identical to the Zig bench `main.zig` `workload()`; one iteration):
-//!   `PageList::init(Options { max_size: Some(1 GiB), ..Options::new(80, 24) })`
+//!   `PageList::init(rustty_vt::alloc::Global, Options { max_size: Some(1 GiB), ..Options::new(80, 24) })`
 //!    -> `grow()` until `total_rows >= 2000` (forces page allocs)
 //!    -> scroll across the viewport (`scroll(.{ .row = r })` for every r, then
 //!       `.active`)
@@ -52,10 +52,13 @@ fn workload() {
     //     .rows = 24,
     //     .max_size = large_max,
     // });
-    let mut pl = PageList::init(Options {
-        max_size: Some(LARGE_MAX),
-        ..Options::new(80, 24)
-    })
+    let mut pl = PageList::init(
+        rustty_vt::alloc::Global,
+        Options {
+            max_size: Some(LARGE_MAX),
+            ..Options::new(80, 24)
+        },
+    )
     .expect("init");
 
     // grow to ~2000 total rows (start at 24 active):
@@ -80,7 +83,9 @@ fn workload() {
             bot: None,
             tracked_pins: None,
         };
-        let mut cloned = pl.clone(&mut opts).expect("clone");
+        let mut cloned = pl
+            .clone(rustty_vt::alloc::Global, &mut opts)
+            .expect("clone");
         cloned.deinit();
     }
 
@@ -125,10 +130,13 @@ fn workload_accounting(item_size: usize) -> usize {
         );
     };
 
-    let mut pl = PageList::init(Options {
-        max_size: Some(LARGE_MAX),
-        ..Options::new(80, 24)
-    })
+    let mut pl = PageList::init(
+        rustty_vt::alloc::Global,
+        Options {
+            max_size: Some(LARGE_MAX),
+            ..Options::new(80, 24)
+        },
+    )
     .expect("init");
     sample(&mut peak);
     stage("init", &pl);
@@ -159,7 +167,9 @@ fn workload_accounting(item_size: usize) -> usize {
             bot: None,
             tracked_pins: None,
         };
-        let mut cloned = pl.clone(&mut opts).expect("clone");
+        let mut cloned = pl
+            .clone(rustty_vt::alloc::Global, &mut opts)
+            .expect("clone");
         // Sample while the clone's separate pool is live (its page set counts).
         sample(&mut peak);
         println!(

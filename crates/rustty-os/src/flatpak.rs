@@ -270,7 +270,10 @@ mod host_command {
     pub struct FlatpakHostCommand {
         /// Argv are the arguments to call on the host with argv[0] being
         /// the command to execute.
-        pub argv: Vec<String>,
+        // PORT NOTE (parity S111-F9): `argv: []const []const u8` — byte strings,
+        // as the env keys/values below. CORRECTION: this used to be
+        // `Vec<String>`.
+        pub argv: Vec<Vec<u8>>,
 
         /// The cwd for the new process. If this is not set then it will use
         /// the current cwd of the calling process.
@@ -349,7 +352,7 @@ mod host_command {
     }
 
     /// Errors that are possible from us.
-    #[derive(Debug, Clone, Copy)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum Error {
         FlatpakMustBeStarted,
         FlatpakSpawnFail,
@@ -357,8 +360,31 @@ mod host_command {
         FlatpakRPCFail,
     }
 
-    // PORT NOTE: `pub const WaitError = xev.Timer.RunError || Error;`.
-    pub type WaitError = Error;
+    // pub const WaitError = xev.Timer.RunError || Error;
+    // PORT NOTE (parity S111-F3): Zig merges the two error sets into one; the
+    // port keeps both halves as variants, so a timer/loop failure reaches the
+    // callback as itself. CORRECTION: this used to be `pub type WaitError =
+    // Error;`, and the timer callback reported any timer error as
+    // `FlatpakSpawnFail`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum WaitError {
+        /// `xev.Timer.RunError`
+        Timer(xev::TimerRunError),
+        /// `Error`
+        Flatpak(Error),
+    }
+
+    impl From<Error> for WaitError {
+        fn from(e: Error) -> Self {
+            WaitError::Flatpak(e)
+        }
+    }
+
+    impl From<xev::TimerRunError> for WaitError {
+        fn from(e: xev::TimerRunError) -> Self {
+            WaitError::Timer(e)
+        }
+    }
 
     impl FlatpakHostCommand {
         /// Spawn the command. This will start the host command. On return,
@@ -472,8 +498,10 @@ mod host_command {
                 };
 
                 match &mut *guard {
-                    State::Init => (*completion).result = Some(Err(Error::FlatpakMustBeStarted)),
-                    State::Err => (*completion).result = Some(Err(Error::FlatpakSpawnFail)),
+                    State::Init => {
+                        (*completion).result = Some(Err(Error::FlatpakMustBeStarted.into()))
+                    }
+                    State::Err => (*completion).result = Some(Err(Error::FlatpakSpawnFail.into())),
                     State::Started {
                         loop_xev,
                         completion: comp_slot,
@@ -688,8 +716,7 @@ mod host_command {
                 // Build our args
                 let mut args: Vec<*mut std::os::raw::c_char> =
                     Vec::with_capacity(self.argv.len() + 1);
-                for arg in &self.argv {
-                    let arg_z = std::ffi::CString::new(arg.as_str()).unwrap();
+                for arg_z in argv_z(&self.argv) {
                     args.push(arg_z.as_ptr() as *mut _);
                     keep_alive.push(arg_z);
                 }
@@ -863,6 +890,23 @@ mod host_command {
         }
     }
 
+    /// `for (0.., self.argv) |i, arg| { const argZ = try arena.dupeZ(u8, arg); ... }`
+    ///
+    /// PORT NOTE (parity S111-F9): the arguments are byte strings, and `^aay`
+    /// reads each `[*:0]u8` only up to its first NUL, so an interior NUL
+    /// truncates the argument there, as for the env pairs. (This used to be
+    /// `CString::new(arg.as_str()).unwrap()` over `String`s, which panicked on
+    /// an interior NUL.)
+    fn argv_z(argv: &[Vec<u8>]) -> Vec<std::ffi::CString> {
+        argv.iter()
+            .map(|arg| {
+                let end = arg.iter().position(|&b| b == 0).unwrap_or(arg.len());
+                std::ffi::CString::new(&arg[..end])
+                    .expect("the bytes before the first NUL hold no NUL")
+            })
+            .collect()
+    }
+
     fn noopCallback(
         _: *mut c_void,
         _: *mut xev::Loop,
@@ -891,9 +935,10 @@ mod host_command {
             if let Some(t) = &mut (*c_outer).timer {
                 t.deinit();
             }
+            // const result = if (r) |_| c_outer.result.? else |err| err;
             let result = match r {
                 Ok(_) => (*c_outer).result.unwrap(),
-                Err(_) => Err(Error::FlatpakSpawnFail),
+                Err(err) => Err(WaitError::Timer(err)),
             };
             ((*c_outer).callback)(ud, l_inner, c_outer, result);
             xev::CallbackAction::Disarm
@@ -964,6 +1009,58 @@ mod host_command {
                 timer: None,
                 result: None,
             }
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use std::sync::Mutex;
+
+        /// Parity S111-F3: the timer-run callback forwards a timer error
+        /// verbatim (`else |err| err`), and forwards the stored result when
+        /// the timer ran. It used to turn every timer error into
+        /// `FlatpakSpawnFail`.
+        #[test]
+        fn timer_callback_forwards_the_timer_error_and_the_stored_result() {
+            static SEEN: Mutex<Vec<Result<u8, WaitError>>> = Mutex::new(Vec::new());
+            fn record(
+                _: *mut c_void,
+                _: *mut xev::Loop,
+                _: *mut Completion,
+                r: Result<u8, WaitError>,
+            ) {
+                SEEN.lock().unwrap().push(r);
+            }
+            let mut c = Completion::new();
+            c.callback = record;
+            c.result = Some(Ok(7));
+            let c_xev = std::ptr::addr_of_mut!(c.c_xev);
+            let a = xev_timer_callback(
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                c_xev,
+                Err(xev::TimerRunError::Canceled),
+            );
+            assert!(matches!(a, xev::CallbackAction::Disarm));
+            let b = xev_timer_callback(std::ptr::null_mut(), std::ptr::null_mut(), c_xev, Ok(()));
+            assert!(matches!(b, xev::CallbackAction::Disarm));
+            assert_eq!(
+                *SEEN.lock().unwrap(),
+                vec![Err(WaitError::Timer(xev::TimerRunError::Canceled)), Ok(7)]
+            );
+        }
+
+        /// Parity S111-F9: arguments are bytes (a non-UTF-8 byte survives) and
+        /// an interior NUL truncates the argument, as `dupeZ` + `^aay` does.
+        #[test]
+        fn argv_z_keeps_bytes_and_truncates_at_an_interior_nul() {
+            let argv = vec![b"/bin/sh".to_vec(), b"a\xffb".to_vec(), b"x\0y".to_vec()];
+            let z: Vec<Vec<u8>> = argv_z(&argv).into_iter().map(|c| c.into_bytes()).collect();
+            assert_eq!(
+                z,
+                vec![b"/bin/sh".to_vec(), b"a\xffb".to_vec(), b"x".to_vec()]
+            );
         }
     }
 }

@@ -2550,11 +2550,11 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        not(target_vendor = "apple"),
+        ignore = "SkipZigTest: macOS-only behaviour (R14)"
+    )]
     fn kitty_report_associated_with_alt_text_on_macos_with_option() {
-        if !cfg!(target_vendor = "apple") {
-            return; // SkipZigTest
-        }
-
         let mut writer: Vec<u8> = Vec::new();
         kitty(
             &mut writer,
@@ -2585,11 +2585,11 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        not(target_vendor = "apple"),
+        ignore = "SkipZigTest: macOS-only behaviour (R14)"
+    )]
     fn kitty_report_associated_with_alt_text_on_macos_with_alt() {
-        if !cfg!(target_vendor = "apple") {
-            return; // SkipZigTest
-        }
-
         {
             // With Alt modifier
             let mut writer: Vec<u8> = Vec::new();
@@ -3094,11 +3094,11 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        not(target_vendor = "apple"),
+        ignore = "SkipZigTest: macOS-only behaviour (R14)"
+    )]
     fn legacy_alt_x_macos() {
-        if !cfg!(target_vendor = "apple") {
-            return; // SkipZigTest
-        }
-
         let mut writer: Vec<u8> = Vec::new();
         legacy(
             &mut writer,
@@ -3123,11 +3123,11 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        not(target_vendor = "apple"),
+        ignore = "SkipZigTest: macOS-only behaviour (R14)"
+    )]
     fn legacy_shift_alt_period_macos() {
-        if !cfg!(target_vendor = "apple") {
-            return; // SkipZigTest
-        }
-
         let mut writer: Vec<u8> = Vec::new();
         legacy(
             &mut writer,
@@ -3395,10 +3395,11 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        not(target_os = "macos"),
+        ignore = "SkipZigTest: macOS-only behaviour (R14)"
+    )]
     fn legacy_alt_digit_with_modify_other_state_2_and_macos_option_as_alt_false() {
-        if !cfg!(target_os = "macos") {
-            return; // SkipZigTest
-        }
         let mut writer: Vec<u8> = Vec::new();
         legacy(
             &mut writer,
@@ -3829,11 +3830,11 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        not(target_os = "macos"),
+        ignore = "SkipZigTest: macOS-only behaviour (R14)"
+    )]
     fn legacy_super_only_on_macos_with_text() {
-        if !cfg!(target_os = "macos") {
-            return; // SkipZigTest
-        }
-
         let mut writer: Vec<u8> = Vec::new();
         legacy(
             &mut writer,
@@ -3853,11 +3854,11 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        not(target_os = "macos"),
+        ignore = "SkipZigTest: macOS-only behaviour (R14)"
+    )]
     fn legacy_super_and_other_mods_on_macos_with_text() {
-        if !cfg!(target_os = "macos") {
-            return; // SkipZigTest
-        }
-
         let mut writer: Vec<u8> = Vec::new();
         legacy(
             &mut writer,

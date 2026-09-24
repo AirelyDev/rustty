@@ -7,7 +7,7 @@
 //!
 //! PORT NOTE (R3, no ghostty/Zig-std dependency): the reference wraps `std.Uri`.
 //! Rust's `url` crate has DIFFERENT (WHATWG) semantics, so it is NOT used. We
-//! faithfully reimplement the subset of Zig 0.15.2 `std.Uri` that `os/uri.zig`
+//! faithfully reimplement the subset of Zig 0.16.0 `std.Uri` that `os/uri.zig`
 //! relies on — `parse`, `parseAfterScheme`, the `Component` union (`raw` /
 //! `percent_encoded`, `isEmpty`, `toRaw`, `percentEncode`), the `ParseError`
 //! set, and the scheme/authority/path scanning algorithm — directly from the
@@ -22,7 +22,7 @@ use crate::string_encoding::Writer;
 
 // ===========================================================================
 // std.Uri reimplementation (the portion os/uri.zig depends on).
-// Mirrors Zig 0.15.2 lib/std/Uri.zig:
+// Mirrors Zig 0.16.0 lib/std/Uri.zig:
 //   "Uniform Resource Identifier (URI) parsing roughly adhering to
 //    <https://tools.ietf.org/html/rfc3986>.
 //    Does not do perfect grammar and character class checking, but should be
@@ -97,6 +97,9 @@ impl<'a> Component<'a> {
                     if percent_encoded.len() - index < 2 {
                         continue;
                     }
+                    // std.fmt.parseInt(u8, percent_encoded[index..][0..2], 16) catch continue;
+                    // PORT NOTE: reference defect (R13), UD230: a signed escape
+                    // (`%-0`, `%+F`) is not decoded; see `parse_int_u8_hex`.
                     let percent_encoded_char =
                         match parse_int_u8_hex(&percent_encoded[index..index + 2]) {
                             Some(v) => v,
@@ -318,21 +321,39 @@ fn last_index_of(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack.windows(needle.len()).rposition(|w| w == needle)
 }
 
+/// `std.fmt.parseInt(u16, s, 10)`; `None` is any of its errors
+/// (`InvalidCharacter`, `Overflow`), which std.Uri maps to `InvalidPort`.
+///
+/// PORT NOTE (S112-F9, N206): Zig's grammar, from `rustty_zigstd::fmt`: a `_`
+/// between digits is skipped (`file://h:8_0/` has port 80), a leading `+` is
+/// taken and `-0` is zero. Faithful: this is the standard library's port
+/// grammar, Ghostty has none of its own, and it never reads the port except in
+/// the MAC-address repair of `parse`, whose result does not change (a host
+/// such as `12:34:56:78:90:+9` fails `isValidMacAddress` either way).
 fn parse_int_u16(s: &[u8]) -> Option<u16> {
     // std.fmt.parseInt(u16, s, 10)
-    if s.is_empty() {
-        return None;
-    }
-    std::str::from_utf8(s).ok()?.parse::<u16>().ok()
+    rustty_zigstd::fmt::parse_int::<u16>(s, 10).ok()
 }
 
+/// `std.fmt.parseInt(u8, s, 16)` over the two bytes after a `%`, as
+/// `Component.formatRaw` calls it.
+///
+/// PORT NOTE: reference defect (R13), UD230. `parseInt` takes a sign, so the
+/// reference decodes `%+X` to the byte `X` and `%-0` to a NUL byte (MEASURED
+/// with zig 0.16.0: `/a%-0b` -> `/a\x00b`), while every other invalid escape
+/// passes through (`catch continue`), as RFC 3986's `pct-encoded` =
+/// `"%" HEXDIG HEXDIG` intends. Reachable from OSC 7 (`reportPwd` decodes the
+/// path and the host with `toRawMaybeAlloc` / `getHost`), so a malformed
+/// escape became a pwd the sender never named. The port decodes an escape
+/// only when both bytes are hex digits; those are exactly the inputs on which
+/// `parseInt` succeeds without a sign (`_` is refused at either end), so the
+/// result for every valid escape is unchanged.
 fn parse_int_u8_hex(s: &[u8]) -> Option<u8> {
-    // std.fmt.parseInt(u8, s, 16)
-    if s.is_empty() {
+    if !s.iter().all(u8::is_ascii_hexdigit) {
         return None;
     }
-    let txt = std::str::from_utf8(s).ok()?;
-    u8::from_str_radix(txt, 16).ok()
+    // std.fmt.parseInt(u8, s, 16)
+    rustty_zigstd::fmt::parse_int::<u8>(s, 16).ok()
 }
 
 /// PORT NOTE: a fixed-buffer writer used to back `Component.toRaw`'s `bufPrint`.
@@ -714,5 +735,69 @@ mod tests {
         assert!(!isValidMacAddress(b"00:23:45:Xx:Yy:Zz"));
         assert!(!isValidMacAddress(b"01-23-45-67-89-Aa"));
         assert!(!isValidMacAddress(b"01:23:45:67:89:Aa:Bb"));
+    }
+
+    /// S112-F9 through std.Uri: the port takes Zig's `_` separator and sign
+    /// handling, and still refuses a leading or trailing `_`.
+    #[test]
+    fn port_numbers_follow_zig_parse_int() {
+        let port = |text: &[u8]| std_parse(text).map(|u| u.port);
+        assert_eq!(port(b"file://host:80/p"), Ok(Some(80)));
+        assert_eq!(port(b"file://host:8_0/p"), Ok(Some(80)));
+        assert_eq!(port(b"file://host:6_5_5_3_5/p"), Ok(Some(65535)));
+        assert_eq!(port(b"file://host:+80/p"), Ok(Some(80)));
+        assert_eq!(port(b"file://host:-0/p"), Ok(Some(0)));
+        assert_eq!(port(b"file://[::1]:4_43/p"), Ok(Some(443)));
+        assert_eq!(port(b"file://host:_80/p"), Err(StdParseError::InvalidPort));
+        assert_eq!(port(b"file://host:80_/p"), Err(StdParseError::InvalidPort));
+        assert_eq!(port(b"file://host:-80/p"), Err(StdParseError::InvalidPort));
+        assert_eq!(
+            port(b"file://host:65536/p"),
+            Err(StdParseError::InvalidPort)
+        );
+    }
+
+    /// UD230 (R13): `%-0` and `%+X` are not percent escapes (RFC 3986
+    /// `pct-encoded` is `"%" HEXDIG HEXDIG`), so they pass through like the
+    /// reference's other invalid escapes. zig 0.16.0
+    /// `std.Uri.Component.formatRaw` decodes them because `parseInt(u8, .., 16)`
+    /// takes a sign: MEASURED, `/a%-0b` -> `/a\x00b` and `/a%+Fb` -> `/a\x0fb`.
+    /// Valid escapes still decode (`%41`, `%00`), and `%_1` / `%1_` pass through
+    /// as in the reference.
+    #[test]
+    fn percent_escapes_decode_only_two_hex_digits() {
+        let raw = |text: &[u8]| {
+            let mut buf = [0u8; 64];
+            Component::PercentEncoded(text)
+                .toRaw(&mut buf)
+                .unwrap()
+                .to_vec()
+        };
+        assert_eq!(raw(b"a%-0b%41"), b"a%-0bA");
+        assert_eq!(raw(b"a%+fb%41"), b"a%+fbA");
+        assert_eq!(raw(b"a%+Fb%-0%+0%00"), b"a%+Fb%-0%+0\x00");
+        assert_eq!(raw(b"%_1%1_%41"), b"%_1%1_A");
+        assert_eq!(raw(b"%2f%2F%ff%FF"), b"//\xff\xff");
+    }
+
+    /// UD230 through the OSC 7 call: `os.uri.parse` with the options
+    /// `reportPwd` passes off macOS, then the path decoded as
+    /// `toRawMaybeAlloc` does.
+    #[test]
+    fn osc7_path_keeps_a_signed_escape() {
+        let uri = parse(
+            b"file://localhost/tmp/a%-0b/c%+1d/%41",
+            ParseOptions {
+                mac_address: true,
+                raw_path: false,
+            },
+        )
+        .unwrap();
+        let mut w = crate::string_encoding::AllocatingWriter::init();
+        uri.path.formatRaw(&mut w).unwrap();
+        assert_eq!(w.written(), b"/tmp/a%-0b/c%+1d/A");
+        let mut buf = [0u8; 64];
+        let host = uri.host.unwrap().toRaw(&mut buf).unwrap();
+        assert_eq!(host, b"localhost");
     }
 }

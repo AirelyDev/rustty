@@ -204,7 +204,9 @@ in
       ];
 
     # This should be set onto the rpath of the rustty binary if you want it to
-    # be "portable" across the system.
+    # be "portable" across the system: `cargo run -p xtask -- patchelf
+    # target/debug/rustty` does that, and sets the interpreter to the ld.so on
+    # PATH (the reference's patch-interp/patch-rpath defaults, S63-F4).
     LD_LIBRARY_PATH = ld_library_path;
     GI_TYPELIB_PATH = gi_typelib_path;
 

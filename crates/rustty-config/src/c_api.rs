@@ -29,6 +29,9 @@ use rustty_input::binding::{Action, TriggerC};
 // process-global that needs no install call and works in tests, benches, the
 // exe and the lib alike).
 use crate::config_struct::log_err;
+// S-15 (NEW-FINDINGS N140 (b)): every `err={}` renders the Zig error name
+// (`error.<Name>`), not the Rust `Debug` form.
+use crate::zig_error;
 
 /// Create a new configuration filled with the initial default values.
 // export fn ghostty_config_new() ?*Config {
@@ -104,7 +107,10 @@ pub unsafe extern "C" fn rustty_config_load_cli_args(self_: *mut Config) {
     // SAFETY: per contract `self_` is a live, uniquely-borrowed Config pointer.
     if let Err(err) = unsafe { &mut *self_ }.load_cli_args() {
         // log.err("error loading config err={}", .{err});
-        log_err(format!("error loading config err={err:?}"));
+        log_err(format!(
+            "error loading config err={}",
+            zig_error::load_error(&err)
+        ));
     }
 }
 
@@ -122,7 +128,10 @@ pub unsafe extern "C" fn rustty_config_load_default_files(self_: *mut Config) {
     // SAFETY: per contract `self_` is a live, uniquely-borrowed Config pointer.
     if let Err(err) = unsafe { &mut *self_ }.load_default_files() {
         // log.err("error loading config err={}", .{err});
-        log_err(format!("error loading config err={err:?}"));
+        log_err(format!(
+            "error loading config err={}",
+            zig_error::load_error(&err)
+        ));
     }
 }
 
@@ -147,8 +156,9 @@ pub unsafe extern "C" fn rustty_config_load_file(
     if let Err(err) = unsafe { &mut *self_ }.load_file(path_slice) {
         // log.err("error loading config from file path={s} err={}", .{ path_slice, err });
         log_err(format!(
-            "error loading config from file path={} err={err:?}",
-            std::string::String::from_utf8_lossy(path_slice)
+            "error loading config from file path={} err={}",
+            std::string::String::from_utf8_lossy(path_slice),
+            zig_error::load_error(&err)
         ));
     }
 }
@@ -167,7 +177,10 @@ pub unsafe extern "C" fn rustty_config_load_recursive_files(self_: *mut Config) 
     // SAFETY: per contract `self_` is a live, uniquely-borrowed Config pointer.
     if let Err(err) = unsafe { &mut *self_ }.load_recursive_files() {
         // log.err("error loading config err={}", .{err});
-        log_err(format!("error loading config err={err:?}"));
+        log_err(format!(
+            "error loading config err={}",
+            zig_error::load_error(&err)
+        ));
     }
 }
 
@@ -182,7 +195,10 @@ pub unsafe extern "C" fn rustty_config_finalize(self_: *mut Config) {
     // SAFETY: per contract `self_` is a live, uniquely-borrowed Config pointer.
     if let Err(err) = unsafe { &mut *self_ }.finalize() {
         // log.err("error finalizing config err={}", .{err});
-        log_err(format!("error finalizing config err={err:?}"));
+        log_err(format!(
+            "error finalizing config err={}",
+            zig_error::load_error(&err)
+        ));
     }
 }
 
@@ -241,7 +257,7 @@ pub unsafe extern "C" fn rustty_config_trigger(
         Ok(t) => t,
         Err(err) => {
             // log.err("error finding trigger err={}", .{err});
-            log_err(format!("error finding trigger err={err:?}"));
+            log_err(format!("error finding trigger err=error.{err:?}"));
             // `.{}` — the default (empty) trigger projected to C.
             rustty_input::binding::Trigger::default().cval()
         }
@@ -317,7 +333,19 @@ pub extern "C" fn rustty_config_open_path() -> String {
         Ok(path) => String::from_path(path),
         Err(err) => {
             // log.err("error opening config in editor err={}", .{err});
-            log_err(format!("error opening config in editor err={err:?}"));
+            //
+            // PORT NOTE (S-15, N140 (b)): `{}` of the Zig error. An `Io` error
+            // is named with `openFileAbsolute`'s errno table, which is exact for
+            // `configPath`'s open; for the `stat`/`openDir`/`createDirPath`/
+            // `createFileAbsolute` failures it is the closest table the port has
+            // (UNVERIFIED per call: those Zig switches were not re-derived).
+            log_err(format!(
+                "error opening config in editor err={}",
+                zig_error::file_load_error(&err, |e| zig_error::fmt_error(
+                    e,
+                    zig_error::Call::OpenFile
+                ))
+            ));
             String::empty()
         }
     }
@@ -662,7 +690,7 @@ mod log_site_tests {
         assert_eq!(
             vec![concat!(
                 "error(config): error loading config from file ",
-                "path=/nonexistent/rustty-14e2/does-not-exist.conf err=FileNotFound"
+                "path=/nonexistent/rustty-14e2/does-not-exist.conf err=error.FileNotFound"
             )
             .to_string()],
             records
@@ -704,39 +732,67 @@ mod log_site_tests {
         let _ = std::fs::remove_file(&file);
     }
 
-    /// The six restored sites this crate cannot drive (they need a failing
-    /// `loadCliArgs`/`loadDefaultFiles`/`loadRecursiveFiles`/`finalize`, an
-    /// unparsable binding action, or an editor-launch failure). STRUCTURAL, and
-    /// reported as such: level, scope and message text pinned from the source.
+    /// A second real driver (S-15, N140 (b)): an action that does not parse.
+    /// Reference: `config_trigger_`'s `try inputpkg.Binding.Action.parse(str)`
+    /// fails with `error.InvalidAction`, and the export logs `{}` of it.
+    #[test]
+    fn trigger_logs_the_zig_error_name() {
+        let mut cfg = Config::default_config();
+        let action = b"not_an_action_s15";
+
+        log_capture::arm();
+        let t = unsafe { super::rustty_config_trigger(&mut cfg, action.as_ptr(), action.len()) };
+        let records = log_capture::take();
+
+        assert_eq!(
+            vec!["error(config): error finding trigger err=error.InvalidAction".to_string()],
+            records
+        );
+        // `.{}`: the default (empty) trigger.
+        assert_eq!(rustty_input::binding::Trigger::default().cval().tag, t.tag);
+    }
+
+    /// The five restored sites this crate cannot drive (they need a failing
+    /// `loadCliArgs`/`loadDefaultFiles`/`loadRecursiveFiles`/`finalize`, or an
+    /// editor-launch failure). STRUCTURAL, and reported as such: the message
+    /// text is pinned from the source, and every site renders `{}` of the error
+    /// through `zig_error` (`error.<Name>`), never the Rust `Debug` form (S-15,
+    /// N140 (b); `finalize`'s real `error.OutOfMemory` is driven end to end in
+    /// `tests/load_path_errors_propagate.rs`).
     #[test]
     fn the_other_restored_sites_are_live_with_the_reference_text() {
         const SRC: &str = include_str!("c_api.rs");
-        // Assembled from fragments so no live-looking sink call enters this file.
-        let call = |message: &str| -> std::string::String {
-            let f = ["log", "_err"].concat();
-            format!("{f}(format!(\"{message}\"))")
+        // Assembled from fragments so the needles do not match themselves.
+        let lit = |message: &str| format!("\"{message}\"");
+        // Code lines only: the verbatim reference comments quote the same text.
+        let live = |needle: &str| {
+            SRC.lines()
+                .filter(|l| !l.trim_start().starts_with("//") && l.contains(needle))
+                .count()
         };
         // log.err("error loading config err={}", .{err});   (x3: cli args,
         // default files, recursive files)
-        assert_eq!(
-            3,
-            SRC.matches(&call("error loading config err={err:?}"))
-                .count()
-        );
+        assert_eq!(3, live(&lit(&["error loading config ", "err={}"].concat())));
         for message in [
             // log.err("error finalizing config err={}", .{err});
-            "error finalizing config err={err:?}",
+            ["error finalizing config ", "err={}"].concat(),
             // log.err("error finding trigger err={}", .{err});
-            "error finding trigger err={err:?}",
+            ["error finding trigger ", "err=error.{err:?}"].concat(),
             // log.err("error opening config in editor err={}", .{err});
-            "error opening config in editor err={err:?}",
+            ["error opening config in editor ", "err={}"].concat(),
         ] {
-            let wanted = call(message);
-            assert_eq!(
-                1,
-                SRC.matches(&wanted).count(),
-                "expected exactly one live emission `{wanted}`"
-            );
+            let wanted = lit(&message);
+            assert_eq!(1, live(&wanted), "expected exactly one `{wanted}`");
         }
+        // The four `LoadError` sites (three loads + finalize) plus load_file's
+        // (driven above) go through `zig_error::load_error`, and the editor's
+        // `FileLoadError` through `zig_error::file_load_error`.
+        let load = ["zig_error::load_error", "(&err)"].concat();
+        assert_eq!(5, live(&load), "`{load}` sites");
+        let file_load = ["zig_error::file_load_error", "(&err,"].concat();
+        assert_eq!(1, live(&file_load), "`{file_load}` sites");
+        // No site prints the Rust `Debug` form of the error any more.
+        let debug_form = ["err={", "err:?}"].concat();
+        assert_eq!(0, live(&debug_form), "a site prints `{debug_form}`");
     }
 }

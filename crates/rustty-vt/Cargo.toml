@@ -179,6 +179,11 @@ imgui = ["dep:dcimgui-sys", "dcimgui-sys/freetype"]
 # did (the tracker is observation-only even when compiled in). Never enable for
 # published artifacts.
 alloc-bench = ["rustty-zigstd/tracking"]
+# TEST-ONLY: exposes `alloc::testing` (the `std.testing.FailingAllocator` port
+# and the counting allocator on the C `RusttyAllocator` ABI) to dependents'
+# tests. rustty-vt-c enables it from `[dev-dependencies]` only, so no
+# production build compiles it (parity tail S7-1).
+test-allocators = []
 
 # The standalone equal-scope PageList allocation bench (see the Zig twin at
 # .port/phase-1/bench-zig-pagelist). `required-features` makes cargo skip it
@@ -228,6 +233,10 @@ rustty-zigstd = { workspace = true }
 # zigstd MemoryPool/ArenaAllocator). `Global` reproduces the prior `std::alloc`
 # path, so PageList behavior is unchanged.
 allocator-api2 = { workspace = true }
+# Allocator-aware hash maps over the `alloc::VtAllocator` handle (the managed
+# `std.AutoHashMap`s the reference builds over the caller's allocator, e.g.
+# `PageList.Clone.TrackedPinsRemap`). Declared once in the workspace.
+hashbrown = { workspace = true }
 # Same libc the reference's std.posix binds (R3). Used by kitty/graphics_image
 # for the POSIX shared-memory medium (shm_open/mmap/fstat/munmap/shm_unlink).
 libc = "0.2"

@@ -1768,3 +1768,126 @@ fn line_iterator_is_silent_on_lines_that_fit() {
     assert_eq!(None, end);
     assert_eq!(Vec::<CapturedRecord>::new(), messages);
 }
+
+// parity S67-F5: `parseAutoStruct`'s `while (try iter.next())` propagates the
+// three `CommaSplitter` errors unchanged, and `parse` renders them through its
+// `else => "unknown error {}"` arm. The texts match Ghostty 1.3.1's
+// `+validate-config` for `mouse-scroll-multiplier = precision:"1` etc.
+#[test]
+fn parse_auto_struct_propagates_comma_splitter_errors() {
+    fn fresh() -> BasicValue {
+        BasicValue {
+            a: Vec::new(),
+            b: 0,
+            c: 0,
+        }
+    }
+    assert_eq!(
+        Err(Error::UnclosedQuote),
+        parse_auto_struct(&mut fresh(), b"a:\"hello")
+    );
+    assert_eq!(
+        Err(Error::IllegalEscape),
+        parse_auto_struct(&mut fresh(), b"a:\"h\\qi\"")
+    );
+    assert_eq!(
+        Err(Error::UnfinishedEscape),
+        parse_auto_struct(&mut fresh(), b"a:\"h\\")
+    );
+
+    struct Data {
+        value: BasicValue,
+        diags: DiagnosticList,
+    }
+    impl Target for Data {
+        fn diagnostics_mut(&mut self) -> Option<&mut DiagnosticList> {
+            Some(&mut self.diags)
+        }
+        fn parse_into_field(&mut self, key: &[u8], value: Option<&[u8]>) -> Result<(), ParseError> {
+            match key {
+                b"value" => parse_auto_struct(&mut self.value, value.ok_or(Error::ValueRequired)?),
+                _ => Err(Error::InvalidField),
+            }
+        }
+    }
+    struct VecArgs(std::vec::IntoIter<Vec<u8>>);
+    impl ArgIterator for VecArgs {
+        type Item = Vec<u8>;
+        fn next(&mut self) -> Option<Vec<u8>> {
+            self.0.next()
+        }
+    }
+    impl LocationProvider for VecArgs {}
+
+    let mut data = Data {
+        value: fresh(),
+        diags: DiagnosticList::default(),
+    };
+    let mut it = VecArgs(
+        vec![
+            b"--value=a:\"hello".to_vec(),
+            b"--value=a:\"h\\qi\"".to_vec(),
+            b"--value=a:\"h\\".to_vec(),
+            b"--value=bogus".to_vec(),
+        ]
+        .into_iter(),
+    );
+    parse(&mut data, &mut it).unwrap();
+    let messages: Vec<&[u8]> = data
+        .diags
+        .items()
+        .iter()
+        .map(|d| d.message.as_slice())
+        .collect();
+    assert_eq!(
+        vec![
+            &b"unknown error error.UnclosedQuote"[..],
+            &b"unknown error error.IllegalEscape"[..],
+            &b"unknown error error.UnfinishedEscape"[..],
+            // The base-set control: a malformed entry is still InvalidValue.
+            &b"invalid value \"bogus\""[..],
+        ],
+        messages
+    );
+}
+
+// parity S67-F3: `parseIntoField`'s integer arm is `std.fmt.parseInt(Int, v, 0)`,
+// which ignores `_` digit separators. Values MEASURED against Zig 0.16.0.
+#[test]
+fn parse_field_int_accepts_the_reference_underscore_separators() {
+    assert_eq!(parse_field_int::<u64>(Some(b"10_000_000")), Ok(10_000_000));
+    assert_eq!(parse_field_int::<u32>(Some(b"0x1_0")), Ok(16));
+    assert_eq!(parse_field_int::<u32>(Some(b"-0")), Ok(0));
+    // The reference still rejects a leading/trailing `_` and a doubled sign.
+    assert_eq!(
+        parse_field_int::<u32>(Some(b"_10")),
+        Err(Error::InvalidValue)
+    );
+    assert_eq!(
+        parse_field_int::<u32>(Some(b"10_")),
+        Err(Error::InvalidValue)
+    );
+    assert_eq!(
+        parse_field_int::<i32>(Some(b"+-5")),
+        Err(Error::InvalidValue)
+    );
+}
+
+// parity S67-F4: `parseIntoField`'s float arm is `std.fmt.parseFloat`, which
+// accepts `_` separators and hexadecimal floats. Values MEASURED against Zig
+// 0.16.0.
+#[test]
+fn parse_field_float_accepts_the_reference_grammar() {
+    assert_eq!(parse_field_float::<f64>(Some(b"1_000.5")), Ok(1000.5));
+    assert_eq!(parse_field_float::<f64>(Some(b"0x1.8p3")), Ok(12.0));
+    assert_eq!(parse_field_float::<f32>(Some(b"0x1.8p3")), Ok(12.0));
+    assert_eq!(parse_field_float::<f64>(Some(b"0x1.8")), Ok(1.5));
+    assert_eq!(
+        parse_field_float::<f32>(Some(b"1__0")),
+        Err(Error::InvalidValue)
+    );
+    assert_eq!(
+        parse_field_float::<f64>(Some(b"1e_5")),
+        Err(Error::InvalidValue)
+    );
+}

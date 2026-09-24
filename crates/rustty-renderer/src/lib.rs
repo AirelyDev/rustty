@@ -50,7 +50,9 @@
 //!     accessor trait (state.rs; the `RendererConfig`-precedent acyclic shape),
 //!     `state.inspector` being the `*mut dyn InspectorOverlay` fat pointer. No
 //!     `unimplemented!()` remains for this seam.
-//!   - GTK — out of the monomorphic Metal scope (a whole-backend follow-up port).
+//!   - ~~GTK — out of the monomorphic Metal scope (a whole-backend follow-up
+//!     port).~~ Stale (parity tail S-8b, 2026-09-24): the GTK host drives the
+//!     ported OpenGL backend below; nothing GTK-side remains in this crate.
 //!     The **OpenGL backend (Linux)** is NOT in this list any more: L4 ported the
 //!     `crate::opengl` leaves + the `generic::linux_impl` twin, and wave 2 closed
 //!     the last draw-path elisions — custom shaders (F-013), kitty graphics
@@ -64,11 +66,14 @@
 //!     [`crate::webgl`].
 //!
 //! G3b comment-coverage SKIPS this crate while it is marked `in progress` (only a
-//! `done` status activates the whole-crate fuzzy match); it stays `in progress`
-//! while the GL/GTK backends are unported (honest). R1 fidelity for the
-//! ported slices is backstopped by the adversary + verify panel + the golden gate
-//! (heavy-tier doctrine), and MAY be spot-checked with a scoped
-//! `check_comment_coverage.py --port-glob` run.
+//! `done` status activates the whole-crate fuzzy match), but `--crate renderer`
+//! runs it: as of parity tail S-8b (2026-09-24) it reports 0 missing / 0 review
+//! over all 1728 distinctive reference comments (Thread.zig checked at its core
+//! `renderer_seam.rs` port, backend.zig at build-config, via G3b's
+//! `RELOCATED_PORTS`). ~~"it stays `in progress` while the GL/GTK backends are
+//! unported"~~ is stale — both are ported. The status stays `in progress` only
+//! because flipping it to `done` binds the done-crate gates (G1/G2/G6) to this
+//! crate, which has not been evaluated; that flip is a separate decision.
 //! See .port/phase-2/DEFERRALS.md and .port/phase-2/GPU_RD_CHUNK5_DESIGN.md.
 
 pub mod cell;

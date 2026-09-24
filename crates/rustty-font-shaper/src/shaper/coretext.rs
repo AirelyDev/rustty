@@ -40,27 +40,13 @@
 //   * `SharedGrid` is `crate::shared_grid::SharedGrid`; `Collection.Index` is
 //     `crate::collection::Index`.
 //   * `os.CFReleaseThread` (the dedicated CFRelease thread) is
-//     `rustty_os::CFReleaseThread` (`crates/rustty-os/src/cf_release_thread.rs`).
-//     This file does NOT use it: it wires a behavior-equivalent release thread
-//     built on `std::thread` + an `mpsc` channel (see `cf_release` below) — a
-//     dedicated thread that `CFRelease`s the pools shipped to it, stopped and
-//     joined on `deinit`.
-//
-//     STALE-CLAIM CORRECTION (task-14c-4, ledger row S94-F1): the justification
-//     that used to stand here — "the libxev event-loop backend is a DEFERRED
-//     SEAM (`rustty_global::seam::Xev`, all `unimplemented!()`), so that thread
-//     cannot spawn/run yet" — is FALSE on macOS, the only target this file
-//     compiles for. `rustty-xev`'s no-backend seam is `cfg`-gated to
-//     freestanding wasm only (`crates/rustty-xev/src/lib.rs:745-790`, which
-//     `compile_error!`s if it is ever active for a non-wasm target), and
-//     `rustty_os::cf_release_thread::Thread::{init,deinit,threadMain}` are real,
-//     inhabited ports against the real kqueue backend. The stand-in is therefore
-//     a CHOICE that is no longer blocked, not a consequence of a missing seam.
-//     Row S94-F1 stays OPEN for the swap itself; this note no longer asserts a
-//     blocker that does not exist. The release thread remains a performance
-//     optimization with no parity surface (it only changes WHERE/WHEN
-//     `CFRelease` runs), so no reference logic, comment, or test is dropped or
-//     weakened (R1/R4/R6).
+//     `rustty_os::CFReleaseThread` (`crates/rustty-os/src/cf_release_thread.rs`),
+//     used as the reference uses it: a heap `Thread` on its own xev loop, fed
+//     through its bounded mailbox and woken/stopped through its `Async`s.
+//     CORRECTION (task T-F, S94-F1): this file used to wire "a behavior-
+//     equivalent release thread built on `std::thread` + an `mpsc` channel"
+//     instead (an unbounded channel, stop honoured only after every queued
+//     pool, no notify step); the swap is done.
 //   * `unicode.table`/`Group`/`GroupCache`/`DeferredFace`/`Library`/`Style` are
 //     referenced only by the (diagnostic, commented-out) `debugPositions`; their
 //     imports are preserved as comments above.
@@ -82,6 +68,8 @@ use objc2_core_text::{
     CTRun, CTRunStatus, CTTypesetter,
 };
 
+use rustty_datastruct::blocking_queue::Timeout;
+use rustty_os::CFReleaseThread;
 use rustty_util::quirks::inlineAssert as assert;
 
 use crate::collection;
@@ -150,6 +138,10 @@ pub enum Error {
     OutOfMemory,
     /// A `Collection.getFace` failure (see `collection::Error`).
     Collection(collection::Error),
+    /// `CFReleaseThread.init`'s errors (the xev loop / async handles).
+    CfReleaseThreadInit,
+    /// `std.Thread.spawn`'s `SpawnError` for the CF release thread (S94-F2).
+    CfReleaseThreadSpawn,
 }
 
 impl From<collection::Error> for Error {
@@ -228,18 +220,28 @@ pub struct Shaper {
     /// such as those produced by CoreText, have excessively slow release
     /// callback logic.
     // cf_release_thread: *CFReleaseThread,
+    cf_release_thread: *mut CFReleaseThread::Thread,
     // cf_release_thr: std.Thread,
-    //
-    // PORT NOTE (stand-in release thread): see the module-level import note,
-    // including its STALE-CLAIM CORRECTION. The reference's heap
-    // `*CFReleaseThread` + its `std.Thread` handle are modeled by the
-    // `mpsc::Sender` used to ship release pools + the spawned thread's
-    // `JoinHandle`. `cf_release` (below) is the behavior-equivalent stand-in for
-    // `os.CFReleaseThread`; it is NOT blocked on a deferred libxev seam (row
-    // S94-F1).
-    cf_release_tx: std::sync::mpsc::Sender<cf_release::Msg>,
-    cf_release_handle: Option<std::thread::JoinHandle<()>>,
+    cf_release_thr: Option<std::thread::JoinHandle<()>>,
+
+    /// Rustty-only: the release thread's `wakeup`/`stop` handles (`Copy`: a
+    /// mach port) and its mailbox, read out before the thread starts. While it
+    /// runs, `threadMain` holds `&mut` to the `Thread`, so this side must not
+    /// read the struct; it uses these copies instead. The reference reads
+    /// `self.cf_release_thread.mailbox`/`.wakeup`/`.stop` through the shared
+    /// pointer.
+    cf_release_wakeup: rustty_xev::Async,
+    cf_release_stop: rustty_xev::Async,
+    cf_release_mailbox: *const CFReleaseThread::Mailbox,
 }
+
+/// The `*CFReleaseThread` handed to the release thread's `threadMain`.
+struct CfReleaseThreadArg(*mut CFReleaseThread::Thread);
+// SAFETY: the pointee is heap-allocated by `Shaper::init` and freed by
+// `Shaper::deinit` only after joining the thread; while the thread runs, the
+// shaper side touches only the mailbox (internally synchronized) and copies of
+// the `Async` handles (mach-port sends, thread-safe), never the struct.
+unsafe impl Send for CfReleaseThreadArg {}
 
 // const CellBuf = std.ArrayListUnmanaged(font.shape.Cell);
 // const CodepointList = std.ArrayListUnmanaged(Codepoint);
@@ -458,21 +460,38 @@ impl Shaper {
         // errdefer alloc.destroy(cf_release_thread);
         // cf_release_thread.* = try .init(alloc);
         // errdefer cf_release_thread.deinit();
-        //
+        let thread = CFReleaseThread::Thread::init().map_err(|_| Error::CfReleaseThreadInit)?;
+        let cf_release_thread: *mut CFReleaseThread::Thread = Box::into_raw(Box::new(thread));
+        // SAFETY: just allocated above and not yet shared with any thread.
+        let (cf_release_wakeup, cf_release_stop, cf_release_mailbox) = unsafe {
+            (
+                (*cf_release_thread).wakeup,
+                (*cf_release_thread).stop,
+                &*(*cf_release_thread).mailbox as *const CFReleaseThread::Mailbox,
+            )
+        };
+
         // Start the CF release thread.
-        // var cf_release_thr = try std.Thread.spawn(.{}, CFReleaseThread.threadMain, .{cf_release_thread});
+        // var cf_release_thr = try std.Thread.spawn(
+        //     .{},
+        //     CFReleaseThread.threadMain,
+        //     .{cf_release_thread},
+        // );
         // cf_release_thr.setName("cf_release") catch {};
         //
-        // PORT NOTE (deferred-seam release thread): `os.CFReleaseThread` is blocked
-        // on the libxev seam (see the module-level note), so we spawn a
-        // behavior-equivalent `std::thread` that drains an `mpsc` channel of
-        // release pools and `CFRelease`s them. Spawned LAST so earlier fallible CF
-        // creates don't leak a thread (mirroring the reference's errdefer order).
-        let (cf_release_tx, cf_release_rx) = std::sync::mpsc::channel::<cf_release::Msg>();
-        let cf_release_handle = std::thread::Builder::new()
-            .name("cf_release".into())
-            .spawn(move || cf_release::thread_main(cf_release_rx))
-            .expect("spawn cf_release thread");
+        // S94-F2: the port used `.expect(..)`, so a failed spawn panicked
+        // where the reference's `try` returns the error from `init`.
+        // (`threadMain` names its own thread; see `cf_release_thread.rs`.)
+        let arg = CfReleaseThreadArg(cf_release_thread);
+        let cf_release_thr = match spawn_cf_release_thread(arg) {
+            Ok(thr) => thr,
+            Err(_) => {
+                // errdefer cf_release_thread.deinit(); errdefer alloc.destroy(..);
+                // SAFETY: the thread never started, so nothing else holds it.
+                unsafe { Box::from_raw(cf_release_thread) }.deinit();
+                return Err(Error::CfReleaseThreadSpawn);
+            }
+        };
 
         // return .{ ... };
         Ok(Shaper {
@@ -484,8 +503,11 @@ impl Shaper {
             cached_fonts: Vec::new(),
             cached_font_grid: 0,
             cf_release_pool: Vec::new(),
-            cf_release_tx,
-            cf_release_handle: Some(cf_release_handle),
+            cf_release_thread,
+            cf_release_thr: Some(cf_release_thr),
+            cf_release_wakeup,
+            cf_release_stop,
+            cf_release_mailbox,
         })
     }
 
@@ -524,7 +546,7 @@ impl Shaper {
         // self.cf_release_pool.deinit(self.alloc);
         if !self.cf_release_pool.is_empty() {
             for r in self.cf_release_pool.drain(..) {
-                unsafe { cf_release::CFRelease(r) };
+                unsafe { CFRelease(r) };
             }
             // PORT NOTE: the reference's `comptime !builtin.is_test` guard is
             // `#[cfg(not(test))]` here — SAME suppression, same reason (in a
@@ -549,15 +571,33 @@ impl Shaper {
         // }
         // self.cf_release_thread.deinit();
         // self.alloc.destroy(self.cf_release_thread);
-        if let Err(err) = self.cf_release_tx.send(cf_release::Msg::Stop) {
-            log::error!(
-                target: LOG_SCOPE,
-                "error notifying cf release thread to stop, may stall err={err:?}"
-            );
+        //
+        // PORT NOTE: `deinit` may run twice on one `Shaper` (a caller's explicit
+        // `deinit` and a later one); the thread is stopped and freed once.
+        if !self.cf_release_thread.is_null() {
+            if let Err(err) = self.cf_release_stop.notify() {
+                log::error!(
+                    target: LOG_SCOPE,
+                    "error notifying cf release thread to stop, may stall err={err:?}"
+                );
+            }
+            if let Some(thr) = self.cf_release_thr.take() {
+                let _ = thr.join();
+            }
+            // SAFETY: allocated by `init`; the thread has been joined, so this
+            // is the only reference left.
+            unsafe { Box::from_raw(self.cf_release_thread) }.deinit();
+            self.cf_release_thread = core::ptr::null_mut();
+            self.cf_release_mailbox = core::ptr::null();
         }
-        if let Some(handle) = self.cf_release_handle.take() {
-            let _ = handle.join();
-        }
+    }
+
+    /// How many CoreFoundation objects are waiting for `end_frame` to hand
+    /// them to the release thread. RUSTTY-SIDE: no reference counterpart; a
+    /// read-only view so the renderer's tests can observe that a frame's
+    /// `endFrame` ran (parity S115-F1).
+    pub fn release_pool_len(&self) -> usize {
+        self.cf_release_pool.len()
     }
 
     // pub fn endFrame(self: *Shaper) void {
@@ -586,11 +626,10 @@ impl Shaper {
         // would fire on the success path, where the reference is silent. Do not
         // "restore" this by logging unconditionally.
         //
-        // CONTINGENT (task-14e-2, NEW-FINDINGS N24): that waiver is dated, not
-        // permanent. The reason there is no arm is the mpsc stand-in itself,
-        // which S94-F1 (CONFIRMED, OPEN) tracks — restore the real
-        // `CFReleaseThread` and `toOwnedSlice`'s failure arm returns with it.
-        // Re-examine this site in the SAME change that closes S94-F1.
+        // RE-EXAMINED (task T-F, with S94-F1 closed as NEW-FINDINGS N24 asked):
+        // the waiver stands. The real `CFReleaseThread` is in place, but moving
+        // the pool out of `cf_release_pool` still allocates nothing and cannot
+        // fail, so there is still no failure arm to log from.
         let items = std::mem::take(&mut self.cf_release_pool);
 
         // Send the items. If the send succeeds then we wake up the
@@ -606,34 +645,35 @@ impl Shaper {
         // for (items) |ref| macos.foundation.CFRelease(ref);
         // self.alloc.free(items);
         //
-        // PORT NOTE: the reference pushes to the thread mailbox and, on success,
-        // wakes the thread and returns; on push failure it releases the slice
-        // inline. Here `send` succeeding is the mailbox push (the channel wakes the
-        // thread implicitly); on `send` failure (thread gone) we release inline.
-        match self
-            .cf_release_tx
-            .send(cf_release::Msg::Release(cf_release::SendableRefs(items)))
-        {
-            // PORT NOTE (S94-F4, WAIVED site 2 of 2 —
-            // `.port/parity-closure/ADJUDICATION.md#s94-f4`): after a successful
-            // push the reference performs a SEPARATE `wakeup.notify()` and logs
-            // `"error notifying cf release thread to wake up, may stall"` in its
-            // `catch` arm. An mpsc `send` IS the wakeup — the channel unparks the
-            // receiver as part of the same infallible operation — so this arm has
-            // no distinct notify step and therefore no failure arm. Emitting here
-            // would fire on every successful frame end, where the reference is
-            // silent.
-            //
-            // CONTINGENT (task-14e-2, NEW-FINDINGS N24): dated, not permanent —
-            // the missing notify step is the mpsc stand-in S94-F1 tracks.
-            // Re-examine in the SAME change that closes S94-F1.
-            Ok(()) => {}
-            Err(std::sync::mpsc::SendError(cf_release::Msg::Release(items))) => {
-                for r in items.0 {
-                    unsafe { cf_release::CFRelease(r) };
+        // SAFETY: the mailbox lives until `deinit`, which is the only place it
+        // is freed; `BlockingQueue` synchronizes the release thread's `pop`.
+        let mailbox = unsafe { &*self.cf_release_mailbox };
+        match mailbox.push_or_return(
+            CFReleaseThread::Message::Release { refs: items },
+            Timeout::Forever,
+        ) {
+            Ok(n) if n != 0 => {
+                // S94-F4 site 2, RESTORED (task T-F): with the real thread the
+                // wakeup is its own fallible step again, as in the reference.
+                if let Err(err) = self.cf_release_wakeup.notify() {
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "error notifying cf release thread to wake up, may stall err={err:?}"
+                    );
                 }
             }
-            Err(_) => {}
+            // (`push_or_return` reports a failed push as `Err`; the queue's
+            // length after a successful one is at least 1.)
+            Ok(_) => {}
+            // A failed push (the reference's `push` returning 0) hands the refs
+            // back.
+            Err(CFReleaseThread::Message::Release { refs }) => {
+                // for (items) |ref| macos.foundation.CFRelease(ref);
+                // self.alloc.free(items);
+                for r in refs {
+                    unsafe { CFRelease(r) };
+                }
+            }
         }
     }
 
@@ -1469,47 +1509,44 @@ fn run_string_indices(ctrun: &CTRun, count: usize) -> Vec<CFIndex> {
     buf
 }
 
-/// The behavior-equivalent CFRelease thread (deferred-seam stand-in for
-/// `os.CFReleaseThread`; see the module-level import note). A dedicated
-/// `std::thread` drains an `mpsc` channel of release pools and `CFRelease`s
-/// their refs, stopping on the `Stop` message. Identical observable behavior to
-/// the reference's libxev-backed thread — no parity surface.
-pub(crate) mod cf_release {
-    use core::ffi::c_void;
+// PORT NOTE: `macos.foundation.CFRelease`. R3 binding to the SAME framework.
+extern "C" {
+    fn CFRelease(cf: *mut c_void);
+}
 
-    /// A pool of CFTypeRefs to release. CFTypeRefs are safe to `CFRelease` from
-    /// any thread (CoreFoundation objects are thread-safe to release), so this
-    /// wrapper is `Send`.
-    pub struct SendableRefs(pub Vec<*mut c_void>);
-    // SAFETY: CFRelease is thread-safe for CFTypeRefs; the refs are only ever
-    // released (never dereferenced) on the receiving thread.
-    unsafe impl Send for SendableRefs {}
-
-    // PORT NOTE: the reference `CFReleaseThread.Message` union (`.release`), plus the
-    // `stop` async modeled as the `Stop` message.
-    pub enum Msg {
-        Release(SendableRefs),
-        Stop,
+/// `std.Thread.spawn(.{}, CFReleaseThread.threadMain, .{cf_release_thread})`.
+fn spawn_cf_release_thread(
+    arg: CfReleaseThreadArg,
+) -> std::io::Result<std::thread::JoinHandle<()>> {
+    // Test-only fail-point (S94-F2): a failed spawn, to prove `init` returns
+    // the error. Not compiled into production builds.
+    #[cfg(test)]
+    if spawn_failpoint::take() {
+        drop(arg);
+        return Err(std::io::Error::other("test fail-point: spawn failed"));
     }
+    std::thread::Builder::new().spawn(move || {
+        // (capture the whole Send wrapper, not its `!Send` pointer field)
+        let arg = arg;
+        // SAFETY: `arg.0` is the live heap `Thread` `init` created; `deinit`
+        // frees it only after joining this thread.
+        unsafe { (*arg.0).threadMain() }
+    })
+}
 
-    // PORT NOTE: `macos.foundation.CFRelease`. R3 binding to the SAME framework.
-    extern "C" {
-        pub fn CFRelease(cf: *mut c_void);
+#[cfg(test)]
+pub(crate) mod spawn_failpoint {
+    use core::cell::Cell;
+    thread_local! {
+        static FAIL: Cell<bool> = const { Cell::new(false) };
     }
-
-    // PORT NOTE: `CFReleaseThread.threadMain` -> `drainMailbox` (the `.release` arm
-    // `for (msg.refs) |ref| CFRelease(ref)`), looping until `stop`.
-    pub fn thread_main(rx: std::sync::mpsc::Receiver<Msg>) {
-        while let Ok(msg) = rx.recv() {
-            match msg {
-                Msg::Release(refs) => {
-                    for r in refs.0 {
-                        unsafe { CFRelease(r) };
-                    }
-                }
-                Msg::Stop => break,
-            }
-        }
+    /// Make the next `Shaper::init` on this thread fail to spawn its thread.
+    pub(crate) fn arm() {
+        FAIL.with(|c| c.set(true));
+    }
+    /// Disarm and report whether this spawn must fail.
+    pub(crate) fn take() -> bool {
+        FAIL.with(|c| c.replace(false))
     }
 }
 

@@ -45,9 +45,10 @@ mod imp {
     #[derive(CompositeTemplate)]
     #[template(resource = "/io/airely/rustty/ui/1.5/inspector-widget.ui")]
     pub struct InspectorWidget {
-        /// PORTS: `inspector_widget.zig:48-50` `surface`. The surface that we are
-        /// attached to. This is NOT referenced. We attach a weak notify to the
-        /// object. Stored as a raw `GObject*` (the faithful analogue of the
+        /// The surface that we are attached to. This is NOT referenced.
+        /// We attach a weak notify to the object.
+        ///
+        /// PORTS: `inspector_widget.zig:48-50` `surface`. Stored as a raw `GObject*` (the faithful analogue of the
         /// reference's non-owning `?*Surface`), null until [`set_surface`]
         /// (super::InspectorWidget::set_surface).
         pub surface: Cell<*mut glib::gobject_ffi::GObject>,
@@ -254,14 +255,16 @@ impl InspectorWidget {
             return;
         }
 
-        // Setup our notification to happen at the end because we're changing
-        // values no matter what (`:130-134`). The `_guard` dropping on EVERY
-        // return path replicates the reference's `defer thawNotify`.
+        // Setup our notification to happen at the end because we're
+        // changing values no matter what.
+        // (`:130-134`) The `_guard` dropping on EVERY return path replicates
+        // the reference's `defer thawNotify`.
         let _guard = self.freeze_notify();
         self.notify("surface");
 
-        // Deactivate the inspector on the old surface if it exists and set our
-        // value to null (`:136-150`).
+        // Deactivate the inspector on the old surface if it exists
+        // and set our value to null.
+        // (`:136-150`)
         if !cur.is_null() {
             imp.surface.set(std::ptr::null_mut());
 
@@ -295,8 +298,9 @@ impl InspectorWidget {
             return;
         }
 
-        // We use a weak reference on surface to determine if the surface was
-        // closed while our inspector was active (`:160-165`).
+        // We use a weak reference on surface to determine if the surface
+        // was closed while our inspector was active.
+        // (`:160-165`)
         let self_weak = self.downgrade();
         let notify = surface.add_weak_ref_notify_local(move || {
             if let Some(this) = self_weak.upgrade() {
@@ -305,8 +309,9 @@ impl InspectorWidget {
         });
         *imp.surface_weak.borrow_mut() = Some(notify);
 
-        // Store our surface. We don't need to ref this because we setup the weak
-        // notify above (`:167-169`).
+        // Store our surface. We don't need to ref this because we setup
+        // the weak notify above.
+        // (`:167-169`)
         imp.surface
             .set(surface.upcast_ref::<glib::Object>().as_ptr());
 
@@ -333,10 +338,11 @@ impl InspectorWidget {
             return;
         }
 
-        // According to weak notify docs, "surface" is in the "dispose" state. Our
-        // surface doesn't clear the core surface until the "finalize" state so we
-        // should be able to safely access it here. We need to be really careful
-        // though (`:188-196`).
+        // According to weak notify docs, "surface" is in the "dispose" state.
+        // Our surface doesn't clear the core surface until the "finalize"
+        // state so we should be able to safely access it here. We need to
+        // be really careful though.
+        // (`:188-196`)
         // SAFETY: the surface is mid-dispose (ref_count still > 0), so a borrowed
         // reconstruction is sound; the core surface is valid until finalize.
         let obj = unsafe { from_glib_borrow::<_, glib::Object>(ptr) };
@@ -351,10 +357,11 @@ impl InspectorWidget {
         imp.surface.set(std::ptr::null_mut());
         self.notify("surface");
 
-        // Note: in the future we should probably show some content on our window
-        // to note that the surface went away in case our embedding widget doesn't
-        // close itself. As I type this, our window closes immediately when the
-        // surface goes away so you don't see this, but for completeness sake we
-        // should clean this up (`:198-202`).
+        // Note: in the future we should probably show some content on our
+        // window to note that the surface went away in case our embedding
+        // widget doesn't close itself. As I type this, our window closes
+        // immediately when the surface goes away so you don't see this, but
+        // for completeness sake we should clean this up.
+        // (`:198-202`)
     }
 }

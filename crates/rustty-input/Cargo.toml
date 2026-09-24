@@ -41,6 +41,9 @@ rustty-os = { workspace = true }
 # rustty-input, so this edge is acyclic.
 rustty-args = { workspace = true }
 rustty-datastruct = { workspace = true }
+# `Binding.zig` `foldedCodepoint` reads uucode's `case_folding_full` (S65-F1).
+# rustty-unicode is a leaf (member 5, below this crate's 18), so this is acyclic.
+rustty-unicode = { workspace = true }
 rustty-util = { workspace = true }
 rustty-cfg-fmt = { workspace = true }
 rustty-render-types = { workspace = true }

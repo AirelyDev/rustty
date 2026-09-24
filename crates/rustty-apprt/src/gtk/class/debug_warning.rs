@@ -55,6 +55,9 @@ mod imp {
 }
 
 glib::wrapper! {
+    /// Debug warning banner. It will be based on adw.Banner if we're using Adwaita
+    /// 1.3 or newer. Otherwise it will use a gtk.Label.
+    ///
     /// PORTS: `debug_warning.zig` `pub const DebugWarning`.
     pub struct DebugWarning(ObjectSubclass<imp::DebugWarning>)
         @extends libadwaita::Bin, gtk4::Widget,

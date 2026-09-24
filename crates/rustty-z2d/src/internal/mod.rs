@@ -10,3 +10,4 @@ pub mod path_nodes;
 pub mod point;
 pub mod raster;
 pub mod tess;
+pub mod zig_math;

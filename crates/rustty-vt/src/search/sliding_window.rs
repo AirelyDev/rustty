@@ -28,12 +28,12 @@
 // const Terminal = terminal.Terminal;
 // const PageFormatter = @import("../formatter.zig").PageFormatter;
 // const FlattenedHighlight = terminal.highlight.Flattened;
+use crate::alloc::Allocator;
 use crate::formatter::{Format, Options, PageFormatter, PointMap};
 use crate::highlight::Flattened as FlattenedHighlight;
 use crate::pagelist::Node;
 use crate::point;
 use crate::size;
-use allocator_api2::alloc::Global as Allocator;
 use rustty_datastruct::circ_buf::{Direction as CircDirection, Error as CircError};
 use rustty_datastruct::CircBuf;
 
@@ -923,7 +923,8 @@ impl SlidingWindow {
         // INSPECT, NOT RESTORE: search must never decompress history it is only
         // reading (oracle 0d015b2fc). `page_preserving_state` decodes into a
         // temporary buffer and leaves the node compressed.
-        let mut preserved = unsafe { crate::pagelist::Node::page_preserving_state(node) }?;
+        let mut preserved =
+            unsafe { crate::pagelist::Node::page_preserving_state(node, self.alloc) }?;
         let page = preserved.page();
         let last_row_wrapped = unsafe { (*(*page).get_row((*page).size.rows as usize - 1)).wrap() };
         let result = self.append_page(node, page, last_row_wrapped);
@@ -944,7 +945,9 @@ impl SlidingWindow {
         &mut self,
         node: *mut Node,
     ) -> Result<Option<AppendResult>, OutOfMemory> {
-        let mut preserved = unsafe { crate::pagelist::Node::page_preserving_state(node) }?;
+        // var preserved = try node.pagePreservingState(self.alloc);
+        let mut preserved =
+            unsafe { crate::pagelist::Node::page_preserving_state(node, self.alloc) }?;
         let page = preserved.page();
         let last_row_wrapped = unsafe { (*(*page).get_row((*page).size.rows as usize - 1)).wrap() };
         if !last_row_wrapped {

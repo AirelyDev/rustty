@@ -16,6 +16,30 @@
 //!   * `src/build/GhosttyI18n.zig` (`:33-43`) — `msgfmt` of each `po/*.po` into
 //!     `share/locale/<locale>/LC_MESSAGES/<domain>.mo`.
 //!
+//! # The two helpers' own module docs
+//!
+//! `blueprint.zig:1-2`:
+//! Compiles a blueprint file using `blueprint-compiler`. This performs
+//! additional checks to ensure that various minimum versions are met.
+//!
+//! Usage: blueprint.zig <major> <minor> <output> <input>
+//!
+//! Example: blueprint.zig 1 5 output.ui input.blp
+//!
+//! `gresource.zig:1-5`:
+//! This file contains a binary helper that builds our gresource XML
+//! file that we can then use with `glib-compile-resources`.
+//!
+//! This binary is expected to be run from the Rustty source root.
+//! Litmus test: `src/apprt/gtk` should exist relative to the pwd.
+//!
+//! (PORT NOTE: here both helpers run inside this build script rather than as
+//! separate binaries, so there is no argv — the `blueprint.zig:4-6`
+//! `Usage:`/`Example:` lines above describe a command line rustty does not have;
+//! its `<major> <minor> <output> <input>` are `compile_blueprint`'s inputs here —
+//! and no cwd precondition: paths are resolved against `--sourcedir`, see
+//! "R2 / paths" below.)
+//!
 //! # R5 / guard
 //!
 //! The whole pipeline runs only when BOTH `CARGO_FEATURE_GTK` and
@@ -182,6 +206,40 @@ const BLUEPRINT_HELP: &str = "\n\nWhen building from a source checkout, rustty r
 version 0.16 or newer of `blueprint-compiler` as a build-time dependency. Please install \
 it, ensure that it is available on your PATH, and then retry building rustty.";
 
+#[path = "src/gtk_targets.rs"]
+mod gtk_targets;
+
+/// `rustty_gtk_x11` / `rustty_gtk_wayland`: which winproto arms are built
+/// (S65-F6; see `src/gtk_targets.rs`). Probes the system GTK4 only for a
+/// native gtk build.
+fn gtk_winproto_cfgs(native_gtk: bool) {
+    println!("cargo::rustc-check-cfg=cfg(rustty_gtk_x11)");
+    println!("cargo::rustc-check-cfg=cfg(rustty_gtk_wayland)");
+    println!("cargo:rerun-if-env-changed=RUSTTY_GTK_X11");
+    println!("cargo:rerun-if-env-changed=RUSTTY_GTK_WAYLAND");
+    println!("cargo:rerun-if-env-changed=PKG_CONFIG_PATH");
+    if !native_gtk {
+        return;
+    }
+    let probed = gtk_targets::parse_targets(gtk_targets::probe().as_deref());
+    let x11 = gtk_targets::arm_enabled(
+        env::var_os("CARGO_FEATURE_X11").is_some(),
+        env::var("RUSTTY_GTK_X11").ok().as_deref(),
+        probed.x11,
+    );
+    let wayland = gtk_targets::arm_enabled(
+        env::var_os("CARGO_FEATURE_WAYLAND").is_some(),
+        env::var("RUSTTY_GTK_WAYLAND").ok().as_deref(),
+        probed.wayland,
+    );
+    if x11 {
+        println!("cargo::rustc-cfg=rustty_gtk_x11");
+    }
+    if wayland {
+        println!("cargo::rustc-cfg=rustty_gtk_wayland");
+    }
+}
+
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
 
@@ -210,6 +268,7 @@ fn main() {
         env::var("CARGO_CFG_TARGET_OS").as_deref(),
         Ok("linux") | Ok("freebsd")
     );
+    gtk_winproto_cfgs(gtk && gtk_target);
     if !(gtk && gtk_target) {
         return;
     }
@@ -229,6 +288,12 @@ fn main() {
     blueprint_compiler_version_gate();
 
     // 1. Compile each `.blp` -> `OUT_DIR/ui/{maj}.{min}/{name}.ui`.
+    //
+    // Collect the UI files that are passed in as arguments.
+    // (gresource.zig:128. PORT NOTE: there are no arguments here — this script
+    // compiles every manifest blueprint itself and collects each output paired
+    // with its `Blueprint`, so `genUi`'s per-file manifest lookup and its
+    // `error.BlueprintNotFound` arm, `gresource.zig:252-269`, cannot miss.)
     let mut ui_files: Vec<(&Blueprint, PathBuf)> = Vec::with_capacity(BLUEPRINTS.len());
     for bp in BLUEPRINTS {
         // Invariant 7 (blueprint.zig:58-67): the installed adwaita must be new
@@ -255,6 +320,10 @@ fn main() {
     let xml_path = out_dir.join("rustty.gresource.xml");
     fs::write(&xml_path, gen_xml(&resource_path, base_app_id, &ui_files))
         .expect("write gresource xml");
+    // The list of filepaths that we depend on. Used for the build
+    // system to have proper caching.
+    // (gresource.zig:71-96 `file_inputs`: the `.blp` inputs are emitted in step
+    // 1 above, the css and icon inputs here, as `rerun-if-changed` edges.)
     for name in CSS {
         println!(
             "cargo:rerun-if-changed={}",
@@ -377,6 +446,8 @@ fn gen_xml(resource_path: &str, base_app_id: &str, ui_files: &[(&Blueprint, Path
     let mut s = String::new();
     s.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<gresources>\n");
 
+    // Generate the resources at the root prefix.
+    //
     // genRoot (gresource.zig:212-237): the css, compressed, aliased to the bare
     // filename, bodies relative to --sourcedir (assets root).
     s.push_str(&format!("  <gresource prefix=\"{resource_path}\">\n"));
@@ -387,6 +458,14 @@ fn gen_xml(resource_path: &str, base_app_id: &str, ui_files: &[(&Blueprint, Path
     }
     s.push_str("  </gresource>\n");
 
+    // Generate the icon resources. This works by looking up all the icons
+    // specified by `icon_sizes` in `images/icons/`. They are asserted to exist
+    // by trying to access the file.
+    //
+    // (PORT NOTE: the existence assertions are hoisted to
+    // `tests/gtk_assets.rs`; `glib-compile-resources` also fails on a missing
+    // `<file>`.)
+    //
     // genIcons (gresource.zig:170-208): the icons at 1x and 2x, uncompressed,
     // aliased icons/{s}x{s}[@2]/apps/<app-id>.png.
     s.push_str(&format!("  <gresource prefix=\"{resource_path}/icons\">\n"));
@@ -401,9 +480,18 @@ fn gen_xml(resource_path: &str, base_app_id: &str, ui_files: &[(&Blueprint, Path
     }
     s.push_str("  </gresource>\n");
 
+    // Generate all the UI resources. This works by looking up all the
+    // blueprint files in `${ui_path}/{major}.{minor}/{name}.blp` and
+    // assuming these will be
+    //
     // genUi (gresource.zig:242-277): each compiled .ui, compressed +
     // xml-stripblanks, aliased {maj}.{min}/{name}.ui; the body is the absolute
-    // OUT_DIR path (outside --sourcedir).
+    // OUT_DIR path (outside --sourcedir). The reference's per-file manifest
+    // lookup ends in a not-found arm (`gresource.zig:264-268`) that cannot fire
+    // here, because each `ui` is already paired with its `Blueprint` (step 1):
+    //   // The for loop never broke which means it didn't find
+    //   // a matching blueprint for this input.
+    //   return error.BlueprintNotFound;
     s.push_str(&format!("  <gresource prefix=\"{resource_path}/ui\">\n"));
     for (bp, ui) in ui_files {
         s.push_str(&format!(

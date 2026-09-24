@@ -19,6 +19,20 @@
 //! Test contract: 8 Zig `test{}` blocks -> 8 `#[test]` fns (Benchmark + the 6
 //! benchmark decltests + `ref_all_decls`; ScreenClone has none).
 
+/// `std.debug.print(fmt, args)`: format to stderr under the stderr lock and
+/// drop any write error (`catch return`, Zig 0.16 `std/debug.zig:307-312`).
+/// The format string carries its own `\n`, as the reference's does.
+//
+// PORT NOTE (parity S62-F3/F4/F5, N180): the report sites used `println!`
+// (stdout). `eprintln!` would reach stderr but panics on a failed write, which
+// `std.debug.print` never does.
+macro_rules! debug_print {
+    ($($arg:tt)*) => {{
+        use ::std::io::Write as _;
+        let _ = ::std::io::stderr().lock().write_fmt(format_args!($($arg)*));
+    }};
+}
+
 // pub const cli = @import("cli.zig");
 pub mod cli;
 

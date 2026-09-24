@@ -28,9 +28,9 @@
 // const Allocator = std.mem.Allocator;
 use crate::formatter::PinMapMap;
 
-// PORT NOTE: the reference allocator maps to `allocator_api2::alloc::Global`
+// PORT NOTE: the reference allocator maps to `crate::alloc::Global`
 // (the crate's allocator seam).
-use allocator_api2::alloc::Global as Allocator;
+use crate::alloc::Allocator;
 
 // Retry budget for StringMap regex searches.
 //
@@ -342,9 +342,9 @@ pub mod url {
 #[cfg(all(test, feature = "oniguruma"))]
 mod tests {
     use super::*;
+    use crate::alloc::Global;
     use crate::point;
     use crate::screen::{Options, Screen, SelectLine, SelectionString};
-    use allocator_api2::alloc::Global;
 
     // ADDITIVE (no reference counterpart): codifies the `[:0]const u8` ->
     // `Vec<u8>` representation contract that the PORT NOTEs on

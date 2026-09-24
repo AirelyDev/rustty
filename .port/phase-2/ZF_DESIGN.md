@@ -35,7 +35,7 @@ are the fidelity pins.
 |---|---|---|
 | `zf.zig` | `src/zf.rs` | `RankOptions`, `RankTokenOptions`, `rank`, `rankToken`, `highlight`, `highlightToken`; the 2 named library tests. Public façade over `filter`. |
 | `filter.zig` | `src/filter.rs` | `indexOf`, `IndexIterator`, `hasSeparator`, `PathIterator`, `segmentLen`, `rankToken`, `FixedArrayList`, `highlightToken`, `isStartOfWord`, `ScanResult`, `scanToEnd`; the 4 named tests (`path iterator`, `segmentLen`, `rankToken`, `FixedArrayList`). The core scorer. |
-| `clib.zig` | `src/clib.rs` | The C ABI: `rustty_zf_{rank,rank_token,highlight,highlight_token}` `#[no_mangle] pub extern "C"`; the 2 named C tests. |
+| `clib.zig` | `src/clib.rs` | The C ABI: `rustty_zf_{rank,rank_token,highlight,highlight_token}` (0.10.3; `_needle` since S-10b, see the note under the export table) `#[no_mangle] pub extern "C"`; the 2 named C tests. |
 | (crate root) | `src/lib.rs` | Crate doc; `mod filter; mod clib; pub mod zf;` (or flatten — see §7); the anonymous `test{}` refAllDecls → a `ref_all_decls` compile-touch `#[test]`. |
 | `std.fs.path` (used by zf.zig + clib.zig) | inline in `src/filter.rs` | `SEP: u8 = b'/'` and `basename()` — a faithful inline of `std.fs.path.sep` / `std.fs.path.basenamePosix` (pure leaf ⇒ cannot use std shim). See §3. |
 
@@ -206,6 +206,11 @@ Zig `export fn {rank,rankToken,highlight,highlightToken}` → Rust
 | `rankToken` | `rustty_zf_rank_token` |
 | `highlight` | `rustty_zf_highlight` |
 | `highlightToken` | `rustty_zf_highlight_token` |
+
+**Superseded (parity tail S-10b, zf 0.10.3 -> 0.11.0):** upstream renamed `rankToken` /
+`highlightToken` to `rankNeedle` / `highlightNeedle`, and the exports are now
+`rustty_zf_rank_needle` / `rustty_zf_highlight_needle` (`NEW-FINDINGS.md` N240). The names
+in this document are the 0.10.3 design as written.
 
 - Signatures faithful: `str: *const c_char` (`[*:0]const u8`),
   `tokens: *const *const c_char`, `num_tokens: usize`, `case_sensitive: bool`,

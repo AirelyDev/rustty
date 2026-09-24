@@ -45,19 +45,17 @@ const TMP = process.env.TMPDIR || "/tmp";
 // Curated header enums that have NO `#[repr(C)]` Rust enum. Each entry must say
 // WHY. This list can only shrink; a stale row fails the gate.
 const UNMAPPED = {
-  // These two are `#[repr(transparent)]` newtypes with associated consts, not
-  // Rust enums, because the oracle declares them as OPEN enums (`enum(c_int) {
-  // …, _ }`) and an out-of-range C value must not be materialized as a Rust
-  // enum tag. Their named values therefore live as `pub const NAME: T = T(n);`
-  // and this arm's `pub enum` parser cannot see them.
-  // TODO(P3): extend the parser to `#[repr(transparent)]` + associated consts
-  // so these two stop being exceptions. Tracked here, not silently dropped.
+  // A `#[repr(transparent)]` newtype for an OPEN oracle enum (`enum(c_int) {
+  // …, _ }`) is checked through its `pub const NAME: T = T(n);` consts (see
+  // `rustEnums`). This one has no consts: its named values are the tags of
+  // `modes::State`, reached through `to_zig`.
+  // CORRECTION (batch T-A, parity S150-F2): this list also carried
+  // `RusttyClipboardWriteResult` and `RusttyClipboardReadResult`, with a
+  // "TODO(P3): extend the parser to `#[repr(transparent)]` + associated consts
+  // so these two stop being exceptions". The parser now reads the consts, and
+  // both are checked.
   RusttyModeReportState:
-    "open enum: crates/rustty-vt-c/src/modes.rs:26 `pub struct ReportState(pub c_int)`",
-  RusttyClipboardWriteResult:
-    "open enum: crates/rustty-vt/src/clipboard.rs `pub struct WriteStatus(pub i32)`",
-  RusttyClipboardReadResult:
-    "open enum: crates/rustty-vt/src/clipboard.rs `pub struct ReadStatus(pub i32)` (e03475c0c; same class as WriteStatus)",
+    "open enum with no associated consts: crates/rustty-vt-c/src/modes.rs `pub struct ReportState(pub c_int)`",
 };
 
 // Curated enums the header deliberately exposes as a PREFIX of the Rust enum.
@@ -124,6 +122,51 @@ function rustEnums() {
           j2--;
         }
         if (cn) aliases.push([cn, alias[2]]);
+        continue;
+      }
+      // `#[repr(transparent)] pub struct X(pub i32);` with a `C:` doc line and
+      // `pub const Name: X = X(n);` associated consts is the port's form of an
+      // OPEN oracle enum (`enum(c_int) { ..., _ }`). The consts, in file order,
+      // are its enumerators. Only an explicit `C:` claim WITH consts is
+      // recorded; a newtype without consts (e.g. `ReportState`) stays in
+      // UNMAPPED. (Batch T-A, parity S150-F2: net-new coverage — the consts of
+      // `clipboard::Location`, `WriteStatus` and `ReadStatus` were unchecked
+      // before, or checked only while `Location` was a closed enum.)
+      const tnew = lines[i].match(
+        /^\s*pub struct\s+([A-Za-z0-9_]+)\s*\(\s*pub\s+[A-Za-z0-9_:]+\s*\)\s*;/,
+      );
+      if (tnew) {
+        let j3 = i - 1;
+        let transparent = false;
+        let cn = null;
+        while (j3 >= 0 && (/^\s*(#\[|\/\/)/.test(lines[j3]) || lines[j3].trim() === "")) {
+          if (/#\[repr\(transparent\)\]/.test(lines[j3])) transparent = true;
+          const m3 = lines[j3].match(
+            /C:\s*(?:Ghostty[A-Za-z0-9_]+\s*->\s*)?(Rustty[A-Za-z0-9_]+)/,
+          );
+          if (m3 && !cn) cn = m3[1];
+          j3--;
+        }
+        if (!transparent || !cn) continue;
+        const name = tnew[1];
+        const constRe = new RegExp(
+          `^\\s*pub const\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*:\\s*${name}\\s*=\\s*` +
+            `${name}\\s*\\(\\s*(-?\\d+)\\s*\\)\\s*;`,
+        );
+        const variants = [];
+        for (const l of lines) {
+          const mc = l.match(constRe);
+          if (mc) variants.push({ name: mc[1], value: parseInt(mc[2], 10) });
+        }
+        if (variants.length === 0) continue;
+        byC.set(cn, {
+          explicit: cn,
+          repr: true,
+          rustName: name,
+          file: f.replace(ROOT + "/", ""),
+          variants,
+          dataCarrying: false,
+        });
         continue;
       }
       const head = lines[i].match(/^\s*pub enum\s+([A-Za-z0-9_]+)\s*\{/);

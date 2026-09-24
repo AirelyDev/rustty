@@ -4,22 +4,27 @@
 //! attached as the `tests` submodule of `harfbuzz.rs`.
 //!
 //! PORT NOTE (backend): these tests run wherever this shaper is the ACTIVE one —
-//! i.e. on the targets whose `Backend::default()` has `hasHarfbuzz() == true`:
-//! `fontconfig_freetype` (Linux/BSD) and `freetype_windows` (Windows), with
-//! FreeType faces carrying an `hb_font` (`face/freetype.rs`). They do NOT run on
-//! macOS: the Darwin default backend is `.coretext`, whose `hasHarfbuzz()` is
-//! false, so `shape.rs` gates this whole module off macOS — the same set the
-//! reference type-checks it on (see the `pub mod harfbuzz` PORT NOTE in
-//! `shape.rs` for the Zig-lazy-vs-Rust-eager reasoning). They previously ran on
-//! macOS against a CoreText face given an `hb_font` it does not have in the
-//! ported configuration; that was the departure, not the coverage. The
+//! i.e. in every build whose `options.backend` has `hasHarfbuzz() == true`: the
+//! defaults `fontconfig_freetype` (Linux/BSD) and `freetype_windows` (Windows),
+//! and `-Dfont-backend=freetype` anywhere, all with FreeType faces carrying an
+//! `hb_font` (`face/freetype.rs`); and on macOS `-Dfont-backend=
+//! coretext_freetype` (FreeType faces) and `coretext_harfbuzz` (CoreText faces
+//! whose `harfbuzz_shaper` arm builds the `hb_font`). They do NOT run in a
+//! default macOS build: `.coretext` has `hasHarfbuzz()` false, so `shape.rs`
+//! gates this whole module off — the same set the reference type-checks it on
+//! (see the `pub mod harfbuzz` PORT NOTE in `shape.rs` for the
+//! Zig-lazy-vs-Rust-eager reasoning). They once ran on macOS against a CoreText
+//! face given an `hb_font` it does not have in the default configuration; that
+//! was the departure, not the coverage. (S-14, N266: the macOS non-default
+//! builds are exercised by the G-FONTBACKEND lane.) The
 //! assertions are structural (cell counts and grid X positions driven by
 //! clusters, plus relative offset orderings) so they hold across every
 //! HarfBuzz-shaping backend, exactly as the reference's do.
 
 use super::*;
 
-use allocator_api2::alloc::Global;
+use allocator_api2::alloc::Global as ApiGlobal;
+use rustty_vt::alloc::Global;
 
 use crate::codepoint_resolver::{CodepointResolver, DescriptorCache, StyleStatus};
 use crate::collection::{AddOptions, Collection, LoadOptions, SizeAdjustment};
@@ -95,7 +100,7 @@ struct TestShaper {
     shaper: Shaper,
     // grid: *SharedGrid — a heap `SharedGrid` (the reference `alloc.create`);
     // `Box` gives the pointer-stable address `TextRun.grid` needs.
-    grid: Box<SharedGrid<Global>>,
+    grid: Box<SharedGrid<ApiGlobal>>,
     lib: Library,
 }
 
@@ -114,8 +119,8 @@ impl TestShaper {
     }
 
     /// Raw pointer to the heap grid (for `RunOptions.grid`).
-    fn grid_ptr(&mut self) -> *mut SharedGrid<Global> {
-        &mut *self.grid as *mut SharedGrid<Global>
+    fn grid_ptr(&mut self) -> *mut SharedGrid<ApiGlobal> {
+        &mut *self.grid as *mut SharedGrid<ApiGlobal>
     }
 }
 
@@ -175,7 +180,11 @@ fn test_shaper_with_font(font_req: TestFont) -> TestShaper {
     //     ...
     //     _ = try c.addDeferred(alloc, face, .{ ... });
     // }
-    #[cfg(not(target_os = "macos"))]
+    //
+    // PORT NOTE (S-14, N266): keyed on `hasCoretext()` (the
+    // `rustty_font_has_coretext` cfg), not the OS: this helper runs on macOS in
+    // the `coretext_freetype`/`coretext_harfbuzz` builds, both `hasCoretext()`.
+    #[cfg(not(rustty_font_has_coretext))]
     {
         c.add(
             Face::init(lib, rustty_font::embedded::EMOJI, face_opts()).unwrap(),
@@ -183,7 +192,7 @@ fn test_shaper_with_font(font_req: TestFont) -> TestShaper {
         )
         .unwrap();
     }
-    #[cfg(target_os = "macos")]
+    #[cfg(rustty_font_has_coretext)]
     {
         use crate::discovery::{Descriptor, Discover};
         let mut disco = Discover::init(lib);
@@ -210,7 +219,7 @@ fn test_shaper_with_font(font_req: TestFont) -> TestShaper {
 
     // const grid_ptr = try alloc.create(SharedGrid);
     // grid_ptr.* = try .init(alloc, .{ .collection = c });
-    let grid = Box::new(SharedGrid::init(Global, resolver_for(c)).unwrap());
+    let grid = Box::new(SharedGrid::init(ApiGlobal, resolver_for(c)).unwrap());
 
     // var shaper = try Shaper.init(alloc, .{ .features = &.{"dlig"} });
     // Some of our tests rely on dlig being enabled by default
@@ -222,16 +231,78 @@ fn test_shaper_with_font(font_req: TestFont) -> TestShaper {
     TestShaper { shaper, grid, lib }
 }
 
+/// R14 strict mode for the system-font skips (the `RUSTTY_REQUIRE_METAL` /
+/// `RUSTTY_REQUIRE_GL` pattern): the reference skips a shaping test when its
+/// font is not installed, which a Rust test can only express as returning `ok`.
+/// `RUSTTY_REQUIRE_SYSTEM_FONTS=1` turns that skip into a FAILURE. These HarfBuzz
+/// tests are compiled only off macOS (`shape.rs` selects the HarfBuzz shaper
+/// there), and no leg that runs them exports the variable: a stock Ubuntu runner
+/// has none of the fonts they ask for, so they skip visibly there. The one
+/// non-stock font, Noto Serif Tibetan, belongs to `shape_tibetan_characters`,
+/// which is `#[ignore]`d instead. (CORRECTED by task S-15: this said the macOS
+/// leg exports it for these tests; the macOS leg exports it for the CoreText
+/// twins in `coretext_tests.rs`.)
+fn system_fonts_required() -> bool {
+    system_fonts_required_from(std::env::var_os("RUSTTY_REQUIRE_SYSTEM_FONTS").as_deref())
+}
+
+fn system_fonts_required_from(value: Option<&std::ffi::OsStr>) -> bool {
+    value == Some(std::ffi::OsStr::new("1"))
+}
+
+/// A no-op when fonts are not required (the caller prints its skip line and
+/// returns), a panic when they are.
+#[track_caller]
+fn require_system_font_or_skip(font_req: &str, why: &str) {
+    require_system_font_or_skip_impl(system_fonts_required(), font_req, why);
+}
+
+#[track_caller]
+fn require_system_font_or_skip_impl(required: bool, font_req: &str, why: &str) {
+    assert!(
+        !required,
+        "system font required but unavailable (RUSTTY_REQUIRE_SYSTEM_FONTS=1): \
+         {font_req:?} {why}"
+    );
+    eprintln!("system font {font_req:?} {why}; skipping");
+}
+
+#[test]
+fn system_font_pivot_is_strict_only_when_env_is_exactly_one() {
+    use std::ffi::OsStr;
+    assert!(!system_fonts_required_from(None));
+    assert!(!system_fonts_required_from(Some(OsStr::new("0"))));
+    assert!(system_fonts_required_from(Some(OsStr::new("1"))));
+    require_system_font_or_skip_impl(false, "Some Font", "was not found");
+}
+
+#[test]
+#[should_panic(expected = "system font required but unavailable (RUSTTY_REQUIRE_SYSTEM_FONTS=1)")]
+fn system_font_pivot_panics_when_required() {
+    require_system_font_or_skip_impl(true, "Some Font", "was not found");
+}
+
 // fn testShaperWithDiscoveredFont(alloc: Allocator, font_req: [:0]const u8) !TestShaper {
 //
 // PORT NOTE: `error.SkipZigTest` (font not found / not matching / discovery
-// unavailable) is modeled as `Option::None` — the caller returns early (a Rust
-// test that returns is a pass, i.e. an effective skip).
+// unavailable) is modeled as `Option::None` — the caller returns early — after
+// the R14 pivot [`require_system_font_or_skip`], so the skip is printed, and is
+// a failure under `RUSTTY_REQUIRE_SYSTEM_FONTS=1`.
 #[cfg(not(target_arch = "wasm32"))]
 fn test_shaper_with_discovered_font(font_req: &str) -> Option<TestShaper> {
     use crate::discovery::{Descriptor, Discover};
 
-    // if (font.Discover == void) return error.SkipZigTest; — Discover exists here.
+    // if (font.Discover == void) return error.SkipZigTest;
+    //
+    // PORT NOTE (S-14, N266): compile-time scope, so R14 form 1 — every test
+    // that calls this helper carries `cfg_attr(rustty_font_backend =
+    // "freetype", ignore)`, the one native backend where `Discover` is `void`
+    // (`web_canvas` is the `not(wasm32)` gate on this helper). The assert keeps
+    // the two in step: reaching here on a `void` backend is a missing attribute.
+    assert!(
+        !crate::discovery::DISCOVER_IS_VOID,
+        "a discovered-font test ran on a `Discover == void` backend without its ignore attribute"
+    );
     // var lib = try Library.init(alloc); errdefer lib.deinit();
     let lib = Library::init().unwrap();
 
@@ -262,6 +333,7 @@ fn test_shaper_with_discovered_font(font_req: &str) -> Option<TestShaper> {
             None => {
                 disco_it.deinit();
                 disco.deinit();
+                require_system_font_or_skip(font_req, "was not found");
                 return None;
             }
         };
@@ -276,6 +348,7 @@ fn test_shaper_with_discovered_font(font_req: &str) -> Option<TestShaper> {
             face.deinit();
             disco_it.deinit();
             disco.deinit();
+            require_system_font_or_skip(font_req, "was not matched (discovery fell back)");
             return None;
         }
 
@@ -289,7 +362,7 @@ fn test_shaper_with_discovered_font(font_req: &str) -> Option<TestShaper> {
 
     // const grid_ptr = try alloc.create(SharedGrid);
     // grid_ptr.* = try .init(alloc, .{ .collection = c });
-    let grid = Box::new(SharedGrid::init(Global, resolver_for(c)).unwrap());
+    let grid = Box::new(SharedGrid::init(ApiGlobal, resolver_for(c)).unwrap());
 
     // var shaper = try Shaper.init(alloc, .{});
     let shaper = Shaper::init(shape::Options::default()).unwrap();
@@ -349,7 +422,7 @@ fn run_iterator() {
             })
         };
         let mut count: usize = 0;
-        while it.next(Global).unwrap().is_some() {
+        while it.next(ApiGlobal).unwrap().is_some() {
             count += 1;
         }
         assert_eq!(1usize, count);
@@ -382,7 +455,7 @@ fn run_iterator() {
             })
         };
         let mut count: usize = 0;
-        while it.next(Global).unwrap().is_some() {
+        while it.next(ApiGlobal).unwrap().is_some() {
             count += 1;
         }
         assert_eq!(1usize, count);
@@ -416,7 +489,7 @@ fn run_iterator() {
             })
         };
         let mut count: usize = 0;
-        while it.next(Global).unwrap().is_some() {
+        while it.next(ApiGlobal).unwrap().is_some() {
             count += 1;
 
             // All runs should be exactly length 1
@@ -500,13 +573,13 @@ fn run_iterator_empty_cells_with_background_set() {
         };
         {
             // const run = (try it.next(alloc)).?;
-            let run = it.next(Global).unwrap().unwrap();
+            let run = it.next(ApiGlobal).unwrap().unwrap();
             assert_eq!(3u32, unsafe { (*shaper).hb_buf.get_length() });
             let cells = unsafe { (*shaper).shape(run) }.unwrap();
             assert_eq!(3usize, cells.len());
         }
         // try testing.expect(try it.next(alloc) == null);
-        assert!(it.next(Global).unwrap().is_none());
+        assert!(it.next(ApiGlobal).unwrap().is_none());
 
         state.deinit(Global);
         t.deinit(Global);
@@ -550,7 +623,7 @@ fn shape() {
         })
     };
     let mut count: usize = 0;
-    while let Some(run) = it.next(Global).unwrap() {
+    while let Some(run) = it.next(ApiGlobal).unwrap() {
         count += 1;
         assert_eq!(3u32, unsafe { (*shaper).hb_buf.get_length() });
         let _ = unsafe { (*shaper).shape(run) }.unwrap();
@@ -590,7 +663,7 @@ fn shape_inconsolata_ligs() {
             })
         };
         let mut count: usize = 0;
-        while let Some(run) = it.next(Global).unwrap() {
+        while let Some(run) = it.next(ApiGlobal).unwrap() {
             count += 1;
 
             assert_eq!(2usize, run.cells as usize);
@@ -627,7 +700,7 @@ fn shape_inconsolata_ligs() {
             })
         };
         let mut count: usize = 0;
-        while let Some(run) = it.next(Global).unwrap() {
+        while let Some(run) = it.next(ApiGlobal).unwrap() {
             count += 1;
 
             assert_eq!(3usize, run.cells as usize);
@@ -672,7 +745,7 @@ fn shape_monaspace_ligs() {
             })
         };
         let mut count: usize = 0;
-        while let Some(run) = it.next(Global).unwrap() {
+        while let Some(run) = it.next(ApiGlobal).unwrap() {
             count += 1;
 
             assert_eq!(3usize, run.cells as usize);
@@ -721,7 +794,7 @@ fn shape_arabic_forced_ltr() {
         })
     };
     let mut count: usize = 0;
-    while let Some(run) = it.next(Global).unwrap() {
+    while let Some(run) = it.next(ApiGlobal).unwrap() {
         count += 1;
         assert_eq!(25usize, run.cells as usize);
 
@@ -771,7 +844,7 @@ fn shape_emoji_width() {
             })
         };
         let mut count: usize = 0;
-        while let Some(run) = it.next(Global).unwrap() {
+        while let Some(run) = it.next(ApiGlobal).unwrap() {
             count += 1;
 
             assert_eq!(2usize, run.cells as usize);
@@ -840,7 +913,7 @@ fn shape_emoji_width_long() {
         })
     };
     let mut count: usize = 0;
-    while let Some(run) = it.next(Global).unwrap() {
+    while let Some(run) = it.next(ApiGlobal).unwrap() {
         count += 1;
         assert_eq!(4u32, unsafe { (*shaper).hb_buf.get_length() });
 
@@ -871,7 +944,7 @@ fn shaper_selects_font_for_entire_grapheme() {
     // const primary = (try testdata.grid.getIndex(alloc, '#', .regular, null)).?;
     let primary = testdata
         .grid
-        .get_index(Global, '#' as u32, Style::Regular, None)
+        .get_index(ApiGlobal, '#' as u32, Style::Regular, None)
         .unwrap()
         .unwrap();
     assert!(testdata.grid.has_codepoint(primary, '#' as u32, None));
@@ -880,7 +953,7 @@ fn shaper_selects_font_for_entire_grapheme() {
     // const additional = (try testdata.grid.getIndex(alloc, 0x20E3, .regular, null)).?;
     let additional = testdata
         .grid
-        .get_index(Global, 0x20E3, Style::Regular, None)
+        .get_index(ApiGlobal, 0x20E3, Style::Regular, None)
         .unwrap()
         .unwrap();
     assert!(testdata.grid.has_codepoint(additional, '#' as u32, None));
@@ -900,7 +973,7 @@ fn shaper_selects_font_for_entire_grapheme() {
         })
     };
     // const run = (try it.next(alloc)).?;
-    let run = it.next(Global).unwrap().unwrap();
+    let run = it.next(ApiGlobal).unwrap().unwrap();
     // try testing.expectEqual(additional, run.font_index);
     assert_eq!(additional, run.font_index);
 
@@ -942,7 +1015,7 @@ fn shape_variation_selector_vs15() {
         })
     };
     let mut count: usize = 0;
-    while let Some(run) = it.next(Global).unwrap() {
+    while let Some(run) = it.next(ApiGlobal).unwrap() {
         count += 1;
         assert_eq!(1u32, unsafe { (*shaper).hb_buf.get_length() });
 
@@ -989,7 +1062,7 @@ fn shape_variation_selector_vs16() {
         })
     };
     let mut count: usize = 0;
-    while let Some(run) = it.next(Global).unwrap() {
+    while let Some(run) = it.next(ApiGlobal).unwrap() {
         count += 1;
         assert_eq!(1u32, unsafe { (*shaper).hb_buf.get_length() });
 
@@ -1034,7 +1107,7 @@ fn shape_with_empty_cells_in_between() {
         })
     };
     let mut count: usize = 0;
-    while let Some(run) = it.next(Global).unwrap() {
+    while let Some(run) = it.next(ApiGlobal).unwrap() {
         count += 1;
 
         let cells = unsafe { (*shaper).shape(run) }.unwrap();
@@ -1082,7 +1155,7 @@ fn shape_combining_characters() {
         })
     };
     let mut count: usize = 0;
-    while let Some(run) = it.next(Global).unwrap() {
+    while let Some(run) = it.next(ApiGlobal).unwrap() {
         count += 1;
 
         let cells = unsafe { (*shaper).shape(run) }.unwrap();
@@ -1105,6 +1178,10 @@ fn shape_combining_characters() {
 // test "shape Devanagari string" {
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
+#[cfg_attr(
+    rustty_font_backend = "freetype",
+    ignore = "SkipZigTest: `font.Discover == void` on the .freetype backend (R14)"
+)]
 fn shape_devanagari_string() {
     // We need a font that supports devanagari for this to work, if we can't
     // find Arial Unicode MS, which is a system font on macOS, we just skip
@@ -1142,7 +1219,7 @@ fn shape_devanagari_string() {
     };
 
     // const run = try it.next(alloc);
-    let run = it.next(Global).unwrap();
+    let run = it.next(ApiGlobal).unwrap();
     assert!(run.is_some());
     let cells = unsafe { (*shaper).shape(run.unwrap()) }.unwrap();
 
@@ -1156,7 +1233,7 @@ fn shape_devanagari_string() {
     assert_eq!(5u16, cells[6].x);
     assert_eq!(6u16, cells[7].x);
 
-    assert!(it.next(Global).unwrap().is_none());
+    assert!(it.next(ApiGlobal).unwrap().is_none());
 
     state.deinit(Global);
     t.deinit(Global);
@@ -1226,16 +1303,20 @@ fn shape_tai_tham_vowels_position_differs_from_advance() {
 }
 
 // test "shape Tibetan characters" {
+//
+// R14: Noto Serif Tibetan is not a stock font on any CI runner, so this test
+// would skip everywhere by default; it is `#[ignore]`d instead of returning
+// `ok`, and FAILS when asked for on a host without the font.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
+#[ignore = "needs Noto Serif Tibetan, which no stock macOS or Linux install has; \
+            install it and run with --ignored (R14)"]
 fn shape_tibetan_characters() {
     // We need a font that has multiple glyphs for this codepoint to reproduce
     // the old broken behavior, and Noto Serif Tibetan is one of them. It's not
     // a default Mac font, and if we can't find it we just skip the test.
-    let mut testdata = match test_shaper_with_discovered_font("Noto Serif Tibetan") {
-        Some(t) => t,
-        None => return,
-    };
+    let mut testdata = test_shaper_with_discovered_font("Noto Serif Tibetan")
+        .expect("shape_tibetan_characters needs the Noto Serif Tibetan font installed");
 
     let mut buf: Vec<u8> = Vec::new();
     push_utf8(&mut buf, 0x0f00); // ༀ
@@ -1267,7 +1348,7 @@ fn shape_tibetan_characters() {
         })
     };
     let mut count: usize = 0;
-    while let Some(run) = it.next(Global).unwrap() {
+    while let Some(run) = it.next(ApiGlobal).unwrap() {
         count += 1;
 
         let cells = unsafe { (*shaper).shape(run) }.unwrap();
@@ -1383,7 +1464,11 @@ fn shape_javanese_ligatures() {
 // test "shape Chakma vowel sign with ligature (vowel sign renders first)" {
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
-fn shape_chakma_vowel_sign_with_ligature() {
+#[cfg_attr(
+    rustty_font_backend = "freetype",
+    ignore = "SkipZigTest: `font.Discover == void` on the .freetype backend (R14)"
+)]
+fn shape_chakma_vowel_sign_with_ligature_vowel_sign_renders_first() {
     // We need a font that supports Chakma for this to work, if we can't find
     // Noto Sans Chakma Regular, which is a system font on macOS, we just skip
     // the test.
@@ -1429,7 +1514,7 @@ fn shape_chakma_vowel_sign_with_ligature() {
         })
     };
     let mut count: usize = 0;
-    while let Some(run) = it.next(Global).unwrap() {
+    while let Some(run) = it.next(ApiGlobal).unwrap() {
         count += 1;
 
         let cells = unsafe { (*shaper).shape(run) }.unwrap();
@@ -1456,6 +1541,10 @@ fn shape_chakma_vowel_sign_with_ligature() {
 // test "shape Bengali ligatures with out of order vowels" {
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
+#[cfg_attr(
+    rustty_font_backend = "freetype",
+    ignore = "SkipZigTest: `font.Discover == void` on the .freetype backend (R14)"
+)]
 fn shape_bengali_ligatures_with_out_of_order_vowels() {
     // Whereas this test in CoreText had everything shaping into one giant
     // ligature, HarfBuzz splits it into a few clusters. It still looks okay
@@ -1510,7 +1599,7 @@ fn shape_bengali_ligatures_with_out_of_order_vowels() {
         })
     };
     let mut count: usize = 0;
-    while let Some(run) = it.next(Global).unwrap() {
+    while let Some(run) = it.next(ApiGlobal).unwrap() {
         count += 1;
 
         let cells = unsafe { (*shaper).shape(run) }.unwrap();
@@ -1570,7 +1659,7 @@ fn shape_box_glyphs() {
         })
     };
     let mut count: usize = 0;
-    while let Some(run) = it.next(Global).unwrap() {
+    while let Some(run) = it.next(ApiGlobal).unwrap() {
         count += 1;
         assert_eq!(2u32, unsafe { (*shaper).hb_buf.get_length() });
         let cells = unsafe { (*shaper).shape(run) }.unwrap();
@@ -1617,7 +1706,7 @@ fn shape_selection_boundary() {
             })
         };
         let mut count: usize = 0;
-        while let Some(run) = it.next(Global).unwrap() {
+        while let Some(run) = it.next(ApiGlobal).unwrap() {
             count += 1;
             let _ = unsafe { (*shaper).shape(run) }.unwrap();
         }
@@ -1637,7 +1726,7 @@ fn shape_selection_boundary() {
             })
         };
         let mut count: usize = 0;
-        while let Some(run) = it.next(Global).unwrap() {
+        while let Some(run) = it.next(ApiGlobal).unwrap() {
             count += 1;
             let _ = unsafe { (*shaper).shape(run) }.unwrap();
         }
@@ -1657,7 +1746,7 @@ fn shape_selection_boundary() {
             })
         };
         let mut count: usize = 0;
-        while let Some(run) = it.next(Global).unwrap() {
+        while let Some(run) = it.next(ApiGlobal).unwrap() {
             count += 1;
             let _ = unsafe { (*shaper).shape(run) }.unwrap();
         }
@@ -1677,7 +1766,7 @@ fn shape_selection_boundary() {
             })
         };
         let mut count: usize = 0;
-        while let Some(run) = it.next(Global).unwrap() {
+        while let Some(run) = it.next(ApiGlobal).unwrap() {
             count += 1;
             let _ = unsafe { (*shaper).shape(run) }.unwrap();
         }
@@ -1697,7 +1786,7 @@ fn shape_selection_boundary() {
             })
         };
         let mut count: usize = 0;
-        while let Some(run) = it.next(Global).unwrap() {
+        while let Some(run) = it.next(ApiGlobal).unwrap() {
             count += 1;
             let _ = unsafe { (*shaper).shape(run) }.unwrap();
         }
@@ -1739,7 +1828,7 @@ fn shape_cursor_boundary() {
             })
         };
         let mut count: usize = 0;
-        while let Some(run) = it.next(Global).unwrap() {
+        while let Some(run) = it.next(ApiGlobal).unwrap() {
             count += 1;
             let _ = unsafe { (*shaper).shape(run) }.unwrap();
         }
@@ -1760,7 +1849,7 @@ fn shape_cursor_boundary() {
                 })
             };
             let mut count: usize = 0;
-            while let Some(run) = it.next(Global).unwrap() {
+            while let Some(run) = it.next(ApiGlobal).unwrap() {
                 count += 1;
                 let _ = unsafe { (*shaper).shape(run) }.unwrap();
             }
@@ -1779,7 +1868,7 @@ fn shape_cursor_boundary() {
                 })
             };
             let mut count: usize = 0;
-            while let Some(run) = it.next(Global).unwrap() {
+            while let Some(run) = it.next(ApiGlobal).unwrap() {
                 count += 1;
                 let _ = unsafe { (*shaper).shape(run) }.unwrap();
             }
@@ -1801,7 +1890,7 @@ fn shape_cursor_boundary() {
                 })
             };
             let mut count: usize = 0;
-            while let Some(run) = it.next(Global).unwrap() {
+            while let Some(run) = it.next(ApiGlobal).unwrap() {
                 count += 1;
                 let _ = unsafe { (*shaper).shape(run) }.unwrap();
             }
@@ -1820,7 +1909,7 @@ fn shape_cursor_boundary() {
                 })
             };
             let mut count: usize = 0;
-            while let Some(run) = it.next(Global).unwrap() {
+            while let Some(run) = it.next(ApiGlobal).unwrap() {
                 count += 1;
                 let _ = unsafe { (*shaper).shape(run) }.unwrap();
             }
@@ -1841,7 +1930,7 @@ fn shape_cursor_boundary() {
                 })
             };
             let mut count: usize = 0;
-            while let Some(run) = it.next(Global).unwrap() {
+            while let Some(run) = it.next(ApiGlobal).unwrap() {
                 count += 1;
                 let _ = unsafe { (*shaper).shape(run) }.unwrap();
             }
@@ -1860,7 +1949,7 @@ fn shape_cursor_boundary() {
                 })
             };
             let mut count: usize = 0;
-            while let Some(run) = it.next(Global).unwrap() {
+            while let Some(run) = it.next(ApiGlobal).unwrap() {
                 count += 1;
                 let _ = unsafe { (*shaper).shape(run) }.unwrap();
             }
@@ -1903,7 +1992,7 @@ fn shape_cursor_boundary_and_colored_emoji() {
             })
         };
         let mut count: usize = 0;
-        while let Some(run) = it.next(Global).unwrap() {
+        while let Some(run) = it.next(ApiGlobal).unwrap() {
             count += 1;
             let _ = unsafe { (*shaper).shape(run) }.unwrap();
         }
@@ -1923,7 +2012,7 @@ fn shape_cursor_boundary_and_colored_emoji() {
             })
         };
         let mut count: usize = 0;
-        while let Some(run) = it.next(Global).unwrap() {
+        while let Some(run) = it.next(ApiGlobal).unwrap() {
             count += 1;
             let _ = unsafe { (*shaper).shape(run) }.unwrap();
         }
@@ -1941,7 +2030,7 @@ fn shape_cursor_boundary_and_colored_emoji() {
             })
         };
         let mut count: usize = 0;
-        while let Some(run) = it.next(Global).unwrap() {
+        while let Some(run) = it.next(ApiGlobal).unwrap() {
             count += 1;
             let _ = unsafe { (*shaper).shape(run) }.unwrap();
         }
@@ -1959,7 +2048,7 @@ fn shape_cursor_boundary_and_colored_emoji() {
             })
         };
         let mut count: usize = 0;
-        while let Some(run) = it.next(Global).unwrap() {
+        while let Some(run) = it.next(ApiGlobal).unwrap() {
             count += 1;
             let _ = unsafe { (*shaper).shape(run) }.unwrap();
         }
@@ -1977,7 +2066,7 @@ fn shape_cursor_boundary_and_colored_emoji() {
             })
         };
         let mut count: usize = 0;
-        while let Some(run) = it.next(Global).unwrap() {
+        while let Some(run) = it.next(ApiGlobal).unwrap() {
             count += 1;
             let _ = unsafe { (*shaper).shape(run) }.unwrap();
         }
@@ -2018,7 +2107,7 @@ fn shape_cell_attribute_change() {
             })
         };
         let mut count: usize = 0;
-        while let Some(run) = it.next(Global).unwrap() {
+        while let Some(run) = it.next(ApiGlobal).unwrap() {
             count += 1;
             let _ = unsafe { (*shaper).shape(run) }.unwrap();
         }
@@ -2054,7 +2143,7 @@ fn shape_cell_attribute_change() {
             })
         };
         let mut count: usize = 0;
-        while let Some(run) = it.next(Global).unwrap() {
+        while let Some(run) = it.next(ApiGlobal).unwrap() {
             count += 1;
             let _ = unsafe { (*shaper).shape(run) }.unwrap();
         }
@@ -2093,7 +2182,7 @@ fn shape_cell_attribute_change() {
             })
         };
         let mut count: usize = 0;
-        while let Some(run) = it.next(Global).unwrap() {
+        while let Some(run) = it.next(ApiGlobal).unwrap() {
             count += 1;
             let _ = unsafe { (*shaper).shape(run) }.unwrap();
         }
@@ -2132,7 +2221,7 @@ fn shape_cell_attribute_change() {
             })
         };
         let mut count: usize = 0;
-        while let Some(run) = it.next(Global).unwrap() {
+        while let Some(run) = it.next(ApiGlobal).unwrap() {
             count += 1;
             let _ = unsafe { (*shaper).shape(run) }.unwrap();
         }
@@ -2169,7 +2258,7 @@ fn shape_cell_attribute_change() {
             })
         };
         let mut count: usize = 0;
-        while let Some(run) = it.next(Global).unwrap() {
+        while let Some(run) = it.next(ApiGlobal).unwrap() {
             count += 1;
             let _ = unsafe { (*shaper).shape(run) }.unwrap();
         }

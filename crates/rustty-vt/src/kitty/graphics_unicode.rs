@@ -782,7 +782,7 @@ mod tests {
 
     #[test]
     fn unicode_placement_none() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
         // defer t.deinit(alloc);
         t.modes.set(crate::modes::Mode::GraphemeCluster, true);
@@ -800,7 +800,7 @@ mod tests {
 
     #[test]
     fn unicode_placement_single_row_col() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
         t.modes.set(crate::modes::Mode::GraphemeCluster, true);
 
@@ -827,7 +827,7 @@ mod tests {
 
     #[test]
     fn unicode_placement_continuation_break() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(10, 5)).unwrap();
         t.modes.set(crate::modes::Mode::GraphemeCluster, true);
 
@@ -865,7 +865,7 @@ mod tests {
 
     #[test]
     fn unicode_placement_continuation_with_diacritics_set() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(10, 5)).unwrap();
         t.modes.set(crate::modes::Mode::GraphemeCluster, true);
 
@@ -897,7 +897,7 @@ mod tests {
 
     #[test]
     fn unicode_placement_continuation_with_no_col() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(10, 5)).unwrap();
         t.modes.set(crate::modes::Mode::GraphemeCluster, true);
 
@@ -927,7 +927,7 @@ mod tests {
 
     #[test]
     fn unicode_placement_continuation_with_no_diacritics() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(10, 5)).unwrap();
         t.modes.set(crate::modes::Mode::GraphemeCluster, true);
 
@@ -956,7 +956,7 @@ mod tests {
 
     #[test]
     fn unicode_placement_run_ending() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(10, 5)).unwrap();
         t.modes.set(crate::modes::Mode::GraphemeCluster, true);
 
@@ -987,7 +987,7 @@ mod tests {
 
     #[test]
     fn unicode_placement_run_starting_in_the_middle() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(10, 5)).unwrap();
         t.modes.set(crate::modes::Mode::GraphemeCluster, true);
 
@@ -1018,7 +1018,7 @@ mod tests {
 
     #[test]
     fn unicode_placement_specifying_image_id_as_palette() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
         t.modes.set(crate::modes::Mode::GraphemeCluster, true);
 
@@ -1046,7 +1046,7 @@ mod tests {
 
     #[test]
     fn unicode_placement_specifying_image_id_with_high_bits() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
         t.modes.set(crate::modes::Mode::GraphemeCluster, true);
 
@@ -1074,7 +1074,7 @@ mod tests {
 
     #[test]
     fn unicode_placement_specifying_placement_id_as_palette() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
         t.modes.set(crate::modes::Mode::GraphemeCluster, true);
 
@@ -1108,7 +1108,7 @@ mod tests {
     // printf "\033_Ga=p,i=1,U=1,q=2,c=4,r=2\033\\"
     #[test]
     fn unicode_render_placement_dog_4x2() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let cell_width = 36;
         let cell_height = 80;
 
@@ -1198,7 +1198,7 @@ mod tests {
     // printf "\033_Ga=p,i=1,U=1,q=2,c=2,r=2\033\\"
     #[test]
     fn unicode_render_placement_dog_2x2_with_blank_cells() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let cell_width = 36;
         let cell_height = 80;
 
@@ -1285,7 +1285,7 @@ mod tests {
     // printf "\033_Ga=p,i=1,U=1,q=2,c=1,r=1\033\\"
     #[test]
     fn unicode_render_placement_dog_1x1() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let cell_width = 36;
         let cell_height = 80;
 

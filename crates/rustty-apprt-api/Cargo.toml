@@ -69,6 +69,12 @@ rustty-global = { workspace = true }
 # acyclic — confirmed by check_acyclic.sh. rustty-config already deps renderer,
 # so apprt-api -> config -> renderer AND apprt-api -> renderer are both downward.
 rustty-renderer = { workspace = true }
+# crash.sentry.ThreadStateSurface: `AppMailbox::crash_surface` hands termio the
+# surface its io threads tag their crash metadata with (`Mailbox.surface`,
+# LEDGER S211-F2 / S212-F2). rustty-crash deps only os/build-config/version/
+# identity/global, all below apprt-api, so the edge is downward. Its `sentry`
+# feature (the C SDK) stays off unless an apprt turns it on.
+rustty-crash = { workspace = true }
 # ipc Action.cval / NewWindow.cval take a std.mem.Allocator; modeled with the
 # allocator-api2 Allocator trait (matching the rest of the workspace).
 allocator-api2 = { workspace = true }

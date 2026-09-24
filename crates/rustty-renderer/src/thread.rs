@@ -32,12 +32,17 @@ use rustty_datastruct::BlockingQueue;
 use crate::config::RendererConfig;
 use crate::message::Message;
 
+/// Whether calls to `drawFrame` must be done from the app thread.
+///
 /// The type used for sending messages to the IO thread. For now this is
 /// hardcoded with a capacity. We can make this a comptime parameter in
 /// the future if we want it configurable.
 //
 // PORT NOTE: reference `pub const Mailbox = BlockingQueue(rendererpkg.Message, 64);`
 // (rustty-datastruct's already-ported `BlockingQueue`).
+// The first doc line above is carried verbatim: in the reference it heads
+// `Mailbox`'s doc block although it describes no decl of this file (the
+// app-thread flag is `apprt.zig`'s `must_draw_from_app_thread`).
 pub type Mailbox = BlockingQueue<Message, 64>;
 
 /// PORTS `configpkg.CustomShaderAnimation` (Config.zig:5244,
