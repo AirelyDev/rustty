@@ -291,6 +291,22 @@ this workstream's.
    golden. If the offset algorithm regresses, those fail first. The exact
    divergent pixel is recorded above so a future reader can re-measure it in one
    command rather than rediscovering it.
+6. **RESOLVED (task T-F, 2026-09-23, LEDGER S97-F1). CORRECTION of point 3's
+   conclusion ("The residual is therefore in rustty-z2d's stroke rasterizer").**
+   The cause was `hypot` after all, in `Slope::normalize`, not `Slope::init`:
+   z2d calls Zig's `std.math.hypot` and the port called libm's `f64::hypot`,
+   which differ in the last bit for the offset hypotenuse's slope
+   (`(30.678190110391604, 57.9476924307397)`: Zig `0x4050645096e433c0`, macOS
+   libm `...c1`, both measured). That bit moved the outer miter points of the
+   stroke (`(8, 16.000000000000004)` and `(44, 84)` in Zig against `(8, 16)` and
+   `(44.00000000000001, 84.00000000000001)`), found by dumping both plotters'
+   contours, and flipped one sample of pixel `(133, 381)`. Point 3's substitute,
+   `sqrt(dx²+dy²)`, is a third algorithm, so it could not show this.
+   `crates/rustty-z2d/src/internal/zig_math.rs` ports `std.math.hypot`, used at
+   all three of z2d's `hypot` sites; the render now matches the oracle at that
+   pixel, and the golden was regenerated from the oracle's own file through
+   `RUSTTY_REGEN_FONT_KAT_PNGS` (which rewrites only when the decoded pixels
+   are identical), so all 36 goldens hold the oracle's pixels.
 
 ---
 

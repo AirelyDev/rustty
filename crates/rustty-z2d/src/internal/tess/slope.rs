@@ -240,7 +240,8 @@ impl Slope {
                 result_dx = -1.0;
             }
         } else {
-            mag = self.dx.hypot(self.dy);
+            // mag = math.hypot(self.dx, self.dy); (Zig's, not libm's: S97-F1)
+            mag = crate::internal::zig_math::hypot(self.dx, self.dy);
             result_dx = self.dx / mag;
             result_dy = self.dy / mag;
         }
