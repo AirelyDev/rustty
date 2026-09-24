@@ -457,11 +457,9 @@ impl Register {
     /// Decode this request's base64 glyf payload into an owned outline.
     // PORT NOTE: reference `decodeGlyfPayload(self, alloc, max_allocation_bytes)
     // DecodeError!Glyf.Outline`.
-    // The reference uses a `stackFallback(max_payload_size, alloc)` allocator for
-    // the decode scratch buffer (stack-first, heap-fallback); since `size` is
-    // capped at `MAX_PAYLOAD_SIZE`, an owned `Vec<u8>` scratch is the faithful
-    // equivalent (the choice of stack vs heap is an allocation-strategy detail,
-    // not observable behavior). The std-base64 decoder is `std.base64.standard.
+    // The decode scratch is on `stackFallback(max_payload_size, alloc)`, as in
+    // the reference (parity tail S7-4): `size` is capped at `MAX_PAYLOAD_SIZE`,
+    // so it always fits the stack and never reaches `alloc`. The std-base64 decoder is `std.base64.standard.
     // Decoder` (alphabet + `'='` pad). `Glyf.Entry` borrows `data` only for the
     // `decode` call; `Glyf.Entry::decode` returns an owned `Outline` (Rust:
     // owned `Vec`s), so the scratch buffer is freed after `decode` returns.
@@ -493,7 +491,15 @@ impl Register {
         // const data_alloc = data_stack.get();
         // const data = try data_alloc.alloc(u8, size);
         // defer data_alloc.free(data);
-        let mut data = vec![0u8; size];
+        let data_stack = crate::alloc::StackFallback::<MAX_PAYLOAD_SIZE>::new(alloc);
+        let mut data: allocator_api2::vec::Vec<u8, &crate::alloc::StackFallback<MAX_PAYLOAD_SIZE>> =
+            allocator_api2::vec::Vec::new_in(&data_stack);
+        data.try_reserve_exact(size)
+            .map_err(|_| DecodeError::OutOfMemory)?;
+        {
+            use crate::alloc::CopyVecExt;
+            data.resize_copy(size, 0);
+        }
 
         // Base64 decode
         // Decoder.decode(data, payload_bytes) catch return error.MalformedPayload;
