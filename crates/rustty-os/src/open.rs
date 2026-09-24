@@ -272,12 +272,8 @@ fn log_stderr_lines(stderr: impl std::io::Read, mut log: impl FnMut(&[u8])) {
     // holds the unfinished line so that a line which straddles two reads is
     // still split at 256 bytes from its own start.
     let mut pending: Vec<u8> = Vec::with_capacity(BUFFER_LEN);
-    loop {
-        let available = match reader.fill_buf() {
-            Ok(v) => v,
-            // error.ReadFailed => break,
-            Err(_) => break,
-        };
+    // (`Err` is error.ReadFailed => break.)
+    while let Ok(available) = reader.fill_buf() {
         if available.is_empty() {
             // error.EndOfStream: `takeDelimiterExclusive` returns what is left
             // when it is not empty, and EndOfStream otherwise.

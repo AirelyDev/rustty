@@ -363,6 +363,26 @@ fn notify_address(
     Ok((socket_address, addr_len as libc::socklen_t))
 }
 
+// PORT NOTE: `std.mem.trimRight(u8, slice, "\n")`.
+#[cfg(any(target_os = "linux", test))]
+fn trim_right<'a>(slice: &'a [u8], strip: &[u8]) -> &'a [u8] {
+    let mut end = slice.len();
+    while end > 0 && strip.contains(&slice[end - 1]) {
+        end -= 1;
+    }
+    &slice[0..end]
+}
+
+#[allow(dead_code)]
+fn log_err(msg: &str) {
+    eprintln!("[err] [{LOG_SCOPE}] {msg}");
+}
+
+#[allow(dead_code)]
+fn log_warn(msg: &str) {
+    eprintln!("[warn] [{LOG_SCOPE}] {msg}");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -455,24 +475,4 @@ mod tests {
             Some(NotifyAddressError::NotPathOrAbstract)
         );
     }
-}
-
-// PORT NOTE: `std.mem.trimRight(u8, slice, "\n")`.
-#[cfg(any(target_os = "linux", test))]
-fn trim_right<'a>(slice: &'a [u8], strip: &[u8]) -> &'a [u8] {
-    let mut end = slice.len();
-    while end > 0 && strip.contains(&slice[end - 1]) {
-        end -= 1;
-    }
-    &slice[0..end]
-}
-
-#[allow(dead_code)]
-fn log_err(msg: &str) {
-    eprintln!("[err] [{LOG_SCOPE}] {msg}");
-}
-
-#[allow(dead_code)]
-fn log_warn(msg: &str) {
-    eprintln!("[warn] [{LOG_SCOPE}] {msg}");
 }
