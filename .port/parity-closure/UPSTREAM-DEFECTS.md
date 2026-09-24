@@ -1928,6 +1928,21 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - proposed fix:    accumulate with the surface's allocator (`self.alloc`) instead of the fixed buffer, or send the reports in chunks as each one is formatted; at the least, do not let a failed report stop the remaining requests.
 - upstream status: not reported
 
+### UD206 — `termio.Backend.childExitedAbnormally` delegates to a method `termio.Exec` does not have
+- kind:            latent (uncompilable but unused code)
+- upstream project: ghostty
+- severity:        low
+- reference:       `src/termio/backend.zig:88-100` (`.exec => |*exec| try exec.childExitedAbnormally(gpa, t, exit_code, runtime_ms)`), at 20abdb50a. `src/termio/Exec.zig` declares no `childExitedAbnormally`; the only other declaration is `Surface.zig`'s own private one (`:1277`, called at `:1330`), which does not go through the backend.
+- defect:          dead code that would not compile: nothing calls `Backend.childExitedAbnormally`, so Zig's lazy analysis never checks it; the first caller would fail to build. By reading (a grep of `src/` for the name).
+- ReleaseSafe:     no effect (never compiled).
+- ReleaseFast:     same.
+- reachability:    none.
+- port handling:   the port has no `Backend::childExitedAbnormally`, so a Rust caller gets the same compile error (it was a public method whose body was `unimplemented!()`, which compiled and would have panicked). The reference is preserved as a comment with a PORT NOTE at `crates/rustty-termio/src/backend.rs`.
+- parity row(s):   LEDGER S212-F3.
+- test:            the `compile_fail,E0599` example on `rustty_termio::Backend` (a doctest). Negative control (macOS, 2026-09-23): the method restored, the doctest fails with "Test compiled successfully, but it's marked `compile_fail`".
+- proposed fix:    delete `Backend.childExitedAbnormally` (Surface handles abnormal exits itself), or add the Exec method it expects.
+- upstream status: not reported
+
 ## Candidates pending verification
 
 Assembled from this plan's progress notes on 2026-09-11. **Not verified** — do not cite as fact.
