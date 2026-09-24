@@ -2003,6 +2003,96 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - proposed fix:    take the start from the iterator before advancing (`const start = grapheme_iter.i;` before `nextCodePoint`), or use `grapheme_iter.i - (bytes consumed)`; the same in `unicode.zig`.
 - upstream status: not reported
 
+### UD261 — libvaxis's render treats "the secondary cursors are unchanged" as a change, and a real change as none
+- kind:            non-crash (evident intent broken)
+- upstream project: libvaxis
+- severity:        low (a repaint on every frame while the cursor is shown; secondary cursors never drawn by a render that changes nothing else)
+- reference:       libvaxis 0.6.0 (pinned by ghostty 20abdb50a `build.zig.zon:25-30`) `src/Vaxis.zig:390-391` (`const cursor_secondary_changed = self.screen.cursor_vis and std.meta.eql(self.screen.cursor_secondary, self.state.cursor_secondary);`), used for `needs_render` at `:392-397` and to record the drawn slice at `:820-823`. `std.meta.eql` on two slices is `a.ptr == b.ptr and a.len == b.len` (Zig 0.16.0 `std/meta.zig:657-661`).
+- defect:          the comparison is the wrong way round. The name, its use in `needs_render` (the new "only write when something changed" render) and the `if (cursor_secondary_changed)` block that records the screen's slice as the drawn one all mean "the secondary cursors differ from the last frame". As written: (a) with the cursor visible and no secondary-cursor change, every `render` repaints (the frame prologue, the cursor, `show_cursor`), which defeats the 0.6.0 optimisation that `test "render: no output when no changes"` covers only for a hidden cursor; (b) after `addTerminalSecondaryCursor`, a render that changes nothing else writes nothing, so the new secondary cursor is not shown, and the state never records the new slice.
+- ReleaseSafe:     MEASURED (Zig 0.16.0, a probe over libvaxis 0.6.0 + ghostty's uucode): with a visible cursor and nothing changed, a render writes the same 40 bytes again; with `caps.multi_cursor` and one secondary cursor added, the render writes 0 bytes. With the one-character fix the same probe writes 0 bytes and then the 61-byte frame with `ESC [ > 0 ; 4 SP q ESC [ > 29 ; 2 : 1 : 4 SP q`.
+- ReleaseFast:     the same (no safety check is involved).
+- reachability:    any libvaxis application that shows the cursor (a repaint per frame); secondary cursors are used only by applications that call `addTerminalSecondaryCursor` on a terminal that answers the multi-cursor query. In Ghostty's CLI, `+list-themes` shows the cursor in its search box.
+- port handling:   fixed (R13): `crates/rustty-vaxis/src/vaxis.rs` `render_diff` negates the comparison (`!ptr_eql`). PORT NOTE: reference defect (R13). Listed in `docs/ghostty-bug-fixes.md`.
+- parity row(s):   NEW-FINDINGS N240.
+- test:            `vaxis::tests::render_scenarios_match_the_reference` replays the probe's eleven renders and compares every byte with the Zig oracle's output (with the fix applied to the oracle; steps 5, 6, 7 and 11 are the ones the unpatched reference renders differently). Negative control (macOS 2026-09-23): the reference's comparison restored, step 5 fails with the 40-byte repaint where nothing is expected.
+- proposed fix:    `!std.meta.eql(self.screen.cursor_secondary, self.state.cursor_secondary)`.
+- upstream status: not reported
+
+### UD262 — libvaxis's `translateMouse` traps when a cell is wider or taller than 32767 pixels
+- kind:            crash (safety-checked trap) / undefined behaviour
+- upstream project: libvaxis
+- severity:        low (a buggy or hostile terminal)
+- reference:       libvaxis 0.6.0 `src/Vaxis.zig:916-917` (`const xcell: i16 = @intCast((self.screen.width_pix - xextra) / self.screen.width);`, and `ycell` from `height_pix`), in `translateMouse` (`:906-924`), called from `Loop.handleEventGeneric` for every mouse event while pixel mouse reporting is on.
+- defect:          0.6.0 made the mouse coordinates `i16` and casts the cell size to `i16` with `@intCast`, which is not guaranteed: the pixel and cell sizes are the terminal's (the kernel winsize it sets, or its in-band resize report, both `u16`), so a report of, e.g., 40000 pixels for one column gives a cell width of 40000.
+- ReleaseSafe:     a safety-check panic at the `@intCast` (by reading the Zig `@intCast` semantics; not run against a terminal).
+- ReleaseFast:     undefined behaviour.
+- reachability:    a terminal that reports such sizes while a libvaxis TUI has pixel mouse reporting on (`setMouseMode` with `caps.sgr_pixels`): `+list-themes` enables mouse reporting and uses pixel mode when the terminal answers the SGR-pixels query.
+- port handling:   fixed (R13): `crates/rustty-vaxis/src/vaxis.rs` `translate_mouse` takes the reference's own exit for a degenerate cell size (it already returns the event untranslated when a cell is 0 pixels) when the size does not fit `i16`. PORT NOTE: reference defect (R13). Listed in `docs/ghostty-bug-fixes.md`.
+- parity row(s):   NEW-FINDINGS N240.
+- test:            `vaxis::tests::translate_mouse_pixel_coordinates` (negative pixel positions give negative cells with a non-negative offset, as `@divFloor`/`@mod` do; then a 40000-pixel column returns the event unchanged). Negative control (macOS 2026-09-23): the casts made `try_from(..).unwrap()` (the reference's trap) panic at the cast.
+- proposed fix:    `std.math.cast(i16, ...) orelse return mouse` for `xcell` and `ycell`.
+- upstream status: not reported
+
+### UD263 — vxfw's mouse handler traps on a negative mouse position
+- kind:            crash (safety-checked trap) / undefined behaviour
+- upstream project: libvaxis
+- severity:        low (terminal input to a vxfw application)
+- reference:       libvaxis 0.6.0 `src/vxfw/App.zig:358-361` (`updateMouse`) and `:417-420` (`handleMouse`): `const mouse_point: vxfw.Point = .{ .row = @intCast(mouse.row), .col = @intCast(mouse.col) };`, with `vxfw.Point` `u16` (`src/vxfw/vxfw.zig:314-317`) and `Mouse.col`/`row` `i16` (`src/Mouse.zig:44-45`).
+- defect:          0.6.0 widened the mouse coordinates to `i16` so that negative positions can be reported (libvaxis PR 276), but vxfw still casts them to the unsigned `Point` with `@intCast`. The parser produces a negative position from any SGR report with a coordinate of 0 or below: `CSI < 0 ; 0 ; 0 M` decodes to column -1, row -1 (MEASURED with libvaxis 0.6.0, S-10b probe), and terminals send such reports while a drag leaves the window.
+- ReleaseSafe:     a safety-check panic at the `@intCast` in the event loop (by reading the Zig `@intCast` semantics; the vxfw handler is private, so no probe reached it).
+- ReleaseFast:     undefined behaviour.
+- reachability:    tty input to a vxfw application with mouse reporting on: Ghostty's `+boo` (`App.run` calls `setMouseMode(.., true)`), from the terminal, or typed.
+- port handling:   fixed (R13): `crates/rustty-vaxis/src/vxfw/app.rs` `mouse_point` returns `None` for a negative position and the handlers hit-test nothing, which is what the reference's own `containsPoint` guard decides for any other point outside the frame (the widgets last under the mouse get their `mouse_leave`). PORT NOTE: reference defect (R13). Listed in `docs/ghostty-bug-fixes.md`.
+- parity row(s):   NEW-FINDINGS N240.
+- test:            `vxfw::app::tests::a_negative_mouse_position_hits_nothing` (column or row -1, and `i16::MIN`, give no point; an on-screen position and column 32767 convert). Negative control (macOS 2026-09-23): the reference's cast restored (`try_from(..).unwrap()`) panics at the conversion.
+- proposed fix:    `const mouse_point: vxfw.Point = .{ .row = std.math.cast(u16, mouse.row) orelse return, .col = ... };` in both handlers (for `handleMouse`, after recording `self.mouse` and sending the `mouse_leave` events for an empty hit list).
+- upstream status: not reported
+
+### UD264 — libvaxis TextInput's word motions reach `unreachable` in `std.unicode.utf8Decode` on invalid UTF-8
+- kind:            crash (safety-checked trap) / undefined behaviour
+- upstream project: libvaxis
+- severity:        low (typed or pasted bytes in a TUI search box)
+- reference:       libvaxis 0.6.0 `src/widgets/TextInput.zig:275-288` (`decodeCodepointAt`: the slice is capped at the end of the buffer) and `:290-299` (`decodeCodepointBefore`: the slice runs back to the first non-continuation byte), both `std.unicode.utf8Decode(slice) catch {...}`; Zig 0.16.0 `std/unicode.zig:101-109` (`utf8Decode`: `switch (bytes.len) { 1 => .., 2 => utf8Decode2(..), 3 => .., 4 => .., else => unreachable }`) and `:116`, `:144`, `:166` (`utf8Decode2/3/4` begin with `assert(` the first byte has that length's lead prefix `)`).
+- defect:          `utf8Decode` is only defined for a slice that is one encoded code point's length. The new word-motion helpers pass it a slice of five or more bytes (a run of continuation bytes), a slice whose first byte is not a lead byte of that length (`a` followed by `0x80`; a space followed by continuation bytes), and a lead byte cut short by the end of the buffer (`E2 82`). Its error return, which the helpers `catch`, does not cover these: they hit `unreachable` / `assert`.
+- ReleaseSafe:     `panic: reached unreachable code`. MEASURED (Zig 0.16.0 Debug, libvaxis 0.6.0 via a probe): Ctrl+W's `deleteWordBeforeWhitespace` on `x SP 80 80 80` (the `assert` in `utf8Decode4`), `moveBackwardWordwise` on `a b SP 80 80 80 80 80` (`else => unreachable`, `unicode.zig:107`) and on `- SP a 80` (`utf8Decode2`'s assert, `:116`), `moveForwardWordwise` on `E2 82` (`:116`); a valid `hello-world` control moves normally.
+- ReleaseFast:     undefined behaviour (the assert is not checked; `unreachable` is undefined).
+- reachability:    the TextInput buffer holds key text from the tty: the parser turns each stray byte such as `0x80` into a key whose text is that byte (MEASURED), and TextInput inserts it. In Ghostty, `+list-themes`'s search box (Alt+B, Alt+F, Alt+D, Alt+Backspace, Ctrl+W).
+- port handling:   fixed (R13): `crates/rustty-vaxis/src/widgets/text_input.rs` `utf8_decode` returns `None` for the inputs the reference traps on, as for its error returns, and both helpers take their existing decode-failure path (one byte is the code point). PORT NOTE: reference defect (R13). Listed in `docs/ghostty-bug-fixes.md`.
+- parity row(s):   NEW-FINDINGS N240.
+- test:            `widgets::text_input::tests::word_motion_over_invalid_utf8_does_not_crash` (the four measured inputs, each with the resulting buffer). Negative controls (macOS 2026-09-23, one at a time): the lead-byte check made `unreachable!()` panics at it; the `len > 4` arm made `unreachable!()` panics at it.
+- proposed fix:    validate before decoding: in `decodeCodepointAt`, fall back when `capped_len != len`; in `decodeCodepointBefore`, fall back when `end - start > 4` or `utf8ByteSequenceLength(bytes[start]) != end - start` (or decode with `std.unicode.Utf8View`).
+- upstream status: not reported
+
+### UD265 — vxfw Text's soft wrap splits a word that fits a line by itself (`trimEnd` where `trimLeft` was meant)
+- kind:            non-crash (evident intent broken)
+- upstream project: libvaxis
+- severity:        low (layout)
+- reference:       libvaxis 0.6.0 `src/vxfw/Text.zig:240` (`const trimmed = std.mem.trimEnd(u8, word, " \t");` in `SoftwrapIterator.next`); 0.5.1 had `std.mem.trimLeft` there (Zig 0.15 renamed `trimLeft`/`trimRight` to `trimStart`/`trimEnd`; the line above, `:226`, correctly became `trimEnd` from `trimRight`).
+- defect:          `word` is the separators before the next word plus the word (`nextWrap` ends it at the first separator after the word), so it never ends in whitespace. `trimEnd` therefore removes nothing, `trimmed_bytes` is always 0, and a word that would fit a line by itself once its leading space is dropped is judged too long and split mid-word. The comment ("Trim the word to see if it can fit on a line by itself") and the byte arithmetic after it describe removing the leading separators.
+- ReleaseSafe:     MEASURED (Zig 0.16.0, a test in a copy of libvaxis 0.6.0): `"ab hello"` at width 5 wraps as `"ab he"` / `"llo"` instead of `"ab"` / `"hello"`.
+- ReleaseFast:     the same.
+- reachability:    any vxfw `Text` with soft wrap on (the default), narrower than its text; in Ghostty, `+boo`'s "Screen must be at least 100w x 41h" message (`src/cli/boo.zig:76`) in a narrow window.
+- port handling:   fixed (R13): `crates/rustty-vaxis/src/vxfw/text.rs` keeps trimming the start (`trim_left`). PORT NOTE: reference defect (R13). Listed in `docs/ghostty-bug-fixes.md`.
+- parity row(s):   NEW-FINDINGS N240.
+- test:            `vxfw::text::tests::softwrap_word_that_fits_alone_after_a_space_wraps_whole`. Negative control (macOS 2026-09-23): `trim_right` (the reference's `trimEnd`) gives `"ab he"`.
+- proposed fix:    `std.mem.trimStart(u8, word, " \t")`.
+- upstream status: not reported
+
+### UD266 — `+list-themes` no longer installs the resize handler, so a window resize is ignored on terminals without in-band resize
+- kind:            non-crash (evident intent broken)
+- upstream project: ghostty
+- severity:        low (the picker keeps its old size until restarted)
+- reference:       `src/cli/list_themes.zig:306` at 20abdb50a (`var loop: vaxis.Loop(Event) = .init(global.io(), &self.tty, &self.vx);`, then `start`, and nothing else); the handler of the resulting events is `:538` (`.winsize => |ws| try self.vx.resize(..)`). Before `e8525c0fd` ("Update to Zig 0.16.0") the code was `var loop: vaxis.Loop(Event) = .{ .tty = &self.tty, .vaxis = &self.vx }; try loop.init(); try loop.start();`, and libvaxis 0.5.1's `Loop.init` installed the SIGWINCH handler. libvaxis 0.6.0 moved that to `installResizeHandler` and made `init` a constructor; its own `vxfw.App.run` calls `installResizeHandler` when the terminal has no in-band resize.
+- defect:          the migration replaced the two lines by the constructor alone, so the SIGWINCH callback that turns a resize into a `.winsize` event is never registered. The picker still handles `.winsize` (and the read thread posts the initial size), but on a terminal without in-band resize reports (mode 2048) nothing reports later sizes.
+- ReleaseSafe:     after a resize the picker keeps drawing at the size it started with (by reading; the rustty test below measures the port's side: without the handler no event arrives).
+- ReleaseFast:     the same.
+- reachability:    running `ghostty +list-themes` in a terminal without in-band resize (for example macOS Terminal) and resizing its window. In Ghostty itself (which supports mode 2048) the in-band reports still arrive.
+- port handling:   fixed (R13): `crates/rustty-cli/src/list_themes.rs` `with_preview_loop` installs the resize handler right after constructing the Loop, where the pre-migration code did. PORT NOTE: reference defect (R13). Listed in `docs/ghostty-bug-fixes.md`.
+- parity row(s):   NEW-FINDINGS N240.
+- test:            `list_themes::picker_tests::the_preview_loop_delivers_a_resize`: a re-executed child whose controlling terminal is a fresh pty builds the picker's Loop with `with_preview_loop`, sets the pty to 33x77, raises SIGWINCH and receives `Winsize { rows: 33, cols: 77 }`. Negative control (macOS 2026-09-23): without the `install_resize_handler` call no event arrives in 10 s ("no winsize event reached the Loop").
+- proposed fix:    `try loop.installResizeHandler();` after constructing the loop (or, as vxfw's `App.run` does, after `queryTerminal` when `!self.vx.state.in_band_resize`).
+- upstream status: not reported
+
 ## Candidates pending verification
 
 Assembled from this plan's progress notes on 2026-09-11. **Not verified** — do not cite as fact.

@@ -186,7 +186,7 @@ those crates' comment fidelity.
 
 | # | Item | Evidence | Size |
 |---|---|---|---|
-| 15 | **vaxis 0.5.1→0.6.0 + zf 0.10.3→0.11.0 upstream delta** (`NON_PORTS.md:355` G2) | 4,402 + 847 diff lines of real upstream code: multi-cursor ctlseqs, `Mouse` u16→i16, zf `to_lower`→`case_sensitive` polarity flip. Filed as a "non-port"; under the scope rule it is **unported upstream code**. **No owner.** | L |
+| 15 | ~~**vaxis 0.5.1→0.6.0 + zf 0.10.3→0.11.0 upstream delta** (`NON_PORTS.md:355` G2)~~ | 4,402 + 847 diff lines of real upstream code: multi-cursor ctlseqs, `Mouse` u16→i16, zf `to_lower`→`case_sensitive` polarity flip. Filed as a "non-port"; under the scope rule it is **unported upstream code**. **No owner.** **DISCHARGED 2026-09-23 (parity tail S-10b):** every delta of the ported vaxis and zf files, vaxis's uucode moved to 2826a37a (0-diff Zig-oracle differential), the zf default flip matched at the `list-themes` call site, reference defects UD260–UD266 fixed (`NON_PORTS.md` §G2 item 5, `NEW-FINDINGS.md` N240). | L |
 | 16 | **13 unported vxfw widgets** | `crates/rustty-vaxis/src/lib.rs:105-109` — "unused by ghostty (YAGNI) and out of scope". A reachability argument over vendored reference source, identical in form to the one voided at `D:6552`. Needs re-derivation against libvaxis `vxfw/`. | L |
 
 ### Verification-only (code present, host absent) — 3 groups
