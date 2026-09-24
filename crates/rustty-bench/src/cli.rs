@@ -184,17 +184,26 @@ impl From<benchmark::Error> for Error {
 }
 
 /// An entrypoint for the benchmark CLI.
-// pub fn main() !void {
+// pub fn main(minimal: std.process.Init.Minimal) !void {
+//     try global.init(.{ .tool = minimal });
 //     const alloc = std.heap.c_allocator;
-//     const action_ = try cli.action.detectArgs(Action, alloc);
+//     const action_ = try cli.action.detectArgs(Action, alloc, minimal.args);
 //     const action = action_ orelse return error.NoAction;
-//     try mainAction(alloc, action, .cli);
+//     try mainAction(alloc, action, .{ .cli = minimal.args });
 // }
 //
-// PORT NOTE: `std.heap.c_allocator` -> the process `Global` allocator. The
-// reference `cli.action.detectArgs(Action, alloc)` is the SHARED action
-// auto-detect that lives in `rustty-cli` (a heavy crate — core/apprt/config —
-// that rustty-bench deliberately does NOT depend on to stay lean and acyclic).
+// (CORRECTION, parity S62-F2 review: the block above used to quote the older
+// `pub fn main() !void`, with no `global.init` and `detectArgs(Action,
+// alloc)`, which is not the pinned `benchmark/cli.zig:54-60`.)
+//
+// PORT NOTE: `std.heap.c_allocator` -> the process `Global` allocator;
+// `minimal.args` -> `std::env::args_os` (read inside `detect_args` and
+// `args_iterator`). The reference `cli.action.detectArgs` is the SHARED action
+// auto-detect that lives in `rustty-cli`, which rustty-bench does not depend
+// on; it does depend on rustty-apprt, for the `.tool` init (S43-F3).
+// (CORRECTION: this note used to call rustty-cli "a heavy crate —
+// core/apprt/config — that rustty-bench deliberately does NOT depend on to stay
+// lean and acyclic", which stopped being true of apprt with S43-F3.)
 // This standalone `main()` is exercised only by the out-of-scope `main_bench.zig`
 // binary; its detect logic (find the single `+name` arg, `stringToEnum`) is
 // replicated locally over `std::env::args_os` (DEFERRALS.md "benchmark: shared
