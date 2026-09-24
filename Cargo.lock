@@ -1191,6 +1191,7 @@ dependencies = [
  "glib",
  "gtk4",
  "gtk4-layer-shell",
+ "gtk4-layer-shell-sys",
  "harfbuzz-sys",
  "libadwaita",
  "libc",

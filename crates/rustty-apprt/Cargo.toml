@@ -111,7 +111,7 @@ gtk-v4_16 = ["gtk", "gtk4/v4_16"]
 # selected these stay OFF and zero Wayland/X11 protocol crates are pulled. The
 # `wayland` arm lands in L5.4, `x11` in L6, each turning its arm on and adding its
 # own protocol-crate deps.
-wayland = ["gtk", "dep:gdk4-wayland", "dep:wayland-client", "dep:wayland-backend", "dep:wayland-protocols", "dep:wayland-protocols-plasma", "dep:wayland-scanner", "dep:bitflags", "dep:gtk4-layer-shell"]
+wayland = ["gtk", "dep:gdk4-wayland", "dep:wayland-client", "dep:wayland-backend", "dep:wayland-protocols", "dep:wayland-protocols-plasma", "dep:wayland-scanner", "dep:bitflags", "dep:gtk4-layer-shell", "dep:gtk4-layer-shell-sys"]
 x11 = ["gtk", "dep:gdk4-x11"]
 
 [dependencies]
@@ -411,6 +411,11 @@ bitflags = { version = "2", optional = true }
 # GTK's own toplevel does not expose. 0.8 tracks gtk4-rs 0.11, matching the stack
 # above. Only the wayland winproto arm's quick-terminal paths consume it.
 gtk4-layer-shell = { version = "0.8", optional = true }
+# The same library's raw C binding, for `gtk_layer_set_namespace` on the config's
+# raw bytes (the reference's `setNamespace` takes `[:0]const u8`; the crate's
+# `set_namespace` takes `&str`, S33-F1). The version gtk4-layer-shell 0.8 itself
+# depends on (one copy in the lock).
+gtk4-layer-shell-sys = { version = "0.6", optional = true }
 # X11 winproto backend (feature = "x11"): gdk4-x11 to reach the xlib Display + the
 # window XID, x11-dl for the XChangeProperty property sets (_MOTIF_WM_HINTS CSD,
 # _KDE_NET_WM_BLUR_BEHIND_REGION blur, _NET_WM_STATE urgency).

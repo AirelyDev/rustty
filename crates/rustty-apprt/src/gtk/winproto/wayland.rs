@@ -949,9 +949,14 @@ impl Window {
             QuickTerminalLayer::Bottom => Layer::Bottom,
             QuickTerminalLayer::Background => Layer::Background,
         });
-        window.set_namespace(Some(&String::from_utf8_lossy(
-            &config.gtk_quick_terminal_namespace,
-        )));
+        // layer_shell.setNamespace(window, config.@"gtk-quick-terminal-namespace");
+        //
+        // S33-F1: the reference hands the raw config bytes to
+        // `gtk_layer_set_namespace` (`pkg/gtk4-layer-shell/src/main.zig:67-69`);
+        // the port went through the crate's `&str` API with `from_utf8_lossy`,
+        // which rewrote invalid UTF-8 as U+FFFD. Call the C function with the
+        // bytes, as the reference does.
+        set_layer_namespace(window, &config.gtk_quick_terminal_namespace);
 
         // Re-resolve the target monitor on every sync so that config reloads
         // and primary-output changes take effect without recreating the window.
@@ -1066,6 +1071,52 @@ fn entered_monitor(_surface: &gdk4::Surface, monitor: &gdk4::Monitor, apprt_wind
     );
 
     window.set_default_size(dims.width as i32, dims.height as i32);
+}
+
+/// PORTS: `pkg/gtk4-layer-shell/src/main.zig:67-69` `setNamespace`:
+/// `c.gtk_layer_set_namespace(@ptrCast(window), name.ptr)` on the config's raw
+/// `[:0]const u8` (S33-F1). The bytes reach C unchanged; C reads them up to the
+/// first NUL, so an interior NUL ends the namespace there, as it does for the
+/// reference's sentinel pointer.
+fn set_layer_namespace(window: &gtk4::Window, name: &[u8]) {
+    let name = layer_namespace_cstring(name);
+    // SAFETY: `window` is a live GtkWindow (the borrow keeps it alive for the
+    // call) and `name` a NUL-terminated string that outlives it;
+    // gtk-layer-shell copies the namespace.
+    unsafe {
+        gtk4_layer_shell_sys::gtk_layer_set_namespace(
+            gtk4::glib::translate::ToGlibPtr::to_glib_none(window).0,
+            name.as_ptr(),
+        );
+    }
+}
+
+/// The C string `setNamespace` passes: the bytes before the first NUL (all of
+/// them when there is none), byte for byte.
+fn layer_namespace_cstring(name: &[u8]) -> std::ffi::CString {
+    let end = name.iter().position(|&b| b == 0).unwrap_or(name.len());
+    std::ffi::CString::new(&name[..end]).expect("no NUL before `end`")
+}
+
+#[cfg(test)]
+mod layer_namespace_tests {
+    use super::layer_namespace_cstring;
+
+    /// S33-F1: invalid UTF-8 reaches gtk-layer-shell unchanged (the port used
+    /// to replace it with U+FFFD).
+    #[test]
+    fn namespace_bytes_are_passed_verbatim() {
+        assert_eq!(
+            layer_namespace_cstring(b"rustty-quick-terminal").as_bytes(),
+            b"rustty-quick-terminal"
+        );
+        assert_eq!(
+            layer_namespace_cstring(b"quick-\xff\xfe").as_bytes(),
+            b"quick-\xff\xfe"
+        );
+        // C sees the reference's sentinel string up to its first NUL.
+        assert_eq!(layer_namespace_cstring(b"a\0b").as_bytes(), b"a");
+    }
 }
 
 /// Resolve the `Globals.state.primary_output_name` for the quick terminal by
