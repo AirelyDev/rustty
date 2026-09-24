@@ -197,8 +197,9 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - reachability:    VT stream (a forged exchange), and plausibly a real tmux: a split created during attach, in a pane running a program with a scroll region above the cursor row (vim's command line, for example).
 - port handling:   no check, as ReleaseFast — `crates/rustty-vt/src/tmux/viewer.rs:1787` (PORT NOTE).
 - parity row(s):   NEW-FINDINGS N43 (no LEDGER row).
-- test:            `pane_history_below_the_scroll_region_does_not_trip_the_empty_active_area_check` (bytes through the VT stream: list-windows with pane 7, a `%layout-change` adding pane 8, pane 7's captures, a `list-panes` giving pane 8 cursor row 23 and region 0-10, then pane 8's history; asserts the viewer is not defunct and the history text is in pane 8's active area). Negative control, macOS 2026-09-11: with the port's former `debug_assertions` check the test panics in `inlineAssert` from `received_pane_history` (backtrace confirmed).
-- proposed fix:    Drop the assert, or make the intent true: reset the scroll region (and origin mode) before the `index()` loop, or clear the active area with `eraseDisplay(.complete, false)` instead of scrolling it.
+- port handling (task S-12): fixed (R13, as extended 2026-09-23), at the cause. `received_pane_state` skips a pane whose `capture-pane` commands are still queued and leaves it to its own `list-panes` reply, which `sync_layouts` always queues after that pane's captures: the order the reference means (its `syncLayouts` comment "If we added any panes, then we also want to resync the pane state", and the state diagram at the top of `viewer.zig`, where the captures run before `pane_state`). The captures are then written into the pane in its initial state, so the history reaches the scrollback in order and the active area is empty afterwards (the condition the reference asserts), and the visible capture is not scrolled inside the early region. The early reply still applies to every pane whose captures are done, and nothing it carries is lost: the pane's own later reply carries the same fields. `crates/rustty-vt/src/tmux/viewer.rs:1519` (PORT NOTE); the no-check PORT NOTE in `received_pane_history` (`:1822`) now points to it. Resetting the scroll region around the history write was considered and not chosen: it leaves the cursor on the early reply's row (so, from reading, not run, 23 blank rows would go to the scrollback ahead of the history), does not cover the visible capture or the other modes the reply sets, and adds state save/restore the reference has no counterpart for. MEASURED damage without the fix (the port with the skip disabled, which is the reference's behaviour): a three-line history `h1`/`h2`/`h3` ends as `h1h2h3` on row 23 with nothing in the scrollback (a capture's bare `\n` keeps the column, UD272, so short lines run together on that row; the ReleaseFast line's "overwrites" holds once a line wraps), and a 12-line visible capture loses its first line (`v0` scrolls out of rows 0-10). NEW-FINDINGS N251; listed in `docs/ghostty-bug-fixes.md`.
+- test:            `pane_state_for_a_pane_with_captures_queued_waits_for_its_own_reply` (replaces `pane_history_below_the_scroll_region_does_not_trip_the_empty_active_area_check`; bytes through the VT stream: list-windows with pane 7, a `%layout-change` adding pane 8, pane 7's captures, a `list-panes` giving pane 7 cursor row 5 and region 2-20 and pane 8 cursor row 23 and region 0-10, pane 8's three-line history and 12-line visible capture, its alternate captures, then pane 8's own `list-panes`). Asserts: pane 7's state applied from the early reply; the history lines in the screen in order with the active area empty; the visible capture on rows 0-11; after pane 8's own reply its region is 0-10 and its primary cursor row 23; the viewer never defunct. Negative controls (macOS, task S-12, each run alone): skip disabled, fails at "the history reached the scrollback in order" with `right: ["", …(23 blank rows)…, "h1h2h3"]`; skip disabled and the history assertions removed, fails at "the visible capture is on rows 0-11, unscrolled" with `right: ["v1", …, "v11"]`. Negative control of the former test, macOS 2026-09-11: with the port's former `debug_assertions` check the test panicked in `inlineAssert` from `received_pane_history` (backtrace confirmed).
+- proposed fix:    Drop the assert, or make the intent true: reset the scroll region (and origin mode) before the `index()` loop, or clear the active area with `eraseDisplay(.complete, false)` instead of scrolling it. Better, at the cause (what the port does): in `receivedPaneState`, skip a pane that still has a `pane_history`/`pane_visible` command queued; its own `pane_state` follows its captures.
 - upstream status: not reported
 
 ### UD10 — tmux layout parsing recurses without a depth limit
@@ -232,7 +233,7 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - upstream status: not reported
 
 ### UD12 — coloured pane history ends the tmux control-mode DCS, so the viewer disconnects
-- kind:            latent (functional: lost tmux session)
+- kind:            non-crash (evident intent broken): lost tmux session
 - upstream project: ghostty
 - severity:        low
 - reference:       src/terminal/tmux/viewer.zig:1317 and :1331 (`capture-pane -p -e …`, the pane history and visible captures), src/terminal/parse_table.zig:71 (the "anywhere" `0x1B => escape` transition, which `dcs_passthrough` does not override), src/terminal/Parser.zig:280 (leaving `dcs_passthrough` emits `dcs_unhook`), at 20abdb50a
@@ -242,8 +243,9 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - reachability:    ordinary use: `tmux -CC attach` to a session with any coloured text in a pane's history or visible area.
 - port handling:   faithful (R13 non-crash defect): the port's parser and DCS handler behave the same. Not changed; the right handling (for example a line-based control-mode reader outside the VT parser, or dropping `-e`) is a design question for upstream.
 - parity row(s):   none.
-- test:            none (recorded only).
-- proposed fix:    Consume tmux control mode outside the VT parser once `ESC P 1000 p` is seen (reading raw lines until `%exit` and ST, as other tmux control-mode clients do), or request captures without `-e` and apply styles another way.
+- port handling (task S-12): fixed (R13, as extended 2026-09-23: the reference means the `-e` escapes to reach the pane, "-e = output escape sequences for SGR", and `receivedPaneHistory` sends the reply "as-is" into the pane's VT stream; its control parser also calls block payload "raw data"). The viewer adds `-C` to both capture commands (`crates/rustty-vt/src/tmux/viewer.rs:2209`, `:2232`) and decodes the reply with `unescape_capture` (`:2438`, PORT NOTE; decode sites `:1791`, `:1887`) before writing it into the pane. tmux (`capture-pane -C`, tmux 1.8 onward: the release that added control mode; `grid.c` at master `72e83b00`) then writes every ESC of an SGR or OSC 8 sequence as the four characters `\033`, SO/SI as `\016`/`\017`, and a one-byte `\` cell as `\\`, so the reply holds no ESC and the DCS stays hooked; the decoder restores exactly the `-e` bytes. No parser or DCS change: an ESC still ends the DCS everywhere, so a tmux that dies mid-reply cannot leave the terminal swallowing output (which a "keep ESC inside a `%begin` block" parser rule would risk, up to the control parser's 1 MiB limit), the parser's hot path is untouched, and no handler API is added. The upstream proposal's redesign (a line reader outside the VT parser) is not needed for this defect. Residual: a hyperlink URI or id holding a literal `\` followed by three octal digits or by another `\` would be decoded (tmux writes them unescaped under `-C`); URIs normally percent-encode `\`. NEW-FINDINGS N250; listed in `docs/ghostty-bug-fixes.md`. Verified against synthetic control-mode transcripts built from tmux's source (no tmux on the host), not a live tmux.
+- test:            `coloured_pane_captures_keep_the_control_session_and_reach_the_pane` (bytes through the VT stream, DCS handler, control parser and viewer; each capture reply is built by `test_host::capture_reply` from the command the viewer actually sent, raw without `-C` and escaped with it, as `cmd-capture-pane.c` and `grid.c` do): bold red history text, a `\` and a `\033`-lookalike in the text, a green visible capture with an OSC 8 hyperlink (ST `ESC \`), then `list-panes` and a later `%output`. Asserts the session survives every capture, the later `%output` reaches the pane, the text and backslashes round-trip, the styles match what the raw `-e` bytes give a fresh terminal (VT formatter), and the hyperlink is on the cell (HTML formatter). `unescape_capture_inverts_tmux_capture_escaping` covers the decoder. Negative controls (macOS, task S-12, each run alone): `-C` removed from the commands, fails at capture 0 with "the control session ended" and notifications ending `"exit"`; `-C` kept and the decode skipped, fails on the text with `\033[1m\033[31mred…` printed literally.
+- proposed fix:    Consume tmux control mode outside the VT parser once `ESC P 1000 p` is seen (reading raw lines until `%exit` and ST, as other tmux control-mode clients do), or request captures without `-e` and apply styles another way. Smaller (what the port does): add `-C` to both `capture-pane` commands and decode `\ooo` and `\\` in `receivedPaneHistory`/`receivedPaneVisible` before `nextSlice`.
 - upstream status: not reported
 
 ### UD13 — GstPlay can finalize on its own play thread when the last `GtkMediaFile` reference drops right after construction
@@ -1986,6 +1988,51 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - parity row(s):   NEW-FINDINGS N206 (the separate R13 question it raised); LEDGER S112-F9 had kept this faithfully.
 - test:            `uri::tests::percent_escapes_decode_only_two_hex_digits` and `uri::tests::osc7_path_keeps_a_signed_escape` (the OSC 7 `parse` options, then the path formatted as `toRawMaybeAlloc` does; `%41` in the same path proves decoding ran). Negative control (macOS, task tail-s9b): the hex-digit check disabled, both fail with `left: [.., 97, 0, 98, ..]` (the NUL) where `[.., 97, 37, 45, 48, 98, ..]` (`a%-0b`) is expected.
 - proposed fix:    in `formatRaw` and `percentDecodeBackwards`, decode only when both bytes pass `std.ascii.isHex` (or parse with `std.fmt.charToDigit` per byte instead of `parseInt`).
+- upstream status: not reported
+
+### UD270 — tmux `%output` data is written into the pane still octal-escaped
+- kind:            non-crash (evident intent broken), latent at the pin (see reachability)
+- upstream project: ghostty
+- severity:        low
+- reference:       src/terminal/tmux/control.zig:213-243 (`%output`: the regex capture is returned as `data` unchanged), :522 (`data: []const u8, // unescaped`), src/terminal/tmux/viewer.zig:1105-1120 (`receivedOutput`: `stream.nextSlice(data)`), at 20abdb50a
+- defect:          tmux writes a pane's output in `%output` with every byte below `' '` and every `\` as octal `\ooo` (tmux(1): "value escapes non-printable characters and backslash as octal \\xxx"; `control.c:830-831` at master `72e83b00`). The notification's own field comment says the data is unescaped, but nothing decodes it, so the pane's terminal prints the escapes as text. MEASURED on the port (faithful, task S-12 probe): `%output %7 x\033[1my\015\012z` leaves the active area reading `x\033[1my\015\012z` literally; no line break, no style.
+- ReleaseSafe:     no crash; every pane's live output shows `\015\012`, `\033[…` and `\134` as text instead of line breaks, colours and backslashes.
+- ReleaseFast:     same.
+- reachability:    every `tmux -CC` session whose pane writes a control character (any newline). At the pin the tmux panes are not displayed (termio's `.windows` action is `// TODO`, `stream_handler.zig:468-470`), so the damage is to the viewer's pane terminals, not yet to anything on screen.
+- port handling:   faithful, not changed (found by task S-12 while fixing UD12; not in that task's assignment). A fix candidate under R13 as extended 2026-09-23: controller ruling requested. The decoder is the `\ooo` half of `unescape_capture` (UD12). Note for the fix: once `%output` is decoded, a pane's own output can set its scroll region before its captures arrive, which UD9's fix (`received_pane_state` waiting) does not cover.
+- parity row(s):   none.
+- test:            none yet (recorded only; the probe was not committed).
+- proposed fix:    decode `\ooo` in the `%output` data (in `parseNotification`, or in `receivedOutput` before `nextSlice`).
+- upstream status: not reported
+
+### UD271 — after attaching, every tmux pane is left on its alternate screen
+- kind:            non-crash (evident intent broken, as read by task S-12; controller ruling requested), latent at the pin
+- upstream project: ghostty
+- severity:        low
+- reference:       src/terminal/tmux/viewer.zig:680-685 (a new pane's captures: primary history and visible, then alternate history and visible), :1053 and :1093 (`receivedPaneHistory`/`receivedPaneVisible`: `_ = try t.switchScreen(screen_key)`), :935-951 (`receivedPaneState`: `alternate_on` picks the screen whose cursor is set, and nothing else), at 20abdb50a
+- defect:          Each capture switches the pane's terminal to the screen it captures, the alternate captures run last, and the `list-panes` reply that follows reads `alternate_on` but never switches back. So a pane whose program is on the primary screen ends up showing its (usually empty) alternate screen, and its live output (UD270 aside) is written there. MEASURED on the port (faithful, task S-12): after the four captures and a `list-panes` with `alternate_on` 0, `screens.active` is the alternate screen, and a later `%output` lands there while the captured history and visible contents sit on the primary screen.
+- ReleaseSafe:     no crash; the pane shows the wrong screen.
+- ReleaseFast:     same.
+- reachability:    every attach. Not yet on screen at the pin (the `.windows` action is `// TODO`).
+- port handling:   faithful, not changed (found by task S-12; not in its assignment). Controller ruling requested; the likely fix is `switchScreen` to `alternate_on`'s screen in `receivedPaneState`.
+- parity row(s):   none.
+- test:            none of its own (recorded only). The S-12 UD12 test `coloured_pane_captures_keep_the_control_session_and_reach_the_pane` asserts the current placement (captures on the primary screen, the later `%output` on the active, alternate, screen) and names this entry; a fix updates those two assertions.
+- proposed fix:    in `receivedPaneState`, switch the pane's terminal to the screen `alternate_on` names.
+- upstream status: not reported
+
+### UD272 — a multi-line tmux capture is written as a staircase: its bare `\n` does not return the carriage
+- kind:            non-crash (evident intent broken), latent at the pin
+- upstream project: ghostty
+- severity:        low
+- reference:       src/terminal/tmux/viewer.zig:1061 and :1102 (`stream.nextSlice(content)` of the capture reply), src/terminal/Terminal.zig:1836-1838 (`linefeed` returns the carriage only in linefeed mode, off by default); the reference test's own hedge at viewer.zig:2183 ("History has 2 lines with "prompt %" (padded to screen width)", asserting only that the text occurs twice), at 20abdb50a
+- defect:          tmux joins a capture's lines with a bare `\n` (`cmd-capture-pane.c:404`), which is how text is written to a file, not to a terminal. Written into the pane's VT stream as-is, each line starts in the column where the previous one ended, and a line that no longer fits wraps. MEASURED on the port (faithful, task S-12): a history `a\nb` and visible `c\nd` leave the primary screen reading `a` / ` b` / `c` / ` d`; `h1\nh2\nh3` gives `h1` / `  h2` / `    h3`.
+- ReleaseSafe:     no crash; pane history and visible contents are skewed and rewrapped.
+- ReleaseFast:     same.
+- reachability:    every capture of more than one line. Not yet on screen at the pin (the `.windows` action is `// TODO`).
+- port handling:   faithful, not changed (found by task S-12; not in its assignment; the S-12 tests compare lines with leading blanks removed so that they neither depend on nor pin this). Controller ruling requested; the likely fix is writing `\r\n` for each `\n` of a capture (or setting linefeed mode around the write).
+- parity row(s):   none.
+- test:            none yet (recorded only).
+- proposed fix:    in `receivedPaneHistory` and `receivedPaneVisible`, feed a carriage return before each `\n` of the capture.
 - upstream status: not reported
 
 ## Candidates pending verification

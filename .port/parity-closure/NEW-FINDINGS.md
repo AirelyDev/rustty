@@ -4074,3 +4074,39 @@ fix: 0 of 50 of the same sequential runs failed; see the task T-F2 report for th
   table: `east_asian_width`, `general_category`, `grapheme_break`, plus `runtime`'s
   `is_emoji_presentation`), so moving it belongs to §G2 (vaxis 0.5.1 -> 0.6.0), task S-10b.
 - **state**: CLOSED (task tail-s10a).
+
+## N250 — the tmux viewer's pane captures ask tmux for `-C` and are decoded (R13 fix, UD12)
+
+- **id**: N250.
+- **found by**: task S-12 (controller ruling: UD12 is fixed under R13 as extended 2026-09-23).
+- **severity**: low. **kind**: extra-behavior (reference defect fixed, R13).
+- **oracle**: `src/terminal/tmux/viewer.zig:1317`, `:1331` (the `capture-pane -p -e` commands), `:1061`,
+  `:1102` (the replies written into the pane).
+- **rustty**: `crates/rustty-vt/src/tmux/viewer.rs:2209`, `:2232` (`-C` added), `:2438`
+  (`unescape_capture`), `:1791`, `:1887` (decode sites).
+
+The port's capture commands differ from the reference's by `-C`, and the port decodes tmux's `\ooo`
+and `\\` escapes before writing a capture. Without it, the first ESC of a coloured capture ends the
+control-mode DCS and the session. The pane receives the same bytes `-e` alone produces. Reference
+defect: `UPSTREAM-DEFECTS.md` UD12; tests `coloured_pane_captures_keep_the_control_session_and_reach_the_pane`
+and `unescape_capture_inverts_tmux_capture_escaping`.
+
+**state**: CLOSED by task S-12.
+
+## N251 — a `list-panes` reply skips a pane whose captures are still queued (R13 fix, UD9)
+
+- **id**: N251.
+- **found by**: task S-12 (controller ruling: UD9's remaining history damage is fixed under R13 as
+  extended 2026-09-23).
+- **severity**: low. **kind**: extra-behavior (reference defect fixed, R13).
+- **oracle**: `src/terminal/tmux/viewer.zig:908-1037` (`receivedPaneState` applies every pane in the
+  reply), `:680-690` (a new pane's captures, then `pane_state`).
+- **rustty**: `crates/rustty-vt/src/tmux/viewer.rs:1519` (`received_pane_state`).
+
+The reference applies a `list-panes` reply to every pane it lists, including a pane added after the
+command was queued whose captures have not yet arrived; its scroll region and cursor then garble the
+history and visible captures written into it. The port skips such a pane; its own `list-panes`,
+queued after its captures, applies the state. Reference defect: `UPSTREAM-DEFECTS.md` UD9 (whose
+earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_queued_waits_for_its_own_reply`.
+
+**state**: CLOSED by task S-12.
