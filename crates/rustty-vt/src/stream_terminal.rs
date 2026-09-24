@@ -884,7 +884,9 @@ impl<'a> Handler<'a> {
             return;
         }
         // The capacity above is already reserved, so this never allocates.
-        buf.resize(max_len, 0);
+        // (`resize_copy`: allocator_api2's `resize` is a per-element loop,
+        // N261; banned in this crate by clippy.toml.)
+        crate::alloc::CopyVecExt::resize_copy(&mut buf, max_len, 0);
         // const decoded = simd.base64.decodeStrict(data, buf, .optional) catch {
         //     log.warn("OSC 52 clipboard write is not valid base64, ignoring", .{});
         //     return;

@@ -188,4 +188,9 @@ rustty-util = { workspace = true }
 # release test lane too. As a dev-dependency it unifies only into
 # test/bench/example builds, so `cargo build --release` still compiles the fail
 # point away.
-rustty-vt = { path = "../rustty-vt", features = ["tripwire-test"] }
+#
+# TEST-ONLY (parity tail S7-1): `test-allocators` exposes
+# `rustty_vt::alloc::testing` (the `std.testing.FailingAllocator` port and a
+# counting allocator on the C ABI) to this crate's tests, under the same
+# dev-dependency unification rule.
+rustty-vt = { path = "../rustty-vt", features = ["tripwire-test", "test-allocators"] }

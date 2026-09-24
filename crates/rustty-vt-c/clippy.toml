@@ -1,0 +1,19 @@
+# Clippy configuration for rustty-vt (parity tail S7-1, gate G-VTALLOC).
+#
+# allocator_api2 0.2's stable `Vec` has no `Copy` specializations:
+# `extend_from_slice` is `extend(iter.cloned())`, a per-element,
+# capacity-checked loop, and `resize` is a per-element `ptr::write` loop. For
+# `Copy` elements std lowers both to one memcpy / fill. Swapping RenderState's
+# std `Vec`s for allocator_api2's naively cost +81% on `screen-clone.render`
+# (N261, `.port/parity-closure/S7-ALLOCATOR-DESIGN.md`). Use
+# `rustty_vt::alloc::CopyVecExt` (`extend_copy` / `resize_copy` and their
+# `try_` forms) instead. std's `Vec` methods are NOT banned: only the
+# allocator_api2 paths below match.
+#
+# Keep this file byte-identical to crates/rustty-vt-c/clippy.toml;
+# `.port/tools/gates/check_vt_alloc_vec_ban.sh` checks both and self-tests
+# that the ban fires.
+disallowed-methods = [
+    { path = "allocator_api2::vec::Vec::extend_from_slice", reason = "per-element loop (N261): use rustty_vt::alloc::CopyVecExt::extend_copy / try_extend_copy" },
+    { path = "allocator_api2::vec::Vec::resize", reason = "per-element loop (N261): use rustty_vt::alloc::CopyVecExt::resize_copy / try_resize_copy" },
+]

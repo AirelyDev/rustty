@@ -329,7 +329,9 @@ impl<A: Allocator> Tabstops<A> {
             self.dynamic_stops = new_vec.into_boxed_slice();
             return Err(OutOfMemory);
         }
-        new_vec.resize(dynamic_count, 0);
+        // (`resize_copy`: allocator_api2's `resize` is a per-element loop,
+        // N261; banned in this crate by clippy.toml.)
+        crate::alloc::CopyVecExt::resize_copy(&mut new_vec, dynamic_count, 0);
         self.dynamic_stops = new_vec.into_boxed_slice();
         self.cols = cols;
         Ok(())

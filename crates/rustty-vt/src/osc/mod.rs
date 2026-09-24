@@ -587,12 +587,13 @@ pub struct Parser<'a> {
     // `alloc` is a `ZigAllocatorRef<'a>` here and a capture that borrowed it
     // would give every `Stream` (whose parser shares the stream's lifetime)
     // drop glue over `'a`. So the capture's allocator is set separately, and
-    // only to an allocator that outlives the parser: `alloc`'s own allocator
-    // for the C-created parsers (vt-c's `rustty_osc_new` and the
-    // `rustty_terminal_new` stream), whose embedder allocator is where the
-    // reference would put the capture. Every other parser keeps the Rust
+    // only to an allocator that outlives the parser: the embedder's allocator
+    // (`crate::alloc::default(alloc_)`) for the C-created parsers (vt-c's
+    // `rustty_osc_new` and the `rustty_terminal_new` stream), which is where
+    // the reference would put the capture. Every other parser keeps the Rust
     // global heap, which is where their `alloc` (the process-global zig
-    // allocator) allocates anyway.
+    // allocator) allocates anyway. (S7-7 retires the split: `alloc` becomes
+    // the handle itself.)
     pub capture_alloc: CaptureAllocator,
 
     /// Current state of the parser.
@@ -715,93 +716,19 @@ pub enum CaptureBacking {
 /// allocates, grows and frees through this allocator, and a failure takes
 /// the reference's paths (the fixed fallback for `initCapacity`,
 /// `error.WriteFailed` for a `realloc`) instead of aborting.
-#[derive(Clone, Copy, Default)]
-pub enum CaptureAllocator {
-    /// The Rust global heap.
-    #[default]
-    Global,
-    /// An allocator that outlives the parser (a C embedder's).
-    Zig(&'static dyn rustty_lib::allocator::ZigAllocator),
-}
-
-// SAFETY: `Global` forwards to allocator_api2's `Global`. `Zig` forwards each
-// request 1:1 to the `ZigAllocator` (the `std.mem.Allocator` analog), which
-// returns memory of at least `len` bytes at the requested alignment, or null,
-// and frees exactly what it handed out; zero-sized requests never reach it
-// (Zig's typed helpers skip them too).
-//
-// PERF(port): `allocate` and `deallocate` are `#[inline]`, as
-// allocator_api2's own `Global` methods are, and their `Zig` arms are out of
-// line (`zig_capture_allocate` / `zig_capture_deallocate`). Every allocating
-// capture allocates on `captureTrailing` and frees on `reset`. With both
-// methods out of line, the fenced `osc-parser` config was ~7% slower than
-// before S174-F3 (paired rotated N=31 min: 48.9 -> 52.3 ms). With this shape
-// it was 48.2 ms against a pre-S174-F3 48.7 ms (N=41), the same as an
-// allocator_api2 `Vec` over the zero-sized `Global`. These were measured under
-// load (T-A3 report).
-unsafe impl allocator_api2::alloc::Allocator for CaptureAllocator {
-    #[inline]
-    fn allocate(
-        &self,
-        layout: core::alloc::Layout,
-    ) -> Result<core::ptr::NonNull<[u8]>, allocator_api2::alloc::AllocError> {
-        match self {
-            CaptureAllocator::Global => allocator_api2::alloc::Global.allocate(layout),
-            CaptureAllocator::Zig(alloc) => zig_capture_allocate(*alloc, layout),
-        }
-    }
-
-    #[inline]
-    unsafe fn deallocate(&self, ptr: core::ptr::NonNull<u8>, layout: core::alloc::Layout) {
-        match self {
-            // SAFETY: forwarded under the caller's contract.
-            CaptureAllocator::Global => unsafe {
-                allocator_api2::alloc::Global.deallocate(ptr, layout)
-            },
-            CaptureAllocator::Zig(alloc) => zig_capture_deallocate(*alloc, ptr, layout),
-        }
-    }
-}
-
-// PERF(port): the `Zig` arms of `CaptureAllocator` are kept out of line, so
-// the inlined `allocate`/`deallocate` stay a tag test plus the `Global` call.
-#[inline(never)]
-fn zig_capture_allocate(
-    alloc: &'static dyn rustty_lib::allocator::ZigAllocator,
-    layout: core::alloc::Layout,
-) -> Result<core::ptr::NonNull<[u8]>, allocator_api2::alloc::AllocError> {
-    if layout.size() == 0 {
-        let dangling = core::ptr::without_provenance_mut::<u8>(layout.align());
-        // SAFETY: an alignment is never zero.
-        let dangling = unsafe { core::ptr::NonNull::new_unchecked(dangling) };
-        return Ok(core::ptr::NonNull::slice_from_raw_parts(dangling, 0));
-    }
-    let ptr = alloc.alloc(
-        layout.size(),
-        rustty_lib::allocator::Alignment::from_byte_units(layout.align()),
-        0,
-    );
-    match core::ptr::NonNull::new(ptr) {
-        Some(p) => Ok(core::ptr::NonNull::slice_from_raw_parts(p, layout.size())),
-        None => Err(allocator_api2::alloc::AllocError),
-    }
-}
-
-#[inline(never)]
-fn zig_capture_deallocate(
-    alloc: &'static dyn rustty_lib::allocator::ZigAllocator,
-    ptr: core::ptr::NonNull<u8>,
-    layout: core::alloc::Layout,
-) {
-    if layout.size() == 0 {
-        return;
-    }
-    alloc.free(
-        rustty_lib::allocator::ZigSlice::new(ptr.as_ptr(), layout.size()),
-        rustty_lib::allocator::Alignment::from_byte_units(layout.align()),
-        0,
-    );
-}
+///
+/// PORT NOTE (parity tail S7-1): this was a two-arm enum (`Global` or a
+/// `&'static dyn ZigAllocator`) with its own allocator_api2 impl. It is now the
+/// crate's runtime allocator handle, `crate::alloc::VtAllocator`, whose
+/// `Global` arm is the same Rust global heap and whose C arm calls the
+/// caller's `RusttyAllocator` vtable directly (what the `Zig` arm reached
+/// through `CAllocatorAsZig`). The handle's `grow` is Zig's `realloc`
+/// (`remap`, then alloc + copy + free), which is what the reference's
+/// `w.allocator.realloc(..)` does here; the enum had no `grow`, so it always
+/// took allocator_api2's default alloc + copy + free. The inlined arms keep the
+/// T-A3 perf shape (a null test plus the `Global` call; the C arm is out of
+/// line).
+pub type CaptureAllocator = crate::alloc::VtAllocator;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CaptureMode {
@@ -1014,7 +941,7 @@ impl<'a> Parser<'a> {
         Parser {
             alloc,
             max_allocating_bytes: MAX_ALLOCATING_BUF,
-            capture_alloc: CaptureAllocator::Global,
+            capture_alloc: CaptureAllocator::GLOBAL,
             state: State::Start,
             capture: None,
             command: Command::Invalid,
@@ -1770,7 +1697,7 @@ mod capture_tests {
     #[test]
     fn capture_write_slice_allocating_arm_appends_exact_bytes() {
         let mut buffer = [0u8; MAX_BUF];
-        let mut w = allocator_api2::vec::Vec::new_in(CaptureAllocator::Global);
+        let mut w = allocator_api2::vec::Vec::new_in(CaptureAllocator::GLOBAL);
         w.try_reserve_exact(4).unwrap();
         let mut cap = Capture {
             backing: CaptureBacking::Allocating(w),

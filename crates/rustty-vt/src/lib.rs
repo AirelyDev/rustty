@@ -216,6 +216,10 @@ pub mod string_map;
 // pub const Style = style.Style;
 // pub const Terminal = @import("Terminal.zig");
 pub mod terminal;
+// PORT NOTE (parity tail S7-1): Rust-only glue, the runtime allocator handle
+// that maps `std.mem.Allocator` (`alloc.rs`; design
+// `.port/parity-closure/S7-ALLOCATOR-DESIGN.md`).
+pub mod alloc;
 // PORT NOTE: `terminal/UTF8Decoder.zig` has no top-level re-export in `main.zig`
 // (it is an internal sibling imported by the stream path). Declared here so the
 // stream can reference it; ported as a leaf in this sub-batch.

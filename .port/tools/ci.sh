@@ -737,6 +737,16 @@ GATE_REGISTRY=(
   # about a second. SELF first: synthetic arms prove each RED and GREEN.
   "G-ARTIFACT-SELF|HARD|$PY $GATES/check_runtime_artifact_setter.py --self-test"
   "G-ARTIFACT|HARD|$PY $GATES/check_runtime_artifact_setter.py"
+  # G-VTALLOC (2026-09-24, parity tail S7-1, N261) — allocator_api2's stable
+  # `Vec::{extend_from_slice, resize}` are per-element loops (+81% on
+  # screen-clone.render when RenderState moved onto them); the vt crates ban
+  # them with clippy `disallowed-methods` (their clippy.toml), which the
+  # workspace clippy step enforces. This gate pins the two configs (present,
+  # identical, both paths, no `allow` escape); the SELF entry proves on a
+  # fixture crate that each config flags exactly the two banned calls and that
+  # no config flags nothing (the ban cannot silently stop resolving).
+  "G-VTALLOC-SELF|HARD|bash $GATES/check_vt_alloc_vec_ban.sh --self-test"
+  "G-VTALLOC|HARD|bash $GATES/check_vt_alloc_vec_ban.sh"
   # G-GTKFEAT (2026-07-31) — the same hole as G-ONIG, one crate over. The
   # workspace clippy lane above builds with DEFAULT features, and rustty-apprt's
   # gtk/wayland/x11 features are default-OFF, so ~30k lines of ported GTK4/
