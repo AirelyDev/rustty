@@ -797,14 +797,15 @@ fn setupZsh(
 // PORT NOTE: support shims (Rust-only glue).
 // ---------------------------------------------------------------------------
 
-/// PORT NOTE (Zig-std shim): `std.fs.path.basename` — the final path component
-/// (config theme.rs precedent).
+/// PORT NOTE (Zig-std shim): `std.fs.path.basename`, the port in
+/// `rustty_config::path` (`basenamePosix`, or `basenameWindows` on Windows).
+//
+// CORRECTION (S213-F1): this was a local `rposition(MAIN_SEPARATOR)` shim that
+// did not skip trailing separators, so `basename("/usr/bin/bash/")` was `""`
+// and `detectShell` found no shell (Zig's is `"bash"`), and it ignored `/` and
+// drive prefixes on Windows.
 fn basename(path: &[u8]) -> &[u8] {
-    let sep = std::path::MAIN_SEPARATOR as u8;
-    match path.iter().rposition(|&b| b == sep) {
-        Some(idx) => &path[idx + 1..],
-        None => path,
-    }
+    configpkg::path::basename(path)
 }
 
 /// PORT NOTE (R2 identity): the reference's `GHOSTTY_*` env-var names carry the
@@ -1047,6 +1048,45 @@ mod tests {
             Some(Shell::Bash),
             detectShell(&configpkg::command::Command::Shell(
                 b"\"/a b/bash\"".to_vec()
+            ))
+        );
+    }
+
+    /// S213-F1 (no reference counterpart): `detectShell` takes the executable
+    /// name with zig's `std.fs.path.basename`, which skips trailing separators.
+    /// The rows are zig 0.16.0's own `test basename` rows for the native
+    /// (POSIX) `basename`, `std/fs/path.zig:1441-1455`, then the shell case.
+    #[test]
+    #[cfg(not(windows))]
+    fn detect_shell_basename_skips_trailing_separators() {
+        for (input, want) in [
+            (&b""[..], &b""[..]),
+            (b"/", b""),
+            (b"/dir/basename.ext", b"basename.ext"),
+            (b"/basename.ext", b"basename.ext"),
+            (b"basename.ext", b"basename.ext"),
+            (b"basename.ext/", b"basename.ext"),
+            (b"basename.ext//", b"basename.ext"),
+            (b"/aaa/bbb", b"bbb"),
+            (b"/aaa/", b"aaa"),
+            (b"/aaa/b", b"b"),
+            (b"/a/b", b"b"),
+            // For Windows, this is a UNC path that only has a server name component.
+            (b"//a", b"a"),
+        ] {
+            assert_eq!(basename(input), want, "{:?}", input);
+        }
+
+        assert_eq!(
+            Some(Shell::Zsh),
+            detectShell(&configpkg::command::Command::Shell(
+                b"/usr/bin/zsh/".to_vec()
+            ))
+        );
+        assert_eq!(
+            Some(Shell::Bash),
+            detectShell(&configpkg::command::Command::Shell(
+                b"/opt/bin/bash//".to_vec()
             ))
         );
     }

@@ -963,7 +963,7 @@ pub(crate) fn basename_posix(path: &[u8]) -> &[u8] {
 
 /// PORTS: `std.fs.path.basename(path)` — the target-dispatched form (see the
 /// `is_absolute` PORT NOTE on why both arms are always compiled).
-pub(crate) fn basename(path: &[u8]) -> &[u8] {
+pub fn basename(path: &[u8]) -> &[u8] {
     #[cfg(windows)]
     {
         basename_windows(path)
