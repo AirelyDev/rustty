@@ -1353,7 +1353,7 @@ mod tests {
     }
 
     /// S213-F2 / UD204 (no reference counterpart): repeated inject flags that
-    /// overflow the reference's 32-byte buffer (36 bytes here) still set up
+    /// overflow the reference's 32-byte buffer (41 bytes here) still set up
     /// the integration, with every flag passed on, instead of failing
     /// `setupBash` and with it the surface.
     #[test]
