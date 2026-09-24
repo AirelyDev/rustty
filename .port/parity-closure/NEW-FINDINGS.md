@@ -3239,4 +3239,4 @@ Not fixed in this round; recorded for adjudication.
   variables for the tarball run (`.env_remove("RUSTTY_REQUIRE_FUZZ_CORPUS")`), since a tarball
   legitimately lacks the corpus. The same reason is why the `.git`-probing xtask tests were
   allow-listed in G-SKIP rather than given a strict variable.
-- **state**: OPEN.
+- **state**: CLOSED by task T-B (commit `fab80ad0`, merged via `tail-b2`): the distcheck cargo steps drop `RUSTTY_REQUIRE_FUZZ_CORPUS`, pinned by a test whose negative control (removal line deleted) fails for the stated reason; confirmed by the T-B and T-B2 reviews.
