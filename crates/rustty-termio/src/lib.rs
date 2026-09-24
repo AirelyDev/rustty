@@ -162,7 +162,7 @@ pub(crate) mod log_capture;
 // `Error`, used as `Err(Error)` / `map_err(|_| Error)` at about 190 sites
 // across the workspace; the `Error` constant below keeps those meaning
 // `Error::Other`, so only the sites that produce a named member change.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Error {
     /// Any termio error `threadMain` does not single out.
     Other,
@@ -178,6 +178,20 @@ pub enum Error {
 /// [`Error`]).
 #[allow(non_upper_case_globals)]
 pub const Error: Error = Error::Other;
+
+/// `Other` keeps the unit struct's `Debug` text, `Error`, which the
+/// `err={err:?}` diagnostics print (their tests pin it); the named members
+/// print their names.
+impl core::fmt::Debug for Error {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(match self {
+            Error::Other => "Error",
+            Error::OpenptyFailed => "OpenptyFailed",
+            Error::InputNotFound => "InputNotFound",
+            Error::InputFailed => "InputFailed",
+        })
+    }
+}
 
 impl core::fmt::Display for Error {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
