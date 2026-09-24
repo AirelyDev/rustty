@@ -551,6 +551,44 @@ pub fn init_with_action(action_detected: bool) -> Result<rustty_core::Logging, I
     Ok(logging)
 }
 
+/// Cleans up the global state. This doesn't _need_ to be called but
+/// doing so in dev modes will check for memory leaks.
+///
+/// Asserts that the state exists.
+///
+/// PORTS: `global.zig` `pub fn deinit() void`, the body `rustty_global`'s
+/// leaf `GlobalState::deinit` cannot run because `crash` is above it (R4). Its
+/// one caller is `main_ghostty.zig`'s `defer global.deinit();`, i.e. the
+/// GUI-launch path of the `rustty` binary (parity S43-F4 / S44-F2).
+///
+/// PORT NOTE: `rustty_core::STATE` is a `OnceLock` that is never emptied, so
+/// the owned `resources_dir` and `tmp_dir_path` are released by process exit
+/// rather than here; there is no `std.Io` instance and no GPA (the leak check)
+/// in the port. What remains observable is the crash-log flush.
+pub fn deinit() {
+    // self.resources_dir.deinit(self.alloc);
+    //   (owned by the never-emptied `STATE`; see the PORT NOTE above)
+
+    // Flush our crash logs
+    // crash.deinit();
+    rustty_crash::deinit();
+
+    // Release our tmp_dir_path if needed
+    // if (self.tmp_dir_path) |td| freeTmpDir(self.alloc, td);
+    //   (`freeTmpDir` is a no-op off Windows; the port's path is an owned
+    //   `Vec<u8>` in `rustty_global`, released by process exit.)
+
+    // Release our I/O instance
+    // self.io_impl.deinit();
+    //
+    // if (self.gpa) |*value| {
+    //     // We want to ensure that we deinit the GPA because this is
+    //     // the point at which it will output if there were safety violations.
+    //     _ = value.deinit();
+    // }
+    //   (no `std.Io` or GPA in the port)
+}
+
 /// Compat wrapper — the pre-WS4 `init()` signature (no CLI action detected:
 /// the pure GUI-launch bootstrap). The gtk integration KATs and any embedded
 /// caller that performs no detection use this.

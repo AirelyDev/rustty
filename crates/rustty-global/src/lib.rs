@@ -497,7 +497,9 @@ impl<Action, ResourcesDir> GlobalState<Action, ResourcesDir> {
     //
     // PORT NOTE: `tmp_dir_path` is an owned `Option<Vec<u8>>` and the resources
     // dir / crash log flush are seams, so rustty's leaf `deinit` has nothing
-    // left to do: `Drop` releases the tmp dir path.
+    // left to do: `Drop` releases the tmp dir path. The crash-log flush runs in
+    // `rustty_apprt::deinit`, called by the `rustty` binary's GUI path (the
+    // reference's `defer global.deinit()`), parity S43-F4.
     pub fn deinit(&mut self) {}
 
     // PARITY (DEFERRED SEAM): reference `fn initSignals() void`. POSIX signal
