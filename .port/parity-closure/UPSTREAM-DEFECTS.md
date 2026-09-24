@@ -2335,6 +2335,21 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - proposed fix:    update the FreeType prongs to 7.0 (narrow `cell_width`) and 15.5 (wide `ascii_height`) together with fixing UD276's guard, or pin `.freetype_load_flags = .{ .light = false }` in the test.
 - upstream status: not reported
 
+### UD290 — an `input` that fails after the shell started leaves the IO loop holding completions in a dead stack frame
+- kind:            crash (use-after-free) and leak
+- upstream project: ghostty
+- severity:        medium
+- reference:       src/termio/Termio.zig:343-400 (`threadEnter`: `try self.backend.threadEnter(...)`, `errdefer self.backend.threadExit(data)`, then the `input` loop returning `error.InputFailed` at :382, :391 and :397); src/termio/Exec.zig:159-190 (`threadEnter` registers `process_wait_c`, `flatpak_wait_c` and `termios_timer_c`, all fields of `td`, on `td.loop`); src/termio/Thread.zig:262-270 (`var cb: CallbackData` in `threadMain_`'s frame; `try io.threadEnter(self, &cb.data)` precedes `defer cb.data.deinit()`) and :224-234 (`threadMain` runs `self.loop.run(.until_done)` to drain after `threadMain_` returned), at 20abdb50a
+- defect:          When an `input` file cannot be read, is larger than 10 MiB, or cannot be queued, `Termio.threadEnter` fails after `Exec.threadEnter` has started the shell and registered its completions on the thread's loop. The `errdefer` stops the read thread only. The completions live in `cb.data`, a local of `threadMain_`, which returns the error; `threadMain` then paints the `input` failure screen and runs the loop "to drain", and the loop's first tick starts the queued completions through pointers into the returned frame. `cb.data.deinit()` is registered only after `threadEnter` succeeds, so the read-thread pipe, the process watcher, the write stream and the termios timer are also never released. By reading at the pin; the port, which had the same shape, was MEASURED.
+- ReleaseSafe:     undefined behaviour (a use-after-free of stack memory in the event loop). Not measured in Zig. MEASURED on the port (Linux aarch64, epoll backend, task L-1): SIGSEGV in the loop's submission-queue pop (`rustty_xev::queue::Intrusive::pop`, reached from `Thread::threadMain`'s drain run). On macOS (kqueue) the same port test passed: the freed frame had not yet been overwritten.
+- ReleaseFast:     same.
+- reachability:    config: an `input` entry naming a file over 10 MiB or one that cannot be read, on any surface start.
+- port handling:   fixed (R13): `crates/rustty-termio/src/termio_impl.rs` `Termio::threadEnter` (PORT NOTE: reference defect (R13) at the input-failure branch), after the faithful `backend.threadExit(data)`, stops the thread's loop, which has not run yet, so none of the queued completions was started and a stopped loop never ticks again (`threadMain` then skips its drain, which had nothing to drain: the mailbox and stop waits are registered only after `threadEnter` succeeds), and releases `data` as the normal exit does (`deinit` + drop). The only visible difference from the reference is that the "abrupt io thread exit detected" warning is not logged on this path. Listed in `docs/ghostty-bug-fixes.md`.
+- parity row(s):   none; found by task L-1 (the Linux lane) when `io_thread::oversized_input_file_paints_the_input_failure_screen` (LEDGER S212-F1's test) crashed the `io_thread` test binary on Linux. NEW-FINDINGS N297.
+- test:            `io_thread::oversized_input_file_paints_the_input_failure_screen` (rustty-termio): an `input` file of 10 MiB + 1 byte, the real `Thread::threadMain` on an io thread, the failure screen asserted, then stop and join. Negative control (Linux, task L-1): the four-line fix removed, the binary dies with SIGSEGV (signal 11) in that test.
+- proposed fix:    In `Termio.threadEnter`, add `errdefer data.deinit()` after the backend starts, and make sure nothing is left queued on the loop: for example `errdefer thread.loop.stop()`, or allocate `CallbackData` in `threadMain` so it outlives the drain.
+- upstream status: not reported
+
 ## Candidates pending verification
 
 Assembled from this plan's progress notes on 2026-09-11. **Not verified** — do not cite as fact.
