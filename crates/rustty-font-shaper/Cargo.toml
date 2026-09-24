@@ -135,6 +135,10 @@ rustty-font = { workspace = true }
 rustty-render-types = { workspace = true }
 # Base utilities leaf.
 rustty-util = { workspace = true }
+# Zig std equivalents: `fmt::format_float_d` is the `{d}` the wasm `web_canvas`
+# face formats its CSS font size with (S91-F2). A leaf (already a transitive
+# dep via rustty-font).
+rustty-zigstd = { workspace = true }
 # Grapheme clustering (`unicode.graphemeBreak`/`uucode.grapheme.BreakState`): the
 # wasm `web_canvas` shaper performs grapheme clustering. Pure-Rust leaf (wasm-safe;
 # already a transitive dep via rustty-vt). Only referenced by the wasm shaper.

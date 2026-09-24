@@ -87,7 +87,9 @@ export function makeWebCanvasEnv({ memory, createCanvas, log }) {
       const bytes = encoder.encode(ctx ? ctx.font : "");
       const n = Math.min(bytes.length, cap);
       u8().set(bytes.subarray(0, n), ptr);
-      return n;
+      // The FULL length (S91-F5): larger than `cap` tells the caller to read
+      // again with a buffer that fits.
+      return bytes.length;
     },
     rustty_wc_context_set_fill_style(ch, ptr, len) {
       const ctx = contexts.get(ch);

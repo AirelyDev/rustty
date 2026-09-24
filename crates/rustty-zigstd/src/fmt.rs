@@ -207,7 +207,9 @@ fn parse_int_with_sign<T: ZigInt>(buf: &[u8], base: u8, neg: bool) -> Result<T, 
 /// A float type `parse_float` produces: `f32` or `f64`. The constants are the
 /// `std.math.float*` queries `convert_hex.zig` reads; both types use a `u64`
 /// mantissa (`common.mantissaType`).
-pub trait ZigFloat: Copy {
+pub trait ZigFloat: Copy + PartialEq + fmt::Display {
+    /// The sign bit (`std.math.signbit`).
+    fn sign_bit(self) -> bool;
     /// `math.floatExponentMax(T)`.
     const MAX_EXP: i64;
     /// `math.floatExponentMin(T)`.
@@ -230,6 +232,9 @@ pub trait ZigFloat: Copy {
 }
 
 impl ZigFloat for f64 {
+    fn sign_bit(self) -> bool {
+        self.is_sign_negative()
+    }
     const MAX_EXP: i64 = 1023;
     const MIN_EXP: i64 = -1022;
     const MANTISSA_BITS: u32 = 52;
@@ -249,6 +254,9 @@ impl ZigFloat for f64 {
 }
 
 impl ZigFloat for f32 {
+    fn sign_bit(self) -> bool {
+        self.is_sign_negative()
+    }
     const MAX_EXP: i64 = 127;
     const MIN_EXP: i64 = -126;
     const MANTISSA_BITS: u32 = 23;
@@ -781,7 +789,23 @@ pub fn parse_float<T: ZigFloat>(s: &[u8]) -> Result<T, ParseFloatError> {
     T::from_decimal(&cleaned).ok_or(ParseFloatError::InvalidCharacter)
 }
 
+/// Zig's `{d}` for a float (`std.fmt` decimal float formatting): the shortest
+/// decimal that reads back to the same value, never in exponent form, and
+/// `inf` / `-inf` / `nan` / `-nan`. Rust's `Display` for `f32`/`f64` is the
+/// same shortest round-trip decimal without an exponent; the one difference is
+/// NaN, which Rust spells `NaN` for either sign (`std/fmt/float.zig`
+/// `copySpecialStr` prints the sign). Checked against Zig 0.16.0 over
+/// `zig_float_d_corpus.rs`.
+pub fn format_float_d<T: ZigFloat>(v: T) -> String {
+    if v != v {
+        return if v.sign_bit() { "-nan" } else { "nan" }.to_string();
+    }
+    format!("{v}")
+}
+
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod zig_corpus;
+#[cfg(test)]
+mod zig_float_d_corpus;

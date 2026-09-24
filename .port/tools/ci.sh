@@ -391,6 +391,13 @@ run_webgl_lane() {
     echo ">> FAIL: the wasm log-emission gate exited $rc_log" >&2
     return 1
   fi
+  # Task T-F (S91-F2, S91-F5): the web_canvas face's CSS font value and its
+  # read-back check, executed in the same DEBUG artifact.
+  echo "--- node .port/tools/wasm-web-canvas-font.mjs"
+  if ! node "$ROOT/.port/tools/wasm-web-canvas-font.mjs"; then
+    echo ">> FAIL: the wasm web_canvas font check failed" >&2
+    return 1
+  fi
 
   echo "--- .port/tools/gates/ws14_webgl_browser_gate.sh"
   sh "$GATES/ws14_webgl_browser_gate.sh"

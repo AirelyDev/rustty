@@ -448,3 +448,26 @@ fn parse_float_matches_zig_over_the_corpus() {
         );
     }
 }
+
+/// `format_float_d` gives Zig 0.16.0's own `{d}` text, character for
+/// character, for every value of `zig_float_d_corpus.rs` (f32 and f64,
+/// including the zeros, the extremes, subnormals, infinities and NaNs).
+#[test]
+fn format_float_d_matches_zig_over_the_corpus() {
+    use super::zig_float_d_corpus::{F32, F64};
+    assert!(F32.len() > 30 && F64.len() > 15);
+    for &(bits, want) in F32 {
+        assert_eq!(
+            format_float_d(f32::from_bits(bits)),
+            want,
+            "f32 {bits:#010x}"
+        );
+    }
+    for &(bits, want) in F64 {
+        assert_eq!(
+            format_float_d(f64::from_bits(bits)),
+            want,
+            "f64 {bits:#018x}"
+        );
+    }
+}

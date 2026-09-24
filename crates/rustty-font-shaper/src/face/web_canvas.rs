@@ -138,7 +138,8 @@ mod ffi {
         pub fn rustty_wc_context_clear(ctx: u32);
         /// `ctx.font = <utf8 string>`.
         pub fn rustty_wc_context_set_font(ctx: u32, ptr: *const u8, len: usize);
-        /// Read `ctx.font` back into `out` (up to `cap`); returns the byte length.
+        /// Copy `ctx.font` into `out` (at most `cap` bytes); returns the value's
+        /// FULL byte length, which exceeds `cap` when the copy was cut short.
         pub fn rustty_wc_context_get_font(ctx: u32, out: *mut u8, cap: usize) -> usize;
         /// `ctx.fillStyle = <utf8 string>`.
         pub fn rustty_wc_context_set_fill_style(ctx: u32, ptr: *const u8, len: usize);
@@ -605,8 +606,11 @@ impl Face {
 
         // Set our context font.
         // const font_val = try std.fmt.allocPrint(alloc, "{d}px {s}", .{size.points, font_str});
+        //
+        // S91-F2: `points` is an `f32` and `{d}` prints it in full (13.5 is
+        // "13.5px"); the port printed the integer part.
         let mut font_val: Vec<u8> = Vec::new();
-        push_int(&mut font_val, self.size.points as i64);
+        font_val.extend_from_slice(rustty_zigstd::fmt::format_float_d(self.size.points).as_bytes());
         font_val.extend_from_slice(b"px ");
         font_val.extend_from_slice(&self.font_str);
         // try ctx.set("font", js.string(font_val));
@@ -617,9 +621,19 @@ impl Face {
         // this at least makes it show up in the logs.
         // const check = try ctx.getAlloc(js.String, self.alloc, "font");
         // if (!std.mem.eql(u8, font_val, check)) log.warn("canvas font didn't set…");
-        let mut check = [0u8; 256];
-        let n = unsafe { ffi::rustty_wc_context_get_font(ctx, check.as_mut_ptr(), check.len()) };
-        let got = check.get(..n).unwrap_or(&[]);
+        //
+        // S91-F5: the reference reads the whole value back (`getAlloc`); the
+        // port read at most 256 bytes, so a longer font always compared unequal
+        // and warned. `rustty_wc_context_get_font` returns the value's full
+        // length, so a second read gets all of it when the first was short.
+        let mut check = vec![0u8; font_val.len() + 1];
+        let mut n =
+            unsafe { ffi::rustty_wc_context_get_font(ctx, check.as_mut_ptr(), check.len()) };
+        if n > check.len() {
+            check.resize(n, 0);
+            n = unsafe { ffi::rustty_wc_context_get_font(ctx, check.as_mut_ptr(), check.len()) };
+        }
+        let got = check.get(..n).unwrap_or(&check[..]);
         if font_val != got {
             font_did_not_set(&font_val, got);
         }
@@ -886,25 +900,6 @@ fn font_did_not_set(expected: &[u8], got: &[u8]) {
         String::from_utf8_lossy(expected),
         String::from_utf8_lossy(got)
     );
-}
-
-/// Append the base-10 ASCII of a non-negative integer to `out` (the `{d}` in the
-/// reference `std.fmt.allocPrint`).
-fn push_int(out: &mut Vec<u8>, mut v: i64) {
-    if v < 0 {
-        out.push(b'-');
-        v = -v;
-    }
-    if v == 0 {
-        out.push(b'0');
-        return;
-    }
-    let start = out.len();
-    while v > 0 {
-        out.push(b'0' + (v % 10) as u8);
-        v /= 10;
-    }
-    out[start..].reverse();
 }
 
 // ---------------------------------------------------------------------------
