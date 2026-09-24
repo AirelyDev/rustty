@@ -49,11 +49,7 @@ const ASCII_WHITESPACE: &[u8] = &[b' ', b'\t', b'\n', 0x0b, 0x0c, b'\r'];
 
 /// `std.fmt.ParseIntError = error{ Overflow, InvalidCharacter }` — the errors
 /// of the reference's `std.fmt.parseUnsigned(u64, buf, 0)` calls.
-#[derive(Debug)]
-enum ParseIntError {
-    Overflow,
-    InvalidCharacter,
-}
+use rustty_args::std_fmt::ParseIntError;
 
 /// The error set of the reference `checkArg`: `error{InvalidValue} ||
 /// error{Unexpected} || std.fmt.ParseIntError || homedir.ExpandError ||
@@ -635,77 +631,20 @@ fn realpath_bytes(path: &[u8]) -> Result<Vec<u8>, std::io::Error> {
     }
 }
 
-/// PORTS: `std.fmt.parseUnsigned(u64, buf, 0)` — base-0 radix detection from
-/// the `0x`/`0o`/`0b` prefix (else base 10), an optional leading `+` (no `-`
-/// for unsigned), and `_` digit separators (rejected at the first or last
-/// position of the digit run, skipped elsewhere). `error.Overflow` /
-/// `error.InvalidCharacter` map to the [`ParseIntError`] variants.
+/// PORTS: `std.fmt.parseUnsigned(u64, buf, 0)`, through the ported std parser
+/// (`rustty_args::std_fmt::parse_unsigned`).
+//
+// PORT NOTE (NEW-FINDINGS N122): this was a hand-written copy that stripped a
+// leading `+`, on the belief that `parseUnsigned` is `parseIntWithSign(.pos)`
+// AFTER a sign strip. It is not: `parseUnsigned` passes `buf` straight to
+// `parseIntWithSign(.., .pos)`, so a `+` reaches `charToDigit` and is
+// `error.InvalidCharacter` (std's own `test parseUnsigned`: `parseUnsigned(u8,
+// "+0", 10)` is `error.InvalidCharacter`; MEASURED with Zig 0.16.0:
+// `parseUnsigned(u64, "+5", 0)` is `error.InvalidCharacter`). The port
+// accepted `--surface-id=+5` and a `+5` surface-id env value where the
+// reference rejects them.
 fn parse_unsigned_u64_base0(buf: &[u8]) -> Result<u64, ParseIntError> {
-    // if (buf.len == 0) return error.InvalidCharacter;
-    if buf.is_empty() {
-        return Err(ParseIntError::InvalidCharacter);
-    }
-
-    // parseUnsigned == parseIntWithSign(.pos): a leading '+' is accepted, '-'
-    // is an invalid character for the unsigned parse.
-    let mut i = 0;
-    if buf[0] == b'+' {
-        i = 1;
-    }
-    if i >= buf.len() {
-        return Err(ParseIntError::InvalidCharacter);
-    }
-
-    // Detect the radix from the prefix when base == 0.
-    let mut radix: u64 = 10;
-    if buf[i] == b'0' && i + 1 < buf.len() {
-        match buf[i + 1] {
-            b'x' | b'X' => {
-                radix = 16;
-                i += 2;
-            }
-            b'o' | b'O' => {
-                radix = 8;
-                i += 2;
-            }
-            b'b' | b'B' => {
-                radix = 2;
-                i += 2;
-            }
-            _ => {}
-        }
-    }
-    if i >= buf.len() {
-        return Err(ParseIntError::InvalidCharacter);
-    }
-
-    // `_` rejected at the first or last position of the digit run.
-    let digits = &buf[i..];
-    if digits[0] == b'_' || digits[digits.len() - 1] == b'_' {
-        return Err(ParseIntError::InvalidCharacter);
-    }
-
-    let mut acc: u64 = 0;
-    for &b in digits {
-        if b == b'_' {
-            continue;
-        }
-        let d = match b {
-            b'0'..=b'9' => (b - b'0') as u64,
-            b'a'..=b'z' => (b - b'a' + 10) as u64,
-            b'A'..=b'Z' => (b - b'A' + 10) as u64,
-            _ => return Err(ParseIntError::InvalidCharacter),
-        };
-        if d >= radix {
-            return Err(ParseIntError::InvalidCharacter);
-        }
-        // mulWithOverflow / addWithOverflow
-        acc = acc
-            .checked_mul(radix)
-            .and_then(|v| v.checked_add(d))
-            .ok_or(ParseIntError::Overflow)?;
-    }
-    Ok(acc)
+    rustty_args::std_fmt::parse_unsigned::<u64>(buf, 0)
 }
 
 #[cfg(test)]
@@ -741,5 +680,38 @@ mod tests {
             (1, b"Error parsing args: error.InvalidCharacter\n".to_vec()),
             run_with(b"--surface-id=abc")
         );
+    }
+
+    // NEW-FINDINGS N122: `std.fmt.parseUnsigned` takes no sign, so the
+    // reference rejects `--surface-id=+5` with `error.InvalidCharacter`
+    // (MEASURED with Zig 0.16.0) and prints it. An unsigned id still parses,
+    // with base-0 prefix detection and `_` separators.
+    #[test]
+    fn surface_id_rejects_a_leading_plus_like_parse_unsigned() {
+        assert_eq!(
+            (1, b"Error parsing args: error.InvalidCharacter\n".to_vec()),
+            run_with(b"--surface-id=+5")
+        );
+
+        let mut opts = Options::default();
+        assert!(matches!(
+            opts.check_arg(b"--surface-id=+5"),
+            Err(CheckArgError::ParseInt(ParseIntError::InvalidCharacter))
+        ));
+        assert_eq!(opts.surface_id, None);
+        assert!(matches!(opts.check_arg(b"--surface-id= 5 "), Ok(None)));
+        assert_eq!(opts.surface_id, Some(5));
+        assert!(matches!(opts.check_arg(b"--surface-id=0x1_0"), Ok(None)));
+        assert_eq!(opts.surface_id, Some(16));
+
+        assert_eq!(
+            parse_unsigned_u64_base0(b"+5"),
+            Err(ParseIntError::InvalidCharacter)
+        );
+        assert_eq!(
+            parse_unsigned_u64_base0(b"-5"),
+            Err(ParseIntError::InvalidCharacter)
+        );
+        assert_eq!(parse_unsigned_u64_base0(b"5"), Ok(5));
     }
 }
