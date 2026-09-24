@@ -1855,8 +1855,6 @@ mod tests {
         c.deinit();
     }
 
-    // test "tmux client-session-changed"
-    #[cfg(feature = "oniguruma")]
     // N102 (no reference test): the first `oni::Regex::init` in a process
     // makes `onig_new` initialize Oniguruma's process-global tables, lazily and
     // without synchronization, so several threads parsing their first
@@ -1864,6 +1862,7 @@ mod tests {
     // SIGABRT / SIGSEGV of this module's tests under the parallel harness).
     // The child process starts 16 threads that all parse their first
     // notification together; the parent runs it 40 times.
+    #[cfg(feature = "oniguruma")]
     #[test]
     fn concurrent_first_notifications_do_not_race_oniguruma_init() {
         const CHILD: &str = "RUSTTY_VT_ONIG_INIT_RACE_CHILD";
@@ -1911,6 +1910,8 @@ mod tests {
         }
     }
 
+    // test "tmux client-session-changed"
+    #[cfg(feature = "oniguruma")]
     #[test]
     fn tmux_client_session_changed() {
         let mut c = Parser::init();
