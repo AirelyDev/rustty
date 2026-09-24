@@ -18,12 +18,19 @@
 
 // -- Targets bit positions (from reference targets.zig comptime asserts) ------
 // x86_64
+#define TGT_AVX3_SPR   (1LL << 4)
+#define TGT_AVX3_ZEN4  (1LL << 6)
+#define TGT_AVX3_DL    (1LL << 7)
 #define TGT_AVX3       (1LL << 8)
 #define TGT_AVX2       (1LL << 9)
 #define TGT_SSE4       (1LL << 11)
 #define TGT_SSSE3      (1LL << 12)
 #define TGT_SSE2       (1LL << 14)
 // aarch64
+#define TGT_SVE2_128   (1LL << 18)
+#define TGT_SVE_256    (1LL << 19)
+#define TGT_SVE2       (1LL << 23)
+#define TGT_SVE        (1LL << 24)
 #define TGT_NEON_BF16  (1LL << 26)
 #define TGT_NEON       (1LL << 28)
 #define TGT_NEON_NO_AES (1LL << 29)
@@ -192,6 +199,182 @@ int64_t rustty_hwy_detect_targets_riscv_for_test(uint64_t hwcap) {
   return riscv_targets_enabled(hwcap);
 }
 
+// -- x86 AVX-512 / AVX10 gate (portable, no CPU instructions) ----------------
+//
+// Ports pkg/highway/src/detect/x86.zig:66-72 (has_avx512_save), :96-154
+// (AVX-512, AVX10) and :160-166 (isAMD) (S34-F2: the previous C port never
+// set any of avx3 / avx3_dl / avx3_zen4 / avx3_spr). The CPUID/XCR0 values
+// arrive already read, so tests can drive it with synthetic leaves on any host;
+// the real x86 detector below reads each leaf only when the reference does and
+// passes 0 for the rest, which this function never consults.
+struct rustty_hwy_x86_leaves {
+  unsigned int max_leaf;   // cpuid(0).eax
+  unsigned int leaf1_ecx;  // cpuid(1).ecx
+  unsigned int xcr0;       // xgetbv(0).eax (read only with OSXSAVE + AVX)
+  unsigned int leaf7_eax;  // cpuid(7, 0)
+  unsigned int leaf7_ebx;
+  unsigned int leaf7_ecx;
+  unsigned int leaf7_edx;
+  unsigned int leaf7_1_eax;  // cpuid(7, 1), read when leaf7_eax >= 1
+  unsigned int leaf7_1_edx;
+  unsigned int leaf24_ebx;  // cpuid(0x24, 0).ebx, read when max_leaf >= 0x24
+  int is_amd;               // isAMD(): cpuid(0) vendor "AuthenticAMD"
+  int is_darwin;            // comptime builtin.os.tag.isDarwin()
+};
+
+static int64_t x86_avx512_targets(const struct rustty_hwy_x86_leaves* l) {
+  int64_t t = 0;
+
+  // Check XSAVE / AVX OS support before enabling any AVX-dependent target.
+  int has_xsave = bit_set(l->leaf1_ecx, 27);
+  int has_avx_bit = bit_set(l->leaf1_ecx, 28);
+  unsigned int xcr0 = (has_xsave && has_avx_bit) ? l->xcr0 : 0;
+  int has_avx_save = (xcr0 & 0x6) == 0x6; // SSE + AVX state
+
+  // Darwin lazily saves AVX-512 context on first use.
+  int has_avx512_save =
+      l->is_darwin ? 1
+                   : (xcr0 & 0xE0) == 0xE0; // opmask + zmm_hi256 + hi16_zmm
+
+  if (!(has_avx_save && l->max_leaf >= 7)) return 0;
+
+  // -- AVX-512 ---------------------------------------------------------------
+  if (has_avx512_save) {
+    if (bit_set(l->leaf7_ebx, 16) && // AVX512F
+        bit_set(l->leaf7_ebx, 31) && // AVX512VL
+        bit_set(l->leaf7_ebx, 17) && // AVX512DQ
+        bit_set(l->leaf7_ebx, 30) && // AVX512BW
+        bit_set(l->leaf7_ebx, 28)) { // AVX512CD
+      t |= TGT_AVX3;
+    }
+
+    if (bit_set(l->leaf7_ecx, 11) && // AVX512VNNI
+        bit_set(l->leaf7_ecx, 10) && // VPCLMULQDQ (AVX save ok)
+        bit_set(l->leaf7_ecx, 1) &&  // AVX512VBMI
+        bit_set(l->leaf7_ecx, 6) &&  // AVX512VBMI2
+        bit_set(l->leaf7_ecx, 9) &&  // VAES (AVX save ok)
+        bit_set(l->leaf7_ecx, 14) && // AVX512VPOPCNTDQ
+        bit_set(l->leaf7_ecx, 12) && // AVX512BITALG
+        bit_set(l->leaf7_ecx, 8)) {  // GFNI
+      t |= TGT_AVX3_DL;
+    }
+
+    // AVX512BF16 is in leaf 7 sub-1.
+    if ((t & TGT_AVX3_DL) && l->leaf7_eax >= 1) {
+      if (bit_set(l->leaf7_1_eax, 5)) { // AVX512BF16
+        if (l->is_amd) {
+          t |= TGT_AVX3_ZEN4;
+        }
+      }
+
+      if (bit_set(l->leaf7_edx, 23) &&   // AVX512FP16
+          bit_set(l->leaf7_1_eax, 5)) {  // AVX512BF16
+        t |= TGT_AVX3_SPR;
+      }
+    } else if (bit_set(l->leaf7_edx, 23)) { // AVX512FP16 without sub-leaf
+      // Can't check BF16 without sub-leaf support, skip avx3_spr.
+    }
+  }
+
+  // -- AVX10 -----------------------------------------------------------------
+  if (l->max_leaf >= 7 && l->leaf7_eax >= 1) {
+    if (bit_set(l->leaf7_1_edx, 19)) { // AVX10.1-256
+      if (l->max_leaf >= 0x24) {
+        if (bit_set(l->leaf24_ebx, 18)) { // AVX10.1-512
+          t |= TGT_AVX3_SPR;
+          t |= TGT_AVX3_DL;
+          t |= TGT_AVX3;
+        }
+      }
+
+      // AVX10.2 detection would require a leaf we can't
+      // reliably check yet; leave for future.
+    }
+  }
+
+  return t;
+}
+
+// isAMD(): cpuid(0) ebx/edx/ecx spell "Auth" "enti" "cAMD" (x86.zig:160-166).
+static int x86_is_amd(unsigned int leaf0_ebx, unsigned int leaf0_ecx,
+                      unsigned int leaf0_edx) {
+  return leaf0_ebx == 0x68747541 && leaf0_ecx == 0x444d4163 &&
+         leaf0_edx == 0x69746e65;
+}
+
+// Test seams (S34-F2): x86_avx512_targets() and x86_is_amd() with synthetic
+// leaves, callable on every host this crate builds on.
+int64_t rustty_hwy_detect_targets_x86_avx512_for_test(
+    const struct rustty_hwy_x86_leaves* leaves) {
+  return x86_avx512_targets(leaves);
+}
+
+int rustty_hwy_detect_x86_is_amd_for_test(unsigned int leaf0_ebx,
+                                          unsigned int leaf0_ecx,
+                                          unsigned int leaf0_edx) {
+  return x86_is_amd(leaf0_ebx, leaf0_ecx, leaf0_edx);
+}
+
+// -- aarch64 Linux gate (portable, no CPU instructions) ----------------------
+//
+// Ports pkg/highway/src/detect/aarch64_linux.zig:9-50 (S34-F3: the previous C
+// port probed the SVE vector length, discarded it, and never set sve /
+// sve_256 / sve2 / sve2_128). `vec_bytes` is sveVectorBytes()'s result; the
+// real detector computes it only when HWCAP_SVE is set, as the reference does,
+// and this function reads it only then. The baseline neon_without_aes bit is
+// the caller's (detect.zig:47).
+static int64_t aarch64_linux_targets(uint64_t hwcap, uint64_t hwcap2,
+                                     uint64_t vec_bytes) {
+  // Bit positions from Linux UAPI asm/hwcap.h. Trailing-underscore names so we
+  // don't collide with the HWCAP_*/HWCAP2_* macros glibc's <sys/auxv.h> pulls
+  // in via <bits/hwcap.h>.
+  const uint64_t HWCAP_AES_ = (uint64_t)1 << 3;
+  const uint64_t HWCAP_FPHP_ = (uint64_t)1 << 9;     // FEAT_FP16
+  const uint64_t HWCAP_ASIMDDP_ = (uint64_t)1 << 20; // DotProd
+  const uint64_t HWCAP_SVE_ = (uint64_t)1 << 22;
+
+  const uint64_t HWCAP2_BF16_ = (uint64_t)1 << 14;
+  const uint64_t HWCAP2_SVE2_ = (uint64_t)1 << 1;
+  const uint64_t HWCAP2_SVEAES_ = (uint64_t)1 << 2;
+
+  int64_t t = 0;
+  if (hwcap & HWCAP_AES_) {
+    t |= TGT_NEON;
+
+    if ((hwcap & HWCAP_FPHP_) && (hwcap & HWCAP_ASIMDDP_) &&
+        (hwcap2 & HWCAP2_BF16_)) {
+      t |= TGT_NEON_BF16;
+    }
+  }
+
+  if (hwcap & HWCAP_SVE_) {
+    if (vec_bytes >= 32) {
+      t |= TGT_SVE;
+      if (vec_bytes == 32) {
+        t |= TGT_SVE_256;
+      }
+    }
+
+    if ((hwcap2 & HWCAP2_SVE2_) && (hwcap2 & HWCAP2_SVEAES_)) {
+      if (vec_bytes >= 32) {
+        t |= TGT_SVE2;
+      } else if (vec_bytes == 16) {
+        t |= TGT_SVE2_128;
+      }
+    }
+  }
+
+  return t;
+}
+
+// Test seam (S34-F3): aarch64_linux_targets() with synthetic hwcap/hwcap2 and
+// SVE vector length, callable on every host this crate builds on.
+int64_t rustty_hwy_detect_targets_aarch64_linux_for_test(uint64_t hwcap,
+                                                         uint64_t hwcap2,
+                                                         uint64_t vec_bytes) {
+  return aarch64_linux_targets(hwcap, hwcap2, vec_bytes);
+}
+
 #if defined(__aarch64__) || defined(_M_ARM64)
 
 #if defined(__APPLE__)
@@ -253,30 +436,14 @@ int64_t rustty_hwy_detect_targets(void) {
   unsigned long hwcap = getauxval(AT_HWCAP_);
   unsigned long hwcap2 = getauxval(AT_HWCAP2_);
 
-  // Bit positions from Linux UAPI asm/hwcap.h. Trailing-underscore names (like
-  // AT_HWCAP_ / AT_HWCAP2_ / PR_SVE_GET_VL_ above) so we don't collide with the
-  // HWCAP_*/HWCAP2_* macros glibc's <sys/auxv.h> pulls in via <bits/hwcap.h>.
-  const unsigned long HWCAP_AES_ = 1UL << 3;
-  const unsigned long HWCAP_FPHP_ = 1UL << 9;     // FEAT_FP16
-  const unsigned long HWCAP_ASIMDDP_ = 1UL << 20; // DotProd
+  // sveVectorBytes() runs only when HWCAP_SVE is set (aarch64_linux.zig:33),
+  // the only case aarch64_linux_targets() reads it.
   const unsigned long HWCAP_SVE_ = 1UL << 22;
+  uint64_t vec_bytes = (hwcap & HWCAP_SVE_) ? (uint64_t)sve_vector_bytes() : 0;
 
-  const unsigned long HWCAP2_BF16_ = 1UL << 14;
-
-  if (hwcap & HWCAP_AES_) {
-    t |= TGT_NEON;
-
-    if ((hwcap & HWCAP_FPHP_) && (hwcap & HWCAP_ASIMDDP_) &&
-        (hwcap2 & HWCAP2_BF16_)) {
-      t |= TGT_NEON_BF16;
-    }
-  }
-
-  // SVE width probing (sve/sve2 bits are not used by the simd kernels here,
-  // but we probe to keep the mask faithful to the reference).
-  if (hwcap & HWCAP_SVE_) {
-    (void)sve_vector_bytes();
-  }
+  // NEON / NEON_BF16 / SVE / SVE_256 / SVE2 / SVE2_128 (S34-F3), via the
+  // shared aarch64_linux_targets() gate defined above.
+  t |= aarch64_linux_targets(hwcap, hwcap2, vec_bytes);
 
   return t;
 }
@@ -355,6 +522,35 @@ int64_t rustty_hwy_detect_targets(void) {
     if (x86_avx2_enabled(max_leaf, l1c, l7b, e1c, xcr0)) {
       t |= TGT_AVX2;
     }
+
+    // -- AVX-512 / AVX10 (S34-F2) --------------------------------------------
+    // Ports x86.zig:96-154 via the shared x86_avx512_targets() gate defined
+    // above. cpuid(7, 1) is read only when leaf 7 reports sub-leaves and
+    // cpuid(0x24) only when it exists, as the reference reads them.
+    struct rustty_hwy_x86_leaves leaves = {0};
+    leaves.max_leaf = max_leaf;
+    leaves.leaf1_ecx = l1c;
+    leaves.xcr0 = xcr0;
+    leaves.leaf7_eax = l7a;
+    leaves.leaf7_ebx = l7b;
+    leaves.leaf7_ecx = l7c;
+    leaves.leaf7_edx = l7d;
+    if (l7a >= 1) {
+      unsigned int s1a = 0, s1b = 0, s1c = 0, s1d = 0;
+      __get_cpuid_count(7, 1, &s1a, &s1b, &s1c, &s1d);
+      leaves.leaf7_1_eax = s1a;
+      leaves.leaf7_1_edx = s1d;
+    }
+    if (max_leaf >= 0x24) {
+      unsigned int x24a = 0, x24b = 0, x24c = 0, x24d = 0;
+      __get_cpuid_count(0x24, 0, &x24a, &x24b, &x24c, &x24d);
+      leaves.leaf24_ebx = x24b;
+    }
+    leaves.is_amd = x86_is_amd(b, c, d);
+#if defined(__APPLE__)
+    leaves.is_darwin = 1;
+#endif
+    t |= x86_avx512_targets(&leaves);
   }
 
   return t;
