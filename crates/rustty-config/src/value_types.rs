@@ -30,7 +30,6 @@ use rustty_cfg_fmt::{
 };
 // PORTS: `u21` (Zig's 21-bit codepoint type) -> `rustty_vt::page::u21` (= u32).
 use rustty_vt::page::u21;
-use std::borrow::Cow;
 
 // PORT NOTE (R1): the value-type parse/format/clone/equal bodies below are the
 // fill of the C2 skeleton (sub-batch). Each reproduces the reference method
@@ -81,13 +80,11 @@ macro_rules! impl_limit_int {
             // was `parse_field_int` (rustty-args' `from_str_radix` path), which
             // rejects the `_` separators and `-0` that `parseInt` accepts, so
             // `scrollback-limit-bytes = 50_000_000` was a config error.
-            // `parse_unsigned_base0` is this crate's port of the base-0
-            // unsigned `parseInt`; every `Limit` `T` is unsigned.
+            // It calls `rustty_args::std_fmt::parse_int`, the port of
+            // `std.fmt.parseInt` itself (NEW-FINDINGS N120).
             fn parse_limit(input: &[u8]) -> Result<$t, ParseError> {
-                parse_unsigned_base0(input)
-                    .ok()
-                    .and_then(|v| <$t>::try_from(v).ok())
-                    .ok_or(Error::InvalidValue)
+                // .value = std.fmt.parseInt(T, input, 0) catch return error.InvalidValue,
+                rustty_args::std_fmt::parse_int::<$t>(input, 0).map_err(|_| Error::InvalidValue)
             }
         }
     )*};
@@ -2563,113 +2560,17 @@ pub(crate) fn background_blur_format_entry<W: Writer>(
 }
 
 /// PORTS: the error set of `std.fmt.parseInt` — `error{ Overflow, InvalidCharacter }`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ParseIntError {
-    Overflow,
-    InvalidCharacter,
-}
+//
+// PORT NOTE (NEW-FINDINGS N120, task T-C3): this crate carried its own partial
+// copies of `std.fmt.parseInt` / `parseUnsigned` / `parseFloat`. They now call
+// the one port in `rustty_args::std_fmt` (this crate already depends on
+// rustty-args), whose tests are Zig 0.16.0's std tables.
+pub use rustty_args::std_fmt::ParseIntError;
 
 /// PORTS: `std.fmt.parseInt(u8, input, 0)` — base-0 means the radix is detected
-/// from the prefix (`0x`/`0o`/`0b`, optional leading `+`/`-`; here unsigned).
+/// from the prefix (`0x`/`0o`/`0b`).
 fn parse_int_u8_base0(input: &[u8]) -> Result<u8, ParseIntError> {
-    let v = parse_unsigned_base0(input)?;
-    u8::try_from(v).map_err(|_| ParseIntError::Overflow)
-}
-
-/// PORTS: `std.fmt.parseInt(T, buf, 0)` for unsigned `T` — radix detection from
-/// the `0x`/`0o`/`0b` prefix (else base 10), an optional leading sign, and `_`
-/// digit separators. Returns `error.Overflow` -> the reference's `error.Overflow`
-/// and `error.InvalidCharacter` -> `error.InvalidValue` semantics; both collapse
-/// to `InvalidValue` at the config call sites that use base 0 (`parseInt(u8,..,0)`).
-//
-// PORT NOTE: a u128 accumulator with an explicit overflow check reproduces
-// `std.fmt.parseInt`'s digit-by-digit `mulWithOverflow`/`addWithOverflow`.
-fn parse_unsigned_base0(buf: &[u8]) -> Result<u128, ParseIntError> {
-    // const Result = ... if (buf.len == 0) return error.InvalidCharacter;
-    if buf.is_empty() {
-        return Err(ParseIntError::InvalidCharacter);
-    }
-
-    // Optional sign. `parseInt` accepts a leading '+'/'-'; for unsigned a '-'
-    // with a non-zero magnitude overflows. We accept '+' and reject '-' on a
-    // non-zero value (matching unsigned `parseInt`).
-    let mut i = 0;
-    let mut negative = false;
-    match buf[0] {
-        b'+' => i = 1,
-        b'-' => {
-            negative = true;
-            i = 1;
-        }
-        _ => {}
-    }
-    if i >= buf.len() {
-        return Err(ParseIntError::InvalidCharacter);
-    }
-
-    // Detect the radix from the prefix when base == 0.
-    let mut radix: u128 = 10;
-    if buf[i] == b'0' && i + 1 < buf.len() {
-        match buf[i + 1] {
-            b'x' | b'X' => {
-                radix = 16;
-                i += 2;
-            }
-            b'o' | b'O' => {
-                radix = 8;
-                i += 2;
-            }
-            b'b' | b'B' => {
-                radix = 2;
-                i += 2;
-            }
-            _ => {}
-        }
-    }
-    if i >= buf.len() {
-        return Err(ParseIntError::InvalidCharacter);
-    }
-
-    // if (buf_start[0] == '_' or buf_start[buf_start.len - 1] == '_') return error.InvalidCharacter;
-    //
-    // `std.fmt.parseInt` rejects a `_` separator only at the FIRST or LAST
-    // position of the post-sign/post-prefix digit run; interior (including
-    // doubled) separators are skipped by the loop below. `_12`, `12_` and
-    // `0x_10` are therefore `error.InvalidCharacter`, while `1__2` is 12.
-    let digits = &buf[i..];
-    if digits[0] == b'_' || digits[digits.len() - 1] == b'_' {
-        return Err(ParseIntError::InvalidCharacter);
-    }
-
-    let mut acc: u128 = 0;
-    let mut any = false;
-    for &c in digits {
-        // if (c == '_') continue;
-        if c == b'_' {
-            continue;
-        }
-        let digit = match c {
-            b'0'..=b'9' => (c - b'0') as u128,
-            b'a'..=b'z' => (c - b'a' + 10) as u128,
-            b'A'..=b'Z' => (c - b'A' + 10) as u128,
-            _ => return Err(ParseIntError::InvalidCharacter),
-        };
-        if digit >= radix {
-            return Err(ParseIntError::InvalidCharacter);
-        }
-        acc = acc
-            .checked_mul(radix)
-            .and_then(|v| v.checked_add(digit))
-            .ok_or(ParseIntError::Overflow)?;
-        any = true;
-    }
-    if !any {
-        return Err(ParseIntError::InvalidCharacter);
-    }
-    if negative && acc != 0 {
-        return Err(ParseIntError::Overflow);
-    }
-    Ok(acc)
+    rustty_args::std_fmt::parse_int::<u8>(input, 0)
 }
 
 // ===========================================================================
@@ -6412,557 +6313,18 @@ impl FormatEntry for MouseScrollMultiplier {
     }
 }
 
-// ===========================================================================
-// PORTS: Zig `lib/std/fmt/parse_float.zig` + `parse_float/parse.zig` +
-// `parse_float/FloatStream.zig` + `parse_float/convert_hex.zig` (Zig 0.16.0,
-// the version `ghostty/build.zig.zon` pins as `.minimum_zig_version`).
-//
-// S75-F1. `parse_float_f64` used to be
-// `core::str::from_utf8(input).ok().and_then(|s| s.parse::<f64>().ok())`.
-// Rust's `f64::from_str` and Zig's `std.fmt.parseFloat` accept DIFFERENT
-// grammars, and every difference is a config value Ghostty loads and rustty
-// rejects with an `InvalidValue` diagnostic:
-//
-//   * `_` DIGIT SEPARATORS. `FloatStream.scanDigit` skips `_` and counts it,
-//     and `validUnderscores` then requires every `_` to sit strictly between
-//     two digits OF THE BASE. So `wght=1_000` and `precision:1_0` load in the
-//     reference; Rust rejects any `_` as `InvalidDigit`.
-//   * HEX FLOATS. `parsePartialNumber` takes a `0x`/`0X` prefix into a base-16
-//     stream whose exponent character is `p`/`P`, and — unlike C `strtod` —
-//     the exponent is OPTIONAL, so `0x1p8`, `0x1.8p0` AND `0x1.8` are all
-//     valid. Rust rejects every one of them.
-//
-// The GRAMMAR is ported here in full because that is the part that decides
-// acceptance. The DECIMAL numeric conversion is delegated to Rust's
-// `f64::from_str` once the grammar has accepted (see `parse_float_f64`); both
-// implementations are correctly-rounded shortest-round-trip parsers over the
-// same input, so `convertFast`/`convertEiselLemire`/`convertSlow` would be a
-// large, bit-identical re-derivation. The HEX conversion has no Rust
-// equivalent at all and IS ported, from `convert_hex.zig`.
-//
-// Naming: the reference's names carry a `pf_` prefix here because
-// `value_types.rs` already has `parse`/`format` free functions.
-
-/// PORTS: `parse_float/common.zig` `isDigit`.
-fn pf_is_digit(c: u8, base: u8) -> bool {
-    debug_assert!(base == 10 || base == 16);
-    // return if (base == 10) '0' <= c and c <= '9'
-    //     else '0' <= c and c <= '9' or 'a' <= c and c <= 'f' or 'A' <= c and c <= 'F';
-    if base == 10 {
-        c.is_ascii_digit()
-    } else {
-        c.is_ascii_hexdigit()
-    }
-}
-
-/// PORTS: `parse_float/parse.zig` `validUnderscores`.
-fn pf_valid_underscores(s: &[u8], base: u8) -> bool {
-    // var i: usize = 0;
-    // while (i < s.len) : (i += 1) {
-    let mut i: usize = 0;
-    while i < s.len() {
-        // if (s[i] == '_') {
-        if s[i] == b'_' {
-            // underscore at start of end
-            // if (i == 0 or i + 1 == s.len) return false;
-            if i == 0 || i + 1 == s.len() {
-                return false;
-            }
-            // consecutive underscores
-            // if (!common.isDigit(s[i - 1], base) or !common.isDigit(s[i + 1], base)) return false;
-            if !pf_is_digit(s[i - 1], base) || !pf_is_digit(s[i + 1], base) {
-                return false;
-            }
-            // next is guaranteed a digit, skip an extra
-            // i += 1;
-            i += 1;
-        }
-        i += 1;
-    }
-    true
-}
-
-/// PORTS: `parse_float/FloatStream.zig`.
-struct PfStream<'a> {
-    slice: &'a [u8],
-    offset: usize,
-    underscore_count: usize,
-}
-
-impl<'a> PfStream<'a> {
-    // pub fn init(s: []const u8) FloatStream
-    fn init(s: &'a [u8]) -> PfStream<'a> {
-        PfStream {
-            slice: s,
-            offset: 0,
-            underscore_count: 0,
-        }
-    }
-
-    // Returns the offset from the start *excluding* any underscores that were found.
-    // pub fn offsetTrue(self: FloatStream) usize
-    fn offset_true(&self) -> usize {
-        self.offset - self.underscore_count
-    }
-
-    // pub fn reset(self: *FloatStream) void
-    fn reset(&mut self) {
-        self.offset = 0;
-        self.underscore_count = 0;
-    }
-
-    // pub fn hasLen(self: FloatStream, n: usize) bool
-    fn has_len(&self, n: usize) -> bool {
-        self.offset + n <= self.slice.len()
-    }
-
-    // pub fn first(self: FloatStream) ?u8
-    fn first(&self) -> Option<u8> {
-        if self.has_len(1) {
-            Some(self.slice[self.offset])
-        } else {
-            None
-        }
-    }
-
-    // pub fn firstIs(self: FloatStream, comptime cs: []const u8) bool
-    fn first_is(&self, cs: &[u8]) -> bool {
-        matches!(self.first(), Some(c) if cs.contains(&c))
-    }
-
-    // pub fn firstIsLower(self: FloatStream, comptime cs: []const u8) bool
-    fn first_is_lower(&self, cs: &[u8]) -> bool {
-        matches!(self.first(), Some(c) if cs.contains(&(c | 0x20)))
-    }
-
-    // pub fn firstIsDigit(self: FloatStream, comptime base: u8) bool
-    fn first_is_digit(&self, base: u8) -> bool {
-        matches!(self.first(), Some(c) if pf_is_digit(c, base))
-    }
-
-    // pub fn advance(self: *FloatStream, n: usize) void
-    fn advance(&mut self, n: usize) {
-        self.offset += n;
-    }
-
-    // pub fn scanDigit(self: *FloatStream, comptime base: u8) ?u8
-    fn scan_digit(&mut self, base: u8) -> Option<u8> {
-        debug_assert!(base == 10 || base == 16);
-        // retry: while (true) {
-        loop {
-            match self.first() {
-                // if ('0' <= ok and ok <= '9') { advance; return ok - '0'; }
-                Some(c) if c.is_ascii_digit() => {
-                    self.advance(1);
-                    return Some(c - b'0');
-                }
-                // else if (base == 16 and 'a' <= ok and ok <= 'f')
-                Some(c) if base == 16 && (b'a'..=b'f').contains(&c) => {
-                    self.advance(1);
-                    return Some(c - b'a' + 10);
-                }
-                // else if (base == 16 and 'A' <= ok and ok <= 'F')
-                Some(c) if base == 16 && (b'A'..=b'F').contains(&c) => {
-                    self.advance(1);
-                    return Some(c - b'A' + 10);
-                }
-                // else if (ok == '_') { advance; underscore_count += 1; continue :retry; }
-                Some(b'_') => {
-                    self.advance(1);
-                    self.underscore_count += 1;
-                }
-                _ => return None,
-            }
-        }
-    }
-}
-
-/// PORTS: `parse_float/common.zig` `Number(T)` for `T = f64`.
-struct PfNumber {
-    exponent: i64,
-    mantissa: u64,
-    negative: bool,
-    many_digits: bool,
-    hex: bool,
-}
-
-/// PORTS: `parse_float/parse.zig` `tryParseDigits`.
-///
-/// PORT NOTE: the reference has an 8-digits-at-a-time SWAR fast path for
-/// base 10 (`parse8Digits`) ahead of this loop. It is a pure optimisation over
-/// the identical scalar recurrence below and is deliberately not ported; it
-/// changes no result.
-fn pf_try_parse_digits(stream: &mut PfStream, x: &mut u64, base: u8) {
-    // while (stream.scanDigit(base)) |digit| { x.* *%= base; x.* +%= digit; }
-    while let Some(digit) = stream.scan_digit(base) {
-        *x = x.wrapping_mul(base as u64).wrapping_add(digit as u64);
-    }
-}
-
-/// PORTS: `parse_float/parse.zig` `min_n_digit_int`.
-///
-/// PORT NOTE: `n *= 10` in the reference regardless of the parse base — this is
-/// used as a magnitude threshold, not a base-relative one. Kept as-is.
-fn pf_min_n_digit_int(digit_count: usize) -> u64 {
-    let mut n: u64 = 1;
-    let mut i: usize = 1;
-    while i < digit_count {
-        n *= 10;
-        i += 1;
-    }
-    n
-}
-
-/// PORTS: `parse_float/parse.zig` `tryParseNDigits`.
-fn pf_try_parse_n_digits(stream: &mut PfStream, x: &mut u64, base: u8, n: usize) {
-    while *x < pf_min_n_digit_int(n) {
-        match stream.scan_digit(base) {
-            Some(digit) => {
-                *x = x.wrapping_mul(base as u64).wrapping_add(digit as u64);
-            }
-            None => break,
-        }
-    }
-}
-
-/// PORTS: `parse_float/parse.zig` `parseScientific`.
-fn pf_parse_scientific(stream: &mut PfStream) -> Option<i64> {
-    // var exponent: i64 = 0; var negative = false;
-    let mut exponent: i64 = 0;
-    let mut negative = false;
-    // if (stream.first()) |c| { negative = c == '-'; if (c == '-' or c == '+') stream.advance(1); }
-    if let Some(c) = stream.first() {
-        negative = c == b'-';
-        if c == b'-' || c == b'+' {
-            stream.advance(1);
-        }
-    }
-    // if (stream.firstIsDigit(10)) {
-    if stream.first_is_digit(10) {
-        while let Some(digit) = stream.scan_digit(10) {
-            // no overflows here, saturate well before overflow
-            if exponent < 0x1000_0000 {
-                exponent = 10 * exponent + digit as i64;
-            }
-        }
-        return Some(if negative { -exponent } else { exponent });
-    }
-    None
-}
-
-/// PORTS: `parse_float/parse.zig` `parsePartialNumberBase`.
-fn pf_parse_partial_number_base(
-    stream: &mut PfStream,
-    negative: bool,
-    n: &mut usize,
-    base: u8,
-    max_mantissa_digits: usize,
-    exp_char_lower: u8,
-) -> Option<PfNumber> {
-    debug_assert!(base == 10 || base == 16);
-
-    // parse initial digits before dot
-    let mut mantissa: u64 = 0;
-    pf_try_parse_digits(stream, &mut mantissa, base);
-    let int_end = stream.offset_true();
-    let mut n_digits = stream.offset_true() as isize;
-
-    // handle dot with the following digits
-    let mut exponent: i64 = 0;
-    if stream.first_is(b".") {
-        stream.advance(1);
-        let marker = stream.offset_true();
-        pf_try_parse_digits(stream, &mut mantissa, base);
-        let n_after_dot = stream.offset_true() - marker;
-        exponent = -(n_after_dot as i64);
-        n_digits += n_after_dot as isize;
-    }
-
-    // adjust required shift to offset mantissa for base-16 (2^4)
-    if base == 16 {
-        exponent *= 4;
-    }
-
-    if n_digits == 0 {
-        return None;
-    }
-
-    // handle scientific format
-    let mut exp_number: i64 = 0;
-    if stream.first_is_lower(&[exp_char_lower]) {
-        stream.advance(1);
-        exp_number = pf_parse_scientific(stream)?;
-        exponent += exp_number;
-    }
-
-    // length must be complete parsed length
-    let len = stream.offset;
-    *n += len;
-
-    if stream.underscore_count > 0 && !pf_valid_underscores(stream.slice, base) {
-        return None;
-    }
-
-    // common case with not many digits
-    if n_digits <= max_mantissa_digits as isize {
-        return Some(PfNumber {
-            exponent,
-            mantissa,
-            negative,
-            many_digits: false,
-            hex: base == 16,
-        });
-    }
-
-    n_digits -= max_mantissa_digits as isize;
-    let mut many_digits = false;
-    // re-parse from beginning
-    stream.reset();
-    while stream.first_is(b"0._") {
-        // '0' = '.' + 2
-        let next = stream.slice[stream.offset];
-        if next != b'_' {
-            n_digits -= next.saturating_sub(b'0' - 1) as isize;
-        } else {
-            stream.underscore_count += 1;
-        }
-        stream.advance(1);
-    }
-    if n_digits > 0 {
-        // at this point we have more than max_mantissa_digits significant
-        // digits, let's try again
-        many_digits = true;
-        mantissa = 0;
-        stream.reset();
-        pf_try_parse_n_digits(stream, &mut mantissa, base, max_mantissa_digits);
-
-        exponent = if mantissa >= pf_min_n_digit_int(max_mantissa_digits) {
-            // big int
-            int_end as i64 - stream.offset_true() as i64
-        } else {
-            // the next byte must be present and be '.'
-            stream.advance(1);
-            let marker = stream.offset_true();
-            pf_try_parse_n_digits(stream, &mut mantissa, base, max_mantissa_digits);
-            marker as i64 - stream.offset_true() as i64
-        };
-        if base == 16 {
-            exponent *= 4;
-        }
-        // add back the explicit part
-        exponent += exp_number;
-    }
-
-    Some(PfNumber {
-        exponent,
-        mantissa,
-        negative,
-        many_digits,
-        hex: base == 16,
-    })
-}
-
-/// PORTS: `parse_float/parse.zig` `parsePartialNumber` for `T = f64`
-/// (`MantissaT == u64`, so `max_mantissa_digits` is 16 hex / 19 decimal).
-fn pf_parse_partial_number(s: &[u8], negative: bool, n: &mut usize) -> Option<PfNumber> {
-    debug_assert!(!s.is_empty());
-    *n = 0;
-
-    // if (s.len >= 2 and s[0] == '0' and std.ascii.toLower(s[1]) == 'x')
-    if s.len() >= 2 && s[0] == b'0' && s[1].eq_ignore_ascii_case(&b'x') {
-        let mut stream = PfStream::init(&s[2..]);
-        *n += 2;
-        pf_parse_partial_number_base(&mut stream, negative, n, 16, 16, b'p')
-    } else {
-        let mut stream = PfStream::init(s);
-        pf_parse_partial_number_base(&mut stream, negative, n, 10, 19, b'e')
-    }
-}
-
-/// PORTS: `parse_float/parse.zig` `parseNumber`.
-fn pf_parse_number(s: &[u8], negative: bool) -> Option<PfNumber> {
-    let mut consumed: usize = 0;
-    let number = pf_parse_partial_number(s, negative, &mut consumed)?;
-    // must consume entire float (no trailing data)
-    if s.len() == consumed {
-        Some(number)
-    } else {
-        None
-    }
-}
-
-/// PORTS: `std.ascii.startsWithIgnoreCase`.
-fn pf_starts_with_ignore_case(s: &[u8], prefix: &[u8]) -> bool {
-    s.len() >= prefix.len() && s[..prefix.len()].eq_ignore_ascii_case(prefix)
-}
-
-/// PORTS: `parse_float/parse.zig` `parsePartialInfOrNan`.
-fn pf_parse_partial_inf_or_nan(s: &[u8], negative: bool, n: &mut usize) -> Option<f64> {
-    // inf/infinity; infxxx should only consume inf.
-    if pf_starts_with_ignore_case(s, b"inf") {
-        *n = 3;
-        if pf_starts_with_ignore_case(&s[3..], b"inity") {
-            *n = 8;
-        }
-        return Some(if !negative {
-            f64::INFINITY
-        } else {
-            f64::NEG_INFINITY
-        });
-    }
-    if pf_starts_with_ignore_case(s, b"nan") {
-        *n = 3;
-        return Some(f64::NAN);
-    }
-    None
-}
-
-/// PORTS: `parse_float/parse.zig` `parseInfOrNan`.
-fn pf_parse_inf_or_nan(s: &[u8], negative: bool) -> Option<f64> {
-    let mut consumed: usize = 0;
-    let special = pf_parse_partial_inf_or_nan(s, negative, &mut consumed)?;
-    if s.len() == consumed {
-        Some(special)
-    } else {
-        None
-    }
-}
-
-/// PORTS: `parse_float/convert_hex.zig` `convertHex` for `T = f64`.
-///
-/// Converts the form `0xMMM.NNNpEEE`: `MMM.NNN` is the mantissa stored as an
-/// integer, `EEE` the offset exponent. Derived (in the reference) from Go's
-/// `strconv/atof.go`. The `T`-generic `math.float*` queries are resolved for
-/// `f64`: `floatExponentMax = 1023`, `floatExponentMin = -1022`,
-/// `floatMantissaBits = 52`, `floatFractionalBits = 52`, `floatExponentBits = 11`.
-fn pf_convert_hex(n_: PfNumber) -> f64 {
-    let mut n = n_;
-
-    // if (n.mantissa == 0) return if (n.negative) -0.0 else 0.0;
-    if n.mantissa == 0 {
-        return if n.negative { -0.0 } else { 0.0 };
-    }
-
-    const MAX_EXP: i64 = 1023;
-    const MIN_EXP: i64 = -1022;
-    const MANTISSA_BITS: u32 = 52;
-    const FRACTIONAL_BITS: u32 = 52;
-    const EXP_BITS: u32 = 11;
-    const EXP_BIAS: i64 = MIN_EXP - 1;
-
-    // mantissa now implicitly divided by 2^fractional_bits
-    n.exponent += FRACTIONAL_BITS as i64;
-
-    // Shift mantissa and exponent to bring representation into float range.
-    while n.mantissa != 0 && (n.mantissa >> (MANTISSA_BITS + 2)) == 0 {
-        n.mantissa <<= 1;
-        n.exponent -= 1;
-    }
-    if n.many_digits {
-        n.mantissa |= 1;
-    }
-    while (n.mantissa >> (1 + FRACTIONAL_BITS + 2)) != 0 {
-        n.mantissa = (n.mantissa >> 1) | (n.mantissa & 1);
-        n.exponent += 1;
-    }
-
-    // If exponent is too negative, denormalize in hopes of making it
-    // representable. (The -2 is for the rounding bits.)
-    while n.mantissa > 1 && n.exponent < MIN_EXP - 2 {
-        n.mantissa = (n.mantissa >> 1) | (n.mantissa & 1);
-        n.exponent += 1;
-    }
-
-    // Round using two bottom bits.
-    let mut round = n.mantissa & 3;
-    n.mantissa >>= 2;
-    round |= n.mantissa & 1; // round to even (round up if mantissa is odd)
-    n.exponent += 2;
-    if round == 3 {
-        n.mantissa += 1;
-        if n.mantissa == 1u64 << (1 + FRACTIONAL_BITS) {
-            n.mantissa >>= 1;
-            n.exponent += 1;
-        }
-    }
-
-    // Denormal or zero
-    if (n.mantissa >> FRACTIONAL_BITS) == 0 {
-        n.exponent = EXP_BIAS;
-    }
-
-    // Infinity and range error
-    if n.exponent > MAX_EXP {
-        return if n.negative {
-            f64::NEG_INFINITY
-        } else {
-            f64::INFINITY
-        };
-    }
-
-    let mut bits = n.mantissa & ((1u64 << MANTISSA_BITS) - 1);
-    bits |= (((n.exponent - EXP_BIAS) & ((1i64 << EXP_BITS) - 1)) as u64) << MANTISSA_BITS;
-    if n.negative {
-        bits |= 1u64 << (MANTISSA_BITS + EXP_BITS);
-    }
-    f64::from_bits(bits)
-}
-
 /// PORTS: `std.fmt.parseFloat(f64, input)`.
-///
-/// S75-F1: the ACCEPTANCE grammar is the reference's, ported above. Only the
-/// DECIMAL numeric conversion is delegated — see the module comment on
-/// `pf_is_digit` for why `convertFast`/`convertEiselLemire`/`convertSlow` are
-/// not re-derived here.
+//
+// PORT NOTE (S75-F1; NEW-FINDINGS N120, task T-C3): this used to be
+// `core::str::from_utf8(input).ok().and_then(|s| s.parse::<f64>().ok())`, and
+// Rust's grammar differs from Zig's: `std.fmt.parseFloat` accepts `_` digit
+// separators between two digits (`wght=1_000`, `precision:1_0`) and hex floats
+// with an OPTIONAL `p` exponent (`0x1p8`, `0x1.8p0`, `0x1.8`), and Rust rejects
+// both. S75-F1 then ported the grammar here as a private `pf_*` copy; it now
+// calls the single port, `rustty_args::std_fmt::parse_float`, which carries the
+// same grammar, the ported `convert_hex`, and Zig 0.16.0's std test tables.
 fn parse_float_f64(input: &[u8]) -> Result<f64, ParseError> {
-    // if (s.len == 0) return error.InvalidCharacter;
-    if input.is_empty() {
-        return Err(Error::InvalidValue);
-    }
-
-    // var i: usize = 0;
-    // const negative = s[i] == '-';
-    // if (s[i] == '-' or s[i] == '+') i += 1;
-    let mut i: usize = 0;
-    let negative = input[0] == b'-';
-    if input[0] == b'-' || input[0] == b'+' {
-        i += 1;
-    }
-    // if (s.len == i) return error.InvalidCharacter;
-    if input.len() == i {
-        return Err(Error::InvalidValue);
-    }
-    let rest = &input[i..];
-
-    // const n = parse.parseNumber(T, s[i..], negative) orelse {
-    //     return parse.parseInfOrNan(T, s[i..], negative) orelse error.InvalidCharacter;
-    // };
-    let n = match pf_parse_number(rest, negative) {
-        Some(n) => n,
-        None => {
-            return pf_parse_inf_or_nan(rest, negative).ok_or(Error::InvalidValue);
-        }
-    };
-
-    // if (n.hex) return convertHex(T, n);
-    if n.hex {
-        return Ok(pf_convert_hex(n));
-    }
-
-    // convertFast / convertEiselLemire / convertSlow, delegated: with the
-    // reference's grammar already satisfied, `f64::from_str` computes the same
-    // correctly-rounded result over the same digits. `_` separators are the one
-    // thing it cannot read, and `validUnderscores` has just proven every one of
-    // them well-placed, so stripping them here is not a relaxation.
-    let mut cleaned: Vec<u8> = Vec::with_capacity(input.len());
-    if negative {
-        cleaned.push(b'-');
-    }
-    cleaned.extend(rest.iter().copied().filter(|&c| c != b'_'));
-    core::str::from_utf8(&cleaned)
-        .ok()
-        .and_then(|s| s.parse::<f64>().ok())
-        .ok_or(Error::InvalidValue)
+    rustty_args::std_fmt::parse_float::<f64>(input).map_err(|_| Error::InvalidValue)
 }
 
 /// PORTS: the `{d}` float formatter — shortest round-trippable decimal. Rust's
@@ -7086,9 +6448,8 @@ impl QuickTerminalSizeSize {
     }
 }
 
-/// PORTS: `std.fmt.parseInt(u32, input, 10)` — i.e.
-/// `parseIntWithGenericCharacter` (optional leading `+`/`-`) followed by
-/// `parseIntWithSign` (base-10 digit run with `_` separators).
+/// PORTS: `std.fmt.parseInt(u32, input, 10)`, through the single port of
+/// `std.fmt.parseInt` (`rustty_args::std_fmt`, NEW-FINDINGS N120).
 //
 // PORT NOTE: Rust's `str::parse::<u32>()` is NOT a faithful stand-in: the
 // reference accepts a leading `+`, accepts `_` digit separators anywhere except
@@ -7098,104 +6459,18 @@ impl QuickTerminalSizeSize {
 // All call sites collapse both `Overflow` and `InvalidCharacter` into
 // `error.InvalidValue`, so only the accept/reject boundary is observable.
 fn parse_int_u32_base10(input: &[u8]) -> Result<u32, ParseIntError> {
-    // if (buf.len == 0) return error.InvalidCharacter;
-    if input.is_empty() {
-        return Err(ParseIntError::InvalidCharacter);
-    }
-
-    // if (buf[0] == '+') return parseIntWithSign(..., buf[1..], base, .pos);
-    // if (buf[0] == '-') return parseIntWithSign(..., buf[1..], base, .neg);
-    let (digits, negative) = match input[0] {
-        b'+' => (&input[1..], false),
-        b'-' => (&input[1..], true),
-        _ => (input, false),
-    };
-
-    // parseIntWithSign: if (buf.len == 0) return error.InvalidCharacter;
-    if digits.is_empty() {
-        return Err(ParseIntError::InvalidCharacter);
-    }
-
-    // if (buf_start[0] == '_' or buf_start[buf_start.len - 1] == '_')
-    //     return error.InvalidCharacter;
-    if digits[0] == b'_' || digits[digits.len() - 1] == b'_' {
-        return Err(ParseIntError::InvalidCharacter);
-    }
-
-    let mut acc: u32 = 0;
-    // for (buf_start) |c| {
-    for &c in digits {
-        // if (c == '_') continue;
-        if c == b'_' {
-            continue;
-        }
-        // const digit = try charToDigit(c, buf_base);
-        let digit = match c {
-            b'0'..=b'9' => (c - b'0') as u32,
-            _ => return Err(ParseIntError::InvalidCharacter),
-        };
-        // accumulate = try math.mul(...); accumulate = try add(...);
-        acc = acc
-            .checked_mul(10)
-            .and_then(|v| v.checked_add(digit))
-            .ok_or(ParseIntError::Overflow)?;
-    }
-
-    // The `.neg` arm subtracts from an unsigned accumulator, which overflows for
-    // any non-zero magnitude; "-0" (and "-000") is 0.
-    if negative && acc != 0 {
-        return Err(ParseIntError::Overflow);
-    }
-    Ok(acc)
-}
-
-/// PORTS: `std.fmt.parseFloat`'s `validUnderscores(s, 10)` — a `_` is legal only
-/// between two base-10 digits (so `1_0` and `1.5_5` are valid while `_10`,
-/// `10_`, `1__0`, `1_.5` and `1e_0` are `error.InvalidCharacter`). Returns the
-/// underscore-stripped bytes, or `None` when an underscore is misplaced.
-//
-// PORT NOTE: the reference's float parser skips `_` while scanning digits; the
-// port validates with the reference's own rule and then strips, which yields the
-// identical numeric value. The sign character is never a base-10 digit, so
-// running the check over the whole (un-sign-stripped) input matches the
-// reference's check over its number slice (`+_10` is rejected either way).
-fn zig_float_strip_underscores(input: &[u8]) -> Option<Cow<'_, [u8]>> {
-    if !input.contains(&b'_') {
-        return Some(Cow::Borrowed(input));
-    }
-
-    let mut i = 0usize;
-    while i < input.len() {
-        if input[i] == b'_' {
-            // underscore at start or end
-            if i == 0 || i + 1 == input.len() {
-                return None;
-            }
-            // consecutive underscores / non-digit neighbours
-            if !input[i - 1].is_ascii_digit() || !input[i + 1].is_ascii_digit() {
-                return None;
-            }
-            // next is guaranteed a digit, skip an extra
-            i += 1;
-        }
-        i += 1;
-    }
-
-    Some(Cow::Owned(
-        input.iter().copied().filter(|&c| c != b'_').collect(),
-    ))
+    rustty_args::std_fmt::parse_int::<u32>(input, 10)
 }
 
 /// PORTS: `std.fmt.parseFloat(f32, input)`.
 //
-// PORT NOTE: Rust's `str::parse::<f32>()` rejects the `_` digit separators the
-// reference accepts, so the underscores are validated + stripped first.
+// PORT NOTE (NEW-FINDINGS N123, task T-C3): this validated and stripped `_`
+// separators and then called Rust's `str::parse::<f32>()`, which has no hex
+// float grammar, so a hex-float percentage (`quick-terminal-size = 0x1p4%`)
+// that the reference loads was rejected. It now calls the single port of
+// `std.fmt.parseFloat` (`rustty_args::std_fmt`, NEW-FINDINGS N120).
 fn parse_float_f32(input: &[u8]) -> Result<f32, ParseError> {
-    let stripped = zig_float_strip_underscores(input).ok_or(Error::InvalidValue)?;
-    core::str::from_utf8(&stripped)
-        .ok()
-        .and_then(|s| s.parse::<f32>().ok())
-        .ok_or(Error::InvalidValue)
+    rustty_args::std_fmt::parse_float::<f32>(input).map_err(|_| Error::InvalidValue)
 }
 
 // pub const Dimensions = struct { width: u32, height: u32 };
@@ -7907,23 +7182,16 @@ fn is_ascii_whitespace(c: u8) -> bool {
     matches!(c, b' ' | b'\t' | b'\n' | 0x0b | 0x0c | b'\r')
 }
 
-/// PORTS: `std.fmt.parseUnsigned(u64, buf, 10)`.
+/// PORTS: `std.fmt.parseUnsigned(u64, buf, 10)`, through the single port
+/// (`rustty_args::std_fmt`, NEW-FINDINGS N120).
+//
+// PORT NOTE: the former copy rejected every `_`, where `parseUnsigned` skips an
+// interior one. The only caller (`Duration.parseCLI`'s longest-number loop)
+// stops at the first prefix that fails to parse, and a prefix ending in `_`
+// always fails, so no `_` ever reaches a successful parse: the two agree on
+// every input that caller can pass.
 fn parse_unsigned_u64_base10(buf: &[u8]) -> Result<u64, ParseIntError> {
-    if buf.is_empty() {
-        return Err(ParseIntError::InvalidCharacter);
-    }
-    let mut acc: u64 = 0;
-    for &c in buf {
-        let digit = match c {
-            b'0'..=b'9' => (c - b'0') as u64,
-            _ => return Err(ParseIntError::InvalidCharacter),
-        };
-        acc = acc
-            .checked_mul(10)
-            .and_then(|v| v.checked_add(digit))
-            .ok_or(ParseIntError::Overflow)?;
-    }
-    Ok(acc)
+    rustty_args::std_fmt::parse_unsigned::<u64>(buf, 10)
 }
 
 // pub const WindowPadding = struct { top_left: u32 = 0, bottom_right: u32 = 0 };
@@ -9695,6 +8963,26 @@ mod tests {
                 size.calculate(QuickTerminalPosition::Center, dims_portrait)
             );
         }
+    }
+
+    /// NEW-FINDINGS N123: a `quick-terminal-size` percentage is
+    /// `std.fmt.parseFloat(f32, ..)`, whose grammar includes hex floats and
+    /// `_` separators. MEASURED with Zig 0.16.0: `parseFloat(f32, "0x1p4")` is
+    /// 16, `"0x1.8p5"` is 48, `"1_0"` is 10.
+    #[test]
+    fn quick_terminal_size_percentage_uses_the_parse_float_grammar() {
+        assert_eq!(
+            Ok(QuickTerminalSizeSize::Percentage(16.0)),
+            QuickTerminalSizeSize::parse(b"0x1p4%")
+        );
+        assert_eq!(
+            Ok(QuickTerminalSizeSize::Percentage(48.0)),
+            QuickTerminalSizeSize::parse(b"0x1.8p5%")
+        );
+        assert_eq!(
+            Ok(QuickTerminalSizeSize::Percentage(10.0)),
+            QuickTerminalSizeSize::parse(b"1_0%")
+        );
     }
 
     /// UD96 (R13, task R13-D): `quick-terminal-size` percentages the parser
