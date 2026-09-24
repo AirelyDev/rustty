@@ -68,8 +68,6 @@ use std::ffi::{c_char, c_void, CStr};
 use std::fs::File;
 
 #[cfg(not(windows))]
-use core::fmt::Write as _;
-#[cfg(not(windows))]
 use std::os::fd::{AsRawFd as _, RawFd};
 
 /// PORT NOTE: `EnvMap = std.process.EnvMap` — a hash map of environment
@@ -136,17 +134,17 @@ pub enum Error {
     PostForkError,
     /// Zig `posix.fork()`: EAGAIN/ENOMEM -> `error.SystemResources`.
     SystemResources,
-    /// `error.Locked` (`setupFd` dup3 EAGAIN/EACCES, linux).
+    /// `error.Locked` (`setupFd` `PosixCall.f` EAGAIN/EACCES).
     Locked,
-    /// `error.FileBusy` (`setupFd` dup3 EBUSY, linux).
+    /// `error.FileBusy` (`setupFd` `PosixCall.f` EBUSY).
     FileBusy,
-    /// `error.PermissionDenied` (`setupFd` dup3 EPERM, linux).
+    /// `error.PermissionDenied` (`setupFd` `PosixCall.f` EPERM).
     PermissionDenied,
-    /// `error.ProcessFdQuotaExceeded` (dup3/dup2 EMFILE).
+    /// `error.ProcessFdQuotaExceeded` (`setupFd` `PosixCall.f` EMFILE).
     ProcessFdQuotaExceeded,
-    /// `error.DeadLock` (`setupFd` dup3 EDEADLK, linux).
+    /// `error.DeadLock` (`setupFd` `PosixCall.f` EDEADLK).
     DeadLock,
-    /// `error.LockedRegionLimitExceeded` (`setupFd` dup3 ENOLCK, linux).
+    /// `error.LockedRegionLimitExceeded` (`setupFd` `PosixCall.f` ENOLCK).
     LockedRegionLimitExceeded,
     /// Zig `error.InvalidUtf8`/`error.InvalidWtf8` — the windows
     /// `utf8ToUtf16LeAllocZ` re-encode of cwd/command line.
@@ -700,11 +698,8 @@ impl<'a> Command<'a> {
             }
         }
 
-        // Finally, replace our process.
-        // Note: we must use the "p"-variant of exec here because we
-        // do not guarantee our command is looked up already in the path.
-        // const err = posix.execvpeZ(self.path, argsZ, envp);
-        let err = execvpeZ(self.path, argsZ.as_ptr(), envp);
+        // const err: posix.E = execve: { ... };  (Command.zig:227-257)
+        let err = execvpe(self.path, argsZ.as_ptr(), envp);
 
         // If we are executing this code, the exec failed. We're in the
         // child process so there isn't much we can do. We try to output
@@ -720,20 +715,7 @@ impl<'a> Command<'a> {
             buf: &mut stderr_buf,
             len: 0,
         };
-        match err {
-            // error.FileNotFound => stderr.print(...) catch {},
-            ExecveError::FileNotFound => {
-                let _ = writeln!(
-                    stderr,
-                    "Requested executable not found. Please verify the command is on\nthe PATH and try again."
-                );
-            }
-
-            // else => stderr.print(...) catch {},
-            _ => {
-                let _ = writeln!(stderr, "exec syscall failed with unexpected error: {err}");
-            }
-        }
+        write_exec_failure(&mut stderr, err);
         stderr.flush(); // stderr.flush() catch {};
 
         // We return a very specific error that can be detected to determine
@@ -1220,6 +1202,52 @@ fn windowsCreateCommandLine(argv: &[&CStr]) -> Vec<u8> {
     buf
 }
 
+/// `setupFd`'s local `PosixCall.f` (`Command.zig:441-459`): issue `call`
+/// until it does not fail with `EINTR`, mapping a failure's errno the way the
+/// reference does. `call` returns the libc result (`-1` on failure, errno set).
+///
+/// S39-F4: the port used this mapping for `dup3` only; the macOS/FreeBSD arm
+/// issued its two `fcntl`s bare (no `EINTR` retry, every errno `Unexpected`)
+/// and a `posix.dup2` shim that retried `EBUSY`, where `PosixCall` returns
+/// `error.FileBusy`.
+#[cfg(not(windows))]
+fn posix_call(mut call: impl FnMut() -> libc::c_int) -> Result<usize, Error> {
+    // while (true) {
+    loop {
+        // const rc = @call(.auto, func, args);
+        let rc = call();
+        // switch (posix.errno(rc)) {
+        if rc >= 0 {
+            // .SUCCESS => return @intCast(rc),
+            return Ok(rc as usize);
+        }
+        match errno() {
+            // .INTR => continue,
+            libc::EINTR => continue,
+            // .AGAIN, .ACCES => return error.Locked,
+            libc::EAGAIN | libc::EACCES => return Err(Error::Locked),
+            // .BADF => unreachable,
+            libc::EBADF => unreachable!(),
+            // .BUSY => return error.FileBusy,
+            libc::EBUSY => return Err(Error::FileBusy),
+            // .INVAL => unreachable, // invalid parameters
+            libc::EINVAL => unreachable!(), // invalid parameters
+            // .PERM => return error.PermissionDenied,
+            libc::EPERM => return Err(Error::PermissionDenied),
+            // .MFILE => return error.ProcessFdQuotaExceeded,
+            libc::EMFILE => return Err(Error::ProcessFdQuotaExceeded),
+            // .NOTDIR => unreachable, // invalid parameter
+            libc::ENOTDIR => unreachable!(), // invalid parameter
+            // .DEADLK => return error.DeadLock,
+            libc::EDEADLK => return Err(Error::DeadLock),
+            // .NOLCK => return error.LockedRegionLimitExceeded,
+            libc::ENOLCK => return Err(Error::LockedRegionLimitExceeded),
+            // else => |err| return posix.unexpectedErrno(err),
+            err => return Err(Error::Unexpected(err)),
+        }
+    }
+}
+
 // fn setupFd(src: File.Handle, target: i32) !void
 #[cfg(not(windows))]
 fn setupFd(src: RawFd, target: i32) -> Result<(), Error> {
@@ -1230,47 +1258,25 @@ fn setupFd(src: RawFd, target: i32) -> Result<(), Error> {
         // We use dup3 so that we can clear CLO_ON_EXEC. We do NOT want this
         // file descriptor to be closed on exec since we're exactly exec-ing after
         // this.
-        loop {
-            let rc = unsafe { libc::dup3(src, target, 0) };
-            if rc >= 0 {
-                // .SUCCESS => break,
-                break;
-            }
-            match errno() {
-                libc::EINTR => continue,
-                libc::EAGAIN | libc::EACCES => return Err(Error::Locked),
-                libc::EBADF => unreachable!(),
-                libc::EBUSY => return Err(Error::FileBusy),
-                libc::EINVAL => unreachable!(), // invalid parameters
-                libc::EPERM => return Err(Error::PermissionDenied),
-                libc::EMFILE => return Err(Error::ProcessFdQuotaExceeded),
-                libc::ENOTDIR => unreachable!(), // invalid parameter
-                libc::EDEADLK => return Err(Error::DeadLock),
-                libc::ENOLCK => return Err(Error::LockedRegionLimitExceeded),
-                err => return Err(Error::Unexpected(err)), // else => |err| return posix.unexpectedErrno(err),
-            }
-        }
+        // _ = try PosixCall.f(linux.dup3, .{ src, target, 0 });
+        posix_call(|| unsafe { libc::dup3(src, target, 0) })?;
         Ok(())
     }
     #[cfg(any(target_os = "freebsd", target_os = "ios", target_os = "macos"))]
     {
         // Mac doesn't support dup3 so we use dup2. We purposely clear
         // CLO_ON_EXEC for this fd.
-        // const flags = try posix.fcntl(src, posix.F.GETFD, 0);
-        let flags = unsafe { libc::fcntl(src, libc::F_GETFD, 0) };
-        if flags < 0 {
-            // (Zig posix.fcntl surfaces the errno as an error)
-            return Err(Error::Unexpected(errno()));
-        }
+        // const flags = try PosixCall.f(posix.system.fcntl, .{ src, posix.F.GETFD });
+        let flags = posix_call(|| unsafe { libc::fcntl(src, libc::F_GETFD) })? as libc::c_int;
         if flags & libc::FD_CLOEXEC != 0 {
-            // _ = try posix.fcntl(src, posix.F.SETFD, flags & ~@as(u32, posix.FD_CLOEXEC));
-            if unsafe { libc::fcntl(src, libc::F_SETFD, flags & !libc::FD_CLOEXEC) } < 0 {
-                return Err(Error::Unexpected(errno()));
-            }
+            // _ = try PosixCall.f(posix.system.fcntl,
+            //     .{ src, posix.F.SETFD, flags & ~@as(u32, posix.FD_CLOEXEC) });
+            posix_call(|| unsafe { libc::fcntl(src, libc::F_SETFD, flags & !libc::FD_CLOEXEC) })?;
         }
 
-        // try posix.dup2(src, target);
-        posix_dup2(src, target)
+        // _ = try PosixCall.f(posix.system.dup2, .{ src, target });
+        posix_call(|| unsafe { libc::dup2(src, target) })?;
+        Ok(())
     }
     #[cfg(not(any(
         target_os = "linux",
@@ -1346,25 +1352,6 @@ fn posix_chdir(dir_path: &[u8]) -> Result<(), i32> {
         return Err(errno());
     }
     Ok(())
-}
-
-/// PORT NOTE (Zig-std shim): `posix.dup2` — loops on EBUSY/EINTR; EMFILE maps to
-/// `error.ProcessFdQuotaExceeded`; EINVAL/EBADF are unreachable (invalid
-/// parameters / invalid file descriptor).
-#[cfg(any(target_os = "freebsd", target_os = "ios", target_os = "macos"))]
-fn posix_dup2(old_fd: RawFd, new_fd: RawFd) -> Result<(), Error> {
-    loop {
-        if unsafe { libc::dup2(old_fd, new_fd) } >= 0 {
-            return Ok(());
-        }
-        match errno() {
-            libc::EBUSY | libc::EINTR => continue,
-            libc::EMFILE => return Err(Error::ProcessFdQuotaExceeded),
-            libc::EINVAL => unreachable!(), // invalid parameters passed to dup2
-            libc::EBADF => unreachable!(),  // invalid file descriptor
-            err => return Err(Error::Unexpected(err)),
-        }
-    }
 }
 
 /// PORT NOTE (Zig-std shim): `std.posix.WaitPidResult` — the `{ pid, status }`
@@ -1468,112 +1455,468 @@ pub(crate) fn posix_waitpid_checked(pid: libc::pid_t, flags: u32) -> Option<Wait
     }
 }
 
-/// PORT NOTE (Zig-std shim): the `ExecveError` set of `posix.execveZ` — the errno
-/// mapping the reference's failed-exec reporting switches over.
+/// `@tagName(e)` for the reference's `posix.E`: the errno's tag name in Zig
+/// 0.16's enum for this target, which the child's exec-failure report prints
+/// after an `E` (`EACCES`, `ENOEXEC`, `E2BIG`). S39-F2: the port printed the
+/// name of a Zig-std error-set member instead (`error.AccessDenied`).
+///
+/// The tables are the enums' fields as Zig 0.16.0 itself enumerates them
+/// (`@typeInfo(std.posix.E).@"enum".fields`, dumped at comptime for
+/// `aarch64-macos`, `aarch64-linux` (identical to `x86_64-linux`: every Linux
+/// arch but mips and sparc shares one enum) and `x86_64-freebsd`).
+///
+/// PORT NOTE: a value with no name (none of them is an errno `execve` returns)
+/// is `None`. The reference's `@tagName` of such a value is a safety panic in
+/// the forked child; the caller prints the number instead.
 #[cfg(not(windows))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ExecveError {
-    SystemResources,
-    ProcessFdQuotaExceeded,
-    NameTooLong,
-    SystemFdQuotaExceeded,
-    AccessDenied,
-    InvalidExe,
-    FileSystem,
-    IsDir,
-    FileNotFound,
-    NotDir,
-    FileBusy,
-    /// `posix.unexpectedErrno` (payload carried for debugging parity with
-    /// Zig's `unexpected_error_tracing`; Zig formats it as `error.Unexpected`).
-    Unexpected(#[allow(dead_code)] i32),
+fn errno_tag_name(e: i32) -> Option<&'static str> {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    const TAGS: &[(i32, &str)] = &[
+        (0, "SUCCESS"),
+        (1, "PERM"),
+        (2, "NOENT"),
+        (3, "SRCH"),
+        (4, "INTR"),
+        (5, "IO"),
+        (6, "NXIO"),
+        (7, "2BIG"),
+        (8, "NOEXEC"),
+        (9, "BADF"),
+        (10, "CHILD"),
+        (11, "DEADLK"),
+        (12, "NOMEM"),
+        (13, "ACCES"),
+        (14, "FAULT"),
+        (15, "NOTBLK"),
+        (16, "BUSY"),
+        (17, "EXIST"),
+        (18, "XDEV"),
+        (19, "NODEV"),
+        (20, "NOTDIR"),
+        (21, "ISDIR"),
+        (22, "INVAL"),
+        (23, "NFILE"),
+        (24, "MFILE"),
+        (25, "NOTTY"),
+        (26, "TXTBSY"),
+        (27, "FBIG"),
+        (28, "NOSPC"),
+        (29, "SPIPE"),
+        (30, "ROFS"),
+        (31, "MLINK"),
+        (32, "PIPE"),
+        (33, "DOM"),
+        (34, "RANGE"),
+        (35, "AGAIN"),
+        (36, "INPROGRESS"),
+        (37, "ALREADY"),
+        (38, "NOTSOCK"),
+        (39, "DESTADDRREQ"),
+        (40, "MSGSIZE"),
+        (41, "PROTOTYPE"),
+        (42, "NOPROTOOPT"),
+        (43, "PROTONOSUPPORT"),
+        (44, "SOCKTNOSUPPORT"),
+        (45, "OPNOTSUPP"),
+        (46, "PFNOSUPPORT"),
+        (47, "AFNOSUPPORT"),
+        (48, "ADDRINUSE"),
+        (49, "ADDRNOTAVAIL"),
+        (50, "NETDOWN"),
+        (51, "NETUNREACH"),
+        (52, "NETRESET"),
+        (53, "CONNABORTED"),
+        (54, "CONNRESET"),
+        (55, "NOBUFS"),
+        (56, "ISCONN"),
+        (57, "NOTCONN"),
+        (58, "SHUTDOWN"),
+        (59, "TOOMANYREFS"),
+        (60, "TIMEDOUT"),
+        (61, "CONNREFUSED"),
+        (62, "LOOP"),
+        (63, "NAMETOOLONG"),
+        (64, "HOSTDOWN"),
+        (65, "HOSTUNREACH"),
+        (66, "NOTEMPTY"),
+        (67, "PROCLIM"),
+        (68, "USERS"),
+        (69, "DQUOT"),
+        (70, "STALE"),
+        (71, "REMOTE"),
+        (72, "BADRPC"),
+        (73, "RPCMISMATCH"),
+        (74, "PROGUNAVAIL"),
+        (75, "PROGMISMATCH"),
+        (76, "PROCUNAVAIL"),
+        (77, "NOLCK"),
+        (78, "NOSYS"),
+        (79, "FTYPE"),
+        (80, "AUTH"),
+        (81, "NEEDAUTH"),
+        (82, "PWROFF"),
+        (83, "DEVERR"),
+        (84, "OVERFLOW"),
+        (85, "BADEXEC"),
+        (86, "BADARCH"),
+        (87, "SHLIBVERS"),
+        (88, "BADMACHO"),
+        (89, "CANCELED"),
+        (90, "IDRM"),
+        (91, "NOMSG"),
+        (92, "ILSEQ"),
+        (93, "NOATTR"),
+        (94, "BADMSG"),
+        (95, "MULTIHOP"),
+        (96, "NODATA"),
+        (97, "NOLINK"),
+        (98, "NOSR"),
+        (99, "NOSTR"),
+        (100, "PROTO"),
+        (101, "TIME"),
+        (103, "NOPOLICY"),
+        (104, "NOTRECOVERABLE"),
+        (105, "OWNERDEAD"),
+        (106, "QFULL"),
+    ];
+    #[cfg(all(
+        target_os = "linux",
+        not(any(
+            target_arch = "mips",
+            target_arch = "mips64",
+            target_arch = "sparc",
+            target_arch = "sparc64"
+        ))
+    ))]
+    const TAGS: &[(i32, &str)] = &[
+        (0, "SUCCESS"),
+        (1, "PERM"),
+        (2, "NOENT"),
+        (3, "SRCH"),
+        (4, "INTR"),
+        (5, "IO"),
+        (6, "NXIO"),
+        (7, "2BIG"),
+        (8, "NOEXEC"),
+        (9, "BADF"),
+        (10, "CHILD"),
+        (11, "AGAIN"),
+        (12, "NOMEM"),
+        (13, "ACCES"),
+        (14, "FAULT"),
+        (15, "NOTBLK"),
+        (16, "BUSY"),
+        (17, "EXIST"),
+        (18, "XDEV"),
+        (19, "NODEV"),
+        (20, "NOTDIR"),
+        (21, "ISDIR"),
+        (22, "INVAL"),
+        (23, "NFILE"),
+        (24, "MFILE"),
+        (25, "NOTTY"),
+        (26, "TXTBSY"),
+        (27, "FBIG"),
+        (28, "NOSPC"),
+        (29, "SPIPE"),
+        (30, "ROFS"),
+        (31, "MLINK"),
+        (32, "PIPE"),
+        (33, "DOM"),
+        (34, "RANGE"),
+        (35, "DEADLK"),
+        (36, "NAMETOOLONG"),
+        (37, "NOLCK"),
+        (38, "NOSYS"),
+        (39, "NOTEMPTY"),
+        (40, "LOOP"),
+        (42, "NOMSG"),
+        (43, "IDRM"),
+        (44, "CHRNG"),
+        (45, "L2NSYNC"),
+        (46, "L3HLT"),
+        (47, "L3RST"),
+        (48, "LNRNG"),
+        (49, "UNATCH"),
+        (50, "NOCSI"),
+        (51, "L2HLT"),
+        (52, "BADE"),
+        (53, "BADR"),
+        (54, "XFULL"),
+        (55, "NOANO"),
+        (56, "BADRQC"),
+        (57, "BADSLT"),
+        (59, "BFONT"),
+        (60, "NOSTR"),
+        (61, "NODATA"),
+        (62, "TIME"),
+        (63, "NOSR"),
+        (64, "NONET"),
+        (65, "NOPKG"),
+        (66, "REMOTE"),
+        (67, "NOLINK"),
+        (68, "ADV"),
+        (69, "SRMNT"),
+        (70, "COMM"),
+        (71, "PROTO"),
+        (72, "MULTIHOP"),
+        (73, "DOTDOT"),
+        (74, "BADMSG"),
+        (75, "OVERFLOW"),
+        (76, "NOTUNIQ"),
+        (77, "BADFD"),
+        (78, "REMCHG"),
+        (79, "LIBACC"),
+        (80, "LIBBAD"),
+        (81, "LIBSCN"),
+        (82, "LIBMAX"),
+        (83, "LIBEXEC"),
+        (84, "ILSEQ"),
+        (85, "RESTART"),
+        (86, "STRPIPE"),
+        (87, "USERS"),
+        (88, "NOTSOCK"),
+        (89, "DESTADDRREQ"),
+        (90, "MSGSIZE"),
+        (91, "PROTOTYPE"),
+        (92, "NOPROTOOPT"),
+        (93, "PROTONOSUPPORT"),
+        (94, "SOCKTNOSUPPORT"),
+        (95, "OPNOTSUPP"),
+        (96, "PFNOSUPPORT"),
+        (97, "AFNOSUPPORT"),
+        (98, "ADDRINUSE"),
+        (99, "ADDRNOTAVAIL"),
+        (100, "NETDOWN"),
+        (101, "NETUNREACH"),
+        (102, "NETRESET"),
+        (103, "CONNABORTED"),
+        (104, "CONNRESET"),
+        (105, "NOBUFS"),
+        (106, "ISCONN"),
+        (107, "NOTCONN"),
+        (108, "SHUTDOWN"),
+        (109, "TOOMANYREFS"),
+        (110, "TIMEDOUT"),
+        (111, "CONNREFUSED"),
+        (112, "HOSTDOWN"),
+        (113, "HOSTUNREACH"),
+        (114, "ALREADY"),
+        (115, "INPROGRESS"),
+        (116, "STALE"),
+        (117, "UCLEAN"),
+        (118, "NOTNAM"),
+        (119, "NAVAIL"),
+        (120, "ISNAM"),
+        (121, "REMOTEIO"),
+        (122, "DQUOT"),
+        (123, "NOMEDIUM"),
+        (124, "MEDIUMTYPE"),
+        (125, "CANCELED"),
+        (126, "NOKEY"),
+        (127, "KEYEXPIRED"),
+        (128, "KEYREVOKED"),
+        (129, "KEYREJECTED"),
+        (130, "OWNERDEAD"),
+        (131, "NOTRECOVERABLE"),
+        (132, "RFKILL"),
+        (133, "HWPOISON"),
+        (160, "NSRNODATA"),
+        (161, "NSRFORMERR"),
+        (162, "NSRSERVFAIL"),
+        (163, "NSRNOTFOUND"),
+        (164, "NSRNOTIMP"),
+        (165, "NSRREFUSED"),
+        (166, "NSRBADQUERY"),
+        (167, "NSRBADNAME"),
+        (168, "NSRBADFAMILY"),
+        (169, "NSRBADRESP"),
+        (170, "NSRCONNREFUSED"),
+        (171, "NSRTIMEOUT"),
+        (172, "NSROF"),
+        (173, "NSRFILE"),
+        (174, "NSRNOMEM"),
+        (175, "NSRDESTRUCTION"),
+        (176, "NSRQUERYDOMAINTOOLONG"),
+        (177, "NSRCNAMELOOP"),
+    ];
+    #[cfg(target_os = "freebsd")]
+    const TAGS: &[(i32, &str)] = &[
+        (0, "SUCCESS"),
+        (1, "PERM"),
+        (2, "NOENT"),
+        (3, "SRCH"),
+        (4, "INTR"),
+        (5, "IO"),
+        (6, "NXIO"),
+        (7, "2BIG"),
+        (8, "NOEXEC"),
+        (9, "BADF"),
+        (10, "CHILD"),
+        (11, "DEADLK"),
+        (12, "NOMEM"),
+        (13, "ACCES"),
+        (14, "FAULT"),
+        (15, "NOTBLK"),
+        (16, "BUSY"),
+        (17, "EXIST"),
+        (18, "XDEV"),
+        (19, "NODEV"),
+        (20, "NOTDIR"),
+        (21, "ISDIR"),
+        (22, "INVAL"),
+        (23, "NFILE"),
+        (24, "MFILE"),
+        (25, "NOTTY"),
+        (26, "TXTBSY"),
+        (27, "FBIG"),
+        (28, "NOSPC"),
+        (29, "SPIPE"),
+        (30, "ROFS"),
+        (31, "MLINK"),
+        (32, "PIPE"),
+        (33, "DOM"),
+        (34, "RANGE"),
+        (35, "AGAIN"),
+        (36, "INPROGRESS"),
+        (37, "ALREADY"),
+        (38, "NOTSOCK"),
+        (39, "DESTADDRREQ"),
+        (40, "MSGSIZE"),
+        (41, "PROTOTYPE"),
+        (42, "NOPROTOOPT"),
+        (43, "PROTONOSUPPORT"),
+        (44, "SOCKTNOSUPPORT"),
+        (45, "OPNOTSUPP"),
+        (46, "PFNOSUPPORT"),
+        (47, "AFNOSUPPORT"),
+        (48, "ADDRINUSE"),
+        (49, "ADDRNOTAVAIL"),
+        (50, "NETDOWN"),
+        (51, "NETUNREACH"),
+        (52, "NETRESET"),
+        (53, "CONNABORTED"),
+        (54, "CONNRESET"),
+        (55, "NOBUFS"),
+        (56, "ISCONN"),
+        (57, "NOTCONN"),
+        (58, "SHUTDOWN"),
+        (59, "TOOMANYREFS"),
+        (60, "TIMEDOUT"),
+        (61, "CONNREFUSED"),
+        (62, "LOOP"),
+        (63, "NAMETOOLONG"),
+        (64, "HOSTDOWN"),
+        (65, "HOSTUNREACH"),
+        (66, "NOTEMPTY"),
+        (67, "PROCLIM"),
+        (68, "USERS"),
+        (69, "DQUOT"),
+        (70, "STALE"),
+        (71, "REMOTE"),
+        (72, "BADRPC"),
+        (73, "RPCMISMATCH"),
+        (74, "PROGUNAVAIL"),
+        (75, "PROGMISMATCH"),
+        (76, "PROCUNAVAIL"),
+        (77, "NOLCK"),
+        (78, "NOSYS"),
+        (79, "FTYPE"),
+        (80, "AUTH"),
+        (81, "NEEDAUTH"),
+        (82, "IDRM"),
+        (83, "NOMSG"),
+        (84, "OVERFLOW"),
+        (85, "CANCELED"),
+        (86, "ILSEQ"),
+        (87, "NOATTR"),
+        (88, "DOOFUS"),
+        (89, "BADMSG"),
+        (90, "MULTIHOP"),
+        (91, "NOLINK"),
+        (92, "PROTO"),
+        (93, "NOTCAPABLE"),
+        (94, "CAPMODE"),
+        (95, "NOTRECOVERABLE"),
+        (96, "OWNERDEAD"),
+        (97, "INTEGRITY"),
+    ];
+    #[cfg(not(any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        all(
+            target_os = "linux",
+            not(any(
+                target_arch = "mips",
+                target_arch = "mips64",
+                target_arch = "sparc",
+                target_arch = "sparc64"
+            ))
+        )
+    )))]
+    const TAGS: &[(i32, &str)] = &[];
+
+    TAGS.iter().find(|&&(v, _)| v == e).map(|&(_, name)| name)
 }
 
+/// The child's exec-failure report (`Command.zig:259-280`), formatted into the
+/// stack writer: the friendly message for `NOENT`, else
+/// `exec syscall failed with unexpected error: E{s}` with the errno's tag.
 #[cfg(not(windows))]
-impl core::fmt::Display for ExecveError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        // (Zig formats an error value as `error.Name` — the shape the child's
-        // "unexpected error" stderr report prints.)
-        let name = match self {
-            ExecveError::SystemResources => "SystemResources",
-            ExecveError::ProcessFdQuotaExceeded => "ProcessFdQuotaExceeded",
-            ExecveError::NameTooLong => "NameTooLong",
-            ExecveError::SystemFdQuotaExceeded => "SystemFdQuotaExceeded",
-            ExecveError::AccessDenied => "AccessDenied",
-            ExecveError::InvalidExe => "InvalidExe",
-            ExecveError::FileSystem => "FileSystem",
-            ExecveError::IsDir => "IsDir",
-            ExecveError::FileNotFound => "FileNotFound",
-            ExecveError::NotDir => "NotDir",
-            ExecveError::FileBusy => "FileBusy",
-            ExecveError::Unexpected(_) => "Unexpected",
-        };
-        write!(f, "error.{name}")
+fn write_exec_failure(stderr: &mut impl core::fmt::Write, err: i32) {
+    match err {
+        // posix.system.E.NOENT => stderr.print(...) catch {},
+        libc::ENOENT => {
+            let _ = writeln!(
+                stderr,
+                "Requested executable not found. Please verify the command is on\nthe PATH and try again."
+            );
+        }
+
+        // else => |e| stderr.print("exec syscall failed with unexpected error: E{s}\n", .{@tagName(e)}) catch {},
+        e => match errno_tag_name(e) {
+            Some(tag) => {
+                let _ = writeln!(stderr, "exec syscall failed with unexpected error: E{tag}");
+            }
+            None => {
+                let _ = writeln!(stderr, "exec syscall failed with unexpected error: E{e}");
+            }
+        },
     }
 }
 
-/// PORT NOTE (Zig-std shim): `posix.execveZ` — issues execve(2) and maps the errno
-/// exactly as the Zig std does (only returns on failure).
+/// `posix.errno(posix.system.execve(path, argsZ, envp))`: execve(2) returns
+/// only on failure, and the reference switches over the raw errno.
 #[cfg(not(windows))]
-fn execveZ(
+fn execve_errno(
     path: *const c_char,
     child_argv: *const *const c_char,
     envp: *const *const c_char,
-) -> ExecveError {
+) -> i32 {
     let _ = unsafe { libc::execve(path, child_argv, envp) };
-    let err = errno();
-    match err {
-        // .SUCCESS => unreachable, .FAULT => unreachable,
-        libc::E2BIG => ExecveError::SystemResources,
-        libc::EMFILE => ExecveError::ProcessFdQuotaExceeded,
-        libc::ENAMETOOLONG => ExecveError::NameTooLong,
-        libc::ENFILE => ExecveError::SystemFdQuotaExceeded,
-        libc::ENOMEM => ExecveError::SystemResources,
-        libc::EACCES => ExecveError::AccessDenied,
-        libc::EPERM => ExecveError::AccessDenied,
-        libc::EINVAL => ExecveError::InvalidExe,
-        libc::ENOEXEC => ExecveError::InvalidExe,
-        libc::EIO => ExecveError::FileSystem,
-        libc::ELOOP => ExecveError::FileSystem,
-        libc::EISDIR => ExecveError::IsDir,
-        libc::ENOENT => ExecveError::FileNotFound,
-        libc::ENOTDIR => ExecveError::NotDir,
-        libc::ETXTBSY => ExecveError::FileBusy,
-        _ => {
-            // (Zig: per-OS extras — linux ELIBBAD/EBADARCH, darwin
-            // EBADARCH/EBADEXEC -> error.InvalidExe; else unexpectedErrno.)
-            #[cfg(target_os = "linux")]
-            if err == libc::ELIBBAD {
-                return ExecveError::InvalidExe;
-            }
-            #[cfg(any(target_os = "macos", target_os = "ios"))]
-            if err == libc::EBADARCH || err == libc::EBADEXEC {
-                return ExecveError::InvalidExe;
-            }
-            ExecveError::Unexpected(err)
-        }
-    }
+    errno()
 }
 
-/// This functionality has been taken from Zig stdlib, a simplified
-/// version of the exec bits with PATH search so that we can just
-/// offload to execve below.
-///
-/// PORT NOTE (Zig-std shim): `posix.execvpeZ` — Zig implements the `p`-variant in
-/// userspace (macOS has no execvpe(3)): a file containing '/' execs directly;
+/// The `const err: posix.E = execve: { ... }` block of `startPosix`
+/// (`Command.zig:227-257`): "This functionality has been taken from Zig
+/// stdlib, a simplified version of the exec bits with PATH search so that we
+/// can just offload to execve below." A file containing '/' execs directly;
 /// otherwise every PATH segment is tried with the candidate built in a stack
 /// buffer. NO heap allocation (we are between fork and exec — see `start`).
-/// Mirrors `std.posix.execvpeZ_expandArg0(.no_expand, ...)`.
+///
+/// S39-F1: this used to be a port of Zig std's `posix.execvpeZ`, which maps the
+/// errno into an error set first (`EPERM` and `EACCES` both become
+/// `AccessDenied`) so an `EPERM` continued the PATH search. The reference
+/// switches on the raw errno, and `EPERM` ends the search.
 #[cfg(not(windows))]
-fn execvpeZ(
-    file: &CStr,
-    child_argv: *const *const c_char,
-    envp: *const *const c_char,
-) -> ExecveError {
+fn execvpe(file: &CStr, child_argv: *const *const c_char, envp: *const *const c_char) -> i32 {
     let file_slice = file.to_bytes();
-    // if (mem.indexOfScalarPos(u8, file_slice, 0, '/') != null) return execveZ(...);
+    // if (std.mem.findScalar(u8, file_slice, '/') != null) {
+    //     break :execve posix.errno(posix.system.execve(self.path, argsZ, envp));
+    // }
     if file_slice.contains(&b'/') {
-        return execveZ(file.as_ptr(), child_argv, envp);
+        return execve_errno(file.as_ptr(), child_argv, envp);
     }
 
     // const PATH = global.environ().getPosix("PATH") orelse "/usr/local/bin:/bin/:/usr/bin";
@@ -1593,59 +1936,59 @@ fn execvpeZ(
         unsafe { CStr::from_ptr(path_env) }.to_bytes()
     };
 
-    execvpeZ_search(file_slice, path_bytes, child_argv, envp)
+    execvpe_search(file_slice, path_bytes, |full_path| {
+        execve_errno(full_path, child_argv, envp)
+    })
 }
 
-/// The PATH-search half of [`execvpeZ`], split out so the `err`-latching
-/// contract (area-E `E29`) is testable without mutating the process
-/// environment — which is exactly what `P3-W7 T3` removed from this workspace.
-/// Behaviour is unchanged: `execvpeZ` calls this with the `PATH` it read.
+/// The PATH-search half of [`execvpe`], split out so the search's errno
+/// switch is testable without mutating the process environment. `execve` is
+/// the exec call (the real one returns `posix.errno(posix.system.execve(..))`);
+/// the result is the errno the search ends on.
 #[cfg(not(windows))]
-fn execvpeZ_search(
+fn execvpe_search(
     file_slice: &[u8],
     path_bytes: &[u8],
-    child_argv: *const *const c_char,
-    envp: *const *const c_char,
-) -> ExecveError {
-    // var path_buf: [PATH_MAX]u8 = undefined;
-    let mut path_buf = [0u8; libc::PATH_MAX as usize];
-    // var it = mem.tokenizeScalar(u8, PATH, ':');
-    let mut seen_eacces = false;
+    mut execve: impl FnMut(*const c_char) -> i32,
+) -> i32 {
+    // var path_expanded_buf: [std.fs.max_path_bytes]u8 = undefined;
+    let mut path_expanded_buf = [0u8; libc::PATH_MAX as usize];
+    // var it = std.mem.tokenizeScalar(u8, PATH, ':');
     // var err: posix.system.E = .NOENT;
-    //
-    // PORT NOTE (P3-W7 T5 / area-E `E29`): this was `let err = ...` — never
-    // reassigned — so if the FINAL PATH entry yielded `ENOTDIR`, rustty
-    // reported `NOENT` where upstream reports `NOTDIR`. Upstream updates `err`
-    // from each `execve` result before the switch:
-    //   err = posix.errno(posix.system.execve(full_path, argsZ, envp));
-    //   switch (err) { .ACCES => seen_eacces = true, .NOENT, .NOTDIR => {}, else => break :execve err }
-    // Observable in the child's stderr text: `NOENT` prints the friendly
-    // "not on the PATH" message, anything else prints "unexpected error: E<name>".
-    let mut err = ExecveError::FileNotFound;
+    let mut err = libc::ENOENT;
+    // var seen_eacces = false;
+    let mut seen_eacces = false;
+
     for search_path in path_bytes.split(|&b| b == b':').filter(|s| !s.is_empty()) {
         // const path_len = search_path.len + file_slice.len + 1;
         let path_len = search_path.len() + file_slice.len() + 1;
-        // if (path_buf.len < path_len + 1) return error.NameTooLong;
-        if path_buf.len() < path_len + 1 {
-            return ExecveError::NameTooLong;
+        // if (path_expanded_buf.len < path_len + 1) break :execve .NAMETOOLONG;
+        if path_expanded_buf.len() < path_len + 1 {
+            return libc::ENAMETOOLONG;
         }
-        path_buf[..search_path.len()].copy_from_slice(search_path);
-        path_buf[search_path.len()] = b'/';
-        path_buf[search_path.len() + 1..][..file_slice.len()].copy_from_slice(file_slice);
-        path_buf[path_len] = 0;
-        let full_path = path_buf.as_ptr() as *const c_char;
+        path_expanded_buf[..search_path.len()].copy_from_slice(search_path);
+        path_expanded_buf[search_path.len()] = b'/';
+        path_expanded_buf[search_path.len() + 1..][..file_slice.len()].copy_from_slice(file_slice);
+        path_expanded_buf[path_len] = 0;
+        let full_path = path_expanded_buf.as_ptr() as *const c_char;
         // Replace here, switch on error (any error means that replace
         // failed, but we might need to retry).
-        err = execveZ(full_path, child_argv, envp);
+        err = execve(full_path);
         match err {
-            ExecveError::AccessDenied => seen_eacces = true,
-            ExecveError::FileNotFound | ExecveError::NotDir => {}
-            e => return e,
+            // .ACCES => seen_eacces = true,
+            libc::EACCES => seen_eacces = true,
+            // .NOENT, .NOTDIR => {},
+            libc::ENOENT | libc::ENOTDIR => {}
+            // else => break :execve err,
+            _ => return err,
         }
     }
+
+    // if (seen_eacces) break :execve .ACCES;
     if seen_eacces {
-        return ExecveError::AccessDenied;
+        return libc::EACCES;
     }
+    // break :execve err;
     err
 }
 
@@ -1879,15 +2222,224 @@ mod tests {
         let mut path_env: Vec<u8> = b"/rustty-w7-no-such-dir:".to_vec();
         path_env.extend_from_slice(path.as_os_str().as_encoded_bytes());
 
-        let got = execvpeZ_search(file_bytes, &path_env, argv.as_ptr(), envp.as_ptr());
+        let got = execvpe_search(file_bytes, &path_env, |full_path| {
+            execve_errno(full_path, argv.as_ptr(), envp.as_ptr())
+        });
         let _ = std::fs::remove_file(&path);
 
         assert_eq!(
             got,
-            ExecveError::NotDir,
-            "the errno of the FINAL PATH entry must be reported (got {got:?}); \
-             `FileNotFound` means `err` is not being latched per iteration"
+            libc::ENOTDIR,
+            "the errno of the FINAL PATH entry must be reported (got {got}); \
+             `ENOENT` means `err` is not being latched per iteration"
         );
+    }
+
+    /// S39-F1: the PATH search switches on the RAW errno (`Command.zig:249-253`):
+    /// `ACCES` is remembered and the search goes on, `NOENT`/`NOTDIR` go on,
+    /// and any other errno, `PERM` included, ends the search with that errno.
+    /// The port mapped `EPERM` to `AccessDenied` first, so an `EPERM` kept
+    /// searching (and could exec a later PATH entry the reference never tries).
+    ///
+    /// `execve` is replaced by a recorder: no real candidate can be made to
+    /// fail with `EPERM` on demand.
+    #[test]
+    #[cfg(not(windows))]
+    fn path_search_ends_on_eperm_and_remembers_eacces() {
+        fn search(errnos: &[i32]) -> (i32, Vec<Vec<u8>>) {
+            let mut tried: Vec<Vec<u8>> = Vec::new();
+            let got = execvpe_search(b"prog", b"/a:/b:/c", |full_path| {
+                // SAFETY: the search hands a NUL-terminated path in its buffer.
+                tried.push(unsafe { CStr::from_ptr(full_path) }.to_bytes().to_vec());
+                errnos[tried.len() - 1]
+            });
+            (got, tried)
+        }
+
+        // EPERM from the first candidate: the search stops there.
+        let (got, tried) = search(&[libc::EPERM, 0, 0]);
+        assert_eq!(got, libc::EPERM);
+        assert_eq!(tried, vec![b"/a/prog".to_vec()]);
+
+        // Any other unexpected errno stops it the same way.
+        let (got, tried) = search(&[libc::ENOENT, libc::ENOEXEC, 0]);
+        assert_eq!(got, libc::ENOEXEC);
+        assert_eq!(tried.len(), 2);
+
+        // EACCES is remembered while the search goes on, and wins over a
+        // final ENOENT.
+        let (got, tried) = search(&[libc::EACCES, libc::ENOENT, libc::ENOTDIR]);
+        assert_eq!(got, libc::EACCES);
+        assert_eq!(
+            tried,
+            vec![
+                b"/a/prog".to_vec(),
+                b"/b/prog".to_vec(),
+                b"/c/prog".to_vec()
+            ]
+        );
+
+        // Nothing found: the last candidate's errno.
+        let (got, _) = search(&[libc::ENOENT, libc::ENOENT, libc::ENOTDIR]);
+        assert_eq!(got, libc::ENOTDIR);
+    }
+
+    fn exec_failure_text(err: i32) -> String {
+        let mut out = String::new();
+        write_exec_failure(&mut out, err);
+        out
+    }
+
+    /// S39-F2: the non-`NOENT` report prints `E` and the errno's tag name
+    /// (`Command.zig:271-276`), not a Zig-std error-set name.
+    #[test]
+    #[cfg(not(windows))]
+    fn exec_failure_report_prints_the_errno_tag() {
+        assert_eq!(
+            exec_failure_text(libc::EACCES),
+            "exec syscall failed with unexpected error: EACCES\n"
+        );
+        assert_eq!(
+            exec_failure_text(libc::EPERM),
+            "exec syscall failed with unexpected error: EPERM\n"
+        );
+        assert_eq!(
+            exec_failure_text(libc::ENOEXEC),
+            "exec syscall failed with unexpected error: ENOEXEC\n"
+        );
+        assert_eq!(
+            exec_failure_text(libc::E2BIG),
+            "exec syscall failed with unexpected error: E2BIG\n"
+        );
+        assert_eq!(
+            exec_failure_text(libc::ENAMETOOLONG),
+            "exec syscall failed with unexpected error: ENAMETOOLONG\n"
+        );
+        // NOENT keeps its own message.
+        assert_eq!(
+            exec_failure_text(libc::ENOENT),
+            "Requested executable not found. Please verify the command is on\n\
+             the PATH and try again.\n"
+        );
+    }
+
+    /// The tag table spells every name the way Zig 0.16's enum does,
+    /// including the ones that differ from the C macro (`EWOULDBLOCK` is
+    /// `AGAIN`, `ENOTSUP` is `OPNOTSUPP` on Linux).
+    #[test]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    fn errno_tag_names_follow_the_zig_enum() {
+        assert_eq!(errno_tag_name(0), Some("SUCCESS"));
+        assert_eq!(errno_tag_name(libc::EPERM), Some("PERM"));
+        assert_eq!(errno_tag_name(libc::EAGAIN), Some("AGAIN"));
+        assert_eq!(errno_tag_name(libc::ETXTBSY), Some("TXTBSY"));
+        assert_eq!(errno_tag_name(libc::ELOOP), Some("LOOP"));
+        #[cfg(target_os = "macos")]
+        {
+            assert_eq!(errno_tag_name(libc::EBADEXEC), Some("BADEXEC"));
+            assert_eq!(errno_tag_name(libc::EBADARCH), Some("BADARCH"));
+            assert_eq!(errno_tag_name(libc::EDEADLK), Some("DEADLK"));
+            // 102 is not a field of Zig's darwin `E`.
+            assert_eq!(errno_tag_name(102), None);
+        }
+        #[cfg(target_os = "linux")]
+        {
+            assert_eq!(errno_tag_name(libc::ELIBBAD), Some("LIBBAD"));
+            assert_eq!(errno_tag_name(libc::EOPNOTSUPP), Some("OPNOTSUPP"));
+            assert_eq!(errno_tag_name(41), None);
+        }
+    }
+
+    /// Set the calling thread's errno (what a failing libc call leaves).
+    #[cfg(not(windows))]
+    fn set_errno(e: i32) {
+        // SAFETY: the thread-local errno location is always valid.
+        unsafe {
+            #[cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd"))]
+            {
+                *libc::__error() = e;
+            }
+            #[cfg(target_os = "linux")]
+            {
+                *libc::__errno_location() = e;
+            }
+        }
+    }
+
+    /// S39-F4: `setupFd`'s `PosixCall.f` (`Command.zig:441-459`), which the
+    /// macOS/FreeBSD arm now uses for `fcntl` and `dup2` too: `EINTR` retries,
+    /// `EBUSY` is `error.FileBusy` at once (the port's `dup2` shim retried it),
+    /// and the other errnos map as the reference maps them.
+    #[test]
+    #[cfg(not(windows))]
+    fn posix_call_retries_eintr_and_maps_errnos() {
+        fn call(errnos: &[i32]) -> (Result<usize, Error>, usize) {
+            let mut calls = 0usize;
+            let got = posix_call(|| {
+                calls += 1;
+                match errnos.get(calls - 1) {
+                    Some(&e) => {
+                        set_errno(e);
+                        -1
+                    }
+                    None => 7,
+                }
+            });
+            (got, calls)
+        }
+
+        // EINTR is retried until the call succeeds.
+        assert_eq!(call(&[libc::EINTR, libc::EINTR]), (Ok(7), 3));
+        // EBUSY is not retried.
+        assert_eq!(call(&[libc::EBUSY]), (Err(Error::FileBusy), 1));
+        assert_eq!(call(&[libc::EAGAIN]), (Err(Error::Locked), 1));
+        assert_eq!(call(&[libc::EACCES]), (Err(Error::Locked), 1));
+        assert_eq!(call(&[libc::EPERM]), (Err(Error::PermissionDenied), 1));
+        assert_eq!(
+            call(&[libc::EMFILE]),
+            (Err(Error::ProcessFdQuotaExceeded), 1)
+        );
+        assert_eq!(call(&[libc::EDEADLK]), (Err(Error::DeadLock), 1));
+        assert_eq!(
+            call(&[libc::ENOLCK]),
+            (Err(Error::LockedRegionLimitExceeded), 1)
+        );
+        assert_eq!(
+            call(&[libc::ENOSPC]),
+            (Err(Error::Unexpected(libc::ENOSPC)), 1)
+        );
+        assert_eq!(call(&[]), (Ok(7), 1));
+    }
+
+    /// `setupFd` on macOS clears `FD_CLOEXEC` on the source and dups it onto
+    /// the target through `PosixCall.f` (a real fd round trip).
+    #[test]
+    #[cfg(any(target_os = "freebsd", target_os = "ios", target_os = "macos"))]
+    #[cfg_attr(miri, ignore)] // real fcntl/dup2 syscalls
+    fn setup_fd_clears_cloexec_and_dups() {
+        use std::os::fd::AsRawFd as _;
+        let src = std::fs::File::open("/dev/null").unwrap(); // Rust opens with O_CLOEXEC
+        let src_fd = src.as_raw_fd();
+        // SAFETY: plain fcntl/dup on fds this test owns.
+        let target = unsafe { libc::dup(src_fd) };
+        assert!(target >= 0);
+        assert_ne!(
+            unsafe { libc::fcntl(src_fd, libc::F_GETFD) } & libc::FD_CLOEXEC,
+            0
+        );
+
+        setupFd(src_fd, target).unwrap();
+
+        assert_eq!(
+            unsafe { libc::fcntl(src_fd, libc::F_GETFD) } & libc::FD_CLOEXEC,
+            0
+        );
+        // dup2 leaves the target without FD_CLOEXEC, open on the same file.
+        assert_eq!(
+            unsafe { libc::fcntl(target, libc::F_GETFD) } & libc::FD_CLOEXEC,
+            0
+        );
+        unsafe { libc::close(target) };
     }
 
     // [T8] Every test below forks. Take the crate-wide fork-serialization lock
@@ -2582,6 +3134,55 @@ mod tests {
             drop(stdout);
             td.deinit();
         }
+    }
+
+    /// S39-F2 end to end: a command whose exec fails with `EACCES` (the path
+    /// names a directory) makes the forked child write the reference's
+    /// report, `E` plus the errno's tag, to its stderr.
+    #[test]
+    #[cfg_attr(miri, ignore)] // real fork/exec/waitpid syscalls
+    #[cfg(not(windows))]
+    fn exec_failure_in_child_reports_the_errno_tag() {
+        use std::io::{Read as _, Seek as _};
+        let _serial = fork_serial();
+
+        let mut td = TempDir::init().unwrap();
+        let stdout = createTestStdout(td.dir()).unwrap();
+        let mut stderr = createTestStderr(td.dir()).unwrap();
+
+        let mut cmd: Command = Command {
+            // A directory: execve fails with EACCES.
+            path: c"/",
+            args: &[c"/"],
+            env: None,
+            cwd: None,
+            stdin: None,
+            stdout: Some(&stdout),
+            stderr: Some(&stderr),
+            os_pre_exec: None,
+            rt_pre_exec: None,
+            rt_pre_exec_info: RtPreExecInfo::default(),
+            rt_post_fork: None,
+            rt_post_fork_info: RtPostForkInfo::default(),
+            data: None,
+            pid: None,
+        };
+
+        cmd.testingStart().unwrap();
+        let exit = cmd.wait(true).unwrap();
+        assert!(matches!(exit, Exit::Exited(1)));
+
+        let mut contents = String::new();
+        stderr.rewind().unwrap();
+        stderr.read_to_string(&mut contents).unwrap();
+        assert_eq!(
+            contents,
+            "exec syscall failed with unexpected error: EACCES\n"
+        );
+
+        drop(stderr);
+        drop(stdout);
+        td.deinit();
     }
 
     // If cmd.start fails with error.ExecFailedInChild it's the _child_ process that is running. If it does not
