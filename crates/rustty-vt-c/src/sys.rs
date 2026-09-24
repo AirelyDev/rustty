@@ -712,6 +712,10 @@ static LOGGER: Logger = Logger;
 /// completely alone — the correct behavior when a host/embedder already
 /// owns the `log` crate's global registration is containment, not clobber.
 pub fn install_log_backend() {
+    // `lib_vt.zig`'s `pub const panic` (the `tinyPanicImpl` arm in release
+    // builds): a Rust panic hook can only be installed at run time, and this is
+    // the first thing every `*_new` entry point does (parity S43-F6).
+    crate::panic::install();
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {
         // task-14a review round 2 (same class as CRITICAL 1): the wasm-release

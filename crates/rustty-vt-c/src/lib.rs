@@ -51,8 +51,10 @@ use std::os::raw::c_int;
 //     — the reference keeps std's panic/stack-trace machinery (~160KB) only on
 //     development builds and never on native freestanding. `DEBUG_MACHINERY`
 //     below is the same predicate (`builtin.mode` → `debug_assertions`, R8:
-//     build-switchable, never folded) for any future consumer (a custom panic
-//     handler on a `none` OS); today the `std` panic handler is what runs.
+//     build-switchable, never folded). It selects the panic handler
+//     (`panic.rs`, the `tinyPanicImpl` port). CORRECTION (parity S43-F6): this
+//     used to say "for any future consumer (a custom panic handler on a `none`
+//     OS); today the `std` panic handler is what runs".
 //
 // wasm32-freestanding is deliberately NOT native freestanding (the reference
 // `!isWasm()` guard): the wasm arms in `sys::log_fn`, `rustty-lib`'s wasm
@@ -73,7 +75,6 @@ pub const NATIVE_FREESTANDING: bool = cfg!(target_os = "none") && !cfg!(target_a
 //         .Debug, .ReleaseSafe => true,
 //         .ReleaseFast, .ReleaseSmall => false,
 //     });
-#[allow(dead_code)]
 pub const DEBUG_MACHINERY: bool = !NATIVE_FREESTANDING && (cfg!(test) || cfg!(debug_assertions));
 
 // ----- terminal/c/main.zig: module hub -----
@@ -108,6 +109,7 @@ pub mod modes;
 pub mod mouse_encode;
 pub mod mouse_event;
 pub mod osc;
+mod panic;
 pub mod paste;
 pub mod point;
 pub mod render;
