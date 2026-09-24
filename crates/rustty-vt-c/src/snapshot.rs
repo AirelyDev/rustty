@@ -2536,6 +2536,50 @@ mod tests {
         assert_eq!(0, counting.live_bytes.get(), "free returns every byte");
     }
 
+    // Parity tail S7-4 (routing evidence): with retention enabled the decoded
+    // terminal's continuation tracker is built by `wrap` over the caller's
+    // allocator (`Stream.init(.{ .allocator = alloc, .continuation_max_bytes =
+    // .. })`), like the rest of the terminal.
+    #[test]
+    fn decoded_terminal_continuation_tracker_is_on_the_callers_allocator() {
+        use rustty_vt::alloc::testing::CountingAllocator;
+        let bytes = sample_snapshot();
+        let counting = CountingAllocator::over_heap();
+        let c = counting.allocator();
+        let mut decoder: Decoder = std::ptr::null_mut();
+        assert_eq!(Result::Success, unsafe {
+            decoder_new_buf(Some(&c), &mut decoder, bytes.as_ptr(), bytes.len())
+        });
+        let retain = true;
+        assert_eq!(Result::Success, unsafe {
+            decoder_set(
+                decoder,
+                DecoderOption::RetainContinuation,
+                &retain as *const bool as *const c_void,
+            )
+        });
+        let mut restored: terminal_c::Terminal = std::ptr::null_mut();
+        assert_eq!(Result::Success, unsafe {
+            decoder_decode(decoder, &mut restored)
+        });
+        unsafe { decoder_free(decoder) };
+        // SAFETY: the decoded terminal is live; a shared read of its stream.
+        unsafe {
+            let tracker = (*restored)
+                .stream
+                .continuation
+                .as_ref()
+                .expect("retention keeps a tracker");
+            assert_eq!(
+                rustty_vt::alloc::default(Some(&c)),
+                tracker.allocator(),
+                "the tracker grows through the caller's allocator"
+            );
+        }
+        unsafe { terminal_c::free(restored) };
+        assert_eq!(0, counting.live_bytes.get(), "free returns every byte");
+    }
+
     // Parity tail S7-4 (T2, no reference counterpart): for every n, a
     // `FailingAllocator` refusing its n-th allocation drives the snapshot
     // decoder (`decoder_new_buf`, `decoder_decode`: the decoded terminal and
