@@ -1838,6 +1838,21 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - proposed fix:    size `tmp` and the output together: decode into a buffer of `max * 3` bytes (or check `std.unicode.calcUtf8Len` against `buf.len` first) and `return string` when the name does not fit.
 - upstream status: not reported
 
+### UD200 — `openThread` spins forever logging empty lines once the opener writes a line to stderr, and never reaps it
+- kind:            hang (busy loop) and leak (unreaped child)
+- upstream project: ghostty
+- severity:        medium
+- reference:       `src/os/open.zig:79-101` (`openThread`, the `takeDelimiterExclusive('\n')` loop at :88-99), at 20abdb50a; zig 0.16.0 `std/Io/Reader.zig:852-876` (`takeDelimiterExclusive` "advancing the seek position up to (but not past) the delimiter", `toss(result.len)` with the delimiter excluded).
+- defect:          `takeDelimiterExclusive` leaves the `'\n'` unread. The loop never tosses it, so every call after the first line finds the same `'\n'` at the read position and returns an empty slice. The loop logs `open stderr=` forever, never reads the rest of stderr, and never reaches `exe.wait(io)`: the thread spins at full CPU, floods the log, and the opener stays a zombie. MEASURED with zig 0.16.0 (`zig run`): the reference loop body over a 256-byte-buffered reader on `"hello\nworld\n" ++ "x" ** 300 ++ "\nend"` yields line 0 `hello`, then lines 1 to 11 empty (capped at 12 iterations by the probe). Not measured through a Ghostty binary.
+- ReleaseSafe:     no crash; an endless busy loop in the detached thread, an endless stream of `warning(os-open): open stderr=` lines, and a zombie per such `open` call.
+- ReleaseFast:     same.
+- reachability:    every `internal_os.open` call (the fallback URL opener used by the `open_url` action when the apprt does not handle it: Linux/FreeBSD `xdg-open`, Windows `rundll32`, macOS `open` for non-OSC 8 kinds) whose opener writes a newline-terminated line to stderr, for example `xdg-open` reporting a missing handler or `open` reporting a missing file.
+- port handling:   fixed (R13, extended 2026-09-23): `crates/rustty-os/src/open.rs` `log_stderr_lines` (PORT NOTE: reference defect (R13)) consumes the delimiter, so each line is logged once and the loop ends at end of stream, then `openThread` waits for the child. It keeps the reference's 256-byte buffer semantics: a line that fills the buffer with no newline is logged as a 256-byte piece (`StreamTooLong => take(buffer.len)`). Listed in `docs/ghostty-bug-fixes.md`.
+- parity row(s):   LEDGER S112-F7.
+- test:            `open::open_thread_tests::stderr_lines_are_logged_once_each_in_256_byte_pieces`, `stderr_line_at_the_buffer_boundary`, `open_thread_reaps_an_opener_that_writes_stderr` (rustty-os). Negative control (macOS, 2026-09-23): the delimiter left unconsumed (`consume(i)`, the reference's behaviour) fails all three, the first two on "stderr loop does not advance past a delimiter" and the third on "the opener was not reaped within 10 s".
+- proposed fix:    use `reader.takeDelimiter('\n')` (which consumes the delimiter and returns `null` at end of stream) with `orelse break`, or `toss(1)` after each `takeDelimiterExclusive` that did not end at end of stream.
+- upstream status: not reported
+
 ## Candidates pending verification
 
 Assembled from this plan's progress notes on 2026-09-11. **Not verified** — do not cite as fact.
