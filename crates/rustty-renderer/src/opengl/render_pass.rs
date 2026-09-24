@@ -113,8 +113,9 @@ impl<'a> RenderPass<'a> {
 
     /// PORTS: `RenderPass.zig:59-137`.
     ///
-    /// Add a step to this render pass. TODO (the reference's own): errors are
-    /// silently ignored here, maybe they shouldn't be.
+    /// Add a step to this render pass.
+    ///
+    /// TODO: Errors are silently ignored in this function, maybe they shouldn't be?
     ///
     /// PORT NOTE (the `defer` fan-out): the Zig body registers, in order,
     /// `defer pbind.unbind()` (`:66`), `defer vaobind.unbind()` (`:69`),
@@ -152,6 +153,9 @@ impl<'a> RenderPass<'a> {
         }
     }
 
+    /// Complete this render pass.
+    /// This struct can no longer be used after calling this.
+    ///
     /// PORTS: `RenderPass.zig:139-144`.
     ///
     /// ```zig
@@ -224,7 +228,8 @@ fn step_body(
     is_first_step: bool,
     clear_col: Option<[f32; 4]>,
 ) {
-    // If we have a clear color and this is the first step, clear.
+    // If we have a clear color and this is the
+    // first step in the pass, go ahead and clear.
     if is_first_step {
         if let Some(c) = clear_col {
             clear_color(c[0], c[1], c[2], c[3]);
@@ -260,7 +265,8 @@ fn step_body(
         }
     }
 
-    // Bind 0th buffer as the vertex buffer, and the rest as storage buffers.
+    // Bind 0th buffer as the vertex buffer,
+    // and bind the rest as storage buffers.
     if !s.buffers.is_empty() {
         if let Some(vbo) = s.buffers[0] {
             let stride = GLsizei::try_from(s.pipeline.stride).unwrap_or(GLsizei::MAX);

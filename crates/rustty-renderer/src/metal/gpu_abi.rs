@@ -36,6 +36,9 @@ use crate::shaders::{BgImage, CellText, Uniforms};
 #[repr(C, align(16))]
 #[derive(Clone, Copy)]
 pub struct UniformsGpu {
+    // Note: all of the explicit alignments are copied from the
+    // MSL developer reference just so that we can be sure that we got
+    // it all exactly right.
     pub(crate) projection_matrix: [[f32; 4]; 4], // 0
     pub(crate) screen_size: [f32; 2],            // 64
     pub(crate) cell_size: [f32; 2],              // 72

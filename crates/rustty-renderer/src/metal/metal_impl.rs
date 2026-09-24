@@ -190,8 +190,9 @@ fn choose_device() -> Result<Retained<ProtocolObject<dyn MTLDevice>>, Error> {
             continue;
         }
         chosen_device = Some(device.clone());
-        // If the user has an eGPU plugged in, they probably want to use it.
-        // Otherwise, integrated GPUs are better for battery life and thermals.
+        // If the user has an eGPU plugged in, they probably want
+        // to use it. Otherwise, integrated GPUs are better for
+        // battery life and thermals.
         if device.isRemovable() || device.isLowPower() {
             break;
         }
@@ -733,9 +734,10 @@ impl Metal {
         Shaders::init(
             &self.device,
             custom_shaders,
-            // Using an `*_srgb` pixel format makes Metal gamma encode the pixels
-            // written to it *after* blending, which means we get linear alpha
-            // blending rather than gamma-incorrect blending.
+            // Using an `*_srgb` pixel format makes Metal gamma encode
+            // the pixels written to it *after* blending, which means
+            // we get linear alpha blending rather than gamma-incorrect
+            // blending.
             if self.blending.is_linear() {
                 api::MTLPixelFormat::BGRA8Unorm_sRGB
             } else {

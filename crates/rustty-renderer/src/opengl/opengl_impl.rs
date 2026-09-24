@@ -167,8 +167,8 @@ impl OpenGL {
     // OpenGL.zig:27-28 — the fragCoord for OpenGL shaders is +Y = up.
     // `pub const custom_shader_y_is_down = false;`
     pub const CUSTOM_SHADER_Y_IS_DOWN: bool = false;
-    /// Because OpenGL's frame completion is always sync, we have no need for
-    /// multi-buffering.
+    /// Because OpenGL's frame completion is always
+    /// sync, we have no need for multi-buffering.
     // OpenGL.zig:30-32 `pub const swap_chain_count = 1;`
     pub const SWAP_CHAIN_COUNT: usize = 1;
 
@@ -230,6 +230,13 @@ impl OpenGL {
     /// (`prepareContext(null)`, reached here via [`sys::prepare_context_windowed`]).
     /// So this merely stores `blending`; `context` is `None` (GDK owns lifetime),
     /// and `surface_size` reads the live `GL_VIEWPORT` GDK set (the `None` arm).
+    ///
+    /// The reference's doc on `init`:
+    /// NOTE: This is an error{}!OpenGL instead of just OpenGL for parity with
+    /// Metal, since it needs to be fallible so does this, even though it
+    /// can't actually fail.
+    /// (PORT NOTE: with an empty error set there is nothing to propagate, so the
+    /// port returns `OpenGL` directly.)
     ///
     /// Unlike [`Self::init_offscreen`] it does NOT stand up an `OffscreenContext`,
     /// does NOT load GL (the windowing host already did via
@@ -703,12 +710,14 @@ impl OpenGL {
                 gltex::InternalFormat::RGBA
             },
             target: gltex::Target::Texture2D,
-            // TODO (ghostty): Generate mipmaps for image textures and use
-            //   linear_mipmap_linear filtering so they look good scaled way down.
+            // TODO: Generate mipmaps for image textures and use
+            //       linear_mipmap_linear filtering so that they
+            //       look good even when scaled way down.
             min_filter: gltex::MinFilter::Linear,
             mag_filter: gltex::MagFilter::Linear,
-            // TODO (ghostty): Separate out background image options, use repeating
-            //   coordinate modes so we don't have to do the modulus in the shader.
+            // TODO: Separate out background image options, use
+            //       repeating coordinate modes so we don't have
+            //       to do the modulus in the shader.
             wrap_s: gltex::Wrap::ClampToEdge,
             wrap_t: gltex::Wrap::ClampToEdge,
         }
