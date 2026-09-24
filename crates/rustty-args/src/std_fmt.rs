@@ -989,6 +989,14 @@ mod tests {
         );
     }
 
+    // The Zig 0.16.0 `test "parse unsigned comptime"` (std/fmt.zig:681-685).
+    // The reference evaluates it at comptime; `parse_unsigned` is not a
+    // `const fn`, so the same value is asserted at run time.
+    #[test]
+    fn std_parse_unsigned_comptime() {
+        assert_eq!(parse_unsigned::<usize>(b"2", 10), Ok(2));
+    }
+
     // Inputs the port's former `from_str_radix` front end got wrong, each
     // MEASURED against Zig 0.16.0 `std.fmt.parseInt(T, s, 0)` (see the task
     // report): `+-5` was accepted, `-0` for an unsigned type was rejected, and

@@ -3196,7 +3196,7 @@ on every input.
 
 **fix round T-C3 (2026-09-23)**: rustty-config depends on rustty-args (`crates/rustty-config/Cargo.toml`),
 so the dependency direction allows the switch, and it is done. `value_types.rs` now calls
-`rustty_args::std_fmt` everywhere it ported a `std.fmt` number parser, and its copies are deleted:
+`rustty_args::std_fmt` for every `std.fmt` integer and float parser it ported, and those copies are deleted (the u21 hex parser is still a local copy; it matches Zig on every input the T-C3 review probed):
 - `pf_*` + `parse_float_f64` -> `std_fmt::parse_float::<f64>` (`Config.zig:6445, 9289` and the
   `MouseScrollMultiplier` fields).
 - `zig_float_strip_underscores` + `parse_float_f32` -> `std_fmt::parse_float::<f32>` (`Config.zig:9481`).
@@ -3286,7 +3286,9 @@ does for `Config.loadFile`), and print through that.
   `InvalidValue` diagnostic and the setting was discarded.
 - **fix**: `parse_float_f32` calls `rustty_args::std_fmt::parse_float::<f32>` (N120). Test
   `value_types::tests::quick_terminal_size_percentage_uses_the_parse_float_grammar`. Negative control: the
-  strip-then-`str::parse` body reinstated -> `0x1p4%` gives `Err(InvalidValue)`.
+  strip-then-`str::parse` body reinstated -> `0x1p4%` gives `Err(InvalidValue)`. A second change, also
+  towards the reference (found by the T-C3 review's differential): `-nan%` used to store a NaN with the sign
+  bit set (`0xffc00000`) and now stores `0x7fc00000`, as Zig does.
 - **state**: FIXED (T-C3).
 
 ## N124 — `std_fmt::parse_int` named the wrong error when an overflow came before a bad character
