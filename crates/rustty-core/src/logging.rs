@@ -41,6 +41,10 @@ pub fn log_with(level: Level, scope: &str, message: &str, logging: &Logging) {
     //     R2: the reference predicate names the bundle id `com.mitchellh.ghostty`.
     //
     // macOS logging is thread safe so no need for locks/mutexes
+    // (PORT NOTE: true of the os_log calls. `macos_logger`'s per-scope slot
+    // LOOKUP takes one short mutex — the stand-in for the reference's
+    // comptime-per-scope static, which Rust's runtime `&str` scopes cannot
+    // have; no logging happens under it.)
     // macos: {
     //     if (comptime !builtin.target.os.tag.isDarwin()) break :macos;
     //     if (!global.logging().macos) break :macos;

@@ -176,40 +176,60 @@ pub fn get_c_int(key: Key) -> Option<i32> {
 /// Caller must free returned memory with the provided allocator.
 /// Returns null if the setting is unavailable.
 ///
-/// PORTS: `gsettings.zig:50-57` `getAlloc` with `getImpl`'s allocating arm
-/// (`:69-74`: `[]const u8 => { const ptr = value.getString() orelse break :blk
-/// null; ... try alloc.dupe(u8, str) }`), for the allocating (`[]const u8`)
-/// keys — the reference's `getAlloc` also accepts the non-allocating keys, whose
-/// readers here are [`get_bool`] / [`get_c_int`]. Returns `None` when no default
-/// `Settings` is available (`:55` `orelse return null`) or the string is NULL.
+/// PORTS: `gsettings.zig:50-57` `getAlloc` over `getImpl` (`:59-77`). Like the
+/// reference it accepts EVERY key: `bool`/`c_int` keys read straight out of the
+/// `GValue` (`:67-68`), and the `[]const u8` key duplicates the C string's bytes
+/// (`:69-74`: `const ptr = value.getString() orelse break :blk null; ... try
+/// alloc.dupe(u8, str)`). Returns `None` when no default `Settings` is available
+/// (`:55` `orelse return null`) or the string is NULL.
 ///
-/// PORT NOTE: the returned bytes are an owned copy (the `alloc.dupe`); "caller
-/// must free" is discharged by `Vec`'s drop, and the `std.mem.Allocator`
-/// parameter collapses with it. The only error the reference can return is
-/// `alloc.dupe`'s `OutOfMemory`, which Rust's global allocator turns into an
-/// abort, so the error union collapses too. Bytes, not `String` (the reference
-/// returns a `[]const u8` slice).
+/// PORT NOTE: the value is read as the raw `GValue` (`property_value` +
+/// `g_value_get_string`), so the string arm returns the exact bytes the
+/// reference's `std.mem.span` sees — a Rust `String` read would panic on
+/// non-UTF-8 (memory `zig-byteslice-to-rust-rawbytes`). "Caller must free" is
+/// discharged by `Vec`'s drop, and the `std.mem.Allocator` parameter collapses
+/// with it; the only reference error is `alloc.dupe`'s `OutOfMemory`, which the
+/// Rust global allocator turns into an abort, so the error union collapses too.
+/// The reference's comptime return type `?key.Type()` is the [`SettingValue`]
+/// enum.
 #[must_use]
-pub fn get_alloc(key: Key) -> Option<Vec<u8>> {
+pub fn get_alloc(key: Key) -> Option<SettingValue> {
     use glib::prelude::ObjectExt as _;
-
-    debug_assert!(
-        key.requires_allocation(),
-        "get_alloc reads an allocating key; {} is not one",
-        key.name()
-    );
-    debug_assert!(
-        matches!(key.value_type(), KeyType::Str),
-        "get_alloc reads a []const u8 key; {} is not one",
-        key.name()
-    );
+    use glib::translate::ToGlibPtr as _;
 
     let settings = gtk4::Settings::default()?;
-    // `gsettings.zig:69-74`: a NULL string reads as `null`; otherwise the
-    // bytes are duplicated into caller-owned memory.
-    settings
-        .property::<Option<String>>(key.name())
-        .map(String::into_bytes)
+    match key.value_type() {
+        // `bool => value.getInt() != 0` (`:67`).
+        KeyType::Bool => Some(SettingValue::Bool(settings.property::<bool>(key.name()))),
+        // `c_int => value.getInt()` (`:68`).
+        KeyType::CInt => Some(SettingValue::CInt(settings.property::<i32>(key.name()))),
+        KeyType::Str => {
+            let value = settings.property_value(key.name());
+            // SAFETY: `value` is a live, initialized GValue of the property's own
+            // type (`G_TYPE_STRING` for this key); `g_value_get_string` returns
+            // its borrowed, NUL-terminated contents or NULL, valid while `value`
+            // lives. The bytes are copied out before `value` drops.
+            let ptr = unsafe { glib::gobject_ffi::g_value_get_string(value.to_glib_none().0) };
+            if ptr.is_null() {
+                return None;
+            }
+            // SAFETY: non-NULL and NUL-terminated per the above.
+            let bytes = unsafe { std::ffi::CStr::from_ptr(ptr) }.to_bytes().to_vec();
+            Some(SettingValue::Str(bytes))
+        }
+    }
+}
+
+/// A setting value as [`get_alloc`] returns it — the reference's `?key.Type()`
+/// (`bool` / `c_int` / `[]const u8`), reified as data like [`KeyType`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SettingValue {
+    /// `bool` (`gsettings.zig:67`).
+    Bool(bool),
+    /// `c_int` (`gsettings.zig:68`).
+    CInt(i32),
+    /// `[]const u8` (`gsettings.zig:69-74`): raw bytes, never re-validated as UTF-8.
+    Str(Vec<u8>),
 }
 
 #[cfg(test)]

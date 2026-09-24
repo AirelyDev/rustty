@@ -16,6 +16,20 @@
 //! `search_overlay.rs` (the `clicked` signal callback is NON-swapped, so `this`
 //! comes LAST; the `notify_data` handler's arg0 genuinely IS Self, so it is
 //! `&self`).
+//!
+//! AD-3 COLLAPSE: `SurfaceChildExited` is always the banner widget here
+//! (`supportsBanner()` is `atLeast(1, 3, 0)`, below the adw ≥ 1.5 floor). The
+//! dropped fallback (`surface_child_exited.zig:204-208`), quoted:
+//!
+//! ```text
+//! /// Empty widget that does nothing if we don't have a new enough
+//! /// Adwaita version to support the child exited banner.
+//! const SurfaceChildExitedNoop = extern struct {
+//!     /// Can be detected at comptime
+//!     pub const noop = true;
+//!     ...
+//! };
+//! ```
 
 use std::cell::RefCell;
 use std::sync::OnceLock;
