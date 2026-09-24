@@ -373,8 +373,9 @@ impl Parser {
     // `%window-pane-changed`, `%client-detached`, `%client-session-changed`) live
     // in this helper, gated behind `#[cfg(feature = "oniguruma")]`. With the
     // feature off the helper returns `Ok(None)` so the caller falls through to the
-    // `is_oni_command` recognition + idle cleanup. The `oni` binding crate does
-    // not exist yet, so the gated body is not compiled in the default build.
+    // `is_oni_command` recognition + idle cleanup. The gated body is compiled
+    // only with the feature (CORRECTION: this used to say the `oni` binding
+    // crate did not exist yet; it is `rustty-oniguruma`).
     #[cfg(not(feature = "oniguruma"))]
     fn parse_notification_oni(
         &mut self,
@@ -390,6 +391,22 @@ impl Parser {
         cmd: &[u8],
         line: &[u8],
     ) -> Result<Option<Notification>, ParseError> {
+        // PORT NOTE (N102): `oni.Regex.init` -> `onig_new`, which initializes
+        // Oniguruma's process-global tables LAZILY on first use
+        // (`onig_reg_init` -> `onig_initialize`), without synchronization. The
+        // reference is only ever single-threaded there: the app runs
+        // `oni.init(&.{oni.Encoding.utf8})` at startup (`global.zig:215`), and
+        // `zig test` runs these tests serially. Parsers on several threads that
+        // reach their first regex together (Rust's parallel test harness; any
+        // multi-threaded host of rustty-vt that has not initialized Oniguruma)
+        // raced inside `onig_initialize` and corrupted the C heap. So the
+        // process-global init runs first, exactly once and thread-safely
+        // (`ensure_init` is the same UTF-8-only init the app performs and the
+        // lazy path would; after the app's own call it is a no-op). Its error
+        // is ignored: `Regex::init` below still reports any init failure
+        // through the reference's own `regex init failed` path.
+        let _ = oni::testing::ensure_init();
+
         if cmd == b"%output" {
             let mut re = oni::Regex::init(
                 b"^%output %([0-9]+) (.+)$",
@@ -1840,6 +1857,60 @@ mod tests {
 
     // test "tmux client-session-changed"
     #[cfg(feature = "oniguruma")]
+    // N102 (no reference test): the first `oni::Regex::init` in a process
+    // makes `onig_new` initialize Oniguruma's process-global tables, lazily and
+    // without synchronization, so several threads parsing their first
+    // notification at once corrupted the C heap (the intermittent SIGTRAP /
+    // SIGABRT / SIGSEGV of this module's tests under the parallel harness).
+    // The child process starts 16 threads that all parse their first
+    // notification together; the parent runs it 40 times.
+    #[test]
+    fn concurrent_first_notifications_do_not_race_oniguruma_init() {
+        const CHILD: &str = "RUSTTY_VT_ONIG_INIT_RACE_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            let barrier = std::sync::Arc::new(std::sync::Barrier::new(16));
+            let threads: Vec<_> = (0..16)
+                .map(|_| {
+                    let barrier = barrier.clone();
+                    std::thread::spawn(move || {
+                        let mut c = Parser::init();
+                        barrier.wait();
+                        for &byte in b"%client-session-changed /dev/pts/1 $2 mysession" {
+                            assert!(c.put(byte).unwrap().is_none());
+                        }
+                        let n = c.put(b'\n').unwrap().unwrap();
+                        assert!(matches!(n, Notification::ClientSessionChanged { .. }));
+                        c.deinit();
+                    })
+                })
+                .collect();
+            for t in threads {
+                t.join().unwrap();
+            }
+            println!("ONIG_INIT_RACE_CHILD_OK");
+            return;
+        }
+        for run in 0..40 {
+            let out = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "tmux::control::tests::concurrent_first_notifications_do_not_race_oniguruma_init",
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            assert!(
+                out.status.success() && stdout.contains("ONIG_INIT_RACE_CHILD_OK"),
+                "child run {run} failed: {:?}\nstdout: {stdout}\nstderr: {}",
+                out.status,
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+    }
+
     #[test]
     fn tmux_client_session_changed() {
         let mut c = Parser::init();
