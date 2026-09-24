@@ -243,13 +243,6 @@ struct CfReleaseThreadArg(*mut CFReleaseThread::Thread);
 // the `Async` handles (mach-port sends, thread-safe), never the struct.
 unsafe impl Send for CfReleaseThreadArg {}
 
-// SAFETY: `Shaper` is created on one thread and used by the renderer thread,
-// as the reference's is. Its raw pointers are the release thread's `Thread`
-// (touched from here only by `deinit`, after the join) and that thread's
-// mailbox, a `BlockingQueue` that synchronizes internally; the CFTypeRefs in
-// `cf_release_pool` may be released on any thread.
-unsafe impl Send for Shaper {}
-
 // const CellBuf = std.ArrayListUnmanaged(font.shape.Cell);
 // const CodepointList = std.ArrayListUnmanaged(Codepoint);
 // const Codepoint = struct { codepoint: u32, cluster: u32 };
