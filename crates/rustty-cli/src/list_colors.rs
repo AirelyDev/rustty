@@ -111,6 +111,12 @@ pub fn run() -> Result<u8, Error> {
         result?;
     }
 
+    run_opts(opts)
+}
+
+/// The rest of the reference `run` after its argument parse, split out so a
+/// test can drive it without the process's argv (task T-C, R13 UD22).
+fn run_opts(opts: Options) -> Result<u8, Error> {
     // var keys: std.ArrayList([]const u8) = .empty;
     // defer keys.deinit(alloc);
     // for (x11_color.map.keys()) |key| try keys.append(alloc, key);
@@ -144,11 +150,15 @@ pub fn run() -> Result<u8, Error> {
         //   flushes on this path (it falls straight to `return 0`); the Rust
         //   `BufWriter` owns its buffer and is flushed explicitly below (and again
         //   on drop), so the output is observably delivered.
-        //   Reference defect, not ported: UPSTREAM-DEFECTS.md UD22, whose
-        //   proposed upstream fix is this flush. Zig 0.16.0 drops the unflushed
-        //   tail (MEASURED, task T-C: 782 lines of 22 bytes through this writer
-        //   deliver 16399 of 17204 bytes, and 10 lines deliver none). Parity row
-        //   S68-F3 is WAIVED on that ground; see its LEDGER cell.
+        //   PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD22. The
+        //   reference never flushes this writer, so the tail of the listing
+        //   still in its buffer at `return 0` is lost: `+list-colors --plain`,
+        //   or any `+list-colors` whose stdout is not a tty, prints a truncated
+        //   list (MEASURED with Zig 0.16.0, task T-C: 782 lines of 22 bytes
+        //   through this writer deliver 16399 of 17204 bytes, and 10 lines
+        //   deliver none). The evident intent (every sibling buffered CLI
+        //   flushes) is the whole list, so the port flushes. Test:
+        //   `plain_listing_reaches_stdout_in_full`.
         let mut stdout_writer = std::io::BufWriter::new(std::io::stdout().lock());
         let writer = &mut stdout_writer;
         // for (keys.items) |name| {
@@ -412,5 +422,63 @@ mod tests {
     fn list_colors_pretty_print_smoke() {
         let keys = ["black", "white"];
         assert_eq!(pretty_print(&keys).unwrap(), 0);
+    }
+}
+
+/// UD22 (R13, task T-C): the plain listing reaches stdout in full. The
+/// reference never flushes its buffered writer, so the tail of the list is
+/// lost at exit; the port flushes. The listing is written to the process's
+/// real stdout, so the body runs in a re-executed copy of this test binary
+/// whose stdout is a pipe the parent reads.
+#[cfg(all(test, unix))]
+mod r13_flush_tests {
+    use super::*;
+
+    const CHILD: &str = "RUSTTY_T_C_LIST_COLORS_CHILD";
+
+    #[test]
+    fn plain_listing_reaches_stdout_in_full() {
+        if std::env::var_os(CHILD).is_some() {
+            let code = run_opts(Options { plain: true }).expect("run_opts");
+            assert_eq!(0, code);
+            return;
+        }
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "list_colors::r13_flush_tests::plain_listing_reaches_stdout_in_full",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(CHILD, "1")
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("re-exec the test binary");
+        let out = crate::test_util::wait_with_deadline(out, 60);
+        assert!(
+            out.status.success(),
+            "the child failed:\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+
+        // The expected listing, built as `run_opts` builds it.
+        let mut keys: Vec<&str> = x11_color::map.keys().iter().map(|k| k.as_str()).collect();
+        keys.sort_unstable_by(|l, r| order_ignore_case(l.as_bytes(), r.as_bytes()));
+        let mut want: Vec<u8> = Vec::new();
+        for name in &keys {
+            let rgb = x11_color::map.get(name).unwrap();
+            want.extend_from_slice(name.as_bytes());
+            want.extend_from_slice(
+                format!(" = #{:02x}{:02x}{:02x}\n", rgb.r, rgb.g, rgb.b).as_bytes(),
+            );
+        }
+        assert!(keys.len() > 700, "the X11 colour map is the full list");
+        assert!(
+            out.stdout.windows(want.len()).any(|w| w == want.as_slice()),
+            "stdout does not carry the whole listing ({} bytes of stdout, {} expected in the listing)",
+            out.stdout.len(),
+            want.len()
+        );
     }
 }

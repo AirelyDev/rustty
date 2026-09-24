@@ -412,13 +412,13 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - upstream project: ghostty
 - severity:        low
 - reference:       src/cli/list_colors.zig:53-74 (plain branch: `var buffer: [4096]u8`, `stdout.writer(global.io(), &buffer)`, prints in a loop, then `return 0` with no flush), at 20abdb50a
-- defect:          The plain branch writes one line per X11 colour through a 4096-byte `std.Io.File.Writer` and never calls `flush()`. Bytes reach stdout only when the buffer fills, so whatever is still buffered at `return 0` (less than 4096 bytes) is discarded. Every other buffered CLI in `src/cli` flushes (`version.zig:78`, `list_keybinds.zig:85`, `list_fonts.zig:168`, `explain_config.zig:112`, `list_themes.zig:200`). The map comes from `src/terminal/res/rgb.txt` (782 lines) and each output line is at least 14 bytes, so the listing spans several buffers and its tail is lost. By reading; the exact number of missing lines is **UNVERIFIED** (not run).
+- defect:          The plain branch writes one line per X11 colour through a 4096-byte `std.Io.File.Writer` and never calls `flush()`. Bytes reach stdout only when the buffer fills, so whatever is still buffered at `return 0` (less than 4096 bytes) is discarded. Every other buffered CLI in `src/cli` flushes (`version.zig:78`, `list_keybinds.zig:85`, `list_fonts.zig:168`, `explain_config.zig:112`, `list_themes.zig:200`). The map comes from `src/terminal/res/rgb.txt` (782 lines) and each output line is at least 14 bytes, so the listing spans several buffers and its tail is lost. MEASURED (task T-C, Zig 0.16.0, a probe writing through the same 4096-byte `std.Io.File.Writer` and never flushing): 782 lines of 22 bytes deliver 16399 of 17204 bytes, and 10 lines deliver none. The reference binary itself was not run; the exact number of colour lines lost depends on the listing's byte count.
 - ReleaseSafe:     no crash; the end of the colour list is missing.
 - ReleaseFast:     same.
 - reachability:    CLI: `ghostty +list-colors --plain`, or any `+list-colors` whose stdout is not a tty.
-- port handling:   diverges: `crates/rustty-cli/src/list_colors.rs:140-167` flushes a `BufWriter` (PORT NOTE at :145-148). Whether that divergence is right under R1 is the open question in S68-F3; R13 does not decide it.
-- parity row(s):   S68-F3 (OPEN, an R1 question); inventory M66.
-- test:            n/a (record only).
+- port handling:   fixed (R13 as extended 2026-09-23: output silently lost because a buffer is never flushed visibly breaks the reference's evident intent). `crates/rustty-cli/src/list_colors.rs` `run_opts` flushes its `BufWriter` after the loop (PORT NOTE: reference defect (R13) at the plain branch), so the whole listing is printed.
+- parity row(s):   S68-F3 (CLOSED by task T-C as this R13 fix); inventory M66.
+- test:            `list_colors::r13_flush_tests::plain_listing_reaches_stdout_in_full` (rustty-cli; a re-executed child runs the plain branch with stdout on a pipe and the parent requires the whole listing). Negative control (macOS, task T-C): discarding the buffered bytes instead of flushing (`BufWriter::into_parts`, the reference's unflushed buffer) fails it with 8378 bytes of stdout against a 15434-byte listing.
 - proposed fix:    Add `try writer.flush();` after the loop.
 - upstream status: not reported
 
@@ -427,13 +427,13 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - upstream project: ghostty
 - severity:        low
 - reference:       src/cli/list_themes.zig:106-202 (`run`): buffered stderr at :124-126, "Could not find the Ghostty resources directory…" at :128-130, "No themes found…" plus `return 1` at :173-176; only `stdout.flush()` at :200, at 20abdb50a
-- defect:          `run` creates a 4096-byte buffered stderr writer and prints to it in two places, but no path flushes it. Both messages are far shorter than the buffer, so neither reaches the terminal. In particular a user with no installed themes sees `+list-themes` exit with status 1 and no output. (`std.debug.print` at :148, used for directory-open errors, is unbuffered and unaffected.) Minor companion: the `arena` created at :116 is never deinited, which is harmless at process exit.
+- defect:          `run` creates a 4096-byte buffered stderr writer and prints to it in two places, but no path flushes it. Both messages are far shorter than the buffer, so neither reaches the terminal (MEASURED, task T-C, Zig 0.16.0: the "No themes found" line through an unflushed 4096-byte `std.Io.File.Writer` delivers 0 bytes; the reference binary itself was not run). In particular a user with no installed themes sees `+list-themes` exit with status 1 and no output. (`std.debug.print` at :148, used for directory-open errors, is unbuffered and unaffected.) Minor companion: the `arena` created at :116 is never deinited, which is harmless at process exit.
 - ReleaseSafe:     no crash; the diagnostics are silently dropped.
 - ReleaseFast:     same.
 - reachability:    CLI: a broken install (no resources directory, or no themes).
-- port handling:   diverges: `crates/rustty-cli/src/list_themes.rs:291` and `:369-375` flush stderr. As with UD22, R13 does not decide the divergence.
-- parity row(s):   S69-F4 (OPEN, an R1 question); inventory M67.
-- test:            n/a (record only).
+- port handling:   fixed (R13 as extended 2026-09-23, as UD22). `crates/rustty-cli/src/list_themes.rs` `run_opts` flushes stderr before `return 1`, and the `BufWriter`'s drop flushes the resources-directory warning on the other paths (PORT NOTE: reference defect (R13) at both sites).
+- parity row(s):   S69-F4 (CLOSED by task T-C as this R13 fix); inventory M67.
+- test:            `list_themes::r13_flush_tests::no_themes_messages_reach_stderr` (rustty-cli; a re-executed child with an empty XDG config directory and no resources directory must exit 1 with both messages on stderr). Negative control (macOS, task T-C): discarding the buffered bytes instead of flushing (`BufWriter::into_parts`) fails it with an empty stderr ("the resources-directory warning is missing").
 - proposed fix:    `defer stderr.flush() catch {};` right after creating the writer (or explicit flushes after each print and before `return 1`).
 - upstream status: not reported
 

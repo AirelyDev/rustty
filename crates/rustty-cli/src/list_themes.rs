@@ -259,6 +259,12 @@ pub fn run() -> Result<u8, Error> {
         result?;
     }
 
+    run_opts(opts)
+}
+
+/// The rest of the reference `run` after its argument parse, split out so a
+/// test can drive it without the process's argv (task T-C, R13 UD23).
+fn run_opts(opts: Options) -> Result<u8, Error> {
     // var arena = std.heap.ArenaAllocator.init(gpa_alloc);
     // const alloc = arena.allocator();
     //   PORT NOTE: the reference threads an arena for the path/name dupes; the Rust
@@ -284,6 +290,10 @@ pub fn run() -> Result<u8, Error> {
     // global; that collapses into the reference's `resources_dir == null` warning
     // path (rather than dereferencing an uninitialized global), so the observable
     // behavior — print the warning — is preserved.
+    //
+    // PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD23: the
+    // reference's warning is never flushed and so never shown; the port's
+    // reaches stderr (see the `count == 0` arm below).
     let resources_dir = rustty_core::STATE.get().and_then(|s| s.resources_dir.app());
     if resources_dir.is_none() {
         writeln!(
@@ -372,12 +382,15 @@ pub fn run() -> Result<u8, Error> {
             "No themes found, check to make sure that the themes were installed correctly."
         )?;
         // return 1;
-        //   PORT NOTE: the reference never flushes its buffered stderr, so this
-        //   message and the resources-directory warning above never reach the
-        //   terminal (Zig 0.16.0, MEASURED by task T-C: an unflushed 4096-byte
-        //   File.Writer delivers nothing of a short message). Reference defect,
-        //   not ported: UPSTREAM-DEFECTS.md UD23, whose proposed upstream fix
-        //   is this flush. Parity row S69-F4 is WAIVED on that ground.
+        //   PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD23. The
+        //   reference never flushes its buffered stderr, so this message and
+        //   the resources-directory warning above never reach the terminal: a
+        //   broken install (no resources directory, or no themes) exits 1 with
+        //   no output (MEASURED with Zig 0.16.0, task T-C: this message through
+        //   an unflushed 4096-byte File.Writer delivers 0 bytes). The evident
+        //   intent is to show them, so the port flushes here (and `stderr`'s
+        //   drop flushes the warning on the other paths). Test:
+        //   `no_themes_messages_reach_stderr`.
         stderr.flush()?;
         return Ok(1);
     }
@@ -2988,5 +3001,66 @@ mod picker_tests {
     fn preview_run_smoke() {
         let themes = vec![te(b"Bogus", b"/nonexistent/theme.zzz")];
         preview(&themes, ColorScheme::All).unwrap();
+    }
+}
+
+/// UD23 (R13, task T-C): with no resources directory and no themes, both of
+/// `run`'s stderr messages reach stderr and the exit code is 1. The reference
+/// never flushes its buffered stderr, so it exits 1 silently. The messages go
+/// to the process's real stderr, so the body runs in a re-executed copy of
+/// this test binary whose stderr is a pipe and whose XDG config directory is
+/// an empty temporary one (no user themes; a test process has no resources
+/// directory).
+#[cfg(all(test, unix))]
+mod r13_flush_tests {
+    use super::*;
+
+    const CHILD: &str = "RUSTTY_T_C_LIST_THEMES_CHILD";
+
+    #[test]
+    fn no_themes_messages_reach_stderr() {
+        if std::env::var_os(CHILD).is_some() {
+            let opts = Options {
+                plain: true,
+                ..Options::default()
+            };
+            let code = run_opts(opts).expect("run_opts");
+            assert_eq!(1, code, "no themes: exit code 1");
+            return;
+        }
+        let dir =
+            std::env::temp_dir().join(format!("rustty-t-c-list-themes-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "list_themes::r13_flush_tests::no_themes_messages_reach_stderr",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(CHILD, "1")
+            .env("XDG_CONFIG_HOME", &dir)
+            .env("HOME", &dir)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("re-exec the test binary");
+        let out = crate::test_util::wait_with_deadline(child, 60);
+        let _ = std::fs::remove_dir_all(&dir);
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(out.status.success(), "the child failed:\n{err}");
+        assert!(
+            err.contains(
+                "Could not find the Rustty resources directory. Please ensure \
+                 that Rustty is installed correctly.\n"
+            ),
+            "the resources-directory warning is missing from stderr:\n{err}"
+        );
+        assert!(
+            err.contains(
+                "No themes found, check to make sure that the themes were installed correctly."
+            ),
+            "the no-themes message is missing from stderr:\n{err}"
+        );
     }
 }
