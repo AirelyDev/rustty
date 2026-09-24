@@ -565,6 +565,38 @@ impl std::fmt::Display for WindowsPtyError {
 #[cfg(windows)]
 impl std::error::Error for WindowsPtyError {}
 
+/// The `errdefer ... CloseHandle(...)` statements of `WindowsPty.open`
+/// (`pty.zig`): each handle is registered right after it is created, and if
+/// `open` returns early the guard closes them in reverse order (Zig runs
+/// errdefers LIFO). `disarm` is the success path.
+///
+/// PORT NOTE (parity S44-F1): CORRECTION, the port used to have no guard, so
+/// every early return after `CreateNamedPipeW` leaked the handles created so
+/// far (and the named pipe instance with them).
+#[cfg(windows)]
+struct WindowsOpenErrdefer {
+    handles: Vec<crate::windows::HANDLE>,
+    armed: bool,
+}
+
+#[cfg(windows)]
+impl WindowsOpenErrdefer {
+    fn disarm(mut self) {
+        self.armed = false;
+    }
+}
+
+#[cfg(windows)]
+impl Drop for WindowsOpenErrdefer {
+    fn drop(&mut self) {
+        if self.armed {
+            for h in self.handles.iter().rev() {
+                crate::windows::CloseHandle(*h);
+            }
+        }
+    }
+}
+
 // Process-wide counter for pipe names
 #[cfg(windows)]
 static pipe_name_counter: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
@@ -600,6 +632,11 @@ impl WindowsPty {
             lpSecurityDescriptor: std::ptr::null_mut(),
         };
 
+        let mut errdefer = WindowsOpenErrdefer {
+            handles: Vec::with_capacity(4),
+            armed: true,
+        };
+
         unsafe {
             pty.in_pipe = windows::kernel32::CreateNamedPipeW(
                 pipe_path_w.as_ptr(),
@@ -617,6 +654,8 @@ impl WindowsPty {
                 return windows::unexpectedError(windows::kernel32::GetLastError())
                     .map_err(|e| Box::new(e) as Box<dyn std::error::Error>);
             }
+            // errdefer _ = windows.exp.kernel32.CloseHandle(pty.in_pipe);
+            errdefer.handles.push(pty.in_pipe);
 
             let mut security_attributes_read = windows::SECURITY_ATTRIBUTES {
                 nLength: security_attributes.nLength,
@@ -636,6 +675,8 @@ impl WindowsPty {
                 return windows::unexpectedError(windows::kernel32::GetLastError())
                     .map_err(|e| Box::new(e) as Box<dyn std::error::Error>);
             }
+            // errdefer _ = windows.exp.kernel32.CloseHandle(pty.in_pipe_pty);
+            errdefer.handles.push(pty.in_pipe_pty);
 
             // The in_pipe needs to be created as a named pipe, since anonymous
             // pipes created with CreatePipe do not support overlapped operations,
@@ -662,6 +703,13 @@ impl WindowsPty {
                 return windows::unexpectedError(windows::kernel32::GetLastError())
                     .map_err(|e| Box::new(e) as Box<dyn std::error::Error>);
             }
+            // errdefer {
+            //     _ = windows.exp.kernel32.CloseHandle(pty.out_pipe);
+            //     _ = windows.exp.kernel32.CloseHandle(pty.out_pipe_pty);
+            // }
+            // (pushed in reverse so the LIFO drop closes `out_pipe` first)
+            errdefer.handles.push(pty.out_pipe_pty);
+            errdefer.handles.push(pty.out_pipe);
 
             windows::SetHandleInformation(pty.in_pipe, windows::HANDLE_FLAG_INHERIT, 0)?;
             windows::SetHandleInformation(pty.in_pipe_pty, windows::HANDLE_FLAG_INHERIT, 0)?;
@@ -684,6 +732,7 @@ impl WindowsPty {
         }
 
         pty.size = size;
+        errdefer.disarm();
         Ok(pty)
     }
 
