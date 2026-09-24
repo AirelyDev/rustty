@@ -2250,25 +2250,128 @@ fn shape_high_plane_sprite_font_codepoint() {
     testdata.deinit();
 }
 
+// libSystem calls for the release-thread test below (this crate has no `libc`
+// dependency).
+mod sys_c {
+    use core::ffi::{c_char, c_int, c_void};
+    extern "C" {
+        pub fn malloc(size: usize) -> *mut c_void;
+        pub fn free(ptr: *mut c_void);
+        pub fn pthread_self() -> usize;
+        pub fn pthread_getname_np(thread: usize, name: *mut c_char, len: usize) -> c_int;
+    }
+}
+
+/// The threads a [`recording_allocator`]'s deallocate callback ran on: the
+/// `pthread_self` and the pthread name of each. Test-only (this file is
+/// `#[cfg(test)]`).
+static RECORDED_DEALLOCS: std::sync::Mutex<Vec<(usize, String)>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// A CoreFoundation allocator (`malloc`/`free`) whose deallocate callback
+/// records the thread it runs on in [`RECORDED_DEALLOCS`]. A CF object created
+/// with it is freed through that callback on the thread whose `CFRelease`
+/// drops the last reference.
+fn recording_allocator() -> *const c_void {
+    #[repr(C)]
+    struct CFAllocatorContext {
+        version: isize,
+        info: *mut c_void,
+        retain: *const c_void,
+        release: *const c_void,
+        copy_description: *const c_void,
+        allocate: Option<extern "C" fn(isize, usize, *mut c_void) -> *mut c_void>,
+        reallocate: *const c_void,
+        deallocate: Option<extern "C" fn(*mut c_void, *mut c_void)>,
+        preferred_size: *const c_void,
+    }
+    extern "C" {
+        fn CFAllocatorCreate(
+            allocator: *const c_void,
+            context: *mut CFAllocatorContext,
+        ) -> *const c_void;
+    }
+    extern "C" fn allocate(size: isize, _hint: usize, _info: *mut c_void) -> *mut c_void {
+        // SAFETY: plain malloc.
+        unsafe { sys_c::malloc(size as usize) }
+    }
+    extern "C" fn deallocate(ptr: *mut c_void, _info: *mut c_void) {
+        let mut name = [0 as core::ffi::c_char; 64];
+        // SAFETY: reads the calling thread's own name into a local buffer.
+        let name = unsafe {
+            sys_c::pthread_getname_np(sys_c::pthread_self(), name.as_mut_ptr(), name.len());
+            std::ffi::CStr::from_ptr(name.as_ptr())
+        };
+        RECORDED_DEALLOCS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push((
+                unsafe { sys_c::pthread_self() },
+                name.to_string_lossy().into_owned(),
+            ));
+        // SAFETY: `ptr` came from `allocate`.
+        unsafe { sys_c::free(ptr) }
+    }
+    let mut ctx = CFAllocatorContext {
+        version: 0,
+        info: core::ptr::null_mut(),
+        retain: core::ptr::null(),
+        release: core::ptr::null(),
+        copy_description: core::ptr::null(),
+        allocate: Some(allocate),
+        reallocate: core::ptr::null(),
+        deallocate: Some(deallocate),
+        preferred_size: core::ptr::null(),
+    };
+    // SAFETY: a valid context; the allocator itself comes from the default
+    // allocator. It is never released (one per test run).
+    let a = unsafe { CFAllocatorCreate(core::ptr::null(), &mut ctx) };
+    assert!(!a.is_null());
+    a
+}
+
 /// S94-F1: `endFrame` hands the frame's pool to the dedicated release thread,
 /// the reference's `os.CFReleaseThread`: pushed into its mailbox, the thread
 /// woken through its `wakeup` async, and each ref `CFRelease`d there
-/// (`coretext.zig:264-297`, `os/cf_release_thread.zig`). A heap string with one
-/// extra retain goes into the pool; its count must come back down, on another
-/// thread, and only after `endFrame`.
+/// (`coretext.zig:264-297`, `os/cf_release_thread.zig`).
+///
+/// The pooled ref is the last reference to a `CFData` made with
+/// [`recording_allocator`], so the `CFRelease` that frees it records its
+/// thread. It must be freed only after `endFrame`, and on the release thread:
+/// not the test's thread, and named `cf_release` (the name `threadMain` gives
+/// it, `cf_release_thread.zig:127-129`). Task T-F2: releasing the pool inline
+/// in `end_frame` passed the earlier form of this test, which only watched the
+/// retain count fall.
 #[test]
 fn end_frame_releases_the_pool_on_the_cf_release_thread() {
-    use objc2_core_foundation::{CFGetRetainCount, CFRetained, CFString};
+    extern "C" {
+        fn CFDataCreate(allocator: *const c_void, bytes: *const u8, length: isize) -> *mut c_void;
+        fn CFGetRetainCount(cf: *const c_void) -> isize;
+        fn CFRetain(cf: *const c_void) -> *const c_void;
+    }
+    let deallocs = || {
+        RECORDED_DEALLOCS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    };
 
     let mut shaper = Shaper::init(shape::Options::default()).unwrap();
-    let kept: CFRetained<CFString> = CFString::from_str("rustty-s94-f1");
-    let raw: *mut c_void = CFRetained::into_raw(kept.clone()).as_ptr().cast();
-    assert_eq!(CFGetRetainCount(Some(kept.as_ref())), 2);
+    let alloc = recording_allocator();
+    let bytes = b"rustty-s94-f1";
+    // SAFETY: CF calls on objects this test owns.
+    let data = unsafe { CFDataCreate(alloc, bytes.as_ptr(), bytes.len() as isize) };
+    assert!(!data.is_null());
+    unsafe { CFRetain(data) };
+    assert_eq!(unsafe { CFGetRetainCount(data) }, 2);
 
-    shaper.cf_release_pool.push(raw);
+    // The pool holds one reference; the test drops the other, so the pool's
+    // is the last.
+    shaper.cf_release_pool.push(data);
+    unsafe { CFRelease(data) };
     // Nothing is released before the frame ends.
     std::thread::sleep(std::time::Duration::from_millis(20));
-    assert_eq!(CFGetRetainCount(Some(kept.as_ref())), 2);
+    assert_eq!(deallocs(), [], "freed before end_frame");
 
     shaper.end_frame();
     assert!(
@@ -2276,12 +2379,17 @@ fn end_frame_releases_the_pool_on_the_cf_release_thread() {
         "the pool went to the thread"
     );
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    while CFGetRetainCount(Some(kept.as_ref())) != 1 {
+    while deallocs().is_empty() {
         assert!(
             std::time::Instant::now() < deadline,
             "the release thread did not release the pool"
         );
         std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let this_thread = unsafe { sys_c::pthread_self() };
+    for (thread, name) in deallocs() {
+        assert_ne!(thread, this_thread, "released on the test's thread");
+        assert_eq!(name, "cf_release", "released on the cf_release thread");
     }
 
     // `deinit` stops and joins the thread, then frees it (a second `deinit`
@@ -2289,7 +2397,6 @@ fn end_frame_releases_the_pool_on_the_cf_release_thread() {
     shaper.deinit();
     assert!(shaper.cf_release_thread.is_null() && shaper.cf_release_thr.is_none());
     shaper.deinit();
-    drop(kept);
 }
 
 /// S94-F2: `Shaper.init` spawns the release thread with `try`
