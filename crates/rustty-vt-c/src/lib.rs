@@ -36,10 +36,12 @@ use std::os::raw::c_int;
 // so the faithful analog is the cfg-level predicate below plus, per knob, the
 // closest thing this crate controls:
 //
-//   * `options.page_size_min = 16; options.page_size_max = 16;` — "Freestanding
-//     targets don't have an OS page size. We still need an alignment for
-//     terminal page allocations, and 16 covers everything stored in a page
-//     without requiring 4 KiB-aligned embedded heaps." The port's page
+//   * `options.page_size_min = 16; options.page_size_max = 16;`, whose
+//     reference comment reads:
+//         // Freestanding targets don't have an OS page size. We still need an
+//         // alignment for terminal page allocations, and 16 covers everything
+//         // stored in a page without requiring 4 KiB-aligned embedded heaps.
+//     The port's page
 //     alignment is `rustty_os::page_allocator` (mmap, OS page size) — there is
 //     no freestanding page pool to align, so this knob has no consumer yet
 //     (assessment: `.port/phase-6/assessments/W1-vt-core.md`).
@@ -76,6 +78,21 @@ pub const NATIVE_FREESTANDING: bool = cfg!(target_os = "none") && !cfg!(target_a
 //         .ReleaseFast, .ReleaseSmall => false,
 //     });
 pub const DEBUG_MACHINERY: bool = !NATIVE_FREESTANDING && (cfg!(test) || cfg!(debug_assertions));
+
+// ----- lib_vt.zig: the root `comptime` export block -----
+//
+//     comptime {
+//         // If we're building the C library (vs. the Zig module) then
+//         // we want to reference the C API so that it gets exported.
+//         if (@import("root") == lib) { ... @export(&c.<fn>, .{ .name = "ghostty_<fn>" }) ... }
+//     }
+//
+// In rustty this crate IS the C library artifact, so every export below is a
+// `#[no_mangle] pub extern "C" fn rustty_<fn>` (the feature gates carried as
+// `#[cfg(feature = ...)]`). The block's `_fltused` MSVC marker and the
+// `quirks_memset.zig` force-reference are Zig-toolchain artefacts, not ported
+// (`.port/phase-3/assessments/C-capi-headers.md` `84254a9d8` N/A;
+// `.port/phase-3/NON_PORTS.md` §E34).
 
 // ----- terminal/c/main.zig: module hub -----
 //
@@ -3685,6 +3702,11 @@ pub unsafe extern "C" fn rustty_terminal_selection_equal(
 }
 
 // pub const terminal_grid_ref = terminal.grid_ref;  (ghostty_terminal_grid_ref)
+//
+// lib_vt.zig's export gate for this and `terminal_point_from_grid_ref`:
+//   // Selections are expressed in grid references, so the untracked
+//   // reference constructors are required by both features.
+//   if (features.grid_introspection or features.selection) { ... }
 /// C: rustty_terminal_grid_ref
 ///
 /// # Safety
