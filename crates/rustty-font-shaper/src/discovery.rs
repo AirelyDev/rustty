@@ -1386,12 +1386,17 @@ mod coretext_impl {
                 //     break :found false;
                 // break :found std.mem.eql(u8, actual_slice, family);
                 //
-                // PORT NOTE: rustty reads CFStrings via `to_string()` (the idiom of
-                // `DeferredFace::family_name`), so the reference's 256-byte stack
-                // buffer and its too-small `orelse false` arm collapse into the
-                // byte comparison.
-                let actual_s = actual.to_string();
-                actual_s.as_bytes() == family
+                // S87-F2: the 256-byte buffer is part of the behaviour: a family
+                // name that does not fit with its NUL (256 bytes or more) is
+                // "not found". The port compared `to_string()` directly, so it
+                // found such a family. CORRECTION (task T-F): the note here said
+                // the buffer "and its too-small `orelse false` arm collapse into
+                // the byte comparison".
+                let mut buf = [0u8; 256];
+                match crate::face::coretext::cstring_utf8(&actual, &mut buf) {
+                    Some(actual_slice) => actual_slice == family,
+                    None => false,
+                }
             };
             if !found {
                 // ct_font.release(); — RAII (`ct_font` drops on return).
@@ -3039,6 +3044,153 @@ mod tests {
         assert!(unsafe { (*cs).has_char(u32::from('A')) });
 
         pat.destroy();
+    }
+
+    /// JetBrains Mono with its `name` table replaced by one whose family,
+    /// full and typographic-family names are `family` (Windows, UTF-16BE) and
+    /// whose PostScript name is `ps`. The new table is appended and the table
+    /// directory entry repointed; CoreText does not check the checksums.
+    #[cfg(target_os = "macos")]
+    fn font_named(family: &str, ps: &str) -> Vec<u8> {
+        let utf16be =
+            |s: &str| -> Vec<u8> { s.encode_utf16().flat_map(|u| u.to_be_bytes()).collect() };
+        let records: [(u16, Vec<u8>); 5] = [
+            (1, utf16be(family)),
+            (2, utf16be("Regular")),
+            (4, utf16be(family)),
+            (6, utf16be(ps)),
+            (16, utf16be(family)),
+        ];
+        let mut table = Vec::new();
+        let count = records.len() as u16;
+        let string_offset = 6 + 12 * count;
+        table.extend_from_slice(&0u16.to_be_bytes()); // format 0
+        table.extend_from_slice(&count.to_be_bytes());
+        table.extend_from_slice(&string_offset.to_be_bytes());
+        let mut storage = Vec::new();
+        for (name_id, bytes) in &records {
+            // platform 3 (Windows), encoding 1 (Unicode BMP), language 0x409
+            for v in [
+                3u16,
+                1,
+                0x409,
+                *name_id,
+                bytes.len() as u16,
+                storage.len() as u16,
+            ] {
+                table.extend_from_slice(&v.to_be_bytes());
+            }
+            storage.extend_from_slice(bytes);
+        }
+        table.extend_from_slice(&storage);
+
+        let mut font = rustty_font::embedded::VARIABLE.to_vec();
+        while font.len() % 4 != 0 {
+            font.push(0);
+        }
+        let offset = font.len() as u32;
+        let num_tables = u16::from_be_bytes([font[4], font[5]]) as usize;
+        let rec = (0..num_tables)
+            .map(|i| 12 + 16 * i)
+            .find(|&r| &font[r..r + 4] == b"name")
+            .expect("JetBrains Mono has a name table");
+        font[rec + 8..rec + 12].copy_from_slice(&offset.to_be_bytes());
+        font[rec + 12..rec + 16].copy_from_slice(&(table.len() as u32).to_be_bytes());
+        font.extend_from_slice(&table);
+        font
+    }
+
+    /// A font registered with CoreText for this process until dropped
+    /// (`CTFontManagerRegisterGraphicsFont`).
+    #[cfg(target_os = "macos")]
+    struct RegisteredFont(*mut core::ffi::c_void);
+
+    #[cfg(target_os = "macos")]
+    extern "C" {
+        fn CGDataProviderCreateWithCFData(data: *const core::ffi::c_void)
+            -> *mut core::ffi::c_void;
+        fn CGDataProviderRelease(p: *mut core::ffi::c_void);
+        fn CGFontCreateWithDataProvider(p: *mut core::ffi::c_void) -> *mut core::ffi::c_void;
+        fn CGFontRelease(f: *mut core::ffi::c_void);
+        fn CTFontManagerRegisterGraphicsFont(
+            font: *mut core::ffi::c_void,
+            error: *mut *mut core::ffi::c_void,
+        ) -> bool;
+        fn CTFontManagerUnregisterGraphicsFont(
+            font: *mut core::ffi::c_void,
+            error: *mut *mut core::ffi::c_void,
+        ) -> bool;
+    }
+
+    #[cfg(target_os = "macos")]
+    impl RegisteredFont {
+        fn new(bytes: &[u8]) -> RegisteredFont {
+            let data = objc2_core_foundation::CFData::from_bytes(bytes);
+            // SAFETY: plain CoreGraphics/CoreText calls on live objects; each
+            // create is balanced by a release below or in `drop`.
+            unsafe {
+                let provider = CGDataProviderCreateWithCFData(
+                    (&*data as *const objc2_core_foundation::CFData).cast(),
+                );
+                assert!(!provider.is_null());
+                let font = CGFontCreateWithDataProvider(provider);
+                CGDataProviderRelease(provider);
+                assert!(!font.is_null(), "CoreGraphics accepts the font");
+                assert!(
+                    CTFontManagerRegisterGraphicsFont(font, core::ptr::null_mut()),
+                    "CoreText registers the font"
+                );
+                RegisteredFont(font)
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    impl Drop for RegisteredFont {
+        fn drop(&mut self) {
+            // SAFETY: `self.0` is the registered CGFont this value owns.
+            unsafe {
+                CTFontManagerUnregisterGraphicsFont(self.0, core::ptr::null_mut());
+                CGFontRelease(self.0);
+            }
+        }
+    }
+
+    /// S87-F2: `discoverExactFamily` reads the found font's family name into a
+    /// 256-byte buffer (`discovery.zig:429-441`); a name that does not fit with
+    /// its NUL (256 bytes or more) is not found, even when it is the family
+    /// asked for. The fonts are registered for this process under names no
+    /// other font has; the 255-byte one proves the lookup itself finds them.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn discover_exact_family_rejects_names_that_do_not_fit_256_bytes() {
+        let disco = CoreText::init(crate::library::Library::init().unwrap());
+        let long = |n: usize, tag: char| -> String {
+            let mut s = format!("Rustty S87F2 {tag} ");
+            while s.len() < n {
+                s.push('x');
+            }
+            s
+        };
+
+        let fits = long(255, 'a');
+        let too_long = long(256, 'b');
+        assert_eq!((fits.len(), too_long.len()), (255, 256));
+        let _fits_font = RegisteredFont::new(&font_named(&fits, "RusttyS87F2a"));
+        let _too_long_font = RegisteredFont::new(&font_named(&too_long, "RusttyS87F2b"));
+
+        // Precondition: CoreText finds each font by that name and reports it
+        // as the family (so only the buffer can make the difference).
+        for name in [&fits, &too_long] {
+            let s = crate::deferred_face::new_cfstring(name).unwrap();
+            let f = unsafe { objc2_core_text::CTFont::with_name(&s, 12.0, core::ptr::null()) };
+            assert_eq!(unsafe { f.family_name() }.to_string(), *name);
+        }
+
+        let found = disco.discover_exact_family(fits.as_bytes()).unwrap();
+        assert!(found.is_some(), "a 255-byte family fits the buffer");
+        let not_found = disco.discover_exact_family(too_long.as_bytes()).unwrap();
+        assert!(not_found.is_none(), "a 256-byte family does not");
     }
 
     // test "coretext" {
