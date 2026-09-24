@@ -297,6 +297,12 @@ impl PageEntryId {
     }
 }
 
+// PORT NOTE (task tail-s2, S-2 review N3): the reference's `Item.value` is
+// `undefined` (`ref_counted_set.zig:85`), so neither a fresh slot (zero-filled
+// by `RefCountedSet::init`, which reads as an empty `.explicit`) nor a reaped
+// one (written with `Item::default()`, this `.implicit` 0) has reference-defined
+// bytes, and neither is ever read as a live value. The two therefore need not
+// agree, and this default is left as it was.
 impl Default for PageEntry {
     fn default() -> Self {
         PageEntry {
@@ -443,13 +449,15 @@ impl PageEntry {
         // autoHash(&hasher, std.meta.activeTag(self.id));
         match self.id.tag() {
             PageEntryIdTag::Implicit => {
-                update(&[PageEntryIdTag::Implicit as u8]); // tag: implicit (1)
-                                                           // .implicit => |v| autoHash(&hasher, v),
+                // tag: implicit (1)
+                update(&[PageEntryIdTag::Implicit as u8]);
+                // .implicit => |v| autoHash(&hasher, v),
                 update(&self.id.implicit().to_ne_bytes());
             }
             PageEntryIdTag::Explicit => {
-                update(&[PageEntryIdTag::Explicit as u8]); // tag: explicit (0)
-                                                           // .explicit => |slice| autoHashStrat(&hasher, slice.slice(base), .Deep),
+                // tag: explicit (0)
+                update(&[PageEntryIdTag::Explicit as u8]);
+                // .explicit => |slice| autoHashStrat(&hasher, slice.slice(base), .Deep),
                 let s = unsafe { self.id.explicit().slice(base) };
                 update(s);
                 update(&s.len().to_ne_bytes());
@@ -756,8 +764,10 @@ mod page_entry_tag_byte_tests {
 // by the reference's OWN `PageEntry.hash` and `hyperlink.Set`, run through
 // `Page.insertHyperlink` in a Zig 0.16.0 probe built from `20abdb50a`
 // (`probe_n82.zig`, task tail-s2 report); the port must give the same 64-bit
-// value and, from it, the same bucket placement.
-#[cfg(test)]
+// value and, from it, the same bucket placement. The probe ran on a 64-bit
+// target (aarch64-macos), and the reference hashes each slice's `len` as a
+// native `usize`, so the expected values hold only where `usize` is 8 bytes.
+#[cfg(all(test, target_pointer_width = "64"))]
 mod page_entry_hash_tests {
     use super::*;
     use crate::page::Capacity;

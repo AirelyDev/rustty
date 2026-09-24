@@ -347,8 +347,13 @@ mod tests {
     }
 
     // test "test vectors at comptime" runs the same `vectors` table inside a
-    // `comptime` block. Rust's `Wyhash` is not a `const fn`, so there is no
-    // compile-time form to port; the runtime table above is the same check.
+    // `comptime` block, and `test "smhasher"` / `test "iterative api"` below
+    // each run their check a second time as `try comptime Test.do()`. Those
+    // compile-time halves are not ported: Rust has no counterpart to a Zig
+    // `comptime` block, which can evaluate any ordinary function at compile
+    // time. Running this code in a Rust `const` would need the port's `Wyhash`
+    // rewritten as `const fn`, a different function from the one under test.
+    // The runtime halves are the same checks on the same inputs.
 
     /// `verify.smhasher` (`lib/std/hash/verify.zig`): hash keys `{}`, `{0}`,
     /// `{0,1}`, ... `{0..254}` with seed `256 - i`, concatenate the 8-byte
@@ -358,7 +363,8 @@ mod tests {
         let mut buf = [0u8; 256];
         let mut buf_all = [0u8; 256 * 8];
         for i in 0..256usize {
-            buf[i] = i as u8;
+            // buf[i] = @intCast(i);
+            buf[i] = u8::try_from(i).unwrap();
             let h = Wyhash::hash((256 - i) as u64, &buf[0..i]);
             buf_all[i * 8..i * 8 + 8].copy_from_slice(&h.to_le_bytes());
         }
