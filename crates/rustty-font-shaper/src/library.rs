@@ -32,6 +32,14 @@ pub type Mutex = std::sync::Mutex<()>;
 // `Backend.default`: macOS → `NoopLibrary`, everything else → `FreetypeLibrary`.
 // macOS (coretext) AND wasm (web_canvas) → `NoopLibrary`; everything else
 // (Linux fontconfig_freetype) → `FreetypeLibrary`.
+//
+//   // Freetype requires a state library
+//   .freetype, .freetype_windows, .fontconfig_freetype, .coretext_freetype,
+//   => FreetypeLibrary,
+//
+//   // Some backends such as CT and Canvas don't have a "library"
+//   .coretext, .coretext_harfbuzz, .coretext_noshape, .web_canvas,
+//   => NoopLibrary,
 #[cfg(any(target_os = "macos", target_arch = "wasm32"))]
 pub type Library = NoopLibrary;
 #[cfg(not(any(target_os = "macos", target_arch = "wasm32")))]

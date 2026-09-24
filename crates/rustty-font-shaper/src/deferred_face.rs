@@ -507,9 +507,12 @@ mod coretext_payload {
 }
 
 // ---------------------------------------------------------------------------
-// PORT NOTE (DEFERRED): the non-CoreText arms of `familyName`/`name`/`load`/
-// `hasCodepoint` are recorded verbatim and land with their backends (the wasm
-// `Wasm` C-ABI struct HAS landed — the `ghostty_wasm_abi` module below):
+// PORT NOTE: the non-CoreText arms of `familyName`/`name`/`load`/
+// `hasCodepoint` are recorded verbatim here; the Fontconfig, Windows and
+// WebCanvas arms are ported in their backends' impls below, and the wasm
+// `Wasm` C-ABI struct in the `ghostty_wasm_abi` module. The `coretext_freetype`
+// arm (`loadCoreTextFreetype`) is not live: `options::BACKEND` resolves only
+// the per-OS default backend.
 //
 //   .freetype_windows => if (self.win) |w| return try w.peek.name(buf),
 //   .fontconfig_freetype => if (self.fc) |fc| return (try fc.pattern.get(.fullname, 0)).string,
@@ -619,10 +622,10 @@ mod coretext_payload {
 // PORT NOTE: this materializes the reference's `fc` payload
 // (`DeferredFace.zig:38-56`) and the `hasCodepoint` fontconfig arm
 // (`:325-347`), which the discovery iterator (`discovery.rs`
-// `DiscoverIterator::next`) constructs. The `familyName`/`name`/`load`
-// (`loadFontconfig`) fontconfig arms are DEFERRED to L3 Task 7 and remain honest
-// `unimplemented!()` leaves (matching Task 1's convention); they are not reached
-// by any current caller (discovery does not name them).
+// `DiscoverIterator::next`) constructs, and the `familyName`/`name`/`load`
+// (`loadFontconfig`) fontconfig arms below. (CORRECTION, 2026-09-24, parity
+// tail S-8a: this note still called those three arms DEFERRED
+// `unimplemented!()` leaves; they are ported.)
 #[cfg(all(
     not(target_os = "macos"),
     not(target_os = "windows"),

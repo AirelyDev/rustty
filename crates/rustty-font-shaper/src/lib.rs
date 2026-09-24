@@ -15,10 +15,16 @@
 //! `shape.zig` + the `shaper/` HarfBuzz framework (`run`/`feature`/`Cache`/
 //! `noop`), `discovery.zig` (CoreText discoverer + `Descriptor`),
 //! `Collection.zig`/`CodepointResolver.zig`, and `SharedGrid.zig`/
-//! `SharedGridSet.zig`. Honest residual (macOS-first locked fork — DEFERRALS.md
-//! "rustty-font-shaper"): the 3 Fontconfig `DeferredFace` arms
-//! (`deferred_face.rs`, Linux backend) + the non-macOS Fontconfig discovery
-//! half, and `face/web_canvas.zig` (wasm browser face, unported).
+//! `SharedGridSet.zig`, plus the Fontconfig `DeferredFace` arms and discoverer
+//! (Linux), the Windows arms, and the wasm `face/web_canvas.zig` +
+//! `shaper/web_canvas.zig` backends. (CORRECTION, 2026-09-24, parity tail
+//! S-8a: this header still listed the Fontconfig arms/discovery and
+//! `face/web_canvas.zig` as an unported residual; all three are ported —
+//! `deferred_face.rs` `fontconfig_payload`, `discovery.rs` `fontconfig_impl`,
+//! `face/web_canvas.rs`.) Residual: `options::BACKEND` resolves only the per-OS
+//! default backend, so the non-default arms (e.g. `loadCoreTextFreetype` for
+//! the non-shipped `coretext_freetype` backend) are recorded verbatim in
+//! comments, not live.
 //!
 //! Carved leaves-first (R1: every line/comment/test{} ported as the crate is
 //! carved, under the acyclicity gate per R4).
@@ -361,3 +367,29 @@ pub const SPRITE_INDEX: collection::Index =
 // pub const default_fallback_adjustment: Collection.SizeAdjustment = .ic_width;
 pub const DEFAULT_FALLBACK_ADJUSTMENT: collection::SizeAdjustment =
     collection::SizeAdjustment::IcWidth;
+
+// If we're targeting wasm then we export some wasm APIs.
+// comptime {
+//     if (builtin.target.cpu.arch.isWasm()) {
+//         _ = Atlas.Wasm;
+//         _ = DeferredFace.Wasm;
+//         _ = face.web_canvas.Wasm;
+//         _ = shape.web_canvas.Wasm;
+//     }
+// }
+// PORT NOTE: Rust has no comptime decl-retention; the four `Wasm` export sets
+// are `#[cfg(target_arch = "wasm32")]` `extern "C"` items in their own
+// modules (`rustty_font::atlas`, `deferred_face`, `face::web_canvas`,
+// `shaper::web_canvas`), and the wasm cdylib artifacts retain them.
+
+// test {
+//     // For non-wasm we want to test everything we can
+//     if (!comptime builtin.target.cpu.arch.isWasm()) {
+//         @import("std").testing.refAllDecls(@This());
+//         return;
+//     }
+//
+//     _ = Atlas;
+// }
+// PORT NOTE: `refAllDecls` has no Rust analogue; every module's `#[cfg(test)]`
+// tests are compiled by `cargo test` regardless of which items it references.
