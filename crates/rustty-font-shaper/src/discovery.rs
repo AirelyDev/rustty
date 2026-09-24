@@ -2826,7 +2826,9 @@ mod tests {
     /// is exactly the guarantee this test exists to hold. (The bodies themselves
     /// are the live Fontconfig discoverer — they are exercised end-to-end by the
     /// ungated `SharedGridSet` / discovered-font shaping tests on Linux.)
-    #[cfg(not(any(target_os = "macos", target_os = "windows", target_arch = "wasm32")))]
+    // (S-14: keyed on `hasFontconfig()`, where `Fontconfig` is the live
+    // discoverer — a Linux `-Dfont-backend=freetype` build has none.)
+    #[cfg(rustty_font_has_fontconfig)]
     #[test]
     fn discover_impl_typechecks() {
         use crate::collection::Collection;
@@ -2947,7 +2949,9 @@ mod tests {
     /// Asserts (a) dropping an iterator destroys its handles exactly once, and
     /// (b) `deinit` is idempotent, so the explicit `deinit()` calls the port
     /// already makes do not double-destroy when the drop follows.
-    #[cfg(not(any(target_os = "macos", target_os = "windows", target_arch = "wasm32")))]
+    // (S-14: keyed on `hasFontconfig()`, where `Fontconfig` is the live
+    // discoverer — a Linux `-Dfont-backend=freetype` build has none.)
+    #[cfg(rustty_font_has_fontconfig)]
     #[test]
     fn discover_iterator_drops_native_handles() {
         // Shared: fontconfig's global state must not be torn down under us
@@ -3529,13 +3533,16 @@ mod tests {
     // error.SkipZigTest;`, made visible (R14; `options::BACKEND` is
     // `FreetypeWindows` on exactly that target). It still needs a stock Windows
     // install to pass: it asserts `Arial` is discoverable and has a glyph for 'A'.
+    //
+    // (S-14, N266: keyed on the `freetype_windows` backend itself, not the
+    // target — a Windows `-Dfont-backend=freetype` build has no `Windows`.)
     #[test]
     #[cfg_attr(
-        not(all(target_os = "windows", not(target_arch = "wasm32"))),
+        not(rustty_font_backend = "freetype_windows"),
         ignore = "SkipZigTest: freetype_windows backend only (R14)"
     )]
     fn windows() {
-        #[cfg(all(target_os = "windows", not(target_arch = "wasm32")))]
+        #[cfg(rustty_font_backend = "freetype_windows")]
         {
             // if (options.backend != .freetype_windows) return error.SkipZigTest;
 

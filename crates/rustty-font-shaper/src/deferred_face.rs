@@ -1070,7 +1070,12 @@ mod windows_payload {
         //   ...
         //   return "";
         // }
-        pub fn family_name<'a>(&self, buf: &'a mut [u8]) -> Result<&'a [u8], FaceError> {
+        // CORRECTION (S-14, N287): `&'a self`, as the coretext payload has it —
+        // `peek.name(buf)` may return the FreeType face's own name bytes
+        // (`face/freetype.rs` `name<'a>(&'a self, ...)`), so the result borrows
+        // `self` too. With `&self` this arm did not type-check for
+        // `x86_64-pc-windows-*` (found by S-14's cross check).
+        pub fn family_name<'a>(&'a self, buf: &'a mut [u8]) -> Result<&'a [u8], FaceError> {
             if let Some(w) = self.win.as_ref() {
                 return w.peek.name(buf);
             }
@@ -1088,7 +1093,8 @@ mod windows_payload {
         //
         // (The reference's Windows arm is the SAME `peek.name(buf)` call as
         // `familyName`'s — FreeType exposes no separate "full name" here.)
-        pub fn name<'a>(&self, buf: &'a mut [u8]) -> Result<&'a [u8], FaceError> {
+        // (`&'a self`: see `family_name`, S-14 / N287.)
+        pub fn name<'a>(&'a self, buf: &'a mut [u8]) -> Result<&'a [u8], FaceError> {
             if let Some(w) = self.win.as_ref() {
                 return w.peek.name(buf);
             }
