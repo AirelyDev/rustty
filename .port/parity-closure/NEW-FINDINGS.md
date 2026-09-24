@@ -4436,3 +4436,30 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   `crates/rustty-apprt/src/gtk/winproto/blur_region.rs`; only `:58` (an insult with no fact) is a
   `gag-prose` row.
 - **state**: CLOSED (task tail-s8d).
+
+## N293 — `readthread_pipeline_shuts_down_cleanly_from_both_stages` bounded a live drain with a wall clock
+
+- **id**: N293. Not a ledger row: the flaky test queued by S-6 (task S-15, item C).
+- **severity**: low (flaky test). **kind**: test defect (port-only KAT; the reference has no
+  equivalent test — `src/termio/Exec.zig` at `20abdb50a` has only the `execCommand` tests).
+- **measured**: at base the test takes 5.5-6.0 s. About 3 s is the eight blocking 64 KiB writes
+  to the slave waiting on the parse stage, and 2.2-2.8 s is the drain AFTER the quit: 145-170 KiB
+  were still in flight (ring plus pty queue) and the parse stage parses them before it exits, at
+  about 65 KiB/s in the `dev` profile. `sample(1)` of the parse stage: the top frames are
+  `rustty_vt::page::mask`, `page::get_bits` and `Page::verify_integrity`, i.e. the reference's
+  `assertIntegrity` under `slow_runtime_safety` (`page.zig:366-376`, Debug only;
+  `SLOW_RUNTIME_SAFETY = cfg!(debug_assertions)` in the port).
+- **root cause**: not a port slowdown. The drain-on-quit is the reference's design (parse loop
+  returns on `done` only once `count == 0`; the gather stage `continue`s on a full buffer without
+  polling `quit`), and the port matches it line for line. The test bounded that finite, live drain
+  with a fixed 10 s `recv_timeout`; under load the drain crosses 10 s (S-6: load 20-29, 1 run in 8;
+  here, 42 spinning processes on 14 cores: drain 5.8-9.96 s, one batch gap 4.1-4.7 s).
+- **fix**: the watchdog now fails only when the read thread has not joined AND no batch has reached
+  `processOutput` for 30 s (the regression it guards — a stage exiting without waking the other —
+  leaves the parse stage asleep on `batch_ready`, so progress stops for good). 30 s is over 6x the
+  loaded per-batch gap. The test also now asserts its premise (bytes still in flight at the quit)
+  and each bulk write's length, and prints `SHUTDOWN-DRAIN` with the drain time and longest gap.
+- **verification**: 3/3 idle (drain 2.2-2.8 s, gap 0.73-0.79 s), 3/3 under the synthetic load.
+  Negative control (gather's `DoneSignal` no longer sets `done`): FAILED after 30.0 s with "no
+  batch reached processOutput for 30s", reverted.
+- **state**: CLOSED (task S-15).

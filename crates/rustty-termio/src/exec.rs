@@ -8824,9 +8824,42 @@ mod tests {
     ///   quit-during-parse: quit while a bulk stream is in flight, so the ring
     ///     is non-empty and the parse stage is mid-`processOutput`.
     ///
-    /// A regression in either direction hangs, so the join is bounded by the
-    /// test harness's own timeout via a watchdog channel rather than blocking
-    /// forever.
+    /// A regression in either direction hangs, so the join is bounded by a
+    /// watchdog channel rather than blocking forever.
+    ///
+    /// THE BOUND IS A STALL BOUND, NOT A WALL-CLOCK BOUND (S-15, N293). On a
+    /// quit the parse stage drains every published batch before it exits, and
+    /// the gather stage keeps filling slots without polling `quit` while the
+    /// pty still yields full 64 KiB buffers. Both are the reference's design
+    /// (`Exec.zig` parse loop: `if (pipeline.done) return;` only once
+    /// `count == 0`; gather: `if (total == buffer_capacity) continue;`), so a
+    /// correct shutdown from quit-during-parse first parses what is still in
+    /// the ring and the pty queue. Measured on an M4 Pro, idle host, `dev`
+    /// profile, three runs: 145-170 KiB were still in flight at the quit and
+    /// the drain took 2.3-2.6 s, i.e. ~65 KiB/s. (The ~3 s before the quit is
+    /// the eight blocking 64 KiB writes waiting on the same parse.) The `dev`
+    /// parse is that slow because every page mutation runs
+    /// `Page::verify_integrity` (sampled: `page::mask`, `page::get_bits` and
+    /// `verify_integrity` are the top frames of the parse stage), which is the
+    /// reference's `assertIntegrity` under `slow_runtime_safety`
+    /// (`page.zig:366-376`, Debug builds only): faithful, not a port defect.
+    /// A fixed 10 s bound on the WHOLE drain therefore failed under host load
+    /// (load average 20-29, task S-6: 1 run in 8) while the pipeline was
+    /// healthy and still making progress.
+    ///
+    /// The regression looks different: a stage that exits without waking the
+    /// other leaves the parse stage asleep on `batch_ready`, so no batch ever
+    /// reaches `processOutput` again. The watchdog therefore fails only when
+    /// the thread has not joined AND no new batch has reached `processOutput`
+    /// for `STALL`. A live drain hands over a batch every ~0.7-0.8 s here
+    /// idle (one 64 KiB slot at ~65 KiB/s; the longest gap is printed as
+    /// `SHUTDOWN-DRAIN`). Under a synthetic load of 42 spinning processes on
+    /// 14 cores (load average 46) the longest gap measured 4.1-4.7 s and the
+    /// whole drain up to 9.96 s, at the old fixed 10 s bound. STALL is
+    /// 30 s: over 6x the loaded gap, and a hang is still caught 30 s after its
+    /// last batch instead of wedging the suite. The drain is finite (at most the
+    /// 512 KiB written), so a livelock cannot hide behind the progress rule:
+    /// once every byte is processed, progress stops and the stall rule applies.
     #[test]
     #[cfg(target_os = "macos")]
     fn readthread_pipeline_shuts_down_cleanly_from_both_stages() {
@@ -8837,19 +8870,30 @@ mod tests {
         for scenario in ["quit-during-gather", "quit-during-parse"] {
             let (handle, master, slave, quit_write, t) = spawn_readthread_over_pty();
 
+            const CHUNK: usize = 64 * 1024;
+            const CHUNKS: usize = 8;
             if scenario == "quit-during-parse" {
                 // Put a bulk stream in flight so the ring is non-empty and the
                 // parse stage is busy when the quit arrives.
-                let chunk = vec![b'z'; 64 * 1024];
-                for _ in 0..8 {
-                    let _ = unsafe {
+                let chunk = vec![b'z'; CHUNK];
+                for _ in 0..CHUNKS {
+                    let w = unsafe {
                         libc::write(
                             slave,
                             chunk.as_ptr().cast::<std::ffi::c_void>(),
                             chunk.len(),
                         )
                     };
+                    assert_eq!(w, CHUNK as isize, "{scenario}: wrote a bulk chunk");
                 }
+                // The scenario's premise, checked rather than assumed: bytes
+                // are still in flight (ring or pty queue) when the quit lands.
+                let at_quit = t.processed_bytes();
+                assert!(
+                    at_quit < CHUNK * CHUNKS,
+                    "{scenario}: all {at_quit} bytes were parsed before the quit, \
+                     so this is not a quit during parse"
+                );
             } else {
                 // Idle pty: let both stages settle into their waits.
                 std::thread::sleep(Duration::from_millis(20));
@@ -8858,13 +8902,39 @@ mod tests {
             let _ = unsafe { libc::write(quit_write, b"x".as_ptr().cast::<std::ffi::c_void>(), 1) };
 
             // Bounded join: a hang here IS the regression, so surface it as a
-            // failure rather than wedging the suite.
+            // failure rather than wedging the suite. The bound is STALL since
+            // the last batch reached processOutput (see the doc comment).
+            const STALL: Duration = Duration::from_secs(30);
             let (tx, rx) = std::sync::mpsc::channel::<()>();
             let joiner = std::thread::spawn(move || {
                 handle.join().expect("read thread join");
                 let _ = tx.send(());
             });
-            let joined = rx.recv_timeout(Duration::from_secs(10)).is_ok();
+            let quit_at = Instant::now();
+            let mut last_calls = t.processed_calls();
+            let mut last_progress = quit_at;
+            let mut longest_gap = Duration::ZERO;
+            let joined = loop {
+                match rx.recv_timeout(Duration::from_millis(50)) {
+                    Ok(()) => break true,
+                    // The joiner panicked (the read thread panicked): not joined.
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break false,
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                }
+                let calls = t.processed_calls();
+                if calls != last_calls {
+                    longest_gap = longest_gap.max(last_progress.elapsed());
+                    last_calls = calls;
+                    last_progress = Instant::now();
+                } else if last_progress.elapsed() >= STALL {
+                    break false;
+                }
+            };
+            eprintln!(
+                "SHUTDOWN-DRAIN {scenario}: joined={joined} after {:?}, longest gap \
+                 between batches {longest_gap:?}",
+                quit_at.elapsed()
+            );
 
             if joined {
                 joiner.join().expect("joiner join");
@@ -8892,10 +8962,10 @@ mod tests {
 
             assert!(
                 joined,
-                "{scenario}: the read pipeline did not shut down within 10s \
-                 (a stage exited without waking the other)"
+                "{scenario}: the read pipeline did not shut down, and no batch \
+                 reached processOutput for {STALL:?} (a stage exited without \
+                 waking the other)"
             );
-            let _ = Instant::now();
         }
     }
 }
