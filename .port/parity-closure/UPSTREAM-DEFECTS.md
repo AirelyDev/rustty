@@ -1868,6 +1868,36 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - proposed fix:    in zig, give `E0` its own class in the `.can_encode_surrogate_half` table (accept `A0..BF`, as in UTF-8 mode) so the validator and decoder agree.
 - upstream status: not reported
 
+### UD202 — `systemd.notify.send` writes one byte past `sun_path` when `NOTIFY_SOCKET` is exactly 108 bytes
+- kind:            crash (bounds-check trap)
+- upstream project: ghostty
+- severity:        low
+- reference:       `src/os/systemd.zig:108-117` (`notify.send`: `if (socket_address.path.len < socket_path.len) { log.warn("NOTIFY_SOCKET path is too long!") ... }` then `socket_address.path[socket_path.len] = 0;`), at 20abdb50a. Found by T-G while working LEDGER S112-F8; outside that row's cited anchors (`:37-53, 136-149`).
+- defect:          the length check lets through a value exactly `path.len` (108 on Linux) bytes long, and the NUL terminator is then written at index 108 of a 108-byte array.
+- ReleaseSafe:     panic "index out of bounds" (by reading; not measured on Linux).
+- ReleaseFast:     undefined behaviour: a one-byte write past `sun_path`, into whatever follows the stack `sockaddr.un`. Not measured.
+- reachability:    Linux, whenever Ghostty calls `notify.ready()` or `notify.reloading()` with `NOTIFY_SOCKET` set to a 108-byte value in its environment (systemd sets the variable for `Type=notify` units; any launcher can set it).
+- port handling:   fixed (R13): `crates/rustty-os/src/systemd.rs` `notify_address` (PORT NOTE: reference defect (R13)) rejects a value that leaves no room for the NUL with the reference's own "NOTIFY_SOCKET path is too long!" warning. The port had copied the reference's index and panicked the same way.
+- parity row(s):   LEDGER S112-F8 (found alongside it).
+- test:            `systemd::tests::notify_socket_as_long_as_sun_path_is_too_long` (runs on macOS, where `sun_path` is 104 bytes, and Linux). Negative control (macOS, 2026-09-23): the reference's `<` restored panics "index out of bounds: the len is 104 but the index is 104". The Linux `send` arm that calls `notify_address` is not compiled on macOS; Linux run pending.
+- proposed fix:    `if (socket_address.path.len <= socket_path.len)`.
+- upstream status: not reported
+
+### UD203 — `systemd.notify.send` accepts an abstract-namespace `NOTIFY_SOCKET` (`@...`) but connects to a filesystem path named `@...`
+- kind:            functional (a documented case that does not work)
+- upstream project: ghostty
+- severity:        low
+- reference:       `src/os/systemd.zig:100-104` (the check and its warning: "only AF_UNIX sockets with path or abstract namespace addresses are supported!"), `:115-116` (the `@` is copied into `path` as is), `:136-141` (`connect` with `@offsetOf(sockaddr.un, "path") + path.len`, the whole struct), at 20abdb50a. `sd_notify(3)`: "If the first character of $NOTIFY_SOCKET is "@", the string is understood as Linux abstract namespace socket". Found by T-G alongside LEDGER S112-F8.
+- defect:          an abstract address is written with a leading NUL byte in place of the `@`, and its length is the name's own. The reference does neither: it connects to the pathname socket `@name` relative to its working directory, which does not exist, so the notification is lost with "unable to connect to notify socket". By reading; not measured.
+- ReleaseSafe:     no crash; `READY=1` / `RELOADING=1` are never delivered, so a `Type=notify` service whose manager hands out an abstract socket times out waiting for readiness.
+- ReleaseFast:     same.
+- reachability:    Linux, any `NOTIFY_SOCKET` starting with `@`.
+- port handling:   fixed (R13, extended 2026-09-23): `crates/rustty-os/src/systemd.rs` `notify_address` (PORT NOTE: reference defect (R13)) writes the leading NUL and uses the name's length for an `@` address; path addresses keep the reference's whole-struct length. Listed in `docs/ghostty-bug-fixes.md`.
+- parity row(s):   LEDGER S112-F8 (found alongside it).
+- test:            `systemd::tests::notify_address_lengths` (macOS and Linux). Negative control (macOS, 2026-09-23): the NUL write removed fails with `left: 64` (the `@`) `right: 0`. The Linux `send` arm is not compiled on macOS; Linux run pending.
+- proposed fix:    `if (socket_path[0] == '@') socket_address.path[0] = 0;` and connect with `@offsetOf(sockaddr.un, "path") + socket_path.len` for that case.
+- upstream status: not reported
+
 ## Candidates pending verification
 
 Assembled from this plan's progress notes on 2026-09-11. **Not verified** — do not cite as fact.

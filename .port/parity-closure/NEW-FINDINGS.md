@@ -3494,6 +3494,20 @@ fix: 0 of 50 of the same sequential runs failed; see the task T-F2 report for th
 
 **state**: CLOSED (task T-F2).
 
+## N160 — `systemd.notify.send`'s address setup, outside S112-F8's anchors: a 108-byte crash and a broken abstract-socket case
+
+- **id**: N160. Not in the inventory. Found by T-G (tail wave), 2026-09-23, while working LEDGER S112-F8,
+  whose cited anchors are `systemd.zig:37-53, 136-149`; these sites are at `:100-117`.
+- **severity**: low. **kind**: crash (UD202) and functional (UD203), both reference defects.
+- **what**: (1) the "too long" check is `path.len < socket_path.len`, so a 108-byte `NOTIFY_SOCKET` passes
+  and its NUL is written at `path[108]`; the port had the same index and panicked (UD202). (2) an
+  `@`-prefixed abstract address, which the check's own warning names as supported, is copied with its
+  `@` and connected with the whole-struct length, i.e. as the pathname `@...` (UD203).
+- **fix**: `crates/rustty-os/src/systemd.rs` `notify_address` (both R13 PORT NOTEs), tests
+  `notify_socket_as_long_as_sun_path_is_too_long` and `notify_address_lengths`, negative controls in
+  UD202/UD203. The Linux-only `send` arm that calls it is not compiled on macOS.
+- **state**: OPEN — fix written, Linux run pending (same as S112-F8).
+
 ## N196 — tests passed without testing anything when their environment was missing
 
 - **id**: N196. Not in the inventory. Found by the tail-s3 task (silent-skip audit), 2026-09-23.
