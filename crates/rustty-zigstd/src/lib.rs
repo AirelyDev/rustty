@@ -36,6 +36,7 @@
 
 pub mod arena_allocator;
 pub mod array_hash_map;
+pub mod fmt;
 pub mod memory_pool;
 pub mod thread;
 pub mod wyhash;

@@ -1959,28 +1959,22 @@ impl rustty_args::args::AutoStruct for SplitResizeParameter {
 
 // fn parseInt(comptime T, value) !T { return std.fmt.parseInt(T, value, 10) catch return Error.InvalidFormat; }
 //
-// PORT NOTE: Zig's `std.fmt.parseInt(_, _, 10)` accepts an optional leading
-// `+`/`-` and `_` digit separators. Rust's `str::parse` accepts `+`/`-` but not
-// `_`; no ported test exercises `_`, and the observable behavior for all parity
-// inputs matches. UTF-8 validity is required to view the bytes as `str`; invalid
-// UTF-8 yields `InvalidFormat`, same as a non-numeric parse failure.
+// S100-F1: this was Rust's `str::parse`, which rejects inputs Zig's
+// `std.fmt.parseInt` accepts: `_` digit separators (`goto_tab:1_0`) and `-0`
+// for an unsigned type (`goto_tab:-0`). `rustty_zigstd::fmt::parse_int` is
+// the port of the Zig parser. The per-type names are the instantiations the
+// action arms use.
+fn parse_int<T: rustty_zigstd::fmt::ZigInt>(value: &[u8]) -> Result<T, Error> {
+    rustty_zigstd::fmt::parse_int::<T>(value, 10).map_err(|_| Error::InvalidFormat)
+}
 fn parse_int_i16(value: &[u8]) -> Result<i16, Error> {
-    std::str::from_utf8(value)
-        .ok()
-        .and_then(|s| s.parse::<i16>().ok())
-        .ok_or(Error::InvalidFormat)
+    parse_int::<i16>(value)
 }
 fn parse_int_isize(value: &[u8]) -> Result<isize, Error> {
-    std::str::from_utf8(value)
-        .ok()
-        .and_then(|s| s.parse::<isize>().ok())
-        .ok_or(Error::InvalidFormat)
+    parse_int::<isize>(value)
 }
 fn parse_int_usize(value: &[u8]) -> Result<usize, Error> {
-    std::str::from_utf8(value)
-        .ok()
-        .and_then(|s| s.parse::<usize>().ok())
-        .ok_or(Error::InvalidFormat)
+    parse_int::<usize>(value)
 }
 
 /// The largest `goto_tab` index the action boundary can carry.
@@ -2004,18 +1998,15 @@ fn parse_int_goto_tab(value: &[u8]) -> Result<usize, Error> {
     Ok(v)
 }
 fn parse_int_u16(value: &[u8]) -> Result<u16, Error> {
-    std::str::from_utf8(value)
-        .ok()
-        .and_then(|s| s.parse::<u16>().ok())
-        .ok_or(Error::InvalidFormat)
+    parse_int::<u16>(value)
 }
 
 // fn parseFloat(comptime T, value) !T { return std.fmt.parseFloat(T, value) catch return Error.InvalidFormat; }
+//
+// S100-F1: Zig's `std.fmt.parseFloat` also takes `_` separators and hex floats
+// (`set_font_size:0x1.8p3` is 12), which `str::parse` rejects.
 fn parse_float_f32(value: &[u8]) -> Result<f32, Error> {
-    std::str::from_utf8(value)
-        .ok()
-        .and_then(|s| s.parse::<f32>().ok())
-        .ok_or(Error::InvalidFormat)
+    rustty_zigstd::fmt::parse_float::<f32>(value).map_err(|_| Error::InvalidFormat)
 }
 
 // PORT NOTE: `parseParameter` for the `resize_split` tuple
@@ -6337,6 +6328,57 @@ mod tests {
             if let Action::ScrollPageFractional(v) = binding.action {
                 assert_eq!(0.5f32, v);
             }
+        }
+    }
+
+    /// S100-F1: the numeric action parameters go through Zig's
+    /// `std.fmt.parseInt(T, value, 10)` / `std.fmt.parseFloat(T, value)`
+    /// (`Binding.zig:1225-1231`), so they take `_` separators, `-0` for an
+    /// unsigned type and hex floats, and reject what Zig rejects. Every
+    /// integer type the actions use is covered (i16, isize, usize, u16) plus
+    /// the f32 one.
+    #[test]
+    fn parse_action_numbers_take_the_zig_grammar() {
+        let action = |s: &[u8]| parse_single(s).map(|b| b.action);
+
+        assert!(matches!(action(b"a=goto_tab:1_0"), Ok(Action::GotoTab(10))));
+        assert!(matches!(action(b"a=goto_tab:-0"), Ok(Action::GotoTab(0))));
+        assert!(matches!(
+            action(b"a=scroll_to_row:+1_000"),
+            Ok(Action::ScrollToRow(1000))
+        ));
+        assert!(matches!(
+            action(b"a=scroll_page_lines:-1_0"),
+            Ok(Action::ScrollPageLines(-10))
+        ));
+        assert!(matches!(
+            action(b"a=move_tab:-2_0"),
+            Ok(Action::MoveTab(-20))
+        ));
+        match action(b"a=resize_split:up,1_0") {
+            Ok(Action::ResizeSplit(v)) => assert_eq!(10u16, v.1),
+            other => panic!("resize_split:up,1_0 parsed as {other:?}"),
+        }
+        assert!(
+            matches!(action(b"a=set_font_size:0x1.8p3"), Ok(Action::SetFontSize(v)) if v == 12.0)
+        );
+        assert!(
+            matches!(action(b"a=increase_font_size:1_0.5"), Ok(Action::IncreaseFontSize(v)) if v == 10.5)
+        );
+
+        for bad in [
+            &b"a=goto_tab:_1"[..],
+            b"a=goto_tab:1_",
+            b"a=goto_tab:-1",
+            b"a=set_font_size:1__0",
+            b"a=set_font_size:0x",
+        ] {
+            assert_eq!(
+                Err(ParseSingleError::InvalidFormat),
+                parse_single(bad).map(|_| ()),
+                "{:?}",
+                String::from_utf8_lossy(bad)
+            );
         }
     }
 

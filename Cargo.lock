@@ -1445,6 +1445,7 @@ dependencies = [
  "rustty-render-types",
  "rustty-util",
  "rustty-z2d",
+ "rustty-zigstd",
 ]
 
 [[package]]
