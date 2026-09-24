@@ -823,7 +823,7 @@ enum ReadyTerminalError {
 
 /// The core allocator parameter (`decoder.alloc`) — the crate-wide `Global`
 /// treatment of `std.mem.Allocator` in rustty-vt (see codec.rs's PORT NOTE).
-const GPA: allocator_api2::alloc::Global = allocator_api2::alloc::Global;
+const GPA: rustty_vt::alloc::Global = rustty_vt::alloc::Global;
 
 /// Decode READY, create terminal-owned I/O, and construct the C terminal.
 // fn decoderReadyTerminal(decoder: *DecoderWrapper) anyerror!ReadyTerminal {
@@ -1254,7 +1254,7 @@ mod tests {
     fn plain_string(t: terminal_c::Terminal) -> Vec<u8> {
         // SAFETY: `t` is a live terminal from `new_t`/the decoder.
         let zt = unsafe { &mut *terminal_c::zig_terminal(t) };
-        zt.plain_string(allocator_api2::alloc::Global).unwrap()
+        zt.plain_string(rustty_vt::alloc::Global).unwrap()
     }
 
     // `lib.alloc.default(&lib.alloc.test_allocator).free(encoded)`

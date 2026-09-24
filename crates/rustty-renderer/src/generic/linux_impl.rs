@@ -1080,7 +1080,7 @@ impl Renderer {
             overlay.deinit();
         }
         // self.terminal_state.deinit(self.alloc); (802)
-        self.terminal_state.deinit(self.alloc);
+        self.terminal_state.deinit(self.alloc.into());
         // (803-804) `search_selected_match`/`search_matches` arena teardown: the
         // arena field was collapsed (message.rs), so the owned `Option`s free via
         // Rust `Drop`; no explicit call.
@@ -3708,7 +3708,7 @@ impl Renderer {
         // retained memory. Frame count is ~12 minutes at 120Hz.
         let max_terminal_state_frame_count = 100_000;
         if self.terminal_state_frame_count >= max_terminal_state_frame_count {
-            self.terminal_state.deinit(self.alloc);
+            self.terminal_state.deinit(self.alloc.into());
             self.terminal_state = RenderState::empty();
             self.terminal_state_frame_count = 0;
         }
@@ -3798,7 +3798,8 @@ impl Renderer {
             }
 
             // Update our terminal state
-            self.terminal_state.update(self.alloc, unsafe { &mut *t })?;
+            self.terminal_state
+                .update(self.alloc.into(), unsafe { &mut *t })?;
 
             // If our terminal state is dirty at all we need to redo the viewport search.
             if self.terminal_state.dirty != Dirty::False {
@@ -3887,7 +3888,7 @@ impl Renderer {
                         CellSet::new()
                     } else {
                         self.terminal_state
-                            .link_cells(Global, vp)
+                            .link_cells(Global.into(), vp)
                             .unwrap_or_else(|err| {
                                 // log.warn("error searching for OSC8 links err={}", .{err});
                                 log::warn!(
@@ -3932,7 +3933,7 @@ impl Renderer {
         // results.
         // catch |err| log.warn("error searching for regex links err={}", .{err});
         if let Err(err) = self.config.links.render_cell_map(
-            Global,
+            Global.into(),
             &mut critical.links,
             &self.terminal_state,
             state.mouse.point,
@@ -3965,7 +3966,7 @@ impl Renderer {
                 //     log.warn("error updating search selected highlight err={}", .{err});
                 // }
                 if let Err(err) = self.terminal_state.update_highlights_flattened(
-                    self.alloc,
+                    self.alloc.into(),
                     HighlightTag::SearchMatchSelected as u8,
                     core::slice::from_ref(&m.r#match),
                 ) {
@@ -3982,7 +3983,7 @@ impl Renderer {
                 //     log.warn("error updating search highlights err={}", .{err});
                 // }
                 if let Err(err) = self.terminal_state.update_highlights_flattened(
-                    self.alloc,
+                    self.alloc.into(),
                     HighlightTag::SearchMatch as u8,
                     &m.matches,
                 ) {
@@ -5592,13 +5593,13 @@ mod tests {
         };
 
         // small terminal: print "Ab" on row 0, leave a visible block cursor.
-        let mut t = Terminal::init(Global, term_opts(10, 3)).unwrap();
+        let mut t = Terminal::init(Global.into(), term_opts(10, 3)).unwrap();
         {
             let mut s = t.vt_stream();
             s.next_slice(b"Ab");
             s.deinit();
         }
-        r.terminal_state.update(Global, &mut t).unwrap();
+        r.terminal_state.update(Global.into(), &mut t).unwrap();
         let cs = cursor::style(
             &r.terminal_state,
             cursor::StyleOptions {
@@ -5631,7 +5632,7 @@ mod tests {
         assert_eq!(r.uniforms.cursor_pos, [2, 0]);
 
         r.deinit();
-        t.deinit(Global);
+        t.deinit(Global.into());
     }
 
     // GPU_RD_CHUNK4_DESIGN §3.2 / this file's Task-11 milestone: the GOLDEN harness =
@@ -5695,8 +5696,8 @@ mod tests {
         r.config.selection_background = Some(TerminalColor::CellForeground);
         r.config.selection_foreground = Some(TerminalColor::CellBackground);
 
-        let mut t = Terminal::init(Global, term_opts(10, 3)).unwrap();
-        r.terminal_state.update(Global, &mut t).unwrap(); // dirty = Full
+        let mut t = Terminal::init(Global.into(), term_opts(10, 3)).unwrap();
+        r.terminal_state.update(Global.into(), &mut t).unwrap(); // dirty = Full
         r.update_custom_shader_uniforms_from_state();
 
         // Positive reach: the update ran past its early returns.
@@ -5743,7 +5744,7 @@ mod tests {
             [1.0, 0.0, 0.0, 1.0]
         );
 
-        t.deinit(Global);
+        t.deinit(Global.into());
         r.deinit();
     }
 
@@ -5815,7 +5816,7 @@ mod tests {
         /// `defer` runs the scrollbar push). Returns the pushed scrollbar value.
         fn update_and_draw(r: &mut Renderer) -> Scrollbar {
             let mut mutex = Mutex::new();
-            let mut t = Terminal::init(Global, term_opts(10, 3)).unwrap();
+            let mut t = Terminal::init(Global.into(), term_opts(10, 3)).unwrap();
             {
                 let mut s = t.vt_stream();
                 s.next_slice(b"Ab");
@@ -5980,7 +5981,7 @@ mod tests {
         // "Ab" on a 10×3 grid ⇒ a block cursor at grid (2,0) (the empty cell after
         // "Ab"; focused + blink_visible ⇒ block). Verified by the T10 test.
         let mut mutex = Mutex::new();
-        let mut t = Terminal::init(Global, term_opts(10, 3)).unwrap();
+        let mut t = Terminal::init(Global.into(), term_opts(10, 3)).unwrap();
         {
             let mut s = t.vt_stream();
             s.next_slice(b"Ab");
@@ -6070,7 +6071,7 @@ mod tests {
         );
 
         r.deinit();
-        t.deinit(Global);
+        t.deinit(Global.into());
     }
 
     /// Build the `state::State` the two Kitty tests drive `update_frame` with.
@@ -6124,7 +6125,7 @@ mod tests {
         // pixels 0xFF (`////////` = 6 bytes of 0xFF). a=T places it at the
         // cursor → a pin placement, marking storage dirty.
         let mut mutex = Mutex::new();
-        let mut t = Terminal::init(Global, term_opts(10, 3)).unwrap();
+        let mut t = Terminal::init(Global.into(), term_opts(10, 3)).unwrap();
         // The vt `Terminal` starts with `width_px`/`height_px == 0` (the port
         // sets them only through the surface). Kitty `pixel_size` divides by the
         // cell size (`width_px / cols`), so pin the pixel dims to the renderer's
@@ -6146,7 +6147,7 @@ mod tests {
 
         // Drive the renderer. `terminal_state.update` snapshots the terminal;
         // `update_frame` → `kitty_requires_update` (dirty) == true → `kitty_update`.
-        r.terminal_state.update(Global, &mut t).unwrap();
+        r.terminal_state.update(Global.into(), &mut t).unwrap();
         {
             let st = kitty_state(&mut mutex, &mut t);
             r.update_frame(&st, true).unwrap();
@@ -6210,7 +6211,7 @@ mod tests {
         );
 
         r.deinit();
-        t.deinit(Global);
+        t.deinit(Global.into());
     }
 
     /// F-005 PROVING TEST (eviction half) — GL-ONLY, no macOS-twin analogue.
@@ -6236,7 +6237,7 @@ mod tests {
         };
 
         let mut mutex = Mutex::new();
-        let mut t = Terminal::init(Global, term_opts(10, 3)).unwrap();
+        let mut t = Terminal::init(Global.into(), term_opts(10, 3)).unwrap();
         t.width_px = r.grid_metrics.cell_width * 10;
         t.height_px = r.grid_metrics.cell_height * 3;
         {
@@ -6246,7 +6247,7 @@ mod tests {
         }
 
         // Frame 1: transmit + place + upload.
-        r.terminal_state.update(Global, &mut t).unwrap();
+        r.terminal_state.update(Global.into(), &mut t).unwrap();
         {
             let st = kitty_state(&mut mutex, &mut t);
             r.update_frame(&st, true).unwrap();
@@ -6269,7 +6270,7 @@ mod tests {
             s.next_slice(b"\x1b_Ga=d,d=A\x1b\\");
             s.deinit();
         }
-        r.terminal_state.update(Global, &mut t).unwrap();
+        r.terminal_state.update(Global.into(), &mut t).unwrap();
         {
             let st = kitty_state(&mut mutex, &mut t);
             r.update_frame(&st, true).unwrap();
@@ -6296,7 +6297,7 @@ mod tests {
         );
 
         r.deinit();
-        t.deinit(Global);
+        t.deinit(Global.into());
     }
 
     // Shared driver for the custom-shader goldens (F-013): write the given shadertoy
@@ -6338,7 +6339,7 @@ mod tests {
         // Drive one frame: "Ab" on 10×3 ⇒ block cursor at grid (2,0) (the T10/T11
         // fixture), visible glyphs + a red cursor cell.
         let mut mutex = Mutex::new();
-        let mut t = Terminal::init(Global, term_opts(10, 3)).unwrap();
+        let mut t = Terminal::init(Global.into(), term_opts(10, 3)).unwrap();
         {
             let mut s = t.vt_stream();
             s.next_slice(b"Ab");
@@ -6432,7 +6433,7 @@ mod tests {
         );
 
         r.deinit();
-        t.deinit(Global);
+        t.deinit(Global.into());
     }
 
     /// F-013 golden 2/2, the BEHAVIORAL proof the post-process pass actually
@@ -6480,7 +6481,7 @@ mod tests {
         );
 
         r.deinit();
-        t.deinit(Global);
+        t.deinit(Global.into());
     }
 
     // ===================================================================
@@ -6565,7 +6566,7 @@ mod tests {
             // An (empty) terminal drives update_frame/draw_frame (as the cursor
             // golden does); the bg-image step does not depend on cell content.
             let mut mutex = Mutex::new();
-            let mut t = Terminal::init(Global, term_opts(10, 3)).unwrap();
+            let mut t = Terminal::init(Global.into(), term_opts(10, 3)).unwrap();
             {
                 let st = kitty_state(&mut mutex, &mut t);
                 r.update_frame(&st, true).unwrap();
@@ -6592,7 +6593,7 @@ mod tests {
             // Y-FLIP: `glReadPixels` is bottom-up (see `golden_renders_cursor_fg_bg`).
             let out = px_at(&px, w, 5 * cw + cw / 2, h - 1 - (2 * ch + ch / 2));
             r.deinit();
-            t.deinit(Global);
+            t.deinit(Global.into());
             Some(out)
         }
 
@@ -6714,7 +6715,7 @@ mod tests {
 
         // The frame's `upload_background_image` frees it.
         let mut mutex = Mutex::new();
-        let mut t = Terminal::init(Global, term_opts(10, 3)).unwrap();
+        let mut t = Terminal::init(Global.into(), term_opts(10, 3)).unwrap();
         {
             let st = kitty_state(&mut mutex, &mut t);
             r.update_frame(&st, true).unwrap();
@@ -6727,7 +6728,7 @@ mod tests {
 
         let _ = std::fs::remove_file(&path);
         r.deinit();
-        t.deinit(Global);
+        t.deinit(Global.into());
     }
 
     /// F-012 — `change_config`'s `bg_image_changed` branch (oracle
@@ -6772,7 +6773,7 @@ mod tests {
         // yields `Replace{texture, pending}`; on an untextured one it is just
         // `Pending` again, which would make this test vacuous).
         let mut mutex = Mutex::new();
-        let mut t = Terminal::init(Global, term_opts(10, 3)).unwrap();
+        let mut t = Terminal::init(Global.into(), term_opts(10, 3)).unwrap();
         {
             let st = kitty_state(&mut mutex, &mut t);
             r.update_frame(&st, true).unwrap();
@@ -6812,7 +6813,7 @@ mod tests {
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(&path2);
         r.deinit();
-        t.deinit(Global);
+        t.deinit(Global.into());
     }
 
     /// F-012 — the wuffs-error → `Error::ImageDecode` mapping the `?` in
@@ -6874,7 +6875,7 @@ mod tests {
         };
 
         let mut mutex = Mutex::new();
-        let mut t = Terminal::init(Global, term_opts(10, 3)).unwrap();
+        let mut t = Terminal::init(Global.into(), term_opts(10, 3)).unwrap();
         {
             // OSC 133;A marks row 0 as a shell PROMPT — the row state
             // `Overlay::highlight_semantic_prompts` looks for. It draws a
@@ -6987,7 +6988,7 @@ mod tests {
         );
 
         r.deinit();
-        t.deinit(Global);
+        t.deinit(Global.into());
     }
 
     /// F-020 — the direct `rebuild_overlay` lifecycle, twin of `macos_impl::tests::

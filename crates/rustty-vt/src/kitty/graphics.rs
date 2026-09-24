@@ -91,7 +91,7 @@ mod tests {
         // over the aggregator's `execute` member.
         let _ = super::execute
             as fn(
-                allocator_api2::alloc::Global,
+                crate::alloc::Global,
                 &mut crate::terminal::Terminal,
                 &super::Command,
             ) -> Option<super::Response>;

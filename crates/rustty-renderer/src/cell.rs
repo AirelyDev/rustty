@@ -437,7 +437,7 @@ fn is_powerline(char: u21) -> bool {
 mod tests {
     use super::*;
     use crate::shaders::{Atlas, CellTextBools};
-    use allocator_api2::alloc::Global;
+    use rustty_vt::alloc::Global;
     use rustty_vt::kitty;
     use rustty_vt::modes::{self as modespkg};
     use rustty_vt::render::RenderState;

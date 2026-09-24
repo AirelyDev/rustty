@@ -15,9 +15,10 @@
 use core::mem::ManuallyDrop;
 
 use super::{
-    CreatePage, Key, Limits, List, MemoryPool, Node, Options, OutOfMemory, PageList, Pin, PinSet,
-    Viewport, PAGE_PREHEAT,
+    page_backing_alloc, CreatePage, Key, Limits, List, MemoryPool, Node, Options, OutOfMemory,
+    PageList, Pin, PinSet, Viewport, PAGE_PREHEAT,
 };
+use crate::alloc::Allocator;
 use crate::page::{Capacity, Page};
 use rustty_render_types::term_size as size;
 
@@ -276,13 +277,16 @@ impl Builder {
     /// of the PageList and some validation is done on the finish call
     /// to ensure you built up a proper PageList according to those options.
     //
-    // PORT NOTE: the reference takes `alloc: Allocator`; as everywhere in this
-    // module, the Rust pools are backed by the global/page allocators selected
-    // inside `MemoryPool::init` (R1 additive glue boundary), so no allocator
-    // parameter is threaded through.
-    pub fn init(options: Options) -> Result<Builder, OutOfMemory> {
+    // PORT NOTE: the reference takes `alloc: Allocator`, and so does the port
+    // (parity tail S7-2, N264); it reaches `MemoryPool.alloc`.
+    pub fn init(alloc: Allocator, options: Options) -> Result<Builder, OutOfMemory> {
         Ok(Builder {
-            pool: ManuallyDrop::new(MemoryPool::init(PAGE_PREHEAT)?),
+            // .pool = try MemoryPool.init(
+            //     alloc,
+            //     pageAllocator(alloc),
+            //     page_preheat,
+            // ),
+            pool: ManuallyDrop::new(MemoryPool::init(alloc, page_backing_alloc(), PAGE_PREHEAT)?),
             pages: List::default(),
             page_serial: 0,
             page_size: 0,

@@ -178,7 +178,7 @@ impl TestSurface {
 
         // The terminal (80x24) that lives inside the Termio.
         let terminal = rustty_vt::terminal::Terminal::init(
-            Allocator,
+            Allocator.into(),
             rustty_vt::terminal::Options {
                 cols: 80,
                 rows: 24,
@@ -458,7 +458,7 @@ impl Drop for TestSurface {
     fn drop(&mut self) {
         unsafe {
             let sp = self.surface;
-            (*sp).io.terminal.deinit(Allocator);
+            (*sp).io.terminal.deinit(Allocator.into());
             (*sp).renderer_thread.wakeup.deinit();
             (*sp).io.renderer_wakeup.deinit();
             drop(Box::from_raw(self.mutex));

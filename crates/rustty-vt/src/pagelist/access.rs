@@ -22,7 +22,8 @@
 
 use super::iter::{CellIterator, Direction, Limit, PageIterator, PromptIterator, RowIterator};
 use super::OutOfMemory;
-use super::{List, MemoryPool, Node, PageList, Pin, PinSet};
+use super::{page_backing_alloc, List, MemoryPool, Node, PageList, Pin, PinSet};
+use crate::alloc::Allocator;
 use crate::highlight;
 use crate::page as pagepkg;
 use crate::page::{CloneFromError, Page, Row};
@@ -813,12 +814,11 @@ impl PageList {
     /// rows will be added to the bottom of the region to make up the difference.
     //
     // PORT NOTE: the reference `clone(self, alloc, opts)` takes an `Allocator`
-    // for the node/pin pools; per the crate convention all pools are backed by
-    // the Rust system allocator, so no allocator parameter is threaded through
-    // (see `init`). `opts.tracked_pins` is taken by value (the remap map is
+    // for the node/pin pools; so does the port (parity tail S7-2, N264; see
+    // `init`). `opts.tracked_pins` is taken by value (the remap map is
     // populated and ownership passes back via the returned `Clone`-less map);
     // because the reference threads a `*TrackedPinsRemap` we accept `&mut`.
-    pub fn clone(&self, opts: &mut Clone) -> Result<PageList, CloneError> {
+    pub fn clone(&self, alloc: Allocator, opts: &mut Clone) -> Result<PageList, CloneError> {
         let mut it = self.page_iterator(Direction::RightDown, opts.top, opts.bot);
 
         // First, count our pages so our preheat is exactly what we need.
@@ -839,7 +839,12 @@ impl PageList {
         };
 
         // Setup our pool
-        let mut pool: MemoryPool = MemoryPool::init(page_count)?;
+        // var pool: MemoryPool = try .init(
+        //     alloc,
+        //     pageAllocator(alloc),
+        //     page_count,
+        // );
+        let mut pool: MemoryPool = MemoryPool::init(alloc, page_backing_alloc(), page_count)?;
         // errdefer pool.deinit();
 
         // Create our viewport. In a clone, the viewport always goes

@@ -643,8 +643,8 @@ pub enum Adjustment {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::alloc::Allocator;
     use crate::screen::Options;
-    use allocator_api2::alloc::Global as Allocator;
 
     // PORT NOTE: helper for `Screen.init(testing.allocator, .{ .cols, .rows,
     // .max_scrollback_bytes })`. The reference struct-literal sets only those three

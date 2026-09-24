@@ -48,9 +48,9 @@ use crate::selection::Selection;
 use crate::size;
 use crate::terminal::Terminal;
 
-// PORT NOTE: the reference allocator maps to `allocator_api2::alloc::Global`
+// PORT NOTE: the reference allocator maps to `crate::alloc::Global`
 // (the crate's allocator seam).
-use allocator_api2::alloc::Global as Allocator;
+use crate::alloc::Allocator;
 
 // PORT NOTE: the reference writer is `*std.Io.Writer` (a byte sink). Per the
 // Screen-SCC plan seam, this ports to `&mut dyn std::io::Write`.
@@ -2784,8 +2784,8 @@ mod tests {
     #![allow(clippy::needless_range_loop)]
 
     use super::*;
+    use crate::alloc::Global;
     use crate::terminal::{Colors, Options as TermOptions, Terminal};
-    use allocator_api2::alloc::Global;
 
     // PORT NOTE: the reference tests call `Terminal.init(alloc, .{ .cols, .rows })`
     // relying on `Options` field defaults. Rust `Options` has no field defaults,

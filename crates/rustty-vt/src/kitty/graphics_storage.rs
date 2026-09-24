@@ -24,6 +24,7 @@
 // `terminal.Screen`/`terminal.Terminal` are `crate::screen::Screen` /
 // `crate::terminal::Terminal`; `PageList.Pin` is `crate::pagelist::Pin`; the
 // `command`/`Image`/`LoadingImage`/`Rect` come from the sibling kitty modules.
+use crate::alloc::Allocator;
 use crate::kitty::graphics_animation as animation;
 use crate::kitty::graphics_command as command;
 use crate::kitty::graphics_image;
@@ -34,7 +35,6 @@ use crate::point;
 use crate::screen::Screen;
 use crate::size;
 use crate::terminal::Terminal;
-use allocator_api2::alloc::Global as Allocator;
 use rustty_util::quirks::inlineAssert as assert;
 use std::collections::HashMap;
 
@@ -2954,7 +2954,7 @@ mod tests {
     // test "storage: add placement with zero placement id"
     #[test]
     fn add_placement_with_zero_placement_id() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(100, 100)).unwrap();
         t.width_px = 100;
         t.height_px = 100;
@@ -3039,7 +3039,7 @@ mod tests {
     // survives.)
     #[test]
     fn delete_all_visible_placements_and_matching_images() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(3, 3)).unwrap();
         let tracked = unsafe { &(*t.screens.active).pages }.count_tracked_pins();
 
@@ -3110,7 +3110,7 @@ mod tests {
     // test "storage: delete all placements and images preserves limit"
     #[test]
     fn delete_all_placements_and_images_preserves_limit() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(3, 3)).unwrap();
         let tracked = unsafe { &(*t.screens.active).pages }.count_tracked_pins();
 
@@ -3183,7 +3183,7 @@ mod tests {
     // test "storage: delete all placements"
     #[test]
     fn delete_all_placements() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(3, 3)).unwrap();
         let tracked = unsafe { &(*t.screens.active).pages }.count_tracked_pins();
 
@@ -3253,7 +3253,7 @@ mod tests {
     // test "storage: delete all placements by image id"
     #[test]
     fn delete_all_placements_by_image_id() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(3, 3)).unwrap();
         let tracked = unsafe { &(*t.screens.active).pages }.count_tracked_pins();
 
@@ -3331,7 +3331,7 @@ mod tests {
     // test "storage: delete all placements by image id and unused images"
     #[test]
     fn delete_all_placements_by_image_id_and_unused_images() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(3, 3)).unwrap();
         let tracked = unsafe { &(*t.screens.active).pages }.count_tracked_pins();
 
@@ -3409,7 +3409,7 @@ mod tests {
     // test "storage: delete placement by specific id"
     #[test]
     fn delete_placement_by_specific_id() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(3, 3)).unwrap();
         let tracked = unsafe { &(*t.screens.active).pages }.count_tracked_pins();
 
@@ -3497,7 +3497,7 @@ mod tests {
     // test "storage: delete intersecting cursor"
     #[test]
     fn delete_intersecting_cursor() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(100, 100)).unwrap();
         t.width_px = 100;
         t.height_px = 100;
@@ -3578,7 +3578,7 @@ mod tests {
     // test "storage: delete intersecting cursor plus unused"
     #[test]
     fn delete_intersecting_cursor_plus_unused() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(100, 100)).unwrap();
         t.width_px = 100;
         t.height_px = 100;
@@ -3659,7 +3659,7 @@ mod tests {
     // test "storage: delete intersecting cursor hits multiple"
     #[test]
     fn delete_intersecting_cursor_hits_multiple() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(100, 100)).unwrap();
         t.width_px = 100;
         t.height_px = 100;
@@ -3728,7 +3728,7 @@ mod tests {
     // test "storage: delete by column"
     #[test]
     fn delete_by_column() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(100, 100)).unwrap();
         t.width_px = 100;
         t.height_px = 100;
@@ -3814,7 +3814,7 @@ mod tests {
     // test "storage: delete by column 1x1"
     #[test]
     fn delete_by_column_1x1() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(100, 100)).unwrap();
         t.width_px = 100;
         t.height_px = 100;
@@ -3902,7 +3902,7 @@ mod tests {
     // test "storage: delete by row"
     #[test]
     fn delete_by_row() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(100, 100)).unwrap();
         t.width_px = 100;
         t.height_px = 100;
@@ -3988,7 +3988,7 @@ mod tests {
     // test "storage: delete by row 1x1"
     #[test]
     fn delete_by_row_1x1() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(100, 100)).unwrap();
         t.width_px = 100;
         t.height_px = 100;
@@ -4079,7 +4079,7 @@ mod tests {
     // rejects a literal 0.
     #[test]
     fn delete_column_zero_logs_and_is_a_no_op() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(3, 3)).unwrap();
         let mut s: ImageStorage = ImageStorage::default();
 
@@ -4113,7 +4113,7 @@ mod tests {
     // graphics_storage.zig:1691) — both interpolated values are asserted.
     #[test]
     fn eviction_logs_the_evicted_image_id_and_size() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(3, 3)).unwrap();
 
         let mut s: ImageStorage = ImageStorage {
@@ -4156,7 +4156,7 @@ mod tests {
     // test "storage: delete images by range 1"
     #[test]
     fn delete_images_by_range_1() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(3, 3)).unwrap();
         let tracked = unsafe { &(*t.screens.active).pages }.count_tracked_pins();
 
@@ -4236,7 +4236,7 @@ mod tests {
     // test "storage: delete images by range 2"
     #[test]
     fn delete_images_by_range_2() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(3, 3)).unwrap();
         let tracked = unsafe { &(*t.screens.active).pages }.count_tracked_pins();
 
@@ -4316,7 +4316,7 @@ mod tests {
     // test "storage: delete images by range 3"
     #[test]
     fn delete_images_by_range_3() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(3, 3)).unwrap();
         let tracked = unsafe { &(*t.screens.active).pages }.count_tracked_pins();
 
@@ -4426,7 +4426,7 @@ mod tests {
     // test "storage: delete images by range 4"
     #[test]
     fn delete_images_by_range_4() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(3, 3)).unwrap();
         let tracked = unsafe { &(*t.screens.active).pages }.count_tracked_pins();
 
@@ -4536,7 +4536,7 @@ mod tests {
     // test "storage: aspect ratio calculation when only columns or rows specified"
     #[test]
     fn aspect_ratio_calculation_when_only_columns_or_rows_specified() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
 
         let mut t = Terminal::init(alloc, opts(100, 100)).unwrap();
         t.width_px = 1000; // 10 px per col
@@ -4596,7 +4596,7 @@ mod tests {
     // test "storage: generation stamps on image add and replace"
     #[test]
     fn storage_generation_stamps_on_image_add_and_replace() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(3, 3)).unwrap();
 
         let mut s: ImageStorage = ImageStorage::default();
@@ -4665,7 +4665,7 @@ mod tests {
     // test "storage: generation bumps on placement and delete"
     #[test]
     fn storage_generation_bumps_on_placement_and_delete() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(3, 3)).unwrap();
 
         let mut s: ImageStorage = ImageStorage::default();
@@ -4707,7 +4707,7 @@ mod tests {
     // test "storage: generation bumps when setLimit evicts or disables"
     #[test]
     fn storage_generation_bumps_when_set_limit_evicts_or_disables() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(3, 3)).unwrap();
 
         let mut s: ImageStorage = ImageStorage::default();
@@ -4747,7 +4747,7 @@ mod tests {
     // test "storage: imageByNumber returns most recently transmitted"
     #[test]
     fn storage_image_by_number_returns_most_recently_transmitted() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(3, 3)).unwrap();
 
         let mut s: ImageStorage = ImageStorage::default();
@@ -4805,7 +4805,7 @@ mod tests {
     // test "storage: no-op delete does not mark a mutation"
     #[test]
     fn storage_no_op_delete_does_not_mark_a_mutation() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(3, 3)).unwrap();
 
         let mut s: ImageStorage = ImageStorage::default();
@@ -4870,7 +4870,7 @@ mod tests {
     // (supersedes a65e11cc9's "storage: evict unused transient image")
     #[test]
     fn storage_evicts_images_in_priority_order() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(3, 3)).unwrap();
 
         let mut s: ImageStorage = ImageStorage {
@@ -4960,7 +4960,7 @@ mod tests {
     /// with the two terms swapped — and every other test would still pass.
     #[test]
     fn storage_eviction_order_is_transient_then_unused() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(3, 3)).unwrap();
 
         // Four images, one per block. IDs are assigned so that ID order is the
@@ -5034,7 +5034,7 @@ mod tests {
     // test "storage: replacing placement releases tracked pin"
     #[test]
     fn storage_replacing_placement_releases_tracked_pin() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(3, 3)).unwrap();
 
         let mut s: ImageStorage = ImageStorage::default();
@@ -5102,7 +5102,7 @@ mod tests {
     // test "storage: adding placement reclaims garbage placements"
     #[test]
     fn storage_adding_placement_reclaims_garbage_placements() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(3, 3)).unwrap();
 
         let mut s: ImageStorage = ImageStorage::default();
@@ -5168,7 +5168,7 @@ mod tests {
     // test "storage: placement count limit permits replacement"
     #[test]
     fn storage_placement_count_limit_permits_replacement() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(3, 3)).unwrap();
 
         let mut s: ImageStorage = ImageStorage::default();
@@ -5221,7 +5221,7 @@ mod tests {
     // test "storage: delete intersecting cursor checks interior row column"
     #[test]
     fn storage_delete_intersecting_cursor_checks_interior_row_column() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(100, 100)).unwrap();
         t.width_px = 100;
         t.height_px = 100;
@@ -5283,7 +5283,7 @@ mod tests {
     // test "storage: delete intersecting cell checks interior row column"
     #[test]
     fn storage_delete_intersecting_cell_checks_interior_row_column() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(100, 100)).unwrap();
         t.width_px = 100;
         t.height_px = 100;
@@ -5351,7 +5351,7 @@ mod tests {
     // test "storage: placement geometry handles untrusted dimensions"
     #[test]
     fn storage_placement_geometry_handles_untrusted_dimensions() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let max = u32::MAX;
 
         let mut t = Terminal::init(alloc, opts(2, 2)).unwrap();
@@ -5470,7 +5470,7 @@ mod tests {
     // test "storage: eviction releases placement pins"
     #[test]
     fn storage_eviction_releases_placement_pins() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(3, 3)).unwrap();
 
         let mut s: ImageStorage = ImageStorage {
@@ -5559,7 +5559,7 @@ mod tests {
     // test "storage: pending image completes once and preserves age"
     #[test]
     fn storage_pending_image_completes_once_and_preserves_age() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(3, 3)).unwrap();
 
         let mut s: ImageStorage = ImageStorage {
@@ -5629,7 +5629,7 @@ mod tests {
     // test "storage: stale pending completion loses to delete replacement and eviction"
     #[test]
     fn storage_stale_pending_completion_loses_to_delete_replacement_and_eviction() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(3, 3)).unwrap();
 
         let mut s: ImageStorage = ImageStorage {
@@ -5722,7 +5722,7 @@ mod tests {
     // test "storage: replacement reuses pending reservation and removes placements"
     #[test]
     fn storage_replacement_reuses_pending_reservation_and_removes_placements() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(3, 3)).unwrap();
 
         let mut s: ImageStorage = ImageStorage {
@@ -5830,7 +5830,7 @@ mod tests {
     // test "storage: pending images share exact eviction ordering"
     #[test]
     fn storage_pending_images_share_exact_eviction_ordering() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(3, 3)).unwrap();
 
         let mut s: ImageStorage = ImageStorage {
@@ -5906,7 +5906,7 @@ mod tests {
     // test "storage: delete all visible placements preserves scrollback"
     #[test]
     fn delete_all_visible_placements_preserves_scrollback() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(
             alloc,
             crate::terminal::Options {
@@ -5983,7 +5983,7 @@ mod tests {
     // test "storage: delete all includes placements spanning into active area"
     #[test]
     fn delete_all_includes_placements_spanning_into_active_area() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(
             alloc,
             crate::terminal::Options {
@@ -6054,7 +6054,7 @@ mod tests {
     // test "storage: uppercase id delete preserves image when placement does not match"
     #[test]
     fn storage_uppercase_id_delete_preserves_image_when_placement_does_not_match() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(3, 3)).unwrap();
 
         let mut s: ImageStorage = ImageStorage::default();
@@ -6091,7 +6091,7 @@ mod tests {
     // test "storage: uppercase id delete frees image after placement matches"
     #[test]
     fn storage_uppercase_id_delete_frees_image_after_placement_matches() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(3, 3)).unwrap();
         let tracked = unsafe { &(*t.screens.active).pages }.count_tracked_pins();
 
@@ -6142,7 +6142,7 @@ mod tests {
     // test "storage: uppercase id delete without placement frees unplaced image"
     #[test]
     fn storage_uppercase_id_delete_without_placement_frees_unplaced_image() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(3, 3)).unwrap();
 
         let mut s: ImageStorage = ImageStorage::default();
@@ -6177,7 +6177,7 @@ mod tests {
     // test "storage: uppercase range deletes unplaced image data"
     #[test]
     fn storage_uppercase_range_deletes_unplaced_image_data() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(3, 3)).unwrap();
 
         let mut s: ImageStorage = ImageStorage::default();
@@ -6231,7 +6231,7 @@ mod tests {
     fn delete_images_by_empty_range() {
         // Ranges that select nothing are a silent no-op, matching kitty, which
         // performs no validation and filters with `x <= image_id <= y`.
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(3, 3)).unwrap();
         let tracked = unsafe { &(*t.screens.active).pages }.count_tracked_pins();
 
@@ -6327,7 +6327,7 @@ mod tests {
     // test "storage: erase display preserves scrollback and reclaims unplaced images"
     #[test]
     fn storage_erase_display_preserves_scrollback_and_reclaims_unplaced_images() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(
             alloc,
             crate::terminal::Options {
@@ -6442,7 +6442,7 @@ mod tests {
     // test "storage: cell offsets stay within explicit destination rectangle"
     #[test]
     fn storage_cell_offsets_stay_within_explicit_destination_rectangle() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
         t.width_px = 50; // 10 px per col
@@ -6474,7 +6474,7 @@ mod tests {
     // test "storage: cell offsets clamp to cell bounds"
     #[test]
     fn storage_cell_offsets_clamp_to_cell_bounds() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
         t.width_px = 50; // 10 px per col
@@ -6507,7 +6507,7 @@ mod tests {
     // test "storage: default source rectangle is intersected before sizing"
     #[test]
     fn storage_default_source_rectangle_is_intersected_before_sizing() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
 
@@ -6533,7 +6533,7 @@ mod tests {
     // test "storage: explicit source rectangle is intersected before sizing"
     #[test]
     fn storage_explicit_source_rectangle_is_intersected_before_sizing() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
 
         let mut t = Terminal::init(alloc, opts(10, 10)).unwrap();
         t.width_px = 100;
@@ -6567,7 +6567,7 @@ mod tests {
     // test "storage: nextImageId number matches Kitty get_free_client_id"
     #[test]
     fn storage_next_image_id_number_matches_kitty_get_free_client_id() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(3, 3)).unwrap();
 
         let mut s: ImageStorage = ImageStorage::default();
@@ -6645,7 +6645,7 @@ mod tests {
     // test "storage: nextImageId implicit skips in-use ids and zero"
     #[test]
     fn storage_next_image_id_implicit_skips_in_use_ids_and_zero() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(3, 3)).unwrap();
 
         let mut s: ImageStorage = ImageStorage::default();
@@ -6690,7 +6690,7 @@ mod tests {
     // test "storage: resolveChain accumulates offsets to the pin root"
     #[test]
     fn storage_resolve_chain_accumulates_offsets_to_the_pin_root() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
 
         let mut s: ImageStorage = ImageStorage::default();
@@ -6783,7 +6783,7 @@ mod tests {
     // test "storage: resolveChain finds virtual roots"
     #[test]
     fn storage_resolve_chain_finds_virtual_roots() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
 
         let mut s: ImageStorage = ImageStorage::default();
@@ -6856,7 +6856,7 @@ mod tests {
     // test "storage: eviction removes orphaned relative placements"
     #[test]
     fn storage_eviction_removes_orphaned_relative_placements() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
 
         let mut s: ImageStorage = ImageStorage::default();
@@ -6941,7 +6941,7 @@ mod tests {
     // test "storage: placeholderTarget lookup"
     #[test]
     fn storage_placeholder_target_lookup() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
 
         let mut s: ImageStorage = ImageStorage::default();
@@ -7069,7 +7069,7 @@ mod tests {
     // test "storage: scroll margins placement inside region scrolls and clips at top"
     #[test]
     fn scroll_margins_placement_inside_region_scrolls_and_clips_at_top() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(10, 6)).unwrap();
         t.width_px = 100;
         t.height_px = 60;
@@ -7145,7 +7145,7 @@ mod tests {
     #[test]
     fn scroll_margins_restores_append_failure_is_logged_and_skipped() {
         use rustty_util::tripwire::ResetMode;
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(10, 6)).unwrap();
         t.width_px = 100;
         t.height_px = 60;
@@ -7213,7 +7213,7 @@ mod tests {
     // test "storage: scroll margins placement straddling region does not move"
     #[test]
     fn scroll_margins_placement_straddling_region_does_not_move() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(10, 6)).unwrap();
         t.width_px = 100;
         t.height_px = 60;
@@ -7264,7 +7264,7 @@ mod tests {
     // test "storage: scroll margins placement below region does not move"
     #[test]
     fn scroll_margins_placement_below_region_does_not_move() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(10, 6)).unwrap();
         t.width_px = 100;
         t.height_px = 60;
@@ -7312,7 +7312,7 @@ mod tests {
     // test "storage: scroll margins reverse index clips at bottom"
     #[test]
     fn scroll_margins_reverse_index_clips_at_bottom() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(10, 6)).unwrap();
         t.width_px = 100;
         t.height_px = 60;
@@ -7373,7 +7373,7 @@ mod tests {
     // test "storage: scroll margins scaled placement clips proportionally"
     #[test]
     fn scroll_margins_scaled_placement_clips_proportionally() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(10, 6)).unwrap();
         t.width_px = 100;
         t.height_px = 60;
@@ -7428,7 +7428,7 @@ mod tests {
     // test "storage: scroll margins left/right margins respect columns"
     #[test]
     fn scroll_margins_left_right_margins_respect_columns() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(10, 6)).unwrap();
         t.width_px = 100;
         t.height_px = 60;
@@ -7494,7 +7494,7 @@ mod tests {
     // test "storage: scroll margins insert/delete lines do not move placements"
     #[test]
     fn scroll_margins_insert_delete_lines_do_not_move_placements() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(10, 6)).unwrap();
         t.width_px = 100;
         t.height_px = 60;
@@ -7546,7 +7546,7 @@ mod tests {
     // test "storage: scroll without margins moves placement into scrollback"
     #[test]
     fn scroll_without_margins_moves_placement_into_scrollback() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(10, 6)).unwrap();
         t.width_px = 100;
         t.height_px = 60;
@@ -7616,7 +7616,7 @@ mod tests {
     // test "storage: scroll margins large scroll deletes inside placement"
     #[test]
     fn scroll_margins_large_scroll_deletes_inside_placement() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(10, 6)).unwrap();
         t.width_px = 100;
         t.height_px = 60;
@@ -7662,7 +7662,7 @@ mod tests {
     // test "storage: scroll margins straddling placement pin inside region restored"
     #[test]
     fn scroll_margins_straddling_placement_pin_inside_region_restored() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(10, 6)).unwrap();
         t.width_px = 100;
         t.height_px = 60;
@@ -7713,7 +7713,7 @@ mod tests {
     // test "storage: scroll margins multi-line scroll up with scrollback"
     #[test]
     fn scroll_margins_multi_line_scroll_up_with_scrollback() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(10, 6)).unwrap();
         t.width_px = 100;
         t.height_px = 60;
@@ -7773,7 +7773,7 @@ mod tests {
     fn animation_tick_advances_and_schedules() {
         use crate::kitty::graphics_animation::{Animation, Frame, State};
 
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(10, 10)).unwrap();
         t.width_px = 100;
         t.height_px = 100;
@@ -7876,7 +7876,7 @@ mod tests {
     fn animation_tick_loading_state_parks_on_last_frame() {
         use crate::kitty::graphics_animation::{Animation, Frame, State};
 
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(10, 10)).unwrap();
         t.width_px = 100;
         t.height_px = 100;
@@ -7972,7 +7972,7 @@ mod tests {
     fn animation_tick_exhausts_loop_budget() {
         use crate::kitty::graphics_animation::{Animation, Frame, State};
 
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(10, 10)).unwrap();
         t.width_px = 100;
         t.height_px = 100;
@@ -8063,7 +8063,7 @@ mod tests {
     fn animation_tick_ignores_ineligible_animations() {
         use crate::kitty::graphics_animation::{Animation, Frame, State};
 
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(10, 10)).unwrap();
         t.width_px = 100;
         t.height_px = 100;
@@ -8133,7 +8133,7 @@ mod tests {
     fn animation_tick_re_anchors_a_restarted_clock() {
         use crate::kitty::graphics_animation::{Animation, Frame, State};
 
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(10, 10)).unwrap();
         t.width_px = 100;
         t.height_px = 100;

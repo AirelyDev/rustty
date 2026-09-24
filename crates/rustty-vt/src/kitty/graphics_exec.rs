@@ -16,6 +16,7 @@
 // const LoadingImage = image.LoadingImage;
 // const Image = image.Image;
 // const ImageStorage = @import("graphics_storage.zig").ImageStorage;
+use crate::alloc::Allocator;
 use crate::kitty::graphics_animation as animation;
 use crate::kitty::graphics_command as command;
 use crate::kitty::graphics_command::{Command, Response};
@@ -24,7 +25,6 @@ use crate::kitty::graphics_image::{FrameContext, Image, LoadingImage};
 use crate::kitty::graphics_pixel as pixel;
 use crate::kitty::graphics_storage::{Location, Placement};
 use crate::terminal::Terminal;
-use allocator_api2::alloc::Global as Allocator;
 use rustty_util::quirks::inlineAssert as assert;
 
 // const log = std.log.scoped(.kitty_gfx);
@@ -1683,7 +1683,7 @@ mod tests {
     // test "kittygfx more chunks with q=1"
     #[test]
     fn kittygfx_more_chunks_with_q_1() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
 
@@ -1709,7 +1709,7 @@ mod tests {
     // test "kittygfx more chunks with q=0"
     #[test]
     fn kittygfx_more_chunks_with_q_0() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
 
@@ -1735,7 +1735,7 @@ mod tests {
     // test "kittygfx more chunks with chunk increasing q"
     #[test]
     fn kittygfx_more_chunks_with_chunk_increasing_q() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
 
@@ -1761,7 +1761,7 @@ mod tests {
     // test "kittygfx default format is rgba"
     #[test]
     fn kittygfx_default_format_is_rgba() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
 
@@ -1780,7 +1780,7 @@ mod tests {
     // test "kittygfx test valid u32 (expect invalid image ID)"
     #[test]
     fn kittygfx_test_valid_u32_expect_invalid_image_id() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
 
@@ -1795,7 +1795,7 @@ mod tests {
     // test "kittygfx test valid i32 (expect invalid image ID)"
     #[test]
     fn kittygfx_test_valid_i32_expect_invalid_image_id() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
 
@@ -1810,7 +1810,7 @@ mod tests {
     // test "kittygfx no response with no image ID or number"
     #[test]
     fn kittygfx_no_response_with_no_image_id_or_number() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
 
@@ -1828,7 +1828,7 @@ mod tests {
     // test "kittygfx no response with no image ID or number load and display"
     #[test]
     fn kittygfx_no_response_with_no_image_id_or_number_load_and_display() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
 
@@ -1846,7 +1846,7 @@ mod tests {
     // test "kittygfx retransmit same id gets fresh image generation"
     #[test]
     fn kittygfx_retransmit_same_id_gets_fresh_image_generation() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
 
@@ -1880,7 +1880,7 @@ mod tests {
     // test "kittygfx retransmit same id removes existing placements"
     #[test]
     fn kittygfx_retransmit_same_id_removes_existing_placements() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
         let tracked = unsafe { &(*t.screens.active).pages }.count_tracked_pins();
@@ -1957,7 +1957,7 @@ mod tests {
     // test "kittygfx delete then retransmit same id gets fresh generation"
     #[test]
     fn kittygfx_delete_then_retransmit_same_id_gets_fresh_generation() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
 
@@ -2004,7 +2004,7 @@ mod tests {
     // test "kittygfx placement bounds cursor movement for untrusted dimensions"
     #[test]
     fn kittygfx_placement_bounds_cursor_movement_for_untrusted_dimensions() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
 
@@ -2033,7 +2033,7 @@ mod tests {
     // test "kittygfx query validates image data"
     #[test]
     fn kittygfx_query_validates_image_data() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
 
         let mut terminal = Terminal::init(alloc, opts(5, 5)).unwrap();
 
@@ -2067,7 +2067,7 @@ mod tests {
     // test "kittygfx valid query does not replace or store image"
     #[test]
     fn kittygfx_valid_query_does_not_replace_or_store_image() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
 
         let mut terminal = Terminal::init(alloc, opts(5, 5)).unwrap();
 
@@ -2108,7 +2108,7 @@ mod tests {
     // test "kittygfx image id and number are mutually exclusive for every action"
     #[test]
     fn kittygfx_image_id_and_number_are_mutually_exclusive_for_every_action() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
 
@@ -2162,7 +2162,7 @@ mod tests {
     // test "kittygfx conflicting identifiers are rejected before mutation"
     #[test]
     fn kittygfx_conflicting_identifiers_are_rejected_before_mutation() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
 
@@ -2241,7 +2241,7 @@ mod tests {
     // test "kittygfx chunked success response uses initial identifiers"
     #[test]
     fn kittygfx_chunked_success_response_uses_initial_identifiers() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
 
@@ -2270,7 +2270,7 @@ mod tests {
     // test "kittygfx chunked error response uses initial identifiers"
     #[test]
     fn kittygfx_chunked_error_response_uses_initial_identifiers() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
 
@@ -2295,7 +2295,7 @@ mod tests {
     // test "kittygfx delete aborts chunked image load"
     #[test]
     fn kittygfx_delete_aborts_chunked_image_load() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
 
@@ -2340,7 +2340,7 @@ mod tests {
     // test "kittygfx uppercase id delete preserves image when placement does not match"
     #[test]
     fn kittygfx_uppercase_id_delete_preserves_image_when_placement_does_not_match() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
 
@@ -2366,7 +2366,7 @@ mod tests {
     // test "kittygfx retransmit same id removes image on first chunk"
     #[test]
     fn kittygfx_retransmit_same_id_removes_image_on_first_chunk() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
         let tracked = unsafe { &(*t.screens.active).pages }.count_tracked_pins();
@@ -2420,7 +2420,7 @@ mod tests {
     // test "kittygfx display clamps cell offsets"
     #[test]
     fn kittygfx_display_clamps_cell_offsets() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
         t.width_px = 50; // 10 px per col
@@ -2448,7 +2448,7 @@ mod tests {
     // test "kittygfx placement moves cursor past a tall image"
     #[test]
     fn kittygfx_placement_moves_cursor_past_a_tall_image() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
 
@@ -2521,7 +2521,7 @@ mod tests {
     // test "kittygfx unknown format responds with EINVAL"
     #[test]
     fn kittygfx_unknown_format_responds_with_einval() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
 
@@ -2545,7 +2545,7 @@ mod tests {
     // test "kittygfx unknown format on query responds with EINVAL"
     #[test]
     fn kittygfx_unknown_format_on_query_responds_with_einval() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
 
@@ -2565,7 +2565,7 @@ mod tests {
     // test "kittygfx zero format is rgba"
     #[test]
     fn kittygfx_zero_format_is_rgba() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
 
@@ -2587,7 +2587,7 @@ mod tests {
     // test "kittygfx unknown format with q=3 has no response"
     #[test]
     fn kittygfx_unknown_format_with_q_3_has_no_response() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
 
@@ -2603,7 +2603,7 @@ mod tests {
     // test "kittygfx out of range display keys are tolerated"
     #[test]
     fn kittygfx_out_of_range_display_keys_are_tolerated() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
 
@@ -2627,7 +2627,7 @@ mod tests {
     // test "kittygfx number-based transmission assigns smallest free id"
     #[test]
     fn kittygfx_number_based_transmission_assigns_smallest_free_id() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
 
@@ -2676,7 +2676,7 @@ mod tests {
     // test "kittygfx number-based id assignment does not replace client image"
     #[test]
     fn kittygfx_number_based_id_assignment_does_not_replace_client_image() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
 
@@ -2717,7 +2717,7 @@ mod tests {
     // test "kittygfx implicit id assignment does not replace client image"
     #[test]
     fn kittygfx_implicit_id_assignment_does_not_replace_client_image() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
 
@@ -2764,7 +2764,7 @@ mod tests {
     // test "kittygfx relative placement with missing parent image"
     #[test]
     fn kittygfx_relative_placement_with_missing_parent_image() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
 
@@ -2802,7 +2802,7 @@ mod tests {
     // test "kittygfx relative placement with missing parent placement"
     #[test]
     fn kittygfx_relative_placement_with_missing_parent_placement() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
 
@@ -2853,7 +2853,7 @@ mod tests {
     // test "kittygfx relative placement cannot parent itself"
     #[test]
     fn kittygfx_relative_placement_cannot_parent_itself() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
 
@@ -2900,7 +2900,7 @@ mod tests {
     // test "kittygfx relative placement cycle"
     #[test]
     fn kittygfx_relative_placement_cycle() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
 
@@ -2946,7 +2946,7 @@ mod tests {
     // test "kittygfx relative placement chain depth limit"
     #[test]
     fn kittygfx_relative_placement_chain_depth_limit() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
 
@@ -2986,7 +2986,7 @@ mod tests {
     // test "kittygfx relative placement does not move cursor"
     #[test]
     fn kittygfx_relative_placement_does_not_move_cursor() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
 
@@ -3037,7 +3037,7 @@ mod tests {
     // test "kittygfx virtual placement with parent rejected before image lookup"
     #[test]
     fn kittygfx_virtual_placement_with_parent_rejected_before_image_lookup() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
 
@@ -3057,7 +3057,7 @@ mod tests {
     // test "kittygfx deleting a parent deletes relative placements transitively"
     #[test]
     fn kittygfx_deleting_a_parent_deletes_relative_placements_transitively() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
 
@@ -3116,7 +3116,7 @@ mod tests {
     // test "kittygfx retransmitting parent image deletes relative placements"
     #[test]
     fn kittygfx_retransmitting_parent_image_deletes_relative_placements() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
 
@@ -3158,7 +3158,7 @@ mod tests {
     // test "kittygfx relative placement parent fallback picks lowest external id"
     #[test]
     fn kittygfx_relative_placement_parent_fallback_picks_lowest_external_id() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
 
@@ -3208,7 +3208,7 @@ mod tests {
         // but PageList.reset marked it garbage. Placements copy the cursor
         // pin, so every placement created after a reset was born garbage
         // and silently swept by the next placement command.
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
 
         let mut t = Terminal::init(alloc, opts(80, 24)).unwrap();
 
@@ -3236,7 +3236,7 @@ mod tests {
     // test "kittygfx relative placement with pruned parent is ENOPARENT"
     #[test]
     fn kittygfx_relative_placement_with_pruned_parent_is_enoparent() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
 
@@ -3294,7 +3294,7 @@ mod tests {
     // test "kittygfx uppercase delete frees image of cascaded placements"
     #[test]
     fn kittygfx_uppercase_delete_frees_image_of_cascaded_placements() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
 
@@ -3330,7 +3330,7 @@ mod tests {
     // test "kittygfx animation: new frame with default gap responds with frame number"
     #[test]
     fn kittygfx_animation_new_frame_with_default_gap_responds_with_frame_number() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
         {
@@ -3375,7 +3375,7 @@ mod tests {
     // test "kittygfx animation: frame gap normalization on create"
     #[test]
     fn kittygfx_animation_frame_gap_normalization_on_create() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
         {
@@ -3407,7 +3407,7 @@ mod tests {
     // test "kittygfx animation: background fill and offset composition"
     #[test]
     fn kittygfx_animation_background_fill_and_offset_composition() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
 
@@ -3443,7 +3443,7 @@ mod tests {
     // test "kittygfx animation: create from base frame with overwrite"
     #[test]
     fn kittygfx_animation_create_from_base_frame_with_overwrite() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
         {
@@ -3476,7 +3476,7 @@ mod tests {
     // test "kittygfx animation: alpha blend composes over base frame"
     #[test]
     fn kittygfx_animation_alpha_blend_composes_over_base_frame() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
         {
@@ -3514,7 +3514,7 @@ mod tests {
     // test "kittygfx animation: edit root frame bumps generation"
     #[test]
     fn kittygfx_animation_edit_root_frame_bumps_generation() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
         {
@@ -3544,7 +3544,7 @@ mod tests {
     // test "kittygfx animation: edit frame gap without data change"
     #[test]
     fn kittygfx_animation_edit_frame_gap_without_data_change() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
         {
@@ -3594,7 +3594,7 @@ mod tests {
     // test "kittygfx animation: frame errors"
     #[test]
     fn kittygfx_animation_frame_errors() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
         {
@@ -3638,7 +3638,7 @@ mod tests {
     // test "kittygfx animation: excess frame data is truncated"
     #[test]
     fn kittygfx_animation_excess_frame_data_is_truncated() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
         {
@@ -3665,7 +3665,7 @@ mod tests {
     // test "kittygfx animation: chunked frame transmission"
     #[test]
     fn kittygfx_animation_chunked_frame_transmission() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
 
@@ -3715,7 +3715,7 @@ mod tests {
     // test "kittygfx animation: chunked frame continuation without a=f"
     #[test]
     fn kittygfx_animation_chunked_frame_continuation_without_a_f() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
 
@@ -3753,7 +3753,7 @@ mod tests {
     // test "kittygfx animation: control command sets gap current state and loops"
     #[test]
     fn kittygfx_animation_control_command_sets_gap_current_state_and_loops() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
         {
@@ -3794,7 +3794,7 @@ mod tests {
     // test "kittygfx animation: control command ignores invalid values"
     #[test]
     fn kittygfx_animation_control_command_ignores_invalid_values() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
         {
@@ -3823,7 +3823,7 @@ mod tests {
     // test "kittygfx animation: control command missing image responds ENOENT"
     #[test]
     fn kittygfx_animation_control_command_missing_image_responds_enoent() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
 
@@ -3841,7 +3841,7 @@ mod tests {
     // test "kittygfx animation: compose frames"
     #[test]
     fn kittygfx_animation_compose_frames() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
 
@@ -3905,7 +3905,7 @@ mod tests {
 
     #[test]
     fn kittygfx_animation_frame_rgba_conversion_oom_is_enomem() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
         {
             let cmd = command::Parser::parse_string(b"a=t,f=24,s=1,v=1,i=1;/wAA").unwrap();
@@ -3937,7 +3937,7 @@ mod tests {
 
     #[test]
     fn kittygfx_animation_compose_rgba_conversion_oom_is_enomem() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
         {
             let cmd = command::Parser::parse_string(b"a=t,f=24,s=2,v=1,i=1;/wAAAAD/").unwrap();
@@ -3959,7 +3959,7 @@ mod tests {
     // test "kittygfx animation: compose current frame bumps generation"
     #[test]
     fn kittygfx_animation_compose_current_frame_bumps_generation() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
 
@@ -3989,7 +3989,7 @@ mod tests {
     // test "kittygfx animation: compose errors"
     #[test]
     fn kittygfx_animation_compose_errors() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
         {
@@ -4029,7 +4029,7 @@ mod tests {
     // test "kittygfx animation: delete frame promotes root and fixes current"
     #[test]
     fn kittygfx_animation_delete_frame_promotes_root_and_fixes_current() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
         {
@@ -4095,7 +4095,7 @@ mod tests {
     // test "kittygfx animation: uppercase frame delete removes non-animated image"
     #[test]
     fn kittygfx_animation_uppercase_frame_delete_removes_non_animated_image() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
 
@@ -4127,7 +4127,7 @@ mod tests {
     // test "kittygfx animation: deleting current frame refreshes display"
     #[test]
     fn kittygfx_animation_deleting_current_frame_refreshes_display() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
         {
@@ -4170,7 +4170,7 @@ mod tests {
     // test "kittygfx animation: retransmitting base image resets animation"
     #[test]
     fn kittygfx_animation_retransmitting_base_image_resets_animation() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
         {
@@ -4203,7 +4203,7 @@ mod tests {
     // test "kittygfx animation: control negative gap makes frame gapless"
     #[test]
     fn kittygfx_animation_control_negative_gap_makes_frame_gapless() {
-        let alloc = allocator_api2::alloc::Global;
+        let alloc = crate::alloc::Global;
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
         {

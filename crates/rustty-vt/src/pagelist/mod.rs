@@ -109,7 +109,8 @@ use rustty_zigstd::array_hash_map::AutoArrayHashMapUnmanaged;
 use rustty_zigstd::memory_pool::DynamicMemoryPoolAligned;
 use rustty_zigstd::memory_pool::MemoryPool as ZigMemoryPool;
 
-use allocator_api2::alloc::{Allocator, Global};
+use crate::alloc::Allocator;
+use allocator_api2::alloc::{Allocator as _, Global as ApiGlobal};
 use core::alloc::Layout;
 use core::ptr::NonNull;
 
@@ -998,10 +999,12 @@ pub struct MemoryPool {
     //
     // PORT NOTE: the reference stores the general-purpose allocator (`alloc`)
     // used for the node/pin pools and the tracked-pin hashmap, plus the page
-    // allocator is captured inside `pages.arena.child_allocator`. The
-    // `rustty_zigstd` pools and the hand-rolled `PagePool` are all backed by the
-    // Rust system allocator (`std::alloc`), the faithful map of Zig's
-    // `gpa`/`page_allocator`, so no allocator handle is stored.
+    // allocator is captured inside `pages.arena.child_allocator`. The handle is
+    // stored as the reference stores it (parity tail S7-2, N264). The node/pin
+    // pools and the tracked-pin map still run on the Rust global heap
+    // (`allocator_api2::alloc::Global`) until S7-3 routes them through it; every
+    // caller passes the Global handle today, so that is the same allocator.
+    pub alloc: Allocator,
     nodes: NodePool,
     pages: PagePool,
     pins: PinPool,
@@ -1046,15 +1049,19 @@ impl MemoryPool {
     // PORT NOTE (audit #1, init signature): the reference
     // `MemoryPool.init(gen_alloc, page_alloc, preheat)` threads the
     // general-purpose allocator into the Node/Pin pools and the page allocator
-    // into the PagePool. We mirror that wiring: the Node/Pin pools take `Global`
-    // (the faithful map of the Zig gpa — exactly the prior `std::alloc` path),
-    // and the PagePool takes `rustty_os::page_allocator::page_allocator()` (the
-    // reference `pageAllocator()` — mmap, page-aligned, LAZILY OS-zeroed). The
-    // page allocator is selected internally rather than passed by the caller
-    // because, unlike Zig, the Rust `pageAllocator()` is a process-wide fact
-    // (R1 additive-glue boundary); the threading is otherwise identical.
-    pub fn init(preheat: usize) -> Result<MemoryPool, OutOfMemory> {
-        let node_pool = NodePool::init_preheated(Global, preheat).map_err(|_| OutOfMemory)?;
+    // into the PagePool. The signature is the reference's (parity tail S7-2,
+    // N264): `gen_alloc` is stored as `alloc`, and `page_alloc` is the page
+    // pool's child, `page_backing_alloc()` (the reference `pageAllocator()` —
+    // mmap, page-aligned, LAZILY OS-zeroed). The Node/Pin pools still take the
+    // Rust global heap (`ApiGlobal`, exactly the prior `std::alloc` path) until
+    // S7-3 builds them over `gen_alloc`; every caller passes the Global handle,
+    // so the routing is unchanged.
+    pub fn init(
+        gen_alloc: Allocator,
+        page_alloc: PageBackingAlloc,
+        preheat: usize,
+    ) -> Result<MemoryPool, OutOfMemory> {
+        let node_pool = NodePool::init_preheated(ApiGlobal, preheat).map_err(|_| OutOfMemory)?;
         // errdefer node_pool.deinit();
         //
         // PORT NOTE (`492c26067`): the two arms below are the runtime spelling
@@ -1064,17 +1071,16 @@ impl MemoryPool {
         // cheap memory.grow / free-list pop) and carries the page allocator
         // only for interface compatibility, exactly like the reference.
         #[cfg(not(all(target_arch = "wasm32", not(test))))]
-        let page_pool =
-            PagePool::init_preheated(page_backing_alloc(), std_size(), PAGE_SIZE_MIN, preheat)
-                .map_err(|_| OutOfMemory)?;
+        let page_pool = PagePool::init_preheated(page_alloc, std_size(), PAGE_SIZE_MIN, preheat)
+            .map_err(|_| OutOfMemory)?;
         #[cfg(all(target_arch = "wasm32", not(test)))]
-        let page_pool =
-            PagePool::init_capacity(page_backing_alloc(), &PAGE_FREE_LIST, std_size(), preheat)
-                .map_err(|_| OutOfMemory)?;
+        let page_pool = PagePool::init_capacity(page_alloc, &PAGE_FREE_LIST, std_size(), preheat)
+            .map_err(|_| OutOfMemory)?;
         // errdefer page_pool.deinit();
-        let pin_pool = PinPool::init_preheated(Global, 8).map_err(|_| OutOfMemory)?;
+        let pin_pool = PinPool::init_preheated(ApiGlobal, 8).map_err(|_| OutOfMemory)?;
         // errdefer pin_pool.deinit();
         Ok(MemoryPool {
+            alloc: gen_alloc,
             nodes: node_pool,
             pages: page_pool,
             pins: pin_pool,
@@ -1703,13 +1709,13 @@ impl PageList {
     /// deep within yourself to find out why you need that.
     //
     // PORT NOTE: the reference takes `alloc: Allocator` for the node/pin pools
-    // and `pageAllocator()` for the page pool. The `rustty_zigstd` pools and the
-    // hand-rolled `PagePool` are all backed by the Rust system allocator, so no
-    // allocator parameter is threaded through (R1 additive glue boundary). The
+    // and `pageAllocator(alloc)` for the page pool; so does the port (parity
+    // tail S7-2, N264: the parameter had been dropped). `alloc` reaches
+    // `MemoryPool.alloc`; the pools themselves move onto it in S7-3. The
     // `init_tw`/`initPages_tw` tripwire failpoints are exercised only by the
     // deferred test phase and are no-ops in non-test builds; see the tests
     // phase for the failpoint wiring.
-    pub fn init(opts: Options) -> Result<PageList, OutOfMemory> {
+    pub fn init(alloc: Allocator, opts: Options) -> Result<PageList, OutOfMemory> {
         let cols = opts.cols;
         let rows = opts.rows;
 
@@ -1719,7 +1725,12 @@ impl PageList {
         // try tw.check(.init_memory_pool);
         #[cfg(test)]
         init_tw_check(InitFp::InitMemoryPool)?;
-        let mut pool = MemoryPool::init(PAGE_PREHEAT)?;
+        // var pool = try MemoryPool.init(
+        //     alloc,
+        //     pageAllocator(alloc),
+        //     page_preheat,
+        // );
+        let mut pool = MemoryPool::init(alloc, page_backing_alloc(), PAGE_PREHEAT)?;
         // errdefer pool.deinit();
 
         // try tw.check(.init_pages);

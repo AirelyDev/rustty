@@ -182,7 +182,7 @@ impl Harness {
         unsafe { (*self.mutex).lock() };
         let dump = unsafe {
             (*(*self.io).terminal.screens.active).dump_string_alloc(
-                Global,
+                Global.into(),
                 rustty_vt::point::Point::Active(rustty_vt::point::Coordinate::default()),
             )
         };

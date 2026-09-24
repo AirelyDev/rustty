@@ -2663,10 +2663,13 @@ mod ws7_tests {
              cannot be exercised here"
         );
 
-        let mut pages = PageList::init(rustty_vt::pagelist::Options {
-            max_size: Some(10 * 1024 * 1024),
-            ..rustty_vt::pagelist::Options::new(80, 24)
-        })
+        let mut pages = PageList::init(
+            rustty_vt::alloc::Global,
+            rustty_vt::pagelist::Options {
+                max_size: Some(10 * 1024 * 1024),
+                ..rustty_vt::pagelist::Options::new(80, 24)
+            },
+        )
         .unwrap();
         while pages.total_pages() < 6 {
             let _ = pages.grow().unwrap();
@@ -2771,10 +2774,13 @@ mod ws7_tests {
         // `IMGUI_LOCK` (memory: parallel-cargo-test-exposes-c-init-races).
         let _guard = IMGUI_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
-        let mut pages = PageList::init(rustty_vt::pagelist::Options {
-            max_size: Some(10 * 1024 * 1024),
-            ..rustty_vt::pagelist::Options::new(80, 24)
-        })
+        let mut pages = PageList::init(
+            rustty_vt::alloc::Global,
+            rustty_vt::pagelist::Options {
+                max_size: Some(10 * 1024 * 1024),
+                ..rustty_vt::pagelist::Options::new(80, 24)
+            },
+        )
         .unwrap();
         while pages.total_pages() < 6 {
             let _ = pages.grow().unwrap();

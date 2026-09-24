@@ -139,7 +139,7 @@ fn cross_page_wide_grapheme_transfer_does_not_allocate() {
     );
     drop(v);
 
-    let alloc = allocator_api2::alloc::Global;
+    let alloc = rustty_vt::alloc::Global;
     let mut t: Terminal = Terminal::init(alloc, terminal_opts(COLS, 5)).unwrap();
     t.modes.set(modes::Mode::GraphemeCluster, true);
 

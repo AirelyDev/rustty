@@ -12,7 +12,7 @@
 // glyph parser takes an allocator in their Rust ports (both buffer into owned
 // `Vec`s). The kitty `complete`/`kitty_graphics` path still consumes an
 // allocator at `end`, so the parameter is real there.
-use allocator_api2::alloc::Global as Allocator;
+use crate::alloc::Allocator;
 
 // pub const glyph = @import("apc/glyph.zig");
 // const kitty_gfx = @import("kitty/graphics.zig");
@@ -849,7 +849,7 @@ mod tests {
     }
 
     use super::*;
-    use allocator_api2::alloc::Global;
+    use crate::alloc::Global;
 
     // test "unknown APC command"
     #[test]

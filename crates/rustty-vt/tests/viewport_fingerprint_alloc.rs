@@ -3,7 +3,7 @@
 //!
 //! Upstream's `fingerprint only allocates on changes` uses Zig's
 //! `testing.FailingAllocator`, which rustty has no direct equivalent of because
-//! `rustty-vt` allocates through `allocator_api2::alloc::Global`. This file
+//! `rustty-vt` allocates through `rustty_vt::alloc::Global`. This file
 //! installs a `#[global_allocator]` that can both COUNT and FAIL allocations,
 //! which gives the two assertions the plan requires:
 //!
@@ -119,7 +119,7 @@ fn fingerprint_only_allocates_on_changes() {
     // REBUILD SENTINEL: verified to fire when tripped (see the lane report).
     assert_eq!(2 + 2, 4, "REBUILD SENTINEL");
 
-    let alloc = allocator_api2::alloc::Global;
+    let alloc = rustty_vt::alloc::Global;
     let mut t: Terminal = Terminal::init(alloc, terminal_opts(10, 10)).unwrap();
     let active_ptr: *mut Screen = t.screens.active;
 

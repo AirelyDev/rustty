@@ -1538,7 +1538,7 @@ pub unsafe fn new(
 // caller allocator therefore yields a recoverable `RUSTTY_OUT_OF_MEMORY`
 // instead of silently succeeding on the Rust global heap. REMAINING Tier-2
 // residual (DEFERRALS.md "F-008/W12-01 Tier 2"): rustty-vt's `Terminal`
-// INTERNALS still allocate through their own `allocator_api2::alloc::Global`
+// INTERNALS still allocate through their own `rustty_vt::alloc::Global`
 // (`t.init(gpa, ...)` below vs the reference's `t.init(alloc, ...)`).
 fn new_(
     alloc_: Option<&CAllocator>,
@@ -1559,7 +1559,7 @@ fn new_(
     // SAFETY: `alloc_holder` is a live heap allocation until `free` (or the
     // unwind arms below) reclaims it.
     let alloc: &'static dyn rustty_lib::allocator::ZigAllocator = unsafe { &*alloc_holder };
-    let gpa = allocator_api2::alloc::Global;
+    let gpa = rustty_vt::alloc::Global;
 
     // const t = alloc.create(ZigTerminal) catch return error.OutOfMemory;
     let terminal_ptr: *mut ZigTerminal = match rustty_lib::allocator::create_raw(alloc) {
@@ -1894,7 +1894,7 @@ pub unsafe fn from_decoded(
         Box::into_raw(rustty_lib::allocator::default(alloc_));
     // SAFETY: live until `free` (or the unwind arms below) reclaims it.
     let alloc: &'static dyn rustty_lib::allocator::ZigAllocator = unsafe { &*alloc_holder };
-    let gpa = allocator_api2::alloc::Global;
+    let gpa = rustty_vt::alloc::Global;
 
     // const native = alloc.create(ZigTerminal) catch { io.deinit(alloc); return error.OutOfMemory; };
     let terminal_ptr: *mut ZigTerminal = match rustty_lib::allocator::create_raw(alloc) {
@@ -4693,7 +4693,7 @@ mod tests {
     fn plain_string(t: Terminal) -> Vec<u8> {
         // SAFETY: `t` is a live terminal from `new_t`.
         let zt = unsafe { &mut *(*t).terminal };
-        zt.plain_string(allocator_api2::alloc::Global).unwrap()
+        zt.plain_string(rustty_vt::alloc::Global).unwrap()
     }
 
     // test "new/free"

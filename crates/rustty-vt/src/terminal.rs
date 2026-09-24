@@ -91,7 +91,7 @@ use crate::color;
 // `unicode.graphemeBreak`) maps to the `rustty_unicode` crate, matching Screen.
 use rustty_unicode as unicode;
 
-use allocator_api2::alloc::Global as Allocator;
+use crate::alloc::Allocator;
 
 /// The width class of a printSlice batch. Each batch contains only
 /// codepoints of a single width class because they fill cells
@@ -7146,7 +7146,7 @@ mod tests {
         );
     }
     use super::*;
-    use allocator_api2::alloc::Global;
+    use crate::alloc::Global;
 
     // Self-test for the terminal.rs tripwire seam introduced for the
     // set_title/set_pwd allocation-failure tests (WS8 T5). Mirrors the

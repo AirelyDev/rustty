@@ -22,13 +22,13 @@
 // const ViewportSearch = @import("viewport.zig").ViewportSearch;
 use super::screen::ScreenSearch;
 use super::viewport::ViewportSearch;
+use crate::alloc::Allocator;
 use crate::highlight::Flattened as FlattenedHighlight;
 use crate::pagelist::OutOfMemory;
 use crate::point;
 use crate::screen_set::Key;
 use crate::screen_set::Key as ScreenSetKey;
 use crate::terminal::Terminal;
-use allocator_api2::alloc::Global as Allocator;
 
 // const log = std.log.scoped(.search_terminal);
 //

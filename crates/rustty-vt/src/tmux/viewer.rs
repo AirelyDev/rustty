@@ -50,12 +50,12 @@ use std::collections::VecDeque;
 
 use rustty_util::quirks::inlineAssert as assert;
 
+use crate::alloc::Allocator;
 use crate::cursor::Style as CursorStyle;
 use crate::screen::Screen;
 use crate::screen_set;
 use crate::size;
 use crate::terminal::{self, Terminal};
-use allocator_api2::alloc::Global as Allocator;
 use rustty_zigstd::array_hash_map::AutoArrayHashMapUnmanaged;
 
 use super::control;
@@ -2600,8 +2600,8 @@ use crate::pagelist::OutOfMemory;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::alloc::Global;
     use crate::tmux::control;
-    use allocator_api2::alloc::Global;
 
     /// PORT NOTE: NOT a reference test (the reference's `Action.format` is
     /// covered only by `testViewer`'s failure log, which the port drops). It

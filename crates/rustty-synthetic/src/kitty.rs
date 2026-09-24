@@ -232,7 +232,7 @@ mod tests {
     /// `\x1b_` and before `\x1b\\` — so the `G` identifier is the first byte.
     #[test]
     fn every_generated_sequence_parses_as_a_kitty_apc_command() {
-        use allocator_api2::alloc::Global;
+        use rustty_vt::alloc::Global;
         use rustty_vt::apc::{Command, Handler};
 
         let prng = DefaultPrng::init(7);

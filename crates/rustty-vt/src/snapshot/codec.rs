@@ -49,9 +49,9 @@ use crate::size;
 use crate::terminal::Terminal;
 
 // PORT NOTE: the reference `Allocator.Error` maps to the crate's canonical
-// OOM; the general-purpose allocator maps to `allocator_api2::alloc::Global`
+// OOM; the general-purpose allocator maps to `crate::alloc::Global`
 // (the crate-wide treatment; see `snapshot/screen.rs`).
-use allocator_api2::alloc::Global as Allocator;
+use crate::alloc::Allocator;
 
 /// Re-export continuation to make it a bit more ergonomic to reference.
 // pub const Continuation = continuation.Value;
@@ -1440,11 +1440,14 @@ mod tests {
 
         let primary = t.screens.get(TerminalScreenKey::Primary).unwrap();
         let replacement: TerminalScreen = {
-            let mut builder = Builder::init(pagelist::Options {
-                max_size: None,
-                max_lines: None,
-                ..pagelist::Options::new(t.cols, t.rows)
-            })
+            let mut builder = Builder::init(
+                crate::alloc::Global,
+                pagelist::Options {
+                    max_size: None,
+                    max_lines: None,
+                    ..pagelist::Options::new(t.cols, t.rows)
+                },
+            )
             .unwrap();
             // defer builder.deinit();
 
@@ -1550,11 +1553,14 @@ mod tests {
         // active page. Replacing the Screen in place preserves ScreenSet
         // routing.
         let replacement: TerminalScreen = {
-            let mut builder = Builder::init(pagelist::Options {
-                max_size: None,
-                max_lines: None,
-                ..pagelist::Options::new(t.cols, t.rows)
-            })
+            let mut builder = Builder::init(
+                crate::alloc::Global,
+                pagelist::Options {
+                    max_size: None,
+                    max_lines: None,
+                    ..pagelist::Options::new(t.cols, t.rows)
+                },
+            )
             .unwrap();
             // defer builder.deinit();
 

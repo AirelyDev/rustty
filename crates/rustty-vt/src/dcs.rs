@@ -17,11 +17,12 @@
 // as `crate::options`. `assert` is `rustty_util::quirks::inlineAssert`.
 // `std.mem.Allocator` is faithfully modeled by `allocator_api2::alloc::Allocator`
 // (the same map used by PageList/Tabstops); callers pass
-// `allocator_api2::alloc::Global` for the prior `std::alloc` behavior. `log` is a
+// `crate::alloc::Global` for the prior `std::alloc` behavior. `log` is a
 // scoped logger; Rustty has no logging facade wired into this crate (matching the
 // convention used by PageList et al.), so the `log.*` calls below are ported as
 // verbatim comments and are no-ops.
-use allocator_api2::alloc::{Allocator, Global};
+use crate::alloc::Global;
+use allocator_api2::alloc::Allocator;
 use rustty_util::quirks::inlineAssert as assert;
 
 use crate::options as build_options;

@@ -2521,7 +2521,7 @@ mod compression_tests {
         fn build(scrollback_compression: bool) -> Harness {
             let mut terminal = Box::new(
                 Terminal::init(
-                    Allocator,
+                    Allocator.into(),
                     TerminalOptions {
                         cols: 80,
                         rows: 24,
@@ -2630,7 +2630,7 @@ mod compression_tests {
                 drop(Box::from_raw(self.state));
                 drop(Box::from_raw(self.mutex));
                 let mut t = Box::from_raw(self.terminal);
-                t.deinit(Allocator);
+                t.deinit(Allocator.into());
             }
         }
     }

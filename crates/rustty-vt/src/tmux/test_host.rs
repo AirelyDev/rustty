@@ -7,7 +7,7 @@
 //! `stream_handler.zig` `dcsCommand` tmux arm does (without its mailbox).
 //! Commands the viewer sends to tmux are recorded instead of written.
 
-use allocator_api2::alloc::Global;
+use crate::alloc::Global;
 
 use crate::dcs;
 use crate::parser;

@@ -6912,13 +6912,13 @@ mod tests {
 
         // `if (self.subprocess.cwd) |cwd| term.setPwd(cwd)`.
         let mut term = rustty_vt::terminal::Terminal::init(
-            Global,
+            Global.into(),
             crate::stream_handler::tests::terminal_opts(None),
         )
         .expect("Terminal::init");
         exec.initTerminal(&mut term);
         let term_pwd = term.get_pwd().map(<[u8]>::to_vec);
-        term.deinit(Global);
+        term.deinit(Global.into());
 
         let cap = crate::log_capture::start();
         let fds = exec.subprocess.start(Global).expect("Subprocess::start");
@@ -6996,7 +6996,7 @@ mod tests {
 
         // The VT stream half: `ESC ] 7 ; file://localhost/<prefix>%00b BEL`.
         let mut term = rustty_vt::terminal::Terminal::init(
-            Global,
+            Global.into(),
             crate::stream_handler::tests::terminal_opts(None),
         )
         .expect("Terminal::init");
@@ -7020,7 +7020,7 @@ mod tests {
             pwd,
             "OSC 7 percent-decodes %00 into the pwd, NUL and all"
         );
-        term.deinit(Global);
+        term.deinit(Global.into());
 
         // `app.newConfig`: `copy.@"working-directory" = .{ .path = pwd }`, then
         // `Surface.init`: `if (config.@"working-directory") |wd| wd.value()`.
@@ -7451,7 +7451,7 @@ mod tests {
 
             // The owned Terminal (80x24).
             let terminal = Terminal::init(
-                Global,
+                Global.into(),
                 rustty_vt::terminal::Options {
                     cols: 80,
                     rows: 24,
@@ -7597,7 +7597,7 @@ mod tests {
             unsafe { (*self.mutex).lock() };
             let dump = unsafe {
                 (*(*self.io).terminal.screens.active).dump_string_alloc(
-                    Global,
+                    Global.into(),
                     rustty_vt::point::Point::Active(rustty_vt::point::Coordinate::default()),
                 )
             };

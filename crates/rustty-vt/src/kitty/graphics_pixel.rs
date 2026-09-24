@@ -150,7 +150,7 @@ thread_local! {
 /// The allocator handed to the wuffs swizzles (the reference passes the
 /// caller's `Allocator`; rustty-vt's kitty tier is Global-allocated).
 #[cfg(feature = "wuffs")]
-const GLOBAL: allocator_api2::alloc::Global = allocator_api2::alloc::Global;
+const GLOBAL: crate::alloc::Global = crate::alloc::Global;
 
 /// Fill an RGBA buffer with the given background color.
 pub fn fill_background(data: &mut [u8], bg: command::Background) {
