@@ -2315,3 +2315,18 @@ Assembled from this plan's progress notes on 2026-09-11. **Not verified** — do
 | C4 | `src/termio/Exec.zig:1045`; `src/apprt/gtk/pre_exec.zig:39,58` | superseded by UD101 (task R13-D) | deadlock | see UD101 | tasks 14d-3, 14e-1 |
 | C5 | `src/font/DeferredFace.zig:154-157, 186-197` | superseded by UD110 (task R13-D) | leak | see UD110 | task 16 |
 | ~~C11~~ | ~~`src/font/face/coretext.zig:1023-1036`; `src/terminal/StringMap` tests~~ | ~~assertions cannot distinguish the fixture under test~~ STRUCK (task R13-D): refuted as a reference defect by the R13 verify pass (those tests assert what they are named for; the insensitivity only limits the port's negative controls) | ~~test-weakness~~ | ported verbatim (S90-F5, S140-F1) | task 17 |
+
+### UD276 — `test "face metrics"` in font/Collection.zig never checks anything: its backend guard is inverted
+- kind:            test-weakness
+- upstream project: ghostty
+- severity:        low
+- reference:       src/font/Collection.zig:1396-1523 at 20abdb50a (comment and guard at :1397-1398, expected-value switches at :1438-1502)
+- defect:          The comment says "The web canvas backend doesn't calculate face metrics, only cell metrics", but the guard is `if (options.backend != .web_canvas) return error.SkipZigTest;`, so the test is skipped on every backend except the one the comment excludes. On `web_canvas` each expected-value switch takes its `.web_canvas => unreachable` prong. The switches also have no `freetype_windows` prong, so they would not compile if analyzed on that backend. The face-metrics expectations therefore never run in upstream CI.
+- ReleaseSafe:     no product effect; the test is inert.
+- ReleaseFast:     same.
+- reachability:    none (test code).
+- port handling:   faithful skip (R13 keeps test weaknesses faithful; R14 form 1: `cfg_attr(not(wasm32), ignore)` in `crates/rustty-font-shaper/src/collection.rs` `face_metrics`), with the body ported live. MEASURED (task tail-s8c): run with `--ignored` on macOS (coretext) the body passes against the reference's own coretext expected values for CozetteVector and Geist Mono; a perturbed `cell_width` (7.3828125 → 7.5) fails it. The `fontconfig_freetype` expectations are UNVERIFIED (no Linux run).
+- parity row(s):   NEW-FINDINGS N265.
+- test:            `face_metrics` (`crates/rustty-font-shaper/src/collection.rs`), ignored by default as upstream.
+- proposed fix:    `if (options.backend == .web_canvas) return error.SkipZigTest;`, plus a `freetype_windows` prong (or an `else`) in the four switches.
+- upstream status: not reported

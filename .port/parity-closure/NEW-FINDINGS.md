@@ -4307,7 +4307,7 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   UNVERIFIED here, because no Linux run was made.
 - **proposed upstream fix**: `if (options.backend == .web_canvas) return error.SkipZigTest;`, plus a
   `freetype_windows` prong or an `else` in the four switches.
-- **state**: RECORDED (the port side is done; the UD entry is owed).
+- **state**: RECORDED as `UPSTREAM-DEFECTS.md` UD276 (controller, 2026-09-24).
 
 ## N266 — the font backend build option is folded to the per-OS default: the `coretext_freetype`, `coretext_harfbuzz`, `coretext_noshape` and `freetype` arms are not live
 
