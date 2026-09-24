@@ -19,10 +19,11 @@
 // PORT NOTE: `tripwire` and `quirks.inlineAssert` live in `rustty-util` (the
 // FIRM leaf crate). `std.mem.Allocator` is faithfully modeled by
 // `allocator_api2::alloc::Allocator` (the same map used by PageList); callers
-// pass `allocator_api2::alloc::Global` for the prior `std::alloc` behavior.
+// pass `crate::alloc::Global` for the prior `std::alloc` behavior.
 // (`ac4dc1205` dropped the `fastmem` import along with the alloc+copy+free
 // resize path.)
-use allocator_api2::alloc::{Allocator, Global};
+use crate::alloc::Global;
+use allocator_api2::alloc::Allocator;
 use allocator_api2::boxed::Box;
 use rustty_util::quirks::inlineAssert as assert;
 
@@ -329,7 +330,9 @@ impl<A: Allocator> Tabstops<A> {
             self.dynamic_stops = new_vec.into_boxed_slice();
             return Err(OutOfMemory);
         }
-        new_vec.resize(dynamic_count, 0);
+        // (`resize_copy`: allocator_api2's `resize` is a per-element loop,
+        // N261; banned in this crate by clippy.toml.)
+        crate::alloc::CopyVecExt::resize_copy(&mut new_vec, dynamic_count, 0);
         self.dynamic_stops = new_vec.into_boxed_slice();
         self.cols = cols;
         Ok(())
@@ -414,7 +417,7 @@ pub(crate) fn resize_tw_end(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use allocator_api2::alloc::Global;
+    use crate::alloc::Global;
 
     // test "Tabstops: basic"
     #[test]

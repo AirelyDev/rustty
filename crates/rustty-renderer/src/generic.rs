@@ -496,8 +496,8 @@ impl DerivedConfig {
         font_styles.set(Style::BoldItalic, config.font_style_bold_italic());
 
         // Our link configs
-        let links =
-            link::Set::from_config(Global, config.links()).map_err(|_| DerivedConfigError)?;
+        let links = link::Set::from_config(Global.into(), config.links())
+            .map_err(|_| DerivedConfigError)?;
 
         Ok(DerivedConfig {
             background_opacity: config.background_opacity().clamp(0.0, 1.0),
@@ -556,7 +556,7 @@ impl DerivedConfig {
     // reference `self.arena.deinit()` maps to the `ArenaAllocator` `Drop` impl,
     // which runs when the caller drops `self`.
     pub fn deinit(&mut self) {
-        self.links.deinit(Global);
+        self.links.deinit(Global.into());
     }
 }
 
@@ -2356,7 +2356,7 @@ mod macos_impl {
                 overlay.deinit();
             }
             // self.terminal_state.deinit(self.alloc);   (802)
-            self.terminal_state.deinit(self.alloc);
+            self.terminal_state.deinit(self.alloc.into());
             // if (self.search_selected_match) |*m| m.arena.deinit();   (803)
             // if (self.search_matches) |*m| m.arena.deinit();   (804)
             // Port: `SearchMatch`/`SearchMatches` DROPPED the reference `arena`
@@ -5105,7 +5105,7 @@ mod macos_impl {
             // Frame count is ~12 minutes at 120Hz.
             let max_terminal_state_frame_count = 100_000;
             if self.terminal_state_frame_count >= max_terminal_state_frame_count {
-                self.terminal_state.deinit(self.alloc);
+                self.terminal_state.deinit(self.alloc.into());
                 self.terminal_state = RenderState::empty();
                 self.terminal_state_frame_count = 0;
             }
@@ -5233,7 +5233,7 @@ mod macos_impl {
                 // outside of this critical section, keeping our lock
                 // hold time as short as possible.
                 self.terminal_state
-                    .begin_update(self.alloc, unsafe { &mut *t })?;
+                    .begin_update(self.alloc.into(), unsafe { &mut *t })?;
 
                 // If our terminal state is dirty at all we need to redo
                 // the viewport search.
@@ -5349,7 +5349,7 @@ mod macos_impl {
                             CellSet::new()
                         } else {
                             self.terminal_state
-                                .link_cells(Global, vp)
+                                .link_cells(Global.into(), vp)
                                 .unwrap_or_else(|err| {
                                     // log.warn("error searching for OSC8 links err={}", .{err});
                                     log::warn!(
@@ -5399,7 +5399,7 @@ mod macos_impl {
             // our regex results.
             // catch |err| log.warn("error searching for regex links err={}", .{err});
             if let Err(err) = self.config.links.render_cell_map(
-                Global,
+                Global.into(),
                 &mut critical.links,
                 &self.terminal_state,
                 state.mouse.point,
@@ -5434,7 +5434,7 @@ mod macos_impl {
                     //     log.warn("error updating search selected highlight err={}", .{err});
                     // }
                     if let Err(err) = self.terminal_state.update_highlights_flattened(
-                        self.alloc,
+                        self.alloc.into(),
                         HighlightTag::SearchMatchSelected as u8,
                         core::slice::from_ref(&m.r#match),
                     ) {
@@ -5452,7 +5452,7 @@ mod macos_impl {
                     //     log.warn("error updating search highlights err={}", .{err});
                     // }
                     if let Err(err) = self.terminal_state.update_highlights_flattened(
-                        self.alloc,
+                        self.alloc.into(),
                         HighlightTag::SearchMatch as u8,
                         &m.matches,
                     ) {
@@ -7645,7 +7645,7 @@ mod macos_impl {
             /// Drive one real frame, as the golden tests do.
             fn draw_one_frame(r: &mut Renderer) {
                 let mut mutex = Mutex::new();
-                let mut t = Terminal::init(Global, opts(10, 3)).unwrap();
+                let mut t = Terminal::init(Global.into(), opts(10, 3)).unwrap();
                 let st = state::State {
                     mutex: &mut mutex,
                     terminal: &mut t,
@@ -7770,7 +7770,7 @@ mod macos_impl {
             /// the scrollbar value the push must carry.
             fn update_and_draw(r: &mut Renderer) -> Scrollbar {
                 let mut mutex = Mutex::new();
-                let mut t = Terminal::init(Global, opts(10, 3)).unwrap();
+                let mut t = Terminal::init(Global.into(), opts(10, 3)).unwrap();
                 {
                     let mut s = t.vt_stream();
                     s.next_slice(b"Ab");
@@ -7958,7 +7958,7 @@ mod macos_impl {
             // "Ab" on a 10×3 grid ⇒ a block cursor at grid (2,0) (the empty cell after
             // "Ab"; focused + blink_visible ⇒ block). Verified by the 3b test.
             let mut mutex = Mutex::new();
-            let mut t = Terminal::init(Global, opts(10, 3)).unwrap();
+            let mut t = Terminal::init(Global.into(), opts(10, 3)).unwrap();
             {
                 let mut s = t.vt_stream();
                 s.next_slice(b"Ab");
@@ -8039,7 +8039,7 @@ mod macos_impl {
                 "no fg glyph rendered in cell (0,0) (maxlum={maxlum})"
             );
 
-            t.deinit(Global);
+            t.deinit(Global.into());
         }
 
         // W5 HEADLESS KAT (`W5_DESIGN §5`): prove the display-callback trampoline
@@ -8067,7 +8067,7 @@ mod macos_impl {
 
             // Give the terminal some content so the draw is non-trivial (mirrors golden).
             let mut mutex = Mutex::new();
-            let mut t = Terminal::init(Global, opts(10, 3)).unwrap();
+            let mut t = Terminal::init(Global.into(), opts(10, 3)).unwrap();
             {
                 let mut s = t.vt_stream();
                 s.next_slice(b"Ab");
@@ -8132,7 +8132,7 @@ mod macos_impl {
             );
 
             r.deinit();
-            t.deinit(Global);
+            t.deinit(Global.into());
         }
 
         // A minimal ObjC test-double for the host NSView. `Metal::init` (the on-screen
@@ -8227,7 +8227,7 @@ mod macos_impl {
             // "Ab" on a 10×3 grid ⇒ a block cursor at grid (2,0) (the empty cell after
             // "Ab") — identical to the offscreen cursor golden.
             let mut mutex = Mutex::new();
-            let mut t = Terminal::init(Global, opts(10, 3)).unwrap();
+            let mut t = Terminal::init(Global.into(), opts(10, 3)).unwrap();
             {
                 let mut s = t.vt_stream();
                 s.next_slice(b"Ab");
@@ -8312,7 +8312,7 @@ mod macos_impl {
                 "view must host our IOSurfaceLayer"
             );
 
-            t.deinit(Global);
+            t.deinit(Global.into());
         }
 
         // T3 (RENDERER_BG_IMAGE_DESIGN §4) — the offscreen proof that the whole
@@ -8362,7 +8362,7 @@ mod macos_impl {
                 // An (empty) terminal drives update_frame/draw_frame (as the cursor
                 // golden does); the bg-image step does not depend on cell content.
                 let mut mutex = Mutex::new();
-                let mut t = Terminal::init(Global, opts(10, 3)).unwrap();
+                let mut t = Terminal::init(Global.into(), opts(10, 3)).unwrap();
                 let st = state::State {
                     mutex: &mut mutex,
                     terminal: &mut t,
@@ -8395,7 +8395,7 @@ mod macos_impl {
                 let ch = r.grid_metrics.cell_height as usize;
                 // Sample the center of an empty cell on the bottom row (grid (5,2)).
                 let out = px_at(&px, w, 5 * cw + cw / 2, 2 * ch + ch / 2);
-                t.deinit(Global);
+                t.deinit(Global.into());
                 Some(out)
             }
 
@@ -8498,7 +8498,7 @@ mod macos_impl {
             // Drive one frame with a non-empty terminal (write visible text so the cell
             // pass produces a recognizable, non-black image the pass-through preserves).
             let mut mutex = Mutex::new();
-            let mut t = Terminal::init(Global, opts(10, 3)).unwrap();
+            let mut t = Terminal::init(Global.into(), opts(10, 3)).unwrap();
             t.print_string(b"HELLO").unwrap();
             let st = state::State {
                 mutex: &mut mutex,
@@ -8544,7 +8544,7 @@ mod macos_impl {
                 "frame is a uniform fill (post-process did not preserve the image)"
             );
 
-            t.deinit(Global);
+            t.deinit(Global.into());
             let _ = std::fs::remove_file(&path);
         }
 
@@ -8567,7 +8567,7 @@ mod macos_impl {
             // pixels 0xFF (`////////` = 6 bytes of 0xFF). a=T places it at the
             // cursor → a pin placement, marking storage dirty.
             let mut mutex = Mutex::new();
-            let mut t = Terminal::init(Global, opts(10, 3)).unwrap();
+            let mut t = Terminal::init(Global.into(), opts(10, 3)).unwrap();
             // The vt `Terminal` starts with `width_px`/`height_px == 0` (the port
             // sets them only through the surface). Kitty `pixel_size` divides by the
             // cell size (`width_px / cols`), so pin the pixel dims to the renderer's
@@ -8589,7 +8589,7 @@ mod macos_impl {
 
             // Drive the renderer. `terminal_state.update` snapshots the terminal;
             // `update_frame` → `kitty_requires_update` (dirty) == true → `kitty_update`.
-            r.terminal_state.update(Global, &mut t).unwrap();
+            r.terminal_state.update(Global.into(), &mut t).unwrap();
             let st = state::State {
                 mutex: &mut mutex,
                 terminal: &mut t,
@@ -8638,7 +8638,7 @@ mod macos_impl {
                 "image has no GPU texture after draw_frame (convert/upload did not run)"
             );
 
-            t.deinit(Global);
+            t.deinit(Global.into());
         }
 
         // PORT-SIDE REGRESSION (`a177ba90a`, gap-close): the display-link lifecycle
@@ -8808,13 +8808,13 @@ mod macos_impl {
             };
 
             // small terminal: print "Ab" on row 0, leave a visible block cursor.
-            let mut t = Terminal::init(Global, opts(10, 3)).unwrap();
+            let mut t = Terminal::init(Global.into(), opts(10, 3)).unwrap();
             {
                 let mut s = t.vt_stream();
                 s.next_slice(b"Ab");
                 s.deinit();
             }
-            r.terminal_state.update(Global, &mut t).unwrap();
+            r.terminal_state.update(Global.into(), &mut t).unwrap();
             let cs = cursor::style(
                 &r.terminal_state,
                 cursor::StyleOptions {
@@ -8846,7 +8846,7 @@ mod macos_impl {
             assert_eq!(cur.grid_pos, [2, 0]);
             assert_eq!(r.uniforms.cursor_pos, [2, 0]);
 
-            t.deinit(Global);
+            t.deinit(Global.into());
         }
 
         #[test]
@@ -8890,7 +8890,7 @@ mod macos_impl {
             };
 
             let mut mutex = Mutex::new();
-            let mut t = Terminal::init(Global, opts(10, 3)).unwrap();
+            let mut t = Terminal::init(Global.into(), opts(10, 3)).unwrap();
             {
                 let mut s = t.vt_stream();
                 s.next_slice(b"Ab");
@@ -8930,7 +8930,7 @@ mod macos_impl {
             let expected_scrollbar = unsafe { (*t.screens.active).pages.scrollbar() };
             assert!(r.scrollbar.eql(expected_scrollbar));
 
-            t.deinit(Global);
+            t.deinit(Global.into());
         }
 
         // Parity S115-F1: `defer self.font_shaper.endFrame()` is updateFrame's
@@ -8945,13 +8945,13 @@ mod macos_impl {
 
             // Shape a row outside `update_frame`, so the shaper's release pool
             // holds this frame's CoreText objects.
-            let mut t = Terminal::init(Global, opts(10, 3)).unwrap();
+            let mut t = Terminal::init(Global.into(), opts(10, 3)).unwrap();
             {
                 let mut s = t.vt_stream();
                 s.next_slice(b"Ab");
                 s.deinit();
             }
-            r.terminal_state.update(Global, &mut t).unwrap();
+            r.terminal_state.update(Global.into(), &mut t).unwrap();
             let cs = cursor::style(
                 &r.terminal_state,
                 cursor::StyleOptions {
@@ -8986,7 +8986,7 @@ mod macos_impl {
             // ...and the shaper's frame was still ended.
             assert_eq!(0, r.font_shaper.release_pool_len());
 
-            t.deinit(Global);
+            t.deinit(Global.into());
         }
 
         // 9e6e2ea96 — renderer: reset terminal state cleanup counter. The frame
@@ -9001,7 +9001,7 @@ mod macos_impl {
             };
 
             let mut mutex = Mutex::new();
-            let mut t = Terminal::init(Global, opts(10, 3)).unwrap();
+            let mut t = Terminal::init(Global.into(), opts(10, 3)).unwrap();
             let st = state::State {
                 mutex: &mut mutex,
                 terminal: &mut t,
@@ -9025,7 +9025,7 @@ mod macos_impl {
             r.update_frame(&st, true).unwrap();
             assert_eq!(r.terminal_state_frame_count, 2);
 
-            t.deinit(Global);
+            t.deinit(Global.into());
         }
 
         // §F.2(2) — direct: `screen_size`/`grid_padding`/`projection_matrix`.
@@ -9089,8 +9089,8 @@ mod macos_impl {
             r.config.selection_background = Some(crate::generic::TerminalColor::CellForeground);
             r.config.selection_foreground = Some(crate::generic::TerminalColor::CellBackground);
 
-            let mut t = Terminal::init(Global, opts(10, 3)).unwrap();
-            r.terminal_state.update(Global, &mut t).unwrap(); // dirty = Full
+            let mut t = Terminal::init(Global.into(), opts(10, 3)).unwrap();
+            r.terminal_state.update(Global.into(), &mut t).unwrap(); // dirty = Full
             r.update_custom_shader_uniforms_from_state();
 
             // Positive reach: the update ran past its early returns.
@@ -9139,7 +9139,7 @@ mod macos_impl {
                 [1.0, 0.0, 0.0, 1.0]
             );
 
-            t.deinit(Global);
+            t.deinit(Global.into());
         }
 
         #[test]
@@ -9184,8 +9184,8 @@ mod macos_impl {
             };
             r.has_custom_shaders = true;
 
-            let mut t = Terminal::init(Global, opts(10, 3)).unwrap();
-            r.terminal_state.update(Global, &mut t).unwrap(); // dirty = Full
+            let mut t = Terminal::init(Global.into(), opts(10, 3)).unwrap();
+            r.terminal_state.update(Global.into(), &mut t).unwrap(); // dirty = Full
             r.update_custom_shader_uniforms_from_state();
 
             let bg = r.terminal_state.colors.background;
@@ -9229,7 +9229,7 @@ mod macos_impl {
                 expected_style
             );
 
-            t.deinit(Global);
+            t.deinit(Global.into());
         }
 
         // §F.2(6) — direct: per-frame timing/resolution/focus. Per §RISK-7 the

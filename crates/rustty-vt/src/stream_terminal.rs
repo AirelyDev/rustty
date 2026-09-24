@@ -451,8 +451,9 @@ pub(crate) fn color_operation_tw_end(
 // PORT NOTE: a fault-injection seam for the OSC 52 decode scratch allocation in
 // `clipboardContents`. The reference injects `testing.failing_allocator` by
 // swapping `t.screens.active.alloc` (oracle test "clipboard_write allocation
-// failure is ignored", stream_terminal.zig:2309-2339); rustty's allocator seam
-// is the zero-sized `allocator_api2::alloc::Global`, so the allocator itself
+// failure is ignored", stream_terminal.zig:2309-2339); the terminal's
+// internals still run on the Rust global heap (the Global arm of
+// `crate::alloc::Allocator`; S7-3/S7-4 route them), so the allocator itself
 // cannot be swapped out. This tripwire is the port's stand-in and sits exactly
 // where the reference's `try alloc.alloc(u8, decoded_len)` can fail. Same
 // `#[cfg(test)] thread_local!` idiom as `COLOR_OPERATION_TW` above.
@@ -884,7 +885,9 @@ impl<'a> Handler<'a> {
             return;
         }
         // The capacity above is already reserved, so this never allocates.
-        buf.resize(max_len, 0);
+        // (`resize_copy`: allocator_api2's `resize` is a per-element loop,
+        // N261; banned in this crate by clippy.toml.)
+        crate::alloc::CopyVecExt::resize_copy(&mut buf, max_len, 0);
         // const decoded = simd.base64.decodeStrict(data, buf, .optional) catch {
         //     log.warn("OSC 52 clipboard write is not valid base64, ignoring", .{});
         //     return;
@@ -3945,12 +3948,12 @@ impl<'a> stream::Handler for Handler<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::alloc::Global;
     use crate::color::{DynamicPalette, DynamicRGB};
     use crate::modes as modespkg;
     use crate::terminal::Colors;
     use crate::terminal::Options;
     use crate::{kitty, size};
-    use allocator_api2::alloc::Global;
 
     // PORT NOTE: the reference tests construct `Terminal: try .init(testing.allocator,
     // .{ .cols, .rows })` and drive bytes through a `Stream`. Rustty's `Options`
@@ -6268,9 +6271,9 @@ mod tests {
     // test "clipboard_write allocation failure is ignored"
     //
     // PORT NOTE: the reference injects `testing.failing_allocator` by swapping
-    // `t.screens.active.alloc` for the duration of the sequence. rustty's
-    // allocator seam is the zero-sized `allocator_api2::alloc::Global`, so
-    // there is nothing to swap; the `CLIPBOARD_CONTENTS_TW` fail point sits
+    // `t.screens.active.alloc` for the duration of the sequence. The
+    // terminal's internals still run on the Rust global heap (the Global arm
+    // of `crate::alloc::Allocator`), so there is nothing to swap; the `CLIPBOARD_CONTENTS_TW` fail point sits
     // exactly where the reference's `try alloc.alloc(u8, decoded_len)` is, and
     // makes that allocation fail instead.
     //

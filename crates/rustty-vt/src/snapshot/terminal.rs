@@ -281,9 +281,9 @@ use crate::terminal::{
 };
 
 // PORT NOTE: the reference `Allocator.Error` maps to the crate's canonical
-// OOM; the general-purpose allocator maps to `allocator_api2::alloc::Global`
+// OOM; the general-purpose allocator maps to `crate::alloc::Global`
 // (the crate-wide treatment; see `snapshot/screen.rs`).
-use allocator_api2::alloc::Global as Allocator;
+use crate::alloc::Allocator;
 
 // const ModeBits = @typeInfo(terminal_modes.ModePacked).@"struct".backing_integer.?;
 // PORT NOTE: the port's `ModePacked` is a `u64` newtype whose low

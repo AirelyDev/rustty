@@ -28,12 +28,12 @@
 // const Terminal = terminal.Terminal;
 // const PageFormatter = @import("../formatter.zig").PageFormatter;
 // const FlattenedHighlight = terminal.highlight.Flattened;
+use crate::alloc::Allocator;
 use crate::formatter::{Format, Options, PageFormatter, PointMap};
 use crate::highlight::Flattened as FlattenedHighlight;
 use crate::pagelist::Node;
 use crate::point;
 use crate::size;
-use allocator_api2::alloc::Global as Allocator;
 use rustty_datastruct::circ_buf::{Direction as CircDirection, Error as CircError};
 use rustty_datastruct::CircBuf;
 

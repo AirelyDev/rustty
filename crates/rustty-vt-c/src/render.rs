@@ -645,7 +645,7 @@ pub unsafe fn free(state_: RenderState) {
     // PORT NOTE (W12-01 Tier-2 residual): rustty-vt's `RenderState` allocates
     // internally through `Global`, so `deinit` takes `Global`, not the caller
     // allocator (see DEFERRALS.md "F-008/W12-01 Tier 2").
-    let gpa = allocator_api2::alloc::Global;
+    let gpa = rustty_vt::alloc::Global;
     state.state.deinit(gpa);
     // alloc.destroy(state);
     // SAFETY: `state_` was created by `new_` via `create_raw` with this
@@ -675,7 +675,7 @@ pub unsafe fn update(state_: RenderState, terminal_: terminal_c::Terminal) -> Re
     let t = unsafe { (*terminal_).terminal };
 
     // state.state.update(state.alloc, t) catch return .out_of_memory;
-    let gpa = allocator_api2::alloc::Global;
+    let gpa = rustty_vt::alloc::Global;
     // SAFETY: `state_`/`t` are live (caller contract); `update` needs `&mut`
     // access to both. They are independent allocations, so the two `&mut`s do
     // not alias.
@@ -709,7 +709,7 @@ pub unsafe fn begin_update(state_: RenderState, terminal_: terminal_c::Terminal)
     // SAFETY: `terminal_` is a live wrapper; raw-ptr read of the sibling field.
     let t = unsafe { (*terminal_).terminal };
 
-    let gpa = allocator_api2::alloc::Global;
+    let gpa = rustty_vt::alloc::Global;
     // SAFETY: `state_`/`t` are live (caller contract); they are independent
     // allocations, so the two `&mut`s do not alias.
     let state = unsafe { &mut *state_ };

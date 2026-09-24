@@ -12,7 +12,8 @@
 
 use super::*;
 
-use allocator_api2::alloc::Global;
+use allocator_api2::alloc::Global as ApiGlobal;
+use rustty_vt::alloc::Global;
 
 use crate::codepoint_resolver::{CodepointResolver, DescriptorCache, StyleStatus};
 use crate::collection::{AddOptions, Collection, LoadOptions, SizeAdjustment};
@@ -72,7 +73,7 @@ struct TestShaper {
     shaper: Shaper,
     // `grid: *SharedGrid` — a heap `SharedGrid` (the reference `alloc.create`);
     // `Box` gives the pointer-stable address `TextRun.grid` needs.
-    grid: Box<SharedGrid<Global>>,
+    grid: Box<SharedGrid<ApiGlobal>>,
     lib: Library,
 }
 
@@ -91,8 +92,8 @@ impl TestShaper {
     }
 
     /// Raw pointer to the heap grid (for `RunOptions.grid`).
-    fn grid_ptr(&mut self) -> *mut SharedGrid<Global> {
-        &mut *self.grid as *mut SharedGrid<Global>
+    fn grid_ptr(&mut self) -> *mut SharedGrid<ApiGlobal> {
+        &mut *self.grid as *mut SharedGrid<ApiGlobal>
     }
 }
 
@@ -186,7 +187,7 @@ fn test_shaper_with_font(font_req: TestFont) -> TestShaper {
 
     // const grid_ptr = try alloc.create(SharedGrid);
     // grid_ptr.* = try .init(alloc, .{ .collection = c });
-    let grid = Box::new(SharedGrid::init(Global, resolver_for(c)).unwrap());
+    let grid = Box::new(SharedGrid::init(ApiGlobal, resolver_for(c)).unwrap());
 
     // var shaper = try Shaper.init(alloc, .{ .features = &.{"dlig"} });
     // Some of our tests rely on dlig being enabled by default
@@ -300,7 +301,7 @@ fn test_shaper_with_discovered_font(font_req: &str) -> Option<TestShaper> {
 
     // const grid_ptr = try alloc.create(SharedGrid);
     // grid_ptr.* = try .init(alloc, .{ .collection = c });
-    let grid = Box::new(SharedGrid::init(Global, resolver_for(c)).unwrap());
+    let grid = Box::new(SharedGrid::init(ApiGlobal, resolver_for(c)).unwrap());
 
     // var shaper = try Shaper.init(alloc, .{});
     let shaper = Shaper::init(shape::Options::default()).unwrap();
@@ -355,7 +356,7 @@ fn run_iterator() {
             })
         };
         let mut count: usize = 0;
-        while it.next(Global).unwrap().is_some() {
+        while it.next(ApiGlobal).unwrap().is_some() {
             count += 1;
         }
         assert_eq!(1usize, count);
@@ -387,7 +388,7 @@ fn run_iterator() {
             })
         };
         let mut count: usize = 0;
-        while it.next(Global).unwrap().is_some() {
+        while it.next(ApiGlobal).unwrap().is_some() {
             count += 1;
         }
         assert_eq!(1usize, count);
@@ -419,7 +420,7 @@ fn run_iterator() {
             })
         };
         let mut count: usize = 0;
-        while it.next(Global).unwrap().is_some() {
+        while it.next(ApiGlobal).unwrap().is_some() {
             count += 1;
         }
         assert_eq!(3usize, count);
@@ -451,7 +452,7 @@ fn run_iterator() {
             })
         };
         let mut count: usize = 0;
-        while it.next(Global).unwrap().is_some() {
+        while it.next(ApiGlobal).unwrap().is_some() {
             count += 1;
         }
         assert_eq!(2usize, count);
@@ -526,11 +527,11 @@ fn run_iterator_empty_cells_with_background_set() {
             })
         };
         {
-            let run = it.next(Global).unwrap().unwrap();
+            let run = it.next(ApiGlobal).unwrap().unwrap();
             let cells = unsafe { (*shaper).shape(run) }.unwrap();
             assert_eq!(3usize, cells.len());
         }
-        assert!(it.next(Global).unwrap().is_none());
+        assert!(it.next(ApiGlobal).unwrap().is_none());
 
         state.deinit(Global);
         t.deinit(Global);
@@ -570,7 +571,7 @@ fn shape() {
         })
     };
     let mut count: usize = 0;
-    while let Some(run) = it.next(Global).unwrap() {
+    while let Some(run) = it.next(ApiGlobal).unwrap() {
         count += 1;
         let _ = unsafe { (*shaper).shape(run) }.unwrap();
     }
@@ -612,7 +613,7 @@ fn shape_nerd_fonts() {
         })
     };
     let mut count: usize = 0;
-    while let Some(run) = it.next(Global).unwrap() {
+    while let Some(run) = it.next(ApiGlobal).unwrap() {
         count += 1;
         let _ = unsafe { (*shaper).shape(run) }.unwrap();
     }
@@ -650,7 +651,7 @@ fn shape_inconsolata_ligs() {
             })
         };
         let mut count: usize = 0;
-        while let Some(run) = it.next(Global).unwrap() {
+        while let Some(run) = it.next(ApiGlobal).unwrap() {
             count += 1;
             assert_eq!(2usize, run.cells as usize);
             let cells = unsafe { (*shaper).shape(run) }.unwrap();
@@ -684,7 +685,7 @@ fn shape_inconsolata_ligs() {
             })
         };
         let mut count: usize = 0;
-        while let Some(run) = it.next(Global).unwrap() {
+        while let Some(run) = it.next(ApiGlobal).unwrap() {
             count += 1;
             assert_eq!(3usize, run.cells as usize);
             let cells = unsafe { (*shaper).shape(run) }.unwrap();
@@ -726,7 +727,7 @@ fn shape_monaspace_ligs() {
             })
         };
         let mut count: usize = 0;
-        while let Some(run) = it.next(Global).unwrap() {
+        while let Some(run) = it.next(ApiGlobal).unwrap() {
             count += 1;
             assert_eq!(3usize, run.cells as usize);
             let cells = unsafe { (*shaper).shape(run) }.unwrap();
@@ -769,7 +770,7 @@ fn shape_left_replaced_lig_in_last_run() {
             })
         };
         let mut count: usize = 0;
-        while let Some(run) = it.next(Global).unwrap() {
+        while let Some(run) = it.next(ApiGlobal).unwrap() {
             count += 1;
             assert_eq!(3usize, run.cells as usize);
             let cells = unsafe { (*shaper).shape(run) }.unwrap();
@@ -812,7 +813,7 @@ fn shape_left_replaced_lig_in_early_run() {
             })
         };
 
-        let run = it.next(Global).unwrap().unwrap();
+        let run = it.next(ApiGlobal).unwrap().unwrap();
         assert_eq!(4usize, run.cells as usize);
         let cells = unsafe { (*shaper).shape(run) }.unwrap();
         assert_eq!(2usize, cells.len());
@@ -854,7 +855,7 @@ fn shape_u_3c9_with_jb_mono() {
 
         let mut run_count: usize = 0;
         let mut cell_count: usize = 0;
-        while let Some(run) = it.next(Global).unwrap() {
+        while let Some(run) = it.next(ApiGlobal).unwrap() {
             run_count += 1;
             let cells = unsafe { (*shaper).shape(run) }.unwrap();
             cell_count += cells.len();
@@ -896,7 +897,7 @@ fn shape_emoji_width() {
             })
         };
         let mut count: usize = 0;
-        while let Some(run) = it.next(Global).unwrap() {
+        while let Some(run) = it.next(ApiGlobal).unwrap() {
             count += 1;
             let cells = unsafe { (*shaper).shape(run) }.unwrap();
             assert_eq!(1usize, cells.len());
@@ -953,7 +954,7 @@ fn shape_emoji_width_long() {
         })
     };
     let mut count: usize = 0;
-    while let Some(run) = it.next(Global).unwrap() {
+    while let Some(run) = it.next(ApiGlobal).unwrap() {
         count += 1;
         let cells = unsafe { (*shaper).shape(run) }.unwrap();
         assert_eq!(1usize, cells.len());
@@ -995,7 +996,7 @@ fn shape_variation_selector_vs15() {
         })
     };
     let mut count: usize = 0;
-    while let Some(run) = it.next(Global).unwrap() {
+    while let Some(run) = it.next(ApiGlobal).unwrap() {
         count += 1;
         let cells = unsafe { (*shaper).shape(run) }.unwrap();
         assert_eq!(1usize, cells.len());
@@ -1037,7 +1038,7 @@ fn shape_variation_selector_vs16() {
         })
     };
     let mut count: usize = 0;
-    while let Some(run) = it.next(Global).unwrap() {
+    while let Some(run) = it.next(ApiGlobal).unwrap() {
         count += 1;
         let cells = unsafe { (*shaper).shape(run) }.unwrap();
         assert_eq!(1usize, cells.len());
@@ -1077,7 +1078,7 @@ fn shape_with_empty_cells_in_between() {
         })
     };
     let mut count: usize = 0;
-    while let Some(run) = it.next(Global).unwrap() {
+    while let Some(run) = it.next(ApiGlobal).unwrap() {
         count += 1;
         let cells = unsafe { (*shaper).shape(run) }.unwrap();
         assert_eq!(1usize, count);
@@ -1125,7 +1126,7 @@ fn shape_combining_characters() {
         })
     };
     let mut count: usize = 0;
-    while let Some(run) = it.next(Global).unwrap() {
+    while let Some(run) = it.next(ApiGlobal).unwrap() {
         count += 1;
         let cells = unsafe { (*shaper).shape(run) }.unwrap();
         assert_eq!(4usize, cells.len());
@@ -1179,7 +1180,7 @@ fn shape_devanagari_string() {
         })
     };
 
-    let run = it.next(Global).unwrap();
+    let run = it.next(ApiGlobal).unwrap();
     assert!(run.is_some());
     let cells = unsafe { (*shaper).shape(run.unwrap()) }.unwrap();
 
@@ -1195,7 +1196,7 @@ fn shape_devanagari_string() {
     assert_eq!(5u16, cells[6].x);
     assert_eq!(6u16, cells[7].x);
 
-    assert!(it.next(Global).unwrap().is_none());
+    assert!(it.next(ApiGlobal).unwrap().is_none());
 
     state.deinit(Global);
     t.deinit(Global);
@@ -1246,7 +1247,7 @@ fn shape_tai_tham_vowels_position_differs_from_advance() {
         })
     };
     let mut count: usize = 0;
-    while let Some(run) = it.next(Global).unwrap() {
+    while let Some(run) = it.next(ApiGlobal).unwrap() {
         count += 1;
         let cells = unsafe { (*shaper).shape(run) }.unwrap();
         let cell_width = unsafe { (*run.grid).metrics.cell_width };
@@ -1310,7 +1311,7 @@ fn shape_tai_tham_letters_position_y_differs_from_advance() {
         })
     };
     let mut count: usize = 0;
-    while let Some(run) = it.next(Global).unwrap() {
+    while let Some(run) = it.next(ApiGlobal).unwrap() {
         count += 1;
         let cells = unsafe { (*shaper).shape(run) }.unwrap();
         assert_eq!(3usize, cells.len());
@@ -1373,7 +1374,7 @@ fn shape_javanese_ligatures() {
         })
     };
     let mut count: usize = 0;
-    while let Some(run) = it.next(Global).unwrap() {
+    while let Some(run) = it.next(ApiGlobal).unwrap() {
         count += 1;
         let cells = unsafe { (*shaper).shape(run) }.unwrap();
         let cell_width = unsafe { (*run.grid).metrics.cell_width };
@@ -1394,7 +1395,7 @@ fn shape_javanese_ligatures() {
 
 // test "shape Chakma vowel sign with ligature (vowel sign renders first)" {
 #[test]
-fn shape_chakma_vowel_sign_with_ligature() {
+fn shape_chakma_vowel_sign_with_ligature_vowel_sign_renders_first() {
     // We need a font that supports Chakma for this to work, if we can't find
     // Noto Sans Chakma Regular, which is a system font on macOS, we just skip
     // the test.
@@ -1439,7 +1440,7 @@ fn shape_chakma_vowel_sign_with_ligature() {
         })
     };
     let mut count: usize = 0;
-    while let Some(run) = it.next(Global).unwrap() {
+    while let Some(run) = it.next(ApiGlobal).unwrap() {
         count += 1;
         let cells = unsafe { (*shaper).shape(run) }.unwrap();
         assert_eq!(4usize, cells.len());
@@ -1513,7 +1514,7 @@ fn shape_bengali_ligatures_with_out_of_order_vowels() {
         })
     };
     let mut count: usize = 0;
-    while let Some(run) = it.next(Global).unwrap() {
+    while let Some(run) = it.next(ApiGlobal).unwrap() {
         count += 1;
         let cells = unsafe { (*shaper).shape(run) }.unwrap();
         assert_eq!(8usize, cells.len());
@@ -1570,7 +1571,7 @@ fn shape_box_glyphs() {
         })
     };
     let mut count: usize = 0;
-    while let Some(run) = it.next(Global).unwrap() {
+    while let Some(run) = it.next(ApiGlobal).unwrap() {
         count += 1;
         let cells = unsafe { (*shaper).shape(run) }.unwrap();
         assert_eq!(2usize, cells.len());
@@ -1615,7 +1616,7 @@ fn shape_selection_boundary() {
             })
         };
         let mut count: usize = 0;
-        while let Some(run) = it.next(Global).unwrap() {
+        while let Some(run) = it.next(ApiGlobal).unwrap() {
             count += 1;
             let _ = unsafe { (*shaper).shape(run) }.unwrap();
         }
@@ -1635,7 +1636,7 @@ fn shape_selection_boundary() {
             })
         };
         let mut count: usize = 0;
-        while let Some(run) = it.next(Global).unwrap() {
+        while let Some(run) = it.next(ApiGlobal).unwrap() {
             count += 1;
             let _ = unsafe { (*shaper).shape(run) }.unwrap();
         }
@@ -1655,7 +1656,7 @@ fn shape_selection_boundary() {
             })
         };
         let mut count: usize = 0;
-        while let Some(run) = it.next(Global).unwrap() {
+        while let Some(run) = it.next(ApiGlobal).unwrap() {
             count += 1;
             let _ = unsafe { (*shaper).shape(run) }.unwrap();
         }
@@ -1675,7 +1676,7 @@ fn shape_selection_boundary() {
             })
         };
         let mut count: usize = 0;
-        while let Some(run) = it.next(Global).unwrap() {
+        while let Some(run) = it.next(ApiGlobal).unwrap() {
             count += 1;
             let _ = unsafe { (*shaper).shape(run) }.unwrap();
         }
@@ -1695,7 +1696,7 @@ fn shape_selection_boundary() {
             })
         };
         let mut count: usize = 0;
-        while let Some(run) = it.next(Global).unwrap() {
+        while let Some(run) = it.next(ApiGlobal).unwrap() {
             count += 1;
             let _ = unsafe { (*shaper).shape(run) }.unwrap();
         }
@@ -1735,7 +1736,7 @@ fn shape_cursor_boundary() {
             })
         };
         let mut count: usize = 0;
-        while let Some(run) = it.next(Global).unwrap() {
+        while let Some(run) = it.next(ApiGlobal).unwrap() {
             count += 1;
             let _ = unsafe { (*shaper).shape(run) }.unwrap();
         }
@@ -1756,7 +1757,7 @@ fn shape_cursor_boundary() {
                 })
             };
             let mut count: usize = 0;
-            while let Some(run) = it.next(Global).unwrap() {
+            while let Some(run) = it.next(ApiGlobal).unwrap() {
                 count += 1;
                 let _ = unsafe { (*shaper).shape(run) }.unwrap();
             }
@@ -1775,7 +1776,7 @@ fn shape_cursor_boundary() {
                 })
             };
             let mut count: usize = 0;
-            while let Some(run) = it.next(Global).unwrap() {
+            while let Some(run) = it.next(ApiGlobal).unwrap() {
                 count += 1;
                 let _ = unsafe { (*shaper).shape(run) }.unwrap();
             }
@@ -1797,7 +1798,7 @@ fn shape_cursor_boundary() {
                 })
             };
             let mut count: usize = 0;
-            while let Some(run) = it.next(Global).unwrap() {
+            while let Some(run) = it.next(ApiGlobal).unwrap() {
                 count += 1;
                 let _ = unsafe { (*shaper).shape(run) }.unwrap();
             }
@@ -1816,7 +1817,7 @@ fn shape_cursor_boundary() {
                 })
             };
             let mut count: usize = 0;
-            while let Some(run) = it.next(Global).unwrap() {
+            while let Some(run) = it.next(ApiGlobal).unwrap() {
                 count += 1;
                 let _ = unsafe { (*shaper).shape(run) }.unwrap();
             }
@@ -1837,7 +1838,7 @@ fn shape_cursor_boundary() {
                 })
             };
             let mut count: usize = 0;
-            while let Some(run) = it.next(Global).unwrap() {
+            while let Some(run) = it.next(ApiGlobal).unwrap() {
                 count += 1;
                 let _ = unsafe { (*shaper).shape(run) }.unwrap();
             }
@@ -1856,7 +1857,7 @@ fn shape_cursor_boundary() {
                 })
             };
             let mut count: usize = 0;
-            while let Some(run) = it.next(Global).unwrap() {
+            while let Some(run) = it.next(ApiGlobal).unwrap() {
                 count += 1;
                 let _ = unsafe { (*shaper).shape(run) }.unwrap();
             }
@@ -1897,7 +1898,7 @@ fn shape_cursor_boundary_and_colored_emoji() {
             })
         };
         let mut count: usize = 0;
-        while let Some(run) = it.next(Global).unwrap() {
+        while let Some(run) = it.next(ApiGlobal).unwrap() {
             count += 1;
             let _ = unsafe { (*shaper).shape(run) }.unwrap();
         }
@@ -1917,7 +1918,7 @@ fn shape_cursor_boundary_and_colored_emoji() {
             })
         };
         let mut count: usize = 0;
-        while let Some(run) = it.next(Global).unwrap() {
+        while let Some(run) = it.next(ApiGlobal).unwrap() {
             count += 1;
             let _ = unsafe { (*shaper).shape(run) }.unwrap();
         }
@@ -1935,7 +1936,7 @@ fn shape_cursor_boundary_and_colored_emoji() {
             })
         };
         let mut count: usize = 0;
-        while let Some(run) = it.next(Global).unwrap() {
+        while let Some(run) = it.next(ApiGlobal).unwrap() {
             count += 1;
             let _ = unsafe { (*shaper).shape(run) }.unwrap();
         }
@@ -1953,7 +1954,7 @@ fn shape_cursor_boundary_and_colored_emoji() {
             })
         };
         let mut count: usize = 0;
-        while let Some(run) = it.next(Global).unwrap() {
+        while let Some(run) = it.next(ApiGlobal).unwrap() {
             count += 1;
             let _ = unsafe { (*shaper).shape(run) }.unwrap();
         }
@@ -1971,7 +1972,7 @@ fn shape_cursor_boundary_and_colored_emoji() {
             })
         };
         let mut count: usize = 0;
-        while let Some(run) = it.next(Global).unwrap() {
+        while let Some(run) = it.next(ApiGlobal).unwrap() {
             count += 1;
             let _ = unsafe { (*shaper).shape(run) }.unwrap();
         }
@@ -2011,7 +2012,7 @@ fn shape_cell_attribute_change() {
             })
         };
         let mut count: usize = 0;
-        while let Some(run) = it.next(Global).unwrap() {
+        while let Some(run) = it.next(ApiGlobal).unwrap() {
             count += 1;
             let _ = unsafe { (*shaper).shape(run) }.unwrap();
         }
@@ -2046,7 +2047,7 @@ fn shape_cell_attribute_change() {
             })
         };
         let mut count: usize = 0;
-        while let Some(run) = it.next(Global).unwrap() {
+        while let Some(run) = it.next(ApiGlobal).unwrap() {
             count += 1;
             let _ = unsafe { (*shaper).shape(run) }.unwrap();
         }
@@ -2084,7 +2085,7 @@ fn shape_cell_attribute_change() {
             })
         };
         let mut count: usize = 0;
-        while let Some(run) = it.next(Global).unwrap() {
+        while let Some(run) = it.next(ApiGlobal).unwrap() {
             count += 1;
             let _ = unsafe { (*shaper).shape(run) }.unwrap();
         }
@@ -2122,7 +2123,7 @@ fn shape_cell_attribute_change() {
             })
         };
         let mut count: usize = 0;
-        while let Some(run) = it.next(Global).unwrap() {
+        while let Some(run) = it.next(ApiGlobal).unwrap() {
             count += 1;
             let _ = unsafe { (*shaper).shape(run) }.unwrap();
         }
@@ -2158,7 +2159,7 @@ fn shape_cell_attribute_change() {
             })
         };
         let mut count: usize = 0;
-        while let Some(run) = it.next(Global).unwrap() {
+        while let Some(run) = it.next(ApiGlobal).unwrap() {
             count += 1;
             let _ = unsafe { (*shaper).shape(run) }.unwrap();
         }
@@ -2208,7 +2209,7 @@ fn shape_high_plane_sprite_font_codepoint() {
         })
     };
     // We should get one run
-    let run = it.next(Global).unwrap().unwrap();
+    let run = it.next(ApiGlobal).unwrap().unwrap();
     // The run state should have the UTF-16 encoding of the character.
     assert_eq!(&[0xD83Eu16, 0xDF70], unsafe {
         (*shaper).run_state.unichars.as_slice()
@@ -2243,7 +2244,7 @@ fn shape_high_plane_sprite_font_codepoint() {
     // - it should be a sprite font
     assert!(run.font_index.special().is_some());
     // And we should get a null run after that
-    assert!(it.next(Global).unwrap().is_none());
+    assert!(it.next(ApiGlobal).unwrap().is_none());
 
     state.deinit(Global);
     t.deinit(Global);

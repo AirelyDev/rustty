@@ -62,9 +62,9 @@ use crate::style;
 use crate::terminal::PrintStringError;
 
 // PORT NOTE: the reference `Allocator.Error` maps to `pagelist::OutOfMemory`;
-// the general-purpose allocator maps to `allocator_api2::alloc::Global`, the
+// the general-purpose allocator maps to `crate::alloc::Global`, the
 // same allocator the PageList pools use (the crate's allocator seam).
-use allocator_api2::alloc::Global as Allocator;
+use crate::alloc::Allocator;
 
 // PORT NOTE: the reference formatter writer is `*std.Io.Writer` (a byte sink).
 // Per the Screen-SCC plan seam, this ports to `&mut dyn std::io::Write`.
@@ -801,11 +801,14 @@ impl Screen {
         //     .max_lines = opts.max_scrollback_lines,
         // });
         // errdefer pages.deinit();
-        let mut pages = PageList::init(pagelist::Options {
-            max_size: opts.max_scrollback_bytes,
-            max_lines: opts.max_scrollback_lines,
-            ..pagelist::Options::new(opts.cols, opts.rows)
-        })?;
+        let mut pages = PageList::init(
+            alloc,
+            pagelist::Options {
+                max_size: opts.max_scrollback_bytes,
+                max_lines: opts.max_scrollback_lines,
+                ..pagelist::Options::new(opts.cols, opts.rows)
+            },
+        )?;
 
         // Create our tracked pin for the cursor.
         // const page_pin = try pages.trackPin(.{ .node = pages.pages.first.? });
@@ -1127,7 +1130,7 @@ impl Screen {
         // everything into `OutOfMemory`; `CloneError::CloneFrom` exists precisely
         // because `clone_from` can fail with set/rehash errors, so the error set
         // is propagated unchanged instead.
-        let mut pages = self.pages.clone(&mut opts)?;
+        let mut pages = self.pages.clone(alloc, &mut opts)?;
         // errdefer pages.deinit();
 
         let pin_remap = opts.tracked_pins.as_ref().unwrap();

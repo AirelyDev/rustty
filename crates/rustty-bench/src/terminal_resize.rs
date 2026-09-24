@@ -225,7 +225,7 @@ impl TerminalResize {
     // (the reference passes the option instead of the 10_000 struct default).
     pub fn create(alloc: Allocator, opts: Options) -> Result<Box<TerminalResize>, OutOfMemory> {
         let terminal = Terminal::init(
-            alloc,
+            alloc.into(),
             rustty_vt::terminal::Options {
                 max_scrollback_bytes: Some(opts.scrollback_bytes),
                 ..crate::terminal_options(opts.terminal_rows, opts.terminal_cols)
@@ -243,7 +243,7 @@ impl TerminalResize {
     //     alloc.destroy(self);
     // }
     pub fn destroy(mut self: Box<TerminalResize>, alloc: Allocator) {
-        self.terminal.deinit(alloc);
+        self.terminal.deinit(alloc.into());
         drop(self);
     }
 
@@ -475,7 +475,7 @@ impl TerminalResize {
         //     .cell_size_px = .{ .width = 10, .height = 20 },
         // }) catch |err| { ... };
         if let Err(err) = self.terminal.resize(
-            self.alloc,
+            self.alloc.into(),
             Resize {
                 cols,
                 rows,

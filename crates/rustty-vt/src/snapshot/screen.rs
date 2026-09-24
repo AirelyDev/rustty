@@ -248,9 +248,9 @@ use crate::screen_set::Key as TerminalScreenKey;
 use crate::style as terminal_style;
 
 // PORT NOTE: the reference `Allocator.Error` maps to the crate's canonical
-// OOM; the general-purpose allocator maps to `allocator_api2::alloc::Global`
+// OOM; the general-purpose allocator maps to `crate::alloc::Global`
 // (the crate-wide treatment; see `screen_set.rs`).
-use allocator_api2::alloc::Global as Allocator;
+use crate::alloc::Allocator;
 
 // const TerminalHyperlink = terminal_hyperlink.Hyperlink;
 pub type TerminalHyperlink = terminal_hyperlink::Hyperlink;
@@ -609,19 +609,22 @@ pub fn decode(
         // tripwire seam: the PageList builder's own allocation.
         #[cfg(test)]
         super::tw::check(super::tw::SnapshotFp::Alloc).map_err(|_| DecodeError::OutOfMemory)?;
-        let mut builder = Builder::init(pagelist::Options {
-            max_size: if key == TerminalScreenKey::Alternate {
-                Some(0)
-            } else {
-                options.max_scrollback_bytes
+        let mut builder = Builder::init(
+            alloc,
+            pagelist::Options {
+                max_size: if key == TerminalScreenKey::Alternate {
+                    Some(0)
+                } else {
+                    options.max_scrollback_bytes
+                },
+                max_lines: if key == TerminalScreenKey::Alternate {
+                    Some(0)
+                } else {
+                    options.max_scrollback_lines
+                },
+                ..pagelist::Options::new(options.cols, options.rows)
             },
-            max_lines: if key == TerminalScreenKey::Alternate {
-                Some(0)
-            } else {
-                options.max_scrollback_lines
-            },
-            ..pagelist::Options::new(options.cols, options.rows)
-        })
+        )
         .map_err(|_| DecodeError::OutOfMemory)?;
         // defer builder.deinit();
 

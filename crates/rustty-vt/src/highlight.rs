@@ -312,10 +312,10 @@ fn flattened_tw_check(point: FlattenedFp) -> Result<(), OutOfMemory> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::alloc::Allocator;
     use crate::kitty;
     use crate::point;
     use crate::screen::{Options, Screen};
-    use allocator_api2::alloc::Global as Allocator;
     use rustty_util::tripwire::ResetMode;
 
     fn arm() {

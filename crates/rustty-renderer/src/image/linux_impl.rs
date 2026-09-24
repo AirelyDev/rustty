@@ -2282,7 +2282,7 @@ mod tests {
     use crate::opengl::gl::test_support;
     use crate::opengl::opengl_impl::OpenGL;
     use crate::size::AlphaBlending;
-    use allocator_api2::alloc::Global;
+    use rustty_vt::alloc::Global;
 
     /// Stand up the headless GL context + `OpenGL` api used by the GL-gated tests.
     /// Returns `None` on the clean-skip path (and panics under

@@ -21,13 +21,21 @@
 //! ported in `rustty-font-shaper` (R4/D1). (CORRECTION, 2026-09-24, parity
 //! tail S-8a: the "ported so far" list here stopped at `codepoint_map`.)
 //!
-//! Every reference comment of the 50 mapped files is present across the two
-//! crates (G3b `--crate font`: 3357/3357, via its R4 relocation map). Why the
-//! status is not `done`: a done claim makes G1/G2 diff the reference tests and
-//! assertions against THIS crate's `src/` only, where the shaper-tier tests
-//! are absent (G1 `--strict`: 89/178 here), so the flip waits for R4
-//! relocation support in `_gatelib`'s per-crate Rust scan; see also the
-//! backend residual in `rustty-font-shaper`'s header.
+//! Every gate examines both crates: `_gatelib.RELOCATIONS` names
+//! `crates/rustty-font-shaper/src` as part of this crate key's port (parity
+//! tail S-8c). Measured 2026-09-24 with that relocation, every gate a done
+//! claim would bind is green for `font`: G1 `--strict` 278/178 with no MISSING
+//! name, G2 970/619 with no WEAKENED test, G3, G3b 3357/3357, and D3.
+//!
+//! Why the status is still not `done`: the reference selects the font backend
+//! with a BUILD OPTION (`-Dfont-backend`, `src/build/Config.zig:191-195`), and
+//! its CI builds and tests `coretext_freetype` on macOS (`build-macos-freetype`
+//! in `.github/workflows/test.yml`). Here `options::BACKEND` is folded to the
+//! per-OS default (`Backend::default()`), and the Face/Shaper/Discover/Library
+//! types are chosen by `target_os`, not by the backend. So the non-default arms
+//! (`loadCoreTextFreetype`, the `coretext_harfbuzz`/`coretext_noshape`/
+//! `freetype` selections) exist only as quoted comments. That is an R8
+//! build-switch fold, recorded OPEN as NEW-FINDINGS N266.
 
 pub mod atlas;
 pub mod codepoint_map;

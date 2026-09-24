@@ -20,9 +20,9 @@
 use crate::screen::Screen;
 
 // PORT NOTE: the reference `Allocator.Error` maps to `pagelist::OutOfMemory`;
-// the general-purpose allocator maps to `allocator_api2::alloc::Global`.
+// the general-purpose allocator maps to `crate::alloc::Global`.
+use crate::alloc::Allocator;
 use crate::pagelist::OutOfMemory;
-use allocator_api2::alloc::Global as Allocator;
 
 /// C: RusttyTerminalScreen (R2) — checked by the A5 enum-discriminant arm.
 /// The possible keys for screens in the screen set.
@@ -171,8 +171,8 @@ impl ScreenSet {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::alloc::Global;
     use crate::screen::Options;
-    use allocator_api2::alloc::Global;
 
     // test ScreenSet
     #[test]

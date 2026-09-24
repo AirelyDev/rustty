@@ -1538,7 +1538,7 @@ pub unsafe fn new(
 // caller allocator therefore yields a recoverable `RUSTTY_OUT_OF_MEMORY`
 // instead of silently succeeding on the Rust global heap. REMAINING Tier-2
 // residual (DEFERRALS.md "F-008/W12-01 Tier 2"): rustty-vt's `Terminal`
-// INTERNALS still allocate through their own `allocator_api2::alloc::Global`
+// INTERNALS still allocate through their own `rustty_vt::alloc::Global`
 // (`t.init(gpa, ...)` below vs the reference's `t.init(alloc, ...)`).
 fn new_(
     alloc_: Option<&CAllocator>,
@@ -1559,7 +1559,7 @@ fn new_(
     // SAFETY: `alloc_holder` is a live heap allocation until `free` (or the
     // unwind arms below) reclaims it.
     let alloc: &'static dyn rustty_lib::allocator::ZigAllocator = unsafe { &*alloc_holder };
-    let gpa = allocator_api2::alloc::Global;
+    let gpa = rustty_vt::alloc::Global;
 
     // const t = alloc.create(ZigTerminal) catch return error.OutOfMemory;
     let terminal_ptr: *mut ZigTerminal = match rustty_lib::allocator::create_raw(alloc) {
@@ -1634,6 +1634,9 @@ fn new_(
         wrap(
             alloc_holder,
             alloc_.copied(),
+            // `lib.alloc.default(alloc_)` as the runtime handle (a non-NULL
+            // `alloc_` outlives the terminal: the caller's contract).
+            rustty_vt::alloc::default(alloc_),
             terminal_ptr,
             DEFAULT_CONTINUATION_MAX_BYTES,
         )
@@ -1668,7 +1671,9 @@ struct WrapOutOfMemory;
 // PORT NOTE: the `io: Io` owner parameter is N/A (see the `Io` PORT NOTE);
 // rustty's analog of the reference `alloc` parameter is the F-008
 // `alloc_holder` (see `TerminalWrapper.alloc`), whose ownership likewise stays
-// with the caller on failure.
+// with the caller on failure. `capture_alloc` is the same allocator as the
+// runtime handle (`rustty_vt::alloc::default(alloc_)`) for the stream's OSC
+// captures (parity tail S7-1; S7-4 threads it into the terminal too).
 //
 // # Safety
 // `alloc_holder` must be a live `Box::into_raw` holder; `terminal_ptr` must
@@ -1676,6 +1681,7 @@ struct WrapOutOfMemory;
 unsafe fn wrap(
     alloc_holder: *mut dyn rustty_lib::allocator::ZigAllocator,
     c_alloc: Option<CAllocator>,
+    capture_alloc: rustty_vt::alloc::Allocator,
     terminal_ptr: *mut ZigTerminal,
     continuation_max_bytes: usize,
 ) -> std::result::Result<Terminal, WrapOutOfMemory> {
@@ -1766,11 +1772,11 @@ unsafe fn wrap(
 
     // The stream's OSC captures allocate through the same caller allocator
     // (`.initAlloc(alloc, handler)`; see `osc::Parser.capture_alloc`, parity
-    // S174-F3). The holder outlives the stream: `free` reclaims it last.
+    // S174-F3): the caller's own `RusttyAllocator` (valid for the terminal's
+    // life, the C API's contract, N260), or the Rust heap for NULL.
     // SAFETY: `wrapper_ptr` was initialized just above; raw place write.
     unsafe {
-        (*wrapper_ptr).stream.parser.osc_parser.capture_alloc =
-            rustty_vt::osc::CaptureAllocator::Zig(alloc);
+        (*wrapper_ptr).stream.parser.osc_parser.capture_alloc = capture_alloc;
     }
 
     // return wrapper;
@@ -1888,7 +1894,7 @@ pub unsafe fn from_decoded(
         Box::into_raw(rustty_lib::allocator::default(alloc_));
     // SAFETY: live until `free` (or the unwind arms below) reclaims it.
     let alloc: &'static dyn rustty_lib::allocator::ZigAllocator = unsafe { &*alloc_holder };
-    let gpa = allocator_api2::alloc::Global;
+    let gpa = rustty_vt::alloc::Global;
 
     // const native = alloc.create(ZigTerminal) catch { io.deinit(alloc); return error.OutOfMemory; };
     let terminal_ptr: *mut ZigTerminal = match rustty_lib::allocator::create_raw(alloc) {
@@ -1926,6 +1932,9 @@ pub unsafe fn from_decoded(
         wrap(
             alloc_holder,
             alloc_.copied(),
+            // `lib.alloc.default(alloc_)` as the runtime handle (a non-NULL
+            // `alloc_` outlives the terminal: the caller's contract).
+            rustty_vt::alloc::default(alloc_),
             terminal_ptr,
             tracker_max_bytes,
         )
@@ -4684,7 +4693,7 @@ mod tests {
     fn plain_string(t: Terminal) -> Vec<u8> {
         // SAFETY: `t` is a live terminal from `new_t`.
         let zt = unsafe { &mut *(*t).terminal };
-        zt.plain_string(allocator_api2::alloc::Global).unwrap()
+        zt.plain_string(rustty_vt::alloc::Global).unwrap()
     }
 
     // test "new/free"

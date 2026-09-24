@@ -2164,7 +2164,7 @@ mod tests {
     use super::*;
     use crate::metal::metal_impl::Metal;
     use crate::size::AlphaBlending;
-    use allocator_api2::alloc::Global;
+    use rustty_vt::alloc::Global;
 
     #[test]
     fn image_empty_lifecycle() {

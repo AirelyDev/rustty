@@ -4473,7 +4473,7 @@ where
                 // our message. This lets the use see the error message the
                 // command may have output.
                 // const viewport_str = try t.plainString(alloc);
-                let viewport_str = (*t).plain_string(alloc)?;
+                let viewport_str = (*t).plain_string(alloc.into())?;
                 // if (viewport_str.len > 0) {
                 if !viewport_str.is_empty() {
                     // try t.linefeed();
@@ -5017,7 +5017,7 @@ where
                     //     .trim = false,
                     // });
                     let str_ = unsafe { &mut *self.io.terminal.screens.active }.selection_string(
-                        alloc,
+                        alloc.into(),
                         terminal::screen::SelectionString {
                             sel: link.selection,
                             trim: false,
@@ -5539,7 +5539,7 @@ where
         //     .trim = false,
         // });
         let text = unsafe { &mut *self.io.terminal.screens.active }.selection_string(
-            alloc,
+            alloc.into(),
             terminal::screen::SelectionString { sel, trim: false },
         )?;
         // errdefer alloc.free(text);
@@ -5772,7 +5772,7 @@ where
         //     .trim = false,
         // });
         let result = unsafe { &mut *self.io.terminal.screens.active }.selection_string(
-            alloc,
+            alloc.into(),
             terminal::screen::SelectionString { sel, trim: false },
         );
         // (the deferred mutex unlock)
@@ -10150,7 +10150,7 @@ where
         // });
         let mut strmap: terminal::string_map::StringMap = unsafe { &mut *screen }
             .selection_string_map(
-                self.alloc,
+                self.alloc.into(),
                 terminal::screen::SelectionString {
                     sel: line,
                     trim: false,
@@ -10292,7 +10292,7 @@ where
                 //     .trim = false,
                 // });
                 let str_ = unsafe { &mut *self.io.terminal.screens.active }.selection_string(
-                    self.alloc,
+                    self.alloc.into(),
                     terminal::screen::SelectionString {
                         sel: link.selection,
                         trim: false,
@@ -11514,7 +11514,7 @@ where
                     // `addr_of!` alias would be popped by the child's
                     // `Box<Mailbox>` noalias — mirihar `search_shipped`).
                     let mut state = terminal::search::thread::Thread::init(
-                        self.alloc,
+                        self.alloc.into(),
                         terminal::search::thread::Options {
                             // .mutex = self.renderer_state.mutex,
                             mutex: self.renderer_state.mutex, // *mut -> *const (§1)
@@ -11784,7 +11784,7 @@ where
                             // };
                             let r = unsafe { &mut *self.io.terminal.screens.active }
                                 .selection_string(
-                                    self.alloc,
+                                    self.alloc.into(),
                                     terminal::screen::SelectionString {
                                         sel: link_info.selection,
                                         trim: self.config.clipboard_trim_trailing_spaces,
@@ -15723,7 +15723,7 @@ mod scroll_page_fractional_saturation_tests {
     #[test]
     fn a_saturated_scroll_delta_is_clamped_by_the_viewport() {
         let mut term = terminal::terminal::Terminal::init(
-            Allocator,
+            Allocator.into(),
             terminal::terminal::Options {
                 cols: 10,
                 rows: 4,
@@ -15750,7 +15750,7 @@ mod scroll_page_fractional_saturation_tests {
         term.scroll_viewport(terminal::terminal::ScrollViewport::Delta(isize::MAX));
         term.scroll_viewport(terminal::terminal::ScrollViewport::Delta(0));
 
-        term.deinit(Allocator);
+        term.deinit(Allocator.into());
     }
 }
 
@@ -16298,7 +16298,7 @@ mod clipboard_codepoint_map_e2e {
         // A terminal with "ab" printed to it (same fixture shape as
         // `surface_visibility_kat.rs`'s `TestSurface::build`).
         let mut terminal = rustty_vt::terminal::Terminal::init(
-            Allocator,
+            Allocator.into(),
             rustty_vt::terminal::Options {
                 cols: 80,
                 rows: 24,
@@ -16410,7 +16410,7 @@ mod clipboard_codepoint_map_e2e {
         // raw pointer), never through `surface`, for the Stacked-Borrows
         // reason noted above.
         unsafe {
-            (*sp).io.terminal.deinit(Allocator);
+            (*sp).io.terminal.deinit(Allocator.into());
             (*sp).config.deinit();
             std::ptr::drop_in_place(std::ptr::addr_of_mut!((*sp).config));
             drop(Box::from_raw(rt_surface_ptr));
@@ -16623,7 +16623,7 @@ mod paste_event_mutex_tests {
     #[cfg_attr(miri, ignore = "spawns a thread and waits on real time")]
     fn paste_event_queues_while_holding_the_renderer_mutex_on_a_full_mailbox() {
         let mut terminal = rustty_vt::terminal::Terminal::init(
-            Allocator,
+            Allocator.into(),
             rustty_vt::terminal::Options {
                 cols: 80,
                 rows: 24,
@@ -16793,7 +16793,7 @@ mod paste_event_mutex_tests {
 
         // Teardown.
         unsafe {
-            (*sp).io.terminal.deinit(Allocator);
+            (*sp).io.terminal.deinit(Allocator.into());
             std::ptr::drop_in_place(std::ptr::addr_of_mut!(
                 (*sp).io.terminal_stream.handler.kitty_clipboard_grants
             ));

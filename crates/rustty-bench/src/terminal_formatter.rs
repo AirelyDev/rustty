@@ -337,9 +337,9 @@ impl TerminalFormatter {
     // }
     pub fn destroy(mut self: Box<TerminalFormatter>, alloc: Allocator) {
         if let Some(t) = self.terminal.as_mut() {
-            t.deinit(self.alloc);
+            t.deinit(self.alloc.into());
         }
-        self.pins.deinit(self.alloc);
+        self.pins.deinit(self.alloc.into());
         let _ = alloc;
         drop(self);
     }
@@ -381,7 +381,7 @@ impl TerminalFormatter {
     // fn setupImpl(self: *TerminalFormatter) !void {
     fn setup_impl(&mut self) -> Result<(), SetupError> {
         if let Some(t) = self.terminal.as_mut() {
-            t.deinit(self.alloc);
+            t.deinit(self.alloc.into());
         }
         self.terminal = None;
         // self.terminal = try Terminal.init(global.io(), self.alloc, .{
@@ -391,7 +391,7 @@ impl TerminalFormatter {
         //     .max_scrollback_lines = null,
         // });
         self.terminal = Some(Terminal::init(
-            self.alloc,
+            self.alloc.into(),
             rustty_vt::terminal::Options {
                 max_scrollback_bytes: None,
                 max_scrollback_lines: None,
@@ -445,7 +445,7 @@ impl TerminalFormatter {
     unsafe fn teardown(ptr: *mut c_void) {
         let self_ = unsafe { &mut *(ptr as *mut TerminalFormatter) };
         if let Some(t) = self_.terminal.as_mut() {
-            t.deinit(self_.alloc);
+            t.deinit(self_.alloc.into());
         }
         self_.terminal = None;
         // self.output.shrinkRetainingCapacity(0);
@@ -537,7 +537,7 @@ impl TerminalFormatter {
                 self_.pins.clear_retaining_capacity();
                 // f.pin_map = .{ .alloc = self.alloc, .map = &self.pins };
                 f.pin_map = Some(formatterpkg::PinMap {
-                    alloc: self_.alloc,
+                    alloc: self_.alloc.into(),
                     map: &mut self_.pins,
                 });
             }
@@ -572,7 +572,7 @@ impl TerminalFormatter {
             if self_.opts.pin_map {
                 self_.pins.clear_retaining_capacity();
                 f.pin_map = Some(formatterpkg::PinMap {
-                    alloc: self_.alloc,
+                    alloc: self_.alloc.into(),
                     map: &mut self_.pins,
                 });
             }
@@ -691,7 +691,7 @@ impl TerminalFormatter {
         // var t2 = try Terminal.init(global.io(), self.alloc, .{ ... });
         // defer t2.deinit(self.alloc);
         let mut t2 = Terminal::init(
-            self.alloc,
+            self.alloc.into(),
             rustty_vt::terminal::Options {
                 max_scrollback_bytes: None,
                 max_scrollback_lines: None,
@@ -718,7 +718,7 @@ impl TerminalFormatter {
         let f2 = formatterpkg::ScreenFormatter::init(t2.screens.active, self.formatter_options());
         // try f2.format(&out2.writer);
         let format_result = f2.format(&mut out2);
-        t2.deinit(self.alloc);
+        t2.deinit(self.alloc.into());
         format_result?;
         // const second = out2.written();
         let second: &[u8] = &out2;

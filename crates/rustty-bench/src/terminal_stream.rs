@@ -148,7 +148,7 @@ impl TerminalStream {
     // }
     pub fn create(alloc: Allocator, opts: Options) -> Result<Box<TerminalStream>, OutOfMemory> {
         let terminal = Terminal::init(
-            alloc,
+            alloc.into(),
             terminal_options(opts.terminal_rows, opts.terminal_cols),
         )?;
 
@@ -203,7 +203,7 @@ impl TerminalStream {
         // 258de36d1 adds this: the full handler owns an APC handler and an OSC
         // parser with allocated state, which the old print-only handler did not.
         self.stream.deinit();
-        self.terminal.deinit(alloc);
+        self.terminal.deinit(alloc.into());
         drop(self);
     }
 

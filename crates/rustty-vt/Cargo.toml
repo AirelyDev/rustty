@@ -179,6 +179,11 @@ imgui = ["dep:dcimgui-sys", "dcimgui-sys/freetype"]
 # did (the tracker is observation-only even when compiled in). Never enable for
 # published artifacts.
 alloc-bench = ["rustty-zigstd/tracking"]
+# TEST-ONLY: exposes `alloc::testing` (the `std.testing.FailingAllocator` port
+# and the counting allocator on the C `RusttyAllocator` ABI) to dependents'
+# tests. rustty-vt-c enables it from `[dev-dependencies]` only, so no
+# production build compiles it (parity tail S7-1).
+test-allocators = []
 
 # The standalone equal-scope PageList allocation bench (see the Zig twin at
 # .port/phase-1/bench-zig-pagelist). `required-features` makes cargo skip it

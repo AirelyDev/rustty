@@ -80,7 +80,6 @@ site that must be carried stays MISSING. Applied rows are PRINTED, never hidden:
 """
 import os
 import re
-import subprocess
 
 EVIDENCE_DOCS = (
     ".port/phase-3/NON_PORTS.md",
@@ -147,13 +146,14 @@ def oracle_reader_at_pin(G):
     if not pin:
         raise LedgerError("ORACLE_PIN missing or malformed")
     oracle = G.oracle_root()
+    if not os.path.isdir(oracle):
+        raise LedgerError(f"the oracle checkout {oracle} does not exist")
     cache = {}
 
     def read(rel):
         if rel not in cache:
             try:
-                r = subprocess.run(["git", "-C", oracle, "show", f"{pin}:src/{rel}"],
-                                   capture_output=True, text=True, env=G.git_env())
+                r = G.oracle_git(oracle, "show", f"{pin}:src/{rel}", text=True)
             except OSError as e:
                 raise LedgerError(f"cannot run git on the oracle: {e}")
             cache[rel] = r.stdout.split("\n") if r.returncode == 0 else None

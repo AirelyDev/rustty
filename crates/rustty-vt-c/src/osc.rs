@@ -104,9 +104,12 @@ pub unsafe fn new(alloc_: Option<&CAllocator>, result: *mut Parser) -> Result {
         return Result::OutOfMemory;
     }
     // The capture allocates through the same resolved allocator (see
-    // `osc::Parser.capture_alloc`); it outlives the parser, as `free` shows.
-    // SAFETY: `ptr` is the live wrapper just created.
-    unsafe { (*ptr).parser.capture_alloc = osc::CaptureAllocator::Zig(parser_alloc_ref) };
+    // `osc::Parser.capture_alloc`): the caller's own `RusttyAllocator`, which
+    // outlives the parser (the C API's contract, N260), or the Rust heap for
+    // NULL (`lib.alloc.default`).
+    // SAFETY: a non-NULL `alloc_` is valid for the parser's life (caller
+    // contract); `ptr` is the live wrapper just created.
+    unsafe { (*ptr).parser.capture_alloc = rustty_vt::alloc::default(alloc_) };
     // result.* = ptr;
     // SAFETY: `result` is writable per the caller contract.
     unsafe { *result = ptr };
@@ -438,6 +441,75 @@ mod tests {
         counting.reject.set(false);
         unsafe { free(p) };
         assert_eq!(0, counting.live_bytes.get());
+    }
+
+    // Parity tail S7-1 (no reference test): the capture's allocator is the
+    // runtime handle over the caller's own `RusttyAllocator`, and its growth
+    // is Zig's `realloc` (`w.allocator.realloc(..)`, osc.zig): `remap` first,
+    // alloc + copy + free only when the remap is refused. The counting
+    // allocator's heap remaps, so the growth is remaps with no extra alloc.
+    // Negative control: the fallback shape (a `FailingAllocator` that refuses
+    // every remap) must show the alloc + copy + free instead.
+    #[test]
+    fn c_parser_capture_grows_by_remap_like_zig_realloc() {
+        use rustty_vt::alloc::testing::{Config, CountingAllocator, FailingAllocator};
+
+        let feed_long_osc52 = |p: Parser| {
+            for &b in b"52;c;" {
+                unsafe { next(p, b) };
+            }
+            for _ in 0..(osc::MAX_BUF * 4) {
+                unsafe { next(p, b'A') };
+            }
+            let cmd = unsafe { end(p, 0) };
+            assert_eq!(osc::CommandKey::ClipboardContents, unsafe {
+                command_type(cmd)
+            });
+        };
+
+        let counting = CountingAllocator::over_heap();
+        let calloc = counting.allocator();
+        let mut p: Parser = std::ptr::null_mut();
+        assert_eq!(Result::Success, unsafe { new(Some(&calloc), &mut p) });
+        assert_eq!(
+            1,
+            counting.alloc_calls.get(),
+            "only the parser wrapper itself"
+        );
+        feed_long_osc52(p);
+        assert_eq!(
+            2,
+            counting.alloc_calls.get(),
+            "wrapper + the initial capture"
+        );
+        assert!(counting.remap_calls.get() >= 2, "the capture grew by remap");
+        unsafe { free(p) };
+        assert_eq!(0, counting.live_bytes.get());
+        assert_eq!(counting.alloc_calls.get(), counting.free_calls.get());
+
+        // Negative control: remaps refused, so every growth allocates fresh.
+        let failing = FailingAllocator::over_heap(Config {
+            resize_fail_index: 0,
+            ..Config::default()
+        });
+        let calloc = failing.allocator();
+        let mut p: Parser = std::ptr::null_mut();
+        assert_eq!(Result::Success, unsafe { new(Some(&calloc), &mut p) });
+        feed_long_osc52(p);
+        assert!(
+            failing.allocations.get() >= 4,
+            "wrapper + capture + >= 2 growths"
+        );
+        assert_eq!(failing.resize_index.get(), 0, "no remap succeeded");
+        unsafe { free(p) };
+        assert_eq!(failing.allocations.get(), failing.deallocations.get());
+        assert_eq!(failing.allocated_bytes.get(), failing.freed_bytes.get());
+
+        // NULL: the Rust heap (`lib.alloc.default(null)`), same result.
+        let mut p: Parser = std::ptr::null_mut();
+        assert_eq!(Result::Success, unsafe { new(None, &mut p) });
+        feed_long_osc52(p);
+        unsafe { free(p) };
     }
 
     // test "command type null" {

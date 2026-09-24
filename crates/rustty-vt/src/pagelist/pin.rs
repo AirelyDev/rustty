@@ -697,7 +697,7 @@ mod p3_reachability_negative_controls {
     /// correct destination.
     #[test]
     fn p3_right_wrap_exact_row_multiple_underflows() {
-        let mut s = PageList::init(Options::new(80, 24)).unwrap();
+        let mut s = PageList::init(crate::alloc::Global, Options::new(80, 24)).unwrap();
         let pin = s
             .pin(point::Point::Active(point::Coordinate { x: 0, y: 0 }))
             .unwrap();
@@ -721,7 +721,7 @@ mod p3_reachability_negative_controls {
     /// now the correct in-range answer.
     #[test]
     fn p3_left_wrap_exact_row_multiple_yields_out_of_range_x() {
-        let mut s = PageList::init(Options::new(80, 24)).unwrap();
+        let mut s = PageList::init(crate::alloc::Global, Options::new(80, 24)).unwrap();
         // Start far enough down that the upward walk stays in range.
         let pin = s
             .pin(point::Point::Active(point::Coordinate { x: 0, y: 10 }))

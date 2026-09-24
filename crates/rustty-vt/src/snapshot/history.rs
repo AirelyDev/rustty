@@ -610,9 +610,9 @@ fn has_semantic_prompt(terminal_page: &TerminalPage) -> bool {
 mod tests {
     use super::super::fixture;
     use super::*;
+    use crate::alloc::Allocator;
     use crate::screen::Options as ScreenOptions;
     use crate::snapshot::io::Reader as _;
-    use allocator_api2::alloc::Global as Allocator;
 
     // const test_header_fixture = test_fixture.parse(@embedFile("testdata/history-header-v1.hex"));
     fn test_header_fixture() -> Vec<u8> {

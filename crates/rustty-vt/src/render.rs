@@ -38,6 +38,7 @@
 // `Style::default()`/`Vec::new()` stores + drop glue. The reference's
 // `.slice().items(.X)` projections become the `CellSlice` column accessors.
 
+use crate::alloc::Allocator;
 use crate::color;
 use crate::cursor;
 use crate::highlight;
@@ -51,7 +52,6 @@ use crate::selection::Selection;
 use crate::size;
 use crate::style::Style;
 use crate::terminal::Terminal;
-use allocator_api2::alloc::Global as Allocator;
 
 /// Contains the state required to render the screen, including optimizing
 /// for repeated render calls and only rendering dirty regions.
@@ -1852,11 +1852,11 @@ use ScreenSet as _ScreenSet;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::alloc::Global;
     use crate::kitty;
     use crate::modes as modespkg;
     use crate::screen_set::Key;
     use crate::terminal::{Colors, Options, ScrollViewport};
-    use allocator_api2::alloc::Global;
 
     // PORT NOTE: the reference `Terminal.init(alloc, .{ .cols, .rows })` relies on
     // `Options` field defaults (`max_scrollback_bytes = 10_000`, `colors = .default`,

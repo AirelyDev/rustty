@@ -15,9 +15,9 @@
 // const SlidingWindow = @import("sliding_window.zig").SlidingWindow;
 // const Terminal = @import("../Terminal.zig");
 use super::sliding_window::{Direction, SlidingWindow};
+use crate::alloc::Allocator;
 use crate::highlight::Flattened as FlattenedHighlight;
 use crate::pagelist::{Node, OutOfMemory, PageList};
-use allocator_api2::alloc::Global as Allocator;
 
 /// Searches for a substring within the active area of a PageList.
 ///

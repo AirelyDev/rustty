@@ -26,13 +26,13 @@
 use super::active::ActiveSearch;
 use super::pagelist::PageListSearch;
 use super::sliding_window::{Direction, SlidingWindow};
+use crate::alloc::Allocator;
 use crate::highlight::Flattened as FlattenedHighlight;
 use crate::highlight::Tracked as TrackedHighlight;
 use crate::pagelist::{Node, OutOfMemory, PageList, Pin};
 use crate::point;
 use crate::screen::Screen;
 use crate::size;
-use allocator_api2::alloc::Global as Allocator;
 
 // const log = std.log.scoped(.search_screen);
 //

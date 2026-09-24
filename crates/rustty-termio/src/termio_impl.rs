@@ -574,7 +574,7 @@ impl<M: AppMailbox> Termio<M> {
         let grid_size = opts.size.grid();
         let mut term =
             Terminal::init(
-                alloc,
+                alloc.into(),
                 rustty_vt::terminal::Options {
                     cols: grid_size.columns,
                     rows: grid_size.rows,
@@ -773,7 +773,7 @@ impl<M: AppMailbox> Termio<M> {
     // invalidates the struct; cf_release `Thread::deinit` precedent).
     pub fn deinit(mut self) {
         self.backend.deinit();
-        self.terminal.deinit(self.alloc);
+        self.terminal.deinit(self.alloc.into());
         self.config.deinit();
         // self.mailbox.deinit(self.alloc);
         self.mailbox.deinit();
@@ -1150,7 +1150,7 @@ impl<M: AppMailbox> Termio<M> {
         // (`4371871bc`: eviction no longer allocates, so this cannot fail — the
         // pre-range `try` and its early-return gate are gone upstream.)
         self.terminal
-            .set_kitty_graphics_size_limit(self.alloc, self.config.image_storage_limit);
+            .set_kitty_graphics_size_limit(self.alloc.into(), self.config.image_storage_limit);
         // self.terminal.setKittyGraphicsLoadingLimits(.allWithTempDir(global.tmpDirPath()));
         self.terminal
             .set_kitty_graphics_loading_limits(Limits::all_with_temp_dir(
@@ -1219,7 +1219,7 @@ impl<M: AppMailbox> Termio<M> {
             if self
                 .terminal
                 .resize(
-                    self.alloc,
+                    self.alloc.into(),
                     rustty_vt::terminal::Resize {
                         cols: grid_size.columns,
                         rows: grid_size.rows,
@@ -2068,7 +2068,7 @@ mod scrollback_limit_handoff_tests {
     fn term_from_config(cfg: &Config, cols: u16, rows: u16) -> Terminal {
         let (bytes, lines) = scrollback_limits(cfg);
         Terminal::init(
-            Global,
+            Global.into(),
             rustty_vt::terminal::Options {
                 cols,
                 rows,
@@ -2135,7 +2135,7 @@ mod scrollback_limit_handoff_tests {
             effective
         );
 
-        t.deinit(Global);
+        t.deinit(Global.into());
     }
 
     /// The default config leaves the line limit unlimited, so the same feed
@@ -2157,7 +2157,7 @@ mod scrollback_limit_handoff_tests {
         // initial screen; everything after that becomes history.
         assert_eq!(feed - (rows as usize - 1), history_rows(&t));
 
-        t.deinit(Global);
+        t.deinit(Global.into());
     }
 
     /// `unlimited` on the byte axis is distinct from the 50 MB default and
@@ -2173,6 +2173,6 @@ mod scrollback_limit_handoff_tests {
         let pages = unsafe { &(*t.screens.active).pages };
         assert_eq!(usize::MAX, pages.limits.bytes.explicit);
 
-        t.deinit(Global);
+        t.deinit(Global.into());
     }
 }

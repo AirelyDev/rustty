@@ -4284,6 +4284,64 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   (green), then restored. It runs on a FreeBSD host (`VERIFICATION_DEBT.md` V23).
 - **state**: CLOSED (task tail-s13).
 
+## N265 — the reference's `test "face metrics"` never checks anything: its backend guard is inverted
+
+- **id**: N265. Not a ledger row: found by G2 once the `font` crate key was graded with its
+  R4 relocation (task tail-s8c).
+- **severity**: low. **kind**: reference test-weakness (R13: stays faithful; needs a
+  `UPSTREAM-DEFECTS.md` entry, whose UD id the controller assigns — this batch had none).
+- **oracle**: `src/font/Collection.zig:1396-1523` at 20abdb50a. `:1397-1398`: "The web canvas
+  backend doesn't calculate face metrics, only cell metrics" followed by
+  `if (options.backend != .web_canvas) return error.SkipZigTest;`, so the test is skipped on
+  every backend except the one its comment excludes. On `web_canvas`, every expected-value
+  switch (`:1438-1502`) takes its `.web_canvas => unreachable` prong. The switches also have no
+  `freetype_windows` prong, so they would not compile if analyzed on that backend.
+- **rustty**: `crates/rustty-font-shaper/src/collection.rs` `face_metrics`. Before this task the
+  body was only comments, and the test had zero assertions. The body is now ported live. The skip
+  is kept as `cfg_attr(not(wasm32), ignore)`, because `options::BACKEND` is `WebCanvas` exactly on
+  wasm32 (R14 form 1).
+- **evidence**: run with `--ignored` on macOS (the `coretext` backend), the live body passes
+  against the reference's own coretext expected values, for both CozetteVector and Geist Mono.
+  Negative control: changing the narrow font's coretext `cell_width` from 7.3828125 to 7.5 makes
+  it fail at the `expect_approx_equal` assertion. The `fontconfig_freetype` values are
+  UNVERIFIED here, because no Linux run was made.
+- **proposed upstream fix**: `if (options.backend == .web_canvas) return error.SkipZigTest;`, plus a
+  `freetype_windows` prong or an `else` in the four switches.
+- **state**: RECORDED as `UPSTREAM-DEFECTS.md` UD276 (controller, 2026-09-24).
+
+## N266 — the font backend build option is folded to the per-OS default: the `coretext_freetype`, `coretext_harfbuzz`, `coretext_noshape` and `freetype` arms are not live
+
+- **id**: N266. Not a ledger row (task tail-s8c, residual of the `font` done-flip).
+- **severity**: medium. **kind**: R8 build-switch fold / R1 missing code paths.
+- **oracle** (20abdb50a): `src/build/Config.zig:191-195` (`-Dfont-backend`, which defaults to
+  `FontBackend.default(target)`); `src/font/main.zig:50`
+  (`.backend = ... build_config.font_backend`). `.github/workflows/test.yml:1383-1428`
+  (`build-macos-freetype`) builds AND tests `-Dfont-backend=coretext_freetype` on macOS, so
+  Ghostty at the pin can be built with a non-default backend on this platform. There are 53
+  `options.backend` / `font_backend` / `backend.has*` sites in 18 files: `font/{face,library,
+  shape,discovery,DeferredFace,Collection,CodepointResolver,main}.zig`,
+  `font/face/coretext.zig`, `font/shaper/{coretext,harfbuzz}.zig`, `apprt/embedded.zig`,
+  `cli/version.zig`, `crash/sentry.zig`, `global.zig`, and `build/{Config,SharedDeps}.zig`.
+- **rustty**: `crates/rustty-font-shaper/src/lib.rs` `options::BACKEND = Backend::default()` (a
+  `cfg(target_os)` decision with no override); `face/mod.rs:88-93`, `shape.rs:135-140` and
+  `discovery.rs:71-83` choose `Face`/`Shaper`/`Discover` by `target_os`. `deferred_face.rs`
+  records `loadCoreTextFreetype` as a comment only. There is no cargo feature that selects a
+  backend. The existing `freetype`/`harfbuzz`/`fontconfig` features gate link edges only.
+- **stale records**: `docs/parity-audit/src-font.md:15` ("`loadCoreTextFreetype` is
+  not-applicable") and `docs/superpowers/specs/2026-08-25-build-system-gap-audit.md:539-542` (it
+  re-classifies `-Dfont-backend` as "correctly absent" on the premise that `rustty-font` has no
+  FreeType/fontconfig/CoreText dependency, which is false for `rustty-font-shaper`) both rest
+  on the fold.
+- **what closing needs**: one mutually exclusive cargo feature per backend on
+  `rustty-font-shaper` (default = the per-OS default, so existing builds are unchanged), with
+  `options::BACKEND` derived from it. Every type alias and `cfg(target_os)` backend gate must be
+  re-keyed on that `BACKEND` (face, shaper, discovery, library, deferred-face arms, collection,
+  resolver, the coretext face's `hasHarfbuzz` shaper font, and the consumers in apprt/cli/crash/
+  global). `loadCoreTextFreetype` has to be ported live. A CI lane (or local run) must build and
+  test `coretext_freetype` on macOS, as the oracle does. This is a multi-crate port, not a
+  gate-tail item.
+- **state**: OPEN. `font` stays `PORT STATUS: in progress` until it closes.
+
 ## N280 — `macosLogger`'s per-scope `os_log` cache (upstream `3225e9ebb`) was never ported
 
 - **id**: N280. Not a ledger row: found by G3b while closing bin's comment coverage (task tail-s8d).
@@ -4344,7 +4402,7 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   workspace and an unstruck evidence record naming it; for `gag-prose` free of digits, identifiers,
   backticks and ALL-CAPS tokens and at most 20 words; with a two-way cap. Excused comments are
   printed as `NOT-CARRIED (<class>)`. 64 rows: bin 35, apprt 29 (25 no-counterpart, 4 gag-prose).
-- **verification**: `check_comment_coverage.py --self-test` (43 ledger arms, synthetic and real,
+- **verification**: `check_comment_coverage.py --self-test` (42 ledger arms, synthetic and real,
   including real-row negative controls); `--not-carried-check` GREEN.
 - **state**: CLOSED (task tail-s8d).
 

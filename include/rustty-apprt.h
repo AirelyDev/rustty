@@ -607,8 +607,11 @@ RUSTTY_API int rustty_init(uintptr_t argc, char **argv);
  * C: rustty_cli_try_action
  *
  * Runs an action if it is specified. If there is no action this returns
- * (the GUI-launch path). If there is an action then this doesn't return
- * (it `posix.exit`s with the action's result code).
+ * false. If there is an action then this doesn't return.
+ *
+ * PORT NOTE: "returns false" is the reference doc's wording; the reference fn
+ * returns `void` (the GUI-launch path simply returns), and with an action it
+ * `posix.exit`s with the action's result code.
  *
  * PORT NOTE: rustty analogue of `ghostty_cli_try_action` (main_c.zig:120):
  * ```zig

@@ -2153,7 +2153,7 @@ mod tests {
             // PORT NOTE (F-008 Tier-2 residual): the storage internals allocate
             // through `Global` in rustty, so the direct storage call takes the
             // internals allocator (see DEFERRALS.md "F-008/W12-01 Tier 2").
-            let alloc = allocator_api2::alloc::Global;
+            let alloc = rustty_vt::alloc::Global;
             let storage = graphics as *mut rustty_vt::kitty::graphics_storage::ImageStorage;
             let screen = unsafe { (*terminal_c::zig_terminal(t)).screens.active };
             let pending = unsafe {

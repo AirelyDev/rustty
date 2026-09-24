@@ -245,7 +245,7 @@ impl ScrollbackCompression {
     ) -> Result<Box<ScrollbackCompression>, OutOfMemory> {
         let mut topts = terminal_options(opts.terminal_rows, opts.terminal_cols);
         topts.max_scrollback_bytes = Some(opts.max_scrollback);
-        let terminal = Terminal::init(alloc, topts)?;
+        let terminal = Terminal::init(alloc.into(), topts)?;
         Ok(Box::new(ScrollbackCompression { opts, terminal }))
     }
 
@@ -254,7 +254,7 @@ impl ScrollbackCompression {
     //     alloc.destroy(self);
     // }
     pub fn destroy(mut self: Box<ScrollbackCompression>, alloc: Allocator) {
-        self.terminal.deinit(alloc);
+        self.terminal.deinit(alloc.into());
         drop(self);
     }
 
