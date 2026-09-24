@@ -40,3 +40,8 @@ rustty-util.workspace = true
 # Faithful Rust map of Zig's `std.mem.Allocator` (the child allocator threaded
 # through `ArenaAllocator`). `Global` reproduces the prior `std::alloc` path.
 allocator-api2.workspace = true
+# The index of `array_hash_map::AutoArrayHashMapUnmanaged` over the map's
+# allocator (the `allocator-api2` feature makes `HashMap<K, V, S, A>` take an
+# allocator_api2 `Allocator`). No default features: the map supplies std's
+# `RandomState`, as it did with `std::collections::HashMap`.
+hashbrown = { version = "0.17", default-features = false, features = ["allocator-api2"] }
