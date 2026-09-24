@@ -267,7 +267,10 @@ impl Pipeline {
     /// PORT NOTE (only the program is destroyed): the reference's `deinit` destroys
     /// ONLY `program`, NOT `fbo`/`vao` — those GL objects leak for the process
     /// lifetime. That is the reference's behaviour (a pipeline outlives its uses and
-    /// is torn down at shutdown), ported as-is rather than "corrected".
+    /// is torn down at shutdown), ported as-is rather than "corrected". A shader
+    /// rebuild in the same GL context (a blending or custom-shader config change)
+    /// therefore leaks both names per pipeline: `.port/parity-closure/
+    /// UPSTREAM-DEFECTS.md` UD251, listed for a decision with a GL lane.
     pub fn deinit(&self) {
         self.program.destroy();
     }

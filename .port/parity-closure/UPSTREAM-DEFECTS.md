@@ -2078,6 +2078,21 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - proposed fix:    query `GL_READ_FRAMEBUFFER_BINDING` for `.read` and `GL_DRAW_FRAMEBUFFER_BINDING` for `.draw` (and `.framebuffer`).
 - upstream status: not reported
 
+### UD251 — the OpenGL `Pipeline.deinit` destroys the program but not the framebuffer and vertex array it created
+- kind:            leak
+- upstream project: ghostty
+- severity:        low (two GL object names per pipeline, per shader rebuild)
+- reference:       `src/renderer/opengl/Pipeline.zig:40-70` (`init` creates `program`, `fbo` at :51 and `vao` at :56, each with an `errdefer ... destroy()`) and `:72-74` (`deinit` destroys only `program`); callers `src/renderer/opengl/shaders.zig:137-153` (`Shaders.deinit`), which `src/renderer/generic.zig:1695-1699` runs when `reinitialize_shaders` is set, i.e. after a config change of the blending mode (`:2106-2112`) or of the custom shaders (`:2118-2119`), at 20abdb50a
+- defect:          `init` owns three GL objects, as its errdefers show, but `deinit` releases one. Every time the shaders are rebuilt in the same GL context, each old pipeline's framebuffer and vertex array names stay allocated.
+- ReleaseSafe:     no crash; GL objects leak in the surface's GL context on each rebuild. By reading; not measured on a driver.
+- ReleaseFast:     same.
+- reachability:    config reload on the OpenGL renderer (Linux, FreeBSD): changing `alpha-blending` or `custom-shader`. The objects go away when the surface's GL context is destroyed.
+- port handling:   faithful: `crates/rustty-renderer/src/opengl/pipeline.rs` `Pipeline::deinit` destroys only the program, with a PORT NOTE saying so. Decided by task tail-s6: a leak reachable from a config reload is R13 crash-class, but the fix could only be checked on a GL lane (none here; Linux-only code) and the leak is bounded by the context's lifetime, so it is listed for the controller rather than fixed blind.
+- parity row(s):   none; found by task tail-s6's sweep of PORT NOTEs.
+- test:            n/a (record only). A fix would be proved on the Ubuntu GL lane by checking `glIsFramebuffer` / `glIsVertexArray` after `deinit`.
+- proposed fix:    destroy `fbo` and `vao` in `deinit` as well (after the program, the reverse of `init`'s order).
+- upstream status: not reported
+
 ## Candidates pending verification
 
 Assembled from this plan's progress notes on 2026-09-11. **Not verified** — do not cite as fact.
