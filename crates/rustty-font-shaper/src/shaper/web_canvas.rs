@@ -444,7 +444,7 @@ mod wasm {
     mod ghostty_wasm_abi {
         use super::{collection, shape, Shaper};
         use crate::shared_grid::SharedGrid;
-        use allocator_api2::alloc::Global;
+        use rustty_vt::alloc::Global;
         use rustty_vt::page::ContentTag;
         use rustty_vt::pagelist::Node;
         use rustty_vt::point::{Coordinate, Point};

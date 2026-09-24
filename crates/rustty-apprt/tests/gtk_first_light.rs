@@ -151,7 +151,7 @@ unsafe fn screen_dump(core: *mut CoreSurface) -> Vec<u8> {
         (*mutex).lock();
         let active = (*(*core).renderer_state.terminal).screens.active;
         let dump = (*active).dump_string_alloc(
-            Global,
+            Global.into(),
             rustty_vt::point::Point::Active(rustty_vt::point::Coordinate::default()),
         );
         (*mutex).unlock();
