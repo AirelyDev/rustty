@@ -1696,6 +1696,7 @@ version = "0.1.0"
 dependencies = [
  "allocator-api2",
  "dcimgui-sys",
+ "hashbrown",
  "libc",
  "log",
  "rustty-datastruct",

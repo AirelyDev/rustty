@@ -261,8 +261,10 @@ pub fn encode<W: io::Writer + ?Sized>(
     let mut node = first;
     while !node.is_null() {
         // SAFETY: `node` is live (see above); encode does not mutate the list.
-        let mut preserved = unsafe { crate::pagelist::Node::page_preserving_state(node) }
-            .map_err(|_| EncodeError::OutOfMemory)?;
+        // var preserved = try current.pagePreservingState(terminal_screen.alloc);
+        let mut preserved =
+            unsafe { crate::pagelist::Node::page_preserving_state(node, terminal_screen.alloc) }
+                .map_err(|_| EncodeError::OutOfMemory)?;
         // defer preserved.deinit();
         // SAFETY: `preserved.page()` is a live page for the preserved scope.
         let result = page::encode(unsafe { &*preserved.page() }, destination);

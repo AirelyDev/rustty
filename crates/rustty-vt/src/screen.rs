@@ -249,7 +249,11 @@ pub struct Cursor {
     /// the cursor page pin changes. We can't get it from the old screen
     /// state because the page may be cleared. This is heap allocated
     /// because its most likely null.
-    pub hyperlink: Option<*mut hyperlink::Hyperlink>,
+    //
+    // PORT NOTE (parity tail S7-3): allocated through the screen's allocator
+    // (`create_cursor_hyperlink`: `alloc.create(Hyperlink)` + `source.dupe(alloc)`)
+    // and freed through it (`destroy_cursor_hyperlink`), bytes included.
+    pub hyperlink: Option<*mut CursorHyperlink>,
 
     /// The current semantic content type for the cursor that will be
     /// applied to any newly written cells.
@@ -336,16 +340,16 @@ impl Cursor {
         //     link.deinit(alloc);
         //     alloc.destroy(link);
         // }
-        // PORT NOTE: the reference frees the heap-allocated `*Hyperlink` via
-        // `link.deinit(alloc)` + `alloc.destroy(link)`. In Rust the link is owned
-        // through a `*mut Hyperlink` produced by `Box::into_raw`; reclaiming the
-        // `Box` here calls `Hyperlink::deinit` (a no-op; the inner `Vec`s drop on
-        // their own) and frees the box, mirroring deinit-then-destroy.
-        let _ = alloc;
+        // PORT NOTE: the link and its bytes were allocated through the screen's
+        // allocator, which the link records (`destroy_cursor_hyperlink` frees
+        // through it); `alloc` is that same allocator.
         if let Some(link) = self.hyperlink.take() {
-            let boxed = unsafe { Box::from_raw(link) };
-            boxed.deinit();
-            drop(boxed);
+            // SAFETY: `link` came from `create_cursor_hyperlink` and is owned by
+            // this cursor.
+            unsafe {
+                (*link).uri.allocator().debug_assert_same(alloc);
+                destroy_cursor_hyperlink(link);
+            }
         }
     }
 }
@@ -568,32 +572,64 @@ pub struct SelectionString {
 // into the returned `StringMap`, so there is no duplicated string left to
 // leak on allocation failure.
 
-// PORT NOTE: `04810273a`'s rollback test uses `std.testing.FailingAllocator` on
-// `alloc.create(Hyperlink)`. The Rust analogue of that allocation is the
-// `Hyperlink` heap allocation in `start_hyperlink_once`, which IS now fallible
-// and returns `OutOfMemory` exactly like the reference — but Rust has no
-// per-call FailingAllocator to make the global allocator fail on demand, so the
-// injection seam stays a tripwire fail point (the pagelist `init_tw`
-// thread-local idiom) placed at that allocation. It simulates what a
-// FailingAllocator does; the error it returns is the one the real allocation
-// path returns.
-#[cfg(test)]
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub(crate) enum StartHyperlinkFp {
-    DupeLink,
+// PORT NOTE (parity tail S7-3): `04810273a`'s rollback test uses
+// `std.testing.FailingAllocator` on `alloc.create(Hyperlink)`, and so does the
+// port now that the cursor hyperlink is allocated through `Screen.alloc`. The
+// port-only tripwire stand-in (`StartHyperlinkFp`) that used to sit here is
+// gone.
+
+/// The cursor's heap hyperlink: the reference's `*Hyperlink` whose bytes were
+/// duplicated with the screen's allocator (see `Cursor.hyperlink`).
+pub type CursorHyperlink = hyperlink::Hyperlink<hyperlink::AllocBytes>;
+
+/// `const link = try alloc.create(Hyperlink); link.* = try source.dupe(alloc);`
+/// with both `errdefer`s: the struct and its bytes are allocated through
+/// `alloc`, and on failure nothing is left allocated.
+fn create_cursor_hyperlink<B: core::ops::Deref<Target = [u8]>>(
+    alloc: Allocator,
+    source: &hyperlink::Hyperlink<B>,
+) -> Result<*mut CursorHyperlink, hyperlink::OutOfMemory> {
+    use allocator_api2::alloc::Allocator as _;
+    let layout = core::alloc::Layout::new::<CursorHyperlink>();
+    // const link = try alloc.create(hyperlink.Hyperlink);
+    let raw = alloc
+        .allocate(layout)
+        .map_err(|_| hyperlink::OutOfMemory)?
+        .cast::<CursorHyperlink>();
+    // link.* = try source.dupe(alloc);
+    match source.dupe_in(alloc) {
+        Ok(value) => {
+            // SAFETY: `raw` is a fresh allocation of `CursorHyperlink`'s layout.
+            unsafe { raw.as_ptr().write(value) };
+            Ok(raw.as_ptr())
+        }
+        Err(e) => {
+            // errdefer alloc.destroy(link);
+            // SAFETY: `raw`/`layout` are the pair allocated above, unwritten.
+            unsafe { alloc.deallocate(raw.cast(), layout) };
+            Err(e)
+        }
+    }
 }
 
-#[cfg(test)]
-thread_local! {
-    pub(crate) static START_HYPERLINK_TW:
-        core::cell::RefCell<rustty_util::tripwire::Module<StartHyperlinkFp, OutOfMemory>> =
-        core::cell::RefCell::new(rustty_util::tripwire::module());
-}
-
-#[cfg(test)]
-#[inline]
-fn start_hyperlink_tw_check(point: StartHyperlinkFp) -> Result<(), OutOfMemory> {
-    START_HYPERLINK_TW.with(|tw| tw.borrow_mut().check(point))
+/// `link.deinit(alloc); alloc.destroy(link);` through the allocator the link
+/// was created with (its bytes record it).
+///
+/// # Safety
+/// `link` came from [`create_cursor_hyperlink`] and is not used afterwards.
+unsafe fn destroy_cursor_hyperlink(link: *mut CursorHyperlink) {
+    use allocator_api2::alloc::Allocator as _;
+    // SAFETY: the caller's contract: `link` is live and exclusively ours.
+    unsafe {
+        let alloc: Allocator = *(*link).uri.allocator();
+        // link.deinit(alloc): the byte vectors free through `alloc` on drop.
+        core::ptr::drop_in_place(link);
+        // alloc.destroy(link);
+        alloc.deallocate(
+            core::ptr::NonNull::new_unchecked(link).cast(),
+            core::alloc::Layout::new::<CursorHyperlink>(),
+        );
+    }
 }
 
 // PORT NOTE (parity S133-F3): the reference exercises `cursorCopy`'s
@@ -1115,9 +1151,13 @@ impl Screen {
         let mut opts = pagelist::access::Clone {
             top,
             bot,
-            // PERF(port): `default()` (not `new()`) since the remap now uses
-            // the reference's cheap pointer hasher instead of `RandomState`.
-            tracked_pins: Some(pagelist::access::TrackedPinsRemap::default()),
+            // var pin_remap = PageList.Clone.TrackedPinsRemap.init(alloc);
+            // PERF(port): a default hasher (not `RandomState`) since the remap
+            // uses the reference's cheap pointer hasher.
+            tracked_pins: Some(pagelist::access::TrackedPinsRemap::with_hasher_in(
+                Default::default(),
+                alloc,
+            )),
         };
 
         // PORT NOTE (parity S133-F4): `PageList::clone` returns `CloneError`
@@ -1412,7 +1452,11 @@ impl Screen {
             self.cursor.hyperlink = None;
 
             // Re-add
-            if let Err(err) = self.start_hyperlink_once(unsafe { (*link).clone() }) {
+            //
+            // PORT NOTE: the reference passes `link.*` by value (borrowed
+            // slices, no allocation); `to_heap` is the port's owned argument, on
+            // the Rust heap so the caller's allocator sees nothing extra.
+            if let Err(err) = self.start_hyperlink_once(unsafe { (*link).to_heap() }) {
                 // TODO: Should we increase the capacity further in this case?
                 log::warn!(
                     target: LOG_SCOPE,
@@ -1421,9 +1465,9 @@ impl Screen {
             }
 
             // Remove our old link
-            let boxed = unsafe { Box::from_raw(link) };
-            boxed.deinit();
-            drop(boxed);
+            // link.deinit(self.alloc);
+            // self.alloc.destroy(link);
+            unsafe { destroy_cursor_hyperlink(link) };
         }
 
         // Reload the cursor information because the pin changed.
@@ -2529,12 +2573,16 @@ impl Screen {
             self.cursor.hyperlink = None;
 
             // Re-add
-            let uri = unsafe { (*link).uri.clone() };
-            let id_ = match unsafe { &(*link).id } {
-                hyperlink::HyperlinkId::Explicit(v) => Some(v.clone()),
+            // PORT NOTE: the reference passes the old link's slices straight
+            // through. `link` is detached from `self.cursor` here, so borrowing
+            // its bytes does not alias the state `start_hyperlink` releases, and
+            // no copy is made.
+            let uri: &[u8] = unsafe { &(*link).uri };
+            let id_: Option<&[u8]> = match unsafe { &(*link).id } {
+                hyperlink::HyperlinkId::Explicit(v) => Some(v),
                 hyperlink::HyperlinkId::Implicit(_) => None,
             };
-            if let Err(err) = self.start_hyperlink(&uri, id_.as_deref()) {
+            if let Err(err) = self.start_hyperlink(uri, id_) {
                 // This shouldn't happen because startHyperlink should handle
                 // resizing. This only happens if we're truly out of RAM. Degrade
                 // to forgetting the hyperlink.
@@ -2542,9 +2590,9 @@ impl Screen {
             }
 
             // Remove our old link
-            let boxed = unsafe { Box::from_raw(link) };
-            boxed.deinit();
-            drop(boxed);
+            // link.deinit(self.alloc);
+            // self.alloc.destroy(link);
+            unsafe { destroy_cursor_hyperlink(link) };
         }
     }
 
@@ -3470,12 +3518,16 @@ impl Screen {
 
         // Fix up our hyperlink if we had one.
         if let Some(link) = cursor_hyperlink {
-            let uri = unsafe { (*link).uri.clone() };
-            let id_ = match unsafe { &(*link).id } {
-                hyperlink::HyperlinkId::Explicit(v) => Some(v.clone()),
+            // PORT NOTE: the reference passes the old link's slices straight
+            // through. `link` is detached from `self.cursor` here, so borrowing
+            // its bytes does not alias the state `start_hyperlink` releases, and
+            // no copy is made.
+            let uri: &[u8] = unsafe { &(*link).uri };
+            let id_: Option<&[u8]> = match unsafe { &(*link).id } {
+                hyperlink::HyperlinkId::Explicit(v) => Some(v),
                 hyperlink::HyperlinkId::Implicit(_) => None,
             };
-            if let Err(err) = self.start_hyperlink(&uri, id_.as_deref()) {
+            if let Err(err) = self.start_hyperlink(uri, id_) {
                 // This shouldn't happen because startHyperlink should handle
                 // resizing. This only happens if we're truly out of RAM. Degrade
                 // to forgetting the hyperlink.
@@ -3483,9 +3535,9 @@ impl Screen {
             }
 
             // Remove our old link
-            let boxed = unsafe { Box::from_raw(link) };
-            boxed.deinit();
-            drop(boxed);
+            // link.deinit(self.alloc);
+            // self.alloc.destroy(link);
+            unsafe { destroy_cursor_hyperlink(link) };
         }
 
         // A tracked pin follows its content when PageList moves or replaces a
@@ -3541,7 +3593,7 @@ impl Screen {
         &mut self,
         cursor_style: style::Style,
         cursor_style_id: style::Id,
-        cursor_hyperlink: Option<*mut hyperlink::Hyperlink>,
+        cursor_hyperlink: Option<*mut CursorHyperlink>,
         cursor_hyperlink_id: hyperlink::Id,
     ) {
         self.cursor.style = cursor_style;
@@ -4283,32 +4335,17 @@ impl Screen {
     ) -> Result<(), StartHyperlinkOnceError> {
         // Allocate our new Hyperlink entry in non-page memory. This
         // lets us quickly get access to URI, ID.
-        // PORT NOTE: `try alloc.create(Hyperlink)` + `link.* = try
-        // source.dupe(alloc)` maps to a heap allocation; `Box::from_raw` (the
-        // reclaim paths below and in `end_hyperlink`) requires it to come from
-        // the global allocator with `Layout::new::<Hyperlink>()`, which is
-        // exactly what `Box::new` does — but `Box::new` ABORTS on failure, and
-        // this function's error set includes `Allocator.Error` precisely so the
-        // caller can recover. So we do the same allocation FALLIBLY and move
-        // `source` (already the caller's per-attempt owned dupe, i.e. the
-        // reference's `source.dupe(alloc)` result) into it. On the insert-error
-        // path we reclaim the box (mirroring the reference's `errdefer
-        // alloc.destroy(link)` / `link.deinit`).
-        #[cfg(test)]
-        start_hyperlink_tw_check(StartHyperlinkFp::DupeLink)
+        // const link = try self.alloc.create(hyperlink.Hyperlink);
+        // errdefer self.alloc.destroy(link);
+        // link.* = try source.dupe(self.alloc);
+        // errdefer link.deinit(self.alloc);
+        //
+        // PORT NOTE (parity tail S7-3): both go through the screen's allocator
+        // (`create_cursor_hyperlink`), fallibly, as the reference's `try`s do.
+        // `source` is the caller's owned argument (the reference's by-value
+        // `link` with borrowed slices); it is dropped here, on the Rust heap.
+        let link: *mut CursorHyperlink = create_cursor_hyperlink(self.alloc, &source)
             .map_err(|_| StartHyperlinkOnceError::OutOfMemory)?;
-        let link: *mut hyperlink::Hyperlink = {
-            let layout = core::alloc::Layout::new::<hyperlink::Hyperlink>();
-            // SAFETY: `Hyperlink` is not a ZST, so `layout.size() > 0`.
-            let raw = unsafe { std::alloc::alloc(layout) } as *mut hyperlink::Hyperlink;
-            if raw.is_null() {
-                return Err(StartHyperlinkOnceError::OutOfMemory);
-            }
-            // SAFETY: `raw` is a fresh, correctly-sized/aligned, uninitialized
-            // allocation; `write` initializes it without dropping the old value.
-            unsafe { raw.write(source) };
-            raw
-        };
 
         // End any prior hyperlink only after duplicating the new value. The
         // source slices are allowed to reference our current hyperlink.
@@ -4320,21 +4357,15 @@ impl Screen {
         // — no allocation. `Hyperlink` owns its `Vec`s here, so the by-value
         // `insert_hyperlink` argument needs a copy; it must be the fallible
         // `dupe`, not `Clone`, for the same reason as above.
-        let insert_arg = match unsafe { (*link).dupe() } {
-            Ok(v) => v,
-            Err(hyperlink::OutOfMemory) => {
-                let boxed = unsafe { Box::from_raw(link) };
-                boxed.deinit();
-                drop(boxed);
-                return Err(StartHyperlinkOnceError::OutOfMemory);
-            }
-        };
-        let id: hyperlink::Id = match unsafe { (*page).insert_hyperlink(insert_arg) } {
+        //
+        // The copy is `source` itself (the caller's owned per-attempt value,
+        // on the Rust heap): moving it in makes no allocation the reference
+        // does not make.
+        let id: hyperlink::Id = match unsafe { (*page).insert_hyperlink(source) } {
             Ok(id) => id,
             Err(e) => {
-                let boxed = unsafe { Box::from_raw(link) };
-                boxed.deinit();
-                drop(boxed);
+                // errdefer link.deinit(self.alloc); errdefer self.alloc.destroy(link);
+                unsafe { destroy_cursor_hyperlink(link) };
                 return Err(StartHyperlinkOnceError::Insert(e));
             }
         };
@@ -4372,9 +4403,9 @@ impl Screen {
                 .release(base, self.cursor.hyperlink_id);
         }
         let link = self.cursor.hyperlink.unwrap();
-        let boxed = unsafe { Box::from_raw(link) };
-        boxed.deinit();
-        drop(boxed);
+        // self.cursor.hyperlink.?.deinit(self.alloc);
+        // self.alloc.destroy(self.cursor.hyperlink.?);
+        unsafe { destroy_cursor_hyperlink(link) };
         self.cursor.hyperlink_id = 0;
         self.cursor.hyperlink = None;
     }
@@ -13187,11 +13218,12 @@ mod tests {
     // otherwise just report the tests as "ignored" and stay green).
     //
     // (f1948d505 removed the `selectionString_tw` module this guard originally
-    // named; `StartHyperlinkFp` is the same idiom and shares the wiring.)
+    // named, and parity tail S7-3 removed the `StartHyperlinkFp` stand-in that
+    // replaced it; PageList's `init_tw` is the same idiom and shares the wiring.)
     #[test]
     fn tripwire_fail_points_enabled_in_test_builds_at_any_profile() {
         assert!(
-            rustty_util::tripwire::Module::<StartHyperlinkFp, OutOfMemory>::enabled(),
+            rustty_util::tripwire::Module::<crate::pagelist::InitFp, OutOfMemory>::enabled(),
             "tripwire fail points must be armed in ALL test builds (Zig: \
              `enabled = builtin.is_test`); if this fires in `--release`, the \
              `rustty-util/tripwire-test` dev-dependency feature was lost"
@@ -15048,7 +15080,7 @@ mod tests {
         // call releases the very allocation they point into — see the PORT NOTE
         // on `Screen::start_hyperlink_raw`. This is the aliasing the reference
         // test exists to exercise, so the test keeps it.
-        let link: *mut crate::hyperlink::Hyperlink = s.cursor.hyperlink.unwrap();
+        let link: *mut CursorHyperlink = s.cursor.hyperlink.unwrap();
         let (uri_ptr, uri_len) = unsafe { ((*link).uri.as_ptr(), (*link).uri.len()) };
         let (id_ptr, id_len) = match unsafe { &(*link).id } {
             crate::hyperlink::HyperlinkId::Explicit(v) => (v.as_ptr(), v.len()),
@@ -15058,7 +15090,7 @@ mod tests {
         let id: *const [u8] = core::ptr::slice_from_raw_parts(id_ptr, id_len);
         unsafe { s.start_hyperlink_raw(uri, Some(id)) }.unwrap();
 
-        let link: *mut crate::hyperlink::Hyperlink = s.cursor.hyperlink.unwrap();
+        let link: *mut CursorHyperlink = s.cursor.hyperlink.unwrap();
         assert_eq!(b"http://example.com".as_slice(), unsafe {
             &(&(*link).uri)[..]
         });
@@ -15081,7 +15113,7 @@ mod tests {
         s.start_hyperlink(b"http://example.com", None).unwrap();
 
         assert_eq!(0 as size::OffsetInt, s.cursor.hyperlink_implicit_id);
-        let link: *mut crate::hyperlink::Hyperlink = s.cursor.hyperlink.unwrap();
+        let link: *mut CursorHyperlink = s.cursor.hyperlink.unwrap();
         match unsafe { &(*link).id } {
             crate::hyperlink::HyperlinkId::Implicit(v) => {
                 assert_eq!(size::OffsetInt::MAX, *v)
@@ -15107,22 +15139,26 @@ mod tests {
         let mut s = mkscreen(5, 5, 0);
 
         s.cursor.hyperlink_implicit_id = size::OffsetInt::MAX;
-        // PORT NOTE: the reference swaps in a `testing.FailingAllocator`; this
-        // crate's failure-injection seam is the tripwire fail point at the
-        // `Box::new(source.dupe())` allocation in `start_hyperlink_once`.
-        START_HYPERLINK_TW.with(|tw| {
-            tw.borrow_mut()
-                .errorAlways(StartHyperlinkFp::DupeLink, OutOfMemory)
-        });
-        assert_eq!(
-            Err(pagelist::grow::IncreaseCapacityError::OutOfMemory),
-            s.start_hyperlink(b"http://example.com", None)
+        // var failing = testing.FailingAllocator.init(alloc, .{});
+        // failing.fail_index = failing.alloc_index;
+        let failing = crate::alloc::testing::FailingAllocator::over_heap(
+            crate::alloc::testing::Config::default(),
         );
-        START_HYPERLINK_TW.with(|tw| {
-            tw.borrow_mut()
-                .end(rustty_util::tripwire::ResetMode::Reset)
-                .unwrap()
+        failing.fail_index.set(failing.alloc_index.get());
+        let c = failing.allocator();
+        crate::alloc::testing::with_handle(&c, |failing_alloc| {
+            // const original_alloc = s.alloc;
+            // defer s.alloc = original_alloc;
+            // s.alloc = failing.allocator();
+            let original_alloc = s.alloc;
+            s.alloc = failing_alloc;
+            assert_eq!(
+                Err(pagelist::grow::IncreaseCapacityError::OutOfMemory),
+                s.start_hyperlink(b"http://example.com", None)
+            );
+            s.alloc = original_alloc;
         });
+        assert!(failing.has_induced_failure.get());
 
         assert_eq!(size::OffsetInt::MAX, s.cursor.hyperlink_implicit_id);
 
@@ -16425,5 +16461,70 @@ mod tests {
 
         ctl.deinit();
         deg.deinit();
+    }
+
+    // Parity tail S7-3 routing evidence (Rust-only; the reference routes by
+    // construction): the Screen's own storage (`ScreenSet`'s
+    // `alloc.create(Screen)`) and the cursor hyperlink (`alloc.create(Hyperlink)`
+    // + `source.dupe(alloc)`) reach the screen's allocator, and are returned.
+    #[test]
+    fn screen_internals_route_through_the_allocator_handle() {
+        use crate::alloc::testing::{with_handle, CountingAllocator};
+        use crate::screen_set::ScreenSet;
+
+        let counting = CountingAllocator::over_heap();
+        let c = counting.allocator();
+        with_handle(&c, |alloc| {
+            let opts = || Options {
+                cols: 5,
+                rows: 5,
+                max_scrollback_bytes: Some(0),
+                max_scrollback_lines: None,
+                kitty_image_storage_limit: 0,
+                kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
+            };
+
+            // A bare Screen: its PageList's allocations.
+            let mut s = Screen::init(alloc, opts()).unwrap();
+            let screen_calls = counting.alloc_calls.get();
+            let screen_live = counting.live_bytes.get();
+            assert!(screen_calls > 0);
+
+            // The cursor hyperlink: the struct and both duplicated slices.
+            let uri = b"http://example.com";
+            let id = b"id";
+            s.start_hyperlink(uri, Some(id)).unwrap();
+            assert_eq!(
+                screen_calls + 3,
+                counting.alloc_calls.get(),
+                "alloc.create(Hyperlink) + dupe(uri) + dupe(id)"
+            );
+            assert_eq!(
+                screen_live + core::mem::size_of::<CursorHyperlink>() + uri.len() + id.len(),
+                counting.live_bytes.get()
+            );
+            s.end_hyperlink();
+            assert_eq!(screen_live, counting.live_bytes.get());
+
+            s.deinit();
+            drop(s);
+            assert_eq!(0, counting.live_bytes.get());
+
+            // A ScreenSet: one more allocation, of exactly the Screen struct.
+            let before = counting.alloc_calls.get();
+            let mut set = ScreenSet::init(alloc, opts()).unwrap();
+            assert_eq!(
+                before + screen_calls + 1,
+                counting.alloc_calls.get(),
+                "alloc.create(Screen) is one more allocation"
+            );
+            assert_eq!(
+                screen_live + core::mem::size_of::<Screen>(),
+                counting.live_bytes.get(),
+                "the Screen's own storage comes from the screen's allocator"
+            );
+            set.deinit(alloc);
+        });
+        assert_eq!(0, counting.live_bytes.get(), "deinit returns every byte");
     }
 }

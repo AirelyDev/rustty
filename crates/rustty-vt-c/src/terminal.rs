@@ -1536,10 +1536,15 @@ pub unsafe fn new(
 // `errdefer alloc.destroy(...)`s as explicit hand unwinds), and the OSC stream
 // is backed by the same allocator (`.initAlloc(alloc, handler)`). A rejecting
 // caller allocator therefore yields a recoverable `RUSTTY_OUT_OF_MEMORY`
-// instead of silently succeeding on the Rust global heap. REMAINING Tier-2
-// residual (DEFERRALS.md "F-008/W12-01 Tier 2"): rustty-vt's `Terminal`
-// INTERNALS still allocate through their own `rustty_vt::alloc::Global`
-// (`t.init(gpa, ...)` below vs the reference's `t.init(alloc, ...)`).
+// instead of silently succeeding on the Rust global heap.
+//
+// PORT NOTE (parity tail S7-3): `t.init(alloc, ...)` now receives the same
+// allocator as the runtime handle (`rustty_vt::alloc::default(alloc_)`), so the
+// terminal's internals that rustty-vt routes (the PageList node/pin pools and
+// tracked-pin sets, compressed pages, the screens themselves, the cursor
+// hyperlink, tabstops, pwd/title and the glyph glossary map) grow through the
+// caller's allocator, as the reference's do. The rest of the internals (kitty
+// graphics, APC/DCS, the stream, clipboard, the wrapper maps) are S7-4's.
 fn new_(
     alloc_: Option<&CAllocator>,
     cols: size::CellCountInt,
@@ -1559,7 +1564,10 @@ fn new_(
     // SAFETY: `alloc_holder` is a live heap allocation until `free` (or the
     // unwind arms below) reclaims it.
     let alloc: &'static dyn rustty_lib::allocator::ZigAllocator = unsafe { &*alloc_holder };
-    let gpa = rustty_vt::alloc::Global;
+    // `lib.alloc.default(alloc_)` as the runtime handle (a non-NULL `alloc_`
+    // outlives the terminal: the caller's contract, N260).
+    // SAFETY: that contract.
+    let gpa = unsafe { rustty_vt::alloc::default(alloc_) };
 
     // const t = alloc.create(ZigTerminal) catch return error.OutOfMemory;
     let terminal_ptr: *mut ZigTerminal = match rustty_lib::allocator::create_raw(alloc) {
@@ -1573,8 +1581,6 @@ fn new_(
 
     // t.* = try .init(alloc, .{ ... });
     // errdefer t.deinit(alloc);
-    // PORT NOTE (F-008 Tier-2 residual): the reference threads `alloc` into
-    // `t.init`; rustty-vt's `Terminal` is `Global`-backed internally (`gpa`).
     let mut terminal = match ZigTerminal::init(
         gpa,
         ZigTerminalOptions {
@@ -1634,9 +1640,7 @@ fn new_(
         wrap(
             alloc_holder,
             alloc_.copied(),
-            // `lib.alloc.default(alloc_)` as the runtime handle (a non-NULL
-            // `alloc_` outlives the terminal: the caller's contract).
-            rustty_vt::alloc::default(alloc_),
+            gpa,
             terminal_ptr,
             DEFAULT_CONTINUATION_MAX_BYTES,
         )
@@ -1894,7 +1898,6 @@ pub unsafe fn from_decoded(
         Box::into_raw(rustty_lib::allocator::default(alloc_));
     // SAFETY: live until `free` (or the unwind arms below) reclaims it.
     let alloc: &'static dyn rustty_lib::allocator::ZigAllocator = unsafe { &*alloc_holder };
-    let gpa = rustty_vt::alloc::Global;
 
     // const native = alloc.create(ZigTerminal) catch { io.deinit(alloc); return error.OutOfMemory; };
     let terminal_ptr: *mut ZigTerminal = match rustty_lib::allocator::create_raw(alloc) {
@@ -1942,8 +1945,12 @@ pub unsafe fn from_decoded(
         Ok(terminal) => terminal,
         Err(_oom) => {
             // native.deinit(alloc); alloc.destroy(native); io.deinit(alloc);
+            // PORT NOTE: `deinit` takes the allocator the decoded terminal was
+            // built with (the snapshot decoder's; routing it is S7-4's), which
+            // the terminal records as `gpa()`.
             // SAFETY: `terminal_ptr` holds the transferred terminal.
             unsafe {
+                let gpa = (*terminal_ptr).gpa();
                 (*terminal_ptr).deinit(gpa);
                 std::ptr::drop_in_place(terminal_ptr);
                 rustty_lib::allocator::destroy_raw(alloc, terminal_ptr);
@@ -6464,16 +6471,11 @@ mod tests {
 
     // test "get vt_processing_error"
     //
-    // WS18 release lane (CORRECTED, parity S166-F2 — this site is the third of
-    // the family and is claimed by no row): the reference forces the failure
-    // with `testing.failing_allocator`; this port arms the `set_title` tripwire
-    // fail point in rustty-vt. Its gate was `cfg(debug_assertions)`, which
-    // deleted the fail point from the release TEST lane as well as from
-    // production, so this test had to be `#[cfg(debug_assertions)]`-compiled
-    // out there. rustty-vt now carries a `tripwire-test` feature that this
-    // crate turns on as a DEV-dependency feature, so the fail point exists in
-    // the release test lane and the test runs at both optimize modes, as the
-    // reference's does.
+    // Ported as written (parity tail S7-3): the active screen's allocator is
+    // swapped for `std.mem.Allocator.failing` (`rustty_vt::alloc::failing()`)
+    // around the write, as the reference swaps in `testing.failing_allocator`.
+    // (A `set_title` tripwire stood in for it while `title` lived on the Rust
+    // heap.)
     #[test]
     fn get_vt_processing_error() {
         with_test_allocator(|alloc| {
@@ -6492,12 +6494,20 @@ mod tests {
 
             // Force a non-graceful terminal-owned update failure through the
             // public VT write path.
-            rustty_vt::terminal::set_string_tw_error_always(
-                rustty_vt::terminal::SetStringFp::Reserve,
-            );
-            vtw(t, b"\x1B]2;unavailable\x1B\\");
-            rustty_vt::terminal::set_string_tw_end(rustty_util::tripwire::ResetMode::Reset)
-                .unwrap();
+            {
+                // const alloc = t.?.terminal.screens.active.alloc;
+                // t.?.terminal.screens.active.alloc = testing.failing_allocator;
+                // defer t.?.terminal.screens.active.alloc = alloc;
+                // SAFETY: `t` is live; the active screen is a stable heap
+                // pointer owned by the terminal, written through a raw place.
+                let active = unsafe { (*zig_terminal(t)).screens.active };
+                let alloc = unsafe { (*active).alloc };
+                unsafe { (*active).alloc = rustty_vt::alloc::failing() };
+
+                vtw(t, b"\x1B]2;unavailable\x1B\\");
+
+                unsafe { (*active).alloc = alloc };
+            }
 
             assert_eq!(Result::Success, unsafe {
                 get(
@@ -11286,5 +11296,123 @@ mod tests {
 
             unsafe { free(t) };
         });
+    }
+
+    /// The corpus the allocation-failure sweep drives through the C API: text
+    /// that scrolls into history (node allocation), titles and pwds (the
+    /// `gpa()`-grown lists), OSC 8 hyperlinks (the cursor's heap hyperlink),
+    /// the alternate screen (a second `Screen` from `ScreenSet.getInit`), wide
+    /// tab stops after a resize past 512 columns, a tracked grid ref (a pin and
+    /// the tracked-pin set), and a full reset.
+    fn sweep_corpus(t: Terminal) -> Vec<Result> {
+        let mut results = Vec::new();
+        for i in 0..60 {
+            vtw(
+                t,
+                format!("line {i:03} the quick brown fox jumps over the lazy dog\r\n").as_bytes(),
+            );
+        }
+        vtw(t, b"\x1B]0;a window title\x1B\\");
+        vtw(t, b"\x1B]7;file:///tmp/sweep\x1B\\");
+        vtw(
+            t,
+            b"\x1B]8;id=one;https://example.com/one\x1B\\link\x1B]8;;\x1B\\",
+        );
+        vtw(t, b"\x1B]8;;https://example.com/implicit\x1B\\open");
+        vtw(t, b"\x1B[?1049h");
+        vtw(t, b"alternate screen text\r\n\x1B]2;alt title\x1B\\");
+        vtw(t, b"\x1B[?1049l");
+        results.push(unsafe { resize(t, 600, 30, 8, 16) });
+        vtw(t, b"\x1B[3g\x1B[1;590H\x1BH\r\t\tafter tabs\r\n");
+        let mut ref_: crate::grid_ref_tracked::CTrackedGridRef = std::ptr::null_mut();
+        results.push(unsafe {
+            grid_ref_track(
+                t,
+                crate::point::PointC::cval(rustty_vt::point::Point::Active(
+                    rustty_vt::point::Coordinate { x: 0, y: 0 },
+                )),
+                &mut ref_,
+            )
+        });
+        for i in 0..40 {
+            vtw(t, format!("more {i:03}\r\n").as_bytes());
+        }
+        results.push(unsafe { resize(t, 80, 24, 8, 16) });
+        vtw(t, b"\x1Bc");
+        vtw(t, b"\x1B]2;after reset\x1B\\done");
+        if !ref_.is_null() {
+            unsafe { crate::grid_ref_tracked::tracked_grid_ref_free(ref_) };
+        }
+        results
+    }
+
+    // Parity tail S7-3 (T2, no reference counterpart — the Zig
+    // `checkAllAllocationFailures` idea applied to the C API): for every n, a
+    // `FailingAllocator` that refuses its n-th allocation drives `new`, a write
+    // corpus, `resize`, grid-ref tracking and `free`. Nothing aborts, every
+    // result is `SUCCESS` or `OUT_OF_MEMORY` (the stream's failures are
+    // log-and-drop), and every byte the terminal took is returned by `free`.
+    // The sweep ends at the first n that induces no failure: every allocation
+    // the scenario makes has then been failed once.
+    #[test]
+    fn allocation_failure_sweep_through_the_c_api() {
+        use rustty_vt::alloc::testing::{Config, FailingAllocator};
+
+        let mut n = 0usize;
+        let mut new_failures = 0usize;
+        let mut call_failures = 0usize;
+        loop {
+            let failing = FailingAllocator::over_heap(Config {
+                fail_index: n,
+                ..Config::default()
+            });
+            let calloc = failing.allocator();
+            let mut t: Terminal = std::ptr::null_mut();
+            let r = unsafe { new(&calloc as *const CAllocator, &mut t, 80, 24) };
+            match r {
+                Result::Success => {
+                    assert!(!t.is_null());
+                    for r in sweep_corpus(t) {
+                        assert!(
+                            matches!(r, Result::Success | Result::OutOfMemory),
+                            "n={n}: unexpected result {r:?}"
+                        );
+                        if r == Result::OutOfMemory {
+                            call_failures += 1;
+                        }
+                    }
+                    unsafe { free(t) };
+                }
+                Result::OutOfMemory => {
+                    assert!(
+                        t.is_null(),
+                        "n={n}: a failed new must not return a terminal"
+                    );
+                    new_failures += 1;
+                }
+                other => panic!("n={n}: new returned {other:?}"),
+            }
+            assert_eq!(
+                failing.allocated_bytes.get(),
+                failing.freed_bytes.get(),
+                "n={n}: every byte taken from the caller's allocator is returned"
+            );
+            assert_eq!(
+                failing.allocations.get(),
+                failing.deallocations.get(),
+                "n={n}"
+            );
+            if !failing.has_induced_failure.get() {
+                break;
+            }
+            n += 1;
+            assert!(n < 10_000, "the sweep must terminate");
+        }
+        // The sweep reached into the terminal's internals: more allocations
+        // than `new`'s own storage, some of them failing `new` itself and some
+        // failing later API calls.
+        assert!(n > 20, "only {n} allocations were swept");
+        assert!(new_failures > 2, "new failed at {new_failures} indices");
+        assert!(call_failures > 0, "no API call reported OUT_OF_MEMORY");
     }
 }

@@ -734,14 +734,17 @@ pub struct Clone {
     pub tracked_pins: Option<TrackedPinsRemap>,
 }
 
-// PORT NOTE: the reference `TrackedPinsRemap = std.AutoHashMap(*Pin, *Pin)`.
-// Ported to the std `HashMap` keyed by the raw `*mut Pin` pointer identity.
+// PORT NOTE: the reference `TrackedPinsRemap = std.AutoHashMap(*Pin, *Pin)`, a
+// MANAGED map (`TrackedPinsRemap.init(alloc)`). Ported to a `hashbrown` map
+// over the allocator handle, keyed by the raw `*mut Pin` pointer identity:
+// `TrackedPinsRemap::with_hasher_in(Default::default(), alloc)` is
+// `TrackedPinsRemap.init(alloc)` (parity tail S7-3).
 // PERF(port): Zig's `AutoHashMap` hashes a pointer key with a cheap integer
 // autoHash and no per-map random seed; the std default `RandomState`
 // (SipHash-1-3) is a heavyweight keyed hash. Restore the reference's cheap
 // idiom with a small multiply/xor mix over the pointer bits ([`PtrHasher`]).
 pub type TrackedPinsRemap =
-    std::collections::HashMap<*mut Pin, *mut Pin, std::hash::BuildHasherDefault<PtrHasher>>;
+    hashbrown::HashMap<*mut Pin, *mut Pin, std::hash::BuildHasherDefault<PtrHasher>, Allocator>;
 
 /// Pointer-identity hasher for [`TrackedPinsRemap`].
 // PERF(port): see the `TrackedPinsRemap` note above. `*mut Pin` keys hash
@@ -850,9 +853,12 @@ impl PageList {
         // Create our viewport. In a clone, the viewport always goes
         // to the top.
         let viewport_pin = pool.pins.create().map_err(|_| OutOfMemory)?.as_ptr();
-        let mut tracked_pins: PinSet = PinSet::new();
+        let mut tracked_pins: PinSet = PinSet::new_in(pool.alloc);
         // errdefer tracked_pins.deinit(pool.alloc);
-        tracked_pins.put_no_clobber(viewport_pin, ());
+        // try tracked_pins.putNoClobber(pool.alloc, viewport_pin, {});
+        tracked_pins
+            .try_put_no_clobber(viewport_pin, ())
+            .map_err(|_| OutOfMemory)?;
 
         // Our list of pages
         let mut page_list: List = List::default();
@@ -964,12 +970,19 @@ impl PageList {
                         (*new_p).node = node;
                         (*new_p).y -= chunk.start;
                     }
-                    // PORT NOTE: `AutoHashMap.putNoClobber` is `Allocator.Error!void`
-                    // in the reference; the Rust `HashMap`/`PinSet` insertions own
-                    // their backing storage and are infallible. We assert no clobber
-                    // to preserve the `putNoClobber` contract.
+                    // try remap.putNoClobber(p, new_p);
+                    // try tracked_pins.putNoClobber(pool.alloc, new_p, {});
+                    //
+                    // PORT NOTE: both inserts are `Allocator.Error!void`; the
+                    // reservations make the inserts themselves allocation-free.
+                    // `new_p` stays in `pool`, which the error path drops.
+                    if remap.try_reserve(1).is_err() {
+                        clone_err!(CloneError::OutOfMemory);
+                    }
                     assert!(remap.insert(p, new_p).is_none());
-                    tracked_pins.put_no_clobber(new_p, ());
+                    if tracked_pins.try_put_no_clobber(new_p, ()).is_err() {
+                        clone_err!(CloneError::OutOfMemory);
+                    }
                 }
             }
         }

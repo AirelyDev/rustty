@@ -676,7 +676,7 @@ pub fn miscTable(t: &Terminal) {
             //     cimgui.c.ImGui_TextDisabled("(none)");
             // }
             //
-            // PORT NOTE: `t.pwd` is a `Vec<u8>` byte buffer (the reference
+            // PORT NOTE: `t.pwd` is an `ArrayListUnmanaged<u8>` byte buffer (the reference
             // `std.ArrayList(u8)`); `%.*s` takes `(int precision, char* ptr)`
             // so the (possibly non-NUL-terminated) buffer is bounded by its
             // length — `len()` + `as_ptr()`.

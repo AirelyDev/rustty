@@ -4312,20 +4312,21 @@ mod tests {
 
     // test "semantic failure is sticky while processing continues"
     //
-    // WS18 release lane (CORRECTED, parity S166-F2): this test injects a failure
-    // through a `rustty_util::tripwire` fail point (the port's stand-in for the
-    // reference's `std.testing.FailingAllocator` — see the `SET_STRING_TW` PORT
-    // NOTE in terminal.rs). The P3-W5 repair that used to sit here
-    // (`#[cfg(debug_assertions)]` on the TEST, because the seam itself was
-    // `#[cfg(debug_assertions)]` and an `ignore` would still have to compile)
-    // was treating the symptom: the seam's gate is now
-    // `cfg(any(test, debug_assertions, feature = "tripwire-test"))`, which is
-    // what `Module::enabled()` has always used, so the seam and the test both
-    // exist under `cargo test -p rustty-vt --release`. The reference runs its
-    // equivalent at every optimize mode.
+    // Ported as written (parity tail S7-3): the terminal runs over a
+    // `FailingAllocator`, as in the reference. (A `SetStringFp` tripwire stood
+    // in for it while `title` lived on the Rust heap.)
     #[test]
     fn semantic_failure_is_sticky_while_processing_continues() {
-        let mut t = Terminal::init(Global, opts(10, 2)).unwrap();
+        // var failing = testing.FailingAllocator.init(testing.allocator, .{});
+        // const alloc = failing.allocator();
+        let failing = crate::alloc::testing::FailingAllocator::over_heap(
+            crate::alloc::testing::Config::default(),
+        );
+        let failing_c = failing.allocator();
+        // SAFETY: `failing_c` and `failing` outlive `t`, deinited below.
+        let alloc =
+            unsafe { crate::alloc::VtAllocator::from_c(core::ptr::NonNull::from(&failing_c)) };
+        let mut t = Terminal::init(alloc, opts(10, 2)).unwrap();
 
         {
             let mut s = t.vt_stream();
@@ -4333,10 +4334,13 @@ mod tests {
 
             // Setting the title is a terminal-owned semantic update. Force its
             // allocation to fail at the central vtFallible boundary.
-            crate::terminal::set_string_tw_error_always(crate::terminal::SetStringFp::Reserve);
+            failing.fail_index.set(failing.alloc_index.get());
             s.next_slice(b"\x1B]2;unavailable\x1B\\");
-            crate::terminal::set_string_tw_end(rustty_util::tripwire::ResetMode::Reset).unwrap();
+            assert!(failing.has_induced_failure.get());
             assert!(s.handler.semantic_failure);
+
+            // failing.fail_index = std.math.maxInt(usize);
+            failing.fail_index.set(usize::MAX);
 
             // Later input and RIS remain best-effort and never clear the
             // diagnostic.
@@ -4353,7 +4357,7 @@ mod tests {
         let fresh = Handler::init(&raw mut t);
         assert!(!fresh.semantic_failure);
 
-        t.deinit(Global);
+        t.deinit(alloc);
     }
 
     // NEW TEST (no oracle counterpart; the reference gets this for free from
@@ -4436,12 +4440,18 @@ mod tests {
     // NEW TEST (no oracle counterpart): `.start_hyperlink => try
     // self.terminal.screens.active.startHyperlink(...)` is inside the
     // reference's `vtFallible`, so an OSC 8 failure sets `semantic_failure`.
-    // The injection seam is `screen::START_HYPERLINK_TW` (the same fail point
-    // `Screen: implicit hyperlink id wrap rolls back on allocation failure`
-    // uses).
+    // The injection is a `FailingAllocator` swapped in as the active screen's
+    // allocator (the same seam `Screen: implicit hyperlink ID wraps` uses; parity
+    // tail S7-3 replaced a tripwire stand-in).
     #[test]
     fn semantic_failure_is_set_by_a_failing_start_hyperlink() {
-        use crate::screen::{StartHyperlinkFp, START_HYPERLINK_TW};
+        let failing = crate::alloc::testing::FailingAllocator::over_heap(
+            crate::alloc::testing::Config::default(),
+        );
+        let failing_c = failing.allocator();
+        // SAFETY: `failing_c` and `failing` outlive every use below.
+        let failing_alloc =
+            unsafe { crate::alloc::VtAllocator::from_c(core::ptr::NonNull::from(&failing_c)) };
 
         let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
         {
@@ -4452,10 +4462,10 @@ mod tests {
             assert!(!s.handler.semantic_failure);
             assert!(s.handler.term().active_mut().cursor.hyperlink_id != 0);
 
-            START_HYPERLINK_TW.with(|tw| {
-                tw.borrow_mut()
-                    .errorAlways(StartHyperlinkFp::DupeLink, crate::pagelist::OutOfMemory)
-            });
+            // s.alloc = failing.allocator(); failing.fail_index = failing.alloc_index;
+            let original_alloc = s.handler.term().active_mut().alloc;
+            s.handler.term().active_mut().alloc = failing_alloc;
+            failing.fail_index.set(failing.alloc_index.get());
             // S166-F3: `vt_catch` logs `log.warn("error handling VT action
             // action={} err={}", .{ action, err })` (stream_terminal.zig:344-347)
             // on this exact shared-catch path.
@@ -4471,11 +4481,8 @@ mod tests {
                 "expected the vt_catch diagnostic, got: {messages:?}"
             );
             drop(cap);
-            START_HYPERLINK_TW.with(|tw| {
-                tw.borrow_mut()
-                    .end(rustty_util::tripwire::ResetMode::Reset)
-                    .unwrap()
-            });
+            s.handler.term().active_mut().alloc = original_alloc;
+            assert!(failing.has_induced_failure.get());
             assert!(s.handler.semantic_failure);
 
             // Processing continues after the failure (best-effort, like every
@@ -4495,7 +4502,8 @@ mod tests {
     // would produce, and which every other assertion in this file would still
     // pass with.
     //
-    // WS18 release lane: tripwire fail point; see the SET_STRING_TW PORT NOTE.
+    // WS18 release lane: tripwire fail point (`ColorOperationFp`), armed in every
+    // test build like Zig's `builtin.is_test`.
     #[test]
     fn semantic_failure_is_not_set_by_a_color_operation_failure() {
         // (a) Baseline: the arm IS reached and DOES produce a response, so the
