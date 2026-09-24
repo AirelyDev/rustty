@@ -304,16 +304,39 @@ impl FmtAny for u32 {
     }
 }
 
+/// `{any}` of an optional: `null`, or the payload's `{any}`.
+impl<T: FmtAny> FmtAny for Option<T> {
+    fn fmt_any(&self) -> String {
+        match self {
+            Some(v) => v.fmt_any(),
+            None => "null".to_string(),
+        }
+    }
+}
+
 // .float fallback for everything else is handled by concrete impls; the
 // reference's `.@"struct"`, `.@"union"`, `.optional`, `.error_union` arms are
 // reproduced by concrete/blanket impls below + per-type impls in tests.
+/// `testing.expectEqual(expected, actual)` on a mismatch prints
+/// `expected {any}, found {any}\n` before returning its error, which the
+/// reference's fallback arms then map to `error.TestExpectedApproxEqual`
+/// (MEASURED, zig 0.16.0: `expected 1, found 2`, `expected null, found 1.5`,
+/// `expected .a, found .b`). Parity N182.
+fn expect_equal_mismatch(expected: &str, actual: &str) -> Error {
+    print(format_args!("expected {expected}, found {actual}\n"));
+    Error::TestExpectedApproxEqual
+}
+
 impl ApproxEqual for i32 {
     // fall back to expectEqual for everything else
+    //   else => testing.expectEqual(expected, actual) catch {
+    //       return error.TestExpectedApproxEqual;
+    //   },
     fn approx_equal(&self, actual: &Self) -> Result<(), Error> {
         if *self == *actual {
             Ok(())
         } else {
-            Err(Error::TestExpectedApproxEqual)
+            Err(expect_equal_mismatch(&self.fmt_any(), &actual.fmt_any()))
         }
     }
 }
@@ -325,7 +348,7 @@ impl ApproxEqual for u32 {
         if *self == *actual {
             Ok(())
         } else {
-            Err(Error::TestExpectedApproxEqual)
+            Err(expect_equal_mismatch(&self.fmt_any(), &actual.fmt_any()))
         }
     }
 }
@@ -340,7 +363,7 @@ impl ApproxEqual for u32 {
 
 // .optional => { if (expected) |e| if (actual) |a| return expectApproxEqual(e, a);
 //                testing.expectEqual(expected, actual) catch return error; }
-impl<T: ApproxEqual> ApproxEqual for Option<T> {
+impl<T: ApproxEqual + FmtAny> ApproxEqual for Option<T> {
     fn approx_equal(&self, actual: &Self) -> Result<(), Error> {
         if let Some(expected_payload) = self {
             if let Some(actual_payload) = actual {
@@ -351,7 +374,7 @@ impl<T: ApproxEqual> ApproxEqual for Option<T> {
         // in which case expectEqual is all we need
         match (self, actual) {
             (None, None) => Ok(()),
-            _ => Err(Error::TestExpectedApproxEqual),
+            _ => Err(expect_equal_mismatch(&self.fmt_any(), &actual.fmt_any())),
         }
     }
 }
@@ -453,7 +476,16 @@ mod tests {
             match (self, actual) {
                 (TUnion::A(e), TUnion::A(a)) => expect_approx_equal(e, a),
                 (TUnion::B(e), TUnion::B(a)) => expect_approx_equal(e, a),
-                _ => Err(Error::TestExpectedApproxEqual),
+                // testing.expectEqual(expectedTag, actualTag) catch {
+                //     return error.TestExpectedApproxEqual;
+                // };
+                _ => {
+                    let tag = |u: &TUnion| match u {
+                        TUnion::A(_) => ".a",
+                        TUnion::B(_) => ".b",
+                    };
+                    Err(expect_equal_mismatch(tag(self), tag(actual)))
+                }
             }
         }
     }
@@ -978,5 +1010,66 @@ mod tests {
         // A passing comparison prints nothing.
         assert!(expect_approx_equal(&1.0f32, &1.0000001f32).is_ok());
         assert!(take_printed().is_empty());
+    }
+
+    /// Parity N182: the `expectEqual` fallback arms print std's
+    /// `expected {any}, found {any}`. Expected lines MEASURED from the pinned
+    /// `comparison.zig` under zig 0.16.0 with the same inputs.
+    #[test]
+    fn expectApproxEqual_expect_equal_fallbacks_print_std_diagnostics() {
+        take_printed();
+
+        assert!(expect_approx_equal(&1i32, &2i32).is_err());
+        assert_eq!(vec!["expected 1, found 2\n"], take_printed());
+
+        assert!(expect_approx_equal(&7u32, &9u32).is_err());
+        assert_eq!(vec!["expected 7, found 9\n"], take_printed());
+
+        assert!(expect_approx_equal(&None::<f32>, &Some(1.5f32)).is_err());
+        assert_eq!(vec!["expected null, found 1.5\n"], take_printed());
+
+        assert!(expect_approx_equal(&Some(3i32), &None).is_err());
+        assert_eq!(vec!["expected 3, found null\n"], take_printed());
+
+        assert!(expect_approx_equal(&TUnion::A(1), &TUnion::B(1.0)).is_err());
+        assert_eq!(vec!["expected .a, found .b\n"], take_printed());
+    }
+
+    /// The child half of `expectApproxEqual_diagnostic_reaches_stderr`: one
+    /// failing comparison, whose diagnostic goes to this process's stderr.
+    /// Ignored on its own; the parent test runs it with `--ignored`.
+    #[test]
+    #[ignore = "child process of expectApproxEqual_diagnostic_reaches_stderr (R14)"]
+    fn expectApproxEqual_diagnostic_child() {
+        assert!(expect_approx_equal(&1.0f32, &1.1f32).is_err());
+    }
+
+    /// Parity S80-F2: `print` is `std.debug.print`, so the diagnostic is on
+    /// STDERR. This re-runs the test binary on the child test above with
+    /// libtest's capture off and reads the child's stderr, so it sees the
+    /// real write, not the `PRINTED` copy.
+    #[test]
+    #[cfg_attr(miri, ignore = "Miri cannot spawn processes (R14)")]
+    fn expectApproxEqual_diagnostic_reaches_stderr() {
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--ignored",
+                "--exact",
+                "--nocapture",
+                "--test-threads=1",
+                "comparison::tests::expectApproxEqual_diagnostic_child",
+            ])
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(out.status.success(), "child failed: {stdout}{stderr}");
+        // The child ran exactly the one test.
+        assert!(stdout.contains("1 passed"), "{stdout}");
+        assert!(
+            stderr.contains("expected approximately 1, found 1.1\n"),
+            "diagnostic not on stderr; stderr was:\n{stderr}"
+        );
+        assert!(!stdout.contains("expected approximately"), "{stdout}");
     }
 }
