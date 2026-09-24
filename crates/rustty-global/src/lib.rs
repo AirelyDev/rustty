@@ -417,16 +417,20 @@ impl<Action, ResourcesDir> GlobalState<Action, ResourcesDir> {
     /// block from the C caller, which is why this is a separate entry point;
     /// `new` is the `.main` arm.
     ///
-    /// PORT NOTE (E16, `048619a6b`): the `InitOpts::tool` arm is **N/A** for
-    /// rustty and is deliberately NOT ported — do not add it later. Upstream
-    /// needed it because `main_bench.zig`/`main_gen.zig` funnel through the
-    /// shared `global.init`, so app-action detection ran on tool argv and
-    /// `+terminal-stream` failed with `InvalidAction`.
-    /// `crates/rustty-bench/src/main_bench.rs` never initializes global state
-    /// (`grep -n "STATE\|init_with_action\|global"` -> 0 hits) and
-    /// `crates/rustty-bench/src/cli.rs` `Action::from_name` owns its own action
-    /// namespace, so the failure upstream fixed cannot occur here. Same
-    /// reasoning for `main_gen.zig` -> `rustty-gen`.
+    /// PORT NOTE (E16, `048619a6b`; CORRECTION by task T-H2, parity S43-F3):
+    /// the `InitOpts::tool` arm IS ported, as
+    /// `rustty_apprt::init_with_action(false)`: the full init with app-action
+    /// detection skipped (the caller does detection, so "no action detected"
+    /// is exactly `.tool`'s `self.action = null`). `rustty-bench`'s
+    /// `cli::main` calls it first, as `benchmark/cli.zig:55` does. This note
+    /// used to say the arm was N/A and must not be added, because the bench
+    /// ran no global init at all; that reasoning covered only the
+    /// action-detection failure upstream fixed, not the rest of the init
+    /// (RUSTTY_LOG, signals, rlimits, locale, crash, glslang, oniguruma,
+    /// resources dir, i18n) the reference bench runs. There is no `tool`
+    /// variant here because this leaf does not own the init body (R4).
+    /// `main_gen.zig`/`synthetic/cli.zig` call no `global.init` at
+    /// `20abdb50a`, so `rustty-gen` needs none.
     ///
     /// PORT NOTE (E16): the `.c` arm's
     /// `return error.UnsupportedOSForCApi` on Windows is carried by

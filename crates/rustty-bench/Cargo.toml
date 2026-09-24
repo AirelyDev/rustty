@@ -95,6 +95,16 @@ rustty-lib = { workspace = true }
 # The `std.mem.Allocator` map used by every benchmark's `create(alloc, ..)` and by
 # `Terminal`/`Screen` (`allocator_api2::alloc::Global` == the process allocator).
 allocator-api2 = { workspace = true }
+# `global.init(.{ .tool = minimal })` (`benchmark/cli.zig:55`; parity S43-F3,
+# controller Decision B commit 2). The port's global init is
+# `rustty_apprt::init_with_action`, whose body needs resourcesDir (apprt),
+# crash, glslang and oniguruma init, so there is no lighter crate to take it
+# from; `init_with_action(false)` is the `.tool` arm (no app-action detection).
+# Default features only: on Linux that is the non-GTK build, so resourcesDir
+# takes its non-GTK arm (the reference links the app runtime into every exe;
+# the bench does not need GTK to init). Acyclic (R4): rustty-apprt does not
+# depend on rustty-bench; rustty-apprt-c, which depends on both, sits above.
+rustty-apprt = { workspace = true }
 
 # P3-W0 T7 step 3. A DEV-dependency on purpose, not a normal one: the feature
 # must be ON for `cargo test -p rustty-bench` and OFF for the shipped
