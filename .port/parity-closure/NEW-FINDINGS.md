@@ -3032,7 +3032,35 @@ reference-sized style section added about 5%. The cause is not investigated yet 
 per-style clone path through `add_with_id_ptr` / `use_multiple`, and its hashing). Re-measured by task
 R13-L2 with the same method, after against before: 0.998 / 1.004 / 0.999, no change.
 
-**state**: OPEN (performance; for the perf owner).
+**cause** (task S-4, MEASURED): not the hashing. A fresh page numbers styles in first-seen order, so on a
+style-heavy screen most style runs land on a different id in the clone than in the source. The port's
+run batching (`clone_partial_row_from_inner`) only recognised the run whose style keeps its id
+(`add_with_id_is_pure_ref_bump`); every other run fell back to one full `add_with_id` per cell, which
+takes `add_context` (a hash and a probe). An xctrace profile of 12,000 clones of `sgr-small.bin` put 52% of
+samples under the per-cell fallback (`lookup_context` 29% self, `add_context` 19% self). Ghostty pays the
+same per-cell lookups (it has no batching), which is why the two were close; on `ascii-small.bin` (one
+style, id preserved) the port's batching already made it 2.7x faster.
+**fix** (commit `5805b4dc`): `add_with_id_pure_ref_bump_target` mirrors `add_with_id`'s branch selection
+and returns the id a repeated call would purely bump in every arm (same id, dead id found elsewhere,
+`add_context` with no trim and the value present); the run-mates get one `use_multiple` on that id and a
+copy with the style id replaced. The style context's `deleted` is a no-op and the bump saturates (UD80),
+so the end state is identical. Test `page_cloneFrom_style_runs_match_per_cell_reference`: the cloned page
+is byte-identical to the reference's per-cell body (and `next_id`, `living`, `max_psl`, `psl_stats`
+equal) for fresh, live-conflict and dead-id destinations, with positive evidence (a test-only counter)
+that the remap batch ran; controls: mates keep the source id (integrity `MismatchedStyleRef`), bump the
+source id (assertion), the old predicate ("remapped runs batched: 0").
+**measured** (task S-4; oracle = Ghostty's bench built at the pin, `.port/tools/perf/README.md`; corpora
+regenerated: `sgr-small.bin` = `ghostty-gen +styled --seed=42 --style-rate=0.8`, `styles-small.bin` =
+random 24-bit foreground per 4-16-character run, Python `random.Random(93)`, both 262,144 B; the
+originals were not kept): instructions retired, clone minus noop, per 1,000 clones: SGR mix 1,581M before,
+550M after, Ghostty 1,321M; truecolor 1,752M before, 642M after, Ghostty 1,484M (instruction counts are
+deterministic and carry the closure). PROVISIONAL (load 21-25, above `IDLE_MAX` 2.0): CPU time (user+sys,
+interleaved rounds, N=21), clone minus noop: SGR mix 72.7 ms before, 28.5 ms after, Ghostty
+66.4 ms (0.43x); truecolor 83.3 ms before, 38.5 ms after, Ghostty 79.7 ms (0.48x). `screen-clone.clone/small`
+unchanged (instructions 1.001x, cycles 0.997x over 41 rounds). The authoritative idle ws10 run is still
+owed (task S-4 report).
+
+**state**: CLOSED (task S-4).
 
 ## N80 — the row-copy retry loops degrade unstorable cells to defaults instead of crashing at the style-set ceiling
 
@@ -3729,7 +3757,20 @@ fix: 0 of 50 of the same sequential runs failed; see the task T-F2 report for th
 - **options for the controller**: record the config in `ws10_suite.py`'s `INCOMPARABLE` with these
   numbers (as `screen-clone.render/small` is), or run the perf lanes with `LC_ALL=C`. Not done here:
   editing a fence is the controller's call (R5).
-- **state**: OPEN.
+- **decision** (task S-4, controller ruling: do not add configs to `INCOMPARABLE`): the oracle was
+  rebuilt at the pin (`ghostty-bench` ReleaseFast from a `git archive` of the pin, sha256
+  `46b5adfb6cd4bfcde6a693a3a6d0cc8c94c6cd825ff66e98c6c6b79d1d95fa2a`,
+  `~/rustty-oracle-artifacts/ghostty-bench-20abdb50a`; recipe and reproducibility in
+  `.port/tools/perf/README.md`). It runs the reference's global init: its log shows
+  `setlocale from env result=en_US.UTF-8`. Both benches now call libc `wcwidth` under the same locale, so
+  the config is comparable again. MEASURED (CPU time, interleaved rounds, load 21-25): rustty 0.92x the
+  rebuilt oracle at N=25 (810 vs 871 ms) and 0.91x at N=21 (746 vs 814 ms); instructions 5,059M vs
+  5,951M. `ws10_suite.py` now uses that oracle (commit `4b60cfac`, sha256-checked, BLOCKED on mismatch),
+  and its `INCOMPARABLE` is empty: the `screen-clone.render/small` entry also ended, as its own text
+  said it would, because the pin contains 446f80f4e (both benches now run 50,000 render iterations:
+  3.785e9 vs 3.874e9 instructions). A provisional ws10 run (load 14.5) held Fence 1 at 14/14, wcwidth
+  -8.3%.
+- **state**: CLOSED (task S-4).
 
 ## N180 — `+page-compression --mode=report` printed to stdout (the S62-F3/F4/F5 class, unlisted)
 
@@ -3906,7 +3947,25 @@ fix: 0 of 50 of the same sequential runs failed; see the task T-F2 report for th
   adjusting page capacity` lines on stderr); whether that path, the logging, or something else is the
   cost is UNVERIFIED.
 - **not done**: no fix attempted; the perf batch owns it. Re-measure at load below `IDLE_MAX` first.
-- **state**: OPEN.
+- **resolution** (task S-4, MEASURED; measured on the merge of `tail-s2`, so with N82's Wyhash hash):
+  the gap is the retired oracle, not the port. Against Ghostty's bench built at the pin (N173's
+  rebuilt oracle), on the same `osc8.bin` (the file itself, copied from the tail-s2
+  scratch): PROVISIONAL (load 17-19, above `IDLE_MAX` 2.0) wall, interleaved N=15: pin oracle 357.1 ms,
+  rustty 356.8 ms (paired ratio 1.002), retired `4749c4e93` oracle 109.4 ms; CPU time: pin oracle 357.7,
+  rustty 358.3 ms (paired 0.992). Deterministic: instructions retired rustty 5,029M vs pin oracle 5,240M
+  (0.965). Both log the same diagnostics: 126,363
+  `start_hyperlink err=OutOfSpace` warnings and 1,004 `adjusting page capacity` lines each (the page
+  reaches the 65,535-byte hyperlink ceiling and the reference drops further links there too), so both
+  do the same work; Ghostty itself became about 3.3x slower on this corpus between `4749c4e93` and the
+  pin. Why (measured by review S-4): the retired binary writes 0 diagnostic lines on this corpus (its
+  bench never ran `global.init`, so logging was never enabled), the pin's writes 127,375, because
+  `benchmark/cli.zig:55` now runs `global.init(.{ .tool = ... })`, which turns on the stderr and macOS
+  unified-log sinks, and `main_ghostty.zig`'s `logFn` creates an `os_log` logger per message. Controller
+  ruling: the warning per dropped hyperlink is the reference's intended behaviour (a diagnostic at a
+  designed capacity ceiling), not an R13 defect, and the port does not diverge. An xctrace profile of rustty puts 32% of samples in writing those warnings and 29% in
+  `increase_capacity` (the reference was not profiled). Re-measured at the end of task S-4
+  (PROVISIONAL, N=21, CPU, load 21-25): rustty 356.3 ms, pin oracle 365.4 ms (paired 0.98).
+- **state**: CLOSED (task S-4; not a port gap).
 
 ## N208 — `Offset(T).Slice` field order differs from the reference on 64-bit targets
 
@@ -3936,6 +3995,38 @@ fix: 0 of 50 of the same sequential runs failed; see the task T-F2 report for th
   stays fixed. The PORT NOTE at `crates/rustty-render-types/src/term_size.rs` that claimed "the same 4
   padding bytes" now gives the real positions. `ADJUDICATION.md#n208`.
 - **state**: WAIVED (task tail-s2, S-2c).
+
+## N215 — against the oracle rebuilt at the pin, `+terminal-stream` retired 27% more instructions than Ghostty
+
+- **id**: N215. Found by task S-4 while rebuilding the perf oracle at the pin (N173). Not in the
+  inventory.
+- **severity**: medium (performance; a STRICT Fence 1 config). **kind**: perf gap; not a fidelity defect.
+- **what**: on `ascii.bin` (the ws10 `terminal-stream/ascii` config) rustty retired 1,389.6M instructions
+  to the pin oracle's 1,097.4M, and was 7-15% slower in CPU time (paired, load 15-40). Two causes,
+  MEASURED with xctrace profiles and instruction counts:
+  1. the printable-run scans (`Stream::next_slice_capped` in `stream.rs`, the codepoint run scan in
+     `print_slice_fill`) built a per-lane bitmask on EVERY group of 8 codepoints. NEON has no movemask,
+     so LLVM emitted a scalar extract per lane (about 21 instructions per group against the
+     reference's 12). The reference tests the group with `@reduce` alone and builds the bitmask only
+     on the group that ends the run. Both scans now do the same, the reduction spelled as an unsigned
+     min/max so LLVM emits one vector op and an across-lanes reduce (a boolean-AND spelling still
+     lowered to a partly scalar sequence): 1,389.6M -> 1,254.9M -> 1,095.5M (intermediate builds;
+     the final candidate, with cause 2 fixed too, measured 1,095.7M, below).
+  2. the bench read the corpus through `DataFile`'s 256 KiB `BufReader`, which a 64 KiB request does not
+     bypass, so the whole corpus was memcpy'd once (about 3% of samples). The reference's
+     `TerminalStream` reads unbuffered (`f.reader(io, &.{})`); `DataFile::unbuffered` is that, and the
+     bench's PORT NOTE claiming the read was already unbuffered is corrected.
+- **fix**: commit `8c1a3e38`. Tests: `unbuffered_reads_the_file_directly` (control: return the
+  `BufReader` -> "read 1 went through the buffer"); the existing lane-boundary test
+  `stream_print_slice_batches_printable_runs` and the print-vs-`print_slice` differential fuzz
+  (controls: stream stop never detected -> "expected exactly two printable runs"; scan threshold widened
+  past 0xFF -> the differential's cursor mismatch).
+- **measured**: instructions (deterministic) 1,095.7M for the final candidate (pin oracle 1,097.4M).
+  PROVISIONAL (above `IDLE_MAX` 2.0): wall, interleaved N=31, load 13: 59.0 ms before, 51.8 ms after
+  (0.879), pin oracle 52.9 ms; CPU N=25, load 21-28: 49.9 ms vs pin oracle 53.7 ms (0.93). Every other
+  ws10 config: instructions within 1% of before (`screen-clone.noop` -1.8%). The authoritative idle ws10
+  run is still owed (task S-4 report).
+- **state**: CLOSED (task S-4).
 
 ## N220 — the deferred uucode revision bump (`NON_PORTS.md` §G1): CI still pinned Zig 0.15.2, which cannot build the harness's uucode
 

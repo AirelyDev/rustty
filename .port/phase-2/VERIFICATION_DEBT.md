@@ -1153,6 +1153,16 @@ cannot be rebuilt, and `origin/main` cannot be built at all". The pin advanced t
 So a comparable oracle exists again and these three rows are no longer blocked.
 The measurements themselves are the remaining work, not the impossibility.
 
+**Update (task S-4, 2026-09-23): the fence now uses an oracle at the current
+pin.** `ws10_suite.py` Fence 1 reads
+`~/rustty-oracle-artifacts/ghostty-bench-<first 9 hex of ORACLE_PIN>`, built
+ReleaseFast at the pin from a `git archive` (oracle checkout untouched), sha256
+`46b5adfb6cd4bfcde6a693a3a6d0cc8c94c6cd825ff66e98c6c6b79d1d95fa2a`, checked
+before every oracle run (BLOCKED on mismatch). Provenance and the rebuild recipe:
+`.port/tools/perf/README.md`. A provisional run (load 14.5) held 14/14; the
+authoritative idle run is owed (task S-4 report). G8's BASELINE.json is still
+the `4749c4e93` series and is not re-based here.
+
 The 4749c4e93 binary and its sha256 stay recorded above: historical rustty
 figures are anchored to it, and numbers from the new binary are a NEW baseline,
 not a continuation of the old series. Comparing across the two would be invalid.

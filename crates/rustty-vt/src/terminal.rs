@@ -1574,15 +1574,36 @@ impl Terminal {
                     // printable-run scan in `stream.rs` for the rationale —
                     // the early-exit form was 4.4x the reference's
                     // instruction count.
+                    //
+                    // The per-group test is the `@reduce(.And, in_range)`
+                    // alone; the lane bitmask is built only on the group that
+                    // ends the run, as the reference does (task S-4: building
+                    // it on every group cost a scalar extract per lane on
+                    // NEON, which has no movemask).
                     while idx + lanes <= cps.len() {
-                        // const in_range = (v >= lo) & (v <= hi);
-                        // if (!@reduce(.And, in_range)) { idx += @ctz(~bits); break; }
+                        // const v: V = cps[idx..][0..lanes].*;
                         let window = &cps[idx..idx + lanes];
-                        let mut bad: u32 = 0;
-                        for (j, &v) in window.iter().enumerate() {
-                            bad |= ((!(0x10..=0xFF).contains(&v)) as u32) << j;
+                        // const in_range = (v >= lo) & (v <= hi);
+                        // if (!@reduce(.And, in_range)) {
+                        //
+                        // PERF(port): the `.And` reduction is spelled as an
+                        // unsigned max of `v - 0x10` (every lane is in
+                        // [0x10, 0xFF] iff the largest `v -% 0x10` is at most
+                        // 0xEF), which LLVM lowers to one vector subtract and
+                        // an across-lanes max; the boolean-AND spelling
+                        // lowered to a partly scalar sequence here.
+                        let mut max_off: u32 = 0;
+                        for &v in window {
+                            max_off = max_off.max(v.wrapping_sub(0x10));
                         }
-                        if bad != 0 {
+                        if max_off > 0xFF - 0x10 {
+                            // const bits = @bitCast(in_range);
+                            // idx += @ctz(~bits);
+                            // break;
+                            let mut bad: u32 = 0;
+                            for (j, &v) in window.iter().enumerate() {
+                                bad |= ((!(0x10..=0xFF).contains(&v)) as u32) << j;
+                            }
                             idx += bad.trailing_zeros() as usize;
                             break;
                         }
