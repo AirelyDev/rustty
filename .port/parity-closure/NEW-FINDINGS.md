@@ -4311,3 +4311,62 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   implies; asserts zero layout mismatches, then that the shrink was refused. Negative control
   (`new_len <= memory.len` reinstated): fails with "left: 0, right: 1" mismatches.
 - **state**: CLOSED (task S7-3).
+
+## N271 — six port-only tripwire stand-ins for the reference's `FailingAllocator` tests are retired
+
+- **id**: N271. Not a ledger row: S-7 design §7 S7-3 ("the ported reference `FailingAllocator` tests,
+  assertion for assertion"; "retires about 66 adaptation notes").
+- **severity**: low. **kind**: test fidelity (R1).
+- **oracle**: `PageList.zig` tests "Builder finish is transactional on allocation failure", "PageAllocation
+  allocation failure leaves list unchanged", "incremental compression advances after allocation failure",
+  "preserved page keeps compressed storage"; `compress/Page.zig` "rejects a representation without
+  savings"; `Screen.zig` "implicit hyperlink ID wraps"; `Terminal.zig` "setPwd/setTitle preserves a
+  sentinel on allocation failure", "resize preserves tabstops on allocation failure";
+  `stream_terminal.zig` "semantic failure is sticky while processing continues"; `snapshot/screen.zig`
+  SCREEN restoration; `c/terminal.zig` "get vt_processing_error".
+- **rustty**: the tests of the same names in `crates/rustty-vt/src/{pagelist/tests.rs, compress/page.rs,
+  screen.rs, terminal.rs, stream_terminal.rs, snapshot/screen.rs}` and `crates/rustty-vt-c/src/terminal.rs`.
+- **description**: while the PageList pools, compressed pages, cursor hyperlink and pwd/title lived on the
+  Rust heap, these tests injected their failures through port-only tripwire modules (`FinishFp`,
+  `AllocatePageFp`, `PagePreservingStateFp`, compress `InitFp`, `StartHyperlinkFp`, `SetStringFp`) that
+  the reference does not have. With those allocations on the allocator handle (S7-3), each test now runs
+  over `alloc::testing::FailingAllocator` (or `alloc::failing()`) exactly as written, asserting
+  `has_induced_failure` where the reference does, and the six modules are deleted. The reference's own
+  tripwires (`init_tw`, `initPages_tw`, `compressPage_tw`, Tabstops/Terminal `resize_tw`) stay.
+- **deviation (test-only)**: the setPwd/setTitle tests also set `resize_fail_index = resize_index`. The
+  reference's inner `testing.allocator` (DebugAllocator) cannot remap a 3- or 5-byte size-class slot to
+  the grown capacity, so its growth reaches the failing `alloc`; the port's inner heap remaps with
+  `realloc`, which would move and succeed. PORT NOTE at both sites.
+- **state**: CLOSED (task S7-3).
+
+## N272 — S7-3 routing: what goes through the allocator handle, what is bound at construction, and what is left
+
+- **id**: N272. Not a ledger row: records the S7-3 scope decisions (S179-F2 closes in S7-4).
+- **severity**: informational. **kind**: allocator routing (T1/T2/T3 of the S-7 design).
+- **routed (T1, with T2 at every reference `try`)**: PageList node + pin pools, every tracked-pin set,
+  the compressed-page encoding, `Node.pagePreservingState(alloc)` buffers, the clone's pools and
+  `TrackedPinsRemap`; `ScreenSet`'s `alloc.create(Screen)`; the cursor hyperlink (`alloc.create` + `dupe`);
+  `Tabstops.dynamic_stops`; `Terminal.pwd`/`title`; the glyph glossary map; the kitty drag-and-drop state
+  (box, MIME lists, offered list, held drop copies). vt-c `new` passes `lib.alloc.default(alloc_)` into
+  `Terminal.init`. Page memory stays on the page allocator.
+- **per-call vs bound**: `pwd`/`title` keep the reference's per-call allocator
+  (`alloc::ArrayListUnmanaged`, grown through `gpa()`; the reference's C-API test swaps the active
+  screen's allocator to make that growth fail). The glossary map, the DnD state and the Tabstops box bind
+  the allocator when created, as allocator_api2 containers do; the reference passes the same allocator
+  per call, and the DnD methods debug-assert that it is the bound one.
+- **left for S7-4 (not routed here, on the Rust heap as before; no new abort)**: the glyph `Entry`
+  payloads (the `Outline` decoded in rustty-font, and the decode scratch), vt-c `from_decoded` (the
+  terminal comes from the snapshot decoder, whose allocator S7-4 routes; `from_decoded` now frees with
+  the decoded terminal's own `gpa()`), and the inspector's two `pagePreservingState(std.heap.page_allocator)`
+  calls, which take the Rust heap handle (the handle has no page-allocator arm; outside the C API).
+- **T3 (call shape) residuals**: the zigstd `AutoArrayHashMapUnmanaged` is an allocator_api2 `Vec` of
+  entries plus a hashbrown index (Zig: a `MultiArrayList` plus an index header above a linear-scan
+  threshold), so the counts differ; the routing tests pin the port's (PageList.init: pools 4 + pin set 2).
+  `Hyperlink` is generic over its byte storage (`Vec<u8>` default; `AllocBytes` for the cursor copy);
+  `startHyperlink`'s port-only copies (the up-front and per-attempt `dupe`) stay on the Rust heap, and the
+  extra `insert_arg` copy is gone (the per-attempt value is moved into the page insert).
+- **verification**: routing tests with counting allocators and exact counts per family
+  (`pagelist_internals_route_through_the_allocator_handle`, `screen_internals_route_…`,
+  `terminal_internals_route_…`, `glossary_map_routes_…`, `dnd_state_routes_…`), each with a negative
+  control that routes one site to Global; `allocation_failure_sweep_through_the_c_api` (vt-c).
+- **state**: OPEN as a record until S7-4/S7-9 (S179-F2's remainder).

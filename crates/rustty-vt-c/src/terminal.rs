@@ -4416,12 +4416,13 @@ pub unsafe fn grid_ref_track(
     };
 
     // const alloc = t.gpa();
-    // PORT NOTE (parity S179-F3): the reference's `t.gpa()` is the caller's
-    // allocator (`t.init(alloc, ..)`). The port's terminal internals are still
-    // on the Rust heap (S179-F2), so the ref takes the wrapper's copy of the
-    // caller's C allocator instead (`TerminalWrapper.c_alloc`), read through
-    // the raw wrapper pointer (no reference to `*t` is formed; Miri SB+TB).
-    // The ref keeps its own copy, so it can be freed after the terminal.
+    // PORT NOTE (parity S179-F3, S7-3): the reference's `t.gpa()` is the
+    // caller's allocator (`t.init(alloc, ..)`), and since S7-3 so is the
+    // port's (the tracked pin above came from the terminal's pin pool on it).
+    // The ref takes the wrapper's copy of that C allocator
+    // (`TerminalWrapper.c_alloc`), read through the raw wrapper pointer (no
+    // reference to `*t` is formed; Miri SB+TB), and keeps its own copy, so it
+    // can be freed after the terminal.
     let alloc: Option<CAllocator> = unsafe { (*terminal_).c_alloc };
     let active_key = unsafe { (*t).screens.active_key };
     let generation = unsafe { (*t).screens.generation(active_key) };
