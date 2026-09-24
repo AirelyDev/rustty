@@ -697,6 +697,13 @@ impl Face {
             return Ok(());
         }
 
+        // Test-only fail-point (S85-F3): forces this fallible step so the
+        // caller's `errdefer face.deinit()` can be proven.
+        #[cfg(test)]
+        if crate::face::test_probe::set_variations_failpoint_should_fail() {
+            return Err(Error::OutOfMemory);
+        }
+
         // Create a new font descriptor with all the variations set.
         let mut desc = unsafe { self.font.font_descriptor() };
         // defer desc.release(); — `desc` is `CFRetained` and releases on drop.

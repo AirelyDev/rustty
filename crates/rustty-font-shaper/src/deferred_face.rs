@@ -406,7 +406,15 @@ mod coretext_payload {
             let ct = self.ct.as_ref().unwrap();
             let mut face = Face::init_font_copy(&ct.font, opts)?;
             // errdefer face.deinit();
-            face.set_variations(&ct.variations, opts)?;
+            // try face.setVariations(ct.variations, opts);
+            //
+            // S85-F3: the `errdefer` was a comment only, so a failing
+            // `setVariations` dropped the face without its `deinit` (the
+            // fontconfig and Windows arms below call it).
+            if let Err(e) = face.set_variations(&ct.variations, opts) {
+                face.deinit();
+                return Err(e);
+            }
             Ok(face)
         }
 
@@ -1511,6 +1519,49 @@ mod tests {
                 variations: Vec::new(),
             }),
         }
+    }
+
+    /// S85-F3: `loadCoreText`'s `errdefer face.deinit()` (`DeferredFace.zig:
+    /// 248-258`): when `setVariations` fails, the freshly created face is torn
+    /// down through `deinit` before the error returns. The fail-point makes
+    /// `set_variations` fail; the probe counts `Face::deinit` calls.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn load_coretext_deinits_the_face_when_set_variations_fails() {
+        use crate::face::test_probe;
+        let opts = crate::face::Options {
+            size: crate::face::DesiredSize {
+                points: 12.0,
+                xdpi: crate::face::DEFAULT_DPI,
+                ydpi: crate::face::DEFAULT_DPI,
+            },
+            freetype_load_flags: crate::face::FREETYPE_LOAD_FLAGS_DEFAULT,
+        };
+        let lib = crate::library::Library::init().unwrap();
+        let mut def = coretext_deferred(rustty_font::embedded::VARIABLE);
+        def.ct.as_mut().unwrap().variations = vec![crate::face::Variation {
+            id: crate::face::Id::init(b"wght"),
+            value: 700.0,
+        }];
+
+        // Positive control: with the fail-point disarmed the load succeeds.
+        // (`set_variations` itself deinits the face it replaces, once.)
+        let before = test_probe::face_deinits();
+        let mut face = def.load(lib, opts).expect("load with variations");
+        assert_eq!(test_probe::face_deinits(), before + 1);
+        face.deinit();
+
+        test_probe::arm_set_variations_failpoint();
+        let before = test_probe::face_deinits();
+        assert!(def.load(lib, opts).is_err(), "set_variations failed");
+        // The fail-point was consumed, so set_variations really ran.
+        assert!(!test_probe::set_variations_failpoint_should_fail());
+        assert_eq!(
+            test_probe::face_deinits(),
+            before + 1,
+            "the face was deinit'ed on the error path"
+        );
+        def.deinit();
     }
 
     /// UD110 (R13, task R13-D): the reference leaks the +1 name string on every

@@ -188,6 +188,20 @@ pub(crate) mod test_probe {
         /// Fail-point for the backend `Face::set_size`: `None` = disarmed;
         /// `Some(n)` = the (n+1)-th `set_size` call on this thread fails.
         static FAIL_SET_SIZE: Cell<Option<usize>> = const { Cell::new(None) };
+        /// Fail-point for the backend `Face::set_variations`: when set, the
+        /// next non-empty `set_variations` call on this thread fails (S85-F3).
+        static FAIL_SET_VARIATIONS: Cell<bool> = const { Cell::new(false) };
+    }
+
+    /// Arm the `set_variations` fail-point for the next non-empty call.
+    pub fn arm_set_variations_failpoint() {
+        FAIL_SET_VARIATIONS.with(|c| c.set(true));
+    }
+
+    /// Called by the backend `Face::set_variations` impls once past their
+    /// empty-list early return; disarms and reports whether this call must fail.
+    pub fn set_variations_failpoint_should_fail() -> bool {
+        FAIL_SET_VARIATIONS.with(|c| c.replace(false))
     }
 
     /// Number of `Face::deinit` calls seen on this thread.
