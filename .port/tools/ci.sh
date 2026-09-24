@@ -528,8 +528,11 @@ GATE_REGISTRY=(
   # load commands to inspect, and "only rustty_* is exported" is false by
   # construction for a .a. Checks the bundle shape, the slice architecture, an
   # export FLOOR, R2 identity (no _ghostty_* leaked), and that the module map's
-  # umbrella header resolves. macOS-only; BLOCKED elsewhere.
-  "G-XCF|HARD|bash $GATES/check_xcframework.sh"
+  # umbrella header resolves. macOS-only; BLOCKED elsewhere. Since review T-B
+  # the slices are the reference's Apple universal set (macos-arm64_x86_64,
+  # plus ios-arm64 and ios-arm64-simulator with the iOS SDK), and the gate's
+  # --self-test runs first, in the same step, over synthetic bundles.
+  "G-XCF|HARD|bash $GATES/check_xcframework.sh --self-test && bash $GATES/check_xcframework.sh"
   # G-FEATMATRIX (2026-08-26) — the reference's test-pkg-linux (build a pkg/
   # subproject ALONE) and test-sentry-linux (build both sides of a build
   # option). Standalone builds are not redundant with `cargo build

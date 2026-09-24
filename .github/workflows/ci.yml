@@ -210,6 +210,16 @@ jobs:
           rustup target add x86_64-pc-windows-msvc || true
           rustup target add x86_64-unknown-freebsd || true
 
+      # G-XCF and G-EXAMPLES (swift-vt-xcframework) run `xtask xcframework-vt`,
+      # which builds the reference's Apple universal bundle: a lipo'd
+      # aarch64 + x86_64 macOS slice, plus iOS device and simulator slices
+      # because this runner has the iOS SDK (GhosttyLibVt.zig:146-215). Every
+      # one of those standard libraries has to be installed, as in the
+      # `macos-app` job below and release-tip.yml's VT job.
+      - name: Install the Apple universal targets (G-XCF / G-EXAMPLES, macOS only)
+        if: runner.os == 'macOS'
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin aarch64-apple-ios aarch64-apple-ios-sim
+
       # G-BLUEPRINT and G-VALGRIND are Linux-only lanes: blueprint-compiler is
       # a GTK tool with no macOS package, and valgrind has no working
       # arm64-Darwin port. Both gates report BLOCKED (never green) on macOS.
