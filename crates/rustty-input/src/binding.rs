@@ -5289,9 +5289,9 @@ mod tests {
         }
     }
 
-    // test "cval"  (Flags)
+    // test "cval"  (nested in `Flags`; the fn carries the reference name)
     #[test]
-    fn flags_cval() {
+    fn cval() {
         assert_eq!(0b0001u8, Flags::default().cval());
         assert_eq!(
             0b0000u8,
@@ -6847,6 +6847,15 @@ mod tests {
 
         s.parse_and_put(b"a=new_window").unwrap();
         let before = s.chain_parent().unwrap().clone();
+        // const before_key = s.chain_parent.?.key_ptr;
+        // const before_value = s.chain_parent.?.value_ptr;
+        //
+        // PORT NOTE (S-8c): the Rust chain parent records the entry's trigger
+        // rather than raw entry pointers, so the reference's two pointer
+        // captures are the addresses of the entry's stored key and value,
+        // resolved through that trigger.
+        let before_key: *const Trigger = s.get_key(before.key).unwrap();
+        let before_value: *const Value = s.get_value(before.key).unwrap();
 
         // Try an invalid parse - should fail
         assert_eq!(
@@ -6857,6 +6866,11 @@ mod tests {
         // chain_parent should be unchanged
         assert!(s.chain_parent().is_some());
         assert_eq!(&before, s.chain_parent().unwrap());
+        // try testing.expect(s.chain_parent.?.key_ptr == before_key);
+        let after = s.chain_parent().unwrap().key;
+        assert!(std::ptr::eq(s.get_key(after).unwrap(), before_key));
+        // try testing.expect(s.chain_parent.?.value_ptr == before_value);
+        assert!(std::ptr::eq(s.get_value(after).unwrap(), before_value));
     }
 
     // test "set: clone produces null chain_parent"
@@ -6950,10 +6964,13 @@ mod tests {
 
         // Verify the pointers are different (truly cloned, not shared)
         //
-        // PORT NOTE: the reference asserts the cloned text `.ptr` differs from the
-        // original. Rust's `Clone` of an owned `Vec<u8>` always allocates a fresh
-        // buffer, so independence is guaranteed by the type; we assert the bytes
-        // match (above) which is the observable property.
+        // PORT NOTE (S-8c): ported as the reference's pointer comparison. It
+        // used to be dropped as "guaranteed by the type" (a cloned `Vec<u8>`
+        // always owns a fresh buffer); R1 keeps the assertion anyway.
+        assert!(
+            text_of(&as_leaf_chained(entry).actions[0]).as_ptr()
+                != text_of(&as_leaf_chained(cloned_entry).actions[0]).as_ptr()
+        );
     }
 
     fn text_of(a: &Action) -> &[u8] {
