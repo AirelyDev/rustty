@@ -146,18 +146,17 @@ fn run_opts(opts: Options) -> Result<u8, Error> {
         // var buffer: [4096]u8 = undefined;
         // var stdout_writer = stdout.writer(&buffer);
         // const writer = &stdout_writer.interface;
-        //   PORT NOTE: the reference File.Writer buffers into `buffer` but never
-        //   flushes on this path (it falls straight to `return 0`); the Rust
-        //   `BufWriter` owns its buffer and is flushed explicitly below (and again
-        //   on drop), so the output is observably delivered.
         //   PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD22. The
-        //   reference never flushes this writer, so the tail of the listing
-        //   still in its buffer at `return 0` is lost: `+list-colors --plain`,
-        //   or any `+list-colors` whose stdout is not a tty, prints a truncated
-        //   list (MEASURED with Zig 0.16.0, task T-C: 782 lines of 22 bytes
-        //   through this writer deliver 16399 of 17204 bytes, and 10 lines
-        //   deliver none). The evident intent (every sibling buffered CLI
-        //   flushes) is the whole list, so the port flushes. Test:
+        //   reference never flushes this writer (it falls straight to `return
+        //   0`), so the tail of the listing still in its buffer is lost:
+        //   `+list-colors --plain`, or any `+list-colors` whose stdout is not a
+        //   tty, prints a truncated list. MEASURED with Zig 0.16.0 on a
+        //   SYNTHETIC probe, not the real listing (task T-C): a program writing
+        //   782 lines of 22 bytes through an unflushed 4096-byte `File.Writer`
+        //   delivers 16399 of 17204 bytes, and 10 lines deliver none. (The real
+        //   listing is 15434 bytes; the reference run on it was not measured.)
+        //   The evident intent (every sibling buffered CLI flushes) is the whole
+        //   list, so the port flushes explicitly below. Test:
         //   `plain_listing_reaches_stdout_in_full`.
         let mut stdout_writer = std::io::BufWriter::new(std::io::stdout().lock());
         let writer = &mut stdout_writer;

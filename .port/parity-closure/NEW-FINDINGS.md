@@ -3194,7 +3194,38 @@ of `std.fmt.parseInt` for unsigned types with base 0: `value_types.rs` `parse_in
 so the same consolidation applies to it. Not compared value by value; UNVERIFIED whether the two agree
 on every input.
 
-**state**: OPEN.
+**fix round T-C3 (2026-09-23)**: rustty-config depends on rustty-args (`crates/rustty-config/Cargo.toml`),
+so the dependency direction allows the switch, and it is done. `value_types.rs` now calls
+`rustty_args::std_fmt` everywhere it ported a `std.fmt` number parser, and its copies are deleted:
+- `pf_*` + `parse_float_f64` -> `std_fmt::parse_float::<f64>` (`Config.zig:6445, 9289` and the
+  `MouseScrollMultiplier` fields).
+- `zig_float_strip_underscores` + `parse_float_f32` -> `std_fmt::parse_float::<f32>` (`Config.zig:9481`).
+  This one CHANGES behaviour: the old copy used Rust's grammar after stripping `_`, so it rejected hex
+  floats. That was a port bug; see N123.
+- T-E's `parse_unsigned_base0` / `parse_int_u8_base0` -> `std_fmt::parse_int::<T>(.., 0)` (`limit.zig:28`,
+  `Config.zig:9878`). Same accept/reject set by reading (the old copy accumulated in `u128` and cast at
+  the end; every caller collapses both errors into `InvalidValue`).
+- `parse_int_u32_base10` -> `std_fmt::parse_int::<u32>(.., 10)` (`Config.zig:9472, 10339, 10341, 10345`).
+- `parse_unsigned_u64_base10` -> `std_fmt::parse_unsigned::<u64>(.., 10)` (`Config.zig:10222`). The old
+  copy rejected every `_`. Its only caller stops at the first prefix that fails, and a prefix ending in
+  `_` always fails, so no `_` reaches a successful parse. The results are the same on every input.
+- `value_types::ParseIntError` is now a re-export of `std_fmt::ParseIntError` (same variants).
+
+Evidence: all 261 pre-existing rustty-config lib tests pass unchanged, among them the 55-row
+`parse_float_f64_matches_std_fmt_parsefloat` Zig oracle table and the `WindowPadding` / `Limit` /
+`quick-terminal-size` integer-spelling tests. `std_fmt`'s own tests are Zig 0.16.0's std tables
+(parseInt, parseUnsigned, "parse u64 digit too big", parseFloat, "nan and inf", "largest normals",
+hex.*), verbatim for every Rust-representable type. The `u21` hex parses (`Config.zig:8293, 8407`)
+have no Rust type and were not touched.
+
+**Remaining (follow-up, not done here):** rustty-vt sits below rustty-args and has its own partial
+copies (`crates/rustty-vt/src/color.rs` `parse_int_u8` / `parse_unsigned_u8`,
+`crates/rustty-vt/src/kitty/graphics_command.rs` `parse_int_i32` / `parse_int_u32`, and a
+`zig_parse_int.rs` that another task is preparing and is not on `tail-c3`). All of them, and
+`rustty_args::std_fmt`, should become ONE port in a shared crate at the lowest layer (below rustty-vt)
+that every crate calls, with `std_fmt`'s std-table tests moved with it.
+
+**state**: OPEN, for the rustty-vt consolidation only. The rustty-config part is done.
 
 ## N121 — five `+show-face` error lines print a Rust Debug value where the reference prints `error.<Name>`
 
@@ -3220,6 +3251,66 @@ reference error is fixed: `Error parsing args: {}` (via `zig_error::args_error`,
 does for `Config.loadFile`), and print through that.
 
 **state**: OPEN.
+
+## N122 — `+new-tab` accepted a surface id with a leading `+`
+
+- **id**: N122. Not in the inventory. Found by the T-C reviewer (review-T-C2, "New finding"), fixed by the
+  T-C3 fix round.
+- **severity**: low (CLI argument and environment validation). **kind**: behavioral-difference.
+- **oracle**: `src/cli/new_tab.zig:69` (`--surface-id=`: `std.fmt.parseUnsigned(u64, trimmed, 0)`) and
+  `:251` (the `GHOSTTY_SURFACE_ID` fallback: `std.fmt.parseUnsigned(u64, e, 0)`), at 20abdb50a.
+  Zig 0.16.0 `parseUnsigned` calls `parseIntWithSign(T, u8, buf, base, .pos)` directly, with no sign
+  strip, so a `+` reaches `charToDigit` and is `error.InvalidCharacter`. std's own `test parseUnsigned`
+  asserts `parseUnsigned(u8, "+0", 10)` is `error.InvalidCharacter`. MEASURED with Zig 0.16.0:
+  `parseUnsigned(u64, "+5", 0)` is `error.InvalidCharacter`.
+- **rustty**: `crates/rustty-cli/src/new_tab.rs` `parse_unsigned_u64_base0`, a hand-written copy whose
+  comment said "parseUnsigned == parseIntWithSign(.pos): a leading '+' is accepted", stripped the `+`.
+  So `--surface-id=+5` was accepted, and so was a `+5` env value, where the reference prints
+  `Error parsing args: error.InvalidCharacter` or falls back to surface 0.
+- **fix**: `parse_unsigned_u64_base0` now calls `rustty_args::std_fmt::parse_unsigned::<u64>(buf, 0)` (new,
+  a port of `parseUnsigned`), and the local `ParseIntError` is the `std_fmt` one. Test
+  `new_tab::tests::surface_id_rejects_a_leading_plus_like_parse_unsigned`. Negative control: the `+` strip
+  reinstated -> the run gets past argument parsing ("+new-tab is not supported on this platform.") where
+  `Error parsing args: error.InvalidCharacter` is expected.
+- **state**: FIXED (T-C3).
+
+## N123 — `quick-terminal-size` rejected hex-float percentages
+
+- **id**: N123. Not in the inventory. Found by the T-C3 fix round while consolidating N120.
+- **severity**: low. **kind**: behavioral-difference (a config value the reference loads was rejected).
+- **oracle**: `src/config/Config.zig:9481` (`QuickTerminalSize.Size.parse`: `std.fmt.parseFloat(f32,
+  input[0 .. input.len - "%".len])`), at 20abdb50a. MEASURED with Zig 0.16.0: `parseFloat(f32, "0x1p4")`
+  is 16, `"0x1.8p5"` is 48, `"1_0"` is 10.
+- **rustty**: `crates/rustty-config/src/value_types.rs` `parse_float_f32` validated and stripped `_`, then
+  called `str::parse::<f32>()`, which has no hex-float grammar, so `quick-terminal-size = 0x1p4%` was an
+  `InvalidValue` diagnostic and the setting was discarded.
+- **fix**: `parse_float_f32` calls `rustty_args::std_fmt::parse_float::<f32>` (N120). Test
+  `value_types::tests::quick_terminal_size_percentage_uses_the_parse_float_grammar`. Negative control: the
+  strip-then-`str::parse` body reinstated -> `0x1p4%` gives `Err(InvalidValue)`.
+- **state**: FIXED (T-C3).
+
+## N124 — `std_fmt::parse_int` named the wrong error when an overflow came before a bad character
+
+- **id**: N124. Not in the inventory. Found by the T-C reviewer (review-T-C2, blocking issue 1), in T-C's
+  own port; fixed by the T-C3 fix round.
+- **severity**: low (error text in a log line). **kind**: behavioral-difference (error identity).
+- **oracle**: Zig 0.16.0 `lib/std/fmt.zig` `parseIntWithSign`: it accumulates in `Accumulate` (the result
+  type widened to at least 8 bits) and returns `error.Overflow` from the `math.mul` / `math.add` /
+  `math.sub` that leaves that range, before it reads the rest of the input. MEASURED with Zig 0.16.0:
+  `parseInt(i64, "99999999999999999999x", 10)`, `parseInt(u8, "300x", 0)`, `parseInt(i8, "300x", 0)`,
+  `parseInt(i8, "-129x", 10)`, `parseInt(u32, "-1x", 10)` and `parseInt(u8, "0x100x", 0)` are all
+  `error.Overflow`.
+- **rustty**: `crates/rustty-args/src/std_fmt.rs` accumulated in `i128` and range-checked only at the end,
+  so each of those gave `InvalidCharacter`. Visible in `ssh_cache/entry.rs`: `Invalid timestamp in cache
+  entry: 99999999999999999999x err=error.InvalidCharacter` where the reference logs `err=error.Overflow`.
+  The PORT NOTE that said only the variant order could differ, "and both variants are errors", was wrong.
+- **fix**: `parse_int_with_sign` range-checks against `T` after every step and follows the reference's
+  first-negative-digit branch. That is exact because `Accumulate == T` for every Rust integer type.
+  Tests `std_fmt::tests::parse_int_overflows_before_a_later_bad_character` and
+  `ssh_cache::entry::tests::cache_entry_timestamp_overflow_is_named_before_a_later_bad_character`.
+  Negative control: the end-of-parse check restored -> the first fails with `InvalidCharacter` for
+  `Overflow`.
+- **state**: FIXED (T-C3).
 
 
 ## N140 — the XDG helpers collapse `homedir.home`'s `error.BufferTooSmall` into `NoHomeDir`
