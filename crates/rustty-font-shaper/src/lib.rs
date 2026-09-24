@@ -32,13 +32,15 @@
 //! arms are live — `loadCoreTextFreetype` (`coretext_freetype`), the CoreText
 //! face's `harfbuzz_shaper` arms (`coretext_harfbuzz`), the noop shaper
 //! (`coretext_noshape`) and the no-discovery arms (`freetype`). Built and
-//! tested on macOS for all five macOS backends (the G-FONTBACKEND lane);
-//! type-checked, not run, for Linux and Windows `freetype`. Not built by the
-//! port (refused by `rustty-build-config`, recorded as N286):
-//! `fontconfig_freetype` on macOS, `freetype_windows` off Windows, and a
-//! native `web_canvas`. Open measurement: N285 (the FreeType arm of the
-//! reference's never-run `face metrics` test disagrees with the port on one
-//! value).
+//! tested on macOS for all seven native backends — including
+//! `fontconfig_freetype` and `freetype_windows`, with host fixtures (the
+//! G-FONTBACKEND lane); type-checked, not run, for Linux and Windows
+//! `freetype`. Not built: the CoreText backends off Darwin (no CoreText),
+//! `fontconfig_freetype` on Windows (OPEN, N286), and a native `web_canvas`
+//! (no feature). The FreeType arm of the reference's never-run `face metrics`
+//! test holds stale values (N285 / UD281; faithful). (CORRECTION, S-14b: this
+//! listed `fontconfig_freetype` on macOS and `freetype_windows` off Windows as
+//! not built.)
 //!
 //! Carved leaves-first (R1: every line/comment/test{} ported as the crate is
 //! carved, under the acyclicity gate per R4).
@@ -244,21 +246,19 @@ pub mod shared_grid_set;
 pub mod ft;
 #[cfg(all(not(target_arch = "wasm32"), feature = "harfbuzz"))]
 pub mod hb;
-// Fontconfig binding wrapper (port of `pkg/fontconfig/*.zig`), the Linux/BSD
-// font-discovery seam. Gated OFF on macOS (CoreText discovers fonts; fontconfig
-// is never linked), on Windows (`Backend::default` picks `freetype_windows`
-// precisely to "avoid fontconfig on Windows because its libxml2 dependency
-// isn't available" — WS20; the `fontconfig-sys` dependency is gated off the same
-// way, so leaving this module on would have failed to link) and on wasm (no C
-// deps), matching the `fontconfig-sys` dependency's `cfg` table.
-// EMBEDDER DIVERGENCE (feature `fontconfig`, DEFAULT-ON): also off when the
-// vendored-C font backends are turned off — the `cfg` above already keeps
-// fontconfig out of every macOS build, but it does NOT keep `fontconfig-sys` out
-// of the resolve graph, which is what a colliding `links = "fontconfig"` needs.
-#[cfg(all(
-    not(any(target_os = "macos", target_os = "windows", target_arch = "wasm32")),
-    feature = "fontconfig"
-))]
+// Fontconfig binding wrapper (port of `pkg/fontconfig/*.zig`), the
+// font-discovery seam of the `fontconfig_freetype` backend. Compiled exactly on
+// `hasFontconfig()` (`rustty_font_has_fontconfig`), as the reference imports
+// `pkg/fontconfig` only for that backend (`SharedDeps.zig:292`): the Linux/BSD
+// default, and `-Dfont-backend=fontconfig_freetype` on macOS. CORRECTION (S-14b,
+// review M3): this was gated off macOS/Windows by `target_os`. Windows stays
+// excluded by `rustty-build-config` (N286: the port does not build
+// `fontconfig-sys` for Windows; WS20 gated it off there), wasm has no C deps.
+// EMBEDDER DIVERGENCE (feature `fontconfig`, DEFAULT-ON): an embedder that
+// turns the vendored-C font backends off drops `fontconfig-sys` from the resolve
+// graph, which is what a colliding `links = "fontconfig"` needs; `build.rs`
+// refuses `fontconfig_freetype` without the feature.
+#[cfg(all(rustty_font_has_fontconfig, feature = "fontconfig"))]
 pub mod fc;
 pub mod library;
 #[cfg(not(target_arch = "wasm32"))]

@@ -63,9 +63,9 @@ ghostty-wasm-abi = ["dep:rustty-os"]
 # "CoreText for font discovery, rendering, and shaping" (`backend.rs`
 # `Backend::default`). FreeType serves only the non-default `coretext_freetype`
 # / `freetype` backends and the Linux/Windows backends, HarfBuzz additionally
-# `coretext_harfbuzz`, and Fontconfig only `fontconfig_freetype`; macOS never
-# links Fontconfig at all (the `fc` module and `fontconfig-sys` are already
-# `cfg`-gated off Darwin). The BACKEND itself is `-Dfont-backend`, i.e.
+# `coretext_harfbuzz`, and Fontconfig only `fontconfig_freetype` (the `fc`
+# module is compiled only on that backend, which is selectable on macOS too).
+# The BACKEND itself is `-Dfont-backend`, i.e.
 # `rustty-build-config`'s `font-backend-*` features (S-14, N266); these three
 # features only decide which `-sys` crates are in the graph, and `build.rs`
 # refuses a selected backend whose libraries they leave out. A macOS embedder
@@ -103,9 +103,10 @@ harfbuzz = ["dep:harfbuzz-sys", "dep:freetype-sys"]
 # backend face, and `library::FreetypeLibrary`. Implies `harfbuzz`.
 freetype = ["dep:freetype-sys", "harfbuzz"]
 # Fontconfig 2.14.2 font discovery/matching (the `fc` module, the port of
-# `pkg/fontconfig/*.zig`) for the `fontconfig_freetype` backend. Already gated off
-# macOS/Windows/wasm by `cfg`; this feature is what lets a NON-macOS-targeting
-# embedder drop `links = "fontconfig"` from the graph too. Implies `freetype`.
+# `pkg/fontconfig/*.zig`) for the `fontconfig_freetype` backend (the `fc`
+# module is compiled only there; `fontconfig-sys` is off Windows/wasm by `cfg`).
+# This feature is what lets an embedder drop `links = "fontconfig"` from the
+# graph. Implies `freetype`.
 fontconfig = ["dep:fontconfig-sys", "freetype"]
 
 [dependencies]
@@ -195,11 +196,15 @@ harfbuzz-sys = { path = "../../crates-sys/harfbuzz-sys", optional = true }
 
 # Fontconfig 2.14.2 (font discovery/matching) for the FreeType/Fontconfig
 # discovery backend — the SAME C library the reference links (R3), consumed by
-# the `fc` module (the port of `pkg/fontconfig/*.zig`). Gated to match `fc`'s
-# `cfg(not(any(target_os = "macos", target_os = "windows", target_arch = "wasm32")))`:
-# macOS discovers fonts via CoreText and never links fontconfig, and freestanding
-# wasm has no C deps. Referenced by path (the `-sys` crates are not in
-# `[workspace.dependencies]`).
+# the `fc` module (the port of `pkg/fontconfig/*.zig`), which is compiled only
+# on `hasFontconfig()` (`-Dfont-backend=fontconfig_freetype`: the Linux/BSD
+# default, and selectable on macOS like the reference's `SharedDeps.zig:292`,
+# which builds fontconfig from source on any target whose backend has it).
+# CORRECTION (S-14b, review M3): this table excluded macOS on the premise that
+# macOS "never links fontconfig"; that is only the DEFAULT backend. A default
+# macOS build compiles the crate but references nothing in it, as the
+# `rustty-apprt` edge to it already did. Freestanding wasm has no C deps.
+# Referenced by path (the `-sys` crates are not in `[workspace.dependencies]`).
 #
 # LATENT GAP FIXED [WS20, 2026-07-30]: this table used to include Windows, so a
 # Windows build would have tried to link fontconfig — the exact thing
@@ -207,9 +212,9 @@ harfbuzz-sys = { path = "../../crates-sys/harfbuzz-sys", optional = true }
 # fontconfig on Windows because its libxml2 dependency isn't available"). With the
 # `freetype_windows` discoverer now live, Windows uses the FreeType directory scan
 # and links no fontconfig.
-[target.'cfg(not(any(target_os = "macos", target_os = "windows", target_arch = "wasm32")))'.dependencies]
+[target.'cfg(not(any(target_os = "windows", target_arch = "wasm32")))'.dependencies]
 # OPTIONAL (feature `fontconfig`, DEFAULT-ON): the `cfg` table above keeps
-# fontconfig off macOS/Windows/wasm, but Cargo's `links` uniqueness check ignores
+# fontconfig off Windows/wasm, but Cargo's `links` uniqueness check ignores
 # `cfg` and runs over the whole resolve graph — so an embedder colliding on
 # `links = "fontconfig"` needs the dependency gone, not merely inactive.
 fontconfig-sys = { path = "../../crates-sys/fontconfig-sys", optional = true }

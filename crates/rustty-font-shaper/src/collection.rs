@@ -2302,7 +2302,10 @@ mod tests {
     // cfg), so it is the `cfg_attr` ignore below (R14 form 1). Run with
     // `--ignored`, the body measures the built backend against the reference's
     // own expected values for it (S-14: including `coretext_freetype`'s FreeType
-    // arm on macOS).
+    // arm on macOS). Those FreeType values are stale upstream (they predate the
+    // light-hinting default; NEW-FINDINGS N285, UPSTREAM-DEFECTS UD281): under a
+    // FreeType backend the body fails on narrow `cell_width` (7.0 vs 8.0) and
+    // wide `ascii_height` (15.5 vs 16.0), as Ghostty's would. Kept faithful.
     #[test]
     #[cfg_attr(
         not(rustty_font_backend = "web_canvas"),

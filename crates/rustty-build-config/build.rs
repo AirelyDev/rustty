@@ -103,13 +103,22 @@ fn font_backend() {
         None => default,
         Some(&tag) => {
             // The backends this port can build per target. The reference enum
-            // lets any value through to the compiler; the arms outside this
-            // table either cannot link on the target (CoreText off Darwin) or
-            // are not built by the port there (`fontconfig_freetype` on macOS:
-            // the vendored `fontconfig-sys` is gated off Darwin, as upstream CI
-            // never builds it there either; `freetype_windows` off Windows: its
-            // font-directory scanner is Windows-only code). Refused LOUDLY
-            // rather than silently replaced by the default (R14 spirit).
+            // lets any value through to the compiler (`Config.zig:191-195` has
+            // no validation). Refused here, LOUDLY rather than silently
+            // replaced by the default (R14 spirit):
+            //   * the CoreText backends off Darwin — they cannot link there
+            //     (no CoreText), in the reference too;
+            //   * `fontconfig_freetype` on Windows — an OPEN R1 gap (N286): the
+            //     reference builds fontconfig from source on any target whose
+            //     backend has it (`SharedDeps.zig:292`), but the port gates
+            //     `fontconfig-sys` off Windows (WS20) and has not built it there.
+            // (`web_canvas` has no feature: `font/main.zig:50` forces it on
+            // wasm, and its face/shaper call browser externs.) CORRECTION
+            // (S-14b, review M3): `fontconfig_freetype` on macOS and
+            // `freetype_windows` off Windows were refused as "not built by the
+            // port"; both build (the Windows directory scanner is portable
+            // Rust, as the reference's is portable Zig) and are tested on macOS
+            // by the G-FONTBACKEND lane.
             //
             // wasm is exempt: `font/main.zig:50` ignores the option there
             // (`.backend = if (wasm) .web_canvas else build_config.font_backend`),
@@ -119,6 +128,8 @@ fn font_backend() {
             } else if os == "macos" || os == "ios" {
                 &[
                     "freetype",
+                    "freetype_windows",
+                    "fontconfig_freetype",
                     "coretext",
                     "coretext_freetype",
                     "coretext_harfbuzz",
@@ -127,7 +138,7 @@ fn font_backend() {
             } else if os == "windows" {
                 &["freetype", "freetype_windows"]
             } else {
-                &["freetype", "fontconfig_freetype"]
+                &["freetype", "freetype_windows", "fontconfig_freetype"]
             };
             if !supported.contains(&tag) {
                 panic!(

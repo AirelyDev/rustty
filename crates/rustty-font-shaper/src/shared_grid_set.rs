@@ -611,9 +611,13 @@ impl<A: Allocator + Copy> SharedGridSet<A> {
             // full discovery (e.g. CoreText).
             // if (@hasDecl(Discover, "discoverExactFamily")) {
             //
-            // PORT NOTE: the comptime `@hasDecl` collapses — this block is already
-            // macOS-gated, where `Discover = CoreText` always declares
-            // `discoverExactFamily`.
+            // PORT NOTE: the comptime `@hasDecl` is a `cfg`: of the discoverers
+            // only CoreText declares `discoverExactFamily` (`discovery.zig:411`),
+            // so it is `rustty_font_has_coretext`. CORRECTION (S-14b): this said
+            // the probe "collapses" because the block was macOS-gated; with
+            // `-Dfont-backend=fontconfig_freetype` or `freetype_windows` on
+            // macOS the block runs with a discoverer that has no fast path.
+            #[cfg(rustty_font_has_coretext)]
             {
                 // if (try disco.discoverExactFamily("Apple Color Emoji")) |face| {
                 if let Some(face) = disco.discover_exact_family(b"Apple Color Emoji")? {

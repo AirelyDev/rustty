@@ -673,11 +673,11 @@ impl Descriptor {
     /// manually managed `*fontconfig.Pattern`); the caller must `destroy` it.
     // PORT NOTE: `discovery.zig:117-157` `toFcPattern`. `assert = quirks.inlineAssert`
     // (imported crate-wide as in `face/freetype.rs:41`); each `pat.add`/`cs.addChar`
-    // is `assert`ed exactly as the reference. Gated to the fontconfig backend class
-    // (`not(any(macos, wasm32))`) — the coretext path uses `to_coretext_descriptor`,
-    // and wasm has no discovery.
+    // is `assert`ed exactly as the reference. Gated to the fontconfig backend
+    // (`hasFontconfig()`; S-14b: it was the Linux/BSD target set) — the coretext
+    // path uses `to_coretext_descriptor`, and wasm has no discovery.
     // pub fn toFcPattern(self: Descriptor) *fontconfig.Pattern {
-    #[cfg(not(any(target_os = "macos", target_os = "windows", target_arch = "wasm32")))]
+    #[cfg(rustty_font_has_fontconfig)]
     pub fn to_fc_pattern(&self) -> *mut crate::fc::Pattern {
         use crate::fc;
         use rustty_util::quirks::inlineAssert as assert;
@@ -2862,7 +2862,7 @@ mod tests {
     /// `[:0]` pointer to the pattern, so fontconfig sees the bytes before the
     /// NUL; the port now stores exactly those bytes, which this reads back out
     /// of the pattern.
-    #[cfg(not(any(target_os = "macos", target_os = "windows", target_arch = "wasm32")))]
+    #[cfg(rustty_font_has_fontconfig)]
     #[test]
     fn a_descriptor_family_with_a_nul_reaches_the_pattern_cut_at_the_nul() {
         let _fc = crate::fc::global_shared();
@@ -3053,7 +3053,7 @@ mod tests {
     // codepoint` tests, whose bodies discover real fonts); these directly assert
     // the built pattern's contents, and are gated to the fontconfig backend class
     // (the only class where `to_fc_pattern` is compiled).
-    #[cfg(not(any(target_os = "macos", target_os = "windows", target_arch = "wasm32")))]
+    #[cfg(rustty_font_has_fontconfig)]
     #[test]
     fn descriptor_to_fc_pattern_family_size_mono() {
         // Shared: fontconfig's global state must not be torn down under us
@@ -3090,7 +3090,7 @@ mod tests {
         pat.destroy();
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "windows", target_arch = "wasm32")))]
+    #[cfg(rustty_font_has_fontconfig)]
     #[test]
     fn descriptor_to_fc_pattern_codepoint() {
         // Shared: fontconfig's global state must not be torn down under us
