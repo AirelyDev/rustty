@@ -79,16 +79,14 @@ impl<'a> Kitty<'a> {
         // ) catch unreachable;
         let mut control_buf = [0u8; 64];
         let control: &[u8] = {
-            // PORT NOTE: `rand.intRangeAtMost(u32, 1, 1_000_000)`. The port's
-            // `Uint` is implemented for `u8`/`u64`/`usize` and the newtype
-            // widths, not `u32`; the range fits in `u64` and the draw is
-            // identical (the generator consumes the same number of bytes for
-            // both widths only if the width matches, so `u64` is used and the
-            // value is narrowed for formatting).
-            let id = self.rand.int_range_at_most::<u64>(1, 1_000_000);
+            // `rand.intRangeAtMost(u32, 1, 1_000_000)`: a 4-byte draw on the
+            // 32-bit Lemire lane (parity S121-F1). CORRECTION: this drew a
+            // `u64` because `Uint` then lacked `u32`, which consumed 8 bytes
+            // and produced a different id for the same seed.
+            let id = self.rand.int_range_at_most::<u32>(1, 1_000_000);
             let mut w = crate::io::FixedWriter::fixed(&mut control_buf);
             w.writeAll(b"a=t,f=100,i=").unwrap();
-            w.writeUint(id).unwrap();
+            w.writeUint(u64::from(id)).unwrap();
             w.writeAll(b";").unwrap();
             let n = w.buffered().len();
             &control_buf[..n]
@@ -145,6 +143,30 @@ mod tests {
         let data = writer.buffered();
         assert!(data.starts_with(b"\x1b_Ga=t,f=100,i="));
         assert!(data.ends_with(b"\x1b\\"));
+    }
+
+    /// Parity S121-F1: seed 0 reproduces the reference's bytes exactly. The
+    /// golden was MEASURED: `zig test` (0.16.0) on a scratch root that imports
+    /// the pinned `src/synthetic/Kitty.zig`, `DefaultPrng.init(0)`,
+    /// `.data_len = 16`, three `gen.next(&writer, 1024)` calls, printed with
+    /// `std.zig.fmtString`.
+    #[test]
+    fn kitty_seed_0_matches_the_reference_bytes() {
+        let prng = DefaultPrng::init(0);
+        let mut buf = [0u8; 8192];
+        let mut writer = FixedWriter::fixed(&mut buf);
+        let mut v = Kitty::new(prng.random());
+        v.data_len = 16;
+        let gen = v.generator();
+        for _ in 0..3 {
+            gen.next(&mut writer, 1024).unwrap();
+        }
+        assert_eq!(
+            &b"\x1b_Ga=t,f=100,i=285327;wvOgFTDQOSyvAzi0\x1b\\\
+               \x1b_Ga=t,f=100,i=684729;i0pO5EoPN794a1nM\x1b\\\
+               \x1b_Ga=t,f=100,i=138824;cN/4m22EwBedx5eE\x1b\\"[..],
+            writer.buffered(),
+        );
     }
 
     /// RUSTTY-SIDE (WS10 T17 Step 7): generator determinism.

@@ -196,8 +196,11 @@ impl<Elem: WriteZig> Tables<Elem> {
         }
         out.push_str("};");
 
+        // One newline, not two: the reference's literal here is `\\` (empty)
+        // then `\\pub const stage3...`, unlike the stage2 header above
+        // (parity S215-F1; CORRECTION: this pushed "\n\n").
         out.push_str(&format!(
-            "\n\npub const stage3: [{}]Elem = .{{",
+            "\npub const stage3: [{}]Elem = .{{",
             self.stage3.len()
         ));
         for entry in &self.stage3 {
@@ -267,6 +270,23 @@ impl<'a, Elem: Copy, const S1: usize, const S2: usize, const S3: usize>
 #[cfg(test)]
 mod tests {
     use crate::generated::{props_data, symbols_data};
+
+    /// Parity S215-F1: `write_zig` reproduces `Tables.writeZig` byte for byte.
+    /// The expected text was MEASURED: `zig test` (0.16.0) on a scratch root
+    /// importing the pinned `src/unicode/lut.zig`, the same three `Tables(bool)`
+    /// stages, `writeZig` into a fixed writer.
+    #[test]
+    fn write_zig_matches_the_reference_output() {
+        let t = super::Tables::<bool> {
+            stage1: vec![0, 256],
+            stage2: vec![0, 1, 1],
+            stage3: vec![false, true],
+        };
+        assert_eq!(
+            "//! This file is auto-generated. Do not edit.\n\npub fn Tables(comptime Elem: type) type {\n    return struct {\npub const stage1: [2]u16 = .{0,256,\n};\n\npub const stage2: [3]u16 = .{0,1,1,};\npub const stage3: [2]Elem = .{false,true,};\n    };\n}\n",
+            t.write_zig(),
+        );
+    }
 
     /// Machine-checks the generator invariant `TablesRef::get` relies on to
     /// elide the stage2/stage3 bounds checks, over every embedded generated

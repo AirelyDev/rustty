@@ -172,13 +172,21 @@ impl<T> Offset<T> {
 // invalid value of type `[u8; 4]`: encountered uninitialized memory" inside
 // `lz4::compress`).
 //
-// Naming the padding is a faithfulness IMPROVEMENT, not a divergence: the
-// oracle's `Offset(T).Slice` is a Zig auto-layout struct with the same `u32` +
-// `usize` fields and therefore the same 4 padding bytes and the same
-// `@sizeOf == 16`; Zig simply permits reading those undefined bytes and Rust
-// does not. `repr(C)` in the declared order gives `offset` @0, `_padding` @4,
-// `len` @8 — 16 bytes, align 8, every byte covered by a field. This port
-// already names such implicit padding elsewhere (`Row._padding: u23`).
+// Naming the padding is not a divergence in size: the oracle's
+// `Offset(T).Slice` is a Zig auto-layout struct with the same `u32` + `usize`
+// fields, so it too has 4 padding bytes and `@sizeOf == 16`; Zig simply
+// permits reading those undefined bytes and Rust does not. `repr(C)` in the
+// declared order gives `offset` @0, `_padding` @4, `len` @8 — 16 bytes,
+// align 8, every byte covered by a field. This port already names such
+// implicit padding elsewhere (`Row._padding: u23`).
+//
+// The field ORDER is not the oracle's on 64-bit targets (NEW-FINDINGS N208,
+// WAIVED). Zig 0.16.0 lays the auto-layout struct out as `len` @0, `offset`
+// @8, padding @12..16 on aarch64-macos and x86_64-linux, and as `offset` @0,
+// `len` @4 (no padding) on wasm32-wasi (MEASURED, task tail-s2 and its
+// review). The language leaves auto-layout field order unspecified and it
+// differs per target, and the page bytes are never persisted or compared with
+// the oracle's, so only size, alignment and stride are held to the reference.
 #[repr(C)]
 pub struct OffsetSlice<T> {
     pub offset: Offset<T>,

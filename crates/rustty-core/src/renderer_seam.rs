@@ -2109,21 +2109,27 @@ where
 // Returns the interval for the blinking cursor in milliseconds.
 // fn cursorBlinkInterval() u64 {
 fn cursorBlinkInterval() -> u64 {
+    // CORRECTION (parity S114-F1): this branch used to be a comment, "inert"
+    // for want of a valgrind probe; `rustty_zigstd::valgrind` ports
+    // `std.valgrind.runningOnValgrind`, which, like the reference's, is live
+    // only where `builtin.valgrind_support` is (debug builds, not macOS).
+    cursor_blink_interval_for(rustty_zigstd::valgrind::running_on_valgrind())
+}
+
+/// The body of `cursorBlinkInterval` given `std.valgrind.runningOnValgrind()`.
+fn cursor_blink_interval_for(running_on_valgrind: usize) -> u64 {
     // if (std.valgrind.runningOnValgrind() > 0) {
-    //     // If we're running under Valgrind, the cursor blink adds enough
-    //     // churn that it makes some stalls annoying unless you're on a
-    //     // super powerful computer, so we delay it.
-    //     //
-    //     // This is a hack, we should change some of our cursor timer
-    //     // logic to be more efficient:
-    //     // https://github.com/ghostty-org/ghostty/issues/8003
-    //     return CURSOR_BLINK_INTERVAL * 5;
-    // }
-    //
-    // PORT NOTE: Rustty has no `std.valgrind.runningOnValgrind` shim, so the
-    // valgrind `* 5` branch above is inert (never taken) and kept as a verbatim
-    // comment; the fn returns the plain constant. Re-arm the branch if a
-    // `rustty_os` valgrind probe is added.
+    if running_on_valgrind > 0 {
+        // If we're running under Valgrind, the cursor blink adds enough
+        // churn that it makes some stalls annoying unless you're on a
+        // super powerful computer, so we delay it.
+        //
+        // This is a hack, we should change some of our cursor timer
+        // logic to be more efficient:
+        // https://github.com/ghostty-org/ghostty/issues/8003
+        // return CURSOR_BLINK_INTERVAL * 5;
+        return CURSOR_BLINK_INTERVAL * 5;
+    }
 
     // return CURSOR_BLINK_INTERVAL;
     CURSOR_BLINK_INTERVAL
@@ -3177,5 +3183,21 @@ mod thread_diagnostics_tests {
             "{ .search_selected_match = null }",
             MessageDbg(&M::SearchSelectedMatch(None)).to_string()
         );
+    }
+}
+
+#[cfg(test)]
+mod cursor_blink_interval_tests {
+    use super::{cursorBlinkInterval, cursor_blink_interval_for};
+
+    /// Parity S114-F1: under Valgrind (one or more) the interval is five
+    /// times `CURSOR_BLINK_INTERVAL` (`Thread.zig:735-748`); natively it is
+    /// the plain 600 ms, and this test binary runs natively.
+    #[test]
+    fn cursor_blink_interval_is_five_times_longer_under_valgrind() {
+        assert_eq!(600, cursor_blink_interval_for(0));
+        assert_eq!(3000, cursor_blink_interval_for(1));
+        assert_eq!(3000, cursor_blink_interval_for(2));
+        assert_eq!(600, cursorBlinkInterval());
     }
 }

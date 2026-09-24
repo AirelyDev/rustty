@@ -3197,7 +3197,7 @@ Not fixed in this round; recorded for adjudication.
   exact). 25 of the rows are kept in `differential_against_zig`.
 - **What the reference hashes** (`hyperlink.zig:143`, `lib/std/hash/auto_hash.zig`): the tag as one
   byte in the union's declaration order (`explicit` 0, `implicit` 1; the port's `PageEntryIdTag`
-  discriminants are the reverse, so the bytes are literals); `.implicit` as its 4 native bytes; each
+  discriminants are the reverse, so the bytes are literals (superseded by the S-2b follow-up below)); `.implicit` as its 4 native bytes; each
   `.Deep` slice (`.explicit` id, then `uri`) as its bytes FOLLOWED BY its `len` as a native `usize`.
   The old port also dropped the two lengths, so `(id "ab", uri "x")` and `(id "a", uri "bx")` hashed
   alike; they no longer do.
@@ -3228,12 +3228,17 @@ Not fixed in this round; recorded for adjudication.
 
 The ledger row for the same finding, `S155-F1` (DISPUTED, WAIVED as not observable), is not this task's
 row and is left as it is; its premise ("any self-consistent hash preserves every observable result") no
-longer describes the code.
+longer describes the code. (Superseded by the S-2b follow-up below: the row was handed to this task and
+re-marked CLOSED.)
 
 **Follow-up, task tail-s2 (S-2b)**: the port's `PageEntryIdTag` discriminants were the reverse of the
 reference's tag (`implicit` 0). They now follow the reference (`explicit` 0, `implicit` 1), so the tag
 byte stored in the page mapping matches: MEASURED with the same probe, byte 16 of `PageEntry.Id` is 01
-for an implicit link and 00 for an explicit one, and an all-zero id is `.explicit`
+for an implicit link and 00 for an explicit one, and an all-zero id is `.explicit`. (That covers live
+entries and a fresh, zero-filled set slot. A reaped slot is written with `Item::default()`, whose
+`PageEntry::default()` is `.implicit` 0, so it is not byte-identical to a fresh one; the reference leaves
+`Item.value` `undefined` in both cases (`ref_counted_set.zig:85`) and never reads it, so neither has
+reference-defined bytes and the default is left as it was.)
 (`hyperlink::page_entry_tag_byte_tests`; negative control: the old numbering fails both tests). No C
 header, snapshot format (it has its own `Kind` byte) or compression golden depends on the numbering. The
 ledger row S155-F1 is re-marked CLOSED with this evidence. The probe also found N208 (the payload
@@ -3765,6 +3770,53 @@ fix: 0 of 50 of the same sequential runs failed; see the task T-F2 report for th
   -8.3%.
 - **state**: CLOSED (task S-4).
 
+## N180 — `+page-compression --mode=report` printed to stdout (the S62-F3/F4/F5 class, unlisted)
+
+- **id**: N180. Not in the inventory. Found by T-I (tail wave), 2026-09-23, while working LEDGER
+  S62-F3/F4/F5: a grep for `std.debug.print` in `src/benchmark/` at the pin finds nine sites; the
+  audit listed seven. The other two are `PageCompression.zig:436` (per-page line) and `:442` (total).
+- **severity**: medium (same as S62-F3). **kind**: behavioral-difference (stdout instead of stderr).
+- **what**: `crates/rustty-bench/src/page_compression.rs` ported both as `println!`.
+- **fix**: all nine sites now use the crate's `debug_print!` macro (`crates/rustty-bench/src/lib.rs`):
+  stderr, under the stderr lock, write errors dropped as `std.debug.print`'s `catch return` does
+  (`eprintln!` would panic on a failed write). Test
+  `crates/rustty-bench/tests/report_output_goes_to_stderr.rs::page_compression_report_goes_to_stderr`
+  runs the binary and asserts the lines are on stderr and stdout is empty; negative control
+  (`print!` restored in `page_compression.rs` only) fails with "no stderr line starts with
+  \"page-compression page=0 \"".
+- **state**: CLOSED (T-I).
+
+## N181 — the S115-F1 `end_frame` wrapper in the Linux renderer twin has never been compiled
+
+- **id**: N181. Not in the inventory. Recorded by T-I2 (tail wave), 2026-09-23, from review T-I F3.
+  Outside LEDGER S115-F1's cited anchors, which name only the macOS `generic.rs`.
+- **severity**: low. **kind**: verification gap (unverified port change).
+- **what**: `crates/rustty-renderer/src/generic/linux_impl.rs:3673-3697` (the wrapper) got the same shape as the macOS
+  fix: `update_frame` runs `update_frame_impl` and then `font_shaper.end_frame()` on every exit
+  (`generic.zig:1271-1274`). HarfBuzz's `end_frame` is a no-op, so the behaviour cannot change, but the
+  edit was written on macOS: `cargo check --target aarch64-unknown-linux-gnu -p rustty-renderer` stops
+  at cc-rs (no `aarch64-linux-gnu-g++` here) and rvm is down. The site's PORT NOTE says so.
+- **fix**: run `cargo build --workspace --features gtk,x11,wayland` and `cargo test -p rustty-renderer`
+  on rvm.
+- **state**: OPEN — fix written, Linux run pending.
+
+## N182 — `expectApproxEqual`'s `expectEqual` fallback arms printed nothing in the port
+
+- **id**: N182. Not in the inventory. Found by review T-I (F8), 2026-09-23; outside LEDGER S80-F2's
+  anchors (`comparison.zig:113,128,137-139,192-199`).
+- **severity**: low. **kind**: missing diagnostic (test-support text).
+- **what**: the reference's `.optional`, tagged-`.@"union"` and `else` arms call
+  `testing.expectEqual`, which prints `expected {any}, found {any}` on a mismatch. The port's `i32`,
+  `u32` and `Option` impls (and the test-local union) returned the error silently. MEASURED with the
+  pinned `comparison.zig` under zig 0.16.0: `expected 1, found 2`, `expected 7, found 9`,
+  `expected null, found 1.5`, `expected 3, found null`, `expected .a, found .b`.
+- **fix**: `crates/rustty-datastruct/src/comparison.rs` `expect_equal_mismatch` prints that line through
+  `print`, used by the `i32`/`u32`/`Option` impls and the test union; `FmtAny` gains `Option` (`null`).
+  Test `comparison::tests::expectApproxEqual_expect_equal_fallbacks_print_std_diagnostics` asserts the
+  five measured lines; negative control (`expect_equal_mismatch` not printing) fails on the first,
+  `["expected 1, found 2\n"]` vs `[]`.
+- **state**: CLOSED (T-I2).
+
 ## N196 — tests passed without testing anything when their environment was missing
 
 - **id**: N196. Not in the inventory. Found by the tail-s3 task (silent-skip audit), 2026-09-23.
@@ -3925,7 +3977,16 @@ fix: 0 of 50 of the same sequential runs failed; see the task T-F2 report for th
   through `payload.offset`).
 - **not done**: `OffsetSlice` is shared across areas (render-types, grapheme map, hyperlinks); out of
   task tail-s2's scope.
-- **state**: OPEN.
+- **review (S-2)**: confirmed with an independent mock: `len` @0 / `offset` @8 on aarch64-macos (Debug,
+  ReleaseSafe, ReleaseFast) and x86_64-linux; `offset` @0 / `len` @4 on wasm32-wasi. A fix would also
+  have to rework `PageEntryId` and audit every other auto-layout struct in page memory.
+- **ruling** (controller, 2026-09-23): WAIVED as not observable. The field order of a non-`extern` Zig
+  struct is unspecified by the language and differs per target; the raw page bytes are never persisted
+  or compared with the oracle's; size, alignment and stride parity are already enforced (N88, R13-L).
+  By contrast the union tag numbering fixed under N82 is language-defined (declaration order), so it
+  stays fixed. The PORT NOTE at `crates/rustty-render-types/src/term_size.rs` that claimed "the same 4
+  padding bytes" now gives the real positions. `ADJUDICATION.md#n208`.
+- **state**: WAIVED (task tail-s2, S-2c).
 
 ## N215 — against the oracle rebuilt at the pin, `+terminal-stream` retired 27% more instructions than Ghostty
 
@@ -3955,3 +4016,50 @@ fix: 0 of 50 of the same sequential runs failed; see the task T-F2 report for th
   before, 51.8 ms after (0.879), pin oracle 52.9 ms; CPU N=25: 49.9 ms vs pin oracle 53.7 ms (0.93).
   Every other ws10 config: instructions within 1% of before (`screen-clone.noop` -1.8%).
 - **state**: CLOSED (task S-4).
+
+## N220 — the deferred uucode revision bump (`NON_PORTS.md` §G1): CI still pinned Zig 0.15.2, which cannot build the harness's uucode
+
+- **id**: N220. Not a ledger row: the deferral lived only in `.port/phase-3/NON_PORTS.md` §G1,
+  `.port/phase-2/DEFERRALS.md` ("Still open — summary") and `.port/phase-3/DEFERRAL_REAUDIT.md` row 13.
+  Discharged by task tail-s10a at the user's instruction to address every parity gap.
+- **severity**: medium (CI lane), none (data). **kind**: dependency-revision / CI-toolchain.
+- **oracle**: ghostty@20abdb50a `build.zig.zon` (uucode `2826a37a…`, hash `ZZjBPlK5…`),
+  `src/build/uucode_config.zig`, `src/build/UnicodeTables.zig`, `src/build/SharedDeps.zig:64-78`,
+  `src/unicode/{props_uucode,symbols_uucode,lut,props,grapheme}.zig`.
+- **what was found**: the harness (`.port/phase-0/harness/unicode/`) had already been moved to uucode
+  2826a37a, the pin's config and the `uucode.types` / `uucode.grapheme` API by `986d90c8`, but
+  `.github/workflows/ci.yml` still installed Zig 0.15.2 for the G4-uni job while the harness's
+  `build.zig.zon` requires 0.16.0. So on CI G4-uni could not build its oracle: RED without comparing
+  anything. §G1 still read DEFERRED.
+- **fix**: CI installs Zig 0.16.0 for that job. No other gate in that job depends on 0.15.2: every other
+  zig consumer (`check_lz4_byte_exact.sh`, `check_ref_item_geometry.py`, `stb-resize-oracle/run.sh`, …)
+  also needs the ghostty oracle checkout, absent on CI, and locally they already run on 0.16.0. The
+  harness's stale version text (the BLOCKED message said "install zig 0.15.2") and the provenance
+  headers of the three generated tables, `lib.rs` and `props.rs` (`uucode.x.types` ->
+  `uucode.types`) now name the revision.
+- **table differential** (the recipe's step 3), all against uucode 2826a37a + the pin's config:
+  - the pin's own `props-unigen` / `symbols-unigen`, built as `UnicodeTables.zig` builds them and run:
+    `props_data.rs` STAGE1/2/3 (8192 / 31744 / 30) and `symbols_data.rs` (8192 / 1792 / 2) are identical
+    element for element. Negative controls: one flipped STAGE3 field / one flipped STAGE2 entry in a copy
+    each reported exactly 1 difference.
+  - G4-uni (`run_unicode_diff.sh`) under Zig 0.16.0: 0 diffs for width, is_symbol, props flags and
+    grapheme_break_no_control over 0..=0x10FFFF and the 8192 grapheme precompute entries
+    (`uucode.grapheme.computeGraphemeBreakNoControl`).
+  - `case_folding_full` (1585 code points, `rustty-unicode` `case_folding_data.rs`) and
+    `is_emoji_presentation` (1219, `rustty-font-shaper` `uucode.rs`), dumped from the live uucode over
+    the full range: 0 differences each (negative controls: a dropped and an altered entry each
+    reported).
+  - Codepoints changed, per class: **none**. The UCD inputs are byte-identical between the two
+    revisions (`diff -rq ucd/`: only a new `BidiMirroring.txt` and `.gitignore`), and the restructured
+    derivations (`x/config_x/wcwidth.zig` -> `components.zig`, `x/grapheme.zig` -> `grapheme.zig`)
+    produce the same values. `ascii.zig`, `utf8.zig`, `code_point.zig` are byte-identical; `BreakState`
+    and `GraphemeBreakNoControl` keep their order. `checksum.rs` is unchanged because the arrays are.
+- **perf**: the `release-fast` `rustty-bench` binary is byte-identical before and after (sha256
+  `ea2e5b2b…`; only comments changed). Paired interleaved sweep anyway (N=9, utf8 corpus, `LC_ALL=C`,
+  load average ~20–22 on a shared host): codepoint-width.table −1.1%, .simd −0.0%, grapheme-break.table
+  −1.8%, is-symbol.table +0.1%, all within noise.
+- **not settled here**: `rustty-vaxis`'s vendored uucode 0.1.0 subset (UCD 16.0.0). At the pin
+  libvaxis 0.6.0 imports Ghostty's uucode 2826a37a through `external_uucode` (the `libvaxis_only`
+  table: `east_asian_width`, `general_category`, `grapheme_break`, plus `runtime`'s
+  `is_emoji_presentation`), so moving it belongs to §G2 (vaxis 0.5.1 -> 0.6.0), task S-10b.
+- **state**: CLOSED (task tail-s10a).

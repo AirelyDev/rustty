@@ -569,8 +569,8 @@ impl TerminalSnapshot {
         //     });
         // }
         for tag in TAGS {
-            println!(
-                "terminal-snapshot tag={} records={} payload={}",
+            debug_print!(
+                "terminal-snapshot tag={} records={} payload={}\n",
                 tag.name(),
                 record_counts[tag_index(tag)],
                 payload_totals[tag_index(tag)],
@@ -581,8 +581,8 @@ impl TerminalSnapshot {
         //     record_total * snapshot.record.Header.len + snapshot.envelope.encoded_len,
         //     bytes.len,
         // });
-        println!(
-            "terminal-snapshot total records={} framing={} encoded={}",
+        debug_print!(
+            "terminal-snapshot total records={} framing={} encoded={}\n",
             record_total,
             record_total * snapshot::record::Header::LEN as u64
                 + snapshot::envelope::ENCODED_LEN as u64,

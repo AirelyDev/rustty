@@ -592,6 +592,14 @@ impl Shaper {
         }
     }
 
+    /// How many CoreFoundation objects are waiting for `end_frame` to hand
+    /// them to the release thread. RUSTTY-SIDE: no reference counterpart; a
+    /// read-only view so the renderer's tests can observe that a frame's
+    /// `endFrame` ran (parity S115-F1).
+    pub fn release_pool_len(&self) -> usize {
+        self.cf_release_pool.len()
+    }
+
     // pub fn endFrame(self: *Shaper) void {
     pub fn end_frame(&mut self) {
         // if (self.cf_release_pool.items.len == 0) return;

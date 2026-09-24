@@ -622,10 +622,10 @@ impl TerminalFormatter {
 
         // std.debug.print("terminal-formatter emit={s} region={s} pages={d} rows={d} " ++
         //     "cols={d} cells={d} out_bytes={d} pin_bytes={d} out_hash={x} pin_hash={x}\n", ...);
-        println!(
+        debug_print!(
             "terminal-formatter emit={} region={} pages={} rows={} \
              cols={} cells={} out_bytes={} pin_bytes={} \
-             out_hash={:x} pin_hash={:x}",
+             out_hash={:x} pin_hash={:x}\n",
             self_.opts.emit.tag_name(),
             self_.opts.region.tag_name(),
             pages,
@@ -642,8 +642,8 @@ impl TerminalFormatter {
         // line remains comparable across implementations.
         if self_.opts.pin_map {
             // std.debug.print("terminal-formatter-pins points={d} nodes={d}\n", ...);
-            println!(
-                "terminal-formatter-pins points={} nodes={}",
+            debug_print!(
+                "terminal-formatter-pins points={} nodes={}\n",
                 self_.pins.points.len(),
                 self_.pins.nodes.len(),
             );
@@ -726,8 +726,8 @@ impl TerminalFormatter {
         // const equal = std.mem.eql(u8, first, second);
         let equal = first == second;
         // std.debug.print("terminal-formatter roundtrip emit={s} bytes={d} replay_bytes={d} equal={}\n", ...);
-        println!(
-            "terminal-formatter roundtrip emit={} bytes={} replay_bytes={} equal={}",
+        debug_print!(
+            "terminal-formatter roundtrip emit={} bytes={} replay_bytes={} equal={}\n",
             self.opts.emit.tag_name(),
             first.len(),
             second.len(),
@@ -744,20 +744,38 @@ impl TerminalFormatter {
             }
             // std.debug.print("terminal-formatter roundtrip mismatch offset={d} first={f} second={f}\n", ...);
             //
-            // PORT NOTE: `std.zig.fmtString` (escaped string literal form) ->
-            // `escape_ascii` (both render controls/escapes printably; the exact
-            // escape spelling is diagnostics-only). `i -| 32` is saturating.
-            println!(
-                "terminal-formatter roundtrip mismatch offset={} first={} second={}",
-                i,
-                first[i.saturating_sub(32)..core::cmp::min(first.len(), i + 32)].escape_ascii(),
-                second[i.saturating_sub(32)..core::cmp::min(second.len(), i + 32)].escape_ascii(),
-            );
+            // `i -| 32` is saturating.
+            debug_print!("{}", roundtrip_mismatch_line(i, first, second));
             // return error.RoundtripMismatch;
             return Err(RoundtripError::RoundtripMismatch);
         }
         Ok(())
     }
+}
+
+/// The roundtrip mismatch diagnostic line (`TerminalFormatter.zig:415-423`):
+/// `std.debug.print("terminal-formatter roundtrip mismatch offset={d}
+/// first={f} second={f}\n", .{ i, std.zig.fmtString(first[i -| 32..@min(first.len,
+/// i + 32)]), std.zig.fmtString(second[..]) })`.
+//
+// PORT NOTE (parity S62-F7): `std.zig.fmtString` is `std.zig.stringEscape`,
+// ported as `rustty_args::args::zig_string_escape`. CORRECTION: this used
+// `<[u8]>::escape_ascii`, which also escapes `'` and spells other bytes
+// differently.
+fn roundtrip_mismatch_line(i: usize, first: &[u8], second: &[u8]) -> String {
+    let mut out = format!("terminal-formatter roundtrip mismatch offset={i} first=").into_bytes();
+    rustty_args::args::zig_string_escape(
+        &mut out,
+        &first[i.saturating_sub(32)..core::cmp::min(first.len(), i + 32)],
+    );
+    out.extend_from_slice(b" second=");
+    rustty_args::args::zig_string_escape(
+        &mut out,
+        &second[i.saturating_sub(32)..core::cmp::min(second.len(), i + 32)],
+    );
+    out.push(b'\n');
+    // `stringEscape` emits only printable ASCII.
+    String::from_utf8(out).expect("zig_string_escape output is ASCII")
 }
 
 /// The inferred error set of `setupImpl` (`!void`): terminal allocation
@@ -902,4 +920,33 @@ impl BenchmarkAction for TerminalFormatter {
     fn benchmark(&mut self) -> Benchmark {
         TerminalFormatter::benchmark(self)
     }
+}
+
+/// Parity S62-F7: the mismatch windows render as `std.zig.fmtString` does
+/// (`'` bare, `"` and `\` backslash-escaped, other non-printables `\xNN` in
+/// lower-case hex), and the window is the saturating `i -| 32 .. i + 32`.
+#[test]
+fn terminal_formatter_roundtrip_mismatch_line_uses_zig_fmt_string() {
+    let first: &[u8] = b"a'b\"c\x1bd\\\t";
+    let second: &[u8] = b"a'b\"c\x1bE\\\t";
+    assert_eq!(
+        "terminal-formatter roundtrip mismatch offset=6 \
+         first=a'b\\\"c\\x1bd\\\\\\t second=a'b\\\"c\\x1bE\\\\\\t\n",
+        roundtrip_mismatch_line(6, first, second),
+    );
+
+    // The window starts 32 bytes before the first difference.
+    let long_first = [b'x'; 40];
+    let mut long_second = [b'x'; 40];
+    long_second[35] = b'y';
+    let line = roundtrip_mismatch_line(35, &long_first, &long_second);
+    assert_eq!(
+        format!(
+            "terminal-formatter roundtrip mismatch offset=35 first={} second={}y{}\n",
+            "x".repeat(37),
+            "x".repeat(32),
+            "x".repeat(4),
+        ),
+        line,
+    );
 }

@@ -7,7 +7,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
 
 ## Low (1)
 
-- [ ] **S215-F1** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S215-F1** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** write_zig emits an extra blank line before the stage3 declaration
   - **Oracle:** `src/unicode/lut.zig:167-172` → **Rustty:** `crates/rustty-unicode/src/lut.rs:196-199`
   - **Audit's suggested fix:** Change lut.rs:197 to `"\npub const stage3: [{}]Elem = .{{"` (single newline).

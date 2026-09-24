@@ -1,10 +1,17 @@
 //! This file is auto-generated. Do not edit.
 //!
 //! Precomputed grapheme-break lookup table generated bit-for-bit from the
-//! reference algorithm (uucode 0.2.0 `computeGraphemeBreakNoControl`), the
-//! same logic ghostty's src/unicode/grapheme.zig embeds at comptime. Each
-//! entry packs a `Value{ result: bool, state: BreakState }` into the low 4
-//! bits: bit 0 is `result`, bits 1..=3 are the `BreakState` enum integer.
+//! reference algorithm (uucode 0.2.0 @ 2826a37a
+//! `uucode.grapheme.computeGraphemeBreakNoControl`), the same logic ghostty's
+//! src/unicode/grapheme.zig embeds at comptime. Each entry packs a
+//! `Value{ result: bool, state: BreakState }` into the low 4 bits: bit 0 is
+//! `result`, bits 1..=3 are the `BreakState` enum integer.
+//!
+//! Re-generated on 2026-09-23 (S-10a, `.port/phase-3/NON_PORTS.md` §G1) at the
+//! reference pin 20abdb50a, i.e. uucode 0.2.0 @ 2826a37a with that pin's
+//! rewritten `uucode_config.zig`: the regenerated arrays are identical,
+//! element for element, to the ones this file held from the pre-bump
+//! revision.
 
 pub const DATA: [u8; 8192] = [
     1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 0,
