@@ -16745,7 +16745,16 @@ mod paste_event_mutex_tests {
                     timer_cb,
                 );
             }
-            let ran = loop_.run(rustty_xev::RunMode::Once);
+            // One `run(Once)` is not enough on Linux: libxev's epoll backend
+            // counts the timer's submission as a completion (`tick`: "These
+            // operations happen synchronously"), so the first tick can return
+            // before either callback ran (measured on the Linux VM: it returned
+            // after 12 us with neither set). Tick until one of them fires; the
+            // 10 s timer bounds the loop.
+            let mut ran = Ok(());
+            while ran.is_ok() && !woke && !timed_out {
+                ran = loop_.run(rustty_xev::RunMode::Once);
+            }
             loop_.deinit();
             let woke = woke && ran.is_ok();
 
