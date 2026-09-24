@@ -33,7 +33,7 @@
 // distinctive reference doc comments are preserved below (R3). Everything is
 // `#[cfg(target_os = "macos")]` via the module gate in lib.rs.
 
-// (module is `#[cfg(any(target_os = "macos", target_os = "freebsd"))]`-gated in lib.rs)
+// (module is `#[cfg(any(target_os = "macos", target_os = "ios", target_os = "visionos", target_os = "freebsd"))]`-gated in lib.rs)
 
 use crate::common::userdata_value;
 use crate::kqueue::{
@@ -1053,9 +1053,16 @@ mod tests {
         miri,
         ignore = "MIRI EXCEPTION (rustty-xev C6, .port/phase-2/MIRI_EXCEPTIONS.md): real openpty + EVFILT_READ/WRITE via the live kqueue loop -- Miri cannot execute foreign functions; runs natively (ci.sh HARD `cargo test --workspace`) + the G6 ASan companion arm (check_leaks.sh `live_ffi_unit_filters`, re-verified 2026-07-31: 31 tests, 0 findings)."
     )]
+    // S-13 (N256): the reference's own compile-time scope, as an R14 attribute.
+    // This module also builds for `.ios`/`.visionos`/`.freebsd`, where the
+    // reference returns `error.SkipZigTest`.
+    #[cfg_attr(
+        all(not(miri), not(any(target_os = "linux", target_os = "macos"))),
+        ignore = "SkipZigTest: upstream runs the pty stream tests on .linux/.macos only (R14)"
+    )]
     fn pty_child_to_parent() {
         // switch (builtin.os.tag) { .linux, .macos => {}, else => return
-        // error.SkipZigTest }  — this module is macOS-gated, so the arm holds.
+        // error.SkipZigTest }  — the `cfg_attr(.., ignore)` above.
 
         // Create the pty parent/child side.
         let mut pty = Pty::init().unwrap();
@@ -1131,7 +1138,16 @@ mod tests {
         miri,
         ignore = "MIRI EXCEPTION (rustty-xev C6, .port/phase-2/MIRI_EXCEPTIONS.md): real openpty + EVFILT_READ/WRITE via the live kqueue loop -- Miri cannot execute foreign functions; runs natively (ci.sh HARD `cargo test --workspace`) + the G6 ASan companion arm (check_leaks.sh `live_ffi_unit_filters`, re-verified 2026-07-31: 31 tests, 0 findings)."
     )]
+    // S-13 (N256): the reference's own compile-time scope, as an R14 attribute.
+    // This module also builds for `.ios`/`.visionos`/`.freebsd`, where the
+    // reference returns `error.SkipZigTest`.
+    #[cfg_attr(
+        all(not(miri), not(any(target_os = "linux", target_os = "macos"))),
+        ignore = "SkipZigTest: upstream runs the pty stream tests on .linux/.macos only (R14)"
+    )]
     fn pty_parent_to_child() {
+        // switch (builtin.os.tag) { .linux, .macos => {}, else => return
+        // error.SkipZigTest }  — the `cfg_attr(.., ignore)` above.
         // Create the pty parent/child side.
         let mut pty = Pty::init().unwrap();
 
@@ -1205,7 +1221,16 @@ mod tests {
         miri,
         ignore = "MIRI EXCEPTION (rustty-xev C6, .port/phase-2/MIRI_EXCEPTIONS.md): real openpty + EVFILT_READ/WRITE via the live kqueue loop -- Miri cannot execute foreign functions; runs natively (ci.sh HARD `cargo test --workspace`) + the G6 ASan companion arm (check_leaks.sh `live_ffi_unit_filters`, re-verified 2026-07-31: 31 tests, 0 findings)."
     )]
+    // S-13 (N256): the reference's own compile-time scope, as an R14 attribute.
+    // This module also builds for `.ios`/`.visionos`/`.freebsd`, where the
+    // reference returns `error.SkipZigTest`.
+    #[cfg_attr(
+        all(not(miri), not(any(target_os = "linux", target_os = "macos"))),
+        ignore = "SkipZigTest: upstream runs the pty stream tests on .linux/.macos only (R14)"
+    )]
     fn pty_queued_writes() {
+        // switch (builtin.os.tag) { .linux, .macos => {}, else => return
+        // error.SkipZigTest }  — the `cfg_attr(.., ignore)` above.
         // this test fails on x86_64 with a strange error but passes
         // on aarch64. for now, just let it go until we investigate.
         // (Non-dynamic `xev.dynamic == false`, so the reference's

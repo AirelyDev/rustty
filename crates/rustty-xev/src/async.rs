@@ -29,7 +29,7 @@
 // `fn AsyncEventFd(comptime xev: type) type` — comptime-generic structs.
 // Monomorphized for the single kqueue backend (§0), each is a concrete `Async`.
 
-// (module is `#[cfg(any(target_os = "macos", target_os = "freebsd"))]`-gated in lib.rs)
+// (module is `#[cfg(any(target_os = "macos", target_os = "ios", target_os = "visionos", target_os = "freebsd"))]`-gated in lib.rs)
 // PORT NOTE: `libc::mach_task_self()` is `#[deprecated]` in libc (it nudges toward
 // the `mach2` crate), but this port binds `libc` directly (R3, no new dep) exactly
 // as the reference uses `posix.system.mach_task_self()`. The call is correct; the

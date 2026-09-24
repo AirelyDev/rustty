@@ -21,7 +21,7 @@
 // `#[cfg(target_os = "macos")]` (EVFILT_PROC + Darwin waitpid reap) exactly as the
 // whole kqueue port is.
 
-// (module is `#[cfg(any(target_os = "macos", target_os = "freebsd"))]`-gated in lib.rs)
+// (module is `#[cfg(any(target_os = "macos", target_os = "ios", target_os = "visionos", target_os = "freebsd"))]`-gated in lib.rs)
 
 use crate::kqueue::{pid_t, Completion, Loop, Operation, ProcError, Result, NOTE_EXIT_FLAGS};
 use crate::looppkg::CallbackAction;
@@ -233,7 +233,7 @@ mod tests {
 
     // PORT NOTE: `argv_0`/`argv_42` — the `builtin.os.tag` switch's non-windows arm
     // (`&.{ "sh", "-c", "exit N" }`); the `.windows => &.{ "cmd.exe", "/C", "exit N" }`
-    // arm is comptime-elided on this macOS-gated module.
+    // arm is comptime-elided on this kqueue-family (Darwin + FreeBSD) module.
     const ARGV_0: [&str; 3] = ["sh", "-c", "exit 0"];
     const ARGV_42: [&str; 3] = ["sh", "-c", "exit 42"];
 
