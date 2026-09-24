@@ -56,9 +56,13 @@ commit, with the section check above as its evidence. The bench needs
 `terminal-stream`. The binary runs the reference's global init (`.tool`),
 including `ensureLocale`, exactly as `rustty-bench` does (N173).
 
-When the pin advances, rebuild at the new pin and update `ORACLE_SHA256`; the
-file name follows the pin, so an un-rebuilt oracle BLOCKS instead of silently
-measuring the old revision.
+When the pin advances, rebuild at the new pin and update `ORACLE_SHA256` and
+`ORACLE_SHA256_PIN_DIGEST` (the first 16 hex of the new pin's sha256) in the same
+commit. Until both are updated every oracle run BLOCKS: the file name follows the
+pin, and the digest ties the recorded sha256 to the pin it was built at, so
+neither an un-rebuilt oracle nor the old binary copied to the new name can pass.
+`--self-test` arm [f] covers the identity check (sha mismatch, missing pin,
+digest mismatch, and that the live digest matches ORACLE_PIN).
 
 The retired `4749c4e93` binary stays at
 `.port/phase-0/baseline/bench-releasefast/bin/ghostty-bench` (shared checkout)
