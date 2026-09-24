@@ -4283,3 +4283,31 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   compile-checked by flipping its `cfg` to macOS for one `cargo check -p rustty --test cli_smoke`
   (green), then restored. It runs on a FreeBSD host (`VERIFICATION_DEBT.md` V23).
 - **state**: CLOSED (task tail-s13).
+
+## N270 — `GlobalZigAllocator::resize` reported success for any shrink, so the later free reached `dealloc` with a smaller layout
+
+- **id**: N270. Not a ledger row: review S7-12 F4 (confirmed by probe), fixed in task S7-3.
+- **severity**: medium. **kind**: port soundness defect (not a reference defect).
+- **oracle**: Zig 0.16 `lib/std/heap.zig` `c_allocator_impl.resize`: `if (new_len <= memory.len)
+  return true; // in-place shrink always works`, otherwise `new_len <= malloc_size(ptr)`, or `return
+  false` where no usable-size query exists. Legal there because C `free` takes no size.
+- **rustty**: `crates/rustty-lib/src/allocator.rs` `GlobalZigAllocator::resize` (backs
+  `c_allocator()`, `default(NULL)`, and the vt-c test allocators).
+- **description**: the port maps `std.heap.c_allocator` onto the Rust global heap (the documented
+  mapping, shared with `rustty_vt::alloc::VtAllocator`'s Global arm and zigstd's `impl ResizeInPlace
+  for Global`). `resize` answered `new_len <= memory.len` without moving the block, so the caller's
+  later `free(new_len)` called `std::alloc::dealloc` with a smaller `Layout` than `alloc` used:
+  undefined behaviour under the `GlobalAlloc` contract, harmless only because the macOS/glibc
+  `System` allocator ignores the size. A zigstd arena over the handle's C arm (S7-3/S7-5) reaches it
+  through `reset(.retain_with_limit)`.
+- **decision**: `resize` now succeeds only for `new_len == memory.len`. Backing the allocator with
+  libc `malloc`/`posix_memalign`/`free` + `malloc_size` would reproduce the reference's in-place
+  answers, but it would split the port's single "NULL allocator" into two heaps (the VtAllocator
+  Global arm stays the Rust heap) and add a libc surface Miri cannot model (`malloc_size`). Refusing
+  is within the Zig allocator contract (the reference's own no-usable-size arm returns `false`);
+  callers fall back to `remap` (`realloc`) or alloc+copy+free. `remap` is unchanged.
+- **verification**: `crates/rustty-lib/tests/global_zig_allocator_resize.rs` (own binary, a
+  size-checking `#[global_allocator]`): alloc 64, shrink-resize, free with the length the contract
+  implies; asserts zero layout mismatches, then that the shrink was refused. Negative control
+  (`new_len <= memory.len` reinstated): fails with "left: 0, right: 1" mismatches.
+- **state**: CLOSED (task S7-3).

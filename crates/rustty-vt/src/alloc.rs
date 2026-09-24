@@ -608,11 +608,11 @@ pub mod testing {
     /// A C allocator over the Rust global heap, the port's `std.testing.allocator`
     /// for the wrappers below (leaks are Miri's job, R6).
     ///
-    /// PORT NOTE: unlike `rustty_lib::allocator::c_allocator()`, whose
-    /// `resize` reports success for any shrink, this one resizes in place only
-    /// to the same length: `std::alloc::dealloc` must be given the layout the
-    /// block was allocated with, so a block cannot be recorded as shorter
-    /// without moving it. `remap` is `realloc` (it may move).
+    /// PORT NOTE: like `rustty_lib::allocator::c_allocator()` (N270), this one
+    /// resizes in place only to the same length: `std::alloc::dealloc` must be
+    /// given the layout the block was allocated with, so a block cannot be
+    /// recorded as shorter without moving it. `remap` is `realloc` (it may
+    /// move).
     pub fn heap() -> CAllocator {
         CAllocator {
             ctx: core::ptr::null_mut(),
