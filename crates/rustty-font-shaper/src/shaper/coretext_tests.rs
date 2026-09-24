@@ -1394,7 +1394,7 @@ fn shape_javanese_ligatures() {
 
 // test "shape Chakma vowel sign with ligature (vowel sign renders first)" {
 #[test]
-fn shape_chakma_vowel_sign_with_ligature() {
+fn shape_chakma_vowel_sign_with_ligature_vowel_sign_renders_first() {
     // We need a font that supports Chakma for this to work, if we can't find
     // Noto Sans Chakma Regular, which is a system font on macOS, we just skip
     // the test.

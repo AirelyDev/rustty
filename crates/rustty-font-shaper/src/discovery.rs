@@ -3323,7 +3323,8 @@ mod tests {
     #[test]
     #[ignore = "SkipZigTest: the reference disables this test unconditionally \
                 (`if (true) return error.SkipZigTest;`, SF Pro is not in CI); \
-                its body is ported as comments only (R14)"]
+                its body is ported live but unreachable, as upstream (R14)"]
+    #[allow(unreachable_code)]
     fn coretext_sorting() {
         // if (options.backend != .coretext and options.backend != .coretext_freetype)
         //     return error.SkipZigTest;
@@ -3340,63 +3341,103 @@ mod tests {
         // !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!//
         //
         // R14: that unconditional skip is the `#[ignore]` above. Run on request,
-        // the test FAILS rather than reporting `ok` for a body that does not exist.
+        // the test FAILS rather than reporting `ok` for a body that never runs.
         panic!(
             "coretext_sorting is disabled upstream (`if (true) return error.SkipZigTest;`); \
-             its body is not ported"
+             its body is unreachable there and here"
         );
 
-        // The remainder is unreachable (the reference's `if (true) return` always
-        // skips); it is ported verbatim as reference below and never executes:
-        //
-        // var lib = try Library.init(alloc); defer lib.deinit();
-        // var ct = CoreText.init(lib); defer ct.deinit();
-        //
-        // We try to get a Regular, Italic, Bold, & Bold Italic version of SF Pro,
-        // which should be installed on all Macs, and has many styles which makes
-        // it a good test, since there will be many results for each discovery.
-        //
-        // Regular
-        // {
-        //     var it = try ct.discover(alloc, .{ .family = "SF Pro", .size = 12 });
-        //     defer it.deinit();
-        //     const res = (try it.next()).?;
-        //     var buf: [1024]u8 = undefined;
-        //     const name = try res.name(&buf);
-        //     try testing.expectEqualStrings("SF Pro Regular", name);
-        // }
-        //
-        // Regular Italic
-        // NOTE: This makes sure that we don't accidentally prefer "Thin Italic",
-        //       which we previously did, because it has a shorter name.
-        // {
-        //     var it = try ct.discover(alloc, .{ .family = "SF Pro", .size = 12, .italic = true });
-        //     defer it.deinit();
-        //     const res = (try it.next()).?;
-        //     var buf: [1024]u8 = undefined;
-        //     const name = try res.name(&buf);
-        //     try testing.expectEqualStrings("SF Pro Regular Italic", name);
-        // }
-        //
-        // Bold
-        // {
-        //     var it = try ct.discover(alloc, .{ .family = "SF Pro", .size = 12, .bold = true });
-        //     defer it.deinit();
-        //     const res = (try it.next()).?;
-        //     var buf: [1024]u8 = undefined;
-        //     const name = try res.name(&buf);
-        //     try testing.expectEqualStrings("SF Pro Bold", name);
-        // }
-        //
-        // Bold Italic
-        // {
-        //     var it = try ct.discover(alloc, .{ .family = "SF Pro", .size = 12, .bold = true, .italic = true });
-        //     defer it.deinit();
-        //     const res = (try it.next()).?;
-        //     var buf: [1024]u8 = undefined;
-        //     const name = try res.name(&buf);
-        //     try testing.expectEqualStrings("SF Pro Bold Italic", name);
-        // }
+        // PORT NOTE (S-8c): the remainder is unreachable, exactly as in the
+        // reference (whose `if (true) return` always skips). It is still ported
+        // as LIVE code, type-checked on every macOS build, so its four
+        // assertions exist and track the API they name.
+        // (`#[allow(unreachable_code)]` on the fn: this block follows the panic.)
+        {
+            use crate::library::Library;
+
+            // var lib = try Library.init(alloc); defer lib.deinit();
+            let mut lib = Library::init().unwrap();
+            // var ct = CoreText.init(lib); defer ct.deinit();
+            let mut ct = CoreText::init(lib);
+
+            // We try to get a Regular, Italic, Bold, & Bold Italic version of SF Pro,
+            // which should be installed on all Macs, and has many styles which makes
+            // it a good test, since there will be many results for each discovery.
+
+            // Regular
+            {
+                let mut it = ct
+                    .discover(Descriptor {
+                        family: Some(b"SF Pro".to_vec()),
+                        size: 12.0,
+                        ..Descriptor::default()
+                    })
+                    .unwrap();
+                let res = it.next().unwrap().unwrap();
+                let mut buf = [0u8; 1024];
+                let name = res.name(&mut buf).unwrap();
+                assert_eq!(b"SF Pro Regular".as_slice(), name);
+                it.deinit();
+            }
+
+            // Regular Italic
+            //
+            // NOTE: This makes sure that we don't accidentally prefer "Thin Italic",
+            //       which we previously did, because it has a shorter name.
+            {
+                let mut it = ct
+                    .discover(Descriptor {
+                        family: Some(b"SF Pro".to_vec()),
+                        size: 12.0,
+                        italic: true,
+                        ..Descriptor::default()
+                    })
+                    .unwrap();
+                let res = it.next().unwrap().unwrap();
+                let mut buf = [0u8; 1024];
+                let name = res.name(&mut buf).unwrap();
+                assert_eq!(b"SF Pro Regular Italic".as_slice(), name);
+                it.deinit();
+            }
+
+            // Bold
+            {
+                let mut it = ct
+                    .discover(Descriptor {
+                        family: Some(b"SF Pro".to_vec()),
+                        size: 12.0,
+                        bold: true,
+                        ..Descriptor::default()
+                    })
+                    .unwrap();
+                let res = it.next().unwrap().unwrap();
+                let mut buf = [0u8; 1024];
+                let name = res.name(&mut buf).unwrap();
+                assert_eq!(b"SF Pro Bold".as_slice(), name);
+                it.deinit();
+            }
+
+            // Bold Italic
+            {
+                let mut it = ct
+                    .discover(Descriptor {
+                        family: Some(b"SF Pro".to_vec()),
+                        size: 12.0,
+                        bold: true,
+                        italic: true,
+                        ..Descriptor::default()
+                    })
+                    .unwrap();
+                let res = it.next().unwrap().unwrap();
+                let mut buf = [0u8; 1024];
+                let name = res.name(&mut buf).unwrap();
+                assert_eq!(b"SF Pro Bold Italic".as_slice(), name);
+                it.deinit();
+            }
+
+            ct.deinit();
+            lib.deinit();
+        }
     }
 
     // test "windows" {

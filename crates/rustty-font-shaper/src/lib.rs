@@ -23,8 +23,10 @@
 //! `deferred_face.rs` `fontconfig_payload`, `discovery.rs` `fontconfig_impl`,
 //! `face/web_canvas.rs`.) Residual: `options::BACKEND` resolves only the per-OS
 //! default backend, so the non-default arms (e.g. `loadCoreTextFreetype` for
-//! the non-shipped `coretext_freetype` backend) are recorded verbatim in
-//! comments, not live.
+//! the `coretext_freetype` backend, which the reference's CI builds and tests
+//! on macOS) are recorded verbatim in comments, not live. That is an R8
+//! build-switch fold, OPEN as NEW-FINDINGS N266, and it keeps the `font`
+//! crate key below `done` (see `rustty-font`'s header).
 //!
 //! Carved leaves-first (R1: every line/comment/test{} ported as the crate is
 //! carved, under the acyclicity gate per R4).
