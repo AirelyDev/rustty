@@ -1266,8 +1266,36 @@ const MODES: &[(Mode, &CStr)] = &[
     (Mode::SynchronizedOutput, c"synchronized_output"),
     (Mode::GraphemeCluster, c"grapheme_cluster"),
     (Mode::ReportColorScheme, c"report_color_scheme"),
+    // CORRECTION (parity S108-F1): `report_visibility` and `kitty_paste_events`
+    // were missing from this table, although it claimed declaration order.
+    // `tests::modes_table_lists_every_mode_in_declaration_order` now holds it
+    // to `Mode::all()`.
+    (Mode::ReportVisibility, c"report_visibility"),
     (Mode::InBandSizeReports, c"in_band_size_reports"),
+    (Mode::KittyPasteEvents, c"kitty_paste_events"),
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::{Mode, MODES};
+
+    /// Parity S108-F1: `modesTable` iterates every field of `terminal.Mode`
+    /// (`terminal.zig:591-616`), so the hand-expanded table must be exactly
+    /// `Mode::all()` (the enum's declaration order), and each name must be the
+    /// field name, which for these modes is the one the reference spells.
+    #[test]
+    fn modes_table_lists_every_mode_in_declaration_order() {
+        let table: Vec<Mode> = MODES.iter().map(|&(m, _)| m).collect();
+        let all: Vec<Mode> = Mode::all().collect();
+        assert_eq!(all, table);
+        // `grep -c '\.name = ' src/terminal/modes.zig` at the pin: 43.
+        assert_eq!(43, table.len());
+
+        let name = |m: Mode| MODES.iter().find(|&&(x, _)| x == m).unwrap().1;
+        assert_eq!(c"report_visibility", name(Mode::ReportVisibility));
+        assert_eq!(c"kitty_paste_events", name(Mode::KittyPasteEvents));
+    }
+}
 
 /// Table of terminal modes.
 // fn modesTable(t: *Terminal) void {

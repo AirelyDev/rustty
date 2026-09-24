@@ -7,7 +7,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
 
 ## Medium (1)
 
-- [ ] **S108-F1** · CONFIRMED · `INDIV` · missing-branch
+- [x] **S108-F1** · CONFIRMED · `INDIV` · missing-branch
   - **What:** modesTable omits report_visibility (?2033) and kitty_paste_events (?5522) rows
   - **Oracle:** `src/inspector/widgets/terminal.zig:591-616` → **Rustty:** `crates/rustty-inspector/src/widgets/terminal.rs:1220-1270, 1330`
   - **Audit's suggested fix:** Insert `(Mode::ReportVisibility, c"report_visibility")` between the ReportColorScheme and InBandSizeReports rows, and append `(Mode::KittyPasteEvents, c"kitty_paste_events")` after InBandSizeReports, so MODES matches the Mode enum's declaration order exactly (ideally derive the table from a single canonical list shared with modes.rs so future mode additions cannot drift).
