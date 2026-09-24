@@ -614,6 +614,17 @@ impl Exec {
             let args = read_args;
             // SAFETY: `args.1` (`*mut Termio<M>`) is valid for the read
             // thread's life; this thread is its sole `processOutput` toucher.
+            //
+            // if (builtin.os.tag == .windows) ReadThread.threadMainWindows else ReadThread.threadMainPosix,
+            //
+            // PORT NOTE (S211-F3): this always called `threadMainPosix`, so the
+            // ported `threadMainWindows` had no caller. Selected per target now,
+            // as the reference does at comptime. The Windows arm is written but
+            // not compiled here (rustty-termio cannot be cross-checked for
+            // Windows from macOS: `highway-sys`, VERIFICATION_DEBT.md).
+            #[cfg(windows)]
+            ReadThread::threadMainWindows::<M>(args.0, args.1, args.2);
+            #[cfg(not(windows))]
             ReadThread::threadMainPosix::<M>(args.0, args.1, args.2);
         }) {
             Ok(t) => t,
@@ -4376,11 +4387,21 @@ pub struct ReadThread;
 // The contract: the read thread is the SOLE toucher of `*io` (for
 // `processOutput`) between the spawn and `Exec::threadExit`'s `join()`; the io
 // thread owns it before the spawn and after the join.
+//
+// (S211-F3: the two descriptors are `posix.fd_t`, a HANDLE on Windows, where
+// `threadMainWindows` takes them.)
 pub(crate) struct ReadThreadArgs<M: rustty_apprt_api::surface::AppMailbox>(
-    pub std::os::fd::RawFd,
+    pub ReadThreadFd,
     pub *mut crate::Termio<M>,
-    pub std::os::fd::RawFd,
+    pub ReadThreadFd,
 );
+
+/// `posix.fd_t` for the read thread's pty and quit descriptors.
+#[cfg(not(windows))]
+pub(crate) type ReadThreadFd = std::os::fd::RawFd;
+/// `posix.fd_t` is a HANDLE on Windows.
+#[cfg(windows)]
+pub(crate) type ReadThreadFd = rustty_os::windows::HANDLE;
 
 // SAFETY: see the newtype's contract — the wrapped `*mut Termio<M>` has a single
 // toucher (the read thread) for the window it is shared, matching the landed
