@@ -685,6 +685,13 @@ re-open it.
 4. **What holds the line.** Those two `-sys` crate builds, which are part of
    every workspace build.
 
+**`src/lib_vt.zig`'s MSVC `_fltused` marker [added 2026-09-24, parity tail S-8d].**
+The `lib_vt.zig` part of this range is `var msvc_fltused: c_int = 1;` plus the
+root-guarded `@export(&msvc_fltused, .{ .name = "_fltused" })` for static MSVC
+builds — Windows/MSVC-only, so N/A on the same terms as the rest of this row.
+Its three distinctive reference comment lines (`:166`, `:173-174`) are declared
+in `.port/parity-closure/COMMENT-NOT-CARRIED.tsv` (G3b NOT-CARRIED).
+
 ## G10 — `1fe1b2d23`, `patch_rpath` -> `patchelf`, `terminalOptions(.., optimize)`, `10e6ace6b` — N/A (with two things recorded, not dismissed)
 
 1. **Upstream.** `1fe1b2d23` fixes static `libghostty-vt` linking on Windows.
@@ -937,3 +944,21 @@ config's 4 remaining G3b misses and global's 31.
    control **vacuous** — `slice::get(pos..pos+n)` already yields `EndOfStream`
    for any out-of-range `pos`, so the oracle's explicit guard is R1-faithful but
    observably redundant here.
+
+# G3b NOT-CARRIED — stripped gag prose in code comments (`strip-ghostty-gag-prose`) [parity tail S-8d, 2026-09-24]
+
+1. **Upstream.** A few reference code comments are pure editorializing: an
+   insult or a joke with no technical content (`apprt/gtk/class/global_shortcuts.zig`'s
+   XDG-portal note, `apprt/gtk/winproto/BlurRegion.zig`'s CSD note).
+2. **Why not.** The prose-fidelity carve-out (`strip-ghostty-gag-prose`) strips
+   gag editorializing; the technical sentences around it ARE carried verbatim or,
+   where a sentence mixed the two, with the fact kept. Only lines with no
+   technical content are dropped.
+3. **What would break.** Nothing observable; it is comment text.
+4. **What holds the line.** Every dropped line is a row of
+   `.port/parity-closure/COMMENT-NOT-CARRIED.tsv`, class `gag-prose`, which G3b
+   (`check_comment_coverage.py`) validates mechanically: the text must be the
+   oracle line at the pin, must contain no digit, identifier, backtick or
+   ALL-CAPS token (a comment that carries technical information can never be
+   gag prose), and at most 20 words. Each excused line is printed as
+   `NOT-CARRIED (gag-prose)` in G3b's output.

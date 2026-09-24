@@ -3576,6 +3576,11 @@ bin is the top sink over cli+apprt). New bin Cargo deps: `rustty-global`,
   > `quirks_memset` (phase-3 NON_PORTS §E34), `std_options_debug_io` and `DllMain`
   > (phase-4 NON_PORTS rows added by S-8b), and the `macosLogger` per-scope cache
   > (`docs/parity-audit/src.md` accepted equivalence).
+  >
+  > **UPDATE [parity tail S-8d, 2026-09-24].** `--crate rustty` is now missing=0
+  > review=0. The `macosLogger` cache is PORTED (NEW-FINDINGS N280), not an
+  > equivalence; the other five items' comments are validated `no-counterpart` rows
+  > of `.port/parity-closure/COMMENT-NOT-CARRIED.tsv`, printed by G3b as NOT-CARRIED.
 
 - **`main_gen.zig` / `main_wasm.zig` / `main_build_data.zig` (0t each) DEFERRED.**
   These are standalone build-tool / wasm-module entrypoints, NOT on the `rustty`
@@ -4994,6 +4999,22 @@ reinforcing findings from the implementation:
 **Action for the plan owner:** amend plan:96's "`at_least(..) -> bool (const fn
 over BASELINE)`" to "live delegate to `runtime_at_least`", or reverse T2. Left
 as a flagged deviation rather than a silent one.
+
+**AD-3 deletion set — G3b NOT-CARRIED anchor [added 2026-09-24, parity tail S-8d].**
+The reference code AD-3 removes from the port, whose distinctive comments are
+declared in `.port/parity-closure/COMMENT-NOT-CARRIED.tsv` rather than restored
+as orphans: the header fold of `gtk_version.zig`/`adw_version.zig` — the
+`gtk_c`/`adw_c` header imports, the `if (comptime comptime_version.order(..) ==
+.lt) return false;` fold in `atLeast` and its `@inComptime` short-circuit (the
+port has no header version, so `at_least` is the live delegate ratified above);
+`adw_version.zig`'s `supportsDialogs` (with the other four
+`supports_*` helpers, see the scope note above);
+`clipboard_confirmation_dialog.zig`'s file-level `const can_remember =
+adw_version.supportsSwitchRow()` (always true at the adw >= 1.5 floor, so the
+remember switch is unconditional); `dialog.zig`'s `Parent` alternative
+`adw.MessageDialog` and its `present` arm (`Parent` is `adw.AlertDialog` at the
+floor); and `surface_child_exited.zig`'s `SurfaceChildExitedNoop` fallback widget
+(the banner-capable `adw` widget always exists at the floor).
 
 ## ~~GlobalShortcuts XDG-portal round-trip (L6 portals)~~ [added 2026-07-18, T26 GlobalShortcuts]
 
