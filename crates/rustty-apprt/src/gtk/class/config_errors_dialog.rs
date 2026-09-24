@@ -43,8 +43,12 @@ mod imp {
         ///
         /// PORT NOTE: the reference hand-rolls `getConfig`/`setConfig`
         /// (`:132-145`) — the setter unrefs the prior value and does NOT ref the
-        /// new one because "the property setter handles it (uses GValue.get vs.
-        /// take)". `glib::Properties` on a `RefCell<Option<Config>>` performs
+        /// new one:
+        ///
+        /// We don't need to increase the reference count because
+        /// the property setter handles it (uses GValue.get vs. take)
+        ///
+        /// `glib::Properties` on a `RefCell<Option<Config>>` performs
         /// exactly the same ownership dance: the old value is dropped (unref'd)
         /// and the new strong ref is stored. The reference's `dispose`
         /// (`:120-124`) unref + null is likewise the `RefCell` drop in
