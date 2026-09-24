@@ -49,7 +49,9 @@ pub const ARTIFACT: Artifact = Artifact::Ghostty;
 // setter's caller, so it stays `Ghostty` in every build selection. The one
 // residual is a Rust host linking both the app tier and the `rustty-vt-c`
 // rlib and calling a `*_new`; none exists (the only rlib consumer,
-// `rustty-web-canvas`, is itself a lib-vt artifact).
+// `rustty-web-canvas`, is itself a lib-vt artifact), and the same gate keeps
+// it so in the workspace: its DEPS arm allows no other dependent of
+// `rustty-vt-c`.
 static RUNTIME_ARTIFACT: core::sync::atomic::AtomicU8 =
     core::sync::atomic::AtomicU8::new(RUNTIME_ARTIFACT_GHOSTTY);
 const RUNTIME_ARTIFACT_GHOSTTY: u8 = 0;

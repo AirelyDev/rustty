@@ -731,8 +731,10 @@ GATE_REGISTRY=(
   # `install_log_backend`; mode 5522's `.disabled` reads it. That is sound only
   # while no app-tier code can set it, so the setter may be called from
   # `crates/rustty-vt-c/src/` alone, the call inside `install_log_backend` must
-  # exist (anti-vacuity), and nothing else may write the cell. STATIC, every
-  # OS, milliseconds. SELF first: six synthetic arms prove each RED and GREEN.
+  # exist (anti-vacuity), the cell has exactly one writer (the setter's store
+  # in options.rs), and only rustty-web-canvas may depend on rustty-vt-c
+  # (`cargo metadata --no-deps`; review-T-H2 blocking 3). STATIC, every OS,
+  # about a second. SELF first: synthetic arms prove each RED and GREEN.
   "G-ARTIFACT-SELF|HARD|$PY $GATES/check_runtime_artifact_setter.py --self-test"
   "G-ARTIFACT|HARD|$PY $GATES/check_runtime_artifact_setter.py"
   # G-GTKFEAT (2026-07-31) — the same hole as G-ONIG, one crate over. The

@@ -56,10 +56,14 @@
 //! process as the lib artifact and then calls [`install`], and nothing else
 //! calls either. The run-time artifact is the port's record of "this process
 //! is libghostty-vt", which is the closest thing it has to the reference's
-//! "`lib_vt.zig` is the root module", and the hook exists exactly when that
-//! record says `Lib`. A check inside the hook could never fail, so none is
-//! added; the gate that restricts the artifact setter to this crate
+//! "`lib_vt.zig` is the root module", and the hook is never installed unless
+//! that record says `Lib`. The converse does not hold: in builds with the
+//! debug machinery, and on wasm, the record is `Lib` but [`install`] returns
+//! without installing anything. A check inside the hook could never fail, so
+//! none is added; the gate that restricts the artifact setter to this crate
 //! (`check_runtime_artifact_setter.py`) is what keeps the two tied.
+//! (CORRECTION, review-T-H2: this used to say the hook exists "exactly when"
+//! the record says `Lib`.)
 
 /// Installs [`tiny_panic_impl`] as the panic hook in builds without the debug
 /// machinery. Idempotent.
