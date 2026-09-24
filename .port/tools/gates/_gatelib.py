@@ -308,6 +308,51 @@ RELOCATIONS = {
          "items": (r"^pub enum Key\b", r"^pub fn value_type\b",
                    r"^mod key_tests\b")},
     ),
+
+    # ---- per-reference-file relocations (parity tail S-8b, 2026-09-24; folded
+    # in here by S-8c). Each entry names the ONE reference file (`ref`, relative
+    # to the oracle's src/) whose port lives at `path` in another crate; it
+    # belongs to the crate that owns `ref` in the crate map (G3b's self-test
+    # checks that). Before these, `--crate bin` reported 146 MISSING comments of
+    # noise (the DEFERRALS "main_c.zig (3t) re-homed ..." row called that
+    # "EXPECTED") that hid the real drops.
+    #
+    # bin (`crates/rustty`): the non-exe artifact roots live in their own crates.
+    "bin": (
+        # lib_vt.zig: the librustty-vt root — the C-lib root/panic/log sink in
+        # vt-c, the Zig-module public API in rustty-vt's crate root (ADV-FIX 6).
+        {"ref": "lib_vt.zig", "path": "crates/rustty-vt-c/src/lib.rs"},
+        {"ref": "lib_vt.zig", "path": "crates/rustty-vt-c/src/panic.rs"},
+        {"ref": "lib_vt.zig", "path": "crates/rustty-vt-c/src/sys.rs"},
+        {"ref": "lib_vt.zig", "path": "crates/rustty-vt/src/lib.rs"},
+        # main_c.zig: the C API hub, re-homed to rustty-apprt-c (ADV-FIX 6).
+        {"ref": "main_c.zig", "path": "crates/rustty-apprt-c/src/lib.rs"},
+        # main_ghostty.zig: `logFn`/`std_options` moved to the core wiring tier
+        # (the lib root re-uses them too); the rest stays in the bin's
+        # main_rustty.rs.
+        {"ref": "main_ghostty.zig", "path": "crates/rustty-core/src/logging.rs"},
+        # main_gen.zig / main_wasm.zig / main_build_data.zig: separate artifacts.
+        {"ref": "main_gen.zig", "path": "crates/rustty-synthetic/src/main_gen.rs"},
+        {"ref": "main_wasm.zig", "path": "crates/rustty-wasm/src/lib.rs"},
+        {"ref": "main_build_data.zig", "path": "xtask/src/main_build_data.rs"},
+    ),
+    # renderer: Thread.zig's run loop lives in core (it names configpkg and
+    # core's App.Mailbox, both cycles from rustty-renderer); backend.zig's
+    # `Backend` enum is defined in build-config (break #3).
+    "renderer": (
+        {"ref": "renderer/Thread.zig", "path": "crates/rustty-core/src/renderer_seam.rs"},
+        {"ref": "renderer/backend.zig", "path": "crates/rustty-build-config/src/renderer.rs"},
+    ),
+    # apprt: embedded.zig's `CAPI` block (the libghostty C exports + their extern
+    # structs) lives in the rustty-apprt-c top-sink crate (vt-c precedent,
+    # EMBEDDED_BLUEPRINT §3); the GTK build helpers blueprint.zig/gresource.zig
+    # are the crate's build script, outside `src/`.
+    "apprt": (
+        {"ref": "apprt/embedded.zig", "path": "crates/rustty-apprt-c/src/lib.rs"},
+        {"ref": "apprt/embedded.zig", "path": "crates/rustty-apprt-c/src/capi.rs"},
+        {"ref": "apprt/gtk/build/blueprint.zig", "path": "crates/rustty-apprt/build.rs"},
+        {"ref": "apprt/gtk/build/gresource.zig", "path": "crates/rustty-apprt/build.rs"},
+    ),
 }
 
 
