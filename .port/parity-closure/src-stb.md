@@ -14,7 +14,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
 
 ## Low (1)
 
-- [ ] **S121-F2** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S121-F2** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** Args::String is whitespace-split instead of ArgIteratorGeneral quote/backslash parsing
   - **Oracle:** `src/synthetic/cli.zig:80-87` → **Rustty:** `crates/rustty-synthetic/src/cli.rs:396-413`
   - **Audit's suggested fix:** Port ArgIteratorGeneral's quote/backslash state machine (or share the one rustty-bench should also have) and use it for Args::String in parse_opts.

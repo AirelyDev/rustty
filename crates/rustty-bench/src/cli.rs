@@ -301,21 +301,19 @@ fn main_action_impl<B: BenchmarkAction>(alloc: Allocator, args: Args) -> Result<
         }
         // .string => |str| {
         Args::String(str) => {
-            // var iter = try std.process.ArgIteratorGeneral(.{}).init(alloc, str);
+            // var iter = try std.process.Args.IteratorGeneral(.{}).init(alloc, str);
             // defer iter.deinit();
             //
-            // PORT NOTE (§6): `std.process.ArgIteratorGeneral` splits a single
-            // string into argv (honoring quotes/backslashes). rustty-args exposes
-            // the pre-split `SliceIterator`; the benchmark C-ABI args are simple
-            // whitespace-separated flags, so we tokenize on ASCII whitespace
-            // (the quote/escape handling is not exercised by the benchmark).
-            let tokens: Vec<&[u8]> = str
-                .split(|b| matches!(b, b' ' | b'\t' | b'\n' | b'\r'))
-                .filter(|t| !t.is_empty())
-                .collect();
-            let mut iter = rustty_args::args::slice_iterator(&tokens);
+            // PORT NOTE (parity S62-F1): the reference tokenizes with Zig std's
+            // `IteratorGeneral(.{})`, which honours double quotes and backslash
+            // escapes; its port is `rustty_args::arg_iterator_general`.
+            // CORRECTION: this arm used to split on ASCII whitespace, with a note
+            // saying "the quote/escape handling is not exercised".
+            let mut iter = rustty_args::arg_iterator_general::ArgIteratorGeneral::init(str);
             // try cli.args.parse(Options, alloc, &opts, &iter);
-            rustty_args::args::parse(&mut opts, &mut iter)?;
+            let result = rustty_args::args::parse(&mut opts, &mut iter);
+            iter.deinit();
+            result?;
         }
     }
 
@@ -387,5 +385,61 @@ mod tests {
         assert_eq!(None, Action::from_name(b"nope"));
         // A near-miss must not resolve: `from_name` is an exact match.
         assert_eq!(None, Action::from_name(b"hyperlink_map"));
+    }
+
+    /// Parity S62-F1: the `.string` arm tokenizes with `IteratorGeneral(.{})`
+    /// (`cli.zig:99-106`), so a double-quoted `--data` value containing a space
+    /// is ONE argument with the quotes stripped. A whitespace split turns it
+    /// into `--data="<dir>/a` and `b.vt"`, which fails to parse.
+    #[test]
+    fn string_args_honour_quotes_like_arg_iterator_general() {
+        use super::{main_action, Args, Error};
+        use std::os::unix::ffi::OsStrExt as _;
+
+        let mut dir = std::env::temp_dir();
+        dir.push(format!(
+            "rustty-s62-f1-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("a b.vt");
+        std::fs::write(&path, b"hello\r\n\x1b[1mworld").unwrap();
+
+        let quoted = |p: &std::path::Path| {
+            let mut s = b"--data=\"".to_vec();
+            s.extend_from_slice(p.as_os_str().as_bytes());
+            s.push(b'"');
+            s
+        };
+
+        // The file exists: the quoted path opens and the benchmark runs.
+        let args = quoted(&path);
+        let ok = main_action(
+            super::Allocator,
+            Action::TerminalParser,
+            Args::String(&args),
+        );
+
+        // The same quoted form naming a missing file fails in setup (the data
+        // file cannot be opened), which shows the path reached `dataFile`.
+        let missing = quoted(&dir.join("missing c.vt"));
+        let err = main_action(
+            super::Allocator,
+            Action::TerminalParser,
+            Args::String(&missing),
+        );
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
+
+        assert!(
+            ok.is_ok(),
+            "quoted --data with a space must parse and open: {ok:?}"
+        );
+        assert!(
+            matches!(err, Err(Error::Benchmark(_))),
+            "a missing quoted path must fail opening the data file, not parsing: {err:?}"
+        );
     }
 }

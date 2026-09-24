@@ -395,21 +395,19 @@ fn parse_opts<T: rustty_args::args::Target>(opts: &mut T, args: Args) -> Result<
         }
         // .string => |str| {
         Args::String(str) => {
-            // var iter = try std.process.ArgIteratorGeneral(.{}).init(alloc, str);
+            // var iter = try std.process.Args.IteratorGeneral(.{}).init(alloc, str);
             // defer iter.deinit();
             //
-            // PORT NOTE: `std.process.ArgIteratorGeneral` splits a single string
-            // into argv (honoring quotes/backslashes). rustty-args exposes the
-            // pre-split `SliceIterator`; the synthetic string args are simple
-            // whitespace-separated flags, so we tokenize on ASCII whitespace
-            // (the quote/escape handling is not exercised here — mirrors bench §6).
-            let tokens: Vec<&[u8]> = str
-                .split(|b| matches!(b, b' ' | b'\t' | b'\n' | b'\r'))
-                .filter(|t| !t.is_empty())
-                .collect();
-            let mut iter = rustty_args::args::slice_iterator(&tokens);
+            // PORT NOTE (parity S121-F2): the reference tokenizes with Zig std's
+            // `IteratorGeneral(.{})`, which honours double quotes and backslash
+            // escapes; its port is `rustty_args::arg_iterator_general`.
+            // CORRECTION: this arm used to split on ASCII whitespace, with a note
+            // saying "the quote/escape handling is not exercised".
+            let mut iter = rustty_args::arg_iterator_general::ArgIteratorGeneral::init(str);
             // try cli.args.parse(Options, alloc, &opts, &iter);
-            rustty_args::args::parse(opts, &mut iter)?;
+            let result = rustty_args::args::parse(opts, &mut iter);
+            iter.deinit();
+            result?;
         }
     }
     Ok(())
@@ -450,5 +448,19 @@ mod tests {
         let _ = Action::Utf8;
         let _ = Action::Kitty;
         let _ = Action::Styled;
+    }
+
+    /// Parity S121-F2: the `.string` arm tokenizes with `IteratorGeneral(.{})`
+    /// (`cli.zig:80-87`), so the double quotes are stripped. A whitespace split
+    /// leaves them in the tokens, and `"--line-min=3"` then fails to parse.
+    #[test]
+    fn string_args_honour_quotes_like_arg_iterator_general() {
+        let mut opts = ascii::Options::default();
+        parse_opts(
+            &mut opts,
+            Args::String(b"\"--line-min=3\" --line-max=\"7\""),
+        )
+        .unwrap();
+        assert_eq!((3, 7), (opts.line_min, opts.line_max));
     }
 }

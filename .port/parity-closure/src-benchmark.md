@@ -7,7 +7,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
 
 ## Medium (5)
 
-- [ ] **S62-F1** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S62-F1** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** Args::String splits on whitespace instead of std.process.ArgIteratorGeneral (no quote/backslash handling)
   - **Oracle:** `src/benchmark/cli.zig:99-106` → **Rustty:** `crates/rustty-bench/src/cli.rs:303-319`
   - **Audit's suggested fix:** Move the `ArgIteratorGeneral` port from rustty-config/command.rs into a leaf crate rustty-bench can depend on (rustty-args or rustty-zigstd) and use it for `Args::String` in both rustty-bench and rustty-synthetic.
