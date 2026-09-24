@@ -51,7 +51,10 @@ const LOG_SCOPE: &str = "font_face";
 const DEBUG_MODE: bool = cfg!(debug_assertions);
 use core::ptr::{self, NonNull};
 
-use objc2_core_foundation::{kCFAllocatorNull, CFData, CFNumber, CFNumberType, CFRetained};
+use objc2_core_foundation::{
+    kCFAllocatorNull, CFData, CFNumber, CFNumberType, CFRetained, CFString,
+    CFStringBuiltInEncodings,
+};
 use objc2_core_foundation::{CGAffineTransform, CGPoint, CGRect, CGSize};
 use objc2_core_graphics::CGGlyph;
 use objc2_core_graphics::{
@@ -275,6 +278,51 @@ pub struct Face {
 
     /// The current size this font is set to.
     pub size: DesiredSize,
+
+    /// The family name `name` returns, copied from CoreText on the first call
+    /// and held until the face is dropped (`None` inside: CoreText has none).
+    ///
+    /// PORT NOTE (S90-F3, UD110): the reference's `name` returns
+    /// `cstringPtr`, a pointer into the +1 `copyFamilyName` string, which it
+    /// never releases; that is how its result outlives the call without
+    /// limit on length. The port may not leak the copy (UD110), so it keeps
+    /// the one copy here, for the face's lifetime, and hands out the pointer
+    /// into it. CoreText returns the same string object on every copy
+    /// (measured, UD110), so holding the first is holding them all.
+    pub family_name: std::sync::OnceLock<Option<CFRetained<CFString>>>,
+}
+
+/// `String.cstringPtr(.utf8)` (`pkg/macos/foundation/string.zig:70-77`):
+/// `CFStringGetCStringPtr`, or `None` "if the internal storage of theString
+/// does not allow this to be returned efficiently". The bytes stay valid as
+/// long as `s` does (a `CFString` here is immutable).
+pub(crate) fn cstring_ptr_utf8(s: &CFString) -> Option<&[u8]> {
+    let p = s.c_string_ptr(CFStringBuiltInEncodings::EncodingUTF8.0);
+    if p.is_null() {
+        return None;
+    }
+    // SAFETY: a non-NULL result is a NUL-terminated C string inside `s`.
+    Some(unsafe { core::ffi::CStr::from_ptr(p) }.to_bytes())
+}
+
+/// `String.cstring(buf, .utf8)` (`pkg/macos/foundation/string.zig:60-68`):
+/// `CFStringGetCString` into `buf`, which must hold the bytes and a NUL, then
+/// the bytes up to the first NUL (`std.mem.sliceTo(buf, 0)`); `None` when the
+/// conversion fails (including when `buf` is too small).
+pub(crate) fn cstring_utf8<'a>(s: &CFString, buf: &'a mut [u8]) -> Option<&'a [u8]> {
+    // SAFETY: `buf` is writable for `buf.len()` bytes, the size passed.
+    let ok = unsafe {
+        s.c_string(
+            buf.as_mut_ptr().cast(),
+            buf.len() as isize,
+            CFStringBuiltInEncodings::EncodingUTF8.0,
+        )
+    };
+    if !ok {
+        return None;
+    }
+    let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+    Some(&buf[..end])
 }
 
 // RUSTTY-ONLY compile-time anchor (no oracle analogue; the reference needs none
@@ -421,6 +469,7 @@ impl Face {
             size: opts.size,
             quirks_disable_default_font_features: false,
             synthetic_bold: None,
+            family_name: std::sync::OnceLock::new(),
         };
         result.quirks_disable_default_font_features = quirks_disable_default_font_features(&result);
 
@@ -631,15 +680,17 @@ impl Face {
     /// Returns the font name. If allocation is required, buf will be used,
     /// but sometimes allocation isn't required and a static string is
     /// returned.
-    // PORT NOTE: the reference returns `[]const u8` that may point at `buf` or at
-    // CoreFoundation-owned memory (`cstringPtr`). To unify lifetimes in Rust the
-    // family name is decoded (via `CFString`'s UTF-8 `Display`) and copied into
-    // `buf`, returning a sub-slice of it (identical bytes); over-long names that
-    // don't fit `buf` map the reference's `orelse error.OutOfMemory`.
-    pub fn name<'a>(&self, buf: &'a mut [u8]) -> Result<&'a [u8], Error> {
+    // PORT NOTE: the reference returns `[]const u8` that points either into the
+    // CoreFoundation string (`cstringPtr`, no length limit) or into `buf`
+    // (`cstring`, `error.OutOfMemory` when the name and its NUL do not fit). So
+    // does the port: the result borrows both `self` (which holds the string,
+    // see `family_name`) and `buf`. CORRECTION (task T-F, S90-F3): the port
+    // used to copy every name into `buf`, so a name longer than `buf` was an
+    // error even where the reference returned the pointer.
+    pub fn name<'a>(&'a self, buf: &'a mut [u8]) -> Result<&'a [u8], Error> {
         // PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD110. The
         // reference never releases the +1 `copyFamilyName` result; here the
-        // `CFRetained` releases it at scope end, after the copy into `buf`.
+        // one copy is held in `self.family_name` and released with the face.
         // (It leaks only for a face loaded from data, i.e. the embedded fonts:
         // a discovered font's names are immortal constants, measured.)
         //
@@ -653,23 +704,26 @@ impl Face {
         // the reference's own answer for the same CoreText NULL,
         // `DeferredFace.familyName`'s `orelse return "unknown"`
         // (`DeferredFace.zig:157-158`).
-        // SAFETY: `self.font` is a live retained CTFont. CTFontCopyFamilyName
-        // follows the Copy rule (+1), which `CFRetained::from_raw` takes over.
-        let raw = unsafe { sys::CTFontCopyFamilyName(&self.font) };
-        let Some(family_name) = NonNull::new(raw).map(|p| unsafe { CFRetained::from_raw(p) })
-        else {
+        // const family_name = self.font.copyFamilyName();
+        let family_name = self.family_name.get_or_init(|| {
+            // SAFETY: `self.font` is a live retained CTFont. CTFontCopyFamilyName
+            // follows the Copy rule (+1), which `CFRetained::from_raw` takes over.
+            let raw = unsafe { sys::CTFontCopyFamilyName(&self.font) };
+            NonNull::new(raw).map(|p| unsafe { CFRetained::from_raw(p) })
+        });
+        let Some(family_name) = family_name.as_deref() else {
             return Ok(b"unknown");
         };
-        let s = family_name.to_string();
-        let bytes = s.as_bytes();
-        if bytes.len() > buf.len() {
-            // "NULL if the internal storage of theString does not allow
-            // this to be returned efficiently." In this case, we need
-            // to allocate.
-            return Err(Error::OutOfMemory);
+        // if (family_name.cstringPtr(.utf8)) |str| return str;
+        if let Some(s) = cstring_ptr_utf8(family_name) {
+            return Ok(s);
         }
-        buf[..bytes.len()].copy_from_slice(bytes);
-        Ok(&buf[..bytes.len()])
+
+        // "NULL if the internal storage of theString does not allow
+        // this to be returned efficiently." In this case, we need
+        // to allocate.
+        // return family_name.cstring(buf, .utf8) orelse error.OutOfMemory;
+        cstring_utf8(family_name, buf).ok_or(Error::OutOfMemory)
     }
 
     /// Resize the font in-place. If this succeeds, the caller is responsible

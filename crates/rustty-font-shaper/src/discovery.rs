@@ -1400,10 +1400,7 @@ mod coretext_impl {
 
             // return .{ .ct = .{ .font = ct_font, .variations = &.{} } };
             Ok(Some(DeferredFace {
-                ct: Some(CoreTextData {
-                    font: ct_font,
-                    variations: Vec::new(),
-                }),
+                ct: Some(CoreTextData::new(ct_font, Vec::new())),
             }))
         }
 
@@ -2206,10 +2203,7 @@ mod coretext_impl {
 
             // return DeferredFace{ .ct = .{ .font = font, .variations = self.variations } };
             Ok(Some(DeferredFace {
-                ct: Some(CoreTextData {
-                    font,
-                    variations: self.variations.clone(),
-                }),
+                ct: Some(CoreTextData::new(font, self.variations.clone())),
             }))
         }
     }

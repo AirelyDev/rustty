@@ -1599,10 +1599,7 @@ mod tests {
         let name = new_cfstring("Menlo").unwrap();
         let ct_font = unsafe { CTFont::with_name(&name, 12.0, core::ptr::null()) };
         let deferred = DeferredFace {
-            ct: Some(CoreTextData {
-                font: ct_font,
-                variations: Vec::new(),
-            }),
+            ct: Some(CoreTextData::new(ct_font, Vec::new())),
         };
 
         let idx = c
