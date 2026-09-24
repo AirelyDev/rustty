@@ -1343,7 +1343,25 @@ mod tests {
             (xl.XSync)(other, 0);
             (xl.XCloseDisplay)(other);
         }
-        pump(1000);
+        // GDK's OWN requests against the dead window (UPSTREAM-DEFECTS UD56) are
+        // not what this test is about, and one of them, an `XIQueryPointer`
+        // (`request_code 131` XInputExtension, minor 40) issued while GDK
+        // processes the unmap, made the child exit 1 in about one run in three on
+        // the VM's headless sway Xwayland (task L-2). So every pump after the
+        // destroy runs under a GDK error trap of its own. The port's property
+        // writes never run inside one: they happen in `set_property` below, and
+        // `display.sync()` flushes any error they leave BEFORE the next trapped
+        // pump, so an untrapped write still exits the child.
+        let x11_display = display
+            .downcast_ref::<gdk4_x11::X11Display>()
+            .expect("the X11 GDK backend")
+            .clone();
+        let pump_trapped = |n: usize| {
+            // Dropped, so popped with `error_trap_pop_ignored`.
+            let _trap = XErrorTrap::push(Some(&x11_display));
+            pump(n);
+        };
+        pump_trapped(1000);
 
         // Each reload's `syncAppearance` runs synchronously inside `set_property`
         // (`notify::config`), and the trap pops (and syncs) before `syncBlur`
@@ -1378,7 +1396,7 @@ mod tests {
                  the X error trap reported as failed (trapped writes vs records)"
             );
             display.sync();
-            pump(200);
+            pump_trapped(200);
             logged
         };
 
