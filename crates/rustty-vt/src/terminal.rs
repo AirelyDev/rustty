@@ -1080,8 +1080,8 @@ impl Terminal {
         // });
         // PORT NOTE: the reference threads `self.gpa()` (a `std.mem.Allocator`)
         // into the stream options. Rustty's `stream::Options.allocator` wants a
-        // `ZigAllocatorRef`; `gpa()` is the global allocator, so we back the OSC
-        // parser with the process-static `GLOBAL_ZIG_ALLOCATOR` (see its note).
+        // `ZigAllocatorRef`, whose presence is the parser's allocation gate;
+        // it is the process-static `GLOBAL_ZIG_ALLOCATOR` (see its note).
         //
         // PORT NOTE (parity tail S7-4): the OSC parser's captures (its dynamic
         // allocations) run on the runtime handle `capture_alloc`, which is set
@@ -5789,11 +5789,11 @@ impl Terminal {
     //     }
     //     return resp;
     // }
-    // PORT NOTE (parity tail S7-3): `glyph::execute` takes no allocator: the
-    // glossary map grows through the allocator it was bound to at `init`, and
-    // the entries' decoded outlines are `Vec`s on the Rust heap (N272). The
-    // reference's per-call `alloc` is that bound allocator, checked here in
-    // debug builds (callers pass `terminal.gpa()` or termio's allocator).
+    // PORT NOTE (parity tail S7-3, S7-4): the glossary map grows through the
+    // allocator it was bound to at `init`; `glyph::execute(alloc, ..)`
+    // allocates each entry's decoded outline through `alloc`. The reference's
+    // per-call `alloc` is that bound allocator, checked here in debug builds
+    // (callers pass `terminal.gpa()` or termio's allocator).
     pub fn glyph_protocol(
         &mut self,
         alloc: Allocator,

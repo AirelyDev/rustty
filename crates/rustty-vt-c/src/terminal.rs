@@ -4532,12 +4532,11 @@ pub unsafe fn grid_ref_track(
     //     alloc.destroy(ref);
     //     return .out_of_memory;
     // };
-    // PORT NOTE: `putNoClobber` asserts the key is absent (a fresh heap ptr is
-    // always unique); the rustty `HashSet::insert` returns `true` for new keys.
-    // PORT NOTE (parity S179-F3): `try_reserve` is the fallible half of the
-    // map's growth, so the reference's `catch` arm is reachable, as in
-    // `search::new` (S4-F3). The registry itself stays on the Rust heap
-    // (S176-F1's allocator adapter).
+    // PORT NOTE (parity S179-F3, parity tail S7-4): `try_put_no_clobber` is
+    // the fallible `putNoClobber` (the key is a fresh heap pointer, so it is
+    // absent), so the reference's `catch` arm is reachable, as in
+    // `search::new` (S4-F3). The registry grows through the terminal's
+    // allocator, bound in `wrap`.
     #[cfg(test)]
     let reserved = track_tw_check().and_then(|()| unsafe {
         (*terminal_)

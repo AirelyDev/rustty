@@ -839,7 +839,7 @@ impl LoadingImage {
         }
 
         // PORT NOTE: the reference reads through a 4096-byte buffered reader.
-        // We read with the same semantics into a `Vec<u8>`.
+        // We read with the same semantics into a byte list on `alloc`.
         // Read the file
         // var managed: std.ArrayList(u8) = .empty;
         // errdefer managed.deinit(alloc);
@@ -859,8 +859,8 @@ impl LoadingImage {
             // PORT NOTE: `reader.readAlloc(alloc, size)` reads EXACTLY `size`
             // bytes or fails (a short read is `error.EndOfStream`); every
             // failure other than OOM maps to `error.InvalidData`. `read_exact`
-            // reproduces that contract (Vec growth aborts on OOM, which is the
-            // Rust-global OOM policy).
+            // reproduces that contract; the buffer is reserved up front through
+            // `alloc`, fallibly (`error.OutOfMemory`).
             // const data = reader.readAlloc(alloc, size) catch |err| {
             //     log.warn("failed to read image file: {}", .{err});
             //     return switch (err) {

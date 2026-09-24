@@ -79,9 +79,9 @@ pub struct Glossary {
     // terminal's allocator handle, bound at construction (`empty_in`). The
     // reference passes that allocator per call (`self.gpa()`); the two are the
     // same allocator unless a caller swaps the screen's allocator mid-life,
-    // which no API path does. The entries' decoded `Outline`s are built by the
-    // glyph decoder in rustty-font and stay on the Rust heap (the APC/glyph
-    // decode path is S7-4's).
+    // which no API path does. The entries' decoded `Outline`s are allocated
+    // through the registering allocator too (`Entry::init(alloc, ..)`, parity
+    // tail S7-4).
     entries: AutoArrayHashMapUnmanaged<u32, Entry, crate::alloc::Allocator>,
 }
 

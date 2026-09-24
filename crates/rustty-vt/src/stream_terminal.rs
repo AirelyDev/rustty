@@ -3797,19 +3797,14 @@ impl<'a> stream::Handler for Handler<'a> {
     //
     //   Clipboard writes are external effects, not terminal state.
     //
-    // rustty's OSC dispatch
-    // arm is infallible, so a malformed payload is a silent no-op here — the net
-    // observable behavior is identical (the callback is simply not invoked), and
-    // the oracle stream test only asserts the un-invoked count. The reference's
-    // fallible-allocator OOM path is ALSO ported: the decode scratch is a
-    // fallible `allocator_api2::vec::Vec<u8, _>` over the terminal allocator
-    // (`try_reserve_exact`, mirroring `dcs.rs`'s `Allocating::init_capacity`),
-    // and on failure we return without invoking the callback — exactly what the
+    // The port's `do_clipboard_contents` returns `Result<(), OutOfMemory>`
+    // and `clipboard_contents`, the dispatch arm, logs the error the same way
+    // (parity tail S7-4).
+    // A malformed payload is a silent no-op (the callback is not invoked). The
+    // decode scratch is allocated through the terminal's allocator, fallibly,
+    // and on failure the callback is not invoked, which is what the
     // reference's `try` + dispatch-arm `catch` pair does. The oracle test
-    // "clipboard_write allocation failure is ignored" is ported over the
-    // `CLIPBOARD_CONTENTS_TW` seam (rustty's allocator is the zero-sized
-    // `Global`, so `testing.failing_allocator` cannot be swapped in). What that
-    // test injects is:
+    // "clipboard_write allocation failure is ignored" is ported as written:
     //
     //   Only the decoded scratch data uses the terminal allocator here. Swap in
     //   an allocator that always fails, then restore it before terminal teardown.
