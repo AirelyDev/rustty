@@ -3458,3 +3458,35 @@ the image's) and `kittygfx_animation_compose_rgba_conversion_oom_is_enomem`, thr
 `cfg(test)` fail point `RGBA_FROM_FORMAT_TW`. Both failed with the ENOMEM arms disabled.
 
 **state**: FIXED (batch T-A).
+
+
+## N102 — tmux control-mode parsers raced Oniguruma's lazy global init (the intermittent `tmux::` test crashes)
+
+- **id**: N102. Not in the inventory. Reported by the T-A reviewer (review-T-A "Pre-existing"),
+  investigated and fixed by the T-A fix round (tail-a2).
+- **severity**: medium (heap corruption; test-harness-visible, and reachable by any multi-threaded
+  host of rustty-vt that has not initialized Oniguruma). **kind**: concurrency / C-init race.
+- **what**: `cargo test -p rustty-vt --lib --features oniguruma tmux::` crashed the test binary
+  intermittently in parallel mode: MEASURED 27 of 1,500 runs at tail-a2 before the fix (SIGTRAP 21,
+  SIGABRT 5, SIGSEGV 1), 0 single-threaded per the reviewer. Under lldb the faulting thread was
+  `tmux::control::tests::tmux_client_session_changed` in `libsystem_malloc` `mfm_free` (a malloc
+  assertion), called from `callout_func_list_add` (`regparse.c:1340`) <- `onig_set_callout_of_name`
+  <- the ASCII encoding's `init` (`ascii.c:64`) <- `onig_initialize_encoding` <- `onig_initialize`
+  (`regcomp.c:7773`) <- `onig_reg_init` (`regcomp.c:7671`) <- `onig_new` <- `oni::Regex::init` <-
+  `Parser::parse_notification_oni`. `onig_new` initializes Oniguruma's process-global tables lazily
+  on first use, with no synchronization, so several parser threads reaching their first regex
+  together raced inside `onig_initialize`. The reference never runs that path concurrently: the app
+  calls `oni.init(&.{oni.Encoding.utf8})` at startup (`global.zig:215`; the port's
+  `rustty-apprt` does the same through `oni::testing::ensure_init`), `zig test` is serial, and
+  libghostty-vt is built without Oniguruma. Same class as the earlier `ensure_init` race (memory
+  note "parallel cargo test exposes C init races").
+- **fix**: `Parser::parse_notification_oni` (`crates/rustty-vt/src/tmux/control.rs`, PORT NOTE N102)
+  calls `oni::testing::ensure_init()` (a `OnceLock` around the same UTF-8-only `onig_initialize`)
+  before any regex; after the app's own call it is a no-op, and an init error still surfaces through
+  the reference's `regex init failed` path. A stale note there that said the `oni` binding crate did
+  not exist was corrected.
+- **tests**: `tmux::control::tests::concurrent_first_notifications_do_not_race_oniguruma_init`
+  (parent/child: 16 threads parse their first notification together in a fresh child process, 40
+  times). Negative control: without the fix the first child aborted (SIGABRT). After the fix, 1,500
+  parallel runs of `tmux::`: 0 failures.
+- **state**: FIXED (tail-a2, d8b82e09).
