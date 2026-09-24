@@ -97,6 +97,9 @@ impl<'a> Component<'a> {
                     if percent_encoded.len() - index < 2 {
                         continue;
                     }
+                    // std.fmt.parseInt(u8, percent_encoded[index..][0..2], 16) catch continue;
+                    // PORT NOTE: reference defect (R13), UD230: a signed escape
+                    // (`%-0`, `%+F`) is not decoded; see `parse_int_u8_hex`.
                     let percent_encoded_char =
                         match parse_int_u8_hex(&percent_encoded[index..index + 2]) {
                             Some(v) => v,
@@ -318,90 +321,39 @@ fn last_index_of(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack.windows(needle.len()).rposition(|w| w == needle)
 }
 
+/// `std.fmt.parseInt(u16, s, 10)`; `None` is any of its errors
+/// (`InvalidCharacter`, `Overflow`), which std.Uri maps to `InvalidPort`.
+///
+/// PORT NOTE (S112-F9, N206): Zig's grammar, from `rustty_zigstd::fmt`: a `_`
+/// between digits is skipped (`file://h:8_0/` has port 80), a leading `+` is
+/// taken and `-0` is zero. Faithful: this is the standard library's port
+/// grammar, Ghostty has none of its own, and it never reads the port except in
+/// the MAC-address repair of `parse`, whose result does not change (a host
+/// such as `12:34:56:78:90:+9` fails `isValidMacAddress` either way).
 fn parse_int_u16(s: &[u8]) -> Option<u16> {
     // std.fmt.parseInt(u16, s, 10)
-    zig_parse_int_unsigned(s, 10, u64::from(u16::MAX)).map(|v| v as u16)
+    rustty_zigstd::fmt::parse_int::<u16>(s, 10).ok()
 }
 
-fn parse_int_u8_hex(s: &[u8]) -> Option<u8> {
-    // std.fmt.parseInt(u8, s, 16)
-    zig_parse_int_unsigned(s, 16, u64::from(u8::MAX)).map(|v| v as u8)
-}
-
-/// zig 0.16.0 `std.fmt.parseInt(T, buf, base)` for an unsigned `T` whose
-/// largest value is `max` and a non-zero `base` (`std/fmt.zig:317-331`,
-/// `parseIntWithSign` at `:394-460`). `None` is any of its errors
-/// (`InvalidCharacter`, `Overflow`); std.Uri's callers do not tell them apart.
+/// `std.fmt.parseInt(u8, s, 16)` over the two bytes after a `%`, as
+/// `Component.formatRaw` calls it.
 ///
-/// PORT NOTE (S112-F9): this was `str::parse::<u16>` / `u8::from_str_radix`,
-/// which differ from Zig's parser in two places std.Uri reaches: Zig skips a
-/// `_` between digits (the source-literal digit separator, so `file://h:8_0/`
-/// has port 80), and it reads `-0` (and `-00`, ...) as zero for an unsigned
-/// type (so `%-0` percent-decodes to a NUL byte). Both are std.Uri's
-/// behaviour, faithfully kept: the port number and escapes are parsed by the
-/// standard library in the reference, not by Ghostty code with a stated
-/// position (compare UD141, where Ghostty's own OSC 99 parser refuses `_`).
-fn zig_parse_int_unsigned(buf: &[u8], base: u8, max: u64) -> Option<u64> {
-    // if (buf.len == 0) return error.InvalidCharacter;
-    // if (buf[0] == '+') return parseIntWithSign(Result, Character, buf[1..], base, .pos);
-    // if (buf[0] == '-') return parseIntWithSign(Result, Character, buf[1..], base, .neg);
-    // return parseIntWithSign(Result, Character, buf, base, .pos);
-    let (digits, neg) = match buf.first()? {
-        b'+' => (&buf[1..], false),
-        b'-' => (&buf[1..], true),
-        _ => (buf, false),
-    };
-
-    // parseIntWithSign:
-    // if (buf.len == 0) return error.InvalidCharacter;
-    let (first, last) = (*digits.first()?, *digits.last()?);
-    // if (buf_start[0] == '_' or buf_start[buf_start.len - 1] == '_') return error.InvalidCharacter;
-    if first == b'_' || last == b'_' {
+/// PORT NOTE: reference defect (R13), UD230. `parseInt` takes a sign, so the
+/// reference decodes `%+X` to the byte `X` and `%-0` to a NUL byte (MEASURED
+/// with zig 0.16.0: `/a%-0b` -> `/a\x00b`), while every other invalid escape
+/// passes through (`catch continue`), as RFC 3986's `pct-encoded` =
+/// `"%" HEXDIG HEXDIG` intends. Reachable from OSC 7 (`reportPwd` decodes the
+/// path and the host with `toRawMaybeAlloc` / `getHost`), so a malformed
+/// escape became a pwd the sender never named. The port decodes an escape
+/// only when both bytes are hex digits; those are exactly the inputs on which
+/// `parseInt` succeeds without a sign (`_` is refused at either end), so the
+/// result for every valid escape is unchanged.
+fn parse_int_u8_hex(s: &[u8]) -> Option<u8> {
+    if !s.iter().all(u8::is_ascii_hexdigit) {
         return None;
     }
-
-    let mut accumulate: u64 = 0;
-    for &c in digits {
-        // if (c == '_') continue;
-        if c == b'_' {
-            continue;
-        }
-        // const digit = try charToDigit(c, buf_base);
-        let digit = u64::from(match c {
-            b'0'..=b'9' => c - b'0',
-            b'A'..=b'Z' => c - b'A' + 10,
-            b'a'..=b'z' => c - b'a' + 10,
-            _ => return None,
-        });
-        if digit >= u64::from(base) {
-            return None;
-        }
-        if accumulate != 0 {
-            // accumulate = try math.mul(Accumulate, accumulate, buf_base);
-            accumulate = accumulate.checked_mul(u64::from(base))?;
-            if accumulate > max {
-                return None;
-            }
-        } else if neg {
-            // } else if (sign == .neg) {
-            //     accumulate = math.cast(Accumulate, -@as(i8, @intCast(digit))) orelse return error.Overflow;
-            //     continue;
-            // }
-            // `-digit` fits an unsigned type only when it is zero, and the
-            // accumulator stays zero, so every digit of an unsigned negative
-            // number comes through here.
-            if digit != 0 {
-                return None;
-            }
-            continue;
-        }
-        // accumulate = try add(Accumulate, accumulate, digit);
-        accumulate = accumulate.checked_add(digit)?;
-        if accumulate > max {
-            return None;
-        }
-    }
-    Some(accumulate)
+    // std.fmt.parseInt(u8, s, 16)
+    rustty_zigstd::fmt::parse_int::<u8>(s, 16).ok()
 }
 
 /// PORT NOTE: a fixed-buffer writer used to back `Component.toRaw`'s `bufPrint`.
@@ -785,48 +737,6 @@ mod tests {
         assert!(!isValidMacAddress(b"01:23:45:67:89:Aa:Bb"));
     }
 
-    /// The unsigned, fixed-base rows of zig 0.16.0 `std/fmt.zig`'s
-    /// `test parseInt` (`:333-392`), verbatim, for the parser std.Uri uses
-    /// (S112-F9). The `i32` rows and the base-0 (prefix-detecting) rows do not
-    /// apply: std.Uri parses only `u16` base 10 and `u8` base 16.
-    #[test]
-    fn zig_parse_int_unsigned_matches_std_fmt_parse_int() {
-        let u32_max = u64::from(u32::MAX);
-        let u8_max = u64::from(u8::MAX);
-        // try std.testing.expectEqual(10, try parseInt(u32, "+10", 10));
-        assert_eq!(zig_parse_int_unsigned(b"+10", 10, u32_max), Some(10));
-        // try std.testing.expectError(error.Overflow, parseInt(u32, "-10", 10));
-        assert_eq!(zig_parse_int_unsigned(b"-10", 10, u32_max), None);
-        // try std.testing.expectError(error.InvalidCharacter, parseInt(u32, " 10", 10));
-        assert_eq!(zig_parse_int_unsigned(b" 10", 10, u32_max), None);
-        // try std.testing.expectError(error.InvalidCharacter, parseInt(u32, "10 ", 10));
-        assert_eq!(zig_parse_int_unsigned(b"10 ", 10, u32_max), None);
-        // try std.testing.expectError(error.InvalidCharacter, parseInt(u32, "_10_", 10));
-        assert_eq!(zig_parse_int_unsigned(b"_10_", 10, u32_max), None);
-        // try std.testing.expectError(error.InvalidCharacter, parseInt(u32, "0x_10_", 10));
-        assert_eq!(zig_parse_int_unsigned(b"0x_10_", 10, u32_max), None);
-        // try std.testing.expectError(error.InvalidCharacter, parseInt(u32, "0x10_", 10));
-        assert_eq!(zig_parse_int_unsigned(b"0x10_", 10, u32_max), None);
-        // try std.testing.expectError(error.InvalidCharacter, parseInt(u32, "0x_10", 10));
-        assert_eq!(zig_parse_int_unsigned(b"0x_10", 10, u32_max), None);
-        // try std.testing.expectEqual(255, try parseInt(u8, "255", 10));
-        assert_eq!(zig_parse_int_unsigned(b"255", 10, u8_max), Some(255));
-        // try std.testing.expectError(error.Overflow, parseInt(u8, "256", 10));
-        assert_eq!(zig_parse_int_unsigned(b"256", 10, u8_max), None);
-        // // +0 and -0 should work for unsigned
-        // try std.testing.expectEqual(0, try parseInt(u8, "-0", 10));
-        assert_eq!(zig_parse_int_unsigned(b"-0", 10, u8_max), Some(0));
-        // try std.testing.expectEqual(0, try parseInt(u8, "+0", 10));
-        assert_eq!(zig_parse_int_unsigned(b"+0", 10, u8_max), Some(0));
-        // // empty string or bare +- is invalid
-        // try std.testing.expectError(error.InvalidCharacter, parseInt(u32, "", 10));
-        assert_eq!(zig_parse_int_unsigned(b"", 10, u32_max), None);
-        // try std.testing.expectError(error.InvalidCharacter, parseInt(u32, "+", 10));
-        assert_eq!(zig_parse_int_unsigned(b"+", 10, u32_max), None);
-        // try std.testing.expectError(error.InvalidCharacter, parseInt(u32, "-", 10));
-        assert_eq!(zig_parse_int_unsigned(b"-", 10, u32_max), None);
-    }
-
     /// S112-F9 through std.Uri: the port takes Zig's `_` separator and sign
     /// handling, and still refuses a leading or trailing `_`.
     #[test]
@@ -847,21 +757,47 @@ mod tests {
         );
     }
 
-    /// S112-F9 through `Component.toRaw`: a `%-0` escape is Zig's
-    /// `parseInt(u8, "-0", 16)` == 0, so it decodes to a NUL byte; `%_1` and
-    /// `%1_` are refused and pass through.
+    /// UD230 (R13): `%-0` and `%+X` are not percent escapes (RFC 3986
+    /// `pct-encoded` is `"%" HEXDIG HEXDIG`), so they pass through like the
+    /// reference's other invalid escapes. zig 0.16.0
+    /// `std.Uri.Component.formatRaw` decodes them because `parseInt(u8, .., 16)`
+    /// takes a sign: MEASURED, `/a%-0b` -> `/a\x00b` and `/a%+Fb` -> `/a\x0fb`.
+    /// Valid escapes still decode (`%41`, `%00`), and `%_1` / `%1_` pass through
+    /// as in the reference.
     #[test]
-    fn percent_escapes_follow_zig_parse_int() {
-        let mut buf = [0u8; 32];
-        let raw = Component::PercentEncoded(b"a%-0b").toRaw(&mut buf).unwrap();
-        assert_eq!(raw, b"a\x00b");
-        let mut buf = [0u8; 32];
-        let raw = Component::PercentEncoded(b"a%+fb").toRaw(&mut buf).unwrap();
-        assert_eq!(raw, b"a\x0fb");
-        let mut buf = [0u8; 32];
-        let raw = Component::PercentEncoded(b"%_1%1_%41")
-            .toRaw(&mut buf)
-            .unwrap();
-        assert_eq!(raw, b"%_1%1_A");
+    fn percent_escapes_decode_only_two_hex_digits() {
+        let raw = |text: &[u8]| {
+            let mut buf = [0u8; 64];
+            Component::PercentEncoded(text)
+                .toRaw(&mut buf)
+                .unwrap()
+                .to_vec()
+        };
+        assert_eq!(raw(b"a%-0b%41"), b"a%-0bA");
+        assert_eq!(raw(b"a%+fb%41"), b"a%+fbA");
+        assert_eq!(raw(b"a%+Fb%-0%+0%00"), b"a%+Fb%-0%+0\x00");
+        assert_eq!(raw(b"%_1%1_%41"), b"%_1%1_A");
+        assert_eq!(raw(b"%2f%2F%ff%FF"), b"//\xff\xff");
+    }
+
+    /// UD230 through the OSC 7 call: `os.uri.parse` with the options
+    /// `reportPwd` passes off macOS, then the path decoded as
+    /// `toRawMaybeAlloc` does.
+    #[test]
+    fn osc7_path_keeps_a_signed_escape() {
+        let uri = parse(
+            b"file://localhost/tmp/a%-0b/c%+1d/%41",
+            ParseOptions {
+                mac_address: true,
+                raw_path: false,
+            },
+        )
+        .unwrap();
+        let mut w = crate::string_encoding::AllocatingWriter::init();
+        uri.path.formatRaw(&mut w).unwrap();
+        assert_eq!(w.written(), b"/tmp/a%-0b/c%+1d/A");
+        let mut buf = [0u8; 64];
+        let host = uri.host.unwrap().toRaw(&mut buf).unwrap();
+        assert_eq!(host, b"localhost");
     }
 }

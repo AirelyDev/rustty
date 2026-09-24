@@ -356,36 +356,13 @@ fn split_scalar(buf: &[u8], delim: u8) -> SplitScalar<'_> {
     }
 }
 
-/// Faithful port of `std.fmt.parseUnsigned(u8, bytes, base)` for the bases used here:
-/// each byte is a base-`base` digit; the accumulator overflows into `Overflow`.
+/// `std.fmt.parseUnsigned(u8, bytes, base)`, from `rustty_zigstd::fmt` (N206: the
+/// port's one copy of Zig's parser), with its two errors.
 fn parse_unsigned_u8(bytes: &[u8], base: u8) -> Result<u8, ColorSpecError> {
-    if bytes.is_empty() {
-        return Err(ColorSpecError::InvalidCharacter);
-    }
-    let mut x: u8 = 0;
-    for &c in bytes {
-        let digit = char_to_digit(c, base).ok_or(ColorSpecError::InvalidCharacter)?;
-        x = x
-            .checked_mul(base)
-            .ok_or(ColorSpecError::Overflow)?
-            .checked_add(digit)
-            .ok_or(ColorSpecError::Overflow)?;
-    }
-    Ok(x)
-}
-
-fn char_to_digit(c: u8, base: u8) -> Option<u8> {
-    let value = match c {
-        b'0'..=b'9' => c - b'0',
-        b'A'..=b'Z' => c - b'A' + 10,
-        b'a'..=b'z' => c - b'a' + 10,
-        _ => return None,
-    };
-    if value < base {
-        Some(value)
-    } else {
-        None
-    }
+    rustty_zigstd::fmt::parse_unsigned::<u8>(bytes, base).map_err(|e| match e {
+        rustty_zigstd::fmt::ParseIntError::InvalidCharacter => ColorSpecError::InvalidCharacter,
+        rustty_zigstd::fmt::ParseIntError::Overflow => ColorSpecError::Overflow,
+    })
 }
 
 #[cfg(test)]
@@ -403,6 +380,30 @@ mod tests {
                 assert_eq!(0xCC, rgb[2]);
             }
             _ => panic!("expected rgb"),
+        }
+    }
+
+    /// N206: each channel is `std.fmt.parseUnsigned(u8, .., 16)` over the last
+    /// two hex digits, which refuses a sign and an edge `_` (measured with
+    /// libvaxis 0.6.0 and Zig 0.16.0: all `error.InvalidCharacter`).
+    #[test]
+    fn rgb_from_spec_channels_are_zig_parse_unsigned() {
+        match Color::rgb_from_spec(b"rgb:00fF/0000/0000") {
+            Ok(Color::Rgb(rgb)) => assert_eq!([0xff, 0, 0], rgb),
+            other => panic!("expected rgb, got {other:?}"),
+        }
+        for spec in [
+            &b"rgb:00+f/0000/0000"[..],
+            &b"rgb:00-0/0000/0000"[..],
+            &b"rgb:00_f/0000/0000"[..],
+            &b"rgb:00f_/0000/0000"[..],
+            &b"rgb:0000/0000/00+F"[..],
+        ] {
+            assert_eq!(
+                Some(ColorSpecError::InvalidCharacter),
+                Color::rgb_from_spec(spec).err(),
+                "{spec:?}"
+            );
         }
     }
 }
