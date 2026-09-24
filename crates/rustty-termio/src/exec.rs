@@ -3609,6 +3609,10 @@ impl Subprocess {
     //
     // pub fn stop(self: *Subprocess) void {
     pub fn stop(&mut self) {
+        // (Test builds only: count the calls, so the UD102 test can check that
+        // the drain ran before this.)
+        #[cfg(test)]
+        tests::STOP_CALLS.with(|c| c.set(c.get() + 1));
         // switch (self.process orelse return) {
         if let Some(process) = &mut self.process {
             match process {
@@ -3887,7 +3891,11 @@ const DRAIN_BUDGET: std::time::Duration = std::time::Duration::from_millis(50);
 #[cfg(not(windows))]
 fn drain_pty_master_once(fd: libc::c_int) -> usize {
     #[cfg(test)]
-    tests::DRAIN_CALLS.with(|c| c.set(c.get() + 1));
+    {
+        tests::DRAIN_CALLS.with(|c| c.set(c.get() + 1));
+        tests::STOPS_BEFORE_DRAIN
+            .with(|c| c.set(Some(tests::STOP_CALLS.with(std::cell::Cell::get))));
+    }
     let deadline = std::time::Instant::now() + DRAIN_BUDGET;
     let mut buf = [0u8; 4096];
     let mut total: usize = 0;
@@ -5923,6 +5931,13 @@ mod tests {
         /// Calls of `drain_pty_master_once` on this thread.
         pub(super) static DRAIN_CALLS: std::cell::Cell<usize> =
             const { std::cell::Cell::new(0) };
+        /// Calls of `Subprocess::stop` on this thread.
+        pub(super) static STOP_CALLS: std::cell::Cell<usize> =
+            const { std::cell::Cell::new(0) };
+        /// The value of `STOP_CALLS` when `drain_pty_master_once` last ran on
+        /// this thread (`None` if it has not run since the last reset).
+        pub(super) static STOPS_BEFORE_DRAIN: std::cell::Cell<Option<usize>> =
+            const { std::cell::Cell::new(None) };
         /// Make `threadEnter`'s read-thread spawn fail on this thread.
         pub(super) static FAIL_READ_THREAD_SPAWN: std::cell::Cell<bool> =
             const { std::cell::Cell::new(false) };
@@ -7611,6 +7626,8 @@ mod tests {
         };
 
         DRAIN_CALLS.with(|c| c.set(0));
+        STOP_CALLS.with(|c| c.set(0));
+        STOPS_BEFORE_DRAIN.with(|c| c.set(None));
         FAIL_READ_THREAD_SPAWN.with(|f| f.set(true));
         let result = unsafe { exec.threadEnter(Global, t.io, &mut td) };
         FAIL_READ_THREAD_SPAWN.with(|f| f.set(false));
@@ -7622,7 +7639,19 @@ mod tests {
         assert_eq!(
             DRAIN_CALLS.with(std::cell::Cell::get),
             1,
-            "the error arm drains the pty master once before stop()"
+            "the error arm drains the pty master once"
+        );
+        // The order is the fix: draining after `stop()` does nothing, because
+        // `stop()` is what wedges on an undrained child.
+        assert_eq!(
+            STOP_CALLS.with(std::cell::Cell::get),
+            1,
+            "the error arm calls subprocess.stop() once"
+        );
+        assert_eq!(
+            STOPS_BEFORE_DRAIN.with(std::cell::Cell::get),
+            Some(0),
+            "the drain runs before subprocess.stop(), not after it"
         );
         // `stop()` ran: the subprocess has been torn down.
         assert!(
