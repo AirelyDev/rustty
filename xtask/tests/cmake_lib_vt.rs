@@ -4,8 +4,9 @@
 //!
 //! Each test configures the workspace root's `CMakeLists.txt` into a fresh
 //! build directory; configuring does not run cargo, so it is quick. Needs
-//! `cmake` on `PATH`; without it a test reports that it did not run rather
-//! than passing silently.
+//! `cmake` on `PATH`; without it a test prints that it was skipped, and under
+//! `RUSTTY_REQUIRE_CMAKE=1` (set by CI, whose runners ship cmake for
+//! G-CCONSUMER) it fails instead (R14).
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -14,10 +15,41 @@ fn workspace_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("..")
 }
 
-/// Configure into a fresh directory, returning it, or `None` without cmake.
+/// The R14 strict-mode pivot for `cmake`: a no-op by default, a panic under
+/// `RUSTTY_REQUIRE_CMAKE=1`, so a CI leg that lost the tool fails instead of
+/// reporting these tests `ok`.
+#[track_caller]
+fn require_cmake_or_skip(test_name: &str, err: &dyn std::fmt::Display) {
+    require_cmake_or_skip_impl(
+        std::env::var_os("RUSTTY_REQUIRE_CMAKE").as_deref() == Some("1".as_ref()),
+        test_name,
+        err,
+    );
+}
+
+#[track_caller]
+fn require_cmake_or_skip_impl(required: bool, test_name: &str, err: &dyn std::fmt::Display) {
+    assert!(
+        !required,
+        "cmake required but unavailable (RUSTTY_REQUIRE_CMAKE=1): \
+         {test_name} would have skipped: {err}"
+    );
+}
+
+/// The pivot itself: a no-op when not required, a panic when required.
+#[test]
+fn cmake_pivot_panics_only_when_required() {
+    require_cmake_or_skip_impl(false, "t", &"missing");
+    let r = std::panic::catch_unwind(|| require_cmake_or_skip_impl(true, "t", &"missing"));
+    assert!(r.is_err());
+}
+
+/// Configure into a fresh directory, returning it, or `None` without cmake
+/// (after the strict-mode pivot).
 fn configure(tag: &str) -> Option<PathBuf> {
-    if Command::new("cmake").arg("--version").output().is_err() {
-        eprintln!("SKIPPED: cmake is not on PATH");
+    if let Err(e) = Command::new("cmake").arg("--version").output() {
+        require_cmake_or_skip(tag, &e);
+        eprintln!("skipping the `{tag}` cmake test: cmake is not on PATH ({e})");
         return None;
     }
     let dir = std::env::temp_dir().join(format!("xtask-cmake-lib-vt-{tag}-{}", std::process::id()));

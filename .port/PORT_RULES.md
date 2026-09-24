@@ -413,6 +413,8 @@ Every skip takes exactly one of these forms:
    | `RUSTTY_REQUIRE_FUZZ_CORPUS` | the mirrored fuzz corpus (`.port/`) | every repo-checkout job |
    | `RUSTTY_REQUIRE_SYSTEM_FONTS` | the stock macOS Supplemental fonts the shaping tests name | the macOS leg |
    | `RUSTTY_REQUIRE_DISPLAY` | an active display for a CoreVideo display link (macOS) | nobody yet (runner not established) |
+   | `RUSTTY_REQUIRE_CMAKE` | `cmake` on `PATH` (xtask's CMake install / pkg-config tests) | both `ci` legs |
+   | `RUSTTY_REQUIRE_XGETTEXT` | `xgettext` on `PATH` (xtask's real GTK-leg extraction) | both `ci` legs |
 
    A resource that no CI lane has (a non-stock font, the Ghostty oracle checkout, a
    WindowServer main thread) is not probed-and-skipped: the test is `#[ignore = "…"]`d and,

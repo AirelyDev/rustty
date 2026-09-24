@@ -326,6 +326,35 @@ fn capture(cmd: &mut Command, what: &str) -> Result<Vec<u8>, String> {
 mod tests {
     use super::*;
 
+    /// The R14 strict-mode pivot for `xgettext`: a no-op by default, a panic
+    /// under `RUSTTY_REQUIRE_XGETTEXT=1`, so a CI leg that lost the tool fails
+    /// instead of reporting the test `ok`.
+    #[track_caller]
+    fn require_xgettext_or_skip(test_name: &str, err: &dyn std::fmt::Display) {
+        require_xgettext_or_skip_impl(
+            std::env::var_os("RUSTTY_REQUIRE_XGETTEXT").as_deref() == Some("1".as_ref()),
+            test_name,
+            err,
+        );
+    }
+
+    #[track_caller]
+    fn require_xgettext_or_skip_impl(required: bool, test_name: &str, err: &dyn std::fmt::Display) {
+        assert!(
+            !required,
+            "xgettext required but unavailable (RUSTTY_REQUIRE_XGETTEXT=1): \
+             {test_name} would have skipped: {err}"
+        );
+    }
+
+    /// The pivot itself: a no-op when not required, a panic when required.
+    #[test]
+    fn xgettext_pivot_panics_only_when_required() {
+        require_xgettext_or_skip_impl(false, "t", &"missing");
+        let r = std::panic::catch_unwind(|| require_xgettext_or_skip_impl(true, "t", &"missing"));
+        assert!(r.is_err());
+    }
+
     /// `GhosttyI18n.zig:63-71` passes `--keyword=N_` and `:152-155` adds the
     /// command-palette source (`src/input/command.zig`, ported as
     /// `crates/rustty-input/src/command.rs`) to the GTK leg. S63-F1.
@@ -346,12 +375,14 @@ mod tests {
     /// the output comes from the command-palette input and the `N_` keyword.
     /// 180 is the command-palette block the committed `.pot` carries
     /// (`crates/rustty-apprt/tests/i18n_msgid_coverage.rs` pins the same 180).
-    /// Needs `xgettext` on `PATH`; without it the test reports that it did
-    /// not run rather than passing silently.
+    /// Needs `xgettext` on `PATH`; without it the test prints that it was
+    /// skipped, and under `RUSTTY_REQUIRE_XGETTEXT=1` (set by CI, whose legs
+    /// install gettext for G-I18N) it fails instead (R14).
     #[test]
     fn gtk_xgettext_extracts_the_command_palette_msgids() {
-        if Command::new("xgettext").arg("--version").output().is_err() {
-            eprintln!("SKIPPED: xgettext is not on PATH");
+        if let Err(e) = Command::new("xgettext").arg("--version").output() {
+            require_xgettext_or_skip("gtk_xgettext_extracts_the_command_palette_msgids", &e);
+            eprintln!("skipping gtk_xgettext_extracts_the_command_palette_msgids: xgettext is not on PATH ({e})");
             return;
         }
         let dir = std::env::temp_dir().join(format!("xtask-i18n-test-{}", std::process::id()));

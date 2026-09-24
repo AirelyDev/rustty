@@ -180,6 +180,17 @@ jobs:
       - name: Require the mirrored fuzz corpus (repo checkouts, parity S63-F8)
         run: echo "RUSTTY_REQUIRE_FUZZ_CORPUS=1" >> "$GITHUB_ENV"
 
+      # PORT_RULES R14: xtask's CMake install/pkg-config tests and its real
+      # `xgettext` run skip when the tool is missing. Both legs have them:
+      # cmake ships on GitHub's Ubuntu and macOS images (G-CCONSUMER drives it),
+      # and the gate-tooling step below installs gettext on both (G-I18N). So
+      # here a skip means the environment lost a tool, and these variables make
+      # it a failure. Env setup, not a check.
+      - name: Require cmake and xgettext (xtask tests, R14)
+        run: |
+          echo "RUSTTY_REQUIRE_CMAKE=1" >> "$GITHUB_ENV"
+          echo "RUSTTY_REQUIRE_XGETTEXT=1" >> "$GITHUB_ENV"
+
       - name: Cache cargo registry + target
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
