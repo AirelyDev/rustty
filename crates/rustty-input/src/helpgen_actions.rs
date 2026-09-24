@@ -78,7 +78,6 @@ impl Format {
                 ---\n\
                 \n\
                 This is a reference of all Rustty keybinding actions.\n\
-                \n\
                 \n",
             ),
         }
@@ -216,4 +215,24 @@ pub fn generate<W: Writer, H: HelpStrings>(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Format;
+
+    /// Parity S103-F2: the reference's markdown header is a Zig multiline
+    /// literal whose last two lines are empty, so it ends with exactly two
+    /// newlines after "keybinding actions." (`helpgen_actions.zig:48-56`).
+    #[test]
+    fn markdown_header_ends_with_one_blank_line() {
+        let header = Format::Markdown.header().unwrap();
+        assert!(
+            header.ends_with(b"This is a reference of all Rustty keybinding actions.\n\n"),
+            "{:?}",
+            String::from_utf8_lossy(header)
+        );
+        assert!(!header.ends_with(b"\n\n\n"));
+        assert_eq!(None, Format::Plaintext.header());
+    }
 }
