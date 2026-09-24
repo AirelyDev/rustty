@@ -1,9 +1,11 @@
 //! build.rs — make the deferral-ledger tripwire in `kqueue.rs` survive a source
 //! tarball (parity S63-F8).
 //!
-//! `kqueue_file_io_on_thread_pool` is a skip-stub guarded by a compile-time
-//! embed of `.port/phase-2/DEFERRALS.md`, so that deleting the ledger entry
-//! fails the build rather than silently leaving a stub with no reason. That
+//! `kqueue_file_io_on_thread_pool` (the unported reference test, `#[ignore]`d
+//! since task S-15, R14) is backed by the tripwire test
+//! `kqueue_file_watcher_deferral_is_ledgered`, which reads a compile-time probe
+//! of `.port/phase-2/DEFERRALS.md`, so that deleting the ledger entry fails the
+//! build rather than silently leaving a stub with no reason. That
 //! embed was `include_str!`, which HARD-FAILS when the file is absent — and
 //! `.port/` is deliberately excluded from the source tarball, so the shipped
 //! tarball could not compile its own tests. Nothing noticed, because

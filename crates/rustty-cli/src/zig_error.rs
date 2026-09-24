@@ -50,51 +50,13 @@ pub fn realpath_error_name(path: &[u8], e: &io::Error) -> &'static str {
 }
 
 /// `{}` of an error from `Config.loadFile` (the reference's `list_themes`
-/// preview pane). Its reachable errors are `file_load.open`'s
-/// `OpenFileError.{FileNotFound, FileIsEmpty, FileOpenFailed}` (`NotAFile` is
-/// handled inside `loadFile`) and whatever `loadIter`'s parse propagates. The
-/// port carries `FileIsEmpty`/`FileOpenFailed` as an `io::Error` whose message
-/// is the variant name (`LoadError::from_open`).
+/// preview pane): `rustty_config::zig_error::load_error`.
 //
-// PORT NOTE: an `Io` error with any other message is a read failure after
-// the file opened. The reference cannot surface one here (its `LineIterator`
-// logs a failed read and stops, so `loadFile` returns normally); a Zig
-// `std.Io.Reader` failure is `error.ReadFailed`, which is the name used.
+// PORT NOTE (S-15, NEW-FINDINGS N140 (b)): the mapping moved down to
+// `rustty-config` so its C API can print the same `error.<Name>` form; this
+// wrapper keeps the CLI's call sites unchanged.
 pub fn load_error(e: &rustty_config::config_struct::LoadError) -> String {
-    use rustty_config::config_struct::LoadError;
-    match e {
-        LoadError::FileNotFound => "error.FileNotFound".to_string(),
-        LoadError::Io(io) => {
-            let msg = io.to_string();
-            match msg.as_str() {
-                "FileIsEmpty" | "FileOpenFailed" | "NotAFile" => format!("error.{msg}"),
-                _ => "error.ReadFailed".to_string(),
-            }
-        }
-        LoadError::Parse(p) => args_error(p),
-        // `loadDefaultFiles`' path-lookup errors (T-E, S74-F1). `loadFile`,
-        // the only caller here, never returns one; named as the variant for
-        // completeness.
-        LoadError::FileLoad(f) => {
-            use rustty_config::file_load::FileLoadError;
-            match f {
-                FileLoadError::NoHomeDir => "error.NoHomeDir".to_string(),
-                FileLoadError::BufferTooSmall => "error.BufferTooSmall".to_string(),
-                FileLoadError::StreamTooLong => "error.StreamTooLong".to_string(),
-                // The port keeps only the `io::ErrorKind` of a failed shell
-                // fallback, so the `SpawnError` name is approximated from it
-                // (the two kinds `std.process.spawn` names directly, else
-                // `Unexpected`). Never reached from `loadFile` (above).
-                FileLoadError::Spawn(kind) => match kind {
-                    io::ErrorKind::NotFound => "error.FileNotFound".to_string(),
-                    io::ErrorKind::PermissionDenied => "error.AccessDenied".to_string(),
-                    _ => "error.Unexpected".to_string(),
-                },
-                FileLoadError::AppleApiFailed => "error.AppleApiFailed".to_string(),
-                FileLoadError::Io(_) => "error.ReadFailed".to_string(),
-            }
-        }
-    }
+    rustty_config::zig_error::load_error(e)
 }
 
 /// `{t}` of a `std.posix.E` value, i.e. `@tagName(errno)`: the reference's
