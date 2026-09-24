@@ -52,7 +52,21 @@ echo "== 1/3 packaging RusttyKit.xcframework =="
 cargo run -q -p xtask -- xcframework --target "$XCFRAMEWORK_TARGET"
 
 echo "== 2/3 generating app resources (zig-out/share) =="
-cargo run -q -p xtask -- resources
+# The resources follow the optimize mode (Config.zig:504-522: a Debug build
+# installs the terminfo source and termcap, a release build only the compiled
+# database). The reference's release pipelines build the app's resources with
+# `zig build -Doptimize=ReleaseFast` and then run `xcodebuild -configuration
+# Release` (release-tag.yml:177-187), and GhosttyXcodebuild.zig:29-35 pairs
+# Debug with Debug and every release mode with a release configuration. So a
+# release CONFIGURATION maps to ReleaseFast here, and OPTIMIZE overrides it (the
+# reference's tip pipeline also ships Debug and ReleaseSafe resources under
+# `-configuration Release`).
+case "$CONFIGURATION" in
+  Debug) DEFAULT_OPTIMIZE=Debug ;;
+  *) DEFAULT_OPTIMIZE=ReleaseFast ;;
+esac
+OPTIMIZE="${OPTIMIZE:-$DEFAULT_OPTIMIZE}"
+cargo run -q -p xtask -- resources --optimize "$OPTIMIZE"
 
 echo "== 3/3 xcodebuild =="
 # The combined archive is fully self-contained — no system or Homebrew link
