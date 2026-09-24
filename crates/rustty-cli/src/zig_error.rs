@@ -79,6 +79,7 @@ pub fn load_error(e: &rustty_config::config_struct::LoadError) -> String {
             use rustty_config::file_load::FileLoadError;
             match f {
                 FileLoadError::NoHomeDir => "error.NoHomeDir".to_string(),
+                FileLoadError::BufferTooSmall => "error.BufferTooSmall".to_string(),
                 FileLoadError::AppleApiFailed => "error.AppleApiFailed".to_string(),
                 FileLoadError::Io(_) => "error.ReadFailed".to_string(),
             }

@@ -108,9 +108,16 @@ impl Location {
     // collections used here, so the reference's `error{OutOfMemory}` set collapses
     // away — `dir` returns `Option<Vec<u8>>` directly. The `BufferTooSmall`/iOS
     // comptime error juggling in the `.user` arm exists only to remap the
-    // platform-specific `xdg.config` error set into `OutOfMemory`; in Rust
-    // `xdg::config` returns the single `DirError::NoHomeDir`, which we treat as
-    // "the XDG directory doesn't exist" (the reference's `else => return null`).
+    // platform-specific `xdg.config` error set into `OutOfMemory`. The port
+    // treats every `xdg::config` error as "the XDG directory doesn't exist"
+    // (the reference's `else => return null`), including
+    // `DirError::BufferTooSmall`, which the reference maps to
+    // `error.OutOfMemory` instead: `dir` returning `Option` has no error to
+    // carry it (NEW-FINDINGS N140, the theme sibling).
+    //
+    // CORRECTION (LEDGER S112-F11): this said "in Rust `xdg::config` returns the
+    // single `DirError::NoHomeDir`". Since S112-F11 it also returns
+    // `DirError::BufferTooSmall`.
     pub fn dir(self) -> Option<Vec<u8>> {
         // return switch (self) {
         match self {

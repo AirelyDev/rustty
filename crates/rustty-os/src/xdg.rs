@@ -12,8 +12,12 @@
 // `homedir = @import("homedir.zig")`, and `env_os = @import("env.zig")`. In Rust
 // we use those ported sibling modules plus the standard library. Allocation in
 // Rust is infallible for the collections used here, so the reference's
-// `Allocator.Error` / `error.NoHomeDir` set collapses to the single
-// `error.NoHomeDir` case kept in `DirError`.
+// `Allocator.Error` member of the error set has no variant in `DirError`.
+//
+// CORRECTION (S112-F11): this used to say the set "collapses to the single
+// `error.NoHomeDir` case kept in `DirError`". `homedir.home`'s
+// `error.BufferTooSmall` is also in the reference's set (`try homedir.home`),
+// and is now `DirError::BufferTooSmall`.
 
 use crate::homedir;
 
@@ -21,6 +25,9 @@ use crate::homedir;
 #[derive(Debug, PartialEq, Eq)]
 pub enum DirError {
     NoHomeDir,
+    /// `homedir.home`'s `error.BufferTooSmall`: the home directory is longer
+    /// than the 1024-byte buffer `dir` reads it into.
+    BufferTooSmall,
 }
 
 // PORT NOTE (W94-B02-01): the reference fields are `?[]const u8` — raw path
@@ -154,7 +161,15 @@ fn dir(
 
     // Get our home dir
     let mut buf = [0u8; 1024];
-    if let Some(home) = homedir::home(environ_map, &mut buf).map_err(|_| DirError::NoHomeDir)? {
+    // if (try homedir.home(io, environ_map, &buf)) |home| {
+    //
+    // PORT NOTE (S112-F11): `try` passes `homedir.home`'s own error on. This
+    // used to map it to `NoHomeDir`, so a `$HOME` longer than the buffer
+    // looked like having no home directory.
+    let home = homedir::home(environ_map, &mut buf).map_err(|err| match err {
+        homedir::Error::BufferTooSmall => DirError::BufferTooSmall,
+    })?;
+    if let Some(home) = home {
         // PORT NOTE (W94-B02-01): `homedir.home` returns `[]const u8`; the raw
         // bytes feed the byte-typed path join directly (the former `&str`
         // round-trip rejected a non-UTF-8 home dir with `NoHomeDir`, which the
@@ -443,6 +458,30 @@ mod tests {
             let actual = (case.func)(&environ_map, Options::default()).unwrap();
             assert_eq!(b"/tmp/w94-\xff-xdg".to_vec(), actual);
         }
+    }
+
+    // S112-F11: `homedir.home`'s `error.BufferTooSmall` (a `$HOME` longer than
+    // the 1024-byte buffer) propagates from every XDG helper under its own
+    // name (`try homedir.home(...)`, xdg.zig:92), not as `NoHomeDir`.
+    #[test]
+    #[cfg_attr(windows, ignore = "SkipZigTest on Windows (R14)")]
+    fn home_longer_than_buffer_is_buffer_too_small() {
+        for case in dir_cases() {
+            let mut environ_map = EnvMap::new();
+            let mut home = b"/".to_vec();
+            home.extend(std::iter::repeat_n(b'h', 1100));
+            environ_map.insert(b"HOME".to_vec(), home);
+            // The home lookup is reached: no XDG variable is set.
+            assert!(!environ_map.contains_key(case.name.as_bytes()));
+
+            let actual = (case.func)(&environ_map, Options::default());
+            assert_eq!(Err(DirError::BufferTooSmall), actual, "{}", case.name);
+        }
+
+        // A home that fits is still used, so the error above is the length.
+        let mut environ_map = EnvMap::new();
+        environ_map.insert(b"HOME".to_vec(), b"/tmp/rustty-test-home".to_vec());
+        assert!(config(&environ_map, Options::default()).is_ok());
     }
 
     // PROVING TEST (W94-B02-01 companion): a non-UTF-8 `$HOME` also flows

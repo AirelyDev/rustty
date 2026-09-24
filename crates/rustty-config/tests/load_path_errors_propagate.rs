@@ -42,14 +42,20 @@ fn load_default_files_returns_the_xdg_path_error() {
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| cfg.load_default_files()));
     rustty_global::environ::set_environ(saved);
 
+    // The error is the reference's own, `homedir.zig`'s `error.BufferTooSmall`
+    // (`try homedir.home(...)`, xdg.zig:92). Until LEDGER S112-F11 the port
+    // reported it as `NoHomeDir` (NEW-FINDINGS N140), and this test pinned that.
     assert!(
-        matches!(helper, Err(FileLoadError::NoHomeDir)),
+        matches!(helper, Err(FileLoadError::BufferTooSmall)),
         "the XDG lookup must fail for a {}-byte HOME, got {helper:?}",
         1101
     );
     let result = result.expect("load_default_files must not panic on a path-lookup error");
     assert!(
-        matches!(result, Err(LoadError::FileLoad(FileLoadError::NoHomeDir))),
+        matches!(
+            result,
+            Err(LoadError::FileLoad(FileLoadError::BufferTooSmall))
+        ),
         "expected the lookup error to propagate, got {result:?}"
     );
 }
