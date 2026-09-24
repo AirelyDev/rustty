@@ -8076,7 +8076,11 @@ the caller-supplied C allocator (`create_raw`/`destroy_raw` in
 `rustty-lib/src/allocator.rs`), return recoverable `RUSTTY_OUT_OF_MEMORY` +
 null out-param on rejection, and fire the caller free callback on free. The
 terminal's OSC stream is also caller-allocator-backed (`initAlloc(alloc, ...)`
-parity). Proving tests: `CountingCAllocator` (`rustty-vt-c/src/test_util.rs`)
+parity). CORRECTION (tail-a2, parity S174-F3): until 430a52a7 that last
+sentence held only for the parser's `alloc` presence gate; the allocating
+capture itself was a global-heap `Vec`. It now allocates through
+`osc::CaptureAllocator`, which vt-c points at the caller allocator for the
+terminal stream and for `rustty_osc_new` parsers. Proving tests: `CountingCAllocator` (`rustty-vt-c/src/test_util.rs`)
 counting/rejecting arms in `terminal.rs`, `render/tests.rs`,
 `selection_gesture/tests.rs`; W36-B06 zero-length typed-helper short-circuit in
 `rustty-vt-c/src/allocator.rs` + `rustty-lib/src/allocator.rs`.
@@ -8088,11 +8092,16 @@ counting/rejecting arms in `terminal.rs`, `render/tests.rs`,
    `allocator_api2::alloc::Global` (`rustty-vt/src/terminal.rs:94`,
    `rustty-vt/src/render.rs:47`), so screen/pagelist/render-row growth and
    `update`/`begin_update` bypass the caller allocator (oracle: `state.alloc`).
-2. `grid_ref_track`'s `TrackedGridRef` is `Box::into_raw`'d on Global (oracle:
-   `t.gpa()` create — depends on 1).
+2. FIXED (tail-a2, parity S179-F3, 4717bccc): `grid_ref_track`'s
+   `TrackedGridRef` is created and destroyed through a copy of the caller's C
+   allocator (`TerminalWrapper.c_alloc`), with both reference OOM arms. The
+   wrapper's `tracked_grid_refs`/`searches` maps stay on Global with item 1.
 3. selection-gesture event codepoint copy (`selection_gesture.rs`
    `try_set_word_boundary_codepoints`) uses an owned `Vec` on Global (oracle:
    `event.alloc.alloc(u21, len)`).
+4. The OSC parser's parsed `Command` payloads (the color and kitty-color
+   request lists the oracle allocates through `parser.alloc`, and owned text
+   payload copies) are Global values (parity S174-F3, OPEN).
 
 Unblocking requires making rustty-vt runtime-allocator-polymorphic (an
 `allocator_api2::Allocator` adapter over `ZigAllocator` threaded through
