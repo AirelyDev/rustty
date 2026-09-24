@@ -1300,12 +1300,30 @@ fn encode_esc(writer: &mut String, esc: &rustty_vt::parser::ESC) {
 
 /// The `else => try writer.print("{f}", .{action})` fallback (termio.zig:510) for
 /// the dcs_*/apc_* variants, mirroring the reference `Action.format` union
-/// formatter (`Parser.Action{ .<tag> = <payload> }`, u8 payloads as `0x{x}`).
+/// formatter (`<@typeName(Action)>{ .<tag> = <payload> }`, u8 payloads as
+/// `0x{x}`, others through `printValue("any", .{}, value, 1)`).
+//
+// PORT NOTE (parity S109-F2): the text below was MEASURED, not inferred: a
+// scratch `zig test` (0.16.0) with the pinned `Parser.zig` `Action` shape and
+// its `format` verbatim, imported as `terminal/main.zig` -> `Parser.zig` from
+// the module root (the app's layout, where the inspector and the parser share
+// the `src/` module), prints
+//   `terminal.Parser.Action{ .dcs_hook = .{ .intermediates = { ... }, .params = { ... }, .final = 113 } }`
+// for `.dcs_hook = .{ .intermediates = "$", .params = &.{ 1, 2 }, .final = 'q' }`
+// and the same for an empty DCS: at depth 1 the two slices collapse to
+// `{ ... }` and `final` (a `u8` field, not the top-level payload) prints as a
+// decimal. The `@typeName` is `terminal.Parser.Action` in that layout; that
+// the real app build gives the same name is UNVERIFIED. CORRECTION: this used
+// the prefix `Parser.Action` and Rust's `{:?}` of the DCS struct.
 fn format_action_default(writer: &mut String, action: &Action) {
-    let _ = writer.write_str("Parser.Action{ .");
+    let _ = writer.write_str("terminal.Parser.Action{ .");
     match action {
         Action::DcsHook(v) => {
-            let _ = write!(writer, "dcs_hook = {:?}", v);
+            let _ = write!(
+                writer,
+                "dcs_hook = .{{ .intermediates = {{ ... }}, .params = {{ ... }}, .final = {} }}",
+                v.final_
+            );
         }
         Action::DcsPut(b) => {
             let _ = write!(writer, "dcs_put = 0x{:x}", b);
@@ -2037,6 +2055,53 @@ mod tests {
                 (ks, vs)
             })
             .collect()
+    }
+
+    /// Parity S109-F2: the `else => writer.print("{f}", .{action})` arm renders
+    /// exactly what the reference's `Action.format` prints (strings MEASURED
+    /// under zig 0.16.0; see `format_action_default`'s PORT NOTE).
+    #[test]
+    fn encode_dcs_and_apc_like_action_format() {
+        let dcs = rustty_vt::parser::DCS {
+            intermediates: rustty_vt::parser::InlineVec::from_slice(b"$"),
+            params: rustty_vt::parser::InlineVec::from_slice(&[1, 2]),
+            final_: b'q',
+        };
+        assert_eq!(
+            desc(&Action::DcsHook(Box::new(dcs))),
+            "terminal.Parser.Action{ .dcs_hook = .{ .intermediates = { ... }, \
+             .params = { ... }, .final = 113 } }"
+        );
+        let empty = rustty_vt::parser::DCS {
+            intermediates: rustty_vt::parser::InlineVec::from_slice(b""),
+            params: rustty_vt::parser::InlineVec::from_slice(&[]),
+            final_: b'q',
+        };
+        assert_eq!(
+            desc(&Action::DcsHook(Box::new(empty))),
+            "terminal.Parser.Action{ .dcs_hook = .{ .intermediates = { ... }, \
+             .params = { ... }, .final = 113 } }"
+        );
+        assert_eq!(
+            desc(&Action::DcsPut(0x41)),
+            "terminal.Parser.Action{ .dcs_put = 0x41 }"
+        );
+        assert_eq!(
+            desc(&Action::DcsUnhook),
+            "terminal.Parser.Action{ .dcs_unhook = void }"
+        );
+        assert_eq!(
+            desc(&Action::ApcStart),
+            "terminal.Parser.Action{ .apc_start = void }"
+        );
+        assert_eq!(
+            desc(&Action::ApcPut(0x1b)),
+            "terminal.Parser.Action{ .apc_put = 0x1b }"
+        );
+        assert_eq!(
+            desc(&Action::ApcEnd),
+            "terminal.Parser.Action{ .apc_end = void }"
+        );
     }
 
     #[test]
