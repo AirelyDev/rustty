@@ -126,6 +126,17 @@ impl From<rustty_config::config_struct::LoadError> for Error {
     }
 }
 
+/// `theme.LocationIterator.next`'s `error.OutOfMemory` (its `Location.dir`
+/// remapping of `xdg.config`'s `error.BufferTooSmall`), folded into
+/// `list_themes`' `run` `!u8` by `while (try it.next())` (S-15, N140 (a)).
+impl From<rustty_config::theme::Error> for Error {
+    fn from(e: rustty_config::theme::Error) -> Self {
+        match e {
+            rustty_config::theme::Error::OutOfMemory => Error::OutOfMemory,
+        }
+    }
+}
+
 impl From<rustty_os::xdg::DirError> for Error {
     fn from(e: rustty_os::xdg::DirError) -> Self {
         Error::Xdg(e)

@@ -3555,6 +3555,33 @@ does for `Config.loadFile`), and print through that.
     that every consumer then handles, and `rustty-cli`'s `list_themes` would need the same.
   - (b) the C-API `err=` sites print the Rust `Debug` form (`FileLoad(BufferTooSmall)`, by
     reading), not `error.BufferTooSmall`.
+- **CLOSED by task S-15 (2026-09-24, N292)**, both halves:
+  - (a) `theme::Location::dir` now returns `Result<Option<Vec<u8>>, theme::Error>` and maps
+    `DirError::BufferTooSmall` to `Error::OutOfMemory` (`theme.zig:51` at `20abdb50a`); every other
+    `xdg::config` error is still `None` (`else => return null`). `LocationIterator::next` and
+    `theme::open` pass it on (`try`); `Config::load_theme` returns it as the new
+    `LoadError::OutOfMemory`, so `finalize` fails as the reference's does, before any diagnostic is
+    appended; `rustty-cli`'s `list_themes` folds it into `Error::OutOfMemory`. Tests:
+    `tests/load_path_errors_propagate.rs::theme_user_dir_buffer_too_small_is_out_of_memory` (dir,
+    next, open, finalize, and the rendered `error.OutOfMemory`) with the short-`HOME` control
+    `theme_user_dir_resolves_with_a_short_home`; `list_themes::r13_flush_tests::
+    a_home_too_long_for_the_xdg_lookup_is_out_of_memory` (re-executed child, env cleared, 1101-byte
+    `HOME`). Negative controls, one at a time: `BufferTooSmall => Ok(None)` fails at "Location.dir
+    (.user)" (`Err(OutOfMemory)` vs `Ok(None)`); `load_theme` swallowing the error fails at
+    "Config.finalize must return OutOfMemory, got Ok(())"; `list_themes` swallowing it fails with
+    "got Ok(1)".
+  - (b) the `LoadError` rendering (`error.<Name>`) moved from `rustty-cli::zig_error::load_error`
+    to `rustty_config::zig_error::load_error` (the CLI helper delegates), and the C-API sites use it:
+    the three `error loading config`, `error loading config from file` and `error finalizing config`
+    sites print `zig_error::load_error(&err)`, `error finding trigger` prints `error.{InvalidFormat,
+    InvalidAction}`, and `error opening config in editor` renders its `FileLoadError` with
+    `openFileAbsolute`'s errno table (exact for `configPath`'s open; UNVERIFIED for the
+    `stat`/`openDir`/`createDirPath`/`createFileAbsolute` failures, whose Zig switches were not
+    re-derived). Tests: `c_api::log_site_tests::load_file_logs_...` now pins
+    `err=error.FileNotFound`; new `trigger_logs_the_zig_error_name` drives `err=error.InvalidAction`;
+    the structural test requires every site to go through `zig_error` and no `err={err:?}` to
+    remain. Negative control: the `load_file` site back to `{err:?}` fails both tests. Not changed:
+    `path={s}` is still rendered through `from_utf8_lossy` (the `log_err` sink takes a `String`).
 
 ## N150 — a third port of Zig's number parsers, now at the lowest layer (`rustty-zigstd::fmt`)
 
@@ -4436,6 +4463,16 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   `crates/rustty-apprt/src/gtk/winproto/blur_region.rs`; only `:58` (an insult with no fact) is a
   `gag-prose` row.
 - **state**: CLOSED (task tail-s8d).
+
+## N292 — theme lookup `BufferTooSmall` → `OutOfMemory`, and the C API's `err=` form (N140 closed)
+
+- **id**: N292. Not a ledger row: the closure of NEW-FINDINGS N140 (a) and (b) (task S-15, item B).
+- **severity**: low. **kind**: behavioral-difference (error identity and propagation; log text).
+- **what / fix / tests / negative controls**: recorded under N140 ("CLOSED by task S-15").
+- **files**: `crates/rustty-config/src/{theme.rs,config_struct.rs,zig_error.rs,c_api.rs,lib.rs}`,
+  `crates/rustty-config/tests/load_path_errors_propagate.rs`,
+  `crates/rustty-cli/src/{rustty.rs,zig_error.rs,list_themes.rs}`.
+- **state**: CLOSED (task S-15).
 
 ## N293 — `readthread_pipeline_shuts_down_cleanly_from_both_stages` bounded a live drain with a wall clock
 

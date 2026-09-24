@@ -313,7 +313,7 @@ fn run_opts(opts: Options) -> Result<u8, Error> {
     let mut it = LocationIterator::new();
 
     // while (try it.next()) |loc| {
-    while let Some(loc) = it.next() {
+    while let Some(loc) = it.next()? {
         // var dir = std.fs.cwd().openDir(loc.dir, .{ .iterate = true }) catch |err| switch (err) {
         //     error.FileNotFound => continue,
         //     else => {
@@ -3228,6 +3228,61 @@ mod r13_flush_tests {
                 "No themes found, check to make sure that the themes were installed correctly."
             ),
             "the no-themes message is missing from stderr:\n{err}"
+        );
+    }
+
+    const OOM_CHILD: &str = "RUSTTY_S15_LIST_THEMES_OOM_CHILD";
+
+    /// NEW-FINDINGS N140 (a), task S-15: `while (try it.next())` passes on
+    /// `theme.Location.dir`'s `error.OutOfMemory` (its remapping of
+    /// `xdg.config`'s `error.BufferTooSmall`, a `$HOME` longer than the XDG
+    /// lookup's 1024-byte buffer) out of `run`. The port's iterator returned
+    /// `None` and `run` went on to report "No themes found". Re-executed so the
+    /// child's captured environment has only the long `HOME`.
+    #[test]
+    fn a_home_too_long_for_the_xdg_lookup_is_out_of_memory() {
+        if std::env::var_os(OOM_CHILD).is_some() {
+            let opts = Options {
+                plain: true,
+                ..Options::default()
+            };
+            let result = run_opts(opts);
+            assert!(
+                matches!(result, Err(Error::OutOfMemory)),
+                "expected error.OutOfMemory from the theme location lookup, got {result:?}"
+            );
+            println!("s15: list_themes returned error.OutOfMemory");
+            return;
+        }
+        let home = format!("/{}", "h".repeat(1100));
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "list_themes::r13_flush_tests::a_home_too_long_for_the_xdg_lookup_is_out_of_memory",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env_clear()
+            .env(OOM_CHILD, "1")
+            .env("HOME", &home)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("re-exec the test binary");
+        let out = crate::test_util::wait_with_deadline(child, 60);
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            out.status.success(),
+            "the child failed:\n{stdout}\n{stderr}"
+        );
+        assert!(
+            stdout.contains("s15: list_themes returned error.OutOfMemory"),
+            "the child did not reach its assertion:\n{stdout}\n{stderr}"
+        );
+        assert!(
+            !stderr.contains("No themes found"),
+            "run went on past the failed lookup:\n{stderr}"
         );
     }
 }
