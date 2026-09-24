@@ -83,6 +83,9 @@ impl<'a> ArgIteratorGeneral<'a> {
     /// Returns a slice of the internal buffer that contains the next argument.
     /// Returns null when it reaches the end.
     // pub fn next(self: *Self) ?[:0]const u8 {
+    // PARITY: named `next` to match the reference's iterator method (the
+    // `SliceIterator` precedent in args.rs).
+    #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> Option<&[u8]> {
         // if (!self.skipWhitespace()) {
         //     return null;

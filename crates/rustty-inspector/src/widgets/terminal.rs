@@ -1275,28 +1275,6 @@ const MODES: &[(Mode, &CStr)] = &[
     (Mode::KittyPasteEvents, c"kitty_paste_events"),
 ];
 
-#[cfg(test)]
-mod tests {
-    use super::{Mode, MODES};
-
-    /// Parity S108-F1: `modesTable` iterates every field of `terminal.Mode`
-    /// (`terminal.zig:591-616`), so the hand-expanded table must be exactly
-    /// `Mode::all()` (the enum's declaration order), and each name must be the
-    /// field name, which for these modes is the one the reference spells.
-    #[test]
-    fn modes_table_lists_every_mode_in_declaration_order() {
-        let table: Vec<Mode> = MODES.iter().map(|&(m, _)| m).collect();
-        let all: Vec<Mode> = Mode::all().collect();
-        assert_eq!(all, table);
-        // `grep -c '\.name = ' src/terminal/modes.zig` at the pin: 43.
-        assert_eq!(43, table.len());
-
-        let name = |m: Mode| MODES.iter().find(|&&(x, _)| x == m).unwrap().1;
-        assert_eq!(c"report_visibility", name(Mode::ReportVisibility));
-        assert_eq!(c"kitty_paste_events", name(Mode::KittyPasteEvents));
-    }
-}
-
 /// Table of terminal modes.
 // fn modesTable(t: *Terminal) void {
 //
@@ -1666,5 +1644,27 @@ fn mouse_shape_name(shape: MouseShape) -> &'static CStr {
         MouseShape::NwseResize => c"nwse_resize",
         MouseShape::ZoomIn => c"zoom_in",
         MouseShape::ZoomOut => c"zoom_out",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Mode, MODES};
+
+    /// Parity S108-F1: `modesTable` iterates every field of `terminal.Mode`
+    /// (`terminal.zig:591-616`), so the hand-expanded table must be exactly
+    /// `Mode::all()` (the enum's declaration order), and each name must be the
+    /// field name, which for these modes is the one the reference spells.
+    #[test]
+    fn modes_table_lists_every_mode_in_declaration_order() {
+        let table: Vec<Mode> = MODES.iter().map(|&(m, _)| m).collect();
+        let all: Vec<Mode> = Mode::all().collect();
+        assert_eq!(all, table);
+        // `grep -c '\.name = ' src/terminal/modes.zig` at the pin: 43.
+        assert_eq!(43, table.len());
+
+        let name = |m: Mode| MODES.iter().find(|&&(x, _)| x == m).unwrap().1;
+        assert_eq!(c"report_visibility", name(Mode::ReportVisibility));
+        assert_eq!(c"kitty_paste_events", name(Mode::KittyPasteEvents));
     }
 }

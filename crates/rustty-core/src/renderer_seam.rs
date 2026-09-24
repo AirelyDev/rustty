@@ -2135,22 +2135,6 @@ fn cursor_blink_interval_for(running_on_valgrind: usize) -> u64 {
     CURSOR_BLINK_INTERVAL
 }
 
-#[cfg(test)]
-mod cursor_blink_interval_tests {
-    use super::{cursorBlinkInterval, cursor_blink_interval_for};
-
-    /// Parity S114-F1: under Valgrind (one or more) the interval is five
-    /// times `CURSOR_BLINK_INTERVAL` (`Thread.zig:735-748`); natively it is
-    /// the plain 600 ms, and this test binary runs natively.
-    #[test]
-    fn cursor_blink_interval_is_five_times_longer_under_valgrind() {
-        assert_eq!(600, cursor_blink_interval_for(0));
-        assert_eq!(3000, cursor_blink_interval_for(1));
-        assert_eq!(3000, cursor_blink_interval_for(2));
-        assert_eq!(600, cursorBlinkInterval());
-    }
-}
-
 /// Schedules incremental terminal compression after renderer activity stops.
 ///
 /// This owns all renderer-specific compression state. The terminal decides
@@ -3199,5 +3183,21 @@ mod thread_diagnostics_tests {
             "{ .search_selected_match = null }",
             MessageDbg(&M::SearchSelectedMatch(None)).to_string()
         );
+    }
+}
+
+#[cfg(test)]
+mod cursor_blink_interval_tests {
+    use super::{cursorBlinkInterval, cursor_blink_interval_for};
+
+    /// Parity S114-F1: under Valgrind (one or more) the interval is five
+    /// times `CURSOR_BLINK_INTERVAL` (`Thread.zig:735-748`); natively it is
+    /// the plain 600 ms, and this test binary runs natively.
+    #[test]
+    fn cursor_blink_interval_is_five_times_longer_under_valgrind() {
+        assert_eq!(600, cursor_blink_interval_for(0));
+        assert_eq!(3000, cursor_blink_interval_for(1));
+        assert_eq!(3000, cursor_blink_interval_for(2));
+        assert_eq!(600, cursorBlinkInterval());
     }
 }
