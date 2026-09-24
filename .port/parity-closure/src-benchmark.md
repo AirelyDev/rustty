@@ -11,7 +11,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** Args::String splits on whitespace instead of std.process.ArgIteratorGeneral (no quote/backslash handling)
   - **Oracle:** `src/benchmark/cli.zig:99-106` → **Rustty:** `crates/rustty-bench/src/cli.rs:303-319`
   - **Audit's suggested fix:** Move the `ArgIteratorGeneral` port from rustty-config/command.rs into a leaf crate rustty-bench can depend on (rustty-args or rustty-zigstd) and use it for `Args::String` in both rustty-bench and rustty-synthetic.
-- [ ] **S62-F2** · CONFIRMED · `LOG` · missing-branch
+- [x] **S62-F2** · CONFIRMED · `LOG` · missing-branch
   - **What:** cli::main does not call global.init(.{ .tool = minimal }) — no process init (logging, GHOSTTY_LOG, rlimits, locale, onig/glslang, resources dir, signals)
   - **Oracle:** `src/benchmark/cli.zig:54-60` → **Rustty:** `crates/rustty-bench/src/cli.rs:201-208`
   - **Audit's suggested fix:** Call the rustty-global process-init path (a `tool` variant that skips app-action detection but performs the rest of `init`) from `cli::main`, or document each skipped side effect as an accepted divergence.

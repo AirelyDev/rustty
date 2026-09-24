@@ -7,7 +7,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
 
 ## Medium (1)
 
-- [ ] **S121-F1** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S121-F1** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** Kitty image id drawn as u64 instead of u32 — same-seed output differs from oracle
   - **Oracle:** `src/synthetic/Kitty.zig:49-53` → **Rustty:** `crates/rustty-synthetic/src/kitty.rs:82-88`
   - **Audit's suggested fix:** Add `impl_uint_prim!(u32, 32, 4);` in rand.rs and change kitty.rs:88 to `self.rand.int_range_at_most::<u32>(1, 1_000_000)`; add a golden test pinning the first generated sequence for a fixed seed against the Zig output.
