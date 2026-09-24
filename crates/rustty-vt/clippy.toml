@@ -10,6 +10,17 @@
 # `try_` forms) instead. std's `Vec` methods are NOT banned: only the
 # allocator_api2 paths below match.
 #
+# NOT BANNABLE (residual, parity tail S7-12b review F8): allocator_api2's
+# `Extend` impls (`v.extend(src.iter().copied())`, `v.extend(src)`) run the
+# same per-element, capacity-checked loop; neither `Extend<T>` nor
+# `Extend<&T>` is specialized for slices (allocator-api2 0.2.21
+# stable/vec/mod.rs). clippy cannot name a trait-impl method:
+# `allocator_api2::vec::Vec::extend` is rejected as "does not refer to a
+# reachable function", and banning `core::iter::Extend::extend` would ban every
+# std container too. So `extend` from a slice onto an allocator_api2 `Vec` must
+# be written `extend_copy` by hand, and reviews of the S-7 container work
+# (S7-3..S7-7, RenderState in S7-5 especially) must check for it.
+#
 # Keep this file byte-identical to crates/rustty-vt-c/clippy.toml;
 # `.port/tools/gates/check_vt_alloc_vec_ban.sh` checks both and self-tests
 # that the ban fires.

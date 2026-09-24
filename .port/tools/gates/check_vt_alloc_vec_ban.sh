@@ -20,9 +20,16 @@
 #
 #   1. CONFIG arm: both clippy.toml files exist, are byte-identical, and name
 #      both banned paths.
-#   2. ESCAPE arm: no `allow(clippy::disallowed_methods)` (or `expect`) in
-#      either crate.
-#   3. --self-test (FIRES arm): a throwaway crate outside the workspace
+#   2. ESCAPE arm (`check_vt_alloc_vec_ban_escape.py`): nothing may switch the
+#      lint off. RED on any mention of `disallowed_methods`, `clippy::style` or
+#      `clippy::all` in either crate's .rs files (allow/expect, combined lists,
+#      multi-line and inner attributes, cfg_attr), on allow/expect(warnings), on
+#      a crate `[lints]` table other than `workspace = true`, and on the
+#      workspace `[workspace.lints.clippy]` allowing disallowed_methods, style or
+#      all. The ban itself also cannot see `Extend::extend` (see clippy.toml).
+#   3. --self-test: the ESCAPE arm's own self-test (a clean synthetic tree
+#      passes; eleven planted spellings and a tree without the crates each go
+#      RED), then the FIRES arm: a throwaway crate outside the workspace
 #      (`fixtures/vt_alloc_vec_ban.rs`) is linted with each crate's config
 #      (CLIPPY_CONF_DIR). EXACTLY the two `BANNED` lines must be reported, at
 #      their line numbers, and std `Vec`'s same-named methods must not be.
@@ -61,13 +68,12 @@ config_arm() {
   echo "  ok      config: both clippy.toml files ban ${#BANNED_PATHS[@]} paths, identical"
 }
 
+ESCAPE_PY=".port/tools/gates/check_vt_alloc_vec_ban_escape.py"
+
 escape_arm() {
-  local hits
-  hits="$(grep -rnE '(allow|expect)\((clippy::)?disallowed_methods' \
-    crates/rustty-vt crates/rustty-vt-c --include='*.rs' || true)"
-  [ -z "$hits" ] || fail "the ban is suppressed:
-$hits"
-  echo "  ok      escape: no allow/expect(clippy::disallowed_methods) in the vt crates"
+  command -v python3 >/dev/null 2>&1 || blocked "python3 not on PATH"
+  python3 "$ESCAPE_PY" "$ROOT" || fail "the ban is suppressed (see ESCAPE lines above)"
+  echo "  ok      escape: nothing in the vt crates or the workspace lints switches the ban off"
 }
 
 # lint_fixture <conf-dir> -> prints the line numbers clippy flags as
@@ -90,6 +96,7 @@ lint_fixture() {
 }
 
 self_test() {
+  python3 "$ESCAPE_PY" --self-test || fail "the ESCAPE arm's self-test failed"
   command -v cargo >/dev/null 2>&1 || blocked "cargo not on PATH"
   [ -f "$FIXTURE" ] || fail "$FIXTURE is missing"
   WORK="$(mktemp -d "${TMPDIR:-/tmp}/g-vtalloc.XXXXXX")" || blocked "mktemp failed"

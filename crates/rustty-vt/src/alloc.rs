@@ -326,6 +326,11 @@ fn dangling(layout: Layout) -> NonNull<[u8]> {
 }
 
 /// `rawAlloc` (skipped for zero bytes, as `Allocator.alloc` skips it).
+///
+/// PORT NOTE (W36-B06): every C-arm call passes `ret_addr = 0` where Zig passes
+/// `@returnAddress()` through `rawAlloc`/`rawResize`/`rawRemap`/`rawFree` to the
+/// C vtable's `ret_addr`. Stable Rust has no return-address intrinsic, and the
+/// argument is only a hint in the Zig allocator contract.
 #[inline(never)]
 fn c_allocate(c: NonNull<CAllocator>, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
     if layout.size() == 0 {
@@ -471,7 +476,9 @@ unsafe fn c_resize(c: NonNull<CAllocator>, ptr: NonNull<u8>, old: Layout, new_le
 /// `Vec`s for allocator_api2's naively cost +81% on `screen-clone.render`; these
 /// helpers remove all of it (S-7a). The slow methods are banned in the vt
 /// crates by clippy `disallowed-methods` (`crates/rustty-vt/clippy.toml`, gate
-/// G-VTALLOC).
+/// G-VTALLOC). allocator_api2's `Extend` impls (`v.extend(slice)`,
+/// `v.extend(slice.iter().copied())`) are the same per-element loop but cannot
+/// be banned by path (a trait-impl method); use `extend_copy` for them too.
 pub trait CopyVecExt<T: Copy> {
     /// `extend_from_slice` as one `memcpy`. Aborts on allocation failure,
     /// like the std method (use [`try_extend_copy`](Self::try_extend_copy) at a
@@ -583,13 +590,20 @@ impl<T, A: ApiAllocator> TryPushExt<T> for allocator_api2::vec::Vec<T, A> {
 /// Compiled for this crate's tests and, through the `test-allocators` feature,
 /// for dependents' tests (rustty-vt-c enables it as a dev-dependency). Never
 /// in a production build.
+///
+/// SINGLE-THREAD ONLY: [`FailingAllocator`] and [`CountingAllocator`] keep
+/// their state in `Cell`s behind the C `ctx` pointer, so they are not `Sync`.
+/// A `VtAllocator` over one of them is nevertheless `Send + Sync` (the handle
+/// cannot see what it points at), so a test must not move an object built over
+/// a test allocator to another thread, or use it from two threads at once.
 #[cfg(any(test, feature = "test-allocators"))]
 pub mod testing {
     use super::VtAllocator;
-    use core::cell::Cell;
+    use core::cell::{Cell, Ref, RefCell};
     use core::ffi::c_void;
     use core::ptr::NonNull;
     use rustty_lib::allocator::{Allocator as CAllocator, VTable};
+    use std::backtrace::Backtrace;
 
     /// A C allocator over the Rust global heap, the port's `std.testing.allocator`
     /// for the wrappers below (leaks are Miri's job, R6).
@@ -663,7 +677,7 @@ pub mod testing {
     /// Call the wrapped allocator's vtable.
     macro_rules! internal {
         ($s:expr, $f:ident($($arg:expr),*)) => {{
-            let c = &$s.internal;
+            let c = &$s.internal_allocator;
             // SAFETY: the internal allocator is valid for the wrapper's life
             // (the constructor's contract).
             unsafe { ((*c.vtable).$f)(c.ctx, $($arg),*) }
@@ -676,17 +690,23 @@ pub mod testing {
     /// conditions are handled correctly.
     ///
     /// PORT NOTE: the fields are `Cell`s because the C vtable reaches the state
-    /// through a shared `ctx` pointer. `stack_addresses`/`getStackTrace` are
-    /// not ported: stable Rust has no `@returnAddress()` and the C ABI carries
-    /// `ret_addr = 0` (the documented W36-B06 residual).
+    /// through a shared `ctx` pointer. Zig's `stack_addresses:
+    /// [num_stack_frames]usize` (the current stack captured at the first
+    /// induced failure, starting at the failing call's `return_address`) is
+    /// `stack_trace`, a `std::backtrace::Backtrace` force-captured at the same
+    /// moment; `getStackTrace` is `get_stack_trace`. The capture starts in this
+    /// callback rather than at the caller's return address (the C ABI carries
+    /// `ret_addr = 0`, W36-B06), so it shows a few more frames at the top. Zig's
+    /// fixed 16-frame buffer has no counterpart: the backtrace is unbounded.
     pub struct FailingAllocator {
         pub alloc_index: Cell<usize>,
         pub resize_index: Cell<usize>,
-        internal: CAllocator,
+        internal_allocator: CAllocator,
         pub allocated_bytes: Cell<usize>,
         pub freed_bytes: Cell<usize>,
         pub allocations: Cell<usize>,
         pub deallocations: Cell<usize>,
+        pub stack_trace: RefCell<Option<Backtrace>>,
         pub has_induced_failure: Cell<bool>,
         pub fail_index: usize,
         pub resize_fail_index: usize,
@@ -720,13 +740,15 @@ pub mod testing {
         /// wrapper is used.
         pub unsafe fn init(internal_allocator: CAllocator, config: Config) -> FailingAllocator {
             FailingAllocator {
-                internal: internal_allocator,
+                internal_allocator,
                 alloc_index: Cell::new(0),
                 resize_index: Cell::new(0),
                 allocated_bytes: Cell::new(0),
                 freed_bytes: Cell::new(0),
                 allocations: Cell::new(0),
                 deallocations: Cell::new(0),
+                // .stack_addresses = undefined,
+                stack_trace: RefCell::new(None),
                 has_induced_failure: Cell::new(false),
                 fail_index: config.fail_index,
                 resize_fail_index: config.resize_fail_index,
@@ -737,6 +759,18 @@ pub mod testing {
         pub fn over_heap(config: Config) -> FailingAllocator {
             // SAFETY: `heap()` is a static vtable over the global heap.
             unsafe { FailingAllocator::init(heap(), config) }
+        }
+
+        /// Only valid once `has_induced_failure == true`
+        ///
+        /// `getStackTrace`: the stack captured at the first induced failure.
+        pub fn get_stack_trace(&self) -> Ref<'_, Backtrace> {
+            // std.debug.assert(self.has_induced_failure);
+            debug_assert!(self.has_induced_failure.get());
+            Ref::map(self.stack_trace.borrow(), |t| {
+                t.as_ref()
+                    .expect("get_stack_trace before any induced failure")
+            })
         }
 
         /// `allocator()`: the C allocator over this state. `self` must stay at
@@ -769,6 +803,9 @@ pub mod testing {
         let s = unsafe { fa(ctx) };
         if s.alloc_index.get() == s.fail_index {
             if !s.has_induced_failure.get() {
+                // const st = std.debug.captureCurrentStackTrace(.{ .first_address = return_address }, &self.stack_addresses);
+                // @memset(self.stack_addresses[@min(st.return_addresses.len, self.stack_addresses.len)..], 0);
+                *s.stack_trace.borrow_mut() = Some(Backtrace::force_capture());
                 s.has_induced_failure.set(true);
             }
             return core::ptr::null_mut();
@@ -850,7 +887,7 @@ pub mod testing {
     ///
     /// Rust-only test glue (the routing evidence of the S-7 design).
     pub struct CountingAllocator {
-        internal: CAllocator,
+        internal_allocator: CAllocator,
         pub alloc_calls: Cell<usize>,
         pub resize_calls: Cell<usize>,
         pub remap_calls: Cell<usize>,
@@ -871,7 +908,7 @@ pub mod testing {
         /// wrapper is used.
         pub unsafe fn init(internal_allocator: CAllocator) -> CountingAllocator {
             CountingAllocator {
-                internal: internal_allocator,
+                internal_allocator,
                 alloc_calls: Cell::new(0),
                 resize_calls: Cell::new(0),
                 remap_calls: Cell::new(0),
@@ -1051,17 +1088,49 @@ mod tests {
     }
 
     #[test]
-    fn global_arm_makes_no_c_calls() {
-        // Negative control for the routing tests: the Global arm never reaches
-        // any C vtable (a C allocator that was never handed out stays at 0).
+    fn dispatch_follows_the_handle() {
+        // The same workload through each arm. Through the C arm every block
+        // comes from, and goes back to, the counting allocator; through the
+        // Global arm the handle carries no C allocator at all, so the same
+        // counter stays at 0 while the vector still grows. (Review S7-12 F5:
+        // the earlier Global-only version could not fail.)
+        fn workload(h: VtAllocator) -> usize {
+            let mut v: AVec<u8, VtAllocator> = AVec::new_in(h);
+            v.extend_copy(&[1, 2, 3]);
+            v.resize_copy(1000, 7);
+            v.shrink_to_fit();
+            assert_eq!(
+                *v.allocator(),
+                h,
+                "the vector is bound to the handle it was given"
+            );
+            assert_eq!((v[0], v[999], v.len()), (1, 7, 1000));
+            v.capacity()
+        }
         let counting = CountingAllocator::over_heap();
-        let mut v: AVec<u8, VtAllocator> = AVec::new_in(VtAllocator::GLOBAL);
-        v.extend_copy(&[1, 2, 3]);
-        v.resize_copy(1000, 7);
-        v.shrink_to_fit();
-        drop(v);
-        assert_eq!(counting.alloc_calls.get(), 0);
-        assert_eq!(counting.free_calls.get(), 0);
+        let c = counting.allocator();
+        with_handle(&c, |h| {
+            assert!(workload(h) >= 1000);
+        });
+        let c_calls = counting.alloc_calls.get();
+        assert!(
+            c_calls >= 1,
+            "the C arm allocated through the caller's vtable"
+        );
+        assert_eq!(
+            counting.free_calls.get(),
+            c_calls,
+            "and freed every block there"
+        );
+        assert_eq!(counting.live_bytes.get(), 0);
+
+        assert_eq!(VtAllocator::GLOBAL.c_allocator(), None);
+        assert!(workload(VtAllocator::GLOBAL) >= 1000);
+        assert_eq!(
+            counting.alloc_calls.get(),
+            c_calls,
+            "the Global arm made no C call"
+        );
     }
 
     #[test]
@@ -1415,6 +1484,32 @@ mod tests {
             assert_eq!(s.allocations.get(), 3);
             assert_eq!(s.deallocations.get(), 3);
         }
+    }
+
+    #[test]
+    fn failing_allocator_captures_the_stack_at_the_first_induced_failure() {
+        let f = FailingAllocator::over_heap(Config {
+            fail_index: 1,
+            ..Config::default()
+        });
+        let c = f.allocator();
+        with_handle(&c, |a| {
+            let p = a.allocate(l(8, 1)).unwrap();
+            assert!(!f.has_induced_failure.get());
+            assert!(
+                f.stack_trace.borrow().is_none(),
+                "nothing captured before a failure"
+            );
+            assert!(a.allocate(l(8, 1)).is_err());
+            assert!(f.has_induced_failure.get());
+            let first = format!("{:?}", *f.get_stack_trace());
+            assert!(!first.is_empty());
+            // Only the FIRST induced failure captures (Zig: `if (!has_induced_failure)`).
+            assert!(a.allocate(l(8, 1)).is_err());
+            assert_eq!(format!("{:?}", *f.get_stack_trace()), first);
+            // SAFETY: live with this layout.
+            unsafe { a.deallocate(p.cast(), l(8, 1)) };
+        });
     }
 
     #[test]
