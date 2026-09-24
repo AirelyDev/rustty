@@ -7,13 +7,13 @@
 //! SkipZigTest cfg-gating, F3 DirectWrite / stage-3 Command precedent).
 //!
 //! PORT STATUS: ported (integration-tier stage 4). Every FUNCTION in this file
-//! is live. ONE thing is still deferred, and it is a field, not a function: the
-//! read thread's crash-sentry `thread_state.surface` (`:4528`), because the
-//! `AppMailbox` trait still exposes no `.surface` accessor — verified, not
-//! assumed: `rustty_crash::sentry::ThreadStateSurface` exists, but
-//! `rustty-apprt-api`'s `AppMailbox` has only `push`/`push_or_return`. That one
-//! deferral is stated at its own site and is not summarised here; see the next
-//! paragraph for why that distinction is the point of this correction.
+//! is live.
+//!
+//! CORRECTION (T-G, LEDGER S211-F2): this said "ONE thing is still deferred,
+//! and it is a field, not a function: the read thread's crash-sentry
+//! `thread_state.surface` ... because the `AppMailbox` trait still exposes no
+//! `.surface` accessor". It now does (`AppMailbox::crash_surface`), and both
+//! read-thread mains set the state (`crate::IoCrashThreadState`).
 //!
 //! CORRECTION (task-18, closes S211-F7). This block used to read: "ported
 //! … EXCEPT the xev event-loop wiring (threadEnter/threadExit/focusGained/
@@ -3151,7 +3151,12 @@ impl Subprocess {
                 // .ws_ypixel = @intCast(self.screen_size.height),
                 ws_ypixel: self.screen_size.height.try_into().unwrap(),
             })
-            .map_err(|_| crate::Error)?;
+            // (S212-F1: `pty.zig`'s `error.OpenptyFailed` keeps its name for
+            // `Thread.threadMain`'s failure screen; it was the opaque `Error`.)
+            .map_err(|e| match e {
+                ptypkg::PosixPtyError::OpenptyFailed => crate::Error::OpenptyFailed,
+                _ => crate::Error::Other,
+            })?;
             // self.pty = pty;
             // (PORT NOTE: the Rust `Pty` is not `Copy`; capture the slave/master fds
             // before the move — the reference's errdefer/defer read the local
@@ -4482,9 +4487,9 @@ impl ReadThread {
     // lifecycle, 0 tests — R1-safe): spawned only by the deferred threadEnter;
     // drives the deferred `Termio.processOutput` …". `threadMainPosix` is FULLY
     // IMPLEMENTED at :4482 below, `threadEnter` (:441) really does spawn it, and
-    // `Termio::processOutput` is live. The one clause still standing is the
-    // crash-sentry `thread_state` seam, which is flagged separately at its own
-    // site (:4528) — see that note, not this one.] Reference, verbatim:
+    // `Termio::processOutput` is live. The crash-sentry `thread_state` clause
+    // that stood after that was closed by T-G (S211-F2); see its site.]
+    // Reference, verbatim:
     //
     // fn threadMainPosix(fd: posix.fd_t, io: *termio.Termio, quit: posix.fd_t) void {
     //     // Always close our end of the pipe when we exit.
@@ -4638,12 +4643,12 @@ impl ReadThread {
         // };
         // defer crash.sentry.thread_state = null;
         //
-        // DEFERRED (cross-crate crash-sentry seam, not part of B3): the read
-        // thread's crash metadata sets `thread_state.surface = io.surface_mailbox
-        // .surface`, but the `AppMailbox` trait does not yet expose a `.surface`
-        // accessor (it lands with rustty-core's `Surface: ThreadStateSurface`
-        // impl — see `crash.sentry` + the ReadThread deferral note above).
-        // Preserved verbatim above; wired when core lands.
+        // CORRECTION (S211-F2): this was "DEFERRED (cross-crate crash-sentry
+        // seam, not part of B3) ... the `AppMailbox` trait does not yet expose a
+        // `.surface` accessor ... wired when core lands." It now does
+        // (`AppMailbox::crash_surface`); the guard's `Drop` is the `defer`,
+        // dropped before `_quit_closer`, the reference's LIFO order.
+        let _crash_thread_state = unsafe { crate::IoCrashThreadState::set(io) };
 
         // Set the fd to non-blocking so the gather stage can drain it
         // in a tight loop and fall back to poll for readiness. The
@@ -5400,8 +5405,8 @@ impl ReadThread {
         // crash.sentry.thread_state = .{ .type = .io, .surface = io.surface_mailbox.surface };
         // defer crash.sentry.thread_state = null;
         //
-        // PORT NOTE: identical to the posix arm — the crash-reporter thread-state
-        // seam is the same call there; see `threadMainPosix` for the ported form.
+        // (S211-F2: the same guard as the posix arm.)
+        let _crash_thread_state = unsafe { crate::IoCrashThreadState::set(io) };
 
         // var buf: [1024]u8 = undefined;
         let mut buf = [0u8; 1024];
@@ -7144,10 +7149,35 @@ mod tests {
             if let rustty_apprt_api::surface::Message::ChildExited(info) = &msg {
                 CHILD_EXITED_CODES.with(|v| v.borrow_mut().push(info.exit_code));
             }
+            // S211-F2: a bell rung by the pty output is pushed from the
+            // io-reader thread; record that thread's crash `thread_state`.
+            if let rustty_apprt_api::surface::Message::RingBell = &msg {
+                let state = rustty_crash::sentry::threadState();
+                BELL_THREAD_STATES
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push(state.map(|(ty, surface)| {
+                        (
+                            ty,
+                            std::ptr::addr_eq(surface, &crate::TEST_CRASH_SURFACE as *const _),
+                        )
+                    }));
+            }
             // Non-zero => "accepted" (matches a live queue's push return).
             Ok(1)
         }
+
+        fn crash_surface(&self) -> *const dyn rustty_crash::sentry::ThreadStateSurface {
+            &crate::TEST_CRASH_SURFACE
+        }
     }
+
+    /// The `(type, is TEST_CRASH_SURFACE)` crash `thread_state` of the thread
+    /// that pushed each `RingBell` through `TestMailbox` (`None` = no state).
+    #[cfg(target_os = "macos")]
+    #[allow(clippy::type_complexity)]
+    static BELL_THREAD_STATES: std::sync::Mutex<Vec<Option<(rustty_crash::sentry::Type, bool)>>> =
+        std::sync::Mutex::new(Vec::new());
 
     // A heap-pinned `Termio<TestMailbox>` test harness (blueprint §5 shape,
     // constructed by hand because `Termio::init` is deferred to B4). It carries a
@@ -7895,6 +7925,55 @@ mod tests {
         );
     }
 
+    /// S211-F2: the io-reader thread tags its crash metadata as an `io` thread
+    /// of the mailbox's surface (`Exec.zig:1411-1417`). A BEL written to the
+    /// pty makes the read thread push `RingBell`, and `TestMailbox` records
+    /// that thread's `thread_state`.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn readthread_sets_io_crash_thread_state() {
+        use std::time::{Duration, Instant};
+
+        let _serial = FORK_KAT_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        BELL_THREAD_STATES
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+        // The test thread itself has no crash state.
+        assert!(rustty_crash::sentry::threadState().is_none());
+
+        let (handle, master, slave, quit_write, t) = spawn_readthread_over_pty();
+        let w = unsafe { libc::write(slave, b"\x07".as_ptr().cast::<std::ffi::c_void>(), 1) };
+        assert_eq!(w, 1, "wrote BEL to the pty slave");
+
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let states = loop {
+            let states = BELL_THREAD_STATES
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
+            if !states.is_empty() || Instant::now() > deadline {
+                break states;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        };
+
+        let _ = unsafe { libc::write(quit_write, b"x".as_ptr().cast::<std::ffi::c_void>(), 1) };
+        handle.join().expect("read thread join");
+        unsafe {
+            libc::close(quit_write);
+            libc::close(master);
+            libc::close(slave);
+        }
+        t.teardown();
+
+        assert_eq!(
+            states,
+            vec![Some((rustty_crash::sentry::Type::Io, true))],
+            "the read thread's thread_state is .io with the mailbox's surface"
+        );
+    }
+
     /// S211-F6: when the gather thread cannot be spawned, `threadMainPosix`
     /// logs the reference's error and returns (`Exec.zig:1470-1479`); it does
     /// not panic. The spawn fails for real (a test-only switch asks for a stack
@@ -7942,6 +8021,8 @@ mod tests {
         t.teardown();
 
         assert!(ran.is_ok(), "threadMainPosix must return, not panic");
+        // S211-F2: its crash `thread_state` guard cleared on the way out.
+        assert!(rustty_crash::sentry::threadState().is_none());
         assert_eq!(errors.len(), 1, "one error logged: {errors:?}");
         assert!(
             errors[0].starts_with("read thread exiting, failed to spawn gather thread err="),

@@ -104,7 +104,29 @@ impl rustty_apprt_api::surface::AppMailbox for TestMailbox {
         // Non-zero => "accepted" (matches a live queue's push return).
         Ok(1)
     }
+
+    fn crash_surface(&self) -> *const dyn rustty_crash::sentry::ThreadStateSurface {
+        &NO_SURFACE
+    }
 }
+
+/// The surface `TestMailbox::crash_surface` reports (this KAT has no core
+/// `Surface`; nothing here reads it).
+struct NoSurface;
+
+impl rustty_crash::sentry::ThreadStateSurface for NoSurface {
+    fn screen_size(&self) -> (u32, u32) {
+        (0, 0)
+    }
+    fn grid_size(&self) -> (u32, u32) {
+        (0, 0)
+    }
+    fn cell_size(&self) -> (u32, u32) {
+        (0, 0)
+    }
+}
+
+static NO_SURFACE: NoSurface = NoSurface;
 
 /// The heap-pinned harness backing one live `Termio<TestMailbox>` plus the
 /// shared render state it points into. The `Termio` is heap-pinned because

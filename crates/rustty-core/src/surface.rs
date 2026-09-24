@@ -15272,6 +15272,12 @@ pub struct SurfaceMailbox<A: apprt::App + 'static> {
 impl<A: apprt::App + 'static> AppMailbox for SurfaceMailbox<A> {
     type Surface = *mut Surface<A>;
 
+    /// `self.surface` for termio's io-thread crash metadata (LEDGER S211-F2,
+    /// S212-F2); `Surface<A>` is the `ThreadStateSurface` impl above.
+    fn crash_surface(&self) -> *const dyn crash::sentry::ThreadStateSurface {
+        self.surface as *const Surface<A>
+    }
+
     /// Send a message to the surface.
     // pub fn push(
     //     self: Mailbox,

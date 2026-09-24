@@ -892,10 +892,12 @@ impl<M: AppMailbox> Termio<M> {
             // const inputs: ?[]const ThreadEnterState.Input = if (self.thread_enter_state) |v|
             //     try v.prepareInput() else null;
             let inputs: Option<Vec<Input>> = match unsafe { (*self_).thread_enter_state.as_mut() } {
-                // (PORT NOTE: `try v.prepareInput()` — the `InputNotFound` error maps to
-                // the opaque `crate::Error`; the reference bubbles it to
-                // `threadMain`'s error switch, unreachable while `Error` is opaque.)
-                Some(v) => Some(v.prepareInput().map_err(|_| Error)?),
+                // (PORT NOTE: `try v.prepareInput()` bubbles `error.InputNotFound`
+                // to `threadMain`'s error switch. S212-F1: it is now
+                // `Error::InputNotFound`; it used to be the opaque unit `Error`.)
+                Some(v) => Some(v.prepareInput().map_err(|e| match e {
+                    PrepareInputError::InputNotFound => Error::InputNotFound,
+                })?),
                 None => None,
             };
             // defer if (inputs) |items| {
@@ -1011,7 +1013,8 @@ impl<M: AppMailbox> Termio<M> {
                     // `threadExit` (which writes the quit pipe + joins) is the
                     // correct teardown.
                     unsafe { (*self_).backend.threadExit(&mut *data) };
-                    return Err(Error);
+                    // return error.InputFailed;  (S212-F1: was the opaque `Error`.)
+                    return Err(Error::InputFailed);
                 }
             }
 

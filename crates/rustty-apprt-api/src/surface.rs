@@ -322,6 +322,17 @@ pub trait AppMailbox {
         // contract mirrors the reference's `_ = ...push(msg, ...)`).
         self.push_or_return(msg, timeout).unwrap_or(0)
     }
+
+    /// `Mailbox.surface`, as the crash reporter sees it.
+    //
+    // PORT NOTE (LEDGER S211-F2, S212-F2): the reference's `Mailbox` is the
+    // struct `{ surface: *Surface, app: App.Mailbox }`, and termio's io and
+    // io-reader threads read the field for their crash metadata:
+    // `crash.sentry.thread_state = .{ .type = .io, .surface =
+    // io.surface_mailbox.surface }`. `Surface` is core's and apprt-api cannot
+    // name it, so the field is exposed through crash's seam trait. There is
+    // no default: every mailbox has a surface in the reference.
+    fn crash_surface(&self) -> *const dyn rustty_crash::sentry::ThreadStateSurface;
 }
 
 // DEFERRED (needs rustty-core `App`/`Surface`; see module doc). The reference

@@ -204,10 +204,29 @@ pub fn setThreadState<S: ThreadStateSurface + 'static>(state: ThreadState<S>) {
     }));
 }
 
+/// PORT NOTE: `crash.sentry.thread_state = .{ .type = ..., .surface = ... };`
+/// for a caller that reaches the surface through the seam trait object:
+/// termio's io and io-reader threads, whose surface is
+/// `io.surface_mailbox.surface` (`AppMailbox::crash_surface`). LEDGER S211-F2,
+/// S212-F2.
+pub fn setThreadStateDyn(type_: Type, surface: *const dyn ThreadStateSurface) {
+    THREAD_STATE.set(Some(ErasedThreadState { type_, surface }));
+}
+
 /// PORT NOTE: `crash.sentry.thread_state = null;` (the callers' paired
 /// `defer crash.sentry.thread_state = null`).
 pub fn clearThreadState() {
     THREAD_STATE.set(None);
+}
+
+/// The calling thread's `thread_state`: its type and surface, or `None`.
+///
+/// PORT NOTE: the read half of the reference's `pub threadlocal var
+/// thread_state`, which any code may read; `beforeSend` reads the thread-local
+/// directly. Added for LEDGER S211-F2 / S212-F2, whose tests check the value
+/// the termio threads set.
+pub fn threadState() -> Option<(Type, *const dyn ThreadStateSurface)> {
+    THREAD_STATE.get().map(|s| (s.type_, s.surface))
 }
 
 /// PORT NOTE: the reified error set of `init`'s `!void` — `std.Thread.spawn`'s

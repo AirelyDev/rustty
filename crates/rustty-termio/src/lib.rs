@@ -147,20 +147,103 @@ pub(crate) mod log_capture;
 
 /// PORT NOTE (GROWTH POINT, Rust-only glue): the reference termio methods
 /// return `!void`/`!T` — error unions whose error SETS are *inferred* from the
-/// concrete backend (`termio.Exec`, stage 4) and the xev loop (D6). Until they
-/// land, this opaque marker error types the seams (precedent:
-/// `rustty_apprt_api::ApprtError`); it gains the real error sets at the growth
-/// point.
+/// concrete backend (`termio.Exec`) and the xev loop. The port does not carry
+/// every member; it carries the ones some caller dispatches on, and `Other`
+/// for the rest (precedent: `rustty_apprt_api::ApprtError`).
+///
+/// The named members are the three `Thread.threadMain`'s failure screen
+/// switches on (`Thread.zig:157-207`): `OpenptyFailed` (`pty.zig`'s
+/// `Pty.open`), and `InputNotFound` / `InputFailed` (`Termio.threadEnter`'s
+/// configured `input`).
+//
+// CORRECTION (S212-F1): this was the unit struct `pub struct Error;` with no
+// discriminant, so `threadMain` could not tell the three apart and painted
+// every failure with the general message. The unit struct was also a VALUE,
+// `Error`, used as `Err(Error)` / `map_err(|_| Error)` at about 190 sites
+// across the workspace; the `Error` constant below keeps those meaning
+// `Error::Other`, so only the sites that produce a named member change.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Error;
+pub enum Error {
+    /// Any termio error `threadMain` does not single out.
+    Other,
+    /// `error.OpenptyFailed`: the system could not allocate a pty.
+    OpenptyFailed,
+    /// `error.InputNotFound`: a configured `input` path does not exist.
+    InputNotFound,
+    /// `error.InputFailed`: a configured `input` could not be read or queued.
+    InputFailed,
+}
+
+/// `Error::Other`, under the name the unit struct had (see the CORRECTION on
+/// [`Error`]).
+#[allow(non_upper_case_globals)]
+pub const Error: Error = Error::Other;
 
 impl core::fmt::Display for Error {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "termio operation failed")
+        match self {
+            Error::Other => write!(f, "termio operation failed"),
+            // `{}` of a Zig error prints its name.
+            Error::OpenptyFailed => write!(f, "error.OpenptyFailed"),
+            Error::InputNotFound => write!(f, "error.InputNotFound"),
+            Error::InputFailed => write!(f, "error.InputFailed"),
+        }
     }
 }
 
 impl std::error::Error for Error {}
+
+/// The io threads' crash metadata: `crash.sentry.thread_state = .{ .type =
+/// .io, .surface = io.surface_mailbox.surface };` on [`IoCrashThreadState::set`],
+/// and its `defer crash.sentry.thread_state = null;` as `Drop`. Used by
+/// `Thread.threadMain_` and both `ReadThread` mains (LEDGER S211-F2, S212-F2).
+pub(crate) struct IoCrashThreadState(());
+
+impl IoCrashThreadState {
+    /// # Safety
+    /// `io` points to a live `Termio` whose `surface_mailbox` is not being
+    /// written (it is set once, in `Termio.init`).
+    pub(crate) unsafe fn set<M: rustty_apprt_api::surface::AppMailbox>(
+        io: *const termio_impl::Termio<M>,
+    ) -> Self {
+        // Only the field is borrowed, never the whole `Termio`, which other
+        // threads reach through raw pointers too.
+        let mailbox: &M = unsafe { &*std::ptr::addr_of!((*io).surface_mailbox) };
+        rustty_crash::sentry::setThreadStateDyn(
+            rustty_crash::sentry::Type::Io,
+            mailbox.crash_surface(),
+        );
+        IoCrashThreadState(())
+    }
+}
+
+impl Drop for IoCrashThreadState {
+    fn drop(&mut self) {
+        rustty_crash::sentry::clearThreadState();
+    }
+}
+
+/// Test-only: the surface the crate's test `AppMailbox` doubles report from
+/// `crash_surface` (they have no core `Surface`).
+#[cfg(test)]
+pub(crate) struct TestCrashSurface;
+
+#[cfg(test)]
+impl rustty_crash::sentry::ThreadStateSurface for TestCrashSurface {
+    fn screen_size(&self) -> (u32, u32) {
+        (0, 0)
+    }
+    fn grid_size(&self) -> (u32, u32) {
+        (0, 0)
+    }
+    fn cell_size(&self) -> (u32, u32) {
+        (0, 0)
+    }
+}
+
+/// The one [`TestCrashSurface`]; tests compare `crash_surface` pointers to it.
+#[cfg(test)]
+pub(crate) static TEST_CRASH_SURFACE: TestCrashSurface = TestCrashSurface;
 
 // (test-support, Rust-only glue) Serialize this binary's fork-spawning KATs so
 // two never `fork()` concurrently: a `fork` snapshots EVERY open fd, so a

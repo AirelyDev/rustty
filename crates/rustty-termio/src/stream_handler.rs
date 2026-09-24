@@ -3910,6 +3910,10 @@ pub(crate) mod tests {
         > {
             Ok(1)
         }
+
+        fn crash_surface(&self) -> *const dyn rustty_crash::sentry::ThreadStateSurface {
+            &crate::TEST_CRASH_SURFACE
+        }
     }
 
     pub(crate) fn terminal_opts(
