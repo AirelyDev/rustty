@@ -16506,6 +16506,37 @@ mod tests {
             s.end_hyperlink();
             assert_eq!(screen_live, counting.live_bytes.get());
 
+            // Screen.clone: its PageList clone plus the pin remap
+            // (`TrackedPinsRemap.init(alloc)`). Baseline: the same PageList
+            // clone without a remap.
+            let top = point::Point::Screen(point::Coordinate::default());
+            let before = counting.alloc_calls.get();
+            let mut plain = pagelist::access::Clone {
+                top,
+                bot: None,
+                tracked_pins: None,
+            };
+            let mut pages = s.pages.clone(alloc, &mut plain).unwrap();
+            let pages_calls = counting.alloc_calls.get() - before;
+            pages.deinit();
+            drop(pages);
+            assert_eq!(screen_live, counting.live_bytes.get());
+
+            let before = counting.alloc_calls.get();
+            let mut cloned = s.clone(alloc, top, None).unwrap();
+            assert_eq!(
+                pages_calls + 1,
+                counting.alloc_calls.get() - before,
+                "Screen.clone = its PageList clone + the pin remap, through alloc"
+            );
+            cloned.deinit();
+            drop(cloned);
+            assert_eq!(
+                screen_live,
+                counting.live_bytes.get(),
+                "the clone frees everything it took"
+            );
+
             s.deinit();
             drop(s);
             assert_eq!(0, counting.live_bytes.get());

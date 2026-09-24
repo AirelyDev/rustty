@@ -19026,8 +19026,26 @@ fn pagelist_internals_route_through_the_allocator_handle() {
         preserved.deinit();
         assert_eq!(Some((len, align_log2)), counting.last_free.get());
 
-        // clone(alloc) with a pin remap: the clone's pools, its tracked-pin set
-        // and the remap map all come from `alloc`.
+        // clone(alloc): the clone's pools (sized to its page count) and its
+        // tracked-pin set. First without a pin remap, as the baseline...
+        let before = counting.alloc_calls.get();
+        let mut plain = super::access::Clone {
+            top: point::Point::Screen(point::Coordinate { x: 0, y: 0 }),
+            bot: None,
+            tracked_pins: None,
+        };
+        let mut baseline = s.clone(alloc, &mut plain).unwrap();
+        let clone_calls = counting.alloc_calls.get() - before;
+        assert_eq!(
+            4 + 2,
+            clone_calls,
+            "the clone's pools (4) and tracked-pin set (entries + index)"
+        );
+        baseline.deinit();
+
+        // ...then with one: exactly one more allocation, the remap map's
+        // table (`TrackedPinsRemap.init(alloc)`, grown by `putNoClobber`). The
+        // remapped viewport pin fits the clone's pin set as built.
         let before = counting.alloc_calls.get();
         let mut opts = super::access::Clone {
             top: point::Point::Screen(point::Coordinate { x: 0, y: 0 }),
@@ -19038,12 +19056,10 @@ fn pagelist_internals_route_through_the_allocator_handle() {
             )),
         };
         let mut cloned = s.clone(alloc, &mut opts).unwrap();
-        // The clone's pools (sized to its page count), its tracked-pin set
-        // and the remap map.
-        assert!(
-            counting.alloc_calls.get() >= before + 4 + 2 + 1,
-            "the clone's pools, pin set and remap ({} calls)",
-            counting.alloc_calls.get() - before
+        assert_eq!(
+            clone_calls + 1,
+            counting.alloc_calls.get() - before,
+            "the pin remap allocates through alloc"
         );
         drop(opts);
         cloned.deinit();
