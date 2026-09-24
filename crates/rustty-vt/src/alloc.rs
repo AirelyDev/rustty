@@ -201,6 +201,81 @@ extern "C" fn failing_remap(
 
 extern "C" fn failing_free(_: *mut core::ffi::c_void, _: *mut u8, _: usize, _: u8, _: usize) {}
 
+/// `std.heap.page_allocator` as a handle: every allocation is its own
+/// page-granular mapping (`rustty_os::page_allocator`), `resize` succeeds
+/// only for the same length and `remap` is refused (Zig's `PageAllocator`
+/// may do either in place; refusing is within the allocator contract, and
+/// callers fall back to alloc + copy + free).
+///
+/// PORT NOTE (parity tail S7-4): the handle's C arm over a process static
+/// vtable, like [`failing`]. Used where the reference names
+/// `std.heap.page_allocator` directly (the inspector's decode buffers). On
+/// Darwin the port's page allocator carries the PageList's VM tag, where the
+/// reference's generic `std.heap.page_allocator` is untagged.
+pub fn page_allocator() -> VtAllocator {
+    // SAFETY: a process static whose vtable forwards to the stateless page
+    // allocator.
+    unsafe { VtAllocator::from_c(NonNull::from(&PAGE.0)) }
+}
+
+static PAGE: SyncCAllocator = SyncCAllocator(CAllocator {
+    ctx: core::ptr::null_mut(),
+    vtable: &PAGE_VTABLE,
+});
+
+static PAGE_VTABLE: VTable = VTable {
+    alloc: page_alloc,
+    resize: page_resize,
+    remap: failing_remap,
+    free: page_free,
+};
+
+fn page_layout(len: usize, alignment: u8) -> Option<Layout> {
+    Layout::from_size_align(len, 1usize << alignment).ok()
+}
+
+extern "C" fn page_alloc(
+    _: *mut core::ffi::c_void,
+    len: usize,
+    alignment: u8,
+    _: usize,
+) -> *mut u8 {
+    let Some(layout) = page_layout(len, alignment) else {
+        return core::ptr::null_mut();
+    };
+    match ApiAllocator::allocate(&rustty_os::page_allocator::page_allocator(), layout) {
+        Ok(p) => p.as_ptr() as *mut u8,
+        Err(_) => core::ptr::null_mut(),
+    }
+}
+
+extern "C" fn page_resize(
+    _: *mut core::ffi::c_void,
+    _: *mut u8,
+    len: usize,
+    _: u8,
+    new_len: usize,
+    _: usize,
+) -> bool {
+    new_len == len
+}
+
+extern "C" fn page_free(
+    _: *mut core::ffi::c_void,
+    memory: *mut u8,
+    len: usize,
+    alignment: u8,
+    _: usize,
+) {
+    let (Some(layout), Some(ptr)) = (page_layout(len, alignment), NonNull::new(memory)) else {
+        return;
+    };
+    // SAFETY: `memory` is a live allocation of `layout` from `page_alloc`
+    // (the vtable contract: frees get the allocation's own length and
+    // alignment).
+    unsafe { ApiAllocator::deallocate(&rustty_os::page_allocator::page_allocator(), ptr, layout) };
+}
+
 // The type AND value spellings (see the module docs). A const and a type alias
 // of the same name live in different namespaces, exactly as a unit struct's
 // name does.
@@ -1648,6 +1723,26 @@ mod tests {
         // SAFETY: live with this layout.
         unsafe { VtAllocator::GLOBAL.deallocate(p.cast(), l(32, 1)) };
         assert_eq!(counting.resize_calls.get(), 2);
+    }
+
+    // Parity tail S7-4: the `std.heap.page_allocator` handle hands out
+    // page-aligned memory, grows by alloc + copy + free (its `remap` is
+    // refused) and frees with the allocation's own layout.
+    #[test]
+    fn page_allocator_handle_allocates_grows_and_frees() {
+        let h = page_allocator();
+        assert!(!h.is_global());
+        let page = l(4096, 4096);
+        let p = h.allocate(page).unwrap();
+        assert_eq!(0, p.as_ptr() as *mut u8 as usize % 4096);
+        // SAFETY: a fresh 4096-byte block.
+        unsafe { core::ptr::write_bytes(p.as_ptr() as *mut u8, 7, 4096) };
+        // SAFETY: the live block of `page`, grown to two pages.
+        let g = unsafe { h.grow(p.cast(), page, l(8192, 4096)) }.unwrap();
+        // SAFETY: the grown block keeps the first page's bytes.
+        assert_eq!(7, unsafe { *(g.as_ptr() as *mut u8).add(4095) });
+        // SAFETY: the live grown block.
+        unsafe { h.deallocate(g.cast(), l(8192, 4096)) };
     }
 
     #[test]
