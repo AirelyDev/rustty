@@ -1752,6 +1752,204 @@ mod tests {
         }
     }
 
+    /// rustty-only (task S-4b, review F2): `add_with_id_pure_ref_bump_target`
+    /// against `add_with_id` itself, in every arm. For each set state (built
+    /// the same way twice), `Some(x)` must mean the call returns the id `x`
+    /// (`None` when `x` is the requested id) and changes NOTHING but `x`'s
+    /// count by +1: `next_id`, `living`, `max_psl`, `psl_stats` and every
+    /// buffer byte are equal once that one reference is released again.
+    /// `None` must mean the call is NOT such a pure bump (an error, or some
+    /// other state change). The trim arm is the one the clone chain cannot
+    /// reach (its first call has already trimmed), so it is only covered here.
+    ///
+    /// NEGATIVE CONTROL: drop the predicate's trim guard -> the "dead top"
+    /// state claims a pure bump while the call trims (`next_id` differs).
+    #[test]
+    fn pure_ref_bump_target_matches_add_with_id_in_every_arm() {
+        type Build = fn(&mut TestSet, OffsetBuf) -> (u32, u16);
+
+        // Fill with distinct values from 100 until `next_id` reaches the cap.
+        unsafe fn fill_to_cap(set: &mut TestSet, base: OffsetBuf) {
+            let mut v = 100u32;
+            while (set.next_id as usize) < set.layout.cap {
+                unsafe { set.add(base, v) }.unwrap();
+                v += 1;
+            }
+        }
+
+        let states: &[(&str, usize, Option<bool>, Build)] = &[
+            ("live and equal", 8, Some(true), |s, b| unsafe {
+                let a = s.add(b, 11).unwrap();
+                (11, a)
+            }),
+            ("dead, value live elsewhere", 8, Some(true), |s, b| unsafe {
+                s.add(b, 11).unwrap();
+                let d = s.add(b, 22).unwrap();
+                s.add(b, 33).unwrap();
+                s.release(b, d);
+                (11, d)
+            }),
+            (
+                "dead, value absent (insert)",
+                8,
+                Some(false),
+                |s, b| unsafe {
+                    s.add(b, 11).unwrap();
+                    let d = s.add(b, 22).unwrap();
+                    s.add(b, 33).unwrap();
+                    s.release(b, d);
+                    (44, d)
+                },
+            ),
+            (
+                "alive not equal, value present, live top",
+                8,
+                Some(true),
+                |s, b| unsafe {
+                    let a = s.add(b, 11).unwrap();
+                    s.add(b, 22).unwrap();
+                    (22, a)
+                },
+            ),
+            (
+                "alive not equal, value present, dead top (trim)",
+                8,
+                Some(false),
+                |s, b| unsafe {
+                    let a = s.add(b, 11).unwrap();
+                    s.add(b, 22).unwrap();
+                    let top = s.add(b, 33).unwrap();
+                    s.release(b, top);
+                    (22, a)
+                },
+            ),
+            (
+                "alive not equal, value absent (insert)",
+                8,
+                Some(false),
+                |s, b| unsafe {
+                    let a = s.add(b, 11).unwrap();
+                    (22, a)
+                },
+            ),
+            (
+                "id >= next_id, value present",
+                8,
+                Some(true),
+                |s, b| unsafe {
+                    s.add(b, 11).unwrap();
+                    s.add(b, 22).unwrap();
+                    (22, 5)
+                },
+            ),
+            (
+                "id >= next_id, value absent (insert)",
+                8,
+                Some(false),
+                |s, b| unsafe {
+                    s.add(b, 11).unwrap();
+                    (22, 5)
+                },
+            ),
+            ("at cap, value present", 8, Some(true), |s, b| unsafe {
+                fill_to_cap(s, b);
+                (101, 1)
+            }),
+            (
+                "at cap, all live, value absent (OutOfMemory)",
+                8,
+                Some(false),
+                |s, b| unsafe {
+                    fill_to_cap(s, b);
+                    (7, 1)
+                },
+            ),
+            (
+                "at cap, below the living threshold, value absent (NeedsRehash)",
+                8,
+                Some(false),
+                |s, b| unsafe {
+                    fill_to_cap(s, b);
+                    // Release two ids that are not the top, so no trim reaps them.
+                    s.release(b, 1);
+                    s.release(b, 2);
+                    (7, 3)
+                },
+            ),
+            ("zero-capacity set", 0, Some(false), |_s, _b| (7, 1)),
+        ];
+
+        let mut claimed = 0;
+        for &(label, cap, expect_pure, build) in states {
+            let layout: Layout<u16> = Layout::init::<u32, u16>(cap);
+            let size = layout.total_size.max(1);
+            let alloc_layout =
+                core::alloc::Layout::from_size_align(size, TestSet::base_align()).unwrap();
+            // SAFETY: non-zero size; freed at the end of the iteration.
+            let buf = unsafe { std::alloc::alloc_zeroed(alloc_layout) };
+            assert!(!buf.is_null());
+            let base = OffsetBuf::init(buf);
+            // SAFETY: `buf` is a live, aligned allocation of `size` bytes and
+            // the base of every call below.
+            unsafe {
+                let mut set: TestSet = TestSet::init(base, layout, TestContext);
+                let (value, id) = build(&mut set, base);
+
+                let target = set.add_with_id_pure_ref_bump_target(base, &raw const value, id);
+
+                let bytes = |p: *mut u8| core::slice::from_raw_parts(p, size).to_vec();
+                let before = bytes(buf);
+                let hdr = |s: &TestSet| (s.next_id, s.living, s.max_psl, s.psl_stats);
+                let hdr_before = hdr(&set);
+
+                let result = set.add_with_id(base, value, id);
+                // Was the call a pure +1 on one id `y`, handing back `y`?
+                let pure_bump = match result {
+                    Err(_) => None,
+                    Ok(r) => {
+                        let y = r.unwrap_or(id);
+                        let pure = hdr(&set) == hdr_before
+                            && (y as usize) < set.layout.cap
+                            && set.ref_count(base, y) >= 2
+                            && {
+                                set.release(base, y);
+                                bytes(buf) == before
+                            };
+                        pure.then_some(y)
+                    }
+                };
+
+                match target {
+                    Some(x) => {
+                        claimed += 1;
+                        assert_eq!(
+                            Some(x),
+                            pure_bump,
+                            "{label}: predicate claimed a pure bump of {x}"
+                        );
+                        assert_eq!(
+                            result.unwrap(),
+                            if x == id { None } else { Some(x) },
+                            "{label}"
+                        );
+                    }
+                    None => {
+                        assert_eq!(None, pure_bump, "{label}: a pure bump the predicate missed")
+                    }
+                }
+                if let Some(p) = expect_pure {
+                    assert_eq!(
+                        p,
+                        target.is_some(),
+                        "{label}: state did not exercise its arm"
+                    );
+                }
+                std::alloc::dealloc(buf, alloc_layout);
+            }
+        }
+        assert_eq!(5, claimed);
+    }
+
     // ref: test "iterator visits live entries in ID order"
     #[test]
     fn iterator_visits_live_entries_in_ID_order() {
