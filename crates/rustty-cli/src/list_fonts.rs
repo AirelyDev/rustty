@@ -3,13 +3,16 @@
 //! PORTS: ghostty src/cli/list_fonts.zig (0t) — the `+list-fonts` action.
 //!
 //! Discovery is fully ported in `rustty-font-shaper` (the D1 shaper tier ABOVE
-//! `rustty-vt`+`rustty-font`): on macOS `font::Discover` = the CoreText
-//! discoverer (`discovery.rs`), `font::Library` = `NoopLibrary`; on Linux/BSD
-//! `font::Discover` = the Fontconfig discoverer, `font::Library` =
-//! `FreetypeLibrary`. In both cases the `DeferredFace::{family_name, name}`
-//! accessors read the discovered pattern/face. This is the real port, NOT a stub.
-//! The reference's `font.Discover == void` arm maps ONLY to the wasm `web_canvas`
-//! backend (no enumerable font list in the browser).
+//! `rustty-vt`+`rustty-font`) and follows `-Dfont-backend`: on the CoreText
+//! backends (the macOS default) `font::Discover` = the CoreText discoverer
+//! (`discovery.rs`); on `fontconfig_freetype` (the Linux/BSD default) the
+//! Fontconfig discoverer; on `freetype_windows` the Windows directory scan. In
+//! each case the `DeferredFace::{family_name, name}` accessors read the
+//! discovered pattern/face. This is the real port, NOT a stub. The reference's
+//! `font.Discover == void` arm (`discovery::DISCOVER_IS_VOID`) is the wasm
+//! `web_canvas` backend (no enumerable font list in the browser) and
+//! `-Dfont-backend=freetype` ("no font discovery"). (CORRECTION, S-14b: this
+//! said the void arm maps ONLY to wasm.)
 
 // const std = @import("std");
 // const Allocator = std.mem.Allocator;

@@ -260,12 +260,12 @@ impl CodepointResolver {
         // If we are regular, try looking for a fallback using discovery.
         // if (style == .regular and font.Discover != void) { ... }
         //
-        // PORT NOTE: `font.Discover != void` is comptime-true on the macOS/Linux
-        // parity backends (CoreText/Fontconfig), so this fallback block is active;
-        // the `== void` (freetype/web_canvas) case elides it. In the ported tests
+        // PORT NOTE: `font.Discover != void` is `!discovery::DISCOVER_IS_VOID`
+        // (false only for the `.freetype`/`.web_canvas` "no discovery"
+        // backends; S-14, N266 — it was folded to `true`). In the ported tests
         // `self.discover` is always null, so the `if (self.discover)` guard
         // short-circuits before any real discovery is performed.
-        if style == Style::Regular {
+        if style == Style::Regular && !crate::discovery::DISCOVER_IS_VOID {
             // log.debug("searching for a fallback font for cp={X}", .{cp});
             log::debug!(target: LOG_SCOPE, "searching for a fallback font for cp={cp:X}");
             'discover: {
@@ -447,8 +447,11 @@ impl CodepointResolver {
         // since the override is based on discovery to find the font.
         // if (comptime font.Discover == void) return null;
         //
-        // PORT NOTE: `font.Discover != void` on the parity backends, so this early
-        // return is elided.
+        // PORT NOTE (S-14, N266): live — it was elided while every native build
+        // had a real discoverer.
+        if crate::discovery::DISCOVER_IS_VOID {
+            return Ok(None);
+        }
 
         // Get our codepoint map. If we have no map set then we have no
         // codepoint overrides and we're done.
