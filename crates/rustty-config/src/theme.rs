@@ -104,25 +104,25 @@ impl Location {
     // pub fn dir(
     //     self: Location,
     //     arena_alloc: Allocator,
-    // ) error{OutOfMemory}!?[]const u8 {
+    // ) error{ OutOfMemory, Unexpected }!?[]const u8 {
+    //     var environ_map = try global.environMap();
+    //     defer environ_map.deinit();
     //
-    // PORT NOTE: allocation in Rust is infallible for the owned `String`/`Vec`
-    // collections used here, so the reference's `error{OutOfMemory}` set collapses
-    // away — `dir` returns `Option<Vec<u8>>` directly. The `BufferTooSmall`/iOS
-    // comptime error juggling in the `.user` arm exists only to remap the
-    // platform-specific `xdg.config` error set into `OutOfMemory`. The port
-    // treats every `xdg::config` error as "the XDG directory doesn't exist"
-    // (the reference's `else => return null`), including
-    // `DirError::BufferTooSmall`, which the reference maps to
-    // `error.OutOfMemory` instead: `dir` returning `Option` has no error to
-    // carry it (NEW-FINDINGS N140, the theme sibling).
+    // PORT NOTE: the error set is [`Error`]. Allocation in Rust aborts rather
+    // than failing, so the only `OutOfMemory` this can return is the `.user`
+    // arm's remapped `error.BufferTooSmall` (below); `error.Unexpected` comes
+    // from `global.environMap()`, whose port (`rustty_global::environ_map`) is
+    // infallible, so it has no variant.
     //
-    // CORRECTION (LEDGER S112-F11): this said "in Rust `xdg::config` returns the
-    // single `DirError::NoHomeDir`". Since S112-F11 it also returns
-    // `DirError::BufferTooSmall`.
-    pub fn dir(self) -> Option<Vec<u8>> {
+    // CORRECTION (S-15, NEW-FINDINGS N140 (a)): this returned
+    // `Option<Vec<u8>>` and treated every `xdg::config` error as "the XDG
+    // directory doesn't exist", including `DirError::BufferTooSmall`, which the
+    // reference maps to `error.OutOfMemory`. It now returns that error, and
+    // `LocationIterator::next`, `open`, `Config::load_theme`/`finalize` and
+    // `rustty-cli`'s `list_themes` pass it on as the reference's `try` does.
+    pub fn dir(self) -> Result<Option<Vec<u8>>, Error> {
         // return switch (self) {
-        match self {
+        Ok(match self {
             // .user => user: {
             Location::User => {
                 // const subdir = std.fs.path.join(arena_alloc, &.{
@@ -171,18 +171,29 @@ impl Location {
                     let _ = subdir;
                     None
                 }
-                // Any other error we treat as the XDG directory not
-                // existing. Windows in particularly can return a LOT
-                // of errors here — hence the blanket `.ok()`.
                 #[cfg(not(target_family = "wasm"))]
-                internal_os::xdg::config(
+                match internal_os::xdg::config(
                     &rustty_global::environ_map(),
                     internal_os::xdg::Options {
                         subdir: Some(&subdir),
                         ..Default::default()
                     },
-                )
-                .ok()
+                ) {
+                    Ok(dir) => Some(dir),
+                    // error.BufferTooSmall => return error.OutOfMemory,
+                    //
+                    // (The `.ios` comptime widening above exists only so this
+                    // prong type-checks where `xdg.config`'s set lacks the
+                    // error; the port's `DirError` always has the variant.)
+                    Err(internal_os::xdg::DirError::BufferTooSmall) => {
+                        return Err(Error::OutOfMemory)
+                    }
+                    // Any other error we treat as the XDG directory not
+                    // existing. Windows in particularly can return a LOT
+                    // of errors here.
+                    // else => return null,
+                    Err(_) => None,
+                }
             }
 
             // .resources => try std.fs.path.join(arena_alloc, &.{
@@ -190,11 +201,25 @@ impl Location {
             //     "themes",
             // }),
             Location::Resources => {
-                let app = resources_dir_app()?;
+                let Some(app) = resources_dir_app() else {
+                    return Ok(None);
+                };
                 Some(join(&[&app, b"themes"]))
             }
-        }
+        })
     }
+}
+
+/// The error set of [`Location::dir`], [`LocationIterator::next`] and [`open`]:
+/// the reference's `error{ OutOfMemory, Unexpected }` (see the PORT NOTE on
+/// `dir` for why `Unexpected` has no variant). `Debug` prints the Zig error
+/// name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Error {
+    /// `error.OutOfMemory`. Reachable only as `Location.dir`'s remapping of
+    /// `xdg.config`'s `error.BufferTooSmall` (`$HOME` longer than the XDG
+    /// lookup's 1024-byte buffer).
+    OutOfMemory,
 }
 
 /// PORT NOTE: `std.fs.path.join` for the in-tree uses here joins the components
@@ -251,8 +276,10 @@ impl LocationIterator {
     //     location: Location,
     //     dir: []const u8,
     // } {
+    //
+    // PORT NOTE (S-15, N140 (a)): the `!` is [`Error`], `Location::dir`'s.
     #[allow(clippy::should_implement_trait)]
-    pub fn next(&mut self) -> Option<LocationItem> {
+    pub fn next(&mut self) -> Result<Option<LocationItem>, Error> {
         // const max = @typeInfo(Location).@"enum".fields.len;
         let max = Location::ALL.len();
         // while (self.i < max) {
@@ -266,12 +293,12 @@ impl LocationIterator {
             //         .location = location,
             //         .dir = dir,
             //     };
-            if let Some(dir) = location.dir() {
-                return Some(LocationItem { location, dir });
+            if let Some(dir) = location.dir()? {
+                return Ok(Some(LocationItem { location, dir }));
             }
         }
         // return null;
-        None
+        Ok(None)
     }
 
     // pub fn reset(self: *LocationIterator) void {
@@ -312,20 +339,27 @@ pub struct ThemeFile {
 //     arena_alloc: Allocator,
 //     theme: []const u8,
 //     diags: *cli.DiagnosticList,
-// ) error{OutOfMemory}!?struct {
+// ) error{ OutOfMemory, Unexpected }!?struct {
 //     path: []const u8,
-//     file: std.fs.File,
+//     file: std.Io.File,
 // } {
-pub fn open(theme: &[u8], diags: &mut DiagnosticList) -> Option<ThemeFile> {
+//
+// PORT NOTE (S-15, N140 (a)): the error set is [`Error`]; its one reachable
+// member comes from `try it.next()` (`Location::dir`'s remapped
+// `BufferTooSmall`). The `try`s on `diags.append`/`allocPrintSentinel`/
+// `path.join` are allocation failures, which abort in Rust.
+pub fn open(theme: &[u8], diags: &mut DiagnosticList) -> Result<Option<ThemeFile>, Error> {
     // Absolute themes are loaded a different path.
     // if (std.fs.path.isAbsolute(theme)) {
     if is_absolute(theme) {
-        // const file: std.fs.File = try openAbsolute(
+        // const file: std.Io.File = try openAbsolute(
         //     arena_alloc,
         //     theme,
         //     diags,
         // ) orelse return null;
-        let file: std::fs::File = open_absolute(theme, diags)?;
+        let Some(file) = open_absolute(theme, diags) else {
+            return Ok(None);
+        };
         // const stat = file.stat() catch |err| {
         //     try diags.append(arena_alloc, .{
         //         .message = try std.fmt.allocPrintSentinel(
@@ -350,7 +384,7 @@ pub fn open(theme: &[u8], diags: &mut DiagnosticList) -> Option<ThemeFile> {
                     ]),
                     ..Default::default()
                 });
-                return None;
+                return Ok(None);
             }
         };
         // switch (stat.kind) {
@@ -377,13 +411,13 @@ pub fn open(theme: &[u8], diags: &mut DiagnosticList) -> Option<ThemeFile> {
                 ]),
                 ..Default::default()
             });
-            return None;
+            return Ok(None);
         }
         // return .{ .path = theme, .file = file };
-        return Some(ThemeFile {
+        return Ok(Some(ThemeFile {
             path: theme.to_vec(),
             file,
-        });
+        }));
     }
 
     // const basename = std.fs.path.basename(theme);
@@ -407,7 +441,7 @@ pub fn open(theme: &[u8], diags: &mut DiagnosticList) -> Option<ThemeFile> {
             ]),
             ..Default::default()
         });
-        return None;
+        return Ok(None);
     }
 
     // Iterate over the possible locations to try to find the
@@ -416,7 +450,7 @@ pub fn open(theme: &[u8], diags: &mut DiagnosticList) -> Option<ThemeFile> {
     let mut it = LocationIterator::new();
     // const cwd = std.fs.cwd();
     // while (try it.next()) |loc| {
-    while let Some(loc) = it.next() {
+    while let Some(loc) = it.next()? {
         // const path = try std.fs.path.join(arena_alloc, &.{ loc.dir, theme });
         let path = join(&[&loc.dir, theme]);
         // if (cwd.openFile(path, .{})) |file| {
@@ -447,7 +481,7 @@ pub fn open(theme: &[u8], diags: &mut DiagnosticList) -> Option<ThemeFile> {
                             ]),
                             ..Default::default()
                         });
-                        return None;
+                        return Ok(None);
                     }
                 };
                 // switch (stat.kind) {
@@ -469,13 +503,13 @@ pub fn open(theme: &[u8], diags: &mut DiagnosticList) -> Option<ThemeFile> {
                         ]),
                         ..Default::default()
                     });
-                    return None;
+                    return Ok(None);
                 }
                 // return .{
                 //     .path = path,
                 //     .file = file,
                 // };
-                return Some(ThemeFile { path, file });
+                return Ok(Some(ThemeFile { path, file }));
             }
             // } else |err| switch (err) {
             Err(err) => match err.kind() {
@@ -509,7 +543,7 @@ pub fn open(theme: &[u8], diags: &mut DiagnosticList) -> Option<ThemeFile> {
                         ]),
                         ..Default::default()
                     });
-                    return None;
+                    return Ok(None);
                 }
             },
         }
@@ -522,7 +556,7 @@ pub fn open(theme: &[u8], diags: &mut DiagnosticList) -> Option<ThemeFile> {
     // it.reset();
     it.reset();
     // while (try it.next()) |loc| {
-    while let Some(loc) = it.next() {
+    while let Some(loc) = it.next()? {
         // const path = try std.fs.path.join(arena_alloc, &.{ loc.dir, theme });
         let path = join(&[&loc.dir, theme]);
         // try diags.append(arena_alloc, .{
@@ -546,7 +580,7 @@ pub fn open(theme: &[u8], diags: &mut DiagnosticList) -> Option<ThemeFile> {
     }
 
     // return null;
-    None
+    Ok(None)
 }
 
 /// Open the given theme from an absolute path. If there are any errors
@@ -686,7 +720,7 @@ mod tests {
     fn diagnostic_preserves_theme_bytes_separator_rejection() {
         let theme = b"bad\xffname/x";
         let mut diags = DiagnosticList::default();
-        assert!(open(theme, &mut diags).is_none());
+        assert!(matches!(open(theme, &mut diags), Ok(None)));
 
         let items = diags.items();
         assert_eq!(1, items.len());
@@ -733,7 +767,7 @@ mod tests {
 
         // `open` of an absolute non-file: the kind's tag name.
         let mut diags = DiagnosticList::default();
-        assert!(open(b"/dev/null", &mut diags).is_none());
+        assert!(matches!(open(b"/dev/null", &mut diags), Ok(None)));
         assert_eq!(
             b"not reading theme from \"/dev/null\": it is a character_device".as_slice(),
             diags.items()[0].message.as_slice()

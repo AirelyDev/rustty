@@ -125,6 +125,67 @@ pub(crate) fn file_kind_tag_name(ft: &std::fs::FileType) -> &'static str {
     }
 }
 
+/// `{}` of a [`LoadError`](crate::config_struct::LoadError): the reference's
+/// `error.<Name>` for the `Config.load*`/`finalize` errors. The C API's
+/// `log.err("... err={}", .{err})` sites (`CApi.zig`) and `rustty-cli`'s
+/// `list_themes` preview pane print it.
+///
+/// `Io` carries `file_load.open`'s `OpenFileError.{FileIsEmpty,
+/// FileOpenFailed}` (and `NotAFile`) as an `io::Error` whose message is the
+/// variant name (`LoadError::from_open`); any other message is a failure after
+/// the file opened. The reference cannot surface one there (its `LineIterator`
+/// logs a failed read and stops); a Zig `std.Io.Reader` failure is
+/// `error.ReadFailed`, which is the name used.
+//
+// PORT NOTE (S-15, NEW-FINDINGS N140 (b)): moved here from `rustty-cli`'s
+// `zig_error::load_error` (task T-C) so the C API in this crate can use it; the
+// CLI helper now delegates. The C-API sites printed the Rust `Debug` form
+// (`FileLoad(BufferTooSmall)`) instead.
+pub fn load_error(e: &crate::config_struct::LoadError) -> String {
+    use crate::config_struct::LoadError;
+    match e {
+        LoadError::FileNotFound => "error.FileNotFound".to_string(),
+        LoadError::Io(io) => {
+            let msg = io.to_string();
+            match msg.as_str() {
+                "FileIsEmpty" | "FileOpenFailed" | "NotAFile" => format!("error.{msg}"),
+                _ => "error.ReadFailed".to_string(),
+            }
+        }
+        // `{}` of a `cli.args.parse` error: the variant names are the
+        // reference's.
+        LoadError::Parse(p) => format!("error.{p:?}"),
+        // `loadDefaultFiles`' path-lookup errors (T-E, S74-F1).
+        LoadError::FileLoad(f) => file_load_error(f, |_| "error.ReadFailed".to_string()),
+        // `finalize`'s theme lookup (N140 (a)).
+        LoadError::OutOfMemory => "error.OutOfMemory".to_string(),
+    }
+}
+
+/// `{}` of a [`FileLoadError`](crate::file_load::FileLoadError). `io_name`
+/// renders the `Io` variant, whose Zig name depends on the call that failed.
+pub(crate) fn file_load_error(
+    f: &crate::file_load::FileLoadError,
+    io_name: impl Fn(&io::Error) -> String,
+) -> String {
+    use crate::file_load::FileLoadError;
+    match f {
+        FileLoadError::NoHomeDir => "error.NoHomeDir".to_string(),
+        FileLoadError::BufferTooSmall => "error.BufferTooSmall".to_string(),
+        FileLoadError::StreamTooLong => "error.StreamTooLong".to_string(),
+        // The port keeps only the `io::ErrorKind` of a failed shell fallback,
+        // so the `SpawnError` name is approximated from it (the two kinds
+        // `std.process.spawn` names directly, else `Unexpected`).
+        FileLoadError::Spawn(kind) => match kind {
+            io::ErrorKind::NotFound => "error.FileNotFound".to_string(),
+            io::ErrorKind::PermissionDenied => "error.AccessDenied".to_string(),
+            _ => "error.Unexpected".to_string(),
+        },
+        FileLoadError::AppleApiFailed => "error.AppleApiFailed".to_string(),
+        FileLoadError::Io(e) => io_name(e),
+    }
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;

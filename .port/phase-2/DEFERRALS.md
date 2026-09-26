@@ -7392,6 +7392,10 @@ fully ported per-backend (`epoll.rs` + `io_uring.rs`) and wrapped as the Dynamic
 4. **The skip-stub is honest.** `kqueue_file_io_on_thread_pool` is a real `#[test]` that
    declares what it skips and why, keeping the R1 test count intact rather than quietly
    dropping a reference test. It defers genuinely-unused functionality, never a live path.
+   CORRECTION (task S-15, PORT_RULES R14): "declares what it skips" was not enough — the
+   stub RETURNED and libtest reported it `ok`. It is now `#[ignore = "..."]` and FAILS when
+   run with `--ignored` (naming the unported watcher); the ledger tripwire moved to the
+   always-run `kqueue_file_watcher_deferral_is_ledgered`.
 
 **If a consumer ever appears** (a macOS caller that needs pool-routed file IO), the arms
 to fill are named in the xev surface notes above; the trigger is that consumer, and the

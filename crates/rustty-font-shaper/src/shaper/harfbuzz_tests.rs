@@ -234,10 +234,14 @@ fn test_shaper_with_font(font_req: TestFont) -> TestShaper {
 /// R14 strict mode for the system-font skips (the `RUSTTY_REQUIRE_METAL` /
 /// `RUSTTY_REQUIRE_GL` pattern): the reference skips a shaping test when its
 /// font is not installed, which a Rust test can only express as returning `ok`.
-/// `RUSTTY_REQUIRE_SYSTEM_FONTS=1` turns that skip into a FAILURE. The macOS CI
-/// leg exports it: every font these tests ask for except Noto Serif Tibetan (an
-/// `#[ignore]`d test) is a stock macOS Supplemental font. The Linux leg does not
-/// (a stock runner has none of them).
+/// `RUSTTY_REQUIRE_SYSTEM_FONTS=1` turns that skip into a FAILURE. These HarfBuzz
+/// tests are compiled only off macOS (`shape.rs` selects the HarfBuzz shaper
+/// there), and no leg that runs them exports the variable: a stock Ubuntu runner
+/// has none of the fonts they ask for, so they skip visibly there. The one
+/// non-stock font, Noto Serif Tibetan, belongs to `shape_tibetan_characters`,
+/// which is `#[ignore]`d instead. (CORRECTED by task S-15: this said the macOS
+/// leg exports it for these tests; the macOS leg exports it for the CoreText
+/// twins in `coretext_tests.rs`.)
 fn system_fonts_required() -> bool {
     system_fonts_required_from(std::env::var_os("RUSTTY_REQUIRE_SYSTEM_FONTS").as_deref())
 }

@@ -3555,6 +3555,33 @@ does for `Config.loadFile`), and print through that.
     that every consumer then handles, and `rustty-cli`'s `list_themes` would need the same.
   - (b) the C-API `err=` sites print the Rust `Debug` form (`FileLoad(BufferTooSmall)`, by
     reading), not `error.BufferTooSmall`.
+- **CLOSED by task S-15 (2026-09-24, N292)**, both halves:
+  - (a) `theme::Location::dir` now returns `Result<Option<Vec<u8>>, theme::Error>` and maps
+    `DirError::BufferTooSmall` to `Error::OutOfMemory` (`theme.zig:51` at `20abdb50a`); every other
+    `xdg::config` error is still `None` (`else => return null`). `LocationIterator::next` and
+    `theme::open` pass it on (`try`); `Config::load_theme` returns it as the new
+    `LoadError::OutOfMemory`, so `finalize` fails as the reference's does, before any diagnostic is
+    appended; `rustty-cli`'s `list_themes` folds it into `Error::OutOfMemory`. Tests:
+    `tests/load_path_errors_propagate.rs::theme_user_dir_buffer_too_small_is_out_of_memory` (dir,
+    next, open, finalize, and the rendered `error.OutOfMemory`) with the short-`HOME` control
+    `theme_user_dir_resolves_with_a_short_home`; `list_themes::r13_flush_tests::
+    a_home_too_long_for_the_xdg_lookup_is_out_of_memory` (re-executed child, env cleared, 1101-byte
+    `HOME`). Negative controls, one at a time: `BufferTooSmall => Ok(None)` fails at "Location.dir
+    (.user)" (`Err(OutOfMemory)` vs `Ok(None)`); `load_theme` swallowing the error fails at
+    "Config.finalize must return OutOfMemory, got Ok(())"; `list_themes` swallowing it fails with
+    "got Ok(1)".
+  - (b) the `LoadError` rendering (`error.<Name>`) moved from `rustty-cli::zig_error::load_error`
+    to `rustty_config::zig_error::load_error` (the CLI helper delegates), and the C-API sites use it:
+    the three `error loading config`, `error loading config from file` and `error finalizing config`
+    sites print `zig_error::load_error(&err)`, `error finding trigger` prints `error.{InvalidFormat,
+    InvalidAction}`, and `error opening config in editor` renders its `FileLoadError` with
+    `openFileAbsolute`'s errno table (exact for `configPath`'s open; UNVERIFIED for the
+    `stat`/`openDir`/`createDirPath`/`createFileAbsolute` failures, whose Zig switches were not
+    re-derived). Tests: `c_api::log_site_tests::load_file_logs_...` now pins
+    `err=error.FileNotFound`; new `trigger_logs_the_zig_error_name` drives `err=error.InvalidAction`;
+    the structural test requires every site to go through `zig_error` and no `err={err:?}` to
+    remain. Negative control: the `load_file` site back to `{err:?}` fails both tests. Not changed:
+    `path={s}` is still rendered through `from_utf8_lossy` (the `log_err` sink takes a `String`).
 
 ## N150 — a third port of Zig's number parsers, now at the lowest layer (`rustty-zigstd::fmt`)
 
@@ -4802,3 +4829,95 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   `load_coretext_freetype_opens_the_discovered_face_of_a_collection`; negative control = the
   reference's index 0 ("Menlo-Bold" != "Menlo-Regular").
 - **state**: CLOSED (task tail-s14), recorded as UD280.
+## N290 — G-SKIP hardened against the S-3 review's eight bypasses (S-3b)
+
+- **id**: N290. Not a ledger row: the S-3 review's non-blocking G-SKIP findings (task S-15, item A).
+- **severity**: medium (gate). **kind**: gate gap.
+- **what**: `check_silent_skips.py` accepted these silent skips: (1) any earlier assertion in the
+  fn body excused a later top-level `return` (and a trivially-true or `debug_assert!` one excused
+  a guarded return); (2) a `match` with an empty `None =>`/`Err(_) =>` arm; (3) an `else` that only
+  prints, without the word "skip" (and an if-let wrapper beside a trivial assertion); (4) a
+  `return` inside a closure / nested fn that is the whole test; (5) any fn NAMED
+  `require_<x>_or_skip` counted as a pivot; (6) every assertion inside a `for` / `.map(..)` over a
+  possibly-empty probe result; (7) `#[rstest]` / `#[test_case]` tests were not scanned; (8) the lint
+  walked the filesystem (untracked files changed the verdict) and treated any `*test*` basename as
+  test code.
+- **fix**: (1) the excusing assertion must sit in the guard's own block (the statement for a
+  top-level return, the arm for an unbraced match arm), at its top nesting level, and be
+  non-trivial (`debug_assert*` and assertions naming no identifier but `true`/`false`, or comparing
+  identical operands, never count); (2) new ARM rule; (3) WRAP now covers any `if` whose assertions
+  leave a silent path (no `else`, or an `else` without assertion/pivot), with trivial outside
+  assertions discounted; (4) bare returns in closures / nested fns are checked when an assertion
+  follows them in that body; (5) a `require_<x>_or_skip` must transitively (same file) both read
+  a `"RUSTTY_REQUIRE_<X>"` literal and fail, else a PIVOT finding, and pivot / pivoting-helper
+  acceptance requires that pair; (6) new LOOP rule (literal tables exempt); (7) `TEST_ATTR` covers
+  `#[rstest]` and `#[test_case(..)]`; (8) `git ls-files` (a non-git root is an ERROR, exit 1), and
+  test-only files are the `tests/` tree plus files loaded by `cfg(test)`-scoped `mod` declarations
+  (`#[path]` resolved, transitively; `cfg(any(test, ..))` included).
+- **self-test**: 59 arms (was 21), each RED arm checked for its exact finding kind; per bypass a
+  planted RED arm and a clean arm, plus the review's missing accept arms (MSG after a pivot, WRAP
+  with a scoped ignore, `ALLOW_GUARDS` over its cap). Mutation run (each new rule weakened
+  in-process, scratch `s15/mutate.py`): every weakening turns its arms FAIL (B1 ×3 mutations, B2,
+  B3, B4, B5, B6, B7, B8 ×2).
+- **real tree**: two silent skips found and fixed (not allow-listed):
+  `rustty-global` `environ_from_process_matches_vars_os` (LOOP: now counts the round-tripped keys and
+  asserts at least one) and `rustty-xev` `kqueue_file_io_on_thread_pool` (RET: returned `ok`
+  having asserted only the deferral ledger, inside a conditional; now `#[ignore]`d and FAILS when run,
+  naming the unported macOS `xev.File` watcher, with the ledger tripwire split into the always-run
+  `kqueue_file_watcher_deferral_is_ledgered`). No allow-list change (4/6 sites, 2/2 guards).
+  Test-only file set vs the old basename rule: `rustty-oniguruma/src/testing.rs` (production) is no
+  longer test code; 26 declared test modules not named `*test*` (the `log_capture.rs` files,
+  `lz4_differential.rs`, `snapshot/fixture.rs`, ...) now are.
+- **state**: CLOSED (task S-15).
+
+## N291 — the display-link test is enforced on the macOS leg; stale "Noto Serif Tibetan" comments
+
+- **id**: N291. Not a ledger row: the S-3 review's follow-ups 2 and 4 (task S-15, item A).
+- **what / fix**: `.github/workflows/ci.yml` now exports `RUSTTY_REQUIRE_DISPLAY=1` on the macOS leg
+  (env step beside METAL / SYSTEM_FONTS), so `cargo test --workspace` in `ci.sh` runs
+  `sync_parks_the_link_while_idle_and_runs_it_while_dirty` as enforced evidence; `PORT_RULES.md`
+  R14's table says so. Local check: `RUSTTY_REQUIRE_DISPLAY=1 RUSTTY_REQUIRE_METAL=1 cargo test -p
+  rustty-renderer --lib sync_parks_the_link` passes (the link exists). UNVERIFIED: whether the hosted
+  macOS image has an active display; if the leg then fails with "active display required but
+  unavailable", that is the finding. The `ci.yml`, `coretext_tests.rs` and `harfbuzz_tests.rs`
+  comments said Noto Serif Tibetan is an `#[ignore]`d test "on every leg" / among the macOS tests;
+  it is only the HarfBuzz `shape_tibetan_characters`, which is not compiled on macOS and is
+  `#[ignore]`d elsewhere. Comments corrected (comment-only edits in `rustty-font-shaper`).
+- **state**: CLOSED (task S-15).
+
+## N292 — theme lookup `BufferTooSmall` → `OutOfMemory`, and the C API's `err=` form (N140 closed)
+
+- **id**: N292. Not a ledger row: the closure of NEW-FINDINGS N140 (a) and (b) (task S-15, item B).
+- **severity**: low. **kind**: behavioral-difference (error identity and propagation; log text).
+- **what / fix / tests / negative controls**: recorded under N140 ("CLOSED by task S-15").
+- **files**: `crates/rustty-config/src/{theme.rs,config_struct.rs,zig_error.rs,c_api.rs,lib.rs}`,
+  `crates/rustty-config/tests/load_path_errors_propagate.rs`,
+  `crates/rustty-cli/src/{rustty.rs,zig_error.rs,list_themes.rs}`.
+- **state**: CLOSED (task S-15).
+
+## N293 — `readthread_pipeline_shuts_down_cleanly_from_both_stages` bounded a live drain with a wall clock
+
+- **id**: N293. Not a ledger row: the flaky test queued by S-6 (task S-15, item C).
+- **severity**: low (flaky test). **kind**: test defect (port-only KAT; the reference has no
+  equivalent test — `src/termio/Exec.zig` at `20abdb50a` has only the `execCommand` tests).
+- **measured**: at base the test takes 5.5-6.0 s. About 3 s is the eight blocking 64 KiB writes
+  to the slave waiting on the parse stage, and 2.2-2.8 s is the drain AFTER the quit: 145-170 KiB
+  were still in flight (ring plus pty queue) and the parse stage parses them before it exits, at
+  about 65 KiB/s in the `dev` profile. `sample(1)` of the parse stage: the top frames are
+  `rustty_vt::page::mask`, `page::get_bits` and `Page::verify_integrity`, i.e. the reference's
+  `assertIntegrity` under `slow_runtime_safety` (`page.zig:366-376`, Debug only;
+  `SLOW_RUNTIME_SAFETY = cfg!(debug_assertions)` in the port).
+- **root cause**: not a port slowdown. The drain-on-quit is the reference's design (parse loop
+  returns on `done` only once `count == 0`; the gather stage `continue`s on a full buffer without
+  polling `quit`), and the port matches it line for line. The test bounded that finite, live drain
+  with a fixed 10 s `recv_timeout`; under load the drain crosses 10 s (S-6: load 20-29, 1 run in 8;
+  here, 42 spinning processes on 14 cores: drain 5.8-9.96 s, one batch gap 4.1-4.7 s).
+- **fix**: the watchdog now fails only when the read thread has not joined AND no batch has reached
+  `processOutput` for 30 s (the regression it guards — a stage exiting without waking the other —
+  leaves the parse stage asleep on `batch_ready`, so progress stops for good). 30 s is over 6x the
+  loaded per-batch gap. The test also now asserts its premise (bytes still in flight at the quit)
+  and each bulk write's length, and prints `SHUTDOWN-DRAIN` with the drain time and longest gap.
+- **verification**: 3/3 idle (drain 2.2-2.8 s, gap 0.73-0.79 s), 3/3 under the synthetic load.
+  Negative control (gather's `DoneSignal` no longer sets `done`): FAILED after 30.0 s with "no
+  batch reached processOutput for 30s", reverted.
+- **state**: CLOSED (task S-15).

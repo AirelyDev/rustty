@@ -5373,6 +5373,20 @@ pub enum LoadError {
     /// A default-path lookup error propagated from `file_load` (the reference's
     /// `try file_load.defaultXdgPath(alloc)` and siblings in `loadDefaultFiles`).
     FileLoad(crate::file_load::FileLoadError),
+    /// `error.OutOfMemory` propagated from the theme lookup (`loadTheme`'s
+    /// `try themepkg.open(..)`, reached from `finalize`'s `try
+    /// self.loadTheme(theme.*)`). Its one reachable cause is
+    /// `theme.Location.dir` remapping `xdg.config`'s `error.BufferTooSmall`
+    /// (NEW-FINDINGS N140 (a), task S-15).
+    OutOfMemory,
+}
+
+impl From<crate::theme::Error> for LoadError {
+    fn from(e: crate::theme::Error) -> LoadError {
+        match e {
+            crate::theme::Error::OutOfMemory => LoadError::OutOfMemory,
+        }
+    }
 }
 
 impl From<crate::file_load::FileLoadError> for LoadError {
@@ -7232,7 +7246,7 @@ impl Config {
         //     name,
         //     &self._diagnostics,
         // )) orelse return;
-        let themefile = match crate::theme::open(&name, &mut self._diagnostics) {
+        let themefile = match crate::theme::open(&name, &mut self._diagnostics)? {
             Some(tf) => tf,
             None => return Ok(()),
         };
