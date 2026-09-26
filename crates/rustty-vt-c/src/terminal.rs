@@ -12226,5 +12226,25 @@ mod tests {
                 "remap n={n}: a refused remap never fails a call"
             );
         }
+
+        // Every remap refused AND the n-th allocation refused: the
+        // `toOwnedSlice` fallback allocations fail too (the alloc loop's
+        // remaps succeed, so it never reaches them).
+        let mut n = 0usize;
+        let mut call_failures = 0usize;
+        loop {
+            let failing = FailingAllocator::over_heap(Config {
+                fail_index: n,
+                resize_fail_index: 0,
+            });
+            let (_, calls) = once(&failing, &format!("no-remap alloc n={n}"));
+            call_failures += calls;
+            if !failing.has_induced_failure.get() {
+                break;
+            }
+            n += 1;
+            assert!(n < 10_000, "the sweep must terminate");
+        }
+        assert!(call_failures > 0, "no writer reported a failure");
     }
 }
