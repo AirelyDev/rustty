@@ -1013,6 +1013,35 @@ impl<M: AppMailbox> Termio<M> {
                     // `threadExit` (which writes the quit pipe + joins) is the
                     // correct teardown.
                     unsafe { (*self_).backend.threadExit(&mut *data) };
+
+                    // PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS UD290.
+                    // The reference stops at the `errdefer` above. By now
+                    // `backend.threadEnter` (and any input already queued) has
+                    // registered completions on the thread's loop that live in
+                    // `data`: Exec's `process_wait_c`, `termios_timer_c` and the
+                    // write-stream requests. `data` is `cb.data` in
+                    // `Thread.threadMain_`'s frame, which is gone once this error
+                    // returns there, and `Thread.threadMain` then runs
+                    // `loop.run(.until_done)` to drain: the loop starts those
+                    // completions from freed stack memory (a use-after-free,
+                    // reachable from config: an `input` file over 10 MiB or one
+                    // that cannot be read; measured on Linux as a SIGSEGV in the
+                    // epoll backend's submission queue). `data` is also never
+                    // deinitialized, which leaks the read-thread pipe, the process
+                    // watcher and the write stream. The loop has not run yet, so
+                    // nothing was started: stop it (a stopped loop never ticks
+                    // again, and `threadMain` skips its drain; the drain had
+                    // nothing to do here, since the mailbox and stop waits are
+                    // registered only after `threadEnter` succeeds), then release
+                    // `data` as the normal exit does (`threadMain_`'s
+                    // `data.deinit()` + drop). The one visible difference: the
+                    // "abrupt io thread exit detected" warning is not logged.
+                    unsafe {
+                        (*thread).loop_.stop();
+                        (*data).deinit();
+                        core::ptr::drop_in_place(data);
+                    }
+
                     // return error.InputFailed;  (S212-F1: was the opaque `Error`.)
                     return Err(Error::InputFailed);
                 }

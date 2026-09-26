@@ -346,8 +346,9 @@ fn live_shell_echo_round_trips_into_the_screen() {
     // loop's outer poll now reads once more on POLLIN|POLLHUP (reference defect,
     // R13, UPSTREAM-DEFECTS.md UD19; `ReadThread::outer_poll_hup_exits` and its
     // tests in exec.rs), so the paragraphs above describe the reference. The
-    // sleep stays: this KAT proves the live stack, not the UD19 handling, whose
-    // Linux end-to-end run is still pending.
+    // sleep stays: this KAT proves the live stack, not the UD19 handling, which
+    // task L-1 measured end to end on Linux with a copy of this KAT minus the
+    // sleep (UD19's record).
     //
     // `/bin/sleep` is spelled ABSOLUTE on purpose: this harness's `Config.env` is a
     // deliberately empty `EnvMap`, so there is no PATH for the shell to search — a
