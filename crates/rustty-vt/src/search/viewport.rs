@@ -330,6 +330,13 @@ impl ViewportSearch {
     /// Find the next match for the needle in the active area. This returns
     /// null when there are no more matches.
     // pub fn next(self: *ViewportSearch) ?FlattenedHighlight {
+    /// Rust-only test accounting (parity tail S7-6): the window plus the
+    /// fingerprint (see `SlidingWindow::owned_bytes`).
+    #[cfg(any(test, feature = "test-allocators"))]
+    pub fn owned_bytes(&self) -> usize {
+        self.window.owned_bytes() + super::cap_bytes(&self.fingerprint.entries)
+    }
+
     #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> Option<FlattenedRef<'_>> {
         // return self.window.next();
@@ -655,6 +662,107 @@ mod tests {
         unsafe { (*node).serial = original_serial };
 
         search.deinit();
+        t.deinit(alloc);
+    }
+
+    // test "fingerprint only allocates on changes"
+    //
+    // PORT NOTE (parity tail S7-6): ported as written; the search's allocator is
+    // the handle over a `FailingAllocator`, as the reference's is. (It used to
+    // live, adapted, in `tests/viewport_fingerprint_alloc.rs` with a counting
+    // global allocator, which remains as an extra check.)
+    #[test]
+    fn fingerprint_only_allocates_on_changes() {
+        // const alloc = testing.allocator;
+        // var t: Terminal = try .init(io, alloc, .{ .cols = 10, .rows = 10 });
+        // defer t.deinit(alloc);
+        let alloc = Allocator;
+        let mut t: Terminal = Terminal::init(alloc, terminal_opts(10, 10)).unwrap();
+        let active_ptr: *mut Screen = t.screens.active;
+
+        // var failing = testing.FailingAllocator.init(alloc, .{});
+        // const failing_alloc = failing.allocator();
+        let failing = crate::alloc::testing::FailingAllocator::over_heap(Default::default());
+        let fc = failing.allocator();
+        crate::alloc::testing::with_handle(&fc, |failing_alloc| {
+            // var search: ViewportSearch = try .init(failing_alloc, "needle");
+            // defer search.deinit();
+            // search.active_dirty = false;
+            let mut search: ViewportSearch =
+                ViewportSearch::init(failing_alloc, b"needle").unwrap();
+            search.active_dirty = Some(false);
+
+            // try testing.expect(try search.update(&t.screens.active.pages));
+            assert!(search.update(unsafe { &(*active_ptr).pages }).unwrap());
+
+            // Fail the next allocation. An unchanged viewport with active dirty
+            // tracking disabled should reuse the existing fingerprint and return
+            // unchanged before rebuilding the search window, so this update should
+            // succeed without reporting a viewport change.
+            // failing.fail_index = failing.alloc_index;
+            // try testing.expect(!try search.update(&t.screens.active.pages));
+            failing.fail_index.set(failing.alloc_index.get());
+            assert!(!search.update(unsafe { &(*active_ptr).pages }).unwrap());
+
+            search.deinit();
+        });
+        t.deinit(alloc);
+    }
+
+    // Parity tail S7-6 (Rust-only): the contract `Fingerprint::update`'s first
+    // statement buys: an allocation failure while reserving leaves the OLD
+    // fingerprint intact and is reported. The terminal grows so the retained
+    // capacity no longer fits, and the reservation (through the search's
+    // allocator) fails.
+    #[test]
+    fn fingerprint_allocation_failure_preserves_the_old_fingerprint() {
+        let alloc = Allocator;
+        let mut t: Terminal = Terminal::init(alloc, terminal_opts(10, 10)).unwrap();
+        let failing = crate::alloc::testing::FailingAllocator::over_heap(Default::default());
+        let fc = failing.allocator();
+        crate::alloc::testing::with_handle(&fc, |failing_alloc| {
+            let mut search: ViewportSearch =
+                ViewportSearch::init(failing_alloc, b"needle").unwrap();
+            search.active_dirty = Some(false);
+            let active_ptr: *mut Screen = t.screens.active;
+            assert!(search.update(unsafe { &(*active_ptr).pages }).unwrap());
+            let before: Vec<(usize, u64)> = search
+                .fingerprint
+                .entries
+                .iter()
+                .map(|e| (e.node as usize, e.serial))
+                .collect();
+            assert!(!before.is_empty());
+            // growCapacity(10 rows) entries on the search's allocator.
+            assert_eq!(10 + 5 + 8, search.fingerprint.entries.capacity());
+
+            t.resize(
+                alloc,
+                crate::terminal::Resize {
+                    cols: 10,
+                    rows: 40,
+                    cell_size_px: None,
+                },
+            )
+            .unwrap();
+            let active_ptr: *mut Screen = t.screens.active;
+            failing.fail_index.set(failing.alloc_index.get());
+            failing.resize_fail_index.set(failing.resize_index.get());
+            assert!(search.update(unsafe { &(*active_ptr).pages }).is_err());
+            assert!(failing.has_induced_failure.get());
+            let after: Vec<(usize, u64)> = search
+                .fingerprint
+                .entries
+                .iter()
+                .map(|e| (e.node as usize, e.serial))
+                .collect();
+            assert_eq!(before, after);
+
+            failing.fail_index.set(usize::MAX);
+            failing.resize_fail_index.set(usize::MAX);
+            search.deinit();
+            assert_eq!(failing.allocated_bytes.get(), failing.freed_bytes.get());
+        });
         t.deinit(alloc);
     }
 

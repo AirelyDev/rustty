@@ -2,10 +2,12 @@
 //! fingerprint's retained storage (oracle `9659167ec`, `bc8bb6c0f`).
 //!
 //! Upstream's `fingerprint only allocates on changes` uses Zig's
-//! `testing.FailingAllocator`, which rustty has no direct equivalent of because
-//! `rustty-vt` allocates through `rustty_vt::alloc::Global`. This file
+//! `testing.FailingAllocator`. Since parity tail S7-6 that test is ported as
+//! written in `src/search/viewport.rs` (the search's allocator is a handle over
+//! `rustty_vt::alloc::testing::FailingAllocator`). This file predates that: it
 //! installs a `#[global_allocator]` that can both COUNT and FAIL allocations,
-//! which gives the two assertions the plan requires:
+//! and checks the same contract for a search on the Rust heap handle
+//! (`rustty_vt::alloc::Global`), with the two assertions the plan requires:
 //!
 //!   1. an unchanged viewport update performs **zero** allocations — an
 //!      assertion on the allocation COUNT, not merely on correctness. A test

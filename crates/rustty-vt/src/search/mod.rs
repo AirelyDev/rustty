@@ -28,6 +28,12 @@
 
 pub mod active;
 pub mod pagelist;
+
+/// Bytes of capacity an allocator-bound list holds (test accounting).
+#[cfg(any(test, feature = "test-allocators"))]
+pub(crate) fn cap_bytes<T>(v: &crate::alloc::AVec<T>) -> usize {
+    v.capacity() * core::mem::size_of::<T>()
+}
 pub mod screen;
 pub mod sliding_window;
 pub mod terminal;

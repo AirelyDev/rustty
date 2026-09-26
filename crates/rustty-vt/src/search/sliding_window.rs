@@ -1132,6 +1132,29 @@ impl SlidingWindow {
         })
     }
 
+    /// Rust-only test accounting (parity tail S7-6): the bytes this window
+    /// holds from its allocator (every buffer's capacity, including each
+    /// page's `cell_map`). A routing test compares it with what a counting
+    /// allocator has live, which proves both that every container is on the
+    /// window's allocator and that nothing else is.
+    #[cfg(any(test, feature = "test-allocators"))]
+    pub fn owned_bytes(&self) -> usize {
+        use super::cap_bytes;
+        let metas: usize = self
+            .meta
+            .storage
+            .iter()
+            .flatten()
+            .map(|m| cap_bytes(&m.cell_map))
+            .sum();
+        cap_bytes(&self.needle)
+            + cap_bytes(&self.overlap_buf)
+            + cap_bytes(&self.data.storage)
+            + cap_bytes(&self.meta.storage)
+            + cap_bytes(&self.chunk_buf)
+            + metas
+    }
+
     /// Only for tests!
     // fn testChangeNeedle(self: *SlidingWindow, new: []const u8) void {
     #[cfg(test)]
@@ -3047,6 +3070,140 @@ mod tests {
         assert!(w.next().is_none());
 
         w.deinit();
+        s.deinit();
+    }
+
+    // ---------------------------------------------------------------------
+    // Parity tail S7-6: allocator routing of the window (S176-F1). Rust-only
+    // tests: the reference has no allocator test for `sliding_window.zig`.
+    // ---------------------------------------------------------------------
+
+    use crate::alloc::testing::{with_handle, CountingAllocator};
+
+    fn counts(c: &CountingAllocator) -> (usize, usize, usize) {
+        (c.alloc_calls.get(), c.remap_calls.get(), c.free_calls.get())
+    }
+
+    // Every buffer of the window is on the window's allocator, with the
+    // reference's calls:
+    // - init: the needle dupe and the overlap buffer (exactly sized); the two
+    //   circular buffers start at zero capacity (`alloc(T, 0)`: no call);
+    // - the first append: the cell map and the encoding buffer grow
+    //   (`appendNTimes`/`drain`: one allocation each, then remaps), the data
+    //   buffer is `realloc`ed to exactly the encoded length, the meta buffer to
+    //   one slot, and the chunk buffer is `setCapacity(growCapacity(1))`: five
+    //   allocations. The encoding buffer is freed at the end of `appendPage`,
+    //   the one free;
+    // - a second append: the data and meta buffers grow by `realloc` (remap
+    //   first, which the heap grants), the chunk buffer already fits, so only
+    //   the new cell map and encoding buffer allocate, and the encoding buffer
+    //   is freed.
+    // After each step every live byte is a window buffer (`owned_bytes`).
+    #[test]
+    fn sliding_window_internals_route_through_the_allocator_handle() {
+        let mut s = screen_init(10, 2, usize::MAX);
+        s.test_write_string(b"hello. boo! hello. boo!\nboo")
+            .unwrap();
+
+        let counting = CountingAllocator::over_heap();
+        let c = counting.allocator();
+        with_handle(&c, |alloc| {
+            let mut w: SlidingWindow =
+                SlidingWindow::init(alloc, Direction::Forward, b"boo!").unwrap();
+            assert_eq!((2, 0, 0), counts(&counting), "init");
+            assert_eq!(4 + 8, counting.live_bytes.get());
+            assert_eq!(w.owned_bytes(), counting.live_bytes.get());
+
+            let node: *mut Node = s.pages.pages.first;
+            let first = w.append(node).unwrap();
+            assert!(first.content_len > 0);
+            let (a, _, f) = counts(&counting);
+            assert_eq!((2 + 5, 1), (a, f), "first append: 5 allocations, 1 free");
+            // The freed block is the encoding buffer: byte-aligned, and at least
+            // as long as what it held.
+            let (freed_len, freed_align) = counting.last_free.get().unwrap();
+            assert_eq!(0, freed_align);
+            assert!(freed_len >= first.content_len);
+            assert_eq!(first.content_len, w.data.capacity());
+            assert_eq!(1, w.meta.capacity());
+            // growCapacity(1) chunks (MultiArrayList, largest field 8 bytes).
+            assert_eq!(1 + 0 + 16, w.chunk_buf.capacity());
+            assert_eq!(w.owned_bytes(), counting.live_bytes.get());
+
+            let second = w.append(node).unwrap();
+            assert_eq!(first.content_len, second.content_len);
+            let (a2, r2, f2) = counts(&counting);
+            assert_eq!(
+                (a + 2, f + 1),
+                (a2, f2),
+                "second append: 2 allocations, 1 free"
+            );
+            assert!(r2 >= 2, "data and meta grew by realloc (remap first)");
+            assert_eq!(2 * first.content_len, w.data.capacity());
+            assert_eq!(2, w.meta.capacity());
+            assert_eq!(w.owned_bytes(), counting.live_bytes.get());
+
+            // Searching allocates nothing: the chunk buffer was sized by append.
+            let before = counts(&counting);
+            {
+                let h = w.next().unwrap();
+                assert_eq!(1, h.chunks.len());
+            }
+            assert_eq!(before, counts(&counting), "next() allocates nothing");
+
+            w.deinit();
+            assert_eq!(0, counting.live_bytes.get());
+        });
+        s.deinit();
+    }
+
+    // A compressed node is appended through a temporary decode buffer
+    // (`node.pagePreservingState(self.alloc)`) on the window's allocator,
+    // page-aligned and freed before `append` returns; the node stays
+    // compressed.
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): multi-page history plus LZ4 compression is the page-mapping volume class that times out in both Miri lanes; covered natively + by ASan. The resident-page routing test above runs under Miri."
+    )]
+    #[test]
+    fn sliding_window_decode_buffer_routes_through_the_allocator_handle() {
+        use crate::pagelist::compress::CompressionMode;
+        use crate::pagelist::{Node as PlNode, Storage};
+
+        let mut s = screen_init(10, 2, usize::MAX);
+        s.test_write_string(b"boo! first page\n").unwrap();
+        while s.pages.total_pages() < 3 {
+            s.test_write_string(b"\n").unwrap();
+        }
+        let _ = s.pages.compress(CompressionMode::Full);
+        let first: *mut Node = s.pages.pages.first;
+        assert_eq!(unsafe { PlNode::storage(first) }, Storage::Compressed);
+
+        let counting = CountingAllocator::over_heap();
+        let c = counting.allocator();
+        with_handle(&c, |alloc| {
+            let mut w: SlidingWindow =
+                SlidingWindow::init(alloc, Direction::Forward, b"boo!").unwrap();
+            let (a, _, f) = counts(&counting);
+            w.append(first).unwrap();
+            let (a2, _, f2) = counts(&counting);
+            // The decode buffer plus the five of a first append; freed: the
+            // encoding buffer and the decode buffer (last, at PAGE_SIZE_MIN
+            // alignment).
+            assert_eq!((a + 6, f + 2), (a2, f2));
+            let (freed_len, freed_align) = counting.last_free.get().unwrap();
+            assert_eq!(
+                crate::page::PAGE_SIZE_MIN.trailing_zeros() as u8,
+                freed_align,
+                "the last free is the page-aligned decode buffer"
+            );
+            assert!(freed_len >= crate::page::PAGE_SIZE_MIN);
+            assert_eq!(w.owned_bytes(), counting.live_bytes.get());
+            assert_eq!(unsafe { PlNode::storage(first) }, Storage::Compressed);
+            assert!(w.next().is_some());
+            w.deinit();
+            assert_eq!(0, counting.live_bytes.get());
+        });
         s.deinit();
     }
 }

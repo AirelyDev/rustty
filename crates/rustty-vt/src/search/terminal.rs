@@ -346,6 +346,27 @@ impl TerminalSearch {
         core::ptr::eq(actual, search_screen)
     }
 
+    /// Rust-only test accounting (parity tail S7-6): the viewport search, the
+    /// cached viewport matches and every screen search (see
+    /// `ScreenSearch::owned_bytes`).
+    #[cfg(any(test, feature = "test-allocators"))]
+    pub fn owned_bytes(&self) -> usize {
+        use super::cap_bytes;
+        let matches: usize = self
+            .viewport_matches
+            .iter()
+            .map(|hl| cap_bytes(&hl.chunks))
+            .sum();
+        let screens: usize = self
+            .screens
+            .entries
+            .iter()
+            .flatten()
+            .map(|s| s.owned_bytes())
+            .sum();
+        self.viewport.owned_bytes() + cap_bytes(&self.viewport_matches) + matches + screens
+    }
+
     /// The needle that this search is using, borrowed.
     // pub fn needle(self: *const TerminalSearch) []const u8 {
     pub fn needle(&self) -> &[u8] {
@@ -1299,5 +1320,296 @@ mod tests {
         // defer search.deinit(&t); defer t.deinit(alloc);
         search.deinit(Some(t_ptr));
         unsafe { (*t_ptr).deinit(alloc) };
+    }
+
+    // ---------------------------------------------------------------------
+    // Parity tail S7-6: allocator routing (S176-F1) and failure semantics.
+    // Rust-only tests: the reference has no FailingAllocator test for
+    // `search/terminal.zig`; these carry the S-7 design's row-closing
+    // evidence (exact routing, the terminal-charged split N262, and an
+    // allocation-failure sweep).
+    // ---------------------------------------------------------------------
+
+    use crate::alloc::testing::{with_handle, Config, CountingAllocator, FailingAllocator};
+
+    /// The number of pins tracked by the terminal's active screen.
+    fn tracked_pins(t_ptr: *mut Terminal) -> usize {
+        unsafe { (*(*t_ptr).screens.active).pages.tracked_pins.count() }
+    }
+
+    /// A terminal whose scrollback holds a match on each of three pages, so the
+    /// history searcher (and its terminal-charged pins) walks several pages.
+    /// Under Miri one page keeps the interpreter fast; history is still
+    /// searched (the rows that scrolled out of the active area).
+    fn write_search_corpus(t_ptr: *mut Terminal) {
+        let mut stream = unsafe { (*t_ptr).vt_stream() };
+        let pages_wanted: usize = if cfg!(miri) { 1 } else { 3 };
+        for page in 1..=pages_wanted {
+            stream.next_slice(b"Fizz\r\nBuzz\r\n");
+            let mut lines = 0usize;
+            while unsafe { (*(*t_ptr).screens.active).pages.total_pages() } < page || lines < 4 {
+                stream.next_slice(b"\r\n");
+                lines += 1;
+            }
+        }
+        stream.next_slice(b"Fizz\r\n");
+        for _ in 0..4 {
+            stream.next_slice(b"\r\n");
+        }
+        stream.next_slice(b"Fizz.");
+        stream.deinit();
+    }
+
+    /// Feed and tick until the search is complete, at most `limit` rounds. A
+    /// round that makes no progress because an allocation failed (the tick
+    /// reports `complete` while the status is still `running`, or a feed leaves
+    /// the status at `feed_required`) ends the loop, as it would otherwise spin.
+    fn pump(search: &mut TerminalSearch, t_ptr: *mut Terminal, limit: usize) {
+        for _ in 0..limit {
+            match search.status() {
+                Status::Complete => return,
+                Status::FeedRequired => {
+                    search.feed(t_ptr, true);
+                    if search.status() == Status::FeedRequired {
+                        return;
+                    }
+                }
+                Status::Running => {
+                    if search.tick() == Tick::Complete && search.status() == Status::Running {
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
+    // Every allocation the search makes goes through the allocator it was
+    // given, and nothing else does: the bytes the counting allocator has live
+    // equal the capacity of every container the search holds
+    // (`owned_bytes`), at every step. The four allocations the reference
+    // charges to the TERMINAL (N262: the history start pin, the PageListSearch
+    // pin and the selected match's two pins; the vt-c registry entry is
+    // covered in rustty-vt-c) are tracked pins on the terminal's PageList.
+    #[test]
+    fn terminal_search_internals_route_through_the_allocator_handle() {
+        let term_counting = CountingAllocator::over_heap();
+        let tc = term_counting.allocator();
+        let search_counting = CountingAllocator::over_heap();
+        let sc = search_counting.allocator();
+        with_handle(&tc, |talloc| {
+            with_handle(&sc, |salloc| {
+                let mut t: Terminal =
+                    Terminal::init(talloc, terminal_opts(10, 2, usize::MAX)).unwrap();
+                let t_ptr: *mut Terminal = core::ptr::addr_of_mut!(t);
+                write_search_corpus(t_ptr);
+                let pins_before = tracked_pins(t_ptr);
+                let term_live_before = term_counting.live_bytes.get();
+
+                // init: the viewport window's needle dupe and overlap buffer,
+                // exactly sized; the circular buffers start at zero capacity.
+                let mut search = TerminalSearch::init(salloc, b"Fizz").unwrap();
+                assert_eq!(
+                    (2, 0, 0),
+                    (
+                        search_counting.alloc_calls.get(),
+                        search_counting.remap_calls.get(),
+                        search_counting.free_calls.get()
+                    ),
+                    "TerminalSearch.init: needle + overlap buffer"
+                );
+                assert_eq!(4 + 8, search_counting.live_bytes.get());
+                assert_eq!(search.owned_bytes(), search_counting.live_bytes.get());
+
+                pump(&mut search, t_ptr, 10_000);
+                assert_eq!(Status::Complete, search.status());
+                assert!(search.active_screen_search().unwrap().history.is_some());
+                assert!(search.active_screen_search().unwrap().matches_len() >= 3);
+                assert_eq!(
+                    search.owned_bytes(),
+                    search_counting.live_bytes.get(),
+                    "after the search: every live byte is a search container"
+                );
+                // The history searcher's PageListSearch pin and the history
+                // start pin are the terminal's.
+                assert_eq!(pins_before + 2, tracked_pins(t_ptr));
+
+                let n = search.viewport_matches().unwrap().len();
+                assert!(n >= 1);
+                assert_eq!(search.owned_bytes(), search_counting.live_bytes.get());
+
+                assert!(search
+                    .select(t_ptr, Select::Next, SelectScroll::None)
+                    .unwrap());
+                // The selected match's two tracked pins are the terminal's.
+                assert_eq!(pins_before + 4, tracked_pins(t_ptr));
+                assert_eq!(
+                    search.owned_bytes(),
+                    search_counting.live_bytes.get(),
+                    "after select: the pins did not land on the search allocator"
+                );
+                assert!(search_counting.free_calls.get() > 0);
+
+                search.deinit(Some(t_ptr));
+                assert_eq!(0, search_counting.live_bytes.get());
+                assert_eq!(pins_before, tracked_pins(t_ptr));
+                // The terminal kept only what its pin pool retains.
+                assert!(term_counting.live_bytes.get() >= term_live_before);
+
+                unsafe { (*t_ptr).deinit(talloc) };
+                assert_eq!(0, term_counting.live_bytes.get());
+            })
+        });
+    }
+
+    /// One search lifecycle over `t_ptr` on `salloc`. Returns how many calls
+    /// reported `error.OutOfMemory`; every other result is success.
+    fn sweep_scenario(t_ptr: *mut Terminal, salloc: Allocator) -> usize {
+        let mut ooms = 0usize;
+        let mut search = match TerminalSearch::init(salloc, b"Fizz") {
+            Ok(s) => s,
+            Err(OutOfMemory) => return 1,
+        };
+        pump(&mut search, t_ptr, 10_000);
+        if search.viewport_matches().is_err() {
+            ooms += 1;
+        }
+        for to in [Select::Next, Select::Next, Select::Prev] {
+            if search.select(t_ptr, to, SelectScroll::None).is_err() {
+                ooms += 1;
+            }
+        }
+        // A second round after the viewport cache was consumed.
+        search.feed(t_ptr, true);
+        pump(&mut search, t_ptr, 10_000);
+        if search.viewport_matches().is_err() {
+            ooms += 1;
+        }
+        search.deinit(Some(t_ptr));
+        ooms
+    }
+
+    // Zig's `checkAllAllocationFailures` idea over the search's allocator: for
+    // every allocation index n the n-th allocation fails (and, the allocator
+    // being sticky, every later one). Nothing aborts or panics, every result is
+    // success or `error.OutOfMemory`, every byte taken from the search's
+    // allocator is returned, and every pin taken on the terminal is released.
+    // A second loop refuses the n-th `remap` instead; the fallback then
+    // allocates, so nothing may fail.
+    #[test]
+    fn terminal_search_allocation_failure_sweep() {
+        let mut t: Terminal = Terminal::init(Allocator, terminal_opts(10, 2, usize::MAX)).unwrap();
+        let t_ptr: *mut Terminal = core::ptr::addr_of_mut!(t);
+        write_search_corpus(t_ptr);
+        let pins_before = tracked_pins(t_ptr);
+
+        let check = |failing: &FailingAllocator, what: &str| {
+            assert_eq!(
+                failing.allocated_bytes.get(),
+                failing.freed_bytes.get(),
+                "{what}: every byte taken from the search's allocator is returned"
+            );
+            assert_eq!(
+                failing.allocations.get(),
+                failing.deallocations.get(),
+                "{what}: every allocation is freed"
+            );
+            assert_eq!(pins_before, tracked_pins(t_ptr), "{what}: no pin leaked");
+        };
+
+        // A clean run: the number of remaps to sweep, and no OOM.
+        let clean = FailingAllocator::over_heap(Config::default());
+        let cc = clean.allocator();
+        assert_eq!(0, with_handle(&cc, |a| sweep_scenario(t_ptr, a)));
+        check(&clean, "clean run");
+        let remaps = clean.resize_index.get();
+        assert!(remaps > 0, "the scenario must grow a list by remap");
+
+        let mut n = 0usize;
+        let mut total_ooms = 0usize;
+        loop {
+            let failing = FailingAllocator::over_heap(Config {
+                fail_index: n,
+                resize_fail_index: usize::MAX,
+            });
+            let fc = failing.allocator();
+            let ooms = with_handle(&fc, |a| sweep_scenario(t_ptr, a));
+            check(&failing, &format!("alloc n={n}"));
+            if !failing.has_induced_failure.get() {
+                assert_eq!(0, ooms, "n={n}: no induced failure, no OOM");
+                break;
+            }
+            total_ooms += ooms;
+            n += 1;
+        }
+        assert!(
+            n > 10,
+            "the sweep must cover the search's allocations ({n})"
+        );
+        assert!(total_ooms > 0, "some induced failure must surface as OOM");
+
+        for r in 0..=remaps {
+            let failing = FailingAllocator::over_heap(Config {
+                fail_index: usize::MAX,
+                resize_fail_index: r,
+            });
+            let fc = failing.allocator();
+            let ooms = with_handle(&fc, |a| sweep_scenario(t_ptr, a));
+            assert_eq!(0, ooms, "remap r={r}: a refused remap falls back to alloc");
+            check(&failing, &format!("remap r={r}"));
+        }
+
+        unsafe { (*t_ptr).deinit(Allocator) };
+    }
+
+    // The terminal-charged half (N262): the terminal's allocator fails at the
+    // n-th allocation after the corpus is written, so the search's tracked
+    // pins (and the pin set's growth) fail. The search's own allocator never
+    // fails. Nothing panics, and every pin the search took is released.
+    #[test]
+    fn terminal_search_terminal_charged_allocation_failure_sweep() {
+        let term_failing = FailingAllocator::over_heap(Config::default());
+        let tc = term_failing.allocator();
+        with_handle(&tc, |talloc| {
+            let mut t: Terminal = Terminal::init(talloc, terminal_opts(10, 2, usize::MAX)).unwrap();
+            let t_ptr: *mut Terminal = core::ptr::addr_of_mut!(t);
+            write_search_corpus(t_ptr);
+            let pins_before = tracked_pins(t_ptr);
+
+            let mut n = 0usize;
+            let mut induced = 0usize;
+            let mut ooms = 0usize;
+            loop {
+                term_failing.has_induced_failure.set(false);
+                term_failing
+                    .fail_index
+                    .set(term_failing.alloc_index.get() + n);
+                let search_heap = FailingAllocator::over_heap(Config::default());
+                let shc = search_heap.allocator();
+                ooms += with_handle(&shc, |a| sweep_scenario(t_ptr, a));
+                term_failing.fail_index.set(usize::MAX);
+                assert_eq!(
+                    search_heap.allocated_bytes.get(),
+                    search_heap.freed_bytes.get(),
+                    "n={n}: the search's own bytes are returned"
+                );
+                assert_eq!(pins_before, tracked_pins(t_ptr), "n={n}: no pin leaked");
+                if !term_failing.has_induced_failure.get() {
+                    break;
+                }
+                induced += 1;
+                n += 1;
+            }
+            assert!(induced >= 1, "a terminal-charged allocation must be swept");
+            assert!(
+                ooms >= 1,
+                "a failed terminal-charged allocation surfaces as OOM"
+            );
+
+            unsafe { (*t_ptr).deinit(talloc) };
+        });
+        assert_eq!(
+            term_failing.allocated_bytes.get(),
+            term_failing.freed_bytes.get()
+        );
     }
 }

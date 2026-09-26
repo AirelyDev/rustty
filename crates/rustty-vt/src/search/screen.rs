@@ -366,6 +366,29 @@ impl ScreenSearch {
         self.history_results = AVec::new_in(alloc);
     }
 
+    /// Rust-only test accounting (parity tail S7-6): the active and history
+    /// windows, both result lists and every stored result's chunks. The
+    /// history start pin and the selected match's pins are the TERMINAL's
+    /// (N262) and are not counted.
+    #[cfg(any(test, feature = "test-allocators"))]
+    pub fn owned_bytes(&self) -> usize {
+        use super::cap_bytes;
+        let results: usize = self
+            .active_results
+            .iter()
+            .chain(self.history_results.iter())
+            .map(|hl| cap_bytes(&hl.chunks))
+            .sum();
+        self.active.owned_bytes()
+            + self
+                .history
+                .as_ref()
+                .map_or(0, |h| h.searcher.owned_bytes())
+            + cap_bytes(&self.active_results)
+            + cap_bytes(&self.history_results)
+            + results
+    }
+
     // fn allocator(self: *ScreenSearch) Allocator {
     fn allocator(&self) -> Allocator {
         // return self.active.window.alloc;
@@ -3328,6 +3351,52 @@ mod tests {
         let _ = search.select(Select::Prev).unwrap();
 
         search.deinit();
+        t.deinit(alloc);
+    }
+
+    // Parity tail S7-6 (Rust-only): `matches(alloc)` is `alloc.alloc(
+    // FlattenedHighlight, n)` plus shallow copies: ONE exact allocation through
+    // the allocator it is given (the caller's, not the search's), whose
+    // elements alias the stored results' chunks.
+    #[test]
+    fn screen_search_matches_is_one_allocation_through_the_given_allocator() {
+        use crate::alloc::testing::{with_handle, CountingAllocator};
+
+        let alloc = Allocator;
+        let mut t: Terminal = Terminal::init(alloc, terminal_opts(10, 2, 10_000)).unwrap();
+        let active_ptr: *mut Screen = t.screens.active;
+        let mut s = t.vt_stream();
+        s.next_slice(b"Fizz\r\nBuzz\r\nFizz\r\nBang");
+
+        let mut search: ScreenSearch = ScreenSearch::init(alloc, active_ptr, b"Fizz").unwrap();
+        search.search_all().unwrap();
+        assert_eq!(2, search.matches_len());
+
+        let counting = CountingAllocator::over_heap();
+        let c = counting.allocator();
+        with_handle(&c, |calloc| {
+            let matches = search.matches(calloc).unwrap();
+            assert_eq!(2, matches.len());
+            assert_eq!(1, counting.alloc_calls.get());
+            assert_eq!(
+                2 * core::mem::size_of::<FlattenedRef<'_>>(),
+                counting.live_bytes.get()
+            );
+            // Newest first: the last active result, then the first.
+            assert!(core::ptr::eq(
+                matches[0].chunks.as_ptr(),
+                search.active_results[1].chunks.as_ptr()
+            ));
+            assert!(core::ptr::eq(
+                matches[1].chunks.as_ptr(),
+                search.active_results[0].chunks.as_ptr()
+            ));
+            drop(matches);
+            assert_eq!(0, counting.live_bytes.get());
+        });
+
+        search.deinit();
+        s.deinit();
         t.deinit(alloc);
     }
 }

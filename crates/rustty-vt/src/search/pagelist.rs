@@ -164,6 +164,14 @@ impl PageListSearch {
     /// This does NOT access the PageList, so it can be called without
     /// a lock held.
     // pub fn next(self: *PageListSearch) ?FlattenedHighlight {
+    /// Rust-only test accounting (parity tail S7-6): see
+    /// `SlidingWindow::owned_bytes`. The tracked pin is the TERMINAL's (N262)
+    /// and is not counted.
+    #[cfg(any(test, feature = "test-allocators"))]
+    pub fn owned_bytes(&self) -> usize {
+        self.window.owned_bytes()
+    }
+
     #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> Option<FlattenedRef<'_>> {
         // return self.window.next();

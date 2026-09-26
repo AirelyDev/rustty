@@ -550,6 +550,18 @@ pub unsafe fn feed(search_: Search) -> Result {
     // built for exactly this.
     // s.feed(t, true);
     s.feed(t, true);
+    // PORT NOTE: reference defect (R13, UD305). `TerminalSearch.feed` logs and
+    // swallows an allocation failure, and a feed that succeeds always moves
+    // the search out of `feed_required` (a history screen either takes its
+    // next page or completes; a screen search is created). So a search that is
+    // still `feed_required` right after a feed failed to allocate, and the
+    // documented protocol (feed while the status is feed_required) would
+    // repeat the same failing feed forever with `GHOSTTY_SUCCESS`. The port
+    // reports `GHOSTTY_OUT_OF_MEMORY` there, the error code allocator.h
+    // promises for allocation failures; every other feed is unchanged.
+    if s.status() == rustty_vt::search::terminal::Status::FeedRequired {
+        return Result::OutOfMemory;
+    }
     // return .success;
     Result::Success
 }
@@ -578,7 +590,20 @@ pub unsafe fn run(search_: Search) -> Result {
     // the last feed, so run doubles as the "terminal changed, catch
     // up" convenience for one-shot embedders.
     // s.feed(t, true);
+    //
+    // PORT NOTE: reference defect (R13, UD305). The reference loops below until
+    // the status is complete, and `feed` swallows an allocation failure: with
+    // the search's allocator failing, the status stays `feed_required` after
+    // every feed and `run` never returns. A successful feed always leaves
+    // `feed_required` (see `feed` above), so the port returns
+    // `GHOSTTY_OUT_OF_MEMORY` when a feed leaves the search there. `tick` needs
+    // no such check: a failed tick still consumes the window it was reading,
+    // so the loop makes progress.
+    use rustty_vt::search::terminal::Status as S;
     s.feed(t, true);
+    if s.status() == S::FeedRequired {
+        return Result::OutOfMemory;
+    }
     // while (true) {
     //     switch (s.status()) {
     //         .complete => return .success,
@@ -587,10 +612,14 @@ pub unsafe fn run(search_: Search) -> Result {
     //     }
     // }
     loop {
-        use rustty_vt::search::terminal::Status as S;
         match s.status() {
             S::Complete => return Result::Success,
-            S::FeedRequired => s.feed(t, true),
+            S::FeedRequired => {
+                s.feed(t, true);
+                if s.status() == S::FeedRequired {
+                    return Result::OutOfMemory;
+                }
+            }
             S::Running => {
                 let _ = s.tick();
             }
@@ -2266,5 +2295,442 @@ mod tests {
     #[test]
     fn search_free_null() {
         unsafe { free(std::ptr::null_mut()) };
+    }
+
+    // ---------------------------------------------------------------------
+    // Parity tail S7-6: allocator routing (S176-F1, S4-F2 search half), the
+    // terminal-charged split (N262), the C-API failure sweep, and UD305.
+    // Rust-only tests: `c/search.zig` has no allocator test.
+    // ---------------------------------------------------------------------
+
+    use rustty_vt::alloc::testing::{Config, CountingAllocator, FailingAllocator};
+
+    /// Pins tracked by the terminal's active screen.
+    unsafe fn tracked_pins(terminal: terminal_c::Terminal) -> usize {
+        unsafe {
+            (*(*(*terminal).terminal).screens.active)
+                .pages
+                .tracked_pins
+                .count()
+        }
+    }
+
+    /// A match on each of `pages_wanted` pages of history. With two, a feed has
+    /// a page to append (the history searcher walks backwards one page per
+    /// feed). The sweeps use one page under Miri (history is still searched:
+    /// the rows that scrolled out of the active area).
+    unsafe fn write_corpus_pages(terminal: terminal_c::Terminal, pages_wanted: usize) {
+        let pages = || unsafe {
+            (*(*(*terminal).terminal).screens.active)
+                .pages
+                .total_pages()
+        };
+        for page in 1..=pages_wanted {
+            unsafe { vt_write(terminal, b"Fizz\r\nBuzz\r\n") };
+            let mut lines = 0usize;
+            while pages() < page || lines < 6 {
+                unsafe { vt_write(terminal, b"\r\n") };
+                lines += 1;
+            }
+        }
+        unsafe { vt_write(terminal, b"Fizz\r\n\r\n\r\n\r\n\r\nFizz.") };
+    }
+
+    /// The corpus: two pages natively, one under Miri (the small corpus).
+    unsafe fn write_corpus(terminal: terminal_c::Terminal) {
+        unsafe { write_corpus_pages(terminal, if cfg!(miri) { 1 } else { 2 }) };
+    }
+
+    unsafe fn set_needle(search: Search, needle: &[u8]) -> Result {
+        let v = test_string(needle);
+        unsafe {
+            set(
+                search,
+                SearchOption::Needle,
+                &v as *const LibString as *const c_void,
+            )
+        }
+    }
+
+    unsafe fn search_status(search: Search) -> SearchStatus {
+        let mut status = SearchStatus::Complete;
+        assert_eq!(Result::Success, unsafe {
+            get(
+                search,
+                SearchData::Status,
+                &mut status as *mut SearchStatus as *mut c_void,
+            )
+        });
+        status
+    }
+
+    /// The bytes the search holds from its allocator: the wrapper and every
+    /// container of its `TerminalSearch`.
+    unsafe fn search_owned_bytes(search: Search) -> usize {
+        size_of::<SearchWrapper>()
+            + unsafe { (*search).search.as_ref() }.map_or(0, |s| s.owned_bytes())
+    }
+
+    // The wrapper and every allocation of the `TerminalSearch` are on the
+    // allocator given to `ghostty_search_new` (the counting allocator's live
+    // bytes equal what the search holds, at every step); the registry entry
+    // and the tracked pins are on the terminal's (N262).
+    #[test]
+    fn search_internals_route_through_the_callers_allocator() {
+        let term = CountingAllocator::over_heap();
+        let tc = term.allocator();
+        let srch = CountingAllocator::over_heap();
+        let sc = srch.allocator();
+        unsafe {
+            let terminal = test_terminal(&tc);
+            write_corpus_pages(terminal, 2);
+            let pins_before = tracked_pins(terminal);
+            let registry_before = (*terminal).searches.count();
+
+            let mut search: Search = std::ptr::null_mut();
+            assert_eq!(Result::Success, new(Some(&sc), &mut search, terminal));
+            // `alloc.create(SearchWrapper)`: the one allocation of `new`.
+            assert_eq!(1, srch.alloc_calls.get());
+            assert_eq!(
+                Some((
+                    size_of::<SearchWrapper>(),
+                    std::mem::align_of::<SearchWrapper>().trailing_zeros() as u8
+                )),
+                srch.last_alloc.get()
+            );
+            // The registry entry is the terminal's.
+            assert_eq!(registry_before + 1, (*terminal).searches.count());
+            assert_eq!(
+                rustty_vt::alloc::default(Some(&tc)),
+                *(*terminal).searches.allocator()
+            );
+
+            // `TerminalSearch.init(wrapper.alloc, needle)`: the needle dupe and
+            // the overlap buffer.
+            assert_eq!(Result::Success, set_needle(search, b"Fizz"));
+            assert_eq!(3, srch.alloc_calls.get());
+            assert_eq!(search_owned_bytes(search), srch.live_bytes.get());
+
+            assert_eq!(Result::Success, run(search));
+            assert_eq!(SearchStatus::Complete, search_status(search));
+            assert_eq!(search_owned_bytes(search), srch.live_bytes.get());
+            // The history searcher's two pins are the terminal's.
+            assert_eq!(pins_before + 2, tracked_pins(terminal));
+
+            let mut buf = [CSelection::default(); 16];
+            let mut out = CSelectionBuffer {
+                ptr: buf.as_mut_ptr(),
+                cap: buf.len(),
+                len: 0,
+            };
+            assert_eq!(
+                Result::Success,
+                get(
+                    search,
+                    SearchData::ViewportMatches,
+                    &mut out as *mut CSelectionBuffer as *mut c_void,
+                )
+            );
+            assert!(out.len >= 1);
+            assert_eq!(search_owned_bytes(search), srch.live_bytes.get());
+            // `.matches` copies shallow results: no allocation.
+            let calls = srch.alloc_calls.get();
+            out.len = 0;
+            assert_eq!(
+                Result::Success,
+                get(
+                    search,
+                    SearchData::Matches,
+                    &mut out as *mut CSelectionBuffer as *mut c_void,
+                )
+            );
+            assert!(out.len >= 3);
+            assert_eq!(calls, srch.alloc_calls.get());
+
+            assert_eq!(
+                Result::Success,
+                set(search, SearchOption::SelectNext, std::ptr::null())
+            );
+            // The selected match's two pins are the terminal's too.
+            assert_eq!(pins_before + 4, tracked_pins(terminal));
+            assert_eq!(search_owned_bytes(search), srch.live_bytes.get());
+
+            // A new needle builds the replacement on the search's allocator
+            // and releases the old search (and its pins).
+            assert_eq!(Result::Success, set_needle(search, b"Buzz"));
+            assert_eq!(pins_before, tracked_pins(terminal));
+            assert_eq!(search_owned_bytes(search), srch.live_bytes.get());
+
+            free(search);
+            assert_eq!(0, srch.live_bytes.get());
+            assert_eq!(pins_before, tracked_pins(terminal));
+            assert_eq!(registry_before, (*terminal).searches.count());
+
+            terminal_c::free(terminal);
+            assert_eq!(0, term.live_bytes.get());
+        }
+    }
+
+    // PORT NOTE: reference defect (R13, UD305). With the search's allocator
+    // failing, a feed that needs to append a history page fails and is
+    // swallowed by `TerminalSearch.feed`; the status stays `feed_required`, so
+    // the reference's `run` loops forever and `feed` keeps answering SUCCESS.
+    // The port answers `GHOSTTY_OUT_OF_MEMORY` from both, and `run` returns.
+    // Negative controls (task S7-6): with `feed`'s check removed this test
+    // fails at "a failed feed reports OUT_OF_MEMORY"; with `run`'s loop check
+    // removed it never returns (killed by a timeout).
+    #[test]
+    fn search_feed_and_run_report_out_of_memory_instead_of_spinning() {
+        let failing = FailingAllocator::over_heap(Config::default());
+        let fc = failing.allocator();
+        with_test_allocator(|talloc| unsafe {
+            let terminal = test_terminal(talloc);
+            write_corpus_pages(terminal, 2);
+            let search: Search = test_new_search(&fc, terminal, b"Fizz");
+
+            // Search everything the first feed loaded, until the history
+            // searcher needs its next page.
+            assert_eq!(Result::Success, feed(search));
+            let mut rounds = 0;
+            while search_status(search) == SearchStatus::Running {
+                assert_eq!(Result::Success, tick(search, std::ptr::null_mut()));
+                rounds += 1;
+                assert!(rounds < 10_000);
+            }
+            assert_eq!(SearchStatus::FeedRequired, search_status(search));
+
+            // Every allocation fails from here on.
+            failing.fail_index.set(failing.alloc_index.get());
+            assert_eq!(
+                Result::OutOfMemory,
+                feed(search),
+                "a failed feed reports OUT_OF_MEMORY"
+            );
+            assert!(failing.has_induced_failure.get());
+            assert_eq!(SearchStatus::FeedRequired, search_status(search));
+            assert_eq!(Result::OutOfMemory, run(search), "run returns");
+
+            // The allocator recovers: the same search completes.
+            failing.fail_index.set(usize::MAX);
+            assert_eq!(Result::Success, run(search));
+            assert_eq!(SearchStatus::Complete, search_status(search));
+
+            free(search);
+            terminal_c::free(terminal);
+        });
+        assert_eq!(failing.allocated_bytes.get(), failing.freed_bytes.get());
+    }
+
+    /// One pass of the C API over `terminal` with a search on `calloc`.
+    /// Returns `(new_failed, out_of_memory_results)`; every result is checked
+    /// to be SUCCESS, OUT_OF_MEMORY, or (for a call that needs a search or a
+    /// match that a failed call did not produce) NO_VALUE.
+    unsafe fn sweep_once(terminal: terminal_c::Terminal, calloc: &CAllocator) -> (bool, usize) {
+        let mut ooms = 0usize;
+        let mut check = |r: Result, what: &str, no_value_ok: bool| {
+            assert!(
+                r == Result::Success
+                    || r == Result::OutOfMemory
+                    || (no_value_ok && r == Result::NoValue),
+                "{what}: unexpected {r:?}"
+            );
+            if r == Result::OutOfMemory {
+                ooms += 1;
+            }
+        };
+        let mut search: Search = std::ptr::null_mut();
+        let r = unsafe { new(Some(calloc), &mut search, terminal) };
+        if r == Result::OutOfMemory {
+            assert!(search.is_null());
+            return (true, 1);
+        }
+        assert_eq!(Result::Success, r);
+        unsafe {
+            check(set_needle(search, b"Fizz"), "needle", false);
+            check(run(search), "run", false);
+            let mut total = 0usize;
+            check(
+                get(
+                    search,
+                    SearchData::TotalMatches,
+                    &mut total as *mut usize as *mut c_void,
+                ),
+                "total",
+                false,
+            );
+            let mut buf = [CSelection::default(); 16];
+            let mut out = CSelectionBuffer {
+                ptr: buf.as_mut_ptr(),
+                cap: buf.len(),
+                len: 0,
+            };
+            check(
+                get(
+                    search,
+                    SearchData::ViewportMatches,
+                    &mut out as *mut CSelectionBuffer as *mut c_void,
+                ),
+                "viewport matches",
+                false,
+            );
+            check(
+                get(
+                    search,
+                    SearchData::Matches,
+                    &mut out as *mut CSelectionBuffer as *mut c_void,
+                ),
+                "matches",
+                false,
+            );
+            for opt in [
+                SearchOption::SelectNext,
+                SearchOption::SelectNext,
+                SearchOption::SelectPrev,
+            ] {
+                check(set(search, opt, std::ptr::null()), "select", true);
+            }
+            let mut sel = CSelection::default();
+            check(
+                get(
+                    search,
+                    SearchData::SelectedMatch,
+                    &mut sel as *mut CSelection as *mut c_void,
+                ),
+                "selected match",
+                true,
+            );
+            check(feed(search), "feed", false);
+            check(tick(search, std::ptr::null_mut()), "tick", false);
+            // A replacement search (and the old one's release).
+            check(set_needle(search, b"Buzz"), "needle change", false);
+            check(run(search), "run again", false);
+            free(search);
+        }
+        (false, ooms)
+    }
+
+    // The C-API allocation-failure sweep (the S-7 design's
+    // `checkAllAllocationFailures` for the search): for every allocation
+    // index n of the search's allocator, the n-th allocation fails (sticky).
+    // Nothing aborts or panics, every result is SUCCESS or OUT_OF_MEMORY (or
+    // NO_VALUE where a failed call left nothing to select), every byte and
+    // allocation taken from the search's allocator is returned, and the
+    // terminal's registry and pins are back where they started. A second loop
+    // refuses the r-th remap instead; its fallback allocates, so nothing fails.
+    #[test]
+    fn search_allocation_failure_sweep_through_the_c_api() {
+        with_test_allocator(|talloc| unsafe {
+            let terminal = test_terminal(talloc);
+            write_corpus(terminal);
+            let pins_before = tracked_pins(terminal);
+            let registry_before = (*terminal).searches.count();
+            let check = |failing: &FailingAllocator, what: &str| {
+                assert_eq!(
+                    failing.allocated_bytes.get(),
+                    failing.freed_bytes.get(),
+                    "{what}: every byte taken from the search's allocator is returned"
+                );
+                assert_eq!(
+                    failing.allocations.get(),
+                    failing.deallocations.get(),
+                    "{what}: every allocation is freed"
+                );
+                assert_eq!(pins_before, tracked_pins(terminal), "{what}: pins");
+                assert_eq!(
+                    registry_before,
+                    (*terminal).searches.count(),
+                    "{what}: registry"
+                );
+            };
+
+            let clean = FailingAllocator::over_heap(Config::default());
+            let cc = clean.allocator();
+            assert_eq!((false, 0), sweep_once(terminal, &cc));
+            check(&clean, "clean run");
+            let remaps = clean.resize_index.get();
+            assert!(remaps > 0, "the corpus must grow a list by remap");
+
+            let mut n = 0usize;
+            let mut new_failures = 0usize;
+            let mut call_failures = 0usize;
+            loop {
+                let failing = FailingAllocator::over_heap(Config {
+                    fail_index: n,
+                    resize_fail_index: usize::MAX,
+                });
+                let fc = failing.allocator();
+                let (new_failed, ooms) = sweep_once(terminal, &fc);
+                check(&failing, &format!("alloc n={n}"));
+                if !failing.has_induced_failure.get() {
+                    assert!(!new_failed && ooms == 0, "n={n}: no induced failure");
+                    break;
+                }
+                if new_failed {
+                    new_failures += 1;
+                } else {
+                    call_failures += ooms;
+                }
+                n += 1;
+            }
+            assert!(n > 10, "the sweep covers the search's allocations ({n})");
+            assert_eq!(1, new_failures, "only index 0 (the wrapper) fails `new`");
+            assert!(call_failures > 0);
+
+            for r in 0..=remaps {
+                let failing = FailingAllocator::over_heap(Config {
+                    fail_index: usize::MAX,
+                    resize_fail_index: r,
+                });
+                let fc = failing.allocator();
+                assert_eq!(
+                    (false, 0),
+                    sweep_once(terminal, &fc),
+                    "remap r={r}: a refused remap falls back to alloc"
+                );
+                check(&failing, &format!("remap r={r}"));
+            }
+
+            terminal_c::free(terminal);
+        });
+    }
+
+    // The terminal-charged half (N262): one allocator shared by the terminal
+    // and the search (what an embedder passing one allocator gets), failing
+    // at the k-th allocation after the corpus, so the registry growth and the
+    // search's tracked pins (terminal-charged) fail as well as the search's
+    // own state. The same checks hold, and the terminal frees every byte.
+    #[test]
+    fn search_shared_allocator_failure_sweep_through_the_c_api() {
+        let failing = FailingAllocator::over_heap(Config::default());
+        let fc = failing.allocator();
+        unsafe {
+            let terminal = test_terminal(&fc);
+            write_corpus(terminal);
+            let pins_before = tracked_pins(terminal);
+            let registry_before = (*terminal).searches.count();
+            let mut k = 0usize;
+            let mut induced = 0usize;
+            loop {
+                failing.has_induced_failure.set(false);
+                failing.fail_index.set(failing.alloc_index.get() + k);
+                let _ = sweep_once(terminal, &fc);
+                failing.fail_index.set(usize::MAX);
+                assert_eq!(pins_before, tracked_pins(terminal), "k={k}: pins");
+                assert_eq!(
+                    registry_before,
+                    (*terminal).searches.count(),
+                    "k={k}: registry"
+                );
+                if !failing.has_induced_failure.get() {
+                    break;
+                }
+                induced += 1;
+                k += 1;
+            }
+            assert!(induced > 10, "the sweep covers the allocations ({induced})");
+            terminal_c::free(terminal);
+        }
+        assert_eq!(failing.allocated_bytes.get(), failing.freed_bytes.get());
+        assert_eq!(failing.allocations.get(), failing.deallocations.get());
     }
 }

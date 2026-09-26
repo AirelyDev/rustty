@@ -156,6 +156,13 @@ impl ActiveSearch {
     /// Find the next match for the needle in the active area. This returns
     /// null when there are no more matches.
     // pub fn next(self: *ActiveSearch) ?FlattenedHighlight {
+    /// Rust-only test accounting (parity tail S7-6): see
+    /// `SlidingWindow::owned_bytes`.
+    #[cfg(any(test, feature = "test-allocators"))]
+    pub fn owned_bytes(&self) -> usize {
+        self.window.owned_bytes()
+    }
+
     #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> Option<FlattenedRef<'_>> {
         // return self.window.next();

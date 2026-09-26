@@ -394,6 +394,34 @@ mod tests {
         s.deinit();
     }
 
+    // Parity tail S7-6: `deinit(alloc)` checks that it is given the allocator
+    // the chunks were built with (the reference's contract, which a Zig
+    // `MultiArrayList` cannot check).
+    #[cfg_attr(
+        not(debug_assertions),
+        ignore = "the allocator-identity check is a debug assertion (R14)"
+    )]
+    #[test]
+    #[should_panic(expected = "allocator mismatch")]
+    fn flattened_deinit_checks_the_allocator() {
+        let counting = CountingAllocator::over_heap();
+        let c = counting.allocator();
+        with_handle(&c, |alloc| {
+            let mut hl = Flattened {
+                chunks: ChunkList::new_in(alloc),
+                top_x: 0,
+                bot_x: 0,
+            };
+            hl.chunks.push(Chunk {
+                node: core::ptr::null_mut(),
+                serial: 0,
+                start: 0,
+                end: 1,
+            });
+            hl.deinit(Allocator);
+        });
+    }
+
     // Parity tail S7-6: `clone(alloc)` is `MultiArrayList.clone`: ONE
     // allocation of `growCapacity(len)` chunks (never a remap) through the
     // allocator it is given, freed through it; an empty highlight allocates
