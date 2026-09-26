@@ -2468,6 +2468,7 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - parity row(s):   none (found by task L-2 running the headed KAT `gtk_parity_callbacks`); NEW-FINDINGS N300.
 - test:            `surface_drop_answers_the_gboolean_drop_signal` (rustty-apprt, Linux, display): emitting `drop` on `surface_drop_target` with a value that is not a surface id returns `false` and the process survives; the headed KAT `parity_callbacks_do_not_abort` emits `drop` on every drop target. NEGATIVE CONTROL (VM, task L-2): the `()` handler restored aborts the test process.
 - proposed fix:    declare `surfaceDrop` as `callconv(.c) c_int` and return `1` after `moveSplit`, `0` on each early return.
+- upstream status: not reported
 
 ### UD300 — three GTK "surface is not in a window" warnings name `new_tab` for another action
 - kind:            latent (copy-paste in a message)
