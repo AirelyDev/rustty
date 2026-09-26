@@ -1023,6 +1023,8 @@ pub unsafe fn encode(terminal: terminal_c::Terminal, writer: io_c::Writer) -> Re
     // SAFETY: shared read of the live native terminal for the encode duration
     // (the caller serializes all terminal access — header contract).
     if let Err(err) = snapshot_core::encode(
+        // native.gpa()
+        unsafe { (*(*native).screens.active).alloc },
         &mut adapter,
         unsafe { &*native },
         snapshot_core::EncodeOptions {
@@ -1082,6 +1084,8 @@ pub unsafe fn encode_buf(
     let mut writer = vt_io::FixedWriter::new(destination);
     // SAFETY: shared read of the live native terminal (see `encode`).
     if let Err(err) = snapshot_core::encode(
+        // native.gpa()
+        unsafe { (*(*native).screens.active).alloc },
         &mut writer,
         unsafe { &*native },
         snapshot_core::EncodeOptions {
@@ -1096,6 +1100,8 @@ pub unsafe fn encode_buf(
                 let mut counter = CountingVtWriter::default();
                 // SAFETY: as above.
                 if let Err(count_err) = snapshot_core::encode(
+                    // native.gpa()
+                    unsafe { (*(*native).screens.active).alloc },
                     &mut counter,
                     unsafe { &*native },
                     snapshot_core::EncodeOptions {
@@ -1161,6 +1167,8 @@ pub unsafe fn encode_alloc(
     let mut writer = rustty_vt::alloc::AllocatingWriter::init(alloc);
     // SAFETY: shared read of the live native terminal (see `encode`).
     if let Err(err) = snapshot_core::encode(
+        // native.gpa()
+        unsafe { (*(*native).screens.active).alloc },
         &mut writer,
         unsafe { &*native },
         snapshot_core::EncodeOptions {
@@ -2729,13 +2737,15 @@ mod tests {
         assert_eq!(Some((153, 0)), counting.last_alloc.get());
         assert_eq!(2, counting.remap_calls.get());
         assert_eq!(0, counting.free_calls.get());
-        // The terminal's allocator: the continuation copy (`\\x1b[31`,
-        // written a byte first: growCapacity(1 + 1 + 1) = 132, then the
-        // `toOwnedSlice` remap), freed before returning.
-        assert_eq!(1, terminal_counting.alloc_calls.get() - terminal_allocs);
-        assert_eq!(Some((132, 0)), terminal_counting.last_alloc.get());
-        assert_eq!(1, terminal_counting.remap_calls.get() - terminal_remaps);
-        assert_eq!(1, terminal_counting.free_calls.get() - terminal_frees);
+        // The terminal's allocator (`native.gpa()`): the continuation copy
+        // (`\\x1b[31`, written a byte first: growCapacity(1 + 1 + 1) = 132,
+        // then the `toOwnedSlice` remap to 4) and the record scratch's spill
+        // past its 512 stack bytes (S7-8 N332: 513 bytes, then one remap
+        // growth), both freed before returning, the continuation copy last.
+        assert_eq!(2, terminal_counting.alloc_calls.get() - terminal_allocs);
+        assert_eq!(Some((513, 0)), terminal_counting.last_alloc.get());
+        assert_eq!(2, terminal_counting.remap_calls.get() - terminal_remaps);
+        assert_eq!(2, terminal_counting.free_calls.get() - terminal_frees);
         assert_eq!(Some((4, 0)), terminal_counting.last_free.get());
         assert_eq!(terminal_live, terminal_counting.live_bytes.get());
         // The caller owns exactly the encoded bytes.

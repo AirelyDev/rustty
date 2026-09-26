@@ -223,9 +223,12 @@ impl From<io::WriteFailed> for FinishError {
 /// The scratch allocation is retained between records so a stream's peak
 /// memory is the largest record payload rather than the complete snapshot.
 ///
-/// PORT NOTE: the reference takes an `Allocator` for the scratch buffer; the
-/// port uses the global allocator (the crate-wide treatment) behind a
-/// stack-fallback scratch (see [`RECORD_SCRATCH_STACK_BYTES`]). The destination
+/// PORT NOTE: the reference takes an `Allocator` for the scratch buffer
+/// (`snapshot.encode` passes `stackFallback(512, alloc).get()`); the port's
+/// scratch is a stack-fallback writer over that allocator
+/// ([`Writer::init_in`], parity tail S7-8; see
+/// [`RECORD_SCRATCH_STACK_BYTES`]). [`Writer::init`] is the same over the Rust
+/// heap, for the record-level tests. The destination
 /// is generic (`W`) rather than `*std.Io.Writer` so tests can read a concrete
 /// `AllocatingWriter` destination back through `destination()` while this
 /// writer borrows it (the reference reads the destination directly; Rust
@@ -250,9 +253,16 @@ pub const RECORD_SCRATCH_STACK_BYTES: usize = 512;
 
 impl<'d, W: io::Writer + ?Sized> Writer<'d, W> {
     pub fn init(destination: &'d mut W) -> Writer<'d, W> {
+        Writer::init_in(crate::alloc::Global, destination)
+    }
+
+    /// `.init(std.heap.stackFallback(512, alloc).get(), destination)`: the
+    /// scratch spills through `alloc` once a payload outgrows the stack
+    /// buffer, fallibly (`error.WriteFailed`).
+    pub fn init_in(alloc: crate::alloc::Allocator, destination: &'d mut W) -> Writer<'d, W> {
         Writer {
             destination,
-            scratch: io::StackFallbackWriter::new(),
+            scratch: io::StackFallbackWriter::new_in(alloc),
             active_tag: None,
         }
     }
