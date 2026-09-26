@@ -16,11 +16,11 @@
 //! every growing call and `deinit` take the allocator. Here the allocator is
 //! bound at construction ([`SegmentedList::new_in`]) and dropping the list
 //! frees it, the convention the S7 allocator-aware containers follow
-//! (allocator_api2 binds at construction). The OSC `Command` that owns a list
-//! is handed to its consumer by value, and dropping it must free the shelves
-//! through the parser's allocator; an unmanaged list would need every consumer
-//! to call `deinit` with the right allocator. The calls the allocator sees, and
-//! their sizes and order, are the reference's.
+//! (allocator_api2 binds at construction). The OSC color list lives in the OSC
+//! parser (`color_requests`) and is dropped at the parser's `reset`, which must
+//! free the shelves through the allocator the list grew with, whatever the
+//! parser's `alloc` is by then. The calls the allocator sees, and their sizes
+//! and order, are the reference's.
 //!
 //! PORT NOTE (element bound): `T: Copy`. The reference copies elements freely
 //! (`append`, `pop`, `writeToSlice`) and never runs element destructors; its
@@ -253,7 +253,7 @@ impl<T: Copy, const PREALLOC: usize, A: Allocator> SegmentedList<T, PREALLOC, A>
         assert!(i < self.len);
         // SAFETY: `i < len`, so the element is initialized; `&mut self` is
         // exclusive.
-        unsafe { &mut *self.unchecked_at(i) }
+        unsafe { &mut *self.unchecked_at_mut(i) }
     }
 
     pub fn count(&self) -> usize {
@@ -308,7 +308,7 @@ impl<T: Copy, const PREALLOC: usize, A: Allocator> SegmentedList<T, PREALLOC, A>
         // try self.growCapacity(allocator, new_length);
         self.grow_capacity(new_length)?;
         // const result = uncheckedAt(self, self.len);
-        let result = self.unchecked_at(self.len);
+        let result = self.unchecked_at_mut(self.len);
         // self.len = new_length;
         self.len = new_length;
         // return result;
@@ -543,17 +543,56 @@ impl<T: Copy, const PREALLOC: usize, A: Allocator> SegmentedList<T, PREALLOC, A>
         }
     }
 
-    /// `uncheckedAt`: the slot's address. Reading it is sound only below
-    /// `len`; the slot must lie within the capacity.
-    pub fn unchecked_at(&self, index: usize) -> *mut T {
+    /// `uncheckedAt`: the slot's address, READ-ONLY (it is derived from
+    /// `&self`). Reading it is sound only below `len`; the slot must lie within
+    /// the capacity. Writes go through [`SegmentedList::unchecked_at_mut`].
+    ///
+    /// PORT NOTE (parity tail S7-7b, review F1): the reference's `uncheckedAt`
+    /// returns `*T` or `*const T` by the constness of `self` (`AtType`). A
+    /// pointer projected from `&self` must not be written through (Stacked
+    /// and Tree Borrows: the preallocated slots live inside the list), so
+    /// the two constnesses are two functions.
+    pub fn unchecked_at(&self, index: usize) -> *const T {
         if index < PREALLOC {
-            return self.prealloc_segment[index].as_ptr().cast_mut();
+            return self.prealloc_segment[index].as_ptr();
         }
         let shelf_index = Self::shelf_index(index);
         let box_index = Self::box_index(index, shelf_index);
         // SAFETY: the caller keeps `index` within the capacity, so the box
         // lies inside that shelf's allocation.
         unsafe { self.segment(shelf_index).as_ptr().add(box_index) }
+    }
+
+    /// `uncheckedAt` through `*Self`: the slot's address, writable, projected
+    /// from `&mut self` (see `unchecked_at`).
+    pub fn unchecked_at_mut(&mut self, index: usize) -> *mut T {
+        if index < PREALLOC {
+            return self.prealloc_segment[index].as_mut_ptr();
+        }
+        let shelf_index = Self::shelf_index(index);
+        let box_index = Self::box_index(index, shelf_index);
+        // SAFETY: as `unchecked_at`; a shelf pointer comes from `allocate`
+        // and is writable.
+        unsafe { self.segment(shelf_index).as_ptr().add(box_index) }
+    }
+
+    /// A cursor slot's address for a const walk (read-only).
+    fn slot_ptr_const(&self, slot: Slot) -> *const T {
+        match slot {
+            Slot::Prealloc(i) => self.prealloc_segment[i].as_ptr(),
+            // SAFETY: the cursor only reaches boxes below `len`, inside
+            // their shelf.
+            Slot::Shelf(s, b) => unsafe { self.segment(s).as_ptr().add(b) },
+        }
+    }
+
+    /// A cursor slot's address for a mutable walk, projected from `&mut self`.
+    fn slot_ptr_mut(&mut self, slot: Slot) -> *mut T {
+        match slot {
+            Slot::Prealloc(i) => self.prealloc_segment[i].as_mut_ptr(),
+            // SAFETY: as `slot_ptr_const`; shelf pointers are writable.
+            Slot::Shelf(s, b) => unsafe { self.segment(s).as_ptr().add(b) },
+        }
     }
 
     fn shelf_count(box_count: usize) -> usize {
@@ -735,7 +774,7 @@ impl Cursor {
 }
 
 macro_rules! base_iterator {
-    ($name:ident, $list:ty, $elem:ty, $deref:ident) => {
+    ($name:ident, $list:ty, $elem:ty, $deref:ident, $ptr:ty, $slot_ptr:ident, ($($m:tt)*)) => {
         // pub const Iterator = BaseIterator(*Self, *T);
         // pub const ConstIterator = BaseIterator(*const Self, *const T);
         pub struct $name<'a, T: Copy, const PREALLOC: usize, A: Allocator> {
@@ -744,13 +783,11 @@ macro_rules! base_iterator {
         }
 
         impl<'a, T: Copy, const PREALLOC: usize, A: Allocator> $name<'a, T, PREALLOC, A> {
-            fn slot_ptr(&self, slot: Slot) -> *mut T {
-                match slot {
-                    Slot::Prealloc(i) => self.list.prealloc_segment[i].as_ptr().cast_mut(),
-                    // SAFETY: the cursor only reaches boxes below `len`,
-                    // inside their shelf.
-                    Slot::Shelf(s, b) => unsafe { self.list.segment(s).as_ptr().add(b) },
-                }
+            // PORT NOTE (parity tail S7-7b, review F1): the mutable iterator
+            // projects its slots through `&mut *self.list`, the const one
+            // through `&*self.list`.
+            fn slot_ptr(&$($m)* self, slot: Slot) -> $ptr {
+                self.list.$slot_ptr(slot)
             }
 
             // `BaseIterator.next`; `Iterator` lends its elements (see below),
@@ -795,7 +832,7 @@ macro_rules! base_iterator {
 /// # Safety
 /// `p` points to an initialized `T` that outlives `'b` and is not mutated
 /// while the returned borrow lives.
-unsafe fn deref_const<'b, T>(p: *mut T) -> &'b T {
+unsafe fn deref_const<'b, T>(p: *const T) -> &'b T {
     // SAFETY: forwarded to the caller.
     unsafe { &*p }
 }
@@ -815,13 +852,19 @@ base_iterator!(
     Iterator,
     &'a mut SegmentedList<T, PREALLOC, A>,
     &mut T,
-    deref_mut
+    deref_mut,
+    *mut T,
+    slot_ptr_mut,
+    (mut)
 );
 base_iterator!(
     ConstIterator,
     &'a SegmentedList<T, PREALLOC, A>,
     &'a T,
-    deref_const
+    deref_const,
+    *const T,
+    slot_ptr_const,
+    ()
 );
 
 #[cfg(test)]
@@ -937,6 +980,49 @@ mod tests {
         }
 
         list.set_capacity(0).unwrap();
+    }
+
+    // Parity tail S7-7b (review F1; Rust-only, the Miri target): every WRITE
+    // path, through both the preallocated slots and a shelf. `add_one` and
+    // `append` write new slots, `at_mut` and the mutable `Iterator` overwrite
+    // them, and the const walks read them back. Isolated and FFI-free, so
+    // `cargo +nightly miri test -p rustty-datastruct --lib --
+    // segmented_list::tests::mutating_paths_through_prealloc_and_shelves`
+    // checks the pointer projections under Stacked and Tree Borrows.
+    #[test]
+    fn mutating_paths_through_prealloc_and_shelves() {
+        let mut list = SegmentedList::<u32, 2, Global>::new_in(Global);
+        for v in 0..7u32 {
+            list.add_one().unwrap().write(v);
+        }
+        list.append(7).unwrap();
+        // Slots 0-1 are the preallocated segment, 2-5 shelf 0, 6-7 shelf 1.
+        for i in 0..list.count() {
+            *list.at_mut(i) += 100;
+        }
+        {
+            let mut it = list.iterator(0);
+            while let Some(v) = it.next() {
+                *v *= 2;
+            }
+            while let Some(v) = it.prev() {
+                *v += 1;
+            }
+            it.set(1);
+            *it.peek().unwrap() += 1000;
+        }
+        let expected: Vec<u32> = (0..8u32)
+            .map(|v| (v + 100) * 2 + 1 + if v == 1 { 1000 } else { 0 })
+            .collect();
+        assert_eq!(expected, list.iter().copied().collect::<Vec<_>>());
+        let mut it = list.const_iterator(0);
+        assert_eq!(Some(&expected[0]), it.next());
+        assert_eq!(Some(expected[7]), list.pop());
+        // SAFETY: index 0 is below `len`.
+        assert_eq!(expected[0], unsafe { *list.unchecked_at(0) });
+        let mut out = [0u32; 7];
+        list.write_to_slice(&mut out, 0);
+        assert_eq!(expected[..7], out[..]);
     }
 
     // test "clearRetainingCapacity" {
