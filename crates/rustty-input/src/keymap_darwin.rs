@@ -221,9 +221,11 @@ impl Keymap {
             // const id = self.sourceId(&buf) catch break :id;
             if let Ok(id) = self.source_id(&mut buf) {
                 // std.log.debug("keyboard layout={s}", .{id});
-                // PORT NOTE: `std.log.debug` -> the established `eprintln!`
-                // debug-log shim (see `rustty-os` log helpers).
-                eprintln!("[debug] keyboard layout={}", String::from_utf8_lossy(id));
+                // `std.log` with no scope: the empty target (the reference's
+                // `.default` scope, as `kitty/graphics_image.rs` carries it).
+                // CORRECTION (task S-1c): this printed `[debug] keyboard
+                // layout=...` straight to stderr, outside the `log` facade.
+                log::debug!(target: "", "keyboard layout={}", String::from_utf8_lossy(id));
             }
         }
 

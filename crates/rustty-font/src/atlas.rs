@@ -992,7 +992,11 @@ pub mod wasm_exports {
         match unsafe { atlas_debug_canvas_(self_) } {
             Ok(id) => id,
             Err(err) => {
-                eprintln!("warning: error dumping atlas canvas err={err:?}");
+                // CORRECTION (task S-1c): this printed `warning: ...`, which is
+                // not the logFn line shape (`<level>(<scope>): <message>`) the
+                // sibling `error(atlas)` print above uses. rustty-font has no
+                // `log` facade (D1), so both print directly.
+                eprintln!("warn(atlas): error dumping atlas canvas err={err:?}");
                 0
             }
         }
