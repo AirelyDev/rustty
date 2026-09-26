@@ -130,10 +130,57 @@ impl Base64Decoder {
     /// dest.len must be what you get from ::calcSize.
     /// Invalid characters result in `error.InvalidCharacter`.
     /// Invalid padding results in `error.InvalidPadding`.
-    // PARITY: `source.len() % 4 != 0` mirrors the reference's modulo check.
-    #[allow(clippy::manual_is_multiple_of)]
     pub fn decode(&self, dest: &mut [u8], source: &[u8]) -> Result<(), Error> {
-        if self.pad_char.is_some() && source.len() % 4 != 0 {
+        // SAFETY: `dest` and `source` are valid for their lengths, and a `&mut`
+        // and a `&` slice never overlap.
+        unsafe { self.decode_raw(dest.as_mut_ptr(), dest.len(), source.as_ptr(), source.len()) }
+    }
+
+    /// `decode(buf[0..dest_len], buf[0..source_len])`: decode `buf` on top of
+    /// itself, as the reference's Kitty graphics payload decode does.
+    ///
+    /// Rust-only glue (parity tail S7-4b): the scalar lane of
+    /// `simd::base64::decode_in_place`. It is safe because every step reads its
+    /// source bytes before it writes, and each write ends before the next read
+    /// starts: the 16-byte step reads `[k, k+16)` and writes `[3k/4, 3k/4+16)`,
+    /// the 4-byte step reads `[k, k+4)` and writes `[3k/4, 3k/4+4)`, and the
+    /// tail writes byte `3k/4` after reading byte `k`.
+    pub fn decode_in_place(
+        &self,
+        buf: &mut [u8],
+        dest_len: usize,
+        source_len: usize,
+    ) -> Result<(), Error> {
+        assert(dest_len <= buf.len() && source_len <= buf.len());
+        let p = buf.as_mut_ptr();
+        // SAFETY: `p` is valid for `buf.len()` reads and writes; the source and
+        // destination are both derived from it (one tag), and the write order
+        // above never overwrites a byte before it is read.
+        unsafe { self.decode_raw(p, dest_len, p.cast_const(), source_len) }
+    }
+
+    /// The decoder over raw pointers, so the source and destination may be the
+    /// same buffer (`decode_in_place`).
+    ///
+    /// # Safety
+    /// `dest` is valid for `dest_len` writes and `source` for `source_len`
+    /// reads. If they overlap, `dest` must not start after `source`.
+    // PARITY: `source_len % 4 != 0` mirrors the reference's modulo check.
+    #[allow(clippy::manual_is_multiple_of)]
+    unsafe fn decode_raw(
+        &self,
+        dest: *mut u8,
+        dest_len: usize,
+        source: *const u8,
+        source_len: usize,
+    ) -> Result<(), Error> {
+        // SAFETY (all reads and writes below): indices are bounded by
+        // `source_len`/`dest_len` exactly as the slice version's were.
+        let src = |i: usize| -> u8 {
+            debug_assert!(i < source_len);
+            unsafe { *source.add(i) }
+        };
+        if self.pad_char.is_some() && source_len % 4 != 0 {
             return Err(Error::InvalidPadding);
         }
         let mut dest_idx: usize = 0;
@@ -141,46 +188,51 @@ impl Base64Decoder {
         let mut acc: u16 = 0; // u12
         let mut acc_len: u8 = 0; // u4
         let mut leftover_idx: Option<usize> = None;
-        while fast_src_idx + 16 < source.len() && dest_idx + 15 < dest.len() {
+        while fast_src_idx + 16 < source_len && dest_idx + 15 < dest_len {
             let mut bits: u128 = 0;
             // inline for (0..4) |i|
             let mut i = 0;
             while i < 4 {
                 let mut new_bits: u128 =
-                    self.fast_char_to_index[0][source[fast_src_idx + i * 4] as usize] as u128;
+                    self.fast_char_to_index[0][src(fast_src_idx + i * 4) as usize] as u128;
                 new_bits |=
-                    self.fast_char_to_index[1][source[fast_src_idx + 1 + i * 4] as usize] as u128;
+                    self.fast_char_to_index[1][src(fast_src_idx + 1 + i * 4) as usize] as u128;
                 new_bits |=
-                    self.fast_char_to_index[2][source[fast_src_idx + 2 + i * 4] as usize] as u128;
+                    self.fast_char_to_index[2][src(fast_src_idx + 2 + i * 4) as usize] as u128;
                 new_bits |=
-                    self.fast_char_to_index[3][source[fast_src_idx + 3 + i * 4] as usize] as u128;
+                    self.fast_char_to_index[3][src(fast_src_idx + 3 + i * 4) as usize] as u128;
                 if (new_bits & Self::INVALID_CHAR_TST as u128) != 0 {
                     return Err(Error::InvalidCharacter);
                 }
                 bits |= new_bits << (24 * i);
                 i += 1;
             }
-            dest[dest_idx..][0..16].copy_from_slice(&bits.to_le_bytes());
+            // dest[dest_idx..][0..16].* = @bitCast(bits);
+            unsafe {
+                core::ptr::copy_nonoverlapping(bits.to_le_bytes().as_ptr(), dest.add(dest_idx), 16)
+            };
 
             fast_src_idx += 16;
             dest_idx += 12;
         }
-        while fast_src_idx + 4 < source.len() && dest_idx + 3 < dest.len() {
-            let mut bits = self.fast_char_to_index[0][source[fast_src_idx] as usize];
-            bits |= self.fast_char_to_index[1][source[fast_src_idx + 1] as usize];
-            bits |= self.fast_char_to_index[2][source[fast_src_idx + 2] as usize];
-            bits |= self.fast_char_to_index[3][source[fast_src_idx + 3] as usize];
+        while fast_src_idx + 4 < source_len && dest_idx + 3 < dest_len {
+            let mut bits = self.fast_char_to_index[0][src(fast_src_idx) as usize];
+            bits |= self.fast_char_to_index[1][src(fast_src_idx + 1) as usize];
+            bits |= self.fast_char_to_index[2][src(fast_src_idx + 2) as usize];
+            bits |= self.fast_char_to_index[3][src(fast_src_idx + 3) as usize];
             if (bits & Self::INVALID_CHAR_TST) != 0 {
                 return Err(Error::InvalidCharacter);
             }
-            dest[dest_idx..][0..4].copy_from_slice(&bits.to_le_bytes());
+            unsafe {
+                core::ptr::copy_nonoverlapping(bits.to_le_bytes().as_ptr(), dest.add(dest_idx), 4)
+            };
 
             fast_src_idx += 4;
             dest_idx += 3;
         }
-        let remaining = &source[fast_src_idx..];
-        for (offset, &c) in remaining.iter().enumerate() {
-            let src_idx = fast_src_idx + offset;
+        let mut src_idx = fast_src_idx;
+        while src_idx < source_len {
+            let c = src(src_idx);
             let d = self.char_to_index[c as usize];
             if d == Self::INVALID_CHAR {
                 if self.pad_char.is_none() || Some(c) != self.pad_char {
@@ -193,21 +245,23 @@ impl Base64Decoder {
             acc_len += 6;
             if acc_len >= 8 {
                 acc_len -= 8;
-                dest[dest_idx] = (acc >> acc_len) as u8;
+                debug_assert!(dest_idx < dest_len);
+                unsafe { *dest.add(dest_idx) = (acc >> acc_len) as u8 };
                 dest_idx += 1;
             }
+            src_idx += 1;
         }
         // if (acc_len > 4 or (acc & (@as(u12, 1) << acc_len) - 1) != 0) {
         //     return error.InvalidPadding;
         // }
-        if leftover_idx.is_none() {
+        let Some(leftover_idx) = leftover_idx else {
             return Ok(());
-        }
-        let leftover = &source[leftover_idx.unwrap()..];
+        };
         if let Some(pad_char) = self.pad_char {
             let padding_len = acc_len / 2;
             let mut padding_chars: usize = 0;
-            for &c in leftover {
+            for i in leftover_idx..source_len {
+                let c = src(i);
                 if c != pad_char {
                     return Err(if c == Base64Decoder::INVALID_CHAR {
                         Error::InvalidCharacter
