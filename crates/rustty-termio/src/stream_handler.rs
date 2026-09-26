@@ -1501,7 +1501,7 @@ impl<M: AppMailbox> StreamHandler<M> {
         // defer arena.deinit();
         // (the arena scopes the Metadata allocations; the Rust Metadata owns
         // its Vecs and frees on drop.)
-        let meta = match kitty_clipboard::Metadata::parse(self.alloc.into(), &v.metadata) {
+        let meta = match kitty_clipboard::Metadata::parse(self.alloc.into(), v.metadata) {
             Ok(Some(meta)) => meta,
             Ok(None) => return Ok(()),
             Err(kitty_clipboard::ParseError::OutOfMemory) => return Ok(()),
@@ -1515,7 +1515,7 @@ impl<M: AppMailbox> StreamHandler<M> {
                 if self.kitty_clipboard_write.is_none() {
                     return Ok(());
                 }
-                match kitty_clipboard::Metadata::operation(&v.metadata) {
+                match kitty_clipboard::Metadata::operation(v.metadata) {
                     Some(Operation::Wdata) | Some(Operation::Walias) => {
                         if let Some(state) = self.kitty_clipboard_write.take() {
                             self.kittyClipboardWriteFinish(
@@ -1531,7 +1531,7 @@ impl<M: AppMailbox> StreamHandler<M> {
             }
         };
 
-        let payload: &[u8] = v.payload.as_deref().unwrap_or(b"");
+        let payload: &[u8] = v.payload.unwrap_or(b"");
         match meta.op {
             Operation::Read => self.kittyClipboardRead(&meta, payload, v.terminator),
             Operation::Write => self.kittyClipboardWriteBegin(&meta, v.terminator),

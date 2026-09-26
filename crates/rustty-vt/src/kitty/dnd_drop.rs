@@ -68,7 +68,7 @@ pub fn handle_command<W: std::io::Write>(
     writer: &mut W,
     v: &osc::KittyDndProtocol,
 ) -> std::io::Result<Option<Event>> {
-    let raw = match Metadata::parse(&v.metadata) {
+    let raw = match Metadata::parse(v.metadata) {
         Some(raw) => raw,
         None => {
             // log.debug("dropping malformed OSC 72 metadata", .{});
@@ -88,7 +88,7 @@ pub fn handle_command<W: std::io::Write>(
         Some(state) => state.chunking.apply(raw),
         None => raw,
     };
-    let payload: &[u8] = v.payload.as_deref().unwrap_or(b"");
+    let payload: &[u8] = v.payload.unwrap_or(b"");
     let t = match meta.r#type {
         Some(t) => t,
         None => return Ok(None),

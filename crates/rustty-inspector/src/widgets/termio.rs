@@ -1425,7 +1425,7 @@ fn encode_metadata_osc(md: &mut Metadata, osc: &OscCommand) {
         // semantic_prompt: struct { action: Action(enum), options_unvalidated: []const u8 }
         OscCommand::SemanticPrompt(sp) => {
             md.put(b"action", dupe_z(sp_action_tag(sp.action).as_bytes()));
-            md.put(b"options_unvalidated", dupe_z(&sp.options_unvalidated));
+            md.put(b"options_unvalidated", dupe_z(sp.options_unvalidated));
         }
 
         // clipboard_contents: struct { kind: u8, data: [:0]const u8,
@@ -1535,7 +1535,7 @@ fn encode_metadata_osc(md: &mut Metadata, osc: &OscCommand) {
 
         // kitty_clipboard_protocol: OSC { metadata: []const u8, payload: ?[]const u8, terminator: enum }
         OscCommand::KittyClipboardProtocol(o) => {
-            md.put(b"metadata", dupe_z(&o.metadata));
+            md.put(b"metadata", dupe_z(o.metadata));
             match &o.payload {
                 Some(bytes) => md.put(b"payload", dupe_z(bytes)),
                 None => md.put(b"payload", dupe_z(b"(unset)")),
@@ -1548,7 +1548,7 @@ fn encode_metadata_osc(md: &mut Metadata, osc: &OscCommand) {
 
         // kitty_dnd_protocol: OSC { metadata: []const u8, payload: ?[]const u8, terminator: enum }
         OscCommand::KittyDndProtocol(o) => {
-            md.put(b"metadata", dupe_z(&o.metadata));
+            md.put(b"metadata", dupe_z(o.metadata));
             match &o.payload {
                 Some(bytes) => md.put(b"payload", dupe_z(bytes)),
                 None => md.put(b"payload", dupe_z(b"(unset)")),
@@ -1562,14 +1562,14 @@ fn encode_metadata_osc(md: &mut Metadata, osc: &OscCommand) {
         // context_signal: Command { action: Action(enum), id: []const u8, metadata: []const u8 }
         OscCommand::ContextSignal(cmd) => {
             md.put(b"action", dupe_z(context_action_tag(cmd.action).as_bytes()));
-            md.put(b"id", dupe_z(&cmd.id));
-            md.put(b"metadata", dupe_z(&cmd.metadata));
+            md.put(b"id", dupe_z(cmd.id));
+            md.put(b"metadata", dupe_z(cmd.metadata));
         }
 
         // kitty_desktop_notification: OSC { metadata: []const u8, payload: []const u8, terminator: enum }
         OscCommand::KittyDesktopNotification(o) => {
-            md.put(b"metadata", dupe_z(&o.metadata));
-            md.put(b"payload", dupe_z(&o.payload));
+            md.put(b"metadata", dupe_z(o.metadata));
+            md.put(b"payload", dupe_z(o.payload));
             md.put(
                 b"terminator",
                 dupe_z(terminator_tag(o.terminator).as_bytes()),

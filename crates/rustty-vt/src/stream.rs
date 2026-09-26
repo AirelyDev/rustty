@@ -6677,7 +6677,7 @@ mod tests {
             fn kitty_clipboard(&mut self, v: osc::KittyClipboardProtocol) {
                 let mut msg: Vec<u8> = Vec::new();
                 msg.extend_from_slice(b"kitty meta=");
-                msg.extend_from_slice(&v.metadata);
+                msg.extend_from_slice(v.metadata);
                 msg.extend_from_slice(b" payload=");
                 match &v.payload {
                     Some(p) => msg.extend_from_slice(p),

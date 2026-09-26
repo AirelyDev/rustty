@@ -28,7 +28,7 @@ fn terminal_stream_is_stream_terminal_stream<'a>(
 
 /// Likewise `Stream` must BE `stream::Stream`, for any handler.
 #[allow(dead_code)]
-fn stream_is_stream_stream<'a, H: rustty_vt::stream::Handler>(
+fn stream_is_stream_stream<H: rustty_vt::stream::Handler>(
     s: rustty_vt::stream::Stream<H>,
 ) -> rustty_vt::Stream<H> {
     s

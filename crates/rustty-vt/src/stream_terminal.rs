@@ -855,7 +855,7 @@ impl<'a> Handler<'a> {
         // on drop at the end of this packet.)
         use crate::osc::parsers::kitty_clipboard_protocol::Operation;
         let gpa = self.term().gpa();
-        let meta = match kitty::clipboard::Metadata::parse(gpa, &v.metadata) {
+        let meta = match kitty::clipboard::Metadata::parse(gpa, v.metadata) {
             Ok(Some(meta)) => meta,
             Ok(None) => return Ok(()),
             // error.OutOfMemory => return error.OutOfMemory,
@@ -871,7 +871,7 @@ impl<'a> Handler<'a> {
                 if self.kitty_clipboard_write.is_none() {
                     return Ok(());
                 }
-                match kitty::clipboard::Metadata::operation(&v.metadata) {
+                match kitty::clipboard::Metadata::operation(v.metadata) {
                     Some(Operation::Wdata) | Some(Operation::Walias) => {
                         if let Some(state) = self.kitty_clipboard_write.take() {
                             self.kitty_clipboard_finish(
@@ -888,7 +888,7 @@ impl<'a> Handler<'a> {
         };
 
         // const payload = v.payload orelse "";
-        let payload: &[u8] = v.payload.as_deref().unwrap_or(b"");
+        let payload: &[u8] = v.payload.unwrap_or(b"");
         match meta.op {
             Operation::Read => self.kitty_clipboard_read(&meta, payload, v.terminator),
             Operation::Write => self.kitty_clipboard_write_begin(&meta, v.terminator),
