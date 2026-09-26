@@ -3843,17 +3843,20 @@ mod tests {
         let failures = core::cell::Cell::new(0usize);
         let check =
             |state: &mut RenderState, t: &mut Terminal, r: Result<(), OutOfMemory>, step: &str| {
-                if r.is_err() {
+                let retried = r.is_err();
+                if retried {
                     failures.set(failures.get() + 1);
                     failing.fail_index.set(usize::MAX);
                     state.update(alloc, t).unwrap();
+                }
+                assert_same_render(state, &fresh_render(t), &format!("{what} {step}"));
+                if retried {
                     assert_eq!(
                         Dirty::Full,
                         state.dirty,
                         "{what} {step}: the retry is a full rebuild"
                     );
                 }
-                assert_same_render(state, &fresh_render(t), &format!("{what} {step}"));
             };
 
         vt_write(&mut t, b"\x1b[1mbold\x1b[0m plain\r\n");
@@ -4000,11 +4003,11 @@ mod tests {
 
             failing.fail_index.set(usize::MAX);
             state.update(alloc, &mut t).unwrap();
-            assert_eq!(Dirty::Full, state.dirty);
-            assert_eq!(10, state.row_data[1].cells.len());
+            assert_eq!(10, state.row_data[1].cells.len(), "row 1 is rebuilt");
             assert_eq!('t' as u32, state.row_data[1].cells.get(0).raw.codepoint());
             assert_eq!('t' as u32, state.row_data[2].cells.get(0).raw.codepoint());
             assert_same_render(&state, &fresh_render(&mut t), "the retry");
+            assert_eq!(Dirty::Full, state.dirty);
 
             // Only the failure forces the rebuild: a clean update after it
             // is incremental again.
