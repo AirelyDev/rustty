@@ -104,7 +104,10 @@ pub fn parse<'a>(parser: &'a mut Parser, terminator_ch: Option<u8>) -> Option<Co
                 continue;
             }
         } else if value == b"?" {
-            // list.append(alloc, .{ .query = key }) catch |err| { ... };
+            // list.append(alloc, .{ .query = key }) catch |err| {
+            //     log.warn("unable to append kitty color protocol option: {}", .{err});
+            //     continue;
+            // };
             if let Err(err) = osc.append(kitty_color::Request::Query(key)) {
                 log::warn!(
                     target: LOG_SCOPE,
@@ -129,7 +132,10 @@ pub fn parse<'a>(parser: &'a mut Parser, terminator_ch: Option<u8>) -> Option<Co
                     continue;
                 }
             };
-            // list.append(alloc, .{ .set = .{ .key = key, .color = ... } }) catch |err| { ... };
+            // list.append(alloc, .{ .set = .{ .key = key, .color = ... } }) catch |err| {
+            //     log.warn("unable to append kitty color protocol option: {}", .{err});
+            //     continue;
+            // };
             if let Err(err) = osc.append(kitty_color::Request::Set { key, color }) {
                 log::warn!(
                     target: LOG_SCOPE,
