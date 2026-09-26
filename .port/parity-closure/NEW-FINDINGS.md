@@ -5109,9 +5109,13 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   as `RenderStateWrapper.alloc` (the wrapper's Rust-heap `Box<dyn ZigAllocator>` holder is gone), and
   `update`/`begin_update`/`free` pass `state.alloc` (`c/render.zig:209-232`). Nothing reaches the
   terminal's allocator or the Rust heap unless that is the state's allocator (the application's
-  `Global`). Not routed: `link_cells` and `string`, whose results are the caller's and are built
-  through the allocator the caller passes (the renderer passes the Rust heap; the C API does not
-  expose them), are unchanged.
+  `Global`). Not routed (T1/T2 residual outside the C API): `string` and `link_cells` ignore the
+  `alloc` they are passed (render.rs `string`'s `_alloc`, `link_cells`' `let _ = alloc`): the writer,
+  the `StringMap` (`Vec<point::Coordinate>`) and the `CellSet` (zigstd `AutoArrayHashMapUnmanaged`
+  over `Global`, whose `put` is infallible) stay on the Rust heap and abort on OOM, where the
+  reference's `try m.map.appendNTimes(m.alloc, ..)`/`append` and `try result.put(alloc, ..)` return
+  `error.OutOfMemory`. Every caller passes the Rust heap (the renderer's link and regex paths), and the
+  C API does not expose either.
 - **fallibility (T2)**: each reference `try` is reachable and returns `error.OutOfMemory`
   (`GHOSTTY_OUT_OF_MEMORY` through the C API): `row_data.resize`, `cells.resize`, the three
   `pending_styles.append`s, the grapheme `dupe`, `applied_styles.ensureTotalCapacity`, and the
@@ -5121,6 +5125,17 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 - **per-call vs bound**: the reference passes the allocator per call; the lists bind to it on first
   growth (`alloc::bind`, rows are created with it) and later calls debug-assert it
   (`render_state_checks_the_update_allocator`).
+- **USER-ACCEPTED, C-observable call-shape difference (cell storage; review S7-5 F2, accepted by the
+  user 2026-09-26)**: a row's cells are three allocations (the `raw`, grapheme-span and `style`
+  columns), not the reference's single `MultiArrayList` block. A C caller's allocator sees three
+  alloc (and later three free) calls per row growth instead of one (a 24-row first update: 73
+  allocations where the reference makes 25), per-column sizes and alignments instead of
+  `capacityInBytes(cap)` at `big_align`, and therefore different failure indices under a
+  failing-after-n allocator; a failure on the second or third column adds an alloc/free pair the
+  reference never makes (the state is left unchanged). Reason: the faithful single block was
+  implemented and MEASURED at +3.4% cycles on `screen-clone.render` (1.8% fewer instructions; the
+  growCapacity headroom between its columns spreads the hot `raw`/`style` columns), outside the +2%
+  fence; the per-column lists measured +0.1%. S7-9 carries this in the T3 record.
 - **T3 (call shape)**: the MultiArrayLists grow as Zig 0.16's `resize` does (to `growCapacity(n)`
   elements, alloc + copy + free, never `remap`); the `ArrayList`s to `growCapacity(n)` by `remap`
   first, then alloc + copy + free. The `init_capacity` of each is computed from the REFERENCE's sizes

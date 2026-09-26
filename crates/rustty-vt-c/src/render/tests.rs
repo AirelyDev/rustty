@@ -3005,7 +3005,6 @@ fn render_state_internals_route_through_the_callers_allocator() {
     );
     // Growth past the capacities: `row_data` and the old rows' cell columns
     // move (alloc + free each), the new rows get their columns.
-    // (alloc + free each), the new rows get their cells.
     assert_eq!(Result::Success, unsafe {
         terminal_c::resize(terminal, 40, 12, 1, 1)
     });
