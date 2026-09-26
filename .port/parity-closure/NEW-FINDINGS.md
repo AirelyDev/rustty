@@ -3702,7 +3702,7 @@ fix: 0 of 50 of the same sequential runs failed; see the task T-F2 report for th
 - **fix**: `crates/rustty-os/src/systemd.rs` `notify_address` (both R13 PORT NOTEs), tests
   `notify_socket_as_long_as_sun_path_is_too_long` and `notify_address_lengths`, negative controls in
   UD202/UD203. The Linux-only `send` arm that calls it is not compiled on macOS.
-- **state**: OPEN — fix written, Linux run pending (same as S112-F8).
+- **state**: CLOSED (task L-1, Linux VM rvm (Fedora 44 aarch64), 2026-09-26): the Linux `send` arm compiles and both tests pass; end to end, `READY=1` reaches an abstract `@name` socket and a path socket gets `RELOADING=1`; the reference's `<` restored panics on a 108-byte value, and its abstract handling delivers nothing (UD202/UD203, LEDGER S112-F8 closed).
 
 ## N170 — `randomTmpPath` renders the temp dir through `String::from_utf8_lossy`
 
@@ -3827,7 +3827,7 @@ fix: 0 of 50 of the same sequential runs failed; see the task T-F2 report for th
   at cc-rs (no `aarch64-linux-gnu-g++` here) and rvm is down. The site's PORT NOTE says so.
 - **fix**: run `cargo build --workspace --features gtk,x11,wayland` and `cargo test -p rustty-renderer`
   on rvm.
-- **state**: OPEN — fix written, Linux run pending.
+- **state**: CLOSED (task L-1, Linux VM rvm (Fedora 44 aarch64), 2026-09-26): `cargo build --workspace --features gtk,x11,wayland`, clippy `-D warnings` for rustty-renderer (all targets) and `cargo test --workspace` with `RUSTTY_REQUIRE_GL=1` (the live-GL renderer tests executed on Mesa llvmpipe) are green on Linux.
 
 ## N182 — `expectApproxEqual`'s `expectEqual` fallback arms printed nothing in the port
 
@@ -4330,8 +4330,9 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 - **evidence**: run with `--ignored` on macOS (the `coretext` backend), the live body passes
   against the reference's own coretext expected values, for both CozetteVector and Geist Mono.
   Negative control: changing the narrow font's coretext `cell_width` from 7.3828125 to 7.5 makes
-  it fail at the `expect_approx_equal` assertion. The `fontconfig_freetype` values are
-  UNVERIFIED here, because no Linux run was made.
+  it fail at the `expect_approx_equal` assertion. The `fontconfig_freetype` values: run with
+  `--ignored` on Linux (task L-1, Linux VM rvm (Fedora 44 aarch64), 2026-09-26) the body fails at the narrow font,
+  `expected approximately 8, found 7` (N285 / UD281's stale FreeType expectation).
 - **proposed upstream fix**: `if (options.backend == .web_canvas) return error.SkipZigTest;`, plus a
   `freetype_windows` prong or an `else` in the four switches.
 - **state**: RECORDED as `UPSTREAM-DEFECTS.md` UD276 (controller, 2026-09-24).
@@ -4588,7 +4589,7 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 - **verification**: UNVERIFIED — the GTK module is `cfg(linux|freebsd, feature = "gtk")` and was
   not compiled here (macOS, no VM for this batch). Needs the Linux lane (`--features
   gtk,x11,wayland` clippy).
-- **state**: fix written, Linux build pending.
+- **state**: CLOSED (task L-1, Linux VM rvm (Fedora 44 aarch64), 2026-09-26): compiles and lints on Linux with `--features gtk,x11,wayland`; a scratch test under a private headless sway set `gtk-font-name` to `Mono \xff\xfe 11` through `g_object_set` and `get_alloc(GtkFontName)` returned those bytes (`Str([.., 255, 254, ..])`), `GtkXftDpi` gave `CInt(98304)` and `GtkEnablePrimaryPaste` `Bool(false)`; the S-8d form (`property::<Option<String>>`) panicked `Invalid UTF-8` on the same value.
 
 ## N283 — G3b had no audited way to mark a deliberately-not-carried comment
 
@@ -4813,3 +4814,65 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   Negative control (gather's `DoneSignal` no longer sets `done`): FAILED after 30.0 s with "no
   batch reached processOutput for 30s", reverted.
 - **state**: CLOSED (task S-15).
+
+## N295 — the S74-F3 cwd-error test ran into `loadCliArgs`'s Linux fast path
+
+- **id**: N295. Not a ledger row: found by task L-1 running `cargo test --workspace` on Linux.
+- **severity**: low. **kind**: test portability (port-only test).
+- **what**: `load_cli_args_returns_the_cwd_realpath_error` (rustty-config) failed on Linux with
+  `got Ok(())`: on Linux and FreeBSD `loadCliArgs` returns at once when argv has one element
+  (`Config.zig`: `.linux, .freebsd => if (std.os.argv.len <= 1) return`, ported), and
+  `cargo test --workspace` starts the test binary with no arguments. Faithful behaviour, wrong test.
+- **fix**: on Linux/FreeBSD the test re-runs itself in a child whose argv holds the libtest filter,
+  asserts the child's argv is longer than one element and that the child ran exactly this test
+  (`ac13a16e`). Linux: passes; macOS: passes.
+- **state**: CLOSED (task L-1).
+
+## N296 — the paste-event mutex test ticked its event loop once
+
+- **id**: N296. Not a ledger row: found by task L-1 on Linux.
+- **severity**: low. **kind**: test portability (port-only test; LEDGER S42-F1's test).
+- **what**: `paste_event_queues_while_holding_the_renderer_mutex_on_a_full_mailbox` (rustty-core)
+  failed deterministically on Linux: `the mailbox never signalled its wakeup (timed out after 10 s:
+  false)`, after 2 ms. Measured with a probe: libxev's epoll backend counts the timer's submission as
+  a completion, so `run(Once)` returned after about 12 us with neither the wakeup nor the timer
+  callback run (a second tick delivered the wakeup). kqueue on macOS happened to wait.
+- **fix**: tick until one of the two callbacks has fired; the 10 s timer still bounds it (`be7f5237`).
+  Linux and macOS pass.
+- **state**: CLOSED (task L-1).
+
+## N297 — `io_thread` crashed on Linux: an `input` failure after the shell starts leaves the loop on a dead frame (UD290)
+
+- **id**: N297. Not a ledger row: found by task L-1 (the `io_thread` test binary died with SIGSEGV on
+  Linux in `oversized_input_file_paints_the_input_failure_screen`, LEDGER S212-F1's test).
+- **severity**: medium. **kind**: reference defect (use-after-free and leak), fixed under R13.
+- **what / fix / proof**: `UPSTREAM-DEFECTS.md` UD290; `crates/rustty-termio/src/termio_impl.rs`
+  `Termio::threadEnter` (PORT NOTE: reference defect (R13)). Found with gdb: the fault is in the epoll
+  loop's submission-queue pop during `Thread::threadMain`'s drain run.
+- **state**: CLOSED (task L-1).
+
+## N298 — two Linux test-portability fixes: the CMake install directory and the gather-stage hangup fixture
+
+- **id**: N298. Not a ledger row: found by task L-1 on Linux.
+- **severity**: low. **kind**: test portability (port-only tests).
+- **what**: (1) `install_layout_is_versioned_like_the_reference` (xtask, LEDGER S64-F5) looked in
+  `prefix/lib`; GNUInstallDirs installs into `lib64` on Fedora, where the layout itself was right
+  (`librustty-vt.so.0.1.0`, `.so.0`, `.so`, SONAME `librustty-vt.so.0`). (2)
+  `gather_stage_reads_output_that_arrives_with_the_hangup` (rustty-termio, UD19) made its hangup with
+  `shutdown(SHUT_WR)`; Linux reports `POLLHUP` on a Unix stream socket only when both directions are
+  shut, so the gather stage saw `POLLIN`, read 0 forever and the test timed out (measured with a C
+  probe: `SHUT_WR` and `SHUT_RDWR` both give `0x11` on macOS).
+- **fix**: (1) the test finds `lib` or `lib64` and now also asserts the ELF SONAME with `readelf`
+  (`297a28fc`); (2) `shutdown(SHUT_RDWR)`. Both pass on Linux and macOS; (2)'s negative control on
+  Linux (the reference's decision) still fails `left: [102, 105, 114, 115, 116]`.
+- **state**: CLOSED (task L-1).
+
+## N299 — the reference's Highway CPU detection is inert on Linux (UD291)
+
+- **id**: N299. Not a ledger row: found by task L-1 verifying LEDGER S34-F3 against the reference.
+- **severity**: low. **kind**: reference defect (performance; evident intent), port already correct.
+- **what**: on the VM the reference's `ghostty_hwy_detect_targets` (zig 0.16.0, aarch64-linux, `-lc`)
+  returns `0x20000000` while the same code without libc, and the port, return `0x34000000`. Zig's
+  `std.os.linux.getauxval` reads an auxv pointer only Zig's own `_start` sets. Details and proposed
+  fix: `UPSTREAM-DEFECTS.md` UD291; PORT NOTE at the port's detector (`d03d273d`).
+- **state**: CLOSED (task L-1).
