@@ -5714,3 +5714,119 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   Note that `utf8.bin` is OSC-heavy for the VT parser: its many `0x9D` bytes (a UTF-8 continuation byte) enter
   `osc_string`.
 - **state**: CLOSED (parity tail S7-7).
+
+## N325 — S7-6 routing: the search's state through the search's allocator, four allocations through the terminal's (S176-F1, S4-F2 closed)
+
+- **id**: N325. Not a ledger row: records the S7-6 scope decisions (closes S176-F1 and, with S7-5's render
+  half, S4-F2).
+- **severity**: informational. **kind**: allocator routing (T1/T2/T3 of the S-7 design).
+- **routed to the search's allocator (T1)**: everything `TerminalSearch.init(alloc, ..)` and the objects under it
+  allocate, re-verified at the pin in `search/{terminal,screen,viewport,active,pagelist,sliding_window}.zig` and
+  `highlight.zig`: the sliding windows' needle (`dupe`) and overlap buffer, their data and meta circular buffers
+  (`CircBuf.init(alloc, 0)`, `resize` = `realloc` to exactly `len + amount`), the chunk buffer
+  (`MultiArrayList.ensureTotalCapacity`), each page's `cell_map` (grown by the page formatter's `PointMap`), the
+  temporary encoding buffer (`std.Io.Writer.Allocating`), and the decode buffer of a compressed page
+  (`node.pagePreservingState(self.alloc)`); the screen searches' `active_results`/`history_results` (and the
+  reload's rebuilt list, `shrinkAndFree` on pruning) and every stored result's chunks (`Flattened.clone(alloc)`);
+  the viewport fingerprint (`ensureTotalCapacity(alloc, rows)`); the terminal search's cached viewport matches.
+  `ScreenSearch.matches(alloc)` allocates its slice through the allocator it is GIVEN. vt-c: the wrapper
+  (`alloc.create`) and `TerminalSearch.init(wrapper.alloc, ..)` use `lib.alloc.default(alloc_)`, kept as the
+  runtime handle (the wrapper's Rust-heap `Box<dyn ZigAllocator>` holder is gone).
+- **charged to the TERMINAL's allocator (N262, reproduced)**: the vt-c `searches` registry entry
+  (`putNoClobber(terminal.gpa(), ..)`, bound by S7-4) and the tracked pins: the PageListSearch pin, the history
+  start pin, and the selected match's two pins (`Tracked.init`), all through the screen's `PageList.trackPin`
+  (its pin pool and pin set are the terminal's, S7-3). Tests count them on the terminal's pin set and show the
+  search's allocator holds nothing else.
+- **fallibility (T2)**: every reference `try` in the search is reachable and returns `error.OutOfMemory`; the
+  formatter's point-map growth returns `error.WriteFailed` as the reference's `catch return error.WriteFailed`
+  (N328). OOM propagates or is logged exactly where the reference logs it. A C-API feed/run that cannot progress
+  reports OUT_OF_MEMORY (UD305, N327).
+- **per-call vs bound**: the reference's unmanaged lists take the allocator per call; the port's lists bind to the
+  search's allocator at creation (the fingerprint on first growth, `alloc::bind`), and `deinit(alloc)` of a
+  `Flattened`, a `Meta`, a circular buffer or the fingerprint debug-asserts the allocator
+  (`flattened_deinit_checks_the_allocator`).
+- **T3 (call shape)**: growth follows Zig 0.16 (`zig_list.rs`): `ArrayList` to `growCapacity(n)` by `remap` first;
+  `MultiArrayList` to `growCapacity(n)` by alloc + copy + free (never `remap`); `CircBuf.resize` = `realloc` (remap
+  first) to exactly the requested size; `Writer.Allocating` drains with `ensureUnusedCapacity(2 * len + 1)`.
+  `init_capacity` uses the REFERENCE's element sizes, so element counts match. Residuals: (1) byte sizes differ
+  where the Rust element does: a chunk is 24 bytes in an array of structs against 20 in Zig's struct of arrays
+  (a clone of a one-chunk highlight is 17 x 24 bytes, not 17 x 20, at 8-byte alignment); a stored `Flattened` is
+  40 bytes against 32; `matches()`'s slice holds 24-byte shallow copies against 32. (2) The encoding buffer's
+  calls follow the port formatter's write granularity (its 512-byte cell-run buffer mirrors the reference's; not
+  verified call for call). (3) The window's private `CircBuf` asserts growth only (the window never shrinks; the
+  shared `rustty_datastruct::CircBuf` ports shrinking). (4) The meta buffer's slots are `Option<Meta>` (48 bytes,
+  the same as Zig's `Meta`), the `undefined` default being `None`.
+- **not routed**: the search thread (`search/thread.rs`, the application's) builds its search on the Rust heap
+  handle, as the reference's thread uses the application allocator. The formatter's `PinMap` points stay on the
+  Rust heap (N328).
+- **state**: CLOSED (task S7-6).
+
+## N326 — port-only search copies removed; FLATTENED_TW and REGISTER_TW retired
+
+- **id**: N326. Not a ledger row: found by task S7-6 routing the search.
+- **severity**: informational. **kind**: port-only allocations (the N263 class) and port-only seams.
+- **what**: the port made Rust-heap copies the reference never makes, on every call: `SlidingWindow.next` cloned
+  the chunk buffer into each returned highlight (the reference's aliases it, "valid until the next call");
+  `matchAt`/`selectedMatch` and `selectNext`/`selectPrev` cloned a stored result (the reference copies the value
+  shallowly); `matches` deep-cloned every result; the terminal and screen searches copied the needle
+  (`to_vec`) before `ScreenSearch.init`/`PageListSearch.init`/`SlidingWindow.init`. They were infallible (an abort
+  under OOM) and invisible to the caller's allocator.
+- **fix**: `highlight::Flattened<C>` holds either owned chunks (the default, cloned through a given allocator) or
+  borrowed ones (`FlattenedRef<'a>`, the reference's shallow copy); `next()`, `matchAt`, `selectedMatch`,
+  `matches` and the search thread's `selected_match` event return borrows, and the borrow checker enforces the
+  reference's lifetime. The needle borrows end before the searches are replaced, so no copy is needed.
+- **seams retired (N271/N277 class)**: `highlight::FLATTENED_TW` (Flattened init/clone failure) and vt-c
+  `search::REGISTER_TW` (registry growth failure) are replaced by `FailingAllocator`s: under the flattened
+  highlight's allocator and under the TERMINAL (the registry is terminal-charged). The adapted
+  `tests/viewport_fingerprint_alloc.rs` stays (it checks the Rust heap handle); the reference's
+  `fingerprint only allocates on changes` is now ported as written in `search/viewport.rs`.
+- **state**: CLOSED (task S7-6).
+
+## N327 — the C API's search feed and run spin under allocation failure (reference defect, R13; UD305)
+
+- **id**: N327. Not a ledger row: found by task S7-6's C-API failure sweep design (a sticky failing allocator
+  makes `run` loop).
+- **severity**: medium. **kind**: reference defect (hang).
+- **what**: `TerminalSearch.feed` swallows allocation failures, so a search waiting for its next history page stays
+  `feed_required`; `ghostty_search_run` loops forever and `ghostty_search_feed` keeps answering SUCCESS. Details,
+  measurement and proposed fix: `UPSTREAM-DEFECTS.md` UD305.
+- **fix / proof**: vt-c `feed` and `run` return OUT_OF_MEMORY when a feed leaves the search `feed_required`
+  (PORT NOTE: reference defect (R13, UD305)); `search_feed_and_run_report_out_of_memory_instead_of_spinning` and
+  the two C-API sweeps; negative controls in UD305.
+- **state**: CLOSED (task S7-6).
+
+## N328 — the page formatter's point map grows fallibly through its allocator; the PinMap's points stay on the Rust heap
+
+- **id**: N328. Not a ledger row: found by task S7-6 (the sliding window's `cell_map` is written by
+  `PageFormatter`'s `PointMap`).
+- **severity**: informational. **kind**: allocator routing / fallibility at a shared type.
+- **what**: `PointMap.map` was a Rust-heap `Vec` with infallible pushes, where the reference appends through
+  `map.alloc` with `catch return error.WriteFailed` (formatter.zig:1123-1276, 1446-1571, 1749, 1854, 2063).
+- **fix**: `PointMap.map` is an allocator-bound list; every append site grows as `ArrayList.appendNTimes`
+  (`growCapacity`, remap first) and maps a failure to an `io::ErrorKind::OutOfMemory` write error (the
+  reference's `WriteFailed`), which the window reports as `error.OutOfMemory`. The appends fill inline and grow
+  out of line (PERF(port), measured).
+- **residual (formatter family, outside S7-6)**: `PinMapMap.points` shares the type and is bound to the Rust
+  heap handle; its `nodes` list, the pin map's `alloc`, and the formatter's other lists are unchanged (the
+  file-wide convention: Rust-heap growth that aborts on OOM). The `alloc` fields of `PinMap` are not asserted
+  against the points' allocator for that reason.
+- **state**: CLOSED for the search; the formatter residual is recorded, not fixed.
+
+## N329 — Stacked Borrows status of the search after S7-6
+
+- **id**: N329. Not a ledger row: the SB check task S7-6 was asked to make.
+- **severity**: informational. **kind**: soundness (UNVERIFIED by Miri here; Miri not run by the task).
+- **the 2026-07-11 finding**: the search SB UB (search objects holding raw `Screen` aliases invalidated by
+  `&mut Screen`; memory `search-screen-sb-ub-finding`) was FIXED by `9e3fe1c` (raw `*mut Screen` in
+  `Untracked::track`, `Tracked::init`/`deinit`, `SelectedMatch`, `HistorySearch::deinit`, `ref_counted_set::get`).
+  Re-checked on this branch: every one of those signatures still takes `*mut Screen`, and `reload_active_inner`
+  still derives `list` with `addr_of_mut!((*self.screen).pages)`. S7-6 adds no `&mut Screen`/`&mut PageList`
+  over a searched screen.
+- **new aliasing shapes to prove under Miri**: (1) `FlattenedRef<'_>` borrows from `SlidingWindow.next()` held
+  across a mutation of a SIBLING field (`self.active.next()` then `self.active_results` growth; `history.searcher`
+  vs `self.history_results`); (2) the window's private `CircBuf::get_ptr_slice` (two raw subslices from one
+  `split_at_mut`) read in `next()` while `highlight(&mut self)` runs after the last use; (3) `shrink_and_free`'s
+  raw-parts round trip; (4) `AllocatingWriter::write`'s raw copy into spare capacity; (5) `append_n_times`'s raw
+  fill. Harness: `.port/phase-2/mirihar-s7-6-search` (isolated, non-FFI, reproduces 1-5 with the same borrow
+  shapes; for the controller's Miri lane under `-Zmiri-stacked-borrows` and `-Zmiri-tree-borrows`).
+- **state**: OPEN for the controller's Miri lane (targets listed in the S7-6 report).

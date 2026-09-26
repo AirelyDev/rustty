@@ -1,0 +1,16 @@
+[package]
+name = "mirihar-s7-6-search"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "mirihar-s7-6-search"
+path = "src/main.rs"
+
+[dependencies]
+# The same container crate and version rustty-vt uses (Cargo.lock at the root).
+allocator-api2 = "=0.2.21"
+
+# Standalone: not part of the rustty root workspace (this is a proof artifact).
+[workspace]

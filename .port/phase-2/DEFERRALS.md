@@ -8158,7 +8158,9 @@ counting/rejecting arms in `terminal.rs`, `render/tests.rs`,
    the glyph entries' decoded outlines, the stream's own buffers, clipboard state,
    the wrapper's `tracked_grid_refs`/`searches` maps, `from_decoded`'s terminal
    (built by the snapshot decoder), `RenderState` contents (`update`/
-   `begin_update`; oracle `state.alloc`) and search state.
+   `begin_update`; oracle `state.alloc`) and search state. Search state is
+   routed since parity tail S7-6 (NEW-FINDINGS N325: the search's allocator for
+   its own state, the terminal's for the registry entry and tracked pins).
 2. FIXED (tail-a2, parity S179-F3, 4717bccc): `grid_ref_track`'s
    `TrackedGridRef` is created and destroyed through a copy of the caller's C
    allocator (`TerminalWrapper.c_alloc`), with both reference OOM arms. The
