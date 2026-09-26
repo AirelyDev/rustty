@@ -25,6 +25,24 @@ pub enum PatchError {
     InvalidWasm,
 }
 
+/// `wasm_patch_growable_table.zig:22-26`: the argument count is wrong.
+///
+/// ```zig
+/// if (args.len != 3) {
+///     std.log.err("usage: wasm_growable_table <input.wasm> <output.wasm>", .{});
+///     std.process.exit(1);
+/// ```
+///
+/// The line is the default-scope logFn's (`error: ...`); xtask has no `log`
+/// backend, so it is printed directly (task S-1d, N313). The name in the text
+/// is the reference's, `wasm_growable_table`, not the binary's
+/// (`wasm_patch_growable_table`, GhosttyLibVt.zig:73): a copy-paste the port
+/// keeps (R13, UPSTREAM-DEFECTS UD301). The caller exits with status 1.
+pub fn report_usage_error() {
+    // std.log.err("usage: wasm_growable_table <input.wasm> <output.wasm>", .{});
+    eprintln!("error: usage: wasm_growable_table <input.wasm> <output.wasm>");
+}
+
 // PORT: `pub fn main() !void { ... }` — the process entry point. In rustty this
 // is driven from the xtask `wasm-patch-growable-table <input> <output>`
 // subcommand (see main.rs); the argv parsing, read, patch, and write live
