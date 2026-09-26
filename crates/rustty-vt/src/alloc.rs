@@ -201,6 +201,13 @@ extern "C" fn failing_remap(
 
 extern "C" fn failing_free(_: *mut core::ffi::c_void, _: *mut u8, _: usize, _: u8, _: usize) {}
 
+/// The inline buffer of a [`StackFallback`], 16-byte aligned so what fits
+/// does not depend on where the buffer lands (a request of up to 16-byte
+/// alignment starts at offset 0). Rust-only (parity tail S7-4b): Zig's
+/// `stackFallback` buffer is a plain `[size]u8`.
+#[repr(C, align(16))]
+struct StackFallbackBuf<const N: usize>([core::mem::MaybeUninit<u8>; N]);
+
 /// `std.heap.stackFallback(N, fallback)`: an allocator that serves requests
 /// from an inline `N`-byte buffer while they fit (bumping through it, as Zig's
 /// `FixedBufferAllocator` does) and from `fallback` otherwise. Freeing the
@@ -212,7 +219,7 @@ extern "C" fn failing_free(_: *mut core::ffi::c_void, _: *mut u8, _: usize, _: u
 /// alloc); const a = sfa.get();` (parity tail S7-4): a request that fits the
 /// buffer reaches no allocator, one that does not reaches `fallback`.
 pub struct StackFallback<const N: usize> {
-    buf: core::cell::UnsafeCell<[core::mem::MaybeUninit<u8>; N]>,
+    buf: core::cell::UnsafeCell<StackFallbackBuf<N>>,
     end: core::cell::Cell<usize>,
     fallback: VtAllocator,
 }
@@ -221,7 +228,9 @@ impl<const N: usize> StackFallback<N> {
     /// `std.heap.stackFallback(N, fallback)` (`.get()` starts empty).
     pub fn new(fallback: VtAllocator) -> StackFallback<N> {
         StackFallback {
-            buf: core::cell::UnsafeCell::new([core::mem::MaybeUninit::uninit(); N]),
+            buf: core::cell::UnsafeCell::new(StackFallbackBuf(
+                [core::mem::MaybeUninit::uninit(); N],
+            )),
             end: core::cell::Cell::new(0),
             fallback,
         }
