@@ -24,7 +24,7 @@ fi
 
 commit="$1"
 base="${RUSTTY_TIP_URL_BASE:-https://tip.rustty.sh}"
-url="${base}/${commit}/rustty-macos-arm64.zip"
+url="${base}/${commit}/rustty-macos-universal.zip"
 
 # `-I` = HEAD, `-L` follows redirects, `-w` prints only the final status code.
 # A network failure yields an empty body and a non-zero curl exit; `|| true`

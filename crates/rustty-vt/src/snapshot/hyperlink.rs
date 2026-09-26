@@ -147,8 +147,8 @@ impl From<io::ReadError> for DecodePageError {
 }
 
 /// Encode one hyperlink entry.
-pub fn encode(
-    value: &terminal_hyperlink::Hyperlink,
+pub fn encode<B: core::ops::Deref<Target = [u8]>>(
+    value: &terminal_hyperlink::Hyperlink<B>,
     writer: &mut dyn io::Writer,
 ) -> Result<(), EncodeError> {
     // Validate the complete value before writing any part of this variable-

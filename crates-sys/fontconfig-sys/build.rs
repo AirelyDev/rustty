@@ -43,6 +43,9 @@
 use std::env;
 use std::path::PathBuf;
 
+#[path = "src/dir_defines.rs"]
+mod dir_defines;
+
 /// fontconfig translation units compiled into the static library.
 ///
 /// The verbatim `srcs` list from the reference's
@@ -81,6 +84,7 @@ const SOURCES: &[&str] = &[
 ];
 
 fn main() {
+    println!("cargo:rerun-if-changed=src/dir_defines.rs");
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let vendor = manifest_dir.join("vendor");
     let override_include = vendor.join("override/include");
@@ -207,14 +211,11 @@ fn main() {
                 Some("\"<dir>/usr/share/fonts</dir><dir>/usr/local/share/fonts</dir>\""),
             );
 
-        // Non-FreeBSD (Linux) arm (build.zig:181-186).
-        build
-            .define(
-                "FC_TEMPLATEDIR",
-                Some("\"/usr/share/fontconfig/conf.avail\""),
-            )
-            .define("FONTCONFIG_PATH", Some("\"/etc/fonts\""))
-            .define("CONFIGDIR", Some("\"/usr/local/fontconfig/conf.d\""));
+        // The FreeBSD / other-OS directory arms (build.zig:178-187, S31-F1),
+        // chosen by `src/dir_defines.rs` where they are tested.
+        for (name, value) in dir_defines::fc_dir_defines(&target_os) {
+            build.define(name, Some(value));
+        }
 
         // Linux-specific headers (build.zig:189-193).
         if target_os == "linux" {

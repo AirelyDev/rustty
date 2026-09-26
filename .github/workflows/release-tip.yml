@@ -301,6 +301,12 @@ jobs:
       - name: Install Rust toolchain (pinned via rust-toolchain.toml)
         uses: dtolnay/rust-toolchain@stable
 
+      # The VT xcframework always carries the macOS universal slice and, with
+      # the iOS SDK present, the iOS device and simulator slices
+      # (GhosttyLibVt.initStaticAppleUniversal).
+      - name: Install the Apple targets
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin aarch64-apple-ios aarch64-apple-ios-sim
+
       - name: Build XCFramework
         run: cargo run -q -p xtask -- xcframework-vt
 
@@ -512,14 +518,14 @@ jobs:
           xcrun stapler staple "Rustty.dmg"
           xcrun stapler staple "$APP"
 
-      # Zip up the app and symbols. `-arm64`, not `-universal`: `xtask
-      # xcframework` builds the aarch64-apple-darwin slice only.
+      # Zip up the app and symbols. `-universal`, as the reference names it:
+      # build-rustty.sh builds the universal (aarch64 + x86_64) library and app.
       - name: Zip App
         run: |
-          ( cd "$(dirname "$APP")" && zip -9 -r --symlinks "$GITHUB_WORKSPACE/rustty-macos-arm64.zip" "$(basename "$APP")" )
+          ( cd "$(dirname "$APP")" && zip -9 -r --symlinks "$GITHUB_WORKSPACE/rustty-macos-universal.zip" "$(basename "$APP")" )
           DSYM="$APP.dSYM"
           if [ -d "$DSYM" ]; then
-            ( cd "$(dirname "$DSYM")" && zip -9 -r --symlinks "$GITHUB_WORKSPACE/rustty-macos-arm64-dsym.zip" "$(basename "$DSYM")" )
+            ( cd "$(dirname "$DSYM")" && zip -9 -r --symlinks "$GITHUB_WORKSPACE/rustty-macos-universal-dsym.zip" "$(basename "$DSYM")" )
           else
             echo "::warning title=No dSYM::$DSYM does not exist; publishing without debug symbols."
           fi
@@ -533,7 +539,7 @@ jobs:
           tag_name: tip
           target_commitish: ${{ github.sha }}
           files: |
-            rustty-macos-arm64.zip
+            rustty-macos-universal.zip
             Rustty.dmg
           token: ${{ secrets.GH_RELEASE_TOKEN || github.token }}
 
@@ -585,9 +591,9 @@ jobs:
         run: |
           rm -rf blob
           mkdir -p "blob/${RUSTTY_COMMIT_LONG}"
-          cp rustty-macos-arm64.zip "blob/${RUSTTY_COMMIT_LONG}/rustty-macos-arm64.zip"
-          if [ -f rustty-macos-arm64-dsym.zip ]; then
-            cp rustty-macos-arm64-dsym.zip "blob/${RUSTTY_COMMIT_LONG}/rustty-macos-arm64-dsym.zip"
+          cp rustty-macos-universal.zip "blob/${RUSTTY_COMMIT_LONG}/rustty-macos-universal.zip"
+          if [ -f rustty-macos-universal-dsym.zip ]; then
+            cp rustty-macos-universal-dsym.zip "blob/${RUSTTY_COMMIT_LONG}/rustty-macos-universal-dsym.zip"
           fi
           cp Rustty.dmg "blob/${RUSTTY_COMMIT_LONG}/Rustty.dmg"
 
@@ -630,8 +636,8 @@ jobs:
         run: |
           cat << EOF | tee release-urls.txt
           Release URLs:
-            App Bundle: https://tip.rustty.sh/${RUSTTY_COMMIT_LONG}/rustty-macos-arm64.zip
-            Debug Symbols: https://tip.rustty.sh/${RUSTTY_COMMIT_LONG}/rustty-macos-arm64-dsym.zip
+            App Bundle: https://tip.rustty.sh/${RUSTTY_COMMIT_LONG}/rustty-macos-universal.zip
+            Debug Symbols: https://tip.rustty.sh/${RUSTTY_COMMIT_LONG}/rustty-macos-universal-dsym.zip
             DMG: https://tip.rustty.sh/${RUSTTY_COMMIT_LONG}/Rustty.dmg
           EOF
 

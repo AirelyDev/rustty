@@ -20,8 +20,8 @@
 //! cargo test -p rustty-apprt --features gtk,x11 --test gtk_x11_windowid -- --ignored
 //! ```
 //!
-//! R5: gated `all(any(linux, freebsd), feature = "x11")`.
-#![cfg(all(any(target_os = "linux", target_os = "freebsd"), feature = "x11"))]
+//! R5: gated `all(any(linux, freebsd), rustty_gtk_x11)`.
+#![cfg(all(any(target_os = "linux", target_os = "freebsd"), rustty_gtk_x11))]
 #![allow(non_snake_case)]
 
 use gtk4::prelude::*;

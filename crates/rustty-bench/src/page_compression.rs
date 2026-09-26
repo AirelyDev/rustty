@@ -764,8 +764,8 @@ impl PageCompression {
             // encoded_total += encoded_len;
             encoded_total += encoded_len;
             // std.debug.print("page-compression page={d} raw={d} encoded={d} ratio={d:.2}%\n", ...);
-            println!(
-                "page-compression page={page_index} raw={len} encoded={encoded_len} ratio={:.2}%",
+            debug_print!(
+                "page-compression page={page_index} raw={len} encoded={encoded_len} ratio={:.2}%\n",
                 percentage(encoded_len, len)
             );
             page_index += 1;
@@ -773,9 +773,9 @@ impl PageCompression {
 
         // std.debug.print("page-compression total pages={d} raw={d} encoded={d}
         //     ratio={d:.2}% workspace={d} output_bound={d}\n", ...);
-        println!(
+        debug_print!(
             "page-compression total pages={page_index} raw={raw_total} encoded={encoded_total} \
-             ratio={:.2}% workspace={} output_bound={}",
+             ratio={:.2}% workspace={} output_bound={}\n",
             percentage(encoded_total, raw_total),
             core::mem::size_of::<lz4::HashTable>(),
             self_.compression_output.len(),

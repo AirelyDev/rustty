@@ -1,0 +1,30 @@
+# Clippy configuration for rustty-vt (parity tail S7-1, gate G-VTALLOC).
+#
+# allocator_api2 0.2's stable `Vec` has no `Copy` specializations:
+# `extend_from_slice` is `extend(iter.cloned())`, a per-element,
+# capacity-checked loop, and `resize` is a per-element `ptr::write` loop. For
+# `Copy` elements std lowers both to one memcpy / fill. Swapping RenderState's
+# std `Vec`s for allocator_api2's naively cost +81% on `screen-clone.render`
+# (N261, `.port/parity-closure/S7-ALLOCATOR-DESIGN.md`). Use
+# `rustty_vt::alloc::CopyVecExt` (`extend_copy` / `resize_copy` and their
+# `try_` forms) instead. std's `Vec` methods are NOT banned: only the
+# allocator_api2 paths below match.
+#
+# NOT BANNABLE (residual, parity tail S7-12b review F8): allocator_api2's
+# `Extend` impls (`v.extend(src.iter().copied())`, `v.extend(src)`) run the
+# same per-element, capacity-checked loop; neither `Extend<T>` nor
+# `Extend<&T>` is specialized for slices (allocator-api2 0.2.21
+# stable/vec/mod.rs). clippy cannot name a trait-impl method:
+# `allocator_api2::vec::Vec::extend` is rejected as "does not refer to a
+# reachable function", and banning `core::iter::Extend::extend` would ban every
+# std container too. So `extend` from a slice onto an allocator_api2 `Vec` must
+# be written `extend_copy` by hand, and reviews of the S-7 container work
+# (S7-3..S7-7, RenderState in S7-5 especially) must check for it.
+#
+# Keep this file byte-identical to crates/rustty-vt-c/clippy.toml;
+# `.port/tools/gates/check_vt_alloc_vec_ban.sh` checks both and self-tests
+# that the ban fires.
+disallowed-methods = [
+    { path = "allocator_api2::vec::Vec::extend_from_slice", reason = "per-element loop (N261): use rustty_vt::alloc::CopyVecExt::extend_copy / try_extend_copy" },
+    { path = "allocator_api2::vec::Vec::resize", reason = "per-element loop (N261): use rustty_vt::alloc::CopyVecExt::resize_copy / try_resize_copy" },
+]

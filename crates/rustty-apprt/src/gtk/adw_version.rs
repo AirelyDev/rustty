@@ -125,22 +125,51 @@ pub fn log_version() {
     ));
 }
 
-/// `adw_version.zig:47` `atLeast` — verifies the running libadwaita version is
-/// at least the given version.
+/// `adw_version.zig:47` `atLeast`.
+///
+/// Verifies that the running libadwaita version is at least the given
+/// version. This will return false if Rustty is configured to not build with
+/// libadwaita.
+///
+/// This can be run in both a comptime and runtime context. If it is run in a
+/// comptime context, it will only check the version in the headers. If it is
+/// run in a runtime context, it will check the actual version of the library we
+/// are linked against. So generally you probably want to do both checks!
+///
+/// This is inlined so that the comptime checks will disable the runtime checks
+/// if the comptime checks fail.
 ///
 /// A live delegate to [`runtime_at_least`], for the reasons spelled out at
 /// [`crate::gtk::gtk_version::at_least`]: rustty has no header fold to apply.
 #[inline]
 pub fn at_least(major: u16, minor: u16, micro: u16) -> bool {
+    // PORT NOTE: the header fold is absent (no header version in rustty; the live
+    // delegate is recorded in DEFERRALS L5.0 T2 and AD-3). The reference body's
+    // two fold steps, quoted (`adw_version.zig:50-60`):
+    //
+    //   // If our header has lower versions than the given version, we can return
+    //   // false immediately. This prevents us from compiling against unknown
+    //   // symbols and makes runtime checks very slightly faster.
+    //   if (comptime comptime_version.order(.{ ... }) == .lt) return false;
+    //
+    //   // If we're in comptime then we can't check the runtime version.
+    //   if (@inComptime()) return true;
     runtime_at_least(major, minor, micro)
 }
 
-/// `adw_version.zig:73` `runtimeAtLeast` — verifies the libadwaita version AT
-/// RUNTIME is at least the given version.
+/// `adw_version.zig:73` `runtimeAtLeast`.
+///
+/// Verifies that the libadwaita version at runtime is at least the given version.
+///
+/// This function should be used in cases where the only the runtime behavior
+/// is affected by the version check. For checks which would affect code
+/// generation, use `atLeast`.
 ///
 /// Oracle: `runtime_version.order(threshold) != .lt` (`:80-84`).
 #[inline]
 pub fn runtime_at_least(major: u16, minor: u16, micro: u16) -> bool {
+    // We use the functions instead of the constants such as c.GTK_MINOR_VERSION
+    // because the function gets the actual runtime version.
     !matches!(
         order(runtime_version(), (major, minor, micro)),
         std::cmp::Ordering::Less

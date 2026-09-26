@@ -42,14 +42,14 @@ pub fn resources_dir() -> Result<ResourcesDir, rustty_os::resourcesdir::Resource
                 .load_from_file("/.flatpak-info", glib::KeyFileFlags::NONE)
                 .is_err()
             {
-                return Ok(ResourcesDir::from_paths(Some(app_path), None));
+                return Ok(ResourcesDir::from_paths(Some(app_path.into_bytes()), None));
             }
 
             // `const app_dir = std.mem.span(keyfile.getString("Instance",
             //  "app-path", null)) orelse return result;` (`flatpak.zig:20`).
             // `defer glib.free(app_dir.ptr)` (`:21`) is the `GString`'s drop.
             let Ok(app_dir) = keyfile.string("Instance", "app-path") else {
-                return Ok(ResourcesDir::from_paths(Some(app_path), None));
+                return Ok(ResourcesDir::from_paths(Some(app_path.into_bytes()), None));
             };
 
             // `result.host_path = try std.fs.path.join(alloc, &[_][]const u8{
@@ -57,11 +57,14 @@ pub fn resources_dir() -> Result<ResourcesDir, rustty_os::resourcesdir::Resource
             let host_path = std::path::Path::new(app_dir.as_str())
                 .join("share")
                 .join(rustty_identity::APP_NAME)
-                .to_string_lossy()
-                .into_owned();
+                .into_os_string()
+                .into_encoded_bytes();
 
             // `return result;` (`flatpak.zig:24`).
-            return Ok(ResourcesDir::from_paths(Some(app_path), Some(host_path)));
+            return Ok(ResourcesDir::from_paths(
+                Some(app_path.into_bytes()),
+                Some(host_path),
+            ));
         }
     }
 
@@ -88,10 +91,10 @@ mod tests {
         }
         let ours = resources_dir()
             .ok()
-            .and_then(|d| d.app().map(str::to_owned));
+            .and_then(|d| d.app().map(<[u8]>::to_vec));
         let theirs = rustty_os::resourcesDir()
             .ok()
-            .and_then(|d| d.app().map(str::to_owned));
+            .and_then(|d| d.app().map(<[u8]>::to_vec));
         assert_eq!(ours, theirs);
     }
 }

@@ -864,7 +864,7 @@ mod tests {
     // longer panic on z2d hairline).
     #[test]
     fn overlay_draws_hyperlink_rect() {
-        use allocator_api2::alloc::Global;
+        use rustty_vt::alloc::Global;
         use rustty_vt::kitty;
         use rustty_vt::modes::{self as modespkg};
         use rustty_vt::render::RenderState;
@@ -925,7 +925,7 @@ mod tests {
 
     #[test]
     fn overlay_draws_semantic_prompt_bar() {
-        use allocator_api2::alloc::Global;
+        use rustty_vt::alloc::Global;
         use rustty_vt::kitty;
         use rustty_vt::modes::{self as modespkg};
         use rustty_vt::page::SemanticPrompt;

@@ -12,7 +12,8 @@
 
 use super::*;
 
-use allocator_api2::alloc::Global;
+use allocator_api2::alloc::Global as ApiGlobal;
+use rustty_vt::alloc::Global;
 
 use crate::codepoint_resolver::{CodepointResolver, DescriptorCache, StyleStatus};
 use crate::collection::{AddOptions, Collection, LoadOptions, SizeAdjustment};
@@ -72,7 +73,7 @@ struct TestShaper {
     shaper: Shaper,
     // `grid: *SharedGrid` — a heap `SharedGrid` (the reference `alloc.create`);
     // `Box` gives the pointer-stable address `TextRun.grid` needs.
-    grid: Box<SharedGrid<Global>>,
+    grid: Box<SharedGrid<ApiGlobal>>,
     lib: Library,
 }
 
@@ -91,8 +92,8 @@ impl TestShaper {
     }
 
     /// Raw pointer to the heap grid (for `RunOptions.grid`).
-    fn grid_ptr(&mut self) -> *mut SharedGrid<Global> {
-        &mut *self.grid as *mut SharedGrid<Global>
+    fn grid_ptr(&mut self) -> *mut SharedGrid<ApiGlobal> {
+        &mut *self.grid as *mut SharedGrid<ApiGlobal>
     }
 }
 
@@ -186,7 +187,7 @@ fn test_shaper_with_font(font_req: TestFont) -> TestShaper {
 
     // const grid_ptr = try alloc.create(SharedGrid);
     // grid_ptr.* = try .init(alloc, .{ .collection = c });
-    let grid = Box::new(SharedGrid::init(Global, resolver_for(c)).unwrap());
+    let grid = Box::new(SharedGrid::init(ApiGlobal, resolver_for(c)).unwrap());
 
     // var shaper = try Shaper.init(alloc, .{ .features = &.{"dlig"} });
     // Some of our tests rely on dlig being enabled by default
@@ -198,12 +199,62 @@ fn test_shaper_with_font(font_req: TestFont) -> TestShaper {
     TestShaper { shaper, grid, lib }
 }
 
+/// R14 strict mode for the system-font skips (the `RUSTTY_REQUIRE_METAL` /
+/// `RUSTTY_REQUIRE_GL` pattern): the reference skips a shaping test when its
+/// font is not installed, which a Rust test can only express as returning `ok`.
+/// `RUSTTY_REQUIRE_SYSTEM_FONTS=1` turns that skip into a FAILURE. The macOS CI
+/// leg exports it: every font these CoreText tests ask for is a stock macOS
+/// Supplemental font. (Noto Serif Tibetan, the one non-stock font, is asked for
+/// only by the HarfBuzz twin `shape_tibetan_characters`, which is not compiled
+/// on macOS; CORRECTED by task S-15, this said it was an `#[ignore]`d test here.)
+/// These tests exist only on macOS, so no other leg runs them.
+fn system_fonts_required() -> bool {
+    system_fonts_required_from(std::env::var_os("RUSTTY_REQUIRE_SYSTEM_FONTS").as_deref())
+}
+
+fn system_fonts_required_from(value: Option<&std::ffi::OsStr>) -> bool {
+    value == Some(std::ffi::OsStr::new("1"))
+}
+
+/// A no-op when fonts are not required (the caller prints its skip line and
+/// returns), a panic when they are.
+#[track_caller]
+fn require_system_font_or_skip(font_req: &str, why: &str) {
+    require_system_font_or_skip_impl(system_fonts_required(), font_req, why);
+}
+
+#[track_caller]
+fn require_system_font_or_skip_impl(required: bool, font_req: &str, why: &str) {
+    assert!(
+        !required,
+        "system font required but unavailable (RUSTTY_REQUIRE_SYSTEM_FONTS=1): \
+         {font_req:?} {why}"
+    );
+    eprintln!("system font {font_req:?} {why}; skipping");
+}
+
+#[test]
+fn system_font_pivot_is_strict_only_when_env_is_exactly_one() {
+    use std::ffi::OsStr;
+    assert!(!system_fonts_required_from(None));
+    assert!(!system_fonts_required_from(Some(OsStr::new("0"))));
+    assert!(system_fonts_required_from(Some(OsStr::new("1"))));
+    require_system_font_or_skip_impl(false, "Some Font", "was not found");
+}
+
+#[test]
+#[should_panic(expected = "system font required but unavailable (RUSTTY_REQUIRE_SYSTEM_FONTS=1)")]
+fn system_font_pivot_panics_when_required() {
+    require_system_font_or_skip_impl(true, "Some Font", "was not found");
+}
+
 /// Return a fully initialized shaper by discovering a named font on the system.
 // fn testShaperWithDiscoveredFont(alloc: Allocator, font_req: [:0]const u8) !TestShaper {
 //
 // PORT NOTE: `error.SkipZigTest` / `error.FontNotFound` (discovery returns null)
-// is modeled as `Option::None` — the caller returns early (a Rust test that
-// returns is a pass, i.e. an effective skip).
+// is modeled as `Option::None` — the caller returns early — after the R14 pivot
+// [`require_system_font_or_skip`], so the skip is printed, and is a failure
+// under `RUSTTY_REQUIRE_SYSTEM_FONTS=1`.
 fn test_shaper_with_discovered_font(font_req: &str) -> Option<TestShaper> {
     use crate::discovery::{Descriptor, Discover};
 
@@ -237,6 +288,7 @@ fn test_shaper_with_discovered_font(font_req: &str) -> Option<TestShaper> {
             None => {
                 disco_it.deinit();
                 disco.deinit();
+                require_system_font_or_skip(font_req, "was not found");
                 return None;
             }
         };
@@ -251,7 +303,7 @@ fn test_shaper_with_discovered_font(font_req: &str) -> Option<TestShaper> {
 
     // const grid_ptr = try alloc.create(SharedGrid);
     // grid_ptr.* = try .init(alloc, .{ .collection = c });
-    let grid = Box::new(SharedGrid::init(Global, resolver_for(c)).unwrap());
+    let grid = Box::new(SharedGrid::init(ApiGlobal, resolver_for(c)).unwrap());
 
     // var shaper = try Shaper.init(alloc, .{});
     let shaper = Shaper::init(shape::Options::default()).unwrap();
@@ -306,7 +358,7 @@ fn run_iterator() {
             })
         };
         let mut count: usize = 0;
-        while it.next(Global).unwrap().is_some() {
+        while it.next(ApiGlobal).unwrap().is_some() {
             count += 1;
         }
         assert_eq!(1usize, count);
@@ -338,7 +390,7 @@ fn run_iterator() {
             })
         };
         let mut count: usize = 0;
-        while it.next(Global).unwrap().is_some() {
+        while it.next(ApiGlobal).unwrap().is_some() {
             count += 1;
         }
         assert_eq!(1usize, count);
@@ -370,7 +422,7 @@ fn run_iterator() {
             })
         };
         let mut count: usize = 0;
-        while it.next(Global).unwrap().is_some() {
+        while it.next(ApiGlobal).unwrap().is_some() {
             count += 1;
         }
         assert_eq!(3usize, count);
@@ -402,7 +454,7 @@ fn run_iterator() {
             })
         };
         let mut count: usize = 0;
-        while it.next(Global).unwrap().is_some() {
+        while it.next(ApiGlobal).unwrap().is_some() {
             count += 1;
         }
         assert_eq!(2usize, count);
@@ -477,11 +529,11 @@ fn run_iterator_empty_cells_with_background_set() {
             })
         };
         {
-            let run = it.next(Global).unwrap().unwrap();
+            let run = it.next(ApiGlobal).unwrap().unwrap();
             let cells = unsafe { (*shaper).shape(run) }.unwrap();
             assert_eq!(3usize, cells.len());
         }
-        assert!(it.next(Global).unwrap().is_none());
+        assert!(it.next(ApiGlobal).unwrap().is_none());
 
         state.deinit(Global);
         t.deinit(Global);
@@ -521,7 +573,7 @@ fn shape() {
         })
     };
     let mut count: usize = 0;
-    while let Some(run) = it.next(Global).unwrap() {
+    while let Some(run) = it.next(ApiGlobal).unwrap() {
         count += 1;
         let _ = unsafe { (*shaper).shape(run) }.unwrap();
     }
@@ -563,7 +615,7 @@ fn shape_nerd_fonts() {
         })
     };
     let mut count: usize = 0;
-    while let Some(run) = it.next(Global).unwrap() {
+    while let Some(run) = it.next(ApiGlobal).unwrap() {
         count += 1;
         let _ = unsafe { (*shaper).shape(run) }.unwrap();
     }
@@ -601,7 +653,7 @@ fn shape_inconsolata_ligs() {
             })
         };
         let mut count: usize = 0;
-        while let Some(run) = it.next(Global).unwrap() {
+        while let Some(run) = it.next(ApiGlobal).unwrap() {
             count += 1;
             assert_eq!(2usize, run.cells as usize);
             let cells = unsafe { (*shaper).shape(run) }.unwrap();
@@ -635,7 +687,7 @@ fn shape_inconsolata_ligs() {
             })
         };
         let mut count: usize = 0;
-        while let Some(run) = it.next(Global).unwrap() {
+        while let Some(run) = it.next(ApiGlobal).unwrap() {
             count += 1;
             assert_eq!(3usize, run.cells as usize);
             let cells = unsafe { (*shaper).shape(run) }.unwrap();
@@ -677,7 +729,7 @@ fn shape_monaspace_ligs() {
             })
         };
         let mut count: usize = 0;
-        while let Some(run) = it.next(Global).unwrap() {
+        while let Some(run) = it.next(ApiGlobal).unwrap() {
             count += 1;
             assert_eq!(3usize, run.cells as usize);
             let cells = unsafe { (*shaper).shape(run) }.unwrap();
@@ -720,7 +772,7 @@ fn shape_left_replaced_lig_in_last_run() {
             })
         };
         let mut count: usize = 0;
-        while let Some(run) = it.next(Global).unwrap() {
+        while let Some(run) = it.next(ApiGlobal).unwrap() {
             count += 1;
             assert_eq!(3usize, run.cells as usize);
             let cells = unsafe { (*shaper).shape(run) }.unwrap();
@@ -763,7 +815,7 @@ fn shape_left_replaced_lig_in_early_run() {
             })
         };
 
-        let run = it.next(Global).unwrap().unwrap();
+        let run = it.next(ApiGlobal).unwrap().unwrap();
         assert_eq!(4usize, run.cells as usize);
         let cells = unsafe { (*shaper).shape(run) }.unwrap();
         assert_eq!(2usize, cells.len());
@@ -805,7 +857,7 @@ fn shape_u_3c9_with_jb_mono() {
 
         let mut run_count: usize = 0;
         let mut cell_count: usize = 0;
-        while let Some(run) = it.next(Global).unwrap() {
+        while let Some(run) = it.next(ApiGlobal).unwrap() {
             run_count += 1;
             let cells = unsafe { (*shaper).shape(run) }.unwrap();
             cell_count += cells.len();
@@ -847,7 +899,7 @@ fn shape_emoji_width() {
             })
         };
         let mut count: usize = 0;
-        while let Some(run) = it.next(Global).unwrap() {
+        while let Some(run) = it.next(ApiGlobal).unwrap() {
             count += 1;
             let cells = unsafe { (*shaper).shape(run) }.unwrap();
             assert_eq!(1usize, cells.len());
@@ -904,7 +956,7 @@ fn shape_emoji_width_long() {
         })
     };
     let mut count: usize = 0;
-    while let Some(run) = it.next(Global).unwrap() {
+    while let Some(run) = it.next(ApiGlobal).unwrap() {
         count += 1;
         let cells = unsafe { (*shaper).shape(run) }.unwrap();
         assert_eq!(1usize, cells.len());
@@ -946,7 +998,7 @@ fn shape_variation_selector_vs15() {
         })
     };
     let mut count: usize = 0;
-    while let Some(run) = it.next(Global).unwrap() {
+    while let Some(run) = it.next(ApiGlobal).unwrap() {
         count += 1;
         let cells = unsafe { (*shaper).shape(run) }.unwrap();
         assert_eq!(1usize, cells.len());
@@ -988,7 +1040,7 @@ fn shape_variation_selector_vs16() {
         })
     };
     let mut count: usize = 0;
-    while let Some(run) = it.next(Global).unwrap() {
+    while let Some(run) = it.next(ApiGlobal).unwrap() {
         count += 1;
         let cells = unsafe { (*shaper).shape(run) }.unwrap();
         assert_eq!(1usize, cells.len());
@@ -1028,7 +1080,7 @@ fn shape_with_empty_cells_in_between() {
         })
     };
     let mut count: usize = 0;
-    while let Some(run) = it.next(Global).unwrap() {
+    while let Some(run) = it.next(ApiGlobal).unwrap() {
         count += 1;
         let cells = unsafe { (*shaper).shape(run) }.unwrap();
         assert_eq!(1usize, count);
@@ -1076,7 +1128,7 @@ fn shape_combining_characters() {
         })
     };
     let mut count: usize = 0;
-    while let Some(run) = it.next(Global).unwrap() {
+    while let Some(run) = it.next(ApiGlobal).unwrap() {
         count += 1;
         let cells = unsafe { (*shaper).shape(run) }.unwrap();
         assert_eq!(4usize, cells.len());
@@ -1130,7 +1182,7 @@ fn shape_devanagari_string() {
         })
     };
 
-    let run = it.next(Global).unwrap();
+    let run = it.next(ApiGlobal).unwrap();
     assert!(run.is_some());
     let cells = unsafe { (*shaper).shape(run.unwrap()) }.unwrap();
 
@@ -1146,7 +1198,7 @@ fn shape_devanagari_string() {
     assert_eq!(5u16, cells[6].x);
     assert_eq!(6u16, cells[7].x);
 
-    assert!(it.next(Global).unwrap().is_none());
+    assert!(it.next(ApiGlobal).unwrap().is_none());
 
     state.deinit(Global);
     t.deinit(Global);
@@ -1197,7 +1249,7 @@ fn shape_tai_tham_vowels_position_differs_from_advance() {
         })
     };
     let mut count: usize = 0;
-    while let Some(run) = it.next(Global).unwrap() {
+    while let Some(run) = it.next(ApiGlobal).unwrap() {
         count += 1;
         let cells = unsafe { (*shaper).shape(run) }.unwrap();
         let cell_width = unsafe { (*run.grid).metrics.cell_width };
@@ -1261,7 +1313,7 @@ fn shape_tai_tham_letters_position_y_differs_from_advance() {
         })
     };
     let mut count: usize = 0;
-    while let Some(run) = it.next(Global).unwrap() {
+    while let Some(run) = it.next(ApiGlobal).unwrap() {
         count += 1;
         let cells = unsafe { (*shaper).shape(run) }.unwrap();
         assert_eq!(3usize, cells.len());
@@ -1324,7 +1376,7 @@ fn shape_javanese_ligatures() {
         })
     };
     let mut count: usize = 0;
-    while let Some(run) = it.next(Global).unwrap() {
+    while let Some(run) = it.next(ApiGlobal).unwrap() {
         count += 1;
         let cells = unsafe { (*shaper).shape(run) }.unwrap();
         let cell_width = unsafe { (*run.grid).metrics.cell_width };
@@ -1345,7 +1397,7 @@ fn shape_javanese_ligatures() {
 
 // test "shape Chakma vowel sign with ligature (vowel sign renders first)" {
 #[test]
-fn shape_chakma_vowel_sign_with_ligature() {
+fn shape_chakma_vowel_sign_with_ligature_vowel_sign_renders_first() {
     // We need a font that supports Chakma for this to work, if we can't find
     // Noto Sans Chakma Regular, which is a system font on macOS, we just skip
     // the test.
@@ -1390,7 +1442,7 @@ fn shape_chakma_vowel_sign_with_ligature() {
         })
     };
     let mut count: usize = 0;
-    while let Some(run) = it.next(Global).unwrap() {
+    while let Some(run) = it.next(ApiGlobal).unwrap() {
         count += 1;
         let cells = unsafe { (*shaper).shape(run) }.unwrap();
         assert_eq!(4usize, cells.len());
@@ -1464,7 +1516,7 @@ fn shape_bengali_ligatures_with_out_of_order_vowels() {
         })
     };
     let mut count: usize = 0;
-    while let Some(run) = it.next(Global).unwrap() {
+    while let Some(run) = it.next(ApiGlobal).unwrap() {
         count += 1;
         let cells = unsafe { (*shaper).shape(run) }.unwrap();
         assert_eq!(8usize, cells.len());
@@ -1521,7 +1573,7 @@ fn shape_box_glyphs() {
         })
     };
     let mut count: usize = 0;
-    while let Some(run) = it.next(Global).unwrap() {
+    while let Some(run) = it.next(ApiGlobal).unwrap() {
         count += 1;
         let cells = unsafe { (*shaper).shape(run) }.unwrap();
         assert_eq!(2usize, cells.len());
@@ -1566,7 +1618,7 @@ fn shape_selection_boundary() {
             })
         };
         let mut count: usize = 0;
-        while let Some(run) = it.next(Global).unwrap() {
+        while let Some(run) = it.next(ApiGlobal).unwrap() {
             count += 1;
             let _ = unsafe { (*shaper).shape(run) }.unwrap();
         }
@@ -1586,7 +1638,7 @@ fn shape_selection_boundary() {
             })
         };
         let mut count: usize = 0;
-        while let Some(run) = it.next(Global).unwrap() {
+        while let Some(run) = it.next(ApiGlobal).unwrap() {
             count += 1;
             let _ = unsafe { (*shaper).shape(run) }.unwrap();
         }
@@ -1606,7 +1658,7 @@ fn shape_selection_boundary() {
             })
         };
         let mut count: usize = 0;
-        while let Some(run) = it.next(Global).unwrap() {
+        while let Some(run) = it.next(ApiGlobal).unwrap() {
             count += 1;
             let _ = unsafe { (*shaper).shape(run) }.unwrap();
         }
@@ -1626,7 +1678,7 @@ fn shape_selection_boundary() {
             })
         };
         let mut count: usize = 0;
-        while let Some(run) = it.next(Global).unwrap() {
+        while let Some(run) = it.next(ApiGlobal).unwrap() {
             count += 1;
             let _ = unsafe { (*shaper).shape(run) }.unwrap();
         }
@@ -1646,7 +1698,7 @@ fn shape_selection_boundary() {
             })
         };
         let mut count: usize = 0;
-        while let Some(run) = it.next(Global).unwrap() {
+        while let Some(run) = it.next(ApiGlobal).unwrap() {
             count += 1;
             let _ = unsafe { (*shaper).shape(run) }.unwrap();
         }
@@ -1686,7 +1738,7 @@ fn shape_cursor_boundary() {
             })
         };
         let mut count: usize = 0;
-        while let Some(run) = it.next(Global).unwrap() {
+        while let Some(run) = it.next(ApiGlobal).unwrap() {
             count += 1;
             let _ = unsafe { (*shaper).shape(run) }.unwrap();
         }
@@ -1707,7 +1759,7 @@ fn shape_cursor_boundary() {
                 })
             };
             let mut count: usize = 0;
-            while let Some(run) = it.next(Global).unwrap() {
+            while let Some(run) = it.next(ApiGlobal).unwrap() {
                 count += 1;
                 let _ = unsafe { (*shaper).shape(run) }.unwrap();
             }
@@ -1726,7 +1778,7 @@ fn shape_cursor_boundary() {
                 })
             };
             let mut count: usize = 0;
-            while let Some(run) = it.next(Global).unwrap() {
+            while let Some(run) = it.next(ApiGlobal).unwrap() {
                 count += 1;
                 let _ = unsafe { (*shaper).shape(run) }.unwrap();
             }
@@ -1748,7 +1800,7 @@ fn shape_cursor_boundary() {
                 })
             };
             let mut count: usize = 0;
-            while let Some(run) = it.next(Global).unwrap() {
+            while let Some(run) = it.next(ApiGlobal).unwrap() {
                 count += 1;
                 let _ = unsafe { (*shaper).shape(run) }.unwrap();
             }
@@ -1767,7 +1819,7 @@ fn shape_cursor_boundary() {
                 })
             };
             let mut count: usize = 0;
-            while let Some(run) = it.next(Global).unwrap() {
+            while let Some(run) = it.next(ApiGlobal).unwrap() {
                 count += 1;
                 let _ = unsafe { (*shaper).shape(run) }.unwrap();
             }
@@ -1788,7 +1840,7 @@ fn shape_cursor_boundary() {
                 })
             };
             let mut count: usize = 0;
-            while let Some(run) = it.next(Global).unwrap() {
+            while let Some(run) = it.next(ApiGlobal).unwrap() {
                 count += 1;
                 let _ = unsafe { (*shaper).shape(run) }.unwrap();
             }
@@ -1807,7 +1859,7 @@ fn shape_cursor_boundary() {
                 })
             };
             let mut count: usize = 0;
-            while let Some(run) = it.next(Global).unwrap() {
+            while let Some(run) = it.next(ApiGlobal).unwrap() {
                 count += 1;
                 let _ = unsafe { (*shaper).shape(run) }.unwrap();
             }
@@ -1848,7 +1900,7 @@ fn shape_cursor_boundary_and_colored_emoji() {
             })
         };
         let mut count: usize = 0;
-        while let Some(run) = it.next(Global).unwrap() {
+        while let Some(run) = it.next(ApiGlobal).unwrap() {
             count += 1;
             let _ = unsafe { (*shaper).shape(run) }.unwrap();
         }
@@ -1868,7 +1920,7 @@ fn shape_cursor_boundary_and_colored_emoji() {
             })
         };
         let mut count: usize = 0;
-        while let Some(run) = it.next(Global).unwrap() {
+        while let Some(run) = it.next(ApiGlobal).unwrap() {
             count += 1;
             let _ = unsafe { (*shaper).shape(run) }.unwrap();
         }
@@ -1886,7 +1938,7 @@ fn shape_cursor_boundary_and_colored_emoji() {
             })
         };
         let mut count: usize = 0;
-        while let Some(run) = it.next(Global).unwrap() {
+        while let Some(run) = it.next(ApiGlobal).unwrap() {
             count += 1;
             let _ = unsafe { (*shaper).shape(run) }.unwrap();
         }
@@ -1904,7 +1956,7 @@ fn shape_cursor_boundary_and_colored_emoji() {
             })
         };
         let mut count: usize = 0;
-        while let Some(run) = it.next(Global).unwrap() {
+        while let Some(run) = it.next(ApiGlobal).unwrap() {
             count += 1;
             let _ = unsafe { (*shaper).shape(run) }.unwrap();
         }
@@ -1922,7 +1974,7 @@ fn shape_cursor_boundary_and_colored_emoji() {
             })
         };
         let mut count: usize = 0;
-        while let Some(run) = it.next(Global).unwrap() {
+        while let Some(run) = it.next(ApiGlobal).unwrap() {
             count += 1;
             let _ = unsafe { (*shaper).shape(run) }.unwrap();
         }
@@ -1962,7 +2014,7 @@ fn shape_cell_attribute_change() {
             })
         };
         let mut count: usize = 0;
-        while let Some(run) = it.next(Global).unwrap() {
+        while let Some(run) = it.next(ApiGlobal).unwrap() {
             count += 1;
             let _ = unsafe { (*shaper).shape(run) }.unwrap();
         }
@@ -1997,7 +2049,7 @@ fn shape_cell_attribute_change() {
             })
         };
         let mut count: usize = 0;
-        while let Some(run) = it.next(Global).unwrap() {
+        while let Some(run) = it.next(ApiGlobal).unwrap() {
             count += 1;
             let _ = unsafe { (*shaper).shape(run) }.unwrap();
         }
@@ -2035,7 +2087,7 @@ fn shape_cell_attribute_change() {
             })
         };
         let mut count: usize = 0;
-        while let Some(run) = it.next(Global).unwrap() {
+        while let Some(run) = it.next(ApiGlobal).unwrap() {
             count += 1;
             let _ = unsafe { (*shaper).shape(run) }.unwrap();
         }
@@ -2073,7 +2125,7 @@ fn shape_cell_attribute_change() {
             })
         };
         let mut count: usize = 0;
-        while let Some(run) = it.next(Global).unwrap() {
+        while let Some(run) = it.next(ApiGlobal).unwrap() {
             count += 1;
             let _ = unsafe { (*shaper).shape(run) }.unwrap();
         }
@@ -2109,7 +2161,7 @@ fn shape_cell_attribute_change() {
             })
         };
         let mut count: usize = 0;
-        while let Some(run) = it.next(Global).unwrap() {
+        while let Some(run) = it.next(ApiGlobal).unwrap() {
             count += 1;
             let _ = unsafe { (*shaper).shape(run) }.unwrap();
         }
@@ -2159,7 +2211,7 @@ fn shape_high_plane_sprite_font_codepoint() {
         })
     };
     // We should get one run
-    let run = it.next(Global).unwrap().unwrap();
+    let run = it.next(ApiGlobal).unwrap().unwrap();
     // The run state should have the UTF-16 encoding of the character.
     assert_eq!(&[0xD83Eu16, 0xDF70], unsafe {
         (*shaper).run_state.unichars.as_slice()
@@ -2194,9 +2246,178 @@ fn shape_high_plane_sprite_font_codepoint() {
     // - it should be a sprite font
     assert!(run.font_index.special().is_some());
     // And we should get a null run after that
-    assert!(it.next(Global).unwrap().is_none());
+    assert!(it.next(ApiGlobal).unwrap().is_none());
 
     state.deinit(Global);
     t.deinit(Global);
     testdata.deinit();
+}
+
+// libSystem calls for the release-thread test below (this crate has no `libc`
+// dependency).
+mod sys_c {
+    use core::ffi::{c_char, c_int, c_void};
+    extern "C" {
+        pub fn malloc(size: usize) -> *mut c_void;
+        pub fn free(ptr: *mut c_void);
+        pub fn pthread_self() -> usize;
+        pub fn pthread_getname_np(thread: usize, name: *mut c_char, len: usize) -> c_int;
+    }
+}
+
+/// The threads a [`recording_allocator`]'s deallocate callback ran on: the
+/// `pthread_self` and the pthread name of each. Test-only (this file is
+/// `#[cfg(test)]`).
+static RECORDED_DEALLOCS: std::sync::Mutex<Vec<(usize, String)>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// A CoreFoundation allocator (`malloc`/`free`) whose deallocate callback
+/// records the thread it runs on in [`RECORDED_DEALLOCS`]. A CF object created
+/// with it is freed through that callback on the thread whose `CFRelease`
+/// drops the last reference.
+fn recording_allocator() -> *const c_void {
+    #[repr(C)]
+    struct CFAllocatorContext {
+        version: isize,
+        info: *mut c_void,
+        retain: *const c_void,
+        release: *const c_void,
+        copy_description: *const c_void,
+        allocate: Option<extern "C" fn(isize, usize, *mut c_void) -> *mut c_void>,
+        reallocate: *const c_void,
+        deallocate: Option<extern "C" fn(*mut c_void, *mut c_void)>,
+        preferred_size: *const c_void,
+    }
+    extern "C" {
+        fn CFAllocatorCreate(
+            allocator: *const c_void,
+            context: *mut CFAllocatorContext,
+        ) -> *const c_void;
+    }
+    extern "C" fn allocate(size: isize, _hint: usize, _info: *mut c_void) -> *mut c_void {
+        // SAFETY: plain malloc.
+        unsafe { sys_c::malloc(size as usize) }
+    }
+    extern "C" fn deallocate(ptr: *mut c_void, _info: *mut c_void) {
+        let mut name = [0 as core::ffi::c_char; 64];
+        // SAFETY: reads the calling thread's own name into a local buffer.
+        let name = unsafe {
+            sys_c::pthread_getname_np(sys_c::pthread_self(), name.as_mut_ptr(), name.len());
+            std::ffi::CStr::from_ptr(name.as_ptr())
+        };
+        RECORDED_DEALLOCS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push((
+                unsafe { sys_c::pthread_self() },
+                name.to_string_lossy().into_owned(),
+            ));
+        // SAFETY: `ptr` came from `allocate`.
+        unsafe { sys_c::free(ptr) }
+    }
+    let mut ctx = CFAllocatorContext {
+        version: 0,
+        info: core::ptr::null_mut(),
+        retain: core::ptr::null(),
+        release: core::ptr::null(),
+        copy_description: core::ptr::null(),
+        allocate: Some(allocate),
+        reallocate: core::ptr::null(),
+        deallocate: Some(deallocate),
+        preferred_size: core::ptr::null(),
+    };
+    // SAFETY: a valid context; the allocator itself comes from the default
+    // allocator. It is never released (one per test run).
+    let a = unsafe { CFAllocatorCreate(core::ptr::null(), &mut ctx) };
+    assert!(!a.is_null());
+    a
+}
+
+/// S94-F1: `endFrame` hands the frame's pool to the dedicated release thread,
+/// the reference's `os.CFReleaseThread`: pushed into its mailbox, the thread
+/// woken through its `wakeup` async, and each ref `CFRelease`d there
+/// (`coretext.zig:264-297`, `os/cf_release_thread.zig`).
+///
+/// The pooled ref is the last reference to a `CFData` made with
+/// [`recording_allocator`], so the `CFRelease` that frees it records its
+/// thread. It must be freed only after `endFrame`, and on the release thread:
+/// not the test's thread, and named `cf_release` (the name `threadMain` gives
+/// it, `cf_release_thread.zig:127-129`). Task T-F2: releasing the pool inline
+/// in `end_frame` passed the earlier form of this test, which only watched the
+/// retain count fall.
+#[test]
+fn end_frame_releases_the_pool_on_the_cf_release_thread() {
+    extern "C" {
+        fn CFDataCreate(allocator: *const c_void, bytes: *const u8, length: isize) -> *mut c_void;
+        fn CFGetRetainCount(cf: *const c_void) -> isize;
+        fn CFRetain(cf: *const c_void) -> *const c_void;
+    }
+    let deallocs = || {
+        RECORDED_DEALLOCS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    };
+
+    let mut shaper = Shaper::init(shape::Options::default()).unwrap();
+    let alloc = recording_allocator();
+    let bytes = b"rustty-s94-f1";
+    // SAFETY: CF calls on objects this test owns.
+    let data = unsafe { CFDataCreate(alloc, bytes.as_ptr(), bytes.len() as isize) };
+    assert!(!data.is_null());
+    unsafe { CFRetain(data) };
+    assert_eq!(unsafe { CFGetRetainCount(data) }, 2);
+
+    // The pool holds one reference; the test drops the other, so the pool's
+    // is the last.
+    shaper.cf_release_pool.push(data);
+    unsafe { CFRelease(data) };
+    // Nothing is released before the frame ends.
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    assert_eq!(deallocs(), [], "freed before end_frame");
+
+    shaper.end_frame();
+    assert!(
+        shaper.cf_release_pool.is_empty(),
+        "the pool went to the thread"
+    );
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while deallocs().is_empty() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the release thread did not release the pool"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let this_thread = unsafe { sys_c::pthread_self() };
+    for (thread, name) in deallocs() {
+        assert_ne!(thread, this_thread, "released on the test's thread");
+        assert_eq!(name, "cf_release", "released on the cf_release thread");
+    }
+
+    // `deinit` stops and joins the thread, then frees it (a second `deinit`
+    // is a no-op).
+    shaper.deinit();
+    assert!(shaper.cf_release_thread.is_null() && shaper.cf_release_thr.is_none());
+    shaper.deinit();
+}
+
+/// S94-F2: `Shaper.init` spawns the release thread with `try`
+/// (`coretext.zig:224-229`), so a failed spawn is an error from `init`; the
+/// port panicked (`.expect`). The test fail-point makes the spawn fail.
+#[test]
+fn init_returns_an_error_when_the_release_thread_cannot_spawn() {
+    super::spawn_failpoint::arm();
+    let result = Shaper::init(shape::Options::default());
+    // The fail-point was consumed: the spawn really was attempted and failed.
+    assert!(!super::spawn_failpoint::take());
+    assert!(
+        matches!(result, Err(Error::CfReleaseThreadSpawn)),
+        "init returned {:?}",
+        result.as_ref().err()
+    );
+
+    // Positive control: disarmed, init succeeds.
+    let mut shaper = Shaper::init(shape::Options::default()).unwrap();
+    shaper.deinit();
 }

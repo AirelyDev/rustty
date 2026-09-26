@@ -39,8 +39,8 @@
 // file-scope `Screen`/`Terminal` aliases are dropped (the tests reach
 // `Terminal` by direct path). `Allocator` -> `allocator_api2::alloc::Global`,
 // matching `RenderState::string`'s allocator parameter.
-use allocator_api2::alloc::Global as Allocator;
 use rustty_input::link::{Highlight, Link as InputLink};
+use rustty_vt::alloc::Allocator;
 use rustty_vt::input::key_mods::Mods;
 use rustty_vt::point;
 use rustty_vt::render::{CellSet, RenderState, StringError, StringMap};
@@ -313,8 +313,8 @@ impl Set {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use allocator_api2::alloc::Global;
     use rustty_input::link::{Action, Link as InputLink};
+    use rustty_vt::alloc::Global;
     use rustty_vt::input::key_mods::Mods;
     use rustty_vt::modes::{self as modespkg};
     use rustty_vt::render::{CellSet, RenderState};

@@ -33,6 +33,9 @@ rustty-input = { workspace = true }
 # `build_config.version_string`, substituted for the fixtures' `@@VERSION@@`
 # marker (`mdgen.zig:8-19`).
 rustty-build-config = { workspace = true }
+# `build_config.version_string` / `release_channel`: the version derived from
+# the checkout, in its own leaf crate so a commit rebuilds only its readers.
+rustty-version = { workspace = true }
 # WS13 webgen: the invocation lines in `commands.mdx` spell the actual command
 # name (`ghostty +<action>` in the reference), so they must follow the R2/Task-14
 # identity profile rather than being hardcoded. Leaf identity crate — no new

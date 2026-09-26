@@ -11,10 +11,28 @@
 
 // const std = @import("std");
 // const Allocator = std.mem.Allocator;
-// PORT NOTE: every `alloc: Allocator` parameter is dropped — Rust's global
-// allocator is implicit and `Allocator.Error` has no recoverable analogue
-// (allocation failure aborts), so `Allocator.Error!T` collapses to `T` and
-// `(Allocator.Error || std.Io.Writer.Error)!T` to `std::io::Result<T>`.
+// PORT NOTE (parity tail S7-3): every `alloc: Allocator` parameter is kept.
+// The state and everything it holds are allocated through that allocator (the
+// terminal's `gpa()`), fallibly: the containers are allocator_api2 vectors
+// bound to it when the state is created, so each later `alloc` argument is
+// checked against that binding in debug builds (all calls must use the
+// allocator the state was created with, the reference's own contract).
+// `(Allocator.Error || std.Io.Writer.Error)!T` is `std::io::Result<T>`, with
+// `error.OutOfMemory` as `std::io::ErrorKind::OutOfMemory` ([`oom`]).
+use crate::alloc::{Allocator, CopyVecExt, TryPushExt};
+use allocator_api2::boxed::Box as ABox;
+use allocator_api2::vec::Vec as AVec;
+
+/// Bytes allocated through the state's allocator.
+pub type Bytes = AVec<u8, Allocator>;
+
+/// `*State` allocated through the terminal's allocator (`alloc.create(State)`).
+pub type StateBox = ABox<State, Allocator>;
+
+/// `error.OutOfMemory` in the `std::io::Result` error union.
+fn oom() -> std::io::Error {
+    std::io::Error::from(std::io::ErrorKind::OutOfMemory)
+}
 
 // const assert = @import("../../quirks.zig").inlineAssert;
 // PORT NOTE: retargeted to `debug_assert!` at the call site (crate convention).
@@ -42,10 +60,11 @@ pub const MAX_MIME_LIST_BYTES: usize = 1024 * 1024;
 /// complete pub surface it consumes.
 ///
 /// PORT NOTE: `slot: *?*State` (heap pointer slot the function allocates
-/// into / frees) → `&mut Option<Box<State>>`; `v: osc.Command.KittyDndProtocol`
+/// into / frees) → `&mut Option<StateBox>`; `v: osc.Command.KittyDndProtocol`
 /// (a struct of borrowed slices) → `&osc::KittyDndProtocol` (self-owning).
 pub fn handle_command<W: std::io::Write>(
-    slot: &mut Option<Box<State>>,
+    slot: &mut Option<StateBox>,
+    alloc: Allocator,
     writer: &mut W,
     v: &osc::KittyDndProtocol,
 ) -> std::io::Result<Option<Event>> {
@@ -87,7 +106,8 @@ pub fn handle_command<W: std::io::Write>(
             let state: &mut State = match slot {
                 Some(state) => state,
                 None => {
-                    let state = slot.insert(Box::new(State::default()));
+                    // const state = try State.create(alloc);
+                    let state = slot.insert(State::create(alloc)?);
                     let _ = state.chunking.apply(raw);
                     state
                 }
@@ -96,18 +116,17 @@ pub fn handle_command<W: std::io::Write>(
             // Update the client ID on every registration
             state.drop.client_id = meta.client_id;
 
-            return Ok(state.register(payload, continuation, meta.more));
+            return state.register(alloc, payload, continuation, meta.more);
         }
 
         command::EventType::Unregister => {
             // const state = slot.* orelse return null;
             // state.destroy(alloc);
             // slot.* = null;
-            // PORT NOTE: `Option::take` drops the Box, freeing the state and
-            // everything it holds (the reference's `destroy`).
-            if slot.take().is_none() {
+            let Some(state) = slot.take() else {
                 return Ok(None);
-            }
+            };
+            State::destroy(state, alloc);
             return Ok(Some(Event::Registration));
         }
 
@@ -116,11 +135,11 @@ pub fn handle_command<W: std::io::Write>(
                 Some(state) => state,
                 None => return Ok(None),
             };
-            return Ok(state.accept_status(meta, payload));
+            return state.accept_status(alloc, meta, payload);
         }
 
         command::EventType::Request => {
-            return data_request(slot.as_deref_mut(), writer, meta, v.terminator);
+            return data_request(slot.as_deref_mut(), alloc, writer, meta, v.terminator);
         }
 
         // Drag source control. Enabling (x=1, with an optional
@@ -169,6 +188,7 @@ pub fn handle_command<W: std::io::Write>(
 /// errors kitty sends from its zeroed drop state.
 fn data_request<W: std::io::Write>(
     state: Option<&mut State>,
+    alloc: Allocator,
     writer: &mut W,
     meta: Metadata,
     terminator: osc::Terminator,
@@ -191,7 +211,7 @@ fn data_request<W: std::io::Write>(
                 None => return Ok(None),
             };
             let dropped = s.drop.dropped;
-            s.reset_drop();
+            s.reset_drop(alloc);
             return Ok(if dropped {
                 Some(Event::concluded(op))
             } else {
@@ -396,10 +416,12 @@ impl Event {
 /// All calls require the same synchronization as any other terminal
 /// mutation.
 ///
-/// PORT NOTE: the reference's "all calls must use the allocator the state
-/// was created with (the terminal's)" contract is subsumed by Rust's global
-/// allocator; `create`/`destroy`/`deinit` collapse to `Default` + `Drop`.
-#[derive(Debug, Default)]
+/// PORT NOTE (parity tail S7-3): the reference's "all calls must use the
+/// allocator the state was created with (the terminal's)" contract holds: the
+/// state's containers are bound to that allocator (`create`), each call's
+/// `alloc` is checked against it in debug builds, and `destroy`/`deinit` free
+/// through it (the containers' Drop).
+#[derive(Debug)]
 pub struct State {
     /// Chunk reassembly for client commands. This is the only part of
     /// the state cleared by a terminal reset (RIS), matching kitty.
@@ -412,7 +434,7 @@ pub struct State {
 /// PORT NOTE: nested `State.DropTarget` hoisted to a module-level type
 /// (Rust has no nested type namespaces); same for `Item`, `Offered`, and
 /// `MoveEvent`.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct DropTarget {
     /// Multiplexer client ID from registration, echoed in every
     /// drop-side message the terminal sends.
@@ -423,7 +445,7 @@ pub struct DropTarget {
     /// Only needed by embedders that must register types with the
     /// OS ahead of a drag; kitty frees it after doing so, we keep
     /// it so the `registration` event can be acted on from here.
-    pub registered_mimes: Vec<u8>,
+    pub registered_mimes: Bytes,
 
     /// True while the pointer of a native drag is over the terminal.
     pub hovered: bool,
@@ -441,14 +463,39 @@ pub struct DropTarget {
     /// The client's accepted MIME list: space-separated while
     /// accumulating, converted to NUL-separated (with a trailing
     /// NUL) once complete, matching kitty's in-place conversion.
-    pub accepted_mimes: Vec<u8>,
+    pub accepted_mimes: Bytes,
 
     /// The MIME types of the current native drag, in the order
     /// that data request indices refer to.
     pub offered: Option<Offered>,
 
     /// The data captured at drop time, parallel to `offered`.
-    pub items: Option<Vec<Item>>,
+    pub items: Option<AVec<HeldItem, Allocator>>,
+}
+
+impl DropTarget {
+    /// The `.{}` default, with its lists bound to `alloc` (no allocation).
+    fn new_in(alloc: Allocator) -> DropTarget {
+        DropTarget {
+            client_id: 0,
+            registered_mimes: Bytes::new_in(alloc),
+            hovered: false,
+            dropped: false,
+            accepted: None,
+            accept_in_progress: false,
+            accepted_mimes: Bytes::new_in(alloc),
+            offered: None,
+            items: None,
+        }
+    }
+}
+
+/// A dropped representation held by the state: the `Item` copies `dragDrop`
+/// makes with `alloc.dupe`.
+#[derive(Debug)]
+pub struct HeldItem {
+    pub mime: Bytes,
+    pub data: Bytes,
 }
 
 /// One dropped representation: a MIME type and its data.
@@ -471,30 +518,38 @@ pub struct Item {
 /// no held borrow), with the slices re-derived on access.
 #[derive(Debug)]
 pub struct Offered {
-    mimes: Vec<core::ops::Range<usize>>,
-    payload: Vec<u8>,
+    mimes: AVec<core::ops::Range<usize>, Allocator>,
+    payload: Bytes,
 }
 
 impl Offered {
-    fn init(mimes: &[&[u8]]) -> Offered {
+    fn init(alloc: Allocator, mimes: &[&[u8]]) -> Result<Offered, std::io::Error> {
+        // const copies = try alloc.alloc([]const u8, mimes.len);
+        // errdefer alloc.free(copies);
+        let mut ranges = AVec::new_in(alloc);
+        ranges.try_reserve_exact(mimes.len()).map_err(|_| oom())?;
+
         let mut payload_len: usize = 0;
         for m in mimes {
             payload_len += m.len() + 1;
         }
 
-        let mut payload = Vec::with_capacity(payload_len);
-        let mut ranges = Vec::with_capacity(mimes.len());
+        // const payload = try alloc.alloc(u8, payload_len);
+        // errdefer alloc.free(payload);
+        let mut payload = Bytes::new_in(alloc);
+        payload.try_reserve_exact(payload_len).map_err(|_| oom())?;
+        // Both reserved exactly above: the fills below cannot allocate.
         for m in mimes {
             let offset = payload.len();
-            payload.extend_from_slice(m);
+            payload.extend_copy(m);
             payload.push(b' ');
             ranges.push(offset..offset + m.len());
         }
 
-        Offered {
+        Ok(Offered {
             mimes: ranges,
             payload,
-        }
+        })
     }
 
     // fn deinit(self: *const Offered, alloc: Allocator) void
@@ -535,12 +590,38 @@ impl State {
     /// generous bound that keeps the MIME list assembly on the stack.
     pub const MAX_ITEMS: usize = 16;
 
+    /// Allocate a fresh state. Done by `handle_command` on registration.
     // fn create(alloc: Allocator) Allocator.Error!*State
+    fn create(alloc: Allocator) -> std::io::Result<StateBox> {
+        // const state = try alloc.create(State);
+        // state.* = .{};
+        StateBox::try_new_in(
+            State {
+                chunking: Default::default(),
+                drop: DropTarget::new_in(alloc),
+            },
+            alloc,
+        )
+        .map_err(|_| oom())
+    }
+
+    /// Free the state and everything it holds.
     // pub fn destroy(self: *State, alloc: Allocator) void
-    // fn deinit(self: *State, alloc: Allocator) void
-    // PORT NOTE: `create` is `Box::new(State::default())` at the single
-    // `handle_command` call site; `destroy`/`deinit` are the derived Drop
-    // (every held allocation is an owned Vec).
+    //
+    // PORT NOTE: `deinit` (`freeDragData` and both lists' `deinit(alloc)`)
+    // and `alloc.destroy(self)` are the Drop of the box and its containers,
+    // which free through the allocator they were created with.
+    //
+    // PORT NOTE: an associated function taking the box (a method cannot take
+    // an allocator_api2 `Box` as `self` on stable Rust).
+    pub fn destroy(state: StateBox, alloc: Allocator) {
+        state
+            .drop
+            .registered_mimes
+            .allocator()
+            .debug_assert_same(alloc);
+        drop(state);
+    }
 
     /// Iterate the MIME types the client registered with, in order.
     /// Empty when the client declared none, which is the common case.
@@ -560,8 +641,15 @@ impl State {
     ///
     /// `continuation` is true for every chunk but the first of a chunked
     /// registration. Returns the registration event once the list is complete.
-    fn register(&mut self, payload: &[u8], continuation: bool, more: bool) -> Option<Event> {
+    fn register(
+        &mut self,
+        alloc: Allocator,
+        payload: &[u8],
+        continuation: bool,
+        more: bool,
+    ) -> std::io::Result<Option<Event>> {
         let list = &mut self.drop.registered_mimes;
+        list.allocator().debug_assert_same(alloc);
         if !continuation {
             // list.clearRetainingCapacity();
             list.clear();
@@ -570,15 +658,16 @@ impl State {
         // Matching kitty, an over-cap chunk is dropped and does not
         // complete the registration.
         if list.len() + payload.len() > MAX_MIME_LIST_BYTES {
-            return None;
+            return Ok(None);
         }
-        list.extend_from_slice(payload);
+        // try list.appendSlice(alloc, payload);
+        list.try_extend_copy(payload).map_err(|_| oom())?;
 
-        if more {
+        Ok(if more {
             None
         } else {
             Some(Event::Registration)
-        }
+        })
     }
 
     /// The client's acceptance response for the drag currently over the
@@ -607,10 +696,14 @@ impl State {
     /// Clear the per-drag state while preserving the registration,
     /// mirroring kitty's reset_drop. Called when a new drag enters and
     /// when a drop concludes.
-    fn reset_drop(&mut self) {
+    fn reset_drop(&mut self, alloc: Allocator) {
         self.free_drag_data();
         // self.drop.accepted_mimes.clearAndFree(alloc);
-        self.drop.accepted_mimes = Vec::new();
+        self.drop
+            .accepted_mimes
+            .allocator()
+            .debug_assert_same(alloc);
+        self.drop.accepted_mimes = Bytes::new_in(alloc);
         self.drop.hovered = false;
         self.drop.dropped = false;
         self.drop.accepted = None;
@@ -619,8 +712,14 @@ impl State {
 
     /// Handle a t=m acceptance status update from the client, mirroring
     /// kitty's drop_set_status.
-    fn accept_status(&mut self, meta: Metadata, payload: &[u8]) -> Option<Event> {
+    fn accept_status(
+        &mut self,
+        alloc: Allocator,
+        meta: Metadata,
+        payload: &[u8],
+    ) -> std::io::Result<Option<Event>> {
         let d = &mut self.drop;
+        d.accepted_mimes.allocator().debug_assert_same(alloc);
         if !d.accept_in_progress {
             // d.accepted_mimes.clearRetainingCapacity();
             d.accepted_mimes.clear();
@@ -632,13 +731,16 @@ impl State {
             // Matching kitty, an over-cap list stops accumulating and
             // never finalizes, leaving the acceptance unanswered.
             if d.accepted_mimes.len() + payload.len() > MAX_MIME_LIST_BYTES {
-                return None;
+                return Ok(None);
             }
-            d.accepted_mimes.extend_from_slice(payload);
+            // try d.accepted_mimes.appendSlice(alloc, payload);
+            d.accepted_mimes
+                .try_extend_copy(payload)
+                .map_err(|_| oom())?;
         }
 
         if meta.more {
-            return None;
+            return Ok(None);
         }
         d.accept_in_progress = false;
         if !d.accepted_mimes.is_empty() {
@@ -647,9 +749,10 @@ impl State {
                     *c = 0;
                 }
             }
-            d.accepted_mimes.push(0);
+            // try d.accepted_mimes.append(alloc, 0);
+            d.accepted_mimes.try_push(0).map_err(|_| oom())?;
         }
-        Some(Event::Acceptance)
+        Ok(Some(Event::Acceptance))
     }
 
     /// Report a native drag moving over the terminal, sending a t=m
@@ -658,11 +761,12 @@ impl State {
     /// indices will refer to.
     pub fn drag_move<W: std::io::Write>(
         &mut self,
+        alloc: Allocator,
         writer: &mut W,
         ev: MoveEvent,
         mimes: &[&[u8]],
     ) -> std::io::Result<()> {
-        self.move_event(writer, ev, mimes, false)
+        self.move_event(alloc, writer, ev, mimes, false)
     }
 
     /// Report a native drop onto the terminal. The items' data is
@@ -673,6 +777,7 @@ impl State {
     /// Sends a t=M drop event listing the items' MIME types.
     pub fn drag_drop<W: std::io::Write>(
         &mut self,
+        alloc: Allocator,
         writer: &mut W,
         ev: MoveEvent,
         items: &[Item],
@@ -680,23 +785,39 @@ impl State {
         // Copy the items so they can be served after this call returns.
         // Items beyond the cap are dropped so the held list always
         // matches the advertised MIME list.
-        //
-        // PORT NOTE: the reference's per-item dupe + errdefer unwind is a
-        // clone (allocation is infallible in Rust).
         let accepted_items = &items[0..items.len().min(Self::MAX_ITEMS)];
-        let copies: Vec<Item> = accepted_items.to_vec();
+        // const copies = try alloc.alloc(Item, accepted_items.len);
+        // errdefer alloc.free(copies);
+        // errdefer for (copies[0..copied]) |item| { ... };
+        //
+        // PORT NOTE: the `errdefer`s are the Drop of `copies` (and of each
+        // copied `HeldItem`) on the `?` paths, freeing through `alloc`.
+        let mut copies: AVec<HeldItem, Allocator> = AVec::new_in(alloc);
+        copies
+            .try_reserve_exact(accepted_items.len())
+            .map_err(|_| oom())?;
+        for item in accepted_items {
+            // const mime = try alloc.dupe(u8, item.mime);
+            // errdefer alloc.free(mime);
+            // const data = try alloc.dupe(u8, item.data);
+            let mime = dupe_in(alloc, &item.mime)?;
+            let data = dupe_in(alloc, &item.data)?;
+            // Reserved exactly above: this cannot allocate.
+            copies.push(HeldItem { mime, data });
+        }
 
         // The move handling below resets per-drag state when this drop
         // arrives without a preceding move, so the items are attached
         // after it runs. Collect the MIME list first.
-        //
-        // PORT NOTE: the reference's `[max_items][]const u8` stack buffer is
-        // a small Vec of borrows into `copies` (bounded by MAX_ITEMS).
-        let mimes: Vec<&[u8]> = copies.iter().map(|item| item.mime.as_slice()).collect();
+        // var mimes_buf: [max_items][]const u8 = undefined;
+        let mut mimes_buf: [&[u8]; Self::MAX_ITEMS] = [&[]; Self::MAX_ITEMS];
+        let mimes = &mut mimes_buf[0..copies.len()];
+        for (m, item) in mimes.iter_mut().zip(copies.iter()) {
+            *m = &item.mime;
+        }
 
-        self.move_event(writer, ev, &mimes, true)?;
+        self.move_event(alloc, writer, ev, mimes, true)?;
 
-        drop(mimes);
         debug_assert!(self.drop.items.is_none());
         self.drop.items = Some(copies);
         Ok(())
@@ -708,7 +829,15 @@ impl State {
     /// Ignored after a drop: some toolkits emit a leave notification
     /// for the drop itself, and the held data must survive until the
     /// client concludes.
-    pub fn drag_leave<W: std::io::Write>(&mut self, writer: &mut W) -> std::io::Result<()> {
+    pub fn drag_leave<W: std::io::Write>(
+        &mut self,
+        alloc: Allocator,
+        writer: &mut W,
+    ) -> std::io::Result<()> {
+        self.drop
+            .accepted_mimes
+            .allocator()
+            .debug_assert_same(alloc);
         if self.drop.dropped {
             return Ok(());
         }
@@ -739,13 +868,14 @@ impl State {
     /// drop_move_on_child.
     fn move_event<W: std::io::Write>(
         &mut self,
+        alloc: Allocator,
         writer: &mut W,
         ev: MoveEvent,
         mimes: &[&[u8]],
         is_drop: bool,
     ) -> std::io::Result<()> {
         if !self.drop.hovered {
-            self.reset_drop();
+            self.reset_drop(alloc);
             self.drop.hovered = true;
         }
         if is_drop {
@@ -760,7 +890,8 @@ impl State {
         };
         if rebuild {
             self.drop.offered = None;
-            self.drop.offered = Some(Offered::init(mimes));
+            // self.drop.offered = try Offered.init(alloc, mimes);
+            self.drop.offered = Some(Offered::init(alloc, mimes)?);
         }
 
         // var header_buf: [96]u8 = undefined;
@@ -787,4 +918,12 @@ impl State {
             osc::Terminator::St,
         )
     }
+}
+
+/// `alloc.dupe(u8, src)` into the state's allocator, `error.OutOfMemory` as
+/// [`oom`].
+fn dupe_in(alloc: Allocator, src: &[u8]) -> std::io::Result<Bytes> {
+    let mut v = Bytes::new_in(alloc);
+    v.try_extend_copy(src).map_err(|_| oom())?;
+    Ok(v)
 }

@@ -291,13 +291,30 @@ this workstream's.
    golden. If the offset algorithm regresses, those fail first. The exact
    divergent pixel is recorded above so a future reader can re-measure it in one
    command rather than rediscovering it.
+6. **RESOLVED (task T-F, 2026-09-23, LEDGER S97-F1). CORRECTION of point 3's
+   conclusion ("The residual is therefore in rustty-z2d's stroke rasterizer").**
+   The cause was `hypot` after all, in `Slope::normalize`, not `Slope::init`:
+   z2d calls Zig's `std.math.hypot` and the port called libm's `f64::hypot`,
+   which differ in the last bit for the offset hypotenuse's slope
+   (`(30.678190110391604, 57.9476924307397)`: Zig `0x4050645096e433c0`, macOS
+   libm `...c1`, both measured). That bit moved the outer miter points of the
+   stroke (`(8, 16.000000000000004)` and `(44, 84)` in Zig against `(8, 16)` and
+   `(44.00000000000001, 84.00000000000001)`), found by dumping both plotters'
+   contours, and flipped one sample of pixel `(133, 381)`. Point 3's substitute,
+   `sqrt(dx²+dy²)`, is a third algorithm, so it could not show this.
+   `crates/rustty-z2d/src/internal/zig_math.rs` ports `std.math.hypot`, used at
+   all three of z2d's `hypot` sites; the render now matches the oracle at that
+   pixel, and the golden was regenerated from the oracle's own file through
+   `RUSTTY_REGEN_FONT_KAT_PNGS` (which rewrites only when the decoded pixels
+   are identical), so all 36 goldens hold the oracle's pixels.
 
 ---
 
 # Area G — `P3-W9` (config / CLI / build / i18n / synthetic)
 
-**READ FIRST — two rows here are OPEN, and this file is otherwise a CLOSED
-record.** `G1` (uucode) and `G2` (vaxis/zf) are `P3-W9 T6` work that was
+**READ FIRST — `G1` and `G2` are both DISCHARGED (parity tail, 2026-09-23); this
+area is now a CLOSED record like the rest of the file.** The paragraph below is
+kept as written in `P3-W9`. `G1` (uucode) and `G2` (vaxis/zf) are `P3-W9 T6` work that was
 **measured and decided but NOT completed**. They are written up with full
 evidence instead of being quietly dropped, but they have **NO OWNER**: `P3-W9`
 closes with this commit and no other workstream claims them. Whoever sequences
@@ -306,12 +323,18 @@ the remaining workstreams must assign them, or `.port/phase-2/DEFERRALS.md` /
 the `G-P2` closure gate can see them. Do not let this paragraph be the only
 thing holding them.
 
+**Update 2026-09-23 (parity tail S-10a): `G1` is DISCHARGED** — see its item 5
+below and `NEW-FINDINGS.md` N220. **Update 2026-09-23 (parity tail S-10b): `G2` is
+DISCHARGED** — see its item 5 below and `NEW-FINDINGS.md` N240.
+
 Appended by **`P3-W9` Task 6 and Task 7**. Same 4-criterion basis as above.
 Source of the verdicts: `.port/phase-3/assessments/G-config-build-i18n.md`.
 
-## G1 — `uucode` revision bump (`e8525c0fd` / `f2a7652ab`) — DEFERRED, NOT non-ported
+## G1 — `uucode` revision bump (`e8525c0fd` / `f2a7652ab`) — DISCHARGED 2026-09-23 (was DEFERRED, never non-ported)
 
-**This row is the ONE open item in this file.** It is recorded here rather than
+**DISCHARGED by parity tail S-10a; items 1–4 are the deferral as written,
+kept for the record, and item 5 is the discharge with its evidence.** It was
+recorded here rather than
 silently dropped because `P3-W9 T6 step 2` explicitly sanctions "defer the
 uucode bump with a written reason" as an outcome, and because deferring a
 dependency bump without the reason is how a table goes stale unnoticed.
@@ -367,8 +390,60 @@ dependency bump without the reason is how a table goes stale unnoticed.
       `props_data.rs` / `symbols_data.rs` / `grapheme_data.rs` against the
       committed ones. A non-empty diff is a REAL data change and must be
       reviewed codepoint-by-codepoint, not blessed.
+5. **Discharge (parity tail S-10a, 2026-09-23; `NEW-FINDINGS.md` N220).** The
+   recipe, step by step:
+   1. `.github/workflows/ci.yml`'s G4-uni step now installs **Zig 0.16.0**.
+      Nothing else in that job needed 0.15.2: every other gate that runs zig
+      (`check_lz4_byte_exact.sh`, `check_ref_item_geometry.py`,
+      `stb-resize-oracle/run.sh`, …) also needs the ghostty oracle checkout,
+      which CI does not have, so they report BLOCKED there whatever the zig;
+      locally they already run on 0.16.0. Before this, the CI pin could not
+      build the harness at all (its `build.zig.zon` already said
+      `minimum_zig_version = "0.16.0"`), so G4-uni was RED on CI.
+   2. The harness had already been moved to uucode 2826a37a, the pin's
+      `uucode_config.zig` (byte-identical to ghostty@20abdb50a's, `diff`
+      empty) and `uucode.types` / `uucode.grapheme` by `986d90c8`
+      (ci-triage); this row was not updated then. S-10a corrected the
+      harness's stale version text (the BLOCKED message still said 0.15.2).
+   3. **Tables regenerated and compared.** The reference's own generators,
+      `src/unicode/props_uucode.zig` / `symbols_uucode.zig` at 20abdb50a
+      (with `lut.zig`, `props.zig`), were built exactly as
+      `src/build/UnicodeTables.zig` + `SharedDeps.zig` build them (uucode
+      2826a37a, `build_config_path` = the pin's `uucode_config.zig`,
+      `tables_path` = that dependency's `tables.zig`) and run. Their
+      `stage1`/`stage2`/`stage3` arrays were compared element for element
+      with `props_data.rs` (8192 / 31744 / 30) and `symbols_data.rs` (8192 /
+      1792 / 2): **0 differences in every array**. `grapheme_data.rs`'s 8192
+      entries are regenerated independently by the harness through
+      `uucode.grapheme.computeGraphemeBreakNoControl`: 0 differences. So the
+      restructured wcwidth derivation (`src/x/config_x/wcwidth.zig` ->
+      `src/components.zig`) and grapheme logic (`src/x/grapheme.zig` ->
+      `src/grapheme.zig`) produce the same values over the byte-identical UCD
+      input: **no code point changed in any class**, and the checksums in
+      `checksum.rs` stand unchanged. `run_unicode_diff.sh` (G4-uni) is GREEN
+      under Zig 0.16.0: 0 diffs for width, is_symbol, props flags,
+      grapheme_break_no_control over 0..=0x10FFFF and the 8192 precompute
+      entries. Negative controls: one flipped `STAGE3` field in a copy of
+      `props_data.rs` and one flipped `STAGE2` entry in a copy of
+      `symbols_data.rs` each reported 1 difference.
+   4. **The other uucode-derived data in the workspace**, probed the same way
+      against uucode 2826a37a + the pin's config: `case_folding_full`
+      (`rustty-unicode` `case_folding_data.rs`, 1585 code points) and
+      `is_emoji_presentation` (`rustty-font-shaper` `uucode.rs`, 1219 code
+      points) — 0 differences each (negative controls: one dropped and one
+      altered entry each reported). `ascii.zig`, `utf8.zig` and
+      `code_point.zig` are byte-identical between the two revisions, and
+      `BreakState` / `GraphemeBreakNoControl` keep their order. The one
+      uucode consumer this does NOT settle is `rustty-vaxis`'s vendored
+      uucode 0.1.0 subset: at the pin, libvaxis 0.6.0 imports Ghostty's
+      uucode 2826a37a (`external_uucode`, the `libvaxis_only` table), so
+      moving it is part of `G2`, below, not of this row.
 
-## G2 — `vaxis` 0.5.1 -> 0.6.0 and `zf` 0.10.3 -> 0.11.0 — DEFERRED with a measured delta
+## G2 — `vaxis` 0.5.1 -> 0.6.0 and `zf` 0.10.3 -> 0.11.0 — DISCHARGED 2026-09-23 (was DEFERRED with a measured delta)
+
+**DISCHARGED by parity tail S-10b; items 1–4 are the deferral as written, kept for
+the record, and item 5 is the discharge with its evidence.**
+
 
 Also open, also recorded rather than dropped. `P3-W9 T6 step 1` asks for the
 tarball diff and the port of the deltas; the diff was produced and read, the
@@ -394,6 +469,12 @@ port was **not** completed, and the size is the reason.
      `cursor_secondary: []Cursor`; `Window.zig` follows at its two write sites.
    * `Mouse.zig`: `col`/`row` change type **`u16` -> `i16`** (negative
      coordinates now representable). A silent-truncation hazard if half-ported.
+     The mouse fields are now half on 0.6.0: see the `Parser.zig` bullet below
+     and `parse_param`'s PORT NOTE in `crates/rustty-vaxis/src/parser.rs`.
+   * `Parser.zig`: `parseParam` reads CSI parameters with `parseInt` instead of
+     `parseUnsigned` (accepting a leading `+` and `-0`). **Absorbed by N206**
+     (tail S-9b): the port's `parse_param` already follows 0.6.0's grammar; only
+     the mouse `i16` type change above is still deferred.
    * `zf`: `token` -> `needle` throughout, `rankToken` -> `rankNeedle`,
      `highlightToken` -> `highlightNeedle`, and — the one that is NOT a rename —
      `RankOptions.to_lower: bool = true` becomes
@@ -413,6 +494,35 @@ port was **not** completed, and the size is the reason.
    `#[ignore]`-on-device (it needs a real `/dev/tty`), so it is exercised by NO
    CI test and the guard there is compile-time only. Do not read the green
    `rustty-vaxis`/`rustty-zf` suites as coverage of the CLI integration.
+5. **Discharge (parity tail S-10b, 2026-09-23; `NEW-FINDINGS.md` N240).**
+   * **What was ported.** Every 0.5.1 -> 0.6.0 delta of the vaxis files the crate
+     ports (the file list is in N240) and every 0.10.3 -> 0.11.0 delta of
+     `zf/{zf,filter,clib}.zig`, with the tests 0.6.0 / 0.11.0 add (Parser 2,
+     InternalScreen 1, Vaxis 1, TextInput 13, App 1, zf `deduplicateMatches`).
+     The `std.Io` / allocator churn is not reproduced (the port has no `std.Io`;
+     `error.Canceled` returns are PORT NOTEs). The four SEMANTIC changes of item 3:
+     multi-cursor ctlseqs + `Screen.Cursor` / `cursor_secondary` + the render and
+     API around them (`vaxis.rs`); `Mouse.col`/`row` `i16` together with
+     `parseParam(i16, ..)` and every consumer (`translateMouse`, `Window.hasMouse`,
+     vxfw `App`, the Windows decode, `list_themes`'s clamps from `d320cd7df`), so
+     no half-applied type change remains (the 36 N206 mouse results now match);
+     zf's rename with the polarity check below; the uucode API
+     (`nextCodePoint` / `.code_point`).
+   * **uucode for vaxis.** At the pin vaxis uses ghostty's uucode 2826a37a with
+     ghostty's config (`SharedDeps.zig:24-78, 512-519`). `rustty-unicode`'s tables
+     are not the same fields (they hold ghostty's derived width / is_symbol /
+     grapheme_break_no_control, not `east_asian_width` / `general_category` /
+     the full `grapheme_break`), so reusing them was not an option and no new
+     crate edge was added; `rustty-vaxis`'s own `build.rs` now follows 2826a37a's
+     `components.zig` over the vendored UCD 17.0.0. Zig-oracle differential over
+     0..=0x10FFFF of the four fields: 0 differences (negative control: 1).
+   * **zf polarity.** The pin's `list_themes.zig:377-386` passes
+     `.case_sensitive = false, .plain = true`; `rustty-cli` passes the same, and
+     714,870 ranked rows are bit-identical to zf 0.11.0.
+   * **Reference defects**, not ported (R13): UD260 (also in 0.5.1) and UD261–UD266.
+   * **Residual, recorded in N240:** the zigimg revision libvaxis 0.6.0 pins
+     (`d695acd9`, was `d7b7ab0b`) was not diffed (the old tarball is not cached);
+     it reaches only vaxis's image tier, which Ghostty never calls.
 
 ## G3 — `libxev` bump (`e8525c0fd`) — nothing semantic for rustty; the 3 QUIRKs RE-AFFIRMED
 
@@ -574,6 +684,14 @@ re-open it.
 3. **What would break.** Nothing; there is simply nothing left to port.
 4. **What holds the line.** Those two `-sys` crate builds, which are part of
    every workspace build.
+
+**`src/lib_vt.zig`'s MSVC `_fltused` marker [added 2026-09-24, parity tail S-8d].**
+The `lib_vt.zig` part of this range is `var msvc_fltused: c_int = 1;` plus the
+root-guarded `@export(&msvc_fltused, .{ .name = "_fltused" })` for static MSVC
+builds — Windows/MSVC-only, so N/A on the same terms as the rest of this row.
+Its reference comment lines (`:166`, `:173-174`) are quoted at the Rust site
+that records the block, `crates/rustty-vt-c/src/lib.rs` (the root export-block
+note), with the `quirks_memset` force-reference comment beside them.
 
 ## G10 — `1fe1b2d23`, `patch_rpath` -> `patchelf`, `terminalOptions(.., optimize)`, `10e6ace6b` — N/A (with two things recorded, not dismissed)
 
@@ -827,3 +945,25 @@ config's 4 remaining G3b misses and global's 31.
    control **vacuous** — `slice::get(pos..pos+n)` already yields `EndOfStream`
    for any out-of-range `pos`, so the oracle's explicit guard is R1-faithful but
    observably redundant here.
+
+# G3b NOT-CARRIED — stripped gag prose in code comments (`strip-ghostty-gag-prose`) [parity tail S-8d, 2026-09-24; revised S-8e]
+
+**RATIFIED BY THE USER (2026-09-24).** The user's rule (memory `strip-ghostty-gag-prose`)
+originally covered prose/prompt files, "not code". Shown these four lines, the user chose
+"drop jokes, keep facts" for code comments too (following the WS16 precedent,
+`docs/superpowers/plans/2026-07-29-ws16-x11-winproto.md:21`): a joke or insult is
+dropped, and any fact on the same line is carried.
+
+Each dropped line is listed below and is a `gag-prose` row of
+`.port/parity-closure/COMMENT-NOT-CARRIED.tsv`, which G3b validates (the text is
+the oracle line at the pin; no digit, identifier, ALL-CAPS token or technical term
+unless the row proves, `MIXED-CARRIED`, that the port carries its fact).
+
+- `apprt/gtk/class/global_shortcuts.zig:380`: opinion only; the XDG-portal note's
+  facts are carried verbatim in `global_shortcuts.rs` `request`.
+- `apprt/gtk/class/global_shortcuts.zig:396`: MIXED. The joke is dropped; its fact
+  (clients must construct the request path themselves) is carried, reworded, on
+  the next line of `request`.
+- `apprt/gtk/class/global_shortcuts.zig:406`: a closing quip, no fact.
+- `apprt/gtk/winproto/BlurRegion.zig:58`: an insult, no fact; `:59-61` (the
+  ~30% CSD fact) are carried verbatim in `blur_region.rs`.

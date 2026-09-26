@@ -167,9 +167,12 @@ pub struct Size {
 /// PORTS: `surface.zig:583` `font_size_request: ?*font.face.DesiredSize`. A boxed
 /// wrapper so the requested font size can ride the `font-size-request` GObject
 /// property (the reference boxes `font.face.DesiredSize` directly via
-/// `privateBoxedFieldAccessor`).
+/// `privateBoxedFieldAccessor`). The GType is the reference's
+/// `DesiredSize.getGObjectType`, `defineBoxed(DesiredSize, .{ .name =
+/// "GhosttyFontDesiredSize" })` (`src/font/face.zig:63-68`); S87-F4: it was
+/// registered as `GhosttyFontSizeRequest`.
 #[derive(Debug, Clone, Copy, glib::Boxed)]
-#[boxed_type(name = "GhosttyFontSizeRequest", nullable)]
+#[boxed_type(name = "GhosttyFontDesiredSize", nullable)]
 pub struct FontSizeRequest(pub DesiredSize);
 
 /// PORTS: `surface.zig:747-752` the `new` overrides — the caller-supplied
@@ -3254,11 +3257,13 @@ impl Surface {
     }
 }
 
-// PORT NOTE (concern): the reference's typed `getMouseShape`/`setMouseShape`
-// (`surface.zig:2176-2184`) over `terminal.MouseShape`, plus the
-// `GhosttyMouseShape` GObject enum, are deferred to the mouse-input task
-// (T16/T17) — see the `mouse-shape` property's PORT NOTE. The generated
-// `mouse_shape()`/`set_mouse_shape()` `i32` accessors carry the shape meanwhile.
+// PORT NOTE: the reference's typed `getMouseShape`/`setMouseShape`
+// (`surface.zig:2176-2184`) over `terminal.MouseShape` are the generated
+// `mouse_shape()`/`set_mouse_shape()` accessors, typed by the `GhosttyMouseShape`
+// GObject enum (`gtypes.rs` `MouseShapeEnum`).
+// CORRECTION (parity S156-F2): this note said the enum and the typed accessors
+// were deferred and that the accessors were `i32`. Both landed with task 20
+// (S54-F3); the note was not updated then.
 
 /// PORTS: `surface.zig:2575-2584` `actionPromptTitle`. Perform the
 /// `prompt_surface_title` binding action on the core surface; the action loops
@@ -4901,6 +4906,18 @@ unsafe fn parent_widget_pwd(rt_surface: *mut ApprtSurface) -> Option<String> {
 mod tests {
     use super::*;
     use crate::gtk::gresource;
+
+    /// S87-F4: the `font-size-request` boxed type is registered under the
+    /// reference's name, `GhosttyFontDesiredSize` (`src/font/face.zig:63-68`).
+    /// Headless: registering a boxed GType needs no display.
+    #[test]
+    fn font_size_request_gtype_name() {
+        use glib::prelude::StaticType as _;
+        assert_eq!(
+            FontSizeRequest::static_type().name(),
+            "GhosttyFontDesiredSize"
+        );
+    }
 
     /// NEGATIVE CONTROL (`P3-W11 T5` = `P3-W8 T5` Step 3, oracle `5ea45919d`).
     ///

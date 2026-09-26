@@ -155,15 +155,20 @@ pub struct Uniforms {
     pub foreground_color: [f32; 4], // align(16); offset 4416 needs no forcing
     pub cursor_color: [f32; 4],  // align(16); offset 4432 needs no forcing
     pub cursor_text: [f32; 4],   // align(16); offset 4448 needs no forcing
-    // PORT NOTE: reference defect, kept (R1; not a crash, so R13 does not change it). The
-    // GLSL prefix (`shaders/shadertoy_prefix.glsl:29-30`, byte-identical to the reference)
-    // declares `iSelectionForegroundColor` THEN `iSelectionBackgroundColor`, the opposite of
-    // these two fields (`shadertoy.zig:40-41`). The block is uploaded byte for byte, so a
-    // custom shader reading `iSelectionForegroundColor` gets `selection_background_color`
-    // and vice versa, exactly as in Ghostty. Do not reorder either side here; the fix belongs
-    // upstream (`.port/parity-closure/UPSTREAM-DEFECTS.md` UD20).
-    pub selection_background_color: [f32; 4], // align(16); offset 4464 needs no forcing
-    pub selection_foreground_color: [f32; 4], // align(16); offset 4480 needs no forcing
+    // PORT NOTE: reference defect (R13). The GLSL prefix (`shaders/shadertoy_prefix.glsl:29-30`,
+    // byte-identical to the reference) declares `iSelectionForegroundColor` THEN
+    // `iSelectionBackgroundColor`, but the reference struct (`shadertoy.zig:40-41`) declares
+    // `selection_background_color` THEN `selection_foreground_color`. The block is uploaded
+    // byte for byte, so in Ghostty a custom shader reading `iSelectionForegroundColor` gets the
+    // `selection-background` colour and vice versa, against the uniform names and their
+    // documentation (`Config.zig:3163-3165`). Reachable from config: `custom-shader` plus either
+    // selection colour. The port declares the two fields in the GLSL order, so each uniform
+    // receives the colour it is named for; the prefix itself stays byte-identical and user
+    // shaders, which bind by name, need no change. Test
+    // `globals_block_members_receive_the_uniform_fields_they_are_named_for`.
+    // `.port/parity-closure/UPSTREAM-DEFECTS.md` UD20.
+    pub selection_foreground_color: [f32; 4], // align(16); offset 4464 needs no forcing
+    pub selection_background_color: [f32; 4], // align(16); offset 4480 needs no forcing
 }
 
 // S117-F1 layout pins: compile-time freeze so the std140 offsets/size can never
@@ -192,8 +197,9 @@ const _: () = assert!(std::mem::offset_of!(Uniforms, background_color) == 4400);
 const _: () = assert!(std::mem::offset_of!(Uniforms, foreground_color) == 4416);
 const _: () = assert!(std::mem::offset_of!(Uniforms, cursor_color) == 4432);
 const _: () = assert!(std::mem::offset_of!(Uniforms, cursor_text) == 4448);
-const _: () = assert!(std::mem::offset_of!(Uniforms, selection_background_color) == 4464);
-const _: () = assert!(std::mem::offset_of!(Uniforms, selection_foreground_color) == 4480);
+// UD20 (R13): the selection pair is in the GLSL order, not the reference struct's.
+const _: () = assert!(std::mem::offset_of!(Uniforms, selection_foreground_color) == 4464);
+const _: () = assert!(std::mem::offset_of!(Uniforms, selection_background_color) == 4480);
 const _: () = assert!(std::mem::size_of::<Uniforms>() == 4496);
 const _: () = assert!(std::mem::align_of::<Uniforms>() == 16);
 
@@ -1079,6 +1085,143 @@ mod tests {
         assert_eq!(offset_of!(Uniforms, palette), 304);
         assert_eq!(size_of::<Uniforms>(), 4496);
         assert_eq!(align_of::<Uniforms>(), 16);
+    }
+
+    /// Reads the `Offset` of every member of the uniform block named `block`
+    /// from SPIR-V words: `OpName` (5) names the block type, `OpMemberName` (6)
+    /// names each member, and `OpMemberDecorate` (72) with decoration `Offset`
+    /// (35) gives its byte offset. Returns `(member name, offset)` in member order.
+    fn spirv_block_member_offsets(spv: &[u8], block: &str) -> Vec<(String, u32)> {
+        assert_eq!(spv.len() % 4, 0, "SPIR-V is a sequence of 32-bit words");
+        let words: Vec<u32> = spv
+            .chunks_exact(4)
+            .map(|w| u32::from_le_bytes([w[0], w[1], w[2], w[3]]))
+            .collect();
+        assert_eq!(words[0], 0x0723_0203, "SPIR-V magic number");
+        let lit = |ws: &[u32]| -> String {
+            let bytes: Vec<u8> = ws.iter().flat_map(|w| w.to_le_bytes()).collect();
+            let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+            String::from_utf8(bytes[..end].to_vec()).unwrap()
+        };
+        let mut block_id = None;
+        let mut names: std::collections::BTreeMap<(u32, u32), String> = Default::default();
+        let mut offsets: std::collections::BTreeMap<(u32, u32), u32> = Default::default();
+        let mut i = 5; // past the five-word header
+        while i < words.len() {
+            let count = (words[i] >> 16) as usize;
+            let opcode = words[i] & 0xffff;
+            assert!(count > 0, "malformed SPIR-V instruction at word {i}");
+            let ops = &words[i + 1..i + count];
+            match opcode {
+                5 if lit(&ops[1..]) == block => block_id = Some(ops[0]),
+                6 => {
+                    names.insert((ops[0], ops[1]), lit(&ops[2..]));
+                }
+                72 if ops[2] == 35 => {
+                    offsets.insert((ops[0], ops[1]), ops[3]);
+                }
+                _ => {}
+            }
+            i += count;
+        }
+        let id = block_id.unwrap_or_else(|| panic!("no OpName {block:?} in the SPIR-V"));
+        names
+            .iter()
+            .filter(|((ty, _), _)| *ty == id)
+            .map(|(key, name)| (name.clone(), offsets[key]))
+            .collect()
+    }
+
+    /// UD20 (PORT NOTE: reference defect (R13), at `Uniforms`): every member of
+    /// the GLSL `Globals` block must receive the `Uniforms` field of the same
+    /// name. The block is uploaded byte for byte, so a member reads whatever
+    /// field sits at its std140 offset. The offsets come from glslang itself
+    /// (the prefix compiled to SPIR-V by the production `spirv_from_glsl`), not
+    /// from a hand derivation. In the reference `iSelectionForegroundColor`
+    /// sits on `selection_background_color` and vice versa.
+    #[test]
+    fn globals_block_members_receive_the_uniform_fields_they_are_named_for() {
+        use std::mem::offset_of;
+        let fields: &[(&str, usize)] = &[
+            ("iResolution", offset_of!(Uniforms, resolution)),
+            ("iTime", offset_of!(Uniforms, time)),
+            ("iTimeDelta", offset_of!(Uniforms, time_delta)),
+            ("iFrameRate", offset_of!(Uniforms, frame_rate)),
+            ("iFrame", offset_of!(Uniforms, frame)),
+            ("iChannelTime", offset_of!(Uniforms, channel_time)),
+            (
+                "iChannelResolution",
+                offset_of!(Uniforms, channel_resolution),
+            ),
+            ("iMouse", offset_of!(Uniforms, mouse)),
+            ("iDate", offset_of!(Uniforms, date)),
+            ("iSampleRate", offset_of!(Uniforms, sample_rate)),
+            ("iCurrentCursor", offset_of!(Uniforms, current_cursor)),
+            ("iPreviousCursor", offset_of!(Uniforms, previous_cursor)),
+            (
+                "iCurrentCursorColor",
+                offset_of!(Uniforms, current_cursor_color),
+            ),
+            (
+                "iPreviousCursorColor",
+                offset_of!(Uniforms, previous_cursor_color),
+            ),
+            (
+                "iCurrentCursorStyle",
+                offset_of!(Uniforms, current_cursor_style),
+            ),
+            (
+                "iPreviousCursorStyle",
+                offset_of!(Uniforms, previous_cursor_style),
+            ),
+            ("iCursorVisible", offset_of!(Uniforms, cursor_visible)),
+            (
+                "iTimeCursorChange",
+                offset_of!(Uniforms, cursor_change_time),
+            ),
+            ("iTimeFocus", offset_of!(Uniforms, time_focus)),
+            ("iFocus", offset_of!(Uniforms, focus)),
+            ("iPalette", offset_of!(Uniforms, palette)),
+            ("iBackgroundColor", offset_of!(Uniforms, background_color)),
+            ("iForegroundColor", offset_of!(Uniforms, foreground_color)),
+            ("iCursorColor", offset_of!(Uniforms, cursor_color)),
+            ("iCursorText", offset_of!(Uniforms, cursor_text)),
+            (
+                "iSelectionForegroundColor",
+                offset_of!(Uniforms, selection_foreground_color),
+            ),
+            (
+                "iSelectionBackgroundColor",
+                offset_of!(Uniforms, selection_background_color),
+            ),
+        ];
+
+        let src = test_glsl_z(
+            b"void mainImage(out vec4 fragColor, in vec2 fragCoord) {\n\
+              fragColor = vec4(iSelectionForegroundColor + iSelectionBackgroundColor, 1.0);\n\
+              }\n",
+        );
+        let mut spv = Vec::new();
+        spirv_from_glsl(&mut spv, None, &src).expect("the prefix compiles");
+        let members = spirv_block_member_offsets(&spv, "Globals");
+
+        // Every block member is paired with exactly one field, and the other way round.
+        assert_eq!(
+            members.len(),
+            fields.len(),
+            "Globals members {members:?} vs the fields this test pairs them with"
+        );
+        for (name, glsl_offset) in &members {
+            let (_, rust_offset) = fields
+                .iter()
+                .find(|(n, _)| n == name)
+                .unwrap_or_else(|| panic!("GLSL member {name} has no Uniforms field here"));
+            assert_eq!(
+                *glsl_offset as usize, *rust_offset,
+                "GLSL member {name} sits at std140 offset {glsl_offset}, but its Uniforms \
+                 field is at {rust_offset}: the shader would read another field"
+            );
+        }
     }
 }
 

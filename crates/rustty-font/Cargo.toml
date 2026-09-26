@@ -41,6 +41,9 @@ rustty-os = { workspace = true }
 rustty-datastruct = { workspace = true }
 rustty-util = { workspace = true }
 rustty-render-types = { workspace = true }
+# Zig's `std.fmt.parseInt`/`parseFloat` grammar for `Metrics.Modifier.parse`
+# (S85-F1). A leaf over rustty-util, so no new layering edge.
+rustty-zigstd = { workspace = true }
 # Pure-Rust port of the z2d 0.10.0 subset (2D vector graphics) used by the glyf
 # rasterizer to turn a decoded outline into an alpha8 bitmap (R3 vendored dep).
 rustty-z2d = { workspace = true }

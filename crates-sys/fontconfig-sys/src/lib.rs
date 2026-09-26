@@ -43,6 +43,11 @@ mod bindings {
 
 pub use bindings::*;
 
+// The configuration-directory defines `build.rs` compiles in, tested here
+// (S31-F1); `build.rs` includes the same file through `#[path]`.
+#[cfg(test)]
+mod dir_defines;
+
 #[cfg(test)]
 mod tests {
     use super::*;

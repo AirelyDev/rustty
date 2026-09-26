@@ -16,7 +16,7 @@
 #
 # Prereqs (already produced by the normal builds):
 #   - ghostty: macos/GhosttyKit.xcframework/macos-arm64_x86_64/ghostty-internal.a
-#   - rustty:  macos/RusttyKit.xcframework/macos-arm64/{libRusttyKit.a,Headers/rustty.h}
+#   - rustty:  macos/RusttyKit.xcframework/macos-arm64_x86_64/{libRusttyKit.a,Headers/rustty.h}
 #
 # Usage:  .port/tools/macos-parity/menu-shortcut-parity.sh [--print-oracle]
 set -uo pipefail
@@ -58,7 +58,7 @@ clang -arch arm64 -I "$GHOSTTY_ROOT/include" "$HERE/ghostty_trigger_oracle.c" "$
 "$OUT/g_oracle" > "$OUT/g.txt" || fail "ghostty oracle CRASHED (exit $?)"
 
 # --- rustty oracle ---
-R_XCF="$RUSTTY_ROOT/macos/RusttyKit.xcframework/macos-arm64"
+R_XCF="$RUSTTY_ROOT/macos/RusttyKit.xcframework/macos-arm64_x86_64"
 [ -f "$R_XCF/libRusttyKit.a" ] || fail "missing rustty lib $R_XCF/libRusttyKit.a (build RusttyKit first)"
 clang -arch arm64 -I "$R_XCF/Headers" "$HERE/rustty_trigger_oracle.c" "$R_XCF/libRusttyKit.a" \
   "${FW[@]}" ${INTL_DIR:+-L"$INTL_DIR" -lintl} -lc++ -lz -o "$OUT/r_oracle" || fail "rustty oracle link failed"

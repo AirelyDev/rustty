@@ -122,9 +122,20 @@ def run(args):
         G.emit(G.RED, f"unknown crate '{args.crate}' (not in crate_map)")
         return 2
 
+    # R4 relocations (_gatelib.RELOCATIONS): a stale entry is BLOCKED before any
+    # verdict, never a silent fall-back to the crate's own src/.
+    try:
+        G.check_relocations(crates)
+    except G.Blocked as b:
+        G.emit(G.BLOCKED_STATE, str(b))
+        return 3
+
     total_contract = 0
     deleted_hits = []
     total_ported = 0
+    # Workspace total counts each ported test ONCE by (file, offset): a relocated
+    # test is also scanned by its host crate, and must not inflate the floor.
+    seen_tests = set()
     red = False
     rows = []
     # The upstream-deleted/renamed contract ledger, verified live (arms 1-3 in
@@ -135,12 +146,16 @@ def run(args):
     diffed_crates = set()   # crates whose name-set diff ran this invocation
     for crate in crates:
         contract = cm[crate]["test_blocks"]
-        ported_names = G.scan_rust_tests(crate)
+        located = G.scan_rust_tests_located(crate)
+        ported_names = [name for _p, _o, name in located]
         ported = len(ported_names)
         status = G.crate_status(crate)
         claimed_done = G.is_claimed_done(crate)
         total_contract += contract
-        total_ported += ported
+        for loc in located:
+            if loc[:2] not in seen_tests:
+                seen_tests.add(loc[:2])
+                total_ported += 1
 
         missing = []
         extra = []
@@ -310,6 +325,100 @@ def run(args):
     return 0
 
 
+def relocation_self_test(tmp, gates, inv, crate_src, invoke):
+    """R4 relocation arms (S-8c). `demo` ports 'Demo: case two' in a HOST crate
+    file (crates/rustty-host/src/moved.rs) that its relocation names; the host
+    crate scans that file too, so the workspace total must count it once."""
+    ok = True
+    summary = {
+        "crate_map": {
+            "demo": {"files": [{"file": "demo.zig", "test_blocks": 2}],
+                     "test_blocks": 2, "file_count": 1},
+            "host": {"files": [{"file": "host.zig", "test_blocks": 1}],
+                     "test_blocks": 1, "file_count": 1},
+        },
+    }
+    with open(os.path.join(inv, "tests-summary.json"), "w") as fh:
+        json.dump(summary, fh)
+    with open(os.path.join(inv, "tests.jsonl"), "w") as fh:
+        for f, nm in (("demo.zig", "Demo: case one"), ("demo.zig", "Demo: case two"),
+                      ("host.zig", "Host: own")):
+            fh.write(json.dumps({"file": f, "name": nm, "anonymous": False,
+                                 "assertion_count": 1}) + "\n")
+    host_src = os.path.join(tmp, "crates", "rustty-host", "src")
+    os.makedirs(host_src, exist_ok=True)
+    with open(os.path.join(host_src, "lib.rs"), "w") as fh:
+        fh.write("//! host\n//! PORT STATUS: done\nmod moved;\n"
+                 "#[test]\nfn host_own() { assert!(true); }\n")
+    moved = os.path.join(host_src, "moved.rs")
+
+    def write_moved(text):
+        with open(moved, "w") as fh:
+            fh.write(text)
+
+    def write_demo(fns):
+        body = "//! demo\n//! PORT STATUS: done\n"
+        for fn_name in fns:
+            body += f"#[test]\nfn {fn_name}() {{ assert!(true); }}\n"
+        with open(os.path.join(crate_src, "lib.rs"), "w") as fh:
+            fh.write(body)
+
+    reloc = {"demo": ({"path": "crates/rustty-host/src/moved.rs"},)}
+    write_moved("#[test]\nfn demo_case_two() { assert!(true); }\n")
+    write_demo(["demo_case_one"])
+
+    # (h) without the relocation the moved test is MISSING => RED
+    G.selftest_install_gatelib(gates, {})
+    r = invoke()
+    arm = r.returncode != 0 and "MISSING: demo::Demo: case two" in r.stdout
+    print(f"[h] relocated test, no relocation -> exit {r.returncode} "
+          f"(expect non-zero, MISSING case two): {arm}")
+    ok &= arm
+
+    # (i) with it: GREEN, and the workspace total counts the moved test ONCE
+    # (demo 2 + host 2 per crate, but 3 distinct tests => 3/3, never 4/3).
+    G.selftest_install_gatelib(gates, reloc)
+    r = invoke()
+    arm = r.returncode == 0 and "PROGRESS [workspace]: 3/3 ported" in r.stdout
+    print(f"[i] same + relocation -> exit {r.returncode} (expect 0), global "
+          f"counted once (3/3): {arm}")
+    ok &= arm
+
+    # (j) with the relocation, a genuine drop in the crate's own src/ is caught
+    write_demo(["totally_unrelated_name"])
+    r = invoke()
+    arm = r.returncode != 0 and "MISSING: demo::Demo: case one" in r.stdout
+    print(f"[j] relocation present, case one dropped -> exit {r.returncode} "
+          f"(expect non-zero, MISSING case one): {arm}")
+    ok &= arm
+
+    # (k) an item-scoped relocation counts ONLY its items: case one sits outside
+    # the named item in the same file and must stay MISSING.
+    write_demo([])
+    write_moved("#[test]\nfn demo_case_one() { assert!(true); }\n\n"
+                "#[cfg(test)]\nmod kept {\n    #[test]\n"
+                "    fn demo_case_two() { assert!(true); }\n}\n")
+    G.selftest_install_gatelib(gates, {"demo": (
+        {"path": "crates/rustty-host/src/moved.rs", "items": (r"^mod kept\b",)},)})
+    r = invoke()
+    arm = (r.returncode != 0 and "MISSING: demo::Demo: case one" in r.stdout
+           and "MISSING: demo::Demo: case two" not in r.stdout)
+    print(f"[k] item-scoped relocation -> exit {r.returncode} (expect non-zero, "
+          f"only case one MISSING): {arm}")
+    ok &= arm
+
+    # (l) a relocation path (or item) that does not exist => BLOCKED (exit 3)
+    for label, bad in (("path", {"path": "crates/rustty-host/src/gone.rs"}),
+                       ("item", {"path": "crates/rustty-host/src/moved.rs",
+                                 "items": (r"^mod gone\b",)})):
+        G.selftest_install_gatelib(gates, {"demo": (bad,)})
+        r = invoke()
+        arm = r.returncode == 3 and "BLOCKED" in r.stdout
+        print(f"[l] relocation {label} missing -> exit {r.returncode} (expect 3): {arm}")
+        ok &= arm
+    return ok
+
+
 # ---------------------------------------------------------------------------
 # Self-test: prove the gate flips. Builds a synthetic crate tree + contract in a
 # temp dir, points the helpers at it, and checks that:
@@ -437,6 +546,8 @@ def self_test():
     print(f"[g'] done, one fn renamed to unrelated (count constant) -> exit "
           f"{r.returncode} (expect non-zero), MISSING caught: {caught}")
     ok &= (r.returncode != 0 and caught)
+
+    ok &= relocation_self_test(tmp, gates, inv, crate_src, invoke)
 
     shutil.rmtree(tmp, ignore_errors=True)
     ok &= ledger_self_test()

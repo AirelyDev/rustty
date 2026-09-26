@@ -94,6 +94,8 @@ mod imp {
     #[properties(wrapper_type = super::CommandPalette)]
     #[template(resource = "/io/airely/rustty/ui/1.5/command-palette.ui")]
     pub struct CommandPalette {
+        /// The configuration that this command palette is using.
+        ///
         /// PORTS: `command_palette.zig:36-46,68` the `config` property / private
         /// field (SHARED `?*Config`; obj accessor: get `.none` refs, set `.full`
         /// unrefs prior — automatic under gtk4-rs).
@@ -110,22 +112,33 @@ mod imp {
         /// and dropped by the `closed` callback (`command_palette.zig:289-291`).
         pub keepalive: RefCell<Option<super::CommandPalette>>,
 
+        /// The dialog object containing the palette UI.
+        ///
         /// PORTS: `command_palette.zig:71` `dialog: *adw.Dialog`.
         #[template_child]
         pub dialog: TemplateChild<libadwaita::Dialog>,
 
+        /// The search input text field.
+        ///
         /// PORTS: `command_palette.zig:74` `search: *gtk.SearchEntry`.
         #[template_child]
         pub search: TemplateChild<gtk4::SearchEntry>,
 
+        /// The view containing each result row.
+        ///
         /// PORTS: `command_palette.zig:77` `view: *gtk.ListView`.
         #[template_child]
         pub view: TemplateChild<gtk4::ListView>,
 
+        /// The model that provides filtered data for the view to display.
+        ///
         /// PORTS: `command_palette.zig:80` `model: *gtk.SingleSelection`.
         #[template_child]
         pub model: TemplateChild<gtk4::SingleSelection>,
 
+        /// The list that serves as the data source of the model.
+        /// This is where all command data is ultimately stored.
+        ///
         /// PORTS: `command_palette.zig:84` `source: *gio.ListStore` — the backing
         /// data store all commands are appended to.
         #[template_child]
@@ -169,6 +182,10 @@ mod imp {
         fn signals() -> &'static [glib::subclass::Signal] {
             static SIGNALS: OnceLock<Vec<glib::subclass::Signal>> = OnceLock::new();
             SIGNALS.get_or_init(|| {
+                // Emitted when a command from the command palette is activated. The
+                // action contains pointers to allocated data so if a receiver of this
+                // signal needs to keep the action around it will need to clone the
+                // action or there may be use-after-free errors.
                 vec![glib::subclass::Signal::builder("trigger")
                     .param_types([super::ActionBoxed::static_type()])
                     .build()]
@@ -181,6 +198,7 @@ mod imp {
         fn constructed(&self) {
             self.parent_constructed();
             let obj = self.obj();
+            // Listen for any changes to our config.
             obj.connect_notify_local(Some("config"), |palette, _pspec| {
                 palette.refresh_model();
             });
@@ -207,6 +225,9 @@ glib::wrapper! {
 }
 
 impl CommandPalette {
+    /// Create a new instance of the command palette. The caller will own a
+    /// reference to the object.
+    ///
     /// PORTS: `command_palette.zig:91-100` `new`. Creates a palette that owns its
     /// own life (see `imp::CommandPalette::keepalive`): the caller receives a
     /// strong ref and may drop it — the palette stays alive until its dialog is
@@ -214,12 +235,19 @@ impl CommandPalette {
     #[must_use]
     pub fn new() -> Self {
         let obj: Self = glib::Object::new();
+        // Sink ourselves so that we aren't floating anymore. We'll unref
+        // ourselves when the palette is closed or an action is activated.
+        //
         // Self-owned strong ref (mirrors `refSink` + the palette holding its own
         // life, `command_palette.zig:94-99`). Cleared by the `closed` callback.
         obj.imp().keepalive.replace(Some(obj.clone()));
+        // Bump the ref so that the caller has a reference.
         obj
     }
 
+    /// Show or hide the command palette dialog. If the dialog is shown it will
+    /// be modal over the given window.
+    ///
     /// PORTS: `command_palette.zig:312-326` `toggle`. Show the palette modal over
     /// `window`, or hide it if already shown.
     pub fn toggle(&self, window: &Window) {
@@ -234,7 +262,7 @@ impl CommandPalette {
         // Show the dialog (`:321-322`).
         imp.dialog.present(Some(window));
 
-        // Focus the search bar (`:324-325`).
+        // Focus on the search bar when opening the dialog (`:324-325`).
         imp.search.grab_focus();
     }
 
@@ -294,12 +322,15 @@ impl CommandPalette {
         }
     }
 
+    /// Collect regular commands from configuration, filtering out unsupported actions.
+    ///
     /// PORTS: `command_palette.zig:181-207` `collectRegularCommands`. Collect the
     /// config's command-palette entries, filtering out actions unsupported on GTK.
     fn collect_regular_commands(&self, config: &Config, commands: &mut Vec<Command>) {
         let cfg = config.get();
         for command in &cfg.command_palette_entry.value {
-            // Filter unsupported/nonsensical GTK actions (`:194`).
+            // Filter out actions that are not implemented or don't make sense
+            // for GTK. (`:194`)
             if !is_action_supported_on_gtk(&command.action) {
                 continue;
             }
@@ -340,16 +371,23 @@ impl CommandPalette {
         }
     }
 
+    /// Helper function to send a signal containing the action that should be
+    /// performed.
+    ///
     /// PORTS: `command_palette.zig:330-364` `activated`. Emit `trigger` for the
     /// selected regular command, or focus the surface for a jump command.
     fn activated(&self, pos: u32) {
         let imp = self.imp();
 
-        // Use the *visible* results model, not the source (`:333-334`).
+        // Use priv.model and not priv.source here to use the list of *visible* results
+        // (`:333-334`).
         let object = imp.model.item(pos);
 
-        // Close before running the action so we aren't replaced by another dialog
-        // (`:336-341`).
+        // Close before running the action in order to avoid being replaced by
+        // another dialog (such as the change title dialog). If that occurs then
+        // the command palette dialog won't be counted as having closed properly
+        // and cannot receive focus when reopened.
+        // (`:336-341`)
         self.close();
 
         let Some(object) = object else {
@@ -359,6 +397,7 @@ impl CommandPalette {
             return;
         };
 
+        // Handle jump commands differently
         // Jump commands focus their surface (`:346-351`).
         if cmd.is_jump() {
             if let Some(surface) = cmd.get_jump_surface() {
@@ -367,10 +406,14 @@ impl CommandPalette {
             return;
         }
 
-        // Regular command — emit `trigger` with the action (`:353-363`).
+        // Regular command - emit trigger signal
+        // (`:353-363`)
         let Some(action) = cmd.get_action() else {
             return;
         };
+
+        // Signal that an action has been selected. Signals are synchronous
+        // so we shouldn't need to worry about cloning the action.
         self.emit_by_name::<()>("trigger", &[&ActionBoxed(action)]);
     }
 }
@@ -401,6 +444,7 @@ impl CommandPalette {
     /// PORTS: `command_palette.zig:293-296` `searchStopped` — ESC closes the palette.
     #[template_callback]
     fn search_stopped(_entry: &gtk4::SearchEntry, this: &CommandPalette) {
+        // ESC was pressed - close the palette
         this.close();
     }
 
@@ -408,6 +452,7 @@ impl CommandPalette {
     /// selected entry.
     #[template_callback]
     fn search_activated(_entry: &gtk4::SearchEntry, this: &CommandPalette) {
+        // If Enter is pressed, activate the selected entry
         let pos = this.imp().model.selected();
         this.activated(pos);
     }
@@ -419,6 +464,8 @@ impl CommandPalette {
     }
 }
 
+/// Check if an action is supported on GTK.
+///
 /// PORTS: `command_palette.zig:209-223` `isActionSupportedOnGtk`. Actions that are
 /// unimplemented or don't make sense for GTK are filtered from the palette.
 fn is_action_supported_on_gtk(action: &binding::Action) -> bool {
@@ -434,6 +481,10 @@ fn is_action_supported_on_gtk(action: &binding::Action) -> bool {
     )
 }
 
+/// Compare two commands for sorting.
+/// Sorts alphabetically by title (case-insensitive), with colon normalization
+/// so "Foo:" sorts before "Foo Bar:". Uses sort_key as tie-breaker.
+///
 /// PORTS: `command_palette.zig:245-282` `compareCommands`. Sort alphabetically by
 /// title (case-insensitive, colon normalized so "Foo:" sorts before "Foo Bar:"),
 /// with jump `sort_key` as the tie-breaker. Returns `true` iff `a < b`.
@@ -450,8 +501,10 @@ fn compare_commands(a: &Command, b: &Command) -> bool {
     let a_bytes = a_title.as_bytes();
     let b_bytes = b_title.as_bytes();
 
-    // Compare case-insensitively with colon → tab normalization (`:253-264`).
+    // Compare case-insensitively with colon normalization
+    // (colon → tab, `:253-264`).
     for i in 0..a_bytes.len().min(b_bytes.len()) {
+        // Get characters, replacing ':' with '\t'
         let a_char = if a_bytes[i] == b':' {
             b'\t'
         } else {
@@ -469,13 +522,14 @@ fn compare_commands(a: &Command, b: &Command) -> bool {
         }
     }
 
-    // Shorter (prefix) title first (`:267-269`).
+    // If one title is a prefix of the other, shorter one comes first
+    // (`:267-269`).
     if a_bytes.len() != b_bytes.len() {
         return a_bytes.len() < b_bytes.len();
     }
 
-    // Equal titles — tie-break by jump sort_key; a regular command returns false
-    // (`:271-281`).
+    // Titles are equal - use sort_key as tie-breaker if both are jump commands
+    // (a regular command returns false, `:271-281`).
     let a_sort_key = match a.sort_key() {
         Some(k) => k,
         None => return false,
@@ -532,6 +586,11 @@ mod imp_command {
         pub sort_key: usize,
     }
 
+    /// Object that wraps around a command.
+    ///
+    /// As GTK list models only accept objects that are within the GObject hierarchy,
+    /// we have to construct a wrapper to be easily consumed by the list model.
+    ///
     /// PORTS: `command_palette.zig:425-556` `Command` + its `Private`. A plain
     /// `glib::Object` wrapper (`command_palette.zig:427` `Parent = gobject.Object`)
     /// so a command can live in a `Gio.ListStore`.
@@ -577,6 +636,10 @@ mod imp_command {
         // ParentType defaults to `glib::Object` (`command_palette.zig:427`).
     }
 
+    // PORTS: `command_palette.zig:594-601` `init`:
+    // NOTE: we do not watch for changes to the config here as the command
+    // palette will destroy and recreate this object if/when the config
+    // changes.
     #[glib::derived_properties]
     impl ObjectImpl for Command {}
 
@@ -694,6 +757,8 @@ impl Command {
         obj
     }
 
+    /// Create a new jump command that focuses a specific surface.
+    ///
     /// PORTS: `command_palette.zig:576-592` `newJump`. A command that focuses a
     /// specific surface.
     #[must_use]
@@ -723,6 +788,10 @@ impl Command {
         obj
     }
 
+    /// Return a copy of the action. Callers must ensure that they do not use
+    /// the action beyond the lifetime of this object because it has internally
+    /// allocated data that will be freed when this object is.
+    ///
     /// PORTS: `command_palette.zig:739-745` `getAction`. A copy of the regular
     /// command's action (or `None` for a jump command).
     #[must_use]
@@ -733,6 +802,8 @@ impl Command {
         }
     }
 
+    /// Check if this is a jump command.
+    ///
     /// PORTS: `command_palette.zig:747-751` `isJump`.
     #[must_use]
     pub fn is_jump(&self) -> bool {
@@ -742,6 +813,9 @@ impl Command {
         )
     }
 
+    /// Get the jump surface. Returns a strong reference that the caller
+    /// must unref when done, or null if the surface has been destroyed.
+    ///
     /// PORTS: `command_palette.zig:753-761` `getJumpSurface`. A strong ref to the
     /// jump surface, or `None` if it has been destroyed / this is not a jump.
     #[must_use]

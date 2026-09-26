@@ -110,13 +110,18 @@ jobs:
           cargo +nightly miri setup
 
       # G4-uni (run_unicode_diff.sh) builds the uucode oracle with zig; the
-      # version is pinned to match the harness requirement (0.15.2 — the same
-      # pin the script's BLOCKED message names). Harness tooling only, R3:
+      # version is pinned to match the harness requirement (0.16.0 — the
+      # harness build.zig.zon's minimum_zig_version, the reference's own
+      # minimum at pin 20abdb50a, and the pin the script's BLOCKED message
+      # names). The oracle's uucode is the reference's revision 2826a37a,
+      # which does not build under 0.15.x (and the pre-bump revision does not
+      # build under 0.16), so the zig pin and the uucode revision move
+      # together (.port/phase-3/NON_PORTS.md §G1). Harness tooling only, R3:
       # no rustty crate depends on zig or uucode.
-      - name: Install zig 0.15.2 (pinned — G4-uni uucode oracle)
+      - name: Install zig 0.16.0 (pinned — G4-uni uucode oracle)
         uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         with:
-          version: 0.15.2
+          version: 0.16.0
 
       # W8-03: the live-GL renderer tests clean-skip when no GL 4.3-core
       # context exists, and this leg previously shipped NO GL stack — so a
@@ -152,6 +157,37 @@ jobs:
         if: runner.os == 'macOS'
         run: echo "RUSTTY_REQUIRE_METAL=1" >> "$GITHUB_ENV"
 
+      # PORT_RULES R14: the CoreText shaping tests skip when the system font
+      # they ask for is not installed (the reference's SkipZigTest). Every font
+      # they name — Arial Unicode MS, Noto Sans Tai Tham / Javanese / Chakma —
+      # ships in a stock macOS install (/System/Library/Fonts/Supplemental), so on
+      # this leg a skip means the image changed, and RUSTTY_REQUIRE_SYSTEM_FONTS=1
+      # makes it a failure. NOT set on Ubuntu: a stock runner has none of these
+      # fonts, and the HarfBuzz twins skip there by design. The one non-stock
+      # font, Noto Serif Tibetan, is asked for only by the HarfBuzz test
+      # `shape_tibetan_characters`, which is not compiled on macOS (CoreText is
+      # the shaper there) and is an #[ignore]d test on the other legs.
+      # Env setup, not a check — the check sequence stays solely in ci.sh.
+      - name: Require the stock macOS shaping fonts (macOS only, R14)
+        if: runner.os == 'macOS'
+        run: echo "RUSTTY_REQUIRE_SYSTEM_FONTS=1" >> "$GITHUB_ENV"
+
+      # PORT_RULES R14 (task S-15, the S-3 review's display follow-up): the
+      # renderer's CoreVideo display-link test
+      # (`sync_parks_the_link_while_idle_and_runs_it_while_dirty`) creates a
+      # real `CVDisplayLink` and skips when `createWithActiveCGDisplays` fails
+      # (no active display). GitHub's hosted macOS runners run a logged-in GUI
+      # session, so the link should exist; RUSTTY_REQUIRE_DISPLAY=1 makes the
+      # skip a failure, so `cargo test --workspace` in ci.sh runs that test as
+      # enforced evidence on this leg. UNVERIFIED on the hosted image when this
+      # step was added: if the leg fails with "active display required but
+      # unavailable (RUSTTY_REQUIRE_DISPLAY=1)", the runner has no display and
+      # that is the finding to record, not a reason to drop the variable.
+      # Env setup, not a check — the check sequence stays solely in ci.sh.
+      - name: Require an active display (macOS only, R14)
+        if: runner.os == 'macOS'
+        run: echo "RUSTTY_REQUIRE_DISPLAY=1" >> "$GITHUB_ENV"
+
       # parity S63-F8: the mirrored fuzz corpus lives under `.port/`, which is
       # deliberately absent from the SOURCE TARBALL — so the five corpus-replay
       # tests clean-skip when it is not there, which is right for a tarball and
@@ -164,6 +200,17 @@ jobs:
       # check — the check sequence stays solely in ci.sh.
       - name: Require the mirrored fuzz corpus (repo checkouts, parity S63-F8)
         run: echo "RUSTTY_REQUIRE_FUZZ_CORPUS=1" >> "$GITHUB_ENV"
+
+      # PORT_RULES R14: xtask's CMake install/pkg-config tests and its real
+      # `xgettext` run skip when the tool is missing. Both legs have them:
+      # cmake ships on GitHub's Ubuntu and macOS images (G-CCONSUMER drives it),
+      # and the gate-tooling step below installs gettext on both (G-I18N). So
+      # here a skip means the environment lost a tool, and these variables make
+      # it a failure. Env setup, not a check.
+      - name: Require cmake and xgettext (xtask tests, R14)
+        run: |
+          echo "RUSTTY_REQUIRE_CMAKE=1" >> "$GITHUB_ENV"
+          echo "RUSTTY_REQUIRE_XGETTEXT=1" >> "$GITHUB_ENV"
 
       - name: Cache cargo registry + target
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
@@ -183,6 +230,16 @@ jobs:
           rustup target add wasm32-unknown-unknown wasm32-wasip1
           rustup target add x86_64-pc-windows-msvc || true
           rustup target add x86_64-unknown-freebsd || true
+
+      # G-XCF and G-EXAMPLES (swift-vt-xcframework) run `xtask xcframework-vt`,
+      # which builds the reference's Apple universal bundle: a lipo'd
+      # aarch64 + x86_64 macOS slice, plus iOS device and simulator slices
+      # because this runner has the iOS SDK (GhosttyLibVt.zig:146-215). Every
+      # one of those standard libraries has to be installed, as in the
+      # `macos-app` job below and release-tip.yml's VT job.
+      - name: Install the Apple universal targets (G-XCF / G-EXAMPLES, macOS only)
+        if: runner.os == 'macOS'
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin aarch64-apple-ios aarch64-apple-ios-sim
 
       # G-BLUEPRINT and G-VALGRIND are Linux-only lanes: blueprint-compiler is
       # a GTK tool with no macOS package, and valgrind has no working
@@ -476,6 +533,12 @@ jobs:
       # The XCFramework the Xcode project links against. This also covers
       # `xtask xcframework`, which G-XTASK otherwise runs only under an opt-in
       # env var because of its cost.
+      # `xtask xcframework` builds the universal library by default (the
+      # reference's `-Dxcframework-target` default), which needs the x86_64
+      # standard library.
+      - name: Install the macOS targets
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
       - name: Build RusttyKit.xcframework
         run: cargo run --release -p xtask -- xcframework
 

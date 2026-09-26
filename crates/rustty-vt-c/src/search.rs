@@ -751,7 +751,7 @@ unsafe fn set_typed(search_: Search, option: SearchOption, value: *const c_void)
             //     wrapper.alloc,
             //     bytes,
             // ) catch return .out_of_memory;
-            let replacement = match TerminalSearch::init(allocator_api2::alloc::Global, bytes) {
+            let replacement = match TerminalSearch::init(rustty_vt::alloc::Global, bytes) {
                 Ok(r) => r,
                 Err(_) => return Result::OutOfMemory,
             };

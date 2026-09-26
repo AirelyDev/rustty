@@ -26,11 +26,10 @@ use rustty_vt::x11_color;
 // const vaxis = @import("vaxis");
 //   The interactive `prettyPrint` render leaf (WIRE1) drives the vaxis TUI core.
 use rustty_vaxis::cell::{Color, Style};
-use rustty_vaxis::gwidth::Method;
 use rustty_vaxis::window::PrintResult;
-use rustty_vaxis::{ctlseqs, Winsize};
+use rustty_vaxis::Winsize;
 // const tui = @import("tui.zig");
-use crate::pretty_arena::{po, seg, styled, winsize_for, Arena};
+use crate::pretty_arena::{po, pretty_device_lifecycle, seg, styled, Arena};
 use crate::tui;
 
 use std::io::Write;
@@ -112,6 +111,12 @@ pub fn run() -> Result<u8, Error> {
         result?;
     }
 
+    run_opts(opts)
+}
+
+/// The rest of the reference `run` after its argument parse, split out so a
+/// test can drive it without the process's argv (task T-C, R13 UD22).
+fn run_opts(opts: Options) -> Result<u8, Error> {
     // var keys: std.ArrayList([]const u8) = .empty;
     // defer keys.deinit(alloc);
     // for (x11_color.map.keys()) |key| try keys.append(alloc, key);
@@ -141,10 +146,18 @@ pub fn run() -> Result<u8, Error> {
         // var buffer: [4096]u8 = undefined;
         // var stdout_writer = stdout.writer(&buffer);
         // const writer = &stdout_writer.interface;
-        //   PORT NOTE: the reference File.Writer buffers into `buffer` but never
-        //   flushes on this path (it falls straight to `return 0`); the Rust
-        //   `BufWriter` owns its buffer and is flushed explicitly below (and again
-        //   on drop), so the output is observably delivered.
+        //   PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD22. The
+        //   reference never flushes this writer (it falls straight to `return
+        //   0`), so the tail of the listing still in its buffer is lost:
+        //   `+list-colors --plain`, or any `+list-colors` whose stdout is not a
+        //   tty, prints a truncated list. MEASURED with Zig 0.16.0 on a
+        //   SYNTHETIC probe, not the real listing (task T-C): a program writing
+        //   782 lines of 22 bytes through an unflushed 4096-byte `File.Writer`
+        //   delivers 16399 of 17204 bytes, and 10 lines deliver none. (The real
+        //   listing is 15434 bytes; the reference run on it was not measured.)
+        //   The evident intent (every sibling buffered CLI flushes) is the whole
+        //   list, so the port flushes explicitly below. Test:
+        //   `plain_listing_reaches_stdout_in_full`.
         let mut stdout_writer = std::io::BufWriter::new(std::io::stdout().lock());
         let writer = &mut stdout_writer;
         // for (keys.items) |name| {
@@ -192,37 +205,24 @@ fn pretty_print(keys: &[&str]) -> Result<u8, Error> {
     // Set up vaxis
     // var buf: [1024]u8 = undefined;
     // var tty = try vaxis.Tty.init(&buf);
-    let mut tty = rustty_vaxis::Tty::init(vec![0u8; 1024])?;
-    // defer tty.deinit();   (fired LIFO-last below)
+    let tty = rustty_vaxis::Tty::init(vec![0u8; 1024])?;
+    // defer tty.deinit();   (in `pretty_device_lifecycle`)
     // var vx = try vaxis.init(alloc, .{});
     let mut vx = rustty_vaxis::Vaxis::init(rustty_vaxis::vaxis::Options::default());
-    // defer vx.deinit(alloc, tty.writer());   (fired below)
+    // defer vx.deinit(alloc, tty.writer());   (in `pretty_device_lifecycle`)
 
     // We know we are ghostty, so let's enable mode 2027. Vaxis normally does this but you need an
     // event loop to auto-enable it.
     // vx.caps.unicode = .unicode;
-    vx.caps.unicode = Method::Unicode;
     // try tty.writer().writeAll(vaxis.ctlseqs.unicode_set);
-    tty.writer().write_all(ctlseqs::unicode_set)?;
-    // defer tty.writer().writeAll(vaxis.ctlseqs.unicode_reset) catch {};   (fired LIFO-first below)
-
-    let winsize = winsize_for(&tty)?;
-
-    // The render body (from `vx.resize` on) — captured (not `?`-ed) so the three
-    // reference `defer`s below fire on BOTH the Ok and the Err path.
-    let res = render_colors(tty.writer(), &mut vx, winsize, keys, &arena);
-
-    // PORT NOTE: the reference registers three `defer`s — `tty.deinit` (1st),
-    // `vx.deinit` (2nd), `unicode_reset` (3rd) — that run LIFO at scope exit.
-    // Emit them here in LIFO order (unicode_reset → vx.deinit → tty.deinit) so
-    // cleanup runs on every exit; then propagate `res`.
     // defer tty.writer().writeAll(vaxis.ctlseqs.unicode_reset) catch {};
-    let _ = tty.writer().write_all(ctlseqs::unicode_reset);
-    // defer vx.deinit(alloc, tty.writer());
-    vx.deinit(tty.writer());
-    // defer tty.deinit();
-    tty.deinit();
-    res?;
+    // const winsize: vaxis.Winsize = ...;
+    //   All four, and every `defer` above on every exit path, are in
+    //   `pretty_device_lifecycle` (parity S68-F1); the render body (from
+    //   `vx.resize` on) is `render_colors`.
+    pretty_device_lifecycle(tty, &mut vx, |w, vx, winsize| {
+        render_colors(w, vx, winsize, keys, &arena)
+    })?;
 
     // return 0;
     Ok(0)
@@ -375,6 +375,8 @@ fn order_ignore_case(a: &[u8], b: &[u8]) -> std::cmp::Ordering {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rustty_vaxis::ctlseqs;
+    use rustty_vaxis::gwidth::Method;
     use rustty_vaxis::vaxis::Options;
 
     fn contains(haystack: &[u8], needle: &[u8]) -> bool {
@@ -419,5 +421,63 @@ mod tests {
     fn list_colors_pretty_print_smoke() {
         let keys = ["black", "white"];
         assert_eq!(pretty_print(&keys).unwrap(), 0);
+    }
+}
+
+/// UD22 (R13, task T-C): the plain listing reaches stdout in full. The
+/// reference never flushes its buffered writer, so the tail of the list is
+/// lost at exit; the port flushes. The listing is written to the process's
+/// real stdout, so the body runs in a re-executed copy of this test binary
+/// whose stdout is a pipe the parent reads.
+#[cfg(all(test, unix))]
+mod r13_flush_tests {
+    use super::*;
+
+    const CHILD: &str = "RUSTTY_T_C_LIST_COLORS_CHILD";
+
+    #[test]
+    fn plain_listing_reaches_stdout_in_full() {
+        if std::env::var_os(CHILD).is_some() {
+            let code = run_opts(Options { plain: true }).expect("run_opts");
+            assert_eq!(0, code);
+            return;
+        }
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "list_colors::r13_flush_tests::plain_listing_reaches_stdout_in_full",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(CHILD, "1")
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("re-exec the test binary");
+        let out = crate::test_util::wait_with_deadline(out, 60);
+        assert!(
+            out.status.success(),
+            "the child failed:\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+
+        // The expected listing, built as `run_opts` builds it.
+        let mut keys: Vec<&str> = x11_color::map.keys().iter().map(|k| k.as_str()).collect();
+        keys.sort_unstable_by(|l, r| order_ignore_case(l.as_bytes(), r.as_bytes()));
+        let mut want: Vec<u8> = Vec::new();
+        for name in &keys {
+            let rgb = x11_color::map.get(name).unwrap();
+            want.extend_from_slice(name.as_bytes());
+            want.extend_from_slice(
+                format!(" = #{:02x}{:02x}{:02x}\n", rgb.r, rgb.g, rgb.b).as_bytes(),
+            );
+        }
+        assert!(keys.len() > 700, "the X11 colour map is the full list");
+        assert!(
+            out.stdout.windows(want.len()).any(|w| w == want.as_slice()),
+            "stdout does not carry the whole listing ({} bytes of stdout, {} expected in the listing)",
+            out.stdout.len(),
+            want.len()
+        );
     }
 }

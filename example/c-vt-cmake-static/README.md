@@ -22,10 +22,8 @@ cmake --build build
 
 ## Platform note
 
-On **macOS**, static linking requires `libintl` (the static archive pulls in
-an i18n object that references gettext). Install it with `brew install
-gettext`; the CMake config locates it automatically. On **Linux**, glibc
-provides these symbols, so no extra package is needed.
+No gettext package is needed: on **macOS** the static archive carries its
+own copy of libintl, and on **Linux** glibc provides these symbols.
 
 Unlike upstream Ghostty (which passes `-Dsimd=false` here), rustty-vt-c's
 `simd` cargo feature is OFF by default, so no extra flag is needed for a

@@ -2,13 +2,13 @@
 
 The benchmark tools are split into two roles:
 
-- `rustty-synthetic` generates synthetic input data.
+- `rustty-gen` (the `rustty-synthetic` crate) generates synthetic input data.
 - `rustty-bench` consumes existing input data and runs a benchmark.
 
 ## Workflow
 
 - For timing comparisons, generate data first and benchmark it later.
-- Do not pipe `rustty-synthetic` directly into `rustty-bench` when comparing
+- Do not pipe `rustty-gen` directly into `rustty-bench` when comparing
   performance. That mixes generation cost into the measurement and makes
   branch-to-branch comparisons noisy.
 - Reuse the exact same generated files when comparing revisions.

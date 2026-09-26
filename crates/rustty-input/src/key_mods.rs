@@ -675,15 +675,17 @@ mod tests {
 
     // test "translation macos-option-as-alt"
     #[test]
+    #[cfg_attr(
+        not(target_vendor = "apple"),
+        ignore = "SkipZigTest: darwin-only transform (R14)"
+    )]
     fn translation_macos_option_as_alt() {
         // if (comptime !builtin.target.os.tag.isDarwin()) return error.SkipZigTest;
         //
         // PORT NOTE: the reference skips on non-darwin. We reproduce the skip with
-        // a runtime guard: on non-darwin the body is a no-op (the Rust analog of
-        // `error.SkipZigTest`), since `translation` is a darwin-gated transform.
-        if !cfg!(target_vendor = "apple") {
-            return;
-        }
+        // the `cfg_attr(.., ignore)` above: on non-darwin the test reports
+        // `ignored` (the Rust analog of `error.SkipZigTest`, R14), since
+        // `translation` is a darwin-gated transform.
 
         // Unset
         {

@@ -22,7 +22,7 @@
 //! This file is OWNED by detector D5 and is disjoint from every other detector's
 //! files (naming convention: `d5_*`). It edits no shared source.
 
-use allocator_api2::alloc::Global;
+use rustty_vt::alloc::Global;
 
 use rustty_vt::color::{DynamicPalette, DynamicRGB};
 use rustty_vt::input::key::{Action, Key, KeyEvent, Mods};

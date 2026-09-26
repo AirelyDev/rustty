@@ -31,6 +31,51 @@ use crate::build_options::{Artifact, SemanticVersion};
 // artifact is selected by a later build seam.
 pub const ARTIFACT: Artifact = Artifact::Ghostty;
 
+// PORT NOTE (R8 deviation, parity S6-F2, controller Decision A): the
+// reference compiles the terminal module once per artifact, each copy with
+// its own comptime `artifact` (`SharedDeps.zig:182` `.ghostty` for every exe,
+// `GhosttyZig.zig:67-72` `.lib` for libghostty-vt). Cargo compiles rustty-vt
+// ONCE per build selection and unifies features across it, so a
+// `rustty-vt-c`-enabled feature would reach the app under `--workspace`. The
+// port therefore keeps `ARTIFACT` above as the comptime value (`Ghostty`) and
+// adds this process-wide RUN-TIME value, used where the lib artifact must
+// behave differently and a feature cannot carry it: today only mode 5522's
+// `.disabled` (`modes.zig:341`). It starts as `Ghostty`; `rustty-vt-c` sets it
+// to `Lib` in `sys::install_log_backend`, which every `*_new` entry point runs
+// before it builds anything, and nothing else may set it (gate
+// `check_runtime_artifact_setter.py`). Why no other artifact can observe it:
+// a cdylib/staticlib host links its own copy of rustty-vt, so the value is
+// per artifact as in the reference; the app binary never contains the
+// setter's caller, so it stays `Ghostty` in every build selection. The one
+// residual is a Rust host linking both the app tier and the `rustty-vt-c`
+// rlib and calling a `*_new`; none exists (the only rlib consumer,
+// `rustty-web-canvas`, is itself a lib-vt artifact), and the same gate keeps
+// it so in the workspace: its DEPS arm allows no other dependent of
+// `rustty-vt-c`.
+static RUNTIME_ARTIFACT: core::sync::atomic::AtomicU8 =
+    core::sync::atomic::AtomicU8::new(RUNTIME_ARTIFACT_GHOSTTY);
+const RUNTIME_ARTIFACT_GHOSTTY: u8 = 0;
+const RUNTIME_ARTIFACT_LIB: u8 = 1;
+
+/// The artifact this process is, at run time. See the PORT NOTE above: it is
+/// `Ghostty` unless `rustty-vt-c` has marked the process as the lib artifact.
+#[inline]
+pub fn runtime_artifact() -> Artifact {
+    match RUNTIME_ARTIFACT.load(core::sync::atomic::Ordering::Relaxed) {
+        RUNTIME_ARTIFACT_LIB => Artifact::Lib,
+        _ => Artifact::Ghostty,
+    }
+}
+
+/// Marks this process as the lib artifact (libghostty-vt's analog). Called
+/// ONLY by `rustty-vt-c` (`sys::install_log_backend`); enforced by gate
+/// `check_runtime_artifact_setter.py`. There is no way back to `Ghostty`, as
+/// an artifact does not change while it runs.
+#[doc(hidden)]
+pub fn set_runtime_artifact_lib() {
+    RUNTIME_ARTIFACT.store(RUNTIME_ARTIFACT_LIB, core::sync::atomic::Ordering::Relaxed);
+}
+
 /// Force C ABI mode on or off.
 // PORT NOTE: `opts.addOption(bool, "c_abi", self.c_abi)`. The C ABI surface
 // (terminal/c/) is the separate `rustty-vt-c` crate, so this in-crate option is
@@ -279,6 +324,14 @@ mod tests {
     #[test]
     fn artifact_is_application() {
         assert_eq!(Artifact::Ghostty, ARTIFACT);
+    }
+
+    /// Parity S6-F2 (Decision A): without `rustty-vt-c`, the run-time
+    /// artifact is the application. Nothing in this crate's tests sets it
+    /// (gate `check_runtime_artifact_setter.py`).
+    #[test]
+    fn runtime_artifact_defaults_to_the_application() {
+        assert_eq!(runtime_artifact(), Artifact::Ghostty);
     }
 
     #[test]

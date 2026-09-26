@@ -1959,28 +1959,22 @@ impl rustty_args::args::AutoStruct for SplitResizeParameter {
 
 // fn parseInt(comptime T, value) !T { return std.fmt.parseInt(T, value, 10) catch return Error.InvalidFormat; }
 //
-// PORT NOTE: Zig's `std.fmt.parseInt(_, _, 10)` accepts an optional leading
-// `+`/`-` and `_` digit separators. Rust's `str::parse` accepts `+`/`-` but not
-// `_`; no ported test exercises `_`, and the observable behavior for all parity
-// inputs matches. UTF-8 validity is required to view the bytes as `str`; invalid
-// UTF-8 yields `InvalidFormat`, same as a non-numeric parse failure.
+// S100-F1: this was Rust's `str::parse`, which rejects inputs Zig's
+// `std.fmt.parseInt` accepts: `_` digit separators (`goto_tab:1_0`) and `-0`
+// for an unsigned type (`goto_tab:-0`). `rustty_zigstd::fmt::parse_int` is
+// the port of the Zig parser. The per-type names are the instantiations the
+// action arms use.
+fn parse_int<T: rustty_zigstd::fmt::ZigInt>(value: &[u8]) -> Result<T, Error> {
+    rustty_zigstd::fmt::parse_int::<T>(value, 10).map_err(|_| Error::InvalidFormat)
+}
 fn parse_int_i16(value: &[u8]) -> Result<i16, Error> {
-    std::str::from_utf8(value)
-        .ok()
-        .and_then(|s| s.parse::<i16>().ok())
-        .ok_or(Error::InvalidFormat)
+    parse_int::<i16>(value)
 }
 fn parse_int_isize(value: &[u8]) -> Result<isize, Error> {
-    std::str::from_utf8(value)
-        .ok()
-        .and_then(|s| s.parse::<isize>().ok())
-        .ok_or(Error::InvalidFormat)
+    parse_int::<isize>(value)
 }
 fn parse_int_usize(value: &[u8]) -> Result<usize, Error> {
-    std::str::from_utf8(value)
-        .ok()
-        .and_then(|s| s.parse::<usize>().ok())
-        .ok_or(Error::InvalidFormat)
+    parse_int::<usize>(value)
 }
 
 /// The largest `goto_tab` index the action boundary can carry.
@@ -2004,18 +1998,15 @@ fn parse_int_goto_tab(value: &[u8]) -> Result<usize, Error> {
     Ok(v)
 }
 fn parse_int_u16(value: &[u8]) -> Result<u16, Error> {
-    std::str::from_utf8(value)
-        .ok()
-        .and_then(|s| s.parse::<u16>().ok())
-        .ok_or(Error::InvalidFormat)
+    parse_int::<u16>(value)
 }
 
 // fn parseFloat(comptime T, value) !T { return std.fmt.parseFloat(T, value) catch return Error.InvalidFormat; }
+//
+// S100-F1: Zig's `std.fmt.parseFloat` also takes `_` separators and hex floats
+// (`set_font_size:0x1.8p3` is 12), which `str::parse` rejects.
 fn parse_float_f32(value: &[u8]) -> Result<f32, Error> {
-    std::str::from_utf8(value)
-        .ok()
-        .and_then(|s| s.parse::<f32>().ok())
-        .ok_or(Error::InvalidFormat)
+    rustty_zigstd::fmt::parse_float::<f32>(value).map_err(|_| Error::InvalidFormat)
 }
 
 // PORT NOTE: `parseParameter` for the `resize_split` tuple
@@ -3419,14 +3410,13 @@ impl Trigger {
 //
 // PORT NOTE: the reference's `foldedCodepoint` ASCII fast path uses
 // `uucode.ascii.isAlphabetic`/`toLower`; the Unicode slow path uses
-// `uucode.get(.case_folding_full, cp)`. The ASCII fast path is ported exactly.
-// The Unicode `case_folding_full` table is NOT yet ported to rustty-unicode (it
-// is uucode-backed; tracked for the unicode crate), so the slow path mirrors the
-// reference's documented fallback behavior: "If more codepoints are produced then
-// we return the codepoint as-is which isn't correct but until we have a failing
-// test then I don't want to handle this." We return the single (non-ASCII)
-// codepoint unchanged in slot 0, which matches the reference for every non-
-// multi-expansion codepoint and for all ported tests (which are ASCII only).
+// `uucode.get(.case_folding_full, cp)`, ported as
+// `rustty_unicode::case_folding::case_folding_full`. CORRECTION (S65-F1,
+// 2026-09-23): the slow path used to return `[cp, 0, 0]` for every non-ASCII
+// code point, under a note that the table was "NOT yet ported". As in the
+// reference, a folding of up to three code points fills the array; the
+// reference's comment about returning the code point as-is does not describe
+// its own code, which copies the whole slice.
 fn folded_codepoint(cp: u21) -> [u21; 3] {
     // ASCII fast path
     if ascii_is_alphabetic(cp) {
@@ -3437,7 +3427,10 @@ fn folded_codepoint(cp: u21) -> [u21; 3] {
     // If more codepoints are produced then we return the codepoint
     // as-is which isn't correct but until we have a failing test
     // then I don't want to handle this.
-    [cp, 0, 0]
+    let (slice, len) = rustty_unicode::case_folding::case_folding_full(cp);
+    let mut array: [u21; 3] = [0; 3];
+    array[..len].copy_from_slice(&slice[..len]);
+    array
 }
 
 // PORT NOTE: `uucode.ascii.isAlphabetic` (uucode ascii.zig): `'A'...'Z',
@@ -5296,9 +5289,9 @@ mod tests {
         }
     }
 
-    // test "cval"  (Flags)
+    // test "cval"  (nested in `Flags`; the fn carries the reference name)
     #[test]
-    fn flags_cval() {
+    fn cval() {
         assert_eq!(0b0001u8, Flags::default().cval());
         assert_eq!(
             0b0000u8,
@@ -5965,6 +5958,41 @@ mod tests {
         }
     }
 
+    /// S65-F1: `foldedCodepoint`'s Unicode slow path is
+    /// `uucode.get(.case_folding_full, cp)` (`Binding.zig:2003-2011`), so two
+    /// triggers differing only in the case of a non-ASCII letter hash and
+    /// compare equal, and a multi-code-point folding fills more than one slot.
+    #[test]
+    fn trigger_folds_non_ascii_case() {
+        // U+00C9 É folds to U+00E9 é.
+        assert_eq!(folded_codepoint(0x00C9), [0x00E9, 0, 0]);
+        // U+00DF ß folds to "ss", and so does U+1E9E ẞ.
+        assert_eq!(folded_codepoint(0x00DF), [0x73, 0x73, 0]);
+        assert_eq!(folded_codepoint(0x1E9E), [0x73, 0x73, 0]);
+        // No folding: the code point itself.
+        assert_eq!(folded_codepoint(0x00E9), [0x00E9, 0, 0]);
+
+        let upper = Trigger {
+            key: TriggerKey::Unicode(0x00C9),
+            mods: Mods::default(),
+        };
+        let lower = Trigger {
+            key: TriggerKey::Unicode(0x00E9),
+            mods: Mods::default(),
+        };
+        // `foldedEqual` is the binding set's equality (`bindingSetEqual`);
+        // plain `equal` stays exact.
+        assert!(upper.folded_equal(lower));
+        assert!(!upper.equal(lower));
+        assert_eq!(upper.hash(), lower.hash());
+        // A different letter still differs.
+        let other = Trigger {
+            key: TriggerKey::Unicode(0x00E8),
+            mods: Mods::default(),
+        };
+        assert!(!upper.folded_equal(other));
+    }
+
     // test "Trigger: equal"
     #[test]
     fn trigger_equal() {
@@ -6300,6 +6328,57 @@ mod tests {
             if let Action::ScrollPageFractional(v) = binding.action {
                 assert_eq!(0.5f32, v);
             }
+        }
+    }
+
+    /// S100-F1: the numeric action parameters go through Zig's
+    /// `std.fmt.parseInt(T, value, 10)` / `std.fmt.parseFloat(T, value)`
+    /// (`Binding.zig:1225-1231`), so they take `_` separators, `-0` for an
+    /// unsigned type and hex floats, and reject what Zig rejects. Every
+    /// integer type the actions use is covered (i16, isize, usize, u16) plus
+    /// the f32 one.
+    #[test]
+    fn parse_action_numbers_take_the_zig_grammar() {
+        let action = |s: &[u8]| parse_single(s).map(|b| b.action);
+
+        assert!(matches!(action(b"a=goto_tab:1_0"), Ok(Action::GotoTab(10))));
+        assert!(matches!(action(b"a=goto_tab:-0"), Ok(Action::GotoTab(0))));
+        assert!(matches!(
+            action(b"a=scroll_to_row:+1_000"),
+            Ok(Action::ScrollToRow(1000))
+        ));
+        assert!(matches!(
+            action(b"a=scroll_page_lines:-1_0"),
+            Ok(Action::ScrollPageLines(-10))
+        ));
+        assert!(matches!(
+            action(b"a=move_tab:-2_0"),
+            Ok(Action::MoveTab(-20))
+        ));
+        match action(b"a=resize_split:up,1_0") {
+            Ok(Action::ResizeSplit(v)) => assert_eq!(10u16, v.1),
+            other => panic!("resize_split:up,1_0 parsed as {other:?}"),
+        }
+        assert!(
+            matches!(action(b"a=set_font_size:0x1.8p3"), Ok(Action::SetFontSize(v)) if v == 12.0)
+        );
+        assert!(
+            matches!(action(b"a=increase_font_size:1_0.5"), Ok(Action::IncreaseFontSize(v)) if v == 10.5)
+        );
+
+        for bad in [
+            &b"a=goto_tab:_1"[..],
+            b"a=goto_tab:1_",
+            b"a=goto_tab:-1",
+            b"a=set_font_size:1__0",
+            b"a=set_font_size:0x",
+        ] {
+            assert_eq!(
+                Err(ParseSingleError::InvalidFormat),
+                parse_single(bad).map(|_| ()),
+                "{:?}",
+                String::from_utf8_lossy(bad)
+            );
         }
     }
 
@@ -6768,6 +6847,15 @@ mod tests {
 
         s.parse_and_put(b"a=new_window").unwrap();
         let before = s.chain_parent().unwrap().clone();
+        // const before_key = s.chain_parent.?.key_ptr;
+        // const before_value = s.chain_parent.?.value_ptr;
+        //
+        // PORT NOTE (S-8c): the Rust chain parent records the entry's trigger
+        // rather than raw entry pointers, so the reference's two pointer
+        // captures are the addresses of the entry's stored key and value,
+        // resolved through that trigger.
+        let before_key: *const Trigger = s.get_key(before.key).unwrap();
+        let before_value: *const Value = s.get_value(before.key).unwrap();
 
         // Try an invalid parse - should fail
         assert_eq!(
@@ -6778,6 +6866,11 @@ mod tests {
         // chain_parent should be unchanged
         assert!(s.chain_parent().is_some());
         assert_eq!(&before, s.chain_parent().unwrap());
+        // try testing.expect(s.chain_parent.?.key_ptr == before_key);
+        let after = s.chain_parent().unwrap().key;
+        assert!(std::ptr::eq(s.get_key(after).unwrap(), before_key));
+        // try testing.expect(s.chain_parent.?.value_ptr == before_value);
+        assert!(std::ptr::eq(s.get_value(after).unwrap(), before_value));
     }
 
     // test "set: clone produces null chain_parent"
@@ -6871,10 +6964,13 @@ mod tests {
 
         // Verify the pointers are different (truly cloned, not shared)
         //
-        // PORT NOTE: the reference asserts the cloned text `.ptr` differs from the
-        // original. Rust's `Clone` of an owned `Vec<u8>` always allocates a fresh
-        // buffer, so independence is guaranteed by the type; we assert the bytes
-        // match (above) which is the observable property.
+        // PORT NOTE (S-8c): ported as the reference's pointer comparison. It
+        // used to be dropped as "guaranteed by the type" (a cloned `Vec<u8>`
+        // always owns a fresh buffer); R1 keeps the assertion anyway.
+        assert!(
+            text_of(&as_leaf_chained(entry).actions[0]).as_ptr()
+                != text_of(&as_leaf_chained(cloned_entry).actions[0]).as_ptr()
+        );
     }
 
     fn text_of(a: &Action) -> &[u8] {

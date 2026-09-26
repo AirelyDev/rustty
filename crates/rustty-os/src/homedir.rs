@@ -23,6 +23,14 @@ use crate::passwd;
 pub enum Error {
     /// The buffer used for output is not large enough to store the value.
     BufferTooSmall,
+    // PORT NOTE (parity S111-F11): the two variants below are the part of
+    // `home`'s INFERRED error set that `try std.process.run(...)` contributes
+    // (`std.process.RunError`, zig 0.16.0 `std/process.zig:454-456`). They are
+    // reached only from the shell fallback.
+    /// `error.StreamTooLong`: the shell's stdout or stderr exceeded its limit.
+    StreamTooLong,
+    /// A `SpawnError` (or a read/wait failure) running the shell.
+    Spawn(std::io::ErrorKind),
 }
 
 /// Determine the home directory for the currently executing user. This
@@ -129,37 +137,119 @@ fn homeUnix<'a>(
         }
 
         // If all else fails, have the shell tell us...
-        // PORT NOTE (P4-E33, `15c50c1db`): upstream's `std.process.run` gained
-        // `.environ_map = environ_map` — the child's environment IS the
-        // caller-supplied snapshot (not the live process environment), so this
-        // fallback cannot race a concurrent `setenv`. `env_clear` + `envs` is
-        // the Rust image of a full environment replacement.
-        use std::os::unix::ffi::OsStrExt;
-        let run = std::process::Command::new("/bin/sh")
-            .args(["-c", "cd && pwd"])
-            .env_clear()
-            .envs(environ_map.iter().map(|(k, v)| {
-                (
-                    std::ffi::OsStr::from_bytes(k),
-                    std::ffi::OsStr::from_bytes(v),
-                )
-            }))
-            .output();
-
-        if let Ok(run) = run {
-            if run.status.success() {
-                let result = trimSpace(&run.stdout);
-                if buf.len() < result.len() {
-                    return Err(Error::BufferTooSmall);
-                }
-                buf[0..result.len()].copy_from_slice(result);
-                let n = result.len();
-                return Ok(Some(&buf[0..n]));
-            }
-        }
-
-        Ok(None)
+        home_from_shell(environ_map, buf)
     }
+}
+
+/// The shell arm of `homeUnix`:
+///
+/// ```text
+/// fba.reset();
+/// const run = try std.process.run(fba.allocator(), io, .{
+///     .argv = &[_][]const u8{ "/bin/sh", "-c", "cd && pwd" },
+///     .environ_map = environ_map,
+///     .stdout_limit = .limited(fba.buffer.len / 2),
+///     .stderr_limit = .limited(fba.buffer.len / 2),
+/// });
+/// ```
+///
+/// PORT NOTE (P4-E33, `15c50c1db`): upstream's `std.process.run` gained
+/// `.environ_map = environ_map` — the child's environment IS the
+/// caller-supplied snapshot (not the live process environment), so this
+/// fallback cannot race a concurrent `setenv`. `env_clear` + `envs` is
+/// the Rust image of a full environment replacement.
+///
+/// PORT NOTE (parity S111-F11): `.limited(fba.buffer.len / 2)` sets a limit of
+/// 512 bytes for each stream, and `run` returns `error.StreamTooLong` when a
+/// stream goes past its limit; the `try` makes that, and a spawn failure, an
+/// error from `home`. Each pipe is read to at most `limit + 1` bytes; past
+/// that the shell is killed and `StreamTooLong` returned. CORRECTION: this
+/// used to call `Command::output()` (unbounded) and turn a spawn failure into
+/// `Ok(None)`. `.stdin = .ignore` in `run` is `Stdio::null()`.
+///
+/// PORT NOTE: reference defect (R13), UD210. CORRECTION: an earlier version
+/// of this note said the reference fails only past 512 bytes. It fails
+/// sooner. `run`'s `MultiReader` grows its stream buffers in the same
+/// 1024-byte `FixedBufferAllocator` that `limited(fba.buffer.len / 2)` is
+/// sized from, and that allocator runs out first. MEASURED with zig 0.16.0,
+/// ReleaseSafe, macOS, over the reference's exact call: a home path of 360
+/// bytes (361 bytes of `pwd` output) comes back; 361 bytes and longer fail
+/// with `error.OutOfMemory`, which `expandHome` turns into
+/// `HomeDetectionFailed`. So the 512-byte limit the reference writes down is
+/// never reached on stdout. The arm runs on Linux/FreeBSD when `HOME` is
+/// unset and passwd has no home directory. The Linux threshold is
+/// UNVERIFIED, but the allocation happens in generic std code. The port
+/// implements the 512-byte limit the reference asks for: a home path of 361
+/// to 511 bytes is returned, not an error. Stderr already behaves as the
+/// limit says, exactly at the edge: 512 bytes of stderr come back with exit
+/// 1, 513 bytes fail with `StreamTooLong`; the port matches it. ReleaseFast
+/// was measured too and is identical on both streams.
+#[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "macos"))]
+#[cfg_attr(target_os = "macos", allow(dead_code))] // tested on macOS; reached on Linux/FreeBSD
+fn home_from_shell<'a>(
+    environ_map: &rustty_global::EnvMap,
+    buf: &'a mut [u8],
+) -> Result<Option<&'a [u8]>, Error> {
+    use std::io::Read as _;
+    use std::os::unix::ffi::OsStrExt;
+    use std::process::Stdio;
+
+    // var tempBuf: [1024]u8 = undefined; ... .limited(fba.buffer.len / 2)
+    const LIMIT: u64 = 1024 / 2;
+
+    let mut child = std::process::Command::new("/bin/sh")
+        .args(["-c", "cd && pwd"])
+        .env_clear()
+        .envs(environ_map.iter().map(|(k, v)| {
+            (
+                std::ffi::OsStr::from_bytes(k),
+                std::ffi::OsStr::from_bytes(v),
+            )
+        }))
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| Error::Spawn(e.kind()))?;
+
+    let stdout = child.stdout.take().expect("stdout is piped");
+    let stderr = child.stderr.take().expect("stderr is piped");
+    // Both pipes are drained at once, as `MultiReader` does, so neither can
+    // fill up and stall the shell while the other is read.
+    let err_reader = std::thread::spawn(move || {
+        let mut out = Vec::new();
+        stderr.take(LIMIT + 1).read_to_end(&mut out).map(|_| out)
+    });
+    let mut out = Vec::new();
+    let out_res = stdout.take(LIMIT + 1).read_to_end(&mut out);
+    let err_res = err_reader.join().expect("stderr reader thread");
+
+    let too_long = out.len() as u64 > LIMIT || matches!(&err_res, Ok(e) if e.len() as u64 > LIMIT);
+    if too_long {
+        // defer child.kill(io);
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(Error::StreamTooLong);
+    }
+    if let Err(e) = out_res.and(err_res.map(|_| ())) {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(Error::Spawn(e.kind()));
+    }
+    let status = child.wait().map_err(|e| Error::Spawn(e.kind()))?;
+
+    // if (run.term == .exited and run.term.exited == 0) {
+    if status.success() {
+        let result = trimSpace(&out);
+        if buf.len() < result.len() {
+            return Err(Error::BufferTooSmall);
+        }
+        buf[0..result.len()].copy_from_slice(result);
+        let n = result.len();
+        return Ok(Some(&buf[0..n]));
+    }
+
+    Ok(None)
 }
 
 #[cfg(windows)]
@@ -235,7 +325,8 @@ fn fixed_buffer_env<'a>(
     Ok(Some(&dst[0..bytes.len()]))
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "macos"))]
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 #[allow(non_snake_case)]
 fn trimSpace(input: &[u8]) -> &[u8] {
     let mut start = 0;
@@ -342,11 +433,8 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)] // env/passwd/objc home lookup hits real OS state
     #[allow(non_snake_case)]
+    #[cfg_attr(windows, ignore = "SkipZigTest on Windows (R14)")]
     fn expand_home_unix() {
-        if cfg!(windows) {
-            return; // error.SkipZigTest
-        }
-
         // PORT NOTE (P3-W7 T3): upstream's test now builds the map from
         // `testing.environ`; rustty's equivalent is the captured process
         // environment, and the `crate::env_test_lock()` serialization is gone
@@ -401,6 +489,153 @@ mod tests {
         let result = home(&environ_map, &mut buf).unwrap();
         assert!(result.is_some());
         assert!(!result.unwrap().is_empty());
+    }
+
+    /// A fresh directory under the system temp dir, removed on drop.
+    #[cfg(unix)]
+    struct ScratchDir(std::path::PathBuf);
+
+    #[cfg(unix)]
+    impl Drop for ScratchDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[cfg(unix)]
+    fn scratch_dir(tag: &str) -> ScratchDir {
+        let p = std::env::temp_dir().join(format!("rustty-t-h-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&p);
+        std::fs::create_dir_all(&p).unwrap();
+        ScratchDir(p.canonicalize().unwrap())
+    }
+
+    #[cfg(unix)]
+    fn env_with_home(home: &[u8]) -> rustty_global::EnvMap {
+        let mut m = rustty_global::EnvMap::new();
+        m.insert(b"HOME".to_vec(), home.to_vec());
+        m
+    }
+
+    /// Parity S111-F11: the shell fallback caps stdout and stderr at 512 bytes
+    /// each (`fba.buffer.len / 2`) and fails with `StreamTooLong` past that,
+    /// which `try` propagates out of `home`. Positive control first: a short
+    /// home comes back.
+    #[test]
+    #[cfg(unix)]
+    #[cfg_attr(miri, ignore)] // spawns /bin/sh
+    fn home_from_shell_limits_stdout_and_stderr_to_512_bytes() {
+        let dir = scratch_dir("home-shell");
+        let short = dir.0.as_os_str().as_encoded_bytes().to_vec();
+        assert!(
+            short.len() < 400,
+            "temp dir too long for the positive control"
+        );
+        let mut buf = [0u8; 4096];
+        assert_eq!(
+            home_from_shell(&env_with_home(&short), &mut buf),
+            Ok(Some(&short[..]))
+        );
+
+        // A real directory whose path is over 512 bytes: `pwd` prints it on
+        // stdout.
+        let mut long = dir.0.clone();
+        while long.as_os_str().len() <= 600 {
+            long.push("d".repeat(100));
+        }
+        std::fs::create_dir_all(&long).unwrap();
+        let long = long.as_os_str().as_encoded_bytes().to_vec();
+        assert_eq!(
+            home_from_shell(&env_with_home(&long), &mut buf),
+            Err(Error::StreamTooLong)
+        );
+
+        // A missing directory with a name over 512 bytes: `cd` fails and
+        // prints the name on stderr, nothing reaches stdout.
+        let mut missing = short.clone();
+        missing.extend_from_slice(b"/");
+        missing.extend(std::iter::repeat_n(b'm', 200));
+        missing.extend_from_slice(b"/");
+        missing.extend(std::iter::repeat_n(b'n', 200));
+        missing.extend_from_slice(b"/");
+        missing.extend(std::iter::repeat_n(b'o', 200));
+        assert_eq!(
+            home_from_shell(&env_with_home(&missing), &mut buf),
+            Err(Error::StreamTooLong)
+        );
+    }
+
+    /// Parity S111-F11, R13 (UD210): a home path between 361 and 511 bytes is
+    /// inside the 512-byte limit, so it comes back. The reference fails there
+    /// with `OutOfMemory` from its 1024-byte `FixedBufferAllocator` (measured,
+    /// see the PORT NOTE on `home_from_shell`).
+    #[test]
+    #[cfg(unix)]
+    #[cfg_attr(miri, ignore)] // spawns /bin/sh
+    fn home_from_shell_returns_a_400_byte_home_the_reference_runs_out_of_memory_on() {
+        let dir = scratch_dir("home-400");
+        let mut p = dir.0.as_os_str().as_encoded_bytes().to_vec();
+        assert!(p.len() < 390, "temp dir too long to build a 400-byte path");
+        // Components of at most 100 bytes (NAME_MAX is 255).
+        while p.len() < 400 {
+            p.push(b'/');
+            let n = (400 - p.len()).clamp(1, 100);
+            p.extend(std::iter::repeat_n(b'q', n));
+        }
+        assert_eq!(p.len(), 400);
+        std::fs::create_dir_all(<std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(&p))
+            .unwrap();
+
+        let mut buf = [0u8; 1024];
+        assert_eq!(
+            home_from_shell(&env_with_home(&p), &mut buf),
+            Ok(Some(&p[..]))
+        );
+    }
+
+    /// Parity S111-F11 (review M1): a spawn failure is an error from `home`
+    /// (`try std.process.run(..)`), not `Ok(None)`. The test re-runs itself in
+    /// a child whose open-file limit is 3, so no pipe can be created; the
+    /// child checks the error and prints a marker the parent looks for.
+    #[test]
+    #[cfg(unix)]
+    #[cfg_attr(miri, ignore)] // spawns a child process
+    fn home_from_shell_returns_the_spawn_error_when_no_pipe_can_be_created() {
+        const CHILD: &str = "RUSTTY_T_H2_HOME_SPAWN_CHILD";
+        const MARKER: &str = "home-spawn-error-checked";
+        if std::env::var_os(CHILD).is_some() {
+            let mut lim = libc::rlimit {
+                rlim_cur: 0,
+                rlim_max: 0,
+            };
+            // SAFETY: `lim` is a valid rlimit that outlives both calls.
+            assert_eq!(unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut lim) }, 0);
+            lim.rlim_cur = 3;
+            // SAFETY: as above.
+            assert_eq!(unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &lim) }, 0);
+            let mut buf = [0u8; 1024];
+            let r = home_from_shell(&env_with_home(b"/"), &mut buf);
+            assert!(matches!(r, Err(Error::Spawn(_))), "got {r:?}");
+            println!("{MARKER}");
+            return;
+        }
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "homedir::tests::home_from_shell_returns_the_spawn_error_when_no_pipe_can_be_created",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            out.status.success() && stdout.contains(MARKER),
+            "child failed: {:?}\nstdout: {stdout}\nstderr: {}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr)
+        );
     }
 
     // `std.fs.path.sep`.

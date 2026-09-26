@@ -1406,6 +1406,13 @@ the defect the 14e-1 review caught (a waiver contradicted by an open `missing-er
 here the ledger does not contradict the waiver, it *dates* it.
 
 **state**: OPEN as a dependency. Discharged by whoever closes `S94-F1`, in the same change.
+
+**DISCHARGED (task T-F, 2026-09-23, in the change that closes `S94-F1`).** The shaper now runs
+the real `CFReleaseThread`. The `wakeup.notify` arm (`:291`) came back and is restored, and
+`LOG-PORTMAP.tsv`'s allowance for the file is tightened 2 -> 1. The `toOwnedSlice` arm (`:277`)
+did not come back: the port still moves the pool out with `std::mem::take`, which allocates
+nothing and returns no `Result`, so that site's waiver now rests on a language property, like
+the other four in the table. The table row above is kept as the record of what was believed.
 ## N25 — five `rustty-font` diagnostics live only in test code, and were counted as if they were the port
 
 - **id**: N25 (next free id checked 2026-09-11 against `NEW-FINDINGS.md` headings, a
@@ -1661,6 +1668,10 @@ here the ledger does not contradict the waiver, it *dates* it.
   `min_allocations` floor with a fixture whose pages carry styles. 26 call sites, 24 of
   them in `grid.rs`'s own tests.
 - **state**: **OPEN**, tracked by **S204-F1** (re-opened 2026-09-11). Not attempted by task 16.
+- **update (batch T-A)**: FIXED with S204-F1. `Remap::init` returns `Result` through
+  `try_reserve_exact` behind a `SnapshotFp::Alloc` check, `decode_payload_body` returns
+  `OutOfMemory` for either remap, and the transactionality sweep has a styled fixture and
+  raised floors (hyperlink fixture 13 to 14, styled fixture 10).
 
 ## N31 — the Miri runner fabricates failures: it classifies on an abort STRING, and it uses a fixed temp path two sessions collide on
 
@@ -3021,7 +3032,35 @@ reference-sized style section added about 5%. The cause is not investigated yet 
 per-style clone path through `add_with_id_ptr` / `use_multiple`, and its hashing). Re-measured by task
 R13-L2 with the same method, after against before: 0.998 / 1.004 / 0.999, no change.
 
-**state**: OPEN (performance; for the perf owner).
+**cause** (task S-4, MEASURED): not the hashing. A fresh page numbers styles in first-seen order, so on a
+style-heavy screen most style runs land on a different id in the clone than in the source. The port's
+run batching (`clone_partial_row_from_inner`) only recognised the run whose style keeps its id
+(`add_with_id_is_pure_ref_bump`); every other run fell back to one full `add_with_id` per cell, which
+takes `add_context` (a hash and a probe). An xctrace profile of 12,000 clones of `sgr-small.bin` put 52% of
+samples under the per-cell fallback (`lookup_context` 29% self, `add_context` 19% self). Ghostty pays the
+same per-cell lookups (it has no batching), which is why the two were close; on `ascii-small.bin` (one
+style, id preserved) the port's batching already made it 2.7x faster.
+**fix** (commit `5805b4dc`): `add_with_id_pure_ref_bump_target` mirrors `add_with_id`'s branch selection
+and returns the id a repeated call would purely bump in every arm (same id, dead id found elsewhere,
+`add_context` with no trim and the value present); the run-mates get one `use_multiple` on that id and a
+copy with the style id replaced. The style context's `deleted` is a no-op and the bump saturates (UD80),
+so the end state is identical. Test `page_cloneFrom_style_runs_match_per_cell_reference`: the cloned page
+is byte-identical to the reference's per-cell body (and `next_id`, `living`, `max_psl`, `psl_stats`
+equal) for fresh, live-conflict and dead-id destinations, with positive evidence (a test-only counter)
+that the remap batch ran; controls: mates keep the source id (integrity `MismatchedStyleRef`), bump the
+source id (assertion), the old predicate ("remapped runs batched: 0").
+**measured** (task S-4; oracle = Ghostty's bench built at the pin, `.port/tools/perf/README.md`; corpora
+regenerated: `sgr-small.bin` = `ghostty-gen +styled --seed=42 --style-rate=0.8`, `styles-small.bin` =
+random 24-bit foreground per 4-16-character run, Python `random.Random(93)`, both 262,144 B; the
+originals were not kept): instructions retired, clone minus noop, per 1,000 clones: SGR mix 1,581M before,
+550M after, Ghostty 1,321M; truecolor 1,752M before, 642M after, Ghostty 1,484M (instruction counts are
+deterministic and carry the closure). PROVISIONAL (load 21-25, above `IDLE_MAX` 2.0): CPU time (user+sys,
+interleaved rounds, N=21), clone minus noop: SGR mix 72.7 ms before, 28.5 ms after, Ghostty
+66.4 ms (0.43x); truecolor 83.3 ms before, 38.5 ms after, Ghostty 79.7 ms (0.48x). `screen-clone.clone/small`
+unchanged (instructions 1.001x, cycles 0.997x over 41 rounds). The authoritative idle ws10 run is still
+owed (task S-4 report).
+
+**state**: CLOSED (task S-4).
 
 ## N80 — the row-copy retry loops degrade unstorable cells to defaults instead of crashing at the style-set ceiling
 
@@ -3165,7 +3204,667 @@ observable); `hyperlink.rs:376` vs `hyperlink.zig` (`DefaultHasher` vs `Wyhash.i
 style-set work aligned the style item layout), so the port and reference cluster hyperlinks identically.
 Not fixed in this round; recorded for adjudication.
 
-**state**: OPEN (R1 candidate).
+**state (before tail-s2)**: OPEN (R1 candidate).
+
+**Closed by task tail-s2 (2026-09-23)**: fixed per R1. `PageEntry.hash`
+(`crates/rustty-vt/src/hyperlink.rs`) now produces the reference's 64-bit value.
+
+- **Wyhash**: the port already existed (`crates/rustty-zigstd/src/wyhash.rs`, used by the page hash
+  maps); its body matches Zig 0.16.0's `lib/std/hash/wyhash.zig` line for line. Its tests now carry all
+  five of Zig's `wyhash.zig` tests (`smhasher` and `iterative api`, with `verify.zig`'s helpers, were
+  missing; `test vectors at comptime` has no Rust compile-time form and is noted, not ported). A
+  differential against a Zig 0.16.0 probe: 602 random inputs, lengths 0-300 (each twice), seed 0 then
+  random seeds, one-shot and iterative in random 1-64-byte chunks. MEASURED: 602/602 one-shot and
+  602/602 iterative hashes equal the probe's, before and after this change (the Wyhash port was already
+  exact). 25 of the rows are kept in `differential_against_zig`.
+- **What the reference hashes** (`hyperlink.zig:143`, `lib/std/hash/auto_hash.zig`): the tag as one
+  byte in the union's declaration order (`explicit` 0, `implicit` 1; the port's `PageEntryIdTag`
+  discriminants are the reverse, so the bytes are literals (superseded by the S-2b follow-up below)); `.implicit` as its 4 native bytes; each
+  `.Deep` slice (`.explicit` id, then `uri`) as its bytes FOLLOWED BY its `len` as a native `usize`.
+  The old port also dropped the two lengths, so `(id "ab", uri "x")` and `(id "a", uri "bx")` hashed
+  alike; they no longer do.
+- **Differential through the reference's own `hash`** (a probe built from `20abdb50a`'s `src/` with
+  `Page.insertHyperlink`, `hyperlink.Set.get`, `PageEntry.hash` and the set context's `hash`): 600
+  random entries (tag 50/50, ids 1-40 bytes, URIs 1-300 bytes, raw bytes) plus 14 readable ones.
+  MEASURED: before, 0/600 matched; after, 600/600 and 14/14 match on both `entry.hash` and the
+  context's `hash`.
+- **Bucket placement**: both sets take the bucket as `(hash +% i) & table_mask`
+  (`ref_counted_set.zig:569`, `:629`; `ref_counted_set.rs:1223`, `:1318`), so the same hash gives
+  the same placement. MEASURED: 16 insert sequences (set counts 4/8/16/32, 4 seeds each, each run
+  past capacity) and one readable count-16 sequence: before, all 16 random sequences differed from the
+  reference in table or PSLs; after, every add result (id or `SetOutOfMemory`), the whole table, every
+  item's bucket/PSL/refcount, `max_psl`, `living` and `next_id` are identical. The R13-L item stride is
+  unchanged (`@sizeOf(hyperlink.Set.Item)` 48 on the probe).
+- **Performance**: the reference's shape (six short `update`s on a streaming hasher) measured 3x the
+  one-shot `Wyhash.hash` on OSC 8-sized entries and a paired +4..7% on an OSC 8-heavy
+  `+terminal-stream` corpus, so an entry of at most 256 bytes of hash input is gathered into a stack
+  buffer and hashed one-shot (the same value: Wyhash's iterative API is concatenation-exact, and both
+  paths are in the differential and in the tests). Numbers in the task tail-s2 report; measured under
+  load, so PROVISIONAL.
+- **Tests**: `hyperlink::page_entry_hash_tests` (`hash_matches_the_reference`: 14 probe values, including
+  both sides of the 256-byte edge and the two "abx" entries; `set_placement_matches_the_reference`: the
+  count-16 table and PSLs); `wyhash::tests::{test_smhasher, test_iterative_api,
+  differential_against_zig}`. Negative controls (one at a time, each failing for its stated reason):
+  lengths dropped, tag bytes swapped, the streaming path's seed changed (fails only on the long rows),
+  Wyhash's `total_len` dropped from `final2`, `total_len` skipped on buffered `update`s.
+
+The ledger row for the same finding, `S155-F1` (DISPUTED, WAIVED as not observable), is not this task's
+row and is left as it is; its premise ("any self-consistent hash preserves every observable result") no
+longer describes the code. (Superseded by the S-2b follow-up below: the row was handed to this task and
+re-marked CLOSED.)
+
+**Follow-up, task tail-s2 (S-2b)**: the port's `PageEntryIdTag` discriminants were the reverse of the
+reference's tag (`implicit` 0). They now follow the reference (`explicit` 0, `implicit` 1), so the tag
+byte stored in the page mapping matches: MEASURED with the same probe, byte 16 of `PageEntry.Id` is 01
+for an implicit link and 00 for an explicit one, and an all-zero id is `.explicit`. (That covers live
+entries and a fresh, zero-filled set slot. A reaped slot is written with `Item::default()`, whose
+`PageEntry::default()` is `.implicit` 0, so it is not byte-identical to a fresh one; the reference leaves
+`Item.value` `undefined` in both cases (`ref_counted_set.zig:85`) and never reads it, so neither has
+reference-defined bytes and the default is left as it was.)
+(`hyperlink::page_entry_tag_byte_tests`; negative control: the old numbering fails both tests). No C
+header, snapshot format (it has its own `Kind` byte) or compression golden depends on the numbering. The
+ledger row S155-F1 is re-marked CLOSED with this evidence. The probe also found N208 (the payload
+slice's field order).
+
+**state**: CLOSED (task tail-s2).
+
+## N100 — nine more `std.fmt.parseInt` sites in `src/terminal` parsed with Rust's `str::parse`
+
+- **id**: N100. Not in the inventory.
+- **found by**: batch T-A (tail wave), while closing S170-F1 / S186-F1 / S194-F3 / S195-F2 / S197-F1,
+  by grepping the reference's `src/terminal` for every `std.fmt.parseInt` / `parseUnsigned` call and
+  reading each port counterpart.
+- **severity**: low. **kind**: behavioral-difference (same class as the five rows).
+- **oracle**: `src/terminal/osc/parsers/osc9.zig:28, 196` (`parseUnsigned`);
+  `src/terminal/tmux/layout.zig:99, 113, 127, 141, 163`; `src/terminal/tmux/output.zig:194-204`;
+  `src/terminal/tmux/viewer.zig:1031`; `src/terminal/tmux/control.zig:178-180` (plus the regex
+  id captures at `:234-470`, which only ever see `[0-9]+`).
+- **rustty**: `crates/rustty-vt/src/osc/parsers/osc9.rs` (sleep and progress arms),
+  `crates/rustty-vt/src/tmux/{layout,output,viewer,control}.rs`.
+
+Zig's `std.fmt.parseInt` accepts interior `_` digit separators and `-0` for unsigned types, and
+`parseUnsigned` rejects any sign byte; Rust's `str::parse` rejects `_` and `-0` and accepts a leading
+`+`. None of these sites belonged to a ledger row. The five rows' sites and these now all go through one
+port of the std function, `crates/rustty-vt/src/zig_parse_int.rs`, which carries the std test table
+(`std_fmt_parse_int_table`). Observable before the fix: `OSC 9;1;4_20` slept 100 ms instead of 420,
+`OSC 9;1;+420` slept 420 instead of 100, a tmux `%end 1_0 2 0` guard line did not end its block, a
+`list-panes` `pane_tabs` entry `1_0` set no tab stop, and `output.rs` reported `-a` as `Overflow`
+where the reference reports `InvalidCharacter`.
+
+Checked and left unchanged: `kitty_desktop_notification.rs` (`w=`) filters `_` first, as the reference
+does, and its remaining forms agree; `context_signal.rs` accepts only `[0-9]` bytes before parsing;
+`x11_color.zig`'s calls run over the built-in `rgb.txt`, not input; `color.zig:65`/`:663` already have
+Zig-faithful ports in `crates/rustty-vt/src/color.rs`.
+
+**tests**: `osc_9_numbers_use_zig_parse_unsigned`, `numbers_use_zig_parse_int` (layout),
+`parse_integer_variables_use_zig_parse_int` (output), `pane_state_tab_stops_use_zig_parse_int`
+(viewer, `--features oniguruma`), `block_terminator_numbers_use_zig_parse_int` (control). Each failed
+before its site's change, on the `_`-separated input.
+
+**state**: FIXED (batch T-A).
+
+**update (tail-a2, extended R13)**: the two osc9 arms now refuse a `_` before `parseUnsigned` (UD141,
+following Ghostty's own OSC 99 filter), so `osc_9_numbers_use_zig_parse_unsigned` now asserts that
+`9;1;4_20` sleeps the default 100 ms and `9;4;1;4_2` has no progress. The tmux sites stay faithful
+(their input is tmux's own generated output; see UD141 "port handling").
+
+## N101 — the a=f frame's own RGBA conversion could not answer ENOMEM
+
+- **id**: N101. Not in the inventory.
+- **found by**: batch T-A (tail wave), while closing S190-F2, by reading every caller of
+  `pixel.rgbaFromFormat`.
+- **severity**: low. **kind**: missing-error-path (same class as S190-F2).
+- **oracle**: `src/terminal/kitty/graphics_exec.zig:600-612` (`pixel.rgbaFromFormat(...) catch
+  |err| { encodeError(&result, err); return result; }` for a non-RGBA frame image);
+  `src/terminal/kitty/graphics_pixel.zig:18-40` (`Allocator.Error![]u8`).
+- **rustty**: `crates/rustty-vt/src/kitty/graphics_exec.rs` (frame load, the `frame_img.format
+  != Rgba` block); `crates/rustty-vt/src/kitty/graphics_pixel.rs` (`rgba_from_format`).
+
+S190-F2 cites only `convertImageToRgba`, but its one failure is `rgbaFromFormat`'s allocation,
+and the frame load calls `rgbaFromFormat` directly on the frame image just before it. The port's
+`rgba_from_format` was infallible (`Vec::with_capacity`, `to_vec`), so this arm was carried as a
+comment and an allocation failure aborted instead of answering `ENOMEM: out of memory`.
+`rgba_from_format` now returns `Result<Vec<u8>, OutOfMemory>` through `try_reserve_exact` (both
+the scalar and the wuffs arms), and all three callers answer ENOMEM.
+
+**tests**: `kittygfx_animation_frame_rgba_conversion_oom_is_enomem` (the frame's conversion, then
+the image's) and `kittygfx_animation_compose_rgba_conversion_oom_is_enomem`, through the
+`cfg(test)` fail point `RGBA_FROM_FORMAT_TW`. Both failed with the ENOMEM arms disabled.
+
+**state**: FIXED (batch T-A).
+
+## N102 — tmux control-mode parsers raced Oniguruma's lazy global init (the intermittent `tmux::` test crashes)
+
+- **id**: N102. Not in the inventory. Reported by the T-A reviewer (review-T-A "Pre-existing"),
+  investigated and fixed by the T-A fix round (tail-a2).
+- **severity**: medium (heap corruption; test-harness-visible, and reachable by any multi-threaded
+  host of rustty-vt that has not initialized Oniguruma). **kind**: concurrency / C-init race.
+- **what**: `cargo test -p rustty-vt --lib --features oniguruma tmux::` crashed the test binary
+  intermittently in parallel mode: MEASURED 27 of 1,500 runs at tail-a2 before the fix (SIGTRAP 20,
+  SIGABRT 6, SIGSEGV 1), 0 single-threaded per the reviewer. Under lldb the faulting thread was
+  `tmux::control::tests::tmux_client_session_changed` in `libsystem_malloc` `mfm_free` (a malloc
+  assertion), called from `callout_func_list_add` (`regparse.c:1340`) <- `onig_set_callout_of_name`
+  <- the ASCII encoding's `init` (`ascii.c:64`) <- `onig_initialize_encoding` <- `onig_initialize`
+  (`regcomp.c:7773`) <- `onig_reg_init` (`regcomp.c:7671`) <- `onig_new` <- `oni::Regex::init` <-
+  `Parser::parse_notification_oni`. `onig_new` initializes Oniguruma's process-global tables lazily
+  on first use, with no synchronization, so several parser threads reaching their first regex
+  together raced inside `onig_initialize`. The reference never runs that path concurrently: the app
+  calls `oni.init(&.{oni.Encoding.utf8})` at startup (`global.zig:215`; the port's
+  `rustty-apprt` does the same through `oni::testing::ensure_init`), `zig test` is serial, and
+  libghostty-vt is built without Oniguruma. Same class as the earlier `ensure_init` race (memory
+  note "parallel cargo test exposes C init races").
+- **fix**: `Parser::parse_notification_oni` (`crates/rustty-vt/src/tmux/control.rs`, PORT NOTE N102)
+  calls `oni::testing::ensure_init()` (a `OnceLock` around the same UTF-8-only `onig_initialize`)
+  before any regex; after the app's own call it is a no-op, and an init error still surfaces through
+  the reference's `regex init failed` path. A stale note there that said the `oni` binding crate did
+  not exist was corrected.
+- **tests**: `tmux::control::tests::concurrent_first_notifications_do_not_race_oniguruma_init`
+  (parent/child: 16 threads parse their first notification together in a fresh child process, 40
+  times). Negative control: without the fix the first child aborted (SIGABRT). After the fix, 1,500
+  parallel runs of `tmux::`: 0 failures.
+- **state**: FIXED (tail-a2, 249d174a).
+
+## N110 — `+version`'s commit hyperlink came from a separate `git rev-parse`, not from the version's `+BUILD`
+
+- **id**: N110. Not in the inventory. Found by the review T-B fix round (tail-b2) while moving the
+  git-derived version into its own crate.
+- **severity**: low. **kind**: behavioral-difference (`+version` output on a TTY).
+- **what**: the reference's `+version` wraps its header in an OSC-8 link to
+  `.../commit/<build_config.version.build>` (`src/cli/version.zig`), where `version.build` is the
+  `+BUILD` metadata of the composed version (`Config.zig:290-338`): the short hash for an untagged
+  checkout, `0000000` without git, `null` (no link) for a `vX.Y.Z`-tagged release, and whatever an
+  explicit `-Dversion-string` carries. `rustty-cli` captured the hash separately in its build script
+  (`git rev-parse --short HEAD`, `RUSTTY_COMMIT_HASH`), so a tagged release was linked, a build
+  without git was not, and an explicit `RUSTTY_VERSION_STRING`'s build metadata was ignored.
+- **fix**: `rustty-cli` `commit_hash()` returns `rustty_version::version_build()`, the `+BUILD` of the
+  composed `VERSION_STRING`; the separate capture and its HEAD watch are gone. Test
+  `version::tests::commit_hash_is_the_version_build_metadata` (hash == the version's `+BUILD`, a real
+  hex hash in a git build). `rustty-version` `tests::version_is_derived_from_git` checks
+  `version_build()` per arm (git: the short hash; tagged: `None`; no git: `0000000`).
+- **state**: CLOSED (tail-b2).
+
+## N120 — two ports of `std.fmt.parseFloat`: rustty-config's is f64-only and private
+
+- **id**: N120. Not in the inventory.
+- **found by**: task T-C (tail wave), closing S67-F4.
+- **severity**: low (duplication; no behaviour difference found). **kind**: maintenance / drift risk.
+- **oracle**: Zig 0.16.0 `lib/std/fmt/parse_float.zig` + `parse_float/{parse,FloatStream,convert_hex}.zig`.
+- **rustty**: `crates/rustty-config/src/value_types.rs` (`pf_*`, `parse_float_f64`, parity S75-F1; plus
+  `zig_float_strip_underscores` / `parse_float_f32`) and, since T-C, `crates/rustty-args/src/std_fmt.rs`
+  (`parse_float::<f32|f64>`, `parse_int`).
+
+S67-F4 needed a `std.fmt.parseFloat` port in `rustty-args` (`parse_field_float`, the `f32`/`f64` arm of
+`parseIntoField`). `rustty-config` already had one, for `f64` only and private to `value_types.rs`, and it
+sits ABOVE `rustty-args`, so `rustty-args` cannot call it. T-C ported the grammar again in `rustty-args`
+(generic over `f32`/`f64`, `convert_hex` included) rather than edit `value_types.rs`, which belongs to the
+config area's batch. The two copies now implement the same grammar. `parse_float_f32` in `value_types.rs`
+is NOT the full grammar: it validates underscores and strips them, then calls Rust's parser, so it rejects
+hex floats. Whether any `f32` value in `value_types.rs` reaches `parse_float_f32` with a hex float is
+UNVERIFIED.
+
+**proposed fix** (NOT applied here): make `value_types.rs` call `rustty_args::std_fmt::parse_float` and
+delete its `pf_*` copy and `parse_float_f32`, in the config area.
+
+**addendum (T-C rebase onto T-E, 2026-09-23)**: T-E (S78-F2, `549b63fd`) added a third partial port,
+of `std.fmt.parseInt` for unsigned types with base 0: `value_types.rs` `parse_int_u8_base0` /
+`parse_unsigned_base0`. `rustty_args::std_fmt::parse_int` is also a port of that function (base 0 included),
+so the same consolidation applies to it. Not compared value by value; UNVERIFIED whether the two agree
+on every input.
+
+**fix round T-C3 (2026-09-23)**: rustty-config depends on rustty-args (`crates/rustty-config/Cargo.toml`),
+so the dependency direction allows the switch, and it is done. `value_types.rs` now calls
+`rustty_args::std_fmt` for every `std.fmt` integer and float parser it ported, and those copies are deleted (the u21 hex parser is still a local copy; it matches Zig on every input the T-C3 review probed):
+- `pf_*` + `parse_float_f64` -> `std_fmt::parse_float::<f64>` (`Config.zig:6445, 9289` and the
+  `MouseScrollMultiplier` fields).
+- `zig_float_strip_underscores` + `parse_float_f32` -> `std_fmt::parse_float::<f32>` (`Config.zig:9481`).
+  This one CHANGES behaviour: the old copy used Rust's grammar after stripping `_`, so it rejected hex
+  floats. That was a port bug; see N123.
+- T-E's `parse_unsigned_base0` / `parse_int_u8_base0` -> `std_fmt::parse_int::<T>(.., 0)` (`limit.zig:28`,
+  `Config.zig:9878`). Same accept/reject set by reading (the old copy accumulated in `u128` and cast at
+  the end; every caller collapses both errors into `InvalidValue`).
+- `parse_int_u32_base10` -> `std_fmt::parse_int::<u32>(.., 10)` (`Config.zig:9472, 10339, 10341, 10345`).
+- `parse_unsigned_u64_base10` -> `std_fmt::parse_unsigned::<u64>(.., 10)` (`Config.zig:10222`). The old
+  copy rejected every `_`. Its only caller stops at the first prefix that fails, and a prefix ending in
+  `_` always fails, so no `_` reaches a successful parse. The results are the same on every input.
+- `value_types::ParseIntError` is now a re-export of `std_fmt::ParseIntError` (same variants).
+
+Evidence: all 261 pre-existing rustty-config lib tests pass unchanged, among them the 55-row
+`parse_float_f64_matches_std_fmt_parsefloat` Zig oracle table and the `WindowPadding` / `Limit` /
+`quick-terminal-size` integer-spelling tests. `std_fmt`'s own tests are Zig 0.16.0's std tables
+(parseInt, parseUnsigned, "parse u64 digit too big", parseFloat, "nan and inf", "largest normals",
+hex.*), verbatim for every Rust-representable type. The `u21` hex parses (`Config.zig:8293, 8407`)
+have no Rust type and were not touched.
+
+**Remaining (follow-up, not done here):** rustty-vt sits below rustty-args and has its own partial
+copies (`crates/rustty-vt/src/color.rs` `parse_int_u8` / `parse_unsigned_u8`,
+`crates/rustty-vt/src/kitty/graphics_command.rs` `parse_int_i32` / `parse_int_u32`, and a
+`zig_parse_int.rs` that another task is preparing and is not on `tail-c3`). All of them, and
+`rustty_args::std_fmt`, should become ONE port in a shared crate at the lowest layer (below rustty-vt)
+that every crate calls, with `std_fmt`'s std-table tests moved with it.
+
+**state**: CLOSED (task tail-s9, 2026-09-23): one port, in `rustty_zigstd::fmt`; see N150's closing entry for
+the comparison, the moves and the test merge. The rustty-config part was done by T-C3; tail-s9 moved rustty-config
+(including the `u21` hex parser, now `parse_int_type(IntType::unsigned(21), .., 16)`), rustty-args, rustty-cli and
+rustty-vt onto `rustty_zigstd::fmt` and deleted `rustty_args::std_fmt`.
+
+## N121 — five `+show-face` error lines print a Rust Debug value where the reference prints `error.<Name>`
+
+- **id**: N121. Not in the inventory.
+- **found by**: task T-C (tail wave), closing S70-F6, whose audit text mentions these sites ("Similarly
+  `show_face.rs` prints `{err:?}`") although its cited anchors are `ssh.zig:281-283, 530-545` only.
+- **severity**: low (stderr text on failure paths). **kind**: behavioral-difference (message text).
+- **oracle**: `src/cli/show_face.zig` `runArgs`/`lookup`: `Unable to load config: {}` (:145), `Unable to
+  initialize font grid set: {}` (:164), `Unable to get font grid: {}` (:184), `Unable to get face: {}`
+  (:226), `Unable to get name of face: {}` (:233), at 20abdb50a.
+- **rustty**: `crates/rustty-cli/src/show_face.rs`, the five `write!(stderr, "Unable to …: {err:?}")` sites,
+  each carrying a PORT NOTE naming this entry.
+
+Zig's `{}` of an error value prints `error.<Name>` (MEASURED, Zig 0.16.0). The port prints the Debug of its
+own error types. For three of them the names cannot be produced by a prefix alone: `LoadError` carries an
+`io::Error`, and `collection::Error::Face(FaceError)` and the face-name errors carry backend payloads, so
+each needs a mapping to the reference error set of the call (`Config.load`, `SharedGridSet.ref`,
+`Collection.getFace`, `Face.name` per backend), which T-C did not derive. T-C fixed the two sites whose
+reference error is fixed: `Error parsing args: {}` (via `zig_error::args_error`, with S69-F5) and
+`Unable to parse string as unicode: {}` (`Utf8View.init`'s only error, `error.InvalidUtf8`).
+
+**proposed fix**: map each port error type to the reference's error names (as `zig_error::load_error`
+does for `Config.loadFile`), and print through that.
+
+**state**: OPEN.
+
+## N122 — `+new-tab` accepted a surface id with a leading `+`
+
+- **id**: N122. Not in the inventory. Found by the T-C reviewer (review-T-C2, "New finding"), fixed by the
+  T-C3 fix round.
+- **severity**: low (CLI argument and environment validation). **kind**: behavioral-difference.
+- **oracle**: `src/cli/new_tab.zig:69` (`--surface-id=`: `std.fmt.parseUnsigned(u64, trimmed, 0)`) and
+  `:251` (the `GHOSTTY_SURFACE_ID` fallback: `std.fmt.parseUnsigned(u64, e, 0)`), at 20abdb50a.
+  Zig 0.16.0 `parseUnsigned` calls `parseIntWithSign(T, u8, buf, base, .pos)` directly, with no sign
+  strip, so a `+` reaches `charToDigit` and is `error.InvalidCharacter`. std's own `test parseUnsigned`
+  asserts `parseUnsigned(u8, "+0", 10)` is `error.InvalidCharacter`. MEASURED with Zig 0.16.0:
+  `parseUnsigned(u64, "+5", 0)` is `error.InvalidCharacter`.
+- **rustty**: `crates/rustty-cli/src/new_tab.rs` `parse_unsigned_u64_base0`, a hand-written copy whose
+  comment said "parseUnsigned == parseIntWithSign(.pos): a leading '+' is accepted", stripped the `+`.
+  So `--surface-id=+5` was accepted, and so was a `+5` env value, where the reference prints
+  `Error parsing args: error.InvalidCharacter` or falls back to surface 0.
+- **fix**: `parse_unsigned_u64_base0` now calls `rustty_args::std_fmt::parse_unsigned::<u64>(buf, 0)` (new,
+  a port of `parseUnsigned`), and the local `ParseIntError` is the `std_fmt` one. Test
+  `new_tab::tests::surface_id_rejects_a_leading_plus_like_parse_unsigned`. Negative control: the `+` strip
+  reinstated -> the run gets past argument parsing ("+new-tab is not supported on this platform.") where
+  `Error parsing args: error.InvalidCharacter` is expected.
+- **state**: FIXED (T-C3).
+
+## N123 — `quick-terminal-size` rejected hex-float percentages
+
+- **id**: N123. Not in the inventory. Found by the T-C3 fix round while consolidating N120.
+- **severity**: low. **kind**: behavioral-difference (a config value the reference loads was rejected).
+- **oracle**: `src/config/Config.zig:9481` (`QuickTerminalSize.Size.parse`: `std.fmt.parseFloat(f32,
+  input[0 .. input.len - "%".len])`), at 20abdb50a. MEASURED with Zig 0.16.0: `parseFloat(f32, "0x1p4")`
+  is 16, `"0x1.8p5"` is 48, `"1_0"` is 10.
+- **rustty**: `crates/rustty-config/src/value_types.rs` `parse_float_f32` validated and stripped `_`, then
+  called `str::parse::<f32>()`, which has no hex-float grammar, so `quick-terminal-size = 0x1p4%` was an
+  `InvalidValue` diagnostic and the setting was discarded.
+- **fix**: `parse_float_f32` calls `rustty_args::std_fmt::parse_float::<f32>` (N120). Test
+  `value_types::tests::quick_terminal_size_percentage_uses_the_parse_float_grammar`. Negative control: the
+  strip-then-`str::parse` body reinstated -> `0x1p4%` gives `Err(InvalidValue)`. A second change, also
+  towards the reference (found by the T-C3 review's differential): `-nan%` used to store a NaN with the sign
+  bit set (`0xffc00000`) and now stores `0x7fc00000`, as Zig does.
+- **state**: FIXED (T-C3).
+
+## N124 — `std_fmt::parse_int` named the wrong error when an overflow came before a bad character
+
+- **id**: N124. Not in the inventory. Found by the T-C reviewer (review-T-C2, blocking issue 1), in T-C's
+  own port; fixed by the T-C3 fix round.
+- **severity**: low (error text in a log line). **kind**: behavioral-difference (error identity).
+- **oracle**: Zig 0.16.0 `lib/std/fmt.zig` `parseIntWithSign`: it accumulates in `Accumulate` (the result
+  type widened to at least 8 bits) and returns `error.Overflow` from the `math.mul` / `math.add` /
+  `math.sub` that leaves that range, before it reads the rest of the input. MEASURED with Zig 0.16.0:
+  `parseInt(i64, "99999999999999999999x", 10)`, `parseInt(u8, "300x", 0)`, `parseInt(i8, "300x", 0)`,
+  `parseInt(i8, "-129x", 10)`, `parseInt(u32, "-1x", 10)` and `parseInt(u8, "0x100x", 0)` are all
+  `error.Overflow`.
+- **rustty**: `crates/rustty-args/src/std_fmt.rs` accumulated in `i128` and range-checked only at the end,
+  so each of those gave `InvalidCharacter`. Visible in `ssh_cache/entry.rs`: `Invalid timestamp in cache
+  entry: 99999999999999999999x err=error.InvalidCharacter` where the reference logs `err=error.Overflow`.
+  The PORT NOTE that said only the variant order could differ, "and both variants are errors", was wrong.
+- **fix**: `parse_int_with_sign` range-checks against `T` after every step and follows the reference's
+  first-negative-digit branch. That is exact because `Accumulate == T` for every Rust integer type.
+  Tests `std_fmt::tests::parse_int_overflows_before_a_later_bad_character` and
+  `ssh_cache::entry::tests::cache_entry_timestamp_overflow_is_named_before_a_later_bad_character`.
+  Negative control: the end-of-parse check restored -> the first fails with `InvalidCharacter` for
+  `Overflow`.
+- **state**: FIXED (T-C3).
+
+
+## N140 — the XDG helpers collapse `homedir.home`'s `error.BufferTooSmall` into `NoHomeDir`
+
+- **id**: N140. Not in the inventory. Found by the T-E reviewer (review-T-E "S74-F1 error name"),
+  recorded by the T-E fix round (tail-e2).
+- **severity**: low. **kind**: behavioral-difference (error identity).
+- **what**: `homedir.zig:28` (`homeUnix`) returns `error.BufferTooSmall` when `$HOME` is longer than
+  the caller's buffer, and `xdg.zig:91-92` passes it on with `try homedir.home(io, environ_map, &buf)`
+  over a 1024-byte buffer. The port's `crates/rustty-os/src/xdg.rs:157` does
+  `homedir::home(..).map_err(|_| DirError::NoHomeDir)?`, and `DirError` has no other variant
+  (the module header at `xdg.rs:10-16` records the collapse). Since S74-F1 (T-E, b7407d17)
+  `loadDefaultFiles` propagates this error, as the reference does, so it is now observable:
+  - `ghostty_config_load_default_files` logs `error loading config err=error.BufferTooSmall` in the
+    reference (`CApi.zig:63-66`, `{}` of the error) and `error loading config err=FileLoad(NoHomeDir)`
+    in the port (`crates/rustty-config/src/c_api.rs:124-125`, `{err:?}`). By reading; the port's
+    error value is pinned by `crates/rustty-config/tests/load_path_errors_propagate.rs:46-52`
+    (HOME longer than 1024 bytes).
+  - A sibling, same cause: `theme.zig` `Location.dir` maps `error.BufferTooSmall` from `xdg.config`
+    to `error.OutOfMemory` (`:51`), while the port's `theme.rs` `dir` treats every `DirError` as
+    "the directory doesn't exist" (`None`). UNVERIFIED what the reference's theme loading then
+    does with that `OutOfMemory`.
+- **why not fixed here**: not small. It needs a `BufferTooSmall` variant in `rustty-os`'s `DirError`
+  (area `src/os`, not this batch's), a matching `FileLoadError` variant and its consumers
+  (`file_load.rs`, `theme.rs`'s OOM arm, `rustty-cli`, `rustty-crash`'s `InitThreadError::Dir`), and
+  the log line would still differ in form, because the C-API sites print the Rust `Debug` form
+  (`FileLoad(..)`) rather than Zig's `error.<Name>` for every error, not only this one.
+- **proposed fix**: add `DirError::BufferTooSmall` and propagate it through `FileLoadError`; port the
+  theme `.user` arm's `BufferTooSmall => OutOfMemory` mapping; and decide separately whether the
+  C-API `err={}` sites should print Zig error names (as T-E's `zig_error.rs` does for config
+  diagnostics).
+- **state**: PARTIALLY RESOLVED by S112-F11 (T-G, 2026-09-23): `DirError::BufferTooSmall` and
+  `FileLoadError::BufferTooSmall` now carry the reference's error, and
+  `load_path_errors_propagate` pins it (so the "what" bullet's `xdg.rs:157` collapse and its
+  `NoHomeDir` pin are historical). Still OPEN:
+  - (a) the `theme.rs` `Location.dir` sibling: the reference maps `BufferTooSmall` to
+    `OutOfMemory` (`theme.zig:51`), and the port returns `None`. Not fixed in T-G2 because it is
+    not small: `Location::dir`, `LocationIterator::next` and `theme::open` would all become
+    fallible, `Config::load_theme` / `finalize` would need an out-of-memory `LoadError` variant
+    that every consumer then handles, and `rustty-cli`'s `list_themes` would need the same.
+  - (b) the C-API `err=` sites print the Rust `Debug` form (`FileLoad(BufferTooSmall)`, by
+    reading), not `error.BufferTooSmall`.
+- **CLOSED by task S-15 (2026-09-24, N292)**, both halves:
+  - (a) `theme::Location::dir` now returns `Result<Option<Vec<u8>>, theme::Error>` and maps
+    `DirError::BufferTooSmall` to `Error::OutOfMemory` (`theme.zig:51` at `20abdb50a`); every other
+    `xdg::config` error is still `None` (`else => return null`). `LocationIterator::next` and
+    `theme::open` pass it on (`try`); `Config::load_theme` returns it as the new
+    `LoadError::OutOfMemory`, so `finalize` fails as the reference's does, before any diagnostic is
+    appended; `rustty-cli`'s `list_themes` folds it into `Error::OutOfMemory`. Tests:
+    `tests/load_path_errors_propagate.rs::theme_user_dir_buffer_too_small_is_out_of_memory` (dir,
+    next, open, finalize, and the rendered `error.OutOfMemory`) with the short-`HOME` control
+    `theme_user_dir_resolves_with_a_short_home`; `list_themes::r13_flush_tests::
+    a_home_too_long_for_the_xdg_lookup_is_out_of_memory` (re-executed child, env cleared, 1101-byte
+    `HOME`). Negative controls, one at a time: `BufferTooSmall => Ok(None)` fails at "Location.dir
+    (.user)" (`Err(OutOfMemory)` vs `Ok(None)`); `load_theme` swallowing the error fails at
+    "Config.finalize must return OutOfMemory, got Ok(())"; `list_themes` swallowing it fails with
+    "got Ok(1)".
+  - (b) the `LoadError` rendering (`error.<Name>`) moved from `rustty-cli::zig_error::load_error`
+    to `rustty_config::zig_error::load_error` (the CLI helper delegates), and the C-API sites use it:
+    the three `error loading config`, `error loading config from file` and `error finalizing config`
+    sites print `zig_error::load_error(&err)`, `error finding trigger` prints `error.{InvalidFormat,
+    InvalidAction}`, and `error opening config in editor` renders its `FileLoadError` with
+    `openFileAbsolute`'s errno table (exact for `configPath`'s open; UNVERIFIED for the
+    `stat`/`openDir`/`createDirPath`/`createFileAbsolute` failures, whose Zig switches were not
+    re-derived). Tests: `c_api::log_site_tests::load_file_logs_...` now pins
+    `err=error.FileNotFound`; new `trigger_logs_the_zig_error_name` drives `err=error.InvalidAction`;
+    the structural test requires every site to go through `zig_error` and no `err={err:?}` to
+    remain. Negative control: the `load_file` site back to `{err:?}` fails both tests. Not changed:
+    `path={s}` is still rendered through `from_utf8_lossy` (the `log_err` sink takes a `String`).
+
+## N150 — a third port of Zig's number parsers, now at the lowest layer (`rustty-zigstd::fmt`)
+
+**Recorded 2026-09-23 (task T-F).** Closing S85-F1 (`Metrics.Modifier.parse`, in `rustty-font`)
+and S100-F1 (the keybind action numbers, in `rustty-input`) needed Zig 0.16.0's
+`std.fmt.parseInt` / `parseUnsigned` / `parseFloat` below the config and CLI crates. They are
+ported in `crates/rustty-zigstd/src/fmt.rs` (with Zig's own std tests for the Rust-representable
+types, and a 133-input differential corpus checked against Zig's results), plus `format_float_d`
+(Zig's `{d}` for `f32`/`f64`, checked against Zig's text for 57 values) for the `web_canvas` face
+(S91-F2).
+
+Task T-C, running in parallel, ported the same parsers into `rustty_args::std_fmt` (NEW-FINDINGS
+N120), which records that the copies should be merged "into a single crate at the lowest layer".
+`rustty-zigstd` is that layer (a leaf over `rustty-util`, already a dependency of `rustty-input`
+and now of `rustty-font` and `rustty-font-shaper`). After both tasks merge there are two full
+ports (`rustty_args::std_fmt`, `rustty_zigstd::fmt`) plus rustty-vt's partial copies.
+
+**state (before tail-s9)**: OPEN. The N120 follow-up can move `rustty-args` and `rustty-config` onto
+`rustty_zigstd::fmt` (or the reverse) and delete the other copy; the two were written
+independently, so their test sets should be merged, not just one kept.
+
+**Closed by task tail-s9 (2026-09-23)** (N120 too). ONE port of `std.fmt.parseInt` /
+`parseUnsigned` / `parseFloat` remains: `crates/rustty-zigstd/src/fmt.rs`.
+
+- **Copies found** (workspace-wide search for `parseInt` / `parseUnsigned` / `parseFloat` /
+  `charToDigit` ports): `rustty_args::std_fmt` (full), `rustty_zigstd::fmt` (full),
+  `crates/rustty-vt/src/zig_parse_int.rs` (integers, any width through a runtime `IntType`),
+  `crates/rustty-vt/src/color.rs` (`parse_int_u8`, `parse_unsigned_u8`, `parse_unsigned_u16`,
+  `parse_int_u8_with_sign`, `char_to_digit`), `crates/rustty-config/src/value_types.rs`
+  `parse_int_u21_base16`. Callers already on a shared port: rustty-input, rustty-font,
+  rustty-font-shaper (zigstd); rustty-config and rustty-cli (args).
+- **Not merged (they are not ports of the std function, or not faithful ones; changing them is a
+  behaviour change, outside this structural task)**: `crates/rustty-os/src/uri.rs`
+  `parse_int_u16` / `parse_int_u8_hex` (Rust `str::parse` / `from_str_radix` standing in for
+  `std.fmt.parseInt(u16, s, 10)` / `(u8, s, 16)`: by reading, both reject the `_` separators and
+  the `-0` that Zig accepts; rustty-os is also T-G's area), and `crates/rustty-vaxis/src/cell.rs`
+  `parse_unsigned_u8` / `char_to_digit` and `crates/rustty-vaxis/src/parser.rs` `parse_unsigned`
+  (libvaxis's `std.fmt.parseUnsigned` calls; no `_` handling). Verdicts (review of tail-s9, measured
+  with Zig 0.16.0): `uri.rs` IS an R1 gap — the reference is `std.Uri`, which calls `std.fmt.parseInt`
+  directly, so `file://host:8_0/x` gives port 80, `:-0` gives 0 and `[::1]:1_0` gives 10 where the port
+  rejects all three (reachable through OSC 7); `vaxis/parser.rs` IS an R1 gap — libvaxis 0.6.0 calls
+  `parseUnsigned` / `parseInt`, so the port also wrongly rejects `+5` and `-0`; `vaxis/cell.rs` is NOT a
+  gap — the reference checks the length first, so its input is always exactly two hex bytes, on which
+  the two agree. Both gaps are tracked as N206. `osc/parsers/kitty_desktop_notification.rs` (OSC 99) and
+  `context_signal.rs` use Rust's parser after the reference's own `_` / digits-only filter, which
+  leaves no input on which the two grammars differ; `kitty/dnd_command.rs` `parse_unsigned` ports
+  a reference helper, not the std function.
+- **Comparison** (MEASURED): each port run against Zig 0.16.0 over a fresh probe of 3120 integer
+  inputs x 22 types (`u1 u2 u4 u7 u8 u9 u16 u21 u32 u64 usize i1 i2 i3 i4 i5 i8 i16 i32 i43 i64
+  isize`, each port on the types it supports) x bases 0/2/8/10/16/36 x `parseInt`/`parseUnsigned`
+  (823,680 Zig results), and 1138 float inputs x f32/f64 bit patterns; the inputs include the union
+  of the three ports' tables, the zigstd corpora, signs, `_` placement, prefixes, overflow before a
+  bad character, non-ASCII bytes, hex floats, special values and subnormals. **No port differed
+  from Zig on any input, and so no two ports differed in value.** The differences were in reach and
+  in the tests: only the rustty-vt copy handled Zig's odd widths (so zigstd and args skipped the
+  `i1`/`i2`/`i4`/`i5`/`i43`/`u1`/`u2`/`u7` std-table rows); zigstd lacked nothing args had; args'
+  parseFloat table asserted `is_err()` where Zig says `expectError(error.InvalidCharacter, ..)`;
+  zigstd's compared `approxEqAbs` in `f64` where Zig compares in `T`. A harness negative control
+  (Accumulate width = result width; the `many_digits` sticky bit dropped) produced 10,287 and 1
+  mismatches, so the probe detects both. Probe and harness: task tail-s9 report.
+- **Fix**: `rustty_zigstd::fmt` keeps its float grammar and takes rustty-vt's arbitrary-width
+  integer core (`IntType`, `parse_int_type`, `parse_unsigned_type`; `parse_int::<T>` /
+  `parse_unsigned::<T>` for native `T`, `isize` included). Deleted: `rustty_args::std_fmt`, the
+  rustty-vt `zig_parse_int.rs` parser (the file is now `protocol_int.rs` with only the UD141
+  `reject_digit_separators` filter, unchanged, still called first at every protocol site), the
+  `color.rs` copies, the config `u21` copy. Callers (rustty-args `args.rs`, rustty-config
+  `value_types.rs`, rustty-cli `new_tab.rs` / `ssh_cache/entry.rs`, and 12 rustty-vt files) call
+  `rustty_zigstd::fmt`; rustty-args and rustty-cli gained a `rustty-zigstd` edge (a leaf over
+  `rustty-util`; `check_acyclic.sh` and `cargo_cycle_check.py` GREEN).
+- **Tests**: the zigstd copy of Zig's tables is the one kept, now with the odd-width rows (so
+  `test parseInt` and `test parseUnsigned` are ported in full) and `approxEqAbs` over `T`. Moved
+  into it: args' `parse_int_sign_and_separator_edges`, `parse_int_overflows_before_a_later_bad_character`,
+  `hex_many_digits_sticky_bit_rounds_up`; rustty-vt's `digit_separators_and_accumulate_width`;
+  `color.rs`'s `parse_unsigned_u8_base10_zig_semantics`, `parse_unsigned_u16_base16_zig_semantics`.
+  Removed as duplicates (twin in `crates/rustty-zigstd/src/fmt/tests.rs`): args `std_parse_int`
+  (`test_parse_int`), `std_parse_unsigned` (`test_parse_unsigned`), `std_parse_u64_digit_too_big`
+  (`test_parse_u64_digit_too_big`), `std_parse_unsigned_comptime` (`test_parse_unsigned_comptime`),
+  `std_parse_float_f32` + `std_parse_float_f64` (`test_parse_float` + `nan_and_inf`),
+  `std_largest_normals` (`largest_normals`), `std_hex_special` (`hex_special`), `std_hex_zero`
+  (`hex_zero`), `std_hex_f32` (`hex_f32`), `std_hex_f64` (`hex_f64`), `std_many_digits_hex`
+  (`many_digits_hex`); rustty-vt `std_fmt_parse_int_table` (`test_parse_int`),
+  `std_fmt_parse_unsigned_table` (`test_parse_unsigned`). Every caller's own tests are unchanged.
+- **Perf**: see the task tail-s9 report (`#[inline]` on the integer core cost `+terminal-parser`
+  about 10% through a codegen-unit reshuffle and was dropped; PERF(port) note in `fmt.rs`).
+
+**state**: CLOSED (task tail-s9).
+
+## N151 — CoreText keeps naming a font after a variation instance of the same data was built
+
+**Recorded 2026-09-23 (task T-F2, from the T-F review).** Test isolation, not product behaviour.
+After `deferred_face::tests::load_coretext_deinits_the_face_when_set_variations_fails` (S85-F3)
+builds a `wght=700` variation instance of the data-loaded embedded JetBrains Mono, CoreText can
+answer `CTFontCopyFamilyName` = "JetBrains Mono" for the same font data with its `name` table
+renamed away, for the rest of the process. `face::coretext::tests::
+a_face_without_a_family_name_is_unknown` then fails its precondition. MEASURED on macOS: the two
+nameless-font tests plus the S85-F3 test, run with `--test-threads=1`, failed 20 of 30 runs (always
+the `face::coretext` one); the reviewer measured 11 of 150 full-suite runs on `tail-f` against 1 of
+150 at the base, and 8 of 200 with a lock shared by the two tests, so the state outlives the test
+that made it and a lock does not help.
+
+**Fix**: both nameless-font tests (`face::coretext::tests::a_face_without_a_family_name_is_unknown`
+and `deferred_face::tests::a_coretext_font_without_a_family_name_is_unknown`) run their body in a
+re-executed child of the test binary (`crates/rustty-font-shaper/src/test_child.rs`, the R14
+parent/child form; the parent asserts that the child ran exactly one test and passed). After the
+fix: 0 of 50 of the same sequential runs failed; see the task T-F2 report for the full-suite count.
+
+**state**: CLOSED (task T-F2).
+
+## N160 — `systemd.notify.send`'s address setup, outside S112-F8's anchors: a 108-byte crash and a broken abstract-socket case
+
+- **id**: N160. Not in the inventory. Found by T-G (tail wave), 2026-09-23, while working LEDGER S112-F8,
+  whose cited anchors are `systemd.zig:37-53, 136-149`; these sites are at `:100-117`.
+- **severity**: low. **kind**: crash (UD202) and functional (UD203), both reference defects.
+- **what**: (1) the "too long" check is `path.len < socket_path.len`, so a 108-byte `NOTIFY_SOCKET` passes
+  and its NUL is written at `path[108]`; the port had the same index and panicked (UD202). (2) an
+  `@`-prefixed abstract address, which the check's own warning names as supported, is copied with its
+  `@` and connected with the whole-struct length, i.e. as the pathname `@...` (UD203).
+- **fix**: `crates/rustty-os/src/systemd.rs` `notify_address` (both R13 PORT NOTEs), tests
+  `notify_socket_as_long_as_sun_path_is_too_long` and `notify_address_lengths`, negative controls in
+  UD202/UD203. The Linux-only `send` arm that calls it is not compiled on macOS.
+- **state**: OPEN — fix written, Linux run pending (same as S112-F8).
+
+## N170 — `randomTmpPath` renders the temp dir through `String::from_utf8_lossy`
+
+- **id**: N170. Not in the inventory. Found by task T-H while closing S111-F12 (the same conversion in
+  `allocTmpDir`); outside that row's cited anchors (`file.zig:85-86`).
+- **severity**: low. **kind**: behavioral-difference (byte-slice → lossy `String`).
+- **oracle**: `src/os/file.zig:121-132` `randomTmpPath` returns `[]u8` from
+  `allocPrint("{s}{c}{s}{s}", .{ global.tmpDirPath(), sep, prefix, basename })`: the temp dir's bytes
+  verbatim.
+- **rustty**: `crates/rustty-os/src/file.rs` `randomTmpPath` returns `String` and formats
+  `String::from_utf8_lossy(rustty_global::tmp_dir_path())`, so a non-UTF-8 `TMPDIR` yields a path naming
+  a different directory. Its one caller is `crates/rustty-cli/src/ssh.rs` (the ssh control path).
+- **proposed fix**: return `Vec<u8>` and pass it to the ssh `Command` as an `OsStr` (touches
+  `rustty-cli`, area `src/cli`).
+- **state**: OPEN.
+
+## N171 — `flatpakExit` can now receive the timer error its `catch unreachable` assumes away
+
+- **id**: N171. Not in the inventory. Found by task T-H while closing S111-F3.
+- **severity**: low. **kind**: R13 candidate (a reference `catch unreachable` on an externally
+  produced error), for the `src/termio` owner.
+- **oracle**: `src/termio/Exec.zig` `flatpakExit`: `const exit_code = r catch unreachable;` over
+  `FlatpakHostCommand.WaitError!u8`, and `WaitError = xev.Timer.RunError || Error` (`os/flatpak.zig:115`;
+  CORRECTION by task T-H2: this said `:110`).
+  The completion's result is `Error.FlatpakMustBeStarted`/`FlatpakSpawnFail` when `waitXev` runs before
+  a successful start, and the timer's own `RunError` (`Canceled`, `Unexpected`) when the loop fails.
+- **rustty**: `crates/rustty-termio/src/exec.rs` `flatpakExit` is `r.unwrap()`. Since S111-F3 the
+  `WaitError::Timer(..)` variant reaches it verbatim, as in the reference; before, the port turned it into
+  `Flatpak(FlatpakSpawnFail)`, which the `unwrap` also panicked on. Reachability not measured (flatpak
+  only, Linux).
+- **proposed fix**: decide under R13 (the `src/termio` batch) whether a failed wait should be handled
+  like a process exit, not a panic.
+- **resolution (task T-H2, controller ruling on review-T-H)**: not reachable, so an R7 invariant, not
+  R13. The `Error` half is set only in states `.init`/`.err` (`flatpak.zig:198-199`); `Exec.threadEnter`
+  calls `waitXev` only after `spawn` succeeded, `spawn` waits for the state to leave `.init` and fails
+  on `.err` (`:143-150`), so the state is `.started` or `.exited`. The timer half needs a cancel of the
+  wait completion (nothing issues one) or an io_uring timeout result other than ETIME/ECANCELED (the
+  kernel produces none; kqueue and epoll timers never return `Unexpected`). By reading, per the review
+  (the pinned libxev `watcher/timer.zig`, `io_uring.zig:757-761`). The port keeps the checked unwrap as
+  `.expect(..)` with a message naming the invariant, and a PORT NOTE at the site
+  (`crates/rustty-termio/src/exec.rs` `flatpakExit`).
+- **state**: CLOSED.
+
+## N172 — the port's `TempDir` opens the current directory for an empty temp-dir path
+
+- **id**: N172. Not in the inventory. Found by task T-H2 while fixing UD211 (S111-F1, `TMPDIR=/`).
+- **severity**: low. **kind**: behavioral-difference (area `src/os`).
+- **oracle**: `src/os/TempDir.zig:32-34` `cwd.openDir(global.io(), tmp_dir, .{})`. With `tmp_dir = ""`
+  (a present-but-empty `TMPDIR`, which `allocTmpDir` returns verbatim) this fails with `FileNotFound`,
+  MEASURED with zig 0.16.0 on macOS (`Dir.cwd().openDir(io, "", .{})` → `error.FileNotFound`).
+- **rustty**: `crates/rustty-os/src/tempdir.rs` `Dir::openDirPath` was `open_dir_abs(&self.path.join(sub_path))`,
+  and `Path::join("")` is the current directory itself, so `TempDir::init` succeeded and created its
+  directory under the current working directory (MEASURED by the T-H2 review: `openDirPath("")` returned
+  `Ok("./")`). Reachable in production: `Surface.writeScreenFile` (`Surface.zig:5699`, the
+  `write_screen_file` actions) starts with `TempDir.init()`, so with `TMPDIR=` Ghostty fails the action
+  and the port wrote the scrollback under the cwd.
+- **fix** (R1, task T-H3): `Dir::openDir` and `Dir::openDirPath` fail with `NotFound` for an empty
+  `sub_path` (`reject_empty_sub_path`, PORT NOTE on it). Re-MEASURED in task T-H3 (zig 0.16.0, macOS, the
+  exact `trimEnd` + `std.Io.Dir.cwd().openDir(io, t, .{})`): `""`, `/` and `//` give
+  `error.FileNotFound`; `/tmp/` and `.` open. Tests `tempdir::tests::open_dir_fails_with_not_found_on_an_empty_sub_path`
+  and `tempdir::tests::init_fails_with_not_found_when_tmpdir_is_empty` (a child with `TMPDIR=` and a fresh
+  cwd; asserts the child ran one test, `TempDir::init` failed with `NotFound`, and the cwd stayed empty).
+  Negative control: the check disabled fails both, the second with "TempDir::init succeeded with an
+  empty TMPDIR (created .. under the cwd)".
+- **state**: CLOSED (task T-H3).
+
+## N173 — after S43-F3, `codepoint-width --mode=wcwidth` is no longer comparable to the pinned perf oracle
+
+- **id**: N173. Found by task T-H2 while measuring S43-F3 (controller Decision B).
+- **severity**: low. **kind**: perf-measurement (no behaviour defect).
+- **what**: `rustty-bench`'s `cli::main` now runs the global init (`init_with_action(false)`, the
+  reference's `global.init(.{ .tool = .. })`), whose `ensureLocale` sets the process locale from the
+  environment (en_US.UTF-8 on this host). libc `wcwidth` is much slower under a UTF-8 locale.
+  MEASURED (paired, N=9, load ~12, provisional): 238 ms before, 749 ms after; with `LANG=C LC_ALL=C` both
+  are 236 ms. The pinned perf oracle (`4749c4e93`, `ws10_suite.py`) predates the `.tool` init and runs
+  in the "C" locale, so Fence 1 now reports that config LOST (zig 267 ms, rust 753 ms). The reference at
+  `20abdb50a` runs `ensureLocale` in its bench too (`global.zig:208`), so the port matches the current
+  reference; the comparison, not the port, is what changed.
+- **options for the controller**: record the config in `ws10_suite.py`'s `INCOMPARABLE` with these
+  numbers (as `screen-clone.render/small` is), or run the perf lanes with `LC_ALL=C`. Not done here:
+  editing a fence is the controller's call (R5).
+- **decision** (task S-4, controller ruling: do not add configs to `INCOMPARABLE`): the oracle was
+  rebuilt at the pin (`ghostty-bench` ReleaseFast from a `git archive` of the pin, sha256
+  `46b5adfb6cd4bfcde6a693a3a6d0cc8c94c6cd825ff66e98c6c6b79d1d95fa2a`,
+  `~/rustty-oracle-artifacts/ghostty-bench-20abdb50a`; recipe and reproducibility in
+  `.port/tools/perf/README.md`). It runs the reference's global init: its log shows
+  `setlocale from env result=en_US.UTF-8`. Both benches now call libc `wcwidth` under the same locale, so
+  the config is comparable again. MEASURED (CPU time, interleaved rounds, load 21-25): rustty 0.92x the
+  rebuilt oracle at N=25 (810 vs 871 ms) and 0.91x at N=21 (746 vs 814 ms); instructions 5,059M vs
+  5,951M. `ws10_suite.py` now uses that oracle (commit `4b60cfac`, sha256-checked, BLOCKED on mismatch),
+  and its `INCOMPARABLE` is empty: the `screen-clone.render/small` entry also ended, as its own text
+  said it would, because the pin contains 446f80f4e (both benches now run 50,000 render iterations:
+  3.785e9 vs 3.874e9 instructions). A provisional ws10 run (load 14.5) held Fence 1 at 14/14, wcwidth
+  -8.3%.
+- **state**: CLOSED (task S-4).
+
+## N180 — `+page-compression --mode=report` printed to stdout (the S62-F3/F4/F5 class, unlisted)
+
+- **id**: N180. Not in the inventory. Found by T-I (tail wave), 2026-09-23, while working LEDGER
+  S62-F3/F4/F5: a grep for `std.debug.print` in `src/benchmark/` at the pin finds nine sites; the
+  audit listed seven. The other two are `PageCompression.zig:436` (per-page line) and `:442` (total).
+- **severity**: medium (same as S62-F3). **kind**: behavioral-difference (stdout instead of stderr).
+- **what**: `crates/rustty-bench/src/page_compression.rs` ported both as `println!`.
+- **fix**: all nine sites now use the crate's `debug_print!` macro (`crates/rustty-bench/src/lib.rs`):
+  stderr, under the stderr lock, write errors dropped as `std.debug.print`'s `catch return` does
+  (`eprintln!` would panic on a failed write). Test
+  `crates/rustty-bench/tests/report_output_goes_to_stderr.rs::page_compression_report_goes_to_stderr`
+  runs the binary and asserts the lines are on stderr and stdout is empty; negative control
+  (`print!` restored in `page_compression.rs` only) fails with "no stderr line starts with
+  \"page-compression page=0 \"".
+- **state**: CLOSED (T-I).
+
+## N181 — the S115-F1 `end_frame` wrapper in the Linux renderer twin has never been compiled
+
+- **id**: N181. Not in the inventory. Recorded by T-I2 (tail wave), 2026-09-23, from review T-I F3.
+  Outside LEDGER S115-F1's cited anchors, which name only the macOS `generic.rs`.
+- **severity**: low. **kind**: verification gap (unverified port change).
+- **what**: `crates/rustty-renderer/src/generic/linux_impl.rs:3673-3697` (the wrapper) got the same shape as the macOS
+  fix: `update_frame` runs `update_frame_impl` and then `font_shaper.end_frame()` on every exit
+  (`generic.zig:1271-1274`). HarfBuzz's `end_frame` is a no-op, so the behaviour cannot change, but the
+  edit was written on macOS: `cargo check --target aarch64-unknown-linux-gnu -p rustty-renderer` stops
+  at cc-rs (no `aarch64-linux-gnu-g++` here) and rvm is down. The site's PORT NOTE says so.
+- **fix**: run `cargo build --workspace --features gtk,x11,wayland` and `cargo test -p rustty-renderer`
+  on rvm.
+- **state**: OPEN — fix written, Linux run pending.
+
+## N182 — `expectApproxEqual`'s `expectEqual` fallback arms printed nothing in the port
+
+- **id**: N182. Not in the inventory. Found by review T-I (F8), 2026-09-23; outside LEDGER S80-F2's
+  anchors (`comparison.zig:113,128,137-139,192-199`).
+- **severity**: low. **kind**: missing diagnostic (test-support text).
+- **what**: the reference's `.optional`, tagged-`.@"union"` and `else` arms call
+  `testing.expectEqual`, which prints `expected {any}, found {any}` on a mismatch. The port's `i32`,
+  `u32` and `Option` impls (and the test-local union) returned the error silently. MEASURED with the
+  pinned `comparison.zig` under zig 0.16.0: `expected 1, found 2`, `expected 7, found 9`,
+  `expected null, found 1.5`, `expected 3, found null`, `expected .a, found .b`.
+- **fix**: `crates/rustty-datastruct/src/comparison.rs` `expect_equal_mismatch` prints that line through
+  `print`, used by the `i32`/`u32`/`Option` impls and the test union; `FmtAny` gains `Option` (`null`).
+  Test `comparison::tests::expectApproxEqual_expect_equal_fallbacks_print_std_diagnostics` asserts the
+  five measured lines; negative control (`expect_equal_mismatch` not printing) fails on the first,
+  `["expected 1, found 2\n"]` vs `[]`.
+- **state**: CLOSED (T-I2).
 
 ## N190 — with port-only emissions subtracted, 11 more reference files showed a deficit their surplus had hidden
 
@@ -3320,6 +4019,50 @@ deleting the :51 line turns it RED (`reference=8 port=7`). Linux verification: s
 
 **state**: CLOSED by task tail-s1b.
 
+## N196 — tests passed without testing anything when their environment was missing
+
+- **id**: N196. Not in the inventory. Found by the tail-s3 task (silent-skip audit), 2026-09-23.
+- **severity**: medium (test evidence, not product behaviour). **kind**: gate / test-honesty.
+- **what**: a Rust test that returns early reports `ok`. 185 sites across the workspace did exactly
+  that when something they needed was missing, measured by the new G-SKIP lint run against the
+  pre-fix tree (145 early returns, 22 bodies that are all `#[cfg]`-gated, 17 unpivoted "skipping"
+  lines in test helpers, 1 test whose every assertion sat in one else-less `if`). The resource-
+  dependent ones: `crates/rustty-apprt-c/tests/macos_window_host.rs` (every hosted-surface KAT,
+  `let Some(host) = HostedSurface::spawn() else { return; }`, not covered by `RUSTTY_REQUIRE_METAL`),
+  `crates-sys/dcimgui-sys/tests/metal_offscreen.rs`, the CoreText/HarfBuzz shaping tests (system
+  fonts), the renderer display-link test, the GTK `gtk_perform_action` KATs (`#[ignore]`d yet silent
+  when run), the two GHOSTTY_ORACLE corpus tests, the LZ4 and UD131 opt-in tests, and a
+  `posix_openpt` skip in rustty-vaxis. The rest were ports of `if (comptime …) return
+  error.SkipZigTest;` (kitty-graphics, glyph-protocol, oniguruma/tmux, wuffs, target OS) written as
+  runtime returns, so a build without the feature reported them passed — MEASURED: in a default
+  `cargo test -p rustty-vt`, `dcs::tests::tmux_enter_and_implicit_exit` and both
+  `image_load_png_*` Wuffs tests used to pass having run nothing; they now report `ignored`, and
+  pass with `--features oniguruma,wuffs`.
+- **fix**: PORT_RULES R14 (compile-time scope -> `cfg_attr(.., ignore)`; runtime resource ->
+  `require_<x>_or_skip` pivot under `RUSTTY_REQUIRE_<X>=1`, or `#[ignore]` + a loud failure; dead
+  skips deleted), applied to every site; G-SKIP (`.port/tools/gates/check_silent_skips.py`, HARD
+  with `--self-test`) keeps the class out. New variables: `RUSTTY_REQUIRE_SYSTEM_FONTS` (set on the
+  macOS CI leg) and `RUSTTY_REQUIRE_DISPLAY` (not set in CI: runner display UNVERIFIED).
+- **state**: CLOSED (tail-s3).
+
+## N197 — CI's distcheck runs the extracted tarball's tests with `RUSTTY_REQUIRE_FUZZ_CORPUS=1` inherited
+
+- **id**: N197. Not in the inventory. Found by the tail-s3 task while deciding whether `.git`-probing
+  xtask tests could take a strict variable. UNVERIFIED: distcheck was not run.
+- **severity**: medium (a CI lane expected to go red). **kind**: CI wiring.
+- **what**: `.github/workflows/ci.yml` exports `RUSTTY_REQUIRE_FUZZ_CORPUS=1` into `$GITHUB_ENV` for
+  the whole `test` job, and sets `RUSTTY_DISTCHECK=1` on the Ubuntu leg. `xtask distcheck`
+  (`xtask/src/dist.rs:361-371`) runs `cargo test --workspace` inside the extracted source tarball
+  with the parent environment inherited (only `CARGO_HOME` is overridden). The tarball omits `.port/`
+  (`.gitattributes:103`, `.port export-ignore`), so the five corpus replays in
+  `crates/rustty-vt/tests/fuzz_corpus_replay.rs` find no corpus and, with the variable inherited,
+  panic instead of skipping. By reading, the Ubuntu leg's G-DIST distcheck arm should therefore fail.
+- **proposed fix** (NOT applied; out of this task's scope): have distcheck clear the repo-only strict
+  variables for the tarball run (`.env_remove("RUSTTY_REQUIRE_FUZZ_CORPUS")`), since a tarball
+  legitimately lacks the corpus. The same reason is why the `.git`-probing xtask tests were
+  allow-listed in G-SKIP rather than given a strict variable.
+- **state**: CLOSED by task T-B (commit `fab80ad0`, merged via `tail-b2`): the distcheck cargo steps drop `RUSTTY_REQUIRE_FUZZ_CORPUS`, pinned by a test whose negative control (removal line deleted) fails for the stated reason; confirmed by the T-B and T-B2 reviews.
+
 ## N203 — the GTK surface warned on source-removal and clipboard failures the reference discards
 
 - **id**: N203. Not in the inventory.
@@ -3379,3 +4122,927 @@ fails. The stat-failure arm itself is not driven (an `fstat` of a just-opened de
 demand): UNVERIFIED by test, present by reading and by G-LOGFILE.
 
 **state**: CLOSED by task tail-s1b.
+
+## N206 — the URL port and the vaxis CSI parameters use Rust's number parser, not Zig's `std.fmt`
+
+- **id**: N206. Not in the inventory. Found by the review of tail-s9 (the Zig number-parser
+  consolidation), which measured both with Zig 0.16.0.
+- **severity**: low. **kind**: behavioral-difference.
+- **oracle**: Zig 0.16.0 `std/Uri.zig` (`parseInt(u16, …, 10)` for the port) as used by Ghostty's OSC 7
+  handling; libvaxis 0.6.0 `src/Parser.zig` (`parseUnsigned` / `parseInt` for CSI parameters).
+- **rustty**: `crates/rustty-os/src/uri.rs` `parse_int_u16` / `parse_int_u8_hex` and
+  `crates/rustty-vaxis/src/parser.rs` `parse_unsigned` use Rust's `str::parse` / `from_str_radix`, which
+  reject the `_` separators, the leading `+` and the `-0` that Zig accepts: `file://host:8_0/x` is port 80
+  in the reference and an InvalidPort in the port.
+- **fix**: route both through `rustty_zigstd::fmt` (rustty-os already depends on it). Whether `%-0`
+  decoding to NUL in `std.Uri` should be reproduced is a separate R13 question.
+- **verification** (task tail-s9b, MEASURED): a Zig 0.16.0 probe built against the pinned libvaxis
+  0.6.0 (`vaxis-0.6.0-BWNV_CrbCQCscGpzsAlR402rYQ_tV3aAl081c2iRRkka`) and `std.Uri`, and a Rust
+  harness over the port's public API, ran the same 1940 inputs (every 1-3 byte string over
+  `0 1 5 9 a f F _ + - space 0xFF`, plus overflow edges, `8_0`, `+80`, `-0`, prefixes) through 19
+  shapes: `parseInt(u16, .., 10)` and `parseInt(u8, .., 16)`, the port of `file://host:<s>/x`, the
+  decode of `/a%<s>b`, and the vaxis parser on OSC 4 / OSC 10-12 numbers, an OSC 4 channel, the
+  XTWINOPS size, kitty keys (codepoint, modifiers, alternates), CSI `~`, CSI modifiers, DECRPM, DSR
+  and SGR mouse (36,860 results, plus 31 exact sequences, 38,831 in all).
+  - **URL half: refuted as stated.** At the base (ff351484) `uri.rs` no longer used `str::parse`:
+    task T-G (37d69654, S112-F9) had already given it a hand-written copy of Zig's `parseInt`. The
+    base port matched Zig on all 3880 URL results (0 mismatches). What remained was a fourth copy of
+    the parser, now deleted: `parse_int_u16` / `parse_int_u8_hex` call `rustty_zigstd::fmt::parse_int`,
+    and its `parseInt` table test is dropped as the twin of `rustty_zigstd::fmt::tests::test_parse_int`.
+  - **vaxis half: confirmed.** 263 mismatches at the base: `_` refused in the OSC numbers
+    (`ESC ] 4 ; 1_0 ; ..` is index 10 in the reference); `+N` / `-0` refused in every `parseParam`
+    CSI number, which libvaxis 0.6.0 reads with `parseInt` (0.5.1, which the crate otherwise follows,
+    used `parseUnsigned`). In a CSI a `_` is a final byte, so `_` reaches only the OSC numbers, and the
+    `parseUnsigned` CSI sites refuse a sign in both. Fixed: `parser.rs` `parse_unsigned` /
+    `parse_param` and `cell.rs` `parse_unsigned_u8` call `rustty_zigstd::fmt`
+    (`parse_unsigned_type` / `parse_int_type` / `parse_unsigned::<u8>`), and rustty-vaxis gains a
+    `rustty-zigstd` edge (`check_acyclic.sh`, `cargo_cycle_check.py` GREEN).
+  - **After the fix: 152 mismatches, all explained.** 116 are the R13 fix below (every input the
+    reference decodes through a sign). 36 are SGR mouse coordinates: libvaxis 0.6.0 reads them as
+    `i16` into an `i16` `Mouse.col`/`row` (so `0` is column -1, `-5` column -6, `40000` refused),
+    while the port keeps 0.5.1's `u16`. That type change is part of the deferred vaxis bump
+    (`.port/phase-3/NON_PORTS.md` §G2, which names `Mouse.zig` `u16 -> i16`), noted at `parse_param`.
+    No other result differs.
+- **R13 decisions**:
+  - `%-0` / `%+X` in `std.Uri` percent decoding: **fixed (UD230)**. RFC 3986 escapes are two hex
+    digits, and the decoder's own `catch continue` keeps every other malformed escape as written; the
+    sign is an accident of reusing `parseInt`, and it puts a NUL or a control byte into an OSC 7 pwd
+    the sender never wrote. Listed in `docs/ghostty-bug-fixes.md`. (RFC 3986 also rules out `+80` as
+    a port, so the RFC alone does not separate the two cases: the reason is that decoding a sign
+    invents bytes and corrupts the data, while a lenient port parse yields the number the sender
+    meant.)
+  - `_`, `+` and `-0` in the URI port number: **faithful**. It is std's grammar, Ghostty has no port
+    grammar of its own, and Ghostty never reads the port except in the MAC-address repair of
+    `os/uri.zig` `parse`, whose outcome does not change (`12:34:56:78:90:+9` fails
+    `isValidMacAddress` whether or not the port parses).
+  - `_`, `+` and `-0` in the vaxis numbers: **faithful**. libvaxis has no parser of its own that
+    refuses them, so there is no UD141-style in-reference evidence; the peer is the terminal.
+- **tests** (fail first, negative controls one at a time, task tail-s9b): rustty-os
+  `percent_escapes_decode_only_two_hex_digits` (replaces `percent_escapes_follow_zig_parse_int`) and
+  `osc7_path_keeps_a_signed_escape` (control: hex check disabled, NUL where `%-0` expected);
+  `port_numbers_follow_zig_parse_int` (unchanged; control: `str::parse`, `Err(InvalidPort)` for
+  `8_0`). rustty-vaxis `osc_numbers_take_zig_digit_separators` (control: `_` refused, `None` where
+  index 10 expected), `csi_params_take_zig_parse_int_signs` (control: `parseUnsigned`, `None` for
+  `ESC [ +97 u`), `csi_unsigned_numbers_refuse_a_sign` and `rgb_from_spec_channels_are_zig_parse_unsigned`
+  (both passed at the base; controls: `parseInt` at those sites, the sign accepted).
+- **state**: CLOSED (task tail-s9b).
+
+## N207 — `+terminal-stream` on an OSC 8-heavy corpus is about 3.3x slower than the oracle
+
+- **id**: N207. Found by task tail-s2 (S-2b) while measuring the N82 fix. Not in the inventory.
+- **severity**: medium (performance). **kind**: perf gap; not a fidelity defect.
+- **corpus**: 16 MiB (16777216 B), generated once to a file and truncated (never piped into the
+  bench), like the ws10 corpora. The generator (`gen_osc8.py`, task tail-s2 scratch, reproduced in the
+  task tail-s2 report) follows the reference generator's `hyperlink_start` / `hyperlink_end` grammar
+  (`src/synthetic/Osc.zig`) in the `--style=streaming` framing: `ESC ] 8;` + `id=<alnum 0-16>` half
+  the time + `;https://localhost` + 2-5 `/<alnum 0-16>` segments + `ESC \`, then 1-8 printable
+  alphanumerics, then `ESC ] 8;; ESC \`, and `\r\n` after 10% of links. Python `random.Random(82)`.
+- **method**: `ws10_suite.measure` (one warmup, then n timed runs, stdout/stderr discarded), `+terminal-stream
+  --data=osc8.bin`, the pinned oracle `.port/phase-0/baseline/bench-releasefast/bin/ghostty-bench`
+  against `target/release-fast/rustty-bench`, alternating which goes first each round.
+- **measured** (PROVISIONAL: 1-minute load 17-25 on every run; other agents were building): oracle median
+  110-132 ms; rustty 368-444 ms, i.e. +215% to +303% over five runs (4 rounds x n=9, or 2 x n=5), both
+  before and after N82's fix. The hash is not the cause (N82's change moved rustty by -17% to +7%).
+  The page grows its hyperlink and string capacity repeatedly on this corpus (`info(page_list):
+  adjusting page capacity` lines on stderr); whether that path, the logging, or something else is the
+  cost is UNVERIFIED.
+- **not done**: no fix attempted; the perf batch owns it. Re-measure at load below `IDLE_MAX` first.
+- **resolution** (task S-4, MEASURED; measured on the merge of `tail-s2`, so with N82's Wyhash hash):
+  the gap is the retired oracle, not the port. Against Ghostty's bench built at the pin (N173's
+  rebuilt oracle), on the same `osc8.bin` (the file itself, copied from the tail-s2
+  scratch): PROVISIONAL (load 17-19, above `IDLE_MAX` 2.0) wall, interleaved N=15: pin oracle 357.1 ms,
+  rustty 356.8 ms (paired ratio 1.002), retired `4749c4e93` oracle 109.4 ms; CPU time: pin oracle 357.7,
+  rustty 358.3 ms (paired 0.992). Deterministic: instructions retired rustty 5,029M vs pin oracle 5,240M
+  (0.965). Both log the same diagnostics: 126,363
+  `start_hyperlink err=OutOfSpace` warnings and 1,004 `adjusting page capacity` lines each (the page
+  reaches the 65,535-byte hyperlink ceiling and the reference drops further links there too), so both
+  do the same work; Ghostty itself became about 3.3x slower on this corpus between `4749c4e93` and the
+  pin. Why (measured by review S-4): the retired binary writes 0 diagnostic lines on this corpus (its
+  bench never ran `global.init`, so logging was never enabled), the pin's writes 127,375, because
+  `benchmark/cli.zig:55` now runs `global.init(.{ .tool = ... })`, which turns on the stderr and macOS
+  unified-log sinks, and `main_ghostty.zig`'s `logFn` creates an `os_log` logger per message. Controller
+  ruling: the warning per dropped hyperlink is the reference's intended behaviour (a diagnostic at a
+  designed capacity ceiling), not an R13 defect, and the port does not diverge. An xctrace profile of rustty puts 32% of samples in writing those warnings and 29% in
+  `increase_capacity` (the reference was not profiled). Re-measured at the end of task S-4
+  (PROVISIONAL, N=21, CPU, load 21-25): rustty 356.3 ms, pin oracle 365.4 ms (paired 0.98).
+- **state**: CLOSED (task S-4; not a port gap).
+
+## N208 — `Offset(T).Slice` field order differs from the reference on 64-bit targets
+
+- **id**: N208. Found by task tail-s2 (S-2b) while probing the hyperlink tag byte. Not in the inventory.
+- **severity**: low. **kind**: R1 fidelity candidate (page-mapping bytes; no behaviour shown to differ).
+- **oracle**: `src/terminal/size.zig` `Offset(T).Slice = struct { offset: Offset(T), len: usize }` is a
+  Zig auto-layout struct. MEASURED with Zig 0.16.0 at `20abdb50a`: on aarch64-macos it is 16 bytes with
+  `len` at 0 and `offset` at 8 (Zig puts the 8-aligned field first); on wasm32-wasi it is 8 bytes with
+  `offset` at 0 and `len` at 4.
+- **rustty**: `crates/rustty-render-types/src/term_size.rs` `OffsetSlice<T>` is `#[repr(C)]` in the
+  declared order: `offset` at 0, `_padding` at 4, `len` at 8 on 64-bit. So every slice stored in a page
+  mapping (a hyperlink's `.explicit` id and `uri`, grapheme-map values) has its two words swapped
+  relative to the reference on 64-bit. wasm32 matches.
+- **interaction**: the hyperlink `.implicit` `u32` sits at bytes 0-4 in both (the reference's union
+  starts every field at byte 0), which in the reference overlaps the low bytes of `len`. A fix that
+  reorders `OffsetSlice` must keep `PageEntryId::Implicit` writing bytes 0-4 (today it writes them
+  through `payload.offset`).
+- **not done**: `OffsetSlice` is shared across areas (render-types, grapheme map, hyperlinks); out of
+  task tail-s2's scope.
+- **review (S-2)**: confirmed with an independent mock: `len` @0 / `offset` @8 on aarch64-macos (Debug,
+  ReleaseSafe, ReleaseFast) and x86_64-linux; `offset` @0 / `len` @4 on wasm32-wasi. A fix would also
+  have to rework `PageEntryId` and audit every other auto-layout struct in page memory.
+- **ruling** (controller, 2026-09-23): WAIVED as not observable. The field order of a non-`extern` Zig
+  struct is unspecified by the language and differs per target; the raw page bytes are never persisted
+  or compared with the oracle's; size, alignment and stride parity are already enforced (N88, R13-L).
+  By contrast the union tag numbering fixed under N82 is language-defined (declaration order), so it
+  stays fixed. The PORT NOTE at `crates/rustty-render-types/src/term_size.rs` that claimed "the same 4
+  padding bytes" now gives the real positions. `ADJUDICATION.md#n208`.
+- **state**: WAIVED (task tail-s2, S-2c).
+
+## N215 — against the oracle rebuilt at the pin, `+terminal-stream` retired 27% more instructions than Ghostty
+
+- **id**: N215. Found by task S-4 while rebuilding the perf oracle at the pin (N173). Not in the
+  inventory.
+- **severity**: medium (performance; a STRICT Fence 1 config). **kind**: perf gap; not a fidelity defect.
+- **what**: on `ascii.bin` (the ws10 `terminal-stream/ascii` config) rustty retired 1,389.6M instructions
+  to the pin oracle's 1,097.4M, and was 7-15% slower in CPU time (paired, load 15-40). Two causes,
+  MEASURED with xctrace profiles and instruction counts:
+  1. the printable-run scans (`Stream::next_slice_capped` in `stream.rs`, the codepoint run scan in
+     `print_slice_fill`) built a per-lane bitmask on EVERY group of 8 codepoints. NEON has no movemask,
+     so LLVM emitted a scalar extract per lane (about 21 instructions per group against the
+     reference's 12). The reference tests the group with `@reduce` alone and builds the bitmask only
+     on the group that ends the run. Both scans now do the same, the reduction spelled as an unsigned
+     min/max so LLVM emits one vector op and an across-lanes reduce (a boolean-AND spelling still
+     lowered to a partly scalar sequence): 1,389.6M -> 1,254.9M -> 1,095.5M (intermediate builds;
+     the final candidate, with cause 2 fixed too, measured 1,095.7M, below).
+  2. the bench read the corpus through `DataFile`'s 256 KiB `BufReader`, which a 64 KiB request does not
+     bypass, so the whole corpus was memcpy'd once (about 3% of samples). The reference's
+     `TerminalStream` reads unbuffered (`f.reader(io, &.{})`); `DataFile::unbuffered` is that, and the
+     bench's PORT NOTE claiming the read was already unbuffered is corrected.
+- **fix**: commit `8c1a3e38`. Tests: `unbuffered_reads_the_file_directly` (control: return the
+  `BufReader` -> "read 1 went through the buffer"); the existing lane-boundary test
+  `stream_print_slice_batches_printable_runs` and the print-vs-`print_slice` differential fuzz
+  (controls: stream stop never detected -> "expected exactly two printable runs"; scan threshold widened
+  past 0xFF -> the differential's cursor mismatch).
+- **measured**: instructions (deterministic) 1,095.7M for the final candidate (pin oracle 1,097.4M).
+  PROVISIONAL (above `IDLE_MAX` 2.0): wall, interleaved N=31, load 13: 59.0 ms before, 51.8 ms after
+  (0.879), pin oracle 52.9 ms; CPU N=25, load 21-28: 49.9 ms vs pin oracle 53.7 ms (0.93). Every other
+  ws10 config: instructions within 1% of before (`screen-clone.noop` -1.8%). The authoritative idle ws10
+  run is still owed (task S-4 report).
+- **state**: CLOSED (task S-4).
+
+## N220 — the deferred uucode revision bump (`NON_PORTS.md` §G1): CI still pinned Zig 0.15.2, which cannot build the harness's uucode
+
+- **id**: N220. Not a ledger row: the deferral lived only in `.port/phase-3/NON_PORTS.md` §G1,
+  `.port/phase-2/DEFERRALS.md` ("Still open — summary") and `.port/phase-3/DEFERRAL_REAUDIT.md` row 13.
+  Discharged by task tail-s10a at the user's instruction to address every parity gap.
+- **severity**: medium (CI lane), none (data). **kind**: dependency-revision / CI-toolchain.
+- **oracle**: ghostty@20abdb50a `build.zig.zon` (uucode `2826a37a…`, hash `ZZjBPlK5…`),
+  `src/build/uucode_config.zig`, `src/build/UnicodeTables.zig`, `src/build/SharedDeps.zig:64-78`,
+  `src/unicode/{props_uucode,symbols_uucode,lut,props,grapheme}.zig`.
+- **what was found**: the harness (`.port/phase-0/harness/unicode/`) had already been moved to uucode
+  2826a37a, the pin's config and the `uucode.types` / `uucode.grapheme` API by `986d90c8`, but
+  `.github/workflows/ci.yml` still installed Zig 0.15.2 for the G4-uni job while the harness's
+  `build.zig.zon` requires 0.16.0. So on CI G4-uni could not build its oracle: RED without comparing
+  anything. §G1 still read DEFERRED.
+- **fix**: CI installs Zig 0.16.0 for that job. No other gate in that job depends on 0.15.2: every other
+  zig consumer (`check_lz4_byte_exact.sh`, `check_ref_item_geometry.py`, `stb-resize-oracle/run.sh`, …)
+  also needs the ghostty oracle checkout, absent on CI, and locally they already run on 0.16.0. The
+  harness's stale version text (the BLOCKED message said "install zig 0.15.2") and the provenance
+  headers of the three generated tables, `lib.rs` and `props.rs` (`uucode.x.types` ->
+  `uucode.types`) now name the revision.
+- **table differential** (the recipe's step 3), all against uucode 2826a37a + the pin's config:
+  - the pin's own `props-unigen` / `symbols-unigen`, built as `UnicodeTables.zig` builds them and run:
+    `props_data.rs` STAGE1/2/3 (8192 / 31744 / 30) and `symbols_data.rs` (8192 / 1792 / 2) are identical
+    element for element. Negative controls: one flipped STAGE3 field / one flipped STAGE2 entry in a copy
+    each reported exactly 1 difference.
+  - G4-uni (`run_unicode_diff.sh`) under Zig 0.16.0: 0 diffs for width, is_symbol, props flags and
+    grapheme_break_no_control over 0..=0x10FFFF and the 8192 grapheme precompute entries
+    (`uucode.grapheme.computeGraphemeBreakNoControl`).
+  - `case_folding_full` (1585 code points, `rustty-unicode` `case_folding_data.rs`) and
+    `is_emoji_presentation` (1219, `rustty-font-shaper` `uucode.rs`), dumped from the live uucode over
+    the full range: 0 differences each (negative controls: a dropped and an altered entry each
+    reported).
+  - Codepoints changed, per class: **none**. The UCD inputs are byte-identical between the two
+    revisions (`diff -rq ucd/`: only a new `BidiMirroring.txt` and `.gitignore`), and the restructured
+    derivations (`x/config_x/wcwidth.zig` -> `components.zig`, `x/grapheme.zig` -> `grapheme.zig`)
+    produce the same values. `ascii.zig`, `utf8.zig`, `code_point.zig` are byte-identical; `BreakState`
+    and `GraphemeBreakNoControl` keep their order. `checksum.rs` is unchanged because the arrays are.
+- **perf**: the `release-fast` `rustty-bench` binary is byte-identical before and after (sha256
+  `ea2e5b2b…`; only comments changed). Paired interleaved sweep anyway (N=9, utf8 corpus, `LC_ALL=C`,
+  load average ~20–22 on a shared host): codepoint-width.table −1.1%, .simd −0.0%, grapheme-break.table
+  −1.8%, is-symbol.table +0.1%, all within noise.
+- **not settled here**: `rustty-vaxis`'s vendored uucode 0.1.0 subset (UCD 16.0.0). At the pin
+  libvaxis 0.6.0 imports Ghostty's uucode 2826a37a through `external_uucode` (the `libvaxis_only`
+  table: `east_asian_width`, `general_category`, `grapheme_break`, plus `runtime`'s
+  `is_emoji_presentation`), so moving it belongs to §G2 (vaxis 0.5.1 -> 0.6.0), task S-10b.
+- **state**: CLOSED (task tail-s10a).
+
+## N240 — the deferred `vaxis` 0.5.1 -> 0.6.0 and `zf` 0.10.3 -> 0.11.0 bumps (`NON_PORTS.md` §G2), with vaxis's uucode 0.1.0 -> 2826a37a
+
+- **id**: N240. Not a ledger row: the deferral lived in `.port/phase-3/NON_PORTS.md` §G2,
+  `.port/phase-2/DEFERRALS.md` ("Still open — summary", and the Chunk 1b uucode entry) and
+  `.port/phase-3/DEFERRAL_REAUDIT.md`. Discharged by task tail-s10b at the user's instruction to address
+  every parity gap.
+- **severity**: medium (behaviour of the CLI TUIs; four reachable crashes found). **kind**:
+  dependency-revision.
+- **oracle**: ghostty@20abdb50a `build.zig.zon` (vaxis `vaxis-0.6.0-BWNV_CrbCQCsc…`, zf
+  `zf-0.11.0-OIRy8X-RAAA…`, uucode `2826a37a` `ZZjBPlK5…`; the three cached tarballs re-hashed with
+  `zig fetch` to exactly these), `src/build/SharedDeps.zig:24-78, 512-519` (vaxis built with
+  `external_uucode = true` over the singleton uucode module and `src/build/uucode_config.zig`),
+  `src/cli/{list_themes,list_colors,list_keybinds,boo}.zig`.
+- **what was ported** (per file, 0.5.1 -> 0.6.0; `std.Io` / allocator / `std.ArrayList` churn noted but
+  not reproduced, as the port has no `std.Io`):
+  - `uucode` (vendored subset in `rustty-vaxis/src/uucode/`): 2826a37a's `grapheme.zig` (20-variant
+    `GraphemeBreak` with `emoji_modifier_base` / `emoji_modifier`, the UTS #51 modifier tailoring in
+    `computeGraphemeBreak`, the 2000-entry precompute, `nextCodePoint` / `.code_point`,
+    `peekCodePoint`, `nextGrapheme` / `peekGrapheme`, `utf8Iterator`), `types.zig`, `utf8.zig` tests;
+    `build.rs` follows `components.zig` (`EmojiData`, `GraphemeBreakDerived`, `" \t\r"` trims) over the
+    vendored UCD 17.0.0 (the same tarball as G4-uni; `ucd/PROVENANCE.md` re-digested).
+  - `gwidth.zig`, `unicode.zig`, `Parser.zig` (the uucode rename; `CSI Z` is shift+tab; SGR mouse
+    coordinates are `parseParam(i16, ..)`, closing the 36 mouse results N206 left open), `Mouse.zig`
+    (`col`/`row` `i16`), `ctlseqs.zig` (the three multi-cursor sequences), `Screen.zig` (`Cursor`,
+    `cursor_secondary`), `InternalScreen.zig` (cursor fields removed; bounds `<=`; its new test),
+    `Window.zig`, `Vaxis.zig` (the render writes nothing when nothing changed, `startRender`,
+    multi-cursor output and `setTerminalCursorSecondaryColor` / `resetAllTerminalSecondaryCursors` /
+    `addTerminalSecondaryCursor`, `translateMouse` over `i16`, `queryTerminal(Duration)`,
+    `transmitImage` over a copy of a `*const` image, the env map; its new test), `Key.zig`
+    (`matchText` on empty text), `queue.zig` (`tryPush` / `tryPop` under one lock, `popAndSignalLH` /
+    `pushAndSignalLH`, `drain` signals `not_full`), `Loop.zig` (`init` is the constructor,
+    `installResizeHandler`, `tty.getWinsize()`), `tty.zig` (the SIGWINCH action installed once,
+    `getWinsize` methods, Windows AltGr, `0xDF` and `i16` mouse), `widgets/TextInput.zig` (the
+    readline word motions, Ctrl+W `deleteWordBeforeWhitespace`, 13 new tests), `vxfw/vxfw.zig` (`Tick`
+    on the monotonic clock, `copyToClipboard` / `setTitle` copy), `vxfw/App.zig` (`init(buffer)`,
+    frame pacing on the monotonic clock, `resetEventState` around timer ticks, its new test),
+    `vxfw/Text.zig`. Unchanged apart from anonymous `refAllDecls` tests: `Cell`, `event`,
+    `GraphemeCache`, `Image`, `widgets.zig`, `vxfw/Center.zig`.
+  - `zf` (`filter.zig`, `zf.zig`, `clib.zig`): `token` -> `needle`, `rankToken` / `highlightToken` ->
+    `rankNeedle` / `highlightNeedle` (Zig and C exports), `RankOptions.to_lower = true` ->
+    `case_sensitive = true` (the default FLIPS to case-sensitive), `indexOfInsensitive` lowers the needle
+    too, `highlight` sorts and deduplicates for several needles (`deduplicateMatches` and its test).
+- **the zf polarity decision**: ghostty@20abdb50a `list_themes.zig:377-386` passes
+  `.case_sensitive = false, .plain = true` explicitly (with a NOTE that it replaces `.to_lower = true`);
+  `rustty-cli` passes exactly that. Its tokens are lowercased before ranking, so the new needle
+  lowering cannot change a result there. MEASURED: 470 names (Ghostty.app's 463 themes + 7 path-like
+  strings) x 1521 queries, four columns (ghostty's call, the default options, insensitive raw
+  needles, `highlight`): 714,870 rows bit-identical to a Zig 0.16.0 build of zf 0.11.0. Negative
+  controls: `case_sensitive: true` at the call site fails `rank_filtered_inclusion` /
+  `rank_filtered_ordering`; the default flipped back fails `rank_library_interface` and
+  `rank_options_default_is_case_sensitive`; the needle not lowered fails the latter.
+- **uucode differential** (vaxis's four fields, the S-10a recipe): a Zig 0.16.0 probe against uucode
+  2826a37a with ghostty's `uucode_config.zig`, wired as `SharedDeps.zig` wires it, dumped
+  `east_asian_width`, `general_category`, `grapheme_break`, `is_emoji_presentation` for
+  0..=0x10FFFF: **0 differences** from `rustty_vaxis::uucode::get` (negative control: one flipped byte,
+  1 difference). Against the 0.1.0 / UCD 16.0.0 tables the move changed 157 `east_asian_width`, 4804
+  `general_category`, 1556 `grapheme_break` (689 extended_pictographic -> other, 671 other -> InCB
+  consonant, 134 extended_pictographic -> emoji_modifier_base, 39 other -> InCB extend, 14 InCB extend
+  -> linker, 5 InCB extend -> emoji_modifier, 3 other -> spacing_mark, 1 prepend -> other) and 7
+  `is_emoji_presentation` values; each is the oracle's. `GraphemeBreakTest-17.0.0.txt`: 766 cases, all
+  pass with the modifier tailoring.
+- **gwidth / grapheme differential**: vaxis `gwidth` (`.unicode`, `.wcwidth`, `.no_zwj`) and
+  `unicode.graphemeIterator` over 1,334,878 inputs (every code point alone, surrogates as WTF-8, the 766
+  test sequences, 200,000 random sequences over emoji / modifier / ZWJ / flag / Hangul / Indic /
+  control code points, 20,000 random byte strings): identical to the Zig oracle except 36 inputs on which
+  the reference traps and 35 on which its grapheme ranges overlap, all UD260. (A ReleaseSafe build of
+  the probe trapped at `utf8.zig:35` on the single-code-point section where the Debug build did not;
+  the Debug build was used as the oracle. The S-10b review did NOT reproduce it: its own ReleaseSafe
+  probe ran libvaxis 0.6.0 `gwidth` over every code point alone with all three methods, with no trap
+  and 0 differences from the port; and the cast at `utf8.zig:35`, `@intCast(utf8d[byte])` into
+  `IntFittingRange(0, 11)`, cannot fail because every table entry is at most 11. Treated as an artifact
+  of the S-10b probe, not a reference defect.)
+- **parser / render differentials**: 4,204 SGR / X10 mouse and `CSI Z` sequences (every 1-3 byte
+  string over `0 1 5 9 a f F _ + - SP 0xFF` in each coordinate, `i16` edges, X10 bytes): parsed events
+  identical to libvaxis 0.6.0. Eleven render steps (cell, cursor, secondary cursor, hide, reset):
+  byte-identical to a libvaxis 0.6.0 built with the UD261 fix; the unpatched reference differs exactly
+  at the four UD261 steps. libvaxis 0.6.0's own test suite, built against ghostty's uucode: 151 of 152
+  pass (the failure is the cwd-dependent `vxfw` doctest).
+- **reference defects found** (R13, all fixed with tests and negative controls): UD260 (gwidth /
+  grapheme start on invalid UTF-8; since 0.5.1), UD261 (inverted secondary-cursor comparison), UD262
+  (`translateMouse` `@intCast`), UD263 (vxfw `@intCast` of a negative mouse position), UD264
+  (TextInput word motions reach `unreachable` in `std.unicode.utf8Decode`), UD265 (`trimEnd` for
+  `trimLeft` in `Text` soft wrap), UD266 (`+list-themes` stopped installing the resize handler in the
+  Zig 0.16 migration). All in `docs/ghostty-bug-fixes.md`. Recorded faithfully: UD267 (`kind: latent`,
+  the queue's edge-only signalling can leave a second blocked producer or consumer waiting; found by
+  the S-10b review).
+- **review follow-up (task tail-s10c)**: UD261's fix is gated on `caps.multi_cursor` (without it, a
+  secondary cursor added on a terminal lacking the capability made every render repaint; test
+  `secondary_cursor_without_multi_cursor_does_not_repaint` + negative control); UD263's reachability
+  is restated (vxfw turns pixel reporting off, so a coordinate of 0 or below comes from a non-conforming
+  terminal or injected bytes, not an ordinary drag); `check_test_counts.py`'s vaxis row now also covers
+  `Vaxis.zig` and `vxfw/{vxfw,App,Text,Center}.zig` (zig 105, one allowance for the vxfw doctest source
+  scan), with `--self-test` arms binding the row and the per-row verdict (each negative-controlled).
+- **not settled here**: libvaxis 0.6.0 also moved zigimg `d7b7ab0b` -> `d695acd9`; the older tarball is
+  not in the local cache, so that delta was not diffed. It reaches only vaxis's image tier
+  (`transmitImage` / `loadImage`), which no Ghostty code calls. What WAS checked (S-10b review F4): the
+  two conversions libvaxis 0.6.0 reaches (`Vaxis.zig:1066-1070`, `convertNoFree` to `.rgb24` /
+  `.rgba32`) in `d695acd9` (`PixelFormatConverter.zig:532, 561, 772-778`; `color.zig:19-75, 478-505`:
+  `rgbToRgba` copies the colour, `rgbaToRgb` premultiplies alpha in f32 with `@round` and clamp) are the
+  formulas `crates/rustty-zigimg/src/convert.rs` implements; `convertNoFree` differs from `convert` only
+  in not freeing the old pixels, which is irrelevant to the port's owned `Vec`; and the decode / PNG
+  encode paths are re-homed onto Ghostty's codecs by design, so a zigimg delta there cannot reach the
+  port. Only the `d7b7ab0b` side of the diff remains unread. The vxfw doctest test (`All widgets have a
+  doctest`, a source scan) is not ported (it was not before either).
+- **state**: CLOSED (task tail-s10b).
+
+## N250 — the tmux viewer's pane captures ask tmux for `-C` and are decoded (R13 fix, UD12)
+
+- **id**: N250.
+- **found by**: task S-12 (controller ruling: UD12 is fixed under R13 as extended 2026-09-23).
+- **severity**: low. **kind**: extra-behavior (reference defect fixed, R13).
+- **oracle**: `src/terminal/tmux/viewer.zig:1317`, `:1331` (the `capture-pane -p -e` commands), `:1061`,
+  `:1102` (the replies written into the pane).
+- **rustty**: `crates/rustty-vt/src/tmux/viewer.rs:2209`, `:2232` (`-C` added), `:2438`
+  (`unescape_capture`), `:1791`, `:1887` (decode sites).
+
+The port's capture commands differ from the reference's by `-C`, and the port decodes tmux's `\ooo`
+and `\\` escapes before writing a capture. Without it, the first ESC of a coloured capture ends the
+control-mode DCS and the session. For the grid text the pane receives the same bytes `-e` alone
+produces; a hyperlink's URI and id, which tmux 3.4+ stores vis-encoded (`hyperlinks.c:148`, `:154`),
+are decoded back to the application's own bytes, where `-e` alone would give the pane the vis form
+(read from tmux's source; review F1). Reference
+defect: `UPSTREAM-DEFECTS.md` UD12; tests `coloured_pane_captures_keep_the_control_session_and_reach_the_pane`
+and `unescape_capture_inverts_tmux_capture_escaping`.
+
+**state**: CLOSED by task S-12.
+
+## N251 — a `list-panes` reply skips a pane whose captures are still queued (R13 fix, UD9)
+
+- **id**: N251.
+- **found by**: task S-12 (controller ruling: UD9's remaining history damage is fixed under R13 as
+  extended 2026-09-23).
+- **severity**: low. **kind**: extra-behavior (reference defect fixed, R13).
+- **oracle**: `src/terminal/tmux/viewer.zig:908-1037` (`receivedPaneState` applies every pane in the
+  reply), `:680-690` (a new pane's captures, then `pane_state`).
+- **rustty**: `crates/rustty-vt/src/tmux/viewer.rs:1519` (`received_pane_state`).
+
+The reference applies a `list-panes` reply to every pane it lists, including a pane added after the
+command was queued whose captures have not yet arrived; its scroll region and cursor then garble the
+history and visible captures written into it. The port skips such a pane; its own `list-panes`,
+queued after its captures, applies the state. Reference defect: `UPSTREAM-DEFECTS.md` UD9 (whose
+earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_queued_waits_for_its_own_reply`.
+
+**state**: CLOSED by task S-12.
+
+## N255 — libxev's FreeBSD loop-wakeup `@panic` stub is unreachable, not "reachable only through an explicit `Loop::wakeup()`"
+
+- **id**: N255. Not a ledger row: the item lived in `.port/phase-2/DEFERRALS.md` ("FreeBSD — the
+  platform's explicit ledger row", item 3). Settled by task tail-s13.
+- **severity**: low. **kind**: reachability correction (reference defect recorded, not fixed).
+- **oracle**: libxev `9ce8e8e6` (ghostty@20abdb50a `build.zig.zon:19-22`; the cached tarball
+  `libxev-0.0.0-86vtcwIRFADbH4hk-…`) `src/backend/kqueue.zig:965-968, 973-975, 1488-1510`,
+  `src/watcher/async.zig:10-30`, `src/dynamic.zig:34-39`; ghostty `src/global.zig:30`.
+- **rustty**: `crates/rustty-xev/src/kqueue.rs` (the FreeBSD `Wakeup`, `Loop::wakeup`,
+  `thread_perform`).
+- **description**: the W2D row said the stub "fires only on an explicit `Loop::wakeup()`" and that
+  an eventfd wakeup "must land upstream first, or be recorded here as an R1 divergence". At the pin
+  no caller can make that call: `Loop.wakeup` is not `pub`, its one call site in `kqueue.zig` is
+  Darwin-gated, `xev.Async` on FreeBSD is `AsyncEventFd` and never calls it, and Ghostty neither
+  names it nor creates an `xev.ThreadPool`. R13 applies only to a reachable defect, so the stub
+  stays faithful; it is recorded upstream as UD275 (`kind: latent`) with the eventfd fix the TODO
+  names. In the port `Loop::wakeup` is also private with no caller on any target.
+- **how found**: task tail-s13, grepping every `wakeup`/`notify` caller in the pinned libxev and in
+  ghostty `src/`.
+- **test**: `kqueue::tests::freebsd_wakeup_stub_is_the_reference_panic` (FreeBSD-only, type-checked
+  from macOS, not run; `VERIFICATION_DEBT.md` V23).
+- **state**: CLOSED (task tail-s13).
+
+## N256 — the FreeBSD row's ios/visionos item was stale, and the three pty stream tests ran where the reference skips them
+
+- **id**: N256. Not a ledger row: `.port/phase-2/DEFERRALS.md` FreeBSD row, item 4.
+- **severity**: low. **kind**: stale record + skip scope (R14).
+- **oracle**: libxev `src/backend/kqueue.zig:29-36` (`.ios, .macos, .visionos => true`, `.freebsd
+  => true`); `src/watcher/stream.zig:1145-1150, 1208-1213, 1272-1277` (`switch (builtin.os.tag) {
+  .linux, .macos => {}, else => return error.SkipZigTest }` in the three pty tests).
+- **rustty**: `crates/rustty-xev/src/lib.rs` (module gates), the module comments of `kqueue.rs`,
+  `async.rs`, `net.rs`, `process.rs`, `stream.rs`, `timer.rs`; `stream.rs` `pty_child_to_parent`,
+  `pty_parent_to_child`, `pty_queued_writes`.
+- **description**: item 4 said rustty gates the kqueue family `any(macos, freebsd)` only.
+  `318af0f6` (2026-08-26) had already widened every gate to `macos + ios + visionos + freebsd`; only
+  six module comments still said otherwise, and they are corrected. Checking the widened module
+  turned up one real gap: the three pty stream tests carried the reference's `.linux, .macos` skip
+  only as a comment claiming "this module is macOS-gated", so on FreeBSD and iOS they would have run
+  where the reference skips them. They now carry the scope as
+  `cfg_attr(all(not(miri), not(any(linux, macos))), ignore = "SkipZigTest: …(R14)")`, with the
+  reference's switch kept as a comment in each.
+- **verification**: `cargo check -p rustty-xev --tests` for `aarch64-apple-ios` and
+  `x86_64-unknown-freebsd` green; `visionos` has no rustup std and is unchecked.
+- **state**: CLOSED (task tail-s13).
+
+## N257 — `cli_smoke.rs`'s `version_plus` asserted nothing about the renderer and libxev lines on FreeBSD
+
+- **id**: N257. Not a ledger row: `.port/phase-2/DEFERRALS.md` FreeBSD row, item 6.
+- **severity**: low. **kind**: missing test arm.
+- **oracle**: `src/cli/version.zig:47-48`; `src/renderer/backend.zig:20-21` (non-Darwin native =>
+  `.opengl`); libxev `src/backend.zig:20,38` (FreeBSD's only candidate is kqueue) and
+  `src/dynamic.zig:39` (one candidate => the static `Api()`, whose `backend` is `.kqueue`).
+- **rustty**: `crates/rustty/tests/cli_smoke.rs` `version_plus`.
+- **description**: the test checked those two lines on macOS and Linux only. It now has a
+  `cfg(target_os = "freebsd")` arm asserting `renderer.generic.Renderer(renderer.OpenGL)` and
+  `libxev        : kqueue`, which is what `crates/rustty-cli/src/version.rs`
+  (`renderer_type_name`, `libxev_backend_tag`) produces from `rustty-build-config` and
+  `rustty_xev::backend()` on FreeBSD.
+- **verification**: `rustty` cannot be type-checked for FreeBSD from macOS (`rustty-os`'s build
+  script compiles `cbits/pty.c`, which needs the target's headers), so the new arm was
+  compile-checked by flipping its `cfg` to macOS for one `cargo check -p rustty --test cli_smoke`
+  (green), then restored. It runs on a FreeBSD host (`VERIFICATION_DEBT.md` V23).
+- **state**: CLOSED (task tail-s13).
+
+## N265 — the reference's `test "face metrics"` never checks anything: its backend guard is inverted
+
+- **id**: N265. Not a ledger row: found by G2 once the `font` crate key was graded with its
+  R4 relocation (task tail-s8c).
+- **severity**: low. **kind**: reference test-weakness (R13: stays faithful; needs a
+  `UPSTREAM-DEFECTS.md` entry, whose UD id the controller assigns — this batch had none).
+- **oracle**: `src/font/Collection.zig:1396-1523` at 20abdb50a. `:1397-1398`: "The web canvas
+  backend doesn't calculate face metrics, only cell metrics" followed by
+  `if (options.backend != .web_canvas) return error.SkipZigTest;`, so the test is skipped on
+  every backend except the one its comment excludes. On `web_canvas`, every expected-value
+  switch (`:1438-1502`) takes its `.web_canvas => unreachable` prong. The switches also have no
+  `freetype_windows` prong, so they would not compile if analyzed on that backend.
+- **rustty**: `crates/rustty-font-shaper/src/collection.rs` `face_metrics`. Before this task the
+  body was only comments, and the test had zero assertions. The body is now ported live. The skip
+  is kept as `cfg_attr(not(wasm32), ignore)`, because `options::BACKEND` is `WebCanvas` exactly on
+  wasm32 (R14 form 1).
+- **evidence**: run with `--ignored` on macOS (the `coretext` backend), the live body passes
+  against the reference's own coretext expected values, for both CozetteVector and Geist Mono.
+  Negative control: changing the narrow font's coretext `cell_width` from 7.3828125 to 7.5 makes
+  it fail at the `expect_approx_equal` assertion. The `fontconfig_freetype` values are
+  UNVERIFIED here, because no Linux run was made.
+- **proposed upstream fix**: `if (options.backend == .web_canvas) return error.SkipZigTest;`, plus a
+  `freetype_windows` prong or an `else` in the four switches.
+- **state**: RECORDED as `UPSTREAM-DEFECTS.md` UD276 (controller, 2026-09-24).
+
+## N266 — the font backend build option is folded to the per-OS default: the `coretext_freetype`, `coretext_harfbuzz`, `coretext_noshape` and `freetype` arms are not live
+
+- **id**: N266. Not a ledger row (task tail-s8c, residual of the `font` done-flip).
+- **severity**: medium. **kind**: R8 build-switch fold / R1 missing code paths.
+- **oracle** (20abdb50a): `src/build/Config.zig:191-195` (`-Dfont-backend`, which defaults to
+  `FontBackend.default(target)`); `src/font/main.zig:50`
+  (`.backend = ... build_config.font_backend`). `.github/workflows/test.yml:1383-1428`
+  (`build-macos-freetype`) builds AND tests `-Dfont-backend=coretext_freetype` on macOS, so
+  Ghostty at the pin can be built with a non-default backend on this platform. There are 53
+  `options.backend` / `font_backend` / `backend.has*` sites in 18 files: `font/{face,library,
+  shape,discovery,DeferredFace,Collection,CodepointResolver,main}.zig`,
+  `font/face/coretext.zig`, `font/shaper/{coretext,harfbuzz}.zig`, `apprt/embedded.zig`,
+  `cli/version.zig`, `crash/sentry.zig`, `global.zig`, and `build/{Config,SharedDeps}.zig`.
+- **rustty**: `crates/rustty-font-shaper/src/lib.rs` `options::BACKEND = Backend::default()` (a
+  `cfg(target_os)` decision with no override); `face/mod.rs:88-93`, `shape.rs:135-140` and
+  `discovery.rs:71-83` choose `Face`/`Shaper`/`Discover` by `target_os`. `deferred_face.rs`
+  records `loadCoreTextFreetype` as a comment only. There is no cargo feature that selects a
+  backend. The existing `freetype`/`harfbuzz`/`fontconfig` features gate link edges only.
+- **stale records**: `docs/parity-audit/src-font.md:15` ("`loadCoreTextFreetype` is
+  not-applicable") and `docs/superpowers/specs/2026-08-25-build-system-gap-audit.md:539-542` (it
+  re-classifies `-Dfont-backend` as "correctly absent" on the premise that `rustty-font` has no
+  FreeType/fontconfig/CoreText dependency, which is false for `rustty-font-shaper`) both rest
+  on the fold.
+- **what closing needs**: one mutually exclusive cargo feature per backend on
+  `rustty-font-shaper` (default = the per-OS default, so existing builds are unchanged), with
+  `options::BACKEND` derived from it. Every type alias and `cfg(target_os)` backend gate must be
+  re-keyed on that `BACKEND` (face, shaper, discovery, library, deferred-face arms, collection,
+  resolver, the coretext face's `hasHarfbuzz` shaper font, and the consumers in apprt/cli/crash/
+  global). `loadCoreTextFreetype` has to be ported live. A CI lane (or local run) must build and
+  test `coretext_freetype` on macOS, as the oracle does. This is a multi-crate port, not a
+  gate-tail item.
+- **state**: OPEN. `font` stays `PORT STATUS: in progress` until it closes.
+- **closed by** (task tail-s14, 2026-09-24): CLOSED.
+  - **option**: `-Dfont-backend` is `rustty-build-config`'s `font-backend-{freetype,
+    freetype-windows,fontconfig-freetype,coretext,coretext-freetype,coretext-harfbuzz,
+    coretext-noshape}` features (at most one — its build script refuses two; none = the
+    per-target `Backend.default`, so every existing build is unchanged). Its build script
+    publishes the resolved tag as `links` metadata; `rustty-font-shaper`'s build script turns it
+    into `rustty_font_backend="<tag>"` + `rustty_font_has_{freetype,coretext,fontconfig,
+    harfbuzz}` (`backend.zig`'s `has*`), and `options::BACKEND` is read from that cfg, with a
+    const assert that it equals `build_config::font_backend()`. `rustty` and `rustty-apprt-c`
+    forward the same features. A backend the port does not build on the target is refused by
+    name (N286).
+  - **sites made live**: `Face`, `FaceError`, `FreetypeLoadFlags`/`Options`, `Shaper` (+ a
+    `ShaperError` alias for callers), `Library`/`InitError`, `Discover` (+ `DISCOVER_IS_VOID` for
+    every `Discover == void` site in SharedGridSet, CodepointResolver (fallback and override —
+    actually applied in tail-s14b), list_fonts and show_face (tail-s14b), and
+    `DISCOVER_WARMUP` for App's `@hasDecl(Discover, "warmup")`), the `DeferredFace` payloads
+    (`ct`/`fc`/`win`/`wc` keyed on their own predicates; the `.freetype` no-payload arms),
+    `loadCoreTextFreetype`, `discoverCodepoint`'s `hasFreetype()` early return, the CoreText
+    face's `harfbuzz_shaper` arms (`hb_font` via `hb_coretext_font_create`, `setScale`,
+    `errdefer`/`deinit` destroy), the noop shaper as the `.coretext_noshape` `Shaper`, the apple-
+    emoji `isDarwin() and Discover != void` pair, `apprt/embedded.zig`'s quicklook `backend !=
+    .coretext => null`, `Surface.DerivedConfig`'s `FreetypeLoadFlags != void` arm (core and
+    `+show-face`), and every backend-keyed test gate. `+version`/sentry/global log read
+    `build_config.font_backend`, which now reflects the option. The renderer and core read the
+    same `links` metadata in their build scripts for their few type-level uses.
+  - **evidence (macOS, 2026-09-24)**: the G-FONTBACKEND lane (`check_font_backends.sh`, HARD in
+    ci.sh — the reference's `build-macos-freetype` job) is GREEN: arm 0 (a default build against
+    `RUSTTY_EXPECT_FONT_BACKEND=coretext_freetype` is RED for the stated reason); font / font-
+    shaper / renderer lib+integration tests pass under `coretext_freetype` 88 / 135 (+6 ignored) /
+    117+3, `coretext_harfbuzz` 88 / 130 (+8) / 117+3, `coretext_noshape` 88 / 102 (+7) / 117+3,
+    `freetype` 88 / 115 (+7) / 117+3 (default `coretext`: 88 / 136 (+4) / 118+3); the workspace
+    builds under `coretext_freetype`. `cargo clippy --workspace --all-targets -D warnings` is clean
+    for all five macOS backends. core + cli + apprt-c tests pass under `coretext_freetype`. The
+    built `rustty` binary reports `font engine : .coretext_freetype` and `+list-fonts` / `+show-
+    face` work. New tests: `backend_selection_tests::selectors_follow_options_backend` (restates
+    each `switch (options.backend)` against the resolved alias types), three
+    `load_coretext_freetype_*` tests + UD280's, and two `coretext_harfbuzz` `hb_font` tests;
+    negative controls (each run alone, reverted): no percent-decode → FreeType
+    `CannotOpenResource`; `FontHasNoFile` → `OutOfMemory` fails its test; dropping the
+    `errdefer face.deinit()` → "the face was deinit'ed on the error path"; dropping the CoreText
+    face's `hb_font.destroy()` → "the HarfBuzz font is destroyed on the error path, not leaked".
+    Cross type-checks (`cargo check --tests`, zig cc sysroots): `aarch64-unknown-linux-gnu` default
+    and `freetype`, `x86_64-pc-windows-gnu` default (`freetype_windows`, after N287) and
+    `freetype`, `wasm32-unknown-unknown` (font-shaper, web-canvas, wasm).
+  - **remainder** (not N266): Linux/Windows arms type-checked only (no VM run this batch); the
+    `face metrics` FreeType arm disagrees on one value (N285); combinations refused by name
+    (N286). The `font` crate key's `done` flip is left to the controller (G6 Miri/ASan lanes).
+  - **tail-s14b (review of S-14)**: three sites the S-14 record called live were not: the
+    CodepointResolver fallback and override `Discover == void` pair (the edit had not been
+    applied) and `+show-face`'s void arm (still `cfg(wasm32)`, M1; now `DISCOVER_IS_VOID`, with
+    tests on both arms). Also keyed on the backend: SharedGridSet's `@hasDecl(Discover,
+    "discoverExactFamily")` (CoreText only), the `fc` module / `toFcPattern` / Fontconfig tests
+    (`hasFontconfig()`), cli's `DerivedConfig` load-flags test (`hasFreetype()`, via a cli
+    `build.rs`). `fontconfig_freetype` and `freetype_windows` are now built and tested on macOS
+    (N286). The core and cli build scripts' cfgs are const-asserted against `options::BACKEND`.
+    G-FONTBACKEND gains the manifest lint (arm L), per-backend clippy, and core/cli/apprt-c
+    tests under `coretext_freetype` and `freetype`. N285 is settled (stale reference values,
+    UD281).
+
+## N270 — `GlobalZigAllocator::resize` reported success for any shrink, so the later free reached `dealloc` with a smaller layout
+
+- **id**: N270. Not a ledger row: review S7-12 F4 (confirmed by probe), fixed in task S7-3.
+- **severity**: medium. **kind**: port soundness defect (not a reference defect).
+- **oracle**: Zig 0.16 `lib/std/heap.zig` `c_allocator_impl.resize`: `if (new_len <= memory.len)
+  return true; // in-place shrink always works`, otherwise `new_len <= malloc_size(ptr)`, or `return
+  false` where no usable-size query exists. Legal there because C `free` takes no size.
+- **rustty**: `crates/rustty-lib/src/allocator.rs` `GlobalZigAllocator::resize` (backs
+  `c_allocator()`, `default(NULL)`, and the vt-c test allocators).
+- **description**: the port maps `std.heap.c_allocator` onto the Rust global heap (the documented
+  mapping, shared with `rustty_vt::alloc::VtAllocator`'s Global arm and zigstd's `impl ResizeInPlace
+  for Global`). `resize` answered `new_len <= memory.len` without moving the block, so the caller's
+  later `free(new_len)` called `std::alloc::dealloc` with a smaller `Layout` than `alloc` used:
+  undefined behaviour under the `GlobalAlloc` contract, harmless only because the macOS/glibc
+  `System` allocator ignores the size. A zigstd arena over the handle's C arm (S7-3/S7-5) reaches it
+  through `reset(.retain_with_limit)`.
+- **decision**: `resize` now succeeds only for `new_len == memory.len`. Backing the allocator with
+  libc `malloc`/`posix_memalign`/`free` + `malloc_size` would reproduce the reference's in-place
+  answers, but it would split the port's single "NULL allocator" into two heaps (the VtAllocator
+  Global arm stays the Rust heap) and add a libc surface Miri cannot model (`malloc_size`). Refusing
+  is within the Zig allocator contract (the reference's own no-usable-size arm returns `false`);
+  callers fall back to `remap` (`realloc`) or alloc+copy+free. `remap` is unchanged.
+- **verification**: `crates/rustty-lib/tests/global_zig_allocator_resize.rs` (own binary, a
+  size-checking `#[global_allocator]`): alloc 64, shrink-resize, free with the length the contract
+  implies; asserts zero layout mismatches, then that the shrink was refused. Negative control
+  (`new_len <= memory.len` reinstated): fails with "left: 0, right: 1" mismatches.
+- **siblings**: the same answer over the Rust heap sat in `rustty_vt::sys::GlobalRawAllocator` (the
+  kitty PNG decode seam's allocator) and in rustty-datastruct's test-only `GlobalAllocator`; both are
+  fixed as N273. With N273 no Rust-heap Zig-style allocator in the workspace reports an in-place shrink.
+- **state**: CLOSED (task S7-3).
+
+## N271 — six port-only tripwire stand-ins for the reference's `FailingAllocator` tests are retired
+
+- **id**: N271. Not a ledger row: S-7 design §7 S7-3 ("the ported reference `FailingAllocator` tests,
+  assertion for assertion"; "retires about 66 adaptation notes").
+- **severity**: low. **kind**: test fidelity (R1).
+- **oracle**: `PageList.zig` tests "Builder finish is transactional on allocation failure", "PageAllocation
+  allocation failure leaves list unchanged", "incremental compression advances after allocation failure",
+  "preserved page keeps compressed storage"; `compress/Page.zig` "rejects a representation without
+  savings"; `Screen.zig` "implicit hyperlink ID wraps"; `Terminal.zig` "setPwd/setTitle preserves a
+  sentinel on allocation failure", "resize preserves tabstops on allocation failure";
+  `stream_terminal.zig` "semantic failure is sticky while processing continues"; `snapshot/screen.zig`
+  SCREEN restoration; `c/terminal.zig` "get vt_processing_error".
+- **rustty**: the tests of the same names in `crates/rustty-vt/src/{pagelist/tests.rs, compress/page.rs,
+  screen.rs, terminal.rs, stream_terminal.rs, snapshot/screen.rs}` and `crates/rustty-vt-c/src/terminal.rs`.
+- **description**: while the PageList pools, compressed pages, cursor hyperlink and pwd/title lived on the
+  Rust heap, these tests injected their failures through port-only tripwire modules (`FinishFp`,
+  `AllocatePageFp`, `PagePreservingStateFp`, compress `InitFp`, `StartHyperlinkFp`, `SetStringFp`) that
+  the reference does not have. With those allocations on the allocator handle (S7-3), each test now runs
+  over `alloc::testing::FailingAllocator` (or `alloc::failing()`) exactly as written, asserting
+  `has_induced_failure` where the reference does, and the six modules are deleted. The reference's own
+  tripwires (`init_tw`, `initPages_tw`, `compressPage_tw`, Tabstops/Terminal `resize_tw`) stay.
+- **deviation (test-only)**: the setPwd/setTitle tests also set `resize_fail_index = resize_index`. The
+  reference's inner `testing.allocator` (DebugAllocator) cannot remap a 3- or 5-byte size-class slot to
+  the grown capacity, so its growth reaches the failing `alloc`; the port's inner heap remaps with
+  `realloc`, which would move and succeed. PORT NOTE at both sites.
+- **state**: CLOSED (task S7-3).
+
+## N272 — S7-3 routing: what goes through the allocator handle, what is bound at construction, and what is left
+
+- **id**: N272. Not a ledger row: records the S7-3 scope decisions (S179-F2 closes in S7-4).
+- **severity**: informational. **kind**: allocator routing (T1/T2/T3 of the S-7 design).
+- **routed (T1, with T2 at every reference `try`)**: PageList node + pin pools, every tracked-pin set,
+  the compressed-page encoding, `Node.pagePreservingState(alloc)` buffers, the clone's pools and
+  `TrackedPinsRemap`; `ScreenSet`'s `alloc.create(Screen)`; the cursor hyperlink (`alloc.create` + `dupe`);
+  `Tabstops.dynamic_stops`; `Terminal.pwd`/`title`; the glyph glossary map; the kitty drag-and-drop state
+  (box, MIME lists, offered list, held drop copies). vt-c `new` passes `lib.alloc.default(alloc_)` into
+  `Terminal.init`. Page memory stays on the page allocator.
+- **per-call vs bound**: `pwd`/`title` keep the reference's per-call allocator
+  (`alloc::ArrayListUnmanaged`, grown through `gpa()`; the reference's C-API test swaps the active
+  screen's allocator to make that growth fail). The glossary map, the DnD state and the Tabstops box bind
+  the allocator when created, as allocator_api2 containers do; the reference passes the same allocator
+  per call, and the DnD methods debug-assert that it is the bound one.
+- **left for S7-4 (not routed here, on the Rust heap as before; no new abort)**: the glyph `Entry`
+  payloads (the `Outline` decoded in rustty-font, and the decode scratch), vt-c `from_decoded` (the
+  terminal comes from the snapshot decoder, whose allocator S7-4 routes; `from_decoded` now frees with
+  the decoded terminal's own `gpa()`), and the inspector's two `pagePreservingState(std.heap.page_allocator)`
+  calls, which take the Rust heap handle (the handle has no page-allocator arm; outside the C API).
+- **T3 (call shape) residuals**: the zigstd `AutoArrayHashMapUnmanaged` is an allocator_api2 `Vec` of
+  entries plus a hashbrown index (Zig: a `MultiArrayList` plus an index header above a linear-scan
+  threshold), so the counts differ; the routing tests pin the port's (PageList.init: pools 4 + pin set 2).
+  `Hyperlink` is generic over its byte storage (`Vec<u8>` default; `AllocBytes` for the cursor copy);
+  `startHyperlink`'s port-only copies (the up-front and per-attempt `dupe`) stay on the Rust heap, and the
+  extra `insert_arg` copy is gone (the per-attempt value is moved into the page insert).
+- **verification**: routing tests with counting allocators and exact counts per family
+  (`pagelist_internals_route_through_the_allocator_handle`, `screen_internals_route_…`,
+  `terminal_internals_route_…`, `glossary_map_routes_…`, `dnd_state_routes_…`), each with a negative
+  control that routes one site to Global; `allocation_failure_sweep_through_the_c_api` (vt-c).
+- **state**: OPEN as a record until S7-4/S7-9 (S179-F2's remainder).
+
+## N273 — `sys::GlobalRawAllocator::raw_resize` reported success for any shrink (the sibling of N270)
+
+- **id**: N273. Not a ledger row: review S7-3 F1. Sibling of N270, fixed in task S7-3b.
+- **severity**: medium. **kind**: port soundness defect (not a reference defect).
+- **oracle**: as N270 (Zig 0.16 `c_allocator.resize`); the reference hands the decoder a `LimitedAllocator`
+  over its general-purpose allocator (`kitty/graphics_image.zig` `decodePng`, `590d669c4`).
+- **rustty**: `crates/rustty-vt/src/sys.rs` `GlobalRawAllocator::raw_resize`; the test-only copy
+  `crates/rustty-datastruct/src/limited_allocator.rs` `tests::GlobalAllocator::raw_resize`.
+- **description**: `GlobalRawAllocator` is the Rust-heap `RawAllocator` behind the kitty PNG decode seam
+  (`graphics_image.rs` `LimitedAllocator::init(sys::GlobalRawAllocator, ...)`, handed to the embedder's
+  decoder through vt-c `sys.rs`). `raw_resize` answered `new_len <= memory.len` without moving the block,
+  so a decoder that shrank a buffer with `resize` and freed it with the new length reached
+  `std::alloc::dealloc` with a smaller `Layout` than `alloc` used: the same undefined behaviour as N270.
+- **fix**: both now succeed in place only for `new_len == memory.len`, with N270's reasoning (PORT NOTE
+  at the production site). Refusing is within the Zig allocator contract; `LimitedAllocator` forwards.
+- **verification**: `crates/rustty-vt/tests/global_raw_allocator_resize.rs` (own binary, a size-checking
+  `#[global_allocator]`): alloc 64, shrink-resize, free with the contract's length, directly and through
+  `LimitedAllocator`; asserts zero layout mismatches, then that the shrinks were refused. Negative control
+  (`new_len <= memory.len` reinstated in sys.rs): fails with "left: 0, right: 2" mismatches.
+- **state**: CLOSED (task S7-3b).
+
+## N280 — `macosLogger`'s per-scope `os_log` cache (upstream `3225e9ebb`) was never ported
+
+- **id**: N280. Not a ledger row: found by G3b while closing bin's comment coverage (task tail-s8d).
+- **severity**: low (performance; identical unified-log output). **kind**: missing upstream change.
+- **oracle**: `src/main_ghostty.zig:170-199` `macosLogger`, called from `logFn` at `:143`.
+- **rustty (pre-fix)**: `crates/rustty-core/src/logging.rs` `log_with` created and released an
+  `os_log` object on every log call, under the pre-`3225e9ebb` comment "Initialize a logger. This is
+  slow to do on every operation but we shouldn't be logging too much." — which the pin no longer
+  has. `docs/parity-audit/src.md` recorded the difference as an accepted equivalence, but the
+  reference's reason for the change (os_log creation shows up in startup profiles) is a behaviour
+  the port simply lacked; it was a missed upstream commit, not a decision.
+- **fix**: `macos_logger(scope)` caches one `Log` per scope for the process lifetime: an acquire
+  load, create, `compare_exchange(null, created, AcqRel, Acquire)` and release of the losing logger,
+  as the reference does. The reference's comptime-per-scope static becomes a per-scope slot from a
+  mutex-guarded registry (Rust scopes are runtime strings). The seven reference comment lines are
+  restored.
+- **verification**: `logging::tests::macos_logger_is_created_once_per_scope` (same scope returns the
+  same object, different scopes differ, 8 racing threads settle on one). Negative control: a
+  per-call `Log::create` in `macos_logger` fails it with "same scope must reuse the cached logger".
+- **state**: CLOSED (task tail-s8d).
+
+## N281 — `class/config.zig` `getMut` had no port and no record
+
+- **id**: N281. Not a ledger row: S-8b report concern 2.
+- **severity**: low. **kind**: unrecorded non-port.
+- **oracle**: `src/apprt/gtk/class/config.zig:94-100` `getMut`. No caller anywhere in `src/` at the
+  pin (`git grep getMut 20abdb50a -- src`: the definition only).
+- **rustty**: `crates/rustty-apprt/src/gtk/class/config.rs` has `get` only.
+- **disposition**: recorded NON-PORT, `.port/phase-4/NON_PORTS.md` (a `&mut CoreConfig` from a
+  shared, refcounted GObject handle is unsound without changing the storage to a `RefCell` and
+  every `get` caller to a guard). Its three doc lines are `no-counterpart` rows of
+  `.port/parity-closure/COMMENT-NOT-CARRIED.tsv` (decl `Config.getMut`).
+- **S-8e (review)**: the record now also names the declined sound alternative, `unsafe fn
+  get_mut(&self) -> *mut CoreConfig` over `UnsafeCell` storage, and why (an uncheckable aliasing
+  contract for a function nothing calls; it is the shape to use if a caller appears).
+- **state**: CLOSED (task tail-s8d; record completed tail-s8e).
+
+## N282 — `gsettings.zig` `getAlloc` had no port and no record
+
+- **id**: N282. Not a ledger row: S-8b report concern 2.
+- **severity**: low. **kind**: missing function (no caller in the reference GTK tree at the pin).
+- **oracle**: `src/apprt/gtk/gsettings.zig:50-57` `getAlloc` + `getImpl`'s `[]const u8` arm `:69-74`.
+- **fix**: `crates/rustty-apprt/src/gtk/gsettings.rs` `get_alloc(key) -> Option<SettingValue>`, with
+  its four reference doc lines restored verbatim. S-8e (review): like the reference it accepts every
+  key (`SettingValue::{Bool, CInt, Str}` reifies `?key.Type()`), and the string arm reads the raw
+  `GValue` (`property_value` + `g_value_get_string` + `CStr::to_bytes`) so non-UTF-8 bytes are
+  returned, not a panic (the S-8d `property::<Option<String>>` form panicked on them).
+- **verification**: UNVERIFIED — the GTK module is `cfg(linux|freebsd, feature = "gtk")` and was
+  not compiled here (macOS, no VM for this batch). Needs the Linux lane (`--features
+  gtk,x11,wayland` clippy).
+- **state**: fix written, Linux build pending.
+
+## N283 — G3b had no audited way to mark a deliberately-not-carried comment
+
+- **id**: N283. Not a ledger row: S-8b report concern 3.
+- **severity**: low (gate). **kind**: gate gap.
+- **description**: comments on code the port does not have by a recorded decision, and stripped
+  gag prose, stayed MISSING permanently, so `--crate bin` / `--crate apprt` could never reach 0 and
+  real drops hid among them. G3b now reads `.port/parity-closure/COMMENT-NOT-CARRIED.tsv`, whose
+  rows are validated mechanically (`.port/tools/gates/_g3b_not_carried.py`): the text must be the
+  oracle line at the pin; still MISSING/REVIEW in the port (a carried row is STALE, RED); for
+  `no-counterpart` attached to the named reference code, with no Rust counterpart anywhere in the
+  workspace and an unstruck evidence record naming it; for `gag-prose` free of digits, identifiers,
+  backticks and ALL-CAPS tokens and at most 20 words; with a two-way cap. Excused comments are
+  printed as `NOT-CARRIED (<class>)`.
+- **S-8e (review CHANGES-REQUIRED, attacks A-1..A-3 went GREEN)**: hardened. `decl` must be DECLARED in
+  the oracle file (fn/const/var, field, enum member) and not a Zig/Rust keyword or common local
+  (`priv`, `self`, `alloc`, ...); a `///` doc or `PORTS:` comment citing it, or a Rust field of its
+  name, is a counterpart (catches `BASELINE` = `comptime_version`); the evidence record (unique
+  needle, at most 30 lines, a heading resolving to its own section only) must name the decl AND
+  the oracle file and carry no strike/RESOLVED/PORTED ANYWHERE; a gag row's record must list its
+  `file:line`, and its text may use no technical term or word of the surrounding oracle code unless
+  `MIXED-CARRIED: "<port comment>"` names a comment the port carries. Rows the stricter rules would
+  not admit, or that have a Rust site, are QUOTED there instead (port convention). 35 rows: bin 21
+  (std_options_debug_io 6, DllMain 15), apprt 14 (adw_c 3, gtk_c 3, supportsDialogs 1,
+  `Config.getMut` 3, gag-prose 4).
+- **verification**: `check_comment_coverage.py --self-test` (69 ledger arms, synthetic and real,
+  the review's A-1/A-2/A-3 planted verbatim); a mutation run (each W1-W4 rule weakened in-process)
+  turns the matching arms FAIL; the review's NC-1..NC-4 and A-1..A-3 re-run on disk are all RED;
+  `--not-carried-check` GREEN.
+- **state**: CLOSED (task tail-s8d, hardened tail-s8e).
+
+## N284 — two BlurRegion CSD-note lines stripped as gag prose carried a fact
+
+- **id**: N284. Not a ledger row: found while classifying S-8b's stripped lines (task tail-s8d).
+- **severity**: low (comment fidelity). **kind**: over-stripped comment.
+- **oracle**: `src/apprt/gtk/winproto/BlurRegion.zig:59-61`.
+- **description**: S-8b stripped `:59` ("... making a window ~30% bigger") and reworded `:61` as gag
+  prose, but `:59` carries the fact the code acts on (CSD windows are ~30% bigger internally), and
+  under the ledger's rule a line with technical content can never be gag prose (the self-test holds
+  a real-row negative control for exactly this line). `:59-61` are restored verbatim in
+  `crates/rustty-apprt/src/gtk/winproto/blur_region.rs`; only `:58` (an insult with no fact) is a
+  `gag-prose` row.
+- **state**: CLOSED (task tail-s8d).
+
+## N285 — the FreeType arm of `test "face metrics"` has stale expectations (reference test-weakness)
+
+- **id**: N285. Not a ledger row (task tail-s14, found running N265's live body under the newly
+  selectable FreeType backends; settled by the S-14 review).
+- **severity**: low (a reference test that never runs upstream — N265/UD276). **kind**: reference
+  test-weakness (R13: stays faithful) — recorded as `UPSTREAM-DEFECTS.md` UD281.
+- **oracle**: `src/font/Collection.zig:1402,1439-1502` at 20abdb50a — the FreeType arms
+  (`.freetype`, `.fontconfig_freetype`, `.coretext_freetype`) expect, at 12 pt / 96 dpi, narrow
+  (`embedded.cozette`) `cell_width` 8.0 / `ascii_height` 18.0625 and wide (`embedded.geist_mono`)
+  `cell_width` 10.0 / `ascii_height` 16.0.
+- **history (oracle git)**: `03a707b2c` (2025-09-17) wrote those values while the test ran;
+  `4af4e1872` (next day, same PR) inverted its guard, so it has been skipped since (UD276);
+  `ad9f9dc11` (2025-10-17, "font: Default to light hinting in FreeType") made `light = true` the
+  default `FreetypeLoadFlags` (`FT_LOAD_TARGET_LIGHT`) and updated a RUNNING FreeType test, not this
+  skipped one.
+- **measurement** (port, `-Dfont-backend=coretext_freetype`; the S-14 review's probe, reverted):
+  default flags (light) → narrow `cell_width` 7.0, `ascii_height` 18.0625; wide 10.0, 15.5.
+  `light = false` → 8.0, 18.0625, 10.0, 16.0 — exactly the reference's expectations. The measuring
+  code (`face/freetype.rs` `getGlyphSize`, the ASCII advance/bbox loop, `glyphLoadFlags`) is
+  line-for-line the reference's at the pin, over the same FreeType 2.13.2. CORRECTION (S-14b): the
+  first version of this entry said "the wide font (Geist Mono) matches"; its `ascii_height` does
+  not (15.5 vs 16.0) — the assert loop panicked on the narrow pair first, so the wide pair had not
+  been compared.
+- **conclusion**: the expectations are stale; Ghostty at the pin, running its own test on a
+  FreeType backend, would measure the same 7.0 / 15.5 (inferred from identical code and library,
+  not run in Zig). Not a port bug.
+- **state**: CLOSED (task tail-s14b). No code change; `face_metrics` stays a faithful skip.
+
+## N286 — `-Dfont-backend`: which backends the port builds per target
+
+- **id**: N286. Not a ledger row (task tail-s14; corrected by tail-s14b, review M3).
+- **severity**: low. **kind**: R1 (Ghostty accepts every backend on every target); one OPEN gap.
+- **oracle**: `src/build/Config.zig:191-195` validates nothing; `SharedDeps.zig:267-310` links
+  HarfBuzz/FreeType/Fontconfig from source on any target whose backend has them. The reference's
+  CI builds the per-OS defaults plus `coretext_freetype` on macOS (`test.yml:1383-1428`).
+- **rustty (tail-s14b)**: `crates/rustty-build-config/build.rs` `font_backend()` accepts, on macOS,
+  all seven native backends (`freetype`, `freetype_windows`, `fontconfig_freetype`, `coretext`,
+  `coretext_freetype`, `coretext_harfbuzz`, `coretext_noshape`); on Linux/BSD `freetype`,
+  `freetype_windows`, `fontconfig_freetype`; on Windows `freetype`, `freetype_windows`. It still
+  refuses, loudly and by name:
+  - the CoreText backends off Darwin — no CoreText there, in the reference too (justified);
+  - `fontconfig_freetype` on Windows — **OPEN R1 gap**: the port gates `fontconfig-sys` off
+    Windows (WS20) and has not built it there; not attempted (no Windows host here).
+  A native `web_canvas` has no feature at all (its face and shaper call browser externs;
+  `font/main.zig:50` forces it on wasm), so it is not "refused by name" — it cannot be named.
+- **correction**: tail-s14 refused `fontconfig_freetype` on macOS ("`fontconfig-sys` is gated off
+  Darwin") and `freetype_windows` off Windows ("the directory scanner is Windows-only code"). Both
+  reasons were wrong: `fontconfig-sys` builds on macOS (the `rustty-apprt` edge already built it
+  there), and the scanner is portable Rust, as the reference's is portable Zig
+  (`discovery.zig:1089-1115`). tail-s14b keys the `fc` module, `Descriptor.toFcPattern`, the
+  Fontconfig tests and SharedGridSet's `@hasDecl(Discover, "discoverExactFamily")` on the backend,
+  and allows both.
+- **evidence (macOS, tail-s14b)**: the G-FONTBACKEND lane's `fontconfig_freetype` arm (a generated
+  fonts.conf over the macOS font directories, since the vendored fontconfig looks in `/etc/fonts`
+  like the reference's) passes font-shaper 142 (+3 ignored), including the `fc` package tests and the
+  reference `fontconfig` / `fontconfig codepoint` tests; its `freetype_windows` arm (a `SYSTEMROOT`
+  fixture whose `root\Fonts` holds Arial, Arial Unicode and Noto Sans Chakma) passes 119 (+3),
+  including the reference `windows` test. Clippy `-D warnings` is clean for both.
+- **state**: OPEN only for `fontconfig_freetype` on Windows; everything else in this entry CLOSED.
+
+## N287 — the `freetype_windows` `DeferredFace` name accessors did not type-check
+
+- **id**: N287. Not a ledger row (task tail-s14; the lines predate it).
+- **severity**: medium (every `x86_64-pc-windows-*` build of `rustty-font-shaper` failed).
+  **kind**: port defect (compile error on the Windows default backend).
+- **rustty**: `crates/rustty-font-shaper/src/deferred_face.rs` `windows_payload` `family_name` /
+  `name` returned `w.peek.name(buf)` — which may borrow the FreeType face — from a `&self` method
+  whose result was tied only to `buf`: E0521-class "lifetime may not live long enough".
+- **fix**: both take `&'a self`, as the CoreText payload's do. Found and verified by
+  `cargo check --tests --target x86_64-pc-windows-gnu` (zig cc, mingw headers), default and
+  `-Dfont-backend=freetype`. Not run on Windows.
+- **state**: CLOSED (task tail-s14).
+
+## N288 — `loadCoreTextFreetype` opens face 0 of a font collection (reference defect)
+
+- **id**: N288. Not a ledger row (task tail-s14).
+- **severity**: medium. **kind**: reference defect, non-crash, evident intent broken (the user's
+  R13 extension) — `UPSTREAM-DEFECTS.md` UD280.
+- **oracle**: `src/font/DeferredFace.zig:301-304` at 20abdb50a: "Face index 0 is not always
+  correct. We don't ship this configuration in a release build." then `Face.initFile(lib, path, 0,
+  opts)`.
+- **evidence**: CoreText's `Menlo-Bold` lives in `/System/Library/Fonts/Menlo.ttc`; with index 0
+  the FreeType face loaded is `Menlo-Regular` (measured, macOS 26, test below before the fix).
+- **rustty**: `deferred_face.rs` `collection_face_index` picks the face whose PostScript name is
+  the CoreText font's (index 0 when the file holds one face or none matches). Test
+  `load_coretext_freetype_opens_the_discovered_face_of_a_collection`; negative control = the
+  reference's index 0 ("Menlo-Bold" != "Menlo-Regular").
+- **state**: CLOSED (task tail-s14), recorded as UD280.
+## N290 — G-SKIP hardened against the S-3 review's eight bypasses (S-3b)
+
+- **id**: N290. Not a ledger row: the S-3 review's non-blocking G-SKIP findings (task S-15, item A).
+- **severity**: medium (gate). **kind**: gate gap.
+- **what**: `check_silent_skips.py` accepted these silent skips: (1) any earlier assertion in the
+  fn body excused a later top-level `return` (and a trivially-true or `debug_assert!` one excused
+  a guarded return); (2) a `match` with an empty `None =>`/`Err(_) =>` arm; (3) an `else` that only
+  prints, without the word "skip" (and an if-let wrapper beside a trivial assertion); (4) a
+  `return` inside a closure / nested fn that is the whole test; (5) any fn NAMED
+  `require_<x>_or_skip` counted as a pivot; (6) every assertion inside a `for` / `.map(..)` over a
+  possibly-empty probe result; (7) `#[rstest]` / `#[test_case]` tests were not scanned; (8) the lint
+  walked the filesystem (untracked files changed the verdict) and treated any `*test*` basename as
+  test code.
+- **fix**: (1) the excusing assertion must sit in the guard's own block (the statement for a
+  top-level return, the arm for an unbraced match arm), at its top nesting level, and be
+  non-trivial (`debug_assert*` and assertions naming no identifier but `true`/`false`, or comparing
+  identical operands, never count); (2) new ARM rule; (3) WRAP now covers any `if` whose assertions
+  leave a silent path (no `else`, or an `else` without assertion/pivot), with trivial outside
+  assertions discounted; (4) bare returns in closures / nested fns are checked when an assertion
+  follows them in that body; (5) a `require_<x>_or_skip` must transitively (same file) both read
+  a `"RUSTTY_REQUIRE_<X>"` literal and fail, else a PIVOT finding, and pivot / pivoting-helper
+  acceptance requires that pair; (6) new LOOP rule (literal tables exempt); (7) `TEST_ATTR` covers
+  `#[rstest]` and `#[test_case(..)]`; (8) `git ls-files` (a non-git root is an ERROR, exit 1), and
+  test-only files are the `tests/` tree plus files loaded by `cfg(test)`-scoped `mod` declarations
+  (`#[path]` resolved, transitively; `cfg(any(test, ..))` included).
+- **self-test**: 59 arms (was 21), each RED arm checked for its exact finding kind; per bypass a
+  planted RED arm and a clean arm, plus the review's missing accept arms (MSG after a pivot, WRAP
+  with a scoped ignore, `ALLOW_GUARDS` over its cap). Mutation run (each new rule weakened
+  in-process, scratch `s15/mutate.py`): every weakening turns its arms FAIL (B1 ×3 mutations, B2,
+  B3, B4, B5, B6, B7, B8 ×2).
+- **real tree**: two silent skips found and fixed (not allow-listed):
+  `rustty-global` `environ_from_process_matches_vars_os` (LOOP: now counts the round-tripped keys and
+  asserts at least one) and `rustty-xev` `kqueue_file_io_on_thread_pool` (RET: returned `ok`
+  having asserted only the deferral ledger, inside a conditional; now `#[ignore]`d and FAILS when run,
+  naming the unported macOS `xev.File` watcher, with the ledger tripwire split into the always-run
+  `kqueue_file_watcher_deferral_is_ledgered`). No allow-list change (4/6 sites, 2/2 guards).
+  Test-only file set vs the old basename rule: `rustty-oniguruma/src/testing.rs` (production) is no
+  longer test code; 26 declared test modules not named `*test*` (the `log_capture.rs` files,
+  `lz4_differential.rs`, `snapshot/fixture.rs`, ...) now are.
+- **state**: CLOSED (task S-15).
+
+## N291 — the display-link test is enforced on the macOS leg; stale "Noto Serif Tibetan" comments
+
+- **id**: N291. Not a ledger row: the S-3 review's follow-ups 2 and 4 (task S-15, item A).
+- **what / fix**: `.github/workflows/ci.yml` now exports `RUSTTY_REQUIRE_DISPLAY=1` on the macOS leg
+  (env step beside METAL / SYSTEM_FONTS), so `cargo test --workspace` in `ci.sh` runs
+  `sync_parks_the_link_while_idle_and_runs_it_while_dirty` as enforced evidence; `PORT_RULES.md`
+  R14's table says so. Local check: `RUSTTY_REQUIRE_DISPLAY=1 RUSTTY_REQUIRE_METAL=1 cargo test -p
+  rustty-renderer --lib sync_parks_the_link` passes (the link exists). UNVERIFIED: whether the hosted
+  macOS image has an active display; if the leg then fails with "active display required but
+  unavailable", that is the finding. The `ci.yml`, `coretext_tests.rs` and `harfbuzz_tests.rs`
+  comments said Noto Serif Tibetan is an `#[ignore]`d test "on every leg" / among the macOS tests;
+  it is only the HarfBuzz `shape_tibetan_characters`, which is not compiled on macOS and is
+  `#[ignore]`d elsewhere. Comments corrected (comment-only edits in `rustty-font-shaper`).
+- **state**: CLOSED (task S-15).
+
+## N292 — theme lookup `BufferTooSmall` → `OutOfMemory`, and the C API's `err=` form (N140 closed)
+
+- **id**: N292. Not a ledger row: the closure of NEW-FINDINGS N140 (a) and (b) (task S-15, item B).
+- **severity**: low. **kind**: behavioral-difference (error identity and propagation; log text).
+- **what / fix / tests / negative controls**: recorded under N140 ("CLOSED by task S-15").
+- **files**: `crates/rustty-config/src/{theme.rs,config_struct.rs,zig_error.rs,c_api.rs,lib.rs}`,
+  `crates/rustty-config/tests/load_path_errors_propagate.rs`,
+  `crates/rustty-cli/src/{rustty.rs,zig_error.rs,list_themes.rs}`.
+- **state**: CLOSED (task S-15).
+
+## N293 — `readthread_pipeline_shuts_down_cleanly_from_both_stages` bounded a live drain with a wall clock
+
+- **id**: N293. Not a ledger row: the flaky test queued by S-6 (task S-15, item C).
+- **severity**: low (flaky test). **kind**: test defect (port-only KAT; the reference has no
+  equivalent test — `src/termio/Exec.zig` at `20abdb50a` has only the `execCommand` tests).
+- **measured**: at base the test takes 5.5-6.0 s. About 3 s is the eight blocking 64 KiB writes
+  to the slave waiting on the parse stage, and 2.2-2.8 s is the drain AFTER the quit: 145-170 KiB
+  were still in flight (ring plus pty queue) and the parse stage parses them before it exits, at
+  about 65 KiB/s in the `dev` profile. `sample(1)` of the parse stage: the top frames are
+  `rustty_vt::page::mask`, `page::get_bits` and `Page::verify_integrity`, i.e. the reference's
+  `assertIntegrity` under `slow_runtime_safety` (`page.zig:366-376`, Debug only;
+  `SLOW_RUNTIME_SAFETY = cfg!(debug_assertions)` in the port).
+- **root cause**: not a port slowdown. The drain-on-quit is the reference's design (parse loop
+  returns on `done` only once `count == 0`; the gather stage `continue`s on a full buffer without
+  polling `quit`), and the port matches it line for line. The test bounded that finite, live drain
+  with a fixed 10 s `recv_timeout`; under load the drain crosses 10 s (S-6: load 20-29, 1 run in 8;
+  here, 42 spinning processes on 14 cores: drain 5.8-9.96 s, one batch gap 4.1-4.7 s).
+- **fix**: the watchdog now fails only when the read thread has not joined AND no batch has reached
+  `processOutput` for 30 s (the regression it guards — a stage exiting without waking the other —
+  leaves the parse stage asleep on `batch_ready`, so progress stops for good). 30 s is over 6x the
+  loaded per-batch gap. The test also now asserts its premise (bytes still in flight at the quit)
+  and each bulk write's length, and prints `SHUTDOWN-DRAIN` with the drain time and longest gap.
+- **verification**: 3/3 idle (drain 2.2-2.8 s, gap 0.73-0.79 s), 3/3 under the synthetic load.
+  Negative control (gather's `DoneSignal` no longer sets `done`): FAILED after 30.0 s with "no
+  batch reached processOutput for 30s", reverted.
+- **state**: CLOSED (task S-15).

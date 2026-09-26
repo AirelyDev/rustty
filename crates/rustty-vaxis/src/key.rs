@@ -201,7 +201,8 @@ impl Key<'_> {
         self_mods.num_lock = false;
         // PORT NOTE (faithful quirk): Zig clears caps_lock/num_lock on `tgt_mods` here
         // but then compares `self_mods` against the ORIGINAL `mods` (not `tgt_mods`).
-        // Reproduced exactly — this is a real asymmetry, not a bug to "fix".
+        // Reproduced exactly — this is a real asymmetry, not a bug to "fix"
+        // (unobservable in the CLI TUIs; UPSTREAM-DEFECTS.md UD249).
         let mut tgt_mods = mods;
         tgt_mods.caps_lock = false;
         tgt_mods.num_lock = false;
@@ -209,10 +210,21 @@ impl Key<'_> {
     }
 
     /// matches when the utf8 encoding of the codepoint and relevant mods matches the
-    /// text of the key. This function will consume Shift and Caps Lock when matching
+    /// text of the key. This function will consume Shift and Caps Lock when matching.
+    ///
+    /// Lifetime: `Key.text`, when set, points into the parser's per-event scratch
+    /// buffer and is only valid until the next event is decoded. Callers that
+    /// retain a `Key` past that point — for example, queueing events to another
+    /// thread — MUST copy the slice before doing so; otherwise both this routine
+    /// and any direct read of `text` race with the parser overwriting its buffer.
+    ///
+    /// (Port: the borrow checker enforces that lifetime — `Key<'a>` borrows the text —
+    /// and the Loop queues an owned copy, [`Key::into_owned`]; see UD107.)
     pub fn match_text(&self, cp: u32, mods: Modifiers) -> bool {
-        // return early if we have no text
-        if self.text.is_none() {
+        let Some(text) = self.text else {
+            return false;
+        };
+        if text.is_empty() {
             return false;
         }
 
@@ -240,7 +252,7 @@ impl Key<'_> {
             Some(c) => c.encode_utf8(&mut buf).len(),
             None => return false,
         };
-        self.text.unwrap() == &buf[0..n] && Modifiers::eql(self_mods, arg_mods)
+        text == &buf[0..n] && Modifiers::eql(self_mods, arg_mods)
     }
 
     // The key must exactly match the codepoint and modifiers. caps_lock and

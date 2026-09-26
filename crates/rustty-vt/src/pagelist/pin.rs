@@ -74,13 +74,21 @@ impl PageList {
         let tracked = tracked.as_ptr();
 
         // Add it to the tracked list
+        // try self.tracked_pins.putNoClobber(self.pool.alloc, tracked, {});
         //
-        // PORT NOTE: the reference `tracked_pins.putNoClobber(self.pool.alloc,
-        // tracked, {})` is `Allocator.Error!void`; the Rust `PinSet` owns its
-        // backing `Vec`, so `put_no_clobber` is infallible (it can never signal
-        // OOM), and the reference's `errdefer _ = tracked_pins.remove(tracked)`
-        // can therefore never fire — there is no fallible step after the insert.
-        self.tracked_pins.put_no_clobber(tracked, ());
+        // PORT NOTE: the insert is the last fallible step, so the reference's
+        // `errdefer _ = tracked_pins.remove(tracked)` can never fire; the pin's
+        // own `errdefer self.pool.pins.destroy(tracked)` can, and runs here.
+        if self.tracked_pins.try_put_no_clobber(tracked, ()).is_err() {
+            // SAFETY: `tracked` came from `self.pool.pins.create()` above and is
+            // in no set.
+            unsafe {
+                self.pool
+                    .pins
+                    .destroy(core::ptr::NonNull::new_unchecked(tracked))
+            };
+            return Err(super::OutOfMemory);
+        }
 
         Ok(tracked)
     }
@@ -697,7 +705,7 @@ mod p3_reachability_negative_controls {
     /// correct destination.
     #[test]
     fn p3_right_wrap_exact_row_multiple_underflows() {
-        let mut s = PageList::init(Options::new(80, 24)).unwrap();
+        let mut s = PageList::init(crate::alloc::Global, Options::new(80, 24)).unwrap();
         let pin = s
             .pin(point::Point::Active(point::Coordinate { x: 0, y: 0 }))
             .unwrap();
@@ -721,7 +729,7 @@ mod p3_reachability_negative_controls {
     /// now the correct in-range answer.
     #[test]
     fn p3_left_wrap_exact_row_multiple_yields_out_of_range_x() {
-        let mut s = PageList::init(Options::new(80, 24)).unwrap();
+        let mut s = PageList::init(crate::alloc::Global, Options::new(80, 24)).unwrap();
         // Start far enough down that the upward walk stays in range.
         let pin = s
             .pin(point::Point::Active(point::Coordinate { x: 0, y: 10 }))

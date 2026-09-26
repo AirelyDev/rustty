@@ -78,7 +78,11 @@ impl Surface {
             .set(widget.upcast_ref::<glib::Object>().as_ptr());
     }
 
-    /// Reconstitute the owning [`class::Surface`] from the backref, or `None`
+    /// Returns the GObject surface for this apprt surface. This is a function
+    /// so we can add some extra logic if we ever have to here.
+    ///
+    /// PORTS: `Surface.zig:20` `gobj`. Reconstitute the owning
+    /// [`class::Surface`] from the backref, or `None`
     /// before `constructed` wires it. Returns a temporary strong ref (dropped at
     /// the caller's scope end); the widget is owned by the GObject tree so this
     /// is never the last ref.
@@ -122,9 +126,11 @@ impl ApprtSurface for Surface {
     type Core = rustty_core::surface::Surface<App>;
 
     fn core(&self) -> *mut Self::Core {
+        // This asserts the non-optional because librustty should only
+        // be calling this for initialized surfaces.
+        //
         // PORTS: `Surface.zig:24-28` `return self.surface.core().?` — a RAW read
-        // through the `*Surface` backref, asserting non-null "because libghostty
-        // should only be calling this for initialized surfaces".
+        // through the `*Surface` backref.
         //
         // SOUNDNESS / TEARDOWN: this must NOT reconstruct a refcounting GObject
         // wrapper (`gobj`), because it is called on the widget's own finalize path
@@ -280,6 +286,8 @@ impl Surface {
         }
     }
 
+    /// Redraw the inspector for our surface.
+    ///
     /// PORTS: `Surface.zig:102-104` `redrawInspector` → `self.surface.redrawInspector()`,
     /// which forwards to the widget's `redrawInspector` (`surface.zig:909-913`):
     /// redraw the inspector window attached to this surface, if there is one.

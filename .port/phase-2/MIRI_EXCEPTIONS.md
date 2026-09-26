@@ -2380,7 +2380,7 @@ measured minimum, not a crate-wide retreat: **69 of 70 rustty-cli tests and 63 o
 | Test | class | measured |
 |---|---|---|
 | `rustty-cli` `boo::tests::decompress_frames_round_trip` | vendored zlib FFI | `can't call foreign function `inflateInit2_`` (see the dedicated section above) |
-| `rustty-cli` `version::tests::commit_hash_is_captured_in_a_git_checkout` | process/file I/O | `` `open` not available when isolation is enabled `` — it runs `git rev-parse` to decide whether it is in a checkout at all |
+| `rustty-cli` `version::tests::commit_hash_is_captured_in_a_git_checkout` | process/file I/O | `` `open` not available when isolation is enabled `` — it runs `git rev-parse` to decide whether it is in a checkout at all. **2026-09-23 (review T-B):** replaced by `commit_hash_is_the_version_build_metadata`, which spawns nothing and is back in the Miri lane; the git probe moved to `rustty-version` `tests::version_is_derived_from_git`, which carries this exception now (same class, same `cfg_attr(miri, ignore)`, same 4-criterion basis) |
 | `rustty-os` `autorelease::tests::{returns_closure_value, pool_drains_autoreleased_references}` | Objective-C runtime | `can't call foreign function `objc_autoreleasePoolPush`` / `objc_getClass` |
 
 4-criterion basis. (1) **Impossible, not slow.** (2) **Pass natively** in ci.sh's

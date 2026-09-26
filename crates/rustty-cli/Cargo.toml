@@ -39,6 +39,9 @@ gtk = ["rustty-apprt/gtk"]
 # imply `gtk`, exactly as `crates/rustty/Cargo.toml` has it, and `crates/rustty`
 # forwards its own `x11`/`wayland` here so the shipped binary agrees with the
 # apprt it links. Added by task-18 with the GTK `+version` block (S70-F1).
+# CORRECTION (S65-F6, 2026-09-23): `version.rs` now prints
+# `rustty_apprt::GTK_X11` / `GTK_WAYLAND`, the arms the apprt actually built,
+# so these features only forward the request to rustty-apprt.
 wayland = ["gtk", "rustty-apprt/wayland"]
 x11 = ["gtk", "rustty-apprt/x11"]
 
@@ -72,6 +75,8 @@ rustty-os = { workspace = true }
 rustty-global = { workspace = true }
 rustty-terminfo = { workspace = true }
 rustty-args = { workspace = true }
+# `std.fmt.parseInt` / `parseUnsigned`: the one port (NEW-FINDINGS N120/N150).
+rustty-zigstd = { workspace = true }
 rustty-apprt = { workspace = true }
 rustty-core = { workspace = true }
 rustty-crash = { workspace = true }
@@ -84,6 +89,9 @@ rustty-crash = { workspace = true }
 # rustty-renderer edge needed — the renderer.zig selection switch is data);
 # the libxev line reads rustty-xev's `backend()` (the reference `xev.backend`).
 rustty-build-config = { workspace = true }
+# `build_config.version_string` / `release_channel`: the version derived from
+# the checkout, in its own leaf crate so a commit rebuilds only its readers.
+rustty-version = { workspace = true }
 rustty-identity = { workspace = true }
 rustty-xev = { workspace = true }
 # C2 (CLI_BLUEPRINT.md §7): show_config streams `config.FileFormatter` output and

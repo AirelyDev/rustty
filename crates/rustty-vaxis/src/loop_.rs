@@ -1,4 +1,4 @@
-//! Port of `libvaxis` `Loop.zig` (404 LOC, 1 `test{}`) — the read thread that reads the
+//! Port of `libvaxis` `Loop.zig` (libvaxis 0.6.0: 450 LOC, 1 `test{}`) — the read thread that reads the
 //! tty, feeds the Chunk-3a `Parser`, routes through `handle_event_generic`, and pushes
 //! parsed events to the [`Queue`]. (`loop` is a Rust keyword, so the module is `loop_`;
 //! `lib.rs` re-exports `Loop` so `vaxis::Loop` matches Zig's `vaxis.Loop`.)
@@ -53,10 +53,185 @@ use crate::tty::{Tty, TtyError};
 use crate::vaxis::Vaxis;
 use crate::Winsize;
 #[cfg(not(windows))]
+use std::os::fd::RawFd;
+
+#[cfg(not(windows))]
 use core::ffi::c_void;
 use std::cell::Cell;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
+
+/// Whether the last libc call failed with `EINTR`.
+#[cfg(not(windows))]
+fn errno_is_eintr() -> bool {
+    std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR)
+}
+
+/// What woke the read thread (UD246).
+#[cfg(not(windows))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TtyWait {
+    /// The tty has input (or an fd is out of `select`'s range: read as the reference does).
+    Readable,
+    /// `stop` wrote the wake pipe.
+    Wake,
+    /// `select` failed with something other than `EINTR`.
+    Failed,
+}
+
+/// Waits until the tty has input or the stop wake pipe is written.
+///
+/// PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD246. The reference's read
+/// thread blocks in `read` alone, so only the terminal's `ESC[0n` can end it; the port
+/// also wakes on `stop`'s pipe. `select`, not `poll`: macOS `poll` answers `POLLNVAL`
+/// for `/dev/tty` (measured, task S-6b). `EINTR` retries the wait itself, so the loop
+/// condition is tested only where the reference tests it (the reference's `read`
+/// retries `EINTR` too); returning to it would let a signal in the ~1 ms between the
+/// DSR and its reply end the thread and leave the reply to the next program on the tty.
+/// An fd at or above `FD_SETSIZE` (never the case for a CLI TUI) answers `Readable`,
+/// keeping the reference's plain blocking read.
+#[cfg(not(windows))]
+fn wait_tty_or_wake(tty_fd: RawFd, wake_r: RawFd) -> TtyWait {
+    if tty_fd as usize >= libc::FD_SETSIZE as usize || wake_r as usize >= libc::FD_SETSIZE as usize
+    {
+        return TtyWait::Readable;
+    }
+    loop {
+        // SAFETY: both fds are below FD_SETSIZE; the set lives on this stack frame.
+        let (rc, woke) = unsafe {
+            let mut readfds: libc::fd_set = std::mem::zeroed();
+            libc::FD_ZERO(&mut readfds);
+            libc::FD_SET(tty_fd, &mut readfds);
+            libc::FD_SET(wake_r, &mut readfds);
+            let rc = libc::select(
+                tty_fd.max(wake_r) + 1,
+                &mut readfds,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            );
+            (rc, rc > 0 && libc::FD_ISSET(wake_r, &readfds))
+        };
+        if rc < 0 {
+            if errno_is_eintr() {
+                continue;
+            }
+            return TtyWait::Failed;
+        }
+        return if woke {
+            TtyWait::Wake
+        } else {
+            TtyWait::Readable
+        };
+    }
+}
+
+/// `stop`'s half of UD246: gives the read thread `grace` to end on its own (the DSR
+/// reply), then writes one byte to the wake pipe if it has not. Returns whether it woke
+/// the thread.
+///
+/// PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD246 (see `Loop::stop`).
+#[cfg(not(windows))]
+fn wake_reader_after_grace(
+    handle: &JoinHandle<()>,
+    wake_w: Option<RawFd>,
+    grace: std::time::Duration,
+) -> bool {
+    let deadline = std::time::Instant::now() + grace;
+    while !handle.is_finished() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    if handle.is_finished() {
+        return false;
+    }
+    match wake_w {
+        Some(w) => {
+            // SAFETY: `w` is the open write end of the wake pipe (closed only after join).
+            let _ = unsafe { libc::write(w, b"q".as_ptr().cast(), 1) };
+            true
+        }
+        None => false,
+    }
+}
+
+/// The read loop's buffer and its carried partial sequence (Zig `var buf: [1024]u8`,
+/// `var read_start: usize`), with the parse-and-carry step of `_ttyRun`.
+///
+/// PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD252. When the parser needs
+/// more input (`result.n == 0`) the reference copies the unparsed tail to the front and
+/// sets `read_start = seq_start - initial_start + 1`, ONE PAST the carried length, and
+/// the next pass parses `buf[seq_start..n]` with `n` the count of NEW bytes only. So a
+/// sequence or UTF-8 character split across two reads is parsed with a stale byte in it
+/// and its last bytes cut off; and a full 1024-byte read that is all one unfinished
+/// sequence (an OSC, DCS or APC with no terminator yet) sets `read_start = 1025`, and
+/// the next `buf[read_start..]` is out of range (a panic in a safety-checked build). The
+/// comment "copy the read to the beginning" states the intent: continue parsing the
+/// carried bytes with the new ones. The port carries exactly the unparsed tail and
+/// parses carried + new bytes. A carried sequence that fills the whole buffer cannot
+/// grow, so the port drops it (the most conservative handling the reference offers
+/// nothing better for: its bytes are lost, and parsing restarts with the next read).
+#[cfg(not(windows))]
+struct ReadCarry {
+    buf: [u8; 1024],
+    read_start: usize,
+}
+
+#[cfg(not(windows))]
+impl ReadCarry {
+    fn new() -> Self {
+        ReadCarry {
+            buf: [0u8; 1024],
+            read_start: 0,
+        }
+    }
+
+    /// Where the next `read` goes: after the carried bytes.
+    fn read_buf(&mut self) -> &mut [u8] {
+        &mut self.buf[self.read_start..]
+    }
+
+    /// Parses the carried bytes plus the `n` new ones, calling `on_event` per event,
+    /// and carries an unfinished tail to the front.
+    fn process(
+        &mut self,
+        n: usize,
+        parser: &mut Parser,
+        mut on_event: impl FnMut(Event<'_>),
+    ) -> Result<(), crate::parser::ParseError> {
+        let end = self.read_start + n;
+        let mut seq_start: usize = 0;
+        while seq_start < end {
+            let result = parser.parse(&self.buf[seq_start..end])?;
+            if result.n == 0 {
+                // release the buf/parser borrow before the overlapping copy
+                drop(result);
+                // copy the read to the beginning. We don't use memcpy because
+                // this could be overlapping, and it's also rare
+                let initial_start = seq_start;
+                while seq_start < end {
+                    self.buf[seq_start - initial_start] = self.buf[seq_start];
+                    seq_start += 1;
+                }
+                let carried = end - initial_start;
+                self.read_start = if carried == self.buf.len() {
+                    0
+                } else {
+                    carried
+                };
+                return Ok(());
+            }
+            self.read_start = 0;
+            seq_start += result.n;
+
+            match result.event {
+                None => continue,
+                Some(event) => on_event(event),
+            }
+        }
+        self.read_start = 0;
+        Ok(())
+    }
+}
 
 #[cfg(all(not(windows), not(test)))]
 use crate::tty::SignalHandler;
@@ -130,7 +305,19 @@ pub struct Loop<'a, T> {
     /// reference's plain `bool` is written by `stop` on the caller's thread and
     /// read by the read thread's loop condition with no synchronization.
     should_quit: AtomicBool,
+    /// Rust-only: the `(read, write)` ends of the stop wake pipe, created by `start` and
+    /// closed by `stop` (MAIN-THREAD-ONLY, like `thread`). The read thread gets its own
+    /// copy of the read end. PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md
+    /// UD246 — see `stop`.
+    #[cfg(not(windows))]
+    wake: Cell<Option<(RawFd, RawFd)>>,
 }
+
+/// How long `stop` waits for the terminal's `ESC[0n` reply to end the read before it
+/// wakes the read thread through the wake pipe (UD246). A terminal that answers does so
+/// well within this, so its shutdown is exactly the reference's.
+#[cfg(not(windows))]
+pub const STOP_DSR_GRACE: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// A `Send` newtype carrying the raw `*mut Loop<T>` into the read thread (§4.2). Sound:
 /// the pointee is pinned for the thread's life and only ever touched via narrow field
@@ -148,24 +335,30 @@ struct SendLoop<T>(*mut Loop<'static, T>);
 unsafe impl<T> Send for SendLoop<T> {}
 
 impl<'a, T: LoopEvent> Loop<'a, T> {
-    /// Construct the Loop over a tty + Vaxis (Zig `.{ .tty = &tty, .vaxis = &vx }`). The
-    /// caller passes raw pointers to a PINNED `tty`/`vaxis` that outlive the Loop. The
-    /// Loop itself must then be pinned (Box/stack held for the read thread's life)
-    /// before `init`/`start` — the intrusive-init requirement below.
-    pub fn new(tty: *mut Tty, vaxis: *mut Vaxis<'a>) -> Self {
+    /// `pub fn init(io: std.Io, tty: *Tty, vx: *Vaxis) Self` (libvaxis 0.6.0; 0.5.1 had no
+    /// constructor and its `init` installed the resize handler, now
+    /// [`Self::install_resize_handler`]). The caller passes raw pointers to a PINNED
+    /// `tty`/`vaxis` that outlive the Loop. The Loop itself must then be pinned (Box/stack
+    /// held for the read thread's life) before `install_resize_handler`/`start` — the
+    /// intrusive requirement below. `io` is dropped (the port's queue and thread are
+    /// `std::sync` / `std::thread`, see [`crate::queue`]).
+    pub fn init(tty: *mut Tty, vaxis: *mut Vaxis<'a>) -> Self {
         Loop {
             tty,
             vaxis,
             queue: Queue::default(),
             thread: Cell::new(None),
             should_quit: AtomicBool::new(false),
+            #[cfg(not(windows))]
+            wake: Cell::new(None),
         }
     }
 
-    /// Initialize the event loop. This is an intrusive init so that we have
-    /// a stable pointer to register signal callbacks with posix TTYs
+    /// `installResizeHandler` (libvaxis 0.6.0; the body of 0.5.1's `init`, whose doc
+    /// read: "Initialize the event loop. This is an intrusive init so that we have a
+    /// stable pointer to register signal callbacks with posix TTYs").
     #[cfg_attr(any(windows, test), allow(clippy::unnecessary_wraps))]
-    pub fn init(&self) -> Result<(), TtyError> {
+    pub fn install_resize_handler(&self) -> Result<(), TtyError> {
         // windows/test → no-op (windows: seam; test: `ttyRun` returns early anyway).
         #[cfg(all(not(windows), not(test)))]
         {
@@ -193,14 +386,51 @@ impl<'a, T: LoopEvent> Loop<'a, T> {
         // are invariant, so `*mut Loop<'a, T>` does NOT coerce to `*mut Loop<'static, T>`.
         #[allow(clippy::unnecessary_cast)]
         let send = SendLoop(self_ptr as *mut Loop<'static, T>);
+        // PORT NOTE: reference defect (R13), UD246: the stop wake pipe (see `stop`).
+        // Close-on-exec so a child spawned by the TUI does not inherit it.
+        #[cfg(not(windows))]
+        let wake_r = {
+            let mut fds = [0 as libc::c_int; 2];
+            if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            for fd in fds {
+                unsafe {
+                    libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC);
+                }
+            }
+            self.wake.set(Some((fds[0], fds[1])));
+            fds[0]
+        };
+        #[cfg(windows)]
+        let wake_r = ();
         // PORT NOTE: Zig passes `self.vaxis.opts.system_clipboard_allocator` as the paste
         // allocator; dropped here (paste owns its `Vec`, §5/3a precedent).
-        let handle = std::thread::Builder::new().spawn(move || {
+        let spawned = std::thread::Builder::new().spawn(move || {
             let s = send;
-            Self::tty_run(s);
-        })?;
+            Self::tty_run(s, wake_r);
+        });
+        let handle = match spawned {
+            Ok(h) => h,
+            Err(e) => {
+                #[cfg(not(windows))]
+                self.close_wake();
+                return Err(e);
+            }
+        };
         self.thread.set(Some(handle));
         Ok(())
+    }
+
+    /// Closes both ends of the stop wake pipe, if open (UD246).
+    #[cfg(not(windows))]
+    fn close_wake(&self) {
+        if let Some((r, w)) = self.wake.take() {
+            unsafe {
+                libc::close(r);
+                libc::close(w);
+            }
+        }
     }
 
     /// stops reading from the tty.
@@ -226,12 +456,30 @@ impl<'a, T: LoopEvent> Loop<'a, T> {
             let w = Tty::writer_raw(tty);
             let _ = Vaxis::device_status_report(&mut *w);
         }
+        // PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD246. The reference
+        // joins right away (`thread.await`), so a terminal that never answers `ESC[5n`
+        // leaves the read thread blocked in `read` and `stop` never returns: the TUI
+        // hangs on exit until more input arrives. The DSR stays the wake, exactly as in
+        // the reference, for `STOP_DSR_GRACE`; only if the read thread has not ended by
+        // then does `stop` write one byte to the wake pipe the read thread polls beside
+        // the tty, and the thread returns without another read. A terminal that answers
+        // within the grace therefore shuts down exactly as in Ghostty (its reply is read
+        // by the reader); one that never answers makes `stop` return after the grace.
+        #[cfg(not(windows))]
+        wake_reader_after_grace(&handle, self.wake.get().map(|(_, w)| w), STOP_DSR_GRACE);
         // join, leave the Cell None, reset should_quit
         handle.join().ok();
+        #[cfg(not(windows))]
+        self.close_wake();
         self.should_quit.store(false, Ordering::Relaxed);
     }
 
     /// returns the next available event, blocking until one is available
+    ///
+    /// PORT NOTE (libvaxis 0.6.0): `nextEvent`, `pollEvent`, `tryEvent`, `postEvent` and
+    /// `tryPostEvent` now return `!T` / `!void`: the only error is the queue's
+    /// `error.Canceled` (an `std.Io` task cancelation), which the port's `std::sync`
+    /// queue cannot produce (see [`crate::queue`]), so they stay infallible here.
     pub fn next_event(&self) -> T {
         self.queue.pop()
     }
@@ -274,7 +522,7 @@ impl<'a, T: LoopEvent> Loop<'a, T> {
             if (*(*self_ptr).vaxis).state.in_band_resize {
                 return;
             }
-            let winsize = match Tty::get_winsize((*(*self_ptr).tty).fd()) {
+            let winsize = match (*(*self_ptr).tty).get_winsize() {
                 Ok(w) => w,
                 Err(_) => return,
             };
@@ -285,7 +533,11 @@ impl<'a, T: LoopEvent> Loop<'a, T> {
     }
 
     /// read input from the tty. This is run in a separate thread
-    fn tty_run(loop_ptr: SendLoop<T>) {
+    fn tty_run(
+        loop_ptr: SendLoop<T>,
+        #[cfg(not(windows))] wake_r: RawFd,
+        #[cfg(windows)] _wake_r: (),
+    ) {
         // Return early if we're in test mode to avoid infinite loops
         if cfg!(test) {
             return;
@@ -295,7 +547,7 @@ impl<'a, T: LoopEvent> Loop<'a, T> {
         #[cfg(not(windows))]
         unsafe {
             // get our initial winsize
-            let winsize = match Tty::get_winsize((*(*sp).tty).fd()) {
+            let winsize = match (*(*sp).tty).get_winsize() {
                 Ok(w) => w,
                 Err(_) => return,
             };
@@ -306,43 +558,34 @@ impl<'a, T: LoopEvent> Loop<'a, T> {
             let mut parser = Parser::default();
 
             // initialize the read buffer
-            let mut buf = [0u8; 1024];
-            let mut read_start: usize = 0;
+            // (var buf: [1024]u8 = undefined; var read_start: usize = 0;) — the pair is
+            // `ReadCarry` (UD252).
+            let mut carry = ReadCarry::new();
             // read loop
-            'read_loop: while !(*sp).should_quit.load(Ordering::Relaxed) {
+            let tty_fd = (*(*sp).tty).fd();
+            while !(*sp).should_quit.load(Ordering::Relaxed) {
+                // PORT NOTE: reference defect (R13), UD246: wait for the tty OR the stop
+                // wake pipe (`wait_tty_or_wake`). `stop` writes the pipe only when the
+                // terminal has not answered its `ESC[5n` within `STOP_DSR_GRACE`; the
+                // thread then ends without another read. Everything else is the
+                // reference's blocking read.
+                if let TtyWait::Wake | TtyWait::Failed = wait_tty_or_wake(tty_fd, wake_r) {
+                    return;
+                }
                 // Raw-receiver read (H1): the thread BLOCKS here while `stop()` writes
                 // the DSR wake into `tty_writer`; `Tty::read(this: *const _)` holds no
                 // whole-Tty borrow across the blocked syscall (see tty.rs).
-                let n = match Tty::read((*sp).tty, &mut buf[read_start..]) {
+                let n = match Tty::read((*sp).tty, carry.read_buf()) {
                     Ok(n) => n,
                     Err(_) => return,
                 };
-                let mut seq_start: usize = 0;
-                while seq_start < n {
-                    let result = match parser.parse(&buf[seq_start..n]) {
-                        Ok(r) => r,
-                        Err(_) => return,
-                    };
-                    if result.n == 0 {
-                        // release the buf/parser borrow before the overlapping copy
-                        drop(result);
-                        // copy the read to the beginning. We don't use memcpy because
-                        // this could be overlapping, and it's also rare
-                        let initial_start = seq_start;
-                        while seq_start < n {
-                            buf[seq_start - initial_start] = buf[seq_start];
-                            seq_start += 1;
-                        }
-                        read_start = seq_start - initial_start + 1;
-                        continue 'read_loop;
-                    }
-                    read_start = 0;
-                    seq_start += result.n;
-
-                    match result.event {
-                        None => continue,
-                        Some(event) => handle_event_generic(sp, (*sp).vaxis, event),
-                    }
+                // PORT NOTE: reference defect (R13), UD252: the parse-and-carry step is
+                // `ReadCarry::process` (see there).
+                let parsed = carry.process(n, &mut parser, |event| {
+                    handle_event_generic(sp, (*sp).vaxis, event)
+                });
+                if parsed.is_err() {
+                    return;
                 }
             }
         }
@@ -684,7 +927,7 @@ mod tests {
     fn queued_key_text_is_owned_not_a_view_of_the_read_buffer() {
         let mut tty = Tty::init(Vec::new()).unwrap();
         let mut vx = Vaxis::default();
-        let mut l: Loop<'_, TestEvent> = Loop::new(&mut tty, &mut vx);
+        let mut l: Loop<'_, TestEvent> = Loop::init(&mut tty, &mut vx);
 
         const EVENTS: usize = 100;
         const LEN: usize = 100; // 100 x 100 bytes > 8 KiB
@@ -718,17 +961,174 @@ mod tests {
         tty.deinit();
     }
 
+    /// libvaxis 0.6.0 `test Loop` (the Loop is constructed by `init` and no resize
+    /// handler is installed; the query waits `.fromSeconds(1)`, 0.5.1 waited 1 ms).
     #[test]
     fn loop_lifecycle() {
         let mut tty = Tty::init(Vec::new()).unwrap();
         let mut vx = Vaxis::default();
+        let tty_ptr: *mut Tty = &raw mut tty;
+        let vx_ptr: *mut Vaxis<'_> = &raw mut vx;
 
-        let l: Loop<'_, TestEvent> = Loop::new(&mut tty, &mut vx);
-        l.init().unwrap();
+        let l: Loop<'_, TestEvent> = Loop::init(tty_ptr, vx_ptr);
 
         l.start().unwrap();
-        l.stop();
 
+        // Optionally enter the alternate screen
+        // SAFETY: the reborrows go through the same pointers the Loop holds; under
+        // cfg(test) the read thread returns at once (`if (builtin.is_test) return;`).
+        unsafe {
+            (*vx_ptr).enter_alt_screen((*tty_ptr).writer()).unwrap();
+            (*vx_ptr)
+                .query_terminal((*tty_ptr).writer(), std::time::Duration::from_secs(1))
+                .unwrap();
+        }
+        // defer loop.stop();
+        l.stop();
+        // defer vx.deinit(std.testing.allocator, tty.writer());
+        unsafe { (*vx_ptr).deinit((*tty_ptr).writer()) };
+        drop(l);
+        // defer tty.deinit();
         tty.deinit();
+    }
+}
+
+/// UD252 (PORT NOTE: reference defect (R13), at `ReadCarry`): the read loop's
+/// parse-and-carry step, driven with the byte chunks successive `read`s would return.
+#[cfg(all(test, not(windows)))]
+mod read_carry_tests {
+    use super::*;
+    use crate::key;
+
+    /// Puts `bytes` where the next `read` would, runs one `process`, and returns the
+    /// codepoints of the key presses it produced.
+    fn feed(carry: &mut ReadCarry, parser: &mut Parser, bytes: &[u8]) -> Vec<u32> {
+        let dst = carry.read_buf();
+        assert!(
+            bytes.len() <= dst.len(),
+            "the chunk must fit the read buffer"
+        );
+        dst[..bytes.len()].copy_from_slice(bytes);
+        let mut keys = Vec::new();
+        carry
+            .process(bytes.len(), parser, |event| {
+                if let Event::KeyPress(k) = event {
+                    keys.push(k.codepoint);
+                }
+            })
+            .expect("parse");
+        keys
+    }
+
+    #[test]
+    fn a_sequence_split_across_reads_parses_whole() {
+        let mut carry = ReadCarry::new();
+        let mut parser = Parser::default();
+        // An arrow key split after its CSI introducer.
+        assert_eq!(
+            feed(&mut carry, &mut parser, b"a\x1b["),
+            vec![u32::from(b'a')]
+        );
+        assert_eq!(
+            feed(&mut carry, &mut parser, b"Ab"),
+            vec![key::up, u32::from(b'b')]
+        );
+        // A longer sequence (Ctrl+Up) split inside its parameters.
+        assert_eq!(
+            feed(&mut carry, &mut parser, b"c\x1b[1;"),
+            vec![u32::from(b'c')]
+        );
+        assert_eq!(
+            feed(&mut carry, &mut parser, b"5Ad"),
+            vec![key::up, u32::from(b'd')]
+        );
+    }
+
+    #[test]
+    fn a_full_buffer_of_one_unfinished_osc_does_not_panic() {
+        let mut carry = ReadCarry::new();
+        let mut parser = Parser::default();
+        let mut osc = b"\x1b]0;".to_vec();
+        osc.resize(1024, b'x');
+        assert_eq!(feed(&mut carry, &mut parser, &osc), Vec::<u32>::new());
+        // The carried sequence filled the buffer and was dropped: the next read has the
+        // whole buffer again, and input after it still parses.
+        assert_eq!(carry.read_buf().len(), 1024);
+        feed(&mut carry, &mut parser, b"xx\x1b\\");
+        assert_eq!(feed(&mut carry, &mut parser, b"\x1b[A"), vec![key::up]);
+    }
+}
+
+/// UD246 (PORT NOTE: reference defect (R13), at `wait_tty_or_wake` and `Loop::stop`):
+/// the read thread's wait, driven with a pipe that stands in for a terminal. (`tty_run`
+/// itself returns at once in test builds, as the reference's does.)
+#[cfg(all(test, not(windows)))]
+mod stop_wake_tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    fn pipe() -> (RawFd, RawFd) {
+        let mut fds = [0 as libc::c_int; 2];
+        assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+        (fds[0], fds[1])
+    }
+
+    /// A reader standing in for `tty_run`: waits, and on `Readable` reads the reply and
+    /// ends (the loop condition then sees `should_quit`).
+    fn spawn_reader(tty_r: RawFd, wake_r: RawFd) -> std::thread::JoinHandle<()> {
+        std::thread::spawn(move || {
+            if wait_tty_or_wake(tty_r, wake_r) == TtyWait::Readable {
+                let mut b = [0u8; 16];
+                let _ = unsafe { libc::read(tty_r, b.as_mut_ptr().cast(), b.len()) };
+            }
+        })
+    }
+
+    #[test]
+    fn a_terminal_that_never_answers_is_woken_after_the_grace() {
+        let (tty_r, tty_w) = pipe();
+        let (wake_r, wake_w) = pipe();
+        let reader = spawn_reader(tty_r, wake_r);
+        let started = Instant::now();
+        let woke = wake_reader_after_grace(&reader, Some(wake_w), Duration::from_millis(200));
+        assert!(woke, "no reply arrived, so stop must use the wake pipe");
+        // Bounded join: with the reference's plain blocking read this never returns.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !reader.is_finished() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(
+            reader.is_finished(),
+            "the reader is still blocked 5 s after the wake: stop would hang (UD246)"
+        );
+        reader.join().unwrap();
+        assert!(
+            started.elapsed() >= Duration::from_millis(200),
+            "woken only after the grace"
+        );
+        for fd in [tty_r, tty_w, wake_r, wake_w] {
+            unsafe { libc::close(fd) };
+        }
+    }
+
+    #[test]
+    fn a_terminal_that_answers_ends_the_read_without_the_wake() {
+        let (tty_r, tty_w) = pipe();
+        let (wake_r, wake_w) = pipe();
+        let reader = spawn_reader(tty_r, wake_r);
+        // The terminal's `ESC[0n` reply.
+        assert_eq!(
+            unsafe { libc::write(tty_w, b"\x1b[0n".as_ptr().cast(), 4) },
+            4
+        );
+        let woke = wake_reader_after_grace(&reader, Some(wake_w), Duration::from_secs(5));
+        assert!(
+            !woke,
+            "the reply ended the read; the wake pipe must not be used"
+        );
+        reader.join().unwrap();
+        for fd in [tty_r, tty_w, wake_r, wake_w] {
+            unsafe { libc::close(fd) };
+        }
     }
 }

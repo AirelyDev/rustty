@@ -41,6 +41,7 @@ pub mod theme;
 pub mod url;
 pub mod value_types;
 pub mod wasm;
+pub mod zig_error;
 
 // Re-exports under the reference's top-level names (the config package exposes
 // these types via `@import("config/<File>.zig")` from `config/main.zig`).

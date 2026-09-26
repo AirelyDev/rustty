@@ -67,6 +67,8 @@ mod imp {
         #[property(get, set, builder(Target::default()))]
         pub target: Cell<Target>,
 
+        /// The initial value of the entry field.
+        ///
         /// PORTS: `title_dialog.zig:47-60,78-79` the `initial-value` property /
         /// private field — the text pre-filled into the entry.
         #[property(get, set, name = "initial-value", nullable)]
@@ -104,6 +106,7 @@ mod imp {
         fn signals() -> &'static [glib::subclass::Signal] {
             static SIGNALS: OnceLock<Vec<glib::subclass::Signal>> = OnceLock::new();
             SIGNALS.get_or_init(|| {
+                // Set the title to the given value.
                 vec![glib::subclass::Signal::builder("set")
                     .param_types([String::static_type()])
                     .build()]
@@ -167,7 +170,10 @@ impl TitleDialog {
         // Set the title for the dialog. PORTS: `title_dialog.zig:117-118`.
         self.set_heading(Some(self.target().title()));
 
-        // Show it. PORTS: `title_dialog.zig:120-127` (`choose` + `alertDialogReady`).
+        // Show it. We could also just use virtual methods to bind to
+        // response but this is pretty simple.
+        //
+        // PORTS: `title_dialog.zig:120-127` (`choose` + `alertDialogReady`).
         // The gtk4-rs `choose` callback receives the response id directly (no
         // `choose_finish`); on "ok" we emit `set` with the entry text.
         self.clone().choose(
@@ -177,8 +183,10 @@ impl TitleDialog {
                 #[weak(rename_to = this)]
                 self,
                 move |response| {
+                    // If we didn't hit "okay" then we do nothing.
                     // PORTS: `title_dialog.zig:138-139` — only act on "ok".
                     if response == "ok" {
+                        // Emit our signal with the new title.
                         // PORTS: `title_dialog.zig:141-148`.
                         let title = this.imp().entry.buffer().text();
                         this.emit_by_name::<()>("set", &[&title.as_str()]);

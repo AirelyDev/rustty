@@ -43,9 +43,12 @@
 //! *source* (`share/terminfo/ghostty.terminfo`) and a `termcap` translation
 //! (`share/terminfo/ghostty.termcap`) alongside it — the `emit_terminfo` /
 //! `emit_termcap` installs of ghostty's `GhosttyResources.zig` (P1.3,
-//! INTEGRATION_PARITY §2.8). ghostty defaults those FALSE for Release and TRUE
-//! for Debug; rustty emits them unconditionally so `infocmp`/Debug tooling has
-//! byte-identical inputs regardless of profile. The termcap is produced by
+//! INTEGRATION_PARITY §2.8). Both are gated by [`Emit`], whose defaults are
+//! the reference's: TRUE for Debug, FALSE for the release modes
+//! (`xtask resources --optimize`, overridable with `--emit-terminfo` /
+//! `--emit-termcap`). CORRECTION (S64-F8, 2026-09-23): this note used to say
+//! "rustty emits them unconditionally so `infocmp`/Debug tooling has
+//! byte-identical inputs regardless of profile". The termcap is produced by
 //! `infotocap` (resolved by name on `PATH`) reading that same source (exactly
 //! ghostty's `RunStep "infotocap" <source>`), whose stderr — capability-translation
 //! warnings + the 1023-byte-truncation notices termcap inherently requires — is
@@ -69,6 +72,54 @@
 
 use std::path::Path;
 use std::process::Command;
+
+/// The reference's `-Doptimize` mode, which picks the `emit_*` defaults
+/// (`Config.zig:504-522`). `zig build` without `-Doptimize` is `Debug`, so
+/// that is the default here too.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Optimize {
+    Debug,
+    ReleaseSafe,
+    ReleaseFast,
+    ReleaseSmall,
+}
+
+impl Optimize {
+    /// Parse the reference's spelling (`-Doptimize=ReleaseFast`).
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "Debug" => Some(Self::Debug),
+            "ReleaseSafe" => Some(Self::ReleaseSafe),
+            "ReleaseFast" => Some(Self::ReleaseFast),
+            "ReleaseSmall" => Some(Self::ReleaseSmall),
+            _ => None,
+        }
+    }
+}
+
+/// `cfg.emit_terminfo` / `cfg.emit_termcap`: whether the terminfo SOURCE and
+/// its termcap translation are installed next to the compiled database
+/// (`GhosttyResources.zig:43-77`). The compiled database is installed either
+/// way.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Emit {
+    pub terminfo: bool,
+    pub termcap: bool,
+}
+
+impl Emit {
+    /// The defaults `Config.zig:504-522` gives when neither `-Demit-terminfo`
+    /// nor `-Demit-termcap` is passed: both on for `Debug` and off for every
+    /// release mode, except that a Windows target always installs the source
+    /// (its runtime lookup keys off that file).
+    pub fn defaults(target_os: &str, optimize: Optimize) -> Self {
+        let debug = optimize == Optimize::Debug;
+        Self {
+            terminfo: target_os == "windows" || debug,
+            termcap: debug,
+        }
+    }
+}
 
 /// The terminfo tree's directory name under `share/` for a target OS: FreeBSD
 /// uses `site-terminfo` (its base system owns `share/terminfo`; third-party
@@ -118,7 +169,7 @@ fn terminfo_dir_name(target_os: &str) -> &'static str {
 ///   4. Translate the source to `{APP}.termcap` via `infotocap` (see
 ///      [`emit_termcap`]).
 ///   5. Create the `share/{APP}/` root (see [`gen_app_root`]).
-pub fn gen_terminfo(share_dir: &Path, target_os: &str) -> Result<(), String> {
+pub fn gen_terminfo(share_dir: &Path, target_os: &str, emit: Emit) -> Result<(), String> {
     // 1. Build + encode the terminfo source.
     let source = rustty_terminfo::entry::rustty();
     let mut src_bytes: Vec<u8> = Vec::new();
@@ -129,16 +180,48 @@ pub fn gen_terminfo(share_dir: &Path, target_os: &str) -> Result<(), String> {
         return Err("terminfo source encoded to empty output".to_string());
     }
 
-    // 2. Emit the SOURCE into the target-appropriate tree (P1.3 /
-    //    INTEGRATION_PARITY §2.8; ghostty `emit_terminfo`). tic and infotocap
-    //    below consume this same installed file, exactly like the oracle's
-    //    WriteFiles `ghostty.terminfo` feeding all three steps.
+    // The oracle writes the source into a build-cache WriteFiles dir
+    // (`wf.addCopyFile(..., "ghostty.terminfo")`) that tic and infotocap read,
+    // and INSTALLS it only `if (cfg.emit_terminfo)` (S64-F8). The private
+    // work dir here is that cache copy.
+    let work = std::env::temp_dir().join(format!(
+        "rustty-xtask-terminfo-src-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    std::fs::create_dir_all(&work).map_err(|e| format!("create {}: {e}", work.display()))?;
+    let result = gen_terminfo_from(share_dir, target_os, emit, &source, &src_bytes, &work);
+    let _ = std::fs::remove_dir_all(&work);
+    result
+}
+
+/// The body of [`gen_terminfo`] once the source is encoded; `work` is the
+/// private directory the uninstalled source copy lives in.
+fn gen_terminfo_from(
+    share_dir: &Path,
+    target_os: &str,
+    emit: Emit,
+    source: &rustty_terminfo::Source,
+    src_bytes: &[u8],
+    work: &Path,
+) -> Result<(), String> {
+    let src_path = work.join(format!("{}.terminfo", crate::APP));
+    std::fs::write(&src_path, src_bytes)
+        .map_err(|e| format!("write {}: {e}", src_path.display()))?;
+
+    // 2. Install the SOURCE into the target-appropriate tree when
+    //    `emit_terminfo` (P1.3 / INTEGRATION_PARITY §2.8).
     let terminfo_dir = share_dir.join(terminfo_dir_name(target_os));
     std::fs::create_dir_all(&terminfo_dir)
         .map_err(|e| format!("create {}: {e}", terminfo_dir.display()))?;
-    let src_path = terminfo_dir.join(format!("{}.terminfo", crate::APP));
-    std::fs::write(&src_path, &src_bytes)
-        .map_err(|e| format!("write {}: {e}", src_path.display()))?;
+    if emit.terminfo {
+        let installed = terminfo_dir.join(format!("{}.terminfo", crate::APP));
+        std::fs::write(&installed, src_bytes)
+            .map_err(|e| format!("write {}: {e}", installed.display()))?;
+    }
 
     // Windows: no tic/infotocap binaries exist — the oracle breaks out of the
     // terminfo block right after the source install (`break :terminfo`), and
@@ -166,8 +249,10 @@ pub fn gen_terminfo(share_dir: &Path, target_os: &str) -> Result<(), String> {
     }
 
     // 4. The termcap translation alongside the compiled DB (ghostty
-    //    `emit_termcap`).
-    emit_termcap(&terminfo_dir, &src_path)?;
+    //    `if (cfg.emit_termcap)`).
+    if emit.termcap {
+        emit_termcap(&terminfo_dir, &src_path)?;
+    }
 
     // 5. The share/{APP} resource root.
     gen_app_root(share_dir)?;
@@ -281,6 +366,101 @@ fn gen_app_root(share_dir: &Path) -> Result<(), String> {
 mod tests {
     use super::*;
 
+    const ALL: Emit = Emit {
+        terminfo: true,
+        termcap: true,
+    };
+
+    /// `Config.zig:504-522`: source and termcap default on for Debug, off for
+    /// the three release modes; a Windows target always installs the source.
+    #[test]
+    fn emit_defaults_follow_the_reference_config() {
+        for os in ["macos", "linux", "freebsd"] {
+            assert_eq!(Emit::defaults(os, Optimize::Debug), ALL);
+            for opt in [
+                Optimize::ReleaseSafe,
+                Optimize::ReleaseFast,
+                Optimize::ReleaseSmall,
+            ] {
+                assert_eq!(
+                    Emit::defaults(os, opt),
+                    Emit {
+                        terminfo: false,
+                        termcap: false
+                    }
+                );
+            }
+        }
+        assert_eq!(
+            Emit::defaults("windows", Optimize::ReleaseFast),
+            Emit {
+                terminfo: true,
+                termcap: false
+            }
+        );
+        assert_eq!(Optimize::parse("ReleaseSafe"), Some(Optimize::ReleaseSafe));
+        assert_eq!(Optimize::parse("release"), None);
+    }
+
+    /// S64-F8: with `emit_terminfo` and `emit_termcap` off (the release
+    /// defaults) the source and termcap are NOT installed
+    /// (`GhosttyResources.zig:43-77`), but the compiled database still is:
+    /// `tic` reads the source from outside the install tree.
+    #[test]
+    fn gen_terminfo_release_installs_only_the_compiled_database() {
+        let base = std::env::temp_dir().join(format!(
+            "rustty-xtask-tinfo-release-test-{}",
+            std::process::id()
+        ));
+        let share = base.join("share");
+        std::fs::create_dir_all(&share).unwrap();
+
+        gen_terminfo(
+            &share,
+            "macos",
+            Emit {
+                terminfo: false,
+                termcap: false,
+            },
+        )
+        .expect("gen_terminfo release");
+
+        let tree = share.join("terminfo");
+        let primary_name =
+            String::from_utf8(rustty_terminfo::entry::rustty().names[0].clone()).unwrap();
+        assert!(compiled_entry_exists(&tree, &primary_name));
+        assert!(!tree.join(format!("{}.terminfo", crate::APP)).exists());
+        assert!(!tree.join(format!("{}.termcap", crate::APP)).exists());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// The two gates are independent: termcap on, source off installs the
+    /// termcap only.
+    #[test]
+    fn gen_terminfo_termcap_without_source() {
+        let base = std::env::temp_dir().join(format!(
+            "rustty-xtask-tinfo-caponly-test-{}",
+            std::process::id()
+        ));
+        let share = base.join("share");
+        std::fs::create_dir_all(&share).unwrap();
+
+        gen_terminfo(
+            &share,
+            "linux",
+            Emit {
+                terminfo: false,
+                termcap: true,
+            },
+        )
+        .expect("gen_terminfo termcap only");
+
+        let tree = share.join("terminfo");
+        assert!(!tree.join(format!("{}.terminfo", crate::APP)).exists());
+        assert!(tree.join(format!("{}.termcap", crate::APP)).is_file());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
     /// W2-03: the tree's directory name matches the runtime lookup
     /// (`rustty-os` `resourcesdir.rs` sentinels) per target, byte-for-byte the
     /// oracle's `terminfo_share_dir` pick: FreeBSD alone uses `site-terminfo`.
@@ -306,7 +486,7 @@ mod tests {
         let share = base.join("share");
         std::fs::create_dir_all(&share).unwrap();
 
-        gen_terminfo(&share, "freebsd").expect("gen_terminfo freebsd");
+        gen_terminfo(&share, "freebsd", ALL).expect("gen_terminfo freebsd");
 
         let tree = share.join("site-terminfo");
         let primary_name = rustty_terminfo::entry::rustty().names[0].clone();
@@ -342,7 +522,7 @@ mod tests {
         let share = base.join("share");
         std::fs::create_dir_all(&share).unwrap();
 
-        gen_terminfo(&share, "windows").expect("gen_terminfo windows");
+        gen_terminfo(&share, "windows", ALL).expect("gen_terminfo windows");
 
         let tree = share.join("terminfo");
         let src = tree.join(format!("{}.terminfo", crate::APP));
@@ -376,7 +556,7 @@ mod tests {
         let share = base.join("share");
         std::fs::create_dir_all(&share).unwrap();
 
-        gen_terminfo(&share, std::env::consts::OS).expect("gen_terminfo");
+        gen_terminfo(&share, std::env::consts::OS, ALL).expect("gen_terminfo");
 
         // Compiled terminfo entry exists under the active profile's primary
         // name (`xterm-rustty` by default, `xterm-ghostty` under

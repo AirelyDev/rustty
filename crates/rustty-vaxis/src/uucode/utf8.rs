@@ -1,4 +1,5 @@
-//! `uucode/src/utf8.zig` — Björn Höhrmann's UTF-8 decoder DFA, ported verbatim.
+//! `uucode/src/utf8.zig` (2826a37a; unchanged from 0.1.0 except its tests) — Björn
+//! Höhrmann's UTF-8 decoder DFA, ported verbatim.
 //!
 //! See https://bjoern.hoehrmann.de/utf-8/decoder/dfa/
 //! and licenses/LICENSE_Bjoern_Hoehrmann
@@ -125,6 +126,8 @@ mod tests {
     fn iterator_for_emoji() {
         let mut it = Iterator::init("😀😅😻👺".as_bytes());
         assert_eq!(it.next(), Some(0x1F600));
+        assert_eq!(it.i, 4);
+        assert_eq!(it.peek(), Some(0x1F605));
         assert_eq!(it.i, 4);
         assert_eq!(it.next(), Some(0x1F605));
         assert_eq!(it.i, 8);

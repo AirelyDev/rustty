@@ -171,6 +171,17 @@ impl args::Target for Options {
         Some(&mut self._diagnostics)
     }
 
+    // formatValues(Options, key, writer): of the four fields only `style`
+    // (`font.Style`) is `.@"enum"`; `presentation` is `?font.Presentation`,
+    // whose `@typeInfo` is `.optional`, so it gets no suffix (parity S67-F1).
+    fn format_values(&self, key: &[u8]) -> Vec<u8> {
+        match key {
+            // pub const Style = enum(u3) { regular, bold, italic, bold_italic };
+            b"style" => args::format_enum_values(&[b"regular", b"bold", b"italic", b"bold_italic"]),
+            _ => Vec::new(),
+        }
+    }
+
     // @hasDecl(Options, "help") == true.
     fn has_help_decl(&self) -> bool {
         true
@@ -245,13 +256,14 @@ where
     // Its possible to build Ghostty without font discovery!
     // if (comptime font.Discover == void) { try stderr.print(...); return 1; }
     //
-    // PORT NOTE: rustty's `font::Discover` is a real discoverer on every native
-    // target — CoreText on macOS, Fontconfig on Linux/BSD (both fully ported in
-    // the shaper's `discovery.rs`) — so this arm is skipped there and the live
-    // lookup body below runs. The `font.Discover == void` arm maps ONLY to the
-    // wasm `web_canvas` backend, whose browser has no font-file discovery.
-    #[cfg(target_arch = "wasm32")]
-    {
+    // PORT NOTE: `font.Discover == void` is `font::discovery::DISCOVER_IS_VOID`:
+    // true on the wasm `web_canvas` backend (no font-file discovery in the
+    // browser) and on `-Dfont-backend=freetype` ("no font discovery"); every
+    // other backend has a live discoverer and runs the lookup body below.
+    // CORRECTION (S-14b, review M1): this arm was `cfg(target_arch = "wasm32")`,
+    // so a native `.freetype` build ran the lookup where Ghostty prints this
+    // message and returns 1 (the sibling `list_fonts` site was converted in S-14).
+    if font::discovery::DISCOVER_IS_VOID {
         let _ = (&args_iter, &stdout);
         // R2: oracle prints the capitalized product name at both positions here.
         write!(
@@ -278,7 +290,11 @@ where
             Ok(()) => {}
             Err(args::Error::ActionHelpRequested) => return Err(Error::ActionHelpRequested),
             Err(err) => {
-                writeln!(stderr, "Error parsing args: {err:?}")?;
+                writeln!(
+                    stderr,
+                    "Error parsing args: {}",
+                    crate::zig_error::args_error(&err)
+                )?;
                 return Ok(1);
             }
         }
@@ -348,6 +364,8 @@ where
         let config = match Config::load() {
             Ok(config) => config,
             Err(err) => {
+                // PORT NOTE: the reference prints `{}` of the error (`error.<Name>`);
+                // this prints the port error's Debug. NEW-FINDINGS N121 (task T-C).
                 write!(stderr, "Unable to load config: {err:?}")?;
                 return Ok(1);
             }
@@ -389,21 +407,22 @@ where
         //     return 1;
         // };
         // errdefer font_grid_set.deinit();
-        //   PORT NOTE: on macOS `SharedGridSet.init`'s error set is uninhabited (the
-        //   `NoopLibrary` `error{}` arm), so the `catch` print is statically
-        //   unreachable (`match e {}` discharges it). On Linux/BSD the set opens the
-        //   `FreetypeLibrary`, so `init` returns a real `ft::FtError` — the reference
-        //   `catch |err| { print; return 1; }` is reproduced literally there. The
+        //   PORT NOTE: `SharedGridSet.init`'s error set is the backend `Library`'s
+        //   (`shared_grid_set::InitError`): uninhabited for `NoopLibrary` (the
+        //   `error{}` arm — the `catch` print is then statically unreachable), a
+        //   real `ft::FtError` for `FreetypeLibrary`. The reference
+        //   `catch |err| { print; return 1; }` is reproduced literally for both
+        //   (S-14, N266: it was split by `target_os`). The
         //   reference has only an `errdefer` (no unconditional `defer deinit`): no
         //   error propagates after this point (every failure below is caught →
         //   `return Ok(1)`), so the set is dropped by RAII at scope end (the
         //   reference leaks it on success).
-        #[cfg(target_os = "macos")]
-        let mut font_grid_set = font::SharedGridSet::init(Global).unwrap_or_else(|e| match e {});
-        #[cfg(not(target_os = "macos"))]
+        #[allow(unreachable_patterns)] // `Err` is uninhabited on `NoopLibrary` backends
         let mut font_grid_set = match font::SharedGridSet::init(Global) {
             Ok(set) => set,
             Err(err) => {
+                // PORT NOTE: the reference prints `{}` of the error (`error.<Name>`);
+                // this prints the port error's Debug. NEW-FINDINGS N121 (task T-C).
                 write!(stderr, "Unable to initialize font grid set: {err:?}")?;
                 return Ok(1);
             }
@@ -440,6 +459,8 @@ where
         let (font_grid_key, font_grid) = match font_grid_set.r#ref(&font_config, font_size) {
             Ok(pair) => pair,
             Err(err) => {
+                // PORT NOTE: the reference prints `{}` of the error (`error.<Name>`);
+                // this prints the port error's Debug. NEW-FINDINGS N121 (task T-C).
                 write!(stderr, "Unable to get font grid: {err:?}")?;
                 return Ok(1);
             }
@@ -466,8 +487,14 @@ where
                 // };
                 let view = match std::str::from_utf8(string) {
                     Ok(view) => view,
-                    Err(err) => {
-                        write!(stderr, "Unable to parse string as unicode: {err:?}")?;
+                    Err(_) => {
+                        // `{}` of `Utf8View.init`'s only error, `error.InvalidUtf8`
+                        // (Zig 0.16.0 `std/unicode.zig:363`); this printed Rust's
+                        // `Utf8Error` Debug (task T-C, NEW-FINDINGS N121).
+                        write!(
+                            stderr,
+                            "Unable to parse string as unicode: error.InvalidUtf8"
+                        )?;
                         return Ok(1);
                     }
                 };
@@ -549,6 +576,8 @@ fn lookup<SO: Write, SE: Write>(
             return Ok(None);
         }
         Err(err) => {
+            // PORT NOTE: the reference prints `{}` of the error (`error.<Name>`);
+            // this prints the port error's Debug. NEW-FINDINGS N121 (task T-C).
             write!(stderr, "Unable to get face: {err:?}")?;
             return Ok(Some(1));
         }
@@ -564,6 +593,8 @@ fn lookup<SO: Write, SE: Write>(
     let name = match unsafe { &*face }.name(&mut buf) {
         Ok(name) => name,
         Err(err) => {
+            // PORT NOTE: the reference prints `{}` of the error (`error.<Name>`);
+            // this prints the port error's Debug. NEW-FINDINGS N121 (task T-C).
             write!(stderr, "Unable to get name of face: {err:?}")?;
             return Ok(Some(1));
         }
@@ -704,9 +735,145 @@ fn font_shared_grid_set_derived_config(config: &Config) -> font::shared_grid_set
         adjust_box_thickness: config.adjust_box_thickness,
         adjust_icon_height: config.adjust_icon_height,
         // .@"freetype-load-flags" = if (FreetypeLoadFlags != void) config.@"freetype-load-flags" else {},
-        //   On macOS the shaper's `FreetypeLoadFlags` is `()` (the reference `void`
-        //   arm — exact); the config value flows on freetype targets when that DI
-        //   lands with the Linux backend.
-        freetype_load_flags: rustty_font_shaper::face::FREETYPE_LOAD_FLAGS_DEFAULT,
+        //
+        // CORRECTION (parity S70-F5, task T-C): this set the default on every
+        // target, under the note "On macOS the shaper's `FreetypeLoadFlags` is
+        // `()` (the reference `void` arm — exact); the config value flows on
+        // freetype targets when that DI lands with the Linux backend". That DI
+        // had landed (`rustty_core::surface::freetype_load_flags_from_config`,
+        // used by rustty-core's copy of this bridge); `derived_freetype_load_flags`
+        // below now selects per target as rustty-core's does.
+        freetype_load_flags: derived_freetype_load_flags(&config.freetype_load_flags),
+    }
+}
+
+/// `if (font.face.FreetypeLoadFlags != void) config.@"freetype-load-flags" else {}`.
+/// The shaper tier decides `hasFreetype()` (`face::freetype_load_flags_if_active`):
+/// `void` (`()`) on the macOS default `coretext`, the configured flags on the
+/// FreeType backends (the Linux/BSD default `fontconfig_freetype`, and
+/// `-Dfont-backend=coretext_freetype`). (S-14, N266: it was split by
+/// `target_os`.)
+#[cfg(not(target_arch = "wasm32"))]
+fn derived_freetype_load_flags(
+    c: &rustty_config::value_types::FreetypeLoadFlags,
+) -> rustty_font_shaper::face::FreetypeLoadFlags {
+    rustty_font_shaper::face::freetype_load_flags_if_active(|| {
+        rustty_core::surface::freetype_load_flags_from_config(c)
+    })
+}
+
+/// The wasm `web_canvas` backend has no FreeType either.
+#[cfg(target_arch = "wasm32")]
+fn derived_freetype_load_flags(
+    _c: &rustty_config::value_types::FreetypeLoadFlags,
+) -> rustty_font_shaper::face::FreetypeLoadFlags {
+    rustty_font_shaper::face::FREETYPE_LOAD_FLAGS_DEFAULT
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct VecArgs(std::vec::IntoIter<Vec<u8>>);
+    impl args::ArgIterator for VecArgs {
+        type Item = Vec<u8>;
+        fn next(&mut self) -> Option<Vec<u8>> {
+            self.0.next()
+        }
+    }
+    impl rustty_args::diagnostics::LocationProvider for VecArgs {}
+
+    // parity S70-F5: on a FreeType target `DerivedConfig.init` copies
+    // `config.@"freetype-load-flags"`; every flag is flipped from its default so
+    // a dropped copy cannot pass. Only on the `hasFreetype()` backends (elsewhere
+    // the type is `void`) — S-14b: keyed on the backend (`build.rs`), not the OS,
+    // so it also runs for macOS `-Dfont-backend=coretext_freetype`/`freetype`.
+    #[cfg(all(rustty_font_has_freetype, not(target_arch = "wasm32")))]
+    #[test]
+    fn derived_config_carries_the_configured_freetype_load_flags() {
+        let mut config = Config::default_config();
+        let d = config.freetype_load_flags;
+        config.freetype_load_flags.hinting = !d.hinting;
+        config.freetype_load_flags.force_autohint = !d.force_autohint;
+        config.freetype_load_flags.monochrome = !d.monochrome;
+        config.freetype_load_flags.autohint = !d.autohint;
+        config.freetype_load_flags.light = !d.light;
+        let got = font_shared_grid_set_derived_config(&config).freetype_load_flags;
+        assert_eq!(
+            (
+                !d.hinting,
+                !d.force_autohint,
+                !d.monochrome,
+                !d.autohint,
+                !d.light
+            ),
+            (
+                got.hinting,
+                got.force_autohint,
+                got.monochrome,
+                got.autohint,
+                got.light
+            )
+        );
+    }
+
+    // S-14b (review M1): `if (comptime font.Discover == void)` — the `.freetype`
+    // ("no font discovery") build prints the reference's message and returns 1
+    // before parsing anything. `--help` tells the arms apart: the void arm never
+    // reaches `args.parse`, the other arm returns `ActionHelpRequested` from it.
+    #[cfg(rustty_font_backend = "freetype")]
+    #[test]
+    fn without_font_discovery_show_face_says_so_and_returns_1() {
+        let mut it = VecArgs(vec![b"--help".to_vec()].into_iter());
+        let (mut out, mut err) = (Vec::<u8>::new(), Vec::<u8>::new());
+        let got = run_args(&mut it, &mut out, &mut err).expect("the void arm returns Ok(1)");
+        assert_eq!(1, got);
+        let err = String::from_utf8(err).unwrap();
+        assert!(
+            err.starts_with(&format!(
+                "{} was built without a font discovery mechanism. This is a compile-time\n",
+                rustty_identity::APP_NAME_TITLECASE
+            )),
+            "{err:?}"
+        );
+        assert!(out.is_empty());
+    }
+
+    /// The other side of the `Discover == void` test: a build WITH discovery
+    /// parses the arguments (`--help` → `ActionHelpRequested`) and prints no
+    /// "without a font discovery mechanism" message.
+    #[cfg(not(any(rustty_font_backend = "freetype", target_arch = "wasm32")))]
+    #[test]
+    fn with_font_discovery_show_face_parses_its_arguments() {
+        let mut it = VecArgs(vec![b"--help".to_vec()].into_iter());
+        let (mut out, mut err) = (Vec::<u8>::new(), Vec::<u8>::new());
+        let got = run_args(&mut it, &mut out, &mut err);
+        assert!(matches!(got, Err(Error::ActionHelpRequested)), "{got:?}");
+        assert!(!String::from_utf8_lossy(&err).contains("without a font discovery mechanism"));
+    }
+
+    // parity S67-F1: `formatValues(Options, "style", ...)` appends the
+    // `font.Style` names; `presentation` (`?font.Presentation`, `.optional`)
+    // gets none. The style text is the one MEASURED from Ghostty's
+    // `+show-face --cp=65 --style=bogus` (installed release build, not the pin).
+    #[test]
+    fn enum_option_diagnostic_lists_the_valid_values() {
+        let mut opts = Options::default();
+        let mut it =
+            VecArgs(vec![b"--style=bogus".to_vec(), b"--presentation=bogus".to_vec()].into_iter());
+        args::parse(&mut opts, &mut it).unwrap();
+        let messages: Vec<&[u8]> = opts
+            ._diagnostics
+            .items()
+            .iter()
+            .map(|d| d.message.as_slice())
+            .collect();
+        assert_eq!(
+            vec![
+                &b"invalid value \"bogus\", valid values are: regular, bold, italic, bold_italic"[..],
+                &b"invalid value \"bogus\""[..],
+            ],
+            messages
+        );
     }
 }

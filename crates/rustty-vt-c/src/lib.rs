@@ -36,10 +36,12 @@ use std::os::raw::c_int;
 // so the faithful analog is the cfg-level predicate below plus, per knob, the
 // closest thing this crate controls:
 //
-//   * `options.page_size_min = 16; options.page_size_max = 16;` — "Freestanding
-//     targets don't have an OS page size. We still need an alignment for
-//     terminal page allocations, and 16 covers everything stored in a page
-//     without requiring 4 KiB-aligned embedded heaps." The port's page
+//   * `options.page_size_min = 16; options.page_size_max = 16;`, whose
+//     reference comment reads:
+//         // Freestanding targets don't have an OS page size. We still need an
+//         // alignment for terminal page allocations, and 16 covers everything
+//         // stored in a page without requiring 4 KiB-aligned embedded heaps.
+//     The port's page
 //     alignment is `rustty_os::page_allocator` (mmap, OS page size) — there is
 //     no freestanding page pool to align, so this knob has no consumer yet
 //     (assessment: `.port/phase-6/assessments/W1-vt-core.md`).
@@ -51,8 +53,10 @@ use std::os::raw::c_int;
 //     — the reference keeps std's panic/stack-trace machinery (~160KB) only on
 //     development builds and never on native freestanding. `DEBUG_MACHINERY`
 //     below is the same predicate (`builtin.mode` → `debug_assertions`, R8:
-//     build-switchable, never folded) for any future consumer (a custom panic
-//     handler on a `none` OS); today the `std` panic handler is what runs.
+//     build-switchable, never folded). It selects the panic handler
+//     (`panic.rs`, the `tinyPanicImpl` port). CORRECTION (parity S43-F6): this
+//     used to say "for any future consumer (a custom panic handler on a `none`
+//     OS); today the `std` panic handler is what runs".
 //
 // wasm32-freestanding is deliberately NOT native freestanding (the reference
 // `!isWasm()` guard): the wasm arms in `sys::log_fn`, `rustty-lib`'s wasm
@@ -73,8 +77,37 @@ pub const NATIVE_FREESTANDING: bool = cfg!(target_os = "none") && !cfg!(target_a
 //         .Debug, .ReleaseSafe => true,
 //         .ReleaseFast, .ReleaseSmall => false,
 //     });
-#[allow(dead_code)]
 pub const DEBUG_MACHINERY: bool = !NATIVE_FREESTANDING && (cfg!(test) || cfg!(debug_assertions));
+
+// ----- lib_vt.zig: the root `comptime` export block -----
+//
+//     comptime {
+//         // If we're building the C library (vs. the Zig module) then
+//         // we want to reference the C API so that it gets exported.
+//         if (@import("root") == lib) { ... @export(&c.<fn>, .{ .name = "ghostty_<fn>" }) ... }
+//     }
+//
+// In rustty this crate IS the C library artifact, so every export below is a
+// `#[no_mangle] pub extern "C" fn rustty_<fn>` (the feature gates carried as
+// `#[cfg(feature = ...)]`). The block's `_fltused` MSVC marker and the
+// `quirks_memset.zig` force-reference are Zig-toolchain artefacts, not ported
+// (`.port/phase-3/assessments/C-capi-headers.md` `84254a9d8` N/A;
+// `.port/phase-3/NON_PORTS.md` §E34). The two, quoted (`lib_vt.zig:166-167`,
+// `:173-188`):
+//
+//     /// Used for MSVC builds (see below)
+//     var msvc_fltused: c_int = 1;
+//     ...
+//         // MSVC requires this marker whenever floating-point code is present.
+//         // Zig's compiler_rt only provides it when libc is not linked.
+//         if (builtin.os.tag == .windows and builtin.abi == .msvc and
+//             builtin.link_mode == .static) { @export(&msvc_fltused, .{ .name = "_fltused" }); }
+//
+//         // Force-reference our memset override so its export is
+//         // emitted. This must stay inside the root guard so that
+//         // downstream Zig module consumers don't get the override
+//         // injected into their binaries. See quirks_memset.zig.
+//         _ = @import("quirks_memset.zig");
 
 // ----- terminal/c/main.zig: module hub -----
 //
@@ -94,6 +127,8 @@ pub mod cell;
 pub mod color;
 pub mod color_scheme;
 mod cwrap;
+#[cfg(test)]
+mod dylib_link_args;
 pub mod focus;
 pub mod formatter;
 pub mod grid_ref;
@@ -106,6 +141,7 @@ pub mod modes;
 pub mod mouse_encode;
 pub mod mouse_event;
 pub mod osc;
+mod panic;
 pub mod paste;
 pub mod point;
 pub mod render;
@@ -3681,6 +3717,11 @@ pub unsafe extern "C" fn rustty_terminal_selection_equal(
 }
 
 // pub const terminal_grid_ref = terminal.grid_ref;  (ghostty_terminal_grid_ref)
+//
+// lib_vt.zig's export gate for this and `terminal_point_from_grid_ref`:
+//   // Selections are expressed in grid references, so the untracked
+//   // reference constructors are required by both features.
+//   if (features.grid_introspection or features.selection) { ... }
 /// C: rustty_terminal_grid_ref
 ///
 /// # Safety

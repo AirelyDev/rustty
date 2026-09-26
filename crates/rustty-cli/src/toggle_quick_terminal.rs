@@ -55,7 +55,13 @@ impl rustty_args::args::Target for Options {
         match key {
             // class: ?[:0]const u8
             b"class" => {
-                self.class = Some(rustty_args::args::parse_field_string(value)?);
+                // An empty (set-but-empty) value resets to the default (null),
+                // the generic `parseIntoField` rule (parity S70-F7).
+                if rustty_args::args::is_reset_to_default(value) {
+                    self.class = None;
+                    return Ok(());
+                }
+                self.class = Some(rustty_args::args::parse_field_sentinel_string(value)?);
                 Ok(())
             }
             // return error.InvalidField;
@@ -142,4 +148,24 @@ pub fn run() -> Result<u8, Error> {
     )?;
     // return 1;
     Ok(1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rustty_args::args::Target;
+
+    // parity S70-F7: `--class=` (set but empty) resets `class` to its default
+    // (null), the generic `parseIntoField` rule. Neither side's `run` parses
+    // these options today, so this pins the Target surface only.
+    #[test]
+    fn empty_class_resets_to_null() {
+        let mut opts = Options::default();
+        opts.parse_into_field(b"class", Some(b"com.example.x"))
+            .unwrap();
+        // Positive reach: `class` really left its default first.
+        assert_eq!(Some(b"com.example.x".to_vec()), opts.class);
+        opts.parse_into_field(b"class", Some(b"")).unwrap();
+        assert_eq!(None, opts.class);
+    }
 }

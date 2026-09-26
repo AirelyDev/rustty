@@ -317,7 +317,8 @@ impl Slope {
             };
         }
 
-        let mag = dx_real.hypot(dy_real);
+        // const mag = std.math.hypot(dx_real, dy_real); (Zig's, not libm's: S97-F1)
+        let mag = crate::internal::zig_math::hypot(dx_real, dy_real);
         Slope {
             dx: dx_real / mag,
             dy: dy_real / mag,

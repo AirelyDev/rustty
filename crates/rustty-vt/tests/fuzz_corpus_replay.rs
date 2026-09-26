@@ -132,6 +132,18 @@ fn oracle_corpus_root() -> Option<PathBuf> {
     }
 }
 
+/// [`oracle_corpus_root`] for the two `#[ignore]`d oracle tests: they were asked
+/// for, so a missing GHOSTTY_ORACLE is a FAILURE naming the fix, never an
+/// early-return `ok` (R14).
+fn oracle_corpus_root_or_fail(test_name: &str) -> PathBuf {
+    oracle_corpus_root().unwrap_or_else(|| {
+        panic!(
+            "{test_name} needs the Ghostty oracle checkout: set GHOSTTY_ORACLE=<path> \
+             (it reads <path>/test/fuzz-libghostty/corpus)"
+        )
+    })
+}
+
 /// Replay every regular file in `dir` through `harness`, returning the file
 /// count. Files are replayed in sorted order so a crash reproduces at a
 /// stable index.
@@ -309,14 +321,14 @@ fn replay_port_full_corpus() {
 /// Provenance cross-check: every in-tree corpus file is BYTE-IDENTICAL to the
 /// oracle's copy. Guards the mirror against silent drift — including the
 /// line-ending normalization that `.gitattributes` used to allow (see
-/// `.port/tools/gates/check_eol_fidelity.sh`). Runs only when GHOSTTY_ORACLE
-/// is set; `G-EOL` performs the same comparison in the gate suite.
+/// `.port/tools/gates/check_eol_fidelity.sh`). Needs GHOSTTY_ORACLE, so it is
+/// `#[ignore]`d and FAILS when asked for without it (R14); `G-EOL` performs the
+/// same comparison in the gate suite.
 #[test]
+#[ignore = "needs the Ghostty oracle: GHOSTTY_ORACLE=<ghostty checkout> cargo test \
+            -p rustty-vt --test fuzz_corpus_replay -- --ignored"]
 fn port_corpus_matches_oracle_bytes() {
-    let Some(oracle_root) = oracle_corpus_root() else {
-        eprintln!("GHOSTTY_ORACLE not set; skipping corpus provenance check");
-        return;
-    };
+    let oracle_root = oracle_corpus_root_or_fail("port_corpus_matches_oracle_bytes");
     let port_root = port_corpus_root();
     let mut compared = 0usize;
     for (dir, _, _) in TIERS {
@@ -350,13 +362,13 @@ fn port_corpus_matches_oracle_bytes() {
 /// Full oracle-corpus replay: the same six dirs read from the ORACLE checkout
 /// rather than the port tree. Retained alongside `replay_port_full_corpus` so
 /// an oracle bump that adds corpus files is exercised before the mirror is
-/// refreshed. Runs only when GHOSTTY_ORACLE is set.
+/// refreshed. Needs GHOSTTY_ORACLE, so it is `#[ignore]`d and FAILS when asked
+/// for without it (R14).
 #[test]
+#[ignore = "needs the Ghostty oracle: GHOSTTY_ORACLE=<ghostty checkout> cargo test \
+            -p rustty-vt --test fuzz_corpus_replay -- --ignored"]
 fn replay_full_oracle_corpus() {
-    let Some(root) = oracle_corpus_root() else {
-        eprintln!("GHOSTTY_ORACLE not set; skipping full oracle-corpus replay");
-        return;
-    };
+    let root = oracle_corpus_root_or_fail("replay_full_oracle_corpus");
 
     let mut total = 0usize;
     for (dir, harness, min) in TIERS {

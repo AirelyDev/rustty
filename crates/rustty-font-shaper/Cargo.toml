@@ -62,13 +62,14 @@ ghostty-wasm-abi = ["dep:rustty-os"]
 # WHY IT IS SOUND ON macOS. The Darwin default backend is `.coretext` —
 # "CoreText for font discovery, rendering, and shaping" (`backend.rs`
 # `Backend::default`). FreeType serves only the non-default `coretext_freetype`
-# backend and the Linux/Windows backends, and Fontconfig only
-# `fontconfig_freetype`; macOS never links Fontconfig at all (the `fc` module and
-# `fontconfig-sys` are already `cfg`-gated off Darwin). Ghostty itself selects
-# these stacks by BUILD OPTION (`-Dfont-backend`), so expressing them as cargo
-# features is faithful in spirit (R8: a build switch ports as a switch, never
-# constant-folded). A macOS embedder that turns all three off gets the reference's
-# own default backend, unchanged.
+# / `freetype` backends and the Linux/Windows backends, HarfBuzz additionally
+# `coretext_harfbuzz`, and Fontconfig only `fontconfig_freetype` (the `fc`
+# module is compiled only on that backend, which is selectable on macOS too).
+# The BACKEND itself is `-Dfont-backend`, i.e.
+# `rustty-build-config`'s `font-backend-*` features (S-14, N266); these three
+# features only decide which `-sys` crates are in the graph, and `build.rs`
+# refuses a selected backend whose libraries they leave out. A macOS embedder
+# that turns all three off gets the reference's own default backend, unchanged.
 #
 # THE IMPLICATION CHAIN is forced by the code, not by taste:
 #   * `harfbuzz` pulls `dep:freetype-sys` as well, because `harfbuzz-sys` has a
@@ -91,19 +92,21 @@ ghostty-wasm-abi = ["dep:rustty-os"]
 default = ["freetype", "harfbuzz", "fontconfig"]
 
 # HarfBuzz 11.0.0 text shaping: the `hb.rs` package port (`pkg/harfbuzz`), the
-# `shape::harfbuzz` shaper, and the `hb_font` the FreeType face carries. NOT the
-# CoreText face: `Backend::default()` is `.coretext` on Darwin and its
-# `hasHarfbuzz()` is false, so `face/coretext.rs`'s `hb_font` is the reference
-# declaration's `void` arm on every build (see its `HARFBUZZ_SHAPER`). Also pulls
-# `freetype-sys` — see the implication chain above.
+# `shape::harfbuzz` shaper, and the `hb_font` the FreeType face carries. The
+# CoreText face carries one only in a `-Dfont-backend=coretext_harfbuzz` build
+# (its `harfbuzz_shaper` arms; on the default `.coretext` `hasHarfbuzz()` is
+# false and `hb_font` is the reference declaration's `void` arm — see
+# `HARFBUZZ_SHAPER`). Also pulls `freetype-sys` — see the implication chain
+# above. `build.rs` refuses a `hasHarfbuzz()` backend with this feature off.
 harfbuzz = ["dep:harfbuzz-sys", "dep:freetype-sys"]
 # FreeType 2.13.2 glyph rasterization: the `ft` FFI glue, the `face::freetype`
 # backend face, and `library::FreetypeLibrary`. Implies `harfbuzz`.
 freetype = ["dep:freetype-sys", "harfbuzz"]
 # Fontconfig 2.14.2 font discovery/matching (the `fc` module, the port of
-# `pkg/fontconfig/*.zig`) for the `fontconfig_freetype` backend. Already gated off
-# macOS/Windows/wasm by `cfg`; this feature is what lets a NON-macOS-targeting
-# embedder drop `links = "fontconfig"` from the graph too. Implies `freetype`.
+# `pkg/fontconfig/*.zig`) for the `fontconfig_freetype` backend (the `fc`
+# module is compiled only there; `fontconfig-sys` is off Windows/wasm by `cfg`).
+# This feature is what lets an embedder drop `links = "fontconfig"` from the
+# graph. Implies `freetype`.
 fontconfig = ["dep:fontconfig-sys", "freetype"]
 
 [dependencies]
@@ -135,6 +138,15 @@ rustty-font = { workspace = true }
 rustty-render-types = { workspace = true }
 # Base utilities leaf.
 rustty-util = { workspace = true }
+# `build_config.font_backend` (`-Dfont-backend`). A leaf. Its build script
+# publishes the resolved backend as `links` metadata, which only a DIRECT
+# dependent's build script receives: `build.rs` turns it into the
+# `rustty_font_backend` cfg every backend selector here is keyed on.
+rustty-build-config = { workspace = true }
+# Zig std equivalents: `fmt::format_float_d` is the `{d}` the wasm `web_canvas`
+# face formats its CSS font size with (S91-F2). A leaf (already a transitive
+# dep via rustty-font).
+rustty-zigstd = { workspace = true }
 # Grapheme clustering (`unicode.graphemeBreak`/`uucode.grapheme.BreakState`): the
 # wasm `web_canvas` shaper performs grapheme clustering. Pure-Rust leaf (wasm-safe;
 # already a transitive dep via rustty-vt). Only referenced by the wasm shaper.
@@ -184,11 +196,15 @@ harfbuzz-sys = { path = "../../crates-sys/harfbuzz-sys", optional = true }
 
 # Fontconfig 2.14.2 (font discovery/matching) for the FreeType/Fontconfig
 # discovery backend — the SAME C library the reference links (R3), consumed by
-# the `fc` module (the port of `pkg/fontconfig/*.zig`). Gated to match `fc`'s
-# `cfg(not(any(target_os = "macos", target_os = "windows", target_arch = "wasm32")))`:
-# macOS discovers fonts via CoreText and never links fontconfig, and freestanding
-# wasm has no C deps. Referenced by path (the `-sys` crates are not in
-# `[workspace.dependencies]`).
+# the `fc` module (the port of `pkg/fontconfig/*.zig`), which is compiled only
+# on `hasFontconfig()` (`-Dfont-backend=fontconfig_freetype`: the Linux/BSD
+# default, and selectable on macOS like the reference's `SharedDeps.zig:292`,
+# which builds fontconfig from source on any target whose backend has it).
+# CORRECTION (S-14b, review M3): this table excluded macOS on the premise that
+# macOS "never links fontconfig"; that is only the DEFAULT backend. A default
+# macOS build compiles the crate but references nothing in it, as the
+# `rustty-apprt` edge to it already did. Freestanding wasm has no C deps.
+# Referenced by path (the `-sys` crates are not in `[workspace.dependencies]`).
 #
 # LATENT GAP FIXED [WS20, 2026-07-30]: this table used to include Windows, so a
 # Windows build would have tried to link fontconfig — the exact thing
@@ -196,9 +212,9 @@ harfbuzz-sys = { path = "../../crates-sys/harfbuzz-sys", optional = true }
 # fontconfig on Windows because its libxml2 dependency isn't available"). With the
 # `freetype_windows` discoverer now live, Windows uses the FreeType directory scan
 # and links no fontconfig.
-[target.'cfg(not(any(target_os = "macos", target_os = "windows", target_arch = "wasm32")))'.dependencies]
+[target.'cfg(not(any(target_os = "windows", target_arch = "wasm32")))'.dependencies]
 # OPTIONAL (feature `fontconfig`, DEFAULT-ON): the `cfg` table above keeps
-# fontconfig off macOS/Windows/wasm, but Cargo's `links` uniqueness check ignores
+# fontconfig off Windows/wasm, but Cargo's `links` uniqueness check ignores
 # `cfg` and runs over the whole resolve graph — so an embedder colliding on
 # `links = "fontconfig"` needs the dependency gone, not merely inactive.
 fontconfig-sys = { path = "../../crates-sys/fontconfig-sys", optional = true }
@@ -219,13 +235,22 @@ fontconfig-sys = { path = "../../crates-sys/fontconfig-sys", optional = true }
 # matching-descriptor array; the codepoint search builds a character set).
 # `CFAttributedString` is added for the CoreText shaper (`shape` builds a
 # `CFAttributedString` over the run's UTF-16 string before typesetting).
-objc2-core-foundation = { version = "0.3", features = ["CFBase", "CFData", "CFString", "CFNumber", "CFCGTypes", "CFDictionary", "CFArray", "CFCharacterSet", "CFAttributedString"] }
+# `CFURL` is added for `DeferredFace.loadCoreTextFreetype` (the
+# `coretext_freetype` backend: `url.copyPath()` +
+# `URL.createStringByReplacingPercentEscapes`).
+objc2-core-foundation = { version = "0.3", features = ["CFBase", "CFData", "CFString", "CFNumber", "CFCGTypes", "CFDictionary", "CFArray", "CFCharacterSet", "CFAttributedString", "CFURL"] }
 objc2-core-graphics = { version = "0.3", features = ["CGContext", "CGColorSpace", "CGBitmapContext", "CGImage", "CGFont", "CGAffineTransform", "CGGeometry"] }
 # `CTFontCollection` is added for the CoreText discoverer's font-collection search.
 # `CTLine`/`CTRun`/`CTTypesetter`/`CTStringAttributes` are added for the CoreText
 # shaper (`CTTypesetter` -> `CTLine` -> `CTRun` glyph extraction + the
 # `kCTFontAttributeName` string attribute).
 objc2-core-text = { version = "0.3", features = ["CTFont", "CTFontDescriptor", "CTFontManager", "CTFontTraits", "CTFontCollection", "CTLine", "CTRun", "CTTypesetter", "CTStringAttributes", "objc2-core-graphics"] }
+# The CoreText shaper's dedicated release thread is the reference's
+# `os.CFReleaseThread` (S94-F1): `rustty_os::CFReleaseThread` on the
+# `rustty_xev` kqueue loop. Neither adds a crate to the graph: rustty-os is
+# already a dependency of rustty-font, and rustty-xev of rustty-os.
+rustty-os = { workspace = true }
+rustty-xev = { workspace = true }
 
 # R3: compile the vendored `stb_image_resize` single-header C (used by the
 # freetype face to scale bitmap-strike glyphs) standalone with `cc`. Same lib

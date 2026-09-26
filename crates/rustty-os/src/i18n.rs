@@ -56,7 +56,13 @@ pub enum InitError {
 /// of translations. This does NOT call `textdomain` as we don't
 /// want to set the domain for the entire application since this is also
 /// used by librustty.
-pub fn init(resources_dir: &str) -> Result<(), InitError> {
+//
+// PORT NOTE (S112-F1): `resources_dir` is `[]const u8` in the reference and
+// bytes here (it was `&str`), since `ResourcesDir.app()` is raw bytes. The
+// share dir is `std.fs.path.dirname` (`rustty_zigstd::fs_path::dirname_posix`) and the locale
+// path is built from bytes, not from `Path::display`, which is lossy.
+pub fn init(resources_dir: impl AsRef<[u8]>) -> Result<(), InitError> {
+    let resources_dir = resources_dir.as_ref();
     if !build_config::i18n() {
         return Ok(());
     }
@@ -72,17 +78,18 @@ pub fn init(resources_dir: &str) -> Result<(), InitError> {
     {
         // Our resources dir is always nested below the share dir that
         // is standard for translations.
-        let share_dir = match std::path::Path::new(resources_dir).parent() {
-            Some(p) if !p.as_os_str().is_empty() => p,
-            _ => return Err(InitError::InvalidResourcesDir),
-        };
+        // const share_dir = std.fs.path.dirname(resources_dir) orelse
+        //     return error.InvalidResourcesDir;
+        let share_dir = rustty_zigstd::fs_path::dirname_posix(resources_dir)
+            .ok_or(InitError::InvalidResourcesDir)?;
 
         // Build our locale path
         // PORT NOTE: the reference formats into a `[std.fs.max_path_bytes]u8` stack
         // buffer with `bufPrintZ`, returning `error.OutOfMemory` on overflow. We
         // build a NUL-terminated `CString`; an interior NUL maps to the same
         // `OutOfMemory` failure path.
-        let path = format!("{}/locale", share_dir.display());
+        let mut path = share_dir.to_vec();
+        path.extend_from_slice(b"/locale");
         let path = std::ffi::CString::new(path).map_err(|_| InitError::OutOfMemory)?;
 
         // Bind our bundle ID to the given locale path
@@ -357,11 +364,9 @@ mod tests {
 
     #[test]
     #[cfg_attr(miri, ignore)] // ffi: vendored gnulib canonicalizer (gettext-sys) crosses the C boundary (ASan, not Miri)
+    #[cfg_attr(not(target_os = "macos"), ignore = "macOS only (R14)")]
     fn canonicalizeLocale_darwin() {
         // PORT NOTE: `if (!builtin.target.os.tag.isDarwin()) return error.SkipZigTest;`
-        if !cfg!(target_os = "macos") {
-            return; // error.SkipZigTest
-        }
 
         // Each assert_eq! ports one `try testing.expectEqualStrings(expected, actual)`
         // (asserted directly, as the reference does — G2 counts assertion-for-assertion).
@@ -437,10 +442,8 @@ mod tests {
     /// the exact behavior the reference's `_` has today.
     #[test]
     #[cfg_attr(miri, ignore)] // ffi: vendored gettext catalog runtime crosses the C boundary (ASan, not Miri)
+    #[cfg_attr(not(target_os = "macos"), ignore = "macOS only (R14)")]
     fn gettext_resolves_from_vendored_libintl() {
-        if !cfg!(target_os = "macos") {
-            return; // the vendored libintl is macOS-only (Linux gets it from libc)
-        }
         let msgid = c"ws9 untranslated probe";
         assert_eq!(gettext_(msgid), msgid);
     }

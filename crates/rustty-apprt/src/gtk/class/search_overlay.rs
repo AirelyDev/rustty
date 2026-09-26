@@ -73,6 +73,8 @@ mod imp {
         #[property(name = "has-search-selected", get = Self::get_has_search_selected)]
         pub has_search_selected_prop: PhantomData<bool>,
 
+        /// Target horizontal alignment for the overlay.
+        ///
         /// PORTS: `search_overlay.zig:130-141,221` property/field `halign-target`
         /// (default `.end`) — the target horizontal alignment; the template binds
         /// `halign: bind template.halign-target` (`search-overlay.blp:9`) and
@@ -80,19 +82,23 @@ mod imp {
         #[property(get, set, name = "halign-target", builder(gtk4::Align::End))]
         pub halign_target: Cell<gtk4::Align>,
 
+        /// Target vertical alignment for the overlay.
+        ///
         /// PORTS: `search_overlay.zig:143-154,224` property/field `valign-target`
         /// (default `.start`) — the target vertical alignment
         /// (`search-overlay.blp:10`).
         #[property(get, set, name = "valign-target", builder(gtk4::Align::Start))]
         pub valign_target: Cell<gtk4::Align>,
 
-        /// PORTS: `search_overlay.zig:215` `search_total: ?usize = null` — total
-        /// number of matches (`null` = unknown/none). Backs `search-total` +
+        /// Total number of search matches (null means unknown/none).
+        ///
+        /// PORTS: `search_overlay.zig:215` `search_total: ?usize = null`. Backs `search-total` +
         /// `has-search-total`; not itself a GObject property.
         pub search_total: Cell<Option<usize>>,
 
-        /// PORTS: `search_overlay.zig:218` `search_selected: ?usize = null` —
-        /// currently selected match index. Backs `search-selected` +
+        /// Currently selected match index (null means none selected).
+        ///
+        /// PORTS: `search_overlay.zig:218` `search_selected: ?usize = null`. Backs `search-selected` +
         /// `has-search-selected`.
         pub search_selected: Cell<Option<usize>>,
     }
@@ -148,15 +154,19 @@ mod imp {
             static SIGNALS: OnceLock<Vec<glib::subclass::Signal>> = OnceLock::new();
             SIGNALS.get_or_init(|| {
                 vec![
+                    // Emitted when the search is stopped (e.g., Escape pressed).
                     // `stop-search` (`:159-168`), no params.
                     glib::subclass::Signal::builder("stop-search").build(),
+                    // Emitted when the search text changes (debounced).
                     // `search-changed` (`:171-180`), one nullable-string param
                     // (`&.{?[*:0]const u8}`). `G_TYPE_STRING` carries the null.
                     glib::subclass::Signal::builder("search-changed")
                         .param_types([String::static_type()])
                         .build(),
+                    // Emitted when navigating to the next match.
                     // `next-match` (`:183-192`), no params.
                     glib::subclass::Signal::builder("next-match").build(),
+                    // Emitted when navigating to the previous match.
                     // `previous-match` (`:195-204`), no params.
                     glib::subclass::Signal::builder("previous-match").build(),
                 ]
@@ -175,6 +185,8 @@ mod imp {
     impl BinImpl for SearchOverlay {}
 
     impl SearchOverlay {
+        /// Set active status, and update search on activation
+        ///
         /// PORTS: `search_overlay.zig:243-251` `setSearchActive` (the property
         /// setter). On an inactive→active transition, re-emit `search-changed`
         /// with the entry's current text so the core search picks up the existing
@@ -214,8 +226,24 @@ mod imp {
 }
 
 glib::wrapper! {
-    /// PORTS: `search_overlay.zig:25` `pub const SearchOverlay`. The searchbar
-    /// overlay driving a surface's find-in-terminal.
+    /// The overlay that shows the current size while a surface is resizing.
+    /// This can be used generically to show pretty much anything with a
+    /// disappearing overlay, but we have no other use at this point so it
+    /// is named specifically for what it does.
+    ///
+    /// General usage:
+    ///
+    ///   1. Add it to an overlay
+    ///   2. Set the label with `setLabel`
+    ///   3. Schedule to show it with `schedule`
+    ///
+    /// Set any properties to change the behavior.
+    ///
+    /// PORT NOTE: the reference doc above (`search_overlay.zig:12-24`) is kept
+    /// verbatim (R1) although it is a copy of `ResizeOverlay`'s; this type is
+    /// the searchbar overlay driving a surface's find-in-terminal.
+    ///
+    /// PORTS: `search_overlay.zig:25` `pub const SearchOverlay`.
     pub struct SearchOverlay(ObjectSubclass<imp::SearchOverlay>)
         @extends libadwaita::Bin, gtk4::Widget,
         @implements gtk4::Accessible, gtk4::Buildable, gtk4::ConstraintTarget;
@@ -230,6 +258,9 @@ impl Default for SearchOverlay {
 #[gtk4::template_callbacks]
 impl SearchOverlay {
     // -- outward-signal emitters (search-overlay.blp) ----------------------
+    // NOTE: The callbacks below use anyopaque for the first parameter
+    // because they're shared with multiple widgets in the template.
+    //
     // PORT NOTE (arg order): these are connected NON-swapped in the blueprint,
     // so gtk4-rs delivers `[emitter, ...signal_args, this]` — the template
     // instance (`this: &SearchOverlay`) LAST, matching the reference's
@@ -300,6 +331,9 @@ impl SearchOverlay {
         offset_y: f64,
         this: &SearchOverlay,
     ) {
+        // On drag end, we want to move our halign/valign if we crossed
+        // the midpoint on either axis. This lets the search overlay be
+        // moved to different corners of the parent container.
         let widget = this.upcast_ref::<gtk4::Widget>();
         let Some(parent) = widget.parent() else {
             return;
@@ -373,15 +407,19 @@ impl SearchOverlay {
 }
 
 impl SearchOverlay {
-    /// PORTS: `search_overlay.zig:234-241` `grabFocus`. Grab focus on the search
-    /// entry and select all its text (`selectRegion(0, -1)`).
+    /// Grab focus on the search entry and select all text.
+    ///
+    /// PORTS: `search_overlay.zig:234-241` `grabFocus`.
     pub fn grab_focus(&self) {
         let entry = &self.imp().search_entry;
         let _ = entry.upcast_ref::<gtk4::Widget>().grab_focus();
-        // `-1` is distance from the end, selecting the entire text.
+        // Select all text in the search entry field. -1 is distance from
+        // the end, causing the entire text to be selected.
         entry.select_region(0, -1);
     }
 
+    /// Set contents of search
+    ///
     /// PORTS: `search_overlay.zig:253-258` `setSearchContents`. Set the entry text
     /// and emit `search-changed` with it (so the core search updates).
     pub fn set_search_contents(&self, content: &str) {
@@ -389,6 +427,8 @@ impl SearchOverlay {
         self.emit_by_name::<()>("search-changed", &[&content]);
     }
 
+    /// Set the total number of search matches.
+    ///
     /// PORTS: `search_overlay.zig:260-270` `setSearchTotal`. Set the total match
     /// count (`None` = unknown), notifying `search-total` (and `has-search-total`
     /// only when the has-ness flips).
@@ -405,6 +445,8 @@ impl SearchOverlay {
         }
     }
 
+    /// Set the currently selected match index.
+    ///
     /// PORTS: `search_overlay.zig:272-282` `setSearchSelected`. Set the selected
     /// match index (`None` = none), notifying `search-selected` (and
     /// `has-search-selected` only when the has-ness flips).

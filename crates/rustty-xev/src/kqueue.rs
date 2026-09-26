@@ -7,13 +7,15 @@
 // PORT NOTE: SCOPE (XEV_BLUEPRINT §0): on macOS AND on FreeBSD `xev.Dynamic` IS the
 // static kqueue `Api()` (the single-candidate `Backend.candidates()` collapses
 // `dynamic.zig` at comptime — `backend.zig:20,38`), so this is the concrete flat
-// loop on both. The module is `#[cfg(any(target_os = "macos", target_os =
-// "freebsd"))]` (W2D/F-004): the reference's own `switch (builtin.os.tag)` arms —
+// loop on both. The module is `#[cfg(any(target_os = "macos", target_os = "ios",
+// target_os = "visionos", target_os = "freebsd"))]` (W2D/F-004; the Darwin set
+// widened 2026-08-26, `318af0f6`): the reference's own `switch (builtin.os.tag)` arms —
 // the FreeBSD `posix.Kevent` fast paths (`kqueue.zig:1863/1935/1876`), the
 // `NOTE_EXIT_FLAGS` split (`:45-49`), the `isDarwin()`-only machport op
 // (`:1674/1081`) and the non-Darwin `Wakeup` stub (`:1488-1510`) — are ported as
-// real `#[cfg]` arms rather than elided. `darwin.rs`/mach stays macOS-only, exactly
-// as `builtin.os.tag.isDarwin()` gates it in the reference.
+// real `#[cfg]` arms rather than elided. `darwin.rs`/mach stays Darwin-only
+// (`macos + ios + visionos`), exactly as `builtin.os.tag.isDarwin()` gates it in
+// the reference.
 //
 // PORT NOTE (the three load-bearing disciplines, §2):
 //  - RAW POINTERS end-to-end: the `Loop` holds `*mut Completion` into caller
@@ -28,7 +30,7 @@
 //    sound (documented at each impl).
 //  - hand-written `Default` for `Completion` (§2 F3): fn-ptr + raw-ptr fields.
 
-// (module is `#[cfg(any(target_os = "macos", target_os = "freebsd"))]`-gated in lib.rs)
+// (module is `#[cfg(any(target_os = "macos", target_os = "ios", target_os = "visionos", target_os = "freebsd"))]`-gated in lib.rs)
 #![allow(non_upper_case_globals)]
 // PORT NOTE: `posix.fd_t`/`socket_t`/`pid_t`/`socklen_t` keep their Zig/C snake_case
 // type names (they mirror `std.posix` identifiers, R2 identifier-fidelity).
@@ -2512,13 +2514,20 @@ impl Wakeup {
 //   // TODO: We should use eventfd for FreeBSD. Until this is
 //   // implemented, loop wakeup will crash on BSD.
 //
-// BLAST RADIUS (adversary-verified): this panic is reachable ONLY through an
-// explicit `Loop::wakeup()`. The pool-completion path does NOT reach it —
-// `thread_perform`'s wakeup call sits inside `if (comptime
-// builtin.target.os.tag.isDarwin())` (`kqueue.zig:965-968`), so on FreeBSD the
-// worker just pushes to `thread_pool_completions` and the loop picks it up on
-// the next tick. Fixing this with a real eventfd wakeup would be an
-// R1-divergence from upstream libxev; it is ledgered in DEFERRALS.md instead.
+// REACHABILITY (S-13, UD275 / N255, re-verified against libxev 9ce8e8e6 pinned
+// by ghostty@20abdb50a): this panic is UNREACHABLE, so R13 does not apply and
+// the stub stays faithful (R1). Its only caller is `Loop.wakeup`, which is
+// `fn wakeup` — NOT `pub` — in `kqueue.zig:973`, so nothing outside kqueue.zig
+// can call it; inside kqueue.zig its one call site is `thread_perform`'s,
+// behind `if (comptime builtin.target.os.tag.isDarwin())` (`:965-968`). On
+// FreeBSD the pool worker just pushes to `thread_pool_completions` and the loop
+// picks it up on its next tick. `xev.Async` does not route through it either:
+// on non-Darwin kqueue it is `AsyncEventFd` (`watcher/async.zig:22-25`), its
+// own eventfd registered with the loop. Ghostty never names `Loop.wakeup` (it is
+// not in the static kqueue `Api()` nor in `dynamic.zig`), and never creates an
+// `xev.ThreadPool`. In this port `Loop::wakeup` is likewise private and has no
+// caller on any target (the Darwin pool path notifies the cached
+// `task_wakeup` handle instead). Test: `tests::freebsd_wakeup_stub_is_the_reference_panic`.
 #[cfg(target_os = "freebsd")]
 struct Wakeup;
 
@@ -3238,6 +3247,26 @@ mod tests {
         // The disarm sites zero it back; the tick loops then skip the event.
         kev_set_udata(&mut k, 0);
         assert_eq!(kev_udata(&k), 0);
+    }
+
+    /// S-13 (UD275, N255): the non-Darwin `Wakeup` is the reference's own
+    /// `@panic("wakeup not implemented on this platform")` stub
+    /// (`kqueue.zig:1488-1510`), kept faithful because no caller reaches it (see
+    /// the PORT NOTE on the FreeBSD `Wakeup`). This pins the ported shape: `init`
+    /// and `setup` succeed and register nothing, and `wakeup` is the panic, so a
+    /// future caller that starts reaching it fails here on a FreeBSD host
+    /// instead of in the field. rustty-added (the reference has no such test).
+    #[cfg(target_os = "freebsd")]
+    #[test]
+    #[should_panic(expected = "wakeup not implemented on this platform")]
+    fn freebsd_wakeup_stub_is_the_reference_panic() {
+        let mut w = Wakeup::init().expect("the FreeBSD Wakeup::init is infallible");
+        let kq = unsafe { libc::kqueue() };
+        assert!(kq >= 0, "kqueue() failed");
+        w.setup(kq)
+            .expect("the FreeBSD Wakeup::setup registers nothing");
+        unsafe { libc::close(kq) };
+        let _ = w.wakeup();
     }
 
     fn read_slice(buf: &mut [u8]) -> ReadBuffer {
@@ -4141,43 +4170,59 @@ mod tests {
     // class/file, not by body. If the watcher is ever ported and the flag flipped,
     // the real body WILL make live kqueue/kevent64 calls and the annotation must
     // come back (see the sibling tests in this module for the exact string).
+    //
+    // R14 (G-SKIP, task S-15): this test used to RETURN `ok` while
+    // `MACOS_FILE_WATCHER_PORTED == false`, having asserted only that the
+    // deferral was ledgered — a reference test reported as passing with none of
+    // its body run. It is now `#[ignore]`d and FAILS when asked for, naming the
+    // missing port; the ledger tripwire it carried is its own always-run test,
+    // `kqueue_file_watcher_deferral_is_ledgered` below.
     #[test]
+    #[ignore = "the macOS xev.File watcher is not ported (.port/phase-2/DEFERRALS.md); \
+                this reference test cannot run until it is (R14)"]
     fn kqueue_file_io_on_thread_pool() {
-        if !MACOS_FILE_WATCHER_PORTED {
-            // Deferred: the macOS `xev.File` watcher. The Zap work-stealing pool
-            // itself IS ported (`thread_pool.rs`), and so are
-            // `ThreadPool.init/deinit/shutdown/schedule` +
-            // `Loop.init(.{.thread_pool})`; what is missing is the macOS
-            // `File`/`TCP`/`UDP` watcher instantiation this test needs to drive
-            // IO through the pool. Assert the deferral is still ledgered so this
-            // skip stays visible (compile-time probe: a removed ledger entry
-            // fails this test on the next build).
-            //
-            // PORT NOTE (parity S63-F8): this was `include_str!` of
-            // `.port/phase-2/DEFERRALS.md`, which HARD-FAILS to compile where
-            // that file does not exist — i.e. in the source tarball, which
-            // deliberately excludes `.port/`. The shipped tarball therefore
-            // could not build its own tests, and `xtask distcheck` could not
-            // see it because it only BUILT the extracted tree. build.rs now
-            // probes the ledger and reports both "is there a ledger here at
-            // all" and "does it still carry the entry", so the tripwire is
-            // unchanged in the repo and simply has nothing to check in a
-            // tarball.
-            if env!("RUSTTY_XEV_DEFERRALS_PRESENT") == "1" {
-                assert_eq!(
-                    "1",
-                    env!("RUSTTY_XEV_DEFERRAL_LEDGERED"),
-                    "the macOS `xev.File` watcher deferral vanished from \
-                     DEFERRALS.md but `kqueue_file_io_on_thread_pool` is still \
-                     a skip-stub: port the watcher (and flip \
-                     MACOS_FILE_WATCHER_PORTED) or restore the ledger entry"
-                );
-            }
-            return;
-        }
+        // Deferred: the macOS `xev.File` watcher. The Zap work-stealing pool
+        // itself IS ported (`thread_pool.rs`), and so are
+        // `ThreadPool.init/deinit/shutdown/schedule` +
+        // `Loop.init(.{.thread_pool})`; what is missing is the macOS
+        // `File`/`TCP`/`UDP` watcher instantiation this test needs to drive
+        // IO through the pool.
+        assert!(
+            MACOS_FILE_WATCHER_PORTED,
+            "`kqueue: file IO on thread pool` cannot run: the macOS `xev.File` \
+             watcher is not ported (MACOS_FILE_WATCHER_PORTED == false)"
+        );
         unreachable!(
             "MACOS_FILE_WATCHER_PORTED flipped without porting the reference \
              `kqueue: file IO on thread pool` body into this test"
+        );
+    }
+
+    /// rustty-only tripwire (not a reference `test {}`), split out of
+    /// `kqueue_file_io_on_thread_pool` by task S-15: while the watcher is
+    /// unported, its deferral must stay ledgered, so the ignored test above
+    /// stays visible (compile-time probe: a removed ledger entry fails this
+    /// test on the next build).
+    ///
+    /// PORT NOTE (parity S63-F8): this was `include_str!` of
+    /// `.port/phase-2/DEFERRALS.md`, which HARD-FAILS to compile where that
+    /// file does not exist — i.e. in the source tarball, which deliberately
+    /// excludes `.port/`. The shipped tarball therefore could not build its own
+    /// tests, and `xtask distcheck` could not see it because it only BUILT the
+    /// extracted tree. build.rs now probes the ledger and reports both "is there
+    /// a ledger here at all" and "does it still carry the entry", so the
+    /// tripwire is unchanged in the repo and simply has nothing to check in a
+    /// tarball.
+    #[test]
+    fn kqueue_file_watcher_deferral_is_ledgered() {
+        let ledger_present = env!("RUSTTY_XEV_DEFERRALS_PRESENT") == "1";
+        let ledgered = env!("RUSTTY_XEV_DEFERRAL_LEDGERED") == "1";
+        assert!(
+            MACOS_FILE_WATCHER_PORTED || !ledger_present || ledgered,
+            "the macOS `xev.File` watcher deferral vanished from DEFERRALS.md \
+             but `kqueue_file_io_on_thread_pool` is still unported: port the \
+             watcher (and flip MACOS_FILE_WATCHER_PORTED) or restore the ledger \
+             entry"
         );
     }
 
@@ -4192,6 +4237,10 @@ mod tests {
     #[cfg_attr(
         miri,
         ignore = "MIRI EXCEPTION (rustty-xev C3, .port/phase-2/MIRI_EXCEPTIONS.md): live kqueue/kevent64/mach/socket syscalls -- Miri cannot execute foreign functions; runs natively (ci.sh HARD `cargo test --workspace`) + the G6 ASan companion arm (check_leaks.sh `live_ffi_unit_filters`, re-verified 2026-07-31: 31 tests, 0 findings)."
+    )]
+    #[cfg_attr(
+        not(target_os = "macos"),
+        ignore = "SkipZigTest: upstream runs `kqueue: mach port` on .macos only (R14)"
     )]
     fn kqueue_mach_port() {
         // if (builtin.os.tag != .macos) return error.SkipZigTest;

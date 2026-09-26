@@ -19,7 +19,7 @@ use crate::grid_ref::CGridRef;
 use crate::point::PointC;
 use crate::result::Result;
 use crate::terminal::{Terminal, TerminalScreen};
-use allocator_api2::alloc::Global as Allocator;
+use rustty_lib::allocator::Allocator as CAllocator;
 use rustty_vt::pagelist::{PageList, Pin};
 use rustty_vt::point::{Coordinate, Tag};
 
@@ -34,12 +34,14 @@ pub type CTrackedGridRef = *mut TrackedGridRef;
 
 // pub const TrackedGridRef = struct { ... }
 // PORT NOTE: `alloc: std.mem.Allocator` is the allocator that owns this ref's
-// heap allocation (resolved from `t.gpa()` at `grid_ref_track` time); ported as
-// the rustty-vt terminal `Allocator`. `terminal: terminal_c.Terminal` is the
+// heap allocation (`t.gpa()` at `grid_ref_track` time, the caller's allocator);
+// ported as a copy of the caller's C allocator (null for the default), taken
+// from `TerminalWrapper.c_alloc` (parity S179-F3), so the ref can be freed
+// through it after the terminal is gone. `terminal: terminal_c.Terminal` is the
 // nullable wrapper back-pointer; `pin: *PageList.Pin` is the tracked PageList
 // pin (raw ptr, owned by the PageList's tracked-pin set).
 pub struct TrackedGridRef {
-    pub alloc: Allocator,
+    pub alloc: Option<CAllocator>,
     pub terminal: Terminal,
     pub screen_key: TerminalScreen,
     pub screen_generation: usize,
@@ -111,10 +113,10 @@ pub unsafe fn tracked_grid_ref_free(ref_: CTrackedGridRef) {
         unsafe { (*list).untrack_pin(pin) };
     }
     // ref.alloc.destroy(ref);
-    // PORT NOTE: `alloc.destroy(ref)` reclaims the heap `TrackedGridRef`; rustty
-    // `Box::from_raw` + drop is the analog (the `alloc` field mirrors the
-    // reference's owning allocator).
-    drop(unsafe { Box::from_raw(ref_) });
+    // (The allocator is copied out first: `destroy` frees the ref it lives in.)
+    // SAFETY: `ref_` was created by `grid_ref_track` through this allocator.
+    let alloc = unsafe { (*ref_).alloc };
+    unsafe { crate::cwrap::destroy(alloc.as_ref(), ref_) };
 }
 
 // pub fn tracked_grid_ref_has_value(ref_: CTrackedGridRef) callconv(lib.calling_conv) bool {
@@ -309,6 +311,129 @@ mod tests {
     use crate::test_util::with_test_allocator;
     use rustty_vt::point::{Coordinate, Point};
     use std::mem::MaybeUninit;
+
+    /// The active screen's tracked-pin count, through raw pointers.
+    fn tracked_pins(term: terminal::Terminal) -> usize {
+        // SAFETY: `term` is a live terminal handle; raw-ptr reads only.
+        unsafe {
+            let t = (*term).terminal;
+            let active = (*t).screens.active;
+            (*core::ptr::addr_of!((*active).pages)).count_tracked_pins()
+        }
+    }
+
+    // Parity S179-F3 (no reference test): the ref is allocated through the
+    // caller's allocator (`t.gpa().create`), and it keeps its own copy of
+    // that allocator, so freeing it after the terminal returns it there.
+    #[test]
+    fn tracked_ref_uses_the_caller_allocator_and_outlives_the_terminal() {
+        let stats = crate::test_util::CountingCAllocator::new();
+        let calloc = stats.c_allocator();
+        let mut term: terminal::Terminal = std::ptr::null_mut();
+        assert_eq!(Result::Success, unsafe {
+            terminal::new(&calloc, &mut term, 5, 2)
+        });
+        let before = stats.alloc_calls.get();
+        let mut ref_: CTrackedGridRef = std::ptr::null_mut();
+        assert_eq!(Result::Success, unsafe {
+            terminal::grid_ref_track(
+                term,
+                PointC::cval(Point::Active(Coordinate { x: 0, y: 0 })),
+                &mut ref_,
+            )
+        });
+        assert_eq!(before + 1, stats.alloc_calls.get());
+        assert_eq!(
+            Some(std::mem::size_of::<TrackedGridRef>()),
+            stats.last_alloc_len.get()
+        );
+
+        unsafe { terminal::free(term) };
+        assert!(!unsafe { tracked_grid_ref_has_value(ref_) });
+        assert!(stats.live_bytes.get() > 0, "the ref is still allocated");
+        unsafe { tracked_grid_ref_free(ref_) };
+        assert_eq!(
+            Some(std::mem::size_of::<TrackedGridRef>()),
+            stats.last_free_len.get()
+        );
+        assert_eq!(0, stats.live_bytes.get());
+    }
+
+    // Parity S179-F3: `alloc.create(TrackedGridRef) catch { list.untrackPin(tracked_pin);
+    // return .out_of_memory; }`.
+    #[test]
+    fn tracked_ref_allocation_failure_is_out_of_memory_and_untracks_the_pin() {
+        let stats = crate::test_util::CountingCAllocator::new();
+        let calloc = stats.c_allocator();
+        let mut term: terminal::Terminal = std::ptr::null_mut();
+        assert_eq!(Result::Success, unsafe {
+            terminal::new(&calloc, &mut term, 5, 2)
+        });
+        let pins = tracked_pins(term);
+        let live = stats.live_bytes.get();
+
+        stats.reject.set(true);
+        let mut ref_: CTrackedGridRef = std::ptr::null_mut();
+        assert_eq!(Result::OutOfMemory, unsafe {
+            terminal::grid_ref_track(
+                term,
+                PointC::cval(Point::Active(Coordinate { x: 0, y: 0 })),
+                &mut ref_,
+            )
+        });
+        stats.reject.set(false);
+        assert!(ref_.is_null());
+        assert_eq!(pins, tracked_pins(term));
+        assert_eq!(live, stats.live_bytes.get());
+        assert!(unsafe { (*term).tracked_grid_refs.is_empty() });
+
+        unsafe { terminal::free(term) };
+        assert_eq!(0, stats.live_bytes.get());
+    }
+
+    // Parity S179-F3: `wrapper.tracked_grid_refs.putNoClobber(alloc, ref, {})
+    // catch { list.untrackPin(tracked_pin); alloc.destroy(ref); return
+    // .out_of_memory; }`, reached through the registry's tripwire.
+    #[test]
+    fn tracked_ref_registry_failure_is_out_of_memory_and_frees_the_ref() {
+        use rustty_util::tripwire::ResetMode;
+        let stats = crate::test_util::CountingCAllocator::new();
+        let calloc = stats.c_allocator();
+        let mut term: terminal::Terminal = std::ptr::null_mut();
+        assert_eq!(Result::Success, unsafe {
+            terminal::new(&calloc, &mut term, 5, 2)
+        });
+        let pins = tracked_pins(term);
+        let live = stats.live_bytes.get();
+        let (allocs, frees) = (stats.alloc_calls.get(), stats.free_calls.get());
+
+        terminal::TRACK_TW.with(|tw| {
+            tw.borrow_mut()
+                .errorAlways(terminal::TrackFp::Reserve, terminal::TrackRegistryFull)
+        });
+        let mut ref_: CTrackedGridRef = std::ptr::null_mut();
+        let r = unsafe {
+            terminal::grid_ref_track(
+                term,
+                PointC::cval(Point::Active(Coordinate { x: 0, y: 0 })),
+                &mut ref_,
+            )
+        };
+        terminal::TRACK_TW
+            .with(|tw| tw.borrow_mut().end(ResetMode::Reset))
+            .unwrap();
+        assert_eq!(Result::OutOfMemory, r);
+        assert!(ref_.is_null());
+        assert_eq!(pins, tracked_pins(term));
+        // The ref was created through the caller's allocator and destroyed.
+        assert_eq!(allocs + 1, stats.alloc_calls.get());
+        assert_eq!(frees + 1, stats.free_calls.get());
+        assert_eq!(live, stats.live_bytes.get());
+        assert!(unsafe { (*term).tracked_grid_refs.is_empty() });
+
+        unsafe { terminal::free(term) };
+        assert_eq!(0, stats.live_bytes.get());
+    }
 
     // test "tracked_grid_ref snapshots after terminal scroll"
     #[test]

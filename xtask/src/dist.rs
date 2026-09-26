@@ -106,6 +106,61 @@ pub fn dist_scoped(scope: Scope) -> Result<PathBuf, String> {
     Ok(out)
 }
 
+/// Paths to exclude from the dist archive when building for lib-vt only.
+/// These are large files and directories that are not needed to build or
+/// test librustty-vt, specified as git pathspec exclude patterns.
+///
+/// PORTS `GhosttyDist.zig:184-209` `lib_vt_excludes`, mapped onto the port's
+/// tree. Of the reference's 17 entries, 11 map one-to-one below. The other 6
+/// are not listed, each for a checked reason:
+/// - `src/font/res`: the port's counterpart `crates/rustty-font/res` is
+///   `include_bytes!`'d by `rustty-font`, which is a normal dependency of
+///   `rustty-vt` (D1), so excluding it breaks the lib-vt build.
+/// - `src/crash/testdata`, `pkg/breakpad/vendor`: their crates
+///   (`rustty-crash`, `breakpad-sys`) are outside `rustty-vt-c`'s closure, so
+///   `prune_to_lib_vt` already removes them.
+/// - `pkg/wuffs/src/too_big.{jpg,png}`: no such files in the port.
+/// - `vendor`: the port has no tracked top-level `vendor/`; the one in the
+///   tarball is the `cargo vendor` output written after the archive.
+const LIB_VT_EXCLUDES: &[&str] = &[
+    // App and platform resources
+    "images",
+    "macos",
+    "dist/doxygen",
+    "dist/linux",
+    "dist/macos",
+    "dist/windows",
+    "flatpak",
+    "snap",
+    "po",
+    "example",
+    // Test corpus (lib-vt tests use embedded testdata within the crates)
+    "test",
+];
+
+/// The `git archive` argv for step 1 of [`dist_stage`]
+/// (`GhosttyDist.zig:78-102`).
+fn git_archive_args(prefix: &str, out: &Path, scope: Scope) -> Vec<String> {
+    let mut args = vec![
+        "archive".to_string(),
+        "--format=tar".to_string(),
+        format!("--prefix={prefix}"),
+        "-o".to_string(),
+        out.to_string_lossy().into_owned(),
+        "HEAD".to_string(),
+    ];
+
+    // When building for lib-vt only, exclude large directories that
+    // are not needed to build librustty-vt. This significantly reduces
+    // the size of the resulting archive.
+    if scope == Scope::LibVt {
+        for exclude in LIB_VT_EXCLUDES {
+            args.push(format!(":(exclude){exclude}"));
+        }
+    }
+    args
+}
+
 /// The staged portion of [`dist`], split out so the staging dir is cleaned up
 /// on every exit path.
 #[allow(clippy::too_many_arguments)]
@@ -123,14 +178,7 @@ fn dist_stage(
     let src_tar = stage.join("src.tar");
     let status = Command::new("git")
         .current_dir(root)
-        .args([
-            "archive",
-            "--format=tar",
-            &format!("--prefix={prefix}"),
-            "-o",
-            &src_tar.to_string_lossy(),
-            "HEAD",
-        ])
+        .args(git_archive_args(prefix, &src_tar, scope))
         .status()
         .map_err(|e| format!("spawn git archive: {e}"))?;
     if !status.success() {
@@ -359,10 +407,7 @@ fn distcheck_scoped(scope: Scope) -> Result<PathBuf, String> {
         ],
     };
     for (step, args) in steps {
-        let status = Command::new("cargo")
-            .current_dir(&extracted)
-            .env("CARGO_HOME", &cargo_home)
-            .args(*args)
+        let status = distcheck_cargo(&extracted, &cargo_home, args)
             .status()
             .map_err(|e| format!("spawn cargo {step}: {e}"))?;
         if !status.success() {
@@ -407,6 +452,21 @@ fn distcheck_scoped(scope: Scope) -> Result<PathBuf, String> {
 
     let _ = std::fs::remove_dir_all(&checkdir);
     Ok(tarball)
+}
+
+/// One `cargo` step of [`distcheck_scoped`], run in the extracted tree with a
+/// fresh `CARGO_HOME`.
+fn distcheck_cargo(extracted: &Path, cargo_home: &Path, args: &[&str]) -> Command {
+    let mut cmd = Command::new("cargo");
+    cmd.current_dir(extracted)
+        .env("CARGO_HOME", cargo_home)
+        // N197: the tarball ships no `.port/`, so the fuzz-corpus replay
+        // tests cannot find their corpus here. `ci.sh` exports
+        // RUSTTY_REQUIRE_FUZZ_CORPUS=1, which would turn that expected
+        // absence into a distcheck failure.
+        .env_remove("RUSTTY_REQUIRE_FUZZ_CORPUS")
+        .args(args);
+    cmd
 }
 
 /// Slice a staged workspace down to `rustty-vt-c`'s closure.
@@ -584,6 +644,127 @@ fn member_dir(root: &Path, name: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// List the paths `git archive` would put in a tarball of `scope`, using
+    /// the real argv from [`git_archive_args`] but writing to stdout.
+    fn archive_listing(scope: Scope) -> Vec<String> {
+        let tag = match scope {
+            Scope::Workspace => "ws",
+            Scope::LibVt => "libvt",
+        };
+        let tarball = std::env::temp_dir().join(format!(
+            "xtask-archive-test-{tag}-{}.tar",
+            std::process::id()
+        ));
+        let status = Command::new("git")
+            .current_dir(workspace_root())
+            .args(git_archive_args("p/", &tarball, scope))
+            .status()
+            .expect("spawn git archive");
+        assert!(status.success());
+        let out = Command::new("tar")
+            .arg("tf")
+            .arg(&tarball)
+            .output()
+            .expect("spawn tar tf");
+        let _ = std::fs::remove_file(&tarball);
+        assert!(out.status.success());
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .map(|l| l.trim_start_matches("p/").to_string())
+            .collect()
+    }
+
+    /// N197: the extracted tarball carries no `.port/`, so the fuzz-corpus
+    /// replay tests can never find their corpus there. `ci.sh` exports
+    /// `RUSTTY_REQUIRE_FUZZ_CORPUS=1`, which turns that absence into a
+    /// failure, so the distcheck cargo steps must not inherit it.
+    #[test]
+    fn distcheck_cargo_does_not_inherit_the_fuzz_corpus_requirement() {
+        let cmd = distcheck_cargo(Path::new("x"), Path::new("h"), &["test"]);
+        let envs: Vec<_> = cmd.get_envs().collect();
+        assert!(
+            envs.contains(&(std::ffi::OsStr::new("RUSTTY_REQUIRE_FUZZ_CORPUS"), None)),
+            "{envs:?}"
+        );
+        // The step still runs with its fresh CARGO_HOME.
+        assert!(
+            envs.contains(&(
+                std::ffi::OsStr::new("CARGO_HOME"),
+                Some(std::ffi::OsStr::new("h"))
+            )),
+            "{envs:?}"
+        );
+    }
+
+    /// `GhosttyDist.zig:95-102, 184-209`: a lib-vt archive passes one
+    /// `:(exclude)<path>` pathspec per `lib_vt_excludes` entry (S63-F10). The
+    /// workspace archive still carries those trees, and the lib-vt archive
+    /// still carries what the library build needs, including the font
+    /// resources `rustty-font` embeds (D1 puts that crate below `rustty-vt`).
+    #[test]
+    fn lib_vt_archive_applies_the_reference_excludes() {
+        // The list itself: the reference's 17 (`GhosttyDist.zig:184-209`, in
+        // order) minus exactly the six omissions `LIB_VT_EXCLUDES` documents.
+        // Asserted as a whole, because the archive checks below iterate the
+        // port's own list and so cannot notice an entry dropped from it.
+        const REFERENCE: [&str; 17] = [
+            "images",
+            "macos",
+            "dist/doxygen",
+            "dist/linux",
+            "dist/macos",
+            "dist/windows",
+            "flatpak",
+            "snap",
+            "po",
+            "example",
+            "test",
+            "src/font/res",
+            "src/crash/testdata",
+            "pkg/wuffs/src/too_big.jpg",
+            "pkg/wuffs/src/too_big.png",
+            "pkg/breakpad/vendor",
+            "vendor",
+        ];
+        const OMITTED: [&str; 6] = [
+            "src/font/res",
+            "src/crash/testdata",
+            "pkg/wuffs/src/too_big.jpg",
+            "pkg/wuffs/src/too_big.png",
+            "pkg/breakpad/vendor",
+            "vendor",
+        ];
+        let expected: Vec<&str> = REFERENCE
+            .into_iter()
+            .filter(|e| !OMITTED.contains(e))
+            .collect();
+        assert_eq!(LIB_VT_EXCLUDES, expected.as_slice());
+        let args = git_archive_args("p/", Path::new("o.tar"), Scope::LibVt);
+        for e in &expected {
+            assert!(args.contains(&format!(":(exclude){e}")), "{args:?}");
+        }
+
+        let lib_vt = archive_listing(Scope::LibVt);
+        let full = archive_listing(Scope::Workspace);
+        for dir in LIB_VT_EXCLUDES {
+            let under = |l: &String| l.starts_with(&format!("{dir}/"));
+            assert!(full.iter().any(under), "workspace archive lacks {dir}/");
+            assert!(!lib_vt.iter().any(under), "lib-vt archive ships {dir}/");
+        }
+        for kept in [
+            "Cargo.toml",
+            "CMakeLists.txt",
+            "crates/rustty-vt-c/Cargo.toml",
+            "dist/cmake/",
+            "crates/rustty-font/res/JetBrainsMono-Regular.ttf",
+        ] {
+            assert!(
+                lib_vt.iter().any(|l| l == kept),
+                "lib-vt archive lacks {kept}"
+            );
+        }
+    }
 
     /// W2-01 proving test: the tarball `dist` builds carries the promised
     /// offline inputs — `VERSION`, the `vendor/` dependency tree, and the

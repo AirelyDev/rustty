@@ -108,6 +108,22 @@ fn version_plus() {
             "libxev line missing/wrong: {stdout}"
         );
     }
+    // S-13 (N257; DEFERRALS FreeBSD row item 6): what the reference prints on
+    // FreeBSD. `renderer/backend.zig:20-21` gives every non-Darwin native target
+    // `.opengl`, and libxev's `backend.zig:20,38` makes kqueue FreeBSD's only
+    // candidate, so `global.xev` (`xev.Dynamic`) collapses to the static kqueue
+    // `Api()` (`dynamic.zig:39`) and `{t}` of its `backend` prints `kqueue`.
+    #[cfg(target_os = "freebsd")]
+    {
+        assert!(
+            stdout.contains("  - renderer      : renderer.generic.Renderer(renderer.OpenGL)"),
+            "renderer line missing/wrong: {stdout}"
+        );
+        assert!(
+            stdout.contains("  - libxev        : kqueue"),
+            "libxev line missing/wrong: {stdout}"
+        );
+    }
 }
 
 // `rustty --version` -> exit 0 (special-case, same output as `+version`).
@@ -236,17 +252,16 @@ fn new_window_not_supported() {
         Some(1),
         "+new-window should exit 1 (none backend: unsupported; GUI backend: IPCFailed)",
     );
-    if rustty_build_config::app_runtime() != rustty_build_config::Runtime::None {
-        // GUI build: the IPC was attempted and failed; the "not supported"
-        // tail is unreachable.
-        return;
+    // GUI build: the IPC was attempted and failed, and the "not supported" tail
+    // is unreachable, so only the exit code above applies (no early return:
+    // each build asserts what it defines, R14).
+    if rustty_build_config::app_runtime() == rustty_build_config::Runtime::None {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains("not supported on this platform"),
+            "+new-window stderr should say it is not supported, got: {stderr:?}",
+        );
     }
-
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        stderr.contains("not supported on this platform"),
-        "+new-window stderr should say it is not supported, got: {stderr:?}",
-    );
 }
 
 // `rustty` (no args) -> exit 0 + the headless usage banner.
@@ -254,12 +269,21 @@ fn new_window_not_supported() {
 // Scoped to the headless `.none` build (the current darwin default): a GUI
 // `.gtk` build would take the Phase-3 GUI leaf (`unimplemented!()`) instead of
 // printing the banner, so the no-args behavior is only defined for `.none`.
+//
+// R14: the GUI builds are the targets where `Runtime::default_for` picks `.gtk`
+// (Linux, FreeBSD); there the test reports `ignored` instead of returning `ok`.
 #[test]
+#[cfg_attr(
+    any(target_os = "linux", target_os = "freebsd"),
+    ignore = "no-args launches the GTK app on this target, not the banner (R14)"
+)]
 fn no_args_usage_banner() {
-    if rustty_build_config::app_runtime() != rustty_build_config::Runtime::None {
-        // GUI build: no-args launches the app (Phase-3 leaf), not the banner.
-        return;
-    }
+    assert_eq!(
+        rustty_build_config::app_runtime(),
+        rustty_build_config::Runtime::None,
+        "the banner is only defined for the .none runtime; the ignore scope above \
+         no longer matches Runtime::default_for"
+    );
 
     let out = run(&[], &[]);
     assert!(

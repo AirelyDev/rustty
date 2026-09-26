@@ -402,6 +402,41 @@ fn workflow_artifact_names_match_the_documented_urls() {
     assert!(tip.contains("rustty-source.tar.gz"));
 }
 
+/// The macOS app zip is universal (`ghostty-macos-universal.zip` in the
+/// reference: publish-tag.yml:51-52, `.github/scripts/ghostty-tip:10`), and
+/// every place that names it agrees: the tagged pipeline stages it, the tip
+/// pipeline uploads it, `publish-tag.yml` validates it, and `rustty-tip` probes
+/// it. Review T-B found the last two still naming the pre-universal
+/// `rustty-macos-arm64.zip`, so every tag publish would fail validation and
+/// tip detection would always miss.
+#[test]
+fn macos_app_zip_is_universal_everywhere() {
+    const ZIP: &str = "rustty-macos-universal.zip";
+    let tag = read_workflow("release-tag.yml");
+    assert!(
+        tag.contains(&format!("blob/${{RUSTTY_VERSION}}/{ZIP}")),
+        "release-tag.yml"
+    );
+    let tip = read_workflow("release-tip.yml");
+    assert!(tip.contains(ZIP), "release-tip.yml");
+    let publish = read_workflow("publish-tag.yml");
+    assert!(publish.contains(&format!("\"{ZIP}\"")), "publish-tag.yml");
+    let probe =
+        std::fs::read_to_string(workspace_root().join(".github/scripts/rustty-tip")).unwrap();
+    assert!(probe.contains(&format!("${{commit}}/{ZIP}")), "rustty-tip");
+    for (name, text) in [
+        ("release-tag.yml", &tag),
+        ("release-tip.yml", &tip),
+        ("publish-tag.yml", &publish),
+        ("rustty-tip", &probe),
+    ] {
+        assert!(
+            !text.contains("macos-arm64"),
+            "{name} still names the pre-universal macos-arm64 artifact"
+        );
+    }
+}
+
 /// Sanity check on the job parser itself, so a parser bug cannot turn the
 /// gating assertions into silent passes.
 #[test]

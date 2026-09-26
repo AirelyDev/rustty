@@ -6,7 +6,7 @@ import SwiftUI
 class TerminalViewContainer: NSView {
     private let terminalView: NSView
 
-    /// Combined glass effect and inactive tint overlay view
+    /// Background color applied with glass effect
     private(set) var glassEffectView: NSView?
     private var derivedConfig: DerivedConfig?
 

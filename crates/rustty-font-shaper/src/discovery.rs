@@ -44,7 +44,7 @@
 /// live reference `log.warn` sites were found by enumerating the reference's own
 /// calls per file (PROCEDURE.md blind spot 3), not from a row's cited anchors.
 /// Recorded as finding **N6** in `.port/parity-closure/NEW-FINDINGS.md`.
-#[cfg(target_os = "macos")]
+#[cfg(rustty_font_has_coretext)]
 const LOG_SCOPE: &str = "discovery";
 
 use crate::face::Variation;
@@ -63,24 +63,53 @@ use crate::face::Variation;
 // };
 //
 // PORT NOTE: the `switch` above is preserved verbatim as a reference; it is
-// modeled here with `cfg(target_os)` matching `backend.zig`'s `Backend.default`
-// (macOS default `coretext` → `CoreText`; Linux default `fontconfig_freetype` →
-// `Fontconfig`). Parity targets both defaults.
-/// The active backend discoverer. macOS default `coretext` → `CoreText`.
-#[cfg(target_os = "macos")]
+// keyed on `options.backend`, the `rustty_font_backend` cfg (`-Dfont-backend`,
+// default `Backend.default`). CORRECTION (S-14, N266): this was a `target_os`
+// split that could only express the three per-OS defaults.
+/// `.coretext, .coretext_freetype, .coretext_harfbuzz, .coretext_noshape =>
+/// CoreText` — exactly `hasCoretext()`.
+#[cfg(rustty_font_has_coretext)]
 pub type Discover = CoreText;
 
-/// Windows default `freetype_windows` → `Windows` (the FreeType directory scan).
-/// Mirrors `Backend::default`'s `.windows => .freetype_windows` arm, which exists
-/// precisely so Windows never pulls fontconfig (and its libxml2 dependency).
-#[cfg(all(target_os = "windows", not(target_arch = "wasm32")))]
+/// `.freetype_windows => Windows` (the FreeType directory scan). The Windows
+/// default, which exists precisely so Windows never pulls fontconfig (and its
+/// libxml2 dependency).
+#[cfg(rustty_font_backend = "freetype_windows")]
 pub type Discover = Windows;
 
-/// Linux/BSD default `fontconfig_freetype` → `Fontconfig` (the live Fontconfig
-/// discoverer). On wasm32 this resolves to the `wasm_noop` `Fontconfig` instead
-/// (the `.web_canvas => void` arm, which genuinely means "no discovery").
-#[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+/// `.fontconfig_freetype => Fontconfig` (the live Fontconfig discoverer, the
+/// Linux/BSD default). On wasm32 the same name resolves to the `wasm_noop`
+/// `Fontconfig` instead (the `.web_canvas => void` arm, which genuinely means
+/// "no discovery").
+#[cfg(any(
+    rustty_font_backend = "fontconfig_freetype",
+    rustty_font_backend = "web_canvas"
+))]
 pub type Discover = Fontconfig;
+
+/// `.freetype => void, // no discovery` — the same functional no-op the
+/// `.web_canvas` arm uses (see `no_discovery` below).
+#[cfg(rustty_font_backend = "freetype")]
+pub type Discover = NoDiscovery;
+
+/// `Discover == void`: the reference's comptime test for a build without a
+/// font discovery mechanism (`.freetype`, `.web_canvas`). Rust cannot alias
+/// `Discover` to `void` (see `no_discovery`), so the `if (comptime Discover ==
+/// void)` sites in `SharedGridSet`, `CodepointResolver` and `list_fonts` read
+/// this instead. (S-14, N266: those sites were elided while every native build
+/// had a real discoverer.)
+pub const DISCOVER_IS_VOID: bool = cfg!(any(
+    rustty_font_backend = "freetype",
+    rustty_font_backend = "web_canvas"
+));
+
+/// `@hasDecl(font.Discover, "warmup")` (`App.zig:85`): only the CoreText
+/// discoverer declares `warmup`. A `const` so the probe stays comptime; the
+/// callers above this crate cannot see the backend cfg.
+#[cfg(rustty_font_has_coretext)]
+pub const DISCOVER_WARMUP: Option<fn()> = Some(CoreText::warmup);
+#[cfg(not(rustty_font_has_coretext))]
+pub const DISCOVER_WARMUP: Option<fn()> = None;
 
 // ---------------------------------------------------------------------------
 // Fontconfig (Linux default `fontconfig_freetype`) discoverer.
@@ -95,18 +124,13 @@ pub type Discover = Fontconfig;
 //
 // The wasm arm further below is the one that stays a FUNCTIONAL noop, because
 // `.web_canvas => void` genuinely means "no discovery".
-#[cfg(all(
-    not(target_os = "macos"),
-    not(target_os = "windows"),
-    not(target_arch = "wasm32")
-))]
+// (S-14, N266: keyed on `hasFontconfig()` — the `fontconfig_freetype` backend,
+// the Linux/BSD default — not on the target set, so a `-Dfont-backend=freetype`
+// build there gets the "no discovery" arm instead.)
+#[cfg(rustty_font_has_fontconfig)]
 pub use fontconfig_impl::{DiscoverIterator, Error, Fontconfig};
 
-#[cfg(all(
-    not(target_os = "macos"),
-    not(target_os = "windows"),
-    not(target_arch = "wasm32")
-))]
+#[cfg(rustty_font_has_fontconfig)]
 mod fontconfig_impl {
     use super::Descriptor;
     use crate::collection::Collection;
@@ -419,11 +443,15 @@ mod fontconfig_impl {
 }
 
 // ---------------------------------------------------------------------------
-// WASM (web_canvas backend) discoverer — a functional NOOP.
+// "No discovery" (web_canvas and freetype backends) discoverer — a functional
+// NOOP.
 //
 // PORT NOTE: the reference `Discover` selector maps the `.web_canvas` backend to
 // `void` ("no discovery" — see the `switch` comment above): the browser has no
 // font-file discovery, fonts are named CSS strings resolved by the Canvas API.
+// `.freetype` maps to `void` too ("FreeType for font rendering with no font
+// discovery enabled"); S-14 (N266) shares this module with it, as `NoDiscovery`
+// (on wasm it keeps its historical `Fontconfig` name).
 // Rust cannot alias `Discover` to `void`/`()` because `CodepointResolver` and
 // `SharedGridSet` name `Discover::init`/`.discover`/`.discover_fallback` and a
 // `DiscoverIterator{next,deinit}` unconditionally (they are comptime-elided in
@@ -433,10 +461,12 @@ mod fontconfig_impl {
 // (`self.discover` is always `null` in practice, so the resolver's discovery
 // branch short-circuits before calling these). This is the faithful modelling of
 // the `.web_canvas => void` arm under Rust's non-lazy type system.
-#[cfg(target_arch = "wasm32")]
-pub use wasm_noop::{DiscoverIterator, Error, Fontconfig};
+#[cfg(rustty_font_backend = "web_canvas")]
+pub use wasm_noop::{DiscoverIterator, Error, NoDiscovery as Fontconfig};
+#[cfg(rustty_font_backend = "freetype")]
+pub use wasm_noop::{DiscoverIterator, Error, NoDiscovery};
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(any(rustty_font_backend = "web_canvas", rustty_font_backend = "freetype"))]
 mod wasm_noop {
     use super::Descriptor;
     use crate::collection::Collection;
@@ -444,8 +474,9 @@ mod wasm_noop {
     use crate::face::FaceError;
     use crate::library::Library;
 
-    /// NOOP discoverer for the wasm `web_canvas` backend (`.web_canvas => void`).
-    pub struct Fontconfig;
+    /// NOOP discoverer for the `.web_canvas => void` and `.freetype => void`
+    /// arms.
+    pub struct NoDiscovery;
 
     /// The (never-produced) discovery error set, mirroring the macOS `Error`
     /// shape enough that `SharedGridSet`'s `From<discovery::Error>` composes. The
@@ -467,10 +498,10 @@ mod wasm_noop {
         }
     }
 
-    impl Fontconfig {
+    impl NoDiscovery {
         // pub fn init(lib: Library) Fontconfig
-        pub fn init(_lib: Library) -> Fontconfig {
-            Fontconfig
+        pub fn init(_lib: Library) -> NoDiscovery {
+            NoDiscovery
         }
 
         // pub fn deinit(self: *Fontconfig) void
@@ -500,6 +531,7 @@ mod wasm_noop {
         pub fn deinit(&mut self) {}
 
         // pub fn next(self: *DiscoverIterator) !?DeferredFace
+        #[allow(clippy::should_implement_trait)]
         pub fn next(&mut self) -> Result<Option<DeferredFace>, Error> {
             Ok(None)
         }
@@ -641,11 +673,11 @@ impl Descriptor {
     /// manually managed `*fontconfig.Pattern`); the caller must `destroy` it.
     // PORT NOTE: `discovery.zig:117-157` `toFcPattern`. `assert = quirks.inlineAssert`
     // (imported crate-wide as in `face/freetype.rs:41`); each `pat.add`/`cs.addChar`
-    // is `assert`ed exactly as the reference. Gated to the fontconfig backend class
-    // (`not(any(macos, wasm32))`) — the coretext path uses `to_coretext_descriptor`,
-    // and wasm has no discovery.
+    // is `assert`ed exactly as the reference. Gated to the fontconfig backend
+    // (`hasFontconfig()`; S-14b: it was the Linux/BSD target set) — the coretext
+    // path uses `to_coretext_descriptor`, and wasm has no discovery.
     // pub fn toFcPattern(self: Descriptor) *fontconfig.Pattern {
-    #[cfg(not(any(target_os = "macos", target_os = "windows", target_arch = "wasm32")))]
+    #[cfg(rustty_font_has_fontconfig)]
     pub fn to_fc_pattern(&self) -> *mut crate::fc::Pattern {
         use crate::fc;
         use rustty_util::quirks::inlineAssert as assert;
@@ -866,17 +898,27 @@ impl From<rustty_font::codepoint_map::Descriptor> for Descriptor {
 // };
 // ---------------------------------------------------------------------------
 
-#[cfg(target_os = "macos")]
+// The CoreText discoverer is `Discover` on every `hasCoretext()` backend
+// (`rustty_font_has_coretext`, macOS only — `rustty-build-config` refuses the
+// CoreText backends elsewhere).
+#[cfg(rustty_font_has_coretext)]
 pub use coretext_impl::{CoreText, DiscoverIterator, Error};
 
-#[cfg(target_os = "macos")]
+#[cfg(rustty_font_has_coretext)]
 mod coretext_impl {
     use super::Descriptor;
-    use crate::collection::{Collection, Index};
+    use crate::collection::Collection;
+    // Only `discoverCodepoint`'s CoreText body uses these, which a FreeType
+    // build never analyses (see its `hasFreetype()` early return).
+    #[cfg(not(rustty_font_has_freetype))]
+    use crate::collection::Index;
     use crate::deferred_face::{new_cfstring_bytes, CoreTextData, DeferredFace};
     use crate::face::coretext::copy_table_data;
-    use crate::face::{Face, FaceError, Variation};
+    #[cfg(not(rustty_font_has_freetype))]
+    use crate::face::Face;
+    use crate::face::{FaceError, Variation};
     use crate::library::Library;
+    #[cfg(not(rustty_font_has_freetype))]
     use crate::Style;
     use core::ffi::c_void;
     use core::ptr::{self, NonNull};
@@ -896,6 +938,7 @@ mod coretext_impl {
     };
     use rustty_font::opentype::head::Head;
     use rustty_font::opentype::os2::OS2;
+    #[cfg(not(rustty_font_has_freetype))]
     use rustty_util::quirks::inlineAssert as assert;
 
     /// The error set for CoreText discovery.
@@ -941,6 +984,9 @@ mod coretext_impl {
         use super::*;
         #[link(name = "CoreText", kind = "framework")]
         extern "C-unwind" {
+            // Only `discoverCodepoint`'s CoreText body, which a FreeType
+            // (`coretext_freetype`) build never analyses.
+            #[cfg(not(rustty_font_has_freetype))]
             pub fn CTFontCreateForString(
                 current_font: &CTFont,
                 string: &CFString,
@@ -1386,12 +1432,17 @@ mod coretext_impl {
                 //     break :found false;
                 // break :found std.mem.eql(u8, actual_slice, family);
                 //
-                // PORT NOTE: rustty reads CFStrings via `to_string()` (the idiom of
-                // `DeferredFace::family_name`), so the reference's 256-byte stack
-                // buffer and its too-small `orelse false` arm collapse into the
-                // byte comparison.
-                let actual_s = actual.to_string();
-                actual_s.as_bytes() == family
+                // S87-F2: the 256-byte buffer is part of the behaviour: a family
+                // name that does not fit with its NUL (256 bytes or more) is
+                // "not found". The port compared `to_string()` directly, so it
+                // found such a family. CORRECTION (task T-F): the note here said
+                // the buffer "and its too-small `orelse false` arm collapse into
+                // the byte comparison".
+                let mut buf = [0u8; 256];
+                match crate::face::coretext::cstring_utf8(&actual, &mut buf) {
+                    Some(actual_slice) => actual_slice == family,
+                    None => false,
+                }
             };
             if !found {
                 // ct_font.release(); — RAII (`ct_font` drops on return).
@@ -1400,10 +1451,7 @@ mod coretext_impl {
 
             // return .{ .ct = .{ .font = ct_font, .variations = &.{} } };
             Ok(Some(DeferredFace {
-                ct: Some(CoreTextData {
-                    font: ct_font,
-                    variations: Vec::new(),
-                }),
+                ct: Some(CoreTextData::new(ct_font, Vec::new())),
             }))
         }
 
@@ -1472,6 +1520,10 @@ mod coretext_impl {
         /// Discover a font for a specific codepoint using the CoreText
         /// CTFontCreateForString API.
         // fn discoverCodepoint(self, collection: *Collection, desc: Descriptor) !?*macos.text.FontDescriptor {
+        //
+        // (`needless_return`: in a `coretext_freetype` build the comptime
+        // `hasFreetype()` early return below is the whole body.)
+        #[cfg_attr(rustty_font_has_freetype, allow(clippy::needless_return))]
         fn discover_codepoint(
             &self,
             collection: *mut Collection,
@@ -1480,144 +1532,157 @@ mod coretext_impl {
             // _ = self;
 
             // if (comptime options.backend.hasFreetype()) {
-            //     // If we have freetype, we can't use CoreText to find a font
-            //     // that supports a specific codepoint because we need to
-            //     // have a CoreText font to be able to do so.
-            //     return null;
-            // }
-            //
-            // PORT NOTE: on the macOS default `coretext` backend `hasFreetype()`
-            // is false, so this early-return does not apply and is a no-op here.
-
-            // assert(desc.codepoint > 0);
-            assert(desc.codepoint > 0);
-
-            // SAFETY: `collection` is an externally-owned collection pointer.
-            let collection = unsafe { &mut *collection };
-
-            // Get our original font. This is dependent on the requested style
-            // from the descriptor.
-            // const original = original: {
-            //     // In all the styles below, we try to match it but if we don't
-            //     // we always fall back to some other option. The order matters
-            //     // here.
-            let original: *mut Face = {
-                // if (desc.bold and desc.italic) {
-                //     const entries = collection.faces.get(.bold_italic);
-                //     if (entries.count() > 0) {
-                //         break :original try collection.getFace(.{ .style = .bold_italic });
-                //     }
-                // }
-                if desc.bold && desc.italic && collection.style_face_count(Style::BoldItalic) > 0 {
-                    collection.get_face(Index::new(Style::BoldItalic, 0))?
-                }
-                // if (desc.bold) {
-                //     const entries = collection.faces.get(.bold);
-                //     if (entries.count() > 0) {
-                //         break :original try collection.getFace(.{ .style = .bold });
-                //     }
-                // }
-                else if desc.bold && collection.style_face_count(Style::Bold) > 0 {
-                    collection.get_face(Index::new(Style::Bold, 0))?
-                }
-                // if (desc.italic) {
-                //     const entries = collection.faces.get(.italic);
-                //     if (entries.count() > 0) {
-                //         break :original try collection.getFace(.{ .style = .italic });
-                //     }
-                // }
-                else if desc.italic && collection.style_face_count(Style::Italic) > 0 {
-                    collection.get_face(Index::new(Style::Italic, 0))?
-                }
-                // break :original try collection.getFace(.{ .style = .regular });
-                else {
-                    collection.get_face(Index::new(Style::Regular, 0))?
-                }
-            };
-
-            // We need it in utf8 format
-            // var buf: [4]u8 = undefined;
-            // const len = try std.unicode.utf8Encode(@intCast(desc.codepoint), &buf);
-            let ch = char::from_u32(desc.codepoint).ok_or(Error::CodepointTooLarge)?;
-            let mut buf = [0u8; 4];
-            let encoded = ch.encode_utf8(&mut buf);
-            let len = encoded.len();
-
-            // We need a CFString
-            // const str = try macos.foundation.String.createWithBytes(buf[0..len], .utf8, false);
-            let str = new_cfstring_bytes(&buf[0..len]).ok_or(Error::OutOfMemory)?;
-            // defer str.release();
-
-            // Get our range length for CTFontCreateForString. It looks like
-            // the range uses UTF-16 codepoints and not UTF-32 codepoints.
-            // const range_len: usize = range_len: {
-            //     var unichars: [2]u16 = undefined;
-            //     const pair = macos.foundation.stringGetSurrogatePairForLongCharacter(desc.codepoint, &unichars);
-            //     break :range_len if (pair) 2 else 1;
-            // };
-            let range_len: isize = {
-                let mut unichars: [u16; 2] = [0, 0];
-                let pair =
-                    string_get_surrogate_pair_for_long_character(desc.codepoint, &mut unichars);
-                if pair {
-                    2
-                } else {
-                    1
-                }
-            };
-
-            // Get our font
-            // const font = original.font.createForString(
-            //     str,
-            //     macos.foundation.Range.init(0, range_len),
-            // ) orelse return null;
-            let font_ptr = unsafe {
-                sys::CTFontCreateForString(
-                    &(*original).font,
-                    &str,
-                    CFRange {
-                        location: 0,
-                        length: range_len,
-                    },
-                )
-            };
-            let font: CFRetained<CTFont> = match NonNull::new(font_ptr) {
-                Some(nn) => unsafe { CFRetained::from_raw(nn) },
-                None => return Ok(None),
-            };
-            // defer font.release();
-
-            // Do not allow the last resort font to go through. This is the
-            // last font used by CoreText if it can't find anything else and
-            // only contains replacement characters.
-            // last_resort: {
-            'last_resort: {
-                // const name_str = font.copyPostScriptName();
-                let name_str = unsafe { font.post_script_name() };
-                // defer name_str.release();
-
-                // If the name doesn't fit in our buffer, then it can't
-                // be the last resort font so we break out.
-                // var name_buf: [64]u8 = undefined;
-                // const name: []const u8 = name_str.cstring(&name_buf, .utf8) orelse break :last_resort;
-                let name = name_str.to_string();
-                let name = name.as_bytes();
-                // PORT NOTE: `cstring(&[64]u8, .utf8)` needs room for a trailing NUL,
-                // so a name of >= 64 bytes returns null → break out (not last resort).
-                if name.len() >= 64 {
-                    break 'last_resort;
-                }
-
-                // If the name is "LastResort" then we don't want to use it.
-                // if (std.mem.eql(u8, "LastResort", name)) return null;
-                if b"LastResort" == name {
-                    return Ok(None);
-                }
+            #[cfg(rustty_font_has_freetype)]
+            {
+                // If we have freetype, we can't use CoreText to find a font
+                // that supports a specific codepoint because we need to
+                // have a CoreText font to be able to do so.
+                let _ = (collection, desc);
+                return Ok(None);
             }
+            // }
+            // PORT NOTE (S-14, N266): live for `coretext_freetype`. The reference
+            // `return` is comptime, so Zig never analyses the rest of this body
+            // in that build — it reads `original.font`, a CoreText-face field the
+            // FreeType face lacks. The rest is therefore the
+            // `not(rustty_font_has_freetype)` block below (Rust's stand-in for
+            // that laziness); in a `coretext_freetype` build the function ends at
+            // the early return above.
+            #[cfg(not(rustty_font_has_freetype))]
+            {
+                // assert(desc.codepoint > 0);
+                assert(desc.codepoint > 0);
 
-            // Get the descriptor
-            // return font.copyDescriptor();
-            Ok(Some(unsafe { font.font_descriptor() }))
+                // SAFETY: `collection` is an externally-owned collection pointer.
+                let collection = unsafe { &mut *collection };
+
+                // Get our original font. This is dependent on the requested style
+                // from the descriptor.
+                // const original = original: {
+                //     // In all the styles below, we try to match it but if we don't
+                //     // we always fall back to some other option. The order matters
+                //     // here.
+                let original: *mut Face = {
+                    // if (desc.bold and desc.italic) {
+                    //     const entries = collection.faces.get(.bold_italic);
+                    //     if (entries.count() > 0) {
+                    //         break :original try collection.getFace(.{ .style = .bold_italic });
+                    //     }
+                    // }
+                    if desc.bold
+                        && desc.italic
+                        && collection.style_face_count(Style::BoldItalic) > 0
+                    {
+                        collection.get_face(Index::new(Style::BoldItalic, 0))?
+                    }
+                    // if (desc.bold) {
+                    //     const entries = collection.faces.get(.bold);
+                    //     if (entries.count() > 0) {
+                    //         break :original try collection.getFace(.{ .style = .bold });
+                    //     }
+                    // }
+                    else if desc.bold && collection.style_face_count(Style::Bold) > 0 {
+                        collection.get_face(Index::new(Style::Bold, 0))?
+                    }
+                    // if (desc.italic) {
+                    //     const entries = collection.faces.get(.italic);
+                    //     if (entries.count() > 0) {
+                    //         break :original try collection.getFace(.{ .style = .italic });
+                    //     }
+                    // }
+                    else if desc.italic && collection.style_face_count(Style::Italic) > 0 {
+                        collection.get_face(Index::new(Style::Italic, 0))?
+                    }
+                    // break :original try collection.getFace(.{ .style = .regular });
+                    else {
+                        collection.get_face(Index::new(Style::Regular, 0))?
+                    }
+                };
+
+                // We need it in utf8 format
+                // var buf: [4]u8 = undefined;
+                // const len = try std.unicode.utf8Encode(@intCast(desc.codepoint), &buf);
+                let ch = char::from_u32(desc.codepoint).ok_or(Error::CodepointTooLarge)?;
+                let mut buf = [0u8; 4];
+                let encoded = ch.encode_utf8(&mut buf);
+                let len = encoded.len();
+
+                // We need a CFString
+                // const str = try macos.foundation.String.createWithBytes(buf[0..len], .utf8, false);
+                let str = new_cfstring_bytes(&buf[0..len]).ok_or(Error::OutOfMemory)?;
+                // defer str.release();
+
+                // Get our range length for CTFontCreateForString. It looks like
+                // the range uses UTF-16 codepoints and not UTF-32 codepoints.
+                // const range_len: usize = range_len: {
+                //     var unichars: [2]u16 = undefined;
+                //     const pair = macos.foundation.stringGetSurrogatePairForLongCharacter(desc.codepoint, &unichars);
+                //     break :range_len if (pair) 2 else 1;
+                // };
+                let range_len: isize = {
+                    let mut unichars: [u16; 2] = [0, 0];
+                    let pair =
+                        string_get_surrogate_pair_for_long_character(desc.codepoint, &mut unichars);
+                    if pair {
+                        2
+                    } else {
+                        1
+                    }
+                };
+
+                // Get our font
+                // const font = original.font.createForString(
+                //     str,
+                //     macos.foundation.Range.init(0, range_len),
+                // ) orelse return null;
+                let font_ptr = unsafe {
+                    sys::CTFontCreateForString(
+                        &(*original).font,
+                        &str,
+                        CFRange {
+                            location: 0,
+                            length: range_len,
+                        },
+                    )
+                };
+                let font: CFRetained<CTFont> = match NonNull::new(font_ptr) {
+                    Some(nn) => unsafe { CFRetained::from_raw(nn) },
+                    None => return Ok(None),
+                };
+                // defer font.release();
+
+                // Do not allow the last resort font to go through. This is the
+                // last font used by CoreText if it can't find anything else and
+                // only contains replacement characters.
+                // last_resort: {
+                'last_resort: {
+                    // const name_str = font.copyPostScriptName();
+                    let name_str = unsafe { font.post_script_name() };
+                    // defer name_str.release();
+
+                    // If the name doesn't fit in our buffer, then it can't
+                    // be the last resort font so we break out.
+                    // var name_buf: [64]u8 = undefined;
+                    // const name: []const u8 = name_str.cstring(&name_buf, .utf8) orelse break :last_resort;
+                    let name = name_str.to_string();
+                    let name = name.as_bytes();
+                    // PORT NOTE: `cstring(&[64]u8, .utf8)` needs room for a trailing NUL,
+                    // so a name of >= 64 bytes returns null → break out (not last resort).
+                    if name.len() >= 64 {
+                        break 'last_resort;
+                    }
+
+                    // If the name is "LastResort" then we don't want to use it.
+                    // if (std.mem.eql(u8, "LastResort", name)) return null;
+                    if b"LastResort" == name {
+                        return Ok(None);
+                    }
+                }
+
+                // Get the descriptor
+                // return font.copyDescriptor();
+                Ok(Some(unsafe { font.font_descriptor() }))
+            }
         }
     }
 
@@ -2206,10 +2271,7 @@ mod coretext_impl {
 
             // return DeferredFace{ .ct = .{ .font = font, .variations = self.variations } };
             Ok(Some(DeferredFace {
-                ct: Some(CoreTextData {
-                    font,
-                    variations: self.variations.clone(),
-                }),
+                ct: Some(CoreTextData::new(font, self.variations.clone())),
             }))
         }
     }
@@ -2233,10 +2295,12 @@ mod coretext_impl {
 /// the tens of milliseconds. A codepoint fallback query may be
 /// noticeably slower because every candidate has to be opened to
 /// probe its CMap.
-#[cfg(all(target_os = "windows", not(target_arch = "wasm32")))]
+// (S-14, N266: keyed on the `freetype_windows` backend, the Windows default,
+// not on the target.)
+#[cfg(rustty_font_backend = "freetype_windows")]
 pub use windows_impl::{DiscoverIterator, Error, Windows};
 
-#[cfg(all(target_os = "windows", not(target_arch = "wasm32")))]
+#[cfg(rustty_font_backend = "freetype_windows")]
 mod windows_impl {
     use super::Descriptor;
     use crate::collection::Collection;
@@ -2694,7 +2758,7 @@ mod windows_impl {
 /// (`discovery.zig:756-764`), extracted into a free fn so the FAILURE arm is
 /// testable without needing a CoreText font whose `head` table is malformed.
 /// The production call site passes the copied table bytes verbatim.
-#[cfg(target_os = "macos")]
+#[cfg(rustty_font_has_coretext)]
 fn parse_head_table(bytes: &[u8]) -> Option<rustty_font::opentype::head::Head> {
     match rustty_font::opentype::head::Head::init(bytes) {
         Ok(v) => Some(v),
@@ -2706,7 +2770,7 @@ fn parse_head_table(bytes: &[u8]) -> Option<rustty_font::opentype::head::Head> {
 }
 
 /// The `OS/2` sibling of [`parse_head_table`] (`discovery.zig:773-781`).
-#[cfg(target_os = "macos")]
+#[cfg(rustty_font_has_coretext)]
 fn parse_os2_table(bytes: &[u8]) -> Option<rustty_font::opentype::os2::OS2> {
     match rustty_font::opentype::os2::OS2::init(bytes) {
         Ok(v) => Some(v),
@@ -2762,7 +2826,9 @@ mod tests {
     /// is exactly the guarantee this test exists to hold. (The bodies themselves
     /// are the live Fontconfig discoverer — they are exercised end-to-end by the
     /// ungated `SharedGridSet` / discovered-font shaping tests on Linux.)
-    #[cfg(not(any(target_os = "macos", target_os = "windows", target_arch = "wasm32")))]
+    // (S-14: keyed on `hasFontconfig()`, where `Fontconfig` is the live
+    // discoverer — a Linux `-Dfont-backend=freetype` build has none.)
+    #[cfg(rustty_font_has_fontconfig)]
     #[test]
     fn discover_impl_typechecks() {
         use crate::collection::Collection;
@@ -2796,7 +2862,7 @@ mod tests {
     /// `[:0]` pointer to the pattern, so fontconfig sees the bytes before the
     /// NUL; the port now stores exactly those bytes, which this reads back out
     /// of the pattern.
-    #[cfg(not(any(target_os = "macos", target_os = "windows", target_arch = "wasm32")))]
+    #[cfg(rustty_font_has_fontconfig)]
     #[test]
     fn a_descriptor_family_with_a_nul_reaches_the_pattern_cut_at_the_nul() {
         let _fc = crate::fc::global_shared();
@@ -2836,7 +2902,7 @@ mod tests {
     }
 
     // test "fontconfig" {
-    #[cfg(not(any(target_os = "macos", target_os = "windows", target_arch = "wasm32")))]
+    #[cfg(rustty_font_backend = "fontconfig_freetype")]
     #[test]
     fn fontconfig() {
         // Shared: fontconfig's global state must not be torn down under us
@@ -2844,12 +2910,11 @@ mod tests {
         let _fc = crate::fc::global_shared();
         // if (options.backend != .fontconfig_freetype) return error.SkipZigTest;
         //
-        // PORT NOTE: the reference's `!= fontconfig_freetype` early-return skip is
-        // expressed as an inverted `== fontconfig_freetype` guard (clippy-clean). On
-        // the freetype-active backend class the body discovers a real system font.
-        if crate::options::BACKEND != crate::Backend::FontconfigFreetype {
-            return;
-        }
+        // PORT NOTE: the reference's `!= fontconfig_freetype` skip is the
+        // `#[cfg]` on this test, keyed on the backend itself (S-14; it was the
+        // target set whose DEFAULT is `fontconfig_freetype`), so a runtime guard
+        // here could never fire (R14: no silent early return). On the freetype-active
+        // backend class the body discovers a real system font.
 
         use crate::library::Library;
 
@@ -2884,15 +2949,15 @@ mod tests {
     /// Asserts (a) dropping an iterator destroys its handles exactly once, and
     /// (b) `deinit` is idempotent, so the explicit `deinit()` calls the port
     /// already makes do not double-destroy when the drop follows.
-    #[cfg(not(any(target_os = "macos", target_os = "windows", target_arch = "wasm32")))]
+    // (S-14: keyed on `hasFontconfig()`, where `Fontconfig` is the live
+    // discoverer — a Linux `-Dfont-backend=freetype` build has none.)
+    #[cfg(rustty_font_has_fontconfig)]
     #[test]
     fn discover_iterator_drops_native_handles() {
         // Shared: fontconfig's global state must not be torn down under us
         // (see `fc::FC_GLOBAL`).
         let _fc = crate::fc::global_shared();
-        if crate::options::BACKEND != crate::Backend::FontconfigFreetype {
-            return;
-        }
+        // The backend skip is the `#[cfg]` above (see `fontconfig`, R14).
 
         use super::fontconfig_impl::deinit_destroys;
         use crate::library::Library;
@@ -2936,16 +3001,14 @@ mod tests {
     }
 
     // test "fontconfig codepoint" {
-    #[cfg(not(any(target_os = "macos", target_os = "windows", target_arch = "wasm32")))]
+    #[cfg(rustty_font_backend = "fontconfig_freetype")]
     #[test]
     fn fontconfig_codepoint() {
         // Shared: fontconfig's global state must not be torn down under us
         // (see `fc::FC_GLOBAL`).
         let _fc = crate::fc::global_shared();
         // if (options.backend != .fontconfig_freetype) return error.SkipZigTest;
-        if crate::options::BACKEND != crate::Backend::FontconfigFreetype {
-            return;
-        }
+        // (the `#[cfg]` above IS that skip, R14 — see `fontconfig`)
 
         use crate::library::Library;
 
@@ -2990,7 +3053,7 @@ mod tests {
     // codepoint` tests, whose bodies discover real fonts); these directly assert
     // the built pattern's contents, and are gated to the fontconfig backend class
     // (the only class where `to_fc_pattern` is compiled).
-    #[cfg(not(any(target_os = "macos", target_os = "windows", target_arch = "wasm32")))]
+    #[cfg(rustty_font_has_fontconfig)]
     #[test]
     fn descriptor_to_fc_pattern_family_size_mono() {
         // Shared: fontconfig's global state must not be torn down under us
@@ -3027,7 +3090,7 @@ mod tests {
         pat.destroy();
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "windows", target_arch = "wasm32")))]
+    #[cfg(rustty_font_has_fontconfig)]
     #[test]
     fn descriptor_to_fc_pattern_codepoint() {
         // Shared: fontconfig's global state must not be torn down under us
@@ -3052,17 +3115,169 @@ mod tests {
         pat.destroy();
     }
 
+    /// JetBrains Mono with its `name` table replaced by one whose family,
+    /// full and typographic-family names are `family` (Windows, UTF-16BE) and
+    /// whose PostScript name is `ps`. The new table is appended and the table
+    /// directory entry repointed; CoreText does not check the checksums.
+    #[cfg(rustty_font_has_coretext)]
+    fn font_named(family: &str, ps: &str) -> Vec<u8> {
+        let utf16be =
+            |s: &str| -> Vec<u8> { s.encode_utf16().flat_map(|u| u.to_be_bytes()).collect() };
+        let records: [(u16, Vec<u8>); 5] = [
+            (1, utf16be(family)),
+            (2, utf16be("Regular")),
+            (4, utf16be(family)),
+            (6, utf16be(ps)),
+            (16, utf16be(family)),
+        ];
+        let mut table = Vec::new();
+        let count = records.len() as u16;
+        let string_offset = 6 + 12 * count;
+        table.extend_from_slice(&0u16.to_be_bytes()); // format 0
+        table.extend_from_slice(&count.to_be_bytes());
+        table.extend_from_slice(&string_offset.to_be_bytes());
+        let mut storage = Vec::new();
+        for (name_id, bytes) in &records {
+            // platform 3 (Windows), encoding 1 (Unicode BMP), language 0x409
+            for v in [
+                3u16,
+                1,
+                0x409,
+                *name_id,
+                bytes.len() as u16,
+                storage.len() as u16,
+            ] {
+                table.extend_from_slice(&v.to_be_bytes());
+            }
+            storage.extend_from_slice(bytes);
+        }
+        table.extend_from_slice(&storage);
+
+        let mut font = rustty_font::embedded::VARIABLE.to_vec();
+        while !font.len().is_multiple_of(4) {
+            font.push(0);
+        }
+        let offset = font.len() as u32;
+        let num_tables = u16::from_be_bytes([font[4], font[5]]) as usize;
+        let rec = (0..num_tables)
+            .map(|i| 12 + 16 * i)
+            .find(|&r| &font[r..r + 4] == b"name")
+            .expect("JetBrains Mono has a name table");
+        font[rec + 8..rec + 12].copy_from_slice(&offset.to_be_bytes());
+        font[rec + 12..rec + 16].copy_from_slice(&(table.len() as u32).to_be_bytes());
+        font.extend_from_slice(&table);
+        font
+    }
+
+    /// A font registered with CoreText for this process until dropped
+    /// (`CTFontManagerRegisterGraphicsFont`).
+    #[cfg(rustty_font_has_coretext)]
+    struct RegisteredFont(*mut core::ffi::c_void);
+
+    #[cfg(rustty_font_has_coretext)]
+    extern "C" {
+        fn CGDataProviderCreateWithCFData(data: *const core::ffi::c_void)
+            -> *mut core::ffi::c_void;
+        fn CGDataProviderRelease(p: *mut core::ffi::c_void);
+        fn CGFontCreateWithDataProvider(p: *mut core::ffi::c_void) -> *mut core::ffi::c_void;
+        fn CGFontRelease(f: *mut core::ffi::c_void);
+        fn CTFontManagerRegisterGraphicsFont(
+            font: *mut core::ffi::c_void,
+            error: *mut *mut core::ffi::c_void,
+        ) -> bool;
+        fn CTFontManagerUnregisterGraphicsFont(
+            font: *mut core::ffi::c_void,
+            error: *mut *mut core::ffi::c_void,
+        ) -> bool;
+    }
+
+    #[cfg(rustty_font_has_coretext)]
+    impl RegisteredFont {
+        fn new(bytes: &[u8]) -> RegisteredFont {
+            let data = objc2_core_foundation::CFData::from_bytes(bytes);
+            // SAFETY: plain CoreGraphics/CoreText calls on live objects; each
+            // create is balanced by a release below or in `drop`.
+            unsafe {
+                let provider = CGDataProviderCreateWithCFData(
+                    (&*data as *const objc2_core_foundation::CFData).cast(),
+                );
+                assert!(!provider.is_null());
+                let font = CGFontCreateWithDataProvider(provider);
+                CGDataProviderRelease(provider);
+                assert!(!font.is_null(), "CoreGraphics accepts the font");
+                assert!(
+                    CTFontManagerRegisterGraphicsFont(font, core::ptr::null_mut()),
+                    "CoreText registers the font"
+                );
+                RegisteredFont(font)
+            }
+        }
+    }
+
+    #[cfg(rustty_font_has_coretext)]
+    impl Drop for RegisteredFont {
+        fn drop(&mut self) {
+            // SAFETY: `self.0` is the registered CGFont this value owns.
+            unsafe {
+                CTFontManagerUnregisterGraphicsFont(self.0, core::ptr::null_mut());
+                CGFontRelease(self.0);
+            }
+        }
+    }
+
+    /// S87-F2: `discoverExactFamily` reads the found font's family name into a
+    /// 256-byte buffer (`discovery.zig:429-441`); a name that does not fit with
+    /// its NUL (256 bytes or more) is not found, even when it is the family
+    /// asked for. The fonts are registered for this process under names no
+    /// other font has; the 255-byte one proves the lookup itself finds them.
+    #[cfg(rustty_font_has_coretext)]
+    #[test]
+    fn discover_exact_family_rejects_names_that_do_not_fit_256_bytes() {
+        let disco = CoreText::init(crate::library::Library::init().unwrap());
+        let long = |n: usize, tag: char| -> String {
+            let mut s = format!("Rustty S87F2 {tag} ");
+            while s.len() < n {
+                s.push('x');
+            }
+            s
+        };
+
+        let fits = long(255, 'a');
+        let too_long = long(256, 'b');
+        assert_eq!((fits.len(), too_long.len()), (255, 256));
+        let _fits_font = RegisteredFont::new(&font_named(&fits, "RusttyS87F2a"));
+        let _too_long_font = RegisteredFont::new(&font_named(&too_long, "RusttyS87F2b"));
+
+        // Precondition: CoreText finds each font by that name and reports it
+        // as the family (so only the buffer can make the difference).
+        for name in [&fits, &too_long] {
+            let s = crate::deferred_face::new_cfstring(name).unwrap();
+            let f = unsafe { objc2_core_text::CTFont::with_name(&s, 12.0, core::ptr::null()) };
+            assert_eq!(unsafe { f.family_name() }.to_string(), *name);
+        }
+
+        let found = disco.discover_exact_family(fits.as_bytes()).unwrap();
+        assert!(found.is_some(), "a 255-byte family fits the buffer");
+        let not_found = disco.discover_exact_family(too_long.as_bytes()).unwrap();
+        assert!(not_found.is_none(), "a 256-byte family does not");
+    }
+
     // test "coretext" {
-    #[cfg(target_os = "macos")]
+    #[cfg(rustty_font_has_coretext)]
+    #[cfg_attr(
+        not(any(
+            rustty_font_backend = "coretext",
+            rustty_font_backend = "coretext_freetype"
+        )),
+        ignore = "SkipZigTest: `options.backend != .coretext and != .coretext_freetype` (R14)"
+    )]
     #[test]
     fn coretext() {
         // if (options.backend != .coretext and options.backend != .coretext_freetype)
         //     return error.SkipZigTest;
-        if crate::options::BACKEND != crate::Backend::Coretext
-            && crate::options::BACKEND != crate::Backend::CoretextFreetype
-        {
-            return;
-        }
+        // (the `cfg_attr(.., ignore)` above IS that skip, made visible — R14,
+        // no silent early return; the `#[cfg]` scopes the body to the builds
+        // where `CoreText` exists, the `hasCoretext()` backends)
 
         use crate::library::Library;
 
@@ -3104,14 +3319,12 @@ mod tests {
     // re-implemented HERE, in `copy_matching_descriptors`' `None => return
     // result` arm. The test therefore lives where the code does, and drives it
     // through the public `discover()` the wrapper's callers use.
-    #[cfg(target_os = "macos")]
+    #[cfg(rustty_font_has_coretext)]
     #[test]
     fn from_descriptors_no_match() {
-        if crate::options::BACKEND != crate::Backend::Coretext
-            && crate::options::BACKEND != crate::Backend::CoretextFreetype
-        {
-            return;
-        }
+        // (the `cfg_attr(.., ignore)` above IS that skip, made visible — R14,
+        // no silent early return; the `#[cfg]` scopes the body to the builds
+        // where `CoreText` exists, the `hasCoretext()` backends)
 
         use crate::library::Library;
 
@@ -3139,16 +3352,21 @@ mod tests {
     }
 
     // test "coretext codepoint" {
-    #[cfg(target_os = "macos")]
+    #[cfg(rustty_font_has_coretext)]
+    #[cfg_attr(
+        not(any(
+            rustty_font_backend = "coretext",
+            rustty_font_backend = "coretext_freetype"
+        )),
+        ignore = "SkipZigTest: `options.backend != .coretext and != .coretext_freetype` (R14)"
+    )]
     #[test]
     fn coretext_codepoint() {
         // if (options.backend != .coretext and options.backend != .coretext_freetype)
         //     return error.SkipZigTest;
-        if crate::options::BACKEND != crate::Backend::Coretext
-            && crate::options::BACKEND != crate::Backend::CoretextFreetype
-        {
-            return;
-        }
+        // (the `cfg_attr(.., ignore)` above IS that skip, made visible — R14,
+        // no silent early return; the `#[cfg]` scopes the body to the builds
+        // where `CoreText` exists, the `hasCoretext()` backends)
 
         use crate::library::Library;
 
@@ -3184,16 +3402,18 @@ mod tests {
     }
 
     // test "coretext sorting" {
-    #[cfg(target_os = "macos")]
+    #[cfg(rustty_font_has_coretext)]
     #[test]
+    #[ignore = "SkipZigTest: the reference disables this test unconditionally \
+                (`if (true) return error.SkipZigTest;`, SF Pro is not in CI); \
+                its body is ported live but unreachable, as upstream (R14)"]
+    #[allow(unreachable_code)]
     fn coretext_sorting() {
         // if (options.backend != .coretext and options.backend != .coretext_freetype)
         //     return error.SkipZigTest;
-        if crate::options::BACKEND != crate::Backend::Coretext
-            && crate::options::BACKEND != crate::Backend::CoretextFreetype
-        {
-            return;
-        }
+        // (the `cfg_attr(.., ignore)` above IS that skip, made visible — R14,
+        // no silent early return; the `#[cfg]` scopes the body to the builds
+        // where `CoreText` exists, the `hasCoretext()` backends)
 
         // !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!//
         // FIXME: Disabled for now because SF Pro is not available in CI
@@ -3202,62 +3422,105 @@ mod tests {
         //        font correctly, instead of relying on the system fonts.
         // if (true) return error.SkipZigTest;
         // !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!//
-        #[allow(clippy::needless_return)]
-        if true {
-            return;
-        }
+        //
+        // R14: that unconditional skip is the `#[ignore]` above. Run on request,
+        // the test FAILS rather than reporting `ok` for a body that never runs.
+        panic!(
+            "coretext_sorting is disabled upstream (`if (true) return error.SkipZigTest;`); \
+             its body is unreachable there and here"
+        );
 
-        // The remainder is unreachable (the `if (true) return` above always skips);
-        // it is ported verbatim as reference below and never executes:
-        //
-        // var lib = try Library.init(alloc); defer lib.deinit();
-        // var ct = CoreText.init(lib); defer ct.deinit();
-        //
-        // We try to get a Regular, Italic, Bold, & Bold Italic version of SF Pro,
-        // which should be installed on all Macs, and has many styles which makes
-        // it a good test, since there will be many results for each discovery.
-        //
-        // Regular
-        // {
-        //     var it = try ct.discover(alloc, .{ .family = "SF Pro", .size = 12 });
-        //     defer it.deinit();
-        //     const res = (try it.next()).?;
-        //     var buf: [1024]u8 = undefined;
-        //     const name = try res.name(&buf);
-        //     try testing.expectEqualStrings("SF Pro Regular", name);
-        // }
-        //
-        // Regular Italic
-        // NOTE: This makes sure that we don't accidentally prefer "Thin Italic",
-        //       which we previously did, because it has a shorter name.
-        // {
-        //     var it = try ct.discover(alloc, .{ .family = "SF Pro", .size = 12, .italic = true });
-        //     defer it.deinit();
-        //     const res = (try it.next()).?;
-        //     var buf: [1024]u8 = undefined;
-        //     const name = try res.name(&buf);
-        //     try testing.expectEqualStrings("SF Pro Regular Italic", name);
-        // }
-        //
-        // Bold
-        // {
-        //     var it = try ct.discover(alloc, .{ .family = "SF Pro", .size = 12, .bold = true });
-        //     defer it.deinit();
-        //     const res = (try it.next()).?;
-        //     var buf: [1024]u8 = undefined;
-        //     const name = try res.name(&buf);
-        //     try testing.expectEqualStrings("SF Pro Bold", name);
-        // }
-        //
-        // Bold Italic
-        // {
-        //     var it = try ct.discover(alloc, .{ .family = "SF Pro", .size = 12, .bold = true, .italic = true });
-        //     defer it.deinit();
-        //     const res = (try it.next()).?;
-        //     var buf: [1024]u8 = undefined;
-        //     const name = try res.name(&buf);
-        //     try testing.expectEqualStrings("SF Pro Bold Italic", name);
-        // }
+        // PORT NOTE (S-8c): the remainder is unreachable, exactly as in the
+        // reference (whose `if (true) return` always skips). It is still ported
+        // as LIVE code, type-checked on every macOS build, so its four
+        // assertions exist and track the API they name.
+        // (`#[allow(unreachable_code)]` on the fn: this block follows the panic.)
+        {
+            use crate::library::Library;
+
+            // var lib = try Library.init(alloc); defer lib.deinit();
+            let mut lib = Library::init().unwrap();
+            // var ct = CoreText.init(lib); defer ct.deinit();
+            let mut ct = CoreText::init(lib);
+
+            // We try to get a Regular, Italic, Bold, & Bold Italic version of SF Pro,
+            // which should be installed on all Macs, and has many styles which makes
+            // it a good test, since there will be many results for each discovery.
+
+            // Regular
+            {
+                let mut it = ct
+                    .discover(Descriptor {
+                        family: Some(b"SF Pro".to_vec()),
+                        size: 12.0,
+                        ..Descriptor::default()
+                    })
+                    .unwrap();
+                let res = it.next().unwrap().unwrap();
+                let mut buf = [0u8; 1024];
+                let name = res.name(&mut buf).unwrap();
+                assert_eq!(b"SF Pro Regular".as_slice(), name);
+                it.deinit();
+            }
+
+            // Regular Italic
+            //
+            // NOTE: This makes sure that we don't accidentally prefer "Thin Italic",
+            //       which we previously did, because it has a shorter name.
+            {
+                let mut it = ct
+                    .discover(Descriptor {
+                        family: Some(b"SF Pro".to_vec()),
+                        size: 12.0,
+                        italic: true,
+                        ..Descriptor::default()
+                    })
+                    .unwrap();
+                let res = it.next().unwrap().unwrap();
+                let mut buf = [0u8; 1024];
+                let name = res.name(&mut buf).unwrap();
+                assert_eq!(b"SF Pro Regular Italic".as_slice(), name);
+                it.deinit();
+            }
+
+            // Bold
+            {
+                let mut it = ct
+                    .discover(Descriptor {
+                        family: Some(b"SF Pro".to_vec()),
+                        size: 12.0,
+                        bold: true,
+                        ..Descriptor::default()
+                    })
+                    .unwrap();
+                let res = it.next().unwrap().unwrap();
+                let mut buf = [0u8; 1024];
+                let name = res.name(&mut buf).unwrap();
+                assert_eq!(b"SF Pro Bold".as_slice(), name);
+                it.deinit();
+            }
+
+            // Bold Italic
+            {
+                let mut it = ct
+                    .discover(Descriptor {
+                        family: Some(b"SF Pro".to_vec()),
+                        size: 12.0,
+                        bold: true,
+                        italic: true,
+                        ..Descriptor::default()
+                    })
+                    .unwrap();
+                let res = it.next().unwrap().unwrap();
+                let mut buf = [0u8; 1024];
+                let name = res.name(&mut buf).unwrap();
+                assert_eq!(b"SF Pro Bold Italic".as_slice(), name);
+                it.deinit();
+            }
+
+            ct.deinit();
+            lib.deinit();
+        }
     }
 
     // test "windows" {
@@ -3265,18 +3528,23 @@ mod tests {
     // SKIP-STUB (the crate's established `fontconfig`/`web_canvas` precedent, and
     // VERIFICATION_DEBT V11): the body is LIVE as of WS20 and compiles only on
     // `target_os = "windows"`, where `Windows`/`DeferredFace.win` exist. On every
-    // other host the backend guard is false and this returns immediately — which IS
-    // the reference's own `if (options.backend != .freetype_windows) return
-    // error.SkipZigTest;`. It still needs a stock Windows install to pass: it
-    // asserts `Arial` is discoverable and has a glyph for 'A'.
+    // other host the `cfg_attr(.., ignore)` below reports it `ignored` — the
+    // reference's own `if (options.backend != .freetype_windows) return
+    // error.SkipZigTest;`, made visible (R14; `options::BACKEND` is
+    // `FreetypeWindows` on exactly that target). It still needs a stock Windows
+    // install to pass: it asserts `Arial` is discoverable and has a glyph for 'A'.
+    //
+    // (S-14, N266: keyed on the `freetype_windows` backend itself, not the
+    // target — a Windows `-Dfont-backend=freetype` build has no `Windows`.)
     #[test]
+    #[cfg_attr(
+        not(rustty_font_backend = "freetype_windows"),
+        ignore = "SkipZigTest: freetype_windows backend only (R14)"
+    )]
     fn windows() {
-        #[cfg(all(target_os = "windows", not(target_arch = "wasm32")))]
+        #[cfg(rustty_font_backend = "freetype_windows")]
         {
             // if (options.backend != .freetype_windows) return error.SkipZigTest;
-            if crate::options::BACKEND != crate::Backend::FreetypeWindows {
-                return;
-            }
 
             use crate::library::Library;
 
@@ -3327,7 +3595,7 @@ mod tests {
     /// Positive control: a malformed `head` table emits exactly ONE warn with
     /// the reference's message, at the reference's `.discovery` scope, and the
     /// parse still degrades to `None` (the reference's `break :head null`).
-    #[cfg(target_os = "macos")]
+    #[cfg(rustty_font_has_coretext)]
     #[test]
     fn parse_head_table_warns_once_on_a_malformed_table() {
         let cap = crate::log_capture::start();
@@ -3350,7 +3618,7 @@ mod tests {
     /// Negative control: a WELL-FORMED `head` table must emit nothing. Without
     /// this, the test above would still pass against a port that warned
     /// unconditionally — the success-path bug this stage is guarding against.
-    #[cfg(target_os = "macos")]
+    #[cfg(rustty_font_has_coretext)]
     #[test]
     fn parse_head_table_is_silent_on_a_well_formed_table() {
         // A `head` table is 54 bytes of fixed-width big-endian fields with no
@@ -3367,7 +3635,7 @@ mod tests {
     }
 
     /// The `OS/2` sibling of the positive control above.
-    #[cfg(target_os = "macos")]
+    #[cfg(rustty_font_has_coretext)]
     #[test]
     fn parse_os2_table_warns_once_on_a_malformed_table() {
         let cap = crate::log_capture::start();
@@ -3387,7 +3655,7 @@ mod tests {
     }
 
     /// The `OS/2` sibling of the negative control above.
-    #[cfg(target_os = "macos")]
+    #[cfg(rustty_font_has_coretext)]
     #[test]
     fn parse_os2_table_is_silent_on_a_well_formed_table() {
         let cap = crate::log_capture::start();

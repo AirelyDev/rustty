@@ -1,4 +1,4 @@
-//! `vaxis/src/InternalScreen.zig` (133 LOC, 0 test) — the allocating back buffer for
+//! `vaxis/src/InternalScreen.zig` (libvaxis 0.6.0: 149 LOC, 1 test) — the allocating back buffer for
 //! diffing (VAXIS_C2_DESIGN §3).
 //!
 //! PORT NOTE (arena → per-cell `Vec<u8>`): Zig backs `char`/`uri`/`uri_id`
@@ -78,8 +78,6 @@ pub struct InternalScreen {
 
     pub buf: Vec<InternalCell>,
 
-    pub cursor_row: u16,
-    pub cursor_col: u16,
     pub cursor_vis: bool,
     pub cursor_shape: CursorShape,
 
@@ -104,8 +102,6 @@ impl InternalScreen {
             width: w,
             height: h,
             buf,
-            cursor_row: 0,
-            cursor_col: 0,
             cursor_vis: false,
             cursor_shape: CursorShape::Default,
             mouse_shape: MouseShape::Default,
@@ -121,13 +117,13 @@ impl InternalScreen {
 
     /// writes a cell to a location. 0 indexed
     pub fn write_cell(&mut self, col: u16, row: u16, cell: &Cell) {
-        // PORT NOTE (`<` bounds quirk): Zig uses `self.width < col` / `self.height < row`
-        // (NOT `>=`) — an off-by-one asymmetry vs `Screen`'s `>=`. Preserved VERBATIM.
-        if self.width < col {
+        // libvaxis 0.6.0 bounds are `self.width <= col` / `self.height <= row` (0.5.1 had
+        // `<`, which let `col == width` through to the index; see the test below).
+        if self.width <= col {
             // column out of bounds
             return;
         }
-        if self.height < row {
+        if self.height <= row {
             // height out of bounds
             return;
         }
@@ -146,11 +142,11 @@ impl InternalScreen {
     }
 
     pub fn read_cell(&self, col: u16, row: u16) -> Option<Cell<'_>> {
-        if self.width < col {
+        if self.width <= col {
             // column out of bounds
             return None;
         }
-        if self.height < row {
+        if self.height <= row {
             // height out of bounds
             return None;
         }
@@ -175,5 +171,36 @@ impl InternalScreen {
             default: cell.default,
             ..Default::default()
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn out_of_bounds_read_write_are_ignored() {
+        let mut screen = InternalScreen::init(2, 2);
+
+        let sentinel = Cell {
+            char: Character {
+                grapheme: b"A",
+                width: 1,
+            },
+            ..Default::default()
+        };
+        screen.write_cell(0, 1, &sentinel);
+
+        let oob_cell = Cell {
+            char: Character {
+                grapheme: b"X",
+                width: 1,
+            },
+            ..Default::default()
+        };
+        screen.write_cell(2, 0, &oob_cell);
+        let read_back = screen.read_cell(0, 1).expect("TestUnexpectedResult");
+        assert_eq!(read_back.char.grapheme, b"A");
+        assert!(screen.read_cell(2, 0).is_none());
     }
 }

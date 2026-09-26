@@ -7,13 +7,15 @@
 //!
 //! This crate is a leaf. It has NO dependency on the ghostty tree (R3); the
 //! Unicode tables are reproduced bit-for-bit (R1) from the reference's own
-//! `props-unigen`/`symbols-unigen` generators (built against uucode 0.2.0 with
-//! ghostty's src/build/uucode_config.zig), and the grapheme-break precompute
-//! table from uucode 0.2.0's `computeGraphemeBreakNoControl`. It is fully
+//! `props-unigen`/`symbols-unigen` generators (built against uucode 0.2.0 @
+//! 2826a37a with ghostty's src/build/uucode_config.zig, both at the reference
+//! pin), and the grapheme-break precompute table from that uucode's
+//! `uucode.grapheme.computeGraphemeBreakNoControl`. It is fully
 //! Miri-able (R6).
 
 mod generated;
 
+pub mod case_folding;
 pub mod grapheme;
 pub mod lut;
 pub mod props;

@@ -406,6 +406,7 @@ impl PageList {
             // buffer is a distinct allocation.
             let result = unsafe {
                 compress::CompressedPage::init(
+                    self.pool.alloc,
                     page as *const _,
                     &mut scratch.bytes()[..required],
                     &mut table,

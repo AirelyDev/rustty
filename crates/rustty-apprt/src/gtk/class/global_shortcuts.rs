@@ -80,8 +80,10 @@ use crate::gtk::key;
 /// `.port/tools/PARITY_NAMING.md`); the GType registered NAME is not.
 const LOG_SCOPE: &str = "gtk_rustty_global_shortcuts";
 
-/// PORTS: `global_shortcuts.zig:85-101` `GlobalShortcuts.BindFailed` — "A global
-/// shortcut that failed to bind or was revoked."
+/// A global shortcut that failed to bind or was revoked.
+/// Only valid for the duration of the signal emission.
+///
+/// PORTS: `global_shortcuts.zig:85-101` `GlobalShortcuts.BindFailed`.
 ///
 /// The per-binding failure channel the `vicinae_hotkey_v1` winproto path needs and
 /// the XDG portal path has no analogue for: the compositor answers every bind
@@ -108,10 +110,13 @@ pub struct BindFailed {
     pub trigger: Trigger,
     /// PORTS: `global_shortcuts.zig:87` `action: Binding.Action`.
     pub action: Action,
-    /// PORTS: `global_shortcuts.zig:89-90` `message` — "May be empty."
+    /// May be empty.
+    ///
+    /// PORTS: `global_shortcuts.zig:89-90` `message`.
     pub message: Vec<u8>,
-    /// PORTS: `global_shortcuts.zig:92-93` `revoked` — "Revoked after binding
-    /// rather than denied up front."
+    /// Revoked after binding rather than denied up front.
+    ///
+    /// PORTS: `global_shortcuts.zig:92-93` `revoked`.
     pub revoked: bool,
 }
 
@@ -124,16 +129,21 @@ mod imp {
     /// (`:59`) — plus the portal session state: `map` (`:68`), `handle` (`:72`),
     /// `response_subscription` (`:76`), `activate_subscription` (`:80`). The
     /// reference's `arena` (`:62`) has no counterpart: it exists only to own the
-    /// map's key strings, which Rust owns in the `Vec` itself.
+    /// map's key strings, which Rust owns in the `Vec` itself. Its reference doc:
+    /// "An arena allocator that is present for each refresh."
     #[derive(Default, Properties)]
     #[properties(wrapper_type = super::GlobalShortcuts)]
     pub struct GlobalShortcuts {
+        /// The configuration that this is using.
+        ///
         /// PORTS: `global_shortcuts.zig:30-38,56` the `config` property / private
         /// field (SHARED `?*Config`; obj accessor: get refs `.none`, set unrefs the
         /// prior and refs the new — automatic under gtk4-rs).
         #[property(get, set, nullable)]
         pub config: RefCell<Option<Config>>,
 
+        /// The dbus connection.
+        ///
         /// PORTS: `global_shortcuts.zig:40-49,59` the `dbus-connection` property /
         /// private field (SHARED `?*gio.DBusConnection`). The reference's separate
         /// `setDbusConnection` method (`:508-540`) does close/ref/refresh side
@@ -143,10 +153,13 @@ mod imp {
         #[property(name = "dbus-connection", get, set = Self::set_dbus_connection, nullable)]
         pub dbus_connection: RefCell<Option<gio::DBusConnection>>,
 
-        /// PORTS: `global_shortcuts.zig:64-68` `map`. A mapping from the portal
-        /// shortcut id to the action it performs. The id is the serialized XDG
-        /// spelling of the trigger, which is unique in the keymap. Insertion
-        /// order is preserved (the reference uses a `StringArrayHashMapUnmanaged`),
+        /// A mapping from a unique ID to an action.
+        /// Currently the unique ID is simply the serialized representation of the
+        /// trigger that was used for the action as triggers are unique in the keymap,
+        /// but this may change in the future.
+        ///
+        /// PORTS: `global_shortcuts.zig:64-68` `map`. The id is the serialized XDG
+        /// spelling of the trigger. Insertion order is preserved (the reference uses a `StringArrayHashMapUnmanaged`),
         /// because that is the order the shortcuts are presented to the portal.
         ///
         /// PORT NOTE: the reference allocates the keys in a per-refresh arena
@@ -155,20 +168,28 @@ mod imp {
         /// counterpart.
         pub map: RefCell<Vec<(String, rustty_input::binding::Action)>>,
 
-        /// PORTS: `global_shortcuts.zig:70-72` `handle` — the current portal
-        /// session's D-Bus object path, or `None` when no session exists.
+        /// The handle of the current global shortcuts portal session,
+        /// as a D-Bus object path.
+        ///
+        /// PORTS: `global_shortcuts.zig:70-72` `handle` (`None` when no session
+        /// exists).
         pub handle: RefCell<Option<String>>,
 
-        /// PORTS: `global_shortcuts.zig:74-76` `response_subscription` — the
-        /// subscription to the in-flight request's `Response` signal. The
+        /// The D-Bus signal subscription for the response signal on requests.
+        /// The ID is guaranteed to be non-zero, so we can use 0 to indicate null.
+        ///
+        /// PORTS: `global_shortcuts.zig:74-76` `response_subscription`. The
         /// reference uses `0` as the null id; gio's `SignalSubscription` is an
         /// RAII guard (dropping it is the `signalUnsubscribe` call), so `Option`
         /// is the faithful spelling and `close`'s explicit unsubscribe is a
         /// `.take()`.
         pub response_subscription: RefCell<Option<gio::SignalSubscription>>,
 
-        /// PORTS: `global_shortcuts.zig:78-80` `activate_subscription` — the
-        /// subscription to the session's `Activated` signal.
+        /// The D-Bus signal subscription for the keybind activate signal.
+        /// The ID is guaranteed to be non-zero, so we can use 0 to indicate null.
+        ///
+        /// PORTS: `global_shortcuts.zig:78-80` `activate_subscription` (an
+        /// `Option` guard, as above).
         pub activate_subscription: RefCell<Option<gio::SignalSubscription>>,
     }
 
@@ -207,7 +228,10 @@ mod imp {
             }
 
             // Adopt the new connection (the stored value holds the ref, mirroring
-            // the reference `v.ref()`) and refresh (`:526-537`).
+            // the reference `v.ref()`) and refresh (`:526-537`). The reference
+            // remarks on that call:
+            //   v.ref(); // Weird this doesn't return self
+            // (a gobject-zig binding quirk; the owned `v` here IS the ref).
             if let Some(v) = dbus_connection {
                 self.dbus_connection.replace(Some(v));
                 obj.refresh();
@@ -225,11 +249,12 @@ mod imp {
             static SIGNALS: OnceLock<Vec<glib::subclass::Signal>> = OnceLock::new();
             SIGNALS.get_or_init(|| {
                 vec![
+                    // Emitted whenever a global shortcut is triggered.
                     glib::subclass::Signal::builder("trigger")
                         .param_types([ActionBoxed::static_type()])
                         .build(),
-                    // `pub const @"bind-failed"` (`:117-126`) — "Emitted when a
-                    // global shortcut fails to bind or is revoked."
+                    // Emitted when a global shortcut fails to bind or is revoked.
+                    // `pub const @"bind-failed"` (`:117-126`).
                     glib::subclass::Signal::builder("bind-failed")
                         .param_types([super::BindFailed::static_type()])
                         .build(),
@@ -249,11 +274,12 @@ mod imp {
                 });
         }
 
-        /// PORTS: `global_shortcuts.zig:598-620` `dispose`. Drops references here so
-        /// we lose access to things like the D-Bus connection, so we must close all
-        /// connections right away instead of in finalize (`:600-602`). Then the
-        /// `config` + `dbus_connection` refs are cleared.
+        /// PORTS: `global_shortcuts.zig:598-620` `dispose`. Close, then clear the
+        /// `config` + `dbus_connection` refs.
         fn dispose(&self) {
+            // Since we drop references here we may lose access to things like
+            // dbus connections, so we need to close all our connections right
+            // away instead of in finalize.
             self.obj().close();
             self.config.replace(None);
             self.dbus_connection.replace(None);
@@ -290,20 +316,24 @@ impl GlobalShortcuts {
     //   `:567` and `:580` `error refreshing global shortcuts: {}` — this
     //          function returns `()`.
     fn refresh(&self) {
-        // Always close our previous state first (`:150`).
+        // Always close our previous state first.
+        // (`:150`)
         self.close();
 
         let imp = self.imp();
 
-        // We need configuration to proceed (`:155`).
+        // We need a configuration to proceed.
+        // (`:155`)
         let map = {
             let config = imp.config.borrow();
             let Some(config) = config.as_ref() else {
                 return;
             };
 
-            // "Prefer a windowing protocol native mechanism over the XDG desktop
-            // portal when available." (`:184-190`, oracle `88bd4fdce`). Returns
+            // Prefer a windowing protocol native mechanism over the
+            // XDG desktop portal when available.
+            //
+            // (`:184-190`, oracle `88bd4fdce`) Returns
             // false on `noop`/`x11` and on a Wayland compositor that does not
             // advertise `vicinae_hotkey_manager_v1`, in which case we fall through
             // to the portal path below — the two mechanisms are ADDITIVE WITH
@@ -326,8 +356,11 @@ impl GlobalShortcuts {
             }
 
             // DELIBERATE DIVERGENCE (recorded, `P3-W11 T4` / `P3-W8 T6 Step 2`):
-            // upstream `0a117e079` adds `if (priv.dbus_connection == null) return;`
-            // here (`:192-193`), before the map is built. rustty KEEPS building the
+            // upstream `0a117e079` adds, here (`:192-193`), before the map is built:
+            //
+            //     // The portal fallback requires a dbus connection.
+            //     if (priv.dbus_connection == null) return;
+            // rustty KEEPS building the
             // map without a bus: two KATs assert exactly that
             // (`global_shortcuts_refresh_builds_map_without_dbus`,
             // `…_clears_prior_map`), and upstream's early return is only an
@@ -340,7 +373,8 @@ impl GlobalShortcuts {
         let count = map.len();
         imp.map.replace(map);
 
-        // Create our session if we have global shortcuts (`:212`).
+        // Create our session if we have global shortcuts.
+        // (`:212`)
         if count > 0 {
             self.request(Method::CreateSession);
         }
@@ -352,12 +386,13 @@ impl GlobalShortcuts {
     fn close(&self) {
         let imp = self.imp();
 
+        // This is safe to call even if the winproto was already
+        // deinitialized, which happens during application teardown.
+        //
         // `Application.default().winproto().clearGlobalShortcuts();` (`:141-146`,
         // oracle `0a117e079`'s tail) — UNCONDITIONAL, i.e. not behind the
         // `dbus_connection` check, because the winproto bindings exist precisely
-        // when the portal session does not. "This is safe to call even if the
-        // winproto was already deinitialized, which happens during application
-        // teardown." — in rustty the `RefCell<winproto::App>` always holds a live
+        // when the portal session does not. In rustty the `RefCell<winproto::App>` always holds a live
         // (possibly `.none`) arm, so the same call is safe for the same reason.
         //
         // Routed through `winproto_mut()`: `clear_global_shortcuts` needs `&mut`
@@ -390,7 +425,8 @@ impl GlobalShortcuts {
             return;
         };
 
-        // Close the existing session (`:123-139`).
+        // Close existing session
+        // (`:123-139`)
         let handle = imp.handle.borrow_mut().take();
         if let Some(handle) = handle {
             dbus.call(
@@ -448,14 +484,16 @@ impl GlobalShortcuts {
         self.emit_trigger(&action);
     }
 
-    /// PORTS: `global_shortcuts.zig:607-616` `emitTrigger` — "Emit the trigger
-    /// signal. Public for winproto shortcut backends."
+    /// Emit the trigger signal. Public for winproto shortcut backends.
+    ///
+    /// PORTS: `global_shortcuts.zig:607-616` `emitTrigger`.
     pub fn emit_trigger(&self, action: &Action) {
         self.emit_by_name::<()>("trigger", &[&ActionBoxed(action.clone())]);
     }
 
-    /// PORTS: `global_shortcuts.zig:618-626` `emitBindFailed` — "Emit the
-    /// bind-failed signal. Public for winproto shortcut backends."
+    /// Emit the bind-failed signal. Public for winproto shortcut backends.
+    ///
+    /// PORTS: `global_shortcuts.zig:618-626` `emitBindFailed`.
     pub fn emit_bind_failed(&self, failure: &BindFailed) {
         self.emit_by_name::<()>("bind-failed", &[&failure.clone()]);
     }
@@ -468,20 +506,40 @@ impl GlobalShortcuts {
         self.imp().map.borrow().clone()
     }
 
-    /// PORTS: `global_shortcuts.zig:329-460` `request`. Submit one request to the
-    /// GlobalShortcuts portal.
+    /// Submit a request to the global shortcuts portal.
     ///
-    /// PROTOCOL NOTE (`:340-360`, editorializing stripped): the documented flow is
-    /// "call the method, it returns a `Request` object path, then listen for that
-    /// object's `Response` signal". That flow is racy — a portal implementation may
-    /// emit `Response` before the caller has subscribed, and the signal is
-    /// delivered exactly once, so the response would be lost. The portal
-    /// documentation's own remedy (under the `Request` interface) is for the client
-    /// to CONSTRUCT the expected request object path from its own unique bus name
-    /// plus the `handle_token` it is about to send, subscribe to `Response` on that
-    /// path FIRST, and only then issue the method call — which is what this does,
-    /// making the method's return value informational.
+    /// PORTS: `global_shortcuts.zig:329-460` `request`.
     fn request(&self, method: Method) {
+        // NOTE(pluiedev):
+        // How the protocol is _initially_ designed to work is as follows:
+        //
+        // 1. The client calls a method which returns the path of a Request object;
+        // 2. The client waits for the Response signal under said object path;
+        // 3. When the signal arrives, the actual return value and status code
+        //    become available for the client for further processing.
+        //
+        // THIS DOES NOT WORK. Once the first two steps are complete, the client
+        // needs to immediately start listening for the third step, but an overeager
+        // server implementation could easily send the Response signal before the
+        // client is even ready, causing communications to break down over a simple
+        // race condition/two generals' problem that even _TCP_ had figured out
+        // decades ago. Worse yet, you get exactly _one_ chance to listen for the
+        // signal, or else your communication attempt so far has all been in vain.
+        //
+        // Instead of fixing the protocol, the portal documentation asks clients
+        // to manually construct the expected object path and subscribe
+        // to the request signal beforehand, making the whole response value of
+        // the original call COMPLETELY MEANINGLESS.
+        //
+        // Furthermore, this is _entirely undocumented_ aside from one tiny
+        // paragraph under the documentation for the Request interface, and
+        // anyone would be forgiven for missing it without reading the libportal
+        // source code.
+        //
+        // (`:379-406`; the note's editorializing is stripped per the port's
+        // prose policy, `strip-ghostty-gag-prose` — the three dropped lines,
+        // `:380`, `:396` and `:406`, are declared in
+        // `.port/parity-closure/COMMENT-NOT-CARRIED.tsv`.)
         let imp = self.imp();
 
         let dbus = { imp.dbus_connection.borrow().clone() };
@@ -495,6 +553,7 @@ impl GlobalShortcuts {
 
         let request_token = generate_token();
 
+        // Construct the payload expected by the XDG portal call.
         // `method.makePayload(self, request_token) orelse return` (`:428`).
         let payload = match method {
             Method::CreateSession => create_session_payload(&request_token, &generate_token()),
@@ -512,8 +571,10 @@ impl GlobalShortcuts {
             }
         };
 
-        // `getRequestPath` (`:429`). `getUniqueName` never returns null on an
-        // ordinary message-bus connection (`:476-478`).
+        // `getRequestPath` (`:429`).
+        // `getUniqueName` should never return null here as we're using an ordinary
+        // message bus connection. If it doesn't, something is very wrong
+        // (`:476-478`).
         let Some(unique_name) = dbus.unique_name() else {
             // PORT NOTE: the reference's `getUniqueName` null arm
             // (`global_shortcuts.zig:476-478`) returns `error.NoDBusUniqueName`
@@ -572,11 +633,15 @@ impl GlobalShortcuts {
             gio::Cancellable::NONE,
             move |res| {
                 // `callbacks.gotResponseHandle` (`:363-387`): the reply carries
-                // the portal's ACTUAL request object path. The reference carries a
-                // TODO to re-point the subscription when it differs from the
-                // computed one (for older portals) and does not implement it —
-                // neither do we, for the same reason: doing so reintroduces the
-                // very race the pre-subscription avoids.
+                // the portal's ACTUAL request object path.
+                //
+                // TODO: XDG recommends updating the signal subscription if the actual
+                // returned request path is not the same as the expected request
+                // path, to retain compatibility with older versions of XDG portals.
+                // Although it suffers from the race condition outlined above,
+                // we should still implement this at some point.
+                //
+                // (Not implemented here either, as in the reference.)
                 if let Err(err) = res {
                     // log.warn("request failed={s} ({})", .{ err_.f_message orelse "(unknown)", err_.f_code });
                     let _ = method_name;
@@ -591,6 +656,8 @@ impl GlobalShortcuts {
         );
     }
 
+    /// See <https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.Request.html#org-freedesktop-portal-request-response>
+    ///
     /// PORTS: `global_shortcuts.zig:442-469` `callbacks.responded`, after its
     /// unsubscribe: read the `Response` body and dispatch on the code. A separate
     /// method (the reference's is a nested callback) so a malformed body can be
@@ -661,7 +728,8 @@ impl GlobalShortcuts {
                     return;
                 };
 
-                // Subscribe to keybind activations (`:304-316`). `arg0` is the
+                // Subscribe to keybind activations
+                // (`:304-316`). `arg0` is the
                 // session handle, matched as an object path.
                 debug_assert!(self.imp().activate_subscription.borrow().is_none());
                 let weak = self.downgrade();
@@ -677,6 +745,7 @@ impl GlobalShortcuts {
                             return;
                         };
                         // 2nd value in the tuple is the activated shortcut ID
+                        // See https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.GlobalShortcuts.html#org-freedesktop-portal-globalshortcuts-activated
                         // (`:598-601`). See [`activated_shortcut_id`].
                         let Some(id) = activated_shortcut_id(signal.parameters) else {
                             return;
@@ -755,8 +824,10 @@ pub(crate) const REQUEST_IFACE: &str = "org.freedesktop.portal.Request";
 /// `global_shortcuts.zig:128` — the interface carrying `Close`.
 pub(crate) const SESSION_IFACE: &str = "org.freedesktop.portal.Session";
 
-/// PORTS: `global_shortcuts.zig:625-633` `generateToken`. A random token suitable
-/// for a portal `handle_token` / `session_handle_token`.
+/// Generate a random token suitable for use in requests.
+///
+/// PORTS: `global_shortcuts.zig:625-633` `generateToken` (a portal
+/// `handle_token` / `session_handle_token`).
 ///
 /// R2: the reference prefixes `ghostty_`; rustty prefixes `rustty_`. The reference
 /// draws a `u28` and formats `{x:0<7}` (hex, fill `0`, LEFT-aligned to width 7 —
@@ -766,10 +837,23 @@ pub(crate) fn generate_token() -> String {
     rustty_os::file::crypto_random_bytes(&mut buf);
     // `std.crypto.random.int(u28)`
     let v = u32::from_ne_bytes(buf) & 0x0fff_ffff;
+    // u28 takes up 7 bytes in hex, 8 bytes for "ghostty_" and 1 byte for NUL
+    // 7 + 8 + 1 = 16
+    // (PORT NOTE: that sizes the reference's `[16]u8` `Token` buffer. R2: the
+    // rustty prefix is 7 bytes, and Rust formats into a `String`, so there is
+    // no fixed buffer to size; the reference arithmetic is kept as written.)
     format!("rustty_{v:0<7x}")
 }
 
-/// PORTS: `global_shortcuts.zig:468-497` `getRequestPath`.
+/// Get the XDG portal request path for the current Rustty instance.
+///
+/// If this sounds like nonsense, see `request` for an explanation as to
+/// why we need to do this.
+///
+/// Precondition: dbus connection exists, arena setup
+///
+/// PORTS: `global_shortcuts.zig:468-497` `getRequestPath` (a pure function of
+/// the unique name and token here; the caller holds the connection).
 ///
 /// The portal's `Request` object path must be computed by the CLIENT and
 /// subscribed to BEFORE the method call is made: an eager portal implementation
@@ -780,9 +864,17 @@ pub(crate) fn generate_token() -> String {
 /// replaced by `_` (`:1.192` → `1_192`); D-Bus object-path components may not
 /// contain `.`.
 pub(crate) fn request_object_path(unique_name: &str, token: &str) -> String {
+    // See https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.Request.html
+    // for the syntax XDG portals expect.
+
     let sender = unique_name
+        // Remove leading `:`
         .strip_prefix(':')
         .unwrap_or(unique_name)
+        // Sanitize the unique name by replacing every `.` with `_`.
+        // In effect, this will turn a unique name like `:1.192` into `1_192`.
+        // Valid D-Bus object path components never contain `.`s anyway, so we're
+        // free to replace all instances of `.` here and avoid extra allocation.
         .replace('.', "_");
     format!("{PORTAL_OBJECT_PATH}/request/{sender}/{token}")
 }
@@ -791,7 +883,8 @@ pub(crate) fn request_object_path(unique_name: &str, token: &str) -> String {
 ///
 /// D-Bus signature `(a{sv})`: one options vardict carrying the request's
 /// `handle_token` and the session's `session_handle_token`.
-/// See <https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.GlobalShortcuts.html>
+///
+/// See <https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.GlobalShortcuts.html#org-freedesktop-portal-globalshortcuts-createsession>
 pub(crate) fn create_session_payload(request_token: &str, session_token: &str) -> glib::Variant {
     use glib::prelude::ToVariant as _;
 
@@ -806,6 +899,8 @@ pub(crate) fn create_session_payload(request_token: &str, session_token: &str) -
 /// D-Bus signature `(oa(sa{sv})sa{sv})`: the session handle, the shortcut list
 /// (each `(id, {description, preferred_trigger})`), an empty parent-window
 /// identifier, and the request options carrying `handle_token`.
+///
+/// See <https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.GlobalShortcuts.html#org-freedesktop-portal-globalshortcuts-bindshortcuts>
 ///
 /// Returns `None` when `handle` is not a valid D-Bus object path — the reference
 /// reaches this point only with a handle the portal itself just gave us
@@ -918,19 +1013,6 @@ pub(crate) fn session_handle_from_results(results: &glib::Variant) -> Option<Str
     value.str().map(str::to_owned)
 }
 
-/// PORTS: `global_shortcuts.zig:168-206` — the map-build half of `refresh`.
-///
-/// Walks the config's keybind set and returns the portal shortcut map: an
-/// insertion-ordered list of `(xdg shortcut id, action)`. Only `global:` leaves
-/// that carry exactly one action are registered; leader (sequence) entries and
-/// chained leaves are skipped, matching the reference's `TODO: remove this
-/// restriction`. The key is the trigger's XDG spelling because triggers are
-/// unique in the keymap (`:64-67`).
-///
-/// PORT NOTE: the reference formats the trigger into a 1024-byte stack buffer and
-/// has a `error.WriteFailed` arm that warns and skips; `xdg_shortcut_from_trigger`
-/// returns a growable `String` here so only the `null` arm (an untranslatable
-/// trigger — `catch_all`, or a key with no GDK keysym name) can skip a bind.
 /// The default [`Application`](super::application::Application), or `None`.
 ///
 /// PORT NOTE: the reference reaches the app with `Application.default()`
@@ -946,8 +1028,36 @@ fn app_default() -> Option<super::application::Application> {
     gio::Application::default().and_then(|a| a.downcast::<super::application::Application>().ok())
 }
 
+/// PORTS: `global_shortcuts.zig:168-206` — the map-build half of `refresh`.
+///
+/// Walks the config's keybind set and returns the portal shortcut map: an
+/// insertion-ordered list of `(xdg shortcut id, action)`. Only `global:` leaves
+/// that carry exactly one action are registered; leader (sequence) entries and
+/// chained leaves are skipped, matching the reference's `TODO: remove this
+/// restriction`. The key is the trigger's XDG spelling because triggers are
+/// unique in the keymap (`:64-67`).
+///
+/// PORT NOTE: the reference formats the trigger into a 1024-byte stack buffer and
+/// has a `error.WriteFailed` arm that warns and skips; `xdg_shortcut_from_trigger`
+/// returns a growable `String` here so only the `null` arm (an untranslatable
+/// trigger — `catch_all`, or a key with no GDK keysym name) can skip a bind.
+/// The reference's comment on that arm (`:235-237`):
+///
+/// ```text
+/// If there isn't space to translate the trigger, then our
+/// buffer might be too small (but 1024 is insane!). In any case
+/// we don't want to stop registering globals.
+/// ```
 pub(crate) fn build_shortcut_map(config: &rustty_config::Config) -> Vec<(String, Action)> {
+    // Setup our new arena that we'll use for memory allocations.
+    // (PORT NOTE: `:203-206` — no arena here, see below.)
+    //
+    // Our map starts out empty again. We don't need to worry about
+    // memory because its part of the arena we clear.
+    // (PORT NOTE: no arena here — the `Vec` owns its strings.)
     let mut map: Vec<(String, Action)> = Vec::new();
+
+    // Update map
 
     for (trigger, value) in config.keybind.set.iter_bindings() {
         // `.leader => continue`, `inline .leaf, .leaf_chained => |l| l.generic()`.
@@ -962,8 +1072,9 @@ pub(crate) fn build_shortcut_map(config: &rustty_config::Config) -> Vec<(String,
             continue;
         }
 
-        // "We only allow global keybinds that map to exactly a single action
-        // for now." (`:179-181`)
+        // We only allow global keybinds that map to exactly a single
+        // action for now. TODO: remove this restriction
+        // (`:179-181`)
         let actions = leaf.actions_slice();
         if actions.len() != 1 {
             continue;

@@ -27,8 +27,8 @@
 use std::io::Write as _;
 
 use super::{
-    now_ms, Command, CommandList, DrawContext, Error, Event, EventContext, HitResult, MaxSize,
-    Phase, Point, Size, SubSurface, Surface, Tick, VxfwArena, Widget,
+    Command, CommandList, DrawContext, Error, Event, EventContext, HitResult, MaxSize, Phase,
+    Point, Size, SubSurface, Surface, Tick, VxfwArena, Widget,
 };
 use crate::key::KittyFlags;
 use crate::loop_::Loop;
@@ -37,8 +37,10 @@ use crate::vaxis::Options as VaxisOptions;
 use crate::window::ChildOptions;
 use crate::{Tty, Vaxis};
 
-/// `App = @This();` — the reference struct. `allocator` is dropped (Rust `Vec`s own
-/// their memory); `buffer: [1024]u8` becomes the `Tty::init` scratch `Vec`.
+/// `App = @This();` — the reference struct. `io` and `allocator` are dropped (Rust `Vec`s
+/// own their memory); `timers` and `wants_focus` live in the run-scope [`AppRun`] (see
+/// the module ALIASING DISCIPLINE). libvaxis 0.6.0 removed 0.5.1's `buffer: [1024]u8`
+/// field: the caller now passes the tty write buffer to `init`.
 pub struct App<'a> {
     pub tty: Tty,
     pub vx: Vaxis<'a>,
@@ -62,11 +64,15 @@ impl<'a> App<'a> {
     /// object on the heap. Call destroy when the app is complete to reset terminal state and release
     /// resources
     ///
-    /// PORT-NOTE: `vaxis.init(allocator, .{ .system_clipboard_allocator = allocator,
-    /// .kitty_keyboard_flags = .{ .report_events = true } })` → `Vaxis::init(Options)`
-    /// (rustty drops the `alloc` arg; `system_clipboard: bool` replaces the allocator
-    /// presence). `Tty::init(&app.buffer)` → `Tty::init(vec![0; 1024])`.
-    pub fn init() -> Result<App<'a>, Error> {
+    /// PORT-NOTE: libvaxis 0.6.0 `init(io, allocator, env_map, buffer)`: `.tty = try
+    /// vaxis.Tty.init(io, buffer)`, then `vaxis.init(io, allocator, env_map, .{
+    /// .system_clipboard_allocator = allocator, .kitty_keyboard_flags = .{ .report_events =
+    /// true } })` → `Vaxis::init(Options)` (rustty drops `io`, `alloc` and `env_map`, see
+    /// `Vaxis::enable_detected_features`; `system_clipboard: bool` replaces the allocator
+    /// presence). The field order of the literal is the evaluation order, so the tty is
+    /// opened first, as in the reference.
+    pub fn init(buffer: Vec<u8>) -> Result<App<'a>, Error> {
+        let tty = Tty::init(buffer).map_err(|_| std::io::Error::other("vaxis Tty::init failed"))?;
         let vx = Vaxis::init(VaxisOptions {
             system_clipboard: true,
             kitty_keyboard_flags: KittyFlags {
@@ -74,8 +80,6 @@ impl<'a> App<'a> {
                 ..KittyFlags::default()
             },
         });
-        let tty = Tty::init(vec![0u8; 1024])
-            .map_err(|_| std::io::Error::other("vaxis Tty::init failed"))?;
         Ok(App { tty, vx })
     }
 
@@ -96,8 +100,8 @@ impl<'a> App<'a> {
         let tty_ptr: *mut Tty = &raw mut self.tty;
         let vx_ptr: *mut Vaxis<'a> = &raw mut self.vx;
 
-        // var loop: EventLoop = .{ .tty = tty, .vaxis = vx };
-        let loop_ = Loop::<Event<'static>>::new(tty_ptr, vx_ptr);
+        // var loop: EventLoop = .init(self.io, tty, vx);
+        let loop_ = Loop::<Event<'static>>::init(tty_ptr, vx_ptr);
         // try loop.start();
         loop_.start()?;
         // NOTE: `defer loop.stop()` — we call stop() at every return path below
@@ -111,18 +115,21 @@ impl<'a> App<'a> {
         // holds — children of its tag, never popping it.
         unsafe {
             (*vx_ptr).enter_alt_screen((*tty_ptr).writer())?;
-            (*vx_ptr).query_terminal((*tty_ptr).writer(), 1_000_000_000)?;
+            (*vx_ptr).query_terminal((*tty_ptr).writer(), std::time::Duration::from_secs(1))?;
             (*vx_ptr).set_bracketed_paste((*tty_ptr).writer(), true)?;
             (*vx_ptr).subscribe_to_color_scheme_updates((*tty_ptr).writer())?;
         }
 
-        // This part deserves a comment. loop.init installs a signal handler for the tty. We wait to
-        // init the loop until we know if we need this handler. We don't need it if the terminal
-        // supports in-band-resize
-        if !unsafe { (*vx_ptr).state.in_band_resize } {
-            loop_
-                .init()
-                .map_err(|_| std::io::Error::other("vaxis Loop::init failed"))?;
+        {
+            // This part deserves a comment. loop.installResizeHandler installs
+            // a signal handler for the tty. We wait to installResizeHandler the
+            // loop until we know if we need this handler. We don't need it if the
+            // terminal supports in-band-resize.
+            if !unsafe { (*vx_ptr).state.in_band_resize } {
+                loop_.install_resize_handler().map_err(|_| {
+                    std::io::Error::other("vaxis Loop::installResizeHandler failed")
+                })?;
+            }
         }
 
         // NOTE: We don't use pixel mouse anywhere
@@ -133,13 +140,14 @@ impl<'a> App<'a> {
 
         DrawContext::init(unsafe { (*vx_ptr).screen.width_method });
 
+        // Calculate tick rate
         let framerate: u64 = if opts.framerate > 0 {
             opts.framerate as u64
         } else {
             60
         };
-        // Calculate tick rate
-        let tick_ms: u64 = 1000 / framerate;
+        // const tick: std.Io.Duration = .fromNanoseconds(@divFloor(std.time.ns_per_s, framerate));
+        let tick = std::time::Duration::from_nanos(1_000_000_000 / framerate);
 
         // Set up arena and context
         let mut arena = VxfwArena::new();
@@ -158,7 +166,8 @@ impl<'a> App<'a> {
         focus_handler.path_to_focused.push(widget);
 
         // Timestamp of our next frame
-        let mut next_frame_ms: u64 = now_ms() as u64;
+        // (`std.Io.Timestamp.now(self.io, .awake)`: the monotonic clock, as `Instant`.)
+        let mut next_frame = std::time::Instant::now();
 
         // Create our event context
         let mut ctx = EventContext {
@@ -171,14 +180,16 @@ impl<'a> App<'a> {
 
         let result = (|| -> Result<(), Error> {
             loop {
-                let now: u64 = now_ms() as u64;
-                if now >= next_frame_ms {
+                let now = std::time::Instant::now();
+                // const duration = now.durationTo(next_frame);
+                // if (duration.nanoseconds <= 0) {
+                if next_frame <= now {
                     // Deadline exceeded. Schedule the next frame
-                    next_frame_ms = now + tick_ms;
+                    next_frame = now + tick;
                 } else {
                     // Sleep until the deadline
-                    std::thread::sleep(std::time::Duration::from_millis(next_frame_ms - now));
-                    next_frame_ms += tick_ms;
+                    std::thread::sleep(next_frame - now);
+                    next_frame += tick;
                 }
 
                 app.check_timers(&mut ctx)?;
@@ -186,11 +197,7 @@ impl<'a> App<'a> {
                 // Drain the events currently available (Zig locks the queue and
                 // `drain`s; `try_event` pops each available event — same effect).
                 while let Some(event) = loop_.try_event() {
-                    // Reset our context after each event
-                    let reset = |ctx: &mut EventContext| {
-                        ctx.consume_event = false;
-                        ctx.phase = Phase::Capturing;
-                    };
+                    // defer resetEventState(&ctx);
                     match event {
                         Event::KeyPress(_) => {
                             focus_handler.handle_event(&mut ctx, event)?;
@@ -220,7 +227,7 @@ impl<'a> App<'a> {
                             app.handle_command(&mut ctx.cmds)?;
                         }
                     }
-                    reset(&mut ctx);
+                    reset_event_state(&mut ctx);
                 }
 
                 // If we have a focus change, handle that event before we layout
@@ -409,20 +416,33 @@ impl<'a> AppRun<'a> {
     }
 
     fn check_timers(&mut self, ctx: &mut EventContext<'a>) -> Result<(), Error> {
-        let now = now_ms();
+        // const now: std.Io.Timestamp = .now(self.io, .awake);
+        let now = std::time::Instant::now();
 
-        // timers are always sorted descending; pop the soonest (last) deadline.
+        // timers are always sorted descending
         while let Some(tick) = self.timers.pop() {
-            if now < tick.deadline_ms {
-                // re-add the timer
+            // const duration = now.durationTo(tick.deadline);
+            // if (duration.nanoseconds > 0) {
+            if tick.deadline > now {
+                // re-add the timer as no more timers will trigger now
                 self.timers.push(tick);
                 break;
             }
+            reset_event_state(ctx);
+            ctx.phase = Phase::AtTarget;
             tick.widget.handle_event(ctx, Event::Tick)?;
+            reset_event_state(ctx);
         }
         self.handle_command(&mut ctx.cmds)?;
         Ok(())
     }
+}
+
+/// `fn resetEventState(ctx: *vxfw.EventContext) void` (libvaxis 0.6.0; 0.5.1 inlined it
+/// as a `defer` in the event loop).
+fn reset_event_state(ctx: &mut EventContext) {
+    ctx.consume_event = false;
+    ctx.phase = Phase::Capturing;
 }
 
 /// `std.sort.insertion` — a stable insertion sort by the `less_than` predicate.
@@ -442,6 +462,28 @@ fn insertion_sort<T: Copy>(items: &mut [T], less_than: impl Fn(&T, &T) -> bool) 
 
 /// `MouseHandler` — hit-tests the last frame and dispatches mouse events through the
 /// capture/target/bubble phases, diffing hit lists for mouse_enter/mouse_leave.
+/// `const mouse_point: vxfw.Point = .{ .row = @intCast(mouse.row), .col = @intCast(mouse.col) };`
+///
+/// PORT NOTE: reference defect (R13, UD263). libvaxis 0.6.0 made `Mouse.col`/`row` `i16`
+/// so that negative positions can be reported, but `MouseHandler` still `@intCast`s them to
+/// the `u16` `vxfw.Point`: a negative position traps in safe builds (undefined behaviour
+/// in ReleaseFast). The parser produces one from any SGR report with a coordinate of 0 or
+/// below (`CSI < 0 ; 0 ; 0 M` is column -1, MEASURED with libvaxis 0.6.0). vxfw turns
+/// SGR-pixel reporting off before enabling the mouse (`App.zig:78-80`), so `+boo` receives
+/// cell reports, which conforming terminals clamp to the grid (Ghostty's own encoder does,
+/// `mouse_encode.zig:256-266`); a coordinate of 0 or below therefore comes from a
+/// non-conforming terminal, or from bytes injected into the tty. `+boo` enables mouse
+/// reporting. A negative position is outside every surface, which is what the
+/// reference's own `containsPoint` guard decides for any other point outside the frame,
+/// so the port returns `None` and the caller hit-tests nothing (the widgets last under
+/// the mouse get their `mouse_leave`, as when the mouse moves off the frame).
+fn mouse_point(mouse: Mouse) -> Option<Point> {
+    Some(Point {
+        row: u16::try_from(mouse.row).ok()?,
+        col: u16::try_from(mouse.col).ok()?,
+    })
+}
+
 struct MouseHandler<'a> {
     last_frame: Surface<'a>,
     last_hit_list: Vec<HitResult<'a>>,
@@ -484,12 +526,11 @@ impl<'a> MouseHandler<'a> {
             surface: last_frame,
             z_index: 0,
         };
-        let mouse_point = Point {
-            row: mouse.row,
-            col: mouse.col,
-        };
-        if sub.contains_point(mouse_point) {
-            last_frame.hit_test(&mut hits, mouse_point)?;
+        // const mouse_point: vxfw.Point = .{ .row = @intCast(mouse.row), .col = @intCast(mouse.col) };
+        if let Some(mouse_point) = mouse_point(mouse) {
+            if sub.contains_point(mouse_point) {
+                last_frame.hit_test(&mut hits, mouse_point)?;
+            }
         }
 
         self.diff_hits(app, ctx, &hits)?;
@@ -545,12 +586,11 @@ impl<'a> MouseHandler<'a> {
             surface: last_frame,
             z_index: 0,
         };
-        let mouse_point = Point {
-            row: mouse.row,
-            col: mouse.col,
-        };
-        if sub.contains_point(mouse_point) {
-            last_frame.hit_test(&mut hits, mouse_point)?;
+        // const mouse_point: vxfw.Point = .{ .row = @intCast(mouse.row), .col = @intCast(mouse.col) };
+        if let Some(mouse_point) = mouse_point(mouse) {
+            if sub.contains_point(mouse_point) {
+                last_frame.hit_test(&mut hits, mouse_point)?;
+            }
         }
 
         // Handle mouse_enter and mouse_leave events
@@ -565,8 +605,12 @@ impl<'a> MouseHandler<'a> {
         ctx.phase = Phase::Capturing;
         for item in &hits {
             let mut m_local = mouse;
-            m_local.col = item.local.col;
-            m_local.row = item.local.row;
+            // `@intCast(u16 -> i16)`, checked as the reference checks it (R7). The local
+            // point is the mouse position (an `i16`) minus the child origins on its path, so
+            // it fits unless a child has a negative origin in a terminal more than 32767
+            // columns or rows wide (not reached by the widgets `+boo` uses; S-10b report).
+            m_local.col = i16::try_from(item.local.col).unwrap();
+            m_local.row = i16::try_from(item.local.row).unwrap();
             item.widget.capture_event(ctx, Event::Mouse(m_local))?;
             app.handle_command(&mut ctx.cmds)?;
             if ctx.consume_event {
@@ -578,8 +622,12 @@ impl<'a> MouseHandler<'a> {
         ctx.phase = Phase::AtTarget;
         {
             let mut m_local = mouse;
-            m_local.col = target.local.col;
-            m_local.row = target.local.row;
+            // `@intCast(u16 -> i16)`, checked as the reference checks it (R7). The local
+            // point is the mouse position (an `i16`) minus the child origins on its path, so
+            // it fits unless a child has a negative origin in a terminal more than 32767
+            // columns or rows wide (not reached by the widgets `+boo` uses; S-10b report).
+            m_local.col = i16::try_from(target.local.col).unwrap();
+            m_local.row = i16::try_from(target.local.row).unwrap();
             target.widget.handle_event(ctx, Event::Mouse(m_local))?;
             app.handle_command(&mut ctx.cmds)?;
             if ctx.consume_event {
@@ -591,8 +639,12 @@ impl<'a> MouseHandler<'a> {
         ctx.phase = Phase::Bubbling;
         while let Some(item) = hits.pop() {
             let mut m_local = mouse;
-            m_local.col = item.local.col;
-            m_local.row = item.local.row;
+            // `@intCast(u16 -> i16)`, checked as the reference checks it (R7). The local
+            // point is the mouse position (an `i16`) minus the child origins on its path, so
+            // it fits unless a child has a negative origin in a terminal more than 32767
+            // columns or rows wide (not reached by the widgets `+boo` uses; S-10b report).
+            m_local.col = i16::try_from(item.local.col).unwrap();
+            m_local.row = i16::try_from(item.local.row).unwrap();
             item.widget.handle_event(ctx, Event::Mouse(m_local))?;
             app.handle_command(&mut ctx.cmds)?;
             if ctx.consume_event {
@@ -736,10 +788,90 @@ mod tests {
     /// never restoring termios — `rustty +boo` left the terminal raw. Under
     /// cfg(test) `Tty = TestTty`, whose `deinit_observer` hook records that
     /// `deinit` ran; this test fails without the `self.tty.deinit()` call.
+    /// libvaxis 0.6.0 `test "timer consume does not leak to the next event"`. The
+    /// reference builds an `App` with `.tty = undefined, .vx = undefined`; here the
+    /// run-scope [`AppRun`] (which owns the timers) gets null tty/vx pointers, which
+    /// `check_timers` never dereferences because the tick queues no command.
+    #[test]
+    fn timer_consume_does_not_leak_to_the_next_event() {
+        fn handle(
+            _: *mut std::ffi::c_void,
+            ctx: &mut EventContext<'_>,
+            event: Event<'_>,
+        ) -> Result<(), Error> {
+            if matches!(event, Event::Tick) {
+                ctx.consume_and_redraw();
+            }
+            Ok(())
+        }
+        fn draw<'a>(_: *mut std::ffi::c_void, _: DrawContext) -> Result<Surface<'a>, Error> {
+            unreachable!()
+        }
+
+        let mut app = AppRun {
+            tty: std::ptr::null_mut(),
+            vx: std::ptr::null_mut(),
+            timers: Vec::new(),
+            wants_focus: None,
+        };
+
+        let mut userdata: u8 = 0;
+        let widget = Widget {
+            userdata: (&raw mut userdata).cast(),
+            capture_handler: None,
+            event_handler: Some(handle),
+            draw_fn: draw,
+        };
+
+        let now = std::time::Instant::now();
+        app.timers.push(Tick {
+            // `now.addDuration(.fromMilliseconds(-1))`
+            deadline: now - std::time::Duration::from_millis(1),
+            widget,
+        });
+
+        let mut ctx = EventContext {
+            phase: Phase::Capturing,
+            cmds: CommandList::new(),
+            consume_event: false,
+            redraw: false,
+            quit: false,
+        };
+
+        app.check_timers(&mut ctx).unwrap();
+
+        assert!(ctx.redraw);
+        assert!(!ctx.consume_event);
+        assert_eq!(Phase::Capturing, ctx.phase);
+    }
+
+    /// UD263 (R13): a negative mouse position (libvaxis 0.6.0's `i16` coordinates; an SGR
+    /// report of column 0 parses to -1) is outside every surface, where the reference's
+    /// `@intCast` to the `u16` `vxfw.Point` traps.
+    #[test]
+    fn a_negative_mouse_position_hits_nothing() {
+        let at = |col: i16, row: i16| Mouse {
+            col,
+            row,
+            xoffset: 0,
+            yoffset: 0,
+            button: crate::mouse::Button::Left,
+            mods: crate::mouse::Modifiers::default(),
+            r#type: crate::mouse::Type::Press,
+        };
+        assert!(mouse_point(at(-1, 0)).is_none());
+        assert!(mouse_point(at(0, -1)).is_none());
+        assert!(mouse_point(at(i16::MIN, i16::MIN)).is_none());
+        let p = mouse_point(at(3, 7)).expect("an on-screen point");
+        assert_eq!((p.col, p.row), (3, 7));
+        let p = mouse_point(at(i16::MAX, 0)).expect("the largest column");
+        assert_eq!(p.col, 32767);
+    }
+
     #[test]
     fn deinit_deinitializes_the_tty() {
         let observed = Arc::new(AtomicBool::new(false));
-        let mut app = App::init().expect("App::init");
+        let mut app = App::init(Vec::new()).expect("App::init");
         app.tty.deinit_observer = Some(Arc::clone(&observed));
         app.deinit();
         assert!(

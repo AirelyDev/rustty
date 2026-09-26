@@ -25,6 +25,15 @@ use rustty_util::quirks::inlineAssert as assert;
 #[derive(Debug)]
 pub enum FileLoadError {
     NoHomeDir,
+    /// `xdg.DirError`'s `error.BufferTooSmall` (from `homedir.home`): `$HOME`
+    /// is longer than the XDG lookup's 1024-byte buffer (LEDGER S112-F11).
+    BufferTooSmall,
+    /// `xdg.DirError`'s `error.StreamTooLong` (from `homedir.home`'s shell
+    /// fallback; `try` passes it on).
+    StreamTooLong,
+    /// `xdg.DirError`'s spawn/read/wait failure of `homedir.home`'s shell
+    /// fallback.
+    Spawn(std::io::ErrorKind),
     AppleApiFailed,
     Io(std::io::Error),
 }
@@ -39,6 +48,9 @@ impl From<rustty_os::xdg::DirError> for FileLoadError {
     fn from(e: rustty_os::xdg::DirError) -> FileLoadError {
         match e {
             rustty_os::xdg::DirError::NoHomeDir => FileLoadError::NoHomeDir,
+            rustty_os::xdg::DirError::BufferTooSmall => FileLoadError::BufferTooSmall,
+            rustty_os::xdg::DirError::StreamTooLong => FileLoadError::StreamTooLong,
+            rustty_os::xdg::DirError::Spawn(kind) => FileLoadError::Spawn(kind),
         }
     }
 }

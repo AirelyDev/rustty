@@ -14,13 +14,19 @@
 //! (glib-0.22 `subclass/boxed.rs:50-63`), giving byte-for-byte the oracle's
 //! deep-copy boxed semantics.
 //!
+//! With the arena gone, the oracle's `allocator` accessor (`slice.zig:39-42`)
+//! has nothing to return and is not ported. Its reference doc:
+//!
+//! Returns the general-purpose allocator used by this StringList.
+//!
 //! Sentinel note: the oracle stores `[:0]const u8` because these feed C APIs.
 //! rustty holds owned `String`; a future consumer that hands one to a C boundary
 //! re-establishes the NUL there (`CString`). No such consumer exists in this
 //! task, so the storage stays plain `String`.
 
-/// PORTS: `slice.zig:8` `pub const StringList`. A boxed type holding a list of
-/// strings, registered as `"GhosttyStringList"` (`slice.zig:47`).
+/// A boxed type that holds a list of string slices.
+///
+/// PORTS: `slice.zig:8` `pub const StringList`, registered as `"GhosttyStringList"` (`slice.zig:47`).
 #[derive(Clone, Debug, glib::Boxed)]
 #[boxed_type(name = "GhosttyStringList", nullable)]
 pub struct StringList {

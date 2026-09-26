@@ -1,8 +1,8 @@
 const std = @import("std");
 
 // Harness-only build for the rustty-unicode differential oracle (ORACLE #2).
-// Builds `uucode-oracle` against uucode 0.2.0 with ghostty's uucode_config.zig
-// (copied verbatim, pinned). R3: this tooling lives in the harness; no rustty
+// Builds `uucode-oracle` against uucode 0.2.0 @ 2826a37a with ghostty's
+// uucode_config.zig (copied verbatim from the reference pin 20abdb50a). R3: this tooling lives in the harness; no rustty
 // Cargo crate depends on uucode/ghostty.
 pub fn build(b: *std.Build) void {
     const exe = b.addExecutable(.{

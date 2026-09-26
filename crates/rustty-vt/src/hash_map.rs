@@ -643,6 +643,62 @@ impl<K: Copy, V: Copy, Context: HashMapContext<K>, const MAX_LOAD_PERCENTAGE: u8
         Iterator { hm: self, index: 0 }
     }
 
+    // pub fn keyIterator(self: *const Self) KeyIterator {
+    //     if (self.metadata) |metadata| {
+    //         return .{
+    //             .len = self.capacity(),
+    //             .metadata = metadata,
+    //             .items = self.keys(),
+    //         };
+    //     } else {
+    //         return .{
+    //             .len = 0,
+    //             .metadata = undefined,
+    //             .items = undefined,
+    //         };
+    //     }
+    // }
+    // PORT NOTE (parity S155-F2): the `undefined` pointers of the empty arm
+    // are null here; `len == 0` means `next` never reads them.
+    pub fn key_iterator(&self) -> KeyIterator<'_, K> {
+        match self.metadata {
+            Some(metadata) => FieldIterator {
+                len: self.capacity() as usize,
+                metadata,
+                // SAFETY: `metadata` is set, so the header and its key array
+                // are valid for `capacity()` slots.
+                items: unsafe { self.keys() },
+                _marker: PhantomData,
+            },
+            None => FieldIterator {
+                len: 0,
+                metadata: core::ptr::null(),
+                items: core::ptr::null_mut(),
+                _marker: PhantomData,
+            },
+        }
+    }
+
+    // pub fn valueIterator(self: *const Self) ValueIterator { ... }
+    // (the same shape as `keyIterator`, over `self.values()`)
+    pub fn value_iterator(&self) -> ValueIterator<'_, V> {
+        match self.metadata {
+            Some(metadata) => FieldIterator {
+                len: self.capacity() as usize,
+                metadata,
+                // SAFETY: as in `key_iterator`, over the value array.
+                items: unsafe { self.values() },
+                _marker: PhantomData,
+            },
+            None => FieldIterator {
+                len: 0,
+                metadata: core::ptr::null(),
+                items: core::ptr::null_mut(),
+                _marker: PhantomData,
+            },
+        }
+    }
+
     /// Insert an entry in the map. Assumes it is not already present.
     pub fn put_no_clobber_context(
         &mut self,
@@ -1371,6 +1427,62 @@ impl<K: Copy, V: Copy, Context: HashMapContext<K>, const P: u8> Iterator<'_, K, 
     }
 }
 
+// pub const KeyIterator = FieldIterator(K);
+// pub const ValueIterator = FieldIterator(V);
+// PORT NOTE (parity S155-F2): Zig nests these in the map type; Rust has no
+// inherent associated types, so they are module-level aliases carrying the
+// map borrow's lifetime.
+pub type KeyIterator<'a, K> = FieldIterator<'a, K>;
+pub type ValueIterator<'a, V> = FieldIterator<'a, V>;
+
+// fn FieldIterator(comptime T: type) type {
+//     return struct {
+//         len: usize,
+//         metadata: [*]const Metadata,
+//         items: [*]T,
+//         ...
+//     };
+// }
+/// Walks one of the map's parallel arrays (keys or values), yielding a
+/// pointer to each slot whose metadata is used.
+// PORT NOTE: the `'a` lifetime ties the iterator to the `&self` borrow it was
+// made from, as `Iterator` above is; the reference's raw many-pointers carry
+// no lifetime. `next` returns `*mut T` like `Entry`'s pointers.
+pub struct FieldIterator<'a, T> {
+    len: usize,
+    metadata: *const Metadata,
+    items: *mut T,
+    _marker: PhantomData<&'a ()>,
+}
+
+impl<T> FieldIterator<'_, T> {
+    // pub fn next(self: *@This()) ?*T {
+    pub fn next(&mut self) -> Option<*mut T> {
+        // while (self.len > 0) {
+        while self.len > 0 {
+            // self.len -= 1;
+            self.len -= 1;
+            // const used = self.metadata[0].isUsed();
+            // SAFETY: `len` counts the slots left in both arrays, so
+            // `metadata` and `items` point at a live slot here.
+            let used = unsafe { (*self.metadata).is_used() };
+            // const item = &self.items[0];
+            let item = self.items;
+            // self.metadata += 1;
+            // self.items += 1;
+            // SAFETY: one past the last slot at most, which is not read.
+            self.metadata = unsafe { self.metadata.add(1) };
+            self.items = unsafe { self.items.add(1) };
+            // if (used) { return item; }
+            if used {
+                return Some(item);
+            }
+        }
+        // return null;
+        None
+    }
+}
+
 // PORT NOTE: `std.mem.alignForward(usize, value, alignment)`.
 #[inline]
 fn align_forward(value: usize, alignment: usize) -> usize {
@@ -1451,6 +1563,55 @@ mod tests {
             i += 1;
         }
         assert_eq!(total, sum);
+    }
+
+    // Parity S155-F2 (no reference test): `keyIterator`/`valueIterator` yield
+    // exactly the used slots, in slot order, and nothing for an empty map.
+    #[test]
+    fn HashMap_key_and_value_iterators() {
+        type Map = AutoHashMapUnmanaged<u32, u32, DEFAULT_MAX_LOAD_PERCENTAGE>;
+
+        let cap = 16;
+        let layout = Map::layout_for_capacity(cap);
+        let buf = AlignedBuf::new(layout.total_size, Map::base_align());
+        let mut map = unsafe { Map::init(buf.offset_buf(), layout) };
+        let c = ctx::<u32>();
+
+        assert!(map.key_iterator().next().is_none());
+        assert!(map.value_iterator().next().is_none());
+
+        for i in 0..5u32 {
+            map.put_context(i, i * 10, &c).unwrap();
+        }
+        map.remove_context(2, &c);
+
+        let mut from_entries: Vec<(u32, u32)> = Vec::new();
+        let mut it = map.iterator();
+        while let Some(kv) = it.next() {
+            from_entries.push(unsafe { (*kv.key_ptr, *kv.value_ptr) });
+        }
+
+        let mut keys: Vec<u32> = Vec::new();
+        let mut key_it = map.key_iterator();
+        while let Some(k) = key_it.next() {
+            keys.push(unsafe { *k });
+        }
+        let mut values: Vec<u32> = Vec::new();
+        let mut value_it = map.value_iterator();
+        while let Some(v) = value_it.next() {
+            values.push(unsafe { *v });
+        }
+
+        assert_eq!(4, keys.len());
+        assert_eq!(from_entries.iter().map(|e| e.0).collect::<Vec<_>>(), keys);
+        assert_eq!(from_entries.iter().map(|e| e.1).collect::<Vec<_>>(), values);
+
+        // The value pointers write through to the map.
+        let mut value_it = map.value_iterator();
+        while let Some(v) = value_it.next() {
+            unsafe { *v += 1 };
+        }
+        assert_eq!(Some(31), map.get_context(3, &c));
     }
 
     // ADDITIVE (no reference counterpart): pins `AutoContext` to the ORACLE's

@@ -8,8 +8,8 @@
 //! enums and the comptime [`Config`] view produced by `fromOptions()` — are
 //! relocated HERE so build-config has no upward dependency on the build script
 //! (R4). The pure build-time machinery (`init`, `addOptions`, `terminalOptions`,
-//! target resolution, git version detection) stays in the `rustty-xtask`
-//! build tooling.
+//! target resolution) stays in the `rustty-xtask` build tooling; git version
+//! detection and the version composition are the `rustty-version` crate's.
 
 use crate::apprt::Runtime as ApprtRuntime;
 use crate::font::Backend as FontBackend;
@@ -97,7 +97,10 @@ impl Config {
             renderer: RendererBackend::default(target, wasm_target),
             // Reference `init()`: `config.font_backend = ... orelse
             // FontBackend.default(target.result, wasm_target);`.
-            font_backend: FontBackend::default(target, wasm_target),
+            font_backend: match FONT_BACKEND_OPTION {
+                Some(backend) => backend,
+                None => FontBackend::default(target, wasm_target),
+            },
             // Reference `init()`: `config.i18n = ... orelse switch
             // (target.result.os.tag) { .macos, .ios => true, .linux, .freebsd =>
             // target.result.isGnuLibC(), else => false };`. `isGnuLibC()` maps
@@ -126,6 +129,29 @@ impl Config {
     }
 }
 
+/// The explicit `-Dfont-backend=<tag>` value, or `None` when the option is not
+/// passed (then `from_options` takes `FontBackend.default`). Reference
+/// `Config.zig:191-195`: `b.option(FontBackend, "font-backend", ...) orelse
+/// FontBackend.default(target.result, wasm_target)`. The `font-backend-*`
+/// features are this option; `build.rs` guarantees at most one is on.
+pub const FONT_BACKEND_OPTION: Option<FontBackend> = if cfg!(feature = "font-backend-freetype") {
+    Some(FontBackend::Freetype)
+} else if cfg!(feature = "font-backend-freetype-windows") {
+    Some(FontBackend::FreetypeWindows)
+} else if cfg!(feature = "font-backend-fontconfig-freetype") {
+    Some(FontBackend::FontconfigFreetype)
+} else if cfg!(feature = "font-backend-coretext") {
+    Some(FontBackend::Coretext)
+} else if cfg!(feature = "font-backend-coretext-freetype") {
+    Some(FontBackend::CoretextFreetype)
+} else if cfg!(feature = "font-backend-coretext-harfbuzz") {
+    Some(FontBackend::CoretextHarfbuzz)
+} else if cfg!(feature = "font-backend-coretext-noshape") {
+    Some(FontBackend::CoretextNoshape)
+} else {
+    None
+};
+
 /// `target.result.isGnuLibC()` — whether the compilation target links glibc.
 /// Rust spells this as the `target_env = "gnu"` cfg; it is named here (rather
 /// than written inline in `i18n_default`'s switch arm below) because `cfg!`
@@ -145,9 +171,22 @@ const fn i18n_default(target: Target) -> bool {
     }
 }
 
-/// The semantic version of this build, parsed from the `rustty-identity`
-/// source-of-truth string (R2). Reference: `options.app_version`.
-const APP_VERSION: SemanticVersion = SemanticVersion::parse(rustty_identity::VERSION);
+/// The semantic version of this build: `MAJOR.MINOR.PATCH` of
+/// `options.app_version` (S63-F2). Reference: `options.app_version`.
+///
+/// That is the explicit `RUSTTY_VERSION_STRING` (`-Dversion-string`) when one
+/// is set, and otherwise the `rustty-identity` app version (R2): the git-derived
+/// arms of `Config.zig:290-338` add only a pre-release and build metadata, which
+/// [`SemanticVersion`] does not carry. The full composed string is
+/// `rustty_version::VERSION_STRING`, kept in that leaf crate so that a commit
+/// does not recompile every dependent of this one.
+const APP_VERSION: SemanticVersion = SemanticVersion::parse(APP_VERSION_SOURCE);
+
+const APP_VERSION_SOURCE: &str = if env!("RUSTTY_VERSION_EXPLICIT").is_empty() {
+    rustty_identity::VERSION
+} else {
+    env!("RUSTTY_VERSION_EXPLICIT")
+};
 
 /// A semantic version `MAJOR.MINOR.PATCH`, mirroring the reference
 /// `std.SemanticVersion` fields read at runtime.

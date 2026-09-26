@@ -440,9 +440,9 @@ pub fn cursorTable(cursor: &Cursor) {
     //     cimgui.c.ImGui_TextDisabled("(none)");
     // }
     //
-    // PORT NOTE (INV-1): `cursor.hyperlink` is a raw `Option<*mut Hyperlink>`
+    // PORT NOTE (INV-1): `cursor.hyperlink` is a raw `Option<*mut CursorHyperlink>`
     // (a call-scoped back-reference into screen state, deref'd under the
-    // surface mutex). `link.uri` is a `Vec<u8>` byte slice; `%.*s` takes
+    // surface mutex). `link.uri` is an allocator-handle byte vector; `%.*s` takes
     // `(int precision, char* ptr)` so the (possibly non-NUL-terminated) slice
     // is bounded by its length — `uri.len()` + `uri.as_ptr()`.
     if let Some(link) = cursor.hyperlink {

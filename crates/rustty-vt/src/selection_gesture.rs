@@ -1069,10 +1069,10 @@ fn drag_selection_output(screen: *mut Screen, click_pin: Pin, drag_pin: Pin) -> 
 #[allow(clippy::bool_assert_comparison)]
 mod tests {
     use super::*;
+    use crate::alloc::Allocator;
     use crate::screen::{Screen, SemanticContentArg};
     use crate::selection::Bounds;
     use crate::terminal::Options;
-    use allocator_api2::alloc::Global as Allocator;
 
     // PORT NOTE: the reference uses inline `Terminal.init(testing.allocator, .{
     // .cols, .rows })` / `.{ ..., .max_scrollback_bytes }` literals. `Options` has more

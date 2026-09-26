@@ -185,7 +185,7 @@ impl ScreenClone {
     // }
     pub fn create(alloc: Allocator, opts: Options) -> Result<Box<ScreenClone>, OutOfMemory> {
         let terminal = Terminal::init(
-            alloc,
+            alloc.into(),
             terminal_options(opts.terminal_rows, opts.terminal_cols),
         )?;
         Ok(Box::new(ScreenClone { opts, terminal }))
@@ -196,7 +196,7 @@ impl ScreenClone {
     //     alloc.destroy(self);
     // }
     pub fn destroy(mut self: Box<ScreenClone>, alloc: Allocator) {
-        self.terminal.deinit(alloc);
+        self.terminal.deinit(alloc.into());
         drop(self);
     }
 

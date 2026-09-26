@@ -30,7 +30,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** Screen.clearCells does not clear the row's kitty_virtual_placeholder flag
   - **Oracle:** `src/terminal/Screen.zig:1818-1828` → **Rustty:** `crates/rustty-vt/src/screen.rs:2739-2742`
   - **Audit's suggested fix:** Add after the styled block in Screen::clear_cells: `if crate::options::KITTY_GRAPHICS && unsafe{(*row).kitty_virtual_placeholder()} && cells_len == unsafe{(*page).size.cols} as usize { let found = (0..cells_len).any(|i| unsafe{(*cells_base.add(i)).codepoint()} == kitty::graphics_unicode::PLACEHOLDER); if !found { unsafe{(*row).set_kitty_virtual_placeholder(false)} } }` (mirror page_impl.rs:1975-1990), and delete the stale deferral note.
-- [ ] **S133-F2** · CONFIRMED · `INDIV` · different-constant
+- [x] **S133-F2** · CONFIRMED · `INDIV` · different-constant
   - **What:** Screen.Options.default uses kitty_image_storage_limit = 0 instead of 320MB (ghostty artifact) / 10MB (lib)
   - **Oracle:** `src/terminal/Screen.zig:273-293` → **Rustty:** `crates/rustty-vt/src/screen.rs:400-423`
   - **Audit's suggested fix:** Set `kitty_image_storage_limit: 320 * 1000 * 1000` (or select by an artifact/`lib` build option matching `build_options.artifact`) in `Options::default()`, and remove the stale vt-12 deferral note.
@@ -38,7 +38,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** cursorCopy does not restore the old cursor when manualStyleUpdate fails; error set collapsed to OutOfMemory
   - **Oracle:** `src/terminal/Screen.zig:1430-1451` → **Rustty:** `crates/rustty-vt/src/screen.rs:2341-2380`
   - **Audit's suggested fix:** Capture `let old = self.cursor;` (Cursor is Copy) before the overwrite and on `Err(e)` from manual_style_update do `self.cursor = old; return Err(e)`; change the return type to `Result<(), IncreaseCapacityError>` (or keep the mapping but document it) so OutOfSpace is not reported as OutOfMemory.
-- [ ] **S141-F1** · CONFIRMED · `INDIV` · different-constant
+- [x] **S141-F1** · CONFIRMED · `INDIV` · different-constant
   - **What:** libghostty-vt default kitty_image_storage_limit is 320MB instead of the .lib artifact's 10MB
   - **Oracle:** `src/terminal/Terminal.zig:266-274` → **Rustty:** `crates/rustty-vt-c/src/terminal.rs:1547-1560`
   - **Audit's suggested fix:** Add an `Options` constructor/`Default` in rustty-vt carrying the reference field defaults (max_scrollback_bytes=Some(10_000), max_scrollback_lines=None, colors=default, default_modes=default, Block/Some(false), storage limit per artifact, loading_limits=DIRECT) and have rustty-vt-c use 10 * 1000 * 1000 for the lib artifact.
@@ -46,7 +46,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** resize failure-path test compares only subsets of flags, tabstops and cursor
   - **Oracle:** `src/terminal/Terminal.zig:4528-4569` → **Rustty:** `crates/rustty-vt/src/terminal.rs:19136-19306`
   - **Audit's suggested fix:** Snapshot `t.flags` (derive/impl PartialEq on Flags), clone the full `Tabstops` table (or compare all `get(i)` for i in 0..cols), and compare the full `Cursor` value (derive PartialEq or compare every field) before/after the failed resize.
-- [ ] **S149-F1** · CONFIRMED · `INDIV` · missing-branch
+- [x] **S149-F1** · CONFIRMED · `INDIV` · missing-branch
   - **What:** apc Handler does not gate the glyph protocol on build_options.glyph_protocol
   - **Oracle:** `src/terminal/apc.zig:84-97, 134-140, 200-207, 237-246, 280-283, 294-297, 432-435, 446-449, 661, 727` → **Rustty:** `crates/rustty-vt/src/apc/mod.rs:174-191, 255-261, 355-362, 427-433, 477, 502, 722, 749, 1069-1086, 1152-1163`
   - **Audit's suggested fix:** Mirror the kitty gating: in feed (identify `;` arm, Glyph arm), feed_slice (Glyph arm), end (Glyph arm), State::deinit and Command::deinit, wrap with `if crate::options::GLYPH_PROTOCOL { ... } else { self.state = State::Ignore / unreachable!() }` exactly as the oracle does; add `if !crate::options::GLYPH_PROTOCOL { return; }` to valid_glyph_command and feed_slice_valid_glyph_command.
@@ -54,7 +54,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** test "RGB.parse" port drops 6 of the reference assertions
   - **Oracle:** `src/terminal/color.zig:927-976` → **Rustty:** `crates/rustty-vt/src/color.rs:1930-2044`
   - **Audit's suggested fix:** Add to `rgb_parse`: assert_eq!(Ok(RGB{r:34,g:139,b:34}), RGB::parse(b"\tForestGreen\t")); and assert_eq!(Err(InvalidFormat), RGB::parse(b"")) / b"  " / b"#12345" / b"12345" / b"nosuchcolor".
-- [ ] **S150-F2** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S150-F2** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** clipboard.Location is a closed enum; reference is non-exhaustive enum(c_int){_}
   - **Oracle:** `src/terminal/clipboard.zig:4-9` → **Rustty:** `crates/rustty-vt/src/clipboard.rs:14-23`
   - **Audit's suggested fix:** Either model Location like WriteStatus/ReadStatus (a #[repr(transparent)] i32 newtype with associated consts) so unknown values round-trip, or explicitly accept the D11 divergence and document it in clipboard.rs next to the type.
@@ -62,11 +62,11 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** ghostty.h ProgressReport.State check never reads the C header (tautological lookup)
   - **Oracle:** `src/terminal/osc.zig:249-253` → **Rustty:** `crates/rustty-vt/src/osc/mod.rs:406-434`
   - **Audit's suggested fix:** Reuse mouse.rs's `parse_header_enum` (hoist it into rustty-lib or a shared test helper) and look the values up in `include/rustty-embed.h`'s `rustty_action_progress_report_state_e` block, plus a probe-can-fail test as in mouse.rs.
-- [ ] **S156-F2** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S156-F2** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** Shape.getGObjectType (GhosttyMouseShape GObject enum) stripped; GTK mouse-shape property is a plain int
   - **Oracle:** `src/terminal/mouse.zig:77-92` → **Rustty:** `crates/rustty-apprt/src/gtk/class/surface.rs:247-257`
   - **Audit's suggested fix:** Register a `RusttyMouseShape` glib enum type (glib::Enum derive over rustty_vt::mouse::Shape or a wrapper) and type the `mouse-shape` property with it, matching surface.zig:222-240.
-- [ ] **S170-F1** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S170-F1** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** parse_u21/parse_u32 reject interior '_' digit separators that Zig std.fmt.parseInt accepts
   - **Oracle:** `src/terminal/apc/glyph/request.zig:106, 217, 220-222, 372` → **Rustty:** `crates/rustty-vt/src/apc/glyph/request.rs:1051-1064`
   - **Audit's suggested fix:** In parse_u21/parse_u32, reject leading/trailing '_' then strip interior '_' bytes before from_str_radix (mirroring parseIntWithSign), and add a test such as `r;cp=e0_a0;QQ==` -> get_cp()==Some(0xE0A0).
@@ -86,7 +86,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** C-created OSC parser does not use the caller-supplied allocator for its dynamic payloads
   - **Oracle:** `src/terminal/c/osc.zig:18-36` → **Rustty:** `crates/rustty-vt-c/src/osc.rs:34, 66-89`
   - **Audit's suggested fix:** Apply the terminal.rs F-008 pattern: heap-hold the resolved C allocator (Box::into_raw of a dyn ZigAllocator) inside OscParserWrapper, build the parser's ZigAllocatorRef from that pointee, and reclaim it last in `free`.
-- [ ] **S174-F4** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S174-F4** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** terminal_paste rejects an out-of-range clipboard location that the oracle accepts
   - **Oracle:** `src/terminal/c/paste.zig:70-73` → **Rustty:** `crates/rustty-vt-c/src/paste.rs:159-175`
   - **Audit's suggested fix:** Model the C-boundary location as an open value (a c_int newtype threaded through to the paste path, or an Unknown(c_int) variant) so an unrecognized location behaves like the oracle's open enum instead of failing the paste.
@@ -106,7 +106,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** instant_from_ns can panic on a large time_ns value where the reference cannot
   - **Oracle:** `src/terminal/c/selection_gesture.zig:739-741` → **Rustty:** `crates/rustty-vt-c/src/selection_gesture.rs:1758-1764`
   - **Audit's suggested fix:** Use `base.checked_add(Duration::from_nanos(ns)).unwrap_or(base)` (or saturate to `base + Duration::MAX`-clamped value) so the conversion is total, matching the reference's inability to fail.
-- [ ] **S179-F1** · CONFIRMED · `INDIV` · different-constant
+- [x] **S179-F1** · CONFIRMED · `INDIV` · different-constant
   - **What:** C-API terminal_new uses the 320MB app kitty-image storage limit instead of the 10MB lib default
   - **Oracle:** `src/terminal/Terminal.zig:289-298 (default used by src/terminal/c/terminal.zig:856-901 `new_`)` → **Rustty:** `crates/rustty-vt-c/src/terminal.rs:1548-1562`
   - **Audit's suggested fix:** In `crates/rustty-vt-c/src/terminal.rs::new_`, pass `10 * 1000 * 1000` (the `.lib` artifact default) — or derive it from an artifact constant — so a C-created terminal matches libghostty-vt.
@@ -130,7 +130,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** ABI manifest omits CLIPBOARD_WRITE_MAX_BYTES (40) from RusttyTerminalData
   - **Oracle:** `src/terminal/c/types.zig:314 (row) / src/terminal/c/terminal.zig:1595` → **Rustty:** `crates/rustty-vt-c/src/types.rs:2387-2436`
   - **Audit's suggested fix:** Append `("clipboard_write_max_bytes", ClipboardWriteMaxBytes),` to the RusttyTerminalData enum_values! row.
-- [ ] **S186-F1** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S186-F1** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** Integer control values containing '_' digit separators are rejected where the reference accepts them
   - **Oracle:** `src/terminal/kitty/graphics_command.zig:318-324` → **Rustty:** `crates/rustty-vt/src/kitty/graphics_command.rs:437-499`
   - **Audit's suggested fix:** Port Zig's `_`-separator handling to the non-negative branches of `parse_int_u32` and `parse_int_i32` (skip interior `_`, reject a leading or trailing `_` with InvalidFormat before the digit scan), mirroring what `parse_int_u32_negative_magnitude` already does, and add table rows for `"1_0" -> Ok(10)`, `"-1_0" -> Ok(-10)` (i32), `"_10"/"10_" -> InvalidFormat`.
@@ -138,7 +138,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** Missing test "image load: rgb, not compressed, relative regular file"
   - **Oracle:** `src/terminal/kitty/graphics_image.zig:1440-1470` → **Rustty:** `crates/rustty-vt/src/kitty/graphics_image.rs:1872-2601`
   - **Audit's suggested fix:** Add a `image_load_rgb_not_compressed_relative_regular_file` test that writes the fixture into a scratch dir under the crate's CWD and passes a relative path as `Command.data`, asserting `complete()` succeeds with `Compression::None`.
-- [ ] **S189-F2** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S189-F2** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** readFile with no `s=` size silently TRUNCATES at max_size instead of failing
   - **Oracle:** `src/terminal/kitty/graphics_image.zig:420-443` → **Rustty:** `crates/rustty-vt/src/kitty/graphics_image.rs:660-670`
   - **Audit's suggested fix:** Read `MAX_SIZE + 1` bytes (or check `managed.len() >= MAX_SIZE` after the take) and return `Error::InvalidData` when the limit was reached, mirroring `error.StreamTooLong`.
@@ -146,15 +146,15 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** test "OSC 52: get/set clipboard with allocator" ported without an allocator, making it a duplicate of the non-allocator test
   - **Oracle:** `src/terminal/osc/parsers/clipboard_operation.zig:94-107` → **Rustty:** `crates/rustty-vt/src/osc/parsers/clipboard_operation.rs:130-152`
   - **Audit's suggested fix:** Construct the parser with an allocator (ZigAllocatorRef) in this test so the allocating capture backing is actually covered, restoring the distinction from the preceding test.
-- [ ] **S194-F3** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S194-F3** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** parse_int_u9 rejects the '_' digit separators that Zig's std.fmt.parseInt accepts
   - **Oracle:** `src/terminal/osc/parsers/color.zig:177-181, 250-254` → **Rustty:** `crates/rustty-vt/src/osc/parsers/color.rs:482-488`
   - **Audit's suggested fix:** Mirror std.fmt.parseInt's separator handling: strip '_' characters that are neither leading nor trailing (and reject a leading/trailing or doubled '_') before the numeric parse.
-- [ ] **S195-F1** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S195-F1** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** OSC 5522 Option_::read hand-rolls prefix key matching instead of using the ported ValueIterator (exact-key, skip-field) semantics
   - **Oracle:** `src/terminal/osc/parsers/kitty_clipboard_protocol.zig:97-115 (Option.read) + src/terminal/osc/kitty_metadata.zig:39-72 (ValueIterator.next)` → **Rustty:** `crates/rustty-vt/src/osc/parsers/kitty_clipboard_protocol.rs:226-292`
   - **Audit's suggested fix:** Replace the hand-rolled scan in `Option_::read` with `kitty_metadata::ValueIterator::init(self.tag_name(), None, metadata).next()` (mirroring kitty_desktop_notification.rs:376-395), delete the now-dead local `trim_whitespace`, and add the prefix-key regression case (e.g. `5522;password=A:pw=B`) as a test.
-- [ ] **S195-F2** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S195-F2** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** OSC 66 update() rejects '_' digit separators that Zig's std.fmt.parseInt accepts
   - **Oracle:** `src/terminal/osc/parsers/kitty_text_sizing.zig:49-54` → **Rustty:** `crates/rustty-vt/src/osc/parsers/kitty_text_sizing.rs:95-105`
   - **Audit's suggested fix:** Strip/accept '_' digit separators the way Zig's parseInt does before `parse::<u8>()` in `OSC::update` (or share a small `parse_int_zig` helper), so `n=1_2` parses to 12 as in the oracle.
@@ -181,7 +181,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** log.info/log.err calls in increaseCapacity and eraseRows are elided (commented out)
   - **Oracle:** `src/terminal/PageList.zig:4317, 4336, 5580` → **Rustty:** `crates/rustty-vt/src/pagelist/grow.rs:767, 784; crates/rustty-vt/src/pagelist/erase.rs:616`
   - **Audit's suggested fix:** Wire the crate's logging facade (whatever rustty-vt uses for scoped `terminal` logs) and emit the three messages at the same points.
-- [ ] **S124-F2** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S124-F2** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** diagram() panics on an unencodable codepoint where Zig `{u}` writes U+FFFD
   - **Oracle:** `src/terminal/PageList.zig:5926-5931` → **Rustty:** `crates/rustty-vt/src/pagelist/access.rs:199-207`
   - **Audit's suggested fix:** Use `char::from_u32(cp).unwrap_or(char::REPLACEMENT_CHARACTER)` at both sites.
@@ -261,7 +261,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** PageEntry.hash uses std SipHash DefaultHasher instead of seed-0 Wyhash autoHash/autoHashStrat
   - **Oracle:** `src/terminal/hyperlink.zig:143-160` → **Rustty:** `crates/rustty-vt/src/hyperlink.rs:355-377`
   - **Audit's suggested fix:** Use `rustty_zigstd::wyhash::Wyhash::init(0)` and feed exactly what Zig autoHash/autoHashStrat(.Deep) write: the tag as its enum integer (u1/u8 per Zig's autoHash of an enum: it hashes @intFromEnum as the tag's backing int), the implicit u32 bytes, the explicit slice bytes with the slice length prefix that autoHashStrat(.Deep) on a []const u8 emits, then the uri likewise — and pin it with a golden test like HashMap_auto_context_matches_reference_wyhash_layout.
-- [ ] **S155-F2** · CONFIRMED · `INDIV` · missing-function
+- [x] **S155-F2** · CONFIRMED · `INDIV` · missing-function
   - **What:** KeyIterator/ValueIterator (FieldIterator) and keyIterator()/valueIterator() not ported
   - **Oracle:** `src/terminal/hash_map.zig:313-336, 415-445` → **Rustty:** `crates/rustty-vt/src/hash_map.rs:642-644`
   - **Audit's suggested fix:** Add `FieldIterator<T>` with `next(&mut self) -> Option<*mut T>` plus `key_iterator()`/`value_iterator()` on HashMapUnmanaged mirroring lines 316-336 and 415-445.
@@ -285,11 +285,11 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** Verbatim comment blocks for main.zig's root test and lib.zig are stale (omit compress/fraction/mem and TinyIo lines)
   - **Oracle:** `src/terminal/main.zig:93-104` → **Rustty:** `crates/rustty-vt/src/lib.rs:330-341, 288-296`
   - **Audit's suggested fix:** Refresh the two verbatim comment blocks to the pinned oracle text.
-- [ ] **S156-F3** · CONFIRMED · `INDIV` · other
+- [x] **S156-F3** · CONFIRMED · `INDIV` · other
   - **What:** madvise failure warnings not logged
   - **Oracle:** `src/terminal/mem.zig:109,129,169` → **Rustty:** `crates/rustty-vt/src/mem.rs:189,214,262`
   - **Audit's suggested fix:** Wire a logging facade (e.g. the `log` crate) into rustty-vt and emit the three warnings, including the errno.
-- [ ] **S156-F4** · CONFIRMED · `INDIV` · other
+- [x] **S156-F4** · CONFIRMED · `INDIV` · other
   - **What:** ensureAllocator warning not logged
   - **Oracle:** `src/terminal/osc.zig:439-444` → **Rustty:** `crates/rustty-vt/src/osc/mod.rs:895-906`
   - **Audit's suggested fix:** Emit the warning through a logging facade once one is wired into rustty-vt.
@@ -305,7 +305,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** Pin/serial skip test omits the last-row serial comparison
   - **Oracle:** `src/terminal/render.zig:599-615` → **Rustty:** `crates/rustty-vt/src/render.rs:1037-1055`
   - **Audit's suggested fix:** Add `|| self.row_data[y + take - 1].serial != node_serial` to the condition at render.rs:1038-1044.
-- [ ] **S161-F2** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S161-F2** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** string() writes surrogate codepoints as WTF-8 bytes instead of U+FFFD
   - **Oracle:** `src/terminal/render.zig:991-999` → **Rustty:** `crates/rustty-vt/src/render.rs:1524-1548`
   - **Audit's suggested fix:** In `write_codepoint`'s `None` arm, emit `[0xEF, 0xBF, 0xBD]` when `utf8_codepoint_sequence_length(cp)` is Some(3) (surrogate), keeping the Err for out-of-range.
@@ -329,7 +329,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** 'stream: continuation lifecycle' is wholly #[ignore]d in release builds, not just its FailingAllocator arm
   - **Oracle:** `src/terminal/stream.zig:4850-4906` → **Rustty:** `crates/rustty-vt/src/stream.rs:6845-6932`
   - **Audit's suggested fix:** Drop the cfg_attr ignore and keep only the `#[cfg(debug_assertions)]` block guard on the failing-allocator arm so the other four assertions run in every configuration.
-- [ ] **S166-F1** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S166-F1** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** Clipboard read/write reply side effects are applied after the effect callback returns instead of inside `reply`
   - **Oracle:** `src/terminal/stream_terminal.zig:738-760, 927-960, 1206-1234` → **Rustty:** `crates/rustty-vt/src/stream_terminal.rs:907-951, 1083-1118, 1261-1339, 2922-3184`
   - **Audit's suggested fix:** Document the deferral as an intentional contract in the Effects doc comment, or apply the grant/pty write from inside `reply` via a raw handler pointer in the state (as the oracle does) if the SB/Miri harness allows it.
@@ -361,11 +361,11 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** `search::new` drops the registry-insert out-of-memory path
   - **Oracle:** `src/terminal/c/search.zig:135-145` → **Rustty:** `crates/rustty-vt-c/src/search.rs:389-400`
   - **Audit's suggested fix:** Use a fallible insert (e.g. `try_reserve` before `insert`, or the allocator-aware hashbrown API) so a registry allocation failure destroys the wrapper and returns `Result::OutOfMemory` as the oracle does.
-- [ ] **S178-F1** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S178-F1** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** log_stderr renders scope/message through String::from_utf8_lossy instead of raw bytes
   - **Oracle:** `src/terminal/c/sys.zig:249-285` → **Rustty:** `crates/rustty-vt-c/src/sys.rs:600-660`
   - **Audit's suggested fix:** Write the raw bytes: `lock.write_all(b"[")`, `write_all(level_text.as_bytes())`, `write_all(b"](")`, `write_all(scope)`, `write_all(b"): ")`, `write_all(message)`, `write_all(b"\n")` — or build the line into a stack `[u8; 2048+128]` buffer and issue one `write_all`, matching the reference's single-write path exactly.
-- [ ] **S178-F2** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S178-F2** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** log_stderr no longer emits each line with a single write; the doc-comment guarantee is unbacked
   - **Oracle:** `src/terminal/c/sys.zig:219-285` → **Rustty:** `crates/rustty-vt-c/src/sys.rs:586-660`
   - **Audit's suggested fix:** Format into a `[u8; LogEmitter::buffer_size + 128]` stack buffer and emit it with a single `write_all`, falling back to piecewise writes when the line does not fit — restoring both the single-write property and the reference's two-path structure. (Fixing this and the lossy-UTF-8 finding together is one change.)
@@ -381,7 +381,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** `get vt_processing_error` counterpart is compiled out of release builds
   - **Oracle:** `src/terminal/c/terminal.zig:3035-3073` → **Rustty:** `crates/rustty-vt-c/src/terminal.rs:6252-6316`
   - **Audit's suggested fix:** Either expose a release-visible fail point (or a failing-allocator equivalent) for the terminal-owned string update path so the test can be unconditional, or accept the gap explicitly in the census ledger.
-- [ ] **S185-F1** · CONFIRMED · `INDIV` · other
+- [x] **S185-F1** · CONFIRMED · `INDIV` · other
   - **What:** Stale "DEFERRED to vt-12 / compiling stub" PORT NOTE on graphics_storage re-export
   - **Oracle:** `src/terminal/kitty/graphics.zig:18-27` → **Rustty:** `crates/rustty-vt/src/kitty/graphics.rs:27-30`
   - **Audit's suggested fix:** Delete or reword the stale deferral note in crates/rustty-vt/src/kitty/graphics.rs:27-30.
@@ -389,7 +389,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** `LoadingImage.debugDump` not ported (carried as a comment)
   - **Oracle:** `src/terminal/kitty/graphics_image.zig:563-586` → **Rustty:** `crates/rustty-vt/src/kitty/graphics_image.rs:854-880`
   - **Audit's suggested fix:** Optionally add a `#[cfg(debug_assertions)] pub fn debug_dump(&self) -> std::io::Result<()>` with the same filename format, or leave as-is and record it as an accepted cosmetic gap.
-- [ ] **S189-F4** · CONFIRMED · `INDIV` · stub-or-unimplemented
+- [x] **S189-F4** · CONFIRMED · `INDIV` · stub-or-unimplemented
   - **What:** Windows has no handle-based realpath, so the kitty file/temporary-file media fail closed there
   - **Oracle:** `src/terminal/kitty/graphics_image.zig:451-465` → **Rustty:** `crates/rustty-vt/src/kitty/graphics_image.rs:1407-1420`
   - **Audit's suggested fix:** Add a Windows arm using `GetFinalPathNameByHandleW` (stripping the `\\?\` prefix) so `validatedFilePath` can apply the blocklist to the opened handle, then close the deferral row.
@@ -397,7 +397,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** All log.info/log.warn/log.debug diagnostics in ImageStorage are carried as comments, never emitted
   - **Oracle:** `src/terminal/kitty/graphics_storage.zig:224-226, 302-311, 369, 576, 1025-1033, 1252, 1271, 1294, 1312, 1495-1505` → **Rustty:** `crates/rustty-vt/src/kitty/graphics_storage.rs:363-367, 452-458, 468, 530, 810-816, 1315-1322, 1607, 1631, 1655, 1682, 1935, 1944`
   - **Audit's suggested fix:** Optional: none required for functional parity; if diagnostics are wanted later, introduce a vt-level logging shim and restore these call sites verbatim.
-- [ ] **S190-F2** · DISPUTED · `LOG` · missing-error-path
+- [x] **S190-F2** · DISPUTED · `LOG` · missing-error-path
   - **What:** Two documented allocation-failure degradation paths cannot be reached in the port (abort instead)
   - **Oracle:** `src/terminal/kitty/graphics_storage.zig:570-579, 977-988` → **Rustty:** `crates/rustty-vt/src/kitty/graphics_storage.rs:806-822, 1268-1300`
   - **Audit's suggested fix:** None practical; the port-wide OOM=abort policy makes these arms dead code. If a fallible allocator is ever adopted for vt, restore `try_reserve`/`push` fallbacks at these two sites.
@@ -409,15 +409,15 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** rxvt_extension scoped logger and its two warn() calls are commented out
   - **Oracle:** `src/terminal/osc/parsers/rxvt_extension.zig:6,27-32` → **Rustty:** `crates/rustty-vt/src/osc/parsers/rxvt_extension.rs:7-11,34,41`
   - **Audit's suggested fix:** If/when a logging facade is wired into rustty-vt, restore both warnings with the same message text and the `osc_rxvt_extension` scope.
-- [ ] **S197-F1** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S197-F1** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** exit_code parsing: Zig std.fmt.parseInt accepts '_' digit separators, Rust str::parse does not
   - **Oracle:** `src/terminal/osc/parsers/semantic_prompt.zig:160-166` → **Rustty:** `crates/rustty-vt/src/osc/parsers/semantic_prompt.rs:323-333`
   - **Audit's suggested fix:** Strip interior `_` separators (rejecting leading/trailing `_` and an all-`_`/empty remainder) before calling `parse::<i32>()`, mirroring Zig's parseIntWithSign, and add a regression assertion to `option_read_exit_code`.
-- [ ] **S204-F1** · DISPUTED · `ALLOC` · missing-error-path
+- [x] **S204-F1** · DISPUTED · `ALLOC` · missing-error-path
   - **What:** Decode-time temporary allocations abort instead of returning OutOfMemory
   - **Oracle:** `src/terminal/snapshot/page.zig:252-253, 373-381` → **Rustty:** `crates/rustty-vt/src/snapshot/page.rs:457, 561-573`
   - **Audit's suggested fix:** If the port wants full parity on this error path, use a fallible allocation (e.g. `Vec::try_reserve`) for the staged payload and remap tables and map failure to `PayloadDecodeError::OutOfMemory`; otherwise record the deviation in a PORT NOTE next to the staged allocation.
-- [ ] **S205-F1** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S205-F1** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** Two decode tests use unlimited scrollback where the reference uses the Options default of zero
   - **Oracle:** `src/terminal/snapshot/screen.zig:2371-2377, 2444-2450` → **Rustty:** `crates/rustty-vt/src/snapshot/screen.rs:2971, 3050`
   - **Audit's suggested fix:** Change both call sites to `screen_options(1, 1, Some(0))` so the decode options match the reference's `Options` default.
@@ -429,11 +429,11 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** PORT NOTE states ModePacked::BITS is 42; it is 43
   - **Oracle:** `src/terminal/snapshot/terminal.zig:247-249` → **Rustty:** `crates/rustty-vt/src/snapshot/terminal.rs:285-291`
   - **Audit's suggested fix:** Change the parenthetical to 43.
-- [ ] **S208-F1** · CONFIRMED · `LOG` · behavioral-difference
+- [x] **S208-F1** · CONFIRMED · `LOG` · behavioral-difference
   - **What:** Notification format/Display output text differs from the reference's comptime-reflected format
   - **Oracle:** `src/terminal/tmux/control.zig:568-590` → **Rustty:** `crates/rustty-vt/src/tmux/control.rs:878-975`
   - **Audit's suggested fix:** Emit `terminal.tmux.control.Notification` as the type name, print `void` for the payload-less tags, and render the struct payloads the way Zig's `{any}` does (byte-array members), or accept the divergence explicitly in the PORT NOTE since the only consumer is a log line.
-- [ ] **S208-F2** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S208-F2** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** tmux output delimiter is treated as a Unicode char rather than a byte
   - **Oracle:** `src/terminal/tmux/output.zig:17-36, 57-66` → **Rustty:** `crates/rustty-vt/src/tmux/output.rs:104-119, 383-405`
   - **Audit's suggested fix:** Split/emit on the raw byte (operate on `&[u8]`, or assert/restrict the delimiter to ASCII) so a >=0x80 delimiter behaves as in the reference.

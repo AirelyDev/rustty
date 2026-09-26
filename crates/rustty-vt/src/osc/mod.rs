@@ -580,6 +580,22 @@ pub struct Parser<'a> {
     /// smaller policy than the default.
     pub max_allocating_bytes: usize,
 
+    /// Where an allocating capture's memory comes from.
+    // PORT NOTE (parity S174-F3): not a reference field. The reference's
+    // allocating capture uses `alloc` itself
+    // (`std.Io.Writer.Allocating.initCapacity(alloc, ..)`, osc.zig:509), but
+    // `alloc` is a `ZigAllocatorRef<'a>` here and a capture that borrowed it
+    // would give every `Stream` (whose parser shares the stream's lifetime)
+    // drop glue over `'a`. So the capture's allocator is set separately, and
+    // only to an allocator that outlives the parser: the embedder's allocator
+    // (`crate::alloc::default(alloc_)`) for the C-created parsers (vt-c's
+    // `rustty_osc_new` and the `rustty_terminal_new` stream), which is where
+    // the reference would put the capture. Every other parser keeps the Rust
+    // global heap, which is where their `alloc` (the process-global zig
+    // allocator) allocates anyway. (S7-7 retires the split: `alloc` becomes
+    // the handle itself.)
+    pub capture_alloc: CaptureAllocator,
+
     /// Current state of the parser.
     pub state: State,
 
@@ -652,6 +668,21 @@ pub enum State {
     S5522,
 }
 
+impl State {
+    /// `@tagName(state)`, as `{t}` prints it: `start`, `invalid`, or the
+    /// OSC number (`@"52"` is `52`).
+    // PORT NOTE: the numeric reference tags are spelled `S<n>` here (a Rust
+    // identifier cannot start with a digit); the tag is the variant name with
+    // that `S` removed, or the lower-cased name for the two word tags.
+    pub fn tag_name(self) -> String {
+        let name = format!("{self:?}");
+        match name.strip_prefix('S') {
+            Some(digits) if digits.bytes().all(|b| b.is_ascii_digit()) => digits.to_string(),
+            _ => name.to_ascii_lowercase(),
+        }
+    }
+}
+
 /// PORT NOTE: the capture backing. The reference uses `std.Io.Writer` over
 /// either a fixed buffer or an allocating buffer. The filled parser path
 /// threads the fixed/allocating distinction through `CaptureMode`.
@@ -674,8 +705,30 @@ pub enum CaptureBacking {
     /// The count of bytes captured so far into `Parser.buffer` — the Zig fixed
     /// writer's `end` index over `&self.buffer` (osc.zig:462-467).
     Fixed(usize),
-    Allocating(Vec<u8>),
+    /// `std.Io.Writer.Allocating`, over `Parser.capture_alloc`.
+    Allocating(allocator_api2::vec::Vec<u8, CaptureAllocator>),
 }
+
+/// The allocator of an allocating capture (see `Parser.capture_alloc`).
+///
+/// CORRECTION (parity S174-F3): the allocating capture used to be a plain
+/// global-heap `Vec<u8>` that aborted on allocation failure. It now
+/// allocates, grows and frees through this allocator, and a failure takes
+/// the reference's paths (the fixed fallback for `initCapacity`,
+/// `error.WriteFailed` for a `realloc`) instead of aborting.
+///
+/// PORT NOTE (parity tail S7-1): this was a two-arm enum (`Global` or a
+/// `&'static dyn ZigAllocator`) with its own allocator_api2 impl. It is now the
+/// crate's runtime allocator handle, `crate::alloc::VtAllocator`, whose
+/// `Global` arm is the same Rust global heap and whose C arm calls the
+/// caller's `RusttyAllocator` vtable directly (what the `Zig` arm reached
+/// through `CAllocatorAsZig`). The handle's `grow` is Zig's `realloc`
+/// (`remap`, then alloc + copy + free), which is what the reference's
+/// `w.allocator.realloc(..)` does here; the enum had no `grow`, so it always
+/// took allocator_api2's default alloc + copy + free. The inlined arms keep the
+/// T-A3 perf shape (a null test plus the `Global` call; the C arm is out of
+/// line).
+pub type CaptureAllocator = crate::alloc::VtAllocator;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CaptureMode {
@@ -761,10 +814,13 @@ impl Capture {
                     // zero-capacity buffer growable.
                     let new_capacity = self.max_bytes.min(w.capacity().saturating_mul(2).max(1));
                     // w.writer.buffer = w.allocator.realloc(w.writer.buffer, new_capacity)
-                    // PORT NOTE: `reserve_exact` grows the Vec's backing to
+                    //     catch return error.WriteFailed;
+                    // PORT NOTE: `try_reserve_exact` grows the Vec's backing to
                     // exactly `new_capacity` (len + additional), mirroring the
-                    // bounded realloc.
-                    w.reserve_exact(new_capacity - w.len());
+                    // bounded realloc (S174-F3).
+                    if w.try_reserve_exact(new_capacity - w.len()).is_err() {
+                        return false;
+                    }
                 }
                 w.push(c);
                 true
@@ -826,14 +882,36 @@ impl Capture {
                     //     w.writer.buffer,
                     //     new_capacity,
                     // ) catch return error.WriteFailed;
-                    // PORT NOTE: `reserve_exact` mirrors the bounded realloc
-                    // (allocation failure aborts in Rust rather than
-                    // surfacing `error.WriteFailed`; the reference's OOM arm
-                    // is unreachable through the ported allocator).
-                    w.reserve_exact(new_capacity - w.len());
+                    // PORT NOTE: `try_reserve_exact` mirrors the bounded
+                    // realloc (S174-F3).
+                    if w.try_reserve_exact(new_capacity - w.len()).is_err() {
+                        return false;
+                    }
                 }
                 // try self.writer.writeAll(bytes[0..n]);
-                w.extend_from_slice(&bytes[..n]);
+                // PERF(port): allocator_api2 0.2's `Vec::extend_from_slice` is
+                // `extend(iter().cloned())`, a byte-at-a-time push loop with no
+                // memcpy specialization (review-T-A2 blocking item 1: OSC 52
+                // stream 16.4 -> 40.0 ms). The reference's `writeAll` is a
+                // memcpy into the already-sized buffer; do the same.
+                // R7: the branch above guarantees `needed <= capacity` (either
+                // it already held, or `try_reserve_exact` succeeded with
+                // `new_capacity >= needed`: `max_bytes >= needed` because
+                // `n <= avail`). Release-checked, not a debug assert.
+                assert!(needed <= w.capacity());
+                let len = w.len();
+                // SAFETY: `len + n == needed <= w.capacity()` (asserted
+                // above), so the destination `[len, len + n)` lies inside
+                // the Vec's allocation. `bytes` is a `&[u8]` borrow distinct
+                // from `w` (we hold `&mut` to `w` through `self.backing`, and
+                // `bytes` is a separate argument), so the two ranges cannot
+                // overlap. `u8` is `Copy` with no invalid bit patterns, so
+                // the `n` copied bytes are initialized before `set_len`
+                // exposes them.
+                unsafe {
+                    core::ptr::copy_nonoverlapping(bytes.as_ptr(), w.as_mut_ptr().add(len), n);
+                    w.set_len(needed);
+                }
             }
         }
 
@@ -863,6 +941,7 @@ impl<'a> Parser<'a> {
         Parser {
             alloc,
             max_allocating_bytes: MAX_ALLOCATING_BUF,
+            capture_alloc: CaptureAllocator::GLOBAL,
             state: State::Start,
             capture: None,
             command: Command::Invalid,
@@ -950,11 +1029,17 @@ impl<'a> Parser<'a> {
         if self.alloc.is_some() {
             return true;
         }
-        // PORT NOTE: `const log = std.log.scoped(.osc);` — Rustty has no logging
-        // facade wired into this crate (matching the convention used by PageList
-        // / DCS et al.), so the scoped logger and its calls are ported as
-        // commented lines.
+        // const log = std.log.scoped(.osc);
         // log.warn("An allocator is required to process OSC {t} but none was provided.", .{self.state});
+        // CORRECTION (parity S156-F4): a PORT NOTE here said "Rustty has no
+        // logging facade wired into this crate (matching the convention used by
+        // PageList / DCS et al.), so the scoped logger and its calls are ported
+        // as commented lines". The crate logs through the `log` facade.
+        log::warn!(
+            target: "osc",
+            "An allocator is required to process OSC {} but none was provided.",
+            self.state.tag_name()
+        );
         self.state = State::Invalid;
         false
     }
@@ -993,14 +1078,21 @@ impl<'a> Parser<'a> {
                     return;
                 }
 
-                // PORT NOTE: the allocating writer's
-                // `initCapacity(alloc, @min(MAX_BUF, max_bytes))` failure path
-                // also falls back to the fixed buffer; here the backing `Vec`
-                // is grown on demand (bounded by `max_bytes`).
+                // Capture.allocating(&self.capture, alloc, self.max_allocating_bytes) catch {
+                //     // The allocator failed for some reason, fall back to a fixed buffer
+                //     // and hope that it's big enough.
+                //     self.captureTrailing(.fixed);
+                //     return;
+                // };
+                let mut w = allocator_api2::vec::Vec::new_in(self.capture_alloc);
+                if w.try_reserve_exact(MAX_BUF.min(self.max_allocating_bytes))
+                    .is_err()
+                {
+                    self.capture_trailing(CaptureMode::Fixed);
+                    return;
+                }
                 self.capture = Some(Capture {
-                    backing: CaptureBacking::Allocating(Vec::with_capacity(
-                        MAX_BUF.min(self.max_allocating_bytes),
-                    )),
+                    backing: CaptureBacking::Allocating(w),
                     max_bytes: self.max_allocating_bytes,
                 });
             }
@@ -1107,7 +1199,12 @@ impl<'a> Parser<'a> {
                             // R7: `*|` saturating multiply, `@max(.., 1)` floor.
                             let new_capacity =
                                 cap.max_bytes.min(w.capacity().saturating_mul(2).max(1));
-                            w.reserve_exact(new_capacity - w.len());
+                            // `realloc(..) catch return error.WriteFailed`,
+                            // which `next` turns into `.invalid` (S174-F3).
+                            if w.try_reserve_exact(new_capacity - w.len()).is_err() {
+                                self.state = State::Invalid;
+                                return;
+                            }
                         }
                         w.push(c);
                     }
@@ -1445,6 +1542,32 @@ mod capture_tests {
     use super::*;
     use rustty_lib::allocator::{GlobalZigAllocator, ZigAllocatorRef};
 
+    // Parity S156-F4 (no reference test): `ensureAllocator` warns, naming the
+    // state with `{t}`, before it invalidates the parser.
+    #[test]
+    fn ensure_allocator_warns_when_no_allocator_was_provided() {
+        assert_eq!("start", State::Start.tag_name());
+        assert_eq!("invalid", State::Invalid.tag_name());
+        assert_eq!("5522", State::S5522.tag_name());
+
+        let mut p = Parser::init(None);
+        let cap = crate::log_capture::start();
+        for ch in b"10;" {
+            p.next(*ch);
+        }
+        let messages = cap.messages();
+        drop(cap);
+        assert_eq!(State::Invalid, p.state);
+        assert_eq!(
+            vec![(
+                log::Level::Warn,
+                "osc".to_string(),
+                "An allocator is required to process OSC 10 but none was provided.".to_string(),
+            )],
+            messages
+        );
+    }
+
     // test "Parser allocating captures have a hard limit"
     #[test]
     fn parser_allocating_captures_have_a_hard_limit() {
@@ -1562,6 +1685,55 @@ mod capture_tests {
         }
 
         p.deinit();
+    }
+
+    // Port-only (no reference test): pins the bytes, length and capacity of
+    // `Capture::write_slice`'s allocating arm, whose append is a raw
+    // `copy_nonoverlapping` + `set_len` (review-T-A2 blocking item 1). It
+    // covers the three shapes: an append that fits in the spare capacity, an
+    // append that grows the buffer (doubling, then clamped to `max_bytes`),
+    // and an append truncated at `max_bytes`. Distinct bytes per position
+    // catch a wrong offset or a stale length.
+    #[test]
+    fn capture_write_slice_allocating_arm_appends_exact_bytes() {
+        let mut buffer = [0u8; MAX_BUF];
+        let mut w = allocator_api2::vec::Vec::new_in(CaptureAllocator::GLOBAL);
+        w.try_reserve_exact(4).unwrap();
+        let mut cap = Capture {
+            backing: CaptureBacking::Allocating(w),
+            max_bytes: 10,
+        };
+        let cap_of = |cap: &Capture| match &cap.backing {
+            CaptureBacking::Allocating(w) => w.capacity(),
+            CaptureBacking::Fixed(_) => unreachable!(),
+        };
+        let initial = cap_of(&cap);
+        assert!(initial >= 4);
+
+        // Fits in the reserved capacity: no growth.
+        assert!(cap.write_slice(&mut buffer, b"ab"));
+        assert_eq!(b"ab".as_slice(), cap.trailing(&buffer));
+        assert_eq!(initial, cap_of(&cap));
+
+        // Empty append is a no-op.
+        assert!(cap.write_slice(&mut buffer, b""));
+        assert_eq!(b"ab".as_slice(), cap.trailing(&buffer));
+
+        // Needs growth: needed = 2 + 5 = 7.
+        assert!(cap.write_slice(&mut buffer, b"cdefg"));
+        assert_eq!(b"abcdefg".as_slice(), cap.trailing(&buffer));
+        assert!(cap_of(&cap) >= 7 && cap_of(&cap) <= 10);
+
+        // Truncated at max_bytes: the first 3 bytes land, the write fails.
+        assert!(!cap.write_slice(&mut buffer, b"hijkl"));
+        assert_eq!(b"abcdefghij".as_slice(), cap.trailing(&buffer));
+        assert_eq!(10, cap_of(&cap));
+
+        // Full: nothing more lands.
+        assert!(!cap.write_slice(&mut buffer, b"z"));
+        assert_eq!(b"abcdefghij".as_slice(), cap.trailing(&buffer));
+        // The fixed buffer was never touched by the allocating arm.
+        assert!(buffer.iter().all(|&b| b == 0));
     }
 
     // test "Parser nextSlice matches per-byte parsing"

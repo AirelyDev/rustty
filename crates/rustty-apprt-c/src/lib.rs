@@ -52,6 +52,17 @@
 //! Carved incrementally (R1: every line/comment/test{} ported as the crate is
 //! carved, leaves-first, under the acyclicity gate per R4).
 
+// reference (main_c.zig:1-8), the C API hub's file header:
+//
+// This is the main file for the C API. The C API is used to embed Rustty
+// within other applications. Depending on the build settings some APIs
+// may not be available (i.e. embedding into macOS exposes various Metal
+// support).
+//
+// This currently isn't supported as a general purpose embedding API.
+// This is currently used only to embed rustty within a macOS app. However,
+// it could be expanded to be general purpose in the future.
+
 use core::ffi::{c_void, CStr};
 use std::mem::ManuallyDrop;
 
@@ -156,13 +167,48 @@ type CoreSurface = rustty_core::surface::Surface<App>;
 // field type) stays in `rustty-apprt`; `capi` only re-asserts its ABI.
 pub mod capi;
 
-// reference (main_c.zig:31-46): the C API hub's `comptime` block force-references
+// reference (main_c.zig:21-32), verbatim:
+//
+//   // Some comptime assertions that our C API depends on.
+//   comptime {
+//       // We allow tests to reference this file because we unit test
+//       // some of the C API. At runtime though we should never get these
+//       // functions unless we are building librustty.
+//       if (!builtin.is_test) {
+//           assert(apprt.runtime == apprt.embedded);
+//       }
+//   }
+//
+//   /// Global options so we can log. This is identical to main.
+//   pub const std_options = main.std_options;
+//
+// PORT NOTE: the runtime assertion is structural here — this crate binds
+// `A = rustty_apprt::embedded::App` for every export, so no other runtime can
+// reach it. `std_options` is `rustty_core::logging` (installed by `rustty_init`).
+//
+// reference (main_c.zig:34-50): the C API hub's `comptime` block force-references
 // the sibling C-API decls so their `export` fns are truly emitted by the C API lib:
 //   comptime {
-//       _ = @import("config.zig").CApi;                              // Config C ABI
-//       if (@hasDecl(apprt.runtime, "CAPI")) _ = apprt.runtime.CAPI; // apprt.embedded
-//       _ = @import("benchmark/main.zig").CApi;                      // benchmark
+//       // These structs need to be referenced so the `export` functions
+//       // are truly exported by the C API lib.
+//
+//       // Our config API
+//       _ = @import("config.zig").CApi;
+//
+//       // Any apprt-specific C API, mainly librustty for apprt.embedded.
+//       if (@hasDecl(apprt.runtime, "CAPI")) _ = apprt.runtime.CAPI;
+//
+//       // Our benchmark API. We probably want to gate this on a build
+//       // config in the future but for now we always just export it.
+//       _ = @import("benchmark/main.zig").CApi;
+//
+//       // Force-reference our memset override so its export is emitted.
+//       // See quirks_memset.zig for details on why this exists.
+//       _ = @import("quirks_memset.zig");
 //   }
+//
+// The memset force-reference is a NON-PORT (`.port/phase-3/NON_PORTS.md` §E34:
+// a Zig-toolchain workaround; rustc lowers memset to the platform libc).
 //
 // In rustty: `config.CApi` is force-linked already (this crate USES
 // `rustty_config::Config`, pulling its rlib — incl. the `rustty_config_*`
@@ -270,6 +316,20 @@ pub unsafe extern "C" fn rustty_init(argc: usize, argv: *mut *mut c_char) -> c_i
 
     // reference: assert(builtin.link_libc);  (Rust `std` always links libc.)
 
+    // reference (main_c.zig:112-128), the environ half of `global.init(.{ .c = ... })`:
+    //
+    //   .environ = if (std.process.Environ.Block == std.process.Environ.PosixBlock)
+    //       // Asserting libc means that we can fast-path all POSIX blocks
+    //       .{ .block = .{ .slice = std.c.environ[0..env_len: { ... } :null] } }
+    //   else
+    //       // Anything that is not using PosixBlock is a global block for
+    //       // purposes of initialization.
+    //       .{ .block = .{ .use_global = true } },
+    //
+    // PORT NOTE: both arms name the process's own libc `environ`; rustty reads
+    // that same block through `rustty_global::environ::Environ::from_process()`
+    // inside the init below (`GlobalState::new_with_environ`'s PORT NOTE).
+
     // The `.c` arm of `global.init`'s `args` field (`global.zig:62-77`, `e8525c0fd`):
     //
     //   // TODO: Using the C API from Windows is unsupported at this time.
@@ -355,8 +415,11 @@ pub unsafe extern "C" fn rustty_init(argc: usize, argv: *mut *mut c_char) -> c_i
 /// C: rustty_cli_try_action
 ///
 /// Runs an action if it is specified. If there is no action this returns
-/// (the GUI-launch path). If there is an action then this doesn't return
-/// (it `posix.exit`s with the action's result code).
+/// false. If there is an action then this doesn't return.
+///
+/// PORT NOTE: "returns false" is the reference doc's wording; the reference fn
+/// returns `void` (the GUI-launch path simply returns), and with an action it
+/// `posix.exit`s with the action's result code.
 ///
 /// PORT NOTE: rustty analogue of `ghostty_cli_try_action` (main_c.zig:120):
 /// ```zig
@@ -1033,7 +1096,7 @@ pub enum BuildMode {
 // already collapses the four Zig modes to ("Debug" xor "ReleaseFast"). So a debug build
 // reports `.Debug` and an optimized build `.ReleaseFast` — the two modes rustty can
 // actually be built in; the `release_safe`/`release_small` arms have no rustty analog.
-// `version` is `rustty_build_config::VERSION_STRING` (the reference
+// `version` is `rustty_version::VERSION_STRING` (the reference
 // `build_config.version_string`): a `&'static str` whose `.as_ptr()`/`.len()` map the
 // reference `[*]const u8` `.ptr`/`.len` — a plain (NON-NUL-terminated) byte pointer the
 // host reads for exactly `version_len` bytes. The pointer is into static storage, valid
@@ -1050,9 +1113,9 @@ pub extern "C" fn rustty_info() -> Info {
             BuildMode::ReleaseFast
         },
         // .version = build_config.version_string.ptr,
-        version: rustty_build_config::VERSION_STRING.as_ptr(),
+        version: rustty_version::VERSION_STRING.as_ptr(),
         // .version_len = build_config.version_string.len,
-        version_len: rustty_build_config::VERSION_STRING.len(),
+        version_len: rustty_version::VERSION_STRING.len(),
     }
 }
 
@@ -2835,8 +2898,11 @@ pub unsafe extern "C" fn rustty_surface_set_display_id(ptr: *mut Surface, displa
 // .0.font_grid`) AND messages CoreText via objc2-core-text (`Face.font.attribute`/
 // `copy_with_attributes`). The returned CTFont is +1 — the host balances it with a
 // CFRelease (I16). The reference non-CoreText early return (`return null`) is
-// elided: this export is Darwin-gated and the coretext backend is the Darwin
-// default, so there is never a non-CoreText grid here. Body ported faithfully.
+// live (S-14, N266): `-Dfont-backend` can select a non-`.coretext` backend on
+// macOS (`coretext_freetype`/`coretext_harfbuzz`/`coretext_noshape`/`freetype`),
+// and there the export returns NULL exactly as the reference does. It used to be
+// elided on the premise that the Darwin default is the only Darwin backend.
+// Body ported faithfully.
 #[cfg(any(target_os = "macos", target_os = "ios"))] // isDarwin()
 #[no_mangle]
 pub unsafe extern "C" fn rustty_surface_quicklook_font(ptr: *mut Surface) -> *mut c_void {
@@ -2848,13 +2914,12 @@ pub unsafe extern "C" fn rustty_surface_quicklook_font(ptr: *mut Surface) -> *mu
     use rustty_font_shaper::collection::Index;
     use rustty_font_shaper::{SharedGrid, Style};
 
-    // // For non-CoreText we just return null.
+    // For non-CoreText we just return null.
     // if (comptime font.options.backend != .coretext) {
-    //     return null;
-    // }
-    //
-    // (Elided — see the PORT NOTE above: this Darwin-gated export IS the CoreText
-    // build, so the non-CoreText early return can never fire.)
+    if rustty_font_shaper::options::BACKEND != rustty_font_shaper::Backend::Coretext {
+        // return null;
+        return core::ptr::null_mut();
+    }
 
     // We'll need content scale so fail early if we can't get it.
     // const content_scale = ptr.getContentScale() catch return null;
@@ -2892,6 +2957,13 @@ pub unsafe extern "C" fn rustty_surface_quicklook_font(ptr: *mut Surface) -> *mu
         Ok(f) => f,
         Err(_) => return core::ptr::null_mut(),
     };
+    // `face.font` — the CoreText face's font. Rust-only spelling: this crate
+    // cannot see the backend cfg that makes `Face` the CoreText face, so it asks
+    // the shaper tier, which answers `Some` exactly on `.coretext` — the only
+    // backend the early return above lets reach here.
+    // SAFETY: `face` is the `*mut Face` just returned, live under the read lock.
+    let face_font: &CTFont = rustty_font_shaper::face::coretext_font(unsafe { &*face })
+        .expect("options.backend == .coretext, checked above");
 
     // We need to unscale the content scale. We apply the
     // content scale to our font stack because we are rendering
@@ -2911,7 +2983,7 @@ pub unsafe extern "C" fn rustty_surface_quicklook_font(ptr: *mut Surface) -> *mu
     // `CFRetained<CFType>` that releases on drop = the reference `defer
     // num.release()`); `getValue(.float, &v)` → `CFNumberType::FloatType` (the C
     // `float`). A missing/non-number attribute leaves the default 12.
-    let size: f32 = match unsafe { (*face).font.attribute(kCTFontSizeAttribute) } {
+    let size: f32 = match unsafe { face_font.attribute(kCTFontSizeAttribute) } {
         None => 12.0,
         Some(num) => {
             let mut v: f32 = 12.0;
@@ -2956,11 +3028,11 @@ pub unsafe extern "C" fn rustty_surface_quicklook_font(ptr: *mut Surface) -> *mu
             attributes: *const core::ffi::c_void,
         ) -> *mut CTFont;
     }
-    // SAFETY: `(*face).font` is a live CTFont; `matrix`/`attributes` are the
-    // reference's NULLs.
+    // SAFETY: `face_font` (`(*face).font`) is a live CTFont; `matrix`/
+    // `attributes` are the reference's NULLs.
     let raw = unsafe {
         CTFontCreateCopyWithAttributes(
-            CFRetained::as_ptr(&(*face).font).as_ptr(),
+            face_font as *const CTFont,
             (size / content_scale.y) as f64,
             core::ptr::null(),
             core::ptr::null(),
@@ -3341,7 +3413,7 @@ mod quicklook_word_tests {
     fn quicklook_word_selects_word_under_cursor() {
         // A small live screen with a two-word line.
         let mut s = Screen::init(
-            Global,
+            Global.into(),
             Options {
                 cols: 20,
                 rows: 5,
@@ -3373,7 +3445,7 @@ mod quicklook_word_tests {
         // readTextLocked → dumpTextLocked reads the selection text; the vt-level
         // `selection_string` is that same read (the non-null `Text` the host gets).
         let text = s
-            .selection_string(Global, SelectionString { sel, trim: true })
+            .selection_string(Global.into(), SelectionString { sel, trim: true })
             .unwrap();
         assert_eq!(text.as_slice(), b"world");
 
@@ -3386,7 +3458,7 @@ mod quicklook_word_tests {
         // No text written: the cell under the cursor is empty, so `select_word`
         // returns `None` — the export's `orelse return false` ("no word") degrade.
         let mut s = Screen::init(
-            Global,
+            Global.into(),
             Options {
                 cols: 20,
                 rows: 5,

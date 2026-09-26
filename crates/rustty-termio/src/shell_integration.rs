@@ -384,6 +384,16 @@ fn setupBash(
     // try inject.writeAll("1");
     //
     // (PORT NOTE: the fixed 32-byte writer collapses into a `String`.)
+    //
+    // PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD204. The 32
+    // bytes hold every DISTINCT flag ("1 --norc --noprofile" is 20), but each
+    // repeat of `--norc` / `--noprofile` is appended again, and the fifth
+    // ` --norc` of `bash --norc --norc --norc --norc --norc` makes `writeAll`
+    // fail (`error.WriteFailed`, measured with zig 0.16.0). `setup` passes the
+    // error on and `Exec.zig:800` `try`s it, so the surface fails to start over
+    // a flag the user repeated. The `String` keeps every flag (the script reads
+    // them as words, so a repeat is harmless), which is what the flag list is
+    // for. S213-F2.
     let mut inject = String::from("1");
 
     // Walk through the rest of the given arguments. If we see an option that
@@ -797,14 +807,15 @@ fn setupZsh(
 // PORT NOTE: support shims (Rust-only glue).
 // ---------------------------------------------------------------------------
 
-/// PORT NOTE (Zig-std shim): `std.fs.path.basename` — the final path component
-/// (config theme.rs precedent).
+/// PORT NOTE (Zig-std shim): `std.fs.path.basename`, the port in
+/// `rustty_config::path` (`basenamePosix`, or `basenameWindows` on Windows).
+//
+// CORRECTION (S213-F1): this was a local `rposition(MAIN_SEPARATOR)` shim that
+// did not skip trailing separators, so `basename("/usr/bin/bash/")` was `""`
+// and `detectShell` found no shell (Zig's is `"bash"`), and it ignored `/` and
+// drive prefixes on Windows.
 fn basename(path: &[u8]) -> &[u8] {
-    let sep = std::path::MAIN_SEPARATOR as u8;
-    match path.iter().rposition(|&b| b == sep) {
-        Some(idx) => &path[idx + 1..],
-        None => path,
-    }
+    configpkg::path::basename(path)
 }
 
 /// PORT NOTE (R2 identity): the reference's `GHOSTTY_*` env-var names carry the
@@ -1047,6 +1058,45 @@ mod tests {
             Some(Shell::Bash),
             detectShell(&configpkg::command::Command::Shell(
                 b"\"/a b/bash\"".to_vec()
+            ))
+        );
+    }
+
+    /// S213-F1 (no reference counterpart): `detectShell` takes the executable
+    /// name with zig's `std.fs.path.basename`, which skips trailing separators.
+    /// The rows are zig 0.16.0's own `test basename` rows for the native
+    /// (POSIX) `basename`, `std/fs/path.zig:1441-1455`, then the shell case.
+    #[test]
+    #[cfg(not(windows))]
+    fn detect_shell_basename_skips_trailing_separators() {
+        for (input, want) in [
+            (&b""[..], &b""[..]),
+            (b"/", b""),
+            (b"/dir/basename.ext", b"basename.ext"),
+            (b"/basename.ext", b"basename.ext"),
+            (b"basename.ext", b"basename.ext"),
+            (b"basename.ext/", b"basename.ext"),
+            (b"basename.ext//", b"basename.ext"),
+            (b"/aaa/bbb", b"bbb"),
+            (b"/aaa/", b"aaa"),
+            (b"/aaa/b", b"b"),
+            (b"/a/b", b"b"),
+            // For Windows, this is a UNC path that only has a server name component.
+            (b"//a", b"a"),
+        ] {
+            assert_eq!(basename(input), want, "{:?}", input);
+        }
+
+        assert_eq!(
+            Some(Shell::Zsh),
+            detectShell(&configpkg::command::Command::Shell(
+                b"/usr/bin/zsh/".to_vec()
+            ))
+        );
+        assert_eq!(
+            Some(Shell::Bash),
+            detectShell(&configpkg::command::Command::Shell(
+                b"/opt/bin/bash//".to_vec()
             ))
         );
     }
@@ -1302,6 +1352,33 @@ mod tests {
         res.deinit();
     }
 
+    /// S213-F2 / UD204 (no reference counterpart): repeated inject flags that
+    /// overflow the reference's 32-byte buffer (41 bytes here) still set up
+    /// the integration, with every flag passed on, instead of failing
+    /// `setupBash` and with it the surface.
+    #[test]
+    fn bash_repeated_inject_flags_do_not_fail_setup() {
+        let mut res = TmpResourcesDir::init(Shell::Bash);
+        let mut env = EnvMap::new();
+
+        let command = setupBash(
+            &configpkg::command::Command::Shell(
+                b"bash --norc --norc --norc --noprofile --norc".to_vec(),
+            ),
+            &res.path,
+            &mut env,
+        )
+        .expect("repeated flags must not fail setupBash");
+        assert!(
+            matches!(command, Some(configpkg::command::Command::Shell(ref v)) if v == b"bash --posix")
+        );
+        let inject = env.getv(&env_name("BASH_INJECT")).unwrap();
+        assert_eq!(b"1 --norc --norc --norc --noprofile --norc", inject);
+        assert!(inject.len() > 32, "the case exceeds the reference's buffer");
+
+        res.deinit();
+    }
+
     // test "bash: rcfile" {
     #[test]
     fn bash_rcfile() {
@@ -1502,6 +1579,7 @@ mod tests {
 
     // test "xdg: empty XDG_DATA_DIRS" {
     #[test]
+    #[cfg_attr(windows, ignore = "the body only exists under cfg(not(windows)) (R14)")]
     fn xdg_empty_xdg_data_dirs() {
         // if (builtin.os.tag == .windows) return error.SkipZigTest;
         #[cfg(not(windows))]
@@ -1539,6 +1617,7 @@ mod tests {
 
     // test "xdg: existing XDG_DATA_DIRS" {
     #[test]
+    #[cfg_attr(windows, ignore = "the body only exists under cfg(not(windows)) (R14)")]
     fn xdg_existing_xdg_data_dirs() {
         // if (builtin.os.tag == .windows) return error.SkipZigTest;
         #[cfg(not(windows))]

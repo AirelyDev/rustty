@@ -62,10 +62,9 @@ target_link_libraries(myapp PRIVATE rustty-vt::rustty-vt)
 The `rustty-vt-static` target links librustty-vt as a static archive. Because
 Cargo's static libraries do not bundle native platform dependencies, the
 consumer must link the system libraries Rust's std relies on; these are set on
-the target's `INTERFACE_LINK_LIBRARIES` automatically. On macOS, static
-linking additionally needs `libintl` (the static archive pulls in an i18n
-object that references gettext) — install it with `brew install gettext`. On
-Linux, glibc provides these symbols, so no extra package is needed.
+the target's `INTERFACE_LINK_LIBRARIES` automatically. No gettext package is
+needed: on macOS the archive carries its own copy of libintl, and on Linux
+glibc provides these symbols.
 
 ## SIMD
 

@@ -22,11 +22,11 @@
 //! `Terminal.init(...) catch return` skip-on-OOM is preserved via the
 //! `Result` returned by `Terminal::init`.
 
+use crate::alloc::Global;
 use crate::osc;
 use crate::parser::Parser;
 use crate::terminal::{Colors, Options, Terminal};
 use crate::{color, kitty, modes};
-use allocator_api2::alloc::Global;
 use rustty_lib::allocator::{FixedBufferAllocator, ZigAllocatorRef};
 
 /// The osc harness's fixed-buffer allocator size.

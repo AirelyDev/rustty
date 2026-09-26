@@ -152,6 +152,8 @@ pub enum Error {
     Create(CreateError),
     // _ = try b.run(.once);
     Benchmark(benchmark::Error),
+    // try global.init(.{ .tool = minimal });
+    GlobalInit(rustty_apprt::InitError),
 }
 
 impl From<rustty_args::args::ParseError> for Error {
@@ -182,23 +184,44 @@ impl From<benchmark::Error> for Error {
 }
 
 /// An entrypoint for the benchmark CLI.
-// pub fn main() !void {
+// pub fn main(minimal: std.process.Init.Minimal) !void {
+//     try global.init(.{ .tool = minimal });
 //     const alloc = std.heap.c_allocator;
-//     const action_ = try cli.action.detectArgs(Action, alloc);
+//     const action_ = try cli.action.detectArgs(Action, alloc, minimal.args);
 //     const action = action_ orelse return error.NoAction;
-//     try mainAction(alloc, action, .cli);
+//     try mainAction(alloc, action, .{ .cli = minimal.args });
 // }
 //
-// PORT NOTE: `std.heap.c_allocator` -> the process `Global` allocator. The
-// reference `cli.action.detectArgs(Action, alloc)` is the SHARED action
-// auto-detect that lives in `rustty-cli` (a heavy crate — core/apprt/config —
-// that rustty-bench deliberately does NOT depend on to stay lean and acyclic).
+// (CORRECTION, parity S62-F2 review: the block above used to quote the older
+// `pub fn main() !void`, with no `global.init` and `detectArgs(Action,
+// alloc)`, which is not the pinned `benchmark/cli.zig:54-60`.)
+//
+// PORT NOTE: `std.heap.c_allocator` -> the process `Global` allocator;
+// `minimal.args` -> `std::env::args_os` (read inside `detect_args` and
+// `args_iterator`). The reference `cli.action.detectArgs` is the SHARED action
+// auto-detect that lives in `rustty-cli`, which rustty-bench does not depend
+// on; it does depend on rustty-apprt, for the `.tool` init (S43-F3).
+// (CORRECTION: this note used to call rustty-cli "a heavy crate —
+// core/apprt/config — that rustty-bench deliberately does NOT depend on to stay
+// lean and acyclic", which stopped being true of apprt with S43-F3.)
 // This standalone `main()` is exercised only by the out-of-scope `main_bench.zig`
 // binary; its detect logic (find the single `+name` arg, `stringToEnum`) is
 // replicated locally over `std::env::args_os` (DEFERRALS.md "benchmark: shared
 // detectArgs"). The benchmark `Action` declares no `detectSpecialCase`, so the
 // special-case arm of `detectIter` is elided.
+//
+// PORT NOTE (parity S43-F3, controller Decision B): the reference `main` now
+// begins with `try global.init(.{ .tool = minimal });` (`cli.zig:55`): the full
+// process init (RUSTTY_LOG, signals, rlimits, locale, crash, glslang,
+// oniguruma, resources dir, i18n) with app-action detection skipped, because
+// the tool's `+terminal-stream` etc. are not app actions. The port's global
+// init is `rustty_apprt::init_with_action`, and `false` ("no app action") is
+// that `.tool` arm. The C API reaches `main_action`, not this function, so it
+// keeps relying on `rustty_init` having run, as the reference's `CApi.zig`
+// does. The benchmark timers start inside `Benchmark::run`, after this.
 pub fn main() -> Result<(), Error> {
+    // try global.init(.{ .tool = minimal });
+    rustty_apprt::init_with_action(false).map_err(Error::GlobalInit)?;
     let alloc = Allocator;
     let action_ = detect_args()?;
     // const action = action_ orelse return error.NoAction;
@@ -301,21 +324,19 @@ fn main_action_impl<B: BenchmarkAction>(alloc: Allocator, args: Args) -> Result<
         }
         // .string => |str| {
         Args::String(str) => {
-            // var iter = try std.process.ArgIteratorGeneral(.{}).init(alloc, str);
+            // var iter = try std.process.Args.IteratorGeneral(.{}).init(alloc, str);
             // defer iter.deinit();
             //
-            // PORT NOTE (§6): `std.process.ArgIteratorGeneral` splits a single
-            // string into argv (honoring quotes/backslashes). rustty-args exposes
-            // the pre-split `SliceIterator`; the benchmark C-ABI args are simple
-            // whitespace-separated flags, so we tokenize on ASCII whitespace
-            // (the quote/escape handling is not exercised by the benchmark).
-            let tokens: Vec<&[u8]> = str
-                .split(|b| matches!(b, b' ' | b'\t' | b'\n' | b'\r'))
-                .filter(|t| !t.is_empty())
-                .collect();
-            let mut iter = rustty_args::args::slice_iterator(&tokens);
+            // PORT NOTE (parity S62-F1): the reference tokenizes with Zig std's
+            // `IteratorGeneral(.{})`, which honours double quotes and backslash
+            // escapes; its port is `rustty_args::arg_iterator_general`.
+            // CORRECTION: this arm used to split on ASCII whitespace, with a note
+            // saying "the quote/escape handling is not exercised".
+            let mut iter = rustty_args::arg_iterator_general::ArgIteratorGeneral::init(str);
             // try cli.args.parse(Options, alloc, &opts, &iter);
-            rustty_args::args::parse(&mut opts, &mut iter)?;
+            let result = rustty_args::args::parse(&mut opts, &mut iter);
+            iter.deinit();
+            result?;
         }
     }
 
@@ -387,5 +408,61 @@ mod tests {
         assert_eq!(None, Action::from_name(b"nope"));
         // A near-miss must not resolve: `from_name` is an exact match.
         assert_eq!(None, Action::from_name(b"hyperlink_map"));
+    }
+
+    /// Parity S62-F1: the `.string` arm tokenizes with `IteratorGeneral(.{})`
+    /// (`cli.zig:99-106`), so a double-quoted `--data` value containing a space
+    /// is ONE argument with the quotes stripped. A whitespace split turns it
+    /// into `--data="<dir>/a` and `b.vt"`, which fails to parse.
+    #[test]
+    fn string_args_honour_quotes_like_arg_iterator_general() {
+        use super::{main_action, Args, Error};
+        use std::os::unix::ffi::OsStrExt as _;
+
+        let mut dir = std::env::temp_dir();
+        dir.push(format!(
+            "rustty-s62-f1-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("a b.vt");
+        std::fs::write(&path, b"hello\r\n\x1b[1mworld").unwrap();
+
+        let quoted = |p: &std::path::Path| {
+            let mut s = b"--data=\"".to_vec();
+            s.extend_from_slice(p.as_os_str().as_bytes());
+            s.push(b'"');
+            s
+        };
+
+        // The file exists: the quoted path opens and the benchmark runs.
+        let args = quoted(&path);
+        let ok = main_action(
+            super::Allocator,
+            Action::TerminalParser,
+            Args::String(&args),
+        );
+
+        // The same quoted form naming a missing file fails in setup (the data
+        // file cannot be opened), which shows the path reached `dataFile`.
+        let missing = quoted(&dir.join("missing c.vt"));
+        let err = main_action(
+            super::Allocator,
+            Action::TerminalParser,
+            Args::String(&missing),
+        );
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
+
+        assert!(
+            ok.is_ok(),
+            "quoted --data with a space must parse and open: {ok:?}"
+        );
+        assert!(
+            matches!(err, Err(Error::Benchmark(_))),
+            "a missing quoted path must fail opening the data file, not parsing: {err:?}"
+        );
     }
 }

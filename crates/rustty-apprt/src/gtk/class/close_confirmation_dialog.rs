@@ -23,10 +23,11 @@ use crate::gtk::i18n::tr;
 
 /// The target of a close dialog.
 ///
-/// PORTS: `close_confirmation_dialog.zig:171-204` `Target`. "This is here so that
-/// we can consolidate all logic related to prompting the user and closing
-/// windows/tabs/surfaces/etc. together into one struct that is the sole source of
-/// truth."
+/// This is here so that we can consolidate all logic related to
+/// prompting the user and closing windows/tabs/surfaces/etc.
+/// together into one struct that is the sole source of truth.
+///
+/// PORTS: `close_confirmation_dialog.zig:171-204` `Target`.
 #[derive(Debug, Default, Copy, Clone, PartialEq, Eq, glib::Enum)]
 #[enum_type(name = "GhosttyCloseConfirmationDialogTarget")]
 #[repr(i32)]
@@ -181,9 +182,12 @@ impl CloseConfirmationDialog {
     /// PORTS: `close_confirmation_dialog.zig:83-91` `present`. Set the heading/body
     /// from the target, then present over `parent`.
     pub fn present(&self, parent: Option<&gtk4::Widget>) {
+        // Setup our title/body text.
         let target = self.target();
         self.set_heading(Some(target.title()));
         self.set_body(target.body());
+
+        // Show it
         AdwDialogExt::present(self, parent);
     }
 }

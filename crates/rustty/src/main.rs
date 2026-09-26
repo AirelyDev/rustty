@@ -29,11 +29,19 @@
 //! `main_gen.zig`/`main_wasm.zig`/`main_build_data.zig` (0t gen/wasm artifacts,
 //! not on the `rustty` exe's switch above) are deferred (DEFERRALS.md).
 
+// `GhosttyExe.zig:43-49`: `exe.subsystem = .Windows` on Windows (S63-F5).
+// The `.rc` resource half is `build.rs`.
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
 // /// See build_config.ExeEntrypoint for why we do this.
 // const entrypoint = switch (build_config.exe_entrypoint) {
 //     .ghostty => @import("main_ghostty.zig"), ...
 // };
 mod main_rustty;
+
+#[cfg(test)]
+#[path = "build_checks.rs"]
+mod build_checks;
 
 /// The main entrypoint for the program.
 // pub const main = entrypoint.main;
@@ -59,11 +67,31 @@ fn main() {
 // `main_rustty` (`std_options` + `log_fn` — a deferred log-facade seam,
 // consistent with the rest of the tree; see there).
 
+// comptime {
+//     // Force-reference our memset override so its export is emitted.
+//     // See quirks_memset.zig for details on why this exists.
+//     _ = @import("quirks_memset.zig");
+// }
+//
+// NON-PORT (`.port/phase-3/NON_PORTS.md` §E34): `quirks_memset.zig` is a
+// Zig-toolchain workaround with no Rust counterpart (rustc lowers memset to the
+// platform libc), so this wiring block is deliberately absent, not dropped —
+// the `rustty-bench` `main_bench.rs` precedent.
+
 #[cfg(test)]
 mod tests {
     // test {
+    //     // Zig 0.16.0 has made test logging more strict. Now, *anything* that gets
+    //     // printed to stderr results in a "failed command" message, even if the
+    //     // tests ultimately passed. To reduce confusion here (and honestly, test
+    //     // log spam in general), we bump the default testing log level to error.
+    //     std.testing.log_level = std.log.Level.err;
     //     _ = entrypoint;
+    //     _ = @import("quirks_memset.zig");
     // }
+    //
+    // PORT NOTE: libtest has no log level to bump (the Zig 0.16 stderr rule is a
+    // Zig test-runner behaviour), and the memset import is the §E34 non-port.
     //
     // PORT NOTE: the reference's anonymous `test { _ = entrypoint; }` forces the
     // selected entrypoint to be semantically analyzed. The Rust analogue references

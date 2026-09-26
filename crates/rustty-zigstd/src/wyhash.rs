@@ -346,6 +346,135 @@ mod tests {
         }
     }
 
+    // test "test vectors at comptime" runs the same `vectors` table inside a
+    // `comptime` block, and `test "smhasher"` / `test "iterative api"` below
+    // each run their check a second time as `try comptime Test.do()`. Those
+    // compile-time halves are not ported: Rust has no counterpart to a Zig
+    // `comptime` block, which can evaluate any ordinary function at compile
+    // time. Running this code in a Rust `const` would need the port's `Wyhash`
+    // rewritten as `const fn`, a different function from the one under test.
+    // The runtime halves are the same checks on the same inputs.
+
+    /// `verify.smhasher` (`lib/std/hash/verify.zig`): hash keys `{}`, `{0}`,
+    /// `{0,1}`, ... `{0..254}` with seed `256 - i`, concatenate the 8-byte
+    /// little-endian hashes, and hash that with seed 0; the low 32 bits are
+    /// the SMHasher verification code.
+    fn smhasher() -> u32 {
+        let mut buf = [0u8; 256];
+        let mut buf_all = [0u8; 256 * 8];
+        for i in 0..256usize {
+            // buf[i] = @intCast(i);
+            buf[i] = u8::try_from(i).unwrap();
+            let h = Wyhash::hash((256 - i) as u64, &buf[0..i]);
+            buf_all[i * 8..i * 8 + 8].copy_from_slice(&h.to_le_bytes());
+        }
+        Wyhash::hash(0, &buf_all) as u32
+    }
+
+    /// Zig's `test "smhasher"`.
+    #[test]
+    fn test_smhasher() {
+        assert_eq!(smhasher(), 0xBD5E_840C);
+    }
+
+    /// Zig's `test "iterative api"` (`verify.iterativeApi(Wyhash)`): feed
+    /// chunks of 1, 2, ... 31 zero bytes; after each, `final` twice must agree
+    /// (idempotent) and must equal the one-shot hash of everything so far.
+    #[test]
+    fn test_iterative_api() {
+        // Sum(1..32) = 528
+        let buf = [0u8; 528];
+        let mut len: usize = 0;
+        let seed = 0;
+
+        let mut hasher = Wyhash::init(seed);
+        for i in 1..32 {
+            let r = Wyhash::hash(seed, &buf[0..len + i]);
+            hasher.update(&buf[len..len + i]);
+            let f1 = hasher.finalize();
+            let f2 = hasher.finalize();
+            assert_eq!(f1, f2, "IterativeHashWasNotIdempotent");
+            assert_eq!(f1, r, "IterativeHashDidNotMatchDirect");
+            len += i;
+        }
+    }
+
+    /// A differential against Zig 0.16.0's `std.hash.Wyhash` (task tail-s2,
+    /// NEW-FINDINGS N82). The inputs are 602 random byte strings, lengths
+    /// `k % 301` (0 to 300, twice), seed 0 for the first 301 and a random seed
+    /// after that, drawn from a SplitMix64 stream that the Zig probe
+    /// (`probe_n82.zig`) draws identically; every input is also fed to the
+    /// iterative API in random 1..64-byte chunks. All 602 one-shot and 602
+    /// iterative hashes matched the probe; the rows below keep the ones at
+    /// the length boundaries of the algorithm (`smallKey` <= 16, `final1`
+    /// <= 48, the 48-byte `round`s) with the probe's values.
+    #[test]
+    fn differential_against_zig() {
+        struct SplitMix64(u64);
+        impl SplitMix64 {
+            fn next(&mut self) -> u64 {
+                self.0 = self.0.wrapping_add(0x9e37_79b9_7f4a_7c15);
+                let mut z = self.0;
+                z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+                z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+                z ^ (z >> 31)
+            }
+        }
+
+        // (k, seed, expected) from the Zig probe.
+        let rows: [(usize, u64, u64); 25] = [
+            (0, 0, 0x0409_638e_e2bd_e459),
+            (1, 0, 0x069a_5c31_5a3d_f180),
+            (3, 0, 0xbd38_a3f4_2b32_aecd),
+            (4, 0, 0x078a_be22_5607_e127),
+            (8, 0, 0xca6b_af7b_a8c1_c2c6),
+            (15, 0, 0x3a27_cdba_9081_4fdd),
+            (16, 0, 0x6152_564e_0cd8_9363),
+            (17, 0, 0x3e15_ab60_fbc1_3d38),
+            (47, 0, 0x7e5b_64ec_926e_1fe2),
+            (48, 0, 0xa320_60d8_0387_f7ce),
+            (49, 0, 0x8773_0997_8877_aa51),
+            (95, 0, 0x7ea5_bed2_f124_8abd),
+            (96, 0, 0xa196_869a_a021_bbe9),
+            (97, 0, 0x443b_14e4_34df_dffd),
+            (144, 0, 0x4e25_db19_f4d4_9aae),
+            (145, 0, 0x7689_a8d2_84b4_b4b5),
+            (200, 0, 0x5aa8_5eba_a5ed_668a),
+            (300, 0, 0x3e80_9dd3_7697_d664),
+            (301, 0x1a7e_44f7_add4_1273, 0x2ec8_976a_1b40_d84a),
+            (305, 0x7b23_e450_a17d_5d1b, 0xa897_9d7e_1abd_df65),
+            (349, 0x2d63_c9e8_4c37_1461, 0xcb78_0feb_2d3c_bdeb),
+            (350, 0x340d_ed0f_b6a9_b7be, 0x41b2_07c7_dde5_831c),
+            (397, 0xb27e_d942_accf_5f44, 0x40f7_d00b_3399_bfd2),
+            (450, 0x3997_3b12_5dce_b591, 0x3bf6_a15b_c5e4_f6cc),
+            (601, 0x4241_4865_7410_51df, 0x94e6_aec8_03fe_ecd8),
+        ];
+
+        let mut rng = SplitMix64(0x5eed_0082);
+        let mut checked = 0;
+        for k in 0..602usize {
+            let len = k % 301;
+            let seed = if k < 301 { 0 } else { rng.next() };
+            let buf: Vec<u8> = (0..len).map(|_| rng.next() as u8).collect();
+            let one = Wyhash::hash(seed, &buf);
+            let mut wh = Wyhash::init(seed);
+            let mut i = 0;
+            while i < len {
+                let step = (1 + rng.next() % 64) as usize;
+                let end = len.min(i + step);
+                wh.update(&buf[i..end]);
+                i = end;
+            }
+            assert_eq!(one, wh.finalize(), "k={k}");
+            if let Some(&(_, want_seed, want)) = rows.iter().find(|r| r.0 == k) {
+                assert_eq!(want_seed, seed, "k={k}");
+                assert_eq!(want, one, "k={k}");
+                checked += 1;
+            }
+        }
+        assert_eq!(rows.len(), checked);
+    }
+
     /// Seed-0 rows — the seed ghostty's `AutoContext` uses — generated from the
     /// oracle's Zig 0.16 `std.hash.Wyhash`.
     #[test]

@@ -1,0 +1,39 @@
+# rustty-version — the git-derived app version (`build_config.version`,
+# `version_string`, `release_channel`).
+#
+# PORTS: the version half of `src/build/Config.zig` (`:276-339`, `:693-701`) and
+# `src/build/GitVersion.zig`, read through `src/build_config.zig`'s
+# `version` / `version_string` / `release_channel`.
+#
+# Why a crate of its own (review T-B, blocking 1): the build script watches git
+# (HEAD, its reflog, the branch ref, packed-refs, tags), so this crate is dirty on
+# every commit, checkout or rebase, and cargo recompiles every crate above it.
+# In `rustty-build-config` that was 27 of the workspace's members. Only the crates
+# that actually print or report the app version depend on this one: crash,
+# config, termio, apprt, apprt-c, extra and cli (plus the binaries and xtask above
+# them). rustty-vt, vt-c, font, renderer, os, input and the rest never read it,
+# so a commit no longer recompiles them.
+#
+# The reference has one `build_options` module that every artifact imports, so
+# each of its artifacts rebuilds on a new commit; the version string itself is
+# identical (see `src/lib.rs`).
+#
+# Crate IDENTITY is `rustty-version` (R4). NO dependency on the ghostty tree (R3).
+[package]
+name = "rustty-version"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# The app version `X.Y.Z` the composition starts from (R2 source of truth).
+rustty-identity = { workspace = true }
+# `ReleaseChannel`, the type `release_channel()` returns; it stays in
+# build-config because it is also a config field type with a `DeepEqual` impl.
+rustty-build-config = { workspace = true }

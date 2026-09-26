@@ -496,8 +496,8 @@ impl DerivedConfig {
         font_styles.set(Style::BoldItalic, config.font_style_bold_italic());
 
         // Our link configs
-        let links =
-            link::Set::from_config(Global, config.links()).map_err(|_| DerivedConfigError)?;
+        let links = link::Set::from_config(Global.into(), config.links())
+            .map_err(|_| DerivedConfigError)?;
 
         Ok(DerivedConfig {
             background_opacity: config.background_opacity().clamp(0.0, 1.0),
@@ -556,7 +556,7 @@ impl DerivedConfig {
     // reference `self.arena.deinit()` maps to the `ArenaAllocator` `Drop` impl,
     // which runs when the caller drops `self`.
     pub fn deinit(&mut self) {
-        self.links.deinit(Global);
+        self.links.deinit(Global.into());
     }
 }
 
@@ -1307,11 +1307,14 @@ mod macos_impl {
         }
     }
     // `font.Shaper.init` (`changeConfig`, and the deferred `Renderer::init`) fails
-    // with the platform shaper's error (`shape::coretext::Error` — an atlas OOM or a
-    // font `Collection` failure). It folds into the aggregate `OutOfMemory` member of
-    // the reference `!void` inferred union (a font-resource failure, not a Metal one).
-    impl From<shape::coretext::Error> for Error {
-        fn from(_: shape::coretext::Error) -> Self {
+    // with the active shaper's error (`shape::ShaperError` — `coretext::Error` on
+    // the default `.coretext` backend: an atlas OOM or a font `Collection`
+    // failure; the HarfBuzz/noop shaper's on `-Dfont-backend=coretext_freetype`/
+    // `coretext_harfbuzz`/`coretext_noshape`, S-14). It folds into the aggregate
+    // `OutOfMemory` member of the reference `!void` inferred union (a
+    // font-resource failure, not a Metal one).
+    impl From<shape::ShaperError> for Error {
+        fn from(_: shape::ShaperError) -> Self {
             Error::OutOfMemory
         }
     }
@@ -2356,7 +2359,7 @@ mod macos_impl {
                 overlay.deinit();
             }
             // self.terminal_state.deinit(self.alloc);   (802)
-            self.terminal_state.deinit(self.alloc);
+            self.terminal_state.deinit(self.alloc.into());
             // if (self.search_selected_match) |*m| m.arena.deinit();   (803)
             // if (self.search_matches) |*m| m.arena.deinit();   (804)
             // Port: `SearchMatch`/`SearchMatches` DROPPED the reference `arena`
@@ -2426,9 +2429,11 @@ mod macos_impl {
         // `surface` for the Metal monomorphization.
         //
         // pub fn surfaceInit(surface: *apprt.Surface) !void {
+        //     // If our API has to do things here, let it.
         //     if (@hasDecl(GraphicsAPI, "surfaceInit"))
         //         try GraphicsAPI.surfaceInit(surface);
         // }
+        /// This is called early right after surface creation.
         #[allow(clippy::not_unsafe_ptr_arg_deref)]
         pub fn surface_init<S>(rt_surface: *mut S) -> Result<(), Error> {
             let _ = rt_surface;
@@ -2439,9 +2444,12 @@ mod macos_impl {
         // "finalizeSurfaceInit")` is FALSE for `Metal` ⇒ no-op (see `surface_init`).
         //
         // pub fn finalizeSurfaceInit(self: *Self, surface: *apprt.Surface) !void {
+        //     // If our API has to do things to finalize surface init, let it.
         //     if (@hasDecl(GraphicsAPI, "finalizeSurfaceInit"))
         //         try self.api.finalizeSurfaceInit(surface);
         // }
+        /// This is called just prior to spinning up the renderer thread for
+        /// final main thread setup requirements.
         #[allow(clippy::not_unsafe_ptr_arg_deref)]
         pub fn finalize_surface_init<S>(&mut self, rt_surface: *mut S) -> Result<(), Error> {
             let _ = rt_surface;
@@ -2486,8 +2494,10 @@ mod macos_impl {
         // (Metal declares only loopEnter) ⇒ no api call; `surface` is the apprt
         // surface the hook is generic over (never named, R4).
         //   pub fn threadEnter(self, surface: *apprt.Surface) !void {
+        //       // If our API has to do things on thread enter, let it.
         //       if (@hasDecl(GraphicsAPI, "threadEnter")) try self.api.threadEnter(surface);
         //   }
+        /// Callback called by renderer.Thread when it begins.
         #[allow(clippy::not_unsafe_ptr_arg_deref)]
         pub fn thread_enter<S>(&self, rt_surface: *mut S) -> Result<(), Error> {
             let _ = rt_surface;
@@ -2496,8 +2506,10 @@ mod macos_impl {
 
         // generic.zig:889-894 threadExit. `@hasDecl(Metal,"threadExit")` FALSE ⇒ no-op.
         //   pub fn threadExit(self) void {
+        //       // If our API has to do things on thread exit, let it.
         //       if (@hasDecl(GraphicsAPI, "threadExit")) self.api.threadExit();
         //   }
+        /// Callback called by renderer.Thread when it exits.
         pub fn thread_exit(&self) {}
 
         // generic.zig:891-903 loopEnter. Adapted for R4: the reference takes
@@ -2505,10 +2517,13 @@ mod macos_impl {
         // `renderer.Thread` (R4), so the caller passes the `draw_now: xev::Async`
         // field directly (Copy+Send handle — NOT an apprt type).
         //   pub fn loopEnter(self, thr: *renderer.Thread) !void {
+        //       // If our API has to do things on loop enter, let it.
         //       if (@hasDecl(GraphicsAPI, "loopEnter")) self.api.loopEnter();
+        //       // If we don't support a display link we have no work to do.
         //       if (comptime DisplayLink == void) return;      // (macOS: never)
         //       self.syncDisplayLink(null, &thr.draw_now);
         //   }
+        /// Called by renderer.Thread when it starts the main loop.
         pub fn loop_enter(&mut self, draw_now: Async) -> Result<(), Error> {
             // Metal DECLARES loopEnter ⇒ this hook fires. It installs the
             // IOSurfaceLayer display callback (W5). container_of needs WHOLE-Renderer
@@ -2531,12 +2546,18 @@ mod macos_impl {
         // generic.zig:919-933 loopExit. `@hasDecl(Metal,"loopExit")` FALSE ⇒ no api
         // call ⇒ FULLY runnable (unlike loopEnter). Stop the link; error ignored.
         //   pub fn loopExit(self) void {
+        //       // If our API has to do things on loop exit, let it.
         //       if (@hasDecl(GraphicsAPI, "loopExit")) self.api.loopExit();
+        //       // If we don't support a display link we have no work to do.
         //       if (comptime DisplayLink == void) return;
         //       const display_link = self.display_link orelse return;
         //       display_link.stop() catch {};
         //   }
+        /// Called by renderer.Thread when it exits the main loop.
         pub fn loop_exit(&self) {
+            // Stop our display link. If this fails its okay it just means
+            // that we either never started it or the view its attached to
+            // is gone which is fine.
             if let Some(display_link) = self.display_link.as_ref() {
                 let _ = display_link.stop(); // catch {}
             }
@@ -2569,6 +2590,7 @@ mod macos_impl {
         // needs both the mutable field and the output-callback userdata. The R4
         // adaptation of `*xev.Async` matches `loop_enter`'s: the Copy+Send handle
         // by value.
+        /// Called when we get an updated display ID for our display link.
         pub fn set_macos_display_id(&mut self, id: u32, draw_now: Async) -> Result<(), Error> {
             self.sync_display_link(Some(id), Some(draw_now));
             Ok(())
@@ -2580,6 +2602,9 @@ mod macos_impl {
         //       const display_link = self.display_link orelse return false;
         //       return display_link.isRunning();
         //   }
+        /// True if our renderer is using vsync. If true, the renderer or apprt
+        /// is responsible for triggering draw_now calls to the render thread.
+        /// That is the only way to trigger a drawFrame.
         pub fn has_vsync(&self) -> bool {
             match self.display_link.as_ref() {
                 Some(display_link) => display_link.is_running(),
@@ -2598,6 +2623,9 @@ mod macos_impl {
         //
         //       self.syncDisplayLink(null, null);
         //   }
+        /// Callback when the focus changes for the terminal this is rendering.
+        ///
+        /// Must be called on the render thread.
         pub fn set_focus(&mut self, focus: bool) -> Result<(), Error> {
             assert!(self.focused != focus);
             self.focused = focus;
@@ -3191,7 +3219,9 @@ mod macos_impl {
                         break 'load_background None;
                     }
                 };
+                // Read it
                 // const contents = file.readToEndAlloc(self.alloc, std.math.maxInt(u32)) catch |err| { log.warn(...); break; };
+                //   (`std.math.maxInt(u32), // Max size of 4 GiB, for now.`)
                 // defer self.alloc.free(contents);
                 let contents: Vec<u8> = {
                     let mut buf: Vec<u8> = Vec::new();
@@ -3344,7 +3374,7 @@ mod macos_impl {
     #[allow(dead_code)]
     enum RebuildRowError {
         Collection(collection::Error),
-        Shape(shape::coretext::Error),
+        Shape(shape::ShaperError),
     }
 
     impl From<collection::Error> for RebuildRowError {
@@ -3352,8 +3382,8 @@ mod macos_impl {
             RebuildRowError::Collection(e)
         }
     }
-    impl From<shape::coretext::Error> for RebuildRowError {
-        fn from(e: shape::coretext::Error) -> Self {
+    impl From<shape::ShaperError> for RebuildRowError {
+        fn from(e: shape::ShaperError) -> Self {
             RebuildRowError::Shape(e)
         }
     }
@@ -4923,6 +4953,9 @@ mod macos_impl {
 
         // fn rebuildOverlay(self, features: []const Overlay.Feature) Overlay.InitError!void
         //
+        /// Build the overlay as configured. Returns null if there is no
+        /// overlay currently configured.
+        //
         // WIDENED to `pub` for dead-code exemption (its only non-test caller,
         // `updateFrame`, is deferred to 3c; GPU_RD_CHUNK3B_DESIGN §F).
         pub fn rebuild_overlay(
@@ -5032,6 +5065,32 @@ mod macos_impl {
             state: &state::State,
             cursor_blink_visible: bool,
         ) -> Result<(), VtOutOfMemory> {
+            // CoreText shaping accumulates objects for deferred release over
+            // the course of a frame. Always flush those objects, including
+            // when rebuilding the frame fails due to memory pressure.
+            // defer self.font_shaper.endFrame();
+            //
+            // PORT NOTE (parity S115-F1): the reference's first statement is
+            // this `defer`, so `endFrame` runs on every exit: the
+            // synchronized-output early `return`, a failed `beginUpdate`, and
+            // the normal end. The body is `update_frame_impl`; running
+            // `end_frame` after it here is that defer. It also keeps the
+            // reference's order at the normal end: the later-registered `defer
+            // self.terminal_state.dirty = .false` (the impl's last statement)
+            // runs before `endFrame`. CORRECTION: `end_frame` used to be a plain
+            // statement at the end of the success path only.
+            let result = self.update_frame_impl(state, cursor_blink_visible);
+            self.font_shaper.end_frame();
+            result
+        }
+
+        /// The body of [`Self::update_frame`], which runs
+        /// `font_shaper.end_frame()` after it on every exit.
+        fn update_frame_impl(
+            &mut self,
+            state: &state::State,
+            cursor_blink_visible: bool,
+        ) -> Result<(), VtOutOfMemory> {
             // const start = std.time.Instant.now() catch unreachable;
             // const start_micro = std.time.microTimestamp();
             // defer {
@@ -5049,7 +5108,7 @@ mod macos_impl {
             // Frame count is ~12 minutes at 120Hz.
             let max_terminal_state_frame_count = 100_000;
             if self.terminal_state_frame_count >= max_terminal_state_frame_count {
-                self.terminal_state.deinit(self.alloc);
+                self.terminal_state.deinit(self.alloc.into());
                 self.terminal_state = RenderState::empty();
                 self.terminal_state_frame_count = 0;
             }
@@ -5112,6 +5171,9 @@ mod macos_impl {
 
             // Update all our data as tightly as possible within the mutex.
             let mut critical: Critical = {
+                // NOTE: This code needs be updated to 0.16.0 before you
+                // un-comment it ;)
+                //
                 // const start = try std.time.Instant.now();
                 // const start_micro = std.time.microTimestamp();
                 // defer {
@@ -5174,7 +5236,7 @@ mod macos_impl {
                 // outside of this critical section, keeping our lock
                 // hold time as short as possible.
                 self.terminal_state
-                    .begin_update(self.alloc, unsafe { &mut *t })?;
+                    .begin_update(self.alloc.into(), unsafe { &mut *t })?;
 
                 // If our terminal state is dirty at all we need to redo
                 // the viewport search.
@@ -5290,7 +5352,7 @@ mod macos_impl {
                             CellSet::new()
                         } else {
                             self.terminal_state
-                                .link_cells(Global, vp)
+                                .link_cells(Global.into(), vp)
                                 .unwrap_or_else(|err| {
                                     // log.warn("error searching for OSC8 links err={}", .{err});
                                     log::warn!(
@@ -5340,7 +5402,7 @@ mod macos_impl {
             // our regex results.
             // catch |err| log.warn("error searching for regex links err={}", .{err});
             if let Err(err) = self.config.links.render_cell_map(
-                Global,
+                Global.into(),
                 &mut critical.links,
                 &self.terminal_state,
                 state.mouse.point,
@@ -5375,7 +5437,7 @@ mod macos_impl {
                     //     log.warn("error updating search selected highlight err={}", .{err});
                     // }
                     if let Err(err) = self.terminal_state.update_highlights_flattened(
-                        self.alloc,
+                        self.alloc.into(),
                         HighlightTag::SearchMatchSelected as u8,
                         core::slice::from_ref(&m.r#match),
                     ) {
@@ -5393,7 +5455,7 @@ mod macos_impl {
                     //     log.warn("error updating search highlights err={}", .{err});
                     // }
                     if let Err(err) = self.terminal_state.update_highlights_flattened(
-                        self.alloc,
+                        self.alloc.into(),
                         HighlightTag::SearchMatch as u8,
                         &m.matches,
                     ) {
@@ -5410,10 +5472,12 @@ mod macos_impl {
             // defer self.terminal_state.dirty = .false;
             //
             // PORT NOTE (§C.4/RISK-3): the reference `defer` fires at function scope
-            // exit — i.e. AFTER `updateCustomShaderUniformsFromState` (:1418, which
-            // GATES on `dirty != .false`) and `endFrame` (:1423). So the reset is the
-            // LAST statement of this fn (after `end_frame`), NOT here; the post-region
-            // is infallible so a plain final assignment is faithful.
+            // exit — i.e. AFTER `updateCustomShaderUniformsFromState` (which GATES on
+            // `dirty != .false`). So the reset is the LAST statement of this body,
+            // NOT here; the post-region is infallible so a plain final assignment is
+            // faithful. CORRECTION (parity S115-F1): this used to say the reset runs
+            // after `endFrame`; the `endFrame` defer is registered FIRST, so it runs
+            // LAST, after this reset (in `update_frame`, after this body returns).
 
             // Rebuild the overlay image if we have one. We can do this
             // outside of any critical areas.
@@ -5508,12 +5572,9 @@ mod macos_impl {
             // Start the display link now that the rebuilt frame is ready.
             // (`6688aa072`: the link is parked while idle, so the rebuild that
             // set `cells_rebuilt` is what un-parks it; runs before the deferred
-            // `font_shaper.endFrame()` below, as in the reference.)
+            // `font_shaper.endFrame()`, which `update_frame` runs after this body,
+            // as in the reference.)
             self.sync_display_link(None, None);
-
-            // Notify our shaper we're done for the frame. For some shapers,
-            // such as CoreText, this triggers off-thread cleanup logic.
-            self.font_shaper.end_frame();
 
             // Reset our dirty state after updating (the reference `defer
             // self.terminal_state.dirty = .false`, fired at fn scope exit — §C.4).
@@ -6464,9 +6525,10 @@ mod macos_impl {
             // assert(!self.shaders.defunct);
             assert!(!unsafe { (*self_ptr).shaders.defunct });
 
-            // If we have custom shaders, make sure we have the custom shader state in
-            // our frame state, otherwise if we have a state but don't need it we remove
-            // it. (Golden: has_custom_shaders=false + custom_shader_state=None ⇒ no-op.)
+            // If we have custom shaders, make sure we have the
+            // custom shader state in our frame state, otherwise
+            // if we have a state but don't need it we remove it.
+            // (Golden: has_custom_shaders=false + custom_shader_state=None ⇒ no-op.)
             {
                 let frame: *mut FrameState = unsafe {
                     // Narrow projection through the `Option` (a fresh,
@@ -6521,9 +6583,9 @@ mod macos_impl {
                 }
             }
 
-            // If this frame's target isn't the correct size, or the target config has
-            // changed (such as when the blending mode changes), remove it and replace
-            // it with a new one with the right values.
+            // If this frame's target isn't the correct size, or the target
+            // config has changed (such as when the blending mode changes),
+            // remove it and replace it with a new one with the right values.
             // if (frame.target.width != self.size.screen.width or
             //     frame.target.height != self.size.screen.height or
             //     frame.target_config_modified != self.target_config_modified) {
@@ -6719,15 +6781,16 @@ mod macos_impl {
                     clear_color: Some([0.0, 0.0, 0.0, 0.0]),
                 }]);
 
-                // First we draw our background image, if we have one. The bg image
-                // shader also draws the main bg color. Otherwise, if we don't have a
-                // background image, we draw the background color by itself in its own
-                // step.
+                // First we draw our background image, if we have one.
+                // The bg image shader also draws the main bg color.
                 //
-                // NOTE: We don't use the clear_color for this because that would require
-                //       us to do color space conversion on the CPU-side. In the future
-                //       when we have utilities for that we should remove this step and
-                //       use clear_color.
+                // Otherwise, if we don't have a background image, we
+                // draw the background color by itself in its own step.
+                //
+                // NOTE: We don't use the clear_color for this because that
+                //       would require us to do color space conversion on the
+                //       CPU-side. In the future when we have utilities for
+                //       that we should remove this step and use clear_color.
                 // if (self.bg_image) |img| switch (img) {
                 //     .ready => |texture| pass.step(.{ .pipeline = bg_image, ... }),
                 //     else => {},
@@ -6762,8 +6825,8 @@ mod macos_impl {
                     }
                 }
 
-                // Then we draw any kitty images that need to be behind text AND cell
-                // backgrounds.
+                // Then we draw any kitty images that need
+                // to be behind text AND cell backgrounds.
                 // self.images.draw(&self.api, self.shaders.pipelines.image, &pass, .kitty_below_bg);
                 unsafe {
                     (*self_ptr).images.draw(
@@ -7585,7 +7648,7 @@ mod macos_impl {
             /// Drive one real frame, as the golden tests do.
             fn draw_one_frame(r: &mut Renderer) {
                 let mut mutex = Mutex::new();
-                let mut t = Terminal::init(Global, opts(10, 3)).unwrap();
+                let mut t = Terminal::init(Global.into(), opts(10, 3)).unwrap();
                 let st = state::State {
                     mutex: &mut mutex,
                     terminal: &mut t,
@@ -7710,7 +7773,7 @@ mod macos_impl {
             /// the scrollbar value the push must carry.
             fn update_and_draw(r: &mut Renderer) -> Scrollbar {
                 let mut mutex = Mutex::new();
-                let mut t = Terminal::init(Global, opts(10, 3)).unwrap();
+                let mut t = Terminal::init(Global.into(), opts(10, 3)).unwrap();
                 {
                     let mut s = t.vt_stream();
                     s.next_slice(b"Ab");
@@ -7898,7 +7961,7 @@ mod macos_impl {
             // "Ab" on a 10×3 grid ⇒ a block cursor at grid (2,0) (the empty cell after
             // "Ab"; focused + blink_visible ⇒ block). Verified by the 3b test.
             let mut mutex = Mutex::new();
-            let mut t = Terminal::init(Global, opts(10, 3)).unwrap();
+            let mut t = Terminal::init(Global.into(), opts(10, 3)).unwrap();
             {
                 let mut s = t.vt_stream();
                 s.next_slice(b"Ab");
@@ -7979,7 +8042,7 @@ mod macos_impl {
                 "no fg glyph rendered in cell (0,0) (maxlum={maxlum})"
             );
 
-            t.deinit(Global);
+            t.deinit(Global.into());
         }
 
         // W5 HEADLESS KAT (`W5_DESIGN §5`): prove the display-callback trampoline
@@ -8007,7 +8070,7 @@ mod macos_impl {
 
             // Give the terminal some content so the draw is non-trivial (mirrors golden).
             let mut mutex = Mutex::new();
-            let mut t = Terminal::init(Global, opts(10, 3)).unwrap();
+            let mut t = Terminal::init(Global.into(), opts(10, 3)).unwrap();
             {
                 let mut s = t.vt_stream();
                 s.next_slice(b"Ab");
@@ -8072,7 +8135,7 @@ mod macos_impl {
             );
 
             r.deinit();
-            t.deinit(Global);
+            t.deinit(Global.into());
         }
 
         // A minimal ObjC test-double for the host NSView. `Metal::init` (the on-screen
@@ -8167,7 +8230,7 @@ mod macos_impl {
             // "Ab" on a 10×3 grid ⇒ a block cursor at grid (2,0) (the empty cell after
             // "Ab") — identical to the offscreen cursor golden.
             let mut mutex = Mutex::new();
-            let mut t = Terminal::init(Global, opts(10, 3)).unwrap();
+            let mut t = Terminal::init(Global.into(), opts(10, 3)).unwrap();
             {
                 let mut s = t.vt_stream();
                 s.next_slice(b"Ab");
@@ -8252,7 +8315,7 @@ mod macos_impl {
                 "view must host our IOSurfaceLayer"
             );
 
-            t.deinit(Global);
+            t.deinit(Global.into());
         }
 
         // T3 (RENDERER_BG_IMAGE_DESIGN §4) — the offscreen proof that the whole
@@ -8302,7 +8365,7 @@ mod macos_impl {
                 // An (empty) terminal drives update_frame/draw_frame (as the cursor
                 // golden does); the bg-image step does not depend on cell content.
                 let mut mutex = Mutex::new();
-                let mut t = Terminal::init(Global, opts(10, 3)).unwrap();
+                let mut t = Terminal::init(Global.into(), opts(10, 3)).unwrap();
                 let st = state::State {
                     mutex: &mut mutex,
                     terminal: &mut t,
@@ -8335,7 +8398,7 @@ mod macos_impl {
                 let ch = r.grid_metrics.cell_height as usize;
                 // Sample the center of an empty cell on the bottom row (grid (5,2)).
                 let out = px_at(&px, w, 5 * cw + cw / 2, 2 * ch + ch / 2);
-                t.deinit(Global);
+                t.deinit(Global.into());
                 Some(out)
             }
 
@@ -8438,7 +8501,7 @@ mod macos_impl {
             // Drive one frame with a non-empty terminal (write visible text so the cell
             // pass produces a recognizable, non-black image the pass-through preserves).
             let mut mutex = Mutex::new();
-            let mut t = Terminal::init(Global, opts(10, 3)).unwrap();
+            let mut t = Terminal::init(Global.into(), opts(10, 3)).unwrap();
             t.print_string(b"HELLO").unwrap();
             let st = state::State {
                 mutex: &mut mutex,
@@ -8484,7 +8547,7 @@ mod macos_impl {
                 "frame is a uniform fill (post-process did not preserve the image)"
             );
 
-            t.deinit(Global);
+            t.deinit(Global.into());
             let _ = std::fs::remove_file(&path);
         }
 
@@ -8507,7 +8570,7 @@ mod macos_impl {
             // pixels 0xFF (`////////` = 6 bytes of 0xFF). a=T places it at the
             // cursor → a pin placement, marking storage dirty.
             let mut mutex = Mutex::new();
-            let mut t = Terminal::init(Global, opts(10, 3)).unwrap();
+            let mut t = Terminal::init(Global.into(), opts(10, 3)).unwrap();
             // The vt `Terminal` starts with `width_px`/`height_px == 0` (the port
             // sets them only through the surface). Kitty `pixel_size` divides by the
             // cell size (`width_px / cols`), so pin the pixel dims to the renderer's
@@ -8529,7 +8592,7 @@ mod macos_impl {
 
             // Drive the renderer. `terminal_state.update` snapshots the terminal;
             // `update_frame` → `kitty_requires_update` (dirty) == true → `kitty_update`.
-            r.terminal_state.update(Global, &mut t).unwrap();
+            r.terminal_state.update(Global.into(), &mut t).unwrap();
             let st = state::State {
                 mutex: &mut mutex,
                 terminal: &mut t,
@@ -8578,7 +8641,7 @@ mod macos_impl {
                 "image has no GPU texture after draw_frame (convert/upload did not run)"
             );
 
-            t.deinit(Global);
+            t.deinit(Global.into());
         }
 
         // PORT-SIDE REGRESSION (`a177ba90a`, gap-close): the display-link lifecycle
@@ -8682,7 +8745,17 @@ mod macos_impl {
                 if r.display_link.is_none() {
                     // No active display (headless / locked session): the
                     // fallback-rendering arm, covered by the guard tests above.
+                    // R14: a skip here is visible, and a failure under
+                    // `RUSTTY_REQUIRE_DISPLAY=1`.
                     r.deinit();
+                    crate::metal::test_support::require_display_or_skip(
+                        "sync_parks_the_link_while_idle_and_runs_it_while_dirty",
+                        &"createWithActiveCGDisplays failed (no active display)",
+                    );
+                    eprintln!(
+                        "no active display; skipping \
+                         sync_parks_the_link_while_idle_and_runs_it_while_dirty"
+                    );
                     return;
                 }
 
@@ -8738,13 +8811,13 @@ mod macos_impl {
             };
 
             // small terminal: print "Ab" on row 0, leave a visible block cursor.
-            let mut t = Terminal::init(Global, opts(10, 3)).unwrap();
+            let mut t = Terminal::init(Global.into(), opts(10, 3)).unwrap();
             {
                 let mut s = t.vt_stream();
                 s.next_slice(b"Ab");
                 s.deinit();
             }
-            r.terminal_state.update(Global, &mut t).unwrap();
+            r.terminal_state.update(Global.into(), &mut t).unwrap();
             let cs = cursor::style(
                 &r.terminal_state,
                 cursor::StyleOptions {
@@ -8776,7 +8849,7 @@ mod macos_impl {
             assert_eq!(cur.grid_pos, [2, 0]);
             assert_eq!(r.uniforms.cursor_pos, [2, 0]);
 
-            t.deinit(Global);
+            t.deinit(Global.into());
         }
 
         #[test]
@@ -8820,7 +8893,7 @@ mod macos_impl {
             };
 
             let mut mutex = Mutex::new();
-            let mut t = Terminal::init(Global, opts(10, 3)).unwrap();
+            let mut t = Terminal::init(Global.into(), opts(10, 3)).unwrap();
             {
                 let mut s = t.vt_stream();
                 s.next_slice(b"Ab");
@@ -8860,7 +8933,68 @@ mod macos_impl {
             let expected_scrollbar = unsafe { (*t.screens.active).pages.scrollbar() };
             assert!(r.scrollbar.eql(expected_scrollbar));
 
-            t.deinit(Global);
+            t.deinit(Global.into());
+        }
+
+        // Parity S115-F1: `defer self.font_shaper.endFrame()` is updateFrame's
+        // first statement, so a frame skipped for synchronized output still
+        // hands the shaper's CoreText objects to the release thread.
+        //
+        // Scoped (S-14, N266) to the `.coretext` backend: the release pool is
+        // the CoreText shaper's (`shaper/coretext.zig`); the HarfBuzz and noop
+        // shapers' `endFrame` are no-ops with nothing to observe.
+        #[cfg(rustty_font_backend = "coretext")]
+        #[test]
+        fn update_frame_ends_the_shaper_frame_on_the_sync_output_return() {
+            let mut r = match test_renderer(10, 3) {
+                Some(r) => r,
+                None => return,
+            };
+
+            // Shape a row outside `update_frame`, so the shaper's release pool
+            // holds this frame's CoreText objects.
+            let mut t = Terminal::init(Global.into(), opts(10, 3)).unwrap();
+            {
+                let mut s = t.vt_stream();
+                s.next_slice(b"Ab");
+                s.deinit();
+            }
+            r.terminal_state.update(Global.into(), &mut t).unwrap();
+            let cs = cursor::style(
+                &r.terminal_state,
+                cursor::StyleOptions {
+                    preedit: false,
+                    focused: true,
+                    blink_visible: true,
+                },
+            );
+            r.rebuild_cells(None, cs, &CellSet::new());
+            assert!(r.font_shaper.release_pool_len() > 0);
+            assert_ne!(r.terminal_state.dirty, Dirty::False);
+
+            t.modes.set(Mode::SynchronizedOutput, true);
+            let mut mutex = Mutex::new();
+            let st = state::State {
+                mutex: &mut mutex,
+                terminal: &mut t,
+                inspector: None,
+                inspector_ptr: None,
+                preedit: None,
+                mouse: state::Mouse::default(),
+                demand: Default::default(),
+                handoff_gen: Default::default(),
+                handoff_park: Default::default(),
+            };
+            r.update_frame(&st, true).unwrap();
+
+            // The early return was taken: the dirty reset at the end of the
+            // body did not run (it is registered after that return in the
+            // reference too).
+            assert_ne!(r.terminal_state.dirty, Dirty::False);
+            // ...and the shaper's frame was still ended.
+            assert_eq!(0, r.font_shaper.release_pool_len());
+
+            t.deinit(Global.into());
         }
 
         // 9e6e2ea96 — renderer: reset terminal state cleanup counter. The frame
@@ -8875,7 +9009,7 @@ mod macos_impl {
             };
 
             let mut mutex = Mutex::new();
-            let mut t = Terminal::init(Global, opts(10, 3)).unwrap();
+            let mut t = Terminal::init(Global.into(), opts(10, 3)).unwrap();
             let st = state::State {
                 mutex: &mut mutex,
                 terminal: &mut t,
@@ -8899,7 +9033,7 @@ mod macos_impl {
             r.update_frame(&st, true).unwrap();
             assert_eq!(r.terminal_state_frame_count, 2);
 
-            t.deinit(Global);
+            t.deinit(Global.into());
         }
 
         // §F.2(2) — direct: `screen_size`/`grid_padding`/`projection_matrix`.
@@ -8963,8 +9097,8 @@ mod macos_impl {
             r.config.selection_background = Some(crate::generic::TerminalColor::CellForeground);
             r.config.selection_foreground = Some(crate::generic::TerminalColor::CellBackground);
 
-            let mut t = Terminal::init(Global, opts(10, 3)).unwrap();
-            r.terminal_state.update(Global, &mut t).unwrap(); // dirty = Full
+            let mut t = Terminal::init(Global.into(), opts(10, 3)).unwrap();
+            r.terminal_state.update(Global.into(), &mut t).unwrap(); // dirty = Full
             r.update_custom_shader_uniforms_from_state();
 
             // Positive reach: the update ran past its early returns.
@@ -9013,7 +9147,7 @@ mod macos_impl {
                 [1.0, 0.0, 0.0, 1.0]
             );
 
-            t.deinit(Global);
+            t.deinit(Global.into());
         }
 
         #[test]
@@ -9058,8 +9192,8 @@ mod macos_impl {
             };
             r.has_custom_shaders = true;
 
-            let mut t = Terminal::init(Global, opts(10, 3)).unwrap();
-            r.terminal_state.update(Global, &mut t).unwrap(); // dirty = Full
+            let mut t = Terminal::init(Global.into(), opts(10, 3)).unwrap();
+            r.terminal_state.update(Global.into(), &mut t).unwrap(); // dirty = Full
             r.update_custom_shader_uniforms_from_state();
 
             let bg = r.terminal_state.colors.background;
@@ -9103,7 +9237,7 @@ mod macos_impl {
                 expected_style
             );
 
-            t.deinit(Global);
+            t.deinit(Global.into());
         }
 
         // §F.2(6) — direct: per-frame timing/resolution/focus. Per §RISK-7 the

@@ -96,3 +96,32 @@ impl ArgsIter for ArgIteratorGeneral {
         Some(v)
     }
 }
+
+/// Wait for a re-executed test child for at most `secs` seconds, killing it
+/// and panicking with its output if it does not finish (so a hang in the
+/// child, e.g. a lock held forever, fails the parent instead of stalling it).
+/// The child's stdout and stderr must be small enough for the pipe buffers.
+pub(crate) fn wait_with_deadline(
+    mut child: std::process::Child,
+    secs: u64,
+) -> std::process::Output {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
+    let finished = loop {
+        if child.try_wait().expect("try_wait").is_some() {
+            break true;
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            break false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    };
+    let out = child.wait_with_output().expect("wait_with_output");
+    assert!(
+        finished,
+        "the child did not finish within {secs} s:\n{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    out
+}

@@ -46,9 +46,12 @@ impl FocusEvent {
     /// parameter is materialized by the callee's PROLOGUE, so an out-of-range
     /// tag is UB before any defensive code of ours can run — there is no
     /// "check it first". And the value is reachable: `include/rustty/vt/focus.h`
-    /// itself declares `RUSTTY_FOCUS_EVENT_MAX_VALUE`, i.e. the published header
+    /// itself declares `RUSTTY_FOCUS_MAX_VALUE`, i.e. the published header
     /// documents an out-of-range enumerator a conforming C caller may pass.
     /// Same reasoning as the `ReportState` PORT NOTE at `modes.rs:19`.
+    /// (CORRECTION, parity S2-F3: this note used to name the enumerator
+    /// `RUSTTY_FOCUS_EVENT_MAX_VALUE`, which exists nowhere; the header's is
+    /// `RUSTTY_FOCUS_MAX_VALUE`, `include/rustty/vt/focus.h:43`.)
     pub fn from_c_int(v: std::os::raw::c_int) -> Option<FocusEvent> {
         match v {
             0 => Some(FocusEvent::Gained),

@@ -19,6 +19,12 @@
 //! drop the comptime gate entirely — `remember_choice` is always bound and always
 //! read in `response`. The `can-remember` property survives (the `.blp` binds
 //! `visible: bind template.can-remember`), toggling only the row's *visibility*.
+//! The dropped file-level constant, quoted (`clipboard_confirmation_dialog.zig:16-17`):
+//!
+//! ```text
+//! /// Whether we're able to have the remember switch
+//! const can_remember = adw_version.supportsSwitchRow();
+//! ```
 
 use std::cell::{Cell, RefCell};
 use std::sync::OnceLock;
@@ -60,23 +66,31 @@ mod imp {
     #[properties(wrapper_type = super::ClipboardConfirmationDialog)]
     #[template(resource = "/io/airely/rustty/ui/1.4/clipboard-confirmation-dialog.ui")]
     pub struct ClipboardConfirmationDialog {
+        /// The request that this dialog is for.
+        ///
         /// PORTS: `clipboard_confirmation_dialog.zig:50-60,119` the `request`
         /// property / private field. Nullable boxed (transfer: get `.none`, set
         /// `.full`), matching `C.privateBoxedFieldAccessor("request")`.
         #[property(get, set, name = "request", nullable)]
         pub request: RefCell<Option<super::ClipboardRequestBoxed>>,
 
+        /// The clipboard contents being read/written.
+        ///
         /// PORTS: `clipboard_confirmation_dialog.zig:62-72,122` the
         /// `clipboard-contents` property / private field — the `TextBuffer` shown
         /// in the dialog. Nullable GObject (transfer: get `.none`, set `.full`).
         #[property(get, set, name = "clipboard-contents", nullable)]
         pub clipboard_contents: RefCell<Option<gtk4::TextBuffer>>,
 
+        /// Whether the contents should be blurred.
+        ///
         /// PORTS: `clipboard_confirmation_dialog.zig:74-90,125` the `blur` property /
         /// private field — whether the contents are blurred behind a reveal button.
         #[property(get, set, name = "blur")]
         pub blur: Cell<bool>,
 
+        /// Whether the user can remember the choice.
+        ///
         /// PORTS: `clipboard_confirmation_dialog.zig:32-48,128` the `can-remember`
         /// property / private field. AD-3 COLLAPSE: no longer gates the switch's
         /// existence (always bound); only drives `remember_choice`'s `visible` bind.
@@ -218,13 +232,17 @@ impl ClipboardConfirmationDialog {
         AdwDialogExt::present(self, parent);
     }
 
-    /// PORTS: `clipboard_confirmation_dialog.zig:156-159` `getRequest`. Get the
-    /// clipboard request without copying (a cheap `Copy` here).
+    /// Get the clipboard request without copying.
+    ///
+    /// PORTS: `clipboard_confirmation_dialog.zig:156-159` `getRequest` (a cheap
+    /// `Copy` here).
     #[must_use]
     pub fn get_request(&self) -> Option<ClipboardRequestBoxed> {
         *self.imp().request.borrow()
     }
 
+    /// Get the clipboard contents without copying.
+    ///
     /// PORTS: `clipboard_confirmation_dialog.zig:161-164` `getClipboardContents`.
     #[must_use]
     pub fn get_clipboard_contents(&self) -> Option<gtk4::TextBuffer> {

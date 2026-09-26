@@ -16,6 +16,7 @@
 // const testing = std.testing;
 // const osc = @import("../osc.zig");
 // const dnd = @import("dnd.zig");
+use crate::alloc::Global;
 use crate::kitty::dnd;
 use crate::osc;
 
@@ -28,7 +29,7 @@ use crate::osc;
 /// Vec dropped with the state).
 #[derive(Default)]
 struct Harness {
-    state: Option<Box<dnd::State>>,
+    state: Option<dnd::StateBox>,
     output: Vec<u8>,
 }
 
@@ -54,6 +55,7 @@ impl Harness {
     ) -> std::io::Result<Option<dnd::Event>> {
         dnd::handle_command(
             &mut self.state,
+            Global,
             &mut self.output,
             &osc::KittyDndProtocol {
                 metadata: metadata.to_vec(),
@@ -197,6 +199,7 @@ fn dnd_move_event_carries_position_operations_and_mime_list() {
         .as_mut()
         .unwrap()
         .drag_move(
+            Global,
             output,
             dnd::MoveEvent {
                 cell_x: 5,
@@ -226,6 +229,7 @@ fn dnd_move_event_echoes_registration_client_id() {
         .as_mut()
         .unwrap()
         .drag_move(
+            Global,
             output,
             dnd::MoveEvent {
                 cell_x: 1,
@@ -275,7 +279,7 @@ fn dnd_mime_list_sent_on_every_move() {
         state
             .as_mut()
             .unwrap()
-            .drag_move(output, ev, &[b"text/plain"])
+            .drag_move(Global, output, ev, &[b"text/plain"])
             .unwrap();
     }
     h.clear();
@@ -286,7 +290,7 @@ fn dnd_mime_list_sent_on_every_move() {
         state
             .as_mut()
             .unwrap()
-            .drag_move(output, ev, &[b"text/plain"])
+            .drag_move(Global, output, ev, &[b"text/plain"])
             .unwrap();
     }
     h.expect_output(b"\x1b]72;t=m:x=0:y=0:X=0:Y=0:o=1:m=0;text/plain \x1b\\");
@@ -303,6 +307,7 @@ fn dnd_leave_event() {
             .as_mut()
             .unwrap()
             .drag_move(
+                Global,
                 output,
                 dnd::MoveEvent {
                     cell_x: 0,
@@ -322,7 +327,7 @@ fn dnd_leave_event() {
 
     {
         let Harness { state, output } = &mut h;
-        state.as_mut().unwrap().drag_leave(output).unwrap();
+        state.as_mut().unwrap().drag_leave(Global, output).unwrap();
     }
     h.expect_output(b"\x1b]72;t=m:x=-1:y=-1\x1b\\");
 }
@@ -409,6 +414,7 @@ fn dnd_drop_and_data_serving_round_trip() {
             .as_mut()
             .unwrap()
             .drag_drop(
+                Global,
                 output,
                 ev,
                 &[
@@ -458,6 +464,7 @@ fn dnd_empty_item_served_as_a_single_end_of_data_message() {
             .as_mut()
             .unwrap()
             .drag_drop(
+                Global,
                 output,
                 dnd::MoveEvent {
                     cell_x: 0,
@@ -494,7 +501,7 @@ fn dnd_leave_without_hover_sends_nothing() {
     let _ = h.command(b"t=a", Some(b"")).unwrap();
     {
         let Harness { state, output } = &mut h;
-        state.as_mut().unwrap().drag_leave(output).unwrap();
+        state.as_mut().unwrap().drag_leave(Global, output).unwrap();
     }
     h.expect_output(b"");
 }
@@ -519,6 +526,7 @@ fn dnd_leave_after_drop_is_ignored() {
             .as_mut()
             .unwrap()
             .drag_drop(
+                Global,
                 output,
                 dnd::MoveEvent {
                     cell_x: 0,
@@ -543,7 +551,7 @@ fn dnd_leave_after_drop_is_ignored() {
     // must survive so the client can still fetch it.
     {
         let Harness { state, output } = &mut h;
-        state.as_mut().unwrap().drag_leave(output).unwrap();
+        state.as_mut().unwrap().drag_leave(Global, output).unwrap();
     }
     h.expect_output(b"");
 
@@ -572,6 +580,7 @@ fn dnd_new_drag_resets_held_drop_data() {
             .as_mut()
             .unwrap()
             .drag_drop(
+                Global,
                 output,
                 ev,
                 &[dnd::Item {
@@ -590,7 +599,7 @@ fn dnd_new_drag_resets_held_drop_data() {
         state
             .as_mut()
             .unwrap()
-            .drag_move(output, ev, &[b"text/plain"])
+            .drag_move(Global, output, ev, &[b"text/plain"])
             .unwrap();
     }
     h.clear();
@@ -646,6 +655,7 @@ fn dnd_unregister_frees_held_drop_data() {
             .as_mut()
             .unwrap()
             .drag_drop(
+                Global,
                 output,
                 dnd::MoveEvent {
                     cell_x: 0,
@@ -725,6 +735,7 @@ fn dnd_bel_terminator_echoed_in_responses() {
 
     let _ = dnd::handle_command(
         &mut h.state,
+        Global,
         &mut h.output,
         &osc::KittyDndProtocol {
             metadata: b"t=q".to_vec(),
@@ -788,7 +799,7 @@ fn dnd_kitten_0_47_conversation_replay() {
         state
             .as_mut()
             .unwrap()
-            .drag_move(output, ev, &[b"text/plain"])
+            .drag_move(Global, output, ev, &[b"text/plain"])
             .unwrap();
     }
     h.expect_output(b"\x1b]72;t=m:x=2:y=1:X=20:Y=18:o=1:m=0;text/plain \x1b\\");
@@ -807,6 +818,7 @@ fn dnd_kitten_0_47_conversation_replay() {
             .as_mut()
             .unwrap()
             .drag_drop(
+                Global,
                 output,
                 ev,
                 &[dnd::Item {
@@ -840,6 +852,7 @@ fn dnd_large_data_served_in_chunks() {
             .as_mut()
             .unwrap()
             .drag_drop(
+                Global,
                 output,
                 dnd::MoveEvent {
                     cell_x: 0,
@@ -888,4 +901,92 @@ fn dnd_over_cap_registration_list_never_completes() {
         let mut it = state.registered_mimes();
         assert!(it.next().is_none());
     }
+}
+
+// Parity tail S7-3 routing evidence (Rust-only): the state and everything it
+// holds are allocated through the allocator `handle_command` is given (the
+// terminal's `gpa()`), and freed through it; a refused allocation is
+// `error.OutOfMemory` (`ErrorKind::OutOfMemory`) with the slot unchanged.
+#[test]
+fn dnd_state_routes_through_the_allocator_handle() {
+    use crate::alloc::testing::{with_handle, Config, CountingAllocator, FailingAllocator};
+
+    let cmd = |metadata: &[u8], payload: Option<&[u8]>| osc::KittyDndProtocol {
+        metadata: metadata.to_vec(),
+        payload: payload.map(|p| p.to_vec()),
+        terminator: osc::Terminator::St,
+    };
+    let ev = dnd::MoveEvent {
+        cell_x: 0,
+        cell_y: 0,
+        pixel_x: 0,
+        pixel_y: 0,
+        operations: dnd::Operations {
+            copy: true,
+            ..Default::default()
+        },
+    };
+
+    let counting = CountingAllocator::over_heap();
+    let c = counting.allocator();
+    with_handle(&c, |alloc| {
+        let mut slot: Option<dnd::StateBox> = None;
+        let mut out: Vec<u8> = Vec::new();
+
+        // t=a: `State.create(alloc)` and the registered list's `appendSlice`.
+        let _ = dnd::handle_command(
+            &mut slot,
+            alloc,
+            &mut out,
+            &cmd(b"t=a", Some(b"text/plain")),
+        )
+        .unwrap();
+        assert_eq!(
+            2,
+            counting.alloc_calls.get(),
+            "create(State) + registered_mimes"
+        );
+
+        // A move: `Offered.init` (the MIME slices and the joined payload).
+        slot.as_mut()
+            .unwrap()
+            .drag_move(alloc, &mut out, ev, &[b"text/plain"])
+            .unwrap();
+        assert_eq!(4, counting.alloc_calls.get(), "Offered: mimes + payload");
+
+        // A drop with the same list: the held copies (the array + mime + data
+        // per item); the unchanged offer is reused.
+        slot.as_mut()
+            .unwrap()
+            .drag_drop(
+                alloc,
+                &mut out,
+                ev,
+                &[dnd::Item {
+                    mime: b"text/plain".to_vec(),
+                    data: b"hello".to_vec(),
+                }],
+            )
+            .unwrap();
+        assert_eq!(7, counting.alloc_calls.get(), "items + mime + data");
+
+        // t=A: `state.destroy(alloc)` returns everything.
+        let _ = dnd::handle_command(&mut slot, alloc, &mut out, &cmd(b"t=A", None)).unwrap();
+        assert!(slot.is_none());
+    });
+    assert_eq!(0, counting.live_bytes.get(), "destroy frees every byte");
+
+    let failing = FailingAllocator::over_heap(Config {
+        fail_index: 0,
+        ..Config::default()
+    });
+    let c = failing.allocator();
+    with_handle(&c, |alloc| {
+        let mut slot: Option<dnd::StateBox> = None;
+        let mut out: Vec<u8> = Vec::new();
+        let err = dnd::handle_command(&mut slot, alloc, &mut out, &cmd(b"t=a", None)).unwrap_err();
+        assert_eq!(std::io::ErrorKind::OutOfMemory, err.kind());
+        assert!(failing.has_induced_failure.get());
+        assert!(slot.is_none(), "a failed create leaves the slot empty");
+    });
 }

@@ -6,6 +6,12 @@
 //! `stage1`/`stage2`/`stage3` constants; this is the Rust transliteration
 //! of those exact values (R1: comptime-generated artifacts reproduced
 //! bit-for-bit).
+//!
+//! Re-generated on 2026-09-23 (S-10a, `.port/phase-3/NON_PORTS.md` §G1) at the
+//! reference pin 20abdb50a, i.e. uucode 0.2.0 @ 2826a37a with that pin's
+//! rewritten `uucode_config.zig`: the regenerated arrays are identical,
+//! element for element, to the ones this file held from the pre-bump
+//! revision.
 
 // PARITY: the reference emits these as `pub const stageN` arrays (Zig comptime
 // constants). Clippy's `large_const_arrays` would have us switch to `static`,

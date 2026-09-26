@@ -46,10 +46,8 @@ fn main() -> ExitCode {
     // from the standalone binary. Neither shipped backend is reachable here —
     // see `rustty_bench::log_backend`'s header, and DECISION-logging.md §6r2/§7.
     //
-    // This is NOT `global.init(.{ .tool = ... })`: S62-F2 is about the whole
-    // process init (logging, RUSTTY_LOG, rlimits, locale, oniguruma/glslang,
-    // resources dir, signals) and this supplies only the logging part. That row
-    // stays OPEN.
+    // This backend is not `global.init(.{ .tool = ... })`; `cli::main` runs
+    // that first (parity S43-F3).
     rustty_bench::log_backend::install_bench_log_backend();
     match rustty_bench::cli::main() {
         Ok(()) => ExitCode::SUCCESS,

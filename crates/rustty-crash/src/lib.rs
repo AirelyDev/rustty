@@ -30,6 +30,8 @@ pub mod dir;
 pub(crate) mod log_capture;
 // const sentry_envelope = @import("sentry_envelope.zig");
 pub mod sentry_envelope;
+// The `std.json` slice `sentry_envelope.zig` uses (LEDGER S79-F3, S79-F4).
+pub mod json;
 
 // PORT-hosted (not in src/crash/): the `build_options` blob entry + the
 // `@import("sentry")` Zig package.

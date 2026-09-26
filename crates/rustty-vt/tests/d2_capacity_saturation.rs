@@ -25,7 +25,7 @@
 //! "worked" ⇒ re-run the oracle under ReleaseSafe/Debug FIRST (R3); ReleaseFast
 //! Zig silently tolerates the OOB the port correctly refuses.
 
-use allocator_api2::alloc::Global;
+use rustty_vt::alloc::Global;
 
 use rustty_vt::apc;
 use rustty_vt::color::{DynamicPalette, DynamicRGB};
@@ -340,7 +340,11 @@ fn osc_buffer_capacity_saturation() {
 fn pagelist_pin_buf_capacity_saturation() {
     // (a) Sanity: a few tracked pins in a row render without tripping the guard.
     {
-        let mut pl = PageList::init(rustty_vt::pagelist::Options::new(20, 5)).unwrap();
+        let mut pl = PageList::init(
+            rustty_vt::alloc::Global,
+            rustty_vt::pagelist::Options::new(20, 5),
+        )
+        .unwrap();
         for x in 0..3u16 {
             let pin = pl
                 .pin(Point::Active(Coordinate { x, y: 0 }))
@@ -359,7 +363,11 @@ fn pagelist_pin_buf_capacity_saturation() {
     //     ceiling; the guard must return TooManyTrackedPinsInRow, never index
     //     pin_buf[16] out of bounds.
     {
-        let mut pl = PageList::init(rustty_vt::pagelist::Options::new(20, 5)).unwrap();
+        let mut pl = PageList::init(
+            rustty_vt::alloc::Global,
+            rustty_vt::pagelist::Options::new(20, 5),
+        )
+        .unwrap();
         for x in 0..16u16 {
             let pin = pl
                 .pin(Point::Active(Coordinate { x, y: 0 }))

@@ -702,11 +702,15 @@ impl Modifier {
             return Err(Error::InvalidFormat);
         }
 
+        // S85-F1: `std.fmt.parseFloat` / `std.fmt.parseInt` accept `_` digit
+        // separators, hex floats and `-0`, which Rust's `str::parse` rejects;
+        // these are ports of the Zig parsers.
         if input[input.len() - 1] == b'%' {
-            let mut percent: f64 = std::str::from_utf8(&input[0..input.len() - 1])
-                .map_err(|_| Error::InvalidFormat)?
-                .parse::<f64>()
-                .map_err(|_| Error::InvalidFormat)?;
+            // var percent = std.fmt.parseFloat(f64, input[0 .. input.len - 1])
+            //     catch return error.InvalidFormat;
+            let mut percent: f64 =
+                rustty_zigstd::fmt::parse_float::<f64>(&input[0..input.len() - 1])
+                    .map_err(|_| Error::InvalidFormat)?;
             percent /= 100.0;
 
             if percent <= -1.0 {
@@ -718,11 +722,9 @@ impl Modifier {
             return Ok(Modifier::Percent(1.0 + percent));
         }
 
+        // .absolute = std.fmt.parseInt(i32, input, 10) catch return error.InvalidFormat,
         Ok(Modifier::Absolute(
-            std::str::from_utf8(input)
-                .map_err(|_| Error::InvalidFormat)?
-                .parse::<i32>()
-                .map_err(|_| Error::InvalidFormat)?,
+            rustty_zigstd::fmt::parse_int::<i32>(input, 10).map_err(|_| Error::InvalidFormat)?,
         ))
     }
 
@@ -1136,6 +1138,27 @@ mod tests {
             let m = Modifier::parse(b"0%").unwrap();
             assert_eq!(Modifier::Percent(1.0), m);
         }
+    }
+
+    /// S85-F1: `Modifier.parse` goes through Zig's `std.fmt.parseInt` /
+    /// `parseFloat`, so it takes what they take (`adjust-cell-height = 1_0`,
+    /// `adjust-cell-width = 2_0%`, a hex float, `-0`) and rejects what they
+    /// reject (a misplaced `_`). The accepted values are Zig 0.16.0's.
+    #[test]
+    fn Modifier_parse_takes_the_zig_number_grammar() {
+        assert_eq!(Modifier::parse(b"1_0"), Ok(Modifier::Absolute(10)));
+        assert_eq!(Modifier::parse(b"-1_000"), Ok(Modifier::Absolute(-1000)));
+        assert_eq!(Modifier::parse(b"+7"), Ok(Modifier::Absolute(7)));
+        assert_eq!(Modifier::parse(b"2_0%"), Ok(Modifier::Percent(1.2)));
+        // 0x1.4p4 = 20: the same as "20%".
+        assert_eq!(Modifier::parse(b"0x1.4p4%"), Ok(Modifier::Percent(1.2)));
+        assert_eq!(Modifier::parse(b"-0x1.4p4%"), Ok(Modifier::Percent(0.8)));
+
+        assert_eq!(Modifier::parse(b"_10"), Err(Error::InvalidFormat));
+        assert_eq!(Modifier::parse(b"10_"), Err(Error::InvalidFormat));
+        assert_eq!(Modifier::parse(b"1__0%"), Err(Error::InvalidFormat));
+        assert_eq!(Modifier::parse(b"0x10"), Err(Error::InvalidFormat));
+        assert_eq!(Modifier::parse(b"%"), Err(Error::InvalidFormat));
     }
 
     #[test]

@@ -247,9 +247,15 @@ pub mod io;
 ///     `set_pwd` and `set_title`;
 ///   * `screen::decode` — the PageList builder, each decoded page, and
 ///     the cursor's tracked pin;
-///   * `history::decode_page` — each history page.
+///   * `history::decode_page` — each history page;
+///   * `grid::Remap::init` — the style and hyperlink remap tables
+///     (parity S204-F1);
+///   * `page::Decoder::decode` — the staged payload buffer (parity S204-F1).
 ///
-/// Twelve `tw::check` sites in all.
+/// Fourteen `tw::check` sites in all. The last one is not reached by the
+/// transactionality sweep (its fixtures are fully buffered, so no payload is
+/// staged); `page.rs`'s `decode_staged_payload_allocation_failure_is_out_of_memory`
+/// is what turns red without it.
 ///
 /// The transactionality sweep in `codec.rs` derives its bound from a
 /// baseline run's reach count and carries a FLOOR on that count. A site is
@@ -262,8 +268,12 @@ pub mod io;
 /// (3039 passed, 0 failed). The sweep's third fixture — a terminal carrying an
 /// explicit hyperlink — exists to reach it.
 ///
-/// **Verified, not asserted**: each of the twelve sites was disabled
-/// individually and the crate suite re-run; all twelve turn it red. Redo that
+/// **Verified, not asserted**: each of the twelve original sites was disabled
+/// individually and the crate suite re-run; all twelve turn it red. The two
+/// S204-F1 sites were checked the same way (batch T-A): without the remap
+/// check the sweep and `decode_remap_allocation_failure_is_out_of_memory`
+/// fail, and without the staged check
+/// `decode_staged_payload_allocation_failure_is_out_of_memory` fails. Redo that
 /// sweep if you add a site, and add a fixture that reaches it if none does.
 ///
 /// **The floor is the only thing in that sweep doing the work.** Of the three

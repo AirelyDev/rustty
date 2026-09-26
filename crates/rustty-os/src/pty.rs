@@ -23,17 +23,53 @@
 #[cfg(target_os = "macos")]
 use rustty_util::quirks::inlineAssert as assert;
 
-#[allow(dead_code)]
+// const log = std.log.scoped(.pty);
+//
+// PORT NOTE (parity S44-F3): the four sites below go through the `log` facade
+// with this target, so the running binary's backend applies the reference
+// `logFn`'s stderr gate, macOS unified-logging sink and `level(scope): `
+// format. CORRECTION: they used to be `eprintln!("[warn] [pty] ...")` helpers
+// that printed unconditionally in a format of their own.
+#[cfg(not(any(windows, target_os = "ios")))]
 const LOG_SCOPE: &str = "pty";
 
-#[allow(dead_code)]
-fn log_warn(msg: &str) {
-    eprintln!("[warn] [{LOG_SCOPE}] {msg}");
+/// `@tagName` of a `posix.E` value: the errno's name without its leading `E`
+/// (`EBADF` -> `BADF`). The set is the errnos `fcntl(2)` and `ioctl(2)` can
+/// report on these calls; anything else renders as its number (the
+/// `rustty-termio` `errno_tag_name` shim's convention).
+#[cfg(not(any(windows, target_os = "ios")))]
+fn errno_tag_name(code: i32) -> std::borrow::Cow<'static, str> {
+    const ERRNOS: &[(i32, &str)] = &[
+        (libc::EACCES, "ACCES"),
+        (libc::EAGAIN, "AGAIN"),
+        (libc::EBADF, "BADF"),
+        (libc::EFAULT, "FAULT"),
+        (libc::EINTR, "INTR"),
+        (libc::EINVAL, "INVAL"),
+        (libc::EIO, "IO"),
+        (libc::ENODEV, "NODEV"),
+        (libc::ENOTTY, "NOTTY"),
+        (libc::ENXIO, "NXIO"),
+        (libc::EPERM, "PERM"),
+    ];
+    for (n, name) in ERRNOS {
+        if *n == code {
+            return std::borrow::Cow::Borrowed(name);
+        }
+    }
+    std::borrow::Cow::Owned(code.to_string())
 }
 
-#[allow(dead_code)]
-fn log_err(msg: &str) {
-    eprintln!("[err] [{LOG_SCOPE}] {msg}");
+/// `{}` on a `posix.E` value: the tag with a leading `.` (`.BADF`), as
+/// measured with zig 0.16.0 (`{}` -> `.BADF`, `{t}` -> `BADF`).
+#[cfg(not(any(windows, target_os = "ios")))]
+fn errno_enum_value(code: i32) -> String {
+    format!(".{}", errno_tag_name(code))
+}
+
+#[cfg(not(any(windows, target_os = "ios")))]
+fn last_errno() -> i32 {
+    std::io::Error::last_os_error().raw_os_error().unwrap_or(0)
 }
 
 /// Redeclare this winsize struct so we can just use a Zig struct. This
@@ -255,19 +291,25 @@ impl PosixPty {
         'cloexec: {
             let flags = unsafe { libc::fcntl(master_fd, libc::F_GETFD, 0) };
             if flags < 0 {
-                log_warn(&format!(
-                    "error getting flags for master fd err={}",
-                    std::io::Error::last_os_error()
-                ));
+                // log.warn("error getting flags for master fd err=E{s}", .{@tagName(posix.errno(-1))});
+                log::warn!(
+                    target: LOG_SCOPE,
+                    "error getting flags for master fd err=E{}",
+                    errno_tag_name(last_errno())
+                );
                 break 'cloexec;
             }
 
             let rc = unsafe { libc::fcntl(master_fd, libc::F_SETFD, flags | libc::FD_CLOEXEC) };
             if rc < 0 {
-                log_warn(&format!(
-                    "error setting CLOEXEC on master fd err={}",
-                    std::io::Error::last_os_error()
-                ));
+                // else => |e| log.warn("error setting CLOEXEC on master fd err=E{}", .{e}),
+                // (`{}` on a `posix.E` value renders `.BADF`, so the reference
+                // prints `err=E.BADF`; measured with zig 0.16.0.)
+                log::warn!(
+                    target: LOG_SCOPE,
+                    "error setting CLOEXEC on master fd err=E{}",
+                    errno_enum_value(last_errno())
+                );
                 break 'cloexec;
             }
         }
@@ -399,10 +441,13 @@ impl PosixPty {
         // Set controlling terminal
         let rc = unsafe { libc::ioctl(self.slave, libc::TIOCSCTTY as _, 0 as libc::c_ulong) };
         if rc != 0 {
-            log_err(&format!(
+            // log.err("error setting controlling terminal errno={}", .{err});
+            // (`{}` on a `posix.E` value renders `.NOTTY` etc.)
+            log::error!(
+                target: LOG_SCOPE,
                 "error setting controlling terminal errno={}",
-                std::io::Error::last_os_error()
-            ));
+                errno_enum_value(last_errno())
+            );
             return Err(PosixPtyError::SetControllingTerminalFailed);
         }
 
@@ -463,10 +508,12 @@ impl PosixPty {
                 self.tty_name = Some(len);
                 std::ffi::CStr::from_bytes_with_nul(&self.tty_name_buf[..len + 1]).ok()
             } else {
-                log_err(&format!(
+                // log.err("error getting name of slave PTY errno={t}", .{err});
+                log::error!(
+                    target: LOG_SCOPE,
                     "error getting name of slave PTY errno={}",
-                    std::io::Error::last_os_error()
-                ));
+                    errno_tag_name(last_errno())
+                );
                 None
             }
         }
@@ -565,6 +612,38 @@ impl std::fmt::Display for WindowsPtyError {
 #[cfg(windows)]
 impl std::error::Error for WindowsPtyError {}
 
+/// The `errdefer ... CloseHandle(...)` statements of `WindowsPty.open`
+/// (`pty.zig`): each handle is registered right after it is created, and if
+/// `open` returns early the guard closes them in reverse order (Zig runs
+/// errdefers LIFO). `disarm` is the success path.
+///
+/// PORT NOTE (parity S44-F1): CORRECTION, the port used to have no guard, so
+/// every early return after `CreateNamedPipeW` leaked the handles created so
+/// far (and the named pipe instance with them).
+#[cfg(windows)]
+struct WindowsOpenErrdefer {
+    handles: Vec<crate::windows::HANDLE>,
+    armed: bool,
+}
+
+#[cfg(windows)]
+impl WindowsOpenErrdefer {
+    fn disarm(mut self) {
+        self.armed = false;
+    }
+}
+
+#[cfg(windows)]
+impl Drop for WindowsOpenErrdefer {
+    fn drop(&mut self) {
+        if self.armed {
+            for h in self.handles.iter().rev() {
+                crate::windows::CloseHandle(*h);
+            }
+        }
+    }
+}
+
 // Process-wide counter for pipe names
 #[cfg(windows)]
 static pipe_name_counter: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
@@ -600,6 +679,11 @@ impl WindowsPty {
             lpSecurityDescriptor: std::ptr::null_mut(),
         };
 
+        let mut errdefer = WindowsOpenErrdefer {
+            handles: Vec::with_capacity(4),
+            armed: true,
+        };
+
         unsafe {
             pty.in_pipe = windows::kernel32::CreateNamedPipeW(
                 pipe_path_w.as_ptr(),
@@ -617,6 +701,8 @@ impl WindowsPty {
                 return windows::unexpectedError(windows::kernel32::GetLastError())
                     .map_err(|e| Box::new(e) as Box<dyn std::error::Error>);
             }
+            // errdefer _ = windows.exp.kernel32.CloseHandle(pty.in_pipe);
+            errdefer.handles.push(pty.in_pipe);
 
             let mut security_attributes_read = windows::SECURITY_ATTRIBUTES {
                 nLength: security_attributes.nLength,
@@ -636,6 +722,8 @@ impl WindowsPty {
                 return windows::unexpectedError(windows::kernel32::GetLastError())
                     .map_err(|e| Box::new(e) as Box<dyn std::error::Error>);
             }
+            // errdefer _ = windows.exp.kernel32.CloseHandle(pty.in_pipe_pty);
+            errdefer.handles.push(pty.in_pipe_pty);
 
             // The in_pipe needs to be created as a named pipe, since anonymous
             // pipes created with CreatePipe do not support overlapped operations,
@@ -662,6 +750,13 @@ impl WindowsPty {
                 return windows::unexpectedError(windows::kernel32::GetLastError())
                     .map_err(|e| Box::new(e) as Box<dyn std::error::Error>);
             }
+            // errdefer {
+            //     _ = windows.exp.kernel32.CloseHandle(pty.out_pipe);
+            //     _ = windows.exp.kernel32.CloseHandle(pty.out_pipe_pty);
+            // }
+            // (pushed in reverse so the LIFO drop closes `out_pipe` first)
+            errdefer.handles.push(pty.out_pipe_pty);
+            errdefer.handles.push(pty.out_pipe);
 
             windows::SetHandleInformation(pty.in_pipe, windows::HANDLE_FLAG_INHERIT, 0)?;
             windows::SetHandleInformation(pty.in_pipe_pty, windows::HANDLE_FLAG_INHERIT, 0)?;
@@ -684,6 +779,7 @@ impl WindowsPty {
         }
 
         pty.size = size;
+        errdefer.disarm();
         Ok(pty)
     }
 
@@ -800,5 +896,55 @@ mod tests {
         assert!(pty.getTtyName().is_none());
 
         pty.deinit();
+    }
+
+    /// Parity S44-F3: the pty diagnostics go through the `log` facade under
+    /// the reference's `pty` scope. The TIOCPTYGNAME failure is driven for
+    /// real (a `/dev/null` master is not a pty, so the ioctl fails with
+    /// ENODEV on macOS, measured) and captured; the other three sites, which need a failing
+    /// `fcntl` on a fresh pty fd or a `setsid` in the test process, are pinned
+    /// by their live emission text.
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[cfg_attr(miri, ignore)] // real ioctl
+    fn pty_diagnostics_reach_the_log_facade_under_the_pty_scope() {
+        use std::os::fd::IntoRawFd as _;
+        let null = std::fs::File::open("/dev/null").unwrap().into_raw_fd();
+        let mut pty = PosixPty {
+            master: null,
+            slave: -1,
+            tty_name_buf: [0; MAX_PATH_BYTES + 1],
+            tty_name: None,
+        };
+        let cap = crate::log_capture::start();
+        assert!(pty.getTtyName().is_none());
+        let messages = cap.messages();
+        drop(cap);
+        unsafe { libc::close(null) };
+        assert_eq!(
+            vec![(
+                log::Level::Error,
+                "pty".to_string(),
+                "error getting name of slave PTY errno=NODEV".to_string()
+            )],
+            messages
+        );
+
+        let src = crate::log_capture::collapse_ws(include_str!("pty.rs"));
+        for (level, message) in [
+            ("warn", "error getting flags for master fd err=E{}"),
+            ("warn", "error setting CLOEXEC on master fd err=E{}"),
+            ("error", "error setting controlling terminal errno={}"),
+            ("error", "error getting name of slave PTY errno={}"),
+        ] {
+            let wanted = crate::log_capture::emission_fragment(level, message);
+            assert_eq!(
+                1,
+                src.matches(&wanted).count(),
+                "expected one live `{wanted}`"
+            );
+        }
+        assert_eq!(errno_enum_value(libc::EBADF), ".BADF");
+        assert_eq!(errno_tag_name(libc::ENOTTY), "NOTTY");
     }
 }

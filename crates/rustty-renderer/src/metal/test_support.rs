@@ -68,6 +68,33 @@ fn require_metal_or_skip_impl(required: bool, test_name: &str, err: &dyn std::fm
     );
 }
 
+/// R14 sibling of [`metal_required`] for the one live-display dependency in this
+/// crate's macOS tests: a CoreVideo display link (`createWithActiveCGDisplays`)
+/// needs an active display, which a headless or locked session lacks.
+/// `RUSTTY_REQUIRE_DISPLAY=1` turns that skip into a failure. It is a separate
+/// variable from `RUSTTY_REQUIRE_METAL` because a machine can have a Metal
+/// device and no active display (a locked session), and because whether a CI
+/// runner has an active display is not established: CI does NOT set it yet.
+pub(crate) fn display_required() -> bool {
+    metal_required_from(std::env::var_os("RUSTTY_REQUIRE_DISPLAY").as_deref())
+}
+
+/// The display pivot: a no-op by default (the caller prints its skip line and
+/// returns), a panic under `RUSTTY_REQUIRE_DISPLAY=1`.
+#[track_caller]
+pub(crate) fn require_display_or_skip(test_name: &str, err: &dyn std::fmt::Display) {
+    require_display_or_skip_impl(display_required(), test_name, err);
+}
+
+#[track_caller]
+fn require_display_or_skip_impl(required: bool, test_name: &str, err: &dyn std::fmt::Display) {
+    assert!(
+        !required,
+        "active display required but unavailable (RUSTTY_REQUIRE_DISPLAY=1): \
+         {test_name} would have skipped: {err}"
+    );
+}
+
 /// PROVING tests for the F5 strict mode: the pivot must be a no-op by default
 /// and a panic under `RUSTTY_REQUIRE_METAL=1`. They drive the `*_from`/`*_impl`
 /// cores directly — never `std::env::set_var` — so they are race-free under the
@@ -77,7 +104,7 @@ fn require_metal_or_skip_impl(required: bool, test_name: &str, err: &dyn std::fm
 mod tests {
     use std::ffi::OsStr;
 
-    use super::{metal_required_from, require_metal_or_skip_impl};
+    use super::{metal_required_from, require_display_or_skip_impl, require_metal_or_skip_impl};
 
     #[test]
     fn metal_required_only_when_env_is_exactly_one() {
@@ -98,5 +125,16 @@ mod tests {
     #[should_panic(expected = "Metal device required but unavailable (RUSTTY_REQUIRE_METAL=1)")]
     fn skip_pivot_panics_when_metal_required() {
         require_metal_or_skip_impl(true, "some_test", &"no device");
+    }
+
+    #[test]
+    fn display_pivot_is_noop_when_not_required() {
+        require_display_or_skip_impl(false, "some_test", &"no active display");
+    }
+
+    #[test]
+    #[should_panic(expected = "active display required but unavailable (RUSTTY_REQUIRE_DISPLAY=1)")]
+    fn display_pivot_panics_when_required() {
+        require_display_or_skip_impl(true, "some_test", &"no active display");
     }
 }

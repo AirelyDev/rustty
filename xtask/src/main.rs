@@ -14,6 +14,10 @@ mod dist;
 
 mod release;
 
+mod patchelf;
+
+mod install_lib;
+
 mod archives;
 
 use std::path::{Path, PathBuf};
@@ -66,7 +70,8 @@ USAGE:
 SUBCOMMANDS:
     header-gen         Generate include/rustty.h from rustty-vt-c via cbindgen (R2)
     header-gen-apprt   Generate include/rustty-apprt.h from rustty-apprt-c via cbindgen (R2)
-    xcframework        Package rustty-apprt-c into macos/RusttyKit.xcframework (macOS Swift-app tier;
+    xcframework [--target universal|native]
+                       Package rustty-apprt-c into macos/RusttyKit.xcframework (macOS Swift-app tier;
                        the path Rustty.xcodeproj links, matching the reference's
                        GhosttyXCFramework out_path)
     xcframework-vt     Package rustty-vt-c into dist/rustty-vt.xcframework (the VT library for
@@ -75,6 +80,7 @@ SUBCOMMANDS:
                        build-lib-vt-xcframework job ships and example/swift-vt-xcframework
                        consumes.
     resources [--target-os <os>] [--prefix <prefix>] [--flatpak] [--debug] [--system-package]
+              [--optimize <mode>] [--emit-terminfo <bool>] [--emit-termcap <bool>] [--emit-themes <bool>]
                        Generate zig-out/share/{terminfo,<app>,vim,nvim,fish,zsh,bash-completion,man,locale,bat} for the macOS Copy-Resources phase (<app> = rustty by default, ghostty under identity-oracle).
                        --target-os (linux|macos|freebsd|windows|…, default: host) selects the
                        TARGET layout like ghostty's cfg.target: freebsd puts the terminfo tree
@@ -85,6 +91,10 @@ SUBCOMMANDS:
                        (default /usr), --flatpak swaps the D-Bus service + caps icons at 512,
                        --debug uses the -debug app id, --system-package puts the systemd user
                        unit under zig-out/lib instead of zig-out/share.
+                       --optimize (Debug|ReleaseSafe|ReleaseFast|ReleaseSmall, default Debug like
+                       `zig build`) picks the emit-terminfo/emit-termcap defaults: the terminfo
+                       source and termcap are installed for Debug only (the source always on
+                       windows). --emit-* override them; --emit-themes defaults to true.
     update-translations
                        Regenerate po/io.airely.rustty.pot from the GTK-apprt + Nautilus
                        sources and msgmerge every po/*.po catalog (needs xgettext+msgmerge
@@ -108,6 +118,17 @@ SUBCOMMANDS:
                        `cmake --build` from the extracted tree. Port of ghostty's
                        `zig build test-lib-vt -Demit-lib-vt=true` + CMake check steps
                        (GhosttyDist.zig:126-147, 156-171).
+    install-lib [--prefix <dir>] [--target <triple>] [--profile <p>]
+                       Non-Darwin install of the embedding library (rustty-apprt-c) as
+                       lib/rustty-internal.{so,a} (Windows: .dll / -static.lib), its header
+                       include/rustty-embed.h, and share/pkgconfig/rustty-internal{,-static}.pc.
+                       Port of build.zig's app_runtime=none install (GhosttyLib.zig). On
+                       Apple targets the library ships in the xcframework instead.
+    patchelf [--patch-interp <path>] [--patch-rpath <paths>] <binary>
+                       Port of Config.zig's patch-interp/patch-rpath + addPatchElf: run
+                       `patchelf --set-interpreter/--set-rpath` on a built binary. On native
+                       Linux inside a Nix shell the defaults are the ld.so on PATH and
+                       LD_LIBRARY_PATH, so a dev-shell build also runs outside the shell.
     release-info [--version <vX.Y.Z>] [--ref <refs/tags/vX.Y.Z>] [--no-workspace-check]
                        Emit the release metadata (version, build, commit, commit_long)
                        the .github/workflows/release-{tag,tip}.yml pipelines consume,
@@ -141,7 +162,7 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
-        Some("xcframework") => match xcframework() {
+        Some("xcframework") => match xcframework(&mut args) {
             Ok(out) => {
                 println!("wrote {}", out.display());
                 ExitCode::SUCCESS
@@ -228,6 +249,32 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
+        Some("install-lib") => match install_lib::run(&mut args) {
+            Ok(out) => {
+                println!("installed into {}", out.display());
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("xtask: install-lib failed: {e}");
+                ExitCode::FAILURE
+            }
+        },
+        Some("patchelf") => {
+            match patchelf::run(&mut args) {
+                Ok(Some(out)) => {
+                    println!("patched {}", out.display());
+                    ExitCode::SUCCESS
+                }
+                Ok(None) => {
+                    println!("nothing to patch (not native Linux in a Nix shell, and no --patch-* option)");
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("xtask: patchelf failed: {e}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
         Some("release-info") => match release::run(&mut args) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
@@ -376,8 +423,12 @@ fn header_gen_apprt() -> Result<PathBuf, String> {
 /// DEFAULT feature set — the `identity-oracle` alias layer was deleted
 /// (rebrand Task 1), so only `rustty_*` symbols are exported.
 ///
-/// macOS-arm64 slice only (the host target). A universal slice would add
-/// `x86_64-apple-darwin` via `lipo`; deferred until that target is installed.
+/// The macOS slice is universal (aarch64 + x86_64, `lipo`-combined) by
+/// default, or the host arch alone with `--target native`: the reference's
+/// `-Dxcframework-target`, default `.universal` (`Config.zig:22, 183-187`;
+/// S63-F3 / S64-F3 / S65-F3). CORRECTION (2026-09-23): this used to read
+/// "macOS-arm64 slice only (the host target). A universal slice would add
+/// `x86_64-apple-darwin` via `lipo`; deferred until that target is installed."
 ///
 /// R3: uses rustty's OWN validated `include/rustty-embed.h` (the frozen
 /// ghostty.h token-renamed and checked against the pinned upstream, per
@@ -390,6 +441,10 @@ fn header_gen_apprt() -> Result<PathBuf, String> {
 /// "object file was built for newer macOS version than being linked" warnings
 /// that appear when the host toolchain defaults to the running OS (e.g. 26.x).
 const MACOS_DEPLOYMENT_TARGET: &str = "13.0";
+
+/// `Config.zig:808-812` `osVersionMinLibVt(.ios)`: "lib-vt is the only thing
+/// we still build for iOS, so its deployment target lives here".
+const IOS_DEPLOYMENT_TARGET: &str = "13.0";
 
 /// What distinguishes one xcframework from another.
 ///
@@ -442,6 +497,124 @@ struct XcframeworkSpec {
     /// present in the resolve graph, so the per-target switch has to live here,
     /// in the builder, exactly as `--features simd` already does below.
     extra_features: &'static [&'static str],
+    /// Which slices the bundle carries. See [`Slices`].
+    slices: Slices,
+}
+
+/// How an xcframework's slices are chosen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Slices {
+    /// The embedding framework: one macOS slice, universal or native per
+    /// `xcframework_target` (`GhosttyXCFramework.zig:18-57`).
+    MacosByTarget,
+    /// The VT library: `GhosttyLibVt.initStaticAppleUniversal`
+    /// (`GhosttyLibVt.zig:146-215`) ALWAYS builds the macOS universal slice
+    /// and adds the iOS device and simulator slices when the iOS SDK is
+    /// detected; `xcframework_target` does not apply.
+    AppleUniversal,
+}
+
+/// `xcframework.zig:1-3` `Target = enum { native, universal }`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum XcframeworkTarget {
+    Native,
+    Universal,
+}
+
+/// One `-library` of an xcframework: the Rust targets whose combined archives
+/// make it (two are `lipo`-combined into one fat archive), and the target
+/// directory name its archive is written under.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Slice {
+    targets: Vec<&'static str>,
+    dir: &'static str,
+}
+
+/// The host's macOS target triple (the reference's `genericMacOSTarget(b,
+/// null)`, the native arch).
+fn native_macos_target() -> &'static str {
+    if std::env::consts::ARCH == "x86_64" {
+        "x86_64-apple-darwin"
+    } else {
+        "aarch64-apple-darwin"
+    }
+}
+
+/// The slices a spec's bundle carries.
+fn plan_slices(slices: Slices, target: XcframeworkTarget, ios_sdk: bool) -> Vec<Slice> {
+    // `initMacOSUniversal` / `initStaticAppleUniversal`: aarch64 + x86_64.
+    let universal = Slice {
+        targets: vec!["aarch64-apple-darwin", "x86_64-apple-darwin"],
+        dir: "universal-apple-darwin",
+    };
+    match slices {
+        Slices::MacosByTarget => match target {
+            XcframeworkTarget::Universal => vec![universal],
+            XcframeworkTarget::Native => {
+                let t = native_macos_target();
+                vec![Slice {
+                    targets: vec![t],
+                    dir: t,
+                }]
+            }
+        },
+        Slices::AppleUniversal => {
+            let mut v = vec![universal];
+            if ios_sdk {
+                v.push(Slice {
+                    targets: vec!["aarch64-apple-ios"],
+                    dir: "aarch64-apple-ios",
+                });
+                v.push(Slice {
+                    targets: vec!["aarch64-apple-ios-sim"],
+                    dir: "aarch64-apple-ios-sim",
+                });
+            }
+            v
+        }
+    }
+}
+
+/// `detectAppleSDK` for iOS: whether `xcrun` can find the iPhoneOS SDK.
+fn ios_sdk_available() -> bool {
+    Command::new("xcrun")
+        .args(["--sdk", "iphoneos", "--show-sdk-path"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// The environment one Apple target's cargo build runs with: the deployment
+/// target (`Config.osVersionMin`, macOS 13.0; `osVersionMinLibVt`, iOS 13.0),
+/// and for the iOS simulator the reference's explicit CPU model
+/// (`GhosttyLibVt.zig:199-205`, `.cpu_model = apple_a17`), for both rustc and
+/// the `cc`-driven C builds.
+fn apple_target_env(target: &str) -> Vec<(&'static str, &'static str)> {
+    if target == "aarch64-apple-ios-sim" {
+        vec![
+            ("IPHONEOS_DEPLOYMENT_TARGET", IOS_DEPLOYMENT_TARGET),
+            (
+                "CARGO_TARGET_AARCH64_APPLE_IOS_SIM_RUSTFLAGS",
+                "-C target-cpu=apple-a17",
+            ),
+            ("CFLAGS_aarch64_apple_ios_sim", "-mcpu=apple-a17"),
+            ("CXXFLAGS_aarch64_apple_ios_sim", "-mcpu=apple-a17"),
+        ]
+    } else if target.contains("-apple-ios") {
+        vec![("IPHONEOS_DEPLOYMENT_TARGET", IOS_DEPLOYMENT_TARGET)]
+    } else {
+        vec![("MACOSX_DEPLOYMENT_TARGET", MACOS_DEPLOYMENT_TARGET)]
+    }
+}
+
+/// `LipoStep.zig:30-34`: `lipo -create -output <out> <a> <b>`.
+fn lipo_command(out: &Path, inputs: &[PathBuf]) -> Command {
+    let mut cmd = Command::new("lipo");
+    cmd.arg("-create").arg("-output").arg(out);
+    for i in inputs {
+        cmd.arg(i);
+    }
+    cmd
 }
 
 /// The two shapes rustty's public headers take.
@@ -481,6 +654,7 @@ const XCF_KIT: XcframeworkSpec = XcframeworkSpec {
     // TRUE on macOS/iOS, and this is the macOS app's library. See
     // `extra_features` above and `rustty-crash`'s `[features]` header.
     extra_features: &["sentry"],
+    slices: Slices::MacosByTarget,
 };
 
 /// PORTS: ghostty's `ghostty-vt.xcframework` (GhosttyXCFramework.zig's lib-vt
@@ -505,6 +679,7 @@ const XCF_VT: XcframeworkSpec = XcframeworkSpec {
     // library is below the crash tier), so there is nothing to enable — the
     // reference links sentry into the APP, not into libghostty-vt.
     extra_features: &[],
+    slices: Slices::AppleUniversal,
 };
 
 /// Copy a directory tree verbatim. `std::fs` has no recursive copy and the
@@ -524,17 +699,86 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn xcframework() -> Result<PathBuf, String> {
-    build_xcframework(&XCF_KIT)
+/// Parse `xtask xcframework`'s flags: `--target universal|native`
+/// (`-Dxcframework-target`), default universal.
+fn parse_xcframework_args(
+    args: &mut impl Iterator<Item = String>,
+) -> Result<XcframeworkTarget, String> {
+    let mut target = XcframeworkTarget::Universal;
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--target" => {
+                target = match args.next().as_deref() {
+                    Some("universal") => XcframeworkTarget::Universal,
+                    Some("native") => XcframeworkTarget::Native,
+                    _ => return Err("--target requires `universal` or `native`".into()),
+                };
+            }
+            other => return Err(format!("unknown `xcframework` flag `{other}`")),
+        }
+    }
+    Ok(target)
+}
+
+fn xcframework(args: &mut impl Iterator<Item = String>) -> Result<PathBuf, String> {
+    let target = parse_xcframework_args(args)?;
+    build_xcframework(&XCF_KIT, target)
 }
 
 fn xcframework_vt() -> Result<PathBuf, String> {
-    build_xcframework(&XCF_VT)
+    // `xcframework_target` does not apply to the VT library (see `Slices`).
+    build_xcframework(&XCF_VT, XcframeworkTarget::Universal)
 }
 
-fn build_xcframework(spec: &XcframeworkSpec) -> Result<PathBuf, String> {
+fn build_xcframework(
+    spec: &XcframeworkSpec,
+    xcf_target: XcframeworkTarget,
+) -> Result<PathBuf, String> {
     let root = workspace_root();
-    let target = "aarch64-apple-darwin";
+    let ios_sdk = spec.slices == Slices::AppleUniversal && ios_sdk_available();
+    let slices = plan_slices(spec.slices, xcf_target, ios_sdk);
+
+    // One library per slice: each Rust target's combined archive, then
+    // `lipo` for a fat slice.
+    let mut libs: Vec<PathBuf> = Vec::with_capacity(slices.len());
+    for slice in &slices {
+        let mut per_target = Vec::with_capacity(slice.targets.len());
+        for target in &slice.targets {
+            per_target.push(build_combined_archive(&root, spec, target)?);
+        }
+        let lib = if let [one] = per_target.as_slice() {
+            one.clone()
+        } else {
+            let out = root.join(format!(
+                "target/{}/xcframework/{}.a",
+                slice.dir, spec.lib_stem
+            ));
+            std::fs::create_dir_all(out.parent().unwrap())
+                .map_err(|e| format!("mkdir {}: {e}", out.display()))?;
+            let _ = std::fs::remove_file(&out);
+            let status = lipo_command(&out, &per_target)
+                .current_dir(&root)
+                .status()
+                .map_err(|e| format!("spawn lipo: {e}"))?;
+            if !status.success() {
+                return Err(format!("lipo exited with {status}"));
+            }
+            out
+        };
+        libs.push(lib);
+    }
+
+    stage_and_create_xcframework(&root, spec, &libs)
+}
+
+/// Build one Rust target's staticlib and fold in its vendored C archives
+/// (steps 1 and 1b), returning the combined archive.
+fn build_combined_archive(
+    root: &Path,
+    spec: &XcframeworkSpec,
+    target: &str,
+) -> Result<PathBuf, String> {
+    let root = root.to_path_buf();
 
     // 1. Build the DEFAULT-profile staticlib under the abort profile.
     //
@@ -572,7 +816,7 @@ fn build_xcframework(spec: &XcframeworkSpec) -> Result<PathBuf, String> {
             "--target",
             target,
         ],
-        &[("MACOSX_DEPLOYMENT_TARGET", MACOS_DEPLOYMENT_TARGET)],
+        &apple_target_env(target),
     )?;
 
     // 1b. Combine the Rust staticlib with its vendored C archives into ONE
@@ -655,6 +899,18 @@ fn build_xcframework(spec: &XcframeworkSpec) -> Result<PathBuf, String> {
     if !lib.exists() {
         return Err(format!("combined lib not found at {}", lib.display()));
     }
+    Ok(lib)
+}
+
+/// Steps 2 and 3: stage the headers and module map, then
+/// `xcodebuild -create-xcframework` with one `-library`/`-headers` pair per
+/// slice (`XCFrameworkStep.zig`).
+fn stage_and_create_xcframework(
+    root: &Path,
+    spec: &XcframeworkSpec,
+    libs: &[PathBuf],
+) -> Result<PathBuf, String> {
+    let root = root.to_path_buf();
 
     // 2. Stage the headers dir + the clang module map.
     let dist = root.join("dist");
@@ -712,11 +968,12 @@ fn build_xcframework(spec: &XcframeworkSpec) -> Result<PathBuf, String> {
     std::fs::create_dir_all(&out_dir).map_err(|e| format!("mkdir {}: {e}", out_dir.display()))?;
     let out = out_dir.join(spec.bundle);
     let _ = std::fs::remove_dir_all(&out);
-    let status = Command::new("xcodebuild")
-        .args(["-create-xcframework", "-library"])
-        .arg(&lib)
-        .arg("-headers")
-        .arg(&headers)
+    let mut xcb = Command::new("xcodebuild");
+    xcb.arg("-create-xcframework");
+    for lib in libs {
+        xcb.arg("-library").arg(lib).arg("-headers").arg(&headers);
+    }
+    let status = xcb
         .arg("-output")
         .arg(&out)
         .current_dir(&root)
@@ -762,8 +1019,30 @@ fn resources(args: &mut impl Iterator<Item = String>) -> Result<PathBuf, String>
     let mut flatpak = false;
     let mut debug = false;
     let mut system_package = false;
+    // `-Doptimize` and the `-Demit-terminfo` / `-Demit-termcap` /
+    // `-Demit-themes` overrides (`Config.zig:504-529`, S64-F8).
+    let mut optimize = res_terminfo::Optimize::Debug;
+    let mut emit_terminfo: Option<bool> = None;
+    let mut emit_termcap: Option<bool> = None;
+    let mut emit_themes = true;
+    let parse_bool = |flag: &str, v: Option<String>| -> Result<bool, String> {
+        match v.as_deref() {
+            Some("true") => Ok(true),
+            Some("false") => Ok(false),
+            _ => Err(format!("{flag} requires `true` or `false`")),
+        }
+    };
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--optimize" => {
+                let v = args.next().ok_or("--optimize requires a value")?;
+                optimize = res_terminfo::Optimize::parse(&v).ok_or_else(|| {
+                    format!("--optimize `{v}`: expected Debug, ReleaseSafe, ReleaseFast or ReleaseSmall")
+                })?;
+            }
+            "--emit-terminfo" => emit_terminfo = Some(parse_bool(&arg, args.next())?),
+            "--emit-termcap" => emit_termcap = Some(parse_bool(&arg, args.next())?),
+            "--emit-themes" => emit_themes = parse_bool(&arg, args.next())?,
             "--target-os" => {
                 target_os = args.next().ok_or("--target-os requires a value")?;
             }
@@ -781,11 +1060,22 @@ fn resources(args: &mut impl Iterator<Item = String>) -> Result<PathBuf, String>
     let share = root.join("zig-out/share");
     std::fs::create_dir_all(&share).map_err(|e| format!("create zig-out/share/: {e}"))?;
 
-    res_terminfo::gen_terminfo(&share, &target_os).map_err(|e| format!("gen_terminfo: {e}"))?;
+    let mut emit = res_terminfo::Emit::defaults(&target_os, optimize);
+    if let Some(v) = emit_terminfo {
+        emit.terminfo = v;
+    }
+    if let Some(v) = emit_termcap {
+        emit.termcap = v;
+    }
+    res_terminfo::gen_terminfo(&share, &target_os, emit)
+        .map_err(|e| format!("gen_terminfo: {e}"))?;
     res_shell::gen_shell(&share).map_err(|e| format!("gen_shell: {e}"))?;
     res_editor::gen_editor(&share).map_err(|e| format!("gen_editor: {e}"))?;
     res_misc::gen_misc(&share).map_err(|e| format!("gen_misc: {e}"))?;
-    res_themes::gen_themes(&share).map_err(|e| format!("gen_themes: {e}"))?;
+    // Themes: `if (cfg.emit_themes)` (`GhosttyResources.zig:127-138`).
+    if emit_themes {
+        res_themes::gen_themes(&share).map_err(|e| format!("gen_themes: {e}"))?;
+    }
     res_shell_integration::gen_shell_integration(&share)
         .map_err(|e| format!("gen_shell_integration: {e}"))?;
 
@@ -816,12 +1106,13 @@ fn wasm_patch_growable_table_cmd(
     args: &mut impl Iterator<Item = String>,
 ) -> Result<PathBuf, String> {
     // Parse args: input output
-    let input = args
-        .next()
-        .ok_or("usage: wasm-patch-growable-table <input.wasm> <output.wasm>")?;
-    let output = args
-        .next()
-        .ok_or("usage: wasm-patch-growable-table <input.wasm> <output.wasm>")?;
+    //
+    // The reference checks `args.len != 3`, so a surplus argument is the
+    // same usage error as a missing one (S65-F7).
+    let usage = "usage: wasm-patch-growable-table <input.wasm> <output.wasm>";
+    let (Some(input), Some(output), None) = (args.next(), args.next(), args.next()) else {
+        return Err(usage.to_string());
+    };
 
     // Patch the file.
     let bytes = std::fs::read(&input).map_err(|e| format!("read {input}: {e}"))?;
@@ -833,4 +1124,118 @@ fn wasm_patch_growable_table_cmd(
     std::fs::write(&output, patched.as_ref())
         .map_err(|e| format!("write {}: {e}", output.display()))?;
     Ok(output)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const WASM_PATCH_USAGE: &str = "usage: wasm-patch-growable-table <input.wasm> <output.wasm>";
+
+    /// `Config.zig:22, 183-187`: `xcframework_target` defaults to universal,
+    /// and `GhosttyXCFramework.zig:42-57` then packs ONE macOS library, the
+    /// `initMacOSUniversal` lipo of aarch64 and x86_64 (S63-F3, S64-F3,
+    /// S65-F3). `native` is the host arch alone.
+    #[test]
+    fn kit_xcframework_is_universal_by_default() {
+        let t = parse_xcframework_args(&mut std::iter::empty()).unwrap();
+        assert_eq!(t, XcframeworkTarget::Universal);
+        let slices = plan_slices(XCF_KIT.slices, t, true);
+        assert_eq!(
+            slices,
+            vec![Slice {
+                targets: vec!["aarch64-apple-darwin", "x86_64-apple-darwin"],
+                dir: "universal-apple-darwin",
+            }]
+        );
+        let native =
+            parse_xcframework_args(&mut ["--target", "native"].into_iter().map(String::from))
+                .unwrap();
+        let slices = plan_slices(XCF_KIT.slices, native, true);
+        assert_eq!(slices.len(), 1);
+        assert_eq!(slices[0].targets, vec![native_macos_target()]);
+        assert!(
+            parse_xcframework_args(&mut ["--target", "fat"].into_iter().map(String::from)).is_err()
+        );
+    }
+
+    /// `GhosttyLibVt.zig:146-215`: the VT library always has the macOS
+    /// universal slice, plus the iOS device and simulator slices when the
+    /// iOS SDK is detected (S64-F4).
+    #[test]
+    fn vt_xcframework_has_the_apple_universal_slices() {
+        let with_ios = plan_slices(XCF_VT.slices, XcframeworkTarget::Native, true);
+        let targets: Vec<_> = with_ios.iter().map(|s| s.targets.clone()).collect();
+        assert_eq!(
+            targets,
+            vec![
+                vec!["aarch64-apple-darwin", "x86_64-apple-darwin"],
+                vec!["aarch64-apple-ios"],
+                vec!["aarch64-apple-ios-sim"],
+            ]
+        );
+        let without = plan_slices(XCF_VT.slices, XcframeworkTarget::Universal, false);
+        assert_eq!(without.len(), 1);
+        let sim = apple_target_env("aarch64-apple-ios-sim");
+        assert!(sim.contains(&("IPHONEOS_DEPLOYMENT_TARGET", "13.0")));
+        assert!(sim.contains(&(
+            "CARGO_TARGET_AARCH64_APPLE_IOS_SIM_RUSTFLAGS",
+            "-C target-cpu=apple-a17"
+        )));
+        assert_eq!(
+            apple_target_env("aarch64-apple-ios"),
+            [("IPHONEOS_DEPLOYMENT_TARGET", "13.0")]
+        );
+        assert_eq!(
+            apple_target_env("x86_64-apple-darwin"),
+            [("MACOSX_DEPLOYMENT_TARGET", "13.0")]
+        );
+    }
+
+    /// `LipoStep.zig:30-34`.
+    #[test]
+    fn lipo_command_matches_the_reference_argv() {
+        let cmd = lipo_command(
+            Path::new("out.a"),
+            &[PathBuf::from("a.a"), PathBuf::from("b.a")],
+        );
+        assert_eq!(cmd.get_program(), "lipo");
+        let args: Vec<_> = cmd.get_args().map(|a| a.to_str().unwrap()).collect();
+        assert_eq!(args, ["-create", "-output", "out.a", "a.a", "b.a"]);
+    }
+
+    /// `wasm_patch_growable_table.zig:21-26`: `if (args.len != 3)` logs the
+    /// usage line and exits 1, so too MANY arguments is the same usage error
+    /// as too few (S65-F7). The input path does not exist, so reaching the
+    /// read would yield a `read …` error instead; asserting the usage text
+    /// proves the arity check itself rejected the call.
+    #[test]
+    fn wasm_patch_rejects_extra_trailing_argument() {
+        let mut args = ["no-such-in.wasm", "no-such-out.wasm", "junk"]
+            .into_iter()
+            .map(String::from);
+        let err = wasm_patch_growable_table_cmd(&mut args).unwrap_err();
+        assert_eq!(err, WASM_PATCH_USAGE);
+    }
+
+    /// Positive control for the test above: with exactly two arguments the
+    /// arity check passes and the command proceeds to the read, which fails
+    /// on the missing input. So the usage error above comes from the arity
+    /// check, not from some earlier rejection of every call.
+    #[test]
+    fn wasm_patch_exact_arity_reaches_the_read() {
+        let mut args = ["no-such-in.wasm", "no-such-out.wasm"]
+            .into_iter()
+            .map(String::from);
+        let err = wasm_patch_growable_table_cmd(&mut args).unwrap_err();
+        assert!(err.starts_with("read no-such-in.wasm: "), "{err}");
+    }
+
+    /// Too few arguments is still the usage error.
+    #[test]
+    fn wasm_patch_rejects_missing_output_argument() {
+        let mut args = ["no-such-in.wasm"].into_iter().map(String::from);
+        let err = wasm_patch_growable_table_cmd(&mut args).unwrap_err();
+        assert_eq!(err, WASM_PATCH_USAGE);
+    }
 }

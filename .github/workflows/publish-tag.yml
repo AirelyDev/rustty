@@ -67,7 +67,7 @@ jobs:
             "rustty-${RUSTTY_VERSION}.tar.gz.minisig" \
             "rustty-source.tar.gz" \
             "rustty-source.tar.gz.minisig" \
-            "rustty-macos-arm64.zip" \
+            "rustty-macos-universal.zip" \
             "Rustty.dmg" \
             "appcast-staged.xml"; do
             code="$(curl -I -s -o /dev/null -w '%{http_code}' "${BASE}/${f}")"

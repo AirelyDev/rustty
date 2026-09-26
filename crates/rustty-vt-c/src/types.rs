@@ -1534,7 +1534,9 @@ static DECLS: &[TypeDecl] = {
         enum_decl!(
             "RusttyClipboardLocation",
             "RUSTTY_CLIPBOARD_LOCATION_",
-            enum_values!(
+            // PORT NOTE (parity S150-F2): `Location` is an open newtype, hence
+            // const rows.
+            enum_const_values!(
                 rustty_vt::clipboard::Location,
                 [
                     ("standard", Standard),

@@ -12,16 +12,36 @@
 // glyph parser takes an allocator in their Rust ports (both buffer into owned
 // `Vec`s). The kitty `complete`/`kitty_graphics` path still consumes an
 // allocator at `end`, so the parameter is real there.
-use allocator_api2::alloc::Global as Allocator;
+use crate::alloc::Allocator;
 
 // pub const glyph = @import("apc/glyph.zig");
 // const kitty_gfx = @import("kitty/graphics.zig");
 pub mod glyph;
 use crate::kitty::graphics as kitty_gfx;
-use crate::options::KITTY_GRAPHICS;
+use crate::options::{GLYPH_PROTOCOL, KITTY_GRAPHICS};
 
 // const log = std.log.scoped(.terminal_apc);
 const LOG_SCOPE: &str = "terminal_apc";
+
+/// The identify arm's `comptime build_options.glyph_protocol` gate.
+///
+/// PORT NOTE (parity S149-F1): in every non-test build this is exactly the
+/// const `options::GLYPH_PROTOCOL`. The `cfg(test)` arm is a test seam: this
+/// crate's tests never build with the `glyph-protocol` feature off
+/// (rustty-synthetic's dev-dependency unifies the default features back on,
+/// and `check_vt_features.py` records that a trimmed build is a build
+/// configuration, not a test one), so a thread-local lets
+/// `glyph_protocol_build_option_off_ignores_glyph_command` take the gate's off
+/// arm. It gates only the identify arm; with it off no `State::Glyph` is ever
+/// entered, so the other arms' `GLYPH_PROTOCOL` guards are not reached.
+#[inline(always)]
+fn glyph_protocol_build_option() -> bool {
+    #[cfg(test)]
+    if tests::GLYPH_PROTOCOL_FORCED_OFF.with(|off| off.get()) {
+        return false;
+    }
+    GLYPH_PROTOCOL
+}
 
 /// APC command handler. This should be hooked into a terminal.Stream handler.
 /// The start/feed/end functions are meant to be called from the terminal.Stream
@@ -165,8 +185,12 @@ impl Handler {
                 // if (byte == ';') {
                 //     const str = id.buf[0..id.len];
                 //     if (std.mem.eql(u8, str, glyph.identifier)) {
-                //         if (self.enabled.contains(.glyph)) { ... }
-                //         else { self.state = .ignore; }
+                //         if (comptime build_options.glyph_protocol) {
+                //             if (self.enabled.contains(.glyph)) { ... }
+                //             else { self.state = .ignore; }
+                //         } else {
+                //             self.state = .ignore;
+                //         }
                 //     } else {
                 //         self.beginUnknown(alloc, str, &.{byte});
                 //     }
@@ -177,10 +201,16 @@ impl Handler {
                     let prefix_len = id.len as usize;
                     let str = &prefix_buf[0..prefix_len];
                     if str == glyph::IDENTIFIER {
-                        if self.enabled[Protocol::Glyph as usize] {
-                            self.state = State::Glyph(glyph::CommandParser::init(
-                                self.max_bytes[Protocol::Glyph as usize],
-                            ));
+                        // CORRECTION (parity S149-F1): the build-option gate
+                        // was missing here and in the glyph arms below.
+                        if glyph_protocol_build_option() {
+                            if self.enabled[Protocol::Glyph as usize] {
+                                self.state = State::Glyph(glyph::CommandParser::init(
+                                    self.max_bytes[Protocol::Glyph as usize],
+                                ));
+                            } else {
+                                self.state = State::Ignore;
+                            }
                         } else {
                             self.state = State::Ignore;
                         }
@@ -248,16 +278,22 @@ impl Handler {
                 }
             }
 
-            // .glyph => |*p| p.feed(byte) catch |err| {
-            //     log.warn("glyph protocol error: {}", .{err});
-            //     p.deinit();
-            //     self.state = .ignore;
-            // },
+            // .glyph => |*p| if (comptime build_options.glyph_protocol) {
+            //     p.feed(byte) catch |err| {
+            //         log.warn("glyph protocol error: {}", .{err});
+            //         p.deinit();
+            //         self.state = .ignore;
+            //     };
+            // } else unreachable,
             State::Glyph(p) => {
-                if let Err(err) = p.feed(byte) {
-                    log::warn!(target: LOG_SCOPE, "glyph protocol error: {err:?}");
-                    p.deinit();
-                    self.state = State::Ignore;
+                if GLYPH_PROTOCOL {
+                    if let Err(err) = p.feed(byte) {
+                        log::warn!(target: LOG_SCOPE, "glyph protocol error: {err:?}");
+                        p.deinit();
+                        self.state = State::Ignore;
+                    }
+                } else {
+                    unreachable!();
                 }
             }
         }
@@ -352,14 +388,18 @@ impl Handler {
                     }
                 }
 
-                // .glyph => |*p| { p.feedSlice(rem) catch ...; return; },
+                // .glyph => |*p| if (comptime build_options.glyph_protocol) { ... } else unreachable,
                 State::Glyph(p) => {
-                    if let Err(err) = p.feed_slice(rem) {
-                        log::warn!(target: LOG_SCOPE, "glyph protocol error: {err:?}");
-                        p.deinit();
-                        self.state = State::Ignore;
+                    if GLYPH_PROTOCOL {
+                        if let Err(err) = p.feed_slice(rem) {
+                            log::warn!(target: LOG_SCOPE, "glyph protocol error: {err:?}");
+                            p.deinit();
+                            self.state = State::Ignore;
+                        }
+                        return;
+                    } else {
+                        unreachable!();
                     }
-                    return;
                 }
             }
         }
@@ -419,19 +459,26 @@ impl Handler {
             }
 
             // .glyph => |*p| glyph_cmd: {
+            //     if (comptime !build_options.glyph_protocol) unreachable;
             //     const command = p.complete(p.alloc) catch |err| {
             //         log.warn("glyph protocol error: {}", .{err});
             //         break :glyph_cmd null;
             //     };
             //     break :glyph_cmd .{ .glyph = command };
             // },
-            State::Glyph(mut p) => match p.complete() {
-                Ok(command) => Some(Command::Glyph(command)),
-                Err(err) => {
-                    log::warn!(target: LOG_SCOPE, "glyph protocol error: {err:?}");
-                    None
+            State::Glyph(mut p) => {
+                if !GLYPH_PROTOCOL {
+                    unreachable!();
                 }
-            },
+
+                match p.complete() {
+                    Ok(command) => Some(Command::Glyph(command)),
+                    Err(err) => {
+                        log::warn!(target: LOG_SCOPE, "glyph protocol error: {err:?}");
+                        None
+                    }
+                }
+            }
         }
     }
 }
@@ -474,7 +521,12 @@ pub enum State {
     Kitty(kitty_gfx::CommandParser),
 
     /// Glyph protocol
-    // glyph: glyph.CommandParser,
+    // glyph: if (build_options.glyph_protocol)
+    //     glyph.CommandParser
+    // else
+    //     void,
+    // PORT NOTE: always carries the parser, as `Kitty` does (see above); the
+    // `!GLYPH_PROTOCOL` arms keep the reference's `unreachable` guards.
     Glyph(glyph::CommandParser),
 
     /// An unsupported APC retained for the optional unknown callback.
@@ -489,7 +541,10 @@ impl State {
     //     switch (self.*) {
     //         .inactive, .ignore, .identify => {},
     //         .unknown => |*v| v.deinit(),
-    //         .glyph => |*v| v.deinit(),
+    //         .glyph => |*v| if (comptime build_options.glyph_protocol)
+    //             v.deinit()
+    //         else
+    //             unreachable,
     //         .kitty => |*v| if (comptime build_options.kitty_graphics)
     //             v.deinit()
     //         else
@@ -500,7 +555,13 @@ impl State {
         match self {
             State::Inactive | State::Ignore | State::Identify(_) => {}
             State::Unknown(v) => v.deinit(),
-            State::Glyph(v) => v.deinit(),
+            State::Glyph(v) => {
+                if GLYPH_PROTOCOL {
+                    v.deinit();
+                } else {
+                    unreachable!();
+                }
+            }
             State::Kitty(_v) => {
                 if KITTY_GRAPHICS {
                     // v.deinit();
@@ -714,7 +775,7 @@ impl Protocol {
 /// A recognized or unsupported APC command.
 // pub const Command = union(enum) {
 //     kitty: if (build_options.kitty_graphics) kitty_gfx.Command else void,
-//     glyph: glyph.Request,
+//     glyph: if (build_options.glyph_protocol) glyph.Request else void,
 //     unknown: Unknown,
 //     ...
 // };
@@ -731,7 +792,11 @@ impl Command {
     //             v.deinit(alloc)
     //         else
     //             unreachable,
-    //         .glyph => |*v| v.deinit(alloc),
+    //         .glyph => |*v| if (comptime build_options.glyph_protocol)
+    //             v.deinit(alloc)
+    //         else
+    //             unreachable,
+    //         .unknown => |*v| v.deinit(alloc),
     //     }
     // }
     // PORT NOTE: both the kitty `Command` and the glyph `Request` own their bytes
@@ -747,7 +812,12 @@ impl Command {
                 let _ = alloc;
             }
             // v.deinit(alloc) — `Request::deinit` frees on drop; no-op.
-            Command::Glyph(v) => v.deinit(),
+            Command::Glyph(v) => {
+                if !GLYPH_PROTOCOL {
+                    unreachable!();
+                }
+                v.deinit();
+            }
             // .unknown => |*v| v.deinit(alloc),
             Command::Unknown(v) => v.deinit(alloc),
         }
@@ -756,8 +826,30 @@ impl Command {
 
 #[cfg(test)]
 mod tests {
+    thread_local! {
+        /// Test seam for `glyph_protocol_build_option` (parity S149-F1).
+        pub(super) static GLYPH_PROTOCOL_FORCED_OFF: core::cell::Cell<bool> =
+            const { core::cell::Cell::new(false) };
+    }
+
+    /// Forces the glyph build option off on this test thread until dropped.
+    struct ForceGlyphProtocolOff;
+
+    impl ForceGlyphProtocolOff {
+        fn new() -> Self {
+            GLYPH_PROTOCOL_FORCED_OFF.with(|off| off.set(true));
+            ForceGlyphProtocolOff
+        }
+    }
+
+    impl Drop for ForceGlyphProtocolOff {
+        fn drop(&mut self) {
+            GLYPH_PROTOCOL_FORCED_OFF.with(|off| off.set(false));
+        }
+    }
+
     use super::*;
-    use allocator_api2::alloc::Global;
+    use crate::alloc::Global;
 
     // test "unknown APC command"
     #[test]
@@ -775,7 +867,13 @@ mod tests {
     // S149-F2: glyph-protocol parse failures at `end()` log
     // `log.warn("glyph protocol error: {}", .{err})` (apc.zig:241-244).
     #[test]
+    #[cfg_attr(
+        not(feature = "glyph-protocol"),
+        ignore = "SkipZigTest: needs options::GLYPH_PROTOCOL (R14)"
+    )]
     fn glyph_protocol_error_at_end_logs() {
+        // The glyph parser only exists with `build_options.glyph_protocol`.
+
         let alloc = Global;
         let mut h: Handler = Handler::default();
         h.start();
@@ -890,11 +988,12 @@ mod tests {
 
     // test "garbage Kitty command"
     #[test]
+    #[cfg_attr(
+        not(all(feature = "kitty-graphics", not(target_os = "none"))),
+        ignore = "SkipZigTest: needs options::KITTY_GRAPHICS (R14)"
+    )]
     fn garbage_kitty_command() {
         // if (comptime !build_options.kitty_graphics) return error.SkipZigTest;
-        if !KITTY_GRAPHICS {
-            return;
-        }
 
         let alloc = Global;
 
@@ -908,11 +1007,12 @@ mod tests {
 
     // test "Kitty command with overflow u32"
     #[test]
+    #[cfg_attr(
+        not(all(feature = "kitty-graphics", not(target_os = "none"))),
+        ignore = "SkipZigTest: needs options::KITTY_GRAPHICS (R14)"
+    )]
     fn kitty_command_with_overflow_u32() {
         // if (comptime !build_options.kitty_graphics) return error.SkipZigTest;
-        if !KITTY_GRAPHICS {
-            return;
-        }
 
         let alloc = Global;
 
@@ -926,11 +1026,12 @@ mod tests {
 
     // test "Kitty command with overflow i32"
     #[test]
+    #[cfg_attr(
+        not(all(feature = "kitty-graphics", not(target_os = "none"))),
+        ignore = "SkipZigTest: needs options::KITTY_GRAPHICS (R14)"
+    )]
     fn kitty_command_with_overflow_i32() {
         // if (comptime !build_options.kitty_graphics) return error.SkipZigTest;
-        if !KITTY_GRAPHICS {
-            return;
-        }
 
         let alloc = Global;
 
@@ -944,11 +1045,12 @@ mod tests {
 
     // test "kitty feed error deinits parser"
     #[test]
+    #[cfg_attr(
+        not(all(feature = "kitty-graphics", not(target_os = "none"))),
+        ignore = "SkipZigTest: needs options::KITTY_GRAPHICS (R14)"
+    )]
     fn kitty_feed_error_deinits_parser() {
         // if (comptime !build_options.kitty_graphics) return error.SkipZigTest;
-        if !KITTY_GRAPHICS {
-            return;
-        }
 
         let alloc = Global;
 
@@ -968,11 +1070,12 @@ mod tests {
 
     // test "kitty max bytes exceeded"
     #[test]
+    #[cfg_attr(
+        not(all(feature = "kitty-graphics", not(target_os = "none"))),
+        ignore = "SkipZigTest: needs options::KITTY_GRAPHICS (R14)"
+    )]
     fn kitty_max_bytes_exceeded() {
         // if (comptime !build_options.kitty_graphics) return error.SkipZigTest;
-        if !KITTY_GRAPHICS {
-            return;
-        }
 
         let alloc = Global;
 
@@ -1007,11 +1110,12 @@ mod tests {
 
     // test "valid Kitty command"
     #[test]
+    #[cfg_attr(
+        not(all(feature = "kitty-graphics", not(target_os = "none"))),
+        ignore = "SkipZigTest: needs options::KITTY_GRAPHICS (R14)"
+    )]
     fn valid_kitty_command() {
         // if (comptime !build_options.kitty_graphics) return error.SkipZigTest;
-        if !KITTY_GRAPHICS {
-            return;
-        }
 
         let alloc = Global;
 
@@ -1095,7 +1199,13 @@ mod tests {
 
     // test "valid glyph command"
     #[test]
+    #[cfg_attr(
+        not(feature = "glyph-protocol"),
+        ignore = "SkipZigTest: needs options::GLYPH_PROTOCOL (R14)"
+    )]
     fn valid_glyph_command() {
+        // if (comptime !build_options.glyph_protocol) return error.SkipZigTest;
+
         let alloc = Global;
 
         let mut h: Handler = Handler::default();
@@ -1114,13 +1224,52 @@ mod tests {
         result.deinit(alloc);
     }
 
+    // Parity S149-F1 (no reference test): with `build_options.glyph_protocol`
+    // off, the reference's identify arm takes `self.state = .ignore` for the
+    // glyph identifier even while `.glyph` is enabled at runtime, so the APC
+    // ends with no command. The build option is forced off through the
+    // `glyph_protocol_build_option` test seam, so this runs in every lane (in a
+    // genuinely trimmed build the const is already false).
+    #[test]
+    fn glyph_protocol_build_option_off_ignores_glyph_command() {
+        // Control: without the seam the same bytes identify as glyph exactly
+        // when the build option is on.
+        {
+            let alloc = Global;
+            let mut h: Handler = Handler::default();
+            h.start();
+            h.feed_slice(alloc, b"25a1;");
+            assert_eq!(GLYPH_PROTOCOL, matches!(h.state, State::Glyph(_)));
+            h.deinit();
+        }
+
+        let _off = ForceGlyphProtocolOff::new();
+        assert!(!super::glyph_protocol_build_option());
+        let alloc = Global;
+        let mut h: Handler = Handler::default();
+        assert!(h.enabled[Protocol::Glyph as usize]);
+        h.start();
+        for c in *b"25a1;" {
+            h.feed(alloc, c);
+        }
+        assert!(matches!(h.state, State::Ignore));
+        h.feed_slice(alloc, b"q;cp=E0A0");
+        assert!(h.end(alloc).is_none());
+
+        h.start();
+        h.feed_slice(alloc, b"25a1;q;cp=E0A0");
+        assert!(matches!(h.state, State::Ignore));
+        assert!(h.end(alloc).is_none());
+    }
+
     // test "feedSlice valid Kitty command"
     #[test]
+    #[cfg_attr(
+        not(all(feature = "kitty-graphics", not(target_os = "none"))),
+        ignore = "SkipZigTest: needs options::KITTY_GRAPHICS (R14)"
+    )]
     fn feed_slice_valid_kitty_command() {
         // if (comptime !build_options.kitty_graphics) return error.SkipZigTest;
-        if !KITTY_GRAPHICS {
-            return;
-        }
 
         let alloc = Global;
 
@@ -1140,11 +1289,11 @@ mod tests {
 
     // test "feedSlice identify split across slices"
     #[test]
+    #[cfg_attr(
+        not(all(feature = "kitty-graphics", not(target_os = "none"))),
+        ignore = "SkipZigTest: needs options::KITTY_GRAPHICS (R14)"
+    )]
     fn feed_slice_identify_split_across_slices() {
-        if !KITTY_GRAPHICS {
-            return;
-        }
-
         let alloc = Global;
 
         let mut h: Handler = Handler::default();
@@ -1178,7 +1327,13 @@ mod tests {
 
     // test "feedSlice valid glyph command"
     #[test]
+    #[cfg_attr(
+        not(feature = "glyph-protocol"),
+        ignore = "SkipZigTest: needs options::GLYPH_PROTOCOL (R14)"
+    )]
     fn feed_slice_valid_glyph_command() {
+        // if (comptime !build_options.glyph_protocol) return error.SkipZigTest;
+
         let alloc = Global;
 
         let mut h: Handler = Handler::default();
@@ -1193,11 +1348,11 @@ mod tests {
 
     // test "feedSlice kitty max bytes exceeded"
     #[test]
+    #[cfg_attr(
+        not(all(feature = "kitty-graphics", not(target_os = "none"))),
+        ignore = "SkipZigTest: needs options::KITTY_GRAPHICS (R14)"
+    )]
     fn feed_slice_kitty_max_bytes_exceeded() {
-        if !KITTY_GRAPHICS {
-            return;
-        }
-
         let alloc = Global;
 
         // var h: Handler = .{ .max_bytes = .init(.{ .kitty = 4 }) };

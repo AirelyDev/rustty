@@ -1,9 +1,12 @@
 //! rustty-apprt::gtk::ext
 //!
+//! Extensions/helpers for GTK objects, following a similar naming
+//! style to zig-gobject. These should, wherever possible, be Zig-friendly
+//! wrappers around existing GTK functionality, rather than complex new
+//! helpers.
+//!
 //! PORTS: ghostty `src/apprt/gtk/ext.zig` (70 loc, 1 `test{}` @ `:67`
-//! `_ = actions; _ = slice;`). "Extensions/helpers for GTK objects … Zig-friendly
-//! wrappers around existing GTK functionality, rather than complex new helpers."
-//! (`ext.zig:1-4`). The rustty analogues are correspondingly thin — most of what
+//! `_ = actions; _ = slice;`). The rustty analogues are correspondingly thin — most of what
 //! the oracle wraps for Zig-friendliness gtk4-rs already exposes idiomatically.
 //!
 //! # Scope at pin `4749c4e9`
@@ -23,8 +26,9 @@ use glib::prelude::*;
 use glib::translate::IntoGlib;
 use gtk4::prelude::WidgetExt;
 
-/// PORTS: `ext.zig:19` `boxedCopy`. "Wrapper around `gobject.boxedCopy` to copy
-/// a boxed type `T`." The oracle threads `T.getGObjectType()`; the gtk4-rs
+/// Wrapper around `gobject.boxedCopy` to copy a boxed type `T`.
+///
+/// PORTS: `ext.zig:19` `boxedCopy`. The oracle threads `T.getGObjectType()`; the gtk4-rs
 /// analogue is [`StaticType::static_type`], which for a `#[derive(glib::Boxed)]`
 /// type is exactly the registered `GBoxed` `GType`. Returns a freshly allocated
 /// pointer the caller owns (free it with [`boxed_free`]).
@@ -41,8 +45,9 @@ pub fn boxed_copy<T: StaticType>(ptr: *const T) -> *mut T {
     }
 }
 
-/// PORTS: `ext.zig:25` `boxedFree`. "Wrapper around `gobject.boxedFree` to free a
-/// boxed type `T`." Null-guarded exactly like the oracle's `ptr: ?*T` (`:26`
+/// Wrapper around `gobject.boxedFree` to free a boxed type `T`.
+///
+/// PORTS: `ext.zig:25` `boxedFree`. Null-guarded exactly like the oracle's `ptr: ?*T` (`:26`
 /// `if (ptr) |p|`).
 pub fn boxed_free<T: StaticType>(ptr: *mut T) {
     if ptr.is_null() {
@@ -53,9 +58,10 @@ pub fn boxed_free<T: StaticType>(ptr: *mut T) {
     }
 }
 
-/// PORTS: `ext.zig:34` `listFind`. "A wrapper around `glib.List.findCustom` to
-/// find an element in the list. The type `T` must be the guaranteed type of every
-/// list element." (`ext.zig:32-33`).
+/// A wrapper around `glib.List.findCustom` to find an element in the list.
+/// The type `T` must be the guaranteed type of every list element.
+///
+/// PORTS: `ext.zig:34` `listFind` (doc `ext.zig:32-33`).
 ///
 /// The oracle threads a raw `*glib.List` plus a `comptime func: *const fn (*T)
 /// bool` down into `list.findCustom` with a C `callconv(.c)` trampoline that
@@ -80,20 +86,24 @@ where
     list.iter().find(|item| predicate(item)).cloned()
 }
 
-/// PORTS: `ext.zig:52` `getAncestor`. "Wrapper around `gtk.Widget.getAncestor`
-/// to get the widget ancestor of the given type `T`, or null if it doesn't
-/// exist." The oracle asserts the final cast is non-null (`:56` `.?`) because
-/// `getAncestor` already filtered to that `GType`; the `.expect` here preserves
-/// that assertion.
+/// Wrapper around `gtk.Widget.getAncestor` to get the widget ancestor
+/// of the given type `T`, or null if it doesn't exist.
+///
+/// PORTS: `ext.zig:52` `getAncestor`. The oracle asserts the final cast is
+/// non-null (`:56` `.?`) because `getAncestor` already filtered to that
+/// `GType`; the `.expect` here preserves that assertion.
 #[must_use]
 pub fn ancestor<T: IsA<gtk4::Widget>>(widget: &impl IsA<gtk4::Widget>) -> Option<T> {
     widget
         .ancestor(T::static_type())
+        // We can assert the unwrap because getAncestor above
         .map(|a| a.downcast::<T>().expect("getAncestor guarantees the GType"))
 }
 
-/// PORTS: `ext.zig:61` `gValueHolds`. "equivalent to GTK's `G_VALUE_HOLDS()`
-/// macro but Zig's C translator does not like it" (`:59-60`). That Zig-specific
+/// Check a gobject.Value to see what type it is wrapping. This is equivalent to GTK's
+/// `G_VALUE_HOLDS()` macro but Zig's C translator does not like it.
+///
+/// PORTS: `ext.zig:61` `gValueHolds`. That Zig-specific
 /// reason does not apply to Rust: gtk4-rs already binds `G_VALUE_HOLDS` as
 /// [`glib::Value::is_type`] (`g_type_check_value_holds` + the fundamental-type
 /// fast path). Kept as a named wrapper so the oracle's call sites port 1:1.

@@ -4,7 +4,7 @@
 //! compiles the vendored Metal shader source `src/shaders/shaders.metal` into a
 //! `.metallib` with two `xcrun` calls —
 //!
-//!     xcrun -sdk macosx metal    -o $OUT_DIR/shaders.ir     -c src/shaders/shaders.metal
+//!     xcrun -sdk macosx metal    -o $OUT_DIR/shaders.ir     -c src/shaders/shaders.metal -mmacos-version-min=13.0.0
 //!     xcrun -sdk macosx metallib -o $OUT_DIR/rustty.metallib   $OUT_DIR/shaders.ir
 //!
 //! On success it sets the `rustty_metallib` cfg so the Chunk-1 runtime embeds
@@ -23,6 +23,11 @@ use std::process::Command;
 /// The Metal shader source we compile / embed.
 const SHADER_SRC: &str = "src/shaders/shaders.metal";
 
+/// `Config.zig:789-797` `osVersionMin(.macos)`: "We support back to the
+/// earliest officially supported version of macOS by Apple. EOL versions are
+/// not supported." Formatted as the reference's `{f}` of the semver.
+const MACOS_VERSION_MIN: &str = "13.0.0";
+
 /// The directory holding the verbatim-vendored GLSL assets (Linux/OpenGL).
 const GLSL_DIR: &str = "src/shaders/glsl";
 
@@ -30,6 +35,28 @@ fn main() {
     // Declare the cfg we may set so `--check-cfg` (CI's `-D warnings`) does not
     // warn about an unexpected cfg name.
     println!("cargo::rustc-check-cfg=cfg(rustty_metallib)");
+
+    // `font.options.backend` (`-Dfont-backend`), for the few renderer items whose
+    // shape depends on WHICH shaper is built (S-14, N266) — e.g. the CoreText
+    // shaper's release pool. `rustty-build-config` publishes the resolved
+    // backend as `links` metadata, which reaches a DIRECT dependent's build
+    // script only; this is the same value `rustty-font-shaper`'s build script
+    // keys its `Face`/`Shaper` selectors on.
+    println!(
+        "cargo::rustc-check-cfg=cfg(rustty_font_backend, values(\"freetype\", \
+         \"freetype_windows\", \"fontconfig_freetype\", \"coretext\", \
+         \"coretext_freetype\", \"coretext_harfbuzz\", \"coretext_noshape\", \
+         \"web_canvas\"))"
+    );
+    println!("cargo::rerun-if-env-changed=DEP_RUSTTY_BUILD_CONFIG_FONT_BACKEND");
+    let font_backend = if std::env::var("CARGO_CFG_TARGET_ARCH").as_deref() == Ok("wasm32") {
+        // `font/main.zig:50`: wasm is always `.web_canvas`.
+        "web_canvas".to_string()
+    } else {
+        std::env::var("DEP_RUSTTY_BUILD_CONFIG_FONT_BACKEND")
+            .expect("rustty-build-config publishes `font_backend` (links metadata)")
+    };
+    println!("cargo::rustc-cfg=rustty_font_backend=\"{font_backend}\"");
 
     // Recompile the metallib when the shader source changes.
     println!("cargo::rerun-if-changed={SHADER_SRC}");
@@ -63,16 +90,32 @@ fn main() {
         return;
     }
 
+    // `-mmacos-version-min=<min_version>` (`MetallibStep.zig:29-56`), where
+    // min_version is the target's `os_version_min`. An explicit
+    // `MACOSX_DEPLOYMENT_TARGET` is the port's spelling of a user-supplied
+    // minimum (rustc reads the same variable for the Rust objects);
+    // otherwise it is `Config.zig:789-797` `osVersionMin(.macos)`, 13.0.0,
+    // which `Config.zig:145-150` fills in whenever the query has none
+    // (S64-F2). The value is exported so a test can check the metallib
+    // header carries it.
+    println!("cargo::rerun-if-env-changed=MACOSX_DEPLOYMENT_TARGET");
+    let min_version = std::env::var("MACOSX_DEPLOYMENT_TARGET")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| MACOS_VERSION_MIN.to_string());
+    println!("cargo::rustc-env=RUSTTY_METALLIB_VERSION_MIN={min_version}");
+
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR set by cargo"));
     let ir = out_dir.join("shaders.ir");
     let metallib = out_dir.join("rustty.metallib");
 
-    // xcrun -sdk macosx metal -o $OUT_DIR/shaders.ir -c src/shaders/shaders.metal
+    // xcrun -sdk macosx metal -o $OUT_DIR/shaders.ir -c src/shaders/shaders.metal -mmacos-version-min=<min>
     if !run(Command::new("xcrun")
         .args(["-sdk", "macosx", "metal", "-o"])
         .arg(&ir)
         .arg("-c")
-        .arg(SHADER_SRC))
+        .arg(SHADER_SRC)
+        .arg(format!("-mmacos-version-min={min_version}")))
     {
         println!("cargo::warning=rustty-renderer: `xcrun metal` failed to compile {SHADER_SRC}; falling back to runtime newLibraryWithSource");
         return;

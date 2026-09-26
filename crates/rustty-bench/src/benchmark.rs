@@ -277,6 +277,10 @@ pub struct VTable {
 
 // test Benchmark {
 #[test]
+#[cfg_attr(
+    any(target_os = "freebsd", target_os = "windows"),
+    ignore = "SkipZigTest: the reference skips this test on FreeBSD and Windows (R14)"
+)]
 fn benchmark() {
     // This test fails on FreeBSD and Windows so skip:
     //
@@ -290,11 +294,9 @@ fn benchmark() {
     //     else => {},
     // }
     //
-    // PORT NOTE: `error.SkipZigTest` -> an early `return` on the same targets
-    // (the port targets macOS+Linux; the documented skip-stub keeps the test
-    // count). `builtin.os.tag` -> the `target_os` cfg.
-    #[cfg(any(target_os = "freebsd", target_os = "windows"))]
-    return;
+    // PORT NOTE: `error.SkipZigTest` -> the `cfg_attr(.., ignore)` above on the
+    // same targets, so they report `ignored` rather than an early-return `ok`
+    // (R14). `builtin.os.tag` -> the `target_os` cfg.
 
     // const testing = std.testing;
     // const Simple = struct {

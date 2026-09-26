@@ -148,7 +148,7 @@ impl TerminalStream {
     // }
     pub fn create(alloc: Allocator, opts: Options) -> Result<Box<TerminalStream>, OutOfMemory> {
         let terminal = Terminal::init(
-            alloc,
+            alloc.into(),
             terminal_options(opts.terminal_rows, opts.terminal_cols),
         )?;
 
@@ -203,7 +203,7 @@ impl TerminalStream {
         // 258de36d1 adds this: the full handler owns an APC handler and an OSC
         // parser with allocated state, which the old print-only handler did not.
         self.stream.deinit();
-        self.terminal.deinit(alloc);
+        self.terminal.deinit(alloc.into());
         drop(self);
     }
 
@@ -274,7 +274,7 @@ impl TerminalStream {
         // buffer that would pollute the measurement.
         // var f_reader = f.reader(global.io(), &.{});
         // const r = &f_reader.interface;
-        let r = f;
+        let mut r = f.unbuffered();
 
         // This buffer size matches the read buffer size used by the
         // real IO thread (see termio Exec.zig buffer_capacity) so that
@@ -282,17 +282,19 @@ impl TerminalStream {
         // var buf: [64 * 1024]u8 = undefined;
         //
         // PORT NOTE (4c5b1d5d5): the reference's final shape is an UNBUFFERED
-        // `std.Io.Reader` plus this 64 KiB dispatch buffer. rustty's
-        // `read_slice_short` already reads straight from the `DataFile` with no
-        // intermediate reader buffer (see `options::read_slice_short`), so the
-        // unbuffered half is structural here and this is the only buffer: it
-        // determines how often the stream crosses a chunk boundary, which is
-        // the measurement-relevant half of the reference's change.
+        // `std.Io.Reader` plus this 64 KiB dispatch buffer. `DataFile::unbuffered`
+        // is the unbuffered half: `read_slice_short` reads straight from the
+        // file into `buf`, so this is the only buffer. It determines how often
+        // the stream crosses a chunk boundary, which is the measurement-relevant
+        // half of the reference's change. (Before task S-4 this read went
+        // through `DataFile`'s 256 KiB `BufReader`, which a 64 KiB request does
+        // not bypass: one extra memcpy of the whole corpus, measured at about
+        // 3% of the bench's samples.)
         let mut buf = [0u8; 64 * 1024];
         // while (true) {
         loop {
             // const n = r.readSliceShort(&buf) catch { ... return error.BenchmarkFailed; };
-            let n = match read_slice_short(r, &mut buf) {
+            let n = match read_slice_short(&mut r, &mut buf) {
                 Ok(n) => n,
                 Err(err) => {
                     // log.warn("error reading data file err={?}", .{f_reader.err});

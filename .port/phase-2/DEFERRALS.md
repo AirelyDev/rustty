@@ -3565,6 +3565,25 @@ bin is the top sink over cli+apprt). New bin Cargo deps: `rustty-global`,
   block — is the rustty-apprt-c E-series' concern, not C6). The C6 scoped-G3b on the
   two files the bin actually ports (main.zig + main_ghostty.zig) is missing=0.
 
+  > **UPDATE [parity tail S-8b, 2026-09-24].** No longer "expected": G3b's
+  > `RELOCATED_PORTS` table (`check_comment_coverage.py`) now checks each re-homed
+  > reference file against its named port files (main_c → apprt-c `lib.rs`; lib_vt →
+  > vt-c `lib.rs`/`panic.rs`/`sys.rs` + vt `lib.rs`; main_ghostty → core `logging.rs`;
+  > main_gen/main_wasm/main_build_data → their crates), and the comments those sites
+  > had dropped were restored. What `--crate rustty` still reports is only reference
+  > code with no Rust counterpart, each with a record: TinyIo (phase-4 NON_PORTS),
+  > the MSVC `_fltused` marker (phase-3 C-capi-headers `84254a9d8` N/A),
+  > `quirks_memset` (phase-3 NON_PORTS §E34), `std_options_debug_io` and `DllMain`
+  > (phase-4 NON_PORTS rows added by S-8b), and the `macosLogger` per-scope cache
+  > (`docs/parity-audit/src.md` accepted equivalence).
+  >
+  > **UPDATE [parity tail S-8d, 2026-09-24].** `--crate rustty` is now missing=0
+  > review=0. The `macosLogger` cache is PORTED (NEW-FINDINGS N280), not an
+  > equivalence. TinyIo, `_fltused` and `quirks_memset` are quoted at their Rust
+  > sites (`rustty-vt/src/lib.rs`, `rustty-vt-c/src/lib.rs`; S-8e); the
+  > `std_options_debug_io` and `DllMain` comments are validated `no-counterpart` rows
+  > of `.port/parity-closure/COMMENT-NOT-CARRIED.tsv`, printed by G3b as NOT-CARRIED.
+
 - **`main_gen.zig` / `main_wasm.zig` / `main_build_data.zig` (0t each) DEFERRED.**
   These are standalone build-tool / wasm-module entrypoints, NOT on the `rustty`
   exe's `exe_entrypoint` switch (main.zig selects only `.ghostty` → main_ghostty for
@@ -4983,6 +5002,20 @@ reinforcing findings from the implementation:
 over BASELINE)`" to "live delegate to `runtime_at_least`", or reverse T2. Left
 as a flagged deviation rather than a silent one.
 
+**AD-3 deletion set — G3b NOT-CARRIED anchor [added 2026-09-24, parity tail S-8d; revised S-8e].**
+Reference code AD-3 removes from the port whose distinctive comments are declared in
+`.port/parity-closure/COMMENT-NOT-CARRIED.tsv` rather than restored as orphans:
+`adw_version.zig`'s `adw_c` and `gtk_version.zig`'s `gtk_c` header imports (they
+exist only to feed `comptime_version`; rustty includes no header, and its
+`at_least` is the live delegate recorded by L5.0 T2 / ADJUDICATION S47-F3 — the
+plan-owner action on plan:96 above is still open), and `adw_version.zig`'s
+`supportsDialogs` (with the other four `supports_*` helpers, see the scope note
+above). The other AD-3-collapsed sites — the `atLeast` header fold and its
+`@inComptime` short-circuit, `clipboard_confirmation_dialog.zig`'s `can_remember`
+constant, `dialog.zig`'s `adw.MessageDialog` arm and `surface_child_exited.zig`'s
+`SurfaceChildExitedNoop` fallback — have a Rust site, so their reference comments
+are quoted there with a PORT NOTE instead.
+
 ## ~~GlobalShortcuts XDG-portal round-trip (L6 portals)~~ [added 2026-07-18, T26 GlobalShortcuts]
 
 **RESOLVED (WS15, 2026-07-29).** The XDG portal round-trip is PORTED and
@@ -5200,6 +5233,21 @@ WASM-artifact milestone for `main_wasm.zig`.
 > silently — a 40-line corpus drives 16 cases and is now caught), and
 > `crates/rustty-vaxis/tests/ucd_provenance.rs` verifies all six vendored UCD inputs against
 > SHA-256 digests recorded in `ucd/PROVENANCE.md`.
+>
+> **PREMISE CORRECTED (parity tail S-10b, 2026-09-23; `NEW-FINDINGS.md` N240).** This entry
+> and the options below assume that "vaxis pins uucode 0.1.0". That was true of libvaxis
+> 0.5.1, but at the reference pin (ghostty 20abdb50a) libvaxis is 0.6.0, and ghostty builds
+> it with `external_uucode = true` over its OWN singleton uucode module: uucode **2826a37a**
+> with ghostty's `src/build/uucode_config.zig` (`SharedDeps.zig:24-78, 512-519`); vaxis
+> 0.6.0's own `build.zig.zon` pins the same revision (task S-10a found the premise false).
+> Option B's structure is kept (vaxis still has its own table generator, because
+> `rustty-unicode` does not hold `east_asian_width` / `general_category` / the full
+> `grapheme_break`), but `build.rs` now follows 2826a37a's `components.zig` over the UCD
+> 17.0.0 corpus, the vendored uucode subset follows 2826a37a's `grapheme.zig` (20 break
+> classes, the emoji-modifier tailoring, `nextCodePoint`), and the per-code-point values are
+> proven equal to the Zig oracle's (0 differences over 0..=0x10FFFF for all four fields).
+> The "0.1.0" / "16.0.0" numbers in the banner above and the record below describe the
+> state before S-10b.
 
 ### Historical record — the original blocker write-up (2026-07-10)
 
@@ -7344,6 +7392,10 @@ fully ported per-backend (`epoll.rs` + `io_uring.rs`) and wrapped as the Dynamic
 4. **The skip-stub is honest.** `kqueue_file_io_on_thread_pool` is a real `#[test]` that
    declares what it skips and why, keeping the R1 test count intact rather than quietly
    dropping a reference test. It defers genuinely-unused functionality, never a live path.
+   CORRECTION (task S-15, PORT_RULES R14): "declares what it skips" was not enough — the
+   stub RETURNED and libtest reported it `ok`. It is now `#[ignore = "..."]` and FAILS when
+   run with `--ignored` (naming the unported watcher); the ledger tripwire moved to the
+   always-run `kqueue_file_watcher_deferral_is_ledgered`.
 
 **If a consumer ever appears** (a macOS caller that needs pool-routed file IO), the arms
 to fill are named in the xev surface notes above; the trigger is that consumer, and the
@@ -8046,8 +8098,15 @@ The three still-live instances are reopened above.
   ~~`MIRI_EXCEPTIONS.md` missing annotations~~ (discharged by the Miri re-audit).
 * **M:** `stream.zig` `Action` C-ABI union; `vt -> xev` fake module
   (`rustty-vt/src/search/thread.rs:1740`); macOS `xev.File`/`TCP`/`UDP`; libxev
-  `c_api.zig`; uucode bump (G1); Windows termio spawn arms.
-* **L:** vaxis 0.6.0 / zf 0.11.0 upstream delta (G2); 13 unported vxfw widgets.
+  `c_api.zig`; ~~uucode bump (G1)~~ (DISCHARGED 2026-09-23, parity tail S-10a:
+  CI Zig pin 0.16.0, tables regenerated at the pin and identical, G4-uni 0-diff —
+  `.port/phase-3/NON_PORTS.md` §G1 item 5, `NEW-FINDINGS.md` N220); Windows termio
+  spawn arms.
+* **L:** ~~vaxis 0.6.0 / zf 0.11.0 upstream delta (G2)~~ (DISCHARGED 2026-09-23, parity
+  tail S-10b: every delta of the ported files, vaxis's uucode moved to 2826a37a / UCD
+  17.0.0 with a 0-diff Zig-oracle differential, zf's polarity flip matched at the
+  `list-themes` call site, UD260–UD266 — `.port/phase-3/NON_PORTS.md` §G2 item 5,
+  `NEW-FINDINGS.md` N240); 13 unported vxfw widgets.
 * **Verification-only** (code present, host absent): V2–V7, V15–V19, V21(b).
 
 ## Implemented in this pass
@@ -8076,7 +8135,11 @@ the caller-supplied C allocator (`create_raw`/`destroy_raw` in
 `rustty-lib/src/allocator.rs`), return recoverable `RUSTTY_OUT_OF_MEMORY` +
 null out-param on rejection, and fire the caller free callback on free. The
 terminal's OSC stream is also caller-allocator-backed (`initAlloc(alloc, ...)`
-parity). Proving tests: `CountingCAllocator` (`rustty-vt-c/src/test_util.rs`)
+parity). CORRECTION (tail-a2, parity S174-F3): until 430a52a7 that last
+sentence held only for the parser's `alloc` presence gate; the allocating
+capture itself was a global-heap `Vec`. It now allocates through
+`osc::CaptureAllocator`, which vt-c points at the caller allocator for the
+terminal stream and for `rustty_osc_new` parsers. Proving tests: `CountingCAllocator` (`rustty-vt-c/src/test_util.rs`)
 counting/rejecting arms in `terminal.rs`, `render/tests.rs`,
 `selection_gesture/tests.rs`; W36-B06 zero-length typed-helper short-circuit in
 `rustty-vt-c/src/allocator.rs` + `rustty-lib/src/allocator.rs`.
@@ -8084,20 +8147,34 @@ counting/rejecting arms in `terminal.rs`, `render/tests.rs`,
 **Tier 2 REMAINS OPEN** (structural, cross-crate — the reference threads
 `alloc` into `t.init(alloc, ...)` and every owned growth path):
 
-1. `rustty-vt` `Terminal`/`Screen`/`PageList`/`RenderState` internals hardwire
-   `allocator_api2::alloc::Global` (`rustty-vt/src/terminal.rs:94`,
-   `rustty-vt/src/render.rs:47`), so screen/pagelist/render-row growth and
-   `update`/`begin_update` bypass the caller allocator (oracle: `state.alloc`).
-2. `grid_ref_track`'s `TrackedGridRef` is `Box::into_raw`'d on Global (oracle:
-   `t.gpa()` create — depends on 1).
+1. PARTLY FIXED (parity tail S7-3, `.port/parity-closure/S7-ALLOCATOR-DESIGN.md`
+   option B): `rustty_terminal_new` passes the caller's allocator into
+   `Terminal::init` through the `rustty_vt::alloc::VtAllocator` handle, and the
+   PageList node/pin pools, tracked-pin sets, compressed pages, preserved-page
+   buffers, clone pin remap, the Screen storage, the cursor hyperlink, Tabstops,
+   pwd/title, the glyph glossary map and the kitty drag-and-drop state grow and
+   free through it, fallibly (NEW-FINDINGS N272). STILL on the Rust heap, owned by
+   S7-4..S7-7: kitty graphics storage and PNG decode, the APC/DCS builders and
+   the glyph entries' decoded outlines, the stream's own buffers, clipboard state,
+   the wrapper's `tracked_grid_refs`/`searches` maps, `from_decoded`'s terminal
+   (built by the snapshot decoder), `RenderState` contents (`update`/
+   `begin_update`; oracle `state.alloc`) and search state.
+2. FIXED (tail-a2, parity S179-F3, 4717bccc): `grid_ref_track`'s
+   `TrackedGridRef` is created and destroyed through a copy of the caller's C
+   allocator (`TerminalWrapper.c_alloc`), with both reference OOM arms. The
+   wrapper's `tracked_grid_refs`/`searches` maps stay on Global with item 1.
 3. selection-gesture event codepoint copy (`selection_gesture.rs`
    `try_set_word_boundary_codepoints`) uses an owned `Vec` on Global (oracle:
    `event.alloc.alloc(u21, len)`).
+4. The OSC parser's parsed `Command` payloads (the color and kitty-color
+   request lists the oracle allocates through `parser.alloc`, and owned text
+   payload copies) are Global values (parity S174-F3, OPEN).
 
-Unblocking requires making rustty-vt runtime-allocator-polymorphic (an
-`allocator_api2::Allocator` adapter over `ZigAllocator` threaded through
-`Terminal::init`). Until then, a caller allocator observes only the
-wrapper-level lifecycle (macOS app path — null allocator — is unaffected).
+The runtime handle that unblocks this exists (parity tail S7-1/S7-2) and is
+threaded through `Terminal::init` (S7-3); the remaining families are routed by
+S7-4..S7-7. Until then a caller allocator observes the wrapper lifecycle plus
+the S7-3 terminal internals above (macOS app path — null allocator — is
+unaffected).
 Vet record: `.port/codex-vet/STATE.json` F-008/W12-01 fix_plans (Tier split).
 
 ## `std.fs.path.resolveWindows` not ported — `config/path.zig` `expand`'s two-component `resolve` stays POSIX-shaped [W10-02, 2026-08-11]
@@ -8208,6 +8285,41 @@ divergence so it is registered rather than silent.
 
 ## FreeBSD — the platform's explicit ledger row [W2D / F-002 + F-003 + F-004, 2026-08-11]
 
+**DISPOSITION [parity tail S-13, 2026-09-24]: RESOLVED / RECLASSIFIED item by item;
+nothing in this row is left without an owner or a disposition.**
+
+- Items 1 and 2 (running anything on FreeBSD; the gtk-featured FreeBSD build) are
+  **RECLASSIFIED as VERIFICATION DEBT**: `.port/phase-2/VERIFICATION_DEBT.md` **V23**,
+  ENVIRONMENT-BLOCKED on a FreeBSD >= 13 host, with the ported artifacts named and the
+  runnable recipe. This is the disposition G-P2 defines for work that is ported and blocked
+  only on a machine the project does not have, and the one every other missing-host
+  platform row already uses (V8 Windows/WASI, V9-V11 Windows, V12 flatpak). It is not
+  routed to a workstream: on 2026-09-24 G-P2 derives exactly one open workstream, WS19
+  (the Phase 2 closeout, whose plan holds no platform bring-up and must not be held open
+  for hardware), and `Phase 3` is accepted only for BEYOND-PIN work, which this is not.
+- Item 3 (the loop-wakeup `@panic` stub): **RESOLVED, stays faithful (R1)**. S-13
+  re-verified against libxev `9ce8e8e6` (the tarball ghostty@20abdb50a pins) that the stub
+  is unreachable, not merely hard to reach: `Loop.wakeup` is not `pub`
+  (`kqueue.zig:973`), its only caller is the Darwin-gated `thread_perform` (`:965-968`),
+  `xev.Async` on FreeBSD is `AsyncEventFd` (`watcher/async.zig:22-25`) and never calls it,
+  and Ghostty neither names `Loop.wakeup` nor creates an `xev.ThreadPool`. R13 applies only
+  to a reachable defect, so the stub is recorded upstream as `kind: latent` (UD275) and
+  pinned by a FreeBSD test. The text of item 3 below ("fires only on an explicit
+  `Loop::wakeup()`") overstated it: no caller can make that call. NEW-FINDINGS N255.
+- Item 4 (ios/visionos): **RESOLVED earlier and the item was stale**. `318af0f6`
+  (2026-08-26) widened every kqueue-family gate in `rustty-xev` to the reference's set
+  (`macos + ios + visionos + freebsd`); S-13 corrected the six module comments that still
+  said `macos + freebsd`, and gave the three pty stream tests the reference's
+  `.linux, .macos` scope as an R14 `ignore` (they would otherwise have run on FreeBSD and
+  iOS, where the reference skips them). `cargo check -p rustty-xev --tests --target
+  aarch64-apple-ios` is green; `visionos` has no rustup std, so that arm is unchecked.
+  NEW-FINDINGS N256.
+- Item 5 (libc ABI pin): **NO ACTION**. Re-checked: the freebsd arms still never name
+  `ext` (`kevent_init` zero-initializes it), so the note stays true as written.
+- Item 6 (`cli_smoke.rs`): **RESOLVED** — `version_plus` has a `cfg(target_os = "freebsd")`
+  arm asserting what the reference prints there (`renderer.generic.Renderer(renderer.OpenGL)`,
+  `kqueue`). NEW-FINDINGS N257.
+
 FreeBSD was never a named deferral: it was only ever *implicitly* covered by the
 macOS-first plan's "GTK last" tier (GAP_ANALYSIS.md §3.7) and by
 XEV_BLUEPRINT.md's "keep the FreeBSD `posix.Kevent` fast-path cfg-gated for
@@ -8244,7 +8356,8 @@ resolves).**
 - `rustty-renderer` (**F-003**) is the sibling W2D item; it is tracked by its own
   batch and is NOT part of this row's evidence.
 
-**STILL OPEN (nothing below is scheduled; this row is where it is registered).**
+~~**STILL OPEN (nothing below is scheduled; this row is where it is registered).**~~
+**The items as W2D registered them (dispositions above).**
 
 1. **Runtime bring-up on a real FreeBSD >= 13 host.** Nothing here has ever been
    executed on FreeBSD. The follow-up is the concrete command set: `cargo test -p
@@ -8283,7 +8396,18 @@ resolves).**
 
 ## kitty file-medium handle-path on Windows — `realpath_of_handle` has no `GetFinalPathNameByHandleW` arm [D3 marker conversion, 2026-08-29]
 
-**Status: OPEN, owned by the `platform-linux-windows` workstream.** Registered
+**Status: CLOSED (parity S189-F4, batch T-A, 2026-09-23).** `realpath_of_handle`
+has a `#[cfg(windows)]` arm: `GetFinalPathNameByHandleW(VOLUME_NAME_DOS)`, the
+`\\?\` / `\\?\UNC\` prefix stripped to the form Zig's `GetFinalPathNameByHandle(.Dos)`
+returns, then a WTF-16 to WTF-8 conversion ported from `std.unicode.wtf16LeToWtf8`.
+The prefix and conversion logic is host-independent and tested on every host
+(`windows_final_path_takes_zig_dos_form`, `wtf16le_to_wtf8_matches_zig`);
+`windows_realpath_of_handle_is_the_canonical_path` runs the call itself in CI's
+`windows` job. From macOS the arm and that test were type-checked for
+`x86_64-pc-windows-msvc` and `-gnu` (the rust-std for both is now installed), not
+run. The history below is kept.
+
+**Former status: OPEN, owned by the `platform-linux-windows` workstream.** Registered
 here after detector **D3** (`check_constants_parity.py`, rule (a): zero surviving
 port-incompleteness markers in a claimed-done crate) reported the
 `TODO(port): windows GetFinalPathNameByHandleW once a windows tier lands.` that

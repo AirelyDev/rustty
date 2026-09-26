@@ -32,11 +32,15 @@ Fence 2 -- SELF   ("no self-regression"):   candidate vs a stored entry binary.
 
 ORACLE COMPARABILITY -- non-negotiable
 --------------------------------------
-Every number this harness produces is comparable to oracle revision `4749c4e93`
-(binary sha256 0fb47d26...) and to NO OTHER ORACLE REVISION. `origin/main` needs
-Zig 0.16.0 and has gained `src/quirks_memset.zig`, which makes it ~2.8x faster on
-+terminal-stream; comparing against it reads as a phantom rustty regression. See
-the WS10 plan's PREMISE CORRECTION section 1 and VERIFICATION_DEBT V6.
+The oracle is Ghostty's `ghostty-bench` built ReleaseFast at THE ORACLE PIN
+(`.port/tools/gates/ORACLE_PIN`), stored at
+`~/rustty-oracle-artifacts/ghostty-bench-<first 9 hex of the pin>` and checked
+against ORACLE_SHA256 before every oracle run (a mismatch is BLOCKED, exit 3).
+Every number is comparable to that binary and to NO OTHER ORACLE REVISION. The
+series recorded before task S-4 (2026-09-23) is anchored on the retired
+`4749c4e93` binary (sha256 0fb47d26..., backup
+`~/rustty-oracle-artifacts/ghostty-bench-4749c4e93`); numbers from the two are
+not a ratio. How the binary is rebuilt: `.port/tools/perf/README.md`.
 
 EXIT CODES
 ----------
@@ -60,9 +64,29 @@ import time
 # Measurement substrate (untracked; shared checkout only -- NOT in worktrees)
 # --------------------------------------------------------------------------
 SHARED = "/Users/gael/projects/rustty"
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "..", "gates"))
+import _gatelib  # noqa: E402  (the one reader of ORACLE_PIN)
+
+#: The oracle pin, read from ORACLE_PIN (never spelled here: G-ORACLE-SH's pin
+#: arm forbids a copy of it in any tracked .port/tools file).
+ORACLE_PIN = _gatelib.oracle_pin()
+ARTIFACTS = os.path.expanduser("~/rustty-oracle-artifacts")
 ORACLE_DEFAULT = os.path.join(
-    SHARED, ".port/phase-0/baseline/bench-releasefast/bin/ghostty-bench")
-ORACLE_SHA256 = "0fb47d268c7b9a7f9f93ed14834ca221383ba189404b69d15f750ff76abf5cdb"
+    ARTIFACTS, "ghostty-bench-" + (ORACLE_PIN or "MISSING-PIN")[:9])
+#: sha256 of the stored oracle binary (built 2026-09-23 by task S-4 from an
+#: archive of the pin; recipe in README.md). Its __TEXT/__DATA contents are
+#: reproducible (a second build from a fresh archive and cache matched them);
+#: the whole-file hash is not, because the linker's LC_UUID and the debug map
+#: record the build directory. So the file is kept, and this pins it.
+ORACLE_SHA256 = "46b5adfb6cd4bfcde6a693a3a6d0cc8c94c6cd825ff66e98c6c6b79d1d95fa2a"
+#: The pin ORACLE_SHA256 was built at, as `pin_digest(pin)` (the first 16 hex
+#: of the pin's sha256: a digest, not a copy of the pin, so G-ORACLE-SH's pin
+#: arms stay green). When ORACLE_PIN advances this stops matching and every
+#: oracle run BLOCKs until the oracle is rebuilt and BOTH constants are updated
+#: in the same commit -- so the old binary copied to the new file name cannot
+#: pass as the new oracle (review S-4 F3).
+ORACLE_SHA256_PIN_DIGEST = "d241ea63fc622abc"
 COR = os.path.join(SHARED, ".port/phase-0/baseline/corpora")
 UTF8 = os.path.join(COR, "utf8.bin")
 ASCII = os.path.join(COR, "ascii.bin")
@@ -142,30 +166,33 @@ ACCEPTED_TRADEOFFS: "dict[str, str]" = {}
 #: binary. Every entry must carry the workload-basis mismatch that causes it and
 #: the normalized comparison, so the exclusion can be checked rather than
 #: trusted. The set is printed on every run.
-INCOMPARABLE: "dict[str, str]" = {
-    "screen-clone.render/small":
-        "WS10 T12 ported 446f80f4e's bench hunk, which re-scaled stepRender from "
-        "1_000 to 50_000 x --loops iterations. The PINNED oracle binary is at "
-        "4749c4e93, i.e. still 1_000 (verified: "
-        "`git -C ../ghostty show 4749c4e93:src/benchmark/ScreenClone.zig` line "
-        "181), so rustty does 50x the oracle's work in this config. Measured "
-        "T21: zig 17.69ms (1_000 iters) vs rust 388.32ms (50_000 iters) = "
-        "7.77ms normalized, i.e. -56% against the oracle -- a WIN, reported as "
-        "+2096% by a raw ratio. Comparability returns when the oracle pin "
-        "advances past 446f80f4e (Phase 3).",
-}
+#:
+#: Empty since task S-4 (2026-09-23). Its one entry, `screen-clone.render/small`
+#: (WS10 T12's port of 446f80f4e's 50x stepRender re-scale against an oracle
+#: still at 1_000 iterations), ended as its own text said it would: the oracle
+#: is now built at the pin, which contains 446f80f4e, so both benches run the
+#: same 50_000 iterations (measured: 3.785e9 vs 3.874e9 instructions retired).
+#: `codepoint-width.wcwidth/utf8` (N173) is NOT listed: both benches now run the
+#: reference's global init and its `ensureLocale`, so both measure libc
+#: `wcwidth` under the same locale and the ratio is a ratio again.
+INCOMPARABLE: "dict[str, str]" = {}
 
 
 # --------------------------------------------------------------------------
 # Pure verdict logic (no subprocesses -- this is what --self-test exercises)
 # --------------------------------------------------------------------------
-def evaluate_oracle(zig_med, rust_med):
-    """Fence 1. -> (lines, ok). Medians are {id: seconds}, lower is better."""
+def evaluate_oracle(zig_med, rust_med, incomparable=None):
+    """Fence 1. -> (lines, ok). Medians are {id: seconds}, lower is better.
+
+    `incomparable` defaults to the module's INCOMPARABLE; the self-test passes a
+    synthetic set so the exclusion logic is exercised even while it is empty."""
+    if incomparable is None:
+        incomparable = INCOMPARABLE
     lines, ok = [], True
     for bid in ALL_IDS:
         if bid not in zig_med or bid not in rust_med:
             continue
-        if bid in INCOMPARABLE:
+        if bid in incomparable:
             z, r = zig_med[bid], rust_med[bid]
             delta = (r - z) / z * 100.0
             lines.append(f"    INCOMPARABLE {bid:26s} zig={z*1000:8.2f}ms "
@@ -322,11 +349,15 @@ def self_test():
     print("=== ws10_suite SELF-TEST ===")
     ok = True
     base = {bid: 0.100 for bid in ALL_IDS}
+    # Cases run per arm. An arm that runs zero cases is a FAIL: a vacuous arm
+    # (arm [e] over an empty INCOMPARABLE, before review S-4 F1) is not a pass.
+    cases = {arm: 0 for arm in "abcdef"}
 
     # (a) rust uniformly 0.9x zig -> green
     lines, good = evaluate_oracle(base, {k: v * 0.9 for k, v in base.items()})
     print(f"[a] rust = 0.90x zig on all 14 -> ok={good} (expect True)")
     ok &= good
+    cases["a"] += 1
 
     # (b) one STRICT config loses -> RED, and names it
     r = {k: v * 0.9 for k, v in base.items()}
@@ -336,6 +367,7 @@ def self_test():
     print(f"[b] grapheme-break.noop 1.10x zig -> ok={good} (expect False), "
           f"names it={named} (expect True)")
     ok &= (not good) and named
+    cases["b"] += 1
 
     # (c) candidate self-regresses 8% on a STRICT config -> RED at +8.0%
     c = dict(base)
@@ -346,6 +378,7 @@ def self_test():
     print(f"[c] candidate 1.08x entry -> ok={good} (expect False), "
           f"names it at +8.0%={named} (expect True)")
     ok &= (not good) and named
+    cases["c"] += 1
 
     # (d) the BANDED arm must NOT fire inside its band, and MUST outside it.
     c = dict(base)
@@ -356,28 +389,81 @@ def self_test():
     print(f"[d] short-config +12% -> ok={in_band} (expect True); "
           f"+20% -> ok={out_band} (expect False)")
     ok &= in_band and (not out_band)
+    cases["d"] += 1
 
     # (e) an INCOMPARABLE config cannot turn FENCE 1 red no matter how bad the
     #     raw ratio is -- but it MUST still be reported, and it MUST still be
     #     fenced by FENCE 2. Anything less would make the exclusion a hole.
+    #     Run over the live set PLUS a synthetic entry, so the arm is never
+    #     vacuous while INCOMPARABLE is empty.
     for bid in INCOMPARABLE:
+        if bid not in ALL_IDS:
+            print(f"[e] INCOMPARABLE names an unknown config {bid!r}")
+            ok = False
+    synthetic = dict(INCOMPARABLE)
+    synthetic.setdefault("screen-clone.render/small", "self-test")
+    for bid in synthetic:
         if bid not in ALL_IDS:
             print(f"[e] INCOMPARABLE names an unknown config {bid!r}")
             ok = False
             continue
         r = {k: v * 0.9 for k, v in base.items()}
         r[bid] = base[bid] * 50.0
-        lines, good = evaluate_oracle(base, r)
+        lines, good = evaluate_oracle(base, r, synthetic)
         shown = any(f"INCOMPARABLE {bid}" in ln for ln in lines)
+        # ... and WITHOUT the exclusion the same 50x ratio is a loss.
+        _l, unexcluded_ok = evaluate_oracle(base, r, {})
         # ... and Fence 2 still catches a self-regression on the same config.
         c = dict(base)
         c[bid] = base[bid] * 1.30
         _l, self_ok = evaluate_self(base, c)
         print(f"[e] {bid}: 50x oracle -> fence1 ok={good} (expect True), "
-              f"reported={shown} (expect True); +30% vs entry -> fence2 "
-              f"ok={self_ok} (expect False)")
-        ok &= good and shown and (not self_ok)
+              f"reported={shown} (expect True), unexcluded ok={unexcluded_ok} "
+              f"(expect False); +30% vs entry -> fence2 ok={self_ok} "
+              f"(expect False)")
+        ok &= good and shown and (not unexcluded_ok) and (not self_ok)
+        cases["e"] += 1
 
+    # (f) the oracle identity check: a binary whose sha256 differs BLOCKs, the
+    #     matching one does not, a missing pin BLOCKs, and a pin whose digest is
+    #     not the one ORACLE_SHA256 was recorded for BLOCKs (F3).
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        good_bin = os.path.join(td, "oracle-good")
+        bad_bin = os.path.join(td, "oracle-bad")
+        with open(good_bin, "wb") as fh:
+            fh.write(b"pinned oracle stand-in")
+        with open(bad_bin, "wb") as fh:
+            fh.write(b"some other binary")
+        want_sha = sha256_of(good_bin)
+        fake_pin = "0123456789abcdef0123456789abcdef01234567"
+        want_digest = pin_digest(fake_pin)
+        f_cases = [
+            ("matching sha and pin", good_bin, fake_pin, False),
+            ("sha mismatch", bad_bin, fake_pin, True),
+            ("missing pin", good_bin, None, True),
+            ("pin advanced (digest mismatch)", good_bin,
+             "f" + fake_pin[1:], True),
+        ]
+        for label, path, pin, expect_block in f_cases:
+            msg = oracle_identity_blocker(path, pin, want_sha, want_digest)
+            blocked = msg is not None
+            print(f"[f] {label} -> blocked={blocked} (expect {expect_block})")
+            ok &= blocked == expect_block
+            cases["f"] += 1
+        # The live constants must agree with the live pin (else every real
+        # run BLOCKs): checked here so a pin advance shows up in the self-test.
+        live = ORACLE_PIN is not None and pin_digest(ORACLE_PIN) == ORACLE_SHA256_PIN_DIGEST
+        print(f"[f] ORACLE_SHA256_PIN_DIGEST matches ORACLE_PIN -> {live} "
+              f"(expect True)")
+        ok &= live
+        cases["f"] += 1
+
+    empty = [arm for arm, n in cases.items() if n == 0]
+    if empty:
+        print(f"FAIL: arm(s) {', '.join(empty)} ran zero cases")
+        ok = False
+    print(f"cases per arm: {cases}")
     print("SELF-TEST:", "PASS" if ok else "FAIL")
     return 0 if ok else 1
 
@@ -388,6 +474,46 @@ def substrate_missing(oracle, need_oracle):
     if need_oracle and not os.path.exists(oracle):
         missing.append(oracle)
     return missing
+
+
+def sha256_of(path):
+    import hashlib
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def pin_digest(pin):
+    """The first 16 hex of sha256(pin): identifies a pin without copying it."""
+    import hashlib
+    return hashlib.sha256(pin.encode("ascii")).hexdigest()[:16]
+
+
+def oracle_identity_blocker(path, pin, expected_sha=None,
+                            expected_pin_digest=None):
+    """None if `path` is the pinned oracle, else the BLOCKED reason.
+
+    Blocks when the pin is missing, when the pin is not the one the expected
+    sha256 was recorded for, or when the binary's sha256 differs."""
+    if expected_sha is None:
+        expected_sha = ORACLE_SHA256
+    if expected_pin_digest is None:
+        expected_pin_digest = ORACLE_SHA256_PIN_DIGEST
+    if pin is None:
+        return ("ORACLE_PIN is missing or malformed, so the oracle's identity "
+                "cannot be checked")
+    if pin_digest(pin) != expected_pin_digest:
+        return (f"ORACLE_PIN ({pin[:9]}) is not the pin ORACLE_SHA256 was "
+                f"recorded for (digest {pin_digest(pin)}, expected "
+                f"{expected_pin_digest}): rebuild the oracle at the pin and "
+                f"update ORACLE_SHA256 and ORACLE_SHA256_PIN_DIGEST together")
+    got = sha256_of(path)
+    if got != expected_sha:
+        return (f"the oracle binary {path} is not the pinned oracle (sha256 "
+                f"{got}, expected {expected_sha})")
+    return None
 
 
 def main():
@@ -416,6 +542,12 @@ def main():
         for m in missing:
             print("   missing:", m)
         sys.exit(3)
+    if need_oracle:
+        why = oracle_identity_blocker(args.oracle, ORACLE_PIN)
+        if why is not None:
+            print(f"BLOCKED: {why}. Numbers against any other binary are not "
+                  f"comparable; see README.md for the rebuild recipe.")
+            sys.exit(3)
 
     load1 = os.getloadavg()[0]
     provisional = load1 > IDLE_MAX
@@ -433,8 +565,9 @@ def main():
             print(f"  {k}: {v}")
     else:
         print("INCOMPARABLE: (none)")
-    print("NOTE: all numbers are comparable to oracle 4749c4e93 "
-          f"(sha256 {ORACLE_SHA256[:8]}...) and to NO other oracle revision.")
+    print(f"NOTE: all numbers are comparable to the pinned oracle "
+          f"{(ORACLE_PIN or '?')[:9]} (sha256 {ORACLE_SHA256[:8]}...) and to NO "
+          f"other oracle revision.")
 
     result = {"load1": load1, "n": args.n, "provisional": provisional,
               "oracle_sha256_expected": ORACLE_SHA256}

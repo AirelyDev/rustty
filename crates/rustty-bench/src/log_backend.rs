@@ -28,7 +28,10 @@
 //! It is **not** `global.init(.{ .tool = ... })`. `S62-F2` is about the whole
 //! process init the reference's `cli.main` performs — logging, `GHOSTTY_LOG`,
 //! rlimits, locale, oniguruma/glslang, the resources dir and signal handlers —
-//! and this supplies only the logging part. That row stays **OPEN**.
+//! and this supplies only the logging backend. CORRECTION (task T-H2, parity
+//! S43-F3): `cli::main` now runs that init (`rustty_apprt::init_with_action`,
+//! the `.tool` arm), so what `S62-F2` asked for is in place; that row belongs
+//! to the `src/benchmark` owner to close.
 //!
 //! # The rendering
 //!

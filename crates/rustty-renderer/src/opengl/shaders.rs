@@ -63,6 +63,16 @@ pub type Error = super::pipeline::Error;
 // as `&CStr` — the `[:0]const u8` that `loadShaderCode` (`shaders.zig:347`)
 // returned. `from_bytes_with_nul_unchecked` is sound: the resolver appends exactly
 // one trailing NUL and GLSL source contains no interior NUL.
+//
+// The reference `loadShaderCode` doc, carried with its port (this macro + the
+// `build.rs` include resolver):
+//
+// /// Load shader code from the target path, processing `#include` directives.
+// ///
+// /// Comptime only for now, this code is really sloppy and makes a bunch of
+// /// assumptions about things being well formed and file names not containing
+// /// quote marks. If we ever want to process `#include`s for custom shaders
+// /// then we need to write something better than this for it.
 // -------------------------------------------------------------------------------
 
 macro_rules! glsl {
@@ -450,8 +460,8 @@ impl Shaders {
     }
 }
 
-/// Initialize our custom shader pipelines. `shaders` is a set of shader **source
-/// code**, not file paths.
+/// Initialize our custom shader pipelines. The shaders argument is a
+/// set of shader source code, not file paths.
 ///
 /// PORTS: `opengl/shaders.zig:302-331` — `initPostPipelines`.
 //
@@ -465,7 +475,13 @@ fn init_post_pipelines(shaders: &[&CStr]) -> Result<Vec<Pipeline>, Error> {
         return Ok(Vec::new());
     }
 
+    // Keeps track of how many shaders we successfully wrote.
+    // (PORT NOTE: the `Vec`'s `len()` is the reference `i`.)
+    //
+    // Initialize our result set. If any error happens, we undo everything.
     let mut pipelines: Vec<Pipeline> = Vec::with_capacity(shaders.len());
+    // Build each shader. Note we don't use "0.." to build our index
+    // because we need to keep track of our length to clean up above.
     for source in shaders {
         match init_post_pipeline(source) {
             Ok(p) => pipelines.push(p),

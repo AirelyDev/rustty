@@ -1043,24 +1043,35 @@ fn option_value<'a>(raw: &'a [u8], key: &[u8]) -> Option<&'a [u8]> {
 }
 
 /// `std.fmt.parseInt(u21, value, radix) catch null` — parse and bound to u21.
-// PORT NOTE: Rust has no `u21`; parse into `u32` and reject values that exceed
-// the u21 range (`> 0x1F_FFFF`), reproducing the reference's `error.Overflow`
-// (→ `null`). `from_str_radix` rejects empty input and non-`[0-9A-Fa-f]` bytes
-// (→ `null`), matching `error.InvalidCharacter`. A leading `+` is rejected here
-// (Zig accepts it), but no protocol path exercises a signed codepoint.
-fn parse_u21(value: &[u8], radix: u32) -> Option<u32> {
-    let s = std::str::from_utf8(value).ok()?;
-    let parsed = u32::from_str_radix(s, radix).ok()?;
-    if parsed > 0x1F_FFFF {
-        return None;
-    }
-    Some(parsed)
+// PORT NOTE: Rust has no `u21`; the port of `std.fmt.parseInt` in
+// `rustty_zigstd::fmt` parses at the reference's `u21` width (so an
+// out-of-range value is `error.Overflow` → `null`) and the value is returned
+// widened to `u32`.
+// CORRECTION (parity S170-F1): this used `u32::from_str_radix` plus a range
+// check, and its note said "A leading `+` is rejected here (Zig accepts it),
+// but no protocol path exercises a signed codepoint". `from_str_radix` also
+// rejected the `_` digit separators and the `-0` that `std.fmt.parseInt`
+// accepts.
+fn parse_u21(value: &[u8], radix: u8) -> Option<u32> {
+    // PORT NOTE: reference defect (R13), UD141: a `_` digit separator is refused
+    // before parsing, as Ghostty's own OSC 99 parser does; see
+    // `protocol_int::reject_digit_separators`.
+    crate::protocol_int::reject_digit_separators(value).ok()?;
+    let parsed =
+        rustty_zigstd::fmt::parse_int_type(rustty_zigstd::fmt::IntType::unsigned(21), value, radix)
+            .ok()?;
+    Some(u32::try_from(parsed).expect("a u21 fits in u32"))
 }
 
 /// `std.fmt.parseInt(u32, value, radix) catch null`.
-fn parse_u32(value: &[u8], radix: u32) -> Option<u32> {
-    let s = std::str::from_utf8(value).ok()?;
-    u32::from_str_radix(s, radix).ok()
+// CORRECTION (parity S170-F1): this used `u32::from_str_radix`; see
+// `parse_u21`.
+fn parse_u32(value: &[u8], radix: u8) -> Option<u32> {
+    // PORT NOTE: reference defect (R13), UD141: a `_` digit separator is refused
+    // before parsing, as Ghostty's own OSC 99 parser does; see
+    // `protocol_int::reject_digit_separators`.
+    crate::protocol_int::reject_digit_separators(value).ok()?;
+    rustty_zigstd::fmt::parse_int::<u32>(value, radix).ok()
 }
 
 // PORT NOTE (`946422dbc`): the `parse_float` helper (`std.fmt.parseFloat(f64,
@@ -1316,6 +1327,52 @@ mod tests {
         };
         // try testing.expectEqual(@as(u21, 0xE0A0), cmd.query.get(.cp).?);
         assert_eq!(0xE0A0u32, qry.get_cp().unwrap());
+    }
+
+    // Parity S170-F1: no reference test. The option readers call
+    // `std.fmt.parseInt`, which accepts a leading `+` and `-0`, and bounds `cp`
+    // to `u21`. UD141 (R13): its `_` digit separators are refused, as
+    // Ghostty's own OSC 99 parser refuses them, so `E0_A0` is no codepoint.
+    #[test]
+    fn integer_options_follow_zig_parse_int_but_refuse_digit_separators() {
+        let Request::Query(qry) = &test_parse(b"q;cp=E0_A0").unwrap() else {
+            panic!("expected query");
+        };
+        assert_eq!(None, qry.get_cp());
+
+        let cmd = test_parse(b"r;cp=+e0a0;upm=1_000;aw=5_12;lh=-0;QQ==").unwrap();
+        let Request::Register(reg) = &cmd else {
+            panic!("expected register");
+        };
+        assert_eq!(Some(0xE0A0u32), reg.get_cp());
+        assert_eq!(None, reg.get_upm());
+        assert_eq!(None, reg.get_aw());
+        assert_eq!(Some(0u32), reg.get_lh());
+
+        let cmd = test_parse(b"r;cp=e0a0;upm=1000;aw=512;QQ==").unwrap();
+        let Request::Register(reg) = &cmd else {
+            panic!("expected register");
+        };
+        assert_eq!(Some(1000u32), reg.get_upm());
+        assert_eq!(Some(512u32), reg.get_aw());
+
+        let Request::Clear(clr) = &test_parse(b"c;cp=1F_FFFF").unwrap() else {
+            panic!("expected clear");
+        };
+        assert_eq!(None, clr.get_cp());
+        let Request::Clear(clr) = &test_parse(b"c;cp=1FFFFF").unwrap() else {
+            panic!("expected clear");
+        };
+        assert_eq!(Some(0x1F_FFFFu32), clr.get_cp());
+
+        let Request::Query(qry) = &test_parse(b"q;cp=_E0A0").unwrap() else {
+            panic!("expected query");
+        };
+        assert_eq!(None, qry.get_cp());
+        let Request::Query(qry) = &test_parse(b"q;cp=20_0000").unwrap() else {
+            panic!("expected query");
+        };
+        assert_eq!(None, qry.get_cp());
     }
 
     #[test]

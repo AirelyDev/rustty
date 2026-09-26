@@ -7,10 +7,9 @@
 //! ```
 //!
 //! WHY `#[ignore]` BY DEFAULT: each arm forks a pty and drives a real full-screen
-//! animation loop for several seconds, and the negative-control arm deliberately ends in
-//! a `SIGKILL`. That does not belong in the default `cargo test` lane. It is `#[ignore]`d
-//! for RUNTIME, not because it is flaky or unproven — both arms are executed and their
-//! output is recorded in the WS12 task log.
+//! animation for several seconds. That does not belong in the default `cargo test` lane.
+//! It is `#[ignore]`d for RUNTIME, not because it is flaky or unproven — both arms are
+//! executed and their output is recorded in the task logs (WS12, S-6b).
 //!
 //! WHY IT DOES NOT SELF-SKIP: a KAT that quietly passes when its subject is missing
 //! asserts nothing. If the `rustty` binary is absent these tests **panic with build
@@ -22,14 +21,17 @@
 //!    synchronized-update wrapper. So Arm A asserts on content (frames, an `ESC[34m`
 //!    colour run, and a far-right cursor column), never merely on "bytes were emitted".
 //!
-//! 2. ESC does quit, but shutdown then blocks in `Loop::stop()`
-//!    (`rustty-vaxis/src/loop_.rs:215`): `stop()` wakes its reader thread — blocked in
-//!    `read(/dev/tty)` — with a DSR query `ESC[5n` and then `join()`s it. Only a terminal
-//!    that ANSWERS `ESC[5n` with `ESC[0n` unblocks that read. A dumb pty never answers, so
-//!    `join()` hangs forever. This is upstream-faithful libvaxis behaviour, NOT a rustty
-//!    defect, and it is why the harness must impersonate a terminal. Arm B suppresses only
-//!    that one reply and asserts the process does NOT exit — which is what makes Arm A's
-//!    clean exit attributable to the ESC key rather than to a timeout or a crash.
+//! 2. ESC does quit, and shutdown then waits in `Loop::stop()`
+//!    (`rustty-vaxis/src/loop_.rs`): `stop()` wakes its reader thread — blocked reading
+//!    `/dev/tty` — with a DSR query `ESC[5n` and then `join()`s it. A terminal that
+//!    ANSWERS with `ESC[0n` ends the read at once, as in libvaxis. In libvaxis a terminal
+//!    that never answers makes `join()` hang forever; rustty does not port that deadlock
+//!    (reference defect, R13, `.port/parity-closure/UPSTREAM-DEFECTS.md` UD246): after
+//!    `STOP_DSR_GRACE` (1 s) `stop()` wakes the reader through a pipe it waits on beside
+//!    the tty. So Arm A (the harness answers DSR) must exit well inside the grace, which
+//!    attributes its exit to the ESC key plus the DSR reply, and Arm B (the reply
+//!    suppressed) must exit only after the grace, which proves the stop is bounded and
+//!    that it was the wake pipe, not the reply, that ended it.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -104,6 +106,13 @@ fn run_harness(extra: &[&str]) -> (i32, std::collections::HashMap<String, String
     (out.status.code().unwrap_or(-1), kv)
 }
 
+fn secs(kv: &std::collections::HashMap<String, String>, key: &str) -> f64 {
+    kv.get(key)
+        .unwrap_or_else(|| panic!("harness output has no {key}"))
+        .parse()
+        .unwrap_or_else(|e| panic!("harness {key} is not a number: {e}"))
+}
+
 fn num(kv: &std::collections::HashMap<String, String>, key: &str) -> i64 {
     kv.get(key)
         .unwrap_or_else(|| panic!("harness output has no {key}"))
@@ -126,6 +135,13 @@ fn boo_renders_frames_and_exits_cleanly_on_esc() {
     );
     assert_eq!(num(&kv, "EXIT_STATUS"), 0, "+boo exited non-zero after ESC");
     assert_eq!(rc, 0, "harness reported failure");
+    // The DSR reply, not the UD246 grace, ended the read: well inside STOP_DSR_GRACE (1 s).
+    assert!(
+        secs(&kv, "ELAPSED_AFTER_QUIT") < 0.5,
+        "+boo took {}s to exit although the harness answered ESC[5n; a terminal that \
+         answers must shut down as in libvaxis, not wait for the UD246 grace",
+        secs(&kv, "ELAPSED_AFTER_QUIT")
+    );
 
     // CONTENT assertions. A 0x0-winsize run emits only empty synchronized-update pairs,
     // so frames alone are not enough — the colour run and the far-right cursor column are
@@ -149,40 +165,41 @@ fn boo_renders_frames_and_exits_cleanly_on_esc() {
     );
 }
 
-/// ARM B — the NEGATIVE CONTROL. Same run with the `ESC[5n` reply suppressed: the child
-/// must NOT exit. This is what makes Arm A's exit attributable to the ESC key.
-///
-/// Upstream-faithful: `Loop::stop()` wakes its blocked reader with a DSR query that only a
-/// replying terminal answers, so against a non-answering terminal `join()` never returns.
+/// ARM B — the terminal never answers `ESC[5n`. libvaxis's `Loop.stop` then joins
+/// forever (UPSTREAM-DEFECTS.md UD246); rustty's `stop` wakes the reader through its
+/// wake pipe after `STOP_DSR_GRACE` (1 s), so `+boo` must exit cleanly, and only after
+/// the grace (which shows the wake pipe, not a reply, ended the read).
 #[test]
-#[ignore = "negative control: deliberately wedges +boo and SIGKILLs it; run with --ignored"]
-fn boo_without_dsr_reply_does_not_exit() {
+#[ignore = "forks a pty and runs the real +boo animation with the DSR reply suppressed; run with --ignored"]
+fn boo_without_dsr_reply_exits_after_the_grace() {
     let (rc, kv) = run_harness(&["--no-dsr"]);
 
     assert_eq!(
         num(&kv, "EXITED"),
-        0,
-        "the no-DSR negative control EXITED — so Arm A's clean exit is NOT evidence that \
-         the ESC key is what shut +boo down (it would exit either way). Either \
-         Loop::stop()'s DSR wake stopped being load-bearing, or the harness is answering \
-         ESC[5n when it should not."
+        1,
+        "with the ESC[5n reply suppressed +boo did not exit: Loop::stop() joined a reader \
+         still blocked in read (the libvaxis deadlock, UD246)"
     );
-    assert_ne!(
-        rc, 0,
-        "the harness must report failure when the child does not exit"
+    assert_eq!(num(&kv, "EXIT_STATUS"), 0, "+boo exited non-zero");
+    assert_eq!(rc, 0, "harness reported failure");
+    let elapsed = secs(&kv, "ELAPSED_AFTER_QUIT");
+    assert!(
+        elapsed >= 0.9,
+        "+boo exited {elapsed}s after ESC with no DSR reply, before the 1 s grace: \
+         something other than the UD246 wake ended the read (is the harness answering?)"
     );
 
-    // The animation must still have RUN — otherwise "did not exit" could be explained by
-    // the process having died or hung before rendering, which would prove nothing.
+    // The animation must still have RUN — otherwise the exit could be explained by the
+    // process having died or stopped before rendering, which would prove nothing.
     assert!(
         num(&kv, "FRAMES") >= 10,
-        "the negative control rendered only {} frames — it must exercise the same live \
+        "Arm B rendered only {} frames — it must exercise the same live \
          animation as Arm A, differing ONLY in the suppressed DSR reply",
         num(&kv, "FRAMES")
     );
     assert!(
         num(&kv, "BYTES") > 10_000,
-        "the negative control captured only {} bytes; it must be a real run",
+        "Arm B captured only {} bytes; it must be a real run",
         num(&kv, "BYTES")
     );
 }

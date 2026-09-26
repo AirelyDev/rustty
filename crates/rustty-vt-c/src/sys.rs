@@ -416,6 +416,12 @@ fn emit_log(level: LogLevel, scope: &[u8], message: &[u8]) {
     );
 }
 
+// const buffer_size = 2048;
+// PORT NOTE: `LogEmitter.buffer_size`, hoisted to module scope because
+// `log_stderr` (every target) sizes its line buffer from it while
+// `LogEmitter` itself is `cfg(not(wasm32))`.
+const LOG_EMITTER_BUFFER_SIZE: usize = 2048;
+
 /// Emits logs in chunks. Almost all logs will be less than the chunk size
 /// but this allows emitting larger logs without heap allocation.
 // const LogEmitter = struct { c_level, scope_text, buf: [2048]u8, pos: usize, ... }
@@ -425,7 +431,7 @@ fn emit_log(level: LogLevel, scope: &[u8], message: &[u8]) {
 struct LogEmitter<'a> {
     c_level: LogLevel,
     scope_text: &'a [u8],
-    buf: [u8; 2048],
+    buf: [u8; LOG_EMITTER_BUFFER_SIZE],
     pos: usize,
 }
 
@@ -547,6 +553,11 @@ pub fn log_fn(level: StdLevel, scope: &str, args: core::fmt::Arguments) {
         let _ = (level, scope, args);
     }
 
+    // } else if (terminal.options.c_abi) {
+    //     // For C ABI builds, use a custom log function that dispatches to an
+    //     // embedder-provided callback (or silently discards when none is set).
+    //     options.logFn = @import("terminal/c/sys.zig").logFn;
+    // }
     #[cfg(not(target_arch = "wasm32"))]
     log_fn_c_abi(level, scope, args);
 }
@@ -572,7 +583,7 @@ fn log_fn_c_abi(level: StdLevel, scope: &str, args: core::fmt::Arguments) {
     let mut ctx = LogEmitter {
         c_level,
         scope_text,
-        buf: [0u8; 2048],
+        buf: [0u8; LOG_EMITTER_BUFFER_SIZE],
         pos: 0,
     };
     // const writer: std.io.GenericWriter(...) = .{ .context = &ctx };
@@ -706,6 +717,19 @@ static LOGGER: Logger = Logger;
 /// completely alone — the correct behavior when a host/embedder already
 /// owns the `log` crate's global registration is containment, not clobber.
 pub fn install_log_backend() {
+    // This process is the lib artifact (libghostty-vt's analog): rustty-vt
+    // compiled it with `terminal_options.artifact = .lib` in the reference
+    // (`GhosttyZig.zig:67-72`). The port records that at run time, here,
+    // because this is the first thing every `*_new` entry point does, and
+    // every route to a mode lookup goes through a `*_new` (parity S6-F2,
+    // Decision A; see `rustty_vt::options::runtime_artifact`). The only
+    // caller of the setter; gate `check_runtime_artifact_setter.py`.
+    rustty_vt::options::set_runtime_artifact_lib();
+    // `lib_vt.zig`'s `pub const panic` (the `tinyPanicImpl` arm in release
+    // builds): a Rust panic hook can only be installed at run time, and this is
+    // the first thing every `*_new` entry point does (parity S43-F6). It is
+    // installed together with the artifact above; see `panic.rs`.
+    crate::panic::install();
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {
         // task-14a review round 2 (same class as CRITICAL 1): the wasm-release
@@ -744,10 +768,8 @@ pub fn install_log_backend() {
 /// and would keep the entire `std.Io.Threaded` vtable alive in the binary
 /// (see `os/stderr.zig`). On freestanding/wasm targets this is a no-op
 /// (no stderr available).
-// PORT NOTE: the `std.debug.lockStderr` avoidance above is Zig binary-size
-// machinery (`std.Io` vtable retention) with no Rust analogue; the port gets
-// the same no-interleaving guarantee by holding `std::io::stderr().lock()`
-// for the whole line (see the lock PORT NOTE in the body).
+// PORT NOTE: the raw write is `rustty_os::stderr::write`, the port of
+// `os/stderr.zig`, so the port also bypasses `std::io::stderr()`'s lock.
 // pub fn logStderr(_, level, scope_ptr, scope_len, message_ptr, message_len)
 //     callconv(...) void { ... }
 /// PORT NOTE: the C calling convention is the `extern "C"` wrapper in `lib.rs`
@@ -782,49 +804,84 @@ pub unsafe fn log_stderr(
         LogLevel::Debug => "debug",
     };
 
-    // The reference formats the line into a stack buffer and emits it with a
-    // single raw stderr write, falling back to piecewise writes when it does
-    // not fit:
-    //
-    //     // Large enough for a full logFn chunk plus the level/scope prefix.
-    //     var buffer: [LogEmitter.buffer_size + 128]u8 = undefined;
-    //     const line: ?[]const u8 = ...bufPrint(&buffer, ...) catch null;
-    //     if (line) |v| { stderr.write(v); return; }
-    //
-    //     // The line didn't fit in our buffer (an embedder called us directly
-    //     // with a very large message). Fall back to writing the pieces
-    //     // separately; interleaving with other threads is possible here but
-    //     // this is a best-effort diagnostic path.
-    //     stderr.write("["); ...
-    //
-    // PORT NOTE: the port instead holds the stderr lock for the duration of
-    // the write — the same thread-safe, mutex-protected output with the same
-    // no-interleaving observable, and with no fixed buffer there is no
-    // didn't-fit fallback path to reproduce.
-    use std::io::Write as _;
-    let stderr = std::io::stderr();
-    let mut lock = stderr.lock();
-    // nosuspend { if (scope.len > 0) { ... } else { ... } }
-    if !scope.is_empty() {
-        // writer.print("[{s}]({s}): {s}\n", .{ level_text, scope, message });
-        // PORT NOTE: the trailing `\n` is emitted by `writeln!` (identical bytes).
-        let _ = writeln!(
-            lock,
-            "[{}]({}): {}",
-            level_text,
-            String::from_utf8_lossy(scope),
-            String::from_utf8_lossy(message)
-        );
+    log_stderr_to(
+        &mut |bytes: &[u8]| rustty_os::stderr::write(bytes),
+        level_text,
+        scope,
+        message,
+    );
+}
+
+/// The body of [`log_stderr`] after the level is named, over a `write` sink
+/// that is `stderr.write` (`rustty_os::stderr::write`) in production and a
+/// recorder in the tests.
+// CORRECTION (parity S178-F1, S178-F2): this used to hold
+// `std::io::stderr().lock()` and `writeln!` the line with the scope and
+// message passed through `String::from_utf8_lossy`. That replaced invalid
+// UTF-8 with U+FFFD where the reference writes the bytes as they are, and
+// `writeln!` issues one write per fragment, so the single-write guarantee in
+// the doc comment was not backed. The reference's two paths are ported below.
+fn log_stderr_to(write: &mut dyn FnMut(&[u8]), level_text: &str, scope: &[u8], message: &[u8]) {
+    // Large enough for a full logFn chunk plus the level/scope prefix.
+    // var buffer: [LogEmitter.buffer_size + 128]u8 = undefined;
+    let mut buffer = [0u8; LOG_EMITTER_BUFFER_SIZE + 128];
+    // const line: ?[]const u8 = if (scope.len > 0)
+    //     std.fmt.bufPrint(&buffer, "[{s}]({s}): {s}\n", .{ level_text, scope, message }) catch null
+    // else
+    //     std.fmt.bufPrint(&buffer, "[{s}]: {s}\n", .{ level_text, message }) catch null;
+    let line: Option<&[u8]> = if !scope.is_empty() {
+        buf_print(
+            &mut buffer,
+            &[
+                b"[",
+                level_text.as_bytes(),
+                b"](",
+                scope,
+                b"): ",
+                message,
+                b"\n",
+            ],
+        )
     } else {
-        // writer.print("[{s}]: {s}\n", .{ level_text, message });
-        // PORT NOTE: the trailing `\n` is emitted by `writeln!` (identical bytes).
-        let _ = writeln!(
-            lock,
-            "[{}]: {}",
-            level_text,
-            String::from_utf8_lossy(message)
-        );
+        buf_print(
+            &mut buffer,
+            &[b"[", level_text.as_bytes(), b"]: ", message, b"\n"],
+        )
+    };
+    // if (line) |v| { stderr.write(v); return; }
+    if let Some(v) = line {
+        write(v);
+        return;
     }
+
+    // The line didn't fit in our buffer (an embedder called us directly
+    // with a very large message). Fall back to writing the pieces
+    // separately; interleaving with other threads is possible here but
+    // this is a best-effort diagnostic path.
+    write(b"[");
+    write(level_text.as_bytes());
+    write(b"]");
+    if !scope.is_empty() {
+        write(b"(");
+        write(scope);
+        write(b")");
+    }
+    write(b": ");
+    write(message);
+    write(b"\n");
+}
+
+/// `std.fmt.bufPrint` for a format made only of `{s}` byte-slice arguments:
+/// the concatenated `parts` in `buf`, or `None` (`error.NoSpaceLeft`) when
+/// they do not fit.
+fn buf_print<'b>(buf: &'b mut [u8], parts: &[&[u8]]) -> Option<&'b [u8]> {
+    let mut pos = 0usize;
+    for part in parts {
+        let end = pos.checked_add(part.len())?;
+        buf.get_mut(pos..end)?.copy_from_slice(part);
+        pos = end;
+    }
+    Some(&buf[..pos])
 }
 
 #[cfg(test)]
@@ -861,6 +918,220 @@ pub(crate) mod tests {
         drop(g);
         *terminal_sys::decode_png.write().unwrap() = None;
         guard
+    }
+
+    // Parity S178-F1 / S178-F2 (no reference test): `logStderr` writes the
+    // scope and message bytes as they are, and a line that fits the
+    // `LogEmitter.buffer_size + 128` buffer goes out in ONE write.
+    #[test]
+    fn log_stderr_writes_raw_bytes_in_one_write() {
+        let mut writes: Vec<Vec<u8>> = Vec::new();
+        log_stderr_to(
+            &mut |b: &[u8]| writes.push(b.to_vec()),
+            "warning",
+            b"sc\xffpe",
+            b"m\xfe\x80sg",
+        );
+        assert_eq!(writes, vec![b"[warning](sc\xffpe): m\xfe\x80sg\n".to_vec()]);
+
+        writes.clear();
+        log_stderr_to(
+            &mut |b: &[u8]| writes.push(b.to_vec()),
+            "info",
+            b"",
+            b"\xc3",
+        );
+        assert_eq!(writes, vec![b"[info]: \xc3\n".to_vec()]);
+    }
+
+    /// The length of the message that makes `[warning](s): <message>\n`
+    /// exactly fill the `LogEmitter.buffer_size + 128` line buffer.
+    const EXACT_FIT_MESSAGE_LEN: usize =
+        LOG_EMITTER_BUFFER_SIZE + 128 - b"[warning](s): ".len() - b"\n".len();
+
+    // Parity S178-F2: the single-write/piecewise boundary is the buffer size
+    // `LogEmitter.buffer_size + 128` exactly: a line of that many bytes is one
+    // write, one byte more is the piecewise fallback.
+    #[test]
+    fn log_stderr_single_write_boundary_is_the_buffer_size() {
+        let mut writes: Vec<Vec<u8>> = Vec::new();
+        let message = vec![b'y'; EXACT_FIT_MESSAGE_LEN];
+        log_stderr_to(
+            &mut |b: &[u8]| writes.push(b.to_vec()),
+            "warning",
+            b"s",
+            &message,
+        );
+        assert_eq!(1, writes.len());
+        assert_eq!(LOG_EMITTER_BUFFER_SIZE + 128, writes[0].len());
+
+        writes.clear();
+        let message = vec![b'y'; EXACT_FIT_MESSAGE_LEN + 1];
+        log_stderr_to(
+            &mut |b: &[u8]| writes.push(b.to_vec()),
+            "warning",
+            b"s",
+            &message,
+        );
+        assert_eq!(9, writes.len(), "one byte over the buffer is piecewise");
+        assert_eq!(message, writes[7]);
+    }
+
+    // Parity S178-F2, the production sink: `log_stderr` hands each line to
+    // `stderr.write` (`rustty_os::stderr::write`, one `write(2)` on fd 2).
+    // The child points fd 2 at a Unix datagram socket, where every `write(2)`
+    // is one datagram, so it can count the writes; a parent/child split keeps
+    // the redirection away from the other tests' stderr.
+    #[test]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg_attr(miri, ignore)] // spawns a child process and redirects fd 2
+    fn log_stderr_production_sink_writes_each_fitting_line_once_to_fd_2() {
+        const CHILD: &str = "RUSTTY_VTC_LOG_STDERR_SINK_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            log_stderr_sink_child();
+            return;
+        }
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "sys::tests::log_stderr_production_sink_writes_each_fitting_line_once_to_fd_2",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            out.status.success() && stdout.contains("LOG_STDERR_SINK_CHILD_OK"),
+            "child failed: {:?}\nstdout: {stdout}\nstderr: {}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    fn log_stderr_sink_child() {
+        use std::ffi::{c_int, c_void};
+        use std::os::unix::io::AsRawFd;
+        use std::os::unix::net::UnixDatagram;
+        extern "C" {
+            fn dup(fd: c_int) -> c_int;
+            fn dup2(fd: c_int, fd2: c_int) -> c_int;
+            fn close(fd: c_int) -> c_int;
+            fn setsockopt(
+                socket: c_int,
+                level: c_int,
+                name: c_int,
+                value: *const c_void,
+                len: u32,
+            ) -> c_int;
+        }
+        #[cfg(target_os = "macos")]
+        const SOL_SOCKET: c_int = 0xffff;
+        #[cfg(target_os = "macos")]
+        const SO_SNDBUF: c_int = 0x1001;
+        #[cfg(target_os = "macos")]
+        const SO_RCVBUF: c_int = 0x1002;
+        #[cfg(target_os = "linux")]
+        const SOL_SOCKET: c_int = 1;
+        #[cfg(target_os = "linux")]
+        const SO_SNDBUF: c_int = 7;
+        #[cfg(target_os = "linux")]
+        const SO_RCVBUF: c_int = 8;
+
+        let (tx, rx) = UnixDatagram::pair().unwrap();
+        let size: c_int = 64 * 1024;
+        for (sock, opt) in [(tx.as_raw_fd(), SO_SNDBUF), (rx.as_raw_fd(), SO_RCVBUF)] {
+            // SAFETY: a valid socket and a live `c_int` option value.
+            let rc = unsafe {
+                setsockopt(
+                    sock,
+                    SOL_SOCKET,
+                    opt,
+                    &size as *const c_int as *const c_void,
+                    std::mem::size_of::<c_int>() as u32,
+                )
+            };
+            assert_eq!(0, rc);
+        }
+
+        let log = |message: &[u8]| {
+            // SAFETY: fd 2 is saved, pointed at the socket for this one call,
+            // and restored; the byte slices are live.
+            unsafe {
+                let saved = dup(2);
+                assert!(saved >= 0);
+                assert_eq!(2, dup2(tx.as_raw_fd(), 2));
+                log_stderr(
+                    std::ptr::null_mut(),
+                    LogLevel::Warning,
+                    b"s".as_ptr(),
+                    1,
+                    message.as_ptr(),
+                    message.len(),
+                );
+                assert_eq!(2, dup2(saved, 2));
+                close(saved);
+            }
+            rx.set_nonblocking(true).unwrap();
+            let mut grams: Vec<Vec<u8>> = Vec::new();
+            let mut buf = vec![0u8; 64 * 1024];
+            while let Ok(n) = rx.recv(&mut buf) {
+                grams.push(buf[..n].to_vec());
+            }
+            grams
+        };
+
+        let message = vec![b'y'; EXACT_FIT_MESSAGE_LEN];
+        let mut line = b"[warning](s): ".to_vec();
+        line.extend_from_slice(&message);
+        line.push(b'\n');
+        assert_eq!(vec![line], log(&message), "a fitting line is one write(2)");
+
+        let message = vec![b'y'; EXACT_FIT_MESSAGE_LEN + 1];
+        let grams = log(&message);
+        assert_eq!(
+            9,
+            grams.len(),
+            "an oversized line is the piecewise fallback"
+        );
+        assert_eq!(message, grams[7]);
+
+        println!("LOG_STDERR_SINK_CHILD_OK");
+    }
+
+    // The reference's fallback: a line that does not fit is written piecewise.
+    #[test]
+    fn log_stderr_writes_an_oversized_line_in_pieces() {
+        let message = vec![b'x'; LOG_EMITTER_BUFFER_SIZE + 128];
+        let mut writes: Vec<Vec<u8>> = Vec::new();
+        log_stderr_to(
+            &mut |b: &[u8]| writes.push(b.to_vec()),
+            "error",
+            b"s",
+            &message,
+        );
+        let expected: Vec<&[u8]> = vec![
+            b"[", b"error", b"]", b"(", b"s", b")", b": ", &message, b"\n",
+        ];
+        assert_eq!(
+            writes,
+            expected.iter().map(|b| b.to_vec()).collect::<Vec<_>>()
+        );
+
+        writes.clear();
+        log_stderr_to(
+            &mut |b: &[u8]| writes.push(b.to_vec()),
+            "debug",
+            b"",
+            &message,
+        );
+        let expected: Vec<&[u8]> = vec![b"[", b"debug", b"]", b": ", &message, b"\n"];
+        assert_eq!(
+            writes,
+            expected.iter().map(|b| b.to_vec()).collect::<Vec<_>>()
+        );
     }
 
     #[test]
@@ -1297,5 +1568,71 @@ pub(crate) mod tests {
         assert_eq!(Result::Success, unsafe {
             set(Option_::DecodePng, std::ptr::null())
         });
+    }
+
+    /// Parity S5-F2: the built-in stderr sink writes the scope and message
+    /// BYTES verbatim, as the reference's `bufPrint("{s}")` does, including
+    /// bytes that are not UTF-8. The parent re-runs this test in a child whose
+    /// stderr it captures, so the assertion is on the real fd-2 output of the
+    /// `rustty_sys_log_stderr` export, not on a helper.
+    #[test]
+    fn log_stderr_writes_non_utf8_scope_and_message_bytes_verbatim() {
+        const CHILD: &str = "RUSTTY_T_H_LOG_STDERR_CHILD";
+        const NAME: &str =
+            "sys::tests::log_stderr_writes_non_utf8_scope_and_message_bytes_verbatim";
+        let scope: &[u8] = b"sc\xffpe";
+        let message: &[u8] = b"m\xc3\x28sg \xfe";
+        if std::env::var_os(CHILD).is_some() {
+            // Child arm: the parent asserts on this process's stderr.
+            // SAFETY: both byte ranges are live slices.
+            unsafe {
+                crate::rustty_sys_log_stderr(
+                    std::ptr::null_mut(),
+                    LogLevel::Warning as std::os::raw::c_int,
+                    scope.as_ptr(),
+                    scope.len(),
+                    message.as_ptr(),
+                    message.len(),
+                );
+                crate::rustty_sys_log_stderr(
+                    std::ptr::null_mut(),
+                    LogLevel::Error as std::os::raw::c_int,
+                    scope.as_ptr(),
+                    0,
+                    message.as_ptr(),
+                    message.len(),
+                );
+            }
+            return;
+        }
+        let bb = std::hint::black_box;
+        assert!(
+            std::str::from_utf8(bb(scope)).is_err() && std::str::from_utf8(bb(message)).is_err()
+        );
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", NAME, "--nocapture", "--test-threads=1"])
+            .env(CHILD, "1")
+            .output()
+            .expect("spawn the child test");
+        assert!(out.status.success(), "child failed: {out:?}");
+        let mut warning = b"[warning](".to_vec();
+        warning.extend_from_slice(scope);
+        warning.extend_from_slice(b"): ");
+        warning.extend_from_slice(message);
+        warning.push(b'\n');
+        let mut error = b"[error]: ".to_vec();
+        error.extend_from_slice(message);
+        error.push(b'\n');
+        let find = |needle: &[u8]| out.stderr.windows(needle.len()).any(|w| w == needle);
+        assert!(
+            find(&warning),
+            "scoped line not verbatim in the child's stderr: {:?}",
+            out.stderr
+        );
+        assert!(
+            find(&error),
+            "unscoped line not verbatim in the child's stderr: {:?}",
+            out.stderr
+        );
     }
 }

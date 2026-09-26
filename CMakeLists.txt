@@ -139,10 +139,43 @@ elseif(WIN32)
     set(RUSTTY_VT_IMPLIB "rustty_vt_c.dll.lib")
 else()
     set(RUSTTY_VT_REALNAME "${CMAKE_SHARED_LIBRARY_PREFIX}rustty_vt_c${CMAKE_SHARED_LIBRARY_SUFFIX}")
-    set(RUSTTY_VT_SONAME "${RUSTTY_VT_REALNAME}")
+    # The versioned soname Zig gives libghostty-vt (S64-F5). This build asks
+    # cargo for it (RUSTTY_VT_SONAME, see crates/rustty-vt-c/build.rs) and
+    # links the name to the cargo artifact in the build tree below.
+    set(RUSTTY_VT_SONAME "librustty-vt.so.${PROJECT_VERSION_MAJOR}")
 endif()
 
 set(RUSTTY_VT_SHARED_LIBRARY "${RUSTTY_OUT_DIR}/${RUSTTY_VT_REALNAME}")
+
+# The INSTALLED names (S64-F5), the layout of GhosttyLibVt.zig:384-490 and
+# Zig's shared-library install: a fully versioned real name, a major-version
+# soname link and an unversioned link, and `librustty-vt.a` /
+# `rustty-vt-static.lib` for the static archive. The build tree keeps cargo's
+# `librustty_vt_c.*` names, which the examples link directly.
+if(APPLE)
+    set(RUSTTY_VT_INSTALL_REALNAME "librustty-vt.${PROJECT_VERSION}.dylib")
+    set(RUSTTY_VT_INSTALL_SONAME "librustty-vt.${PROJECT_VERSION_MAJOR}.dylib")
+    set(RUSTTY_VT_INSTALL_LINKNAME "librustty-vt.dylib")
+elseif(WIN32)
+    # A DLL cannot be renamed after linking: its import library names it. So
+    # the DLL keeps cargo's name. The import library's FILE name is free (the
+    # DLL name is recorded inside it), so it is installed as `rustty-vt.lib`,
+    # the file `-lrustty-vt` in the .pc resolves to: Zig installs the
+    # reference's as `ghostty-vt.lib`, which its `-lghostty-vt` names.
+    set(RUSTTY_VT_INSTALL_REALNAME "${RUSTTY_VT_REALNAME}")
+    set(RUSTTY_VT_INSTALL_SONAME "${RUSTTY_VT_REALNAME}")
+    set(RUSTTY_VT_INSTALL_LINKNAME "${RUSTTY_VT_REALNAME}")
+    set(RUSTTY_VT_INSTALL_IMPLIB "rustty-vt.lib")
+else()
+    set(RUSTTY_VT_INSTALL_REALNAME "librustty-vt.so.${PROJECT_VERSION}")
+    set(RUSTTY_VT_INSTALL_SONAME "${RUSTTY_VT_SONAME}")
+    set(RUSTTY_VT_INSTALL_LINKNAME "librustty-vt.so")
+endif()
+if(WIN32)
+    set(RUSTTY_VT_STATIC_INSTALL_NAME "rustty-vt-static.lib")
+else()
+    set(RUSTTY_VT_STATIC_INSTALL_NAME "librustty-vt.a")
+endif()
 
 # Static library name. cargo names it librustty_vt_c.a on all Unix platforms
 # and rustty_vt_c.lib on Windows (MSVC); use the platform static suffix.
@@ -179,8 +212,19 @@ endif()
 # cargo is already incremental, so an unconditional invocation costs a fraction
 # of a second when nothing changed. Same reasoning as the WS19 T16 change to
 # the example/*/build.sh scripts, which had the identical staleness bug.
+if(APPLE OR WIN32)
+    set(_RUSTTY_CARGO_ENV "")
+    set(_RUSTTY_SONAME_LINK_CMD "")
+else()
+    set(_RUSTTY_CARGO_ENV "${CMAKE_COMMAND}" -E env "RUSTTY_VT_SONAME=${RUSTTY_VT_SONAME}")
+    # The cdylib now records RUSTTY_VT_SONAME, so a build-tree consumer needs
+    # that name next to it at run time.
+    set(_RUSTTY_SONAME_LINK_CMD COMMAND "${CMAKE_COMMAND}" -E create_symlink
+        "${RUSTTY_VT_REALNAME}" "${RUSTTY_OUT_DIR}/${RUSTTY_VT_SONAME}")
+endif()
 add_custom_target(cargo_build_lib_vt ALL
-    COMMAND "${CARGO_EXECUTABLE}" build -p rustty-vt-c ${_RUSTTY_PROFILE_FLAG} ${_RUSTTY_FEATURE_FLAGS} ${RUSTTY_CARGO_BUILD_FLAGS}
+    COMMAND ${_RUSTTY_CARGO_ENV} "${CARGO_EXECUTABLE}" build -p rustty-vt-c ${_RUSTTY_PROFILE_FLAG} ${_RUSTTY_FEATURE_FLAGS} ${RUSTTY_CARGO_BUILD_FLAGS}
+    ${_RUSTTY_SONAME_LINK_CMD}
     BYPRODUCTS ${_RUSTTY_CARGO_OUTPUTS}
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
     COMMENT "Building librustty-vt via cargo build..."
@@ -231,21 +275,16 @@ set_target_properties(rustty-vt-static PROPERTIES
 if(APPLE)
     # Rust std + the crate's C deps on macOS. The base list is the authoritative
     # `rustc --print native-static-libs` output for rustty-vt-c (order matters).
-    # Additionally, the static archive pulls in rustty-os's i18n object, which
-    # references gettext (bindtextdomain/dgettext/textdomain). Unlike Linux
-    # (glibc provides these), macOS needs an external libintl — install gettext
-    # (`brew install gettext`). This is only required for the STATIC library;
-    # the shared library dead-code-eliminates the unused i18n path.
-    find_library(RUSTTY_INTL_LIBRARY intl
-        HINTS /opt/homebrew/opt/gettext/lib /opt/homebrew/lib
-              /usr/local/opt/gettext/lib /usr/local/lib)
-    if(NOT RUSTTY_INTL_LIBRARY)
-        message(WARNING "libintl (gettext) not found; static linking of "
-            "rustty-vt-static may fail. Install gettext (brew install gettext).")
-        set(RUSTTY_INTL_LIBRARY "intl")
-    endif()
+    #
+    # No libintl (S64-F6). The gettext calls rustty-os's i18n object makes
+    # (bindtextdomain/dgettext/textdomain) resolve inside the archive: the
+    # vendored `gettext-sys` libintl is bundled into it (measured: `nm` shows
+    # them defined in librustty_vt_c.a, and a static link of
+    # example/c-vt-cmake-static with no -lintl runs). CORRECTION (2026-09-23):
+    # this block used to find_library() a Homebrew libintl and link it, on the
+    # premise that macOS "needs an external libintl".
     set_target_properties(rustty-vt-static PROPERTIES
-        INTERFACE_LINK_LIBRARIES "c++;-framework CoreFoundation;-framework Foundation;iconv;${RUSTTY_INTL_LIBRARY};System;objc;c;m"
+        INTERFACE_LINK_LIBRARIES "c++;-framework CoreFoundation;-framework Foundation;iconv;System;objc;c;m"
     )
 elseif(WIN32)
     # Rust std on Windows (MSVC) uses these system import libraries.
@@ -264,17 +303,30 @@ add_dependencies(rustty-vt-static cargo_build_lib_vt)
 
 include(GNUInstallDirs)
 
-# Install shared library. cargo produces no versioned soname / symlinks, so
-# (unlike the Zig build) there is no SONAME->REALNAME symlink dance.
+# Install the shared library under its versioned real name, then point the
+# major-version and unversioned names at it (GhosttyLibVt.zig:440-458,
+# "Recreate addInstallArtifact's dylib layout"). CORRECTION (S64-F5,
+# 2026-09-23): this used to install cargo's flat librustty_vt_c.* with "no
+# SONAME->REALNAME symlink dance".
 if(WIN32)
     install(FILES "${RUSTTY_VT_SHARED_LIBRARY}" TYPE BIN)
-    install(FILES "${RUSTTY_OUT_DIR}/${RUSTTY_VT_IMPLIB}" TYPE LIB)
+    install(FILES "${RUSTTY_OUT_DIR}/${RUSTTY_VT_IMPLIB}" TYPE LIB RENAME "${RUSTTY_VT_INSTALL_IMPLIB}")
 else()
-    install(FILES "${RUSTTY_VT_SHARED_LIBRARY}" TYPE LIB)
+    install(FILES "${RUSTTY_VT_SHARED_LIBRARY}" TYPE LIB RENAME "${RUSTTY_VT_INSTALL_REALNAME}")
+    # Resolved when the install script runs, so `cmake --install --prefix`
+    # and DESTDIR are honoured.
+    set(_rvt_libdir "\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}")
+    if(APPLE)
+        # "Give framework consumers a stable runtime-relative identity."
+        install(CODE "execute_process(COMMAND install_name_tool -id @rpath/${RUSTTY_VT_INSTALL_LINKNAME} \"${_rvt_libdir}/${RUSTTY_VT_INSTALL_REALNAME}\" COMMAND_ERROR_IS_FATAL ANY)")
+    endif()
+    install(CODE "file(CREATE_LINK \"${RUSTTY_VT_INSTALL_REALNAME}\" \"${_rvt_libdir}/${RUSTTY_VT_INSTALL_SONAME}\" SYMBOLIC)")
+    install(CODE "file(CREATE_LINK \"${RUSTTY_VT_INSTALL_SONAME}\" \"${_rvt_libdir}/${RUSTTY_VT_INSTALL_LINKNAME}\" SYMBOLIC)")
+    unset(_rvt_libdir)
 endif()
 
-# Install static library
-install(FILES "${RUSTTY_VT_STATIC_LIBRARY}" TYPE LIB)
+# Install static library (`libghostty-vt.a` / `ghostty-vt-static.lib`).
+install(FILES "${RUSTTY_VT_STATIC_LIBRARY}" TYPE LIB RENAME "${RUSTTY_VT_STATIC_INSTALL_NAME}")
 
 # Install headers
 install(DIRECTORY "${RUSTTY_INCLUDE_DIR}/rustty" DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
@@ -327,11 +379,10 @@ install(
 # `-lc++` IS required. Asserting the reference's "no libc++" property would be
 # asserting something untrue of this build.
 if(APPLE)
-    # RUSTTY_INTL_LIBRARY was resolved above (find_library, with Homebrew
-    # hints). Emit the FULL path: a bare `-lintl` does not resolve on macOS
-    # without also emitting the -L for the Homebrew gettext prefix, and a .pc
-    # that hands consumers an unresolvable flag is worse than none.
-    set(RUSTTY_VT_PC_LIBS_PRIVATE "-lc++ -framework CoreFoundation -framework Foundation -liconv ${RUSTTY_INTL_LIBRARY} -lobjc -lc -lm")
+    # No libintl, and so no machine-specific absolute path in an installed file
+    # (S64-F6): the archive carries its own vendored libintl (see
+    # rustty-vt-static above).
+    set(RUSTTY_VT_PC_LIBS_PRIVATE "-lc++ -framework CoreFoundation -framework Foundation -liconv -lobjc -lc -lm")
 elseif(WIN32)
     set(RUSTTY_VT_PC_LIBS_PRIVATE "-lntdll -lkernel32 -lws2_32 -luserenv -lbcrypt -ladvapi32")
 else()
@@ -345,7 +396,8 @@ endif()
 # rather than by omission.
 set(RUSTTY_VT_PC_REQUIRES_PRIVATE "")
 
-set(RUSTTY_VT_PC_LINK_NAME "rustty_vt_c")
+# `-lrustty-vt` resolves to the unversioned install link (S64-F5).
+set(RUSTTY_VT_PC_LINK_NAME "rustty-vt")
 
 configure_file(
     "${CMAKE_CURRENT_SOURCE_DIR}/dist/cmake/librustty-vt.pc.in"
@@ -518,8 +570,9 @@ function(rustty_vt_add_target)
             INTERFACE_LINK_LIBRARIES "ntdll;kernel32;ws2_32;userenv;bcrypt;advapi32"
         )
     elseif(_RVT_RUST_TARGET MATCHES "darwin|apple")
+        # No `intl`: the archive bundles its own vendored libintl (S64-F6).
         set_target_properties(${_static_target} PROPERTIES
-            INTERFACE_LINK_LIBRARIES "c++;-framework CoreFoundation;-framework Foundation;iconv;intl;objc;c;m"
+            INTERFACE_LINK_LIBRARIES "c++;-framework CoreFoundation;-framework Foundation;iconv;objc;c;m"
         )
     else()
         set_target_properties(${_static_target} PROPERTIES

@@ -309,6 +309,11 @@ mod tests {
     /// geometry to the oracle's to the last bit rather than to hand-derived
     /// numbers.
     #[test]
+    // CORRECTION (task T-F, S97-F1): `input_set.rs` now calls
+    // `zig_math::hypot`, the port of Zig's `std.math.hypot` (`sqrt` and
+    // `mul_add`), not libm's `hypot`; whether Miri now agrees bit for bit was
+    // not measured (Miri is not run here), so the exclusion below stands. The
+    // text below describes the libm call.
     // Miri's libm is not bit-faithful for the IMPRECISE math this path uses.
     // `input_set.rs:320`'s `dx.hypot(dy)` differs from the host libm by 1-4 ULP
     // under Miri, and the error propagates into every derived node: measured
@@ -377,6 +382,11 @@ mod tests {
 
     /// Ported verbatim from the reference's `test "offset, e2e"` (outset half).
     #[test]
+    // CORRECTION (task T-F, S97-F1): `input_set.rs` now calls
+    // `zig_math::hypot`, the port of Zig's `std.math.hypot` (`sqrt` and
+    // `mul_add`), not libm's `hypot`; whether Miri now agrees bit for bit was
+    // not measured (Miri is not run here), so the exclusion below stands. The
+    // text below describes the libm call.
     // Miri's libm is not bit-faithful for the IMPRECISE math this path uses.
     // `input_set.rs:320`'s `dx.hypot(dy)` differs from the host libm by 1-4 ULP
     // under Miri, and the error propagates into every derived node: measured

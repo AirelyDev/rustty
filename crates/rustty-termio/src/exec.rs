@@ -7,13 +7,13 @@
 //! SkipZigTest cfg-gating, F3 DirectWrite / stage-3 Command precedent).
 //!
 //! PORT STATUS: ported (integration-tier stage 4). Every FUNCTION in this file
-//! is live. ONE thing is still deferred, and it is a field, not a function: the
-//! read thread's crash-sentry `thread_state.surface` (`:4528`), because the
-//! `AppMailbox` trait still exposes no `.surface` accessor — verified, not
-//! assumed: `rustty_crash::sentry::ThreadStateSurface` exists, but
-//! `rustty-apprt-api`'s `AppMailbox` has only `push`/`push_or_return`. That one
-//! deferral is stated at its own site and is not summarised here; see the next
-//! paragraph for why that distinction is the point of this correction.
+//! is live.
+//!
+//! CORRECTION (T-G, LEDGER S211-F2): this said "ONE thing is still deferred,
+//! and it is a field, not a function: the read thread's crash-sentry
+//! `thread_state.surface` ... because the `AppMailbox` trait still exposes no
+//! `.surface` accessor". It now does (`AppMailbox::crash_surface`), and both
+//! read-thread mains set the state (`crate::IoCrashThreadState`).
 //!
 //! CORRECTION (task-18, closes S211-F7). This block used to read: "ported
 //! … EXCEPT the xev event-loop wiring (threadEnter/threadExit/focusGained/
@@ -601,14 +601,32 @@ impl Exec {
         // (surface.rs), whose sole toucher of `*io` for `processOutput` is this
         // read thread, between spawn and `threadExit`'s `join()`; blueprint §3.)
         let read_args = ReadThreadArgs::<M>(pty_fds.read, io, pipe[0]);
-        let read_thread = match std::thread::Builder::new()
-            .name("io-reader".to_string())
-            .spawn(move || {
-                let args = read_args;
-                // SAFETY: `args.1` (`*mut Termio<M>`) is valid for the read
-                // thread's life; this thread is its sole `processOutput` toucher.
-                ReadThread::threadMainPosix::<M>(args.0, args.1, args.2);
-            }) {
+        let read_thread_builder = std::thread::Builder::new().name("io-reader".to_string());
+        // (Test builds only: `tests::FAIL_READ_THREAD_SPAWN` makes this spawn
+        // fail for real, with a stack no thread can get, to drive the error arm.)
+        #[cfg(test)]
+        let read_thread_builder = if tests::FAIL_READ_THREAD_SPAWN.with(std::cell::Cell::get) {
+            read_thread_builder.stack_size(usize::MAX / 2)
+        } else {
+            read_thread_builder
+        };
+        let read_thread = match read_thread_builder.spawn(move || {
+            let args = read_args;
+            // SAFETY: `args.1` (`*mut Termio<M>`) is valid for the read
+            // thread's life; this thread is its sole `processOutput` toucher.
+            //
+            // if (builtin.os.tag == .windows) ReadThread.threadMainWindows else ReadThread.threadMainPosix,
+            //
+            // PORT NOTE (S211-F3): this always called `threadMainPosix`, so the
+            // ported `threadMainWindows` had no caller. Selected per target now,
+            // as the reference does at comptime. The Windows arm is written but
+            // not compiled here (rustty-termio cannot be cross-checked for
+            // Windows from macOS: `highway-sys`, VERIFICATION_DEBT.md).
+            #[cfg(windows)]
+            ReadThread::threadMainWindows::<M>(args.0, args.1, args.2);
+            #[cfg(not(windows))]
+            ReadThread::threadMainPosix::<M>(args.0, args.1, args.2);
+        }) {
             Ok(t) => t,
             Err(_) => {
                 // errdefer (reverse): termios_timer.deinit(); stream.deinit();
@@ -1284,7 +1302,20 @@ impl Exec {
         r: core::result::Result<u8, FlatpakHostCommandWaitError>,
     ) {
         // const exit_code = r catch unreachable;
-        let exit_code = r.unwrap();
+        //
+        // PORT NOTE (N171): an R7 invariant, not an R13 defect; nothing
+        // outside the process can produce either half of `WaitError`
+        // (`os/flatpak.zig:115`) here. The `Error` half is stored only while
+        // the state is `.init` or `.err`, but `threadEnter` calls `waitXev`
+        // only after `spawn` succeeded, which means the state is `.started`
+        // or `.exited`. The timer half is `Canceled`, which needs a cancel of
+        // this completion (nothing issues one), or `Unexpected`, which only
+        // an io_uring timeout result other than ETIME/ECANCELED produces (the
+        // kernel does not; kqueue and epoll never do).
+        let exit_code = r.expect(
+            "flatpak wait result is an exit code: waitXev runs only after a \
+             successful spawn and its timer is never canceled",
+        );
         // processExitCommon(td_.?, exit_code);
         Self::processExitCommon::<M>(
             td_.cast::<crate::termio_impl::ThreadData<M>>(),
@@ -2432,7 +2463,7 @@ impl Subprocess {
         // try env.put("TERM_PROGRAM_VERSION", build_config.version_string);
         env.put(
             b"TERM_PROGRAM_VERSION",
-            rustty_build_config::VERSION_STRING.as_bytes(),
+            rustty_version::VERSION_STRING.as_bytes(),
         );
 
         // VTE_VERSION is set by gnome-terminal and other VTE-based terminals.
@@ -3133,7 +3164,12 @@ impl Subprocess {
                 // .ws_ypixel = @intCast(self.screen_size.height),
                 ws_ypixel: self.screen_size.height.try_into().unwrap(),
             })
-            .map_err(|_| crate::Error)?;
+            // (S212-F1: `pty.zig`'s `error.OpenptyFailed` keeps its name for
+            // `Thread.threadMain`'s failure screen; it was the opaque `Error`.)
+            .map_err(|e| match e {
+                ptypkg::PosixPtyError::OpenptyFailed => crate::Error::OpenptyFailed,
+                _ => crate::Error::Other,
+            })?;
             // self.pty = pty;
             // (PORT NOTE: the Rust `Pty` is not `Copy`; capture the slave/master fds
             // before the move — the reference's errdefer/defer read the local
@@ -3214,7 +3250,7 @@ impl Subprocess {
                     // const dev_null = try ... openFile("/dev/null", .{ .mode = .read_write });
                     let dev_null = unsafe { libc::open(c"/dev/null".as_ptr(), libc::O_RDWR) };
                     let mut cmd = rustty_os::flatpak::FlatpakHostCommand::default();
-                    cmd.argv = vec!["/bin/sh".to_string(), "-c".to_string(), ":".to_string()];
+                    cmd.argv = vec![b"/bin/sh".to_vec(), b"-c".to_vec(), b":".to_vec()];
                     // (`.cwd = proposed` reaches D-Bus as the `[*:0]` pointer, so
                     // the host sees the bytes up to the first NUL — `cstring`.)
                     cmd.cwd = Some(cstring(proposed));
@@ -3322,11 +3358,9 @@ impl Subprocess {
                 #[cfg(feature = "flatpak")]
                 {
                     let mut fcmd = rustty_os::flatpak::FlatpakHostCommand::default();
-                    fcmd.argv = self
-                        .args
-                        .iter()
-                        .map(|a| String::from_utf8_lossy(a.to_bytes()).into_owned())
-                        .collect();
+                    // (Byte strings since parity S111-F9; this used to go through
+                    // `String::from_utf8_lossy`, renaming a non-UTF-8 argument.)
+                    fcmd.argv = self.args.iter().map(|a| a.to_bytes().to_vec()).collect();
                     // (was `CString::new(c).unwrap()`: unreachable while `cwd` was a
                     // `CString`, reachable once it holds the reference's raw bytes;
                     // the flatpak test spawn above can accept a NUL path.)
@@ -3586,6 +3620,10 @@ impl Subprocess {
     //
     // pub fn stop(self: *Subprocess) void {
     pub fn stop(&mut self) {
+        // (Test builds only: count the calls, so the UD102 test can check that
+        // the drain ran before this.)
+        #[cfg(test)]
+        tests::STOP_CALLS.with(|c| c.set(c.get() + 1));
         // switch (self.process orelse return) {
         if let Some(process) = &mut self.process {
             match process {
@@ -3863,6 +3901,12 @@ const DRAIN_BUDGET: std::time::Duration = std::time::Duration::from_millis(50);
 /// the port side at an earlier date, not re-measured at the pin.
 #[cfg(not(windows))]
 fn drain_pty_master_once(fd: libc::c_int) -> usize {
+    #[cfg(test)]
+    {
+        tests::DRAIN_CALLS.with(|c| c.set(c.get() + 1));
+        tests::STOPS_BEFORE_DRAIN
+            .with(|c| c.set(Some(tests::STOP_CALLS.with(std::cell::Cell::get))));
+    }
     let deadline = std::time::Instant::now() + DRAIN_BUDGET;
     let mut buf = [0u8; 4096];
     let mut total: usize = 0;
@@ -4367,11 +4411,21 @@ pub struct ReadThread;
 // The contract: the read thread is the SOLE toucher of `*io` (for
 // `processOutput`) between the spawn and `Exec::threadExit`'s `join()`; the io
 // thread owns it before the spawn and after the join.
+//
+// (S211-F3: the two descriptors are `posix.fd_t`, a HANDLE on Windows, where
+// `threadMainWindows` takes them.)
 pub(crate) struct ReadThreadArgs<M: rustty_apprt_api::surface::AppMailbox>(
-    pub std::os::fd::RawFd,
+    pub ReadThreadFd,
     pub *mut crate::Termio<M>,
-    pub std::os::fd::RawFd,
+    pub ReadThreadFd,
 );
+
+/// `posix.fd_t` for the read thread's pty and quit descriptors.
+#[cfg(not(windows))]
+pub(crate) type ReadThreadFd = std::os::fd::RawFd;
+/// `posix.fd_t` is a HANDLE on Windows.
+#[cfg(windows)]
+pub(crate) type ReadThreadFd = rustty_os::windows::HANDLE;
 
 // SAFETY: see the newtype's contract — the wrapped `*mut Termio<M>` has a single
 // toucher (the read thread) for the window it is shared, matching the landed
@@ -4383,29 +4437,27 @@ impl ReadThread {
     /// stages. The gather stage can run at most this many batches
     /// ahead of the parse stage before it blocks, which (via the
     /// kernel pty queue) is also what preserves flow control to the
-    /// child.
-    ///
-    /// The Darwin value was empirically chosen through measurements on
-    /// an M4 Max. Less than 4 there are minor slowdowns, above 4 there
-    /// are no improvements.
-    ///
-    /// Other POSIX platforms keep fewer batches in flight so terminal
-    /// parsing applies backpressure to bulk writers before frame-style
-    /// output can queue stale frames.
-    // const buffer_count = if (builtin.os.tag.isDarwin()) 4 else 2;
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    /// child. Empirically chosen through measurements on an M4 Max.
+    /// Less than 4 there are minor slowdowns, above 4 there are no
+    /// improvements.
+    // const buffer_count = 4;
+    //
+    // CORRECTION (S211-F1): this was `4` on Darwin and `2` elsewhere, citing
+    // `if (builtin.os.tag.isDarwin()) 4 else 2`. That is upstream bed47168c
+    // ("termio: bound POSIX read-ahead on non-Darwin"), which 60121a039
+    // reverted before the pin; at 20abdb50a both constants are unconditional
+    // (`Exec.zig:1305`, `:1318`). The doc paragraph that went with it ("Other
+    // POSIX platforms keep fewer batches in flight ...") is gone with it.
     pub(crate) const BUFFER_COUNT: usize = 4;
-    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
-    pub(crate) const BUFFER_COUNT: usize = 2;
 
     /// The capacity of each gather buffer. One batch is also the unit
     /// of work the parse stage does per terminal lock acquisition, so
     /// this bounds both gather latency and lock hold time.
-    // const buffer_capacity = if (builtin.os.tag.isDarwin()) 64 * 1024 else 8 * 1024;
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    // const buffer_capacity = 64 * 1024;
+    //
+    // CORRECTION (S211-F1): was `64 * 1024` on Darwin and `8 * 1024` elsewhere
+    // (the same reverted commit).
     pub(crate) const BUFFER_CAPACITY: usize = 64 * 1024;
-    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
-    pub(crate) const BUFFER_CAPACITY: usize = 8 * 1024;
 
     /// How many gathered bytes mark a stream as saturated. The macOS
     /// kernel tty output queue hands the master at most about 1 KiB
@@ -4454,9 +4506,9 @@ impl ReadThread {
     // lifecycle, 0 tests — R1-safe): spawned only by the deferred threadEnter;
     // drives the deferred `Termio.processOutput` …". `threadMainPosix` is FULLY
     // IMPLEMENTED at :4482 below, `threadEnter` (:441) really does spawn it, and
-    // `Termio::processOutput` is live. The one clause still standing is the
-    // crash-sentry `thread_state` seam, which is flagged separately at its own
-    // site (:4528) — see that note, not this one.] Reference, verbatim:
+    // `Termio::processOutput` is live. The crash-sentry `thread_state` clause
+    // that stood after that was closed by T-G (S211-F2); see its site.]
+    // Reference, verbatim:
     //
     // fn threadMainPosix(fd: posix.fd_t, io: *termio.Termio, quit: posix.fd_t) void {
     //     // Always close our end of the pipe when we exit.
@@ -4610,12 +4662,12 @@ impl ReadThread {
         // };
         // defer crash.sentry.thread_state = null;
         //
-        // DEFERRED (cross-crate crash-sentry seam, not part of B3): the read
-        // thread's crash metadata sets `thread_state.surface = io.surface_mailbox
-        // .surface`, but the `AppMailbox` trait does not yet expose a `.surface`
-        // accessor (it lands with rustty-core's `Surface: ThreadStateSurface`
-        // impl — see `crash.sentry` + the ReadThread deferral note above).
-        // Preserved verbatim above; wired when core lands.
+        // CORRECTION (S211-F2): this was "DEFERRED (cross-crate crash-sentry
+        // seam, not part of B3) ... the `AppMailbox` trait does not yet expose a
+        // `.surface` accessor ... wired when core lands." It now does
+        // (`AppMailbox::crash_surface`); the guard's `Drop` is the `defer`,
+        // dropped before `_quit_closer`, the reference's LIFO order.
+        let _crash_thread_state = unsafe { crate::IoCrashThreadState::set(io) };
 
         // Set the fd to non-blocking so the gather stage can drain it
         // in a tight loop and fall back to poll for readiness. The
@@ -4738,6 +4790,12 @@ impl ReadThread {
             if cfg!(not(any(target_os = "macos", target_os = "ios"))) {
                 // if (comptime !builtin.os.tag.isDarwin()) gather_thread.setName("io-gather");
                 builder = builder.name("io-gather".to_string());
+            }
+            // (Test builds only: `tests::FAIL_GATHER_SPAWN` makes this spawn
+            // fail for real, with a stack no thread can get.)
+            #[cfg(test)]
+            if tests::FAIL_GATHER_SPAWN.with(std::cell::Cell::get) {
+                builder = builder.stack_size(usize::MAX / 2);
             }
             if let Err(err) = builder.spawn_scoped(scope, move || {
                 Self::gatherMainPosix(gather_fd, gather_quit, pipeline);
@@ -4909,6 +4967,11 @@ impl ReadThread {
                 revents: 0,
             },
         ];
+
+        // Set once an outer poll has reported the hangup together with
+        // unread data and the loop went back to read it (UD19; see
+        // `outer_poll_hup_exits`).
+        let mut drained_after_hup = false;
 
         loop {
             // Claim the next free buffer. This blocks only when the
@@ -5160,6 +5223,11 @@ impl ReadThread {
             // Wait for data. The idle fd is sliced off: the parse
             // stage only writes to it while we're bridging.
             // _ = posix.poll(pollfds[0..2], -1) catch |err| { ... return; };
+            //
+            // (Test builds only: `tests::before_outer_poll` lets a test change
+            // the fd's state at this exact point, UD19.)
+            #[cfg(test)]
+            tests::before_outer_poll(fd);
             let rc = unsafe { libc::poll(pollfds.as_mut_ptr(), 2, -1) };
             if rc < 0 {
                 if errno() == libc::EINTR {
@@ -5185,12 +5253,45 @@ impl ReadThread {
             // If our pty fd is closed, then we're also done with our
             // read thread.
             // if (pollfds[0].revents & posix.POLL.HUP != 0) { ... return; }
-            if pollfds[0].revents & libc::POLLHUP != 0 {
+            //
+            // PORT NOTE: reference defect (R13): see `outer_poll_hup_exits`.
+            if Self::outer_poll_hup_exits(pollfds[0].revents, &mut drained_after_hup) {
                 // log.info("pty fd closed, read thread exiting", .{});
                 log::info!(target: LOG_SCOPE, "pty fd closed, read thread exiting");
                 return;
             }
         }
+    }
+
+    /// Whether the gather stage's outer poll ends the read thread on a
+    /// hangup.
+    ///
+    /// PORT NOTE: reference defect (R13). The reference returns as soon as
+    /// `POLLHUP` is set (`Exec.zig:1727-1730`), without looking at `POLLIN`.
+    /// On Linux a pty master reports both in one word (`0x11`, measured on
+    /// the port in phase 2) when the child writes and exits while this stage
+    /// is parked in the poll, and the bytes still queued on the pty are never
+    /// read: the last output of a command that exits at once can be missing
+    /// from the terminal. The same function's bridge poll states the intent,
+    /// "HUP without IN means no more data is coming" (`Exec.zig:1657-1662`).
+    /// So a hangup with `POLLIN` sends the loop back to read once more; the
+    /// next outer poll that reports the hangup ends it, whatever `POLLIN`
+    /// says. That second rule matters: once the data is read the fd still
+    /// reports `POLLIN | POLLHUP` where a read returns 0 (measured on macOS
+    /// for a pty master and for a pipe), and on Linux the read after the
+    /// data fails with EIO, which the gather loop already treats as the end.
+    /// A hangup without `POLLIN` ends the thread at once, as in the
+    /// reference. `.port/parity-closure/UPSTREAM-DEFECTS.md` UD19.
+    #[cfg(not(windows))]
+    fn outer_poll_hup_exits(revents: libc::c_short, drained_after_hup: &mut bool) -> bool {
+        if revents & libc::POLLHUP == 0 {
+            return false;
+        }
+        if revents & libc::POLLIN != 0 && !*drained_after_hup {
+            *drained_after_hup = true;
+            return false;
+        }
+        true
     }
 
     /// Clears the bridging flag armed before a bridge poll, closing
@@ -5366,8 +5467,8 @@ impl ReadThread {
         // crash.sentry.thread_state = .{ .type = .io, .surface = io.surface_mailbox.surface };
         // defer crash.sentry.thread_state = null;
         //
-        // PORT NOTE: identical to the posix arm — the crash-reporter thread-state
-        // seam is the same call there; see `threadMainPosix` for the ported form.
+        // (S211-F2: the same guard as the posix arm.)
+        let _crash_thread_state = unsafe { crate::IoCrashThreadState::set(io) };
 
         // var buf: [1024]u8 = undefined;
         let mut buf = [0u8; 1024];
@@ -5877,6 +5978,176 @@ mod tests {
     use super::*;
     use rustty_os::passwd::Entry as PasswdEntry;
 
+    // Test-only instrumentation of the `threadEnter` read-thread spawn error
+    // arm (S211-F5 / UD102). Thread-local, so it only affects the test thread
+    // that sets it (threadEnter and its error arm run on the calling thread).
+    thread_local! {
+        /// Calls of `drain_pty_master_once` on this thread.
+        pub(super) static DRAIN_CALLS: std::cell::Cell<usize> =
+            const { std::cell::Cell::new(0) };
+        /// Calls of `Subprocess::stop` on this thread.
+        pub(super) static STOP_CALLS: std::cell::Cell<usize> =
+            const { std::cell::Cell::new(0) };
+        /// The value of `STOP_CALLS` when `drain_pty_master_once` last ran on
+        /// this thread (`None` if it has not run since the last reset).
+        pub(super) static STOPS_BEFORE_DRAIN: std::cell::Cell<Option<usize>> =
+            const { std::cell::Cell::new(None) };
+        /// Make `threadEnter`'s read-thread spawn fail on this thread.
+        pub(super) static FAIL_READ_THREAD_SPAWN: std::cell::Cell<bool> =
+            const { std::cell::Cell::new(false) };
+        /// Make `threadMainPosix`'s gather-thread spawn fail on this thread
+        /// (S211-F6).
+        pub(super) static FAIL_GATHER_SPAWN: std::cell::Cell<bool> =
+            const { std::cell::Cell::new(false) };
+    }
+
+    /// Test-only hook run by `gatherMainPosix` right before its outer
+    /// `poll(-1)`, for the one fd it was installed for (the gather stage runs
+    /// on its own thread, so a thread-local cannot reach it; keying on the fd
+    /// keeps concurrent tests out of it). UD19.
+    #[cfg(not(windows))]
+    type OuterPollHook = (std::os::fd::RawFd, Box<dyn FnMut() + Send>);
+    #[cfg(not(windows))]
+    static BEFORE_OUTER_POLL: std::sync::Mutex<Option<OuterPollHook>> = std::sync::Mutex::new(None);
+
+    #[cfg(not(windows))]
+    pub(super) fn before_outer_poll(fd: std::os::fd::RawFd) {
+        let mut hook = BEFORE_OUTER_POLL.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((hook_fd, f)) = hook.as_mut() {
+            if *hook_fd == fd {
+                f();
+            }
+        }
+    }
+
+    /// UD19: the outer-poll decision on its own. A hangup without data ends
+    /// the thread at once (the reference's behaviour); a hangup with data
+    /// sends it back to read once, and the next hangup ends it.
+    #[cfg(not(windows))]
+    #[test]
+    fn outer_poll_hangup_with_data_reads_once_more() {
+        let mut drained = false;
+        assert!(!ReadThread::outer_poll_hup_exits(
+            libc::POLLIN,
+            &mut drained
+        ));
+        assert!(!drained, "no hangup, nothing to drain");
+        assert!(ReadThread::outer_poll_hup_exits(
+            libc::POLLHUP,
+            &mut drained
+        ));
+
+        let mut drained = false;
+        let both = libc::POLLIN | libc::POLLHUP;
+        assert!(!ReadThread::outer_poll_hup_exits(both, &mut drained));
+        assert!(drained);
+        assert!(ReadThread::outer_poll_hup_exits(both, &mut drained));
+    }
+
+    /// UD19 (PORT NOTE: reference defect (R13), at `outer_poll_hup_exits`):
+    /// output that arrives together with the hangup, while the gather stage is
+    /// parked in its outer poll, is still read. The hook writes `second` and
+    /// shuts down the writing side right before that poll, so the poll reports
+    /// `POLLIN | POLLHUP` with `second` unread (measured on macOS for a Unix
+    /// socket pair after `shutdown(SHUT_WR)`, and for a pipe after `close`:
+    /// `revents == 0x11`; on Linux a pty master reports the same word when the
+    /// child writes and exits, UD19). The reference returns on `POLLHUP` alone
+    /// and drops `second`.
+    #[cfg(not(windows))]
+    #[test]
+    fn gather_stage_reads_output_that_arrives_with_the_hangup() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        // The data fd is a socket pair, not a pipe: the hangup is made with
+        // `shutdown(SHUT_WR)`, which acts on the socket itself. Closing a pipe's
+        // write end is not enough in this binary, where other tests fork
+        // children that can hold a copy of it for a moment, and then the poll
+        // can see the data before the hangup (measured: an extra outer poll).
+        let mut fds = [0 as libc::c_int; 2];
+        assert_eq!(
+            unsafe { libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, fds.as_mut_ptr()) },
+            0
+        );
+        let (data_r, data_w) = (fds[0], fds[1]);
+        assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+        let (quit_r, quit_w) = (fds[0], fds[1]);
+        // The gather stage expects a non-blocking fd (`threadMainPosix` sets it).
+        unsafe {
+            let fl = libc::fcntl(data_r, libc::F_GETFL);
+            assert!(fl >= 0);
+            assert_eq!(libc::fcntl(data_r, libc::F_SETFL, fl | libc::O_NONBLOCK), 0);
+        }
+        let first = b"first";
+        assert_eq!(
+            unsafe { libc::write(data_w, first.as_ptr().cast(), first.len()) },
+            first.len() as isize
+        );
+
+        let polls = Arc::new(AtomicUsize::new(0));
+        {
+            let polls = Arc::clone(&polls);
+            *BEFORE_OUTER_POLL.lock().unwrap() = Some((
+                data_r,
+                Box::new(move || {
+                    if polls.fetch_add(1, Ordering::SeqCst) == 0 {
+                        let second = b"second";
+                        assert_eq!(
+                            unsafe { libc::write(data_w, second.as_ptr().cast(), second.len()) },
+                            second.len() as isize
+                        );
+                        assert_eq!(unsafe { libc::shutdown(data_w, libc::SHUT_WR) }, 0);
+                    }
+                }),
+            ));
+        }
+
+        // `'static` so a hung gather stage cannot hang the test: the test waits
+        // with a timeout instead of joining.
+        let pipeline: &'static Pipeline = Box::leak(Box::new(Pipeline::new()));
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            ReadThread::gatherMainPosix(data_r, quit_r, pipeline);
+            let _ = tx.send(());
+        });
+        let finished = rx.recv_timeout(std::time::Duration::from_secs(10));
+        *BEFORE_OUTER_POLL.lock().unwrap() = None;
+        assert!(
+            finished.is_ok(),
+            "the gather stage must end after the hangup"
+        );
+
+        let mut got = Vec::new();
+        {
+            let mut m = pipeline.mutex.lock().unwrap();
+            assert!(m.done, "the gather stage marks the stream done");
+            while m.count > 0 {
+                let slot = m.tail;
+                let len = m.lens[slot];
+                got.extend_from_slice(unsafe {
+                    std::slice::from_raw_parts(pipeline.slot_ptr(slot), len)
+                });
+                m.tail = (m.tail + 1) % ReadThread::BUFFER_COUNT;
+                m.count -= 1;
+            }
+        }
+        unsafe {
+            libc::close(data_r);
+            libc::close(data_w);
+            libc::close(quit_r);
+            libc::close(quit_w);
+        }
+        assert_eq!(
+            got, b"firstsecond",
+            "the output that came with the hangup must be delivered"
+        );
+        assert_eq!(
+            polls.load(Ordering::SeqCst),
+            2,
+            "one outer poll saw POLLIN|POLLHUP and drained; the next saw the hangup again and ended"
+        );
+    }
+
     // ---- MOVED FROM `rustty-os`'s `env.rs` (P3-W7 T2 / area-E `E13`) --------
     // Upstream `e8525c0fd` moved `appendEnv`/`appendEnvAlways` into
     // `src/termio/Exec.zig` when it deleted `src/os/env.zig`; their two tests
@@ -5940,6 +6211,16 @@ mod tests {
     // `command::tests`' fork KATs share it — see the doc there.)
     #[cfg(not(windows))]
     use crate::FORK_KAT_SERIAL;
+
+    /// S211-F1: the read pipeline's ring is the pinned reference's on every
+    /// target (`Exec.zig:1305` `buffer_count = 4`, `:1318` `buffer_capacity =
+    /// 64 * 1024`). It was 2 x 8 KiB off Darwin, which only a non-Darwin run
+    /// of this test observes.
+    #[test]
+    fn read_thread_ring_matches_the_reference_on_every_target() {
+        assert_eq!(ReadThread::BUFFER_COUNT, 4);
+        assert_eq!(ReadThread::BUFFER_CAPACITY, 64 * 1024);
+    }
 
     // WS19 T17a: `drain_pty_master_once` — the helper the `threadEnter` error arms
     // call before `stop()`. Two properties, both load-bearing:
@@ -6034,6 +6315,10 @@ mod tests {
 
     // test "execCommand darwin: shell command" {
     #[test]
+    #[cfg_attr(
+        not(any(target_os = "macos", target_os = "ios")),
+        ignore = "the body only exists on macOS/iOS (R14)"
+    )]
     fn exec_command_darwin_shell_command() {
         // if (comptime !builtin.os.tag.isDarwin()) return error.SkipZigTest;
         // (PORT NOTE: cfg-gating the body is the SkipZigTest analogue — stage-3
@@ -6090,6 +6375,10 @@ mod tests {
 
     // test "execCommand darwin: direct command" {
     #[test]
+    #[cfg_attr(
+        not(any(target_os = "macos", target_os = "ios")),
+        ignore = "the body only exists on macOS/iOS (R14)"
+    )]
     fn exec_command_darwin_direct_command() {
         // if (comptime !builtin.os.tag.isDarwin()) return error.SkipZigTest;
         #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -6138,6 +6427,7 @@ mod tests {
 
     // test "execCommand: shell command, empty passwd" {
     #[test]
+    #[cfg_attr(windows, ignore = "the body only exists under cfg(not(windows)) (R14)")]
     fn exec_command_shell_command_empty_passwd() {
         // if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
         #[cfg(not(windows))]
@@ -6180,6 +6470,7 @@ mod tests {
 
     // test "execCommand: shell command, error passwd" {
     #[test]
+    #[cfg_attr(windows, ignore = "the body only exists under cfg(not(windows)) (R14)")]
     fn exec_command_shell_command_error_passwd() {
         // if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
         #[cfg(not(windows))]
@@ -6224,6 +6515,7 @@ mod tests {
 
     // test "execCommand: direct command, error passwd" {
     #[test]
+    #[cfg_attr(windows, ignore = "the body only exists under cfg(not(windows)) (R14)")]
     fn exec_command_direct_command_error_passwd() {
         // if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
         #[cfg(not(windows))]
@@ -6268,6 +6560,7 @@ mod tests {
 
     // test "execCommand: direct command, config freed" {
     #[test]
+    #[cfg_attr(windows, ignore = "the body only exists under cfg(not(windows)) (R14)")]
     fn exec_command_direct_command_config_freed() {
         // if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
         #[cfg(not(windows))]
@@ -6316,6 +6609,7 @@ mod tests {
 
     // test "execCommand windows: bare cmd.exe resolves via COMSPEC" {
     #[test]
+    #[cfg_attr(not(windows), ignore = "the body only exists under cfg(windows) (R14)")]
     fn exec_command_windows_bare_cmd_exe_resolves_via_comspec() {
         // if (comptime builtin.os.tag != .windows) return error.SkipZigTest;
         #[cfg(windows)]
@@ -6347,6 +6641,7 @@ mod tests {
 
     // test "execCommand windows: bare non-cmd shell is passed through" {
     #[test]
+    #[cfg_attr(not(windows), ignore = "the body only exists under cfg(windows) (R14)")]
     fn exec_command_windows_bare_non_cmd_shell_is_passed_through() {
         // if (comptime builtin.os.tag != .windows) return error.SkipZigTest;
         #[cfg(windows)]
@@ -6373,6 +6668,7 @@ mod tests {
 
     // test "execCommand windows: shell with args is split on whitespace" {
     #[test]
+    #[cfg_attr(not(windows), ignore = "the body only exists under cfg(windows) (R14)")]
     fn exec_command_windows_shell_with_args_is_split_on_whitespace() {
         // if (comptime builtin.os.tag != .windows) return error.SkipZigTest;
         #[cfg(windows)]
@@ -6400,6 +6696,7 @@ mod tests {
 
     // test "execCommand windows: direct command is passed through unchanged" {
     #[test]
+    #[cfg_attr(not(windows), ignore = "the body only exists under cfg(windows) (R14)")]
     fn exec_command_windows_direct_command_is_passed_through_unchanged() {
         // if (comptime builtin.os.tag != .windows) return error.SkipZigTest;
         #[cfg(windows)]
@@ -6615,13 +6912,13 @@ mod tests {
 
         // `if (self.subprocess.cwd) |cwd| term.setPwd(cwd)`.
         let mut term = rustty_vt::terminal::Terminal::init(
-            Global,
+            Global.into(),
             crate::stream_handler::tests::terminal_opts(None),
         )
         .expect("Terminal::init");
         exec.initTerminal(&mut term);
         let term_pwd = term.get_pwd().map(<[u8]>::to_vec);
-        term.deinit(Global);
+        term.deinit(Global.into());
 
         let cap = crate::log_capture::start();
         let fds = exec.subprocess.start(Global).expect("Subprocess::start");
@@ -6699,7 +6996,7 @@ mod tests {
 
         // The VT stream half: `ESC ] 7 ; file://localhost/<prefix>%00b BEL`.
         let mut term = rustty_vt::terminal::Terminal::init(
-            Global,
+            Global.into(),
             crate::stream_handler::tests::terminal_opts(None),
         )
         .expect("Terminal::init");
@@ -6723,7 +7020,7 @@ mod tests {
             pwd,
             "OSC 7 percent-decodes %00 into the pwd, NUL and all"
         );
-        term.deinit(Global);
+        term.deinit(Global.into());
 
         // `app.newConfig`: `copy.@"working-directory" = .{ .path = pwd }`, then
         // `Surface.init`: `if (config.@"working-directory") |wd| wd.value()`.
@@ -7068,10 +7365,35 @@ mod tests {
             if let rustty_apprt_api::surface::Message::ChildExited(info) = &msg {
                 CHILD_EXITED_CODES.with(|v| v.borrow_mut().push(info.exit_code));
             }
+            // S211-F2: a bell rung by the pty output is pushed from the
+            // io-reader thread; record that thread's crash `thread_state`.
+            if let rustty_apprt_api::surface::Message::RingBell = &msg {
+                let state = rustty_crash::sentry::threadState();
+                BELL_THREAD_STATES
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push(state.map(|(ty, surface)| {
+                        (
+                            ty,
+                            std::ptr::addr_eq(surface, &crate::TEST_CRASH_SURFACE as *const _),
+                        )
+                    }));
+            }
             // Non-zero => "accepted" (matches a live queue's push return).
             Ok(1)
         }
+
+        fn crash_surface(&self) -> *const dyn rustty_crash::sentry::ThreadStateSurface {
+            &crate::TEST_CRASH_SURFACE
+        }
     }
+
+    /// The `(type, is TEST_CRASH_SURFACE)` crash `thread_state` of the thread
+    /// that pushed each `RingBell` through `TestMailbox` (`None` = no state).
+    #[cfg(target_os = "macos")]
+    #[allow(clippy::type_complexity)]
+    static BELL_THREAD_STATES: std::sync::Mutex<Vec<Option<(rustty_crash::sentry::Type, bool)>>> =
+        std::sync::Mutex::new(Vec::new());
 
     // A heap-pinned `Termio<TestMailbox>` test harness (blueprint §5 shape,
     // constructed by hand because `Termio::init` is deferred to B4). It carries a
@@ -7129,7 +7451,7 @@ mod tests {
 
             // The owned Terminal (80x24).
             let terminal = Terminal::init(
-                Global,
+                Global.into(),
                 rustty_vt::terminal::Options {
                     cols: 80,
                     rows: 24,
@@ -7275,7 +7597,7 @@ mod tests {
             unsafe { (*self.mutex).lock() };
             let dump = unsafe {
                 (*(*self.io).terminal.screens.active).dump_string_alloc(
-                    Global,
+                    Global.into(),
                     rustty_vt::point::Point::Active(rustty_vt::point::Coordinate::default()),
                 )
             };
@@ -7442,6 +7764,202 @@ mod tests {
         exec.deinit();
         // The read thread is joined; deinit the harness Termio last.
         t.teardown();
+    }
+
+    /// S211-F5 / UD102: drive one of `threadEnter`'s error arms for real, the
+    /// read-thread spawn failure (a thread that cannot get its stack), and
+    /// check that it drains the pty master before `subprocess.stop()` and
+    /// fails `threadEnter`. The reference's arm is the bare `errdefer
+    /// self.subprocess.stop()`; the drain is the port's R13 handling. The child
+    /// is a real `/bin/sh` that writes to the pty and keeps running.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn threadenter_read_thread_spawn_failure_drains_before_stop() {
+        use allocator_api2::alloc::Global;
+        use std::time::Instant;
+
+        let _serial = FORK_KAT_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+
+        let cfg = Config {
+            command: Some(configpkg::command::Command::Direct(vec![
+                b"/bin/sh".to_vec(),
+                b"-c".to_vec(),
+                b"printf PENDING-OUTPUT; exec /bin/sleep 5".to_vec(),
+            ])),
+            env: EnvMap::new(),
+            env_override: configpkg::RepeatableStringMap::default(),
+            shell_integration: configpkg::value_types::ShellIntegration::Detect,
+            shell_integration_features: configpkg::value_types::ShellIntegrationFeatures::default(),
+            cursor_blink: None,
+            working_directory: None,
+            resources_dir: None,
+            term: b"xterm-256color".to_vec(),
+            rt_pre_exec_info: RtPreExecInfo::default(),
+            rt_post_fork_info: RtPostForkInfo::default(),
+        };
+        let mut exec = Exec::init(Global, cfg).expect("Exec::init");
+        let mut loop_ = xev::Loop::init(xev::Options::default()).expect("Loop::init");
+        let loop_ptr: *mut xev::Loop = std::ptr::addr_of_mut!(loop_);
+        let t = TestTermio::build();
+        let mut td: crate::termio_impl::ThreadData<TestMailbox> = crate::termio_impl::ThreadData {
+            alloc: Global,
+            loop_: loop_ptr,
+            renderer_state: t.state,
+            surface_mailbox: TestMailbox,
+            backend: crate::backend::ThreadData::Exec(ThreadData {
+                start: Instant::now(),
+                exited: false,
+                write_stream: xev::Stream::init_fd(-1),
+                process: None,
+                write_pool: MemoryPool::init(Global),
+                write_queue: xev::WriteQueue::default(),
+                process_wait_c: xev::Completion::default(),
+                flatpak_wait_c: FlatpakHostCommandCompletion::default(),
+                read_thread: std::thread::spawn(|| {}),
+                read_thread_pipe: -1,
+                read_thread_fd: -1,
+                termios_timer: xev::Timer::init().expect("placeholder Timer::init"),
+                termios_timer_c: xev::Completion::default(),
+                termios_timer_running: false,
+                termios_mode: ptypkg::Mode::default(),
+            }),
+            mailbox: std::ptr::null_mut(),
+        };
+
+        DRAIN_CALLS.with(|c| c.set(0));
+        STOP_CALLS.with(|c| c.set(0));
+        STOPS_BEFORE_DRAIN.with(|c| c.set(None));
+        FAIL_READ_THREAD_SPAWN.with(|f| f.set(true));
+        let result = unsafe { exec.threadEnter(Global, t.io, &mut td) };
+        FAIL_READ_THREAD_SPAWN.with(|f| f.set(false));
+
+        assert!(
+            result.is_err(),
+            "a failed read-thread spawn fails threadEnter"
+        );
+        assert_eq!(
+            DRAIN_CALLS.with(std::cell::Cell::get),
+            1,
+            "the error arm drains the pty master once"
+        );
+        // The order is the fix: draining after `stop()` does nothing, because
+        // `stop()` is what wedges on an undrained child.
+        assert_eq!(
+            STOP_CALLS.with(std::cell::Cell::get),
+            1,
+            "the error arm calls subprocess.stop() once"
+        );
+        assert_eq!(
+            STOPS_BEFORE_DRAIN.with(std::cell::Cell::get),
+            Some(0),
+            "the drain runs before subprocess.stop(), not after it"
+        );
+        // `stop()` ran: the subprocess has been torn down.
+        assert!(
+            exec.subprocess.process.is_none(),
+            "the error arm stops the subprocess"
+        );
+
+        td.deinit();
+        loop_.deinit();
+        exec.deinit();
+        t.teardown();
+    }
+
+    /// S212-F1: the pty-exhaustion failure has a real producer. With the
+    /// process's descriptor table full, `Subprocess::start`'s `Pty.open`
+    /// (`openpty`) fails, and `start` returns `Error::OpenptyFailed` (the
+    /// member `Thread.threadMain` turns into the pty-exhaustion screen), not
+    /// the general `Error::Other`. The table is filled in a re-executed child
+    /// copy of this test binary, so no other test runs out of descriptors.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn subprocess_start_with_no_free_descriptor_is_openpty_failed() {
+        use allocator_api2::alloc::Global;
+
+        const CHILD: &str = "RUSTTY_TERMIO_OPENPTY_EXHAUSTION_CHILD";
+        const TEST: &str =
+            "exec::tests::subprocess_start_with_no_free_descriptor_is_openpty_failed";
+        if std::env::var_os(CHILD).is_none() {
+            let out = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", TEST, "--nocapture", "--test-threads=1"])
+                .env(CHILD, "1")
+                .output()
+                .expect("re-exec the test binary");
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            assert!(
+                out.status.success(),
+                "the child run failed ({:?})\nstdout:\n{stdout}\nstderr:\n{stderr}",
+                out.status
+            );
+            assert!(
+                stdout.contains("test result: ok. 1 passed; 0 failed"),
+                "the child ran exactly this test\nstdout:\n{stdout}\nstderr:\n{stderr}"
+            );
+            return;
+        }
+
+        // Child: a fresh process, one test thread.
+        let cfg = Config {
+            command: Some(configpkg::command::Command::Direct(vec![
+                b"/usr/bin/true".to_vec()
+            ])),
+            env: EnvMap::new(),
+            env_override: configpkg::RepeatableStringMap::default(),
+            shell_integration: configpkg::value_types::ShellIntegration::Detect,
+            shell_integration_features: configpkg::value_types::ShellIntegrationFeatures::default(),
+            cursor_blink: None,
+            working_directory: None,
+            resources_dir: None,
+            term: b"xterm-256color".to_vec(),
+            rt_pre_exec_info: RtPreExecInfo::default(),
+            rt_post_fork_info: RtPostForkInfo::default(),
+        };
+        let mut exec = Exec::init(Global, cfg).expect("Exec::init");
+
+        // Fill the descriptor table: a low soft limit, then dup until EMFILE.
+        let mut old = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+        assert_eq!(unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut old) }, 0);
+        let low = libc::rlimit {
+            rlim_cur: 256,
+            rlim_max: old.rlim_max,
+        };
+        assert_eq!(unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &low) }, 0);
+        let mut filler: Vec<libc::c_int> = Vec::new();
+        loop {
+            let fd = unsafe { libc::dup(2) };
+            if fd < 0 {
+                assert_eq!(
+                    std::io::Error::last_os_error().raw_os_error(),
+                    Some(libc::EMFILE),
+                    "the table fills up"
+                );
+                break;
+            }
+            filler.push(fd);
+        }
+        assert!(!filler.is_empty(), "descriptors were taken");
+
+        let result = exec.subprocess.start(Global);
+
+        for fd in filler {
+            unsafe {
+                libc::close(fd);
+            }
+        }
+        assert_eq!(unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &old) }, 0);
+
+        assert!(
+            matches!(result, Err(crate::Error::OpenptyFailed)),
+            "a full descriptor table makes start fail with OpenptyFailed, got {:?}",
+            result.as_ref().map(|_| ()).map_err(|e| *e)
+        );
+        assert!(exec.subprocess.pty.is_none(), "no pty was kept");
+        exec.deinit();
     }
 
     /// UD67 harness: `threadEnter` a real `/bin/sh -c <script>` child on a real
@@ -7730,6 +8248,111 @@ mod tests {
         assert!(
             found,
             "pty bytes did not land in the terminal Screen within the deadline"
+        );
+    }
+
+    /// S211-F2: the io-reader thread tags its crash metadata as an `io` thread
+    /// of the mailbox's surface (`Exec.zig:1411-1417`). A BEL written to the
+    /// pty makes the read thread push `RingBell`, and `TestMailbox` records
+    /// that thread's `thread_state`.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn readthread_sets_io_crash_thread_state() {
+        use std::time::{Duration, Instant};
+
+        let _serial = FORK_KAT_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        BELL_THREAD_STATES
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+        // The test thread itself has no crash state.
+        assert!(rustty_crash::sentry::threadState().is_none());
+
+        let (handle, master, slave, quit_write, t) = spawn_readthread_over_pty();
+        let w = unsafe { libc::write(slave, b"\x07".as_ptr().cast::<std::ffi::c_void>(), 1) };
+        assert_eq!(w, 1, "wrote BEL to the pty slave");
+
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let states = loop {
+            let states = BELL_THREAD_STATES
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
+            if !states.is_empty() || Instant::now() > deadline {
+                break states;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        };
+
+        let _ = unsafe { libc::write(quit_write, b"x".as_ptr().cast::<std::ffi::c_void>(), 1) };
+        handle.join().expect("read thread join");
+        unsafe {
+            libc::close(quit_write);
+            libc::close(master);
+            libc::close(slave);
+        }
+        t.teardown();
+
+        assert_eq!(
+            states,
+            vec![Some((rustty_crash::sentry::Type::Io, true))],
+            "the read thread's thread_state is .io with the mailbox's surface"
+        );
+    }
+
+    /// S211-F6: when the gather thread cannot be spawned, `threadMainPosix`
+    /// logs the reference's error and returns (`Exec.zig:1470-1479`); it does
+    /// not panic. The spawn fails for real (a test-only switch asks for a stack
+    /// no thread can get). `threadMainPosix` runs on the test thread itself, so
+    /// the thread-local switch and the thread-owned log capture both see it.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn readthread_gather_spawn_failure_logs_and_returns() {
+        let _serial = FORK_KAT_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+
+        let t = TestTermio::build();
+        let pty = Pty::open(ptypkg::winsize {
+            ws_row: 24,
+            ws_col: 80,
+            ws_xpixel: 800,
+            ws_ypixel: 480,
+        })
+        .expect("Pty::open");
+        let mut pipefds = [0 as std::os::fd::RawFd; 2];
+        assert_eq!(unsafe { libc::pipe(pipefds.as_mut_ptr()) }, 0, "pipe()");
+        let (quit_read, quit_write) = (pipefds[0], pipefds[1]);
+
+        let cap = crate::log_capture::start();
+        FAIL_GATHER_SPAWN.with(|f| f.set(true));
+        let io = t.io;
+        let master = pty.master;
+        let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            ReadThread::threadMainPosix::<TestMailbox>(master, io, quit_read);
+        }));
+        FAIL_GATHER_SPAWN.with(|f| f.set(false));
+        let errors: Vec<String> = cap
+            .messages()
+            .into_iter()
+            .filter(|(level, target, _)| *level == log::Level::Error && target == LOG_SCOPE)
+            .map(|(_, _, message)| message)
+            .collect();
+        drop(cap);
+
+        // `quit_read` was closed by the read thread's guard on return.
+        unsafe {
+            libc::close(quit_write);
+            libc::close(pty.master);
+            libc::close(pty.slave);
+        }
+        t.teardown();
+
+        assert!(ran.is_ok(), "threadMainPosix must return, not panic");
+        // S211-F2: its crash `thread_state` guard cleared on the way out.
+        assert!(rustty_crash::sentry::threadState().is_none());
+        assert_eq!(errors.len(), 1, "one error logged: {errors:?}");
+        assert!(
+            errors[0].starts_with("read thread exiting, failed to spawn gather thread err="),
+            "the reference's message: {errors:?}"
         );
     }
 
@@ -8201,9 +8824,42 @@ mod tests {
     ///   quit-during-parse: quit while a bulk stream is in flight, so the ring
     ///     is non-empty and the parse stage is mid-`processOutput`.
     ///
-    /// A regression in either direction hangs, so the join is bounded by the
-    /// test harness's own timeout via a watchdog channel rather than blocking
-    /// forever.
+    /// A regression in either direction hangs, so the join is bounded by a
+    /// watchdog channel rather than blocking forever.
+    ///
+    /// THE BOUND IS A STALL BOUND, NOT A WALL-CLOCK BOUND (S-15, N293). On a
+    /// quit the parse stage drains every published batch before it exits, and
+    /// the gather stage keeps filling slots without polling `quit` while the
+    /// pty still yields full 64 KiB buffers. Both are the reference's design
+    /// (`Exec.zig` parse loop: `if (pipeline.done) return;` only once
+    /// `count == 0`; gather: `if (total == buffer_capacity) continue;`), so a
+    /// correct shutdown from quit-during-parse first parses what is still in
+    /// the ring and the pty queue. Measured on an M4 Pro, idle host, `dev`
+    /// profile, three runs: 145-170 KiB were still in flight at the quit and
+    /// the drain took 2.3-2.6 s, i.e. ~65 KiB/s. (The ~3 s before the quit is
+    /// the eight blocking 64 KiB writes waiting on the same parse.) The `dev`
+    /// parse is that slow because every page mutation runs
+    /// `Page::verify_integrity` (sampled: `page::mask`, `page::get_bits` and
+    /// `verify_integrity` are the top frames of the parse stage), which is the
+    /// reference's `assertIntegrity` under `slow_runtime_safety`
+    /// (`page.zig:366-376`, Debug builds only): faithful, not a port defect.
+    /// A fixed 10 s bound on the WHOLE drain therefore failed under host load
+    /// (load average 20-29, task S-6: 1 run in 8) while the pipeline was
+    /// healthy and still making progress.
+    ///
+    /// The regression looks different: a stage that exits without waking the
+    /// other leaves the parse stage asleep on `batch_ready`, so no batch ever
+    /// reaches `processOutput` again. The watchdog therefore fails only when
+    /// the thread has not joined AND no new batch has reached `processOutput`
+    /// for `STALL`. A live drain hands over a batch every ~0.7-0.8 s here
+    /// idle (one 64 KiB slot at ~65 KiB/s; the longest gap is printed as
+    /// `SHUTDOWN-DRAIN`). Under a synthetic load of 42 spinning processes on
+    /// 14 cores (load average 46) the longest gap measured 4.1-4.7 s and the
+    /// whole drain up to 9.96 s, at the old fixed 10 s bound. STALL is
+    /// 30 s: over 6x the loaded gap, and a hang is still caught 30 s after its
+    /// last batch instead of wedging the suite. The drain is finite (at most the
+    /// 512 KiB written), so a livelock cannot hide behind the progress rule:
+    /// once every byte is processed, progress stops and the stall rule applies.
     #[test]
     #[cfg(target_os = "macos")]
     fn readthread_pipeline_shuts_down_cleanly_from_both_stages() {
@@ -8214,19 +8870,30 @@ mod tests {
         for scenario in ["quit-during-gather", "quit-during-parse"] {
             let (handle, master, slave, quit_write, t) = spawn_readthread_over_pty();
 
+            const CHUNK: usize = 64 * 1024;
+            const CHUNKS: usize = 8;
             if scenario == "quit-during-parse" {
                 // Put a bulk stream in flight so the ring is non-empty and the
                 // parse stage is busy when the quit arrives.
-                let chunk = vec![b'z'; 64 * 1024];
-                for _ in 0..8 {
-                    let _ = unsafe {
+                let chunk = vec![b'z'; CHUNK];
+                for _ in 0..CHUNKS {
+                    let w = unsafe {
                         libc::write(
                             slave,
                             chunk.as_ptr().cast::<std::ffi::c_void>(),
                             chunk.len(),
                         )
                     };
+                    assert_eq!(w, CHUNK as isize, "{scenario}: wrote a bulk chunk");
                 }
+                // The scenario's premise, checked rather than assumed: bytes
+                // are still in flight (ring or pty queue) when the quit lands.
+                let at_quit = t.processed_bytes();
+                assert!(
+                    at_quit < CHUNK * CHUNKS,
+                    "{scenario}: all {at_quit} bytes were parsed before the quit, \
+                     so this is not a quit during parse"
+                );
             } else {
                 // Idle pty: let both stages settle into their waits.
                 std::thread::sleep(Duration::from_millis(20));
@@ -8235,13 +8902,39 @@ mod tests {
             let _ = unsafe { libc::write(quit_write, b"x".as_ptr().cast::<std::ffi::c_void>(), 1) };
 
             // Bounded join: a hang here IS the regression, so surface it as a
-            // failure rather than wedging the suite.
+            // failure rather than wedging the suite. The bound is STALL since
+            // the last batch reached processOutput (see the doc comment).
+            const STALL: Duration = Duration::from_secs(30);
             let (tx, rx) = std::sync::mpsc::channel::<()>();
             let joiner = std::thread::spawn(move || {
                 handle.join().expect("read thread join");
                 let _ = tx.send(());
             });
-            let joined = rx.recv_timeout(Duration::from_secs(10)).is_ok();
+            let quit_at = Instant::now();
+            let mut last_calls = t.processed_calls();
+            let mut last_progress = quit_at;
+            let mut longest_gap = Duration::ZERO;
+            let joined = loop {
+                match rx.recv_timeout(Duration::from_millis(50)) {
+                    Ok(()) => break true,
+                    // The joiner panicked (the read thread panicked): not joined.
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break false,
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                }
+                let calls = t.processed_calls();
+                if calls != last_calls {
+                    longest_gap = longest_gap.max(last_progress.elapsed());
+                    last_calls = calls;
+                    last_progress = Instant::now();
+                } else if last_progress.elapsed() >= STALL {
+                    break false;
+                }
+            };
+            eprintln!(
+                "SHUTDOWN-DRAIN {scenario}: joined={joined} after {:?}, longest gap \
+                 between batches {longest_gap:?}",
+                quit_at.elapsed()
+            );
 
             if joined {
                 joiner.join().expect("joiner join");
@@ -8269,10 +8962,10 @@ mod tests {
 
             assert!(
                 joined,
-                "{scenario}: the read pipeline did not shut down within 10s \
-                 (a stage exited without waking the other)"
+                "{scenario}: the read pipeline did not shut down, and no batch \
+                 reached processOutput for {STALL:?} (a stage exited without \
+                 waking the other)"
             );
-            let _ = Instant::now();
         }
     }
 }

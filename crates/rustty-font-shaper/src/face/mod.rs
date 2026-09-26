@@ -15,19 +15,20 @@
 // pub const web_canvas = @import("face/web_canvas.zig");
 //
 // PORT NOTE: `face/freetype.zig` (the FreeType backend `Face`) is ported in the
-// `freetype` submodule below. `face/coretext.zig` / `face/web_canvas.zig` land
-// in later F3 subtasks. The `Face = switch(options.backend)` selector still
-// resolves to the scaffold placeholder (below) until those backends land; the
-// concrete `freetype::Face` is reachable directly as `face::freetype::Face`.
+// `freetype` submodule below; the concrete type is `face::freetype::Face`, and
+// the `Face = switch(options.backend)` selector below resolves to it on every
+// `hasFreetype()` backend. (CORRECTION, S-14: this said the selector "still
+// resolves to the scaffold placeholder"; it has not since the F3 faces landed.)
 // WASM DIVERGENCE: the FreeType backend face is not compiled on the `wasm32`
 // web_canvas backend (no FreeType on freestanding wasm).
 // EMBEDDER DIVERGENCE (features `freetype` + `harfbuzz`, both DEFAULT-ON): the
 // FreeType backend face also drops out when an embedding application turns the
 // vendored-C font backends off. It needs BOTH features — it rasterizes through
 // `crate::ft` and shapes through `crate::hb` (`hasHarfbuzz()` is true for every
-// freetype-active backend) — and the `Face` selector below resolves to
-// `coretext::Face` on the only target where that is allowed (macOS, whose
-// default backend is `.coretext`; see this crate's `Cargo.toml` `[features]`).
+// freetype-active backend) — and `build.rs` refuses a `hasFreetype()` backend
+// without them, so the `Face` selector below can only resolve to
+// `coretext::Face` there (`.coretext`/`.coretext_noshape`; see this crate's
+// `Cargo.toml` `[features]`).
 #[cfg(all(
     not(target_arch = "wasm32"),
     feature = "freetype",
@@ -44,17 +45,22 @@ pub mod web_canvas;
 // PORT NOTE: `face/coretext.zig` (the CoreText backend `Face`) is ported in the
 // `coretext` submodule below (macOS only). Like `freetype::Face`, the concrete
 // `coretext::Face` is reachable directly as `face::coretext::Face`; the
-// `Face = switch(options.backend)` selector still resolves to the scaffold
-// placeholder until the selector is re-pointed at the real backends.
+// `Face = switch(options.backend)` selector resolves to it on `.coretext`,
+// `.coretext_harfbuzz` and `.coretext_noshape`. (CORRECTION, S-14: this said
+// the selector "still resolves to the scaffold placeholder".)
 #[cfg(target_os = "macos")]
 pub mod coretext;
 //
 // PORT NOTE: the reference imports the two build seams `options` (from
 // `main.zig`, providing `options.backend`) and `config` (providing
 // `config.FreetypeLoadFlags`) plus the three concrete backend faces. In rustty:
-//   * `options.backend` — the build backend — is modeled by `cfg(target_os)`
-//     below, matching `backend.zig`'s `Backend.default` (macOS default=`coretext`,
-//     Linux default=`fontconfig_freetype`); parity targets both defaults.
+//   * `options.backend` — the build backend, `-Dfont-backend` — is the
+//     `rustty_font_backend` cfg (and the `rustty_font_has_*` cfgs for the
+//     `hasFreetype()`-style predicates) that `build.rs` derives from
+//     `rustty-build-config`'s `font-backend-*` features, defaulting to
+//     `backend.zig`'s `Backend.default` (macOS `coretext`, Linux/BSD
+//     `fontconfig_freetype`, Windows `freetype_windows`). (CORRECTION, S-14,
+//     N266: this was `cfg(target_os)`, which could only express the defaults.)
 //   * `config.FreetypeLoadFlags` lives in the higher `rustty-config` crate; per
 //     break #9 (config injected via DI) it is NOT a dependency of this tier, so
 //     the freetype-active arm is seamed (see `FreetypeLoadFlags` below).
@@ -78,30 +84,60 @@ pub mod coretext;
 // };
 //
 // PORT NOTE: the concrete backend `Face` impls (`face/coretext.zig`,
-// `face/freetype.zig`) are ported in the `coretext`/`freetype` submodules, so the
-// selector is now re-pointed at the real backend `Face` type. The `switch` above
-// is preserved verbatim as a reference; it is modeled here with `cfg(target_os)`
-// matching `backend.zig`'s `Backend.default`: macOS default `coretext` →
-// `coretext::Face`; Linux default `fontconfig_freetype` → `freetype::Face`. The
-// `web_canvas => web_canvas.Face` arm lands with the wasm backend.
-#[cfg(target_os = "macos")]
+// `face/freetype.zig`, `face/web_canvas.zig`) are ported in the submodules
+// above. The `switch` is keyed on `options.backend` — the `rustty_font_backend`
+// cfg `build.rs` derives from `-Dfont-backend` (`rustty-build-config`'s
+// `font-backend-*` features, default `Backend.default`). The freetype arms are
+// exactly `hasFreetype()` (`rustty_font_has_freetype`); the coretext arms are the
+// CoreText backends without it. (N266 CLOSED by S-14: this used to be keyed on
+// `target_os`, folding `coretext_freetype` to `coretext`.)
+//
+// .freetype, .freetype_windows, .fontconfig_freetype, .coretext_freetype,
+// => freetype.Face,
+#[cfg(rustty_font_has_freetype)]
+pub type Face = freetype::Face;
+// .coretext, .coretext_harfbuzz, .coretext_noshape, => coretext.Face,
+#[cfg(any(
+    rustty_font_backend = "coretext",
+    rustty_font_backend = "coretext_harfbuzz",
+    rustty_font_backend = "coretext_noshape"
+))]
 pub type Face = coretext::Face;
 // `.web_canvas => web_canvas.Face` (wasm browser backend).
-#[cfg(target_arch = "wasm32")]
+#[cfg(rustty_font_backend = "web_canvas")]
 pub type Face = web_canvas::Face;
-#[cfg(not(any(target_os = "macos", target_arch = "wasm32")))]
-pub type Face = freetype::Face;
+
+/// RUSTTY-ONLY accessor for callers ABOVE this crate (which cannot see the
+/// backend cfg): the active `Face`'s CoreText font — `face.font` in the
+/// reference, which names it directly under `if (comptime
+/// font.options.backend != .coretext) return null;` (`apprt/embedded.zig:2404`,
+/// the quicklook font). `Some` exactly when `options.backend == .coretext`, the
+/// one backend that guard lets through; the caller keeps the guard itself.
+#[cfg(target_os = "macos")]
+pub fn coretext_font(face: &Face) -> Option<&objc2_core_text::CTFont> {
+    #[cfg(rustty_font_backend = "coretext")]
+    return Some(&face.font);
+    #[cfg(not(rustty_font_backend = "coretext"))]
+    {
+        let _ = face;
+        None
+    }
+}
 
 /// The error type of the active backend `Face` (`coretext::Error` /
 /// `freetype::Error`). Introduced so higher-tier callers (Collection,
 /// DeferredFace) can compose the backend-face error into their own error sets
 /// (the reference threads the backend's inferred error set through `!` unions).
-#[cfg(target_os = "macos")]
-pub type FaceError = coretext::Error;
-#[cfg(target_arch = "wasm32")]
-pub type FaceError = web_canvas::Error;
-#[cfg(not(any(target_os = "macos", target_arch = "wasm32")))]
+#[cfg(rustty_font_has_freetype)]
 pub type FaceError = freetype::Error;
+#[cfg(any(
+    rustty_font_backend = "coretext",
+    rustty_font_backend = "coretext_harfbuzz",
+    rustty_font_backend = "coretext_noshape"
+))]
+pub type FaceError = coretext::Error;
+#[cfg(rustty_font_backend = "web_canvas")]
+pub type FaceError = web_canvas::Error;
 
 /// If a DPI can't be calculated, this DPI is used. This is probably
 /// wrong on modern devices so it is highly recommended you get the DPI
@@ -128,23 +164,24 @@ pub const DEFAULT_DPI: u16 = 96;
 // `FreetypeLoadFlags` placeholder — a faithful stand-in for
 // `config::FreetypeLoadFlags`, wired to the real type when the Linux freetype
 // backend + config DI land.
-// PORT NOTE (3-way split): `hasFreetype()` is FALSE only on the macOS default
-// `coretext` backend and the wasm `web_canvas` backend; it is TRUE on the Linux
-// default `fontconfig_freetype`. The three arms below therefore are:
-//   * macOS  (`coretext`)            → `void` (Rust `()`), per the reference.
+// PORT NOTE (3-way split, keyed on `options.backend.hasFreetype()` — the
+// `rustty_font_has_freetype` cfg — not on the target OS):
+//   * the CoreText backends without FreeType (`coretext`, `coretext_harfbuzz`,
+//     `coretext_noshape`) → `void` (Rust `()`), per the reference.
 //   * wasm32 (`web_canvas`)          → the local placeholder struct. The
 //     `freetype` module is not compiled on wasm (no FreeType on freestanding
 //     wasm, see the `mod freetype` gate above) and `face/web_canvas.rs` names
 //     `super::Options`/`super::FreetypeLoadFlags` directly, so this arm must keep
 //     declaring its own types.
-//   * everyone else (`fontconfig_freetype`) → RE-EXPORTS the freetype backend's
-//     own `config::FreetypeLoadFlags` stand-in (`face/freetype.rs`). This is a
-//     `pub use`, NOT a redeclaration, so `face::FreetypeLoadFlags` and
-//     `face::freetype::FreetypeLoadFlags` are the SAME type — which is what lets
-//     `face::Options` flow directly into `face::Face::init`/`::init_file` (on this
-//     target class `face::Face` IS `freetype::Face`, which takes
-//     `freetype::Options`).
-#[cfg(target_os = "macos")]
+//   * every `hasFreetype()` backend (`fontconfig_freetype`, `freetype`,
+//     `freetype_windows`, and `coretext_freetype` on macOS) → RE-EXPORTS the
+//     freetype backend's own `config::FreetypeLoadFlags` stand-in
+//     (`face/freetype.rs`). This is a `pub use`, NOT a redeclaration, so
+//     `face::FreetypeLoadFlags` and `face::freetype::FreetypeLoadFlags` are the
+//     SAME type — which is what lets `face::Options` flow directly into
+//     `face::Face::init`/`::init_file` (on these backends `face::Face` IS
+//     `freetype::Face`, which takes `freetype::Options`).
+#[cfg(all(rustty_font_has_coretext, not(rustty_font_has_freetype)))]
 pub type FreetypeLoadFlags = ();
 
 /// Scaffold stand-in for `config::FreetypeLoadFlags` on the wasm `web_canvas`
@@ -158,15 +195,38 @@ pub struct FreetypeLoadFlags {
 
 /// On the freetype-active backends, `face::FreetypeLoadFlags` IS the freetype
 /// backend's `config::FreetypeLoadFlags` stand-in (`face/freetype.rs`).
-#[cfg(not(any(target_os = "macos", target_arch = "wasm32")))]
+#[cfg(rustty_font_has_freetype)]
 pub use freetype::FreetypeLoadFlags;
 
+/// RUSTTY-ONLY (the break #9 DI seam, for callers ABOVE this crate, which cannot
+/// see the backend cfg): `if (font.face.FreetypeLoadFlags != void) <flags> else
+/// {}` — `SharedGridSet.zig:528` / `Surface.zig`'s `DerivedConfig`. `flags`
+/// supplies the configured value on a `hasFreetype()` backend; on the others the
+/// `void` arm is taken and it is never called.
+#[cfg(rustty_font_has_freetype)]
+pub fn freetype_load_flags_if_active(
+    flags: impl FnOnce() -> freetype::FreetypeLoadFlags,
+) -> FreetypeLoadFlags {
+    flags()
+}
+/// See the `hasFreetype()` twin above: the `else {}` arm.
+#[cfg(all(
+    rustty_font_has_coretext,
+    not(rustty_font_has_freetype),
+    feature = "freetype",
+    feature = "harfbuzz"
+))]
+pub fn freetype_load_flags_if_active(
+    _flags: impl FnOnce() -> freetype::FreetypeLoadFlags,
+) -> FreetypeLoadFlags {
+}
+
 // pub const freetype_load_flags_default: FreetypeLoadFlags = if (FreetypeLoadFlags != void) .{} else {};
-#[cfg(target_os = "macos")]
+#[cfg(all(rustty_font_has_coretext, not(rustty_font_has_freetype)))]
 pub const FREETYPE_LOAD_FLAGS_DEFAULT: FreetypeLoadFlags = ();
 #[cfg(target_arch = "wasm32")]
 pub const FREETYPE_LOAD_FLAGS_DEFAULT: FreetypeLoadFlags = FreetypeLoadFlags { _private: () };
-#[cfg(not(any(target_os = "macos", target_arch = "wasm32")))]
+#[cfg(rustty_font_has_freetype)]
 pub const FREETYPE_LOAD_FLAGS_DEFAULT: FreetypeLoadFlags = freetype::FreetypeLoadFlags::DEFAULT;
 
 /// Test-only instrumentation proving the manual-destructor discipline on the
@@ -188,6 +248,47 @@ pub(crate) mod test_probe {
         /// Fail-point for the backend `Face::set_size`: `None` = disarmed;
         /// `Some(n)` = the (n+1)-th `set_size` call on this thread fails.
         static FAIL_SET_SIZE: Cell<Option<usize>> = const { Cell::new(None) };
+        /// Fail-point for the backend `Face::set_variations`: when set, the
+        /// next non-empty `set_variations` call on this thread fails (S85-F3).
+        static FAIL_SET_VARIATIONS: Cell<bool> = const { Cell::new(false) };
+    }
+
+    /// The CoreText face's `harfbuzz_shaper` fail-point hook (see below).
+    #[cfg(all(target_os = "macos", rustty_font_has_harfbuzz))]
+    pub type CtHbFontHook = fn(&crate::hb::Font) -> bool;
+
+    thread_local! {
+        /// S-14: the CoreText face's `harfbuzz_shaper` fail-point. `Some(f)`:
+        /// the next `init_font` on this thread hands `f` its fresh HarfBuzz
+        /// font and fails if `f` returns true. Only in `hasHarfbuzz()` builds,
+        /// the only ones where that face has a HarfBuzz font.
+        #[cfg(all(target_os = "macos", rustty_font_has_harfbuzz))]
+        static CT_HB_FONT_HOOK: Cell<Option<CtHbFontHook>> = const { Cell::new(None) };
+    }
+
+    /// Arm the CoreText face's `harfbuzz_shaper` fail-point (see above).
+    #[cfg(all(target_os = "macos", rustty_font_has_harfbuzz))]
+    pub fn set_ct_hb_font_hook(f: CtHbFontHook) {
+        CT_HB_FONT_HOOK.with(|c| c.set(Some(f)));
+    }
+
+    /// Called by the CoreText face's `init_font`; disarms and runs the hook.
+    #[cfg(all(target_os = "macos", rustty_font_has_harfbuzz))]
+    pub fn ct_hb_font_hook_should_fail(font: &crate::hb::Font) -> bool {
+        CT_HB_FONT_HOOK.with(|c| c.take()).is_some_and(|f| f(font))
+    }
+
+    /// Arm the `set_variations` fail-point for the next non-empty call.
+    // Only the CoreText-payload `DeferredFace` tests arm it.
+    #[cfg_attr(not(rustty_font_has_coretext), allow(dead_code))]
+    pub fn arm_set_variations_failpoint() {
+        FAIL_SET_VARIATIONS.with(|c| c.set(true));
+    }
+
+    /// Called by the backend `Face::set_variations` impls once past their
+    /// empty-list early return; disarms and reports whether this call must fail.
+    pub fn set_variations_failpoint_should_fail() -> bool {
+        FAIL_SET_VARIATIONS.with(|c| c.replace(false))
     }
 
     /// Number of `Face::deinit` calls seen on this thread.
@@ -230,7 +331,7 @@ pub(crate) mod test_probe {
 //     size: DesiredSize,
 //     freetype_load_flags: FreetypeLoadFlags = freetype_load_flags_default,
 // };
-#[cfg(any(target_os = "macos", target_arch = "wasm32"))]
+#[cfg(not(rustty_font_has_freetype))]
 #[derive(Clone, Copy, Debug)]
 pub struct Options {
     pub size: DesiredSize,
@@ -243,7 +344,7 @@ pub struct Options {
 /// On the freetype-active backends, `face::Options` IS `freetype::Options` — the
 /// reference's single `font.face.Options` type, which `freetype.Face.init` takes
 /// directly. Re-exported (not redeclared) so the two never diverge.
-#[cfg(not(any(target_os = "macos", target_arch = "wasm32")))]
+#[cfg(rustty_font_has_freetype)]
 pub use freetype::Options;
 
 /// The desired size for loading a font.
@@ -275,10 +376,15 @@ impl DesiredSize {
     //     .none => void,
     // };
     //
-    // PORT NOTE: `build_config.app_runtime` is `.none` in this build (GTK is
-    // deferred; the `.gtk` arm's gobject boxed-type registration is ported when
-    // the apprt-gtk layer lands, retargeting the `GhosttyFontDesiredSize` name to
-    // the rustty identity). `.none` → `void` (Rust `()`).
+    // PORT NOTE: this crate has no GTK edge, so it keeps the `.none` arm
+    // (`void`, Rust `()`). The `.gtk` arm's boxed type is registered in
+    // rustty-apprt as `gtk::class::surface::FontSizeRequest`, under the
+    // reference's name `GhosttyFontDesiredSize` (S87-F4). CORRECTION (task
+    // T-F): this said "GTK is deferred; the `.gtk` arm's gobject boxed-type
+    // registration is ported when the apprt-gtk layer lands, retargeting the
+    // `GhosttyFontDesiredSize` name to the rustty identity"; the GTK layer has
+    // landed, and GType names keep the `Ghostty` prefix like every other boxed
+    // type in rustty-apprt.
     pub const GET_G_OBJECT_TYPE: () = ();
 }
 
