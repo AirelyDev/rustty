@@ -48,7 +48,11 @@ pub const SUPPORTED_FORMATS: ResponseSupportFormats = ResponseSupportFormats {
 /// Query responses only report glossary coverage. Callers that can determine
 /// system font coverage must update the returned query response before sending
 /// it to the client.
-pub fn execute(glossary: &mut Glossary, req: &Request) -> Option<Response> {
+pub fn execute(
+    alloc: crate::alloc::Allocator,
+    glossary: &mut Glossary,
+    req: &Request,
+) -> Option<Response> {
     // log.debug("executing glyph protocol request: {t}", .{req.*});
     // return switch (req.*) {
     match req {
@@ -59,7 +63,7 @@ pub fn execute(glossary: &mut Glossary, req: &Request) -> Option<Response> {
         // .query => |qry| query(glossary, qry),
         Request::Query(qry) => query(glossary, qry),
         // .register => |reg| register(alloc, glossary, reg),
-        Request::Register(reg) => register(glossary, reg),
+        Request::Register(reg) => register(alloc, glossary, reg),
         // .clear => |clr| clear(alloc, glossary, clr),
         Request::Clear(clr) => clear(glossary, clr),
     }
@@ -78,11 +82,15 @@ fn query(glossary: &mut Glossary, qry: &request::Query) -> Option<Response> {
     }))
 }
 
-fn register(glossary: &mut Glossary, reg: &request::Register) -> Option<Response> {
+fn register(
+    alloc: crate::alloc::Allocator,
+    glossary: &mut Glossary,
+    reg: &request::Register,
+) -> Option<Response> {
     // const reply = reg.get(.reply) orelse .all;
     let reply = reg.get_reply().unwrap_or(request::Reply::All);
     // const cp = registerFallible(alloc, glossary, reg) catch |err| return switch (reply) {
-    let cp = match register_fallible(glossary, reg) {
+    let cp = match register_fallible(alloc, glossary, reg) {
         Ok(cp) => cp,
         Err(err) => {
             return match reply {
@@ -186,6 +194,7 @@ impl From<glossary::RegisterError> for RegisterFallibleError {
 }
 
 fn register_fallible(
+    alloc: crate::alloc::Allocator,
     glossary: &mut Glossary,
     reg: &request::Register,
 ) -> Result<u32, RegisterFallibleError> {
@@ -199,9 +208,10 @@ fn register_fallible(
     // PORT NOTE: the reference `errdefer entry.deinit(alloc)` frees the decoded
     // entry if `glossary.register` fails; here `entry` is dropped on the error
     // path (or moved into the glossary on success), reproducing that cleanup.
-    let entry: Entry = Entry::init(reg)?;
+    let entry: Entry = Entry::init(alloc, reg)?;
 
     // try glossary.register(alloc, cp, entry);
+    glossary.allocator().debug_assert_same(alloc);
     glossary.register(cp, entry)?;
     // return cp;
     Ok(cp)
@@ -247,20 +257,20 @@ mod tests {
     // `CommandParser` and returns the completed `Request`. `alloc` is dropped.
     fn test_parse(data: &[u8]) -> Request {
         // var parser = request.CommandParser.init(alloc, 1024 * 1024);
-        let mut parser = CommandParser::init(1024 * 1024);
+        let mut parser = CommandParser::init(crate::alloc::Global, 1024 * 1024);
         // defer parser.deinit();
         // for (data) |byte| try parser.feed(byte);
         for &byte in data {
             parser.feed(byte).unwrap();
         }
         // return try parser.complete(alloc);
-        parser.complete().unwrap()
+        parser.complete(crate::alloc::Global).unwrap()
     }
 
     // PORT NOTE: reference `testExecute(alloc, glossary, req)` is a thin wrapper
     // over `execute`; the `alloc` argument is dropped.
     fn test_execute(glossary: &mut Glossary, req: &Request) -> Option<Response> {
-        execute(glossary, req)
+        execute(crate::alloc::Global, glossary, req)
     }
 
     #[test]

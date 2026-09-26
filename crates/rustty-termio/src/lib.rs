@@ -172,6 +172,9 @@ pub enum Error {
     InputNotFound,
     /// `error.InputFailed`: a configured `input` could not be read or queued.
     InputFailed,
+    /// `error.OutOfMemory` (parity tail S7-4b): named so the mailbox drain's
+    /// `err={}` shows it, as the reference's does.
+    OutOfMemory,
 }
 
 /// `Error::Other`, under the name the unit struct had (see the CORRECTION on
@@ -189,6 +192,7 @@ impl core::fmt::Debug for Error {
             Error::OpenptyFailed => "OpenptyFailed",
             Error::InputNotFound => "InputNotFound",
             Error::InputFailed => "InputFailed",
+            Error::OutOfMemory => "OutOfMemory",
         })
     }
 }
@@ -201,6 +205,7 @@ impl core::fmt::Display for Error {
             Error::OpenptyFailed => write!(f, "error.OpenptyFailed"),
             Error::InputNotFound => write!(f, "error.InputNotFound"),
             Error::InputFailed => write!(f, "error.InputFailed"),
+            Error::OutOfMemory => write!(f, "error.OutOfMemory"),
         }
     }
 }

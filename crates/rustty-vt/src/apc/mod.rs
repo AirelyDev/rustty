@@ -7,12 +7,12 @@
 // const std = @import("std");
 // const build_options = @import("terminal_options");
 // const Allocator = std.mem.Allocator;
-// PORT NOTE: `Allocator` is the project allocator type, threaded through the
-// `feed`/`end` API for call-site fidelity even though neither the kitty nor the
-// glyph parser takes an allocator in their Rust ports (both buffer into owned
-// `Vec`s). The kitty `complete`/`kitty_graphics` path still consumes an
-// allocator at `end`, so the parameter is real there.
-use crate::alloc::Allocator;
+// PORT NOTE (parity tail S7-4): `Allocator` is the runtime allocator handle.
+// The kitty and glyph parsers and the unknown-capture builder are created with
+// the `alloc` passed to `feed` (the stream handler's is the terminal's
+// `gpa()`) and buffer through it, fallibly; `end` completes each parser with
+// its own allocator, as the reference does.
+use crate::alloc::{Allocator, Bytes, CopyVecExt};
 
 // pub const glyph = @import("apc/glyph.zig");
 // const kitty_gfx = @import("kitty/graphics.zig");
@@ -123,11 +123,7 @@ impl Handler {
     }
 
     // pub fn feed(self: *Handler, alloc: Allocator, byte: u8) void {
-    // PORT NOTE: `alloc` is threaded for call-site fidelity; the Rust kitty and
-    // glyph parsers do not take an allocator on `init`/`feed` (they buffer into
-    // owned `Vec`s), so it is unused here.
     pub fn feed(&mut self, alloc: Allocator, byte: u8) {
-        let _ = alloc;
         match &mut self.state {
             // .inactive => unreachable,
             State::Inactive => unreachable!(),
@@ -170,6 +166,7 @@ impl Handler {
                     if KITTY_GRAPHICS {
                         if self.enabled[Protocol::Kitty as usize] {
                             self.state = State::Kitty(kitty_gfx::CommandParser::init(
+                                alloc,
                                 self.max_bytes[Protocol::Kitty as usize],
                             ));
                         } else {
@@ -206,6 +203,7 @@ impl Handler {
                         if glyph_protocol_build_option() {
                             if self.enabled[Protocol::Glyph as usize] {
                                 self.state = State::Glyph(glyph::CommandParser::init(
+                                    alloc,
                                     self.max_bytes[Protocol::Glyph as usize],
                                 ));
                             } else {
@@ -307,7 +305,6 @@ impl Handler {
     //     suffix: []const u8,
     // ) void {
     fn begin_unknown(&mut self, alloc: Allocator, prefix: &[u8], suffix: &[u8]) {
-        let _ = alloc;
         // const max_bytes = self.unknown_max_bytes;
         let max_bytes = self.unknown_max_bytes;
         // if (max_bytes == 0) { self.state = .ignore; return; }
@@ -321,7 +318,7 @@ impl Handler {
         // PORT NOTE: the Rust callers copy the 4-byte identify buffer out
         // before calling (see the `feed` PORT NOTE), so `prefix` here never
         // aliases `self.state`.
-        let mut unknown = UnknownBuilder::init(max_bytes);
+        let mut unknown = UnknownBuilder::init(alloc, max_bytes);
         unknown.append(prefix);
         unknown.append(suffix);
         self.state = State::Unknown(unknown);
@@ -419,13 +416,13 @@ impl Handler {
     // to consume; the per-arm `deinit()` calls on the moved-out parsers reproduce
     // the deferred `state.deinit()` (the moved-out value drops at scope end either
     // way, so the explicit `deinit()` is the no-op call-site fidelity hook).
-    // `alloc` is threaded for fidelity (kitty `complete` consumes the
-    // parser's own `alloc` in the reference; the Rust parser ignores it).
+    // `alloc` (a port-only parameter) is the allocator the APC was fed with;
+    // each parser completes with its own allocator (`p.alloc`), as in the
+    // reference, and `alloc` is debug-asserted to be it.
     //
     /// Complete the current APC. The caller owns a returned result and must
     /// call `Command.deinit` with the allocator used while feeding the APC.
     pub fn end(&mut self, alloc: Allocator) -> Option<Command> {
-        let _ = alloc;
         let state = core::mem::replace(&mut self.state, State::Inactive);
         match state {
             // .inactive => unreachable,
@@ -449,7 +446,10 @@ impl Handler {
                 }
 
                 // Use the same allocator that was used to create the parser.
-                match p.complete() {
+                // const alloc = p.alloc;
+                let parser_alloc = p.allocator();
+                parser_alloc.debug_assert_same(alloc);
+                match p.complete(parser_alloc) {
                     Ok(command) => Some(Command::Kitty(command)),
                     Err(err) => {
                         log::warn!(target: LOG_SCOPE, "kitty graphics protocol error: {err:?}");
@@ -471,7 +471,9 @@ impl Handler {
                     unreachable!();
                 }
 
-                match p.complete() {
+                let parser_alloc = p.allocator();
+                parser_alloc.debug_assert_same(alloc);
+                match p.complete(parser_alloc) {
                     Ok(command) => Some(Command::Glyph(command)),
                     Err(err) => {
                         log::warn!(target: LOG_SCOPE, "glyph protocol error: {err:?}");
@@ -591,21 +593,20 @@ pub struct Identify {
 // const UnknownBuilder = struct { ... };
 pub struct UnknownBuilder {
     // data: std.ArrayList(u8) = .empty,
-    data: Vec<u8>,
     // alloc: Allocator,
-    // PORT NOTE: the `Vec` allocates on the global allocator (the crate's
-    // established ArrayList mapping); the reference's allocation-failure arms
-    // (`catch { self.truncated = true; return; }` / `toOwnedSlice` failure)
-    // have no port-side analog because the global allocator aborts on OOM.
+    // PORT NOTE (parity tail S7-4): the list is allocated through `alloc`
+    // (bound at `init`); a refused growth takes the reference's
+    // `catch { self.truncated = true; return; }` arm.
+    data: Bytes,
     max_bytes: usize,
     truncated: bool,
 }
 
 impl UnknownBuilder {
     // fn init(alloc: Allocator, max_bytes: usize) UnknownBuilder {
-    fn init(max_bytes: usize) -> UnknownBuilder {
+    fn init(alloc: Allocator, max_bytes: usize) -> UnknownBuilder {
         UnknownBuilder {
-            data: Vec::new(),
+            data: Bytes::new_in(alloc),
             max_bytes,
             truncated: false,
         }
@@ -616,7 +617,8 @@ impl UnknownBuilder {
     //     self.data = .empty;
     // }
     fn deinit(&mut self) {
-        self.data = Vec::new();
+        let alloc = *self.data.allocator();
+        self.data = Bytes::new_in(alloc);
     }
 
     // Append some bytes to the unknown capture. This flags as truncated
@@ -663,11 +665,18 @@ impl UnknownBuilder {
                     core::cmp::max(self.data.capacity().saturating_mul(2), 1),
                 ),
             );
-            self.data.reserve_exact(capacity - self.data.len());
+            if self
+                .data
+                .try_reserve_exact(capacity - self.data.len())
+                .is_err()
+            {
+                self.truncated = true;
+                return;
+            }
         }
 
         // self.data.appendSliceAssumeCapacity(bytes[0..retained]);
-        self.data.extend_from_slice(&bytes[0..retained]);
+        self.data.extend_copy(&bytes[0..retained]);
     }
 
     /// Convert the current capture state to an Unknown where allocator
@@ -677,15 +686,16 @@ impl UnknownBuilder {
     /// This can't fail because if there is an allocator issue we return
     /// an empty truncate-flagged Unknown.
     // fn toOwned(self: *UnknownBuilder) Unknown {
-    // PORT NOTE: `toOwnedSlice` → `mem::take` of the `Vec` (its failure arm
-    // has no analog, see the `alloc` PORT NOTE above). The inherent name
-    // shadows `ToOwned::to_owned` deliberately — the receiver is `&mut self`,
-    // so there is no ambiguity in practice.
+    // PORT NOTE: `toOwnedSlice` hands the list over (not a shrunk copy, so
+    // its failure arm cannot occur; a T3 call-shape residual). The inherent
+    // name shadows `ToOwned::to_owned` deliberately — the receiver is
+    // `&mut self`, so there is no ambiguity in practice.
     #[allow(clippy::should_implement_trait, clippy::wrong_self_convention)]
     fn to_owned(&mut self) -> Unknown {
         // toOwnedSlice allows us to reuse data but this makes error
         // handling a little simpler.
-        let content = core::mem::take(&mut self.data);
+        let alloc = *self.data.allocator();
+        let content = core::mem::replace(&mut self.data, Bytes::new_in(alloc));
 
         Unknown {
             content,
@@ -701,7 +711,7 @@ impl UnknownBuilder {
 //     ...
 // };
 pub struct Unknown {
-    pub content: Vec<u8>,
+    pub content: Bytes,
     pub truncated: bool,
 }
 
@@ -710,13 +720,13 @@ impl Unknown {
     //     if (self.content.len > 0) alloc.free(self.content);
     //     self.* = undefined;
     // }
-    // PORT NOTE: the owned `Vec` frees on drop; the explicit free is the
-    // no-op call-site fidelity hook (`alloc` unused).
+    // PORT NOTE: frees the content (through the allocator it was allocated
+    // with, checked against `alloc`).
     pub fn deinit(&mut self, alloc: Allocator) {
-        let _ = alloc;
-        if !self.content.is_empty() {
-            self.content = Vec::new();
+        if self.content.capacity() != 0 {
+            self.content.allocator().debug_assert_same(alloc);
         }
+        self.content = Bytes::new_in(alloc);
     }
 }
 
@@ -799,24 +809,26 @@ impl Command {
     //         .unknown => |*v| v.deinit(alloc),
     //     }
     // }
-    // PORT NOTE: both the kitty `Command` and the glyph `Request` own their bytes
-    // via `Vec`s and free them on drop, so the per-arm `deinit(alloc)` calls are
-    // no-ops retained for call-site fidelity (`alloc` is unused).
+    // PORT NOTE: the kitty `Command` and the glyph `Request` own their bytes,
+    // allocated through `alloc`; each arm frees them now (and checks it).
     pub fn deinit(&mut self, alloc: Allocator) {
         match self {
-            Command::Kitty(_v) => {
+            Command::Kitty(v) => {
                 if !KITTY_GRAPHICS {
                     unreachable!();
                 }
-                // v.deinit(alloc) — Rust drops the owned data; no-op.
-                let _ = alloc;
+                // v.deinit(alloc)
+                if v.data.capacity() != 0 {
+                    v.data.allocator().debug_assert_same(alloc);
+                }
+                v.data = Bytes::new_in(alloc);
             }
-            // v.deinit(alloc) — `Request::deinit` frees on drop; no-op.
+            // v.deinit(alloc)
             Command::Glyph(v) => {
                 if !GLYPH_PROTOCOL {
                     unreachable!();
                 }
-                v.deinit();
+                v.deinit(alloc);
             }
             // .unknown => |*v| v.deinit(alloc),
             Command::Unknown(v) => v.deinit(alloc),
@@ -1430,5 +1442,115 @@ mod tests {
             h.feed(alloc, c);
         }
         assert!(h.end(alloc).is_none());
+    }
+
+    // Parity tail S7-4 (routing evidence, no reference counterpart): the
+    // parsers and the unknown capture are created with the `feed` allocator
+    // and complete with their own, so every buffer and every completed
+    // command's bytes go to it; the glyph registration's decoded outline
+    // (its contours and points) is allocated through the registering
+    // allocator. `deinit` returns every byte.
+    #[test]
+    fn apc_builders_route_through_the_allocator_handle() {
+        use super::*;
+        use crate::alloc::testing::CountingAllocator;
+        let counting = CountingAllocator::over_heap();
+        let c = counting.allocator();
+        crate::alloc::testing::with_handle(&c, |alloc| {
+            let mut h = Handler::default();
+
+            // Kitty: the payload list grows through `alloc` and the command
+            // owns it.
+            h.start();
+            h.feed_slice(alloc, b"Ga=t,f=24,s=1,v=1;/wAA");
+            assert_eq!(1, counting.alloc_calls.get(), "the kitty payload list");
+            let mut cmd = h.end(alloc).unwrap();
+            assert!(matches!(&cmd, Command::Kitty(k) if k.data.as_slice() == [255, 0, 0]));
+            cmd.deinit(alloc);
+            assert_eq!(0, counting.live_bytes.get());
+
+            // Glyph: the request buffer, then the decoded outline.
+            h.start();
+            h.feed_slice(
+                alloc,
+                b"25a1;r;cp=e0a0;AAEAAAAAAGQAZAACAAABAQEAAABk/84AAAAAAGQ=",
+            );
+            assert!(counting.alloc_calls.get() > 1, "the glyph request buffer");
+            let mut cmd = h.end(alloc).unwrap();
+            let Command::Glyph(glyph::Request::Register(reg)) = &cmd else {
+                panic!("a glyph registration");
+            };
+            let c0 = counting.alloc_calls.get();
+            let entry = glyph::glossary::Entry::init(alloc, reg).unwrap();
+            assert_eq!(
+                c0 + 2,
+                counting.alloc_calls.get(),
+                "the outline's contours and points"
+            );
+            assert_eq!(
+                Some((
+                    3 * core::mem::size_of::<rustty_font::opentype::glyf::Point>(),
+                    core::mem::align_of::<rustty_font::opentype::glyf::Point>().trailing_zeros()
+                        as u8
+                )),
+                counting.last_alloc.get(),
+                "the three points"
+            );
+            drop(entry);
+            cmd.deinit(alloc);
+            assert_eq!(0, counting.live_bytes.get());
+
+            // Unknown capture (when enabled) grows through `alloc` too.
+            h.unknown_max_bytes = 64;
+            h.start();
+            h.feed_slice(alloc, b"Xunknown");
+            let mut cmd = h.end(alloc).unwrap();
+            assert!(matches!(&cmd, Command::Unknown(u) if u.content.as_slice() == b"Xunknown"));
+            assert!(
+                counting.live_bytes.get() > 0,
+                "the capture is on the handle"
+            );
+            cmd.deinit(alloc);
+            h.deinit();
+            assert_eq!(0, counting.live_bytes.get(), "every byte is returned");
+        });
+    }
+
+    // Parity tail S7-4b (N278): a glyph registration decodes its payload on
+    // a 64 KiB `stackFallback` scratch, as the reference does. Run end to end
+    // (APC feed, request, `Entry::init`) on a thread with a 128 KiB stack
+    // (1/16 of Rust's 2 MiB default, 1/128 of Zig's 16 MiB). Measured on
+    // aarch64 macOS: a debug build needs about 80 KiB with the scratch built
+    // in place (`StackFallback::new_in_place`), and overflowed 192 KiB with a
+    // by-value `new`; a release build fits in 64 KiB.
+    #[test]
+    fn glyph_registration_fits_a_128k_stack() {
+        let stack = std::env::var("RUSTTY_GLYPH_STACK")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(128 * 1024);
+        std::thread::Builder::new()
+            .stack_size(stack)
+            .spawn(|| {
+                use super::*;
+                let alloc = crate::alloc::Global;
+                let mut h = Handler::default();
+                h.start();
+                h.feed_slice(
+                    alloc,
+                    b"25a1;r;cp=e0a0;AAEAAAAAAGQAZAACAAABAQEAAABk/84AAAAAAGQ=",
+                );
+                let mut cmd = h.end(alloc).unwrap();
+                let Command::Glyph(glyph::Request::Register(reg)) = &cmd else {
+                    panic!("a glyph registration");
+                };
+                let entry = glyph::glossary::Entry::init(alloc, reg).unwrap();
+                drop(entry);
+                cmd.deinit(alloc);
+                h.deinit();
+            })
+            .unwrap()
+            .join()
+            .unwrap();
     }
 }

@@ -149,16 +149,16 @@ pub fn validate(bytes: &[u8]) -> Result<(), ValidateError> {
 // pub const Tracker = struct { ... };
 pub struct Tracker {
     // alloc: Allocator,
-    // PORT NOTE: the reference stores the `std.mem.Allocator` used by its
-    // `ArrayList(u8)`; the Rust `bytes` is a `Vec<u8>` on the global allocator
-    // (the crate's established ArrayList mapping — see `apc::UnknownBuilder`).
-    // The allocation-failure arms (`catch { markBroken }`) are preserved via
-    // the `TRACKER_TW` tripwire seam below, the crate's `FailingAllocator`
-    // stand-in (see `tabstops.rs`'s `RESIZE_TW` PORT NOTE).
+    // PORT NOTE (parity tail S7-4): the runtime allocator handle; `bytes`
+    // grows through it, fallibly (`catch { markBroken }`).
+    alloc: crate::alloc::Allocator,
     // max_bytes: usize,
     pub max_bytes: usize,
     // bytes: std.ArrayList(u8) = .empty,
-    pub bytes: Vec<u8>,
+    // (parity tail S7-4b: `alloc::ArrayListUnmanaged`, so `ensureTotalCapacity`
+    // and `appendSlice` grow by Zig's `growCapacity`, as the reference's list
+    // does. `Drop` frees it through `alloc`.)
+    pub bytes: crate::alloc::ArrayListUnmanaged<u8>,
     // broken: bool = false,
     pub broken: bool,
 }
@@ -169,10 +169,11 @@ impl Tracker {
 
     /// Initialize a tracker.
     // pub fn init(alloc: Allocator, max_bytes: usize) Tracker {
-    pub fn init(max_bytes: usize) -> Tracker {
+    pub fn init(alloc: crate::alloc::Allocator, max_bytes: usize) -> Tracker {
         let mut result = Tracker {
+            alloc,
             max_bytes,
-            bytes: Vec::new(),
+            bytes: crate::alloc::ArrayListUnmanaged::EMPTY,
             broken: false,
         };
         // result.bytes.ensureTotalCapacity(
@@ -196,8 +197,13 @@ impl Tracker {
     //     self.bytes.deinit(self.alloc);
     // }
     pub fn deinit(&mut self) {
-        // The `Vec` frees on drop; clear+shrink mirrors freeing the storage.
-        self.bytes = Vec::new();
+        // (Leaves an empty list, so a later drop frees nothing.)
+        self.bytes.deinit(self.alloc);
+    }
+
+    /// The allocator the tracker grows through (`self.alloc`).
+    pub fn allocator(&self) -> crate::alloc::Allocator {
+        self.alloc
     }
 
     /// Clear the current continuation suffix and broken state while keeping
@@ -207,7 +213,7 @@ impl Tracker {
     pub fn reset(&mut self) {
         self.broken = false;
         // self.bytes.clearRetainingCapacity();
-        self.bytes.clear();
+        self.bytes.clear_retaining_capacity();
     }
 
     /// Retain the part of `input` needed to replay a feed that ended with
@@ -242,7 +248,7 @@ impl Tracker {
     // fn replace(self: *Tracker, suffix: []const u8) void {
     fn replace(&mut self, suffix: &[u8]) {
         // self.bytes.clearRetainingCapacity();
-        self.bytes.clear();
+        self.bytes.clear_retaining_capacity();
         // if (suffix.len > self.max_bytes) { self.markBroken(); return; }
         if suffix.len() > self.max_bytes {
             self.mark_broken();
@@ -302,7 +308,7 @@ impl Tracker {
         //     if (scanner.next(c) == .omittable) continue;
         //     try writer.writeByte(c);
         // }
-        for &c in &self.bytes {
+        for &c in self.bytes.iter() {
             if scanner.next(c) == Effect::Omittable {
                 continue;
             }
@@ -315,27 +321,41 @@ impl Tracker {
     fn mark_broken(&mut self) {
         self.broken = true;
         // self.bytes.clearRetainingCapacity();
-        self.bytes.clear();
+        self.bytes.clear_retaining_capacity();
     }
 
-    /// `self.bytes.appendSlice(self.alloc, ...)` — the fallible append. The
-    /// only failure source in the port is the `TRACKER_TW` tripwire (Rust's
-    /// global-allocator `Vec` aborts on real OOM), which stands in for the
-    /// reference's `testing.FailingAllocator`.
-    fn append_slice(&mut self, bytes: &[u8]) -> Result<(), crate::pagelist::OutOfMemory> {
-        #[cfg(test)]
-        tracker_tw_check(TrackerFp::Alloc)?;
-        self.bytes.extend_from_slice(bytes);
+    /// `self.bytes.appendSlice(self.alloc, ...)`: `ensureUnusedCapacity`
+    /// (`ensureTotalCapacity(len + n)`, rounded by `growCapacity`), then the
+    /// copy.
+    fn append_slice(&mut self, bytes: &[u8]) -> Result<(), crate::alloc::OutOfMemory> {
+        let len = self.bytes.len();
+        let new_len = len
+            .checked_add(bytes.len())
+            .ok_or(crate::alloc::OutOfMemory)?;
+        self.bytes.ensure_total_capacity(self.alloc, new_len)?;
+        // SAFETY: capacity >= new_len; the copied range is initialized
+        // before `set_len` exposes it.
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                bytes.as_ptr(),
+                self.bytes.as_mut_ptr().add(len),
+                bytes.len(),
+            );
+            self.bytes.set_len(new_len);
+        }
         Ok(())
     }
 
     /// `self.bytes.ensureTotalCapacity(alloc, n)` — the fallible best-effort
-    /// reservation done by `init`.
-    fn try_reserve(&mut self, capacity: usize) -> Result<(), crate::pagelist::OutOfMemory> {
-        #[cfg(test)]
-        tracker_tw_check(TrackerFp::Alloc)?;
-        self.bytes.reserve(capacity);
-        Ok(())
+    /// reservation done by `init` (rounded up by `growCapacity`).
+    fn try_reserve(&mut self, capacity: usize) -> Result<(), crate::alloc::OutOfMemory> {
+        self.bytes.ensure_total_capacity(self.alloc, capacity)
+    }
+}
+
+impl Drop for Tracker {
+    fn drop(&mut self) {
+        self.bytes.deinit(self.alloc);
     }
 }
 
@@ -348,49 +368,6 @@ impl Tracker {
 pub enum Pending {
     Vt,
     Utf8,
-}
-
-// PORT NOTE: tripwire fail-point enum + thread-local module standing in for
-// the reference tests' `std.testing.FailingAllocator` (the crate's established
-// failure-injection seam; see `tabstops.rs`'s `RESIZE_TW` PORT NOTE). One
-// point, `Alloc`, sits at both fallible allocation sites (`init`'s best-effort
-// reservation and `appendSlice`), matching the FailingAllocator's "fail from
-// fail_index onward" behavior when armed with `errorAlways`.
-#[cfg(test)]
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub(crate) enum TrackerFp {
-    Alloc,
-}
-
-#[cfg(test)]
-thread_local! {
-    pub(crate) static TRACKER_TW: core::cell::RefCell<
-        rustty_util::tripwire::Module<TrackerFp, crate::pagelist::OutOfMemory>,
-    > = core::cell::RefCell::new(rustty_util::tripwire::module());
-}
-
-#[cfg(test)]
-#[inline]
-fn tracker_tw_check(point: TrackerFp) -> Result<(), crate::pagelist::OutOfMemory> {
-    TRACKER_TW.with(|tw| tw.borrow_mut().check(point))
-}
-
-/// Arm the tracker allocation fail point (cross-module accessor so
-/// `stream.rs`'s continuation tests can drive it).
-#[cfg(test)]
-pub(crate) fn tracker_tw_error_always(point: TrackerFp) {
-    TRACKER_TW.with(|tw| {
-        tw.borrow_mut()
-            .errorAlways(point, crate::pagelist::OutOfMemory)
-    });
-}
-
-/// Disarm the tracker allocation fail point (cross-module accessor).
-#[cfg(test)]
-pub(crate) fn tracker_tw_end(
-    mode: rustty_util::tripwire::ResetMode,
-) -> Result<(), rustty_util::tripwire::UntrippedError> {
-    TRACKER_TW.with(|tw| tw.borrow_mut().end(mode))
 }
 
 /// Find where replay must begin when a feed ends inside a VT sequence.
@@ -727,7 +704,8 @@ impl io::Write for FixedIoWriter<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rustty_util::tripwire::ResetMode;
+    use crate::alloc::testing::{with_handle, Config, CountingAllocator, FailingAllocator};
+    use crate::alloc::Global;
 
     // test "boundary scanner classifies effects and ground"
     #[test]
@@ -833,7 +811,7 @@ mod tests {
     // test "tracker retains and normalizes replay-safe bytes"
     #[test]
     fn tracker_retains_and_normalizes_replay_safe_bytes() {
-        let mut tracker = Tracker::init(64);
+        let mut tracker = Tracker::init(Global, 64);
         // defer tracker.deinit();
 
         tracker.append(Pending::Vt, b"committed\x1b[1\x07");
@@ -867,7 +845,7 @@ mod tests {
     // test "tracker cap, reset, and broken recovery"
     #[test]
     fn tracker_cap_reset_and_broken_recovery() {
-        let mut tracker = Tracker::init(4);
+        let mut tracker = Tracker::init(Global, 4);
         // defer tracker.deinit();
 
         tracker.append(Pending::Vt, b"\x1b[123");
@@ -907,7 +885,7 @@ mod tests {
     // test "tracker reports writer failure and defers allocation failure"
     #[test]
     fn tracker_reports_writer_failure_and_defers_allocation_failure() {
-        let mut tracker = Tracker::init(64);
+        let mut tracker = Tracker::init(Global, 64);
         // defer tracker.deinit();
         tracker.append(Pending::Vt, b"\x1b[");
 
@@ -919,20 +897,54 @@ mod tests {
         // var failing = testing.FailingAllocator.init(testing.allocator, .{
         //     .fail_index = 0,
         // });
-        // PORT NOTE: the FailingAllocator (fail_index = 0 → every allocation
-        // fails) is stood in by the `TRACKER_TW` tripwire seam.
-        tracker_tw_error_always(TrackerFp::Alloc);
-        let mut failing_tracker = Tracker::init(64);
-        // defer failing_tracker.deinit();
-        assert!(!failing_tracker.broken);
+        let failing = FailingAllocator::over_heap(Config {
+            fail_index: 0,
+            ..Config::default()
+        });
+        let c = failing.allocator();
+        with_handle(&c, |alloc| {
+            // var failing_tracker = Tracker.init(failing.allocator(), 64);
+            let mut failing_tracker = Tracker::init(alloc, 64);
+            // defer failing_tracker.deinit();
+            assert!(!failing_tracker.broken);
 
-        // The best-effort initial reservation failed, so the first required
-        // retention retries allocation and marks the tracker broken.
-        failing_tracker.append(Pending::Vt, b"\x1b[");
-        assert!(failing_tracker.broken);
-        tracker_tw_end(ResetMode::Reset).unwrap();
+            // The best-effort initial reservation failed, so the first required
+            // retention retries allocation and marks the tracker broken.
+            failing_tracker.append(Pending::Vt, b"\x1b[");
+            assert!(failing_tracker.broken);
+            failing_tracker.deinit();
+        });
 
-        failing_tracker.deinit();
         tracker.deinit();
+    }
+
+    // Parity tail S7-4 (routing evidence, no reference counterpart): the
+    // retained suffix is allocated through the tracker's allocator: `init`'s
+    // best-effort reservation of `min(max_bytes, 4096)` bytes, then growth past
+    // it. `deinit` returns every byte.
+    #[test]
+    fn tracker_routes_through_the_allocator_handle() {
+        let counting = CountingAllocator::over_heap();
+        let c = counting.allocator();
+        with_handle(&c, |alloc| {
+            let mut tracker = Tracker::init(alloc, 16384);
+            // `ensureTotalCapacity(4096)` asks for `growCapacity(4096)`.
+            let first = crate::alloc::ArrayListUnmanaged::<u8>::grow_capacity(4096);
+            #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
+            assert_eq!(6272, first, "4096 + 2048 + cache_line (128)");
+            assert_eq!(1, counting.alloc_calls.get(), "the initial reservation");
+            assert_eq!(Some((first, 0)), counting.last_alloc.get());
+            // Past the reservation the suffix grows by `growCapacity` too.
+            let mut input = vec![b'1'; 7000];
+            input[0..2].copy_from_slice(b"\x1b[");
+            tracker.append(Pending::Vt, &input);
+            assert!(!tracker.broken);
+            assert_eq!(7000, tracker.bytes.len());
+            let grown = crate::alloc::ArrayListUnmanaged::<u8>::grow_capacity(7000);
+            assert_eq!(grown, tracker.bytes.capacity());
+            assert_eq!(grown, counting.live_bytes.get(), "the grown suffix");
+            tracker.deinit();
+            assert_eq!(0, counting.live_bytes.get(), "every byte is returned");
+        });
     }
 }

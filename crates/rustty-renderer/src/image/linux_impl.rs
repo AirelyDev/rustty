@@ -853,7 +853,7 @@ impl State {
                 //     log.warn("error preparing kitty placement err={}", .{err});
                 // };
                 if let Err(err) =
-                    self.prep_kitty_placement(alloc, t, top_y, bot_y, &image, p, origin)
+                    self.prep_kitty_placement(alloc, t, top_y, bot_y, image, p, origin)
                 {
                     // log.warn("error preparing kitty placement err={}", .{err});
                     log::warn!(target: LOG_SCOPE, "error preparing kitty placement err={err:?}");
@@ -982,7 +982,7 @@ impl State {
 
                 // const grid = pr.p.gridSize(image, t);
                 // if (grid.cols == 0 or grid.rows == 0) continue;
-                let grid = pr.p.grid_size(&image, t);
+                let grid = pr.p.grid_size(image, t);
                 if grid.cols == 0 || grid.rows == 0 {
                     continue;
                 }
@@ -1017,7 +1017,7 @@ impl State {
                     Ok(v) => v,
                     Err(_) => continue,
                 };
-                if let Err(err) = self.append_kitty_placement(alloc, t, &image, &pr.p, x, y) {
+                if let Err(err) = self.append_kitty_placement(alloc, t, image, &pr.p, x, y) {
                     // log.warn("error preparing kitty placement err={}", .{err});
                     log::warn!(target: LOG_SCOPE, "error preparing kitty placement err={err:?}");
                 }
@@ -1341,7 +1341,7 @@ impl State {
 
         // const rp = p.renderPlacement(storage, &image, cell_size.width, cell_size.height)
         //     catch |err| { log.warn("error rendering virtual placement err={}", .{err}); return; };
-        let rp = match p.render_placement(storage, &image, cell_size.width, cell_size.height) {
+        let rp = match p.render_placement(storage, image, cell_size.width, cell_size.height) {
             Ok(rp) => rp,
             Err(err) => {
                 // log.warn("error rendering virtual placement err={}", .{err});
@@ -1370,7 +1370,7 @@ impl State {
 
         // Prepare the image for the GPU and store the placement.
         // try self.prepKittyImage(alloc, &image);
-        self.prep_kitty_image(alloc, &image)?;
+        self.prep_kitty_image(alloc, image)?;
         // try self.kitty_placements.append(alloc, .{ ... });
         self.kitty_placements.push(Placement {
             image_id: Id::Kitty(image.id),
@@ -1537,8 +1537,8 @@ impl State {
                 },
                 // constCasts are always gross but this one is safe is because
                 // the data is only read from here and copied into its own
-                // buffer. (`image` is our owned clone (§0 R-1) so the ptr is
-                // valid for the call.)
+                // buffer. (`image` borrows the stored image under the terminal
+                // lock (N276), so the ptr is valid for the call.)
                 // .data = @constCast(data.ptr),
                 data: data.as_ptr() as *mut u8,
             },
@@ -2736,7 +2736,10 @@ mod tests {
 
         // const pixels = try alloc.dupe(u8, "rgba");
         let pixels = b"rgba".to_vec();
-        assert!(pending.complete(unsafe { &mut (*sp).kitty_images }, pixels));
+        assert!(pending.complete(
+            unsafe { &mut (*sp).kitty_images },
+            rustty_vt::alloc::heap_bytes(&pixels)
+        ));
         state.kitty_update(
             alloc,
             &t,
@@ -2817,7 +2820,7 @@ mod tests {
                     width: 4,
                     height: 3,
                     format: Format::Rgb,
-                    data: Data::Complete(pixels),
+                    data: Data::Complete(rustty_vt::alloc::heap_bytes(&pixels)),
                     ..KittyImage::default()
                 },
             )
@@ -2890,7 +2893,7 @@ mod tests {
                     width: 1,
                     height: 1,
                     format: Format::Rgb,
-                    data: Data::Complete(pixels),
+                    data: Data::Complete(rustty_vt::alloc::heap_bytes(&pixels)),
                     ..KittyImage::default()
                 },
             )
@@ -2996,7 +2999,7 @@ mod tests {
                     width: 1,
                     height: 1,
                     format: Format::Rgb,
-                    data: Data::Complete(pixels),
+                    data: Data::Complete(rustty_vt::alloc::heap_bytes(&pixels)),
                     ..KittyImage::default()
                 },
             )
@@ -3119,7 +3122,7 @@ mod tests {
                     width: 10,
                     height: 10,
                     format: Format::Rgb,
-                    data: Data::Complete(pixels),
+                    data: Data::Complete(rustty_vt::alloc::heap_bytes(&pixels)),
                     ..KittyImage::default()
                 },
             )
@@ -3218,7 +3221,7 @@ mod tests {
                     height: 1,
                     format: Format::Rgba,
                     // .data = .{ .complete = try alloc.dupe(u8, &.{ 255, 0, 0, 255 }) },
-                    data: Data::Complete(vec![255, 0, 0, 255]),
+                    data: Data::Complete(rustty_vt::alloc::heap_bytes(&[255, 0, 0, 255])),
                     ..KittyImage::default()
                 },
             )
@@ -3272,9 +3275,9 @@ mod tests {
         // anim.current_index = 1;
         // storage.markImageContentChanged(io, img);
         {
-            let mut anim = Box::new(Animation::default());
+            let mut anim = rustty_vt::alloc::heap_box(Animation::default());
             anim.frames.push(Frame {
-                data: vec![0, 0, 255, 255],
+                data: rustty_vt::alloc::heap_bytes(&[0, 0, 255, 255]),
                 gap_ms: 40,
             });
             anim.current_index = 1;

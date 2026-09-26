@@ -725,7 +725,9 @@ pub unsafe fn decoder_next(decoder_: Decoder) -> Result {
     // SAFETY: transient `&mut` of the decoder field / native terminal off the
     // raw handles; both die with this statement (the
     // rust-mut-args-strongly-protected shape).
-    let progress = match unsafe { (*decoder_).decoder.next(GPA, &mut *native) } {
+    // SAFETY: `decoder_` is a live handle (caller contract).
+    let gpa = unsafe { decoder_gpa(decoder_) };
+    let progress = match unsafe { (*decoder_).decoder.next(gpa, &mut *native) } {
         Ok(progress) => progress,
         Err(err) => {
             unsafe { (*decoder_).state = State::Failed(Some(metadata)) };
@@ -782,7 +784,9 @@ pub unsafe fn decoder_decode(decoder_: Decoder, out_: *mut terminal_c::Terminal)
     // Apply every history page and require a valid FINISH record.
     loop {
         // SAFETY: transient `&mut`s off the raw handles (see `decoder_next`).
-        let progress = match unsafe { (*decoder_).decoder.next(GPA, &mut *native) } {
+        // SAFETY: `decoder_` is a live handle (caller contract).
+        let gpa = unsafe { decoder_gpa(decoder_) };
+        let progress = match unsafe { (*decoder_).decoder.next(gpa, &mut *native) } {
             Ok(progress) => progress,
             Err(err) => {
                 unsafe {
@@ -821,9 +825,18 @@ enum ReadyTerminalError {
     FromDecoded(terminal_c::FromDecodedError),
 }
 
-/// The core allocator parameter (`decoder.alloc`) — the crate-wide `Global`
-/// treatment of `std.mem.Allocator` in rustty-vt (see codec.rs's PORT NOTE).
-const GPA: rustty_vt::alloc::Global = rustty_vt::alloc::Global;
+/// The core allocator parameter (`decoder.alloc`): the caller's allocator as
+/// the runtime handle (`lib.alloc.default(alloc_)`), or the Rust heap for NULL
+/// (parity tail S7-4). The decoded terminal is built over it, so it becomes
+/// that terminal's `gpa()`, and every later `next` applies history through it.
+///
+/// # Safety
+/// `decoder` is a live decoder handle whose stored allocator, if non-null, is
+/// the caller's still-live allocator (the C contract, N260).
+unsafe fn decoder_gpa(decoder: *const DecoderWrapper) -> rustty_vt::alloc::Allocator {
+    // SAFETY: the caller's contract.
+    unsafe { rustty_vt::alloc::default((*decoder).alloc.as_ref()) }
+}
 
 /// Decode READY, create terminal-owned I/O, and construct the C terminal.
 // fn decoderReadyTerminal(decoder: *DecoderWrapper) anyerror!ReadyTerminal {
@@ -846,7 +859,9 @@ unsafe fn decoder_ready_terminal(
     let options = snapshot_core::DecodeOptions {
         max_continuation_bytes: unsafe { (*decoder).max_continuation_bytes },
     };
-    let mut decoded = match unsafe { (*decoder).decoder.ready(GPA, &options) } {
+    // SAFETY: `decoder` is live (caller contract).
+    let gpa = unsafe { decoder_gpa(decoder) };
+    let mut decoded = match unsafe { (*decoder).decoder.ready(gpa, &options) } {
         Ok(decoded) => decoded,
         Err(err) => return Err(ReadyTerminalError::Decode(err.into())),
     };
@@ -872,7 +887,7 @@ unsafe fn decoder_ready_terminal(
         )
     };
     // defer decoded.deinit(decoder.alloc); — runs on both outcomes.
-    decoded.deinit(GPA);
+    decoded.deinit(gpa);
     let terminal = result.map_err(ReadyTerminalError::FromDecoded)?;
     Ok(ReadyTerminal { terminal, metadata })
 }
@@ -2447,5 +2462,219 @@ mod tests {
             free_alloc(alloc, encoded_ptr, encoded_len);
             unsafe { terminal_c::free(source) };
         });
+    }
+
+    /// Encoded snapshot bytes of a small terminal with scrollback, a title and
+    /// a hyperlink (built over the test allocator).
+    fn sample_snapshot() -> Vec<u8> {
+        sample_snapshot_with(None)
+    }
+
+    /// `sample_snapshot`, optionally ending inside an unfinished CSI of
+    /// `continuation` parameter bytes (continuation tracking enabled on the
+    /// source).
+    fn sample_snapshot_with(continuation: Option<usize>) -> Vec<u8> {
+        with_test_allocator(|alloc| {
+            let (new_result, source) = new_t(alloc, 20, 4);
+            assert_eq!(Result::Success, new_result);
+            if continuation.is_some() {
+                test_enable_continuation(source);
+            }
+            let lines = if cfg!(miri) { 6 } else { 30 };
+            for i in 0..lines {
+                vtw(source, format!("line {i:02}\r\n").as_bytes());
+            }
+            vtw(source, b"\x1B]2;a title\x1B\\");
+            vtw(
+                source,
+                b"\x1B]8;id=x;https://example.com\x1B\\link\x1B]8;;\x1B\\",
+            );
+            if let Some(n) = continuation {
+                let mut csi = b"\x1B[".to_vec();
+                csi.extend(std::iter::repeat_n(b'1', n));
+                vtw(source, &csi);
+            }
+            let mut encoded_ptr: *mut u8 = std::ptr::null_mut();
+            let mut encoded_len: usize = 0;
+            assert_eq!(Result::Success, unsafe {
+                encode_alloc(source, Some(alloc), &mut encoded_ptr, &mut encoded_len)
+            });
+            // SAFETY: the allocation returned above; copied out and freed here.
+            let bytes = unsafe { core::slice::from_raw_parts(encoded_ptr, encoded_len) }.to_vec();
+            free_alloc(alloc, encoded_ptr, encoded_len);
+            unsafe { terminal_c::free(source) };
+            bytes
+        })
+    }
+
+    // Parity tail S7-4 (routing evidence): the decoder builds the terminal over
+    // the caller's allocator (`decoder.ready(decoder.alloc, ..)`, the
+    // terminal's `gpa()` from then on), so a decoded terminal's internals are
+    // on the caller's allocator like a `new`-created one's: it holds at least
+    // what a fresh terminal of the same size holds, and `free` returns every
+    // byte.
+    #[test]
+    fn decoded_terminal_internals_route_through_the_callers_allocator() {
+        use rustty_vt::alloc::testing::CountingAllocator;
+        let bytes = sample_snapshot();
+
+        let fresh = CountingAllocator::over_heap();
+        let fresh_c = fresh.allocator();
+        let (new_result, t) = new_t(&fresh_c, 20, 4);
+        assert_eq!(Result::Success, new_result);
+        let fresh_live = fresh.live_bytes.get();
+        unsafe { terminal_c::free(t) };
+
+        let counting = CountingAllocator::over_heap();
+        let c = counting.allocator();
+        let mut decoder: Decoder = std::ptr::null_mut();
+        assert_eq!(Result::Success, unsafe {
+            decoder_new_buf(Some(&c), &mut decoder, bytes.as_ptr(), bytes.len())
+        });
+        let decoder_live = counting.live_bytes.get();
+        let mut restored: terminal_c::Terminal = std::ptr::null_mut();
+        assert_eq!(Result::Success, unsafe {
+            decoder_decode(decoder, &mut restored)
+        });
+        unsafe { decoder_free(decoder) };
+        assert!(
+            counting.live_bytes.get() >= fresh_live,
+            "the decoded terminal ({} bytes, decoder {}) holds at least a fresh one's {}",
+            counting.live_bytes.get(),
+            decoder_live,
+            fresh_live
+        );
+        // SAFETY: the decoded terminal is live.
+        let text = plain_string(restored);
+        assert!(text.ends_with(b"link"));
+        unsafe { terminal_c::free(restored) };
+        assert_eq!(0, counting.live_bytes.get(), "free returns every byte");
+    }
+
+    // Parity tail S7-4 (routing evidence): with retention enabled the decoded
+    // terminal's continuation tracker is built by `wrap` over the caller's
+    // allocator (`Stream.init(.{ .allocator = alloc, .continuation_max_bytes =
+    // .. })`), like the rest of the terminal.
+    #[test]
+    fn decoded_terminal_continuation_tracker_is_on_the_callers_allocator() {
+        use rustty_vt::alloc::testing::CountingAllocator;
+        let bytes = sample_snapshot();
+        let counting = CountingAllocator::over_heap();
+        let c = counting.allocator();
+        let mut decoder: Decoder = std::ptr::null_mut();
+        assert_eq!(Result::Success, unsafe {
+            decoder_new_buf(Some(&c), &mut decoder, bytes.as_ptr(), bytes.len())
+        });
+        let retain = true;
+        assert_eq!(Result::Success, unsafe {
+            decoder_set(
+                decoder,
+                DecoderOption::RetainContinuation,
+                &retain as *const bool as *const c_void,
+            )
+        });
+        let mut restored: terminal_c::Terminal = std::ptr::null_mut();
+        assert_eq!(Result::Success, unsafe {
+            decoder_decode(decoder, &mut restored)
+        });
+        unsafe { decoder_free(decoder) };
+        // SAFETY: the decoded terminal is live; a shared read of its stream.
+        unsafe {
+            let tracker = (*restored)
+                .stream
+                .continuation
+                .as_ref()
+                .expect("retention keeps a tracker");
+            assert_eq!(
+                rustty_vt::alloc::default(Some(&c)),
+                tracker.allocator(),
+                "the tracker grows through the caller's allocator"
+            );
+        }
+        unsafe { terminal_c::free(restored) };
+        assert_eq!(0, counting.live_bytes.get(), "free returns every byte");
+    }
+
+    // Parity tail S7-4 (T2, no reference counterpart): for every n, a
+    // `FailingAllocator` refusing its n-th allocation drives the snapshot
+    // decoder (`decoder_new_buf`, `decoder_decode`: the decoded terminal and
+    // its history) and `free`. Nothing aborts, every result is `SUCCESS` or
+    // `OUT_OF_MEMORY`, and every byte is returned. A second loop refuses
+    // `remap`/`resize` from their n-th call on. The snapshot ends inside a
+    // 7000-byte unfinished CSI, so the decoded terminal's verification tracker
+    // grows past its `growCapacity(4096)` reservation while the continuation
+    // is replayed: the decode's remap.
+    #[test]
+    fn allocation_failure_sweep_through_snapshot_decode() {
+        use rustty_vt::alloc::testing::{Config, FailingAllocator};
+        let bytes = sample_snapshot_with(Some(7000));
+
+        let run = |failing: &FailingAllocator, what: &str| -> bool {
+            let c = failing.allocator();
+            let mut decoder: Decoder = std::ptr::null_mut();
+            let mut failed = false;
+            match unsafe { decoder_new_buf(Some(&c), &mut decoder, bytes.as_ptr(), bytes.len()) } {
+                Result::Success => {
+                    let mut restored: terminal_c::Terminal = std::ptr::null_mut();
+                    match unsafe { decoder_decode(decoder, &mut restored) } {
+                        Result::Success => unsafe { terminal_c::free(restored) },
+                        Result::OutOfMemory => {
+                            assert!(restored.is_null(), "{what}");
+                            failed = true;
+                        }
+                        other => panic!("{what}: decode returned {other:?}"),
+                    }
+                    unsafe { decoder_free(decoder) };
+                }
+                Result::OutOfMemory => {
+                    assert!(decoder.is_null(), "{what}");
+                    failed = true;
+                }
+                other => panic!("{what}: decoder_new_buf returned {other:?}"),
+            }
+            assert_eq!(
+                failing.allocated_bytes.get(),
+                failing.freed_bytes.get(),
+                "{what}: every byte taken from the caller's allocator is returned"
+            );
+            assert_eq!(
+                failing.allocations.get(),
+                failing.deallocations.get(),
+                "{what}"
+            );
+            failed
+        };
+
+        let mut n = 0usize;
+        let mut failures = 0usize;
+        loop {
+            let failing = FailingAllocator::over_heap(Config {
+                fail_index: n,
+                ..Config::default()
+            });
+            failures += usize::from(run(&failing, &format!("alloc n={n}")));
+            if !failing.has_induced_failure.get() {
+                break;
+            }
+            n += 1;
+            assert!(n < 10_000, "the sweep must terminate");
+        }
+        assert!(n > 10, "only {n} allocations were swept");
+        assert!(failures > 5, "only {failures} indices failed the decode");
+
+        let clean = FailingAllocator::over_heap(Config::default());
+        assert!(!run(&clean, "remap clean run"));
+        let remaps = clean.resize_index.get();
+        assert!(remaps > 0, "the decode makes no remap/resize call");
+        for n in 0..=remaps {
+            let failing = FailingAllocator::over_heap(Config {
+                resize_fail_index: n,
+                ..Config::default()
+            });
+            assert!(
+                !run(&failing, &format!("remap n={n}")),
+                "a refused remap never fails the decode"
+            );
+        }
     }
 }

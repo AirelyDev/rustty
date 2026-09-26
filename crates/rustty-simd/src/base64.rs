@@ -81,6 +81,49 @@ pub fn decode<'a>(input: &[u8], output: &'a mut [u8]) -> Result<&'a [u8], Base64
     decode_scalar(input, output)
 }
 
+/// `decode(buf, buf[0..max_len])`: decode `buf` on top of itself and return
+/// the decoded length. The reference's Kitty graphics payload decode passes
+/// the same buffer as input and output ("guaranteed that the encoded size is
+/// larger"); Rust cannot alias `&[u8]` with `&mut [u8]`, so this takes the
+/// buffer once. `max_len` must be `max_len(buf)` (at most `buf.len()`).
+///
+/// PORT NOTE: the SIMD kernel receives the same pointer for input and output,
+/// exactly as the reference's call does, and so does the scalar lane (wasm32,
+/// Miri: `Base64Decoder::decode_in_place`, parity tail S7-4b). Neither copies
+/// the payload.
+pub fn decode_in_place(buf: &mut [u8], max_len: usize) -> Result<usize, Base64Invalid> {
+    assert(max_len <= buf.len());
+    #[cfg(not(target_arch = "wasm32"))]
+    if SIMD && !cfg!(miri) {
+        let p = buf.as_mut_ptr();
+        // SAFETY: `p` is valid for `buf.len()` reads and writes; the kernel
+        // writes at most `max_len <= buf.len()` bytes and, like the reference,
+        // is given one buffer as both input and output.
+        let res = unsafe { rustty_simd_base64_decode(p, buf.len(), p) };
+        if res < 0 {
+            return Err(Base64Invalid);
+        }
+        return Ok(res as usize);
+    }
+
+    decode_in_place_scalar(buf, max_len)
+}
+
+/// The scalar lane of [`decode_in_place`]: `decode_scalar(buf, buf[0..max_len])`
+/// on one buffer.
+fn decode_in_place_scalar(buf: &mut [u8], max_len: usize) -> Result<usize, Base64Invalid> {
+    let source_len = scalar_input(buf).len();
+    let size = max_len_scalar(&buf[..source_len]);
+    if size == 0 {
+        return Ok(0);
+    }
+    assert(max_len >= size);
+    scalar_decoder
+        .decode_in_place(buf, max_len, source_len)
+        .map_err(|_| Base64Invalid)?;
+    Ok(size)
+}
+
 fn decode_scalar<'a>(input_raw: &[u8], output: &'a mut [u8]) -> Result<&'a [u8], Base64Invalid> {
     let input = scalar_input(input_raw);
     let size = max_len_scalar(input);
@@ -321,6 +364,70 @@ mod tests {
     // (camelCase `maxLen` preserved); spaces are not valid in a Rust fn name.
     #![allow(non_snake_case)]
     use super::*;
+
+    // Rust-only (parity tail S7-4): decoding a buffer on top of itself gives
+    // the same bytes and the same errors as decoding it into a separate
+    // buffer, on the SIMD lane (Miri: the scalar lane).
+    // Parity tail S7-4b: the scalar lane decodes on top of the buffer itself
+    // (no copy) with the same bytes and errors as the separate-buffer scalar
+    // decode, on every target. Lengths 0..200 cover the 16-byte and 4-byte
+    // steps and the tail; each input is also tried padded and with an invalid
+    // character.
+    #[test]
+    fn scalar_decode_in_place_matches_scalar_decode() {
+        const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut seed: u32 = 0x1234_5678;
+        let mut next = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            seed
+        };
+        let n = if cfg!(miri) { 40 } else { 200 };
+        for len in 0..n {
+            let base: Vec<u8> = (0..len).map(|_| ALPHABET[(next() % 64) as usize]).collect();
+            let mut padded = base.clone();
+            padded.extend_from_slice(b"==");
+            let mut invalid = base.clone();
+            if !invalid.is_empty() {
+                let at = (next() as usize) % invalid.len();
+                invalid[at] = b'!';
+            }
+            for case in [&base, &padded, &invalid] {
+                let max = max_len_scalar(case);
+                let mut out = vec![0u8; max];
+                let expected = decode_scalar(case, &mut out).map(|d| d.to_vec());
+                let mut buf = case.clone();
+                let got = decode_in_place_scalar(&mut buf, max).map(|k| buf[..k].to_vec());
+                assert_eq!(
+                    expected,
+                    got,
+                    "len {len}: {:?}",
+                    String::from_utf8_lossy(case)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn decode_in_place_matches_decode() {
+        let cases: [&[u8]; 6] = [
+            b"",
+            b"aGVsbG8=",
+            b"aGVsbG8",
+            b"////",
+            b"SGVsbG8gd29ybGQsIHRoaXMgaXMgYSBsb25nZXIgcGF5bG9hZCBmb3IgdGhlIFNJTUQgbGFuZQ==",
+            b"!!!!",
+        ];
+        for case in cases {
+            let max = max_len(case);
+            let mut out = vec![0u8; max];
+            let expected = decode(case, &mut out).map(|d| d.to_vec());
+            let mut buf = case.to_vec();
+            let got = decode_in_place(&mut buf, max).map(|n| buf[..n].to_vec());
+            assert_eq!(expected, got, "case {:?}", String::from_utf8_lossy(case));
+        }
+    }
 
     // ---- task-14e-2 / S120-F2 ------------------------------------------------
 

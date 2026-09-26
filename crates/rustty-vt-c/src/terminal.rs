@@ -67,7 +67,6 @@ use rustty_vt::size_report;
 use rustty_vt::stream_terminal::{Handler, Stream};
 use rustty_vt::terminal::{Colors, Terminal as ZigTerminal};
 use rustty_vt::terminal::{Options as ZigTerminalOptions, ScrollViewport as ZigScrollViewport};
-use std::collections::HashSet;
 use std::ffi::c_void;
 use std::mem::{align_of, offset_of, size_of};
 use std::os::raw::c_int;
@@ -240,10 +239,19 @@ pub struct TerminalWrapper {
     pub terminfo_name_buf: [u8; rustty_vt::stream_terminal::MAX_TERMINFO_NAME_BYTES],
     pub stream: Stream<'static>,
     pub effects: Effects,
-    pub tracked_grid_refs: HashSet<*mut TrackedGridRef>,
+    // tracked_grid_refs: std.AutoArrayHashMapUnmanaged(*TrackedGridRef, void) = .{},
+    // PORT NOTE (parity tail S7-4): grown through the terminal's allocator
+    // (`t.gpa()`, the caller's), which the map is bound to in `wrap`.
+    pub tracked_grid_refs: WrapperSet<*mut TrackedGridRef>,
     // searches: std.AutoArrayHashMapUnmanaged(*search_c.SearchWrapper, void) = .{},
-    pub searches: HashSet<*mut SearchWrapper>,
+    // (the terminal's allocator too: the search's registration is charged to
+    // the terminal, N262.)
+    pub searches: WrapperSet<*mut SearchWrapper>,
 }
+
+/// `std.AutoArrayHashMapUnmanaged(K, void)` over the terminal's allocator
+/// handle: the wrapper's registries of live tracked refs and searches.
+pub type WrapperSet<K> = rustty_vt::alloc::AArrayHashMap<K, ()>;
 
 /// C callback state for terminal effects. Most trampolines are always
 /// installed on the stream handler; they check these fields and no-op when
@@ -760,8 +768,9 @@ struct ClipboardWriteCtx<'a> {
 //
 // PORT NOTE (R9 callback-ctx): stack-lifetime, like `ClipboardWriteCtx` above
 // (and module-scoped for the same reason). `wrapper` is carried so the reply
-// trampoline can allocate through `ctx.wrapper.terminal.gpa()` (rustty: the
-// infallible `Vec`, so the field is a parity carry); it is a raw pointer,
+// trampoline can allocate through `ctx.wrapper.terminal.gpa()` (rustty reads
+// the same allocator through `handler.terminal`, so the field is a parity
+// carry; parity tail S7-4); it is a raw pointer,
 // never re-borrowed as `&mut` (the wrapper's stream-handler call chain is
 // live on the same wrapper — the interleaved-alias shape of the
 // `shaper-hook-sb-clean-interleave` memory).
@@ -995,10 +1004,8 @@ impl Effects {
 
         // Most protocols currently produce one representation, so keep that
         // path allocation-free while supporting arbitrary multi-MIME writes.
-        // PORT NOTE: the reference's `gpa().alloc(...) catch return
-        // write.reply(.io_error)` OOM arm has no rustty analog — a `Vec`
-        // aborts on OOM (DG5 abort policy), so the past-4 path is an
-        // infallible `Vec`.
+        // (parity tail S7-4: past 4 the array is allocated through the
+        // terminal's `gpa()`, fallibly: `catch return write.reply(.io_error)`.)
         let to_c = |content: &clipboard::Content<'_>| ClipboardContent {
             mime: LibString {
                 ptr: content.mime.as_ptr(),
@@ -1020,14 +1027,28 @@ impl Effects {
                 len: 0,
             },
         }; 4];
-        let heap_contents: Vec<ClipboardContent>;
+        let mut heap_contents: rustty_vt::alloc::AVec<ClipboardContent>;
         let contents: &[ClipboardContent] = if write.contents.len() <= stack_contents.len() {
             for (dst, content) in stack_contents.iter_mut().zip(write.contents) {
                 *dst = to_c(content);
             }
             &stack_contents[..write.contents.len()]
         } else {
-            heap_contents = write.contents.iter().map(to_c).collect();
+            // wrapper.terminal.gpa().alloc(ClipboardContent, write.contents.len)
+            //     catch return write.reply(.io_error);
+            // defer wrapper.terminal.gpa().free(contents);
+            // SAFETY: `handler.terminal` is the live terminal; raw reads.
+            let gpa = unsafe { (*(*handler.terminal).screens.active).alloc };
+            heap_contents = rustty_vt::alloc::AVec::new_in(gpa);
+            if heap_contents
+                .try_reserve_exact(write.contents.len())
+                .is_err()
+            {
+                return write.reply(handler, clipboard::WriteResult::IoError);
+            }
+            for content in write.contents {
+                heap_contents.push(to_c(content));
+            }
             &heap_contents
         };
 
@@ -1122,11 +1143,26 @@ impl Effects {
         // Requests carry a handful of MIME types, so keep the common case
         // allocation-free. On OOM the request goes unanswered and the
         // handler replies with an empty clipboard.
-        // PERF(port): `std.heap.stackFallback(128, gpa)` — the stack-first
-        // allocation is ported as a plain `Vec` (which also makes the
-        // reference's `log.warn` OOM arm unreachable: a `Vec` aborts on OOM,
-        // DG5).
-        let mimes: Vec<LibString> = read.mimes.iter().map(|m| LibString::init(m)).collect();
+        // var sfa = std.heap.stackFallback(128, wrapper.terminal.gpa());
+        // const alloc = sfa.get();
+        // const mimes = alloc.alloc(lib.String, read.mimes.len) catch {
+        //     log.warn("out of memory converting clipboard read request", .{});
+        //     return;
+        // };
+        // defer alloc.free(mimes);
+        // (parity tail S7-4: `alloc::StackFallback` over the terminal's `gpa()`.)
+        // SAFETY: `handler.terminal` is the live terminal; raw reads.
+        let gpa = unsafe { (*(*handler.terminal).screens.active).alloc };
+        let sfa = rustty_vt::alloc::StackFallback::<128>::new(gpa);
+        let mut mimes: allocator_api2::vec::Vec<LibString, &rustty_vt::alloc::StackFallback<128>> =
+            allocator_api2::vec::Vec::new_in(&sfa);
+        if mimes.try_reserve_exact(read.mimes.len()).is_err() {
+            log::warn!(target: LOG_SCOPE, "out of memory converting clipboard read request");
+            return;
+        }
+        for m in read.mimes {
+            mimes.push(LibString::init(m));
+        }
 
         // const ctx: ClipboardReadCtx = .{ .read = read, .wrapper = wrapper };
         // (Derived last: nothing touches `handler` again until `func` returns.)
@@ -1208,25 +1244,47 @@ impl Effects {
         // allocation-free while supporting arbitrary multi-MIME replies.
         // On OOM we don't reply and the handler answers with an empty
         // clipboard.
-        // PERF(port): `std.heap.stackFallback(256, ctx.wrapper.terminal.gpa())`
-        // — ported as plain `Vec`s (whose OOM aborts, DG5, so the reference's
-        // `log.warn`-and-return arms are unreachable). The gpa reached through
-        // `ctx.wrapper` is rustty's Global allocator; no wrapper deref is
-        // needed, and none is performed (no alias interleaving with the live
-        // handler call chain).
+        // var sfa = std.heap.stackFallback(256, ctx.wrapper.terminal.gpa());
+        // const alloc = sfa.get();
+        // const contents = alloc.alloc(clipboard.Content, c_contents.len) catch {
+        //     log.warn("out of memory converting clipboard read reply", .{});
+        //     return;
+        // };
+        // defer alloc.free(contents);
+        // ...
+        // const available = alloc.alloc([]const u8, c_available.len) catch { ...same... };
+        // defer alloc.free(available);
+        // (parity tail S7-4: `alloc::StackFallback` over the terminal's
+        // `gpa()`, read through the handler's raw terminal pointer: no wrapper
+        // deref and no `&mut` alias of the live call chain.)
+        // SAFETY: `handler.terminal` is the live terminal; raw reads.
+        let gpa = unsafe { (*(*handler.terminal).screens.active).alloc };
+        let sfa = rustty_vt::alloc::StackFallback::<256>::new(gpa);
+        let mut contents: allocator_api2::vec::Vec<
+            clipboard::Content<'_>,
+            &rustty_vt::alloc::StackFallback<256>,
+        > = allocator_api2::vec::Vec::new_in(&sfa);
+        if contents.try_reserve_exact(c_contents.len()).is_err() {
+            log::warn!(target: LOG_SCOPE, "out of memory converting clipboard read reply");
+            return;
+        }
         // SAFETY: each `LibString`/`ClipboardContent` names borrowed C memory
         // valid for this call.
-        let contents: Vec<clipboard::Content<'_>> = c_contents
-            .iter()
-            .map(|c_content| clipboard::Content {
+        for c_content in c_contents {
+            contents.push(clipboard::Content {
                 mime: unsafe { std::slice::from_raw_parts(c_content.mime.ptr, c_content.mime.len) },
                 data: unsafe { std::slice::from_raw_parts(c_content.data.ptr, c_content.data.len) },
-            })
-            .collect();
-        let available: Vec<&[u8]> = c_available
-            .iter()
-            .map(|c_mime| unsafe { std::slice::from_raw_parts(c_mime.ptr, c_mime.len) })
-            .collect();
+            });
+        }
+        let mut available: allocator_api2::vec::Vec<&[u8], &rustty_vt::alloc::StackFallback<256>> =
+            allocator_api2::vec::Vec::new_in(&sfa);
+        if available.try_reserve_exact(c_available.len()).is_err() {
+            log::warn!(target: LOG_SCOPE, "out of memory converting clipboard read reply");
+            return;
+        }
+        for c_mime in c_available {
+            available.push(unsafe { std::slice::from_raw_parts(c_mime.ptr, c_mime.len) });
+        }
 
         // read.reply(.{ .success = .{ .contents = contents, .available = available, .remember = reply.remember } });
         read.reply(
@@ -1762,14 +1820,19 @@ unsafe fn wrap(
                 // (a zeroed seed — never observed before `set(.terminfo_name)`
                 // overwrites the prefix it then publishes)
                 terminfo_name_buf: [0; rustty_vt::stream_terminal::MAX_TERMINFO_NAME_BYTES],
-                stream: Stream::init(rustty_vt::stream::Options {
-                    allocator: Some(rustty_lib::allocator::ZigAllocatorRef::new(alloc)),
-                    handler,
-                    continuation_max_bytes: Some(continuation_max_bytes),
-                }),
+                // (parity tail S7-4: the continuation tracker grows through
+                // the same caller allocator, `Stream::init_in`.)
+                stream: Stream::init_in(
+                    rustty_vt::stream::Options {
+                        allocator: Some(rustty_lib::allocator::ZigAllocatorRef::new(alloc)),
+                        handler,
+                        continuation_max_bytes: Some(continuation_max_bytes),
+                    },
+                    capture_alloc,
+                ),
                 effects: Effects::default(),
-                tracked_grid_refs: HashSet::new(),
-                searches: HashSet::new(),
+                tracked_grid_refs: WrapperSet::new_in(capture_alloc),
+                searches: WrapperSet::new_in(capture_alloc),
             },
         )
     };
@@ -1885,7 +1948,11 @@ pub enum FromDecodedError {
 // arm) is N/A — see the `Io` PORT NOTE. The reference `alloc` is the decoder's
 // resolved allocator; rustty passes the decoder's stored C-allocator COPY and
 // builds a fresh F-008 holder here, so the produced terminal owns its own
-// holder exactly like a `new`-created one (`free` reclaims it).
+// holder exactly like a `new`-created one (`free` reclaims it). The decoded
+// terminal was built over the same allocator as the runtime handle (parity
+// tail S7-4: the snapshot decoder passes `lib.alloc.default(alloc_)` to
+// `ready`), so its internals, like a `new`-created terminal's, grow through
+// the caller's allocator.
 ///
 /// # Safety
 /// `alloc_`, if provided, must reference a valid `CAllocator`.
@@ -1910,6 +1977,14 @@ pub unsafe fn from_decoded(
     // native.* = decoded.toOwned();
     // SAFETY: `terminal_ptr` is valid uninitialized `ZigTerminal` storage.
     unsafe { std::ptr::write(terminal_ptr, decoded.to_owned()) };
+    // The decoded terminal's allocator is the one the wrapper stores below.
+    // SAFETY: `terminal_ptr` holds the transferred terminal; `alloc_` is the
+    // caller's allocator (the function's contract).
+    unsafe {
+        (*terminal_ptr)
+            .gpa()
+            .debug_assert_same(rustty_vt::alloc::default(alloc_))
+    };
 
     // const continuation = switch (decoded.continuation) {
     //     .ground => "",
@@ -1946,8 +2021,8 @@ pub unsafe fn from_decoded(
         Err(_oom) => {
             // native.deinit(alloc); alloc.destroy(native); io.deinit(alloc);
             // PORT NOTE: `deinit` takes the allocator the decoded terminal was
-            // built with (the snapshot decoder's; routing it is S7-4's), which
-            // the terminal records as `gpa()`.
+            // built with (the snapshot decoder's, the caller's), which the
+            // terminal records as `gpa()`.
             // SAFETY: `terminal_ptr` holds the transferred terminal.
             unsafe {
                 let gpa = (*terminal_ptr).gpa();
@@ -2421,7 +2496,7 @@ unsafe fn set_continuation_max_bytes(wrapper: *mut TerminalWrapper, max_bytes: u
             // Once a retained prefix is discarded it cannot be reconstructed
             // from parser state alone. Mark it broken until Stream observes a
             // ground state or a new replay-safe sequence start.
-            tracker.bytes.clear();
+            tracker.bytes.clear_retaining_capacity();
             tracker.broken = true;
         }
         return;
@@ -2430,10 +2505,12 @@ unsafe fn set_continuation_max_bytes(wrapper: *mut TerminalWrapper, max_bytes: u
     // Enabling from zero starts an empty tracker owned by the terminal's
     // allocator. It can immediately track only if no earlier bytes are needed.
     // wrapper.stream.continuation = .init(wrapper.terminal.gpa(), max_bytes);
-    // SAFETY: `wrapper` is live (caller contract).
+    // SAFETY: `wrapper` is live (caller contract); raw reads of its terminal.
     unsafe {
-        (*wrapper).stream.continuation =
-            Some(rustty_vt::stream_continuation::Tracker::init(max_bytes));
+        let gpa = (*(*(*wrapper).terminal).screens.active).alloc;
+        (*wrapper).stream.continuation = Some(rustty_vt::stream_continuation::Tracker::init(
+            gpa, max_bytes,
+        ));
         if !(*wrapper).stream.ground() {
             // The parser was already mid-sequence while tracking was disabled, so
             // exporting now would omit an unknown prefix.
@@ -4455,21 +4532,24 @@ pub unsafe fn grid_ref_track(
     //     alloc.destroy(ref);
     //     return .out_of_memory;
     // };
-    // PORT NOTE: `putNoClobber` asserts the key is absent (a fresh heap ptr is
-    // always unique); the rustty `HashSet::insert` returns `true` for new keys.
-    // PORT NOTE (parity S179-F3): `try_reserve` is the fallible half of the
-    // map's growth, so the reference's `catch` arm is reachable, as in
-    // `search::new` (S4-F3). The registry itself stays on the Rust heap
-    // (S176-F1's allocator adapter).
+    // PORT NOTE (parity S179-F3, parity tail S7-4): `try_put_no_clobber` is
+    // the fallible `putNoClobber` (the key is a fresh heap pointer, so it is
+    // absent), so the reference's `catch` arm is reachable, as in
+    // `search::new` (S4-F3). The registry grows through the terminal's
+    // allocator, bound in `wrap`.
     #[cfg(test)]
     let reserved = track_tw_check().and_then(|()| unsafe {
         (*terminal_)
             .tracked_grid_refs
-            .try_reserve(1)
+            .try_put_no_clobber(ref_ptr, ())
             .map_err(|_| TrackRegistryFull)
     });
     #[cfg(not(test))]
-    let reserved = unsafe { (*terminal_).tracked_grid_refs.try_reserve(1) };
+    let reserved = unsafe {
+        (*terminal_)
+            .tracked_grid_refs
+            .try_put_no_clobber(ref_ptr, ())
+    };
     if reserved.is_err() {
         // SAFETY: as above; `ref_ptr` was just created with `alloc` and has
         // not been handed out.
@@ -4477,9 +4557,6 @@ pub unsafe fn grid_ref_track(
         unsafe { crate::cwrap::destroy(alloc.as_ref(), ref_ptr) };
         return Result::OutOfMemory;
     }
-    // SAFETY: `tracked_grid_refs` is a sibling field of the live wrapper.
-    let inserted = unsafe { (*terminal_).tracked_grid_refs.insert(ref_ptr) };
-    debug_assert!(inserted);
 
     // out.* = ref;
     unsafe { *out_ref = ref_ptr };
@@ -4608,12 +4685,12 @@ pub unsafe fn free(terminal_: Terminal) {
     // SAFETY: each tracked-ref pointer was inserted by `grid_ref_track` and
     // is still live (it back-references this wrapper); detach it so a later
     // tracked-ref free does not dereference the freed terminal.
-    for &ref_ in unsafe { (*terminal_).tracked_grid_refs.iter() } {
+    for &ref_ in unsafe { (*terminal_).tracked_grid_refs.keys() } {
         unsafe { (*ref_).terminal = std::ptr::null_mut() };
     }
-    // wrapper.tracked_grid_refs.deinit(alloc); — the HashSet frees when the
-    // wrapper value drops below.
-    unsafe { (*terminal_).tracked_grid_refs.clear() };
+    // wrapper.tracked_grid_refs.deinit(alloc);
+    // (the map frees now, through the allocator it was bound to in `wrap`.)
+    unsafe { (*terminal_).tracked_grid_refs.clear_and_free() };
 
     // for (wrapper.searches.keys()) |search| search.terminal = null;
     // PORT NOTE (`f0c918fc4`): detach every registered search so a later
@@ -4623,12 +4700,12 @@ pub unsafe fn free(terminal_: Terminal) {
     // (no `&mut SearchWrapper` exists anywhere; `search.rs` SB note).
     // SAFETY: each search pointer was inserted by `search::new` and is still
     // live (a freed search unregisters itself first).
-    for &search in unsafe { (*terminal_).searches.iter() } {
+    for &search in unsafe { (*terminal_).searches.keys() } {
         unsafe { (*search).terminal = std::ptr::null_mut() };
     }
-    // wrapper.searches.deinit(alloc); — the HashSet frees when the wrapper
-    // value drops below.
-    unsafe { (*terminal_).searches.clear() };
+    // wrapper.searches.deinit(alloc);
+    // (the map frees now, through the allocator it was bound to in `wrap`.)
+    unsafe { (*terminal_).searches.clear_and_free() };
 
     // wrapper.stream.deinit();
     unsafe { (*terminal_).stream.deinit() };
@@ -11307,8 +11384,20 @@ mod tests {
     /// `gpa()`-grown lists), OSC 8 hyperlinks (the cursor's heap hyperlink),
     /// the alternate screen (a second `Screen` from `ScreenSet.getInit`), kitty
     /// drag and drop state, wide tab stops after a resize past 512 columns, a
-    /// tracked grid ref (a pin and the tracked-pin set), and a full reset.
-    fn sweep_corpus(t: Terminal) -> Vec<Result> {
+    /// tracked grid ref (a pin and the tracked-pin set), a search (the
+    /// terminal's `searches` registry), and a full reset.
+    ///
+    /// Parity tail S7-4 adds: Kitty graphics (a transmit-and-display, a chunked
+    /// transmit, an animation frame and a composition, a display and an
+    /// uppercase delete), a glyph protocol registration (the request bytes and
+    /// the decoded outline), an OSC 52 write and a Kitty clipboard write
+    /// transaction (both through the installed clipboard effect), a
+    /// five-representation Kitty clipboard write (the C trampoline's array past
+    /// its four stack slots) and a Kitty clipboard read whose reply spills the
+    /// reply trampoline's stack buffer, continuation tracking (the tracker's
+    /// reservation and growth), a color response larger than its stack buffer,
+    /// and XTGETTCAP / DECRQSS.
+    fn sweep_corpus(t: Terminal, before_reset: &dyn Fn(Terminal)) -> Vec<Result> {
         // A smaller corpus under Miri (the design's "small-corpus instance");
         // it still reaches every family below.
         let (lines, more_lines) = if cfg!(miri) { (4, 2) } else { (60, 40) };
@@ -11345,6 +11434,65 @@ mod tests {
         // destroyed by `free`.
         vtw(t, b"\x1B]72;t=a;text/plain text/uri-list\x1B\\");
         vtw(t, b"\x1B]72;t=m:o=1;text/plain\x1B\\");
+        // Kitty graphics.
+        vtw(t, b"\x1B_Ga=T,f=24,s=1,v=1,i=1;/wAA\x1B\\");
+        vtw(t, b"\x1B_Ga=t,f=24,s=2,v=1,i=2,m=1;/wAA\x1B\\");
+        vtw(t, b"\x1B_Gm=0;AAD/\x1B\\");
+        vtw(t, b"\x1B_Ga=f,i=1,f=24,s=1,v=1;AAD/\x1B\\");
+        vtw(t, b"\x1B_Ga=c,i=1,r=1,c=2,w=1,h=1\x1B\\");
+        vtw(t, b"\x1B_Ga=p,i=2\x1B\\");
+        vtw(t, b"\x1B_Ga=d,d=I,i=2\x1B\\");
+        // A glyph protocol registration: a one-contour, three-point outline.
+        vtw(
+            t,
+            b"\x1B_25a1;r;cp=e0a0;AAEAAAAAAGQAZAACAAABAQEAAABk/84AAAAAAGQ=\x1B\\",
+        );
+        // Clipboard writes (the sweep installs a clipboard effect).
+        vtw(t, b"\x1B]52;c;aGVsbG8=\x1B\\");
+        vtw(t, b"\x1B]5522;type=write\x1B\\");
+        vtw(
+            t,
+            b"\x1B]5522;type=wdata:mime=dGV4dC9wbGFpbg==;R2hvc3Q=\x1B\\",
+        );
+        vtw(t, b"\x1B]5522;type=wdata\x1B\\");
+        vtw(t, b"\x1B]5522;type=write\x1B\\");
+        for mime in ["dGV4dC9h", "dGV4dC9i", "dGV4dC9j", "dGV4dC9k", "dGV4dC9l"] {
+            vtw(
+                t,
+                format!("\x1B]5522;type=wdata:mime={mime};eA==\x1B\\").as_bytes(),
+            );
+        }
+        vtw(t, b"\x1B]5522;type=wdata\x1B\\");
+        vtw(t, b"\x1B]5522;type=read;dGV4dC9wbGFpbg==\x1B\\");
+        // Continuation tracking: past `growCapacity(4096)` (6272 bytes on
+        // 64-bit targets) the suffix grows beyond the tracker's initial
+        // reservation (under Miri only the reservation).
+        let (max, unfinished) = if cfg!(miri) {
+            (64usize, 40)
+        } else {
+            (16384, 7000)
+        };
+        results.push(unsafe {
+            set(
+                t,
+                Option_::ContinuationMaxBytes,
+                &max as *const usize as *const c_void,
+            )
+        });
+        let mut csi = b"\x1B[".to_vec();
+        csi.extend(std::iter::repeat_n(b'1', unfinished));
+        vtw(t, &csi);
+        vtw(t, b"m");
+        // A color response past its 1024-byte stack buffer.
+        let mut queries = b"\x1B]4".to_vec();
+        for i in 0..64 {
+            queries.extend_from_slice(format!(";{i};?").as_bytes());
+        }
+        queries.extend_from_slice(b"\x1B\\");
+        vtw(t, &queries);
+        // DCS: XTGETTCAP ("TN") and DECRQSS (SGR).
+        vtw(t, b"\x1BP+q544e\x1B\\");
+        vtw(t, b"\x1BP$qm\x1B\\");
         results.push(unsafe { resize(t, 600, 30, 8, 16) });
         vtw(t, b"\x1B[3g\x1B[1;590H\x1BH\r\t\tafter tabs\r\n");
         let mut ref_: crate::grid_ref_tracked::CTrackedGridRef = std::ptr::null_mut();
@@ -11357,16 +11505,339 @@ mod tests {
                 &mut ref_,
             )
         });
+        // A search over the caller's allocator registers itself in the
+        // terminal's `searches` map (grown through the terminal's allocator).
+        // SAFETY: `t` is the live wrapper; its allocator copy is read out.
+        let search_alloc: Option<CAllocator> = unsafe { (*t).c_alloc };
+        let mut search: crate::search::Search = std::ptr::null_mut();
+        results.push(unsafe { crate::search::new(search_alloc.as_ref(), &mut search, t) });
         for i in 0..more_lines {
             vtw(t, format!("more {i:03}\r\n").as_bytes());
         }
         results.push(unsafe { resize(t, 80, 24, 8, 16) });
+        before_reset(t);
         vtw(t, b"\x1Bc");
         vtw(t, b"\x1B]2;after reset\x1B\\done");
         if !ref_.is_null() {
             unsafe { crate::grid_ref_tracked::tracked_grid_ref_free(ref_) };
         }
+        if !search.is_null() {
+            unsafe { crate::search::free(search) };
+        }
         results
+    }
+
+    thread_local! {
+        /// Clipboard writes the sweep's effect accepted (this thread's).
+        static SWEEP_CLIPBOARD_WRITES: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+        /// Clipboard reads the sweep's effect served (this thread's).
+        static SWEEP_CLIPBOARD_READS: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+    }
+
+    // Parity tail S7-4 (routing evidence, no reference counterpart): the
+    // clipboard trampolines allocate their C arrays through the terminal's
+    // `gpa()`. A write of five representations spills past the four stack
+    // slots into one 160-byte array on the caller's allocator; four stay on
+    // the stack. A read reply of nine contents spills past
+    // `stackFallback(256, gpa)` (8 x 32 bytes fit) into exactly one extra
+    // allocation. Every spilled byte is returned.
+    #[test]
+    fn clipboard_trampolines_route_through_the_terminals_allocator() {
+        use rustty_vt::alloc::testing::CountingAllocator;
+        thread_local! {
+            static COUNTING: core::cell::Cell<*const CountingAllocator> =
+                const { core::cell::Cell::new(std::ptr::null()) };
+            static WRITE_CONTENTS: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+            static WRITE_CALLS: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+            static REPLY_CONTENTS: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+            static REPLY_ALLOCS: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+        }
+        fn counting() -> &'static CountingAllocator {
+            // SAFETY: set to the test's live allocator for the test's body.
+            unsafe { &*COUNTING.with(|c| c.get()) }
+        }
+        extern "C" fn write_pty(_: Terminal, _: *mut c_void, _: *const u8, _: usize) {}
+        extern "C" fn clipboard_write(_: Terminal, _: *mut c_void, request: *const ClipboardWrite) {
+            unsafe {
+                WRITE_CONTENTS.with(|c| c.set((*request).contents_len));
+                WRITE_CALLS.with(|c| c.set(counting().alloc_calls.get()));
+                ((*request).reply)(
+                    request,
+                    &ClipboardWriteReply {
+                        size: std::mem::size_of::<ClipboardWriteReply>(),
+                        result: clipboard::WriteStatus::Success,
+                        remember: false,
+                    },
+                );
+            }
+        }
+        extern "C" fn clipboard_read(_: Terminal, _: *mut c_void, request: *const ClipboardRead) {
+            let n = REPLY_CONTENTS.with(|c| c.get());
+            let contents = [ClipboardContent {
+                mime: LibString::init(b"text/plain"),
+                data: LibString::init(b"x"),
+            }; 9];
+            let before = counting().alloc_calls.get();
+            unsafe {
+                ((*request).reply)(
+                    request,
+                    &ClipboardReadReply {
+                        size: std::mem::size_of::<ClipboardReadReply>(),
+                        result: clipboard::ReadStatus::Success,
+                        contents: contents.as_ptr(),
+                        contents_len: n,
+                        available: std::ptr::null(),
+                        available_len: 0,
+                        remember: false,
+                    },
+                );
+            }
+            REPLY_ALLOCS.with(|c| c.set(counting().alloc_calls.get() - before));
+        }
+
+        let counting_alloc = CountingAllocator::over_heap();
+        COUNTING.with(|c| c.set(&counting_alloc));
+        let calloc = counting_alloc.allocator();
+        let mut t: Terminal = std::ptr::null_mut();
+        assert_eq!(Result::Success, unsafe {
+            new(&calloc as *const CAllocator, &mut t, 80, 24)
+        });
+        unsafe {
+            assert_eq!(
+                Result::Success,
+                set(t, Option_::WritePty, write_pty as *const c_void)
+            );
+            assert_eq!(
+                Result::Success,
+                set(t, Option_::ClipboardWrite, clipboard_write as *const c_void)
+            );
+            assert_eq!(
+                Result::Success,
+                set(t, Option_::ClipboardRead, clipboard_read as *const c_void)
+            );
+        }
+        assert_eq!(32, std::mem::size_of::<ClipboardContent>());
+
+        // Writes: four representations stay on the stack, five spill one
+        // allocation more before the callback runs.
+        let mut spills = [0usize; 2];
+        for (i, (n, mimes)) in [0usize, 1].into_iter().zip([
+            (
+                4usize,
+                &["dGV4dC9h", "dGV4dC9i", "dGV4dC9j", "dGV4dC9k"][..],
+            ),
+            (
+                5,
+                &["dGV4dC9h", "dGV4dC9i", "dGV4dC9j", "dGV4dC9k", "dGV4dC9l"][..],
+            ),
+        ]) {
+            vtw(t, b"\x1B]5522;type=write:id=w\x1B\\");
+            for m in mimes {
+                vtw(
+                    t,
+                    format!("\x1B]5522;type=wdata:mime={m};eA==\x1B\\").as_bytes(),
+                );
+            }
+            let live = counting_alloc.live_bytes.get();
+            let before = counting_alloc.alloc_calls.get();
+            vtw(t, b"\x1B]5522;type=wdata\x1B\\");
+            spills[i] = WRITE_CALLS.with(|c| c.get()) - before;
+            assert_eq!(n, WRITE_CONTENTS.with(|c| c.get()));
+            assert!(
+                counting_alloc.live_bytes.get() <= live,
+                "the array is freed"
+            );
+        }
+        assert_eq!(spills[0] + 1, spills[1], "five representations spill once");
+
+        // Read replies: eight contents fit the 256-byte buffer, nine spill one
+        // allocation more.
+        let mut allocs = [0usize; 2];
+        for (i, n) in [8usize, 9].into_iter().enumerate() {
+            REPLY_CONTENTS.with(|c| c.set(n));
+            vtw(t, b"\x1B]5522;type=read:id=r;dGV4dC9wbGFpbg==\x1B\\");
+            allocs[i] = REPLY_ALLOCS.with(|c| c.get());
+        }
+        assert_eq!(allocs[0] + 1, allocs[1], "nine contents spill once");
+
+        unsafe { free(t) };
+        assert_eq!(0, counting_alloc.live_bytes.get(), "every byte is returned");
+        COUNTING.with(|c| c.set(std::ptr::null()));
+    }
+
+    // Parity tail S7-4 (routing evidence, no reference counterpart): enabling
+    // continuation tracking builds the tracker over the terminal's allocator
+    // (`.init(wrapper.terminal.gpa(), max_bytes)`): its best-effort
+    // `ensureTotalCapacity(4096)` reservation (`growCapacity(4096)` bytes) and
+    // its growth reach the caller's allocator, and disabling or `free` returns
+    // every byte.
+    #[test]
+    fn continuation_tracker_routes_through_the_terminals_allocator() {
+        use rustty_vt::alloc::testing::CountingAllocator;
+        let counting = CountingAllocator::over_heap();
+        let calloc = counting.allocator();
+        let mut t: Terminal = std::ptr::null_mut();
+        assert_eq!(Result::Success, unsafe {
+            new(&calloc as *const CAllocator, &mut t, 80, 24)
+        });
+        let live = counting.live_bytes.get();
+        let before = counting.alloc_calls.get();
+        let max: usize = 16384;
+        assert_eq!(Result::Success, unsafe {
+            set(
+                t,
+                Option_::ContinuationMaxBytes,
+                &max as *const usize as *const c_void,
+            )
+        });
+        assert_eq!(before + 1, counting.alloc_calls.get(), "the reservation");
+        let first = rustty_vt::alloc::ArrayListUnmanaged::<u8>::grow_capacity(4096);
+        #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
+        assert_eq!(6272, first);
+        assert_eq!(Some((first, 0)), counting.last_alloc.get());
+
+        let mut input = vec![b'1'; 7000];
+        input[0..2].copy_from_slice(b"\x1b[");
+        vtw(t, &input);
+        assert!(
+            counting.live_bytes.get() >= live + 7000,
+            "the retained suffix is on the caller's allocator"
+        );
+
+        let zero: usize = 0;
+        assert_eq!(Result::Success, unsafe {
+            set(
+                t,
+                Option_::ContinuationMaxBytes,
+                &zero as *const usize as *const c_void,
+            )
+        });
+        assert_eq!(
+            live,
+            counting.live_bytes.get(),
+            "disabling frees the suffix"
+        );
+        unsafe { free(t) };
+        assert_eq!(0, counting.live_bytes.get());
+    }
+
+    // Parity tail S7-4: the sweep corpus is not vacuous. On a clean run over a
+    // counting C allocator it stores a Kitty image with an animation frame
+    // (and deletes the chunked one), registers the glyph, and hands both
+    // clipboard writes to the effect; every byte it took is returned by `free`.
+    #[test]
+    fn sweep_corpus_reaches_the_s7_4_families() {
+        use rustty_vt::alloc::testing::CountingAllocator;
+        let counting = CountingAllocator::over_heap();
+        let calloc = counting.allocator();
+        let mut t: Terminal = std::ptr::null_mut();
+        assert_eq!(Result::Success, unsafe {
+            new(&calloc as *const CAllocator, &mut t, 80, 24)
+        });
+        sweep_install_effects(t);
+        SWEEP_CLIPBOARD_WRITES.with(|c| c.set(0));
+        SWEEP_CLIPBOARD_READS.with(|c| c.set(0));
+        let reached = |t: Terminal| {
+            // SAFETY: `t` is the live wrapper; raw reads of its terminal and
+            // active screen.
+            unsafe {
+                let term = (*t).terminal;
+                let storage = &(*(*term).screens.active).kitty_images;
+                let img = storage.images.get(&1).expect("image 1 is stored");
+                assert_eq!(
+                    1,
+                    img.animation
+                        .as_ref()
+                        .expect("image 1 animates")
+                        .frames
+                        .len()
+                );
+                assert!(storage.images.get(&2).is_none(), "image 2 was deleted");
+                assert!(
+                    (*term).glyph_glossary.contains(0xE0A0),
+                    "the glyph is registered"
+                );
+                let tracker = (*t)
+                    .stream
+                    .continuation
+                    .as_ref()
+                    .expect("continuation tracking is on");
+                assert!(!tracker.broken);
+                assert_eq!(1, (*t).searches.count(), "the search is registered");
+                assert!(
+                    tracker.bytes.capacity()
+                        > rustty_vt::alloc::ArrayListUnmanaged::<u8>::grow_capacity(4096),
+                    "the suffix grew"
+                );
+            }
+        };
+        for r in sweep_corpus(t, &reached) {
+            assert_eq!(Result::Success, r);
+        }
+        // OSC 52 twice (the long capture and the short write) and the two
+        // Kitty clipboard commits; the Kitty read.
+        assert_eq!(4, SWEEP_CLIPBOARD_WRITES.with(|c| c.get()));
+        assert_eq!(1, SWEEP_CLIPBOARD_READS.with(|c| c.get()));
+        let calls_before_free = counting.alloc_calls.get();
+        unsafe { free(t) };
+        // (S7-3's corpus made 33 allocations; the families above add theirs.)
+        assert!(
+            calls_before_free > 33,
+            "the corpus allocates: {calls_before_free}"
+        );
+        assert_eq!(0, counting.live_bytes.get(), "free returns every byte");
+    }
+
+    /// The effects the sweep corpus exercises: a pty sink, a clipboard writer
+    /// that accepts every write, and a clipboard reader that answers with nine
+    /// contents. Setting them allocates nothing.
+    fn sweep_install_effects(t: Terminal) {
+        extern "C" fn clipboard_read(_: Terminal, _: *mut c_void, request: *const ClipboardRead) {
+            SWEEP_CLIPBOARD_READS.with(|c| c.set(c.get() + 1));
+            let contents = [ClipboardContent {
+                mime: LibString::init(b"text/plain"),
+                data: LibString::init(b"x"),
+            }; 9];
+            // SAFETY: `request` is valid for the callback.
+            unsafe {
+                ((*request).reply)(
+                    request,
+                    &ClipboardReadReply {
+                        size: std::mem::size_of::<ClipboardReadReply>(),
+                        result: clipboard::ReadStatus::Success,
+                        contents: contents.as_ptr(),
+                        contents_len: contents.len(),
+                        available: std::ptr::null(),
+                        available_len: 0,
+                        remember: false,
+                    },
+                )
+            };
+        }
+        extern "C" fn write_pty(_: Terminal, _: *mut c_void, _: *const u8, _: usize) {}
+        extern "C" fn clipboard_write(_: Terminal, _: *mut c_void, request: *const ClipboardWrite) {
+            SWEEP_CLIPBOARD_WRITES.with(|c| c.set(c.get() + 1));
+            // SAFETY: `request` is valid for the callback.
+            unsafe {
+                ((*request).reply)(
+                    request,
+                    &ClipboardWriteReply {
+                        size: std::mem::size_of::<ClipboardWriteReply>(),
+                        result: clipboard::WriteStatus::Success,
+                        remember: false,
+                    },
+                )
+            };
+        }
+        assert_eq!(Result::Success, unsafe {
+            set(t, Option_::WritePty, write_pty as *const c_void)
+        });
+        assert_eq!(Result::Success, unsafe {
+            set(t, Option_::ClipboardWrite, clipboard_write as *const c_void)
+        });
+        assert_eq!(Result::Success, unsafe {
+            set(t, Option_::ClipboardRead, clipboard_read as *const c_void)
+        });
     }
 
     /// One sweep scenario over `failing`: `new`, the corpus, `free`. Asserts
@@ -11384,7 +11855,8 @@ mod tests {
         match r {
             Result::Success => {
                 assert!(!t.is_null());
-                for r in sweep_corpus(t) {
+                sweep_install_effects(t);
+                for r in sweep_corpus(t, &|_| {}) {
                     assert!(
                         matches!(r, Result::Success | Result::OutOfMemory),
                         "{what}: unexpected result {r:?}"
@@ -11463,7 +11935,8 @@ mod tests {
         // remap/resize calls (R); refusing from each n in 0..=R reaches every
         // one of them (and n = R refuses none).
         let clean = FailingAllocator::over_heap(Config::default());
-        let _ = sweep_once(&clean, "remap clean run");
+        // The clean run fails nothing.
+        assert_eq!((false, 0), sweep_once(&clean, "remap clean run"));
         let remaps = clean.resize_index.get();
         assert!(remaps > 0, "the corpus makes no remap/resize call");
         for n in 0..=remaps {
@@ -11471,11 +11944,15 @@ mod tests {
                 resize_fail_index: n,
                 ..Config::default()
             });
-            let (new_failed, _) = sweep_once(&failing, &format!("remap n={n}"));
+            let (new_failed, call_failures) = sweep_once(&failing, &format!("remap n={n}"));
             // A refused remap never fails the scenario: the fallback allocates.
             assert!(
                 !new_failed,
                 "remap n={n}: new must not fail on a refused remap"
+            );
+            assert_eq!(
+                0, call_failures,
+                "remap n={n}: no call reports OUT_OF_MEMORY on a refused remap"
             );
             assert!(
                 failing.resize_index.get() <= n,

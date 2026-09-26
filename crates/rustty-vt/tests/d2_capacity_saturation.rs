@@ -188,7 +188,7 @@ fn kitty_kv_temp_capacity_saturation() {
     // Parser starts in ControlKey; every non-'='/';' byte accumulates into kv_temp.
     // Feed 11 bytes (fills indices 0..=10 exactly) then 4 more to trip the overflow
     // guard. No feed may panic (a Rust OOB write is the #31503-class defect).
-    let mut p = KittyCmdParser::init(1024);
+    let mut p = KittyCmdParser::init(rustty_vt::alloc::Global, 1024);
     for _ in 0..(11 + 4) {
         assert!(
             p.feed(b'a').is_ok(),
@@ -199,7 +199,7 @@ fn kitty_kv_temp_capacity_saturation() {
     // invalid-format error rather than crashing — the observable that the guard,
     // not a panic, absorbed the overflow.
     assert!(
-        p.complete().is_err(),
+        p.complete(rustty_vt::alloc::Global).is_err(),
         "overflowed control key ends in Ignore -> InvalidFormat, proving the guard fired"
     );
 }

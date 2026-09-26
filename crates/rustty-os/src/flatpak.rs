@@ -409,7 +409,8 @@ mod host_command {
             // (`argv`/`cwd`/`env`/the three fds) are read-only after `spawn`.
             unsafe impl Send for SendPtr {}
             let arg = SendPtr(self as *const FlatpakHostCommand);
-            let builder = std::thread::Builder::new().name("flatpak-host-command".to_string());
+            let builder =
+                rustty_zigstd::thread::spawn_config().name("flatpak-host-command".to_string());
             let thread = builder
                 .spawn(move || {
                     let arg = arg;

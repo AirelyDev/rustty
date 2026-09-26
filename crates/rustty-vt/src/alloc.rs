@@ -201,6 +201,189 @@ extern "C" fn failing_remap(
 
 extern "C" fn failing_free(_: *mut core::ffi::c_void, _: *mut u8, _: usize, _: u8, _: usize) {}
 
+/// The inline buffer of a [`StackFallback`], 16-byte aligned so what fits
+/// does not depend on where the buffer lands (a request of up to 16-byte
+/// alignment starts at offset 0). Rust-only (parity tail S7-4b): Zig's
+/// `stackFallback` buffer is a plain `[size]u8`.
+#[repr(C, align(16))]
+struct StackFallbackBuf<const N: usize>([core::mem::MaybeUninit<u8>; N]);
+
+/// `std.heap.stackFallback(N, fallback)`: an allocator that serves requests
+/// from an inline `N`-byte buffer while they fit (bumping through it, as Zig's
+/// `FixedBufferAllocator` does) and from `fallback` otherwise. Freeing the
+/// most recent in-buffer allocation returns its bytes to the buffer; other
+/// in-buffer frees are no-ops, and fallback allocations are freed through
+/// `fallback`. Use it through `&StackFallback` (allocator_api2's `Allocator`).
+///
+/// Rust-only glue for the reference's `var sfa = std.heap.stackFallback(n,
+/// alloc); const a = sfa.get();` (parity tail S7-4): a request that fits the
+/// buffer reaches no allocator, one that does not reaches `fallback`.
+pub struct StackFallback<const N: usize> {
+    buf: core::cell::UnsafeCell<StackFallbackBuf<N>>,
+    end: core::cell::Cell<usize>,
+    fallback: VtAllocator,
+}
+
+impl<const N: usize> StackFallback<N> {
+    /// `std.heap.stackFallback(N, fallback)` (`.get()` starts empty).
+    pub fn new(fallback: VtAllocator) -> StackFallback<N> {
+        StackFallback {
+            buf: core::cell::UnsafeCell::new(StackFallbackBuf(
+                [core::mem::MaybeUninit::uninit(); N],
+            )),
+            end: core::cell::Cell::new(0),
+            fallback,
+        }
+    }
+
+    /// `new`, built in `slot` without moving the buffer: only the end index
+    /// and the fallback are written (the buffer is `MaybeUninit` bytes, so it
+    /// needs no initialization). For large `N` in debug builds, where a
+    /// by-value `new` copies the whole buffer through temporaries (parity tail
+    /// S7-4b, N278: the glyph decode's 64 KiB scratch).
+    pub fn new_in_place(
+        slot: &mut core::mem::MaybeUninit<StackFallback<N>>,
+        fallback: VtAllocator,
+    ) -> &StackFallback<N> {
+        let p = slot.as_mut_ptr();
+        // SAFETY: `p` is valid for writes; `end` and `fallback` are written
+        // before the shared borrow is formed, and `buf` holds `MaybeUninit`
+        // bytes (inside an `UnsafeCell`), for which uninitialized memory is
+        // a valid value. `StackFallback` has no `Drop`, so never dropping the
+        // slot leaks nothing.
+        unsafe {
+            core::ptr::addr_of_mut!((*p).end).write(core::cell::Cell::new(0));
+            core::ptr::addr_of_mut!((*p).fallback).write(fallback);
+            &*p
+        }
+    }
+
+    fn base(&self) -> *mut u8 {
+        self.buf.get() as *mut u8
+    }
+
+    fn owns(&self, ptr: NonNull<u8>) -> bool {
+        let base = self.base() as usize;
+        let p = ptr.as_ptr() as usize;
+        p >= base && p < base + N
+    }
+}
+
+// SAFETY: in-buffer blocks are disjoint ranges of `buf` handed out by bumping
+// `end` (never overlapping a live block), valid while `self` lives, which the
+// `&StackFallback` borrow guarantees; fallback blocks follow the handle's
+// contract. Frees of in-buffer blocks only move `end` back when the block is
+// the last one handed out.
+unsafe impl<const N: usize> ApiAllocator for &StackFallback<N> {
+    fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+        if layout.size() == 0 {
+            return Ok(dangling(layout));
+        }
+        let base = self.base() as usize;
+        let start = (base + self.end.get()).next_multiple_of(layout.align()) - base;
+        if let Some(new_end) = start.checked_add(layout.size()) {
+            if new_end <= N {
+                self.end.set(new_end);
+                // SAFETY: `start..new_end` lies inside `buf` and is not part of
+                // any live block (everything live is below the old `end`).
+                let p = unsafe { NonNull::new_unchecked(self.base().add(start)) };
+                return Ok(NonNull::slice_from_raw_parts(p, layout.size()));
+            }
+        }
+        self.fallback.allocate(layout)
+    }
+
+    unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
+        if layout.size() == 0 {
+            return;
+        }
+        if self.owns(ptr) {
+            let offset = ptr.as_ptr() as usize - self.base() as usize;
+            if offset + layout.size() == self.end.get() {
+                self.end.set(offset);
+            }
+            return;
+        }
+        // SAFETY: a fallback block (the caller's contract).
+        unsafe { self.fallback.deallocate(ptr, layout) };
+    }
+}
+
+/// `std.heap.page_allocator` as a handle: every allocation is its own
+/// page-granular mapping (`rustty_os::page_allocator`), `resize` succeeds
+/// only for the same length and `remap` is refused (Zig's `PageAllocator`
+/// may do either in place; refusing is within the allocator contract, and
+/// callers fall back to alloc + copy + free).
+///
+/// PORT NOTE (parity tail S7-4): the handle's C arm over a process static
+/// vtable, like [`failing`]. Used where the reference names
+/// `std.heap.page_allocator` directly (the inspector's decode buffers). On
+/// Darwin the port's page allocator carries the PageList's VM tag, where the
+/// reference's generic `std.heap.page_allocator` is untagged.
+pub fn page_allocator() -> VtAllocator {
+    // SAFETY: a process static whose vtable forwards to the stateless page
+    // allocator.
+    unsafe { VtAllocator::from_c(NonNull::from(&PAGE.0)) }
+}
+
+static PAGE: SyncCAllocator = SyncCAllocator(CAllocator {
+    ctx: core::ptr::null_mut(),
+    vtable: &PAGE_VTABLE,
+});
+
+static PAGE_VTABLE: VTable = VTable {
+    alloc: page_alloc,
+    resize: page_resize,
+    remap: failing_remap,
+    free: page_free,
+};
+
+fn page_layout(len: usize, alignment: u8) -> Option<Layout> {
+    Layout::from_size_align(len, 1usize << alignment).ok()
+}
+
+extern "C" fn page_alloc(
+    _: *mut core::ffi::c_void,
+    len: usize,
+    alignment: u8,
+    _: usize,
+) -> *mut u8 {
+    let Some(layout) = page_layout(len, alignment) else {
+        return core::ptr::null_mut();
+    };
+    match ApiAllocator::allocate(&rustty_os::page_allocator::page_allocator(), layout) {
+        Ok(p) => p.as_ptr() as *mut u8,
+        Err(_) => core::ptr::null_mut(),
+    }
+}
+
+extern "C" fn page_resize(
+    _: *mut core::ffi::c_void,
+    _: *mut u8,
+    len: usize,
+    _: u8,
+    new_len: usize,
+    _: usize,
+) -> bool {
+    new_len == len
+}
+
+extern "C" fn page_free(
+    _: *mut core::ffi::c_void,
+    memory: *mut u8,
+    len: usize,
+    alignment: u8,
+    _: usize,
+) {
+    let (Some(layout), Some(ptr)) = (page_layout(len, alignment), NonNull::new(memory)) else {
+        return;
+    };
+    // SAFETY: `memory` is a live allocation of `layout` from `page_alloc`
+    // (the vtable contract: frees get the allocation's own length and
+    // alignment).
+    unsafe { ApiAllocator::deallocate(&rustty_os::page_allocator::page_allocator(), ptr, layout) };
+}
+
 // The type AND value spellings (see the module docs). A const and a type alias
 // of the same name live in different namespaces, exactly as a unit struct's
 // name does.
@@ -220,6 +403,76 @@ impl From<ApiGlobal> for VtAllocator {
     fn from(_: ApiGlobal) -> VtAllocator {
         VtAllocator::GLOBAL
     }
+}
+
+/// A vector whose storage is allocated (and freed) through a [`VtAllocator`]
+/// bound at construction: the port's `std.ArrayListUnmanaged(T)` where the
+/// reference always passes the same allocator, and its owned slices (`[]T`
+/// from `alloc.alloc`/`dupe`/`toOwnedSlice`).
+pub type AVec<T> = allocator_api2::vec::Vec<T, VtAllocator>;
+
+/// A single object allocated through a [`VtAllocator`] (`alloc.create(T)`);
+/// dropping it is `alloc.destroy`.
+pub type ABox<T> = allocator_api2::boxed::Box<T, VtAllocator>;
+
+/// `std.AutoArrayHashMapUnmanaged(K, V)` over a [`VtAllocator`] bound at
+/// construction (zigstd's port, S7-3).
+pub type AArrayHashMap<K, V> =
+    rustty_zigstd::array_hash_map::AutoArrayHashMapUnmanaged<K, V, VtAllocator>;
+
+/// Owned bytes allocated through a [`VtAllocator`] (`[]u8` from
+/// `alloc.alloc`/`alloc.dupe`/`toOwnedSlice`).
+pub type Bytes = AVec<u8>;
+
+/// `try alloc.dupe(u8, src)`: one exact-sized, fallible allocation through
+/// `alloc`. An empty `src` allocates nothing (Zig's `alloc(u8, 0)` returns a
+/// zero-length slice without calling the vtable).
+pub fn try_dupe(alloc: VtAllocator, src: &[u8]) -> Result<Bytes, OutOfMemory> {
+    let mut v = Bytes::new_in(alloc);
+    v.try_reserve_exact(src.len()).map_err(|_| OutOfMemory)?;
+    v.extend_copy(src);
+    Ok(v)
+}
+
+/// Bind an unmanaged list to the allocator a reference call site passes.
+///
+/// Zig's `.empty` unmanaged containers hold no allocator: every growing call
+/// passes one, and the contract is that it is always the same. An
+/// allocator_api2 vector binds its allocator at construction, so a list that
+/// starts `.empty` (a `Default` field) is rebound to `alloc` while it owns no
+/// allocation, and afterwards `alloc` is debug-asserted to be the allocator
+/// it was bound to (the design's "bind on first growth", S-7 §4 (B) risk 3).
+#[inline]
+pub fn bind<T>(v: &mut AVec<T>, alloc: VtAllocator) {
+    if v.capacity() == 0 {
+        if *v.allocator() != alloc {
+            *v = AVec::new_in(alloc);
+        }
+    } else {
+        v.allocator().debug_assert_same(alloc);
+    }
+}
+
+/// A copy of `src` on the Rust heap (the Global arm), aborting on allocation
+/// failure like `<[u8]>::to_vec`. Rust-only convenience for code that builds
+/// allocator-aware byte fields outside any reference allocation site (tests,
+/// the application's Global-arm fixtures).
+pub fn heap_bytes(src: &[u8]) -> Bytes {
+    let mut v = Bytes::new_in(VtAllocator::GLOBAL);
+    v.extend_copy(src);
+    v
+}
+
+/// A box on the Rust heap (the Global arm), aborting on allocation failure
+/// like `Box::new`; the [`heap_bytes`] counterpart for single objects.
+pub fn heap_box<T>(value: T) -> ABox<T> {
+    ABox::new_in(value, VtAllocator::GLOBAL)
+}
+
+/// `try alloc.create(T)` + initialization: one fallible allocation through
+/// `alloc`. On failure `value` is dropped.
+pub fn try_create<T>(alloc: VtAllocator, value: T) -> Result<ABox<T>, OutOfMemory> {
+    ABox::try_new_in(value, alloc).map_err(|_| OutOfMemory)
 }
 
 // SAFETY: the Global arm forwards verbatim to allocator_api2's `Global`. The C
@@ -305,6 +558,92 @@ unsafe impl ApiAllocator for VtAllocator {
             None => unsafe { ApiGlobal.shrink(ptr, old_layout, new_layout) },
             // SAFETY: forwarded under the caller's contract.
             Some(c) => unsafe { c_realloc(c, ptr, old_layout, new_layout) },
+        }
+    }
+}
+
+/// The handle behind the raw `std.mem.Allocator` vtable interface of
+/// rustty-datastruct (`rawAlloc`/`rawResize`/`rawRemap`/`rawFree`), so a
+/// `LimitedAllocator` can wrap it as its child: the kitty PNG decode seam's
+/// `LimitedAllocator.init(alloc, max_size)` (parity tail S7-4).
+///
+/// The C arm forwards each raw call to the caller's vtable unchanged (Zig's
+/// `Allocator.rawAlloc` etc. do exactly that). The Global arm is
+/// `sys::GlobalRawAllocator` (the Rust heap, the same heap the handle's Global
+/// arm uses).
+impl rustty_datastruct::limited_allocator::RawAllocator for VtAllocator {
+    fn raw_alloc(
+        &self,
+        len: usize,
+        alignment: rustty_datastruct::limited_allocator::Alignment,
+        ret_addr: usize,
+    ) -> *mut u8 {
+        match self.c {
+            None => crate::sys::GlobalRawAllocator.raw_alloc(len, alignment, ret_addr),
+            Some(c) => {
+                // SAFETY: `from_c`'s contract keeps the struct alive and its
+                // vtable valid; read by value.
+                let CAllocator { ctx, vtable } = unsafe { c.read() };
+                // SAFETY: the vtable contract.
+                unsafe { ((*vtable).alloc)(ctx, len, alignment.0, ret_addr) }
+            }
+        }
+    }
+
+    fn raw_resize(
+        &self,
+        memory: rustty_datastruct::limited_allocator::RawSlice,
+        alignment: rustty_datastruct::limited_allocator::Alignment,
+        new_len: usize,
+        ret_addr: usize,
+    ) -> bool {
+        match self.c {
+            None => crate::sys::GlobalRawAllocator.raw_resize(memory, alignment, new_len, ret_addr),
+            Some(c) => {
+                // SAFETY: as in `raw_alloc`.
+                let CAllocator { ctx, vtable } = unsafe { c.read() };
+                // SAFETY: the vtable contract; `memory` came from this allocator.
+                unsafe {
+                    ((*vtable).resize)(ctx, memory.ptr, memory.len, alignment.0, new_len, ret_addr)
+                }
+            }
+        }
+    }
+
+    fn raw_remap(
+        &self,
+        memory: rustty_datastruct::limited_allocator::RawSlice,
+        alignment: rustty_datastruct::limited_allocator::Alignment,
+        new_len: usize,
+        ret_addr: usize,
+    ) -> *mut u8 {
+        match self.c {
+            None => crate::sys::GlobalRawAllocator.raw_remap(memory, alignment, new_len, ret_addr),
+            Some(c) => {
+                // SAFETY: as in `raw_alloc`.
+                let CAllocator { ctx, vtable } = unsafe { c.read() };
+                // SAFETY: the vtable contract; `memory` came from this allocator.
+                unsafe {
+                    ((*vtable).remap)(ctx, memory.ptr, memory.len, alignment.0, new_len, ret_addr)
+                }
+            }
+        }
+    }
+
+    fn raw_free(
+        &self,
+        memory: rustty_datastruct::limited_allocator::RawSlice,
+        alignment: rustty_datastruct::limited_allocator::Alignment,
+        ret_addr: usize,
+    ) {
+        match self.c {
+            None => crate::sys::GlobalRawAllocator.raw_free(memory, alignment, ret_addr),
+            Some(c) => {
+                // SAFETY: as in `raw_alloc`.
+                let CAllocator { ctx, vtable } = unsafe { c.read() };
+                // SAFETY: the vtable contract; `memory` came from this allocator.
+                unsafe { ((*vtable).free)(ctx, memory.ptr, memory.len, alignment.0, ret_addr) }
+            }
         }
     }
 }
@@ -1492,6 +1831,68 @@ mod tests {
         // SAFETY: live with this layout.
         unsafe { VtAllocator::GLOBAL.deallocate(p.cast(), l(32, 1)) };
         assert_eq!(counting.resize_calls.get(), 2);
+    }
+
+    // Parity tail S7-4: the `std.heap.page_allocator` handle hands out
+    // page-aligned memory, grows by alloc + copy + free (its `remap` is
+    // refused) and frees with the allocation's own layout.
+    // `stackFallback`: requests that fit the buffer reach no allocator,
+    // larger ones (and the overflow of a growing list) reach the fallback,
+    // and every fallback byte is returned.
+    #[test]
+    fn stack_fallback_serves_the_buffer_then_the_fallback() {
+        let counting = CountingAllocator::over_heap();
+        let c = counting.allocator();
+        with_handle(&c, |alloc| {
+            let sfa = StackFallback::<64>::new(alloc);
+            let mut small: AVec<u64, &StackFallback<64>> = AVec::new_in(&sfa);
+            small.try_reserve_exact(4).unwrap();
+            small.extend([1, 2, 3, 4]);
+            assert_eq!(0, counting.alloc_calls.get(), "32 bytes fit the buffer");
+            let mut more: AVec<u8, &StackFallback<64>> = AVec::new_in(&sfa);
+            more.try_reserve_exact(32).unwrap();
+            assert_eq!(0, counting.alloc_calls.get(), "64 bytes still fit");
+            let mut big: AVec<u8, &StackFallback<64>> = AVec::new_in(&sfa);
+            big.try_reserve_exact(1).unwrap();
+            assert_eq!(1, counting.alloc_calls.get(), "the buffer is full");
+            assert_eq!(Some((1, 0)), counting.last_alloc.get());
+            drop(big);
+            drop(more);
+            // The last in-buffer block was returned; a grow past the buffer
+            // moves the list to the fallback.
+            small.try_reserve_exact(100).unwrap();
+            assert_eq!(2, counting.alloc_calls.get());
+            assert_eq!(&[1, 2, 3, 4], small.as_slice());
+            drop(small);
+            assert_eq!(
+                0,
+                counting.live_bytes.get(),
+                "every fallback byte is returned"
+            );
+
+            // A failing fallback surfaces as the allocation error.
+            let sfa = StackFallback::<8>::new(failing());
+            let mut v: AVec<u8, &StackFallback<8>> = AVec::new_in(&sfa);
+            assert!(v.try_reserve_exact(8).is_ok());
+            assert!(v.try_reserve_exact(9).is_err());
+        });
+    }
+
+    #[test]
+    fn page_allocator_handle_allocates_grows_and_frees() {
+        let h = page_allocator();
+        assert!(!h.is_global());
+        let page = l(4096, 4096);
+        let p = h.allocate(page).unwrap();
+        assert_eq!(0, p.as_ptr() as *mut u8 as usize % 4096);
+        // SAFETY: a fresh 4096-byte block.
+        unsafe { core::ptr::write_bytes(p.as_ptr() as *mut u8, 7, 4096) };
+        // SAFETY: the live block of `page`, grown to two pages.
+        let g = unsafe { h.grow(p.cast(), page, l(8192, 4096)) }.unwrap();
+        // SAFETY: the grown block keeps the first page's bytes.
+        assert_eq!(7, unsafe { *(g.as_ptr() as *mut u8).add(4095) });
+        // SAFETY: the live grown block.
+        unsafe { h.deallocate(g.cast(), l(8192, 4096)) };
     }
 
     #[test]

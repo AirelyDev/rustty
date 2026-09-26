@@ -395,7 +395,7 @@ pub unsafe fn new(
     //     return .out_of_memory;
     // };
     // PORT NOTE: `putNoClobber` asserts the key is absent (a fresh heap ptr is
-    // always unique); `HashSet::insert` returns `true` for new keys.
+    // always unique); `try_put_no_clobber` is its fallible spelling.
     //
     // PORT NOTE (parity S4-F3 / S176-F2): the reference's `catch` arm is the
     // map's OWN allocation failing, and `search.h:340-362` documents
@@ -413,11 +413,11 @@ pub unsafe fn new(
     let reserved = register_tw_check().and_then(|()| unsafe {
         (*terminal_wrapper)
             .searches
-            .try_reserve(1)
+            .try_put_no_clobber(wrapper, ())
             .map_err(|_| RegistryFull)
     });
     #[cfg(not(test))]
-    let reserved = unsafe { (*terminal_wrapper).searches.try_reserve(1) };
+    let reserved = unsafe { (*terminal_wrapper).searches.try_put_no_clobber(wrapper, ()) };
     if reserved.is_err() {
         // alloc.destroy(wrapper);
         // PORT NOTE: the `free` pattern — `alloc` was moved into the wrapper by
@@ -433,9 +433,6 @@ pub unsafe fn new(
         // return .out_of_memory;
         return Result::OutOfMemory;
     }
-    // SAFETY: `searches` is a sibling field of the live terminal wrapper.
-    let inserted = unsafe { (*terminal_wrapper).searches.insert(wrapper) };
-    debug_assert!(inserted);
 
     // out.* = wrapper;
     // SAFETY: `out_search` is a non-null valid writable `Search`.
@@ -493,7 +490,7 @@ pub unsafe fn free(search_: Search) {
         //     _ = terminal_wrapper.searches.swapRemove(wrapper);
         // SAFETY: a non-null `terminal` is a live terminal wrapper (it nulls
         // this field before it dies); `searches` is a sibling field.
-        unsafe { (*terminal_wrapper).searches.remove(&search_) };
+        unsafe { (*terminal_wrapper).searches.swap_remove(&search_) };
         //     if (wrapper.search) |*s| s.deinit(terminal_wrapper.terminal);
         let t = unsafe { (*terminal_wrapper).terminal };
         if let Some(s) = unsafe { &mut (*search_).search }.as_mut() {
@@ -2243,6 +2240,39 @@ mod tests {
             free(b);
             terminal_c::free(terminal);
         });
+    }
+
+    // Parity tail S7-4b (routing evidence, no reference counterpart): the
+    // terminal's `searches` registry grows through the TERMINAL's allocator
+    // (`wrapper.searches.putNoClobber(t.gpa(), ..)`, bound in `wrap`), not the
+    // search's: a search created over another allocator registers itself in a
+    // map bound to the terminal's, whose growth is visible there, and freeing
+    // the search and then the terminal returns every byte.
+    #[test]
+    fn search_registry_routes_through_the_terminals_allocator() {
+        use rustty_vt::alloc::testing::CountingAllocator;
+        let counting = CountingAllocator::over_heap();
+        let calloc = counting.allocator();
+        with_test_allocator(|search_alloc| unsafe {
+            let terminal = test_terminal(&calloc);
+            let live = counting.live_bytes.get();
+            let before = counting.alloc_calls.get();
+            let search: Search = test_new_search(search_alloc, terminal, b"Fizz");
+            assert_eq!(1, (*terminal).searches.count());
+            assert_eq!(
+                rustty_vt::alloc::default(Some(&calloc)),
+                *(*terminal).searches.allocator(),
+                "the registry is bound to the terminal's allocator"
+            );
+            assert!(
+                counting.alloc_calls.get() > before && counting.live_bytes.get() > live,
+                "the registry's growth reaches the terminal's allocator"
+            );
+            free(search);
+            assert_eq!(0, (*terminal).searches.count());
+            terminal_c::free(terminal);
+        });
+        assert_eq!(0, counting.live_bytes.get(), "every byte is returned");
     }
 
     // test "search free null"

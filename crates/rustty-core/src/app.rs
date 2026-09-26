@@ -226,7 +226,10 @@ where
         // `-Dfont-backend=freetype` build (no discoverer, no `warmup`). Detach ==
         // dropping the `JoinHandle`.
         if let Some(warmup) = rustty_font_shaper::discovery::DISCOVER_WARMUP {
-            if let Err(err) = std::thread::Builder::new().spawn(warmup).map(drop) {
+            if let Err(err) = rustty_zigstd::thread::spawn_config()
+                .spawn(warmup)
+                .map(drop)
+            {
                 // log.warn("font warmup thread spawn failed err={}", .{err});
                 log::warn!(target: LOG_SCOPE, "font warmup thread spawn failed err={err:?}");
             }
@@ -249,7 +252,7 @@ where
         // OpenGL/WebGL do not), so the probe folds to the same macOS cfg.
         #[cfg(target_os = "macos")]
         {
-            if let Err(err) = std::thread::Builder::new()
+            if let Err(err) = rustty_zigstd::thread::spawn_config()
                 .spawn(rustty_renderer::metal::Metal::warmup)
                 .map(drop)
             {

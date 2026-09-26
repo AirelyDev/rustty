@@ -1525,7 +1525,7 @@ fn spawn_cf_release_thread(
         drop(arg);
         return Err(std::io::Error::other("test fail-point: spawn failed"));
     }
-    std::thread::Builder::new().spawn(move || {
+    rustty_zigstd::thread::spawn_config().spawn(move || {
         // (capture the whole Send wrapper, not its `!Send` pointer field)
         let arg = arg;
         // SAFETY: `arg.0` is the live heap `Thread` `init` created; `deinit`

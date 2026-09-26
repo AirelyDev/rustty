@@ -148,8 +148,12 @@ pub unsafe fn terminal_paste(
 
     // A paste carries a handful of representations, so keep the common
     // case allocation-free.
-    // PERF(port): `std.heap.stackFallback(256, wrapper.terminal.gpa())` — the
-    // stack-first allocation is ported as a plain `Vec`.
+    // var sfa = std.heap.stackFallback(256, wrapper.terminal.gpa());
+    // const alloc = sfa.get();
+    // const mimes = alloc.alloc([]const u8, c_mimes.len) catch return .out_of_memory;
+    // defer alloc.free(mimes);
+    // (parity tail S7-4: `alloc::StackFallback` over the terminal's `gpa()`;
+    // the active screen's allocator is read through the raw wrapper.)
     //
     // PORT NOTE (parity S174-F5): the reference's
     // `alloc.alloc([]const u8, c_mimes.len) catch return .out_of_memory` IS an
@@ -159,7 +163,11 @@ pub unsafe fn terminal_paste(
     // pressure to reach: an absurd `mimes_len` alone fails the reservation.
     // `try_reserve_exact` is that fallible allocation; it runs BEFORE the
     // elements are read, matching the reference's allocate-then-fill order.
-    let mut mimes: Vec<&[u8]> = Vec::new();
+    // SAFETY: `terminal_` is a live wrapper (caller contract); raw reads.
+    let gpa = unsafe { (*(*(*terminal_).terminal).screens.active).alloc };
+    let sfa = rustty_vt::alloc::StackFallback::<256>::new(gpa);
+    let mut mimes: allocator_api2::vec::Vec<&[u8], &rustty_vt::alloc::StackFallback<256>> =
+        allocator_api2::vec::Vec::new_in(&sfa);
     if mimes.try_reserve_exact(c_mimes_len).is_err() {
         return Result::OutOfMemory;
     }
@@ -173,11 +181,9 @@ pub unsafe fn terminal_paste(
     };
     // for (mimes, c_mimes) |*mime, c_mime| mime.* = c_mime.ptr[0..c_mime.len];
     // SAFETY: each `LibString` names readable C memory for the call duration.
-    mimes.extend(
-        c_mimes
-            .iter()
-            .map(|c_mime| unsafe { std::slice::from_raw_parts(c_mime.ptr, c_mime.len) }),
-    );
+    for c_mime in c_mimes {
+        mimes.push(unsafe { std::slice::from_raw_parts(c_mime.ptr, c_mime.len) });
+    }
 
     // .source = switch (req.source) {
     //     .clipboard => .{ .clipboard = req.location },
@@ -806,8 +812,9 @@ mod tests {
 
     // PORT NOTE: no reference test. The reference's mimes array comes from
     // `alloc.alloc([]const u8, c_mimes.len) catch return .out_of_memory`, an
-    // observable `RUSTTY_OUT_OF_MEMORY` for a C caller; the port collected into
-    // a `Vec`, which aborts, making that return unreachable (parity S174-F5).
+    // observable `RUSTTY_OUT_OF_MEMORY` for a C caller (parity S174-F5; since
+    // parity tail S7-4 the list is on `StackFallback(256, gpa)`, as in the
+    // reference).
     // `mimes_len` is caller-supplied, so the failure does not need real memory
     // pressure — a length no allocation could ever describe is enough, and that
     // is what this asserts. The pointer is never dereferenced on this path (the
@@ -851,6 +858,70 @@ mod tests {
 
             unsafe { terminal_c::free(t) };
         });
+    }
+
+    // Parity tail S7-4 (routing evidence, no reference counterpart): the MIME
+    // list is on `stackFallback(256, wrapper.terminal.gpa())`. Sixteen
+    // entries (256 bytes) fit the stack and reach no allocator; seventeen
+    // spill exactly one 272-byte list to the terminal's allocator, which
+    // takes it back before `terminal_paste` returns.
+    #[test]
+    fn terminal_paste_mimes_route_through_the_stack_fallback() {
+        let _guard = PASTE_TEST_LOCK.lock().unwrap();
+        use capture as s;
+        s::reset();
+        use rustty_vt::alloc::testing::CountingAllocator;
+        let counting = CountingAllocator::over_heap();
+        let calloc = counting.allocator();
+        let mut t: Terminal = std::ptr::null_mut();
+        assert_eq!(Result::Success, unsafe {
+            terminal_c::new(&calloc as *const CAllocator, &mut t, 80, 24)
+        });
+        assert_eq!(Result::Success, unsafe {
+            terminal_c::set(
+                t,
+                terminal_c::Option_::WritePty,
+                s::write_pty as *const c_void,
+            )
+        });
+        // Image-only lists: nothing is read or written, so the list is the
+        // only allocation `terminal_paste` could make.
+        let mimes = [LibString::init(b"image/png"); 17];
+        extern "C" fn never_read(_: *mut c_void, _: LibString, _: io::Writer) -> bool {
+            unreachable!("no text representation is read")
+        }
+        let paste = |len: usize| {
+            let req = Request {
+                size: std::mem::size_of::<Request>(),
+                location: 0,
+                source: 0,
+                mimes: mimes.as_ptr(),
+                mimes_len: len,
+                reader: io::MimeReader {
+                    read: Some(never_read),
+                    userdata: std::ptr::null_mut(),
+                },
+                allow_unsafe: false,
+            };
+            let mut written = true;
+            let before = counting.alloc_calls.get();
+            let live = counting.live_bytes.get();
+            assert_eq!(Result::Success, unsafe {
+                terminal_paste(t, &req, &mut written)
+            });
+            assert!(!written);
+            assert_eq!(live, counting.live_bytes.get(), "the list is freed");
+            counting.alloc_calls.get() - before
+        };
+        assert_eq!(16 * std::mem::size_of::<&[u8]>(), 256);
+        assert_eq!(0, paste(16), "256 bytes stay on the stack");
+        assert_eq!(1, paste(17), "272 bytes spill to the terminal's allocator");
+        assert_eq!(
+            Some((17 * std::mem::size_of::<&[u8]>(), 3)),
+            counting.last_alloc.get()
+        );
+        unsafe { terminal_c::free(t) };
+        assert_eq!(0, counting.live_bytes.get());
     }
 
     // test "terminal_paste null handling"

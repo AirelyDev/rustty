@@ -16,7 +16,7 @@
 // const LoadingImage = image.LoadingImage;
 // const Image = image.Image;
 // const ImageStorage = @import("graphics_storage.zig").ImageStorage;
-use crate::alloc::Allocator;
+use crate::alloc::{Allocator, Bytes, CopyVecExt, TryPushExt};
 use crate::kitty::graphics_animation as animation;
 use crate::kitty::graphics_command as command;
 use crate::kitty::graphics_command::{Command, Response};
@@ -205,8 +205,7 @@ fn query(alloc: Allocator, terminal: &Terminal, cmd: &Command) -> Response {
     //     return result;
     // };
     // defer loading.deinit(alloc);
-    let _ = &alloc;
-    let mut loading = match LoadingImage::init(cmd, &storage.image_limits) {
+    let mut loading = match LoadingImage::init(alloc, cmd, &storage.image_limits) {
         Ok(loading) => loading,
         Err(err) => {
             encode_error(&mut result, err);
@@ -216,17 +215,16 @@ fn query(alloc: Allocator, terminal: &Terminal, cmd: &Command) -> Response {
 
     // var img = loading.complete(alloc) catch |err| { ... };
     // img.deinit(alloc);
-    // PORT NOTE: both the completed image and the loading state are owned
-    // values dropped at scope end (the reference's `img.deinit` + deferred
-    // `loading.deinit`).
-    let img = match loading.complete() {
+    let mut img = match loading.complete(alloc) {
         Ok(img) => img,
         Err(err) => {
             encode_error(&mut result, err);
+            loading.deinit(alloc);
             return result;
         }
     };
-    drop(img);
+    img.deinit(alloc);
+    loading.deinit(alloc);
 
     result
 }
@@ -301,7 +299,7 @@ fn transmit(alloc: Allocator, terminal: &mut Terminal, cmd: &Command) -> Respons
             &Command {
                 control: command::Control::Display(d_copy),
                 quiet: cmd.quiet,
-                data: Vec::new(),
+                data: Bytes::new_in(alloc),
             },
         );
     }
@@ -358,10 +356,15 @@ fn display(alloc: Allocator, terminal: &mut Terminal, cmd: &Command) -> Response
     //     storage.imageById(d.image_id)
     // else
     //     storage.imageByNumber(d.image_number);
+    // PORT NOTE (parity tail S7-4): the metadata copy (`withoutData`, no
+    // allocation) stands in for the reference's by-value `Image`; the stored
+    // image is mutated below.
     let img_: Option<Image> = if d.image_id != 0 {
-        storage.image_by_id(d.image_id)
+        storage.image_by_id(d.image_id).map(Image::withoutData)
     } else {
-        storage.image_by_number(d.image_number)
+        storage
+            .image_by_number(d.image_number)
+            .map(Image::withoutData)
     };
     // const img = img_ orelse {
     //     result.message = "ENOENT: image not found";
@@ -640,7 +643,7 @@ fn transmit_animation_frame(alloc: Allocator, terminal: &mut Terminal, cmd: &Com
         // var result = loading.response;
         let mut result = loading.response.clone();
         // loading.addData(alloc, cmd.data) catch |err| { ... };
-        if let Err(err) = loading.addData(&cmd.data) {
+        if let Err(err) = loading.addData(alloc, &cmd.data) {
             encode_error(&mut result, err);
             return result;
         }
@@ -657,9 +660,10 @@ fn transmit_animation_frame(alloc: Allocator, terminal: &mut Terminal, cmd: &Com
         // alloc.destroy(loading);
         // storage.loading = null;
         // defer loading_copy.deinit(alloc);
-        let mut loading_copy = *storage.loading.take().unwrap();
-        return complete_animation_frame(alloc, terminal, &mut loading_copy);
-        // `loading_copy` drops here (the reference `defer deinit`).
+        let mut loading_copy = crate::alloc::ABox::into_inner(storage.loading.take().unwrap());
+        let resp = complete_animation_frame(alloc, terminal, &mut loading_copy);
+        loading_copy.deinit(alloc);
+        return resp;
     }
 
     // We are starting our load, either the first frame or a subsequent frame.
@@ -696,7 +700,7 @@ fn transmit_animation_frame(alloc: Allocator, terminal: &mut Terminal, cmd: &Com
         };
     result.id = img_id;
 
-    let mut loading = match LoadingImage::init(cmd, &storage.image_limits) {
+    let mut loading = match LoadingImage::init(alloc, cmd, &storage.image_limits) {
         Ok(loading) => loading,
         Err(err) => {
             encode_error(&mut result, err);
@@ -720,13 +724,21 @@ fn transmit_animation_frame(alloc: Allocator, terminal: &mut Terminal, cmd: &Com
         // };
         // loading_ptr.* = loading;
         // storage.loading = loading_ptr;
-        // PORT NOTE: `Box::new` aborts on OOM; the catch arm is unreachable.
-        storage.loading = Some(Box::new(loading));
+        // (a failed `create` drops the moved `loading`: its deinit.)
+        match crate::alloc::try_create(alloc, loading) {
+            Ok(loading_ptr) => storage.loading = Some(loading_ptr),
+            Err(_) => {
+                encode_error(&mut result, image::Error::OutOfMemory);
+                return result;
+            }
+        }
         return Response::default();
     }
 
-    // defer loading.deinit(alloc); — `loading` drops at end of scope.
-    complete_animation_frame(alloc, terminal, &mut loading)
+    // defer loading.deinit(alloc);
+    let resp = complete_animation_frame(alloc, terminal, &mut loading);
+    loading.deinit(alloc);
+    resp
 }
 
 /// Complete a fully loaded animation frame: validate it against its
@@ -779,7 +791,7 @@ fn complete_animation_frame(
     // and length validation all match image loading.
     // var frame_img = loading.complete(alloc) catch |err| { ... };
     // defer frame_img.deinit(alloc);
-    let mut frame_img = match loading.complete() {
+    let mut frame_img = match loading.complete(alloc) {
         Ok(img) => img,
         Err(err) => {
             encode_error(&mut result, err);
@@ -801,15 +813,16 @@ fn complete_animation_frame(
         //     catch |err| { encodeError(&result, err); return result; };
         // CORRECTION (parity S190-F2 / N101): `rgba_from_format` was
         // infallible, so this ENOMEM arm was carried as a comment.
-        let rgba = match pixel::rgba_from_format(frame_img.format, frame_img.data.bytes().unwrap())
-        {
-            Ok(rgba) => rgba,
-            Err(err) => {
-                encode_error_storage(&mut result, err);
-                return result;
-            }
-        };
-        // frame_img.data.deinit(alloc); — the assignment drops the old payload.
+        let rgba =
+            match pixel::rgba_from_format(alloc, frame_img.format, frame_img.data.bytes().unwrap())
+            {
+                Ok(rgba) => rgba,
+                Err(err) => {
+                    encode_error_storage(&mut result, err);
+                    return result;
+                }
+            };
+        frame_img.data.deinit(alloc);
         frame_img.data = image::Data::Complete(rgba);
         frame_img.format = command::Format::Rgba;
     }
@@ -824,14 +837,21 @@ fn complete_animation_frame(
         return result;
     }
 
-    // const anim = ensureAnimation(alloc, img) catch |err| { ... };
+    // const anim = ensureAnimation(alloc, img) catch |err| {
+    //     encodeError(&result, err);
+    //     return result;
+    // };
     // (re-borrowed per use below, see the hazard-#3 note above.)
+    if let Err(err) = ensure_animation(alloc, storage.images.get_mut(&img_id).unwrap()) {
+        encode_error_storage(&mut result, err);
+        return result;
+    }
 
     // Resolve the frame number: r in 1..count edits that existing
     // frame, anything else (including omitted) creates a new frame
     // appended at count+1. The resolved number is echoed in the
     // response so clients can learn assigned frame numbers.
-    let count: u32 = ensure_animation(storage.images.get_mut(&img_id).unwrap()).frame_count();
+    let count: u32 = animation_mut(storage.images.get_mut(&img_id).unwrap()).frame_count();
     let number: u32 = {
         let r = f.edit_frame;
         if r == 0 || r > count + 1 {
@@ -887,9 +907,14 @@ fn complete_animation_frame(
         //     result.message = "ENOMEM: out of memory";
         //     return result;
         // };
-        // PORT NOTE: `vec!` aborts on OOM; the release/ENOMEM arm is
-        // unreachable in this port.
-        let mut canvas = vec![0u8; frame_len];
+        let mut canvas = Bytes::new_in(alloc);
+        if canvas.try_reserve_exact(frame_len).is_err() {
+            storage.release_animation_bytes(frame_len);
+            result.message = b"ENOMEM: out of memory".to_vec();
+            return result;
+        }
+        // The capacity is reserved, so this never allocates.
+        canvas.resize_copy(frame_len, 0);
         if f.create_frame > 0 {
             // @memcpy(canvas, img.frameData(f.create_frame).?);
             canvas.copy_from_slice(
@@ -921,13 +946,18 @@ fn complete_animation_frame(
         //     result.message = "ENOMEM: out of memory";
         //     return result;
         // };
-        // PORT NOTE: `Vec::push` aborts on OOM; the catch arm is unreachable.
-        {
+        let appended = {
             let img = storage.images.get_mut(&img_id).unwrap();
-            ensure_animation(img).frames.push(animation::Frame {
+            animation_mut(img).frames.try_push(animation::Frame {
                 data: canvas,
                 gap_ms: gap,
-            });
+            })
+        };
+        if appended.is_err() {
+            // (the dropped frame frees its canvas: `alloc.free(canvas)`)
+            storage.release_animation_bytes(frame_len);
+            result.message = b"ENOMEM: out of memory".to_vec();
+            return result;
         }
 
         // A new frame never changes the displayed frame (playback
@@ -944,7 +974,7 @@ fn complete_animation_frame(
         // from its quota check.
         if f.gap_ms != 0 {
             let img = storage.images.get_mut(&img_id).unwrap();
-            ensure_animation(img).set_gap_at(
+            animation_mut(img).set_gap_at(
                 number - 1,
                 if f.gap_ms > 0 {
                     u32::try_from(f.gap_ms).unwrap()
@@ -1030,11 +1060,16 @@ fn control_animation(alloc: Allocator, terminal: &mut Terminal, cmd: &Command) -
         }
     };
 
-    // const anim = ensureAnimation(alloc, img) catch |err| { ... };
-    // PORT NOTE: infallible in this port (Box aborts on OOM); the `anim`
-    // pointer is re-borrowed per key below (hazard #3: the mark_* calls
-    // between the keys need `&mut storage`).
-    ensure_animation(storage.images.get_mut(&img_id).unwrap());
+    // const anim = ensureAnimation(alloc, img) catch |err| {
+    //     encodeError(&result, err);
+    //     return result;
+    // };
+    // PORT NOTE: the `anim` pointer is re-borrowed per key below (hazard #3:
+    // the mark_* calls between the keys need `&mut storage`).
+    if let Err(err) = ensure_animation(alloc, storage.images.get_mut(&img_id).unwrap()) {
+        encode_error_storage(&mut result, err);
+        return result;
+    }
 
     // The keys below are applied independently and in the same order as Kitty.
 
@@ -1299,19 +1334,32 @@ fn compose_animation(alloc: Allocator, terminal: &mut Terminal, cmd: &Command) -
 
 /// Get or lazily create the animation state for an image.
 //
-// PORT NOTE: `Allocator.Error!*animation.Animation` — `alloc.create` maps to
-// `Box::default` (aborts on OOM), so the port is infallible; the callers'
-// `catch encodeError` arms are carried as comments at each call site.
-fn ensure_animation(img: &mut Image) -> &mut animation::Animation {
+// PORT NOTE: `Allocator.Error!*animation.Animation`: `alloc.create` through
+// the storage's allocator (parity tail S7-4), fallible; the animation's frame
+// list is bound to the same allocator.
+fn ensure_animation(
+    alloc: Allocator,
+    img: &mut Image,
+) -> Result<&mut animation::Animation, crate::kitty::graphics_storage::OutOfMemory> {
     // if (img.animation) |anim| return anim;
     // const anim = try alloc.create(animation.Animation);
     // anim.* = .{};
     // img.animation = anim;
     // return anim;
     if img.animation.is_none() {
-        img.animation = Some(Box::default());
+        let anim = crate::alloc::try_create(alloc, animation::Animation::init_in(alloc))
+            .map_err(|_| crate::kitty::graphics_storage::OutOfMemory)?;
+        img.animation = Some(anim);
     }
-    img.animation.as_deref_mut().unwrap()
+    Ok(img.animation.as_deref_mut().unwrap())
+}
+
+/// The animation `ensure_animation` attached (re-borrowed per use; see the
+/// hazard-#3 notes at the call sites).
+fn animation_mut(img: &mut Image) -> &mut animation::Animation {
+    img.animation
+        .as_deref_mut()
+        .expect("ensure_animation attached the animation")
 }
 
 /// Mutable access to a frame's pixel buffer — the reference spells this
@@ -1413,9 +1461,8 @@ fn delete(alloc: Allocator, terminal: &mut Terminal, cmd: &Command) -> Response 
     //     loading.destroy(alloc);
     //     storage.loading = null;
     // }
-    // PORT NOTE: dropping the boxed LoadingImage is `destroy`.
-    if storage.loading.is_some() {
-        storage.loading = None;
+    if let Some(loading) = storage.loading.take() {
+        LoadingImage::destroy(loading, alloc);
     }
 
     // Then perform the actual deletion request, too.
@@ -1459,7 +1506,7 @@ fn load_and_add_image(
         // we're _copying_ the data. We want the command data to be freed.
         // try loading.addData(alloc, cmd.data);
         let loading = storage.loading.as_mut().unwrap();
-        loading.addData(&cmd.data)?;
+        loading.addData(alloc, &cmd.data)?;
 
         // If we have more then we're done
         // if (t.more_chunks) return .{ .image = loading.image, .more = true };
@@ -1483,8 +1530,9 @@ fn load_and_add_image(
         // PORT NOTE: the reference copies the loading image out of the heap
         // pointer then destroys the pointer (and nulls `storage.loading`).
         // `Option::take` moves the boxed `LoadingImage` out (nulling the slot)
-        // and unboxing yields the owned value — the box is freed at scope end.
-        *storage.loading.take().unwrap()
+        // and `into_inner` yields the owned value, freeing the box through
+        // its allocator.
+        crate::alloc::ABox::into_inner(storage.loading.take().unwrap())
     } else {
         // Reusing a specific image ID deletes the old image and all of its
         // placements when the new transmission begins, not when it completes.
@@ -1516,7 +1564,7 @@ fn load_and_add_image(
         // SB: re-derive the storage reference after the delete above scoped
         // its own aliases.
         let storage = unsafe { &(*terminal.screens.active).kitty_images };
-        LoadingImage::init(cmd, &storage.image_limits)?
+        LoadingImage::init(alloc, cmd, &storage.image_limits)?
     };
 
     // We only want to deinit on error. If we're chunking, then we don't
@@ -1564,7 +1612,10 @@ fn load_and_add_image(
         // storage.loading = loading_ptr;
         // return .{ .image = loading.image, .more = true };
         let image = loading.image.withoutData();
-        storage.loading = Some(Box::new(loading));
+        // (a failed `create` drops the moved `loading`: the errdefer's deinit.)
+        let loading_ptr =
+            crate::alloc::try_create(alloc, loading).map_err(|_| image::Error::OutOfMemory)?;
+        storage.loading = Some(loading_ptr);
         return Ok(LoadAndAddImage {
             image,
             more: true,
@@ -1587,7 +1638,7 @@ fn load_and_add_image(
     // copy via `withoutData`. The only fields the caller reads from the returned
     // image are `id`/`implicit_id` (both preserved by `withoutData`); the data is
     // never read post-store, so this is observably identical.
-    let img = loading.complete()?;
+    let img = loading.complete(alloc)?;
     let returned = img.withoutData();
     storage
         .add_image(alloc, terminal.screens.active, img)
@@ -1665,6 +1716,120 @@ mod tests {
     // relying on the reference `Terminal.Options` field defaults. Rust `Options`
     // has no field defaults, so this helper supplies them verbatim, mirroring the
     // reference `Options` declaration (see terminal.rs / graphics_storage.rs).
+    // Parity tail S7-4 (routing evidence, no reference counterpart): every
+    // Kitty graphics allocation goes to the allocator the terminal was built
+    // with (a counting C allocator here), with the counts the reference's
+    // containers make: the command payload list, the loading data, the image
+    // map, the placement map, the animation box, the RGBA conversions, the
+    // frame canvas and the frame list; `deinit` returns every byte.
+    #[test]
+    fn kitty_graphics_route_through_the_allocator_handle() {
+        use crate::alloc::testing::CountingAllocator;
+        let counting = CountingAllocator::over_heap();
+        let c = counting.allocator();
+        crate::alloc::testing::with_handle(&c, |alloc| {
+            let calls = || counting.alloc_calls.get();
+            let live = || counting.live_bytes.get();
+            let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
+            let (base_calls, base_live) = (calls(), live());
+
+            // The command: its payload list grows once (4 base64 bytes).
+            let cmd = command::Parser::parse_string(alloc, b"a=t,f=24,s=1,v=1,i=1;/wAA").unwrap();
+            assert_eq!(base_calls + 1, calls(), "the command payload list");
+            assert_eq!(
+                Some((8, 0)),
+                counting.last_alloc.get(),
+                "allocator_api2's first u8 growth"
+            );
+
+            // Transmit: the loading data (3 decoded bytes) and the image map.
+            let c0 = calls();
+            assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
+            assert_eq!(c0 + 2, calls(), "loading data + images map");
+            cmd.deinit(alloc);
+
+            // Display: the placement map (and the placement's tracked pin,
+            // from the screen's pin pool, which already has room).
+            let c1 = calls();
+            let cmd = command::Parser::parse_string(alloc, b"a=p,i=1").unwrap();
+            assert_eq!(c1, calls(), "no payload, no list");
+            assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
+            assert_eq!(c1 + 1, calls(), "the placements map");
+
+            // An RGB animation frame over the RGB image: the frame's payload
+            // list, its loading data, its RGBA conversion, the image's RGBA
+            // conversion, the animation box, the canvas and the frame list.
+            let cmd = command::Parser::parse_string(alloc, b"a=f,i=1,f=24,s=1,v=1;AAD/").unwrap();
+            let c2 = calls();
+            assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
+            assert_eq!(
+                c2 + 6,
+                calls(),
+                "loading data, 2 RGBA conversions, box, canvas, frames"
+            );
+            cmd.deinit(alloc);
+            {
+                let storage = unsafe { &(*t.screens.active).kitty_images };
+                let img = storage.images.get(&1).unwrap();
+                assert_eq!(command::Format::Rgba, img.format);
+                assert_eq!(1, img.animation.as_ref().unwrap().frames.len());
+            }
+
+            // Uppercase delete frees the image, its data and its animation.
+            let live_before_delete = live();
+            let cmd = command::Parser::parse_string(alloc, b"a=d,d=I,i=1").unwrap();
+            assert!(execute(alloc, &mut t, &cmd).is_none());
+            assert!(
+                live() < live_before_delete,
+                "the image's allocations are freed"
+            );
+
+            t.deinit(alloc);
+            assert_eq!(0, live(), "deinit returns every byte");
+            let _ = base_live;
+        });
+    }
+
+    // Parity tail S7-4: a chunked transmission's loading state is
+    // `alloc.create(LoadingImage)` through the same allocator, and a delete
+    // aborts it (`loading.destroy(alloc)`).
+    #[test]
+    fn kitty_chunked_loading_routes_through_the_allocator_handle() {
+        use crate::alloc::testing::CountingAllocator;
+        let counting = CountingAllocator::over_heap();
+        let c = counting.allocator();
+        crate::alloc::testing::with_handle(&c, |alloc| {
+            let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
+            let cmd =
+                command::Parser::parse_string(alloc, b"a=t,f=24,s=2,v=1,i=2,m=1;/wAA").unwrap();
+            let c0 = counting.alloc_calls.get();
+            assert!(execute(alloc, &mut t, &cmd).is_none());
+            // The loading data and the boxed loading state.
+            assert_eq!(c0 + 2, counting.alloc_calls.get());
+            assert_eq!(
+                Some((
+                    core::mem::size_of::<LoadingImage>(),
+                    core::mem::align_of::<LoadingImage>().trailing_zeros() as u8
+                )),
+                counting.last_alloc.get(),
+                "alloc.create(LoadingImage)"
+            );
+            cmd.deinit(alloc);
+            let f0 = counting.free_calls.get();
+            let cmd = command::Parser::parse_string(alloc, b"a=d,d=a").unwrap();
+            let _ = execute(alloc, &mut t, &cmd);
+            assert!(unsafe { &(*t.screens.active).kitty_images }
+                .loading
+                .is_none());
+            assert!(
+                counting.free_calls.get() >= f0 + 2,
+                "the loading data and its box are freed"
+            );
+            t.deinit(alloc);
+            assert_eq!(0, counting.live_bytes.get());
+        });
+    }
+
     fn opts(cols: size::CellCountInt, rows: size::CellCountInt) -> crate::terminal::Options {
         crate::terminal::Options {
             cols,
@@ -1689,16 +1854,18 @@ mod tests {
 
         // Initial chunk has q=1
         {
-            let cmd =
-                command::Parser::parse_string(b"a=T,f=24,t=d,i=1,s=1,v=2,c=10,r=1,m=1,q=1;////")
-                    .unwrap();
+            let cmd = command::Parser::parse_string(
+                crate::alloc::Global,
+                b"a=T,f=24,t=d,i=1,s=1,v=2,c=10,r=1,m=1,q=1;////",
+            )
+            .unwrap();
             let resp = execute(alloc, &mut t, &cmd);
             assert!(resp.is_none());
         }
 
         // Subsequent chunk has no q but should respect initial
         {
-            let cmd = command::Parser::parse_string(b"m=0;////").unwrap();
+            let cmd = command::Parser::parse_string(crate::alloc::Global, b"m=0;////").unwrap();
             let resp = execute(alloc, &mut t, &cmd);
             assert!(resp.is_none());
         }
@@ -1715,16 +1882,18 @@ mod tests {
 
         // Initial chunk has q=0
         {
-            let cmd =
-                command::Parser::parse_string(b"a=t,f=24,t=d,s=1,v=2,c=10,r=1,m=1,i=1,q=0;////")
-                    .unwrap();
+            let cmd = command::Parser::parse_string(
+                crate::alloc::Global,
+                b"a=t,f=24,t=d,s=1,v=2,c=10,r=1,m=1,i=1,q=0;////",
+            )
+            .unwrap();
             let resp = execute(alloc, &mut t, &cmd);
             assert!(resp.is_none());
         }
 
         // Subsequent chunk has no q so should respond OK
         {
-            let cmd = command::Parser::parse_string(b"m=0;////").unwrap();
+            let cmd = command::Parser::parse_string(crate::alloc::Global, b"m=0;////").unwrap();
             let resp = execute(alloc, &mut t, &cmd).unwrap();
             assert!(resp.ok());
         }
@@ -1741,16 +1910,18 @@ mod tests {
 
         // Initial chunk has q=0
         {
-            let cmd =
-                command::Parser::parse_string(b"a=t,f=24,t=d,s=1,v=2,c=10,r=1,m=1,i=1,q=0;////")
-                    .unwrap();
+            let cmd = command::Parser::parse_string(
+                crate::alloc::Global,
+                b"a=t,f=24,t=d,s=1,v=2,c=10,r=1,m=1,i=1,q=0;////",
+            )
+            .unwrap();
             let resp = execute(alloc, &mut t, &cmd);
             assert!(resp.is_none());
         }
 
         // Subsequent chunk sets q=1 so should not respond
         {
-            let cmd = command::Parser::parse_string(b"m=0,q=1;////").unwrap();
+            let cmd = command::Parser::parse_string(crate::alloc::Global, b"m=0,q=1;////").unwrap();
             let resp = execute(alloc, &mut t, &cmd);
             assert!(resp.is_none());
         }
@@ -1765,8 +1936,11 @@ mod tests {
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
 
-        let cmd =
-            command::Parser::parse_string(b"a=t,t=d,i=1,s=1,v=2,c=10,r=1;///////////").unwrap();
+        let cmd = command::Parser::parse_string(
+            crate::alloc::Global,
+            b"a=t,t=d,i=1,s=1,v=2,c=10,r=1;///////////",
+        )
+        .unwrap();
         let resp = execute(alloc, &mut t, &cmd).unwrap();
         assert!(resp.ok());
 
@@ -1784,7 +1958,7 @@ mod tests {
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
 
-        let cmd = command::Parser::parse_string(b"a=p,i=4294967295").unwrap();
+        let cmd = command::Parser::parse_string(crate::alloc::Global, b"a=p,i=4294967295").unwrap();
         let resp = execute(alloc, &mut t, &cmd).unwrap();
         assert!(!resp.ok());
         assert_eq!(resp.message, b"ENOENT: image not found");
@@ -1799,7 +1973,8 @@ mod tests {
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
 
-        let cmd = command::Parser::parse_string(b"a=p,i=1,z=-2147483648").unwrap();
+        let cmd =
+            command::Parser::parse_string(crate::alloc::Global, b"a=p,i=1,z=-2147483648").unwrap();
         let resp = execute(alloc, &mut t, &cmd).unwrap();
         assert!(!resp.ok());
         assert_eq!(resp.message, b"ENOENT: image not found");
@@ -1815,9 +1990,11 @@ mod tests {
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
 
         {
-            let cmd =
-                command::Parser::parse_string(b"a=t,f=24,t=d,s=1,v=2,c=10,r=1,i=0,I=0;////////")
-                    .unwrap();
+            let cmd = command::Parser::parse_string(
+                crate::alloc::Global,
+                b"a=t,f=24,t=d,s=1,v=2,c=10,r=1,i=0,I=0;////////",
+            )
+            .unwrap();
             let resp = execute(alloc, &mut t, &cmd);
             assert!(resp.is_none());
         }
@@ -1833,9 +2010,11 @@ mod tests {
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
 
         {
-            let cmd =
-                command::Parser::parse_string(b"a=T,f=24,t=d,s=1,v=2,c=10,r=1,i=0,I=0;////////")
-                    .unwrap();
+            let cmd = command::Parser::parse_string(
+                crate::alloc::Global,
+                b"a=T,f=24,t=d,s=1,v=2,c=10,r=1,i=0,I=0;////////",
+            )
+            .unwrap();
             let resp = execute(alloc, &mut t, &cmd);
             assert!(resp.is_none());
         }
@@ -1852,7 +2031,11 @@ mod tests {
 
         // Transmit a 1x2 RGB image with id=1.
         {
-            let cmd = command::Parser::parse_string(b"a=t,t=d,f=24,i=1,s=1,v=2;////////").unwrap();
+            let cmd = command::Parser::parse_string(
+                crate::alloc::Global,
+                b"a=t,t=d,f=24,i=1,s=1,v=2;////////",
+            )
+            .unwrap();
             let resp = execute(alloc, &mut t, &cmd).unwrap();
             assert!(resp.ok());
         }
@@ -1865,7 +2048,11 @@ mod tests {
         // (width, height, format, len) tuple is identical, so only the
         // generation can reveal that the contents were replaced.
         {
-            let cmd = command::Parser::parse_string(b"a=t,t=d,f=24,i=1,s=1,v=2;AAAAAAAA").unwrap();
+            let cmd = command::Parser::parse_string(
+                crate::alloc::Global,
+                b"a=t,t=d,f=24,i=1,s=1,v=2;AAAAAAAA",
+            )
+            .unwrap();
             let resp = execute(alloc, &mut t, &cmd).unwrap();
             assert!(resp.ok());
         }
@@ -1888,18 +2075,22 @@ mod tests {
         // Transmit and display an image, then add anonymous and named placements.
         // Multiple anonymous a=p placements for one image are explicitly valid.
         {
+            let cmd = command::Parser::parse_string(
+                crate::alloc::Global,
+                b"a=T,t=d,f=24,i=1,s=1,v=2,C=1;////////",
+            )
+            .unwrap();
+            let resp = execute(alloc, &mut t, &cmd).unwrap();
+            assert!(resp.ok());
+        }
+        {
+            let cmd = command::Parser::parse_string(crate::alloc::Global, b"a=p,i=1,C=1").unwrap();
+            let resp = execute(alloc, &mut t, &cmd).unwrap();
+            assert!(resp.ok());
+        }
+        {
             let cmd =
-                command::Parser::parse_string(b"a=T,t=d,f=24,i=1,s=1,v=2,C=1;////////").unwrap();
-            let resp = execute(alloc, &mut t, &cmd).unwrap();
-            assert!(resp.ok());
-        }
-        {
-            let cmd = command::Parser::parse_string(b"a=p,i=1,C=1").unwrap();
-            let resp = execute(alloc, &mut t, &cmd).unwrap();
-            assert!(resp.ok());
-        }
-        {
-            let cmd = command::Parser::parse_string(b"a=p,i=1,p=7,C=1").unwrap();
+                command::Parser::parse_string(crate::alloc::Global, b"a=p,i=1,p=7,C=1").unwrap();
             let resp = execute(alloc, &mut t, &cmd).unwrap();
             assert!(resp.ok());
         }
@@ -1915,7 +2106,11 @@ mod tests {
         // Retransmitting replaces the image and must delete every old placement.
         // Plain a=t creates no replacement placement of its own.
         {
-            let cmd = command::Parser::parse_string(b"a=t,t=d,f=24,i=1,s=1,v=2;AAAAAAAA").unwrap();
+            let cmd = command::Parser::parse_string(
+                crate::alloc::Global,
+                b"a=t,t=d,f=24,i=1,s=1,v=2;AAAAAAAA",
+            )
+            .unwrap();
             let resp = execute(alloc, &mut t, &cmd).unwrap();
             assert!(resp.ok());
         }
@@ -1931,14 +2126,20 @@ mod tests {
         // a=T creates one new placement after deleting the previous image and
         // placements, so repeated redraws remain bounded at one placement.
         {
-            let cmd =
-                command::Parser::parse_string(b"a=T,t=d,f=24,i=1,s=1,v=2,C=1;////////").unwrap();
+            let cmd = command::Parser::parse_string(
+                crate::alloc::Global,
+                b"a=T,t=d,f=24,i=1,s=1,v=2,C=1;////////",
+            )
+            .unwrap();
             let resp = execute(alloc, &mut t, &cmd).unwrap();
             assert!(resp.ok());
         }
         {
-            let cmd =
-                command::Parser::parse_string(b"a=T,t=d,f=24,i=1,s=1,v=2,C=1;AAAAAAAA").unwrap();
+            let cmd = command::Parser::parse_string(
+                crate::alloc::Global,
+                b"a=T,t=d,f=24,i=1,s=1,v=2,C=1;AAAAAAAA",
+            )
+            .unwrap();
             let resp = execute(alloc, &mut t, &cmd).unwrap();
             assert!(resp.ok());
         }
@@ -1964,8 +2165,11 @@ mod tests {
         // Transmit and display, then delete everything (including image
         // data), then retransmit the same ID.
         {
-            let cmd = command::Parser::parse_string(b"a=T,t=d,f=24,i=1,s=1,v=2,c=1,r=1;////////")
-                .unwrap();
+            let cmd = command::Parser::parse_string(
+                crate::alloc::Global,
+                b"a=T,t=d,f=24,i=1,s=1,v=2,c=1,r=1;////////",
+            )
+            .unwrap();
             let resp = execute(alloc, &mut t, &cmd).unwrap();
             assert!(resp.ok());
         }
@@ -1975,7 +2179,7 @@ mod tests {
             .generation;
 
         {
-            let cmd = command::Parser::parse_string(b"a=d,d=A").unwrap();
+            let cmd = command::Parser::parse_string(crate::alloc::Global, b"a=d,d=A").unwrap();
             let resp = execute(alloc, &mut t, &cmd);
             assert!(resp.is_none());
         }
@@ -1987,7 +2191,11 @@ mod tests {
         assert!(gen_delete > gen1);
 
         {
-            let cmd = command::Parser::parse_string(b"a=t,t=d,f=24,i=1,s=1,v=2;////////").unwrap();
+            let cmd = command::Parser::parse_string(
+                crate::alloc::Global,
+                b"a=t,t=d,f=24,i=1,s=1,v=2;////////",
+            )
+            .unwrap();
             let resp = execute(alloc, &mut t, &cmd).unwrap();
             assert!(resp.ok());
         }
@@ -2009,6 +2217,7 @@ mod tests {
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
 
         let cmd = command::Parser::parse_string(
+            crate::alloc::Global,
             b"a=T,t=d,f=24,i=1,s=1,v=1,c=4294967295,r=4294967295;////",
         )
         .unwrap();
@@ -2047,7 +2256,7 @@ mod tests {
             }),
             quiet: command::Quiet::No,
             // A 1x1 RGB image requires three bytes.
-            data: vec![0, 0],
+            data: crate::alloc::heap_bytes(&[0, 0]),
         };
 
         let resp = execute(alloc, &mut terminal, &cmd).unwrap();
@@ -2073,7 +2282,9 @@ mod tests {
 
         // Store a red pixel under the same ID used by the query.
         {
-            let cmd = command::Parser::parse_string(b"a=t,f=24,s=1,v=1,i=31;/wAA").unwrap();
+            let cmd =
+                command::Parser::parse_string(crate::alloc::Global, b"a=t,f=24,s=1,v=1,i=31;/wAA")
+                    .unwrap();
             assert!(execute(alloc, &mut terminal, &cmd).unwrap().ok());
         }
 
@@ -2087,7 +2298,7 @@ mod tests {
                 ..Default::default()
             }),
             quiet: command::Quiet::No,
-            data: vec![0, 0, 0],
+            data: crate::alloc::heap_bytes(&[0, 0, 0]),
         };
 
         let resp = execute(alloc, &mut terminal, &cmd).unwrap();
@@ -2124,7 +2335,7 @@ mod tests {
         ];
 
         for input in inputs {
-            let cmd = command::Parser::parse_string(input).unwrap();
+            let cmd = command::Parser::parse_string(crate::alloc::Global, input).unwrap();
 
             let resp = execute(alloc, &mut t, &cmd).unwrap();
             assert!(!resp.ok());
@@ -2168,7 +2379,9 @@ mod tests {
 
         // Store an image so a buggy put would succeed and mutate placement state.
         {
-            let cmd = command::Parser::parse_string(b"a=t,f=24,s=1,v=1,i=1;/wAA").unwrap();
+            let cmd =
+                command::Parser::parse_string(crate::alloc::Global, b"a=t,f=24,s=1,v=1,i=1;/wAA")
+                    .unwrap();
             assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
         }
 
@@ -2184,7 +2397,7 @@ mod tests {
                     ..Default::default()
                 }),
                 quiet: command::Quiet::No,
-                data: Vec::new(),
+                data: crate::alloc::Bytes::new_in(crate::alloc::Global),
             };
             let resp = execute(alloc, &mut t, &cmd).unwrap();
             assert!(!resp.ok());
@@ -2201,7 +2414,8 @@ mod tests {
 
         // Add a real placement so a buggy delete would remove it.
         {
-            let cmd = command::Parser::parse_string(b"a=p,i=1,p=7,C=1").unwrap();
+            let cmd =
+                command::Parser::parse_string(crate::alloc::Global, b"a=p,i=1,p=7,C=1").unwrap();
             assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
             assert_eq!(
                 1usize,
@@ -2212,7 +2426,8 @@ mod tests {
         }
 
         {
-            let cmd = command::Parser::parse_string(b"a=d,d=i,i=1,I=2,p=7").unwrap();
+            let cmd = command::Parser::parse_string(crate::alloc::Global, b"a=d,d=i,i=1,I=2,p=7")
+                .unwrap();
             let resp = execute(alloc, &mut t, &cmd).unwrap();
             assert!(!resp.ok());
             assert_eq!(
@@ -2225,7 +2440,9 @@ mod tests {
 
         // q=2 suppresses the required error response but not the validation.
         {
-            let cmd = command::Parser::parse_string(b"a=d,d=i,i=1,I=2,p=7,q=2").unwrap();
+            let cmd =
+                command::Parser::parse_string(crate::alloc::Global, b"a=d,d=i,i=1,I=2,p=7,q=2")
+                    .unwrap();
             assert!(execute(alloc, &mut t, &cmd).is_none());
             assert_eq!(
                 1usize,
@@ -2246,12 +2463,16 @@ mod tests {
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
 
         {
-            let cmd = command::Parser::parse_string(b"a=t,f=24,s=1,v=2,I=93,p=7,m=1;AAAA").unwrap();
+            let cmd = command::Parser::parse_string(
+                crate::alloc::Global,
+                b"a=t,f=24,s=1,v=2,I=93,p=7,m=1;AAAA",
+            )
+            .unwrap();
             assert!(execute(alloc, &mut t, &cmd).is_none());
         }
 
         {
-            let cmd = command::Parser::parse_string(b"m=0;AAAA").unwrap();
+            let cmd = command::Parser::parse_string(crate::alloc::Global, b"m=0;AAAA").unwrap();
             let resp = execute(alloc, &mut t, &cmd).unwrap();
 
             assert!(resp.ok());
@@ -2275,12 +2496,16 @@ mod tests {
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
 
         {
-            let cmd = command::Parser::parse_string(b"a=t,f=24,s=1,v=1,i=41,p=7,m=1;AA==").unwrap();
+            let cmd = command::Parser::parse_string(
+                crate::alloc::Global,
+                b"a=t,f=24,s=1,v=1,i=41,p=7,m=1;AA==",
+            )
+            .unwrap();
             assert!(execute(alloc, &mut t, &cmd).is_none());
         }
 
         {
-            let cmd = command::Parser::parse_string(b"m=0;AA==").unwrap();
+            let cmd = command::Parser::parse_string(crate::alloc::Global, b"m=0;AA==").unwrap();
             let resp = execute(alloc, &mut t, &cmd).unwrap();
 
             assert!(!resp.ok());
@@ -2301,7 +2526,11 @@ mod tests {
 
         // Begin a two-chunk RGB image, then interrupt it with a delete.
         {
-            let cmd = command::Parser::parse_string(b"a=t,f=24,s=1,v=2,i=1,m=1;AAAA").unwrap();
+            let cmd = command::Parser::parse_string(
+                crate::alloc::Global,
+                b"a=t,f=24,s=1,v=2,i=1,m=1;AAAA",
+            )
+            .unwrap();
             assert!(execute(alloc, &mut t, &cmd).is_none());
         }
         assert!(unsafe { &(*t.screens.active).kitty_images }
@@ -2309,7 +2538,7 @@ mod tests {
             .is_some());
 
         {
-            let cmd = command::Parser::parse_string(b"a=d").unwrap();
+            let cmd = command::Parser::parse_string(crate::alloc::Global, b"a=d").unwrap();
             assert!(execute(alloc, &mut t, &cmd).is_none());
         }
         assert!(unsafe { &(*t.screens.active).kitty_images }
@@ -2318,11 +2547,15 @@ mod tests {
 
         // A fresh chunked upload must start from empty state after the delete.
         {
-            let cmd = command::Parser::parse_string(b"a=t,f=24,s=1,v=2,i=1,m=1;AAAA").unwrap();
+            let cmd = command::Parser::parse_string(
+                crate::alloc::Global,
+                b"a=t,f=24,s=1,v=2,i=1,m=1;AAAA",
+            )
+            .unwrap();
             assert!(execute(alloc, &mut t, &cmd).is_none());
         }
         {
-            let cmd = command::Parser::parse_string(b"m=0;AAAA").unwrap();
+            let cmd = command::Parser::parse_string(crate::alloc::Global, b"m=0;AAAA").unwrap();
             assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
         }
         assert_eq!(
@@ -2346,13 +2579,16 @@ mod tests {
 
         // Store an unplaced 1x1 RGB image.
         {
-            let cmd = command::Parser::parse_string(b"a=t,f=24,s=1,v=1,i=1;AAAA").unwrap();
+            let cmd =
+                command::Parser::parse_string(crate::alloc::Global, b"a=t,f=24,s=1,v=1,i=1;AAAA")
+                    .unwrap();
             assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
         }
 
         // Uppercase deletion may free data only if the named placement matched.
         {
-            let cmd = command::Parser::parse_string(b"a=d,d=I,i=1,p=7").unwrap();
+            let cmd =
+                command::Parser::parse_string(crate::alloc::Global, b"a=d,d=I,i=1,p=7").unwrap();
             assert!(execute(alloc, &mut t, &cmd).is_none());
         }
 
@@ -2373,8 +2609,11 @@ mod tests {
 
         // Store and display the old image.
         {
-            let cmd =
-                command::Parser::parse_string(b"a=T,t=d,f=24,i=1,s=1,v=2,C=1;////////").unwrap();
+            let cmd = command::Parser::parse_string(
+                crate::alloc::Global,
+                b"a=T,t=d,f=24,i=1,s=1,v=2,C=1;////////",
+            )
+            .unwrap();
             assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
         }
         assert!(unsafe { &(*t.screens.active).kitty_images }
@@ -2394,7 +2633,11 @@ mod tests {
         // Starting a replacement for the same explicit ID removes the old image
         // and placements before the replacement's final chunk arrives.
         {
-            let cmd = command::Parser::parse_string(b"a=t,t=d,f=24,i=1,s=1,v=2,m=1;AAAA").unwrap();
+            let cmd = command::Parser::parse_string(
+                crate::alloc::Global,
+                b"a=t,t=d,f=24,i=1,s=1,v=2,m=1;AAAA",
+            )
+            .unwrap();
             assert!(execute(alloc, &mut t, &cmd).is_none());
         }
         assert!(unsafe { &(*t.screens.active).kitty_images }
@@ -2426,9 +2669,11 @@ mod tests {
         t.width_px = 50; // 10 px per col
         t.height_px = 100; // 20 px per row
 
-        let cmd =
-            command::Parser::parse_string(b"a=T,t=d,f=24,i=1,s=1,v=1,c=2,r=1,X=99,Y=99,C=1;AAAA")
-                .unwrap();
+        let cmd = command::Parser::parse_string(
+            crate::alloc::Global,
+            b"a=T,t=d,f=24,i=1,s=1,v=1,c=2,r=1,X=99,Y=99,C=1;AAAA",
+        )
+        .unwrap();
 
         let resp = execute(alloc, &mut t, &cmd).unwrap();
         assert!(resp.ok());
@@ -2438,7 +2683,7 @@ mod tests {
         assert_eq!(9u32, placement.x_offset);
         assert_eq!(19u32, placement.y_offset);
 
-        let actual = placement.pixel_size(&storage.image_by_id(1).unwrap(), &t);
+        let actual = placement.pixel_size(storage.image_by_id(1).unwrap(), &t);
         assert_eq!(11u32, actual.width);
         assert_eq!(1u32, actual.height);
 
@@ -2456,12 +2701,17 @@ mod tests {
         // rows. Eight rows are taller than the screen but still within Kitty's
         // scroll budget.
         {
-            let cmd = command::Parser::parse_string(b"a=t,t=d,f=24,i=1,s=1,v=1;////").unwrap();
+            let cmd = command::Parser::parse_string(
+                crate::alloc::Global,
+                b"a=t,t=d,f=24,i=1,s=1,v=1;////",
+            )
+            .unwrap();
             let resp = execute(alloc, &mut t, &cmd).unwrap();
             assert!(resp.ok());
         }
         {
-            let cmd = command::Parser::parse_string(b"a=p,i=1,p=1,c=5,r=8").unwrap();
+            let cmd = command::Parser::parse_string(crate::alloc::Global, b"a=p,i=1,p=1,c=5,r=8")
+                .unwrap();
             let resp = execute(alloc, &mut t, &cmd).unwrap();
             assert!(resp.ok());
         }
@@ -2469,7 +2719,8 @@ mod tests {
         // A subsequent placement begins immediately after the first one instead
         // of overlapping it at the old one-screen movement cap.
         {
-            let cmd = command::Parser::parse_string(b"a=p,i=1,p=2,C=1").unwrap();
+            let cmd =
+                command::Parser::parse_string(crate::alloc::Global, b"a=p,i=1,p=2,C=1").unwrap();
             let resp = execute(alloc, &mut t, &cmd).unwrap();
             assert!(resp.ok());
         }
@@ -2525,7 +2776,9 @@ mod tests {
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
 
-        let cmd = command::Parser::parse_string(b"a=t,f=42,t=d,i=31,s=1,v=1;AAAA").unwrap();
+        let cmd =
+            command::Parser::parse_string(crate::alloc::Global, b"a=t,f=42,t=d,i=31,s=1,v=1;AAAA")
+                .unwrap();
 
         let resp = execute(alloc, &mut t, &cmd).unwrap();
         assert!(!resp.ok());
@@ -2549,7 +2802,9 @@ mod tests {
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
 
-        let cmd = command::Parser::parse_string(b"a=q,f=42,t=d,i=31,s=1,v=1;AAAA").unwrap();
+        let cmd =
+            command::Parser::parse_string(crate::alloc::Global, b"a=q,f=42,t=d,i=31,s=1,v=1;AAAA")
+                .unwrap();
 
         let resp = execute(alloc, &mut t, &cmd).unwrap();
         assert!(!resp.ok());
@@ -2570,8 +2825,11 @@ mod tests {
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
 
         // Kitty treats f=0 as an absent f, i.e. RGBA.
-        let cmd =
-            command::Parser::parse_string(b"a=t,f=0,t=d,i=1,s=1,v=2,c=10,r=1;///////////").unwrap();
+        let cmd = command::Parser::parse_string(
+            crate::alloc::Global,
+            b"a=t,f=0,t=d,i=1,s=1,v=2,c=10,r=1;///////////",
+        )
+        .unwrap();
 
         let resp = execute(alloc, &mut t, &cmd).unwrap();
         assert!(resp.ok());
@@ -2593,7 +2851,11 @@ mod tests {
 
         // q above 2 is out of range in the spec but Kitty suppresses
         // everything for anything above 1, so we must still parse it.
-        let cmd = command::Parser::parse_string(b"a=t,f=42,t=d,i=31,q=3,s=1,v=1;AAAA").unwrap();
+        let cmd = command::Parser::parse_string(
+            crate::alloc::Global,
+            b"a=t,f=42,t=d,i=31,q=3,s=1,v=1;AAAA",
+        )
+        .unwrap();
 
         assert!(execute(alloc, &mut t, &cmd).is_none());
 
@@ -2608,8 +2870,11 @@ mod tests {
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
 
         {
-            let cmd =
-                command::Parser::parse_string(b"a=T,f=24,t=d,i=31,s=1,v=1,C=2,U=2;AAAA").unwrap();
+            let cmd = command::Parser::parse_string(
+                crate::alloc::Global,
+                b"a=T,f=24,t=d,i=31,s=1,v=1,C=2,U=2;AAAA",
+            )
+            .unwrap();
 
             let resp = execute(alloc, &mut t, &cmd).unwrap();
             assert!(resp.ok());
@@ -2633,7 +2898,9 @@ mod tests {
 
         // Empty storage: the first free ID is 1, as in Kitty.
         {
-            let cmd = command::Parser::parse_string(b"a=t,f=24,s=1,v=1,I=42;/wAA").unwrap();
+            let cmd =
+                command::Parser::parse_string(crate::alloc::Global, b"a=t,f=24,s=1,v=1,I=42;/wAA")
+                    .unwrap();
             let resp = execute(alloc, &mut t, &cmd).unwrap();
             assert!(resp.ok());
             assert_eq!(1u32, resp.id);
@@ -2642,11 +2909,15 @@ mod tests {
 
         // Occupy ID 2 explicitly; the next number gets 3.
         {
-            let cmd = command::Parser::parse_string(b"a=t,f=24,s=1,v=1,i=2;/wAA").unwrap();
+            let cmd =
+                command::Parser::parse_string(crate::alloc::Global, b"a=t,f=24,s=1,v=1,i=2;/wAA")
+                    .unwrap();
             assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
         }
         {
-            let cmd = command::Parser::parse_string(b"a=t,f=24,s=1,v=1,I=43;/wAA").unwrap();
+            let cmd =
+                command::Parser::parse_string(crate::alloc::Global, b"a=t,f=24,s=1,v=1,I=43;/wAA")
+                    .unwrap();
             let resp = execute(alloc, &mut t, &cmd).unwrap();
             assert!(resp.ok());
             assert_eq!(3u32, resp.id);
@@ -2654,11 +2925,13 @@ mod tests {
 
         // Deleting ID 1 opens a gap that the next number fills.
         {
-            let cmd = command::Parser::parse_string(b"a=d,d=I,i=1").unwrap();
+            let cmd = command::Parser::parse_string(crate::alloc::Global, b"a=d,d=I,i=1").unwrap();
             assert!(execute(alloc, &mut t, &cmd).is_none());
         }
         {
-            let cmd = command::Parser::parse_string(b"a=t,f=24,s=1,v=1,I=44;/wAA").unwrap();
+            let cmd =
+                command::Parser::parse_string(crate::alloc::Global, b"a=t,f=24,s=1,v=1,I=44;/wAA")
+                    .unwrap();
             let resp = execute(alloc, &mut t, &cmd).unwrap();
             assert!(resp.ok());
             assert_eq!(1u32, resp.id);
@@ -2683,17 +2956,24 @@ mod tests {
         // A client stores and places a red pixel on the ID the old wrapping
         // counter would assign first.
         {
-            let cmd = command::Parser::parse_string(b"a=t,f=24,s=1,v=1,i=2147483647;/wAA").unwrap();
+            let cmd = command::Parser::parse_string(
+                crate::alloc::Global,
+                b"a=t,f=24,s=1,v=1,i=2147483647;/wAA",
+            )
+            .unwrap();
             assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
         }
         {
-            let cmd = command::Parser::parse_string(b"a=p,i=2147483647,C=1").unwrap();
+            let cmd = command::Parser::parse_string(crate::alloc::Global, b"a=p,i=2147483647,C=1")
+                .unwrap();
             assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
         }
 
         // A number-based transmission must not collide with it.
         {
-            let cmd = command::Parser::parse_string(b"a=t,f=24,s=1,v=1,I=42;AAD/").unwrap();
+            let cmd =
+                command::Parser::parse_string(crate::alloc::Global, b"a=t,f=24,s=1,v=1,I=42;AAD/")
+                    .unwrap();
             let resp = execute(alloc, &mut t, &cmd).unwrap();
             assert!(resp.ok());
             assert_eq!(1u32, resp.id);
@@ -2724,18 +3004,24 @@ mod tests {
         // A client stores and places a red pixel on the ID the implicit
         // counter assigns first.
         {
-            let cmd = command::Parser::parse_string(b"a=t,f=24,s=1,v=1,i=2147483647;/wAA").unwrap();
+            let cmd = command::Parser::parse_string(
+                crate::alloc::Global,
+                b"a=t,f=24,s=1,v=1,i=2147483647;/wAA",
+            )
+            .unwrap();
             assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
         }
         {
-            let cmd = command::Parser::parse_string(b"a=p,i=2147483647,C=1").unwrap();
+            let cmd = command::Parser::parse_string(crate::alloc::Global, b"a=p,i=2147483647,C=1")
+                .unwrap();
             assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
         }
 
         // Transmit without an ID or number: no response, and the counter
         // skips over the in-use ID instead of replacing that image.
         {
-            let cmd = command::Parser::parse_string(b"a=t,f=24,s=1,v=1;AAD/").unwrap();
+            let cmd = command::Parser::parse_string(crate::alloc::Global, b"a=t,f=24,s=1,v=1;AAD/")
+                .unwrap();
             assert!(execute(alloc, &mut t, &cmd).is_none());
         }
 
@@ -2769,7 +3055,9 @@ mod tests {
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
 
         {
-            let cmd = command::Parser::parse_string(b"a=t,f=24,s=1,v=1,i=1;AAAA").unwrap();
+            let cmd =
+                command::Parser::parse_string(crate::alloc::Global, b"a=t,f=24,s=1,v=1,i=1;AAAA")
+                    .unwrap();
             assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
         }
 
@@ -2778,7 +3066,11 @@ mod tests {
         // move (a relative placement never moves the cursor, and a failed
         // one certainly must not).
         {
-            let cmd = command::Parser::parse_string(b"a=p,i=1,p=1,P=42,Q=1,H=2,V=2").unwrap();
+            let cmd = command::Parser::parse_string(
+                crate::alloc::Global,
+                b"a=p,i=1,p=1,P=42,Q=1,H=2,V=2",
+            )
+            .unwrap();
             let resp = execute(alloc, &mut t, &cmd).unwrap();
             assert!(!resp.ok());
             assert_eq!(
@@ -2810,13 +3102,13 @@ mod tests {
             b"a=t,f=24,s=1,v=1,i=1;AAAA".as_slice(),
             b"a=t,f=24,s=1,v=1,i=2;AAAA".as_slice(),
         ] {
-            let cmd = command::Parser::parse_string(input).unwrap();
+            let cmd = command::Parser::parse_string(crate::alloc::Global, input).unwrap();
             assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
         }
 
         // The parent image exists but has no placements at all.
         {
-            let cmd = command::Parser::parse_string(b"a=p,i=1,P=2").unwrap();
+            let cmd = command::Parser::parse_string(crate::alloc::Global, b"a=p,i=1,P=2").unwrap();
             let resp = execute(alloc, &mut t, &cmd).unwrap();
             assert!(!resp.ok());
             assert_eq!(
@@ -2827,11 +3119,13 @@ mod tests {
 
         // The parent image has a placement, but not the requested one.
         {
-            let cmd = command::Parser::parse_string(b"a=p,i=2,p=1,C=1").unwrap();
+            let cmd =
+                command::Parser::parse_string(crate::alloc::Global, b"a=p,i=2,p=1,C=1").unwrap();
             assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
         }
         {
-            let cmd = command::Parser::parse_string(b"a=p,i=1,P=2,Q=9").unwrap();
+            let cmd =
+                command::Parser::parse_string(crate::alloc::Global, b"a=p,i=1,P=2,Q=9").unwrap();
             let resp = execute(alloc, &mut t, &cmd).unwrap();
             assert!(!resp.ok());
             assert_eq!(
@@ -2861,7 +3155,7 @@ mod tests {
             b"a=t,f=24,s=1,v=1,i=1;AAAA".as_slice(),
             b"a=p,i=1,p=1,C=1".as_slice(),
         ] {
-            let cmd = command::Parser::parse_string(input).unwrap();
+            let cmd = command::Parser::parse_string(crate::alloc::Global, input).unwrap();
             assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
         }
 
@@ -2871,7 +3165,7 @@ mod tests {
             b"a=p,i=1,p=1,P=1,Q=1".as_slice(),
             b"a=p,i=1,p=1,P=1".as_slice(),
         ] {
-            let cmd = command::Parser::parse_string(input).unwrap();
+            let cmd = command::Parser::parse_string(crate::alloc::Global, input).unwrap();
             let resp = execute(alloc, &mut t, &cmd).unwrap();
             assert!(!resp.ok());
             assert_eq!(
@@ -2909,14 +3203,15 @@ mod tests {
             b"a=p,i=1,p=1,C=1".as_slice(),
             b"a=p,i=1,p=2,P=1,Q=1".as_slice(),
         ] {
-            let cmd = command::Parser::parse_string(input).unwrap();
+            let cmd = command::Parser::parse_string(crate::alloc::Global, input).unwrap();
             assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
         }
 
         // Replacing placement 1 with a parent of placement 2 would create
         // the cycle 1 -> 2 -> 1.
         {
-            let cmd = command::Parser::parse_string(b"a=p,i=1,p=1,P=1,Q=2").unwrap();
+            let cmd = command::Parser::parse_string(crate::alloc::Global, b"a=p,i=1,p=1,P=1,Q=2")
+                .unwrap();
             let resp = execute(alloc, &mut t, &cmd).unwrap();
             assert!(!resp.ok());
             assert_eq!(
@@ -2954,7 +3249,7 @@ mod tests {
             b"a=t,f=24,s=1,v=1,i=1;AAAA".as_slice(),
             b"a=p,i=1,p=1,C=1".as_slice(),
         ] {
-            let cmd = command::Parser::parse_string(input).unwrap();
+            let cmd = command::Parser::parse_string(crate::alloc::Global, input).unwrap();
             assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
         }
 
@@ -2962,13 +3257,15 @@ mod tests {
         // placements form the chain 9 -> 8 -> ... -> 2 -> 1.
         for id in 2..10 {
             let input = format!("a=p,i=1,p={},P=1,Q={}", id, id - 1);
-            let cmd = command::Parser::parse_string(input.as_bytes()).unwrap();
+            let cmd =
+                command::Parser::parse_string(crate::alloc::Global, input.as_bytes()).unwrap();
             assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
         }
 
         // One more link exceeds the limit.
         {
-            let cmd = command::Parser::parse_string(b"a=p,i=1,p=10,P=1,Q=9").unwrap();
+            let cmd = command::Parser::parse_string(crate::alloc::Global, b"a=p,i=1,p=10,P=1,Q=9")
+                .unwrap();
             let resp = execute(alloc, &mut t, &cmd).unwrap();
             assert!(!resp.ok());
             assert_eq!(
@@ -2997,7 +3294,7 @@ mod tests {
             b"a=p,i=1,p=1,C=1".as_slice(),
             b"a=p,i=1,p=2,P=1,Q=1,H=3,V=2,c=2,r=2".as_slice(),
         ] {
-            let cmd = command::Parser::parse_string(input).unwrap();
+            let cmd = command::Parser::parse_string(crate::alloc::Global, input).unwrap();
             assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
         }
         assert_eq!(0, unsafe { (*t.screens.active).cursor.x });
@@ -3043,7 +3340,7 @@ mod tests {
 
         // Kitty rejects U=1 + P= before checking that the image exists,
         // so this must not be ENOENT.
-        let cmd = command::Parser::parse_string(b"a=p,i=42,U=1,P=1").unwrap();
+        let cmd = command::Parser::parse_string(crate::alloc::Global, b"a=p,i=42,U=1,P=1").unwrap();
         let resp = execute(alloc, &mut t, &cmd).unwrap();
         assert!(!resp.ok());
         assert_eq!(
@@ -3068,7 +3365,7 @@ mod tests {
             b"a=p,i=1,p=2,P=1,Q=1".as_slice(),
             b"a=p,i=1,p=3,P=1,Q=2".as_slice(),
         ] {
-            let cmd = command::Parser::parse_string(input).unwrap();
+            let cmd = command::Parser::parse_string(crate::alloc::Global, input).unwrap();
             assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
         }
         assert_eq!(
@@ -3081,7 +3378,8 @@ mod tests {
         // Deleting the middle placement takes the grandchild with it but
         // leaves the root.
         {
-            let cmd = command::Parser::parse_string(b"a=d,d=i,i=1,p=2").unwrap();
+            let cmd =
+                command::Parser::parse_string(crate::alloc::Global, b"a=d,d=i,i=1,p=2").unwrap();
             assert!(execute(alloc, &mut t, &cmd).is_none());
         }
         {
@@ -3101,7 +3399,8 @@ mod tests {
         // Deleting the root removes the remaining placement, and the
         // image itself is retained (lowercase delete).
         {
-            let cmd = command::Parser::parse_string(b"a=d,d=i,i=1,p=1").unwrap();
+            let cmd =
+                command::Parser::parse_string(crate::alloc::Global, b"a=d,d=i,i=1,p=1").unwrap();
             assert!(execute(alloc, &mut t, &cmd).is_none());
         }
         {
@@ -3127,7 +3426,7 @@ mod tests {
             b"a=p,i=1,p=1,C=1".as_slice(),
             b"a=p,i=2,p=1,P=1,Q=1".as_slice(),
         ] {
-            let cmd = command::Parser::parse_string(input).unwrap();
+            let cmd = command::Parser::parse_string(crate::alloc::Global, input).unwrap();
             assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
         }
         assert_eq!(
@@ -3143,7 +3442,9 @@ mod tests {
         // with uppercase semantics, and kitty also removes an image whose
         // last placement died from a broken parent chain.
         {
-            let cmd = command::Parser::parse_string(b"a=t,f=24,s=1,v=1,i=1;AAAA").unwrap();
+            let cmd =
+                command::Parser::parse_string(crate::alloc::Global, b"a=t,f=24,s=1,v=1,i=1;AAAA")
+                    .unwrap();
             assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
         }
         {
@@ -3169,7 +3470,7 @@ mod tests {
             b"a=p,i=1,p=3,C=1".as_slice(),
             b"a=p,i=2,P=1".as_slice(),
         ] {
-            let cmd = command::Parser::parse_string(input).unwrap();
+            let cmd = command::Parser::parse_string(crate::alloc::Global, input).unwrap();
             assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
         }
 
@@ -3220,7 +3521,7 @@ mod tests {
             b"a=p,i=1,p=2,C=1".as_slice(),
             b"a=p,i=1,p=3,P=1,Q=2".as_slice(),
         ] {
-            let cmd = command::Parser::parse_string(input).unwrap();
+            let cmd = command::Parser::parse_string(crate::alloc::Global, input).unwrap();
             assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
         }
         assert_eq!(
@@ -3244,7 +3545,7 @@ mod tests {
             b"a=t,f=24,s=1,v=1,i=1;AAAA".as_slice(),
             b"a=p,i=1,p=1,C=1".as_slice(),
         ] {
-            let cmd = command::Parser::parse_string(input).unwrap();
+            let cmd = command::Parser::parse_string(crate::alloc::Global, input).unwrap();
             assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
         }
 
@@ -3273,7 +3574,8 @@ mod tests {
         }
 
         {
-            let cmd = command::Parser::parse_string(b"a=p,i=1,p=2,P=1,Q=1").unwrap();
+            let cmd = command::Parser::parse_string(crate::alloc::Global, b"a=p,i=1,p=2,P=1,Q=1")
+                .unwrap();
             let resp = execute(alloc, &mut t, &cmd).unwrap();
             assert!(!resp.ok());
             assert_eq!(
@@ -3303,7 +3605,7 @@ mod tests {
             b"a=p,i=1,p=1,C=1".as_slice(),
             b"a=p,i=1,p=2,P=1,Q=1".as_slice(),
         ] {
-            let cmd = command::Parser::parse_string(input).unwrap();
+            let cmd = command::Parser::parse_string(crate::alloc::Global, input).unwrap();
             assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
         }
 
@@ -3311,7 +3613,8 @@ mod tests {
         // removes placement 2, leaving the image without placements, so
         // the image must be freed too.
         {
-            let cmd = command::Parser::parse_string(b"a=d,d=I,i=1,p=1").unwrap();
+            let cmd =
+                command::Parser::parse_string(crate::alloc::Global, b"a=d,d=I,i=1,p=1").unwrap();
             assert!(execute(alloc, &mut t, &cmd).is_none());
         }
         {
@@ -3334,12 +3637,15 @@ mod tests {
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
         {
-            let cmd = command::Parser::parse_string(b"a=t,f=24,s=1,v=1,i=1;/wAA").unwrap();
+            let cmd =
+                command::Parser::parse_string(crate::alloc::Global, b"a=t,f=24,s=1,v=1,i=1;/wAA")
+                    .unwrap();
             assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
         }
 
         // Transmit a 1x1 RGB blue frame ("AAD/" is 0000FF).
-        let cmd = command::Parser::parse_string(b"a=f,i=1,f=24,s=1,v=1;AAD/").unwrap();
+        let cmd = command::Parser::parse_string(crate::alloc::Global, b"a=f,i=1,f=24,s=1,v=1;AAD/")
+            .unwrap();
         let resp = execute(alloc, &mut t, &cmd).unwrap();
         assert!(resp.ok());
         assert_eq!(1u32, resp.id);
@@ -3379,7 +3685,9 @@ mod tests {
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
         {
-            let cmd = command::Parser::parse_string(b"a=t,f=24,s=1,v=1,i=1;/wAA").unwrap();
+            let cmd =
+                command::Parser::parse_string(crate::alloc::Global, b"a=t,f=24,s=1,v=1,i=1;/wAA")
+                    .unwrap();
             assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
         }
 
@@ -3387,7 +3695,7 @@ mod tests {
             b"a=f,i=1,f=24,s=1,v=1,z=100;AAD/".as_slice(),
             b"a=f,i=1,f=24,s=1,v=1,z=-5;AAD/".as_slice(),
         ] {
-            let cmd = command::Parser::parse_string(input).unwrap();
+            let cmd = command::Parser::parse_string(crate::alloc::Global, input).unwrap();
             assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
         }
 
@@ -3413,15 +3721,22 @@ mod tests {
 
         // 2x1 RGB white image ("////////" is FFFFFF FFFFFF).
         {
-            let cmd = command::Parser::parse_string(b"a=t,f=24,s=2,v=1,i=1;////////").unwrap();
+            let cmd = command::Parser::parse_string(
+                crate::alloc::Global,
+                b"a=t,f=24,s=2,v=1,i=1;////////",
+            )
+            .unwrap();
             assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
         }
 
         // New frame: 1x1 RGB white transmitted at x=1 over an opaque red
         // background (Y=4278190335 is 0xff0000ff, R in the MSB).
         {
-            let cmd = command::Parser::parse_string(b"a=f,i=1,f=24,s=1,v=1,x=1,Y=4278190335;////")
-                .unwrap();
+            let cmd = command::Parser::parse_string(
+                crate::alloc::Global,
+                b"a=f,i=1,f=24,s=1,v=1,x=1,Y=4278190335;////",
+            )
+            .unwrap();
             assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
         }
 
@@ -3447,7 +3762,9 @@ mod tests {
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
         {
-            let cmd = command::Parser::parse_string(b"a=t,f=24,s=1,v=1,i=1;/wAA").unwrap();
+            let cmd =
+                command::Parser::parse_string(crate::alloc::Global, b"a=t,f=24,s=1,v=1,i=1;/wAA")
+                    .unwrap();
             assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
         }
 
@@ -3455,8 +3772,11 @@ mod tests {
         // pixel ("AAD/gA==" is 0000FF80) in overwrite mode: the source
         // replaces the canvas including alpha.
         {
-            let cmd =
-                command::Parser::parse_string(b"a=f,i=1,f=32,s=1,v=1,c=1,X=1;AAD/gA==").unwrap();
+            let cmd = command::Parser::parse_string(
+                crate::alloc::Global,
+                b"a=f,i=1,f=32,s=1,v=1,c=1,X=1;AAD/gA==",
+            )
+            .unwrap();
             let resp = execute(alloc, &mut t, &cmd).unwrap();
             assert!(resp.ok());
         }
@@ -3480,21 +3800,31 @@ mod tests {
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
         {
-            let cmd = command::Parser::parse_string(b"a=t,f=24,s=1,v=1,i=1;/wAA").unwrap();
+            let cmd =
+                command::Parser::parse_string(crate::alloc::Global, b"a=t,f=24,s=1,v=1,i=1;/wAA")
+                    .unwrap();
             assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
         }
 
         // Blend a fully opaque blue pixel over the root: alpha blending
         // an opaque source is equivalent to a copy.
         {
-            let cmd = command::Parser::parse_string(b"a=f,i=1,f=32,s=1,v=1,c=1;AAD//w==").unwrap();
+            let cmd = command::Parser::parse_string(
+                crate::alloc::Global,
+                b"a=f,i=1,f=32,s=1,v=1,c=1;AAD//w==",
+            )
+            .unwrap();
             assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
         }
 
         // Blend a fully transparent pixel over the root: the canvas is
         // unchanged (still the red base).
         {
-            let cmd = command::Parser::parse_string(b"a=f,i=1,f=32,s=1,v=1,c=1;AAD/AA==").unwrap();
+            let cmd = command::Parser::parse_string(
+                crate::alloc::Global,
+                b"a=f,i=1,f=32,s=1,v=1,c=1;AAD/AA==",
+            )
+            .unwrap();
             assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
         }
 
@@ -3518,7 +3848,9 @@ mod tests {
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
         {
-            let cmd = command::Parser::parse_string(b"a=t,f=24,s=1,v=1,i=1;/wAA").unwrap();
+            let cmd =
+                command::Parser::parse_string(crate::alloc::Global, b"a=t,f=24,s=1,v=1,i=1;/wAA")
+                    .unwrap();
             assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
         }
         let gen1 = unsafe { &(*t.screens.active).kitty_images }
@@ -3528,7 +3860,9 @@ mod tests {
 
         // r=1 edits the root frame in place. The root is the displayed
         // frame so the image generation must change.
-        let cmd = command::Parser::parse_string(b"a=f,i=1,f=24,s=1,v=1,r=1;AAD/").unwrap();
+        let cmd =
+            command::Parser::parse_string(crate::alloc::Global, b"a=f,i=1,f=24,s=1,v=1,r=1;AAD/")
+                .unwrap();
         let resp = execute(alloc, &mut t, &cmd).unwrap();
         assert!(resp.ok());
         assert_eq!(1u32, resp.frame);
@@ -3548,18 +3882,28 @@ mod tests {
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
         {
-            let cmd = command::Parser::parse_string(b"a=t,f=24,s=1,v=1,i=1;/wAA").unwrap();
+            let cmd =
+                command::Parser::parse_string(crate::alloc::Global, b"a=t,f=24,s=1,v=1,i=1;/wAA")
+                    .unwrap();
             assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
         }
 
         // Create frame 2, then edit it with z=-1: gap becomes gapless.
         // Editing with z=0 leaves the gap unchanged (no 40ms default).
         {
-            let cmd = command::Parser::parse_string(b"a=f,i=1,f=24,s=1,v=1,z=77;AAD/").unwrap();
+            let cmd = command::Parser::parse_string(
+                crate::alloc::Global,
+                b"a=f,i=1,f=24,s=1,v=1,z=77;AAD/",
+            )
+            .unwrap();
             assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
         }
         {
-            let cmd = command::Parser::parse_string(b"a=f,i=1,f=24,s=1,v=1,r=2;/wAA").unwrap();
+            let cmd = command::Parser::parse_string(
+                crate::alloc::Global,
+                b"a=f,i=1,f=24,s=1,v=1,r=2;/wAA",
+            )
+            .unwrap();
             assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
         }
         {
@@ -3574,7 +3918,11 @@ mod tests {
         }
 
         {
-            let cmd = command::Parser::parse_string(b"a=f,i=1,f=24,s=1,v=1,r=2,z=-1;/wAA").unwrap();
+            let cmd = command::Parser::parse_string(
+                crate::alloc::Global,
+                b"a=f,i=1,f=24,s=1,v=1,r=2,z=-1;/wAA",
+            )
+            .unwrap();
             assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
         }
         {
@@ -3598,7 +3946,9 @@ mod tests {
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
         {
-            let cmd = command::Parser::parse_string(b"a=t,f=24,s=1,v=1,i=1;/wAA").unwrap();
+            let cmd =
+                command::Parser::parse_string(crate::alloc::Global, b"a=t,f=24,s=1,v=1,i=1;/wAA")
+                    .unwrap();
             assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
         }
 
@@ -3619,7 +3969,7 @@ mod tests {
             (b"a=f,i=1,f=24,s=1,v=1;AA==", b"ENODATA: insufficient data"),
         ];
         for (input, message) in cases {
-            let cmd = command::Parser::parse_string(input).unwrap();
+            let cmd = command::Parser::parse_string(crate::alloc::Global, input).unwrap();
             let resp = execute(alloc, &mut t, &cmd).unwrap();
             assert!(!resp.ok());
             assert_eq!(message, resp.message.as_slice());
@@ -3642,12 +3992,16 @@ mod tests {
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
         {
-            let cmd = command::Parser::parse_string(b"a=t,f=24,s=1,v=1,i=1;/wAA").unwrap();
+            let cmd =
+                command::Parser::parse_string(crate::alloc::Global, b"a=t,f=24,s=1,v=1,i=1;/wAA")
+                    .unwrap();
             assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
         }
 
         // Six bytes for a 1x1 RGB frame: Kitty tolerates the excess.
-        let cmd = command::Parser::parse_string(b"a=f,i=1,f=24,s=1,v=1;AAD/////").unwrap();
+        let cmd =
+            command::Parser::parse_string(crate::alloc::Global, b"a=f,i=1,f=24,s=1,v=1;AAD/////")
+                .unwrap();
         assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
 
         let storage = unsafe { &(*t.screens.active).kitty_images };
@@ -3671,7 +4025,11 @@ mod tests {
 
         // 2x1 RGB white image.
         {
-            let cmd = command::Parser::parse_string(b"a=t,f=24,s=2,v=1,i=1;////////").unwrap();
+            let cmd = command::Parser::parse_string(
+                crate::alloc::Global,
+                b"a=t,f=24,s=2,v=1,i=1;////////",
+            )
+            .unwrap();
             assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
         }
 
@@ -3679,14 +4037,18 @@ mod tests {
         // chunks repeat a=f per the protocol. No response until the
         // final chunk.
         {
-            let cmd = command::Parser::parse_string(b"a=f,i=1,f=24,s=2,v=1,z=60,m=1;/wAA").unwrap();
+            let cmd = command::Parser::parse_string(
+                crate::alloc::Global,
+                b"a=f,i=1,f=24,s=2,v=1,z=60,m=1;/wAA",
+            )
+            .unwrap();
             assert!(execute(alloc, &mut t, &cmd).is_none());
         }
         assert!(unsafe { &(*t.screens.active).kitty_images }
             .loading
             .is_some());
         {
-            let cmd = command::Parser::parse_string(b"a=f,m=0;AAD/").unwrap();
+            let cmd = command::Parser::parse_string(crate::alloc::Global, b"a=f,m=0;AAD/").unwrap();
             let resp = execute(alloc, &mut t, &cmd).unwrap();
             assert!(resp.ok());
             assert_eq!(1u32, resp.id);
@@ -3720,7 +4082,11 @@ mod tests {
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
 
         {
-            let cmd = command::Parser::parse_string(b"a=t,f=24,s=2,v=1,i=1;////////").unwrap();
+            let cmd = command::Parser::parse_string(
+                crate::alloc::Global,
+                b"a=t,f=24,s=2,v=1,i=1;////////",
+            )
+            .unwrap();
             assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
         }
 
@@ -3728,11 +4094,15 @@ mod tests {
         // (which parses as a transmit action) must still continue the
         // frame load rather than turn into an image transmission.
         {
-            let cmd = command::Parser::parse_string(b"a=f,i=1,f=24,s=2,v=1,m=1;/wAA").unwrap();
+            let cmd = command::Parser::parse_string(
+                crate::alloc::Global,
+                b"a=f,i=1,f=24,s=2,v=1,m=1;/wAA",
+            )
+            .unwrap();
             assert!(execute(alloc, &mut t, &cmd).is_none());
         }
         {
-            let cmd = command::Parser::parse_string(b"m=0;AAD/").unwrap();
+            let cmd = command::Parser::parse_string(crate::alloc::Global, b"m=0;AAD/").unwrap();
             let resp = execute(alloc, &mut t, &cmd).unwrap();
             assert!(resp.ok());
             assert_eq!(2u32, resp.frame);
@@ -3757,11 +4127,15 @@ mod tests {
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
         {
-            let cmd = command::Parser::parse_string(b"a=t,f=24,s=1,v=1,i=1;/wAA").unwrap();
+            let cmd =
+                command::Parser::parse_string(crate::alloc::Global, b"a=t,f=24,s=1,v=1,i=1;/wAA")
+                    .unwrap();
             assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
         }
         {
-            let cmd = command::Parser::parse_string(b"a=f,i=1,f=24,s=1,v=1;AAD/").unwrap();
+            let cmd =
+                command::Parser::parse_string(crate::alloc::Global, b"a=f,i=1,f=24,s=1,v=1;AAD/")
+                    .unwrap();
             assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
         }
         let gen1 = unsafe { &(*t.screens.active).kitty_images }
@@ -3773,7 +4147,9 @@ mod tests {
         // (r=1,z=50), the current frame (c=2), the state (s=3, running),
         // and the loop count (v=3, meaning two loops). Successful a=a
         // commands never respond.
-        let cmd = command::Parser::parse_string(b"a=a,i=1,r=1,z=50,c=2,s=3,v=3").unwrap();
+        let cmd =
+            command::Parser::parse_string(crate::alloc::Global, b"a=a,i=1,r=1,z=50,c=2,s=3,v=3")
+                .unwrap();
         assert!(execute(alloc, &mut t, &cmd).is_none());
 
         let storage = unsafe { &(*t.screens.active).kitty_images };
@@ -3798,12 +4174,15 @@ mod tests {
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
         {
-            let cmd = command::Parser::parse_string(b"a=t,f=24,s=1,v=1,i=1;/wAA").unwrap();
+            let cmd =
+                command::Parser::parse_string(crate::alloc::Global, b"a=t,f=24,s=1,v=1,i=1;/wAA")
+                    .unwrap();
             assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
         }
 
         // Out-of-range frame numbers and s values are silently ignored.
-        let cmd = command::Parser::parse_string(b"a=a,i=1,r=9,z=50,c=9,s=7").unwrap();
+        let cmd = command::Parser::parse_string(crate::alloc::Global, b"a=a,i=1,r=9,z=50,c=9,s=7")
+            .unwrap();
         assert!(execute(alloc, &mut t, &cmd).is_none());
 
         let storage = unsafe { &(*t.screens.active).kitty_images };
@@ -3827,7 +4206,7 @@ mod tests {
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
 
-        let cmd = command::Parser::parse_string(b"a=a,i=9,s=3").unwrap();
+        let cmd = command::Parser::parse_string(crate::alloc::Global, b"a=a,i=9,s=3").unwrap();
         let resp = execute(alloc, &mut t, &cmd).unwrap();
         assert!(!resp.ok());
         assert_eq!(
@@ -3847,13 +4226,19 @@ mod tests {
 
         // 2x1 RGB image: red then blue ("/wAAAAD/" is FF0000 0000FF).
         {
-            let cmd = command::Parser::parse_string(b"a=t,f=24,s=2,v=1,i=1;/wAAAAD/").unwrap();
+            let cmd = command::Parser::parse_string(
+                crate::alloc::Global,
+                b"a=t,f=24,s=2,v=1,i=1;/wAAAAD/",
+            )
+            .unwrap();
             assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
         }
         // Frame 2 starts as a transparent canvas with a white pixel at
         // x=0 ("////" is FFFFFF).
         {
-            let cmd = command::Parser::parse_string(b"a=f,i=1,f=24,s=1,v=1;////").unwrap();
+            let cmd =
+                command::Parser::parse_string(crate::alloc::Global, b"a=f,i=1,f=24,s=1,v=1;////")
+                    .unwrap();
             assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
         }
 
@@ -3861,7 +4246,11 @@ mod tests {
         // r=1 is the source frame, c=2 the destination, X/Y the source
         // offsets, x/y the destination offsets.
         {
-            let cmd = command::Parser::parse_string(b"a=c,i=1,r=1,c=2,w=1,h=1,X=1,x=0").unwrap();
+            let cmd = command::Parser::parse_string(
+                crate::alloc::Global,
+                b"a=c,i=1,r=1,c=2,w=1,h=1,X=1,x=0",
+            )
+            .unwrap();
             let resp = execute(alloc, &mut t, &cmd).unwrap();
             assert!(resp.ok());
             assert_eq!(0u32, resp.frame);
@@ -3885,75 +4274,83 @@ mod tests {
     // Parity S190-F2 / N101 (no reference test): the three RGBA conversions
     // in a=f and a=c answer ENOMEM when their allocation fails, as the
     // reference's `catch |err| { encodeError(&result, err); return result; }`
-    // arms do. The `RGBA_FROM_FORMAT_TW` fail point stands in for the
-    // failing allocator.
-    fn rgba_alloc_fails<R>(f: impl FnOnce() -> R) -> R {
-        use crate::kitty::graphics_pixel::{RgbaFromFormatFp, RGBA_FROM_FORMAT_TW};
-        use rustty_util::tripwire::ResetMode;
-        RGBA_FROM_FORMAT_TW.with(|tw| {
-            tw.borrow_mut().errorAlways(
-                RgbaFromFormatFp::Alloc,
-                crate::kitty::graphics_storage::OutOfMemory,
-            )
-        });
-        let r = f();
-        RGBA_FROM_FORMAT_TW
-            .with(|tw| tw.borrow_mut().end(ResetMode::Reset))
-            .unwrap();
-        r
+    // arms do.
+    //
+    // Parity tail S7-4: the failure is real. The terminal is built over a
+    // `FailingAllocator` and, for every n, the command under test runs with
+    // its n-th allocation refused, until a run induces no failure. Every
+    // refused run answers ENOMEM (never a panic), at least one of them fails
+    // an RGBA conversion (the image is still RGB afterwards), and every byte
+    // is returned by `deinit`. (This retires the `RGBA_FROM_FORMAT_TW`
+    // stand-in.)
+    fn rgba_oom_sweep(setup: &[&[u8]], cmd: &[u8]) {
+        use crate::alloc::testing::{Config, FailingAllocator};
+        let mut conversion_refused = false;
+        let mut n = 0usize;
+        loop {
+            let failing = FailingAllocator::over_heap(Config::default());
+            let c = failing.allocator();
+            crate::alloc::testing::with_handle(&c, |alloc| {
+                let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
+                for setup_cmd in setup {
+                    let setup_cmd =
+                        command::Parser::parse_string(crate::alloc::Global, setup_cmd).unwrap();
+                    assert!(execute(alloc, &mut t, &setup_cmd).unwrap().ok());
+                }
+                let cmd = command::Parser::parse_string(crate::alloc::Global, cmd).unwrap();
+                failing.fail_index.set(failing.alloc_index.get() + n);
+                let resp = execute(alloc, &mut t, &cmd).unwrap();
+                failing.fail_index.set(usize::MAX);
+                if !resp.ok() {
+                    assert_eq!(
+                        b"ENOMEM: out of memory".as_slice(),
+                        resp.message.as_slice(),
+                        "n={n}"
+                    );
+                    let storage = unsafe { &(*t.screens.active).kitty_images };
+                    let img = storage.image_ptr_by_id_or_number(1, 0).unwrap();
+                    if img.format == command::Format::Rgb {
+                        conversion_refused = true;
+                    }
+                }
+                t.deinit(alloc);
+            });
+            assert_eq!(
+                failing.allocated_bytes.get(),
+                failing.freed_bytes.get(),
+                "n={n}: every byte is returned"
+            );
+            if !failing.has_induced_failure.get() {
+                break;
+            }
+            n += 1;
+            assert!(n < 1000, "the sweep must terminate");
+        }
+        assert!(n > 0, "the command allocates");
+        assert!(conversion_refused, "an RGBA conversion was refused");
     }
 
     #[test]
     fn kittygfx_animation_frame_rgba_conversion_oom_is_enomem() {
-        let alloc = crate::alloc::Global;
-        let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
-        {
-            let cmd = command::Parser::parse_string(b"a=t,f=24,s=1,v=1,i=1;/wAA").unwrap();
-            assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
-        }
-
-        // An RGB frame: the frame's own conversion fails first.
-        let cmd = command::Parser::parse_string(b"a=f,i=1,f=24,s=1,v=1;AAD/").unwrap();
-        let resp = rgba_alloc_fails(|| execute(alloc, &mut t, &cmd).unwrap());
-        assert_eq!(b"ENOMEM: out of memory".as_slice(), resp.message.as_slice());
-
-        // An RGBA frame over the RGB image: the image's conversion
-        // (`convertImageToRgba`) fails.
-        let cmd = command::Parser::parse_string(b"a=f,i=1,f=32,s=1,v=1;AAD//w==").unwrap();
-        let resp = rgba_alloc_fails(|| execute(alloc, &mut t, &cmd).unwrap());
-        assert_eq!(b"ENOMEM: out of memory".as_slice(), resp.message.as_slice());
-
-        // Neither attempt changed the image.
-        {
-            let storage = unsafe { &(*t.screens.active).kitty_images };
-            let img = storage.image_ptr_by_id_or_number(1, 0).unwrap();
-            assert_eq!(command::Format::Rgb, img.format);
-            assert_eq!(&[255, 0, 0], img.data.bytes().unwrap());
-            assert!(img.animation.is_none());
-        }
-
-        t.deinit(alloc);
+        // An RGB frame over an RGB image: the frame's own conversion and the
+        // image's conversion (`convertImageToRgba`).
+        rgba_oom_sweep(
+            &[b"a=t,f=24,s=1,v=1,i=1;/wAA"],
+            b"a=f,i=1,f=24,s=1,v=1;AAD/",
+        );
+        // An RGBA frame over the RGB image: the image's conversion.
+        rgba_oom_sweep(
+            &[b"a=t,f=24,s=1,v=1,i=1;/wAA"],
+            b"a=f,i=1,f=32,s=1,v=1;AAD//w==",
+        );
     }
 
     #[test]
     fn kittygfx_animation_compose_rgba_conversion_oom_is_enomem() {
-        let alloc = crate::alloc::Global;
-        let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
-        {
-            let cmd = command::Parser::parse_string(b"a=t,f=24,s=2,v=1,i=1;/wAAAAD/").unwrap();
-            assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
-        }
-
-        let cmd = command::Parser::parse_string(b"a=c,i=1,r=1,c=1,w=1,h=1,X=1,x=0").unwrap();
-        let resp = rgba_alloc_fails(|| execute(alloc, &mut t, &cmd).unwrap());
-        assert_eq!(b"ENOMEM: out of memory".as_slice(), resp.message.as_slice());
-        {
-            let storage = unsafe { &(*t.screens.active).kitty_images };
-            let img = storage.image_ptr_by_id_or_number(1, 0).unwrap();
-            assert_eq!(command::Format::Rgb, img.format);
-        }
-
-        t.deinit(alloc);
+        rgba_oom_sweep(
+            &[b"a=t,f=24,s=2,v=1,i=1;/wAAAAD/"],
+            b"a=c,i=1,r=1,c=1,w=1,h=1,X=1,x=0",
+        );
     }
 
     // test "kittygfx animation: compose current frame bumps generation"
@@ -3965,7 +4362,11 @@ mod tests {
 
         // 2x1 RGB white image; the root frame is the displayed frame.
         {
-            let cmd = command::Parser::parse_string(b"a=t,f=24,s=2,v=1,i=1;////////").unwrap();
+            let cmd = command::Parser::parse_string(
+                crate::alloc::Global,
+                b"a=t,f=24,s=2,v=1,i=1;////////",
+            )
+            .unwrap();
             assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
         }
         let gen1 = unsafe { &(*t.screens.active).kitty_images }
@@ -3975,7 +4376,9 @@ mod tests {
 
         // a=c works on images without animation state: both frames are
         // the root. Copy pixel 0 onto pixel 1.
-        let cmd = command::Parser::parse_string(b"a=c,i=1,r=1,c=1,w=1,h=1,x=1").unwrap();
+        let cmd =
+            command::Parser::parse_string(crate::alloc::Global, b"a=c,i=1,r=1,c=1,w=1,h=1,x=1")
+                .unwrap();
         assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
         let img_generation = unsafe { &(*t.screens.active).kitty_images }
             .image_ptr_by_id_or_number(1, 0)
@@ -3993,7 +4396,9 @@ mod tests {
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
         {
-            let cmd = command::Parser::parse_string(b"a=t,f=24,s=1,v=1,i=1;/wAA").unwrap();
+            let cmd =
+                command::Parser::parse_string(crate::alloc::Global, b"a=t,f=24,s=1,v=1,i=1;/wAA")
+                    .unwrap();
             assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
         }
 
@@ -4017,7 +4422,7 @@ mod tests {
             ),
         ];
         for (input, message) in cases {
-            let cmd = command::Parser::parse_string(input).unwrap();
+            let cmd = command::Parser::parse_string(crate::alloc::Global, input).unwrap();
             let resp = execute(alloc, &mut t, &cmd).unwrap();
             assert!(!resp.ok());
             assert_eq!(message, resp.message.as_slice());
@@ -4033,7 +4438,9 @@ mod tests {
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
         {
-            let cmd = command::Parser::parse_string(b"a=t,f=24,s=1,v=1,i=1;/wAA").unwrap();
+            let cmd =
+                command::Parser::parse_string(crate::alloc::Global, b"a=t,f=24,s=1,v=1,i=1;/wAA")
+                    .unwrap();
             assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
         }
 
@@ -4042,7 +4449,7 @@ mod tests {
             b"a=f,i=1,f=24,s=1,v=1,z=10;AAD/".as_slice(),
             b"a=f,i=1,f=24,s=1,v=1,z=20;////".as_slice(),
         ] {
-            let cmd = command::Parser::parse_string(input).unwrap();
+            let cmd = command::Parser::parse_string(crate::alloc::Global, input).unwrap();
             assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
         }
         let total_before = unsafe { &(*t.screens.active).kitty_images }.total_bytes;
@@ -4050,7 +4457,7 @@ mod tests {
         // Delete the root frame (r omitted selects it): frame 2 becomes
         // the new root, including its gap. Deletes never respond.
         {
-            let cmd = command::Parser::parse_string(b"a=d,d=f,i=1").unwrap();
+            let cmd = command::Parser::parse_string(crate::alloc::Global, b"a=d,d=f,i=1").unwrap();
             assert!(execute(alloc, &mut t, &cmd).is_none());
         }
         {
@@ -4065,7 +4472,8 @@ mod tests {
 
         // Delete a frame number past the end: clamps to the last frame.
         {
-            let cmd = command::Parser::parse_string(b"a=d,d=f,i=1,r=9").unwrap();
+            let cmd =
+                command::Parser::parse_string(crate::alloc::Global, b"a=d,d=f,i=1,r=9").unwrap();
             assert!(execute(alloc, &mut t, &cmd).is_none());
         }
         {
@@ -4082,7 +4490,7 @@ mod tests {
 
         // Down to one frame: d=f is now a no-op and the image survives.
         {
-            let cmd = command::Parser::parse_string(b"a=d,d=f,i=1").unwrap();
+            let cmd = command::Parser::parse_string(crate::alloc::Global, b"a=d,d=f,i=1").unwrap();
             assert!(execute(alloc, &mut t, &cmd).is_none());
         }
         assert!(unsafe { &(*t.screens.active).kitty_images }
@@ -4102,7 +4510,11 @@ mod tests {
         // Transmit and place: unlike d=I, an uppercase frame delete on a
         // non-animated image removes it even though it is placed.
         {
-            let cmd = command::Parser::parse_string(b"a=T,f=24,s=1,v=1,i=1,C=1;/wAA").unwrap();
+            let cmd = command::Parser::parse_string(
+                crate::alloc::Global,
+                b"a=T,f=24,s=1,v=1,i=1,C=1;/wAA",
+            )
+            .unwrap();
             assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
         }
         assert_eq!(
@@ -4113,7 +4525,7 @@ mod tests {
         );
 
         {
-            let cmd = command::Parser::parse_string(b"a=d,d=F,i=1").unwrap();
+            let cmd = command::Parser::parse_string(crate::alloc::Global, b"a=d,d=F,i=1").unwrap();
             assert!(execute(alloc, &mut t, &cmd).is_none());
         }
         let storage = unsafe { &(*t.screens.active).kitty_images };
@@ -4131,7 +4543,9 @@ mod tests {
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
         {
-            let cmd = command::Parser::parse_string(b"a=t,f=24,s=1,v=1,i=1;/wAA").unwrap();
+            let cmd =
+                command::Parser::parse_string(crate::alloc::Global, b"a=t,f=24,s=1,v=1,i=1;/wAA")
+                    .unwrap();
             assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
         }
         for input in [
@@ -4139,7 +4553,7 @@ mod tests {
             b"a=f,i=1,f=24,s=1,v=1;////".as_slice(),
             b"a=a,i=1,c=3".as_slice(),
         ] {
-            let cmd = command::Parser::parse_string(input).unwrap();
+            let cmd = command::Parser::parse_string(crate::alloc::Global, input).unwrap();
             let _ = execute(alloc, &mut t, &cmd);
         }
 
@@ -4154,7 +4568,8 @@ mod tests {
         // Deleting the last frame (the current one) clamps the index and
         // refreshes the display.
         {
-            let cmd = command::Parser::parse_string(b"a=d,d=f,i=1,r=3").unwrap();
+            let cmd =
+                command::Parser::parse_string(crate::alloc::Global, b"a=d,d=f,i=1,r=3").unwrap();
             assert!(execute(alloc, &mut t, &cmd).is_none());
         }
         let storage = unsafe { &(*t.screens.active).kitty_images };
@@ -4174,11 +4589,15 @@ mod tests {
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
         {
-            let cmd = command::Parser::parse_string(b"a=t,f=24,s=1,v=1,i=1;/wAA").unwrap();
+            let cmd =
+                command::Parser::parse_string(crate::alloc::Global, b"a=t,f=24,s=1,v=1,i=1;/wAA")
+                    .unwrap();
             assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
         }
         {
-            let cmd = command::Parser::parse_string(b"a=f,i=1,f=24,s=1,v=1;AAD/").unwrap();
+            let cmd =
+                command::Parser::parse_string(crate::alloc::Global, b"a=f,i=1,f=24,s=1,v=1;AAD/")
+                    .unwrap();
             assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
         }
         assert_eq!(
@@ -4189,7 +4608,9 @@ mod tests {
         // Retransmit the base image: the animation is dropped and the
         // frame bytes are credited back.
         {
-            let cmd = command::Parser::parse_string(b"a=t,f=24,s=1,v=1,i=1;/wAA").unwrap();
+            let cmd =
+                command::Parser::parse_string(crate::alloc::Global, b"a=t,f=24,s=1,v=1,i=1;/wAA")
+                    .unwrap();
             assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
         }
         let storage = unsafe { &(*t.screens.active).kitty_images };
@@ -4207,15 +4628,19 @@ mod tests {
 
         let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
         {
-            let cmd = command::Parser::parse_string(b"a=t,f=24,s=1,v=1,i=1;/wAA").unwrap();
+            let cmd =
+                command::Parser::parse_string(crate::alloc::Global, b"a=t,f=24,s=1,v=1,i=1;/wAA")
+                    .unwrap();
             assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
         }
         {
-            let cmd = command::Parser::parse_string(b"a=f,i=1,f=24,s=1,v=1;AAD/").unwrap();
+            let cmd =
+                command::Parser::parse_string(crate::alloc::Global, b"a=f,i=1,f=24,s=1,v=1;AAD/")
+                    .unwrap();
             assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
         }
 
-        let cmd = command::Parser::parse_string(b"a=a,i=1,r=2,z=-1").unwrap();
+        let cmd = command::Parser::parse_string(crate::alloc::Global, b"a=a,i=1,r=2,z=-1").unwrap();
         assert!(execute(alloc, &mut t, &cmd).is_none());
 
         let storage = unsafe { &(*t.screens.active).kitty_images };

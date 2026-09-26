@@ -17,11 +17,12 @@
 //   const simd = @import("../../simd/main.zig");
 //   const clipboard = @import("../clipboard.zig");
 //   const protocol = @import("../osc/parsers/kitty_clipboard_protocol.zig");
-// `std` facilities are reproduced inline; `Allocator` is the crate-wide
-// global-allocator treatment (owned `Vec<u8>` fields replace the caller's
-// packet-scoped arena, so there is no deinit either way).
+// `std` facilities are reproduced inline. `Allocator` is the runtime allocator
+// handle (parity tail S7-4): every decoded value is allocated through the
+// allocator given to `parse`/`init`, fallibly.
 #![allow(non_upper_case_globals)]
 
+use crate::alloc::{self as valloc, Allocator, Bytes, OutOfMemory, TryPushExt};
 use crate::clipboard;
 use crate::osc::parsers::kitty_clipboard_protocol as protocol;
 use rustty_simd as simd;
@@ -54,9 +55,6 @@ pub(crate) const fn b64_calc_size(n: usize) -> usize {
 }
 
 /// `Metadata.parse`'s error set: `error{ OutOfMemory, InvalidValue }`.
-// PORT NOTE: `OutOfMemory` is carried for parity with the reference error
-// set; the global-allocator port's allocations are infallible so only
-// `InvalidValue` is produced.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ParseError {
     OutOfMemory,
@@ -68,8 +66,11 @@ pub enum ParseError {
 /// All slice values are allocated from the allocator given to parse and
 /// are sized to their contents. Callers are expected to pass an arena
 /// scoped to handling the packet. There is no deinit.
-// PORT NOTE: the arena-owned `[]const u8` values are owned `Vec<u8>` here;
-// "no deinit" holds either way (drop frees them).
+// PORT NOTE (parity tail S7-4): the `[]const u8` values are owned `Bytes`
+// allocated through the allocator given to `parse` (the stream handler's
+// packet-scoped arena over the terminal's `gpa()` in the reference; each
+// value is its own allocation here, a T3 call-shape residual). They free on
+// drop, so "no deinit" holds.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Metadata {
     pub op: Operation,
@@ -85,40 +86,41 @@ pub struct Metadata {
     /// Sanitized id: invalid characters stripped, truncated to
     /// max_id_len. Empty means no id.
     // id: []const u8 = "",
-    pub id: Vec<u8>,
+    pub id: Bytes,
 
     /// Decoded mime metadata value. Empty means absent; kitty treats an
     /// empty mime the same as a missing one everywhere it matters (a
     /// wdata packet with either commits the transaction).
     // mime: []const u8 = "",
-    pub mime: Vec<u8>,
+    pub mime: Bytes,
 
     /// Decoded password. Empty means absent. Per the spec:
     /// "Specifying a password without a human friendly name is
     /// equivalent to not specifying a password and the terminal must
     /// treat the request as though it had no password."
     // pw: []const u8 = "",
-    pub pw: Vec<u8>,
+    pub pw: Bytes,
 
     /// Decoded human friendly name of the requesting program, shown in
     /// permission prompts. Empty means absent. Its presence opts into
     /// password grants.
     // name: []const u8 = "",
-    pub name: Vec<u8>,
+    pub name: Bytes,
 }
 
 impl Metadata {
     /// The reference's struct-literal defaults (every field but `op`); Rust
     /// callers spell `.{ .op = .write, .id = "42" }` as
-    /// `Metadata { id: b"42".to_vec(), ..Metadata::new(Operation::Write) }`.
+    /// `Metadata { id: bytes(b"42"), ..Metadata::new(Operation::Write) }`.
+    /// The empty defaults allocate nothing.
     pub fn new(op: Operation) -> Metadata {
         Metadata {
             op,
             loc: clipboard::Location::Standard,
-            id: Vec::new(),
-            mime: Vec::new(),
-            pw: Vec::new(),
-            name: Vec::new(),
+            id: Bytes::new_in(valloc::Global),
+            mime: Bytes::new_in(valloc::Global),
+            pw: Bytes::new_in(valloc::Global),
+            name: Bytes::new_in(valloc::Global),
         }
     }
 
@@ -134,7 +136,7 @@ impl Metadata {
     //     alloc: Allocator,
     //     raw: []const u8,
     // ) error{ OutOfMemory, InvalidValue }!?Metadata {
-    pub fn parse(raw: &[u8]) -> Result<Option<Metadata>, ParseError> {
+    pub fn parse(alloc: Allocator, raw: &[u8]) -> Result<Option<Metadata>, ParseError> {
         // const fields = Raw.parse(raw) orelse return null;
         let fields = match Raw::parse(raw) {
             Some(fields) => fields,
@@ -159,32 +161,35 @@ impl Metadata {
             } else {
                 clipboard::Location::Standard
             },
-            id: sanitize_id(fields.id),
-            mime: Vec::new(),
-            pw: Vec::new(),
-            name: Vec::new(),
+            id: sanitize_id(alloc, fields.id).map_err(|_| ParseError::OutOfMemory)?,
+            mime: Bytes::new_in(alloc),
+            pw: Bytes::new_in(alloc),
+            name: Bytes::new_in(alloc),
         };
 
         // result.mime = decodeValue(alloc, fields.mime, max_mime_len) catch ...
-        result.mime = match decode_value(fields.mime, max_mime_len) {
+        result.mime = match decode_value(alloc, fields.mime, max_mime_len) {
             Ok(v) => v,
+            Err(DecodeValueError::OutOfMemory) => return Err(ParseError::OutOfMemory),
             Err(
                 DecodeValueError::Overflow
                 | DecodeValueError::InvalidBase64
                 | DecodeValueError::InvalidUtf8,
             ) => return Err(ParseError::InvalidValue),
         };
-        result.pw = match decode_value(fields.pw, max_pw_len) {
+        result.pw = match decode_value(alloc, fields.pw, max_pw_len) {
             Ok(v) => v,
+            Err(DecodeValueError::OutOfMemory) => return Err(ParseError::OutOfMemory),
             Err(DecodeValueError::InvalidBase64 | DecodeValueError::InvalidUtf8) => {
                 return Err(ParseError::InvalidValue)
             }
             // An over-long password behaves as if none was given: it can
             // never match a stored grant.
-            Err(DecodeValueError::Overflow) => Vec::new(),
+            Err(DecodeValueError::Overflow) => Bytes::new_in(alloc),
         };
-        result.name = match decode_value(fields.name, max_name_len) {
+        result.name = match decode_value(alloc, fields.name, max_name_len) {
             Ok(v) => v,
+            Err(DecodeValueError::OutOfMemory) => return Err(ParseError::OutOfMemory),
             Err(
                 DecodeValueError::Overflow
                 | DecodeValueError::InvalidBase64
@@ -263,8 +268,10 @@ impl<'a> Raw<'a> {
 /// Any other characters must be stripped out from the id by the terminal
 /// emulator before retransmitting it.
 // fn sanitizeId(alloc: Allocator, value: []const u8) Allocator.Error![]const u8 {
-fn sanitize_id(value: &[u8]) -> Vec<u8> {
-    let mut list: Vec<u8> = Vec::new();
+// PORT NOTE: `defer list.deinit(alloc)` + `toOwnedSlice` hand the grown list
+// over as the result (the list itself, not a shrunk copy: a T3 residual).
+fn sanitize_id(alloc: Allocator, value: &[u8]) -> Result<Bytes, OutOfMemory> {
+    let mut list: Bytes = Bytes::new_in(alloc);
     for &c in value {
         match c {
             b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'+' | b'.' => {}
@@ -273,15 +280,16 @@ fn sanitize_id(value: &[u8]) -> Vec<u8> {
         if list.len() >= max_id_len {
             break;
         }
-        list.push(c);
+        // try list.append(alloc, c);
+        list.try_push(c)?;
     }
-    list
+    Ok(list)
 }
 
-/// `decodeValue`'s error set (minus the parity-only `OutOfMemory`; the
-/// buffer allocation is infallible here).
+/// `decodeValue`'s error set.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DecodeValueError {
+    OutOfMemory,
     Overflow,
     InvalidBase64,
     InvalidUtf8,
@@ -294,7 +302,7 @@ enum DecodeValueError {
 // fn decodeValue(alloc: Allocator, value: []const u8, max_len: usize) error{
 //     OutOfMemory, Overflow, InvalidBase64, InvalidUtf8,
 // }![]const u8 {
-fn decode_value(value: &[u8], max_len: usize) -> Result<Vec<u8>, DecodeValueError> {
+fn decode_value(alloc: Allocator, value: &[u8], max_len: usize) -> Result<Bytes, DecodeValueError> {
     // const Encoder = std.base64.standard.Encoder;
     //
     // Avoid hostile large payloads.
@@ -305,7 +313,9 @@ fn decode_value(value: &[u8], max_len: usize) -> Result<Vec<u8>, DecodeValueErro
 
     // Decode
     // const buf = try alloc.alloc(u8, simd.base64.maxLen(value));
-    let mut buf = vec![0u8; simd::base64::max_len(value)];
+    // errdefer alloc.free(buf);
+    let mut buf = alloc_buf(alloc, simd::base64::max_len(value))
+        .map_err(|_| DecodeValueError::OutOfMemory)?;
     let decoded_len = simd::base64::decode_strict(value, &mut buf, simd::base64::Padding::Required)
         .map_err(|_| DecodeValueError::InvalidBase64)?
         .len();
@@ -322,8 +332,19 @@ fn decode_value(value: &[u8], max_len: usize) -> Result<Vec<u8>, DecodeValueErro
     Ok(buf)
 }
 
+/// `alloc.alloc(u8, n)`: one exact-sized, fallible allocation through
+/// `alloc`, zero-filled (Zig's is `undefined`; the decoders overwrite what
+/// they report). `n == 0` allocates nothing.
+pub(crate) fn alloc_buf(alloc: Allocator, n: usize) -> Result<Bytes, OutOfMemory> {
+    use crate::alloc::CopyVecExt;
+    let mut buf = Bytes::new_in(alloc);
+    buf.try_reserve_exact(n).map_err(|_| OutOfMemory)?;
+    // The capacity is reserved, so this never allocates.
+    buf.resize_copy(n, 0);
+    Ok(buf)
+}
+
 /// `Payload.init`'s error set: `error{ OutOfMemory, Invalid }`.
-// PORT NOTE: `OutOfMemory` carried for parity; only `Invalid` is produced.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PayloadError {
     OutOfMemory,
@@ -339,7 +360,7 @@ pub enum PayloadError {
 // stores the owned buffer plus the decoded length and exposes the alias as
 // the `data()` accessor — no self-referential borrow.
 pub struct Payload {
-    buf: Vec<u8>,
+    buf: Bytes,
     len: usize,
 }
 
@@ -349,9 +370,11 @@ impl Payload {
     /// spec's "Encoding of payloads" section; how an invalid payload
     /// is reported (or not) depends on the packet type.
     // pub fn init(alloc: Allocator, payload: []const u8) error{ OutOfMemory, Invalid }!Payload {
-    pub fn init(payload: &[u8]) -> Result<Payload, PayloadError> {
+    pub fn init(alloc: Allocator, payload: &[u8]) -> Result<Payload, PayloadError> {
         // const buf = try alloc.alloc(u8, simd.base64.maxLen(payload));
-        let mut buf = vec![0u8; simd::base64::max_len(payload)];
+        // errdefer alloc.free(buf);
+        let mut buf = alloc_buf(alloc, simd::base64::max_len(payload))
+            .map_err(|_| PayloadError::OutOfMemory)?;
         // const data = simd.base64.decodeStrict(payload, buf, .required) catch return error.Invalid;
         let len = simd::base64::decode_strict(payload, &mut buf, simd::base64::Padding::Required)
             .map_err(|_| PayloadError::Invalid)?
@@ -360,7 +383,11 @@ impl Payload {
     }
 
     // pub fn deinit(self: *const Payload, alloc: Allocator) void { alloc.free(self.buf); }
-    // PORT NOTE: freed on drop; no deinit.
+    // PORT NOTE: `buf` frees through the allocator it was allocated with on
+    // drop; `deinit` consumes the payload and checks that allocator.
+    pub fn deinit(self, alloc: Allocator) {
+        self.buf.allocator().debug_assert_same(alloc);
+    }
 
     /// The decoded bytes (the reference's `data` field).
     pub fn data(&self) -> &[u8] {
@@ -438,22 +465,34 @@ mod tests {
     // test "metadata: empty is dropped"
     #[test]
     fn metadata_empty_is_dropped() {
-        assert!(Metadata::parse(b"").unwrap().is_none());
+        assert!(Metadata::parse(crate::alloc::Global, b"")
+            .unwrap()
+            .is_none());
     }
 
     // test "metadata: record without = is dropped"
     #[test]
     fn metadata_record_without_eql_is_dropped() {
-        assert!(Metadata::parse(b"type=read:bare").unwrap().is_none());
-        assert!(Metadata::parse(b"bare:type=read").unwrap().is_none());
+        assert!(Metadata::parse(crate::alloc::Global, b"type=read:bare")
+            .unwrap()
+            .is_none());
+        assert!(Metadata::parse(crate::alloc::Global, b"bare:type=read")
+            .unwrap()
+            .is_none());
     }
 
     // test "metadata: missing or unknown type is dropped"
     #[test]
     fn metadata_missing_or_unknown_type_is_dropped() {
-        assert!(Metadata::parse(b"loc=primary").unwrap().is_none());
-        assert!(Metadata::parse(b"type=bobr").unwrap().is_none());
-        assert!(Metadata::parse(b"type=").unwrap().is_none());
+        assert!(Metadata::parse(crate::alloc::Global, b"loc=primary")
+            .unwrap()
+            .is_none());
+        assert!(Metadata::parse(crate::alloc::Global, b"type=bobr")
+            .unwrap()
+            .is_none());
+        assert!(Metadata::parse(crate::alloc::Global, b"type=")
+            .unwrap()
+            .is_none());
     }
 
     // test "metadata: duplicate keys keep the last occurrence"
@@ -461,15 +500,24 @@ mod tests {
     fn metadata_duplicate_keys_keep_the_last_occurrence() {
         assert_eq!(
             Operation::Read,
-            Metadata::parse(b"type=bobr:type=read").unwrap().unwrap().op,
+            Metadata::parse(crate::alloc::Global, b"type=bobr:type=read")
+                .unwrap()
+                .unwrap()
+                .op,
         );
-        assert!(Metadata::parse(b"type=read:type=bobr").unwrap().is_none());
+        assert!(
+            Metadata::parse(crate::alloc::Global, b"type=read:type=bobr")
+                .unwrap()
+                .is_none()
+        );
     }
 
     // test "metadata: basic read"
     #[test]
     fn metadata_basic_read() {
-        let meta = Metadata::parse(b"type=read").unwrap().unwrap();
+        let meta = Metadata::parse(crate::alloc::Global, b"type=read")
+            .unwrap()
+            .unwrap();
         assert_eq!(Operation::Read, meta.op);
         assert!(meta.loc == crate::clipboard::Location::Standard);
         assert_eq!(0usize, meta.id.len());
@@ -478,7 +526,9 @@ mod tests {
     // test "metadata: unknown keys ignored"
     #[test]
     fn metadata_unknown_keys_ignored() {
-        let meta = Metadata::parse(b"type=read:bobr=kurwa").unwrap().unwrap();
+        let meta = Metadata::parse(crate::alloc::Global, b"type=read:bobr=kurwa")
+            .unwrap()
+            .unwrap();
         assert_eq!(Operation::Read, meta.op);
     }
 
@@ -486,7 +536,7 @@ mod tests {
     #[test]
     fn metadata_loc() {
         assert!(
-            Metadata::parse(b"type=read:loc=primary")
+            Metadata::parse(crate::alloc::Global, b"type=read:loc=primary")
                 .unwrap()
                 .unwrap()
                 .loc
@@ -495,7 +545,10 @@ mod tests {
         // Anything other than "primary" means the clipboard; it is not an
         // error.
         assert!(
-            Metadata::parse(b"type=read:loc=bobr").unwrap().unwrap().loc
+            Metadata::parse(crate::alloc::Global, b"type=read:loc=bobr")
+                .unwrap()
+                .unwrap()
+                .loc
                 == crate::clipboard::Location::Standard
         );
     }
@@ -504,14 +557,16 @@ mod tests {
     #[test]
     fn metadata_id_sanitized() {
         {
-            let meta = Metadata::parse(b"type=read:id=abc-123_x.Y+z")
+            let meta = Metadata::parse(crate::alloc::Global, b"type=read:id=abc-123_x.Y+z")
                 .unwrap()
                 .unwrap();
             assert_eq!(b"abc-123_x.Y+z".as_slice(), meta.id.as_slice());
         }
         {
             // Invalid characters are stripped, not rejected.
-            let meta = Metadata::parse(b"type=read:id=*4 2*").unwrap().unwrap();
+            let meta = Metadata::parse(crate::alloc::Global, b"type=read:id=*4 2*")
+                .unwrap()
+                .unwrap();
             assert_eq!(b"42".as_slice(), meta.id.as_slice());
         }
     }
@@ -522,7 +577,9 @@ mod tests {
         // const raw = "type=read:id=" ++ "a" ** (max_id_len + 100);
         let mut raw = b"type=read:id=".to_vec();
         raw.extend(core::iter::repeat_n(b'a', max_id_len + 100));
-        let meta = Metadata::parse(&raw).unwrap().unwrap();
+        let meta = Metadata::parse(crate::alloc::Global, &raw)
+            .unwrap()
+            .unwrap();
         assert_eq!(max_id_len, meta.id.len());
     }
 
@@ -530,7 +587,7 @@ mod tests {
     #[test]
     fn metadata_mime_decoded() {
         // "text/plain"
-        let meta = Metadata::parse(b"type=wdata:mime=dGV4dC9wbGFpbg==")
+        let meta = Metadata::parse(crate::alloc::Global, b"type=wdata:mime=dGV4dC9wbGFpbg==")
             .unwrap()
             .unwrap();
         assert_eq!(b"text/plain".as_slice(), meta.mime.as_slice());
@@ -554,7 +611,10 @@ mod tests {
             b"type=wdata:mime=dGV4dC9w\nbGFpbg==",
         ];
         for case in cases {
-            assert_eq!(Err(ParseError::InvalidValue), Metadata::parse(case));
+            assert_eq!(
+                Err(ParseError::InvalidValue),
+                Metadata::parse(crate::alloc::Global, case)
+            );
             assert_eq!(Operation::Wdata, Metadata::operation(case).unwrap());
         }
     }
@@ -565,7 +625,7 @@ mod tests {
         // base64 of 0xff 0xfe
         assert_eq!(
             Err(ParseError::InvalidValue),
-            Metadata::parse(b"type=wdata:mime=//4="),
+            Metadata::parse(crate::alloc::Global, b"type=wdata:mime=//4="),
         );
         assert_eq!(
             Operation::Wdata,
@@ -577,7 +637,7 @@ mod tests {
     #[test]
     fn metadata_pw_and_name() {
         // pw="secret", name="app"
-        let meta = Metadata::parse(b"type=read:pw=c2VjcmV0:name=YXBw")
+        let meta = Metadata::parse(crate::alloc::Global, b"type=read:pw=c2VjcmV0:name=YXBw")
             .unwrap()
             .unwrap();
         assert_eq!(b"secret".as_slice(), meta.pw.as_slice());
@@ -592,13 +652,16 @@ mod tests {
         let long = vec![b'n'; max_name_len + 1];
         let mut raw = b"type=read:name=".to_vec();
         raw.extend_from_slice(&crate::kitty::clipboard_response::b64_encode_to_vec(&long));
-        assert_eq!(Err(ParseError::InvalidValue), Metadata::parse(&raw));
+        assert_eq!(
+            Err(ParseError::InvalidValue),
+            Metadata::parse(crate::alloc::Global, &raw)
+        );
     }
 
     // test "metadata: empty name"
     #[test]
     fn metadata_empty_name() {
-        let meta = Metadata::parse(b"type=read:pw=c2VjcmV0:name=")
+        let meta = Metadata::parse(crate::alloc::Global, b"type=read:pw=c2VjcmV0:name=")
             .unwrap()
             .unwrap();
         assert_eq!(0usize, meta.name.len());
@@ -618,7 +681,11 @@ mod tests {
     #[test]
     fn payload_mime_iterator() {
         // base64 of "text/plain  text/html\ntext/uri-list"
-        let payload = Payload::init(b"dGV4dC9wbGFpbiAgdGV4dC9odG1sCnRleHQvdXJpLWxpc3Q=").unwrap();
+        let payload = Payload::init(
+            crate::alloc::Global,
+            b"dGV4dC9wbGFpbiAgdGV4dC9odG1sCnRleHQvdXJpLWxpc3Q=",
+        )
+        .unwrap();
         let mut it = payload.mime_iterator();
         assert_eq!(b"text/plain".as_slice(), it.next().unwrap());
         assert_eq!(b"text/html".as_slice(), it.next().unwrap());
@@ -638,7 +705,10 @@ mod tests {
             b"dGV4dC9w\nbGFpbg==",
         ];
         for case in cases {
-            assert!(matches!(Payload::init(case), Err(PayloadError::Invalid)));
+            assert!(matches!(
+                Payload::init(crate::alloc::Global, case),
+                Err(PayloadError::Invalid)
+            ));
         }
     }
 
@@ -646,7 +716,57 @@ mod tests {
     #[test]
     fn payload_decoded_text_must_be_valid_utf8() {
         // Valid base64 encoding of a single 0xff byte.
-        let payload = Payload::init(b"/w==").unwrap();
+        let payload = Payload::init(crate::alloc::Global, b"/w==").unwrap();
         assert!(!payload.is_valid_utf8());
+    }
+
+    // Parity tail S7-4 (routing evidence): `parse` allocates every decoded
+    // value (and the sanitized id) through the allocator it is given, and a
+    // refused allocation is `error.OutOfMemory`; `Payload.init` likewise.
+    #[test]
+    fn metadata_and_payload_route_through_the_allocator_handle() {
+        use crate::alloc::testing::{Config, CountingAllocator, FailingAllocator};
+        let counting = CountingAllocator::over_heap();
+        let c = counting.allocator();
+        crate::alloc::testing::with_handle(&c, |alloc| {
+            let meta = Metadata::parse(
+                alloc,
+                b"type=read:id=abc:mime=dGV4dC9wbGFpbg==:pw=cHc=:name=YXBw",
+            )
+            .unwrap()
+            .unwrap();
+            // The id list (grown one byte at a time, one allocation for 3
+            // bytes) and one decode buffer per value.
+            assert_eq!(4, counting.alloc_calls.get());
+            assert_eq!(b"text/plain".as_slice(), meta.mime.as_slice());
+            drop(meta);
+            assert_eq!(0, counting.live_bytes.get());
+
+            let payload = Payload::init(alloc, b"dGV4dC9wbGFpbg==").unwrap();
+            assert_eq!(5, counting.alloc_calls.get());
+            assert_eq!(
+                Some((simd::base64::max_len(b"dGV4dC9wbGFpbg=="), 0)),
+                counting.last_alloc.get()
+            );
+            payload.deinit(alloc);
+            assert_eq!(0, counting.live_bytes.get());
+        });
+
+        let failing = FailingAllocator::over_heap(Config {
+            fail_index: 0,
+            ..Config::default()
+        });
+        let f = failing.allocator();
+        crate::alloc::testing::with_handle(&f, |alloc| {
+            assert_eq!(
+                Err(ParseError::OutOfMemory),
+                Metadata::parse(alloc, b"type=read:mime=dGV4dC9wbGFpbg==")
+            );
+            assert!(matches!(
+                Payload::init(alloc, b"dGV4dC9wbGFpbg=="),
+                Err(PayloadError::OutOfMemory)
+            ));
+        });
+        assert_eq!(0, failing.allocated_bytes.get());
     }
 }

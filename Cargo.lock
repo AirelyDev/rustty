@@ -1418,6 +1418,7 @@ dependencies = [
  "rustty-identity",
  "rustty-os",
  "rustty-version",
+ "rustty-zigstd",
  "sentry-sys",
 ]
 

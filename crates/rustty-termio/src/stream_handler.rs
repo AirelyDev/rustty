@@ -1476,10 +1476,13 @@ impl<M: AppMailbox> StreamHandler<M> {
     // ) error{OutOfMemory}!void {
     //     try self.kitty_clipboard_grants.grant(self.alloc, pw, dir, false);
     // }
-    // (the `error{OutOfMemory}` collapses — `grant` is infallible under the
-    // global allocator.)
-    pub fn kittyClipboardGrant(&mut self, pw: &[u8], dir: rustty_vt::kitty::clipboard::Direction) {
-        self.kitty_clipboard_grants.grant(pw, dir, false);
+    pub fn kittyClipboardGrant(
+        &mut self,
+        pw: &[u8],
+        dir: rustty_vt::kitty::clipboard::Direction,
+    ) -> Result<(), rustty_vt::alloc::OutOfMemory> {
+        self.kitty_clipboard_grants
+            .grant(self.alloc.into(), pw, dir, false)
     }
 
     /// Handle one Kitty clipboard protocol (OSC 5522) packet.
@@ -1498,7 +1501,7 @@ impl<M: AppMailbox> StreamHandler<M> {
         // defer arena.deinit();
         // (the arena scopes the Metadata allocations; the Rust Metadata owns
         // its Vecs and frees on drop.)
-        let meta = match kitty_clipboard::Metadata::parse(&v.metadata) {
+        let meta = match kitty_clipboard::Metadata::parse(self.alloc.into(), &v.metadata) {
             Ok(Some(meta)) => meta,
             Ok(None) => return Ok(()),
             Err(kitty_clipboard::ParseError::OutOfMemory) => return Ok(()),
@@ -1556,7 +1559,7 @@ impl<M: AppMailbox> StreamHandler<M> {
         // The payload is the requested MIME list. A read request with
         // an undecodable payload is dropped without any response,
         // matching kitty.
-        let decoded = match kitty_clipboard::Payload::init(payload) {
+        let decoded = match kitty_clipboard::Payload::init(self.alloc.into(), payload) {
             Ok(decoded) => decoded,
             Err(_) => return Ok(()),
         };
@@ -1604,9 +1607,9 @@ impl<M: AppMailbox> StreamHandler<M> {
             },
             mimes,
             list,
-            id: meta.id.clone(),
+            id: meta.id.to_vec(),
             pw: pw.to_vec(),
-            name: meta.name.clone(),
+            name: meta.name.to_vec(),
             granted,
             terminator,
         });
@@ -1625,8 +1628,11 @@ impl<M: AppMailbox> StreamHandler<M> {
         if rustty_vt::kitty::clipboard::read_prompt_exempt(mimes_len) {
             return false;
         }
-        self.kitty_clipboard_grants
-            .use_(pw, rustty_vt::kitty::clipboard::Direction::Read)
+        self.kitty_clipboard_grants.use_(
+            self.alloc.into(),
+            pw,
+            rustty_vt::kitty::clipboard::Direction::Read,
+        )
     }
 
     /// Begin a Kitty clipboard write transaction (type=write).
@@ -1658,13 +1664,16 @@ impl<M: AppMailbox> StreamHandler<M> {
         // const state = try self.alloc.create(terminal.kitty.clipboard.WriteState);
         // errdefer self.alloc.destroy(state);
         // state.* = try .init(self.alloc, meta, .{ .max_size = self.clipboard_write_limit });
-        let state = Box::new(kitty_clipboard::WriteState::init(
+        let Ok(state) = kitty_clipboard::WriteState::init(
+            self.alloc.into(),
             meta,
             kitty_clipboard::WriteOptions {
                 max_size: self.clipboard_write_limit,
             },
-        ));
-        self.kitty_clipboard_write = Some(state);
+        ) else {
+            return Err(crate::Error::Other);
+        };
+        self.kitty_clipboard_write = Some(Box::new(state));
         Ok(())
     }
 
@@ -1694,7 +1703,7 @@ impl<M: AppMailbox> StreamHandler<M> {
             return self.kittyClipboardWriteCommit(state, terminator);
         }
 
-        match state.data(meta, payload) {
+        match state.data(self.alloc.into(), meta, payload) {
             Ok(()) => {
                 self.kitty_clipboard_write = Some(state);
                 Ok(())
@@ -1743,7 +1752,7 @@ impl<M: AppMailbox> StreamHandler<M> {
             );
         }
 
-        match state.alias(meta, payload) {
+        match state.alias(self.alloc.into(), meta, payload) {
             Ok(()) => {
                 self.kitty_clipboard_write = Some(state);
                 Ok(())
@@ -1823,7 +1832,7 @@ impl<M: AppMailbox> StreamHandler<M> {
             Vec<u8>,
             Vec<u8>,
         ) = {
-            let committed = state.commit()?;
+            let committed = state.commit(self.alloc.into())?;
             let pw: &[u8] = if !committed.name.is_empty() {
                 committed.pw
             } else {
@@ -1852,9 +1861,11 @@ impl<M: AppMailbox> StreamHandler<M> {
         // stored session grant for it lets the surface skip its
         // permission prompt.
         // const granted = self.kitty_clipboard_grants.use(self.alloc, pw, .write);
-        let granted = self
-            .kitty_clipboard_grants
-            .use_(&pw_owned, rustty_vt::kitty::clipboard::Direction::Write);
+        let granted = self.kitty_clipboard_grants.use_(
+            self.alloc.into(),
+            &pw_owned,
+            rustty_vt::kitty::clipboard::Direction::Write,
+        );
 
         // Everything about the request, including the request struct itself,
         // lives in a single arena that crosses to the surface thread ...
@@ -4839,7 +4850,13 @@ pub(crate) mod tests {
         let mut term = Terminal::init(Global.into(), terminal_opts(Some(false))).unwrap();
         let mut h = handler_for(&raw mut term, std::ptr::null_mut(), std::ptr::null_mut());
         h.kitty_clipboard_grants
-            .grant(b"otp", rustty_vt::kitty::clipboard::Direction::Read, true);
+            .grant(
+                Global.into(),
+                b"otp",
+                rustty_vt::kitty::clipboard::Direction::Read,
+                true,
+            )
+            .unwrap();
 
         // A listing request must not burn the one-time paste password...
         assert!(!h.kittyClipboardReadGranted(b"otp", 0));
@@ -4887,7 +4904,7 @@ pub(crate) mod tests {
 
         // const begin: Metadata = .{ .op = .write, .id = "macos" };
         let mut begin = kitty_clipboard::Metadata::new(Operation::Write);
-        begin.id = b"macos".to_vec();
+        begin.id = rustty_vt::alloc::try_dupe(Global.into(), b"macos").unwrap();
         h.kittyClipboardWriteBegin(&begin, rustty_vt::osc::Terminator::St)
             .unwrap();
 
@@ -4895,13 +4912,15 @@ pub(crate) mod tests {
         // try state.data(..., "SGVsbA==") // "Hell"
         // try testing.expectError(error.TooLarge, state.data(..., "bw==")) // "o"
         let mut wdata = kitty_clipboard::Metadata::new(Operation::Wdata);
-        wdata.mime = b"text/plain".to_vec();
+        wdata.mime = rustty_vt::alloc::try_dupe(Global.into(), b"text/plain").unwrap();
         {
             let write_state = h.kitty_clipboard_write.as_mut().unwrap();
-            write_state.data(&wdata, b"SGVsbA==").unwrap();
+            write_state
+                .data(Global.into(), &wdata, b"SGVsbA==")
+                .unwrap();
             assert_eq!(
                 Err(kitty_clipboard::DataError::TooLarge),
-                write_state.data(&wdata, b"bw==")
+                write_state.data(Global.into(), &wdata, b"bw==")
             );
         }
         // try handler.kittyClipboardWriteFinish(state, .EFBIG, .st);

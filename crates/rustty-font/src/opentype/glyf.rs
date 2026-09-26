@@ -8,12 +8,15 @@
 //   const std = @import("std");
 //   const Allocator = std.mem.Allocator;
 //   const sfnt = @import("sfnt.zig");
-// `Allocator` is not threaded through: `Outline` owns its `contours`/`points` as
-// `Vec`s (freed on drop), so `decode` takes no allocator and `Outline.deinit` has
-// no port-side equivalent. The big-endian on-disk reads the reference does via
+// `Allocator` is an allocator_api2 allocator (parity tail S7-4): `Outline<A>`
+// owns its `contours`/`points` as vectors allocated through the allocator given
+// to `decode_limited_in` (freed on drop through it; `decode`/`decode_limited`
+// use the Rust heap). The big-endian on-disk reads the reference does via
 // `std.io.fixedBufferStream` + `reader.readInt(..., .big)` / `readByte` /
 // `skipBytes` are ported as an explicit cursor over the byte slice.
 use crate::opentype::sfnt;
+use allocator_api2::alloc::{Allocator, Global};
+use allocator_api2::vec::Vec as AVec;
 
 /// Glyph Data Table
 ///
@@ -39,15 +42,15 @@ pub struct Glyf<'a> {
 // PORT NOTE: the reference `Outline` is `pub const Outline = struct { ... }`
 // nested in `Glyf`; Rust has no nested type declarations, so it is hoisted to a
 // sibling type (referenced as `Glyf.Outline` in Zig, `Outline` here). Its
-// `contours`/`points` are reference allocator-owned slices; here they are owned
-// `Vec`s, so `deinit` is dropped (handled by `Drop`).
-pub struct Outline {
+// `contours`/`points` are reference allocator-owned slices; here they are
+// vectors over the decoding allocator `A`, freed through it on drop.
+pub struct Outline<A: Allocator = Global> {
     /// List of contour end points. Calculate the full list of
     /// points using points[prev...this+1]
-    pub contours: Vec<sfnt::Uint16>,
+    pub contours: AVec<sfnt::Uint16, A>,
 
     /// The backing storage of all points in the entry.
-    pub points: Vec<Point>,
+    pub points: AVec<Point, A>,
 }
 
 /// A single decoded point in a simple glyph contour.
@@ -60,7 +63,7 @@ pub struct Point {
     pub on_curve: bool,
 }
 
-impl Outline {
+impl<A: Allocator> Outline<A> {
     /// Return the point slice for the contour at `index`.
     ///
     /// The returned slice references `points` and is invalidated when
@@ -80,7 +83,7 @@ impl Outline {
     //   /// allocator used for decoding.
     //   pub fn deinit(self: *Outline, alloc: Allocator) void
     // which frees `contours`/`points` and sets `self.* = undefined`. In the Rust
-    // port these are owned `Vec`s freed automatically on drop, so there is no
+    // port the vectors free through their allocator on drop, so there is no
     // `deinit`.
 }
 
@@ -612,16 +615,33 @@ impl<'a> Entry<'a> {
         self.decode_limited(usize::MAX)
     }
 
-    /// `decode` through a per-allocation byte limit.
-    ///
-    /// PORT NOTE (433b16bcb): the reference expresses the limit by threading a
-    /// `datastruct.LimitedAllocator` through `decode(alloc)` — an allocator
-    /// that rejects any single allocation larger than `limit` bytes. This
-    /// port's decode owns its `Vec`s (no allocator parameter), so the limit is
-    /// threaded explicitly and each allocation site checks its request size,
-    /// failing with `DecodeError::OutOfMemory` exactly where the reference's
-    /// limited allocator would return null.
+    /// `decode` through a per-allocation byte limit, on the Rust heap.
     pub fn decode_limited(&self, max_allocation_bytes: usize) -> Result<Outline, DecodeError> {
+        let mut limit_exceeded = false;
+        self.decode_limited_in(max_allocation_bytes, Global, &mut limit_exceeded)
+    }
+
+    /// `decode(limited.allocator())`: every allocation through `alloc`, each
+    /// limited to `max_allocation_bytes`.
+    ///
+    /// PORT NOTE (433b16bcb, parity tail S7-4): the reference expresses the
+    /// limit by threading a `datastruct.LimitedAllocator` over the caller's
+    /// allocator through `decode(alloc)` — an allocator that rejects any single
+    /// allocation larger than `limit` bytes. Here the limit is threaded
+    /// explicitly and each allocation site checks its request size, failing
+    /// with `DecodeError::OutOfMemory` exactly where the reference's limited
+    /// allocator would return null; the allocation itself goes to `alloc` (the
+    /// limited allocator's child), fallibly, as the reference's does.
+    ///
+    /// `limit_exceeded` is set when a request was refused for its size (the
+    /// limited allocator's `limit_exceeded` flag): an `OutOfMemory` without
+    /// it is a refusal by `alloc` itself.
+    pub fn decode_limited_in<A: Allocator + Clone>(
+        &self,
+        max_allocation_bytes: usize,
+        alloc: A,
+        limit_exceeded: &mut bool,
+    ) -> Result<Outline<A>, DecodeError> {
         // We only support simple glyphs.
         match self.entry_type() {
             Type::Simple => {}
@@ -635,8 +655,8 @@ impl<'a> Entry<'a> {
         let num_contours: usize = self.header.numberOfContours as usize;
         if num_contours == 0 && self.data.len() < 2 {
             return Ok(Outline {
-                points: Vec::new(),
-                contours: Vec::new(),
+                points: AVec::new_in(alloc.clone()),
+                contours: AVec::new_in(alloc),
             });
         }
 
@@ -645,9 +665,10 @@ impl<'a> Entry<'a> {
         // the request goes through the (possible) per-allocation limit.
         if num_contours.saturating_mul(core::mem::size_of::<sfnt::Uint16>()) > max_allocation_bytes
         {
+            *limit_exceeded = true;
             return Err(DecodeError::OutOfMemory);
         }
-        let mut end_points: Vec<sfnt::Uint16> = vec![0; num_contours];
+        let mut end_points: AVec<sfnt::Uint16, A> = filled_in(alloc.clone(), num_contours, 0)?;
 
         // If we have no contours, then the only possible remaining
         // field is instructionLength. Instructions are not supported.
@@ -657,7 +678,7 @@ impl<'a> Entry<'a> {
                 return Err(DecodeError::InstructionsNotSupported);
             }
             return Ok(Outline {
-                points: Vec::new(),
+                points: AVec::new_in(alloc),
                 contours: end_points,
             });
         }
@@ -701,16 +722,18 @@ impl<'a> Entry<'a> {
         // allocation; its request size is what the reference's limited
         // allocator bounds.
         if point_count.saturating_mul(core::mem::size_of::<Point>()) > max_allocation_bytes {
+            *limit_exceeded = true;
             return Err(DecodeError::OutOfMemory);
         }
-        let mut points: Vec<Point> = vec![
+        let mut points: AVec<Point, A> = filled_in(
+            alloc.clone(),
+            point_count,
             Point {
                 x: 0,
                 y: 0,
                 on_curve: false,
-            };
-            point_count
-        ];
+            },
+        )?;
 
         // This is EXTREMELY annoying but all the flags are separate
         // from the points so we have to do some allocation here since
@@ -720,20 +743,30 @@ impl<'a> Entry<'a> {
         // first while still falling back to the caller's allocator for
         // unusually large outlines.
         // PORT NOTE: the reference uses `std.heap.stackFallback(4096, alloc)`
-        // purely as an allocation-strategy optimization for the temporary flags
-        // buffer; it is semantically a `[]SimpleFlags` of length `point_count`.
-        // Rust has no stack-fallback allocator, so the temporary is a plain
-        // `Vec<SimpleFlags>` (freed at end of scope, like the reference `defer`).
+        // for the temporary flags buffer, a `[]SimpleFlags` of length
+        // `point_count`: it lives on the stack up to 4096 bytes and spills to
+        // `alloc` past that. So does the port (parity tail S7-4): a 4096-byte
+        // stack array, else a vector through `alloc`, freed at end of scope
+        // (the reference `defer`).
         // PORT NOTE (433b16bcb): the per-allocation limit only sees this
         // request when it spills past the 4096-byte stack half of the
         // reference's `stackFallback`, so the check mirrors that threshold.
         {
             let flags_bytes = point_count.saturating_mul(core::mem::size_of::<SimpleFlags>());
             if flags_bytes > 4096 && flags_bytes > max_allocation_bytes {
+                *limit_exceeded = true;
                 return Err(DecodeError::OutOfMemory);
             }
         }
-        let mut flags: Vec<SimpleFlags> = vec![SimpleFlags(0); point_count];
+        const FLAGS_STACK: usize = 4096 / core::mem::size_of::<SimpleFlags>();
+        let mut flags_stack = [SimpleFlags(0); FLAGS_STACK];
+        let mut flags_heap: AVec<SimpleFlags, A>;
+        let flags: &mut [SimpleFlags] = if point_count <= FLAGS_STACK {
+            &mut flags_stack[..point_count]
+        } else {
+            flags_heap = filled_in(alloc, point_count, SimpleFlags(0))?;
+            &mut flags_heap
+        };
         {
             let mut point_i: usize = 0;
             while point_i < point_count {
@@ -799,6 +832,24 @@ impl<'a> Entry<'a> {
             contours: end_points,
         })
     }
+}
+
+/// `alloc.alloc(T, n)` filled with `value`: one exact-sized, fallible
+/// allocation through `alloc` (`error.OutOfMemory` on refusal).
+fn filled_in<T: Copy, A: Allocator>(
+    alloc: A,
+    n: usize,
+    value: T,
+) -> Result<AVec<T, A>, DecodeError> {
+    let mut v = AVec::new_in(alloc);
+    v.try_reserve_exact(n)
+        .map_err(|_| DecodeError::OutOfMemory)?;
+    for slot in &mut v.spare_capacity_mut()[..n] {
+        slot.write(value);
+    }
+    // SAFETY: the first `n` spare slots were just initialized.
+    unsafe { v.set_len(n) };
+    Ok(v)
 }
 
 impl<'a> Glyf<'a> {

@@ -170,7 +170,7 @@ pub fn open(kind: Kind, url: &[u8]) -> Result<(), OpenError> {
 
     // const thread = try std.Thread.spawn(.{}, openThread, .{ global.io(), exe });
     // thread.detach();
-    spawn_open_thread(std::thread::Builder::new(), child)
+    spawn_open_thread(rustty_zigstd::thread::spawn_config(), child)
 }
 
 /// `const thread = try std.Thread.spawn(.{}, openThread, .{ global.io(), exe });

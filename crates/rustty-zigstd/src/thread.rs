@@ -28,6 +28,18 @@
 //! the exact observable semantics of the Zig API as ghostty uses it.
 
 use std::sync::{Condvar, Mutex as StdMutex, MutexGuard};
+
+/// `std.Thread.SpawnConfig.default_stack_size` (Zig 0.16 `std/Thread.zig`:
+/// `16 * 1024 * 1024`): the stack every `std.Thread.spawn(.{}, ..)` thread
+/// gets. Rust's `std::thread` default is 2 MiB (parity tail S7-4b, N278).
+pub const DEFAULT_STACK_SIZE: usize = 16 * 1024 * 1024;
+
+/// `std.Thread.spawn(.{}, ..)`'s `SpawnConfig{}` as a `std::thread::Builder`:
+/// a [`DEFAULT_STACK_SIZE`] stack. Every thread the reference spawns with the
+/// default config is built from this.
+pub fn spawn_config() -> std::thread::Builder {
+    std::thread::Builder::new().stack_size(DEFAULT_STACK_SIZE)
+}
 use std::time::{Duration, Instant};
 
 /// Zig `std.Thread.Mutex`: a guard-less mutual-exclusion lock.
