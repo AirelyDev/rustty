@@ -58,6 +58,9 @@ use super::globals::Globals;
 use super::vicinae::vicinae_hotkey_manager_v1::{Modifiers, VicinaeHotkeyManagerV1};
 use super::vicinae::vicinae_hotkey_v1::{self, VicinaeHotkeyV1};
 
+// const log = std.log.scoped(.winproto_wayland_hotkeys);
+const LOG_SCOPE: &str = "winproto_wayland_hotkeys";
+
 /// The per-proxy userdata: which [`Entry`] an event belongs to. See the module
 /// docs for why this is a token rather than the reference's `*Entry`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -142,12 +145,14 @@ impl Entry {
             return Err(BindError::NoKeysym);
         };
 
-        // `std.fmt.bufPrintZ(&desc_buf, "{f}", .{self.action}) catch ""`
-        // (`:43-44`). PORT NOTE: the reference formats into a 256-byte stack
-        // buffer and substitutes the EMPTY description when the action does not
-        // fit; rustty's formatter allocates, so no description is ever truncated
-        // to "". The description is advisory compositor-UI text either way.
-        let desc = crate::gtk::class::global_shortcuts::action_description(&self.action);
+        // var desc_buf: [256]u8 = undefined;
+        // const desc = std.fmt.bufPrintZ(&desc_buf, "{f}", .{self.action}) catch "";
+        //
+        // CORRECTION (task T-D, S61-F5): a PORT NOTE here said "rustty's formatter
+        // allocates, so no description is ever truncated to \"\"", and the full
+        // description was sent. The reference's 256-byte buffer is reproduced by
+        // [`bind_description`].
+        let desc = bind_description(&self.action);
 
         // `manager.bind(keysym, .{...}, null, app_id.ptr, desc.ptr)` (`:46-55`).
         // `seat = null` — "request it on all of the client's seats", which is what
@@ -326,7 +331,16 @@ impl Hotkeys {
         let app_id = std::mem::take(&mut self.app_id);
         for entry in &mut self.entries {
             if let Err(err) = entry.bind(manager, qh, &app_id) {
-                eprintln!("warn(gtk): failed to request hotkey err={err:?}");
+                // log.warn("failed to request hotkey trigger={f} err={}", .{
+                //     entry.trigger,
+                //     err,
+                // });
+                //
+                // CORRECTION (task T-D, S61-F4): this printed
+                // `failed to request hotkey err={err:?}` (no trigger) through an
+                // `eprintln!("warn(gtk): ...")` bypass.
+                log::warn!(target: LOG_SCOPE, "failed to request hotkey trigger={} err={err:?}",
+                    trigger_desc(&entry.trigger));
             }
         }
         self.app_id = app_id;
@@ -346,19 +360,23 @@ impl Hotkeys {
         match event {
             // `.bound => log.debug("hotkey bound action={f}", ...)` (`:145`).
             vicinae_hotkey_v1::Event::Bound => {
-                eprintln!("debug(gtk): hotkey bound action={}", desc(&entry.action));
+                // .bound => log.debug("hotkey bound action={f}", .{entry.action}),
+                log::debug!(target: LOG_SCOPE, "hotkey bound action={}", desc(&entry.action));
                 self.bound_events = self.bound_events.saturating_add(1);
             }
 
             // `.denied => |v| { log.warn(...); entry.fail(v.message, false); }`
             // (`:147-154`).
             vicinae_hotkey_v1::Event::Denied { reason, message } => {
-                eprintln!(
-                    "warn(gtk): hotkey denied action={} reason={:?} message={}",
+                // log.warn("hotkey denied action={f} reason={} message={s}", .{
+                //     entry.action,
+                //     v.reason,
+                //     v.message,
+                // });
+                log::warn!(target: LOG_SCOPE, "hotkey denied action={} reason={:?} message={}",
                     desc(&entry.action),
                     reason.into_result().map(|r| r as u32),
-                    message,
-                );
+                    message,);
                 let emission = entry.fail(message.into_bytes(), false);
                 self.pending.extend(emission);
             }
@@ -366,12 +384,15 @@ impl Hotkeys {
             // `.revoked => |v| { log.warn(...); entry.fail(v.message, true); }`
             // (`:156-163`).
             vicinae_hotkey_v1::Event::Revoked { reason, message } => {
-                eprintln!(
-                    "warn(gtk): hotkey revoked action={} reason={:?} message={}",
+                // log.warn("hotkey revoked action={f} reason={} message={s}", .{
+                //     entry.action,
+                //     v.reason,
+                //     v.message,
+                // });
+                log::warn!(target: LOG_SCOPE, "hotkey revoked action={} reason={:?} message={}",
                     desc(&entry.action),
                     reason.into_result().map(|r| r as u32),
-                    message,
-                );
+                    message,);
                 let emission = entry.fail(message.into_bytes(), true);
                 self.pending.extend(emission);
             }
@@ -471,6 +492,31 @@ pub fn select_entries(config: &CoreConfig) -> Vec<(Trigger, Action)> {
 /// with `{f}`.
 fn desc(action: &Action) -> String {
     crate::gtk::class::global_shortcuts::action_description(action)
+}
+
+/// `{f}` of a `Binding.Trigger` (`Binding.zig:2062-2080` `Trigger.format`).
+fn trigger_desc(trigger: &Trigger) -> String {
+    let mut w = rustty_cfg_fmt::AllocatingWriter::init();
+    let _ = trigger.format(&mut w);
+    String::from_utf8_lossy(w.written()).into_owned()
+}
+
+/// `var desc_buf: [256]u8` (`Hotkeys.zig:42`).
+const DESC_BUF_LEN: usize = 256;
+
+/// `std.fmt.bufPrintZ(&desc_buf, "{f}", .{self.action}) catch ""`
+/// (`Hotkeys.zig:42-43`): the action's `{f}` text when it fits the 256-byte
+/// buffer WITH its NUL sentinel (255 bytes at most), else the empty description.
+/// The limit is on the formatted BYTES, measured before any UTF-8 decoding.
+fn bind_description(action: &Action) -> String {
+    let mut w = rustty_cfg_fmt::AllocatingWriter::init();
+    let _ = action.format(&mut w);
+    let bytes = w.written();
+    if bytes.len() < DESC_BUF_LEN {
+        String::from_utf8_lossy(bytes).into_owned()
+    } else {
+        String::new()
+    }
 }
 
 /// PORTS: `Hotkeys.zig:138-167` `hotkeyListener` — the listener install
@@ -1062,8 +1108,23 @@ mod tests {
         assert!(matches!(no_keysym[0].0.key, TriggerKey::Physical(_)));
 
         let gs = GlobalShortcuts::new();
+        let cap = crate::log_capture::start();
         globals.hotkeys_mut().bind(&manager, &qh, &gs, &config);
+        let messages = cap.messages();
+        drop(cap);
         assert_eq!(2, globals.hotkeys().entry_count());
+
+        // S61-F4: the reference's bind-loop warning names the TRIGGER
+        // (`Hotkeys.zig:131-135`, `trigger={f}`), under the file's scope, once, for
+        // the skipped bind only.
+        assert_eq!(
+            messages,
+            [(
+                log::Level::Warn,
+                LOG_SCOPE.to_owned(),
+                "failed to request hotkey trigger=audio_volume_up err=NoKeysym".to_owned(),
+            )]
+        );
 
         event_queue.flush().expect("client flush");
         display
@@ -1078,6 +1139,102 @@ mod tests {
             server.binds.iter().map(|b| b.keysym).collect::<Vec<_>>(),
             "only the bind with a keysym reaches the compositor"
         );
+    }
+
+    /// S61-F5: `Entry.bind`'s description is `bufPrintZ` into a 256-byte buffer,
+    /// `catch ""` (`Hotkeys.zig:42-43`): 255 formatted bytes are sent, 256 become
+    /// the empty description. The boundary is found by formatting, not assumed.
+    #[test]
+    fn hotkeys_bind_description_fits_the_reference_buffer() {
+        let text = |n: usize| Action::Text(vec![b'x'; n]);
+        // The `text:` action's `{f}` form, measured at two lengths so the payload
+        // length that lands on exactly 255 formatted bytes can be solved for.
+        let overhead = desc(&text(1)).len() - 1;
+        assert_eq!(desc(&text(2)).len(), overhead + 2, "precondition: linear");
+        let at_255 = text(255 - overhead);
+        let at_256 = text(256 - overhead);
+        assert_eq!(desc(&at_255).len(), 255);
+        assert_eq!(desc(&at_256).len(), 256);
+
+        assert_eq!(bind_description(&at_255), desc(&at_255));
+        assert_eq!(bind_description(&at_256), "");
+    }
+
+    /// S61-F5, on the wire: an over-long action reaches the compositor with the
+    /// EMPTY description, and a short one with its full `{f}` text.
+    #[test]
+    fn hotkeys_bind_sends_an_empty_description_for_an_over_long_action() {
+        use std::os::unix::net::UnixStream;
+        use std::sync::Arc;
+
+        use fake_compositor_proto::vicinae_hotkey_manager_v1::VicinaeHotkeyManagerV1 as SrvManager;
+
+        let (server_sock, client_sock) = UnixStream::pair().expect("socket pair");
+        let mut display: wayland_server::Display<FakeCompositor> =
+            wayland_server::Display::new().expect("wayland-server display");
+        let mut dh = display.handle();
+        dh.create_global::<FakeCompositor, SrvManager, ()>(1, ());
+        let _client = dh
+            .insert_client(server_sock, Arc::new(NoClientData))
+            .expect("insert client");
+        let mut server = FakeCompositor::default();
+
+        let host = wayland_client::Connection::from_socket(client_sock).expect("host connection");
+        let backend = unsafe {
+            wayland_backend::sys::client::Backend::from_foreign_display(
+                host.backend().display_ptr(),
+            )
+        };
+        let conn = wayland_client::Connection::from_backend(backend);
+        let mut event_queue = conn.new_event_queue::<Globals>();
+        let qh = event_queue.handle();
+        let registry = conn.display().get_registry(&qh, ());
+        let mut globals = Box::new(Globals::new(
+            conn.clone(),
+            qh.clone(),
+            registry,
+            "com.mitchellh.rustty",
+        ));
+        for _ in 0..16 {
+            event_queue.flush().expect("client flush");
+            display
+                .dispatch_clients(&mut server)
+                .expect("server dispatch");
+            display.flush_clients().expect("server flush");
+            gdk_read(&host);
+            event_queue
+                .dispatch_pending(&mut globals)
+                .expect("client dispatch");
+            if globals.vicinae_hotkey_manager().is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        let manager = globals
+            .vicinae_hotkey_manager()
+            .cloned()
+            .expect("the registry must bind the advertised vicinae_hotkey_manager_v1");
+
+        let long = format!("global:super+a=text:{}", "x".repeat(300));
+        let config = config_with(&[&long, "global:super+b=new_tab"]);
+        let selected = select_entries(&config);
+        assert_eq!(2, selected.len(), "precondition: both binds are selected");
+
+        let gs = GlobalShortcuts::new();
+        globals.hotkeys_mut().bind(&manager, &qh, &gs, &config);
+        event_queue.flush().expect("client flush");
+        display
+            .dispatch_clients(&mut server)
+            .expect("server dispatch");
+
+        assert_eq!(2, server.binds.len(), "both binds reach the compositor");
+        let mut descriptions: Vec<&str> = server
+            .binds
+            .iter()
+            .map(|b| b.description.as_str())
+            .collect();
+        descriptions.sort_unstable();
+        assert_eq!(descriptions, ["", "new_tab"]);
     }
 
     /// F-W3's codegen gate: the bindings really were generated from the vendored

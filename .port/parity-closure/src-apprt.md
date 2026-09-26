@@ -59,7 +59,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** About dialog drops the `website` and `issue-url` properties
   - **Oracle:** `src/apprt/gtk/class/window.zig:1790-1832` → **Rustty:** `crates/rustty-apprt/src/gtk/class/window.rs:2174-2209`
   - **Audit's suggested fix:** Add WEBSITE and ISSUE_URL constants to rustty_identity (per profile) and pass `.website(..)` / `.issue_url(..)` to the AboutDialog builder.
-- [ ] **S59-F1** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S59-F1** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** IPC CLI arguments are converted with String::from_utf8_lossy instead of sent as raw bytes
   - **Oracle:** `src/apprt/gtk/ipc/new_window.zig:49-56 (and new_tab.zig:54-61)` → **Rustty:** `crates/rustty-apprt/src/gtk/app.rs:257-262, 297-302`
   - **Audit's suggested fix:** Keep bytes: build the `as` array with glib::Variant::from_bytes / from_bytes_with_type on the raw bytes (as the oracle does) so invalid UTF-8 fails at the D-Bus layer exactly like the oracle, or at minimum return IPCFailed with the oracle's stderr message when an argument is not valid UTF-8 rather than silently mangling it.
@@ -110,7 +110,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** Unicode-trigger fallback drops unencodable codepoints instead of writing U+FFFD
   - **Oracle:** `src/apprt/gtk/key.zig:79-81, 389-391` → **Rustty:** `crates/rustty-apprt/src/gtk/key.rs:138-142, 318-322`
   - **Audit's suggested fix:** `out.push(char::from_u32(cp).unwrap_or(char::REPLACEMENT_CHARACTER))` in both write_trigger_key and write_trigger_key_label.
-- [ ] **S48-F3** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S48-F3** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** parseRequestPathToken hex parsing differs on '_' separators and leading '+'
   - **Oracle:** `src/apprt/gtk/portal.zig:63-67` → **Rustty:** `crates/rustty-apprt/src/gtk/portal.rs:89-92`
   - **Audit's suggested fix:** Reject a leading '+' explicitly and (if underscore tolerance is wanted for fidelity) strip interior '_' subject to Zig's no-leading/trailing-underscore rule before from_str_radix.
@@ -118,15 +118,15 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** generateToken draws from GLib's MT PRNG; PORT NOTE cites a stale entropy source
   - **Oracle:** `src/apprt/gtk/portal.zig:13-17` → **Rustty:** `crates/rustty-apprt/src/gtk/portal.rs:31-49`
   - **Audit's suggested fix:** Update the PORT NOTE to cite std.Random.IoSource; optionally use getrandom-backed entropy (e.g. rand::rngs::OsRng or libc::getrandom) to match the source class.
-- [ ] **S48-F5** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S48-F5** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** fromResource / mediaFileError log lines collapse the reference's domain/code detail and two-branch messages
   - **Oracle:** `src/apprt/gtk/media.zig:29-47, 126-133` → **Rustty:** `crates/rustty-apprt/src/gtk/media.rs:36-44, 107-116`
   - **Audit's suggested fix:** Format `err.domain()` (quark to string) and `err.code()` alongside the message in both warnings.
-- [ ] **S49-F3** · CONFIRMED · `ALLOC` · missing-error-path
+- [x] **S49-F3** · CONFIRMED · `ALLOC` · missing-error-path
   - **What:** loadCustomCss: a non-FileTooBig read error no longer aborts the whole custom-CSS load
   - **Oracle:** `src/apprt/gtk/class/application.zig:1166-1176` → **Rustty:** `crates/rustty-apprt/src/gtk/class/application.rs:1261-1292`
   - **Audit's suggested fix:** On a read error after a successful open, log the oracle's 'failed to load custom CSS' warning and return early; load via `load_from_bytes(&glib::Bytes::from(&contents))` to preserve raw bytes.
-- [ ] **S49-F4** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S49-F4** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** globalShortcutBindFailed: fixed 128/512-byte buffers (drop-notification-on-overflow) not reproduced
   - **Oracle:** `src/apprt/gtk/class/application.zig:1753-1784` → **Rustty:** `crates/rustty-apprt/src/gtk/class/application.rs:1661-1692`
   - **Audit's suggested fix:** Leave as-is if the deviation is accepted; otherwise truncate/skip at the same 128/512 thresholds.
@@ -134,11 +134,11 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** Log-only omissions: runtime-CSS byte-count debug line dropped; unimplemented-action warning omits the action name
   - **Oracle:** `src/apprt/gtk/class/application.zig:942, 812` → **Rustty:** `crates/rustty-apprt/src/gtk/class/application.rs:1197-1201, 3461-3463`
   - **Audit's suggested fix:** Emit `eprintln!("debug(gtk): runtime CSS is {} bytes", css.len())` and include `{action:?}`-style discriminant in the unimplemented warning.
-- [ ] **S50-F2** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S50-F2** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** parseOverrides trims Unicode whitespace instead of ASCII whitespace
   - **Oracle:** `src/apprt/gtk/class/application.zig:2073-2097` → **Rustty:** `crates/rustty-apprt/src/gtk/class/application.rs:1927-1950`
   - **Audit's suggested fix:** Use `trim_matches(|c: char| matches!(c, ' ' | '\t' | '\n' | '\r' | '\x0B' | '\x0C'))` (or a shared ascii-whitespace trim helper) at the three sites.
-- [ ] **S50-F3** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S50-F3** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** globalShortcutBindFailed: over-long body is dropped by the reference but always notified by the port
   - **Oracle:** `src/apprt/gtk/class/application.zig:1771-1785` → **Rustty:** `crates/rustty-apprt/src/gtk/class/application.rs:1661-1690`
   - **Audit's suggested fix:** If strict fidelity is wanted, return early when the formatted body exceeds 511 bytes and fall back to "?" when the label exceeds 127 bytes.
@@ -154,7 +154,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** Config.getMut has no counterpart
   - **Oracle:** `src/apprt/gtk/class/config.zig:94-100` → **Rustty:** `crates/rustty-apprt/src/gtk/class/config.rs:142-151`
   - **Audit's suggested fix:** Add a `get_mut` (e.g. via `OnceCell::get_mut` on `imp().config`, or document the omission as deliberate).
-- [ ] **S51-F10** · CONFIRMED · `INDIV` · other
+- [x] **S51-F10** · CONFIRMED · `INDIV` · other
   - **What:** rustty-only extra log lines in on_response(BindShortcuts) and dispatch_activation
   - **Oracle:** `src/apprt/gtk/class/global_shortcuts.zig:323,558-564` → **Rustty:** `crates/rustty-apprt/src/gtk/class/global_shortcuts.rs:410-418,613-620`
   - **Audit's suggested fix:** None; cosmetic.
@@ -210,11 +210,11 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** actionNotifyOnNextCommandFinish: non-boolean state is toggled to true instead of ignored
   - **Oracle:** `src/apprt/gtk/class/surface.zig:2586-2597` → **Rustty:** `crates/rustty-apprt/src/gtk/class/surface.rs:3173-3185`
   - **Audit's suggested fix:** Match on `action.state()`: `Some(s) if s.is_type(VariantTy::BOOLEAN) => toggle`, `Some(_) => return`, `None => set_state(true)` (i.e. treat null as false and negate).
-- [ ] **S55-F4** · CONFIRMED · `ABI` · behavioral-difference
+- [x] **S55-F4** · CONFIRMED · `ABI` · behavioral-difference
   - **What:** mouse-shape property is registered as an int, not the GhosttyMouseShape enum GType
   - **Oracle:** `src/apprt/gtk/class/surface.zig:2176-2184, 2378-2429` → **Rustty:** `crates/rustty-apprt/src/gtk/class/surface.rs:249-259, 3143-3147, 3197-3242`
   - **Audit's suggested fix:** Register a `GhosttyMouseShape` glib::Enum for rustty_vt::mouse::Shape (or a local wrapper) and make the property typed with default Text, keeping the notify semantics; then drop the i32 lookup table in favour of a match.
-- [ ] **S55-F5** · CONFIRMED · `INDIV` · other
+- [x] **S55-F5** · CONFIRMED · `INDIV` · other
   - **What:** Mouse button callback warning text differs and drops the error value
   - **Oracle:** `src/apprt/gtk/class/surface.zig:2827-2829, 2884-2887` → **Rustty:** `crates/rustty-apprt/src/gtk/class/surface.rs:3334-3337, 3387-3390`
   - **Audit's suggested fix:** Print the error value (`err={err:?}`) and keep the oracle text if log parity matters.
@@ -226,11 +226,11 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** clipboardConfirmationDeny: @panic replaced by a warning log for non-rememberable requests
   - **Oracle:** `src/apprt/gtk/class/surface.zig:4025-4040` → **Rustty:** `crates/rustty-apprt/src/gtk/class/surface.rs:4464-4495`
   - **Audit's suggested fix:** Use `unreachable!("request should not be able to be remembered")` (panic->abort in the C callback) to keep the oracle's fail-fast semantics.
-- [ ] **S56-F3** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S56-F3** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** set_clipboard converts the text/plain payload lossily to String for the clipboard-write signal
   - **Oracle:** `src/apprt/gtk/class/surface.zig:3768-3774, 3832-3837` → **Rustty:** `crates/rustty-apprt/src/gtk/class/surface.rs:2265-2270, 2315`
   - **Audit's suggested fix:** Carry the signal text as raw bytes (glib::Bytes / Vec<u8>) per the repo's zig-byteslice-to-rust-rawbytes rule, or document that only valid UTF-8 is representable in the GObject string param.
-- [ ] **S56-F4** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S56-F4** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** gl_resize debug log omits the window (GdkSurface) scale factor
   - **Oracle:** `src/apprt/gtk/class/surface.zig:3352-3369` → **Rustty:** `crates/rustty-apprt/src/gtk/class/surface.rs:3900-3910`
   - **Audit's suggested fix:** Add `window_scale` = self.root().and_then(|r| r.surface()).map(|s| s.scale_factor()).unwrap_or(0) to the debug line.
@@ -242,7 +242,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** action_close checks the mode string before the tab view, changing which warning is logged
   - **Oracle:** `src/apprt/gtk/class/tab.zig:396-433` → **Rustty:** `crates/rustty-apprt/src/gtk/class/tab.rs:386-409`
   - **Audit's suggested fix:** Move the `get_tab_view()` early-return above the `args.str()` check so the warning ordering matches the reference.
-- [ ] **S57-F3** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S57-F3** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** computed_title converts the config `title` bytes lossily (U+FFFD substitution)
   - **Oracle:** `src/apprt/gtk/class/tab.zig:496-509` → **Rustty:** `crates/rustty-apprt/src/gtk/class/tab.rs:352-355`
   - **Audit's suggested fix:** Pass the bytes through unchanged (e.g. glib::GString from the raw bytes / validate-not-replace), or document that GTK requires UTF-8 and the substitution is intentional.
@@ -266,7 +266,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** Warn log messages omit the error value and one message text differs
   - **Oracle:** `src/apprt/gtk/class/window.zig:706-709, 748-751, 884-889, 1196-1206, 1208-1226, 1310-1313, 1998-2002` → **Rustty:** `crates/rustty-apprt/src/gtk/class/window.rs:525, 594, 618, 668, 2093-2107, 2118, 2341`
   - **Audit's suggested fix:** Format the error into the message (`{err:?}`) and restore the exact text.
-- [ ] **S59-F2** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S59-F2** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** --class target name is lossy-converted before the bus-name validity check
   - **Oracle:** `src/apprt/gtk/ipc/DBus.zig:42-66` → **Rustty:** `crates/rustty-apprt/src/gtk/app.rs:181-186`
   - **Audit's suggested fix:** Validate/print the raw bytes (e.g. via OsStr/lossless byte printing) and only convert after validation; or accept as cosmetic.
@@ -274,7 +274,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** Cleanup staleness threshold differs by up to one second (truncated seconds > 30 vs Duration > 30s)
   - **Oracle:** `src/apprt/gtk/portal/OpenURI.zig:545-549` → **Rustty:** `crates/rustty-apprt/src/gtk/portal/open_uri.rs:566-577`
   - **Audit's suggested fix:** Compare truncated whole seconds: `now.duration_since(e.start).as_secs() > CLEANUP_TIMEOUT_SECS`.
-- [ ] **S59-F5** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S59-F5** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** start() rejects non-UTF-8 URIs with a rustty-only UriNotUtf8 error before the portal call
   - **Oracle:** `src/apprt/gtk/portal/OpenURI.zig:147-187, 275-279` → **Rustty:** `crates/rustty-apprt/src/gtk/portal/open_uri.rs:67-74, 229-231`
   - **Audit's suggested fix:** Accept as documented divergence, or mirror the oracle by attempting the call and letting the D-Bus layer fail into failRequestAndFallback.
@@ -294,7 +294,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** noop.Window.updateConfigEvent has no counterpart
   - **Oracle:** `src/apprt/gtk/winproto/noop.zig:64-67` → **Rustty:** `crates/rustty-apprt/src/gtk/winproto/noop.rs:119-174`
   - **Audit's suggested fix:** Add an empty `update_config_event(&mut self, _cfg: &DerivedConfig) -> Result<(), WinprotoError>` to noop::Window for 1:1 surface parity, or document it as intentionally omitted dead code.
-- [ ] **S60-F5** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S60-F5** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** X11 supportsQuickTerminal drops the warn log; initQuickTerminal returns an error instead of Ok
   - **Oracle:** `src/apprt/gtk/winproto/x11.zig:172-177` → **Rustty:** `crates/rustty-apprt/src/gtk/winproto/x11.rs:413-431`
   - **Audit's suggested fix:** Emit the warn in supports_quick_terminal and return Ok(()) from init_quick_terminal.
@@ -302,7 +302,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** X11 syncAppearance/syncBlur diagnostics dropped (blur debug line, `failed to sync decorations` error log)
   - **Oracle:** `src/apprt/gtk/winproto/x11.zig:225-234, 266-271, 289-307` → **Rustty:** `crates/rustty-apprt/src/gtk/winproto/x11.rs:521-525, 613-622`
   - **Audit's suggested fix:** Log the swallowed errors and the blur debug line with the same wording (log-only change).
-- [ ] **S60-F8** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S60-F8** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** gtk-quick-terminal-namespace (and x11-instance-name) pass through String::from_utf8_lossy
   - **Oracle:** `src/apprt/gtk/winproto/wayland.zig:352` → **Rustty:** `crates/rustty-apprt/src/gtk/winproto/wayland.rs:909-911`
   - **Audit's suggested fix:** Pass the bytes through the raw C-string entry points (gtk4_layer_shell ffi / g_set_prgname) to avoid the lossy re-encode, per the byte-slice fidelity rule.
@@ -318,23 +318,23 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** onGlobalRemoved clears the blur capability for ext_background_effect; reference only resets output order
   - **Oracle:** `src/apprt/gtk/winproto/wayland/Globals.zig:132-137` → **Rustty:** `crates/rustty-apprt/src/gtk/winproto/wayland/globals.rs:375-386`
   - **Audit's suggested fix:** Drop the extra arm (or keep it and record the divergence in the parity ledger).
-- [ ] **S61-F3** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S61-F3** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** Globals log lines dropped (found global / matched / bind warn / empty primary output warn / primary output debug)
   - **Oracle:** `src/apprt/gtk/winproto/wayland/Globals.zig:146,150,157-161,235,239,242` → **Rustty:** `crates/rustty-apprt/src/gtk/winproto/wayland/globals.rs:437-443,502-515`
   - **Audit's suggested fix:** Add the equivalent eprintln!/log calls at the same points.
-- [ ] **S61-F4** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S61-F4** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** Hotkeys.bind warn omits the trigger
   - **Oracle:** `src/apprt/gtk/winproto/wayland/Hotkeys.zig:126-133` → **Rustty:** `crates/rustty-apprt/src/gtk/winproto/wayland/hotkeys.rs:317-323`
   - **Audit's suggested fix:** Include the formatted trigger in the log line.
-- [ ] **S61-F5** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S61-F5** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** Hotkey description is never truncated to "" for actions longer than 255 bytes
   - **Oracle:** `src/apprt/gtk/winproto/wayland/Hotkeys.zig:42-43` → **Rustty:** `crates/rustty-apprt/src/gtk/winproto/wayland/hotkeys.rs:136-141`
   - **Audit's suggested fix:** Substitute an empty description when the formatted action exceeds 255 bytes.
-- [ ] **S61-F8** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S61-F8** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** Failure log prints the Rust Debug variant name instead of the action tag name
   - **Oracle:** `src/benchmark/CApi.zig:25-31` → **Rustty:** `crates/rustty-bench/src/capi.rs:62-66`
   - **Audit's suggested fix:** Print the kebab-case action name (the inverse of `Action::from_name`).
-- [ ] **S61-F9** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S61-F9** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** report mode prints to stdout instead of stderr
   - **Oracle:** `src/benchmark/PageCompression.zig:436-453` → **Rustty:** `crates/rustty-bench/src/page_compression.rs:749-764`
   - **Audit's suggested fix:** Use `eprintln!` for both report lines.
