@@ -2005,7 +2005,7 @@ impl<'a> Handler<'a> {
     // ) !void
     fn do_kitty_color_operation(
         &mut self,
-        request: kitty::color::OSC,
+        request: &kitty::color::OSC,
     ) -> Result<(), crate::snapshot::io::WriteFailed> {
         // var stack = std.heap.stackFallback(1024, self.terminal.gpa());
         // const alloc = stack.get();
@@ -3882,7 +3882,7 @@ impl<'a> stream::Handler for Handler<'a> {
     // PORT NOTE (oracle 439d35e27): stays GRACEFUL. A failure here is a query
     // RESPONSE failure, not a divergence of terminal-owned state, so it must
     // NOT route through `vt_catch` / set `semantic_failure`.
-    fn kitty_color_report(&mut self, v: kitty::color::OSC) {
+    fn kitty_color_report(&mut self, v: &kitty::color::OSC) {
         if let Err(err) = self.do_kitty_color_operation(v) {
             log::warn!(target: LOG_SCOPE, "error reporting Kitty colors err={err:?}");
         }
@@ -3894,8 +3894,8 @@ impl<'a> stream::Handler for Handler<'a> {
     // ) catch |err| log.warn("error reporting OSC color err={}", .{err}),
     //
     // PORT NOTE (oracle 439d35e27): stays GRACEFUL; see `kitty_color_report`.
-    fn color_operation(&mut self, v: stream::ColorOperation) {
-        if let Err(err) = self.do_color_operation(&v.requests, v.terminator) {
+    fn color_operation(&mut self, v: stream::ColorOperation<'_>) {
+        if let Err(err) = self.do_color_operation(v.requests, v.terminator) {
             log::warn!(target: LOG_SCOPE, "error reporting OSC color err={err:?}");
         }
     }
@@ -7813,6 +7813,11 @@ mod tests {
                     calls() > a5,
                     "a response past 1024 bytes spills through gpa()"
                 );
+                // (Parity tail S7-7: the 64 requests' list stays with the OSC
+                // parser, the reference's `parser.command`, until the next
+                // OSC's `reset`; an OSC 104 with one index allocates nothing
+                // and frees it.)
+                s.next_slice(b"\x1B]104;1\x1B\\");
                 assert_eq!(live0, live(), "and frees the spill");
 
                 s.deinit();

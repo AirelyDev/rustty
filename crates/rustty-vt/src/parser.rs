@@ -133,9 +133,8 @@ pub enum TransitionAction {
 // carries the parser's lifetime `'p`, and the actions `Parser::next` returns
 // hold the parser borrowed until they are consumed. Only `osc_dispatch`
 // borrows; every other variant converts to `Action<'static>` with
-// [`Action::into_static`]. There is no `Clone`: the OSC command owns the lists
-// the reference allocates through the OSC parser's allocator.
-#[derive(Debug, PartialEq)]
+// [`Action::into_static`].
+#[derive(Debug, Clone, PartialEq)]
 pub enum Action<'p> {
     // pub const Tag = std.meta.FieldEnum(Action);
     /// Draw character to the screen. This is a unicode codepoint.
@@ -671,29 +670,15 @@ impl Parser {
         }
 
         // Exit depends on current state
-        let exit: Option<Action<'static>> = if state == next_state {
-            None
-        } else {
-            match state {
-                // .osc_string => if (self.osc_parser.end(c)) |cmd|
-                //     Action{ .osc_dispatch = cmd.* } else null,
-                // PORT NOTE (parity tail S7-7): evaluated LAST, below. The
-                // command borrows `self.osc_parser` for as long as the returned
-                // actions live, so nothing may take `&mut self` after it. The
-                // transition and entry actions of an `osc_string` exit never
-                // touch the OSC parser (the table leaves `osc_string` only on
-                // BEL, ESC, CAN and SUB: `none`/`execute` transitions into
-                // `ground`/`escape`, whose entries are nothing and `clear()`),
-                // so the reordering is unobservable.
-                State::OscString => None,
-                // .dcs_passthrough => Action{ .dcs_unhook = {} },
-                State::DcsPassthrough => Some(Action::DcsUnhook),
-                // .sos_pm_apc_string => Action{ .apc_end = {} },
-                State::SosPmApcString => Some(Action::ApcEnd),
-                // else => null,
-                _ => None,
-            }
-        };
+        // PORT NOTE (parity tail S7-7): computed LAST, after the transition and
+        // entry actions and the deferred state write (below). The
+        // `osc_string` exit's command borrows `self.osc_parser` for as long as
+        // the returned actions live, so nothing may take `&mut self` after it.
+        // The reordering is unobservable: the other exits are constant values,
+        // and the transition and entry of an `osc_string` exit never touch the
+        // OSC parser (the table leaves `osc_string` only on BEL, ESC, CAN and
+        // SUB: `none`/`execute` transitions into `ground`/`escape`, whose
+        // entries are nothing and `clear()`); `end` does not read `self.state`.
 
         // self.doAction(action, c),
         let transition = self.do_action(action, c);
@@ -754,19 +739,30 @@ impl Parser {
         // (the Zig `defer` above).
         self.state = next_state;
 
-        if state == State::OscString {
-            debug_assert!(
-                next_state != State::OscString
-                    && matches!(action, TransitionAction::None | TransitionAction::Execute)
-            );
-            // .osc_string => if (self.osc_parser.end(c)) |cmd|
-            //     Action{ .osc_dispatch = cmd.* } else null,
-            let exit = self
-                .osc_parser
-                .end(Some(c))
-                .map(|cmd| Action::OscDispatch(Box::new(cmd)));
-            return [exit, transition, entry];
-        }
+        // Exit depends on current state (see the PORT NOTE above).
+        let exit: Option<Action<'_>> = if state == next_state {
+            None
+        } else {
+            match state {
+                // .osc_string => if (self.osc_parser.end(c)) |cmd|
+                //     Action{ .osc_dispatch = cmd.* } else null,
+                State::OscString => {
+                    debug_assert!(matches!(
+                        action,
+                        TransitionAction::None | TransitionAction::Execute
+                    ));
+                    self.osc_parser
+                        .end(Some(c))
+                        .map(|cmd| Action::OscDispatch(Box::new(cmd)))
+                }
+                // .dcs_passthrough => Action{ .dcs_unhook = {} },
+                State::DcsPassthrough => Some(Action::DcsUnhook),
+                // .sos_pm_apc_string => Action{ .apc_end = {} },
+                State::SosPmApcString => Some(Action::ApcEnd),
+                // else => null,
+                _ => None,
+            }
+        };
 
         [exit, transition, entry]
     }

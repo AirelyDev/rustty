@@ -11955,9 +11955,10 @@ mod tests {
     // builds its OSC command lists through the caller's allocator
     // (`Stream.init(.{ .allocator = alloc, .. })` hands `alloc` to the OSC
     // parser): an OSC 104 with three indices grows the color list's shelf
-    // array and shelf 0, an OSC 21 grows the kitty color list once, and each
-    // command frees what it grew once it has been dispatched. An OSC 104 with
-    // two indices allocates nothing (the preallocated slots).
+    // array and shelf 0, an OSC 21 grows the kitty color list once. The OSC
+    // parser keeps each list (the reference's `parser.command` owns it) until
+    // the next OSC's `reset` or the terminal's `free`. An OSC 104 with two
+    // indices allocates nothing (the preallocated slots).
     #[test]
     fn terminal_stream_osc_lists_route_through_the_callers_allocator() {
         use rustty_vt::alloc::testing::CountingAllocator;
@@ -11982,12 +11983,26 @@ mod tests {
             counting.alloc_calls.get(),
             "the shelf array and shelf 0"
         );
-        assert_eq!(f + 2, counting.free_calls.get(), "freed after dispatch");
+        assert_eq!(
+            f,
+            counting.free_calls.get(),
+            "the OSC parser keeps the list"
+        );
 
         vtw(t, b"\x1B]21;foreground=#010203;background=?\x1B\\");
         assert_eq!(a + 3, counting.alloc_calls.get(), "the kitty color list");
-        assert_eq!(f + 3, counting.free_calls.get());
-        assert_eq!(live, counting.live_bytes.get());
+        assert_eq!(
+            f + 2,
+            counting.free_calls.get(),
+            "OSC 21's reset freed the color list"
+        );
+        assert_eq!(
+            rustty_vt::alloc::ArrayListUnmanaged::<rustty_vt::kitty::color::Request>::grow_capacity(
+                1
+            ) * core::mem::size_of::<rustty_vt::kitty::color::Request>(),
+            counting.live_bytes.get() - live,
+            "only the kitty list is live"
+        );
 
         unsafe { free(t) };
         assert_eq!(0, counting.live_bytes.get());

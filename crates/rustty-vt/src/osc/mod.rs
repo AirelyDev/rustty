@@ -141,18 +141,17 @@ impl<const N: usize> PartialEq<&[u8; N]> for ZStr<'_> {
     }
 }
 
-// PORT NOTE (parity tail S7-7, N263): `Command<'p>` borrows its text payloads
-// from the parser that produced it (see `ZStr`), as the reference's slices do.
-// The borrow is the reference's documented lifetime, "only valid until the
-// next call to the parser", enforced by the borrow checker: `Parser::end`
-// returns `Command<'_>` over `&mut self`, so the parser cannot be fed, reset or
-// ended again while the command lives. The two lists the reference allocates
-// through `parser.alloc` (`color_operation.requests`,
-// `kitty_color_protocol.list`) are owned by the command and freed through that
-// allocator when it drops. There is no `Clone`: the reference's by-value copy
-// (`cmd.*`) shares the lists with the parser, which Rust cannot express for an
-// owning value.
-#[derive(Debug, PartialEq)]
+// PORT NOTE (parity tail S7-7, N263): `Command<'p>` borrows everything from
+// the parser that produced it: its text payloads (see `ZStr`), as the
+// reference's slices do, and the two lists the reference grows through
+// `parser.alloc` (`color_operation.requests`, `kitty_color_protocol.list`),
+// which the parser keeps and frees at `reset`, as the reference's
+// `parser.command` does. The borrow is the reference's documented lifetime,
+// "only valid until the next call to the parser", enforced by the borrow
+// checker: `Parser::end` returns `Command<'_>` over `&mut self`, so the parser
+// cannot be fed, reset or ended again while the command lives. Owning
+// nothing, it is `Copy`, like the reference's by-value `cmd.*`.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Command<'p> {
     /// This generally shouldn't ever be set except as an initial zero value.
     /// Ignore it.
@@ -227,13 +226,15 @@ pub enum Command<'p> {
     /// 4, 5, 10-19, 104, 105, 110-119
     ColorOperation {
         op: color::Operation,
-        requests: color::List,
+        // PORT NOTE (parity tail S7-7): the parser's `color_requests`.
+        requests: &'p color::List,
         terminator: Terminator,
     },
 
     /// Kitty color protocol, OSC 21
     /// https://sw.kovidgoyal.net/kitty/color-stack/#id1
-    KittyColorProtocol(kitty_color::OSC),
+    // PORT NOTE (parity tail S7-7): the parser's `kitty_color`.
+    KittyColorProtocol(&'p kitty_color::OSC),
 
     /// Show a desktop notification (OSC 9 or OSC 777)
     ShowDesktopNotification {
@@ -718,15 +719,21 @@ pub struct Parser {
     /// Capture state. If this is set then we're actively capturing the
     /// bytes coming into the parser.
     pub capture: Option<Capture>,
+
     // /// The command that is the result of parsing.
     // command: Command,
-    // PORT NOTE (parity tail S7-7, N263): not a field here. The reference's
-    // `command` points into this parser's own `buffer`/`capture`; a Rust field
-    // holding those borrows would make the parser self-referential (and a
-    // moved parser would leave them dangling). `end` builds the command and
-    // returns it by value, borrowing the parser (see `Command`), and the
-    // per-command cleanup `reset` does in the reference (freeing the two
-    // lists) happens when that value drops.
+    // PORT NOTE (parity tail S7-7, N263): the command itself is not a field.
+    // The reference's `command` points into this parser's own `buffer` or
+    // `capture`; a Rust field holding those borrows would make the parser
+    // self-referential (and a moved parser would leave them dangling). `end`
+    // builds the command and returns it by value, borrowing the parser (see
+    // `Command`). What the reference's `command` OWNS stays here, as it does
+    // there: the two lists grown through `alloc` (`color_operation.requests`,
+    // `kitty_color_protocol.list`), which the command borrows and `reset`
+    // frees. `color_requests` and `kitty_color` hold the list of the last
+    // color or kitty color command until then.
+    pub color_requests: Option<color::List>,
+    pub kitty_color: Option<kitty_color::OSC>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1062,6 +1069,8 @@ impl Parser {
             max_allocating_bytes: MAX_ALLOCATING_BUF,
             state: State::Start,
             capture: None,
+            color_requests: None,
+            kitty_color: None,
             buffer: [0u8; MAX_BUF],
         }
     }
@@ -1097,14 +1106,13 @@ impl Parser {
         //     .kitty_desktop_notification, .context_signal,
         //     => {},
         // }
-        // PORT NOTE (parity tail S7-7): the command is not stored in the
-        // parser (see the `command` note on `Parser`). The two lists are owned
-        // by the `Command` value `end` returned, which frees them through
-        // `self.alloc` when it drops; the borrow checker has already ended
-        // that value before `reset` can run. T3: the reference frees them
-        // here, at the next `reset`/`deinit`; the port frees them when the
-        // consumer drops the command, before the parser's next call. The
-        // calls the allocator sees are the same.
+        // PORT NOTE (parity tail S7-7): the lists the command owned are the
+        // parser's `color_requests` and `kitty_color` (see the `command` note
+        // on `Parser`); both arms free them here, through the allocator they
+        // grew with. The borrow checker has ended the command that borrowed
+        // them before `reset` can run. The other arms own nothing.
+        self.kitty_color = None;
+        self.color_requests = None;
 
         self.state = State::Start;
         self.capture = None;
@@ -1916,8 +1924,9 @@ mod s7_7_tests {
 
     // `color_operation.requests` is `SegmentedList(Request, 2)` over
     // `parser.alloc`: one or two requests allocate nothing; the third
-    // allocates the shelf array and shelf 0 (4 requests); dropping the command
-    // frees both. Exact counts: a request that reached the Rust heap, or a
+    // allocates the shelf array and shelf 0 (4 requests); the parser keeps the
+    // list (the reference's `parser.command` owns it) and `reset` frees both.
+    // Exact counts: a request that reached the Rust heap, or a
     // `Vec`, would change them.
     #[test]
     fn color_requests_route_through_the_parser_allocator() {
@@ -1966,7 +1975,9 @@ mod s7_7_tests {
                 );
                 assert_eq!(0, counting.free_calls.get(), "live while the command is");
             }
-            assert_eq!(2, counting.free_calls.get(), "freed when the command drops");
+            assert_eq!(0, counting.free_calls.get(), "the parser keeps the list");
+            p.reset();
+            assert_eq!(2, counting.free_calls.get(), "`reset` frees it");
             assert_eq!(0, counting.live_bytes.get());
             p.deinit();
         });
@@ -1975,7 +1986,8 @@ mod s7_7_tests {
 
     // `kitty_color_protocol.list` is an `ArrayList(Request)` appended through
     // `parser.alloc`: Zig 0.16's first `append` reserves `growCapacity(1)`
-    // requests in one allocation; dropping the command frees it.
+    // requests in one allocation; the parser keeps it until `reset` or
+    // `deinit`, as the reference's `parser.command` does.
     #[test]
     fn kitty_color_list_routes_through_the_parser_allocator() {
         let counting = CountingAllocator::over_heap();
@@ -2000,9 +2012,10 @@ mod s7_7_tests {
                     counting.last_alloc.get().unwrap().0
                 );
             }
-            assert_eq!(1, counting.free_calls.get());
-            assert_eq!(0, counting.live_bytes.get());
+            assert_eq!(0, counting.free_calls.get(), "the parser keeps the list");
             p.deinit();
+            assert_eq!(1, counting.free_calls.get(), "`deinit` frees it");
+            assert_eq!(0, counting.live_bytes.get());
         });
     }
 

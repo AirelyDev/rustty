@@ -44,12 +44,15 @@ pub fn parse<'a>(parser: &'a mut Parser, terminator_ch: Option<u8>) -> Option<Co
     //     },
     // };
     // const list = &parser.command.kitty_color_protocol.list;
-    // PORT NOTE (parity tail S7-7): the command is a local returned by value
-    // (see `osc::Command`); an early `return null` drops it, freeing what the
-    // list had grown through `alloc` (the reference frees it at the next
-    // `reset`). The capture is read in place, as the reference's
-    // `cap.trailing()` is; the port used to copy it into a `Vec`.
-    let mut osc = kitty_color::OSC::init(alloc, crate::osc::Terminator::init(terminator_ch));
+    // PORT NOTE (parity tail S7-7): the list lives in the parser
+    // (`kitty_color`, what the reference's `parser.command` owns) until
+    // `reset` frees it, including after an early `return null`, as in the
+    // reference; the command borrows it. The capture is read in place, as the
+    // reference's `cap.trailing()` is; the port used to copy it into a `Vec`.
+    let osc: &'a mut kitty_color::OSC = parser.kitty_color.insert(kitty_color::OSC::init(
+        alloc,
+        crate::osc::Terminator::init(terminator_ch),
+    ));
     // const data = cap.trailing();
     let data = cap.trailing(&parser.buffer);
     // var kv_it = std.mem.splitScalar(u8, data, ';');

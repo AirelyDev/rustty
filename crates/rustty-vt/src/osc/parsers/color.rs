@@ -161,6 +161,10 @@ pub fn parse<'a>(parser: &'a mut Parser, terminator_ch: Option<u8>) -> Option<Co
             List::new_in(alloc)
         }
     };
+    // PORT NOTE (parity tail S7-7): the list is the parser's (`color_requests`,
+    // what the reference's `parser.command` owns), freed at `reset`; the
+    // command borrows it.
+    let requests: &'a List = parser.color_requests.insert(requests);
     Some(Command::ColorOperation {
         op,
         requests,

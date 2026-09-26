@@ -2914,7 +2914,7 @@ impl<M: AppMailbox> StreamHandler<M> {
     //     self: *StreamHandler,
     //     request: terminal.kitty.color.OSC,
     // ) !void {
-    fn kittyColorReport(&mut self, request: kitty::color::OSC) -> Result<(), crate::Error> {
+    fn kittyColorReport(&mut self, request: &kitty::color::OSC) -> Result<(), crate::Error> {
         // var stream: std.Io.Writer.Allocating = .init(self.alloc);
         // defer stream.deinit();
         // const writer = &stream.writer;
@@ -3623,14 +3623,14 @@ impl<M: AppMailbox> stream::Handler for StreamHandler<M> {
     }
 
     // .kitty_color_report => try self.kittyColorReport(value),
-    fn kitty_color_report(&mut self, v: kitty::color::OSC) {
+    fn kitty_color_report(&mut self, v: &kitty::color::OSC) {
         let r = self.kittyColorReport(v);
         self.vt("kitty_color_report", r);
     }
 
     // .color_operation => try self.colorOperation(value.op, &value.requests, value.terminator),
-    fn color_operation(&mut self, v: stream::ColorOperation) {
-        let r = self.colorOperation(v.op, &v.requests, v.terminator);
+    fn color_operation(&mut self, v: stream::ColorOperation<'_>) {
+        let r = self.colorOperation(v.op, v.requests, v.terminator);
         self.vt("color_operation", r);
     }
 

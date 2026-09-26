@@ -279,12 +279,13 @@ pub struct ApcEnd {
 //     requests: osc.color.List,
 //     terminator: osc.Terminator,
 // };
-// PORT NOTE (parity tail S7-7): no `Clone`/`Eq`: `requests` is the command's
-// `SegmentedList` over the OSC parser's allocator, owned, freed on drop.
-#[derive(Debug, PartialEq)]
-pub struct ColorOperation {
+// PORT NOTE (parity tail S7-7): `requests` borrows the OSC parser's list (the
+// reference's by-value copy of the list struct shares its segments with the
+// parser the same way).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ColorOperation<'a> {
     pub op: osc::color::Operation,
-    pub requests: osc::color::List,
+    pub requests: &'a osc::color::List,
     pub terminator: osc::Terminator,
 }
 
@@ -699,10 +700,11 @@ pub trait Handler {
     fn set_attribute(&mut self, _attr: sgr::Attribute) {}
 
     /// `kitty_color_report` (OSC 21)
-    fn kitty_color_report(&mut self, _v: kitty::color::OSC) {}
+    // PORT NOTE (parity tail S7-7): the OSC parser's `kitty_color`, borrowed.
+    fn kitty_color_report(&mut self, _v: &kitty::color::OSC) {}
 
     /// `color_operation`
-    fn color_operation(&mut self, _v: ColorOperation) {}
+    fn color_operation(&mut self, _v: ColorOperation<'_>) {}
 
     /// `semantic_prompt` (OSC 133)
     fn semantic_prompt(&mut self, _v: SemanticPrompt<'_>) {}

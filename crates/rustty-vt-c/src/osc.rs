@@ -64,8 +64,8 @@ pub struct OscParserWrapper {
 
 impl OscParserWrapper {
     /// Ends the borrow of the last command (the reference's "only valid until
-    /// the next call to the parser"). Dropping it frees the lists it owns
-    /// through the parser's allocator.
+    /// the next call to the parser"). The command owns nothing: the lists it
+    /// borrows are the parser's, freed at `reset`/`free` as in the reference.
     #[inline]
     fn clear_command(&mut self) {
         self.command = None;
@@ -682,11 +682,10 @@ mod tests {
     // grows the color request list through the caller's allocator
     // (`parseColor(parser.alloc, ..)`): none for two requests (the
     // preallocated slots), the shelf array and shelf 0 for the third. The
-    // command owns them for the header's lifetime and they are freed at the
-    // next call on the parser (`reset`, `next`); `free` returns everything.
-    // T3: the reference frees the lists at the next `reset` or `free`, not at
-    // `next`; the port ends the command's borrow of the parser's buffer at
-    // every call, as the header's lifetime says.
+    // parser owns the list (as the reference's `parser.command` does) and
+    // frees it at `reset`, and `free` returns everything. `next` ends the
+    // command's borrow of the parser's buffer (the header's lifetime) but
+    // frees nothing, as in the reference.
     #[test]
     fn c_parser_color_requests_route_through_the_caller_allocator() {
         use rustty_vt::alloc::testing::CountingAllocator;
@@ -728,17 +727,14 @@ mod tests {
             counting.alloc_calls.get(),
             "+ the shelf array and shelf 0"
         );
-        assert_eq!(0, counting.free_calls.get(), "owned by the live command");
+        assert_eq!(0, counting.free_calls.get(), "owned by the parser");
 
         unsafe { reset(p) };
-        assert_eq!(
-            2,
-            counting.free_calls.get(),
-            "the next call ends the command"
-        );
+        assert_eq!(2, counting.free_calls.get(), "`reset` frees the list");
 
         // `next` is a call on the parser too: the command's borrow of the
-        // buffer ends before the byte lands, and its lists are freed.
+        // buffer ends before the byte lands (the wrapper drops it), but the
+        // list stays with the parser until `reset`.
         for &b in b"104;1;2;3" {
             unsafe { next(p, b) };
         }
@@ -746,7 +742,15 @@ mod tests {
         assert!(!cmd.is_null());
         assert_eq!(5, counting.alloc_calls.get());
         unsafe { next(p, b';') };
-        assert_eq!(4, counting.free_calls.get(), "next ended the command");
+        // SAFETY: `p` is live; the wrapper's stored command is inspected.
+        assert!(unsafe { (*p).command.is_none() }, "next ended the command");
+        assert_eq!(
+            2,
+            counting.free_calls.get(),
+            "the parser still owns the list"
+        );
+        unsafe { reset(p) };
+        assert_eq!(4, counting.free_calls.get());
         unsafe { free(p) };
         assert_eq!(0, counting.live_bytes.get());
         assert_eq!(counting.alloc_calls.get(), counting.free_calls.get());
