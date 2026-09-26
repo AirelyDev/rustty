@@ -1131,27 +1131,6 @@ fn layer_namespace_cstring(name: &[u8]) -> std::ffi::CString {
     std::ffi::CString::new(&name[..end]).expect("no NUL before `end`")
 }
 
-#[cfg(test)]
-mod layer_namespace_tests {
-    use super::layer_namespace_cstring;
-
-    /// S33-F1: invalid UTF-8 reaches gtk-layer-shell unchanged (the port used
-    /// to replace it with U+FFFD).
-    #[test]
-    fn namespace_bytes_are_passed_verbatim() {
-        assert_eq!(
-            layer_namespace_cstring(b"rustty-quick-terminal").as_bytes(),
-            b"rustty-quick-terminal"
-        );
-        assert_eq!(
-            layer_namespace_cstring(b"quick-\xff\xfe").as_bytes(),
-            b"quick-\xff\xfe"
-        );
-        // C sees the reference's sentinel string up to its first NUL.
-        assert_eq!(layer_namespace_cstring(b"a\0b").as_bytes(), b"a");
-    }
-}
-
 /// Resolve the `Globals.state.primary_output_name` for the quick terminal by
 /// reaching the wayland winproto [`App`] through the owning [`Application`].
 ///
@@ -1221,5 +1200,21 @@ mod tests {
         };
         assert_eq!(got, b"caf\xe9-quick");
         window.destroy();
+    }
+
+    /// S33-F1: invalid UTF-8 reaches gtk-layer-shell unchanged (the port used
+    /// to replace it with U+FFFD).
+    #[test]
+    fn namespace_bytes_are_passed_verbatim() {
+        assert_eq!(
+            layer_namespace_cstring(b"rustty-quick-terminal").as_bytes(),
+            b"rustty-quick-terminal"
+        );
+        assert_eq!(
+            layer_namespace_cstring(b"quick-\xff\xfe").as_bytes(),
+            b"quick-\xff\xfe"
+        );
+        // C sees the reference's sentinel string up to its first NUL.
+        assert_eq!(layer_namespace_cstring(b"a\0b").as_bytes(), b"a");
     }
 }
