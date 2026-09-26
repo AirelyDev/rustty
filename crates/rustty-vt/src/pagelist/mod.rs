@@ -1357,6 +1357,16 @@ pub struct Pin {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OutOfMemory;
 
+// PORT NOTE (parity tail S7-6): both spellings are Zig's one
+// `error.OutOfMemory`; `?` converts the allocator handle's
+// (`crate::alloc::OutOfMemory`) into this one.
+impl From<crate::alloc::OutOfMemory> for OutOfMemory {
+    #[inline]
+    fn from(_: crate::alloc::OutOfMemory) -> OutOfMemory {
+        OutOfMemory
+    }
+}
+
 // const init_tw = tripwire.module(enum {
 //     init_memory_pool,
 //     init_pages,

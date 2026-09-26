@@ -362,8 +362,11 @@ pub struct NodeRun {
 #[derive(Clone)]
 pub struct PinMapMap {
     /// The x/y coordinate within its page for every output byte.
-    // PORT NOTE: `std.ArrayList(Coordinate) = .empty` -> `Vec<Coordinate>`.
-    pub points: Vec<Coordinate>,
+    // PORT NOTE: `std.ArrayList(Coordinate) = .empty`. An allocator-bound list
+    // (parity tail S7-6) because the page formatter's `PointMap` writes into
+    // it; it stays on the Rust heap handle (the pin map's own `alloc` is not
+    // routed here: the formatter family's convention, outside S7-6).
+    pub points: crate::alloc::AVec<Coordinate>,
 
     /// The page node for ranges of output bytes, ordered by offset.
     pub nodes: Vec<NodeRun>,
@@ -372,7 +375,7 @@ pub struct PinMapMap {
 impl PinMapMap {
     // pub const empty: Map = .{};
     pub const EMPTY: PinMapMap = PinMapMap {
-        points: Vec::new(),
+        points: crate::alloc::AVec::new_in(crate::alloc::VtAllocator::GLOBAL),
         nodes: Vec::new(),
     };
 
@@ -381,7 +384,7 @@ impl PinMapMap {
         // `Vec`s free on drop; replacing them here is the faithful
         // deallocation, and the `alloc` parameter is kept for signature parity.
         let _ = alloc;
-        self.points = Vec::new();
+        self.points = crate::alloc::AVec::new_in(crate::alloc::VtAllocator::GLOBAL);
         self.nodes = Vec::new();
     }
 
@@ -421,13 +424,15 @@ impl PinMapMap {
         }
         self.set_node(alloc, pin.node);
         // try self.points.appendNTimes(alloc, .{ .x = pin.x, .y = pin.y }, n);
-        self.points.extend(core::iter::repeat_n(
+        let len = self.points.len();
+        crate::alloc::CopyVecExt::resize_copy(
+            &mut self.points,
+            len + n,
             Coordinate {
                 x: pin.x,
                 y: pin.y as u32,
             },
-            n,
-        ));
+        );
     }
 
     /// Returns the pin that the byte at the given offset maps to,
@@ -1446,9 +1451,17 @@ pub struct PageFormatter<'a> {
 
 /// See point_map.
 // PORT NOTE: nested `PageFormatter.PointMap`, hoisted to a top-level name.
+//
+// PORT NOTE (parity tail S7-6): `map` is an allocator-bound list, the
+// reference's `*std.ArrayList(Coordinate)` grown through `alloc`. It grows
+// through the allocator it is bound to: the search sliding window binds its
+// `cell_map` to the window's allocator (the reference's `.alloc =
+// self.alloc`). Growth follows `ArrayList.appendNTimes` (`growCapacity`,
+// `remap` first) and a failure is the reference's `catch return
+// error.WriteFailed` (an `io::ErrorKind::OutOfMemory` error).
 pub struct PointMap<'a> {
     pub alloc: Allocator,
-    pub map: &'a mut Vec<Coordinate>,
+    pub map: &'a mut crate::alloc::AVec<Coordinate>,
 
     /// The index in `map` at which this formatter's output begins.
     /// Entries before this index belong to a caller (e.g. previous
@@ -1458,6 +1471,36 @@ pub struct PointMap<'a> {
     // explicitly at each construction site (Rust struct literals have no
     // field defaults).
     pub base: usize,
+}
+
+/// `ArrayList(Coordinate)`'s `init_capacity` (`@sizeOf(Coordinate)` is 8).
+const COORDINATE_INIT_CAPACITY: usize = crate::zig_list::init_capacity(8);
+
+/// `error.WriteFailed` for a failed point-map growth.
+fn point_map_write_failed(_: crate::alloc::OutOfMemory) -> io::Error {
+    io::Error::from(io::ErrorKind::OutOfMemory)
+}
+
+impl PointMap<'_> {
+    /// `map.map.appendNTimes(map.alloc, coord, n) catch return error.WriteFailed`.
+    #[inline]
+    fn append_n_times(&mut self, coord: Coordinate, n: usize) -> io::Result<()> {
+        crate::zig_list::append_n_times(self.map, coord, n, COORDINATE_INIT_CAPACITY)
+            .map_err(point_map_write_failed)
+    }
+
+    /// `map.map.append(map.alloc, coord) catch return error.WriteFailed`.
+    #[inline]
+    fn append(&mut self, coord: Coordinate) -> io::Result<()> {
+        self.append_n_times(coord, 1)
+    }
+
+    /// `map.map.ensureUnusedCapacity(map.alloc, n) catch return error.WriteFailed`.
+    #[inline]
+    fn ensure_unused_capacity(&mut self, n: usize) -> io::Result<()> {
+        crate::zig_list::ensure_unused_capacity(self.map, n, COORDINATE_INIT_CAPACITY)
+            .map_err(point_map_write_failed)
+    }
 }
 
 /// Trailing state. This is used to ensure that rows wrapped across
@@ -1655,9 +1698,7 @@ impl<'a> PageFormatter<'a> {
 
                 writer.write_all(&header)?;
                 if let Some(map) = self.point_map.as_mut() {
-                    for _ in 0..header.len() {
-                        map.map.push(Coordinate { x: 0, y: 0 });
-                    }
+                    map.append_n_times(Coordinate { x: 0, y: 0 }, header.len())?;
                 }
             }
 
@@ -1681,9 +1722,7 @@ impl<'a> PageFormatter<'a> {
 
                 writer.write_all(&header)?;
                 if let Some(map) = self.point_map.as_mut() {
-                    for _ in 0..header.len() {
-                        map.map.push(Coordinate { x: 0, y: 0 });
-                    }
+                    map.append_n_times(Coordinate { x: 0, y: 0 }, header.len())?;
                 }
             }
         }
@@ -1795,23 +1834,25 @@ impl<'a> PageFormatter<'a> {
                     };
 
                     // The first one inherits the x value.
-                    for _ in 0..sequence.len() {
-                        map.map.push(Coordinate {
+                    map.append_n_times(
+                        Coordinate {
                             x: start.x,
                             y: start.y,
-                        });
-                    }
+                        },
+                        sequence.len(),
+                    )?;
 
                     // All others have x = 0 since they reference their prior
                     // blank line.
                     for y_offset_usize in 1..blank_rows {
                         let y_offset: u32 = y_offset_usize as u32;
-                        for _ in 0..sequence.len() {
-                            map.map.push(Coordinate {
+                        map.append_n_times(
+                            Coordinate {
                                 x: 0,
                                 y: start.y + y_offset,
-                            });
-                        }
+                            },
+                            sequence.len(),
+                        )?;
                     }
                 }
 
@@ -1948,7 +1989,7 @@ impl<'a> PageFormatter<'a> {
                     }
 
                     if self.point_map.is_some() {
-                        self.append_blank_points(blank_cells, x, y);
+                        self.append_blank_points(blank_cells, x, y)?;
                     }
 
                     blank_cells = 0;
@@ -2115,10 +2156,7 @@ impl<'a> PageFormatter<'a> {
                             self.write_cell(tag, emit, &mut discarding, page, cell)?;
                             let count = discarding.count;
                             if let Some(map) = self.point_map.as_mut() {
-                                map.map.extend(core::iter::repeat_n(
-                                    Coordinate { x, y: y as u32 },
-                                    count,
-                                ));
+                                map.append_n_times(Coordinate { x, y: y as u32 }, count)?;
                             }
                         }
                     }
@@ -2128,7 +2166,7 @@ impl<'a> PageFormatter<'a> {
                     pagepkg::ContentTag::BgColorPalette | pagepkg::ContentTag::BgColorRgb => {
                         writer.write_all(b" ")?;
                         if let Some(map) = self.point_map.as_mut() {
-                            map.map.push(Coordinate { x, y: y as u32 });
+                            map.append(Coordinate { x, y: y as u32 })?;
                         }
                     }
                 }
@@ -2152,11 +2190,11 @@ impl<'a> PageFormatter<'a> {
             let closing = b"</div>";
             writer.write_all(closing)?;
             if let Some(map) = self.point_map.as_mut() {
-                // PORT NOTE: `ensureUnusedCapacity` + `appendNTimesAssumeCapacity`
-                // -> `reserve` + `extend(repeat_n(..))`.
-                map.map.reserve(closing.len());
+                // PORT NOTE: `ensureUnusedCapacity` + `appendNTimesAssumeCapacity`;
+                // the second cannot grow after the first.
+                map.ensure_unused_capacity(closing.len())?;
                 let last = map.map[map.map.len() - 1];
-                map.map.extend(core::iter::repeat_n(last, closing.len()));
+                map.append_n_times(last, closing.len())?;
             }
             // Closing the div creates a newline in the output
             // so make sure to create one less newline
@@ -2315,7 +2353,7 @@ impl<'a> PageFormatter<'a> {
             // This cell produces output: materialize accumulated blanks.
             if pending > 0 {
                 if track_points {
-                    self.append_blank_points(pending, x, run_y);
+                    self.append_blank_points(pending, x, run_y)?;
                 }
 
                 while pending > 0 {
@@ -2360,10 +2398,7 @@ impl<'a> PageFormatter<'a> {
             // All of the cell's bytes map to the cell's coordinate.
             if track_points {
                 let map = self.point_map.as_mut().unwrap();
-                map.map.extend(core::iter::repeat_n(
-                    Coordinate { x, y: run_y as u32 },
-                    cell_bytes,
-                ));
+                map.append_n_times(Coordinate { x, y: run_y as u32 }, cell_bytes)?;
             }
 
             i += 1;
@@ -2417,13 +2452,19 @@ impl<'a> PageFormatter<'a> {
     // PORT NOTE: the reference passes `map: *const PointMap` (whose inner list
     // pointer is mutable through the const handle); the Rust expression of
     // that aliasing is `&mut self` mutating `self.point_map` directly.
-    fn append_blank_points(&mut self, count: usize, x: size::CellCountInt, y: size::CellCountInt) {
+    fn append_blank_points(
+        &mut self,
+        count: usize,
+        x: size::CellCountInt,
+        y: size::CellCountInt,
+    ) -> io::Result<()> {
         let cols = unsafe { &*self.page }.size.cols;
         let map = self.point_map.as_mut().unwrap();
-        // PORT NOTE: `ensureUnusedCapacity` + `appendAssumeCapacity` ->
-        // `reserve` + `push` (Vec growth aborts on OOM; the reference's
-        // `catch return error.WriteFailed` arm has no Rust analogue).
-        map.map.reserve(count);
+        // map.map.ensureUnusedCapacity(
+        //     map.alloc,
+        //     count,
+        // ) catch return error.WriteFailed;
+        map.ensure_unused_capacity(count)?;
 
         let mut remaining = count;
         let mut blank_x = x;
@@ -2442,12 +2483,14 @@ impl<'a> PageFormatter<'a> {
                 blank_y = 0;
             }
 
+            // map.map.appendAssumeCapacity(.{ .x = blank_x, .y = blank_y });
             map.map.push(Coordinate {
                 x: blank_x,
                 y: blank_y as u32,
             });
             remaining -= 1;
         }
+        Ok(())
     }
 
     fn write_cell(
@@ -2652,9 +2695,7 @@ impl<'a> PageFormatter<'a> {
         if let Some(m) = self.point_map.as_mut() {
             debug_assert!(!m.map.is_empty());
             let last = m.map[m.map.len() - 1];
-            for _ in 0..s.len() {
-                m.map.push(last);
-            }
+            m.append_n_times(last, s.len())?;
         }
         Ok(())
     }
@@ -2694,9 +2735,7 @@ impl<'a> PageFormatter<'a> {
         if let Some(m) = self.point_map.as_mut() {
             debug_assert!(!m.map.is_empty());
             let last = m.map[m.map.len() - 1];
-            for _ in 0..s.len() {
-                m.map.push(last);
-            }
+            m.append_n_times(last, s.len())?;
         }
         Ok(())
     }
@@ -2871,7 +2910,7 @@ mod tests {
         let mut formatter: PageFormatter = PageFormatter::init(page, Options::plain());
 
         // Test our point map.
-        let mut point_map: Vec<Coordinate> = Vec::new();
+        let mut point_map: crate::alloc::AVec<Coordinate> = crate::alloc::AVec::new_in(Global);
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
@@ -2921,7 +2960,7 @@ mod tests {
         );
 
         // Test our point map.
-        let mut point_map: Vec<Coordinate> = Vec::new();
+        let mut point_map: crate::alloc::AVec<Coordinate> = crate::alloc::AVec::new_in(Global);
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
@@ -2968,7 +3007,7 @@ mod tests {
         // Full string
         {
             builder.clear();
-            let mut point_map: Vec<Coordinate> = Vec::new();
+            let mut point_map: crate::alloc::AVec<Coordinate> = crate::alloc::AVec::new_in(Global);
             let mut formatter: PageFormatter = PageFormatter::init(page, Options::plain());
             formatter.point_map = Some(PointMap {
                 alloc: Global,
@@ -2991,7 +3030,7 @@ mod tests {
         // Wide only (from start)
         {
             builder.clear();
-            let mut point_map: Vec<Coordinate> = Vec::new();
+            let mut point_map: crate::alloc::AVec<Coordinate> = crate::alloc::AVec::new_in(Global);
             let mut formatter: PageFormatter = PageFormatter::init(page, Options::plain());
             formatter.point_map = Some(PointMap {
                 alloc: Global,
@@ -3015,7 +3054,7 @@ mod tests {
         // Wide only (from tail)
         {
             builder.clear();
-            let mut point_map: Vec<Coordinate> = Vec::new();
+            let mut point_map: crate::alloc::AVec<Coordinate> = crate::alloc::AVec::new_in(Global);
             let mut formatter: PageFormatter = PageFormatter::init(page, Options::plain());
             formatter.point_map = Some(PointMap {
                 alloc: Global,
@@ -3060,7 +3099,7 @@ mod tests {
         // Full string
         {
             builder.clear();
-            let mut point_map: Vec<Coordinate> = Vec::new();
+            let mut point_map: crate::alloc::AVec<Coordinate> = crate::alloc::AVec::new_in(Global);
             let mut formatter: PageFormatter = PageFormatter::init(page, Options::plain());
             formatter.opts.unwrap = true;
             formatter.point_map = Some(PointMap {
@@ -3084,7 +3123,7 @@ mod tests {
         // Full string (ending on spacer head)
         {
             builder.clear();
-            let mut point_map: Vec<Coordinate> = Vec::new();
+            let mut point_map: crate::alloc::AVec<Coordinate> = crate::alloc::AVec::new_in(Global);
             let mut formatter: PageFormatter = PageFormatter::init(page, Options::plain());
             formatter.opts.unwrap = true;
             formatter.point_map = Some(PointMap {
@@ -3108,7 +3147,7 @@ mod tests {
         // Wide only (from start)
         {
             builder.clear();
-            let mut point_map: Vec<Coordinate> = Vec::new();
+            let mut point_map: crate::alloc::AVec<Coordinate> = crate::alloc::AVec::new_in(Global);
             let mut formatter: PageFormatter = PageFormatter::init(page, Options::plain());
             formatter.opts.unwrap = true;
             formatter.point_map = Some(PointMap {
@@ -3133,7 +3172,7 @@ mod tests {
         // Wide only (from tail)
         {
             builder.clear();
-            let mut point_map: Vec<Coordinate> = Vec::new();
+            let mut point_map: crate::alloc::AVec<Coordinate> = crate::alloc::AVec::new_in(Global);
             let mut formatter: PageFormatter = PageFormatter::init(page, Options::plain());
             formatter.opts.unwrap = true;
             formatter.point_map = Some(PointMap {
@@ -3177,7 +3216,7 @@ mod tests {
         let page = unsafe { last_page(pages) };
         let page_ref = unsafe { &*page };
         let mut formatter: PageFormatter = PageFormatter::init(page, Options::plain());
-        let mut point_map: Vec<Coordinate> = Vec::new();
+        let mut point_map: crate::alloc::AVec<Coordinate> = crate::alloc::AVec::new_in(Global);
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
@@ -3225,7 +3264,7 @@ mod tests {
         formatter.start_x = 1;
         formatter.end_x = Some(3);
         formatter.rectangle = true;
-        let mut point_map: Vec<Coordinate> = Vec::new();
+        let mut point_map: crate::alloc::AVec<Coordinate> = crate::alloc::AVec::new_in(Global);
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
@@ -3270,7 +3309,7 @@ mod tests {
         let page = unsafe { last_page(pages) };
         let page_ref = unsafe { &*page };
         let mut formatter: PageFormatter = PageFormatter::init(page, Options::plain());
-        let mut point_map: Vec<Coordinate> = Vec::new();
+        let mut point_map: crate::alloc::AVec<Coordinate> = crate::alloc::AVec::new_in(Global);
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
@@ -3317,7 +3356,7 @@ mod tests {
         let page = unsafe { last_page(pages) };
         let page_ref = unsafe { &*page };
         let mut formatter: PageFormatter = PageFormatter::init(page, Options::plain());
-        let mut point_map: Vec<Coordinate> = Vec::new();
+        let mut point_map: crate::alloc::AVec<Coordinate> = crate::alloc::AVec::new_in(Global);
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
@@ -3364,7 +3403,7 @@ mod tests {
         let page = unsafe { last_page(pages) };
         let page_ref = unsafe { &*page };
         let mut formatter: PageFormatter = PageFormatter::init(page, Options::plain());
-        let mut point_map: Vec<Coordinate> = Vec::new();
+        let mut point_map: crate::alloc::AVec<Coordinate> = crate::alloc::AVec::new_in(Global);
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
@@ -3418,7 +3457,7 @@ mod tests {
                 ..Options::plain()
             },
         );
-        let mut point_map: Vec<Coordinate> = Vec::new();
+        let mut point_map: crate::alloc::AVec<Coordinate> = crate::alloc::AVec::new_in(Global);
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
@@ -3464,7 +3503,7 @@ mod tests {
         let page_ref = unsafe { &*page };
         let mut formatter: PageFormatter = PageFormatter::init(page, Options::plain());
         formatter.trailing_state = Some(TrailingState { rows: 2, cells: 0 });
-        let mut point_map: Vec<Coordinate> = Vec::new();
+        let mut point_map: crate::alloc::AVec<Coordinate> = crate::alloc::AVec::new_in(Global);
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
@@ -3505,7 +3544,7 @@ mod tests {
         let page_ref = unsafe { &*page };
         let mut formatter: PageFormatter = PageFormatter::init(page, Options::plain());
         formatter.trailing_state = Some(TrailingState { rows: 0, cells: 3 });
-        let mut point_map: Vec<Coordinate> = Vec::new();
+        let mut point_map: crate::alloc::AVec<Coordinate> = crate::alloc::AVec::new_in(Global);
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
@@ -3557,7 +3596,7 @@ mod tests {
             },
         );
         formatter.trailing_state = Some(TrailingState { rows: 0, cells: 3 });
-        let mut point_map: Vec<Coordinate> = Vec::new();
+        let mut point_map: crate::alloc::AVec<Coordinate> = crate::alloc::AVec::new_in(Global);
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
@@ -3600,7 +3639,7 @@ mod tests {
         let page = unsafe { last_page(pages) };
         let page_ref = unsafe { &*page };
         let mut formatter: PageFormatter = PageFormatter::init(page, Options::plain());
-        let mut point_map: Vec<Coordinate> = Vec::new();
+        let mut point_map: crate::alloc::AVec<Coordinate> = crate::alloc::AVec::new_in(Global);
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
@@ -3650,7 +3689,7 @@ mod tests {
                 ..Options::plain()
             },
         );
-        let mut point_map: Vec<Coordinate> = Vec::new();
+        let mut point_map: crate::alloc::AVec<Coordinate> = crate::alloc::AVec::new_in(Global);
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
@@ -3692,7 +3731,7 @@ mod tests {
         let page = unsafe { last_page(pages) };
         let page_ref = unsafe { &*page };
         let mut formatter: PageFormatter = PageFormatter::init(page, Options::plain());
-        let mut point_map: Vec<Coordinate> = Vec::new();
+        let mut point_map: crate::alloc::AVec<Coordinate> = crate::alloc::AVec::new_in(Global);
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
@@ -3746,7 +3785,7 @@ mod tests {
                 ..Options::plain()
             },
         );
-        let mut point_map: Vec<Coordinate> = Vec::new();
+        let mut point_map: crate::alloc::AVec<Coordinate> = crate::alloc::AVec::new_in(Global);
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
@@ -3788,7 +3827,7 @@ mod tests {
         let page_ref = unsafe { &*page };
         let mut formatter: PageFormatter = PageFormatter::init(page, Options::plain());
         formatter.start_y = 1;
-        let mut point_map: Vec<Coordinate> = Vec::new();
+        let mut point_map: crate::alloc::AVec<Coordinate> = crate::alloc::AVec::new_in(Global);
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
@@ -3826,7 +3865,7 @@ mod tests {
         let page_ref = unsafe { &*page };
         let mut formatter: PageFormatter = PageFormatter::init(page, Options::plain());
         formatter.end_y = Some(1);
-        let mut point_map: Vec<Coordinate> = Vec::new();
+        let mut point_map: crate::alloc::AVec<Coordinate> = crate::alloc::AVec::new_in(Global);
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
@@ -3865,7 +3904,7 @@ mod tests {
         let mut formatter: PageFormatter = PageFormatter::init(page, Options::plain());
         formatter.start_y = 1;
         formatter.end_y = Some(2);
-        let mut point_map: Vec<Coordinate> = Vec::new();
+        let mut point_map: crate::alloc::AVec<Coordinate> = crate::alloc::AVec::new_in(Global);
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
@@ -3902,7 +3941,7 @@ mod tests {
         let page = unsafe { last_page(pages) };
         let mut formatter: PageFormatter = PageFormatter::init(page, Options::plain());
         formatter.start_y = 30;
-        let mut point_map: Vec<Coordinate> = Vec::new();
+        let mut point_map: crate::alloc::AVec<Coordinate> = crate::alloc::AVec::new_in(Global);
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
@@ -3933,7 +3972,7 @@ mod tests {
         let page_ref = unsafe { &*page };
         let mut formatter: PageFormatter = PageFormatter::init(page, Options::plain());
         formatter.end_y = Some(30);
-        let mut point_map: Vec<Coordinate> = Vec::new();
+        let mut point_map: crate::alloc::AVec<Coordinate> = crate::alloc::AVec::new_in(Global);
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
@@ -3968,7 +4007,7 @@ mod tests {
         let mut formatter: PageFormatter = PageFormatter::init(page, Options::plain());
         formatter.start_y = 5;
         formatter.end_y = Some(2);
-        let mut point_map: Vec<Coordinate> = Vec::new();
+        let mut point_map: crate::alloc::AVec<Coordinate> = crate::alloc::AVec::new_in(Global);
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
@@ -3999,7 +4038,7 @@ mod tests {
         let page_ref = unsafe { &*page };
         let mut formatter: PageFormatter = PageFormatter::init(page, Options::plain());
         formatter.start_x = 6;
-        let mut point_map: Vec<Coordinate> = Vec::new();
+        let mut point_map: crate::alloc::AVec<Coordinate> = crate::alloc::AVec::new_in(Global);
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
@@ -4033,7 +4072,7 @@ mod tests {
         let mut formatter: PageFormatter = PageFormatter::init(page, Options::plain());
         formatter.end_y = Some(2);
         formatter.end_x = Some(4);
-        let mut point_map: Vec<Coordinate> = Vec::new();
+        let mut point_map: crate::alloc::AVec<Coordinate> = crate::alloc::AVec::new_in(Global);
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
@@ -4076,7 +4115,7 @@ mod tests {
         formatter.start_x = 6;
         formatter.end_y = Some(2);
         formatter.end_x = Some(2);
-        let mut point_map: Vec<Coordinate> = Vec::new();
+        let mut point_map: crate::alloc::AVec<Coordinate> = crate::alloc::AVec::new_in(Global);
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
@@ -4120,7 +4159,7 @@ mod tests {
         let page = unsafe { last_page(pages) };
         let mut formatter: PageFormatter = PageFormatter::init(page, Options::plain());
         formatter.start_x = 100;
-        let mut point_map: Vec<Coordinate> = Vec::new();
+        let mut point_map: crate::alloc::AVec<Coordinate> = crate::alloc::AVec::new_in(Global);
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
@@ -4151,7 +4190,7 @@ mod tests {
         let page_ref = unsafe { &*page };
         let mut formatter: PageFormatter = PageFormatter::init(page, Options::plain());
         formatter.end_x = Some(100);
-        let mut point_map: Vec<Coordinate> = Vec::new();
+        let mut point_map: crate::alloc::AVec<Coordinate> = crate::alloc::AVec::new_in(Global);
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
@@ -4186,7 +4225,7 @@ mod tests {
         formatter.start_x = 10;
         formatter.end_y = Some(0);
         formatter.end_x = Some(5);
-        let mut point_map: Vec<Coordinate> = Vec::new();
+        let mut point_map: crate::alloc::AVec<Coordinate> = crate::alloc::AVec::new_in(Global);
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
@@ -4218,7 +4257,7 @@ mod tests {
         let mut formatter: PageFormatter = PageFormatter::init(page, Options::plain());
         formatter.start_y = 1;
         formatter.trailing_state = Some(TrailingState { rows: 5, cells: 10 });
-        let mut point_map: Vec<Coordinate> = Vec::new();
+        let mut point_map: crate::alloc::AVec<Coordinate> = crate::alloc::AVec::new_in(Global);
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
@@ -4254,7 +4293,7 @@ mod tests {
         let mut formatter: PageFormatter = PageFormatter::init(page, Options::plain());
         formatter.start_x = 6;
         formatter.trailing_state = Some(TrailingState { rows: 2, cells: 8 });
-        let mut point_map: Vec<Coordinate> = Vec::new();
+        let mut point_map: crate::alloc::AVec<Coordinate> = crate::alloc::AVec::new_in(Global);
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
@@ -4291,7 +4330,7 @@ mod tests {
         formatter.start_y = 0;
         formatter.start_x = 0;
         formatter.trailing_state = Some(TrailingState { rows: 2, cells: 0 });
-        let mut point_map: Vec<Coordinate> = Vec::new();
+        let mut point_map: crate::alloc::AVec<Coordinate> = crate::alloc::AVec::new_in(Global);
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
@@ -4333,7 +4372,7 @@ mod tests {
         let page = unsafe { last_page(pages) };
         let page_ref = unsafe { &*page };
         let mut formatter: PageFormatter = PageFormatter::init(page, Options::plain());
-        let mut point_map: Vec<Coordinate> = Vec::new();
+        let mut point_map: crate::alloc::AVec<Coordinate> = crate::alloc::AVec::new_in(Global);
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
@@ -4367,7 +4406,7 @@ mod tests {
         let pages = unsafe { &(*t.screens.active).pages };
         let page = unsafe { last_page(pages) };
         let mut formatter: PageFormatter = PageFormatter::init(page, Options::vt());
-        let mut point_map: Vec<Coordinate> = Vec::new();
+        let mut point_map: crate::alloc::AVec<Coordinate> = crate::alloc::AVec::new_in(Global);
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
@@ -4397,7 +4436,7 @@ mod tests {
         let pages = unsafe { &(*t.screens.active).pages };
         let page = unsafe { last_page(pages) };
         let mut formatter: PageFormatter = PageFormatter::init(page, Options::vt());
-        let mut point_map: Vec<Coordinate> = Vec::new();
+        let mut point_map: crate::alloc::AVec<Coordinate> = crate::alloc::AVec::new_in(Global);
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
@@ -4433,7 +4472,7 @@ mod tests {
         let pages = unsafe { &(*t.screens.active).pages };
         let page = unsafe { last_page(pages) };
         let mut formatter: PageFormatter = PageFormatter::init(page, Options::vt());
-        let mut point_map: Vec<Coordinate> = Vec::new();
+        let mut point_map: crate::alloc::AVec<Coordinate> = crate::alloc::AVec::new_in(Global);
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
@@ -4463,7 +4502,7 @@ mod tests {
         let pages = unsafe { &(*t.screens.active).pages };
         let page = unsafe { last_page(pages) };
         let mut formatter: PageFormatter = PageFormatter::init(page, Options::vt());
-        let mut point_map: Vec<Coordinate> = Vec::new();
+        let mut point_map: crate::alloc::AVec<Coordinate> = crate::alloc::AVec::new_in(Global);
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
@@ -4538,7 +4577,7 @@ mod tests {
         let pages = unsafe { &(*t.screens.active).pages };
         let page = unsafe { last_page(pages) };
         let mut formatter: PageFormatter = PageFormatter::init(page, Options::vt());
-        let mut point_map: Vec<Coordinate> = Vec::new();
+        let mut point_map: crate::alloc::AVec<Coordinate> = crate::alloc::AVec::new_in(Global);
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
@@ -4570,7 +4609,7 @@ mod tests {
         let pages = unsafe { &(*t.screens.active).pages };
         let page = unsafe { last_page(pages) };
         let mut formatter: PageFormatter = PageFormatter::init(page, Options::vt());
-        let mut point_map: Vec<Coordinate> = Vec::new();
+        let mut point_map: crate::alloc::AVec<Coordinate> = crate::alloc::AVec::new_in(Global);
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
@@ -6224,7 +6263,7 @@ mod tests {
         let pages = unsafe { &(*t.screens.active).pages };
         let page = unsafe { last_page(pages) };
         let mut formatter: PageFormatter = PageFormatter::init(page, Options::html());
-        let mut point_map: Vec<Coordinate> = Vec::new();
+        let mut point_map: crate::alloc::AVec<Coordinate> = crate::alloc::AVec::new_in(Global);
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
@@ -6509,7 +6548,7 @@ mod tests {
         let mut o = Options::plain();
         o.codepoint_map = Some(map);
         let mut formatter: PageFormatter = PageFormatter::init(page, o);
-        let mut point_map: Vec<Coordinate> = Vec::new();
+        let mut point_map: crate::alloc::AVec<Coordinate> = crate::alloc::AVec::new_in(Global);
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
@@ -6588,7 +6627,7 @@ mod tests {
         let mut o = Options::plain();
         o.codepoint_map = Some(map);
         let mut formatter: PageFormatter = PageFormatter::init(page, o);
-        let mut point_map: Vec<Coordinate> = Vec::new();
+        let mut point_map: crate::alloc::AVec<Coordinate> = crate::alloc::AVec::new_in(Global);
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
@@ -6691,7 +6730,7 @@ mod tests {
         let mut o = Options::plain();
         o.codepoint_map = Some(map);
         let mut formatter: PageFormatter = PageFormatter::init(page, o);
-        let mut point_map: Vec<Coordinate> = Vec::new();
+        let mut point_map: crate::alloc::AVec<Coordinate> = crate::alloc::AVec::new_in(Global);
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
@@ -7007,7 +7046,7 @@ mod tests {
         let pages = unsafe { &(*t.screens.active).pages };
         let page = unsafe { last_page(pages) };
         let mut formatter: PageFormatter = PageFormatter::init(page, Options::html());
-        let mut point_map: Vec<Coordinate> = Vec::new();
+        let mut point_map: crate::alloc::AVec<Coordinate> = crate::alloc::AVec::new_in(Global);
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,

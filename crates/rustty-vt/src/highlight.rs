@@ -128,14 +128,24 @@ impl Tracked {
 /// pruned).
 //
 // PORT NOTE: the reference `chunks` is a `std.MultiArrayList(Chunk)`; the Rust
-// port uses a `Vec<Chunk>` (the SoA layout is a Zig storage optimization, not
-// observable). `.slice().items(.node)` etc. become field projections over the
-// `Vec`.
-pub struct Flattened {
+// port stores the chunks as an array of structs (the SoA layout is a Zig
+// storage optimization, not observable). `.slice().items(.node)` etc. become
+// field projections over the slice.
+//
+// PORT NOTE (parity tail S7-6): the chunk storage `C` is either OWNED, an
+// allocator-bound [`ChunkList`] (the default, what `clone(alloc)` returns and
+// what the search result lists hold), or BORROWED, a `&[Chunk]`
+// ([`FlattenedRef`]). The reference's `Flattened` is a plain value whose
+// `chunks` header is copied freely: `SlidingWindow.next` returns one that
+// aliases the window's `chunk_buf`, and `matchAt`/`selectedMatch` return
+// shallow copies of stored results, with no allocation. The borrowed form is
+// that shallow copy (its lifetime is the reference's "valid until the next
+// call"); the owned form frees through the allocator it was built with.
+pub struct Flattened<C = ChunkList> {
     /// The page chunks that make up this highlight. This handles the
     /// y bounds since chunks[0].start is the first highlighted row
     /// and chunks[len - 1].end is the last highlighted row (exclsive).
-    pub chunks: Vec<Chunk>,
+    pub chunks: C,
 
     /// The x bounds of the highlight. `bot_x` may be less than `top_x`
     /// for typical left-to-right highlights: can start the selection right
@@ -144,10 +154,19 @@ pub struct Flattened {
     pub bot_x: size::CellCountInt,
 }
 
+/// The owned chunk storage: a `std.MultiArrayList(Chunk)` through the
+/// allocator it was built with.
+pub type ChunkList = crate::alloc::AVec<Chunk>;
+
+/// A shallow copy of a [`Flattened`] (the reference's by-value `Flattened`
+/// that aliases another list's chunks).
+pub type FlattenedRef<'a> = Flattened<&'a [Chunk]>;
+
 /// A flattened chunk is almost identical to a PageList.Chunk but
 /// we also flatten the serial number. This lets the flattened
 /// highlight more robust for comparisons and validity checks with
 /// the PageList.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Chunk {
     pub node: *mut Node,
     pub serial: u64,
@@ -155,31 +174,50 @@ pub struct Chunk {
     pub end: size::CellCountInt,
 }
 
+/// `MultiArrayList(Chunk)`'s `init_capacity`: the largest field is 8 bytes
+/// (`node`, `serial`), so `cache_line / 8`.
+pub(crate) const CHUNK_INIT_CAPACITY: usize = crate::zig_list::init_capacity(8);
+
+/// `ArrayList(Flattened)`'s `init_capacity`: Zig's `@sizeOf(Flattened)` is 32
+/// (a 24-byte `MultiArrayList` header plus two `u16`s, padded to 8).
+pub(crate) const FLATTENED_INIT_CAPACITY: usize = crate::zig_list::init_capacity(32);
+
 impl Flattened {
     // pub const empty: Flattened = .{ .chunks = .empty, .top_x = 0, .bot_x = 0 };
+    //
+    // PORT NOTE: `.empty` holds no allocation; its list is bound to the Rust
+    // heap handle until something is stored in it.
     pub fn empty() -> Flattened {
         Flattened {
-            chunks: Vec::new(),
+            chunks: ChunkList::new_in(crate::alloc::VtAllocator::GLOBAL),
             top_x: 0,
             bot_x: 0,
         }
     }
 
-    pub fn init(start: Pin, end: Pin) -> Result<Flattened, OutOfMemory> {
-        // PORT NOTE: the reference accumulates into a `std.MultiArrayList(PageChunk)`
-        // (with an `errdefer result.deinit(alloc)`); the Rust `Vec<Chunk>` owns its
-        // storage and frees on drop, so the errdefer is implicit.
+    pub fn init(
+        alloc: crate::alloc::VtAllocator,
+        start: Pin,
+        end: Pin,
+    ) -> Result<Flattened, OutOfMemory> {
+        // var result: std.MultiArrayList(PageChunk) = .empty;
+        // errdefer result.deinit(alloc);
+        // var it = start.pageIterator(.right_down, end);
+        // while (it.next()) |chunk| try result.append(alloc, .{
+        //     .node = chunk.node,
+        //     .serial = chunk.node.serial,
+        //     .start = chunk.start,
+        //     .end = chunk.end,
+        // });
         //
-        // PORT NOTE: the reference's `try result.append(alloc, ...)` is FALLIBLE
-        // (`Allocator.Error!Flattened`). `Vec::push` is not — it aborts — so the
-        // growth is done through `try_reserve`, which is what makes the declared
-        // `Result` reachable instead of decorative.
-        let mut result: Vec<Chunk> = Vec::new();
+        // PORT NOTE: the errdefer is the list's drop (it frees through `alloc`).
+        // `append` is `ensureUnusedCapacity(1)` + `setCapacity`, the
+        // `MultiArrayList` growth.
+        let mut result: ChunkList = ChunkList::new_in(alloc);
         let mut it = start.page_iterator(Direction::RightDown, Some(end));
         while let Some(chunk) = it.next() {
-            #[cfg(test)]
-            flattened_tw_check(FlattenedFp::Alloc)?;
-            result.try_reserve(1).map_err(|_| OutOfMemory)?;
+            let needed = result.len() + 1;
+            crate::zig_list::multi_ensure_total_capacity(&mut result, needed, CHUNK_INIT_CAPACITY)?;
             result.push(Chunk {
                 node: chunk.node,
                 serial: unsafe { (*chunk.node).serial },
@@ -199,36 +237,46 @@ impl Flattened {
         })
     }
 
-    // PORT NOTE: the reference `deinit` frees `self.chunks`; the Rust `Vec`
-    // frees on drop, so an explicit method is a no-op kept for API parity.
-    pub fn deinit(&mut self) {
-        self.chunks = Vec::new();
+    // pub fn deinit(self: *Flattened, alloc: Allocator) void {
+    //     self.chunks.deinit(alloc);
+    // }
+    //
+    // PORT NOTE: the list frees through the allocator it was built with; `alloc`
+    // is checked against it (an empty list may still be on the `.empty` Rust
+    // heap handle). The highlight is left empty.
+    pub fn deinit(&mut self, alloc: crate::alloc::VtAllocator) {
+        if self.chunks.capacity() != 0 {
+            self.chunks.allocator().debug_assert_same(alloc);
+        }
+        self.chunks = ChunkList::new_in(alloc);
     }
 
-    // PORT NOTE: the reference method is named `clone` (returns
-    // `Allocator.Error!Flattened`); kept verbatim. `#[allow(clippy::should_implement_trait)]`
-    // because its fallible signature can't be the std `Clone::clone`.
-    #[allow(clippy::should_implement_trait)]
-    pub fn clone(&self) -> Result<Flattened, OutOfMemory> {
-        // PORT NOTE: `Vec::with_capacity` aborts on OOM, which would make the
-        // reference's `try self.chunks.clone(alloc)` unfailable here; the fallible
-        // `try_reserve_exact` preserves the reference's error path.
-        #[cfg(test)]
-        flattened_tw_check(FlattenedFp::Alloc)?;
-        let mut chunks: Vec<Chunk> = Vec::new();
-        chunks
-            .try_reserve_exact(self.chunks.len())
-            .map_err(|_| OutOfMemory)?;
-        for c in &self.chunks {
-            chunks.push(Chunk {
-                node: c.node,
-                serial: c.serial,
-                start: c.start,
-                end: c.end,
-            });
+    /// A shallow copy (the reference's by-value `Flattened`).
+    pub fn as_ref(&self) -> FlattenedRef<'_> {
+        Flattened {
+            chunks: &self.chunks[..],
+            top_x: self.top_x,
+            bot_x: self.bot_x,
         }
+    }
+}
+
+impl<C: core::ops::Deref<Target = [Chunk]>> Flattened<C> {
+    // pub fn clone(self: *const Flattened, alloc: Allocator) Allocator.Error!Flattened {
+    //     return .{
+    //         .chunks = try self.chunks.clone(alloc),
+    //         .top_x = self.top_x,
+    //         .bot_x = self.bot_x,
+    //     };
+    // }
+    //
+    // PORT NOTE: the reference method is named `clone`; kept verbatim.
+    // `#[allow(clippy::should_implement_trait)]` because its fallible,
+    // allocator-taking signature can't be the std `Clone::clone`.
+    #[allow(clippy::should_implement_trait)]
+    pub fn clone(&self, alloc: crate::alloc::VtAllocator) -> Result<Flattened, OutOfMemory> {
         Ok(Flattened {
-            chunks,
+            chunks: crate::zig_list::multi_clone(&self.chunks, alloc, CHUNK_INIT_CAPACITY)?,
             top_x: self.top_x,
             bot_x: self.bot_x,
         })
@@ -283,56 +331,17 @@ use List as _List;
 #[allow(unused_imports)]
 use PageChunk as _PageChunk;
 
-// PORT NOTE: tripwire fail-point enum + thread-local module standing in for the
-// reference tests' `std.testing.FailingAllocator` (the crate's established
-// failure-injection seam; see `stream_continuation.rs`'s `TRACKER_TW` PORT
-// NOTE). One point, `Alloc`, sits at `Flattened.init`'s per-chunk growth and
-// `Flattened.clone`'s reservation — the two sites the reference reaches with
-// `try`. Without it the declared `Allocator.Error` return is unreachable in the
-// port, because Rust's infallible `Vec` growth aborts instead of erroring.
-#[cfg(test)]
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub(crate) enum FlattenedFp {
-    Alloc,
-}
-
-#[cfg(test)]
-thread_local! {
-    pub(crate) static FLATTENED_TW: core::cell::RefCell<
-        rustty_util::tripwire::Module<FlattenedFp, OutOfMemory>,
-    > = core::cell::RefCell::new(rustty_util::tripwire::module());
-}
-
-#[cfg(test)]
-#[inline]
-fn flattened_tw_check(point: FlattenedFp) -> Result<(), OutOfMemory> {
-    FLATTENED_TW.with(|tw| tw.borrow_mut().check(point))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::alloc::testing::{with_handle, Config, CountingAllocator, FailingAllocator};
     use crate::alloc::Allocator;
     use crate::kitty;
     use crate::point;
     use crate::screen::{Options, Screen};
-    use rustty_util::tripwire::ResetMode;
 
-    fn arm() {
-        FLATTENED_TW.with(|tw| tw.borrow_mut().errorAlways(FlattenedFp::Alloc, OutOfMemory));
-    }
-
-    fn disarm() -> Result<(), rustty_util::tripwire::UntrippedError> {
-        FLATTENED_TW.with(|tw| tw.borrow_mut().end(ResetMode::Reset))
-    }
-
-    // PORT NOTE: net-new (highlight.zig declares no tests). It exists to prove
-    // that `Flattened.init`/`clone`'s declared `Allocator.Error` return is
-    // REACHABLE — before this, both were infallible in the port and the
-    // `Result` could only ever be `Ok` (parity row S155-F6).
-    #[test]
-    fn flattened_init_and_clone_propagate_out_of_memory() {
-        let mut s = Screen::init(
+    fn test_screen() -> Screen {
+        Screen::init(
             Allocator,
             Options {
                 cols: 10,
@@ -343,8 +352,16 @@ mod tests {
                 kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
             },
         )
-        .unwrap();
+        .unwrap()
+    }
 
+    // PORT NOTE: net-new (highlight.zig declares no tests). It proves that
+    // `Flattened.init`/`clone`'s declared `Allocator.Error` return is REACHABLE
+    // (parity row S155-F6). Parity tail S7-6 replaced the port-only tripwire
+    // (`FLATTENED_TW`) with a `FailingAllocator`, the reference's own tool.
+    #[test]
+    fn flattened_init_and_clone_propagate_out_of_memory() {
+        let mut s = test_screen();
         let start = s
             .pages
             .pin(point::Point::Active(point::Coordinate { x: 0, y: 0 }))
@@ -354,21 +371,75 @@ mod tests {
             .pin(point::Point::Active(point::Coordinate { x: 9, y: 2 }))
             .unwrap();
 
-        // Unarmed: the same call succeeds and visits at least one chunk, so the
-        // failure below is about the allocation and not about an empty range.
-        let ok = Flattened::init(start.pin_copy(), end.pin_copy()).unwrap();
-        assert!(!ok.chunks.is_empty());
+        let failing = FailingAllocator::over_heap(Config::default());
+        let c = failing.allocator();
+        with_handle(&c, |alloc| {
+            // Unarmed: the same call succeeds and visits at least one chunk, so
+            // the failure below is about the allocation and not about an empty
+            // range.
+            let ok = Flattened::init(alloc, start.pin_copy(), end.pin_copy()).unwrap();
+            assert!(!ok.chunks.is_empty());
 
-        arm();
-        assert_eq!(
-            Err(OutOfMemory),
-            Flattened::init(start.pin_copy(), end.pin_copy()).map(|_| ()),
-        );
-        disarm().unwrap();
+            failing.fail_index.set(failing.alloc_index.get());
+            assert_eq!(
+                Err(OutOfMemory),
+                Flattened::init(alloc, start.pin_copy(), end.pin_copy()).map(|_| ()),
+            );
+            assert_eq!(Err(OutOfMemory), ok.clone(alloc).map(|_| ()));
+            assert!(failing.has_induced_failure.get());
+            drop(ok);
+            assert_eq!(failing.allocated_bytes.get(), failing.freed_bytes.get());
+        });
 
-        arm();
-        assert_eq!(Err(OutOfMemory), ok.clone().map(|_| ()));
-        disarm().unwrap();
+        s.deinit();
+    }
+
+    // Parity tail S7-6: `clone(alloc)` is `MultiArrayList.clone`: ONE
+    // allocation of `growCapacity(len)` chunks (never a remap) through the
+    // allocator it is given, freed through it; an empty highlight allocates
+    // nothing; a shallow copy (`as_ref`) allocates nothing.
+    #[test]
+    fn flattened_clone_routes_through_the_given_allocator() {
+        let mut s = test_screen();
+        let start = s
+            .pages
+            .pin(point::Point::Active(point::Coordinate { x: 0, y: 0 }))
+            .unwrap();
+        let end = s
+            .pages
+            .pin(point::Point::Active(point::Coordinate { x: 9, y: 2 }))
+            .unwrap();
+        let src = Flattened::init(Allocator, start, end).unwrap();
+        assert_eq!(1, src.chunks.len());
+
+        let counting = CountingAllocator::over_heap();
+        let c = counting.allocator();
+        with_handle(&c, |alloc| {
+            let shallow = src.as_ref();
+            assert_eq!(0, counting.alloc_calls.get());
+            let mut cloned = shallow.clone(alloc).unwrap();
+            assert_eq!(
+                (1, 0, 0),
+                (
+                    counting.alloc_calls.get(),
+                    counting.remap_calls.get(),
+                    counting.free_calls.get()
+                )
+            );
+            // growCapacity(1) = 1 + 0 + 16 chunks, 8-aligned (log2 3).
+            assert_eq!(
+                Some((17 * core::mem::size_of::<Chunk>(), 3)),
+                counting.last_alloc.get()
+            );
+            assert_eq!(src.chunks[..], cloned.chunks[..]);
+            assert_eq!((src.top_x, src.bot_x), (cloned.top_x, cloned.bot_x));
+            cloned.deinit(alloc);
+            assert_eq!(0, counting.live_bytes.get());
+
+            let empty = Flattened::empty().clone(alloc).unwrap();
+            assert!(empty.chunks.is_empty());
+            assert_eq!(1, counting.alloc_calls.get());
+        });
 
         s.deinit();
     }

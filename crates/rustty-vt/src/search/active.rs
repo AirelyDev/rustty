@@ -16,7 +16,7 @@
 // const Terminal = @import("../Terminal.zig");
 use super::sliding_window::{Direction, SlidingWindow};
 use crate::alloc::Allocator;
-use crate::highlight::Flattened as FlattenedHighlight;
+use crate::highlight::FlattenedRef;
 use crate::pagelist::{Node, OutOfMemory, PageList};
 
 /// Searches for a substring within the active area of a PageList.
@@ -157,7 +157,7 @@ impl ActiveSearch {
     /// null when there are no more matches.
     // pub fn next(self: *ActiveSearch) ?FlattenedHighlight {
     #[allow(clippy::should_implement_trait)]
-    pub fn next(&mut self) -> Option<FlattenedHighlight> {
+    pub fn next(&mut self) -> Option<FlattenedRef<'_>> {
         // return self.window.next();
         self.window.next()
     }

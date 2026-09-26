@@ -108,7 +108,10 @@ pub struct TerminalSearch {
     /// drains on read, so results are collected once per viewport
     /// change and cached here.
     // viewport_matches: std.ArrayList(FlattenedHighlight),
-    pub viewport_matches: Vec<FlattenedHighlight>,
+    //
+    // PORT NOTE (parity tail S7-6): grown through `self.alloc` (bound at
+    // `init`), each element cloned through it.
+    pub viewport_matches: crate::alloc::AVec<FlattenedHighlight>,
 }
 
 /// Overall status of the search. See `status`.
@@ -242,7 +245,7 @@ impl TerminalSearch {
             screen_generations: [None, None],
             active_key: ScreenSetKey::Primary,
             stale_viewport_matches: true,
-            viewport_matches: Vec::new(),
+            viewport_matches: crate::alloc::AVec::new_in(alloc),
         })
     }
 
@@ -262,7 +265,7 @@ impl TerminalSearch {
         // self.clearViewportMatches();
         self.clear_viewport_matches();
         // self.viewport_matches.deinit(self.alloc);
-        self.viewport_matches = Vec::new();
+        self.viewport_matches = crate::alloc::AVec::new_in(self.alloc);
         // self.viewport.deinit();
         self.viewport.deinit();
         // var it = self.screens.iterator();
@@ -584,8 +587,7 @@ impl TerminalSearch {
                 //     entry.value.*,
                 //     self.viewport.needle(),
                 // ) catch |err| switch (err) {
-                let needle_owned: Vec<u8> = self.viewport.needle().to_vec();
-                match ScreenSearch::init(alloc, entry_value, &needle_owned) {
+                match ScreenSearch::init(alloc, entry_value, self.viewport.needle()) {
                     // self.screens.put(entry.key, screen_search);
                     // self.screen_generations.put(
                     //     entry.key,
@@ -741,23 +743,27 @@ impl TerminalSearch {
             //
             // PORT NOTE: the reference's `errdefer` cleanup (clear the cache and
             // `viewport.reset()`) fires when either the clone or the append
-            // fails with OutOfMemory. `Flattened::clone` carries the fallible
-            // signature, so the error arm is realized explicitly here;
-            // `Vec::push` aborts on allocation failure rather than returning
-            // an error, so only the clone can take it.
-            let hl_cloned = match hl.clone() {
-                Ok(c) => c,
-                Err(err) => {
-                    // -- errdefer --
-                    self.clear_viewport_matches();
-
-                    // Reset the viewport so we force an update (and therefore a
-                    // re-collection) on the next feed.
-                    self.viewport.reset();
-                    return Err(err);
-                }
+            // fails with OutOfMemory; both are realized explicitly here. A
+            // failed append drops `hl_cloned` (its `errdefer`, freeing through
+            // `self.alloc`).
+            let collected = match hl.clone(self.alloc) {
+                Ok(hl_cloned) => crate::zig_list::append(
+                    &mut self.viewport_matches,
+                    hl_cloned,
+                    crate::highlight::FLATTENED_INIT_CAPACITY,
+                )
+                .map_err(OutOfMemory::from),
+                Err(err) => Err(err),
             };
-            self.viewport_matches.push(hl_cloned);
+            if let Err(err) = collected {
+                // -- errdefer --
+                self.clear_viewport_matches();
+
+                // Reset the viewport so we force an update (and therefore a
+                // re-collection) on the next feed.
+                self.viewport.reset();
+                return Err(err);
+            }
         }
 
         // return self.viewport_matches.items;
@@ -767,8 +773,9 @@ impl TerminalSearch {
     // fn clearViewportMatches(self: *TerminalSearch) void {
     fn clear_viewport_matches(&mut self) {
         // for (self.viewport_matches.items) |*hl| hl.deinit(self.alloc);
+        let alloc = self.alloc;
         for hl in self.viewport_matches.iter_mut() {
-            hl.deinit();
+            hl.deinit(alloc);
         }
         // self.viewport_matches.clearRetainingCapacity();
         self.viewport_matches.clear();

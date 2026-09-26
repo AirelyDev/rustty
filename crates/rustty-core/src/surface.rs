@@ -4698,11 +4698,13 @@ where
                 // for (matches) |*m| m.* = try m.clone(alloc);
                 //
                 // (the shallow dupe + in-place deep clone collapse into one
-                // clone-into-Vec pass — same elements, same failure points.)
+                // clone-into-Vec pass — same elements, same failure points.
+                // The collapsed arena is the Rust heap, so each clone goes
+                // through the Rust heap handle.)
                 let mut matches: Vec<terminal::highlight::Flattened> =
                     Vec::with_capacity(matches_unowned.len());
                 for m in matches_unowned {
-                    matches.push(m.clone()?);
+                    matches.push(m.clone(terminal::alloc::Global)?);
                 }
 
                 // _ = self.renderer_thread.mailbox.push(
@@ -4734,7 +4736,7 @@ where
                     //
                     // (same collapsed arena as above; `match` is a Rust
                     // keyword — the renderer message.rs `r#match` note.)
-                    let match_ = sel.highlight.clone()?;
+                    let match_ = sel.highlight.clone(terminal::alloc::Global)?;
 
                     // _ = self.renderer_thread.mailbox.push(
                     //     .{ .search_selected_match = .{

@@ -3,16 +3,20 @@
 //! PORTS: ghostty src/terminal/search/sliding_window.zig
 //!
 //! PORT STATUS: complete (vt-15). Faithful port of the search sliding-window
-//! ring-buffer/window core. The reference `DataBuf = CircBuf(u8, 0)` maps to the
-//! ported `rustty_datastruct::CircBuf<u8>`. The reference `MetaBuf =
-//! CircBuf(Meta, undefined)` CANNOT use that ported `CircBuf` because `Meta`
-//! owns an `ArrayList(point.Coordinate)` (a `Vec`) and is therefore not `Copy`
-//! (the ported `CircBuf<T: Copy>` is bound to `Copy` for its `@memset`-on-delete
-//! semantics). We therefore port a faithful, byte-for-byte-equivalent non-`Copy`
-//! circular buffer `MetaBuf` below, mirroring `circ_buf.zig` exactly for the
-//! subset of operations the sliding window uses (`init`/`deinit`/`iterator`/
-//! `len`/`clear`/`ensureUnusedCapacity`/`appendAssumeCapacity`/`capacity`/
-//! `deleteOldest`), including the `Iterator.idx` field the prune logic reads.
+//! ring-buffer/window core. The reference `DataBuf = CircBuf(u8, 0)` and
+//! `MetaBuf = CircBuf(Meta, undefined)` are a private port of `circ_buf.zig`
+//! below (parity tail S7-6), over the window's allocator, for the subset of
+//! operations the sliding window uses (`init`/`deinit`/`iterator`/`len`/`clear`/
+//! `ensureUnusedCapacity`/`resize`/`appendAssumeCapacity`/
+//! `appendSliceAssumeCapacity`/`capacity`/`deleteOldest`/`getPtrSlice`),
+//! including the `Iterator.idx` field the prune logic reads.
+//!
+//! Parity tail S7-6: every allocation the window makes goes through its
+//! `alloc` (the search's allocator), as in the reference: the needle and
+//! overlap buffer, both circular buffers, the chunk buffer, each page's
+//! `cell_map`, the temporary encoding buffer, and the decode buffer of a
+//! compressed page (`pagePreservingState(self.alloc)`). Every growth is
+//! fallible (`error.OutOfMemory`).
 
 // const std = @import("std");
 // const assert = @import("../../quirks.zig").inlineAssert;
@@ -28,22 +32,21 @@
 // const Terminal = terminal.Terminal;
 // const PageFormatter = @import("../formatter.zig").PageFormatter;
 // const FlattenedHighlight = terminal.highlight.Flattened;
-use crate::alloc::Allocator;
+use crate::alloc::{AVec, Allocator, Bytes};
 use crate::formatter::{Format, Options, PageFormatter, PointMap};
-use crate::highlight::Flattened as FlattenedHighlight;
+use crate::highlight::{Chunk, Flattened, FlattenedRef};
 use crate::pagelist::Node;
 use crate::point;
 use crate::size;
-use rustty_datastruct::circ_buf::{Direction as CircDirection, Error as CircError};
-use rustty_datastruct::CircBuf;
+use crate::zig_list::AllocatingWriter;
 
 // PORT NOTE: the reference `Allocator.Error` is a single-variant error set
 // (`OutOfMemory`). We mirror it with the crate-local OOM type used throughout
 // the port.
 use crate::pagelist::OutOfMemory;
 
-// PORT NOTE: `DataBuf = CircBuf(u8, 0)` ports directly to the ported `CircBuf<u8>`.
-type DataBuf = CircBuf<u8>;
+/// `ArrayList(point.Coordinate)`'s `init_capacity` (`@sizeOf(Coordinate)` is 8).
+const COORDINATE_INIT_CAPACITY: usize = crate::zig_list::init_capacity(8);
 
 /// Searches page nodes via a sliding window. The sliding window maintains
 /// the invariant that data isn't pruned until (1) we've searched it and
@@ -74,9 +77,8 @@ pub struct SlidingWindow {
     /// ensure we always use a consistent allocator. Additionally, only
     /// a small amount of sliding windows are expected to be in use
     /// at any one time so the memory overhead isn't that large.
-    // PORT NOTE: `Allocator` is the ZST `allocator_api2::Global`; the ported
-    // collections (`Vec`, ported `CircBuf`) carry their own allocator, so this
-    // field is kept for API parity but is a unit.
+    // PORT NOTE: the runtime allocator handle (parity tail S7-6). The window's
+    // lists are bound to it when they are created.
     // PORT NOTE: `pub(crate)` so the sibling search modules (active/pagelist/
     // screen/viewport) can read `window.alloc`, `window.needle`, and
     // `window.direction` as the reference does (`self.active.window.alloc`,
@@ -96,9 +98,10 @@ pub struct SlidingWindow {
     /// Buffer that can fit any amount of chunks necessary for next
     /// to never fail allocation.
     // PORT NOTE: the reference `std.MultiArrayList(FlattenedHighlight.Chunk)`
-    // ports to a `Vec<Chunk>` (the SoA layout is a Zig storage optimization, not
-    // observable). The chunk type is the ported `highlight::Chunk`.
-    chunk_buf: Vec<crate::highlight::Chunk>,
+    // ports to an allocator-bound array of structs (the SoA layout is a Zig
+    // storage optimization, not observable), grown with `MultiArrayList`'s
+    // `growCapacity` + `setCapacity`. The chunk type is `highlight::Chunk`.
+    chunk_buf: AVec<Chunk>,
 
     /// Offset into data for our current state. This handles the
     /// situation where our search moved through meta[0] but didn't
@@ -106,9 +109,9 @@ pub struct SlidingWindow {
     data_offset: usize,
 
     /// The needle we're searching for. Does own the memory.
-    // PORT NOTE: `[]const u8` -> owned `Vec<u8>`. `pub(crate)` so sibling search
-    // modules can read `window.needle` / `window.needle.len()`.
-    pub(crate) needle: Vec<u8>,
+    // PORT NOTE: `[]const u8` -> owned `Bytes` (an `alloc.dupe`). `pub(crate)` so
+    // sibling search modules can read `window.needle` / `window.needle.len()`.
+    pub(crate) needle: Bytes,
 
     /// The search direction. If the direction is forward then pages should
     /// be appended in forward linked list order from the PageList. If the
@@ -127,7 +130,7 @@ pub struct SlidingWindow {
     /// A buffer to store the overlap search data. This is used to search
     /// overlaps between pages where the match starts on one page and
     /// ends on another. The length is always `needle.len * 2`.
-    overlap_buf: Vec<u8>,
+    overlap_buf: Bytes,
 }
 
 // const Direction = enum { forward, reverse };
@@ -140,8 +143,9 @@ pub enum Direction {
 // const Meta = struct { ... };
 //
 // PORT NOTE: the reference `Meta` owns a `cell_map: std.ArrayList(point.Coordinate)`.
-// The ported `cell_map` is a `Vec<point::Coordinate>`. `Meta` is therefore NOT
-// `Copy`, which is why `MetaBuf` is a bespoke non-`Copy` circular buffer below.
+// The ported `cell_map` is an allocator-bound list on the window's allocator.
+// `Meta` is therefore NOT `Copy`; `MetaBuf` holds `Option<Meta>` slots (see the
+// `CircBuf` section below).
 struct Meta {
     node: *mut Node,
     serial: u64,
@@ -151,7 +155,7 @@ struct Meta {
     ///
     /// PORTS: oracle@main search/sliding_window.zig `Meta.rows` (0d015b2fc).
     rows: size::CellCountInt,
-    cell_map: Vec<point::Coordinate>,
+    cell_map: AVec<point::Coordinate>,
 }
 
 /// Information copied from a page while appending it to the window.
@@ -171,35 +175,23 @@ impl Meta {
     // pub fn deinit(self: *Meta, alloc: Allocator) void {
     //     self.cell_map.deinit(alloc);
     // }
-    fn deinit(&mut self, _alloc: Allocator) {
-        // PORT NOTE: the reference frees `cell_map`; the Rust `Vec` frees on
-        // drop, so clearing it (releasing its storage) mirrors the deinit.
-        self.cell_map = Vec::new();
+    fn deinit(&mut self, alloc: Allocator) {
+        // PORT NOTE: the list frees through the allocator it is bound to (the
+        // window's); `alloc` is checked against it. It is left empty.
+        if self.cell_map.capacity() != 0 {
+            self.cell_map.allocator().debug_assert_same(alloc);
+        }
+        self.cell_map = AVec::new_in(alloc);
     }
 }
 
-/// `try alloc.dupe(u8, src)` — a fallible byte-slice copy.
-///
-/// PORT NOTE: `SlidingWindow.init` is `Allocator.Error!SlidingWindow` in the
-/// reference and EVERY allocation in it is `try`'d, so allocation failure is
-/// recoverable (the search thread catches it). Rust's `to_vec`/`vec![]` abort
-/// instead, which voided that advertised contract; `Vec::try_reserve_exact` is
-/// the fallible equivalent.
-fn try_dupe_bytes(src: &[u8]) -> Result<Vec<u8>, OutOfMemory> {
-    let mut v: Vec<u8> = Vec::new();
-    v.try_reserve_exact(src.len()).map_err(|_| OutOfMemory)?;
-    v.extend_from_slice(src);
-    Ok(v)
-}
-
-/// `try alloc.alloc(u8, n)` — a fallible byte-buffer allocation. See
-/// `try_dupe_bytes`. (The reference's `alloc.alloc` leaves the bytes undefined;
-/// we zero them, as the previous `vec![0u8; n]` did.)
-fn try_alloc_bytes(n: usize) -> Result<Vec<u8>, OutOfMemory> {
-    let mut v: Vec<u8> = Vec::new();
-    v.try_reserve_exact(n).map_err(|_| OutOfMemory)?;
-    // Reserved above, so this cannot reallocate.
-    v.resize(n, 0);
+/// `try alloc.alloc(u8, n)`: one exact-sized, fallible allocation through
+/// `alloc` (none for `n == 0`). The reference leaves the bytes undefined; they
+/// are zeroed here, as the earlier `vec![0u8; n]` did.
+fn try_alloc_bytes(alloc: Allocator, n: usize) -> Result<Bytes, OutOfMemory> {
+    let mut v = Bytes::new_in(alloc);
+    crate::zig_list::ensure_total_capacity_precise(&mut v, n)?;
+    crate::alloc::CopyVecExt::resize_copy(&mut v, n, 0);
     Ok(v)
 }
 
@@ -216,15 +208,18 @@ impl SlidingWindow {
     ) -> Result<SlidingWindow, OutOfMemory> {
         // var data = try DataBuf.init(alloc, 0);
         // errdefer data.deinit(alloc);
-        let data = DataBuf::init(0, 0).map_err(circ_to_oom)?;
+        //
+        // PORT NOTE: each errdefer below is the value's drop, which frees
+        // through `alloc`.
+        let data = DataBuf::init(alloc, 0)?;
 
         // var meta = try MetaBuf.init(alloc, 0);
         // errdefer meta.deinit(alloc);
-        let meta = MetaBuf::init(alloc, 0).map_err(circ_to_oom)?;
+        let meta = MetaBuf::init(alloc, 0)?;
 
         // const needle = try alloc.dupe(u8, needle_unowned);
         // errdefer alloc.free(needle);
-        let mut needle: Vec<u8> = try_dupe_bytes(needle_unowned)?;
+        let mut needle: Bytes = crate::alloc::try_dupe(alloc, needle_unowned)?;
         // switch (direction) {
         //     .forward => {},
         //     .reverse => std.mem.reverse(u8, needle),
@@ -236,14 +231,14 @@ impl SlidingWindow {
 
         // const overlap_buf = try alloc.alloc(u8, needle.len * 2);
         // errdefer alloc.free(overlap_buf);
-        let overlap_buf: Vec<u8> = try_alloc_bytes(needle.len() * 2)?;
+        let overlap_buf: Bytes = try_alloc_bytes(alloc, needle.len() * 2)?;
 
         Ok(SlidingWindow {
             alloc,
             data,
             meta,
             // .chunk_buf = .empty,
-            chunk_buf: Vec::new(),
+            chunk_buf: AVec::new_in(alloc),
             data_offset: 0,
             needle,
             direction,
@@ -252,25 +247,29 @@ impl SlidingWindow {
     }
 
     // pub fn deinit(self: *SlidingWindow) void {
+    //
+    // PORT NOTE: every buffer frees through `self.alloc` (the lists are bound to
+    // it) and is left empty, so a second `deinit` (or the drop that follows)
+    // frees nothing more.
     pub fn deinit(&mut self) {
+        let alloc = self.alloc;
         // self.alloc.free(self.overlap_buf);
-        self.overlap_buf = Vec::new();
+        self.overlap_buf = Bytes::new_in(alloc);
         // self.alloc.free(self.needle);
-        self.needle = Vec::new();
+        self.needle = Bytes::new_in(alloc);
         // self.chunk_buf.deinit(self.alloc);
-        self.chunk_buf = Vec::new();
+        self.chunk_buf = AVec::new_in(alloc);
         // self.data.deinit(self.alloc);
-        // PORT NOTE: the ported `CircBuf` frees on drop; nothing explicit needed.
+        self.data.deinit(alloc);
 
         // var meta_it = self.meta.iterator(.forward);
         // while (meta_it.next()) |meta| meta.deinit(self.alloc);
         // self.meta.deinit(self.alloc);
-        let alloc = self.alloc;
         let mut meta_it = self.meta.iterator(MetaDirection::Forward);
         while let Some(meta) = meta_it.next() {
             meta.deinit(alloc);
         }
-        // The ported `MetaBuf` frees on drop.
+        self.meta.deinit(alloc);
     }
 
     /// Clear all data but retain allocated capacity.
@@ -307,8 +306,13 @@ impl SlidingWindow {
     /// or `append()`. If the caller wants to retain the flattened highlight
     /// then they should clone it.
     // pub fn next(self: *SlidingWindow) ?FlattenedHighlight {
+    //
+    // PORT NOTE (parity tail S7-6): the returned highlight BORROWS the window's
+    // chunk buffer, as the reference's aliases it: no allocation, and the
+    // borrow ends before the next `next()`/`append()` (the reference's "only
+    // valid until" contract, enforced by the borrow checker).
     #[allow(clippy::should_implement_trait)]
-    pub fn next(&mut self) -> Option<FlattenedHighlight> {
+    pub fn next(&mut self) -> Option<FlattenedRef<'_>> {
         // An empty needle represents an inactive search. Searching for it
         // would otherwise produce a zero-length match, which highlight()
         // cannot represent because its end offset is inclusive.
@@ -535,7 +539,7 @@ impl SlidingWindow {
     //     start_offset: usize,
     //     len: usize,
     // ) terminal.highlight.Flattened {
-    fn highlight(&mut self, start_offset: usize, len: usize) -> FlattenedHighlight {
+    fn highlight(&mut self, start_offset: usize, len: usize) -> FlattenedRef<'_> {
         // const start = start_offset + self.data_offset;
         let start = start_offset + self.data_offset;
         // const end = start + len - 1;
@@ -559,7 +563,14 @@ impl SlidingWindow {
         // the terminal lock has been released.
         let mut cross_page_end_rows: Option<size::CellCountInt> = None;
         // var result: terminal.highlight.Flattened = .empty;
-        let mut result: FlattenedHighlight = FlattenedHighlight::empty();
+        //
+        // PORT NOTE: the x bounds are built here; the chunks are attached at the
+        // end (`result.chunks = self.chunk_buf`).
+        let mut result: Flattened<()> = Flattened {
+            chunks: (),
+            top_x: 0,
+            bot_x: 0,
+        };
 
         // Go through the meta nodes to find our start.
         // const tl: struct { ... } = tl: {
@@ -621,12 +632,15 @@ impl SlidingWindow {
                     //     .start = @intCast(start_map.y),
                     //     .end = @intCast(end_map.y + 1),
                     // });
-                    self.chunk_buf.push(crate::highlight::Chunk {
-                        node: meta.node,
-                        serial: meta.serial,
-                        start: start_map.y as size::CellCountInt,
-                        end: (end_map.y + 1) as size::CellCountInt,
-                    });
+                    append_chunk_assume_capacity(
+                        &mut self.chunk_buf,
+                        Chunk {
+                            node: meta.node,
+                            serial: meta.serial,
+                            start: start_map.y as size::CellCountInt,
+                            end: (end_map.y + 1) as size::CellCountInt,
+                        },
+                    );
 
                     // break :tl .{
                     //     .br = null,
@@ -658,12 +672,15 @@ impl SlidingWindow {
                     // INSPECT, NOT RESTORE: the row count is the COPY taken in
                     // append_page, not a live node read (oracle 0d015b2fc).
                     let node_rows = meta.rows;
-                    self.chunk_buf.push(crate::highlight::Chunk {
-                        node: meta.node,
-                        serial: meta.serial,
-                        start: map.y as size::CellCountInt,
-                        end: node_rows,
-                    });
+                    append_chunk_assume_capacity(
+                        &mut self.chunk_buf,
+                        Chunk {
+                            node: meta.node,
+                            serial: meta.serial,
+                            start: map.y as size::CellCountInt,
+                            end: node_rows,
+                        },
+                    );
 
                     // break :tl .{
                     //     .br = .{
@@ -720,12 +737,15 @@ impl SlidingWindow {
                     // INSPECT, NOT RESTORE: the row count is the COPY taken in
                     // append_page, not a live node read (oracle 0d015b2fc).
                     let node_rows = meta.rows;
-                    self.chunk_buf.push(crate::highlight::Chunk {
-                        node: meta.node,
-                        serial: meta.serial,
-                        start: 0,
-                        end: node_rows,
-                    });
+                    append_chunk_assume_capacity(
+                        &mut self.chunk_buf,
+                        Chunk {
+                            node: meta.node,
+                            serial: meta.serial,
+                            start: 0,
+                            end: node_rows,
+                        },
+                    );
 
                     // meta_consumed += meta.cell_map.items.len;
                     // continue;
@@ -746,12 +766,15 @@ impl SlidingWindow {
                 //     .start = 0,
                 //     .end = @intCast(map.y + 1),
                 // });
-                self.chunk_buf.push(crate::highlight::Chunk {
-                    node: meta.node,
-                    serial: meta.serial,
-                    start: 0,
-                    end: (map.y + 1) as size::CellCountInt,
-                });
+                append_chunk_assume_capacity(
+                    &mut self.chunk_buf,
+                    Chunk {
+                        node: meta.node,
+                        serial: meta.serial,
+                        start: 0,
+                        end: (map.y + 1) as size::CellCountInt,
+                    },
+                );
                 // break;
                 break;
             }
@@ -882,26 +905,12 @@ impl SlidingWindow {
 
         // Copy over our MultiArrayList so it points to the proper memory.
         // result.chunks = self.chunk_buf;
-        //
-        // PORT NOTE: the reference assigns `self.chunk_buf` (a value copy of the
-        // MultiArrayList header) into `result.chunks`; the returned `Flattened`
-        // then aliases the same backing storage as `self.chunk_buf` and is only
-        // valid until the next `next()`/`append()` (which call
-        // `clearRetainingCapacity`). We mirror that "valid until next call"
-        // contract by cloning the chunk vec into the result; the originals stay
-        // in `self.chunk_buf`. (`highlight::Chunk` is not `Copy`.)
-        let mut chunks: Vec<crate::highlight::Chunk> = Vec::with_capacity(self.chunk_buf.len());
-        for c in &self.chunk_buf {
-            chunks.push(crate::highlight::Chunk {
-                node: c.node,
-                serial: c.serial,
-                start: c.start,
-                end: c.end,
-            });
-        }
-        result.chunks = chunks;
         // return result;
-        result
+        Flattened {
+            chunks: &self.chunk_buf[..],
+            top_x: result.top_x,
+            bot_x: result.bot_x,
+        }
     }
 
     /// Add a new node to the sliding window. This will always grow
@@ -984,7 +993,7 @@ impl SlidingWindow {
             node,
             serial: unsafe { (*node).serial },
             rows: unsafe { (*page).size.rows },
-            cell_map: Vec::new(),
+            cell_map: AVec::new_in(self.alloc),
         };
 
         // This is suboptimal but we need to encode the page once to
@@ -993,7 +1002,10 @@ impl SlidingWindow {
         // directly into the circular buffer.
         // var encoded: std.Io.Writer.Allocating = .init(self.alloc);
         // defer encoded.deinit();
-        let mut encoded: Vec<u8> = Vec::new();
+        //
+        // PORT NOTE: the defer is the writer's drop (it frees through
+        // `self.alloc`), at the end of this function as in the reference.
+        let mut encoded = AllocatingWriter::init(self.alloc);
 
         // Encode the page into the buffer.
         // const formatter: PageFormatter = formatter: {
@@ -1031,7 +1043,7 @@ impl SlidingWindow {
             formatter.format(&mut encoded).map_err(|_| OutOfMemory)?;
         }
         // assert(meta.cell_map.items.len == encoded.written().len);
-        assert!(meta.cell_map.len() == encoded.len());
+        assert!(meta.cell_map.len() == encoded.written().len());
 
         // If the node we're adding isn't soft-wrapped, we add the
         // trailing newline.
@@ -1047,13 +1059,13 @@ impl SlidingWindow {
         //     );
         // }
         if !last_row_wrapped {
-            encoded.push(b'\n');
+            encoded.write_byte(b'\n')?;
             let last = meta
                 .cell_map
                 .last()
                 .copied()
                 .unwrap_or(point::Coordinate { x: 0, y: 0 });
-            meta.cell_map.push(last);
+            crate::zig_list::append(&mut meta.cell_map, last, COORDINATE_INIT_CAPACITY)?;
         }
 
         // If our written data is empty, then there is nothing to
@@ -1063,7 +1075,7 @@ impl SlidingWindow {
         //     self.assertIntegrity();
         //     return 0;
         // }
-        if encoded.is_empty() {
+        if encoded.written().is_empty() {
             // PORT NOTE: `meta` (and its `cell_map`) is dropped here, matching the
             // reference `errdefer meta.deinit`/scope-end behavior for the unused
             // metadata.
@@ -1086,31 +1098,30 @@ impl SlidingWindow {
         match self.direction {
             Direction::Forward => {}
             Direction::Reverse => {
-                encoded.reverse();
+                encoded.written_mut().reverse();
                 meta.cell_map.reverse();
             }
         }
 
         // Ensure our buffers are big enough to store what we need.
         // try self.data.ensureUnusedCapacity(self.alloc, written.len);
-        self.data
-            .ensure_unused_capacity(encoded.len())
-            .map_err(circ_to_oom)?;
+        let written = encoded.written();
+        self.data.ensure_unused_capacity(written.len())?;
         // try self.meta.ensureUnusedCapacity(self.alloc, 1);
-        self.meta.ensure_unused_capacity(1).map_err(circ_to_oom)?;
+        self.meta.ensure_unused_capacity(1)?;
         // try self.chunk_buf.ensureTotalCapacity(self.alloc, self.meta.capacity());
-        self.chunk_buf.reserve(
-            self.meta
-                .capacity()
-                .saturating_sub(self.chunk_buf.capacity()),
-        );
+        crate::zig_list::multi_ensure_total_capacity(
+            &mut self.chunk_buf,
+            self.meta.capacity(),
+            crate::highlight::CHUNK_INIT_CAPACITY,
+        )?;
 
         // Append our new node to the circular buffer.
         // self.data.appendSliceAssumeCapacity(written);
-        self.data.append_slice_assume_capacity(&encoded);
+        self.data.append_slice_assume_capacity(written);
         // self.meta.appendAssumeCapacity(meta);
-        let written_len = encoded.len();
-        self.meta.append_assume_capacity(meta);
+        let written_len = written.len();
+        self.meta.append_assume_capacity(Some(meta));
 
         // self.assertIntegrity();
         self.assert_integrity();
@@ -1129,7 +1140,7 @@ impl SlidingWindow {
         assert!(new.len() == self.needle.len());
         // self.alloc.free(self.needle);
         // self.needle = self.alloc.dupe(u8, new) catch unreachable;
-        self.needle = new.to_vec();
+        self.needle = crate::alloc::try_dupe(self.alloc, new).expect("testChangeNeedle dupe");
     }
 
     // fn assertIntegrity(self: *const SlidingWindow) void {
@@ -1168,6 +1179,15 @@ impl SlidingWindow {
         let data_len_is_zero = self.data.len() == 0;
         assert!(data_len_is_zero || self.data_offset < self.data.len());
     }
+}
+
+/// `chunk_buf.appendAssumeCapacity(chunk)` (`MultiArrayList`): the capacity
+/// was ensured by `appendPage` (`meta.capacity()` chunks), so this never grows.
+#[inline]
+fn append_chunk_assume_capacity(chunk_buf: &mut AVec<Chunk>, chunk: Chunk) {
+    // assert(self.len < self.capacity);
+    debug_assert!(chunk_buf.len() < chunk_buf.capacity());
+    chunk_buf.push(chunk);
 }
 
 // PORT NOTE: the reference anonymous `tl:` block-expression struct, hoisted to a
@@ -1228,24 +1248,77 @@ fn ascii_eql_ignore_case(a: &[u8], b: &[u8]) -> bool {
     a.eq_ignore_ascii_case(b)
 }
 
-// PORT NOTE: bridge the ported `CircBuf` error into the crate-local OOM type.
-fn circ_to_oom(_e: CircError) -> OutOfMemory {
-    OutOfMemory
+// =====================================================================
+// CircBuf — the window's circular buffers over the allocator handle.
+//
+// PORT NOTE (parity tail S7-6): a private port of `datastruct/circ_buf.zig`
+// for the two instantiations the window uses, `DataBuf = CircBuf(u8, 0)` and
+// `MetaBuf = CircBuf(Meta, undefined)`, limited to the operations the sliding
+// window calls. The shared `rustty_datastruct::CircBuf` keeps its storage on
+// the Rust heap; the window's buffers must grow through the window's
+// allocator, with the reference's calls:
+//
+// - `init(alloc, 0)` is `alloc.alloc(T, 0)`: no allocator call.
+// - `resize` is `alloc.realloc(storage, size)`: the first growth allocates, a
+//   later one tries `remap` first, then allocates, copies and frees (the
+//   handle's `grow`), to EXACTLY `size` elements (`ensureUnusedCapacity`
+//   asks for `len + amount`, never more).
+// - `deinit` frees the storage (here: dropping the bound list).
+//
+// The storage is an allocator-bound list whose length is always its capacity
+// (every slot initialized), so it is the reference's `storage: []T`. The
+// `undefined` default of `MetaBuf` is `None`: a deleted or never-written slot
+// holds no `Meta`, so no `cell_map` is ever freed twice or leaked.
+//
+// The window only ever grows its buffers, so the shrinking arm of
+// `circ_buf.zig`'s `resize` (`size < storage.len`) is not reachable here and
+// is asserted against rather than ported (the shared
+// `rustty_datastruct::CircBuf` ports it).
+// =====================================================================
+
+/// The comptime `default` of `CircBuf(T, default)`: `0` for the data buffer,
+/// `undefined` (an empty slot) for the meta buffer.
+trait CircDefault {
+    fn circ_default() -> Self;
 }
 
-// =====================================================================
-// MetaBuf — faithful non-`Copy` port of `CircBuf(Meta, undefined)`.
-//
-// The ported `rustty_datastruct::CircBuf<T: Copy>` cannot hold `Meta` (owns a
-// `Vec`). This is a 1:1 port of `circ_buf.zig` for the `Meta` element type,
-// limited to the operations the sliding window uses. The `undefined` default is
-// modeled by leaving deleted slots as their prior value (we never read deleted
-// slots), so `deleteOldest` only advances head/tail (it does NOT `@memset` to a
-// default the way the `u8` buffer does — the reference `undefined` default makes
-// that memset a no-op observationally; for non-`Copy` we must not write a bogus
-// `Meta`, so we `take` the slot's contents into a dropped temporary instead,
-// preserving the "data is gone" invariant and freeing the `Vec`).
-// =====================================================================
+impl CircDefault for u8 {
+    #[inline]
+    fn circ_default() -> u8 {
+        0
+    }
+}
+
+impl CircDefault for Option<Meta> {
+    #[inline]
+    fn circ_default() -> Option<Meta> {
+        None
+    }
+}
+
+/// `CircBuf(T, default)` over the allocator handle.
+struct CircBuf<T: CircDefault> {
+    // Implementation note: there's a lot of unsafe addition of usize
+    // here in this implementation that can technically overflow. If someone
+    // wants to fix this and make it overflow safe (use subtractions for
+    // checks prior to additions) then I welcome it. In reality, we'd
+    // have to be a really, really large terminal screen to even worry
+    // about this so I'm punting it.
+    storage: AVec<T>,
+    head: usize,
+    tail: usize,
+
+    // We could remove this and just use math with head/tail to figure
+    // it out, but our usage of circular buffers stores so much data that
+    // this minor overhead is not worth optimizing out.
+    full: bool,
+}
+
+// const DataBuf = CircBuf(u8, 0);
+type DataBuf = CircBuf<u8>;
+
+// const MetaBuf = CircBuf(Meta, undefined);
+type MetaBuf = CircBuf<Option<Meta>>;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum MetaDirection {
@@ -1253,57 +1326,356 @@ enum MetaDirection {
     Reverse,
 }
 
-impl From<MetaDirection> for CircDirection {
-    fn from(d: MetaDirection) -> CircDirection {
-        match d {
-            MetaDirection::Forward => CircDirection::Forward,
-            MetaDirection::Reverse => CircDirection::Reverse,
+impl<T: CircDefault> CircBuf<T> {
+    /// Initialize a new circular buffer that can store size elements.
+    // pub fn init(alloc: Allocator, size: usize) Allocator.Error!Self {
+    fn init(alloc: Allocator, size: usize) -> Result<Self, OutOfMemory> {
+        // const buf = try alloc.alloc(T, size);
+        // @memset(buf, default);
+        let mut buf: AVec<T> = AVec::new_in(alloc);
+        crate::zig_list::ensure_total_capacity_precise(&mut buf, size)?;
+        for _ in 0..size {
+            buf.push(T::circ_default());
         }
-    }
-}
 
-struct MetaBuf {
-    storage: Vec<Option<Meta>>,
-    head: usize,
-    tail: usize,
-    full: bool,
-}
-
-impl MetaBuf {
-    // pub fn init(alloc: Allocator, requested_size: usize) Allocator.Error!Self
-    fn init(_alloc: Allocator, requested_size: usize) -> Result<MetaBuf, CircError> {
-        // var buf = try alloc.alloc(T, requested_size);
-        let mut storage: Vec<Option<Meta>> = Vec::with_capacity(requested_size);
-        for _ in 0..requested_size {
-            storage.push(None);
-        }
-        Ok(MetaBuf {
-            storage,
+        // return Self{
+        //     .storage = buf,
+        //     .head = 0,
+        //     .tail = 0,
+        //     .full = size == 0,
+        // };
+        Ok(CircBuf {
+            storage: buf,
             head: 0,
             tail: 0,
-            full: false,
+            full: size == 0,
         })
     }
 
-    // pub fn clear(self: *Self) void
-    fn clear(&mut self) {
-        // Drop all live entries (the reference resets head/tail/full; our slots
-        // own `Meta`, so we release their `Vec`s here to match the data being
-        // logically cleared).
-        let cap = self.capacity();
-        if cap > 0 {
-            let len = self.len();
-            for i in 0..len {
-                let storage_idx = (self.tail + i) % cap;
-                self.storage[storage_idx] = None;
-            }
+    // pub fn deinit(self: *Self, alloc: Allocator) void {
+    //     alloc.free(self.storage);
+    //     self.* = undefined;
+    // }
+    //
+    // PORT NOTE: the storage frees through the allocator it is bound to (`alloc`
+    // is checked against it); the buffer is left an empty zero-capacity one,
+    // as `init(alloc, 0)` makes.
+    fn deinit(&mut self, alloc: Allocator) {
+        self.storage.allocator().debug_assert_same(alloc);
+        self.storage = AVec::new_in(alloc);
+        self.head = 0;
+        self.tail = 0;
+        self.full = true;
+    }
+
+    /// Append a single value to the buffer, assuming there is capacity.
+    // pub fn appendAssumeCapacity(self: *Self, v: T) void {
+    fn append_assume_capacity(&mut self, v: T) {
+        // assert(!self.full);
+        assert!(!self.full);
+        // self.storage[self.head] = v;
+        self.storage[self.head] = v;
+        // self.head += 1;
+        // if (self.head >= self.storage.len) self.head = 0;
+        self.head += 1;
+        if self.head >= self.storage.len() {
+            self.head = 0;
         }
+        // self.full = self.head == self.tail;
+        self.full = self.head == self.tail;
+    }
+
+    /// Append a slice to the buffer.
+    // pub fn appendSliceAssumeCapacity(self: *Self, slice: []const T) void {
+    fn append_slice_assume_capacity(&mut self, slice: &[T])
+    where
+        T: Copy,
+    {
+        // const storage = self.getPtrSlice(self.len(), slice.len);
+        // fastmem.copy(T, storage[0], slice[0..storage[0].len]);
+        // fastmem.copy(T, storage[1], slice[storage[0].len..]);
+        let storage = self.get_ptr_slice(self.len(), slice.len());
+        // SAFETY: `get_ptr_slice` returns two disjoint, valid subslices of the
+        // storage and no other borrow of `self` is live while they are written.
+        unsafe {
+            let s0 = &mut *storage.0;
+            let s1 = &mut *storage.1;
+            let s0_len = s0.len();
+            s0.copy_from_slice(&slice[0..s0_len]);
+            s1.copy_from_slice(&slice[s0_len..]);
+        }
+    }
+
+    /// Clear the buffer.
+    // pub fn clear(self: *Self) void {
+    fn clear(&mut self) {
+        // self.head = 0;
+        // self.tail = 0;
+        // self.full = false;
         self.head = 0;
         self.tail = 0;
         self.full = false;
     }
 
-    // pub fn iterator(self: *Self, direction: Iterator.Direction) Iterator
+    /// Ensures that there is enough capacity to store amount more
+    /// items via append.
+    // pub fn ensureUnusedCapacity(self: *Self, alloc: Allocator, amount: usize) Allocator.Error!void {
+    fn ensure_unused_capacity(&mut self, amount: usize) -> Result<(), OutOfMemory> {
+        // const new_cap = self.len() + amount;
+        // if (new_cap <= self.capacity()) return;
+        // try self.resize(alloc, new_cap);
+        let new_cap = self.len() + amount;
+        if new_cap <= self.capacity() {
+            return Ok(());
+        }
+        self.resize(new_cap)
+    }
+
+    /// Resize the buffer to the given size (larger or smaller).
+    /// If larger, new values will be set to the default value.
+    // pub fn resize(self: *Self, alloc: Allocator, size: usize) Allocator.Error!void {
+    fn resize(&mut self, size: usize) -> Result<(), OutOfMemory> {
+        // See the section PORT NOTE: only growth reaches this copy.
+        assert!(size >= self.storage.len());
+
+        // Rotate to zero so it is aligned.
+        // try self.rotateToZero();
+        self.rotate_to_zero();
+
+        // Reallocate, this adds to the end so we're ready to go.
+        // const prev_len = self.len();
+        // const prev_cap = self.storage.len;
+        // self.storage = try alloc.realloc(self.storage, size);
+        // const retained_len = @min(prev_len, size);
+        let prev_len = self.len();
+        let prev_cap = self.storage.len();
+        crate::zig_list::ensure_total_capacity_precise(&mut self.storage, size)?;
+        let retained_len = core::cmp::min(prev_len, size);
+
+        // If we grew, we need to set our new defaults. We can add it
+        // at the end since we rotated to start.
+        // if (size > prev_cap) {
+        //     @memset(self.storage[prev_cap..], default);
+        // }
+        if size > prev_cap {
+            for _ in prev_cap..size {
+                self.storage.push(T::circ_default());
+            }
+        }
+
+        // Fix up our head/tail for the new capacity.
+        // self.head = if (retained_len == size) 0 else retained_len;
+        // self.tail = 0;
+        // self.full = retained_len == size;
+        self.head = if retained_len == size {
+            0
+        } else {
+            retained_len
+        };
+        self.tail = 0;
+        self.full = retained_len == size;
+        Ok(())
+    }
+
+    /// Rotate the data so that it is zero-aligned.
+    // fn rotateToZero(self: *Self) Allocator.Error!void {
+    fn rotate_to_zero(&mut self) {
+        // If we're already at zero then do nothing.
+        // if (self.tail == 0) return;
+        if self.tail == 0 {
+            return;
+        }
+
+        // We use std.mem.rotate to rotate our storage in-place.
+        // std.mem.rotate(T, self.storage, self.tail);
+        self.storage.rotate_left(self.tail);
+
+        // Then fix up our head and tail.
+        // self.head = self.len() % self.storage.len;
+        // self.tail = 0;
+        self.head = self.len() % self.storage.len();
+        self.tail = 0;
+    }
+
+    /// Returns the total capacity allocated for this buffer.
+    // pub fn capacity(self: Self) usize {
+    fn capacity(&self) -> usize {
+        // return self.storage.len;
+        self.storage.len()
+    }
+
+    /// Returns the length in elements that are used.
+    // pub fn len(self: Self) usize {
+    fn len(&self) -> usize {
+        // if (self.full) return self.storage.len;
+        if self.full {
+            return self.storage.len();
+        }
+        // if (self.head >= self.tail) return self.head - self.tail;
+        if self.head >= self.tail {
+            return self.head - self.tail;
+        }
+        // return self.storage.len - (self.tail - self.head);
+        self.storage.len() - (self.tail - self.head)
+    }
+
+    /// Delete the oldest n values from the buffer. If there are less
+    /// than n values in the buffer, it'll delete everything.
+    // pub fn deleteOldest(self: *Self, n: usize) void {
+    fn delete_oldest(&mut self, n: usize) {
+        // assert(n <= self.storage.len);
+        assert!(n <= self.storage.len());
+
+        // Special case n == 0 otherwise we will accidentally break
+        // our circular buffer.
+        // if (n == 0) { @branchHint(.cold); return; }
+        if n == 0 {
+            return;
+        }
+
+        // Clear the values back to default
+        // const slices = self.getPtrSlice(0, n);
+        // inline for (slices) |slice| @memset(slice, default);
+        //
+        // PORT NOTE: `getPtrSlice(0, n)` only advances the head when
+        // `n > len()`; the sliding window never deletes more than it holds.
+        // For `MetaBuf` writing the `None` default drops any `Meta` still in a
+        // deleted slot (the window deinits each one first, which leaves it
+        // empty).
+        let (s0, s1) = self.get_ptr_slice(0, n);
+        // SAFETY: the two returned `*mut [T]` are disjoint, valid subslices of
+        // the storage and no other borrow of `self` is live here.
+        unsafe {
+            for v in (*s0).iter_mut() {
+                *v = T::circ_default();
+            }
+            for v in (*s1).iter_mut() {
+                *v = T::circ_default();
+            }
+        }
+
+        // If we're not full, we can just advance the tail. We know
+        // it'll be less than the length because otherwise we'd be full.
+        // self.tail += @min(self.len(), n);
+        // if (self.tail >= self.storage.len) self.tail -= self.storage.len;
+        // self.full = false;
+        self.tail += core::cmp::min(self.len(), n);
+        if self.tail >= self.storage.len() {
+            self.tail -= self.storage.len();
+        }
+        self.full = false;
+    }
+
+    /// Returns a pointer to the value at offset with the given length,
+    /// and considers this full amount of data "written" if it is beyond
+    /// the end of our buffer. This never "rotates" the buffer because
+    /// the offset can only be within the size of the buffer.
+    // pub fn getPtrSlice(self: *Self, offset: usize, slice_len: usize) [2][]T {
+    fn get_ptr_slice(&mut self, offset: usize, slice_len: usize) -> (*mut [T], *mut [T]) {
+        // Special case the empty slice fast-path.
+        if slice_len == 0 {
+            // @branchHint(.cold);
+            // return .{ &.{}, &.{} };
+            let empty: &mut [T] = &mut [];
+            return (empty as *mut [T], &mut [] as *mut [T]);
+        }
+
+        // Note: this assertion is very important, it hints the compiler
+        // which generates ~10% faster code than without it.
+        assert!(offset + slice_len <= self.capacity());
+
+        // End offset is the last offset (exclusive) for our slice.
+        // We use exclusive because it makes the math easier and it
+        // matches Zigs slicing parameterization.
+        let end_offset = offset + slice_len;
+
+        // If our slice can't fit it in our length, then we need to advance.
+        if end_offset > self.len() {
+            self.advance(end_offset - self.len());
+        }
+
+        // Our start and end indexes into the storage buffer
+        let start_idx = self.storage_offset(offset);
+        let end_idx = self.storage_offset(end_offset - 1);
+
+        // Optimistically, our data fits in one slice
+        if end_idx >= start_idx {
+            // self.storage[start_idx .. end_idx + 1], self.storage[0..0]
+            // Two disjoint subslices from one `split_at_mut`, so they have
+            // separate provenance (the Zig `[2][]T` raw slices).
+            let (left, right) = self.storage.split_at_mut(end_idx + 1);
+            let single: *mut [T] = &mut left[start_idx..];
+            let empty: *mut [T] = &mut right[0..0]; // So there is an empty slice
+            return (single, empty);
+        }
+
+        // Wrapping case: self.storage[start_idx..], self.storage[0 .. end_idx + 1]
+        let (head, tail) = self.storage.split_at_mut(start_idx);
+        let first: *mut [T] = tail; // [start_idx..]
+        let second: *mut [T] = &mut head[0..end_idx + 1]; // [0 .. end_idx + 1]
+        (first, second)
+    }
+
+    /// Advances the head/tail so that we can store amount.
+    // fn advance(self: *Self, amount: usize) void {
+    fn advance(&mut self, amount: usize) {
+        assert!(amount <= self.storage.len() - self.len());
+
+        // Optimistically add our amount
+        self.head += amount;
+
+        // If we exceeded the length of the buffer, wrap around.
+        if self.head >= self.storage.len() {
+            self.head -= self.storage.len();
+        }
+
+        // If we're full, we have to keep tail lined up.
+        if self.full {
+            self.tail = self.head;
+        }
+
+        // We're full if the head reached the tail. The head can never
+        // pass the tail because advance asserts amount is only in
+        // available space left
+        self.full = self.head == self.tail;
+    }
+
+    /// For a given offset from zero, this returns the offset in the
+    /// storage buffer where this data can be found.
+    // fn storageOffset(self: Self, offset: usize) usize {
+    fn storage_offset(&self, offset: usize) -> usize {
+        assert!(offset < self.storage.len());
+
+        // This should be subtraction ideally to avoid overflows but
+        // it would take a really, really, huge buffer to overflow.
+        let fits_offset = self.tail + offset;
+        if fits_offset < self.storage.len() {
+            return fits_offset;
+        }
+        fits_offset - self.storage.len()
+    }
+
+    // PORT NOTE: shared index translation used by both iterators (mirrors the
+    // `Iterator.next` tail->storage index math).
+    fn storage_idx(&self, idx: usize, direction: MetaDirection) -> Option<usize> {
+        if idx >= self.len() {
+            return None;
+        }
+        // const tail_idx = switch (self.direction) {
+        //     .forward => self.idx,
+        //     .reverse => self.buf.len() - self.idx - 1,
+        // };
+        let tail_idx = match direction {
+            MetaDirection::Forward => idx,
+            MetaDirection::Reverse => self.len() - idx - 1,
+        };
+        // const storage_idx = (self.buf.tail + tail_idx) % self.buf.capacity();
+        Some((self.tail + tail_idx) % self.capacity())
+    }
+}
+
+impl MetaBuf {
+    // pub fn iterator(self: Self, direction: Iterator.Direction) Iterator
     fn iterator(&mut self, direction: MetaDirection) -> MetaIterMut<'_> {
         MetaIterMut {
             buf: self,
@@ -1329,166 +1701,13 @@ impl MetaBuf {
             direction,
         }
     }
-
-    // pub fn ensureUnusedCapacity(self: *Self, alloc: Allocator, n: usize) Allocator.Error!void
-    fn ensure_unused_capacity(&mut self, amount: usize) -> Result<(), CircError> {
-        let new_cap = self.len() + amount;
-        if new_cap <= self.capacity() {
-            return Ok(());
-        }
-        self.resize(new_cap)
-    }
-
-    // pub fn resize(self: *Self, alloc: Allocator, size: usize) Allocator.Error!void
-    fn resize(&mut self, size: usize) -> Result<(), CircError> {
-        // Rotate to zero so it is aligned.
-        // try self.rotateToZero();
-        self.rotate_to_zero();
-
-        // Reallocate, this adds to the end so we're ready to go.
-        // const prev_len = self.len();
-        // const prev_cap = self.storage.len;
-        // self.storage = try alloc.realloc(self.storage, size);
-        let prev_len = self.len();
-        let prev_cap = self.storage.len();
-        // Grow (or shrink) storage to `size`. The sliding window only ever
-        // grows the meta buffer, but we mirror the realloc-to-`size` shape.
-        if size > prev_cap {
-            self.storage.reserve(size - prev_cap);
-            while self.storage.len() < size {
-                self.storage.push(None);
-            }
-        } else {
-            self.storage.truncate(size);
-        }
-
-        // If we grew, we need to set our new defaults. We can add it
-        // at the end since we rotated to start.
-        // if (size > prev_cap) {
-        if size > prev_cap {
-            // @memset(self.storage[prev_cap..], default);
-            // (the appended `None` slots above are the "default".)
-
-            // Fix up our head/tail
-            // if (self.full) {
-            //     self.head = prev_len;
-            //     self.full = false;
-            // }
-            if self.full {
-                self.head = prev_len;
-                self.full = false;
-            }
-        }
-
-        Ok(())
-    }
-
-    // PORT NOTE: rotate the live entries so they begin at storage index 0,
-    // mirroring `circ_buf.zig`'s `rotateToZero` used inside `resize`.
-    // fn rotateToZero(self: *Self) Allocator.Error!void
-    fn rotate_to_zero(&mut self) {
-        // If we're already at zero then do nothing.
-        // if (self.tail == 0) return;
-        if self.tail == 0 {
-            return;
-        }
-
-        // We use std.mem.rotate to rotate our storage in-place.
-        // std.mem.rotate(T, self.storage, self.tail);
-        self.storage.rotate_left(self.tail);
-
-        // Then fix up our head and tail.
-        // self.head = self.len() % self.storage.len;
-        // self.tail = 0;
-        self.head = self.len() % self.storage.len();
-        self.tail = 0;
-    }
-
-    // pub fn capacity(self: Self) usize
-    fn capacity(&self) -> usize {
-        self.storage.len()
-    }
-
-    // pub fn len(self: Self) usize
-    fn len(&self) -> usize {
-        if self.full {
-            return self.storage.len();
-        }
-        if self.tail <= self.head {
-            return self.head - self.tail;
-        }
-        self.storage.len() - (self.tail - self.head)
-    }
-
-    // pub fn appendAssumeCapacity(self: *Self, v: T) void
-    fn append_assume_capacity(&mut self, v: Meta) {
-        // assert(!self.full);
-        assert!(!self.full);
-        // self.storage[self.head] = v;
-        self.storage[self.head] = Some(v);
-        // self.head += 1; if (self.head >= self.storage.len) self.head -= self.storage.len;
-        self.head += 1;
-        if self.head >= self.storage.len() {
-            self.head -= self.storage.len();
-        }
-        // self.full = self.head == self.tail;
-        self.full = self.head == self.tail;
-    }
-
-    // pub fn deleteOldest(self: *Self, n: usize) void
-    fn delete_oldest(&mut self, n: usize) {
-        // assert(n <= self.storage.len);
-        assert!(n <= self.storage.len());
-
-        // Special case n == 0 otherwise we will accidentally break
-        // our circular buffer.
-        // if (n == 0) return;
-        if n == 0 {
-            return;
-        }
-
-        // Clear the values back to default. For non-`Copy` `Meta` we `take`
-        // each deleted slot (dropping its `Vec`) instead of `@memset(default)`
-        // (the reference `undefined` default makes the memset observationally a
-        // no-op; we must not write a bogus `Meta`).
-        let cap = self.storage.len();
-        let clear_n = core::cmp::min(self.len(), n);
-        for i in 0..clear_n {
-            let storage_idx = (self.tail + i) % cap;
-            self.storage[storage_idx] = None;
-        }
-
-        // If we're not full, we can just advance the tail. We know
-        // it'll be less than the length because otherwise we'd be full.
-        // self.tail += @min(self.len(), n);
-        self.tail += core::cmp::min(self.len(), n);
-        // if (self.tail >= self.storage.len) self.tail -= self.storage.len;
-        if self.tail >= self.storage.len() {
-            self.tail -= self.storage.len();
-        }
-        // self.full = false;
-        self.full = false;
-    }
-
-    // PORT NOTE: shared index translation used by both iterators (mirrors the
-    // `Iterator.next` tail->storage index math).
-    fn storage_idx(&self, idx: usize, direction: MetaDirection) -> Option<usize> {
-        if idx >= self.len() {
-            return None;
-        }
-        let tail_idx = match direction {
-            MetaDirection::Forward => idx,
-            MetaDirection::Reverse => self.len() - idx - 1,
-        };
-        Some((self.tail + tail_idx) % self.capacity())
-    }
 }
 
 // pub const Iterator = struct { buf: Self, idx: usize, direction: Direction };
 //
 // PORT NOTE: split into a `&mut`-borrowing and `&`-borrowing iterator because
 // the reference `next()` returns `?*T` (mutable) but `assertIntegrity` only
-// reads. The `idx` field is `pub` (read in the prune logic via `meta_it.idx`).
+// reads. The `idx` field is read in the prune logic via `meta_it.idx`.
 struct MetaIterMut<'a> {
     buf: &'a mut MetaBuf,
     idx: usize,
@@ -1503,9 +1722,7 @@ impl<'a> MetaIterMut<'a> {
         // self.idx += 1;
         self.idx += 1;
         // return &self.buf.storage[storage_idx];
-        // SAFETY: `storage_idx` is a valid in-bounds index and the slot is
-        // `Some` (it lies within `[tail, head)`); we hand out a `&mut Meta` to a
-        // live entry, mirroring the reference `*T`.
+        // A live slot (within `[tail, head)`) always holds `Some`.
         self.buf.storage[storage_idx].as_mut()
     }
 
@@ -1585,24 +1802,47 @@ mod tests {
     // `try`'d, so the contract is carried by the signature). `init` ADVERTISES
     // `Allocator.Error!SlidingWindow`, so an allocation failure must be REPORTED,
     // not abort the process the way `to_vec`/`vec![]` do.
+    //
+    // Parity tail S7-6: driven through a `FailingAllocator` (the reference's
+    // tool) rather than an impossible request: `init` makes exactly two
+    // allocations for a non-empty needle (the needle dupe and the overlap
+    // buffer; the circular buffers start at zero capacity), each one fails
+    // cleanly, and nothing is left allocated.
     #[test]
     fn sliding_window_init_allocations_are_fallible() {
-        // A genuinely impossible request: the allocator reports, nothing aborts.
-        assert_eq!(Err(OutOfMemory), try_alloc_bytes(isize::MAX as usize));
-        // (`try_dupe_bytes` uses the same primitive; a slice big enough to make
-        // it fail cannot be constructed without UB, so we pin the primitive it
-        // relies on and its success path.)
-        assert!(Vec::<u8>::new()
-            .try_reserve_exact(isize::MAX as usize)
-            .is_err());
-        assert_eq!(Ok(vec![1u8, 2, 3]), try_dupe_bytes(&[1u8, 2, 3]));
+        use crate::alloc::testing::{with_handle, Config, FailingAllocator};
 
-        // The success path is unchanged: the needle is duplicated byte-exactly
-        // and the overlap buffer is `needle.len() * 2` zeroed bytes.
-        let mut w = SlidingWindow::init(Allocator, Direction::Forward, b"bo\xffo").unwrap();
-        assert_eq!(b"bo\xffo".to_vec(), w.needle);
-        assert_eq!(vec![0u8; 8], w.overlap_buf);
-        w.deinit();
+        for fail_index in 0..2 {
+            let failing = FailingAllocator::over_heap(Config {
+                fail_index,
+                resize_fail_index: usize::MAX,
+            });
+            let c = failing.allocator();
+            with_handle(&c, |alloc| {
+                assert!(matches!(
+                    SlidingWindow::init(alloc, Direction::Forward, b"bo\xffo"),
+                    Err(OutOfMemory)
+                ));
+            });
+            assert!(failing.has_induced_failure.get(), "index {fail_index}");
+            assert_eq!(fail_index, failing.allocations.get());
+            assert_eq!(failing.allocated_bytes.get(), failing.freed_bytes.get());
+        }
+
+        // The success path: the needle is duplicated byte-exactly and the
+        // overlap buffer is `needle.len() * 2` zeroed bytes, both through the
+        // window's allocator, exactly sized.
+        let failing = FailingAllocator::over_heap(Config::default());
+        let c = failing.allocator();
+        with_handle(&c, |alloc| {
+            let mut w = SlidingWindow::init(alloc, Direction::Forward, b"bo\xffo").unwrap();
+            assert_eq!(&b"bo\xffo"[..], &w.needle[..]);
+            assert_eq!(&[0u8; 8][..], &w.overlap_buf[..]);
+            assert_eq!(2, failing.allocations.get());
+            assert_eq!(4 + 8, failing.allocated_bytes.get());
+            w.deinit();
+            assert_eq!(failing.allocated_bytes.get(), failing.freed_bytes.get());
+        });
     }
 
     // test "SlidingWindow empty on init"

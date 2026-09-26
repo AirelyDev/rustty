@@ -18,7 +18,7 @@
 // const Terminal = @import("../Terminal.zig");
 use super::sliding_window::{Direction, SlidingWindow};
 use crate::alloc::Allocator;
-use crate::highlight::Flattened as FlattenedHighlight;
+use crate::highlight::FlattenedRef;
 use crate::pagelist::iter::Direction as IterDirection;
 use crate::pagelist::{Node, OutOfMemory, PageList};
 use crate::point;
@@ -114,18 +114,6 @@ impl ViewportSearch {
     /// Returns true if the viewport changed and a re-search is needed.
     /// Returns false if the viewport is unchanged.
     //
-    // PORT NOTE: the reference's `fingerprint only allocates on changes` test
-    // proves the no-allocation contract with a `testing.FailingAllocator`:
-    //
-    //   Fail the next allocation. An unchanged viewport with active dirty
-    //   tracking disabled should reuse the existing fingerprint and return
-    //   unchanged before rebuilding the search window, so this update should
-    //   succeed without reporting a viewport change.
-    //
-    // rustty has no fallible allocator seam here, so the port asserts the same
-    // property by counting global-allocator calls; it lives out-of-`src` in
-    // `crates/rustty-vt/tests/viewport_fingerprint_alloc.rs` because the
-    // counting global allocator must be installed process-wide.
     // pub fn update(
     //     self: *ViewportSearch,
     //     list: *PageList,
@@ -343,20 +331,35 @@ impl ViewportSearch {
     /// null when there are no more matches.
     // pub fn next(self: *ViewportSearch) ?FlattenedHighlight {
     #[allow(clippy::should_implement_trait)]
-    pub fn next(&mut self) -> Option<FlattenedHighlight> {
+    pub fn next(&mut self) -> Option<FlattenedRef<'_>> {
         // return self.window.next();
         self.window.next()
     }
 }
 
 /// Viewport fingerprint so we can detect when the viewport moves.
-#[derive(Default)]
 pub struct Fingerprint {
     /// The node addresses and generations that make up the viewport. We
     /// can't safely dereference cached node pointers because the nodes may
     /// be invalid, so equality only compares these captured values.
     // entries: std.ArrayListUnmanaged(Entry) = .empty,
-    pub entries: Vec<Entry>,
+    //
+    // PORT NOTE (parity tail S7-6): an allocator-bound list. `.empty` is on the
+    // Rust heap handle and holds nothing; `update` binds it to the allocator it
+    // is given (the search's), as the unmanaged list takes it per call.
+    pub entries: crate::alloc::AVec<Entry>,
+}
+
+/// `ArrayListUnmanaged(Entry)`'s `init_capacity` (`@sizeOf(Entry)` is 16).
+const ENTRY_INIT_CAPACITY: usize = crate::zig_list::init_capacity(16);
+
+// fingerprint: Fingerprint = .{},
+impl Default for Fingerprint {
+    fn default() -> Fingerprint {
+        Fingerprint {
+            entries: crate::alloc::AVec::new_in(crate::alloc::VtAllocator::GLOBAL),
+        }
+    }
 }
 
 // const Entry = struct {
@@ -374,11 +377,13 @@ impl Fingerprint {
     //     self.entries.deinit(alloc);
     // }
     //
-    // PORT NOTE: the reference frees the `ArrayListUnmanaged`'s storage; the
-    // Rust `Vec` frees on drop, so this drops it (kept for API parity with the
-    // explicit `deinit` callers above).
-    pub fn deinit(&mut self, _alloc: Allocator) {
-        self.entries = Vec::new();
+    // PORT NOTE: the list frees through the allocator it is bound to (checked
+    // against `alloc`) and is left empty.
+    pub fn deinit(&mut self, alloc: Allocator) {
+        if self.entries.capacity() != 0 {
+            self.entries.allocator().debug_assert_same(alloc);
+        }
+        self.entries = crate::alloc::AVec::new_in(alloc);
     }
 
     // pub fn clearAndRetainCapacity(self: *Fingerprint) void {
@@ -412,15 +417,12 @@ impl Fingerprint {
         // MUST STAY FIRST. Reserving before any mutation is what makes an
         // allocation failure preserve the OLD fingerprint; moving it after the
         // first write silently breaks that contract.
-        let _ = &alloc;
-        let rows = pages.rows as usize;
-        if self
-            .entries
-            .try_reserve(rows.saturating_sub(self.entries.len()))
-            .is_err()
-        {
-            return Err(OutOfMemory);
-        }
+        crate::alloc::bind(&mut self.entries, alloc);
+        crate::zig_list::ensure_total_capacity(
+            &mut self.entries,
+            pages.rows as usize,
+            ENTRY_INIT_CAPACITY,
+        )?;
 
         // const old_len = self.entries.items.len;
         let old_len = self.entries.len();
@@ -465,7 +467,7 @@ impl Fingerprint {
             if i < self.entries.len() {
                 self.entries[i] = entry;
             } else {
-                // `appendAssumeCapacity`: the `try_reserve` above guarantees
+                // `appendAssumeCapacity`: `ensureTotalCapacity` above guarantees
                 // room for `pages.rows` entries and the viewport can have at
                 // most one entry per visible row, so this never reallocates.
                 debug_assert!(self.entries.len() < self.entries.capacity());

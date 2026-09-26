@@ -26,9 +26,11 @@
 use super::active::ActiveSearch;
 use super::pagelist::PageListSearch;
 use super::sliding_window::{Direction, SlidingWindow};
-use crate::alloc::Allocator;
+use crate::alloc::{AVec, Allocator};
 use crate::highlight::Flattened as FlattenedHighlight;
+use crate::highlight::FlattenedRef;
 use crate::highlight::Tracked as TrackedHighlight;
+use crate::highlight::FLATTENED_INIT_CAPACITY;
 use crate::pagelist::{Node, OutOfMemory, PageList, Pin};
 use crate::point;
 use crate::screen::Screen;
@@ -116,8 +118,12 @@ pub struct ScreenSearch {
     /// is mostly immutable once found, while active area results may
     /// change. This lets us easily reset the active area results for a
     /// re-search scenario.
-    pub history_results: Vec<FlattenedHighlight>,
-    pub active_results: Vec<FlattenedHighlight>,
+    //
+    // PORT NOTE (parity tail S7-6): `std.ArrayList(FlattenedHighlight)` grown
+    // through `self.allocator()` (the search's allocator), bound to it at
+    // `init`; each element's chunks were cloned through it too.
+    pub history_results: AVec<FlattenedHighlight>,
+    pub active_results: AVec<FlattenedHighlight>,
 
     /// The dimensions of the screen. When this changes we need to
     /// restart the whole search, currently.
@@ -285,8 +291,8 @@ impl ScreenSearch {
             active: ActiveSearch::init(alloc, needle_unowned)?,
             history: None,
             state: State::Active,
-            active_results: Vec::new(),
-            history_results: Vec::new(),
+            active_results: AVec::new_in(alloc),
+            history_results: AVec::new_in(alloc),
             selected: None,
         };
 
@@ -349,16 +355,15 @@ impl ScreenSearch {
         // for (self.active_results.items) |*hl| hl.deinit(alloc);
         // self.active_results.deinit(alloc);
         for hl in self.active_results.iter_mut() {
-            hl.deinit();
+            hl.deinit(alloc);
         }
-        self.active_results = Vec::new();
+        self.active_results = AVec::new_in(alloc);
         // for (self.history_results.items) |*hl| hl.deinit(alloc);
         // self.history_results.deinit(alloc);
         for hl in self.history_results.iter_mut() {
-            hl.deinit();
+            hl.deinit(alloc);
         }
-        self.history_results = Vec::new();
-        let _ = alloc;
+        self.history_results = AVec::new_in(alloc);
     }
 
     // fn allocator(self: *ScreenSearch) Allocator {
@@ -391,13 +396,12 @@ impl ScreenSearch {
     /// already loaded its active area through `init` in that case.
     //
     // PORT NOTE (oracle 627518447, `P3-W1 T5`): extracted VERBATIM from the
-    // inline body that used to live at the top of `feed`. The needle is copied
-    // into an owned `Vec<u8>` FIRST — the reference can pass `self.needle()`
-    // straight into `init` because Zig slices are unprotected, but in Rust that
-    // borrow of `self` must not be live across `self.deinit()` / `*self = new`.
-    // That shape is `feed`'s existing one, reused unchanged. `self.screen` is a
-    // raw `*mut Screen` alias throughout (memory: rust-mut-args-strongly-protected)
-    // and is never re-borrowed as `&mut Screen` here.
+    // inline body that used to live at the top of `feed`. The needle borrow of
+    // `self` ends when `init` returns (the new search owns its own copy), before
+    // `self.deinit()` / `*self = new`, so no port-only copy of the needle is
+    // made (parity tail S7-6). `self.screen` is a raw `*mut Screen` alias
+    // throughout (memory: rust-mut-args-strongly-protected) and is never
+    // re-borrowed as `&mut Screen` here.
     // fn resetIfDimensionsChanged(self: *ScreenSearch) Allocator.Error!bool {
     fn reset_if_dimensions_changed(&mut self) -> Result<bool, OutOfMemory> {
         // if (self.screen.pages.rows == self.rows and
@@ -411,8 +415,12 @@ impl ScreenSearch {
             return Ok(false);
         }
 
-        let needle_owned: Vec<u8> = self.needle().to_vec();
-        let new: ScreenSearch = ScreenSearch::init(self.allocator(), self.screen, &needle_owned)?;
+        // const new: ScreenSearch = try .init(
+        //     self.allocator(),
+        //     self.screen,
+        //     self.needle(),
+        // );
+        let new: ScreenSearch = ScreenSearch::init(self.allocator(), self.screen, self.needle())?;
 
         self.deinit();
         *self = new;
@@ -430,7 +438,12 @@ impl ScreenSearch {
     //     self: *ScreenSearch,
     //     alloc: Allocator,
     // ) Allocator.Error![]FlattenedHighlight {
-    pub fn matches(&mut self, _alloc: Allocator) -> Result<Vec<FlattenedHighlight>, OutOfMemory> {
+    //
+    // PORT NOTE (parity tail S7-6): the reference's elements are shallow copies
+    // that alias this search's stored chunks; here they are `FlattenedRef`s
+    // borrowing them, so the one allocation (the slice, through `alloc`) is
+    // the reference's and the result cannot outlive the search's results.
+    pub fn matches(&self, alloc: Allocator) -> Result<AVec<FlattenedRef<'_>>, OutOfMemory> {
         // const active_results = self.active_results.items;
         // const history_results = self.history_results.items;
         // const results = try alloc.alloc(
@@ -438,18 +451,13 @@ impl ScreenSearch {
         //     active_results.len + history_results.len,
         // );
         // errdefer alloc.free(results);
-        //
-        // PORT NOTE: the reference allocates an uninitialized `[]FlattenedHighlight`
-        // and `@memcpy`s the (shallow, non-owning) `Flattened` values in. The Rust
-        // `Flattened` is not `Copy` (owns a `Vec<Chunk>`), so we build the result
-        // by `clone()`ing each entry into the new `Vec` in the same order the
-        // reference produces (active reversed, then history). This is an
-        // ADDITION-of-clones, not a loss: the reference's shallow copies alias the
-        // same chunk storage; our clones are independent but observably identical.
         let active_results = &self.active_results;
         let history_results = &self.history_results;
-        let mut results: Vec<FlattenedHighlight> =
-            Vec::with_capacity(active_results.len() + history_results.len());
+        let mut results: AVec<FlattenedRef<'_>> = AVec::new_in(alloc);
+        crate::zig_list::ensure_total_capacity_precise(
+            &mut results,
+            active_results.len() + history_results.len(),
+        )?;
 
         // Active does a forward search, so we add the active results then
         // reverse them. There are usually not many active results so this
@@ -459,7 +467,7 @@ impl ScreenSearch {
         // @memcpy(results[0..active_results.len], active_results);
         // std.mem.reverse(FlattenedHighlight, results[0..active_results.len]);
         for hl in active_results.iter() {
-            results.push(hl.clone()?);
+            results.push(hl.as_ref());
         }
         results.reverse();
 
@@ -467,7 +475,7 @@ impl ScreenSearch {
         // after.
         // @memcpy(results[active_results.len..], history_results);
         for hl in history_results.iter() {
-            results.push(hl.clone()?);
+            results.push(hl.as_ref());
         }
 
         // return results;
@@ -702,6 +710,7 @@ impl ScreenSearch {
                 // `Terminal::reset`/full-clear followed by `select`), and it is
                 // present verbatim in `oracle@main`, so it is kept rather than
                 // removed as dead code.
+                let alloc = self.allocator();
                 if let Some(m) = self.selected.as_ref() {
                     let first_pruned = self.active_results.len() + i;
                     if m.idx >= first_pruned {
@@ -713,10 +722,9 @@ impl ScreenSearch {
                 // self.history_results.shrinkAndFree(alloc, i);
                 // return;
                 for prune_hl in self.history_results[i..].iter_mut() {
-                    prune_hl.deinit();
+                    prune_hl.deinit(alloc);
                 }
-                self.history_results.truncate(i);
-                self.history_results.shrink_to_fit();
+                crate::zig_list::shrink_and_free(&mut self.history_results, i);
                 return;
             }
 
@@ -746,7 +754,7 @@ impl ScreenSearch {
             // var removed = self.history_results.orderedRemove(i);
             // removed.deinit(self.allocator());
             let mut removed = self.history_results.remove(i);
-            removed.deinit();
+            removed.deinit(self.allocator());
         }
     }
 
@@ -756,6 +764,7 @@ impl ScreenSearch {
         // because the active area is generally small.
         // const alloc = self.allocator();
         // while (self.active.next()) |hl| {
+        let alloc = self.allocator();
         while let Some(hl) = self.active.next() {
             // If this fails, then we miss a result since `active.next()`
             // moves forward and prunes data. In the future, we may want
@@ -765,8 +774,11 @@ impl ScreenSearch {
             // var hl_cloned = try hl.clone(alloc);
             // errdefer hl_cloned.deinit(alloc);
             // try self.active_results.append(alloc, hl_cloned);
-            let hl_cloned = hl.clone()?;
-            self.active_results.push(hl_cloned);
+            //
+            // PORT NOTE: the errdefer is `hl_cloned`'s drop when the append
+            // fails (it frees through `alloc`).
+            let hl_cloned = hl.clone(alloc)?;
+            crate::zig_list::append(&mut self.active_results, hl_cloned, FLATTENED_INIT_CAPACITY)?;
         }
 
         // We've consumed the entire active area, move to history.
@@ -787,12 +799,12 @@ impl ScreenSearch {
             self.state = State::Complete;
             return Ok(());
         }
-        let history = self.history.as_mut().unwrap();
-
         // Try to consume all the loaded matches in one go, because
         // the search is generally fast for loaded data.
         // const alloc = self.allocator();
         // while (history.searcher.next()) |hl| {
+        let alloc = self.allocator();
+        let history = self.history.as_mut().unwrap();
         while let Some(hl) = history.searcher.next() {
             // Ignore selections that are found within the starting
             // node since those are covered by the active area search.
@@ -805,8 +817,12 @@ impl ScreenSearch {
             // var hl_cloned = try hl.clone(alloc);
             // errdefer hl_cloned.deinit(alloc);
             // try self.history_results.append(alloc, hl_cloned);
-            let hl_cloned = hl.clone()?;
-            self.history_results.push(hl_cloned);
+            let hl_cloned = hl.clone(alloc)?;
+            crate::zig_list::append(
+                &mut self.history_results,
+                hl_cloned,
+                FLATTENED_INIT_CAPACITY,
+            )?;
 
             // Since history only appends to our results in reverse order,
             // we don't need to update any selected match state. The index
@@ -899,7 +915,6 @@ impl ScreenSearch {
     fn reload_active_inner(&mut self) -> Result<(), OutOfMemory> {
         // const alloc = self.allocator();
         let alloc = self.allocator();
-        let _ = alloc;
         // const list: *PageList = &self.screen.pages;
         // SB: raw `addr_of_mut!` (reference `*PageList`), NOT `&mut (*self.screen).pages`
         // — a `&mut` reborrow here would be invalidated by the later `&mut`-free
@@ -937,7 +952,7 @@ impl ScreenSearch {
                         self.history.as_mut().unwrap().deinit(self.screen);
                         self.history = None;
                         for hl in self.history_results.iter_mut() {
-                            hl.deinit();
+                            hl.deinit(alloc);
                         }
                         self.history_results.clear();
                         false
@@ -961,9 +976,8 @@ impl ScreenSearch {
                     //     history_node,
                     // );
                     // errdefer search.deinit();
-                    let needle_owned: Vec<u8> = self.needle().to_vec();
                     let mut search: PageListSearch =
-                        PageListSearch::init(alloc, &needle_owned, list, history_node)?;
+                        PageListSearch::init(alloc, self.needle(), list, history_node)?;
 
                     // const pin = try list.trackPin(.{ .node = history_node });
                     // errdefer list.untrackPin(pin);
@@ -1008,9 +1022,8 @@ impl ScreenSearch {
                 // a massive amount of history to search here.
                 // var window: SlidingWindow = try .init(alloc, .forward, self.needle());
                 // defer window.deinit();
-                let needle_owned: Vec<u8> = self.needle().to_vec();
                 let mut window: SlidingWindow =
-                    SlidingWindow::init(alloc, Direction::Forward, &needle_owned)?;
+                    SlidingWindow::init(alloc, Direction::Forward, self.needle())?;
                 // while (true) {
                 //     _ = try window.append(history.start_pin.node);
                 //     if (history.start_pin.node == history_node) break;
@@ -1048,8 +1061,14 @@ impl ScreenSearch {
                 //     self.history_results.items.len,
                 // );
                 // errdefer { for (results.items) |*hl| hl.deinit(alloc); results.deinit(alloc); }
-                let mut results: Vec<FlattenedHighlight> =
-                    Vec::with_capacity(self.history_results.len());
+                let mut results: AVec<FlattenedHighlight> = AVec::new_in(alloc);
+                if let Err(e) = crate::zig_list::ensure_total_capacity_precise(
+                    &mut results,
+                    self.history_results.len(),
+                ) {
+                    window.deinit();
+                    return Err(e.into());
+                }
 
                 // while (window.next()) |hl| {
                 //     if (hl.chunks.items(.node)[0] == history_node) continue;
@@ -1063,16 +1082,16 @@ impl ScreenSearch {
                         if core::ptr::eq(hl.chunks[0].node, history_node) {
                             continue;
                         }
-                        let hl_cloned = hl.clone()?;
+                        let hl_cloned = hl.clone(alloc)?;
                         #[cfg(test)]
                         reload_active_tw_check(ReloadActiveFp::HistoryAppendNew)?;
-                        results.push(hl_cloned);
+                        crate::zig_list::append(&mut results, hl_cloned, FLATTENED_INIT_CAPACITY)?;
                     }
                     Ok(())
                 })();
                 if let Err(e) = loop_result {
                     for hl in results.iter_mut() {
-                        hl.deinit();
+                        hl.deinit(alloc);
                     }
                     window.deinit();
                     return Err(e);
@@ -1104,8 +1123,14 @@ impl ScreenSearch {
                     // PORT NOTE: the reference `appendSlice` shallow-copies the
                     // (non-owning) `Flattened` values; ownership then transfers
                     // from `self.history_results` (which is replaced wholesale by
-                    // `results` below). We mirror by moving each owned `Flattened`
-                    // out of `self.history_results` (drained) into `results`.
+                    // `results` below). We mirror by growing `results` as
+                    // `appendSlice` does (`ensureUnusedCapacity`) and then moving
+                    // each owned `Flattened` out of `self.history_results`.
+                    crate::zig_list::ensure_unused_capacity(
+                        &mut results,
+                        self.history_results.len(),
+                        FLATTENED_INIT_CAPACITY,
+                    )?;
                     for hl in self.history_results.drain(..) {
                         results.push(hl);
                     }
@@ -1113,7 +1138,7 @@ impl ScreenSearch {
                 })();
                 if let Err(e) = append_result {
                     for hl in results.iter_mut() {
-                        hl.deinit();
+                        hl.deinit(alloc);
                     }
                     window.deinit();
                     return Err(e);
@@ -1123,7 +1148,8 @@ impl ScreenSearch {
                 //
                 // PORT NOTE: `self.history_results` was drained above (all owned
                 // values moved into `results`); assigning replaces the now-empty
-                // Vec with the rebuilt one.
+                // list (freeing its storage through `alloc`, the deinit) with the
+                // rebuilt one.
                 self.history_results = results;
 
                 window.deinit();
@@ -1162,7 +1188,7 @@ impl ScreenSearch {
                 self.history.as_mut().unwrap().deinit(self.screen);
                 self.history = None;
                 for hl in self.history_results.iter_mut() {
-                    hl.deinit();
+                    hl.deinit(alloc);
                 }
                 self.history_results.clear();
             }
@@ -1225,7 +1251,7 @@ impl ScreenSearch {
         // for (self.active_results.items) |*hl| hl.deinit(alloc);
         // self.active_results.clearRetainingCapacity();
         for hl in self.active_results.iter_mut() {
-            hl.deinit();
+            hl.deinit(alloc);
         }
         self.active_results.clear();
         // switch (self.state) {
@@ -1275,7 +1301,7 @@ impl ScreenSearch {
                     // }
                     let end_pin = self.active_results[i].end_pin();
                     if !tl.before(end_pin) {
-                        self.active_results[i].deinit();
+                        self.active_results[i].deinit(alloc);
                         continue;
                     }
 
@@ -1384,20 +1410,19 @@ impl ScreenSearch {
     /// This does not require read/write access to the underlying screen.
     // pub fn matchAt(self: *const ScreenSearch, idx: usize) ?FlattenedHighlight {
     //
-    // PORT NOTE (oracle `149c9f562`): the reference returns a (shallow,
-    // aliasing) `FlattenedHighlight` by value. The Rust `Flattened` is not
-    // `Copy`, so this returns a `clone()` (an independent copy of the same
-    // chunks). Callers use it transiently (`untracked()`, `startPin()`);
-    // observably identical. Returns `None` on the out-of-range path exactly as
-    // the reference returns `null`.
-    pub fn match_at(&self, idx: usize) -> Option<FlattenedHighlight> {
+    // PORT NOTE (oracle `149c9f562`, parity tail S7-6): the reference returns a
+    // (shallow, aliasing) `FlattenedHighlight` by value; this returns the same
+    // shallow copy as a `FlattenedRef` borrowing the stored result (no
+    // allocation). Returns `None` on the out-of-range path exactly as the
+    // reference returns `null`.
+    pub fn match_at(&self, idx: usize) -> Option<FlattenedRef<'_>> {
         // const active_len = self.active_results.items.len;
         let active_len = self.active_results.len();
         // if (idx < active_len) {
         //     return self.active_results.items[active_len - 1 - idx];
         // }
         if idx < active_len {
-            return self.active_results[active_len - 1 - idx].clone().ok();
+            return Some(self.active_results[active_len - 1 - idx].as_ref());
         }
 
         // const history_len = self.history_results.items.len;
@@ -1406,7 +1431,7 @@ impl ScreenSearch {
         //     return self.history_results.items[idx - active_len];
         // }
         if idx < active_len + history_len {
-            return self.history_results[idx - active_len].clone().ok();
+            return Some(self.history_results[idx - active_len].as_ref());
         }
 
         // return null;
@@ -1417,7 +1442,7 @@ impl ScreenSearch {
     ///
     /// This does not require read/write access to the underlying screen.
     // pub fn selectedMatch(self: *const ScreenSearch) ?FlattenedHighlight {
-    pub fn selected_match(&self) -> Option<FlattenedHighlight> {
+    pub fn selected_match(&self) -> Option<FlattenedRef<'_>> {
         // const sel = self.selected orelse return null;
         let sel = self.selected.as_ref()?;
         // return self.matchAt(sel.idx);
@@ -1466,14 +1491,14 @@ impl ScreenSearch {
         if self.selected.is_none() {
             // Get our highlight
             // const hl: FlattenedHighlight = hl: { ... };
-            let hl: FlattenedHighlight = {
+            let hl: FlattenedRef<'_> = {
                 if !self.active_results.is_empty() {
                     // Active is in forward order
                     let len = self.active_results.len();
-                    self.active_results[len - 1].clone()?
+                    self.active_results[len - 1].as_ref()
                 } else if !self.history_results.is_empty() {
                     // History is in reverse order
-                    self.history_results[0].clone()?
+                    self.history_results[0].as_ref()
                 } else {
                     // No matches at all. Can't select anything.
                     return Ok(false);
@@ -1511,10 +1536,10 @@ impl ScreenSearch {
         //     self.active_results.items[active_len - 1 - next_idx]
         // else
         //     self.history_results.items[next_idx - active_len];
-        let hl: FlattenedHighlight = if next_idx < active_len {
-            self.active_results[active_len - 1 - next_idx].clone()?
+        let hl: FlattenedRef<'_> = if next_idx < active_len {
+            self.active_results[active_len - 1 - next_idx].as_ref()
         } else {
-            self.history_results[next_idx - active_len].clone()?
+            self.history_results[next_idx - active_len].as_ref()
         };
 
         // Pin it so we can track any movement
@@ -1543,14 +1568,14 @@ impl ScreenSearch {
         if self.selected.is_none() {
             // Get our highlight (oldest match)
             // const hl: FlattenedHighlight = hl: { ... };
-            let hl: FlattenedHighlight = {
+            let hl: FlattenedRef<'_> = {
                 if !self.history_results.is_empty() {
                     // History is in reverse order, so last item is oldest
                     let len = self.history_results.len();
-                    self.history_results[len - 1].clone()?
+                    self.history_results[len - 1].as_ref()
                 } else if !self.active_results.is_empty() {
                     // Active is in forward order, so first item is oldest
-                    self.active_results[0].clone()?
+                    self.active_results[0].as_ref()
                 } else {
                     // No matches at all. Can't select anything.
                     return Ok(false);
@@ -1593,10 +1618,10 @@ impl ScreenSearch {
         //     self.active_results.items[active_len - 1 - next_idx]
         // else
         //     self.history_results.items[next_idx - active_len];
-        let hl: FlattenedHighlight = if next_idx < active_len {
-            self.active_results[active_len - 1 - next_idx].clone()?
+        let hl: FlattenedRef<'_> = if next_idx < active_len {
+            self.active_results[active_len - 1 - next_idx].as_ref()
         } else {
-            self.history_results[next_idx - active_len].clone()?
+            self.history_results[next_idx - active_len].as_ref()
         };
 
         // Pin it so we can track any movement

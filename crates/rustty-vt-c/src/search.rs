@@ -44,9 +44,11 @@ use crate::grid_ref::CGridRef;
 use crate::result::Result;
 use crate::selection::{CSelection, CSelectionBuffer};
 use crate::terminal as terminal_c;
+use allocator_api2::alloc::{Allocator as ApiAllocator, Layout};
 use rustty_lib::allocator::Allocator as CAllocator;
 use rustty_lib::String as LibString;
-use rustty_vt::highlight::Flattened as FlattenedHighlight;
+use rustty_vt::alloc::VtAllocator;
+use rustty_vt::highlight::{Chunk, Flattened, Flattened as FlattenedHighlight};
 use rustty_vt::search::terminal::{SelectScroll, TerminalSearch};
 use rustty_vt::terminal::Terminal as ZigTerminal;
 use std::ffi::c_void;
@@ -67,13 +69,14 @@ pub type Search = *mut SearchWrapper;
 pub struct SearchWrapper {
     // alloc: std.mem.Allocator,
     //
-    // PORT NOTE (F-008): the C-resolved allocator (`lib.alloc.default(alloc_)`)
-    // that owns the WRAPPER storage (`alloc.create`/`alloc.destroy`). The
-    // `TerminalSearch` itself is built on `rustty_vt`'s internals allocator
-    // (`allocator_api2::Global`, the type its `init` takes — see render.rs /
-    // selection_gesture.rs for the same seam); the reference passes this
-    // allocator to `TerminalSearch.init` as well.
-    pub alloc: Box<dyn rustty_lib::allocator::ZigAllocator>,
+    // PORT NOTE (F-008, parity tail S7-6): the C-resolved allocator
+    // (`lib.alloc.default(alloc_)`) as the runtime handle. It owns the WRAPPER
+    // storage (`alloc.create`/`alloc.destroy`) and, as in the reference, every
+    // allocation of the `TerminalSearch` built on it (`TerminalSearch.init(
+    // wrapper.alloc, ..)`). The search's `searches` registry entry and its
+    // tracked pins are charged to the TERMINAL's allocator instead (N262). The
+    // caller's `RusttyAllocator` must outlive the search (N260).
+    pub alloc: VtAllocator,
 
     /// The terminal this search is bound to. This is borrowed, so the
     /// search never frees it. If the terminal is freed first, it sets
@@ -359,14 +362,17 @@ pub unsafe fn new(
     }
     let terminal_wrapper = terminal;
     // const alloc = lib.alloc.default(alloc_);
-    let alloc = rustty_lib::allocator::default(alloc_);
+    // SAFETY: a non-null `alloc_` is a valid caller allocator that outlives the
+    // search (the reference's contract, N260).
+    let alloc: VtAllocator = unsafe { rustty_vt::alloc::default(alloc_) };
     // const wrapper = alloc.create(SearchWrapper) catch return .out_of_memory;
     // PORT NOTE (F-008): through the C-resolved allocator; a rejecting caller
     // allocator yields `.out_of_memory` like the reference.
-    let wrapper: *mut SearchWrapper = match rustty_lib::allocator::create_raw(&*alloc) {
-        Ok(ptr) => ptr,
-        Err(_) => return Result::OutOfMemory,
-    };
+    let wrapper: *mut SearchWrapper =
+        match ApiAllocator::allocate(&alloc, Layout::new::<SearchWrapper>()) {
+            Ok(ptr) => ptr.as_ptr() as *mut SearchWrapper,
+            Err(_) => return Result::OutOfMemory,
+        };
     // wrapper.* = .{
     //     .alloc = alloc,
     //     .terminal = terminal_wrapper,
@@ -407,29 +413,26 @@ pub unsafe fn new(
     // (This is a CHOICE the port had, not a Rust language limitation — which is
     // why the earlier "the port cannot produce this failure" reading of the
     // sibling row does not hold.)
+    // The registry is bound to the terminal's allocator (`gpa()`, parity tail
+    // S7-4), so this growth is charged to the terminal, as in the reference.
     // SAFETY: `searches` is a sibling field of the live terminal wrapper.
-    let wrapper_ptr = wrapper;
-    #[cfg(test)]
-    let reserved = register_tw_check().and_then(|()| unsafe {
-        (*terminal_wrapper)
-            .searches
-            .try_put_no_clobber(wrapper, ())
-            .map_err(|_| RegistryFull)
-    });
-    #[cfg(not(test))]
     let reserved = unsafe { (*terminal_wrapper).searches.try_put_no_clobber(wrapper, ()) };
     if reserved.is_err() {
         // alloc.destroy(wrapper);
-        // PORT NOTE: the `free` pattern — `alloc` was moved into the wrapper by
-        // the `ptr::write` above, so the value is read back out before the
-        // storage is returned through it, then dropped. Nothing else owns
-        // anything yet (`search` is `None`), so this is the whole teardown.
-        // SAFETY: `wrapper` was just created by `create_raw` with this resolved
-        // allocator and has not been handed out; after the read the storage is
-        // treated as uninitialized and freed exactly once.
-        let wrapper = unsafe { std::ptr::read(wrapper) };
-        unsafe { rustty_lib::allocator::destroy_raw(&*wrapper.alloc, wrapper_ptr) };
-        drop(wrapper);
+        // PORT NOTE: nothing else owns anything yet (`search` is `None`), so
+        // dropping the value in place and returning its storage through the
+        // allocator it came from is the whole teardown.
+        // SAFETY: `wrapper` was just allocated through `alloc` with this layout
+        // and initialized above, and has not been handed out; it is dropped and
+        // freed exactly once.
+        unsafe {
+            std::ptr::drop_in_place(wrapper);
+            ApiAllocator::deallocate(
+                &alloc,
+                std::ptr::NonNull::new_unchecked(wrapper as *mut u8),
+                Layout::new::<SearchWrapper>(),
+            );
+        }
         // return .out_of_memory;
         return Result::OutOfMemory;
     }
@@ -439,38 +442,6 @@ pub unsafe fn new(
     unsafe { *out_search = wrapper };
     // return .success;
     Result::Success
-}
-
-// PORT NOTE: tripwire fail-point standing in for the reference tests'
-// `std.testing.FailingAllocator` at the ONE allocation `new` performs after the
-// wrapper exists: the terminal's search registry growing
-// (`terminal_wrapper.searches.putNoClobber(gpa, wrapper, {})`). It is the only
-// way to exercise the reference's `catch { alloc.destroy(wrapper); return
-// .out_of_memory; }` arm, which `search.h:340-362` documents as
-// `GHOSTTY_OUT_OF_MEMORY` (parity S4-F3 / S176-F2). The crate's established
-// seam; see `rustty-vt`'s `stream_continuation.rs` `TRACKER_TW` PORT NOTE.
-#[cfg(test)]
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub(crate) enum RegisterFp {
-    Reserve,
-}
-
-/// The tripwire's error value (Zig `Allocator.Error`).
-#[cfg(test)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct RegistryFull;
-
-#[cfg(test)]
-thread_local! {
-    pub(crate) static REGISTER_TW: core::cell::RefCell<
-        rustty_util::tripwire::Module<RegisterFp, RegistryFull>,
-    > = core::cell::RefCell::new(rustty_util::tripwire::module());
-}
-
-#[cfg(test)]
-#[inline]
-fn register_tw_check() -> core::result::Result<(), RegistryFull> {
-    REGISTER_TW.with(|tw| tw.borrow_mut().check(RegisterFp::Reserve))
 }
 
 // pub fn free(search_: Search) callconv(lib.calling_conv) void {
@@ -510,18 +481,21 @@ pub unsafe fn free(search_: Search) {
     }
     // const alloc = wrapper.alloc;
     // alloc.destroy(wrapper);
-    // PORT NOTE (F-008): move the wrapper value out of the caller-allocator
-    // storage, return the STORAGE through the resolved allocator (the caller
-    // free callback fires), then drop the value (its `search` was `deinit`ed
-    // above; dropping it releases only the Vec/array storage it still owns —
-    // the reference's `alloc.destroy` reclaims the same bytes) and the `alloc`
-    // box itself last.
-    // SAFETY: `search_` was created by `new` via `create_raw` with this same
-    // resolved allocator; after the read the storage is treated as
-    // uninitialized and freed exactly once.
-    let wrapper = unsafe { std::ptr::read(search_) };
-    unsafe { rustty_lib::allocator::destroy_raw(&*wrapper.alloc, search_) };
-    drop(wrapper);
+    // PORT NOTE (F-008): the value is dropped in place (its `search` was
+    // `deinit`ed above, so this releases nothing more) and the storage goes
+    // back through the allocator that created it (the caller's free callback
+    // fires).
+    // SAFETY: `search_` was allocated by `new` through `alloc` with this
+    // layout; it is dropped and freed exactly once.
+    let alloc = unsafe { (*search_).alloc };
+    unsafe {
+        std::ptr::drop_in_place(search_);
+        ApiAllocator::deallocate(
+            &alloc,
+            std::ptr::NonNull::new_unchecked(search_ as *mut u8),
+            Layout::new::<SearchWrapper>(),
+        );
+    }
 }
 
 // pub fn tick(
@@ -748,7 +722,8 @@ unsafe fn set_typed(search_: Search, option: SearchOption, value: *const c_void)
             //     wrapper.alloc,
             //     bytes,
             // ) catch return .out_of_memory;
-            let replacement = match TerminalSearch::init(rustty_vt::alloc::Global, bytes) {
+            // SAFETY: `wrapper` is live (checked above).
+            let replacement = match TerminalSearch::init(unsafe { (*wrapper).alloc }, bytes) {
                 Ok(r) => r,
                 Err(_) => return Result::OutOfMemory,
             };
@@ -1189,8 +1164,11 @@ unsafe fn get_typed(search_: Search, data: SearchData, out: *mut c_void) -> Resu
 // }
 // PORT NOTE: `.size` rides `CSelection::default()` (the reference fills
 // `.size = @sizeOf(CSelection)` via the field default). Takes `&Flattened`
-// because the port's `Flattened` owns its chunk `Vec` (not `Copy`).
-fn selection_from_highlight(hl: &FlattenedHighlight) -> CSelection {
+// of either chunk storage: an owned result or a shallow copy
+// (`FlattenedRef`), the reference's by-value `Flattened`.
+fn selection_from_highlight<C: core::ops::Deref<Target = [Chunk]>>(
+    hl: &Flattened<C>,
+) -> CSelection {
     // const untracked = hl.untracked();
     let untracked = hl.untracked();
     CSelection {
@@ -1276,54 +1254,63 @@ mod tests {
     // documents `GHOSTTY_OUT_OF_MEMORY` when `ghostty_search_new` cannot
     // register the search, and the reference's
     // `catch { alloc.destroy(wrapper); return .out_of_memory; }` both FREES the
-    // wrapper and returns it. The port used an infallible `HashSet::insert`, so
-    // the documented return was unreachable and the wrapper would have leaked on
-    // that path. Both halves are asserted: the return value AND that the C
-    // allocator got its bytes back.
+    // wrapper and returns it. Both halves are asserted: the return value AND
+    // that the search's allocator got its bytes back.
+    //
+    // Parity tail S7-6: the registry grows through the TERMINAL's allocator
+    // (N262), so the failure is driven by a `FailingAllocator` under the
+    // terminal (the port-only `REGISTER_TW` tripwire is retired), while the
+    // wrapper lives on the search's own counting allocator.
     #[test]
     fn search_new_releases_the_wrapper_when_registry_growth_fails() {
-        use rustty_util::tripwire::ResetMode;
+        use rustty_vt::alloc::testing::{Config, CountingAllocator, FailingAllocator};
 
-        let stats = crate::test_util::CountingCAllocator::new();
-        let calloc = stats.c_allocator();
+        let terminal_failing = FailingAllocator::over_heap(Config::default());
+        let terminal_calloc = terminal_failing.allocator();
+        let search_counting = CountingAllocator::over_heap();
+        let search_calloc = search_counting.allocator();
 
-        let terminal = unsafe { test_terminal(&calloc) };
-        let live_before = stats.live_bytes.get();
-        let frees_before = stats.free_calls.get();
+        let terminal = unsafe { test_terminal(&terminal_calloc) };
 
-        REGISTER_TW.with(|tw| {
-            tw.borrow_mut()
-                .errorAlways(RegisterFp::Reserve, RegistryFull)
-        });
-
+        // Fail the terminal's next allocation: the registry's first growth.
+        terminal_failing
+            .fail_index
+            .set(terminal_failing.alloc_index.get());
         let mut search: Search = std::ptr::null_mut();
         assert_eq!(Result::OutOfMemory, unsafe {
-            new(Some(&calloc), &mut search, terminal)
+            new(Some(&search_calloc), &mut search, terminal)
         });
         assert!(search.is_null());
+        assert!(terminal_failing.has_induced_failure.get());
 
-        REGISTER_TW
-            .with(|tw| tw.borrow_mut().end(ResetMode::Reset))
-            .unwrap();
+        // The wrapper was allocated through the SEARCH allocator and handed
+        // back to it (positively: one allocation and one free of the wrapper).
+        assert_eq!(
+            (1, 1),
+            (
+                search_counting.alloc_calls.get(),
+                search_counting.free_calls.get()
+            )
+        );
+        assert_eq!(0, search_counting.live_bytes.get());
 
-        // The wrapper was allocated through the CALLER allocator and handed
-        // back to it: no bytes outstanding beyond what the terminal holds, and
-        // at least one free happened (positively proving the destroy arm ran,
-        // rather than only that nothing leaked).
-        assert!(stats.free_calls.get() > frees_before);
-        assert_eq!(live_before, stats.live_bytes.get());
-
-        // The same call succeeds with the fail point disarmed, so the assertion
-        // above is about the failure path and not about `new` being broken.
+        // The same call succeeds once the terminal allocator recovers, so the
+        // assertion above is about the failure path and not about `new` being
+        // broken.
+        terminal_failing.fail_index.set(usize::MAX);
         let mut ok_search: Search = std::ptr::null_mut();
         assert_eq!(Result::Success, unsafe {
-            new(Some(&calloc), &mut ok_search, terminal)
+            new(Some(&search_calloc), &mut ok_search, terminal)
         });
         assert!(!ok_search.is_null());
         unsafe { free(ok_search) };
 
         unsafe { terminal_c::free(terminal) };
-        assert_eq!(0, stats.live_bytes.get());
+        assert_eq!(0, search_counting.live_bytes.get());
+        assert_eq!(
+            terminal_failing.allocated_bytes.get(),
+            terminal_failing.freed_bytes.get()
+        );
     }
 
     // test "search lifecycle and run to complete"

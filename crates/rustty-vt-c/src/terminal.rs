@@ -4567,7 +4567,8 @@ pub unsafe fn grid_ref_track(
 // PORT NOTE: tripwire fail-point for the tracked-ref registry's growth in
 // `grid_ref_track` (`wrapper.tracked_grid_refs.putNoClobber(alloc, ref, {})`),
 // standing in for `std.testing.FailingAllocator`, as `search.rs`'s
-// `REGISTER_TW` does for S4-F3 (parity S179-F3).
+// `REGISTER_TW` did for S4-F3 until parity tail S7-6 drove that arm with a
+// `FailingAllocator` under the terminal (parity S179-F3).
 #[cfg(test)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) enum TrackFp {

@@ -2666,15 +2666,16 @@ mod tests {
         //     .end = pin.y + 1,
         // });
         let mut hl = highlight::Flattened {
-            chunks: vec![highlight::Chunk {
-                node: pin.node,
-                serial: live_serial ^ 1,
-                start: pin.y,
-                end: pin.y + 1,
-            }],
+            chunks: highlight::ChunkList::new_in(alloc),
             top_x: 2,
             bot_x: 4,
         };
+        hl.chunks.push(highlight::Chunk {
+            node: pin.node,
+            serial: live_serial ^ 1,
+            start: pin.y,
+            end: pin.y + 1,
+        });
 
         // try state.updateHighlightsFlattened(alloc, 42, &.{hl});
         state
@@ -2709,7 +2710,7 @@ mod tests {
             assert_eq!(Dirty::Partial, state.dirty);
         }
 
-        hl.deinit();
+        hl.deinit(alloc);
         state.deinit(alloc);
         t.deinit(alloc);
     }

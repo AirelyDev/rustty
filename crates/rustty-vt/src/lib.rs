@@ -279,6 +279,10 @@ pub mod terminal;
 // that maps `std.mem.Allocator` (`alloc.rs`; design
 // `.port/parity-closure/S7-ALLOCATOR-DESIGN.md`).
 pub mod alloc;
+// PORT NOTE (parity tail S7-6): Rust-only glue, Zig 0.16's `ArrayList` /
+// `MultiArrayList` / `Writer.Allocating` growth over allocator-bound vectors,
+// for the search subsystem and the containers it shares (`zig_list.rs`).
+pub(crate) mod zig_list;
 // PORT NOTE: `terminal/UTF8Decoder.zig` has no top-level re-export in `main.zig`
 // (it is an internal sibling imported by the stream path). Declared here so the
 // stream can reference it; ported as a leaf in this sub-batch.

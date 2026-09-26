@@ -21,7 +21,7 @@
 // const SlidingWindow = @import("sliding_window.zig").SlidingWindow;
 use super::sliding_window::{Direction, SlidingWindow};
 use crate::alloc::Allocator;
-use crate::highlight::Flattened as FlattenedHighlight;
+use crate::highlight::FlattenedRef;
 use crate::pagelist::{Node, OutOfMemory, PageList, Pin};
 
 /// Searches for a term in a PageList structure.
@@ -165,7 +165,7 @@ impl PageListSearch {
     /// a lock held.
     // pub fn next(self: *PageListSearch) ?FlattenedHighlight {
     #[allow(clippy::should_implement_trait)]
-    pub fn next(&mut self) -> Option<FlattenedHighlight> {
+    pub fn next(&mut self) -> Option<FlattenedRef<'_>> {
         // return self.window.next();
         self.window.next()
     }
@@ -685,10 +685,15 @@ mod tests {
         // exact number of feeds depends on how much blank-page text the formatter
         // trims, so bound progress by the number of pages rather than encoding
         // that implementation detail in the test.
-        let mut found: Option<FlattenedHighlight> = None;
+        //
+        // PORT NOTE (parity tail S7-6): `next()` borrows the window, so the
+        // match is kept as an owned clone across the later `feed` calls (the
+        // reference keeps its shallow copy, which the window never overwrites
+        // after the `break`).
+        let mut found: Option<crate::highlight::Flattened> = None;
         for _ in 0..unsafe { (*pages()).total_pages() } + 1 {
             if let Some(m) = search.next() {
-                found = Some(m);
+                found = Some(m.clone(alloc).unwrap());
                 break;
             }
             if !search.feed().unwrap() {

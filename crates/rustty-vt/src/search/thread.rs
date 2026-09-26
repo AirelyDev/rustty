@@ -1113,7 +1113,7 @@ pub enum Event<'a> {
 
     /// Selected match changed.
     // selected_match: ?SelectedMatch,
-    SelectedMatch(Option<SelectedMatch>),
+    SelectedMatch(Option<SelectedMatch<'a>>),
 
     /// Matches in the viewport have changed. The memory is owned by the
     /// search thread and is only valid during the callback.
@@ -1125,9 +1125,14 @@ pub enum Event<'a> {
 //     idx: usize,
 //     highlight: FlattenedHighlight,
 // };
-pub struct SelectedMatch {
+//
+// PORT NOTE (parity tail S7-6): the reference's `highlight` is a shallow copy of
+// the search's stored result, valid during the callback (the event's
+// lifetime); `FlattenedRef<'a>` is that copy. A receiver that keeps it clones it
+// through its own allocator, as the reference's surface does.
+pub struct SelectedMatch<'a> {
     pub idx: usize,
-    pub highlight: FlattenedHighlight,
+    pub highlight: crate::highlight::FlattenedRef<'a>,
 }
 
 /// The last-notified values used by `notify` to diff search state
@@ -1732,7 +1737,7 @@ mod tests {
                     let mut vp = ud.viewport.lock().unwrap();
                     *vp = Vec::with_capacity(v.len());
                     for src in v {
-                        vp.push(src.clone().unwrap());
+                        vp.push(src.clone(Allocator).unwrap());
                     }
                 }
             }
