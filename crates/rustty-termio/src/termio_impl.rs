@@ -1770,6 +1770,11 @@ impl<M: AppMailbox> Termio<M> {
                 // parser allocator collapses under Rust's infallible global
                 // allocator), unlike the reference's `catch |err| log.err`; the
                 // error-logging arm never fires so it has no Rust equivalent.
+                // CORRECTION (task S-1d, review S-1c F9): the arm cannot fire in
+                // the REFERENCE either. `Stream.recordPtyRead`
+                // (inspector/widgets/termio.zig:50-62) has no `try`, so its
+                // inferred error set is empty and so is `Inspector.recordPtyRead`'s;
+                // `Termio.zig:705` is a dead-branch row in LOG-DEAD-SITES.tsv.
                 //
                 // PORT NOTE (G-LOGFILE / task-14e-1, 2026-09-10): this is
                 // `Termio.zig:705`, the ONE site of this file's six that stays

@@ -38,6 +38,9 @@ wasm = ["rustty-os/wasm-host-owned"]
 
 [dependencies]
 rustty-os = { workspace = true }
+# Atlas.zig's scoped `log` (task S-1d): `Unsupported format for dump` and the
+# wasm `atlas_debug_canvas` warning go through the facade, not direct prints.
+log = { workspace = true }
 rustty-datastruct = { workspace = true }
 rustty-util = { workspace = true }
 rustty-render-types = { workspace = true }

@@ -2470,6 +2470,37 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - proposed fix:    declare `surfaceDrop` as `callconv(.c) c_int` and return `1` after `moveSplit`, `0` on each early return.
 - upstream status: not reported
 
+### UD300 — three GTK "surface is not in a window" warnings name `new_tab` for another action
+- kind:            latent (copy-paste in a message)
+- upstream project: ghostty
+- severity:        low (a log line names the wrong action)
+- reference:       `src/apprt/gtk/class/application.zig` at 20abdb50a: `gotoTab` :2462, `moveTab` :2603 and `toggleTabOverview` :3276 each log `surface is not in a window, ignoring new_tab`, the text of `newTab`'s own warning (:2683); the sibling `moveTabToNewWindow` (:2626) names its own action.
+- defect:          when the surface has no enclosing window, the warning names `new_tab` although the ignored action is `goto_tab`, `move_tab` or `toggle_tab_overview`.
+- ReleaseSafe:     misleading diagnostic, no behavioural effect.
+- ReleaseFast:     the same.
+- reachability:    any of the three actions targeting a surface that is not (or no longer) inside a `Window`.
+- port handling:   faithful (R13: message text stays faithful). The port had used the "corrected" names; task S-1c restored the reference text in `crates/rustty-apprt/src/gtk/class/application.rs` `goto_tab`, `move_tab` and `toggle_tab_overview`, each with a comment citing this entry. Not in `docs/ghostty-bug-fixes.md` (no fix in the port).
+- parity row(s):   NEW-FINDINGS N310.
+- test:            none (GTK widget tree; the text is a string literal, compile-checked on Linux only). UNVERIFIED on Linux.
+- proposed fix:    `ignoring goto_tab`, `ignoring move_tab`, `ignoring toggle_tab_overview`.
+
+- upstream status: not reported
+
+### UD301 — `wasm_patch_growable_table`'s usage line names a `wasm_growable_table` binary
+- kind:            latent (copy-paste in a message)
+- upstream project: ghostty
+- severity:        low (a usage line names the wrong program)
+- reference:       `src/build/wasm_patch_growable_table.zig:9` (doc) and `:23` `std.log.err("usage: wasm_growable_table <input.wasm> <output.wasm>", .{})` at 20abdb50a; the build step names the executable `wasm_patch_growable_table` (`src/build/GhosttyLibVt.zig:73`).
+- defect:          the usage error names a program that does not exist; the binary is `wasm_patch_growable_table`.
+- ReleaseSafe:     misleading diagnostic, no behavioural effect.
+- ReleaseFast:     the same.
+- reachability:    running the build helper with the wrong argument count (only the build graph runs it, with two arguments).
+- port handling:   faithful (R13: message text stays faithful): xtask's `report_usage_error` prints the reference's line (task S-1d). Not in `docs/ghostty-bug-fixes.md`.
+- parity row(s):   NEW-FINDINGS N313.
+- test:            none for the text (xtask's `wasm_patch_rejects_*` tests assert the usage path); the line was measured (`cargo run -p xtask -- wasm-patch-growable-table onlyone`: the line, exit 1).
+- proposed fix:    `usage: wasm_patch_growable_table <input.wasm> <output.wasm>` in both places.
+- upstream status: not reported
+
 ### UD315 — after a render-state update fails on an allocation, the next update leaves the rows it did not rebuild stale or empty
 - kind:            functional (evident intent: a successful update must describe the current terminal), and, by reading, UB (UNVERIFIED)
 - upstream project: ghostty

@@ -1447,6 +1447,7 @@ name = "rustty-font"
 version = "0.1.0"
 dependencies = [
  "allocator-api2",
+ "log",
  "png",
  "rustty-cfg-fmt",
  "rustty-datastruct",
@@ -1502,6 +1503,7 @@ version = "0.1.0"
 name = "rustty-input"
 version = "0.1.0"
 dependencies = [
+ "log",
  "rustty-args",
  "rustty-cfg-fmt",
  "rustty-datastruct",

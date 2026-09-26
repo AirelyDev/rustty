@@ -178,14 +178,14 @@ mod imp {
     ///
     /// PORTS: `imgui_widget.zig:480-483` `defaultSetup`.
     fn default_imgui_setup(_this: &super::ImguiWidget) {
-        eprintln!("warn(gtk): default Dear ImGui setup called, this is a bug.");
+        eprintln!("warning(gtk): default Dear ImGui setup called, this is a bug.");
     }
 
     /// Default render function. Does nothing but log a warning.
     ///
     /// PORTS: `imgui_widget.zig:485-488` `defaultRender`.
     fn default_imgui_render(_this: &super::ImguiWidget) {
-        eprintln!("warn(gtk): default Dear ImGui render called, this is a bug.");
+        eprintln!("warning(gtk): default Dear ImGui render called, this is a bug.");
     }
 }
 
@@ -326,7 +326,7 @@ impl ImguiWidget {
     pub fn set_current_context(&self) -> Result<(), ContextNotInitialized> {
         let ig_context = self.imp().ig_context.get();
         if ig_context.is_null() {
-            eprintln!("warn(gtk): Dear ImGui context not initialized");
+            eprintln!("warning(gtk): Dear ImGui context not initialized");
             return Err(ContextNotInitialized);
         }
         // SAFETY: non-null context handle owned by this widget.
@@ -447,14 +447,14 @@ impl ImguiWidget {
 
         imp.gl_area.make_current();
         if let Some(err) = imp.gl_area.error() {
-            eprintln!("warn(gtk): GLArea for Dear ImGui widget failed to realize: {err}");
+            eprintln!("warning(gtk): GLArea for Dear ImGui widget failed to realize: {err}");
             return;
         }
 
         // SAFETY: the GL context is current; create the per-widget ImGui context.
         let ig_context = unsafe { cimgui::ImGui_CreateContext(ptr::null_mut()) };
         if ig_context.is_null() {
-            eprintln!("warn(gtk): unable to initialize Dear ImGui context");
+            eprintln!("warning(gtk): unable to initialize Dear ImGui context");
             return;
         }
         imp.ig_context.set(ig_context);
@@ -497,7 +497,7 @@ impl ImguiWidget {
         // so we make it current for ImGui cleanup (`:260-266`).
         imp.gl_area.make_current();
         if let Some(err) = imp.gl_area.error() {
-            eprintln!("warn(gtk): GLArea for Dear ImGui widget failed to realize: {err}");
+            eprintln!("warning(gtk): GLArea for Dear ImGui widget failed to realize: {err}");
             return;
         }
 

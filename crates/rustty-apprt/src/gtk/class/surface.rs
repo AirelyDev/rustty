@@ -1181,6 +1181,22 @@ fn remove_source_id(id: Option<glib::SourceId>, what: &str) {
     }
 }
 
+/// Removes a glib source id and DISCARDS the result — the reference's
+/// `_ = glib.Source.remove(v);` (`surface.zig:3118`, `:3134`, the horizontal
+/// tab-scroll reset source), which logs nothing.
+///
+/// PORT NOTE (task tail-s1b, N203): these two call sites went through
+/// [`remove_source_id`] and so warned `unable to remove pending horizontal
+/// scroll reset source` on a failure the reference ignores silently. That
+/// warning is `dispose`'s (`surface.zig:1936`), not the scroll handler's.
+fn discard_source_id(id: Option<glib::SourceId>) {
+    if let Some(id) = id {
+        // SAFETY: as in `remove_source_id` — a glib-issued id; `g_source_remove`
+        // returns FALSE (and removes nothing) if the source is already gone.
+        let _ = unsafe { glib::ffi::g_source_remove(id.as_raw()) };
+    }
+}
+
 /// PORTS: the `defer priv.im_len = 0` at `surface.zig:1349` — resets the IME
 /// buffer length to 0 on EVERY exit of [`Surface::key_event`] past the IM block.
 /// A RAII guard reproduces the reference's function-scoped `defer` exactly
@@ -2683,9 +2699,13 @@ impl Surface {
             }
 
             let all = gdk4::ContentProvider::new_union(&providers);
-            if let Err(err) = clipboard.set_content(Some(&all)) {
-                log::warn!(target: LOG_SCOPE, "failed to set clipboard content err={err}");
-            }
+            // _ = clipboard.setContent(all);
+            //
+            // PORT NOTE (task tail-s1b, N203): the reference discards the result
+            // and logs nothing; this used to warn `failed to set clipboard
+            // content` on gdk4-rs's `Err` arm, a diagnostic the reference does not
+            // emit.
+            let _ = clipboard.set_content(Some(&all));
 
             // Surface.signals.@"clipboard-write".impl.emit(
             //     self,
@@ -4137,10 +4157,11 @@ impl Surface {
         imp.pending_horizontal_scroll.set(pending);
 
         if pending.abs() < 120.0 {
-            remove_source_id(
-                imp.pending_horizontal_scroll_reset.take(),
-                "pending horizontal scroll reset source",
-            );
+            // if (priv.pending_horizontal_scroll_reset) |v| {
+            //     _ = glib.Source.remove(v);
+            //     priv.pending_horizontal_scroll_reset = null;
+            // }
+            discard_source_id(imp.pending_horizontal_scroll_reset.take());
 
             // The reset source clears the accumulator after 500ms of inactivity
             // (`:3046`). A weak backref keeps the reference's non-owning semantics
@@ -4167,10 +4188,11 @@ impl Surface {
             .upcast_ref::<gtk4::Widget>()
             .activate_action(action_name, None);
 
-        remove_source_id(
-            imp.pending_horizontal_scroll_reset.take(),
-            "pending horizontal scroll reset source",
-        );
+        // if (priv.pending_horizontal_scroll_reset) |v| {
+        //     _ = glib.Source.remove(v);
+        //     priv.pending_horizontal_scroll_reset = null;
+        // }
+        discard_source_id(imp.pending_horizontal_scroll_reset.take());
         imp.pending_horizontal_scroll.set(0.0);
 
         true

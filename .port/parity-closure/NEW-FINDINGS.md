@@ -3152,7 +3152,27 @@ port. With that in place, the `PageList.zig` +1 (and the `embedded.zig` over-cre
 revisited) would be declared and subtracted, so removing `:775` would correctly go RED. This is a gate
 change to `check_log_reconcile.py` and its ledger; it is recorded, not applied, in this round.
 
-**state**: OPEN (remedy proposed, not implemented).
+Update (task tail-s1): the remedy is implemented. `.port/parity-closure/LOG-PORT-ONLY.tsv` declares
+each port-only emission by oracle file, port file, innermost enclosing Rust `fn` (optionally `fn#k`,
+the k-th match, for textually identical `#[cfg]` twins) and a substring of the emission's call text,
+with a kind from a closed set (`r13-handling`, `rust-only-path`, `abi-guard`, `instrumentation`,
+`expansion`, `open-finding`) and a mandatory reason. G-LOGFILE subtracts each from every portmap arm
+that contains its port file before comparing. A row that selects no live emission is RED (stale), one
+that selects several is RED (ambiguous), two rows selecting one emission are RED, a port file outside
+the named reference file's arms is RED, and the row count sits on a two-way `#!port-only-cap` ratchet;
+a missing directive or a malformed row is BLOCKED (exit 3). `expansion` covers the second shape the
+same gap hid: extra static copies of ONE reference site. Self-test arms cover the subtraction, the
+masked-loss case in both states, stale, ambiguous, `fn#k`, duplicate, both cap directions, kind,
+reason, arm membership and five loader cases; mutations removing the subtraction, the ambiguity check
+and the duplicate check each fail their arm. MEASURED on the real tree: with the `PageList.zig` row
+declared the arm reads 23/23, allowance 0, GREEN; deleting the `PageList.zig:775` port
+(`pagelist/mod.rs` `assert_integrity`'s `log::error!`) now turns the gate RED (`reference=23 port=22
+deficit=1 allowance=0`), restored afterwards. The `embedded.zig` over-credit (`d130c504`) was the 3
+port-only D11 range guards in `rustty-apprt-c/src/lib.rs` (`rustty_app_key`, `rustty_surface_key`,
+`rustty_inspector_key`); they are declared, and the row now reads 52/54 with allowance 2 (its other +5
+is the declared `main_c.zig` overlap, N190). The sweep over the whole tree is N190.
+
+**state**: CLOSED by task tail-s1 (`LOG-PORT-ONLY.tsv`, 48 rows at close).
 
 ## N82 — the port's hyperlink hash is SipHash where the reference's is Wyhash (observable through the PSL arm)
 
@@ -3885,6 +3905,166 @@ fix: 0 of 50 of the same sequential runs failed; see the task T-F2 report for th
   `["expected 1, found 2\n"]` vs `[]`.
 - **state**: CLOSED (T-I2).
 
+## N190 — with port-only emissions subtracted, 11 more reference files showed a deficit their surplus had hidden
+
+- **id**: N190. Not in the inventory.
+- **found by**: task tail-s1, the whole-tree sweep that followed N81's fix.
+- **severity**: low (gate honesty; no port behaviour changed). **kind**: gate-gap.
+- **gate**: `.port/tools/gates/check_log_reconcile.py` (G-LOGFILE), `.port/parity-closure/LOG-PORTMAP.tsv`,
+  `.port/parity-closure/LOG-PORT-ONLY.tsv`.
+
+**Method.** Every mapped port emission was paired one to one with a live reference site of the file(s)
+sharing its arm: exact normalised message first, then best similarity >= 0.6. Each port emission left
+unpaired was then read at the pin on both sides. The confirmed port-only lines and extra static copies
+are the 48 rows of `LOG-PORT-ONLY.tsv`. The pairing is a heuristic: a paraphrased counterpart can be
+left unpaired, so only rows verified by reading are declared, and a surplus that could not be verified
+(below) is left counted.
+
+**Files that went RED once the rows were subtracted** — each had a real missing site masked by a
+port-only line or an extra copy. The allowance now equals the measured deficit and its `reason` names
+the missing sites (`LOG-PORTMAP.tsv`):
+
+| Reference file | Before (ref/port, allowance) | After | Missing sites and disposition |
+|---|---|---|---|
+| `src/apprt/embedded.zig` | 54/55, 0 | 54/52, 2 | 7 unrestored with PORT NOTEs (:353 :540 :559 :828 :883 :899 :1983); the arm still carries `main_c.zig`'s 5 emissions (declared overlap, see below) |
+| `src/apprt/gtk/class/global_shortcuts.zig` | 14/12, 2 | 14/9, 5 | :239 :345 :365 :567 :580, infallible catch arms (PORT NOTE at `fn refresh`) |
+| `src/apprt/gtk/class/surface.zig` | 63/62, 1 | 63/57, 6 (corrected by tail-s1b; tail-s1 read 58, 5) | `set_clipboard`'s `failed to set clipboard content` was a fifth, undeclared port-only line (review tail-s1 B1). Missing: three of the four `unable to remove ...` sites (:1065 :1922 :1929 :1936 fold into `remove_source_id`, counted once), :2735 and :2762 (OutOfMemory arms) and :3618 (`bufPrintZ`). :4307 is NOT missing: it pairs with `clipboard_confirmation_confirm` (surface.rs:2526) |
+| `src/apprt/gtk/portal/OpenURI.zig` | 19/13, 6 | 19/12, 7 | :225 :369 :373 :393 :454 :512 :532 (the row's reason already named 7) |
+| `src/apprt/gtk/winproto/wayland/Globals.zig` | 6/10, 0 | 6/4, 2 | :157 :239, infallible in wayland-rs / owned String (PORT NOTEs) |
+| `src/os/systemd.zig` | 10/8, 2 | 10/7, 3 | :34 :188 `bufPrint` arms; :51 is a real gap, N192 |
+| `src/renderer/generic.zig` | 33/26, 7 | 33/25, 8 | 6 DisplayLink-gated + 3 infallible on the Linux arm (9), minus the `opengl/Frame.zig` overlap credit |
+| `src/terminal/c/render.zig` | 5/6, 0 | 5/3, 2 | :376 and :1029 are LIVE, in `rustty-vt-c/src/lib.rs`'s `extern "C"` wrappers, which no portmap arm covers |
+| `src/terminal/stream.zig` | 128/138, 0 | 128/127, 1 | :1291 `error handling action manually`: the port's `vt_raw` returns `bool` and cannot fail |
+| `src/terminal/tmux/viewer.zig` | 19/19, 0 | 19/18, 1 | :1497, inside the reference's TEST helper `testViewer`; the port's is `#[cfg(test)]` (PORT NOTE, S209-F2) |
+| `src/termio/Exec.zig` | 58/57, 1 | 58/54, 4 | :731 :748 :840 :1078, each with a PORT NOTE |
+
+None of these is a simple missing log port that could be restored here: all but two are catch arms of
+calls that cannot fail in the port, and those two are :51 (Linux-only, N192) and the `c/render.zig`
+guards (live, but outside the arm).
+
+**Fixed here.** `src/main_ghostty.zig` was mapped to `crates/rustty-core/src/logging.rs`, whose two
+`log_with` calls are logFn's own transport, not reference `log.*` sites; the arm read 2/5 with
+allowance 3 and a reason ("sentry/crash arms") that did not describe the five sites. All five (:62
+:63 :64 :69 :71) are live in the binary's `main` in `crates/rustty/src/main_rustty.rs` through its
+`log_fn` facade. The arm is remapped there, the two Rust-only `run_gtk` error lines (the reference
+`try`s out of `main`) are declared port-only, and the row reads 5/5, allowance 0. The LEDGER row
+S44-F4 (WAIVED) still carries the old reasoning; it belongs to another area and is not edited here.
+
+**Not handled by LOG-PORT-ONLY.tsv, still counted** (each is a real counterpart of ANOTHER reference
+file, so declaring it port-only would be false):
+- **Shared-file overlap**: `rustty-apprt-c/src/lib.rs` carries `main_c.zig`'s 5 emissions into
+  `embedded.zig`'s arm (+5); `generic/linux_impl.rs` carries `opengl/Frame.zig:65` into `generic.zig`'s
+  Linux arm (+1), and `generic.rs:5926` is `metal/Frame.zig`'s `Failed to present render target` in the
+  macOS arm. The docstring's "counts, does not attribute" limit.
+- **A call site of another file's log helper**: `application.rs` calls `gtk_version::log_version()`
+  and `adw_version::log_version()` (the counterparts of `gtk_version.zig:27` and `adw_version.zig:28`),
+  so `application.zig` is credited +2. It reads 111/96 with allowance 15, while the consolidated PORT
+  NOTE in `Application::new` names 14 sites: up to 3 of its missing sites are unaccounted for.
+  UNVERIFIED site by site.
+- **`rustty-vt-c/src/lib.rs` is in no arm**: its `extern "C"` option guards (`render_state_set`,
+  `render_state_row_set`, `selection_gesture_event_set`, `terminal_set`) are live but uncounted, which
+  is part of why `c/render.zig`, `c/selection_gesture.zig` and `c/terminal.zig` carry allowances.
+- **Unverified surplus left counted**: `src/terminal/tmux/control.zig` reads 19/20 (the extra is the
+  `parse_capture_usize` helper's `failed to match notification`, which may be a fold of several
+  reference sites); `pkg/macos/video/display_link.zig` reads 0/1 (nothing to mask).
+
+Update (task tail-s1b). Every item above is resolved, and every file in the table is at allowance 0:
+- **Shared-file overlap** is no longer counted twice. `LOG-ATTRIBUTION.tsv` (new, capped, self-tested)
+  requires a `default-owner` for any port file in two or more reference files' arms, and `owner` rows move
+  single emissions, plausibility-checked (a literal must match the named file's sites at least as well as
+  any other holder's, or the call must be a `log_*` emitter defined in the named file's arm). MEASURED
+  before: `src/main_c.zig` 27 port against 3 reference sites, `opengl/Frame.zig` 25 against 1; after:
+  3/3 and 1/1.
+- **The `application.zig` credits** (`log_version` ×2 and a split `error opening gtk-custom-css file`)
+  are owned by `gtk_version.zig`/`adw_version.zig` (whose allowances 1 -> 0) and declared `expansion`.
+  `application.zig` therefore RISES 15 -> 18: 93 of 111. Its PORT NOTE names 14 sites and a message
+  pairing leaves a different 18 unmatched; the site list is not re-adjudicated here (the row's reason
+  names both lists, UNVERIFIED) and is the one remaining allowance this batch touched.
+- **vt-c `lib.rs`** is in the arms of the seven `c/*.zig` files whose `extern "C"` guards it holds, each
+  emission owned by its file: `c/render.zig`, `c/build_info.zig`, `c/key_event.zig`, `c/mouse_event.zig`,
+  `c/selection.zig`, `c/selection_gesture.zig` go to 0; `c/terminal.zig` 4 -> 0 (its three
+  `stackFallback` OOM arms are declared absent).
+- **tmux/control.zig** (review N2): `parse_capture_usize`'s reuse of `failed to match notification` is the
+  UD7 R13 handling and is declared port-only (`r13-handling`); 19/19.
+- **display_link.zig** (review N1): cvdisplaylink.rs's one emission is generic.zig:991, now in generic.zig's
+  macOS arm and owned there; display_link.zig reads 0/0.
+- **Test-only reference sites** (review N3): the gate now drops reference sites the reference compiles
+  only into its tests, the mirror of the port side's `#[cfg(test)]` rule; `viewer.zig:1497` and 12
+  others in 6 more files (whose allowances go to 0).
+- **The infallible catch arms** are declared per site and per arm in `LOG-ABSENT-SITES.tsv` (new, capped,
+  RED if the reference line is not a live production site, the named port fn does not exist, or the arm
+  still emits the message), and four sites the reference itself cannot reach go to `LOG-DEAD-SITES.tsv`
+  (`dead-branch`).
+- **The real gaps are ported**: embedded.zig:540, systemd.zig:51 (N192), OpenURI.zig:512 (N204).
+
+Allowances over the whole portmap: 201 over 79 files -> 137 over 53. The remaining 52 files other than
+`application.zig` were outside review tail-s1's list and were not examined, except where one of the
+mechanisms above settled them.
+
+**state**: CLOSED by task tail-s1b.
+
+## N191 — the GTK surface logs a `winproto failed to add subprocess env` warning the reference does not have, and continues where the reference fails
+
+- **id**: N191. Not in the inventory.
+- **found by**: task tail-s1 (N190 sweep).
+- **severity**: low. **kind**: extra-behavior (inverse defect).
+- **oracle**: `src/apprt/gtk/class/surface.zig:1656-1661` at pin 20abdb50a:
+  `try window.winproto().addSubprocessEnv(&env);` — no log, the error propagates out of the env build.
+- **rustty**: `crates/rustty-apprt/src/gtk/class/surface.rs` `default_termio_env`: on `Err` it emits
+  `log::warn!("winproto failed to add subprocess env err={err:?}")` and carries on building the env.
+
+The preserved comment above the port's line quotes a call that exists nowhere in the reference at the
+pin (it is already declared a stale comment in `LOG-TEXT-DIVERGENCES.tsv`, whose reason says "Nothing
+emits it" — that is wrong: `surface.rs` emits it). So the port both says something the reference does
+not and swallows an error the reference propagates. Not fixed here (GTK, another area; the fix changes
+the function's error contract). The emission is declared `open-finding` in `LOG-PORT-ONLY.tsv`, so it is
+not counted as a reference site; delete that row when this is fixed.
+
+Update (task tail-s1b): decided under R1 — NOT changed, for a verified reason. The reference's
+`addSubprocessEnv` can fail only in `x11.zig:331-340` (`bufPrint` of a decimal XID into 64 bytes, which
+cannot overflow, and `env.put`'s OutOfMemory); `noop.zig` and `wayland.zig` return nothing. Every port
+arm of `add_subprocess_env` (`winproto/x11.rs:581`, `wayland.rs:780`, `noop.rs:171`) returns `Ok(())`
+unconditionally. The `Err` arm in `default_termio_env` is therefore unreachable in the port, just as the
+reference's propagation is unreachable in practice, and logging-and-continuing there differs from
+propagating on no reachable path. Mirroring the `try` would make `default_termio_env` fallible and change
+its callers' contract for no observable behaviour. The `LOG-PORT-ONLY.tsv` row is reclassified from
+`open-finding` to `rust-only-path` with this reason.
+
+**state**: CLOSED (task tail-s1b; no behaviour change, reason verified at both sides).
+
+## N192 — `launchedBySystemd` folds the open and the read of `/proc/<ppid>/comm` into one call, so `systemd.zig:51` can never be logged
+
+- **id**: N192. Not in the inventory.
+- **found by**: task tail-s1 (N190 sweep; `systemd.zig` went from 8/10 to 7/10 once the Rust-only
+  MONOTONIC-clock line was subtracted).
+- **severity**: low. **kind**: missing-branch (R1).
+- **oracle**: `src/os/systemd.zig:37-52`: `openFileAbsolute` fails -> `log.err("unable to open '{s}' for
+  reading")` (:38); `readAll` fails -> `log.err("problems reading from '{s}'")` (:51); each breaks false.
+- **rustty**: `crates/rustty-os/src/systemd.rs` `launchedBySystemd`: one `std::fs::read(&comm_path)`,
+  whose every failure logs :38's text.
+
+A read failure after a successful open is reported as an open failure, and :51 has no counterpart. The
+fix is small (open with `File::open`, read at most `TASK_COMM_LEN` bytes with `read`, log each arm with
+its own reference text), but the code is `#[cfg(target_os = "linux")]` and this macOS worktree cannot
+compile it (`cargo check --target aarch64-unknown-linux-gnu` needs a cross C compiler for rustty-os's
+build script), so it is recorded rather than changed blind. `systemd.zig`'s allowance is 3 and names it.
+
+Update (task tail-s1b): FIXED. `launchedBySystemd` opens the file and `readAll`s it into the
+`TASK_COMM_LEN` buffer in two steps (`read_comm`, which returns which step failed), and logs :38's and
+:51's texts from their own arms. Tests (`read_comm_tests`, Linux): `/proc/self/comm` reads; a missing
+file fails at the open; a directory opens and fails at the read (EISDIR). G-LOGFILE: systemd.zig 8/8
+(:34 and :188 are `bufPrint` arms the reference cannot reach, now `LOG-DEAD-SITES.tsv`), allowance 0;
+deleting the :51 line turns it RED (`reference=8 port=7`). Linux verification: see the task report.
+
+Update (task S-1c, the merge of parity-closure `a3e92e1d`): parity-closure's T-G (LEDGER S112-F8) had
+fixed the same gap independently, as `comm_is_systemd` (open, then `readAll` into the `TASK_COMM_LEN`
+buffer, two failure arms) with a test that runs on every host
+(`comm_check_reads_16_bytes_and_has_two_failure_arms`, both arms driven). The merge kept that version
+and dropped this batch's `read_comm` and its Linux-only `read_comm_tests`; nothing of it is left to
+verify on Linux. G-LOGFILE `systemd.zig` still reads 8/8, allowance 0.
+
+**state**: CLOSED by task tail-s1b; its code superseded by S112-F8's at the S-1c merge.
+
 ## N196 — tests passed without testing anything when their environment was missing
 
 - **id**: N196. Not in the inventory. Found by the tail-s3 task (silent-skip audit), 2026-09-23.
@@ -3928,6 +4108,66 @@ fix: 0 of 50 of the same sequential runs failed; see the task T-F2 report for th
   legitimately lacks the corpus. The same reason is why the `.git`-probing xtask tests were
   allow-listed in G-SKIP rather than given a strict variable.
 - **state**: CLOSED by task T-B (commit `fab80ad0`, merged via `tail-b2`): the distcheck cargo steps drop `RUSTTY_REQUIRE_FUZZ_CORPUS`, pinned by a test whose negative control (removal line deleted) fails for the stated reason; confirmed by the T-B and T-B2 reviews.
+
+## N203 — the GTK surface warned on source-removal and clipboard failures the reference discards
+
+- **id**: N203. Not in the inventory.
+- **found by**: task tail-s1b, while making `remove_source_id` a declared facade.
+- **severity**: low. **kind**: extra-behavior (the port says something the reference does not).
+- **oracle**: `src/apprt/gtk/class/surface.zig:3116-3121` and `:3133-3136` (the horizontal tab-scroll
+  handler): `_ = glib.Source.remove(v);` — result discarded, no log. `:4111`: `_ = clipboard.setContent(all);`.
+- **rustty**: `crates/rustty-apprt/src/gtk/class/surface.rs` `scroll_horizontal` routed both removals
+  through `remove_source_id`, which warns `unable to remove pending horizontal scroll reset source` (that
+  text is `dispose`'s, :1936); `set_clipboard` warned `failed to set clipboard content err=` on gdk4-rs's
+  `Err` (review tail-s1 B1 had declared that line `rust-only-path`).
+
+Fixed: `scroll_horizontal` calls a new `discard_source_id` (`g_source_remove`, result ignored), and
+`set_clipboard` discards `set_content`'s result. The two `open-finding` rows and the B1 `rust-only-path`
+row are deleted from `LOG-PORT-ONLY.tsv`; with `remove_source_id` declared a facade, its four remaining
+calls are exactly surface.zig's four `unable to remove` sites. Verified by build and by the gate
+(surface.zig 60/60 after the declared absent and dead sites, allowance 0). No behavioural test: driving
+`scroll_horizontal` needs a realized widget and a touchpad-unit scroll event (UNVERIFIED by test).
+
+**state**: CLOSED by task tail-s1b.
+
+## N204 — OpenURI's `stop_cleanup_timer` panicked on a stale timer where the reference warns
+
+- **id**: N204. Not in the inventory.
+- **found by**: task tail-s1b, restoring `OpenURI.zig:512`.
+- **severity**: low (a panic inside a GTK callback on a path the port's own `cleanup` normally prevents by
+  clearing the field). **kind**: behavioral-difference.
+- **oracle**: `src/apprt/gtk/portal/OpenURI.zig:507-516`: `if (glib.Source.remove(timer) == 0)
+  log.warn("unable to remove cleanup timer source={d}", .{timer});`.
+- **rustty**: `crates/rustty-apprt/src/gtk/portal/open_uri.rs` `stop_cleanup_timer` called glib-rs
+  `SourceId::remove`, whose body is `result_from_gboolean!(g_source_remove(..)).unwrap()`
+  (glib-0.22.8 `src/source.rs:29-36`): a stale id panics. Its PORT NOTE said the call "returns `()` — it
+  has no failure report", which was wrong.
+
+Fixed: `g_source_remove` is called directly and FALSE logs the reference's warning. Test
+`stopping_a_stale_cleanup_timer_warns_instead_of_panicking` drives a live source (removed, no record)
+and a stale one (one `openuri` warn with the reference text). Linux verification: see the task report.
+
+**state**: CLOSED by task tail-s1b.
+
+## N205 — a requested working directory naming a regular file took the wrong diagnostic
+
+- **id**: N205. Not in the inventory.
+- **found by**: task tail-s1b, restoring `embedded.zig:540`.
+- **severity**: low. **kind**: behavioral-difference (log text).
+- **oracle**: `src/apprt/embedded.zig:529-553`: `openDirAbsolute(wd)` (flags `O_RDONLY | O_DIRECTORY |
+  O_CLOEXEC`, plus `O_PATH` on Linux, per Zig 0.16 `dirOpenDirPosix`) fails on a regular file with
+  `error.NotDir` and logs `error opening requested working directory`; the `dir.stat` failure logs
+  `failed to stat requested working directory` (:540).
+- **rustty**: `crates/rustty-apprt/src/embedded.rs` used one `std::fs::metadata`, so a regular file
+  passed the "open", then logged `requested working directory is not a directory`, and :540 had no arm.
+
+Fixed: `requested_working_directory_is_usable` opens with the reference's flags and `fstat`s the open
+descriptor. Tests: a directory (usable, no record), a missing path and a regular file (both fail at the
+open; the file's error is `NotADirectory`). Negative control: without `O_DIRECTORY` the regular-file test
+fails. The stat-failure arm itself is not driven (an `fstat` of a just-opened descriptor does not fail on
+demand): UNVERIFIED by test, present by reading and by G-LOGFILE.
+
+**state**: CLOSED by task tail-s1b.
 
 ## N206 — the URL port and the vaxis CSI parameters use Rust's number parser, not Zig's `std.fmt`
 
@@ -5097,6 +5337,180 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   selects the `.none` windowing protocol, so they fail under `--features gtk,x11,wayland`; built with
   `--features gtk` as their `#[ignore]` reasons say, both pass on the VM (task L-2).
 - **state**: CLOSED (task L-2).
+
+## N310 — G-LOGFILE allowances driven from 131 over 50 files to 17 over 8, each now a port or a machine-checked row
+
+- **id**: N310. Not a ledger row: the S-1c batch (follow-up of N190 and task tail-s1b), branch
+  `tail-s1c` = tail-s1b merged with parity-closure `a3e92e1d`.
+- **severity**: low. **kind**: gate accounting + R1 restorations (missing diagnostics).
+- **before / after**: after the merge the portmap carried 131 allowance units over 50 reference files
+  (tail-s1b alone: 137 over 53; parity-closure's T-A/T-F/T-G had already restored 6). Now 17 over 8,
+  each row's reason names its sites and the open finding that holds it (N312, N313, N314, and
+  `stream_terminal.zig`'s 7, which batch S7-4 restores on its own branch).
+- **ported live** (the reference logs; the port had the call as a comment, most under a stale "no
+  logging facade in this crate" note — `rustty-vt` has logged through `log` since parity S156-F4),
+  each with a log-capture test and a negative control run one at a time (the `log` call disabled
+  with `#[cfg(any())]`; all 33 FAILED for the stated reason, restored): `osc/parsers/kitty_color.zig`
+  :35 :42 :46 :66; `context_signal.zig` :219 :234 :245 :256; `kitty_desktop_notification.zig` :299 :312
+  :322; `hyperlink.zig` :43; `iterm2.zig` :192 (Zig `{t}` = the key's tag name); `kitty/dnd_drop.zig`
+  :31; `kitty/graphics_unicode.zig` :447 :453 :459 :468; `kitty/graphics_exec.zig` :35 :39 :60 :125
+  (:304 `track_pin` and :420 `index` fail only on allocation: ported, not driven, UNVERIFIED by test);
+  `kitty/graphics_command.zig` :281; `kitty/clipboard_write.zig` :151 :236; `apc/glyph/execute.zig` :35;
+  `dcs.zig` :33 :37 :117 (:56 is behind `!tmux_control_mode`, off in this build: ported, not driven);
+  `Terminal.zig` :1437 :4837 :4857 (the alt-screen cursor copy failure is driven through the existing
+  `CURSOR_COPY_TW` tripwire for modes 47, 1047 and 1049); `page.zig` :372 (logged before the panic).
+- **ported live, not testable on macOS** (compile verified only where noted): `KeymapDarwin.zig:117`
+  (`log::debug!` with the empty target of an unscoped `std.log`; `rustty-input` gained its `log`
+  dependency; compiled on macOS, not driven: needs a TIS input source); GTK `application.zig` :1640 :1644
+  :1825 :1874 :1994 and :2197 (`gtk.rs` `register_resources`, which printed `rustty: unable to load
+  resources` outside the facade), and :3024's text restored (`, out of memory` was lost) — Linux-pending.
+- **text restored to the reference** (R13, message text stays faithful): `application.zig` :2462 :2603
+  :3276 say `ignoring new_tab` in `gotoTab`/`moveTab`/`toggleTabOverview`; the port had "corrected" them
+  to `goto_tab`/`move_tab`/`toggle_tab_overview`. Recorded as UD300. Linux-pending.
+- **renamed so the gate counts it**: the CoreText and FreeType variation-axes dumps (face/coretext.zig
+  :124 :151, face/freetype.zig :122 :130) were live since S90-F2/S91-F8, but in a helper named
+  `log_variation_axes`, which G-LOGFILE reads as a one-message `log_*` facade; now `dump_variation_axes`.
+  `font/Atlas.zig:466` printed `warning: ...` (not the logFn shape) and now prints `warn(atlas): ...`;
+  rustty-font has no `log` facade (D1), so the file's bypass cap is 2.
+- **declared, machine-checked**: 59 `LOG-ABSENT-SITES.tsv` rows (catch arms of calls the port cannot
+  fail, or states its types cannot hold: config C API and wasm, Config.zig, DeferredFace, shaper
+  coretext, image.zig on both twins, metal buffer, opengl Buffer.zig, Surface.zig, PageCompression,
+  inspector renderer/termio, stream_handler, search Thread, osc color and kitty_color's appends, and
+  in GTK command_palette, media, wayland and application); 3 `LOG-DEAD-SITES.tsv` rows
+  (`bitmap_allocator.zig:215` in the uncalled private `dumpBitmaps`; `Termio.zig:705`, whose
+  `recordPtyRead` has an EMPTY inferred error set, so the reference's own catch cannot run;
+  `Program.zig:120` in `setUniform`, which nothing names); 2 `facade` rows (resize_overlay's and
+  split_tree's `remove_source_id`); 5 `LOG-PORT-ONLY.tsv` rows (N311 x3, N312's reclassified copy,
+  and PageList `compact`, below).
+- **gate change** (`check_log_reconcile.py`, self-tested; every arm below fails under its own mutation,
+  9 mutations each alone, file restored and hash-checked): (1) the test-only rule now spans the TREE:
+  a `pub fn` every tree-wide reference of which is in test code (fixed point, with its private
+  callees) is test-only — this drops `lib/enum.zig` :138 :154 (`checkGhosttyHEnum`, called only from
+  `test` blocks) and `PageList.zig:3674` (`compact` has no caller outside tests at the pin), and names
+  81 such `pub fn`s in the report; references are matched by NAME (conservative), a quoted name keeps a
+  fn counted, only same-name re-exports are transparent; (2) `LOG-DEAD-SITES.tsv` kind
+  `unreferenced-pub`, verified against the same index; (3) `LOG-PORT-ONLY.tsv` kind
+  `test-only-reference` (the port counterpart of a site the tree rule drops, verified: the match must be
+  a test-only site's message) — used for PageList `compact`, whose port compiles and counts the
+  emission.
+- **update (task S-1d, review S-1c)**:
+  - **F1**: the tree rule classified a name test-only when its only references were inside its own
+    same-name bodies (delegation), i.e. when it had no caller at all (`redrawInspector`, four defs, no
+    test reference, was reported test-only; no site moved). A name now needs at least one caller
+    outside its bodies; with none it stays counted. Self-test arm (delegation fixture) and mutation.
+  - **F2**: `pub fn`s called by comptime declaration reflection (`font/sprite/Face.zig:60-104` walks
+    the `draw*` fns of eight imported files) were invisible to the name index. Every `pub fn` of a
+    file `@import`ed by a file with a production `@typeInfo(T).@"struct".decls` /
+    `std.meta.declarations` line is now reflected: never test-only, never `unreferenced-pub`. 38 files
+    at the pin; the report now names 78 test-only fns, and the same 3 sites drop.
+  - **F5**: the gate's logFn prefix accepted `warn(`/`err(`, which no logFn prints, and rejected
+    `warning(`, the text Zig's `Level.asText()` gives. It now accepts exactly `error|warning|info|
+    debug` with `(<scope>): ` or, for the default scope, `: `. 25 direct prints that carried the wrong
+    prefix are corrected (`warn(` -> `warning(`, `err(` -> `error(`): imgui_widget.rs x6,
+    inspector_widget.rs x1, post_fork.rs x7, cgroup.rs x1, search/thread.rs x4, search/terminal.rs x5,
+    atlas.rs x1. Atlas.zig's two sites go through `log` now (rustty-font gains `log`; the S-1c "D1"
+    reason was a misreading: D1 forbids a vt edge), bypass cap 2 -> 0. tripwire.rs's correct
+    `warning(tripwire)` print is counted for the first time: bypass cap 1. The controller may assign
+    this record a separate id (the N310-N314 block had none left).
+  - **merge**: at the S-1d merge of parity-closure `602e8f2b` the absent rows media.zig:45 (T-D) and
+    c/terminal.zig :475 :527 :538 (S7-4) were deleted (those sites are live), and N312's row (below).
+  - Allowances: 17 over 8 files at tail-s1c -> 3 over 2 (N314) after the merge, F4 and N313.
+- **state**: CLOSED (task S-1c; updated by task S-1d). The remainder is N311 and N314.
+
+## N311 — the GTK apprt logs three errors the reference propagates with `try`
+
+- **id**: N311. Not a ledger row: found by task S-1c adjudicating `application.zig`.
+- **severity**: low. **kind**: behavioral-difference (extra diagnostics; possible double logging).
+- **oracle**: `src/apprt/gtk/class/application.zig:2443-2482` `reloadConfig` `try`s `Config.load`,
+  `core_surface.updateConfig` and `self.core().updateConfig`, with no log.
+- **rustty**: `crates/rustty-apprt/src/gtk/class/application.rs` `reload_config_inner` logs
+  `error loading config on reload err=` and `error updating surface config err=`, and
+  `update_config_app` logs `error updating app config err=`, where each flattens the error into the
+  unit `ApprtError` and returns it.
+- **open question**: whether a caller of the port also logs the (now valueless) error, which would
+  make these duplicates, or whether they are the only record of the error value, which the unit
+  `ApprtError` would otherwise lose. UNVERIFIED either way (GTK code; not traced on Linux).
+- **gate**: declared `open-finding` in `LOG-PORT-ONLY.tsv` (delete the rows in the commit that
+  resolves this).
+- **state**: OPEN.
+
+## N312 — `load_custom_css` reports a read failure as an open failure and keeps going
+
+- **id**: N312. Not a ledger row: found by task S-1c adjudicating `application.zig:1310`.
+- **severity**: low. **kind**: missing-branch (R1).
+- **oracle**: `src/apprt/gtk/class/application.zig:1140-1180` `loadCustomCss`: `openFileAbsolute`
+  fails -> `error opening gtk-custom-css file {s}: {}` (unless an optional file is missing) and
+  `continue`; `readToEndAlloc` fails with `FileTooBig` -> the size warning and `continue`; any OTHER
+  read error -> `return e`, which `propConfig` logs as :1310 `failed to load custom CSS, no custom CSS
+  applied, err={}`, and the remaining paths are not loaded.
+- **rustty**: `load_custom_css` does `std::fs::metadata` then `std::fs::read`, and logs a failed
+  `read` with the OPEN message (:1154's text) and continues, so :1310 is never emitted and the later
+  paths are still loaded.
+- **fix (not applied: GTK code, cannot compile on macOS)**: open with `File::open` (open failure =
+  :1154 arm), read with `read_to_end` bounded by the 5 MiB limit (`FileTooBig` arm), and return any
+  other read error from `load_custom_css`; `prop_config` logs it with :1310's text. Then delete the
+  `load_custom_css#1` `open-finding` row and set application.zig's allowance to 0.
+- **gate**: application.zig allowance 1 names this site.
+- **update (task S-1d, the merge of parity-closure `602e8f2b`)**: parity tail T-D (S49-F3) had already
+  made this change on parity-closure: `load_custom_css` returns the read error, `prop_config` logs :1310
+  (application.rs `prop_config`), and only one `error opening gtk-custom-css file` copy is left. After the
+  merge the `load_custom_css#1` `open-finding` row would have selected that genuine :1154 counterpart and
+  subtracted it (review S-1c F4), so the row is deleted (port-only cap 57 -> 56) and application.zig's
+  allowance is 0.
+- **state**: CLOSED (superseded by T-D S49-F3; records reconciled at the S-1d merge).
+
+## N313 — the Zig build graph's own diagnostics have no counterpart in the cargo/xtask build
+
+- **id**: N313. Not a ledger row: found by task S-1c.
+- **severity**: low. **kind**: gate accounting (decision needed).
+- **sites**: `src/build/Config.zig` :135 (iOS rejected for the full build) :445 (`-Dvt-features`
+  names an unknown feature); `src/build/GhosttyDist.zig:245` (a dist resource in a git checkout);
+  `src/build/combine_archives.zig` :19 :52 and `src/build/wasm_patch_growable_table.zig:23` (helper
+  binaries' usage and exit errors).
+- **port**: the build is cargo + `rustty-build-config` + xtask. The two Config.zig checks and the
+  dist-resource check do not exist there (UNVERIFIED for GhosttyDist's `Resource.exists`); the port
+  has no `combine_archives` binary (libtool/lipo in `archives.rs`); xtask's `wasm-patch-growable-table`
+  reports its usage error as a returned `Err` string printed by xtask's `main`, not as a logFn line.
+- **correction (review S-1c F7)**: this entry said a `build-tooling:` exclusion "stops a future
+  upstream site in them from turning the gate RED". That is false: `#!exclusion-cap files=N sites=M`
+  is an exact two-way ratchet on the excluded files' site count, so a new site in an excluded file is
+  RED, as it is under an allowance.
+- **resolution (task S-1d, controller decision on the reviewer's per-site plan)**:
+  - `Config.zig:135` PORTED: the `rustty` app crate's build.rs `reject_unsupported_target` prints
+    the default-scope line `error: iOS is not a supported target for the full Rustty build; only
+    librustty-vt supports iOS (-Demit-lib-vt)` (R2 rename declared `identity-rename` in
+    LOG-TEXT-DIVERGENCES.tsv) and exits 1. `build_checks::full_build_rejects_ios_only` tests the
+    predicate; `cargo check -p rustty --target aarch64-apple-ios` measured failing with the line.
+  - `Config.zig:445`: LOG-ABSENT-SITES `unrepresentable-state` (cargo rejects an unknown feature
+    itself: "the package 'rustty-vt-c' does not contain this feature", measured).
+  - `GhosttyDist.zig:245`: the port never chooses between a dist and a generated resource (rustty-cli
+    and rustty-apprt build scripts always generate; xtask's dist ships none), so LOG-ABSENT-SITES
+    `unrepresentable-state`.
+  - `combine_archives.zig` :19 :52: `build-tooling:` EXCLUSION (the binary does not exist in the
+    port); exclusion budget 2/2 -> 3/4.
+  - `wasm_patch_growable_table.zig:23` PORTED: xtask's `wasm-patch-growable-table` usage error prints
+    `error: usage: wasm_growable_table <input.wasm> <output.wasm>` (`report_usage_error`) and exits 1
+    (measured), keeping the reference's name, a latent copy-paste (UD301). The tests now assert the
+    `WasmPatchError::Usage` variant.
+  - All six build/* allowance units are 0.
+- **state**: CLOSED (task S-1d).
+
+## N314 — two reference sites are test-only or never compiled, but the gate cannot verify it
+
+- **id**: N314. Not a ledger row: found by task S-1c.
+- **severity**: low. **kind**: gate limit.
+- **`src/terminal/snapshot/fixture.zig:227`**: in `pub fn expectEqual`, which every caller reaches
+  from a `test` block as `test_fixture.expectEqual` (the port's fixture.rs is `#[cfg(test)]`). The
+  tree-wide test-only rule (N310) matches references by NAME, and a different `expectEqual` is written
+  in production code (`src/datastruct/comparison.zig:155-186`), so the rule keeps the site counted, as
+  designed. Closing it needs receiver-aware resolution (only `.expectEqual` after an alias of
+  fixture.zig counts).
+- **`src/unicode/grapheme.zig:221 :233`**: in `pub fn main`, a debug entry point no build step
+  compiles (its doc comment says so). `unreferenced-pub` cannot verify it because `main` is written all
+  over the tree. The port's `main` prints its progress with a plain `eprintln!` and cannot port the
+  uucode comparison (R3; the external parity harness does that).
+- **gate**: fixture.zig allowance 1, grapheme.zig allowance 2, each naming this finding.
+- **state**: OPEN.
 
 ## N315 — S7-5 routing: the render state's contents, through the allocator it is updated with
 

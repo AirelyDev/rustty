@@ -2757,4 +2757,25 @@ mod tests {
             f.background
         );
     }
+
+    // Task S-1c (no reference test): a payload that is not base64 logs the
+    // reference's warning (graphics_command.zig:281) and fails with
+    // `InvalidData`.
+    #[test]
+    fn invalid_base64_payload_logs_a_warning() {
+        let cap = crate::log_capture::start();
+        let result = Parser::parse_string(crate::alloc::Global, b"a=t,f=24,s=1,v=1;!!!!");
+        let messages = cap.messages();
+        drop(cap);
+        assert!(matches!(result, Err(Error::InvalidData)), "{result:?}");
+        assert_eq!(1, messages.len(), "{messages:?}");
+        assert_eq!(log::Level::Warn, messages[0].0);
+        assert_eq!("kitty_gfx", messages[0].1);
+        assert!(
+            messages[0]
+                .2
+                .starts_with("failed to decode base64 payload data: "),
+            "{messages:?}"
+        );
+    }
 }

@@ -259,7 +259,7 @@ impl Face {
 
     // PORT NOTE: `initFace`.
     fn init_face(lib: Library, face: ft::Face, opts: Options) -> Result<Face, Error> {
-        Face::init_face_with(lib, face, opts, |f| f.log_variation_axes(DEBUG_MODE))
+        Face::init_face_with(lib, face, opts, |f| f.dump_variation_axes(DEBUG_MODE))
     }
 
     /// `initFace` with its one fallible diagnostic step as a parameter.
@@ -286,7 +286,7 @@ impl Face {
         // errdefer hb_font.destroy();
         //
         // PORT NOTE (task R13-P, N53): the old comment here claimed no fallible
-        // operation followed. `log_variation_axes` below IS fallible (the
+        // operation followed. `dump_variation_axes` below IS fallible (the
         // reference's `try result.name(&buf)` and `try face.getMMVar()`), so
         // both this errdefer and the `ft_mutex` one below are live. `Face` has
         // no `Drop`, so they are realized explicitly on that error arm.
@@ -313,7 +313,7 @@ impl Face {
         //
         // if (comptime builtin.mode == .Debug) mm: { ... }
         //
-        // Ported live (S91-F8): the body is `log_variation_axes`, which takes the
+        // Ported live (S91-F8): the body is `dump_variation_axes`, which takes the
         // mode flag as a parameter so the release arm is testable; the ONLY
         // production call site passes `DEBUG_MODE`, the direct port of
         // `comptime builtin.mode == .Debug`. Same shape as `face/coretext.rs`.
@@ -496,7 +496,11 @@ impl Face {
     /// face. The reference's `try result.name(&buf)` and `try face.getMMVar()`
     /// PROPAGATE, so this returns `Result` and `init_face` uses `?` on it — the
     /// error paths are part of the ported behaviour, not just the emission.
-    fn log_variation_axes(&self, debug_mode: bool) -> Result<(), Error> {
+    ///
+    /// Named `log_variation_axes` until task S-1c. G-LOGFILE reads a `log_*` fn
+    /// as a one-message logging facade and counts its call site instead of its
+    /// body, so the two reference sites this body ports were counted as one.
+    fn dump_variation_axes(&self, debug_mode: bool) -> Result<(), Error> {
         if !debug_mode {
             return Ok(());
         }
@@ -2943,7 +2947,7 @@ mod tests {
     }
 
     #[test]
-    fn log_variation_axes_is_silent_when_not_debug_mode() -> Result<(), Error> {
+    fn dump_variation_axes_is_silent_when_not_debug_mode() -> Result<(), Error> {
         let mut lib: Library = Library::init()?;
         let mut face: Face = Face::init(
             lib,
@@ -2956,7 +2960,7 @@ mod tests {
         )?;
 
         let cap = crate::log_capture::start();
-        face.log_variation_axes(false)?;
+        face.dump_variation_axes(false)?;
         let messages = cap.messages();
         drop(cap);
 
@@ -2974,7 +2978,7 @@ mod tests {
     /// would still pass if the port emitted the header twice, dropped every
     /// axis but one, or emitted at the wrong level.
     #[test]
-    fn log_variation_axes_emits_the_header_and_one_record_per_axis() -> Result<(), Error> {
+    fn dump_variation_axes_emits_the_header_and_one_record_per_axis() -> Result<(), Error> {
         let mut lib: Library = Library::init()?;
         let mut face: Face = Face::init(
             lib,
@@ -2987,7 +2991,7 @@ mod tests {
         )?;
 
         let cap = crate::log_capture::start();
-        face.log_variation_axes(true)?;
+        face.dump_variation_axes(true)?;
         let messages = cap.messages();
         drop(cap);
 

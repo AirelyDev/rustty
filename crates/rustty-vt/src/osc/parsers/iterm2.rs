@@ -4,10 +4,12 @@
 
 use crate::osc::{Command, Parser, State};
 
-// PORT NOTE: `const log = std.log.scoped(.osc_iterm2);` — the reference scopes a
-// logger for this module. rustty-vt does not thread a logging dependency; the
-// single `log.debug` call below is preserved as a verbatim comment at its use
-// site.
+// const log = std.log.scoped(.osc_iterm2);
+// The scope, carried through the `log` facade as `target: LOG_SCOPE`.
+// CORRECTION (task S-1c): a PORT NOTE here said "rustty-vt does not thread a
+// logging dependency", and the one `log.debug` call below was ported as a
+// comment. The crate logs through the `log` facade, so the call is live.
+const LOG_SCOPE: &str = "osc_iterm2";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Key {
@@ -94,6 +96,17 @@ const MAP: &[(&str, Key)] = &[
     ("StealFocus", Key::StealFocus),
     ("UnicodeVersion", Key::UnicodeVersion),
 ];
+
+impl Key {
+    /// PORT NOTE: Zig's `{t}` formats an enum by its tag name, which is the
+    /// `MAP` name for every `Key` (the map is built from the tag names).
+    fn tag_name(self) -> &'static str {
+        MAP.iter()
+            .find(|(_, k)| *k == self)
+            .map(|(name, _)| *name)
+            .expect("every Key is in MAP")
+    }
+}
 
 /// PORT NOTE: `map.get(key_str)` with `std.ascii.eqlIgnoreCase` — ASCII
 /// case-insensitive lookup over the comptime `MAP`.
@@ -263,6 +276,7 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut Comman
         | Key::StealFocus
         | Key::UnicodeVersion => {
             // log.debug("unimplemented OSC 1337: {t}", .{key});
+            log::debug!(target: LOG_SCOPE, "unimplemented OSC 1337: {}", key.tag_name());
             parser.command = Command::Invalid;
             None
         }
@@ -518,5 +532,31 @@ mod tests {
             Command::ReportPwd { value } => assert_eq!(b"abc123", value.as_slice()),
             _ => unreachable!(),
         }
+    }
+
+    // Task S-1c (no reference test): an unimplemented key logs the reference's
+    // debug line (iterm2.zig:192) with the key's tag name, whatever its case
+    // on the wire, and every Key has a tag name.
+    #[test]
+    fn osc_1337_unimplemented_key_logs_its_tag_name() {
+        for (name, key) in super::MAP {
+            assert_eq!(*name, key.tag_name());
+        }
+        let mut p: Parser = Parser::init(None);
+        let cap = crate::log_capture::start();
+        for ch in "1337;setbadgeformat=abc".bytes() {
+            p.next(ch);
+        }
+        assert!(p.end(Some(b'\x1b')).is_none());
+        let messages = cap.messages();
+        drop(cap);
+        assert_eq!(
+            vec![(
+                log::Level::Debug,
+                "osc_iterm2".to_string(),
+                "unimplemented OSC 1337: SetBadgeFormat".to_string(),
+            )],
+            messages
+        );
     }
 }

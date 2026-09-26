@@ -990,3 +990,26 @@ fn dnd_state_routes_through_the_allocator_handle() {
         assert!(slot.is_none(), "a failed create leaves the slot empty");
     });
 }
+
+// Task S-1c (no reference test): malformed metadata is dropped with the
+// reference's debug line (dnd_drop.zig:31) under the `kitty_dnd` scope, and
+// nothing is written or allocated.
+#[test]
+fn dnd_malformed_metadata_is_dropped_with_a_debug_line() {
+    let mut h = Harness::init();
+    let cap = crate::log_capture::start();
+    let event = h.command(b"z=1", None).unwrap();
+    let messages = cap.messages();
+    drop(cap);
+    assert!(event.is_none());
+    h.expect_output(b"");
+    assert!(h.state.is_none());
+    assert_eq!(
+        vec![(
+            log::Level::Debug,
+            "kitty_dnd".to_string(),
+            "dropping malformed OSC 72 metadata".to_string(),
+        )],
+        messages
+    );
+}
