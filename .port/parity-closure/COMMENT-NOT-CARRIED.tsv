@@ -35,7 +35,7 @@
 # stripped, verbatim), reason (individual, >= 6 words).
 #
 # Two-way ratchet: the directive must equal the row count; a missing directive BLOCKS.
-#!not-carried-cap entries=36
+#!not-carried-cap entries=37
 oracle_file	line	class	decl	evidence	text	reason
 lib_vt.zig	505	no-counterpart	std_options_debug_io	.port/phase-4/NON_PORTS.md#`src/lib_vt.zig` `pub const std_options_debug_io`	Guards release builds against accidentally reintroducing the std	Line 505 of the doc on `pub const std_options_debug_io` (lib_vt.zig:505-513), a release-build guard over Zig's `std.Options.debug_io`; phase-4 NON-PORT (Rust has no `std.Options`/`std.Io` vtable to guard), so the guard has no Rust counterpart.
 lib_vt.zig	508	no-counterpart	std_options_debug_io	.port/phase-4/NON_PORTS.md#`src/lib_vt.zig` `pub const std_options_debug_io`	`std.Options.debug_io` defaults to `std.Io.Threaded`, and anything	Line 508 of the doc on `pub const std_options_debug_io` (lib_vt.zig:505-513), a release-build guard over Zig's `std.Options.debug_io`; phase-4 NON-PORT (Rust has no `std.Options`/`std.Io` vtable to guard), so the guard has no Rust counterpart.
@@ -73,3 +73,4 @@ apprt/gtk/class/global_shortcuts.zig	396	gag-prose	-	.port/phase-3/NON_PORTS.md#
 apprt/gtk/class/global_shortcuts.zig	406	gag-prose	-	.port/phase-3/NON_PORTS.md#G3b NOT-CARRIED — stripped gag prose	When in Rome, do as the Romans do, I guess...?	Closing quip of the XDG-portal note (global_shortcuts.zig:406); no technical content. The note's facts are carried verbatim in `global_shortcuts.rs` `request`.
 apprt/gtk/winproto/BlurRegion.zig	58	gag-prose	-	.port/phase-3/NON_PORTS.md#G3b NOT-CARRIED — stripped gag prose	NOTE(pluiedev): CSDs are a f--king mistake.	Opening line of the CSD note in `calcForWindow` (BlurRegion.zig:58-61): an insult with no fact. The rest of the note (CSD windows are ~30% bigger internally, lines :59-61) is carried verbatim in `blur_region.rs`.
 apprt/gtk/class/application.zig	3486	gag-prose	-	.port/phase-3/NON_PORTS.md#G3b NOT-CARRIED — stripped gag prose	Abusing integers to be enums and booleans is a terrible idea, C.	MIXED-CARRIED: "Confusingly, `isActive` returns 1 when active," — closing jab of the isActive note in `activeWindow`'s sort callback (application.zig:3484-3486); the joke is dropped and the note's fact (1 when active, 0 means equality) is carried verbatim in `find_active_window`.
+apprt/gtk/winproto/x11.zig	486	gag-prose	-	.port/phase-3/NON_PORTS.md#G3b NOT-CARRIED — stripped gag prose	I know this is really ugly. X11 is ugly. I consider it apropos.	Closing quip of the bufferType alignment note (x11.zig:482-486); opinion only, no fact. The note's facts (multi-pointer to bytes aligned to the element type) are carried verbatim in `x11.rs` next to `FORMAT_32`.

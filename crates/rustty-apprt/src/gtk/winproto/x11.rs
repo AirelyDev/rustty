@@ -79,8 +79,6 @@ const FORMAT_32: c_int = 32;
 // The buffer type has to be a multi-pointer to bytes
 // *aligned to the element type* (very important,
 // otherwise you'll read garbage!)
-//
-// I know this is really ugly. X11 is ugly. I consider it apropos.
 
 /// `XkbUseCoreKbd` (`X11/XKBlib.h`, via `X11/extensions/XKB.h`) — the core-keyboard
 /// device spec (`x11.zig:95`). `x11-dl` does not export it, so it is spelled here.
