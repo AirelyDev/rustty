@@ -326,11 +326,21 @@ pub unsafe fn command_data(command_: Command, data: c_int, out: *mut c_void) -> 
 /// PORT NOTE: the `.change_window_title_str` arm of `commandDataTyped`.
 ///
 /// # Safety
-/// `command_` must be non-null (`command_.?`); `out` must point to writable
-/// `*const u8` storage.
+/// `command_`, if non-null, must be a live command pointer; `out` must point
+/// to writable `*const u8` storage.
 unsafe fn command_data_change_window_title_str(command_: Command, out: *mut *const u8) -> bool {
     // const command = command_.?;
-    // SAFETY: `command_` is non-null per the caller contract (`.?`).
+    // PORT NOTE: reference defect (R13), N323. The header documents
+    // `command` as "may be NULL", and `rustty_osc_end` returns NULL for every
+    // invalid or unfinished OSC, but the reference unwraps it with `.?`: a
+    // panic in ReleaseSafe and undefined behaviour in ReleaseFast when a C
+    // caller asks a NULL command for its title. `commandType` answers NULL
+    // with `.invalid`; this answers it with `false` ("the data is not
+    // available"), the function's own failure value, and never dereferences.
+    if command_.is_null() {
+        return false;
+    }
+    // SAFETY: non-null, so a live command pointer (caller contract).
     let command = unsafe { &*command_ };
     // switch (command.*) { .change_window_title => |v| out.* = v.ptr, else => return false }
     match command {
@@ -537,6 +547,30 @@ mod tests {
         });
     }
 
+    // Parity tail S7-7, N323 (R13; no reference test): `commandData` on a NULL
+    // command (what `end` returns for an invalid OSC; the header says the
+    // command "may be NULL") answers `false` and leaves `out` alone, where
+    // the reference's `command_.?` traps.
+    #[test]
+    fn command_data_on_a_null_command_is_false() {
+        let mut p: Parser = std::ptr::null_mut();
+        assert_eq!(Result::Success, unsafe { new(None, &mut p) });
+        unsafe { next(p, b'2') };
+        let cmd = unsafe { end(p, 0x07) };
+        assert!(cmd.is_null(), "an unfinished OSC has no command");
+        let sentinel: *const u8 = std::ptr::dangling();
+        let mut title: *const u8 = sentinel;
+        assert!(!unsafe {
+            command_data(
+                cmd,
+                CommandData::ChangeWindowTitleStr as c_int,
+                &mut title as *mut *const u8 as *mut c_void,
+            )
+        });
+        assert_eq!(sentinel, title, "out is untouched");
+        unsafe { free(p) };
+    }
+
     // test "change window title" {
     #[test]
     fn change_window_title() {
@@ -642,5 +676,239 @@ mod tests {
             )],
             "the S174-F2 warning was not routed through sys::log_fn"
         );
+    }
+
+    // Parity tail S7-7 (Rust-only, no reference test): a C-created parser
+    // grows the color request list through the caller's allocator
+    // (`parseColor(parser.alloc, ..)`): none for two requests (the
+    // preallocated slots), the shelf array and shelf 0 for the third. The
+    // command owns them for the header's lifetime and they are freed at the
+    // next call on the parser (`reset`, `next`); `free` returns everything.
+    // T3: the reference frees the lists at the next `reset` or `free`, not at
+    // `next`; the port ends the command's borrow of the parser's buffer at
+    // every call, as the header's lifetime says.
+    #[test]
+    fn c_parser_color_requests_route_through_the_caller_allocator() {
+        use rustty_vt::alloc::testing::CountingAllocator;
+
+        let counting = CountingAllocator::over_heap();
+        let calloc = counting.allocator();
+        let mut p: Parser = std::ptr::null_mut();
+        assert_eq!(Result::Success, unsafe { new(Some(&calloc), &mut p) });
+        assert_eq!(1, counting.alloc_calls.get(), "the parser itself");
+
+        for &b in b"104;1;2" {
+            unsafe { next(p, b) };
+        }
+        let cmd = unsafe { end(p, 0x07) };
+        assert_eq!(osc::CommandKey::ColorOperation, unsafe {
+            command_type(cmd)
+        });
+        assert_eq!(
+            1,
+            counting.alloc_calls.get(),
+            "two requests fit the prealloc"
+        );
+
+        unsafe { reset(p) };
+        for &b in b"104;1;2;3" {
+            unsafe { next(p, b) };
+        }
+        let cmd = unsafe { end(p, 0x07) };
+        assert_eq!(osc::CommandKey::ColorOperation, unsafe {
+            command_type(cmd)
+        });
+        // SAFETY: `cmd` is the live command (no call on the parser since).
+        match unsafe { &*cmd } {
+            osc::Command::ColorOperation { requests, .. } => assert_eq!(3, requests.count()),
+            other => panic!("expected color_operation, got {other:?}"),
+        }
+        assert_eq!(
+            3,
+            counting.alloc_calls.get(),
+            "+ the shelf array and shelf 0"
+        );
+        assert_eq!(0, counting.free_calls.get(), "owned by the live command");
+
+        unsafe { reset(p) };
+        assert_eq!(
+            2,
+            counting.free_calls.get(),
+            "the next call ends the command"
+        );
+
+        // `next` is a call on the parser too: the command's borrow of the
+        // buffer ends before the byte lands, and its lists are freed.
+        for &b in b"104;1;2;3" {
+            unsafe { next(p, b) };
+        }
+        let cmd = unsafe { end(p, 0x07) };
+        assert!(!cmd.is_null());
+        assert_eq!(5, counting.alloc_calls.get());
+        unsafe { next(p, b';') };
+        assert_eq!(4, counting.free_calls.get(), "next ended the command");
+        unsafe { free(p) };
+        assert_eq!(0, counting.live_bytes.get());
+        assert_eq!(counting.alloc_calls.get(), counting.free_calls.get());
+    }
+
+    // Parity tail S7-7, N263: a title is the parser's own sentinel-terminated
+    // bytes (the reference's `v.ptr` into the capture), not a copy: parsing it
+    // allocates nothing beyond the parser, and the string reads back through
+    // `commandData` until the next call on the parser.
+    #[test]
+    fn c_parser_title_is_borrowed_not_copied() {
+        use rustty_vt::alloc::testing::CountingAllocator;
+
+        let counting = CountingAllocator::over_heap();
+        let calloc = counting.allocator();
+        let mut p: Parser = std::ptr::null_mut();
+        assert_eq!(Result::Success, unsafe { new(Some(&calloc), &mut p) });
+        for &b in b"2;a borrowed title" {
+            unsafe { next(p, b) };
+        }
+        let cmd = unsafe { end(p, 0x07) };
+        let mut title: *const u8 = std::ptr::null();
+        assert!(unsafe {
+            command_data(
+                cmd,
+                CommandData::ChangeWindowTitleStr as c_int,
+                &mut title as *mut *const u8 as *mut c_void,
+            )
+        });
+        // SAFETY: `p` is live; the buffer is inside the parser's storage.
+        let buffer = unsafe { (*p).parser.buffer.as_ptr_range() };
+        assert!(buffer.contains(&title), "the title is the parser's buffer");
+        // SAFETY: valid until the next call on `p`.
+        let span = unsafe { std::ffi::CStr::from_ptr(title as *const std::os::raw::c_char) };
+        assert_eq!(b"a borrowed title", span.to_bytes());
+        // Introspection is not "a call on the parser": the command stays.
+        assert_eq!(osc::CommandKey::ChangeWindowTitle, unsafe {
+            command_type(cmd)
+        });
+        assert_eq!(1, counting.alloc_calls.get(), "only the parser itself");
+        unsafe { free(p) };
+        assert_eq!(0, counting.live_bytes.get());
+    }
+
+    /// One pass of the OSC C-API scenario over `failing`: every command kind
+    /// that allocates through the parser (the allocating capture and its
+    /// growth, the color list past its preallocation, the kitty color list),
+    /// with `end`, introspection and `reset` after each. Returns whether `new`
+    /// failed.
+    fn osc_sweep_once(failing: &rustty_vt::alloc::testing::FailingAllocator, what: &str) -> bool {
+        let calloc = failing.allocator();
+        let mut p: Parser = std::ptr::null_mut();
+        match unsafe { new(Some(&calloc), &mut p) } {
+            Result::Success => {}
+            Result::OutOfMemory => {
+                assert!(p.is_null(), "{what}: no parser on OUT_OF_MEMORY");
+                assert_eq!(failing.allocated_bytes.get(), failing.freed_bytes.get());
+                return true;
+            }
+            other => panic!("{what}: unexpected result {other:?}"),
+        }
+        let long = if cfg!(miri) { 64 } else { osc::MAX_BUF * 3 };
+        let mut corpus: Vec<Vec<u8>> = vec![
+            b"0;a title".to_vec(),
+            b"4;1;?;2;?;3;?;4;?;5;?;6;?;7;?;8;?".to_vec(),
+            b"10;?;?;?;?;?;?;?".to_vec(),
+            b"104;1;2;3;4;5".to_vec(),
+            b"21;foreground=?;background=#ffffff;cursor=;2=?;3=rgb:10/20/30".to_vec(),
+            b"52;c;aGVsbG8=".to_vec(),
+            b"8;id=x;https://example.com".to_vec(),
+        ];
+        let mut osc52 = b"52;c;".to_vec();
+        osc52.extend(std::iter::repeat_n(b'A', long));
+        corpus.push(osc52);
+        if cfg!(miri) {
+            corpus.truncate(5);
+            corpus.push(b"52;c;aGk=".to_vec());
+        }
+        for input in &corpus {
+            for &b in input {
+                unsafe { next(p, b) };
+            }
+            let cmd = unsafe { end(p, 0x07) };
+            let kind = unsafe { command_type(cmd) };
+            let mut title: *const u8 = std::ptr::null();
+            if unsafe {
+                command_data(
+                    cmd,
+                    CommandData::ChangeWindowTitleStr as c_int,
+                    &mut title as *mut *const u8 as *mut c_void,
+                )
+            } {
+                assert_eq!(osc::CommandKey::ChangeWindowTitle, kind);
+                // SAFETY: valid until the next call on `p`.
+                let span =
+                    unsafe { std::ffi::CStr::from_ptr(title as *const std::os::raw::c_char) };
+                assert_eq!(b"a title", span.to_bytes(), "{what}");
+            }
+            unsafe { reset(p) };
+        }
+        unsafe { free(p) };
+        assert_eq!(
+            failing.allocated_bytes.get(),
+            failing.freed_bytes.get(),
+            "{what}: every byte returned"
+        );
+        assert_eq!(
+            failing.allocations.get(),
+            failing.deallocations.get(),
+            "{what}: every allocation freed"
+        );
+        false
+    }
+
+    // Parity tail S7-7 (Rust-only; the reference has no C-API failure test): a
+    // `FailingAllocator` that refuses the n-th allocation, for every n the
+    // scenario reaches, and then every n-th remap. The process never aborts,
+    // `new` answers OUT_OF_MEMORY or SUCCESS, every refusal takes the
+    // reference's path (capture fixed fallback or invalid, color catch with an
+    // empty list, kitty warn-and-continue), and every byte comes back.
+    #[test]
+    fn osc_allocation_failure_sweep_through_the_c_api() {
+        use rustty_vt::alloc::testing::{Config, FailingAllocator};
+
+        let mut n = 0usize;
+        let mut new_failures = 0usize;
+        loop {
+            let failing = FailingAllocator::over_heap(Config {
+                fail_index: n,
+                ..Config::default()
+            });
+            new_failures += usize::from(osc_sweep_once(&failing, &format!("alloc n={n}")));
+            if !failing.has_induced_failure.get() {
+                break;
+            }
+            n += 1;
+            assert!(n < 10_000, "the sweep must terminate");
+        }
+        // The parser, the captures and their growth, the color shelves and the
+        // kitty lists: well past the parser's own allocation.
+        let min_swept = if cfg!(miri) { 4 } else { 12 };
+        assert!(n > min_swept, "only {n} allocations were swept");
+        assert_eq!(1, new_failures, "only n = 0 fails `new`");
+
+        let clean = FailingAllocator::over_heap(Config::default());
+        assert!(!osc_sweep_once(&clean, "remap clean run"));
+        assert!(!clean.has_induced_failure.get());
+        let remaps = clean.resize_index.get();
+        assert!(remaps > 0, "the corpus makes no remap/resize call");
+        for n in 0..=remaps {
+            let failing = FailingAllocator::over_heap(Config {
+                resize_fail_index: n,
+                ..Config::default()
+            });
+            assert!(
+                !osc_sweep_once(&failing, &format!("remap n={n}")),
+                "remap n={n}: new never remaps"
+            );
+            assert!(
+                failing.resize_index.get() <= n,
+                "remap n={n}: no remap/resize succeeded past the refusal"
+            );
+        }
     }
 }
