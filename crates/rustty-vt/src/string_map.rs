@@ -70,13 +70,13 @@ impl StringMap {
         // var map = self.map;
         // map.deinit(alloc);
         // PORT NOTE: the reference frees the `alloc`-owned string and the pin
-        // map's two lists. In Rust both are owning containers, so taking
-        // `self` by value and letting them drop here is the faithful
-        // equivalent; the `alloc` parameter is preserved for signature parity
-        // but the `Global` seam is the implicit `Vec` allocator.
-        let _ = alloc;
+        // map's two lists. The pin map's lists are bound to the allocator they
+        // grew through (parity tail S7-8, N330), and `deinit` asserts that it
+        // is `alloc`. The string is a Rust-heap `Vec`: every caller passes
+        // the Rust heap handle (N330's residual).
         drop(self.string);
-        drop(self.map);
+        let mut map = self.map;
+        map.deinit(alloc);
     }
 
     /// Returns an iterator that yields the next match of the given regex.
