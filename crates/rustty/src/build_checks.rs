@@ -64,6 +64,17 @@ pub fn nix_shell_error(
     )
 }
 
+/// `build/Config.zig:132-141` (task S-1d, NEW-FINDINGS N313): "The full Ghostty
+/// build no longer supports iOS; Fail early with a clear message rather than
+/// partway through the build." The reference's condition is `os.tag == .ios and
+/// !emit_lib_vt`; this crate IS the full build (librustty-vt is the separate
+/// `rustty-vt-c` crate), so only the target OS decides. `target_os` is cargo's
+/// `CARGO_CFG_TARGET_OS`. The build script logs the reference's
+/// `std.log.err(...)` and fails (`return error.UnsupportedTarget`).
+pub fn full_build_rejects_target(target_os: &str) -> bool {
+    target_os == "ios"
+}
+
 /// `GhosttyExe.zig:43-49`: on Windows the executable gets the Windows GUI
 /// subsystem (`src/main.rs`'s `windows_subsystem` attribute) and
 /// `dist/windows/rustty.rc` (icon, manifest, version info) compiled in. This
@@ -111,6 +122,16 @@ mod tests {
     use super::*;
 
     /// Each early return of `checkNixShell`, then the error case.
+    #[test]
+    fn full_build_rejects_ios_only() {
+        // `Config.zig:134`: `.ios` fails the full build; every other target the
+        // port builds for does not.
+        assert!(full_build_rejects_target("ios"));
+        for os in ["macos", "linux", "freebsd", "windows", "android", ""] {
+            assert!(!full_build_rejects_target(os), "{os}");
+        }
+    }
+
     #[test]
     fn nix_shell_check_matches_the_reference_guards() {
         assert_eq!(nix_shell_error("macos", true, true, false), None);

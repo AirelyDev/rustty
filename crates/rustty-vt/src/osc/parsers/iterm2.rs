@@ -2,12 +2,14 @@
 //!
 //! PORT STATUS: ported — full parse logic + tests (vt-6).
 
-use crate::osc::{Command, Parser, State};
+use crate::osc::{Command, Parser, State, ZStr};
 
-// PORT NOTE: `const log = std.log.scoped(.osc_iterm2);` — the reference scopes a
-// logger for this module. rustty-vt does not thread a logging dependency; the
-// single `log.debug` call below is preserved as a verbatim comment at its use
-// site.
+// const log = std.log.scoped(.osc_iterm2);
+// The scope, carried through the `log` facade as `target: LOG_SCOPE`.
+// CORRECTION (task S-1c): a PORT NOTE here said "rustty-vt does not thread a
+// logging dependency", and the one `log.debug` call below was ported as a
+// comment. The crate logs through the `log` facade, so the call is live.
+const LOG_SCOPE: &str = "osc_iterm2";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Key {
@@ -95,6 +97,17 @@ const MAP: &[(&str, Key)] = &[
     ("UnicodeVersion", Key::UnicodeVersion),
 ];
 
+impl Key {
+    /// PORT NOTE: Zig's `{t}` formats an enum by its tag name, which is the
+    /// `MAP` name for every `Key` (the map is built from the tag names).
+    fn tag_name(self) -> &'static str {
+        MAP.iter()
+            .find(|(_, k)| *k == self)
+            .map(|(name, _)| *name)
+            .expect("every Key is in MAP")
+    }
+}
+
 /// PORT NOTE: `map.get(key_str)` with `std.ascii.eqlIgnoreCase` — ASCII
 /// case-insensitive lookup over the comptime `MAP`.
 fn map_get(key_str: &[u8]) -> Option<Key> {
@@ -108,7 +121,7 @@ fn map_get(key_str: &[u8]) -> Option<Key> {
 
 /// Parse OSC 1337
 /// https://iterm2.com/documentation-escape-codes.html
-pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut Command> {
+pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<Command<'a>> {
     // assert(parser.state == .@"1337");
     debug_assert!(parser.state == State::S1337);
 
@@ -130,25 +143,27 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut Comman
     // mirroring the trailing-`0` (and middle-`0`) sentinel handling exactly.
     let data = cap.trailing_mut(&mut parser.buffer);
 
-    let (key_str, value_): (&[u8], Option<Vec<u8>>) = {
+    let (key_str, value_): (ZStr<'a>, Option<ZStr<'a>>) = {
         match data.iter().position(|&b| b == b'=') {
             None => {
                 // .{ data[0 .. data.len - 1 :0], null }
-                (&data[0..data.len() - 1], None)
+                let data: &'a [u8] = data;
+                (ZStr::sentinel(data, 0, data.len() - 1), None)
             }
             Some(index) => {
                 data[index] = 0;
+                let data: &'a [u8] = data;
                 // .{ data[0..index :0], data[index + 1 .. data.len - 1 :0] }
-                let value = data[index + 1..data.len() - 1].to_vec();
-                (&data[0..index], Some(value))
+                let value = ZStr::sentinel(data, index + 1, data.len() - 1);
+                (ZStr::sentinel(data, 0, index), Some(value))
             }
         }
     };
 
-    let key = match map_get(key_str) {
+    let key = match map_get(&key_str) {
         Some(k) => k,
         None => {
-            parser.command = Command::Invalid;
+            // parser.command = .invalid;
             return None;
         }
     };
@@ -158,7 +173,7 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut Comman
             let mut value = match value_ {
                 Some(v) => v,
                 None => {
-                    parser.command = Command::Invalid;
+                    // parser.command = .invalid;
                     return None;
                 }
             };
@@ -166,37 +181,38 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut Comman
             // Sending a blank entry to clear the clipboard is an OSC 52-ism,
             // make sure that is invalid here.
             if value.is_empty() {
-                parser.command = Command::Invalid;
+                // parser.command = .invalid;
                 return None;
             }
 
             // base64 value must be prefixed by a colon
             if value[0] != b':' {
-                parser.command = Command::Invalid;
+                // parser.command = .invalid;
                 return None;
             }
 
             // value = value[1..value.len :0];
-            value = value[1..value.len()].to_vec();
+            value = ZStr::from_bytes_with_nul(&value.as_bytes_with_nul()[1..]);
 
             // Sending a blank entry to clear the clipboard is an OSC 52-ism,
             // make sure that is invalid here.
             if value.is_empty() {
-                parser.command = Command::Invalid;
+                // parser.command = .invalid;
                 return None;
             }
 
             // Sending a '?' to query the clipboard is an OSC 52-ism, make sure
             // that is invalid here.
             if value.len() == 1 && value[0] == b'?' {
-                parser.command = Command::Invalid;
+                // parser.command = .invalid;
                 return None;
             }
 
             // It would be better to check for valid base64 data here, but that
             // would mean parsing the base64 data twice in the "normal" case.
 
-            parser.command = Command::ClipboardContents {
+            // parser.command = .{ .clipboard_contents = .{ ... } };
+            Some(Command::ClipboardContents {
                 kind: b'c',
                 // PORT NOTE (fidelity): reference assigns `value` ([:0]u8) to
                 // `data` ([:0]const u8) directly — RAW bytes, not lossy.
@@ -204,28 +220,27 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut Comman
                 // (Zig field default `terminator: Terminator = .st` — OSC 1337
                 // Copy never carries a read response, so the default rides.)
                 terminator: crate::osc::Terminator::St,
-            };
-            Some(&mut parser.command)
+            })
         }
 
         Key::CurrentDir => {
             let value = match value_ {
                 Some(v) => v,
                 None => {
-                    parser.command = Command::Invalid;
+                    // parser.command = .invalid;
                     return None;
                 }
             };
             if value.is_empty() {
-                parser.command = Command::Invalid;
+                // parser.command = .invalid;
                 return None;
             }
-            parser.command = Command::ReportPwd {
+            // parser.command = .{ .report_pwd = .{ .value = value } };
+            Some(Command::ReportPwd {
                 // PORT NOTE (fidelity): reference assigns `value` ([:0]u8) to
                 // `value` ([:0]const u8) directly — RAW bytes, not lossy.
                 value,
-            };
-            Some(&mut parser.command)
+            })
         }
 
         Key::AddAnnotation
@@ -263,7 +278,8 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut Comman
         | Key::StealFocus
         | Key::UnicodeVersion => {
             // log.debug("unimplemented OSC 1337: {t}", .{key});
-            parser.command = Command::Invalid;
+            log::debug!(target: LOG_SCOPE, "unimplemented OSC 1337: {}", key.tag_name());
+            // parser.command = .invalid;
             None
         }
     }
@@ -468,7 +484,7 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(Some(b'\x1b')).unwrap().clone();
+        let cmd = p.end(Some(b'\x1b')).unwrap();
         assert!(matches!(cmd, Command::ClipboardContents { .. }));
         match cmd {
             Command::ClipboardContents { kind, data, .. } => {
@@ -512,11 +528,37 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(Some(b'\x1b')).unwrap().clone();
+        let cmd = p.end(Some(b'\x1b')).unwrap();
         assert!(matches!(cmd, Command::ReportPwd { .. }));
         match cmd {
             Command::ReportPwd { value } => assert_eq!(b"abc123", value.as_slice()),
             _ => unreachable!(),
         }
+    }
+
+    // Task S-1c (no reference test): an unimplemented key logs the reference's
+    // debug line (iterm2.zig:192) with the key's tag name, whatever its case
+    // on the wire, and every Key has a tag name.
+    #[test]
+    fn osc_1337_unimplemented_key_logs_its_tag_name() {
+        for (name, key) in super::MAP {
+            assert_eq!(*name, key.tag_name());
+        }
+        let mut p: Parser = Parser::init(None);
+        let cap = crate::log_capture::start();
+        for ch in "1337;setbadgeformat=abc".bytes() {
+            p.next(ch);
+        }
+        assert!(p.end(Some(b'\x1b')).is_none());
+        let messages = cap.messages();
+        drop(cap);
+        assert_eq!(
+            vec![(
+                log::Level::Debug,
+                "osc_iterm2".to_string(),
+                "unimplemented OSC 1337: SetBadgeFormat".to_string(),
+            )],
+            messages
+        );
     }
 }

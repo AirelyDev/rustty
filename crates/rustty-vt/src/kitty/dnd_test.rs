@@ -58,8 +58,8 @@ impl Harness {
             Global,
             &mut self.output,
             &osc::KittyDndProtocol {
-                metadata: metadata.to_vec(),
-                payload: payload.map(|p| p.to_vec()),
+                metadata,
+                payload,
                 terminator: osc::Terminator::St,
             },
         )
@@ -738,7 +738,7 @@ fn dnd_bel_terminator_echoed_in_responses() {
         Global,
         &mut h.output,
         &osc::KittyDndProtocol {
-            metadata: b"t=q".to_vec(),
+            metadata: b"t=q",
             payload: None,
             terminator: osc::Terminator::Bel,
         },
@@ -911,9 +911,9 @@ fn dnd_over_cap_registration_list_never_completes() {
 fn dnd_state_routes_through_the_allocator_handle() {
     use crate::alloc::testing::{with_handle, Config, CountingAllocator, FailingAllocator};
 
-    let cmd = |metadata: &[u8], payload: Option<&[u8]>| osc::KittyDndProtocol {
-        metadata: metadata.to_vec(),
-        payload: payload.map(|p| p.to_vec()),
+    let cmd = |metadata: &'static [u8], payload: Option<&'static [u8]>| osc::KittyDndProtocol {
+        metadata,
+        payload,
         terminator: osc::Terminator::St,
     };
     let ev = dnd::MoveEvent {
@@ -989,4 +989,27 @@ fn dnd_state_routes_through_the_allocator_handle() {
         assert!(failing.has_induced_failure.get());
         assert!(slot.is_none(), "a failed create leaves the slot empty");
     });
+}
+
+// Task S-1c (no reference test): malformed metadata is dropped with the
+// reference's debug line (dnd_drop.zig:31) under the `kitty_dnd` scope, and
+// nothing is written or allocated.
+#[test]
+fn dnd_malformed_metadata_is_dropped_with_a_debug_line() {
+    let mut h = Harness::init();
+    let cap = crate::log_capture::start();
+    let event = h.command(b"z=1", None).unwrap();
+    let messages = cap.messages();
+    drop(cap);
+    assert!(event.is_none());
+    h.expect_output(b"");
+    assert!(h.state.is_none());
+    assert_eq!(
+        vec![(
+            log::Level::Debug,
+            "kitty_dnd".to_string(),
+            "dropping malformed OSC 72 metadata".to_string(),
+        )],
+        messages
+    );
 }

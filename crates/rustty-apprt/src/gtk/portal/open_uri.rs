@@ -688,13 +688,26 @@ fn response_received(inner: &Rc<Inner>, object_path: &str, params: &glib::Varian
 ///
 /// PORTS: `OpenURI.zig:506-515` `stopCleanupTimer`.
 //
-// PORT NOTE (task-14d-3, UNRESTORED SITE `OpenURI.zig:512`): the reference tests
-// `if (glib.Source.remove(timer) == 0) log.warn("unable to remove cleanup timer
-// source={d}", .{timer})`. glib-rs's `SourceId::remove` returns `()` — it has no
-// failure report — so there is no arm for the warning.
+// PORT NOTE (task tail-s1b, N204): this called glib-rs's `SourceId::remove`,
+// which the earlier note described as returning `()` with "no failure report".
+// It does return `()`, but only because it `unwrap()`s `g_source_remove`'s
+// result: a stale id PANICKED (glib-0.22.8 `source.rs:29-36`), inside a GTK
+// callback, where the reference warns `unable to remove cleanup timer
+// source={d}` and carries on. `g_source_remove` is now called directly, as
+// `class/surface.rs`'s `remove_source_id` does, and its FALSE is the
+// reference's `== 0` arm.
 fn stop_cleanup_timer(state: &mut State) {
+    // if (self.cleanup_timer) |timer| {
     if let Some(timer) = state.cleanup_timer.take() {
-        timer.remove();
+        let raw = timer.as_raw();
+        // if (glib.Source.remove(timer) == 0) {
+        // SAFETY: `raw` is a source id glib issued for this timer; passing it to
+        // `g_source_remove` is always valid (FALSE if the source is already gone).
+        if unsafe { glib::ffi::g_source_remove(raw) } == glib::ffi::GFALSE {
+            // log.warn("unable to remove cleanup timer source={d}", .{timer});
+            log::warn!(target: LOG_SCOPE, "unable to remove cleanup timer source={raw}");
+        }
+        // self.cleanup_timer = null;  (the `take()` above; `SourceId` has no `Drop`)
     }
 }
 
@@ -776,6 +789,54 @@ mod tests {
     use super::*;
 
     use crate::log_capture;
+
+    /// N204 / `OpenURI.zig:512`. A cleanup timer whose source is already gone
+    /// must WARN with the reference's text and carry on; glib-rs's
+    /// `SourceId::remove` panicked here. The live arm is checked too: a source
+    /// that still exists is removed without a diagnostic.
+    #[test]
+    fn stopping_a_stale_cleanup_timer_warns_instead_of_panicking() {
+        use glib::translate::FromGlib;
+
+        let cap = log_capture::start();
+
+        // Live source: removed, no diagnostic.
+        let live = glib::timeout_add_seconds_once(3600, || {});
+        let mut state = State {
+            entries: HashMap::new(),
+            cleanup_timer: Some(live),
+        };
+        stop_cleanup_timer(&mut state);
+        assert!(state.cleanup_timer.is_none());
+        assert_eq!(cap.messages(), Vec::new());
+
+        // Stale source: removed behind the timer's back first.
+        let stale = glib::timeout_add_seconds_once(3600, || {});
+        let raw = stale.as_raw();
+        // SAFETY: a glib-issued id, removed exactly once here.
+        assert_ne!(
+            unsafe { glib::ffi::g_source_remove(raw) },
+            glib::ffi::GFALSE
+        );
+        // SAFETY: re-wrapping the (now stale) raw id; `SourceId` has no `Drop`.
+        let stale_again = unsafe { glib::SourceId::from_glib(raw) };
+        let mut state = State {
+            entries: HashMap::new(),
+            cleanup_timer: Some(stale_again),
+        };
+        stop_cleanup_timer(&mut state);
+        assert!(state.cleanup_timer.is_none());
+        let messages = cap.messages();
+        drop(cap);
+        assert_eq!(
+            vec![(
+                log::Level::Warn,
+                "openuri".to_string(),
+                format!("unable to remove cleanup timer source={raw}"),
+            )],
+            messages
+        );
+    }
 
     /// Build the `(u@a{sv})` payload the portal's `Response` signal carries
     /// (`OpenURI.zig:481`).

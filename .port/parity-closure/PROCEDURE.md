@@ -284,7 +284,8 @@ point is that they become proposable upstream rather than lost in a task report.
      Filename inference gets at least five entries wrong — `global.zig` ports to
      `rustty-apprt/src/lib.rs`, `renderer/Thread.zig` to `rustty-core/src/renderer_seam.rs`
      (a different crate), `OpenGL.zig`'s head to `opengl/gl/sys.rs`, `main_ghostty.zig` to
-     `rustty-core/src/logging.rs`, and both renderer twin pairs split two ways. **Adding a
+     the binary's `rustty/src/main_rustty.rs` (it was mapped to `rustty-core/src/logging.rs`,
+     logFn's transport, until N190), and both renderer twin pairs split two ways. **Adding a
      LOG row for a reference file with no portmap entry turns the gate RED**; add the entry
      in the same commit, and take that as the prompt to say where the file really ports to.
    - **Platform twins are separate arms (`|`), never summed.** A file's score is the
@@ -368,6 +369,46 @@ point is that they become proposable upstream rather than lost in a task report.
      emission carrying a declared-dead site's message is RED.** That is the only check in the
      gate that can catch the port saying something the reference does not, which is precisely
      what "restore the call under the comment" would produce here.
+   - **A diagnostic the reference does not have is not a site either, and an uncounted one
+     is worse than a missing one.** A port-only emission (an R13 handling line, a D11 range
+     guard, a Rust-only error arm, instrumentation) or an extra static copy of ONE reference
+     site (an unrolled `inline for`, a `#[cfg]` twin, a call split across two arms, the 12
+     inlined `logUnsupportedOnce` calls) used to be counted, and because the gate clamps a
+     surplus it could not even be seen: it credited its file with a site that was not there
+     and masked the next real loss. Deleting the ported `PageList.zig:775` left the gate green
+     (N81), and the sweep that followed found such lines hiding missing sites in 11 more files
+     (N190). Declare every one in `LOG-PORT-ONLY.tsv` — by enclosing fn and call text, never by
+     line — in the commit that adds it; the gate subtracts it and RED-flags a row that selects
+     none or several emissions, and the list is capped. **Never raise an allowance to absorb a
+     port-only line, and never let one cancel a restored site.**
+   - **An allowance is the last resort, not the ledger of why a site is missing (task
+     tail-s1b).** Each missing reference site now has a checked home, and prose in an
+     allowance's `reason` is only for what none of them fits:
+     - a site the reference compiles only into its tests is not counted at all (the gate
+       applies the port side's `#[cfg(test)]` rule to the reference; since task S-1c also
+       across files: a `pub fn` that only test code anywhere in the reference names). Where
+       the port compiles such a fn anyway, its emission is a `test-only-reference` row in
+       `LOG-PORT-ONLY.tsv`; a `pub fn` nothing names is an `unreferenced-pub` dead site.
+       "Test-only" means "no production caller in the reference tree": a module other
+       programs import (libghostty-vt re-exports `PageList`) is still judged by the tree's
+       own callers. Two things keep a fn counted that the name index cannot see through:
+       a caller that only delegates under the same name (it is no caller), and a file that
+       walks declarations by reflection (`@typeInfo(T).@"struct".decls`), which makes every
+       `pub fn` of the files it imports reachable (task S-1d);
+     - a direct print that reproduces logFn must carry the line Zig prints:
+       `error(<scope>): `, `warning(<scope>): `, `info(<scope>): `, `debug(<scope>): `, or
+       `<level>: ` for the default scope; `warn(`/`err(` are not counted (task S-1d);
+     - a site the reference never reaches goes in `LOG-DEAD-SITES.tsv`;
+     - a site the reference reaches on a condition the port (or one platform arm) cannot
+       produce — the catch arm of an allocation or a `bufPrint` the port writes as `format!`,
+       a guard on a null pointer a typed closure cannot hold, a site `comptime`-gated off
+       that platform — goes in `LOG-ABSENT-SITES.tsv`, per arm, naming the port fn; the gate
+       REDs a row whose arm still emits the message;
+     - an emission in a Rust file that ports SEVERAL reference files counts for one of them,
+       declared in `LOG-ATTRIBUTION.tsv` (`default-owner` / `owner`); a helper that folds
+       several reference sites (`remove_source_id`) is a `facade` whose call sites count.
+     Before declaring, check that the site is not simply unported: `systemd.zig:51`,
+     `embedded.zig:540` and `OpenURI.zig:512` looked like "infallible" arms and were real gaps.
    - **Ratchet EVERY number a stage can move, including the escape hatch.** Completing the
      portmap (N15) created a new lever: an EXCLUSION retires a reference file instead of
      reconciling it, so it erases that file's whole deficit. Reclassifying

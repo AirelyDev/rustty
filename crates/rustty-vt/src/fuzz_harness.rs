@@ -49,7 +49,16 @@ pub fn fuzz_osc(input: &[u8]) {
     // const alloc = fuzz_alloc.allocator();
     let mut backing = vec![0u8; OSC_FUZZ_ALLOC_BYTES];
     let fba = FixedBufferAllocator::init(&mut backing);
-    let alloc = ZigAllocatorRef::new(&fba);
+    let zig_alloc = ZigAllocatorRef::new(&fba);
+    // PORT NOTE (parity tail S7-7): the OSC parser's allocator is the runtime
+    // handle; the fixed-buffer allocator reaches it through the C allocator
+    // ABI (`Allocator.fromZig`), so the capture and the color lists draw from
+    // the fixed buffer, as the reference's do. `backing`, `fba`, `zig_alloc`
+    // and `c_alloc` outlive `p` (declared after them, dropped first).
+    let c_alloc = rustty_lib::allocator::Allocator::from_zig(&zig_alloc);
+    // SAFETY: `c_alloc` is a valid `RusttyAllocator` over `zig_alloc`, and it
+    // outlives every allocation made through the handle (see above).
+    let alloc = unsafe { crate::alloc::VtAllocator::from_c(core::ptr::NonNull::from(&c_alloc)) };
 
     // Use the first byte to select the terminator variant.
     let selector = input[0];

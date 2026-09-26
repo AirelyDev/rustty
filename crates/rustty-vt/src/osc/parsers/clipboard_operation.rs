@@ -3,11 +3,11 @@
 //! PORT STATUS: ported — full parse logic + tests (vt-6; e03475c0c terminator
 //! capture for OSC 52 read responses).
 
-use crate::osc::{Command, Parser, Terminator};
+use crate::osc::{Command, Parser, Terminator, ZStr};
 
 /// Parse OSC 52
 // pub fn parse(parser: *Parser, terminator_ch: ?u8) ?*Command {
-pub fn parse<'a>(parser: &'a mut Parser, terminator_ch: Option<u8>) -> Option<&'a mut Command> {
+pub fn parse<'a>(parser: &'a mut Parser, terminator_ch: Option<u8>) -> Option<Command<'a>> {
     // assert(parser.state == .@"52");
     debug_assert!(parser.state == crate::osc::State::S52);
     let cap = if let Some(c) = parser.capture.as_mut() {
@@ -25,12 +25,13 @@ pub fn parse<'a>(parser: &'a mut Parser, terminator_ch: Option<u8>) -> Option<&'
         parser.state = crate::osc::State::Invalid;
         return None;
     }
+    let command;
     if data[0] == b';' {
-        parser.command = Command::ClipboardContents {
+        command = Command::ClipboardContents {
             kind: b'c',
             // data[1 .. data.len() - 1 :0]
             // PORT NOTE (fidelity): reference `[:0]const u8` RAW bytes.
-            data: data[1..data.len() - 1].to_vec(),
+            data: ZStr::sentinel(data, 1, data.len() - 1),
             // .terminator = .init(terminator_ch),
             terminator: Terminator::init(terminator_ch),
         };
@@ -43,16 +44,16 @@ pub fn parse<'a>(parser: &'a mut Parser, terminator_ch: Option<u8>) -> Option<&'
             parser.state = crate::osc::State::Invalid;
             return None;
         }
-        parser.command = Command::ClipboardContents {
+        command = Command::ClipboardContents {
             kind: data[0],
             // data[2 .. data.len() - 1 :0]
             // PORT NOTE (fidelity): reference `[:0]const u8` RAW bytes.
-            data: data[2..data.len() - 1].to_vec(),
+            data: ZStr::sentinel(data, 2, data.len() - 1),
             // .terminator = .init(terminator_ch),
             terminator: Terminator::init(terminator_ch),
         };
     }
-    Some(&mut parser.command)
+    Some(command)
 }
 
 #[cfg(test)]
@@ -75,7 +76,7 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(None).unwrap().clone();
+        let cmd = p.end(None).unwrap();
         assert!(matches!(cmd, crate::osc::Command::ClipboardContents { .. }));
         match cmd {
             crate::osc::Command::ClipboardContents {
@@ -103,7 +104,7 @@ mod tests {
         }
 
         // const cmd = p.end(0x07).?.*;
-        let cmd = p.end(Some(0x07)).unwrap().clone();
+        let cmd = p.end(Some(0x07)).unwrap();
         assert!(matches!(cmd, crate::osc::Command::ClipboardContents { .. }));
         match cmd {
             crate::osc::Command::ClipboardContents { terminator, .. } => {
@@ -123,7 +124,7 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(None).unwrap().clone();
+        let cmd = p.end(None).unwrap();
         assert!(matches!(cmd, crate::osc::Command::ClipboardContents { .. }));
         match cmd {
             crate::osc::Command::ClipboardContents { kind, data, .. } => {
@@ -147,8 +148,7 @@ mod tests {
         // The PORT NOTE that stood here said "no Zig allocator is threaded for
         // the test (the captured bytes are identical either way)"; the bytes
         // are, the code path is not.
-        let backend = rustty_lib::allocator::GlobalZigAllocator;
-        let alloc = rustty_lib::allocator::ZigAllocatorRef::new(&backend);
+        let alloc = crate::alloc::Global;
         let mut p: Parser = Parser::init(Some(alloc));
 
         let input = "52;s;?";
@@ -156,7 +156,7 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(None).unwrap().clone();
+        let cmd = p.end(None).unwrap();
         assert!(matches!(cmd, crate::osc::Command::ClipboardContents { .. }));
         match cmd {
             crate::osc::Command::ClipboardContents { kind, data, .. } => {
@@ -176,7 +176,7 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(None).unwrap().clone();
+        let cmd = p.end(None).unwrap();
         assert!(matches!(cmd, crate::osc::Command::ClipboardContents { .. }));
         match cmd {
             crate::osc::Command::ClipboardContents { kind, data, .. } => {

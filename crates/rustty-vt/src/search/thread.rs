@@ -279,7 +279,7 @@ impl Thread {
         // };
         if let Err(err) = self.thread_main_() {
             // In the future, we should expose this on the thread struct.
-            eprintln!("warn(search_thread): search thread err={:?}", err);
+            eprintln!("warning(search_thread): search thread err={:?}", err);
         }
     }
 
@@ -319,7 +319,10 @@ impl Thread {
                     );
                 }
                 Err(err) => {
-                    eprintln!("warn(search_thread): error setting QoS class err={:?}", err);
+                    eprintln!(
+                        "warning(search_thread): error setting QoS class err={:?}",
+                        err
+                    );
                 }
             }
         }
@@ -747,7 +750,7 @@ impl Thread {
                     Ok(m) => m,
                     Err(err) => {
                         eprintln!(
-                            "warn(search_thread): error collecting viewport matches err={:?}",
+                            "warning(search_thread): error collecting viewport matches err={:?}",
                             err
                         );
                         break 'viewport;
@@ -923,7 +926,10 @@ impl Thread {
         // self.drainMailbox() catch |err|
         //     log.warn("error draining mailbox err={}", .{err});
         if let Err(err) = self.drain_mailbox() {
-            eprintln!("warn(search_thread): error draining mailbox err={:?}", err);
+            eprintln!(
+                "warning(search_thread): error draining mailbox err={:?}",
+                err
+            );
         }
 
         // return .rearm;

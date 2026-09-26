@@ -2470,6 +2470,112 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - proposed fix:    declare `surfaceDrop` as `callconv(.c) c_int` and return `1` after `moveSplit`, `0` on each early return.
 - upstream status: not reported
 
+### UD300 — three GTK "surface is not in a window" warnings name `new_tab` for another action
+- kind:            latent (copy-paste in a message)
+- upstream project: ghostty
+- severity:        low (a log line names the wrong action)
+- reference:       `src/apprt/gtk/class/application.zig` at 20abdb50a: `gotoTab` :2462, `moveTab` :2603 and `toggleTabOverview` :3276 each log `surface is not in a window, ignoring new_tab`, the text of `newTab`'s own warning (:2683); the sibling `moveTabToNewWindow` (:2626) names its own action.
+- defect:          when the surface has no enclosing window, the warning names `new_tab` although the ignored action is `goto_tab`, `move_tab` or `toggle_tab_overview`.
+- ReleaseSafe:     misleading diagnostic, no behavioural effect.
+- ReleaseFast:     the same.
+- reachability:    any of the three actions targeting a surface that is not (or no longer) inside a `Window`.
+- port handling:   faithful (R13: message text stays faithful). The port had used the "corrected" names; task S-1c restored the reference text in `crates/rustty-apprt/src/gtk/class/application.rs` `goto_tab`, `move_tab` and `toggle_tab_overview`, each with a comment citing this entry. Not in `docs/ghostty-bug-fixes.md` (no fix in the port).
+- parity row(s):   NEW-FINDINGS N310.
+- test:            none (GTK widget tree; the text is a string literal, compile-checked on Linux only). UNVERIFIED on Linux.
+- proposed fix:    `ignoring goto_tab`, `ignoring move_tab`, `ignoring toggle_tab_overview`.
+
+- upstream status: not reported
+
+### UD301 — `wasm_patch_growable_table`'s usage line names a `wasm_growable_table` binary
+- kind:            latent (copy-paste in a message)
+- upstream project: ghostty
+- severity:        low (a usage line names the wrong program)
+- reference:       `src/build/wasm_patch_growable_table.zig:9` (doc) and `:23` `std.log.err("usage: wasm_growable_table <input.wasm> <output.wasm>", .{})` at 20abdb50a; the build step names the executable `wasm_patch_growable_table` (`src/build/GhosttyLibVt.zig:73`).
+- defect:          the usage error names a program that does not exist; the binary is `wasm_patch_growable_table`.
+- ReleaseSafe:     misleading diagnostic, no behavioural effect.
+- ReleaseFast:     the same.
+- reachability:    running the build helper with the wrong argument count (only the build graph runs it, with two arguments).
+- port handling:   faithful (R13: message text stays faithful): xtask's `report_usage_error` prints the reference's line (task S-1d). Not in `docs/ghostty-bug-fixes.md`.
+- parity row(s):   NEW-FINDINGS N313.
+- test:            none for the text (xtask's `wasm_patch_rejects_*` tests assert the usage path); the line was measured (`cargo run -p xtask -- wasm-patch-growable-table onlyone`: the line, exit 1).
+- proposed fix:    `usage: wasm_patch_growable_table <input.wasm> <output.wasm>` in both places.
+- upstream status: not reported
+
+### UD310 — an OSC 10-13 whose seventh color request fails to allocate leaks the list it grew
+- kind:            leak
+- upstream project: ghostty
+- severity:        low (reachable only with a failing caller allocator)
+- reference:       src/terminal/osc/parsers/color.zig `parseGetSetDynamicColor` (`var result: List = .{};` with no `errdefer result.deinit(alloc);`, unlike its three siblings `parseGetSetAnsiColor`, `parseResetAnsiColor`, `parseResetDynamicColor`), at 20abdb50a
+- defect:          `result` is a `SegmentedList(Request, 2)`: the third request grows the shelf array and shelf 0, the seventh a new shelf array and shelf 1. When that seventh `try result.addOne(alloc)` fails, the error returns without freeing `result`, and the caller's `catch` (color.zig `parse`) substitutes an empty list. Only OSC 10, 11, 12 and 13 reach a seventh request: each value advances with `Dynamic.next()`, which ends at 19, so OSC 14 takes at most six values and OSC 15-19 fewer.
+- ReleaseSafe:     the shelf array and shelf 0 leak (the testing allocator reports them); the OSC is otherwise handled as the reference intends (an empty request list).
+- ReleaseFast:     the same leak.
+- reachability:    libghostty-vt embedders whose `GhosttyAllocator` can fail, through the OSC parser (`ghostty_osc_*`) or the terminal stream, on an OSC 10-13 with seven or more values from the program in the terminal.
+- port handling:   fixed (R13): the port's list frees itself when the error drops it; `crates/rustty-vt/src/osc/parsers/color.rs` (PORT NOTE: reference defect (R13), UD310). Listed in `docs/ghostty-bug-fixes.md`.
+- parity row(s):   none; found by task S7-7 (LEDGER S174-F3). NEW-FINDINGS N321.
+- test:            `osc::s7_7_tests::dynamic_color_list_growth_failure_frees_what_it_grew` (rustty-vt): `FailingAllocator` refusing allocation 2 on `10;?;?;?;?;?;?;?`; allocated == freed and the catch's log ran. Negative control (the list forgotten on the error path): allocated 28 vs freed 0.
+- proposed fix:    add `errdefer result.deinit(alloc);` after `var result: List = .{};` in `parseGetSetDynamicColor`.
+- upstream status: not reported
+
+### UD311 — `SegmentedList.growCapacity` cleans up a failed multi-shelf growth by freeing an undefined pointer
+- kind:            latent
+- upstream project: ghostty (vendored Zig 0.15.2 `std.segmented_list`)
+- severity:        low (latent)
+- reference:       src/datastruct/segmented_list.zig `growCapacity`: `errdefer while (i > old_shelf_count) : (i -= 1) { allocator.free(new_dynamic_segments[i][0..shelfSize(i)]); };`, at 20abdb50a
+- defect:          when the allocation of shelf `i` fails, the cleanup frees `new_dynamic_segments[i]`, the slot of the shelf that failed, which was never written, and stops before `old_shelf_count`, so the first new shelf leaks. It runs only when one call adds two or more shelves and a later one fails.
+- ReleaseSafe:     `new_dynamic_segments[i]` is `undefined` (0xaa… bytes): an invalid free (the general-purpose allocator panics; a C embedder's allocator does whatever it does with a wild pointer), plus the leak.
+- ReleaseFast:     the free of an uninitialized pointer is undefined behaviour, plus the leak.
+- reachability:    none today. The callers only `addOne`/`append`, which add at most one shelf per call: src/terminal/osc/parsers/color.zig (`List`) and src/font/Collection.zig:698 (`SegmentedList(EntryOrAlias, 0)`). A future `setCapacity`/`growCapacity` with a large capacity would reach it.
+- port handling:   the port frees exactly the shelves the call allocated: `crates/rustty-datastruct/src/segmented_list.rs` `grow_capacity` (PORT NOTE, UD311). No behaviour change on any reachable path, so not listed in `docs/ghostty-bug-fixes.md`.
+- parity row(s):   none; found by task S7-7 porting the file. NEW-FINDINGS N322.
+- test:            `segmented_list::tests::a_refused_shelf_in_a_multi_shelf_growth_frees_the_new_shelves` (rustty-datastruct), exact call log; negative control (cleanup removed): the shelves leak and the log differs.
+- proposed fix:    `errdefer while (i > old_shelf_count) { i -= 1; allocator.free(new_dynamic_segments[i][0..shelfSize(i)]); };` (free indices `old_shelf_count..i`).
+- upstream status: not reported
+
+### UD312 — `ghostty_osc_command_data` unwraps a NULL command, which `ghostty_osc_end` returns
+- kind:            crash
+- upstream project: ghostty
+- severity:        medium (C API)
+- reference:       src/terminal/c/osc.zig `commandDataTyped`: `const command = command_.?;`; `end` (osc.zig `Parser.end`) returns null for `.start`, `.invalid` and every parser that rejects its input; at 20abdb50a
+- defect:          `ghostty_osc_command_data` dereferences its command without a NULL check. The header contradicts itself: `ghostty_osc_command_data` documents `command` as "may be NULL", while `ghostty_osc_end` is documented to never return NULL ("Invalid commands will return a command with type GHOSTTY_OSC_COMMAND_INVALID"), yet it does. A caller that trusts the header passes `end`'s result straight to `command_data`.
+- ReleaseSafe:     panic (null unwrap).
+- ReleaseFast:     a NULL dereference (undefined behaviour).
+- reachability:    libghostty-vt embedders using the OSC parser API: `ghostty_osc_end` on a parser fed nothing (or any rejected OSC from the program in the terminal), then `ghostty_osc_command_data(cmd, GHOSTTY_OSC_DATA_CHANGE_WINDOW_TITLE_STR, &out)`.
+- port handling:   fixed (R13): a NULL command answers `false` and leaves `out` untouched, as `commandType` answers NULL with `.invalid`; `crates/rustty-vt-c/src/osc.rs` (PORT NOTE: reference defect (R13), UD312). Listed in `docs/ghostty-bug-fixes.md`.
+- parity row(s):   none; found by task S7-7's C-API failure sweep. NEW-FINDINGS N323.
+- test:            `osc::tests::command_data_on_a_null_command_is_false` (rustty-vt-c); negative control (guard removed): the test process aborts on the NULL dereference.
+- proposed fix:    `const command = command_ orelse return false;` in `commandDataTyped`; alternatively make `end` honour its header (return a command of type `.invalid` instead of null).
+- upstream status: not reported
+
+### UD313 — a second `ghostty_osc_end` on the same color or kitty-color OSC leaks the first request list
+- kind:            leak
+- upstream project: ghostty
+- severity:        low (C API)
+- reference:       src/terminal/osc/parsers/color.zig `parse` and src/terminal/osc/parsers/kitty_color.zig `parse` assign `parser.command = .{ ... }` without freeing the list the previous command holds; `Parser.end` leaves `parser.state` as it was, so a second `end` reparses; only `reset`/`deinit` free the list; at 20abdb50a
+- defect:          calling `ghostty_osc_end` twice on the same OSC (the header does not forbid it, and `end` changes no state) builds a second list and drops the first one's allocation: for OSC 4/5/10-19/104/110-119 the shelf array and shelf 0 once there are three or more requests, for OSC 21 the `ArrayList` buffer.
+- ReleaseSafe:     the first list leaks.
+- ReleaseFast:     the same leak.
+- reachability:    libghostty-vt embedders using the OSC parser API (`ghostty_osc_end` twice without `ghostty_osc_reset`). The terminal stream is not affected: it resets the parser on every OSC start.
+- port handling:   fixed (R13): the parser's `color_requests`/`kitty_color` storage is replaced with `insert`, which frees the previous list; `crates/rustty-vt/src/osc/parsers/color.rs` and `kitty_color.rs` (PORT NOTE: reference defect (R13), UD313). Listed in `docs/ghostty-bug-fixes.md`.
+- parity row(s):   none; found by the S7-7 review (F4).
+- test:            `osc::tests::end_twice_frees_the_first_list` (rustty-vt-c): OSC 4 with three requests and OSC 21, `end` twice over a counting allocator; the first list is freed by the second `end` and `free` returns everything. Negative controls (the previous list forgotten before each `insert`, the reference's behaviour): the test fails for each.
+- proposed fix:    in both `parse` functions, free the previous command's list before assigning `parser.command` (for example call the `reset` cleanup switch first), or have `end` move the state to `.invalid` so a second `end` returns null.
+- upstream status: not reported
+
+### UD315 — after a render-state update fails on an allocation, the next update leaves the rows it did not rebuild stale or empty
+- kind:            functional (evident intent: a successful update must describe the current terminal), and, by reading, UB (UNVERIFIED)
+- upstream project: ghostty
+- severity:        medium (UB-class by reading, UNVERIFIED; reachable only with a failing caller allocator)
+- reference:       src/terminal/render.zig:373-745 (`beginUpdate`: `self.rows`/`cols`/`viewport_pin` are stored at :417-419 before the `row_data.resize` `try` at :469; each page's dirty flag is cleared at :580 and each row's at :630/:638/:646 before `try builder.row(...)`; `t.flags.dirty` and the screen's dirty flags are cleared only at the end, :743-744), :1140-1344 (`RowBuilder.row`: `try cells.resize` at :1181, `try b.pending_styles.append` at :1260/:1275/:1326, `try arena_alloc.dupe` at :1285, `try ensureTotalCapacity` at :1340), and src/terminal/c/render.zig:214-233 (`update`/`begin_update` return `.out_of_memory` and nothing else), at 20abdb50a
+- defect:          When an allocation fails part way through `beginUpdate`, the call returns `error.OutOfMemory` after it has already consumed dirty state it did not act on: the new dimensions and viewport pin are stored, the pages and rows it reached have their dirty flags cleared (the failing row included, since its flag is cleared before `builder.row` runs), and rows added by a resize exist with no cells. The next `beginUpdate` compares against those stored values, so unless the terminal changed again it is not a full redraw: it rebuilds only rows whose page or row is still dirty, and leaves the others stale (their previous frame) or empty (0 cells), and it can report `.false` or `.partial` for them. By reading at the pin; the port, which is line-for-line the same, was MEASURED (below). Worse, by reading, UNVERIFIED (review S7-5 F1): when the failure happens INSIDE `RowBuilder.row`, the failing row has already had its raw cells copied (`fastmem.copy`, render.zig:1190-1194) and its arena reset (:1155, `reset(.retain_capacity)` frees every node but the last, ArenaAllocator.zig:153-160), so its flagged cells past the failure point keep grapheme slices into freed or reused arena memory; on a row whose cells were just allocated (first update or a resize) they keep the undefined grapheme slices and `Style` values `MultiArrayList.resize` leaves. The row's dirty flag was consumed, so the successful retry does not rebuild it, and `ghostty_render_state_row_cells_get` reads `cells.styles[x]` (c/render.zig:758) and `cells.graphemes[x]` (:767, :772) for those cells.
+- ReleaseSafe:     a caller that retries after `GHOSTTY_OUT_OF_MEMORY` gets `GHOSTTY_SUCCESS` and a render state whose unreached rows are missing or out of date, until they happen to be written again. By reading, UNVERIFIED: reading a flagged cell of a row that failed part way reads an undefined or dangling grapheme slice and `Style`; a possible panic (invalid union tag in the style switch) or garbage graphemes.
+- ReleaseFast:     the stale/empty rows as above; by reading, UNVERIFIED: the same reads are undefined behaviour (a wild or dangling read of the grapheme slice).
+- reachability:    libghostty-vt embedders whose `GhosttyAllocator` can fail (a limited arena, a memory cap), through `ghostty_render_state_update`/`begin_update`. Ghostty's own renderer uses the process allocator.
+- port handling:   fixed (R13, evident intent): `crates/rustty-vt/src/render.rs` `RenderState::begin_update` (PORT NOTE: reference defect (R13, UD315)) records a failed update, and the next one takes the reference's own full-redraw path (`redraw`), which rebuilds every row, re-stores every pin and reports `.full`; the flag clears when that redraw completes. On success nothing changes. The port has no counterpart of the undefined reads: new cell slots are initialized, grapheme spans are read through a checked slice, and the forced redraw rebuilds the row. Listed in `docs/ghostty-bug-fixes.md`.
+- parity row(s):   none; found by task S7-5 while making the render state's allocations fallible (LEDGER S175-F1). NEW-FINDINGS N316.
+- test:            `render::tests::failed_update_is_followed_by_a_full_rebuild` (rustty-vt): a failing allocator refuses row 1's first cell column; the retried update must rebuild rows 1 and 2 and equal a fresh state. `render_state_allocation_failure_sweep` (rustty-vt) and `render_state_allocation_failure_sweep_through_the_c_api` (rustty-vt-c) fail every allocation of their scenarios in turn and compare each retried update with a fresh state. Negative control (the flag's check removed, the reference's behaviour): the first test fails with `row 1 is rebuilt` (10 expected, 0 cells), the Rust sweep with `alloc n=0 first update: row 2 raw` (an empty row where the fresh state has text).
+- proposed fix:    make a failed `beginUpdate` force the next one to redraw: a `needs_redraw: bool` field set by an `errdefer` at the top of `beginUpdate`, checked first in the `redraw` block and cleared when a redraw completes (or `errdefer self.rows = 0;`, which reuses the dimension check but also changes what `rows` reports until then).
+- upstream status: not reported
+
 ## Candidates pending verification
 
 Assembled from this plan's progress notes on 2026-09-11. **Not verified** — do not cite as fact.

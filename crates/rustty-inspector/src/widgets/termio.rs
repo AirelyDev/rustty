@@ -90,14 +90,6 @@ impl<F: FnMut()> Drop for Defer<F> {
     }
 }
 
-// The process-global backing allocator for the inspector parser stream. Mirrors
-// `Stream.initAlloc(alloc, handler)` (termio.zig:33): a single always-available
-// allocator threaded into the OSC parser so large OSC captures can grow. Being a
-// `'static` ZST it makes `parser_stream` a `Stream<'static, VTHandler>`, so the
-// widget carries no lifetime parameter.
-static TERMIO_STREAM_ALLOC: rustty_lib::allocator::GlobalZigAllocator =
-    rustty_lib::allocator::GlobalZigAllocator;
-
 /// VT event stream inspector widget.
 // pub const Stream = struct {
 pub struct Stream {
@@ -108,7 +100,7 @@ pub struct Stream {
     events: VTEventRing,
 
     // parser_stream: VTHandler.Stream,
-    parser_stream: VtStream<'static, VTHandler>,
+    parser_stream: VtStream<VTHandler>,
 
     // selected_event_seq: ?u32 = null,
     /// The currently selected event sequence number for keyboard navigation
@@ -147,9 +139,11 @@ impl Stream {
         Stream {
             events,
             parser_stream: VtStream::init(rustty_vt::stream::Options {
-                allocator: Some(rustty_lib::allocator::ZigAllocatorRef::new(
-                    &TERMIO_STREAM_ALLOC,
-                )),
+                // Mirrors `Stream.initAlloc(alloc, handler)` (termio.zig:33): the
+                // application's allocator, the Rust heap handle (parity tail
+                // S7-7: `Options.allocator` is the runtime handle; it was a
+                // process-static `GlobalZigAllocator` reference).
+                allocator: Some(rustty_vt::alloc::Global),
                 handler,
                 continuation_max_bytes: None,
             }),
@@ -1431,7 +1425,7 @@ fn encode_metadata_osc(md: &mut Metadata, osc: &OscCommand) {
         // semantic_prompt: struct { action: Action(enum), options_unvalidated: []const u8 }
         OscCommand::SemanticPrompt(sp) => {
             md.put(b"action", dupe_z(sp_action_tag(sp.action).as_bytes()));
-            md.put(b"options_unvalidated", dupe_z(&sp.options_unvalidated));
+            md.put(b"options_unvalidated", dupe_z(sp.options_unvalidated));
         }
 
         // clipboard_contents: struct { kind: u8, data: [:0]const u8,
@@ -1541,7 +1535,7 @@ fn encode_metadata_osc(md: &mut Metadata, osc: &OscCommand) {
 
         // kitty_clipboard_protocol: OSC { metadata: []const u8, payload: ?[]const u8, terminator: enum }
         OscCommand::KittyClipboardProtocol(o) => {
-            md.put(b"metadata", dupe_z(&o.metadata));
+            md.put(b"metadata", dupe_z(o.metadata));
             match &o.payload {
                 Some(bytes) => md.put(b"payload", dupe_z(bytes)),
                 None => md.put(b"payload", dupe_z(b"(unset)")),
@@ -1554,7 +1548,7 @@ fn encode_metadata_osc(md: &mut Metadata, osc: &OscCommand) {
 
         // kitty_dnd_protocol: OSC { metadata: []const u8, payload: ?[]const u8, terminator: enum }
         OscCommand::KittyDndProtocol(o) => {
-            md.put(b"metadata", dupe_z(&o.metadata));
+            md.put(b"metadata", dupe_z(o.metadata));
             match &o.payload {
                 Some(bytes) => md.put(b"payload", dupe_z(bytes)),
                 None => md.put(b"payload", dupe_z(b"(unset)")),
@@ -1568,14 +1562,14 @@ fn encode_metadata_osc(md: &mut Metadata, osc: &OscCommand) {
         // context_signal: Command { action: Action(enum), id: []const u8, metadata: []const u8 }
         OscCommand::ContextSignal(cmd) => {
             md.put(b"action", dupe_z(context_action_tag(cmd.action).as_bytes()));
-            md.put(b"id", dupe_z(&cmd.id));
-            md.put(b"metadata", dupe_z(&cmd.metadata));
+            md.put(b"id", dupe_z(cmd.id));
+            md.put(b"metadata", dupe_z(cmd.metadata));
         }
 
         // kitty_desktop_notification: OSC { metadata: []const u8, payload: []const u8, terminator: enum }
         OscCommand::KittyDesktopNotification(o) => {
-            md.put(b"metadata", dupe_z(&o.metadata));
-            md.put(b"payload", dupe_z(&o.payload));
+            md.put(b"metadata", dupe_z(o.metadata));
+            md.put(b"payload", dupe_z(o.payload));
             md.put(
                 b"terminator",
                 dupe_z(terminator_tag(o.terminator).as_bytes()),
@@ -2140,7 +2134,7 @@ mod tests {
 
     #[test]
     fn osc_tag_prefix_in_description() {
-        let osc = C::ChangeWindowTitle(b"hi".to_vec());
+        let osc = C::ChangeWindowTitle(rustty_vt::osc::ZStr::from_bytes_with_nul(b"hi\0"));
         // encodeOSC writes "{tag} " then the metadata is separate.
         assert_eq!(
             desc(&Action::OscDispatch(Box::new(osc))),
@@ -2151,7 +2145,9 @@ mod tests {
     #[test]
     fn metadata_byte_slice_payload_is_data() {
         // change_window_title: [:0]const u8 ⇒ md.put("data", v)
-        let md = osc_md(&C::ChangeWindowTitle(b"my title".to_vec()));
+        let md = osc_md(&C::ChangeWindowTitle(
+            rustty_vt::osc::ZStr::from_bytes_with_nul(b"my title\0"),
+        ));
         assert_eq!(md, vec![("data".into(), "my title".into())]);
     }
 
@@ -2161,7 +2157,7 @@ mod tests {
         //     terminator: Terminator = .st }
         let md = osc_md(&C::ClipboardContents {
             kind: b'c',
-            data: b"xyz".to_vec(),
+            data: rustty_vt::osc::ZStr::from_bytes_with_nul(b"xyz\0"),
             terminator: rustty_vt::osc::Terminator::St,
         });
         assert_eq!(
@@ -2178,8 +2174,8 @@ mod tests {
     fn metadata_optional_and_enum_fields() {
         // hyperlink_start: struct { id: ?[:0]const u8, uri: [:0]const u8 }
         let some = osc_md(&C::HyperlinkStart {
-            id: Some(b"7".to_vec()),
-            uri: b"http://x".to_vec(),
+            id: Some(rustty_vt::osc::ZStr::from_bytes_with_nul(b"7\0")),
+            uri: rustty_vt::osc::ZStr::from_bytes_with_nul(b"http://x\0"),
         });
         assert_eq!(
             some,
@@ -2187,7 +2183,7 @@ mod tests {
         );
         let none = osc_md(&C::HyperlinkStart {
             id: None,
-            uri: b"u".to_vec(),
+            uri: rustty_vt::osc::ZStr::from_bytes_with_nul(b"u\0"),
         });
         assert_eq!(
             none,
@@ -2205,7 +2201,9 @@ mod tests {
         assert_eq!(reset, vec![("data".into(), "reset".into())]);
 
         let value = osc_md(&C::ConemuChangeTabTitle(
-            rustty_vt::osc::ConemuChangeTabTitle::Value(b"tab".to_vec()),
+            rustty_vt::osc::ConemuChangeTabTitle::Value(rustty_vt::osc::ZStr::from_bytes_with_nul(
+                b"tab\0",
+            )),
         ));
         // active-payload ⇒ md.put("value", bytes)
         assert_eq!(value, vec![("value".into(), "tab".into())]);

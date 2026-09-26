@@ -2519,6 +2519,38 @@ mod tests {
         page.deinit();
     }
 
+    // Task S-1c (no reference test): `assertIntegrity` logs the violation at
+    // `err` level (page.zig:372) before it panics.
+    #[test]
+    #[cfg(debug_assertions)]
+    fn page_assertIntegrity_logs_before_it_panics() {
+        let mut page = Page::init(Capacity {
+            styles: 8,
+            ..Capacity::new(10, 10)
+        })
+        .unwrap();
+        page.size.rows = 0;
+
+        let cap = crate::log_capture::start();
+        let panicked =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| page.assert_integrity()))
+                .is_err();
+        let messages = cap.messages();
+        drop(cap);
+        assert!(panicked, "an integrity violation must still crash");
+        assert!(
+            messages.contains(&(
+                log::Level::Error,
+                "page".to_string(),
+                "page integrity violation, crashing. err=ZeroRowCount".to_string(),
+            )),
+            "expected the crashing diagnostic, got: {messages:?}"
+        );
+
+        page.size.rows = 10;
+        page.deinit();
+    }
+
     #[test]
     fn page_verifyIntegrity_zero_cols() {
         // Too slow, and not really necessary because the integrity tests are

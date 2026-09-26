@@ -76,17 +76,12 @@ use crate::xev_seam as xev;
 use crate::Backend;
 use crate::Error;
 
-/// PORT NOTE: the process-static Zig allocator that backs the terminal
-/// `Stream`'s OSC parser (`terminal_stream = .init(.{ .allocator = alloc,
-/// .handler = handler })`). The reference threads the same `std.mem.Allocator`
-/// it passes to `Termio.init`;
-/// Rustty's `stream::Options.allocator` wants a `ZigAllocatorRef`, so we back the OSC
-/// parser with the process-static global zig allocator — the identical choice
-/// `Terminal::vt_stream` and the vt-c `TerminalWrapper` make (supports dynamic
-/// OSC growth, e.g. large OSC 52 clipboard payloads). `GlobalZigAllocator` is a
-/// stateless ZST, so sharing the static is sound.
-static GLOBAL_ZIG_ALLOCATOR_FOR_OSC: rustty_lib::allocator::GlobalZigAllocator =
-    rustty_lib::allocator::GlobalZigAllocator;
+// CORRECTION (parity tail S7-7): a process-static `GlobalZigAllocator`
+// (`GLOBAL_ZIG_ALLOCATOR_FOR_OSC`) used to back the terminal `Stream`'s OSC
+// parser, because `stream::Options.allocator` wanted a `ZigAllocatorRef`. It
+// takes the runtime allocator handle now, and `init` passes the Rust heap,
+// the application's `alloc` (`terminal_stream = .init(.{ .allocator = alloc,
+// .handler = handler })`).
 
 // const log = std.log.scoped(.io_exec);
 //
@@ -102,7 +97,7 @@ const LOG_SCOPE: &str = "io_exec";
 /// stage 4). The vt Stream's OSC-parser allocator lifetime is `'static` here
 /// (the field owns its handler for the Termio lifetime; only the deferred
 /// `Termio::init` constructs it — `.init(.{ .allocator = alloc, .handler = handler })`).
-pub type StreamHandlerStream<M> = crate::stream_handler::Stream<'static, M>;
+pub type StreamHandlerStream<M> = crate::stream_handler::Stream<M>;
 
 /// Mutex state argument for queueMessage.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -758,9 +753,9 @@ impl<M: AppMailbox> Termio<M> {
         // handler it takes references the already-written self fields above.
         let terminal_stream: StreamHandlerStream<M> =
             crate::stream_handler::Stream::init(rustty_vt::stream::Options {
-                allocator: Some(rustty_lib::allocator::ZigAllocatorRef::new(
-                    &GLOBAL_ZIG_ALLOCATOR_FOR_OSC,
-                )),
+                // (parity tail S7-7: `Options.allocator` is the runtime
+                // handle; the application's `alloc` is the Rust heap.)
+                allocator: Some(rustty_vt::alloc::Global),
                 handler,
                 continuation_max_bytes: None,
             });
@@ -1770,6 +1765,11 @@ impl<M: AppMailbox> Termio<M> {
                 // parser allocator collapses under Rust's infallible global
                 // allocator), unlike the reference's `catch |err| log.err`; the
                 // error-logging arm never fires so it has no Rust equivalent.
+                // CORRECTION (task S-1d, review S-1c F9): the arm cannot fire in
+                // the REFERENCE either. `Stream.recordPtyRead`
+                // (inspector/widgets/termio.zig:50-62) has no `try`, so its
+                // inferred error set is empty and so is `Inspector.recordPtyRead`'s;
+                // `Termio.zig:705` is a dead-branch row in LOG-DEAD-SITES.tsv.
                 //
                 // PORT NOTE (G-LOGFILE / task-14e-1, 2026-09-10): this is
                 // `Termio.zig:705`, the ONE site of this file's six that stays

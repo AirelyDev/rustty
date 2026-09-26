@@ -32,8 +32,127 @@ pub use parsers::color;
 // pub const semantic_prompt = parsers.semantic_prompt;
 pub use parsers::semantic_prompt;
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum Command {
+/// `[:0]const u8`: a byte string BORROWED from the parser, whose terminating
+/// NUL sentinel is part of the borrow.
+///
+/// PORT NOTE (parity tail S7-7, N263): the reference's text payloads are
+/// sentinel-terminated slices into the parser's own storage (the fixed
+/// `buffer` or the allocating capture). They used to be owned `Vec<u8>` copies
+/// here, which the reference never makes. The sentinel is kept inside the
+/// borrow so that a C caller reading the string through [`ZStr::as_ptr`]
+/// (`rustty_osc_command_data`'s `const char *`) stays within the memory the
+/// borrow covers. Dereferencing gives the bytes WITHOUT the sentinel, which is
+/// what `[:0]const u8` indexes and what `.len` counts.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ZStr<'p> {
+    with_nul: &'p [u8],
+}
+
+impl<'p> ZStr<'p> {
+    /// The empty string (`""`, a lone sentinel in static memory).
+    pub const EMPTY: ZStr<'static> = ZStr { with_nul: b"\0" };
+
+    /// `data[start..end :0]`: `with_nul` is the slice INCLUDING its sentinel.
+    ///
+    /// Zig's sentinel slice checks the sentinel (a safety check); so does this,
+    /// in every build, because [`ZStr::as_ptr`] promises C a terminated string.
+    #[inline]
+    #[track_caller]
+    pub fn from_bytes_with_nul(with_nul: &'p [u8]) -> ZStr<'p> {
+        assert_eq!(Some(&0), with_nul.last(), "[:0] slice without its sentinel");
+        ZStr { with_nul }
+    }
+
+    /// `data[start..end :0]`: the bytes `data[start..end]`, whose sentinel is
+    /// `data[end]`.
+    #[inline]
+    #[track_caller]
+    pub fn sentinel(data: &'p [u8], start: usize, end: usize) -> ZStr<'p> {
+        ZStr::from_bytes_with_nul(&data[start..end + 1])
+    }
+
+    /// The bytes, without the sentinel (the `Vec::as_slice` spelling).
+    #[inline]
+    pub fn as_slice(&self) -> &'p [u8] {
+        self.as_bytes()
+    }
+
+    /// The bytes, without the sentinel.
+    #[inline]
+    pub fn as_bytes(&self) -> &'p [u8] {
+        &self.with_nul[..self.with_nul.len() - 1]
+    }
+
+    /// The bytes followed by the sentinel.
+    #[inline]
+    pub fn as_bytes_with_nul(&self) -> &'p [u8] {
+        self.with_nul
+    }
+
+    /// `.ptr`: a NUL-terminated C string, valid while the borrow is.
+    #[inline]
+    pub fn as_ptr(&self) -> *const u8 {
+        self.with_nul.as_ptr()
+    }
+}
+
+impl core::ops::Deref for ZStr<'_> {
+    type Target = [u8];
+    #[inline]
+    fn deref(&self) -> &[u8] {
+        self.as_bytes()
+    }
+}
+
+impl AsRef<[u8]> for ZStr<'_> {
+    #[inline]
+    fn as_ref(&self) -> &[u8] {
+        self.as_bytes()
+    }
+}
+
+impl core::fmt::Debug for ZStr<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{:?}", self.as_bytes().escape_ascii().to_string())
+    }
+}
+
+impl PartialEq<[u8]> for ZStr<'_> {
+    fn eq(&self, other: &[u8]) -> bool {
+        self.as_bytes() == other
+    }
+}
+
+impl PartialEq<&[u8]> for ZStr<'_> {
+    fn eq(&self, other: &&[u8]) -> bool {
+        self.as_bytes() == *other
+    }
+}
+
+impl<const N: usize> PartialEq<[u8; N]> for ZStr<'_> {
+    fn eq(&self, other: &[u8; N]) -> bool {
+        self.as_bytes() == other.as_slice()
+    }
+}
+
+impl<const N: usize> PartialEq<&[u8; N]> for ZStr<'_> {
+    fn eq(&self, other: &&[u8; N]) -> bool {
+        self.as_bytes() == other.as_slice()
+    }
+}
+
+// PORT NOTE (parity tail S7-7, N263): `Command<'p>` borrows everything from
+// the parser that produced it: its text payloads (see `ZStr`), as the
+// reference's slices do, and the two lists the reference grows through
+// `parser.alloc` (`color_operation.requests`, `kitty_color_protocol.list`),
+// which the parser keeps and frees at `reset`, as the reference's
+// `parser.command` does. The borrow is the reference's documented lifetime,
+// "only valid until the next call to the parser", enforced by the borrow
+// checker: `Parser::end` returns `Command<'_>` over `&mut self`, so the parser
+// cannot be fed, reset or ended again while the command lives. Owning
+// nothing, it is `Copy`, like the reference's by-value `cmd.*`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Command<'p> {
     /// This generally shouldn't ever be set except as an initial zero value.
     /// Ignore it.
     Invalid,
@@ -48,8 +167,9 @@ pub enum Command {
     /// as latin1.
     ///
     /// PORT NOTE (fidelity): the reference declares this `[:0]const u8` (raw,
-    /// NUL-terminated bytes). Modeled as owned `Vec<u8>` — NOT a lossy `String`.
-    ChangeWindowTitle(Vec<u8>),
+    /// NUL-terminated bytes), borrowed from the parser: [`ZStr`], NOT a lossy
+    /// `String`.
+    ChangeWindowTitle(ZStr<'p>),
 
     /// Set the icon of the terminal window. The name of the icon is not
     /// well defined, so this is currently ignored by Ghostty at the time
@@ -57,10 +177,10 @@ pub enum Command {
     /// in the log.
     ///
     /// PORT NOTE (fidelity): reference `[:0]const u8` — raw bytes, not lossy.
-    ChangeWindowIcon(Vec<u8>),
+    ChangeWindowIcon(ZStr<'p>),
 
     /// Semantic prompt command: https://gitlab.freedesktop.org/Per_Bothner/specifications/blob/master/proposals/semantic-prompts.md
-    SemanticPrompt(SemanticPrompt),
+    SemanticPrompt(SemanticPrompt<'p>),
 
     /// Set or get clipboard contents. If data is "?", then the current
     /// clipboard contents are sent to the pty. Otherwise, the contents
@@ -68,7 +188,7 @@ pub enum Command {
     ClipboardContents {
         kind: u8,
         /// PORT NOTE (fidelity): reference `data: [:0]const u8` — raw bytes.
-        data: Vec<u8>,
+        data: ZStr<'p>,
         // terminator: Terminator = .st,
         // (e03475c0c: captured so the OSC 52 read response can echo it.)
         terminator: Terminator,
@@ -83,7 +203,7 @@ pub enum Command {
         /// be a file URL but it is up to the caller to utilize this value.
         ///
         /// PORT NOTE (fidelity): reference `value: [:0]const u8` — raw bytes.
-        value: Vec<u8>,
+        value: ZStr<'p>,
     },
 
     /// OSC 22. Set the mouse shape. There doesn't seem to be a standard
@@ -92,7 +212,7 @@ pub enum Command {
     /// we just parse whatever string is given.
     MouseShape {
         /// PORT NOTE (fidelity): reference `value: [:0]const u8` — raw bytes.
-        value: Vec<u8>,
+        value: ZStr<'p>,
     },
 
     /// OSC color operations to set, reset, or report color settings. Some OSCs
@@ -106,28 +226,30 @@ pub enum Command {
     /// 4, 5, 10-19, 104, 105, 110-119
     ColorOperation {
         op: color::Operation,
-        requests: color::List,
+        // PORT NOTE (parity tail S7-7): the parser's `color_requests`.
+        requests: &'p color::List,
         terminator: Terminator,
     },
 
     /// Kitty color protocol, OSC 21
     /// https://sw.kovidgoyal.net/kitty/color-stack/#id1
-    KittyColorProtocol(kitty_color::OSC),
+    // PORT NOTE (parity tail S7-7): the parser's `kitty_color`.
+    KittyColorProtocol(&'p kitty_color::OSC),
 
     /// Show a desktop notification (OSC 9 or OSC 777)
     ShowDesktopNotification {
         /// PORT NOTE (fidelity): reference `title: [:0]const u8` — raw bytes.
-        title: Vec<u8>,
+        title: ZStr<'p>,
         /// PORT NOTE (fidelity): reference `body: [:0]const u8` — raw bytes.
-        body: Vec<u8>,
+        body: ZStr<'p>,
     },
 
     /// Start a hyperlink (OSC 8)
     HyperlinkStart {
         /// PORT NOTE (fidelity): reference `id: ?[:0]const u8` — optional raw bytes.
-        id: Option<Vec<u8>>,
+        id: Option<ZStr<'p>>,
         /// PORT NOTE (fidelity): reference `uri: [:0]const u8` — raw bytes.
-        uri: Vec<u8>,
+        uri: ZStr<'p>,
     },
 
     /// End a hyperlink (OSC 8)
@@ -141,10 +263,10 @@ pub enum Command {
     /// ConEmu show GUI message box (OSC 9;2)
     ///
     /// PORT NOTE (fidelity): reference `[:0]const u8` — raw bytes.
-    ConemuShowMessageBox(Vec<u8>),
+    ConemuShowMessageBox(ZStr<'p>),
 
     /// ConEmu change tab title (OSC 9;3)
-    ConemuChangeTabTitle(ConemuChangeTabTitle),
+    ConemuChangeTabTitle(ConemuChangeTabTitle<'p>),
 
     /// ConEmu progress report (OSC 9;4)
     ConemuProgressReport(ProgressReport),
@@ -155,17 +277,17 @@ pub enum Command {
     /// ConEmu GUI macro (OSC 9;6)
     ///
     /// PORT NOTE (fidelity): reference `[:0]const u8` — raw bytes.
-    ConemuGuimacro(Vec<u8>),
+    ConemuGuimacro(ZStr<'p>),
 
     /// ConEmu run process (OSC 9;7)
     ///
     /// PORT NOTE (fidelity): reference `[:0]const u8` — raw bytes.
-    ConemuRunProcess(Vec<u8>),
+    ConemuRunProcess(ZStr<'p>),
 
     /// ConEmu output environment variable (OSC 9;8)
     ///
     /// PORT NOTE (fidelity): reference `[:0]const u8` — raw bytes.
-    ConemuOutputEnvironmentVariable(Vec<u8>),
+    ConemuOutputEnvironmentVariable(ZStr<'p>),
 
     /// ConEmu XTerm keyboard and output emulation (OSC 9;10)
     /// https://conemu.github.io/en/TerminalModes.html
@@ -183,35 +305,35 @@ pub enum Command {
     /// ConEmu comment (OSC 9;11)
     ///
     /// PORT NOTE (fidelity): reference `[:0]const u8` — raw bytes.
-    ConemuComment(Vec<u8>),
+    ConemuComment(ZStr<'p>),
 
     /// Kitty text sizing protocol (OSC 66)
-    KittyTextSizing(parsers::kitty_text_sizing::OSC),
+    KittyTextSizing(parsers::kitty_text_sizing::OSC<'p>),
 
-    KittyClipboardProtocol(KittyClipboardProtocol),
+    KittyClipboardProtocol(KittyClipboardProtocol<'p>),
 
     /// Kitty drag and drop protocol (OSC 72)
     /// https://sw.kovidgoyal.net/kitty/drag-and-drop-protocol/
-    KittyDndProtocol(KittyDndProtocol),
+    KittyDndProtocol(KittyDndProtocol<'p>),
 
     /// OSC 3008. Hierarchical context signalling (UAPI spec).
     /// https://uapi-group.org/specifications/specs/osc_context/
-    ContextSignal(parsers::context_signal::Command),
+    ContextSignal(parsers::context_signal::Command<'p>),
 
     /// Kitty desktop notifications (OSC 99)
-    KittyDesktopNotification(KittyDesktopNotification),
+    KittyDesktopNotification(KittyDesktopNotification<'p>),
 }
 
 // PORT NOTE: `conemu_change_tab_title: union(enum) { reset, value: [:0]const u8 }`
 // — the anonymous tagged union is hoisted to a named type.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ConemuChangeTabTitle {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConemuChangeTabTitle<'p> {
     Reset,
     /// PORT NOTE (fidelity): reference `value: [:0]const u8` — raw bytes.
-    Value(Vec<u8>),
+    Value(ZStr<'p>),
 }
 
-impl Command {
+impl Command<'_> {
     // pub const SemanticPrompt = parsers.semantic_prompt.Command;
     // pub const KittyClipboardProtocol = parsers.kitty_clipboard_protocol.OSC;
 
@@ -323,19 +445,19 @@ pub enum CommandKey {
 
 /// PORT NOTE: `parsers.semantic_prompt.Command` re-exported as
 /// `Command.SemanticPrompt`.
-pub type SemanticPrompt = parsers::semantic_prompt::Command;
+pub type SemanticPrompt<'p> = parsers::semantic_prompt::Command<'p>;
 
 /// PORT NOTE: `parsers.kitty_clipboard_protocol.OSC` re-exported as
 /// `Command.KittyClipboardProtocol`.
-pub type KittyClipboardProtocol = parsers::kitty_clipboard_protocol::OSC;
+pub type KittyClipboardProtocol<'p> = parsers::kitty_clipboard_protocol::OSC<'p>;
 
 /// PORT NOTE: `parsers.kitty_dnd_protocol.OSC` re-exported as
 /// `Command.KittyDndProtocol`.
-pub type KittyDndProtocol = parsers::kitty_dnd_protocol::OSC;
+pub type KittyDndProtocol<'p> = parsers::kitty_dnd_protocol::OSC<'p>;
 
 /// PORT NOTE: `parsers.kitty_desktop_notification.OSC` re-exported as
 /// `Command.KittyDesktopNotification` (`9a8e7ae18`).
-pub type KittyDesktopNotification = parsers::kitty_desktop_notification::OSC;
+pub type KittyDesktopNotification<'p> = parsers::kitty_desktop_notification::OSC<'p>;
 
 /// PORT NOTE: `Command.ProgressReport` — the ConEmu progress report payload.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -569,32 +691,24 @@ pub const MAX_BUF: usize = 2048;
 /// OSC input is untrusted, so these captures must have a finite bound.
 pub const MAX_ALLOCATING_BUF: usize = 8 * 1024 * 1024;
 
-pub struct Parser<'a> {
+pub struct Parser {
     /// Optional allocator used to accept data longer than MAX_BUF.
     /// This only applies to some commands (e.g. OSC 52) that can
     /// reasonably exceed MAX_BUF.
-    pub alloc: Option<rustty_lib::allocator::ZigAllocatorRef<'a>>,
+    // PORT NOTE (parity tail S7-7): `?Allocator`, the runtime allocator handle
+    // (`crate::alloc::Allocator`). It gates the OSCs that need an allocator
+    // (`ensureAllocator`), backs the allocating capture, and grows the two
+    // command lists (`color_operation.requests`, `kitty_color_protocol.list`),
+    // exactly where the reference uses `parser.alloc`. It used to be a
+    // borrowed `ZigAllocatorRef<'a>` beside a separate `capture_alloc` handle
+    // (S174-F3 part 1); the split is retired, and with it the parser's
+    // lifetime parameter.
+    pub alloc: Option<crate::alloc::Allocator>,
 
     /// Maximum number of bytes retained by an allocating capture.
     /// This is configurable primarily so callers and tests can choose a
     /// smaller policy than the default.
     pub max_allocating_bytes: usize,
-
-    /// Where an allocating capture's memory comes from.
-    // PORT NOTE (parity S174-F3): not a reference field. The reference's
-    // allocating capture uses `alloc` itself
-    // (`std.Io.Writer.Allocating.initCapacity(alloc, ..)`, osc.zig:509), but
-    // `alloc` is a `ZigAllocatorRef<'a>` here and a capture that borrowed it
-    // would give every `Stream` (whose parser shares the stream's lifetime)
-    // drop glue over `'a`. So the capture's allocator is set separately, and
-    // only to an allocator that outlives the parser: the embedder's allocator
-    // (`crate::alloc::default(alloc_)`) for the C-created parsers (vt-c's
-    // `rustty_osc_new` and the `rustty_terminal_new` stream), which is where
-    // the reference would put the capture. Every other parser keeps the Rust
-    // global heap, which is where their `alloc` (the process-global zig
-    // allocator) allocates anyway. (S7-7 retires the split: `alloc` becomes
-    // the handle itself.)
-    pub capture_alloc: CaptureAllocator,
 
     /// Current state of the parser.
     pub state: State,
@@ -606,8 +720,20 @@ pub struct Parser<'a> {
     /// bytes coming into the parser.
     pub capture: Option<Capture>,
 
-    /// The command that is the result of parsing.
-    pub command: Command,
+    // /// The command that is the result of parsing.
+    // command: Command,
+    // PORT NOTE (parity tail S7-7, N263): the command itself is not a field.
+    // The reference's `command` points into this parser's own `buffer` or
+    // `capture`; a Rust field holding those borrows would make the parser
+    // self-referential (and a moved parser would leave them dangling). `end`
+    // builds the command and returns it by value, borrowing the parser (see
+    // `Command`). What the reference's `command` OWNS stays here, as it does
+    // there: the two lists grown through `alloc` (`color_operation.requests`,
+    // `kitty_color_protocol.list`), which the command borrows and `reset`
+    // frees. `color_requests` and `kitty_color` hold the list of the last
+    // color or kitty color command until then.
+    pub color_requests: Option<color::List>,
+    pub kitty_color: Option<kitty_color::OSC>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -705,11 +831,11 @@ pub enum CaptureBacking {
     /// The count of bytes captured so far into `Parser.buffer` — the Zig fixed
     /// writer's `end` index over `&self.buffer` (osc.zig:462-467).
     Fixed(usize),
-    /// `std.Io.Writer.Allocating`, over `Parser.capture_alloc`.
+    /// `std.Io.Writer.Allocating`, over `Parser.alloc`.
     Allocating(allocator_api2::vec::Vec<u8, CaptureAllocator>),
 }
 
-/// The allocator of an allocating capture (see `Parser.capture_alloc`).
+/// The allocator of an allocating capture (`Parser.alloc`).
 ///
 /// CORRECTION (parity S174-F3): the allocating capture used to be a plain
 /// global-heap `Vec<u8>` that aborted on allocation failure. It now
@@ -923,8 +1049,8 @@ impl Capture {
     }
 }
 
-impl<'a> Parser<'a> {
-    pub fn init(alloc: Option<rustty_lib::allocator::ZigAllocatorRef<'a>>) -> Parser<'a> {
+impl Parser {
+    pub fn init(alloc: Option<crate::alloc::Allocator>) -> Parser {
         // Keeping all our undefined values together so we can
         // visually easily duplicate them in the Valgrind check below.
         // .buffer = undefined,
@@ -941,10 +1067,10 @@ impl<'a> Parser<'a> {
         Parser {
             alloc,
             max_allocating_bytes: MAX_ALLOCATING_BUF,
-            capture_alloc: CaptureAllocator::GLOBAL,
             state: State::Start,
             capture: None,
-            command: Command::Invalid,
+            color_requests: None,
+            kitty_color: None,
             buffer: [0u8; MAX_BUF],
         }
     }
@@ -962,53 +1088,35 @@ impl<'a> Parser<'a> {
         }
 
         // Handle any cleanup that individual OSCs require.
-        match &mut self.command {
-            Command::KittyColorProtocol(v) => {
-                // v.deinit(self.alloc orelse break :kitty_color_protocol);
-                if self.alloc.is_some() {
-                    v.deinit();
-                }
-            }
-            // .color_operation => |*v| color_operation: {
-            //     v.requests.deinit(self.alloc orelse break :color_operation);
-            // },
-            // PORT NOTE (oracle 14c829883): the reference frees the
-            // `SegmentedList` backing `requests` here to avoid an allocation
-            // leak on reset. The port's `color::List` is a plain `Vec<Request>`
-            // (see osc/parsers/color.rs), which Rust drops (and frees) when
-            // `self.command` is overwritten by `Command::Invalid` below — no
-            // manual release is needed or possible to express here.
-            Command::ColorOperation { .. } => {}
-            Command::ChangeWindowIcon(_)
-            | Command::ChangeWindowTitle(_)
-            | Command::ClipboardContents { .. }
-            | Command::ConemuChangeTabTitle(_)
-            | Command::ConemuComment(_)
-            | Command::ConemuGuimacro(_)
-            | Command::ConemuOutputEnvironmentVariable(_)
-            | Command::ConemuProgressReport(_)
-            | Command::ConemuRunProcess(_)
-            | Command::ConemuShowMessageBox(_)
-            | Command::ConemuSleep { .. }
-            | Command::ConemuWaitInput
-            | Command::ConemuXtermEmulation { .. }
-            | Command::HyperlinkEnd
-            | Command::HyperlinkStart { .. }
-            | Command::Invalid
-            | Command::MouseShape { .. }
-            | Command::ReportPwd { .. }
-            | Command::SemanticPrompt(_)
-            | Command::ShowDesktopNotification { .. }
-            | Command::KittyTextSizing(_)
-            | Command::KittyClipboardProtocol(_)
-            | Command::KittyDndProtocol(_)
-            | Command::KittyDesktopNotification(_)
-            | Command::ContextSignal(_) => {}
-        }
+        // switch (self.command) {
+        //     .kitty_color_protocol => |*v| kitty_color_protocol: {
+        //         v.deinit(self.alloc orelse break :kitty_color_protocol);
+        //     },
+        //     .color_operation => |*v| color_operation: {
+        //         v.requests.deinit(self.alloc orelse break :color_operation);
+        //     },
+        //     .change_window_icon, .change_window_title, .clipboard_contents,
+        //     .conemu_change_tab_title, .conemu_comment, .conemu_guimacro,
+        //     .conemu_output_environment_variable, .conemu_progress_report,
+        //     .conemu_run_process, .conemu_show_message_box, .conemu_sleep,
+        //     .conemu_wait_input, .conemu_xterm_emulation, .hyperlink_end,
+        //     .hyperlink_start, .invalid, .mouse_shape, .report_pwd,
+        //     .semantic_prompt, .show_desktop_notification, .kitty_text_sizing,
+        //     .kitty_clipboard_protocol, .kitty_dnd_protocol,
+        //     .kitty_desktop_notification, .context_signal,
+        //     => {},
+        // }
+        // PORT NOTE (parity tail S7-7): the lists the command owned are the
+        // parser's `color_requests` and `kitty_color` (see the `command` note
+        // on `Parser`); both arms free them here, through the allocator they
+        // grew with. The borrow checker has ended the command that borrowed
+        // them before `reset` can run. The other arms own nothing.
+        self.kitty_color = None;
+        self.color_requests = None;
 
         self.state = State::Start;
         self.capture = None;
-        self.command = Command::Invalid;
+        // self.command = .invalid;
 
         // if (std.valgrind.runningOnValgrind() > 0) {
         //     // Initialize our undefined fields so Valgrind can catch it.
@@ -1071,12 +1179,13 @@ impl<'a> Parser<'a> {
             }
 
             CaptureMode::Allocating => {
-                if self.alloc.is_none() {
+                // const alloc = self.alloc orelse { ... };
+                let Some(alloc) = self.alloc else {
                     // We don't have an allocator - fall back to a fixed buffer and hope
                     // that it's big enough.
                     self.capture_trailing(CaptureMode::Fixed);
                     return;
-                }
+                };
 
                 // Capture.allocating(&self.capture, alloc, self.max_allocating_bytes) catch {
                 //     // The allocator failed for some reason, fall back to a fixed buffer
@@ -1084,7 +1193,7 @@ impl<'a> Parser<'a> {
                 //     self.captureTrailing(.fixed);
                 //     return;
                 // };
-                let mut w = allocator_api2::vec::Vec::new_in(self.capture_alloc);
+                let mut w = allocator_api2::vec::Vec::new_in(alloc);
                 if w.try_reserve_exact(MAX_BUF.min(self.max_allocating_bytes))
                     .is_err()
                 {
@@ -1441,7 +1550,10 @@ impl<'a> Parser<'a> {
     ///
     /// The returned pointer is only valid until the next call to the parser.
     /// Callers should copy out any data they wish to retain across calls.
-    pub fn end(&mut self, terminator_ch: Option<u8>) -> Option<&mut Command> {
+    // PORT NOTE (parity tail S7-7): `?*Command` into `self.command` becomes
+    // the command by value, borrowing `self` (see `Command`); "only valid
+    // until the next call to the parser" is the borrow.
+    pub fn end(&mut self, terminator_ch: Option<u8>) -> Option<Command<'_>> {
         match self.state {
             State::Start => None,
 
@@ -1540,7 +1652,6 @@ mod ref_tests {
 #[cfg(test)]
 mod capture_tests {
     use super::*;
-    use rustty_lib::allocator::{GlobalZigAllocator, ZigAllocatorRef};
 
     // Parity S156-F4 (no reference test): `ensureAllocator` warns, naming the
     // state with `{t}`, before it invalidates the parser.
@@ -1575,8 +1686,7 @@ mod capture_tests {
         let limit = MAX_BUF + 1;
 
         for prefix in prefixes {
-            let backend = GlobalZigAllocator;
-            let alloc = ZigAllocatorRef::new(&backend);
+            let alloc = crate::alloc::Global;
             let mut p: Parser = Parser::init(Some(alloc));
             p.max_allocating_bytes = limit;
 
@@ -1620,8 +1730,7 @@ mod capture_tests {
     fn parser_next_slice_allocating_captures_have_a_hard_limit() {
         let limit = MAX_BUF + 1;
 
-        let backend = GlobalZigAllocator;
-        let alloc = ZigAllocatorRef::new(&backend);
+        let alloc = crate::alloc::Global;
         let mut p: Parser = Parser::init(Some(alloc));
         p.max_allocating_bytes = limit;
 
@@ -1666,8 +1775,7 @@ mod capture_tests {
     // test "Parser nextSlice overflowing slice is truncated at the limit"
     #[test]
     fn parser_next_slice_overflowing_slice_is_truncated_at_the_limit() {
-        let backend = GlobalZigAllocator;
-        let alloc = ZigAllocatorRef::new(&backend);
+        let alloc = crate::alloc::Global;
         let mut p: Parser = Parser::init(Some(alloc));
         p.max_allocating_bytes = 4;
 
@@ -1744,14 +1852,13 @@ mod capture_tests {
         // Every two-way split of the input must parse identically to
         // the byte-at-a-time path.
         for split in 0..=input.len() {
-            let backend = GlobalZigAllocator;
-            let alloc = ZigAllocatorRef::new(&backend);
+            let alloc = crate::alloc::Global;
             let mut p: Parser = Parser::init(Some(alloc));
             p.next_slice(&input[0..split]);
             p.next_slice(&input[split..]);
 
             // const cmd = p.end(null).?.*;
-            let cmd = p.end(None).unwrap().clone();
+            let cmd = p.end(None).unwrap();
             // try testing.expect(cmd == .clipboard_contents);
             assert!(matches!(cmd, Command::ClipboardContents { .. }));
             match &cmd {
@@ -1771,8 +1878,7 @@ mod capture_tests {
     // test "Parser allocating capture limit includes parser-added bytes"
     #[test]
     fn parser_allocating_capture_limit_includes_parser_added_bytes() {
-        let backend = GlobalZigAllocator;
-        let alloc = ZigAllocatorRef::new(&backend);
+        let alloc = crate::alloc::Global;
         let mut p: Parser = Parser::init(Some(alloc));
         p.max_allocating_bytes = 4;
 
@@ -1791,5 +1897,413 @@ mod capture_tests {
         }
 
         p.deinit();
+    }
+}
+
+// Parity tail S7-7 (Rust-only, no reference tests): the evidence that the OSC
+// parser's allocations go where the reference's do (`parser.alloc`) and nowhere
+// else, that a refusal takes the reference's path, and that the command's text
+// payloads are BORROWED from the parser's own storage (N263). The borrow tests
+// are also the Miri targets for the `Command<'p>` design (a command borrowing
+// the parser buffer while the parser itself is `&mut` elsewhere).
+#[cfg(test)]
+mod s7_7_tests {
+    use super::*;
+    use crate::alloc::testing::{with_handle, Config, CountingAllocator, FailingAllocator};
+
+    fn feed(p: &mut Parser, input: &[u8]) {
+        for &ch in input {
+            p.next(ch);
+        }
+    }
+
+    /// `color::Request`'s size, the element of the list's shelves.
+    fn request_size() -> usize {
+        core::mem::size_of::<color::Request>()
+    }
+
+    // `color_operation.requests` is `SegmentedList(Request, 2)` over
+    // `parser.alloc`: one or two requests allocate nothing; the third
+    // allocates the shelf array and shelf 0 (4 requests); the parser keeps the
+    // list (the reference's `parser.command` owns it) and `reset` frees both.
+    // Exact counts: a request that reached the Rust heap, or a
+    // `Vec`, would change them.
+    #[test]
+    fn color_requests_route_through_the_parser_allocator() {
+        let counting = CountingAllocator::over_heap();
+        let c = counting.allocator();
+        with_handle(&c, |alloc| {
+            let mut p = Parser::init(Some(alloc));
+
+            feed(&mut p, b"4;1;?;2;?");
+            {
+                let cmd = p.end(Some(0x07)).unwrap();
+                match &cmd {
+                    Command::ColorOperation { requests, .. } => assert_eq!(2, requests.count()),
+                    other => panic!("expected color_operation, got {other:?}"),
+                }
+                assert_eq!(
+                    0,
+                    counting.alloc_calls.get(),
+                    "two requests fit the prealloc"
+                );
+            }
+            assert_eq!(0, counting.free_calls.get());
+
+            p.reset();
+            feed(&mut p, b"4;1;?;2;?;3;?");
+            {
+                let cmd = p.end(Some(0x07)).unwrap();
+                match &cmd {
+                    Command::ColorOperation { requests, .. } => {
+                        assert_eq!(3, requests.count());
+                        assert_eq!(
+                            color::Request::Query(color::Target::Palette(3)),
+                            *requests.at(2)
+                        );
+                    }
+                    other => panic!("expected color_operation, got {other:?}"),
+                }
+                assert_eq!(2, counting.alloc_calls.get(), "the shelf array and shelf 0");
+                assert_eq!(
+                    Some((
+                        4 * request_size(),
+                        core::mem::align_of::<color::Request>().trailing_zeros() as u8
+                    )),
+                    counting.last_alloc.get(),
+                    "shelf 0 holds prealloc * 2 requests"
+                );
+                assert_eq!(0, counting.free_calls.get(), "live while the command is");
+            }
+            assert_eq!(0, counting.free_calls.get(), "the parser keeps the list");
+            p.reset();
+            assert_eq!(2, counting.free_calls.get(), "`reset` frees it");
+            assert_eq!(0, counting.live_bytes.get());
+            p.deinit();
+        });
+        assert_eq!(0, counting.live_bytes.get());
+    }
+
+    // `kitty_color_protocol.list` is an `ArrayList(Request)` appended through
+    // `parser.alloc`: Zig 0.16's first `append` reserves `growCapacity(1)`
+    // requests in one allocation; the parser keeps it until `reset` or
+    // `deinit`, as the reference's `parser.command` does.
+    #[test]
+    fn kitty_color_list_routes_through_the_parser_allocator() {
+        let counting = CountingAllocator::over_heap();
+        let c = counting.allocator();
+        with_handle(&c, |alloc| {
+            let mut p = Parser::init(Some(alloc));
+            feed(&mut p, b"21;foreground=?;background=#ffffff;cursor=");
+            {
+                let cmd = p.end(Some(0x1b)).unwrap();
+                match &cmd {
+                    Command::KittyColorProtocol(osc) => assert_eq!(3, osc.list.len()),
+                    other => panic!("expected kitty_color_protocol, got {other:?}"),
+                }
+                let first =
+                    crate::alloc::ArrayListUnmanaged::<crate::kitty::color::Request>::grow_capacity(
+                        1,
+                    );
+                assert!(first >= 3, "one reservation holds all three");
+                assert_eq!(1, counting.alloc_calls.get());
+                assert_eq!(
+                    first * core::mem::size_of::<crate::kitty::color::Request>(),
+                    counting.last_alloc.get().unwrap().0
+                );
+            }
+            assert_eq!(0, counting.free_calls.get(), "the parser keeps the list");
+            p.deinit();
+            assert_eq!(1, counting.free_calls.get(), "`deinit` frees it");
+            assert_eq!(0, counting.live_bytes.get());
+        });
+    }
+
+    // T2: a refused list allocation takes the reference's `catch`: the
+    // command is still produced, with an empty list, and `log.info` names the
+    // OSC, the error and the data. Nothing is left allocated.
+    #[test]
+    fn color_request_allocation_failure_logs_and_yields_an_empty_list() {
+        let failing = FailingAllocator::over_heap(Config {
+            fail_index: 0,
+            ..Config::default()
+        });
+        let c = failing.allocator();
+        with_handle(&c, |alloc| {
+            let mut p = Parser::init(Some(alloc));
+            feed(&mut p, b"4;1;?;2;?;3;?");
+            let cap = crate::log_capture::start();
+            {
+                let cmd = p.end(Some(0x07)).unwrap();
+                match &cmd {
+                    Command::ColorOperation { op, requests, .. } => {
+                        assert_eq!(color::Operation::osc_4, *op);
+                        assert_eq!(0, requests.count());
+                    }
+                    other => panic!("expected color_operation, got {other:?}"),
+                }
+            }
+            let messages = cap.messages();
+            drop(cap);
+            assert!(
+                messages.iter().any(|(level, target, msg)| {
+                    *level == log::Level::Info
+                    && target == "osc_color"
+                    && msg == "failed to parse OSC 4 color request err=OutOfMemory data=1;?;2;?;3;?"
+                }),
+                "expected the parseColor catch diagnostic, got: {messages:?}"
+            );
+            assert!(failing.has_induced_failure.get());
+            p.deinit();
+        });
+        assert_eq!(failing.allocated_bytes.get(), failing.freed_bytes.get());
+        assert_eq!(failing.allocations.get(), failing.deallocations.get());
+    }
+
+    // PORT NOTE: reference defect (R13), N321. `parseGetSetDynamicColor` has no
+    // `errdefer result.deinit(alloc)`: an OSC 10 whose seventh value fails to
+    // grow the list leaks shelf 0 and the shelf array in the reference. The
+    // port's list is freed when the error drops it. Allocation 0 and 1 are the
+    // third request's shelf array and shelf 0; allocation 2 (the seventh
+    // request's new shelf array) is refused.
+    #[test]
+    fn dynamic_color_list_growth_failure_frees_what_it_grew() {
+        let failing = FailingAllocator::over_heap(Config {
+            fail_index: 2,
+            ..Config::default()
+        });
+        let c = failing.allocator();
+        with_handle(&c, |alloc| {
+            let mut p = Parser::init(Some(alloc));
+            feed(&mut p, b"10;?;?;?;?;?;?;?");
+            let cap = crate::log_capture::start();
+            {
+                let cmd = p.end(Some(0x07)).unwrap();
+                match &cmd {
+                    Command::ColorOperation { op, requests, .. } => {
+                        assert_eq!(color::Operation::osc_10, *op);
+                        assert_eq!(0, requests.count(), "the catch's empty list");
+                    }
+                    other => panic!("expected color_operation, got {other:?}"),
+                }
+            }
+            let messages = cap.messages();
+            drop(cap);
+            assert!(
+                messages.iter().any(|(_, target, msg)| target == "osc_color"
+                    && msg.starts_with("failed to parse OSC 10 color request err=OutOfMemory")),
+                "the failure path ran: {messages:?}"
+            );
+            assert!(failing.has_induced_failure.get());
+            assert_eq!(
+                2,
+                failing.allocations.get(),
+                "shelf array and shelf 0 were grown"
+            );
+            assert_eq!(
+                failing.allocated_bytes.get(),
+                failing.freed_bytes.get(),
+                "the grown shelves are freed on the error path"
+            );
+            p.deinit();
+        });
+    }
+
+    // T2: a refused kitty list append logs the reference's warning and skips
+    // that key (`continue`): the loop reaches the next key, whose append is
+    // refused as well (the failing allocator's refusal is sticky, as Zig's
+    // is), so both keys log and the command is still produced.
+    #[test]
+    fn kitty_color_append_failure_logs_and_continues() {
+        let failing = FailingAllocator::over_heap(Config {
+            fail_index: 0,
+            ..Config::default()
+        });
+        let c = failing.allocator();
+        with_handle(&c, |alloc| {
+            let mut p = Parser::init(Some(alloc));
+            feed(&mut p, b"21;foreground=?;background=?");
+            let cap = crate::log_capture::start();
+            {
+                let cmd = p.end(Some(0x1b)).unwrap();
+                match &cmd {
+                    Command::KittyColorProtocol(osc) => assert_eq!(0, osc.list.len()),
+                    other => panic!("expected kitty_color_protocol, got {other:?}"),
+                }
+            }
+            let messages = cap.messages();
+            drop(cap);
+            assert_eq!(
+                2,
+                messages
+                    .iter()
+                    .filter(|(level, target, msg)| *level == log::Level::Warn
+                        && target == "osc_kitty_color"
+                        && msg == "unable to append kitty color protocol option: OutOfMemory")
+                    .count(),
+                "got: {messages:?}"
+            );
+            p.deinit();
+        });
+        assert_eq!(failing.allocated_bytes.get(), failing.freed_bytes.get());
+    }
+
+    // N263: text payloads are borrowed from the parser's storage, not copied:
+    // a title from the fixed capture points into `Parser.buffer`, with its NUL
+    // sentinel inside the borrow, and parsing it allocates nothing.
+    #[test]
+    fn fixed_capture_payloads_borrow_the_parser_buffer() {
+        let counting = CountingAllocator::over_heap();
+        let c = counting.allocator();
+        with_handle(&c, |alloc| {
+            let mut p = Parser::init(Some(alloc));
+            let buffer = p.buffer.as_ptr_range();
+            feed(&mut p, b"0;a title");
+            {
+                let cmd = p.end(None).unwrap();
+                let Command::ChangeWindowTitle(title) = &cmd else {
+                    panic!("expected change_window_title, got {cmd:?}");
+                };
+                assert_eq!(b"a title", title.as_bytes());
+                assert_eq!(b"a title\0", title.as_bytes_with_nul());
+                assert!(
+                    buffer.contains(&title.as_ptr()),
+                    "the title is the buffer's bytes"
+                );
+                // SAFETY: `as_ptr` is a NUL-terminated string valid while the
+                // command is (the C caller's read, inside the borrow).
+                let c_str = unsafe { core::ffi::CStr::from_ptr(title.as_ptr().cast()) };
+                assert_eq!(b"a title", c_str.to_bytes());
+            }
+            // The same parser, fed again (the borrow has ended).
+            p.reset();
+            feed(&mut p, b"8;id=x;https://example.com");
+            {
+                let cmd = p.end(None).unwrap();
+                let Command::HyperlinkStart { id, uri } = &cmd else {
+                    panic!("expected hyperlink_start, got {cmd:?}");
+                };
+                assert_eq!(Some(b"x".as_slice()), id.map(|id| id.as_bytes()));
+                assert_eq!(b"https://example.com", uri.as_bytes());
+                assert!(buffer.contains(&uri.as_ptr()));
+                assert!(buffer.contains(&id.unwrap().as_ptr()));
+            }
+            assert_eq!(0, counting.alloc_calls.get(), "no payload copy, no list");
+            p.deinit();
+        });
+    }
+
+    // N263: a payload from an allocating capture points into the capture's
+    // own allocation; the only allocation is the capture's (`initCapacity`,
+    // `MAX_BUF` bytes), none for the payload.
+    #[test]
+    fn allocating_capture_payloads_borrow_the_capture() {
+        let counting = CountingAllocator::over_heap();
+        let c = counting.allocator();
+        with_handle(&c, |alloc| {
+            let mut p = Parser::init(Some(alloc));
+            let buffer = p.buffer.as_ptr_range();
+            feed(&mut p, b"52;c;aGVsbG8=");
+            let capture = match &p.capture.as_ref().unwrap().backing {
+                CaptureBacking::Allocating(w) => w.as_ptr_range(),
+                CaptureBacking::Fixed(_) => panic!("OSC 52 captures with an allocator"),
+            };
+            {
+                let cmd = p.end(Some(0x07)).unwrap();
+                let Command::ClipboardContents {
+                    kind,
+                    data,
+                    terminator,
+                } = &cmd
+                else {
+                    panic!("expected clipboard_contents, got {cmd:?}");
+                };
+                assert_eq!(b'c', *kind);
+                assert_eq!(Terminator::Bel, *terminator);
+                assert_eq!(b"aGVsbG8=", data.as_bytes());
+                assert!(
+                    capture.contains(&data.as_ptr()),
+                    "the data is the capture's bytes"
+                );
+                assert!(!buffer.contains(&data.as_ptr()));
+            }
+            assert_eq!(1, counting.alloc_calls.get(), "the capture only");
+            assert_eq!(Some((MAX_BUF, 0)), counting.last_alloc.get());
+            p.deinit();
+        });
+        assert_eq!(0, counting.live_bytes.get());
+    }
+
+    // The nested payloads borrow too: a kitty clipboard OSC's metadata and
+    // payload, and an option value read from the metadata, are slices of the
+    // capture.
+    #[test]
+    fn nested_payloads_and_option_values_borrow_the_capture() {
+        let mut p = Parser::init(Some(crate::alloc::Global));
+        feed(&mut p, b"5522;type=read:mime=dGV4dA==;cGF5bG9hZA==");
+        let capture = match &p.capture.as_ref().unwrap().backing {
+            CaptureBacking::Allocating(w) => w.as_ptr_range(),
+            CaptureBacking::Fixed(_) => panic!("OSC 5522 captures with an allocator"),
+        };
+        {
+            let cmd = p.end(Some(0x1b)).unwrap();
+            let Command::KittyClipboardProtocol(osc) = &cmd else {
+                panic!("expected kitty_clipboard_protocol, got {cmd:?}");
+            };
+            assert_eq!(b"type=read:mime=dGV4dA==", osc.metadata);
+            assert_eq!(Some(b"cGF5bG9hZA==".as_slice()), osc.payload);
+            assert!(capture.contains(&osc.metadata.as_ptr()));
+            assert!(capture.contains(&osc.payload.unwrap().as_ptr()));
+            let mime = osc
+                .read_option(parsers::kitty_clipboard_protocol::Option_::Mime)
+                .as_bytes()
+                .unwrap();
+            assert_eq!(b"dGV4dA==", mime);
+            assert!(capture.contains(&mime.as_ptr()));
+        }
+        p.deinit();
+    }
+
+    // The stream hands the borrowed command to its handler (the OSC fast path
+    // and the action loop), and the handler sees the parser's own bytes.
+    #[test]
+    fn the_stream_dispatches_the_borrowed_command() {
+        use crate::stream::{Handler, Options, Stream, WindowTitle};
+
+        #[derive(Default)]
+        struct Titles {
+            seen: Vec<(Vec<u8>, usize)>,
+        }
+        impl Handler for Titles {
+            fn window_title(&mut self, v: WindowTitle) {
+                self.seen
+                    .push((v.title.to_vec(), v.title.as_ptr() as usize));
+            }
+        }
+
+        let mut s = Stream::init(Options {
+            handler: Titles::default(),
+            allocator: Some(crate::alloc::Global),
+            continuation_max_bytes: None,
+        });
+        let buffer = s.parser.osc_parser.buffer.as_ptr_range();
+        // BEL (the bulk fast path), ESC \ (the fast path), and a byte at a
+        // time (the action loop).
+        s.next_slice(b"\x1b]0;one\x07\x1b]2;two\x1b\\");
+        for &b in b"\x1b]0;three\x07" {
+            s.next(b);
+        }
+        let seen = std::mem::take(&mut s.handler.seen);
+        assert_eq!(
+            vec![b"one".to_vec(), b"two".to_vec(), b"three".to_vec()],
+            seen.iter().map(|(t, _)| t.clone()).collect::<Vec<_>>()
+        );
+        for (_, addr) in &seen {
+            assert!(
+                buffer.contains(&(*addr as *const u8)),
+                "the handler saw the parser's buffer"
+            );
+        }
+        s.deinit();
     }
 }

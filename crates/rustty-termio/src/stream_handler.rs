@@ -100,7 +100,7 @@ impl core::fmt::Display for HexBytes<'_> {
 // module-level alias (Rust cannot nest a generic type alias in a struct's
 // namespace). `'a` threads the vt Stream's OSC-parser allocator lifetime
 // (rustty-vt stream_terminal precedent).
-pub type Stream<'a, M> = stream::Stream<'a, StreamHandler<M>>;
+pub type Stream<M> = stream::Stream<StreamHandler<M>>;
 
 /// True if we have tmux control mode built in.
 //
@@ -1501,7 +1501,7 @@ impl<M: AppMailbox> StreamHandler<M> {
         // defer arena.deinit();
         // (the arena scopes the Metadata allocations; the Rust Metadata owns
         // its Vecs and frees on drop.)
-        let meta = match kitty_clipboard::Metadata::parse(self.alloc.into(), &v.metadata) {
+        let meta = match kitty_clipboard::Metadata::parse(self.alloc.into(), v.metadata) {
             Ok(Some(meta)) => meta,
             Ok(None) => return Ok(()),
             Err(kitty_clipboard::ParseError::OutOfMemory) => return Ok(()),
@@ -1515,7 +1515,7 @@ impl<M: AppMailbox> StreamHandler<M> {
                 if self.kitty_clipboard_write.is_none() {
                     return Ok(());
                 }
-                match kitty_clipboard::Metadata::operation(&v.metadata) {
+                match kitty_clipboard::Metadata::operation(v.metadata) {
                     Some(Operation::Wdata) | Some(Operation::Walias) => {
                         if let Some(state) = self.kitty_clipboard_write.take() {
                             self.kittyClipboardWriteFinish(
@@ -1531,7 +1531,7 @@ impl<M: AppMailbox> StreamHandler<M> {
             }
         };
 
-        let payload: &[u8] = v.payload.as_deref().unwrap_or(b"");
+        let payload: &[u8] = v.payload.unwrap_or(b"");
         match meta.op {
             Operation::Read => self.kittyClipboardRead(&meta, payload, v.terminator),
             Operation::Write => self.kittyClipboardWriteBegin(&meta, v.terminator),
@@ -2914,14 +2914,14 @@ impl<M: AppMailbox> StreamHandler<M> {
     //     self: *StreamHandler,
     //     request: terminal.kitty.color.OSC,
     // ) !void {
-    fn kittyColorReport(&mut self, request: kitty::color::OSC) -> Result<(), crate::Error> {
+    fn kittyColorReport(&mut self, request: &kitty::color::OSC) -> Result<(), crate::Error> {
         // var stream: std.Io.Writer.Allocating = .init(self.alloc);
         // defer stream.deinit();
         // const writer = &stream.writer;
         let mut stream: String = String::new();
 
         // for (request.list.items) |item| {
-        for item in &request.list {
+        for item in request.list.iter() {
             match item {
                 // .query => |key| {
                 kitty::color::Request::Query(key) => {
@@ -3623,14 +3623,14 @@ impl<M: AppMailbox> stream::Handler for StreamHandler<M> {
     }
 
     // .kitty_color_report => try self.kittyColorReport(value),
-    fn kitty_color_report(&mut self, v: kitty::color::OSC) {
+    fn kitty_color_report(&mut self, v: &kitty::color::OSC) {
         let r = self.kittyColorReport(v);
         self.vt("kitty_color_report", r);
     }
 
     // .color_operation => try self.colorOperation(value.op, &value.requests, value.terminator),
-    fn color_operation(&mut self, v: stream::ColorOperation) {
-        let r = self.colorOperation(v.op, &v.requests, v.terminator);
+    fn color_operation(&mut self, v: stream::ColorOperation<'_>) {
+        let r = self.colorOperation(v.op, v.requests, v.terminator);
         self.vt("color_operation", r);
     }
 
@@ -4522,18 +4522,23 @@ pub(crate) mod tests {
         }));
         let mut h = handler_for(&raw mut term, mailbox, state);
 
-        let mut requests: osc::color::List = (0..=255u8)
-            .map(|i| osc::color::Request::Query(osc::color::Target::Palette(i)))
-            .collect();
+        let mut requests = osc::color::List::new_in(rustty_vt::alloc::Global);
+        for i in 0..=255u8 {
+            requests
+                .append(osc::color::Request::Query(osc::color::Target::Palette(i)))
+                .unwrap();
+        }
         let new_color = color::RGB {
             r: 0x12,
             g: 0x34,
             b: 0x56,
         };
-        requests.push(osc::color::Request::Set(osc::color::ColoredTarget {
-            target: osc::color::Target::Palette(7),
-            color: new_color,
-        }));
+        requests
+            .append(osc::color::Request::Set(osc::color::ColoredTarget {
+                target: osc::color::Target::Palette(7),
+                color: new_color,
+            }))
+            .unwrap();
 
         let mut expected: Vec<u8> = Vec::new();
         for i in 0..=255u8 {

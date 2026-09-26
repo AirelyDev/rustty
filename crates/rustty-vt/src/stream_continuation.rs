@@ -505,7 +505,7 @@ fn find_utf8_replay_start(input: &[u8]) -> Option<usize> {
 /// This is allocation-free.
 // const BoundaryScanner = struct { ... };
 struct BoundaryScanner {
-    parser: Parser<'static>,
+    parser: Parser,
     utf8decoder: UTF8Decoder,
 }
 

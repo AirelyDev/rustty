@@ -292,14 +292,10 @@ unsafe fn print_slice_store_pairs(
     }
 }
 
-// PORT NOTE: `vtStream` threads `self.gpa()` (a `std.mem.Allocator`) into the
-// OSC parser via `Stream.initAlloc`, which in Rustty wants a
-// `ZigAllocatorRef<'static>`. The reference `gpa()` returns the screen's
-// general-purpose allocator (the global allocator). We back the OSC parser with
-// a process-static `GlobalZigAllocator` (a stateless ZST) so the returned
-// `ZigAllocatorRef` is `'static` and coerces to the stream's lifetime.
-pub(crate) static GLOBAL_ZIG_ALLOCATOR: rustty_lib::allocator::GlobalZigAllocator =
-    rustty_lib::allocator::GlobalZigAllocator;
+// CORRECTION (parity tail S7-7): a process-static `GlobalZigAllocator`
+// (`GLOBAL_ZIG_ALLOCATOR`) stood in for `self.gpa()` in `vtStream` because
+// `Stream.initAlloc` wanted a `ZigAllocatorRef<'static>`. The stream takes the
+// runtime allocator handle now, and `vt_stream` passes `gpa()` itself.
 
 // const log = std.log.scoped(.terminal);
 const LOG_SCOPE: &str = "terminal";
@@ -1078,25 +1074,17 @@ impl Terminal {
         //     .allocator = self.gpa(),
         //     .handler = self.vtHandler(),
         // });
-        // PORT NOTE: the reference threads `self.gpa()` (a `std.mem.Allocator`)
-        // into the stream options. Rustty's `stream::Options.allocator` wants a
-        // `ZigAllocatorRef`, whose presence is the parser's allocation gate;
-        // it is the process-static `GLOBAL_ZIG_ALLOCATOR` (see its note).
-        //
-        // PORT NOTE (parity tail S7-4): the OSC parser's captures (its dynamic
-        // allocations) run on the runtime handle `capture_alloc`, which is set
-        // to `gpa()` here, as the reference's `.allocator = self.gpa()` does.
+        // CORRECTION (parity tail S7-7): `stream::Options.allocator` is the
+        // runtime handle, so `self.gpa()` is threaded as the reference threads
+        // it; it used to be the process-static `GLOBAL_ZIG_ALLOCATOR` (the
+        // gate) with `gpa()` set separately as the capture's allocator (S7-4).
         let gpa = self.gpa();
         let handler = self.vt_handler();
-        let mut stream = Stream::init(crate::stream::Options {
-            allocator: Some(rustty_lib::allocator::ZigAllocatorRef::new(
-                &GLOBAL_ZIG_ALLOCATOR,
-            )),
+        Stream::init(crate::stream::Options {
+            allocator: Some(gpa),
             handler,
             continuation_max_bytes: None,
-        });
-        stream.parser.osc_parser.capture_alloc = gpa;
-        stream
+        })
     }
 
     /// This is the handler-side only for vtStream.
@@ -2487,6 +2475,13 @@ impl Terminal {
                 }
 
                 // log.debug("c={X} grapheme attach to left={} primary_cp={X}", ...);
+                log::debug!(
+                    target: LOG_SCOPE,
+                    "c={:X} grapheme attach to left={} primary_cp={:X}",
+                    c,
+                    prev_left,
+                    unsafe { (*prev_cell).codepoint() }
+                );
                 self.active_mut().cursor_mark_dirty();
                 self.active_mut()
                     .append_grapheme(prev_cell, c)
@@ -6810,17 +6805,20 @@ impl Terminal {
                     // `&mut Screen` and `old.cursor` is a `Copy` value.
                     let old_cursor = unsafe { (*old).cursor };
                     let active: *mut Screen = self.screens.active;
-                    if let Err(_err) = unsafe {
+                    if let Err(err) = unsafe {
                         (*active).cursor_copy(
                             old_cursor,
                             crate::screen::CursorCopyOptions { hyperlink: false },
                         )
                     } {
                         // log.warn("cursor copy failed entering alt screen err={}", .{err});
-                        // PORT NOTE: this crate has no logging facility (all
-                        // `std.log` calls are preserved as comments); on the
-                        // copy-failure path we just continue, matching the
-                        // reference `catch` that only logs and proceeds.
+                        // CORRECTION (task S-1c): a PORT NOTE here said this
+                        // crate has no logging facility; it logs through the
+                        // `log` facade, so the reference's warning is live.
+                        log::warn!(
+                            target: LOG_SCOPE,
+                            "cursor copy failed entering alt screen err={err:?}"
+                        );
                     }
                 }
             }
@@ -6851,15 +6849,17 @@ impl Terminal {
                         // SAFETY: see the M47/M1047 arm above.
                         let old_cursor = unsafe { (*old).cursor };
                         let active: *mut Screen = self.screens.active;
-                        if let Err(_err) = unsafe {
+                        if let Err(err) = unsafe {
                             (*active).cursor_copy(
                                 old_cursor,
                                 crate::screen::CursorCopyOptions { hyperlink: false },
                             )
                         } {
                             // log.warn("cursor copy failed entering alt screen err={}", .{err});
-                            // PORT NOTE: see the M47/M1047 arm above; no logging
-                            // facility, so the copy-failure path just continues.
+                            log::warn!(
+                                target: LOG_SCOPE,
+                                "cursor copy failed entering alt screen err={err:?}"
+                            );
                         }
                     }
                 } else {
@@ -7468,6 +7468,74 @@ mod tests {
         drop(cap);
 
         t.deinit(Global);
+    }
+
+    // Task S-1c (no reference test): a grapheme attached to the cell on its
+    // left logs the reference's debug line (Terminal.zig:1437).
+    #[test]
+    fn terminal_grapheme_attach_logs_a_debug_line() {
+        let mut t = Terminal::init(Global, opts(10, 2)).unwrap();
+        t.modes.set(modespkg::Mode::GraphemeCluster, true);
+        t.print('e' as u32).unwrap();
+
+        let cap = crate::log_capture::start();
+        t.print(0x0301).unwrap(); // Combining acute accent.
+        let messages = cap.messages();
+        drop(cap);
+        assert!(
+            messages.contains(&(
+                log::Level::Debug,
+                "terminal".to_string(),
+                "c=301 grapheme attach to left=1 primary_cp=65".to_string(),
+            )),
+            "expected the grapheme-attach debug line, got: {messages:?}"
+        );
+
+        t.deinit(Global);
+    }
+
+    // Task S-1c (no reference test): when the cursor copy fails on entering
+    // the alternate screen, `switchScreenMode` logs the reference's warning
+    // (Terminal.zig:4837 for 47/1047, :4857 for 1049) and carries on.
+    #[test]
+    fn terminal_alt_screen_cursor_copy_failure_logs_a_warning() {
+        use crate::screen::{CursorCopyFp, CURSOR_COPY_TW};
+        use rustty_util::tripwire::ResetMode;
+
+        for (name, mode) in [
+            ("47", SwitchScreenMode::M47),
+            ("1047", SwitchScreenMode::M1047),
+            ("1049", SwitchScreenMode::M1049),
+        ] {
+            let mut t = Terminal::init(Global, opts(10, 3)).unwrap();
+            CURSOR_COPY_TW.with(|tw| {
+                tw.borrow_mut().errorAlways(
+                    CursorCopyFp::ManualStyleUpdate,
+                    crate::pagelist::grow::IncreaseCapacityError::OutOfSpace,
+                )
+            });
+            let cap = crate::log_capture::start();
+            let result = t.switch_screen_mode(mode, true);
+            let messages = cap.messages();
+            drop(cap);
+            CURSOR_COPY_TW
+                .with(|tw| tw.borrow_mut().end(ResetMode::Reset))
+                .unwrap();
+            assert!(
+                result.is_ok(),
+                "{name}: the failure is logged, not returned"
+            );
+            assert_eq!(crate::screen_set::Key::Alternate, t.screens.active_key);
+            assert!(
+                messages.contains(&(
+                    log::Level::Warn,
+                    "terminal".to_string(),
+                    "cursor copy failed entering alt screen err=OutOfSpace".to_string(),
+                )),
+                "{name}: expected the cursor-copy warning, got: {messages:?}"
+            );
+            t.deinit(Global);
+        }
     }
 
     // test "Terminal: zero-width character attaches to pending wrap cell"
@@ -20376,7 +20444,7 @@ mod tests {
         t.linefeed().unwrap();
         t.semantic_prompt(osc::SemanticPrompt {
             action: osc::semantic_prompt::Action::PromptStart,
-            options_unvalidated: b"k=c".to_vec(),
+            options_unvalidated: b"k=c",
         })
         .unwrap();
 
@@ -20609,7 +20677,7 @@ mod tests {
         t.linefeed().unwrap();
         t.semantic_prompt(osc::SemanticPrompt {
             action: osc::semantic_prompt::Action::PromptStart,
-            options_unvalidated: b"k=c".to_vec(),
+            options_unvalidated: b"k=c",
         })
         .unwrap();
         for c in "> ".bytes() {
@@ -20709,7 +20777,7 @@ mod tests {
         // OSC 133;A with click_events=1
         t.semantic_prompt(osc::SemanticPrompt {
             action: osc::semantic_prompt::Action::FreshLineNewPrompt,
-            options_unvalidated: b"click_events=1".to_vec(),
+            options_unvalidated: b"click_events=1",
         })
         .unwrap();
 
@@ -20735,7 +20803,7 @@ mod tests {
         // OSC 133;A with click_events=2
         t.semantic_prompt(osc::SemanticPrompt {
             action: osc::semantic_prompt::Action::FreshLineNewPrompt,
-            options_unvalidated: b"click_events=2".to_vec(),
+            options_unvalidated: b"click_events=2",
         })
         .unwrap();
 
@@ -20756,7 +20824,7 @@ mod tests {
         // OSC 133;A with click_events=0
         t.semantic_prompt(osc::SemanticPrompt {
             action: osc::semantic_prompt::Action::FreshLineNewPrompt,
-            options_unvalidated: b"click_events=0".to_vec(),
+            options_unvalidated: b"click_events=0",
         })
         .unwrap();
 
@@ -20777,7 +20845,7 @@ mod tests {
         // OSC 133;A with cl=m (multiple)
         t.semantic_prompt(osc::SemanticPrompt {
             action: osc::semantic_prompt::Action::FreshLineNewPrompt,
-            options_unvalidated: b"cl=m".to_vec(),
+            options_unvalidated: b"cl=m",
         })
         .unwrap();
 
@@ -20797,7 +20865,7 @@ mod tests {
 
         t.semantic_prompt(osc::SemanticPrompt {
             action: osc::semantic_prompt::Action::FreshLineNewPrompt,
-            options_unvalidated: b"cl=line".to_vec(),
+            options_unvalidated: b"cl=line",
         })
         .unwrap();
 
@@ -20818,7 +20886,7 @@ mod tests {
         // OSC 133;A with both click_events=1 and cl=m
         t.semantic_prompt(osc::SemanticPrompt {
             action: osc::semantic_prompt::Action::FreshLineNewPrompt,
-            options_unvalidated: b"click_events=1;cl=m".to_vec(),
+            options_unvalidated: b"click_events=1;cl=m",
         })
         .unwrap();
 
@@ -20840,7 +20908,7 @@ mod tests {
         // OSC 133;A with click_events=0 and cl=v
         t.semantic_prompt(osc::SemanticPrompt {
             action: osc::semantic_prompt::Action::FreshLineNewPrompt,
-            options_unvalidated: b"click_events=0;cl=v".to_vec(),
+            options_unvalidated: b"click_events=0;cl=v",
         })
         .unwrap();
 
@@ -20862,7 +20930,7 @@ mod tests {
         // OSC 133;A with no click-related options
         t.semantic_prompt(osc::SemanticPrompt {
             action: osc::semantic_prompt::Action::FreshLineNewPrompt,
-            options_unvalidated: b"aid=123".to_vec(),
+            options_unvalidated: b"aid=123",
         })
         .unwrap();
 

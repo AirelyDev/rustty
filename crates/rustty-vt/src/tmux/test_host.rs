@@ -28,7 +28,7 @@ pub(crate) struct Host {
     pub viewer_exits: usize,
 }
 
-pub(crate) type HostStream = stream::Stream<'static, Host>;
+pub(crate) type HostStream = stream::Stream<Host>;
 
 pub(crate) fn stream() -> HostStream {
     stream::Stream::init(stream::Options::with_handler(Host::default()))

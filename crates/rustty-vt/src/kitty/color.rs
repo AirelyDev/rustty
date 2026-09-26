@@ -9,15 +9,43 @@
 use crate::color::RGB;
 use crate::osc::Terminator;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OSC {
     /// list of requests
-    pub list: Vec<Request>,
+    // PORT NOTE (parity tail S7-7, S174-F3): `std.ArrayList(Request)` grown
+    // through the OSC parser's allocator (`list.append(alloc, ..)`,
+    // osc/parsers/kitty_color.zig). It was a Rust-heap `Vec`. The list is
+    // unmanaged, as the reference's is; `alloc` below is the allocator its
+    // growth used. The OSC lives in the parser's `kitty_color` field and is
+    // dropped at `reset`, which frees the list (the reference's
+    // `OSC.deinit(alloc)`, which the parser's `reset` calls).
+    pub list: crate::alloc::ArrayListUnmanaged<Request>,
 
     /// We must reply with the same string terminator (ST) as used in the
     /// request.
     pub terminator: Terminator,
+
+    /// The allocator `list` grows through (`parser.alloc`).
+    // PORT NOTE: not a reference field; see `list`.
+    pub alloc: crate::alloc::Allocator,
 }
+
+impl core::fmt::Debug for OSC {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("OSC")
+            .field("list", &self.list.items())
+            .field("terminator", &self.terminator)
+            .finish()
+    }
+}
+
+/// Equality of the requests and the terminator (not of the allocator).
+impl PartialEq for OSC {
+    fn eq(&self, other: &Self) -> bool {
+        self.list.items() == other.list.items() && self.terminator == other.terminator
+    }
+}
+
+impl Eq for OSC {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Request {
@@ -27,12 +55,37 @@ pub enum Request {
 }
 
 impl OSC {
-    // PORT NOTE: `list: std.ArrayList(Request)` has no embedded allocator in
-    // Zig's unmanaged ArrayList; `deinit(alloc)` frees the backing storage.
-    // Rust's `Vec` owns and frees its own storage on drop, so `deinit` is a
-    // no-op retaining the faithful signature shape (the `alloc` is unused).
+    /// `.{ .list = .empty, .terminator = .. }` over `alloc`.
+    pub fn init(alloc: crate::alloc::Allocator, terminator: Terminator) -> OSC {
+        OSC {
+            list: crate::alloc::ArrayListUnmanaged::EMPTY,
+            terminator,
+            alloc,
+        }
+    }
+
+    /// `try self.list.append(alloc, request)`: Zig 0.16's `append`
+    /// (`ensureUnusedCapacity(1)`, which rounds up with `growCapacity`).
+    pub fn append(&mut self, request: Request) -> Result<(), crate::alloc::OutOfMemory> {
+        let len = self.list.len();
+        self.list.ensure_total_capacity(self.alloc, len + 1)?;
+        // SAFETY: capacity is at least `len + 1`; the slot is written before
+        // `len` exposes it.
+        unsafe {
+            self.list.as_mut_ptr().add(len).write(request);
+            self.list.set_len(len + 1);
+        }
+        Ok(())
+    }
+
+    // pub fn deinit(self: *OSC, alloc: std.mem.Allocator) void {
+    //     self.list.deinit(alloc);
+    // }
+    // PORT NOTE: frees the list through the allocator it grew with, leaving it
+    // empty; `Drop` calls it, so a second call (or the drop after an explicit
+    // call) frees nothing.
     pub fn deinit(&mut self) {
-        // self.list.deinit(alloc);
+        self.list.deinit(self.alloc);
     }
 
     // PORT NOTE: `pub const C = void;` and `pub fn cval(_: OSC) C { return {}; }`
@@ -40,6 +93,12 @@ impl OSC {
     // the unit type / a no-op returning `()`.
     /// We don't currently support encoding this to C in any way.
     pub fn cval(&self) {}
+}
+
+impl Drop for OSC {
+    fn drop(&mut self) {
+        self.deinit();
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

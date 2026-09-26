@@ -279,15 +279,18 @@ pub struct ApcEnd {
 //     requests: osc.color.List,
 //     terminator: osc.Terminator,
 // };
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ColorOperation {
+// PORT NOTE (parity tail S7-7): `requests` borrows the OSC parser's list (the
+// reference's by-value copy of the list struct shares its segments with the
+// parser the same way).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ColorOperation<'a> {
     pub op: osc::color::Operation,
-    pub requests: osc::color::List,
+    pub requests: &'a osc::color::List,
     pub terminator: osc::Terminator,
 }
 
 /// `Action.SemanticPrompt = osc.Command.SemanticPrompt`
-pub type SemanticPrompt = osc::SemanticPrompt;
+pub type SemanticPrompt<'p> = osc::SemanticPrompt<'p>;
 
 /// Returns a type that can process a stream of tty control characters.
 ///
@@ -333,7 +336,7 @@ pub trait Handler {
     /// raw parser action before it is further parsed. If this returns `true`
     /// then the stream skips its own processing of the action.
     // if (@hasDecl(T, "vtRaw")) { ... }
-    fn vt_raw(&mut self, _action: &parser::Action) -> bool {
+    fn vt_raw(&mut self, _action: &parser::Action<'_>) -> bool {
         false
     }
 
@@ -697,26 +700,27 @@ pub trait Handler {
     fn set_attribute(&mut self, _attr: sgr::Attribute) {}
 
     /// `kitty_color_report` (OSC 21)
-    fn kitty_color_report(&mut self, _v: kitty::color::OSC) {}
+    // PORT NOTE (parity tail S7-7): the OSC parser's `kitty_color`, borrowed.
+    fn kitty_color_report(&mut self, _v: &kitty::color::OSC) {}
 
     /// `color_operation`
-    fn color_operation(&mut self, _v: ColorOperation) {}
+    fn color_operation(&mut self, _v: ColorOperation<'_>) {}
 
     /// `semantic_prompt` (OSC 133)
-    fn semantic_prompt(&mut self, _v: SemanticPrompt) {}
+    fn semantic_prompt(&mut self, _v: SemanticPrompt<'_>) {}
 
     /// `kitty_clipboard` (OSC 5522, the Kitty clipboard protocol)
     // .kitty_clipboard_protocol => |v| { self.handler.vt(.kitty_clipboard, v); }
     // PORT NOTE (Action.KittyClipboard = osc.Command.KittyClipboardProtocol):
     // the action value is the parser's owned command payload, handed to the
     // handler by value like the reference's union payload move.
-    fn kitty_clipboard(&mut self, _v: osc::KittyClipboardProtocol) {}
+    fn kitty_clipboard(&mut self, _v: osc::KittyClipboardProtocol<'_>) {}
 
     /// `kitty_dnd` (OSC 72, the Kitty drag and drop protocol)
     // .kitty_dnd_protocol => |v| { self.handler.vt(.kitty_dnd, v); }
     // PORT NOTE (Action.KittyDnd = osc.Command.KittyDndProtocol): see
     // `kitty_clipboard` above.
-    fn kitty_dnd(&mut self, _v: osc::KittyDndProtocol) {}
+    fn kitty_dnd(&mut self, _v: osc::KittyDndProtocol<'_>) {}
 }
 
 /// Returns a type that can process a stream of tty control characters.
@@ -746,19 +750,30 @@ pub trait Handler {
 // is specialized per handler `H`, and the `Handler` trait's default no-op methods
 // let the optimizer drop unimplemented actions — the same "no conditional cost on
 // every action" property the comptime `vt` dispatch gives the reference.
-pub struct Stream<'a, H: Handler> {
+pub struct Stream<H: Handler> {
     // handler: Handler,
     pub handler: H,
     // parser: Parser,
-    pub parser: Parser<'a>,
+    pub parser: Parser,
     // utf8decoder: UTF8Decoder,
     pub utf8decoder: UTF8Decoder,
     // continuation: ?continuationpkg.Tracker,
     pub continuation: Option<continuationpkg::Tracker>,
 }
 
+/// An action that cannot borrow the parser (not an `osc_dispatch`), detached
+/// from the parser's borrow (see `Action::into_static`).
+#[inline(always)]
+fn detach_action(action: parser::Action<'_>) -> parser::Action<'static> {
+    match action.into_static() {
+        Ok(action) => action,
+        // `Parser::next` only produces `osc_dispatch` as the exit action.
+        Err(_) => unreachable!("osc_dispatch is only ever the exit action"),
+    }
+}
+
 // pub const Options = struct { ... };
-pub struct Options<'a, H> {
+pub struct Options<H> {
     /// The handler initial value, must be set.
     // handler: Handler,
     pub handler: H,
@@ -768,7 +783,11 @@ pub struct Options<'a, H> {
     /// that will be dropped in this case such as OSC 52 clipboard
     /// ops.
     // allocator: ?Allocator = null,
-    pub allocator: Option<rustty_lib::allocator::ZigAllocatorRef<'a>>,
+    // PORT NOTE (parity tail S7-7): the runtime allocator handle, as the OSC
+    // parser's `alloc` now is; it was a borrowed `ZigAllocatorRef<'a>` that
+    // only gated tracking, with the tracker's allocator passed separately to
+    // `Stream::init_in` (S7-4). `init` uses it for both, as the reference does.
+    pub allocator: Option<crate::alloc::Allocator>,
 
     /// Maximum size in bytes of the continuation suffix. If this is
     /// null or zero then continuation tracking is disabled. This is
@@ -781,11 +800,11 @@ pub struct Options<'a, H> {
     pub continuation_max_bytes: Option<usize>,
 }
 
-impl<'a, H> Options<'a, H> {
+impl<H> Options<H> {
     /// `.{ .handler = h }` — the reference's Zig field defaults
     /// (`allocator = null`, `continuation_max_bytes = null`) have no Rust
     /// struct-literal equivalent, so this constructor fills them.
-    pub fn with_handler(handler: H) -> Options<'a, H> {
+    pub fn with_handler(handler: H) -> Options<H> {
         Options {
             handler,
             allocator: None,
@@ -804,7 +823,7 @@ pub enum WriteContinuationError {
     ContinuationUnavailable,
 }
 
-impl<'a, H: Handler> Stream<'a, H> {
+impl<H: Handler> Stream<H> {
     /// Initialize a stream. Without an allocator, operations that require
     /// heap allocation are dropped.
     ///
@@ -815,22 +834,11 @@ impl<'a, H: Handler> Stream<'a, H> {
     /// This takes ownership of the handler and will call deinit
     /// when the stream is deinitialized.
     // pub fn init(options: Options) Self {
-    pub fn init(options: Options<'a, H>) -> Stream<'a, H> {
-        Stream::init_in(options, crate::alloc::Global)
-    }
-
-    /// `init`, with the continuation tracker on `tracker_alloc`.
-    ///
-    /// PORT NOTE (parity tail S7-4): the reference builds the tracker over
-    /// `options.allocator`. The port's `Options.allocator` is the OSC parser's
-    /// `ZigAllocatorRef` (whose presence gates tracking); the tracker grows
-    /// through the runtime handle, which the caller passes here: the C API's
-    /// `wrap` passes the terminal's allocator, as `Stream.init(.{ .allocator =
-    /// alloc, ... })` does. `init` passes the Rust heap.
-    pub fn init_in(
-        options: Options<'a, H>,
-        tracker_alloc: crate::alloc::Allocator,
-    ) -> Stream<'a, H> {
+    // CORRECTION (parity tail S7-7): S7-4 added `init_in(options,
+    // tracker_alloc)` because `Options.allocator` could not carry the runtime
+    // handle; it can now, so `init` is the reference's again and `init_in` is
+    // gone.
+    pub fn init(options: Options<H>) -> Stream<H> {
         // Initialize the parser
         // var parser: Parser = .init();
         // if (options.allocator) |alloc| parser.osc_parser.alloc = alloc;
@@ -846,13 +854,11 @@ impl<'a, H: Handler> Stream<'a, H> {
         //         if (max_bytes > 0) tracker = .init(alloc, max_bytes);
         //     }
         // }
-        // PORT NOTE: the gate consumes `options.allocator`'s presence; the
-        // tracker grows through `tracker_alloc` (see `init_in`).
         let mut tracker: Option<continuationpkg::Tracker> = None;
-        if options.allocator.is_some() {
+        if let Some(alloc) = options.allocator {
             if let Some(max_bytes) = options.continuation_max_bytes {
                 if max_bytes > 0 {
-                    tracker = Some(continuationpkg::Tracker::init(tracker_alloc, max_bytes));
+                    tracker = Some(continuationpkg::Tracker::init(alloc, max_bytes));
                 }
             }
         }
@@ -1437,16 +1443,12 @@ impl<'a, H: Handler> Stream<'a, H> {
                             // if (self.parser.osc_parser.end(
                             //     std.ascii.control_code.esc,
                             // )) |cmd| self.oscDispatch(cmd.*);
-                            // PORT NOTE: `cmd.*` copies the command out of the
-                            // parser — mirrored as the same clone the scalar
-                            // path's OscDispatch exit action performs.
-                            let cmd = self
-                                .parser
-                                .osc_parser
-                                .end(Some(0x1B))
-                                .map(|cmd| cmd.clone());
-                            if let Some(cmd) = cmd {
-                                self.osc_dispatch(cmd);
+                            // PORT NOTE (parity tail S7-7): the command borrows
+                            // the OSC parser (as `cmd.*`'s slices do) and is
+                            // handed to the handler, a disjoint field; it used
+                            // to be a deep clone.
+                            if let Some(cmd) = self.parser.osc_parser.end(Some(0x1B)) {
+                                Self::osc_dispatch(&mut self.handler, cmd);
                             }
                             self.parser.clear();
                             self.parser.state = parser::State::Escape;
@@ -1456,13 +1458,8 @@ impl<'a, H: Handler> Stream<'a, H> {
                         // BEL terminates the string directly.
                         // std.ascii.control_code.bel => { ... }
                         0x07 => {
-                            let cmd = self
-                                .parser
-                                .osc_parser
-                                .end(Some(0x07))
-                                .map(|cmd| cmd.clone());
-                            if let Some(cmd) = cmd {
-                                self.osc_dispatch(cmd);
+                            if let Some(cmd) = self.parser.osc_parser.end(Some(0x07)) {
+                                Self::osc_dispatch(&mut self.handler, cmd);
                             }
                             self.parser.state = parser::State::Ground;
                             offset += 1;
@@ -2013,10 +2010,29 @@ impl<'a, H: Handler> Stream<'a, H> {
         // miscompile or it's just very counter-intuitive comptime stuff,
         // but regardless, this is the easy solution.
         // const actions = @call(.always_inline, Parser.next, .{ &self.parser, c });
-        let actions = self.parser.next(c);
+        let [exit, transition, entry] = self.parser.next(c);
+
+        // PORT NOTE (parity tail S7-7): the actions hold the parser borrowed
+        // (an `osc_dispatch` command borrows the OSC parser's storage, as the
+        // reference's does), and the loop below calls back into `self`. Only
+        // the exit action can borrow (`Parser::next`), so the other two are
+        // detached, and an `osc_dispatch` exit is run first, against the
+        // handler alone, which is where the reference's loop runs it too.
+        let transition = transition.map(detach_action);
+        let entry = entry.map(detach_action);
+        let exit = match exit {
+            None => None,
+            Some(action) => match action.into_static() {
+                Ok(action) => Some(action),
+                Err(cmd) => {
+                    Self::run_osc_dispatch_action(&mut self.handler, cmd);
+                    None
+                }
+            },
+        };
 
         // for (actions) |action_opt| { ... }
-        for action_opt in actions {
+        for action_opt in [exit, transition, entry] {
             // const action = action_opt orelse continue;
             let action = match action_opt {
                 Some(a) => a,
@@ -2052,7 +2068,9 @@ impl<'a, H: Handler> Stream<'a, H> {
                 // are unchanged.
                 parser::Action::CsiDispatch(csi_action) => self.csi_dispatch(*csi_action),
                 parser::Action::EscDispatch(esc) => self.esc_dispatch(*esc),
-                parser::Action::OscDispatch(cmd) => self.osc_dispatch(*cmd),
+                // (`into_static` hands every `osc_dispatch` to
+                // `run_osc_dispatch_action` above.)
+                parser::Action::OscDispatch(cmd) => Self::osc_dispatch(&mut self.handler, *cmd),
                 parser::Action::DcsHook(dcs) => self.handler.dcs_hook(*dcs),
                 parser::Action::DcsPut(code) => self.handler.dcs_put(code),
                 parser::Action::DcsUnhook => self.handler.dcs_unhook(),
@@ -2066,6 +2084,24 @@ impl<'a, H: Handler> Stream<'a, H> {
                 }),
             }
         }
+    }
+
+    /// The action loop's body for an `osc_dispatch` action (see the PORT NOTE
+    /// in `next_non_utf8`): the debug log, the raw hook, then `oscDispatch`.
+    fn run_osc_dispatch_action(handler: &mut H, cmd: Box<osc::Command<'_>>) {
+        let action = parser::Action::OscDispatch(cmd);
+        if DEBUG {
+            log::info!(target: LOG_SCOPE, "action: {action:?}");
+        }
+        // if (@hasDecl(T, "vtRaw")) { ... } (see the action loop)
+        if handler.vt_raw(&action) {
+            return;
+        }
+        // .osc_dispatch => |cmd| self.oscDispatch(cmd),
+        let parser::Action::OscDispatch(cmd) = action else {
+            unreachable!()
+        };
+        Self::osc_dispatch(handler, *cmd);
     }
 
     /// Finalize and dispatch a CSI directly from parser state for
@@ -3977,7 +4013,11 @@ impl<'a, H: Handler> Stream<'a, H> {
     }
 
     // inline fn oscDispatch(self: *Self, cmd: osc.Command) void { ... }
-    fn osc_dispatch(&mut self, cmd: osc::Command) {
+    // PORT NOTE (parity tail S7-7): an associated function over the handler,
+    // not a method: the command borrows `self.parser`, so the caller passes
+    // the disjoint `handler`. The handler receives the borrowed payloads
+    // (`title: &[u8]` and so on) exactly as the reference's does.
+    fn osc_dispatch(handler: &mut H, cmd: osc::Command<'_>) {
         // The branch hints here are based on real world data
         // which indicates that the most common OSC commands are:
         //
@@ -4005,7 +4045,7 @@ impl<'a, H: Handler> Stream<'a, H> {
             // .semantic_prompt => |sp| { ... }
             osc::Command::SemanticPrompt(sp) => {
                 // @branchHint(.likely);
-                self.handler.semantic_prompt(sp);
+                handler.semantic_prompt(sp);
             }
 
             // .change_window_title => |title| { ... }
@@ -4022,7 +4062,7 @@ impl<'a, H: Handler> Stream<'a, H> {
                     return;
                 }
 
-                self.handler.window_title(WindowTitle { title: &title });
+                handler.window_title(WindowTitle { title: &title });
             }
 
             // .change_window_icon => |icon| { ... }
@@ -4053,7 +4093,7 @@ impl<'a, H: Handler> Stream<'a, H> {
                 data,
                 terminator,
             } => {
-                self.handler.clipboard_contents(ClipboardContents {
+                handler.clipboard_contents(ClipboardContents {
                     kind,
                     data: &data,
                     terminator,
@@ -4063,7 +4103,7 @@ impl<'a, H: Handler> Stream<'a, H> {
             // .report_pwd => |v| { ... }
             osc::Command::ReportPwd { value } => {
                 // @branchHint(.likely);
-                self.handler.report_pwd(ReportPwd { url: &value });
+                handler.report_pwd(ReportPwd { url: &value });
             }
 
             // .mouse_shape => |v| { ... }
@@ -4083,7 +4123,7 @@ impl<'a, H: Handler> Stream<'a, H> {
                     }
                 };
 
-                self.handler.mouse_shape(shape);
+                handler.mouse_shape(shape);
             }
 
             // .color_operation => |v| { ... }
@@ -4093,7 +4133,7 @@ impl<'a, H: Handler> Stream<'a, H> {
                 terminator,
             } => {
                 // @branchHint(.likely);
-                self.handler.color_operation(ColorOperation {
+                handler.color_operation(ColorOperation {
                     op,
                     requests,
                     terminator,
@@ -4102,22 +4142,21 @@ impl<'a, H: Handler> Stream<'a, H> {
 
             // .kitty_color_protocol => |v| { ... }
             osc::Command::KittyColorProtocol(v) => {
-                self.handler.kitty_color_report(v);
+                handler.kitty_color_report(v);
             }
 
             // .show_desktop_notification => |v| { ... }
             osc::Command::ShowDesktopNotification { title, body } => {
-                self.handler
-                    .show_desktop_notification(ShowDesktopNotification {
-                        title: &title,
-                        body: &body,
-                    });
+                handler.show_desktop_notification(ShowDesktopNotification {
+                    title: &title,
+                    body: &body,
+                });
             }
 
             // .hyperlink_start => |v| { ... }
             osc::Command::HyperlinkStart { id, uri } => {
                 // @branchHint(.likely);
-                self.handler.start_hyperlink(StartHyperlink {
+                handler.start_hyperlink(StartHyperlink {
                     uri: &uri,
                     id: id.as_deref(),
                 });
@@ -4126,12 +4165,12 @@ impl<'a, H: Handler> Stream<'a, H> {
             // .hyperlink_end => { ... }
             osc::Command::HyperlinkEnd => {
                 // @branchHint(.likely);
-                self.handler.end_hyperlink();
+                handler.end_hyperlink();
             }
 
             // .conemu_progress_report => |v| { ... }
             osc::Command::ConemuProgressReport(v) => {
-                self.handler.progress_report(v);
+                handler.progress_report(v);
             }
 
             // .conemu_sleep, .conemu_show_message_box, .conemu_change_tab_title,
@@ -4140,17 +4179,17 @@ impl<'a, H: Handler> Stream<'a, H> {
             // .conemu_run_process, .kitty_text_sizing, .kitty_clipboard_protocol,
             // .kitty_desktop_notification, .context_signal => { ... }
             // .kitty_clipboard_protocol => |v| {
-            //     self.handler.vt(.kitty_clipboard, v);
+            //     handler.vt(.kitty_clipboard, v);
             // },
             osc::Command::KittyClipboardProtocol(v) => {
-                self.handler.kitty_clipboard(v);
+                handler.kitty_clipboard(v);
             }
 
             // .kitty_dnd_protocol => |v| {
-            //     self.handler.vt(.kitty_dnd, v);
+            //     handler.vt(.kitty_dnd, v);
             // },
             osc::Command::KittyDndProtocol(v) => {
-                self.handler.kitty_dnd(v);
+                handler.kitty_dnd(v);
             }
 
             osc::Command::ConemuSleep { .. }
@@ -6640,7 +6679,7 @@ mod tests {
             fn kitty_clipboard(&mut self, v: osc::KittyClipboardProtocol) {
                 let mut msg: Vec<u8> = Vec::new();
                 msg.extend_from_slice(b"kitty meta=");
-                msg.extend_from_slice(&v.metadata);
+                msg.extend_from_slice(v.metadata);
                 msg.extend_from_slice(b" payload=");
                 match &v.payload {
                     Some(p) => msg.extend_from_slice(p),
@@ -7248,15 +7287,10 @@ mod tests {
 
     use crate::stream_continuation::FixedIoWriter;
 
-    /// `testing.allocator` for the `Options.allocator` gate: the tests only
-    /// need the allocator's *presence* (the tracker grows through the handle
-    /// `Stream::init_in` is given), backed by the process-global zig
-    /// allocator exactly as `Terminal::vt_stream` does.
-    static CONTINUATION_TEST_ALLOC: rustty_lib::allocator::GlobalZigAllocator =
-        rustty_lib::allocator::GlobalZigAllocator;
-
-    fn testing_allocator() -> rustty_lib::allocator::ZigAllocatorRef<'static> {
-        rustty_lib::allocator::ZigAllocatorRef::new(&CONTINUATION_TEST_ALLOC)
+    /// `testing.allocator` for `Options.allocator`: the Rust heap handle, as
+    /// `Terminal::vt_stream` passes.
+    fn testing_allocator() -> crate::alloc::Allocator {
+        crate::alloc::Global
     }
 
     // const ContinuationTestHandler = struct { ... };
@@ -7560,14 +7594,11 @@ mod tests {
             });
         let c = failing.allocator();
         crate::alloc::testing::with_handle(&c, |alloc| {
-            let mut failing_stream: Stream<ContinuationNullHandler> = Stream::init_in(
-                Options {
-                    allocator: Some(testing_allocator()),
-                    handler: ContinuationNullHandler,
-                    continuation_max_bytes: Some(64),
-                },
-                alloc,
-            );
+            let mut failing_stream: Stream<ContinuationNullHandler> = Stream::init(Options {
+                allocator: Some(alloc),
+                handler: ContinuationNullHandler,
+                continuation_max_bytes: Some(64),
+            });
             // defer failing_stream.deinit();
             failing_stream.next_slice(b"\x1b[");
             let mut unavailable_buf = [0u8; 1];
@@ -8006,14 +8037,11 @@ mod tests {
         );
         let c = failing.allocator();
         crate::alloc::testing::with_handle(&c, |alloc| {
-            let mut stream: Stream<ContinuationNullHandler> = Stream::init_in(
-                Options {
-                    allocator: Some(testing_allocator()),
-                    handler: ContinuationNullHandler,
-                    continuation_max_bytes: Some(16 * 1024),
-                },
-                alloc,
-            );
+            let mut stream: Stream<ContinuationNullHandler> = Stream::init(Options {
+                allocator: Some(alloc),
+                handler: ContinuationNullHandler,
+                continuation_max_bytes: Some(16 * 1024),
+            });
             // defer stream.deinit();
 
             let mut input = vec![0u8; 12 * 1024];

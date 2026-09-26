@@ -15,19 +15,17 @@ use crate::options::{self, CacheLineBuf, DataFile};
 use allocator_api2::alloc::Global as Allocator;
 use core::ffi::c_void;
 use core::hint::black_box;
-use rustty_lib::allocator::{GlobalZigAllocator, ZigAllocatorRef};
 use rustty_vt::osc::Parser;
 use rustty_vt::pagelist::OutOfMemory;
 use std::io::{BufReader, ErrorKind, Read};
 
 const LOG_SCOPE: &str = "osc-parser-bench";
 
-/// The process-static allocator backing the OSC parser (§7.4). The reference
-/// threads `alloc` (a `std.mem.Allocator`) into `Parser.init`; rustty's
-/// `Parser::init` wants a `ZigAllocatorRef`, so we back it with a `'static`
-/// `GlobalZigAllocator` (a ZST over the process global allocator), giving a
-/// `Parser<'static>`.
-static GA: GlobalZigAllocator = GlobalZigAllocator;
+// PORT NOTE (§7.4): the reference threads `alloc` (a `std.mem.Allocator`) into
+// `Parser.init`. CORRECTION (parity tail S7-7): the port's `Parser::init` takes
+// the runtime allocator handle; the bench's `alloc` is the Rust heap, so it
+// passes `rustty_vt::alloc::Global` (it used to be a process-static
+// `GlobalZigAllocator` reference, giving a `Parser<'static>`).
 
 // opts: Options,
 // /// The file, opened in the setup function.
@@ -37,7 +35,7 @@ pub struct OscParser {
     opts: Options,
     /// The file, opened in the setup function.
     data_f: Option<DataFile>,
-    parser: Parser<'static>,
+    parser: Parser,
 }
 
 // pub const Options = struct {
@@ -81,7 +79,7 @@ impl OscParser {
         Ok(Box::new(OscParser {
             opts,
             data_f: None,
-            parser: Parser::init(Some(ZigAllocatorRef::new(&GA))),
+            parser: Parser::init(Some(rustty_vt::alloc::Global)),
         }))
     }
 

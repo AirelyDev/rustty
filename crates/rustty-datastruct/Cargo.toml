@@ -17,3 +17,7 @@ workspace = true
 
 [dependencies]
 rustty-util.workspace = true
+# `SegmentedList` (segmented_list.rs) is generic over an allocator_api2
+# allocator so the OSC color list can grow through libghostty-vt's caller
+# allocator handle (parity tail S7-7).
+allocator-api2 = { workspace = true }

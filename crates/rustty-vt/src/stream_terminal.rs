@@ -68,10 +68,10 @@ const LOG_SCOPE: &str = "stream_terminal";
 /// a Terminal and updates the Terminal state.
 // pub const Stream = stream.Stream(Handler);
 // PORT NOTE: the reference `stream.Stream(Handler)` becomes the generic
-// `stream::Stream<'a, Handler<'a>>`. The `'a` threads the OSC parser allocator
+// `stream::Stream<Handler<'a>>`. The `'a` threads the OSC parser allocator
 // lifetime (see `stream::Stream::init_alloc`) through both the stream and the
 // handler's effect callbacks.
-pub type Stream<'a> = stream::Stream<'a, Handler<'a>>;
+pub type Stream<'a> = stream::Stream<Handler<'a>>;
 
 /// The APC command handler maintains the APC state.
 ///
@@ -855,7 +855,7 @@ impl<'a> Handler<'a> {
         // on drop at the end of this packet.)
         use crate::osc::parsers::kitty_clipboard_protocol::Operation;
         let gpa = self.term().gpa();
-        let meta = match kitty::clipboard::Metadata::parse(gpa, &v.metadata) {
+        let meta = match kitty::clipboard::Metadata::parse(gpa, v.metadata) {
             Ok(Some(meta)) => meta,
             Ok(None) => return Ok(()),
             // error.OutOfMemory => return error.OutOfMemory,
@@ -871,7 +871,7 @@ impl<'a> Handler<'a> {
                 if self.kitty_clipboard_write.is_none() {
                     return Ok(());
                 }
-                match kitty::clipboard::Metadata::operation(&v.metadata) {
+                match kitty::clipboard::Metadata::operation(v.metadata) {
                     Some(Operation::Wdata) | Some(Operation::Walias) => {
                         if let Some(state) = self.kitty_clipboard_write.take() {
                             self.kitty_clipboard_finish(
@@ -888,7 +888,7 @@ impl<'a> Handler<'a> {
         };
 
         // const payload = v.payload orelse "";
-        let payload: &[u8] = v.payload.as_deref().unwrap_or(b"");
+        let payload: &[u8] = v.payload.unwrap_or(b"");
         match meta.op {
             Operation::Read => self.kitty_clipboard_read(&meta, payload, v.terminator),
             Operation::Write => self.kitty_clipboard_write_begin(&meta, v.terminator),
@@ -2005,7 +2005,7 @@ impl<'a> Handler<'a> {
     // ) !void
     fn do_kitty_color_operation(
         &mut self,
-        request: kitty::color::OSC,
+        request: &kitty::color::OSC,
     ) -> Result<(), crate::snapshot::io::WriteFailed> {
         // var stack = std.heap.stackFallback(1024, self.terminal.gpa());
         // const alloc = stack.get();
@@ -2016,7 +2016,7 @@ impl<'a> Handler<'a> {
         let mut response = crate::snapshot::io::StackFallbackWriter::<1024>::new_in(gpa);
 
         // for (request.list.items) |item| {
-        for item in &request.list {
+        for item in request.list.iter() {
             match item {
                 // .set => |v| switch (v.key) {
                 kitty::color::Request::Set { key, color } => match key {
@@ -3882,7 +3882,7 @@ impl<'a> stream::Handler for Handler<'a> {
     // PORT NOTE (oracle 439d35e27): stays GRACEFUL. A failure here is a query
     // RESPONSE failure, not a divergence of terminal-owned state, so it must
     // NOT route through `vt_catch` / set `semantic_failure`.
-    fn kitty_color_report(&mut self, v: kitty::color::OSC) {
+    fn kitty_color_report(&mut self, v: &kitty::color::OSC) {
         if let Err(err) = self.do_kitty_color_operation(v) {
             log::warn!(target: LOG_SCOPE, "error reporting Kitty colors err={err:?}");
         }
@@ -3894,8 +3894,8 @@ impl<'a> stream::Handler for Handler<'a> {
     // ) catch |err| log.warn("error reporting OSC color err={}", .{err}),
     //
     // PORT NOTE (oracle 439d35e27): stays GRACEFUL; see `kitty_color_report`.
-    fn color_operation(&mut self, v: stream::ColorOperation) {
-        if let Err(err) = self.do_color_operation(&v.requests, v.terminator) {
+    fn color_operation(&mut self, v: stream::ColorOperation<'_>) {
+        if let Err(err) = self.do_color_operation(v.requests, v.terminator) {
             log::warn!(target: LOG_SCOPE, "error reporting OSC color err={err:?}");
         }
     }
@@ -7326,12 +7326,10 @@ mod tests {
         use crate::clipboard;
         use crate::stream_continuation::FixedIoWriter;
 
-        // `testing.allocator` for the `Options.allocator` gate (the same
-        // process-global zig allocator `Terminal::vt_stream` uses).
-        static CONT_ZIG_ALLOC: rustty_lib::allocator::GlobalZigAllocator =
-            rustty_lib::allocator::GlobalZigAllocator;
-        fn cont_alloc() -> rustty_lib::allocator::ZigAllocatorRef<'static> {
-            rustty_lib::allocator::ZigAllocatorRef::new(&CONT_ZIG_ALLOC)
+        // `testing.allocator` for `Options.allocator` (the Rust heap handle,
+        // as `Terminal::vt_stream` passes `gpa()`).
+        fn cont_alloc() -> crate::alloc::Allocator {
+            crate::alloc::Global
         }
 
         // const S = struct { var bell_count ... fn reset() ... };
@@ -7815,6 +7813,11 @@ mod tests {
                     calls() > a5,
                     "a response past 1024 bytes spills through gpa()"
                 );
+                // (Parity tail S7-7: the 64 requests' list stays with the OSC
+                // parser, the reference's `parser.command`, until the next
+                // OSC's `reset`; an OSC 104 with one index allocates nothing
+                // and frees it.)
+                s.next_slice(b"\x1B]104;1\x1B\\");
                 assert_eq!(live0, live(), "and frees the spill");
 
                 s.deinit();
@@ -9329,9 +9332,7 @@ mod tests {
         let ptr: *mut Terminal = &mut t;
 
         let mut s = Stream::init(stream::Options {
-            allocator: Some(rustty_lib::allocator::ZigAllocatorRef::new(
-                &crate::terminal::GLOBAL_ZIG_ALLOCATOR,
-            )),
+            allocator: Some(crate::alloc::Global),
             handler: Handler::init(ptr),
             continuation_max_bytes: None,
         });
@@ -9400,9 +9401,7 @@ mod tests {
         let ptr: *mut Terminal = &mut t;
 
         let mut s = Stream::init(stream::Options {
-            allocator: Some(rustty_lib::allocator::ZigAllocatorRef::new(
-                &crate::terminal::GLOBAL_ZIG_ALLOCATOR,
-            )),
+            allocator: Some(crate::alloc::Global),
             handler: Handler::init(ptr),
             continuation_max_bytes: None,
         });
@@ -9431,9 +9430,7 @@ mod tests {
         let ptr: *mut Terminal = &mut t;
 
         let mut s = Stream::init(stream::Options {
-            allocator: Some(rustty_lib::allocator::ZigAllocatorRef::new(
-                &crate::terminal::GLOBAL_ZIG_ALLOCATOR,
-            )),
+            allocator: Some(crate::alloc::Global),
             handler: Handler::init(ptr),
             continuation_max_bytes: None,
         });
@@ -9496,9 +9493,7 @@ mod tests {
         let ptr: *mut Terminal = &mut t;
 
         let mut s = Stream::init(stream::Options {
-            allocator: Some(rustty_lib::allocator::ZigAllocatorRef::new(
-                &crate::terminal::GLOBAL_ZIG_ALLOCATOR,
-            )),
+            allocator: Some(crate::alloc::Global),
             handler: Handler::init(ptr),
             continuation_max_bytes: None,
         });
@@ -10153,9 +10148,7 @@ mod tests {
         handler.effects.write_pty = Some(pc_write_pty);
         handler.effects.clipboard_read = Some(pc_clipboard_read);
         let mut s = Stream::init(stream::Options {
-            allocator: Some(rustty_lib::allocator::ZigAllocatorRef::new(
-                &crate::terminal::GLOBAL_ZIG_ALLOCATOR,
-            )),
+            allocator: Some(crate::alloc::Global),
             handler,
             continuation_max_bytes: None,
         });
@@ -10465,9 +10458,7 @@ mod tests {
         let mut handler = Handler::init(ptr);
         handler.effects.write_pty = Some(pc_write_pty);
         let mut s = Stream::init(stream::Options {
-            allocator: Some(rustty_lib::allocator::ZigAllocatorRef::new(
-                &crate::terminal::GLOBAL_ZIG_ALLOCATOR,
-            )),
+            allocator: Some(crate::alloc::Global),
             handler,
             continuation_max_bytes: None,
         });
@@ -10516,9 +10507,7 @@ mod tests {
         handler.effects.write_pty = Some(pc_write_pty);
         handler.effects.clipboard_read = Some(pc_clipboard_read);
         let mut s = Stream::init(stream::Options {
-            allocator: Some(rustty_lib::allocator::ZigAllocatorRef::new(
-                &crate::terminal::GLOBAL_ZIG_ALLOCATOR,
-            )),
+            allocator: Some(crate::alloc::Global),
             handler,
             continuation_max_bytes: None,
         });

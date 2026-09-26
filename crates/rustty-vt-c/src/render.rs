@@ -10,7 +10,7 @@
 // `renderpkg.RenderState`: the iterator caches per-field slices
 // (`row_data.items(.raw)`, `.cells`, `.selection`, `.dirty`). rustty-vt's
 // `RenderState` is the faithful `Vec<Row>` port (each `Row` owns its `raw`,
-// `cells: Vec<Cell>`, `dirty`, `selection`); see render.rs's module PORT NOTE.
+// `cells: CellList`, `dirty`, `selection`); see render.rs's module PORT NOTE.
 // So the rustty iterator wrappers cache a single raw slice pointer into
 // `row_data` (and, for cells, into a `Row.cells`) plus the palette, and the
 // reference's `it.raws[y]` / `it.cells[y]` / `it.selection[y]` / `it.dirty[y]`
@@ -40,6 +40,7 @@ use std::os::raw::c_int;
 // const Result = @import("result.zig").Result;
 // const row = @import("row.zig");
 // const style_c = @import("style.zig");
+use allocator_api2::alloc::{Allocator as ApiAllocator, Layout};
 use rustty_lib::allocator::Allocator as CAllocator;
 use rustty_lib::types::Buffer;
 use rustty_vt::color::{Palette, RGB};
@@ -69,14 +70,14 @@ pub(crate) const LOG_SCOPE: &str = "render_state_c";
 // through the C-resolved allocator (`alloc.create`, see `new_`) and handed
 // across the C ABI as a raw `*mut RenderStateWrapper`; `free` returns it via
 // `alloc.destroy` — the caller allocator owns the lifecycle exactly like the
-// reference. Tier-2 residual: the `renderpkg.RenderState` CONTENTS still grow
-// through rustty-vt's own `allocator_api2::Global` (DEFERRALS.md
-// "F-008/W12-01 Tier 2").
+// reference. Parity tail S7-5 (S175-F1): the `renderpkg.RenderState` CONTENTS
+// grow through the same allocator (`update`/`beginUpdate`/`deinit` pass
+// `state.alloc`).
 pub struct RenderStateWrapper {
     // PORT NOTE: the reference `alloc: std.mem.Allocator` is the C-resolved
-    // allocator; it owns this wrapper's storage (used by `free`). Tier-2
-    // residual: the `deinit`/`update` calls on `state` still use Global.
-    pub alloc: Box<dyn rustty_lib::allocator::ZigAllocator>,
+    // allocator, held as the runtime handle (`lib.alloc.default(alloc_)`):
+    // the caller's `RusttyAllocator` must outlive the state (N260).
+    pub alloc: rustty_vt::alloc::VtAllocator,
     pub state: ZigRenderState,
 }
 
@@ -600,12 +601,15 @@ struct OutOfMemory;
 // `error.OutOfMemory` exactly like the reference. `RenderState::empty()`
 // supplies the `.state = .empty` field default.
 fn new_(alloc_: Option<&CAllocator>) -> std::result::Result<RenderState, OutOfMemory> {
-    let alloc = rustty_lib::allocator::default(alloc_);
+    // SAFETY: a non-NULL `alloc_` is a valid `RusttyAllocator` that outlives
+    // the state (the reference's contract, N260).
+    let alloc = unsafe { rustty_vt::alloc::default(alloc_) };
     // const ptr = alloc.create(RenderStateWrapper) catch return error.OutOfMemory;
-    let ptr: *mut RenderStateWrapper = match rustty_lib::allocator::create_raw(&*alloc) {
-        Ok(ptr) => ptr,
-        Err(_) => return Err(OutOfMemory),
-    };
+    let ptr: *mut RenderStateWrapper =
+        match ApiAllocator::allocate(&alloc, Layout::new::<RenderStateWrapper>()) {
+            Ok(ptr) => ptr.cast().as_ptr(),
+            Err(_) => return Err(OutOfMemory),
+        };
     // ptr.* = .{ .alloc = alloc };
     // SAFETY: `ptr` is valid uninitialized `RenderStateWrapper` storage.
     unsafe {
@@ -634,24 +638,26 @@ pub unsafe fn free(state_: RenderState) {
         return;
     }
     // PORT NOTE (W12-01): move the wrapper value out of the caller-allocator
-    // storage, deinit its contents, return the STORAGE through the resolved
-    // allocator (`alloc.destroy(state)` — the caller free callback fires),
-    // then drop the value (which drops the `alloc` box itself last).
+    // storage, deinit its contents, then return the STORAGE through the same
+    // allocator (`alloc.destroy(state)` — the caller free callback fires).
     // SAFETY: `state_` is a live `new`-returned wrapper (caller contract);
     // after the read the storage is treated as uninitialized and freed once.
     let mut state = unsafe { std::ptr::read(state_) };
     // const alloc = state.alloc;
+    let alloc = state.alloc;
     // state.state.deinit(alloc);
-    // PORT NOTE (W12-01 Tier-2 residual): rustty-vt's `RenderState` allocates
-    // internally through `Global`, so `deinit` takes `Global`, not the caller
-    // allocator (see DEFERRALS.md "F-008/W12-01 Tier 2").
-    let gpa = rustty_vt::alloc::Global;
-    state.state.deinit(gpa);
-    // alloc.destroy(state);
-    // SAFETY: `state_` was created by `new_` via `create_raw` with this
-    // same resolved allocator.
-    unsafe { rustty_lib::allocator::destroy_raw(&*state.alloc, state_) };
+    state.state.deinit(alloc);
     drop(state);
+    // alloc.destroy(state);
+    // SAFETY: `state_` was allocated by `new_` through this same allocator
+    // with this layout.
+    unsafe {
+        ApiAllocator::deallocate(
+            &alloc,
+            std::ptr::NonNull::new_unchecked(state_.cast()),
+            Layout::new::<RenderStateWrapper>(),
+        )
+    };
 }
 
 // pub fn update(state_: RenderState, terminal_: terminal_c.Terminal) ... Result {
@@ -675,13 +681,12 @@ pub unsafe fn update(state_: RenderState, terminal_: terminal_c::Terminal) -> Re
     let t = unsafe { (*terminal_).terminal };
 
     // state.state.update(state.alloc, t) catch return .out_of_memory;
-    let gpa = rustty_vt::alloc::Global;
     // SAFETY: `state_`/`t` are live (caller contract); `update` needs `&mut`
     // access to both. They are independent allocations, so the two `&mut`s do
     // not alias.
     let state = unsafe { &mut *state_ };
     let t_ref = unsafe { &mut *t };
-    match state.state.update(gpa, t_ref) {
+    match state.state.update(state.alloc, t_ref) {
         Ok(()) => Result::Success,
         Err(_oom) => Result::OutOfMemory,
     }
@@ -709,12 +714,12 @@ pub unsafe fn begin_update(state_: RenderState, terminal_: terminal_c::Terminal)
     // SAFETY: `terminal_` is a live wrapper; raw-ptr read of the sibling field.
     let t = unsafe { (*terminal_).terminal };
 
-    let gpa = rustty_vt::alloc::Global;
+    // state.state.beginUpdate(state.alloc, t) catch return .out_of_memory;
     // SAFETY: `state_`/`t` are live (caller contract); they are independent
     // allocations, so the two `&mut`s do not alias.
     let state = unsafe { &mut *state_ };
     let t_ref = unsafe { &mut *t };
-    match state.state.begin_update(gpa, t_ref) {
+    match state.state.begin_update(state.alloc, t_ref) {
         Ok(()) => Result::Success,
         Err(_oom) => Result::OutOfMemory,
     }
@@ -987,7 +992,7 @@ unsafe fn get_typed(state_: RenderState, data: Data, out: *mut c_void) -> Result
             // `Vec<Row>` BUFFER root (`as_mut_ptr` through a transient
             // field-level `&mut`), so the alias survives `clean`'s later
             // transient reborrows of the same rows (see the field's PORT NOTE).
-            let row_data: *mut Vec<RenderRow> =
+            let row_data: *mut rustty_vt::alloc::AVec<RenderRow> =
                 unsafe { core::ptr::addr_of_mut!((*state_).state.row_data) };
             // SAFETY: `row_data` is a live `Vec` field of the live wrapper; the
             // autorefs below are transient and die within this statement.

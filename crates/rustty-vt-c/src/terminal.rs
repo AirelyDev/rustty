@@ -82,12 +82,11 @@ pub(crate) const LOG_SCOPE: &str = "terminal_c";
 
 // PORT NOTE (F-008, supersedes the D3-era `GLOBAL_ZIG_ALLOCATOR_FOR_OSC`
 // static): the reference threads the C allocator into the OSC parser via
-// `Stream.initAlloc(alloc, ...)`. rustty's OSC parser wants a
-// `ZigAllocatorRef`, and the wrapper's `Stream<'static>` requires a `'static`
-// backing allocator; that is now satisfied by the wrapper's OWN resolved
-// C allocator (heap-held via `Box::into_raw`, reclaimed last in `free`), so
-// dynamic OSC payloads (e.g. OSC 52 clipboard) grow through the CALLER's
-// allocator exactly like the reference.
+// `Stream.initAlloc(alloc, ...)`, so dynamic OSC payloads (e.g. OSC 52
+// clipboard) grow through the CALLER's allocator. CORRECTION (parity tail
+// S7-7): the OSC parser used to want a borrowed `ZigAllocatorRef` over the
+// wrapper's boxed allocator; `stream::Options.allocator` is the runtime handle
+// now (`rustty_vt::alloc::default(alloc_)`), as the reference passes `alloc`.
 
 /// PORT NOTE (oracle `e8525c0fd`/`960c2cca5`): `wrapper.tmp_dir_path` is a
 /// `[std.fs.max_path_bytes]u8` field whose only role is to OWN the temp-dir
@@ -1734,8 +1733,10 @@ struct WrapOutOfMemory;
 // rustty's analog of the reference `alloc` parameter is the F-008
 // `alloc_holder` (see `TerminalWrapper.alloc`), whose ownership likewise stays
 // with the caller on failure. `capture_alloc` is the same allocator as the
-// runtime handle (`rustty_vt::alloc::default(alloc_)`) for the stream's OSC
-// captures (parity tail S7-1; S7-4 threads it into the terminal too).
+// runtime handle (`rustty_vt::alloc::default(alloc_)`): the reference's
+// `alloc` for the stream (`Stream.init(.{ .allocator = alloc, .. })`: its OSC
+// parser and continuation tracker) and the wrapper maps (parity tail S7-1,
+// S7-4, S7-7).
 //
 // # Safety
 // `alloc_holder` must be a live `Box::into_raw` holder; `terminal_ptr` must
@@ -1820,31 +1821,20 @@ unsafe fn wrap(
                 // (a zeroed seed — never observed before `set(.terminfo_name)`
                 // overwrites the prefix it then publishes)
                 terminfo_name_buf: [0; rustty_vt::stream_terminal::MAX_TERMINFO_NAME_BYTES],
-                // (parity tail S7-4: the continuation tracker grows through
-                // the same caller allocator, `Stream::init_in`.)
-                stream: Stream::init_in(
-                    rustty_vt::stream::Options {
-                        allocator: Some(rustty_lib::allocator::ZigAllocatorRef::new(alloc)),
-                        handler,
-                        continuation_max_bytes: Some(continuation_max_bytes),
-                    },
-                    capture_alloc,
-                ),
+                // (parity tail S7-7: `Options.allocator` is the runtime
+                // handle, so the OSC parser and the continuation tracker both
+                // grow through the caller's allocator, as in the reference.)
+                stream: Stream::init(rustty_vt::stream::Options {
+                    allocator: Some(capture_alloc),
+                    handler,
+                    continuation_max_bytes: Some(continuation_max_bytes),
+                }),
                 effects: Effects::default(),
                 tracked_grid_refs: WrapperSet::new_in(capture_alloc),
                 searches: WrapperSet::new_in(capture_alloc),
             },
         )
     };
-
-    // The stream's OSC captures allocate through the same caller allocator
-    // (`.initAlloc(alloc, handler)`; see `osc::Parser.capture_alloc`, parity
-    // S174-F3): the caller's own `RusttyAllocator` (valid for the terminal's
-    // life, the C API's contract, N260), or the Rust heap for NULL.
-    // SAFETY: `wrapper_ptr` was initialized just above; raw place write.
-    unsafe {
-        (*wrapper_ptr).stream.parser.osc_parser.capture_alloc = capture_alloc;
-    }
 
     // return wrapper;
     // PROVENANCE: expose the whole wrapper allocation so the effect trampolines
@@ -11960,5 +11950,62 @@ mod tests {
                 "remap n={n}: no remap/resize succeeded past the refusal"
             );
         }
+    }
+
+    // Parity tail S7-7 (Rust-only routing evidence): the terminal's stream
+    // builds its OSC command lists through the caller's allocator
+    // (`Stream.init(.{ .allocator = alloc, .. })` hands `alloc` to the OSC
+    // parser): an OSC 104 with three indices grows the color list's shelf
+    // array and shelf 0, an OSC 21 grows the kitty color list once. The OSC
+    // parser keeps each list (the reference's `parser.command` owns it) until
+    // the next OSC's `reset` or the terminal's `free`. An OSC 104 with two
+    // indices allocates nothing (the preallocated slots).
+    #[test]
+    fn terminal_stream_osc_lists_route_through_the_callers_allocator() {
+        use rustty_vt::alloc::testing::CountingAllocator;
+        let counting = CountingAllocator::over_heap();
+        let calloc = counting.allocator();
+        let mut t: Terminal = std::ptr::null_mut();
+        assert_eq!(Result::Success, unsafe {
+            new(&calloc as *const CAllocator, &mut t, 80, 24)
+        });
+        let live = counting.live_bytes.get();
+
+        let (a, f) = (counting.alloc_calls.get(), counting.free_calls.get());
+        vtw(t, b"\x1B]104;1;2\x1B\\");
+        assert_eq!(
+            (a, f),
+            (counting.alloc_calls.get(), counting.free_calls.get())
+        );
+
+        vtw(t, b"\x1B]104;1;2;3\x1B\\");
+        assert_eq!(
+            a + 2,
+            counting.alloc_calls.get(),
+            "the shelf array and shelf 0"
+        );
+        assert_eq!(
+            f,
+            counting.free_calls.get(),
+            "the OSC parser keeps the list"
+        );
+
+        vtw(t, b"\x1B]21;foreground=#010203;background=?\x1B\\");
+        assert_eq!(a + 3, counting.alloc_calls.get(), "the kitty color list");
+        assert_eq!(
+            f + 2,
+            counting.free_calls.get(),
+            "OSC 21's reset freed the color list"
+        );
+        assert_eq!(
+            rustty_vt::alloc::ArrayListUnmanaged::<rustty_vt::kitty::color::Request>::grow_capacity(
+                1
+            ) * core::mem::size_of::<rustty_vt::kitty::color::Request>(),
+            counting.live_bytes.get() - live,
+            "only the kitty list is live"
+        );
+
+        unsafe { free(t) };
+        assert_eq!(0, counting.live_bytes.get());
     }
 }

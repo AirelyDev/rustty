@@ -28,9 +28,9 @@ fn terminal_stream_is_stream_terminal_stream<'a>(
 
 /// Likewise `Stream` must BE `stream::Stream`, for any handler.
 #[allow(dead_code)]
-fn stream_is_stream_stream<'a, H: rustty_vt::stream::Handler>(
-    s: rustty_vt::stream::Stream<'a, H>,
-) -> rustty_vt::Stream<'a, H> {
+fn stream_is_stream_stream<H: rustty_vt::stream::Handler>(
+    s: rustty_vt::stream::Stream<H>,
+) -> rustty_vt::Stream<H> {
     s
 }
 
@@ -41,11 +41,8 @@ fn root_module_reexports_stream_and_terminal_stream() {
         core::mem::size_of::<rustty_vt::TerminalStream<'static>>(),
     );
     assert_eq!(
-        core::mem::size_of::<
-            rustty_vt::stream::Stream<'static, rustty_vt::stream_terminal::Handler<'static>>,
-        >(),
-        core::mem::size_of::<
-            rustty_vt::Stream<'static, rustty_vt::stream_terminal::Handler<'static>>,
-        >(),
+        core::mem::size_of::<rustty_vt::stream::Stream<rustty_vt::stream_terminal::Handler<'static>>>(
+        ),
+        core::mem::size_of::<rustty_vt::Stream<rustty_vt::stream_terminal::Handler<'static>>>(),
     );
 }

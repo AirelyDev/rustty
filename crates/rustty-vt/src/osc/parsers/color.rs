@@ -22,20 +22,43 @@
 // The scoped logger `log` has no facade wired into this crate (matching the
 // convention used elsewhere in rustty-vt), so its single `log.info` call is
 // ported as a commented line at its call site.
+// CORRECTION (parity tail S7-7): the crate logs through the `log` facade
+// (S156-F4), and the `log.info` is live: `parseColor` can fail now that the
+// list grows through the parser's allocator. `SegmentedList` is
+// `rustty_datastruct::SegmentedList` (the port of
+// src/datastruct/segmented_list.zig).
+use crate::alloc::Allocator;
 use crate::color::Dynamic as DynamicColor;
 use crate::color::Special as SpecialColor;
 use crate::color::RGB;
 use crate::osc::{Command, Parser};
+use rustty_datastruct::SegmentedList;
+
+const LOG_SCOPE: &str = "osc_color";
 
 // const ParseError = Allocator.Error || error{
 //     MissingOperation,
 // };
-// PORT NOTE: `ParseError` is `Allocator.Error || error{MissingOperation}`. The
-// ported `List` is a `Vec<Request>` (see the parent stub note), so there is no
-// allocation-failure path, and `MissingOperation` is never actually returned by
-// the body. `parseColor` therefore cannot fail in the port; its callers' `catch`
-// path (logging + empty list) is preserved as a comment at the call site. The
-// error set is carried here verbatim as a comment per R2.
+// CORRECTION (parity tail S7-7): a PORT NOTE here said `parseColor` cannot fail
+// because `List` was a `Vec`. `List` is the reference's `SegmentedList` over the
+// parser's allocator, so `error.OutOfMemory` is reachable and takes the
+// caller's `catch` (log, empty list). `MissingOperation` is declared but never
+// returned by the body, in the reference as here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ParseError {
+    OutOfMemory,
+    #[allow(dead_code)]
+    MissingOperation,
+}
+
+impl From<rustty_datastruct::segmented_list::OutOfMemory> for ParseError {
+    fn from(_: rustty_datastruct::segmented_list::OutOfMemory) -> ParseError {
+        ParseError::OutOfMemory
+    }
+}
+
+/// `Allocator.Error`, as the per-operation parsers return it.
+type AllocError = rustty_datastruct::segmented_list::OutOfMemory;
 
 /// The possible operations we support for colors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,19 +90,15 @@ pub enum Operation {
 }
 
 /// Parse OSCs 4, 5, 10-19, 104, 110-119
-pub fn parse<'a>(parser: &'a mut Parser, terminator_ch: Option<u8>) -> Option<&'a mut Command> {
+pub fn parse<'a>(parser: &'a mut Parser, terminator_ch: Option<u8>) -> Option<Command<'a>> {
     // const alloc = parser.alloc orelse {
     //     parser.state = .invalid;
     //     return null;
     // };
-    // PORT NOTE: the reference requires an allocator (it backs the `List`). The
-    // ported `List` is a `Vec<Request>` that allocates via the global allocator,
-    // but the reference's gate is faithful behavior: with no allocator the parse
-    // is abandoned. We preserve that gate by checking `parser.alloc`.
-    if parser.alloc.is_none() {
+    let Some(alloc) = parser.alloc else {
         parser.state = crate::osc::State::Invalid;
         return None;
-    }
+    };
     // If we've collected any extra data parse that, otherwise use an empty
     // string.
     let data: &[u8] = match parser.capture.as_ref() {
@@ -129,15 +148,32 @@ pub fn parse<'a>(parser: &'a mut Parser, terminator_ch: Option<u8>) -> Option<&'
     //         .terminator = .init(terminator_ch),
     //     },
     // };
-    // PORT NOTE: `parseColor` cannot fail in the port (see the `ParseError`
-    // note), so the `catch` branch (logging + empty list) is unreachable and
-    // carried as a comment above. We assign the parsed list directly.
-    parser.command = Command::ColorOperation {
-        op,
-        requests: parse_color(op, data),
-        terminator: crate::osc::Terminator::init(terminator_ch),
+    let requests = match parse_color(alloc, op, data) {
+        Ok(list) => list,
+        Err(err) => {
+            log::info!(
+                target: LOG_SCOPE,
+                "failed to parse OSC {} color request err={err:?} data={}",
+                parser.state.tag_name(),
+                String::from_utf8_lossy(data)
+            );
+            // break :list .{};
+            List::new_in(alloc)
+        }
     };
-    Some(&mut parser.command)
+    // PORT NOTE (parity tail S7-7): the list is the parser's (`color_requests`,
+    // what the reference's `parser.command` owns), freed at `reset`; the
+    // command borrows it.
+    // PORT NOTE: reference defect (R13), UD313: the reference assigns
+    // `parser.command` without freeing the list a previous `end` built, so a
+    // second `end` on the same OSC (reachable through the C API) leaks it;
+    // `insert` drops, and frees, the previous list.
+    let requests: &'a List = parser.color_requests.insert(requests);
+    Some(Command::ColorOperation {
+        op,
+        requests,
+        terminator: crate::osc::Terminator::init(terminator_ch),
+    })
 }
 
 /// Parse any color operation string. This should NOT include the operation
@@ -150,63 +186,87 @@ pub fn parse<'a>(parser: &'a mut Parser, terminator_ch: Option<u8>) -> Option<&'
 /// request) but grants us an easier to understand and testable implementation.
 ///
 /// If color changing ends up being a bottleneck we can optimize this later.
-fn parse_color(op: Operation, buf: &[u8]) -> List {
+fn parse_color(alloc: Allocator, op: Operation, buf: &[u8]) -> Result<List, ParseError> {
     // var it = std.mem.tokenizeScalar(u8, buf, ';');
     let mut it = TokenizeScalar::new(buf, b';');
-    match op {
-        Operation::osc_4 => parse_get_set_ansi_color(Operation::osc_4, &mut it),
-        Operation::osc_5 => parse_get_set_ansi_color(Operation::osc_5, &mut it),
-        Operation::osc_104 => parse_reset_ansi_color(Operation::osc_104, &mut it),
-        Operation::osc_105 => parse_reset_ansi_color(Operation::osc_105, &mut it),
-        Operation::osc_10 => parse_get_set_dynamic_color(DynamicColor::Foreground, &mut it),
-        Operation::osc_11 => parse_get_set_dynamic_color(DynamicColor::Background, &mut it),
-        Operation::osc_12 => parse_get_set_dynamic_color(DynamicColor::Cursor, &mut it),
-        Operation::osc_13 => parse_get_set_dynamic_color(DynamicColor::PointerForeground, &mut it),
-        Operation::osc_14 => parse_get_set_dynamic_color(DynamicColor::PointerBackground, &mut it),
+    Ok(match op {
+        Operation::osc_4 => parse_get_set_ansi_color(alloc, Operation::osc_4, &mut it),
+        Operation::osc_5 => parse_get_set_ansi_color(alloc, Operation::osc_5, &mut it),
+        Operation::osc_104 => parse_reset_ansi_color(alloc, Operation::osc_104, &mut it),
+        Operation::osc_105 => parse_reset_ansi_color(alloc, Operation::osc_105, &mut it),
+        Operation::osc_10 => parse_get_set_dynamic_color(alloc, DynamicColor::Foreground, &mut it),
+        Operation::osc_11 => parse_get_set_dynamic_color(alloc, DynamicColor::Background, &mut it),
+        Operation::osc_12 => parse_get_set_dynamic_color(alloc, DynamicColor::Cursor, &mut it),
+        Operation::osc_13 => {
+            parse_get_set_dynamic_color(alloc, DynamicColor::PointerForeground, &mut it)
+        }
+        Operation::osc_14 => {
+            parse_get_set_dynamic_color(alloc, DynamicColor::PointerBackground, &mut it)
+        }
         Operation::osc_15 => {
-            parse_get_set_dynamic_color(DynamicColor::TektronixForeground, &mut it)
+            parse_get_set_dynamic_color(alloc, DynamicColor::TektronixForeground, &mut it)
         }
         Operation::osc_16 => {
-            parse_get_set_dynamic_color(DynamicColor::TektronixBackground, &mut it)
+            parse_get_set_dynamic_color(alloc, DynamicColor::TektronixBackground, &mut it)
         }
         Operation::osc_17 => {
-            parse_get_set_dynamic_color(DynamicColor::HighlightBackground, &mut it)
+            parse_get_set_dynamic_color(alloc, DynamicColor::HighlightBackground, &mut it)
         }
-        Operation::osc_18 => parse_get_set_dynamic_color(DynamicColor::TektronixCursor, &mut it),
+        Operation::osc_18 => {
+            parse_get_set_dynamic_color(alloc, DynamicColor::TektronixCursor, &mut it)
+        }
         Operation::osc_19 => {
-            parse_get_set_dynamic_color(DynamicColor::HighlightForeground, &mut it)
+            parse_get_set_dynamic_color(alloc, DynamicColor::HighlightForeground, &mut it)
         }
-        Operation::osc_110 => parse_reset_dynamic_color(DynamicColor::Foreground, &mut it),
-        Operation::osc_111 => parse_reset_dynamic_color(DynamicColor::Background, &mut it),
-        Operation::osc_112 => parse_reset_dynamic_color(DynamicColor::Cursor, &mut it),
-        Operation::osc_113 => parse_reset_dynamic_color(DynamicColor::PointerForeground, &mut it),
-        Operation::osc_114 => parse_reset_dynamic_color(DynamicColor::PointerBackground, &mut it),
-        Operation::osc_115 => parse_reset_dynamic_color(DynamicColor::TektronixForeground, &mut it),
-        Operation::osc_116 => parse_reset_dynamic_color(DynamicColor::TektronixBackground, &mut it),
-        Operation::osc_117 => parse_reset_dynamic_color(DynamicColor::HighlightBackground, &mut it),
-        Operation::osc_118 => parse_reset_dynamic_color(DynamicColor::TektronixCursor, &mut it),
-        Operation::osc_119 => parse_reset_dynamic_color(DynamicColor::HighlightForeground, &mut it),
-    }
+        Operation::osc_110 => parse_reset_dynamic_color(alloc, DynamicColor::Foreground, &mut it),
+        Operation::osc_111 => parse_reset_dynamic_color(alloc, DynamicColor::Background, &mut it),
+        Operation::osc_112 => parse_reset_dynamic_color(alloc, DynamicColor::Cursor, &mut it),
+        Operation::osc_113 => {
+            parse_reset_dynamic_color(alloc, DynamicColor::PointerForeground, &mut it)
+        }
+        Operation::osc_114 => {
+            parse_reset_dynamic_color(alloc, DynamicColor::PointerBackground, &mut it)
+        }
+        Operation::osc_115 => {
+            parse_reset_dynamic_color(alloc, DynamicColor::TektronixForeground, &mut it)
+        }
+        Operation::osc_116 => {
+            parse_reset_dynamic_color(alloc, DynamicColor::TektronixBackground, &mut it)
+        }
+        Operation::osc_117 => {
+            parse_reset_dynamic_color(alloc, DynamicColor::HighlightBackground, &mut it)
+        }
+        Operation::osc_118 => {
+            parse_reset_dynamic_color(alloc, DynamicColor::TektronixCursor, &mut it)
+        }
+        Operation::osc_119 => {
+            parse_reset_dynamic_color(alloc, DynamicColor::HighlightForeground, &mut it)
+        }
+    }?)
 }
 
 /// OSC 4/5
-fn parse_get_set_ansi_color(op: Operation, it: &mut TokenizeScalar<'_>) -> List {
+fn parse_get_set_ansi_color(
+    alloc: Allocator,
+    op: Operation,
+    it: &mut TokenizeScalar<'_>,
+) -> Result<List, AllocError> {
     // Note: in ANY error scenario below we return the accumulated results.
     // This matches the xterm behavior (see misc.c ChangeAnsiColorRequest)
 
-    let mut result: List = List::new();
+    let mut result: List = List::new_in(alloc);
     // errdefer result.deinit(alloc);
-    // PORT NOTE: `errdefer` cleanup is automatic via `Vec`'s `Drop`.
+    // PORT NOTE: `errdefer` cleanup is `SegmentedList`'s `Drop`.
     loop {
         // We expect a `c; spec` pair. If either doesn't exist then
         // we return the results up to this point.
         let color_str = match it.next() {
             Some(v) => v,
-            None => return result,
+            None => return Ok(result),
         };
         let spec_str = match it.next() {
             Some(v) => v,
-            None => return result,
+            None => return Ok(result),
         };
 
         // Color must be numeric. u9 because that'll fit our palette + special
@@ -216,7 +276,7 @@ fn parse_get_set_ansi_color(op: Operation, it: &mut TokenizeScalar<'_>) -> List 
         // `> 511` value both bail to the accumulated results).
         let color: u16 = match parse_int_u9(color_str) {
             Some(v) => v,
-            None => return result,
+            None => return Ok(result),
         };
 
         // Parse the color.
@@ -225,11 +285,11 @@ fn parse_get_set_ansi_color(op: Operation, it: &mut TokenizeScalar<'_>) -> List 
             Operation::osc_5 => Target::Special({
                 let cast = match cast_u3(color) {
                     Some(v) => v,
-                    None => return result,
+                    None => return Ok(result),
                 };
                 match int_to_special(cast) {
                     Some(v) => v,
-                    None => return result,
+                    None => return Ok(result),
                 }
             }),
 
@@ -240,11 +300,11 @@ fn parse_get_set_ansi_color(op: Operation, it: &mut TokenizeScalar<'_>) -> List 
                 None => Target::Special({
                     let cast = match cast_u3(color - 256) {
                         Some(v) => v,
-                        None => return result,
+                        None => return Ok(result),
                     };
                     match int_to_special(cast) {
                         Some(v) => v,
-                        None => return result,
+                        None => return Ok(result),
                     }
                 }),
             },
@@ -257,37 +317,42 @@ fn parse_get_set_ansi_color(op: Operation, it: &mut TokenizeScalar<'_>) -> List 
         if spec_str == b"?" {
             // const req = try result.addOne(alloc);
             // req.* = .{ .query = target };
-            result.push(Request::Query(target));
+            result.add_one()?.write(Request::Query(target));
             continue;
         }
 
         // const rgb = RGB.parse(spec_str) catch return result;
         let rgb = match RGB::parse(spec_str) {
             Ok(v) => v,
-            Err(_) => return result,
+            Err(_) => return Ok(result),
         };
         // const req = try result.addOne(alloc);
         // req.* = .{ .set = .{ .target = target, .color = rgb } };
-        result.push(Request::Set(ColoredTarget { target, color: rgb }));
+        result
+            .add_one()?
+            .write(Request::Set(ColoredTarget { target, color: rgb }));
     }
 }
 
 /// OSC 104/105: Reset ANSI Colors
-fn parse_reset_ansi_color(op: Operation, it: &mut TokenizeScalar<'_>) -> List {
+fn parse_reset_ansi_color(
+    alloc: Allocator,
+    op: Operation,
+    it: &mut TokenizeScalar<'_>,
+) -> Result<List, AllocError> {
     // Note: xterm stops parsing the reset list on any error, but we're
     // more flexible and try the next value. This matches the behavior of
     // Kitty and I don't see a downside to being more flexible here. Hopefully
     // no one depends on the exact behavior of xterm.
 
-    let mut result: List = List::new();
+    let mut result: List = List::new_in(alloc);
     // errdefer result.deinit(alloc);
     loop {
         let color_str = match it.next() {
             Some(v) => v,
             None => {
                 // If no parameters are given, we reset the full table.
-                // PORT NOTE: `result.count() == 0` => `result.is_empty()`.
-                if result.is_empty() {
+                if result.count() == 0 {
                     // const req = try result.addOne(alloc);
                     // req.* = switch (op) { ... };
                     let req = match op {
@@ -295,9 +360,9 @@ fn parse_reset_ansi_color(op: Operation, it: &mut TokenizeScalar<'_>) -> List {
                         Operation::osc_105 => Request::ResetSpecial,
                         _ => unreachable!(),
                     };
-                    result.push(req);
+                    result.add_one()?.write(req);
                 }
-                return result;
+                return Ok(result);
             }
         };
 
@@ -349,36 +414,47 @@ fn parse_reset_ansi_color(op: Operation, it: &mut TokenizeScalar<'_>) -> List {
 
         // const req = try result.addOne(alloc);
         // req.* = .{ .reset = target };
-        result.push(Request::Reset(target));
+        result.add_one()?.write(Request::Reset(target));
     }
 }
 
 /// OSC 10-19: Get/Set Dynamic Colors
-fn parse_get_set_dynamic_color(start: DynamicColor, it: &mut TokenizeScalar<'_>) -> List {
+fn parse_get_set_dynamic_color(
+    alloc: Allocator,
+    start: DynamicColor,
+    it: &mut TokenizeScalar<'_>,
+) -> Result<List, AllocError> {
     // Note: in ANY error scenario below we return the accumulated results.
     // This matches the xterm behavior (see misc.c ChangeColorsRequest)
 
-    let mut result: List = List::new();
+    let mut result: List = List::new_in(alloc);
+    // PORT NOTE: reference defect (R13), UD310 (N321): the reference has no
+    // `errdefer result.deinit(alloc)` here, unlike its three siblings, so an
+    // `addOne` that fails after an earlier one grew a shelf (the 7th request of
+    // an OSC 10-13 with seven or more values) leaks the shelves. `result` is a
+    // `SegmentedList` that frees them when the error drops it.
     let mut color: DynamicColor = start;
     loop {
         let spec_str = match it.next() {
             Some(v) => v,
-            None => return result,
+            None => return Ok(result),
         };
 
         if spec_str == b"?" {
             // const req = try result.addOne(alloc);
             // req.* = .{ .query = .{ .dynamic = color } };
-            result.push(Request::Query(Target::Dynamic(color)));
+            result
+                .add_one()?
+                .write(Request::Query(Target::Dynamic(color)));
         } else {
             // const rgb = RGB.parse(spec_str) catch return result;
             let rgb = match RGB::parse(spec_str) {
                 Ok(v) => v,
-                Err(_) => return result,
+                Err(_) => return Ok(result),
             };
             // const req = try result.addOne(alloc);
             // req.* = .{ .set = .{ .target = .{ .dynamic = color }, .color = rgb } };
-            result.push(Request::Set(ColoredTarget {
+            result.add_one()?.write(Request::Set(ColoredTarget {
                 target: Target::Dynamic(color),
                 color: rgb,
             }));
@@ -388,23 +464,29 @@ fn parse_get_set_dynamic_color(start: DynamicColor, it: &mut TokenizeScalar<'_>)
         // color = color.next() orelse return result;
         color = match color.next() {
             Some(v) => v,
-            None => return result,
+            None => return Ok(result),
         };
     }
 }
 
 /// OSC 110-119: Reset Dynamic Colors
-fn parse_reset_dynamic_color(color: DynamicColor, it: &mut TokenizeScalar<'_>) -> List {
-    let mut result: List = List::new();
+fn parse_reset_dynamic_color(
+    alloc: Allocator,
+    color: DynamicColor,
+    it: &mut TokenizeScalar<'_>,
+) -> Result<List, AllocError> {
+    let mut result: List = List::new_in(alloc);
     // errdefer result.deinit(alloc);
     // if (it.next() != null) return result;
     if it.next().is_some() {
-        return result;
+        return Ok(result);
     }
     // const req = try result.addOne(alloc);
     // req.* = .{ .reset = .{ .dynamic = color } };
-    result.push(Request::Reset(Target::Dynamic(color)));
     result
+        .add_one()?
+        .write(Request::Reset(Target::Dynamic(color)));
+    Ok(result)
 }
 
 /// A segmented list is used to avoid copying when many operations
@@ -414,12 +496,17 @@ fn parse_reset_dynamic_color(color: DynamicColor, it: &mut TokenizeScalar<'_>) -
 /// The exact prealloc value is chosen arbitrarily assuming most
 /// color ops have very few. If we can get empirical data on more
 /// typical values we can switch to that.
-// pub const List = std.SegmentedList(Request, 2);
-// PORT NOTE: `std.SegmentedList(Request, 2)` is a segmented list with 2 prealloc
-// slots. `std.SegmentedList` is not ported; the storage is modeled as a
-// `Vec<Request>` carrying the same elements. The prealloc-count tuning (2) is a
-// perf detail with no observable behavior.
-pub type List = Vec<Request>;
+// pub const List = SegmentedList(
+//     Request,
+//     2,
+// );
+// CORRECTION (parity tail S7-7, S174-F3): this was a `Vec<Request>` on the Rust
+// heap, with a note that the prealloc count "is a perf detail with no
+// observable behavior". Through the caller's allocator it is observable: with
+// the two preallocated slots an OSC carrying one or two requests makes no
+// allocation at all. The list is bound to the parser's allocator (see
+// `SegmentedList`'s allocator note).
+pub type List = SegmentedList<Request, 2, Allocator>;
 
 /// A single operation related to the terminal color palette.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -598,7 +685,8 @@ mod tests {
             {
                 let body = format!("{};red", idx);
 
-                let list = parse_color(Operation::osc_4, body.as_bytes());
+                let list =
+                    parse_color(crate::alloc::Global, Operation::osc_4, body.as_bytes()).unwrap();
                 assert_eq!(1, list.len());
                 assert_eq!(
                     Request::Set(ColoredTarget {
@@ -614,7 +702,8 @@ mod tests {
             {
                 let body = format!("{};?", idx);
 
-                let list = parse_color(Operation::osc_4, body.as_bytes());
+                let list =
+                    parse_color(crate::alloc::Global, Operation::osc_4, body.as_bytes()).unwrap();
                 assert_eq!(1, list.len());
                 assert_eq!(Request::Query(Target::Palette(idx as u8)), list[0],);
             }
@@ -624,7 +713,8 @@ mod tests {
             {
                 let body = format!("{};red;", idx);
 
-                let list = parse_color(Operation::osc_4, body.as_bytes());
+                let list =
+                    parse_color(crate::alloc::Global, Operation::osc_4, body.as_bytes()).unwrap();
                 assert_eq!(1, list.len());
                 assert_eq!(
                     Request::Set(ColoredTarget {
@@ -642,7 +732,8 @@ mod tests {
             {
                 let body = format!("{};red ", idx);
 
-                let list = parse_color(Operation::osc_4, body.as_bytes());
+                let list =
+                    parse_color(crate::alloc::Global, Operation::osc_4, body.as_bytes()).unwrap();
                 assert_eq!(1, list.len());
                 assert_eq!(
                     Request::Set(ColoredTarget {
@@ -664,7 +755,8 @@ mod tests {
             {
                 let body = format!("{};red", 256 + i);
 
-                let list = parse_color(Operation::osc_4, body.as_bytes());
+                let list =
+                    parse_color(crate::alloc::Global, Operation::osc_4, body.as_bytes()).unwrap();
                 assert_eq!(1, list.len());
                 assert_eq!(
                     Request::Set(ColoredTarget {
@@ -689,7 +781,8 @@ mod tests {
             {
                 let body = format!("{};red", i);
 
-                let list = parse_color(Operation::osc_5, body.as_bytes());
+                let list =
+                    parse_color(crate::alloc::Global, Operation::osc_5, body.as_bytes()).unwrap();
                 assert_eq!(1, list.len());
                 assert_eq!(
                     Request::Set(ColoredTarget {
@@ -711,9 +804,14 @@ mod tests {
     #[test]
     fn osc_4_104_color_index_follows_zig_parse_int_but_refuses_digit_separators() {
         // A `_` fails the parse, which ends an OSC 4 list.
-        assert_eq!(0, parse_color(Operation::osc_4, b"1_0;red;+11;blue").len());
+        assert_eq!(
+            0,
+            parse_color(crate::alloc::Global, Operation::osc_4, b"1_0;red;+11;blue")
+                .unwrap()
+                .len()
+        );
 
-        let list = parse_color(Operation::osc_4, b"10;red;+11;blue");
+        let list = parse_color(crate::alloc::Global, Operation::osc_4, b"10;red;+11;blue").unwrap();
         assert_eq!(2, list.len());
         assert_eq!(
             Request::Set(ColoredTarget {
@@ -731,21 +829,32 @@ mod tests {
         );
 
         // OSC 104 skips a bad index and goes on.
-        let list = parse_color(Operation::osc_104, b"1_2;_3;3_;-0;5_12;4;12");
+        let list = parse_color(
+            crate::alloc::Global,
+            Operation::osc_104,
+            b"1_2;_3;3_;-0;5_12;4;12",
+        )
+        .unwrap();
         assert_eq!(3, list.len());
         assert_eq!(Request::Reset(Target::Palette(0)), list[0]);
         assert_eq!(Request::Reset(Target::Palette(4)), list[1]);
         assert_eq!(Request::Reset(Target::Palette(12)), list[2]);
 
         // A leading `_` fails the parse, which ends an OSC 4 list.
-        assert_eq!(0, parse_color(Operation::osc_4, b"_1;red").len());
+        assert_eq!(
+            0,
+            parse_color(crate::alloc::Global, Operation::osc_4, b"_1;red")
+                .unwrap()
+                .len()
+        );
     }
 
     #[test]
     fn osc_4_multiple_requests() {
         // printf '\e]4;0;red;1;blue\e\\'
         {
-            let list = parse_color(Operation::osc_4, b"0;red;1;blue");
+            let list =
+                parse_color(crate::alloc::Global, Operation::osc_4, b"0;red;1;blue").unwrap();
             assert_eq!(2, list.len());
             assert_eq!(
                 Request::Set(ColoredTarget {
@@ -766,7 +875,8 @@ mod tests {
         // Multiple requests with same index overwrite each other
         // printf '\e]4;0;red;0;blue\e\\'
         {
-            let list = parse_color(Operation::osc_4, b"0;red;0;blue");
+            let list =
+                parse_color(crate::alloc::Global, Operation::osc_4, b"0;red;0;blue").unwrap();
             assert_eq!(2, list.len());
             assert_eq!(
                 Request::Set(ColoredTarget {
@@ -795,7 +905,8 @@ mod tests {
             {
                 let body = format!("{}", idx);
 
-                let list = parse_color(Operation::osc_104, body.as_bytes());
+                let list =
+                    parse_color(crate::alloc::Global, Operation::osc_104, body.as_bytes()).unwrap();
                 assert_eq!(1, list.len());
                 assert_eq!(Request::Reset(Target::Palette(idx as u8)), list[0],);
             }
@@ -810,7 +921,8 @@ mod tests {
             {
                 let body = format!("{}", 256 + i);
 
-                let list = parse_color(Operation::osc_104, body.as_bytes());
+                let list =
+                    parse_color(crate::alloc::Global, Operation::osc_104, body.as_bytes()).unwrap();
                 assert_eq!(1, list.len());
                 assert_eq!(Request::Reset(Target::Special(special)), list[0],);
             }
@@ -820,7 +932,7 @@ mod tests {
     // test "OSC 104: empty index" {
     #[test]
     fn osc_104_empty_index() {
-        let list = parse_color(Operation::osc_104, b"0;;1");
+        let list = parse_color(crate::alloc::Global, Operation::osc_104, b"0;;1").unwrap();
         assert_eq!(2, list.len());
         assert_eq!(Request::Reset(Target::Palette(0)), list[0],);
         assert_eq!(Request::Reset(Target::Palette(1)), list[1],);
@@ -829,7 +941,7 @@ mod tests {
     // test "OSC 104: invalid index" {
     #[test]
     fn osc_104_invalid_index() {
-        let list = parse_color(Operation::osc_104, b"ffff;1");
+        let list = parse_color(crate::alloc::Global, Operation::osc_104, b"ffff;1").unwrap();
         assert_eq!(1, list.len());
         assert_eq!(Request::Reset(Target::Palette(1)), list[0],);
     }
@@ -837,7 +949,7 @@ mod tests {
     // test "OSC 104: reset all" {
     #[test]
     fn osc_104_reset_all() {
-        let list = parse_color(Operation::osc_104, b"");
+        let list = parse_color(crate::alloc::Global, Operation::osc_104, b"").unwrap();
         assert_eq!(1, list.len());
         assert_eq!(Request::ResetPalette, list[0],);
     }
@@ -845,7 +957,7 @@ mod tests {
     // test "OSC 105: reset all" {
     #[test]
     fn osc_105_reset_all() {
-        let list = parse_color(Operation::osc_105, b"");
+        let list = parse_color(crate::alloc::Global, Operation::osc_105, b"").unwrap();
         assert_eq!(1, list.len());
         assert_eq!(Request::ResetSpecial, list[0],);
     }
@@ -862,7 +974,7 @@ mod tests {
             // Example script:
             // printf '\e]10;red\e\\'
             {
-                let list = parse_color(op, b"red");
+                let list = parse_color(crate::alloc::Global, op, b"red").unwrap();
                 assert_eq!(1, list.len());
                 assert_eq!(
                     Request::Set(ColoredTarget {
@@ -881,7 +993,7 @@ mod tests {
         // Example script:
         // printf '\e]11;red;blue\e\\'
         {
-            let list = parse_color(Operation::osc_11, b"red;blue");
+            let list = parse_color(crate::alloc::Global, Operation::osc_11, b"red;blue").unwrap();
             assert_eq!(2, list.len());
             assert_eq!(
                 Request::Set(ColoredTarget {
@@ -913,7 +1025,7 @@ mod tests {
             // Example script:
             // printf '\e]110\e\\'
             {
-                let list = parse_color(op, b"");
+                let list = parse_color(crate::alloc::Global, op, b"").unwrap();
                 assert_eq!(1, list.len());
                 assert_eq!(Request::Reset(Target::Dynamic(color)), list[0],);
             }
@@ -922,7 +1034,7 @@ mod tests {
             //
             // printf '\e]110;\e\\'
             {
-                let list = parse_color(op, b";");
+                let list = parse_color(crate::alloc::Global, op, b";").unwrap();
                 assert_eq!(1, list.len());
                 assert_eq!(Request::Reset(Target::Dynamic(color)), list[0],);
             }
@@ -931,7 +1043,7 @@ mod tests {
             //
             // printf '\e]110 \e\\'
             {
-                let list = parse_color(op, b" ");
+                let list = parse_color(crate::alloc::Global, op, b" ").unwrap();
                 assert_eq!(0, list.len());
             }
         }
@@ -968,16 +1080,22 @@ mod tests {
         // (fuzz input `\x00` + `4;1;aebcd` with a real 'e-acute'): 'aébcd' is
         // valid UTF-8, 6 BYTES, so `parse` takes its 6-byte arm and cuts
         // `input[2..4]` inside 'é'.
-        let list = parse_color(Operation::osc_4, "1;aébcd".as_bytes());
+        let list =
+            parse_color(crate::alloc::Global, Operation::osc_4, "1;aébcd".as_bytes()).unwrap();
         assert!(list.is_empty());
 
         // Raw invalid UTF-8 in the spec is equally just a failed parse.
-        let list = parse_color(Operation::osc_4, b"1;U\x8evv");
+        let list = parse_color(crate::alloc::Global, Operation::osc_4, b"1;U\x8evv").unwrap();
         assert!(list.is_empty());
 
         // The bail is "return what we have", not "drop everything": a good
         // pair before the bad one survives.
-        let list = parse_color(Operation::osc_4, "0;red;1;aébcd".as_bytes());
+        let list = parse_color(
+            crate::alloc::Global,
+            Operation::osc_4,
+            "0;red;1;aébcd".as_bytes(),
+        )
+        .unwrap();
         assert_eq!(1, list.len());
         assert_eq!(
             Request::Set(ColoredTarget {
@@ -992,15 +1110,21 @@ mod tests {
     // which has its own `RGB.parse` call site.
     #[test]
     fn osc_10_non_ascii_spec_stops_the_list_instead_of_panicking() {
-        let list = parse_color(Operation::osc_10, "aébcd".as_bytes());
+        let list =
+            parse_color(crate::alloc::Global, Operation::osc_10, "aébcd".as_bytes()).unwrap();
         assert!(list.is_empty());
 
-        let list = parse_color(Operation::osc_11, b"U\x8evv");
+        let list = parse_color(crate::alloc::Global, Operation::osc_11, b"U\x8evv").unwrap();
         assert!(list.is_empty());
 
         // A query for the foreground, then a bad background spec: the query
         // survives, the bad spec ends the list.
-        let list = parse_color(Operation::osc_10, "?;aébcd".as_bytes());
+        let list = parse_color(
+            crate::alloc::Global,
+            Operation::osc_10,
+            "?;aébcd".as_bytes(),
+        )
+        .unwrap();
         assert_eq!(1, list.len());
         assert_eq!(
             Request::Query(Target::Dynamic(DynamicColor::Foreground)),

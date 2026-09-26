@@ -19,6 +19,9 @@ use crate::pagelist::iter::{Direction, RowIterator};
 use crate::pagelist::Pin;
 
 // const log = std.log.scoped(.kitty_gfx);
+// The scope, carried through the `log` facade as `target: LOG_SCOPE` (task
+// S-1c: the four diacritic warnings below were ported as comments).
+const LOG_SCOPE: &str = "kitty_gfx";
 
 // PORT NOTE: `assert` is `quirks.inlineAssert`. We retarget to the same helper
 // used by the rest of the vt crate.
@@ -569,6 +572,11 @@ impl IncompletePlacement {
                 Some(v) => Some(v),
                 None => {
                     // log.warn("virtual placement with invalid row diacritic cp={X}", .{cps[0]});
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "virtual placement with invalid row diacritic cp={:X}",
+                        cps[0]
+                    );
                     None
                 }
             };
@@ -578,6 +586,11 @@ impl IncompletePlacement {
                     Some(v) => Some(v),
                     None => {
                         // log.warn("virtual placement with invalid col diacritic cp={X}", .{cps[1]});
+                        log::warn!(
+                            target: LOG_SCOPE,
+                            "virtual placement with invalid col diacritic cp={:X}",
+                            cps[1]
+                        );
                         None
                     }
                 };
@@ -587,6 +600,11 @@ impl IncompletePlacement {
                         Some(v) => Some(v),
                         None => {
                             // log.warn("virtual placement with invalid high diacritic cp={X}", .{cps[2]});
+                            log::warn!(
+                                target: LOG_SCOPE,
+                                "virtual placement with invalid high diacritic cp={:X}",
+                                cps[2]
+                            );
                             None
                         }
                     };
@@ -599,6 +617,12 @@ impl IncompletePlacement {
                                 //     cps[2],
                                 //     high,
                                 // });
+                                log::warn!(
+                                    target: LOG_SCOPE,
+                                    "virtual placement with invalid high diacritic cp={:X} value={}",
+                                    cps[2],
+                                    high
+                                );
                                 None
                             }
                         };
@@ -1340,5 +1364,48 @@ mod tests {
 
         s.deinit(alloc, t.screens.active);
         t.deinit(alloc);
+    }
+
+    // Task S-1c (no reference test): each invalid diacritic of a virtual
+    // placement logs the reference's warning (graphics_unicode.zig:447, :453,
+    // :459, :468) and is treated as absent.
+    fn placement_warnings(text: &str) -> Vec<crate::log_capture::CapturedRecord> {
+        let alloc = crate::alloc::Global;
+        let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
+        t.modes.set(crate::modes::Mode::GraphemeCluster, true);
+        t.print_string(text.as_bytes()).unwrap();
+        let pin = unsafe { &(*t.screens.active).pages }.get_top_left(point::Tag::Viewport);
+        let cap = crate::log_capture::start();
+        let mut it = placement_iterator(pin, None);
+        let p = it.next().unwrap();
+        assert!(it.next().is_none());
+        let messages = cap.messages();
+        drop(cap);
+        assert_eq!(0, p.row);
+        t.deinit(alloc);
+        messages
+    }
+
+    fn warn(msg: &str) -> crate::log_capture::CapturedRecord {
+        (log::Level::Warn, "kitty_gfx".to_string(), msg.to_string())
+    }
+
+    #[test]
+    fn unicode_placement_invalid_diacritics_log_warnings() {
+        assert_eq!(
+            vec![
+                warn("virtual placement with invalid row diacritic cp=301"),
+                warn("virtual placement with invalid col diacritic cp=301"),
+                warn("virtual placement with invalid high diacritic cp=301"),
+            ],
+            placement_warnings("\u{10EEEE}\u{0301}\u{0301}\u{0301}")
+        );
+        // 0x1D242 is diacritic index 294, which does not fit the u8 high byte.
+        assert_eq!(
+            vec![warn(
+                "virtual placement with invalid high diacritic cp=1D242 value=294"
+            )],
+            placement_warnings("\u{10EEEE}\u{0305}\u{0305}\u{1D242}")
+        );
     }
 }

@@ -2019,6 +2019,7 @@ fn action_new_window(
     app: &Application,
 ) {
     // `log.debug("received new window action")` (`:1904`).
+    log::debug!(target: LOG_SCOPE, "received new window action");
 
     // `const overrides = overrides: { ... }` (`:1911-1930`) — parse the
     // optional `as` parameter; a parse failure collapses to null (`catch
@@ -2068,6 +2069,7 @@ fn action_new_tab(
     app: &Application,
 ) {
     // `log.debug("received new tab action")` (`:1951`).
+    log::debug!(target: LOG_SCOPE, "received new tab action");
 
     // `const surface_id_, const overrides = result: { ... }` (`:1959-1993`).
     let (surface_id, overrides) = {
@@ -2154,7 +2156,7 @@ fn parse_overrides(arguments_it: glib::VariantIter) -> Option<TabOverrides> {
         };
 
         // `log.debug("argument: {d} {s}", .{ i, str });` (`:2044`).
-        let _ = i;
+        log::debug!(target: LOG_SCOPE, "argument: {i} {str}");
 
         if e_seen {
             // `args.append(arena_alloc, copy)` (`:2046-2056`) — everything
@@ -3041,9 +3043,12 @@ impl Application {
         //   `:1998 :2002 :2037 :2044 :2814` — Zig `dupeZ`/`ArrayList.append`/
         //          `bufPrint` allocation failures; the Rust equivalents are
         //          infallible.
-        //   `:2197` `unable to load resources` — gresource registration is
-        //          compiled in and cannot fail at runtime here.
-        //   `:3024` `unable to resize split, out of memory` — same class.
+        //   (`:2197` `unable to load resources` is live: `gtk.rs`
+        //          `register_resources`, task S-1c.)
+        //   (`:3024` `unable to resize split, out of memory` is live in
+        //          `resize_split`; its text had lost ", out of memory".)
+        //   Each remaining site is a machine-checked row in
+        //   `.port/parity-closure/LOG-ABSENT-SITES.tsv` (task S-1c).
         //
         // (`application.zig:306`). `set_gtk_env` is infallible in rustty (see its
         // doc), so the reference's `error.NoSpaceLeft` warn arm folds away. That
@@ -3407,10 +3412,15 @@ impl Application {
                 // log.warn("error updating app color scheme err={}", ...)`.
                 if let Some(rt_app) = rt_app {
                     // SAFETY: as above — app-thread-only access to the two backrefs.
-                    if let Err(_err) =
+                    if let Err(err) =
                         unsafe { &mut *core_app }.colorSchemeEvent(unsafe { &*rt_app }, scheme)
                     {
                         // log.warn("error updating app color scheme err={}", .{err});
+                        // (task S-1c: ported live; it was a comment.)
+                        log::warn!(
+                            target: LOG_SCOPE,
+                            "error updating app color scheme err={err:?}"
+                        );
                     }
                 }
 
@@ -3422,11 +3432,15 @@ impl Application {
                     // SAFETY: as above — app-thread-only access to the surface
                     // backrefs the core app owns.
                     let core = unsafe { &*surface }.core();
-                    if let Err(_err) = unsafe { &mut *core }.colorSchemeCallback(scheme) {
+                    if let Err(err) = unsafe { &mut *core }.colorSchemeCallback(scheme) {
                         // log.warn(
                         //     "unable to tell surface about color scheme change err={}",
                         //     .{err},
                         // );
+                        log::warn!(
+                            target: LOG_SCOPE,
+                            "unable to tell surface about color scheme change err={err:?}"
+                        );
                     }
                 }
             })));
@@ -4260,7 +4274,12 @@ mod action {
             Target::Surface(v) => {
                 let Some(w) = widget(v) else { return false };
                 let Some(window) = ext::ancestor::<Window>(&w) else {
-                    log::warn!(target: LOG_SCOPE, "surface is not in a window, ignoring goto_tab");
+                    // log.warn("surface is not in a window, ignoring new_tab", .{});
+                    // (application.zig:2462, in `gotoTab`.) The reference names the
+                    // wrong action here, a copy of `newTab`'s message; R13 keeps
+                    // message text faithful and records it (UPSTREAM-DEFECTS UD300).
+                    // Task S-1c: this said `ignoring goto_tab`.
+                    log::warn!(target: LOG_SCOPE, "surface is not in a window, ignoring new_tab");
                     return false;
                 };
                 // `window.selectTab(switch (tab) { ... })` (`:2058-2063`). The special
@@ -4483,7 +4502,12 @@ mod action {
             Target::Surface(v) => {
                 let Some(w) = widget(v) else { return false };
                 let Some(window) = ext::ancestor::<Window>(&w) else {
-                    log::warn!(target: LOG_SCOPE, "surface is not in a window, ignoring move_tab");
+                    // log.warn("surface is not in a window, ignoring new_tab", .{});
+                    // (application.zig:2603, in `moveTab`.) The reference names the
+                    // wrong action here, a copy of `newTab`'s message; R13 keeps
+                    // message text faithful and records it (UPSTREAM-DEFECTS UD300).
+                    // Task S-1c: this said `ignoring move_tab`.
+                    log::warn!(target: LOG_SCOPE, "surface is not in a window, ignoring new_tab");
                     return false;
                 };
                 // `window.moveTab(surface, @intCast(value.amount))` (`:2196-2199`).
@@ -5022,7 +5046,10 @@ mod action {
                 match tree.resize(dir, value.amount) {
                     Ok(handled) => handled,
                     Err(_) => {
-                        log::warn!(target: LOG_SCOPE, "unable to resize split");
+                        // `error.OutOfMemory => log.warn("unable to resize split, out
+                        // of memory", .{})` (`:3024`): `DsError` has only that
+                        // variant. (Task S-1c: the text had lost ", out of memory".)
+                        log::warn!(target: LOG_SCOPE, "unable to resize split, out of memory");
                         false
                     }
                 }
@@ -5365,7 +5392,12 @@ mod action {
             Target::Surface(v) => {
                 let Some(w) = widget(v) else { return false };
                 let Some(window) = ext::ancestor::<Window>(&w) else {
-                    log::warn!(target: LOG_SCOPE, "surface is not in a window, ignoring toggle_tab_overview");
+                    // log.warn("surface is not in a window, ignoring new_tab", .{});
+                    // (application.zig:3276, in `toggleTabOverview`.) The reference names the
+                    // wrong action here, a copy of `newTab`'s message; R13 keeps
+                    // message text faithful and records it (UPSTREAM-DEFECTS UD300).
+                    // Task S-1c: this said `ignoring toggle_tab_overview`.
+                    log::warn!(target: LOG_SCOPE, "surface is not in a window, ignoring new_tab");
                     return false;
                 };
                 window.toggle_tab_overview();

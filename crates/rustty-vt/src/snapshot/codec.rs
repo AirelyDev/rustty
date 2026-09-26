@@ -1314,12 +1314,11 @@ mod tests {
     use crate::terminal::{Colors as TerminalColors, Options as TerminalOptions};
     use std::borrow::Cow;
 
-    // PORT NOTE: `testing.allocator` for the Stream's OSC parser — the
-    // process-global zig allocator (the `stream_terminal.rs` test idiom).
-    static CONT_ZIG_ALLOC: rustty_lib::allocator::GlobalZigAllocator =
-        rustty_lib::allocator::GlobalZigAllocator;
-    fn cont_alloc() -> rustty_lib::allocator::ZigAllocatorRef<'static> {
-        rustty_lib::allocator::ZigAllocatorRef::new(&CONT_ZIG_ALLOC)
+    // PORT NOTE: `testing.allocator` for the Stream — the Rust heap handle
+    // (the `stream_terminal.rs` test idiom; parity tail S7-7 made
+    // `Options.allocator` the runtime handle).
+    fn cont_alloc() -> crate::alloc::Allocator {
+        crate::alloc::Global
     }
 
     // const test_encode_options: EncodeOptions = .{ .continuation = .ground };
