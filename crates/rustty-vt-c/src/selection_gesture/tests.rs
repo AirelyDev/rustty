@@ -1339,3 +1339,201 @@ fn get_multi_rejects_out_of_range_c_keys() {
         unsafe { terminal_c::free(terminal) };
     });
 }
+
+// ---------------------------------------------------------------------------
+// Parity tail S7-8: the event's codepoint copy goes through the event's
+// allocator (`event.alloc.alloc(u21, value.len)`, `event.alloc.free(cps)`),
+// with the reference's exact sizes, its OUT_OF_MEMORY arm, and the R13 fix of
+// the invalid-codepoint leak (UD314).
+// ---------------------------------------------------------------------------
+
+fn set_codepoints(event: Event, values: &[u32]) -> Result {
+    let in_ = Codepoints {
+        ptr: values.as_ptr(),
+        len: values.len(),
+    };
+    unsafe {
+        event_set(
+            event,
+            EventOption::WordBoundaryCodepoints,
+            &in_ as *const _ as *const c_void,
+        )
+    }
+}
+
+#[test]
+fn event_codepoints_route_through_the_event_allocator() {
+    use rustty_vt::alloc::testing::CountingAllocator;
+    let counting = CountingAllocator::over_heap();
+    let calloc = counting.allocator();
+    let wrapper_len = std::mem::size_of::<EventWrapper>();
+
+    let mut event: Event = std::ptr::null_mut();
+    assert_eq!(Result::Success, unsafe {
+        event_new(Some(&calloc), &mut event, EventType::Press)
+    });
+    // alloc.create(EventWrapper): one call, nothing else.
+    assert_eq!(1, counting.alloc_calls.get());
+    assert_eq!(wrapper_len, counting.live_bytes.get());
+
+    // alloc(u21, 3): one exact 12-byte, 4-aligned request.
+    assert_eq!(
+        Result::Success,
+        set_codepoints(event, &[' ' as u32, '\t' as u32, ';' as u32])
+    );
+    assert_eq!(2, counting.alloc_calls.get());
+    assert_eq!(Some((12, 2)), counting.last_alloc.get());
+    assert_eq!(wrapper_len + 12, counting.live_bytes.get());
+    assert_eq!(
+        vec![' ' as u32, '\t' as u32, ';' as u32],
+        press_word_boundaries(event)
+    );
+
+    // Replacing frees the old copy (clearWordBoundaryCodepoints) before the
+    // new one is allocated.
+    assert_eq!(Result::Success, set_codepoints(event, &['x' as u32]));
+    assert_eq!(1, counting.free_calls.get());
+    assert_eq!(Some((12, 2)), counting.last_free.get());
+    assert_eq!(3, counting.alloc_calls.get());
+    assert_eq!(Some((4, 2)), counting.last_alloc.get());
+    assert_eq!(wrapper_len + 4, counting.live_bytes.get());
+
+    // A zero-length, non-null slice: `alloc(u21, 0)` makes no call, and the
+    // old copy is freed.
+    let none: [u32; 0] = [];
+    let empty = Codepoints {
+        ptr: none.as_ptr(),
+        len: 0,
+    };
+    assert!(!empty.ptr.is_null());
+    assert_eq!(Result::Success, unsafe {
+        event_set(
+            event,
+            EventOption::WordBoundaryCodepoints,
+            &empty as *const _ as *const c_void,
+        )
+    });
+    assert_eq!(3, counting.alloc_calls.get());
+    assert_eq!(2, counting.free_calls.get());
+    assert_eq!(0, press_word_boundaries(event).len());
+
+    // The null-value clear allocates nothing.
+    assert_eq!(
+        Result::Success,
+        set_codepoints(event, &['y' as u32, 'z' as u32])
+    );
+    assert_eq!(4, counting.alloc_calls.get());
+    assert_eq!(Result::Success, unsafe {
+        event_set(event, EventOption::WordBoundaryCodepoints, std::ptr::null())
+    });
+    assert_eq!(4, counting.alloc_calls.get());
+    assert_eq!(3, counting.free_calls.get());
+    assert_eq!(Some((8, 2)), counting.last_free.get());
+
+    // event_free frees a live copy, then the wrapper.
+    assert_eq!(Result::Success, set_codepoints(event, &['a' as u32]));
+    assert_eq!(5, counting.alloc_calls.get());
+    unsafe { event_free(event) };
+    assert_eq!(5, counting.free_calls.get());
+    assert_eq!(
+        Some((
+            wrapper_len,
+            std::mem::align_of::<EventWrapper>().trailing_zeros() as u8
+        )),
+        counting.last_free.get()
+    );
+    assert_eq!(0, counting.live_bytes.get());
+    // Nothing reached the vtable's resize/remap.
+    assert_eq!(0, counting.resize_calls.get());
+    assert_eq!(0, counting.remap_calls.get());
+}
+
+#[test]
+fn event_codepoints_allocation_failure_is_out_of_memory() {
+    use rustty_vt::alloc::testing::{Config, FailingAllocator};
+    // The wrapper succeeds; the codepoint copy is the second allocation.
+    let failing = FailingAllocator::over_heap(Config {
+        fail_index: 1,
+        ..Config::default()
+    });
+    let calloc = failing.allocator();
+    let mut event: Event = std::ptr::null_mut();
+    assert_eq!(Result::Success, unsafe {
+        event_new(Some(&calloc), &mut event, EventType::Drag)
+    });
+    assert_eq!(Result::OutOfMemory, set_codepoints(event, &[' ' as u32]));
+    assert!(failing.has_induced_failure.get());
+    // The failed set already cleared any previous copy: the payload reads the
+    // default boundaries, as the reference's `target.*` does.
+    // SAFETY: `event` is live.
+    let ev = unsafe { &*event };
+    assert!(ev.word_boundary_codepoints.is_none());
+    assert_eq!(
+        selection_codepoints::DEFAULT_WORD_BOUNDARIES.len(),
+        ev.word_boundaries().len()
+    );
+    unsafe { event_free(event) };
+    assert_eq!(1, failing.allocations.get());
+    assert_eq!(1, failing.deallocations.get());
+    assert_eq!(failing.allocated_bytes.get(), failing.freed_bytes.get());
+}
+
+// R13 (UD314): an out-of-range codepoint returns INVALID_VALUE. The reference
+// leaks the copy there (`errdefer` does not run for a non-error return); the
+// port frees it.
+#[test]
+fn event_invalid_codepoint_frees_the_copy() {
+    use rustty_vt::alloc::testing::CountingAllocator;
+    let counting = CountingAllocator::over_heap();
+    let calloc = counting.allocator();
+    let wrapper_len = std::mem::size_of::<EventWrapper>();
+    let mut event: Event = std::ptr::null_mut();
+    assert_eq!(Result::Success, unsafe {
+        event_new(Some(&calloc), &mut event, EventType::Press)
+    });
+    assert_eq!(Result::Success, set_codepoints(event, &[' ' as u32]));
+    assert_eq!(wrapper_len + 4, counting.live_bytes.get());
+
+    // The copy is allocated (2 elements, 8 bytes), then the second codepoint
+    // does not fit in 21 bits.
+    assert_eq!(
+        Result::InvalidValue,
+        set_codepoints(event, &['a' as u32, 0x20_0000])
+    );
+    // The fixed path ran: the copy was allocated...
+    assert_eq!(3, counting.alloc_calls.get());
+    assert_eq!(Some((8, 2)), counting.last_alloc.get());
+    // ...and freed, along with the previous copy.
+    assert_eq!(2, counting.free_calls.get());
+    assert_eq!(Some((8, 2)), counting.last_free.get());
+    assert_eq!(wrapper_len, counting.live_bytes.get());
+    // The event falls back to the defaults, as the reference's does.
+    assert_eq!(
+        selection_codepoints::DEFAULT_WORD_BOUNDARIES.to_vec(),
+        press_word_boundaries(event)
+    );
+    // The boundary itself (U+1FFFFF) is accepted.
+    assert_eq!(Result::Success, set_codepoints(event, &[0x1F_FFFF]));
+    unsafe { event_free(event) };
+    assert_eq!(0, counting.live_bytes.get());
+}
+
+#[test]
+fn gesture_wrapper_routes_through_the_gesture_allocator() {
+    use rustty_vt::alloc::testing::CountingAllocator;
+    let counting = CountingAllocator::over_heap();
+    let calloc = counting.allocator();
+    let mut gesture: Gesture = std::ptr::null_mut();
+    assert_eq!(Result::Success, unsafe { new(Some(&calloc), &mut gesture) });
+    assert_eq!(1, counting.alloc_calls.get());
+    assert_eq!(
+        Some((
+            std::mem::size_of::<GestureWrapper>(),
+            std::mem::align_of::<GestureWrapper>().trailing_zeros() as u8
+        )),
+        counting.last_alloc.get()
+    );
+    unsafe { free(gesture, std::ptr::null_mut()) };
+    assert_eq!(1, counting.free_calls.get());
+    assert_eq!(0, counting.live_bytes.get());
+}
