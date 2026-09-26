@@ -1022,35 +1022,47 @@ mod tests {
     /// a UTF-8 URL does start a request (one entry in flight).
     #[test]
     fn open_uri_rejects_a_non_utf8_uri_before_any_state() {
-        let bus = PrivateBus::start();
-        let open_uri = OpenUri::new();
-        open_uri.set_dbus_connection(Some(&bus.conn));
+        // CORRECTION (task L-2): the positive control's request is an ASYNC
+        // `DBusConnection::call` whose reply callback attaches to the calling
+        // thread's thread-default main context. With none pushed that was the
+        // process-global default context, so another test iterating it
+        // (`hotkeys_wire_path_bound_pressed_denied_revoked`) dispatched this
+        // test's callback on its own thread: glib-rs's thread guard panicked in the
+        // C callback and aborted the test binary, in about one full run in two on
+        // the VM. The test now runs on a private context of its own.
+        let ctx = glib::MainContext::new();
+        ctx.with_thread_default(|| {
+            let bus = PrivateBus::start();
+            let open_uri = OpenUri::new();
+            open_uri.set_dbus_connection(Some(&bus.conn));
 
-        assert_eq!(
-            open_uri.start(OpenUrl {
-                kind: OpenUrlKind::Unknown,
-                url: b"https://example.invalid/caf\xe9",
-            }),
-            Err(Error::UriNotUtf8),
-        );
-        assert_eq!(open_uri.in_flight(), 0, "no entry for the refused URL");
-        assert!(
-            open_uri.inner.state.borrow().cleanup_timer.is_none(),
-            "no cleanup timer for the refused URL"
-        );
-        assert_eq!(open_uri.observed(), Observed::default());
+            assert_eq!(
+                open_uri.start(OpenUrl {
+                    kind: OpenUrlKind::Unknown,
+                    url: b"https://example.invalid/caf\xe9",
+                }),
+                Err(Error::UriNotUtf8),
+            );
+            assert_eq!(open_uri.in_flight(), 0, "no entry for the refused URL");
+            assert!(
+                open_uri.inner.state.borrow().cleanup_timer.is_none(),
+                "no cleanup timer for the refused URL"
+            );
+            assert_eq!(open_uri.observed(), Observed::default());
 
-        // Positive control: the same object and connection DO start a request for
-        // a UTF-8 URL, so the refusal above is the UTF-8 check, not a dead object.
-        assert_eq!(
-            open_uri.start(OpenUrl {
-                kind: OpenUrlKind::Unknown,
-                url: b"https://example.invalid/cafe",
-            }),
-            Ok(()),
-        );
-        assert_eq!(open_uri.in_flight(), 1);
-        open_uri.deinit();
+            // Positive control: the same object and connection DO start a request for
+            // a UTF-8 URL, so the refusal above is the UTF-8 check, not a dead object.
+            assert_eq!(
+                open_uri.start(OpenUrl {
+                    kind: OpenUrlKind::Unknown,
+                    url: b"https://example.invalid/cafe",
+                }),
+                Ok(()),
+            );
+            assert_eq!(open_uri.in_flight(), 1);
+            open_uri.deinit();
+        })
+        .expect("acquire the test's own main context");
     }
 
     /// `deinit` is idempotent (`OpenURI.zig:129-130` `if (!self.alive) return`) and
