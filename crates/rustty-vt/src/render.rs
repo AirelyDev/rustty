@@ -3555,4 +3555,465 @@ mod tests {
         state.deinit(alloc);
         t.deinit(alloc);
     }
+
+    // =========================================================================
+    // Parity tail S7-5 (S175-F1): the render state's containers grow through
+    // the allocator `update`/`beginUpdate` is given. Rust-only tests: the
+    // reference has no FailingAllocator test for the render state.
+    // =========================================================================
+
+    fn vt_write(t: &mut Terminal, bytes: &[u8]) {
+        let mut s = t.vt_stream();
+        s.next_slice(bytes);
+        s.deinit();
+    }
+
+    fn resize_terminal(t: &mut Terminal, cols: size::CellCountInt, rows: size::CellCountInt) {
+        t.resize(
+            Global,
+            crate::terminal::Resize {
+                cols,
+                rows,
+                cell_size_px: None,
+            },
+        )
+        .unwrap();
+    }
+
+    /// Whether the reference defines `style` for this cell (the run kinds
+    /// `row_builder` records).
+    fn style_is_defined(raw: page::Cell) -> bool {
+        match raw.content_tag() {
+            page::ContentTag::Codepoint | page::ContentTag::CodepointGrapheme => raw.style_id() > 0,
+            page::ContentTag::BgColorRgb | page::ContentTag::BgColorPalette => true,
+        }
+    }
+
+    /// Everything a render state defines for a reader, compared field by
+    /// field: dimensions, cursor, and every row's raw data, pin, selection
+    /// and cells (the raw column, and the style and grapheme columns where
+    /// they are defined). Highlights are the caller's (not compared).
+    #[track_caller]
+    fn assert_same_render(got: &RenderState, want: &RenderState, what: &str) {
+        assert_eq!(want.rows, got.rows, "{what}: rows");
+        assert_eq!(want.cols, got.cols, "{what}: cols");
+        assert_eq!(
+            want.cursor
+                .viewport
+                .as_ref()
+                .map(|v| (v.x, v.y, v.wide_tail)),
+            got.cursor
+                .viewport
+                .as_ref()
+                .map(|v| (v.x, v.y, v.wide_tail)),
+            "{what}: cursor"
+        );
+        assert_eq!(want.row_data.len(), got.row_data.len(), "{what}: row count");
+        for (y, (g, w)) in got.row_data.iter().zip(want.row_data.iter()).enumerate() {
+            assert_eq!(w.raw.cval(), g.raw.cval(), "{what}: row {y} raw");
+            assert!(g.pin.eql(w.pin), "{what}: row {y} pin");
+            assert_eq!(w.serial, g.serial, "{what}: row {y} serial");
+            assert_eq!(w.selection, g.selection, "{what}: row {y} selection");
+            assert_eq!(w.cells.len(), g.cells.len(), "{what}: row {y} cell count");
+            for x in 0..w.cells.len() {
+                let (gc, wc) = (g.cells.get(x), w.cells.get(x));
+                assert_eq!(wc.raw.cval(), gc.raw.cval(), "{what}: cell {x},{y} raw");
+                if style_is_defined(wc.raw) {
+                    assert!(gc.style.eql(&wc.style), "{what}: cell {x},{y} style");
+                }
+                if wc.raw.has_grapheme() {
+                    assert_eq!(wc.grapheme, gc.grapheme, "{what}: cell {x},{y} grapheme");
+                }
+            }
+        }
+    }
+
+    /// A fresh render state over the Rust heap: the full rebuild `got` must
+    /// match.
+    fn fresh_render(t: &mut Terminal) -> RenderState {
+        let mut fresh = RenderState::empty();
+        fresh.update(Global, t).unwrap();
+        fresh
+    }
+
+    // Every container of the render state allocates, grows and frees through
+    // the update allocator, with the reference's call shape and capacities:
+    // the MultiArrayLists (`row_data`, each row's `cells`) take one allocation
+    // of `growCapacity(n)` elements and grow by alloc + copy + free (never
+    // `remap`); the `ArrayList`s (`pending_styles`, `applied_styles`,
+    // `highlights`) take `growCapacity` and grow by `remap` first; the
+    // grapheme buffer and the highlights keep their capacity across rebuilds
+    // (the arena's `.retain_capacity`). `deinit` returns every byte.
+    #[test]
+    fn render_state_internals_route_through_the_allocator_handle() {
+        use crate::alloc::testing::{with_handle, CountingAllocator};
+
+        let row_bytes = core::mem::size_of::<Row>();
+        let run_bytes = core::mem::size_of::<StyleRun>();
+        let cells_bytes =
+            |cols: usize| grow_capacity::<CELL_ZIG_FIELD_MAX>(cols) * CellList::ELEM_BYTES;
+        // Zig's own element counts: `growCapacity` with init 5 (rows), 4
+        // (cells), 3 (style runs), 21 (highlights) on a 128-byte cache line.
+        if CACHE_LINE_IS_128 {
+            assert_eq!(9, grow_capacity::<ROW_ZIG_FIELD_MAX>(3));
+            assert_eq!(19, grow_capacity::<CELL_ZIG_FIELD_MAX>(10));
+            assert_eq!(4, grow_capacity::<STYLE_RUN_ZIG_SIZE>(1));
+            assert_eq!(22, grow_capacity::<HIGHLIGHT_ZIG_SIZE>(1));
+        }
+
+        let counting = CountingAllocator::over_heap();
+        let c = counting.allocator();
+        let mut t = Terminal::init(Global, opts(10, 3)).unwrap();
+        with_handle(&c, |alloc| {
+            let mut state = RenderState::empty();
+            let calls = || {
+                (
+                    counting.alloc_calls.get(),
+                    counting.free_calls.get(),
+                    counting.remap_calls.get(),
+                )
+            };
+
+            // A: plain text. One `row_data` allocation (growCapacity(3) rows)
+            // and one per row for its cells (growCapacity(10) cells).
+            vt_write(&mut t, b"ABCD");
+            state.update(alloc, &mut t).unwrap();
+            assert_eq!((4, 0, 0), calls(), "row_data + 3 x cells");
+            assert_eq!(
+                grow_capacity::<ROW_ZIG_FIELD_MAX>(3) * row_bytes + 3 * cells_bytes(10),
+                counting.live_bytes.get()
+            );
+            assert_eq!(
+                Some((cells_bytes(10), 3)),
+                counting.last_alloc.get(),
+                "one allocation holds all three cell columns, 8-aligned"
+            );
+            assert_eq!(
+                grow_capacity::<CELL_ZIG_FIELD_MAX>(10),
+                state.row_data[0].cells.capacity()
+            );
+
+            // B: a styled row: the first pending run and that row's applied
+            // cache (growCapacity(1) runs each).
+            let live = counting.live_bytes.get();
+            vt_write(&mut t, b"\x1b[2;1H\x1b[1mBOLD\x1b[0m");
+            state.update(alloc, &mut t).unwrap();
+            assert_eq!((6, 0, 0), calls(), "pending_styles + applied_styles");
+            assert_eq!(
+                live + 2 * grow_capacity::<STYLE_RUN_ZIG_SIZE>(1) * run_bytes,
+                counting.live_bytes.get()
+            );
+            assert!(state.row_data[1].cells.get(0).style.flags.bold);
+
+            // C: a grapheme: the row's grapheme buffer.
+            vt_write(&mut t, "\x1b[3;1H\u{1F468}\u{200D}".as_bytes());
+            state.update(alloc, &mut t).unwrap();
+            assert_eq!((7, 0, 0), calls(), "the grapheme buffer");
+            assert_eq!(&[0x200D], state.row_data[2].cells.grapheme(0));
+
+            // D: a highlight on row 0 (growCapacity(1) highlights).
+            let live = counting.live_bytes.get();
+            let pin = state.row_data[0].pin;
+            let hl = highlight::Flattened {
+                chunks: vec![highlight::Chunk {
+                    node: pin.node,
+                    serial: state.row_data[0].serial,
+                    start: pin.y,
+                    end: pin.y + 1,
+                }],
+                top_x: 0,
+                bot_x: 2,
+            };
+            state
+                .update_highlights_flattened(alloc, 1, core::slice::from_ref(&hl))
+                .unwrap();
+            assert_eq!((8, 0, 0), calls(), "the highlight list");
+            assert_eq!(
+                live + grow_capacity::<HIGHLIGHT_ZIG_SIZE>(1) * core::mem::size_of::<Highlight>(),
+                counting.live_bytes.get()
+            );
+
+            // E: rebuilding rows keeps every capacity (the arena's
+            // `.retain_capacity`, the lists' `clearRetainingCapacity`).
+            vt_write(
+                &mut t,
+                "\x1b[1;1HZ\x1b[2;1H\x1b[1mX\x1b[0m\x1b[3;1H\u{1F469}\u{200D}".as_bytes(),
+            );
+            state.update(alloc, &mut t).unwrap();
+            assert_eq!((8, 0, 0), calls(), "a steady state allocates nothing");
+            assert!(
+                state.row_data[0].highlights.is_empty(),
+                "the rebuild reset the highlights"
+            );
+
+            // F: growing past the rows' and the cells' capacity: row_data and
+            // the three old rows' cells move (alloc + copy + free, no remap),
+            // the nine new rows get their cells.
+            resize_terminal(&mut t, 30, 12);
+            state.update(alloc, &mut t).unwrap();
+            assert_eq!((8 + 1 + 3 + 9, 1 + 3, 0), calls(), "MultiArrayList growth");
+            assert_eq!(
+                grow_capacity::<ROW_ZIG_FIELD_MAX>(12),
+                state.row_data.capacity()
+            );
+            assert_eq!(
+                grow_capacity::<CELL_ZIG_FIELD_MAX>(30),
+                state.row_data[0].cells.capacity()
+            );
+            assert_eq!(
+                grow_capacity::<CELL_ZIG_FIELD_MAX>(30),
+                state.row_data[11].cells.capacity()
+            );
+
+            // G: five runs in one row grow both run lists past 4: `remap`.
+            let before = calls();
+            vt_write(
+                &mut t,
+                b"\x1b[2;1H\x1b[1mA\x1b[0mB\x1b[1mC\x1b[0mD\x1b[1mE\x1b[0mF\x1b[1mG\x1b[0mH\x1b[1mI\x1b[0m",
+            );
+            state.update(alloc, &mut t).unwrap();
+            assert_eq!(
+                (before.0, before.1, before.2 + 2),
+                calls(),
+                "ArrayList growth remaps"
+            );
+            assert_eq!(
+                grow_capacity::<STYLE_RUN_ZIG_SIZE>(5),
+                state.pending_styles.capacity()
+            );
+            assert_eq!(
+                grow_capacity::<STYLE_RUN_ZIG_SIZE>(5),
+                state.row_data[1].applied_styles.capacity()
+            );
+
+            // H: shrinking frees the dropped rows' lists.
+            resize_terminal(&mut t, 30, 4);
+            state.update(alloc, &mut t).unwrap();
+            assert_same_render(&state, &fresh_render(&mut t), "after the shrink");
+
+            state.deinit(alloc);
+        });
+        assert_eq!(0, counting.live_bytes.get(), "deinit returns every byte");
+        assert_eq!(counting.alloc_calls.get(), counting.free_calls.get());
+        t.deinit(Global);
+    }
+
+    /// `std.atomic.cache_line` is 128 on the targets the counts above assume.
+    const CACHE_LINE_IS_128: bool = cfg!(any(
+        target_arch = "x86_64",
+        target_arch = "aarch64",
+        target_arch = "powerpc64"
+    ));
+
+    // The update allocator is bound on first growth; another allocator later
+    // is a caller bug the port reports (Zig takes the allocator per call and
+    // trusts it to be the same).
+    #[test]
+    #[cfg_attr(
+        not(debug_assertions),
+        ignore = "debug_assert_same is a debug-build check (R14)"
+    )]
+    #[should_panic(expected = "allocator mismatch")]
+    fn render_state_checks_the_update_allocator() {
+        use crate::alloc::testing::{with_handle, CountingAllocator};
+
+        let counting = CountingAllocator::over_heap();
+        let c = counting.allocator();
+        let mut t = Terminal::init(Global, opts(10, 3)).unwrap();
+        with_handle(&c, |alloc| {
+            let mut state = RenderState::empty();
+            state.update(alloc, &mut t).unwrap();
+            let _ = state.update(Global, &mut t);
+        });
+    }
+
+    /// The sweep scenario: styled text, graphemes, a background-color erase,
+    /// both update forms, a highlight, growth past every capacity, and a
+    /// shrink. After each call: a success must match a fresh full rebuild;
+    /// a failure is lifted (`fail_index` moved past it, so the first failure
+    /// is the only one) and the retried update must match it too (R13,
+    /// UD315). Returns how many calls failed.
+    fn render_sweep_scenario(
+        failing: &crate::alloc::testing::FailingAllocator,
+        alloc: Allocator,
+        what: &str,
+    ) -> usize {
+        let mut t = Terminal::init(Global, opts(10, 3)).unwrap();
+        let mut state = RenderState::empty();
+        let failures = core::cell::Cell::new(0usize);
+        let check =
+            |state: &mut RenderState, t: &mut Terminal, r: Result<(), OutOfMemory>, step: &str| {
+                if r.is_err() {
+                    failures.set(failures.get() + 1);
+                    failing.fail_index.set(usize::MAX);
+                    state.update(alloc, t).unwrap();
+                    assert_eq!(
+                        Dirty::Full,
+                        state.dirty,
+                        "{what} {step}: the retry is a full rebuild"
+                    );
+                }
+                assert_same_render(state, &fresh_render(t), &format!("{what} {step}"));
+            };
+
+        vt_write(&mut t, b"\x1b[1mbold\x1b[0m plain\r\n");
+        let r = state.update(alloc, &mut t);
+        check(&mut state, &mut t, r, "first update");
+
+        let lines = if cfg!(miri) { 2 } else { 8 };
+        for i in 0..lines {
+            vt_write(
+                &mut t,
+                format!("\x1b[3{}m{i}\x1b[0m e\u{301} \u{1F468}\u{200D}\u{1F469}\x1b[4{}m\x1b[K\x1b[0m\r\n", i % 8, (i + 1) % 8)
+                    .as_bytes(),
+            );
+        }
+        let r = state.begin_update(alloc, &mut t);
+        state.end_update();
+        check(&mut state, &mut t, r, "two-phase update");
+
+        let pin = state.row_data[0].pin;
+        let hl = highlight::Flattened {
+            chunks: vec![highlight::Chunk {
+                node: pin.node,
+                serial: state.row_data[0].serial,
+                start: pin.y,
+                end: pin.y + 1,
+            }],
+            top_x: 0,
+            bot_x: 3,
+        };
+        if state
+            .update_highlights_flattened(alloc, 7, core::slice::from_ref(&hl))
+            .is_err()
+        {
+            failures.set(failures.get() + 1);
+            failing.fail_index.set(usize::MAX);
+        }
+
+        resize_terminal(&mut t, 40, 14);
+        vt_write(
+            &mut t,
+            b"\x1b[1mA\x1b[0mB\x1b[1mC\x1b[0mD\x1b[1mE\x1b[0mF\x1b[1mG\x1b[0mH\x1b[1mI\x1b[0m\r\n",
+        );
+        let r = state.update(alloc, &mut t);
+        check(&mut state, &mut t, r, "growth");
+
+        resize_terminal(&mut t, 20, 4);
+        let r = state.update(alloc, &mut t);
+        check(&mut state, &mut t, r, "shrink");
+
+        state.deinit(alloc);
+        t.deinit(Global);
+        failures.get()
+    }
+
+    // T2 (parity tail S7-5; the Zig `checkAllAllocationFailures` idea): for
+    // every n the n-th allocation of the scenario is refused. Nothing aborts,
+    // each refused call reports `error.OutOfMemory`, the retry rebuilds a
+    // state identical to a fresh one, and `deinit` returns every byte. The
+    // sweep ends at the first n that induces no failure, so every allocation
+    // is failed once. A second sweep refuses `remap`/`resize` from their n-th
+    // call on: growth then takes the alloc + copy + free fallback, and nothing
+    // fails.
+    #[test]
+    fn render_state_allocation_failure_sweep() {
+        use crate::alloc::testing::{with_handle, Config, FailingAllocator};
+
+        let mut n = 0usize;
+        let mut failed_calls = 0usize;
+        loop {
+            let failing = FailingAllocator::over_heap(Config {
+                fail_index: n,
+                ..Config::default()
+            });
+            let c = failing.allocator();
+            let failures = with_handle(&c, |alloc| {
+                render_sweep_scenario(&failing, alloc, &format!("alloc n={n}"))
+            });
+            assert_eq!(
+                failing.allocated_bytes.get(),
+                failing.freed_bytes.get(),
+                "alloc n={n}: every byte is returned"
+            );
+            assert_eq!(failing.allocations.get(), failing.deallocations.get());
+            if !failing.has_induced_failure.get() {
+                assert_eq!(0, failures);
+                break;
+            }
+            assert_eq!(1, failures, "alloc n={n}: exactly the refused call fails");
+            failed_calls += failures;
+            n += 1;
+            assert!(n < 10_000, "the sweep must terminate");
+        }
+        let min_swept = if cfg!(miri) { 10 } else { 25 };
+        assert!(n > min_swept, "only {n} allocations were swept");
+        assert_eq!(n, failed_calls);
+
+        let clean = FailingAllocator::over_heap(Config::default());
+        let c = clean.allocator();
+        assert_eq!(
+            0,
+            with_handle(&c, |alloc| render_sweep_scenario(&clean, alloc, "clean"))
+        );
+        let remaps = clean.resize_index.get();
+        assert!(remaps > 0, "the scenario makes no remap call");
+        for n in 0..=remaps {
+            let failing = FailingAllocator::over_heap(Config {
+                resize_fail_index: n,
+                ..Config::default()
+            });
+            let c = failing.allocator();
+            let failures = with_handle(&c, |alloc| {
+                render_sweep_scenario(&failing, alloc, &format!("remap n={n}"))
+            });
+            assert_eq!(0, failures, "remap n={n}: a refused remap falls back");
+            assert!(failing.resize_index.get() <= n, "remap n={n}");
+            assert_eq!(
+                failing.allocated_bytes.get(),
+                failing.freed_bytes.get(),
+                "remap n={n}"
+            );
+        }
+    }
+
+    // R13 (UD315): a `beginUpdate` that fails part way leaves rows it did not
+    // rebuild, and has already cleared their dirty flags. The next update must
+    // still produce the full, current viewport.
+    #[test]
+    fn failed_update_is_followed_by_a_full_rebuild() {
+        use crate::alloc::testing::{with_handle, Config, FailingAllocator};
+
+        let mut t = Terminal::init(Global, opts(10, 3)).unwrap();
+        vt_write(&mut t, b"one\r\ntwo\r\nthree");
+        // Allocation 0 is `row_data`, 1 is row 0's cells: refuse row 1's.
+        let failing = FailingAllocator::over_heap(Config {
+            fail_index: 2,
+            ..Config::default()
+        });
+        let c = failing.allocator();
+        with_handle(&c, |alloc| {
+            let mut state = RenderState::empty();
+            assert!(state.update(alloc, &mut t).is_err());
+            assert!(failing.has_induced_failure.get());
+            assert_eq!(0, state.row_data[1].cells.len(), "row 1 was not built");
+
+            failing.fail_index.set(usize::MAX);
+            state.update(alloc, &mut t).unwrap();
+            assert_eq!(Dirty::Full, state.dirty);
+            assert_eq!(10, state.row_data[1].cells.len());
+            assert_eq!('t' as u32, state.row_data[1].cells.get(0).raw.codepoint());
+            assert_eq!('t' as u32, state.row_data[2].cells.get(0).raw.codepoint());
+            assert_same_render(&state, &fresh_render(&mut t), "the retry");
+
+            // Only the failure forces the rebuild: a clean update after it
+            // is incremental again.
+            state.dirty = Dirty::False;
+            state.update(alloc, &mut t).unwrap();
+            assert_eq!(Dirty::False, state.dirty);
+            state.deinit(alloc);
+        });
+        assert_eq!(failing.allocated_bytes.get(), failing.freed_bytes.get());
+        t.deinit(Global);
+    }
 }
