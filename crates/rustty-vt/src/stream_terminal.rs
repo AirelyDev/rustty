@@ -7824,6 +7824,130 @@ mod tests {
         });
     }
 
+    // Parity tail S7-4b (routing evidence, no reference counterpart): each
+    // `stackFallback(N, self.terminal.gpa())` response writer keeps a small
+    // response on its stack buffer and spills a large one through `gpa()`,
+    // freeing the spill before the handler returns. Each pair runs the same
+    // code path, so the large response costs exactly the spill on top of the
+    // small one's allocations: the OSC 52 read reply (256), the Kitty
+    // clipboard DATA reply (1024), the CSI 21 t title report (256), the Kitty
+    // color report (1024) and the OSC 72 data serving (512).
+    #[test]
+    fn response_writers_spill_through_gpa() {
+        use crate::alloc::testing::CountingAllocator;
+        let counting = CountingAllocator::over_heap();
+        let c = counting.allocator();
+        crate::alloc::testing::with_handle(&c, |alloc| {
+            let calls = || counting.alloc_calls.get();
+            let live = || counting.live_bytes.get();
+            let mut t = Terminal::init(alloc, opts(80, 24)).unwrap();
+            kc_reset();
+            let ptr: *mut Terminal = &mut t;
+            {
+                let mut s = t.vt_stream();
+                s.handler.effects.write_pty = Some(kc_write_pty);
+                s.handler.effects.clipboard_read = Some(kc_clipboard_read);
+                // The allocations one input makes, and that the live bytes
+                // come back to where they were once its response is written.
+                let cost = |s: &mut Stream<'_>, input: &[u8]| -> usize {
+                    // (An OSC frees the previous OSC's capture when it starts;
+                    // run an unrecognized OSC first so both inputs start
+                    // alike.)
+                    s.next_slice(b"\x1B]99999;x\x1B\\");
+                    let (a, l) = (calls(), live());
+                    s.next_slice(input);
+                    let spent = calls() - a;
+                    // A capture (if any) stays until the next OSC starts.
+                    s.next_slice(b"\x1B]99999;x\x1B\\");
+                    assert!(live() <= l + crate::osc::MAX_BUF, "the spill is freed");
+                    spent
+                };
+                let read_reply = |data: Vec<u8>| {
+                    kc_mut(|c| {
+                        c.read_result = Some(KcReadResult::Success {
+                            contents: vec![(b"text/plain".to_vec(), data)],
+                            available: vec![b"text/plain".to_vec()],
+                            remember: false,
+                        })
+                    })
+                };
+
+                // OSC 52 read reply: 256 bytes on the stack.
+                read_reply(b"x".to_vec());
+                let small = cost(&mut s, b"\x1B]52;c;?\x1B\\");
+                read_reply(vec![b'x'; 300]);
+                let large = cost(&mut s, b"\x1B]52;c;?\x1B\\");
+                assert_eq!(small + 1, large, "OSC 52 read reply spills once");
+
+                // Kitty clipboard DATA reply: 1024 bytes on the stack.
+                read_reply(b"x".to_vec());
+                let small = cost(&mut s, b"\x1B]5522;type=read;dGV4dC9wbGFpbg==\x1B\\");
+                read_reply(vec![b'x'; 1000]);
+                let large = cost(&mut s, b"\x1B]5522;type=read;dGV4dC9wbGFpbg==\x1B\\");
+                assert_eq!(small + 1, large, "Kitty DATA reply spills once");
+
+                // CSI 21 t: 256 bytes on the stack (the title is set first).
+                s.handler.title_report = true;
+                s.next_slice(b"\x1B]2;t\x1B\\");
+                let small = cost(&mut s, b"\x1B[21t");
+                let mut title = b"\x1B]2;".to_vec();
+                title.extend(std::iter::repeat_n(b'T', 300));
+                title.extend_from_slice(b"\x1B\\");
+                s.next_slice(&title);
+                let large = cost(&mut s, b"\x1B[21t");
+                assert_eq!(small + 1, large, "the title report spills once");
+
+                // Kitty color report: 1024 bytes on the stack.
+                let small = cost(&mut s, b"\x1B]21;0=?\x1B\\");
+                let mut query = b"\x1B]21".to_vec();
+                for i in 0..100 {
+                    query.extend_from_slice(format!(";{i}=?").as_bytes());
+                }
+                query.extend_from_slice(b"\x1B\\");
+                let large = cost(&mut s, &query);
+                assert_eq!(small + 1, large, "the Kitty color report spills once");
+
+                // OSC 72 data serving: 512 bytes on the stack.
+                s.next_slice(b"\x1B]72;t=a;text/plain\x1B\\");
+                let serve = |data: &[u8]| {
+                    let mut aw: Vec<u8> = Vec::new();
+                    // SAFETY: the stream's terminal; no other borrow of its
+                    // DnD slot is live.
+                    unsafe { (*ptr).kitty_dnd.as_mut() }
+                        .unwrap()
+                        .drag_drop(
+                            alloc,
+                            &mut aw,
+                            kitty::dnd::MoveEvent {
+                                cell_x: 0,
+                                cell_y: 0,
+                                pixel_x: 0,
+                                pixel_y: 0,
+                                operations: kitty::dnd::Operations {
+                                    copy: true,
+                                    r#move: false,
+                                },
+                            },
+                            &[kitty::dnd::Item {
+                                mime: b"text/plain".to_vec(),
+                                data: data.to_vec(),
+                            }],
+                        )
+                        .unwrap();
+                };
+                serve(b"x");
+                let small = cost(&mut s, b"\x1B]72;t=r:x=1\x1B\\");
+                serve(&[b'Z'; 600]);
+                let large = cost(&mut s, b"\x1B]72;t=r:x=1\x1B\\");
+                assert_eq!(small + 1, large, "OSC 72 data serving spills once");
+
+                s.deinit();
+            }
+            t.deinit(alloc);
+            assert_eq!(0, live(), "deinit returns every byte");
+        });
+    }
+
     // test "kitty clipboard write transaction round trip"
     #[test]
     fn kitty_clipboard_write_transaction_round_trip() {
@@ -9831,6 +9955,45 @@ mod tests {
             }
             Ok(())
         }
+    }
+
+    // Parity tail S7-4b (routing evidence, no reference counterpart): reader
+    // contents are read into a `std.Io.Writer.Allocating` over `ctx.alloc`,
+    // which `Handler::paste` sets to the terminal's `gpa()`: the bytes the
+    // reader writes are allocated through it (at least one allocation, holding
+    // the 16 bytes read) and freed before `paste` returns.
+    #[test]
+    fn paste_reader_contents_route_through_gpa() {
+        use crate::alloc::testing::CountingAllocator;
+        let counting = CountingAllocator::over_heap();
+        let c = counting.allocator();
+        crate::alloc::testing::with_handle(&c, |alloc| {
+            let mut t = Terminal::init(alloc, opts(80, 24)).unwrap();
+            let ptr: *mut Terminal = &mut t;
+            pc_reset();
+            let mut handler = Handler::init(ptr);
+            handler.effects.write_pty = Some(pc_write_pty);
+            let mut reader = PasteReader::new(&[b"text/plain"], &[b"echo hello world"]);
+            let (a0, l0) = (counting.alloc_calls.get(), counting.live_bytes.get());
+            assert!(handler
+                .paste(Paste {
+                    source: paste_pkg::Source::default(),
+                    contents: reader.contents(),
+                    allow_unsafe: false,
+                })
+                .unwrap());
+            assert_eq!(b"echo hello world".as_slice(), pc_written().as_slice());
+            assert!(
+                counting.alloc_calls.get() > a0,
+                "the read bytes are allocated through gpa()"
+            );
+            assert!(counting.peak_bytes.get() >= l0 + 16, "they are held there");
+            assert_eq!(l0, counting.live_bytes.get(), "and freed");
+            use crate::stream::Handler as _;
+            handler.deinit();
+            t.deinit(alloc);
+        });
+        assert_eq!(0, counting.live_bytes.get());
     }
 
     // test "paste: reader contents are read on demand"

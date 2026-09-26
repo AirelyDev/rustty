@@ -11384,7 +11384,8 @@ mod tests {
     /// `gpa()`-grown lists), OSC 8 hyperlinks (the cursor's heap hyperlink),
     /// the alternate screen (a second `Screen` from `ScreenSet.getInit`), kitty
     /// drag and drop state, wide tab stops after a resize past 512 columns, a
-    /// tracked grid ref (a pin and the tracked-pin set), and a full reset.
+    /// tracked grid ref (a pin and the tracked-pin set), a search (the
+    /// terminal's `searches` registry), and a full reset.
     ///
     /// Parity tail S7-4 adds: Kitty graphics (a transmit-and-display, a chunked
     /// transmit, an animation frame and a composition, a display and an
@@ -11504,6 +11505,12 @@ mod tests {
                 &mut ref_,
             )
         });
+        // A search over the caller's allocator registers itself in the
+        // terminal's `searches` map (grown through the terminal's allocator).
+        // SAFETY: `t` is the live wrapper; its allocator copy is read out.
+        let search_alloc: Option<CAllocator> = unsafe { (*t).c_alloc };
+        let mut search: crate::search::Search = std::ptr::null_mut();
+        results.push(unsafe { crate::search::new(search_alloc.as_ref(), &mut search, t) });
         for i in 0..more_lines {
             vtw(t, format!("more {i:03}\r\n").as_bytes());
         }
@@ -11513,6 +11520,9 @@ mod tests {
         vtw(t, b"\x1B]2;after reset\x1B\\done");
         if !ref_.is_null() {
             unsafe { crate::grid_ref_tracked::tracked_grid_ref_free(ref_) };
+        }
+        if !search.is_null() {
+            unsafe { crate::search::free(search) };
         }
         results
     }
@@ -11753,6 +11763,7 @@ mod tests {
                     .as_ref()
                     .expect("continuation tracking is on");
                 assert!(!tracker.broken);
+                assert_eq!(1, (*t).searches.count(), "the search is registered");
                 assert!(
                     tracker.bytes.capacity()
                         > rustty_vt::alloc::ArrayListUnmanaged::<u8>::grow_capacity(4096),

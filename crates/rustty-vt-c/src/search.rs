@@ -2242,6 +2242,39 @@ mod tests {
         });
     }
 
+    // Parity tail S7-4b (routing evidence, no reference counterpart): the
+    // terminal's `searches` registry grows through the TERMINAL's allocator
+    // (`wrapper.searches.putNoClobber(t.gpa(), ..)`, bound in `wrap`), not the
+    // search's: a search created over another allocator registers itself in a
+    // map bound to the terminal's, whose growth is visible there, and freeing
+    // the search and then the terminal returns every byte.
+    #[test]
+    fn search_registry_routes_through_the_terminals_allocator() {
+        use rustty_vt::alloc::testing::CountingAllocator;
+        let counting = CountingAllocator::over_heap();
+        let calloc = counting.allocator();
+        with_test_allocator(|search_alloc| unsafe {
+            let terminal = test_terminal(&calloc);
+            let live = counting.live_bytes.get();
+            let before = counting.alloc_calls.get();
+            let search: Search = test_new_search(search_alloc, terminal, b"Fizz");
+            assert_eq!(1, (*terminal).searches.count());
+            assert_eq!(
+                rustty_vt::alloc::default(Some(&calloc)),
+                *(*terminal).searches.allocator(),
+                "the registry is bound to the terminal's allocator"
+            );
+            assert!(
+                counting.alloc_calls.get() > before && counting.live_bytes.get() > live,
+                "the registry's growth reaches the terminal's allocator"
+            );
+            free(search);
+            assert_eq!(0, (*terminal).searches.count());
+            terminal_c::free(terminal);
+        });
+        assert_eq!(0, counting.live_bytes.get(), "every byte is returned");
+    }
+
     // test "search free null"
     #[test]
     fn search_free_null() {

@@ -1367,11 +1367,21 @@ mod tests {
         assert!(p.buffer.capacity() >= 128);
         p.deinit();
 
-        // A capacity that cannot be satisfied is reported, not aborted.
-        assert_eq!(
-            Err(OutOfMemory),
-            Parser::init_options(crate::alloc::Global, 4096, usize::MAX / 2).map(|_| ())
-        );
+        // An allocation failure is reported, not aborted (parity tail
+        // S7-4b: through a failing allocator handle).
+        let failing =
+            crate::alloc::testing::FailingAllocator::over_heap(crate::alloc::testing::Config {
+                fail_index: 0,
+                ..crate::alloc::testing::Config::default()
+            });
+        let fc = failing.allocator();
+        crate::alloc::testing::with_handle(&fc, |alloc| {
+            assert_eq!(
+                Err(OutOfMemory),
+                Parser::init_options(alloc, 4096, 128).map(|_| ())
+            );
+        });
+        assert!(failing.has_induced_failure.get());
     }
 
     // ---- task-14e-2: the restored `tmux/control.zig` diagnostics ------------
