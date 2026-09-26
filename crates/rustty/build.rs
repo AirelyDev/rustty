@@ -9,12 +9,33 @@ use std::path::PathBuf;
 fn main() {
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
 
+    reject_unsupported_target(&target_os);
+
     // Check for possible issues
     check_nix_shell(&target_os);
 
     // OS-specific
     if target_os == "windows" {
         windows_resources();
+    }
+}
+
+/// `build/Config.zig:132-141` (task S-1d, N313): the full build refuses iOS.
+fn reject_unsupported_target(target_os: &str) {
+    if build_checks::full_build_rejects_target(target_os) {
+        // std.log.err(
+        //     "iOS is not a supported target for the full Ghostty build; " ++
+        //         "only libghostty-vt supports iOS (-Demit-lib-vt)",
+        //     .{},
+        // );
+        // (The default-scope logFn line; product names R2-renamed, declared
+        // `identity-rename` in LOG-TEXT-DIVERGENCES.tsv.)
+        eprintln!(
+            "error: iOS is not a supported target for the full Rustty build; \
+             only librustty-vt supports iOS (-Demit-lib-vt)"
+        );
+        // return error.UnsupportedTarget;
+        std::process::exit(1);
     }
 }
 

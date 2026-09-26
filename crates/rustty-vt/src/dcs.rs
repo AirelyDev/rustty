@@ -18,14 +18,17 @@
 // `std.mem.Allocator` is faithfully modeled by `allocator_api2::alloc::Allocator`
 // (the same map used by PageList/Tabstops); callers pass
 // `crate::alloc::Global` for the prior `std::alloc` behavior. `log` is a
-// scoped logger; Rustty has no logging facade wired into this crate (matching the
-// convention used by PageList et al.), so the `log.*` calls below are ported as
-// verbatim comments and are no-ops.
+// scoped logger, carried through the `log` facade as `target: LOG_SCOPE`.
+// CORRECTION (task S-1c): this note said "Rustty has no logging facade wired
+// into this crate", and the `log.*` calls below were ported as comments. The
+// crate logs through the `log` facade, so the calls are live.
 use crate::alloc::Global;
 use allocator_api2::alloc::Allocator;
 use rustty_util::quirks::inlineAssert as assert;
 
 use crate::options as build_options;
+
+const LOG_SCOPE: &str = "terminal_dcs";
 
 /// DEFERRED SEAM: `DCS = terminal.DCS = Parser.Action.DCS`. `Parser` is ported by
 /// a later vt sub-batch (vt-5); to avoid a forward dependency on the unported
@@ -104,8 +107,12 @@ impl<A: Allocator + Into<crate::alloc::Allocator>> Handler<A> {
         // Try to parse the hook.
         let hk_ = match self.try_hook(alloc, dcs) {
             Ok(hk_) => hk_,
-            Err(_err) => {
+            Err(err) => {
                 // log.info("error initializing DCS hook, will ignore hook err={}", .{err});
+                log::info!(
+                    target: LOG_SCOPE,
+                    "error initializing DCS hook, will ignore hook err={err:?}"
+                );
                 return None;
             }
         };
@@ -113,6 +120,7 @@ impl<A: Allocator + Into<crate::alloc::Allocator>> Handler<A> {
             Some(hk) => hk,
             None => {
                 // log.info("unknown DCS hook: {}", .{dcs});
+                log::info!(target: LOG_SCOPE, "unknown DCS hook: {dcs:?}");
                 return None;
             }
         };
@@ -128,6 +136,10 @@ impl<A: Allocator + Into<crate::alloc::Allocator>> Handler<A> {
                 b'p' => 'tmux: {
                     if !build_options::TMUX_CONTROL_MODE {
                         // log.debug("tmux control mode not enabled in build, ignoring", .{});
+                        log::debug!(
+                            target: LOG_SCOPE,
+                            "tmux control mode not enabled in build, ignoring"
+                        );
                         break 'tmux None;
                     }
 
@@ -200,9 +212,13 @@ impl<A: Allocator + Into<crate::alloc::Allocator>> Handler<A> {
     pub fn put(&mut self, byte: u8) -> Option<Command<A>> {
         match self.try_put(byte) {
             Ok(cmd) => cmd,
-            Err(_err) => {
+            Err(err) => {
                 // On error we just discard our state and ignore the rest
                 // log.info("error putting byte into DCS handler err={}", .{err});
+                log::info!(
+                    target: LOG_SCOPE,
+                    "error putting byte into DCS handler err={err:?}"
+                );
                 //
                 // PORT NOTE: reference defect (R13, UPSTREAM-DEFECTS.md UD6).
                 // The reference returns `null` here for every state. For the
@@ -1056,6 +1072,92 @@ mod tests {
             cmd.deinit();
         }
 
+        h.deinit();
+    }
+
+    // Task S-1c (no reference test): the handler's `log.info` sites
+    // (dcs.zig:33, :37, :117) emit under the `terminal_dcs` scope on the input
+    // that reaches each. (`:56` is behind `!tmux_control_mode`, which this
+    // build enables.)
+    fn info(msg: &str) -> crate::log_capture::CapturedRecord {
+        (
+            log::Level::Info,
+            "terminal_dcs".to_string(),
+            msg.to_string(),
+        )
+    }
+
+    #[test]
+    fn dcs_unknown_hook_and_failed_hook_log() {
+        let mut h: Handler<Global> = Handler::default();
+        let unknown = DCS {
+            final_: b'A',
+            ..Default::default()
+        };
+        let cap = crate::log_capture::start();
+        assert!(h.hook(Global, unknown).is_none());
+        let messages = cap.messages();
+        drop(cap);
+        assert_eq!(
+            vec![info(&format!("unknown DCS hook: {unknown:?}"))],
+            messages
+        );
+        assert!(h.unhook().is_none());
+
+        // XTGETTCAP's buffer cannot be allocated.
+        let cap = crate::log_capture::start();
+        assert!(h
+            .hook(
+                crate::alloc::failing(),
+                DCS {
+                    intermediates: b"+",
+                    final_: b'q',
+                    ..Default::default()
+                }
+            )
+            .is_none());
+        let messages = cap.messages();
+        drop(cap);
+        assert!(matches!(h.state, State::Ignore));
+        assert_eq!(
+            vec![info(
+                "error initializing DCS hook, will ignore hook err=OutOfMemory"
+            )],
+            messages
+        );
+        assert!(h.unhook().is_none());
+        h.deinit();
+    }
+
+    #[test]
+    fn dcs_put_failure_logs_and_ignores_the_rest() {
+        let mut h: Handler<Global> = Handler {
+            max_bytes: 4,
+            ..Handler::default()
+        };
+        assert!(h
+            .hook(
+                Global,
+                DCS {
+                    intermediates: b"+",
+                    final_: b'q',
+                    ..Default::default()
+                }
+            )
+            .is_none());
+        for byte in *b"5365" {
+            assert!(h.put(byte).is_none());
+        }
+        let cap = crate::log_capture::start();
+        assert!(h.put(b'6').is_none());
+        let messages = cap.messages();
+        drop(cap);
+        assert!(matches!(h.state, State::Ignore));
+        assert_eq!(
+            vec![info("error putting byte into DCS handler err=OutOfMemory")],
+            messages
+        );
+        assert!(h.unhook().is_none());
         h.deinit();
     }
 

@@ -43,8 +43,11 @@ use crate::osc;
 use command::{Metadata, Operation, Operations};
 
 // const log = std.log.scoped(.kitty_dnd);
-// PORT NOTE: Rustty has no logging facade wired into this crate; the
-// reference's `log.debug` sites are ported as comments.
+// The scope, carried through the `log` facade as `target: LOG_SCOPE`.
+// CORRECTION (task S-1c): a PORT NOTE here said "Rustty has no logging facade
+// wired into this crate", and the `log.debug` site was ported as a comment.
+// The crate logs through the `log` facade, so the call is live.
+const LOG_SCOPE: &str = "kitty_dnd";
 
 /// Maximum accumulated size of a client-sent MIME list (the accepted
 /// list of a `t=m` status update). Matches kitty's MIME_LIST_SIZE_CAP.
@@ -72,6 +75,7 @@ pub fn handle_command<W: std::io::Write>(
         Some(raw) => raw,
         None => {
             // log.debug("dropping malformed OSC 72 metadata", .{});
+            log::debug!(target: LOG_SCOPE, "dropping malformed OSC 72 metadata");
             return Ok(None);
         }
     };

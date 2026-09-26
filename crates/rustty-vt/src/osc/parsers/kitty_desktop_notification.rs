@@ -23,11 +23,12 @@ use crate::osc::kitty_metadata;
 // PORT NOTE: `const encoding = @import("../encoding.zig");`
 use crate::osc::encoding;
 
-// PORT NOTE: `const log = std.log.scoped(.kitty_desktop_notification);` —
-// Rustty has no logging facade wired into this crate (matching the convention
-// used by the `osc.zig` scoped logger), so the scoped logger is ported as a
-// commented line.
 // const log = std.log.scoped(.kitty_desktop_notification);
+// The scope, carried through the `log` facade as `target: LOG_SCOPE`.
+// CORRECTION (task S-1c): a PORT NOTE here said "Rustty has no logging facade
+// wired into this crate", and the calls below were ported as comments. The
+// crate logs through the `log` facade, so the calls are live.
+const LOG_SCOPE: &str = "kitty_desktop_notification";
 
 pub const MAX_PLAIN_PAYLOAD_BYTES: usize = 2048;
 pub const MAX_ENCODED_PAYLOAD_BYTES: usize = 4096;
@@ -610,6 +611,7 @@ pub fn parse<'a>(parser: &'a mut Parser, terminator_ch: Option<u8>) -> Option<Co
         Some(i) => i,
         None => {
             // log.warn("missing semicolon before payload", .{});
+            log::warn!(target: LOG_SCOPE, "missing semicolon before payload");
             parser.state = State::Invalid;
             return None;
         }
@@ -628,6 +630,12 @@ pub fn parse<'a>(parser: &'a mut Parser, terminator_ch: Option<u8>) -> Option<Co
         //     "payload is too large: size={d} max={d}",
         //     .{ payload.len, max_payload_bytes },
         // );
+        log::warn!(
+            target: LOG_SCOPE,
+            "payload is too large: size={} max={}",
+            payload.len(),
+            max_payload_bytes
+        );
         parser.state = State::Invalid;
         return None;
     }
@@ -635,6 +643,7 @@ pub fn parse<'a>(parser: &'a mut Parser, terminator_ch: Option<u8>) -> Option<Co
     // Payload has to be an escape-code-safe UTF-8 string.
     if !encoding::is_safe_utf8(payload) {
         // log.warn("payload is not escape code safe UTF-8", .{});
+        log::warn!(target: LOG_SCOPE, "payload is not escape code safe UTF-8");
         parser.state = State::Invalid;
         return None;
     }
@@ -1312,5 +1321,52 @@ mod tests {
         parse_kdn!(kdn, "99;w=4294967296;foobar");
         assert_eq!(b"foobar".as_slice(), kdn.payload);
         assert_eq!(-1, kdn.read_option(Option_::W).as_int());
+    }
+
+    // Task S-1c (no reference test): the three rejection arms of `parse` log
+    // the reference's warnings (kitty_desktop_notification.zig:299, :312,
+    // :322) under the `kitty_desktop_notification` scope.
+    fn rejected_with(input: &[u8]) -> Vec<crate::log_capture::CapturedRecord> {
+        let alloc = crate::alloc::Global;
+        let mut p: Parser = Parser::init(Some(alloc));
+        let cap = crate::log_capture::start();
+        for &ch in input {
+            p.next(ch);
+        }
+        assert!(p.end(Some(0x1b)).is_none(), "the command must be rejected");
+        let messages = cap.messages();
+        drop(cap);
+        p.deinit();
+        messages
+    }
+
+    fn warn(msg: &str) -> crate::log_capture::CapturedRecord {
+        (
+            log::Level::Warn,
+            "kitty_desktop_notification".to_string(),
+            msg.to_string(),
+        )
+    }
+
+    #[test]
+    fn osc_99_rejections_log_the_reference_warnings() {
+        assert_eq!(
+            vec![warn("missing semicolon before payload")],
+            rejected_with(b"99;i=1")
+        );
+        let mut big = b"99;;".to_vec();
+        big.extend(std::iter::repeat_n(b'a', MAX_PLAIN_PAYLOAD_BYTES + 1));
+        assert_eq!(
+            vec![warn(&format!(
+                "payload is too large: size={} max={}",
+                MAX_PLAIN_PAYLOAD_BYTES + 1,
+                MAX_PLAIN_PAYLOAD_BYTES
+            ))],
+            rejected_with(&big)
+        );
+        assert_eq!(
+            vec![warn("payload is not escape code safe UTF-8")],
+            rejected_with(b"99;;a\x07b")
+        );
     }
 }

@@ -167,8 +167,13 @@ pub fn register_resources() {
         // null).
         let ptr = unsafe { rustty_get_resource() };
         if ptr.is_null() {
-            // Reference `class/application.zig:1875-1880`: warn and continue.
-            eprintln!("rustty: unable to load resources");
+            // Reference `class/application.zig:2194-2197`: warn and continue.
+            // `log.warn("unable to load resources", .{})` under application.zig's
+            // own scope (`gtk_ghostty_application`, R2-renamed). CORRECTION
+            // (task S-1c): this printed `rustty: unable to load resources`
+            // outside the `log` facade, and application.rs's PORT NOTE claimed
+            // the arm could not be reached.
+            log::warn!(target: "gtk_rustty_application", "unable to load resources");
             return;
         }
         // SAFETY: `ptr` is a non-null pointer to the static `GResource`.

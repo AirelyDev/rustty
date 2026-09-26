@@ -111,7 +111,7 @@ pub fn post_fork(info: &PostForkInfo, pid: Option<u32>) -> Result<(), PostForkEr
                 // `log.err("gtk-single-instance is set to detect which should be
                 //  impossible!", .{}); return error.PostForkError;` (`:47-48`).
                 eprintln!(
-                    "err({LOG_SCOPE}): gtk-single-instance is set to detect which should be impossible!"
+                    "error({LOG_SCOPE}): gtk-single-instance is set to detect which should be impossible!"
                 );
                 return Err(PostForkError);
             }
@@ -121,7 +121,7 @@ pub fn post_fork(info: &PostForkInfo, pid: Option<u32>) -> Result<(), PostForkEr
     // `const pid: u32 = @intCast(cmd.pid orelse { log.err("PID of child not
     //  known!", .{}); return error.PostForkError; });` (`:53-56`).
     let Some(pid) = pid else {
-        eprintln!("err({LOG_SCOPE}): PID of child not known!");
+        eprintln!("error({LOG_SCOPE}): PID of child not known!");
         return Err(PostForkError);
     };
 
@@ -150,7 +150,7 @@ pub fn post_fork(info: &PostForkInfo, pid: Option<u32>) -> Result<(), PostForkEr
         if info.linux_cgroup_hard_fail {
             // `log.err("dbus connection required for cgroup isolation,
             //  exiting", .{}); return error.PostForkError;` (`:67-68`).
-            eprintln!("err({LOG_SCOPE}): dbus connection required for cgroup isolation, exiting");
+            eprintln!("error({LOG_SCOPE}): dbus connection required for cgroup isolation, exiting");
             return Err(PostForkError);
         }
         // `return;` (`:71`).
@@ -171,14 +171,14 @@ pub fn post_fork(info: &PostForkInfo, pid: Option<u32>) -> Result<(), PostForkEr
             // `log.err("unable to create transient systemd scope {s}: {t}", ...);
             //  return error.PostForkError;` (`:80-81`).
             eprintln!(
-                "err({LOG_SCOPE}): unable to create transient systemd scope {expected_display}: {err}"
+                "error({LOG_SCOPE}): unable to create transient systemd scope {expected_display}: {err}"
             );
             return Err(PostForkError);
         }
         // `log.warn("unable to create transient systemd scope {s}: {t}", ...);
         //  return;` (`:84-85`).
         eprintln!(
-            "warn({LOG_SCOPE}): unable to create transient systemd scope {expected_display}: {err}"
+            "warning({LOG_SCOPE}): unable to create transient systemd scope {expected_display}: {err}"
         );
         return Ok(());
     }
@@ -201,14 +201,14 @@ pub fn post_fork(info: &PostForkInfo, pid: Option<u32>) -> Result<(), PostForkEr
                 // `log.err("transition to new transient systemd scope {s} took
                 //  too long", ...); return error.PostForkError;` (`:94-95`).
                 eprintln!(
-                    "err({LOG_SCOPE}): transition to new transient systemd scope {expected_display} took too long"
+                    "error({LOG_SCOPE}): transition to new transient systemd scope {expected_display} took too long"
                 );
                 return Err(PostForkError);
             }
             // `log.warn("transition to transient systemd scope {s} took too
             //  long", ...); break :loop;` (`:97-98`).
             eprintln!(
-                "warn({LOG_SCOPE}): transition to transient systemd scope {expected_display} took too long"
+                "warning({LOG_SCOPE}): transition to transient systemd scope {expected_display} took too long"
             );
             break 'outer;
         }

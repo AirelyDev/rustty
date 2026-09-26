@@ -1,3 +1,5 @@
+//! Use DBus to call the XDG Desktop Portal to open an URI.
+//!
 //! PORTS: ghostty `src/apprt/gtk/portal/OpenURI.zig` — use D-Bus to call the XDG
 //! Desktop Portal to open a URI.
 //!
@@ -56,8 +58,9 @@ const OPEN_URI_IFACE: &str = "org.freedesktop.portal.OpenURI";
 /// PORTS: `OpenURI.zig:203` — the `Request` interface that carries `Response`.
 const REQUEST_IFACE: &str = "org.freedesktop.portal.Request";
 
-/// PORTS: `OpenURI.zig:502` `const cleanup_timeout = 30` — wait this many seconds
-/// and then clean up any orphaned entries.
+/// Wait this number of seconds and then clean up any orphaned entries.
+///
+/// PORTS: `OpenURI.zig:502` `const cleanup_timeout = 30`.
 const CLEANUP_TIMEOUT_SECS: u64 = 30;
 
 /// PORTS: `OpenURI.zig:103-111` `pub const Errors`.
@@ -71,14 +74,32 @@ pub enum Error {
     /// A request with this token is already in flight — the reference's
     /// `putNoClobber` error (`OpenURI.zig:175`).
     DuplicateToken,
-    /// DELIBERATE, DOCUMENTED DIVERGENCE (no reference counterpart): the URI is not
-    /// valid UTF-8. The reference `dupeZ`s the raw bytes and hands the pointer to a
-    /// `"s"` variant; D-Bus strings are REQUIRED to be UTF-8, so non-UTF-8 bytes
-    /// would produce an invalid message rather than an open. Reporting it as an
-    /// error routes the URL to the OS opener — which takes raw bytes — via the
-    /// caller's existing error arm (`application.zig:2359-2362`), i.e. the byte
-    /// string still gets opened, just not through the portal.
+    /// The URI is not valid UTF-8 (no reference counterpart).
+    ///
+    /// PORT NOTE: reference defect (R13), `UPSTREAM-DEFECTS.md` UD171. The
+    /// reference `dupeZ`s the URL's raw bytes and passes them to
+    /// `builder.add("s", entry.uri.ptr)` (`OpenURI.zig:279`), i.e.
+    /// `g_variant_new_string`, whose precondition is valid UTF-8. A non-UTF-8 URL
+    /// (a terminal hyperlink, OSC 8, carries arbitrary bytes) violates it:
+    /// MEASURED on GLib 2.88.2 with a C probe that builds `sendRequest`'s payload
+    /// the reference's way, GLib logs `GLib-CRITICAL: g_variant_new_string():
+    /// requires valid UTF-8` and substitutes the string `[Invalid UTF-8]`, so the
+    /// portal is asked to open `[Invalid UTF-8]`. A failed `g_return_*_if_fail` is
+    /// a programmer error after which, in GLib's own words, the function "should be
+    /// considered to have undefined behaviour"; with the checks compiled out
+    /// (`G_DISABLE_CHECKS`) the invalid string would reach the D-Bus serializer,
+    /// whose UTF-8 `g_assert` aborts the process (measured for the IPC path, UD170).
+    /// The port checks the bytes first and reports this error, which the caller
+    /// handles with the reference's own failure path for `start`: `log.err("unable
+    /// to open uri err={}")` then `openUrlFallback` (`application.zig:2845-2849`),
+    /// so the URL is still opened, by the OS opener, with its raw bytes. It is
+    /// checked BEFORE any state is mutated, so nothing is left behind (no entry, no
+    /// subscription, no cleanup timer, no portal call).
     UriNotUtf8,
+    // PORT NOTE: the reference's `TimerUnavailable` (`OpenURI.zig:110-111`) has no
+    // variant here: `Instant::now()` cannot fail, where `std.Io.Timestamp` can.
+    // Its doc, verbatim:
+    // The system was unable to give us the time.
 }
 
 impl std::fmt::Display for Error {
@@ -115,46 +136,64 @@ pub struct Observed {
     pub resubscribes: u64,
 }
 
-/// PORTS: `OpenURI.zig:79-101` `pub const Entry` — data about an in-flight call.
+/// Data about any in-flight calls to the portal.
+///
+/// PORTS: `OpenURI.zig:79-101` `pub const Entry`.
 struct Entry {
-    /// When the request started (`:81`).
+    /// When the request started.
     start: Instant,
-    /// The token the portal uses to identify requests and responses (`:86`).
+    /// A token used by the portal to identify requests and responses. The
+    /// actual format of the token does not really matter as long as it can be
+    /// used as part of a D-Bus object path. `usize` was chosen since it's easy
+    /// to hash and to generate random tokens.
     token: usize,
-    /// The "kind" of URI, needed to pass on to the fallback opener (`:89`).
+    /// The "kind" of URI. Unused here, but we may need to pass it on to the
+    /// fallback URL opener if the D-Bus method fails.
     kind: OpenUrlKind,
-    /// Our own copy of the URI: the method calls are asynchronous and the caller's
-    /// slice may be gone by the time we need it (`:93`).
+    /// A copy of the URI that we are opening. We need our own copy since the
+    /// method calls are asynchronous and the original may have been freed by
+    /// the time we need it.
     uri: Vec<u8>,
-    /// The `Response` subscription (`:96`). RAII: dropping it unsubscribes, which is
-    /// the port's spelling of `signalUnsubscribe` (`:227`).
+    /// Used to manage a subscription to a D-Bus signal, which is how the XDG
+    /// Portal reports results of the method call.
+    ///
+    /// RAII: dropping it unsubscribes, which is the port's spelling of
+    /// `signalUnsubscribe` (`:227`).
     subscription: Option<gio::SignalSubscription>,
 }
 
 /// The mutex-guarded half of the reference struct (`OpenURI.zig:26-35`).
+///
+/// PORT NOTE: the reference's `mutex` field is this `RefCell` (see the module's
+/// threading note). Its doc, verbatim:
+/// Mutex to protect modification of the entries map or the cleanup timer.
 #[derive(Default)]
 struct State {
+    /// Map to store data about any in-flight calls to the portal.
+    ///
     /// `entries` (`:29`). PORT NOTE: the reference uses an
     /// `AutoArrayHashMapUnmanaged`; nothing depends on its iteration order (the
     /// cleanup sweep `swapRemove`s, which reorders anyway), so a `HashMap` is used.
     entries: HashMap<usize, Entry>,
-    /// `cleanup_timer` (`:32`).
+    /// Used to manage a timer to clean up any orphan entries in the map.
     cleanup_timer: Option<glib::SourceId>,
 }
 
 struct Inner {
-    /// `dbus` (`OpenURI.zig:23`).
+    /// Connection to the D-Bus session bus that we'll use for all of our messaging.
     dbus: RefCell<Option<gio::DBusConnection>>,
     state: RefCell<State>,
-    /// `alive` (`OpenURI.zig:35`) — set false during shutdown so callbacks stop
-    /// touching internal state.
+    /// Set to false during shutdown so callbacks stop touching internal state.
     alive: Cell<bool>,
     observed: Cell<Observed>,
 }
 
 /// PORTS: `OpenURI.zig` — the whole struct.
 ///
-/// PORT NOTE (no `app` backref): the reference holds `app: *App` (`:20`) for exactly
+/// PORT NOTE (no `app` backref): the reference holds `app: *App` (`:20`), documented
+/// as:
+/// The GTK app that we "belong" to.
+/// It holds it for exactly
 /// two purposes — the allocator, and `app.app.openUrlFallback`. The port needs no
 /// allocator, and its fallback ([`crate::gtk::class::application::open_url_fallback`])
 /// is app-independent (it reaches `rustty_os::open`), so no backref is stored. That
@@ -222,8 +261,10 @@ impl OpenUri {
         inner.dbus.replace(None);
     }
 
-    /// PORTS: `OpenURI.zig:146-187` `start`. Send the D-Bus method call to the XDG
-    /// Desktop portal; the result is reported asynchronously.
+    /// Send the D-Bus method call to the XDG Desktop portal. The result of the
+    /// method call will be reported asynchronously.
+    ///
+    /// PORTS: `OpenURI.zig:146-187` `start`.
     pub fn start(&self, value: OpenUrl<'_>) -> Result<(), Error> {
         let inner = &self.inner;
 
@@ -244,6 +285,9 @@ impl OpenUri {
         {
             let mut state = inner.state.borrow_mut();
 
+            // Create an entry that is used to track the results of the D-Bus method
+            // call.
+            //
             // `try self.entries.putNoClobber(alloc, token, entry)` (`:165-177`).
             if state.entries.contains_key(&token) {
                 return Err(Error::DuplicateToken);
@@ -274,6 +318,9 @@ impl OpenUri {
     }
 }
 
+/// Subscribe to the D-Bus signal that will contain the results of our method
+/// call to the portal. This must be called with the mutex locked.
+///
 /// PORTS: `OpenURI.zig:191-212` `subscribeToResponse`.
 fn subscribe_to_response(
     inner: &Rc<Inner>,
@@ -335,6 +382,9 @@ fn fallback(inner: &Rc<Inner>, kind: OpenUrlKind, uri: &[u8]) {
     crate::gtk::class::application::open_url_fallback(kind, uri);
 }
 
+/// Send the D-Bus method call to the portal. The mutex must be locked when this
+/// is called.
+///
 /// PORTS: `OpenURI.zig:258-349` `sendRequest` (the payload builder + the call).
 fn send_request(
     inner: &Rc<Inner>,
@@ -345,6 +395,9 @@ fn send_request(
 ) {
     // `(ssa{sv})`: parent window (empty = we have no window), the URI, and the
     // options vardict (`:266-330`).
+    //
+    // parent window - empty string means we have no window
+    // URI to open
     let options = glib::VariantDict::new(None);
     options.insert_value("handle_token", &format_token(token).to_variant());
     options.insert_value("writable", &false.to_variant());
@@ -385,9 +438,12 @@ fn send_request(
 /// * `:393` `D-Bus method call returned a null value!` — the async call's
 ///   `Result` is `Ok(Variant)`; there is no null reply to test for.
 ///
-/// PORTS: `OpenURI.zig:354-439` `requestCallback`. Process the result of the original
-/// method call. Receiving this result does not indicate the call SUCCEEDED, but it
-/// may carry an error worth logging, and it names the portal's actual request path.
+/// Process the result of the original method call. Receiving this result does
+/// not indicate that the that the method call succeeded but it may contain an
+/// error message that is useful to log for debugging purposes.
+///
+/// PORTS: `OpenURI.zig:354-439` `requestCallback`. It also names the portal's
+/// actual request path.
 fn request_callback(
     inner: &Rc<Inner>,
     token: usize,
@@ -495,6 +551,10 @@ fn request_callback(
         );
         // `self.unsubscribeFromResponse(entry); self.subscribeToResponse(..)`
         // (`:437-438`). Dropping the old subscription IS the unsubscribe.
+        // `unsubscribeFromResponse`'s doc (`:215-217`), verbatim:
+        // Unsubscribe to the D-Bus signal that contains the result of the method call.
+        // This will prevent a response from being processed multiple times. This must
+        // be called when the mutex is locked.
         //
         // UNRESTORED SITE `OpenURI.zig:225` (task-14d-3):
         // `unsubscribeFromResponse` warns `unable to unsubscribe open uri
@@ -519,8 +579,10 @@ fn request_callback(
 /// there is no nullable user-data to check. `:532`'s `cleanup called with null
 /// userdata` is the same shape in [`cleanup`].
 ///
-/// PORTS: `OpenURI.zig:443-499` `responseReceived`. Handles the `Response` signal
-/// from the portal, which carries the actual result of the method call.
+/// Handle the response signal from the portal. This should contain the actual
+/// results of the method call (success or failure).
+///
+/// PORTS: `OpenURI.zig:443-499` `responseReceived`.
 fn response_received(inner: &Rc<Inner>, object_path: &str, params: &glib::Variant) {
     // `portal.parseRequestPathToken(..) orelse { log; return }` (`:459-462`).
     let Some(token) = parse_request_path_token(object_path) else {
@@ -621,20 +683,39 @@ fn response_received(inner: &Rc<Inner>, object_path: &str, params: &glib::Varian
     }
 }
 
+/// If there is an active cleanup timer, cancel it. This must be called with the
+/// mutex locked
+///
 /// PORTS: `OpenURI.zig:506-515` `stopCleanupTimer`.
 //
-// PORT NOTE (task-14d-3, UNRESTORED SITE `OpenURI.zig:512`): the reference tests
-// `if (glib.Source.remove(timer) == 0) log.warn("unable to remove cleanup timer
-// source={d}", .{timer})`. glib-rs's `SourceId::remove` returns `()` — it has no
-// failure report — so there is no arm for the warning.
+// PORT NOTE (task tail-s1b, N204): this called glib-rs's `SourceId::remove`,
+// which the earlier note described as returning `()` with "no failure report".
+// It does return `()`, but only because it `unwrap()`s `g_source_remove`'s
+// result: a stale id PANICKED (glib-0.22.8 `source.rs:29-36`), inside a GTK
+// callback, where the reference warns `unable to remove cleanup timer
+// source={d}` and carries on. `g_source_remove` is now called directly, as
+// `class/surface.rs`'s `remove_source_id` does, and its FALSE is the
+// reference's `== 0` arm.
 fn stop_cleanup_timer(state: &mut State) {
+    // if (self.cleanup_timer) |timer| {
     if let Some(timer) = state.cleanup_timer.take() {
-        timer.remove();
+        let raw = timer.as_raw();
+        // if (glib.Source.remove(timer) == 0) {
+        // SAFETY: `raw` is a source id glib issued for this timer; passing it to
+        // `g_source_remove` is always valid (FALSE if the source is already gone).
+        if unsafe { glib::ffi::g_source_remove(raw) } == glib::ffi::GFALSE {
+            // log.warn("unable to remove cleanup timer source={d}", .{timer});
+            log::warn!(target: LOG_SCOPE, "unable to remove cleanup timer source={raw}");
+        }
+        // self.cleanup_timer = null;  (the `take()` above; `SourceId` has no `Drop`)
     }
 }
 
-/// PORTS: `OpenURI.zig:520-525` `startCleanupTimer`. If there is already a timer it
-/// is stopped and replaced.
+/// Start a timer to clean up any entries that have not received a timely
+/// response. If there is already a timer it will be stopped and replaced with a
+/// new one. This must be called with the mutex locked.
+///
+/// PORTS: `OpenURI.zig:520-525` `startCleanupTimer`.
 fn start_cleanup_timer(inner: &Rc<Inner>, state: &mut State) {
     stop_cleanup_timer(state);
 
@@ -650,8 +731,10 @@ fn start_cleanup_timer(inner: &Rc<Inner>, state: &mut State) {
     state.cleanup_timer = Some(source);
 }
 
-/// PORTS: `OpenURI.zig:529-565` `cleanup`. Frees any entries that failed to get a
-/// response in a timely manner, reaching the fallback opener for each.
+/// The cleanup timer is used to free up any entries that may have failed
+/// to get a response in a timely manner.
+///
+/// PORTS: `OpenURI.zig:529-565` `cleanup`, reaching the fallback opener for each.
 ///
 /// The reference returns `SOURCE_REMOVE`, so this is a one-shot; the port uses
 /// `timeout_add_seconds_local_once`, whose source removes itself. The `cleanup_timer`
@@ -706,6 +789,54 @@ mod tests {
     use super::*;
 
     use crate::log_capture;
+
+    /// N204 / `OpenURI.zig:512`. A cleanup timer whose source is already gone
+    /// must WARN with the reference's text and carry on; glib-rs's
+    /// `SourceId::remove` panicked here. The live arm is checked too: a source
+    /// that still exists is removed without a diagnostic.
+    #[test]
+    fn stopping_a_stale_cleanup_timer_warns_instead_of_panicking() {
+        use glib::translate::FromGlib;
+
+        let cap = log_capture::start();
+
+        // Live source: removed, no diagnostic.
+        let live = glib::timeout_add_seconds_once(3600, || {});
+        let mut state = State {
+            entries: HashMap::new(),
+            cleanup_timer: Some(live),
+        };
+        stop_cleanup_timer(&mut state);
+        assert!(state.cleanup_timer.is_none());
+        assert_eq!(cap.messages(), Vec::new());
+
+        // Stale source: removed behind the timer's back first.
+        let stale = glib::timeout_add_seconds_once(3600, || {});
+        let raw = stale.as_raw();
+        // SAFETY: a glib-issued id, removed exactly once here.
+        assert_ne!(
+            unsafe { glib::ffi::g_source_remove(raw) },
+            glib::ffi::GFALSE
+        );
+        // SAFETY: re-wrapping the (now stale) raw id; `SourceId` has no `Drop`.
+        let stale_again = unsafe { glib::SourceId::from_glib(raw) };
+        let mut state = State {
+            entries: HashMap::new(),
+            cleanup_timer: Some(stale_again),
+        };
+        stop_cleanup_timer(&mut state);
+        assert!(state.cleanup_timer.is_none());
+        let messages = cap.messages();
+        drop(cap);
+        assert_eq!(
+            vec![(
+                log::Level::Warn,
+                "openuri".to_string(),
+                format!("unable to remove cleanup timer source={raw}"),
+            )],
+            messages
+        );
+    }
 
     /// Build the `(u@a{sv})` payload the portal's `Response` signal carries
     /// (`OpenURI.zig:481`).
@@ -879,8 +1010,13 @@ mod tests {
     ///
     /// An earlier version of this test asserted the opposite ordering and FAILED
     /// on Linux from the day it landed (WS19 T8) — its rationale ("the UTF-8 check
-    /// must run first") had no oracle basis. The `UriNotUtf8` path itself is
-    /// exercised by the live-gated portal KAT, where a connection exists.
+    /// must run first") had no oracle basis.
+    ///
+    /// CORRECTION (task T-D, S59-F5): this doc went on "The `UriNotUtf8` path
+    /// itself is exercised by the live-gated portal KAT, where a connection
+    /// exists." No test or gate in the tree named `UriNotUtf8` (grep of
+    /// `crates/*/tests` and `.port/tools`, 2026-09-23). It is driven now by
+    /// `open_uri_rejects_a_non_utf8_uri_before_any_state`, below.
     #[test]
     fn open_uri_connection_check_precedes_uri_validation() {
         let open_uri = OpenUri::new();
@@ -892,6 +1028,102 @@ mod tests {
             .expect_err("no dbus connection was set");
         assert_eq!(err, Error::DBusConnectionRequired);
         assert_eq!(open_uri.in_flight(), 0);
+    }
+
+    /// A private message bus for one test: `dbus-daemon --session --nofork
+    /// --print-address` on its own socket, connected WITHOUT touching the process
+    /// environment (`DBUS_SESSION_BUS_ADDRESS`), which other tests in the same
+    /// binary read concurrently. The daemon is killed when the guard drops.
+    struct PrivateBus {
+        daemon: std::process::Child,
+        conn: gio::DBusConnection,
+    }
+
+    impl PrivateBus {
+        fn start() -> PrivateBus {
+            use std::io::BufRead;
+            let mut daemon = std::process::Command::new("dbus-daemon")
+                .args(["--session", "--nofork", "--print-address"])
+                .stdout(std::process::Stdio::piped())
+                .spawn()
+                .expect("dbus-daemon must be installed for this test");
+            let mut address = String::new();
+            std::io::BufReader::new(daemon.stdout.as_mut().expect("piped stdout"))
+                .read_line(&mut address)
+                .expect("dbus-daemon prints its address");
+            let conn = gio::DBusConnection::for_address_sync(
+                address.trim(),
+                gio::DBusConnectionFlags::AUTHENTICATION_CLIENT
+                    | gio::DBusConnectionFlags::MESSAGE_BUS_CONNECTION,
+                None,
+                gio::Cancellable::NONE,
+            )
+            .expect("connect to the private bus");
+            assert!(
+                conn.unique_name().is_some(),
+                "a message-bus connection has a unique name"
+            );
+            PrivateBus { daemon, conn }
+        }
+    }
+
+    impl Drop for PrivateBus {
+        fn drop(&mut self) {
+            let _ = self.conn.close_sync(gio::Cancellable::NONE);
+            let _ = self.daemon.kill();
+            let _ = self.daemon.wait();
+        }
+    }
+
+    /// S59-F5 / UD171 (R13): with a connection, a non-UTF-8 URL is refused with
+    /// `UriNotUtf8` BEFORE any state exists: no entry, no request made, no
+    /// cleanup timer. The reference would call `g_variant_new_string` on the bytes
+    /// (a GLib precondition violation, measured: `GLib-CRITICAL` and the portal
+    /// asked to open `[Invalid UTF-8]`). Positive control on the same connection:
+    /// a UTF-8 URL does start a request (one entry in flight).
+    #[test]
+    fn open_uri_rejects_a_non_utf8_uri_before_any_state() {
+        // CORRECTION (task L-2): the positive control's request is an ASYNC
+        // `DBusConnection::call` whose reply callback attaches to the calling
+        // thread's thread-default main context. With none pushed that was the
+        // process-global default context, so another test iterating it
+        // (`hotkeys_wire_path_bound_pressed_denied_revoked`) dispatched this
+        // test's callback on its own thread: glib-rs's thread guard panicked in the
+        // C callback and aborted the test binary, in about one full run in two on
+        // the VM. The test now runs on a private context of its own.
+        let ctx = glib::MainContext::new();
+        ctx.with_thread_default(|| {
+            let bus = PrivateBus::start();
+            let open_uri = OpenUri::new();
+            open_uri.set_dbus_connection(Some(&bus.conn));
+
+            assert_eq!(
+                open_uri.start(OpenUrl {
+                    kind: OpenUrlKind::Unknown,
+                    url: b"https://example.invalid/caf\xe9",
+                }),
+                Err(Error::UriNotUtf8),
+            );
+            assert_eq!(open_uri.in_flight(), 0, "no entry for the refused URL");
+            assert!(
+                open_uri.inner.state.borrow().cleanup_timer.is_none(),
+                "no cleanup timer for the refused URL"
+            );
+            assert_eq!(open_uri.observed(), Observed::default());
+
+            // Positive control: the same object and connection DO start a request for
+            // a UTF-8 URL, so the refusal above is the UTF-8 check, not a dead object.
+            assert_eq!(
+                open_uri.start(OpenUrl {
+                    kind: OpenUrlKind::Unknown,
+                    url: b"https://example.invalid/cafe",
+                }),
+                Ok(()),
+            );
+            assert_eq!(open_uri.in_flight(), 1);
+            open_uri.deinit();
+        })
+        .expect("acquire the test's own main context");
     }
 
     /// `deinit` is idempotent (`OpenURI.zig:129-130` `if (!self.alive) return`) and

@@ -503,7 +503,7 @@ impl Face {
         //
         // if (comptime builtin.mode == .Debug) { ... }
         //
-        // Ported live (S90-F2 / S91-F8): the body is `log_variation_axes`, which
+        // Ported live (S90-F2 / S91-F8): the body is `dump_variation_axes`, which
         // takes the mode flag as a parameter so the release arm is testable; the
         // ONLY production call site passes `DEBUG_MODE`, the direct port of
         // `comptime builtin.mode == .Debug`.
@@ -514,7 +514,7 @@ impl Face {
         // first is a no-op (there is no HarfBuzz font in this face), and `font`
         // and `color` own their data and release on `Drop`, so `?` discharges
         // both arms. See the `init_font` doc comment.
-        if let Err(e) = result.log_variation_axes(DEBUG_MODE) {
+        if let Err(e) = result.dump_variation_axes(DEBUG_MODE) {
             // errdefer if (comptime harfbuzz_shaper) hb_font.destroy();
             // (`result` owns `hb_font` now; `font`/`color` release on drop.)
             return Err(destroy_hb_font_on_err(e));
@@ -587,7 +587,11 @@ impl Face {
     /// Purely diagnostic: it emits `log.debug` records and has no effect on the
     /// face. The `try result.name(&buf)` in the reference propagates, so this
     /// returns `Result` and `init` uses `?` on it, matching that.
-    fn log_variation_axes(&self, debug_mode: bool) -> Result<(), Error> {
+    ///
+    /// Named `log_variation_axes` until task S-1c. G-LOGFILE reads a `log_*` fn
+    /// as a one-message logging facade and counts its call site instead of its
+    /// body, so the two reference sites this body ports were counted as one.
+    fn dump_variation_axes(&self, debug_mode: bool) -> Result<(), Error> {
         if !debug_mode {
             return Ok(());
         }
@@ -2184,7 +2188,7 @@ mod tests {
     /// `test {}` counterpart in the reference, so the `check_test_counts.py`
     /// contract (rust >= zig) is unaffected.
     #[test]
-    fn log_variation_axes_is_silent_when_not_debug_mode() -> Result<(), Error> {
+    fn dump_variation_axes_is_silent_when_not_debug_mode() -> Result<(), Error> {
         let mut face = Face::init(
             crate::library::Library::init().unwrap(),
             embedded::VARIABLE,
@@ -2192,7 +2196,7 @@ mod tests {
         )?;
 
         let cap = crate::log_capture::start();
-        face.log_variation_axes(false)?;
+        face.dump_variation_axes(false)?;
         let messages = cap.messages();
         drop(cap);
 
@@ -2211,7 +2215,7 @@ mod tests {
     /// macOS version. The record COUNT, the level, the target, and the message
     /// PREFIX are all pinned, which is what the restoration is actually about.
     #[test]
-    fn log_variation_axes_emits_the_header_and_one_record_per_axis() -> Result<(), Error> {
+    fn dump_variation_axes_emits_the_header_and_one_record_per_axis() -> Result<(), Error> {
         let mut face = Face::init(
             crate::library::Library::init().unwrap(),
             embedded::VARIABLE,
@@ -2219,7 +2223,7 @@ mod tests {
         )?;
 
         let cap = crate::log_capture::start();
-        face.log_variation_axes(true)?;
+        face.dump_variation_axes(true)?;
         let messages = cap.messages();
         drop(cap);
 

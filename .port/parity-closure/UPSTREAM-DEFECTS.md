@@ -1779,6 +1779,81 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - proposed fix:    upstream in Zig, make `text_i` a `usize` (or reject text longer than 255 bytes up front). In ghostty, until then, reject a key longer than a hostname can be (`HostName.max_len` plus the `user@` prefix) in `isValidCacheKey` before calling `parseIp6`.
 - upstream status: not reported
 
+### UD170 — `+new-window -e` / `+new-tab -e` with a non-UTF-8 argument aborts the CLI process inside GLib's D-Bus serializer
+- kind:            crash (GLib `g_assert` → SIGABRT)
+- upstream project: ghostty
+- severity:        low (the sending CLI process dies; the running instance is unaffected)
+- reference:       `src/apprt/gtk/ipc/new_window.zig:45-56`, `src/apprt/gtk/ipc/new_tab.zig:44-61` (each argument becomes `glib.Variant.newFromBytes(s, Bytes(arg ++ NUL), trusted = true)`), sent by `src/apprt/gtk/ipc/DBus.zig:137-188` (`send` → `callSync` at `:165`), at 20abdb50a
+- defect:          `newFromBytes` with `trusted = true` does not validate, so a non-UTF-8 argument builds an `s` value that is not UTF-8. `g_dbus_connection_call_sync` serializes the message with `g_dbus_message_to_blob`, whose `append_value_to_blob` asserts that every `s` is valid UTF-8.
+- ReleaseSafe:     the process aborts: `GLib-GIO:ERROR:../gio/gdbusmessage.c:2691:append_value_to_blob: assertion failed: (g_utf8_validate (v, -1, &end) && (end == v + len))`, `Bail out!`, SIGABRT (exit 134). MEASURED on the VM (Fedora, GLib 2.88.2) with a C probe that builds the `(sava{sv})` payload exactly as `newWindow` does (the argument `caf\xe9`) and calls `g_dbus_message_to_blob`. The abort is GLib's, so it does not depend on the Zig build mode.
+- ReleaseFast:     the same abort (GLib's assertion, not Zig's).
+- reachability:    the command line: `ghostty +new-window -e <arg>` or `+new-tab -e <arg>` where `<arg>` is not UTF-8, e.g. a file name in a Latin-1 locale or on a non-UTF-8 file system.
+- port handling:   `crates/rustty-apprt/src/gtk/app.rs` `ipc_arguments_variant` checks each argument; a non-UTF-8 one fails the IPC with `IPCFailed` (the reference's own failure return for these functions) after printing `D-Bus IPC argument is not valid UTF-8: <the argument's bytes>`, because the CLI caller treats `IPCFailed` as "the apprt should have printed a more specific error message already" (`src/cli/new_window.zig:249-252`). That line is NEW text; the reference has none for this case. UTF-8 arguments build the byte-identical `s` values. The check runs where the reference builds the parameter, after the bus-name checks and the session-bus connection, so earlier diagnostics keep their order. The port previously `String::from_utf8_lossy`'d each argument, which forwarded U+FFFD-mangled arguments and reported success. PORT NOTE at `ipc_arguments_variant`.
+- parity row(s):   LEDGER S59-F1.
+- test:            `ipc_arguments_variant_rejects_non_utf8` (rustty-apprt, Linux, display-free): `[-e, caf\xe9]` fails with `IPCFailed` and exactly that stderr line, for both `new-window-command` and `new-tab`'s `(tas)`. `ipc_arguments_variant_matches_the_reference_bytes`: for UTF-8 arguments (including non-ASCII and an empty one) the port's `as` equals the reference's own `newFromBytes` construction, built through the same C calls in the test (`g_variant_equal` and serialized bytes), and `(tas)` likewise. NEGATIVE CONTROL (VM, 2026-09-23): restoring the lossy conversion fails the first test at its `IPCFailed` assertion. The reference's own behaviour (the abort) is shown by the C probe above, not by a Rust test.
+- proposed fix:    validate before building: `if (!std.unicode.utf8ValidateSlice(argument)) { try stderr.print("argument is not valid UTF-8: {s}\n", .{argument}); return error.IPCFailed; }`, or build the value with `glib.Variant.newString`, which validates.
+- upstream status: not reported
+
+### UD171 — opening a non-UTF-8 URL through the OpenURI portal violates `g_variant_new_string`'s UTF-8 precondition
+- kind:            ub (a GLib API precondition violation; GLib documents the function as having undefined behaviour after a failed `g_return_*_if_fail`)
+- upstream project: ghostty
+- severity:        low
+- reference:       `src/apprt/gtk/portal/OpenURI.zig:147-187` (`start`: `entry.uri = try alloc.dupeZ(u8, value.url)`, no validation), `:259-353` (`sendRequest`: `builder.add("s", entry.uri.ptr)` at `:279`), at 20abdb50a; called from `src/apprt/gtk/class/application.zig:2832-2850` (`openUrl`)
+- defect:          `builder.add("s", ptr)` is `g_variant_builder_add(&b, "s", ptr)`, i.e. `g_variant_new_string(ptr)`, whose precondition is a valid UTF-8 string. A URL's bytes are not validated anywhere before it.
+- ReleaseSafe:     GLib logs `GLib-CRITICAL: g_variant_new_string(): requires valid UTF-8` and substitutes the string `[Invalid UTF-8]`, so the portal is asked to open `[Invalid UTF-8]`. MEASURED on the VM (GLib 2.88.2) with a C probe that builds `sendRequest`'s `(ssa{sv})` payload the reference's way (printed: `('', '[Invalid UTF-8]', {'handle_token': <'0000000000000042'>})`). What the portal then does with that URI was NOT measured (the VM's portal did not start: `NameHasNoOwner ... startup job failed`); UNVERIFIED. GLib's contract for a failed `g_return_*_if_fail` (the `g_return_if_fail` documentation in `glib/gmessages.h`, GLib main fetched 2026-09-23): "the current function should be considered to have undefined behaviour (a programmer error)"; with the checks compiled out (`G_DISABLE_CHECKS`) the invalid string would reach the D-Bus serializer, whose UTF-8 `g_assert` aborts the process (MEASURED for the IPC path, UD170; not measured for this path).
+- ReleaseFast:     the same (GLib's behaviour, not Zig's).
+- reachability:    the VT stream: a terminal hyperlink (OSC 8) whose URL bytes are not UTF-8, opened by the user; also any other `open_url` whose bytes are not UTF-8 and do not start with `/` or `file://` (those two go straight to the OS opener).
+- port handling:   `crates/rustty-apprt/src/gtk/portal/open_uri.rs` `OpenUri::start` returns `Error::UriNotUtf8` before any state is created (no entry, no subscription, no cleanup timer, no portal call), and the caller takes the reference's own failure path for `start`: `log.err("unable to open uri err={}")` then `openUrlFallback` (`application.zig:2845-2849`), so the URL is still opened by the OS opener with its raw bytes. The guard predates this task (it was a "DELIBERATE, DOCUMENTED DIVERGENCE"); task T-D re-grounds it on R13, records the measurement, and adds the first test that drives it. PORT NOTE on `Error::UriNotUtf8`.
+- parity row(s):   LEDGER S59-F5.
+- test:            `open_uri_rejects_a_non_utf8_uri_before_any_state` (rustty-apprt, Linux, no display): a private `dbus-daemon` (started by the test, connected without touching the process environment) supplies a real message-bus connection; `https://example.invalid/caf\xe9` returns `UriNotUtf8` with no entry in flight, no cleanup timer and nothing observed, and the positive control on the same object and connection, `https://example.invalid/cafe`, starts a request (one entry in flight). CORRECTION (task L-2): this said "NOT YET RUN: written by task T-D, but the Linux VM went down before this test was built; no negative control yet." RUN on the VM (Fedora 44 aarch64, GLib 2.88.2, 2026-09-26): passes; NEGATIVE CONTROL (the URI converted with `from_utf8_lossy` instead of refused): RED, `start` returns `Ok(())` where `Err(UriNotUtf8)` is expected.
+- proposed fix:    validate in `start` and fail into the existing fallback: `if (!std.unicode.utf8ValidateSlice(value.url)) return error.InvalidUri;` (the caller already falls back to `openUrlFallback` on any error).
+- upstream status: not reported
+
+### UD172 — an OSC 52 write with a non-UTF-8 payload that needs confirmation previews as EMPTY, and confirming clears the clipboard
+- kind:            ub (a GTK API precondition violation; see UD171 for GLib's contract) with a data-loss consequence
+- upstream project: ghostty
+- severity:        low (needs `clipboard-write = ask`)
+- reference:       `src/apprt/gtk/class/surface.zig:4045-4132` (`Clipboard.set`: `text` is the payload's raw `text/plain` bytes), `:4232-4271` (`showClipboardConfirmation`: `contents_buf.insertAtCursor(str, @intCast(str.len))`), `:4273-4309` (`clipboardConfirmationConfirm`: reads the buffer's `text` property back and completes the request with it), at 20abdb50a
+- defect:          `gtk_text_buffer_insert_at_cursor`'s precondition is valid UTF-8. A non-UTF-8 OSC 52 payload violates it.
+- ReleaseSafe:     GTK logs `Gtk-CRITICAL: gtk_text_buffer_emit_insert: assertion 'g_utf8_validate (text, len, NULL)' failed` and inserts nothing, so the dialog previews an EMPTY payload, and confirming completes the write with the buffer's text, `""`, which clears the clipboard. MEASURED on the VM (GTK 4.22.4) with a C probe: after `gtk_text_buffer_insert_at_cursor(buf, "caf\xe9!", 5)` the buffer's `text` is empty, while the U+FFFD-substituted `caf\xef\xbf\xbd!` is kept (7 bytes). The dialog-level consequence (empty preview, cleared clipboard) is by reading `clipboardConfirmationConfirm`.
+- ReleaseFast:     the same (GTK's behaviour).
+- reachability:    the VT stream: any program can send an OSC 52 write with arbitrary base64-decoded bytes; the dialog appears when `clipboard-write = ask`.
+- port handling:   `crates/rustty-apprt/src/gtk/class/surface.rs` `set_clipboard` previews `String::from_utf8_lossy(payload)`: each invalid sequence becomes U+FFFD, and confirming writes that text, so the user confirms exactly what is written. The `clipboard-write` signal (the non-confirm path) carries the raw bytes, as the reference's does (S56-F3). PORT NOTE at the `show_clipboard_confirmation` call in `set_clipboard`.
+- parity row(s):   LEDGER S56-F3.
+- test:            `clipboard_confirmation_preview_substitutes_invalid_utf8` (rustty-apprt, Linux, needs a display): `set_clipboard(Standard, [text/plain: caf\xe9], confirm = true)` builds a dialog whose preview buffer reads `caf\u{FFFD}`. CORRECTION (task L-2): this said "NOT YET RUN: written by task T-D, but the Linux VM went down before this test was built; no negative control yet." RUN on the VM (GTK 4.22.4, private headless sway, 2026-09-26): passes; NEGATIVE CONTROL (the preview given the reference's measured result, the empty text): RED, the buffer reads `""` where `caf\u{FFFD}` is expected.
+- proposed fix:    validate before inserting and show a replacement-character copy, or refuse the write: `if (!std.unicode.utf8ValidateSlice(str)) { ... }`; and let confirm write the ORIGINAL bytes rather than the buffer's text.
+- upstream status: not reported
+
+### UD173 — `loadCustomCss`'s failure warning says "no custom CSS applied" when earlier stylesheets stay applied
+- kind:            latent (a misleading diagnostic)
+- upstream project: ghostty
+- severity:        low
+- reference:       `src/apprt/gtk/class/application.zig:1123-1199` (`loadCustomCss`: each stylesheet is added to the display as it loads; a non-`FileTooBig` read error `return`s), `:1309-1314` (`propConfig`: `log.warn("failed to load custom CSS, no custom CSS applied, err={}")`), at 20abdb50a
+- defect:          when entry N fails its read, entries 0..N-1 are already registered on the display and stay applied, but the warning says none is.
+- ReleaseSafe:     a wrong message; the earlier stylesheets are in effect. By reading (`loadCustomCss` adds each provider to the display before the next file is read). The port test that exercises the same shape (`load_custom_css_stops_on_a_read_error_and_loads_raw_bytes`) is written but NOT YET RUN (the Linux VM went down).
+- ReleaseFast:     the same.
+- reachability:    config: a `gtk-custom-css` entry that opens but cannot be read (MEASURED: a directory opens and its first read fails `error.IsDir`, Zig 0.16 on the VM), listed after a readable one.
+- port handling:   faithful (message and behaviour), as R13 leaves non-crash defects to R1.
+- parity row(s):   LEDGER S49-F3.
+- test:            as above.
+- proposed fix:    say what happened: `"failed to load custom CSS, later stylesheets not applied, err={}"`, or unload the partial set before returning.
+- upstream status: not reported
+
+### UD174 — `globalShortcutBindFailed` silently drops the notification when the compositor's message is long
+- kind:            latent (a silent failure)
+- upstream project: ghostty
+- severity:        low
+- reference:       `src/apprt/gtk/class/application.zig:1753-1784` (`globalShortcutBindFailed`: `var body_buf: [512]u8`, `std.fmt.bufPrintZ(&body_buf, "{s}: {s}", ...) catch return;` at `:1773-1778`), at 20abdb50a
+- defect:          a "global keybind unavailable" notification whose body (trigger label, `": "`, the compositor's message) is 512 bytes or more is not raised at all, and nothing is logged, so a keybind the compositor denied does nothing with no sign of why: the silent no-op this notification exists to prevent.
+- ReleaseSafe:     no notification, no log. By reading.
+- ReleaseFast:     the same.
+- reachability:    a peer process: the compositor's (or portal's) denial/revocation message.
+- port handling:   faithful (the same 512-byte limit, measured on the raw bytes, and the same 128-byte label buffer with its `"?"` fallback), as R13 leaves non-crash defects to R1. `crates/rustty-apprt/src/gtk/class/application.rs` `bind_failed_notification`.
+- parity row(s):   LEDGER S49-F4, S50-F3.
+- test:            `application_bind_failed_notification_buffer_limits` (rustty-apprt, Linux, display-free).
+- proposed fix:    format into an allocating writer, or truncate the message to fit instead of returning.
+- upstream status: not reported
+
 
 ### UD180 — `+list-keybinds --docs` never prints a keybind action's help
 - kind:            latent (functional: documentation output silently empty)
@@ -2305,6 +2380,21 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - proposed fix:    what the TODO names: on FreeBSD (13+ has `eventfd(2)`), give `Wakeup` an eventfd created with `EFD_CLOEXEC | EFD_NONBLOCK`, register it in `setup` as `EVFILT_READ` with `udata = 0` (the tick loop already skips `udata == 0` events, as it does for the Darwin mach port), write `1` to it in `wakeup`, and drain it on each tick; then drop the `isDarwin()` gate on `thread_perform`'s wakeup. (`EVFILT_USER` with `NOTE_TRIGGER` is the eventfd-free alternative on every BSD.)
 - upstream status: not reported
 
+### UD276 — `test "face metrics"` in font/Collection.zig never checks anything: its backend guard is inverted
+- kind:            test-weakness
+- upstream project: ghostty
+- severity:        low
+- reference:       src/font/Collection.zig:1396-1523 at 20abdb50a (comment and guard at :1397-1398, expected-value switches at :1438-1502)
+- defect:          The comment says "The web canvas backend doesn't calculate face metrics, only cell metrics", but the guard is `if (options.backend != .web_canvas) return error.SkipZigTest;`, so the test is skipped on every backend except the one the comment excludes. On `web_canvas` each expected-value switch takes its `.web_canvas => unreachable` prong. The switches also have no `freetype_windows` prong, so they would not compile if analyzed on that backend. The face-metrics expectations therefore never run in upstream CI.
+- ReleaseSafe:     no product effect; the test is inert.
+- ReleaseFast:     same.
+- reachability:    none (test code).
+- port handling:   faithful skip (R13 keeps test weaknesses faithful; R14 form 1: `cfg_attr(not(wasm32), ignore)` in `crates/rustty-font-shaper/src/collection.rs` `face_metrics`), with the body ported live. MEASURED (task tail-s8c): run with `--ignored` on macOS (coretext) the body passes against the reference's own coretext expected values for CozetteVector and Geist Mono; a perturbed `cell_width` (7.3828125 → 7.5) fails it. On Linux (`fontconfig_freetype`, task L-1, Linux VM rvm (Fedora 44 aarch64), 2026-09-26) the body run with `--ignored` fails at the narrow font's first metric, `expected approximately 8, found 7`: the stale FreeType expectation of UD281, as measured under `coretext_freetype`.
+- parity row(s):   NEW-FINDINGS N265.
+- test:            `face_metrics` (`crates/rustty-font-shaper/src/collection.rs`), ignored by default as upstream.
+- proposed fix:    `if (options.backend == .web_canvas) return error.SkipZigTest;`, plus a `freetype_windows` prong (or an `else`) in the four switches.
+- upstream status: not reported
+
 ### UD280 — with `-Dfont-backend=coretext_freetype`, a font shipped as a collection (`.ttc`) loads the collection's first face
 - kind:            non-crash (evident intent broken)
 - upstream project: ghostty
@@ -2365,6 +2455,67 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - proposed fix:    call libc's `getauxval` when `builtin.link_libc` (for example `std.c.getauxval`), keeping the Zig implementation for libc-free builds.
 - upstream status: not reported
 
+### UD295 — the surface drag-and-drop `drop` handler is a `void` function on a `gboolean` signal
+- kind:            ub (a C function-type mismatch: GTK calls the handler as returning `gboolean` and reads an undefined return value)
+- upstream project: ghostty
+- severity:        low (the drop is accepted or rejected at random; the split move itself runs)
+- reference:       `src/apprt/gtk/class/surface.zig:3759-3786` (`surfaceDrop`, `callconv(.c) void`), connected in `src/apprt/gtk/ui/1.2/surface.blp` (`surface_drop_target`: `drop => $surface_drop()`), at 20abdb50a. `GtkDropTarget::drop` is declared `gboolean (*drop) (GtkDropTarget*, const GValue*, double, double, gpointer)`: "Returns: whether the drop was accepted at the given pointer position".
+- defect:          the handler returns nothing, so GTK reads whatever the return register holds and passes it to `gdk_drop_finish` as the accepted/rejected answer. The sibling handler `surfaceDropMotion` does return its `gdk.DragAction`.
+- ReleaseSafe:     UNVERIFIED (not measured on a Ghostty build): the answer GTK sees is the register left by the last call in `surfaceDrop` (`setDropOverlayDirection`, or `findSurfaceByID`/`moveSplit` on the early returns), so the drag source is told accepted or rejected arbitrarily. No crash is expected in C.
+- ReleaseFast:     the same (C calling convention, not a Zig safety check).
+- reachability:    every drag of a split onto another surface (the surface drag source), from the user.
+- port handling:   `crates/rustty-apprt/src/gtk/class/surface.rs` `surface_drop` returns `bool`: `true` after `move_split`, `false` on each early return, the signal's documented meaning. A `()` handler, the direct translation, is worse in Rust: glib-rs checks the return type and panics inside the C callback, which aborts the process (MEASURED on the VM, task L-2: "Closure returned no value but the caller expected a value of type gboolean", then "panic in a function that cannot unwind"). PORT NOTE: reference defect (R13) at the handler.
+- parity row(s):   none (found by task L-2 running the headed KAT `gtk_parity_callbacks`); NEW-FINDINGS N300.
+- test:            `surface_drop_answers_the_gboolean_drop_signal` (rustty-apprt, Linux, display): emitting `drop` on `surface_drop_target` with a value that is not a surface id returns `false` and the process survives; the headed KAT `parity_callbacks_do_not_abort` emits `drop` on every drop target. NEGATIVE CONTROL (VM, task L-2): the `()` handler restored aborts the test process.
+- proposed fix:    declare `surfaceDrop` as `callconv(.c) c_int` and return `1` after `moveSplit`, `0` on each early return.
+- upstream status: not reported
+
+### UD300 — three GTK "surface is not in a window" warnings name `new_tab` for another action
+- kind:            latent (copy-paste in a message)
+- upstream project: ghostty
+- severity:        low (a log line names the wrong action)
+- reference:       `src/apprt/gtk/class/application.zig` at 20abdb50a: `gotoTab` :2462, `moveTab` :2603 and `toggleTabOverview` :3276 each log `surface is not in a window, ignoring new_tab`, the text of `newTab`'s own warning (:2683); the sibling `moveTabToNewWindow` (:2626) names its own action.
+- defect:          when the surface has no enclosing window, the warning names `new_tab` although the ignored action is `goto_tab`, `move_tab` or `toggle_tab_overview`.
+- ReleaseSafe:     misleading diagnostic, no behavioural effect.
+- ReleaseFast:     the same.
+- reachability:    any of the three actions targeting a surface that is not (or no longer) inside a `Window`.
+- port handling:   faithful (R13: message text stays faithful). The port had used the "corrected" names; task S-1c restored the reference text in `crates/rustty-apprt/src/gtk/class/application.rs` `goto_tab`, `move_tab` and `toggle_tab_overview`, each with a comment citing this entry. Not in `docs/ghostty-bug-fixes.md` (no fix in the port).
+- parity row(s):   NEW-FINDINGS N310.
+- test:            none (GTK widget tree; the text is a string literal, compile-checked on Linux only). UNVERIFIED on Linux.
+- proposed fix:    `ignoring goto_tab`, `ignoring move_tab`, `ignoring toggle_tab_overview`.
+
+- upstream status: not reported
+
+### UD301 — `wasm_patch_growable_table`'s usage line names a `wasm_growable_table` binary
+- kind:            latent (copy-paste in a message)
+- upstream project: ghostty
+- severity:        low (a usage line names the wrong program)
+- reference:       `src/build/wasm_patch_growable_table.zig:9` (doc) and `:23` `std.log.err("usage: wasm_growable_table <input.wasm> <output.wasm>", .{})` at 20abdb50a; the build step names the executable `wasm_patch_growable_table` (`src/build/GhosttyLibVt.zig:73`).
+- defect:          the usage error names a program that does not exist; the binary is `wasm_patch_growable_table`.
+- ReleaseSafe:     misleading diagnostic, no behavioural effect.
+- ReleaseFast:     the same.
+- reachability:    running the build helper with the wrong argument count (only the build graph runs it, with two arguments).
+- port handling:   faithful (R13: message text stays faithful): xtask's `report_usage_error` prints the reference's line (task S-1d). Not in `docs/ghostty-bug-fixes.md`.
+- parity row(s):   NEW-FINDINGS N313.
+- test:            none for the text (xtask's `wasm_patch_rejects_*` tests assert the usage path); the line was measured (`cargo run -p xtask -- wasm-patch-growable-table onlyone`: the line, exit 1).
+- proposed fix:    `usage: wasm_patch_growable_table <input.wasm> <output.wasm>` in both places.
+- upstream status: not reported
+
+### UD315 — after a render-state update fails on an allocation, the next update leaves the rows it did not rebuild stale or empty
+- kind:            functional (evident intent: a successful update must describe the current terminal), and, by reading, UB (UNVERIFIED)
+- upstream project: ghostty
+- severity:        medium (UB-class by reading, UNVERIFIED; reachable only with a failing caller allocator)
+- reference:       src/terminal/render.zig:373-745 (`beginUpdate`: `self.rows`/`cols`/`viewport_pin` are stored at :417-419 before the `row_data.resize` `try` at :469; each page's dirty flag is cleared at :580 and each row's at :630/:638/:646 before `try builder.row(...)`; `t.flags.dirty` and the screen's dirty flags are cleared only at the end, :743-744), :1140-1344 (`RowBuilder.row`: `try cells.resize` at :1181, `try b.pending_styles.append` at :1260/:1275/:1326, `try arena_alloc.dupe` at :1285, `try ensureTotalCapacity` at :1340), and src/terminal/c/render.zig:214-233 (`update`/`begin_update` return `.out_of_memory` and nothing else), at 20abdb50a
+- defect:          When an allocation fails part way through `beginUpdate`, the call returns `error.OutOfMemory` after it has already consumed dirty state it did not act on: the new dimensions and viewport pin are stored, the pages and rows it reached have their dirty flags cleared (the failing row included, since its flag is cleared before `builder.row` runs), and rows added by a resize exist with no cells. The next `beginUpdate` compares against those stored values, so unless the terminal changed again it is not a full redraw: it rebuilds only rows whose page or row is still dirty, and leaves the others stale (their previous frame) or empty (0 cells), and it can report `.false` or `.partial` for them. By reading at the pin; the port, which is line-for-line the same, was MEASURED (below). Worse, by reading, UNVERIFIED (review S7-5 F1): when the failure happens INSIDE `RowBuilder.row`, the failing row has already had its raw cells copied (`fastmem.copy`, render.zig:1190-1194) and its arena reset (:1155, `reset(.retain_capacity)` frees every node but the last, ArenaAllocator.zig:153-160), so its flagged cells past the failure point keep grapheme slices into freed or reused arena memory; on a row whose cells were just allocated (first update or a resize) they keep the undefined grapheme slices and `Style` values `MultiArrayList.resize` leaves. The row's dirty flag was consumed, so the successful retry does not rebuild it, and `ghostty_render_state_row_cells_get` reads `cells.styles[x]` (c/render.zig:758) and `cells.graphemes[x]` (:767, :772) for those cells.
+- ReleaseSafe:     a caller that retries after `GHOSTTY_OUT_OF_MEMORY` gets `GHOSTTY_SUCCESS` and a render state whose unreached rows are missing or out of date, until they happen to be written again. By reading, UNVERIFIED: reading a flagged cell of a row that failed part way reads an undefined or dangling grapheme slice and `Style`; a possible panic (invalid union tag in the style switch) or garbage graphemes.
+- ReleaseFast:     the stale/empty rows as above; by reading, UNVERIFIED: the same reads are undefined behaviour (a wild or dangling read of the grapheme slice).
+- reachability:    libghostty-vt embedders whose `GhosttyAllocator` can fail (a limited arena, a memory cap), through `ghostty_render_state_update`/`begin_update`. Ghostty's own renderer uses the process allocator.
+- port handling:   fixed (R13, evident intent): `crates/rustty-vt/src/render.rs` `RenderState::begin_update` (PORT NOTE: reference defect (R13, UD315)) records a failed update, and the next one takes the reference's own full-redraw path (`redraw`), which rebuilds every row, re-stores every pin and reports `.full`; the flag clears when that redraw completes. On success nothing changes. The port has no counterpart of the undefined reads: new cell slots are initialized, grapheme spans are read through a checked slice, and the forced redraw rebuilds the row. Listed in `docs/ghostty-bug-fixes.md`.
+- parity row(s):   none; found by task S7-5 while making the render state's allocations fallible (LEDGER S175-F1). NEW-FINDINGS N316.
+- test:            `render::tests::failed_update_is_followed_by_a_full_rebuild` (rustty-vt): a failing allocator refuses row 1's first cell column; the retried update must rebuild rows 1 and 2 and equal a fresh state. `render_state_allocation_failure_sweep` (rustty-vt) and `render_state_allocation_failure_sweep_through_the_c_api` (rustty-vt-c) fail every allocation of their scenarios in turn and compare each retried update with a fresh state. Negative control (the flag's check removed, the reference's behaviour): the first test fails with `row 1 is rebuilt` (10 expected, 0 cells), the Rust sweep with `alloc n=0 first update: row 2 raw` (an empty row where the fresh state has text).
+- proposed fix:    make a failed `beginUpdate` force the next one to redraw: a `needs_redraw: bool` field set by an `errdefer` at the top of `beginUpdate`, checked first in the `redraw` block and cleared when a redraw completes (or `errdefer self.rows = 0;`, which reuses the dimension check but also changes what `rows` reports until then).
+- upstream status: not reported
+
 ## Candidates pending verification
 
 Assembled from this plan's progress notes on 2026-09-11. **Not verified** — do not cite as fact.
@@ -2375,18 +2526,3 @@ Assembled from this plan's progress notes on 2026-09-11. **Not verified** — do
 | C4 | `src/termio/Exec.zig:1045`; `src/apprt/gtk/pre_exec.zig:39,58` | superseded by UD101 (task R13-D) | deadlock | see UD101 | tasks 14d-3, 14e-1 |
 | C5 | `src/font/DeferredFace.zig:154-157, 186-197` | superseded by UD110 (task R13-D) | leak | see UD110 | task 16 |
 | ~~C11~~ | ~~`src/font/face/coretext.zig:1023-1036`; `src/terminal/StringMap` tests~~ | ~~assertions cannot distinguish the fixture under test~~ STRUCK (task R13-D): refuted as a reference defect by the R13 verify pass (those tests assert what they are named for; the insensitivity only limits the port's negative controls) | ~~test-weakness~~ | ported verbatim (S90-F5, S140-F1) | task 17 |
-
-### UD276 — `test "face metrics"` in font/Collection.zig never checks anything: its backend guard is inverted
-- kind:            test-weakness
-- upstream project: ghostty
-- severity:        low
-- reference:       src/font/Collection.zig:1396-1523 at 20abdb50a (comment and guard at :1397-1398, expected-value switches at :1438-1502)
-- defect:          The comment says "The web canvas backend doesn't calculate face metrics, only cell metrics", but the guard is `if (options.backend != .web_canvas) return error.SkipZigTest;`, so the test is skipped on every backend except the one the comment excludes. On `web_canvas` each expected-value switch takes its `.web_canvas => unreachable` prong. The switches also have no `freetype_windows` prong, so they would not compile if analyzed on that backend. The face-metrics expectations therefore never run in upstream CI.
-- ReleaseSafe:     no product effect; the test is inert.
-- ReleaseFast:     same.
-- reachability:    none (test code).
-- port handling:   faithful skip (R13 keeps test weaknesses faithful; R14 form 1: `cfg_attr(not(wasm32), ignore)` in `crates/rustty-font-shaper/src/collection.rs` `face_metrics`), with the body ported live. MEASURED (task tail-s8c): run with `--ignored` on macOS (coretext) the body passes against the reference's own coretext expected values for CozetteVector and Geist Mono; a perturbed `cell_width` (7.3828125 → 7.5) fails it. On Linux (`fontconfig_freetype`, task L-1, Linux VM rvm (Fedora 44 aarch64), 2026-09-26) the body run with `--ignored` fails at the narrow font's first metric, `expected approximately 8, found 7`: the stale FreeType expectation of UD281, as measured under `coretext_freetype`.
-- parity row(s):   NEW-FINDINGS N265.
-- test:            `face_metrics` (`crates/rustty-font-shaper/src/collection.rs`), ignored by default as upstream.
-- proposed fix:    `if (options.backend == .web_canvas) return error.SkipZigTest;`, plus a `freetype_windows` prong (or an `else`) in the four switches.
-- upstream status: not reported

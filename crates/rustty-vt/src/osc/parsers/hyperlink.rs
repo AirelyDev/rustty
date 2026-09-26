@@ -4,11 +4,12 @@
 
 use crate::osc::{Command, Parser, ZStr};
 
-// PORT NOTE: `const log = std.log.scoped(.osc_hyperlink);` — Rustty has no
-// logging facade wired into this crate (matching the convention used by the
-// `osc.zig` scoped logger), so the scoped logger and its calls are ported as
-// commented lines.
 // const log = std.log.scoped(.osc_hyperlink);
+// The scope, carried through the `log` facade as `target: LOG_SCOPE`.
+// CORRECTION (task S-1c): a PORT NOTE here said "Rustty has no logging facade
+// wired into this crate", and the call below was ported as a comment. The
+// crate logs through the `log` facade, so the call is live.
+const LOG_SCOPE: &str = "osc_hyperlink";
 
 /// Parse OSC 8 hyperlinks
 pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<Command<'a>> {
@@ -78,6 +79,11 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<Command<'a>> {
             }
         } else {
             // log.warn("unknown hyperlink option: '{s}'", .{key});
+            log::warn!(
+                target: LOG_SCOPE,
+                "unknown hyperlink option: '{}'",
+                String::from_utf8_lossy(key)
+            );
         }
         kv_start = kv_end + 1;
     }
@@ -242,5 +248,28 @@ mod tests {
 
         let cmd = p.end(Some(0x1b)).unwrap();
         assert!(matches!(cmd, Command::HyperlinkEnd));
+    }
+
+    // Task S-1c (no reference test): an option other than `id` logs the
+    // reference's warning (hyperlink.zig:43) and the link still parses.
+    #[test]
+    fn osc_8_unknown_option_logs_a_warning() {
+        let mut p: Parser = Parser::init(None);
+        let cap = crate::log_capture::start();
+        for ch in "8;foo=bar;http://example.com".bytes() {
+            p.next(ch);
+        }
+        let cmd = p.end(Some(0x1b)).unwrap();
+        let messages = cap.messages();
+        drop(cap);
+        assert!(matches!(cmd, Command::HyperlinkStart { .. }));
+        assert_eq!(
+            vec![(
+                log::Level::Warn,
+                "osc_hyperlink".to_string(),
+                "unknown hyperlink option: 'foo'".to_string(),
+            )],
+            messages
+        );
     }
 }

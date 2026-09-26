@@ -30,6 +30,8 @@ oniguruma = ["dep:rustty-oniguruma"]
 
 [dependencies]
 rustty-vt = { workspace = true }
+# `KeymapDarwin.zig`'s `std.log.debug("keyboard layout={s}")` (task S-1c).
+log = { workspace = true }
 # `command.zig` imports `../os/i18n.zig` (df23bef0e): `Command.translated()` runs
 # `i18n._` over the palette strings and every default entry is `i18n.N_`-marked.
 # rustty-os has no rustty-vt/rustty-input edge, so this is acyclic.

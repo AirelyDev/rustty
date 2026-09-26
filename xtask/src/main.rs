@@ -287,7 +287,12 @@ fn main() -> ExitCode {
                 println!("wrote {}", out.display());
                 ExitCode::SUCCESS
             }
-            Err(e) => {
+            // `std.log.err("usage: ...", .{}); std.process.exit(1);` (task S-1d).
+            Err(WasmPatchError::Usage) => {
+                wasm_patch_growable_table::report_usage_error();
+                ExitCode::FAILURE
+            }
+            Err(WasmPatchError::Failed(e)) => {
                 eprintln!("xtask: wasm-patch-growable-table failed: {e}");
                 ExitCode::FAILURE
             }
@@ -1104,33 +1109,40 @@ fn resources(args: &mut impl Iterator<Item = String>) -> Result<PathBuf, String>
 /// [`wasm_patch_growable_table::patch_table_growable`].
 fn wasm_patch_growable_table_cmd(
     args: &mut impl Iterator<Item = String>,
-) -> Result<PathBuf, String> {
+) -> Result<PathBuf, WasmPatchError> {
     // Parse args: input output
     //
     // The reference checks `args.len != 3`, so a surplus argument is the
     // same usage error as a missing one (S65-F7).
-    let usage = "usage: wasm-patch-growable-table <input.wasm> <output.wasm>";
     let (Some(input), Some(output), None) = (args.next(), args.next(), args.next()) else {
-        return Err(usage.to_string());
+        return Err(WasmPatchError::Usage);
     };
 
     // Patch the file.
-    let bytes = std::fs::read(&input).map_err(|e| format!("read {input}: {e}"))?;
+    let bytes =
+        std::fs::read(&input).map_err(|e| WasmPatchError::Failed(format!("read {input}: {e}")))?;
     let patched = wasm_patch_growable_table::patch_table_growable(&bytes)
-        .map_err(|e| format!("patch failed: {e:?}"))?;
+        .map_err(|e| WasmPatchError::Failed(format!("patch failed: {e:?}")))?;
 
     // Write our output
     let output = PathBuf::from(output);
     std::fs::write(&output, patched.as_ref())
-        .map_err(|e| format!("write {}: {e}", output.display()))?;
+        .map_err(|e| WasmPatchError::Failed(format!("write {}: {e}", output.display())))?;
     Ok(output)
+}
+
+/// How `wasm-patch-growable-table` fails: the reference's usage error, which
+/// has its own logFn line (`report_usage_error`), or an I/O or patch failure,
+/// which the reference propagates out of `main` with no log line of its own.
+#[derive(Debug, PartialEq, Eq)]
+enum WasmPatchError {
+    Usage,
+    Failed(String),
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    const WASM_PATCH_USAGE: &str = "usage: wasm-patch-growable-table <input.wasm> <output.wasm>";
 
     /// `Config.zig:22, 183-187`: `xcframework_target` defaults to universal,
     /// and `GhosttyXCFramework.zig:42-57` then packs ONE macOS library, the
@@ -1215,7 +1227,7 @@ mod tests {
             .into_iter()
             .map(String::from);
         let err = wasm_patch_growable_table_cmd(&mut args).unwrap_err();
-        assert_eq!(err, WASM_PATCH_USAGE);
+        assert_eq!(err, WasmPatchError::Usage);
     }
 
     /// Positive control for the test above: with exactly two arguments the
@@ -1228,7 +1240,10 @@ mod tests {
             .into_iter()
             .map(String::from);
         let err = wasm_patch_growable_table_cmd(&mut args).unwrap_err();
-        assert!(err.starts_with("read no-such-in.wasm: "), "{err}");
+        assert!(
+            matches!(&err, WasmPatchError::Failed(e) if e.starts_with("read no-such-in.wasm: ")),
+            "{err:?}"
+        );
     }
 
     /// Too few arguments is still the usage error.
@@ -1236,6 +1251,6 @@ mod tests {
     fn wasm_patch_rejects_missing_output_argument() {
         let mut args = ["no-such-in.wasm"].into_iter().map(String::from);
         let err = wasm_patch_growable_table_cmd(&mut args).unwrap_err();
-        assert_eq!(err, WASM_PATCH_USAGE);
+        assert_eq!(err, WasmPatchError::Usage);
     }
 }

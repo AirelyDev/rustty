@@ -10,16 +10,12 @@ use crate::color::{InvalidFormat, RGB};
 use crate::kitty::color as kitty_color;
 use crate::osc::{Command, Parser};
 
-// PORT NOTE: `const log = std.log.scoped(.osc_kitty_color);` — Rustty has no
-// logging facade wired into this crate (matching the convention used by the
-// `osc.zig` scoped logger), so the scoped logger and its calls are ported as
-// commented lines.
-// CORRECTION (parity tail S7-7): the crate logs through the `log` facade
-// (S156-F4). The three "unable to append" warns are live: the list grows
-// through the parser's allocator now, so their failure path is reachable.
-// The other four remain comments (outside S7-7's allocation scope; they are
-// counted in G-LOGFILE's allowance for this file).
 // const log = std.log.scoped(.osc_kitty_color);
+// The scope, carried through the `log` facade as `target: LOG_SCOPE`.
+// CORRECTION (task S-1c): a PORT NOTE here said "Rustty has no logging facade
+// wired into this crate", and the calls below were ported as comments. The
+// crate logs through the `log` facade (osc.rs's own scoped warn is live, parity
+// S156-F4), so the calls are live.
 const LOG_SCOPE: &str = "osc_kitty_color";
 
 /// Parse OSC 21, the Kitty Color Protocol.
@@ -60,6 +56,10 @@ pub fn parse<'a>(parser: &'a mut Parser, terminator_ch: Option<u8>) -> Option<Co
     for kv in kv_it {
         if osc.list.len() >= kitty_color::Kind::MAX * 2 {
             // log.warn("exceeded limit for number of keys in kitty color protocol, ignoring", .{});
+            log::warn!(
+                target: LOG_SCOPE,
+                "exceeded limit for number of keys in kitty color protocol, ignoring"
+            );
             parser.state = crate::osc::State::Invalid;
             return None;
         }
@@ -72,6 +72,7 @@ pub fn parse<'a>(parser: &'a mut Parser, terminator_ch: Option<u8>) -> Option<Co
         };
         if k.is_empty() {
             // log.warn("zero length key in kitty color protocol", .{});
+            log::warn!(target: LOG_SCOPE, "zero length key in kitty color protocol");
             continue;
         }
         // PORT NOTE: keys are ASCII identifiers / decimal palette indices; an
@@ -82,6 +83,7 @@ pub fn parse<'a>(parser: &'a mut Parser, terminator_ch: Option<u8>) -> Option<Co
             Some(key) => key,
             None => {
                 // log.warn("unknown key in kitty color protocol: {s}", .{k});
+                log::warn!(target: LOG_SCOPE, "unknown key in kitty color protocol: {k_str}");
                 continue;
             }
         };
@@ -91,6 +93,13 @@ pub fn parse<'a>(parser: &'a mut Parser, terminator_ch: Option<u8>) -> Option<Co
         // '=' was present).
         let rest = it.next().unwrap_or(&[]);
         let value = trim_spaces(rest);
+        // PORT NOTE (task S-1c): each `list.append(alloc, ...) catch |err|`
+        // below logs "unable to append kitty color protocol option: {}" and
+        // continues.
+        // CORRECTION (parity tail S7-7): the note said the list was a `Vec`
+        // whose `push` aborts, so the three arms were unreachable. The list
+        // grows through `parser.alloc` and `append` returns `OutOfMemory`, so
+        // the arms and their warns are live.
         if value.is_empty() {
             // list.append(alloc, .{ .reset = key }) catch |err| {
             //     log.warn("unable to append kitty color protocol option: {}", .{err});
@@ -129,6 +138,11 @@ pub fn parse<'a>(parser: &'a mut Parser, terminator_ch: Option<u8>) -> Option<Co
                 Ok(color) => color,
                 Err(InvalidFormat) => {
                     // log.warn("invalid color format in kitty color protocol: {s}", .{value});
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "invalid color format in kitty color protocol: {}",
+                        String::from_utf8_lossy(value)
+                    );
                     continue;
                 }
             };
@@ -394,5 +408,56 @@ mod tests {
             Command::KittyColorProtocol(osc) => assert_eq!(0, osc.list.len()),
             _ => unreachable!(),
         }
+    }
+
+    // Task S-1c (no reference test): the four live `log.warn` sites of
+    // `parse` (kitty_color.zig:35, :42, :46, :66) emit, with the reference's
+    // scope and text, on the input that reaches each.
+    fn capture(input: &[u8]) -> Vec<crate::log_capture::CapturedRecord> {
+        let alloc = crate::alloc::Global;
+        let mut p: Parser = Parser::init(Some(alloc));
+        let cap = crate::log_capture::start();
+        for &ch in input {
+            p.next(ch);
+        }
+        let _ = p.end(Some(0x1b));
+        let messages = cap.messages();
+        drop(cap);
+        messages
+    }
+
+    fn warn(msg: &str) -> crate::log_capture::CapturedRecord {
+        (
+            log::Level::Warn,
+            "osc_kitty_color".to_string(),
+            msg.to_string(),
+        )
+    }
+
+    #[test]
+    fn osc_21_logs_zero_length_unknown_key_and_invalid_color() {
+        assert_eq!(
+            vec![
+                warn("zero length key in kitty color protocol"),
+                warn("unknown key in kitty color protocol: nope"),
+                warn("invalid color format in kitty color protocol: #xxxyyzz"),
+            ],
+            capture(b"21;=?;nope=?;selection_foreground=#xxxyyzz;2=?")
+        );
+    }
+
+    #[test]
+    fn osc_21_logs_when_the_key_limit_is_exceeded() {
+        let mut input = b"21".to_vec();
+        for _ in 0..(Kind::MAX * 2 + 1) {
+            // `;2` (a reset) keeps the payload inside the 2048-byte capture.
+            input.extend_from_slice(b";2");
+        }
+        assert_eq!(
+            vec![warn(
+                "exceeded limit for number of keys in kitty color protocol, ignoring"
+            )],
+            capture(&input)
+        );
     }
 }
