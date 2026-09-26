@@ -449,7 +449,7 @@ impl TerminalSearch {
                 // ),
                 Err(super::screen::TickError::OutOfMemory) => {
                     eprintln!(
-                        "warn(search_terminal): error ticking screen search key={:?} err={:?}",
+                        "warning(search_terminal): error ticking screen search key={:?} err={:?}",
                         entry_key,
                         super::screen::TickError::OutOfMemory
                     );
@@ -608,7 +608,7 @@ impl TerminalSearch {
                     // },
                     Err(err) => {
                         eprintln!(
-                            "warn(search_terminal): error initializing screen search for key={:?} err={:?}",
+                            "warning(search_terminal): error initializing screen search for key={:?} err={:?}",
                             entry_key, err
                         );
                         continue;
@@ -638,7 +638,7 @@ impl TerminalSearch {
                 // };
                 if let Err(err) = screen_search.reload_active() {
                     eprintln!(
-                        "warn(search_terminal): error reloading active area for screen key={:?} err={:?}",
+                        "warning(search_terminal): error reloading active area for screen key={:?} err={:?}",
                         active_key, err
                     );
                 }
@@ -664,7 +664,7 @@ impl TerminalSearch {
             }
             Err(err) => {
                 eprintln!(
-                    "warn(search_terminal): error updating viewport search err={:?}",
+                    "warning(search_terminal): error updating viewport search err={:?}",
                     err
                 );
             }
@@ -689,7 +689,7 @@ impl TerminalSearch {
                 // };
                 if let Err(err) = entry.feed() {
                     eprintln!(
-                        "warn(search_terminal): error feeding screen search key={:?} err={:?}",
+                        "warning(search_terminal): error feeding screen search key={:?} err={:?}",
                         entry_key, err
                     );
                 }

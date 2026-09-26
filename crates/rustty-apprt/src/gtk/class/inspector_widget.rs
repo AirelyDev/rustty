@@ -294,7 +294,7 @@ impl InspectorWidget {
         };
         // SAFETY: live core surface.
         if let Err(err) = unsafe { (*core_surface).activateInspector() } {
-            eprintln!("warn(gtk): failed to activate inspector err={err:?}");
+            eprintln!("warning(gtk): failed to activate inspector err={err:?}");
             return;
         }
 

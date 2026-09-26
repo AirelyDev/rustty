@@ -723,10 +723,9 @@ impl<A: Allocator + Copy> Atlas<A> {
             Format::Grayscale => '5',
             Format::Bgr => '6',
             _ => {
-                eprintln!(
-                    "error(atlas): Unsupported format for dump: {:?}",
-                    self.format
-                );
+                // (task S-1d: through the `log` facade under Atlas.zig's scope,
+                // not a direct `error(atlas)` print.)
+                log::error!(target: "atlas", "Unsupported format for dump: {:?}", self.format);
                 panic!("Cannot dump this atlas format.");
             }
         };
@@ -992,11 +991,13 @@ pub mod wasm_exports {
         match unsafe { atlas_debug_canvas_(self_) } {
             Ok(id) => id,
             Err(err) => {
-                // CORRECTION (task S-1c): this printed `warning: ...`, which is
-                // not the logFn line shape (`<level>(<scope>): <message>`) the
-                // sibling `error(atlas)` print above uses. rustty-font has no
-                // `log` facade (D1), so both print directly.
-                eprintln!("warn(atlas): error dumping atlas canvas err={err:?}");
+                // log.warn("error dumping atlas canvas err={}", .{err});
+                // CORRECTION (tasks S-1c, S-1d): this printed `warning: ...`
+                // straight to stderr (no scope), then `warn(atlas): ...` (not the
+                // level text Zig's logFn prints). It goes through the `log`
+                // facade under Atlas.zig's scope; rustty-font gained `log`
+                // (D1 forbids a vt edge, not a `log` dependency).
+                log::warn!(target: "atlas", "error dumping atlas canvas err={err:?}");
                 0
             }
         }
