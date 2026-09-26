@@ -51,6 +51,8 @@ log = { workspace = true }
 # `internal_os = @import("../os/main.zig")` — xdg state/cache dirs + the macOS
 # NSCachesDirectory / pthread_setname_np paths.
 rustty-os = { workspace = true }
+# `std.Thread.spawn(.{}, ..)`: the Zig default thread config (16 MiB stack).
+rustty-zigstd = { workspace = true }
 # `build_config = @import("../build_config.zig")` — version_string + the
 # setTag build-mode/app-runtime/font-backend/renderer values.
 rustty-build-config = { workspace = true }

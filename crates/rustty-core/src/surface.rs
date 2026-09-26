@@ -2814,7 +2814,7 @@ where
         #[cfg(feature = "init-fault-inject")]
         let probe =
             crate::init_fault::ThreadProbe::start(crate::init_fault::ProbedThread::Renderer);
-        let spawn_result = std::thread::Builder::new()
+        let spawn_result = rustty_zigstd::thread::spawn_config()
             .name("renderer".to_string())
             .spawn(move || {
                 // (the probe is dropped when this closure ends)
@@ -2860,7 +2860,7 @@ where
             // `io_thread.stop.notify()`. Pass the raw pointers straight through.
             unsafe { termio::Thread::threadMain(args.thread, args.io) }
         };
-        let io_builder = std::thread::Builder::new().name("io".to_string());
+        let io_builder = rustty_zigstd::thread::spawn_config().name("io".to_string());
         // Test-only (UD104, task R13-D2): an armed fault fails the spawn
         // without starting the thread. Not compiled into production builds.
         #[cfg(feature = "init-fault-inject")]
@@ -11570,7 +11570,7 @@ where
                     struct SendState(*mut terminal::search::thread::Thread);
                     unsafe impl Send for SendState {}
                     let send = SendState(state_ptr);
-                    let spawned = std::thread::Builder::new()
+                    let spawned = rustty_zigstd::thread::spawn_config()
                         .name("search".into()) // == setName("search")
                         .spawn(move || {
                             let s = send;

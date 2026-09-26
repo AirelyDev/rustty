@@ -236,6 +236,28 @@ impl<const N: usize> StackFallback<N> {
         }
     }
 
+    /// `new`, built in `slot` without moving the buffer: only the end index
+    /// and the fallback are written (the buffer is `MaybeUninit` bytes, so it
+    /// needs no initialization). For large `N` in debug builds, where a
+    /// by-value `new` copies the whole buffer through temporaries (parity tail
+    /// S7-4b, N278: the glyph decode's 64 KiB scratch).
+    pub fn new_in_place(
+        slot: &mut core::mem::MaybeUninit<StackFallback<N>>,
+        fallback: VtAllocator,
+    ) -> &StackFallback<N> {
+        let p = slot.as_mut_ptr();
+        // SAFETY: `p` is valid for writes; `end` and `fallback` are written
+        // before the shared borrow is formed, and `buf` holds `MaybeUninit`
+        // bytes (inside an `UnsafeCell`), for which uninitialized memory is
+        // a valid value. `StackFallback` has no `Drop`, so never dropping the
+        // slot leaks nothing.
+        unsafe {
+            core::ptr::addr_of_mut!((*p).end).write(core::cell::Cell::new(0));
+            core::ptr::addr_of_mut!((*p).fallback).write(fallback);
+            &*p
+        }
+    }
+
     fn base(&self) -> *mut u8 {
         self.buf.get() as *mut u8
     }

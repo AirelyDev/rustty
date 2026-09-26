@@ -1515,4 +1515,42 @@ mod tests {
             assert_eq!(0, counting.live_bytes.get(), "every byte is returned");
         });
     }
+
+    // Parity tail S7-4b (N278): a glyph registration decodes its payload on
+    // a 64 KiB `stackFallback` scratch, as the reference does. Run end to end
+    // (APC feed, request, `Entry::init`) on a thread with a 128 KiB stack
+    // (1/16 of Rust's 2 MiB default, 1/128 of Zig's 16 MiB). Measured on
+    // aarch64 macOS: a debug build needs about 80 KiB with the scratch built
+    // in place (`StackFallback::new_in_place`), and overflowed 192 KiB with a
+    // by-value `new`; a release build fits in 64 KiB.
+    #[test]
+    fn glyph_registration_fits_a_256k_stack() {
+        let stack = std::env::var("RUSTTY_GLYPH_STACK")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(128 * 1024);
+        std::thread::Builder::new()
+            .stack_size(stack)
+            .spawn(|| {
+                use super::*;
+                let alloc = crate::alloc::Global;
+                let mut h = Handler::default();
+                h.start();
+                h.feed_slice(
+                    alloc,
+                    b"25a1;r;cp=e0a0;AAEAAAAAAGQAZAACAAABAQEAAABk/84AAAAAAGQ=",
+                );
+                let mut cmd = h.end(alloc).unwrap();
+                let Command::Glyph(glyph::Request::Register(reg)) = &cmd else {
+                    panic!("a glyph registration");
+                };
+                let entry = glyph::glossary::Entry::init(alloc, reg).unwrap();
+                drop(entry);
+                cmd.deinit(alloc);
+                h.deinit();
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
 }

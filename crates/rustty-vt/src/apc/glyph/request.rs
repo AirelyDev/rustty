@@ -491,9 +491,13 @@ impl Register {
         // const data_alloc = data_stack.get();
         // const data = try data_alloc.alloc(u8, size);
         // defer data_alloc.free(data);
-        let data_stack = crate::alloc::StackFallback::<MAX_PAYLOAD_SIZE>::new(alloc);
+        // (Built in place: a by-value 64 KiB `new` is copied through
+        // temporaries in debug builds, N278.)
+        let mut data_slot = core::mem::MaybeUninit::uninit();
+        let data_stack =
+            crate::alloc::StackFallback::<MAX_PAYLOAD_SIZE>::new_in_place(&mut data_slot, alloc);
         let mut data: allocator_api2::vec::Vec<u8, &crate::alloc::StackFallback<MAX_PAYLOAD_SIZE>> =
-            allocator_api2::vec::Vec::new_in(&data_stack);
+            allocator_api2::vec::Vec::new_in(data_stack);
         data.try_reserve_exact(size)
             .map_err(|_| DecodeError::OutOfMemory)?;
         {

@@ -601,7 +601,8 @@ impl Exec {
         // (surface.rs), whose sole toucher of `*io` for `processOutput` is this
         // read thread, between spawn and `threadExit`'s `join()`; blueprint §3.)
         let read_args = ReadThreadArgs::<M>(pty_fds.read, io, pipe[0]);
-        let read_thread_builder = std::thread::Builder::new().name("io-reader".to_string());
+        let read_thread_builder =
+            rustty_zigstd::thread::spawn_config().name("io-reader".to_string());
         // (Test builds only: `tests::FAIL_READ_THREAD_SPAWN` makes this spawn
         // fail for real, with a stack no thread can get, to drive the error arm.)
         #[cfg(test)]
@@ -4786,7 +4787,7 @@ impl ReadThread {
         std::thread::scope(|scope| {
             let gather_fd = fd;
             let gather_quit = quit;
-            let mut builder = std::thread::Builder::new();
+            let mut builder = rustty_zigstd::thread::spawn_config();
             if cfg!(not(any(target_os = "macos", target_os = "ios"))) {
                 // if (comptime !builtin.os.tag.isDarwin()) gather_thread.setName("io-gather");
                 builder = builder.name("io-gather".to_string());
