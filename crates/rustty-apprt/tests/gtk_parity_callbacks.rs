@@ -91,7 +91,13 @@ fn parity_callbacks_do_not_abort() {
     // (A) notify handlers: setting these properties emits notify::* → the surface's
     //     mouse-shape/hidden/hover-url template/notify callbacks. A mis-shaped one
     //     aborts here.
-    surface.set_property("mouse-shape", 2i32);
+    // CORRECTION (task L-2): this set the property from `2i32`, which GLib has
+    // rejected since task 20 (S54-F3) typed `mouse-shape` as the
+    // `GhosttyMouseShape` enum (`surface.zig:2264-2272`); the test panicked there.
+    surface.set_property(
+        "mouse-shape",
+        rustty_apprt::gtk::class::gtypes::MouseShapeEnum::Pointer,
+    );
     surface.set_property("mouse-hidden", true);
     surface.set_property("mouse-hidden", false);
     surface.set_property("mouse-hover-url", "https://example.com/rustty");
