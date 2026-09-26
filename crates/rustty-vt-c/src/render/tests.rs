@@ -2938,3 +2938,253 @@ fn render_set_dirty_reads_the_whole_int_slot() {
         );
     });
 }
+
+// =============================================================================
+// Parity tail S7-5 (S175-F1, S4-F2's render half; Rust-only — the reference
+// has no test for this): the render state's CONTENTS allocate through the
+// allocator the state was created with (`state.alloc`), not the terminal's and
+// not the Rust heap, and a refused allocation is `OUT_OF_MEMORY`.
+// =============================================================================
+
+fn vtw(terminal: terminal_c::Terminal, bytes: &[u8]) {
+    // SAFETY: `terminal` is a live handle; `bytes` is valid for its length.
+    unsafe { terminal_c::vt_write(terminal, bytes.as_ptr(), bytes.len()) };
+}
+
+// A render state over a counting allocator, on a terminal over the default
+// (NULL) allocator: `new` is the wrapper; the first update adds `row_data`,
+// three rows' cells, the pending style runs, row 0's applied runs and row 0's
+// grapheme buffer; a steady update adds nothing; `free` returns every byte.
+// The terminal's own allocations never reach the state's allocator.
+#[test]
+fn render_state_internals_route_through_the_callers_allocator() {
+    use rustty_vt::alloc::testing::CountingAllocator;
+
+    let counting = CountingAllocator::over_heap();
+    let calloc = counting.allocator();
+    let mut terminal: terminal_c::Terminal = std::ptr::null_mut();
+    assert_eq!(Result::Success, unsafe {
+        terminal_c::new(std::ptr::null(), &mut terminal, 10, 3)
+    });
+    let mut state: RenderState = std::ptr::null_mut();
+    assert_eq!(Result::Success, unsafe { new(Some(&calloc), &mut state) });
+    assert_eq!(1, counting.alloc_calls.get(), "the wrapper");
+
+    vtw(
+        terminal,
+        "\x1b[1mA\x1b[0m \u{1F468}\u{200D}\u{1F469}".as_bytes(),
+    );
+    assert_eq!(
+        1,
+        counting.alloc_calls.get(),
+        "writes allocate on the terminal's allocator"
+    );
+    assert_eq!(Result::Success, unsafe { begin_update(state, terminal) });
+    assert_eq!(Result::Success, unsafe { end_update(state) });
+    assert_eq!(
+        1 + 1 + 3 + 3,
+        counting.alloc_calls.get(),
+        "row_data, 3 x cells, pending runs, applied runs, graphemes"
+    );
+    // SAFETY: `state` is live; a read of the Rust-side contents.
+    unsafe {
+        let s = &(*state).state;
+        assert_eq!(3, s.row_data.len());
+        assert!(s.row_data[0].cells.get(0).style.flags.bold);
+        assert!(!s.row_data[0].cells.allocator().is_global());
+        assert!(!s.row_data.allocator().is_global());
+    }
+
+    vtw(terminal, b"\x1b[2;1Hsecond row");
+    assert_eq!(Result::Success, unsafe { update(state, terminal) });
+    assert_eq!(
+        8,
+        counting.alloc_calls.get(),
+        "a steady update allocates nothing"
+    );
+
+    // Growth past the capacities: `row_data` and the old rows' cells move
+    // (alloc + free each), the new rows get their cells.
+    assert_eq!(Result::Success, unsafe {
+        terminal_c::resize(terminal, 40, 12, 1, 1)
+    });
+    let (allocs, frees) = (counting.alloc_calls.get(), counting.free_calls.get());
+    assert_eq!(Result::Success, unsafe { update(state, terminal) });
+    assert_eq!(allocs + 1 + 3 + 9, counting.alloc_calls.get());
+    assert_eq!(frees + 1 + 3, counting.free_calls.get());
+
+    unsafe { free(state) };
+    assert_eq!(0, counting.live_bytes.get(), "free returns every byte");
+    assert_eq!(counting.alloc_calls.get(), counting.free_calls.get());
+    unsafe { terminal_c::free(terminal) };
+}
+
+/// One C-API sweep scenario for a render state over `failing` (the terminal
+/// on the default allocator): `new`, updates in both forms over styled text,
+/// graphemes and background-color erases, growth past every capacity, a
+/// shrink, `free`. Every result is `SUCCESS` or `OUT_OF_MEMORY`; after an
+/// `OUT_OF_MEMORY` update the failure is lifted and the retried update must
+/// equal a fresh state's (R13, UD315). Returns (whether `new` failed, the
+/// calls that reported `OUT_OF_MEMORY`).
+fn render_sweep_once(
+    failing: &rustty_vt::alloc::testing::FailingAllocator,
+    what: &str,
+) -> (bool, usize) {
+    let calloc = failing.allocator();
+    let mut terminal: terminal_c::Terminal = std::ptr::null_mut();
+    assert_eq!(Result::Success, unsafe {
+        terminal_c::new(std::ptr::null(), &mut terminal, 10, 3)
+    });
+    let mut state: RenderState = std::ptr::null_mut();
+    let r = unsafe { new(Some(&calloc), &mut state) };
+    let mut call_failures = 0usize;
+    let new_failed = match r {
+        Result::Success => {
+            let mut step = |r: Result, name: &str| {
+                assert!(
+                    matches!(r, Result::Success | Result::OutOfMemory),
+                    "{what} {name}: unexpected result {r:?}"
+                );
+                if r == Result::OutOfMemory {
+                    call_failures += 1;
+                    failing.fail_index.set(usize::MAX);
+                    assert_eq!(Result::Success, unsafe { update(state, terminal) });
+                }
+                assert_matches_fresh(state, terminal, &format!("{what} {name}"));
+            };
+
+            vtw(terminal, b"\x1b[1mbold\x1b[0m plain\r\n");
+            step(unsafe { update(state, terminal) }, "first update");
+
+            let lines = if cfg!(miri) { 2 } else { 8 };
+            for i in 0..lines {
+                vtw(
+                    terminal,
+                    format!(
+                        "\x1b[3{}m{i}\x1b[0m e\u{301} \u{1F468}\u{200D}\u{1F469}\x1b[4{}m\x1b[K\x1b[0m\r\n",
+                        i % 8,
+                        (i + 1) % 8
+                    )
+                    .as_bytes(),
+                );
+            }
+            let r = unsafe { begin_update(state, terminal) };
+            assert_eq!(Result::Success, unsafe { end_update(state) });
+            step(r, "two-phase update");
+
+            assert_eq!(Result::Success, unsafe {
+                terminal_c::resize(terminal, 40, 14, 1, 1)
+            });
+            vtw(
+                terminal,
+                b"\x1b[1mA\x1b[0mB\x1b[1mC\x1b[0mD\x1b[1mE\x1b[0mF\x1b[1mG\x1b[0mH\x1b[1mI\x1b[0m\r\n",
+            );
+            step(unsafe { update(state, terminal) }, "growth");
+
+            assert_eq!(Result::Success, unsafe {
+                terminal_c::resize(terminal, 20, 4, 1, 1)
+            });
+            step(unsafe { update(state, terminal) }, "shrink");
+
+            unsafe { free(state) };
+            false
+        }
+        Result::OutOfMemory => {
+            assert!(state.is_null(), "{what}: a failed new returns no state");
+            true
+        }
+        other => panic!("{what}: new returned {other:?}"),
+    };
+    unsafe { terminal_c::free(terminal) };
+    assert_eq!(
+        failing.allocated_bytes.get(),
+        failing.freed_bytes.get(),
+        "{what}: every byte taken from the caller's allocator is returned"
+    );
+    assert_eq!(
+        failing.allocations.get(),
+        failing.deallocations.get(),
+        "{what}"
+    );
+    (new_failed, call_failures)
+}
+
+/// The state's rows equal those of a fresh render state (over the default
+/// allocator) updated from the same terminal: dimensions, and every row's raw
+/// data and raw cells.
+fn assert_matches_fresh(state: RenderState, terminal: terminal_c::Terminal, what: &str) {
+    let mut fresh: RenderState = std::ptr::null_mut();
+    assert_eq!(Result::Success, unsafe { new(None, &mut fresh) });
+    assert_eq!(Result::Success, unsafe { update(fresh, terminal) });
+    // SAFETY: both states are live; reads of their Rust-side contents.
+    unsafe {
+        let (got, want) = (&(*state).state, &(*fresh).state);
+        assert_eq!((want.rows, want.cols), (got.rows, got.cols), "{what}: size");
+        assert_eq!(want.row_data.len(), got.row_data.len(), "{what}: rows");
+        for (y, (g, w)) in got.row_data.iter().zip(want.row_data.iter()).enumerate() {
+            assert_eq!(w.raw.cval(), g.raw.cval(), "{what}: row {y}");
+            let (g, w) = (g.cells.raw(), w.cells.raw());
+            assert_eq!(w.len(), g.len(), "{what}: row {y} cells");
+            for (x, (g, w)) in g.iter().zip(w.iter()).enumerate() {
+                assert_eq!(w.cval(), g.cval(), "{what}: cell {x},{y}");
+            }
+        }
+    }
+    unsafe { free(fresh) };
+}
+
+// T2 through the C API (parity tail S7-5; the Zig `checkAllAllocationFailures`
+// idea): for every n, a render state whose allocator refuses its n-th
+// allocation. Nothing aborts, every result is `SUCCESS` or `OUT_OF_MEMORY`, a
+// retried update equals a fresh state, and `free` returns every byte. The
+// sweep ends at the first n with no induced failure. A second sweep refuses
+// `remap`/`resize` from their n-th call on: growth falls back to
+// alloc + copy + free and nothing fails. Under Miri the corpus is smaller.
+#[test]
+fn render_state_allocation_failure_sweep_through_the_c_api() {
+    use rustty_vt::alloc::testing::{Config, FailingAllocator};
+
+    let mut n = 0usize;
+    let mut new_failures = 0usize;
+    let mut call_failures = 0usize;
+    loop {
+        let failing = FailingAllocator::over_heap(Config {
+            fail_index: n,
+            ..Config::default()
+        });
+        let (new_failed, calls) = render_sweep_once(&failing, &format!("alloc n={n}"));
+        new_failures += usize::from(new_failed);
+        call_failures += calls;
+        if !failing.has_induced_failure.get() {
+            break;
+        }
+        assert_eq!(
+            1,
+            usize::from(new_failed) + calls,
+            "alloc n={n}: exactly the refused call fails"
+        );
+        n += 1;
+        assert!(n < 10_000, "the sweep must terminate");
+    }
+    let min_swept = if cfg!(miri) { 10 } else { 25 };
+    assert!(n > min_swept, "only {n} allocations were swept");
+    assert_eq!(1, new_failures, "only the wrapper's allocation fails new");
+    assert_eq!(n - 1, call_failures);
+
+    let clean = FailingAllocator::over_heap(Config::default());
+    assert_eq!((false, 0), render_sweep_once(&clean, "remap clean run"));
+    let remaps = clean.resize_index.get();
+    assert!(remaps > 0, "the corpus makes no remap call");
+    for n in 0..=remaps {
+        let failing = FailingAllocator::over_heap(Config {
+            resize_fail_index: n,
+            ..Config::default()
+        });
+        assert_eq!(
+            (false, 0),
+            render_sweep_once(&failing, &format!("remap n={n}")),
+            "remap n={n}: a refused remap falls back"
+        );
+        assert!(failing.resize_index.get() <= n, "remap n={n}");
+    }
+}
