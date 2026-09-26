@@ -1033,6 +1033,9 @@ impl SlidingWindow {
                     ..Options::plain()
                 },
             );
+            // `PointMap` grows through the list it points to, not its `alloc`
+            // field (N328); for the window both must be the window's allocator.
+            meta.cell_map.allocator().debug_assert_same(self.alloc);
             formatter.point_map = Some(PointMap {
                 alloc: self.alloc,
                 map: &mut meta.cell_map,
@@ -3165,7 +3168,9 @@ mod tests {
     // A compressed node is appended through a temporary decode buffer
     // (`node.pagePreservingState(self.alloc)`) on the window's allocator,
     // page-aligned and freed before `append` returns; the node stays
-    // compressed.
+    // compressed. The same holds at `appendIfWrapped`'s own decode site, both
+    // when the node's last row is soft-wrapped (it is appended) and when it is
+    // not (the early return frees the decode buffer and appends nothing).
     #[cfg_attr(
         miri,
         ignore = "MIRI EXCEPTION (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): multi-page history plus LZ4 compression is the page-mapping volume class that times out in both Miri lanes; covered natively + by ASan. The resident-page routing test above runs under Miri."
@@ -3183,6 +3188,23 @@ mod tests {
         let _ = s.pages.compress(CompressionMode::Full);
         let first: *mut Node = s.pages.pages.first;
         assert_eq!(unsafe { PlNode::storage(first) }, Storage::Compressed);
+
+        // A second screen whose first page ends in a soft-wrapped row: one
+        // long line of text runs across the page boundary.
+        let mut s2 = screen_init(10, 2, usize::MAX);
+        while s2.pages.total_pages() < 2 {
+            s2.test_write_string(b"xxxxxboo!x").unwrap();
+        }
+        s2.test_write_string(b"xxxxxboo!x\n").unwrap();
+        while s2.pages.total_pages() < 3 {
+            s2.test_write_string(b"\n").unwrap();
+        }
+        let _ = s2.pages.compress(CompressionMode::Full);
+        let wrapped_first: *mut Node = s2.pages.pages.first;
+        assert_eq!(
+            unsafe { PlNode::storage(wrapped_first) },
+            Storage::Compressed
+        );
 
         let counting = CountingAllocator::over_heap();
         let c = counting.allocator();
@@ -3206,9 +3228,56 @@ mod tests {
             assert_eq!(w.owned_bytes(), counting.live_bytes.get());
             assert_eq!(unsafe { PlNode::storage(first) }, Storage::Compressed);
             assert!(w.next().is_some());
+
+            // `appendIfWrapped` on the same (not soft-wrapped) compressed node:
+            // the decode buffer only, allocated and freed.
+            let (a, _, f) = counts(&counting);
+            assert_eq!(None, w.append_if_wrapped(first).unwrap());
+            assert_eq!(
+                (a + 1, f + 1),
+                counts_af(&counting),
+                "unwrapped: decode only"
+            );
+            assert_decode_buffer_was_last_free(&counting);
+            assert_eq!(w.owned_bytes(), counting.live_bytes.get());
+
+            // `appendIfWrapped` on a compressed node whose last row IS
+            // soft-wrapped: the decode buffer, the cell map and the encoding
+            // buffer (the rings grow by realloc and the chunk buffer fits);
+            // freed: the encoding buffer, then the decode buffer.
+            let (a, _, f) = counts(&counting);
+            let appended = w.append_if_wrapped(wrapped_first).unwrap();
+            assert!(appended.is_some_and(|r| r.last_row_wrapped && r.content_len > 0));
+            assert_eq!(
+                (a + 3, f + 2),
+                counts_af(&counting),
+                "wrapped: decode + append"
+            );
+            assert_decode_buffer_was_last_free(&counting);
+            assert_eq!(w.owned_bytes(), counting.live_bytes.get());
+            assert_eq!(
+                unsafe { PlNode::storage(wrapped_first) },
+                Storage::Compressed
+            );
+
             w.deinit();
             assert_eq!(0, counting.live_bytes.get());
         });
         s.deinit();
+        s2.deinit();
+    }
+
+    fn counts_af(c: &CountingAllocator) -> (usize, usize) {
+        (c.alloc_calls.get(), c.free_calls.get())
+    }
+
+    fn assert_decode_buffer_was_last_free(c: &CountingAllocator) {
+        let (freed_len, freed_align) = c.last_free.get().unwrap();
+        assert_eq!(
+            crate::page::PAGE_SIZE_MIN.trailing_zeros() as u8,
+            freed_align,
+            "the last free is the page-aligned decode buffer"
+        );
+        assert!(freed_len >= crate::page::PAGE_SIZE_MIN);
     }
 }

@@ -8171,6 +8171,16 @@ counting/rejecting arms in `terminal.rs`, `render/tests.rs`,
 4. The OSC parser's parsed `Command` payloads (the color and kitty-color
    request lists the oracle allocates through `parser.alloc`, and owned text
    payload copies) are Global values (parity S174-F3, OPEN).
+5. OPEN, owned by S7-8 (recorded by S7-6, NEW-FINDINGS N328; review S7-6 F3):
+   the formatter's pin map. `PinMapMap.points` (and `nodes`) grow on the Rust
+   heap whatever the pin map's `alloc` is: `PageListFormatter` hands
+   `m.map.points` to the page formatter's `PointMap` (formatter.rs, the
+   `pin_map` block of `PageListFormatter::format`), and `PointMap` grows the list
+   it points to without reading its own `alloc`. The reference grows both
+   through `map.alloc` (`formatter.zig:916-923`, `PinMap.Map.append`/`setNode`;
+   callers such as `Screen.selectionString(.., pins)` pass the caller's
+   allocator). Fix: bind `points`/`nodes` to the pin map's `alloc` (fallibly,
+   `catch return error.WriteFailed`) and assert it in `PointMap`'s growth.
 
 The runtime handle that unblocks this exists (parity tail S7-1/S7-2) and is
 threaded through `Terminal::init` (S7-3); the remaining families are routed by

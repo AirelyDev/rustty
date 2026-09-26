@@ -23,5 +23,11 @@ for c in window_next tick_sibling list_helpers; do
 done
 ```
 
-Natively (`cargo run -q -- all`) every candidate passes (task S7-6). Miri results: not
-run by the task (the controller's lane).
+Natively (`cargo run -q -- all`) every candidate passes (task S7-6).
+
+Miri (controller lane, after S7-6): `all` passed under Stacked Borrows AND Tree Borrows
+("ok all"), with one warning: the placeholder history node was an integer-to-pointer
+cast (`0x10 as *mut u8`), which weakens Miri's checking. S7-6b replaced it with
+`core::ptr::without_provenance_mut(0x10)` (the pointer is only compared, never
+dereferenced); natively the harness still prints `ok all`. Not re-run under Miri by
+S7-6b.
