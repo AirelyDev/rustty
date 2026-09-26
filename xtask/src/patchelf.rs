@@ -95,6 +95,26 @@ pub fn run(args: &mut impl Iterator<Item = String>) -> Result<Option<PathBuf>, S
     let ld_so = which("ld.so").and_then(|p| std::fs::canonicalize(p).ok());
     let ld_so = ld_so.as_ref().map(|p| p.to_string_lossy().into_owned());
     let ld_library_path = std::env::var("LD_LIBRARY_PATH").ok();
+    // Under `cargo run` the variable is not the shell's: cargo prepends its own
+    // library directories (measured on Linux: every `target/debug/build/*/out`,
+    // `target/debug`, `target/debug/deps` and the toolchain's `lib` dirs). The
+    // reference reads the dev shell's value (`zig build` leaves it alone), so
+    // drop that prefix again.
+    let ld_library_path = match (std::env::var_os("CARGO"), ld_library_path) {
+        (Some(_), Some(v)) => {
+            let target_dir = std::env::current_exe()
+                .ok()
+                .and_then(|e| Some(e.parent()?.parent()?.to_path_buf()));
+            let sysroot = rustc_sysroot();
+            let ours: Vec<&Path> = target_dir
+                .iter()
+                .chain(sysroot.iter())
+                .map(PathBuf::as_path)
+                .collect();
+            Some(strip_cargo_prefix(&v, &ours))
+        }
+        (_, v) => v,
+    };
     let env = Env {
         // xtask runs on the host and patches a host build.
         native_linux: cfg!(target_os = "linux"),
@@ -111,6 +131,32 @@ pub fn run(args: &mut impl Iterator<Item = String>) -> Result<Option<PathBuf>, S
         return Err(format!("patchelf exited with {status}"));
     }
     Ok(Some(artifact))
+}
+
+/// `LD_LIBRARY_PATH` without the leading entries cargo added for `cargo run`:
+/// the longest prefix of entries that lie under one of `ours` (the target
+/// directory and the Rust sysroot). The shell's own entries follow them.
+pub fn strip_cargo_prefix(ld_library_path: &str, ours: &[&Path]) -> String {
+    let entries: Vec<&str> = ld_library_path.split(':').collect();
+    let skip = entries
+        .iter()
+        .take_while(|e| !e.is_empty() && ours.iter().any(|o| Path::new(e).starts_with(o)))
+        .count();
+    entries[skip..].join(":")
+}
+
+/// `rustc --print sysroot` (`RUSTC` if cargo set it), for [`strip_cargo_prefix`].
+fn rustc_sysroot() -> Option<PathBuf> {
+    let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
+    let out = Command::new(rustc)
+        .args(["--print", "sysroot"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let s = String::from_utf8(out.stdout).ok()?;
+    Some(PathBuf::from(s.trim()))
 }
 
 /// `b.findProgram(&.{name}, &.{})`: the first `PATH` entry holding `name`.
@@ -154,6 +200,31 @@ mod tests {
             ..env(true, true)
         };
         assert_eq!(resolve(None, None, &e).rpath, None);
+    }
+
+    /// `cargo run` prepends its own library directories to `LD_LIBRARY_PATH`;
+    /// only the dev shell's entries are the rpath.
+    #[test]
+    fn cargo_run_library_dirs_are_not_the_rpath() {
+        let ours = [
+            Path::new("/w/target"),
+            Path::new("/home/u/.rustup/toolchains/t"),
+        ];
+        let v = "/w/target/debug/build/a-1/out:/w/target/debug:/w/target/debug/deps:\
+                 /home/u/.rustup/toolchains/t/lib/rustlib/x/lib:/home/u/.rustup/toolchains/t/lib:\
+                 /nix/store/a/lib:/nix/store/b/lib";
+        assert_eq!(
+            strip_cargo_prefix(v, &ours),
+            "/nix/store/a/lib:/nix/store/b/lib"
+        );
+        // Nothing cargo added: unchanged; a shell entry under the target dir
+        // after a foreign one is the shell's and stays.
+        assert_eq!(
+            strip_cargo_prefix("/nix/store/a/lib:/w/target/x", &ours),
+            "/nix/store/a/lib:/w/target/x"
+        );
+        // Only cargo's entries: no rpath.
+        assert_eq!(strip_cargo_prefix("/w/target/debug", &ours), "");
     }
 
     /// Explicit options win everywhere.
