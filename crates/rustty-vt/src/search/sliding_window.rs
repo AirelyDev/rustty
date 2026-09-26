@@ -3124,8 +3124,11 @@ mod tests {
             let (freed_len, freed_align) = counting.last_free.get().unwrap();
             assert_eq!(0, freed_align);
             assert!(freed_len >= first.content_len);
+            // `realloc(storage, len + amount)`: exactly sized allocations.
             assert_eq!(first.content_len, w.data.capacity());
+            assert_eq!(first.content_len, w.data.storage.capacity());
             assert_eq!(1, w.meta.capacity());
+            assert_eq!(1, w.meta.storage.capacity());
             // growCapacity(1) chunks (MultiArrayList, largest field 8 bytes).
             assert_eq!(1 + 0 + 16, w.chunk_buf.capacity());
             assert_eq!(w.owned_bytes(), counting.live_bytes.get());
@@ -3140,7 +3143,9 @@ mod tests {
             );
             assert!(r2 >= 2, "data and meta grew by realloc (remap first)");
             assert_eq!(2 * first.content_len, w.data.capacity());
+            assert_eq!(2 * first.content_len, w.data.storage.capacity());
             assert_eq!(2, w.meta.capacity());
+            assert_eq!(2, w.meta.storage.capacity());
             assert_eq!(w.owned_bytes(), counting.live_bytes.get());
 
             // Searching allocates nothing: the chunk buffer was sized by append.
