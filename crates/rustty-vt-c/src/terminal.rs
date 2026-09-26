@@ -11924,7 +11924,8 @@ mod tests {
         // remap/resize calls (R); refusing from each n in 0..=R reaches every
         // one of them (and n = R refuses none).
         let clean = FailingAllocator::over_heap(Config::default());
-        let _ = sweep_once(&clean, "remap clean run");
+        // The clean run fails nothing.
+        assert_eq!((false, 0), sweep_once(&clean, "remap clean run"));
         let remaps = clean.resize_index.get();
         assert!(remaps > 0, "the corpus makes no remap/resize call");
         for n in 0..=remaps {
@@ -11932,11 +11933,15 @@ mod tests {
                 resize_fail_index: n,
                 ..Config::default()
             });
-            let (new_failed, _) = sweep_once(&failing, &format!("remap n={n}"));
+            let (new_failed, call_failures) = sweep_once(&failing, &format!("remap n={n}"));
             // A refused remap never fails the scenario: the fallback allocates.
             assert!(
                 !new_failed,
                 "remap n={n}: new must not fail on a refused remap"
+            );
+            assert_eq!(
+                0, call_failures,
+                "remap n={n}: no call reports OUT_OF_MEMORY on a refused remap"
             );
             assert!(
                 failing.resize_index.get() <= n,

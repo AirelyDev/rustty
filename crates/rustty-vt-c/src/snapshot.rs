@@ -2467,9 +2467,19 @@ mod tests {
     /// Encoded snapshot bytes of a small terminal with scrollback, a title and
     /// a hyperlink (built over the test allocator).
     fn sample_snapshot() -> Vec<u8> {
+        sample_snapshot_with(None)
+    }
+
+    /// `sample_snapshot`, optionally ending inside an unfinished CSI of
+    /// `continuation` parameter bytes (continuation tracking enabled on the
+    /// source).
+    fn sample_snapshot_with(continuation: Option<usize>) -> Vec<u8> {
         with_test_allocator(|alloc| {
             let (new_result, source) = new_t(alloc, 20, 4);
             assert_eq!(Result::Success, new_result);
+            if continuation.is_some() {
+                test_enable_continuation(source);
+            }
             let lines = if cfg!(miri) { 6 } else { 30 };
             for i in 0..lines {
                 vtw(source, format!("line {i:02}\r\n").as_bytes());
@@ -2479,6 +2489,11 @@ mod tests {
                 source,
                 b"\x1B]8;id=x;https://example.com\x1B\\link\x1B]8;;\x1B\\",
             );
+            if let Some(n) = continuation {
+                let mut csi = b"\x1B[".to_vec();
+                csi.extend(std::iter::repeat_n(b'1', n));
+                vtw(source, &csi);
+            }
             let mut encoded_ptr: *mut u8 = std::ptr::null_mut();
             let mut encoded_len: usize = 0;
             assert_eq!(Result::Success, unsafe {
@@ -2585,11 +2600,14 @@ mod tests {
     // decoder (`decoder_new_buf`, `decoder_decode`: the decoded terminal and
     // its history) and `free`. Nothing aborts, every result is `SUCCESS` or
     // `OUT_OF_MEMORY`, and every byte is returned. A second loop refuses
-    // `remap`/`resize` from their n-th call on.
+    // `remap`/`resize` from their n-th call on. The snapshot ends inside a
+    // 7000-byte unfinished CSI, so the decoded terminal's verification tracker
+    // grows past its `growCapacity(4096)` reservation while the continuation
+    // is replayed: the decode's remap.
     #[test]
     fn allocation_failure_sweep_through_snapshot_decode() {
         use rustty_vt::alloc::testing::{Config, FailingAllocator};
-        let bytes = sample_snapshot();
+        let bytes = sample_snapshot_with(Some(7000));
 
         let run = |failing: &FailingAllocator, what: &str| -> bool {
             let c = failing.allocator();
@@ -2647,6 +2665,7 @@ mod tests {
         let clean = FailingAllocator::over_heap(Config::default());
         assert!(!run(&clean, "remap clean run"));
         let remaps = clean.resize_index.get();
+        assert!(remaps > 0, "the decode makes no remap/resize call");
         for n in 0..=remaps {
             let failing = FailingAllocator::over_heap(Config {
                 resize_fail_index: n,
