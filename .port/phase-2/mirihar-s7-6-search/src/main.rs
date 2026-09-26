@@ -460,7 +460,7 @@ fn window_next() {
 fn tick_sibling() {
     let mut s = Screenish {
         active: Window::init(b"ab"),
-        history: Some(History { searcher: Window::init(b"ab"), start_node: 0x10 as *mut u8 }),
+        history: Some(History { searcher: Window::init(b"ab"), start_node: core::ptr::without_provenance_mut(0x10) }),
         active_results: AVec::new_in(Global),
         history_results: AVec::new_in(Global),
     };

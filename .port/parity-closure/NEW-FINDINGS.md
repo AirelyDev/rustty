@@ -5810,7 +5810,9 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   heap handle; its `nodes` list, the pin map's `alloc`, and the formatter's other lists are unchanged (the
   file-wide convention: Rust-heap growth that aborts on OOM). The `alloc` fields of `PinMap` are not asserted
   against the points' allocator for that reason.
-- **state**: CLOSED for the search; the formatter residual is recorded, not fixed.
+- **state**: CLOSED for the search. The formatter residual is OPEN, owned by S7-8
+  (`DEFERRALS.md` F-008/W12-01 Tier 2 item 5). The window's own `PointMap` construction
+  debug-asserts that the list is on the window's allocator (S7-6b).
 
 ## N329 — Stacked Borrows status of the search after S7-6
 

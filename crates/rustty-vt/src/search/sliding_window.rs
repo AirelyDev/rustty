@@ -1033,6 +1033,9 @@ impl SlidingWindow {
                     ..Options::plain()
                 },
             );
+            // `PointMap` grows through the list it points to, not its `alloc`
+            // field (N328); for the window both must be the window's allocator.
+            meta.cell_map.allocator().debug_assert_same(self.alloc);
             formatter.point_map = Some(PointMap {
                 alloc: self.alloc,
                 map: &mut meta.cell_map,
