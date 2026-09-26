@@ -2953,8 +2953,9 @@ fn vtw(terminal: terminal_c::Terminal, bytes: &[u8]) {
 
 // A render state over a counting allocator, on a terminal over the default
 // (NULL) allocator: `new` is the wrapper; the first update adds `row_data`,
-// three rows' cells, the pending style runs, row 0's applied runs and row 0's
-// grapheme buffer; a steady update adds nothing; `free` returns every byte.
+// the three rows' three cell columns, the pending style runs, row 0's applied
+// runs and row 0's grapheme buffer; a steady update adds nothing; `free`
+// returns every byte.
 // The terminal's own allocations never reach the state's allocator.
 #[test]
 fn render_state_internals_route_through_the_callers_allocator() {
@@ -2982,9 +2983,9 @@ fn render_state_internals_route_through_the_callers_allocator() {
     assert_eq!(Result::Success, unsafe { begin_update(state, terminal) });
     assert_eq!(Result::Success, unsafe { end_update(state) });
     assert_eq!(
-        1 + 1 + 3 + 3,
+        1 + 1 + 3 * 3 + 3,
         counting.alloc_calls.get(),
-        "row_data, 3 x cells, pending runs, applied runs, graphemes"
+        "row_data, 3 rows x 3 cell columns, pending runs, applied runs, graphemes"
     );
     // SAFETY: `state` is live; a read of the Rust-side contents.
     unsafe {
@@ -2998,20 +2999,20 @@ fn render_state_internals_route_through_the_callers_allocator() {
     vtw(terminal, b"\x1b[2;1Hsecond row");
     assert_eq!(Result::Success, unsafe { update(state, terminal) });
     assert_eq!(
-        8,
+        14,
         counting.alloc_calls.get(),
         "a steady update allocates nothing"
     );
-
-    // Growth past the capacities: `row_data` and the old rows' cells move
+    // Growth past the capacities: `row_data` and the old rows' cell columns
+    // move (alloc + free each), the new rows get their columns.
     // (alloc + free each), the new rows get their cells.
     assert_eq!(Result::Success, unsafe {
         terminal_c::resize(terminal, 40, 12, 1, 1)
     });
     let (allocs, frees) = (counting.alloc_calls.get(), counting.free_calls.get());
     assert_eq!(Result::Success, unsafe { update(state, terminal) });
-    assert_eq!(allocs + 1 + 3 + 9, counting.alloc_calls.get());
-    assert_eq!(frees + 1 + 3, counting.free_calls.get());
+    assert_eq!(allocs + 1 + 3 * 3 + 9 * 3, counting.alloc_calls.get());
+    assert_eq!(frees + 1 + 3 * 3, counting.free_calls.get());
 
     unsafe { free(state) };
     assert_eq!(0, counting.live_bytes.get(), "free returns every byte");

@@ -28,9 +28,9 @@
 // PORT NOTE (reshape): restore MultiArrayList SoA (render.zig:187) — each
 // row's cells are stored as parallel columns in `CellList` (`raw`, `style`,
 // and grapheme codepoints in a single per-row reusable `grapheme_buf`
-// addressed by a `(offset, len)` span column; S7-5 made the three columns one
-// allocation, as the MultiArrayList's are). `grapheme_buf.clear()` (retaining capacity) is the direct
-// analogue of the reference per-row `arena.reset(.retain_capacity)`
+// addressed by a `(offset, len)` span column). `grapheme_buf.clear()`
+// (retaining capacity) is the direct analogue of the reference per-row
+// `arena.reset(.retain_capacity)`
 // (render.zig:469-471). An earlier port draft stored cells AoS (`Vec<Cell>`
 // with a per-cell owned `Vec<u32>` grapheme); that lost the raw-column memcpy
 // rebuild whose value the reference's own comment quantifies at ~300% on the
@@ -42,9 +42,10 @@
 // through the allocator `update`/`beginUpdate` is given, as the reference's
 // do (`state.alloc` for the C API, `c/render.zig:209-232`); nothing is on the
 // Rust heap unless that allocator is the Rust heap (the application's).
-// - `row_data` and each row's `cells` are MultiArrayLists: ONE allocation
-//   each, grown by Zig 0.16's `resize` (`growCapacity`, then alloc + copy +
-//   free, never `remap`). `CellList` is therefore a single-allocation SoA.
+// - `row_data` and each row's `cells` are MultiArrayLists, grown by Zig
+//   0.16's `resize`: to `growCapacity(n)` elements, by alloc + copy + free,
+//   never `remap`. `row_data` is one allocation as in the reference; a row's
+//   cells are one allocation per column (a measured choice, see `CellList`).
 // - `pending_styles` and each row's `applied_styles` are `std.ArrayList`s:
 //   `growCapacity` sizes, grown by `remap` first, then alloc + copy + free
 //   (the handle's `grow`).
@@ -76,8 +77,6 @@ use crate::selection::Selection;
 use crate::size;
 use crate::style::Style;
 use crate::terminal::Terminal;
-use allocator_api2::alloc::{Allocator as ApiAllocator, Layout};
-use core::ptr::NonNull;
 
 /// Contains the state required to render the screen, including optimizing
 /// for repeated render calls and only rendering dirty regions.
@@ -382,13 +381,16 @@ type GraphemeSpan = (u32, u32);
 /// Struct-of-arrays storage for a row's cells, mirroring the reference
 /// `std.MultiArrayList(Cell)`.
 //
-// PORT NOTE (reshape): see the module note. Like the MultiArrayList it is ONE
-// allocation (`bytes`, `capacity` elements per column) on the update
-// allocator, holding the `raw`, grapheme-span and `style` columns back to back
-// (in decreasing alignment, as Zig orders a MultiArrayList's fields), and it
-// grows as `MultiArrayList.resize` does: `growCapacity`, then alloc + copy +
-// free (`setCapacity`). The columns are exactly `cols` long; `raw` is filled by
-// a single memcpy on rebuild (the reference `fastmem.copy(...,
+// PORT NOTE (reshape): see the module note. The three columns (`raw`, the
+// grapheme spans, `style`) are separate lists on the update allocator, grown
+// together as `MultiArrayList.resize` grows its one allocation: to
+// `growCapacity(cols)`, by alloc + copy + free (`setCapacity`, never `remap`).
+// One allocation per column instead of one for all three is a measured
+// choice (T3 residual, N315): the single SoA block, with the capacity headroom
+// between its columns, spread the hot `raw` and `style` columns of a
+// viewport's rows over ~1.6x the memory and cost ~3% of `screen-clone.render`
+// in cycles at FEWER instructions. The columns are exactly `cols` long; `raw`
+// is filled by a single memcpy on rebuild (the reference `fastmem.copy(...,
 // cells_slice.items(.raw), page_cells)`), while `style`/`grapheme` are written
 // ONLY for flagged cells in the managed-row loop — the reference's "undefined
 // unless flagged" discipline (render.zig:491-505). Slots the reference leaves
@@ -396,23 +398,11 @@ type GraphemeSpan = (u32, u32);
 // style, the empty span), so every read is defined. `grapheme_buf` is the
 // per-row arena analogue: cleared (retaining capacity) each rebuild.
 pub struct CellList {
-    /// `MultiArrayList.bytes`.
-    bytes: NonNull<u8>,
-    /// `MultiArrayList.len`.
-    len: usize,
-    /// `MultiArrayList.capacity`.
-    capacity: usize,
-    /// The allocator `bytes` came from (the reference passes it per call).
-    alloc: Allocator,
+    raw: AVec<page::Cell>,
+    style: AVec<Style>,
+    grapheme_spans: AVec<GraphemeSpan>,
     grapheme_buf: AVec<u32>,
 }
-
-// SAFETY: `CellList` owns its allocation outright (a unique owning pointer, as
-// a `Vec`'s is) and its columns are plain `Copy` data; the allocator handle is
-// `Send + Sync`.
-unsafe impl Send for CellList {}
-// SAFETY: shared access only reads the columns.
-unsafe impl Sync for CellList {}
 
 /// A borrowed SoA view over a `CellList`, mirroring
 /// `std.MultiArrayList(Cell).Slice`. Consumers project `.raw` / `.style` /
@@ -460,36 +450,7 @@ impl Default for CellList {
     }
 }
 
-impl Drop for CellList {
-    // `cells.deinit(alloc)`: `gpa.free(self.allocatedBytes())`.
-    fn drop(&mut self) {
-        if self.capacity != 0 {
-            let layout = Self::layout(self.capacity).expect("a live allocation has a valid layout");
-            // SAFETY: `bytes` is the live allocation of `layout`, made through
-            // `alloc` by `set_capacity`.
-            unsafe { ApiAllocator::deallocate(&self.alloc, self.bytes, layout) };
-        }
-    }
-}
-
-// The columns are laid out raw, spans, style: decreasing alignment, so each
-// column starts aligned with no padding (Zig sorts a MultiArrayList's fields
-// by alignment for the same reason).
-const _: () = {
-    assert!(core::mem::align_of::<page::Cell>() >= core::mem::align_of::<GraphemeSpan>());
-    assert!(core::mem::align_of::<GraphemeSpan>() >= core::mem::align_of::<Style>());
-    assert!(
-        core::mem::size_of::<page::Cell>().is_multiple_of(core::mem::align_of::<GraphemeSpan>())
-    );
-    assert!(core::mem::size_of::<GraphemeSpan>().is_multiple_of(core::mem::align_of::<Style>()));
-};
-
 impl CellList {
-    /// Bytes per element across the three columns (`capacityInBytes(1)`).
-    const ELEM_BYTES: usize = core::mem::size_of::<page::Cell>()
-        + core::mem::size_of::<GraphemeSpan>()
-        + core::mem::size_of::<Style>();
-
     /// Empty (the reference `.empty`).
     pub const fn empty() -> CellList {
         CellList::empty_in(valloc::VtAllocator::GLOBAL)
@@ -498,82 +459,47 @@ impl CellList {
     /// Empty, bound to `alloc` for its first growth.
     pub const fn empty_in(alloc: Allocator) -> CellList {
         CellList {
-            bytes: NonNull::<page::Cell>::dangling().cast(),
-            len: 0,
-            capacity: 0,
-            alloc,
+            raw: AVec::new_in(alloc),
+            style: AVec::new_in(alloc),
+            grapheme_spans: AVec::new_in(alloc),
             grapheme_buf: AVec::new_in(alloc),
         }
     }
 
     /// Number of cells (columns) in the row.
     pub fn len(&self) -> usize {
-        self.len
+        self.raw.len()
     }
 
     /// True if there are no cells.
     pub fn is_empty(&self) -> bool {
-        self.len == 0
+        self.raw.is_empty()
     }
 
     /// `MultiArrayList.capacity`.
     pub fn capacity(&self) -> usize {
-        self.capacity
+        self.raw.capacity()
     }
 
     /// The allocator the cells grow through.
     pub fn allocator(&self) -> Allocator {
-        self.alloc
-    }
-
-    /// `capacityInBytes(capacity)` as a layout (the allocation's alignment is
-    /// the largest column alignment, `sizes.big_align`).
-    fn layout(capacity: usize) -> Option<Layout> {
-        let size = Self::ELEM_BYTES.checked_mul(capacity)?;
-        Layout::from_size_align(size, core::mem::align_of::<page::Cell>()).ok()
-    }
-
-    #[inline]
-    fn raw_ptr(&self) -> *mut page::Cell {
-        self.bytes.as_ptr().cast()
-    }
-
-    #[inline]
-    fn spans_ptr(&self) -> *mut GraphemeSpan {
-        // The spans column starts `capacity` cells in: within the allocation,
-        // or at offset 0 of the dangling pointer when the capacity is 0.
-        self.raw_ptr().wrapping_add(self.capacity).cast()
-    }
-
-    #[inline]
-    fn style_ptr(&self) -> *mut Style {
-        // The style column starts `capacity` spans past the spans column.
-        self.spans_ptr().wrapping_add(self.capacity).cast()
+        *self.raw.allocator()
     }
 
     /// `.items(.raw)`: the raw cell column.
     pub fn raw(&self) -> &[page::Cell] {
-        // SAFETY: the first `len` slots of every column are initialized
-        // (`resize`), and the pointer is aligned (dangling when empty).
-        unsafe { core::slice::from_raw_parts(self.raw_ptr(), self.len) }
+        &self.raw
     }
 
     /// Mutable `.items(.raw)` column (used to stamp flags on the render copy,
     /// e.g. the overlay tests / hyperlink marking).
     pub fn raw_mut(&mut self) -> &mut [page::Cell] {
-        // SAFETY: as `raw`, and `&mut self` is exclusive.
-        unsafe { core::slice::from_raw_parts_mut(self.raw_ptr(), self.len) }
+        &mut self.raw
     }
 
     /// `.items(.style)`: the style column. Only valid for flagged cells.
     pub fn style(&self) -> &[Style] {
-        // SAFETY: as `raw`.
-        unsafe { core::slice::from_raw_parts(self.style_ptr(), self.len) }
-    }
-
-    fn spans(&self) -> &[GraphemeSpan] {
-        // SAFETY: as `raw`.
-        unsafe { core::slice::from_raw_parts(self.spans_ptr(), self.len) }
+        &self.style
     }
 
     /// `.items(.grapheme)[x]`. Undefined (empty) unless flagged.
@@ -581,7 +507,7 @@ impl CellList {
     // PERF(port): checked slicing with an empty fallback — see
     // `CellSlice::grapheme` (unflagged spans are stale by design).
     pub fn grapheme(&self, x: usize) -> &[u32] {
-        let (off, len) = self.spans()[x];
+        let (off, len) = self.grapheme_spans[x];
         self.grapheme_buf
             .get(off as usize..off as usize + len as usize)
             .unwrap_or(&[])
@@ -590,9 +516,9 @@ impl CellList {
     /// A borrowed SoA view (the reference `cells.slice()`).
     pub fn slice(&self) -> CellSlice<'_> {
         CellSlice {
-            raw: self.raw(),
-            style: self.style(),
-            spans: self.spans(),
+            raw: &self.raw,
+            style: &self.style,
+            spans: &self.grapheme_spans,
             buf: &self.grapheme_buf,
         }
     }
@@ -600,22 +526,20 @@ impl CellList {
     /// The reference `MultiArrayList.get(x)` — a by-value cell view.
     pub fn get(&self, x: usize) -> CellRef<'_> {
         CellRef {
-            raw: self.raw()[x],
+            raw: self.raw[x],
             grapheme: self.grapheme(x),
-            style: self.style()[x],
+            style: self.style[x],
         }
     }
 
-    /// Bind the list (and its grapheme buffer) to the allocator the reference
-    /// passes, on first growth; afterwards debug-assert it (see
+    /// Bind the columns (and the grapheme buffer) to the allocator the
+    /// reference passes, on first growth; afterwards debug-assert it (see
     /// `alloc::bind`).
     #[inline]
     fn bind(&mut self, alloc: Allocator) {
-        if self.capacity == 0 {
-            self.alloc = alloc;
-        } else {
-            self.alloc.debug_assert_same(alloc);
-        }
+        valloc::bind(&mut self.raw, alloc);
+        valloc::bind(&mut self.style, alloc);
+        valloc::bind(&mut self.grapheme_spans, alloc);
         valloc::bind(&mut self.grapheme_buf, alloc);
     }
 
@@ -625,54 +549,44 @@ impl CellList {
     // PORT NOTE: the reference leaves the new slots undefined; they are
     // initialized here (see the type note). Only a column-count change calls
     // this, so the fill is off the hot path.
+    #[cold]
+    #[inline(never)]
     fn resize(&mut self, alloc: Allocator, new_len: usize) -> Result<(), OutOfMemory> {
         self.bind(alloc);
-        if self.capacity < new_len {
+        if self.raw.capacity() < new_len {
             self.set_capacity(grow_capacity::<CELL_ZIG_FIELD_MAX>(new_len))?;
         }
-        for x in self.len..new_len {
-            // SAFETY: `x < capacity`; the slots are written, not read.
-            unsafe {
-                self.raw_ptr().add(x).write(page::Cell::zeroed());
-                self.spans_ptr().add(x).write((0, 0));
-                self.style_ptr().add(x).write(Style::default());
-            }
-        }
-        self.len = new_len;
+        // The capacity is reserved: these never allocate.
+        self.raw.resize_copy(new_len, page::Cell::zeroed());
+        self.grapheme_spans.resize_copy(new_len, (0, 0));
+        self.style.resize_copy(new_len, Style::default());
         Ok(())
     }
 
-    // `setCapacity(gpa, new_capacity)`: always a fresh allocation, the live
-    // prefix of each column copied over, then the old one freed (never
-    // `remap`: the columns move with the capacity).
-    #[cold]
-    #[inline(never)]
+    // `setCapacity(gpa, new_capacity)`: a fresh allocation per column, the
+    // live prefix copied over, then the old one freed (never `remap`). All
+    // three are allocated before any is replaced, so a failure changes
+    // nothing, as the reference's single allocation does.
     fn set_capacity(&mut self, new_capacity: usize) -> Result<(), OutOfMemory> {
-        debug_assert!(new_capacity >= self.len);
-        let layout = Self::layout(new_capacity).ok_or(OutOfMemory)?;
-        let new_bytes = ApiAllocator::allocate(&self.alloc, layout).map_err(|_| OutOfMemory)?;
-        let mut other = CellList {
-            bytes: new_bytes.cast(),
-            len: self.len,
-            capacity: new_capacity,
-            alloc: self.alloc,
-            grapheme_buf: AVec::new_in(self.alloc),
-        };
-        // SAFETY: both allocations hold at least `len` slots per column and
-        // do not overlap; the source prefixes are initialized.
-        unsafe {
-            core::ptr::copy_nonoverlapping(self.raw_ptr(), other.raw_ptr(), self.len);
-            core::ptr::copy_nonoverlapping(self.spans_ptr(), other.spans_ptr(), self.len);
-            core::ptr::copy_nonoverlapping(self.style_ptr(), other.style_ptr(), self.len);
+        fn fresh<T: Copy>(old: &AVec<T>, new_capacity: usize) -> Result<AVec<T>, OutOfMemory> {
+            let mut v = AVec::new_in(*old.allocator());
+            v.try_reserve_exact(new_capacity).map_err(|_| OutOfMemory)?;
+            Ok(v)
         }
-        // `gpa.free(self.allocatedBytes()); self.* = other;` — the swap hands
-        // the old allocation to `other`, whose drop frees it.
-        core::mem::swap(&mut self.bytes, &mut other.bytes);
-        core::mem::swap(&mut self.capacity, &mut other.capacity);
+        let mut raw = fresh(&self.raw, new_capacity)?;
+        let mut spans = fresh(&self.grapheme_spans, new_capacity)?;
+        let mut style = fresh(&self.style, new_capacity)?;
+        raw.extend_copy(&self.raw);
+        spans.extend_copy(&self.grapheme_spans);
+        style.extend_copy(&self.style);
+        self.raw = raw;
+        self.grapheme_spans = spans;
+        self.style = style;
         Ok(())
     }
 
     // `arena.reset(.retain_capacity)` for the grapheme dupes.
+    #[inline]
     fn reset_graphemes(&mut self) {
         self.grapheme_buf.clear();
     }
@@ -680,40 +594,33 @@ impl CellList {
     // `fastmem.copy(page.Cell, cells_slice.items(.raw), page_cells)`.
     #[inline]
     fn copy_raw(&mut self, page_cells: &[page::Cell]) {
-        self.raw_mut().copy_from_slice(page_cells);
+        self.raw.copy_from_slice(page_cells);
     }
 
     // PORT NOTE (reshape): the reference hoists the mutable column pointers
     // once before the managed per-cell loop — `const cells_grapheme =
     // cells_slice.items(.grapheme); const cells_style =
     // cells_slice.items(.style);` (render.zig:508-510). `slice_mut` is the
-    // Rust analogue: the disjoint mutable borrows (style column, grapheme-span
-    // column, grapheme arena) handed to `update()` so it can hoist them the
-    // same way.
+    // Rust analogue: the three disjoint mutable field borrows (style column,
+    // grapheme-span column, grapheme arena) handed to `update()` so it can
+    // hoist them the same way.
     //
     // PERF(port): the previous per-write `set_style`/`set_grapheme` helpers
     // went through `&mut self`, so every styled cell re-loaded the column
     // len + base pointer (a bounds check per cell the reference doesn't pay);
     // hoisting the borrows lets those loads live in registers across the loop.
     fn slice_mut(&mut self) -> (&mut [Style], &mut [GraphemeSpan], &mut AVec<u32>) {
-        let len = self.len;
-        // SAFETY: the style and span columns are disjoint regions of the
-        // allocation, each initialized for `len` slots; `grapheme_buf` is a
-        // separate field. `&mut self` is exclusive.
-        unsafe {
-            (
-                core::slice::from_raw_parts_mut(self.style_ptr(), len),
-                core::slice::from_raw_parts_mut(self.spans_ptr(), len),
-                &mut self.grapheme_buf,
-            )
-        }
+        (
+            &mut self.style,
+            &mut self.grapheme_spans,
+            &mut self.grapheme_buf,
+        )
     }
 
     /// `row_cells[run.y].slice().items(.style)` — the style column alone, for
     /// `RenderState::end_update`'s denormalization pass.
     fn style_mut(&mut self) -> &mut [Style] {
-        // SAFETY: as `raw_mut`.
-        unsafe { core::slice::from_raw_parts_mut(self.style_ptr(), self.len) }
+        &mut self.style
     }
 }
 
@@ -3658,9 +3565,9 @@ mod tests {
 
     // Every container of the render state allocates, grows and frees through
     // the update allocator, with the reference's call shape and capacities:
-    // the MultiArrayLists (`row_data`, each row's `cells`) take one allocation
-    // of `growCapacity(n)` elements and grow by alloc + copy + free (never
-    // `remap`); the `ArrayList`s (`pending_styles`, `applied_styles`,
+    // the MultiArrayLists (`row_data`, and each of a row's three cell
+    // columns) take `growCapacity(n)` elements and grow by alloc + copy + free
+    // (never `remap`); the `ArrayList`s (`pending_styles`, `applied_styles`,
     // `highlights`) take `growCapacity` and grow by `remap` first; the
     // grapheme buffer and the highlights keep their capacity across rebuilds
     // (the arena's `.retain_capacity`). `deinit` returns every byte.
@@ -3670,8 +3577,14 @@ mod tests {
 
         let row_bytes = core::mem::size_of::<Row>();
         let run_bytes = core::mem::size_of::<StyleRun>();
-        let cells_bytes =
-            |cols: usize| grow_capacity::<CELL_ZIG_FIELD_MAX>(cols) * CellList::ELEM_BYTES;
+        // The three cell columns (`raw`, grapheme spans, `style`), each of
+        // growCapacity(cols) elements.
+        let cells_bytes = |cols: usize| {
+            grow_capacity::<CELL_ZIG_FIELD_MAX>(cols)
+                * (core::mem::size_of::<page::Cell>()
+                    + core::mem::size_of::<GraphemeSpan>()
+                    + core::mem::size_of::<Style>())
+        };
         // Zig's own element counts: `growCapacity` with init 5 (rows), 4
         // (cells), 3 (style runs), 21 (highlights) on a 128-byte cache line.
         if CACHE_LINE_IS_128 {
@@ -3695,18 +3608,21 @@ mod tests {
             };
 
             // A: plain text. One `row_data` allocation (growCapacity(3) rows)
-            // and one per row for its cells (growCapacity(10) cells).
+            // and, per row, one per cell column (growCapacity(10) cells).
             vt_write(&mut t, b"ABCD");
             state.update(alloc, &mut t).unwrap();
-            assert_eq!((4, 0, 0), calls(), "row_data + 3 x cells");
+            assert_eq!((10, 0, 0), calls(), "row_data + 3 rows x 3 columns");
             assert_eq!(
                 grow_capacity::<ROW_ZIG_FIELD_MAX>(3) * row_bytes + 3 * cells_bytes(10),
                 counting.live_bytes.get()
             );
             assert_eq!(
-                Some((cells_bytes(10), 3)),
+                Some((
+                    grow_capacity::<CELL_ZIG_FIELD_MAX>(10) * core::mem::size_of::<Style>(),
+                    core::mem::align_of::<Style>().trailing_zeros() as u8
+                )),
                 counting.last_alloc.get(),
-                "one allocation holds all three cell columns, 8-aligned"
+                "the last row's style column"
             );
             assert_eq!(
                 grow_capacity::<CELL_ZIG_FIELD_MAX>(10),
@@ -3718,7 +3634,7 @@ mod tests {
             let live = counting.live_bytes.get();
             vt_write(&mut t, b"\x1b[2;1H\x1b[1mBOLD\x1b[0m");
             state.update(alloc, &mut t).unwrap();
-            assert_eq!((6, 0, 0), calls(), "pending_styles + applied_styles");
+            assert_eq!((12, 0, 0), calls(), "pending_styles + applied_styles");
             assert_eq!(
                 live + 2 * grow_capacity::<STYLE_RUN_ZIG_SIZE>(1) * run_bytes,
                 counting.live_bytes.get()
@@ -3728,7 +3644,7 @@ mod tests {
             // C: a grapheme: the row's grapheme buffer.
             vt_write(&mut t, "\x1b[3;1H\u{1F468}\u{200D}".as_bytes());
             state.update(alloc, &mut t).unwrap();
-            assert_eq!((7, 0, 0), calls(), "the grapheme buffer");
+            assert_eq!((13, 0, 0), calls(), "the grapheme buffer");
             assert_eq!(&[0x200D], state.row_data[2].cells.grapheme(0));
 
             // D: a highlight on row 0 (growCapacity(1) highlights).
@@ -3747,7 +3663,7 @@ mod tests {
             state
                 .update_highlights_flattened(alloc, 1, core::slice::from_ref(&hl))
                 .unwrap();
-            assert_eq!((8, 0, 0), calls(), "the highlight list");
+            assert_eq!((14, 0, 0), calls(), "the highlight list");
             assert_eq!(
                 live + grow_capacity::<HIGHLIGHT_ZIG_SIZE>(1) * core::mem::size_of::<Highlight>(),
                 counting.live_bytes.get()
@@ -3760,18 +3676,22 @@ mod tests {
                 "\x1b[1;1HZ\x1b[2;1H\x1b[1mX\x1b[0m\x1b[3;1H\u{1F469}\u{200D}".as_bytes(),
             );
             state.update(alloc, &mut t).unwrap();
-            assert_eq!((8, 0, 0), calls(), "a steady state allocates nothing");
+            assert_eq!((14, 0, 0), calls(), "a steady state allocates nothing");
             assert!(
                 state.row_data[0].highlights.is_empty(),
                 "the rebuild reset the highlights"
             );
 
             // F: growing past the rows' and the cells' capacity: row_data and
-            // the three old rows' cells move (alloc + copy + free, no remap),
-            // the nine new rows get their cells.
+            // the three old rows' cell columns move (alloc + copy + free, no
+            // remap), the nine new rows get their columns.
             resize_terminal(&mut t, 30, 12);
             state.update(alloc, &mut t).unwrap();
-            assert_eq!((8 + 1 + 3 + 9, 1 + 3, 0), calls(), "MultiArrayList growth");
+            assert_eq!(
+                (14 + 1 + 3 * 3 + 9 * 3, 1 + 3 * 3, 0),
+                calls(),
+                "MultiArrayList growth"
+            );
             assert_eq!(
                 grow_capacity::<ROW_ZIG_FIELD_MAX>(12),
                 state.row_data.capacity()
@@ -4009,9 +3929,10 @@ mod tests {
 
         let mut t = Terminal::init(Global, opts(10, 3)).unwrap();
         vt_write(&mut t, b"one\r\ntwo\r\nthree");
-        // Allocation 0 is `row_data`, 1 is row 0's cells: refuse row 1's.
+        // Allocation 0 is `row_data`, 1-3 are row 0's cell columns: refuse
+        // row 1's first column.
         let failing = FailingAllocator::over_heap(Config {
-            fail_index: 2,
+            fail_index: 4,
             ..Config::default()
         });
         let c = failing.allocator();
