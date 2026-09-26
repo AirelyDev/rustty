@@ -743,18 +743,25 @@ const HIGHLIGHT_ZIG_SIZE: usize = 6;
 
 /// `try list.append(gpa, value)`: grows to `growCapacity(len + 1)` when full
 /// (`remap` first, then alloc + copy + free: the handle's `grow`).
-#[inline]
+//
+// PERF(port): always inlined with the growth out of line, so an append that
+// fits is a compare and a store (the per-run hot path of `row_builder`).
+#[inline(always)]
 fn try_append<T, const ZIG_SIZE: usize>(list: &mut AVec<T>, value: T) -> Result<(), OutOfMemory> {
-    if list.len() == list.capacity() {
-        ensure_total_capacity::<T, ZIG_SIZE>(list, list.len() + 1)?;
+    let len = list.len();
+    if len == list.capacity() {
+        grow_total_capacity::<T, ZIG_SIZE>(list, len + 1)?;
     }
-    list.push(value);
+    // SAFETY: `len < capacity` now; the slot is written before `len` covers it.
+    unsafe {
+        list.as_mut_ptr().add(len).write(value);
+        list.set_len(len + 1);
+    }
     Ok(())
 }
 
 /// `try list.ensureTotalCapacity(gpa, new_capacity)`.
-#[cold]
-#[inline(never)]
+#[inline(always)]
 fn ensure_total_capacity<T, const ZIG_SIZE: usize>(
     list: &mut AVec<T>,
     new_capacity: usize,
@@ -762,6 +769,16 @@ fn ensure_total_capacity<T, const ZIG_SIZE: usize>(
     if list.capacity() >= new_capacity {
         return Ok(());
     }
+    grow_total_capacity::<T, ZIG_SIZE>(list, new_capacity)
+}
+
+/// `ensureTotalCapacityPrecise(gpa, growCapacity(new_capacity))`.
+#[cold]
+#[inline(never)]
+fn grow_total_capacity<T, const ZIG_SIZE: usize>(
+    list: &mut AVec<T>,
+    new_capacity: usize,
+) -> Result<(), OutOfMemory> {
     let target = grow_capacity::<ZIG_SIZE>(new_capacity);
     list.try_reserve_exact(target - list.len())
         .map_err(|_| OutOfMemory)
@@ -924,8 +941,11 @@ impl RenderState {
                 continue;
             }
 
+            // PERF(port): the reference takes `row_cells[run.y].slice()
+            // .items(.style)` per run; every run of the segment has `run.y ==
+            // y`, so the column is resolved once.
+            let styles = row.cells.style_mut();
             for run in segment {
-                let styles = row.cells.style_mut();
                 let end = core::cmp::min(run.end as usize, styles.len());
                 let start = core::cmp::min(run.start as usize, end);
 
