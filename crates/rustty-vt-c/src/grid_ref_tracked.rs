@@ -105,7 +105,7 @@ pub unsafe fn tracked_grid_ref_free(ref_: CTrackedGridRef) {
     let wrapper = unsafe { (*ref_).terminal };
     if !wrapper.is_null() {
         // SAFETY: `tracked_grid_refs` is a sibling field of the live wrapper.
-        unsafe { (*wrapper).tracked_grid_refs.remove(&ref_) };
+        unsafe { (*wrapper).tracked_grid_refs.swap_remove(&ref_) };
     }
     // if (ref.pageList()) |list| list.untrackPin(ref.pin);
     if let Some(list) = unsafe { (*ref_).page_list() } {
@@ -333,6 +333,26 @@ mod tests {
         assert_eq!(Result::Success, unsafe {
             terminal::new(&calloc, &mut term, 5, 2)
         });
+        // The first ref also grows the terminal's registry of tracked refs
+        // (`wrapper.tracked_grid_refs.putNoClobber(alloc, ref, {})`, the same
+        // caller allocator since parity tail S7-4).
+        let mut first: CTrackedGridRef = std::ptr::null_mut();
+        assert_eq!(Result::Success, unsafe {
+            terminal::grid_ref_track(
+                term,
+                PointC::cval(Point::Active(Coordinate { x: 1, y: 0 })),
+                &mut first,
+            )
+        });
+        // The registry holds the ref and is bound to the caller's allocator.
+        // SAFETY: `term` is live; a shared read of its registry.
+        unsafe {
+            assert_eq!(1, (*term).tracked_grid_refs.count());
+            assert_eq!(
+                rustty_vt::alloc::default(Some(&calloc)),
+                *(*term).tracked_grid_refs.allocator()
+            );
+        }
         let before = stats.alloc_calls.get();
         let mut ref_: CTrackedGridRef = std::ptr::null_mut();
         assert_eq!(Result::Success, unsafe {
@@ -342,15 +362,18 @@ mod tests {
                 &mut ref_,
             )
         });
-        assert_eq!(before + 1, stats.alloc_calls.get());
-        assert_eq!(
-            Some(std::mem::size_of::<TrackedGridRef>()),
-            stats.last_alloc_len.get()
-        );
+        assert!(stats.alloc_calls.get() > before);
 
         unsafe { terminal::free(term) };
         assert!(!unsafe { tracked_grid_ref_has_value(ref_) });
-        assert!(stats.live_bytes.get() > 0, "the ref is still allocated");
+        // Everything the terminal took is returned except the two refs, which
+        // outlive it on the caller's allocator.
+        assert_eq!(
+            2 * std::mem::size_of::<TrackedGridRef>(),
+            stats.live_bytes.get(),
+            "only the refs are still allocated"
+        );
+        unsafe { tracked_grid_ref_free(first) };
         unsafe { tracked_grid_ref_free(ref_) };
         assert_eq!(
             Some(std::mem::size_of::<TrackedGridRef>()),

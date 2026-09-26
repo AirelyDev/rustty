@@ -922,24 +922,22 @@ impl RGB {
 
     // pub fn encodeRgb8(self: RGB, writer: *std.Io.Writer) !void
     /// Encode as the 8-bit-per-channel `rgb:xx/xx/xx` xterm wire form.
-    pub fn encode_rgb8(&self, out: &mut Vec<u8>) {
+    pub fn encode_rgb8<W: std::io::Write + ?Sized>(&self, out: &mut W) -> std::io::Result<()> {
         // try writer.print("rgb:{x:0>2}/{x:0>2}/{x:0>2}", .{self.r, self.g, self.b});
-        use std::io::Write as _;
-        let _ = write!(out, "rgb:{:02x}/{:02x}/{:02x}", self.r, self.g, self.b);
+        write!(out, "rgb:{:02x}/{:02x}/{:02x}", self.r, self.g, self.b)
     }
 
     // pub fn encodeRgb16(self: RGB, writer: *std.Io.Writer) !void
     /// Encode as the 16-bit-per-channel `rgb:xxxx/xxxx/xxxx` xterm wire form.
-    pub fn encode_rgb16(&self, out: &mut Vec<u8>) {
+    pub fn encode_rgb16<W: std::io::Write + ?Sized>(&self, out: &mut W) -> std::io::Result<()> {
         // 8->16 bit expansion: v * 257 (0xFF -> 0xFFFF)
-        use std::io::Write as _;
-        let _ = write!(
+        write!(
             out,
             "rgb:{:04x}/{:04x}/{:04x}",
             u16::from(self.r) * 257,
             u16::from(self.g) * 257,
             u16::from(self.b) * 257,
-        );
+        )
     }
 
     /// Calculates the contrast ratio between two colors. The contrast
@@ -1401,10 +1399,10 @@ mod tests {
             b: 0xff,
         };
         let mut buf = Vec::new();
-        rgb.encode_rgb8(&mut buf);
+        rgb.encode_rgb8(&mut buf).unwrap();
         assert_eq!(b"rgb:01/23/ff", &buf[..]);
         buf.clear();
-        rgb.encode_rgb16(&mut buf);
+        rgb.encode_rgb16(&mut buf).unwrap();
         assert_eq!(b"rgb:0101/2323/ffff", &buf[..]);
     }
 

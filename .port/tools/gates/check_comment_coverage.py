@@ -905,6 +905,14 @@ def self_test_not_carried():
                   NC.gag_violations("that frobnicator is silly", REASON, {"frobnicator"})))
         check("ACCEPT: gag text with only allowlisted capitals (NOTE, XDG, GNOME)",
               not NC.gag_violations("NOTE(someone): XDG and GNOME are a mess", REASON))
+        check("ACCEPT: gag text naming the proper noun X11 (whole token)",
+              not NC.gag_violations("I know this is really ugly. X11 is ugly. I consider it apropos.", REASON))
+        for bad_text, why in (("X11R6 is ugly and I consider it apropos", "digit"),
+                              ("X11_ATOM is ugly and I consider it apropos", "snake_case"),
+                              ("X12 is ugly and I consider it apropos", "digit"),
+                              ("XA_ATOM and X11 are ugly and apropos", "snake_case")):
+            check(f"REJECT: proper-noun allowance is exact-token only ({bad_text.split()[0]})",
+                  any(why in e for e in NC.gag_violations(bad_text, REASON)))
         long = " ".join(["word"] * (NC.GAG_MAX_WORDS + 1))
         check("REJECT: gag text over the word limit",
               any("longer than" in e for e in NC.gag_violations(long, REASON)))

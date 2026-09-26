@@ -160,11 +160,7 @@ pub(crate) fn try_dupe_bytes_in(
     src: &[u8],
     alloc: crate::alloc::Allocator,
 ) -> Result<AllocBytes, OutOfMemory> {
-    use crate::alloc::CopyVecExt;
-    let mut v = AllocBytes::new_in(alloc);
-    v.try_reserve_exact(src.len()).map_err(|_| OutOfMemory)?;
-    v.extend_copy(src);
-    Ok(v)
+    crate::alloc::try_dupe(alloc, src).map_err(|_| OutOfMemory)
 }
 
 /// `alloc.dupe(u8, src)` — a fallible byte-slice copy.

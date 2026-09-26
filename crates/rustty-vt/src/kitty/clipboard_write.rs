@@ -15,11 +15,17 @@
 //   const simd = @import("../../simd/main.zig");
 //   const clipboard = @import("../clipboard.zig");
 //   const clipboard_command = @import("clipboard_command.zig");
-// The transaction arena (`arena: std.heap.ArenaAllocator`) is the crate-wide
-// global-allocator treatment: every arena-duped slice is an owned `Vec<u8>`
-// and `deinit` maps to drop.
+// `Allocator` is the runtime allocator handle (parity tail S7-4). The
+// transaction's lists and every arena-duped slice are allocated through the
+// allocator given to `init` (the terminal's `gpa()`), fallibly; the handle is
+// stored in the state and every later `alloc` argument is debug-asserted to be
+// it. The transaction arena (`arena: std.heap.ArenaAllocator` over `alloc`) is
+// its owned `Bytes` values: each arena `dupe` is its own allocation through
+// `alloc` (the routing is the reference's; the arena's block-sized calls are
+// not, a T3 call-shape residual).
 #![allow(non_upper_case_globals)]
 
+use crate::alloc::{self as valloc, AVec, Allocator, Bytes, CopyVecExt, OutOfMemory, TryPushExt};
 use crate::clipboard;
 use crate::kitty::clipboard_command;
 use rustty_simd as simd;
@@ -52,8 +58,6 @@ pub const max_write_aliases: usize = 64;
 pub use clipboard::Content;
 
 /// `WriteState.data`'s error set: `error{ OutOfMemory, TooLarge, Invalid }`.
-// PORT NOTE: `OutOfMemory` carried for parity; only `TooLarge`/`Invalid` are
-// produced by the global-allocator port.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DataError {
     OutOfMemory,
@@ -80,17 +84,24 @@ pub enum CommitError {
 /// or error.
 pub struct WriteState {
     // arena: std.heap.ArenaAllocator,
-    // (owned Vecs; no arena field — see the module PORT NOTE)
+    // PORT NOTE: the arena's allocations are the owned `Bytes` below (and
+    // `targets`); `alloc` is the allocator `init` was given, which the arena
+    // and the unmanaged lists use.
+    alloc: Allocator,
     pub loc: clipboard::Location,
-    pub id: Vec<u8>,
-    pub pw: Vec<u8>,
-    pub name: Vec<u8>,
+    pub id: Bytes,
+    pub pw: Bytes,
+    pub name: Bytes,
     // spool: std.ArrayListUnmanaged(u8) = .empty,
-    spool: Vec<u8>,
+    spool: Bytes,
     // entries: std.ArrayListUnmanaged(Entry) = .empty,
-    entries: Vec<Entry>,
+    entries: AVec<Entry>,
     // aliases: std.ArrayListUnmanaged(Alias) = .empty,
-    aliases: Vec<Alias>,
+    aliases: AVec<Alias>,
+    /// The arena-duped alias targets: one per `alias` call that registers
+    /// any alias, shared by every alias of that call (the reference's
+    /// `target` slice). Rust-only storage for what the arena owns.
+    targets: AVec<Bytes>,
 
     /// Maximum total decoded bytes this transaction will accumulate.
     /// Captured at init so a change to the configured limit doesn't
@@ -133,7 +144,7 @@ impl Default for Options {
 // const Entry = struct { ... };
 struct Entry {
     /// Owned by the transaction arena.
-    mime: Vec<u8>,
+    mime: Bytes,
     // start: usize = 0,
     start: usize,
     // len: usize = 0,
@@ -143,12 +154,12 @@ struct Entry {
 // const Alias = struct { ... };
 struct Alias {
     /// Owned by the transaction arena.
-    alias: Vec<u8>,
+    alias: Bytes,
     // PORT NOTE: the reference's `target` is one arena-duped slice SHARED by
     // every alias registered in the same call (pointer assignment on
-    // overwrite); the port clones the bytes per alias — same observable
-    // mapping. PERF(port): one small allocation per alias vs one per call.
-    target: Vec<u8>,
+    // overwrite); the port stores the index of that shared copy in
+    // `WriteState.targets`.
+    target: usize,
 }
 
 /// The result of a committed transaction. All slices borrow the
@@ -161,38 +172,65 @@ pub struct Committed<'a> {
     pub id: &'a [u8],
     pub pw: &'a [u8],
     pub name: &'a [u8],
-    pub contents: Vec<Content<'a>>,
+    pub contents: AVec<Content<'a>>,
 }
 
-// pub fn deinit(self: *const Committed, alloc: Allocator) void {
-//     alloc.free(self.contents);
-// }
-// PORT NOTE: `contents` frees on drop; no deinit.
+impl Committed<'_> {
+    // pub fn deinit(self: *const Committed, alloc: Allocator) void {
+    //     alloc.free(self.contents);
+    // }
+    // PORT NOTE: `contents` frees through the allocator it was allocated
+    // with when dropped; `deinit` consumes the result and checks it.
+    pub fn deinit(self, alloc: Allocator) {
+        self.contents.allocator().debug_assert_same(alloc);
+    }
+}
 
 impl WriteState {
     /// Begin a transaction from a type=write packet.
     // pub fn init(alloc: Allocator, meta: *const Metadata, opts: Options)
     //     Allocator.Error!WriteState {
-    pub fn init(meta: &Metadata, opts: Options) -> WriteState {
+    pub fn init(
+        alloc: Allocator,
+        meta: &Metadata,
+        opts: Options,
+    ) -> Result<WriteState, OutOfMemory> {
         assert(meta.op == Operation::Write);
         // var arena: std.heap.ArenaAllocator = .init(alloc);
-        // const id = try arena.allocator().dupe(u8, meta.id); (etc.)
-        WriteState {
+        // errdefer arena.deinit();
+        // const id = try arena.allocator().dupe(u8, meta.id);
+        // const pw = try arena.allocator().dupe(u8, meta.pw);
+        // const name = try arena.allocator().dupe(u8, meta.name);
+        let id = valloc::try_dupe(alloc, &meta.id)?;
+        let pw = valloc::try_dupe(alloc, &meta.pw)?;
+        let name = valloc::try_dupe(alloc, &meta.name)?;
+        Ok(WriteState {
+            alloc,
             loc: meta.loc,
-            id: meta.id.clone(),
-            pw: meta.pw.clone(),
-            name: meta.name.clone(),
-            spool: Vec::new(),
-            entries: Vec::new(),
-            aliases: Vec::new(),
+            id,
+            pw,
+            name,
+            spool: Bytes::new_in(alloc),
+            entries: AVec::new_in(alloc),
+            aliases: AVec::new_in(alloc),
+            targets: AVec::new_in(alloc),
             max_size: opts.max_size,
             current: None,
             decoder: simd::base64::Streaming::default(),
-        }
+        })
     }
 
-    // pub fn deinit(self: *WriteState, alloc: Allocator) void { ... }
-    // PORT NOTE: all owned state frees on drop; no deinit.
+    // pub fn deinit(self: *WriteState, alloc: Allocator) void {
+    //     self.spool.deinit(alloc);
+    //     self.entries.deinit(alloc);
+    //     self.aliases.deinit(alloc);
+    //     self.arena.deinit();
+    // }
+    // PORT NOTE: every owned list and slice frees through `self.alloc` when
+    // dropped; `deinit` consumes the state and checks the allocator.
+    pub fn deinit(self, alloc: Allocator) {
+        self.alloc.debug_assert_same(alloc);
+    }
 
     /// Accumulate one wdata chunk carrying data for meta.mime (which
     /// must be non-empty; an empty mime is a commit, not data).
@@ -203,9 +241,15 @@ impl WriteState {
     /// respectively and abort it, as required by the protocol.
     // pub fn data(self: *WriteState, alloc: Allocator, meta: *const Metadata,
     //     payload: []const u8) error{ OutOfMemory, TooLarge, Invalid }!void {
-    pub fn data(&mut self, meta: &Metadata, payload: &[u8]) -> Result<(), DataError> {
+    pub fn data(
+        &mut self,
+        alloc: Allocator,
+        meta: &Metadata,
+        payload: &[u8],
+    ) -> Result<(), DataError> {
         assert(meta.op == Operation::Wdata);
         assert(!meta.mime.is_empty());
+        self.alloc.debug_assert_same(alloc);
         // Switch the receiving entry if this chunk is for a different
         // MIME type than the last one.
         // entry: { ... }
@@ -253,11 +297,18 @@ impl WriteState {
                 return Ok(());
             }
 
-            self.entries.push(Entry {
-                mime: meta.mime.clone(),
-                start: self.spool.len(),
-                len: 0,
-            });
+            // try self.entries.append(alloc, .{
+            //     .mime = try self.arena.allocator().dupe(u8, meta.mime),
+            //     .start = self.spool.items.len,
+            // });
+            let mime = valloc::try_dupe(alloc, &meta.mime).map_err(|_| DataError::OutOfMemory)?;
+            self.entries
+                .try_push(Entry {
+                    mime,
+                    start: self.spool.len(),
+                    len: 0,
+                })
+                .map_err(|_| DataError::OutOfMemory)?;
             self.current = Some(self.entries.len() - 1);
         }
 
@@ -278,7 +329,11 @@ impl WriteState {
         // (hazard #5).
         let start = self.spool.len();
         let reserve = self.decoder.max_len(payload);
-        self.spool.resize(start + reserve, 0);
+        self.spool
+            .try_reserve(reserve)
+            .map_err(|_| DataError::OutOfMemory)?;
+        // The capacity is reserved, so this never allocates.
+        self.spool.resize_copy(start + reserve, 0);
         let decoded_len = {
             let spool_tail = &mut self.spool[start..];
             match self.decoder.feed(payload, spool_tail) {
@@ -318,12 +373,18 @@ impl WriteState {
     /// an undecodable payload, which aborts the transaction with EINVAL.
     // pub fn alias(self: *WriteState, alloc: Allocator, meta: *const Metadata,
     //     payload: []const u8) error{ OutOfMemory, Invalid }!void {
-    pub fn alias(&mut self, meta: &Metadata, payload: &[u8]) -> Result<(), AliasError> {
+    pub fn alias(
+        &mut self,
+        alloc: Allocator,
+        meta: &Metadata,
+        payload: &[u8],
+    ) -> Result<(), AliasError> {
         assert(meta.op == Operation::Walias);
         assert(!meta.mime.is_empty());
+        self.alloc.debug_assert_same(alloc);
         // const decoded = try Payload.init(alloc, payload);
         // defer decoded.deinit(alloc);
-        let decoded = Payload::init(payload).map_err(|err| match err {
+        let decoded = Payload::init(alloc, payload).map_err(|err| match err {
             PayloadError::OutOfMemory => AliasError::OutOfMemory,
             PayloadError::Invalid => AliasError::Invalid,
         })?;
@@ -334,12 +395,18 @@ impl WriteState {
 
         // Copy the target only if at least one valid alias exists.
         // const target: []const u8 = target: { ... };
-        let target: Vec<u8> = 'target: {
+        let target: usize = 'target: {
             while let Some(name) = it.next() {
                 if name.len() > max_mime_len {
                     continue;
                 }
-                break 'target meta.mime.clone();
+                // break :target try self.arena.allocator().dupe(u8, meta.mime);
+                let copy =
+                    valloc::try_dupe(alloc, &meta.mime).map_err(|_| AliasError::OutOfMemory)?;
+                self.targets
+                    .try_push(copy)
+                    .map_err(|_| AliasError::OutOfMemory)?;
+                break 'target self.targets.len() - 1;
             }
 
             // If we didn't find a target then ignore it.
@@ -360,8 +427,8 @@ impl WriteState {
             // for (self.aliases.items) |*a| { ... } else { ... }
             let mut matched = false;
             for a in self.aliases.iter_mut() {
-                if a.alias == name {
-                    a.target = target.clone();
+                if a.alias.as_slice() == name {
+                    a.target = target;
                     matched = true;
                     break;
                 }
@@ -373,10 +440,14 @@ impl WriteState {
                     return Ok(());
                 }
 
-                self.aliases.push(Alias {
-                    alias: name.to_vec(),
-                    target: target.clone(),
-                });
+                // try self.aliases.append(alloc, .{
+                //     .alias = try self.arena.allocator().dupe(u8, name),
+                //     .target = target,
+                // });
+                let alias = valloc::try_dupe(alloc, name).map_err(|_| AliasError::OutOfMemory)?;
+                self.aliases
+                    .try_push(Alias { alias, target })
+                    .map_err(|_| AliasError::OutOfMemory)?;
             }
         }
         Ok(())
@@ -389,7 +460,8 @@ impl WriteState {
     /// fail the transaction with EINVAL and abort it.
     // pub fn commit(self: *WriteState, alloc: Allocator)
     //     error{ OutOfMemory, Invalid }!Committed {
-    pub fn commit(&mut self) -> Result<Committed<'_>, CommitError> {
+    pub fn commit(&mut self, alloc: Allocator) -> Result<Committed<'_>, CommitError> {
+        self.alloc.debug_assert_same(alloc);
         // Finalize the region receiving data.
         if let Some(idx) = self.current {
             self.finish_current().map_err(|_| CommitError::Invalid)?;
@@ -404,8 +476,15 @@ impl WriteState {
         // chained aliases work like kitty's dict iteration. An alias
         // whose target has no mapping is dropped; an alias colliding
         // with an existing name overwrites it.
-        let mut contents: Vec<Content<'_>> =
-            Vec::with_capacity(self.entries.len() + self.aliases.len());
+        // var contents: std.ArrayListUnmanaged(Content) = .empty;
+        // defer contents.deinit(alloc);
+        // try contents.ensureTotalCapacity(alloc, self.entries.items.len + self.aliases.items.len);
+        // PORT NOTE: `toOwnedSlice` hands this list over as the result (not a
+        // shrunk copy: a T3 residual).
+        let mut contents: AVec<Content<'_>> = AVec::new_in(alloc);
+        contents
+            .try_reserve_exact(self.entries.len() + self.aliases.len())
+            .map_err(|_| CommitError::OutOfMemory)?;
 
         for entry in self.entries.iter() {
             contents.push(Content {
@@ -418,7 +497,7 @@ impl WriteState {
             // const target: Content = target: { ... continue; };
             let target: Content<'_> = match contents
                 .iter()
-                .find(|c| c.mime == a.target.as_slice())
+                .find(|c| c.mime == self.targets[a.target].as_slice())
                 .copied()
             {
                 Some(c) => c,
@@ -456,10 +535,12 @@ impl WriteState {
 mod tests {
     use super::*;
 
+    const G: crate::alloc::Allocator = crate::alloc::Global;
+
     // (Zig `.{ .op = .wdata, .mime = "text/plain" }` shorthand.)
     fn wdata(mime: &[u8]) -> Metadata {
         Metadata {
-            mime: mime.to_vec(),
+            mime: crate::alloc::try_dupe(G, mime).unwrap(),
             ..Metadata::new(Operation::Wdata)
         }
     }
@@ -469,16 +550,16 @@ mod tests {
     fn write_basic_transaction() {
         // const begin_meta: Metadata = .{ .op = .write, .id = "42" };
         let begin_meta = Metadata {
-            id: b"42".to_vec(),
+            id: crate::alloc::try_dupe(G, b"42").unwrap(),
             ..Metadata::new(Operation::Write)
         };
-        let mut state = WriteState::init(&begin_meta, Options::default());
+        let mut state = WriteState::init(G, &begin_meta, Options::default()).unwrap();
 
         state
-            .data(&wdata(b"text/plain"), b"R2hvc3R0eQ==") // "Ghostty"
+            .data(G, &wdata(b"text/plain"), b"R2hvc3R0eQ==") // "Ghostty"
             .unwrap();
 
-        let committed = state.commit().unwrap();
+        let committed = state.commit(G).unwrap();
         assert_eq!(b"42".as_slice(), committed.id);
         assert!(committed.loc == crate::clipboard::Location::Standard);
         assert_eq!(1usize, committed.contents.len());
@@ -490,12 +571,12 @@ mod tests {
     #[test]
     fn write_chunked_data_accumulates() {
         let begin_meta = Metadata::new(Operation::Write);
-        let mut state = WriteState::init(&begin_meta, Options::default());
+        let mut state = WriteState::init(G, &begin_meta, Options::default()).unwrap();
 
-        state.data(&wdata(b"text/plain"), b"SGVsbG8=").unwrap(); // "Hello"
-        state.data(&wdata(b"text/plain"), b"V29ybGQ=").unwrap(); // "World"
+        state.data(G, &wdata(b"text/plain"), b"SGVsbG8=").unwrap(); // "Hello"
+        state.data(G, &wdata(b"text/plain"), b"V29ybGQ=").unwrap(); // "World"
 
-        let committed = state.commit().unwrap();
+        let committed = state.commit(G).unwrap();
         assert_eq!(b"HelloWorld".as_slice(), committed.contents[0].data);
     }
 
@@ -503,12 +584,12 @@ mod tests {
     #[test]
     fn write_multiple_mimes_in_order() {
         let begin_meta = Metadata::new(Operation::Write);
-        let mut state = WriteState::init(&begin_meta, Options::default());
+        let mut state = WriteState::init(G, &begin_meta, Options::default()).unwrap();
 
-        state.data(&wdata(b"text/plain"), b"YQ==").unwrap(); // "a"
-        state.data(&wdata(b"text/html"), b"Yg==").unwrap(); // "b"
+        state.data(G, &wdata(b"text/plain"), b"YQ==").unwrap(); // "a"
+        state.data(G, &wdata(b"text/html"), b"Yg==").unwrap(); // "b"
 
-        let committed = state.commit().unwrap();
+        let committed = state.commit(G).unwrap();
         assert_eq!(2usize, committed.contents.len());
         assert_eq!(b"text/plain".as_slice(), committed.contents[0].mime);
         assert_eq!(b"a".as_slice(), committed.contents[0].data);
@@ -520,13 +601,13 @@ mod tests {
     #[test]
     fn write_reused_mime_overwrites() {
         let begin_meta = Metadata::new(Operation::Write);
-        let mut state = WriteState::init(&begin_meta, Options::default());
+        let mut state = WriteState::init(G, &begin_meta, Options::default()).unwrap();
 
-        state.data(&wdata(b"text/plain"), b"YQ==").unwrap(); // "a"
-        state.data(&wdata(b"text/html"), b"Yg==").unwrap(); // "b"
-        state.data(&wdata(b"text/plain"), b"Yw==").unwrap(); // "c"
+        state.data(G, &wdata(b"text/plain"), b"YQ==").unwrap(); // "a"
+        state.data(G, &wdata(b"text/html"), b"Yg==").unwrap(); // "b"
+        state.data(G, &wdata(b"text/plain"), b"Yw==").unwrap(); // "c"
 
-        let committed = state.commit().unwrap();
+        let committed = state.commit(G).unwrap();
         assert_eq!(2usize, committed.contents.len());
         // Position preserved, data replaced.
         assert_eq!(b"text/plain".as_slice(), committed.contents[0].mime);
@@ -543,21 +624,21 @@ mod tests {
             [b"!!!", b"SGVs!!!bG8=", b"\nZGF0YSB3aXRoIGEgbmV3bGluZQ=="];
         for payload in invalid_payloads {
             let begin_meta = Metadata::new(Operation::Write);
-            let mut state = WriteState::init(&begin_meta, Options::default());
+            let mut state = WriteState::init(G, &begin_meta, Options::default()).unwrap();
             assert_eq!(
                 Err(DataError::Invalid),
-                state.data(&wdata(b"text/plain"), payload),
+                state.data(G, &wdata(b"text/plain"), payload),
             );
         }
 
         // Also after an earlier valid chunk for the same MIME type.
         {
             let begin_meta = Metadata::new(Operation::Write);
-            let mut state = WriteState::init(&begin_meta, Options::default());
-            state.data(&wdata(b"text/plain"), b"Z29vZA==").unwrap(); // "good"
+            let mut state = WriteState::init(G, &begin_meta, Options::default()).unwrap();
+            state.data(G, &wdata(b"text/plain"), b"Z29vZA==").unwrap(); // "good"
             assert_eq!(
                 Err(DataError::Invalid),
-                state.data(&wdata(b"text/plain"), b"SGVs!!!bG8="),
+                state.data(G, &wdata(b"text/plain"), b"SGVs!!!bG8="),
             );
         }
     }
@@ -571,18 +652,20 @@ mod tests {
         let splits: [&[usize]; 2] = [&[3, 7], &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]];
         for split in splits {
             let begin_meta = Metadata::new(Operation::Write);
-            let mut state = WriteState::init(&begin_meta, Options::default());
+            let mut state = WriteState::init(G, &begin_meta, Options::default()).unwrap();
 
             let mut prev: usize = 0;
             for &end in split {
                 state
-                    .data(&wdata(b"text/plain"), &encoded[prev..end])
+                    .data(G, &wdata(b"text/plain"), &encoded[prev..end])
                     .unwrap();
                 prev = end;
             }
-            state.data(&wdata(b"text/plain"), &encoded[prev..]).unwrap();
+            state
+                .data(G, &wdata(b"text/plain"), &encoded[prev..])
+                .unwrap();
 
-            let committed = state.commit().unwrap();
+            let committed = state.commit(G).unwrap();
             assert_eq!(b"some data".as_slice(), committed.contents[0].data);
         }
     }
@@ -591,24 +674,24 @@ mod tests {
     #[test]
     fn write_incorrectly_padded_stream_aborts_at_commit() {
         let begin_meta = Metadata::new(Operation::Write);
-        let mut state = WriteState::init(&begin_meta, Options::default());
+        let mut state = WriteState::init(G, &begin_meta, Options::default()).unwrap();
 
         // "Hello" without its final padding byte: every chunk decodes,
         // but the stream ends mid-group so the commit reports it.
-        state.data(&wdata(b"text/plain"), b"SGVsbG8").unwrap();
-        assert!(matches!(state.commit(), Err(CommitError::Invalid)));
+        state.data(G, &wdata(b"text/plain"), b"SGVsbG8").unwrap();
+        assert!(matches!(state.commit(G), Err(CommitError::Invalid)));
     }
 
     // test "write: incorrectly padded stream aborts at MIME switch"
     #[test]
     fn write_incorrectly_padded_stream_aborts_at_mime_switch() {
         let begin_meta = Metadata::new(Operation::Write);
-        let mut state = WriteState::init(&begin_meta, Options::default());
+        let mut state = WriteState::init(G, &begin_meta, Options::default()).unwrap();
 
-        state.data(&wdata(b"text/plain"), b"SGVsbG8").unwrap();
+        state.data(G, &wdata(b"text/plain"), b"SGVsbG8").unwrap();
         assert_eq!(
             Err(DataError::Invalid),
-            state.data(&wdata(b"text/html"), b"PGI+aGk8L2I+"),
+            state.data(G, &wdata(b"text/html"), b"PGI+aGk8L2I+"),
         );
     }
 
@@ -621,12 +704,12 @@ mod tests {
         // decoder on EOF). Padding followed by more data within a single
         // packet stays invalid.
         let begin_meta = Metadata::new(Operation::Write);
-        let mut state = WriteState::init(&begin_meta, Options::default());
+        let mut state = WriteState::init(G, &begin_meta, Options::default()).unwrap();
 
-        state.data(&wdata(b"text/plain"), b"Z29vZA==").unwrap(); // "good"
-        state.data(&wdata(b"text/plain"), b"bW9yZQ==").unwrap(); // "more"
+        state.data(G, &wdata(b"text/plain"), b"Z29vZA==").unwrap(); // "good"
+        state.data(G, &wdata(b"text/plain"), b"bW9yZQ==").unwrap(); // "more"
 
-        let committed = state.commit().unwrap();
+        let committed = state.commit(G).unwrap();
         assert_eq!(b"goodmore".as_slice(), committed.contents[0].data);
     }
 
@@ -634,11 +717,11 @@ mod tests {
     #[test]
     fn write_data_after_padding_within_one_chunk_aborts() {
         let begin_meta = Metadata::new(Operation::Write);
-        let mut state = WriteState::init(&begin_meta, Options::default());
+        let mut state = WriteState::init(G, &begin_meta, Options::default()).unwrap();
 
         assert_eq!(
             Err(DataError::Invalid),
-            state.data(&wdata(b"text/plain"), b"Z29vZA==bW9yZQ=="),
+            state.data(G, &wdata(b"text/plain"), b"Z29vZA==bW9yZQ=="),
         );
     }
 
@@ -646,20 +729,22 @@ mod tests {
     #[test]
     fn write_aliases_resolve_at_commit() {
         let begin_meta = Metadata::new(Operation::Write);
-        let mut state = WriteState::init(&begin_meta, Options::default());
+        let mut state = WriteState::init(G, &begin_meta, Options::default()).unwrap();
 
-        state.data(&wdata(b"text/plain"), b"R2hvc3R0eQ==").unwrap(); // "Ghostty"
+        state
+            .data(G, &wdata(b"text/plain"), b"R2hvc3R0eQ==")
+            .unwrap(); // "Ghostty"
 
         // Alias "TEXT UTF8_STRING" -> text/plain.
         let alias_meta = Metadata {
-            mime: b"text/plain".to_vec(),
+            mime: crate::alloc::try_dupe(G, b"text/plain").unwrap(),
             ..Metadata::new(Operation::Walias)
         };
         state
-            .alias(&alias_meta, b"VEVYVCBVVEY4X1NUUklORw==")
+            .alias(G, &alias_meta, b"VEVYVCBVVEY4X1NUUklORw==")
             .unwrap();
 
-        let committed = state.commit().unwrap();
+        let committed = state.commit(G).unwrap();
         assert_eq!(3usize, committed.contents.len());
         assert_eq!(b"TEXT".as_slice(), committed.contents[1].mime);
         assert_eq!(b"Ghostty".as_slice(), committed.contents[1].data);
@@ -671,21 +756,24 @@ mod tests {
     #[test]
     fn write_alias_payload_must_be_valid_utf8() {
         let begin_meta = Metadata::new(Operation::Write);
-        let mut state = WriteState::init(&begin_meta, Options::default());
+        let mut state = WriteState::init(G, &begin_meta, Options::default()).unwrap();
 
         let alias_meta = Metadata {
-            mime: b"text/plain".to_vec(),
+            mime: crate::alloc::try_dupe(G, b"text/plain").unwrap(),
             ..Metadata::new(Operation::Walias)
         };
         // Valid base64 encoding of a single 0xff byte.
-        assert_eq!(Err(AliasError::Invalid), state.alias(&alias_meta, b"/w=="));
+        assert_eq!(
+            Err(AliasError::Invalid),
+            state.alias(G, &alias_meta, b"/w==")
+        );
     }
 
     // test "write: default limit when unset"
     #[test]
     fn write_default_limit_when_unset() {
         let begin_meta = Metadata::new(Operation::Write);
-        let state = WriteState::init(&begin_meta, Options::default());
+        let state = WriteState::init(G, &begin_meta, Options::default()).unwrap();
         assert_eq!(max_write_size, state.max_size);
     }
 
@@ -693,11 +781,11 @@ mod tests {
     #[test]
     fn write_text_over_limit_rejects_transaction() {
         let begin_meta = Metadata::new(Operation::Write);
-        let mut state = WriteState::init(&begin_meta, Options { max_size: 8 });
+        let mut state = WriteState::init(G, &begin_meta, Options { max_size: 8 }).unwrap();
 
         assert_eq!(
             Err(DataError::TooLarge),
-            state.data(&wdata(b"text/plain"), b"SGVsbG9Xb3JsZA=="), // "HelloWorld"
+            state.data(G, &wdata(b"text/plain"), b"SGVsbG9Xb3JsZA=="), // "HelloWorld"
         );
     }
 
@@ -705,12 +793,12 @@ mod tests {
     #[test]
     fn write_text_crossing_limit_across_chunks_rejects_transaction() {
         let begin_meta = Metadata::new(Operation::Write);
-        let mut state = WriteState::init(&begin_meta, Options { max_size: 8 });
+        let mut state = WriteState::init(G, &begin_meta, Options { max_size: 8 }).unwrap();
 
-        state.data(&wdata(b"text/plain"), b"SGVsbG8=").unwrap(); // "Hello"
+        state.data(G, &wdata(b"text/plain"), b"SGVsbG8=").unwrap(); // "Hello"
         assert_eq!(
             Err(DataError::TooLarge),
-            state.data(&wdata(b"text/plain"), b"V29ybGQ="), // "World"
+            state.data(G, &wdata(b"text/plain"), b"V29ybGQ="), // "World"
         );
     }
 
@@ -718,11 +806,11 @@ mod tests {
     #[test]
     fn write_data_exactly_at_limit_is_accepted() {
         let begin_meta = Metadata::new(Operation::Write);
-        let mut state = WriteState::init(&begin_meta, Options { max_size: 5 });
+        let mut state = WriteState::init(G, &begin_meta, Options { max_size: 5 }).unwrap();
 
-        state.data(&wdata(b"text/plain"), b"SGVsbG8=").unwrap(); // "Hello"
+        state.data(G, &wdata(b"text/plain"), b"SGVsbG8=").unwrap(); // "Hello"
 
-        let committed = state.commit().unwrap();
+        let committed = state.commit(G).unwrap();
         assert_eq!(b"Hello".as_slice(), committed.contents[0].data);
     }
 
@@ -730,11 +818,11 @@ mod tests {
     #[test]
     fn write_non_text_under_limit_is_unaffected() {
         let begin_meta = Metadata::new(Operation::Write);
-        let mut state = WriteState::init(&begin_meta, Options { max_size: 8 });
+        let mut state = WriteState::init(G, &begin_meta, Options { max_size: 8 }).unwrap();
 
-        state.data(&wdata(b"image/png"), b"iVBORw==").unwrap(); // "\x89PNG"
+        state.data(G, &wdata(b"image/png"), b"iVBORw==").unwrap(); // "\x89PNG"
 
-        let committed = state.commit().unwrap();
+        let committed = state.commit(G).unwrap();
         assert_eq!(b"\x89PNG".as_slice(), committed.contents[0].data);
     }
 
@@ -742,11 +830,11 @@ mod tests {
     #[test]
     fn write_non_text_over_limit_rejects_transaction() {
         let begin_meta = Metadata::new(Operation::Write);
-        let mut state = WriteState::init(&begin_meta, Options { max_size: 8 });
+        let mut state = WriteState::init(G, &begin_meta, Options { max_size: 8 }).unwrap();
 
         assert_eq!(
             Err(DataError::TooLarge),
-            state.data(&wdata(b"image/png"), b"SGVsbG9Xb3JsZA=="), // "HelloWorld"
+            state.data(G, &wdata(b"image/png"), b"SGVsbG9Xb3JsZA=="), // "HelloWorld"
         );
     }
 
@@ -754,13 +842,13 @@ mod tests {
     #[test]
     fn write_total_data_across_mime_types_is_limited() {
         let begin_meta = Metadata::new(Operation::Write);
-        let mut state = WriteState::init(&begin_meta, Options { max_size: 8 });
+        let mut state = WriteState::init(G, &begin_meta, Options { max_size: 8 }).unwrap();
 
-        state.data(&wdata(b"text/plain"), b"SGVsbG8=").unwrap(); // "Hello"
+        state.data(G, &wdata(b"text/plain"), b"SGVsbG8=").unwrap(); // "Hello"
 
         assert_eq!(
             Err(DataError::TooLarge),
-            state.data(&wdata(b"image/png"), b"V29ybGQ="), // "World"
+            state.data(G, &wdata(b"image/png"), b"V29ybGQ="), // "World"
         );
     }
 
@@ -768,15 +856,15 @@ mod tests {
     #[test]
     fn write_alias_without_data_target_is_dropped() {
         let begin_meta = Metadata::new(Operation::Write);
-        let mut state = WriteState::init(&begin_meta, Options::default());
+        let mut state = WriteState::init(G, &begin_meta, Options::default()).unwrap();
 
         let alias_meta = Metadata {
-            mime: b"text/plain".to_vec(),
+            mime: crate::alloc::try_dupe(G, b"text/plain").unwrap(),
             ..Metadata::new(Operation::Walias)
         };
-        state.alias(&alias_meta, b"VEVYVA==").unwrap(); // "TEXT"
+        state.alias(G, &alias_meta, b"VEVYVA==").unwrap(); // "TEXT"
 
-        let committed = state.commit().unwrap();
+        let committed = state.commit(G).unwrap();
         assert_eq!(0usize, committed.contents.len());
     }
 
@@ -794,14 +882,14 @@ mod tests {
         };
 
         let begin_meta = Metadata::new(Operation::Write);
-        let mut state = WriteState::init(&begin_meta, Options::default());
+        let mut state = WriteState::init(G, &begin_meta, Options::default()).unwrap();
         for i in 0..max_write_mimes {
             state
-                .data(&wdata(format!("type/m{i}").as_bytes()), b"YQ==")
+                .data(G, &wdata(format!("type/m{i}").as_bytes()), b"YQ==")
                 .unwrap();
         }
         let cap = crate::log_capture::start();
-        state.data(&wdata(b"type/extra"), b"YQ==").unwrap();
+        state.data(G, &wdata(b"type/extra"), b"YQ==").unwrap();
         let messages = cap.messages();
         drop(cap);
         assert_eq!(
@@ -811,17 +899,17 @@ mod tests {
             messages
         );
 
-        let mut state = WriteState::init(&begin_meta, Options::default());
-        state.data(&wdata(b"text/plain"), b"YQ==").unwrap();
+        let mut state = WriteState::init(G, &begin_meta, Options::default()).unwrap();
+        state.data(G, &wdata(b"text/plain"), b"YQ==").unwrap();
         let names: Vec<String> = (0..=max_write_aliases).map(|i| format!("a{i}")).collect();
         let payload =
             crate::kitty::clipboard_response::b64_encode_to_vec(names.join(" ").as_bytes());
         let alias_meta = Metadata {
-            mime: b"text/plain".to_vec(),
+            mime: crate::alloc::try_dupe(G, b"text/plain").unwrap(),
             ..Metadata::new(Operation::Walias)
         };
         let cap = crate::log_capture::start();
-        state.alias(&alias_meta, &payload).unwrap();
+        state.alias(G, &alias_meta, &payload).unwrap();
         let messages = cap.messages();
         drop(cap);
         assert_eq!(
@@ -829,5 +917,69 @@ mod tests {
             messages
         );
         assert_eq!(max_write_aliases, state.aliases.len());
+    }
+
+    // Parity tail S7-4 (routing evidence): the transaction's dupes, lists,
+    // spool and committed contents are allocated through the allocator
+    // given to `init`, and every one is returned when the state is dropped;
+    // a refused spool growth is `error.OutOfMemory`.
+    #[test]
+    fn write_state_routes_through_the_allocator_handle() {
+        use crate::alloc::testing::{Config, CountingAllocator, FailingAllocator};
+        let counting = CountingAllocator::over_heap();
+        let c = counting.allocator();
+        crate::alloc::testing::with_handle(&c, |alloc| {
+            let begin_meta = Metadata {
+                id: crate::alloc::try_dupe(G, b"42").unwrap(),
+                ..Metadata::new(Operation::Write)
+            };
+            let mut state = WriteState::init(alloc, &begin_meta, Options::default()).unwrap();
+            // `arena.dupe(u8, meta.id)`; the empty pw and name allocate nothing.
+            assert_eq!(1, counting.alloc_calls.get());
+            state
+                .data(alloc, &wdata(b"text/plain"), b"R2hvc3R0eQ==")
+                .unwrap();
+            // The mime dupe, the entries list and the spool.
+            assert_eq!(4, counting.alloc_calls.get());
+            let alias_meta = Metadata {
+                mime: crate::alloc::try_dupe(G, b"text/plain").unwrap(),
+                ..Metadata::new(Operation::Walias)
+            };
+            state
+                .alias(alloc, &alias_meta, b"VEVYVCBVVEY4X1NUUklORw==")
+                .unwrap();
+            // The decoded payload (freed), the shared target, the targets
+            // list, the aliases list and one dupe per alias ("TEXT",
+            // "UTF8_STRING").
+            assert_eq!(10, counting.alloc_calls.get());
+            let committed = state.commit(alloc).unwrap();
+            assert_eq!(11, counting.alloc_calls.get(), "the committed contents");
+            assert_eq!(3, committed.contents.len());
+            committed.deinit(alloc);
+            state.deinit(alloc);
+            assert_eq!(0, counting.live_bytes.get(), "every byte is returned");
+        });
+
+        // The spool growth is refused (the id dupe, then mime + entries
+        // succeed): `error.OutOfMemory`.
+        let failing = FailingAllocator::over_heap(Config {
+            fail_index: 3,
+            ..Config::default()
+        });
+        let f = failing.allocator();
+        crate::alloc::testing::with_handle(&f, |alloc| {
+            let begin_meta = Metadata {
+                id: crate::alloc::try_dupe(G, b"42").unwrap(),
+                ..Metadata::new(Operation::Write)
+            };
+            let mut state = WriteState::init(alloc, &begin_meta, Options::default()).unwrap();
+            assert_eq!(
+                Err(DataError::OutOfMemory),
+                state.data(alloc, &wdata(b"text/plain"), b"R2hvc3R0eQ==")
+            );
+            assert!(failing.has_induced_failure.get());
+            state.deinit(alloc);
+        });
+        assert_eq!(failing.allocated_bytes.get(), failing.freed_bytes.get());
     }
 }

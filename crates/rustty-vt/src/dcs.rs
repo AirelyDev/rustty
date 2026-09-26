@@ -91,7 +91,9 @@ impl<A: Allocator> Default for Handler<A> {
     }
 }
 
-impl<A: Allocator> Handler<A> {
+// (`Into<crate::alloc::Allocator>`: the tmux control parser's buffer is
+// allocated through the runtime handle, parity tail S7-4.)
+impl<A: Allocator + Into<crate::alloc::Allocator>> Handler<A> {
     pub fn deinit(&mut self) {
         self.discard();
     }
@@ -151,13 +153,13 @@ impl<A: Allocator> Handler<A> {
                     // literal (`.max_bytes = self.max_bytes, .buffer = try
                     // .initCapacity(alloc, 128)`); `ControlParser`'s fields are
                     // private, so `init_options` is its constructor mirror. The
-                    // parser's buffer is an owning global `Vec` per its own PORT
-                    // NOTE, so the `alloc` does not thread through here, but the
-                    // `try` does: `init_options` reserves fallibly and its
-                    // `OutOfMemory` propagates out of `hook` like the reference's.
+                    // buffer is allocated through `alloc` (parity tail S7-4),
+                    // fallibly: `init_options`'s `OutOfMemory` propagates out
+                    // of `hook` like the reference's.
                     break 'tmux Some(Hook {
                         state: State::Tmux(
                             TmuxState::init_options(
+                                alloc.into(),
                                 self.max_bytes,
                                 128, // Arbitrary choice to limit initial reallocs
                             )
@@ -1157,5 +1159,40 @@ mod tests {
         );
         assert!(h.unhook().is_none());
         h.deinit();
+    }
+
+    // Parity tail S7-4b (routing evidence, no reference counterpart): the
+    // tmux control parser's buffer is `initCapacity(alloc, 128)` through the
+    // allocator `hook` is given, and exit frees it.
+    #[test]
+    #[cfg_attr(
+        not(feature = "oniguruma"),
+        ignore = "SkipZigTest: tmux_control_mode tracks the oniguruma feature (R14)"
+    )]
+    fn tmux_buffer_routes_through_the_hook_allocator() {
+        use crate::alloc::testing::{with_handle, CountingAllocator};
+        let counting = CountingAllocator::over_heap();
+        let c = counting.allocator();
+        with_handle(&c, |alloc| {
+            let mut h: Handler<crate::alloc::Allocator> = Handler::default();
+            let mut cmd = h
+                .hook(
+                    alloc,
+                    DCS {
+                        params: &[1000],
+                        final_: b'p',
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+            assert!(matches!(cmd, Command::Tmux(TmuxCommand::Enter)));
+            assert_eq!(1, counting.alloc_calls.get(), "the tmux buffer");
+            assert_eq!(Some((128, 0)), counting.last_alloc.get());
+            cmd.deinit();
+            let mut cmd = h.unhook().unwrap();
+            cmd.deinit();
+            h.deinit();
+        });
+        assert_eq!(0, counting.live_bytes.get(), "exit frees the buffer");
     }
 }

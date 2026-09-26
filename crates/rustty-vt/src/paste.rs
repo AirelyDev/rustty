@@ -30,13 +30,15 @@
 //   const input_paste = @import("../input/paste.zig");
 //   const Terminal = @import("Terminal.zig");
 // `*std.Io.Writer` maps to the crate's byte-oriented stand-in,
-// `snapshot::io::Writer`, and `std.Io.Writer.Allocating` to
-// `snapshot::io::AllocatingWriter`; `std.Io` (the entropy capability) maps to
-// the sys.rs `Io` stand-in (see its NON_PORTS TinyIo re-read note).
+// `snapshot::io::Writer`, and `std.Io.Writer.Allocating` over `ctx.alloc` to
+// `snapshot::io::StackFallbackWriter<0>` over it (no inline buffer, so every
+// byte goes through `ctx.alloc`, fallibly); `std.Io` (the entropy capability)
+// maps to the sys.rs `Io` stand-in (see its NON_PORTS TinyIo re-read note).
+use crate::alloc::Allocator;
 use crate::clipboard;
 use crate::input::paste as input_paste;
 use crate::kitty::clipboard as kitty_clipboard;
-use crate::snapshot::io::{AllocatingWriter, Writer};
+use crate::snapshot::io::{StackFallbackWriter, Writer};
 use crate::sys;
 use crate::terminal::Terminal;
 
@@ -145,14 +147,12 @@ pub struct Context<'a> {
     // terminal: *const Terminal,
     pub terminal: &'a Terminal,
 
-    // PORT NOTE: the reference field
-    //     /// Allocator for transient state: the buffered read and a paste
-    //     /// event's grant. Must be the allocator `kitty_clipboard.grants`
-    //     /// is freed with.
-    //     alloc: Allocator,
-    // is the crate-wide global-allocator treatment (see snapshot/io.rs
-    // `AllocatingWriter`): the buffered read allocates infallibly from the
-    // global allocator, so the port carries no field.
+    /// Allocator for transient state: the buffered read and a paste
+    /// event's grant. Must be the allocator `kitty_clipboard.grants`
+    /// is freed with.
+    // alloc: Allocator,
+    pub alloc: Allocator,
+
     /// Receives the encoded text in chunks, or the event. Must be
     /// buffered (the encoder works in its buffer) and is not flushed
     /// by `paste`; the caller flushes once it returns.
@@ -193,8 +193,8 @@ pub struct KittyClipboard<'a> {
 //     error{ UnsafePaste };
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error {
-    /// `Allocator.Error` — `error.OutOfMemory`. (Reachable only through the
-    /// reference's read-buffering arm; see the catch mapping in `paste`.)
+    /// `Allocator.Error` — `error.OutOfMemory`: the buffered read (see the
+    /// catch mapping in `paste`) or a paste event's grant.
     OutOfMemory,
 
     /// `std.Io.RandomSecureError` — `error.EntropyUnavailable`. Produced by
@@ -270,7 +270,7 @@ pub fn paste(mut ctx: Context<'_>, req: Request<'_>) -> Result<bool, Error> {
     // scan.
     // var aw: std.Io.Writer.Allocating = .init(ctx.alloc);
     // defer aw.deinit();
-    let mut aw = AllocatingWriter::new();
+    let mut aw = StackFallbackWriter::<0>::new_in(ctx.alloc);
     let text: &[u8] = match &req.contents {
         Contents::Memory(v) => v[index].data,
         Contents::Reader(v) => {
@@ -337,7 +337,8 @@ fn paste_kitty_event(
     // try kitty.grants.grant(ctx.alloc, &otp, .read, true);
     kitty
         .grants
-        .grant(&otp, kitty_clipboard::Direction::Read, true);
+        .grant(ctx.alloc, &otp, kitty_clipboard::Direction::Read, true)
+        .map_err(|_| Error::OutOfMemory)?;
 
     let event = kitty_clipboard::PasteEvent {
         // The protocol only distinguishes the clipboard from the
@@ -355,7 +356,9 @@ fn paste_kitty_event(
     // (errdefer: revoke the grant when the event was never sent.)
     if event.encode(ctx.writer).is_err() {
         // errdefer _ = kitty.grants.use(ctx.alloc, &otp, .read);
-        let _ = kitty.grants.use_(&otp, kitty_clipboard::Direction::Read);
+        let _ = kitty
+            .grants
+            .use_(ctx.alloc, &otp, kitty_clipboard::Direction::Read);
         return Err(Error::WriteFailed);
     }
     Ok(())

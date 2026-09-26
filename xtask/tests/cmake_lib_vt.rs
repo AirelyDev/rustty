@@ -132,7 +132,18 @@ fn install_layout_is_versioned_like_the_reference() {
             String::from_utf8_lossy(&out.stderr)
         );
     }
-    let lib = prefix.join("lib");
+    // GNUInstallDirs picks the library directory: `lib64` on Fedora-style
+    // multilib hosts (measured on Fedora 44 aarch64), `lib` elsewhere.
+    let lib = ["lib", "lib64"]
+        .iter()
+        .map(|d| prefix.join(d))
+        .find(|d| d.join("librustty-vt.a").is_file())
+        .unwrap_or_else(|| {
+            panic!(
+                "no lib/ or lib64/ under {} holds librustty-vt.a",
+                prefix.display()
+            )
+        });
     let v = env!("CARGO_PKG_VERSION");
     let major = v.split('.').next().unwrap();
     let (real, so, link) = if cfg!(target_os = "macos") {
@@ -169,6 +180,22 @@ fn install_layout_is_versioned_like_the_reference() {
                 "@rpath/librustty-vt.dylib (compatibility version 1.0.0, current version"
             ) && id.contains(&format!("current version {v}")),
             "{text}"
+        );
+    }
+
+    if cfg!(any(target_os = "linux", target_os = "freebsd")) {
+        // The ELF soname Zig records for a versioned shared library
+        // (`lib<name>.so.<major>`), which the soname link above resolves.
+        let out = Command::new("readelf")
+            .arg("-d")
+            .arg(lib.join(&real))
+            .output()
+            .expect("run readelf");
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            text.lines()
+                .any(|l| l.contains("(SONAME)") && l.contains(&format!("[{so}]"))),
+            "SONAME must be {so}:\n{text}"
         );
     }
 

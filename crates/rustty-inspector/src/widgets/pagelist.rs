@@ -361,14 +361,13 @@ impl Inspector {
                     //     std.heap.page_allocator,
                     // ) catch { ... };
                     //
-                    // PORT NOTE (parity tail S7-3): `std.heap.page_allocator` ->
-                    // the Rust heap handle. The allocator handle has no page-
-                    // allocator arm; the buffer's page alignment is in its
-                    // `Layout`, and the inspector is outside the C API.
+                    // PORT NOTE (parity tail S7-4): `std.heap.page_allocator` is
+                    // `rustty_vt::alloc::page_allocator()`, the handle over the
+                    // port's page allocator.
                     match unsafe {
                         rustty_vt::pagelist::Node::page_preserving_state(
                             page_node,
-                            rustty_vt::alloc::Global,
+                            rustty_vt::alloc::page_allocator(),
                         )
                     } {
                         Err(_) => unsafe {
@@ -1779,8 +1778,11 @@ impl CellChooser {
         // the renderer-state mutex), which is `page_preserving_state`'s contract.
         let mut preserved = match unsafe {
             // pin.node.pagePreservingState(std.heap.page_allocator): see the
-            // PORT NOTE on the first call site (the Rust heap handle).
-            rustty_vt::pagelist::Node::page_preserving_state(pin.node, rustty_vt::alloc::Global)
+            // PORT NOTE on the first call site (the page allocator handle).
+            rustty_vt::pagelist::Node::page_preserving_state(
+                pin.node,
+                rustty_vt::alloc::page_allocator(),
+            )
         } {
             Ok(preserved) => preserved,
             Err(_) => {

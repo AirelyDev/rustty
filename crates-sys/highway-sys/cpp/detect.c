@@ -430,6 +430,15 @@ int64_t rustty_hwy_detect_targets(void) {
   t |= TGT_NEON_NO_AES;
 
   // Linux exposes AArch64 features via getauxval(AT_HWCAP / AT_HWCAP2).
+  //
+  // PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS UD291. The reference
+  // reads these through Zig's std.os.linux.getauxval (detect/linux.zig), which
+  // in a libc-linked program (every Ghostty build on Linux, and libghostty-vt as
+  // a library) reads an auxv pointer only Zig's own _start sets, so it returns 0
+  // and no feature is ever detected (measured on Linux aarch64: 0x20000000,
+  // NEON_WITHOUT_AES only, against 0x34000000 from the same Zig code built
+  // without libc). libc's getauxval gives the values the reference's code is
+  // written to read; the same applies to the ppc, s390x and riscv arms below.
   const unsigned long AT_HWCAP_ = 16;
   const unsigned long AT_HWCAP2_ = 26;
 

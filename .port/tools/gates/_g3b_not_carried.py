@@ -438,6 +438,13 @@ ALL_CAPS_RE = re.compile(r"\b[A-Z][A-Z0-9_]+\b")
 # proper nouns. Anything else in capitals (an errno, a C macro, a constant) is
 # technical and disqualifies the row. Growing this list is a gate change (R5).
 ALL_CAPS_PROSE = frozenset({"NOTE", "XDG", "GNOME"})
+# Proper nouns that contain a digit: the whole token (word-bounded, exact case) is
+# prose, so it is removed before the digit and ALL-CAPS checks. `X11R6`, `X11_ATOM`,
+# `X12` and any other digit still disqualify the row. Added 2026-09-24 for the
+# user-ratified gag line `x11.zig:486` ("X11 is ugly"); growing this list is a gate
+# change (R5).
+PROPER_NOUN_TOKENS = frozenset({"X11"})
+_PROPER_NOUN_RE = re.compile(r"(?<![A-Za-z0-9_])(?:" + "|".join(sorted(PROPER_NOUN_TOKENS)) + r")(?![A-Za-z0-9_])")
 
 
 # W2 (S-8e review): plain-English technical words. A gag line may not use one
@@ -487,8 +494,9 @@ def technical_words(text, near_code):
 
 
 def gag_violations(text, reason, near_code=frozenset()):
-    out = [f"gag-prose text contains {what}" for rx, what in TECHNICAL_RES if rx.search(text)]
-    caps = [w for w in ALL_CAPS_RE.findall(text) if w not in ALL_CAPS_PROSE]
+    scan = _PROPER_NOUN_RE.sub(" ", text)
+    out = [f"gag-prose text contains {what}" for rx, what in TECHNICAL_RES if rx.search(scan)]
+    caps = [w for w in ALL_CAPS_RE.findall(scan) if w not in ALL_CAPS_PROSE]
     if caps:
         out.append(f"gag-prose text contains ALL-CAPS token(s) {caps}")
     tech = technical_words(text, near_code)

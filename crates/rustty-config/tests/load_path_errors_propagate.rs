@@ -65,9 +65,47 @@ fn load_default_files_returns_the_xdg_path_error() {
 /// directory that no longer exists makes `realpath(".")` fail, and the reference
 /// returns that error. The port used `.ok()...unwrap_or_default()` and expanded
 /// against an empty base.
+///
+/// On Linux and FreeBSD `loadCliArgs` returns before the realpath when argv has
+/// one element (`.linux, .freebsd => if (std.os.argv.len <= 1) return`), and
+/// `cargo test --workspace` starts this binary with no arguments. There the test
+/// re-runs itself in a child whose argv is longer (the libtest filter), so the
+/// body always reaches the realpath; the parent asserts the child ran it.
 #[cfg(unix)]
 #[test]
 fn load_cli_args_returns_the_cwd_realpath_error() {
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    {
+        const CHILD: &str = "RUSTTY_S74F3_CWD_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let out = std::process::Command::new(std::env::current_exe().expect("current_exe"))
+                .args([
+                    "load_cli_args_returns_the_cwd_realpath_error",
+                    "--exact",
+                    "--test-threads=1",
+                ])
+                .env(CHILD, "1")
+                .output()
+                .expect("spawn the child");
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            assert!(
+                out.status.success(),
+                "the child failed ({:?})\nstdout: {stdout}\nstderr: {stderr}",
+                out.status
+            );
+            assert!(
+                stdout.contains("test result: ok. 1 passed"),
+                "the child must run exactly this test\nstdout: {stdout}"
+            );
+            return;
+        }
+        assert!(
+            std::env::args_os().len() > 1,
+            "the child's argv must be longer than one element or loadCliArgs takes its fast path"
+        );
+    }
+
     let _guard = SERIAL
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);

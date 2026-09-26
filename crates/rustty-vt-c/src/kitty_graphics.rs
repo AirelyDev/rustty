@@ -35,7 +35,9 @@ use rustty_vt::kitty::graphics_storage::{ImageStorage, Location, Placement, Plac
 use rustty_vt::options::KITTY_GRAPHICS;
 use rustty_vt::point::Tag;
 use rustty_vt::terminal::Terminal as ZigTerminal;
-use std::collections::hash_map;
+// (the storage maps are `hashbrown` maps over the allocator handle, parity
+// tail S7-4; `graphics_storage::PlacementMapIter` is their iterator.)
+use rustty_vt::kitty::graphics_storage::PlacementMapIter;
 use std::ffi::c_void;
 use std::os::raw::c_int;
 
@@ -108,7 +110,7 @@ pub type PlacementIterator = *mut PlacementIteratorWrapper;
 // `cwrap`), mirroring the reference's stored `alloc: std.mem.Allocator`.
 pub struct PlacementIteratorWrapper {
     alloc: Option<CAllocator>,
-    inner: Option<hash_map::Iter<'static, PlacementKey, Placement>>,
+    inner: Option<PlacementMapIter<'static>>,
     entry: Option<(*const PlacementKey, *const Placement)>,
     layer_filter: PlacementLayer,
 }
@@ -268,10 +270,8 @@ unsafe fn get_typed(graphics_: KittyGraphics, data: Data, out: *mut c_void) -> R
             // iterator (see `PlacementIteratorWrapper` PORT NOTE); the storage
             // outlives the iterator.
             // SAFETY: `storage` is the live `ImageStorage` behind the handle.
-            let iter: hash_map::Iter<'_, PlacementKey, Placement> =
-                unsafe { (*storage).placements.iter() };
-            let iter_static: hash_map::Iter<'static, PlacementKey, Placement> =
-                unsafe { core::mem::transmute(iter) };
+            let iter: PlacementMapIter<'_> = unsafe { (*storage).placements.iter() };
+            let iter_static: PlacementMapIter<'static> = unsafe { core::mem::transmute(iter) };
             // SAFETY: `it` is a live wrapper (checked non-null above).
             unsafe {
                 (*it).inner = Some(iter_static);
@@ -2149,11 +2149,10 @@ mod tests {
 
             // const alloc = lib.alloc.default(&lib.alloc.test_allocator);
             // const pending = try graphics.addPendingImage(testing.io, alloc, terminal_c.zigTerminal(t).?.screens.active, .{ ... });
-            //
-            // PORT NOTE (F-008 Tier-2 residual): the storage internals allocate
-            // through `Global` in rustty, so the direct storage call takes the
-            // internals allocator (see DEFERRALS.md "F-008/W12-01 Tier 2").
-            let alloc = rustty_vt::alloc::Global;
+            // (parity tail S7-4: the storage allocates through the terminal's
+            // allocator, the caller's, as the reference's does.)
+            // SAFETY: `ta` outlives the terminal and this call.
+            let alloc = unsafe { rustty_vt::alloc::default(Some(ta)) };
             let storage = graphics as *mut rustty_vt::kitty::graphics_storage::ImageStorage;
             let screen = unsafe { (*terminal_c::zig_terminal(t)).screens.active };
             let pending = unsafe {
@@ -2214,8 +2213,8 @@ mod tests {
             });
 
             // const pixels = try alloc.dupe(u8, "*" ** 12);
-            let pixels: Vec<u8> = b"************".to_vec();
-            let expected = pixels.clone();
+            let pixels = rustty_vt::alloc::try_dupe(alloc, b"************").unwrap();
+            let expected = pixels.to_vec();
             // try testing.expect(pending.complete(graphics, testing.io, pixels));
             assert!(unsafe { pending.complete(&mut *storage, pixels) });
             // const completed_img = image_get_handle(graphics, 42);

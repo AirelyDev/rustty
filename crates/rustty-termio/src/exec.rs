@@ -601,7 +601,8 @@ impl Exec {
         // (surface.rs), whose sole toucher of `*io` for `processOutput` is this
         // read thread, between spawn and `threadExit`'s `join()`; blueprint §3.)
         let read_args = ReadThreadArgs::<M>(pty_fds.read, io, pipe[0]);
-        let read_thread_builder = std::thread::Builder::new().name("io-reader".to_string());
+        let read_thread_builder =
+            rustty_zigstd::thread::spawn_config().name("io-reader".to_string());
         // (Test builds only: `tests::FAIL_READ_THREAD_SPAWN` makes this spawn
         // fail for real, with a stack no thread can get, to drive the error arm.)
         #[cfg(test)]
@@ -4786,7 +4787,7 @@ impl ReadThread {
         std::thread::scope(|scope| {
             let gather_fd = fd;
             let gather_quit = quit;
-            let mut builder = std::thread::Builder::new();
+            let mut builder = rustty_zigstd::thread::spawn_config();
             if cfg!(not(any(target_os = "macos", target_os = "ios"))) {
                 // if (comptime !builtin.os.tag.isDarwin()) gather_thread.setName("io-gather");
                 builder = builder.name("io-gather".to_string());
@@ -6049,10 +6050,10 @@ mod tests {
     /// parked in its outer poll, is still read. The hook writes `second` and
     /// shuts down the writing side right before that poll, so the poll reports
     /// `POLLIN | POLLHUP` with `second` unread (measured on macOS for a Unix
-    /// socket pair after `shutdown(SHUT_WR)`, and for a pipe after `close`:
-    /// `revents == 0x11`; on Linux a pty master reports the same word when the
-    /// child writes and exits, UD19). The reference returns on `POLLHUP` alone
-    /// and drops `second`.
+    /// socket pair after `shutdown(SHUT_WR)` or `shutdown(SHUT_RDWR)`, and for a
+    /// pipe after `close`: `revents == 0x11`; on Linux a pty master reports the
+    /// same word when the child writes and exits, UD19). The reference returns
+    /// on `POLLHUP` alone and drops `second`.
     #[cfg(not(windows))]
     #[test]
     fn gather_stage_reads_output_that_arrives_with_the_hangup() {
@@ -6060,7 +6061,7 @@ mod tests {
         use std::sync::Arc;
 
         // The data fd is a socket pair, not a pipe: the hangup is made with
-        // `shutdown(SHUT_WR)`, which acts on the socket itself. Closing a pipe's
+        // `shutdown(SHUT_RDWR)`, which acts on the socket itself. Closing a pipe's
         // write end is not enough in this binary, where other tests fork
         // children that can hold a copy of it for a moment, and then the poll
         // can see the data before the hangup (measured: an extra outer poll).
@@ -6096,7 +6097,12 @@ mod tests {
                             unsafe { libc::write(data_w, second.as_ptr().cast(), second.len()) },
                             second.len() as isize
                         );
-                        assert_eq!(unsafe { libc::shutdown(data_w, libc::SHUT_WR) }, 0);
+                        // SHUT_RDWR, not SHUT_WR: Linux reports `POLLHUP` on a
+                        // Unix stream socket only once both directions are shut
+                        // (a peer's SHUT_WR alone gives `POLLIN`, and read then
+                        // returns 0 forever, so the gather stage never ends).
+                        // macOS reports `POLLIN | POLLHUP` for either.
+                        assert_eq!(unsafe { libc::shutdown(data_w, libc::SHUT_RDWR) }, 0);
                     }
                 }),
             ));

@@ -991,11 +991,11 @@ impl Thread {
                 // (the `defer free` is the owned `pw` Vec dropping at arm end.)
                 Message::KittyClipboardGrantRead(v) => unsafe {
                     (*io).kittyClipboardGrant(&v.pw, rustty_vt::kitty::clipboard::Direction::Read)
-                },
+                }?,
                 // .kitty_clipboard_grant_write => |v| { ... .write ... },
                 Message::KittyClipboardGrantWrite(v) => unsafe {
                     (*io).kittyClipboardGrant(&v.pw, rustty_vt::kitty::clipboard::Direction::Write)
-                },
+                }?,
                 // .start_synchronized_output => self.startSynchronizedOutput(cb),
                 Message::StartSynchronizedOutput => Self::startSynchronizedOutput(self_, cb),
                 // .linefeed_mode => |v| self.flags.linefeed_mode = v,
@@ -1371,7 +1371,7 @@ fn failure_screen_text(err: crate::Error) -> String {
         ),
 
         // else => {
-        crate::Error::Other => format!(
+        crate::Error::Other | crate::Error::OutOfMemory => format!(
             "error starting IO thread: {err}\n\
              \n\
              The underlying shell or command was unable to be started.\n\

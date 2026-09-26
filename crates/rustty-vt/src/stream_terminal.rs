@@ -142,7 +142,7 @@ pub struct Handler<'a> {
     // kitty_clipboard_write: ?*kitty_clipboard.WriteState = null,
     // PORT NOTE: `?*` (manual create/destroy) -> `Option<Box<_>>`; the abort
     // and finish paths become `take()` + drop.
-    pub kitty_clipboard_write: Option<Box<kitty::clipboard::WriteState>>,
+    pub kitty_clipboard_write: Option<crate::alloc::ABox<kitty::clipboard::WriteState>>,
 
     /// Kitty clipboard protocol (OSC 5522) session password grants,
     /// recorded when a clipboard_read or clipboard_write reply asks to
@@ -409,130 +409,6 @@ impl<'a> Default for Effects<'a> {
     }
 }
 
-// PORT NOTE (P3-W4 T5): a fault-injection seam for `do_color_operation`. See
-// the PORT FINDING inside that function: rustty's response writer cannot fail,
-// so without this the "graceful arms do not set `semantic_failure`" control
-// would pass whether or not the re-partition was ported. Same
-// `#[cfg(test)] thread_local!` idiom as the crate's other tripwire modules.
-#[cfg(test)]
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub(crate) enum ColorOperationFp {
-    Respond,
-}
-
-#[cfg(test)]
-thread_local! {
-    pub(crate) static COLOR_OPERATION_TW: core::cell::RefCell<
-        rustty_util::tripwire::Module<ColorOperationFp, crate::pagelist::OutOfMemory>,
-    > = core::cell::RefCell::new(rustty_util::tripwire::module());
-}
-
-#[cfg(test)]
-#[inline]
-fn color_operation_tw_check(point: ColorOperationFp) -> Result<(), crate::pagelist::OutOfMemory> {
-    COLOR_OPERATION_TW.with(|tw| tw.borrow_mut().check(point))
-}
-
-#[cfg(test)]
-pub(crate) fn color_operation_tw_error_always(point: ColorOperationFp) {
-    COLOR_OPERATION_TW.with(|tw| {
-        tw.borrow_mut()
-            .errorAlways(point, crate::pagelist::OutOfMemory)
-    });
-}
-
-#[cfg(test)]
-pub(crate) fn color_operation_tw_end(
-    mode: rustty_util::tripwire::ResetMode,
-) -> Result<(), rustty_util::tripwire::UntrippedError> {
-    COLOR_OPERATION_TW.with(|tw| tw.borrow_mut().end(mode))
-}
-
-// PORT NOTE: a fault-injection seam for the OSC 52 decode scratch allocation in
-// `clipboardContents`. The reference injects `testing.failing_allocator` by
-// swapping `t.screens.active.alloc` (oracle test "clipboard_write allocation
-// failure is ignored", stream_terminal.zig:2309-2339); the terminal's
-// internals still run on the Rust global heap (the Global arm of
-// `crate::alloc::Allocator`; S7-3/S7-4 route them), so the allocator itself
-// cannot be swapped out. This tripwire is the port's stand-in and sits exactly
-// where the reference's `try alloc.alloc(u8, decoded_len)` can fail. Same
-// `#[cfg(test)] thread_local!` idiom as `COLOR_OPERATION_TW` above.
-#[cfg(test)]
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub(crate) enum ClipboardContentsFp {
-    DecodeScratch,
-}
-
-#[cfg(test)]
-thread_local! {
-    pub(crate) static CLIPBOARD_CONTENTS_TW: core::cell::RefCell<
-        rustty_util::tripwire::Module<ClipboardContentsFp, crate::pagelist::OutOfMemory>,
-    > = core::cell::RefCell::new(rustty_util::tripwire::module());
-}
-
-#[cfg(test)]
-#[inline]
-fn clipboard_contents_tw_check(
-    point: ClipboardContentsFp,
-) -> Result<(), crate::pagelist::OutOfMemory> {
-    CLIPBOARD_CONTENTS_TW.with(|tw| tw.borrow_mut().check(point))
-}
-
-#[cfg(test)]
-pub(crate) fn clipboard_contents_tw_error_always(point: ClipboardContentsFp) {
-    CLIPBOARD_CONTENTS_TW.with(|tw| {
-        tw.borrow_mut()
-            .errorAlways(point, crate::pagelist::OutOfMemory)
-    });
-}
-
-#[cfg(test)]
-pub(crate) fn clipboard_contents_tw_end(
-    mode: rustty_util::tripwire::ResetMode,
-) -> Result<(), rustty_util::tripwire::UntrippedError> {
-    CLIPBOARD_CONTENTS_TW.with(|tw| tw.borrow_mut().end(mode))
-}
-
-// PORT NOTE: a fault-injection seam for the Kitty clipboard (OSC 5522) write
-// transaction allocation in `kitty_clipboard_write_begin`. The reference test
-// "kitty clipboard allocation failure is ignored" swaps `t.screens.active.alloc`
-// for `testing.failing_allocator` so `alloc.create(WriteState)` fails; rustty's
-// `Box::new` cannot fail, so this tripwire sits exactly where that `try` can.
-// Same `#[cfg(test)] thread_local!` idiom as `CLIPBOARD_CONTENTS_TW` above.
-#[cfg(test)]
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub(crate) enum KittyClipboardFp {
-    CreateWriteState,
-}
-
-#[cfg(test)]
-thread_local! {
-    pub(crate) static KITTY_CLIPBOARD_TW: core::cell::RefCell<
-        rustty_util::tripwire::Module<KittyClipboardFp, crate::pagelist::OutOfMemory>,
-    > = core::cell::RefCell::new(rustty_util::tripwire::module());
-}
-
-#[cfg(test)]
-#[inline]
-fn kitty_clipboard_tw_check(point: KittyClipboardFp) -> Result<(), crate::pagelist::OutOfMemory> {
-    KITTY_CLIPBOARD_TW.with(|tw| tw.borrow_mut().check(point))
-}
-
-#[cfg(test)]
-pub(crate) fn kitty_clipboard_tw_error_always(point: KittyClipboardFp) {
-    KITTY_CLIPBOARD_TW.with(|tw| {
-        tw.borrow_mut()
-            .errorAlways(point, crate::pagelist::OutOfMemory)
-    });
-}
-
-#[cfg(test)]
-pub(crate) fn kitty_clipboard_tw_end(
-    mode: rustty_util::tripwire::ResetMode,
-) -> Result<(), rustty_util::tripwire::UntrippedError> {
-    KITTY_CLIPBOARD_TW.with(|tw| tw.borrow_mut().end(mode))
-}
-
 impl<'a> Handler<'a> {
     // pub fn init(terminal: *Terminal) Handler {
     //     return .{ .terminal = terminal };
@@ -765,9 +641,14 @@ impl<'a> Handler<'a> {
         let terminal: &Terminal = unsafe { &*self.terminal };
         let io = terminal.io;
 
+        // .alloc = self.terminal.gpa(),
+        // SAFETY: the active screen is live for the terminal's life; a raw
+        // read of its allocator field (`Terminal::gpa` without `&mut`).
+        let alloc = unsafe { (*terminal.screens.active).alloc };
         let result = paste_pkg::paste(
             paste_pkg::Context {
                 terminal,
+                alloc,
                 // Paste events need the program's follow-up Kitty
                 // clipboard read served.
                 // .kitty_clipboard = if (self.effects.clipboard_read != null) .{
@@ -821,13 +702,17 @@ impl<'a> Handler<'a> {
     //     terminator: osc.Terminator,
     // ) !void
     //
-    // PORT NOTE: the reference is `!void` and its dispatch arm swallows the
-    // error ("Clipboard operations are external effects, not terminal
-    // state."); rustty's arm is infallible — the fallible decode-scratch
-    // allocation is ported over the `CLIPBOARD_CONTENTS_TW` seam (see its
-    // module note), and every failure returns without invoking the effect,
-    // exactly what the reference's `try` + graceful dispatch catch does.
-    fn do_clipboard_contents(&mut self, kind: u8, data: &[u8], terminator: osc::Terminator) {
+    // PORT NOTE: the reference is `!void` and its dispatch arm logs the error
+    // ("Clipboard operations are external effects, not terminal state."). The
+    // decode scratch is allocated through the terminal's `gpa()` (parity tail
+    // S7-4 retired the `CLIPBOARD_CONTENTS_TW` stand-in); its failure returns
+    // `error.OutOfMemory` without invoking the effect.
+    fn do_clipboard_contents(
+        &mut self,
+        kind: u8,
+        data: &[u8],
+        terminator: osc::Terminator,
+    ) -> Result<(), crate::alloc::OutOfMemory> {
         // const location: clipboard.Location = switch (kind) { ... };
         let location = match kind {
             b's' => clipboard::Location::Selection,
@@ -838,12 +723,12 @@ impl<'a> Handler<'a> {
         // OSC 52 uses a "?" payload to request the clipboard contents.
         if data.len() == 1 && data[0] == b'?' {
             self.do_clipboard_read(location, terminator);
-            return;
+            return Ok(());
         }
 
         // const func = self.effects.clipboard_write orelse return;
         let Some(func) = self.effects.clipboard_write else {
-            return;
+            return Ok(());
         };
 
         // OSC 52 uses an empty payload to clear the selected clipboard.
@@ -860,7 +745,7 @@ impl<'a> Handler<'a> {
                     reply_fn: ignore_write_reply,
                 },
             );
-            return;
+            return Ok(());
         }
 
         // Decode the base64 payload with the SIMD decoder (the same one
@@ -875,19 +760,8 @@ impl<'a> Handler<'a> {
         // const buf = try alloc.alloc(u8, simd.base64.maxLen(data));
         // defer alloc.free(buf);
         let alloc = self.term().gpa();
-        let max_len = rustty_simd::base64::max_len(data);
-        let mut buf: allocator_api2::vec::Vec<u8, _> = allocator_api2::vec::Vec::new_in(alloc);
-        #[cfg(test)]
-        if clipboard_contents_tw_check(ClipboardContentsFp::DecodeScratch).is_err() {
-            return;
-        }
-        if buf.try_reserve_exact(max_len).is_err() {
-            return;
-        }
-        // The capacity above is already reserved, so this never allocates.
-        // (`resize_copy`: allocator_api2's `resize` is a per-element loop,
-        // N261; banned in this crate by clippy.toml.)
-        crate::alloc::CopyVecExt::resize_copy(&mut buf, max_len, 0);
+        let mut buf =
+            kitty::clipboard_command::alloc_buf(alloc, rustty_simd::base64::max_len(data))?;
         // const decoded = simd.base64.decodeStrict(data, buf, .optional) catch {
         //     log.warn("OSC 52 clipboard write is not valid base64, ignoring", .{});
         //     return;
@@ -898,7 +772,7 @@ impl<'a> Handler<'a> {
             rustty_simd::base64::Padding::Optional,
         ) else {
             log::warn!(target: LOG_SCOPE, "OSC 52 clipboard write is not valid base64, ignoring");
-            return;
+            return Ok(());
         };
 
         // const contents = [_]clipboard.Content{.{ .mime = "text/plain", .data = decoded }};
@@ -918,6 +792,7 @@ impl<'a> Handler<'a> {
                 reply_fn: ignore_write_reply,
             },
         );
+        Ok(())
     }
 
     // fn clipboardRead(
@@ -955,26 +830,38 @@ impl<'a> Handler<'a> {
         // The program is waiting on us, so a callback that returned
         // without a (successful) reply gets an empty clipboard rather
         // than silence.
-        // if (!state.replied) state.respond("") catch ...;
+        // if (!state.replied) state.respond("") catch |err| {
+        //     log.warn("error replying to clipboard read err={}", .{err});
+        // };
         if !state.replied {
-            state.respond(self, b"");
+            if let Err(err) = state.respond(self, b"") {
+                log::warn!(target: LOG_SCOPE, "error replying to clipboard read err={err:?}");
+            }
         }
     }
 
     /// Handle one Kitty clipboard protocol (OSC 5522) packet.
     // fn kittyClipboard(self: *Handler, v: Action.Value(.kitty_clipboard))
     //     error{OutOfMemory}!void
-    fn do_kitty_clipboard(&mut self, v: &osc::KittyClipboardProtocol) {
+    fn do_kitty_clipboard(
+        &mut self,
+        v: &osc::KittyClipboardProtocol,
+    ) -> Result<(), crate::alloc::OutOfMemory> {
         // Decode and validate the metadata.
         // var arena: std.heap.ArenaAllocator = .init(self.terminal.gpa());
         // defer arena.deinit();
         // (PORT NOTE: the arena scopes the Metadata allocations; the Rust
-        // Metadata owns its Vecs and frees on drop.)
+        // Metadata owns its values, allocated through `gpa()`, and frees them
+        // on drop at the end of this packet.)
         use crate::osc::parsers::kitty_clipboard_protocol::Operation;
-        let meta = match kitty::clipboard::Metadata::parse(&v.metadata) {
+        let gpa = self.term().gpa();
+        let meta = match kitty::clipboard::Metadata::parse(gpa, &v.metadata) {
             Ok(Some(meta)) => meta,
-            Ok(None) => return,
-            Err(kitty::clipboard::ParseError::OutOfMemory) => return,
+            Ok(None) => return Ok(()),
+            // error.OutOfMemory => return error.OutOfMemory,
+            Err(kitty::clipboard::ParseError::OutOfMemory) => {
+                return Err(crate::alloc::OutOfMemory)
+            }
             Err(kitty::clipboard::ParseError::InvalidValue) => {
                 // const state = self.kitty_clipboard_write orelse return;
                 // switch (kitty_clipboard.Metadata.operation(v.metadata) orelse return) {
@@ -982,7 +869,7 @@ impl<'a> Handler<'a> {
                 //     .read, .write => {},
                 // }
                 if self.kitty_clipboard_write.is_none() {
-                    return;
+                    return Ok(());
                 }
                 match kitty::clipboard::Metadata::operation(&v.metadata) {
                     Some(Operation::Wdata) | Some(Operation::Walias) => {
@@ -996,7 +883,7 @@ impl<'a> Handler<'a> {
                     }
                     Some(Operation::Read) | Some(Operation::Write) | None => {}
                 }
-                return;
+                return Ok(());
             }
         };
 
@@ -1016,15 +903,25 @@ impl<'a> Handler<'a> {
         meta: &kitty::clipboard::Metadata,
         payload: &[u8],
         terminator: osc::Terminator,
-    ) {
+    ) -> Result<(), crate::alloc::OutOfMemory> {
         // The payload is the requested MIME list. Kitty drops a read
         // request with an undecodable payload without any response.
-        let decoded = match kitty::clipboard::Payload::init(payload) {
+        // const alloc = self.terminal.gpa();
+        // const decoded = kitty_clipboard.Payload.init(alloc, payload) catch |err| switch (err) {
+        //     error.OutOfMemory => return error.OutOfMemory,
+        //     error.Invalid => return,
+        // };
+        // defer decoded.deinit(alloc);
+        let alloc = self.term().gpa();
+        let decoded = match kitty::clipboard::Payload::init(alloc, payload) {
             Ok(decoded) => decoded,
-            Err(_) => return,
+            Err(kitty::clipboard_command::PayloadError::OutOfMemory) => {
+                return Err(crate::alloc::OutOfMemory)
+            }
+            Err(kitty::clipboard_command::PayloadError::Invalid) => return Ok(()),
         };
         if !decoded.is_valid_utf8() {
-            return;
+            return Ok(());
         }
 
         // Without a clipboard_read effect nothing can serve the read.
@@ -1038,7 +935,7 @@ impl<'a> Handler<'a> {
                     kitty::clipboard::Status::Eperm,
                 )
             });
-            return;
+            return Ok(());
         };
 
         // The targets type ('.') asks for the listing of available
@@ -1076,7 +973,7 @@ impl<'a> Handler<'a> {
         let granted = !kitty::clipboard::read_prompt_exempt(mimes.len())
             && self
                 .kitty_clipboard_grants
-                .use_(pw, kitty::clipboard::Direction::Read);
+                .use_(alloc, pw, kitty::clipboard::Direction::Read);
 
         // var state: KittyClipboardReadState = .{ ... };
         let mut state = KittyClipboardReadState {
@@ -1109,6 +1006,7 @@ impl<'a> Handler<'a> {
         if !state.replied {
             state.respond_status(self, kitty::clipboard::Status::Eperm);
         }
+        Ok(())
     }
 
     // fn kittyClipboardWriteBegin(self, meta, terminator) error{OutOfMemory}!void
@@ -1116,7 +1014,7 @@ impl<'a> Handler<'a> {
         &mut self,
         meta: &kitty::clipboard::Metadata,
         terminator: osc::Terminator,
-    ) {
+    ) -> Result<(), crate::alloc::OutOfMemory> {
         // A new write silently replaces any in-flight transaction.
         self.kitty_clipboard_abort();
 
@@ -1132,7 +1030,7 @@ impl<'a> Handler<'a> {
                     kitty::clipboard::Status::Enosys,
                 )
             });
-            return;
+            return Ok(());
         }
 
         // Setup our write state
@@ -1140,22 +1038,22 @@ impl<'a> Handler<'a> {
         // const state = try alloc.create(kitty_clipboard.WriteState);
         // errdefer alloc.destroy(state);
         // state.* = try .init(alloc, meta, .{ .max_size = ... });
+        // self.kitty_clipboard_write = state;
         //
-        // PORT NOTE: the `try alloc.create` OOM (whose failure the dispatch
-        // arm swallows) is ported over the `KITTY_CLIPBOARD_TW` seam — on
-        // injected failure we return without creating the transaction, which
-        // is exactly the reference's propagated-OOM end state.
-        #[cfg(test)]
-        if kitty_clipboard_tw_check(KittyClipboardFp::CreateWriteState).is_err() {
-            return;
-        }
-        let state = Box::new(kitty::clipboard::WriteState::init(
+        // PORT NOTE: the state is built first and then moved into its
+        // allocation; a failed `init` allocates no storage, and a failed
+        // `create` drops the built state (the errdefer).
+        let alloc = self.term().gpa();
+        let state = kitty::clipboard::WriteState::init(
+            alloc,
             meta,
             kitty::clipboard::WriteOptions {
                 max_size: self.kitty_clipboard_write_max_bytes,
             },
-        ));
+        )?;
+        let state = crate::alloc::try_create(alloc, state)?;
         self.kitty_clipboard_write = Some(state);
+        Ok(())
     }
 
     // fn kittyClipboardData(self, meta, payload, terminator) error{OutOfMemory}!void
@@ -1164,14 +1062,14 @@ impl<'a> Handler<'a> {
         meta: &kitty::clipboard::Metadata,
         payload: &[u8],
         terminator: osc::Terminator,
-    ) {
+    ) -> Result<(), crate::alloc::OutOfMemory> {
         // Data without a transaction is silently ignored.
         // const state = self.kitty_clipboard_write orelse return;
         // PORT NOTE: the Box is taken out of the slot while it is operated on
         // (and put back on success) so the failure paths can respond through
         // `&mut self` without aliasing the stored transaction.
         let Some(mut state) = self.kitty_clipboard_write.take() else {
-            return;
+            return Ok(());
         };
 
         // A wdata packet without a MIME type commits the transaction.
@@ -1179,15 +1077,16 @@ impl<'a> Handler<'a> {
             return self.kitty_clipboard_commit(state, terminator);
         }
 
-        match state.data(meta, payload) {
+        // state.data(self.terminal.gpa(), meta, payload) catch |err| switch (err) { ... };
+        let gpa = self.term().gpa();
+        match state.data(gpa, meta, payload) {
             Ok(()) => self.kitty_clipboard_write = Some(state),
 
             // Failing to spool matches kitty's EIO for a failed buffer
             // write.
-            // (error.OutOfMemory: the reference re-raises after finishing;
-            // rustty's spool allocation is infallible, carried for parity.)
             Err(kitty::clipboard::DataError::OutOfMemory) => {
                 self.kitty_clipboard_finish(&state, kitty::clipboard::Status::Eio, terminator);
+                return Err(crate::alloc::OutOfMemory);
             }
 
             // Data over the write limit aborts the transaction and is
@@ -1201,6 +1100,7 @@ impl<'a> Handler<'a> {
                 self.kitty_clipboard_finish(&state, kitty::clipboard::Status::Einval, terminator);
             }
         }
+        Ok(())
     }
 
     // fn kittyClipboardAlias(self, meta, payload, terminator) error{OutOfMemory}!void
@@ -1209,26 +1109,26 @@ impl<'a> Handler<'a> {
         meta: &kitty::clipboard::Metadata,
         payload: &[u8],
         terminator: osc::Terminator,
-    ) {
+    ) -> Result<(), crate::alloc::OutOfMemory> {
         // Aliases without a transaction are silently ignored. Once a
         // transaction exists, a missing target MIME type is invalid and
         // aborts the transaction.
         let Some(mut state) = self.kitty_clipboard_write.take() else {
-            return;
+            return Ok(());
         };
         if meta.mime.is_empty() {
-            return self.kitty_clipboard_finish(
-                &state,
-                kitty::clipboard::Status::Einval,
-                terminator,
-            );
+            self.kitty_clipboard_finish(&state, kitty::clipboard::Status::Einval, terminator);
+            return Ok(());
         }
 
-        match state.alias(meta, payload) {
+        // state.alias(self.terminal.gpa(), meta, payload) catch |err| switch (err) { ... };
+        let gpa = self.term().gpa();
+        match state.alias(gpa, meta, payload) {
             Ok(()) => self.kitty_clipboard_write = Some(state),
 
             Err(kitty::clipboard::AliasError::OutOfMemory) => {
                 self.kitty_clipboard_finish(&state, kitty::clipboard::Status::Eio, terminator);
+                return Err(crate::alloc::OutOfMemory);
             }
 
             // An undecodable alias payload aborts the transaction.
@@ -1236,81 +1136,94 @@ impl<'a> Handler<'a> {
                 self.kitty_clipboard_finish(&state, kitty::clipboard::Status::Einval, terminator);
             }
         }
+        Ok(())
     }
 
     // fn kittyClipboardCommit(self, state, terminator) error{OutOfMemory}!void
     fn kitty_clipboard_commit(
         &mut self,
-        mut state: Box<kitty::clipboard::WriteState>,
+        mut state: crate::alloc::ABox<kitty::clipboard::WriteState>,
         terminator: osc::Terminator,
-    ) {
+    ) -> Result<(), crate::alloc::OutOfMemory> {
+        // const alloc = self.terminal.gpa();
+        let alloc = self.term().gpa();
         // const committed = state.commit(alloc) catch |err| switch (err) { ... };
         // defer committed.deinit(alloc);
         //
         // PORT NOTE: `commit` borrows the transaction, so the effect is
         // invoked while `committed` is live and the replied status is carried
-        // out of that scope.
-        let status: Option<kitty::clipboard::Status> = {
-            let committed = match state.commit() {
-                Ok(committed) => committed,
-                Err(kitty::clipboard::CommitError::OutOfMemory) => {
-                    self.kitty_clipboard_finish(&state, kitty::clipboard::Status::Eio, terminator);
-                    return;
+        // out of that scope. The failure arms (a commit error, or `None` for
+        // the ENOSYS arm) answer after the match, once that borrow has ended.
+        let committed_status: Result<
+            Option<kitty::clipboard::Status>,
+            Option<kitty::clipboard::CommitError>,
+        > = match state.commit(alloc) {
+            Err(err) => Err(Some(err)),
+            Ok(committed) => match self.effects.clipboard_write {
+                // The effect can't be null here (checked when the transaction
+                // began) but if an embedder cleared it mid-transaction that's
+                // ENOSYS.
+                None => {
+                    committed.deinit(alloc);
+                    Err(None)
                 }
-
-                // The last MIME type's payload stream was not correctly
-                // padded, which aborts the transaction.
-                Err(kitty::clipboard::CommitError::Invalid) => {
-                    self.kitty_clipboard_finish(
-                        &state,
-                        kitty::clipboard::Status::Einval,
-                        terminator,
+                Some(func) => {
+                    // Per the spec a password without a name is no password. A
+                    // stored grant for it lets the embedder skip its prompt.
+                    let pw: &[u8] = if !committed.name.is_empty() {
+                        committed.pw
+                    } else {
+                        b""
+                    };
+                    let granted = self.kitty_clipboard_grants.use_(
+                        alloc,
+                        pw,
+                        kitty::clipboard::Direction::Write,
                     );
-                    return;
+
+                    // var reply_state: KittyClipboardWriteReplyState = .{ .handler = self, .pw = pw };
+                    let mut reply_state = KittyClipboardWriteReplyState {
+                        handler: core::ptr::from_ref(&*self).cast(),
+                        pw,
+                        status: None,
+                    };
+                    func(
+                        self,
+                        clipboard::Write {
+                            location: committed.loc,
+                            contents: &committed.contents,
+                            name: committed.name,
+                            granted,
+                            can_remember: !pw.is_empty(),
+                            reply_ctx: (&mut reply_state) as *mut KittyClipboardWriteReplyState
+                                as *mut core::ffi::c_void,
+                            reply_fn: KittyClipboardWriteReplyState::reply,
+                        },
+                    );
+
+                    let status = reply_state.status;
+                    committed.deinit(alloc);
+                    Ok(status)
                 }
-            };
-
-            // The effect can't be null here (checked when the transaction
-            // began) but if an embedder cleared it mid-transaction that's
-            // ENOSYS.
-            let Some(func) = self.effects.clipboard_write else {
-                drop(committed);
+            },
+        };
+        let status = match committed_status {
+            Ok(status) => status,
+            Err(None) => {
                 self.kitty_clipboard_finish(&state, kitty::clipboard::Status::Enosys, terminator);
-                return;
-            };
+                return Ok(());
+            }
+            Err(Some(kitty::clipboard::CommitError::OutOfMemory)) => {
+                self.kitty_clipboard_finish(&state, kitty::clipboard::Status::Eio, terminator);
+                return Err(crate::alloc::OutOfMemory);
+            }
 
-            // Per the spec a password without a name is no password. A
-            // stored grant for it lets the embedder skip its prompt.
-            let pw: &[u8] = if !committed.name.is_empty() {
-                committed.pw
-            } else {
-                b""
-            };
-            let granted = self
-                .kitty_clipboard_grants
-                .use_(pw, kitty::clipboard::Direction::Write);
-
-            // var reply_state: KittyClipboardWriteReplyState = .{ .handler = self, .pw = pw };
-            let mut reply_state = KittyClipboardWriteReplyState {
-                handler: core::ptr::from_ref(&*self).cast(),
-                pw,
-                status: None,
-            };
-            func(
-                self,
-                clipboard::Write {
-                    location: committed.loc,
-                    contents: &committed.contents,
-                    name: committed.name,
-                    granted,
-                    can_remember: !pw.is_empty(),
-                    reply_ctx: (&mut reply_state) as *mut KittyClipboardWriteReplyState
-                        as *mut core::ffi::c_void,
-                    reply_fn: KittyClipboardWriteReplyState::reply,
-                },
-            );
-
-            reply_state.status
+            // The last MIME type's payload stream was not correctly
+            // padded, which aborts the transaction.
+            Err(Some(kitty::clipboard::CommitError::Invalid)) => {
+                self.kitty_clipboard_finish(&state, kitty::clipboard::Status::Einval, terminator);
+                return Ok(());
+            }
         };
 
         // The program is waiting on the commit status, so a callback
@@ -1321,6 +1234,7 @@ impl<'a> Handler<'a> {
             status.unwrap_or(kitty::clipboard::Status::Eperm),
             terminator,
         );
+        Ok(())
     }
 
     /// Answer a write transaction with its final status and drop it.
@@ -1356,8 +1270,12 @@ impl<'a> Handler<'a> {
     //     }
     // }
     fn kitty_clipboard_abort(&mut self) {
-        // PORT NOTE: dropping the Box is the deinit + destroy.
-        self.kitty_clipboard_write = None;
+        // PORT NOTE: dropping the box (allocated through `gpa()`) is the
+        // deinit + destroy through that allocator.
+        if let Some(state) = self.kitty_clipboard_write.take() {
+            let alloc = self.term().gpa();
+            crate::alloc::ABox::into_inner(state).deinit(alloc);
+        }
     }
 
     /// Encode and write a single response packet. Unlike kitty, which
@@ -1372,14 +1290,18 @@ impl<'a> Handler<'a> {
         // Our responses carry at most a status and the echoed id so
         // they virtually always fit on the stack.
         // var stack = std.heap.stackFallback(1024, self.terminal.gpa());
-        // PORT NOTE (R10): stackFallback is a Zig allocation idiom; the port
-        // encodes into an owned buffer (PERF(port): stackFallback).
-        let mut aw = crate::snapshot::io::AllocatingWriter::new();
+        // const alloc = stack.get();
+        // var aw: std.Io.Writer.Allocating = .init(alloc);
+        // defer aw.deinit();
+        // response.encode(&aw.writer) catch return;
+        // const resp = aw.toOwnedSliceSentinel(0) catch return;
+        // defer alloc.free(resp);
+        // self.writePty(resp);
+        let mut aw = crate::snapshot::io::StackFallbackWriter::<1024>::new_in(self.term().gpa());
         if response.encode(&mut aw).is_err() {
             return;
         }
-        let resp = aw.written().to_vec();
-        self.write_pty(&resp);
+        self.write_pty(aw.written());
     }
 
     /// Handle an OSC 72 drag and drop command.
@@ -1389,8 +1311,11 @@ impl<'a> Handler<'a> {
         // Responses are usually small (queries, errors) but data
         // serving can produce many chunks, so fall back to the heap.
         // var stack = std.heap.stackFallback(512, self.terminal.gpa());
-        // PORT NOTE (R10): PERF(port): stackFallback — owned Vec buffer.
-        let mut aw: Vec<u8> = Vec::new();
+        // const response_alloc = stack.get();
+        // var aw: std.Io.Writer.Allocating = .init(response_alloc);
+        // defer aw.deinit();
+        let response_alloc = self.term().gpa();
+        let mut aw = crate::snapshot::io::StackFallbackWriter::<512>::new_in(response_alloc);
 
         // The state is allocated on registration and owned by the
         // terminal, so it uses the terminal's allocator, not the
@@ -1405,8 +1330,8 @@ impl<'a> Handler<'a> {
             kitty::dnd::handle_command(slot, gpa, &mut aw, v)?
         };
 
-        if !aw.is_empty() {
-            self.write_pty(&aw);
+        if !aw.written().is_empty() {
+            self.write_pty(aw.written());
         }
 
         if let Some(ev) = event {
@@ -1863,7 +1788,7 @@ impl<'a> Handler<'a> {
         &mut self,
         requests: &osc::color::List,
         terminator: osc::Terminator,
-    ) -> Result<(), crate::pagelist::OutOfMemory> {
+    ) -> Result<(), crate::snapshot::io::WriteFailed> {
         // if (requests.count() == 0) return;
         if requests.is_empty() {
             return Ok(());
@@ -1875,22 +1800,15 @@ impl<'a> Handler<'a> {
         // defer response.deinit();
         // const writer = &response.writer;
         //
-        // PORT FINDING (P3-W4 T5): in the reference, EVERY `writer.print` below
-        // is fallible (an allocating writer), which is what makes
-        // `colorOperation` a `!void` the caller can `catch |err| log.warn(...)`.
-        // In rustty the writer is a `Vec<u8>` that ABORTS on OOM (the crate's
-        // DG5 policy), so this function has NO reachable error path at all —
-        // every `return` below is `Ok(())`. That makes the `439d35e27`
-        // re-partition ("color_operation stays graceful") IMPOSSIBLE to
-        // exercise by feeding a real failure, and any test that tries is
-        // VACUOUS. The fail point below is the injectable stand-in for the
-        // reference's fallible `writer.print`; it exists ONLY so the
-        // "a color-operation failure must NOT set `semantic_failure`" control
-        // is a real control. See `COLOR_OPERATION_TW`.
-        let mut response = Vec::new();
-
-        #[cfg(test)]
-        color_operation_tw_check(ColorOperationFp::Respond)?;
+        //
+        // PORT NOTE (parity tail S7-4): the response is a
+        // `StackFallbackWriter<1024>` over the terminal's `gpa()`, so a response
+        // past 1024 bytes spills through that allocator and a refused
+        // allocation fails the write (`error.WriteFailed`), which the dispatch
+        // arm logs. (This retires the `COLOR_OPERATION_TW` stand-in that P3-W4
+        // T5 added while the port's writer could not fail.)
+        let gpa = self.term().gpa();
+        let mut response = crate::snapshot::io::StackFallbackWriter::<1024>::new_in(gpa);
 
         // var it = requests.constIterator(0);
         // while (it.next()) |req| {
@@ -2005,7 +1923,7 @@ impl<'a> Handler<'a> {
                     let Some(c) = self.term().color_for_xterm(*target) else {
                         continue;
                     };
-                    Self::write_xterm_color_report(&mut response, target, c, terminator);
+                    Self::write_xterm_color_report(&mut response, target, c, terminator)?;
                 }
 
                 // .reset_special => {},
@@ -2018,8 +1936,8 @@ impl<'a> Handler<'a> {
         //     defer alloc.free(resp);
         //     self.writePty(resp);
         // }
-        if !response.is_empty() {
-            self.write_pty(&response);
+        if !response.written().is_empty() {
+            self.write_pty(response.written());
         }
 
         Ok(())
@@ -2032,11 +1950,12 @@ impl<'a> Handler<'a> {
     //     terminator: osc.Terminator,
     // ) !void
     fn write_xterm_color_report(
-        out: &mut Vec<u8>,
+        out: &mut crate::snapshot::io::StackFallbackWriter<1024>,
         target: &osc::color::Target,
         c: color::RGB,
         terminator: osc::Terminator,
-    ) {
+    ) -> Result<(), crate::snapshot::io::WriteFailed> {
+        use crate::snapshot::io::WriteFailed;
         use std::io::Write as _;
         match target {
             // .palette => |i| {
@@ -2045,9 +1964,10 @@ impl<'a> Handler<'a> {
             //     try writer.writeAll(terminator.string());
             // },
             osc::color::Target::Palette(i) => {
-                let _ = write!(out, "\x1b]4;{};", i);
-                c.encode_rgb16(out);
-                out.extend_from_slice(terminator.string());
+                write!(out, "\x1b]4;{};", i).map_err(|_| WriteFailed)?;
+                c.encode_rgb16(out).map_err(|_| WriteFailed)?;
+                out.write_all(terminator.string())
+                    .map_err(|_| WriteFailed)?;
             }
             // .dynamic => |dynamic| switch (dynamic) {
             osc::color::Target::Dynamic(dynamic) => match dynamic {
@@ -2059,9 +1979,10 @@ impl<'a> Handler<'a> {
                 color::Dynamic::Foreground
                 | color::Dynamic::Background
                 | color::Dynamic::Cursor => {
-                    let _ = write!(out, "\x1b]{};", *dynamic as u32);
-                    c.encode_rgb16(out);
-                    out.extend_from_slice(terminator.string());
+                    write!(out, "\x1b]{};", *dynamic as u32).map_err(|_| WriteFailed)?;
+                    c.encode_rgb16(out).map_err(|_| WriteFailed)?;
+                    out.write_all(terminator.string())
+                        .map_err(|_| WriteFailed)?;
                 }
                 // .pointer_foreground, ... => {},
                 color::Dynamic::PointerForeground
@@ -2075,6 +1996,7 @@ impl<'a> Handler<'a> {
             // .special => {},
             osc::color::Target::Special(_) => {}
         }
+        Ok(())
     }
 
     // fn kittyColorOperation(
@@ -2084,13 +2006,14 @@ impl<'a> Handler<'a> {
     fn do_kitty_color_operation(
         &mut self,
         request: kitty::color::OSC,
-    ) -> Result<(), crate::pagelist::OutOfMemory> {
+    ) -> Result<(), crate::snapshot::io::WriteFailed> {
         // var stack = std.heap.stackFallback(1024, self.terminal.gpa());
         // const alloc = stack.get();
         // var response: std.Io.Writer.Allocating = .init(alloc);
         // defer response.deinit();
         // const writer = &response.writer;
-        let mut response = Vec::new();
+        let gpa = self.term().gpa();
+        let mut response = crate::snapshot::io::StackFallbackWriter::<1024>::new_in(gpa);
 
         // for (request.list.items) |item| {
         for item in &request.list {
@@ -2159,6 +2082,7 @@ impl<'a> Handler<'a> {
                 //     try c.encodeRgb8(writer);
                 // },
                 kitty::color::Request::Query(key) => {
+                    use crate::snapshot::io::WriteFailed;
                     use std::io::Write as _;
                     if self.effects.write_pty.is_none() {
                         continue;
@@ -2168,17 +2092,17 @@ impl<'a> Handler<'a> {
                             if !key.has_terminal_query_color() {
                                 continue;
                             }
-                            if response.is_empty() {
-                                response.extend_from_slice(b"\x1b]21");
+                            if response.written().is_empty() {
+                                response.write_all(b"\x1b]21").map_err(|_| WriteFailed)?;
                             }
-                            let _ = write!(response, ";{}=", key);
+                            write!(response, ";{}=", key).map_err(|_| WriteFailed)?;
                         }
                         Some(c) => {
-                            if response.is_empty() {
-                                response.extend_from_slice(b"\x1b]21");
+                            if response.written().is_empty() {
+                                response.write_all(b"\x1b]21").map_err(|_| WriteFailed)?;
                             }
-                            let _ = write!(response, ";{}=", key);
-                            c.encode_rgb8(&mut response);
+                            write!(response, ";{}=", key).map_err(|_| WriteFailed)?;
+                            c.encode_rgb8(&mut response).map_err(|_| WriteFailed)?;
                         }
                     }
                 }
@@ -2191,9 +2115,9 @@ impl<'a> Handler<'a> {
         //     defer alloc.free(resp);
         //     self.writePty(resp);
         // }
-        if !response.is_empty() {
-            response.extend_from_slice(request.terminator.string());
-            self.write_pty(&response);
+        if !response.written().is_empty() {
+            crate::snapshot::io::Writer::write_all(&mut response, request.terminator.string())?;
+            self.write_pty(response.written());
         }
 
         Ok(())
@@ -2216,12 +2140,12 @@ impl<'a> Handler<'a> {
     //     self.writePty(written);
     // }
     //
-    // PORT NOTE (vt-12b-7b): the reference accumulates the encoded response into a
-    // `std.Io.Writer.Allocating` (a `stackFallback(128, ...)`-backed growable
-    // buffer) and then writes the owned sentinel slice. Rust's `String` is the
-    // growable byte accumulator here; `device_attributes::Attributes::encode`
-    // writes via `core::fmt::Write` (matching the reference `attrs.encode`), and
-    // an encode failure (`catch return`) is the `is_err()` early-out. The
+    // PORT NOTE (vt-12b-7b, parity tail S7-4): the reference accumulates the
+    // encoded response into a `std.Io.Writer.Allocating` over
+    // `stackFallback(128, self.terminal.gpa())`: `StackFallbackWriter<128>` over
+    // `gpa()`. `device_attributes::Attributes::encode` writes via
+    // `core::fmt::Write` (matching the reference `attrs.encode`), and an encode
+    // or allocation failure (`catch return`) is the `is_err()` early-out. The
     // resulting bytes (no sentinel needed at the `&[u8]` callback boundary) are
     // handed to `writePty`.
     fn report_device_attributes(&mut self, req: device_attributes::Req) {
@@ -2230,12 +2154,13 @@ impl<'a> Handler<'a> {
         };
         let attrs = func(self);
 
-        let mut aw = String::new();
+        let gpa = self.term().gpa();
+        let mut aw = crate::snapshot::io::StackFallbackWriter::<128>::new_in(gpa);
         if attrs.encode(req, &mut aw).is_err() {
             return;
         }
 
-        self.write_pty(aw.as_bytes());
+        self.write_pty(aw.written());
     }
 
     // fn deviceStatus(self: *Handler, req: device_status.Request) void {
@@ -2431,12 +2356,11 @@ impl<'a> Handler<'a> {
         // var aw: std.Io.Writer.Allocating = .init(alloc);
         // defer aw.deinit();
         //
-        // PORT NOTE (vt-12b-7b): the reference accumulates into a
-        // `stackFallback(256, ...)`-backed `std.Io.Writer.Allocating`; Rust's
-        // `String` is the growable accumulator. An encode/print failure
-        // (`catch return` / `catch |err| { log.warn(...); return; }`) is the
-        // `is_err()` early-out.
-        let mut aw = String::new();
+        // PORT NOTE (vt-12b-7b, parity tail S7-4): `StackFallbackWriter<256>`
+        // over `gpa()`. An encode/print or allocation failure (`catch return` /
+        // `catch |err| { log.warn(...); return; }`) is the `is_err()` early-out.
+        let gpa = self.term().gpa();
+        let mut aw = crate::snapshot::io::StackFallbackWriter::<256>::new_in(gpa);
 
         // Build the response.
         match style {
@@ -2450,15 +2374,15 @@ impl<'a> Handler<'a> {
                     return;
                 }
                 // PORT NOTE: the title is a raw byte slice spliced via `{s}`; we
-                // build the bytes directly to avoid assuming UTF-8.
-                let mut resp: Vec<u8> = Vec::new();
-                resp.extend_from_slice(b"\x1b]l");
-                if let Some(title) = self.term().get_title() {
-                    resp.extend_from_slice(title);
+                // write the bytes directly to avoid assuming UTF-8.
+                use crate::snapshot::io::Writer as _;
+                let title: &[u8] = self.term().get_title().unwrap_or(b"");
+                if aw.write_all(b"\x1b]l").is_err()
+                    || aw.write_all(title).is_err()
+                    || aw.write_all(b"\x1b\\").is_err()
+                {
+                    return;
                 }
-                resp.extend_from_slice(b"\x1b\\");
-                self.write_pty(&resp);
-                return;
             }
 
             // .csi_14_t, .csi_16_t, .csi_18_t => {
@@ -2500,7 +2424,7 @@ impl<'a> Handler<'a> {
         // const resp = aw.toOwnedSliceSentinel(0) catch return;
         // defer alloc.free(resp);
         // self.writePty(resp);
-        self.write_pty(aw.as_bytes());
+        self.write_pty(aw.written());
     }
 
     // fn windowTitle(self: *Handler, title_raw: []const u8) !void { ... }
@@ -2983,19 +2907,29 @@ impl ClipboardReadState {
         //     return;
         // };
         // self.replied = true;
-        // (the ported respond cannot fail; see `respond`.)
-        state.respond(handler, data);
+        if let Err(err) = state.respond(handler, data) {
+            // Leave replied unset so clipboardRead falls back to the
+            // empty reply.
+            log::warn!(target: LOG_SCOPE, "error replying to clipboard read err={err:?}");
+            return;
+        }
         state.replied = true;
     }
 
     // fn respond(self: *ClipboardReadState, data: []const u8)
     //     error{ OutOfMemory, WriteFailed }!void
     //
-    // PORT NOTE (R10): the reference encodes over stackFallback(256) +
-    // Allocating writer; the port encodes into an owned buffer
-    // (PERF(port): stackFallback). Infallible by construction. `handler` is
-    // the reference's `self.handler`.
-    fn respond(&self, handler: &mut Handler<'_>, data: &[u8]) {
+    // PORT NOTE: `handler` is the reference's `self.handler`. The response is
+    // encoded over `stackFallback(256, handler.terminal.gpa())`
+    // (`StackFallbackWriter`), so a long reply spills through the terminal's
+    // allocator and a refused allocation is `error.WriteFailed` (`Allocating`
+    // maps its OutOfMemory to it; the reference's `toOwnedSliceSentinel` copy
+    // is not made).
+    fn respond(
+        &self,
+        handler: &mut Handler<'_>,
+        data: &[u8],
+    ) -> Result<(), crate::snapshot::io::WriteFailed> {
         use crate::snapshot::io::Writer as _;
         let kind: u8 = match self.location {
             clipboard::Location::Selection => b's',
@@ -3003,17 +2937,22 @@ impl ClipboardReadState {
             // .standard, _ => 'c',
             _ => b'c',
         };
-        let mut aw = crate::snapshot::io::AllocatingWriter::new();
+        // var stack = std.heap.stackFallback(256, handler.terminal.gpa());
+        // const alloc = stack.get();
+        // var aw: std.Io.Writer.Allocating = .init(alloc);
+        // defer aw.deinit();
+        let mut aw = crate::snapshot::io::StackFallbackWriter::<256>::new_in(handler.term().gpa());
         // try aw.writer.print("\x1b]52;{c};", .{kind});
-        aw.write_all(b"\x1b]52;").unwrap();
-        aw.write_byte(kind).unwrap();
-        aw.write_all(b";").unwrap();
+        aw.write_all(b"\x1b]52;")?;
+        aw.write_byte(kind)?;
+        aw.write_all(b";")?;
         // try std.base64.standard.Encoder.encodeWriter(&aw.writer, data);
-        crate::kitty::clipboard_response::b64_encode_writer(&mut aw, data).unwrap();
+        crate::kitty::clipboard_response::b64_encode_writer(&mut aw, data)?;
         // try aw.writer.writeAll(self.terminator.string());
-        aw.write_all(self.terminator.string()).unwrap();
+        aw.write_all(self.terminator.string())?;
         // handler.writePty(written);
         handler.write_pty(aw.written());
+        Ok(())
     }
 }
 
@@ -3077,22 +3016,30 @@ impl KittyClipboardReadState<'_> {
         // Remembering is only offered when the request carried a
         // usable password.
         // if (success.remember and self.pw.len > 0) {
-        //     self.handler.kitty_clipboard_grants.grant(gpa, self.pw, .read, false) catch ...;
+        //     self.handler.kitty_clipboard_grants.grant(gpa, self.pw, .read, false) catch |err| {
+        //         log.warn("error recording clipboard grant err={}", .{err});
+        //     };
         // }
-        // (PORT NOTE: the ported `grant` cannot fail, so the reference's
-        // `log.warn("error recording clipboard grant ...")` arm has no
-        // counterpart.)
         if success.remember && !state.pw.is_empty() {
-            handler.kitty_clipboard_grants.grant(
+            let gpa = handler.term().gpa();
+            if let Err(err) = handler.kitty_clipboard_grants.grant(
+                gpa,
                 state.pw,
                 kitty::clipboard::Direction::Read,
                 false,
-            );
+            ) {
+                log::warn!(target: LOG_SCOPE, "error recording clipboard grant err={err:?}");
+            }
         }
 
-        // self.respondSuccess(&success) catch |err| { ...; self.respondStatus(.EIO); };
-        // (the ported respond_success cannot fail; see its note.)
-        state.respond_success(handler, &success);
+        // self.respondSuccess(&success) catch |err| {
+        //     log.warn("error replying to clipboard read err={}", .{err});
+        //     self.respondStatus(.EIO);
+        // };
+        if let Err(err) = state.respond_success(handler, &success) {
+            log::warn!(target: LOG_SCOPE, "error replying to clipboard read err={err:?}");
+            state.respond_status(handler, kitty::clipboard::Status::Eio);
+        }
     }
 
     /// Answer with a single status packet.
@@ -3119,11 +3066,11 @@ impl KittyClipboardReadState<'_> {
         &self,
         handler: &mut Handler<'_>,
         success: &clipboard::ReadResultSuccess<'_>,
-    ) {
+    ) -> Result<(), crate::snapshot::io::WriteFailed> {
         // const handler = self.handler;
         // if (handler.effects.write_pty == null) return;
         if handler.effects.write_pty.is_none() {
-            return;
+            return Ok(());
         }
 
         // var served_buf: [kitty_clipboard.max_read_mimes]clipboard.Content = undefined;
@@ -3147,9 +3094,12 @@ impl KittyClipboardReadState<'_> {
         // Status packets fit on the stack; DATA packets carry the
         // clipboard contents and fall back to the heap.
         // var stack = std.heap.stackFallback(1024, handler.terminal.gpa());
-        // PORT NOTE (R10): PERF(port): stackFallback — owned buffer.
-        let mut aw = crate::snapshot::io::AllocatingWriter::new();
-        if (kitty::clipboard::ReadSuccess {
+        // const alloc = stack.get();
+        // var aw: std.Io.Writer.Allocating = .init(alloc);
+        // defer aw.deinit();
+        let mut aw = crate::snapshot::io::StackFallbackWriter::<1024>::new_in(handler.term().gpa());
+        // try (kitty_clipboard.ReadSuccess{ ... }).encode(&aw.writer);
+        (kitty::clipboard::ReadSuccess {
             primary: self.primary,
             id: self.id,
             list: self.list,
@@ -3158,13 +3108,10 @@ impl KittyClipboardReadState<'_> {
             terminator: self.terminator,
             ..kitty::clipboard::ReadSuccess::default()
         })
-        .encode(&mut aw)
-        .is_err()
-        {
-            return;
-        }
+        .encode(&mut aw)?;
         // handler.writePty(written);
         handler.write_pty(aw.written());
+        Ok(())
     }
 }
 
@@ -3212,11 +3159,23 @@ impl KittyClipboardWriteReplyState<'_> {
                 // Remembering is only offered when the request
                 // carried a usable password.
                 if success.remember && !state.pw.is_empty() {
-                    handler.kitty_clipboard_grants.grant(
+                    // self.handler.kitty_clipboard_grants.grant(
+                    //     self.handler.terminal.gpa(), self.pw, .write, false,
+                    // ) catch |err| {
+                    //     log.warn("error recording clipboard grant err={}", .{err});
+                    // };
+                    let gpa = handler.term().gpa();
+                    if let Err(err) = handler.kitty_clipboard_grants.grant(
+                        gpa,
                         state.pw,
                         kitty::clipboard::Direction::Write,
                         false,
-                    );
+                    ) {
+                        log::warn!(
+                            target: LOG_SCOPE,
+                            "error recording clipboard grant err={err:?}"
+                        );
+                    }
                 }
                 kitty::clipboard::Status::Done
             }
@@ -3233,9 +3192,8 @@ impl<'a> stream::Handler for Handler<'a> {
     // }
     fn deinit(&mut self) {
         self.kitty_clipboard_abort();
-        // PORT NOTE: `Grants.deinit(alloc)` frees the entries; replacing with
-        // the empty default drops them.
-        self.kitty_clipboard_grants = kitty::clipboard::Grants::default();
+        let gpa = self.term().gpa();
+        self.kitty_clipboard_grants.deinit(gpa);
         self.apc_handler.deinit();
         self.dcs_handler.deinit();
     }
@@ -3519,6 +3477,8 @@ impl<'a> stream::Handler for Handler<'a> {
         self.term().full_reset();
 
         // Full reset clears grants
+        let gpa = self.term().gpa();
+        self.kitty_clipboard_grants.deinit(gpa);
         self.kitty_clipboard_grants = kitty::clipboard::Grants::default();
 
         // Clear the progress bar (eeab85b96; the b56c6d88f "only if there is
@@ -3837,19 +3797,14 @@ impl<'a> stream::Handler for Handler<'a> {
     //
     //   Clipboard writes are external effects, not terminal state.
     //
-    // rustty's OSC dispatch
-    // arm is infallible, so a malformed payload is a silent no-op here — the net
-    // observable behavior is identical (the callback is simply not invoked), and
-    // the oracle stream test only asserts the un-invoked count. The reference's
-    // fallible-allocator OOM path is ALSO ported: the decode scratch is a
-    // fallible `allocator_api2::vec::Vec<u8, _>` over the terminal allocator
-    // (`try_reserve_exact`, mirroring `dcs.rs`'s `Allocating::init_capacity`),
-    // and on failure we return without invoking the callback — exactly what the
+    // The port's `do_clipboard_contents` returns `Result<(), OutOfMemory>`
+    // and `clipboard_contents`, the dispatch arm, logs the error the same way
+    // (parity tail S7-4).
+    // A malformed payload is a silent no-op (the callback is not invoked). The
+    // decode scratch is allocated through the terminal's allocator, fallibly,
+    // and on failure the callback is not invoked, which is what the
     // reference's `try` + dispatch-arm `catch` pair does. The oracle test
-    // "clipboard_write allocation failure is ignored" is ported over the
-    // `CLIPBOARD_CONTENTS_TW` seam (rustty's allocator is the zero-sized
-    // `Global`, so `testing.failing_allocator` cannot be swapped in). What that
-    // test injects is:
+    // "clipboard_write allocation failure is ignored" is ported as written:
     //
     //   Only the decoded scratch data uses the terminal allocator here. Swap in
     //   an allocator that always fails, then restore it before terminal teardown.
@@ -3862,7 +3817,9 @@ impl<'a> stream::Handler for Handler<'a> {
     //     log.warn("error handling clipboard operation err={}", .{err});
     // },
     fn clipboard_contents(&mut self, v: stream::ClipboardContents) {
-        self.do_clipboard_contents(v.kind, v.data, v.terminator);
+        if let Err(err) = self.do_clipboard_contents(v.kind, v.data, v.terminator) {
+            log::warn!(target: LOG_SCOPE, "error handling clipboard operation err={err:?}");
+        }
     }
 
     // .kitty_clipboard => self.kittyClipboard(value) catch |err| {
@@ -3871,7 +3828,9 @@ impl<'a> stream::Handler for Handler<'a> {
     //     log.warn("error handling kitty clipboard err={}", .{err});
     // },
     fn kitty_clipboard(&mut self, v: osc::KittyClipboardProtocol) {
-        self.do_kitty_clipboard(&v);
+        if let Err(err) = self.do_kitty_clipboard(&v) {
+            log::warn!(target: LOG_SCOPE, "error handling kitty clipboard err={err:?}");
+        }
     }
 
     // .kitty_dnd => self.kittyDnd(value) catch |err| {
@@ -4504,10 +4463,19 @@ mod tests {
     // would produce, and which every other assertion in this file would still
     // pass with.
     //
-    // WS18 release lane: tripwire fail point (`ColorOperationFp`), armed in every
-    // test build like Zig's `builtin.is_test`.
+    // The failure is real (parity tail S7-4): the response of 64 palette
+    // queries outgrows the `stackFallback(1024, gpa())` buffer, and the
+    // active screen's allocator (`gpa()`) is swapped for
+    // `std.mem.Allocator.failing`, so the spill fails.
     #[test]
     fn semantic_failure_is_not_set_by_a_color_operation_failure() {
+        // One OSC 4 with 64 queries: one color operation, one response.
+        let mut queries = b"\x1B]4".to_vec();
+        for i in 0..64 {
+            queries.extend_from_slice(format!(";{i};?").as_bytes());
+        }
+        queries.extend_from_slice(b"\x1B\\");
+
         // (a) Baseline: the arm IS reached and DOES produce a response, so the
         //     failure injected in (b) is landing on a live code path. (Without
         //     this the whole control could be passing because the input never
@@ -4517,10 +4485,12 @@ mod tests {
         {
             let mut s = t.vt_stream();
             s.handler.effects.write_pty = Some(cap_write_pty);
-            s.next_slice(b"\x1B]4;0;?\x1B\\");
+            s.next_slice(&queries);
+            let resp = cap_take()
+                .expect("colorOperation must be reached for this control to mean anything");
             assert!(
-                cap_take().is_some(),
-                "colorOperation must be reached for this control to mean anything"
+                resp.len() > 1024,
+                "the response must outgrow the stack buffer"
             );
             assert!(!s.handler.semantic_failure);
         }
@@ -4537,9 +4507,20 @@ mod tests {
         {
             let mut s = t.vt_stream();
             s.handler.effects.write_pty = Some(cap_write_pty);
-            color_operation_tw_error_always(ColorOperationFp::Respond);
-            s.next_slice(b"\x1B]4;0;?\x1B\\");
-            color_operation_tw_end(rustty_util::tripwire::ResetMode::Reset).unwrap();
+            let original_alloc = s.handler.term().active_mut().alloc;
+            s.handler.term().active_mut().alloc = crate::alloc::failing();
+            let cap = crate::log_capture::start();
+            s.next_slice(&queries);
+            let messages = cap.messages();
+            drop(cap);
+            s.handler.term().active_mut().alloc = original_alloc;
+            assert!(
+                messages
+                    .iter()
+                    .any(|(level, _, msg)| *level == log::Level::Warn
+                        && msg.starts_with("error reporting OSC color err=")),
+                "the dispatch arm logs the failure: {messages:?}"
+            );
             assert!(
                 cap_take().is_none(),
                 "the injected failure must actually abort the response"
@@ -6279,18 +6260,6 @@ mod tests {
     }
 
     // test "clipboard_write allocation failure is ignored"
-    //
-    // PORT NOTE: the reference injects `testing.failing_allocator` by swapping
-    // `t.screens.active.alloc` for the duration of the sequence. The
-    // terminal's internals still run on the Rust global heap (the Global arm
-    // of `crate::alloc::Allocator`), so there is nothing to swap; the `CLIPBOARD_CONTENTS_TW` fail point sits
-    // exactly where the reference's `try alloc.alloc(u8, decoded_len)` is, and
-    // makes that allocation fail instead.
-    //
-    // WS18 release lane: `tripwire::Module::enabled()` is the union of
-    // `cfg!(test)`, `cfg!(debug_assertions)` and the `tripwire-test` feature
-    // (a dev-dependency feature of this crate), reproducing Zig's
-    // `builtin.is_test`, so this runs in the release test lane too.
     #[test]
     fn clipboard_write_allocation_failure_is_ignored() {
         let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
@@ -6307,10 +6276,17 @@ mod tests {
             let mut s = t.vt_stream();
             s.handler.effects.clipboard_write = Some(cap_clipboard_write);
 
-            // Only the decoded scratch data uses the terminal allocator here.
-            clipboard_contents_tw_error_always(ClipboardContentsFp::DecodeScratch);
-            s.next_slice(b"\x1B]52;c;aGVsbG8=\x1B\\");
-            clipboard_contents_tw_end(rustty_util::tripwire::ResetMode::Reset).unwrap();
+            // Only the decoded scratch data uses the terminal allocator here. Swap in
+            // an allocator that always fails, then restore it before terminal teardown.
+            {
+                // const alloc = t.screens.active.alloc;
+                // t.screens.active.alloc = testing.failing_allocator;
+                // defer t.screens.active.alloc = alloc;
+                let alloc = s.handler.term().active_mut().alloc;
+                s.handler.term().active_mut().alloc = crate::alloc::failing();
+                s.next_slice(b"\x1B]52;c;aGVsbG8=\x1B\\");
+                s.handler.term().active_mut().alloc = alloc;
+            }
 
             assert_eq!(0, CLIP_COUNT.with(|c| c.get()));
             assert!(!s.handler.semantic_failure);
@@ -7286,7 +7262,9 @@ mod tests {
         let img = storage.image_by_id(7).expect("image 7 must be stored");
         let expected: Vec<u8> = (5..17).map(|i| (i % 251) as u8).collect();
         match &img.data {
-            kitty::graphics_image::Data::Complete(d) => assert_eq!(&expected, d),
+            kitty::graphics_image::Data::Complete(d) => {
+                assert_eq!(expected.as_slice(), d.as_slice())
+            }
             other => panic!("unexpected image data: {other:?}"),
         }
 
@@ -7690,6 +7668,284 @@ mod tests {
 
     fn kc_mut(f: impl FnOnce(&mut KittyCap)) {
         KC.with(|c| f(&mut c.borrow_mut()));
+    }
+
+    // Parity tail S7-4 (routing evidence, no reference counterpart): the
+    // stream handler's allocations go to the terminal's `gpa()`, which here is
+    // a counting C allocator. Every OSC 52 / 5522 sequence also takes the OSC
+    // parser's allocating capture from the stream's allocator, which
+    // `vt_stream` sets to `gpa()` as the reference does (`CAPTURE` calls of
+    // `MAX_BUF` bytes each). OSC 52's decode scratch is one exact-sized
+    // allocation; a Kitty clipboard write transaction (its state, entries,
+    // MIME copies, spool and the committed contents) and the per-packet
+    // metadata allocate through it and return every byte; a remembered grant
+    // is held until RIS frees it; a color response that outgrows its
+    // 1024-byte stack buffer spills through it, while a small one allocates
+    // nothing.
+    #[test]
+    fn stream_handler_internals_route_through_the_allocator_handle() {
+        use crate::alloc::testing::CountingAllocator;
+        let counting = CountingAllocator::over_heap();
+        let c = counting.allocator();
+        crate::alloc::testing::with_handle(&c, |alloc| {
+            let calls = || counting.alloc_calls.get();
+            let frees = || counting.free_calls.get();
+            let live = || counting.live_bytes.get();
+
+            let mut t = Terminal::init(alloc, opts(80, 24)).unwrap();
+            kc_reset();
+            {
+                let mut s = t.vt_stream();
+                s.handler.effects.write_pty = Some(kc_write_pty);
+                s.handler.effects.clipboard_write = Some(kc_clipboard_write);
+                s.handler.effects.clipboard_read = Some(kc_clipboard_read);
+                let (a0, f0, live0) = (calls(), frees(), live());
+
+                // OSC 52: `alloc.alloc(u8, simd.base64.maxLen(data))`, freed
+                // after the write effect.
+                const CAPTURE: usize = 1;
+                s.next_slice(b"\x1B]52;c;aGVsbG8=\x1B\\");
+                assert_eq!(1, kc(|c| c.write_count));
+                assert_eq!(
+                    a0 + CAPTURE + 1,
+                    calls(),
+                    "OSC 52 decode scratch: one allocation"
+                );
+                assert_eq!(
+                    Some((rustty_simd::base64::max_len(b"aGVsbG8="), 0)),
+                    counting.last_alloc.get(),
+                    "the scratch is maxLen(data) bytes"
+                );
+                // The capture lives until the next OSC starts (or the stream
+                // is freed); the scratch is freed.
+                let capture_bytes = crate::osc::MAX_BUF;
+                assert_eq!(
+                    (f0 + 1, live0 + capture_bytes),
+                    (frees(), live()),
+                    "the scratch is freed"
+                );
+                let live0 = live();
+
+                // Kitty clipboard write: `alloc.create(WriteState)` (the
+                // empty id/pw/name dupes allocate nothing).
+                let a1 = calls();
+                s.next_slice(b"\x1B]5522;type=write\x1B\\");
+                assert_eq!(a1 + CAPTURE + 1, calls(), "alloc.create(WriteState)");
+                assert_eq!(
+                    Some((core::mem::size_of::<kitty::clipboard::WriteState>(), 3)),
+                    counting.last_alloc.get()
+                );
+                assert_eq!(
+                    live0 + core::mem::size_of::<kitty::clipboard::WriteState>(),
+                    live()
+                );
+
+                // A wdata packet: the decoded mime metadata value (freed with
+                // the packet), the entries list, the entry's mime dupe and the
+                // spool.
+                let a2 = calls();
+                s.next_slice(b"\x1B]5522;type=wdata:mime=dGV4dC9wbGFpbg==;R2hvc3Q=\x1B\\");
+                assert_eq!(
+                    a2 + CAPTURE + 4,
+                    calls(),
+                    "metadata mime + entries + mime dupe + spool"
+                );
+
+                // Commit: the committed contents, then the whole transaction
+                // is freed.
+                let a3 = calls();
+                s.next_slice(b"\x1B]5522;type=wdata\x1B\\");
+                assert_eq!(2, kc(|c| c.write_count));
+                assert_eq!(
+                    a3 + CAPTURE + 1,
+                    calls(),
+                    "commit: contents.toOwnedSlice(alloc)"
+                );
+                assert_eq!(live0, live(), "the transaction returns every byte");
+                assert_eq!(
+                    calls() - a0,
+                    frees() - f0 + CAPTURE,
+                    "only the capture is live"
+                );
+
+                // A remembered read grant (pw + name) is recorded through
+                // gpa() and held until RIS.
+                kc_mut(|c| {
+                    c.read_result = Some(KcReadResult::Success {
+                        contents: vec![(b"text/plain".to_vec(), b"x".to_vec())],
+                        available: vec![b"text/plain".to_vec()],
+                        remember: true,
+                    })
+                });
+                s.next_slice(b"\x1b]5522;type=read:pw=cHc=:name=YXBw;dGV4dC9wbGFpbg==\x1b\\");
+                assert_eq!(1, s.handler.kitty_clipboard_grants.len());
+                // The grant's entries list and its `dupe(pw)` ("pw", 2 bytes).
+                let grant_bytes = live() - live0;
+                assert!(
+                    grant_bytes > 2,
+                    "the grant holds its list and password copy"
+                );
+                let (held, f_ris) = (live(), frees());
+                s.next_slice(b"\x1Bc");
+                assert_eq!(0, s.handler.kitty_clipboard_grants.len());
+                assert!(
+                    frees() >= f_ris + 2,
+                    "RIS frees the grant's list and password"
+                );
+                assert!(
+                    live() <= held - grant_bytes,
+                    "RIS frees the grant through gpa()"
+                );
+
+                // Color responses: a small one stays on the stack buffer.
+                // (The OSC 4 start frees the last OSC's capture; OSC 4 itself
+                // takes none.)
+                let a4 = calls();
+                s.next_slice(b"\x1B]4;0;?\x1B\\");
+                assert_eq!(a4, calls(), "a small response allocates nothing");
+                let live0 = live();
+                let mut queries = b"\x1B]4".to_vec();
+                for i in 0..64 {
+                    queries.extend_from_slice(format!(";{i};?").as_bytes());
+                }
+                queries.extend_from_slice(b"\x1B\\");
+                let a5 = calls();
+                s.next_slice(&queries);
+                assert!(
+                    calls() > a5,
+                    "a response past 1024 bytes spills through gpa()"
+                );
+                assert_eq!(live0, live(), "and frees the spill");
+
+                s.deinit();
+            }
+            t.deinit(alloc);
+            assert_eq!(0, live(), "deinit returns every byte");
+        });
+    }
+
+    // Parity tail S7-4b (routing evidence, no reference counterpart): each
+    // `stackFallback(N, self.terminal.gpa())` response writer keeps a small
+    // response on its stack buffer and spills a large one through `gpa()`,
+    // freeing the spill before the handler returns. Each pair runs the same
+    // code path, so the large response costs exactly the spill on top of the
+    // small one's allocations: the OSC 52 read reply (256), the Kitty
+    // clipboard DATA reply (1024), the CSI 21 t title report (256), the Kitty
+    // color report (1024) and the OSC 72 data serving (512).
+    #[test]
+    fn response_writers_spill_through_gpa() {
+        use crate::alloc::testing::CountingAllocator;
+        let counting = CountingAllocator::over_heap();
+        let c = counting.allocator();
+        crate::alloc::testing::with_handle(&c, |alloc| {
+            let calls = || counting.alloc_calls.get();
+            let live = || counting.live_bytes.get();
+            let mut t = Terminal::init(alloc, opts(80, 24)).unwrap();
+            kc_reset();
+            let ptr: *mut Terminal = &mut t;
+            {
+                let mut s = t.vt_stream();
+                s.handler.effects.write_pty = Some(kc_write_pty);
+                s.handler.effects.clipboard_read = Some(kc_clipboard_read);
+                // The allocations one input makes, and that the live bytes
+                // come back to where they were once its response is written.
+                let cost = |s: &mut Stream<'_>, input: &[u8]| -> usize {
+                    // (An OSC frees the previous OSC's capture when it starts;
+                    // run an unrecognized OSC first so both inputs start
+                    // alike.)
+                    s.next_slice(b"\x1B]99999;x\x1B\\");
+                    let (a, l) = (calls(), live());
+                    s.next_slice(input);
+                    let spent = calls() - a;
+                    // A capture (if any) stays until the next OSC starts.
+                    s.next_slice(b"\x1B]99999;x\x1B\\");
+                    assert!(live() <= l + crate::osc::MAX_BUF, "the spill is freed");
+                    spent
+                };
+                let read_reply = |data: Vec<u8>| {
+                    kc_mut(|c| {
+                        c.read_result = Some(KcReadResult::Success {
+                            contents: vec![(b"text/plain".to_vec(), data)],
+                            available: vec![b"text/plain".to_vec()],
+                            remember: false,
+                        })
+                    })
+                };
+
+                // OSC 52 read reply: 256 bytes on the stack.
+                read_reply(b"x".to_vec());
+                let small = cost(&mut s, b"\x1B]52;c;?\x1B\\");
+                read_reply(vec![b'x'; 300]);
+                let large = cost(&mut s, b"\x1B]52;c;?\x1B\\");
+                assert_eq!(small + 1, large, "OSC 52 read reply spills once");
+
+                // Kitty clipboard DATA reply: 1024 bytes on the stack.
+                read_reply(b"x".to_vec());
+                let small = cost(&mut s, b"\x1B]5522;type=read;dGV4dC9wbGFpbg==\x1B\\");
+                read_reply(vec![b'x'; 1000]);
+                let large = cost(&mut s, b"\x1B]5522;type=read;dGV4dC9wbGFpbg==\x1B\\");
+                assert_eq!(small + 1, large, "Kitty DATA reply spills once");
+
+                // CSI 21 t: 256 bytes on the stack (the title is set first).
+                s.handler.title_report = true;
+                s.next_slice(b"\x1B]2;t\x1B\\");
+                let small = cost(&mut s, b"\x1B[21t");
+                let mut title = b"\x1B]2;".to_vec();
+                title.extend(std::iter::repeat_n(b'T', 300));
+                title.extend_from_slice(b"\x1B\\");
+                s.next_slice(&title);
+                let large = cost(&mut s, b"\x1B[21t");
+                assert_eq!(small + 1, large, "the title report spills once");
+
+                // Kitty color report: 1024 bytes on the stack.
+                let small = cost(&mut s, b"\x1B]21;0=?\x1B\\");
+                let mut query = b"\x1B]21".to_vec();
+                for i in 0..100 {
+                    query.extend_from_slice(format!(";{i}=?").as_bytes());
+                }
+                query.extend_from_slice(b"\x1B\\");
+                let large = cost(&mut s, &query);
+                assert_eq!(small + 1, large, "the Kitty color report spills once");
+
+                // OSC 72 data serving: 512 bytes on the stack.
+                s.next_slice(b"\x1B]72;t=a;text/plain\x1B\\");
+                let serve = |data: &[u8]| {
+                    let mut aw: Vec<u8> = Vec::new();
+                    // SAFETY: the stream's terminal; no other borrow of its
+                    // DnD slot is live.
+                    unsafe { (*ptr).kitty_dnd.as_mut() }
+                        .unwrap()
+                        .drag_drop(
+                            alloc,
+                            &mut aw,
+                            kitty::dnd::MoveEvent {
+                                cell_x: 0,
+                                cell_y: 0,
+                                pixel_x: 0,
+                                pixel_y: 0,
+                                operations: kitty::dnd::Operations {
+                                    copy: true,
+                                    r#move: false,
+                                },
+                            },
+                            &[kitty::dnd::Item {
+                                mime: b"text/plain".to_vec(),
+                                data: data.to_vec(),
+                            }],
+                        )
+                        .unwrap();
+                };
+                serve(b"x");
+                let small = cost(&mut s, b"\x1B]72;t=r:x=1\x1B\\");
+                serve(&[b'Z'; 600]);
+                let large = cost(&mut s, b"\x1B]72;t=r:x=1\x1B\\");
+                assert_eq!(small + 1, large, "OSC 72 data serving spills once");
+
+                s.deinit();
+            }
+            t.deinit(alloc);
+            assert_eq!(0, live(), "deinit returns every byte");
+        });
     }
 
     // test "kitty clipboard write transaction round trip"
@@ -8183,7 +8439,8 @@ mod tests {
         // A one-time read grant, as minted for a paste event.
         s.handler
             .kitty_clipboard_grants
-            .grant(b"otp", kitty::clipboard::Direction::Read, true);
+            .grant(Global, b"otp", kitty::clipboard::Direction::Read, true)
+            .unwrap();
 
         // A targets-only read (payload ".") is prompt-exempt so it never
         // consults, and must not burn, the one-time password.
@@ -8586,11 +8843,6 @@ mod tests {
     }
 
     // test "kitty clipboard allocation failure is ignored"
-    //
-    // PORT NOTE: the reference swaps `t.screens.active.alloc` for
-    // `testing.failing_allocator`; rustty's allocator seam is the zero-sized
-    // Global, so the `KITTY_CLIPBOARD_TW` fail point sits exactly where the
-    // reference's `try alloc.create(WriteState)` is (see its module note).
     #[test]
     fn kitty_clipboard_allocation_failure_is_ignored() {
         let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
@@ -8603,9 +8855,13 @@ mod tests {
         // Only transaction state uses the terminal allocator here. Swap in
         // an allocator that always fails, then restore it before teardown.
         {
-            kitty_clipboard_tw_error_always(KittyClipboardFp::CreateWriteState);
+            // const alloc = t.screens.active.alloc;
+            // t.screens.active.alloc = testing.failing_allocator;
+            // defer t.screens.active.alloc = alloc;
+            let alloc = s.handler.term().active_mut().alloc;
+            s.handler.term().active_mut().alloc = crate::alloc::failing();
             s.next_slice(b"\x1B]5522;type=write\x1B\\");
-            kitty_clipboard_tw_end(rustty_util::tripwire::ResetMode::Reset).unwrap();
+            s.handler.term().active_mut().alloc = alloc;
         }
 
         // Clipboard writes are external effects, best-effort like OSC 52;
@@ -9701,6 +9957,45 @@ mod tests {
         }
     }
 
+    // Parity tail S7-4b (routing evidence, no reference counterpart): reader
+    // contents are read into a `std.Io.Writer.Allocating` over `ctx.alloc`,
+    // which `Handler::paste` sets to the terminal's `gpa()`: the bytes the
+    // reader writes are allocated through it (at least one allocation, holding
+    // the 16 bytes read) and freed before `paste` returns.
+    #[test]
+    fn paste_reader_contents_route_through_gpa() {
+        use crate::alloc::testing::CountingAllocator;
+        let counting = CountingAllocator::over_heap();
+        let c = counting.allocator();
+        crate::alloc::testing::with_handle(&c, |alloc| {
+            let mut t = Terminal::init(alloc, opts(80, 24)).unwrap();
+            let ptr: *mut Terminal = &mut t;
+            pc_reset();
+            let mut handler = Handler::init(ptr);
+            handler.effects.write_pty = Some(pc_write_pty);
+            let mut reader = PasteReader::new(&[b"text/plain"], &[b"echo hello world"]);
+            let (a0, l0) = (counting.alloc_calls.get(), counting.live_bytes.get());
+            assert!(handler
+                .paste(Paste {
+                    source: paste_pkg::Source::default(),
+                    contents: reader.contents(),
+                    allow_unsafe: false,
+                })
+                .unwrap());
+            assert_eq!(b"echo hello world".as_slice(), pc_written().as_slice());
+            assert!(
+                counting.alloc_calls.get() > a0,
+                "the read bytes are allocated through gpa()"
+            );
+            assert!(counting.peak_bytes.get() >= l0 + 16, "they are held there");
+            assert_eq!(l0, counting.live_bytes.get(), "and freed");
+            use crate::stream::Handler as _;
+            handler.deinit();
+            t.deinit(alloc);
+        });
+        assert_eq!(0, counting.live_bytes.get());
+    }
+
     // test "paste: reader contents are read on demand"
     #[test]
     #[cfg_attr(
@@ -10230,7 +10525,8 @@ mod tests {
 
         s.handler
             .kitty_clipboard_grants
-            .grant(b"pw", kitty::clipboard::Direction::Read, false);
+            .grant(Global, b"pw", kitty::clipboard::Direction::Read, false)
+            .unwrap();
         assert_eq!(1, s.handler.kitty_clipboard_grants.len());
 
         s.next_slice(b"\x1Bc");
@@ -10244,7 +10540,8 @@ mod tests {
         assert!(!pc(|c| c.last_read_granted));
         s.handler
             .kitty_clipboard_grants
-            .grant(b"pw", kitty::clipboard::Direction::Read, false);
+            .grant(Global, b"pw", kitty::clipboard::Direction::Read, false)
+            .unwrap();
         assert_eq!(1, s.handler.kitty_clipboard_grants.len());
 
         s.deinit();

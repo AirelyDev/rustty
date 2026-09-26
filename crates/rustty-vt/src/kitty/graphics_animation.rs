@@ -29,6 +29,7 @@
 
 // const std = @import("std");
 // const Allocator = std.mem.Allocator;
+use crate::alloc::{AVec, Allocator, Bytes};
 
 /// The gap assigned to a newly created frame when the command doesn't
 /// specify one (z omitted or z=0). Taken from Kitty (DEFAULT_GAP).
@@ -40,20 +41,21 @@ pub const DEFAULT_GAP_MS: u32 = 40;
 //
 // PORT NOTE: the reference `Image.animation` is `?*Animation` — a raw heap
 // pointer that Image value-copies SHARE and only the stored image's explicit
-// `deinit` frees. Rustty's `Image` already deep-clones its pixel `data` Vec on
-// copy (the sanctioned `image_by_id` shape), so `animation` follows the same
-// sanctioned pattern as `Option<Box<Animation>>`: the stored image owns it,
-// `Drop` frees it at every removal site (replace/evict/delete/clear), and
-// clones deep-copy — observably identical for every read, with no raw-pointer
-// share to track (hazard #3 of the phase-5 plan). `Clone`/`PartialEq`/`Eq`
-// derives are Rust-only glue required by `Image`'s derives.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+// `deinit` frees. Rustty's stored `Image` owns it as an allocator-aware box
+// (`ABox<Animation>`, allocated through the storage's allocator): the stored
+// image owns it and `Drop` frees it at every removal site
+// (replace/evict/delete/clear); copies made for reading
+// (`Image::withoutData`) do not carry it. `Clone`/`PartialEq`/`Eq` derives
+// are Rust-only glue required by `Image`'s derives.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Animation {
     /// The frames following the root frame: `frames[i]` is
     /// protocol frame number `i + 2`. The root frame (frame 1) is the
     /// image's base data and is not stored here.
-    // PORT NOTE: `std.ArrayListUnmanaged(Frame) = .empty` → an owning `Vec`.
-    pub frames: Vec<Frame>,
+    // PORT NOTE (parity tail S7-4): `std.ArrayListUnmanaged(Frame) = .empty`,
+    // grown (and each frame's `data` allocated) through the storage's
+    // allocator; bound when the animation is created (`init_in`).
+    pub frames: AVec<Frame>,
 
     /// The gap of the root frame in milliseconds. Zero means gapless:
     /// the frame is skipped during playback. Kitty creates the root
@@ -98,20 +100,47 @@ pub enum State {
 pub struct Frame {
     /// Fully composed pixel data, always image width * height * 4
     /// bytes of RGBA.
-    pub data: Vec<u8>,
+    pub data: Bytes,
 
     /// Milliseconds this frame is displayed before advancing.
     /// Zero means gapless: skipped during playback.
     pub gap_ms: u32,
 }
 
+/// `.{}` over the Rust heap (the empty list allocates nothing).
+impl Default for Animation {
+    fn default() -> Animation {
+        Animation::init_in(crate::alloc::Global)
+    }
+}
+
 impl Animation {
+    /// `.{}` whose `frames` grow through `alloc` (the reference passes that
+    /// allocator to every `frames.append`/`deinit`).
+    pub fn init_in(alloc: Allocator) -> Animation {
+        Animation {
+            frames: AVec::new_in(alloc),
+            root_gap_ms: 0,
+            current_index: 0,
+            state: State::Stopped,
+            max_loops: 0,
+            current_loop: 0,
+            frame_shown_at_ms: None,
+        }
+    }
+
     // pub fn deinit(self: *Animation, alloc: Allocator) void {
     //     for (self.frames.items) |frame| alloc.free(frame.data);
     //     self.frames.deinit(alloc);
     // }
-    // PORT NOTE: dropping the owning `Vec<Frame>` frees every frame's data;
-    // there is no explicit `deinit`.
+    // PORT NOTE: dropping `frames` frees every frame's data and the list
+    // through the allocator they were allocated with; `deinit` checks it.
+    pub fn deinit(&mut self, alloc: Allocator) {
+        if self.frames.capacity() != 0 {
+            self.frames.allocator().debug_assert_same(alloc);
+        }
+        self.frames = AVec::new_in(alloc);
+    }
 
     /// The total number of frames including the root frame.
     pub fn frame_count(&self) -> u32 {
@@ -168,8 +197,10 @@ mod tests {
     fn animation_gap_helpers() {
         let mut anim: Animation = Animation::default();
         // defer anim.deinit(alloc); — Drop.
+        // try anim.frames.append(alloc, .{ .data = try alloc.alloc(u8, 4), .gap_ms = 100 });
+        let alloc = crate::alloc::Global;
         anim.frames.push(Frame {
-            data: vec![0u8; 4], // try alloc.alloc(u8, 4)
+            data: crate::alloc::try_dupe(alloc, &[0u8; 4]).unwrap(),
             gap_ms: 100,
         });
 

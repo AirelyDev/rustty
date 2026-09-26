@@ -167,6 +167,10 @@ mod imp {
     #[derive(glib::Properties, Default)]
     #[properties(wrapper_type = super::Application)]
     pub struct Application {
+        /// The apprt App. This is annoying that we need this it'd be
+        /// nicer to just make THIS the apprt app but the current librustty
+        /// API doesn't allow that.
+        ///
         /// PORTS: `application.zig:167` `rt_app: *ApprtApp` (BACKREF, never freed
         /// here). The apprt `App` owns the sole created `Application` ref and
         /// backrefs it; this is the reverse edge. Stored as a raw non-owning
@@ -176,6 +180,8 @@ mod imp {
         /// until `new` sets it.
         pub rt_app: Cell<Option<NonNull<c_void>>>,
 
+        /// The librustty App instance.
+        ///
         /// PORTS: `application.zig:170` `core_app: *CoreApp` (BACKREF; libghostty
         /// core owns it, `alloc = core_app.alloc`, `application.zig:247`; not freed
         /// here). Raw non-owning pointer. PORT NOTE: `*mut c_void` in the skeleton —
@@ -183,6 +189,8 @@ mod imp {
         /// `App` type exists (Task 11); Task 8 fills it and Task 11 narrows it.
         pub core_app: Cell<Option<NonNull<c_void>>>,
 
+        /// The configuration for the application.
+        ///
         /// PORTS: `application.zig:173` `config: *Config` (SHARED — refcounted
         /// [`Config`] GObject shared across the tier). The `config` property is
         /// backed by this field; the getter refs (`.full`), a Task 8 `setConfig`
@@ -190,6 +198,8 @@ mod imp {
         #[property(get = Self::get_config, name = "config", nullable)]
         pub config: RefCell<Option<Config>>,
 
+        /// The global shortcut logic.
+        ///
         /// PORTS: `application.zig:182` `global_shortcuts: *GlobalShortcuts` (OWNED
         /// — created here, sole ref, `unref` at dispose, PREPORT_GTK §1.1). PORT
         /// NOTE: stored as a bare `glib::Object` in the skeleton because the
@@ -214,6 +224,10 @@ mod imp {
         /// f0f3f4d8d — moved here from the surface; OWNED, dropped at dispose).
         pub bell_media: RefCell<Option<gtk4::MediaFile>>,
 
+        /// If non-null, we're currently showing a config errors dialog.
+        /// This is a WeakRef because the dialog can close on its own
+        /// outside of our own lifecycle and that's okay.
+        ///
         /// PORTS: `application.zig:203-205` `config_errors_dialog:
         /// WeakRef(ConfigErrorsDialog)` (SHARED / non-owning — the dialog may close
         /// on its own outside our lifecycle, so a weak ref is correct).
@@ -222,43 +236,67 @@ mod imp {
         /// to the real `WeakRef<ConfigErrorsDialog>` now that the class exists.
         pub config_errors_dialog: WeakRef<ConfigErrorsDialog>,
 
+        /// CSS Provider for any styles based on Rustty configuration values.
+        ///
         /// PORTS: `application.zig:208` `css_provider: *gtk.CssProvider` (OWNED —
         /// `.new()` here, `unref` at dispose). Invariant 12: manually held, never
         /// parented. `None` until `new`.
         pub css_provider: RefCell<Option<gtk4::CssProvider>>,
 
+        /// Providers for loading custom stylesheets defined by user
+        ///
         /// PORTS: `application.zig:212` `custom_css_providers:
         /// ArrayListUnmanaged(*gtk.CssProvider)` (OWNED — each element `unref`'d and
         /// the list `deinit`'d at dispose). A `Vec<CssProvider>` whose `Drop`
         /// unrefs each element.
         pub custom_css_providers: RefCell<Vec<gtk4::CssProvider>>,
 
+        /// A copy of the LANG environment variable that was provided to Rustty
+        /// by the system. If this is null, the LANG environment variable did
+        /// not exist in Rustty's environment variable.
+        ///
         /// PORTS: `application.zig:217` `saved_language: ?[:0]const u8` (OWNED — a
         /// heap copy of the launch-time `LANG`, `alloc.free`'d at dispose). A
         /// NUL-terminated [`CString`] (the reference type is a sentinel-terminated
         /// slice). `None` when `LANG` was unset.
         pub saved_language: RefCell<Option<CString>>,
 
+        /// glib source for our signal handler.
+        ///
         /// PORTS: `application.zig:206` `signal_source: ?c_uint` (OWNED handle — the
         /// glib source id for the SIGINT/SIGTERM handler; `Source.remove` at
         /// dispose). A [`glib::SourceId`]; dropping/removing it detaches the source
         /// (invariant 11, RAII). `None` when no handler is installed.
         pub signal_source: RefCell<Option<glib::SourceId>>,
 
+        /// The timer used to quit the application after the last window is
+        /// closed. Even if there is no quit delay set, this is the state
+        /// used to determine to close the app.
+        ///
         /// PORTS: `application.zig:194-201` `quit_timer` (OWNED handle — see
         /// [`QuitTimer`]). `.off` until armed.
         pub quit_timer: RefCell<QuitTimer>,
 
+        /// This is set to true so long as we request a window exactly
+        /// once. This prevents quitting the app before we've shown one
+        /// window.
+        ///
         /// PORTS: `application.zig:186` `requested_window: bool` — set true once we
         /// have requested a window exactly once, so we don't quit before showing
         /// one. Control flag; Task 8/Task 10 drive it.
         pub requested_window: Cell<bool>,
 
+        /// This is set to false internally when the event loop
+        /// should exit and the application should quit. This must
+        /// only be set by the main loop thread.
+        ///
         /// PORTS: `application.zig:191` `running: bool` — the hand-rolled run loop's
         /// continue flag; set false to quit. Set only by the main-loop thread
         /// (Task 10). Control flag.
         pub running: Cell<bool>,
 
+        /// State and logic for the underlying windowing protocol.
+        ///
         /// PORTS: `application.zig:176` `winproto: winprotopkg.App` — the
         /// per-application windowing-protocol state (the [`winproto`] tagged
         /// union). `.none` (the noop backend) until [`super::Application::new`]
@@ -423,6 +461,14 @@ mod imp {
         ///      (`application.zig:1889-1892`) → handled by the `*Impl` trait method
         ///      slots below (bodies are Task 9's; the skeleton keeps the defaults).
         fn class_init(_klass: &mut Self::Class) {
+            // Register our compiled resources exactly once.
+            //
+            // PORT NOTE: `register_resources` owns the reference's failure arm
+            // (`application.zig:2194-2197`):
+            //
+            //     // If we fail to load resources then things will
+            //     // probably look really bad but it shouldn't stop our
+            //     // app from loading.
             crate::gtk::register_resources();
         }
     }
@@ -499,25 +545,37 @@ mod imp {
             // Set ourselves as the default application (`:1303`).
             (*obj).set_default();
 
-            // The D-Bus connection is only valid after GApplication startup, so the
-            // portal `OpenURI` object is handed it here (`:1305-1308`).
+            // The D-Bus connection is only valid after GApplication startup.
+            //
+            // (The portal `OpenURI` object is handed it here, `:1305-1308`.)
             {
                 use gio::prelude::ApplicationExt as _;
                 let dbus = obj.upcast_ref::<gio::Application>().dbus_connection();
                 self.open_uri.set_dbus_connection(dbus.as_ref());
             }
 
-            // Setup our event loop backend (`:1311`).
+            // Setup our event loop
+            //
+            // (`:1311`.)
             self.startup_xev();
-            // Setup our style manager — light/dark mode (`:1314`).
+            // Setup our style manager (light/dark mode)
+            //
+            // (`:1314`.)
             self.startup_style_manager();
-            // Setup signal handlers (`:1317`).
+            // Setup some signal handlers
+            //
+            // (`:1317`.)
             self.startup_signals();
             // Setup our action map (`:1320`).
             self.startup_action_map();
             // Setup our global shortcuts (`:1323`).
             self.startup_global_shortcuts();
-            // Show the config-diagnostics dialog if loading produced any (`:1329`).
+            // If we have any config diagnostics from loading, then we
+            // show the diagnostics dialog. We show this one as a general
+            // modal (not to any specific window) because we don't even
+            // know if the window will load.
+            //
+            // (`:1329`.)
             self.show_config_errors_dialog();
         }
 
@@ -537,7 +595,9 @@ mod imp {
                 thunk();
             }
 
-            // `gio.Application.virtual_methods.activate.call(parent)` (`:1468-1472`).
+            // Call the parent activate method.
+            //
+            // (`gio.Application.virtual_methods.activate.call(parent)`, `:1468-1472`.)
             self.parent_activate();
         }
     }
@@ -545,6 +605,10 @@ mod imp {
     impl libadwaita::subclass::prelude::AdwApplicationImpl for Application {}
 
     impl Application {
+        /// Returns the configuration for this application.
+        ///
+        /// The reference count is increased.
+        ///
         /// PORTS: `application.zig:1208-1210` `getConfig` (the `config` property
         /// getter, `getter_transfer = .full`). Hands back a fresh strong ref to the
         /// shared [`Config`] (cloning a gtk4-rs wrapper increments the refcount), so
@@ -556,6 +620,12 @@ mod imp {
             self.config.borrow().clone()
         }
 
+        /// Set the configuration for this application. The reference count
+        /// is increased on the new configuration and the old one is
+        /// unreferenced.
+        ///
+        /// If the config has errors this may show the config errors dialog.
+        ///
         /// PORTS: `application.zig:1211-1226` `setConfig`. Sets the configuration for
         /// this application: unref the prior, ref the new, emit `notify::config` (so
         /// [`Self::prop_config`] re-applies CSS / accelerators), then show the config
@@ -572,7 +642,9 @@ mod imp {
             self.config.replace(Some(config));
             // `self.as(gobject.Object).notifyByPspec(...config...)` (`:1226`).
             self.obj().notify("config");
-            // `self.showConfigErrorsDialog()` (`:1229`).
+            // Show our errors if we have any
+            //
+            // (`self.showConfigErrorsDialog()`, `:1229`.)
             self.show_config_errors_dialog();
         }
 
@@ -610,11 +682,16 @@ mod imp {
             // Sync our accelerators for menu items (`:1233`).
             self.sync_action_accelerators();
 
-            // Load our runtime and custom CSS (`:1238-1249`). A failure here just
-            // leaves the old CSS in place — it must not fail the whole config
-            // change — so both loaders warn-and-continue internally.
+            // Load our runtime and custom CSS. If this fails then our window is
+            // just stuck with the old CSS but we don't want to fail the entire
+            // config change operation (`:1300-1314`).
             self.load_runtime_css();
-            self.load_custom_css();
+            // self.loadCustomCss() catch |err| {
+            //     log.warn("failed to load custom CSS, no custom CSS applied, err={}", .{err});
+            // };
+            if let Err(err) = self.load_custom_css() {
+                log::warn!(target: LOG_SCOPE, "failed to load custom CSS, no custom CSS applied, err={err}");
+            }
         }
 
         /// PORTS: `application.zig:...` `signalCssParsingError` — the
@@ -674,6 +751,10 @@ mod imp {
                 error.message(),);
         }
 
+        /// Configure libxev to use a specific backend.
+        ///
+        /// This must be called before any other xev APIs are used.
+        ///
         /// PORTS: `application.zig:1335-1360` `startupXev`. Configures libxev to a
         /// specific backend when `async-backend` is not `.auto`. Must run before
         /// any other xev API is used.
@@ -689,6 +770,8 @@ mod imp {
             // If our backend is auto then we have no setup to do (`:1340`).
             let backend = match config.async_backend {
                 AsyncBackend::Auto => return,
+                // Setup our event loop backend to the preferred method
+                //
                 // On Linux `rustty_xev::DYNAMIC` is TRUE, so this branch is LIVE
                 // (unlike macOS). `.epoll => if (comptime xev.dynamic)
                 // xev.prefer(.epoll) else false` (`:1345-1346`).
@@ -710,6 +793,10 @@ mod imp {
             }
         }
 
+        /// Setup the style manager on startup. The primary task here is to
+        /// setup our initial light/dark mode based on the configuration and
+        /// setup listeners for changes to the style manager.
+        ///
         /// PORTS: `application.zig:1365-1397` `startupStyleManager`. Sets the
         /// initial light/dark scheme from `window-theme`, subscribes to scheme
         /// changes, and does one idempotent initial sync.
@@ -754,7 +841,11 @@ mod imp {
                 }
             ));
 
-            // Initial idempotent color-scheme sync (`:1393-1396`).
+            // Do an initial color scheme sync. This is idempotent and does nothing
+            // if our current theme matches what librustty has so its safe to
+            // call.
+            //
+            // (`:1393-1396`.)
             self.handle_style_manager_dark(&style);
         }
 
@@ -965,7 +1056,11 @@ mod imp {
             self.global_shortcut_bind_failed_count
                 .set(self.global_shortcut_bind_failed_count.get() + 1);
 
-            let (title, body) = super::bind_failed_notification(failure);
+            // `... catch return;` (`:1773-1778`): no notification when the body
+            // does not fit the reference's 512-byte buffer (S49-F4 / S50-F3).
+            let Some((title, body)) = super::bind_failed_notification(failure) else {
+                return;
+            };
             // `Action.desktopNotification(self, .app, .{ .title, .body })`
             // (`:1721-1724`).
             action::desktop_notification(
@@ -973,11 +1068,14 @@ mod imp {
                 Target::<super::AppTargetHandle>::App,
                 rustty_apprt_api::action::DesktopNotification {
                     title: title.as_bytes(),
-                    body: body.as_bytes(),
+                    body: &body,
                 },
             );
         }
 
+        /// Show the config errors dialog if the config on our application
+        /// has diagnostics.
+        ///
         /// PORTS: `application.zig:1608-1653` `showConfigErrorsDialog`. Presents (or
         /// refreshes) the config-diagnostics dialog when the config has diagnostics.
         fn show_config_errors_dialog(&self) {
@@ -990,6 +1088,8 @@ mod imp {
             };
             let has_diagnostics = config.property::<bool>("has-diagnostics");
 
+            // If we already have a dialog, just update the config.
+            //
             // `if (priv.config_errors_dialog.get()) |diag| { ... return; }`
             // (`:1612-1631`). The strong ref `get()` hands back (`:1613` `defer
             // diag.unref()`) is dropped at the end of this block.
@@ -1056,6 +1156,10 @@ mod imp {
                 Target::<AppTargetHandle>::App,
                 rustty_apprt_api::action::ReloadConfig::default(),
             ) {
+                // If we fail to reload the configuration, then we want the
+                // user to know it. For now we log but we should show another
+                // GUI.
+                //
                 // log.warn("error reloading config: {}", .{err});
                 log::warn!(target: LOG_SCOPE, "error reloading config: {err:?}");
             }
@@ -1160,6 +1264,14 @@ mod imp {
                 return;
             };
             // Trigger → GTK accelerator string (`:1176-1193`).
+            //
+            // PORT NOTE: the reference formats into a fixed 1024-byte buffer and
+            // has an overflow arm that `accel_from_trigger` (a `String`) cannot
+            // reach:
+            //
+            //     // This should really never, never happen. Its not critical enough
+            //     // to actually crash, but this is a bug somewhere. An accelerator
+            //     // for a trigger can't possibly be more than 1024 bytes.
             let Some(accel) = crate::gtk::key::accel_from_trigger(trigger) else {
                 return;
             };
@@ -1247,20 +1359,40 @@ mod imp {
             provider.load_from_string(&css);
         }
 
-        /// PORTS: `application.zig:1066-1140` `loadCustomCss`. Loads each
+        /// PORTS: `application.zig:1119-1199` `loadCustomCss`. Loads each
         /// `gtk-custom-css` file into a fresh provider appended to
         /// `custom_css_providers` and registered on the display at USER priority.
-        fn load_custom_css(&self) {
+        ///
+        /// Returns the reference's `LoadCustomCssError` arm: a read error other
+        /// than `FileTooBig` on a file that OPENED stops the whole load (the files
+        /// after it are not loaded; the ones before it stay applied), and the caller
+        /// logs `failed to load custom CSS, no custom CSS applied, err={}`
+        /// (`:1309-1314`). Measured on the VM with the reference's own open + read
+        /// code (Zig 0.16, aarch64-linux): a DIRECTORY named in `gtk-custom-css`
+        /// opens, then its first read fails with `error.IsDir`.
+        ///
+        /// CORRECTION (task T-D, S49-F3): this returned `()`. It checked the size
+        /// with `fs::metadata` and read with `fs::read`, so a read error was logged
+        /// as "error opening gtk-custom-css file" and skipped, and the files after
+        /// it still loaded. It also logged `loading gtk-custom-css path=` only
+        /// after a successful read (the reference logs it between the open and the
+        /// read), printed the size limit as `5242880 bytes` (the reference's `{Bi}`
+        /// prints `5MiB`, measured), and parsed `String::from_utf8_lossy(contents)`
+        /// where the reference hands GTK the file's bytes (`glib.Bytes` +
+        /// `loadFromBytes`). GTK treats those differently: measured on GTK 4.22.4,
+        /// a stylesheet whose comment holds one Latin-1 byte parses to NOTHING from
+        /// raw bytes, and to its rules after U+FFFD substitution.
+        pub(super) fn load_custom_css(&self) -> std::io::Result<()> {
             use std::os::unix::ffi::OsStrExt;
 
-            // `gdk.Display.getDefault() orelse { warn; return }` (`:1069-1072`).
+            // `gdk.Display.getDefault() orelse { warn; return }` (`:1126-1129`).
             let Some(display) = gtk4::gdk::Display::default() else {
                 log::warn!(target: LOG_SCOPE, "unable to get display");
-                return;
+                return Ok(());
             };
 
             // Unload the previously loaded style providers, then clear the list
-            // (`:1074-1081`). Each was registered at USER priority below; drop it
+            // (`:1131-1138`). Each was registered at USER priority below; drop it
             // off the display before releasing our reference.
             {
                 let mut providers = self.custom_css_providers.borrow_mut();
@@ -1272,47 +1404,28 @@ mod imp {
 
             let cfg = self.config.borrow();
             let Some(cfg) = cfg.as_ref() else {
-                return;
+                return Ok(());
             };
             let config = cfg.get();
 
-            // 5 MB per-file limit (`:1101`).
-            const CSS_FILE_SIZE_LIMIT: u64 = 5 * 1024 * 1024;
-
-            // `for (config.@"gtk-custom-css".value.items) |p|` (`:1083`). Each path
+            // `for (config.@"gtk-custom-css".value.items) |p|` (`:1141`). Each path
             // was already expanded to absolute at config load.
             for p in &config.gtk_custom_css.value {
                 // `.optional => .{ path, true }` / `.required => .{ path, false }`
-                // (`:1084-1087`).
+                // (`:1142-1145`).
                 let (path_bytes, optional) = match p {
                     rustty_config::path::Path::Optional(path) => (path, true),
                     rustty_config::path::Path::Required(path) => (path, false),
                 };
                 let path = std::path::Path::new(std::ffi::OsStr::from_bytes(path_bytes));
 
-                // Open + read the file (`:1088-1113`). A missing OPTIONAL file is
-                // silent; any other open error (or a missing REQUIRED file) warns;
-                // either way we skip to the next path.
-                let contents = match std::fs::metadata(path) {
-                    Ok(meta) if meta.len() > CSS_FILE_SIZE_LIMIT => {
-                        log::warn!(target: LOG_SCOPE, "gtk-custom-css file {} was larger than {CSS_FILE_SIZE_LIMIT} bytes",
-                            path.display());
-                        continue;
-                    }
-                    Ok(_) => match std::fs::read(path) {
-                        Ok(bytes) => bytes,
-                        Err(err) => {
-                            let missing = err.kind() == std::io::ErrorKind::NotFound;
-                            if !missing || !optional {
-                                log::warn!(target: LOG_SCOPE, "error opening gtk-custom-css file {}: {err}",
-                                    path.display());
-                            }
-                            continue;
-                        }
-                    },
+                // const file = std.Io.Dir.openFileAbsolute(global.io(), path, .{})
+                //     catch |err| { if (err != error.FileNotFound or !optional) log.warn(...); continue; };
+                // (`:1146-1158`). A missing OPTIONAL file is silent.
+                let file = match std::fs::File::open(path) {
+                    Ok(file) => file,
                     Err(err) => {
-                        let missing = err.kind() == std::io::ErrorKind::NotFound;
-                        if !missing || !optional {
+                        if err.kind() != std::io::ErrorKind::NotFound || !optional {
                             log::warn!(target: LOG_SCOPE, "error opening gtk-custom-css file {}: {err}",
                                 path.display());
                         }
@@ -1320,10 +1433,37 @@ mod imp {
                     }
                 };
 
+                // const css_file_size_limit = 5 * 1024 * 1024; // 5MB
+                const CSS_FILE_SIZE_LIMIT: usize = 5 * 1024 * 1024;
+
+                // log.info("loading gtk-custom-css path={s}", .{path});
                 log::info!(target: LOG_SCOPE, "loading gtk-custom-css path={}", path.display());
 
+                // const contents = compat_file.readToEndAlloc(file, alloc, css_file_size_limit)
+                //     catch |err| switch (err) {
+                //         error.FileTooBig => { log.warn(...); continue; },
+                //         else => |e| return e,
+                //     };
+                // (`:1166-1176`).
+                let contents = match super::read_to_end_alloc(file, CSS_FILE_SIZE_LIMIT) {
+                    Ok(contents) => contents,
+                    Err(super::ReadToEndAllocError::FileTooBig) => {
+                        // `{Bi}` of `css_file_size_limit` (5 * 1024 * 1024) prints
+                        // `5MiB` (Zig 0.16, measured on the VM).
+                        const CSS_FILE_SIZE_LIMIT_BI: &str = "5MiB";
+                        // log.warn("gtk-custom-css file {s} was larger than {Bi}", .{ path, css_file_size_limit });
+                        log::warn!(target: LOG_SCOPE, "gtk-custom-css file {} was larger than {CSS_FILE_SIZE_LIMIT_BI}",
+                            path.display());
+                        continue;
+                    }
+                    Err(super::ReadToEndAllocError::Io(err)) => return Err(err),
+                };
+
+                // const bytes = glib.Bytes.new(contents.ptr, contents.len); (`:1180`)
+                let bytes = glib::Bytes::from_owned(contents);
+
                 // Fresh provider, wire the parse-error logger, own it in the Vec,
-                // load, and register on the display at USER priority (`:1115-1139`).
+                // load, and register on the display at USER priority (`:1183-1197`).
                 let css_provider = gtk4::CssProvider::new();
                 let obj = self.obj();
                 css_provider.connect_parsing_error(glib::clone!(
@@ -1336,15 +1476,19 @@ mod imp {
                 self.custom_css_providers
                     .borrow_mut()
                     .push(css_provider.clone());
-                css_provider.load_from_string(&String::from_utf8_lossy(&contents));
+                // css_provider.loadFromBytes(bytes); (`:1196`)
+                css_provider.load_from_bytes(&bytes);
                 gtk4::style_context_add_provider_for_display(
                     &display,
                     &css_provider,
                     gtk4::STYLE_PROVIDER_PRIORITY_USER,
                 );
             }
+            Ok(())
         }
 
+        /// This will get called when there are no more open surfaces.
+        ///
         /// PORTS: `application.zig:823-846` `startQuitTimer`. Called when the last
         /// surface closes: arms (or immediately expires) the "quit after the last
         /// window closed" timer. Cancels any prior timer first, so calling it more
@@ -1358,7 +1502,9 @@ mod imp {
         /// the surface-lifecycle callers land.
         #[allow(dead_code)]
         pub(super) fn start_quit_timer(&self) {
-            // Cancel any previous timer (`:828`). This makes repeated arming
+            // Cancel any previous timer.
+            //
+            // (`:828`.) This makes repeated arming
             // idempotent and leak-free.
             self.stop_quit_timer();
 
@@ -1368,14 +1514,16 @@ mod imp {
             };
             let config = config.get();
 
-            // No-op unless configured to quit after the last window closes
-            // (`:831`).
+            // This is a no-op unless we are configured to quit after last window is closed.
+            //
+            // (`:831`.)
             if !config.quit_after_last_window_closed {
                 return;
             }
 
-            // With a delay configured, arm a one-shot timeout that marks the timer
-            // expired; without one, treat it as already expired (`:834-845`).
+            // If a delay is configured, set a timeout function to quit after the delay.
+            //
+            // (`:834-845`.)
             if let Some(delay) = config.quit_after_last_window_closed_delay {
                 // `glib.timeoutAdd(v.asMilliseconds(), handleQuitTimerExpired, self)`
                 // (`:836-840`). The reference passes a raw `self` userdata (no
@@ -1400,11 +1548,15 @@ mod imp {
                 );
                 *self.quit_timer.borrow_mut() = QuitTimer::Active(source);
             } else {
-                // No delay: treat as expired (`:844`).
+                // If no delay is configured, treat it as expired.
+                //
+                // (`:844`.)
                 *self.quit_timer.borrow_mut() = QuitTimer::Expired;
             }
         }
 
+        /// This will get called when a new surface gets opened.
+        ///
         /// PORTS: `application.zig:849-864` `stopQuitTimer`. Cancels the quit timer
         /// and returns it to `.off`. Idempotent for every state (invariant 11).
         pub(super) fn stop_quit_timer(&self) {
@@ -1444,8 +1596,9 @@ mod imp {
         }
     }
 
-    /// PORTS: `application.zig:930-964` `loadRuntimeCss414`. Load runtime CSS for
-    /// older than GTK 4.16.
+    /// Load runtime CSS for older than GTK 4.16
+    ///
+    /// PORTS: `application.zig:930-964` `loadRuntimeCss414`.
     fn load_runtime_css_414(config: &CoreConfig, css: &mut String) {
         use rustty_config::value_types::WindowTheme;
         use std::fmt::Write as _;
@@ -1489,8 +1642,9 @@ mod imp {
         }
     }
 
-    /// PORTS: `application.zig:966-1064` `loadRuntimeCss416`. Load runtime CSS
-    /// for GTK 4.16 and newer.
+    /// Load runtime for GTK 4.16 and newer
+    ///
+    /// PORTS: `application.zig:966-1064` `loadRuntimeCss416`.
     fn load_runtime_css_416(config: &CoreConfig, css: &mut String) {
         use rustty_config::value_types::WindowTheme;
         use std::fmt::Write as _;
@@ -1638,6 +1792,8 @@ mod imp {
     }
 }
 
+// SIGUSR2 signal handler via g_unix_signal_add
+//
 // PORTS: `application.zig:1507-1524` `handleSigusr2`. The SIGUSR2 handler
 // installed by [`imp::Application::startup_signals`]. `g_unix_signal_add` calls
 // it on the main loop when SIGUSR2 is delivered; returning `G_SOURCE_CONTINUE`
@@ -1663,6 +1819,10 @@ unsafe extern "C" fn handle_sigusr2(ud: glib::ffi::gpointer) -> glib::ffi::gbool
         Target::<AppTargetHandle>::App,
         rustty_apprt_api::action::ReloadConfig::default(),
     ) {
+        // If we fail to reload the configuration, then we want the
+        // user to know it. For now we log but we should show another
+        // GUI.
+        //
         // log.warn("error reloading config: {}", .{err});
         // (task-14d-3: the error VALUE was dropped — the `.is_err()` discarded it.)
         log::warn!(target: LOG_SCOPE, "error reloading config: {err:?}");
@@ -1681,42 +1841,122 @@ unsafe extern "C" fn handle_sigusr2(ud: glib::ffi::gpointer) -> glib::ffi::gbool
 /// fallbacks otherwise (`:1707-1713`). The trigger label falls back to `"?"` when
 /// the trigger cannot be rendered (`:1701-1705`).
 ///
-/// PORT NOTE (byte fidelity): `failure.message` is compositor wire data
-/// ([`Vec<u8>`]); it is decoded lossily HERE, at the one place it becomes
-/// user-facing display text, and nowhere earlier.
+/// Returns `None` where the reference returns without raising a notification: the
+/// body does not fit its 512-byte buffer (`:1773-1778`, `bufPrintZ(...) catch
+/// return`).
 ///
-/// PORT NOTE: the reference formats into a fixed 512-byte buffer and RETURNS
-/// (raising no notification at all) when the body does not fit (`:1715-1720`,
-/// `catch return`). rustty's `String` grows, so the notification is always raised;
-/// a notification silently dropped for length is a defect, not behaviour worth
-/// reproducing.
-pub(crate) fn bind_failed_notification(failure: &BindFailed) -> (String, String) {
-    // `key.labelFromTrigger(&writer, failure.trigger) catch false` → `"?"`
-    // (`:1700-1705`).
+/// The body is BYTES, as the reference's is: `failure.message` is compositor wire
+/// data (`[*:0]const u8`), and the 512-byte limit is a limit on those bytes. It is
+/// decoded only where it becomes display text (`action::desktop_notification`).
+///
+/// CORRECTION (task T-D, S49-F4 / S50-F3): this returned `(String, String)` under
+/// a PORT NOTE reading "rustty's `String` grows, so the notification is always
+/// raised; a notification silently dropped for length is a defect, not behaviour
+/// worth reproducing", and it decoded `failure.message` lossily before measuring
+/// anything. Neither buffer limit was reproduced. A dropped notification is not a
+/// crash, leak, hang or UB, so `PORT_RULES.md` R13 does not apply and R1 does: both
+/// limits are reproduced ([`BIND_FAILED_LABEL_BUF_LEN`], [`BIND_FAILED_BODY_BUF_LEN`])
+/// and the silent drop is recorded upstream as a latent defect
+/// (`UPSTREAM-DEFECTS.md` UD174).
+pub(crate) fn bind_failed_notification(failure: &BindFailed) -> Option<(String, Vec<u8>)> {
+    // var label_buf: [128]u8 = undefined;
+    // var writer: std.Io.Writer = .fixed(&label_buf);
+    // const label: []const u8 = label: {
+    //     const ok = key.labelFromTrigger(&writer, failure.trigger) catch false;
+    //     break :label if (ok) writer.buffered() else "?";
+    // };
     let label = {
         let mut buf = String::new();
-        if crate::gtk::key::label_from_trigger(&mut buf, failure.trigger) {
-            buf
-        } else {
-            "?".to_owned()
-        }
+        let ok = crate::gtk::key::label_from_trigger(&mut buf, failure.trigger);
+        bind_failed_label(ok, buf)
     };
 
-    // `if (failure.message[0] != 0) break :detail failure.message;` (`:1708`).
-    let detail: String = if failure.message.is_empty() {
+    // const detail: [*:0]const u8 = detail: {
+    //     if (failure.message[0] != 0) break :detail failure.message;
+    //     break :detail if (failure.revoked) ... else ...;
+    // };
+    //
+    // `[*:0]`: the message ends at its first NUL.
+    let message = failure
+        .message
+        .split(|&b| b == 0)
+        .next()
+        .unwrap_or_default();
+    let detail: &[u8] = if message.is_empty() {
         if failure.revoked {
-            tr(c"The keybind was revoked by the system.").to_owned()
+            tr(c"The keybind was revoked by the system.").as_bytes()
         } else {
-            tr(c"The keybind was denied by the system.").to_owned()
+            tr(c"The keybind was denied by the system.").as_bytes()
         }
     } else {
-        String::from_utf8_lossy(&failure.message).into_owned()
+        message
     };
 
-    (
-        tr(c"Global keybind unavailable").to_owned(),
-        format!("{label}: {detail}"),
-    )
+    // var body_buf: [512]u8 = undefined;
+    // const body = std.fmt.bufPrintZ(&body_buf, "{s}: {s}", .{ label, detail }) catch return;
+    let body = bind_failed_body(label.as_bytes(), detail)?;
+
+    Some((tr(c"Global keybind unavailable").to_owned(), body))
+}
+
+/// `compat_file.ReadToEndAllocError` as `loadCustomCss` distinguishes it:
+/// `error.FileTooBig` versus every other read error.
+#[derive(Debug)]
+pub(crate) enum ReadToEndAllocError {
+    /// `error.FileTooBig`: more than `max_bytes` were read.
+    FileTooBig,
+    /// Any other read error (`else => |e| return e`).
+    Io(std::io::Error),
+}
+
+/// PORTS: `src/lib/compat/file.zig:15-31` `readToEndAlloc`: read from the file's
+/// current position to end of stream, `error.FileTooBig` once more than
+/// `max_bytes` have been read. A STREAMING limit, as the reference's is (it never
+/// consults the file's size), so a file whose reported size is not its content
+/// (a `/proc` file, a FIFO) is measured by what it yields.
+pub(crate) fn read_to_end_alloc(
+    file: std::fs::File,
+    max_bytes: usize,
+) -> Result<Vec<u8>, ReadToEndAllocError> {
+    use std::io::Read;
+    let mut contents = Vec::new();
+    // Reading at most `max_bytes + 1` is enough to tell "fits" from "too big":
+    // the reference fails as soon as its running total would pass `max_bytes`.
+    file.take(max_bytes as u64 + 1)
+        .read_to_end(&mut contents)
+        .map_err(ReadToEndAllocError::Io)?;
+    if contents.len() > max_bytes {
+        return Err(ReadToEndAllocError::FileTooBig);
+    }
+    Ok(contents)
+}
+
+/// `var label_buf: [128]u8` (`application.zig:1758`).
+const BIND_FAILED_LABEL_BUF_LEN: usize = 128;
+/// `var body_buf: [512]u8` (`application.zig:1773`).
+const BIND_FAILED_BODY_BUF_LEN: usize = 512;
+
+/// The label half of `globalShortcutBindFailed`: `labelFromTrigger` into a
+/// `.fixed(&label_buf)` writer fails with `WriteFailed` once the label exceeds
+/// the 128-byte buffer, and a failure (of either kind) becomes `"?"`.
+fn bind_failed_label(ok: bool, label: String) -> String {
+    if ok && label.len() <= BIND_FAILED_LABEL_BUF_LEN {
+        label
+    } else {
+        "?".to_owned()
+    }
+}
+
+/// The body half: `bufPrintZ(&body_buf, "{s}: {s}", ...)` needs the formatted
+/// bytes PLUS the NUL sentinel to fit 512 bytes, so a body of 512 bytes or more
+/// is `error.NoSpaceLeft`, which the reference turns into `return` (no
+/// notification).
+fn bind_failed_body(label: &[u8], detail: &[u8]) -> Option<Vec<u8>> {
+    let mut body = Vec::with_capacity(label.len() + 2 + detail.len());
+    body.extend_from_slice(label);
+    body.extend_from_slice(b": ");
+    body.extend_from_slice(detail);
+    (body.len() < BIND_FAILED_BODY_BUF_LEN).then_some(body)
 }
 
 /// A zero-sized [`CoreSurfaceHandle`] used only to name the `C` type parameter of
@@ -1767,6 +2007,8 @@ extern "C" {
 // REGISTERED verbatim so the action map is complete (the `startup` KAT asserts all
 // nine names).
 
+/// Handle `app.new-window` and `app.new-window-command` GTK actions
+///
 /// PORTS: `application.zig:1899-1936` `actionNewWindow` (`new-window` /
 /// `new-window-command`; B5 end state — the argv parse is factored into
 /// [`parse_overrides`]). Parses the optional `as` argv override, then requests
@@ -1951,7 +2193,7 @@ fn parse_overrides(arguments_it: glib::VariantIter) -> Option<TabOverrides> {
         // a parse failure warns and CONTINUES (`:2079-2082`), unlike the
         // command arm.
         if let Some(v) = str.strip_prefix("--shell-integration=") {
-            match ShellIntegration::string_to_enum(v.trim().as_bytes()) {
+            match ShellIntegration::string_to_enum(trim_ascii_whitespace(v).as_bytes()) {
                 Some(parsed) => parsed_shell_integration = Some(parsed),
                 None => {
                     log::warn!(target: LOG_SCOPE, "unable to parse shell integration {v}: InvalidValue")
@@ -1962,12 +2204,12 @@ fn parse_overrides(arguments_it: glib::VariantIter) -> Option<TabOverrides> {
         // `if (std.mem.cutPrefix(u8, str, "--working-directory="))`
         // (`:2085-2091`).
         if let Some(v) = str.strip_prefix("--working-directory=") {
-            working_directory = Some(v.trim().to_string());
+            working_directory = Some(trim_ascii_whitespace(v).to_string());
             continue;
         }
         // `if (std.mem.cutPrefix(u8, str, "--title="))` (`:2092-2097`).
         if let Some(v) = str.strip_prefix("--title=") {
-            title = Some(v.trim().to_string());
+            title = Some(trim_ascii_whitespace(v).to_string());
             continue;
         }
     }
@@ -1986,6 +2228,18 @@ fn parse_overrides(arguments_it: glib::VariantIter) -> Option<TabOverrides> {
         working_directory,
         title,
     })
+}
+
+/// `std.mem.trim(u8, v, &std.ascii.whitespace)` — `parseOverrides`' trim of the
+/// `--shell-integration=`, `--working-directory=` and `--title=` values.
+///
+/// `std.ascii.whitespace` is `{ ' ', '\t', '\n', '\r', VT (0x0B), FF (0x0C) }`
+/// (Zig 0.16 `lib/std/ascii.zig:162`). CORRECTION (task T-D, S50-F2): the three
+/// sites used `str::trim()`, which also strips Unicode `White_Space` (U+00A0,
+/// U+0085, U+2028, U+3000, ...). `str::trim_ascii()` is not a substitute either:
+/// its set omits VT, which Zig's includes.
+fn trim_ascii_whitespace(v: &str) -> &str {
+    v.trim_matches(|c: char| matches!(c, ' ' | '\t' | '\n' | '\r' | '\x0B' | '\x0C'))
 }
 
 /// PORTS: `application.zig:2114-2148` `actionOpenConfig` (`open-config`;
@@ -2115,9 +2369,11 @@ fn action_present_surface(
         return;
     };
 
-    // Convert the u64 to a core surface by using it as a surface ID. A value of
-    // zero means that there was no target surface for the notification so we
-    // don't focus any surface (`:1834-1838`).
+    // Convert the u64 to a core surface by using it as a surface ID.
+    // A value of zero means that there was no target surface for the
+    // notification so we don't focus any surface.
+    //
+    // (`:1834-1838`.)
     if surface_id == 0 {
         return;
     }
@@ -2156,6 +2412,10 @@ fn action_reload_config(
         Target::<AppTargetHandle>::App,
         rustty_apprt_api::action::ReloadConfig::default(),
     ) {
+        // If we fail to reload the configuration, then we want the
+        // user to know it. For now we log but we should show another
+        // GUI.
+        //
         // log.warn("error reloading config: {}", .{err});
         // (task-14d-3: the error VALUE was dropped — the `.is_err()` discarded it.)
         log::warn!(target: LOG_SCOPE, "error reloading config: {err:?}");
@@ -2232,6 +2492,9 @@ fn deinit_private(priv_: &imp::Application) {
     priv_.custom_css_providers.borrow_mut().clear();
 }
 
+/// Function used to funnel GLib/GObject/GTK log messages into Zig's logging
+/// system rather than just getting dumped directly to stderr.
+///
 /// PORTS: `application.zig:48-110` `glibLogWriterFunction`. Funnels
 /// GLib/GObject/GTK log messages through rustty's logging — the `log::` facade
 /// under the reference's own `glib` scope (`GLIB_LOG_SCOPE`) — rather than
@@ -2296,6 +2559,11 @@ fn glib_log_writer(level: glib::LogLevel, fields: &[glib::LogField<'_>]) -> glib
     glib::LogWriterOutput::Handled
 }
 
+/// This sets various GTK-related environment variables as necessary
+/// given the runtime environment or configuration.
+///
+/// This must be called BEFORE GTK initialization.
+///
 /// PORTS: `application.zig:2849-2951` `setGtkEnv`. Sets the `GDK_DEBUG` /
 /// `GDK_DISABLE` environment variables BEFORE GTK initializes, based on the
 /// runtime GTK version, so Ghostty gets a GL (never GLES/Vulkan) GDK backend.
@@ -2321,15 +2589,31 @@ fn set_gtk_env(config: &CoreConfig) {
     // (`application.zig:2864-2866`). `state.logging.stderr` reads the process
     // global state; unset (e.g. in a test) reads as `false`.
     let stderr_logging = rustty_core::STATE.get().is_some_and(|s| s.logging.stderr);
+    //
+    // output OpenGL debug information
+    //
+    // `gtk-opengl-debug` dumps logs directly to stderr so both must be true
+    // to enable OpenGL debugging.
     let gdk_debug_opengl = stderr_logging && config.gtk_opengl_debug;
+    // disable GLES, Rustty can't use GLES
     let mut gdk_debug_gl_disable_gles = false;
+    // GTK's new renderer can cause blurry font when using fractional scaling.
     let mut gdk_debug_gl_no_fractional = false;
+    // Disabling Vulkan can improve startup times by hundreds of
+    // milliseconds on some systems. We don't use Vulkan so we can just
+    // disable it.
     let mut gdk_debug_vulkan_disable = false;
 
     // GDK_DISABLE flags (`application.zig:2869-2879`). `color-mgmt` defaults ON —
     // current GTK color management is not good enough (`application.zig:2871-2874`).
     let mut gdk_disable_gles_api = false;
+    // current gtk implementation for color management is not good enough.
+    // see: https://bugs.kde.org/show_bug.cgi?id=495647
+    // gtk issue: https://gitlab.gnome.org/GNOME/gtk/-/issues/6864
     let mut gdk_disable_color_mgmt = true;
+    // Disabling Vulkan can improve startup times by hundreds of
+    // milliseconds on some systems. We don't use Vulkan so we can just
+    // disable it.
     let mut gdk_disable_vulkan = false;
 
     // Version-gated environment block (`application.zig:2881-2914`). Every gate is
@@ -2341,14 +2625,22 @@ fn set_gtk_env(config: &CoreConfig) {
             gdk_disable_color_mgmt = false;
         }
 
-        // From GTK 4.16, GDK_DEBUG split into GDK_DEBUG + GDK_DISABLE (`:2886-2892`).
+        // (`:2886-2892`.)
         if gtk_version::runtime_at_least(4, 16, 0) {
+            // From gtk 4.16, GDK_DEBUG is split into GDK_DEBUG and GDK_DISABLE.
+            // For the remainder of "why" see the 4.14 comment below.
             gdk_disable_gles_api = true;
             gdk_disable_vulkan = true;
             break 'environment;
         }
-        // GTK 4.14+: export GDK_DEBUG to run on Wayland (`:2893-2908`).
+        // (`:2893-2908`.)
         if gtk_version::runtime_at_least(4, 14, 0) {
+            // We need to export GDK_DEBUG to run on Wayland after GTK 4.14.
+            // Older versions of GTK do not support these values so it is safe
+            // to always set this. Forwards versions are uncertain so we'll have
+            // to reassess...
+            //
+            // Upstream issue: https://gitlab.gnome.org/GNOME/gtk/-/issues/6589
             gdk_debug_gl_disable_gles = true;
             gdk_debug_vulkan_disable = true;
             // Removed at GTK v4.17.5 (`application.zig:2903-2906`).
@@ -2357,7 +2649,11 @@ fn set_gtk_env(config: &CoreConfig) {
             }
             break 'environment;
         }
-        // Versions prior to 4.14 (`application.zig:2910-2913`).
+        // Versions prior to 4.14 are a bit of an unknown for Rustty. It
+        // is an environment that isn't tested well and we don't have a
+        // good understanding of what we may need to do.
+        //
+        // (`application.zig:2910-2913`.)
         gdk_debug_vulkan_disable = true;
     }
 
@@ -2402,6 +2698,11 @@ fn set_gtk_env(config: &CoreConfig) {
             env_setenv(c"GDK_DISABLE", &v);
         }
     }
+
+    // Sync environ after altering system env
+    //
+    // (`global.syncEnviron()`, `application.zig:2951`: [`env_setenv`] re-syncs
+    // after each `setenv`, so both variables are already synced here.)
 }
 
 /// PORTS: the three error arms of `application.zig:477` `run` (`!void`): the
@@ -2460,9 +2761,13 @@ impl Drop for RunCleanup<'_> {
         // Sync any remaining settings (`application.zig:491`).
         gio::Settings::sync();
 
-        // Clear out the event loop, don't block (`application.zig:494`).
+        // Clear out the event loop, don't block.
+        //
+        // (`application.zig:494`.)
         while self.ctx.iteration(false) {}
 
+        // Release the context so something else can use it.
+        //
         // The context release (`application.zig:497`) is the paired
         // `MainContextAcquireGuard`'s `Drop`, which runs after this guard's — see
         // the struct doc.
@@ -2479,12 +2784,37 @@ fn find_active_window() -> Option<gtk4::Window> {
     gtk4::Window::list_toplevels()
         .into_iter()
         .filter_map(|w| w.downcast::<gtk4::Window>().ok())
-        // Confusingly `isActive() == 1` means active; the reference abuses that as
-        // the `findCustom` equality (`application.zig:2956-2959`).
+        // Confusingly, `isActive` returns 1 when active,
+        // but we want to return 0 to indicate equality.
+        //
+        // (The reference's `findCustom` compare function,
+        // `application.zig:2956-2959`; here a plain `find`.)
         .find(|w| w.is_active())
 }
 
 glib::wrapper! {
+    /// The primary entrypoint for the Rustty GTK application.
+    ///
+    /// This requires a `rustty.App` and `rustty.Config` and takes
+    /// care of the rest. Call `run` to run the application to completion.
+    ///
+    /// This type creates a new GObject class. Since the Application is
+    /// the primary entrypoint I'm going to use this as a place to document
+    /// how this all works and where you can find resources for it, but
+    /// this applies to any other GObject class within this apprt.
+    ///
+    /// The various fields (parent_instance) and constants (Parent,
+    /// getGObjectType, etc.) are mandatory "interfaces" for zig-gobject
+    /// to create a GObject class.
+    ///
+    /// I found these to be the best resources:
+    ///
+    ///   * https://github.com/ianprime0509/zig-gobject/blob/d7f1edaf50193d49b56c60568dfaa9f23195565b/extensions/gobject2.zig
+    ///   * https://github.com/ianprime0509/zig-gobject/blob/d7f1edaf50193d49b56c60568dfaa9f23195565b/example/src/custom_class.zig
+    ///
+    /// PORT NOTE: the gtk4-rs `glib::wrapper!` + `#[glib::object_subclass]`
+    /// idiom replaces zig-gobject's mandatory fields and constants.
+    ///
     /// The `GhosttyApplication` — the application-wide GObject, an
     /// [`libadwaita::Application`] subclass. PORTS: `application.zig:112-140`
     /// `pub const Application`. Process-global singleton: reach it anywhere via
@@ -2495,6 +2825,13 @@ glib::wrapper! {
 }
 
 impl Application {
+    /// Get this application as the default, allowing access to its
+    /// properties globally.
+    ///
+    /// This asserts that there is a default application and that the
+    /// default application is a GhosttyApplication. The program would have
+    /// to be in a very bad state for this to be violated.
+    ///
     /// PORTS: `application.zig:230-233` `default`. Returns this application as the
     /// process-global default, giving access to its properties anywhere. Asserts
     /// (like the reference's `gio.Application.getDefault().?` +
@@ -2516,6 +2853,10 @@ impl Application {
             .expect("the default GApplication is not a GhosttyApplication")
     }
 
+    /// The global allocator that all other classes should use by
+    /// calling `Application.default().allocator()`. Zig code should prefer
+    /// this wherever possible so we get leak detection in debug/tests.
+    ///
     /// PORTS: `application.zig:464-466` `allocator`. The ONE canonical allocator all
     /// other classes must use (invariant 2, see the module doc). In rustty the
     /// allocator seam is the workspace global allocator, so this returns
@@ -2535,6 +2876,9 @@ impl Application {
         self.property("config")
     }
 
+    /// Get the original language that Rustty was launched with. This returns a
+    /// pointer to internal memory so it must be copied by callers.
+    ///
     /// PORTS: `application.zig:475-478` `savedLanguage` — the launch-time `LANG`
     /// captured by [`Application::new`] BEFORE the `config.language` override
     /// (`application.zig:279-290`), applied to child-process environments by
@@ -2580,6 +2924,15 @@ impl Application {
     // call-graph shape exists, but their bodies land in later tasks. Each panics if
     // reached before then.
 
+    /// Creates a new Application instance.
+    ///
+    /// This does a lot more work than a typical class instantiation,
+    /// because we expect that this is the main program entrypoint.
+    ///
+    /// The only failure mode of initializing the application is early OOM.
+    /// Early OOM can't be recovered from. Every other error is mapped to
+    /// some degraded state where we can at least show a window with an error.
+    ///
     /// PORTS: `application.zig:243-428` `new`. Creates a new `Application` — the
     /// main program entrypoint's heavy lifting: capture the GLib log writer, load
     /// the configuration (with the degraded-default fallback), capture/override
@@ -2604,8 +2957,10 @@ impl Application {
         // rustty the allocator seam is the global allocator (invariant 2), so
         // there is no per-core allocator to bind here.
 
-        // Capture GLib/GObject/GTK log messages (`application.zig:249-251`).
-        // gtk4-rs's `log_set_writer_func` panics if set more than once, so guard
+        // Capture GLib/GObject/GTK log messages and funnel them through Zig's
+        // logging system rather than just getting dumped directly to stderr.
+        //
+        // (`application.zig:249-251`.) gtk4-rs's `log_set_writer_func` panics if set more than once, so guard
         // with a `Once` — repeated `Application::new` (e.g. across tests) must not
         // abort.
         {
@@ -2614,17 +2969,23 @@ impl Application {
             WRITER.call_once(|| glib::log_set_writer_func(glib_log_writer));
         }
 
-        // Log our GTK / libadwaita versions (`application.zig:254-255`).
+        // Log our GTK versions
+        //
+        // (GTK and libadwaita, `application.zig:254-255`.)
         crate::gtk::gtk_version::log_version();
         crate::gtk::adw_version::log_version();
 
-        // Load our configuration, with the degraded-default fallback that records
-        // the load error as a diagnostic so it can be shown to the user; the
-        // default only fails for OOM (which aborts), so we can always start
-        // (`application.zig:258-271`).
+        // Load our configuration.
+        //
+        // (`application.zig:258-271`; the default only fails for OOM, which
+        // aborts in Rust.)
         let config: CoreConfig = match CoreConfig::load() {
             Ok(config) => config,
             Err(err) => {
+                // If we fail to load the configuration, then we should log
+                // the error in the diagnostics so it can be shown to the user.
+                // We can still load a default which only fails for OOM, allowing
+                // us to startup.
                 let mut def = CoreConfig::default_config();
                 def.add_diagnostic_fmt(
                     format!("error loading user configuration: {err:?}").into_bytes(),
@@ -2633,11 +2994,14 @@ impl Application {
             }
         };
 
-        // Capture the launch-time LANG, then override it from `config.language`
-        // (`application.zig:274-284`). The capture happens BEFORE the override.
+        // Set the old language,
+        //
+        // (Capture the launch-time LANG, then override it from `config.language`,
+        // `application.zig:274-284`. The capture happens BEFORE the override.)
         let saved_language: Option<CString> = {
             let old_language = env_getenv(c"LANG").and_then(|v| CString::new(v).ok());
             if let Some(language) = &config.language {
+                // Override LANG if we need to (sync global environs if so)
                 if let Ok(lang) = CString::new(language.clone()) {
                     env_setenv(c"LANG", &lang);
                 }
@@ -2645,14 +3009,20 @@ impl Application {
             old_language
         };
 
-        // Set the gettext global domain; warn-and-continue on failure — a failure
-        // shouldn't stop startup, translations just may not resolve
-        // (`application.zig:288-293`).
+        // Set gettext global domain to be our app so that our unqualified
+        // translations map to our translations.
+        //
+        // (`application.zig:288-293`.)
         if let Err(err) = rustty_os::i18n::initGlobalDomain() {
+            // Failures shuldn't stop application startup. Our app may
+            // not translate correctly but it should still work. In the
+            // future we may want to add this to the GUI to show.
             log::warn!(target: LOG_SCOPE, "i18n initialization failed error={err:?}");
         }
 
-        // Setup our GTK init env vars (`application.zig:296-305`), then libadwaita
+        // Setup our GTK init env vars
+        //
+        // (`application.zig:296-305`), then libadwaita
         // UNRESTORED SITES (task-14d-3) — this file's residual deficit, each a
         // `catch` arm of a call that is INFALLIBLE in this port, so restoring
         // any of them would put a diagnostic on a success path:
@@ -2662,13 +3032,11 @@ impl Application {
         //   `:1258` `accelerator somehow longer than 1024 bytes: {f}` — the
         //          reference formats into a fixed 1024-byte stack buffer; this
         //          port formats into a `String`.
-        //   `:1304` `out of memory loading runtime CSS, no runtime CSS applied`
-        //          — `load_runtime_css` returns `()`.
-        //   `:1310` `failed to load custom CSS, ...` — NOT a no-arm site: the
-        //          reference reaches it when reading an opened file fails
-        //          (`readToEndAlloc`'s `else => |e| return e`), and
-        //          `load_custom_css` instead logs that failure with the OPEN
-        //          message and continues (NEW-FINDINGS N312, open).
+        //   `:1304` `out of memory loading runtime CSS, no runtime CSS applied` —
+        //          `load_runtime_css` returns `()`. (CORRECTION, task T-D: this
+        //          entry also listed `:1310` `failed to load custom CSS, ...` as
+        //          unrestorable because `load_custom_css` returned `()`; it returns
+        //          the reference's read error now and `:1310` is live, S49-F3.)
         //   `:1804` `error toggling quick terminal err={}` and `:1815`
         //          `error quitting err={}` — both collapse to a direct call
         //          that cannot fail (see each action fn's own PORT NOTE).
@@ -2683,7 +3051,11 @@ impl Application {
         //   `.port/parity-closure/LOG-ABSENT-SITES.tsv` (task S-1c).
         //
         // (`application.zig:306`). `set_gtk_env` is infallible in rustty (see its
-        // doc), so the reference's `error.NoSpaceLeft` warn arm folds away.
+        // doc), so the reference's `error.NoSpaceLeft` warn arm folds away. That
+        // arm reads:
+        //
+        //     // If we fail to set GTK environment variables then we still
+        //     // try to start the application...
         set_gtk_env(&config);
         let _ = libadwaita::init();
 
@@ -2691,18 +3063,25 @@ impl Application {
         let single_instance = match config.gtk_single_instance {
             rustty_config::value_types::GtkSingleInstance::True => true,
             rustty_config::value_types::GtkSingleInstance::False => false,
-            // Resolved to true/false during config finalize (`application.zig:311-312`).
+            // This should have been resolved to true/false during config loading.
+            //
+            // (`application.zig:311-312`.)
             rustty_config::value_types::GtkSingleInstance::Detect => unreachable!(
                 "gtk-single-instance must be resolved to true/false during config load"
             ),
         };
+        // Setup the flags for our application.
         let mut app_flags = gio::ApplicationFlags::empty();
         if !single_instance {
             app_flags |= gio::ApplicationFlags::NON_UNIQUE;
         }
 
-        // Our app id: `config.class` if a valid GApplication id, else the
-        // build-info default (`application.zig:325-335`).
+        // Our app ID determines uniqueness and maps to our desktop file.
+        // We append "-debug" to the ID if we're in debug mode so that we
+        // can develop Rustty in Rustty.
+        //
+        // (`config.class` if a valid GApplication id, else the build-info
+        // default, `application.zig:325-335`.)
         let app_id: String = 'app_id: {
             if let Some(class) = &config.class {
                 if let Ok(class_str) = std::str::from_utf8(class) {
@@ -2715,32 +3094,41 @@ impl Application {
             build_info::APPLICATION_ID.to_owned()
         };
 
-        // The GDK display, or exit — there is no scenario we expect this to be
-        // null, and we don't want null checks everywhere (`application.zig:337-342`).
+        // (`application.zig:337-342`.)
         let Some(display) = gdk4::Display::default() else {
+            // I'm unsure of any scenario where this happens. Because we don't
+            // want to litter null checks everywhere, we just exit here.
             log::warn!(target: LOG_SCOPE, "gdk display is null, exiting");
             std::process::exit(1);
         };
 
-        // Windowing-protocol logic, with the fallback to `.none` on error so we
-        // can still launch (`application.zig:345-358`).
+        // Setup our windowing protocol logic
+        //
+        // (`application.zig:345-358`.)
         let winproto = match winproto::App::init(&display, &app_id, &config) {
             Ok(wp) => wp,
             Err(err) => {
+                // If we fail to detect or setup the windowing protocol
+                // specifies, we fallback to a noop implementation so we can
+                // still launch.
                 log::warn!(target: LOG_SCOPE, "error initializing windowing protocol err={err}");
                 winproto::App::default()
             }
         };
         log::debug!(target: LOG_SCOPE, "windowing protocol={:?}", winproto.protocol());
 
+        // Create our GTK Application which encapsulates our process.
         log::debug!(target: LOG_SCOPE, "creating GTK application id={app_id} single-instance={single_instance}");
 
-        // Wrap the configuration in a GObject (`application.zig:366-368`). This
-        // clones the config, so the local `config` may drop at end of scope.
+        // Wrap our configuration in a GObject.
+        //
+        // (`application.zig:366-368`.) This clones the config, so the local `config` may drop at end of scope.
         let config_obj = Config::new(&config);
 
-        // The CSS provider for config-derived styles. GTK ensures only one
-        // instance of a given provider exists per display (`application.zig:371-378`).
+        // Internally, GTK ensures that only one instance of this provider
+        // exists in the provider list for the display.
+        //
+        // (`application.zig:371-378`.)
         let css_provider = gtk4::CssProvider::new();
         gtk4::style_context_add_provider_for_display(
             &display,
@@ -2748,20 +3136,25 @@ impl Application {
             gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION + 3,
         );
 
-        // Construct the app instance (`application.zig:381-389`). Force the
-        // resource base path to a known value ([`build_info::RESOURCE_PATH`]) so
-        // it does not depend on the app id (which changes debug/release and can be
-        // user-configured) and forces loading the compiled resources
-        // (`application.zig:385-387`).
+        // Initialize the app.
+        //
+        // (`application.zig:381-389`.)
         let app: Self = glib::Object::builder()
             .property("application-id", &app_id)
             .property("flags", app_flags)
+            // Force the resource path to a known value so it doesn't depend
+            // on the app id (which changes between debug/release and can be
+            // user-configured) and force it to load in compiled resources.
+            //
+            // ([`build_info::RESOURCE_PATH`], `application.zig:385-387`.)
             .property("resource-base-path", build_info::RESOURCE_PATH)
             .build();
 
-        // Fill the private state (`application.zig:394-405`). More setup happens in
-        // the GObject-called init callbacks, but this is data we can't thread
-        // through them.
+        // Setup our private state. More setup is done in the init
+        // callback that GObject calls, but we can't pass this data through
+        // to there (and we don't need it there directly) so this is here.
+        //
+        // (`application.zig:394-405`.)
         let priv_ = app.imp();
         priv_.rt_app.set(NonNull::new(rt_app));
         priv_.core_app.set(NonNull::new(core_app));
@@ -2778,7 +3171,9 @@ impl Application {
         // `startupGlobalShortcuts` creates it), and there is no `open_uri` field
         // yet. Their frees in `deinit` are guarded accordingly.
 
-        // Signals (`application.zig:408-422`). The `notify::config` handler
+        // Signals
+        //
+        // (`application.zig:408-422`.) The `notify::config` handler
         // (re)applies config; the CssProvider `parsing-error` handler logs parse
         // errors. Both handler bodies are Task 9's (placeholder-leaf now).
         app.connect_notify_local(Some("config"), |app: &Application, _pspec| {
@@ -2792,12 +3187,20 @@ impl Application {
             }
         ));
 
-        // Trigger initial config changes (`application.zig:425`).
+        // Trigger initial config changes
+        //
+        // (`application.zig:425`.)
         app.notify("config");
 
         app
     }
 
+    /// Force deinitialize the application.
+    ///
+    /// Normally in a GObject lifecycle, this would be called by the
+    /// finalizer. But applications are never fully unreferenced so this
+    /// ensures that our memory is cleaned up properly.
+    ///
     /// PORTS: `application.zig:435-459` `deinit`. Force-deinitialize the
     /// application. Normally a GObject frees in its finalizer, but the application
     /// is never fully unreferenced (`application.zig:430-434`), so this frees every
@@ -3096,6 +3499,20 @@ impl Application {
     /// Must run BEFORE [`Application::bind_core_app`], which captures the `rt_app`
     /// pointer into the tick / confirm-quit thunks. No-op semantics: a null `rt_app`
     /// clears the cell.
+    ///
+    /// PORT NOTE: the reference's two raw accessors over these backrefs have no
+    /// Rust counterpart: the non-generic `Application` cannot name `CoreApp` /
+    /// `ApprtApp`, so their callers go through the `*_thunk` seams instead
+    /// (`application.zig:803-811`):
+    ///
+    /// ```text
+    /// /// Returns the core app associated with this application. This is
+    /// /// not a reference-counted type so you should not store this.
+    /// pub fn core(self: *Self) *CoreApp
+    ///
+    /// /// Returns the apprt application associated with this application.
+    /// pub fn rt(self: *Self) *ApprtApp
+    /// ```
     pub fn bind_rt_app(&self, rt_app: *mut c_void) {
         self.imp().rt_app.set(NonNull::new(rt_app));
     }
@@ -3110,6 +3527,8 @@ impl Application {
         self.imp().winproto.borrow().protocol()
     }
 
+    /// Returns the app winproto implementation.
+    ///
     /// PORTS: `application.zig:468-472` `winproto` — the app-level windowing
     /// protocol accessor the reference returns as `*winprotopkg.App`. rustty holds
     /// it in a [`RefCell`]; the shared-borrow view is what
@@ -3130,6 +3549,8 @@ impl Application {
         self.imp().winproto.borrow_mut()
     }
 
+    /// Returns the open URI portal implementation.
+    ///
     /// PORTS: `application.zig:817-820` `openUri` — returns the open-URI portal
     /// implementation. The reference returns `*OpenURI` (a pointer into the private
     /// struct); [`OpenUri`] is itself an `Rc` handle, so a clone is the same shared
@@ -3139,6 +3560,10 @@ impl Application {
         self.imp().open_uri.clone()
     }
 
+    /// Run the application. This is a replacement for `gio.Application.run`
+    /// because we want more tight control over our event loop so we can
+    /// integrate it with librustty.
+    ///
     /// PORTS: `application.zig:474-592` `run`. A hand-rolled replacement for
     /// `gio.Application.run` (**AD-7**, the plan's defining structural choice) so
     /// the event loop can be interleaved with libghostty's core: after every
@@ -3157,6 +3582,9 @@ impl Application {
         use gtk4::prelude::GtkApplicationExt as _;
 
         let imp = self.imp();
+
+        // Based on the actual `gio.Application.run` implementation:
+        // https://github.com/GNOME/glib/blob/a8e8b742e7926e33eb635a8edceac74cf239d6ed/gio/gapplication.c#L2533
 
         // Acquire the default context for the application (`:482-483`).
         let ctx = glib::MainContext::default();
@@ -3182,11 +3610,17 @@ impl Application {
             RunError::ApplicationRegisterFailed
         })?;
 
-        // Call `activate` as part of the normal startup routine, but only if the
-        // config allows it (background launch without an initial window,
-        // `:518-530`). Scope the config borrow: once the event loop runs it can
-        // change out from underneath us (`:526-527`, load-bearing).
+        // This just calls the `activate` signal but its part of the normal startup
+        // routine so we just call it, but only if the config allows it (this allows
+        // for launching Rustty in the "background" without immediately opening
+        // a window).
+        //
+        // https://gitlab.gnome.org/GNOME/glib/-/blob/bd2ccc2f69ecfd78ca3f34ab59e42e2b462bad65/gio/gapplication.c#L2302
+        //
+        // (`:518-530`.)
         {
+            // We need to scope any config access because once we run our
+            // event loop, this can change out from underneath us.
             let initial_window = {
                 let config = imp.config.borrow();
                 config.as_ref().is_some_and(|c| c.get().initial_window)
@@ -3196,8 +3630,10 @@ impl Application {
             }
         }
 
-        // If we are NOT the primary instance, never run the loop — another GTK
-        // instance is already running (`:532-540`).
+        // If we are NOT the primary instance, then we never want to run.
+        // This means that another instance of the GTK app is running.
+        //
+        // (`:532-540`.)
         if self.is_remote() {
             log::debug!(target: LOG_SCOPE, "application is remote, exiting run loop after activation");
             return Ok(());
@@ -3241,19 +3677,26 @@ impl Application {
                 };
                 let config = config.get();
 
-                // Configured to always stay running → don't quit (`:557-558`).
+                // If we are configured to always stay running, don't quit.
+                //
+                // (`:557-558`.)
                 if !config.quit_after_last_window_closed {
                     break 'q false;
                 }
 
-                // Quit timer expired → quit (`:560-564`).
+                // If the quit timer has expired, quit.
+                //
+                // (`:560-564`.)
                 if matches!(*imp.quit_timer.borrow(), imp::QuitTimer::Expired) {
                     log::debug!(target: LOG_SCOPE, "must_quit due to quit timer expired");
                     break 'q true;
                 }
 
-                // No windows attached → quit, but only when no closed-delay is set
-                // (with a delay we exit via the timer instead) (`:566-577`).
+                // If we have no windows attached to our app, also quit.
+                // We only do this if we don't have the closed delay set,
+                // because with the closed delay set we'll exit eventually.
+                //
+                // (`:566-577`.)
                 if config.quit_after_last_window_closed_delay.is_none()
                     && imp.requested_window.get()
                     && self.windows().is_empty()
@@ -3262,10 +3705,16 @@ impl Application {
                     break 'q true;
                 }
 
+                // No quit conditions met
                 break 'q false;
             };
 
             if must_quit {
+                // All must quit scenarios do not need confirmation.
+                // Furthermore, must quit scenarios may result in a situation
+                // where its unsafe to even access the app/surface memory
+                // since its in the process of being freed. We must simply
+                // begin our exit immediately.
                 self.quit_now();
             }
         }
@@ -3285,6 +3734,9 @@ impl Application {
         glib::MainContext::default().wakeup();
     }
 
+    /// Quit the application. This will start the process to stop the
+    /// run loop. It will not `posix.exit`.
+    ///
     /// PORTS: `application.zig:594-637` `quit`. Begins stopping the run loop; it
     /// does NOT `posix.exit`. If the run loop already exited we are done; if the
     /// core needs no quit confirmation we exit immediately via [`Application::quit_now`];
@@ -3297,7 +3749,10 @@ impl Application {
             return;
         }
 
-        // If the core doesn't need to confirm quit, exit immediately (`:602-607`).
+        // If our core app doesn't need to confirm quit then we
+        // can exit immediately.
+        //
+        // (`:602-607`.)
         // An unbound confirm-quit thunk (no core wired) reads as `false`.
         let needs_confirm = imp
             .needs_confirm_quit_thunk
@@ -3309,8 +3764,15 @@ impl Application {
             return;
         }
 
-        // Find the active toplevel to parent the dialog on (`:609-623`). In the
-        // rare case there is none we present unparented so we don't crash.
+        // Get the parent for our dialog
+        //
+        // (`:609-623`.) When there is none:
+        //
+        //     // If we have an active surface then we should have
+        //     // a window available but in the rare case we don't we
+        //     // should exit so we don't crash.
+        //
+        // (the reference then presents unparented, as here).
         let parent = find_active_window();
 
         // Show a confirmation dialog whose `close-request` routes to
@@ -3335,15 +3797,20 @@ impl Application {
     /// them to free, which triggers a proper shutdown sequence) then trips the run
     /// loop's exit flag. All `must_quit` scenarios route here — no confirmation.
     pub fn quit_now(&self) {
-        // Get all toplevels and destroy ONLY our own `Window`s (`:640-661`).
+        // Get all our windows and destroy them, forcing them to free.
         //
-        // The fcitx-IME double-free note (`:652-656`, load-bearing): we previously
-        // destroyed ALL toplevels, but that double-frees with the fcitx IME, which
-        // owns a nested `gtk.Window` (as a property) that we do not own and that it
-        // later frees itself. So we destroy only windows that are our own `Window`
-        // subclass (`gobject.ext.isA(window, Window)`), which own every other window
-        // type and thus trigger a proper cascading shutdown.
+        // (`:640-661`.)
         for window in gtk4::Window::list_toplevels() {
+            // We only want to destroy our windows. These windows own
+            // every other type of window that is possible so this will
+            // trigger a proper shutdown sequence.
+            //
+            // We previously just destroyed ALL windows but this leads to
+            // a double-free with the fcitx ime, because it has a nested
+            // gtk.Window as a property that we don't own and it later
+            // tries to free on its own. I think this is probably a bug in
+            // the fcitx ime widget but still, we don't want a double free!
+            //
             // `if (gobject.ext.isA(window, Window)) window.destroy();` (`:657-660`)
             // — the `downcast_ref` succeeds exactly when the toplevel is (or
             // derives) our `Window` subclass, the gtk4-rs analogue of `isA`.
@@ -3357,6 +3824,8 @@ impl Application {
         self.imp().running.set(false);
     }
 
+    /// apprt API to perform an action.
+    ///
     /// PORTS: `application.zig:668-799` `performAction`. Dispatches an apprt action
     /// on a target through the [`action`] namespace (`application.zig:1909-2843`).
     ///
@@ -3747,8 +4216,10 @@ mod action {
         notification
             .set_default_action_and_target_value("app.present-surface", Some(&0u64.to_variant()));
 
-        // Notification ID = body so an identical follow-up replaces the prior one
-        // (`:1988-1999`).
+        // We set the notification ID to the body content. If the content is the
+        // same, this notification may replace a previous notification
+        //
+        // (`:1988-1999`.)
         app.upcast_ref::<gio::Application>()
             .send_notification(Some(&body_str), &notification);
     }
@@ -3775,6 +4246,10 @@ mod action {
         match target {
             Target::App => false,
             Target::Surface(v) => {
+                // Design note: we can't use widget actions here because
+                // we need to know whether there is a goto target for returning
+                // the proper perform result (boolean).
+
                 let Some(w) = widget(v) else { return false };
                 let Some(tree) = ext::ancestor::<SplitTree>(&w) else {
                     log::warn!(target: LOG_SCOPE, "surface is not in a split tree, ignoring goto_split");
@@ -4100,6 +4575,9 @@ mod action {
                 false
             }
             Target::Surface(v) => {
+                // Get the window ancestor of the surface. Surfaces shouldn't
+                // be aware they might be in windows but at the app level we
+                // can do this.
                 let Some(w) = widget(v) else { return false };
                 let Some(window) = ext::ancestor::<Window>(&w) else {
                     log::warn!(target: LOG_SCOPE, "surface is not in a window, ignoring new_tab");
@@ -4127,8 +4605,13 @@ mod action {
         target: Target<'_, C>,
         overrides: TabOverrides,
     ) -> Result<(), ApprtError> {
-        // Note that we've requested a window at least once (`:2262`). Used to trigger
-        // quit-on-no-windows.
+        // Note that we've requested a window at least once. This is used
+        // to trigger quit on no windows. Note I'm not sure if this is REALLY
+        // necessary, but I don't want to risk a bug where on a slow machine
+        // or something we quit immediately after starting up because there
+        // was a delay in the event loop before we created a Window.
+        //
+        // (`:2262`.)
         app.imp().requested_window.set(true);
 
         // The parent core surface (target-dependent): `.app => null`, `.surface => v`
@@ -4161,17 +4644,21 @@ mod action {
         parent: Option<*mut CoreSurface>,
         overrides: TabOverrides,
     ) {
-        // Setup a binding so that whenever our config changes so does the window.
-        // There's never a time when the window config should be out of sync with the
-        // application config (`:2295-2306`).
+        // Setup a binding so that whenever our config changes so does the
+        // window. There's never a time when the window config should be out
+        // of sync with the application config.
+        //
+        // (`:2295-2306`.)
         app.bind_property("config", win, "config").build();
 
         // Create a new tab with window context (first tab in new window) (`:2308-2313`,
         // `win.newTabForWindow(parent, ...)`), applying the argv override.
         win.new_tab_for_window(parent, overrides);
 
-        // Estimate the initial window size before presenting so the window manager
-        // can position it correctly (`surface.estimateInitialSize()` + the
+        // Estimate the initial window size before presenting so the window
+        // manager can position it correctly.
+        //
+        // (`surface.estimateInitialSize()` + the
         // `getDefaultSize`/`setDefaultSize` read, `:2315-2325`).
         if let Some(surface) = win.get_active_surface() {
             surface.estimate_initial_size();
@@ -4298,6 +4785,10 @@ mod action {
     /// [`rustty_os::open::open`]).
     pub(super) fn open_url_fallback(kind: rustty_apprt_api::action::OpenUrlKind, url: &[u8]) {
         use rustty_apprt_api::action::OpenUrlKind;
+        // Fallback to the minimal cross-platform way of opening a URL.
+        // This is always a safe fallback and enables for example Windows
+        // to open URLs (GTK on Windows via WSL is a thing).
+        //
         // `apprt.action.OpenUrl.Kind` -> the `rustty_os::open::Kind` seam (`open.rs:31`).
         let kind = match kind {
             OpenUrlKind::Unknown => rustty_os::open::Kind::Unknown,
@@ -4433,14 +4924,21 @@ mod action {
         }
     }
 
+    /// Reload the configuration for the application and propagate it
+    /// across the entire application and all terminals.
+    ///
     /// `pub fn reloadConfig(self, target, opts) !void` (`:2443-2482`).
     pub(super) fn reload_config<C: CoreSurfaceHandle>(
         app: &Application,
         target: Target<'_, C>,
         opts: rustty_apprt_api::action::ReloadConfig,
     ) -> Result<(), ApprtError> {
-        // Tell systemd that reloading has started (`:2448`), and — via the trailing
-        // `notify::ready()` after the body — that it has finished. The reference's
+        // Tell systemd that reloading has started.
+        //
+        // When we exit this function tell systemd that reloading has finished.
+        //
+        // (`:2448`, and — via the trailing `notify::ready()` after the body —
+        // `:2451`.) The reference's
         // `defer systemd.notify.ready()` (`:2451`) must run on EVERY exit path
         // (including the `?` early-returns of the hard-reload load), so the body runs
         // in an inner closure and `ready()` fires unconditionally afterwards.
@@ -4458,18 +4956,23 @@ mod action {
         target: Target<'_, C>,
         opts: rustty_apprt_api::action::ReloadConfig,
     ) -> Result<(), ApprtError> {
-        // Get our config object (`:2453-2472`).
+        // Get our config object.
+        //
+        // (`:2453-2472`.)
         let config: Config = if opts.soft {
-            // Soft reload: apply conditional logic to the existing loaded config, so
-            // return it as-is but take a reference (`:2458-2461`,
-            // `self.private().config.ref()`).
+            // Soft-reloading applies conditional logic to the existing loaded
+            // config so we return that as-is (but take a reference).
+            //
+            // (`:2458-2461`, `self.private().config.ref()`.)
             match app.get_config() {
                 Some(c) => c,
                 // No config set yet (pre-construction) — nothing to reload.
                 None => return Ok(()),
             }
         } else {
-            // Hard reload: load a new config completely (`:2464-2470`). The reference
+            // Hard reload, load a new config completely.
+            //
+            // (`:2464-2470`.) The reference
             // wraps the loaded `CoreConfig` in a `Config` GObject (which clones it),
             // so the local load result may drop here.
             let core_config = CoreConfig::load().map_err(|err| {
@@ -4479,8 +4982,11 @@ mod action {
             Config::new(&core_config)
         };
 
-        // Update the proper target. This triggers a `config_change` apprt action
-        // which propagates the config to our property system (`:2477-2481`).
+        // Update the proper target. This will trigger a `config_change`
+        // apprt action which will propagate the config properly to our
+        // property system.
+        //
+        // (`:2477-2481`.)
         match target {
             // `.app => try self.core().updateConfig(self.rt(), config.get())`
             // (`:2472-2475`).
@@ -4524,8 +5030,10 @@ mod action {
                     log::warn!(target: LOG_SCOPE, "surface is not in a split tree, ignoring resize_split");
                     return false;
                 };
-                // If the tree has no splits (one leaf), the action is not performable
-                // (`:2500-2501`).
+                // If the tree has no splits (only one leaf), this action is not performable.
+                // This allows the key event to pass through to the terminal.
+                //
+                // (`:2500-2501`.)
                 if !tree.property::<bool>("is-split") {
                     return false;
                 }
@@ -4764,8 +5272,10 @@ mod action {
         match target {
             Target::App => false,
             // `.surface => |core| { surface.setMinSize(.{ .width = min_width,
-            // .height = min_height }); return true; }` (`:2621-2630`). The max size
-            // is ignored — we have no mechanism to enforce it (`:2622-2623`).
+            // .height = min_height }); return true; }` (`:2621-2630`).
+            //
+            // Note: we ignore the max size currently because we have
+            // no mechanism to enforce it.
             Target::Surface(v) => match widget(v) {
                 Some(w) => {
                     w.set_min_size(Some(Size {
@@ -4848,6 +5358,9 @@ mod action {
                     log::warn!(target: LOG_SCOPE, "surface is not in a split tree, ignoring toggle_split_zoom");
                     return false;
                 };
+
+                // If the tree has no splits (only one leaf), this action is not performable.
+                // This allows the key event to pass through to the terminal.
                 if !tree.property::<bool>("is-split") {
                     return false;
                 }
@@ -5146,6 +5659,11 @@ mod action {
                 log::warn!(target: LOG_SCOPE, "show_on_screen_keyboard to app is unexpected");
                 false
             }
+            // NOTE: Even though `activateOsk` takes a gdk.Event, it's currently
+            // unused by all implementations of `activateOsk` as of GTK 4.18.
+            // The commit that introduced the method (ce6aa73c) clarifies that
+            // the event *may* be used by other IM backends, but for Linux desktop
+            // environments this doesn't matter.
             Target::Surface(v) => match widget(v) {
                 Some(w) => w.show_on_screen_keyboard(None),
                 None => false,
@@ -5232,6 +5750,155 @@ mod tests {
     // `adding_actions_to_an_object`". A skip that reports `1 passed` is not a
     // pattern to follow: every one of these now calls
     // `crate::gtk::init_for_display_test`, so the others FAIL, by name.
+
+    /// S49-F3: `loadCustomCss` (`application.zig:1119-1199`) against real files.
+    ///
+    /// - A directory in `gtk-custom-css` opens and then fails its first read
+    ///   (`error.IsDir`, measured with the reference's own open + read code on the
+    ///   VM). That is not `FileTooBig`, so the WHOLE load stops: a stylesheet
+    ///   listed after it is not loaded, one listed before it stays loaded, and the
+    ///   caller (`propConfig`, `:1309-1314`) logs `failed to load custom CSS, no
+    ///   custom CSS applied, err=...`.
+    /// - The provider is fed the file's BYTES (`loadFromBytes`): a stylesheet
+    ///   whose comment holds one Latin-1 byte parses to nothing in GTK (measured,
+    ///   GTK 4.22.4), where its U+FFFD-substituted text would parse to its rule.
+    #[test]
+    #[ignore = "requires a display; run via cargo test -p rustty-apprt --features gtk,x11,wayland --lib load_custom_css -- --ignored"]
+    fn load_custom_css_stops_on_a_read_error_and_loads_raw_bytes() {
+        use rustty_config::path::Path as CfgPath;
+
+        crate::gtk::init_for_display_test(
+            "load_custom_css_stops_on_a_read_error_and_loads_raw_bytes",
+        );
+        let _ = libadwaita::init();
+
+        let dir = std::env::temp_dir().join(format!("rustty-s49f3-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("a-directory.css")).unwrap();
+        let ok_css = dir.join("ok.css");
+        std::fs::write(&ok_css, b"label { color: red; }").unwrap();
+        let latin1_css = dir.join("latin1.css");
+        std::fs::write(&latin1_css, b"/* caf\xe9 */ label { color: red; }").unwrap();
+        let cfg_path = |p: &std::path::Path| {
+            use std::os::unix::ffi::OsStrExt;
+            CfgPath::Required(p.as_os_str().as_bytes().to_vec())
+        };
+        let provider_text = |provider: &gtk4::CssProvider| -> Vec<u8> {
+            use glib::translate::ToGlibPtr;
+            // SAFETY: GTK returns a newly allocated NUL-terminated string we free.
+            unsafe {
+                let p = gtk4::ffi::gtk_css_provider_to_string(provider.to_glib_none().0);
+                let bytes = std::ffi::CStr::from_ptr(p).to_bytes().to_vec();
+                glib::ffi::g_free(p.cast());
+                bytes
+            }
+        };
+
+        let app = build_test_app(std::ptr::null_mut());
+        let set_css = |paths: Vec<CfgPath>| {
+            let mut core = rustty_config::Config::default_config();
+            core.gtk_custom_css.value = paths;
+            app.imp().config.replace(Some(Config::new(&core)));
+        };
+
+        // [dir, ok]: the directory's read error stops the load before ok.css.
+        set_css(vec![
+            cfg_path(&dir.join("a-directory.css")),
+            cfg_path(&ok_css),
+        ]);
+        let err = app
+            .imp()
+            .load_custom_css()
+            .expect_err("a directory's read error must abort the load");
+        assert_eq!(err.kind(), std::io::ErrorKind::IsADirectory);
+        assert_eq!(
+            app.imp().custom_css_providers.borrow().len(),
+            0,
+            "nothing after the failing entry is loaded"
+        );
+
+        // [ok, dir]: the entry BEFORE the failure stays loaded (positive: the loop
+        // ran and loaded a provider before it stopped).
+        set_css(vec![
+            cfg_path(&ok_css),
+            cfg_path(&dir.join("a-directory.css")),
+        ]);
+        assert!(app.imp().load_custom_css().is_err());
+        assert_eq!(app.imp().custom_css_providers.borrow().len(), 1);
+
+        // The caller logs the reference's warning with the error.
+        set_css(vec![cfg_path(&dir.join("a-directory.css"))]);
+        let cap = crate::log_capture::start();
+        app.imp().prop_config(&app);
+        let messages = cap.messages();
+        drop(cap);
+        let failed: Vec<_> = messages
+            .iter()
+            .filter(|(_, _, m)| {
+                m.starts_with("failed to load custom CSS, no custom CSS applied, err=")
+            })
+            .collect();
+        assert_eq!(failed.len(), 1, "one caller warning; got {messages:?}");
+        assert_eq!(failed[0].0, log::Level::Warn);
+        assert_eq!(failed[0].1, LOG_SCOPE);
+
+        // Raw bytes: the Latin-1 comment makes GTK parse nothing; the control
+        // (pure ASCII, same rule) parses to its rule.
+        set_css(vec![cfg_path(&latin1_css), cfg_path(&ok_css)]);
+        app.imp().load_custom_css().expect("both files load");
+        let providers = app.imp().custom_css_providers.borrow().clone();
+        assert_eq!(providers.len(), 2);
+        assert_eq!(
+            provider_text(&providers[0]),
+            b"",
+            "GTK is handed the raw bytes (a lossy U+FFFD copy would parse to the rule)"
+        );
+        assert!(
+            provider_text(&providers[1]).starts_with(b"label {"),
+            "control: the ASCII stylesheet parses to its rule"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// S50-F2: `parseOverrides` trims its three values with
+    /// `std.mem.trim(u8, v, &std.ascii.whitespace)` (`application.zig:2072-2097`):
+    /// ASCII space/TAB/LF/CR/VT/FF only. A value ending in U+00A0 (NO-BREAK SPACE)
+    /// or U+3000 keeps it; VT and FF are stripped. Display-free: the argv arrives
+    /// as a plain `as` variant.
+    #[test]
+    fn parse_overrides_trims_ascii_whitespace_only() {
+        use glib::prelude::*;
+        use rustty_config::value_types::ShellIntegration;
+
+        let parse = |args: &[&str]| {
+            let v = args.to_variant();
+            parse_overrides(v.iter()).expect("no --command, so parsing cannot fail")
+        };
+
+        // Unicode whitespace is NOT trimmed (the reference trims ASCII only).
+        let o = parse(&[
+            "--title=\u{a0}tab\u{a0}",
+            "--working-directory=/tmp/x\u{3000}",
+        ]);
+        assert_eq!(o.title.as_deref(), Some("\u{a0}tab\u{a0}"));
+        assert_eq!(o.working_directory.as_deref(), Some("/tmp/x\u{3000}"));
+
+        // ... so a NO-BREAK SPACE makes the shell-integration value unparseable
+        // (the reference warns and continues), where `str::trim` would parse it.
+        let o = parse(&["--shell-integration=\u{a0}bash"]);
+        assert_eq!(o.shell_integration, None);
+
+        // Every byte of `std.ascii.whitespace`, VT and FF included, IS trimmed.
+        let o = parse(&[
+            "--title= \t\n\r\x0B\x0Ctab\x0C\x0B\r\n\t ",
+            "--working-directory=\x0B/tmp/y\x0C",
+            "--shell-integration=\x0Bbash\x0C",
+        ]);
+        assert_eq!(o.title.as_deref(), Some("tab"));
+        assert_eq!(o.working_directory.as_deref(), Some("/tmp/y"));
+        assert_eq!(o.shell_integration, Some(ShellIntegration::Bash));
+    }
 
     /// S50-F1: `gotoWindow`'s walk, pinned on plain integers so it needs no display.
     /// Each case lists the nodes `gotoWindowMaybe` was asked about, in order. The
@@ -5545,9 +6212,10 @@ mod tests {
             action: rustty_input::binding::Action::NewWindow,
             message: b"already held by vicinae".to_vec(),
             revoked: false,
-        });
+        })
+        .expect("fits the 512-byte body buffer");
         assert_eq!(title, "Global keybind unavailable");
-        assert_eq!(body, "Super+Q: already held by vicinae");
+        assert_eq!(body, b"Super+Q: already held by vicinae");
 
         // Empty message + denied -> the "denied" fallback (`:1710-1712`).
         let (_, body) = bind_failed_notification(&BindFailed {
@@ -5555,8 +6223,9 @@ mod tests {
             action: rustty_input::binding::Action::NewWindow,
             message: Vec::new(),
             revoked: false,
-        });
-        assert_eq!(body, "Super+Q: The keybind was denied by the system.");
+        })
+        .expect("fits the 512-byte body buffer");
+        assert_eq!(body, b"Super+Q: The keybind was denied by the system.");
 
         // Empty message + revoked -> the "revoked" fallback (`:1710-1711`). This
         // pair is the reason the `revoked` flag is carried at all: a test of only
@@ -5566,8 +6235,9 @@ mod tests {
             action: rustty_input::binding::Action::NewWindow,
             message: Vec::new(),
             revoked: true,
-        });
-        assert_eq!(body, "Super+Q: The keybind was revoked by the system.");
+        })
+        .expect("fits the 512-byte body buffer");
+        assert_eq!(body, b"Super+Q: The keybind was revoked by the system.");
 
         // An unformattable trigger degrades to "?" rather than dropping the
         // notification (`:1701-1705`).
@@ -5579,8 +6249,63 @@ mod tests {
             action: rustty_input::binding::Action::NewWindow,
             message: b"nope".to_vec(),
             revoked: false,
-        });
-        assert_eq!(body, "?: nope");
+        })
+        .expect("fits the 512-byte body buffer");
+        assert_eq!(body, b"?: nope");
+    }
+
+    /// S49-F4 / S50-F3: `globalShortcutBindFailed`'s two fixed buffers
+    /// (`application.zig:1758-1778`). The body is `bufPrintZ` into 512 bytes, so it
+    /// fits at 511 bytes plus the NUL and at 512 the reference returns WITHOUT a
+    /// notification; the label is written into 128 bytes and one byte more turns it
+    /// into `"?"`. The message bytes are measured raw (a non-UTF-8 byte is ONE byte,
+    /// not the three of a U+FFFD).
+    #[test]
+    fn application_bind_failed_notification_buffer_limits() {
+        use rustty_input::binding::{Trigger, TriggerKey};
+        use rustty_vt::input::key_mods::Mods;
+
+        let trigger = Trigger {
+            key: TriggerKey::Unicode('q' as u32),
+            mods: Mods {
+                super_: true,
+                ..Default::default()
+            },
+        };
+        let notify = |message: Vec<u8>| {
+            bind_failed_notification(&BindFailed {
+                trigger,
+                action: rustty_input::binding::Action::NewWindow,
+                message,
+                revoked: false,
+            })
+        };
+        // "Super+Q: " is 9 bytes.
+        let prefix = b"Super+Q: ".len();
+
+        // 511 bytes of body: the largest that fits `[512]u8` with its sentinel.
+        let (_, body) = notify(vec![b'x'; 511 - prefix]).expect("511 bytes fit");
+        assert_eq!(body.len(), 511);
+        // 512 bytes: `bufPrintZ` fails and the reference raises nothing.
+        assert!(
+            notify(vec![b'x'; 512 - prefix]).is_none(),
+            "a 512-byte body does not fit the reference's buffer"
+        );
+        // Measured in raw bytes: 501 x's + one 0xE9 is 511 bytes (fits); decoded
+        // lossily it would be 513 (and be dropped).
+        let mut msg = vec![b'x'; 511 - prefix - 1];
+        msg.push(0xE9);
+        let (_, body) = notify(msg).expect("511 raw bytes fit");
+        assert_eq!(
+            body.last(),
+            Some(&0xE9),
+            "the message bytes are passed through raw"
+        );
+
+        // The 128-byte label buffer.
+        assert_eq!(bind_failed_label(true, "k".repeat(128)), "k".repeat(128));
+        assert_eq!(bind_failed_label(true, "k".repeat(129)), "?");
+        assert_eq!(bind_failed_label(false, "k".to_owned()), "?");
     }
 
     /// PORTS: `application.zig:1475-1481` — the `bind-failed` connection. Emitting

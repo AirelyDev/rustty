@@ -2814,7 +2814,7 @@ where
         #[cfg(feature = "init-fault-inject")]
         let probe =
             crate::init_fault::ThreadProbe::start(crate::init_fault::ProbedThread::Renderer);
-        let spawn_result = std::thread::Builder::new()
+        let spawn_result = rustty_zigstd::thread::spawn_config()
             .name("renderer".to_string())
             .spawn(move || {
                 // (the probe is dropped when this closure ends)
@@ -2860,7 +2860,7 @@ where
             // `io_thread.stop.notify()`. Pass the raw pointers straight through.
             unsafe { termio::Thread::threadMain(args.thread, args.io) }
         };
-        let io_builder = std::thread::Builder::new().name("io".to_string());
+        let io_builder = rustty_zigstd::thread::spawn_config().name("io".to_string());
         // Test-only (UD104, task R13-D2): an armed fault fails the spawn
         // without starting the thread. Not compiled into production builds.
         #[cfg(feature = "init-fault-inject")]
@@ -11570,7 +11570,7 @@ where
                     struct SendState(*mut terminal::search::thread::Thread);
                     unsafe impl Send for SendState {}
                     let send = SendState(state_ptr);
-                    let spawned = std::thread::Builder::new()
+                    let spawned = rustty_zigstd::thread::spawn_config()
                         .name("search".into()) // == setName("search")
                         .spawn(move || {
                             let s = send;
@@ -13874,6 +13874,9 @@ where
         let pasted = match rustty_vt::paste::paste(
             rustty_vt::paste::Context {
                 terminal: &self.io.terminal,
+                // .alloc = self.alloc: the application's allocator, which is
+                // the terminal's (the Rust heap; the grants are freed with it).
+                alloc: rustty_vt::alloc::Global,
                 writer: &mut aw,
                 kitty_clipboard: Some(rustty_vt::paste::KittyClipboard {
                     grants: &mut self.io.terminal_stream.handler.kitty_clipboard_grants,
@@ -16745,7 +16748,16 @@ mod paste_event_mutex_tests {
                     timer_cb,
                 );
             }
-            let ran = loop_.run(rustty_xev::RunMode::Once);
+            // One `run(Once)` is not enough on Linux: libxev's epoll backend
+            // counts the timer's submission as a completion (`tick`: "These
+            // operations happen synchronously"), so the first tick can return
+            // before either callback ran (measured on the Linux VM: it returned
+            // after 12 us with neither set). Tick until one of them fires; the
+            // 10 s timer bounds the loop.
+            let mut ran = Ok(());
+            while ran.is_ok() && !woke && !timed_out {
+                ran = loop_.run(rustty_xev::RunMode::Once);
+            }
             loop_.deinit();
             let woke = woke && ran.is_ok();
 

@@ -321,7 +321,7 @@ pub fn init(environ_map: rustty_global::EnvMap) -> Result<(), InitError> {
         // "sentry-init" name the reference sets post-spawn. Upstream: "Naming the
         // thread from here only works on some platforms (e.g. Linux). On Darwin the
         // thread names itself in initThread."
-        let thr = std::thread::Builder::new()
+        let thr = rustty_zigstd::thread::spawn_config()
             .name("sentry-init".to_string())
             .spawn(move || initThread(environ_map))
             .map_err(InitError::Spawn)?;

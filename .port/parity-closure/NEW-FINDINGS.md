@@ -3534,6 +3534,45 @@ does for `Config.loadFile`), and print through that.
   `Overflow`.
 - **state**: FIXED (T-C3).
 
+## N130 — the GTK apprt decodes title BYTES lossily at every GObject-string boundary, where the reference passes them raw
+
+- **id**: N130. Not in the inventory.
+- **found by**: task T-D (tail wave), closing S57-F3 (WAIVED, pointing here).
+- **severity**: low. **kind**: R1 fidelity gap with a Rust-type constraint; recorded, not fixed.
+- **oracle**: the reference carries titles as `[:0]const u8` and hands the bytes to G_TYPE_STRING
+  properties and GTK setters unconverted: `src/apprt/gtk/class/tab.zig:496-509` (`closureComputedTitle`,
+  the config `title`), and the apprt `set_title` / window-title paths.
+- **rustty**: `String::from_utf8_lossy` at `crates/rustty-apprt/src/gtk/class/tab.rs:362-366`
+  (`computed_title`, config `title`), `class/window.rs:312` (window title from config),
+  `class/surface.rs:1959` (the notification title), `class/application.rs:4772, 4799, 4831` (the
+  `set_title` / prompt-title actions, whose bytes come from the VT stream, OSC 0/2). The S57-F3 audit
+  said "all other title sources are already UTF-8 GTK strings"; the four `application.rs`/`surface.rs`
+  sites show that is not so (the OSC title is raw VT bytes).
+
+What differs, MEASURED where stated. A non-UTF-8 title reaches GTK as U+FFFD in the port and as its raw
+bytes in the reference. What the reference's bytes then do is GTK's business: Pango, which renders a tab
+or window label, logs `Pango-WARNING: Invalid UTF-8 string passed to pango_layout_set_text()` and keeps the
+invalid byte as `0xff` (MEASURED, Pango 1.57.1 on the VM: `caf\xe9!` → `63 61 66 ff 21`), so the user sees a
+replacement glyph in both, drawn differently. Other consumers of the property values (accessibility over
+D-Bus, the window-manager title) were NOT measured.
+
+Why this is not fixed row by row. Carrying non-UTF-8 in these properties needs every Rust reader of them to
+avoid glib-rs's string types: `Value::get::<String>()` panics on non-UTF-8 ("Invalid UTF-8"), and
+`GStr`/`GString` built from a C pointer assume UTF-8. The tab `title` property alone is stored as
+`RefCell<Option<String>>` (`tab.rs:84`, via the `Properties` derive) and read back by `prompt_tab_title`
+(`tab.rs:263`) into the title dialog; the window and surface titles have the same shape. Changing one site
+(S57-F3) while the others stay lossy would make the chain inconsistent, and changing the property storage
+is a cross-file change with crash risk (a missed reader panics on user input). S56-F3 shows the contained
+version of the same fix (a raw `G_TYPE_STRING` `GValue` and a raw reader, `surface.rs`
+`raw_string_value`/`raw_string_bytes`) for a signal with ONE receiver.
+
+**proposed remedy** (NOT implemented): store the title properties as raw bytes behind hand-written
+G_TYPE_STRING pspecs (set/get through `g_value_set_string`/`g_value_get_string`), route every Rust reader
+through `raw_string_bytes`, and pass GTK setters the raw C string, then close this finding site by site with
+a non-UTF-8 test per reader.
+
+**state**: OPEN (R1 candidate; S57-F3 WAIVED to this entry).
+
 
 ## N140 — the XDG helpers collapse `homedir.home`'s `error.BufferTooSmall` into `NoHomeDir`
 
@@ -3722,7 +3761,7 @@ fix: 0 of 50 of the same sequential runs failed; see the task T-F2 report for th
 - **fix**: `crates/rustty-os/src/systemd.rs` `notify_address` (both R13 PORT NOTEs), tests
   `notify_socket_as_long_as_sun_path_is_too_long` and `notify_address_lengths`, negative controls in
   UD202/UD203. The Linux-only `send` arm that calls it is not compiled on macOS.
-- **state**: OPEN — fix written, Linux run pending (same as S112-F8).
+- **state**: CLOSED (task L-1, Linux VM rvm (Fedora 44 aarch64), 2026-09-26): the Linux `send` arm compiles and both tests pass; end to end, `READY=1` reaches an abstract `@name` socket and a path socket gets `RELOADING=1`; the reference's `<` restored panics on a 108-byte value, and its abstract handling delivers nothing (UD202/UD203, LEDGER S112-F8 closed).
 
 ## N170 — `randomTmpPath` renders the temp dir through `String::from_utf8_lossy`
 
@@ -3847,7 +3886,7 @@ fix: 0 of 50 of the same sequential runs failed; see the task T-F2 report for th
   at cc-rs (no `aarch64-linux-gnu-g++` here) and rvm is down. The site's PORT NOTE says so.
 - **fix**: run `cargo build --workspace --features gtk,x11,wayland` and `cargo test -p rustty-renderer`
   on rvm.
-- **state**: OPEN — fix written, Linux run pending.
+- **state**: CLOSED (task L-1, Linux VM rvm (Fedora 44 aarch64), 2026-09-26): `cargo build --workspace --features gtk,x11,wayland`, clippy `-D warnings` for rustty-renderer (all targets) and `cargo test --workspace` with `RUSTTY_REQUIRE_GL=1` (the live-GL renderer tests executed on Mesa llvmpipe) are green on Linux.
 
 ## N182 — `expectApproxEqual`'s `expectEqual` fallback arms printed nothing in the port
 
@@ -4570,8 +4609,9 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 - **evidence**: run with `--ignored` on macOS (the `coretext` backend), the live body passes
   against the reference's own coretext expected values, for both CozetteVector and Geist Mono.
   Negative control: changing the narrow font's coretext `cell_width` from 7.3828125 to 7.5 makes
-  it fail at the `expect_approx_equal` assertion. The `fontconfig_freetype` values are
-  UNVERIFIED here, because no Linux run was made.
+  it fail at the `expect_approx_equal` assertion. The `fontconfig_freetype` values: run with
+  `--ignored` on Linux (task L-1, Linux VM rvm (Fedora 44 aarch64), 2026-09-26) the body fails at the narrow font,
+  `expected approximately 8, found 7` (N285 / UD281's stale FreeType expectation).
 - **proposed upstream fix**: `if (options.backend == .web_canvas) return error.SkipZigTest;`, plus a
   `freetype_windows` prong or an `else` in the four switches.
 - **state**: RECORDED as `UPSTREAM-DEFECTS.md` UD276 (controller, 2026-09-24).
@@ -4755,7 +4795,7 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   (`pagelist_internals_route_through_the_allocator_handle`, `screen_internals_route_…`,
   `terminal_internals_route_…`, `glossary_map_routes_…`, `dnd_state_routes_…`), each with a negative
   control that routes one site to Global; `allocation_failure_sweep_through_the_c_api` (vt-c).
-- **state**: OPEN as a record until S7-4/S7-9 (S179-F2's remainder).
+- **state**: CLOSED (task S7-4 routes the "left for S7-4" items and closes S179-F2; see N274).
 
 ## N273 — `sys::GlobalRawAllocator::raw_resize` reported success for any shrink (the sibling of N270)
 
@@ -4777,6 +4817,165 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   `LimitedAllocator`; asserts zero layout mismatches, then that the shrinks were refused. Negative control
   (`new_len <= memory.len` reinstated in sys.rs): fails with "left: 0, right: 2" mismatches.
 - **state**: CLOSED (task S7-3b).
+
+## N274 — S7-4 routing: kitty graphics, APC/DCS, stream handler, clipboards and the vt-c wrapper, through the allocator handle
+
+- **id**: N274. Not a ledger row: records the S7-4 scope decisions (closes S179-F2 with N272).
+- **severity**: informational. **kind**: allocator routing (T1/T2/T3 of the S-7 design).
+- **routed (T1)**: kitty graphics: the command parser's payload and `Command.data`, `LoadingImage`
+  (box, data, zlib output, file and shared-memory reads), `Image` data, the animation box, frame list and
+  frame data, the RGBA conversion, the image and placement maps (hashbrown over the handle), the scroll
+  `restores` list (screen's allocator); the PNG decode seam's `LimitedAllocator` wraps the caller's
+  allocator, as at the pin. APC: the kitty/glyph parsers and the unknown capture (the `feed` allocator),
+  the glyph `Outline` (rustty-font `Outline<A>`, `decode_limited_in`). DCS: the tmux control buffer. The
+  stream handler: the OSC 52 decode scratch, the kitty clipboard metadata/payload, grants, write state and
+  committed contents, all eight `stackFallback` response writers (`StackFallbackWriter<N>` over `gpa()`),
+  `paste.Context.alloc`, and the stream continuation tracker (`Tracker::init(alloc, ..)`, `Stream::init_in`;
+  since S7-4b an `alloc::ArrayListUnmanaged`, so its first reservation is `growCapacity(4096)`, 6272 bytes
+  on 64-bit targets, and later growth rounds the same way, as the reference's `ArrayList` does).
+  vt-c: the snapshot decoder builds the terminal over the caller's allocator (`from_decoded` asserts it),
+  the `tracked_grid_refs`/`searches` maps are `AArrayHashMap`s bound in `wrap`, `set(continuation_max_bytes)`
+  builds the tracker over `gpa()`, and the clipboard trampolines and `terminal_paste` use
+  `alloc::StackFallback<N>` (a port of `std.heap.stackFallback`) over `gpa()` with the reference's sizes
+  (128, 256, 4-on-stack, 256). The inspector's two `pagePreservingState(std.heap.page_allocator)` calls
+  take `alloc::page_allocator()`, a handle over `rustty_os::page_allocator`.
+- **fallibility (T2)**: each reference `try` or `catch` in these families is reachable: the clipboard
+  handlers return `Result` and their dispatch arms log; the write state, grants and loading image fail
+  with `OutOfMemory`; animation frames and canvases answer `ENOMEM`; the tracker marks itself broken; the
+  vt-c write trampoline replies `io_error`, the read trampolines log and return, `terminal_paste` returns
+  `RUSTTY_OUT_OF_MEMORY`. S7-4b (review F1): the PNG decode seam hands the decoder's own buffer over
+  (`sys::Image.data` is a `RawSlice` on the decode allocator, as the reference's `[]u8`), and `decodePng`
+  copies it into `alloc` fallibly (`try_reserve_exact`) before freeing it through the decode allocator;
+  the infallible Rust-heap copy outside the limit, which aborted where the reference answers ENOMEM, is
+  gone.
+- **per-call vs bound**: the reference passes the allocator per call; containers bind it on first growth
+  (`alloc::bind`/`bind_map`) or at construction and debug-assert it is the same one on later calls.
+- **T3 (call shape) residuals**: the reference's per-transaction arenas are per-value `Bytes`;
+  `toOwnedSlice` hands the list over without shrinking it; `StackFallbackWriter` spills when the payload
+  crosses `N` (Zig's `Writer.Allocating` can reach the fallback a little earlier and grows by
+  `growCapacity`); `alloc::page_allocator()` carries the PageList's VM tag on Darwin
+  (the reference's `std.heap.page_allocator` is untagged); `withoutData` is a field copy with no
+  animation. Port-only transient allocations that the reference does not make (response message strings,
+  `format!` report strings, placement/image key snapshots taken before mutating a map, tmux notification
+  field copies) stay on the Rust heap: they are not caller allocations in the reference, so they are
+  not routed. zlib's inflate state comes from zlib's own `malloc` (`zalloc` null), where the reference
+  inflates with `std.compress.flate` and a window on the stack: not a caller allocation in either, but
+  the port's is a C heap allocation per zlib-compressed image.
+- **reachability**: the read-request trampoline's `stackFallback(128)` never spills from the stream: at most
+  `max_read_mimes` (4) MIME types, 64 bytes, reach it. It is routed as written; its spill arm is not
+  exercised by a test.
+- **verification**: routing tests over counting allocators. At S7-4 four routed sites had no test that
+  noticed a revert to Global (review S7-4 NC-C to NC-F: the DCS tmux buffer, the OSC 52 read-reply
+  writer, the vt-c `searches` map, the paste reader's writer), and only the OSC 4 writer's spill was
+  tested. S7-4b added the missing tests; each of the four controls and a Global revert of each writer
+  below now fails its test:
+  - kitty graphics: `kitty_graphics_route_…`, `kitty_chunked_loading_routes_…`,
+    `image_load_png_decode_routes_…` (peak bytes: the decoder buffer and the copy are live together),
+    rustty-vt `default_decoder_hands_over_its_buffer`;
+  - APC/DCS: `apc_builders_route_…`, `tmux_buffer_routes_through_the_hook_allocator`,
+    `tmux_init_options_reports_allocation_failure` (through a `FailingAllocator` handle);
+  - stream handler: `grants_route_…`, `write_state_routes_…`, `metadata_and_payload_route_…`,
+    `stream_handler_internals_route_…` (OSC 52 scratch, clipboard state, the OSC 4 writer),
+    `response_writers_spill_through_gpa` (OSC 52 read reply, Kitty DATA reply, CSI 21 t, Kitty color,
+    OSC 72 serving: each large response costs exactly one spill over the small one),
+    `paste_reader_contents_route_through_gpa`, `tracker_routes_…`;
+  - vt-c: `decoded_terminal_internals_route_…`,
+    `decoded_terminal_continuation_tracker_is_on_the_callers_allocator`, `continuation_tracker_routes_…`,
+    `clipboard_trampolines_route_…`, `terminal_paste_mimes_route_through_the_stack_fallback`,
+    `search_registry_routes_through_the_terminals_allocator`, the grid-ref registry test.
+  Not covered by a routing test: the Kitty graphics response writer (1024; a status and an echoed id,
+  which "virtually always fit on the stack", as the reference says) and the DA writer (128), whose
+  spill arms no test input reaches, and the read-request spill arm (above). The vt-c C-API
+  failure sweep (alloc and remap loops; the clean run fails nothing and a refused remap makes no call
+  report OUT_OF_MEMORY) runs over a corpus that reaches these families and a search
+  (`sweep_corpus_reaches_the_s7_4_families`); `allocation_failure_sweep_through_snapshot_decode` sweeps a
+  snapshot whose unfinished 7000-byte CSI makes the decode remap (its remap loop had exercised nothing).
+- **state**: CLOSED (task S7-4; review fixes S7-4b).
+
+## N275 — the kitty graphics payload was cloned before its in-place base64 decode
+
+- **id**: N275. Not a ledger row: found while routing the kitty command parser (S7-4).
+- **severity**: low. **kind**: port-only allocation (not a reference defect).
+- **oracle**: `kitty/graphics_command.zig` `decodeData`: decodes `self.data.items` on top of itself
+  ("the encoded size is larger, and any bytes in areas that are written to will have already been used").
+- **rustty**: `crates/rustty-vt/src/kitty/graphics_command.rs` `decode_data`; `crates/rustty-simd/src/base64.rs`
+  `decode_in_place`.
+- **description**: the borrow checker forbids one `Vec` as both source and destination, so the port
+  cloned the whole payload (up to the protocol's maximum) on the Rust heap and decoded the clone into the
+  original. Every transmitted chunk paid a second full-size allocation the reference does not make.
+- **fix**: `simd::base64::decode_in_place(buf, max_len)` hands the kernel the same pointer for input and
+  output, as the reference's call does, and `decode_data` truncates in place. The scalar lane (wasm32,
+  Miri) decodes in place too since S7-4b (review F5): `Base64Decoder::decode_in_place` runs the scalar
+  decoder over one buffer through raw pointers (each step reads its source bytes before writing, and a
+  write ends before the next read starts), so no lane copies the payload.
+- **verification**: `decode_in_place_matches_decode` (same bytes and errors as a separate-buffer decode,
+  SIMD lane; the scalar lane under Miri); `scalar_decode_in_place_matches_scalar_decode` (the scalar lane
+  on every target, lengths 0..200, padded and invalid; negative control: a destination 4 bytes into the
+  buffer fails it); the kitty routing tests count no copy.
+- **state**: CLOSED (task S7-4).
+
+## N276 — `image_by_id` and `image_by_number` returned a deep copy of the stored image
+
+- **id**: N276. Not a ledger row: found while routing kitty image storage (S7-4).
+- **severity**: low. **kind**: port-only allocation (not a reference defect).
+- **oracle**: `kitty/graphics_storage.zig` `imageById`/`imageByNumber` return `?Image` by value: a shallow
+  struct copy that shares the stored pixel data.
+- **rustty**: `crates/rustty-vt/src/kitty/graphics_storage.rs`, `crates/rustty-vt/src/kitty/graphics_exec.rs`.
+- **description**: the port returned `Option<Image>` through `.cloned()`, which copied the pixel data and
+  the animation's frames: a full-image allocation on every display, delete or frame lookup, through the
+  storage's allocator once that is the caller's.
+- **fix**: both return `Option<&Image>`. The display path, which the reference gives a value copy and
+  then mutates the stored image, takes `Image::withoutData` (a metadata copy, no allocation); the delete
+  sites collect `(image id, rect)` before mutating.
+- **verification**: `kitty_graphics_route_through_the_allocator_handle` pins the display step's count
+  (`a=p`: exactly one allocation, the placements map); the existing display/delete tests pass unchanged.
+- **state**: CLOSED (task S7-4).
+
+## N277 — six more port-only tripwire stand-ins for `FailingAllocator` tests are retired
+
+- **id**: N277. Not a ledger row: S-7 design §7 (the sibling of N271 for the S7-4 families).
+- **severity**: low. **kind**: test fidelity (R1).
+- **rustty**: `CLIPBOARD_CONTENTS_TW`, `KITTY_CLIPBOARD_TW` and `COLOR_OPERATION_TW` (stream_terminal.rs),
+  `RGBA_FROM_FORMAT_TW` (graphics_pixel.rs), `SCROLL_MARGINS_TW` (graphics_storage.rs) and `TRACKER_TW`
+  (stream_continuation.rs) are deleted.
+- **description**: with these allocations on the handle, the tests they served run over
+  `alloc::testing::FailingAllocator` or `alloc::failing()` as the reference writes them:
+  `clipboard_write_allocation_failure_is_ignored`, `kitty_clipboard_allocation_failure_is_ignored`,
+  `semantic_failure_is_not_set_by_a_color_operation_failure`,
+  `scroll_margins_restores_append_failure_is_logged_and_skipped`, the `rgba_oom_sweep` tests,
+  `tracker_reports_writer_failure_and_defers_allocation_failure`,
+  `stream_continuation_lifecycle`'s failing stream and `stream_continuation_allocation_failure_recovers`
+  (no longer `cfg(debug_assertions)`-only).
+- **deviation (test-only)**: `stream_continuation_allocation_failure_recovers` also sets
+  `resize_fail_index = resize_index`, as N271's setPwd/setTitle tests do: the reference's inner
+  `testing.allocator` cannot remap the `growCapacity(4096)`-byte reservation to the 12 KiB suffix, so the growth reaches the failing
+  `alloc`, while the port's inner heap remaps with `realloc`. Without it the test fails (checked).
+- **state**: CLOSED (task S7-4).
+
+## N278 — threads the reference spawns with `std.Thread.spawn(.{}, ..)` had Rust's 2 MiB stack, not Zig's 16 MiB
+
+- **id**: N278. Not a ledger row: review S7-4 F6.
+- **severity**: low. **kind**: runtime-environment fidelity (not a reference defect).
+- **oracle**: Zig 0.16 `std/Thread.zig`: `SpawnConfig.stack_size = default_stack_size`, `default_stack_size
+  = 16 * 1024 * 1024`. Every reference spawn uses `.{}`: `Surface.zig` (renderer, io), `termio/Exec.zig`
+  (read thread, gather thread), `terminal/search/Thread.zig`, `crash/sentry.zig`, `App.zig` (font and
+  renderer warmups), `font/shaper/coretext.zig` (CF release), `os/flatpak.zig`, `os/open.zig`.
+- **rustty**: `rustty_zigstd::thread::{DEFAULT_STACK_SIZE, spawn_config}`; the spawn sites in
+  rustty-core (`app.rs`, `surface.rs`), rustty-termio (`exec.rs`), rustty-crash (`sentry.rs`),
+  rustty-font-shaper (`shaper/coretext.rs`) and rustty-os (`flatpak.rs`, `open.rs`).
+- **description**: the port spawned these threads with `std::thread::Builder::new()`, Rust's 2 MiB
+  default. Code the reference sizes against 16 MiB ran on an eighth of it: notably the glyph protocol's
+  payload decode, whose `stackFallback(64 KiB)` scratch runs on the io-reader thread. In a debug build
+  the port's by-value `StackFallback::new` also copied that 64 KiB through temporaries: a glyph
+  registration overflowed a 192 KiB stack (fitting in 256 KiB), and `#[inline(always)]` made it worse.
+- **fix**: `spawn_config()` (`Builder::new().stack_size(16 MiB)`) at each site above.
+  `StackFallback::new_in_place` builds the 64 KiB scratch in its slot without moving it: a debug
+  registration now fits in about 80 KiB (release: 64 KiB). Embedders calling the vt-c API from their own
+  threads bring their own stacks, as with the reference.
+- **verification**: `glyph_registration_fits_a_128k_stack` (APC feed, request, `Entry::init` on a
+  128 KiB thread; negative control: the by-value `new` overflows it, SIGABRT). Measured on aarch64
+  macOS by running it at 64..256 KiB (`RUSTTY_GLYPH_STACK`).
+- **state**: CLOSED (task S7-4b).
 
 ## N280 — `macosLogger`'s per-scope `os_log` cache (upstream `3225e9ebb`) was never ported
 
@@ -4828,7 +5027,7 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 - **verification**: UNVERIFIED — the GTK module is `cfg(linux|freebsd, feature = "gtk")` and was
   not compiled here (macOS, no VM for this batch). Needs the Linux lane (`--features
   gtk,x11,wayland` clippy).
-- **state**: fix written, Linux build pending.
+- **state**: CLOSED (task L-1, Linux VM rvm (Fedora 44 aarch64), 2026-09-26): compiles and lints on Linux with `--features gtk,x11,wayland`; a scratch test under a private headless sway set `gtk-font-name` to `Mono \xff\xfe 11` through `g_object_set` and `get_alloc(GtkFontName)` returned those bytes (`Str([.., 255, 254, ..])`), `GtkXftDpi` gave `CInt(98304)` and `GtkEnablePrimaryPaste` `Bool(false)`; the S-8d form (`property::<Option<String>>`) panicked `Invalid UTF-8` on the same value.
 
 ## N283 — G3b had no audited way to mark a deliberately-not-carried comment
 
@@ -5054,6 +5253,91 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   batch reached processOutput for 30s", reverted.
 - **state**: CLOSED (task S-15).
 
+## N295 — the S74-F3 cwd-error test ran into `loadCliArgs`'s Linux fast path
+
+- **id**: N295. Not a ledger row: found by task L-1 running `cargo test --workspace` on Linux.
+- **severity**: low. **kind**: test portability (port-only test).
+- **what**: `load_cli_args_returns_the_cwd_realpath_error` (rustty-config) failed on Linux with
+  `got Ok(())`: on Linux and FreeBSD `loadCliArgs` returns at once when argv has one element
+  (`Config.zig`: `.linux, .freebsd => if (std.os.argv.len <= 1) return`, ported), and
+  `cargo test --workspace` starts the test binary with no arguments. Faithful behaviour, wrong test.
+- **fix**: on Linux/FreeBSD the test re-runs itself in a child whose argv holds the libtest filter,
+  asserts the child's argv is longer than one element and that the child ran exactly this test
+  (`ac13a16e`). Linux: passes; macOS: passes.
+- **state**: CLOSED (task L-1).
+
+## N296 — the paste-event mutex test ticked its event loop once
+
+- **id**: N296. Not a ledger row: found by task L-1 on Linux.
+- **severity**: low. **kind**: test portability (port-only test; LEDGER S42-F1's test).
+- **what**: `paste_event_queues_while_holding_the_renderer_mutex_on_a_full_mailbox` (rustty-core)
+  failed deterministically on Linux: `the mailbox never signalled its wakeup (timed out after 10 s:
+  false)`, after 2 ms. Measured with a probe: libxev's epoll backend counts the timer's submission as
+  a completion, so `run(Once)` returned after about 12 us with neither the wakeup nor the timer
+  callback run (a second tick delivered the wakeup). kqueue on macOS happened to wait.
+- **fix**: tick until one of the two callbacks has fired; the 10 s timer still bounds it (`be7f5237`).
+  Linux and macOS pass.
+- **state**: CLOSED (task L-1).
+
+## N297 — `io_thread` crashed on Linux: an `input` failure after the shell starts leaves the loop on a dead frame (UD290)
+
+- **id**: N297. Not a ledger row: found by task L-1 (the `io_thread` test binary died with SIGSEGV on
+  Linux in `oversized_input_file_paints_the_input_failure_screen`, LEDGER S212-F1's test).
+- **severity**: medium. **kind**: reference defect (use-after-free and leak), fixed under R13.
+- **what / fix / proof**: `UPSTREAM-DEFECTS.md` UD290; `crates/rustty-termio/src/termio_impl.rs`
+  `Termio::threadEnter` (PORT NOTE: reference defect (R13)). Found with gdb: the fault is in the epoll
+  loop's submission-queue pop during `Thread::threadMain`'s drain run.
+- **state**: CLOSED (task L-1).
+
+## N298 — two Linux test-portability fixes: the CMake install directory and the gather-stage hangup fixture
+
+- **id**: N298. Not a ledger row: found by task L-1 on Linux.
+- **severity**: low. **kind**: test portability (port-only tests).
+- **what**: (1) `install_layout_is_versioned_like_the_reference` (xtask, LEDGER S64-F5) looked in
+  `prefix/lib`; GNUInstallDirs installs into `lib64` on Fedora, where the layout itself was right
+  (`librustty-vt.so.0.1.0`, `.so.0`, `.so`, SONAME `librustty-vt.so.0`). (2)
+  `gather_stage_reads_output_that_arrives_with_the_hangup` (rustty-termio, UD19) made its hangup with
+  `shutdown(SHUT_WR)`; Linux reports `POLLHUP` on a Unix stream socket only when both directions are
+  shut, so the gather stage saw `POLLIN`, read 0 forever and the test timed out (measured with a C
+  probe: `SHUT_WR` and `SHUT_RDWR` both give `0x11` on macOS).
+- **fix**: (1) the test finds `lib` or `lib64` and now also asserts the ELF SONAME with `readelf`
+  (`297a28fc`); (2) `shutdown(SHUT_RDWR)`. Both pass on Linux and macOS; (2)'s negative control on
+  Linux (the reference's decision) still fails `left: [102, 105, 114, 115, 116]`.
+- **state**: CLOSED (task L-1).
+
+## N299 — the reference's Highway CPU detection is inert on Linux (UD291)
+
+- **id**: N299. Not a ledger row: found by task L-1 verifying LEDGER S34-F3 against the reference.
+- **severity**: low. **kind**: reference defect (performance; evident intent), port already correct.
+- **what**: on the VM the reference's `ghostty_hwy_detect_targets` (zig 0.16.0, aarch64-linux, `-lc`)
+  returns `0x20000000` while the same code without libc, and the port, return `0x34000000`. Zig's
+  `std.os.linux.getauxval` reads an auxv pointer only Zig's own `_start` sets. Details and proposed
+  fix: `UPSTREAM-DEFECTS.md` UD291; PORT NOTE at the port's detector (`d03d273d`).
+- **state**: CLOSED (task L-1).
+
+
+## N300 — the port aborted on every surface drag-and-drop, and the headed KAT that emits `drop` had stopped reaching it (UD295)
+
+- **id**: N300. Not a ledger row: found by task L-2 running the `--ignored` headed GTK integration tests
+  under a private headless sway on the VM.
+- **severity**: high for the port (a process abort on a user gesture). **kind**: port defect, from a
+  reference defect (UD295).
+- **what**: `surface_drop` (`crates/rustty-apprt/src/gtk/class/surface.rs`) was a `()` template
+  callback on `GtkDropTarget::drop`, a `gboolean` signal, faithful to the reference's
+  `callconv(.c) void` `surfaceDrop`. glib-rs panics on the missing return value inside the C callback,
+  which aborts the process; so dragging a split onto another surface killed Rustty. It now returns
+  `bool` (UD295, R13). Test `surface_drop_answers_the_gboolean_drop_signal`.
+- **how it hid**: the only test that emits `drop`, the headed KAT `gtk_parity_callbacks`, had stopped
+  reaching it: since task 20 (S54-F3) typed `mouse-shape` it panicked earlier on
+  `set_property("mouse-shape", 2i32)`, and its `drop` emission passed a bare string where the signal
+  declares a boxed `GValue`. Both are fixed; it now emits `drop` on every drop target of the surface.
+  No CI lane runs the headed KATs (`#[ignore]`d; R14 form 2 "no lane has the resource").
+- **not stale**: `gtk_application::application_new_then_deinit` and
+  `gtk_first_light::first_light_renders_a_live_terminal_frame` assert that a "noop-only build"
+  selects the `.none` windowing protocol, so they fail under `--features gtk,x11,wayland`; built with
+  `--features gtk` as their `#[ignore]` reasons say, both pass on the VM (task L-2).
+- **state**: CLOSED (task L-2).
+
 ## N310 — G-LOGFILE allowances driven from 131 over 50 files to 17 over 8, each now a port or a machine-checked row
 
 - **id**: N310. Not a ledger row: the S-1c batch (follow-up of N190 and task tail-s1b), branch
@@ -5145,7 +5429,13 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   other read error from `load_custom_css`; `prop_config` logs it with :1310's text. Then delete the
   `load_custom_css#1` `open-finding` row and set application.zig's allowance to 0.
 - **gate**: application.zig allowance 1 names this site.
-- **state**: OPEN.
+- **update (task S-1d, the merge of parity-closure `602e8f2b`)**: parity tail T-D (S49-F3) had already
+  made this change on parity-closure: `load_custom_css` returns the read error, `prop_config` logs :1310
+  (application.rs `prop_config`), and only one `error opening gtk-custom-css file` copy is left. After the
+  merge the `load_custom_css#1` `open-finding` row would have selected that genuine :1154 counterpart and
+  subtracted it (review S-1c F4), so the row is deleted (port-only cap 57 -> 56) and application.zig's
+  allowance is 0.
+- **state**: CLOSED (superseded by T-D S49-F3; records reconciled at the S-1d merge).
 
 ## N313 — the Zig build graph's own diagnostics have no counterpart in the cargo/xtask build
 

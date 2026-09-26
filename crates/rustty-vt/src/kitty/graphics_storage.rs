@@ -24,7 +24,7 @@
 // `terminal.Screen`/`terminal.Terminal` are `crate::screen::Screen` /
 // `crate::terminal::Terminal`; `PageList.Pin` is `crate::pagelist::Pin`; the
 // `command`/`Image`/`LoadingImage`/`Rect` come from the sibling kitty modules.
-use crate::alloc::Allocator;
+use crate::alloc::{ABox, AVec, Allocator, Bytes, TryPushExt};
 use crate::kitty::graphics_animation as animation;
 use crate::kitty::graphics_command as command;
 use crate::kitty::graphics_image;
@@ -36,7 +36,7 @@ use crate::screen::Screen;
 use crate::size;
 use crate::terminal::Terminal;
 use rustty_util::quirks::inlineAssert as assert;
-use std::collections::HashMap;
+use std::hash::RandomState;
 
 // const log = std.log.scoped(.kitty_gfx);
 const LOG_SCOPE: &str = "kitty_gfx";
@@ -89,11 +89,14 @@ pub fn next_generation() -> u64 {
 //
 // PORT NOTE: the reference uses `std.AutoHashMapUnmanaged(u32, Image)` for
 // `images` and `std.AutoHashMapUnmanaged(PlacementKey, Placement)` for
-// `placements`. The Image value owns a `Vec<u8>` (non-`Copy`), so the
+// `placements`. The Image value owns its pixel data (non-`Copy`), so the
 // allocator-backed pointer map (`crate::hash_map::HashMapUnmanaged`, which is
-// `K: Copy, V: Copy`) cannot store it. As elsewhere in the vt port for
-// heap-side maps (see `mouse`/`x11_color`/`page_impl`), we use Rust's
-// `std::collections::HashMap`. Both Zig and Rust hash maps are unordered; the
+// `K: Copy, V: Copy`) cannot store it. They are `hashbrown` maps over the
+// allocator handle (parity tail S7-4), with std's `RandomState` hasher (what
+// the `std::collections::HashMap` they replace used). An unmanaged `.{}` map
+// holds no allocator: each map binds to the allocator of its first growing
+// call (`bind_map`), and later calls debug-assert that it is the same one,
+// the reference's contract. Both Zig and Rust hash maps are unordered; the
 // reference's iterate-and-`removeByPtr` pattern is reproduced by collecting the
 // matching keys first and then removing them, which is observably identical (no
 // behavior depends on iteration order — the tests assert only counts/membership).
@@ -147,7 +150,9 @@ pub struct ImageStorage {
     pub placements: PlacementMap,
 
     /// Non-null if there is an in-progress loading image.
-    pub loading: Option<Box<LoadingImage>>,
+    // PORT NOTE (parity tail S7-4): `alloc.create(LoadingImage)` through the
+    // storage's allocator.
+    pub loading: Option<ABox<LoadingImage>>,
 
     /// The limits of what medium types are allowed for image loading.
     pub image_limits: Limits,
@@ -160,9 +165,30 @@ pub struct ImageStorage {
 }
 
 // const ImageMap = std.AutoHashMapUnmanaged(u32, Image);
-type ImageMap = HashMap<u32, Image>;
+pub type ImageMap = hashbrown::HashMap<u32, Image, RandomState, Allocator>;
 // const PlacementMap = std.AutoHashMapUnmanaged(PlacementKey, Placement);
-type PlacementMap = HashMap<PlacementKey, Placement>;
+pub type PlacementMap = hashbrown::HashMap<PlacementKey, Placement, RandomState, Allocator>;
+/// The placements map's iterator (`PlacementMap.Iterator`).
+pub type PlacementMapIter<'a> = hashbrown::hash_map::Iter<'a, PlacementKey, Placement>;
+
+/// `.{}`: an empty unmanaged map (no allocation; bound on first growth).
+fn empty_map<K, V>() -> hashbrown::HashMap<K, V, RandomState, Allocator> {
+    hashbrown::HashMap::with_hasher_in(RandomState::new(), crate::alloc::Global)
+}
+
+/// Bind an unmanaged map to the allocator a reference call site passes: while
+/// it owns no allocation it is rebound to `alloc`; afterwards `alloc` is
+/// debug-asserted to be the allocator it was bound to (see `alloc::bind`).
+fn bind_map<K, V>(map: &mut hashbrown::HashMap<K, V, RandomState, Allocator>, alloc: Allocator) {
+    if map.capacity() == 0 {
+        if *map.allocator() != alloc {
+            debug_assert!(map.is_empty());
+            *map = hashbrown::HashMap::with_hasher_in(RandomState::new(), alloc);
+        }
+    } else {
+        map.allocator().debug_assert_same(alloc);
+    }
+}
 
 /// Maximum number of parent links in a relative placement chain,
 /// matching the minimum specified in the spec and the actual
@@ -233,8 +259,8 @@ impl Default for ImageStorage {
             generation: 0,
             next_image_id: 2147483647,
             next_internal_placement_id: 0,
-            images: ImageMap::new(),
-            placements: PlacementMap::new(),
+            images: empty_map(),
+            placements: empty_map(),
             loading: None,
             image_limits: Limits::DIRECT, // .direct
             total_bytes: 0,
@@ -259,10 +285,11 @@ impl PendingImage {
     /// therefore eviction age) while marking storage content as mutated.
     //
     // PORT NOTE: the reference takes `data: []const u8` and the caller frees it
-    // on `false`. Rust ownership transfers the `Vec<u8>` either way: on `true`
-    // it becomes the image payload; on `false` it is dropped (freed) here —
-    // observably the caller's `defer alloc.free(data)`.
-    pub fn complete(&self, storage: &mut ImageStorage, data: Vec<u8>) -> bool {
+    // on `false`. Rust ownership transfers the bytes either way: on `true`
+    // they become the image payload; on `false` they are dropped (freed
+    // through their allocator) here — observably the caller's
+    // `defer alloc.free(data)`.
+    pub fn complete(&self, storage: &mut ImageStorage, data: Bytes) -> bool {
         // const img = storage.images.getPtr(self.id) orelse return false;
         let img = match storage.images.get_mut(&self.id) {
             Some(img) => img,
@@ -301,21 +328,27 @@ impl ImageStorage {
     // reconstruction of the whole screen.
     pub fn deinit(&mut self, alloc: Allocator, s: *mut Screen) {
         // if (self.loading) |loading| loading.destroy(alloc);
-        // PORT NOTE: `LoadingImage.destroy` frees its data + the heap allocation;
-        // dropping the owning `Box<LoadingImage>` does both.
-        let _ = &alloc;
-        self.loading = None;
+        if let Some(loading) = self.loading.take() {
+            LoadingImage::destroy(loading, alloc);
+        }
 
         self.clear_placements(s);
         // self.placements.deinit(alloc);
-        self.placements = PlacementMap::new();
+        if self.placements.capacity() != 0 {
+            self.placements.allocator().debug_assert_same(alloc);
+        }
+        self.placements = empty_map();
 
         // var it = self.images.iterator();
         // while (it.next()) |kv| kv.value_ptr.deinit(alloc);
         // self.images.deinit(alloc);
-        // PORT NOTE: `Image.deinit` frees its `data`; clearing the owning map
-        // drops every `Image` (and its payload).
-        self.images.clear();
+        for img in self.images.values_mut() {
+            img.deinit(alloc);
+        }
+        if self.images.capacity() != 0 {
+            self.images.allocator().debug_assert_same(alloc);
+        }
+        self.images = empty_map();
     }
 
     /// Kitty image protocol is enabled if we have a non-zero limit.
@@ -444,10 +477,10 @@ impl ImageStorage {
 
         // Reserve map capacity before evicting anything so allocation failure
         // cannot leave storage partially evicted. Existing keys need no room.
-        // PORT NOTE: `ensureUnusedCapacity` on a Rust `HashMap` is infallible
-        // (it grows via the global allocator); the reserve keeps the shape.
+        // try self.images.ensureUnusedCapacity(alloc, 1);
         if !self.images.contains_key(&img.id) {
-            self.images.reserve(1);
+            bind_map(&mut self.images, alloc);
+            self.images.try_reserve(1).map_err(|_| OutOfMemory)?;
         }
 
         // If this would put us over the limit, then evict.
@@ -484,10 +517,9 @@ impl ImageStorage {
             // implementing the protocol rule that retransmitting the
             // base image resets the animation.
             self.total_bytes -= self.images.get(&id).unwrap().storage_size();
-            // the existing `Image` (its payload and animation) is dropped by
-            // the `insert` below.
+            // gop.value_ptr.deinit(alloc);
+            self.images.get_mut(&id).unwrap().deinit(alloc);
         }
-        let _ = &alloc;
 
         // gop.value_ptr.* = img;
         // gop.value_ptr.metadata.placement_count = 0;
@@ -538,7 +570,6 @@ impl ImageStorage {
         placement_id: u32,
         p: Placement,
     ) -> Result<(), OutOfMemory> {
-        let _ = &alloc;
         // assert(self.images.get(image_id) != null);
         assert(self.images.contains_key(&image_id));
         log::debug!(
@@ -583,6 +614,13 @@ impl ImageStorage {
         //     gop.value_ptr.deinit(s);
         // } else { ... placement_count overflow check ... }
         // gop.value_ptr.* = p;
+        // PORT NOTE (parity tail S7-4): `getOrPut`'s growth is the fallible
+        // `try_reserve(1)`, made before anything else changes, as the
+        // reference's `try` is.
+        if !self.placements.contains_key(&key) {
+            bind_map(&mut self.placements, alloc);
+            self.placements.try_reserve(1).map_err(|_| OutOfMemory)?;
+        }
         if let Some(existing) = self.placements.get(&key) {
             existing.deinit(s);
         } else {
@@ -664,9 +702,10 @@ impl ImageStorage {
         assert(core::ptr::eq(self as *const ImageStorage, unsafe {
             &raw const (*s).kitty_images
         }));
+        // (`restores` grows through the screen's allocator, `s.alloc`.)
         let mut result: ScrollMargins = ScrollMargins {
             screen: s,
-            restores: Vec::new(),
+            restores: AVec::new_in(unsafe { (*s).alloc }),
         };
 
         // const top: i64 = t.scrolling_region.top;
@@ -817,30 +856,24 @@ impl ImageStorage {
             //     log.warn("OOM adjusting image placement for scroll", .{});
             //     continue;
             // };
-            // PORT NOTE: `try_reserve(1)` is the fallible growth of the append,
-            // and the `cfg(test)` fail point stands in for a failing allocator
-            // (see `SCROLL_MARGINS_TW`).
+            // PORT NOTE: `try_push` is the fallible append through the screen's
+            // allocator (parity tail S7-4 retired the `SCROLL_MARGINS_TW`
+            // stand-in).
             // CORRECTION (parity S190-F2): this was a bare `Vec::push`, which
             // aborts on OOM, and the log call was commented out.
-            #[cfg(test)]
-            let append_failed = SCROLL_MARGINS_TW
-                .with(|tw| tw.borrow_mut().check(ScrollMarginsFp::RestoresAppend))
-                .is_err();
-            #[cfg(not(test))]
-            let append_failed = false;
-            if append_failed || result.restores.try_reserve(1).is_err() {
-                // OOM: this placement is left to the whims of the
-                // generic pin tracking. Degraded, but safe.
-                log::warn!(target: LOG_SCOPE, "OOM adjusting image placement for scroll");
-                continue 'placements;
-            }
-            result.restores.push(Restore {
+            let restore = Restore {
                 pin,
                 // SAFETY: shared read of the tracked pin, see above.
                 x: unsafe { (*pin).x },
                 // .y = @intCast(final_y),
                 y: u32::try_from(final_y).unwrap(),
-            });
+            };
+            if result.restores.try_push(restore).is_err() {
+                // OOM: this placement is left to the whims of the
+                // generic pin tracking. Degraded, but safe.
+                log::warn!(target: LOG_SCOPE, "OOM adjusting image placement for scroll");
+                continue 'placements;
+            }
         }
 
         if mutated {
@@ -1194,13 +1227,20 @@ impl ImageStorage {
     }
 
     /// Get an image by its ID. If the image doesn't exist, null is returned.
-    pub fn image_by_id(&self, image_id: u32) -> Option<Image> {
-        self.images.get(&image_id).cloned()
+    //
+    // PORT NOTE (parity tail S7-4): the reference returns `?Image` by value, a
+    // shallow copy sharing the stored pixel data. The port returns a borrow of
+    // the stored image: a copy would duplicate the pixel data, an allocation
+    // (through the storage's, possibly the embedder's, allocator) the
+    // reference never makes.
+    pub fn image_by_id(&self, image_id: u32) -> Option<&Image> {
+        self.images.get(&image_id)
     }
 
     /// Get an image by its number. If the image doesn't exist, return null.
-    pub fn image_by_number(&self, image_number: u32) -> Option<Image> {
-        let mut newest: Option<Image> = None;
+    // PORT NOTE (parity tail S7-4): a borrow, as `image_by_id`.
+    pub fn image_by_number(&self, image_number: u32) -> Option<&Image> {
+        let mut newest: Option<&Image> = None;
 
         // var it = self.images.iterator();
         // while (it.next()) |kv| { ... }
@@ -1210,8 +1250,8 @@ impl ImageStorage {
         #[allow(clippy::collapsible_if)]
         for kv in self.images.values() {
             if kv.number == image_number {
-                if newest.is_none() || kv.generation > newest.as_ref().unwrap().generation {
-                    newest = Some(kv.clone());
+                if newest.is_none() || kv.generation > newest.unwrap().generation {
+                    newest = Some(kv);
                 }
             }
         }
@@ -1285,7 +1325,6 @@ impl ImageStorage {
         alloc: Allocator,
         image_id: u32,
     ) -> Result<(), OutOfMemory> {
-        let _ = &alloc;
         let (rgba, old_len) = {
             let img = self.images.get(&image_id).unwrap();
             if img.format == command::Format::Rgba {
@@ -1298,13 +1337,12 @@ impl ImageStorage {
             };
 
             // const rgba = try pixel.rgbaFromFormat(alloc, img.format, old);
-            (pixel::rgba_from_format(img.format, old)?, old.len())
+            (pixel::rgba_from_format(alloc, img.format, old)?, old.len())
         };
         {
             let img = self.images.get_mut(&image_id).unwrap();
             let new_len = rgba.len();
-            // img.data.deinit(alloc); — the assignment below drops the old
-            // payload.
+            img.data.deinit(alloc);
             img.data = graphics_image::Data::Complete(rgba);
             img.format = command::Format::Rgba;
             self.total_bytes -= old_len;
@@ -1679,18 +1717,22 @@ impl ImageStorage {
                     let x = x - 1;
                     let keys: Vec<PlacementKey> = self.placements.keys().copied().collect();
                     for key in keys {
-                        let img = match self.image_by_id(key.image_id) {
-                            Some(img) => img,
-                            None => continue,
-                        };
-                        let rect = match self.placements.get(&key).unwrap().rect(&img, t) {
-                            Some(r) => r,
-                            None => continue,
+                        // (the image is borrowed: only its id and the placement rect
+                        // are needed, and the storage is mutated below.)
+                        let (img_id, rect) = {
+                            let img = match self.image_by_id(key.image_id) {
+                                Some(img) => img,
+                                None => continue,
+                            };
+                            match self.placements.get(&key).unwrap().rect(img, t) {
+                                Some(r) => (img.id, r),
+                                None => continue,
+                            }
                         };
                         if rect.top_left.x as u32 <= x && rect.bottom_right.x as u32 >= x {
                             self.remove_placement(t.screens.active, &key);
                             if delete {
-                                self.delete_if_unused(alloc, img.id);
+                                self.delete_if_unused(alloc, img_id);
                             }
                         }
                     }
@@ -1718,13 +1760,17 @@ impl ImageStorage {
 
                     let keys: Vec<PlacementKey> = self.placements.keys().copied().collect();
                     for key in keys {
-                        let img = match self.image_by_id(key.image_id) {
-                            Some(img) => img,
-                            None => continue,
-                        };
-                        let rect = match self.placements.get(&key).unwrap().rect(&img, t) {
-                            Some(r) => r,
-                            None => continue,
+                        // (the image is borrowed: only its id and the placement rect
+                        // are needed, and the storage is mutated below.)
+                        let (img_id, rect) = {
+                            let img = match self.image_by_id(key.image_id) {
+                                Some(img) => img,
+                                None => continue,
+                            };
+                            match self.placements.get(&key).unwrap().rect(img, t) {
+                                Some(r) => (img.id, r),
+                                None => continue,
+                            }
                         };
 
                         // We need to copy our pin to ensure we are at least at
@@ -1734,7 +1780,7 @@ impl ImageStorage {
                         if target_pin_copy.is_between(rect.top_left, rect.bottom_right) {
                             self.remove_placement(t.screens.active, &key);
                             if delete {
-                                self.delete_if_unused(alloc, img.id);
+                                self.delete_if_unused(alloc, img_id);
                             }
                         }
                     }
@@ -1881,7 +1927,7 @@ impl ImageStorage {
                     Some(image) => image,
                     None => continue,
                 };
-                let rect = match self.placements.get(&key).unwrap().rect(&image, t) {
+                let rect = match self.placements.get(&key).unwrap().rect(image, t) {
                     Some(rect) => rect,
                     None => continue,
                 };
@@ -2111,13 +2157,17 @@ impl ImageStorage {
 
         let keys: Vec<PlacementKey> = self.placements.keys().copied().collect();
         for key in keys {
-            let img = match self.image_by_id(key.image_id) {
-                Some(img) => img,
-                None => continue,
-            };
-            let rect = match self.placements.get(&key).unwrap().rect(&img, t) {
-                Some(r) => r,
-                None => continue,
+            // (the image is borrowed: only its id and the placement rect
+            // are needed, and the storage is mutated below.)
+            let (img_id, rect) = {
+                let img = match self.image_by_id(key.image_id) {
+                    Some(img) => img,
+                    None => continue,
+                };
+                match self.placements.get(&key).unwrap().rect(img, t) {
+                    Some(r) => (img.id, r),
+                    None => continue,
+                }
             };
             // if (rect.contains(target_pin)) { ... }
             if rect.contains(target_pin) {
@@ -2127,7 +2177,7 @@ impl ImageStorage {
                 }
                 self.remove_placement(t.screens.active, &key);
                 if delete_unused {
-                    self.delete_if_unused(alloc, img.id);
+                    self.delete_if_unused(alloc, img_id);
                 }
             }
         }
@@ -2271,7 +2321,7 @@ pub enum ScrollOp {
 pub struct ScrollMargins {
     screen: *mut Screen,
     // restores: std.ArrayListUnmanaged(Restore) = .empty,
-    restores: Vec<Restore>,
+    restores: AVec<Restore>,
 }
 
 // const Restore = struct { pin: *PageList.Pin, x: size.CellCountInt, y: u32 };
@@ -2319,7 +2369,8 @@ impl Drop for ScrollMargins {
             };
             unsafe { *restore.pin = new_pin };
         }
-        // self.restores.deinit(self.screen.alloc); — the owning Vec drops.
+        // self.restores.deinit(self.screen.alloc); — the list drops through
+        // the allocator it grew with (the screen's).
     }
 }
 
@@ -2332,24 +2383,6 @@ impl Drop for ScrollMargins {
 // placement-count overflow, `error.OutOfMemory` upstream).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OutOfMemory;
-
-// PORT NOTE (parity S190-F2): the reference reaches `scrollMarginsBegin`'s
-// degraded `restores.append ... catch` arm with a failing allocator; the
-// port's restores `Vec` is on the global heap, so a `cfg(test)` fail point in
-// front of the `try_reserve` stands in (same stand-in as `screen.rs`'s
-// `CURSOR_COPY_TW`).
-#[cfg(test)]
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub(crate) enum ScrollMarginsFp {
-    RestoresAppend,
-}
-
-#[cfg(test)]
-thread_local! {
-    pub(crate) static SCROLL_MARGINS_TW: core::cell::RefCell<
-        rustty_util::tripwire::Module<ScrollMarginsFp, OutOfMemory>,
-    > = core::cell::RefCell::new(rustty_util::tripwire::module());
-}
 
 /// The candidate type used during eviction (`evictImageExcept`).
 //
@@ -4125,7 +4158,7 @@ mod tests {
             t.screens.active,
             Image {
                 id: 7,
-                data: Data::Complete(vec![b'*'; 64]),
+                data: Data::Complete(crate::alloc::heap_bytes(&[b'*'; 64])),
                 ..Image::default()
             },
         )
@@ -4719,7 +4752,7 @@ mod tests {
                 id: 1,
                 width: 1,
                 height: 1,
-                data: Data::Complete(b"1234".to_vec()),
+                data: Data::Complete(crate::alloc::heap_bytes(b"1234")),
                 ..Image::default()
             },
         )
@@ -4883,7 +4916,7 @@ mod tests {
             t.screens.active,
             Image {
                 id: 1,
-                data: Data::Complete(vec![b'*'; 64]),
+                data: Data::Complete(crate::alloc::heap_bytes(&[b'*'; 64])),
                 metadata: Metadata {
                     transient: false,
                     ..Metadata::default()
@@ -4897,7 +4930,7 @@ mod tests {
             t.screens.active,
             Image {
                 id: 2,
-                data: Data::Complete(vec![b'*'; 64]),
+                data: Data::Complete(crate::alloc::heap_bytes(&[b'*'; 64])),
                 metadata: Metadata {
                     transient: true,
                     ..Metadata::default()
@@ -4911,7 +4944,7 @@ mod tests {
             t.screens.active,
             Image {
                 id: 3,
-                data: Data::Complete(vec![b'*'; 64]),
+                data: Data::Complete(crate::alloc::heap_bytes(&[b'*'; 64])),
                 metadata: Metadata {
                     transient: true,
                     ..Metadata::default()
@@ -4982,7 +5015,7 @@ mod tests {
                 t.screens.active,
                 Image {
                     id,
-                    data: Data::Complete(vec![b'*'; 64]),
+                    data: Data::Complete(crate::alloc::heap_bytes(&[b'*'; 64])),
                     metadata: Metadata {
                         transient,
                         ..Metadata::default()
@@ -5484,7 +5517,7 @@ mod tests {
             t.screens.active,
             Image {
                 id: 1,
-                data: Data::Complete(vec![b'*'; 64]),
+                data: Data::Complete(crate::alloc::heap_bytes(&[b'*'; 64])),
                 ..Image::default()
             },
         )
@@ -5504,7 +5537,7 @@ mod tests {
             t.screens.active,
             Image {
                 id: 2,
-                data: Data::Complete(vec![b'*'; 64]),
+                data: Data::Complete(crate::alloc::heap_bytes(&[b'*'; 64])),
                 ..Image::default()
             },
         )
@@ -5531,7 +5564,7 @@ mod tests {
             t.screens.active,
             Image {
                 id: 3,
-                data: Data::Complete(vec![b'*'; 64]),
+                data: Data::Complete(crate::alloc::heap_bytes(&[b'*'; 64])),
                 ..Image::default()
             },
         )
@@ -5603,13 +5636,13 @@ mod tests {
         // try testing.expect(!wrong_completed);
         // defer alloc.free(wrong); — the Vec drops inside `complete` on false.
         let wrong = b"short".to_vec();
-        let wrong_completed = pending.complete(&mut s, wrong);
+        let wrong_completed = pending.complete(&mut s, crate::alloc::heap_bytes(&wrong));
         assert!(!wrong_completed);
 
         let storage_generation = s.generation;
         s.dirty = false;
         let pixels = vec![b'*'; 16];
-        assert!(pending.complete(&mut s, pixels.clone()));
+        assert!(pending.complete(&mut s, crate::alloc::heap_bytes(&pixels.clone())));
         assert!(s.dirty);
         assert!(s.generation > storage_generation);
         assert_eq!(pending.generation, s.image_by_id(1).unwrap().generation);
@@ -5619,7 +5652,7 @@ mod tests {
         assert_eq!(pixels.as_slice(), stored.data.bytes().unwrap());
 
         let duplicate = vec![b'!'; 16];
-        let duplicate_completed = pending.complete(&mut s, duplicate);
+        let duplicate_completed = pending.complete(&mut s, crate::alloc::heap_bytes(&duplicate));
         assert!(!duplicate_completed);
 
         s.deinit(alloc, t.screens.active);
@@ -5658,7 +5691,7 @@ mod tests {
             },
         );
         let deleted_data = b"gone".to_vec();
-        let deleted_completed = deleted.complete(&mut s, deleted_data);
+        let deleted_completed = deleted.complete(&mut s, crate::alloc::heap_bytes(&deleted_data));
         assert!(!deleted_completed);
 
         let replaced = s
@@ -5677,13 +5710,14 @@ mod tests {
             t.screens.active,
             Image {
                 id: 2,
-                data: Data::Complete(b"live".to_vec()),
+                data: Data::Complete(crate::alloc::heap_bytes(b"live")),
                 ..Image::default()
             },
         )
         .unwrap();
         let replaced_data = b"late".to_vec();
-        let replaced_completed = replaced.complete(&mut s, replaced_data);
+        let replaced_completed =
+            replaced.complete(&mut s, crate::alloc::heap_bytes(&replaced_data));
         assert!(!replaced_completed);
         // try testing.expectEqualStrings("live", s.imageById(2).?.data.bytes().?);
         let live = s.image_by_id(2).unwrap();
@@ -5705,14 +5739,14 @@ mod tests {
             t.screens.active,
             Image {
                 id: 4,
-                data: Data::Complete(b"12345678".to_vec()),
+                data: Data::Complete(crate::alloc::heap_bytes(b"12345678")),
                 ..Image::default()
             },
         )
         .unwrap();
         assert!(s.image_by_id(3).is_none());
         let evicted_data = b"late".to_vec();
-        let evicted_completed = evicted.complete(&mut s, evicted_data);
+        let evicted_completed = evicted.complete(&mut s, crate::alloc::heap_bytes(&evicted_data));
         assert!(!evicted_completed);
 
         s.deinit(alloc, t.screens.active);
@@ -5760,7 +5794,7 @@ mod tests {
             t.screens.active,
             Image {
                 id: 2,
-                data: Data::Complete(b"keep".to_vec()),
+                data: Data::Complete(crate::alloc::heap_bytes(b"keep")),
                 ..Image::default()
             },
         )
@@ -5774,7 +5808,7 @@ mod tests {
                 width: 2,
                 height: 1,
                 format: command::Format::Rgba,
-                data: Data::Complete(b"12345678".to_vec()),
+                data: Data::Complete(crate::alloc::heap_bytes(b"12345678")),
                 ..Image::default()
             },
         )
@@ -5791,7 +5825,7 @@ mod tests {
         assert_eq!(12usize, s.total_bytes);
 
         let stale = b"snapshot".to_vec();
-        let stale_completed = pending.complete(&mut s, stale);
+        let stale_completed = pending.complete(&mut s, crate::alloc::heap_bytes(&stale));
         assert!(!stale_completed);
 
         // Growing the replacement requires eviction, but the replacement ID is
@@ -5801,7 +5835,7 @@ mod tests {
             t.screens.active,
             Image {
                 id: 1,
-                data: Data::Complete(b"1234567890".to_vec()),
+                data: Data::Complete(crate::alloc::heap_bytes(b"1234567890")),
                 ..Image::default()
             },
         )
@@ -5873,7 +5907,7 @@ mod tests {
             t.screens.active,
             Image {
                 id: 3,
-                data: Data::Complete(vec![b'*'; 64]),
+                data: Data::Complete(crate::alloc::heap_bytes(&[b'*'; 64])),
                 metadata: Metadata {
                     transient: true,
                     ..Metadata::default()
@@ -6038,7 +6072,7 @@ mod tests {
                 .point_from_pin(point::Tag::Active, unsafe { *pin })
                 .is_none());
         }
-        let rect = placement.rect(&s.image_by_id(1).unwrap(), &t).unwrap();
+        let rect = placement.rect(s.image_by_id(1).unwrap(), &t).unwrap();
         assert!(unsafe { &(*t.screens.active).pages }
             .point_from_pin(point::Tag::Active, rect.bottom_right)
             .is_some());
@@ -6870,7 +6904,7 @@ mod tests {
                 id: 1,
                 width: 2,
                 height: 1,
-                data: Data::Complete(vec![0, 0, 0, 0, 0, 0]),
+                data: Data::Complete(crate::alloc::heap_bytes(&[0, 0, 0, 0, 0, 0])),
                 ..Image::default()
             },
         )
@@ -6924,7 +6958,7 @@ mod tests {
                 id: 3,
                 width: 2,
                 height: 1,
-                data: Data::Complete(vec![0, 0, 0, 0, 0, 0]),
+                data: Data::Complete(crate::alloc::heap_bytes(&[0, 0, 0, 0, 0, 0])),
                 ..Image::default()
             },
         )
@@ -7144,7 +7178,6 @@ mod tests {
     // deleted.
     #[test]
     fn scroll_margins_restores_append_failure_is_logged_and_skipped() {
-        use rustty_util::tripwire::ResetMode;
         let alloc = crate::alloc::Global;
         let mut t = Terminal::init(alloc, opts(10, 6)).unwrap();
         t.width_px = 100;
@@ -7177,10 +7210,11 @@ mod tests {
         }
         t.set_top_and_bottom_margin(2, 5);
 
-        SCROLL_MARGINS_TW.with(|tw| {
-            tw.borrow_mut()
-                .errorAlways(ScrollMarginsFp::RestoresAppend, OutOfMemory)
-        });
+        // The restores list grows through the screen's allocator (`s.alloc`),
+        // swapped for `std.mem.Allocator.failing` for the begin call (parity
+        // tail S7-4 retired the `SCROLL_MARGINS_TW` stand-in).
+        let original_alloc = unsafe { (*t.screens.active).alloc };
+        unsafe { (*t.screens.active).alloc = crate::alloc::failing() };
         let cap = crate::log_capture::start();
         let result = {
             let storage = unsafe { &mut (*t.screens.active).kitty_images };
@@ -7188,9 +7222,7 @@ mod tests {
         };
         let messages = cap.messages();
         drop(cap);
-        SCROLL_MARGINS_TW
-            .with(|tw| tw.borrow_mut().end(ResetMode::Reset))
-            .unwrap();
+        unsafe { (*t.screens.active).alloc = original_alloc };
 
         assert_eq!(0usize, result.restores.len());
         assert!(
@@ -7789,7 +7821,7 @@ mod tests {
                 width: 1,
                 height: 1,
                 format: command::Format::Rgba,
-                data: Data::Complete(vec![255, 0, 0, 255]),
+                data: Data::Complete(crate::alloc::heap_bytes(&[255, 0, 0, 255])),
                 ..Image::default()
             },
         )
@@ -7801,12 +7833,12 @@ mod tests {
         // try anim.frames.append(alloc, .{ .data = ..., .gap_ms = 40 });
         {
             let img = s.images.get_mut(&1).unwrap();
-            img.animation = Some(Box::new(Animation {
+            img.animation = Some(crate::alloc::heap_box(Animation {
                 state: State::Running,
                 ..Animation::default()
             }));
             img.animation.as_mut().unwrap().frames.push(Frame {
-                data: vec![0, 0, 255, 255],
+                data: crate::alloc::heap_bytes(&[0, 0, 255, 255]),
                 gap_ms: 40,
             });
         }
@@ -7893,19 +7925,19 @@ mod tests {
                 width: 1,
                 height: 1,
                 format: command::Format::Rgba,
-                data: Data::Complete(vec![255, 0, 0, 255]),
+                data: Data::Complete(crate::alloc::heap_bytes(&[255, 0, 0, 255])),
                 ..Image::default()
             },
         )
         .unwrap();
         {
             let img = s.images.get_mut(&1).unwrap();
-            img.animation = Some(Box::new(Animation {
+            img.animation = Some(crate::alloc::heap_box(Animation {
                 state: State::Loading,
                 ..Animation::default()
             }));
             img.animation.as_mut().unwrap().frames.push(Frame {
-                data: vec![0, 0, 255, 255],
+                data: crate::alloc::heap_bytes(&[0, 0, 255, 255]),
                 gap_ms: 40,
             });
         }
@@ -7948,7 +7980,7 @@ mod tests {
             .unwrap()
             .frames
             .push(Frame {
-                data: vec![0, 255, 0, 255],
+                data: crate::alloc::heap_bytes(&[0, 255, 0, 255]),
                 gap_ms: 25,
             });
         assert_eq!(Some(25u64), s.animation_tick(150));
@@ -7989,21 +8021,21 @@ mod tests {
                 width: 1,
                 height: 1,
                 format: command::Format::Rgba,
-                data: Data::Complete(vec![255, 0, 0, 255]),
+                data: Data::Complete(crate::alloc::heap_bytes(&[255, 0, 0, 255])),
                 ..Image::default()
             },
         )
         .unwrap();
         {
             let img = s.images.get_mut(&1).unwrap();
-            img.animation = Some(Box::new(Animation {
+            img.animation = Some(crate::alloc::heap_box(Animation {
                 state: State::Running,
                 root_gap_ms: 10,
                 max_loops: 1,
                 ..Animation::default()
             }));
             img.animation.as_mut().unwrap().frames.push(Frame {
-                data: vec![0, 0, 255, 255],
+                data: crate::alloc::heap_bytes(&[0, 0, 255, 255]),
                 gap_ms: 40,
             });
         }
@@ -8080,16 +8112,16 @@ mod tests {
                 width: 1,
                 height: 1,
                 format: command::Format::Rgba,
-                data: Data::Complete(vec![255, 0, 0, 255]),
+                data: Data::Complete(crate::alloc::heap_bytes(&[255, 0, 0, 255])),
                 ..Image::default()
             },
         )
         .unwrap();
         {
             let img = s.images.get_mut(&1).unwrap();
-            img.animation = Some(Box::new(Animation::default()));
+            img.animation = Some(crate::alloc::heap_box(Animation::default()));
             img.animation.as_mut().unwrap().frames.push(Frame {
-                data: vec![0, 0, 255, 255],
+                data: crate::alloc::heap_bytes(&[0, 0, 255, 255]),
                 gap_ms: 40,
             });
         }
@@ -8150,21 +8182,21 @@ mod tests {
                 width: 1,
                 height: 1,
                 format: command::Format::Rgba,
-                data: Data::Complete(vec![255, 0, 0, 255]),
+                data: Data::Complete(crate::alloc::heap_bytes(&[255, 0, 0, 255])),
                 ..Image::default()
             },
         )
         .unwrap();
         {
             let img = s.images.get_mut(&1).unwrap();
-            img.animation = Some(Box::new(Animation {
+            img.animation = Some(crate::alloc::heap_box(Animation {
                 state: State::Running,
                 current_index: 1,
                 frame_shown_at_ms: Some(1000),
                 ..Animation::default()
             }));
             img.animation.as_mut().unwrap().frames.push(Frame {
-                data: vec![0, 0, 255, 255],
+                data: crate::alloc::heap_bytes(&[0, 0, 255, 255]),
                 gap_ms: 40,
             });
         }
