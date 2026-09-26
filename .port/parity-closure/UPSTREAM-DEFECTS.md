@@ -2576,6 +2576,21 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - proposed fix:    in both `parse` functions, free the previous command's list before assigning `parser.command` (for example call the `reset` cleanup switch first), or have `end` move the state to `.invalid` so a second `end` returns null.
 - upstream status: not reported
 
+### UD314 — `ghostty_selection_gesture_event_set` leaks the word-boundary codepoint copy when a codepoint is out of range
+- kind:            leak
+- upstream project: ghostty
+- severity:        low (C API)
+- reference:       src/terminal/c/selection_gesture.zig:710-731 (`trySetWordBoundaryCodepoints`), at 20abdb50a
+- defect:          the function returns `Result`, not an error union. After `const copy = event.alloc.alloc(u21, value.len)`, the conversion loop's `std.math.cast(u21, cp) orelse return .invalid_value` is a normal return, so the `errdefer event.alloc.free(copy)` above it never runs and the copy leaks. The previous copy was already freed and the event falls back to the default boundaries, so nothing references the leaked block.
+- ReleaseSafe:     `len * 4` bytes leak from the event's allocator per call.
+- ReleaseFast:     the same leak.
+- reachability:    libghostty-vt embedders: `ghostty_selection_gesture_event_set(event, GHOSTTY_SELECTION_GESTURE_EVENT_OPT_WORD_BOUNDARY_CODEPOINTS, &codepoints)` with any codepoint above U+1FFFFF (the header takes `uint32_t` values).
+- port handling:   fixed (R13): `crates/rustty-vt-c/src/selection_gesture.rs` `try_set_word_boundary_codepoints` (PORT NOTE: reference defect (R13, UD314)); returning drops the copy, which frees it through the event's allocator. The result and the event's state are the reference's. Listed in `docs/ghostty-bug-fixes.md`.
+- parity row(s):   none; found by task S7-8 while routing the copy (NEW-FINDINGS N333).
+- test:            `selection_gesture::tests::event_invalid_codepoint_frees_the_copy` (rustty-vt-c): over a counting allocator, a valid copy, then `['a', 0x200000]`: INVALID_VALUE, the 8-byte copy is allocated and freed along with the previous one, the defaults apply, and U+1FFFFF itself is accepted. Negative control (`mem::forget(copy)` before the return, the reference's behaviour): the test fails on the free count (2 expected, 1).
+- proposed fix:    free the copy on the invalid path (`event.alloc.free(copy); return .invalid_value;`), or validate every codepoint before allocating.
+- upstream status: not reported
+
 ### UD315 — after a render-state update fails on an allocation, the next update leaves the rows it did not rebuild stale or empty
 - kind:            functional (evident intent: a successful update must describe the current terminal), and, by reading, UB (UNVERIFIED)
 - upstream project: ghostty

@@ -245,10 +245,11 @@ pub struct Writer<'d, W: io::Writer + ?Sized> {
 /// buffer handles our smallest records on the stack before larger records
 /// fall back to the heap." The reference wraps the caller's allocator in
 /// `std.heap.stackFallback(512, alloc)` at the `snapshot.encode` call site
-/// only; the port's `Writer` has no allocator parameter to wrap, so the
-/// fallback is baked into every `Writer`'s scratch here (the other `Writer`
-/// constructors are tests and the C-API tier, where the only difference is
-/// where the first 512 bytes of a payload live).
+/// only; the port bakes the 512-byte stack buffer into every `Writer`'s
+/// scratch, whose spill goes through the allocator `init_in` is given
+/// (`snapshot::encode`'s `alloc`, parity tail S7-8). The other `Writer`
+/// constructors are tests, where the only difference is where the first 512
+/// bytes of a payload live.
 pub const RECORD_SCRATCH_STACK_BYTES: usize = 512;
 
 impl<'d, W: io::Writer + ?Sized> Writer<'d, W> {
