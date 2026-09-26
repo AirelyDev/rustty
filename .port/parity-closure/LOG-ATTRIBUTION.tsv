@@ -29,7 +29,7 @@
 # reason       mandatory.
 #
 # The row count is a two-way ratchet; a missing directive BLOCKS.
-#!attribution-cap entries=25
+#!attribution-cap entries=27
 kind	oracle_file	port_file	function	match	reason
 default-owner	src/apprt/embedded.zig	crates/rustty-apprt-c/src/lib.rs	*	*	lib.rs is the C API half of embedded.zig (the `ghostty_*` exports) and also holds main_c.zig's `ghostty_init` / `ghostty_cli_try_action`; every emission not owned below is embedded.zig's.
 owner	src/main_c.zig	crates/rustty-apprt-c/src/lib.rs	rustty_init#2	"failed to initialize rustty error={err:?}"	main_c.zig:130's one `catch` around `global.init(...)` (text R2-renamed). The port splits that call into three fallible steps; this, the `init_with_action` arm, is the counted copy, and the other two are declared `expansion` in LOG-PORT-ONLY.tsv.
@@ -56,3 +56,5 @@ default-owner	src/apprt/gtk/class/application.zig	crates/rustty-apprt/src/gtk/cl
 owner	src/apprt/gtk/gtk_version.zig	crates/rustty-apprt/src/gtk/class/application.rs	new#1	log_version()	gtk_version.zig:27 `GTK version build={f} runtime={f}`, emitted inside gtk_version.rs `log_version` and counted at this call (`crate::gtk::gtk_version::log_version()`). It used to credit application.zig and gtk_version.zig read 0/1.
 owner	src/apprt/gtk/adw_version.zig	crates/rustty-apprt/src/gtk/class/application.rs	new#2	log_version()	adw_version.zig:28 `libadwaita version build={f} runtime={f}`, counted at this call (`crate::gtk::adw_version::log_version()`).
 facade	src/apprt/gtk/class/surface.zig	crates/rustty-apprt/src/gtk/class/surface.rs	remove_source_id	*	surface.zig's four `if (glib.Source.remove(id) == 0) log.warn("unable to remove <what>")` sites (:1065 :1922 :1929 :1936) fold into this helper, each caller passing the reference's own <what>; its CALL SITES are the four emissions (review tail-s1: counting the body once reported three of them missing).
+facade	src/apprt/gtk/class/resize_overlay.zig	crates/rustty-apprt/src/gtk/class/resize_overlay.rs	remove_source_id	*	task S-1c: resize_overlay.zig's four `if (glib.Source.remove(id) == 0) log.warn("unable to remove <what>")` sites (:208 :256 :262 :268) fold into this helper, each caller passing the reference's own <what>; counting its body once reported three of them missing.
+facade	src/apprt/gtk/class/split_tree.zig	crates/rustty-apprt/src/gtk/class/split_tree.rs	remove_source_id	*	task S-1c: split_tree.zig's five `unable to remove <what> source` sites (:653 :659 :893 :899 :1456) fold into this helper, one call per site.

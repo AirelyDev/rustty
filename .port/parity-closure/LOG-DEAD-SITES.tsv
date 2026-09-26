@@ -10,7 +10,11 @@
 # line         the exact line of the `log.*` call. A line that is not a live reference log
 #              site at the pin is RED - a declaration that corresponds to nothing removes
 #              nothing and hides a drift.
-# kind         one of: unreachable-private, commented-caller, dead-branch.
+# kind         one of: unreachable-private, commented-caller, dead-branch, unreferenced-pub.
+#              `unreferenced-pub` (task S-1c) is a site in a `pub fn` that nothing in the
+#              reference tree names (Zig analyses lazily, so it is never compiled). It is
+#              VERIFIED: the gate's tree index must show the enclosing `pub fn`'s name
+#              written nowhere but its definition and never quoted, or the row is RED.
 # reason       mandatory. A declaration with no reason is RED.
 #
 # THE CHECK THAT MAKES THIS NET-NEW COVERAGE RATHER THAN A SUBTRACTION (R5): a port emission
@@ -23,7 +27,7 @@
 # An UNDECLARED dead site is undetectable by construction: nothing in the text says a function
 # is never called. The cap below is therefore the only thing stopping this becoming an escape
 # hatch the way the exclusion list nearly did. Two-way ratchet; a missing directive BLOCKS.
-#!dead-site-cap entries=12
+#!dead-site-cap entries=15
 oracle_file	line	kind	reason
 src/font/shaper/coretext.zig	775	unreachable-private	N22: inside private `fn debugPositions` (`:690`). A whole-tree grep for that name finds exactly four occurrences - the two definitions and two COMMENTED-OUT calls (`coretext.zig:503`, `harfbuzz.zig:236`). The fn is private, so Zig never analyses the body. The four LIVE sites in this same file (`:254, :264, :277, :291`) are unaffected and still counted.
 src/font/shaper/coretext.zig	793	unreachable-private	N22: inside private `fn debugPositions` (`:690`), whose only two call sites in the reference are commented out.
@@ -37,3 +41,6 @@ src/termio/Exec.zig	1078	dead-branch	task tail-s1b: `errdefer killCommand(&cmd) 
 src/os/systemd.zig	34	dead-branch	task tail-s1b: `std.fmt.bufPrint(&comm_path_buf, "/proc/{d}/comm", .{ppid})` writes at most 6 + 10 + 5 = 21 bytes (a pid_t is at most 10 digits) into a `std.fs.max_path_bytes` buffer, so NoSpaceLeft cannot occur. The port's `format!` has no arm either.
 src/os/systemd.zig	188	dead-branch	task tail-s1b: `bufPrint(&buffer, "RELOADING=1\nMONOTONIC_USEC={d}", .{now})` writes 27 bytes plus an i64 (at most 20 characters) = 47 into a 64-byte buffer, so the catch arm cannot run.
 src/apprt/gtk/class/surface.zig	3618	dead-branch	task tail-s1b: `bufPrintZ(&buf, "{d} x {d}", .{ grid_size.columns, grid_size.rows })` - both are `CellCountInt` = u16 (terminal/size.zig:22, renderer/size.zig:239), at most 5 + 3 + 5 + NUL = 14 bytes into `buf: [32]u8`, so the `unable to format text` arm cannot run. The port formats with `format!` (surface.rs `resize_overlay_schedule`).
+src/terminal/bitmap_allocator.zig	215	unreachable-private	task S-1c: inside private `fn dumpBitmaps` ("For debugging", bitmap_allocator.zig:211); a whole-tree grep for `dumpBitmaps` finds only its definition, so no call site exists at all.
+src/termio/Termio.zig	705	dead-branch	task S-1c: `insp.recordPtyRead(...) catch |err|`. `Inspector.recordPtyRead` (inspector/Inspector.zig:99) only `try`s `vt_stream.recordPtyRead` (inspector/widgets/termio.zig:50), whose body sets a field and calls `nextSlice` and has no `try` or error return, so the inferred error set is empty and the catch arm cannot run.
+pkg/opengl/Program.zig	120	unreferenced-pub	task S-1c: inside `pub fn setUniform` (Program.zig:91), which nothing in the reference tree names (the gate's tree index finds no reference and no quoted name), so Zig never analyses it; the port does not carry it either (program.rs module docs).
