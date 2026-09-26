@@ -1537,3 +1537,51 @@ fn gesture_wrapper_routes_through_the_gesture_allocator() {
     assert_eq!(1, counting.free_calls.get());
     assert_eq!(0, counting.live_bytes.get());
 }
+
+// The C-API allocation-failure sweep over the selection-gesture lifecycle: for
+// every allocation index, the sequence either succeeds or reports
+// OUT_OF_MEMORY at exactly the failing call, never aborts, and returns every
+// byte. The lifecycle makes 4 allocations (gesture, event, two copies) and no
+// resize or remap (the routing test pins that), so there is no remap loop.
+#[test]
+fn selection_gesture_allocation_failure_sweep() {
+    use rustty_vt::alloc::testing::{Config, FailingAllocator};
+    const ALLOCS: usize = 4;
+    for fail_index in 0..=ALLOCS {
+        let failing = FailingAllocator::over_heap(Config {
+            fail_index,
+            ..Config::default()
+        });
+        let calloc = failing.allocator();
+        let mut results = Vec::new();
+        let mut gesture: Gesture = std::ptr::null_mut();
+        results.push(unsafe { new(Some(&calloc), &mut gesture) });
+        let mut event: Event = std::ptr::null_mut();
+        results.push(unsafe { event_new(Some(&calloc), &mut event, EventType::Press) });
+        if !event.is_null() {
+            results.push(set_codepoints(event, &[' ' as u32, '\t' as u32]));
+            results.push(set_codepoints(event, &['x' as u32]));
+        }
+        unsafe { event_free(event) };
+        unsafe { free(gesture, std::ptr::null_mut()) };
+
+        // Per index: each call makes one allocation, and the failing
+        // allocator refuses every allocation from `fail_index` on, so every
+        // call from `fail_index` on reports OUT_OF_MEMORY and every earlier
+        // call succeeds. A failed `event_new` leaves no event to set.
+        let expected_calls = if fail_index <= 1 { 2 } else { ALLOCS };
+        assert_eq!(expected_calls, results.len(), "fail_index {fail_index}");
+        for (i, r) in results.iter().enumerate() {
+            let expect = if i >= fail_index {
+                Result::OutOfMemory
+            } else {
+                Result::Success
+            };
+            assert_eq!(expect, *r, "fail_index {fail_index}, call {i}");
+        }
+        assert_eq!(fail_index < ALLOCS, failing.has_induced_failure.get());
+        assert_eq!(fail_index.min(ALLOCS), failing.allocations.get());
+        assert_eq!(failing.allocations.get(), failing.deallocations.get());
+        assert_eq!(failing.allocated_bytes.get(), failing.freed_bytes.get());
+    }
+}
