@@ -1282,17 +1282,23 @@ impl LoadingImage {
                 }
             },
         };
-        // defer decode_alloc.free(result.data); — the decoder's
-        // limited-allocator buffer was already freed inside the seam after
-        // copying into the global-allocator `Vec` carried by `result` (see
-        // `sys::decode_png` PORT NOTE).
+        // defer decode_alloc.free(result.data);
+        struct FreeDecoded<'a>(&'a dyn sys::RawAllocator, sys::RawSlice);
+        impl Drop for FreeDecoded<'_> {
+            fn drop(&mut self) {
+                self.0.free_bytes(self.1);
+            }
+        }
+        let _free = FreeDecoded(decode_alloc, result.data);
+        // SAFETY: the decoder's live buffer, freed by `_free` at scope end.
+        let decoded = unsafe { result.bytes() };
 
-        if result.data.len() > MAX_SIZE {
+        if decoded.len() > MAX_SIZE {
             // log.warn("png image too large size={} max_size={}", .{ result.data.len, max_size });
             log::warn!(
                 target: LOG_SCOPE,
                 "png image too large size={} max_size={}",
-                result.data.len(),
+                decoded.len(),
                 MAX_SIZE
             );
             return Err(Error::InvalidData);
@@ -1303,17 +1309,14 @@ impl LoadingImage {
         // self.data = .empty;
         // try self.data.ensureUnusedCapacity(alloc, result.data.len);
         // try self.data.appendSlice(alloc, result.data[0..result.data.len]);
-        // PORT NOTE (parity tail S7-4): the new data is allocated through
-        // `alloc` and the decoded pixels copied in, as the reference does. The
-        // seam hands the pixels over in a Rust-heap `Vec` (its decode buffer
-        // was freed through the decode allocator inside the seam, see
-        // `sys::decode_png`), so that transient copy is the port's, off the
-        // caller's allocator.
+        // (parity tail S7-4b) The new data is allocated through `alloc`,
+        // fallibly, and the decoded pixels are copied straight out of the
+        // decoder's buffer, as the reference does.
         self.data = Bytes::new_in(alloc);
         self.data
-            .try_reserve_exact(result.data.len())
+            .try_reserve_exact(decoded.len())
             .map_err(|_| Error::OutOfMemory)?;
-        self.data.extend_copy(&result.data);
+        self.data.extend_copy(decoded);
 
         // Store updated image dimensions
         self.image.width = result.width;
@@ -3188,15 +3191,10 @@ mod tests {
                 Err(_) => return Err(sys::DecodeError::OutOfMemory),
             };
             // return .{ .width = 1, .height = 1, .data = data };
-            // PORT NOTE: unreachable in practice (the limiter rejects first);
-            // sys::Image owns a Vec, so copy-and-free the raw allocation.
-            // SAFETY: `data` is a live `MAX_SIZE + 1`-byte allocation from `alloc`.
-            let bytes = unsafe { std::slice::from_raw_parts(data.ptr, data.len) }.to_vec();
-            alloc.free_bytes(data);
             Ok(sys::Image {
                 width: 1,
                 height: 1,
-                data: bytes,
+                data,
             })
         }
 
@@ -3246,7 +3244,12 @@ mod tests {
     // Parity tail S7-4 (routing evidence): the PNG decoder allocates through
     // the `LimitedAllocator` whose child is the allocator `complete` is given
     // (`LimitedAllocator.init(alloc, max_size)`), and the decoded pixels are
-    // copied into data allocated through that same allocator.
+    // copied into data allocated through that same allocator. S7-4b: the copy
+    // is taken straight from the decoder's buffer, which is freed through the
+    // decode allocator only afterwards (`defer decode_alloc.free`), so both
+    // are live on the handle at once. The input (3 bytes) is freed before the
+    // copy (`self.data.deinit(alloc)`), so the peak is decoded 4 + copy 4 = 8;
+    // a copy out of the seam first would peak at input 3 + decoded 4 = 7.
     #[test]
     fn image_load_png_decode_routes_through_the_allocator_handle() {
         use rustty_datastruct::limited_allocator::RawAllocator;
@@ -3260,12 +3263,10 @@ mod tests {
                 .map_err(|_| sys::DecodeError::OutOfMemory)?;
             // SAFETY: a live 4-byte allocation from `alloc`.
             unsafe { core::ptr::write_bytes(data.ptr, 9, 4) };
-            let bytes = unsafe { std::slice::from_raw_parts(data.ptr, data.len) }.to_vec();
-            alloc.free_bytes(data);
             Ok(sys::Image {
                 width: 1,
                 height: 1,
-                data: bytes,
+                data,
             })
         }
 
@@ -3289,10 +3290,35 @@ mod tests {
             assert_eq!(c0 + 2, counting.alloc_calls.get());
             assert_eq!(Some((4, 0)), counting.last_alloc.get());
             assert_eq!(Some(&[9u8, 9, 9, 9][..]), img.data.bytes());
+            assert_eq!(
+                8,
+                counting.peak_bytes.get(),
+                "decoder buffer and copy both live"
+            );
             img.deinit(alloc);
             loading.deinit(alloc);
         });
         assert_eq!(0, counting.live_bytes.get(), "every byte is returned");
+
+        // The copy is fallible: the decoder's allocation succeeds, the copy
+        // into `alloc` fails, and `complete` answers OutOfMemory with every
+        // byte returned (the decoder's buffer through the decode allocator).
+        let failing =
+            crate::alloc::testing::FailingAllocator::over_heap(crate::alloc::testing::Config {
+                fail_index: 2,
+                ..crate::alloc::testing::Config::default()
+            });
+        let fc = failing.allocator();
+        crate::alloc::testing::with_handle(&fc, |alloc| {
+            let mut loading = LoadingImage {
+                data: crate::alloc::try_dupe(alloc, b"png").unwrap(),
+                ..shm_loading(0, 0, command::Format::Png)
+            };
+            assert_eq!(Err(Error::OutOfMemory), loading.complete(alloc).map(|_| ()));
+            loading.deinit(alloc);
+        });
+        assert!(failing.has_induced_failure.get());
+        assert_eq!(failing.allocated_bytes.get(), failing.freed_bytes.get());
 
         *sys::decode_png.write().unwrap() = original_decode_png;
     }

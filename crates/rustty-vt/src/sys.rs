@@ -174,13 +174,29 @@ const DECODE_PNG_DEFAULT: Option<DecodePngFn> = None;
 /// The result of decoding an image. The caller owns the returned data
 /// and must free it with the same allocator that was passed to the
 /// decode function.
-// PORT NOTE: the reference `data` is a `[]u8` allocated by the decode function;
-// in Rust ownership is carried by the `Vec<u8>`, which frees on drop.
-#[derive(Clone, Debug)]
+// PORT NOTE (parity tail S7-4b): `data: []u8` is a `RawSlice` the decode
+// function allocated through the allocator it was given (byte alignment,
+// `alloc_bytes`), and the caller frees it with `free_bytes` on that allocator,
+// as the reference does. Nothing frees it on drop.
+#[derive(Clone, Copy, Debug)]
 pub struct Image {
     pub width: u32,
     pub height: u32,
-    pub data: Vec<u8>,
+    pub data: RawSlice,
+}
+
+impl Image {
+    /// The decoded bytes (`data` as a slice).
+    ///
+    /// # Safety
+    /// `data` must still be live (not yet freed through the decode allocator).
+    pub unsafe fn bytes(&self) -> &[u8] {
+        if self.data.len == 0 {
+            return &[];
+        }
+        // SAFETY: a live `len`-byte allocation (caller contract).
+        unsafe { core::slice::from_raw_parts(self.data.ptr, self.data.len) }
+    }
 }
 
 /// PORT NOTE (`590d669c4` seam): the wuffs binding's `decode` is generic over
@@ -247,19 +263,16 @@ fn decode_png_wuffs(alloc: &dyn RawAllocator, data: &[u8]) -> Result<Image, Deco
     //     .data = result.data,
     // };
     //
-    // PORT NOTE: the reference moves the alloc-owned `[]u8` into `Image.data`
-    // and the CALLER frees it through the same allocator after copying
-    // (`decodePng`'s `defer decode_alloc.free(result.data)` + `appendSlice`).
-    // `sys::Image.data` is a global-allocator `Vec<u8>`, so the copy happens
-    // here instead and the decode-allocator buffer is freed on `result`'s drop
-    // — same single copy out of the decode allocation, relocated.
-    // PERF(port): the reference's zero-copy handoff into the caller's
-    // `appendSlice` source; one extra decoded-image copy per PNG decode.
-    let data = result.bytes().to_vec();
+    // The alloc-owned buffer moves into `Image.data` and the caller frees it
+    // through the same allocator after copying (`decodePng`'s
+    // `defer decode_alloc.free(result.data)`). wuffs allocated it with
+    // `Layout(len, 1)` through `WuffsRawAlloc(alloc)`, which is
+    // `alloc.raw_alloc(len, Alignment(0))`: what `free_bytes` frees.
+    let (width, height, ptr, len) = result.into_raw();
     Ok(Image {
-        width: result.width,
-        height: result.height,
-        data,
+        width,
+        height,
+        data: RawSlice::new(ptr.as_ptr(), len),
     })
 }
 
@@ -396,7 +409,38 @@ mod tests {
         .expect("PNG decodes");
         assert_eq!(50, img.width);
         assert_eq!(76, img.height);
-        assert_eq!(50 * 76 * 4, img.data.len());
+        assert_eq!(50 * 76 * 4, img.data.len);
+        GlobalRawAllocator.free_bytes(img.data);
+    }
+
+    // Parity tail S7-4b (routing evidence): the default decoder hands back the
+    // buffer wuffs allocated through the seam allocator, uncopied: it is still
+    // live on that allocator when `decode` returns, and `free_bytes` returns
+    // it.
+    #[cfg(feature = "wuffs")]
+    #[test]
+    fn default_decoder_hands_over_its_buffer() {
+        let _png_lock = decode_png_test_lock
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let f = (*decode_png.read().unwrap()).expect("wuffs default decoder installed");
+        let counting = crate::alloc::testing::CountingAllocator::over_heap();
+        let c = counting.allocator();
+        crate::alloc::testing::with_handle(&c, |alloc| {
+            let img = f(
+                &alloc,
+                include_bytes!("kitty/testdata/image-png-none-50x76-2147483647-raw.data"),
+            )
+            .expect("PNG decodes");
+            assert_eq!(50 * 76 * 4, img.data.len);
+            assert_eq!(
+                img.data.len,
+                counting.live_bytes.get(),
+                "only the pixels are live"
+            );
+            alloc.free_bytes(img.data);
+        });
+        assert_eq!(0, counting.live_bytes.get());
     }
 
     // test "randomSecure: override is preferred over the Io" {

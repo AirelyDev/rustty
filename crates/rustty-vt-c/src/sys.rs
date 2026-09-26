@@ -260,29 +260,15 @@ fn decode_png_wrapper(
     }
 
     // return .{ .width = out.width, .height = out.height, .data = result_data[0..out.data_len] };
-    // PORT NOTE (ownership model): the reference's `terminal_sys.Image.data` is a
-    // `[]u8` it takes ownership of directly (the kitty image later frees it via
-    // `alloc.free(data)` — a byte-aligned []u8 free through the same allocator the
-    // callback allocated from). rustty's `Image.data` is a `Vec<u8>` (owned, frees
-    // on drop via the Rust allocator), so we copy the callback-allocated bytes
-    // into a Vec AND free the callback's buffer here through the same allocator we
-    // handed it — the rustty analogue of the reference's downstream
-    // `alloc.free(data)` (VALIDATION_REPORT §3c.4: without this free, every kitty
-    // PNG decode leaked the C-callback buffer; regression-pinned Miri-fail-first by
-    // `decode_png_wrapper_frees_callback_buffer` below).
-    let bytes = unsafe { std::slice::from_raw_parts(out.data, out.data_len) }.to_vec();
-    // Free the callback-allocated buffer: byte (1) alignment, exactly the layout
-    // `alloc_bytes`/the reference's `[]u8` contract allocated with.
-    use rustty_lib::allocator::ZigAllocator as _;
-    zig_alloc.free(
-        rustty_lib::allocator::ZigSlice::new(out.data, out.data_len),
-        rustty_lib::allocator::Alignment(0),
-        0,
-    );
+    // PORT NOTE (ownership model, parity tail S7-4b): the callback allocated the
+    // buffer through `c_alloc`, which is `alloc`; `terminal_sys::Image.data` takes
+    // it as is, and the caller frees it through `alloc` (`decodePng`'s
+    // `defer decode_alloc.free(result.data)`). VALIDATION_REPORT §3c.4's leak
+    // stays closed: `decode_png_wrapper_hands_over_the_callback_buffer` below.
     Ok(terminal_sys::Image {
         width: out.width,
         height: out.height,
-        data: bytes,
+        data: terminal_sys::RawSlice::new(out.data, out.data_len),
     })
 }
 
@@ -1519,7 +1505,7 @@ pub(crate) mod tests {
     // "memory leaked" pre-fix and runs clean post-fix (fail-first proven; LSan is
     // unavailable on arm64 macOS per R6, Miri IS this crate's leak gate).
     #[test]
-    fn decode_png_wrapper_frees_callback_buffer() {
+    fn decode_png_wrapper_hands_over_the_callback_buffer() {
         let _guard = reset_global();
 
         // A decode callback that allocates the pixel buffer through the provided
@@ -1561,8 +1547,11 @@ pub(crate) mod tests {
         let img = f(&terminal_sys::GlobalRawAllocator, &[0x42]).expect("decode must succeed");
         assert_eq!(2, img.width);
         assert_eq!(2, img.height);
-        // bytes copied out of the callback buffer before it is freed
-        assert_eq!(vec![0x42u8, 0x43, 0x40, 0x41], img.data);
+        // The callback's own buffer, handed over uncopied; the caller frees it
+        // through the allocator it passed (as `decodePng` does).
+        assert_eq!(&[0x42u8, 0x43, 0x40, 0x41][..], unsafe { img.bytes() });
+        use terminal_sys::RawAllocator as _;
+        terminal_sys::GlobalRawAllocator.free_bytes(img.data);
 
         // Clear the slot again (leave the global state clean for siblings).
         assert_eq!(Result::Success, unsafe {
