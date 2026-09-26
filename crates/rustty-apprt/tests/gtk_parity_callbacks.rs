@@ -123,7 +123,11 @@ fn parity_callbacks_do_not_abort() {
     // (C) DropTarget `drop` (the former live crash). Emit with a string Value → the
     //     string branch (paste). If the signature is wrong this aborts.
     if let Some(dt) = find_drop_target(&sw) {
-        let val = "dropped-text".to_value();
+        // CORRECTION (task L-2): GtkDropTarget's `drop` declares its first
+        // argument as a boxed `GValue` (G_TYPE_VALUE); emitting the bare string
+        // value panicked in glib-rs ("expected GValue, got gchararray") before any
+        // handler ran, so the value is boxed as GTK itself passes it.
+        let val = glib::value::BoxedValue("dropped-text".to_value());
         let _ = dt.emit_by_name::<bool>("drop", &[&val, &10.0f64, &10.0f64]);
         for _ in 0..10 {
             ctx.iteration(true);
