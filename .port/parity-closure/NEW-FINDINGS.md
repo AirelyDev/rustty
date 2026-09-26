@@ -5832,3 +5832,22 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   fill. Harness: `.port/phase-2/mirihar-s7-6-search` (isolated, non-FFI, reproduces 1-5 with the same borrow
   shapes; for the controller's Miri lane under `-Zmiri-stacked-borrows` and `-Zmiri-tree-borrows`).
 - **state**: OPEN for the controller's Miri lane (targets listed in the S7-6 report).
+
+## N335 — `passwd.get`'s Flatpak block leaks the pty slave when the host command cannot start (reference defect, R13; UD320)
+
+- **id**: N335. Found by task L-4 while closing LEDGER S112-F5 in a real Flatpak sandbox.
+- **severity**: low. **kind**: reference defect (fd leak on an error path), fixed under R13.
+- **where**: `src/os/passwd.zig:69-89` at pin `20abdb50a`: `defer pty.deinit()` (which closes only the master,
+  `src/pty.zig:189-192`), then `try cmd.spawn(alloc)` / `try cmd.wait()` before the hand `close(pty.slave)`.
+- **reachable**: a Flatpak build whose host command cannot start (no `org.freedesktop.Flatpak` access, no session
+  bus). MEASURED in the sandbox: both failure modes (no bus: "Cannot autolaunch D-Bus"; bus without access:
+  `ServiceUnknown` -> `FlatpakRPCFail`) reach the early return.
+- **port**: the pty guard in `crates/rustty-os/src/passwd.rs` `get` closes the slave while it is still owned
+  (`PORT NOTE: reference defect (R13)`, UD320). Test
+  `passwd::tests::flatpak_spawn_failure_returns_the_host_command_error_and_closes_the_pty`; negative control (the
+  slave close removed) leaks `{4: /dev/pts/0}`.
+- **correction**: LEDGER S112-F5's T-G note said the pre-guard code "leaked both fds" on a failing spawn/wait/read
+  and that the guard fixed it; the guard fixed the master only (measured: without the guard's `deinit`,
+  `{3: /dev/pts/ptmx}` leaks); the slave leak is this finding.
+- **UD id**: UD320, with its `docs/ghostty-bug-fixes.md` row.
+- **state**: CLOSED (parity tail L-4).

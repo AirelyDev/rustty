@@ -2591,6 +2591,21 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - proposed fix:    make a failed `beginUpdate` force the next one to redraw: a `needs_redraw: bool` field set by an `errdefer` at the top of `beginUpdate`, checked first in the `redraw` block and cleared when a redraw completes (or `errdefer self.rows = 0;`, which reuses the dimension check but also changes what `rows` reports until then).
 - upstream status: not reported
 
+### UD320 — in a Flatpak build, `passwd.get` leaks the pty slave when the host command cannot start
+- kind:            leak (one file descriptor per call)
+- upstream project: ghostty
+- severity:        low (one pty fd per failing call; the calls repeat)
+- reference:       `src/os/passwd.zig:69-89` (`var pty = try Pty.open(.{}); defer pty.deinit();` ... `_ = try cmd.spawn(alloc); _ = try cmd.wait();` then `_ = compat_fd.close(pty.slave);`) and `src/pty.zig:189-192` (`deinit` closes only `self.master`), at 20abdb50a
+- defect:          the slave is closed by hand after `cmd.wait()`, and `Pty.deinit` closes only the master, so when `cmd.spawn` or `cmd.wait` fails the `try` returns with the slave still open. Nothing else holds it.
+- ReleaseSafe:     one leaked pty fd per failing call (an error return, no safety check involved). MEASURED on the port with the reference's behaviour restored (task L-4, Flatpak sandbox on rvm): `{4: /dev/pts/0}` left open after `get` returns the spawn error.
+- ReleaseFast:     the same.
+- reachability:    a Flatpak build of Ghostty whose host command cannot start: the sandbox lacks `--talk-name=org.freedesktop.Flatpak` (a repackaged or locally overridden manifest, `flatpak override --no-talk-name`), or the session bus / flatpak-session-helper is unavailable. `passwd.get` is called by `Config.finalize` (`src/config/Config.zig:4792`, every config load and reload) and by `homedir.home` (`src/os/homedir.zig:53`), so each of those leaks another fd.
+- port handling:   `crates/rustty-os/src/passwd.rs` `get`: the pty guard (the port of the `defer`) also closes the slave while it is still owned, and the hand close after `wait` clears that ownership, so the success path is unchanged. PORT NOTE: reference defect (R13) at the guard.
+- parity row(s):   LEDGER S112-F5 (found closing it); NEW-FINDINGS N335.
+- test:            `passwd::tests::flatpak_spawn_failure_returns_the_host_command_error_and_closes_the_pty` (rustty-os, Linux, run inside `flatpak build` without Flatpak access): `get` returns `Error::HostCommand(FlatpakSpawnFail)` and the process's set of pty fds is unchanged. NEGATIVE CONTROL (task L-4): the slave close removed from the guard, the reference's behaviour, fails with `no pty fd leaked (master or slave)`, left `{4: "/dev/pts/0 (deleted)"}`.
+- proposed fix:    after `defer pty.deinit();` add `var slave_open = true; defer if (slave_open) { _ = compat_fd.close(pty.slave); }`, and set `slave_open = false;` at the hand close after `wait`. (A plain `errdefer close(pty.slave)` would close the slave twice when the read loop's `return err` fires after the hand close.)
+- upstream status: not reported
+
 ## Candidates pending verification
 
 Assembled from this plan's progress notes on 2026-09-11. **Not verified** — do not cite as fact.

@@ -127,16 +127,37 @@ pub fn get() -> Result<Entry, Error> {
                 //
                 // PORT NOTE (S112-F5): the `defer` closes the pty on EVERY exit,
                 // including the `try`s below. This called `deinit` only after the
-                // read loop, so a failing spawn, wait or read leaked both fds; the
-                // guard's `Drop` is the `defer`.
-                struct PtyDeinit(Pty);
+                // read loop, so a failing spawn, wait or read leaked the master;
+                // the guard's `Drop` is the `defer`.
+                //
+                // PORT NOTE: reference defect (R13), `UPSTREAM-DEFECTS.md` UD320.
+                // `Pty.deinit` closes only the master; the reference closes the
+                // slave by hand after `cmd.wait()`, so when `cmd.spawn` or
+                // `cmd.wait` fails (the session helper is unreachable, or the
+                // sandbox may not talk to `org.freedesktop.Flatpak`) the `try`
+                // returns with the slave still open: one pty fd leaked per call,
+                // and `passwd.get` runs on every config load and home-dir lookup.
+                // The guard also closes the slave while it is still ours
+                // (`slave_open`), which the hand close below clears. MEASURED in a
+                // Flatpak sandbox (task L-4):
+                // `flatpak_spawn_failure_returns_the_host_command_error_and_closes_the_pty`.
+                struct PtyDeinit {
+                    pty: Pty,
+                    slave_open: bool,
+                }
                 impl Drop for PtyDeinit {
                     fn drop(&mut self) {
-                        self.0.deinit();
+                        if self.slave_open {
+                            unsafe { libc::close(self.pty.slave) };
+                        }
+                        self.pty.deinit();
                     }
                 }
-                let pty = PtyDeinit(Pty::open(Default::default()).map_err(Error::PtyOpen)?);
-                let pty = &pty.0;
+                let mut guard = PtyDeinit {
+                    pty: Pty::open(Default::default()).map_err(Error::PtyOpen)?,
+                    slave_open: true,
+                };
+                let pty = &guard.pty;
                 // PORT NOTE: the reference is a struct literal with the remaining
                 // fields defaulted. `FlatpakHostCommand`'s state fields are private
                 // (they are the `state_mutex`-guarded internals), so the Rust map is
@@ -158,6 +179,7 @@ pub fn get() -> Result<Entry, Error> {
                 // wait right now but that is fine too. This lets us read the
                 // parent and detect EOF.
                 unsafe { libc::close(pty.slave) };
+                guard.slave_open = false;
 
                 // Read all of our output
                 let output = {
@@ -312,5 +334,93 @@ mod tests {
         let entry = get().unwrap();
         assert!(entry.shell.is_some());
         assert!(entry.home.is_some());
+    }
+
+    // LEDGER S112-F5 / UD320: the flatpak host-command block runs only inside a
+    // Flatpak sandbox (`is_flatpak()`), in a build with BOTH flatpak switches on.
+    // No CI lane has a sandbox, so these are `#[ignore]`d and FAIL naming what is
+    // missing when run elsewhere (R14). Run them one at a time, single-threaded
+    // (other rustty-os tests open ptys), from inside `flatpak build`:
+    //
+    //   cargo test -p rustty-os --features flatpak,rustty-build-config/flatpak \
+    //     --lib passwd::tests::<name> -- --ignored --exact --test-threads=1
+
+    /// The fds of this process that are a pty master or slave, by number.
+    #[cfg(all(target_os = "linux", feature = "flatpak"))]
+    fn pty_fds() -> std::collections::BTreeMap<i32, std::path::PathBuf> {
+        let mut out = std::collections::BTreeMap::new();
+        for ent in std::fs::read_dir("/proc/self/fd").expect("read /proc/self/fd") {
+            let ent = ent.expect("a /proc/self/fd entry");
+            let Ok(fd) = ent.file_name().to_string_lossy().parse::<i32>() else {
+                continue;
+            };
+            // The directory's own fd is gone by the time it is read back.
+            let Ok(target) = std::fs::read_link(ent.path()) else {
+                continue;
+            };
+            if target.starts_with("/dev/pts") || target.starts_with("/dev/ptmx") {
+                out.insert(fd, target);
+            }
+        }
+        out
+    }
+
+    #[cfg(all(target_os = "linux", feature = "flatpak"))]
+    fn require_flatpak_sandbox(test: &str) {
+        assert!(
+            is_flatpak(),
+            "{test} needs a Flatpak sandbox (/.flatpak-info is missing); run it under `flatpak build`"
+        );
+        assert!(
+            build_config::flatpak(),
+            "{test} needs rustty-build-config's `flatpak` feature (add `--features rustty-build-config/flatpak`)"
+        );
+    }
+
+    /// With `--talk-name=org.freedesktop.Flatpak`, `get` asks the host
+    /// (`/bin/sh -l -c "getent passwd <name>"`) and returns the host's shell and
+    /// home, and nothing else: the reference's flatpak block returns before
+    /// `name` is set, so `name == None` proves the host path is the one that
+    /// returned. The pty it opened is closed.
+    #[test]
+    #[cfg(all(target_os = "linux", feature = "flatpak"))]
+    #[ignore = "needs a Flatpak sandbox with --talk-name=org.freedesktop.Flatpak (R14)"]
+    fn flatpak_get_reads_the_host_entry() {
+        require_flatpak_sandbox("flatpak_get_reads_the_host_entry");
+        let before = pty_fds();
+        let entry = get().expect("the host command answers");
+        let shell = entry.shell.expect("the host entry has a shell");
+        let home = entry.home.expect("the host entry has a home");
+        eprintln!("host entry: shell={shell:?} home={home:?}");
+        assert!(
+            entry.name.is_none(),
+            "the flatpak block returned (it never sets `name`)"
+        );
+        assert_eq!(shell.as_bytes().first(), Some(&b'/'), "an absolute shell");
+        assert_eq!(home.as_bytes().first(), Some(&b'/'), "an absolute home");
+        assert_eq!(pty_fds(), before, "every pty fd `get` opened is closed");
+    }
+
+    /// Without `org.freedesktop.Flatpak` access the host command cannot start:
+    /// `get` returns the spawn's own error (not `OutOfMemory`), and closes BOTH
+    /// pty fds. The reference's `defer pty.deinit()` closes only the master, so
+    /// its early return leaks the slave (UD320).
+    #[test]
+    #[cfg(all(target_os = "linux", feature = "flatpak"))]
+    #[ignore = "needs a Flatpak sandbox WITHOUT org.freedesktop.Flatpak access (R14)"]
+    fn flatpak_spawn_failure_returns_the_host_command_error_and_closes_the_pty() {
+        require_flatpak_sandbox(
+            "flatpak_spawn_failure_returns_the_host_command_error_and_closes_the_pty",
+        );
+        let before = pty_fds();
+        let err = get().err().expect("the host command cannot start");
+        assert!(
+            matches!(
+                err,
+                Error::HostCommand(crate::flatpak::Error::FlatpakSpawnFail)
+            ),
+            "the spawn's error is carried: {err:?}"
+        );
+        assert_eq!(pty_fds(), before, "no pty fd leaked (master or slave)");
     }
 }
