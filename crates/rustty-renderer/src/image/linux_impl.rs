@@ -1537,8 +1537,8 @@ impl State {
                 },
                 // constCasts are always gross but this one is safe is because
                 // the data is only read from here and copied into its own
-                // buffer. (`image` is our owned clone (§0 R-1) so the ptr is
-                // valid for the call.)
+                // buffer. (`image` borrows the stored image under the terminal
+                // lock (N276), so the ptr is valid for the call.)
                 // .data = @constCast(data.ptr),
                 data: data.as_ptr() as *mut u8,
             },

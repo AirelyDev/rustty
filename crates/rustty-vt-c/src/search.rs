@@ -395,7 +395,7 @@ pub unsafe fn new(
     //     return .out_of_memory;
     // };
     // PORT NOTE: `putNoClobber` asserts the key is absent (a fresh heap ptr is
-    // always unique); `HashSet::insert` returns `true` for new keys.
+    // always unique); `try_put_no_clobber` is its fallible spelling.
     //
     // PORT NOTE (parity S4-F3 / S176-F2): the reference's `catch` arm is the
     // map's OWN allocation failing, and `search.h:340-362` documents

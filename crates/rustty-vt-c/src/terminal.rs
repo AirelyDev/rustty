@@ -4688,8 +4688,8 @@ pub unsafe fn free(terminal_: Terminal) {
     for &ref_ in unsafe { (*terminal_).tracked_grid_refs.keys() } {
         unsafe { (*ref_).terminal = std::ptr::null_mut() };
     }
-    // wrapper.tracked_grid_refs.deinit(alloc); — the HashSet frees when the
-    // wrapper value drops below.
+    // wrapper.tracked_grid_refs.deinit(alloc);
+    // (the map frees now, through the allocator it was bound to in `wrap`.)
     unsafe { (*terminal_).tracked_grid_refs.clear_and_free() };
 
     // for (wrapper.searches.keys()) |search| search.terminal = null;
@@ -4703,8 +4703,8 @@ pub unsafe fn free(terminal_: Terminal) {
     for &search in unsafe { (*terminal_).searches.keys() } {
         unsafe { (*search).terminal = std::ptr::null_mut() };
     }
-    // wrapper.searches.deinit(alloc); — the HashSet frees when the wrapper
-    // value drops below.
+    // wrapper.searches.deinit(alloc);
+    // (the map frees now, through the allocator it was bound to in `wrap`.)
     unsafe { (*terminal_).searches.clear_and_free() };
 
     // wrapper.stream.deinit();
