@@ -4915,3 +4915,26 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   `std.os.linux.getauxval` reads an auxv pointer only Zig's own `_start` sets. Details and proposed
   fix: `UPSTREAM-DEFECTS.md` UD291; PORT NOTE at the port's detector (`d03d273d`).
 - **state**: CLOSED (task L-1).
+
+
+## N300 — the port aborted on every surface drag-and-drop, and the headed KAT that emits `drop` had stopped reaching it (UD295)
+
+- **id**: N300. Not a ledger row: found by task L-2 running the `--ignored` headed GTK integration tests
+  under a private headless sway on the VM.
+- **severity**: high for the port (a process abort on a user gesture). **kind**: port defect, from a
+  reference defect (UD295).
+- **what**: `surface_drop` (`crates/rustty-apprt/src/gtk/class/surface.rs`) was a `()` template
+  callback on `GtkDropTarget::drop`, a `gboolean` signal, faithful to the reference's
+  `callconv(.c) void` `surfaceDrop`. glib-rs panics on the missing return value inside the C callback,
+  which aborts the process; so dragging a split onto another surface killed Rustty. It now returns
+  `bool` (UD295, R13). Test `surface_drop_answers_the_gboolean_drop_signal`.
+- **how it hid**: the only test that emits `drop`, the headed KAT `gtk_parity_callbacks`, had stopped
+  reaching it: since task 20 (S54-F3) typed `mouse-shape` it panicked earlier on
+  `set_property("mouse-shape", 2i32)`, and its `drop` emission passed a bare string where the signal
+  declares a boxed `GValue`. Both are fixed; it now emits `drop` on every drop target of the surface.
+  No CI lane runs the headed KATs (`#[ignore]`d; R14 form 2 "no lane has the resource").
+- **not stale**: `gtk_application::application_new_then_deinit` and
+  `gtk_first_light::first_light_renders_a_live_terminal_frame` assert that a "noop-only build"
+  selects the `.none` windowing protocol, so they fail under `--features gtk,x11,wayland`; built with
+  `--features gtk` as their `#[ignore]` reasons say, both pass on the VM (task L-2).
+- **state**: CLOSED (task L-2).

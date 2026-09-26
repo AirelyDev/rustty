@@ -5179,29 +5179,47 @@ impl Surface {
     /// PORTS: `surface.zig:3747-3774` `surfaceDrop` — resolve the dropped
     /// surface id, then `SplitTree::move_split` it onto this surface in the
     /// pointer-derived direction.
+    ///
+    /// PORT NOTE: reference defect (R13), `UPSTREAM-DEFECTS.md` UD295. The
+    /// reference's handler is `callconv(.c) void`, but `GtkDropTarget::drop` is a
+    /// `gboolean` signal ("whether the drop was accepted"), so GTK reads an
+    /// undefined return value on every surface drag-and-drop (a C
+    /// function-type mismatch). In the port a `()` handler on a `gboolean` signal
+    /// makes glib-rs panic inside the C callback, which ABORTS the process:
+    /// MEASURED on the VM (task L-2) by emitting `drop` on this target ("Closure
+    /// returned no value but the caller expected a value of type gboolean",
+    /// then "panic in a function that cannot unwind"). The port returns `true`
+    /// when the split was moved and `false` on every early return, the signal's
+    /// documented meaning.
     #[template_callback]
-    fn surface_drop(_tgt: &gtk4::DropTarget, v: &glib::Value, x: f64, y: f64, this: &Surface) {
+    fn surface_drop(
+        _tgt: &gtk4::DropTarget,
+        v: &glib::Value,
+        x: f64,
+        y: f64,
+        this: &Surface,
+    ) -> bool {
         // `v.getUint64()`.
         let Ok(dropped_id) = v.get::<u64>() else {
-            return;
+            return false;
         };
         // `self.core().?.app.findSurfaceByID(dropped_id) orelse return`.
         let core = this.core().expect("surface core is initialized");
         // SAFETY: a non-null `core()` result is a live core surface; its `app`
         // backref is the live core App (app-thread dispatch).
         let Some(dropped) = (unsafe { (*(*core).app).findSurfaceByID(dropped_id) }) else {
-            return;
+            return false;
         };
         // `dropped.rt_surface.gobj()`.
         // SAFETY: `findSurfaceByID` returns a validated live surface whose
         // `rt_surface` points at the pinned apprt surface in the widget private.
         let Some(from) = (unsafe { (*(*dropped).rt_surface).widget() }) else {
-            return;
+            return false;
         };
 
         let Some(st) = ext::ancestor::<SplitTree>(this) else {
             log::warn!(target: LOG_SCOPE, "surface is not placed in a split tree");
-            return;
+            return false;
         };
 
         let dir = this.calc_drop_direction(x, y);
@@ -5209,11 +5227,12 @@ impl Surface {
         // The only error that could happen here is an OOM,
         // and in that case we're already milliseconds away from crashing, so...
         if st.move_split(&from, this, dir).is_err() {
-            return;
+            return false;
         }
 
         // Clean up overlay state
         this.set_drop_overlay_direction(None);
+        true
     }
 
     /// PORTS: `surface.zig:3776-3781` `surfaceDropLeave`.
@@ -5761,6 +5780,30 @@ mod tests {
         crate::gtk::register_resources();
         let _app = crate::gtk::class::application::Application::build_default_for_test();
         Surface::new(SurfaceOverrides::default())
+    }
+
+    /// UD295 (R13): `surface_drop` answers `GtkDropTarget::drop`'s `gboolean`.
+    /// A `()` handler made glib-rs panic inside the C callback and abort the
+    /// process on every surface drop. A value the handler does not accept (not a
+    /// surface id) must come back `false`, the rejected-drop answer, without
+    /// aborting.
+    #[test]
+    #[ignore = "requires a display; run via cargo test -p rustty-apprt --features gtk,x11,wayland --lib surface_drop_answers -- --ignored"]
+    fn surface_drop_answers_the_gboolean_drop_signal() {
+        let surface = display_surface();
+        let target = surface.imp().surface_drop_target.get();
+        let accepted = target.emit_by_name::<bool>(
+            "drop",
+            &[
+                &glib::value::BoxedValue("not-a-surface-id".to_value()),
+                &10.0f64,
+                &10.0f64,
+            ],
+        );
+        assert!(
+            !accepted,
+            "a value that is not a surface id is not accepted"
+        );
     }
 
     /// S54-F3: the `mouse-shape` / `focused` pspecs and the `clipboard-write`

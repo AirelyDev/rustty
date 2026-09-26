@@ -2440,6 +2440,21 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - proposed fix:    call libc's `getauxval` when `builtin.link_libc` (for example `std.c.getauxval`), keeping the Zig implementation for libc-free builds.
 - upstream status: not reported
 
+### UD295 — the surface drag-and-drop `drop` handler is a `void` function on a `gboolean` signal
+- kind:            ub (a C function-type mismatch: GTK calls the handler as returning `gboolean` and reads an undefined return value)
+- upstream project: ghostty
+- severity:        low (the drop is accepted or rejected at random; the split move itself runs)
+- reference:       `src/apprt/gtk/class/surface.zig:3759-3786` (`surfaceDrop`, `callconv(.c) void`), connected in `src/apprt/gtk/ui/1.2/surface.blp` (`surface_drop_target`: `drop => $surface_drop()`), at 20abdb50a. `GtkDropTarget::drop` is declared `gboolean (*drop) (GtkDropTarget*, const GValue*, double, double, gpointer)`: "Returns: whether the drop was accepted at the given pointer position".
+- defect:          the handler returns nothing, so GTK reads whatever the return register holds and passes it to `gdk_drop_finish` as the accepted/rejected answer. The sibling handler `surfaceDropMotion` does return its `gdk.DragAction`.
+- ReleaseSafe:     UNVERIFIED (not measured on a Ghostty build): the answer GTK sees is the register left by the last call in `surfaceDrop` (`setDropOverlayDirection`, or `findSurfaceByID`/`moveSplit` on the early returns), so the drag source is told accepted or rejected arbitrarily. No crash is expected in C.
+- ReleaseFast:     the same (C calling convention, not a Zig safety check).
+- reachability:    every drag of a split onto another surface (the surface drag source), from the user.
+- port handling:   `crates/rustty-apprt/src/gtk/class/surface.rs` `surface_drop` returns `bool`: `true` after `move_split`, `false` on each early return, the signal's documented meaning. A `()` handler, the direct translation, is worse in Rust: glib-rs checks the return type and panics inside the C callback, which aborts the process (MEASURED on the VM, task L-2: "Closure returned no value but the caller expected a value of type gboolean", then "panic in a function that cannot unwind"). PORT NOTE: reference defect (R13) at the handler.
+- parity row(s):   none (found by task L-2 running the headed KAT `gtk_parity_callbacks`); NEW-FINDINGS N300.
+- test:            `surface_drop_answers_the_gboolean_drop_signal` (rustty-apprt, Linux, display): emitting `drop` on `surface_drop_target` with a value that is not a surface id returns `false` and the process survives; the headed KAT `parity_callbacks_do_not_abort` emits `drop` on every drop target. NEGATIVE CONTROL (VM, task L-2): the `()` handler restored aborts the test process.
+- proposed fix:    declare `surfaceDrop` as `callconv(.c) c_int` and return `1` after `moveSplit`, `0` on each early return.
+- upstream status: not reported
+
 ## Candidates pending verification
 
 Assembled from this plan's progress notes on 2026-09-11. **Not verified** — do not cite as fact.

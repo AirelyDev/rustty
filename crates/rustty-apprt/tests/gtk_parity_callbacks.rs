@@ -32,24 +32,25 @@ fn find_by_type(widget: &gtk4::Widget, type_name: &str, out: &mut Vec<gtk4::Widg
     }
 }
 
-/// Walk the widget tree and every widget's controllers to find a DropTarget.
-fn find_drop_target(widget: &gtk4::Widget) -> Option<gtk4::DropTarget> {
+/// Walk the widget tree and every widget's controllers to collect every DropTarget.
+///
+/// CORRECTION (task L-2): this returned the FIRST DropTarget only, which is the
+/// surface's `surface_drop_target` (split drag-and-drop), not the paste
+/// `drop_target` the (C) block below describes; both are now fired.
+fn find_drop_targets(widget: &gtk4::Widget, out: &mut Vec<gtk4::DropTarget>) {
     let controllers = widget.observe_controllers();
     for i in 0..controllers.n_items() {
         if let Some(obj) = controllers.item(i) {
             if let Ok(dt) = obj.downcast::<gtk4::DropTarget>() {
-                return Some(dt);
+                out.push(dt);
             }
         }
     }
     let mut child = widget.first_child();
     while let Some(c) = child {
-        if let Some(dt) = find_drop_target(&c) {
-            return Some(dt);
-        }
+        find_drop_targets(&c, out);
         child = c.next_sibling();
     }
-    None
 }
 
 #[test]
@@ -122,18 +123,25 @@ fn parity_callbacks_do_not_abort() {
 
     // (C) DropTarget `drop` (the former live crash). Emit with a string Value → the
     //     string branch (paste). If the signature is wrong this aborts.
-    if let Some(dt) = find_drop_target(&sw) {
+    let mut drop_targets = Vec::new();
+    find_drop_targets(&sw, &mut drop_targets);
+    assert!(
+        drop_targets.len() >= 2,
+        "the surface has its paste and split drop targets; found {}",
+        drop_targets.len()
+    );
+    for dt in &drop_targets {
         // CORRECTION (task L-2): GtkDropTarget's `drop` declares its first
         // argument as a boxed `GValue` (G_TYPE_VALUE); emitting the bare string
         // value panicked in glib-rs ("expected GValue, got gchararray") before any
         // handler ran, so the value is boxed as GTK itself passes it.
         let val = glib::value::BoxedValue("dropped-text".to_value());
         let _ = dt.emit_by_name::<bool>("drop", &[&val, &10.0f64, &10.0f64]);
+        // Non-blocking: with both targets fired there may be nothing left to
+        // dispatch, and a blocking iteration would then wait forever.
         for _ in 0..10 {
-            ctx.iteration(true);
+            ctx.iteration(false);
         }
-    } else {
-        panic!("surface has no DropTarget to fire drop against");
     }
 
     // (D) New standalone classes construct (template load / class registration).
