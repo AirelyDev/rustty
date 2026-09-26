@@ -1891,3 +1891,406 @@ mod capture_tests {
         p.deinit();
     }
 }
+
+// Parity tail S7-7 (Rust-only, no reference tests): the evidence that the OSC
+// parser's allocations go where the reference's do (`parser.alloc`) and nowhere
+// else, that a refusal takes the reference's path, and that the command's text
+// payloads are BORROWED from the parser's own storage (N263). The borrow tests
+// are also the Miri targets for the `Command<'p>` design (a command borrowing
+// the parser buffer while the parser itself is `&mut` elsewhere).
+#[cfg(test)]
+mod s7_7_tests {
+    use super::*;
+    use crate::alloc::testing::{with_handle, Config, CountingAllocator, FailingAllocator};
+
+    fn feed(p: &mut Parser, input: &[u8]) {
+        for &ch in input {
+            p.next(ch);
+        }
+    }
+
+    /// `color::Request`'s size, the element of the list's shelves.
+    fn request_size() -> usize {
+        core::mem::size_of::<color::Request>()
+    }
+
+    // `color_operation.requests` is `SegmentedList(Request, 2)` over
+    // `parser.alloc`: one or two requests allocate nothing; the third
+    // allocates the shelf array and shelf 0 (4 requests); dropping the command
+    // frees both. Exact counts: a request that reached the Rust heap, or a
+    // `Vec`, would change them.
+    #[test]
+    fn color_requests_route_through_the_parser_allocator() {
+        let counting = CountingAllocator::over_heap();
+        let c = counting.allocator();
+        with_handle(&c, |alloc| {
+            let mut p = Parser::init(Some(alloc));
+
+            feed(&mut p, b"4;1;?;2;?");
+            {
+                let cmd = p.end(Some(0x07)).unwrap();
+                match &cmd {
+                    Command::ColorOperation { requests, .. } => assert_eq!(2, requests.count()),
+                    other => panic!("expected color_operation, got {other:?}"),
+                }
+                assert_eq!(
+                    0,
+                    counting.alloc_calls.get(),
+                    "two requests fit the prealloc"
+                );
+            }
+            assert_eq!(0, counting.free_calls.get());
+
+            p.reset();
+            feed(&mut p, b"4;1;?;2;?;3;?");
+            {
+                let cmd = p.end(Some(0x07)).unwrap();
+                match &cmd {
+                    Command::ColorOperation { requests, .. } => {
+                        assert_eq!(3, requests.count());
+                        assert_eq!(
+                            color::Request::Query(color::Target::Palette(3)),
+                            *requests.at(2)
+                        );
+                    }
+                    other => panic!("expected color_operation, got {other:?}"),
+                }
+                assert_eq!(2, counting.alloc_calls.get(), "the shelf array and shelf 0");
+                assert_eq!(
+                    Some((
+                        4 * request_size(),
+                        core::mem::align_of::<color::Request>().trailing_zeros() as u8
+                    )),
+                    counting.last_alloc.get(),
+                    "shelf 0 holds prealloc * 2 requests"
+                );
+                assert_eq!(0, counting.free_calls.get(), "live while the command is");
+            }
+            assert_eq!(2, counting.free_calls.get(), "freed when the command drops");
+            assert_eq!(0, counting.live_bytes.get());
+            p.deinit();
+        });
+        assert_eq!(0, counting.live_bytes.get());
+    }
+
+    // `kitty_color_protocol.list` is an `ArrayList(Request)` appended through
+    // `parser.alloc`: Zig 0.16's first `append` reserves `growCapacity(1)`
+    // requests in one allocation; dropping the command frees it.
+    #[test]
+    fn kitty_color_list_routes_through_the_parser_allocator() {
+        let counting = CountingAllocator::over_heap();
+        let c = counting.allocator();
+        with_handle(&c, |alloc| {
+            let mut p = Parser::init(Some(alloc));
+            feed(&mut p, b"21;foreground=?;background=#ffffff;cursor=");
+            {
+                let cmd = p.end(Some(0x1b)).unwrap();
+                match &cmd {
+                    Command::KittyColorProtocol(osc) => assert_eq!(3, osc.list.len()),
+                    other => panic!("expected kitty_color_protocol, got {other:?}"),
+                }
+                let first =
+                    crate::alloc::ArrayListUnmanaged::<crate::kitty::color::Request>::grow_capacity(
+                        1,
+                    );
+                assert!(first >= 3, "one reservation holds all three");
+                assert_eq!(1, counting.alloc_calls.get());
+                assert_eq!(
+                    first * core::mem::size_of::<crate::kitty::color::Request>(),
+                    counting.last_alloc.get().unwrap().0
+                );
+            }
+            assert_eq!(1, counting.free_calls.get());
+            assert_eq!(0, counting.live_bytes.get());
+            p.deinit();
+        });
+    }
+
+    // T2: a refused list allocation takes the reference's `catch`: the
+    // command is still produced, with an empty list, and `log.info` names the
+    // OSC, the error and the data. Nothing is left allocated.
+    #[test]
+    fn color_request_allocation_failure_logs_and_yields_an_empty_list() {
+        let failing = FailingAllocator::over_heap(Config {
+            fail_index: 0,
+            ..Config::default()
+        });
+        let c = failing.allocator();
+        with_handle(&c, |alloc| {
+            let mut p = Parser::init(Some(alloc));
+            feed(&mut p, b"4;1;?;2;?;3;?");
+            let cap = crate::log_capture::start();
+            {
+                let cmd = p.end(Some(0x07)).unwrap();
+                match &cmd {
+                    Command::ColorOperation { op, requests, .. } => {
+                        assert_eq!(color::Operation::osc_4, *op);
+                        assert_eq!(0, requests.count());
+                    }
+                    other => panic!("expected color_operation, got {other:?}"),
+                }
+            }
+            let messages = cap.messages();
+            drop(cap);
+            assert!(
+                messages.iter().any(|(level, target, msg)| {
+                    *level == log::Level::Info
+                    && target == "osc_color"
+                    && msg == "failed to parse OSC 4 color request err=OutOfMemory data=1;?;2;?;3;?"
+                }),
+                "expected the parseColor catch diagnostic, got: {messages:?}"
+            );
+            assert!(failing.has_induced_failure.get());
+            p.deinit();
+        });
+        assert_eq!(failing.allocated_bytes.get(), failing.freed_bytes.get());
+        assert_eq!(failing.allocations.get(), failing.deallocations.get());
+    }
+
+    // PORT NOTE: reference defect (R13), N321. `parseGetSetDynamicColor` has no
+    // `errdefer result.deinit(alloc)`: an OSC 10 whose seventh value fails to
+    // grow the list leaks shelf 0 and the shelf array in the reference. The
+    // port's list is freed when the error drops it. Allocation 0 and 1 are the
+    // third request's shelf array and shelf 0; allocation 2 (the seventh
+    // request's new shelf array) is refused.
+    #[test]
+    fn dynamic_color_list_growth_failure_frees_what_it_grew() {
+        let failing = FailingAllocator::over_heap(Config {
+            fail_index: 2,
+            ..Config::default()
+        });
+        let c = failing.allocator();
+        with_handle(&c, |alloc| {
+            let mut p = Parser::init(Some(alloc));
+            feed(&mut p, b"10;?;?;?;?;?;?;?");
+            let cap = crate::log_capture::start();
+            {
+                let cmd = p.end(Some(0x07)).unwrap();
+                match &cmd {
+                    Command::ColorOperation { op, requests, .. } => {
+                        assert_eq!(color::Operation::osc_10, *op);
+                        assert_eq!(0, requests.count(), "the catch's empty list");
+                    }
+                    other => panic!("expected color_operation, got {other:?}"),
+                }
+            }
+            let messages = cap.messages();
+            drop(cap);
+            assert!(
+                messages.iter().any(|(_, target, msg)| target == "osc_color"
+                    && msg.starts_with("failed to parse OSC 10 color request err=OutOfMemory")),
+                "the failure path ran: {messages:?}"
+            );
+            assert!(failing.has_induced_failure.get());
+            assert_eq!(
+                2,
+                failing.allocations.get(),
+                "shelf array and shelf 0 were grown"
+            );
+            assert_eq!(
+                failing.allocated_bytes.get(),
+                failing.freed_bytes.get(),
+                "the grown shelves are freed on the error path"
+            );
+            p.deinit();
+        });
+    }
+
+    // T2: a refused kitty list append logs the reference's warning and skips
+    // that key (`continue`): the loop reaches the next key, whose append is
+    // refused as well (the failing allocator's refusal is sticky, as Zig's
+    // is), so both keys log and the command is still produced.
+    #[test]
+    fn kitty_color_append_failure_logs_and_continues() {
+        let failing = FailingAllocator::over_heap(Config {
+            fail_index: 0,
+            ..Config::default()
+        });
+        let c = failing.allocator();
+        with_handle(&c, |alloc| {
+            let mut p = Parser::init(Some(alloc));
+            feed(&mut p, b"21;foreground=?;background=?");
+            let cap = crate::log_capture::start();
+            {
+                let cmd = p.end(Some(0x1b)).unwrap();
+                match &cmd {
+                    Command::KittyColorProtocol(osc) => assert_eq!(0, osc.list.len()),
+                    other => panic!("expected kitty_color_protocol, got {other:?}"),
+                }
+            }
+            let messages = cap.messages();
+            drop(cap);
+            assert_eq!(
+                2,
+                messages
+                    .iter()
+                    .filter(|(level, target, msg)| *level == log::Level::Warn
+                        && target == "osc_kitty_color"
+                        && msg == "unable to append kitty color protocol option: OutOfMemory")
+                    .count(),
+                "got: {messages:?}"
+            );
+            p.deinit();
+        });
+        assert_eq!(failing.allocated_bytes.get(), failing.freed_bytes.get());
+    }
+
+    // N263: text payloads are borrowed from the parser's storage, not copied:
+    // a title from the fixed capture points into `Parser.buffer`, with its NUL
+    // sentinel inside the borrow, and parsing it allocates nothing.
+    #[test]
+    fn fixed_capture_payloads_borrow_the_parser_buffer() {
+        let counting = CountingAllocator::over_heap();
+        let c = counting.allocator();
+        with_handle(&c, |alloc| {
+            let mut p = Parser::init(Some(alloc));
+            let buffer = p.buffer.as_ptr_range();
+            feed(&mut p, b"0;a title");
+            {
+                let cmd = p.end(None).unwrap();
+                let Command::ChangeWindowTitle(title) = &cmd else {
+                    panic!("expected change_window_title, got {cmd:?}");
+                };
+                assert_eq!(b"a title", title.as_bytes());
+                assert_eq!(b"a title\0", title.as_bytes_with_nul());
+                assert!(
+                    buffer.contains(&title.as_ptr()),
+                    "the title is the buffer's bytes"
+                );
+                // SAFETY: `as_ptr` is a NUL-terminated string valid while the
+                // command is (the C caller's read, inside the borrow).
+                let c_str = unsafe { core::ffi::CStr::from_ptr(title.as_ptr().cast()) };
+                assert_eq!(b"a title", c_str.to_bytes());
+            }
+            // The same parser, fed again (the borrow has ended).
+            p.reset();
+            feed(&mut p, b"8;id=x;https://example.com");
+            {
+                let cmd = p.end(None).unwrap();
+                let Command::HyperlinkStart { id, uri } = &cmd else {
+                    panic!("expected hyperlink_start, got {cmd:?}");
+                };
+                assert_eq!(Some(b"x".as_slice()), id.map(|id| id.as_bytes()));
+                assert_eq!(b"https://example.com", uri.as_bytes());
+                assert!(buffer.contains(&uri.as_ptr()));
+                assert!(buffer.contains(&id.unwrap().as_ptr()));
+            }
+            assert_eq!(0, counting.alloc_calls.get(), "no payload copy, no list");
+            p.deinit();
+        });
+    }
+
+    // N263: a payload from an allocating capture points into the capture's
+    // own allocation; the only allocation is the capture's (`initCapacity`,
+    // `MAX_BUF` bytes), none for the payload.
+    #[test]
+    fn allocating_capture_payloads_borrow_the_capture() {
+        let counting = CountingAllocator::over_heap();
+        let c = counting.allocator();
+        with_handle(&c, |alloc| {
+            let mut p = Parser::init(Some(alloc));
+            let buffer = p.buffer.as_ptr_range();
+            feed(&mut p, b"52;c;aGVsbG8=");
+            let capture = match &p.capture.as_ref().unwrap().backing {
+                CaptureBacking::Allocating(w) => w.as_ptr_range(),
+                CaptureBacking::Fixed(_) => panic!("OSC 52 captures with an allocator"),
+            };
+            {
+                let cmd = p.end(Some(0x07)).unwrap();
+                let Command::ClipboardContents {
+                    kind,
+                    data,
+                    terminator,
+                } = &cmd
+                else {
+                    panic!("expected clipboard_contents, got {cmd:?}");
+                };
+                assert_eq!(b'c', *kind);
+                assert_eq!(Terminator::Bel, *terminator);
+                assert_eq!(b"aGVsbG8=", data.as_bytes());
+                assert!(
+                    capture.contains(&data.as_ptr()),
+                    "the data is the capture's bytes"
+                );
+                assert!(!buffer.contains(&data.as_ptr()));
+            }
+            assert_eq!(1, counting.alloc_calls.get(), "the capture only");
+            assert_eq!(Some((MAX_BUF, 0)), counting.last_alloc.get());
+            p.deinit();
+        });
+        assert_eq!(0, counting.live_bytes.get());
+    }
+
+    // The nested payloads borrow too: a kitty clipboard OSC's metadata and
+    // payload, and an option value read from the metadata, are slices of the
+    // capture.
+    #[test]
+    fn nested_payloads_and_option_values_borrow_the_capture() {
+        let mut p = Parser::init(Some(crate::alloc::Global));
+        feed(&mut p, b"5522;type=read:mime=dGV4dA==;cGF5bG9hZA==");
+        let capture = match &p.capture.as_ref().unwrap().backing {
+            CaptureBacking::Allocating(w) => w.as_ptr_range(),
+            CaptureBacking::Fixed(_) => panic!("OSC 5522 captures with an allocator"),
+        };
+        {
+            let cmd = p.end(Some(0x1b)).unwrap();
+            let Command::KittyClipboardProtocol(osc) = &cmd else {
+                panic!("expected kitty_clipboard_protocol, got {cmd:?}");
+            };
+            assert_eq!(b"type=read:mime=dGV4dA==", osc.metadata);
+            assert_eq!(Some(b"cGF5bG9hZA==".as_slice()), osc.payload);
+            assert!(capture.contains(&osc.metadata.as_ptr()));
+            assert!(capture.contains(&osc.payload.unwrap().as_ptr()));
+            let mime = osc
+                .read_option(parsers::kitty_clipboard_protocol::Option_::Mime)
+                .as_bytes()
+                .unwrap();
+            assert_eq!(b"dGV4dA==", mime);
+            assert!(capture.contains(&mime.as_ptr()));
+        }
+        p.deinit();
+    }
+
+    // The stream hands the borrowed command to its handler (the OSC fast path
+    // and the action loop), and the handler sees the parser's own bytes.
+    #[test]
+    fn the_stream_dispatches_the_borrowed_command() {
+        use crate::stream::{Handler, Options, Stream, WindowTitle};
+
+        #[derive(Default)]
+        struct Titles {
+            seen: Vec<(Vec<u8>, usize)>,
+        }
+        impl Handler for Titles {
+            fn window_title(&mut self, v: WindowTitle) {
+                self.seen
+                    .push((v.title.to_vec(), v.title.as_ptr() as usize));
+            }
+        }
+
+        let mut s = Stream::init(Options {
+            handler: Titles::default(),
+            allocator: Some(crate::alloc::Global),
+            continuation_max_bytes: None,
+        });
+        let buffer = s.parser.osc_parser.buffer.as_ptr_range();
+        // BEL (the bulk fast path), ESC \ (the fast path), and a byte at a
+        // time (the action loop).
+        s.next_slice(b"\x1b]0;one\x07\x1b]2;two\x1b\\");
+        for &b in b"\x1b]0;three\x07" {
+            s.next(b);
+        }
+        let seen = std::mem::take(&mut s.handler.seen);
+        assert_eq!(
+            vec![b"one".to_vec(), b"two".to_vec(), b"three".to_vec()],
+            seen.iter().map(|(t, _)| t.clone()).collect::<Vec<_>>()
+        );
+        for (_, addr) in &seen {
+            assert!(
+                buffer.contains(&(*addr as *const u8)),
+                "the handler saw the parser's buffer"
+            );
+        }
+        s.deinit();
+    }
+}
