@@ -2350,6 +2350,21 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - proposed fix:    In `Termio.threadEnter`, add `errdefer data.deinit()` after the backend starts, and make sure nothing is left queued on the loop: for example `errdefer thread.loop.stop()`, or allocate `CallbackData` in `threadMain` so it outlives the drain.
 - upstream status: not reported
 
+### UD291 — Highway's Linux CPU detection never sees a feature bit: `std.os.linux.getauxval` returns 0 in a libc-linked program
+- kind:            functional (performance: SIMD dispatch stuck at the baseline target)
+- upstream project: ghostty
+- severity:        low
+- reference:       pkg/highway/src/detect/linux.zig:1-5 (`getauxval` = `std.os.linux.getauxval`, "Does not call into libc"), used by detect/aarch64_linux.zig:9-10, ppc.zig, s390x.zig, riscv.zig and loongarch.zig; consumed by pkg/highway/src/cpp/targets.cpp:28-38 (`DetectTargets`, runtime dispatch); zig 0.16.0 std/os/linux.zig:517-545 (`getauxvalImpl` reads `elf_aux_maybe`, which only std/start.zig:550, Zig's own `_start`, sets; with `link_libc` that implementation is the one used). At 20abdb50a.
+- defect:          In a program that links libc, the C runtime's `_start` runs instead of Zig's, `elf_aux_maybe` stays null, and `getauxval` returns 0 for every key. Ghostty on Linux always links libc, and libghostty-vt is a library (no Zig `_start` at all), so on every non-x86 Linux target the HWCAP tests all fail and Highway only ever dispatches to the baseline (`neon_without_aes` on aarch64). The code and its doc comment ("lightweight syscalls (... getauxval on Linux)", detect.zig:18-21) clearly mean to read the kernel's values. MEASURED (task L-1, Linux aarch64 VM, HWCAP 0xefb3ffff, HWCAP2 0x126181, no SVE): the reference's `ghostty_hwy_detect_targets` built with zig 0.16.0 for aarch64-linux-gnu with `-lc` returns 0x20000000 (NEON_WITHOUT_AES), and for aarch64-linux-musl with `-lc` also 0x20000000; the same code built without libc returns 0x34000000 (NEON_WITHOUT_AES, NEON, NEON_BF16).
+- ReleaseSafe:     no crash; the SIMD kernels run their baseline variant on ARM, POWER, s390x, RISC-V and LoongArch Linux.
+- ReleaseFast:     same.
+- reachability:    every Ghostty run on non-x86 Linux (x86 uses CPUID and is unaffected).
+- port handling:   fixed (R13, evident intent): `crates-sys/highway-sys/cpp/detect.c` reads `getauxval` from libc (PORT NOTE: reference defect (R13) at the aarch64 Linux detector). The port always did; the difference was found only now, by task L-1's comparison against the reference. Listed in `docs/ghostty-bug-fixes.md`.
+- parity row(s):   LEDGER S34-F3 (found while verifying it). NEW-FINDINGS N299.
+- test:            measured by probes, not a unit test: the port's `rustty_hwy_detect_targets` (the committed `detect.c` compiled on the VM) returns 0x34000000 on the host above, equal to the reference's own code when its `getauxval` works (the no-libc build). Negative control: the reference's behaviour (libc-linked Zig build) returns 0x20000000 on the same host.
+- proposed fix:    call libc's `getauxval` when `builtin.link_libc` (for example `std.c.getauxval`), keeping the Zig implementation for libc-free builds.
+- upstream status: not reported
+
 ## Candidates pending verification
 
 Assembled from this plan's progress notes on 2026-09-11. **Not verified** — do not cite as fact.
