@@ -428,10 +428,10 @@ fn parse_get_set_dynamic_color(
     // This matches the xterm behavior (see misc.c ChangeColorsRequest)
 
     let mut result: List = List::new_in(alloc);
-    // PORT NOTE: reference defect (R13), N321: the reference has no
+    // PORT NOTE: reference defect (R13), UD310 (N321): the reference has no
     // `errdefer result.deinit(alloc)` here, unlike its three siblings, so an
     // `addOne` that fails after an earlier one grew a shelf (the 7th request of
-    // an OSC 10 with seven or more values) leaks the shelves. `result` is a
+    // an OSC 10-13 with seven or more values) leaks the shelves. `result` is a
     // `SegmentedList` that frees them when the error drops it.
     let mut color: DynamicColor = start;
     loop {

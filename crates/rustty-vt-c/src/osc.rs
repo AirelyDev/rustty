@@ -334,7 +334,7 @@ pub unsafe fn command_data(command_: Command, data: c_int, out: *mut c_void) -> 
 /// to writable `*const u8` storage.
 unsafe fn command_data_change_window_title_str(command_: Command, out: *mut *const u8) -> bool {
     // const command = command_.?;
-    // PORT NOTE: reference defect (R13), N323. The header documents
+    // PORT NOTE: reference defect (R13), UD312 (N323). The header documents
     // `command` as "may be NULL", and `rustty_osc_end` returns NULL for every
     // invalid or unfinished OSC, but the reference unwraps it with `.?`: a
     // panic in ReleaseSafe and undefined behaviour in ReleaseFast when a C

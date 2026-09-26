@@ -2501,6 +2501,66 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - proposed fix:    `usage: wasm_patch_growable_table <input.wasm> <output.wasm>` in both places.
 - upstream status: not reported
 
+### UD310 — an OSC 10-13 whose seventh color request fails to allocate leaks the list it grew
+- kind:            leak
+- upstream project: ghostty
+- severity:        low (reachable only with a failing caller allocator)
+- reference:       src/terminal/osc/parsers/color.zig `parseGetSetDynamicColor` (`var result: List = .{};` with no `errdefer result.deinit(alloc);`, unlike its three siblings `parseGetSetAnsiColor`, `parseResetAnsiColor`, `parseResetDynamicColor`), at 20abdb50a
+- defect:          `result` is a `SegmentedList(Request, 2)`: the third request grows the shelf array and shelf 0, the seventh a new shelf array and shelf 1. When that seventh `try result.addOne(alloc)` fails, the error returns without freeing `result`, and the caller's `catch` (color.zig `parse`) substitutes an empty list. Only OSC 10, 11, 12 and 13 reach a seventh request: each value advances with `Dynamic.next()`, which ends at 19, so OSC 14 takes at most six values and OSC 15-19 fewer.
+- ReleaseSafe:     the shelf array and shelf 0 leak (the testing allocator reports them); the OSC is otherwise handled as the reference intends (an empty request list).
+- ReleaseFast:     the same leak.
+- reachability:    libghostty-vt embedders whose `GhosttyAllocator` can fail, through the OSC parser (`ghostty_osc_*`) or the terminal stream, on an OSC 10-13 with seven or more values from the program in the terminal.
+- port handling:   fixed (R13): the port's list frees itself when the error drops it; `crates/rustty-vt/src/osc/parsers/color.rs` (PORT NOTE: reference defect (R13), UD310). Listed in `docs/ghostty-bug-fixes.md`.
+- parity row(s):   none; found by task S7-7 (LEDGER S174-F3). NEW-FINDINGS N321.
+- test:            `osc::s7_7_tests::dynamic_color_list_growth_failure_frees_what_it_grew` (rustty-vt): `FailingAllocator` refusing allocation 2 on `10;?;?;?;?;?;?;?`; allocated == freed and the catch's log ran. Negative control (the list forgotten on the error path): allocated 28 vs freed 0.
+- proposed fix:    add `errdefer result.deinit(alloc);` after `var result: List = .{};` in `parseGetSetDynamicColor`.
+- upstream status: not reported
+
+### UD311 — `SegmentedList.growCapacity` cleans up a failed multi-shelf growth by freeing an undefined pointer
+- kind:            latent
+- upstream project: ghostty (vendored Zig 0.15.2 `std.segmented_list`)
+- severity:        low (latent)
+- reference:       src/datastruct/segmented_list.zig `growCapacity`: `errdefer while (i > old_shelf_count) : (i -= 1) { allocator.free(new_dynamic_segments[i][0..shelfSize(i)]); };`, at 20abdb50a
+- defect:          when the allocation of shelf `i` fails, the cleanup frees `new_dynamic_segments[i]`, the slot of the shelf that failed, which was never written, and stops before `old_shelf_count`, so the first new shelf leaks. It runs only when one call adds two or more shelves and a later one fails.
+- ReleaseSafe:     `new_dynamic_segments[i]` is `undefined` (0xaa… bytes): an invalid free (the general-purpose allocator panics; a C embedder's allocator does whatever it does with a wild pointer), plus the leak.
+- ReleaseFast:     the free of an uninitialized pointer is undefined behaviour, plus the leak.
+- reachability:    none today. The callers only `addOne`/`append`, which add at most one shelf per call: src/terminal/osc/parsers/color.zig (`List`) and src/font/Collection.zig:698 (`SegmentedList(EntryOrAlias, 0)`). A future `setCapacity`/`growCapacity` with a large capacity would reach it.
+- port handling:   the port frees exactly the shelves the call allocated: `crates/rustty-datastruct/src/segmented_list.rs` `grow_capacity` (PORT NOTE, UD311). No behaviour change on any reachable path, so not listed in `docs/ghostty-bug-fixes.md`.
+- parity row(s):   none; found by task S7-7 porting the file. NEW-FINDINGS N322.
+- test:            `segmented_list::tests::a_refused_shelf_in_a_multi_shelf_growth_frees_the_new_shelves` (rustty-datastruct), exact call log; negative control (cleanup removed): the shelves leak and the log differs.
+- proposed fix:    `errdefer while (i > old_shelf_count) { i -= 1; allocator.free(new_dynamic_segments[i][0..shelfSize(i)]); };` (free indices `old_shelf_count..i`).
+- upstream status: not reported
+
+### UD312 — `ghostty_osc_command_data` unwraps a NULL command, which `ghostty_osc_end` returns
+- kind:            crash
+- upstream project: ghostty
+- severity:        medium (C API)
+- reference:       src/terminal/c/osc.zig `commandDataTyped`: `const command = command_.?;`; `end` (osc.zig `Parser.end`) returns null for `.start`, `.invalid` and every parser that rejects its input; at 20abdb50a
+- defect:          `ghostty_osc_command_data` dereferences its command without a NULL check. The header contradicts itself: `ghostty_osc_command_data` documents `command` as "may be NULL", while `ghostty_osc_end` is documented to never return NULL ("Invalid commands will return a command with type GHOSTTY_OSC_COMMAND_INVALID"), yet it does. A caller that trusts the header passes `end`'s result straight to `command_data`.
+- ReleaseSafe:     panic (null unwrap).
+- ReleaseFast:     a NULL dereference (undefined behaviour).
+- reachability:    libghostty-vt embedders using the OSC parser API: `ghostty_osc_end` on a parser fed nothing (or any rejected OSC from the program in the terminal), then `ghostty_osc_command_data(cmd, GHOSTTY_OSC_DATA_CHANGE_WINDOW_TITLE_STR, &out)`.
+- port handling:   fixed (R13): a NULL command answers `false` and leaves `out` untouched, as `commandType` answers NULL with `.invalid`; `crates/rustty-vt-c/src/osc.rs` (PORT NOTE: reference defect (R13), UD312). Listed in `docs/ghostty-bug-fixes.md`.
+- parity row(s):   none; found by task S7-7's C-API failure sweep. NEW-FINDINGS N323.
+- test:            `osc::tests::command_data_on_a_null_command_is_false` (rustty-vt-c); negative control (guard removed): the test process aborts on the NULL dereference.
+- proposed fix:    `const command = command_ orelse return false;` in `commandDataTyped`; alternatively make `end` honour its header (return a command of type `.invalid` instead of null).
+- upstream status: not reported
+
+### UD313 — a second `ghostty_osc_end` on the same color or kitty-color OSC leaks the first request list
+- kind:            leak
+- upstream project: ghostty
+- severity:        low (C API)
+- reference:       src/terminal/osc/parsers/color.zig `parse` and src/terminal/osc/parsers/kitty_color.zig `parse` assign `parser.command = .{ ... }` without freeing the list the previous command holds; `Parser.end` leaves `parser.state` as it was, so a second `end` reparses; only `reset`/`deinit` free the list; at 20abdb50a
+- defect:          calling `ghostty_osc_end` twice on the same OSC (the header does not forbid it, and `end` changes no state) builds a second list and drops the first one's allocation: for OSC 4/5/10-19/104/110-119 the shelf array and shelf 0 once there are three or more requests, for OSC 21 the `ArrayList` buffer.
+- ReleaseSafe:     the first list leaks.
+- ReleaseFast:     the same leak.
+- reachability:    libghostty-vt embedders using the OSC parser API (`ghostty_osc_end` twice without `ghostty_osc_reset`). The terminal stream is not affected: it resets the parser on every OSC start.
+- port handling:   fixed (R13): the parser's `color_requests`/`kitty_color` storage is replaced with `insert`, which frees the previous list; `crates/rustty-vt/src/osc/parsers/color.rs` and `kitty_color.rs` (PORT NOTE: reference defect (R13), UD313). Listed in `docs/ghostty-bug-fixes.md`.
+- parity row(s):   none; found by the S7-7 review (F4).
+- test:            `osc::tests::end_twice_frees_the_first_list` (rustty-vt-c): OSC 4 with three requests and OSC 21, `end` twice over a counting allocator; the first list is freed by the second `end` and `free` returns everything. Negative controls (the previous list forgotten before each `insert`, the reference's behaviour): the test fails for each.
+- proposed fix:    in both `parse` functions, free the previous command's list before assigning `parser.command` (for example call the `reset` cleanup switch first), or have `end` move the state to `.invalid` so a second `end` returns null.
+- upstream status: not reported
+
 ### UD315 — after a render-state update fails on an allocation, the next update leaves the rows it did not rebuild stale or empty
 - kind:            functional (evident intent: a successful update must describe the current terminal), and, by reading, UB (UNVERIFIED)
 - upstream project: ghostty

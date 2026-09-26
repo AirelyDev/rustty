@@ -387,7 +387,7 @@ impl<T: Copy, const PREALLOC: usize, A: Allocator> SegmentedList<T, PREALLOC, A>
         // errdefer while (i > old_shelf_count) : (i -= 1) {
         //     allocator.free(new_dynamic_segments[i][0..shelfSize(i)]);
         // };
-        // PORT NOTE (N322): the reference's cleanup starts at the shelf whose
+        // PORT NOTE (UD311, N322): the reference's cleanup starts at the shelf whose
         // allocation FAILED (index `i`, never written) and stops before
         // `old_shelf_count`, so it frees an undefined pointer and leaks the
         // first new shelf. It only runs when one call adds two or more shelves

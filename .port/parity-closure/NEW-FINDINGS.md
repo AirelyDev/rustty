@@ -5631,14 +5631,16 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   `kitty_color_report(&kitty::color::OSC)`, `color_operation(ColorOperation<'_>)` (with `requests: &List`).
 - **state**: CLOSED (parity tail S7-7).
 
-## N321 — `parseGetSetDynamicColor` leaks its grown list when a later `addOne` fails (reference defect, R13)
+## N321 — `parseGetSetDynamicColor` leaks its grown list when a later `addOne` fails (reference defect, R13; UD310)
 
 - **id**: N321. Not a ledger row: found by S7-7 porting the list's growth.
 - **severity**: low. **kind**: reference defect (leak on allocation failure), fixed under R13.
 - **where**: `src/terminal/osc/parsers/color.zig` `parseGetSetDynamicColor` at pin `20abdb50a`: `var result: List =
   .{};` with no `errdefer result.deinit(alloc);`, unlike its three siblings (`parseGetSetAnsiColor`,
   `parseResetAnsiColor`, `parseResetDynamicColor`).
-- **reachable**: an OSC 10 (or 11..19) from the pty with seven or more values, while the parser's allocator refuses
+- **reachable**: an OSC 10, 11, 12 or 13 from the pty with seven or more values (S7-7b, review F2: each value
+  advances with `Dynamic.next()`, which ends at 19, so OSC 14 takes at most six and OSC 15-19 fewer), while the
+  parser's allocator refuses
   the seventh request's growth (a C embedder's limited allocator): the third request grew the shelf array and
   shelf 0, the seventh's `try result.addOne(alloc)` fails, and `result` is dropped without `deinit`. ReleaseSafe and
   ReleaseFast: the two allocations leak (the caller's `catch` returns an empty list).
@@ -5647,36 +5649,39 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   (FailingAllocator `fail_index 2`: allocated == freed, and the catch's log ran); negative control: the list
   forgotten on the error path leaks 28 bytes and fails the test.
 - **upstream fix**: add `errdefer result.deinit(alloc);` after `var result: List = .{};`.
-- **UD id**: not allocated in this batch's dispatch (N ids only); the controller assigns one and the
-  `docs/ghostty-bug-fixes.md` line.
-- **state**: CLOSED (parity tail S7-7), UD entry owed.
+- **UD id**: UD310 (S7-7b), with its `docs/ghostty-bug-fixes.md` row.
+- **state**: CLOSED (parity tail S7-7).
 
-## N322 — the vendored `SegmentedList.growCapacity` cleanup frees the slot that failed (latent reference defect)
+## N322 — the vendored `SegmentedList.growCapacity` cleanup frees the slot that failed (latent reference defect; UD311)
 
 - **id**: N322. Not a ledger row: found by S7-7 porting `src/datastruct/segmented_list.zig`.
 - **severity**: low. **kind**: latent reference defect (vendored Zig 0.15.2 std code).
 - **where**: `growCapacity`'s `errdefer while (i > old_shelf_count) : (i -= 1) { allocator.free(
   new_dynamic_segments[i][0..shelfSize(i)]); }`: when the allocation of shelf `i` fails, the cleanup frees
   `new_dynamic_segments[i]` (never written: an undefined pointer) and stops before `old_shelf_count` (leaking the
-  first new shelf).
+  first new shelf). ReleaseSafe: the slot is `undefined` (0xaa… bytes), so an invalid free (the general-purpose
+  allocator panics; a C allocator's behaviour is the embedder's); ReleaseFast: undefined behaviour; both leak the
+  first new shelf (S7-7b, review F3).
 - **reachable**: only when one call adds two or more shelves (`setCapacity`/`growCapacity` with a large capacity)
-  and a later shelf fails. `addOne`, libghostty-vt's only caller (the OSC color list), adds at most one shelf per
-  call, so it is not reachable there.
+  and a later shelf fails. Every caller in the reference only appends, one shelf per call: the OSC color list
+  (`addOne`) and src/font/Collection.zig:698 (`SegmentedList(EntryOrAlias, 0)`), so it is latent across the whole
+  reference.
 - **port**: frees exactly the shelves the call allocated (`PORT NOTE ... N322` in `rustty_datastruct::segmented_list`);
   test `a_refused_shelf_in_a_multi_shelf_growth_frees_the_new_shelves` (exact call log); negative control: without
   the cleanup the shelves leak and the call log differs.
 - **upstream fix**: free indices `old_shelf_count..i` (e.g. `errdefer while (i > old_shelf_count) { i -= 1;
   allocator.free(...[i]...); }`).
-- **UD id**: owed (kind: latent), as N321.
-- **state**: CLOSED (parity tail S7-7), UD entry owed.
+- **UD id**: UD311 (latent; no `docs/ghostty-bug-fixes.md` row).
+- **state**: CLOSED (parity tail S7-7).
 
-## N323 — `ghostty_osc_command_data` traps on a NULL command the header allows (reference defect, R13)
+## N323 — `ghostty_osc_command_data` traps on a NULL command the header allows (reference defect, R13; UD312)
 
 - **id**: N323. Not a ledger row: found by S7-7's C-API failure sweep.
 - **severity**: medium. **kind**: reference defect (crash / UB), fixed under R13.
 - **where**: `src/terminal/c/osc.zig` `commandDataTyped`: `const command = command_.?;`. The header
   (`include/ghostty/vt/osc.h`) documents `command` as "may be NULL", and `ghostty_osc_end` returns NULL for every
-  invalid or unfinished OSC.
+  invalid or unfinished OSC, although the same header documents `end` as never returning NULL (S7-7b, review F3).
+  Minimal trigger: `ghostty_osc_end` on a parser fed nothing, then `command_data` for the title.
 - **reachable**: a C caller that asks the result of `end` for its title (`GHOSTTY_OSC_DATA_CHANGE_WINDOW_TITLE_STR`)
   after an OSC the parser rejected (bytes from the pty). ReleaseSafe: panic; ReleaseFast: a NULL dereference (UB).
   The port had the same dereference (`&*command_`).
@@ -5684,9 +5689,11 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   (`PORT NOTE: reference defect (R13), N323` in `crates/rustty-vt-c/src/osc.rs`). Test
   `command_data_on_a_null_command_is_false`; negative control: without the guard the test process aborts on the
   NULL dereference.
-- **upstream fix**: `const command = command_ orelse return false;`.
-- **UD id**: owed, as N321.
-- **state**: CLOSED (parity tail S7-7), UD entry owed.
+- **upstream fix**: `const command = command_ orelse return false;` (or make `end` honour its header).
+- **UD id**: UD312 (S7-7b), with its `docs/ghostty-bug-fixes.md` row. S7-7b also recorded UD313 (review F4): a
+  second `ghostty_osc_end` on the same color/kitty-color OSC leaks the first list in the reference; the port frees it
+  (test `end_twice_frees_the_first_list`). No N id (none left in S7-7's block).
+- **state**: CLOSED (parity tail S7-7).
 
 ## N324 — a borrowed OSC command that owned its lists cost the per-byte parser loop up to 2.2x
 
