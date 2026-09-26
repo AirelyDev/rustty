@@ -2335,6 +2335,21 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - proposed fix:    update the FreeType prongs to 7.0 (narrow `cell_width`) and 15.5 (wide `ascii_height`) together with fixing UD276's guard, or pin `.freetype_load_flags = .{ .light = false }` in the test.
 - upstream status: not reported
 
+### UD300 — three GTK "surface is not in a window" warnings name `new_tab` for another action
+- kind:            latent (copy-paste in a message)
+- upstream project: ghostty
+- severity:        low (a log line names the wrong action)
+- reference:       `src/apprt/gtk/class/application.zig` at 20abdb50a: `gotoTab` :2462, `moveTab` :2603 and `toggleTabOverview` :3276 each log `surface is not in a window, ignoring new_tab`, the text of `newTab`'s own warning (:2683); the sibling `moveTabToNewWindow` (:2626) names its own action.
+- defect:          when the surface has no enclosing window, the warning names `new_tab` although the ignored action is `goto_tab`, `move_tab` or `toggle_tab_overview`.
+- ReleaseSafe:     misleading diagnostic, no behavioural effect.
+- ReleaseFast:     the same.
+- reachability:    any of the three actions targeting a surface that is not (or no longer) inside a `Window`.
+- port handling:   faithful (R13: message text stays faithful). The port had used the "corrected" names; task S-1c restored the reference text in `crates/rustty-apprt/src/gtk/class/application.rs` `goto_tab`, `move_tab` and `toggle_tab_overview`, each with a comment citing this entry. Not in `docs/ghostty-bug-fixes.md` (no fix in the port).
+- parity row(s):   NEW-FINDINGS N310.
+- test:            none (GTK widget tree; the text is a string literal, compile-checked on Linux only). UNVERIFIED on Linux.
+- proposed fix:    `ignoring goto_tab`, `ignoring move_tab`, `ignoring toggle_tab_overview`.
+- upstream status: not reported
+
 ## Candidates pending verification
 
 Assembled from this plan's progress notes on 2026-09-11. **Not verified** — do not cite as fact.
