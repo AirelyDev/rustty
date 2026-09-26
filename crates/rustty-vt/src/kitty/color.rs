@@ -15,7 +15,8 @@ pub struct OSC {
     // through the OSC parser's allocator (`list.append(alloc, ..)`,
     // osc/parsers/kitty_color.zig). It was a Rust-heap `Vec`. The list is
     // unmanaged, as the reference's is; `alloc` below is the allocator its
-    // growth used, so dropping the command frees it (the reference's
+    // growth used. The OSC lives in the parser's `kitty_color` field and is
+    // dropped at `reset`, which frees the list (the reference's
     // `OSC.deinit(alloc)`, which the parser's `reset` calls).
     pub list: crate::alloc::ArrayListUnmanaged<Request>,
 

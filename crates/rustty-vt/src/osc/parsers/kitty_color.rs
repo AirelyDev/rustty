@@ -45,6 +45,8 @@ pub fn parse<'a>(parser: &'a mut Parser, terminator_ch: Option<u8>) -> Option<Co
     // `reset` frees it, including after an early `return null`, as in the
     // reference; the command borrows it. The capture is read in place, as the
     // reference's `cap.trailing()` is; the port used to copy it into a `Vec`.
+    // PORT NOTE: reference defect (R13), UD313: as in `color::parse`, a second
+    // `end` leaks the previous list in the reference; `insert` frees it.
     let osc: &'a mut kitty_color::OSC = parser.kitty_color.insert(kitty_color::OSC::init(
         alloc,
         crate::osc::Terminator::init(terminator_ch),
@@ -182,10 +184,10 @@ mod tests {
     use crate::kitty::color::{Kind, Request, Special};
     use crate::osc::{Command, Parser};
 
-    // PORT NOTE: the reference uses `testing.allocator`. The OSC 21 list is a
-    // Rust `Vec` (self-owning), so the parser only needs the allocator's
-    // *presence* (the `parser.alloc orelse` gate). `GlobalZigAllocator` is the
-    // always-available stateless backend that satisfies that gate.
+    // PORT NOTE: the reference uses `testing.allocator`. The OSC 21 list grows
+    // through `parser.alloc` (parity tail S7-7); these tests pass the Rust heap
+    // handle (`crate::alloc::Global`), and the routing tests in `osc` pass a
+    // counting one.
 
     // REGRESSION (fuzz finding, `cargo fuzz run fuzz_osc`, 2026-08-11): the
     // kitty color value used to be decoded with `String::from_utf8_lossy`

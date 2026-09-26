@@ -57,7 +57,11 @@ pub struct OscParserWrapper {
     // it FIRST, before it touches the parser. The wrapper lives in its own C
     // allocation and never moves, so the borrowed bytes stay where the
     // command points.
-    command: Option<osc::Command<'static>>,
+    // PORT NOTE (parity tail S7-7b, review F5): cleared to `Command::Invalid`
+    // (owns and borrows nothing), not to an absent value: a stale pointer a C
+    // caller keeps against the header then reads a defined `.invalid`, as the
+    // reference's `parser.command` reads after `reset`.
+    command: osc::Command<'static>,
     parser: osc::Parser,
     alloc: Option<CAllocator>,
 }
@@ -68,7 +72,7 @@ impl OscParserWrapper {
     /// borrows are the parser's, freed at `reset`/`free` as in the reference.
     #[inline]
     fn clear_command(&mut self) {
-        self.command = None;
+        self.command = osc::Command::Invalid;
     }
 }
 
@@ -104,7 +108,7 @@ pub unsafe fn new(alloc_: Option<&CAllocator>, result: *mut Parser) -> Result {
         create(
             alloc_,
             OscParserWrapper {
-                command: None,
+                command: osc::Command::Invalid,
                 parser: osc::Parser::init(Some(alloc)),
                 alloc: alloc_.copied(),
             },
@@ -208,8 +212,8 @@ pub unsafe fn end(parser_: Parser, terminator: u8) -> Command {
             // header's lifetime for the returned command.
             let cmd: osc::Command<'static> =
                 unsafe { core::mem::transmute::<osc::Command<'_>, osc::Command<'static>>(cmd) };
-            let slot = wrapper.command.insert(cmd);
-            slot as *mut osc::Command<'static>
+            wrapper.command = cmd;
+            &mut wrapper.command as *mut osc::Command<'static>
         }
         None => std::ptr::null_mut(),
     }
@@ -743,7 +747,11 @@ mod tests {
         assert_eq!(5, counting.alloc_calls.get());
         unsafe { next(p, b';') };
         // SAFETY: `p` is live; the wrapper's stored command is inspected.
-        assert!(unsafe { (*p).command.is_none() }, "next ended the command");
+        assert!(
+            // SAFETY: as above.
+            matches!(unsafe { &(*p).command }, osc::Command::Invalid),
+            "next ended the command"
+        );
         assert_eq!(
             2,
             counting.free_calls.get(),
@@ -754,6 +762,43 @@ mod tests {
         unsafe { free(p) };
         assert_eq!(0, counting.live_bytes.get());
         assert_eq!(counting.alloc_calls.get(), counting.free_calls.get());
+    }
+
+    // Parity tail S7-7b, UD313 (R13; review F4): `end` twice on the same OSC
+    // (the header allows it) reparses. The reference overwrites
+    // `parser.command` without freeing the list the first `end` built, and
+    // leaks it; the port's second parse replaces, and frees, it. The second
+    // `end` allocates the list again (4 allocations: the parser, twice the
+    // shelf array and shelf 0) and frees the first (2 frees); `free` returns
+    // everything.
+    #[test]
+    fn end_twice_frees_the_first_list() {
+        use rustty_vt::alloc::testing::CountingAllocator;
+
+        for input in [&b"4;1;?;2;?;3;?"[..], &b"21;foreground=?;background=?"[..]] {
+            let counting = CountingAllocator::over_heap();
+            let calloc = counting.allocator();
+            let mut p: Parser = std::ptr::null_mut();
+            assert_eq!(Result::Success, unsafe { new(Some(&calloc), &mut p) });
+            for &b in input {
+                unsafe { next(p, b) };
+            }
+            let first = unsafe { end(p, 0x07) };
+            assert!(!first.is_null());
+            let per_list = counting.alloc_calls.get() - 1;
+            assert!(per_list > 0, "the list allocates");
+            let second = unsafe { end(p, 0x07) };
+            assert!(!second.is_null());
+            assert_eq!(1 + 2 * per_list, counting.alloc_calls.get());
+            assert_eq!(
+                per_list,
+                counting.free_calls.get(),
+                "the first list was freed"
+            );
+            unsafe { free(p) };
+            assert_eq!(counting.alloc_calls.get(), counting.free_calls.get());
+            assert_eq!(0, counting.live_bytes.get());
+        }
     }
 
     // Parity tail S7-7, N263: a title is the parser's own sentinel-terminated
