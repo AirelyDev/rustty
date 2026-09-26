@@ -24,14 +24,15 @@ use rustty_os::string_encoding;
 /// options. So, I think this is a fair interpretation.
 // PORT NOTE: `pub const C = void;` — the C ABI tag for this command has no
 // payload; the Rust port carries it as a comment as there is no C surface here.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Command {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Command<'p> {
     pub action: Action,
     // PORT NOTE (fidelity): `options_unvalidated: []const u8` is a borrowed slice
-    // into the parser's capture buffer in Zig. The ported `Command` owns the
-    // bytes as a `Vec<u8>` (RAW bytes, not a lossy `String`); option reading and
-    // command-line decoding operate over the byte slice directly.
-    pub options_unvalidated: Vec<u8>,
+    // into the parser's capture buffer in Zig, and here (parity tail S7-7, N263:
+    // it used to be an owned `Vec<u8>` copy). RAW bytes, not a lossy `String`;
+    // option reading and command-line decoding operate over the byte slice
+    // directly.
+    pub options_unvalidated: &'p [u8],
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,11 +47,11 @@ pub enum Action {
     EndCommand,                      // 'D'
 }
 
-impl Command {
-    pub fn init(action: Action) -> Command {
+impl<'p> Command<'p> {
+    pub fn init(action: Action) -> Command<'p> {
         Command {
             action,
-            options_unvalidated: Vec::new(),
+            options_unvalidated: &[],
         }
     }
 
@@ -61,7 +62,7 @@ impl Command {
     // `Copy`-valued options and the borrow-returning `[]const u8` options share
     // one `read_option` entry point.
     pub fn read_option<'a, O: ReadableOption<'a>>(&'a self, option: O) -> Option<O::Output> {
-        option.read(&self.options_unvalidated)
+        option.read(self.options_unvalidated)
     }
 
     /// Write the decoded command line (if any) to the writer. If an error
@@ -446,7 +447,7 @@ pub enum Redraw {
 }
 
 /// Parse OSC 133, semantic prompts
-pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut OSCCommand> {
+pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<OSCCommand<'a>> {
     let cap = if let Some(c) = parser.capture.as_ref() {
         c
     } else {
@@ -458,6 +459,10 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut OSCCom
         parser.state = State::Invalid;
         return None;
     }
+
+    // PORT NOTE (parity tail S7-7): the reference builds `parser.command` in
+    // place; the port builds this local and returns it (see `osc::Command`).
+    let mut command: OSCCommand<'a> = OSCCommand::Invalid;
 
     // PORT NOTE: Zig uses labeled blocks with `break :valid` for the "invalid
     // fallthrough" pattern and per-arm `break :<label>` for the early
@@ -473,31 +478,29 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut OSCCom
     let valid = 'valid: {
         match data[0] {
             b'A' => 'fresh_line: {
-                parser.command =
-                    OSCCommand::SemanticPrompt(Command::init(Action::FreshLineNewPrompt));
+                command = OSCCommand::SemanticPrompt(Command::init(Action::FreshLineNewPrompt));
                 if data.len() == 1 {
                     break 'fresh_line;
                 }
                 if data[1] != b';' {
                     break 'valid false;
                 }
-                set_options(&mut parser.command, &data[2..]);
+                set_options(&mut command, &data[2..]);
             }
 
             b'B' => 'end_prompt: {
-                parser.command =
-                    OSCCommand::SemanticPrompt(Command::init(Action::EndPromptStartInput));
+                command = OSCCommand::SemanticPrompt(Command::init(Action::EndPromptStartInput));
                 if data.len() == 1 {
                     break 'end_prompt;
                 }
                 if data[1] != b';' {
                     break 'valid false;
                 }
-                set_options(&mut parser.command, &data[2..]);
+                set_options(&mut command, &data[2..]);
             }
 
             b'I' => 'end_prompt_line: {
-                parser.command = OSCCommand::SemanticPrompt(Command::init(
+                command = OSCCommand::SemanticPrompt(Command::init(
                     Action::EndPromptStartInputTerminateEol,
                 ));
                 if data.len() == 1 {
@@ -506,59 +509,58 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut OSCCom
                 if data[1] != b';' {
                     break 'valid false;
                 }
-                set_options(&mut parser.command, &data[2..]);
+                set_options(&mut command, &data[2..]);
             }
 
             b'C' => 'end_input: {
-                parser.command =
-                    OSCCommand::SemanticPrompt(Command::init(Action::EndInputStartOutput));
+                command = OSCCommand::SemanticPrompt(Command::init(Action::EndInputStartOutput));
                 if data.len() == 1 {
                     break 'end_input;
                 }
                 if data[1] != b';' {
                     break 'valid false;
                 }
-                set_options(&mut parser.command, &data[2..]);
+                set_options(&mut command, &data[2..]);
             }
 
             b'D' => 'end_command: {
-                parser.command = OSCCommand::SemanticPrompt(Command::init(Action::EndCommand));
+                command = OSCCommand::SemanticPrompt(Command::init(Action::EndCommand));
                 if data.len() == 1 {
                     break 'end_command;
                 }
                 if data[1] != b';' {
                     break 'valid false;
                 }
-                set_options(&mut parser.command, &data[2..]);
+                set_options(&mut command, &data[2..]);
             }
 
             b'L' => {
                 if data.len() > 1 {
                     break 'valid false;
                 }
-                parser.command = OSCCommand::SemanticPrompt(Command::init(Action::FreshLine));
+                command = OSCCommand::SemanticPrompt(Command::init(Action::FreshLine));
             }
 
             b'N' => 'new_command: {
-                parser.command = OSCCommand::SemanticPrompt(Command::init(Action::NewCommand));
+                command = OSCCommand::SemanticPrompt(Command::init(Action::NewCommand));
                 if data.len() == 1 {
                     break 'new_command;
                 }
                 if data[1] != b';' {
                     break 'valid false;
                 }
-                set_options(&mut parser.command, &data[2..]);
+                set_options(&mut command, &data[2..]);
             }
 
             b'P' => 'prompt_start: {
-                parser.command = OSCCommand::SemanticPrompt(Command::init(Action::PromptStart));
+                command = OSCCommand::SemanticPrompt(Command::init(Action::PromptStart));
                 if data.len() == 1 {
                     break 'prompt_start;
                 }
                 if data[1] != b';' {
                     break 'valid false;
                 }
-                set_options(&mut parser.command, &data[2..]);
+                set_options(&mut command, &data[2..]);
             }
 
             _ => break 'valid false,
@@ -568,7 +570,7 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut OSCCom
     };
 
     if valid {
-        return Some(&mut parser.command);
+        return Some(command);
     }
 
     // Any fallthroughs are invalid
@@ -577,12 +579,12 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut OSCCom
 }
 
 // PORT NOTE: `parser.command.semantic_prompt.options_unvalidated = data[2..];`
-// — in Zig this stores a borrowed slice into the capture buffer. The ported
-// `Command` owns its options as a `Vec<u8>`, so we copy the RAW bytes in —
-// NEVER a lossy String decode.
-fn set_options(command: &mut OSCCommand, data: &[u8]) {
+// — in Zig this stores a borrowed slice into the capture buffer, and so does
+// the port (parity tail S7-7; it used to copy the bytes into a `Vec`). RAW
+// bytes, NEVER a lossy String decode.
+fn set_options<'a>(command: &mut OSCCommand<'a>, data: &'a [u8]) {
     if let OSCCommand::SemanticPrompt(sp) = command {
-        sp.options_unvalidated = data.to_vec();
+        sp.options_unvalidated = data;
     }
 }
 
@@ -596,7 +598,7 @@ mod tests {
     // PORT NOTE: `cmd.semantic_prompt` is `cmd` unwrapped to the
     // `Command::SemanticPrompt` payload. This helper mirrors the Zig
     // `cmd.semantic_prompt` projection after asserting the tag.
-    fn semantic_prompt(cmd: &OSCCommand) -> &Command {
+    fn semantic_prompt<'c, 'p>(cmd: &'c OSCCommand<'p>) -> &'c Command<'p> {
         match cmd {
             OSCCommand::SemanticPrompt(sp) => sp,
             _ => unreachable!(),
@@ -612,7 +614,7 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(None).unwrap().clone();
+        let cmd = p.end(None).unwrap();
         assert!(matches!(cmd, OSCCommand::SemanticPrompt(_)));
         assert!(semantic_prompt(&cmd).action == super::Action::EndInputStartOutput);
         assert!(semantic_prompt(&cmd).read_option(option::AID).is_none());
@@ -637,7 +639,7 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(None).unwrap().clone();
+        let cmd = p.end(None).unwrap();
         assert!(matches!(cmd, OSCCommand::SemanticPrompt(_)));
         assert!(semantic_prompt(&cmd).action == super::Action::EndInputStartOutput);
         assert_eq!(
@@ -656,7 +658,7 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(None).unwrap().clone();
+        let cmd = p.end(None).unwrap();
         assert!(matches!(cmd, OSCCommand::SemanticPrompt(_)));
         assert!(semantic_prompt(&cmd).action == super::Action::EndInputStartOutput);
 
@@ -674,7 +676,7 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(None).unwrap().clone();
+        let cmd = p.end(None).unwrap();
         assert!(matches!(cmd, OSCCommand::SemanticPrompt(_)));
 
         semantic_prompt(&cmd).write_command_line(&mut w).unwrap();
@@ -691,7 +693,7 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(None).unwrap().clone();
+        let cmd = p.end(None).unwrap();
         assert!(matches!(cmd, OSCCommand::SemanticPrompt(_)));
         assert!(semantic_prompt(&cmd).action == super::Action::EndInputStartOutput);
 
@@ -709,7 +711,7 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(None).unwrap().clone();
+        let cmd = p.end(None).unwrap();
         assert!(matches!(cmd, OSCCommand::SemanticPrompt(_)));
         assert!(semantic_prompt(&cmd).action == super::Action::EndInputStartOutput);
 
@@ -727,7 +729,7 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(None).unwrap().clone();
+        let cmd = p.end(None).unwrap();
         assert!(matches!(cmd, OSCCommand::SemanticPrompt(_)));
         assert!(semantic_prompt(&cmd).action == super::Action::EndInputStartOutput);
         assert!(matches!(
@@ -746,7 +748,7 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(None).unwrap().clone();
+        let cmd = p.end(None).unwrap();
         assert!(matches!(cmd, OSCCommand::SemanticPrompt(_)));
         assert!(semantic_prompt(&cmd).action == super::Action::EndInputStartOutput);
 
@@ -766,7 +768,7 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(None).unwrap().clone();
+        let cmd = p.end(None).unwrap();
         assert!(matches!(cmd, OSCCommand::SemanticPrompt(_)));
         assert!(semantic_prompt(&cmd).action == super::Action::EndInputStartOutput);
         assert!(matches!(
@@ -785,7 +787,7 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(None).unwrap().clone();
+        let cmd = p.end(None).unwrap();
         assert!(matches!(cmd, OSCCommand::SemanticPrompt(_)));
         assert!(semantic_prompt(&cmd).action == super::Action::EndInputStartOutput);
 
@@ -803,7 +805,7 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(None).unwrap().clone();
+        let cmd = p.end(None).unwrap();
         assert!(matches!(cmd, OSCCommand::SemanticPrompt(_)));
         assert!(semantic_prompt(&cmd).action == super::Action::EndInputStartOutput);
 
@@ -821,7 +823,7 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(None).unwrap().clone();
+        let cmd = p.end(None).unwrap();
         assert!(matches!(cmd, OSCCommand::SemanticPrompt(_)));
         assert!(semantic_prompt(&cmd).action == super::Action::EndInputStartOutput);
 
@@ -839,7 +841,7 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(None).unwrap().clone();
+        let cmd = p.end(None).unwrap();
         assert!(matches!(cmd, OSCCommand::SemanticPrompt(_)));
         assert!(semantic_prompt(&cmd).action == super::Action::EndInputStartOutput);
 
@@ -857,7 +859,7 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(None).unwrap().clone();
+        let cmd = p.end(None).unwrap();
         assert!(matches!(cmd, OSCCommand::SemanticPrompt(_)));
         assert!(semantic_prompt(&cmd).action == super::Action::EndInputStartOutput);
         assert!(matches!(
@@ -876,7 +878,7 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(None).unwrap().clone();
+        let cmd = p.end(None).unwrap();
         assert!(matches!(cmd, OSCCommand::SemanticPrompt(_)));
         assert!(semantic_prompt(&cmd).action == super::Action::EndInputStartOutput);
         assert!(matches!(
@@ -895,7 +897,7 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(None).unwrap().clone();
+        let cmd = p.end(None).unwrap();
         assert!(matches!(cmd, OSCCommand::SemanticPrompt(_)));
         assert!(semantic_prompt(&cmd).action == super::Action::EndInputStartOutput);
 
@@ -913,7 +915,7 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(None).unwrap().clone();
+        let cmd = p.end(None).unwrap();
         assert!(matches!(cmd, OSCCommand::SemanticPrompt(_)));
         assert!(semantic_prompt(&cmd).action == super::Action::EndInputStartOutput);
         assert!(matches!(
@@ -932,7 +934,7 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(None).unwrap().clone();
+        let cmd = p.end(None).unwrap();
         assert!(matches!(cmd, OSCCommand::SemanticPrompt(_)));
         assert!(semantic_prompt(&cmd).action == super::Action::EndInputStartOutput);
         assert!(matches!(
@@ -950,7 +952,7 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(None).unwrap().clone();
+        let cmd = p.end(None).unwrap();
         assert!(matches!(cmd, OSCCommand::SemanticPrompt(_)));
         assert!(semantic_prompt(&cmd).action == super::Action::FreshLine);
     }
@@ -987,7 +989,7 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(None).unwrap().clone();
+        let cmd = p.end(None).unwrap();
         assert!(matches!(cmd, OSCCommand::SemanticPrompt(_)));
         assert!(semantic_prompt(&cmd).action == super::Action::FreshLineNewPrompt);
         assert!(semantic_prompt(&cmd).read_option(option::AID).is_none());
@@ -1003,7 +1005,7 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(None).unwrap().clone();
+        let cmd = p.end(None).unwrap();
         assert!(matches!(cmd, OSCCommand::SemanticPrompt(_)));
         assert!(semantic_prompt(&cmd).action == super::Action::FreshLineNewPrompt);
         assert_eq!(
@@ -1021,7 +1023,7 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(None).unwrap().clone();
+        let cmd = p.end(None).unwrap();
         assert!(matches!(cmd, OSCCommand::SemanticPrompt(_)));
         assert!(semantic_prompt(&cmd).action == super::Action::FreshLineNewPrompt);
         assert_eq!(
@@ -1039,7 +1041,7 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(None).unwrap().clone();
+        let cmd = p.end(None).unwrap();
         assert!(matches!(cmd, OSCCommand::SemanticPrompt(_)));
         assert!(semantic_prompt(&cmd).action == super::Action::FreshLineNewPrompt);
         assert!(semantic_prompt(&cmd).read_option(option::CL) == Some(Click::Line));
@@ -1054,7 +1056,7 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(None).unwrap().clone();
+        let cmd = p.end(None).unwrap();
         assert!(matches!(cmd, OSCCommand::SemanticPrompt(_)));
         assert!(semantic_prompt(&cmd).action == super::Action::FreshLineNewPrompt);
         assert!(semantic_prompt(&cmd).read_option(option::CL) == Some(Click::Multiple));
@@ -1069,7 +1071,7 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(None).unwrap().clone();
+        let cmd = p.end(None).unwrap();
         assert!(matches!(cmd, OSCCommand::SemanticPrompt(_)));
         assert!(semantic_prompt(&cmd).action == super::Action::FreshLineNewPrompt);
         assert!(semantic_prompt(&cmd).read_option(option::CL).is_none());
@@ -1084,7 +1086,7 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(None).unwrap().clone();
+        let cmd = p.end(None).unwrap();
         assert!(matches!(cmd, OSCCommand::SemanticPrompt(_)));
         assert!(semantic_prompt(&cmd).action == super::Action::FreshLineNewPrompt);
     }
@@ -1098,7 +1100,7 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(None).unwrap().clone();
+        let cmd = p.end(None).unwrap();
         assert!(matches!(cmd, OSCCommand::SemanticPrompt(_)));
         assert!(semantic_prompt(&cmd).action == super::Action::FreshLineNewPrompt);
         assert!(semantic_prompt(&cmd).read_option(option::AID).is_none());
@@ -1114,7 +1116,7 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(None).unwrap().clone();
+        let cmd = p.end(None).unwrap();
         assert!(matches!(cmd, OSCCommand::SemanticPrompt(_)));
         assert!(semantic_prompt(&cmd).action == super::Action::FreshLineNewPrompt);
         assert_eq!(
@@ -1133,7 +1135,7 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(None).unwrap().clone();
+        let cmd = p.end(None).unwrap();
         assert!(matches!(cmd, OSCCommand::SemanticPrompt(_)));
         assert!(semantic_prompt(&cmd).action == super::Action::FreshLineNewPrompt);
         assert!(semantic_prompt(&cmd).read_option(option::REDRAW).is_none());
@@ -1148,7 +1150,7 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(None).unwrap().clone();
+        let cmd = p.end(None).unwrap();
         assert!(matches!(cmd, OSCCommand::SemanticPrompt(_)));
         assert!(semantic_prompt(&cmd).action == super::Action::FreshLineNewPrompt);
         assert!(semantic_prompt(&cmd).read_option(option::REDRAW).unwrap() == Redraw::False);
@@ -1163,7 +1165,7 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(None).unwrap().clone();
+        let cmd = p.end(None).unwrap();
         assert!(matches!(cmd, OSCCommand::SemanticPrompt(_)));
         assert!(semantic_prompt(&cmd).action == super::Action::FreshLineNewPrompt);
         assert!(semantic_prompt(&cmd).read_option(option::REDRAW).unwrap() == Redraw::True);
@@ -1178,7 +1180,7 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(None).unwrap().clone();
+        let cmd = p.end(None).unwrap();
         assert!(matches!(cmd, OSCCommand::SemanticPrompt(_)));
         assert!(semantic_prompt(&cmd).action == super::Action::FreshLineNewPrompt);
         assert!(semantic_prompt(&cmd).read_option(option::REDRAW).is_none());
@@ -1193,7 +1195,7 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(None).unwrap().clone();
+        let cmd = p.end(None).unwrap();
         assert!(matches!(cmd, OSCCommand::SemanticPrompt(_)));
         assert!(semantic_prompt(&cmd).action == super::Action::PromptStart);
         assert!(semantic_prompt(&cmd)
@@ -1210,7 +1212,7 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(None).unwrap().clone();
+        let cmd = p.end(None).unwrap();
         assert!(matches!(cmd, OSCCommand::SemanticPrompt(_)));
         assert!(semantic_prompt(&cmd).action == super::Action::PromptStart);
         assert!(
@@ -1227,7 +1229,7 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(None).unwrap().clone();
+        let cmd = p.end(None).unwrap();
         assert!(matches!(cmd, OSCCommand::SemanticPrompt(_)));
         assert!(semantic_prompt(&cmd).action == super::Action::PromptStart);
         assert!(semantic_prompt(&cmd).read_option(option::PROMPT_KIND) == Some(PromptKind::Right));
@@ -1242,7 +1244,7 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(None).unwrap().clone();
+        let cmd = p.end(None).unwrap();
         assert!(matches!(cmd, OSCCommand::SemanticPrompt(_)));
         assert!(semantic_prompt(&cmd).action == super::Action::PromptStart);
         assert!(
@@ -1260,7 +1262,7 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(None).unwrap().clone();
+        let cmd = p.end(None).unwrap();
         assert!(matches!(cmd, OSCCommand::SemanticPrompt(_)));
         assert!(semantic_prompt(&cmd).action == super::Action::PromptStart);
         assert!(
@@ -1277,7 +1279,7 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(None).unwrap().clone();
+        let cmd = p.end(None).unwrap();
         assert!(matches!(cmd, OSCCommand::SemanticPrompt(_)));
         assert!(semantic_prompt(&cmd).action == super::Action::PromptStart);
         assert!(semantic_prompt(&cmd)
@@ -1304,7 +1306,7 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(None).unwrap().clone();
+        let cmd = p.end(None).unwrap();
         assert!(matches!(cmd, OSCCommand::SemanticPrompt(_)));
         assert!(semantic_prompt(&cmd).action == super::Action::NewCommand);
         assert!(semantic_prompt(&cmd).read_option(option::AID).is_none());
@@ -1320,7 +1322,7 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(None).unwrap().clone();
+        let cmd = p.end(None).unwrap();
         assert!(matches!(cmd, OSCCommand::SemanticPrompt(_)));
         assert!(semantic_prompt(&cmd).action == super::Action::NewCommand);
         assert_eq!(
@@ -1338,7 +1340,7 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(None).unwrap().clone();
+        let cmd = p.end(None).unwrap();
         assert!(matches!(cmd, OSCCommand::SemanticPrompt(_)));
         assert!(semantic_prompt(&cmd).action == super::Action::NewCommand);
         assert!(semantic_prompt(&cmd).read_option(option::CL) == Some(Click::Line));
@@ -1353,7 +1355,7 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(None).unwrap().clone();
+        let cmd = p.end(None).unwrap();
         assert!(matches!(cmd, OSCCommand::SemanticPrompt(_)));
         assert!(semantic_prompt(&cmd).action == super::Action::NewCommand);
         assert_eq!(
@@ -1382,7 +1384,7 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(None).unwrap().clone();
+        let cmd = p.end(None).unwrap();
         assert!(matches!(cmd, OSCCommand::SemanticPrompt(_)));
         assert!(semantic_prompt(&cmd).action == super::Action::EndPromptStartInput);
     }
@@ -1405,7 +1407,7 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(None).unwrap().clone();
+        let cmd = p.end(None).unwrap();
         assert!(matches!(cmd, OSCCommand::SemanticPrompt(_)));
         assert!(semantic_prompt(&cmd).action == super::Action::EndPromptStartInput);
         assert_eq!(
@@ -1423,7 +1425,7 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(None).unwrap().clone();
+        let cmd = p.end(None).unwrap();
         assert!(matches!(cmd, OSCCommand::SemanticPrompt(_)));
         assert!(semantic_prompt(&cmd).action == super::Action::EndPromptStartInputTerminateEol);
     }
@@ -1446,7 +1448,7 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(None).unwrap().clone();
+        let cmd = p.end(None).unwrap();
         assert!(matches!(cmd, OSCCommand::SemanticPrompt(_)));
         assert!(semantic_prompt(&cmd).action == super::Action::EndPromptStartInputTerminateEol);
         assert_eq!(
@@ -1464,7 +1466,7 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(None).unwrap().clone();
+        let cmd = p.end(None).unwrap();
         assert!(matches!(cmd, OSCCommand::SemanticPrompt(_)));
         assert!(semantic_prompt(&cmd).action == super::Action::EndCommand);
         assert!(semantic_prompt(&cmd)
@@ -1493,7 +1495,7 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(None).unwrap().clone();
+        let cmd = p.end(None).unwrap();
         assert!(matches!(cmd, OSCCommand::SemanticPrompt(_)));
         assert!(semantic_prompt(&cmd).action == super::Action::EndCommand);
         assert!(semantic_prompt(&cmd).read_option(option::EXIT_CODE) == Some(0));
@@ -1508,7 +1510,7 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(None).unwrap().clone();
+        let cmd = p.end(None).unwrap();
         assert!(matches!(cmd, OSCCommand::SemanticPrompt(_)));
         assert!(semantic_prompt(&cmd).action == super::Action::EndCommand);
         assert_eq!(

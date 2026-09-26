@@ -32,8 +32,128 @@ pub use parsers::color;
 // pub const semantic_prompt = parsers.semantic_prompt;
 pub use parsers::semantic_prompt;
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum Command {
+/// `[:0]const u8`: a byte string BORROWED from the parser, whose terminating
+/// NUL sentinel is part of the borrow.
+///
+/// PORT NOTE (parity tail S7-7, N263): the reference's text payloads are
+/// sentinel-terminated slices into the parser's own storage (the fixed
+/// `buffer` or the allocating capture). They used to be owned `Vec<u8>` copies
+/// here, which the reference never makes. The sentinel is kept inside the
+/// borrow so that a C caller reading the string through [`ZStr::as_ptr`]
+/// (`rustty_osc_command_data`'s `const char *`) stays within the memory the
+/// borrow covers. Dereferencing gives the bytes WITHOUT the sentinel, which is
+/// what `[:0]const u8` indexes and what `.len` counts.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ZStr<'p> {
+    with_nul: &'p [u8],
+}
+
+impl<'p> ZStr<'p> {
+    /// The empty string (`""`, a lone sentinel in static memory).
+    pub const EMPTY: ZStr<'static> = ZStr { with_nul: b"\0" };
+
+    /// `data[start..end :0]`: `with_nul` is the slice INCLUDING its sentinel.
+    ///
+    /// Zig's sentinel slice checks the sentinel (a safety check); so does this,
+    /// in every build, because [`ZStr::as_ptr`] promises C a terminated string.
+    #[inline]
+    #[track_caller]
+    pub fn from_bytes_with_nul(with_nul: &'p [u8]) -> ZStr<'p> {
+        assert_eq!(Some(&0), with_nul.last(), "[:0] slice without its sentinel");
+        ZStr { with_nul }
+    }
+
+    /// `data[start..end :0]`: the bytes `data[start..end]`, whose sentinel is
+    /// `data[end]`.
+    #[inline]
+    #[track_caller]
+    pub fn sentinel(data: &'p [u8], start: usize, end: usize) -> ZStr<'p> {
+        ZStr::from_bytes_with_nul(&data[start..end + 1])
+    }
+
+    /// The bytes, without the sentinel (the `Vec::as_slice` spelling).
+    #[inline]
+    pub fn as_slice(&self) -> &'p [u8] {
+        self.as_bytes()
+    }
+
+    /// The bytes, without the sentinel.
+    #[inline]
+    pub fn as_bytes(&self) -> &'p [u8] {
+        &self.with_nul[..self.with_nul.len() - 1]
+    }
+
+    /// The bytes followed by the sentinel.
+    #[inline]
+    pub fn as_bytes_with_nul(&self) -> &'p [u8] {
+        self.with_nul
+    }
+
+    /// `.ptr`: a NUL-terminated C string, valid while the borrow is.
+    #[inline]
+    pub fn as_ptr(&self) -> *const u8 {
+        self.with_nul.as_ptr()
+    }
+}
+
+impl core::ops::Deref for ZStr<'_> {
+    type Target = [u8];
+    #[inline]
+    fn deref(&self) -> &[u8] {
+        self.as_bytes()
+    }
+}
+
+impl AsRef<[u8]> for ZStr<'_> {
+    #[inline]
+    fn as_ref(&self) -> &[u8] {
+        self.as_bytes()
+    }
+}
+
+impl core::fmt::Debug for ZStr<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{:?}", self.as_bytes().escape_ascii().to_string())
+    }
+}
+
+impl PartialEq<[u8]> for ZStr<'_> {
+    fn eq(&self, other: &[u8]) -> bool {
+        self.as_bytes() == other
+    }
+}
+
+impl PartialEq<&[u8]> for ZStr<'_> {
+    fn eq(&self, other: &&[u8]) -> bool {
+        self.as_bytes() == *other
+    }
+}
+
+impl<const N: usize> PartialEq<[u8; N]> for ZStr<'_> {
+    fn eq(&self, other: &[u8; N]) -> bool {
+        self.as_bytes() == other.as_slice()
+    }
+}
+
+impl<const N: usize> PartialEq<&[u8; N]> for ZStr<'_> {
+    fn eq(&self, other: &&[u8; N]) -> bool {
+        self.as_bytes() == other.as_slice()
+    }
+}
+
+// PORT NOTE (parity tail S7-7, N263): `Command<'p>` borrows its text payloads
+// from the parser that produced it (see `ZStr`), as the reference's slices do.
+// The borrow is the reference's documented lifetime, "only valid until the
+// next call to the parser", enforced by the borrow checker: `Parser::end`
+// returns `Command<'_>` over `&mut self`, so the parser cannot be fed, reset or
+// ended again while the command lives. The two lists the reference allocates
+// through `parser.alloc` (`color_operation.requests`,
+// `kitty_color_protocol.list`) are owned by the command and freed through that
+// allocator when it drops. There is no `Clone`: the reference's by-value copy
+// (`cmd.*`) shares the lists with the parser, which Rust cannot express for an
+// owning value.
+#[derive(Debug, PartialEq)]
+pub enum Command<'p> {
     /// This generally shouldn't ever be set except as an initial zero value.
     /// Ignore it.
     Invalid,
@@ -48,8 +168,9 @@ pub enum Command {
     /// as latin1.
     ///
     /// PORT NOTE (fidelity): the reference declares this `[:0]const u8` (raw,
-    /// NUL-terminated bytes). Modeled as owned `Vec<u8>` — NOT a lossy `String`.
-    ChangeWindowTitle(Vec<u8>),
+    /// NUL-terminated bytes), borrowed from the parser: [`ZStr`], NOT a lossy
+    /// `String`.
+    ChangeWindowTitle(ZStr<'p>),
 
     /// Set the icon of the terminal window. The name of the icon is not
     /// well defined, so this is currently ignored by Ghostty at the time
@@ -57,10 +178,10 @@ pub enum Command {
     /// in the log.
     ///
     /// PORT NOTE (fidelity): reference `[:0]const u8` — raw bytes, not lossy.
-    ChangeWindowIcon(Vec<u8>),
+    ChangeWindowIcon(ZStr<'p>),
 
     /// Semantic prompt command: https://gitlab.freedesktop.org/Per_Bothner/specifications/blob/master/proposals/semantic-prompts.md
-    SemanticPrompt(SemanticPrompt),
+    SemanticPrompt(SemanticPrompt<'p>),
 
     /// Set or get clipboard contents. If data is "?", then the current
     /// clipboard contents are sent to the pty. Otherwise, the contents
@@ -68,7 +189,7 @@ pub enum Command {
     ClipboardContents {
         kind: u8,
         /// PORT NOTE (fidelity): reference `data: [:0]const u8` — raw bytes.
-        data: Vec<u8>,
+        data: ZStr<'p>,
         // terminator: Terminator = .st,
         // (e03475c0c: captured so the OSC 52 read response can echo it.)
         terminator: Terminator,
@@ -83,7 +204,7 @@ pub enum Command {
         /// be a file URL but it is up to the caller to utilize this value.
         ///
         /// PORT NOTE (fidelity): reference `value: [:0]const u8` — raw bytes.
-        value: Vec<u8>,
+        value: ZStr<'p>,
     },
 
     /// OSC 22. Set the mouse shape. There doesn't seem to be a standard
@@ -92,7 +213,7 @@ pub enum Command {
     /// we just parse whatever string is given.
     MouseShape {
         /// PORT NOTE (fidelity): reference `value: [:0]const u8` — raw bytes.
-        value: Vec<u8>,
+        value: ZStr<'p>,
     },
 
     /// OSC color operations to set, reset, or report color settings. Some OSCs
@@ -117,17 +238,17 @@ pub enum Command {
     /// Show a desktop notification (OSC 9 or OSC 777)
     ShowDesktopNotification {
         /// PORT NOTE (fidelity): reference `title: [:0]const u8` — raw bytes.
-        title: Vec<u8>,
+        title: ZStr<'p>,
         /// PORT NOTE (fidelity): reference `body: [:0]const u8` — raw bytes.
-        body: Vec<u8>,
+        body: ZStr<'p>,
     },
 
     /// Start a hyperlink (OSC 8)
     HyperlinkStart {
         /// PORT NOTE (fidelity): reference `id: ?[:0]const u8` — optional raw bytes.
-        id: Option<Vec<u8>>,
+        id: Option<ZStr<'p>>,
         /// PORT NOTE (fidelity): reference `uri: [:0]const u8` — raw bytes.
-        uri: Vec<u8>,
+        uri: ZStr<'p>,
     },
 
     /// End a hyperlink (OSC 8)
@@ -141,10 +262,10 @@ pub enum Command {
     /// ConEmu show GUI message box (OSC 9;2)
     ///
     /// PORT NOTE (fidelity): reference `[:0]const u8` — raw bytes.
-    ConemuShowMessageBox(Vec<u8>),
+    ConemuShowMessageBox(ZStr<'p>),
 
     /// ConEmu change tab title (OSC 9;3)
-    ConemuChangeTabTitle(ConemuChangeTabTitle),
+    ConemuChangeTabTitle(ConemuChangeTabTitle<'p>),
 
     /// ConEmu progress report (OSC 9;4)
     ConemuProgressReport(ProgressReport),
@@ -155,17 +276,17 @@ pub enum Command {
     /// ConEmu GUI macro (OSC 9;6)
     ///
     /// PORT NOTE (fidelity): reference `[:0]const u8` — raw bytes.
-    ConemuGuimacro(Vec<u8>),
+    ConemuGuimacro(ZStr<'p>),
 
     /// ConEmu run process (OSC 9;7)
     ///
     /// PORT NOTE (fidelity): reference `[:0]const u8` — raw bytes.
-    ConemuRunProcess(Vec<u8>),
+    ConemuRunProcess(ZStr<'p>),
 
     /// ConEmu output environment variable (OSC 9;8)
     ///
     /// PORT NOTE (fidelity): reference `[:0]const u8` — raw bytes.
-    ConemuOutputEnvironmentVariable(Vec<u8>),
+    ConemuOutputEnvironmentVariable(ZStr<'p>),
 
     /// ConEmu XTerm keyboard and output emulation (OSC 9;10)
     /// https://conemu.github.io/en/TerminalModes.html
@@ -183,35 +304,35 @@ pub enum Command {
     /// ConEmu comment (OSC 9;11)
     ///
     /// PORT NOTE (fidelity): reference `[:0]const u8` — raw bytes.
-    ConemuComment(Vec<u8>),
+    ConemuComment(ZStr<'p>),
 
     /// Kitty text sizing protocol (OSC 66)
-    KittyTextSizing(parsers::kitty_text_sizing::OSC),
+    KittyTextSizing(parsers::kitty_text_sizing::OSC<'p>),
 
-    KittyClipboardProtocol(KittyClipboardProtocol),
+    KittyClipboardProtocol(KittyClipboardProtocol<'p>),
 
     /// Kitty drag and drop protocol (OSC 72)
     /// https://sw.kovidgoyal.net/kitty/drag-and-drop-protocol/
-    KittyDndProtocol(KittyDndProtocol),
+    KittyDndProtocol(KittyDndProtocol<'p>),
 
     /// OSC 3008. Hierarchical context signalling (UAPI spec).
     /// https://uapi-group.org/specifications/specs/osc_context/
-    ContextSignal(parsers::context_signal::Command),
+    ContextSignal(parsers::context_signal::Command<'p>),
 
     /// Kitty desktop notifications (OSC 99)
-    KittyDesktopNotification(KittyDesktopNotification),
+    KittyDesktopNotification(KittyDesktopNotification<'p>),
 }
 
 // PORT NOTE: `conemu_change_tab_title: union(enum) { reset, value: [:0]const u8 }`
 // — the anonymous tagged union is hoisted to a named type.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ConemuChangeTabTitle {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConemuChangeTabTitle<'p> {
     Reset,
     /// PORT NOTE (fidelity): reference `value: [:0]const u8` — raw bytes.
-    Value(Vec<u8>),
+    Value(ZStr<'p>),
 }
 
-impl Command {
+impl Command<'_> {
     // pub const SemanticPrompt = parsers.semantic_prompt.Command;
     // pub const KittyClipboardProtocol = parsers.kitty_clipboard_protocol.OSC;
 
@@ -323,19 +444,19 @@ pub enum CommandKey {
 
 /// PORT NOTE: `parsers.semantic_prompt.Command` re-exported as
 /// `Command.SemanticPrompt`.
-pub type SemanticPrompt = parsers::semantic_prompt::Command;
+pub type SemanticPrompt<'p> = parsers::semantic_prompt::Command<'p>;
 
 /// PORT NOTE: `parsers.kitty_clipboard_protocol.OSC` re-exported as
 /// `Command.KittyClipboardProtocol`.
-pub type KittyClipboardProtocol = parsers::kitty_clipboard_protocol::OSC;
+pub type KittyClipboardProtocol<'p> = parsers::kitty_clipboard_protocol::OSC<'p>;
 
 /// PORT NOTE: `parsers.kitty_dnd_protocol.OSC` re-exported as
 /// `Command.KittyDndProtocol`.
-pub type KittyDndProtocol = parsers::kitty_dnd_protocol::OSC;
+pub type KittyDndProtocol<'p> = parsers::kitty_dnd_protocol::OSC<'p>;
 
 /// PORT NOTE: `parsers.kitty_desktop_notification.OSC` re-exported as
 /// `Command.KittyDesktopNotification` (`9a8e7ae18`).
-pub type KittyDesktopNotification = parsers::kitty_desktop_notification::OSC;
+pub type KittyDesktopNotification<'p> = parsers::kitty_desktop_notification::OSC<'p>;
 
 /// PORT NOTE: `Command.ProgressReport` — the ConEmu progress report payload.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -569,32 +690,24 @@ pub const MAX_BUF: usize = 2048;
 /// OSC input is untrusted, so these captures must have a finite bound.
 pub const MAX_ALLOCATING_BUF: usize = 8 * 1024 * 1024;
 
-pub struct Parser<'a> {
+pub struct Parser {
     /// Optional allocator used to accept data longer than MAX_BUF.
     /// This only applies to some commands (e.g. OSC 52) that can
     /// reasonably exceed MAX_BUF.
-    pub alloc: Option<rustty_lib::allocator::ZigAllocatorRef<'a>>,
+    // PORT NOTE (parity tail S7-7): `?Allocator`, the runtime allocator handle
+    // (`crate::alloc::Allocator`). It gates the OSCs that need an allocator
+    // (`ensureAllocator`), backs the allocating capture, and grows the two
+    // command lists (`color_operation.requests`, `kitty_color_protocol.list`),
+    // exactly where the reference uses `parser.alloc`. It used to be a
+    // borrowed `ZigAllocatorRef<'a>` beside a separate `capture_alloc` handle
+    // (S174-F3 part 1); the split is retired, and with it the parser's
+    // lifetime parameter.
+    pub alloc: Option<crate::alloc::Allocator>,
 
     /// Maximum number of bytes retained by an allocating capture.
     /// This is configurable primarily so callers and tests can choose a
     /// smaller policy than the default.
     pub max_allocating_bytes: usize,
-
-    /// Where an allocating capture's memory comes from.
-    // PORT NOTE (parity S174-F3): not a reference field. The reference's
-    // allocating capture uses `alloc` itself
-    // (`std.Io.Writer.Allocating.initCapacity(alloc, ..)`, osc.zig:509), but
-    // `alloc` is a `ZigAllocatorRef<'a>` here and a capture that borrowed it
-    // would give every `Stream` (whose parser shares the stream's lifetime)
-    // drop glue over `'a`. So the capture's allocator is set separately, and
-    // only to an allocator that outlives the parser: the embedder's allocator
-    // (`crate::alloc::default(alloc_)`) for the C-created parsers (vt-c's
-    // `rustty_osc_new` and the `rustty_terminal_new` stream), which is where
-    // the reference would put the capture. Every other parser keeps the Rust
-    // global heap, which is where their `alloc` (the process-global zig
-    // allocator) allocates anyway. (S7-7 retires the split: `alloc` becomes
-    // the handle itself.)
-    pub capture_alloc: CaptureAllocator,
 
     /// Current state of the parser.
     pub state: State,
@@ -605,9 +718,15 @@ pub struct Parser<'a> {
     /// Capture state. If this is set then we're actively capturing the
     /// bytes coming into the parser.
     pub capture: Option<Capture>,
-
-    /// The command that is the result of parsing.
-    pub command: Command,
+    // /// The command that is the result of parsing.
+    // command: Command,
+    // PORT NOTE (parity tail S7-7, N263): not a field here. The reference's
+    // `command` points into this parser's own `buffer`/`capture`; a Rust field
+    // holding those borrows would make the parser self-referential (and a
+    // moved parser would leave them dangling). `end` builds the command and
+    // returns it by value, borrowing the parser (see `Command`), and the
+    // per-command cleanup `reset` does in the reference (freeing the two
+    // lists) happens when that value drops.
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -705,11 +824,11 @@ pub enum CaptureBacking {
     /// The count of bytes captured so far into `Parser.buffer` — the Zig fixed
     /// writer's `end` index over `&self.buffer` (osc.zig:462-467).
     Fixed(usize),
-    /// `std.Io.Writer.Allocating`, over `Parser.capture_alloc`.
+    /// `std.Io.Writer.Allocating`, over `Parser.alloc`.
     Allocating(allocator_api2::vec::Vec<u8, CaptureAllocator>),
 }
 
-/// The allocator of an allocating capture (see `Parser.capture_alloc`).
+/// The allocator of an allocating capture (`Parser.alloc`).
 ///
 /// CORRECTION (parity S174-F3): the allocating capture used to be a plain
 /// global-heap `Vec<u8>` that aborted on allocation failure. It now
@@ -923,8 +1042,8 @@ impl Capture {
     }
 }
 
-impl<'a> Parser<'a> {
-    pub fn init(alloc: Option<rustty_lib::allocator::ZigAllocatorRef<'a>>) -> Parser<'a> {
+impl Parser {
+    pub fn init(alloc: Option<crate::alloc::Allocator>) -> Parser {
         // Keeping all our undefined values together so we can
         // visually easily duplicate them in the Valgrind check below.
         // .buffer = undefined,
@@ -941,10 +1060,8 @@ impl<'a> Parser<'a> {
         Parser {
             alloc,
             max_allocating_bytes: MAX_ALLOCATING_BUF,
-            capture_alloc: CaptureAllocator::GLOBAL,
             state: State::Start,
             capture: None,
-            command: Command::Invalid,
             buffer: [0u8; MAX_BUF],
         }
     }
@@ -962,53 +1079,36 @@ impl<'a> Parser<'a> {
         }
 
         // Handle any cleanup that individual OSCs require.
-        match &mut self.command {
-            Command::KittyColorProtocol(v) => {
-                // v.deinit(self.alloc orelse break :kitty_color_protocol);
-                if self.alloc.is_some() {
-                    v.deinit();
-                }
-            }
-            // .color_operation => |*v| color_operation: {
-            //     v.requests.deinit(self.alloc orelse break :color_operation);
-            // },
-            // PORT NOTE (oracle 14c829883): the reference frees the
-            // `SegmentedList` backing `requests` here to avoid an allocation
-            // leak on reset. The port's `color::List` is a plain `Vec<Request>`
-            // (see osc/parsers/color.rs), which Rust drops (and frees) when
-            // `self.command` is overwritten by `Command::Invalid` below — no
-            // manual release is needed or possible to express here.
-            Command::ColorOperation { .. } => {}
-            Command::ChangeWindowIcon(_)
-            | Command::ChangeWindowTitle(_)
-            | Command::ClipboardContents { .. }
-            | Command::ConemuChangeTabTitle(_)
-            | Command::ConemuComment(_)
-            | Command::ConemuGuimacro(_)
-            | Command::ConemuOutputEnvironmentVariable(_)
-            | Command::ConemuProgressReport(_)
-            | Command::ConemuRunProcess(_)
-            | Command::ConemuShowMessageBox(_)
-            | Command::ConemuSleep { .. }
-            | Command::ConemuWaitInput
-            | Command::ConemuXtermEmulation { .. }
-            | Command::HyperlinkEnd
-            | Command::HyperlinkStart { .. }
-            | Command::Invalid
-            | Command::MouseShape { .. }
-            | Command::ReportPwd { .. }
-            | Command::SemanticPrompt(_)
-            | Command::ShowDesktopNotification { .. }
-            | Command::KittyTextSizing(_)
-            | Command::KittyClipboardProtocol(_)
-            | Command::KittyDndProtocol(_)
-            | Command::KittyDesktopNotification(_)
-            | Command::ContextSignal(_) => {}
-        }
+        // switch (self.command) {
+        //     .kitty_color_protocol => |*v| kitty_color_protocol: {
+        //         v.deinit(self.alloc orelse break :kitty_color_protocol);
+        //     },
+        //     .color_operation => |*v| color_operation: {
+        //         v.requests.deinit(self.alloc orelse break :color_operation);
+        //     },
+        //     .change_window_icon, .change_window_title, .clipboard_contents,
+        //     .conemu_change_tab_title, .conemu_comment, .conemu_guimacro,
+        //     .conemu_output_environment_variable, .conemu_progress_report,
+        //     .conemu_run_process, .conemu_show_message_box, .conemu_sleep,
+        //     .conemu_wait_input, .conemu_xterm_emulation, .hyperlink_end,
+        //     .hyperlink_start, .invalid, .mouse_shape, .report_pwd,
+        //     .semantic_prompt, .show_desktop_notification, .kitty_text_sizing,
+        //     .kitty_clipboard_protocol, .kitty_dnd_protocol,
+        //     .kitty_desktop_notification, .context_signal,
+        //     => {},
+        // }
+        // PORT NOTE (parity tail S7-7): the command is not stored in the
+        // parser (see the `command` note on `Parser`). The two lists are owned
+        // by the `Command` value `end` returned, which frees them through
+        // `self.alloc` when it drops; the borrow checker has already ended
+        // that value before `reset` can run. T3: the reference frees them
+        // here, at the next `reset`/`deinit`; the port frees them when the
+        // consumer drops the command, before the parser's next call. The
+        // calls the allocator sees are the same.
 
         self.state = State::Start;
         self.capture = None;
-        self.command = Command::Invalid;
+        // self.command = .invalid;
 
         // if (std.valgrind.runningOnValgrind() > 0) {
         //     // Initialize our undefined fields so Valgrind can catch it.
@@ -1071,12 +1171,13 @@ impl<'a> Parser<'a> {
             }
 
             CaptureMode::Allocating => {
-                if self.alloc.is_none() {
+                // const alloc = self.alloc orelse { ... };
+                let Some(alloc) = self.alloc else {
                     // We don't have an allocator - fall back to a fixed buffer and hope
                     // that it's big enough.
                     self.capture_trailing(CaptureMode::Fixed);
                     return;
-                }
+                };
 
                 // Capture.allocating(&self.capture, alloc, self.max_allocating_bytes) catch {
                 //     // The allocator failed for some reason, fall back to a fixed buffer
@@ -1084,7 +1185,7 @@ impl<'a> Parser<'a> {
                 //     self.captureTrailing(.fixed);
                 //     return;
                 // };
-                let mut w = allocator_api2::vec::Vec::new_in(self.capture_alloc);
+                let mut w = allocator_api2::vec::Vec::new_in(alloc);
                 if w.try_reserve_exact(MAX_BUF.min(self.max_allocating_bytes))
                     .is_err()
                 {
@@ -1441,7 +1542,10 @@ impl<'a> Parser<'a> {
     ///
     /// The returned pointer is only valid until the next call to the parser.
     /// Callers should copy out any data they wish to retain across calls.
-    pub fn end(&mut self, terminator_ch: Option<u8>) -> Option<&mut Command> {
+    // PORT NOTE (parity tail S7-7): `?*Command` into `self.command` becomes
+    // the command by value, borrowing `self` (see `Command`); "only valid
+    // until the next call to the parser" is the borrow.
+    pub fn end(&mut self, terminator_ch: Option<u8>) -> Option<Command<'_>> {
         match self.state {
             State::Start => None,
 
@@ -1540,7 +1644,6 @@ mod ref_tests {
 #[cfg(test)]
 mod capture_tests {
     use super::*;
-    use rustty_lib::allocator::{GlobalZigAllocator, ZigAllocatorRef};
 
     // Parity S156-F4 (no reference test): `ensureAllocator` warns, naming the
     // state with `{t}`, before it invalidates the parser.
@@ -1575,8 +1678,7 @@ mod capture_tests {
         let limit = MAX_BUF + 1;
 
         for prefix in prefixes {
-            let backend = GlobalZigAllocator;
-            let alloc = ZigAllocatorRef::new(&backend);
+            let alloc = crate::alloc::Global;
             let mut p: Parser = Parser::init(Some(alloc));
             p.max_allocating_bytes = limit;
 
@@ -1620,8 +1722,7 @@ mod capture_tests {
     fn parser_next_slice_allocating_captures_have_a_hard_limit() {
         let limit = MAX_BUF + 1;
 
-        let backend = GlobalZigAllocator;
-        let alloc = ZigAllocatorRef::new(&backend);
+        let alloc = crate::alloc::Global;
         let mut p: Parser = Parser::init(Some(alloc));
         p.max_allocating_bytes = limit;
 
@@ -1666,8 +1767,7 @@ mod capture_tests {
     // test "Parser nextSlice overflowing slice is truncated at the limit"
     #[test]
     fn parser_next_slice_overflowing_slice_is_truncated_at_the_limit() {
-        let backend = GlobalZigAllocator;
-        let alloc = ZigAllocatorRef::new(&backend);
+        let alloc = crate::alloc::Global;
         let mut p: Parser = Parser::init(Some(alloc));
         p.max_allocating_bytes = 4;
 
@@ -1744,14 +1844,13 @@ mod capture_tests {
         // Every two-way split of the input must parse identically to
         // the byte-at-a-time path.
         for split in 0..=input.len() {
-            let backend = GlobalZigAllocator;
-            let alloc = ZigAllocatorRef::new(&backend);
+            let alloc = crate::alloc::Global;
             let mut p: Parser = Parser::init(Some(alloc));
             p.next_slice(&input[0..split]);
             p.next_slice(&input[split..]);
 
             // const cmd = p.end(null).?.*;
-            let cmd = p.end(None).unwrap().clone();
+            let cmd = p.end(None).unwrap();
             // try testing.expect(cmd == .clipboard_contents);
             assert!(matches!(cmd, Command::ClipboardContents { .. }));
             match &cmd {
@@ -1771,8 +1870,7 @@ mod capture_tests {
     // test "Parser allocating capture limit includes parser-added bytes"
     #[test]
     fn parser_allocating_capture_limit_includes_parser_added_bytes() {
-        let backend = GlobalZigAllocator;
-        let alloc = ZigAllocatorRef::new(&backend);
+        let alloc = crate::alloc::Global;
         let mut p: Parser = Parser::init(Some(alloc));
         p.max_allocating_bytes = 4;
 

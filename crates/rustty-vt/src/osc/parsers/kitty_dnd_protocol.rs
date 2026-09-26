@@ -22,20 +22,23 @@
 // by `kitty_clipboard_protocol.rs`).
 use crate::osc::{Command, Parser, State, Terminator};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OSC {
+// PORT NOTE (parity tail S7-7, N263): `metadata` and `payload` borrow the
+// parser's capture, as the reference's slices do; they were owned `Vec<u8>`
+// copies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OSC<'p> {
     /// The raw metadata that was received. Parse with
     /// `kitty::dnd::Metadata::parse`.
     ///
     /// PORT NOTE (fidelity): reference `metadata: []const u8` — RAW bytes.
-    pub metadata: Vec<u8>,
+    pub metadata: &'p [u8],
 
     /// The raw payload. Its meaning and encoding depend on the event
     /// type (`t` metadata key). Null when the OSC had no `;` after the
     /// metadata; an empty payload is distinct from no payload.
     ///
     /// PORT NOTE (fidelity): reference `payload: ?[]const u8` — optional RAW bytes.
-    pub payload: Option<Vec<u8>>,
+    pub payload: Option<&'p [u8]>,
 
     /// The terminator used for this OSC, so any response can match it.
     pub terminator: Terminator,
@@ -46,12 +49,12 @@ pub struct OSC {
 // PORT NOTE: "We don't currently support encoding this to C in any way." —
 // the void C encoding is handled at the Command cval dispatch (osc/mod.rs).
 
-pub fn parse<'a>(parser: &'a mut Parser, terminator_ch: Option<u8>) -> Option<&'a mut Command> {
+pub fn parse<'a>(parser: &'a mut Parser, terminator_ch: Option<u8>) -> Option<Command<'a>> {
     // assert(parser.state == .@"72");
     debug_assert!(parser.state == State::S72);
 
     // const cap = if (parser.capture) |*c| c else { ... };
-    let data: &[u8] = {
+    let data: &'a [u8] = {
         let cap = if let Some(c) = parser.capture.as_ref() {
             c
         } else {
@@ -62,7 +65,7 @@ pub fn parse<'a>(parser: &'a mut Parser, terminator_ch: Option<u8>) -> Option<&'
         cap.trailing(&parser.buffer)
     };
 
-    let (metadata, payload): (&[u8], Option<&[u8]>) = 'result: {
+    let (metadata, payload): (&'a [u8], Option<&'a [u8]>) = 'result: {
         // const sep = std.mem.indexOfScalar(u8, data, ';')
         //     orelse break :result .{ data, null };
         let sep = match data.iter().position(|&b| b == b';') {
@@ -74,17 +77,17 @@ pub fn parse<'a>(parser: &'a mut Parser, terminator_ch: Option<u8>) -> Option<&'
     };
 
     // PORT NOTE (fidelity): `metadata`/`payload` are `[]const u8` / `?[]const u8`
-    // RAW bytes; copy the bytes out, NEVER a lossy String decode.
-    let metadata = metadata.to_vec();
-    let payload = payload.map(|p| p.to_vec());
+    // RAW bytes, borrowed from the capture (parity tail S7-7) — NEVER a lossy
+    // String decode.
 
-    parser.command = Command::KittyDndProtocol(OSC {
+    // parser.command = .{ .kitty_dnd_protocol = .{ ... } };
+    let command = Command::KittyDndProtocol(OSC {
         metadata,
         payload,
         terminator: Terminator::init(terminator_ch),
     });
 
-    Some(&mut parser.command)
+    Some(command)
 }
 
 #[cfg(test)]
@@ -102,12 +105,12 @@ mod tests {
         for ch in input.bytes() {
             p.next(ch);
         }
-        let cmd = p.end(Some(0x1b)).unwrap().clone();
+        let cmd = p.end(Some(0x1b)).unwrap();
         let dnd = match cmd {
             Command::KittyDndProtocol(dnd) => dnd,
             _ => unreachable!(),
         };
-        assert_eq!(b"t=a".as_slice(), dnd.metadata.as_slice());
+        assert_eq!(b"t=a".as_slice(), dnd.metadata);
         assert!(dnd.payload.is_none());
     }
 
@@ -118,13 +121,13 @@ mod tests {
         for ch in input.bytes() {
             p.next(ch);
         }
-        let cmd = p.end(Some(0x1b)).unwrap().clone();
+        let cmd = p.end(Some(0x1b)).unwrap();
         let dnd = match cmd {
             Command::KittyDndProtocol(dnd) => dnd,
             _ => unreachable!(),
         };
-        assert_eq!(b"t=a".as_slice(), dnd.metadata.as_slice());
-        assert_eq!(b"".as_slice(), dnd.payload.as_ref().unwrap().as_slice());
+        assert_eq!(b"t=a".as_slice(), dnd.metadata);
+        assert_eq!(b"".as_slice(), dnd.payload.unwrap());
     }
 
     #[test]
@@ -134,16 +137,13 @@ mod tests {
         for ch in input.bytes() {
             p.next(ch);
         }
-        let cmd = p.end(Some(0x1b)).unwrap().clone();
+        let cmd = p.end(Some(0x1b)).unwrap();
         let dnd = match cmd {
             Command::KittyDndProtocol(dnd) => dnd,
             _ => unreachable!(),
         };
-        assert_eq!(b"t=a:i=5".as_slice(), dnd.metadata.as_slice());
-        assert_eq!(
-            b"text/plain text/uri-list".as_slice(),
-            dnd.payload.as_ref().unwrap().as_slice()
-        );
+        assert_eq!(b"t=a:i=5".as_slice(), dnd.metadata);
+        assert_eq!(b"text/plain text/uri-list".as_slice(), dnd.payload.unwrap());
     }
 
     #[test]
@@ -153,16 +153,13 @@ mod tests {
         for ch in input.bytes() {
             p.next(ch);
         }
-        let cmd = p.end(Some(0x1b)).unwrap().clone();
+        let cmd = p.end(Some(0x1b)).unwrap();
         let dnd = match cmd {
             Command::KittyDndProtocol(dnd) => dnd,
             _ => unreachable!(),
         };
-        assert_eq!(b"".as_slice(), dnd.metadata.as_slice());
-        assert_eq!(
-            b"payload".as_slice(),
-            dnd.payload.as_ref().unwrap().as_slice()
-        );
+        assert_eq!(b"".as_slice(), dnd.metadata);
+        assert_eq!(b"payload".as_slice(), dnd.payload.unwrap());
     }
 
     #[test]
@@ -172,7 +169,7 @@ mod tests {
         for ch in input.bytes() {
             p.next(ch);
         }
-        let cmd = p.end(Some(0x07)).unwrap().clone();
+        let cmd = p.end(Some(0x07)).unwrap();
         let dnd = match cmd {
             Command::KittyDndProtocol(dnd) => dnd,
             _ => unreachable!(),

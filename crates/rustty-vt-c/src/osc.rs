@@ -21,7 +21,7 @@
 // `std.log.scoped(.osc)`.
 pub(crate) const LOG_SCOPE: &str = "osc";
 use crate::result::Result;
-use rustty_lib::allocator::{Allocator as CAllocator, ZigAllocator, ZigAllocatorRef};
+use rustty_lib::allocator::Allocator as CAllocator;
 use rustty_vt::osc;
 use std::ffi::c_void;
 use std::os::raw::c_int;
@@ -30,31 +30,46 @@ use crate::cwrap::{create, destroy};
 
 // PORT NOTE (lifetime/allocator): the reference `osc.Parser` carries its own
 // `std.mem.Allocator` (`parser.alloc`, `.init(alloc)` with the resolved
-// `lib.alloc.default(alloc_)`) and `free` reconstructs it from the stored
-// field. rustty's `osc::Parser<'a>` borrows its allocator, so the wrapper owns
-// the resolved allocator (`parser_alloc`) and the parser borrows it, the same
-// shape `terminal::new_` uses for its stream's OSC parser (`alloc_holder`).
-// CORRECTION (parity S174-F3): the C-built parser used to be backed by a
-// process-static global allocator whatever `alloc_` the caller passed.
-//
-// The wrapper also keeps the original (possibly null) C `alloc_` (a `Copy` C
-// struct; see `cwrap` PORT NOTE) so `free` releases the wrapper through the
-// SAME allocator the reference's `parser.alloc.?` would select.
+// `lib.alloc.default(alloc_)`), and so does the port's: `osc::Parser.alloc` is
+// the runtime allocator handle, over the caller's own `RusttyAllocator` (or
+// the Rust heap for NULL). The parser's capture and the command lists it
+// builds go through it (parity S174-F3). The wrapper also keeps the original
+// (possibly null) C `alloc_` (a `Copy` C struct; see `cwrap` PORT NOTE) so
+// `free` releases the wrapper through the SAME allocator the reference's
+// `parser.alloc.?` would select.
+// CORRECTION (parity tail S7-7): the wrapper used to own a boxed
+// `ZigAllocator` for the parser to borrow, plus a separate capture handle; the
+// handle in `parser.alloc` replaces both, and the Rust-heap box is gone.
 
 /// Wrapper around the parser that tracks the allocator for C API usage.
 // PORT NOTE: the reference stores `parser.alloc` inside `osc.Parser` itself
-// (`.init(alloc)`).
+// (`.init(alloc)`), and `end` returns a pointer into `parser.command`.
 pub struct OscParserWrapper {
-    /// Declared first: it borrows `parser_alloc`, which `free` reclaims only
-    /// after the wrapper (and so this parser) has been dropped.
-    parser: osc::Parser<'static>,
-    /// The resolved caller allocator (`lib.alloc.default(alloc_)`) the parser
-    /// allocates its captures through. Held as a raw `Box::into_raw` pointer,
-    /// like `TerminalWrapper.alloc`, so the parser's shared borrow of it is
-    /// not invalidated when the wrapper is moved into its C allocation;
-    /// `free` (or `new`'s failure arm) reclaims it.
-    parser_alloc: *mut dyn ZigAllocator,
+    /// The command the last `end` returned, which `rustty_osc_end`'s pointer
+    /// points at.
+    // PORT NOTE (parity tail S7-7, N263): the reference's `parser.command`.
+    // The port's parser returns the command by value, borrowing the parser's
+    // buffer or capture (`osc::Command<'_>`); the wrapper keeps it here, with
+    // that borrow's lifetime erased, for the C caller. It is valid exactly as
+    // long as the header says the command is ("until the next call to any
+    // `rustty_osc_*` function with the same parser instance", except the
+    // command introspection functions): every other entry point below clears
+    // it FIRST, before it touches the parser. The wrapper lives in its own C
+    // allocation and never moves, so the borrowed bytes stay where the
+    // command points.
+    command: Option<osc::Command<'static>>,
+    parser: osc::Parser,
     alloc: Option<CAllocator>,
+}
+
+impl OscParserWrapper {
+    /// Ends the borrow of the last command (the reference's "only valid until
+    /// the next call to the parser"). Dropping it frees the lists it owns
+    /// through the parser's allocator.
+    #[inline]
+    fn clear_command(&mut self) {
+        self.command = None;
+    }
 }
 
 /// C: RusttyOscParser (R2)
@@ -63,7 +78,7 @@ pub type Parser = *mut OscParserWrapper;
 
 /// C: RusttyOscCommand (R2)
 // pub const Command = ?*osc.Command;
-pub type Command = *mut osc::Command;
+pub type Command = *mut osc::Command<'static>;
 
 // pub fn new(alloc_: ?*const CAllocator, result: *Parser) ... Result {
 //     const alloc = lib.alloc.default(alloc_);
@@ -78,38 +93,26 @@ pub type Command = *mut osc::Command;
 /// writable storage for one `Parser`.
 pub unsafe fn new(alloc_: Option<&CAllocator>, result: *mut Parser) -> Result {
     // const alloc = lib.alloc.default(alloc_);
+    // SAFETY: a non-NULL `alloc_` is valid for the parser's life (the C API's
+    // contract, N260).
+    let alloc = unsafe { rustty_vt::alloc::default(alloc_) };
     // const ptr = alloc.create(osc.Parser) catch return .out_of_memory;
     // ptr.* = .init(alloc);
-    // PORT NOTE: `.init(alloc)` is the parser's own embedded allocator, the
-    // resolved caller allocator (see module PORT NOTE); the original C
-    // `alloc_` is stored for `free`.
-    let parser_alloc: *mut dyn ZigAllocator = Box::into_raw(rustty_lib::allocator::default(alloc_));
-    // SAFETY: `parser_alloc` is a live heap allocation until `free` (or the
-    // failure arm below) reclaims it, after the parser borrowing it is gone.
-    let parser_alloc_ref: &'static dyn ZigAllocator = unsafe { &*parser_alloc };
+    // PORT NOTE: the original C `alloc_` is stored for `free`.
+    // SAFETY: `alloc_` is valid per the caller contract.
     let ptr = unsafe {
         create(
             alloc_,
             OscParserWrapper {
-                parser: osc::Parser::init(Some(ZigAllocatorRef::new(parser_alloc_ref))),
-                parser_alloc,
+                command: None,
+                parser: osc::Parser::init(Some(alloc)),
                 alloc: alloc_.copied(),
             },
         )
     };
     if ptr.is_null() {
-        // `create` dropped the unplaced wrapper (and its parser) already.
-        // SAFETY: nothing borrows the holder any more.
-        drop(unsafe { Box::from_raw(parser_alloc) });
         return Result::OutOfMemory;
     }
-    // The capture allocates through the same resolved allocator (see
-    // `osc::Parser.capture_alloc`): the caller's own `RusttyAllocator`, which
-    // outlives the parser (the C API's contract, N260), or the Rust heap for
-    // NULL (`lib.alloc.default`).
-    // SAFETY: a non-NULL `alloc_` is valid for the parser's life (caller
-    // contract); `ptr` is the live wrapper just created.
-    unsafe { (*ptr).parser.capture_alloc = rustty_vt::alloc::default(alloc_) };
     // result.* = ptr;
     // SAFETY: `result` is writable per the caller contract.
     unsafe { *result = ptr };
@@ -136,17 +139,14 @@ pub unsafe fn free(parser_: Parser) {
     // const alloc = parser.alloc.?;
     // SAFETY: `parser_` is a live wrapper handle (caller contract).
     let alloc = unsafe { (*parser_).alloc };
-    // SAFETY: as above.
-    let parser_alloc = unsafe { (*parser_).parser_alloc };
+    // SAFETY: as above; the last command's borrow ends before the parser goes.
+    unsafe { (*parser_).clear_command() };
     // parser.deinit();
     // SAFETY: `parser_` is a live wrapper handle (caller contract).
     unsafe { (*parser_).parser.deinit() };
     // alloc.destroy(parser);
     // SAFETY: `parser_` was produced by `create` with the same `alloc_`.
     unsafe { destroy(alloc.as_ref(), parser_) };
-    // The parser that borrowed the resolved allocator is gone.
-    // SAFETY: `parser_alloc` came from `Box::into_raw` in `new`.
-    drop(unsafe { Box::from_raw(parser_alloc) });
 }
 
 // pub fn reset(parser_: Parser) ... void {
@@ -157,8 +157,12 @@ pub unsafe fn free(parser_: Parser) {
 /// `parser_` must be a non-null handle returned by `new`.
 pub unsafe fn reset(parser_: Parser) {
     // parser_.?.reset();
-    // SAFETY: `parser_` is non-null per the caller contract (`.?`).
-    unsafe { (*parser_).parser.reset() };
+    // SAFETY: `parser_` is non-null per the caller contract (`.?`); the last
+    // command's borrow ends first.
+    unsafe {
+        (*parser_).clear_command();
+        (*parser_).parser.reset();
+    }
 }
 
 // pub fn next(parser_: Parser, byte: u8) ... void {
@@ -169,8 +173,12 @@ pub unsafe fn reset(parser_: Parser) {
 /// `parser_` must be a non-null handle returned by `new`.
 pub unsafe fn next(parser_: Parser, byte: u8) {
     // parser_.?.next(byte);
-    // SAFETY: `parser_` is non-null per the caller contract (`.?`).
-    unsafe { (*parser_).parser.next(byte) };
+    // SAFETY: `parser_` is non-null per the caller contract (`.?`); the last
+    // command's borrow ends first.
+    unsafe {
+        (*parser_).clear_command();
+        (*parser_).parser.next(byte);
+    }
 }
 
 // pub fn end(parser_: Parser, terminator: u8) ... Command {
@@ -182,12 +190,27 @@ pub unsafe fn next(parser_: Parser, byte: u8) {
 pub unsafe fn end(parser_: Parser, terminator: u8) -> Command {
     // return parser_.?.end(terminator);
     // PORT NOTE: `osc::Parser::end` takes `Option<u8>` (the reference passes the
-    // raw `u8` terminator; rustty wraps it in `Some`). It returns
-    // `Option<&mut Command>`; project back to a raw `*mut Command` (null for
-    // `None`).
+    // raw `u8` terminator; rustty wraps it in `Some`). It returns the command
+    // by value, borrowing the parser; the wrapper keeps it (the reference's
+    // `parser.command`) and C gets a pointer to it (null for `None`).
     // SAFETY: `parser_` is non-null per the caller contract (`.?`).
-    match unsafe { (*parser_).parser.end(Some(terminator)) } {
-        Some(cmd) => cmd as *mut osc::Command,
+    let wrapper = unsafe { &mut *parser_ };
+    // The previous command's borrow ends before the parser is ended again.
+    wrapper.clear_command();
+    match wrapper.parser.end(Some(terminator)) {
+        Some(cmd) => {
+            // SAFETY: lifetime erasure only (same type, same layout). The
+            // command borrows `wrapper.parser`'s buffer or capture. The wrapper
+            // does not move (it lives in its C allocation until `free`), and
+            // every entry point that could touch those bytes (`next`, `reset`,
+            // `end`, `free`) clears `command` before it does, so the erased
+            // borrow is never used past the bytes' validity; this is the
+            // header's lifetime for the returned command.
+            let cmd: osc::Command<'static> =
+                unsafe { core::mem::transmute::<osc::Command<'_>, osc::Command<'static>>(cmd) };
+            let slot = wrapper.command.insert(cmd);
+            slot as *mut osc::Command<'static>
+        }
         None => std::ptr::null_mut(),
     }
 }
@@ -308,24 +331,17 @@ pub unsafe fn command_data(command_: Command, data: c_int, out: *mut c_void) -> 
 unsafe fn command_data_change_window_title_str(command_: Command, out: *mut *const u8) -> bool {
     // const command = command_.?;
     // SAFETY: `command_` is non-null per the caller contract (`.?`).
-    let command = unsafe { &mut *command_ };
+    let command = unsafe { &*command_ };
     // switch (command.*) { .change_window_title => |v| out.* = v.ptr, else => return false }
     match command {
         osc::Command::ChangeWindowTitle(v) => {
             // out.* = v.ptr;
-            // PORT NOTE (fidelity): the reference field is `[:0]const u8` — its
-            // `.ptr` is a NUL-terminated C string. rustty's source-of-truth
-            // `osc::Command::ChangeWindowTitle(Vec<u8>)` stores the title WITHOUT
-            // the trailing NUL (`change_window_title.rs` excludes the sentinel),
-            // so we restore the sentinel in place before exposing the pointer to
-            // C consumers. C consumers reach this command only through this FFI
-            // surface, so appending a single NUL byte is behavior-equivalent to
-            // the reference's `[:0]const u8` and keeps the returned pointer a
-            // valid C string. This mutates the owned `Vec` (the command outlives
-            // the call via the parser), never reallocating away the live bytes.
-            if v.last() != Some(&0) {
-                v.push(0);
-            }
+            // CORRECTION (parity tail S7-7): the title used to be an owned
+            // `Vec<u8>` without its sentinel, and this pushed a NUL onto it
+            // before exposing the pointer. It is the reference's `[:0]const u8`
+            // now, a `ZStr` borrowing the parser's buffer WITH its sentinel,
+            // so `.ptr` is already a C string, owned by the parser, as the
+            // header says.
             // SAFETY: `out` is writable `*const u8` storage (caller contract).
             unsafe { *out = v.as_ptr() };
             // return true;

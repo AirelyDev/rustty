@@ -58,8 +58,8 @@ impl Harness {
             Global,
             &mut self.output,
             &osc::KittyDndProtocol {
-                metadata: metadata.to_vec(),
-                payload: payload.map(|p| p.to_vec()),
+                metadata,
+                payload,
                 terminator: osc::Terminator::St,
             },
         )
@@ -738,7 +738,7 @@ fn dnd_bel_terminator_echoed_in_responses() {
         Global,
         &mut h.output,
         &osc::KittyDndProtocol {
-            metadata: b"t=q".to_vec(),
+            metadata: b"t=q",
             payload: None,
             terminator: osc::Terminator::Bel,
         },
@@ -911,9 +911,9 @@ fn dnd_over_cap_registration_list_never_completes() {
 fn dnd_state_routes_through_the_allocator_handle() {
     use crate::alloc::testing::{with_handle, Config, CountingAllocator, FailingAllocator};
 
-    let cmd = |metadata: &[u8], payload: Option<&[u8]>| osc::KittyDndProtocol {
-        metadata: metadata.to_vec(),
-        payload: payload.map(|p| p.to_vec()),
+    let cmd = |metadata: &'static [u8], payload: Option<&'static [u8]>| osc::KittyDndProtocol {
+        metadata,
+        payload,
         terminator: osc::Terminator::St,
     };
     let ev = dnd::MoveEvent {

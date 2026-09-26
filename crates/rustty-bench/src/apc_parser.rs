@@ -23,12 +23,6 @@ use rustty_vt::apc;
 // const log = std.log.scoped(.@"apc-parser-bench");
 const LOG_SCOPE: &str = "apc-parser-bench";
 
-// PORT NOTE: backs the stream's `Options.allocator` (a `ZigAllocatorRef`) with
-// the process-global allocator — see `terminal_stream.rs`'s identical static:
-// a `'static` allocator ref coerces to any stream lifetime.
-static GLOBAL_ZIG_ALLOCATOR: rustty_lib::allocator::GlobalZigAllocator =
-    rustty_lib::allocator::GlobalZigAllocator;
-
 // opts: Options,
 // stream: Stream,
 // /// The file, opened in the setup function.
@@ -77,7 +71,7 @@ impl rustty_args::args::Target for Options {
 }
 
 // const Stream = terminalpkg.Stream(Handler);
-type Stream = rustty_vt::stream::Stream<'static, Handler>;
+type Stream = rustty_vt::stream::Stream<Handler>;
 
 /// A stream handler that only processes APC actions, parsing and
 /// immediately discarding completed commands.
@@ -132,14 +126,11 @@ impl ApcParser {
             //     .allocator = alloc,
             //     .handler = .{ .alloc = alloc },
             // }),
-            // PORT NOTE: `alloc` here is a `std.mem.Allocator`; the stream
-            // options want a `ZigAllocatorRef`, so we back it with the
-            // process-static `GlobalZigAllocator` exactly as
-            // `terminal_stream.rs` does and for the same reason.
+            // PORT NOTE: `alloc` here is the Rust heap; the stream options
+            // take the runtime allocator handle (parity tail S7-7; it used to
+            // be a process-static `GlobalZigAllocator` reference).
             stream: Stream::init(rustty_vt::stream::Options {
-                allocator: Some(rustty_lib::allocator::ZigAllocatorRef::new(
-                    &GLOBAL_ZIG_ALLOCATOR,
-                )),
+                allocator: Some(rustty_vt::alloc::Global),
                 handler: Handler {
                     alloc,
                     apc: apc::Handler::default(),

@@ -14,43 +14,48 @@ use crate::osc::{Command, Parser};
 // logging facade wired into this crate (matching the convention used by the
 // `osc.zig` scoped logger), so the scoped logger and its calls are ported as
 // commented lines.
+// CORRECTION (parity tail S7-7): the crate logs through the `log` facade
+// (S156-F4). The three "unable to append" warns are live: the list grows
+// through the parser's allocator now, so their failure path is reachable.
+// The other four remain comments (outside S7-7's allocation scope; they are
+// counted in G-LOGFILE's allowance for this file).
 // const log = std.log.scoped(.osc_kitty_color);
+const LOG_SCOPE: &str = "osc_kitty_color";
 
 /// Parse OSC 21, the Kitty Color Protocol.
-pub fn parse<'a>(parser: &'a mut Parser, terminator_ch: Option<u8>) -> Option<&'a mut Command> {
+pub fn parse<'a>(parser: &'a mut Parser, terminator_ch: Option<u8>) -> Option<Command<'a>> {
     // assert(parser.state == .@"21");
     debug_assert!(parser.state == crate::osc::State::S21);
 
     // const alloc = parser.alloc orelse { ... };
-    if parser.alloc.is_none() {
+    let Some(alloc) = parser.alloc else {
         parser.state = crate::osc::State::Invalid;
         return None;
-    }
-    if parser.capture.is_none() {
-        parser.state = crate::osc::State::Invalid;
-        return None;
-    }
-    parser.command = Command::KittyColorProtocol(kitty_color::OSC {
-        list: Vec::new(),
-        terminator: crate::osc::Terminator::init(terminator_ch),
-    });
-    // PORT NOTE: `data = cap.trailing()` is borrowed up front; in Rust we take
-    // an owned copy so the mutable `parser.command` borrow below does not alias
-    // the capture buffer.
-    let data: Vec<u8> = parser
-        .capture
-        .as_ref()
-        .unwrap()
-        .trailing(&parser.buffer)
-        .to_vec();
-    let list = match &mut parser.command {
-        Command::KittyColorProtocol(osc) => &mut osc.list,
-        _ => unreachable!(),
     };
+    // const cap = if (parser.capture) |*c| c else { ... };
+    let Some(cap) = parser.capture.as_ref() else {
+        parser.state = crate::osc::State::Invalid;
+        return None;
+    };
+    // parser.command = .{
+    //     .kitty_color_protocol = .{
+    //         .list = .empty,
+    //         .terminator = .init(terminator_ch),
+    //     },
+    // };
+    // const list = &parser.command.kitty_color_protocol.list;
+    // PORT NOTE (parity tail S7-7): the command is a local returned by value
+    // (see `osc::Command`); an early `return null` drops it, freeing what the
+    // list had grown through `alloc` (the reference frees it at the next
+    // `reset`). The capture is read in place, as the reference's
+    // `cap.trailing()` is; the port used to copy it into a `Vec`.
+    let mut osc = kitty_color::OSC::init(alloc, crate::osc::Terminator::init(terminator_ch));
+    // const data = cap.trailing();
+    let data = cap.trailing(&parser.buffer);
     // var kv_it = std.mem.splitScalar(u8, data, ';');
     let kv_it = data.split(|&b| b == b';');
     for kv in kv_it {
-        if list.len() >= kitty_color::Kind::MAX * 2 {
+        if osc.list.len() >= kitty_color::Kind::MAX * 2 {
             // log.warn("exceeded limit for number of keys in kitty color protocol, ignoring", .{});
             parser.state = crate::osc::State::Invalid;
             return None;
@@ -84,11 +89,26 @@ pub fn parse<'a>(parser: &'a mut Parser, terminator_ch: Option<u8>) -> Option<&'
         let rest = it.next().unwrap_or(&[]);
         let value = trim_spaces(rest);
         if value.is_empty() {
-            // list.append(alloc, .{ .reset = key }) catch ...
-            list.push(kitty_color::Request::Reset(key));
+            // list.append(alloc, .{ .reset = key }) catch |err| {
+            //     log.warn("unable to append kitty color protocol option: {}", .{err});
+            //     continue;
+            // };
+            if let Err(err) = osc.append(kitty_color::Request::Reset(key)) {
+                log::warn!(
+                    target: LOG_SCOPE,
+                    "unable to append kitty color protocol option: {err:?}"
+                );
+                continue;
+            }
         } else if value == b"?" {
-            // list.append(alloc, .{ .query = key }) catch ...
-            list.push(kitty_color::Request::Query(key));
+            // list.append(alloc, .{ .query = key }) catch |err| { ... };
+            if let Err(err) = osc.append(kitty_color::Request::Query(key)) {
+                log::warn!(
+                    target: LOG_SCOPE,
+                    "unable to append kitty color protocol option: {err:?}"
+                );
+                continue;
+            }
         } else {
             // PORT NOTE: the byte slice is passed THROUGH, unconverted, like
             // the reference's `RGB.parse(value)` on `[]const u8`. A lossy
@@ -106,11 +126,18 @@ pub fn parse<'a>(parser: &'a mut Parser, terminator_ch: Option<u8>) -> Option<&'
                     continue;
                 }
             };
-            // list.append(alloc, .{ .set = .{ .key = key, .color = ... } }) catch ...
-            list.push(kitty_color::Request::Set { key, color });
+            // list.append(alloc, .{ .set = .{ .key = key, .color = ... } }) catch |err| { ... };
+            if let Err(err) = osc.append(kitty_color::Request::Set { key, color }) {
+                log::warn!(
+                    target: LOG_SCOPE,
+                    "unable to append kitty color protocol option: {err:?}"
+                );
+                continue;
+            }
         }
     }
-    Some(&mut parser.command)
+    // return &parser.command;
+    Some(Command::KittyColorProtocol(osc))
 }
 
 // PORT NOTE: `std.mem.trim(u8, slice, " ")` — strip leading/trailing space
@@ -131,7 +158,6 @@ fn trim_spaces(s: &[u8]) -> &[u8] {
 mod tests {
     use crate::kitty::color::{Kind, Request, Special};
     use crate::osc::{Command, Parser};
-    use rustty_lib::allocator::{GlobalZigAllocator, ZigAllocatorRef};
 
     // PORT NOTE: the reference uses `testing.allocator`. The OSC 21 list is a
     // Rust `Vec` (self-owning), so the parser only needs the allocator's
@@ -149,8 +175,7 @@ mod tests {
     // requests in the list.
     #[test]
     fn osc_21_invalid_utf8_value_is_skipped_not_a_crash() {
-        let backend = GlobalZigAllocator;
-        let alloc = ZigAllocatorRef::new(&backend);
+        let alloc = crate::alloc::Global;
         let mut p: Parser = Parser::init(Some(alloc));
 
         // The exact minimized fuzz input from
@@ -163,7 +188,7 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(Some(0x9c)).unwrap().clone();
+        let cmd = p.end(Some(0x9c)).unwrap();
         let osc = match cmd {
             Command::KittyColorProtocol(osc) => osc,
             _ => panic!("expected a kitty color protocol command"),
@@ -176,8 +201,7 @@ mod tests {
     // lossy decode was not required for the crash, only for the second route.
     #[test]
     fn osc_21_non_ascii_value_is_skipped_not_a_crash() {
-        let backend = GlobalZigAllocator;
-        let alloc = ZigAllocatorRef::new(&backend);
+        let alloc = crate::alloc::Global;
         let mut p: Parser = Parser::init(Some(alloc));
 
         // `1=aébcd` is 6 BYTES of value, hitting the 6-byte arm whose
@@ -187,7 +211,7 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(Some(0x1b)).unwrap().clone();
+        let cmd = p.end(Some(0x1b)).unwrap();
         let osc = match cmd {
             Command::KittyColorProtocol(osc) => osc,
             _ => panic!("expected a kitty color protocol command"),
@@ -198,8 +222,7 @@ mod tests {
 
     #[test]
     fn osc_21_kitty_color_protocol() {
-        let backend = GlobalZigAllocator;
-        let alloc = ZigAllocatorRef::new(&backend);
+        let alloc = crate::alloc::Global;
         let mut p: Parser = Parser::init(Some(alloc));
 
         let input = "21;foreground=?;background=rgb:f0/f8/ff;cursor=aliceblue;cursor_text;visual_bell=;selection_foreground=#xxxyyzz;selection_background=?;selection_background=#aabbcc;2=?;3=rgbi:1.0/1.0/1.0";
@@ -207,7 +230,7 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(Some(0x1b)).unwrap().clone();
+        let cmd = p.end(Some(0x1b)).unwrap();
         assert!(matches!(cmd, Command::KittyColorProtocol(_)));
         let osc = match cmd {
             Command::KittyColorProtocol(osc) => osc,
@@ -309,8 +332,7 @@ mod tests {
 
     #[test]
     fn osc_21_kitty_color_protocol_double_reset() {
-        let backend = GlobalZigAllocator;
-        let alloc = ZigAllocatorRef::new(&backend);
+        let alloc = crate::alloc::Global;
         let mut p: Parser = Parser::init(Some(alloc));
 
         let input = "21;foreground=?;background=rgb:f0/f8/ff;cursor=aliceblue;cursor_text;visual_bell=;selection_foreground=#xxxyyzz;selection_background=?;selection_background=#aabbcc;2=?;3=rgbi:1.0/1.0/1.0";
@@ -318,7 +340,7 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(Some(0x1b)).unwrap().clone();
+        let cmd = p.end(Some(0x1b)).unwrap();
         assert!(matches!(cmd, Command::KittyColorProtocol(_)));
 
         p.reset();
@@ -327,8 +349,7 @@ mod tests {
 
     #[test]
     fn osc_21_kitty_color_protocol_reset_after_invalid() {
-        let backend = GlobalZigAllocator;
-        let alloc = ZigAllocatorRef::new(&backend);
+        let alloc = crate::alloc::Global;
         let mut p: Parser = Parser::init(Some(alloc));
 
         let input = "21;foreground=?;background=rgb:f0/f8/ff;cursor=aliceblue;cursor_text;visual_bell=;selection_foreground=#xxxyyzz;selection_background=?;selection_background=#aabbcc;2=?;3=rgbi:1.0/1.0/1.0";
@@ -336,7 +357,7 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(Some(0x1b)).unwrap().clone();
+        let cmd = p.end(Some(0x1b)).unwrap();
         assert!(matches!(cmd, Command::KittyColorProtocol(_)));
 
         p.reset();
@@ -350,8 +371,7 @@ mod tests {
 
     #[test]
     fn osc_21_kitty_color_protocol_no_key() {
-        let backend = GlobalZigAllocator;
-        let alloc = ZigAllocatorRef::new(&backend);
+        let alloc = crate::alloc::Global;
         let mut p: Parser = Parser::init(Some(alloc));
 
         let input = "21;";
@@ -359,7 +379,7 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(Some(0x1b)).unwrap().clone();
+        let cmd = p.end(Some(0x1b)).unwrap();
         assert!(matches!(cmd, Command::KittyColorProtocol(_)));
         match cmd {
             Command::KittyColorProtocol(osc) => assert_eq!(0, osc.list.len()),

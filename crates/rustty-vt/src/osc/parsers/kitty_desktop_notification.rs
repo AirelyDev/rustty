@@ -32,30 +32,33 @@ use crate::osc::encoding;
 pub const MAX_PLAIN_PAYLOAD_BYTES: usize = 2048;
 pub const MAX_ENCODED_PAYLOAD_BYTES: usize = 4096;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OSC {
+// PORT NOTE (parity tail S7-7, N263): `metadata` and `payload` borrow the
+// parser's capture, as the reference's slices do; they were owned `Vec<u8>`
+// copies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OSC<'p> {
     /// The raw metadata that was received. It can be parsed by using the `readOption` method.
     ///
     /// PORT NOTE (fidelity): reference `metadata: []const u8` — RAW bytes.
-    pub metadata: Vec<u8>,
+    pub metadata: &'p [u8],
     /// The raw payload. It may be Base64 encoded, check the `e` option.
     ///
     /// PORT NOTE (fidelity): reference `payload: []const u8` — RAW bytes.
-    pub payload: Vec<u8>,
+    pub payload: &'p [u8],
     /// The terminator that was used in case we need to send a response.
     pub terminator: Terminator,
 }
 
-impl OSC {
+impl<'p> OSC<'p> {
     /// Decode an option from the metadata.
     // PORT NOTE: the reference uses a `comptime key: Option` parameter with a
     // dependent return type `key.Type()`. Rust has no comptime-dependent return
     // types, so `read_option` takes a runtime `Option_` and returns a tagged
     // `OptionValue` whose active variant matches the option's `Type()` (the
     // kitty_clipboard_protocol.rs precedent).
-    pub fn read_option(&self, key: Option_) -> OptionValue<'_> {
+    pub fn read_option(&self, key: Option_) -> OptionValue<'p> {
         // return key.read(self.metadata);
-        key.read(&self.metadata)
+        key.read(self.metadata)
     }
 }
 
@@ -581,7 +584,7 @@ fn trim_whitespace(s: &[u8]) -> &[u8] {
     &s[start..end]
 }
 
-pub fn parse<'a>(parser: &'a mut Parser, terminator_ch: Option<u8>) -> Option<&'a mut Command> {
+pub fn parse<'a>(parser: &'a mut Parser, terminator_ch: Option<u8>) -> Option<Command<'a>> {
     // assert(parser.state == .@"99");
     debug_assert!(parser.state == State::S99);
 
@@ -591,7 +594,7 @@ pub fn parse<'a>(parser: &'a mut Parser, terminator_ch: Option<u8>) -> Option<&'
     // };
     //
     // const data = cap.trailing();
-    let data: &[u8] = {
+    let data: &'a [u8] = {
         let cap = if let Some(c) = parser.capture.as_ref() {
             c
         } else {
@@ -637,19 +640,17 @@ pub fn parse<'a>(parser: &'a mut Parser, terminator_ch: Option<u8>) -> Option<&'
     }
 
     // PORT NOTE (fidelity): the reference `metadata`/`payload` are `[]const u8`
-    // slices borrowing the capture; the ported `OSC` owns copies of the RAW
-    // bytes (the established convention of the OSC 5522/72 parser ports) —
-    // NEVER a lossy String decode.
-    let metadata = metadata.to_vec();
-    let payload = payload.to_vec();
+    // slices borrowing the capture, and so are the port's (parity tail S7-7;
+    // they were owned copies) — NEVER a lossy String decode.
 
-    parser.command = Command::KittyDesktopNotification(OSC {
+    // parser.command = .{ .kitty_desktop_notification = .{ ... } };
+    let command = Command::KittyDesktopNotification(OSC {
         metadata,
         payload,
         terminator: Terminator::init(terminator_ch),
     });
 
-    Some(&mut parser.command)
+    Some(command)
 }
 
 #[cfg(test)]
@@ -667,28 +668,33 @@ mod tests {
     /// `kitty_desktop_notification` command (the shared preamble of the
     /// reference tests: `var p: Parser = .init(null); for (input) |ch|
     /// p.next(ch); const cmd = p.end('\x1b').?.*;`).
-    fn parse_kdn(input: &str) -> OSC {
-        let mut p: Parser = Parser::init(None);
+    // PORT NOTE (parity tail S7-7): a macro, not a function: the command
+    // borrows the parser, so the parser must live in the test's own scope.
+    // `parse_kdn!(kdn, input)` declares both.
+    macro_rules! parse_kdn {
+        ($kdn:ident, $input:expr) => {
+            let mut p: Parser = Parser::init(None);
 
-        for ch in input.bytes() {
-            p.next(ch);
-        }
+            for ch in $input.bytes() {
+                p.next(ch);
+            }
 
-        let cmd = p.end(Some(0x1b)).unwrap().clone();
-        // try testing.expect(cmd == .kitty_desktop_notification);
-        assert!(matches!(cmd, Command::KittyDesktopNotification(_)));
-        match cmd {
-            Command::KittyDesktopNotification(v) => v,
-            _ => unreachable!(),
-        }
+            let cmd = p.end(Some(0x1b)).unwrap();
+            // try testing.expect(cmd == .kitty_desktop_notification);
+            assert!(matches!(cmd, Command::KittyDesktopNotification(_)));
+            let $kdn: OSC = match cmd {
+                Command::KittyDesktopNotification(v) => v,
+                _ => unreachable!(),
+            };
+        };
     }
 
     // test "OSC 99: empty metadata and payload" {
     #[test]
     fn osc_99_empty_metadata_and_payload() {
-        let kdn = parse_kdn("99;;");
-        assert_eq!(b"".as_slice(), kdn.metadata.as_slice());
-        assert_eq!(b"".as_slice(), kdn.payload.as_slice());
+        parse_kdn!(kdn, "99;;");
+        assert_eq!(b"".as_slice(), kdn.metadata);
+        assert_eq!(b"".as_slice(), kdn.payload);
         // try testing.expectEqualDeep(Option.a.default(), cmd...readOption(.a));
         assert_eq!(Option_::A.default(), kdn.read_option(Option_::A));
         assert!(!kdn.read_option(Option_::C).as_bool());
@@ -716,9 +722,9 @@ mod tests {
     // test "OSC 99: empty metadata with payload" {
     #[test]
     fn osc_99_empty_metadata_with_payload() {
-        let kdn = parse_kdn("99;;bobr");
-        assert_eq!(b"".as_slice(), kdn.metadata.as_slice());
-        assert_eq!(b"bobr".as_slice(), kdn.payload.as_slice());
+        parse_kdn!(kdn, "99;;bobr");
+        assert_eq!(b"".as_slice(), kdn.metadata);
+        assert_eq!(b"bobr".as_slice(), kdn.payload);
         assert_eq!(Option_::A.default(), kdn.read_option(Option_::A));
         assert!(!kdn.read_option(Option_::C).as_bool());
         assert!(kdn.read_option(Option_::D).as_bool());
@@ -775,8 +781,7 @@ mod tests {
         for case in cases {
             // var p: Parser = .init(testing.allocator);
             // defer p.deinit();
-            let backend = rustty_lib::allocator::GlobalZigAllocator;
-            let alloc = rustty_lib::allocator::ZigAllocatorRef::new(&backend);
+            let alloc = crate::alloc::Global;
             let mut p: Parser = Parser::init(Some(alloc));
 
             for ch in "99;".bytes() {
@@ -799,7 +804,7 @@ mod tests {
     // test "OSC 99: unknown prefix does not hide dotted identifier" {
     #[test]
     fn osc_99_unknown_prefix_does_not_hide_dotted_identifier() {
-        let kdn = parse_kdn("99;invalid=wrong:i=org.ghostty;payload");
+        parse_kdn!(kdn, "99;invalid=wrong:i=org.ghostty;payload");
         // try testing.expectEqualStrings("org.ghostty", cmd...readOption(.i).?);
         assert_eq!(
             b"org.ghostty".as_slice(),
@@ -810,30 +815,30 @@ mod tests {
     // test "OSC 99: single parameter i" {
     #[test]
     fn osc_99_single_parameter_i() {
-        let kdn = parse_kdn("99;i=bobr;payload");
+        parse_kdn!(kdn, "99;i=bobr;payload");
         assert_eq!(
             b"bobr".as_slice(),
             kdn.read_option(Option_::I).as_opt_bytes().unwrap()
         );
-        assert_eq!(b"payload".as_slice(), kdn.payload.as_slice());
+        assert_eq!(b"payload".as_slice(), kdn.payload);
     }
 
     // test "OSC 99: repeated parameter i" {
     #[test]
     fn osc_99_repeated_parameter_i() {
-        let kdn = parse_kdn("99;i=bobr:i=foobar;payload");
+        parse_kdn!(kdn, "99;i=bobr:i=foobar;payload");
         assert_eq!(
             b"bobr".as_slice(),
             kdn.read_option(Option_::I).as_opt_bytes().unwrap()
         );
-        assert_eq!(b"payload".as_slice(), kdn.payload.as_slice());
+        assert_eq!(b"payload".as_slice(), kdn.payload);
     }
 
     // test "OSC 99: multiple types" {
     #[test]
     fn osc_99_multiple_types() {
-        let kdn = parse_kdn("99;t=mail: t = chat : t = alert ;notification");
-        assert_eq!(b"notification".as_slice(), kdn.payload.as_slice());
+        parse_kdn!(kdn, "99;t=mail: t = chat : t = alert ;notification");
+        assert_eq!(b"notification".as_slice(), kdn.payload);
         let mut it = kdn.read_option(Option_::T).into_iterator();
         assert_eq!(b"mail".as_slice(), it.next().unwrap());
         assert_eq!(b"chat".as_slice(), it.next().unwrap());
@@ -844,8 +849,8 @@ mod tests {
     // test "OSC 99: a 1" {
     #[test]
     fn osc_99_a_1() {
-        let kdn = parse_kdn("99;a=report,focus;foobar");
-        assert_eq!(b"foobar".as_slice(), kdn.payload.as_slice());
+        parse_kdn!(kdn, "99;a=report,focus;foobar");
+        assert_eq!(b"foobar".as_slice(), kdn.payload);
         // try testing.expectEqualDeep(Action{ .report = true, .focus = true }, ...);
         assert_eq!(
             Action {
@@ -859,8 +864,8 @@ mod tests {
     // test "OSC 99: a 2" {
     #[test]
     fn osc_99_a_2() {
-        let kdn = parse_kdn("99;a=report,-focus;foobar");
-        assert_eq!(b"foobar".as_slice(), kdn.payload.as_slice());
+        parse_kdn!(kdn, "99;a=report,-focus;foobar");
+        assert_eq!(b"foobar".as_slice(), kdn.payload);
         assert_eq!(
             Action {
                 report: true,
@@ -873,8 +878,8 @@ mod tests {
     // test "OSC 99: a 3" {
     #[test]
     fn osc_99_a_3() {
-        let kdn = parse_kdn("99;a=-report,focus;foobar");
-        assert_eq!(b"foobar".as_slice(), kdn.payload.as_slice());
+        parse_kdn!(kdn, "99;a=-report,focus;foobar");
+        assert_eq!(b"foobar".as_slice(), kdn.payload);
         assert_eq!(
             Action {
                 report: false,
@@ -887,8 +892,8 @@ mod tests {
     // test "OSC 99: a 4" {
     #[test]
     fn osc_99_a_4() {
-        let kdn = parse_kdn("99;a=-report,-focus;foobar");
-        assert_eq!(b"foobar".as_slice(), kdn.payload.as_slice());
+        parse_kdn!(kdn, "99;a=-report,-focus;foobar");
+        assert_eq!(b"foobar".as_slice(), kdn.payload);
         assert_eq!(
             Action {
                 report: false,
@@ -901,80 +906,80 @@ mod tests {
     // test "OSC 99: c 1" {
     #[test]
     fn osc_99_c_1() {
-        let kdn = parse_kdn("99;c=0;foobar");
-        assert_eq!(b"foobar".as_slice(), kdn.payload.as_slice());
+        parse_kdn!(kdn, "99;c=0;foobar");
+        assert_eq!(b"foobar".as_slice(), kdn.payload);
         assert!(!kdn.read_option(Option_::C).as_bool());
     }
 
     // test "OSC 99: c 2" {
     #[test]
     fn osc_99_c_2() {
-        let kdn = parse_kdn("99;c=1;foobar");
-        assert_eq!(b"foobar".as_slice(), kdn.payload.as_slice());
+        parse_kdn!(kdn, "99;c=1;foobar");
+        assert_eq!(b"foobar".as_slice(), kdn.payload);
         assert!(kdn.read_option(Option_::C).as_bool());
     }
 
     // test "OSC 99: c 3" {
     #[test]
     fn osc_99_c_3() {
-        let kdn = parse_kdn("99;c=bobr;foobar");
-        assert_eq!(b"foobar".as_slice(), kdn.payload.as_slice());
+        parse_kdn!(kdn, "99;c=bobr;foobar");
+        assert_eq!(b"foobar".as_slice(), kdn.payload);
         assert!(!kdn.read_option(Option_::C).as_bool());
     }
 
     // test "OSC 99: d 1" {
     #[test]
     fn osc_99_d_1() {
-        let kdn = parse_kdn("99;d=0;foobar");
-        assert_eq!(b"foobar".as_slice(), kdn.payload.as_slice());
+        parse_kdn!(kdn, "99;d=0;foobar");
+        assert_eq!(b"foobar".as_slice(), kdn.payload);
         assert!(!kdn.read_option(Option_::D).as_bool());
     }
 
     // test "OSC 99: d 2" {
     #[test]
     fn osc_99_d_2() {
-        let kdn = parse_kdn("99;d=1;foobar");
-        assert_eq!(b"foobar".as_slice(), kdn.payload.as_slice());
+        parse_kdn!(kdn, "99;d=1;foobar");
+        assert_eq!(b"foobar".as_slice(), kdn.payload);
         assert!(kdn.read_option(Option_::D).as_bool());
     }
 
     // test "OSC 99: d 3" {
     #[test]
     fn osc_99_d_3() {
-        let kdn = parse_kdn("99;d=bobr;foobar");
-        assert_eq!(b"foobar".as_slice(), kdn.payload.as_slice());
+        parse_kdn!(kdn, "99;d=bobr;foobar");
+        assert_eq!(b"foobar".as_slice(), kdn.payload);
         assert!(kdn.read_option(Option_::D).as_bool());
     }
 
     // test "OSC 99: e 1" {
     #[test]
     fn osc_99_e_1() {
-        let kdn = parse_kdn("99;e=0;foobar");
-        assert_eq!(b"foobar".as_slice(), kdn.payload.as_slice());
+        parse_kdn!(kdn, "99;e=0;foobar");
+        assert_eq!(b"foobar".as_slice(), kdn.payload);
         assert!(!kdn.read_option(Option_::E).as_bool());
     }
 
     // test "OSC 99: e 2" {
     #[test]
     fn osc_99_e_2() {
-        let kdn = parse_kdn("99;e=1;foobar");
-        assert_eq!(b"foobar".as_slice(), kdn.payload.as_slice());
+        parse_kdn!(kdn, "99;e=1;foobar");
+        assert_eq!(b"foobar".as_slice(), kdn.payload);
         assert!(kdn.read_option(Option_::E).as_bool());
     }
 
     // test "OSC 99: e 3" {
     #[test]
     fn osc_99_e_3() {
-        let kdn = parse_kdn("99;e=bobr;foobar");
-        assert_eq!(b"foobar".as_slice(), kdn.payload.as_slice());
+        parse_kdn!(kdn, "99;e=bobr;foobar");
+        assert_eq!(b"foobar".as_slice(), kdn.payload);
         assert!(!kdn.read_option(Option_::E).as_bool());
     }
 
     // test "OSC 99: f 1" {
     #[test]
     fn osc_99_f_1() {
-        let kdn = parse_kdn("99;f=R2hvc3R0eQ==;foobar");
-        assert_eq!(b"foobar".as_slice(), kdn.payload.as_slice());
+        parse_kdn!(kdn, "99;f=R2hvc3R0eQ==;foobar");
+        assert_eq!(b"foobar".as_slice(), kdn.payload);
         assert_eq!(
             b"R2hvc3R0eQ==".as_slice(),
             kdn.read_option(Option_::F).as_opt_bytes().unwrap()
@@ -984,8 +989,8 @@ mod tests {
     // test "OSC 99: f 2" {
     #[test]
     fn osc_99_f_2() {
-        let kdn = parse_kdn("99;c=0:f= R2hvc3R0eQ== ;foobar");
-        assert_eq!(b"foobar".as_slice(), kdn.payload.as_slice());
+        parse_kdn!(kdn, "99;c=0:f= R2hvc3R0eQ== ;foobar");
+        assert_eq!(b"foobar".as_slice(), kdn.payload);
         assert_eq!(
             b"R2hvc3R0eQ==".as_slice(),
             kdn.read_option(Option_::F).as_opt_bytes().unwrap()
@@ -995,8 +1000,8 @@ mod tests {
     // test "OSC 99: g 1" {
     #[test]
     fn osc_99_g_1() {
-        let kdn = parse_kdn("99;c=0:g=7f8a9129-a35d-4e9f-8043-ce2700e15e2c;foobar");
-        assert_eq!(b"foobar".as_slice(), kdn.payload.as_slice());
+        parse_kdn!(kdn, "99;c=0:g=7f8a9129-a35d-4e9f-8043-ce2700e15e2c;foobar");
+        assert_eq!(b"foobar".as_slice(), kdn.payload);
         assert_eq!(
             b"7f8a9129-a35d-4e9f-8043-ce2700e15e2c".as_slice(),
             kdn.read_option(Option_::G).as_opt_bytes().unwrap()
@@ -1006,24 +1011,24 @@ mod tests {
     // test "OSC 99: g 2" {
     #[test]
     fn osc_99_g_2() {
-        let kdn = parse_kdn("99;c=0:g=aaa*bbb;foobar");
-        assert_eq!(b"foobar".as_slice(), kdn.payload.as_slice());
+        parse_kdn!(kdn, "99;c=0:g=aaa*bbb;foobar");
+        assert_eq!(b"foobar".as_slice(), kdn.payload);
         assert!(kdn.read_option(Option_::G).as_opt_bytes().is_none());
     }
 
     // test "OSC 99: i 1" {
     #[test]
     fn osc_99_i_1() {
-        let kdn = parse_kdn("99;;foobar");
-        assert_eq!(b"foobar".as_slice(), kdn.payload.as_slice());
+        parse_kdn!(kdn, "99;;foobar");
+        assert_eq!(b"foobar".as_slice(), kdn.payload);
         assert!(kdn.read_option(Option_::I).as_opt_bytes().is_none());
     }
 
     // test "OSC 99: i 2" {
     #[test]
     fn osc_99_i_2() {
-        let kdn = parse_kdn("99;i=bobr;foobar");
-        assert_eq!(b"foobar".as_slice(), kdn.payload.as_slice());
+        parse_kdn!(kdn, "99;i=bobr;foobar");
+        assert_eq!(b"foobar".as_slice(), kdn.payload);
         assert_eq!(
             b"bobr".as_slice(),
             kdn.read_option(Option_::I).as_opt_bytes().unwrap()
@@ -1033,8 +1038,8 @@ mod tests {
     // test "OSC 99: i 3" {
     #[test]
     fn osc_99_i_3() {
-        let kdn = parse_kdn("99;i=;foobar");
-        assert_eq!(b"foobar".as_slice(), kdn.payload.as_slice());
+        parse_kdn!(kdn, "99;i=;foobar");
+        assert_eq!(b"foobar".as_slice(), kdn.payload);
         assert_eq!(
             b"".as_slice(),
             kdn.read_option(Option_::I).as_opt_bytes().unwrap()
@@ -1044,8 +1049,8 @@ mod tests {
     // test "OSC 99: i 4" {
     #[test]
     fn osc_99_i_4() {
-        let kdn = parse_kdn("99;i= :;foobar");
-        assert_eq!(b"foobar".as_slice(), kdn.payload.as_slice());
+        parse_kdn!(kdn, "99;i= :;foobar");
+        assert_eq!(b"foobar".as_slice(), kdn.payload);
         assert_eq!(
             b"".as_slice(),
             kdn.read_option(Option_::I).as_opt_bytes().unwrap()
@@ -1055,8 +1060,8 @@ mod tests {
     // test "OSC 99: i 5" {
     #[test]
     fn osc_99_i_5() {
-        let kdn = parse_kdn("99;i= bobr ;foobar");
-        assert_eq!(b"foobar".as_slice(), kdn.payload.as_slice());
+        parse_kdn!(kdn, "99;i= bobr ;foobar");
+        assert_eq!(b"foobar".as_slice(), kdn.payload);
         assert_eq!(
             b"bobr".as_slice(),
             kdn.read_option(Option_::I).as_opt_bytes().unwrap()
@@ -1066,8 +1071,8 @@ mod tests {
     // test "OSC 99: i 6" {
     #[test]
     fn osc_99_i_6() {
-        let kdn = parse_kdn("99;i= bobr : i=kurwa ;foobar");
-        assert_eq!(b"foobar".as_slice(), kdn.payload.as_slice());
+        parse_kdn!(kdn, "99;i= bobr : i=kurwa ;foobar");
+        assert_eq!(b"foobar".as_slice(), kdn.payload);
         assert_eq!(
             b"bobr".as_slice(),
             kdn.read_option(Option_::I).as_opt_bytes().unwrap()
@@ -1077,8 +1082,8 @@ mod tests {
     // test "OSC 99: n 1" {
     #[test]
     fn osc_99_n_1() {
-        let kdn = parse_kdn("99;n=R2hvc3R0eQ==;foobar");
-        assert_eq!(b"foobar".as_slice(), kdn.payload.as_slice());
+        parse_kdn!(kdn, "99;n=R2hvc3R0eQ==;foobar");
+        assert_eq!(b"foobar".as_slice(), kdn.payload);
         let mut it = kdn.read_option(Option_::N).into_iterator();
         assert_eq!(b"R2hvc3R0eQ==".as_slice(), it.next().unwrap());
         assert!(it.next().is_none());
@@ -1087,8 +1092,8 @@ mod tests {
     // test "OSC 99: n 2" {
     #[test]
     fn osc_99_n_2() {
-        let kdn = parse_kdn("99;n=R2hvc3R0eQ==:n=R2hvc3R0eQ==;foobar");
-        assert_eq!(b"foobar".as_slice(), kdn.payload.as_slice());
+        parse_kdn!(kdn, "99;n=R2hvc3R0eQ==:n=R2hvc3R0eQ==;foobar");
+        assert_eq!(b"foobar".as_slice(), kdn.payload);
         let mut it = kdn.read_option(Option_::N).into_iterator();
         assert_eq!(b"R2hvc3R0eQ==".as_slice(), it.next().unwrap());
         assert_eq!(b"R2hvc3R0eQ==".as_slice(), it.next().unwrap());
@@ -1098,24 +1103,24 @@ mod tests {
     // test "OSC 99: o 1" {
     #[test]
     fn osc_99_o_1() {
-        let kdn = parse_kdn("99;o= ;foobar");
-        assert_eq!(b"foobar".as_slice(), kdn.payload.as_slice());
+        parse_kdn!(kdn, "99;o= ;foobar");
+        assert_eq!(b"foobar".as_slice(), kdn.payload);
         assert_eq!(Occasion::Always, kdn.read_option(Option_::O).as_occasion());
     }
 
     // test "OSC 99: o 2" {
     #[test]
     fn osc_99_o_2() {
-        let kdn = parse_kdn("99;o=always;foobar");
-        assert_eq!(b"foobar".as_slice(), kdn.payload.as_slice());
+        parse_kdn!(kdn, "99;o=always;foobar");
+        assert_eq!(b"foobar".as_slice(), kdn.payload);
         assert_eq!(Occasion::Always, kdn.read_option(Option_::O).as_occasion());
     }
 
     // test "OSC 99: o 3" {
     #[test]
     fn osc_99_o_3() {
-        let kdn = parse_kdn("99;o=unfocused;foobar");
-        assert_eq!(b"foobar".as_slice(), kdn.payload.as_slice());
+        parse_kdn!(kdn, "99;o=unfocused;foobar");
+        assert_eq!(b"foobar".as_slice(), kdn.payload);
         assert_eq!(
             Occasion::Unfocused,
             kdn.read_option(Option_::O).as_occasion()
@@ -1125,8 +1130,8 @@ mod tests {
     // test "OSC 99: o 4" {
     #[test]
     fn osc_99_o_4() {
-        let kdn = parse_kdn("99;o=invisible;foobar");
-        assert_eq!(b"foobar".as_slice(), kdn.payload.as_slice());
+        parse_kdn!(kdn, "99;o=invisible;foobar");
+        assert_eq!(b"foobar".as_slice(), kdn.payload);
         assert_eq!(
             Occasion::Invisible,
             kdn.read_option(Option_::O).as_occasion()
@@ -1136,88 +1141,88 @@ mod tests {
     // test "OSC 99: o 5" {
     #[test]
     fn osc_99_o_5() {
-        let kdn = parse_kdn("99;o=bobr;foobar");
-        assert_eq!(b"foobar".as_slice(), kdn.payload.as_slice());
+        parse_kdn!(kdn, "99;o=bobr;foobar");
+        assert_eq!(b"foobar".as_slice(), kdn.payload);
         assert_eq!(Occasion::Always, kdn.read_option(Option_::O).as_occasion());
     }
 
     // test "OSC 99: p 1" {
     #[test]
     fn osc_99_p_1() {
-        let kdn = parse_kdn("99;p=alive;foobar");
-        assert_eq!(b"foobar".as_slice(), kdn.payload.as_slice());
+        parse_kdn!(kdn, "99;p=alive;foobar");
+        assert_eq!(b"foobar".as_slice(), kdn.payload);
         assert_eq!(Payload::Alive, kdn.read_option(Option_::P).as_payload());
     }
 
     // test "OSC 99: p 2" {
     #[test]
     fn osc_99_p_2() {
-        let kdn = parse_kdn("99;p=body;foobar");
-        assert_eq!(b"foobar".as_slice(), kdn.payload.as_slice());
+        parse_kdn!(kdn, "99;p=body;foobar");
+        assert_eq!(b"foobar".as_slice(), kdn.payload);
         assert_eq!(Payload::Body, kdn.read_option(Option_::P).as_payload());
     }
 
     // test "OSC 99: p 3" {
     #[test]
     fn osc_99_p_3() {
-        let kdn = parse_kdn("99;p=buttons;foobar");
-        assert_eq!(b"foobar".as_slice(), kdn.payload.as_slice());
+        parse_kdn!(kdn, "99;p=buttons;foobar");
+        assert_eq!(b"foobar".as_slice(), kdn.payload);
         assert_eq!(Payload::Buttons, kdn.read_option(Option_::P).as_payload());
     }
 
     // test "OSC 99: p 4" {
     #[test]
     fn osc_99_p_4() {
-        let kdn = parse_kdn("99;p=close;foobar");
-        assert_eq!(b"foobar".as_slice(), kdn.payload.as_slice());
+        parse_kdn!(kdn, "99;p=close;foobar");
+        assert_eq!(b"foobar".as_slice(), kdn.payload);
         assert_eq!(Payload::Close, kdn.read_option(Option_::P).as_payload());
     }
 
     // test "OSC 99: p 5" {
     #[test]
     fn osc_99_p_5() {
-        let kdn = parse_kdn("99;p=icon;foobar");
-        assert_eq!(b"foobar".as_slice(), kdn.payload.as_slice());
+        parse_kdn!(kdn, "99;p=icon;foobar");
+        assert_eq!(b"foobar".as_slice(), kdn.payload);
         assert_eq!(Payload::Icon, kdn.read_option(Option_::P).as_payload());
     }
 
     // test "OSC 99: p 6" {
     #[test]
     fn osc_99_p_6() {
-        let kdn = parse_kdn("99;p=?;foobar");
-        assert_eq!(b"foobar".as_slice(), kdn.payload.as_slice());
+        parse_kdn!(kdn, "99;p=?;foobar");
+        assert_eq!(b"foobar".as_slice(), kdn.payload);
         assert_eq!(Payload::Query, kdn.read_option(Option_::P).as_payload());
     }
 
     // test "OSC 99: p 7" {
     #[test]
     fn osc_99_p_7() {
-        let kdn = parse_kdn("99;p=title;foobar");
-        assert_eq!(b"foobar".as_slice(), kdn.payload.as_slice());
+        parse_kdn!(kdn, "99;p=title;foobar");
+        assert_eq!(b"foobar".as_slice(), kdn.payload);
         assert_eq!(Payload::Title, kdn.read_option(Option_::P).as_payload());
     }
 
     // test "OSC 99: p 8" {
     #[test]
     fn osc_99_p_8() {
-        let kdn = parse_kdn("99;p=query;foobar");
-        assert_eq!(b"foobar".as_slice(), kdn.payload.as_slice());
+        parse_kdn!(kdn, "99;p=query;foobar");
+        assert_eq!(b"foobar".as_slice(), kdn.payload);
         assert_eq!(Payload::Unknown, kdn.read_option(Option_::P).as_payload());
     }
 
     // test "OSC 99: p 9" {
     #[test]
     fn osc_99_p_9() {
-        let kdn = parse_kdn("99;p=bobr;foobar");
-        assert_eq!(b"foobar".as_slice(), kdn.payload.as_slice());
+        parse_kdn!(kdn, "99;p=bobr;foobar");
+        assert_eq!(b"foobar".as_slice(), kdn.payload);
         assert_eq!(Payload::Unknown, kdn.read_option(Option_::P).as_payload());
     }
 
     // test "OSC 99: s 1" {
     #[test]
     fn osc_99_s_1() {
-        let kdn = parse_kdn("99;s=R2hvc3R0eQ==;foobar");
-        assert_eq!(b"foobar".as_slice(), kdn.payload.as_slice());
+        parse_kdn!(kdn, "99;s=R2hvc3R0eQ==;foobar");
+        assert_eq!(b"foobar".as_slice(), kdn.payload);
         assert_eq!(
             b"R2hvc3R0eQ==".as_slice(),
             kdn.read_option(Option_::S).as_bytes()
@@ -1227,8 +1232,8 @@ mod tests {
     // test "OSC 99: t 1" {
     #[test]
     fn osc_99_t_1() {
-        let kdn = parse_kdn("99;t=R2hvc3R0eQ==;foobar");
-        assert_eq!(b"foobar".as_slice(), kdn.payload.as_slice());
+        parse_kdn!(kdn, "99;t=R2hvc3R0eQ==;foobar");
+        assert_eq!(b"foobar".as_slice(), kdn.payload);
         let mut it = kdn.read_option(Option_::T).into_iterator();
         assert_eq!(b"R2hvc3R0eQ==".as_slice(), it.next().unwrap());
         assert!(it.next().is_none());
@@ -1237,8 +1242,8 @@ mod tests {
     // test "OSC 99: t 2" {
     #[test]
     fn osc_99_t_2() {
-        let kdn = parse_kdn("99;t=R2hvc3R0eQ==:t=R2hvc3R0eQ==;foobar");
-        assert_eq!(b"foobar".as_slice(), kdn.payload.as_slice());
+        parse_kdn!(kdn, "99;t=R2hvc3R0eQ==:t=R2hvc3R0eQ==;foobar");
+        assert_eq!(b"foobar".as_slice(), kdn.payload);
         let mut it = kdn.read_option(Option_::T).into_iterator();
         assert_eq!(b"R2hvc3R0eQ==".as_slice(), it.next().unwrap());
         assert_eq!(b"R2hvc3R0eQ==".as_slice(), it.next().unwrap());
@@ -1248,64 +1253,64 @@ mod tests {
     // test "OSC 99: u 1" {
     #[test]
     fn osc_99_u_1() {
-        let kdn = parse_kdn("99;u=0;foobar");
-        assert_eq!(b"foobar".as_slice(), kdn.payload.as_slice());
+        parse_kdn!(kdn, "99;u=0;foobar");
+        assert_eq!(b"foobar".as_slice(), kdn.payload);
         assert_eq!(Urgency::Low, kdn.read_option(Option_::U).as_urgency());
     }
 
     // test "OSC 99: u 2" {
     #[test]
     fn osc_99_u_2() {
-        let kdn = parse_kdn("99;u=1;foobar");
-        assert_eq!(b"foobar".as_slice(), kdn.payload.as_slice());
+        parse_kdn!(kdn, "99;u=1;foobar");
+        assert_eq!(b"foobar".as_slice(), kdn.payload);
         assert_eq!(Urgency::Normal, kdn.read_option(Option_::U).as_urgency());
     }
 
     // test "OSC 99: u 3" {
     #[test]
     fn osc_99_u_3() {
-        let kdn = parse_kdn("99;u=2;foobar");
-        assert_eq!(b"foobar".as_slice(), kdn.payload.as_slice());
+        parse_kdn!(kdn, "99;u=2;foobar");
+        assert_eq!(b"foobar".as_slice(), kdn.payload);
         assert_eq!(Urgency::High, kdn.read_option(Option_::U).as_urgency());
     }
 
     // test "OSC 99: u 4" {
     #[test]
     fn osc_99_u_4() {
-        let kdn = parse_kdn("99;u=bobr;foobar");
-        assert_eq!(b"foobar".as_slice(), kdn.payload.as_slice());
+        parse_kdn!(kdn, "99;u=bobr;foobar");
+        assert_eq!(b"foobar".as_slice(), kdn.payload);
         assert_eq!(Urgency::Normal, kdn.read_option(Option_::U).as_urgency());
     }
 
     // test "OSC 99: w 1" {
     #[test]
     fn osc_99_w_1() {
-        let kdn = parse_kdn("99;w=0;foobar");
-        assert_eq!(b"foobar".as_slice(), kdn.payload.as_slice());
+        parse_kdn!(kdn, "99;w=0;foobar");
+        assert_eq!(b"foobar".as_slice(), kdn.payload);
         assert_eq!(0, kdn.read_option(Option_::W).as_int());
     }
 
     // test "OSC 99: w 2" {
     #[test]
     fn osc_99_w_2() {
-        let kdn = parse_kdn("99;w=-1;foobar");
-        assert_eq!(b"foobar".as_slice(), kdn.payload.as_slice());
+        parse_kdn!(kdn, "99;w=-1;foobar");
+        assert_eq!(b"foobar".as_slice(), kdn.payload);
         assert_eq!(-1, kdn.read_option(Option_::W).as_int());
     }
 
     // test "OSC 99: w 3" {
     #[test]
     fn osc_99_w_3() {
-        let kdn = parse_kdn("99;w=-42;foobar");
-        assert_eq!(b"foobar".as_slice(), kdn.payload.as_slice());
+        parse_kdn!(kdn, "99;w=-42;foobar");
+        assert_eq!(b"foobar".as_slice(), kdn.payload);
         assert_eq!(-1, kdn.read_option(Option_::W).as_int());
     }
 
     // test "OSC 99: w 4" {
     #[test]
     fn osc_99_w_4() {
-        let kdn = parse_kdn("99;w=4294967296;foobar");
-        assert_eq!(b"foobar".as_slice(), kdn.payload.as_slice());
+        parse_kdn!(kdn, "99;w=4294967296;foobar");
+        assert_eq!(b"foobar".as_slice(), kdn.payload);
         assert_eq!(-1, kdn.read_option(Option_::W).as_int());
     }
 }

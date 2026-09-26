@@ -292,14 +292,10 @@ unsafe fn print_slice_store_pairs(
     }
 }
 
-// PORT NOTE: `vtStream` threads `self.gpa()` (a `std.mem.Allocator`) into the
-// OSC parser via `Stream.initAlloc`, which in Rustty wants a
-// `ZigAllocatorRef<'static>`. The reference `gpa()` returns the screen's
-// general-purpose allocator (the global allocator). We back the OSC parser with
-// a process-static `GlobalZigAllocator` (a stateless ZST) so the returned
-// `ZigAllocatorRef` is `'static` and coerces to the stream's lifetime.
-pub(crate) static GLOBAL_ZIG_ALLOCATOR: rustty_lib::allocator::GlobalZigAllocator =
-    rustty_lib::allocator::GlobalZigAllocator;
+// CORRECTION (parity tail S7-7): a process-static `GlobalZigAllocator`
+// (`GLOBAL_ZIG_ALLOCATOR`) stood in for `self.gpa()` in `vtStream` because
+// `Stream.initAlloc` wanted a `ZigAllocatorRef<'static>`. The stream takes the
+// runtime allocator handle now, and `vt_stream` passes `gpa()` itself.
 
 // const log = std.log.scoped(.terminal);
 const LOG_SCOPE: &str = "terminal";
@@ -1078,25 +1074,17 @@ impl Terminal {
         //     .allocator = self.gpa(),
         //     .handler = self.vtHandler(),
         // });
-        // PORT NOTE: the reference threads `self.gpa()` (a `std.mem.Allocator`)
-        // into the stream options. Rustty's `stream::Options.allocator` wants a
-        // `ZigAllocatorRef`, whose presence is the parser's allocation gate;
-        // it is the process-static `GLOBAL_ZIG_ALLOCATOR` (see its note).
-        //
-        // PORT NOTE (parity tail S7-4): the OSC parser's captures (its dynamic
-        // allocations) run on the runtime handle `capture_alloc`, which is set
-        // to `gpa()` here, as the reference's `.allocator = self.gpa()` does.
+        // CORRECTION (parity tail S7-7): `stream::Options.allocator` is the
+        // runtime handle, so `self.gpa()` is threaded as the reference threads
+        // it; it used to be the process-static `GLOBAL_ZIG_ALLOCATOR` (the
+        // gate) with `gpa()` set separately as the capture's allocator (S7-4).
         let gpa = self.gpa();
         let handler = self.vt_handler();
-        let mut stream = Stream::init(crate::stream::Options {
-            allocator: Some(rustty_lib::allocator::ZigAllocatorRef::new(
-                &GLOBAL_ZIG_ALLOCATOR,
-            )),
+        Stream::init(crate::stream::Options {
+            allocator: Some(gpa),
             handler,
             continuation_max_bytes: None,
-        });
-        stream.parser.osc_parser.capture_alloc = gpa;
-        stream
+        })
     }
 
     /// This is the handler-side only for vtStream.
@@ -20376,7 +20364,7 @@ mod tests {
         t.linefeed().unwrap();
         t.semantic_prompt(osc::SemanticPrompt {
             action: osc::semantic_prompt::Action::PromptStart,
-            options_unvalidated: b"k=c".to_vec(),
+            options_unvalidated: b"k=c",
         })
         .unwrap();
 
@@ -20609,7 +20597,7 @@ mod tests {
         t.linefeed().unwrap();
         t.semantic_prompt(osc::SemanticPrompt {
             action: osc::semantic_prompt::Action::PromptStart,
-            options_unvalidated: b"k=c".to_vec(),
+            options_unvalidated: b"k=c",
         })
         .unwrap();
         for c in "> ".bytes() {
@@ -20709,7 +20697,7 @@ mod tests {
         // OSC 133;A with click_events=1
         t.semantic_prompt(osc::SemanticPrompt {
             action: osc::semantic_prompt::Action::FreshLineNewPrompt,
-            options_unvalidated: b"click_events=1".to_vec(),
+            options_unvalidated: b"click_events=1",
         })
         .unwrap();
 
@@ -20735,7 +20723,7 @@ mod tests {
         // OSC 133;A with click_events=2
         t.semantic_prompt(osc::SemanticPrompt {
             action: osc::semantic_prompt::Action::FreshLineNewPrompt,
-            options_unvalidated: b"click_events=2".to_vec(),
+            options_unvalidated: b"click_events=2",
         })
         .unwrap();
 
@@ -20756,7 +20744,7 @@ mod tests {
         // OSC 133;A with click_events=0
         t.semantic_prompt(osc::SemanticPrompt {
             action: osc::semantic_prompt::Action::FreshLineNewPrompt,
-            options_unvalidated: b"click_events=0".to_vec(),
+            options_unvalidated: b"click_events=0",
         })
         .unwrap();
 
@@ -20777,7 +20765,7 @@ mod tests {
         // OSC 133;A with cl=m (multiple)
         t.semantic_prompt(osc::SemanticPrompt {
             action: osc::semantic_prompt::Action::FreshLineNewPrompt,
-            options_unvalidated: b"cl=m".to_vec(),
+            options_unvalidated: b"cl=m",
         })
         .unwrap();
 
@@ -20797,7 +20785,7 @@ mod tests {
 
         t.semantic_prompt(osc::SemanticPrompt {
             action: osc::semantic_prompt::Action::FreshLineNewPrompt,
-            options_unvalidated: b"cl=line".to_vec(),
+            options_unvalidated: b"cl=line",
         })
         .unwrap();
 
@@ -20818,7 +20806,7 @@ mod tests {
         // OSC 133;A with both click_events=1 and cl=m
         t.semantic_prompt(osc::SemanticPrompt {
             action: osc::semantic_prompt::Action::FreshLineNewPrompt,
-            options_unvalidated: b"click_events=1;cl=m".to_vec(),
+            options_unvalidated: b"click_events=1;cl=m",
         })
         .unwrap();
 
@@ -20840,7 +20828,7 @@ mod tests {
         // OSC 133;A with click_events=0 and cl=v
         t.semantic_prompt(osc::SemanticPrompt {
             action: osc::semantic_prompt::Action::FreshLineNewPrompt,
-            options_unvalidated: b"click_events=0;cl=v".to_vec(),
+            options_unvalidated: b"click_events=0;cl=v",
         })
         .unwrap();
 
@@ -20862,7 +20850,7 @@ mod tests {
         // OSC 133;A with no click-related options
         t.semantic_prompt(osc::SemanticPrompt {
             action: osc::semantic_prompt::Action::FreshLineNewPrompt,
-            options_unvalidated: b"aid=123".to_vec(),
+            options_unvalidated: b"aid=123",
         })
         .unwrap();
 

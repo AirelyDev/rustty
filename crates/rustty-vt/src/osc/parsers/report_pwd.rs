@@ -2,10 +2,10 @@
 //!
 //! PORT STATUS: ported — full parse logic + tests (vt-6).
 
-use crate::osc::{Command, Parser};
+use crate::osc::{Command, Parser, ZStr};
 
 /// Parse OSC 7
-pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut Command> {
+pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<Command<'a>> {
     let cap = if let Some(c) = parser.capture.as_mut() {
         c
     } else {
@@ -17,13 +17,13 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut Comman
         return None;
     }
     let data = cap.trailing(&parser.buffer);
-    parser.command = Command::ReportPwd {
+    let command = Command::ReportPwd {
         // data[0 .. data.len() - 1 :0]
         // PORT NOTE (fidelity): reference `[:0]const u8` RAW bytes (trailing NUL
         // excluded), NOT a lossy String decode.
-        value: data[0..data.len() - 1].to_vec(),
+        value: ZStr::sentinel(data, 0, data.len() - 1),
     };
-    Some(&mut parser.command)
+    Some(command)
 }
 
 #[cfg(test)]
@@ -39,7 +39,7 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(None).unwrap().clone();
+        let cmd = p.end(None).unwrap();
         assert!(matches!(cmd, crate::osc::Command::ReportPwd { .. }));
         match cmd {
             crate::osc::Command::ReportPwd { value } => {
@@ -57,7 +57,7 @@ mod tests {
         for ch in input.bytes() {
             p.next(ch);
         }
-        let cmd = p.end(None).unwrap().clone();
+        let cmd = p.end(None).unwrap();
         assert!(matches!(cmd, crate::osc::Command::ReportPwd { .. }));
         match cmd {
             crate::osc::Command::ReportPwd { value } => assert_eq!(b"", value.as_slice()),

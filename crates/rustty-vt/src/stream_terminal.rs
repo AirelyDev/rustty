@@ -68,10 +68,10 @@ const LOG_SCOPE: &str = "stream_terminal";
 /// a Terminal and updates the Terminal state.
 // pub const Stream = stream.Stream(Handler);
 // PORT NOTE: the reference `stream.Stream(Handler)` becomes the generic
-// `stream::Stream<'a, Handler<'a>>`. The `'a` threads the OSC parser allocator
+// `stream::Stream<Handler<'a>>`. The `'a` threads the OSC parser allocator
 // lifetime (see `stream::Stream::init_alloc`) through both the stream and the
 // handler's effect callbacks.
-pub type Stream<'a> = stream::Stream<'a, Handler<'a>>;
+pub type Stream<'a> = stream::Stream<Handler<'a>>;
 
 /// The APC command handler maintains the APC state.
 ///
@@ -2016,7 +2016,7 @@ impl<'a> Handler<'a> {
         let mut response = crate::snapshot::io::StackFallbackWriter::<1024>::new_in(gpa);
 
         // for (request.list.items) |item| {
-        for item in &request.list {
+        for item in request.list.iter() {
             match item {
                 // .set => |v| switch (v.key) {
                 kitty::color::Request::Set { key, color } => match key {
@@ -7326,12 +7326,10 @@ mod tests {
         use crate::clipboard;
         use crate::stream_continuation::FixedIoWriter;
 
-        // `testing.allocator` for the `Options.allocator` gate (the same
-        // process-global zig allocator `Terminal::vt_stream` uses).
-        static CONT_ZIG_ALLOC: rustty_lib::allocator::GlobalZigAllocator =
-            rustty_lib::allocator::GlobalZigAllocator;
-        fn cont_alloc() -> rustty_lib::allocator::ZigAllocatorRef<'static> {
-            rustty_lib::allocator::ZigAllocatorRef::new(&CONT_ZIG_ALLOC)
+        // `testing.allocator` for `Options.allocator` (the Rust heap handle,
+        // as `Terminal::vt_stream` passes `gpa()`).
+        fn cont_alloc() -> crate::alloc::Allocator {
+            crate::alloc::Global
         }
 
         // const S = struct { var bell_count ... fn reset() ... };
@@ -9329,9 +9327,7 @@ mod tests {
         let ptr: *mut Terminal = &mut t;
 
         let mut s = Stream::init(stream::Options {
-            allocator: Some(rustty_lib::allocator::ZigAllocatorRef::new(
-                &crate::terminal::GLOBAL_ZIG_ALLOCATOR,
-            )),
+            allocator: Some(crate::alloc::Global),
             handler: Handler::init(ptr),
             continuation_max_bytes: None,
         });
@@ -9400,9 +9396,7 @@ mod tests {
         let ptr: *mut Terminal = &mut t;
 
         let mut s = Stream::init(stream::Options {
-            allocator: Some(rustty_lib::allocator::ZigAllocatorRef::new(
-                &crate::terminal::GLOBAL_ZIG_ALLOCATOR,
-            )),
+            allocator: Some(crate::alloc::Global),
             handler: Handler::init(ptr),
             continuation_max_bytes: None,
         });
@@ -9431,9 +9425,7 @@ mod tests {
         let ptr: *mut Terminal = &mut t;
 
         let mut s = Stream::init(stream::Options {
-            allocator: Some(rustty_lib::allocator::ZigAllocatorRef::new(
-                &crate::terminal::GLOBAL_ZIG_ALLOCATOR,
-            )),
+            allocator: Some(crate::alloc::Global),
             handler: Handler::init(ptr),
             continuation_max_bytes: None,
         });
@@ -9496,9 +9488,7 @@ mod tests {
         let ptr: *mut Terminal = &mut t;
 
         let mut s = Stream::init(stream::Options {
-            allocator: Some(rustty_lib::allocator::ZigAllocatorRef::new(
-                &crate::terminal::GLOBAL_ZIG_ALLOCATOR,
-            )),
+            allocator: Some(crate::alloc::Global),
             handler: Handler::init(ptr),
             continuation_max_bytes: None,
         });
@@ -10153,9 +10143,7 @@ mod tests {
         handler.effects.write_pty = Some(pc_write_pty);
         handler.effects.clipboard_read = Some(pc_clipboard_read);
         let mut s = Stream::init(stream::Options {
-            allocator: Some(rustty_lib::allocator::ZigAllocatorRef::new(
-                &crate::terminal::GLOBAL_ZIG_ALLOCATOR,
-            )),
+            allocator: Some(crate::alloc::Global),
             handler,
             continuation_max_bytes: None,
         });
@@ -10465,9 +10453,7 @@ mod tests {
         let mut handler = Handler::init(ptr);
         handler.effects.write_pty = Some(pc_write_pty);
         let mut s = Stream::init(stream::Options {
-            allocator: Some(rustty_lib::allocator::ZigAllocatorRef::new(
-                &crate::terminal::GLOBAL_ZIG_ALLOCATOR,
-            )),
+            allocator: Some(crate::alloc::Global),
             handler,
             continuation_max_bytes: None,
         });
@@ -10516,9 +10502,7 @@ mod tests {
         handler.effects.write_pty = Some(pc_write_pty);
         handler.effects.clipboard_read = Some(pc_clipboard_read);
         let mut s = Stream::init(stream::Options {
-            allocator: Some(rustty_lib::allocator::ZigAllocatorRef::new(
-                &crate::terminal::GLOBAL_ZIG_ALLOCATOR,
-            )),
+            allocator: Some(crate::alloc::Global),
             handler,
             continuation_max_bytes: None,
         });

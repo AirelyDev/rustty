@@ -100,7 +100,7 @@ impl core::fmt::Display for HexBytes<'_> {
 // module-level alias (Rust cannot nest a generic type alias in a struct's
 // namespace). `'a` threads the vt Stream's OSC-parser allocator lifetime
 // (rustty-vt stream_terminal precedent).
-pub type Stream<'a, M> = stream::Stream<'a, StreamHandler<M>>;
+pub type Stream<M> = stream::Stream<StreamHandler<M>>;
 
 /// True if we have tmux control mode built in.
 //
@@ -2921,7 +2921,7 @@ impl<M: AppMailbox> StreamHandler<M> {
         let mut stream: String = String::new();
 
         // for (request.list.items) |item| {
-        for item in &request.list {
+        for item in request.list.iter() {
             match item {
                 // .query => |key| {
                 kitty::color::Request::Query(key) => {
@@ -4522,18 +4522,23 @@ pub(crate) mod tests {
         }));
         let mut h = handler_for(&raw mut term, mailbox, state);
 
-        let mut requests: osc::color::List = (0..=255u8)
-            .map(|i| osc::color::Request::Query(osc::color::Target::Palette(i)))
-            .collect();
+        let mut requests = osc::color::List::new_in(rustty_vt::alloc::Global);
+        for i in 0..=255u8 {
+            requests
+                .append(osc::color::Request::Query(osc::color::Target::Palette(i)))
+                .unwrap();
+        }
         let new_color = color::RGB {
             r: 0x12,
             g: 0x34,
             b: 0x56,
         };
-        requests.push(osc::color::Request::Set(osc::color::ColoredTarget {
-            target: osc::color::Target::Palette(7),
-            color: new_color,
-        }));
+        requests
+            .append(osc::color::Request::Set(osc::color::ColoredTarget {
+                target: osc::color::Target::Palette(7),
+                color: new_color,
+            }))
+            .unwrap();
 
         let mut expected: Vec<u8> = Vec::new();
         for i in 0..=255u8 {

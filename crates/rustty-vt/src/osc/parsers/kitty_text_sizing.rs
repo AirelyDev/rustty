@@ -10,7 +10,7 @@
 // PORT NOTE: Zig imports retargeted to ported crate paths (R2). `encoding` is
 // the sibling `crate::osc::encoding`; `lib` is `rustty_lib`.
 use crate::osc::encoding;
-use crate::osc::{Command, Parser};
+use crate::osc::{Command, Parser, ZStr};
 
 // const log = std.log.scoped(.kitty_text_sizing);
 //
@@ -67,16 +67,17 @@ impl HAlign {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OSC {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OSC<'p> {
     pub scale: u8,       // 1 - 7 (u3, default 1)
     pub width: u8,       // 0 - 7 (0 means default) (u3)
     pub numerator: u8,   // u4
     pub denominator: u8, // u4
     pub valign: VAlign,
     pub halign: HAlign,
-    /// PORT NOTE (fidelity): reference `text: [:0]const u8` — raw bytes, not lossy.
-    pub text: Vec<u8>,
+    /// PORT NOTE (fidelity): reference `text: [:0]const u8` — raw bytes, not lossy,
+    /// borrowed from the capture (parity tail S7-7, N263; it was a `Vec<u8>` copy).
+    pub text: ZStr<'p>,
 }
 
 // PORT NOTE: `error{ UnknownKey, InvalidValue }` — the error set returned by
@@ -89,7 +90,7 @@ enum UpdateError {
     InvalidValue,
 }
 
-impl OSC {
+impl OSC<'_> {
     // PORT NOTE: `pub const C = void;` and `pub fn cval(_: OSC) C { return {}; }`
     // — "We don't currently support encoding this to C in any way." Modeled as
     // the unit type / a no-op returning `()`.
@@ -162,7 +163,7 @@ fn cast_u3(v: u8) -> Option<u8> {
     }
 }
 
-pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut Command> {
+pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<Command<'a>> {
     // assert(parser.state == .@"66");
     debug_assert!(parser.state == crate::osc::State::S66);
 
@@ -189,7 +190,7 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut Comman
         return None;
     };
     // data[payload_start + 1 .. data.len - 1 :0]
-    let payload = &data[payload_start + 1..data.len() - 1];
+    let payload = ZStr::sentinel(data, payload_start + 1, data.len() - 1);
 
     // Payload has to be a URL-safe UTF-8 string,
     // and be under the size limit.
@@ -199,7 +200,7 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut Comman
         parser.state = crate::osc::State::Invalid;
         return None;
     }
-    if !encoding::is_safe_utf8(payload) {
+    if !encoding::is_safe_utf8(&payload) {
         // log.warn("payload is not escape code safe UTF-8", .{});
         log::warn!(target: LOG_SCOPE, "payload is not escape code safe UTF-8");
         parser.state = crate::osc::State::Invalid;
@@ -207,15 +208,14 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut Comman
     }
 
     // PORT NOTE (fidelity): the reference assigns `payload` (a `[:0]const u8`
-    // slice) directly to `text`; copy the RAW bytes out (so the mutable
-    // `parser.command` borrow below does not alias the capture buffer), NOT a
-    // lossy String decode.
-    let text = payload.to_vec();
-    // PORT NOTE: the args region precedes the payload; copy it out for the same
-    // aliasing reason before reborrowing `parser.command`.
-    let args: Vec<u8> = data[0..payload_start].to_vec();
+    // slice) directly to `text`, and so does the port (parity tail S7-7: it
+    // used to copy the payload and the args region out of the capture) — NOT
+    // a lossy String decode.
+    let text = payload;
+    let args: &[u8] = &data[0..payload_start];
 
-    parser.command = Command::KittyTextSizing(OSC {
+    // parser.command = .{ .kitty_text_sizing = .{ .text = payload } };
+    let mut cmd = OSC {
         scale: 1,
         width: 0,
         numerator: 0,
@@ -223,10 +223,6 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut Comman
         valign: VAlign::Top,
         halign: HAlign::Left,
         text,
-    });
-    let cmd = match &mut parser.command {
-        Command::KittyTextSizing(osc) => osc,
-        _ => unreachable!(),
     };
 
     // Parse any arguments if given
@@ -294,7 +290,7 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut Comman
         }
     }
 
-    Some(&mut parser.command)
+    Some(Command::KittyTextSizing(cmd))
 }
 
 #[cfg(test)]
@@ -365,8 +361,7 @@ mod tests {
     /// its `Vec::new()` assertion while never reaching the guard.
     #[test]
     fn an_over_long_payload_warns() {
-        let backend = rustty_lib::allocator::GlobalZigAllocator;
-        let alloc = rustty_lib::allocator::ZigAllocatorRef::new(&backend);
+        let alloc = crate::alloc::Global;
         let mut p: Parser = Parser::init(Some(alloc));
         let mut input = String::from("66;;");
         input.push_str(&"a".repeat(MAX_PAYLOAD_LENGTH + 1));
@@ -393,7 +388,7 @@ mod tests {
         for ch in b"66;s=2;bobr" {
             p.next(*ch);
         }
-        let cmd = p.end(Some(0x1b)).map(|c| c.clone());
+        let cmd = p.end(Some(0x1b));
         let messages = cap.messages();
         drop(cap);
 
@@ -421,7 +416,7 @@ mod tests {
         for ch in b"66;n=12:d=+15;bobr" {
             p.next(*ch);
         }
-        match p.end(Some(0x1b)).map(|c| c.clone()) {
+        match p.end(Some(0x1b)) {
             Some(Command::KittyTextSizing(osc)) => {
                 assert_eq!(12u8, osc.numerator);
                 assert_eq!(15u8, osc.denominator);
@@ -433,7 +428,7 @@ mod tests {
         for ch in b"66;n=1_2:d=+15:s=_2:w=2_;bobr" {
             p.next(*ch);
         }
-        match p.end(Some(0x1b)).map(|c| c.clone()) {
+        match p.end(Some(0x1b)) {
             Some(Command::KittyTextSizing(osc)) => {
                 assert_eq!(0u8, osc.numerator);
                 assert_eq!(15u8, osc.denominator);
@@ -454,7 +449,7 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(Some(0x1b)).unwrap().clone();
+        let cmd = p.end(Some(0x1b)).unwrap();
         assert!(matches!(cmd, Command::KittyTextSizing(_)));
         match cmd {
             Command::KittyTextSizing(osc) => {
@@ -474,7 +469,7 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(Some(0x1b)).unwrap().clone();
+        let cmd = p.end(Some(0x1b)).unwrap();
         assert!(matches!(cmd, Command::KittyTextSizing(_)));
         match cmd {
             Command::KittyTextSizing(osc) => {
@@ -494,7 +489,7 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(Some(0x1b)).unwrap().clone();
+        let cmd = p.end(Some(0x1b)).unwrap();
         assert!(matches!(cmd, Command::KittyTextSizing(_)));
         match cmd {
             Command::KittyTextSizing(osc) => {
@@ -518,7 +513,7 @@ mod tests {
         for ch in input.bytes() {
             p.next(ch);
         }
-        let cmd = p.end(Some(0x1b)).unwrap().clone();
+        let cmd = p.end(Some(0x1b)).unwrap();
 
         assert!(matches!(cmd, Command::KittyTextSizing(_)));
         match cmd {
@@ -534,7 +529,7 @@ mod tests {
         for ch in "66;w=8:v=3:n=16;".bytes() {
             p.next(ch);
         }
-        let cmd = p.end(Some(0x1b)).unwrap().clone();
+        let cmd = p.end(Some(0x1b)).unwrap();
 
         assert!(matches!(cmd, Command::KittyTextSizing(_)));
         match cmd {
@@ -556,7 +551,7 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(Some(0x1b)).unwrap().clone();
+        let cmd = p.end(Some(0x1b)).unwrap();
         assert!(matches!(cmd, Command::KittyTextSizing(_)));
         match cmd {
             Command::KittyTextSizing(osc) => {

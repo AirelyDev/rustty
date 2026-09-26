@@ -2,13 +2,13 @@
 //!
 //! PORT STATUS: ported — full parse logic + tests (vt-6).
 
-use crate::osc::{Command, Parser};
+use crate::osc::{Command, Parser, ZStr};
 
 // const log = std.log.scoped(.osc_rxvt_extension);
 const LOG_SCOPE: &str = "osc_rxvt_extension";
 
 /// Parse OSC 777
-pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut Command> {
+pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<Command<'a>> {
     let cap = if let Some(c) = parser.capture.as_mut() {
         c
     } else {
@@ -41,15 +41,15 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut Comman
         return None;
     };
     data[t] = 0;
+    let data: &'a [u8] = data;
     let data_len = data.len();
     // data[k + 1 .. t :0]
     // PORT NOTE (fidelity): reference `title: [:0]const u8` RAW bytes.
-    let title = data[k + 1..t].to_vec();
+    let title = ZStr::sentinel(data, k + 1, t);
     // data[t + 1 .. data.len - 1 :0]
     // PORT NOTE (fidelity): reference `body: [:0]const u8` RAW bytes.
-    let body = data[t + 1..data_len - 1].to_vec();
-    parser.command = Command::ShowDesktopNotification { title, body };
-    Some(&mut parser.command)
+    let body = ZStr::sentinel(data, t + 1, data_len - 1);
+    Some(Command::ShowDesktopNotification { title, body })
 }
 
 #[cfg(test)]
@@ -65,7 +65,7 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(Some(0x1b)).unwrap().clone();
+        let cmd = p.end(Some(0x1b)).unwrap();
         assert!(matches!(
             cmd,
             crate::osc::Command::ShowDesktopNotification { .. }

@@ -24,8 +24,10 @@ use crate::osc::{Command as OSCCommand, Parser, State};
 const MAX_CONTEXT_ID_LEN: usize = 64;
 
 /// A single OSC 3008 context signal command.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Command {
+// PORT NOTE (parity tail S7-7, N263): `id` and `metadata` borrow the parser's
+// capture, as the reference's slices do; they were owned `Vec<u8>` copies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Command<'p> {
     // PORT NOTE: `pub const C = void;` — the per-command C-API payload type
     // marker used by the OSC C bindings. There is no C binding surface in this
     // crate, so it is ported as this note.
@@ -33,24 +35,24 @@ pub struct Command {
     /// The context identifier. Must be 1-64 characters in the 32..126 byte range.
     ///
     /// PORT NOTE (fidelity): reference `id: []const u8` — RAW bytes.
-    pub id: Vec<u8>,
+    pub id: &'p [u8],
     /// Raw unparsed metadata fields after the context ID.
     /// Fields are semicolon-separated key=value pairs.
     /// Parsed lazily via `readOption`.
     ///
     /// PORT NOTE (fidelity): reference `metadata: []const u8` — RAW bytes.
-    pub metadata: Vec<u8>,
+    pub metadata: &'p [u8],
 }
 
-impl Command {
+impl<'p> Command<'p> {
     /// Read a metadata field value from the raw fields string.
     /// Returns null if the field is not present or malformed.
     // PORT NOTE: the reference uses a `comptime option: Field` parameter with a
     // dependent return type `option.Type()`. Rust has no comptime-dependent
     // return types, so `read_option` takes a runtime `Field` and returns a
     // tagged `FieldValue` whose active variant matches `Field::value_type`.
-    pub fn read_option(&self, option: Field) -> FieldValue {
-        option.read(&self.metadata)
+    pub fn read_option(&self, option: Field) -> FieldValue<'p> {
+        option.read(self.metadata)
     }
 }
 
@@ -152,16 +154,17 @@ pub enum Field {
 //   .status          => ?u64
 //   // All other fields are string values
 //   all other fields => ?[]const u8
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum FieldValue {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FieldValue<'a> {
     Type(Option<ContextType>),
     Exit(Option<ExitStatus>),
     Int(Option<u64>),
-    /// PORT NOTE (fidelity): string fields are `[]const u8` — RAW bytes.
-    Str(Option<Vec<u8>>),
+    /// PORT NOTE (fidelity): string fields are `[]const u8` — RAW bytes,
+    /// borrowed from the metadata (parity tail S7-7; they were copies).
+    Str(Option<&'a [u8]>),
 }
 
-impl FieldValue {
+impl<'a> FieldValue<'a> {
     /// Helper for `?ContextType` fields.
     pub fn as_type(&self) -> Option<ContextType> {
         match self {
@@ -189,9 +192,9 @@ impl FieldValue {
     /// Helper for `?[]const u8` fields.
     ///
     /// PORT NOTE (fidelity): returns the RAW bytes, not a UTF-8 `str`.
-    pub fn as_bytes(&self) -> Option<&[u8]> {
+    pub fn as_bytes(&self) -> Option<&'a [u8]> {
         match self {
-            FieldValue::Str(v) => v.as_deref(),
+            FieldValue::Str(v) => *v,
             _ => panic!("field value is not a string"),
         }
     }
@@ -238,13 +241,13 @@ impl Field {
     /// e.g. "type=container;user=lennart;hostname=zeta".
     ///
     /// Unknown or malformed fields are ignored per the specification.
-    pub fn read(self, raw: &[u8]) -> FieldValue {
+    pub fn read<'a>(self, raw: &'a [u8]) -> FieldValue<'a> {
         // var it = std.mem.splitScalar(u8, raw, ';');
         // while (it.next()) |full|
         for full in raw.split(|&b| b == b';') {
             // Parse key=value
             // const value = value: {
-            let value: &[u8] = {
+            let value: &'a [u8] = {
                 if let Some(eql_idx) = full.iter().position(|&b| b == b'=') {
                     if full[0..eql_idx] == *self.key() {
                         full.get(eql_idx + 1..).unwrap_or(&[])
@@ -301,7 +304,7 @@ impl Field {
                 | Field::Signal => {
                     if !value.is_empty() {
                         // PORT NOTE (fidelity): `[]const u8` RAW bytes, not lossy.
-                        FieldValue::Str(Some(value.to_vec()))
+                        FieldValue::Str(Some(value))
                     } else {
                         FieldValue::Str(None)
                     }
@@ -332,8 +335,8 @@ pub enum Action {
 /// Expected data format (after "3008;" prefix has been consumed by the state machine):
 ///   start=<id>[;<field>=<value>]*
 ///   end=<id>[;<field>=<value>]*
-pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut OSCCommand> {
-    let data: &[u8] = {
+pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<OSCCommand<'a>> {
+    let data: &'a [u8] = {
         let cap = if let Some(c) = parser.capture.as_ref() {
             c
         } else {
@@ -403,24 +406,22 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut OSCCom
     }
 
     // Extract raw metadata fields (everything after the ID)
-    let metadata: &[u8] = if id_end < rest.len() {
+    let metadata: &'a [u8] = if id_end < rest.len() {
         &rest[id_end + 1..]
     } else {
         b""
     };
 
-    // PORT NOTE (fidelity): `id`/`metadata` are `[]const u8` RAW bytes; copy the
-    // bytes out, NEVER a lossy String decode.
-    let id = id.to_vec();
-    let metadata = metadata.to_vec();
+    // PORT NOTE (fidelity): `id`/`metadata` are `[]const u8` RAW bytes,
+    // borrowed from the capture (parity tail S7-7) — NEVER a lossy String
+    // decode.
 
-    parser.command = OSCCommand::ContextSignal(Command {
+    // parser.command = .{ .context_signal = .{ ... } };
+    Some(OSCCommand::ContextSignal(Command {
         action,
         id,
         metadata,
-    });
-
-    Some(&mut parser.command)
+    }))
 }
 
 // ============================================================================
@@ -440,15 +441,15 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(None).unwrap().clone();
+        let cmd = p.end(None).unwrap();
         assert!(matches!(cmd, Command::ContextSignal(_)));
         let cs = match cmd {
             Command::ContextSignal(cs) => cs,
             _ => unreachable!(),
         };
         assert_eq!(cs.action, super::Action::Start);
-        assert_eq!(cs.id.as_slice(), b"abc123".as_slice());
-        assert_eq!(cs.metadata.as_slice(), b"".as_slice());
+        assert_eq!(cs.id, b"abc123".as_slice());
+        assert_eq!(cs.metadata, b"".as_slice());
     }
 
     #[test]
@@ -459,15 +460,15 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(None).unwrap().clone();
+        let cmd = p.end(None).unwrap();
         assert!(matches!(cmd, Command::ContextSignal(_)));
         let cs = match cmd {
             Command::ContextSignal(cs) => cs,
             _ => unreachable!(),
         };
         assert_eq!(cs.action, super::Action::End);
-        assert_eq!(cs.id.as_slice(), b"abc123".as_slice());
-        assert_eq!(cs.metadata.as_slice(), b"".as_slice());
+        assert_eq!(cs.id, b"abc123".as_slice());
+        assert_eq!(cs.metadata, b"".as_slice());
     }
 
     #[test]
@@ -479,17 +480,14 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(None).unwrap().clone();
+        let cmd = p.end(None).unwrap();
         assert!(matches!(cmd, Command::ContextSignal(_)));
         let cs = match cmd {
             Command::ContextSignal(cs) => cs,
             _ => unreachable!(),
         };
         assert_eq!(cs.action, super::Action::Start);
-        assert_eq!(
-            cs.id.as_slice(),
-            b"bed86fab93af4328bbed0a1224af6d40".as_slice()
-        );
+        assert_eq!(cs.id, b"bed86fab93af4328bbed0a1224af6d40".as_slice());
 
         // Read individual fields
         assert_eq!(
@@ -514,7 +512,7 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(None).unwrap().clone();
+        let cmd = p.end(None).unwrap();
         assert!(matches!(cmd, Command::ContextSignal(_)));
         let cs = match cmd {
             Command::ContextSignal(cs) => cs,
@@ -556,14 +554,14 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(None).unwrap().clone();
+        let cmd = p.end(None).unwrap();
         assert!(matches!(cmd, Command::ContextSignal(_)));
         let cs = match cmd {
             Command::ContextSignal(cs) => cs,
             _ => unreachable!(),
         };
         assert_eq!(cs.action, super::Action::End);
-        assert_eq!(cs.id.as_slice(), b"myctx".as_slice());
+        assert_eq!(cs.id, b"myctx".as_slice());
         assert_eq!(
             cs.read_option(Field::Exit).as_exit().unwrap(),
             ExitStatus::Success
@@ -579,7 +577,7 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(None).unwrap().clone();
+        let cmd = p.end(None).unwrap();
         assert!(matches!(cmd, Command::ContextSignal(_)));
         let cs = match cmd {
             Command::ContextSignal(cs) => cs,
@@ -604,7 +602,7 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(None).unwrap().clone();
+        let cmd = p.end(None).unwrap();
         assert!(matches!(cmd, Command::ContextSignal(_)));
         let cs = match cmd {
             Command::ContextSignal(cs) => cs,
@@ -628,7 +626,7 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(None).unwrap().clone();
+        let cmd = p.end(None).unwrap();
         assert!(matches!(cmd, Command::ContextSignal(_)));
         let cs = match cmd {
             Command::ContextSignal(cs) => cs,
@@ -671,13 +669,13 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(None).unwrap().clone();
+        let cmd = p.end(None).unwrap();
         assert!(matches!(cmd, Command::ContextSignal(_)));
         let cs = match cmd {
             Command::ContextSignal(cs) => cs,
             _ => unreachable!(),
         };
-        assert_eq!(cs.id.as_slice(), id.as_bytes());
+        assert_eq!(cs.id, id.as_bytes());
     }
 
     #[test]
@@ -776,17 +774,14 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(None).unwrap().clone();
+        let cmd = p.end(None).unwrap();
         assert!(matches!(cmd, Command::ContextSignal(_)));
         let cs = match cmd {
             Command::ContextSignal(cs) => cs,
             _ => unreachable!(),
         };
         assert_eq!(cs.action, super::Action::Start);
-        assert_eq!(
-            cs.id.as_slice(),
-            b"bed86fab93af4328bbed0a1224af6d40".as_slice()
-        );
+        assert_eq!(cs.id, b"bed86fab93af4328bbed0a1224af6d40".as_slice());
         assert_eq!(
             cs.read_option(Field::Type).as_type().unwrap(),
             ContextType::Container
@@ -819,17 +814,14 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(None).unwrap().clone();
+        let cmd = p.end(None).unwrap();
         assert!(matches!(cmd, Command::ContextSignal(_)));
         let cs = match cmd {
             Command::ContextSignal(cs) => cs,
             _ => unreachable!(),
         };
         assert_eq!(cs.action, super::Action::End);
-        assert_eq!(
-            cs.id.as_slice(),
-            b"bed86fab93af4328bbed0a1224af6d40".as_slice()
-        );
+        assert_eq!(cs.id, b"bed86fab93af4328bbed0a1224af6d40".as_slice());
     }
 
     #[test]
@@ -840,7 +832,7 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(None).unwrap().clone();
+        let cmd = p.end(None).unwrap();
         assert!(matches!(cmd, Command::ContextSignal(_)));
         let cs = match cmd {
             Command::ContextSignal(cs) => cs,
@@ -864,14 +856,14 @@ mod tests {
             p.next(ch);
         }
 
-        let cmd = p.end(None).unwrap().clone();
+        let cmd = p.end(None).unwrap();
         assert!(matches!(cmd, Command::ContextSignal(_)));
         let cs = match cmd {
             Command::ContextSignal(cs) => cs,
             _ => unreachable!(),
         };
         assert_eq!(cs.action, super::Action::Start);
-        assert_eq!(cs.id.as_slice(), b"simpleid".as_slice());
+        assert_eq!(cs.id, b"simpleid".as_slice());
         assert!(cs.read_option(Field::Type).is_null());
         assert!(cs.read_option(Field::User).is_null());
         assert!(cs.read_option(Field::Exit).is_null());

@@ -127,8 +127,16 @@ pub enum TransitionAction {
 // The `Action.Tag` (`std.meta.FieldEnum`) reflection alias and the `format`
 // logging implementations are observability-only helpers with no behavioral
 // effect; they are ported as commented references below.
-#[derive(Debug, Clone, PartialEq)]
-pub enum Action {
+//
+// PORT NOTE (parity tail S7-7, N263): the OSC payload is the exception. Its text
+// fields BORROW the OSC parser's storage, as the reference's do, so `Action`
+// carries the parser's lifetime `'p`, and the actions `Parser::next` returns
+// hold the parser borrowed until they are consumed. Only `osc_dispatch`
+// borrows; every other variant converts to `Action<'static>` with
+// [`Action::into_static`]. There is no `Clone`: the OSC command owns the lists
+// the reference allocates through the OSC parser's allocator.
+#[derive(Debug, PartialEq)]
+pub enum Action<'p> {
     // pub const Tag = std.meta.FieldEnum(Action);
     /// Draw character to the screen. This is a unicode codepoint.
     // print: u21,
@@ -158,7 +166,7 @@ pub enum Action {
 
     /// Execute the OSC command.
     // osc_dispatch: osc.Command,
-    OscDispatch(Box<osc::Command>),
+    OscDispatch(Box<osc::Command<'p>>),
 
     /// DCS-related events.
     // dcs_hook: DCS,
@@ -175,6 +183,32 @@ pub enum Action {
     ApcPut(u8),
     // apc_end: void,
     ApcEnd,
+}
+
+impl<'p> Action<'p> {
+    /// This action with no borrow of the parser, for every variant but
+    /// `OscDispatch`, which is handed back in `Err`.
+    ///
+    /// PORT NOTE (parity tail S7-7): Rust-only glue. `Parser::next` returns its
+    /// three actions under one borrow of the parser; a consumer that must call
+    /// back into its own state between them (the stream) detaches the ones that
+    /// cannot borrow. Only the exit action of `osc_string` can.
+    #[inline(always)]
+    pub fn into_static(self) -> Result<Action<'static>, Box<osc::Command<'p>>> {
+        Ok(match self {
+            Action::Print(c) => Action::Print(c),
+            Action::Execute(c) => Action::Execute(c),
+            Action::CsiDispatch(v) => Action::CsiDispatch(v),
+            Action::EscDispatch(v) => Action::EscDispatch(v),
+            Action::OscDispatch(cmd) => return Err(cmd),
+            Action::DcsHook(v) => Action::DcsHook(v),
+            Action::DcsPut(c) => Action::DcsPut(c),
+            Action::DcsUnhook => Action::DcsUnhook,
+            Action::ApcStart => Action::ApcStart,
+            Action::ApcPut(c) => Action::ApcPut(c),
+            Action::ApcEnd => Action::ApcEnd,
+        })
+    }
 }
 
 // PORT NOTE: `Action.CSI` is a nested struct in the reference; hoisted to a
@@ -511,9 +545,10 @@ pub const MAX_PARAMS: usize = 24;
 
 /// VT-series parser for escape and control sequences.
 // PORT NOTE: the reference is `const Parser = @This()` — the file *is* the
-// struct. Ported as a named `Parser` struct carrying the same fields. The
-// embedded `osc.Parser` carries the OSC allocator lifetime `'a`.
-pub struct Parser<'a> {
+// struct. Ported as a named `Parser` struct carrying the same fields.
+// (parity tail S7-7: the embedded `osc.Parser` no longer carries an allocator
+// lifetime; its allocator is the runtime handle.)
+pub struct Parser {
     /// Current state of the state machine
     pub state: State,
 
@@ -529,12 +564,12 @@ pub struct Parser<'a> {
     pub param_acc_idx: u8,
 
     /// Parser for OSC sequences
-    pub osc_parser: osc::Parser<'a>,
+    pub osc_parser: osc::Parser,
 }
 
-impl<'a> Parser<'a> {
+impl Parser {
     // pub fn init() Parser {
-    pub fn init() -> Parser<'a> {
+    pub fn init() -> Parser {
         // var result: Parser = .{ ... };
         // PORT NOTE: the reference's `intermediates`/`params` are left
         // `undefined` (and only reset under Valgrind via the runningOnValgrind
@@ -573,7 +608,7 @@ impl<'a> Parser<'a> {
     // bench->next call (benchmark/TerminalParser.zig:100) inlines under
     // ReleaseFast; #[inline] restores cross-crate inlinability without LTO.
     #[inline]
-    pub fn next(&mut self, c: u8) -> [Option<Action>; 3] {
+    pub fn next(&mut self, c: u8) -> [Option<Action<'_>>; 3] {
         // PERF(port): `self.state` hoisted into a local. Nothing below writes
         // `self.state` until the deferred assignment (the arms only touch the
         // osc parser / intermediates / params), so every read is the same
@@ -636,16 +671,21 @@ impl<'a> Parser<'a> {
         }
 
         // Exit depends on current state
-        let exit: Option<Action> = if state == next_state {
+        let exit: Option<Action<'static>> = if state == next_state {
             None
         } else {
             match state {
                 // .osc_string => if (self.osc_parser.end(c)) |cmd|
                 //     Action{ .osc_dispatch = cmd.* } else null,
-                State::OscString => self
-                    .osc_parser
-                    .end(Some(c))
-                    .map(|cmd| Action::OscDispatch(Box::new(cmd.clone()))),
+                // PORT NOTE (parity tail S7-7): evaluated LAST, below. The
+                // command borrows `self.osc_parser` for as long as the returned
+                // actions live, so nothing may take `&mut self` after it. The
+                // transition and entry actions of an `osc_string` exit never
+                // touch the OSC parser (the table leaves `osc_string` only on
+                // BEL, ESC, CAN and SUB: `none`/`execute` transitions into
+                // `ground`/`escape`, whose entries are nothing and `clear()`),
+                // so the reordering is unobservable.
+                State::OscString => None,
                 // .dcs_passthrough => Action{ .dcs_unhook = {} },
                 State::DcsPassthrough => Some(Action::DcsUnhook),
                 // .sos_pm_apc_string => Action{ .apc_end = {} },
@@ -659,7 +699,7 @@ impl<'a> Parser<'a> {
         let transition = self.do_action(action, c);
 
         // Entry depends on new state
-        let entry: Option<Action> = if state == next_state {
+        let entry: Option<Action<'static>> = if state == next_state {
             None
         } else {
             match next_state {
@@ -714,6 +754,20 @@ impl<'a> Parser<'a> {
         // (the Zig `defer` above).
         self.state = next_state;
 
+        if state == State::OscString {
+            debug_assert!(
+                next_state != State::OscString
+                    && matches!(action, TransitionAction::None | TransitionAction::Execute)
+            );
+            // .osc_string => if (self.osc_parser.end(c)) |cmd|
+            //     Action{ .osc_dispatch = cmd.* } else null,
+            let exit = self
+                .osc_parser
+                .end(Some(c))
+                .map(|cmd| Action::OscDispatch(Box::new(cmd)));
+            return [exit, transition, entry];
+        }
+
         [exit, transition, entry]
     }
 
@@ -740,7 +794,7 @@ impl<'a> Parser<'a> {
     // the dispatch arms building their owned payloads in place (the former
     // staging layer is gone).
     #[inline(always)]
-    fn do_action(&mut self, action: TransitionAction, c: u8) -> Option<Action> {
+    fn do_action(&mut self, action: TransitionAction, c: u8) -> Option<Action<'static>> {
         match action {
             // .none, .ignore => null,
             TransitionAction::None | TransitionAction::Ignore => None,
@@ -878,19 +932,28 @@ impl<'a> Parser<'a> {
 mod tests {
     use super::*;
     use crate::osc;
-    use rustty_lib::allocator::{GlobalZigAllocator, ZigAllocatorRef};
+
+    /// PORT NOTE (parity tail S7-7): `p.next(c)` with its actions detached from
+    /// the parser borrow (`Action::into_static`), so a test can read `p.state`
+    /// while it holds them, as the reference's tests do. None of the actions
+    /// these tests see is an `osc_dispatch`; the OSC tests call `p.next`
+    /// directly.
+    fn next(p: &mut Parser, c: u8) -> [Option<Action<'static>>; 3] {
+        p.next(c)
+            .map(|a| a.map(|a| a.into_static().expect("not an osc_dispatch action")))
+    }
 
     // test {
     #[test]
     fn basic_apc_print_execute() {
         let mut p = Parser::init();
-        let _ = p.next(0x9E);
+        let _ = next(&mut p, 0x9E);
         assert!(p.state == State::SosPmApcString);
-        let _ = p.next(0x9C);
+        let _ = next(&mut p, 0x9C);
         assert!(p.state == State::Ground);
 
         {
-            let a = p.next(b'a');
+            let a = next(&mut p, b'a');
             assert!(p.state == State::Ground);
             assert!(a[0].is_none());
             assert!(matches!(a[1].as_ref().unwrap(), Action::Print(_)));
@@ -898,7 +961,7 @@ mod tests {
         }
 
         {
-            let a = p.next(0x19);
+            let a = next(&mut p, 0x19);
             assert!(p.state == State::Ground);
             assert!(a[0].is_none());
             assert!(matches!(a[1].as_ref().unwrap(), Action::Execute(_)));
@@ -910,11 +973,11 @@ mod tests {
     #[test]
     fn esc_esc_paren_b() {
         let mut p = Parser::init();
-        let _ = p.next(0x1B);
-        let _ = p.next(b'(');
+        let _ = next(&mut p, 0x1B);
+        let _ = next(&mut p, b'(');
 
         {
-            let a = p.next(b'B');
+            let a = next(&mut p, b'B');
             assert!(p.state == State::Ground);
             assert!(a[0].is_none());
             assert!(matches!(a[1].as_ref().unwrap(), Action::EscDispatch(_)));
@@ -934,11 +997,11 @@ mod tests {
     #[test]
     fn csi_esc_bracket_h() {
         let mut p = Parser::init();
-        let _ = p.next(0x1B);
-        let _ = p.next(0x5B);
+        let _ = next(&mut p, 0x1B);
+        let _ = next(&mut p, 0x5B);
 
         {
-            let a = p.next(0x48);
+            let a = next(&mut p, 0x48);
             assert!(p.state == State::Ground);
             assert!(a[0].is_none());
             assert!(matches!(a[1].as_ref().unwrap(), Action::CsiDispatch(_)));
@@ -957,14 +1020,14 @@ mod tests {
     #[test]
     fn csi_esc_bracket_1_4_h() {
         let mut p = Parser::init();
-        let _ = p.next(0x1B);
-        let _ = p.next(0x5B);
-        let _ = p.next(0x31); // 1
-        let _ = p.next(0x3B); // ;
-        let _ = p.next(0x34); // 4
+        let _ = next(&mut p, 0x1B);
+        let _ = next(&mut p, 0x5B);
+        let _ = next(&mut p, 0x31); // 1
+        let _ = next(&mut p, 0x3B); // ;
+        let _ = next(&mut p, 0x34); // 4
 
         {
-            let a = p.next(0x48); // H
+            let a = next(&mut p, 0x48); // H
             assert!(p.state == State::Ground);
             assert!(a[0].is_none());
             assert!(matches!(a[1].as_ref().unwrap(), Action::CsiDispatch(_)));
@@ -985,15 +1048,15 @@ mod tests {
     #[test]
     fn csi_sgr_esc_38_2_m() {
         let mut p = Parser::init();
-        let _ = p.next(0x1B);
-        let _ = p.next(b'[');
-        let _ = p.next(b'3');
-        let _ = p.next(b'8');
-        let _ = p.next(b':');
-        let _ = p.next(b'2');
+        let _ = next(&mut p, 0x1B);
+        let _ = next(&mut p, b'[');
+        let _ = next(&mut p, b'3');
+        let _ = next(&mut p, b'8');
+        let _ = next(&mut p, b':');
+        let _ = next(&mut p, b'2');
 
         {
-            let a = p.next(b'm');
+            let a = next(&mut p, b'm');
             assert!(p.state == State::Ground);
             assert!(a[0].is_none());
             assert!(matches!(a[1].as_ref().unwrap(), Action::CsiDispatch(_)));
@@ -1016,26 +1079,26 @@ mod tests {
     #[test]
     fn csi_sgr_colon_followed_by_semicolon() {
         let mut p = Parser::init();
-        let _ = p.next(0x1B);
+        let _ = next(&mut p, 0x1B);
         for c in *b"[48:2" {
-            let a = p.next(c);
+            let a = next(&mut p, c);
             assert!(a[0].is_none());
             assert!(a[1].is_none());
             assert!(a[2].is_none());
         }
 
         {
-            let a = p.next(b'm');
+            let a = next(&mut p, b'm');
             assert!(p.state == State::Ground);
             assert!(a[0].is_none());
             assert!(matches!(a[1].as_ref().unwrap(), Action::CsiDispatch(_)));
             assert!(a[2].is_none());
         }
 
-        let _ = p.next(0x1B);
-        let _ = p.next(b'[');
+        let _ = next(&mut p, 0x1B);
+        let _ = next(&mut p, b'[');
         {
-            let a = p.next(b'H');
+            let a = next(&mut p, b'H');
             assert!(p.state == State::Ground);
             assert!(a[0].is_none());
             assert!(matches!(a[1].as_ref().unwrap(), Action::CsiDispatch(_)));
@@ -1047,16 +1110,16 @@ mod tests {
     #[test]
     fn csi_sgr_mixed_colon_and_semicolon() {
         let mut p = Parser::init();
-        let _ = p.next(0x1B);
+        let _ = next(&mut p, 0x1B);
         for c in *b"[38:5:1;48:5:0" {
-            let a = p.next(c);
+            let a = next(&mut p, c);
             assert!(a[0].is_none());
             assert!(a[1].is_none());
             assert!(a[2].is_none());
         }
 
         {
-            let a = p.next(b'm');
+            let a = next(&mut p, b'm');
             assert!(p.state == State::Ground);
             assert!(a[0].is_none());
             assert!(matches!(a[1].as_ref().unwrap(), Action::CsiDispatch(_)));
@@ -1068,16 +1131,16 @@ mod tests {
     #[test]
     fn csi_sgr_esc_48_2_m() {
         let mut p = Parser::init();
-        let _ = p.next(0x1B);
+        let _ = next(&mut p, 0x1B);
         for c in *b"[48:2:240:143:104" {
-            let a = p.next(c);
+            let a = next(&mut p, c);
             assert!(a[0].is_none());
             assert!(a[1].is_none());
             assert!(a[2].is_none());
         }
 
         {
-            let a = p.next(b'm');
+            let a = next(&mut p, b'm');
             assert!(p.state == State::Ground);
             assert!(a[0].is_none());
             assert!(matches!(a[1].as_ref().unwrap(), Action::CsiDispatch(_)));
@@ -1106,14 +1169,14 @@ mod tests {
     #[test]
     fn csi_sgr_esc_4_3_m_colon() {
         let mut p = Parser::init();
-        let _ = p.next(0x1B);
-        let _ = p.next(b'[');
-        let _ = p.next(b'4');
-        let _ = p.next(b':');
-        let _ = p.next(b'3');
+        let _ = next(&mut p, 0x1B);
+        let _ = next(&mut p, b'[');
+        let _ = next(&mut p, b'4');
+        let _ = next(&mut p, b':');
+        let _ = next(&mut p, b'3');
 
         {
-            let a = p.next(b'm');
+            let a = next(&mut p, b'm');
             assert!(p.state == State::Ground);
             assert!(a[0].is_none());
             assert!(matches!(a[1].as_ref().unwrap(), Action::CsiDispatch(_)));
@@ -1136,16 +1199,16 @@ mod tests {
     #[test]
     fn csi_sgr_with_many_blank_and_colon() {
         let mut p = Parser::init();
-        let _ = p.next(0x1B);
+        let _ = next(&mut p, 0x1B);
         for c in *b"[58:2::240:143:104" {
-            let a = p.next(c);
+            let a = next(&mut p, c);
             assert!(a[0].is_none());
             assert!(a[1].is_none());
             assert!(a[2].is_none());
         }
 
         {
-            let a = p.next(b'm');
+            let a = next(&mut p, b'm');
             assert!(p.state == State::Ground);
             assert!(a[0].is_none());
             assert!(matches!(a[1].as_ref().unwrap(), Action::CsiDispatch(_)));
@@ -1177,16 +1240,16 @@ mod tests {
     #[test]
     fn csi_sgr_mixed_colon_and_semicolon_with_blank() {
         let mut p = Parser::init();
-        let _ = p.next(0x1B);
+        let _ = next(&mut p, 0x1B);
         for c in *b"[;4:3;38;2;175;175;215;58:2::190:80:70" {
-            let a = p.next(c);
+            let a = next(&mut p, c);
             assert!(a[0].is_none());
             assert!(a[1].is_none());
             assert!(a[2].is_none());
         }
 
         {
-            let a = p.next(b'm');
+            let a = next(&mut p, b'm');
             assert!(p.state == State::Ground);
             assert!(a[0].is_none());
             assert!(matches!(a[1].as_ref().unwrap(), Action::CsiDispatch(_)));
@@ -1234,16 +1297,16 @@ mod tests {
     #[test]
     fn csi_sgr_mixed_colon_and_semicolon_setting_underline_bg_fg() {
         let mut p = Parser::init();
-        let _ = p.next(0x1B);
+        let _ = next(&mut p, 0x1B);
         for c in *b"[4:3;38;2;51;51;51;48;2;170;170;170;58;2;255;97;136" {
-            let a = p.next(c);
+            let a = next(&mut p, c);
             assert!(a[0].is_none());
             assert!(a[1].is_none());
             assert!(a[2].is_none());
         }
 
         {
-            let a = p.next(b'm');
+            let a = next(&mut p, b'm');
             assert!(p.state == State::Ground);
             assert!(a[0].is_none());
             assert!(matches!(a[1].as_ref().unwrap(), Action::CsiDispatch(_)));
@@ -1296,9 +1359,9 @@ mod tests {
     #[test]
     fn csi_colon_for_non_m_final() {
         let mut p = Parser::init();
-        let _ = p.next(0x1B);
+        let _ = next(&mut p, 0x1B);
         for c in *b"[38:2h" {
-            let a = p.next(c);
+            let a = next(&mut p, c);
             assert!(a[0].is_none());
             assert!(a[1].is_none());
             assert!(a[2].is_none());
@@ -1311,16 +1374,16 @@ mod tests {
     #[test]
     fn csi_request_mode_decrqm() {
         let mut p = Parser::init();
-        let _ = p.next(0x1B);
+        let _ = next(&mut p, 0x1B);
         for c in *b"[?2026$" {
-            let a = p.next(c);
+            let a = next(&mut p, c);
             assert!(a[0].is_none());
             assert!(a[1].is_none());
             assert!(a[2].is_none());
         }
 
         {
-            let a = p.next(b'p');
+            let a = next(&mut p, b'p');
             assert!(p.state == State::Ground);
             assert!(a[0].is_none());
             assert!(matches!(a[1].as_ref().unwrap(), Action::CsiDispatch(_)));
@@ -1343,16 +1406,16 @@ mod tests {
     #[test]
     fn csi_change_cursor() {
         let mut p = Parser::init();
-        let _ = p.next(0x1B);
+        let _ = next(&mut p, 0x1B);
         for c in *b"[3 " {
-            let a = p.next(c);
+            let a = next(&mut p, c);
             assert!(a[0].is_none());
             assert!(a[1].is_none());
             assert!(a[2].is_none());
         }
 
         {
-            let a = p.next(b'q');
+            let a = next(&mut p, b'q');
             assert!(p.state == State::Ground);
             assert!(a[0].is_none());
             assert!(matches!(a[1].as_ref().unwrap(), Action::CsiDispatch(_)));
@@ -1384,7 +1447,9 @@ mod tests {
 
         {
             let a = p.next(0x07); // BEL
-            assert!(p.state == State::Ground);
+                                  // assert(p.state == .ground);
+                                  // PORT NOTE (parity tail S7-7): read after the block: the actions
+                                  // hold the parser borrowed while the command is inspected.
             assert!(matches!(a[0].as_ref().unwrap(), Action::OscDispatch(_)));
             assert!(a[1].is_none());
             assert!(a[2].is_none());
@@ -1400,6 +1465,7 @@ mod tests {
             };
             assert_eq!(b"abc", title.as_slice());
         }
+        assert!(p.state == State::Ground);
     }
 
     // test "osc: change window title (end in esc)" {
@@ -1416,24 +1482,32 @@ mod tests {
 
         {
             let a = p.next(0x1B);
-            // PORT NOTE: the reference reads `a` (the result of `next(0x1B)`)
-            // before calling `next('\\')`; we mirror that ordering by extracting
-            // the cloned command from `a` first, then advancing the parser.
-            let cmd = match a[0].as_ref() {
-                Some(Action::OscDispatch(cmd)) => (**cmd).clone(),
-                _ => panic!("expected osc_dispatch"),
-            };
+            // _ = p.next('\\');
+            // try testing.expect(p.state == .ground);
+            // PORT NOTE (parity tail S7-7): the reference calls `next('\\')`
+            // before it reads `a`. The command borrows the OSC parser, "only
+            // valid until the next call to next", which the borrow checker
+            // enforces; the reference's read after `next('\\')` relies on that
+            // call not touching the OSC buffer. The same assertions run on `a`
+            // first, then `next('\\')` and the state check.
+            assert!(matches!(a[0].as_ref(), Some(Action::OscDispatch(_))));
             assert!(a[1].is_none());
             assert!(a[2].is_none());
-            let _ = p.next(b'\\');
-            assert!(p.state == State::Ground);
 
+            let cmd = match a[0].as_ref() {
+                Some(Action::OscDispatch(cmd)) => cmd.as_ref(),
+                _ => panic!("expected osc_dispatch"),
+            };
             assert!(matches!(cmd, osc::Command::ChangeWindowTitle(_)));
-            let title = match &cmd {
+            let title = match cmd {
                 osc::Command::ChangeWindowTitle(t) => t,
                 _ => unreachable!(),
             };
             assert_eq!(b"abc", title.as_slice());
+            drop(a);
+
+            let _ = p.next(b'\\');
+            assert!(p.state == State::Ground);
         }
     }
 
@@ -1442,8 +1516,7 @@ mod tests {
     // test "osc: 112 incomplete sequence" {
     #[test]
     fn osc_112_incomplete_sequence() {
-        let backend = GlobalZigAllocator;
-        let alloc = ZigAllocatorRef::new(&backend);
+        let alloc = crate::alloc::Global;
         let mut p: Parser = Parser::init();
         // defer p.deinit();
         // p.osc_parser.alloc = std.testing.allocator;
@@ -1457,7 +1530,9 @@ mod tests {
 
         {
             let a = p.next(0x07);
-            assert!(p.state == State::Ground);
+            // assert(p.state == .ground);
+            // PORT NOTE (parity tail S7-7): read after the block: the actions
+            // hold the parser borrowed while the command is inspected.
             assert!(matches!(a[0].as_ref().unwrap(), Action::OscDispatch(_)));
             assert!(a[1].is_none());
             assert!(a[2].is_none());
@@ -1492,6 +1567,7 @@ mod tests {
             }
             assert!(it.next().is_none());
         }
+        assert!(p.state == State::Ground);
 
         p.deinit();
     }
@@ -1499,8 +1575,7 @@ mod tests {
     // test "osc: 104 empty" {
     #[test]
     fn osc_104_empty() {
-        let backend = GlobalZigAllocator;
-        let alloc = ZigAllocatorRef::new(&backend);
+        let alloc = crate::alloc::Global;
         let mut p: Parser = Parser::init();
         // defer p.deinit();
         // p.osc_parser.alloc = std.testing.allocator;
@@ -1514,7 +1589,9 @@ mod tests {
 
         {
             let a = p.next(0x07);
-            assert!(p.state == State::Ground);
+            // assert(p.state == .ground);
+            // PORT NOTE (parity tail S7-7): read after the block: the actions
+            // hold the parser borrowed while the command is inspected.
             assert!(matches!(a[0].as_ref().unwrap(), Action::OscDispatch(_)));
             assert!(a[1].is_none());
             assert!(a[2].is_none());
@@ -1542,6 +1619,7 @@ mod tests {
             }
             assert!(it.next().is_none());
         }
+        assert!(p.state == State::Ground);
 
         p.deinit();
     }
@@ -1550,16 +1628,16 @@ mod tests {
     #[test]
     fn csi_too_many_params() {
         let mut p = Parser::init();
-        let _ = p.next(0x1B);
-        let _ = p.next(b'[');
+        let _ = next(&mut p, 0x1B);
+        let _ = next(&mut p, b'[');
         for _ in 0..100 {
-            let _ = p.next(b'1');
-            let _ = p.next(b';');
+            let _ = next(&mut p, b'1');
+            let _ = next(&mut p, b';');
         }
-        let _ = p.next(b'1');
+        let _ = next(&mut p, b'1');
 
         {
-            let a = p.next(b'C');
+            let a = next(&mut p, b'C');
             assert!(p.state == State::Ground);
             assert!(a[0].is_none());
             assert!(a[1].is_none());
@@ -1572,17 +1650,17 @@ mod tests {
     fn csi_sgr_with_up_to_our_max_parameters() {
         for max in 1..MAX_PARAMS + 1 {
             let mut p = Parser::init();
-            let _ = p.next(0x1B);
-            let _ = p.next(b'[');
+            let _ = next(&mut p, 0x1B);
+            let _ = next(&mut p, b'[');
 
             for _ in 0..max - 1 {
-                let _ = p.next(b'1');
-                let _ = p.next(b';');
+                let _ = next(&mut p, b'1');
+                let _ = next(&mut p, b';');
             }
-            let _ = p.next(b'2');
+            let _ = next(&mut p, b'2');
 
             {
-                let a = p.next(b'H');
+                let a = next(&mut p, b'H');
                 assert!(p.state == State::Ground);
                 assert!(a[0].is_none());
                 assert!(matches!(a[1].as_ref().unwrap(), Action::CsiDispatch(_)));
@@ -1605,17 +1683,17 @@ mod tests {
         let max = MAX_PARAMS + 2;
 
         let mut p = Parser::init();
-        let _ = p.next(0x1B);
-        let _ = p.next(b'[');
+        let _ = next(&mut p, 0x1B);
+        let _ = next(&mut p, b'[');
 
         for _ in 0..max - 1 {
-            let _ = p.next(b'1');
-            let _ = p.next(b';');
+            let _ = next(&mut p, b'1');
+            let _ = next(&mut p, b';');
         }
-        let _ = p.next(b'2');
+        let _ = next(&mut p, b'2');
 
         {
-            let a = p.next(b'H');
+            let a = next(&mut p, b'H');
             assert!(p.state == State::Ground);
             assert!(a[0].is_none());
             assert!(a[1].is_none());
@@ -1627,16 +1705,16 @@ mod tests {
     #[test]
     fn dcs_xtgettcap() {
         let mut p = Parser::init();
-        let _ = p.next(0x1B);
+        let _ = next(&mut p, 0x1B);
         for c in *b"P+" {
-            let a = p.next(c);
+            let a = next(&mut p, c);
             assert!(a[0].is_none());
             assert!(a[1].is_none());
             assert!(a[2].is_none());
         }
 
         {
-            let a = p.next(b'q');
+            let a = next(&mut p, b'q');
             assert!(p.state == State::DcsPassthrough);
             assert!(a[0].is_none());
             assert!(a[1].is_none());
@@ -1656,16 +1734,16 @@ mod tests {
     #[test]
     fn dcs_params() {
         let mut p = Parser::init();
-        let _ = p.next(0x1B);
+        let _ = next(&mut p, 0x1B);
         for c in *b"P1000" {
-            let a = p.next(c);
+            let a = next(&mut p, c);
             assert!(a[0].is_none());
             assert!(a[1].is_none());
             assert!(a[2].is_none());
         }
 
         {
-            let a = p.next(b'p');
+            let a = next(&mut p, b'p');
             assert!(p.state == State::DcsPassthrough);
             assert!(a[0].is_none());
             assert!(a[1].is_none());
@@ -1688,20 +1766,20 @@ mod tests {
         // entering dcs_passthrough wrote to params[params_idx] without a
         // bounds check, causing an out-of-bounds access.
         let mut p = Parser::init();
-        let _ = p.next(0x1B); // ESC
-        let _ = p.next(b'P'); // DCS entry
+        let _ = next(&mut p, 0x1B); // ESC
+        let _ = next(&mut p, b'P'); // DCS entry
 
         // Feed a digit then MAX_PARAMS semicolons to fill all param slots.
-        let _ = p.next(b'6');
+        let _ = next(&mut p, b'6');
         for _ in 0..MAX_PARAMS {
-            let _ = p.next(b';');
+            let _ = next(&mut p, b';');
         }
         // Feed another digit so param_acc_idx > 0 while params_idx == MAX_PARAMS.
-        let _ = p.next(b'7');
+        let _ = next(&mut p, b'7');
 
         // A final byte triggers entry to dcs_passthrough. The DCS should
         // be dropped entirely, consistent with how CSI handles overflow.
-        let a = p.next(b'p');
+        let a = next(&mut p, b'p');
         assert!(a[0].is_none());
         assert!(a[1].is_none());
         assert!(a[2].is_none());
@@ -1714,14 +1792,14 @@ mod tests {
     fn collect_logs_when_intermediates_overflow() {
         let cap = crate::log_capture::start();
         let mut p = Parser::init();
-        let _ = p.next(0x1B); // ESC
-        let _ = p.next(b'['); // CSI entry
-                              // Intermediate bytes are 0x20..=0x2F; feed one more than
-                              // `MAX_INTERMEDIATE` (4) to overflow `collect`.
+        let _ = next(&mut p, 0x1B); // ESC
+        let _ = next(&mut p, b'['); // CSI entry
+                                    // Intermediate bytes are 0x20..=0x2F; feed one more than
+                                    // `MAX_INTERMEDIATE` (4) to overflow `collect`.
         for _ in 0..(MAX_INTERMEDIATE + 1) {
-            let _ = p.next(b'!');
+            let _ = next(&mut p, b'!');
         }
-        let _ = p.next(b'm');
+        let _ = next(&mut p, b'm');
 
         let messages = cap.messages();
         assert!(
@@ -1743,12 +1821,12 @@ mod tests {
     fn csi_dispatch_logs_on_colon_separator_mismatch_for_non_m_command() {
         let cap = crate::log_capture::start();
         let mut p = Parser::init();
-        let _ = p.next(0x1B); // ESC
-        let _ = p.next(b'['); // CSI entry
-        let _ = p.next(b'1');
-        let _ = p.next(b':'); // colon separator — only valid for 'm'
-        let _ = p.next(b'2');
-        let a = p.next(b'H'); // cursor position, NOT 'm'
+        let _ = next(&mut p, 0x1B); // ESC
+        let _ = next(&mut p, b'['); // CSI entry
+        let _ = next(&mut p, b'1');
+        let _ = next(&mut p, b':'); // colon separator — only valid for 'm'
+        let _ = next(&mut p, b'2');
+        let a = next(&mut p, b'H'); // cursor position, NOT 'm'
 
         // The dispatch is suppressed entirely on the mismatch (`return None`).
         assert!(a.iter().all(Option::is_none));

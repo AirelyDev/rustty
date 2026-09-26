@@ -34,11 +34,9 @@ use rustty_vt::terminal::Terminal;
 // rustty equivalent, but it returns `Stream<'_>` borrowed from `&mut self`,
 // which cannot be stored beside the `Terminal` in one struct. So `create`
 // reproduces `vt_stream`'s body against the boxed terminal's stable address,
-// backing the OSC parser with a process-static `GlobalZigAllocator` exactly as
-// `terminal.rs:102` does and for the same reason (a `'static` allocator ref
-// coerces to any stream lifetime).
-static GLOBAL_ZIG_ALLOCATOR: rustty_lib::allocator::GlobalZigAllocator =
-    rustty_lib::allocator::GlobalZigAllocator;
+// passing the terminal's allocator (the Rust heap) as `vt_stream` passes
+// `gpa()` (parity tail S7-7; it used to be a process-static
+// `GlobalZigAllocator` reference).
 
 const LOG_SCOPE: &str = "terminal-stream-bench";
 
@@ -175,9 +173,7 @@ impl TerminalStream {
             opts,
             terminal,
             stream: Stream::init(rustty_vt::stream::Options {
-                allocator: Some(rustty_lib::allocator::ZigAllocatorRef::new(
-                    &GLOBAL_ZIG_ALLOCATOR,
-                )),
+                allocator: Some(rustty_vt::alloc::Global),
                 handler: Handler::init(core::ptr::null_mut()),
                 continuation_max_bytes,
             }),
@@ -185,9 +181,7 @@ impl TerminalStream {
         });
         let tptr: *mut Terminal = &mut b.terminal;
         b.stream = Stream::init(rustty_vt::stream::Options {
-            allocator: Some(rustty_lib::allocator::ZigAllocatorRef::new(
-                &GLOBAL_ZIG_ALLOCATOR,
-            )),
+            allocator: Some(rustty_vt::alloc::Global),
             handler: Handler::init(tptr),
             continuation_max_bytes,
         });
