@@ -1,5 +1,7 @@
 //! rustty-apprt::gtk::winproto::x11
 //!
+//! X11 window protocol implementation for the Rustty GTK apprt.
+//!
 //! PORTS: ghostty `src/apprt/gtk/winproto/x11.zig` (509 loc) — the X11
 //! window-protocol backend. Two types: [`App`] (per-application: the xlib
 //! `Display` GDK owns, plus the interned [`Atoms`]) and [`Window`] (per-surface:
@@ -33,10 +35,11 @@
 //!
 //! # DEFERRALS
 //!
-//! * **Quick terminal.** [`App::supports_quick_terminal`] is `false` and
-//!   [`App::init_quick_terminal`] returns unsupported — matching the reference,
-//!   whose X11 `supportsQuickTerminal` is unconditionally `false` (`x11.zig:172-177`;
-//!   the quick terminal is a Wayland layer-shell feature).
+//! * **Quick terminal.** [`App::supports_quick_terminal`] warns and is `false`, and
+//!   [`App::init_quick_terminal`] is an empty success — matching the reference
+//!   (`x11.zig:172-177`; the quick terminal is a Wayland layer-shell feature).
+//!   CORRECTION (task T-D, S60-F5): this said `init_quick_terminal` "returns
+//!   unsupported".
 
 use rustty_global::EnvMapExt as _;
 use std::os::raw::{c_int, c_long, c_uchar, c_uint, c_ulong, c_void};
@@ -70,6 +73,14 @@ const MWM_DECOR_ALL: c_ulong = 1 << 0;
 /// the client API (`x11.zig:471,477`). Both properties this arm writes
 /// (`_MOTIF_WM_HINTS`, `_KDE_NET_WM_BLUR_BEHIND_REGION`) use format 32.
 const FORMAT_32: c_int = 32;
+// PORT NOTE: the reference's `PropertyFormat.bufferType` (`x11.zig:481-488`) has no
+// counterpart: the port passes `*const c_uchar` built from `#[repr(C)]` `c_long`
+// words, so the alignment it guards is the source type's. Its comment, verbatim:
+// The buffer type has to be a multi-pointer to bytes
+// *aligned to the element type* (very important,
+// otherwise you'll read garbage!)
+//
+// I know this is really ugly. X11 is ugly. I consider it apropos.
 
 /// `XkbUseCoreKbd` (`X11/XKBlib.h`, via `X11/extensions/XKB.h`) — the core-keyboard
 /// device spec (`x11.zig:95`). `x11-dl` does not export it, so it is spelled here.
@@ -109,8 +120,6 @@ pub enum Error {
     PropertyTypeMismatch,
     /// `error.PropertyFormatMismatch` (`x11.zig:385,441`).
     PropertyFormatMismatch,
-    /// The quick terminal is not supported on X11 (`x11.zig:172-177`).
-    QuickTerminalUnsupported,
 }
 
 impl core::fmt::Display for Error {
@@ -124,14 +133,22 @@ impl core::fmt::Display for Error {
             Error::RequestFailed => write!(f, "X11 request failed"),
             Error::PropertyTypeMismatch => write!(f, "X11 property type mismatch"),
             Error::PropertyFormatMismatch => write!(f, "X11 property format mismatch"),
-            Error::QuickTerminalUnsupported => {
-                write!(f, "quick terminal is not supported on X11")
-            }
         }
     }
 }
 
 impl std::error::Error for Error {}
+
+/// `glib.setPrgname(name)` with the name's raw bytes: the reference passes its
+/// `[:0]const u8` config value straight to `g_set_prgname`, which does not
+/// require UTF-8. C reads up to the first NUL, as it does for the reference's
+/// sentinel-terminated slice.
+fn set_prgname_raw(name: &[u8]) {
+    let end = name.iter().position(|&b| b == 0).unwrap_or(name.len());
+    let c = std::ffi::CString::new(&name[..end]).expect("no interior NUL before `end`");
+    // SAFETY: `c` is a valid NUL-terminated string; GLib copies it.
+    unsafe { glib::ffi::g_set_prgname(c.as_ptr()) };
+}
 
 impl From<Error> for WinprotoError {
     fn from(e: Error) -> Self {
@@ -165,6 +182,10 @@ impl Atoms {
     }
 }
 
+// See Xm/MwmUtil.h, packaged with the Motif Window Manager
+//
+// We don't really care about the other flags
+// (the reference's `_rest` padding of both `flags` and `decorations`).
 /// PORTS: `x11.zig:491-509` `MotifWMHints`. See `Xm/MwmUtil.h`. `#[repr(C)]` of
 /// five machine words; the reference expresses `flags`/`decorations` as `c_ulong`
 /// packed bitfields, but the only bits this arm touches are
@@ -219,6 +240,7 @@ impl App {
         app_id: &str,
         config: &CoreConfig,
     ) -> Result<Option<App>, WinprotoError> {
+        // If the display isn't X11, then we don't need to do anything.
         // `gobject.ext.cast(gdk_x11.X11Display, gdk_display) orelse return null`
         // (`x11.zig:39-42`).
         let Some(x11d) = gdk_display.downcast_ref::<gdk4_x11::X11Display>() else {
@@ -229,15 +251,42 @@ impl App {
         // binding; the pointer is a live `Display` GDK owns for its lifetime.
         let display = unsafe { x11d.xdisplay() };
 
-        // Set WM_CLASS. The instance name is derived from `g_set_prgname`
-        // (`x11.zig:46-69`): `x11-instance-name` if set, else the debug/release
-        // program name. Matches the reference's structure with rustty's identity.
-        let program_name: std::borrow::Cow<'_, str> = match &config.x11_instance_name {
-            Some(pn) => String::from_utf8_lossy(pn),
-            None if cfg!(debug_assertions) => std::borrow::Cow::Borrowed("rustty-debug"),
-            None => std::borrow::Cow::Borrowed("rustty"),
+        // const x11_program_name: [:0]const u8 = if (config.@"x11-instance-name") |pn|
+        //     pn
+        // else if (builtin.mode == .Debug)
+        //     "ghostty-debug"
+        // else
+        //     "ghostty";
+        let x11_program_name: &[u8] = match &config.x11_instance_name {
+            Some(pn) => pn,
+            None if cfg!(debug_assertions) => b"rustty-debug",
+            None => b"rustty",
         };
-        glib::set_prgname(Some(program_name.as_ref()));
+
+        // Set the X11 window class property (WM_CLASS) if we are on an X11
+        // display.
+        //
+        // Note that we also set the program name here using g_set_prgname.
+        // This is how the instance name field for WM_CLASS is derived when
+        // calling gdk_x11_display_set_program_class; there does not seem to be
+        // a way to set it directly. It does not look like this is being set by
+        // our other app initialization routines currently, but since we're
+        // currently deriving its value from x11-instance-name effectively, I
+        // feel like gating it behind an X11 check is better intent.
+        //
+        // This makes the property show up like so when using xprop:
+        //
+        //     WM_CLASS(STRING) = "rustty", "io.airely.rustty"
+        //
+        // Append "-debug" on both when using the debug build.
+        //
+        // CORRECTION (task T-D, S60-F8): the instance name went through
+        // `String::from_utf8_lossy` and `glib::set_prgname(&str)`, so a non-UTF-8
+        // `x11-instance-name` reached WM_CLASS with U+FFFD in place of its bytes,
+        // and the reference's comment block above had been dropped. The reference
+        // hands the raw `[:0]const u8` to `glib.setPrgname`; so does
+        // [`set_prgname_raw`].
+        set_prgname_raw(x11_program_name);
         // `gdk_x11.X11Display.setProgramClass(gdk_display, app_id)` (`x11.zig:70`).
         x11d.set_program_class(app_id);
 
@@ -327,24 +376,29 @@ impl App {
     #[allow(clippy::unused_self)]
     pub fn deinit(&mut self) {}
 
-    /// PORTS: `x11.zig:115-160` `App.eventMods`. Checks for an IMMEDIATE pending XKB
-    /// state-update event and derives the keyboard modifiers from it. This is
-    /// necessary because the standard GTK X11 API (and X11 generally) does not
-    /// include the just-pressed key in the modifier snapshot carried by that key's
-    /// own event — so pressing e.g. Shift does not show `shift` set.
+    /// Checks for an immediate pending XKB state update event, and returns the
+    /// keyboard state based on if it finds any. This is necessary as the
+    /// standard GTK X11 API (and X11 in general) does not include the current
+    /// key pressed in any modifier state snapshot for that event (e.g. if the
+    /// pressed key is a modifier, that is not necessarily reflected in the
+    /// modifiers).
     ///
-    /// Returns `None` when there is no such event; the caller
-    /// ([`super::App::event_mods`]) then falls back to the plain GDK modifier state
-    /// via `key::translate_mods` (`winproto.zig:62`).
+    /// Returns null if there is no event. In this case, the caller should fall
+    /// back to the standard GDK modifier state (this likely means the key
+    /// event did not result in a modifier change).
     ///
-    /// The approach is the reference's, which credits Firefox/Gecko's
-    /// `widget/gtk/nsGtkKeyUtils.cpp` (`x11.zig:133-134`).
+    /// PORTS: `x11.zig:115-160` `App.eventMods`. The caller
+    /// ([`super::App::event_mods`]) falls back via `key::translate_mods`
+    /// (`winproto.zig:62`).
     #[must_use]
     pub fn event_mods(
         &self,
         _device: Option<&gdk4::Device>,
         _gtk_mods: gdk4::ModifierType,
     ) -> Option<rustty_vt::input::key_mods::Mods> {
+        // Shoutout to Mozilla for figuring out a clean way to do this, this is
+        // paraphrased from Firefox/Gecko in widget/gtk/nsGtkKeyUtils.cpp.
+        //
         // `if (XEventsQueued(display, QueuedAfterReading) == 0) return null`
         // (`x11.zig:135-138`). This guard is load-bearing: XPeekEvent BLOCKS when
         // the queue is empty.
@@ -382,6 +436,7 @@ impl App {
                 std::ptr::from_ref(&next_event).cast::<xlib::XkbStateNotifyEvent>(),
             )
         };
+        // Check the state according to XKB masks.
         let lookup_mods = c_uint::from(state.lookup_mods);
 
         // `log.debug("X11: found extra XkbStateNotify event w/lookup_mods: {b}")`
@@ -441,16 +496,21 @@ impl App {
         false
     }
 
-    /// PORTS: `x11.zig:177` `App.initQuickTerminal`. Unsupported on X11 — returns
-    /// [`Error::QuickTerminalUnsupported`]. Only reachable if
-    /// [`Self::supports_quick_terminal`] is `true` (never), so effectively
-    /// unreachable; the reference's body is empty.
-    #[allow(clippy::unused_self)]
+    /// PORTS: `x11.zig:177` `App.initQuickTerminal` —
+    /// `pub fn initQuickTerminal(_: *App, _: *ApprtWindow) !void {}`: an empty
+    /// SUCCESS.
+    ///
+    /// CORRECTION (task T-D, S60-F5): this returned
+    /// `Err(Error::QuickTerminalUnsupported)` (a variant the reference's X11 error
+    /// set does not have) under a doc saying "Unsupported on X11 — returns
+    /// QuickTerminalUnsupported ... the reference's body is empty". The body is
+    /// empty AND returns success; the variant is removed.
+    #[allow(clippy::unused_self, clippy::unnecessary_wraps)]
     pub fn init_quick_terminal(
         &mut self,
         _window: &impl gtk4::prelude::IsA<gtk4::Window>,
     ) -> Result<(), WinprotoError> {
-        Err(Error::QuickTerminalUnsupported.into())
+        Ok(())
     }
 }
 
@@ -475,9 +535,10 @@ pub struct Window {
 
     /// PORTS: `x11.zig:186` `blur_region`.
     blur_region: BlurRegion,
-    /// PORTS: `x11.zig:191` `last_applied_decoration_hints`. Cache the last applied
-    /// `_MOTIF_WM_HINTS` to avoid redundant property writes, which glitch some WMs
-    /// (ghostty PR #8075, `x11.zig:188-191`).
+    // Cache last applied values to avoid redundant X11 property updates.
+    // Redundant property updates seem to cause some visual glitches
+    // with some window managers: https://github.com/ghostty-org/ghostty/pull/8075
+    /// PORTS: `x11.zig:191` `last_applied_decoration_hints`.
     last_applied_decoration_hints: Option<MotifWmHints>,
 }
 
@@ -533,6 +594,7 @@ impl Window {
     /// PORTS: `x11.zig:218-223` `Window.resizeEvent`. The blur region must track
     /// window resizes.
     pub fn resize_event(&mut self) -> Result<(), WinprotoError> {
+        // The blur region must update with window resizes
         // self.syncBlur() catch |err| { log.err("failed to sync blur={}", .{err}); };
         if let Err(err) = self.sync_blur() {
             log::error!(target: LOG_SCOPE, "failed to sync blur={err:?}");
@@ -543,6 +605,8 @@ impl Window {
     /// PORTS: `x11.zig:225-234` `Window.syncAppearance`. Re-derive both the blur
     /// region (CSD toggles change its offset) and the decoration hints.
     pub fn sync_appearance(&mut self) -> Result<(), WinprotoError> {
+        // The user could have toggled between CSDs and SSDs,
+        // therefore we need to recalculate the blur region offset.
         // self.syncBlur() catch |err| { log.err("failed to sync blur={}", .{err}); };
         if let Err(err) = self.sync_blur() {
             log::error!(target: LOG_SCOPE, "failed to sync blur={err:?}");
@@ -603,6 +667,7 @@ impl Window {
         let Some(config) = apprt.get_config() else {
             return Ok(());
         };
+        // When blur is disabled, remove the property if it was previously set
         let blur = config.get().background_blur;
 
         // `if (blur.enabled()) calcForWindow(..., true) else .empty` (`x11.zig:249-257`).
@@ -615,7 +680,7 @@ impl Window {
             BlurRegion::empty()
         };
 
-        // Only touch X11 when the region actually changes (`x11.zig:260-264`).
+        // Only update X11 properties when the blur region actually changes
         if region.eql(&self.blur_region) {
             return Ok(());
         }
@@ -663,6 +728,7 @@ impl Window {
         // `getWindowProperty(...)` catching PropertyNotFound (`x11.zig:292-307`).
         let mut hints = match self.get_motif_hints() {
             Ok(Some(h)) => h,
+            // motif_wm_hints is already initialized, so this is fine
             // PropertyNotFound => default (already-zeroed) hints (`x11.zig:300-301`).
             Ok(None) => MotifWmHints::default(),
             // RequestFailed / type / format mismatch: the reference PROPAGATES,
@@ -680,13 +746,15 @@ impl Window {
             hints.decorations &= !MWM_DECOR_ALL;
         }
 
-        // Only update when the hints actually change (`x11.zig:315-318`).
+        // Only update decoration hints when they actually change
         if self.last_applied_decoration_hints == Some(hints) {
             return Ok(());
         }
 
         // `changeProperty(MotifWMHints, motif_wm_hints, motif_wm_hints, ._32, .replace, &.{hints})`
         // (`x11.zig:320-327`). One element of five `c_long` words => nelements = 5.
+        // The reference computes it as `words_per_elem`:
+        // The number of "words" that each element `T` occupies.
         let data = std::ptr::addr_of!(hints).cast::<c_uchar>();
         unsafe {
             self.change_property(
@@ -861,6 +929,10 @@ impl Window {
                 nelements,
             )
         });
+        // For some godforsaken reason Xlib alternates between
+        // error values (0 = success) and booleans (1 = success), and they look exactly
+        // the same in the signature (just `int`, since Xlib is written in C89)...
+        //
         // `if (status == 0) return error.RequestFailed` (`x11.zig:421`); a trapped
         // X error takes the same path (R13, [`Self::trap_x_errors`]).
         #[cfg(test)]
@@ -964,6 +1036,77 @@ mod tests {
         _property: c_ulong,
     ) -> c_int {
         0
+    }
+
+    /// S60-F5: X11 `supportsQuickTerminal` warns "quick terminal is not yet
+    /// supported on X11" and returns false; `initQuickTerminal` is an empty
+    /// SUCCESS (`x11.zig:172-177`). Needs a live X server (headless sway's
+    /// Xwayland on the VM); FAILS rather than returning without one.
+    #[test]
+    #[ignore = "requires an X server; run with GDK_BACKEND=x11 DISPLAY=... cargo test -p rustty-apprt --features gtk,x11,wayland --lib x11_quick_terminal -- --ignored"]
+    fn x11_quick_terminal_warns_unsupported_and_init_succeeds() {
+        crate::gtk::init_for_display_test("x11_quick_terminal_warns_unsupported_and_init_succeeds");
+        let display = gdk4::Display::default().expect("a default GDK display");
+        assert!(
+            display.downcast_ref::<gdk4_x11::X11Display>().is_some(),
+            "this test needs the X11 GDK backend (GDK_BACKEND=x11)"
+        );
+        let mut x11_app = App::init(
+            &display,
+            "io.airely.rustty.test",
+            &CoreConfig::default_config(),
+        )
+        .expect("x11 App::init")
+        .expect("the X11 arm");
+
+        let cap = crate::log_capture::start();
+        let supported = x11_app.supports_quick_terminal();
+        let messages = cap.messages();
+        drop(cap);
+        assert!(!supported);
+        assert_eq!(
+            messages,
+            [(
+                log::Level::Warn,
+                LOG_SCOPE.to_owned(),
+                "quick terminal is not yet supported on X11".to_owned(),
+            )]
+        );
+
+        let window = gtk4::Window::new();
+        assert!(
+            x11_app.init_quick_terminal(&window).is_ok(),
+            "the reference's initQuickTerminal is an empty success"
+        );
+        window.destroy();
+    }
+
+    /// S60-F8: `x11-instance-name` reaches `g_set_prgname` as its raw bytes
+    /// (`x11.zig:46-69`, `glib.setPrgname(x11_program_name)`), which is where
+    /// GDK derives WM_CLASS's instance name from. A non-UTF-8 byte is kept, not
+    /// replaced by U+FFFD.
+    #[test]
+    #[ignore = "requires an X server; run with GDK_BACKEND=x11 DISPLAY=... cargo test -p rustty-apprt --features gtk,x11,wayland --lib x11_instance_name -- --ignored"]
+    fn x11_instance_name_reaches_g_set_prgname_raw() {
+        crate::gtk::init_for_display_test("x11_instance_name_reaches_g_set_prgname_raw");
+        let display = gdk4::Display::default().expect("a default GDK display");
+        assert!(
+            display.downcast_ref::<gdk4_x11::X11Display>().is_some(),
+            "this test needs the X11 GDK backend (GDK_BACKEND=x11)"
+        );
+        let mut config = CoreConfig::default_config();
+        config.x11_instance_name = Some(b"caf\xe9-rustty".to_vec());
+        let _x11_app = App::init(&display, "io.airely.rustty.test", &config)
+            .expect("x11 App::init")
+            .expect("the X11 arm");
+
+        // SAFETY: GLib returns its own NUL-terminated copy of the program name.
+        let prgname = unsafe {
+            let p = glib::ffi::g_get_prgname();
+            assert!(!p.is_null(), "App::init set a program name");
+            std::ffi::CStr::from_ptr(p).to_bytes().to_vec()
+        };
+        assert_eq!(prgname, b"caf\xe9-rustty");
     }
 
     /// S60-F1: `syncBlur` commits its new region to the cache only after the
@@ -1233,7 +1376,25 @@ mod tests {
             (xl.XSync)(other, 0);
             (xl.XCloseDisplay)(other);
         }
-        pump(1000);
+        // GDK's OWN requests against the dead window (UPSTREAM-DEFECTS UD56) are
+        // not what this test is about, and one of them, an `XIQueryPointer`
+        // (`request_code 131` XInputExtension, minor 40) issued while GDK
+        // processes the unmap, made the child exit 1 in about one run in three on
+        // the VM's headless sway Xwayland (task L-2). So every pump after the
+        // destroy runs under a GDK error trap of its own. The port's property
+        // writes never run inside one: they happen in `set_property` below, and
+        // `display.sync()` flushes any error they leave BEFORE the next trapped
+        // pump, so an untrapped write still exits the child.
+        let x11_display = display
+            .downcast_ref::<gdk4_x11::X11Display>()
+            .expect("the X11 GDK backend")
+            .clone();
+        let pump_trapped = |n: usize| {
+            // Dropped, so popped with `error_trap_pop_ignored`.
+            let _trap = XErrorTrap::push(Some(&x11_display));
+            pump(n);
+        };
+        pump_trapped(1000);
 
         // Each reload's `syncAppearance` runs synchronously inside `set_property`
         // (`notify::config`), and the trap pops (and syncs) before `syncBlur`
@@ -1268,7 +1429,7 @@ mod tests {
                  the X error trap reported as failed (trapped writes vs records)"
             );
             display.sync();
-            pump(200);
+            pump_trapped(200);
             logged
         };
 

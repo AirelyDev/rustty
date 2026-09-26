@@ -108,6 +108,9 @@ mod imp {
         #[property(name = "headerbar-visible", get = Self::headerbar_visible)]
         pub headerbar_visible_prop: PhantomData<bool>,
 
+        /// Whether this window is a quick terminal. If it is then it
+        /// behaves slightly differently under certain scenarios.
+        ///
         /// PORTS: `window.zig:135-151,221` `quick-terminal` (private field, which
         /// starts `false`; the pspec default is `true`, `:143`).
         ///
@@ -164,18 +167,28 @@ mod imp {
         pub toast_overlay: TemplateChild<adw::ToastOverlay>,
 
         // ---- Private (non-property) state (window.zig:218-260) -------------
+        /// Timeout source to react to this window becoming (in)active.
+        ///
         /// PORTS: `window.zig:224` `handle_active_state_source` — glib source
         /// (**invariant 11**), removed in `dispose`.
         pub handle_active_state_source: RefCell<Option<glib::SourceId>>,
 
+        /// The window decoration override. If this is not set then we'll
+        /// inherit whatever the config has. This allows overriding the
+        /// config on a per-window basis.
+        ///
         /// PORTS: `window.zig:229` `window_decoration` — the per-window decoration
         /// override; `None` inherits the config.
         pub window_decoration: RefCell<Option<rustty_config::value_types::WindowDecoration>>,
 
+        /// Binding group for our active tab.
+        ///
         /// PORTS: `window.zig:232` `tab_bindings` — the OWNED `GBindingGroup`. Set
         /// in `constructed`, `set_source(None)` in `dispose`, `unref` on `Drop`.
         pub tab_bindings: RefCell<Option<TabBindings>>,
 
+        /// State and logic for windowing protocol for a window.
+        ///
         /// PORTS: `window.zig:238` `winproto` — the per-window windowing protocol
         /// state (§1.11). `.none` until realized (`window.zig:312`).
         pub winproto: RefCell<winproto::Window>,
@@ -189,18 +202,27 @@ mod imp {
         /// a property or method that gets us all the surfaces in all the
         /// tabs and checking if we have zero or one that isn't initialized.
         ///
+        /// For now, this logic is more similar to our legacy GTK side.
+        ///
         /// PORTS: `window.zig:250` `surface_init` — whether any surface has
         /// initialized (gates default-size).
         pub surface_init: Cell<bool>,
 
+        /// See tabOverviewOpen for why we have this.
+        ///
         /// PORTS: `window.zig:253` `tab_overview_focus_timer` — glib source
         /// (**invariant 11**), removed in `dispose`.
         pub tab_overview_focus_timer: RefCell<Option<glib::SourceId>>,
 
+        /// A weak reference to a command palette.
+        ///
         /// PORTS: `window.zig:256` `command_palette` — a WEAK reference
         /// (**invariant 4**): the referent can finalize out from under us.
         pub command_palette: WeakRef<CommandPalette>,
 
+        /// Tab page that the context menu was opened for.
+        /// setup by `setup-menu`.
+        ///
         /// PORTS: `window.zig:260` `context_menu_page` — the tab page the context
         /// menu was opened for (owned by `tab_view`; set by `setup-menu`).
         pub context_menu_page: RefCell<Option<adw::TabPage>>,
@@ -277,6 +299,9 @@ mod imp {
                 self.config.replace(config);
             }
 
+            // We initialize our windowing protocol to none because we can't
+            // actually initialize this until we get realized.
+            //
             // `priv.winproto = .none` (`window.zig:312`) — already the field default.
 
             // Debug CSS class (`window.zig:315-317`).
@@ -284,6 +309,9 @@ mod imp {
                 obj.add_css_class("devel");
             }
 
+            // Setup our tab binding group. This ensures certain properties
+            // are only synced from the currently active tab.
+            //
             // Tab BindingGroup (`window.zig:321-322`): sync `title` from the active
             // tab to the window. **Invariant 12**: manually held (not sunk).
             let bindings = TabBindings::new();
@@ -297,6 +325,8 @@ mod imp {
             // Actions (`window.zig:329`).
             self.init_action_map();
 
+            // Start states based on config.
+            //
             // Start states from config (`window.zig:332-342`).
             {
                 let cfg = self.config.borrow();
@@ -308,16 +338,28 @@ mod imp {
                     if !matches!(c.fullscreen, Fullscreen::False) {
                         obj.fullscreen();
                     }
+                    // If we have an explicit title set, we set that immediately
+                    // so that any applications inspecting the window states see
+                    // an immediate title set when the window appears, rather than
+                    // waiting possibly a few event loop ticks for it to sync from
+                    // the surface.
                     if let Some(title) = &c.title {
                         obj.set_title(Some(&String::from_utf8_lossy(title)));
                     }
                 }
             }
 
+            // We always sync our appearance at the end because loading our
+            // config and such can affect our bindings which are setup initially
+            // in initTemplate.
+            //
             // Sync appearance last (`window.zig:347`) — config load affects the
             // bindings set up in `initTemplate`.
             self.sync_appearance();
 
+            // We need to do this so that the title initializes properly,
+            // I think because its a dynamic getter.
+            //
             // Kick the dynamic `active-surface` getter (`window.zig:351`).
             obj.notify("active-surface");
         }
@@ -404,29 +446,34 @@ mod imp {
 
         /// PORTS: `window.zig:994-1025` `getHeaderbarVisible`.
         fn headerbar_visible(&self) -> bool {
-            // Never with CSDs disabled (`:997-999`).
+            // Never display the header bar when CSDs are disabled.
             if !self.winproto.borrow().client_side_decoration_enabled() {
                 return false;
             }
-            // Never as a quick terminal (`:1001-1002`).
+            // Never display the header bar as a quick terminal.
             if self.quick_terminal.get() {
                 return false;
             }
-            // Never when fullscreen (`:1004-1005`).
+            // If we're fullscreen we never show the header bar.
             if self.obj().is_fullscreen() {
                 return false;
             }
+            // The remainder needs a config
             let cfg = self.config.borrow();
             let Some(config) = cfg.as_ref() else {
                 return true;
             };
             let c = config.get();
-            // Conditionally hide when maximized (`:1011-1015`).
+            // *Conditionally* disable the header bar when maximized, and
+            // gtk-titlebar-hide-when-maximized is set
             if self.obj().is_maximized() && c.gtk_titlebar_hide_when_maximized {
                 return false;
             }
             match c.gtk_titlebar_style {
+                // If the titlebar style is tabs never show the titlebar.
                 GtkTitlebarStyle::Tabs => false,
+                // If the titlebar style is native show the titlebar if configured
+                // to do so.
                 GtkTitlebarStyle::Native => c.gtk_titlebar,
             }
         }
@@ -439,10 +486,15 @@ mod imp {
             };
             let c = config.get();
             match c.gtk_titlebar_style {
+                // If the titlebar style is tabs we cannot autohide.
                 GtkTitlebarStyle::Tabs => false,
                 GtkTitlebarStyle::Native => match c.window_show_tab_bar {
+                    // Auto we always autohide... obviously.
                     WindowShowTabBar::Auto => true,
+                    // Always we never autohide because we always show the tab bar.
                     WindowShowTabBar::Always => false,
+                    // Never we autohide because it doesn't actually matter,
+                    // since getTabsVisible will return false.
                     WindowShowTabBar::Never => true,
                 },
             }
@@ -457,9 +509,12 @@ mod imp {
             let c = config.get();
             match c.gtk_titlebar_style {
                 GtkTitlebarStyle::Tabs => {
+                    // *Conditionally* disable the tab bar when maximized, the titlebar
+                    // style is tabs, and gtk-titlebar-hide-when-maximized is set.
                     if self.obj().is_maximized() && c.gtk_titlebar_hide_when_maximized {
                         return false;
                     }
+                    // If the titlebar style is tabs the tab bar must always be visible.
                     true
                 }
                 GtkTitlebarStyle::Native => match c.window_show_tab_bar {
@@ -508,6 +563,8 @@ mod imp {
             self.get_selected_tab()?.get_active_surface()
         }
 
+        /// Get the currently selected tab as a Tab object.
+        ///
         /// PORTS: `window.zig:959-965` `getSelectedTab`.
         pub(super) fn get_selected_tab(&self) -> Option<Tab> {
             let page = self.tab_view.selected_page()?;
@@ -541,6 +598,8 @@ mod imp {
             }
         }
 
+        /// Perform a binding action on the window's active surface.
+        ///
         /// PORTS: `window.zig:742-752` `performBindingAction`.
         pub(super) fn perform_binding_action(&self, action: binding::Action) {
             let Some(surface) = self.get_active_surface() else {
@@ -558,6 +617,8 @@ mod imp {
             }
         }
 
+        /// Sync the state of any actions on this window.
+        ///
         /// PORTS: `window.zig:713-731` `syncActions`. Enables/disables the `copy`
         /// action based on the active surface's selection.
         pub(super) fn sync_actions(&self) {
@@ -576,6 +637,13 @@ mod imp {
             }
         }
 
+        /// Queue a simple text-based toast. All text-based toasts share the
+        /// same timeout for consistency.
+        ///
+        /// This is not `pub` because we should be using signals emitted by
+        /// other widgets to trigger our toasts. Other objects should not
+        /// trigger toasts directly.
+        ///
         /// PORTS: `window.zig:760-764` `addToast`. Queues a 3s text toast.
         ///
         /// PORT NOTE (i18n): the reference wraps the title in `i18n._(...)` at each
@@ -588,11 +656,21 @@ mod imp {
             self.toast_overlay.add_toast(toast);
         }
 
+        /// Updates various appearance properties. This should always be safe
+        /// to call multiple times. This should be called whenever a change
+        /// happens that might affect how the window appears (config change,
+        /// fullscreen, etc.).
+        ///
         /// PORTS: `window.zig:624-710` `syncAppearance`. Safe to call repeatedly.
         pub(super) fn sync_appearance(&self) {
             let obj = self.obj();
 
-            // Reset the CSD/SSD style classes (`:634-640`).
+            // Toggle style classes based on whether we're using CSDs or SSDs.
+            //
+            // These classes are defined in the gtk.Window documentation:
+            // https://docs.gtk.org/gtk4/class.Window.html#css-nodes.
+            //
+            // Reset all style classes first
             for class in ["ssd", "csd", "solid-csd", "no-border-radius"] {
                 obj.remove_css_class(class);
             }
@@ -601,7 +679,13 @@ mod imp {
             obj.set_decorated(csd_enabled);
 
             if csd_enabled {
-                // The same check GTK does internally (`:648-659`).
+                // We do the exact same check GTK is doing internally and toggle
+                // either the `csd` or `solid-csd` style, based on whether the user's
+                // window manager is deemed _non-compositing_.
+                //
+                // In practice this only impacts users of traditional X11 window
+                // managers (e.g. i3, dwm, awesomewm, etc.) and not X11 desktop
+                // environments or Wayland compositors/DEs.
                 let display = obj.upcast_ref::<gtk4::Widget>().display();
                 if display.is_rgba() && display.is_composited() {
                     obj.add_css_class("csd");
@@ -610,10 +694,11 @@ mod imp {
                 }
             } else {
                 obj.add_css_class("ssd");
+                // Fix any artifacting that may occur in window corners.
                 obj.add_css_class("no-border-radius");
             }
 
-            // Trigger the config-dependent dynamic properties (`:668-679`).
+            // Trigger all our dynamic properties that depend on the config.
             for key in [
                 "headerbar-visible",
                 "tabs-autohide",
@@ -633,18 +718,22 @@ mod imp {
                 };
                 let c = config.get();
 
-                // Solid background only if opaque (`:685-688`).
+                // Only add a solid background if we're opaque.
                 self.toggle_css_class("background", c.background_opacity >= 1.0);
 
-                // `window-theme-ghostty` only below GTK 4.16 (`:693-697`). `.ghostty`
-                // is rustty's `WindowTheme::Rustty`.
+                // Apply class to color headerbar if window-theme is set to `rustty` and
+                // GTK version is before 4.16. The conditional is because above 4.16
+                // we use GTK CSS color variables.
+                //
+                // `.ghostty` is rustty's `WindowTheme::Rustty`; the CSS class keeps
+                // the reference name `window-theme-ghostty`.
                 self.toggle_css_class(
                     "window-theme-ghostty",
                     !gtk_version::at_least(4, 16, 0)
                         && matches!(c.window_theme, WindowTheme::Rustty),
                 );
 
-                // Move the tab bar to the configured location (`:700-704`).
+                // Move the tab bar to the proper location.
                 let tab_bar_widget = self.tab_bar.upcast_ref::<gtk4::Widget>();
                 self.toolbar.remove(tab_bar_widget);
                 match c.gtk_tabs_location {
@@ -653,13 +742,17 @@ mod imp {
                 }
             }
 
-            // Window-protocol-specific appearance sync (`:706-709`).
+            // Do our window-protocol specific appearance sync.
             if let Err(err) = self.winproto.borrow_mut().sync_appearance() {
                 // log.warn("failed to sync winproto appearance error={}", .{err});
                 log::warn!(target: LOG_SCOPE, "failed to sync winproto appearance error={err:?}");
             }
         }
 
+        /// Callback to handle this window becoming active or inactive.
+        /// Triggered by propIsActive with a timeout to debounce temporary
+        /// changes in active state.
+        ///
         /// PORTS: `window.zig:864-891` `handleActiveState` — the debounced
         /// active/inactive reaction (the timeout body).
         pub(super) fn handle_active_state(&self) {
@@ -678,7 +771,7 @@ mod imp {
                 }
             }
 
-            // Only reset urgency if we're the active window (`:882-889`).
+            // Don't change urgency if we're not the active window.
             if !obj.is_active() {
                 return;
             }
@@ -763,13 +856,15 @@ mod imp {
                 }
             }
 
-            // Resize notifications need the realized GDK surface
-            // (`window.zig:1318-1333`).
+            // We need to setup resize notifications on our surface,
+            // which is only available after the window had been realized.
             if let Some(gdk_surface) = obj.surface() {
                 for detail in ["width", "height"] {
                     let obj_weak = obj.downgrade();
                     gdk_surface.connect_notify_local(Some(detail), move |_, _| {
                         if let Some(win) = obj_weak.upgrade() {
+                            // X11 needs to fix blurring on resize, but winproto implementations
+                            // could do anything.
                             if let Err(err) = win.imp().winproto.borrow_mut().resize_event() {
                                 // log.warn("winproto resize event failed error={}", .{err});
                                 log::warn!(
@@ -837,7 +932,8 @@ mod imp {
                 });
             }
 
-            // Always sync appearance on realize (`window.zig:1337`).
+            // When we are realized we always setup our appearance since this
+            // calls some winproto functions.
             self.sync_appearance();
         }
 
@@ -905,9 +1001,12 @@ mod imp {
         }
 
         // ---- Window decoration (window.zig:920-956) ------------------------
+        /// Toggle the window decorations for this window.
+        ///
         /// PORTS: `window.zig:928-945` `toggleWindowDecorations`.
         pub(super) fn toggle_window_decorations(&self) {
             if self.window_decoration.borrow().is_some() {
+                // Unset any previously set window decoration settings
                 self.set_window_decoration(None);
                 return;
             }
@@ -917,7 +1016,9 @@ mod imp {
             };
             use rustty_config::value_types::WindowDecoration;
             let new = match config.get().window_decoration {
+                // Use auto when the decoration is initially none
                 WindowDecoration::None => WindowDecoration::Auto,
+                // Anything non-none to none
                 WindowDecoration::Auto | WindowDecoration::Client | WindowDecoration::Server => {
                     WindowDecoration::None
                 }
@@ -926,6 +1027,9 @@ mod imp {
             self.set_window_decoration(Some(new));
         }
 
+        /// Set the window decoration override for this window. If this is null,
+        /// then we'll revert back to the configuration's default.
+        ///
         /// PORTS: `window.zig:949-956` `setWindowDecoration`.
         fn set_window_decoration(&self, new: Option<rustty_config::value_types::WindowDecoration>) {
             self.window_decoration.replace(new);
@@ -970,7 +1074,8 @@ mod imp {
 
             // Get the position that we should insert the new tab at (`:452-466`).
             let Some(config) = config else {
-                // No config: just append at the end. Should never happen (`:453-457`).
+                // If we don't have a config we just append it at the end.
+                // This should never happen.
                 return tab_view.append(&tab);
             };
             let position = match config.get().window_new_tab_position {
@@ -1040,8 +1145,9 @@ mod imp {
         pub(super) fn connect_surface_handlers(&self, tree: &Tree) {
             let obj = self.obj();
             for surface in tree_surfaces(tree) {
-                // Before adding any new signal handlers, disconnect any that we
-                // may have added before (`:773-784`).
+                // Before adding any new signal handlers, disconnect any that we may
+                // have added before. Otherwise we may get multiple handlers for the
+                // same signal.
                 self.disconnect_handlers_for_surface(&surface);
 
                 let mut ids: Vec<glib::SignalHandlerId> = Vec::new();
@@ -1066,7 +1172,11 @@ mod imp {
                         let clipboard_type: ClipboardEnum = args[1]
                             .get()
                             .expect("clipboard-write type is a GhosttyApprtClipboard");
-                        let text: String = args[2].get().expect("clipboard-write text is a string");
+                        // `text: [*:0]const u8`: read RAW. The payload may be
+                        // non-UTF-8 (an OSC 52 write; S56-F3), which
+                        // `Value::get::<String>()` would panic on.
+                        let text = crate::gtk::class::surface::raw_string_bytes(&args[2])
+                            .unwrap_or_default();
                         if let Some(win) = this_weak.upgrade() {
                             win.imp()
                                 .surface_clipboard_write(clipboard_type.into(), &text);
@@ -1106,8 +1216,12 @@ mod imp {
                     }),
                 );
 
-                // `init` → `surfaceInit` — only registered while no surface has
-                // initialized yet (`:821-833`; the handler re-checks the flag).
+                // If we've never had a surface initialize yet, then we register
+                // this signal. Its theoretically possible to launch multiple surfaces
+                // before init so we could register this on multiple and that is not
+                // a problem because we'll check the flag again in each handler.
+                //
+                // `init` → `surfaceInit` (`:821-833`).
                 if !self.surface_init.get() {
                     let this_weak = obj.downgrade();
                     ids.push(surface.connect_local("init", false, move |args| {
@@ -1126,8 +1240,11 @@ mod imp {
             }
         }
 
-        /// PORTS: `window.zig:842-859` `disconnectSurfaceHandlers`. Called whenever
-        /// a tree is no longer present in the window (tab detached / tree changed).
+        /// Disconnect all the surface handlers for the given tree. This should
+        /// be called whenever a tree is no longer present in the window, e.g.
+        /// when a tab is detached or the tree changes.
+        ///
+        /// PORTS: `window.zig:842-859` `disconnectSurfaceHandlers`.
         pub(super) fn disconnect_surface_handlers(&self, tree: &Tree) {
             for surface in tree_surfaces(tree) {
                 self.disconnect_handlers_for_surface(&surface);
@@ -1159,7 +1276,7 @@ mod imp {
         // ---- Surface signal handlers (window.zig:1645-1773) -----------------
         /// PORTS: `window.zig:1645-1666` `surfaceClipboardWrite`. Toast on a
         /// standard-clipboard write, when configured.
-        fn surface_clipboard_write(&self, clipboard_type: Clipboard, text: &str) {
+        fn surface_clipboard_write(&self, clipboard_type: Clipboard, text: &[u8]) {
             // We only toast for the standard clipboard (`:1652`).
             if clipboard_type != Clipboard::Standard {
                 return;
@@ -1174,7 +1291,8 @@ mod imp {
                     return;
                 }
                 // PORTS `:1663-1665`'s `i18n._(...)` lookups (the reference wraps
-                // at the CALLER, not inside `addToast`).
+                // at the CALLER, not inside `addToast`). `if (text[0] != 0)`: the
+                // C string's bytes, so empty means its first byte is the NUL.
                 if text.is_empty() {
                     tr(c"Cleared clipboard")
                 } else {
@@ -1210,7 +1328,7 @@ mod imp {
                 Some(_) => {}
             }
 
-            // Get the tab for this surface (`:1699-1706`).
+            // Get the tab for this surface.
             let Some(tab) = ext::ancestor::<Tab>(surface) else {
                 // log.warn("present request surface not found", .{});
                 log::warn!(target: LOG_SCOPE, "present request surface not found");
@@ -1237,6 +1355,8 @@ mod imp {
             } else {
                 obj.fullscreen();
             }
+
+            // We react to the changes in the propFullscreen callback
         }
 
         /// PORTS: `window.zig:1736-1748` `surfaceToggleMaximize`. The change is
@@ -1248,6 +1368,8 @@ mod imp {
             } else {
                 obj.maximize();
             }
+
+            // We react to the changes in the propMaximized callback
         }
 
         /// PORTS: `window.zig:1750-1773` `surfaceInit`. On the FIRST surface init,
@@ -1288,10 +1410,11 @@ mod imp {
         pub(super) fn toggle_command_palette(&self) {
             let obj = self.obj();
 
-            // Reuse the saved palette if it is still alive, else create one
-            // (`window.zig:2013-2045`).
+            // Get a reference to a command palette. First check the weak reference
+            // that we save to see if we already have one stored. If we don't then
+            // create a new one.
             let palette = self.command_palette.get().unwrap_or_else(|| {
-                // Create a fresh command palette (`:2015-2016`).
+                // Create a fresh command palette.
                 let palette = CommandPalette::new();
 
                 // Synchronize our config to the palette's config
@@ -1300,31 +1423,36 @@ mod imp {
                     .sync_create()
                     .build();
 
-                // Listen to `trigger` to know when the user selected an option
-                // (`:2027-2036`) → `signalCommandPaletteTrigger`
-                // (`window.zig:2052-2055`), which performs the binding action.
+                // Listen to the activate signal to know if the user selected an option in
+                // the command palette.
+                //
+                // `trigger` → `signalCommandPaletteTrigger` (`window.zig:2052-2055`):
+                // React to a signal from a command palette asking an action to be performed.
                 let this_weak = obj.downgrade();
                 palette.connect_local("trigger", false, move |args| {
                     let boxed: ActionBoxed =
                         args[1].get().expect("trigger action is an ActionBoxed");
+                    // If the activation actually has an action, perform it.
                     if let Some(win) = this_weak.upgrade() {
                         win.imp().perform_binding_action(boxed.0);
                     }
                     None
                 });
 
-                // Save a WEAK ref to avoid reference-counting cycles
-                // (`:2038-2041`).
+                // Save a weak reference to the command palette. We use a weak reference to avoid
+                // reference counting cycles that might cause problems later.
                 self.command_palette.set(Some(&palette));
 
                 palette
             });
 
-            // Tell the palette to toggle itself, modal over our window
-            // (`:2047-2048`).
+            // Tell the command palette to toggle itself. If the dialog gets
+            // presented (instead of hidden) it will be modal over our window.
             palette.toggle(&obj);
         }
 
+        /// Toggle the Rustty inspector for the active surface.
+        ///
         /// PORTS: `window.zig:2069-2072` `toggleInspector`. Resolve the active
         /// surface and toggle its terminal inspector window.
         pub(super) fn toggle_inspector(&self) {
@@ -1559,11 +1687,17 @@ impl Window {
     pub fn new(app: &Application, title: Option<&str>) -> Self {
         let win: Self = glib::Object::builder().property("application", app).build();
         if let Some(title) = title {
+            // If the overrides have a title set, we set that immediately
+            // so that any applications inspecting the window states see an
+            // immediate title set when the window appears, rather than waiting
+            // possibly a few event loop ticks for it to sync from the surface.
             win.set_title(Some(title));
         }
         win
     }
 
+    /// Winproto backend for this window.
+    ///
     /// PORTS: `window.zig:386-388` `winproto`. Mutable access to this window's
     /// per-window windowing-protocol state. `pub(crate)` because the only consumer
     /// is [`crate::gtk::class::Surface::default_termio_env`] (`surface.zig:1633`);
@@ -1573,6 +1707,8 @@ impl Window {
         self.imp().winproto.borrow_mut()
     }
 
+    /// Whether this terminal is a quick terminal or not.
+    ///
     /// PORTS: `window.zig:897-899` `isQuickTerminal`.
     #[must_use]
     pub fn is_quick_terminal(&self) -> bool {
@@ -1585,18 +1721,25 @@ impl Window {
         self.imp().get_active_surface()
     }
 
-    /// PORTS: `window.zig:910-912` `getConfig`. Does not increase the ref count.
+    /// Returns the configuration for this window. The reference count
+    /// is not increased.
+    ///
+    /// PORTS: `window.zig:910-912` `getConfig`.
     #[must_use]
     pub fn get_config(&self) -> Option<Config> {
         self.imp().config.borrow().clone()
     }
 
+    /// Get the tab view for this window.
+    ///
     /// PORTS: `window.zig:915-917` `getTabView`.
     #[must_use]
     pub fn get_tab_view(&self) -> adw::TabView {
         self.imp().tab_view.get()
     }
 
+    /// Get the current window decoration value for this window.
+    ///
     /// PORTS: `window.zig:919-925` `getWindowDecoration`.
     #[must_use]
     pub fn get_window_decoration(&self) -> rustty_config::value_types::WindowDecoration {
@@ -1611,14 +1754,19 @@ impl Window {
             })
     }
 
+    /// Toggle the window decorations for this window.
+    ///
     /// PORTS: `window.zig:928-945` `toggleWindowDecorations`.
     pub fn toggle_window_decorations(&self) {
         self.imp().toggle_window_decorations();
     }
 
+    /// Create a new tab with the given parent. The tab will be inserted
+    /// at the position dictated by the `window-new-tab-position` config.
+    /// The new tab will be selected.
+    ///
     /// PORTS: `window.zig:408-424` `newTab` (B5, 034506f14: gains the
-    /// overrides struct). Create a new tab with the given parent, inserted at
-    /// the `window-new-tab-position` and selected.
+    /// overrides struct).
     pub fn new_tab(&self, parent: Option<*mut CoreSurface>, overrides: TabOverrides) {
         let _ = self
             .imp()
@@ -1644,8 +1792,10 @@ impl Window {
         self.imp().toggle_visibility();
     }
 
-    /// PORTS: `window.zig:518-563` `selectTab`. Select the tab as requested.
-    /// Returns true if the tab selection changed.
+    /// Select the tab as requested. Returns true if the tab selection
+    /// changed.
+    ///
+    /// PORTS: `window.zig:518-563` `selectTab`.
     pub fn select_tab(&self, n: SelectTab) -> bool {
         let tab_view = self.imp().tab_view.get();
 
@@ -1700,9 +1850,10 @@ impl Window {
         true
     }
 
-    /// PORTS: `window.zig:568-605` `moveTab`. Move the tab containing the given
-    /// surface by the given amount. Returns whether this affected any tab
-    /// positioning.
+    /// Move the tab containing the given surface by the given amount.
+    /// Returns if this affected any tab positioning.
+    ///
+    /// PORTS: `window.zig:568-605` `moveTab`.
     pub fn move_tab(&self, surface: &Surface, amount: isize) -> bool {
         let tab_view = self.imp().tab_view.get();
 
@@ -1846,12 +1997,23 @@ impl Window {
         _pspec: &glib::ParamSpec,
         this: &Window,
     ) {
-        // We only care about close (`:1356-1357`).
+        // We only care about when the tab overview is closed.
         if overview.is_open() {
             return;
         }
+
+        // On tab overview close, focus is sometimes lost. This is an
+        // upstream issue in libadwaita[1]. When this is resolved we
+        // can put a runtime version check here to avoid this workaround.
+        //
+        // Our workaround is to start a timer after 500ms to refocus
+        // the currently selected tab. We choose 500ms because the adw
+        // animation is 400ms.
+        //
+        // [1]: https://gitlab.gnome.org/GNOME/libadwaita/-/issues/670
+
+        // If we have an old timer remove it
         let imp = this.imp();
-        // Remove any old timer (`:1370-1373`).
         if let Some(old) = imp.tab_overview_focus_timer.take() {
             let _ = unsafe { glib::ffi::g_source_remove(old.as_raw()) };
         }
@@ -1860,7 +2022,10 @@ impl Window {
         let source = glib::timeout_add_local(std::time::Duration::from_millis(500), move || {
             if let Some(win) = this_weak.upgrade() {
                 let imp = win.imp();
+                // Always note our timer is removed
                 imp.tab_overview_focus_timer.replace(None);
+                // Get our currently active surface which should respect the newly
+                // selected tab. Grab focus.
                 if let Some(surface) = imp.get_active_surface() {
                     surface.grab_focus();
                 }
@@ -1904,7 +2069,8 @@ impl Window {
         let Ok(tab) = page.child().downcast::<Tab>() else {
             return glib::Propagation::Proceed;
         };
-        // Close immediately if no confirmation is needed (`:1471-1474`).
+        // If the tab says it doesn't need confirmation then we go ahead
+        // and close immediately.
         if !tab.get_needs_confirm_quit() {
             imp.tab_view.close_page_finish(page, true);
             return glib::Propagation::Stop;
@@ -1947,13 +2113,15 @@ impl Window {
         this: &Window,
     ) {
         let imp = this.imp();
-        // The attached page must be a Tab object (`:1529-1530`).
+        // Get the attached page which must be a Tab object.
         let Ok(tab) = page.child().downcast::<Tab>() else {
             return;
         };
 
-        // Attach listeners for the tab (`:1532-1539`): `close-request` →
-        // `tabCloseRequest`, tracked as a `(tab, id)` pair (see `tab_handlers`).
+        // Attach listeners for the tab.
+        //
+        // `close-request` → `tabCloseRequest`, tracked as a `(tab, id)` pair (see
+        // `tab_handlers`).
         let this_weak = this.downgrade();
         let id = tab.connect_local("close-request", false, move |args| {
             let t: Tab = args[0].get().expect("close-request emitter is a Tab");
@@ -1964,7 +2132,25 @@ impl Window {
         });
         imp.tab_handlers.borrow_mut().push((tab.clone(), id));
 
-        // Attach listeners for the surfaces (`:1541-1562`).
+        // Attach listeners for the surface.
+        //
+        // Interesting behavior here that was previously undocumented but
+        // I'm going to make it explicit here: we accept all the signals here
+        // (like toggle-fullscreen) regardless of whether the surface or tab
+        // is focused. At the time of writing this we have no API that could
+        // really trigger these that way but its theoretically possible.
+        //
+        // What is DEFINITELY possible is something like OSC52 triggering
+        // a clipboard-write signal on an unfocused tab/surface. We definitely
+        // want to show the user a notification about that but our notification
+        // right now is a toast that doesn't make it clear WHO used the
+        // clipboard. We probably want to change that in the future.
+        //
+        // I'm not sure how desirable all the above is, and we probably
+        // should be thoughtful about future signals here. But all of this
+        // behavior is consistent with macOS and the previous GTK apprt,
+        // but that behavior was all implicit and not documented, so here
+        // I am.
         if let Some(tree) = tab.get_surface_tree() {
             imp.connect_surface_handlers(&tree);
         }
@@ -1980,7 +2166,7 @@ impl Window {
         this: &Window,
     ) {
         let imp = this.imp();
-        // We need the tab to disconnect the signals (`:1571-1573`).
+        // We need to get the tab to disconnect the signals.
         let Ok(tab) = page.child().downcast::<Tab>() else {
             return;
         };
@@ -2021,8 +2207,11 @@ impl Window {
     /// (no new tab) and hands back its tab view for the dragged-out page.
     #[template_callback(name = "tab_create_window")]
     fn on_tab_create_window(_tab_view: &adw::TabView, _this: &Window) -> adw::TabView {
+        // Create a new window without creating a new tab.
         let win = Window::new(&Application::default(), None);
+        // We have to show it otherwise it'll just be hidden.
         win.present();
+        // Get our tab view
         win.imp().tab_view.get()
     }
 
@@ -2032,6 +2221,12 @@ impl Window {
     fn on_notify_n_pages(_tab_view: &adw::TabView, _pspec: &glib::ParamSpec, this: &Window) {
         let imp = this.imp();
         if imp.tab_view.n_pages() == 0 {
+            // If we have no pages left then we want to close window.
+
+            // If the tab overview is open, then we don't close the window
+            // because its a rather abrupt experience. This also fixes an
+            // issue where dragging out the last tab in the tab overview
+            // won't cause Rustty to exit.
             if imp.tab_overview.is_open() {
                 return;
             }
@@ -2044,18 +2239,22 @@ impl Window {
     #[template_callback(name = "notify_selected_page")]
     fn on_notify_selected_page(_tab_view: &adw::TabView, _pspec: &glib::ParamSpec, this: &Window) {
         let imp = this.imp();
-        // Always reset in case there are no pages (`:1506`).
+        // Always reset our binding source in case we have no pages.
         if let Some(bindings) = imp.tab_bindings.borrow().as_ref() {
             bindings.set_source(None::<&glib::Object>);
         }
+        // Get our current page which MUST be a Tab object.
         let Some(page) = imp.tab_view.selected_page() else {
             return;
         };
         let child = page.child();
+        // Setup our binding group. This ensures things like the title
+        // are synced from the active tab.
         if let Some(bindings) = imp.tab_bindings.borrow().as_ref() {
             bindings.set_source(Some(child.upcast_ref::<glib::Object>()));
         }
-        // Unmark needs-attention now that it's selected (`:1519`).
+        // If the tab was previously marked as needing attention
+        // (e.g. due to a bell character), we now unmark that
         page.set_needs_attention(false);
     }
 
@@ -2092,12 +2291,29 @@ impl Window {
     #[template_callback(name = "notify_is_active")]
     fn on_notify_is_active(_window: &gtk4::Window, _pspec: &glib::ParamSpec, this: &Window) {
         let imp = this.imp();
+        // Use a timeout callback to wait for focus state to settle,
+        // because depending on the windowing backend the window might
+        // become inactive and immediately active again. This happens
+        // e.g. on Wayland when opening a context menu or a submenu
+        // inside a context menu.
         if imp.handle_active_state_source.borrow().is_some() {
             return;
         }
         let this_weak = this.downgrade();
         let source = glib::timeout_add_local_full(
+            // 50ms was chosen to be conservative. From testing we know
+            // that, depending on the backend and system performance, a
+            // shorter timeout or just an idle callback can be enough for
+            // the focus to settle. On the other hand a delay of e.g. 10ms
+            // does not work reliably on some slow systems. The downside
+            // of a high value is that some operations in handleActiveState,
+            // e.g. hiding the quick-terminal, will be visibly delayed.
+            // However, 50ms should barely be noticeable. We can change
+            // this in the future if necessary.
             std::time::Duration::from_millis(50),
+            // Use priority of an idle callback instead of the higher
+            // default timeout priority. This allows us to use a shorter
+            // timeout duration.
             glib::Priority::DEFAULT_IDLE,
             move || {
                 if let Some(win) = this_weak.upgrade() {
@@ -2123,11 +2339,15 @@ impl Window {
     /// action validity.
     #[template_callback(name = "notify_menu_active")]
     fn on_notify_menu_active(button: &gtk4::MenuButton, _pspec: &glib::ParamSpec, this: &Window) {
+        // Debian 12 is stuck on GTK 4.8
+        //
         // Baseline is >= 4.14, so the reference's 4.10 guard is always satisfied
         // (`window.zig:1181`).
         if !gtk_version::at_least(4, 10, 0) {
             return;
         }
+        // We only care if we're activating. If we're activating then
+        // we need to check the validity of our menu items.
         if !button.is_active() {
             return;
         }
@@ -2156,6 +2376,7 @@ impl Window {
             return;
         }
         if imp.quick_terminal.get() {
+            // Initialize the quick terminal at the app-layer
             if let Err(err) = Application::default()
                 .winproto_mut()
                 .init_quick_terminal(this)
@@ -2174,6 +2395,10 @@ impl Window {
         _pspec: &glib::ParamSpec,
         this: &Window,
     ) {
+        // On some platforms (namely X11) we need to refresh our appearance when
+        // the scale factor changes. In theory this could be more fine-grained as
+        // a full refresh could be expensive, but a) this *should* be rare, and
+        // b) quite noticeable visual bugs would occur if this is not present.
         if let Err(err) = this.imp().winproto.borrow_mut().sync_appearance() {
             // log.warn("failed to sync appearance after scale factor has been updated={}", .{err});
             log::warn!(
@@ -2467,8 +2692,11 @@ fn action_ring_bell(_action: &gio::SimpleAction, _param: Option<&glib::Variant>,
     }
 
     // Attention / urgency (`:1995-2003`).
+    //
+    // Dont set urgency if the window is already active.
     if c.bell_features.attention && !this.is_active() {
         drop(cfg);
+        // Request user attention
         if let Err(err) = imp.winproto.borrow_mut().set_urgent(true) {
             // log.warn("winproto failed to set urgency={}", .{err});
             log::warn!(target: LOG_SCOPE, "winproto failed to set urgency={err:?}");
@@ -2476,6 +2704,8 @@ fn action_ring_bell(_action: &gio::SimpleAction, _param: Option<&glib::Variant>,
     }
 }
 
+/// React to a GTK action requesting that the command palette be toggled.
+///
 /// PORTS: `window.zig:2058-2066` `actionToggleCommandPalette`.
 fn action_toggle_command_palette(
     _action: &gio::SimpleAction,
@@ -2487,6 +2717,8 @@ fn action_toggle_command_palette(
     this.imp().toggle_command_palette();
 }
 
+/// React to a GTK action requesting that the Rustty inspector be toggled.
+///
 /// PORTS: `window.zig:2075-2083` `actionToggleInspector`.
 fn action_toggle_inspector(
     _action: &gio::SimpleAction,

@@ -316,7 +316,8 @@ mod log_site_census {
         (
             "capi.rs",
             "warn",
-            "failed to run action={action:?} err={err:?}",
+            // S61-F8 (task T-D): the action is printed by its tag name.
+            "failed to run action={} err={err:?}",
             1,
         ),
         // CodepointWidth.zig:89,110,125,152,184

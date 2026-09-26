@@ -87,6 +87,10 @@ use super::key_state_overlay::KeyStateOverlay;
 use super::resize_overlay::ResizeOverlay;
 use super::search_overlay::SearchOverlay;
 use super::split_tree::SplitTree;
+// `surface.zig:59-60`:
+// /// A SplitTree implementation that stores surfaces.
+// pub const Tree = datastruct.SplitTree(Self);
+// PORT NOTE: the alias lives in `split_tree.rs` (`SplitTree`), not here.
 use super::surface_child_exited::SurfaceChildExited;
 
 /// PORTS: `Tree.Split.Direction` (`datastruct/split_tree.zig`) as named at the
@@ -111,6 +115,9 @@ pub type CoreSurface = rustty_core::surface::Surface<App>;
 #[cfg(test)]
 const TEMPLATE_RESOURCE: &str = "/io/airely/rustty/ui/1.2/surface.ui";
 
+/// The state of the key event while we're doing IM composition.
+/// See gtkKeyPressed for detailed descriptions.
+///
 /// PORTS: `surface.zig:657` `in_keyevent: IMKeyEvent`. Whether we are currently
 /// inside a key-event dispatch (gates the IME state transitions, **invariant 9**).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -118,6 +125,11 @@ pub enum ImKeyEvent {
     /// Not in a key event (`IMKeyEvent.false`).
     #[default]
     False,
+    /// In a key event but im_composing was either true or false
+    /// prior to the calling IME processing. This is important to
+    /// work around different input methods calling commit and
+    /// preedit end in a different order.
+    ///
     /// In a key event whose composition has not yet been handled.
     True,
     /// In a key event whose composition has been handled.
@@ -153,6 +165,8 @@ impl Default for ImeState {
     }
 }
 
+/// Simple dimensions struct for the surface used by various properties.
+///
 /// PORTS: `surface.zig:3715-3723` `pub const Size` — the boxed dimensions type
 /// (`GhosttySurfaceSize`) shared by the `default-size`/`min-size` properties.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, glib::Boxed)]
@@ -207,6 +221,18 @@ mod imp {
     #[properties(wrapper_type = super::Surface)]
     pub struct Surface {
         // ---- Properties (surface.zig:3664-3691; 24 registered) --------------
+        /// This property is set to true when the bell is ringing. Note that
+        /// this property will only emit a changed signal when there is a
+        /// full state change. If a bell is ringing and another bell event
+        /// comes through, the change notification will NOT be emitted.
+        ///
+        /// If you need to know every scenario the bell is triggered,
+        /// listen to the `bell` signal instead.
+        ///
+        /// Private field (`surface.zig:674-676`):
+        // True while the bell is ringing. This will be set to false (after
+        // true) under various scenarios, but can also manually be set to
+        // false by a parent widget.
         /// PORTS: `surface.zig:69-79,675` `bell-ringing` (privateShallow).
         #[property(get, set)]
         pub bell_ringing: Cell<bool>,
@@ -216,22 +242,32 @@ mod imp {
         #[property(get, set, nullable)]
         pub config: RefCell<Option<Config>>,
 
+        /// True when the child has exited.
         /// PORTS: `surface.zig:94-109,667` `child-exited`.
         #[property(get, set)]
         pub child_exited: Cell<bool>,
 
+        /// The default size for a window that embeds this surface.
         /// PORTS: `surface.zig:112-121,575` `default-size` (`?*Size`, OWNED boxed).
         #[property(get, set, nullable)]
         pub default_size: RefCell<Option<Size>>,
 
+        /// True if this surface is in an error state. This is currently
+        /// a simple boolean with no additional information on WHAT the
+        /// error state is, because we don't yet need it or use it. For now,
+        /// if this is true, then it means the terminal is non-functional.
         /// PORTS: `surface.zig:124-139,687` `error`.
         #[property(name = "error", get, set)]
         pub error: Cell<bool>,
 
+        /// The requested font size. This only applies to initialization
+        /// and has no effect later.
         /// PORTS: `surface.zig:142-152,583` `font-size-request` (OWNED boxed).
         #[property(get, set, nullable)]
         pub font_size_request: RefCell<Option<FontSizeRequest>>,
 
+        /// The current focus state of the terminal based on the
+        /// focus events.
         /// PORTS: `surface.zig:154-170,611` `focused`. The pspec default is `false`
         /// (`:161`) while the private field starts `true` (`:611`, see [`Default`]).
         ///
@@ -241,6 +277,8 @@ mod imp {
         #[property(get, set)]
         pub focused: Cell<bool>,
 
+        /// Whether the GLArea widget is mapped. Some operations like grabbing
+        /// focus only work if a widget is mapped.
         /// PORTS: `surface.zig:172-188,615` `mapped`.
         #[property(get, set)]
         pub mapped: Cell<bool>,
@@ -255,10 +293,13 @@ mod imp {
         #[property(name = "key-table", get = Self::key_table_prop, nullable)]
         pub key_table_prop: std::marker::PhantomData<Option<ext::StringList>>,
 
+        /// The minimum size for this surface. Embedders enforce this,
+        /// not the surface itself.
         /// PORTS: `surface.zig:190-200,579` `min-size` (`?*Size`, OWNED boxed).
         #[property(get, set, nullable)]
         pub min_size: RefCell<Option<Size>>,
 
+        /// The mouse shape to show for the surface.
         /// PORTS: `surface.zig:222-240,586` `mouse-shape`, typed
         /// `terminal.MouseShape` with pspec default `.text`.
         ///
@@ -270,31 +311,46 @@ mod imp {
         #[property(name = "mouse-shape", get, set, builder(MouseShapeEnum::Text))]
         pub mouse_shape: Cell<MouseShapeEnum>,
 
+        /// Whether the mouse should be hidden or not as requested externally.
         /// PORTS: `surface.zig:202-220,589` `mouse-hidden`.
         #[property(get, set)]
         pub mouse_hidden: Cell<bool>,
 
+        /// The URL that the mouse is currently hovering over.
         /// PORTS: `surface.zig:242-253,592` `mouse-hover-url` (string; getter
         /// `.none`, setter `.full`).
         #[property(get, set, nullable)]
         pub mouse_hover_url: RefCell<Option<String>>,
 
+        /// The current working directory. This has to be reported externally,
+        /// usually by shell integration which then talks to librustty
+        /// which triggers this property.
+        ///
+        /// If this is set prior to initialization then the surface will
+        /// start in this pwd. If it is set after, it has no impact on the
+        /// core surface.
         /// PORTS: `surface.zig:255-266,601` `pwd` (string).
         #[property(get, set, nullable)]
         pub pwd: RefCell<Option<String>>,
 
+        /// The title of this surface, if any has been set.
         /// PORTS: `surface.zig:268-279,604` `title` (string).
         #[property(get, set, nullable)]
         pub title: RefCell<Option<String>>,
 
+        /// The manually overridden title of this surface from `promptTitle`.
         /// PORTS: `surface.zig:281-292,607` `title-override` (string).
         #[property(name = "title-override", get, set, nullable)]
         pub title_override: RefCell<Option<String>>,
 
+        /// Whether this surface is "zoomed" or not. A zoomed surface
+        /// shows up taking the full bounds of a split view.
         /// PORTS: `surface.zig:294-310,619` `zoom`.
         #[property(get, set)]
         pub zoom: Cell<bool>,
 
+        // True if the current surface is a split, this is used to apply
+        // unfocused-split-* options
         /// PORTS: `surface.zig:312-328,697` `is-split`.
         #[property(name = "is-split", get, set)]
         pub is_split: Cell<bool>,
@@ -323,9 +379,12 @@ mod imp {
 
         // ---- Template children (13; BORROW_FIELD, surface.zig:3608-3620) ----
         // Never unref'd by field: released en masse by `dispose_template`.
+        /// The GLArea that renders the actual surface. This is a binding
+        /// to the template so it doesn't have to be unrefed manually.
         /// PORTS: `surface.zig:623` `gl_area` — the GL context source.
         #[template_child]
         pub gl_area: TemplateChild<gtk4::GLArea>,
+        /// The labels for the left/right sides of the URL hover tooltip.
         /// PORTS: `surface.zig:626` `url_left`.
         #[template_child]
         pub url_left: TemplateChild<gtk4::Label>,
@@ -381,6 +440,15 @@ mod imp {
         /// wired when the apprt `Surface` grows its handle (L5.1 T18).
         pub rt_surface: ApprtSurface,
 
+        /// The core surface backing this GTK surface. This starts out
+        /// null because it can't be initialized until there is an available
+        /// GLArea that is realized.
+        //
+        // NOTE(mitchellh): This is a limitation we should definitely remove
+        // at some point by modifying our OpenGL renderer for GTK to
+        // start in an unrealized state. There are other benefits to being
+        // able to initialize the surface early so we should aim for that,
+        // eventually.
         /// PORTS: `surface.zig:650` `core_surface: ?*CoreSurface` — the ONE OWNED
         /// libghostty-core object. **Invariant 3**: null until the first GLArea
         /// resize (T15); free-site (`deinit` + destroy) in the finalize `Drop`.
@@ -407,17 +475,21 @@ mod imp {
         /// ever reads a cleared/freed pointer (the join-before-clear invariant).
         pub core_surface: AtomicPtr<CoreSurface>,
 
+        /// Cached metrics for librustty callbacks
         /// PORTS: `surface.zig:653` `size: apprt.SurfaceSize` — cached metrics.
         pub size: Cell<SurfaceSize>,
         /// PORTS: `surface.zig:654` `cursor_pos: apprt.CursorPos`.
         pub cursor_pos: Cell<CursorPos>,
 
+        /// Various input method state. All related to key input.
         /// PORTS: `surface.zig:657-661` the IME state group (**invariant 9**).
         pub ime: RefCell<ImeState>,
 
+        /// True when we have a precision scroll in progress
         /// PORTS: `surface.zig:664` `precision_scroll`.
         pub precision_scroll: Cell<bool>,
 
+        // Progress bar
         /// PORTS: `surface.zig:670` `progress_bar_timer: ?c_uint` — glib source id
         /// (OWNED handle; `Source.remove` in dispose, **invariant 11**, T14).
         pub progress_bar_timer: RefCell<Option<glib::SourceId>>,
@@ -432,9 +504,11 @@ mod imp {
         // (`Application.Private.bell_media` + the `app.ring-bell` action).
         pub is_split_binding: RefCell<Option<glib::Binding>>,
 
+        /// The source that handles setting our child property.
         /// PORTS: `surface.zig:690` `idle_rechild: ?c_uint` (OWNED source; T14).
         pub idle_rechild: RefCell<Option<glib::SourceId>>,
 
+        /// A weak reference to an inspector window.
         /// PORTS: `surface.zig:693` `inspector: ?*InspectorWindow` — a BACKREF
         /// (weak; nulled by weak-notify, `:2624`). The `InspectorWindow` GType lands
         /// later; stored as an untyped weak backref placeholder for now.
@@ -451,24 +525,32 @@ mod imp {
         /// (the scroll wiring) constructs it via FFI when it lands.
         pub vadj_signal_group: RefCell<Option<glib::Object>>,
 
+        // Key state tracking for key sequences and tables
         /// PORTS: `surface.zig:709` `key_sequence: ArrayListUnmanaged([:0]const u8)`
         /// (OWNED; free each + deinit, T15). Backs the `key-sequence` property.
         pub key_sequence: RefCell<Vec<CString>>,
         /// PORTS: `surface.zig:710` `key_tables` (OWNED; T15). Backs `key-table`.
         pub key_tables: RefCell<Vec<CString>>,
 
+        /// The context for this surface (window, tab, or split)
         /// PORTS: `surface.zig:721` `context: apprt.surface.NewSurfaceContext`.
         pub context: Cell<NewSurfaceContext>,
 
+        /// Whether primary paste (middle-click paste) is enabled.
         /// PORTS: `surface.zig:724` `gtk_enable_primary_paste` (struct default true).
         pub gtk_enable_primary_paste: Cell<bool>,
 
+        /// True when a left mouse down was consumed purely for a focus change,
+        /// and the matching left mouse release should also be suppressed.
         /// PORTS: `surface.zig:728` `suppress_left_mouse_release`.
         pub suppress_left_mouse_release: Cell<bool>,
 
+        /// How much pending horizontal scroll do we have?
         /// PORTS: `surface.zig:731` `pending_horizontal_scroll`.
         pub pending_horizontal_scroll: Cell<f64>,
 
+        /// Timer to reset the amount of horizontal scroll if the user
+        /// stops scrolling.
         /// PORTS: `surface.zig:735` `pending_horizontal_scroll_reset: ?c_uint`
         /// (OWNED source; T14).
         pub pending_horizontal_scroll_reset: RefCell<Option<glib::SourceId>>,
@@ -605,12 +687,27 @@ mod imp {
             static SIGNALS: OnceLock<Vec<glib::subclass::Signal>> = OnceLock::new();
             SIGNALS.get_or_init(|| {
                 vec![
+                    // Emitted whenever the bell event is received. Unlike the
+                    // `bell-ringing` property, this is emitted every time the event
+                    // is received and not just on state changes.
                     // `bell` (`:448-457`).
                     glib::subclass::Signal::builder("bell").build(),
+                    // Emitted whenever the surface would like to be closed for any
+                    // reason.
+                    //
+                    // The surface view does NOT handle its own close confirmation.
+                    // If there is a process alive then the boolean parameter will
+                    // specify it and the parent widget should handle this request.
+                    //
+                    // This signal lets the containing widget decide how closure works.
+                    // This lets this Surface widget be used as a split, tab, etc.
+                    // without it having to be aware of its own semantics.
                     // `close-request` (`:468-477`).
                     glib::subclass::Signal::builder("close-request").build(),
+                    // Emitted whenever the surface reads the clipboard.
                     // `clipboard-read` (`:495-504`).
                     glib::subclass::Signal::builder("clipboard-read").build(),
+                    // Emitted whenever the clipboard has been written.
                     // `clipboard-write` (`:480-492`), params `(apprt.Clipboard,
                     // [*:0]const u8)`. Emitted by `Clipboard::set` after a
                     // non-confirm write (surface.rs `set_clipboard`).
@@ -622,14 +719,22 @@ mod imp {
                     glib::subclass::Signal::builder("clipboard-write")
                         .param_types([ClipboardEnum::static_type(), String::static_type()])
                         .build(),
+                    // Emitted after the surface is initialized.
                     // `init` (`:507-516`).
                     glib::subclass::Signal::builder("init").build(),
+                    // Emitted just prior to the context menu appearing.
                     // `menu` (`:519-528`).
                     glib::subclass::Signal::builder("menu").build(),
+                    // Emitted when the focus wants to be brought to the top and
+                    // focused.
                     // `present-request` (`:532-541`).
                     glib::subclass::Signal::builder("present-request").build(),
+                    // Emitted when this surface requests its container to toggle its
+                    // fullscreen state.
                     // `toggle-fullscreen` (`:545-554`).
                     glib::subclass::Signal::builder("toggle-fullscreen").build(),
+                    // Emitted when this surface requests its container to toggle its
+                    // maximized state.
                     // `toggle-maximize` (`:558-567`).
                     glib::subclass::Signal::builder("toggle-maximize").build(),
                 ]
@@ -655,6 +760,7 @@ mod imp {
             // `self.initActionMap()` (`surface.zig:1788`). **Invariant 10**.
             obj.init_action_map();
 
+            // Initialize some private fields so they aren't undefined
             // Private-field defaults (`surface.zig:1793-1801`). Most are already the
             // struct defaults ([`Default`]); we re-assert the ones `init` sets.
             self.ime.replace(ImeState::default());
@@ -678,12 +784,17 @@ mod imp {
                 self.config.replace(config);
             }
 
+            // Setup our input method state
             // IME state (`surface.zig:1811-1813`) — already reset above.
 
+            // Read GTK primary paste setting
             // Read the GTK primary-paste setting (`surface.zig:1816`).
             self.gtk_enable_primary_paste
                 .set(gsettings::get_bool(gsettings::Key::GtkEnablePrimaryPaste).unwrap_or(true));
 
+            // Set up to handle items being dropped on our surface. Files can be dropped
+            // from Nautilus and strings can be dropped from many programs. The order
+            // of these types matter.
             // Drop-target gtypes IN ORDER (`surface.zig:1818-1826`) — the order is
             // load-bearing: FileList, then File, then string.
             self.drop_target.set_types(&[
@@ -799,6 +910,10 @@ mod imp {
             // NOTE: We must deinit the surface in the finalize (this `Drop`) and
             // NOT in `dispose`, because the inspector widget relies on this behavior
             // with a weakRef to properly deactivate (`surface.zig:1931-1933`).
+            // NOTE: We must deinit the surface in the finalize call and NOT
+            // the dispose call because the inspector widget relies on this
+            // behavior with a weakRef to properly deactivate.
+            //
             // Load the raw pointer WITHOUT clearing it (`Acquire` pairs with the
             // `Release` publish in `init_surface`). **Invariant 5** — the pointer
             // MUST stay published until the render/io threads are joined (below),
@@ -952,17 +1067,23 @@ mod imp {
     impl ScrollableImpl for Surface {}
 
     impl Surface {
+        /// Get the key sequence list. Full transfer.
+        ///
         /// PORTS: `surface.zig:2141-2145` `getKeySequence` (transfer `.full`).
         /// Builds a fresh [`ext::StringList`] from the owned key-sequence.
         fn key_sequence_prop(&self) -> Option<ext::StringList> {
             Some(string_list_from(&self.key_sequence.borrow()))
         }
 
+        /// Get the key table list. Full transfer.
+        ///
         /// PORTS: `surface.zig:2148-2152` `getKeyTable` (transfer `.full`).
         fn key_table_prop(&self) -> Option<ext::StringList> {
             Some(string_list_from(&self.key_tables.borrow()))
         }
 
+        /// Get the readonly state from the core surface.
+        ///
         /// PORTS: `surface.zig:1197-1201` `getReadonly`. `false` before realize
         /// (`core_surface == null`, **invariant 3**); otherwise the core's flag.
         fn readonly_prop(&self) -> bool {
@@ -1092,6 +1213,9 @@ fn translate_mouse_button(button: u32) -> Button {
     }
 }
 
+/// Compute a fraction [0.0, 1.0] from the supplied progress, which is clamped
+/// to [0, 100].
+///
 /// PORTS: `surface.zig:4116-4120` `computeFraction`. Computes a fraction in
 /// `[0.0, 1.0]` from the supplied progress, clamped to `[0, 100]`.
 ///
@@ -1311,6 +1435,12 @@ impl Surface {
         std::ptr::from_ref(&self.imp().rt_surface)
     }
 
+    /// Set the parent of this surface. This will extract the information
+    /// required to initialize this surface with the proper values but doesn't
+    /// retain any memory.
+    ///
+    /// If the surface is already realized this does nothing.
+    ///
     /// PORTS: `surface.zig:781-816` `setParent`. Extracts init values from a
     /// parent core surface **only before this surface is realized**
     /// (**invariant 3**): the font size is always inherited, and the working
@@ -1321,6 +1451,8 @@ impl Surface {
     pub unsafe fn set_parent(&self, parent: *mut CoreSurface, context: NewSurfaceContext) {
         let imp = self.imp();
 
+        // This is a mistake! We can only set a parent before surface
+        // realization. We log this because this is probably a logic error.
         // "We can only set a parent before surface realization." (`:788-793`).
         if !imp.core_surface.load(Ordering::Acquire).is_null() {
             // log.warn("setParent called after surface is already realized", .{});
@@ -1328,6 +1460,7 @@ impl Surface {
             return;
         }
 
+        // Store the context so initSurface can use it
         // Store the context so the lazy `initSurface` (T15) can use it (`:795-796`).
         imp.context.set(context);
 
@@ -1362,6 +1495,11 @@ impl Surface {
         }
     }
 
+    /// Force the surface to redraw itself. Rustty often will only redraw
+    /// the terminal in reaction to internal changes. If there are external
+    /// events that invalidate the surface, such as the widget moving parents,
+    /// then we should force a redraw.
+    ///
     /// PORTS: `surface.zig:822-825` `redraw`. Forces the GLArea to re-render — used
     /// when external events (e.g. a reparent) invalidate the surface. This is the
     /// app/main-thread leg of the **T16 render contract** (`must_draw_from_app_thread`).
@@ -1417,9 +1555,8 @@ impl Surface {
         if self.imp().mouse_hidden.get() {
             return;
         }
-        // Map the shape (carried as its `i32` discriminant) to a CSS cursor name
-        // and set it (`:2389-2429`).
-        let name = mouse_shape_cursor_name(self.imp().mouse_shape.get() as i32);
+        // Map the typed shape to a CSS cursor name and set it (`:2482-2520`).
+        let name = mouse_shape_cursor_name(MouseShape::from(self.imp().mouse_shape.get()));
         self.upcast_ref::<gtk4::Widget>()
             .set_cursor_from_name(Some(name));
     }
@@ -1431,6 +1568,9 @@ impl Surface {
         self.emit_by_name::<()>("close-request", &[]);
     }
 
+    /// Focus this surface. This properly focuses the input part of
+    /// our surface.
+    ///
     /// PORTS: `surface.zig:1742-1745` `grabFocus`. Focus the input part of the
     /// surface — the inner `GLArea`, NOT the outer `adw::Bin`. The owner tiers
     /// (`window.rs`, `split_tree.rs`, `application.rs`) call `surface.grab_focus()`;
@@ -1476,6 +1616,8 @@ impl Surface {
         self.imp().search_overlay.set_search_selected(selected);
     }
 
+    /// Handle a key sequence action from the apprt.
+    ///
     /// PORTS: `surface.zig:916-950` `keySequenceAction`. Handle a key-sequence
     /// action from the apprt, updating the owned `key_sequence` (which backs the
     /// `key-sequence` property the key-state overlay binds, revealing pending
@@ -1506,12 +1648,15 @@ impl Surface {
                 }
             }
             KeySequence::End => {
+                // Free all the stored strings and clear
                 // Free all stored strings and clear (`:944-948`).
                 imp.key_sequence.borrow_mut().clear();
             }
         }
     }
 
+    /// Handle a key table action from the apprt.
+    ///
     /// PORTS: `surface.zig:953-981` `keyTableAction`. Handle a key-table action,
     /// maintaining the owned `key_tables` stack (which backs the `key-table`
     /// property the key-state overlay binds).
@@ -1524,6 +1669,7 @@ impl Surface {
 
         match value {
             KeyTable::Activate(name) => {
+                // Duplicate the name string and push onto stack
                 // Duplicate the name and push onto the stack (`:965-969`).
                 if let Ok(duped) = CString::new(name) {
                     imp.key_tables.borrow_mut().push(duped);
@@ -1540,6 +1686,8 @@ impl Surface {
         }
     }
 
+    /// Set the current progress report state.
+    ///
     /// PORTS: `surface.zig:1030-1113` `setProgressReport`. Drive the
     /// `progress_bar_overlay` (a `gtk.ProgressBar` in `surface.blp`) visible +
     /// fraction/pulse from an OSC 9;4 progress report, with a 15s watchdog timer
@@ -1548,6 +1696,8 @@ impl Surface {
         use rustty_vt::osc::ProgressReportState;
         let imp = self.imp();
 
+        // No matter what, we stop the timer because if we're removing
+        // then we're done and otherwise we restart it.
         // Stop the timer no matter what — if removing we're done, otherwise we
         // restart it below (`:1036-1043`).
         remove_source_id(imp.progress_bar_timer.take(), "progress bar timer");
@@ -1572,6 +1722,8 @@ impl Surface {
                 progress_bar.set_visible(false);
                 return;
             }
+            // Set the progress bar to a fixed value if one was provided, otherwise pulse.
+            // Remove the `error` CSS class so that the progress bar shows as normal.
             // Fixed value if provided, otherwise pulse; clear the `error` class
             // (`:1063-1070`).
             ProgressReportState::Set => {
@@ -1581,6 +1733,8 @@ impl Surface {
                     None => progress_bar.pulse(),
                 }
             }
+            // Set the progress bar to a fixed value if one was provided, otherwise pulse.
+            // Set the `error` CSS class so that the progress bar shows as an error color.
             // As `.set`, but with the `error` class (`:1074-1081`).
             ProgressReportState::Error => {
                 progress_bar.add_css_class("error");
@@ -1589,8 +1743,14 @@ impl Surface {
                     None => progress_bar.pulse(),
                 }
             }
+            // The state of progress is unknown, so pulse the progress bar to
+            // indicate that things are still happening.
             // Unknown progress — pulse (`:1085-1087`).
             ProgressReportState::Indeterminate => progress_bar.pulse(),
+            // If a progress value was provided, set the progress bar to that value.
+            // Don't pulse the progress bar as that would indicate that things were
+            // happening. Otherwise this is mainly used to keep the progress bar on
+            // screen instead of timing out.
             // Keep the bar on screen; set a fixed value if provided, but don't
             // pulse (`:1093-1097`).
             ProgressReportState::Pause => {
@@ -1600,9 +1760,12 @@ impl Surface {
             }
         }
 
+        // Assume all states lead to visibility
         // All non-remove states lead to visibility (`:1100-1102`).
         progress_bar.set_visible(true);
 
+        // Start our timer to remove bad actor programs that stall
+        // the progress bar.
         // Start the watchdog to remove bad-actor programs that stall the bar
         // (`:1104-1112`). 15 seconds, mirroring `progress_bar_timeout_seconds`.
         let id = glib::timeout_add_local(
@@ -1618,6 +1781,8 @@ impl Surface {
         imp.progress_bar_timer.replace(Some(id));
     }
 
+    /// The progress bar hasn't been updated by the TUI recently, remove it.
+    ///
     /// PORTS: `surface.zig:1116-1122` `progressBarTimer`. The bar hasn't been
     /// updated by the TUI recently; remove it. Nulls the field first (before the
     /// re-entrant `setProgressReport(.remove)`) so its timer-removal branch is a
@@ -1638,9 +1803,16 @@ impl Surface {
     /// returns `false` (forcing the text-based message) does not exist in this
     /// Adwaita-1.3+ port (`:1521-1526`).
     pub fn child_exited_show(&self, value: rustty_apprt_api::surface::ChildExited) -> bool {
+        // Even if we don't support the overlay, we still keep our property
+        // up to date for anyone listening.
         // Keep the property up to date for anyone listening (`:1513-1519`).
         self.set_child_exited(true);
 
+        // If we have the noop child exited overlay then we don't do anything
+        // for child exited. The false return will force librustty to show
+        // the normal text-based message.
+        // PORT NOTE: this port has no noop child-exited overlay (`surface.zig:1541-1543`
+        // `@hasDecl(ChildExited, "noop")`), so that early `return false` has no arm here.
         // Populate the banner (`:1528`).
         self.imp()
             .child_exited_overlay
@@ -1715,6 +1887,9 @@ impl Surface {
         let _ = self.activate_action("app.ring-bell", None);
     }
 
+    /// Request that this terminal come to the front and become focused.
+    /// It is up to the embedding widget to react to this.
+    ///
     /// PORTS: `surface.zig:1126-1133` `present`. Request that this terminal come to
     /// the front and become focused. It is up to the embedding widget (the owning
     /// [`Window`](super::Window)) to react to this via the `present-request` signal
@@ -1735,6 +1910,11 @@ impl Surface {
         self.emit_by_name::<()>("toggle-maximize", &[]);
     }
 
+    /// Estimate and set the initial window size from config and font metrics.
+    /// This can be called before the core surface exists to set up the window
+    /// size before presenting. This is an estimate because it does not take
+    /// into account any padding that may need to be added to the window.
+    ///
     /// PORTS: `surface.zig:2095-2138` `estimateInitialSize`. Estimate the window's
     /// initial pixel size from `window-width`/`window-height` × the font-grid cell
     /// size, so the window manager can position it before the surface initializes;
@@ -1753,6 +1933,7 @@ impl Surface {
             return;
         }
 
+        // Get content scale and compute DPI
         // Content scale -> DPI (`:2104-2113`). `default_dpi` = 72 on macOS else 96
         // (`rustty-font-shaper/face/mod.rs` `default_dpi`).
         let content_scale = self.get_content_scale();
@@ -1767,6 +1948,7 @@ impl Surface {
             ydpi: (content_scale.y * default_dpi) as u16,
         };
 
+        // Get font grid for cell metrics
         // Get the font grid for cell metrics (`:2115-2126`). Reach the core app's
         // `font_grid_set` the way `delete_surface` reaches the core app (above).
         let app = Application::default();
@@ -1806,6 +1988,8 @@ impl Surface {
     pub fn get_content_scale(&self) -> ContentScale {
         let imp = self.imp();
 
+        // Future: detect GTK version 4.12+ and use gdk_surface_get_scale so we
+        // can support fractional scaling.
         // The GTK widget scale factor (`:1536-1546`).
         let scale = imp.gl_area.scale_factor();
         let gtk_scale: f32 = if scale <= 0 {
@@ -1815,6 +1999,12 @@ impl Surface {
             scale as f32
         };
 
+        // Also scale using font-specific DPI, which is often exposed to the user
+        // via DE accessibility settings (see https://docs.gtk.org/gtk4/class.Settings.html).
+        //
+        // gtk-xft-dpi is font DPI multiplied by 1024. See
+        // https://docs.gtk.org/gtk4/property.Settings.gtk-xft-dpi.html
+        //
         // The gtk-xft-dpi font-DPI scale (`:1548-1572`). gtk-xft-dpi is the font
         // DPI × 1024; divide by 1024 then by the 96 default to derive a scale.
         let xft_dpi_scale: f32 = match gsettings::get_c_int(gsettings::Key::GtkXftDpi) {
@@ -1822,6 +2012,10 @@ impl Surface {
                 log::warn!(target: LOG_SCOPE, "gtk-xft-dpi was not set, using default value");
                 1.0
             }
+            // Use a value of 1.0 for the XFT DPI scale if the setting is <= 0
+            // See:
+            // https://gitlab.gnome.org/GNOME/libadwaita/-/commit/a7738a4d269bfdf4d8d5429ca73ccdd9b2450421
+            // https://gitlab.gnome.org/GNOME/libadwaita/-/commit/9759d3fd81129608dd78116001928f2aed974ead
             Some(dpi) if dpi <= 0 => {
                 // -1 is a valid value which specifies default scale.
                 // https://docs.gtk.org/gtk4/property.Settings.gtk-xft-dpi.html
@@ -1830,6 +2024,9 @@ impl Surface {
                 }
                 1.0
             }
+            // As noted above gtk-xft-dpi is multiplied by 1024, so we divide by
+            // 1024, then divide by the default value (96) to derive a scale. Note
+            // gtk-xft-dpi can be fractional, so we use floating point math here.
             Some(dpi) => (dpi as f32 / 1024.0) / 96.0,
         };
 
@@ -1844,6 +2041,10 @@ impl Surface {
     /// dimensions (**invariant 3**).
     #[must_use]
     pub fn get_size(&self) -> SurfaceSize {
+        // By the time this is called, we should be in a widget tree.
+        // This should not be called before that. We ensure this by initializing
+        // the surface in `glareaResize`. This is VERY important because it
+        // avoids the pty having an incorrect initial size.
         self.imp().size.get()
     }
 
@@ -1853,6 +2054,51 @@ impl Surface {
         self.imp().cursor_pos.get()
     }
 
+    // `surface.zig:2104-2152`, the remaining property accessors. PORT NOTE: each is
+    // the `glib::Properties`-generated getter/setter on the field of the same name
+    // (`imp::Surface`), which sets the field and notifies as the reference does:
+    //
+    // /// Set the title for this surface, copies the value. This should always
+    // /// be the title as set by the terminal program, not any manually set
+    // /// title. For manually set titles see `setTitleOverride`.
+    // pub fn setTitle(self: *Self, title: ?[:0]const u8) void {
+    //
+    // /// Overridden title. This will be generally be shown over the title
+    // /// unless this is unset (null).
+    // pub fn setTitleOverride(self: *Self, title: ?[:0]const u8) void {
+    //
+    // /// Returns the pwd property without a copy.
+    // pub fn getPwd(self: *Self) ?[:0]const u8 {
+    //
+    // /// Set the pwd for this surface, copies the value.
+    // pub fn setPwd(self: *Self, pwd: ?[:0]const u8) void {
+    //
+    // /// Returns the focus state of this surface.
+    // pub fn getFocused(self: *Self) bool {
+    //
+    // /// Returns true if the GLArea of this surface is mapped.
+    // pub fn getMapped(self: *Self) bool {
+    //
+    // /// Change the configuration for this surface.
+    // pub fn setConfig(self: *Self, config: *Config) void {
+    //
+    // /// Return the default size, if set.
+    // pub fn getDefaultSize(self: *Self) ?*Size {
+    //
+    // /// Set the default size for a window that contains this surface.
+    // /// This is up to the embedding widget to respect this. Generally, only
+    // /// the first surface in a window respects this.
+    // pub fn setDefaultSize(self: *Self, size: Size) void {
+    //
+    // /// Return the min size, if set.
+    // pub fn getMinSize(self: *Self) ?*Size {
+    //
+    // /// Set the min size for a window that contains this surface.
+    // /// This is up to the embedding widget to respect this. Generally, only
+    // /// the first surface in a window respects this.
+    // pub fn setMinSize(self: *Self, size: Size) void {
+    /// Returns the title property without a copy.
+    ///
     /// PORTS: `surface.zig:1994-1996` `getTitle`. The stored surface title (the
     /// terminal-set title, before the user override).
     #[must_use]
@@ -1860,6 +2106,9 @@ impl Surface {
         self.imp().title.borrow().clone()
     }
 
+    /// Returns the effective title: the user-overridden title if set,
+    /// otherwise the terminal-set title.
+    ///
     /// PORTS: `surface.zig:1998-2004` `getEffectiveTitle`. The user override wins
     /// over the terminal-set title.
     #[must_use]
@@ -1872,6 +2121,8 @@ impl Surface {
             .or_else(|| imp.title.borrow().clone())
     }
 
+    /// Copies the effective title to the clipboard.
+    ///
     /// PORTS: `surface.zig:2006-2019` `copyTitleToClipboard`. Copies the effective
     /// title to the standard clipboard.
     pub fn copy_title_to_clipboard(&self) -> bool {
@@ -1896,6 +2147,8 @@ impl Surface {
         true
     }
 
+    /// Prompt for a manual title change for the surface.
+    ///
     /// PORTS: `surface.zig:1466-1478` `promptTitle` + `titleDialogSet`
     /// (`:3543-3551`). Mirrors [`super::Tab::prompt_tab_title`], but targets the
     /// surface: the initial value is `title_override orelse title` (`:1468`), and
@@ -1982,17 +2235,25 @@ impl Surface {
             Some(&core_id.to_variant()),
         );
 
+        // We set the notification ID to the body content. If the content is the
+        // same, this notification may replace a previous notification
         // We set the notification ID to the body content so an identical follow-up
         // replaces the prior notification (`:1774-1777`).
         app.upcast_ref::<gio::Application>()
             .send_notification(Some(&body_str), &notification);
     }
 
+    /// Set the scrollbar state for this surface. This will setup the
+    /// properties for our Gtk.Scrollable interface properly.
+    ///
     /// PORTS: `surface.zig:988-1031` `setScrollbar`. Update the `Gtk.Scrollable`
     /// vadjustment in place from the core's scroll state.
     pub fn set_scrollbar(&self, scrollbar: rustty_vt::pagelist::grow::Scrollbar) {
         let imp = self.imp();
 
+        // Update existing adjustment in-place. If we don't have an
+        // adjustment then we do nothing because we're not part of a
+        // scrolled window.
         // `const vadj = self.getVAdjustment() orelse return` (`:993`) — reads
         // `priv.vadj`. Clone the GObject so we don't hold the `RefCell` borrow
         // across `configure` (which may synchronously emit `value-changed`). No
@@ -2005,6 +2266,7 @@ impl Surface {
             }
         };
 
+        // Check if values match existing adjustment and skip update if so
         // Target values (`:996-999`).
         let value = scrollbar.offset as f64;
         let upper = scrollbar.total as f64;
@@ -2020,6 +2282,13 @@ impl Surface {
             return;
         }
 
+        // If we have a vadjustment we MUST have the signal group since
+        // it is setup in the prop handler.
+        //
+        // During manual scrollbar changes from Rustty core we don't
+        // want to emit value-changed signals so we block them. This would
+        // cause a waste of resources at best and infinite loops at worst.
+        //
         // If we have a vadjustment we MUST have the signal group since it is
         // setup in the prop handler (`:1009-1011`, `const group =
         // priv.vadj_signal_group.?`). rustty's `on_notify_vadjustment` builds the
@@ -2039,6 +2308,14 @@ impl Surface {
             .clone()
             .map(SignalGroupBlock::new);
 
+        // vadj.configure(
+        //     value, // value: current scroll position
+        //     0, // lower: minimum value
+        //     upper, // upper: maximum value (total scrollable area)
+        //     1, // step_increment: amount to scroll on arrow click
+        //     page_size, // page_increment: amount to scroll on page up/down
+        //     page_size, // page_size: size of visible area
+        // );
         // `vadj.configure(value, 0, upper, 1, page_size, page_size)` (`:1024-1031`).
         vadj.configure(value, 0.0, upper, 1.0, page_size, page_size);
     }
@@ -2145,6 +2422,8 @@ impl Surface {
         true
     }
 
+    /// Notify anyone interested that the readonly status has changed.
+    ///
     /// PORTS: `surface.zig:1204-1208` `setReadonly`. The `readonly` property is a
     /// computed read of the core surface's flag (which core has already toggled by
     /// the time this fires); notifying re-evaluates the `reveal-child: bind
@@ -2156,6 +2435,10 @@ impl Surface {
         true
     }
 
+    // `surface.zig:934-938`:
+    // /// Redraw our inspector, if there is one associated with this surface.
+    // pub fn redrawInspector(self: *Self) void {
+    // PORT NOTE: ported as `crate::gtk::surface::Surface::redraw_inspector`.
     /// The [`InspectorWindow`] currently attached to this surface, if any,
     /// upgraded from the weak backref (`surface.zig:891` `priv.inspector`). The
     /// backing store is a weak ref (`gtk/class/surface.rs:396`); the weak-notify
@@ -2224,10 +2507,12 @@ impl Surface {
         None
     }
 
+    /// Request data from the clipboard (read the clipboard). A started
+    /// request completes asynchronously and will call the
+    /// `completeClipboardRequest` core surface API when done.
+    ///
     /// PORTS: `surface.zig` `clipboardRequest` → delegates to
-    /// `Clipboard.request`. Request data from the clipboard (a READ); a started
-    /// request completes asynchronously and delivers the result to the core via
-    /// `completeClipboardRequest`.
+    /// `Clipboard.request`.
     pub fn clipboard_request(
         &self,
         clipboard_type: Clipboard,
@@ -2261,7 +2546,16 @@ impl Surface {
             return Ok(ClipboardReadResult::Unavailable);
         }
 
-        // Important: we ref `self` (clone the GObject — a cheap refcount bump) into
+        // Important: we ref self here so that we can't free memory
+        // while we have an outstanding clipboard read.
+        //
+        // PORT NOTE: `self.ref()` into the `Request` userdata, whose doc reads
+        // (`surface.zig:4392-4396`):
+        //   /// The request we send as userdata to the clipboard read.
+        //   const Request = struct {
+        //       /// "Self" is reffed so we can't dispose it until the clipboard
+        //       /// read is complete. Callers must unref when done.
+        // Here: we ref `self` (clone the GObject — a cheap refcount bump) into
         // the async closure so the surface can't be freed while a clipboard read is
         // outstanding. The reference `self.ref()`s into the `Request` userdata
         // (`surface.zig:3882-3886`); the gtk4-rs closure captures the clone instead.
@@ -2323,6 +2617,10 @@ impl Surface {
         Ok(ClipboardReadResult::Started)
     }
 
+    /// `surface.zig:4042`: A namespace for our clipboard-related functions so Surface isn't SO large.
+    /// PORT NOTE: the `Clipboard` namespace's functions are methods on [`Surface`]
+    /// here (`set_clipboard`, `clipboard_request`, `paste`, `clipboard_for`, ...).
+    ///
     /// PORTS: `surface.zig:1726-1738` `setClipboard` → delegates to `Clipboard.set`
     /// (`surface.zig:3760-3847`). Set the clipboard contents (a WRITE).
     pub fn set_clipboard(
@@ -2331,31 +2629,48 @@ impl Surface {
         contents: &[ClipboardContent<'_>],
         confirm: bool,
     ) {
-        // Grab our plaintext content for use in confirmation dialogs and signals.
-        // We always expect one to exist (`surface.zig:3768-3774`).
+        // Grab our plaintext content for use in confirmation dialogs
+        // and signals. We always expect one to exist. (`surface.zig:3768-3774`)
         let Some(text_content) = contents.iter().find(|c| c.mime == b"text/plain") else {
             return;
         };
-        let text = String::from_utf8_lossy(text_content.data).into_owned();
+        // `const text: [:0]const u8 = ... break content.data;` — the payload's
+        // BYTES. CORRECTION (task T-D, S56-F3): this was
+        // `String::from_utf8_lossy(text_content.data)`, so a non-UTF-8 OSC 52
+        // payload reached the `clipboard-write` signal with U+FFFD in place of its
+        // bytes. The signal now carries the bytes ([`raw_string_value`]); the
+        // confirmation dialog's copy is the one R13 exception (below).
+        let text: &[u8] = text_content.data;
 
         // If no confirmation is necessary, set the clipboard (`surface.zig:3777`).
         if !confirm {
             let clipboard = self.clipboard_for(clipboard_type);
 
             // Build one `ContentProvider` per content, then union them all
-            // (`surface.zig:3784-3826`). The reference falls back to
-            // `clipboard.setText(text)` only on an allocation failure; Rust's `Vec`
-            // aborts on OOM, so the fallback path is unreachable here.
+            // (`surface.zig:3784-3826`).
+            // Note: we don't need to unref the individual providers
+            // because new_union takes ownership of them.
+            //
+            // The reference falls back to `clipboard.setText(text)` only on an
+            // allocation failure:
+            // If we fail to alloc, we can at least set the text content.
+            // Rust's `Vec` aborts on OOM, so the fallback path is unreachable here.
             let mut providers: Vec<gdk4::ContentProvider> = Vec::with_capacity(contents.len());
             for content in contents {
                 let bytes = glib::Bytes::from(content.data);
                 if content.mime == b"text/plain" {
-                    // Add an explicit UTF-8 encoding parameter to the text/plain
-                    // type. The default charset when there is none is ASCII, and
-                    // lots of things look for UTF-8 specifically. Some clients pick
-                    // the FIRST match in the order we set here then garble bare
-                    // 'text/plain' with non-ASCII UTF-8, so offer UTF-8 first
-                    // (`surface.zig:3792-3817`).
+                    // Add an explicit UTF-8 encoding parameter to the
+                    // text/plain type. The default charset when there is
+                    // none is ASCII, and lots of things look for UTF-8
+                    // specifically.
+                    // The specs are not clear about the order here, but
+                    // some clients apparently pick the first match in the
+                    // order we set here then garble up bare 'text/plain'
+                    // with non-ASCII UTF-8 content, so offer UTF-8 first.
+                    //
+                    // Note that under X11, GTK automatically adds the
+                    // UTF8_STRING atom when this is present.
+                    // (`surface.zig:3792-3817`)
                     let text_providers = [
                         gdk4::ContentProvider::for_bytes("text/plain;charset=utf-8", &bytes),
                         gdk4::ContentProvider::for_bytes("text/plain", &bytes),
@@ -2372,22 +2687,51 @@ impl Surface {
                 log::warn!(target: LOG_SCOPE, "failed to set clipboard content err={err}");
             }
 
-            // `Surface.signals.@"clipboard-write".impl.emit(...)` with
-            // `(clipboard_type, text)` (`surface.zig:3832-3837`), the first as the
-            // `GhosttyApprtClipboard` enum the signal declares.
-            self.emit_by_name::<()>(
+            // Surface.signals.@"clipboard-write".impl.emit(
+            //     self,
+            //     null,
+            //     .{ clipboard_type, text.ptr },
+            //     null,
+            // );
+            // (`surface.zig:4117-4122`): the first param as the
+            // `GhosttyApprtClipboard` enum the signal declares, the second as the
+            // payload's C string, raw.
+            self.emit_by_name_with_values(
                 "clipboard-write",
-                &[&ClipboardEnum::from(clipboard_type), &text],
+                &[
+                    ClipboardEnum::from(clipboard_type).to_value(),
+                    raw_string_value(text),
+                ],
             );
 
             return;
         }
 
-        // confirm == true → showClipboardConfirmation (`surface.zig:3842-3846`).
-        // DEFERRED to Phase B.
-        self.show_clipboard_confirmation(ClipboardRequest::Osc52Write(clipboard_type), &text);
+        // showClipboardConfirmation(self, .{ .osc_52_write = clipboard_type }, text);
+        // (`surface.zig:4127-4131`).
+        //
+        // PORT NOTE: reference defect (R13), `UPSTREAM-DEFECTS.md` UD172. The
+        // reference inserts the payload's raw bytes into the dialog's
+        // `GtkTextBuffer` (`showClipboardConfirmation`, `insertAtCursor(str,
+        // len)`), whose precondition is valid UTF-8. For a non-UTF-8 OSC 52 payload
+        // (any program can send one) GTK rejects the insert —
+        // `Gtk-CRITICAL: gtk_text_buffer_emit_insert: assertion 'g_utf8_validate
+        // (text, len, NULL)' failed`, MEASURED on GTK 4.22.4 — the preview is
+        // EMPTY, and confirming writes that empty buffer text to the clipboard
+        // (`clipboardConfirmationConfirm` reads the buffer's `text`); in a GTK
+        // built with `G_DISABLE_CHECKS` the invalid bytes reach the text btree,
+        // which assumes UTF-8 (UNVERIFIED). The port keeps the conservative
+        // handling it already had for this one copy: the preview shows the payload
+        // with each invalid sequence replaced by U+FFFD, and confirming writes that
+        // text, so the user confirms exactly what is written.
+        self.show_clipboard_confirmation(
+            ClipboardRequest::Osc52Write(clipboard_type),
+            &String::from_utf8_lossy(text),
+        );
     }
 
+    /// Get the specific type of clipboard for a widget.
+    ///
     /// PORTS: `surface.zig:3934-3943` `Clipboard.get`. Get the specific GDK
     /// clipboard for a widget: `.standard` → the widget's default clipboard,
     /// `.selection`/`.primary` → the primary (selection) clipboard.
@@ -2428,6 +2772,10 @@ impl Surface {
         // Set `request` LAST: it fires `notify::request`, which sets the dialog's
         // heading/body from the variant.
         dialog.set_request(Some(ClipboardRequestBoxed(req)));
+        // TEST-ONLY observation point (compiled out of non-test builds): the UD172
+        // test reads back the preview buffer of the dialog this call built.
+        #[cfg(test)]
+        LAST_CLIPBOARD_CONFIRMATION.with(|last| last.replace(Some(dialog.clone())));
 
         // Wire confirm/deny (`surface.zig:3968-3981`). The signals carry the
         // "remember" flag as their single bool param (`args[1]`). We ref `self`
@@ -2612,12 +2960,14 @@ impl Surface {
             }
         }
 
-        // Don't leak GTK debug / desktop-activation vars to children
-        // (`:1608-1621`).
+        // (`:1608-1621`)
         for key in [
+            // Don't leak these GTK environment variables to child processes.
             b"GDK_DEBUG".as_slice(),
             b"GDK_DISABLE",
             b"GSK_RENDERER",
+            // Remove some environment variables that are set when Rustty is launched
+            // from a `.desktop` file, by D-Bus activation, or systemd.
             b"GIO_LAUNCHED_DESKTOP_FILE",
             b"GIO_LAUNCHED_DESKTOP_FILE_PID",
             b"DBUS_STARTER_ADDRESS",
@@ -2640,9 +2990,10 @@ impl Surface {
         // window.winproto().addSubprocessEnv(&env); if (window.isQuickTerminal())
         // try env.put("GHOSTTY_QUICK_TERMINAL", "1"); }` (`surface.zig:1636-1642`).
         //
-        // The reference's own comment calls this a hack that ties the Surface to the
-        // Window class, and says the right fix is a signal whose handler mutates the
-        // EnvMap; it punts because boxing the EnvMap is awkward. Ported as-is (R1).
+        // This is a hack because it ties ourselves (optionally) to the
+        // Window class. The right solution we should do is emit a signal
+        // here where the handler can modify our EnvMap, but boxing the
+        // EnvMap is a bit annoying so I'm punting it.
         if let Some(window) = crate::gtk::ext::ancestor::<crate::gtk::class::window::Window>(self) {
             if let Err(err) = window.winproto_mut().add_subprocess_env(&mut env) {
                 // log.warn("winproto failed to add subprocess env err={}", .{err});
@@ -2671,6 +3022,8 @@ impl Surface {
         self.imp().im_context.activate_osk(event)
     }
 
+    /// Scale x/y by the GDK device scale.
+    ///
     /// PORTS: `surface.zig:1481-1495` `scaledCoordinates`. Scales `x`/`y` by the
     /// GDK device (widget) scale factor.
     fn scaled_coordinates(&self, x: f64, y: f64) -> (f64, f64) {
@@ -2683,6 +3036,37 @@ impl Surface {
         (x * scale_factor, y * scale_factor)
     }
 
+    /// Key press event (press or release).
+    ///
+    /// At a high level, we want to construct an `input.KeyEvent` and
+    /// pass that to `keyCallback`. At a low level, this is more complicated
+    /// than it appears because we need to construct all of this information
+    /// and its not given to us.
+    ///
+    /// For all events, we run the GdkEvent through the input method context.
+    /// This allows the input method to capture the event and trigger
+    /// callbacks such as preedit, commit, etc.
+    ///
+    /// There are a couple important aspects to the prior paragraph: we must
+    /// send ALL events through the input method context. This is because
+    /// input methods use both key press and key release events to determine
+    /// the state of the input method. For example, fcitx uses key release
+    /// events on modifiers (i.e. ctrl+shift) to switch the input method.
+    ///
+    /// We set some state to note we're in a key event (self.in_keyevent)
+    /// because some of the input method callbacks change behavior based on
+    /// this state. For example, we don't want to send character events
+    /// like "a" via the input "commit" event if we're actively processing
+    /// a keypress because we'd lose access to the keycode information.
+    /// However, a "commit" event may still happen outside of a keypress
+    /// event from e.g. a tablet or on-screen keyboard.
+    ///
+    /// Finally, we take all of the information in order to determine if we have
+    /// a unicode character or if we have to map the keyval to a code to
+    /// get the underlying logical key, etc.
+    ///
+    /// Then we can emit the keyCallback.
+    ///
     /// PORTS: `surface.zig:1240-1463` `keyEvent` — the tier's subtlest function.
     /// A GTK key event (press/repeat/release) is passed FIRST through the input
     /// method (`filterKeypress`), then — depending on the composition state —
@@ -2714,9 +3098,9 @@ impl Surface {
             return false;
         };
 
-        // The block below is all related to input method handling. See the
-        // function comment for high level details and the comments within the
-        // block for specifics (`:1253-1343`).
+        // The block below is all related to input method handling. See the function
+        // comment for some high level details and then the comments within
+        // the block for more specifics. (`:1253-1343`)
         {
             // This can trigger an input method so we need to notify the im
             // context where the cursor is so it can render the dropdowns in the
@@ -2755,28 +3139,33 @@ impl Surface {
                 };
             }
 
-            // Pass the event through the input method which returns true if
-            // handled. Confusingly, not all events handled by the input method
-            // result in this returning true so we have to maintain some
-            // additional state about whether we were composing or not to
-            // determine if we should proceed with key encoding.
+            // Pass the event through the input method which returns true if handled.
+            // Confusingly, not all events handled by the input method result
+            // in this returning true so we have to maintain some additional
+            // state about whether we were composing or not to determine if
+            // we should proceed with key encoding.
             //
             // Cases where the input method does not mark the event as handled:
             //
             // - If we change the input method via keypress while we have preedit
             //   text, the input method will commit the pending text but will not
-            //   mark it as handled. We use the `.composing` state to detect this
-            //   case.
+            //   mark it as handled. We use the `.composing` state to detect
+            //   this case.
             //
-            // - If we switch input methods (i.e. via ctrl+shift with fcitx), the
-            //   input method will handle the key release event but will not mark
-            //   it as handled. I don't know any way to detect this case so it
-            //   will result in a key event being sent to the key callback. For
-            //   Kitty text encoding, this will result in modifiers being
+            // - If we switch input methods (i.e. via ctrl+shift with fcitx),
+            //   the input method will handle the key release event but will not
+            //   mark it as handled. I don't know any way to detect this case so
+            //   it will result in a key event being sent to the key callback.
+            //   For Kitty text encoding, this will result in modifiers being
             //   triggered despite being technically consumed. At the time of
-            //   writing, both Kitty and Alacritty have the same behavior. I know
-            //   of no way to fix this (`:1282-1302`).
+            //   writing, both Kitty and Alacritty have the same behavior. I
+            //   know of no way to fix this. (`:1282-1302`)
             let im_handled = imp.im_context.filter_keypress(&event);
+            // log.warn("GTKIM: im_handled={} im_len={} im_composing={}", .{
+            //     im_handled,
+            //     self.im_len,
+            //     self.im_composing,
+            // });
 
             // Read the (possibly IME-mutated) state, then reset `in_keyevent` to
             // `.false` — the block-scoped `defer` at `:1280`, which fires AFTER
@@ -2788,24 +3177,25 @@ impl Surface {
             imp.ime.borrow_mut().in_keyevent = ImKeyEvent::False;
 
             // If the input method handled the event, you would think we would
-            // never proceed with key encoding for Ghostty but that is not the
+            // never proceed with key encoding for Rustty but that is not the
             // case. Input methods will handle basic character encoding like
-            // typing "a" and we want to associate that with the key event. So we
-            // have to check additional state to determine if we exit
-            // (`:1310-1336`).
+            // typing "a" and we want to associate that with the key event.
+            // So we have to check additional state to determine if we exit.
+            // (`:1310-1336`)
             if im_handled {
-                // If we are composing then we're in a preedit state and do not
-                // want to encode any keys. For example: type a deadkey such as
-                // single quote on a US international keyboard layout (`:1316-1319`).
+                // If we are composing then we're in a preedit state and do
+                // not want to encode any keys. For example: type a deadkey
+                // such as single quote on a US international keyboard layout.
+                // (`:1316-1319`)
                 if im_composing {
                     return true;
                 }
 
-                // If we were composing and now we're not, it means that we
-                // committed the text. We also don't want to encode a key event
-                // for this. Example: enable Japanese input method, press "konn"
-                // and then press enter. The final enter should not be encoded and
-                // "konn" (in hiragana) should be written as "こん" (`:1321-1326`).
+                // If we were composing and now we're not, it means that we committed
+                // the text. We also don't want to encode a key event for this.
+                // Example: enable Japanese input method, press "konn" and then
+                // press enter. The final enter should not be encoded and "konn"
+                // (in hiragana) should be written as "こん". (`:1321-1326`)
                 if in_keyevent == ImKeyEvent::Composing {
                     return true;
                 }
@@ -2813,27 +3203,29 @@ impl Surface {
                 // Not composing and our input method buffer is empty. This could
                 // mean that the input method reacted to this event by activating
                 // an onscreen keyboard or something equivalent. We don't know.
-                // But the input method handled it and didn't give us text so we
-                // will just assume we should not encode this. This handles a real
-                // scenario when ibus starts the emoji input method (super+.)
-                // (`:1328-1335`).
+                // But the input method handled it and didn't give us text so
+                // we will just assume we should not encode this. This handles a
+                // real scenario when ibus starts the emoji input method
+                // (super+.). (`:1328-1335`)
                 if im_len == 0 {
                     return true;
                 }
             }
 
-            // At this point, for the sake of explanation of internal state: it is
-            // possible that im_len > 0 and im_composing == false. This means that
-            // we received a commit event from the input method that we want
-            // associated with the key event. This is common: its how basic
-            // character translation for simple inputs like "a" work (`:1338-1342`).
+            // At this point, for the sake of explanation of internal state:
+            // it is possible that im_len > 0 and im_composing == false. This
+            // means that we received a commit event from the input method that
+            // we want associated with the key event. This is common: its how
+            // basic character translation for simple inputs like "a" work.
+            // (`:1338-1342`)
         }
 
         // We always reset the length of the im buffer. There's only one scenario
         // we reach this point with im_len > 0 and that's if we received a commit
         // event from the input method. We don't want to keep that state around
-        // since we've handled it here. `defer priv.im_len = 0` (`:1349`) — the
-        // guard resets on every return past this point.
+        // since we've handled it here.
+        // `defer priv.im_len = 0` (`:1349`) — the guard resets on every return
+        // past this point.
         let _im_len_reset = ImLenReset(&imp.ime);
 
         // Get the keyvals for this event (`:1352-1357`).
@@ -2844,7 +3236,8 @@ impl Surface {
             keycode,
         );
 
-        // We want to get the physical unmapped key to process physical keybinds
+        // We want to get the physical unmapped key to process physical keybinds.
+        // (These are keybinds explicitly marked as requesting physical mapping).
         // (`:1359-1379`; `ef01d5fda`: the inline remap block is now
         // `key::remap_key`, folded into `physical_key` with the GDK modifier
         // flag).
@@ -2865,10 +3258,20 @@ impl Surface {
             key::translate_mods(gdk4::ModifierType::from_bits_truncate(masked))
         };
 
-        // If we have no UTF-8 text, we try to convert our keyval to a text value.
-        // We have to do this because GTK will not process "Ctrl+Shift+1" (on US
-        // keyboards) as "Ctrl+!" but instead as "". But the keyval is set
-        // correctly so we can at least extract that (`:1409-1424`).
+        // log.debug("key pressed key={} keyval={x} physical_key={} composing={} text_len={} mods={}", .{
+        //     key,
+        //     keyval,
+        //     physical_key,
+        //     priv.im_composing,
+        //     priv.im_len,
+        //     mods,
+        // });
+
+        // If we have no UTF-8 text, we try to convert our keyval to
+        // a text value. We have to do this because GTK will not process
+        // "Ctrl+Shift+1" (on US keyboards) as "Ctrl+!" but instead as "".
+        // But the keyval is set correctly so we can at least extract that.
+        // (`:1409-1424`)
         {
             let mut ime = imp.ime.borrow_mut();
             if ime.im_len == 0 && keyval_unicode > 0 {
@@ -2938,7 +3341,7 @@ impl Surface {
                     }
 
                     // Bell stops ringing when any key is pressed that is used by
-                    // the core in any way (`:1454-1456`).
+                    // the core in any way. (`:1454-1456`)
                     self.set_bell_ringing_inner(false);
 
                     return true;
@@ -2962,9 +3365,15 @@ impl Surface {
             imp.im_context.focus_out();
         }
 
-        // The focus callback runs on an idle source because libghostty callbacks
-        // can trigger focus loss and deadlock if the lock is held during the
-        // callback (`:2761,2768-2783`). The reference `ref`s the widget and
+        // `idleFocus` (`:2761,2768-2783`):
+        // The focus callback must be triggered on an idle loop source because
+        // there are actions within librustty callbacks (such as showing close
+        // confirmation dialogs) that can trigger focus loss and cause a deadlock
+        // because the lock may be held during the callback.
+        //
+        // Userdata should be a `*Surface`. This will unref once.
+        //
+        // The reference `ref`s the widget and
         // `unref`s in the callback; capturing an owned strong ref here is the same
         // (dropped at the closure's end).
         let obj = self.clone();
@@ -3058,9 +3467,9 @@ impl Surface {
             rustty_config::value_types::ResizeOverlay::Never => return,
         }
 
-        // If we have resize overlays enabled, setup an idler to show that. We do
-        // this in an idle tick because doing it during the resize results in
-        // flickering (`:3503-3519`).
+        // If we have resize overlays enabled, setup an idler
+        // to show that. We do this in an idle tick because doing it
+        // during the resize results in flickering. (`:3503-3519`)
         // SAFETY: `core` is the widget's boxed, initialized core surface.
         let grid = unsafe { &*core }.size.grid();
         let text = format!("{} x {}", grid.columns, grid.rows);
@@ -3082,7 +3491,8 @@ impl Surface {
             "initSurface called with a core surface already present"
         );
 
-        // Make the context current so we can call GL functions (`:3416-3424`).
+        // We need to make the context current so we can call GL functions.
+        // This is required for all surface operations. (`:3416-3424`)
         imp.gl_area.make_current();
         if let Some(err) = imp.gl_area.error() {
             log::warn!(target: LOG_SCOPE, "failed to make GL context current: {err}");
@@ -3111,6 +3521,7 @@ impl Surface {
             return Err(InitError::Surface);
         };
 
+        // Make our pointer to store our surface
         // Our stable heap slot for the core surface (`alloc.create(CoreSurface)`,
         // **invariant 2**, `:3430`). `Box`'s allocation is the pin the renderer/io
         // threads' pointers rely on; on the error path the `MaybeUninit` box is
@@ -3129,7 +3540,7 @@ impl Surface {
         // SAFETY: `core_app` is the live `App<App>` bound by `bind_core_app`.
         unsafe { &mut *core_app }.addSurface(rt_surface);
 
-        // Initialize our surface configuration (`:3438-3442`), applying the
+        // Initialize our surface configuration. (`:3438-3442`), applying the
         // caller overrides and font-size / pwd (`:3445-3462`).
         let mut config = {
             let cfg_ref = imp.config.borrow();
@@ -3155,6 +3566,7 @@ impl Surface {
             wd_val.finalize();
             config.working_directory = Some(wd_val);
         }
+        // Properties that can impact surface init
         // `if (priv.font_size_request) |size| config.@"font-size" = size.points` (`:3456`).
         if let Some(size) = imp.font_size_request.borrow().as_ref() {
             config.font_size = size.0.points;
@@ -3286,56 +3698,94 @@ fn action_notify_on_next_command_finish(
 // The 39 template callbacks (`surface.zig:3623-3661`). Per the placeholder-leaf
 // doctrine most are `unimplemented!()` (Tasks 16/17/19 fill them); the three
 // reached during template instantiation return safe values (see the module doc).
-/// Map a [`MouseShape`] discriminant (as carried by the `mouse-shape` property) to
-/// its W3C/CSS cursor name for `gtk.Widget.set_cursor_from_name`.
+#[cfg(test)]
+thread_local! {
+    /// The last `ClipboardConfirmationDialog` `show_clipboard_confirmation` built on
+    /// this thread (TEST-ONLY; see the UD172 test).
+    static LAST_CLIPBOARD_CONFIRMATION: RefCell<Option<ClipboardConfirmationDialog>> =
+        const { RefCell::new(None) };
+}
+
+/// A `G_TYPE_STRING` `GValue` holding `bytes` UNCONVERTED — what the reference's
+/// `[*:0]const u8` signal argument is (`surface.zig:4117-4122`, `text.ptr`). A
+/// GValue string does not require UTF-8 (`g_value_set_string` copies the bytes);
+/// glib-rs's `String`/`&str` values do, which is why this goes through the C call.
+/// C reads up to the first NUL, as it does for the reference's pointer.
 ///
-/// PORTS: the `switch (priv.mouse_shape)` in `surface.zig:2389-2427` (`propMouseShape`).
-/// Indexed by the shape's `#[repr(i32)]` discriminant in `mouse::Shape` declaration
-/// order (`rustty-vt/src/mouse.rs:70-105`); an out-of-range value falls back to
-/// `"default"`.
-fn mouse_shape_cursor_name(repr: i32) -> &'static str {
-    // Declaration order of `mouse::Shape` (`mouse.rs:71-104`), each mapped to the
-    // reference's cursor name (`surface.zig:2390-2426`).
-    const NAMES: [&str; 34] = [
-        "default",       // Default
-        "context-menu",  // ContextMenu
-        "help",          // Help
-        "pointer",       // Pointer
-        "progress",      // Progress
-        "wait",          // Wait
-        "cell",          // Cell
-        "crosshair",     // Crosshair
-        "text",          // Text
-        "vertical-text", // VerticalText
-        "alias",         // Alias
-        "copy",          // Copy
-        "move",          // Move
-        "no-drop",       // NoDrop
-        "not-allowed",   // NotAllowed
-        "grab",          // Grab
-        "grabbing",      // Grabbing
-        "all-scroll",    // AllScroll
-        "col-resize",    // ColResize
-        "row-resize",    // RowResize
-        "n-resize",      // NResize
-        "e-resize",      // EResize
-        "s-resize",      // SResize
-        "w-resize",      // WResize
-        "ne-resize",     // NeResize
-        "nw-resize",     // NwResize
-        "se-resize",     // SeResize
-        "sw-resize",     // SwResize
-        "ew-resize",     // EwResize
-        "ns-resize",     // NsResize
-        "nesw-resize",   // NeswResize
-        "nwse-resize",   // NwseResize
-        "zoom-in",       // ZoomIn
-        "zoom-out",      // ZoomOut
-    ];
-    usize::try_from(repr)
-        .ok()
-        .and_then(|i| NAMES.get(i).copied())
-        .unwrap_or("default")
+/// A receiver must read it with `g_value_get_string`, never
+/// `Value::get::<String>()` (which panics on non-UTF-8); the one in-tree receiver
+/// is `window.rs`'s `clipboard-write` handler.
+pub(crate) fn raw_string_value(bytes: &[u8]) -> glib::Value {
+    use glib::translate::ToGlibPtrMut;
+    let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+    let c = std::ffi::CString::new(&bytes[..end]).expect("no interior NUL before `end`");
+    let mut value = glib::Value::from_type(glib::Type::STRING);
+    // SAFETY: `value` is an initialized G_TYPE_STRING GValue; GLib copies `c`.
+    unsafe { glib::gobject_ffi::g_value_set_string(value.to_glib_none_mut().0, c.as_ptr()) };
+    value
+}
+
+/// The bytes of a `G_TYPE_STRING` `GValue`, read without UTF-8 validation (the
+/// reader half of [`raw_string_value`]). `None` for a NULL string.
+pub(crate) fn raw_string_bytes(value: &glib::Value) -> Option<Vec<u8>> {
+    use glib::translate::ToGlibPtr;
+    // SAFETY: `value` is a live GValue; `g_value_get_string` returns its own
+    // NUL-terminated string (or NULL), valid while `value` is.
+    unsafe {
+        let p = glib::gobject_ffi::g_value_get_string(value.to_glib_none().0);
+        (!p.is_null()).then(|| std::ffi::CStr::from_ptr(p).to_bytes().to_vec())
+    }
+}
+
+/// Map a [`MouseShape`] to its W3C/CSS cursor name for
+/// `gtk.Widget.set_cursor_from_name`.
+///
+/// PORTS: the `switch (priv.mouse_shape)` in `surface.zig:2482-2517`
+/// (`propMouseShape`), arm for arm and in the reference's arm order.
+///
+/// CORRECTION (task T-D, S55-F4): this took the shape as its `i32` discriminant
+/// and indexed a 34-entry name table in `mouse::Shape` declaration order, with an
+/// out-of-range index falling back to `"default"` — a branch the reference's
+/// exhaustive switch does not have. The `mouse-shape` property has carried the
+/// typed `GhosttyMouseShape` since task 20 (S54-F3), so the map is the
+/// reference's switch again; an unhandled shape is now a compile error.
+fn mouse_shape_cursor_name(shape: MouseShape) -> &'static str {
+    match shape {
+        MouseShape::Default => "default",
+        MouseShape::Help => "help",
+        MouseShape::Pointer => "pointer",
+        MouseShape::ContextMenu => "context-menu",
+        MouseShape::Progress => "progress",
+        MouseShape::Wait => "wait",
+        MouseShape::Cell => "cell",
+        MouseShape::Crosshair => "crosshair",
+        MouseShape::Text => "text",
+        MouseShape::VerticalText => "vertical-text",
+        MouseShape::Alias => "alias",
+        MouseShape::Copy => "copy",
+        MouseShape::NoDrop => "no-drop",
+        MouseShape::Move => "move",
+        MouseShape::NotAllowed => "not-allowed",
+        MouseShape::Grab => "grab",
+        MouseShape::Grabbing => "grabbing",
+        MouseShape::AllScroll => "all-scroll",
+        MouseShape::ColResize => "col-resize",
+        MouseShape::RowResize => "row-resize",
+        MouseShape::NResize => "n-resize",
+        MouseShape::EResize => "e-resize",
+        MouseShape::SResize => "s-resize",
+        MouseShape::WResize => "w-resize",
+        MouseShape::NeResize => "ne-resize",
+        MouseShape::NwResize => "nw-resize",
+        MouseShape::SeResize => "se-resize",
+        MouseShape::SwResize => "sw-resize",
+        MouseShape::EwResize => "ew-resize",
+        MouseShape::NsResize => "ns-resize",
+        MouseShape::NeswResize => "nesw-resize",
+        MouseShape::NwseResize => "nwse-resize",
+        MouseShape::ZoomIn => "zoom-in",
+        MouseShape::ZoomOut => "zoom-out",
+    }
 }
 
 #[gtk4::template_callbacks]
@@ -3492,10 +3942,12 @@ impl Surface {
                 }
             };
 
-        // Trigger the on-screen keyboard if we have no selection, and the mouse
-        // event hasn't been intercepted by the callback. It's better to do this
-        // here rather than within the core callback since we have direct access
-        // to the underlying gdk.Event here (`:2892-2901`).
+        // Trigger the on-screen keyboard if we have no selection,
+        // and that the mouse event hasn't been intercepted by the callback.
+        //
+        // It's better to do this here rather than within the core callback
+        // since we have direct access to the underlying gdk.Event here.
+        // (`:2892-2901`)
         // SAFETY: `core` is the initialized core surface.
         if !consumed
             && button == Button::Left
@@ -3522,10 +3974,15 @@ impl Surface {
         };
 
         // There seem to be at least two cases where GTK issues a mouse motion
-        // event without the cursor actually moving (GLArea resized under the
-        // mouse; window title update). To prevent incorrect behavior, we'll only
-        // grab focus and continue with callback logic if the cursor has actually
-        // moved (`:2919-2930`).
+        // event without the cursor actually moving:
+        // 1. GLArea is resized under the mouse. This has the unfortunate
+        //    side effect of causing focus to potentially change when
+        //    `focus-follows-mouse` is enabled.
+        // 2. The window title is updated. This can cause the mouse to unhide
+        //    incorrectly when hide-mouse-when-typing is enabled.
+        // To prevent incorrect behavior, we'll only grab focus and
+        // continue with callback logic if the cursor has actually moved.
+        // (`:2919-2930`)
         let cur = imp.cursor_pos.get();
         let is_cursor_still = (cur.x - pos.x).abs() < 1.0 && (cur.y - pos.y).abs() < 1.0;
         if is_cursor_still {
@@ -3563,8 +4020,9 @@ impl Surface {
             return;
         };
 
-        // If we have a core surface then we can send the cursor pos callback with
-        // an invalid position to indicate the mouse left (`:2962-2975`).
+        // If we have a core surface then we can send the cursor pos
+        // callback with an invalid position to indicate the mouse left.
+        // (`:2962-2975`)
         if let Some(core) = this.core() {
             let mods = key::translate_mods(event.modifier_state());
             let pos = CursorPos { x: -1.0, y: -1.0 };
@@ -3595,7 +4053,10 @@ impl Surface {
         };
 
         let (sx, sy) = this.scaled_coordinates(x, y);
-        // We invert (`* -1`) because we apply natural scrolling to the values
+        // We invert because we apply natural scrolling to the values.
+        // This behavior has existed for years without Linux users complaining
+        // but I suspect we'll have to make this configurable in the future
+        // or read a system setting.
         // (`:3009-3016`); written `-x * m` to satisfy clippy::neg_multiply.
         // SAFETY: `core` is the widget's boxed, initialized core surface.
         if let Err(err) =
@@ -3824,8 +4285,10 @@ impl Surface {
         true
     }
 
-    /// PORTS: `surface.zig:3898-3931` `Clipboard.paste`. Paste explicit text
-    /// directly into the surface, regardless of the actual clipboard contents.
+    /// Paste explicit text directly into the surface, regardless of the
+    /// actual clipboard contents.
+    ///
+    /// PORTS: `surface.zig:3898-3931` `Clipboard.paste`.
     /// Mirrors the Phase-A `clipboard_request` completion path (the core mutable
     /// deref + the `UnsafePaste`/`UnauthorizedPaste` → confirmation fallback).
     fn paste(&self, text: &[u8]) {
@@ -3886,8 +4349,9 @@ impl Surface {
         log::debug!(target: LOG_SCOPE, "realize");
         let imp = self.imp();
 
-        // Make the GL area current so we can detect any OpenGL errors; on error
-        // we can't render and switch to the error state (`:3234-3245`).
+        // Make the GL area current so we can detect any OpenGL errors. If
+        // we have errors here we can't render and we switch to the error
+        // state. (`:3234-3245`)
         imp.gl_area.make_current();
         if let Some(err) = imp.gl_area.error() {
             log::warn!(target: LOG_SCOPE, "failed to make GL context current: {err}");
@@ -3906,8 +4370,9 @@ impl Surface {
             return;
         }
 
-        // If we already have an initialized surface, notify it; otherwise we
-        // initialize it on the first resize (`:3247-3257`).
+        // If we already have an initialized surface then we notify it.
+        // If we don't, we'll initialize it on the first resize so we have
+        // our proper initial dimensions. (`:3247-3257`)
         if let Some(core) = self.core() {
             // SAFETY: `core` is the widget's boxed, initialized core surface; the
             // renderer is aliased raw by the render thread (W5), so use raw-self.
@@ -3922,8 +4387,9 @@ impl Surface {
             }
         }
 
-        // Set up our input method. This creates a strong ref back to ourselves,
-        // released in unrealize (`:3259-3262`).
+        // Setup our input method. We do this here because this will
+        // create a strong reference back to ourself and we want to be
+        // able to release that in unrealize. (`:3259-3262`)
         imp.im_context.set_client_widget(Some(self));
     }
 
@@ -3933,10 +4399,19 @@ impl Surface {
         log::debug!(target: LOG_SCOPE, "unrealize");
         let imp = self.imp();
 
+        // Notify our core surface
         if let Some(core) = self.core() {
-            // No guarantee the context is current on unrealize (`:3274-3276`).
+            // There is no guarantee that our GLArea context is current
+            // when unrealize is emitted, so we need to make it current.
+            // (`:3274-3276`)
             imp.gl_area.make_current();
             if let Some(err) = imp.gl_area.error() {
+                // I don't know a scenario this can happen, but it means
+                // we probably leaked memory because displayUnrealized
+                // below frees resources that aren't specifically OpenGL
+                // related. I didn't make the OpenGL renderer handle this
+                // scenario because I don't know if its even possible
+                // under valid circumstances, so let's log.
                 log::warn!(target: LOG_SCOPE, "gl_area_make_current failed in unrealize msg={err}");
                 log::warn!(target: LOG_SCOPE, "OpenGL resources and memory likely leaked");
                 return;
@@ -3948,7 +4423,8 @@ impl Surface {
             }
         }
 
-        // Unset our input method (`:3295-3296`).
+        // Unset our input method
+        // (`:3295-3296`)
         imp.im_context.set_client_widget(gtk4::Widget::NONE);
     }
 
@@ -3978,8 +4454,9 @@ impl Surface {
     /// `&self`; the trailing context / area values are ignored positionally.
     #[template_callback]
     fn gl_render(&self) -> bool {
-        // No surface ⇒ we failed to initialize; nothing to draw (`:3333-3336`,
-        // returns 1 / `true`: handled).
+        // If we don't have a surface then we failed to initialize for
+        // some reason and there's nothing to draw to the GLArea.
+        // (`:3333-3336`, returns 1 / `true`: handled).
         let Some(core) = self.core() else {
             return true;
         };
@@ -4010,16 +4487,43 @@ impl Surface {
     /// values[1] (an `i32` width) and abort the (nounwind) FFI trampoline with a
     /// type mismatch. We take `(&self, width, height)`; the trailing area value
     /// is ignored positionally.
+    /// `glareaResize`'s debug block (`surface.zig:3452-3470`): the GL area's scale
+    /// factor and the scale of the window's `GdkSurface`, 0 when the widget has no
+    /// root or the root no surface yet.
+    ///
+    /// CORRECTION (task T-D, S56-F4): the port logged only `width`/`height`/`scale`
+    /// under a comment saying "The window (gdk-surface) scale is elided from the
+    /// log here". The reference's `window_scale={}` is restored.
+    fn gl_resize_debug_log(&self, width: i32, height: i32) {
+        // const widget = gl_area.as(gtk.Widget);
+        let widget = self.imp().gl_area.upcast_ref::<gtk4::Widget>();
+        // const scale_factor = widget.getScaleFactor();
+        let scale_factor = widget.scale_factor();
+        // const window_scale_factor = scale: {
+        //     const root = widget.getRoot() orelse break :scale 0;
+        //     const gtk_native = root.as(gtk.Native);
+        //     const gdk_surface = gtk_native.getSurface() orelse break :scale 0;
+        //     break :scale gdk_surface.getScaleFactor();
+        // };
+        let window_scale_factor = widget
+            .root()
+            .and_then(|root| root.upcast_ref::<gtk4::Native>().surface())
+            .map_or(0, |surface| surface.scale_factor());
+
+        // log.debug("gl resize width={} height={} scale={} window_scale={}", .{
+        log::debug!(target: LOG_SCOPE, "gl resize width={width} height={height} scale={scale_factor} window_scale={window_scale_factor}");
+    }
+
     #[template_callback]
     fn gl_resize(&self, width: i32, height: i32) {
         let imp = self.imp();
 
-        // Debug output to understand what GTK is telling us (`:3352-3369`). The
-        // window (gdk-surface) scale is elided from the log here.
-        log::debug!(target: LOG_SCOPE, "gl resize width={width} height={height} scale={}",
-            imp.gl_area.scale_factor(),);
+        // Some debug output to help understand what GTK is telling us.
+        // (`:3452-3470`)
+        self.gl_resize_debug_log(width, height);
 
-        // Store our cached size (`:3371-3379`).
+        // Store our cached size
+        // (`:3371-3379`)
         let new_size = SurfaceSize {
             width: width as u32,
             height: height as u32,
@@ -4027,10 +4531,10 @@ impl Surface {
         let changed = !imp.size.get().eql(&new_size);
         imp.size.set(new_size);
 
-        // If our surface is realized, we send callbacks (`:3381-3398`).
+        // If our surface is realize, we send callbacks. (`:3381-3398`)
         if let Some(core) = self.core() {
             // We also update the content scale because there is no signal for
-            // content-scale change and it seems to trigger a resize event
+            // content scale change and it seems to trigger a resize event.
             // (`:3383-3387`) — this note is load-bearing.
             // SAFETY: `core` is the widget's boxed, initialized core surface.
             if let Err(err) = unsafe { &mut *core }.contentScaleCallback(self.get_content_scale()) {
@@ -4044,13 +4548,15 @@ impl Surface {
                     // log.warn("error in size callback err={}", .{err});
                     log::warn!(target: LOG_SCOPE, "error in size callback err={err:?}");
                 }
+                // Setup our resize overlay if configured
                 self.resize_overlay_schedule();
             }
 
             return;
         }
 
-        // If we don't have a surface, then we initialize it (`:3400-3403`).
+        // If we don't have a surface, then we initialize it.
+        // (`:3400-3403`)
         if let Err(err) = self.init_surface() {
             // log.warn("surface failed to initialize err={}", .{err});
             log::warn!(target: LOG_SCOPE, "surface failed to initialize err={err:?}");
@@ -4061,8 +4567,10 @@ impl Surface {
     /// PORTS: `surface.zig:3076-3087` `imPreeditStart`.
     #[template_callback]
     fn im_preedit_start(_ctx: &gtk4::IMMulticontext, this: &Surface) {
-        // Start our composing state for the input method and reset our input
-        // buffer to empty (`:3082-3086`).
+        // log.warn("GTKIM: preedit start", .{});
+
+        // Start our composing state for the input method and reset our
+        // input buffer to empty. (`:3082-3086`)
         let mut ime = this.imp().ime.borrow_mut();
         ime.im_composing = true;
         ime.im_len = 0;
@@ -4070,12 +4578,17 @@ impl Surface {
     /// PORTS: `surface.zig:3089-3126` `imPreeditChanged`.
     #[template_callback]
     fn im_preedit_changed(ctx: &gtk4::IMMulticontext, this: &Surface) {
-        // Any preedit change should mark that we're composing (`:3095-3101`).
+        // Any preedit change should mark that we're composing. Its possible this
+        // is false using fcitx5-hangul and typing "dkssud<space>" ("안녕"). The
+        // second "s" results in a "commit" for "안" which sets composing to false,
+        // but then immediately sends a preedit change for the next symbol. With
+        // composing set to false we won't commit this text. Therefore, we must
+        // ensure it is set here. (`:3095-3101`)
         this.imp().ime.borrow_mut().im_composing = true;
 
-        // We can't set our preedit on our surface unless we're realized. We do
-        // this now because we want to still keep our input method state coherent
-        // (`:3103-3106`).
+        // We can't set our preedit on our surface unless we're realized.
+        // We do this now because we want to still keep our input method
+        // state coherent. (`:3103-3106`)
         let Some(core) = this.core() else {
             return;
         };
@@ -4083,7 +4596,9 @@ impl Surface {
         // Get our pre-edit string that we'll use to show the user (`:3108-3116`).
         let (preedit, _attrs, _pos) = ctx.preedit_string();
 
-        // Update our preedit state in Ghostty core (`:3118-3125`).
+        // Update our preedit state in Rustty core
+        // log.warn("GTKIM: preedit change str={s}", .{str});
+        // (`:3118-3125`)
         // SAFETY: `core` is the widget's boxed, initialized core surface.
         if let Err(err) = unsafe { (*core).preeditCallback(Some(preedit.as_bytes())) } {
             // log.warn("error in preedit callback err={}", .{err});
@@ -4093,8 +4608,10 @@ impl Surface {
     /// PORTS: `surface.zig:3128-3143` `imPreeditEnd`.
     #[template_callback]
     fn im_preedit_end(_ctx: &gtk4::IMMulticontext, this: &Surface) {
-        // End our composing state for GTK, allowing us to commit the text
-        // (`:3134-3136`).
+        // log.warn("GTKIM: preedit end", .{});
+
+        // End our composing state for GTK, allowing us to commit the text.
+        // (`:3134-3136`)
         this.imp().ime.borrow_mut().im_composing = false;
 
         // End our preedit state in Ghostty core (`:3138-3142`).
@@ -4116,26 +4633,33 @@ impl Surface {
         let imp = this.imp();
         let str_bytes = bytes.as_bytes();
 
+        // log.debug("GTKIM: input commit composing={} keyevent={} str={s}", .{
+        //     self.im_composing,
+        //     self.in_keyevent,
+        //     str,
+        // });
+
         // We need to handle commit specially if we're in a key event.
-        // Specifically, GTK will send us a commit event for basic key encodings
-        // like "a" (on a US layout keyboard). We don't want to treat this as IME
-        // committed text because we want to associate it with a key event
-        // (`:3159-3192`).
+        // Specifically, GTK will send us a commit event for basic key
+        // encodings like "a" (on a US layout keyboard). We don't want
+        // to treat this as IME committed text because we want to associate
+        // it with a key event (i.e. "a" key press). (`:3159-3192`)
         let in_keyevent = imp.ime.borrow().in_keyevent;
         match in_keyevent {
-            // If we're not in a key event then this commit is from some other
-            // source (i.e. on-screen keyboard, tablet, etc.) and we want to
-            // commit the text to the core surface (`:3165-3168`).
+            // If we're not in a key event then this commit is from
+            // some other source (i.e. on-screen keyboard, tablet, etc.)
+            // and we want to commit the text to the core surface. (`:3165-3168`)
             ImKeyEvent::False => {}
 
-            // If we're in a composing state and in a key event then this key
-            // event is resulting in a commit of multiple keypresses and we don't
-            // want to encode it alongside the keypress (`:3170-3173`).
+            // If we're in a composing state and in a key event then this
+            // key event is resulting in a commit of multiple keypresses
+            // and we don't want to encode it alongside the keypress. (`:3170-3173`)
             ImKeyEvent::Composing => {}
 
-            // If we're not composing then this commit is just a normal key
-            // encoding and we want our key event to handle it so that Ghostty can
-            // be aware of the key event alongside the text (`:3175-3191`,
+            // If we're not composing then this commit is just a normal
+            // key encoding and we want our key event to handle it so
+            // that Rustty can be aware of the key event alongside
+            // the text. (`:3175-3191`,
             // `.not_composing`). See the [`ImKeyEvent`] naming note in `key_event`.
             ImKeyEvent::True => {
                 let mut ime = imp.ime.borrow_mut();
@@ -4160,19 +4684,24 @@ impl Surface {
                 debug_assert!(str_bytes.len() <= ime.im_buf.len());
                 ime.im_len = str_bytes.len() as u8;
 
+                // log.debug("input commit len={}", .{priv.im_len});
                 return;
             }
         }
 
-        // If we reach this point from above it means we're composing OR not in a
-        // keypress. In either case, we want to commit the text given to us
-        // because that's what GTK is asking us to do (`:3194-3198`).
+        // If we reach this point from above it means we're composing OR
+        // not in a keypress. In either case, we want to commit the text
+        // given to us because that's what GTK is asking us to do. If we're
+        // not in a keypress it means that this commit came via a non-keyboard
+        // event (i.e. on-screen keyboard, tablet of some kind, etc.).
+        // (`:3194-3198`)
 
         // Committing ends composing state (`:3200-3201`).
         imp.ime.borrow_mut().im_composing = false;
 
-        // We can't set our preedit on our surface unless we're realized
-        // (`:3203-3225`).
+        // We can't set our preedit on our surface unless we're realized.
+        // We do this now because we want to still keep our input method
+        // state coherent. (`:3203-3225`)
         if let Some(core) = this.core() {
             // End our preedit state. Well-behaved input methods do this for us by
             // triggering a preedit-end event but some do not (ibus 1.5.29)
@@ -4226,15 +4755,17 @@ impl Surface {
     #[template_callback]
     fn child_exited_close(_child_exited: &SurfaceChildExited, this: &Surface) {
         // PORTS: `surface.zig:2600-2603` `childExitedClose(_: *ChildExited, self)`.
-        // Closes the surface with no confirmation. NON-swapped signal: the emitting
+        // This closes the surface with no confirmation.
+        // NON-swapped signal: the emitting
         // ChildExited overlay is arg 0, `this: &Surface` is last (PORT NOTE above).
         this.close();
     }
     #[template_callback]
     fn context_menu_closed(_popover: &gtk4::PopoverMenu, this: &Surface) {
         // PORTS: `surface.zig:2608-2618` `contextMenuClosed(_: *gtk.PopoverMenu, self)`.
-        // When the context menu closes, GTK moves focus back to the tab bar if there
-        // are tabs — not what we want; grab it back on the surface (the GLArea).
+        // When the context menu closes, it moves focus back to the tab
+        // bar if there are tabs. That's not correct. We need to grab it
+        // on the surface.
         // NON-swapped signal: the emitting PopoverMenu is arg 0, `this: &Surface` last.
         this.grab_focus();
     }
@@ -4282,19 +4813,23 @@ impl Surface {
     fn on_notify_error(&self) {
         let widget = self.upcast_ref::<gtk4::Widget>();
         if self.imp().error.get() {
-            // Ensure an opaque background so the error message is readable
-            // (`:2316-2322`).
+            // Ensure we have an opaque background. The window will NOT set
+            // this if we have transparency set and we need an opaque
+            // background for the error message to be readable. (`:2316-2322`)
             widget.add_css_class("background");
         } else {
-            // Parent widgets set it appropriately otherwise (`:2323-2326`).
+            // Regardless of transparency setting, we remove the background
+            // CSS class from this widget. Parent widgets will set it
+            // appropriately (see window.zig for example). (`:2323-2326`)
             widget.remove_css_class("background");
         }
 
-        // We need to set our child property on an idle tick, because the error
-        // property can be triggered by signals that are in the middle of widget
-        // mapping and changing our child during that time results in a hard gtk
-        // crash (`:2328-2335`). A weak backref keeps the source non-owning (removed
-        // in `dispose`, **invariant 11**).
+        // We need to set our child property on an idle tick, because the
+        // error property can be triggered by signals that are in the middle
+        // of widget mapping and changing our child during that time
+        // results in a hard gtk crash. (`:2328-2335`)
+        // A weak backref keeps the source non-owning (removed in `dispose`,
+        // **invariant 11**).
         let imp = self.imp();
         if imp.idle_rechild.borrow().is_none() {
             let weak = self.downgrade();
@@ -4339,8 +4874,8 @@ impl Surface {
                 .set_cursor_from_name(Some("none"));
             return;
         }
-        // If we're not hidden we just trigger the mouse shape logic to handle
-        // setting the proper mouse shape (`:2373-2375`).
+        // If we're not hidden we just trigger the mouse shape
+        // prop notification to handle setting the proper mouse shape. (`:2373-2375`)
         self.apply_mouse_shape_cursor();
     }
     /// PORTS: `surface.zig:2378-2429` `propMouseShape`. Set the GLArea/widget cursor
@@ -4360,9 +4895,9 @@ impl Surface {
     fn on_notify_vadjustment(&self) {
         let imp = self.imp();
 
-        // When vadjustment is first set, we setup the signal group lazily. This
-        // makes it so that if we don't use scrollbars, we never pay the memory
-        // cost of this (`:2448-2461`). The typed `gobject.SignalGroup` binding is
+        // When vadjustment is first set, we setup the signal group lazily.
+        // This makes it so that if we don't use scrollbars, we never
+        // pay the memory cost of this. (`:2448-2461`) The typed `gobject.SignalGroup` binding is
         // behind a glib feature this build does not enable, so the group is built
         // and connected via the libgobject-2.0 C symbols directly (see the FFI
         // block by `g_signal_group_set_target`).
@@ -4392,10 +4927,11 @@ impl Surface {
             // capture would leak.
             let weak = self.downgrade();
             let closure = glib::Closure::new_local(move |values| {
-                // PORTS: `vadjValueChanged` (`:2430-2439`). This will trigger for
-                // every single pixel change in the adjustment, but our core
-                // surface handles the noise from this so that identical rows are
-                // cheap. `values[0]` is the emitting `gtk.Adjustment`.
+                // PORTS: `vadjValueChanged` (`:2430-2439`).
+                // This will trigger for every single pixel change in the adjustment,
+                // but our core surface handles the noise from this so that identical
+                // rows are cheap.
+                // `values[0]` is the emitting `gtk.Adjustment`.
                 let this: Surface = weak.upgrade()?;
                 // `const core_surface = self.core() orelse return` (`:2434`).
                 let core = this.core()?;
@@ -4442,12 +4978,18 @@ impl Surface {
     }
 
     // -- bind-time closures — MUST return safe values (evaluated at init) ---
+    /// Callback used to determine whether border should be shown around the
+    /// surface.
+    ///
     /// PORTS: `surface.zig:829-848` `closureShouldBorderBeShown`. `false` unless
     /// the bell is ringing AND the config's `bell-features.border` is set.
     #[template_callback]
     fn should_border_be_shown(&self, config: Option<Config>, bell_ringing: bool) -> bool {
-        // The bell isn't ringing at creation — return early to avoid the
-        // config-race warning (`surface.zig:836-841`).
+        // If the bell isn't ringing exit early because when the surface is
+        // first created there's a race between this code being run and the
+        // config being set on the surface. That way we don't overwhelm people
+        // with the warning that we issue if the config isn't set and overwhelm
+        // ourselves with large numbers of bug reports. (`surface.zig:836-841`)
         if !bell_ringing {
             return false;
         }
@@ -4463,6 +5005,9 @@ impl Surface {
         config.get().bell_features.border
     }
 
+    /// Callback used to determine whether unfocused-split-fill / unfocused-split-opacity
+    /// should be applied to the surface
+    ///
     /// PORTS: `surface.zig:853-860` `closureShouldUnfocusedSplitBeShown`.
     #[template_callback]
     fn should_unfocused_split_be_shown(
@@ -4634,29 +5179,47 @@ impl Surface {
     /// PORTS: `surface.zig:3747-3774` `surfaceDrop` — resolve the dropped
     /// surface id, then `SplitTree::move_split` it onto this surface in the
     /// pointer-derived direction.
+    ///
+    /// PORT NOTE: reference defect (R13), `UPSTREAM-DEFECTS.md` UD295. The
+    /// reference's handler is `callconv(.c) void`, but `GtkDropTarget::drop` is a
+    /// `gboolean` signal ("whether the drop was accepted"), so GTK reads an
+    /// undefined return value on every surface drag-and-drop (a C
+    /// function-type mismatch). In the port a `()` handler on a `gboolean` signal
+    /// makes glib-rs panic inside the C callback, which ABORTS the process:
+    /// MEASURED on the VM (task L-2) by emitting `drop` on this target ("Closure
+    /// returned no value but the caller expected a value of type gboolean",
+    /// then "panic in a function that cannot unwind"). The port returns `true`
+    /// when the split was moved and `false` on every early return, the signal's
+    /// documented meaning.
     #[template_callback]
-    fn surface_drop(_tgt: &gtk4::DropTarget, v: &glib::Value, x: f64, y: f64, this: &Surface) {
+    fn surface_drop(
+        _tgt: &gtk4::DropTarget,
+        v: &glib::Value,
+        x: f64,
+        y: f64,
+        this: &Surface,
+    ) -> bool {
         // `v.getUint64()`.
         let Ok(dropped_id) = v.get::<u64>() else {
-            return;
+            return false;
         };
         // `self.core().?.app.findSurfaceByID(dropped_id) orelse return`.
         let core = this.core().expect("surface core is initialized");
         // SAFETY: a non-null `core()` result is a live core surface; its `app`
         // backref is the live core App (app-thread dispatch).
         let Some(dropped) = (unsafe { (*(*core).app).findSurfaceByID(dropped_id) }) else {
-            return;
+            return false;
         };
         // `dropped.rt_surface.gobj()`.
         // SAFETY: `findSurfaceByID` returns a validated live surface whose
         // `rt_surface` points at the pinned apprt surface in the widget private.
         let Some(from) = (unsafe { (*(*dropped).rt_surface).widget() }) else {
-            return;
+            return false;
         };
 
         let Some(st) = ext::ancestor::<SplitTree>(this) else {
             log::warn!(target: LOG_SCOPE, "surface is not placed in a split tree");
-            return;
+            return false;
         };
 
         let dir = this.calc_drop_direction(x, y);
@@ -4664,11 +5227,12 @@ impl Surface {
         // The only error that could happen here is an OOM,
         // and in that case we're already milliseconds away from crashing, so...
         if st.move_split(&from, this, dir).is_err() {
-            return;
+            return false;
         }
 
         // Clean up overlay state
         this.set_drop_overlay_direction(None);
+        true
     }
 
     /// PORTS: `surface.zig:3776-3781` `surfaceDropLeave`.
@@ -4790,6 +5354,8 @@ fn apply_command_overrides(
     }
 }
 
+/// Filter out environment variables that start with forbidden prefixes.
+///
 /// PORTS: `surface.zig:1667-1740` `filterSnapPaths`. Filter out environment
 /// variables that start with forbidden prefixes.
 ///
@@ -4808,6 +5374,8 @@ fn filter_snap_paths(env_map: &mut rustty_global::EnvMap) {
         b"SNAP_COMMON",
     ];
 
+    // Use an arena because everything in this function is temporary.
+    // PORT NOTE: the arena is these two owned `Vec`s, dropped on return.
     let mut env_to_remove: Vec<Vec<u8>> = Vec::new();
     let mut env_to_update: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
 
@@ -5214,6 +5782,30 @@ mod tests {
         Surface::new(SurfaceOverrides::default())
     }
 
+    /// UD295 (R13): `surface_drop` answers `GtkDropTarget::drop`'s `gboolean`.
+    /// A `()` handler made glib-rs panic inside the C callback and abort the
+    /// process on every surface drop. A value the handler does not accept (not a
+    /// surface id) must come back `false`, the rejected-drop answer, without
+    /// aborting.
+    #[test]
+    #[ignore = "requires a display; run via cargo test -p rustty-apprt --features gtk,x11,wayland --lib surface_drop_answers -- --ignored"]
+    fn surface_drop_answers_the_gboolean_drop_signal() {
+        let surface = display_surface();
+        let target = surface.imp().surface_drop_target.get();
+        let accepted = target.emit_by_name::<bool>(
+            "drop",
+            &[
+                &glib::value::BoxedValue("not-a-surface-id".to_value()),
+                &10.0f64,
+                &10.0f64,
+            ],
+        );
+        assert!(
+            !accepted,
+            "a value that is not a surface id is not accepted"
+        );
+    }
+
     /// S54-F3: the `mouse-shape` / `focused` pspecs and the `clipboard-write`
     /// signal carry the reference's types and defaults (`surface.zig:154-170,
     /// 222-240, 480-492`): `mouse-shape` is `GhosttyMouseShape` defaulting to
@@ -5243,6 +5835,166 @@ mod tests {
             params,
             [ClipboardEnum::static_type(), String::static_type()]
         );
+    }
+
+    /// S56-F3: a non-confirmed clipboard write emits `clipboard-write` with the
+    /// payload's RAW bytes (`surface.zig:4117-4122`, `text.ptr`); a non-UTF-8
+    /// OSC 52 payload is not U+FFFD-substituted. The handler reads the argument
+    /// the way `window.rs`'s does, and must fire exactly once.
+    #[test]
+    #[ignore = "requires a display; run via cargo test -p rustty-apprt --features gtk,x11,wayland --lib clipboard_write_signal -- --ignored"]
+    fn clipboard_write_signal_carries_the_raw_payload() {
+        let surface = display_surface();
+        let seen: std::rc::Rc<RefCell<Vec<Vec<u8>>>> = std::rc::Rc::default();
+        let sink = seen.clone();
+        surface.connect_local("clipboard-write", false, move |args| {
+            sink.borrow_mut()
+                .push(raw_string_bytes(&args[2]).expect("a non-NULL text"));
+            None
+        });
+
+        surface.set_clipboard(
+            Clipboard::Standard,
+            &[ClipboardContent {
+                mime: b"text/plain",
+                data: b"caf\xe9",
+            }],
+            false,
+        );
+        assert_eq!(*seen.borrow(), [b"caf\xe9".to_vec()]);
+    }
+
+    /// UD172 (R13), the confirmation half of S56-F3: a non-UTF-8 OSC 52 payload
+    /// that needs confirmation must preview as its U+FFFD-substituted text. The
+    /// reference inserts the raw bytes into the `GtkTextBuffer`, whose UTF-8
+    /// precondition fails (a `Gtk-CRITICAL`, measured), leaving the preview empty
+    /// and a confirm that writes an empty clipboard.
+    #[test]
+    #[ignore = "requires a display; run via cargo test -p rustty-apprt --features gtk,x11,wayland --lib clipboard_confirmation_preview -- --ignored"]
+    fn clipboard_confirmation_preview_substitutes_invalid_utf8() {
+        let surface = display_surface();
+        let window = gtk4::Window::new();
+        window.set_child(Some(&surface));
+
+        surface.set_clipboard(
+            Clipboard::Standard,
+            &[ClipboardContent {
+                mime: b"text/plain",
+                data: b"caf\xe9",
+            }],
+            true,
+        );
+        let dialog = LAST_CLIPBOARD_CONFIRMATION
+            .with(|last| last.borrow_mut().take())
+            .expect("confirm = true builds a confirmation dialog");
+        let buffer = dialog
+            .get_clipboard_contents()
+            .expect("the dialog carries the preview buffer");
+        let text: String = buffer.property("text");
+        assert_eq!(text, "caf\u{FFFD}");
+        window.destroy();
+    }
+
+    /// S56-F4: `glareaResize`'s debug line carries `window_scale`
+    /// (`surface.zig:3452-3470`): 0 while the surface has no root, and the root's
+    /// `GdkSurface` scale factor once it is in a realized window.
+    #[test]
+    #[ignore = "requires a display; run via cargo test -p rustty-apprt --features gtk,x11,wayland --lib gl_resize_debug -- --ignored"]
+    fn gl_resize_debug_log_carries_the_window_scale() {
+        let surface = display_surface();
+        let scale = surface.imp().gl_area.scale_factor();
+
+        // No root: `getRoot() orelse break :scale 0`.
+        let cap = crate::log_capture::start();
+        surface.gl_resize_debug_log(10, 20);
+        let unrooted = cap.messages();
+        drop(cap);
+        assert_eq!(
+            unrooted,
+            [(
+                log::Level::Debug,
+                LOG_SCOPE.to_owned(),
+                format!("gl resize width=10 height=20 scale={scale} window_scale=0"),
+            )]
+        );
+
+        // In a realized window: the root's native GdkSurface exists.
+        let window = gtk4::Window::new();
+        window.set_child(Some(&surface));
+        WidgetExt::realize(&window);
+        let gdk_surface = window
+            .upcast_ref::<gtk4::Native>()
+            .surface()
+            .expect("a realized window has a GdkSurface");
+        let window_scale = gdk_surface.scale_factor();
+        assert!(window_scale > 0, "a real GdkSurface scale is positive");
+
+        let cap = crate::log_capture::start();
+        surface.gl_resize_debug_log(30, 40);
+        let rooted = cap.messages();
+        drop(cap);
+        let scale = surface.imp().gl_area.scale_factor();
+        assert_eq!(
+            rooted,
+            [(
+                log::Level::Debug,
+                LOG_SCOPE.to_owned(),
+                format!("gl resize width=30 height=40 scale={scale} window_scale={window_scale}"),
+            )]
+        );
+        window.destroy();
+    }
+
+    /// S55-F4: `propMouseShape`'s switch (`surface.zig:2482-2517`), every arm, the
+    /// pairs copied from the reference in its arm order. Display-free: the map is
+    /// a pure function of the typed shape; the property itself is pinned by
+    /// `surface_pspec_types_and_defaults_match_the_reference`.
+    #[test]
+    fn mouse_shape_cursor_names_match_the_reference_switch() {
+        let reference: [(MouseShape, &str); 34] = [
+            (MouseShape::Default, "default"),
+            (MouseShape::Help, "help"),
+            (MouseShape::Pointer, "pointer"),
+            (MouseShape::ContextMenu, "context-menu"),
+            (MouseShape::Progress, "progress"),
+            (MouseShape::Wait, "wait"),
+            (MouseShape::Cell, "cell"),
+            (MouseShape::Crosshair, "crosshair"),
+            (MouseShape::Text, "text"),
+            (MouseShape::VerticalText, "vertical-text"),
+            (MouseShape::Alias, "alias"),
+            (MouseShape::Copy, "copy"),
+            (MouseShape::NoDrop, "no-drop"),
+            (MouseShape::Move, "move"),
+            (MouseShape::NotAllowed, "not-allowed"),
+            (MouseShape::Grab, "grab"),
+            (MouseShape::Grabbing, "grabbing"),
+            (MouseShape::AllScroll, "all-scroll"),
+            (MouseShape::ColResize, "col-resize"),
+            (MouseShape::RowResize, "row-resize"),
+            (MouseShape::NResize, "n-resize"),
+            (MouseShape::EResize, "e-resize"),
+            (MouseShape::SResize, "s-resize"),
+            (MouseShape::WResize, "w-resize"),
+            (MouseShape::NeResize, "ne-resize"),
+            (MouseShape::NwResize, "nw-resize"),
+            (MouseShape::SeResize, "se-resize"),
+            (MouseShape::SwResize, "sw-resize"),
+            (MouseShape::EwResize, "ew-resize"),
+            (MouseShape::NsResize, "ns-resize"),
+            (MouseShape::NeswResize, "nesw-resize"),
+            (MouseShape::NwseResize, "nwse-resize"),
+            (MouseShape::ZoomIn, "zoom-in"),
+            (MouseShape::ZoomOut, "zoom-out"),
+        ];
+        for (shape, name) in reference {
+            assert_eq!(mouse_shape_cursor_name(shape), name, "{shape:?}");
+            // And through the GObject enum the property carries.
+            assert_eq!(
+                mouse_shape_cursor_name(MouseShape::from(MouseShapeEnum::from(shape))),
+                name
+            );
+        }
     }
 
     /// S55-F1: `filterSnapPaths` (`surface.zig:1667-1740`) over a synthetic env.

@@ -3514,6 +3514,45 @@ does for `Config.loadFile`), and print through that.
   `Overflow`.
 - **state**: FIXED (T-C3).
 
+## N130 — the GTK apprt decodes title BYTES lossily at every GObject-string boundary, where the reference passes them raw
+
+- **id**: N130. Not in the inventory.
+- **found by**: task T-D (tail wave), closing S57-F3 (WAIVED, pointing here).
+- **severity**: low. **kind**: R1 fidelity gap with a Rust-type constraint; recorded, not fixed.
+- **oracle**: the reference carries titles as `[:0]const u8` and hands the bytes to G_TYPE_STRING
+  properties and GTK setters unconverted: `src/apprt/gtk/class/tab.zig:496-509` (`closureComputedTitle`,
+  the config `title`), and the apprt `set_title` / window-title paths.
+- **rustty**: `String::from_utf8_lossy` at `crates/rustty-apprt/src/gtk/class/tab.rs:362-366`
+  (`computed_title`, config `title`), `class/window.rs:312` (window title from config),
+  `class/surface.rs:1959` (the notification title), `class/application.rs:4772, 4799, 4831` (the
+  `set_title` / prompt-title actions, whose bytes come from the VT stream, OSC 0/2). The S57-F3 audit
+  said "all other title sources are already UTF-8 GTK strings"; the four `application.rs`/`surface.rs`
+  sites show that is not so (the OSC title is raw VT bytes).
+
+What differs, MEASURED where stated. A non-UTF-8 title reaches GTK as U+FFFD in the port and as its raw
+bytes in the reference. What the reference's bytes then do is GTK's business: Pango, which renders a tab
+or window label, logs `Pango-WARNING: Invalid UTF-8 string passed to pango_layout_set_text()` and keeps the
+invalid byte as `0xff` (MEASURED, Pango 1.57.1 on the VM: `caf\xe9!` → `63 61 66 ff 21`), so the user sees a
+replacement glyph in both, drawn differently. Other consumers of the property values (accessibility over
+D-Bus, the window-manager title) were NOT measured.
+
+Why this is not fixed row by row. Carrying non-UTF-8 in these properties needs every Rust reader of them to
+avoid glib-rs's string types: `Value::get::<String>()` panics on non-UTF-8 ("Invalid UTF-8"), and
+`GStr`/`GString` built from a C pointer assume UTF-8. The tab `title` property alone is stored as
+`RefCell<Option<String>>` (`tab.rs:84`, via the `Properties` derive) and read back by `prompt_tab_title`
+(`tab.rs:263`) into the title dialog; the window and surface titles have the same shape. Changing one site
+(S57-F3) while the others stay lossy would make the chain inconsistent, and changing the property storage
+is a cross-file change with crash risk (a missed reader panics on user input). S56-F3 shows the contained
+version of the same fix (a raw `G_TYPE_STRING` `GValue` and a raw reader, `surface.rs`
+`raw_string_value`/`raw_string_bytes`) for a signal with ONE receiver.
+
+**proposed remedy** (NOT implemented): store the title properties as raw bytes behind hand-written
+G_TYPE_STRING pspecs (set/get through `g_value_set_string`/`g_value_get_string`), route every Rust reader
+through `raw_string_bytes`, and pass GTK setters the raw C string, then close this finding site by site with
+a non-UTF-8 test per reader.
+
+**state**: OPEN (R1 candidate; S57-F3 WAIVED to this entry).
+
 
 ## N140 — the XDG helpers collapse `homedir.home`'s `error.BufferTooSmall` into `NoHomeDir`
 
@@ -5035,3 +5074,26 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   `std.os.linux.getauxval` reads an auxv pointer only Zig's own `_start` sets. Details and proposed
   fix: `UPSTREAM-DEFECTS.md` UD291; PORT NOTE at the port's detector (`d03d273d`).
 - **state**: CLOSED (task L-1).
+
+
+## N300 — the port aborted on every surface drag-and-drop, and the headed KAT that emits `drop` had stopped reaching it (UD295)
+
+- **id**: N300. Not a ledger row: found by task L-2 running the `--ignored` headed GTK integration tests
+  under a private headless sway on the VM.
+- **severity**: high for the port (a process abort on a user gesture). **kind**: port defect, from a
+  reference defect (UD295).
+- **what**: `surface_drop` (`crates/rustty-apprt/src/gtk/class/surface.rs`) was a `()` template
+  callback on `GtkDropTarget::drop`, a `gboolean` signal, faithful to the reference's
+  `callconv(.c) void` `surfaceDrop`. glib-rs panics on the missing return value inside the C callback,
+  which aborts the process; so dragging a split onto another surface killed Rustty. It now returns
+  `bool` (UD295, R13). Test `surface_drop_answers_the_gboolean_drop_signal`.
+- **how it hid**: the only test that emits `drop`, the headed KAT `gtk_parity_callbacks`, had stopped
+  reaching it: since task 20 (S54-F3) typed `mouse-shape` it panicked earlier on
+  `set_property("mouse-shape", 2i32)`, and its `drop` emission passed a bare string where the signal
+  declares a boxed `GValue`. Both are fixed; it now emits `drop` on every drop target of the surface.
+  No CI lane runs the headed KATs (`#[ignore]`d; R14 form 2 "no lane has the resource").
+- **not stale**: `gtk_application::application_new_then_deinit` and
+  `gtk_first_light::first_light_renders_a_live_terminal_frame` assert that a "noop-only build"
+  selects the `.none` windowing protocol, so they fail under `--features gtk,x11,wayland`; built with
+  `--features gtk` as their `#[ignore]` reasons say, both pass on the VM (task L-2).
+- **state**: CLOSED (task L-2).
