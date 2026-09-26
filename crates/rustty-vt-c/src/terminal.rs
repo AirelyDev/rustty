@@ -12080,13 +12080,13 @@ mod tests {
         // An empty continuation writes nothing: no call.
         assert_eq!(allocs, counting.alloc_calls.get());
         unsafe { restore_continuation(restored, b"\x1b[31") }.unwrap();
-        // The tracker may grow on the replay; the exported copy is one
-        // 132-byte growth, freed on return.
-        assert!(counting.alloc_calls.get() > allocs);
-        assert!(counting.free_calls.get() > frees);
+        // The replay fits the tracker's reservation; the exported copy is
+        // one 132-byte growth, freed on return.
+        assert_eq!(allocs + 1, counting.alloc_calls.get());
+        assert_eq!(frees + 1, counting.free_calls.get());
         assert_eq!(Some((132, 0)), counting.last_alloc.get());
         assert_eq!(Some((132, 0)), counting.last_free.get());
-        assert!(counting.live_bytes.get() >= live);
+        assert_eq!(live, counting.live_bytes.get());
         unsafe { free(restored) };
         assert_eq!(0, counting.live_bytes.get());
 
