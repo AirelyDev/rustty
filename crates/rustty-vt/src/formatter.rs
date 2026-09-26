@@ -7224,7 +7224,9 @@ mod tests {
         // Every growth index fails in turn: the format reports the
         // reference's `error.WriteFailed` (`OutOfMemory` here), never aborts,
         // and the map frees what it holds.
-        for fail_index in 0..2 {
+        // Plain reaches the page formatter's `PointMap`; vt reaches the
+        // palette extras' `m.map.append` first.
+        for (fail_index, vt) in [(0, false), (1, false), (0, true), (1, true)] {
             let failing = FailingAllocator::over_heap(Config {
                 fail_index,
                 ..Config::default()
@@ -7232,7 +7234,8 @@ mod tests {
             let c = failing.allocator();
             with_handle(&c, |alloc| {
                 let mut pin_map: PinMapMap = PinMapMap::EMPTY;
-                let (r, _) = format_with_pin_map(&t, Options::plain(), alloc, &mut pin_map);
+                let o = if vt { Options::vt() } else { Options::plain() };
+                let (r, _) = format_with_pin_map(&t, o, alloc, &mut pin_map);
                 let err = r.expect_err("the pin map's growth fails");
                 assert_eq!(io::ErrorKind::OutOfMemory, err.kind());
                 assert!(failing.has_induced_failure.get());
