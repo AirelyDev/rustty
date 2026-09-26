@@ -2496,7 +2496,7 @@ unsafe fn set_continuation_max_bytes(wrapper: *mut TerminalWrapper, max_bytes: u
             // Once a retained prefix is discarded it cannot be reconstructed
             // from parser state alone. Mark it broken until Stream observes a
             // ground state or a new replay-safe sequence start.
-            tracker.bytes.clear();
+            tracker.bytes.clear_retaining_capacity();
             tracker.broken = true;
         }
         return;
@@ -11463,12 +11463,13 @@ mod tests {
         }
         vtw(t, b"\x1B]5522;type=wdata\x1B\\");
         vtw(t, b"\x1B]5522;type=read;dGV4dC9wbGFpbg==\x1B\\");
-        // Continuation tracking: past 4096 bytes the suffix grows beyond the
-        // tracker's initial reservation (under Miri only the reservation).
+        // Continuation tracking: past `growCapacity(4096)` (6272 bytes on
+        // 64-bit targets) the suffix grows beyond the tracker's initial
+        // reservation (under Miri only the reservation).
         let (max, unfinished) = if cfg!(miri) {
             (64usize, 40)
         } else {
-            (8192, 5000)
+            (16384, 7000)
         };
         results.push(unsafe {
             set(
@@ -11656,9 +11657,10 @@ mod tests {
 
     // Parity tail S7-4 (routing evidence, no reference counterpart): enabling
     // continuation tracking builds the tracker over the terminal's allocator
-    // (`.init(wrapper.terminal.gpa(), max_bytes)`): its best-effort 4096-byte
-    // reservation and its growth reach the caller's allocator, and disabling
-    // or `free` returns every byte.
+    // (`.init(wrapper.terminal.gpa(), max_bytes)`): its best-effort
+    // `ensureTotalCapacity(4096)` reservation (`growCapacity(4096)` bytes) and
+    // its growth reach the caller's allocator, and disabling or `free` returns
+    // every byte.
     #[test]
     fn continuation_tracker_routes_through_the_terminals_allocator() {
         use rustty_vt::alloc::testing::CountingAllocator;
@@ -11670,7 +11672,7 @@ mod tests {
         });
         let live = counting.live_bytes.get();
         let before = counting.alloc_calls.get();
-        let max: usize = 8192;
+        let max: usize = 16384;
         assert_eq!(Result::Success, unsafe {
             set(
                 t,
@@ -11679,13 +11681,16 @@ mod tests {
             )
         });
         assert_eq!(before + 1, counting.alloc_calls.get(), "the reservation");
-        assert_eq!(Some((4096, 0)), counting.last_alloc.get());
+        let first = rustty_vt::alloc::ArrayListUnmanaged::<u8>::grow_capacity(4096);
+        #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
+        assert_eq!(6272, first);
+        assert_eq!(Some((first, 0)), counting.last_alloc.get());
 
-        let mut input = vec![b'1'; 5000];
+        let mut input = vec![b'1'; 7000];
         input[0..2].copy_from_slice(b"\x1b[");
         vtw(t, &input);
         assert!(
-            counting.live_bytes.get() >= live + 5000,
+            counting.live_bytes.get() >= live + 7000,
             "the retained suffix is on the caller's allocator"
         );
 
@@ -11748,7 +11753,11 @@ mod tests {
                     .as_ref()
                     .expect("continuation tracking is on");
                 assert!(!tracker.broken);
-                assert!(tracker.bytes.capacity() > 4096, "the suffix grew");
+                assert!(
+                    tracker.bytes.capacity()
+                        > rustty_vt::alloc::ArrayListUnmanaged::<u8>::grow_capacity(4096),
+                    "the suffix grew"
+                );
             }
         };
         for r in sweep_corpus(t, &reached) {

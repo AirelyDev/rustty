@@ -155,7 +155,10 @@ pub struct Tracker {
     // max_bytes: usize,
     pub max_bytes: usize,
     // bytes: std.ArrayList(u8) = .empty,
-    pub bytes: crate::alloc::Bytes,
+    // (parity tail S7-4b: `alloc::ArrayListUnmanaged`, so `ensureTotalCapacity`
+    // and `appendSlice` grow by Zig's `growCapacity`, as the reference's list
+    // does. `Drop` frees it through `alloc`.)
+    pub bytes: crate::alloc::ArrayListUnmanaged<u8>,
     // broken: bool = false,
     pub broken: bool,
 }
@@ -170,7 +173,7 @@ impl Tracker {
         let mut result = Tracker {
             alloc,
             max_bytes,
-            bytes: crate::alloc::Bytes::new_in(alloc),
+            bytes: crate::alloc::ArrayListUnmanaged::EMPTY,
             broken: false,
         };
         // result.bytes.ensureTotalCapacity(
@@ -194,8 +197,8 @@ impl Tracker {
     //     self.bytes.deinit(self.alloc);
     // }
     pub fn deinit(&mut self) {
-        // The list frees through `alloc` when replaced (or dropped).
-        self.bytes = crate::alloc::Bytes::new_in(self.alloc);
+        // (Leaves an empty list, so a later drop frees nothing.)
+        self.bytes.deinit(self.alloc);
     }
 
     /// The allocator the tracker grows through (`self.alloc`).
@@ -210,7 +213,7 @@ impl Tracker {
     pub fn reset(&mut self) {
         self.broken = false;
         // self.bytes.clearRetainingCapacity();
-        self.bytes.clear();
+        self.bytes.clear_retaining_capacity();
     }
 
     /// Retain the part of `input` needed to replay a feed that ended with
@@ -245,7 +248,7 @@ impl Tracker {
     // fn replace(self: *Tracker, suffix: []const u8) void {
     fn replace(&mut self, suffix: &[u8]) {
         // self.bytes.clearRetainingCapacity();
-        self.bytes.clear();
+        self.bytes.clear_retaining_capacity();
         // if (suffix.len > self.max_bytes) { self.markBroken(); return; }
         if suffix.len() > self.max_bytes {
             self.mark_broken();
@@ -305,7 +308,7 @@ impl Tracker {
         //     if (scanner.next(c) == .omittable) continue;
         //     try writer.writeByte(c);
         // }
-        for &c in &self.bytes {
+        for &c in self.bytes.iter() {
             if scanner.next(c) == Effect::Omittable {
                 continue;
             }
@@ -318,23 +321,41 @@ impl Tracker {
     fn mark_broken(&mut self) {
         self.broken = true;
         // self.bytes.clearRetainingCapacity();
-        self.bytes.clear();
+        self.bytes.clear_retaining_capacity();
     }
 
-    /// `self.bytes.appendSlice(self.alloc, ...)` — the fallible append
-    /// through `alloc`.
+    /// `self.bytes.appendSlice(self.alloc, ...)`: `ensureUnusedCapacity`
+    /// (`ensureTotalCapacity(len + n)`, rounded by `growCapacity`), then the
+    /// copy.
     fn append_slice(&mut self, bytes: &[u8]) -> Result<(), crate::alloc::OutOfMemory> {
-        use crate::alloc::CopyVecExt;
-        self.bytes.try_extend_copy(bytes)
+        let len = self.bytes.len();
+        let new_len = len
+            .checked_add(bytes.len())
+            .ok_or(crate::alloc::OutOfMemory)?;
+        self.bytes.ensure_total_capacity(self.alloc, new_len)?;
+        // SAFETY: capacity >= new_len; the copied range is initialized
+        // before `set_len` exposes it.
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                bytes.as_ptr(),
+                self.bytes.as_mut_ptr().add(len),
+                bytes.len(),
+            );
+            self.bytes.set_len(new_len);
+        }
+        Ok(())
     }
 
     /// `self.bytes.ensureTotalCapacity(alloc, n)` — the fallible best-effort
-    /// reservation done by `init`.
+    /// reservation done by `init` (rounded up by `growCapacity`).
     fn try_reserve(&mut self, capacity: usize) -> Result<(), crate::alloc::OutOfMemory> {
-        let additional = capacity.saturating_sub(self.bytes.len());
-        self.bytes
-            .try_reserve_exact(additional)
-            .map_err(|_| crate::alloc::OutOfMemory)
+        self.bytes.ensure_total_capacity(self.alloc, capacity)
+    }
+}
+
+impl Drop for Tracker {
+    fn drop(&mut self) {
+        self.bytes.deinit(self.alloc);
     }
 }
 
@@ -906,15 +927,22 @@ mod tests {
         let counting = CountingAllocator::over_heap();
         let c = counting.allocator();
         with_handle(&c, |alloc| {
-            let mut tracker = Tracker::init(alloc, 8192);
+            let mut tracker = Tracker::init(alloc, 16384);
+            // `ensureTotalCapacity(4096)` asks for `growCapacity(4096)`.
+            let first = crate::alloc::ArrayListUnmanaged::<u8>::grow_capacity(4096);
+            #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
+            assert_eq!(6272, first, "4096 + 2048 + cache_line (128)");
             assert_eq!(1, counting.alloc_calls.get(), "the initial reservation");
-            assert_eq!(Some((4096, 0)), counting.last_alloc.get());
-            let mut input = vec![b'1'; 5000];
+            assert_eq!(Some((first, 0)), counting.last_alloc.get());
+            // Past the reservation the suffix grows by `growCapacity` too.
+            let mut input = vec![b'1'; 7000];
             input[0..2].copy_from_slice(b"\x1b[");
             tracker.append(Pending::Vt, &input);
             assert!(!tracker.broken);
-            assert_eq!(5000, tracker.bytes.len());
-            assert!(counting.live_bytes.get() >= 5000, "the grown suffix");
+            assert_eq!(7000, tracker.bytes.len());
+            let grown = crate::alloc::ArrayListUnmanaged::<u8>::grow_capacity(7000);
+            assert_eq!(grown, tracker.bytes.capacity());
+            assert_eq!(grown, counting.live_bytes.get(), "the grown suffix");
             tracker.deinit();
             assert_eq!(0, counting.live_bytes.get(), "every byte is returned");
         });

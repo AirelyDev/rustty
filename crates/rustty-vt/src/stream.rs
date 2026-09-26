@@ -8023,8 +8023,8 @@ mod tests {
             // failing.fail_index = failing.alloc_index;
             // PORT NOTE (test-only, as N271's setPwd/setTitle tests): also
             // `resize_fail_index = resize_index`. The reference's inner
-            // `testing.allocator` cannot remap the 4096-byte reservation to
-            // 12 KiB, so the growth reaches the failing `alloc`; the port's
+            // `testing.allocator` cannot remap the `growCapacity(4096)`-byte
+            // reservation to the 12 KiB suffix, so the growth reaches the failing `alloc`; the port's
             // inner heap remaps with `realloc`, which would succeed.
             failing.fail_index.set(failing.alloc_index.get());
             failing.resize_fail_index.set(failing.resize_index.get());
