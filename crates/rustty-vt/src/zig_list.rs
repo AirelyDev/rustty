@@ -245,7 +245,11 @@ pub(crate) fn multi_clone<T: Copy>(
 /// `ensureUnusedCapacity(bytes.len + splat_len + 1)` (with `splat == 1` the
 /// splat pattern is the bytes themselves). A failed growth is
 /// `error.WriteFailed` (an `io::ErrorKind::OutOfMemory` error here).
-pub(crate) struct AllocatingWriter {
+///
+/// Public (re-exported as `alloc::AllocatingWriter`) since parity tail S7-8:
+/// the C API's `format_alloc`/`encode_alloc`/continuation writers build their
+/// output through the caller's allocator with it.
+pub struct AllocatingWriter {
     pub(crate) buf: AVec<u8>,
 }
 
@@ -254,14 +258,14 @@ const U8_INIT_CAPACITY: usize = init_capacity(1);
 
 impl AllocatingWriter {
     /// `Allocating.init(alloc)`: no allocation.
-    pub(crate) fn init(alloc: crate::alloc::VtAllocator) -> AllocatingWriter {
+    pub fn init(alloc: crate::alloc::VtAllocator) -> AllocatingWriter {
         AllocatingWriter {
             buf: AVec::new_in(alloc),
         }
     }
 
     /// `written()`.
-    pub(crate) fn written(&self) -> &[u8] {
+    pub fn written(&self) -> &[u8] {
         &self.buf
     }
 
@@ -270,8 +274,41 @@ impl AllocatingWriter {
         &mut self.buf
     }
 
+    /// `toOwnedSlice()`: `ArrayList.toOwnedSlice` over the written bytes
+    /// (Zig 0.16 `std/array_list.zig`): `remap` the buffer to exactly the
+    /// written length, else allocate that length, copy, and free the buffer;
+    /// the writer is left empty. A writer that never allocated makes no call
+    /// (`remap` of an empty slice to 0 is a no-op `free`). On failure the
+    /// writer keeps its buffer, which its drop frees (the reference's `defer
+    /// aw.deinit()`).
+    pub fn to_owned_slice(&mut self) -> Result<AVec<u8>, OutOfMemory> {
+        let alloc = *self.buf.allocator();
+        if self.buf.capacity() == 0 {
+            return Ok(AVec::new_in(alloc));
+        }
+        let taken = core::mem::replace(&mut self.buf, AVec::new_in(alloc));
+        let (ptr, len, cap, alloc) = taken.into_raw_parts_with_alloc();
+        let old = Layout::array::<u8>(cap).expect("a live allocation has a valid layout");
+        let new = Layout::array::<u8>(len).expect("no larger than a live allocation");
+        // SAFETY: `ptr` is the live allocation of `old` made through `alloc`
+        // (the list's own), and `new` is no larger. The handle's `shrink` is
+        // Zig's `realloc`: `remap` first, then alloc + copy + free (a zero
+        // `new` is a free).
+        let shrunk = unsafe { ApiAllocator::shrink(&alloc, NonNull::new_unchecked(ptr), old, new) };
+        match shrunk {
+            // SAFETY: `p` holds the `len` written bytes (the shrink keeps the
+            // prefix) in exactly `len` bytes of storage.
+            Ok(p) => Ok(unsafe { AVec::from_raw_parts_in(p.as_ptr() as *mut u8, len, len, alloc) }),
+            Err(_) => {
+                // SAFETY: the shrink failed, so the old block is untouched.
+                self.buf = unsafe { AVec::from_raw_parts_in(ptr, len, cap, alloc) };
+                Err(OutOfMemory)
+            }
+        }
+    }
+
     /// `writeByte`: grow through `rebase(0, 1)` only when the buffer is full.
-    pub(crate) fn write_byte(&mut self, byte: u8) -> Result<(), OutOfMemory> {
+    pub fn write_byte(&mut self, byte: u8) -> Result<(), OutOfMemory> {
         if self.buf.capacity() == self.buf.len() {
             // growingRebase(0, 1): ensureTotalCapacity(1), then
             // ensureUnusedCapacity(1).
@@ -460,6 +497,73 @@ mod tests {
             assert_eq!(Err(OutOfMemory), w.write_byte(b'\n'));
             assert!(w.written().is_empty());
             assert!(failing.has_induced_failure.get());
+        });
+    }
+
+    // Parity tail S7-8: `toOwnedSlice` (`ArrayList.toOwnedSlice`): an empty
+    // writer makes no call; otherwise `remap` to the written length, else
+    // alloc + copy + free; a failure leaves the buffer with the writer.
+    #[test]
+    fn allocating_writer_to_owned_slice_is_zigs() {
+        let counting = CountingAllocator::over_heap();
+        let c = counting.allocator();
+        with_handle(&c, |alloc| {
+            let mut w = AllocatingWriter::init(alloc);
+            let empty = w.to_owned_slice().unwrap();
+            assert_eq!(0, empty.capacity());
+            assert_eq!(alloc, *empty.allocator());
+            assert_eq!(0, counting.alloc_calls.get() + counting.remap_calls.get());
+
+            w.write_all(b"abc").unwrap();
+            assert_eq!(138, w.buf.capacity());
+            let owned = w.to_owned_slice().unwrap();
+            assert_eq!(b"abc", owned.as_slice());
+            assert_eq!(3, owned.capacity());
+            assert_eq!(alloc, *owned.allocator());
+            // One alloc (the drain), one remap (the shrink), no free.
+            assert_eq!(1, counting.alloc_calls.get());
+            assert_eq!(1, counting.remap_calls.get());
+            assert_eq!(0, counting.free_calls.get());
+            assert_eq!(3, counting.live_bytes.get());
+            // The writer is left empty and reusable.
+            assert_eq!(0, w.buf.capacity());
+            drop(owned);
+            assert_eq!(0, counting.live_bytes.get());
+        });
+
+        // `remap` refused: alloc + copy + free.
+        let failing = FailingAllocator::over_heap(Config {
+            fail_index: usize::MAX,
+            resize_fail_index: 0,
+        });
+        let c = failing.allocator();
+        with_handle(&c, |alloc| {
+            let mut w = AllocatingWriter::init(alloc);
+            w.write_all(b"abc").unwrap();
+            let owned = w.to_owned_slice().unwrap();
+            assert_eq!(b"abc", owned.as_slice());
+            assert_eq!(3, owned.capacity());
+            assert_eq!(2, failing.allocations.get());
+            assert_eq!(1, failing.deallocations.get());
+            drop(owned);
+            assert_eq!(failing.allocated_bytes.get(), failing.freed_bytes.get());
+        });
+
+        // Both refused: `error.OutOfMemory`, and the writer keeps (and later
+        // frees) its buffer.
+        let failing = FailingAllocator::over_heap(Config {
+            fail_index: 1,
+            resize_fail_index: 0,
+        });
+        let c = failing.allocator();
+        with_handle(&c, |alloc| {
+            let mut w = AllocatingWriter::init(alloc);
+            w.write_all(b"abc").unwrap();
+            assert_eq!(Err(OutOfMemory), w.to_owned_slice().map(|_| ()));
+            assert_eq!(b"abc", w.written());
+            assert_eq!(138, w.buf.capacity());
+            drop(w);
+            assert_eq!(failing.allocated_bytes.get(), failing.freed_bytes.get());
         });
     }
 }

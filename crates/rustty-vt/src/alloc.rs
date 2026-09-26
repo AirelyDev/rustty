@@ -424,6 +424,9 @@ pub type AArrayHashMap<K, V> =
 /// `alloc.alloc`/`alloc.dupe`/`toOwnedSlice`).
 pub type Bytes = AVec<u8>;
 
+/// `std.Io.Writer.Allocating` over the handle (see [`crate::zig_list`]).
+pub use crate::zig_list::AllocatingWriter;
+
 /// `try alloc.dupe(u8, src)`: one exact-sized, fallible allocation through
 /// `alloc`. An empty `src` allocates nothing (Zig's `alloc(u8, 0)` returns a
 /// zero-length slice without calling the vtable).

@@ -15,6 +15,27 @@
 
 use rustty_lib::allocator::{default, Allocator as CAllocator, ZigSlice};
 
+/// The pointer of an empty `[]u8` handed across the C ABI: the non-null,
+/// byte-aligned sentinel `alloc(0)` returns (`rustty-lib` `alloc_bytes`), so
+/// `rustty_free(alloc, ptr, 0)` is the no-op the reference's is.
+const EMPTY_BYTES: *mut u8 = usize::MAX as *mut u8;
+
+/// Hand an owned byte buffer (the result of `aw.toOwnedSlice()`) across the C
+/// ABI as `(ptr, len)`: `out_ptr.* = buf.ptr; out_len.* = buf.len;`.
+///
+/// PORT NOTE (parity tail S7-8): the buffer was allocated, and exactly sized,
+/// through the caller's allocator, so the caller releases it with
+/// `rustty_free` and that same allocator, as in the reference.
+pub(crate) fn into_c_bytes(buf: rustty_vt::alloc::AVec<u8>) -> (*mut u8, usize) {
+    let (ptr, len, cap, _alloc) = buf.into_raw_parts_with_alloc();
+    debug_assert_eq!(len, cap, "an owned slice is exactly its length");
+    if len == 0 {
+        (EMPTY_BYTES, 0)
+    } else {
+        (ptr, len)
+    }
+}
+
 /// Allocate a buffer of `len` bytes using the given allocator
 /// (or the default allocator if NULL).
 ///

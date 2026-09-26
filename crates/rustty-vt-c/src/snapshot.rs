@@ -945,22 +945,28 @@ unsafe fn decoder_map_error(decoder: *mut DecoderWrapper, err: ReadyTerminalErro
 // fn continuationOwned(terminal: terminal_c.Terminal) struct { result: Result, bytes: []u8 } {
 /// # Safety
 /// `terminal`, if non-null, must be a live terminal handle.
-unsafe fn continuation_owned(terminal: terminal_c::Terminal) -> (Result, Vec<u8>) {
+unsafe fn continuation_owned(
+    terminal: terminal_c::Terminal,
+) -> (Result, rustty_vt::alloc::AVec<u8>) {
     // The terminal allocator also owns the temporary continuation copy.
     // const native = terminal_c.zigTerminal(terminal) orelse return .{ ... };
     // SAFETY: `terminal` validity is the caller's contract.
     let native = unsafe { terminal_c::zig_terminal(terminal) };
     if native.is_null() {
-        return (Result::InvalidValue, Vec::new());
+        return (
+            Result::InvalidValue,
+            rustty_vt::alloc::AVec::new_in(rustty_vt::alloc::VtAllocator::GLOBAL),
+        );
     }
     // const alloc = native.gpa();
-    //   ^ rustty: the owned copy is a `Vec` (Global) — see
-    //     `continuation_alloc_io`'s PORT NOTE.
+    // SAFETY: `native` is the live terminal; raw reads of the active
+    // screen's allocator (`Terminal.gpa()`), no `&mut` retag.
+    let alloc = unsafe { (*(*native).screens.active).alloc };
 
     // Snapshotting can prove an untracked ground stream needs no replay bytes;
     // only non-ground streams require tracking to have retained their prefix.
     // SAFETY: forwarded caller contract.
-    match unsafe { terminal_c::continuation_alloc_io(terminal, true) } {
+    match unsafe { terminal_c::continuation_alloc_io(terminal, alloc, true) } {
         Ok(bytes) => (Result::Success, bytes),
         Err(err) => (
             match err {
@@ -971,7 +977,7 @@ unsafe fn continuation_owned(terminal: terminal_c::Terminal) -> (Result, Vec<u8>
                     Result::InvalidValue
                 }
             },
-            Vec::new(),
+            rustty_vt::alloc::AVec::new_in(alloc),
         ),
     }
 }
@@ -1146,12 +1152,13 @@ pub unsafe fn encode_alloc(
 
     // Encode once, then transfer ownership of the writer's completed slice.
     // const alloc = lib.alloc.default(alloc_);
+    // SAFETY: a non-NULL `alloc_` is a valid `RusttyAllocator` for the call.
+    let alloc = unsafe { rustty_vt::alloc::default(alloc_) };
     // var writer: std.Io.Writer.Allocating = .init(alloc); defer writer.deinit();
-    // PORT NOTE: the allocating writer grows a `Vec` (Global) and
-    // `toOwnedSlice` is reproduced by copying through the resolved C allocator
-    // (the `format_alloc` precedent), preserving the ownership contract:
-    // callers release with rustty_free + the same allocator.
-    let mut writer = vt_io::AllocatingWriter::new();
+    // PORT NOTE (parity tail S7-8): the writer grows through the caller's
+    // allocator (Zig's `growCapacity`, `remap` first), and a failed growth is
+    // `error.WriteFailed` (OUT_OF_MEMORY through `map_encode_error`).
+    let mut writer = rustty_vt::alloc::AllocatingWriter::init(alloc);
     // SAFETY: shared read of the live native terminal (see `encode`).
     if let Err(err) = snapshot_core::encode(
         &mut writer,
@@ -1163,22 +1170,13 @@ pub unsafe fn encode_alloc(
         return map_encode_error(err, None);
     }
     // const bytes = writer.toOwnedSlice() catch return .out_of_memory;
-    let allocator = rustty_lib::allocator::default(alloc_);
-    let written = writer.written();
-    let len = written.len();
-    // PORT NOTE (parity S171-F1's class, found outside that row's anchors): the
-    // TYPED helper `alloc_bytes`, not the RAW `alloc`. `toOwnedSlice` on empty
-    // output returns the writer's own empty buffer without calling any
-    // allocator callback, so the reference never hands a C embedder a zero-size
-    // request; `alloc_bytes` short-circuits it the same way, and `rustty_free`
-    // already short-circuits the matching zero-length free.
-    let dst = allocator.alloc_bytes(len);
-    if dst.is_null() {
-        return Result::OutOfMemory;
-    }
-    // SAFETY: `dst` is `len` freshly allocated bytes; `written` holds `len`
-    // initialized bytes.
-    unsafe { std::ptr::copy_nonoverlapping(written.as_ptr(), dst, len) };
+    // PORT NOTE (parity tail S7-8): the writer's own buffer, shrunk to the
+    // written length through the caller's allocator (`toOwnedSlice`).
+    let (dst, len) = match writer.to_owned_slice() {
+        Ok(buf) => crate::allocator::into_c_bytes(buf),
+        Err(_) => return Result::OutOfMemory,
+    };
+    // out_ptr.* = bytes.ptr; out_len.* = bytes.len;
     unsafe {
         *out_ptr_ = dst;
         *out_len_ = len;
@@ -2117,11 +2115,17 @@ mod tests {
             // var failing = testing.FailingAllocator.init(testing.allocator, .{
             //     .fail_index = 0,
             // });
-            // (rustty: the rejecting CountingCAllocator — the crate's C-ABI
-            // failure-injection allocator; see test_util.rs.)
-            let failing = crate::test_util::CountingCAllocator::new();
-            failing.reject.set(true);
-            let failing_c = failing.c_allocator();
+            let failing = rustty_vt::alloc::testing::FailingAllocator::over_heap(
+                rustty_vt::alloc::testing::Config {
+                    fail_index: 0,
+                    ..rustty_vt::alloc::testing::Config::default()
+                },
+            );
+            // const failing_zig = failing.allocator();
+            // const failing_c: CAllocator = .fromZig(&failing_zig);
+            // (rustty: the port's FailingAllocator is built on the C ABI, so
+            // `allocator()` is the C allocator itself; parity tail S7-8.)
+            let failing_c = failing.allocator();
             let mut failed_ptr: *mut u8 = std::ptr::null_mut();
             let mut failed_len: usize = 99;
             assert_eq!(Result::OutOfMemory, unsafe {
@@ -2676,5 +2680,69 @@ mod tests {
                 "a refused remap never fails the decode"
             );
         }
+    }
+
+    // Parity tail S7-8 (N331): `encode_alloc`'s `Writer.Allocating` grows
+    // through the caller's allocator and `toOwnedSlice` hands that buffer
+    // over; the temporary continuation copy (`continuationOwned`) is on the
+    // TERMINAL's allocator (`native.gpa()`) and is freed before returning.
+    #[test]
+    fn encode_alloc_writer_routes_through_the_callers_allocator() {
+        use rustty_vt::alloc::testing::CountingAllocator;
+        let terminal_counting = CountingAllocator::over_heap();
+        let tc = terminal_counting.allocator();
+        let (new_result, source) = new_t(&tc, 10, 3);
+        assert_eq!(Result::Success, new_result);
+        test_enable_continuation(source);
+        vtw(source, b"hello\x1b[31");
+
+        let mut required: usize = 0;
+        assert_eq!(Result::OutOfSpace, unsafe {
+            encode_buf(source, std::ptr::null_mut(), 0, &mut required)
+        });
+        let mut expected = vec![0u8; required];
+        let mut written: usize = 0;
+        assert_eq!(Result::Success, unsafe {
+            encode_buf(source, expected.as_mut_ptr(), expected.len(), &mut written)
+        });
+
+        let terminal_allocs = terminal_counting.alloc_calls.get();
+        let terminal_frees = terminal_counting.free_calls.get();
+        let terminal_remaps = terminal_counting.remap_calls.get();
+        let terminal_live = terminal_counting.live_bytes.get();
+
+        let counting = CountingAllocator::over_heap();
+        let c = counting.allocator();
+        let mut out_ptr: *mut u8 = std::ptr::null_mut();
+        let mut out_len: usize = 0;
+        assert_eq!(Result::Success, unsafe {
+            encode_alloc(source, Some(&c), &mut out_ptr, &mut out_len)
+        });
+        assert_eq!(expected.as_slice(), unsafe {
+            std::slice::from_raw_parts(out_ptr, out_len)
+        });
+        // The caller's allocator: the envelope's 8-byte write reserves
+        // growCapacity(8 + 8 + 1) = 153 bytes, one remap grows it, and
+        // `toOwnedSlice` remaps it to the 1095 encoded bytes.
+        assert_eq!(1095, out_len);
+        assert_eq!(1, counting.alloc_calls.get());
+        assert_eq!(Some((153, 0)), counting.last_alloc.get());
+        assert_eq!(2, counting.remap_calls.get());
+        assert_eq!(0, counting.free_calls.get());
+        // The terminal's allocator: the continuation copy (`\\x1b[31`,
+        // written a byte first: growCapacity(1 + 1 + 1) = 132, then the
+        // `toOwnedSlice` remap), freed before returning.
+        assert_eq!(1, terminal_counting.alloc_calls.get() - terminal_allocs);
+        assert_eq!(Some((132, 0)), terminal_counting.last_alloc.get());
+        assert_eq!(1, terminal_counting.remap_calls.get() - terminal_remaps);
+        assert_eq!(1, terminal_counting.free_calls.get() - terminal_frees);
+        assert_eq!(Some((4, 0)), terminal_counting.last_free.get());
+        assert_eq!(terminal_live, terminal_counting.live_bytes.get());
+        // The caller owns exactly the encoded bytes.
+        assert_eq!(out_len, counting.live_bytes.get());
+        unsafe { crate::allocator::free(Some(&c), out_ptr, out_len) };
+        assert_eq!(0, counting.live_bytes.get());
+        unsafe { terminal_c::free(source) };
+        assert_eq!(0, terminal_counting.live_bytes.get());
     }
 }

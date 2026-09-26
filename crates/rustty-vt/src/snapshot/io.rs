@@ -296,6 +296,19 @@ impl Writer for AllocatingWriter {
     }
 }
 
+/// `std.Io.Writer.Allocating` over a runtime allocator handle (the port's
+/// `zig_list::AllocatingWriter`): a failed growth is `error.WriteFailed`
+/// (parity tail S7-8: the C API's `encode_alloc` output buffer).
+impl Writer for crate::zig_list::AllocatingWriter {
+    fn write_all(&mut self, bytes: &[u8]) -> Result<(), WriteFailed> {
+        std::io::Write::write_all(self, bytes).map_err(|_| WriteFailed)
+    }
+
+    fn write_byte(&mut self, byte: u8) -> Result<(), WriteFailed> {
+        crate::zig_list::AllocatingWriter::write_byte(self, byte).map_err(|_| WriteFailed)
+    }
+}
+
 /// `std.Io.Writer.Allocating` over `std.heap.stackFallback(N, alloc)`: a
 /// growable byte writer whose first `N` bytes live inline (on the stack of
 /// whoever owns it) and which falls back to the heap only when a payload
