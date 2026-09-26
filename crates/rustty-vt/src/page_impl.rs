@@ -615,6 +615,10 @@ impl Page {
             // behavior.
             if let Err(err) = self.verify_integrity() {
                 // log.err("page integrity violation, crashing. err={}", .{err});
+                log::error!(
+                    target: crate::page::LOG_SCOPE,
+                    "page integrity violation, crashing. err={err:?}"
+                );
                 panic!("page integrity violation: {:?}", err);
             }
         }

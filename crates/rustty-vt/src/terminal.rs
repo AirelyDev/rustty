@@ -2481,6 +2481,13 @@ impl Terminal {
                 }
 
                 // log.debug("c={X} grapheme attach to left={} primary_cp={X}", ...);
+                log::debug!(
+                    target: LOG_SCOPE,
+                    "c={:X} grapheme attach to left={} primary_cp={:X}",
+                    c,
+                    prev_left,
+                    unsafe { (*prev_cell).codepoint() }
+                );
                 self.active_mut().cursor_mark_dirty();
                 self.active_mut()
                     .append_grapheme(prev_cell, c)
@@ -6804,17 +6811,20 @@ impl Terminal {
                     // `&mut Screen` and `old.cursor` is a `Copy` value.
                     let old_cursor = unsafe { (*old).cursor };
                     let active: *mut Screen = self.screens.active;
-                    if let Err(_err) = unsafe {
+                    if let Err(err) = unsafe {
                         (*active).cursor_copy(
                             old_cursor,
                             crate::screen::CursorCopyOptions { hyperlink: false },
                         )
                     } {
                         // log.warn("cursor copy failed entering alt screen err={}", .{err});
-                        // PORT NOTE: this crate has no logging facility (all
-                        // `std.log` calls are preserved as comments); on the
-                        // copy-failure path we just continue, matching the
-                        // reference `catch` that only logs and proceeds.
+                        // CORRECTION (task S-1c): a PORT NOTE here said this
+                        // crate has no logging facility; it logs through the
+                        // `log` facade, so the reference's warning is live.
+                        log::warn!(
+                            target: LOG_SCOPE,
+                            "cursor copy failed entering alt screen err={err:?}"
+                        );
                     }
                 }
             }
@@ -6845,15 +6855,17 @@ impl Terminal {
                         // SAFETY: see the M47/M1047 arm above.
                         let old_cursor = unsafe { (*old).cursor };
                         let active: *mut Screen = self.screens.active;
-                        if let Err(_err) = unsafe {
+                        if let Err(err) = unsafe {
                             (*active).cursor_copy(
                                 old_cursor,
                                 crate::screen::CursorCopyOptions { hyperlink: false },
                             )
                         } {
                             // log.warn("cursor copy failed entering alt screen err={}", .{err});
-                            // PORT NOTE: see the M47/M1047 arm above; no logging
-                            // facility, so the copy-failure path just continues.
+                            log::warn!(
+                                target: LOG_SCOPE,
+                                "cursor copy failed entering alt screen err={err:?}"
+                            );
                         }
                     }
                 } else {
@@ -7462,6 +7474,74 @@ mod tests {
         drop(cap);
 
         t.deinit(Global);
+    }
+
+    // Task S-1c (no reference test): a grapheme attached to the cell on its
+    // left logs the reference's debug line (Terminal.zig:1437).
+    #[test]
+    fn terminal_grapheme_attach_logs_a_debug_line() {
+        let mut t = Terminal::init(Global, opts(10, 2)).unwrap();
+        t.modes.set(modespkg::Mode::GraphemeCluster, true);
+        t.print('e' as u32).unwrap();
+
+        let cap = crate::log_capture::start();
+        t.print(0x0301).unwrap(); // Combining acute accent.
+        let messages = cap.messages();
+        drop(cap);
+        assert!(
+            messages.contains(&(
+                log::Level::Debug,
+                "terminal".to_string(),
+                "c=301 grapheme attach to left=1 primary_cp=65".to_string(),
+            )),
+            "expected the grapheme-attach debug line, got: {messages:?}"
+        );
+
+        t.deinit(Global);
+    }
+
+    // Task S-1c (no reference test): when the cursor copy fails on entering
+    // the alternate screen, `switchScreenMode` logs the reference's warning
+    // (Terminal.zig:4837 for 47/1047, :4857 for 1049) and carries on.
+    #[test]
+    fn terminal_alt_screen_cursor_copy_failure_logs_a_warning() {
+        use crate::screen::{CursorCopyFp, CURSOR_COPY_TW};
+        use rustty_util::tripwire::ResetMode;
+
+        for (name, mode) in [
+            ("47", SwitchScreenMode::M47),
+            ("1047", SwitchScreenMode::M1047),
+            ("1049", SwitchScreenMode::M1049),
+        ] {
+            let mut t = Terminal::init(Global, opts(10, 3)).unwrap();
+            CURSOR_COPY_TW.with(|tw| {
+                tw.borrow_mut().errorAlways(
+                    CursorCopyFp::ManualStyleUpdate,
+                    crate::pagelist::grow::IncreaseCapacityError::OutOfSpace,
+                )
+            });
+            let cap = crate::log_capture::start();
+            let result = t.switch_screen_mode(mode, true);
+            let messages = cap.messages();
+            drop(cap);
+            CURSOR_COPY_TW
+                .with(|tw| tw.borrow_mut().end(ResetMode::Reset))
+                .unwrap();
+            assert!(
+                result.is_ok(),
+                "{name}: the failure is logged, not returned"
+            );
+            assert_eq!(crate::screen_set::Key::Alternate, t.screens.active_key);
+            assert!(
+                messages.contains(&(
+                    log::Level::Warn,
+                    "terminal".to_string(),
+                    "cursor copy failed entering alt screen err=OutOfSpace".to_string(),
+                )),
+                "{name}: expected the cursor-copy warning, got: {messages:?}"
+            );
+            t.deinit(Global);
+        }
     }
 
     // test "Terminal: zero-width character attaches to pending wrap cell"

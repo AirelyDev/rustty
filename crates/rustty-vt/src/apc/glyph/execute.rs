@@ -22,9 +22,21 @@ use crate::apc::glyph::response::{
 };
 
 // const log = std.log.scoped(.glyph);
-// PORT NOTE: the scoped logger is unused beyond `log.debug` in `execute`; the
-// log call is preserved as a comment (the project ports `std.log.scoped` as a
-// commented-out seam — no behavior depends on it).
+// The scope, carried through the `log` facade as `target: LOG_SCOPE`.
+// CORRECTION (task S-1c): a PORT NOTE here said the `log.debug` in `execute`
+// was ported as a comment because the project ports `std.log.scoped` as a
+// commented-out seam. The crate logs through the `log` facade, so it is live.
+const LOG_SCOPE: &str = "glyph";
+
+/// Zig's `{t}` of a `Request`: the union's tag name.
+fn request_tag_name(req: &Request) -> &'static str {
+    match req {
+        Request::Support => "support",
+        Request::Query(_) => "query",
+        Request::Register(_) => "register",
+        Request::Clear(_) => "clear",
+    }
+}
 
 /// Payload formats we support. Hardcoded because the support is
 /// fixed.
@@ -50,6 +62,11 @@ pub const SUPPORTED_FORMATS: ResponseSupportFormats = ResponseSupportFormats {
 /// it to the client.
 pub fn execute(glossary: &mut Glossary, req: &Request) -> Option<Response> {
     // log.debug("executing glyph protocol request: {t}", .{req.*});
+    log::debug!(
+        target: LOG_SCOPE,
+        "executing glyph protocol request: {}",
+        request_tag_name(req)
+    );
     // return switch (req.*) {
     match req {
         // .support => .{ .support = .{ .fmt = supported_formats } },
@@ -500,5 +517,25 @@ mod tests {
 
         // try testing.expect(testExecute(alloc, &glossary, &req) == null);
         assert!(test_execute(&mut glossary, &req).is_none());
+    }
+
+    // Task S-1c (no reference test): `execute` logs the request's tag name at
+    // debug level (execute.zig:35).
+    #[test]
+    fn execute_logs_the_request_tag() {
+        let mut glossary = Glossary::empty();
+        let req = test_parse(b"r;cp=e0a0;AAAAAAAAAAAAAA==");
+        let cap = crate::log_capture::start();
+        let _ = test_execute(&mut glossary, &req);
+        let messages = cap.messages();
+        drop(cap);
+        assert_eq!(
+            vec![(
+                log::Level::Debug,
+                "glyph".to_string(),
+                "executing glyph protocol request: register".to_string(),
+            )],
+            messages
+        );
     }
 }

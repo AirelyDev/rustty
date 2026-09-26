@@ -32,6 +32,9 @@ use clipboard_command::{max_mime_len, Metadata, Payload};
 use clipboard_command::{Operation, PayloadError};
 
 // const log = std.log.scoped(.kitty_clipboard);
+// The scope, carried through the `log` facade as `target: LOG_SCOPE` (task
+// S-1c: the two limit warnings below were ported as comments).
+const LOG_SCOPE: &str = "kitty_clipboard";
 
 /// Default maximum total decoded bytes accumulated by one write
 /// transaction. Embedders can override this per-transaction via
@@ -241,6 +244,11 @@ impl WriteState {
             if self.entries.len() >= max_write_mimes {
                 // log.warn("clipboard write has too many MIME types, ignoring mime={s}",
                 //     .{meta.mime});
+                log::warn!(
+                    target: LOG_SCOPE,
+                    "clipboard write has too many MIME types, ignoring mime={}",
+                    String::from_utf8_lossy(&meta.mime)
+                );
                 self.current = None;
                 return Ok(());
             }
@@ -361,6 +369,7 @@ impl WriteState {
             if !matched {
                 if self.aliases.len() >= max_write_aliases {
                     // log.warn("clipboard write has too many aliases, ignoring", .{});
+                    log::warn!(target: LOG_SCOPE, "clipboard write has too many aliases, ignoring");
                     return Ok(());
                 }
 
@@ -769,5 +778,56 @@ mod tests {
 
         let committed = state.commit().unwrap();
         assert_eq!(0usize, committed.contents.len());
+    }
+
+    // Task S-1c (no reference test): past `max_write_mimes` MIME types and
+    // `max_write_aliases` aliases the write warns (clipboard_write.zig:151,
+    // :236) and ignores the rest.
+    #[test]
+    fn write_limits_log_warnings() {
+        let warn = |msg: &str| {
+            (
+                log::Level::Warn,
+                "kitty_clipboard".to_string(),
+                msg.to_string(),
+            )
+        };
+
+        let begin_meta = Metadata::new(Operation::Write);
+        let mut state = WriteState::init(&begin_meta, Options::default());
+        for i in 0..max_write_mimes {
+            state
+                .data(&wdata(format!("type/m{i}").as_bytes()), b"YQ==")
+                .unwrap();
+        }
+        let cap = crate::log_capture::start();
+        state.data(&wdata(b"type/extra"), b"YQ==").unwrap();
+        let messages = cap.messages();
+        drop(cap);
+        assert_eq!(
+            vec![warn(
+                "clipboard write has too many MIME types, ignoring mime=type/extra"
+            )],
+            messages
+        );
+
+        let mut state = WriteState::init(&begin_meta, Options::default());
+        state.data(&wdata(b"text/plain"), b"YQ==").unwrap();
+        let names: Vec<String> = (0..=max_write_aliases).map(|i| format!("a{i}")).collect();
+        let payload =
+            crate::kitty::clipboard_response::b64_encode_to_vec(names.join(" ").as_bytes());
+        let alias_meta = Metadata {
+            mime: b"text/plain".to_vec(),
+            ..Metadata::new(Operation::Walias)
+        };
+        let cap = crate::log_capture::start();
+        state.alias(&alias_meta, &payload).unwrap();
+        let messages = cap.messages();
+        drop(cap);
+        assert_eq!(
+            vec![warn("clipboard write has too many aliases, ignoring")],
+            messages
+        );
+        assert_eq!(max_write_aliases, state.aliases.len());
     }
 }

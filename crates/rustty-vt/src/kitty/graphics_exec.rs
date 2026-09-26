@@ -28,6 +28,9 @@ use crate::terminal::Terminal;
 use rustty_util::quirks::inlineAssert as assert;
 
 // const log = std.log.scoped(.kitty_gfx);
+// The scope, carried through the `log` facade as `target: LOG_SCOPE` (task
+// S-1c: the six `log.*` calls below were ported as comments).
+const LOG_SCOPE: &str = "kitty_gfx";
 
 /// Execute a Kitty graphics command against the given terminal. This
 /// will never fail, but the response may indicate an error and the
@@ -43,6 +46,7 @@ pub fn execute(alloc: Allocator, terminal: &mut Terminal, cmd: &Command) -> Opti
     // if (!terminal.screens.active.kitty_images.enabled()) {
     if !unsafe { &(*terminal.screens.active).kitty_images }.enabled() {
         // log.debug("kitty graphics requested but disabled", .{});
+        log::debug!(target: LOG_SCOPE, "kitty graphics requested but disabled");
         return None;
     }
 
@@ -50,6 +54,12 @@ pub fn execute(alloc: Allocator, terminal: &mut Terminal, cmd: &Command) -> Opti
     //     cmd.quiet,
     //     cmd.control,
     // });
+    log::debug!(
+        target: LOG_SCOPE,
+        "executing kitty graphics command: quiet={:?} control={:?}",
+        cmd.quiet,
+        cmd.control
+    );
 
     // The quiet settings used to control the response. We have to make this
     // a var because in certain special cases (namely chunked transmissions)
@@ -69,6 +79,11 @@ pub fn execute(alloc: Allocator, terminal: &mut Terminal, cmd: &Command) -> Opti
             ..Response::default()
         };
         // log.warn("erroneous kitty graphics response: {s}", .{resp.message});
+        log::warn!(
+            target: LOG_SCOPE,
+            "erroneous kitty graphics response: {}",
+            String::from_utf8_lossy(&resp.message)
+        );
 
         return match quiet {
             command::Quiet::No => Some(resp),
@@ -139,6 +154,11 @@ pub fn execute(alloc: Allocator, terminal: &mut Terminal, cmd: &Command) -> Opti
     if let Some(resp) = resp_ {
         if !resp.ok() {
             // log.warn("erroneous kitty graphics response: {s}", .{resp.message});
+            log::warn!(
+                target: LOG_SCOPE,
+                "erroneous kitty graphics response: {}",
+                String::from_utf8_lossy(&resp.message)
+            );
         }
 
         return match quiet {
@@ -398,8 +418,12 @@ fn display(alloc: Allocator, terminal: &mut Terminal, cmd: &Command) -> Response
             let cursor_pin = unsafe { *active.cursor.page_pin };
             let pin = match active.pages.track_pin(cursor_pin) {
                 Ok(pin) => pin,
-                Err(_err) => {
+                Err(err) => {
                     // log.warn("failed to create pin for Kitty graphics err={}", .{err});
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "failed to create pin for Kitty graphics err={err:?}"
+                    );
                     result.message = b"EINVAL: failed to prepare terminal state".to_vec();
                     return result;
                 }
@@ -592,8 +616,9 @@ fn display(alloc: Allocator, terminal: &mut Terminal, cmd: &Command) -> Response
                     rows_before_scroll.saturating_add(terminal.rows as usize),
                 );
                 for _ in 0..rows_to_move {
-                    if terminal.index().is_err() {
+                    if let Err(err) = terminal.index() {
                         // log.warn("failed to move cursor: {}", .{err});
+                        log::warn!(target: LOG_SCOPE, "failed to move cursor: {err:?}");
                         break;
                     }
                 }
@@ -4227,6 +4252,77 @@ mod tests {
             .unwrap();
         assert_eq!(0u32, anim.frames[0].gap_ms);
 
+        t.deinit(alloc);
+    }
+
+    // Task S-1c (no reference test): `execute` logs the reference's lines
+    // (graphics_exec.zig:35, :39, :60, :125) under the `kitty_gfx` scope. The
+    // two failure arms of `track_pin` (:304) and `index` (:420) fail only on
+    // allocation and are not driven here.
+    fn run(t: &mut Terminal, raw: &[u8]) -> Vec<crate::log_capture::CapturedRecord> {
+        let cmd = command::Parser::parse_string(raw).unwrap();
+        let cap = crate::log_capture::start();
+        let _ = execute(crate::alloc::Global, t, &cmd);
+        let messages = cap.messages();
+        drop(cap);
+        messages
+    }
+
+    fn has(messages: &[crate::log_capture::CapturedRecord], level: log::Level, msg: &str) -> bool {
+        messages
+            .iter()
+            .any(|(l, target, m)| *l == level && target == "kitty_gfx" && m == msg)
+    }
+
+    #[test]
+    fn kittygfx_execute_logs_the_reference_lines() {
+        let alloc = crate::alloc::Global;
+
+        let mut off = opts(5, 5);
+        off.kitty_image_storage_limit = 0;
+        let mut t = Terminal::init(alloc, off).unwrap();
+        let messages = run(&mut t, b"a=q,i=1;");
+        assert_eq!(
+            vec![(
+                log::Level::Debug,
+                "kitty_gfx".to_string(),
+                "kitty graphics requested but disabled".to_string(),
+            )],
+            messages
+        );
+        t.deinit(alloc);
+
+        let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
+        let cmd = command::Parser::parse_string(b"a=p,i=1,I=2;").unwrap();
+        let messages = run(&mut t, b"a=p,i=1,I=2;");
+        assert!(
+            has(
+                &messages,
+                log::Level::Debug,
+                &format!(
+                    "executing kitty graphics command: quiet={:?} control={:?}",
+                    cmd.quiet, cmd.control
+                )
+            ),
+            "{messages:?}"
+        );
+        assert!(
+            has(
+                &messages,
+                log::Level::Warn,
+                "erroneous kitty graphics response: EINVAL: image ID and number are mutually exclusive"
+            ),
+            "{messages:?}"
+        );
+
+        // A placement for an image that does not exist is an error response.
+        let messages = run(&mut t, b"a=p,i=99;");
+        assert!(
+            messages.iter().any(|(l, target, m)| *l == log::Level::Warn
+                && target == "kitty_gfx"
+                && m.starts_with("erroneous kitty graphics response: ENOENT")),
+            "{messages:?}"
+        );
         t.deinit(alloc);
     }
 }

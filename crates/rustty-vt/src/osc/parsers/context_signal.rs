@@ -14,11 +14,12 @@
 // parent `Command`, aliased to disambiguate from this module's own `Command`.
 use crate::osc::{Command as OSCCommand, Parser, State};
 
-// PORT NOTE: `const log = std.log.scoped(.osc_context_signal);` — Rustty has no
-// logging facade wired into this crate (matching the convention used by the
-// `osc.zig` scoped logger), so the scoped logger and its calls are ported as
-// commented lines.
 // const log = std.log.scoped(.osc_context_signal);
+// The scope, carried through the `log` facade as `target: LOG_SCOPE`.
+// CORRECTION (task S-1c): a PORT NOTE here said "Rustty has no logging facade
+// wired into this crate", and the calls below were ported as comments. The
+// crate logs through the `log` facade, so the calls are live.
+const LOG_SCOPE: &str = "osc_context_signal";
 
 /// Maximum length of a context identifier (per spec).
 const MAX_CONTEXT_ID_LEN: usize = 64;
@@ -359,6 +360,11 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut OSCCom
         // log.warn("OSC 3008: expected 'start=' or 'end=' prefix, got: {s}", .{
         //     data[0..@min(data.len, 10)],
         // });
+        log::warn!(
+            target: LOG_SCOPE,
+            "OSC 3008: expected 'start=' or 'end=' prefix, got: {}",
+            String::from_utf8_lossy(&data[0..data.len().min(10)])
+        );
         parser.state = State::Invalid;
         return None;
     };
@@ -372,6 +378,7 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut OSCCom
 
     if rest.is_empty() {
         // log.warn("OSC 3008: missing context ID", .{});
+        log::warn!(target: LOG_SCOPE, "OSC 3008: missing context ID");
         parser.state = State::Invalid;
         return None;
     }
@@ -386,6 +393,12 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut OSCCom
         //     id.len,
         //     max_context_id_len,
         // });
+        log::warn!(
+            target: LOG_SCOPE,
+            "OSC 3008: context ID length {} out of range (1-{})",
+            id.len(),
+            MAX_CONTEXT_ID_LEN
+        );
         parser.state = State::Invalid;
         return None;
     }
@@ -397,6 +410,10 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut OSCCom
         #[allow(clippy::manual_range_contains)]
         if c < 0x20 || c > 0x7e {
             // log.warn("OSC 3008: invalid character 0x{x:0>2} in context ID", .{c});
+            log::warn!(
+                target: LOG_SCOPE,
+                "OSC 3008: invalid character 0x{c:0>2x} in context ID"
+            );
             parser.state = State::Invalid;
             return None;
         }
@@ -875,5 +892,56 @@ mod tests {
         assert!(cs.read_option(Field::Type).is_null());
         assert!(cs.read_option(Field::User).is_null());
         assert!(cs.read_option(Field::Exit).is_null());
+    }
+
+    // Task S-1c (no reference test): each rejection arm of `parse` logs the
+    // reference's warning (context_signal.zig:219, :234, :245, :256) under the
+    // `osc_context_signal` scope, and the command is still rejected.
+    fn rejected_with(input: &[u8]) -> Vec<crate::log_capture::CapturedRecord> {
+        let mut p: Parser = Parser::init(None);
+        let cap = crate::log_capture::start();
+        for &ch in input {
+            p.next(ch);
+        }
+        assert!(p.end(None).is_none(), "{:?} must be rejected", input);
+        let messages = cap.messages();
+        drop(cap);
+        messages
+    }
+
+    fn warn(msg: &str) -> crate::log_capture::CapturedRecord {
+        (
+            log::Level::Warn,
+            "osc_context_signal".to_string(),
+            msg.to_string(),
+        )
+    }
+
+    #[test]
+    fn osc_3008_rejections_log_the_reference_warnings() {
+        assert_eq!(
+            vec![warn(
+                "OSC 3008: expected 'start=' or 'end=' prefix, got: middle=abc"
+            )],
+            rejected_with(b"3008;middle=abcdefgh")
+        );
+        assert_eq!(
+            vec![warn("OSC 3008: missing context ID")],
+            rejected_with(b"3008;start=")
+        );
+        assert_eq!(
+            vec![warn("OSC 3008: context ID length 0 out of range (1-64)")],
+            rejected_with(b"3008;end=;type=boot")
+        );
+        let mut long = b"3008;start=".to_vec();
+        long.extend(std::iter::repeat_n(b'a', 65));
+        assert_eq!(
+            vec![warn("OSC 3008: context ID length 65 out of range (1-64)")],
+            rejected_with(&long)
+        );
+        assert_eq!(
+            vec![warn("OSC 3008: invalid character 0x7f in context ID")],
+            rejected_with(b"3008;start=ab\x7fcd")
+        );
     }
 }
