@@ -1524,7 +1524,7 @@ mod tests {
     // in place (`StackFallback::new_in_place`), and overflowed 192 KiB with a
     // by-value `new`; a release build fits in 64 KiB.
     #[test]
-    fn glyph_registration_fits_a_256k_stack() {
+    fn glyph_registration_fits_a_128k_stack() {
         let stack = std::env::var("RUSTTY_GLYPH_STACK")
             .ok()
             .and_then(|v| v.parse().ok())
