@@ -385,7 +385,10 @@ point is that they become proposable upstream rather than lost in a task report.
      tail-s1b).** Each missing reference site now has a checked home, and prose in an
      allowance's `reason` is only for what none of them fits:
      - a site the reference compiles only into its tests is not counted at all (the gate
-       applies the port side's `#[cfg(test)]` rule to the reference);
+       applies the port side's `#[cfg(test)]` rule to the reference; since task S-1c also
+       across files: a `pub fn` that only test code anywhere in the reference names). Where
+       the port compiles such a fn anyway, its emission is a `test-only-reference` row in
+       `LOG-PORT-ONLY.tsv`; a `pub fn` nothing names is an `unreferenced-pub` dead site;
      - a site the reference never reaches goes in `LOG-DEAD-SITES.tsv`;
      - a site the reference reaches on a condition the port (or one platform arm) cannot
        produce — the catch arm of an allocation or a `bufPrint` the port writes as `format!`,

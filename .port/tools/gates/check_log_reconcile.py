@@ -64,6 +64,21 @@ or one platform arm cannot produce (`LOG-ABSENT-SITES.tsv`, per arm, RED if that
 arm still emits the message); (3) the reference never reaches it at all
 (`LOG-DEAD-SITES.tsv`, as before).
 
+TEST-ONLY ACROSS FILES (task S-1c): rule (1) stopped at the file boundary — a
+private fn cannot be named from another file, but a `pub fn` can, so a reference
+test helper exported to other files' `test` blocks (`snapshot/fixture.zig`
+`expectEqual`, `lib/enum.zig` `checkGhosttyHEnum`) was still demanded of the
+port's production code. `zig_tree_test_only` extends the rule to the whole
+reference tree: a `pub fn` every one of whose tree-wide references sits in test
+code (a `test` block, a test-only private fn, or another such `pub fn`; a fixed
+point) is test-only, and so are the private fns only it calls. Conservative by
+construction: a reference is ANY occurrence of the name as an identifier in any
+reference file, so an unrelated field or fn of the same name keeps it counted; a
+quoted `"name"` anywhere (reflection) keeps it counted; only a same-name
+re-export `const name = x.name;` is transparent. `LOG-DEAD-SITES.tsv` also gains
+the kind `unreferenced-pub` (a site in a `pub fn` that nothing in the tree names,
+which Zig never analyses), verified against the same index.
+
 EXCLUSION BUDGET: an exclusion retires a reference file rather than reconciling
 it, erasing its whole deficit — the widest lever here, and once the only number
 that was not ratcheted (retiring `src/termio/Exec.zig` wiped 58 sites and stayed
@@ -217,7 +232,7 @@ def _zig_block(code, open_at):
     return None
 
 
-def zig_test_only_lines(text):
+def zig_test_only_lines(text, extra_regions=()):
     """Line numbers that the reference compiles ONLY INTO ITS TESTS.
 
     WHY (task tail-s1b, the `tmux/viewer.zig:1497` case). The Rust side of this
@@ -239,10 +254,14 @@ def zig_test_only_lines(text):
     CONSERVATIVE BY CONSTRUCTION: a name is matched as a bare identifier, so a
     second fn or field with the same name anywhere in the file keeps the helper
     counted (a false "production", never a false "test-only").
+
+    `extra_regions` are further `(start, end)` spans of the stripped code that are
+    test-only for a reason this file cannot see: the bodies of `pub fn`s that
+    `zig_tree_test_only` found referenced only from test code tree-wide.
     """
     lines = text.split("\n")
     code = "\n".join(zig_strip(line) for line in lines)
-    spans = []
+    spans = list(extra_regions)
     for m in ZIG_TEST_BLOCK.finditer(code):
         body = _zig_block(code, m.end() - 1)
         if body:
@@ -293,8 +312,159 @@ def zig_test_only_lines(text):
 
 def zig_prod_sites(text):
     """Line numbers of live `log.*` calls the reference compiles into PRODUCTION."""
-    test_only = zig_test_only_lines(text)
+    test_only = TREE_TEST_ONLY.get(text)
+    if test_only is None:
+        test_only = zig_test_only_lines(text)
     return [k for k in zig_sites(text) if k not in test_only]
+
+
+# ---------------------------------------------------------------------------
+# Test-only and unreferenced `pub fn`s across the whole reference tree (task S-1c)
+# ---------------------------------------------------------------------------
+# `zig_test_only_lines` sees one file. A `pub fn` is reachable from any file, so
+# whether it is test-only is a property of the TREE. `zig_tree_index` indexes, for
+# every `pub fn` name in the tree, every place the name is written (as an
+# identifier, comments and string bodies excluded), and `zig_tree_test_only`
+# runs the file rule and the tree rule to one fixed point. The result is keyed by
+# the file's TEXT in `TREE_TEST_ONLY`, which `zig_prod_sites` consults first; the
+# gate's `main` installs it for the oracle tree, the self-test for its fixtures.
+TREE_TEST_ONLY = {}
+TREE_INDEX = {}
+TREE_TEST_ONLY_FNS = []
+ZIG_PUB_FN = re.compile(
+    r"(?m)^[ \t]*pub[ \t]+(?:(?:inline|noinline)[ \t]+)?fn[ \t]+([A-Za-z_][A-Za-z0-9_]*)[ \t]*\("
+)
+ZIG_IDENT = re.compile(r"(?<![A-Za-z0-9_@])[A-Za-z_][A-Za-z0-9_]*")
+# `const name = some.path.name;` (optionally `pub`): a same-name re-export. Its two
+# mentions of `name` are a declaration, not a use; the uses of the alias are the
+# same identifier and are indexed anyway. Any OTHER alias (`const other = x.name;`)
+# is an ordinary reference, which keeps the fn counted.
+ZIG_REEXPORT = re.compile(
+    r"(?m)^[ \t]*(?:pub[ \t]+)?const[ \t]+([A-Za-z_][A-Za-z0-9_]*)[ \t]*=[ \t]*"
+    r"(?:[A-Za-z_][A-Za-z0-9_]*\.)+([A-Za-z_][A-Za-z0-9_]*)[ \t]*;"
+)
+
+
+def zig_tree_index(files):
+    """{name: {"defs": [(rel, def_pos, (body_start, body_end))], "refs": [(rel, pos)],
+    "quoted": bool}} for every `pub fn` name in `files` ({rel: text}), plus the
+    stripped code per file under the key `None`."""
+    code = {rel: "\n".join(zig_strip(l) for l in t.split("\n")) for rel, t in files.items()}
+    index = {}
+    for rel, c in code.items():
+        for m in ZIG_PUB_FN.finditer(c):
+            body = _zig_block(c, m.end())
+            if body:
+                entry = index.setdefault(m.group(1), {"defs": [], "refs": [], "quoted": False})
+                entry["defs"].append((rel, m.start(1), body))
+    for rel, c in code.items():
+        skip = set()
+        for m in ZIG_REEXPORT.finditer(c):
+            if m.group(1) == m.group(2) and m.group(1) in index:
+                skip.add(m.start(1))
+                skip.add(m.start(2))
+        for m in ZIG_IDENT.finditer(c):
+            entry = index.get(m.group(0))
+            if entry is None or m.start() in skip:
+                continue
+            if any(d[0] == rel and d[1] == m.start() for d in entry["defs"]):
+                continue
+            entry["refs"].append((rel, m.start()))
+    for name, entry in index.items():
+        needle = '"' + name + '"'
+        entry["quoted"] = any(needle in t for t in files.values())
+    index[None] = code
+    return index
+
+
+def zig_tree_test_only(files, index=None):
+    """{text: set(test-only line numbers)} for every file in `files`, applying the
+    file rule and the tree rule to one fixed point."""
+    index = index if index is not None else zig_tree_index(files)
+    code = index[None]
+    tree_fns = set()  # (name) of pub fns classified test-only tree-wide
+    extra = {rel: [] for rel in files}
+
+    def file_regions(rel):
+        c = code[rel]
+        regions = list(extra[rel])
+        for m in ZIG_TEST_BLOCK.finditer(c):
+            body = _zig_block(c, m.end() - 1)
+            if body:
+                regions.append(body)
+        # private fns that are test-only given `regions` (the file rule's fixed point)
+        lines_only = zig_test_only_lines(files[rel], extra[rel])
+        text_lines = c.split("\n")
+        starts, pos = [], 0
+        for line in text_lines:
+            starts.append(pos)
+            pos += len(line) + 1
+        return regions, lines_only, starts
+
+    changed = True
+    while changed:
+        changed = False
+        cache = {}
+        for name, entry in index.items():
+            if name is None or name in tree_fns or entry["quoted"] or not entry["refs"]:
+                continue
+            ok = True
+            for rel, p in entry["refs"]:
+                # recursion inside one of its own bodies is not a caller
+                if any(d[0] == rel and d[2][0] <= p <= d[2][1] for d in entry["defs"]):
+                    continue
+                if rel not in cache:
+                    cache[rel] = file_regions(rel)
+                regions, lines_only, starts = cache[rel]
+                line_no = _bisect_line(starts, p)
+                if not (any(a <= p <= b for a, b in regions) or line_no in lines_only):
+                    ok = False
+                    break
+            if ok:
+                tree_fns.add(name)
+                for rel, _at, body in entry["defs"]:
+                    extra[rel].append(body)
+                changed = True
+    out = {}
+    for rel, text in files.items():
+        out[text] = zig_test_only_lines(text, extra[rel]) if extra[rel] else zig_test_only_lines(text)
+    return out, sorted(tree_fns)
+
+
+def _bisect_line(starts, pos):
+    lo, hi = 0, len(starts) - 1
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if starts[mid] <= pos:
+            lo = mid
+        else:
+            hi = mid - 1
+    return lo + 1
+
+
+def zig_enclosing_pub_fn(index, rel, line):
+    """The name of the `pub fn` of `rel` whose body holds `line`, or None."""
+    code = index[None].get(rel)
+    if code is None:
+        return None
+    starts, pos = [], 0
+    for l in code.split("\n"):
+        starts.append(pos)
+        pos += len(l) + 1
+    if line < 1 or line > len(starts):
+        return None
+    # Place the line by its `log.*` call, as `zig_test_only_lines` does: a
+    # one-line `pub fn f() void { log.warn(...); }` starts before its own body.
+    m = ZIG_CALL.search(code.split("\n")[line - 1])
+    p = starts[line - 1] + (m.start() if m else 0)
+    best = None
+    for name, entry in index.items():
+        if name is None:
+            continue
+        for r, _at, (a, b) in entry["defs"]:
+            if r == rel and a <= p <= b and (best is None or a > best[1]):
+                best = (name, a)
+    return best[0] if best else None
 
 
 # ---------------------------------------------------------------------------
@@ -1181,6 +1351,7 @@ DEAD_SITE_KINDS = (
     "unreachable-private",  # private fn, every call site commented out
     "commented-caller",     # reachable only from a call the reference comments out
     "dead-branch",          # inside a branch the reference cannot take
+    "unreferenced-pub",     # a `pub fn` nothing in the tree names (task S-1c; verified)
 )
 DEAD_SITE_DIRECTIVE = re.compile(r"^#!\s*dead-site-cap\s+entries=(\d+)\s*$")
 
@@ -1271,6 +1442,7 @@ PORT_ONLY_KINDS = (
     "expansion",        # an EXTRA static copy of ONE reference site (unrolled inline-for, cfg twin, split arm)
     "open-finding",     # a port-only emission recorded as an open NEW-FINDINGS defect; delete the row when fixed
     "transport",        # a call INTO the log backend itself (the reference's sink has no `log.*` site), counted only for its `log_*` name
+    "test-only-reference",  # the counterpart of a reference site in code the reference compiles only into its tests; verified (task S-1c)
 )
 PORT_ONLY_DIRECTIVE = re.compile(r"^#!\s*port-only-cap\s+entries=(\d+)\s*$")
 PORT_ONLY_FN = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)(?:#([1-9][0-9]*))?$")
@@ -1374,7 +1546,7 @@ def call_text(code, nc, pos):
     return " ".join(nc[pos : j + 1].split())
 
 
-def resolve_port_only(rows, pool, emitters, defs, portmap):
+def resolve_port_only(rows, pool, emitters, defs, portmap, zig_text=None):
     """Resolve every declaration to one live emission.
 
     Returns (subtract, problems): `subtract` maps port file -> {offset: line} of
@@ -1384,7 +1556,8 @@ def resolve_port_only(rows, pool, emitters, defs, portmap):
     problem class -> [(row, detail)].
     """
     problems = {k: [] for k in ("missing_file", "not_in_arm", "bad_kind",
-                                "no_reason", "stale", "ambiguous", "duplicate")}
+                                "no_reason", "stale", "ambiguous", "duplicate",
+                                "not_test_only")}
     arm_files = {}
     for r in portmap:
         for arm in r.get("arms", []):
@@ -1397,6 +1570,18 @@ def resolve_port_only(rows, pool, emitters, defs, portmap):
             problems["bad_kind"].append((row, row["kind"]))
         if not row["reason"]:
             problems["no_reason"].append((row, ""))
+        if row["kind"] == "test-only-reference":
+            # Verified: the reference file must hold a site that is test-only
+            # (in the reference's `test` code, or a fn only tests reach) whose
+            # message is the row's match. Without the reference text it is RED.
+            txt = zig_text(row["oracle"]) if zig_text else None
+            want = normalise_message(row["match"].strip().strip('"'))
+            test_msgs = (
+                {zig_site_message(txt, k) for k in set(zig_sites(txt)) - set(zig_prod_sites(txt))}
+                if txt else set()
+            )
+            if want not in test_msgs:
+                problems["not_test_only"].append((row, want))
         if row["file"] not in arm_files.get(row["oracle"], ()):
             problems["not_in_arm"].append((row, row["oracle"]))
             continue
@@ -1937,7 +2122,9 @@ def verdict(portmap, claims, zig_text, rust_text, facade_sources=None, report=Fa
     dead_by_file = dead_lines_by_file(dead_rows)
     # PORT-ONLY emissions come off the port count BEFORE any comparison (N81).
     po_rows = port_only or []
-    po_subtract, po_problems = resolve_port_only(po_rows, pool, emitters, defs, portmap)
+    po_subtract, po_problems = resolve_port_only(
+        po_rows, pool, emitters, defs, portmap, zig_text=zig_text
+    )
 
     ref_msg_cache = {}
 
@@ -2169,6 +2356,13 @@ def verdict(portmap, claims, zig_text, rust_text, facade_sources=None, report=Fa
             f"holding {ex_sites} site(s){budget}: "
             + ", ".join(f"{v} {k}" for k, v in sorted(kinds.items()))
         )
+    if TREE_TEST_ONLY_FNS:
+        out.append(
+            f"           {len(TREE_TEST_ONLY_FNS)} reference `pub fn`(s) are referenced only "
+            "from test code tree-wide, so their sites are test-only (task S-1c): "
+            + ", ".join(TREE_TEST_ONLY_FNS[:12])
+            + (" ..." if len(TREE_TEST_ONLY_FNS) > 12 else "")
+        )
     if dead_rows:
         kinds = {}
         for d in dead_rows:
@@ -2307,10 +2501,24 @@ def verdict(portmap, claims, zig_text, rust_text, facade_sources=None, report=Fa
                 rc = 1
     # --- DEAD SITES: validity, ratchet, and the inverse-defect check -----------
     dead_bad_kind, dead_no_reason, dead_bogus, dead_emitted = [], [], [], []
+    dead_referenced = []
     if dead_rows:
         for d in dead_rows:
             if d["kind"] not in DEAD_SITE_KINDS:
                 dead_bad_kind.append((d["file"], d["line"], d["kind"]))
+            if d["kind"] == "unreferenced-pub":
+                # Verified, not trusted: the site must sit in a `pub fn` whose name
+                # the tree index shows written nowhere but its definition(s), and
+                # never quoted. Without a tree index there is nothing to verify
+                # against, so the row is RED.
+                name = zig_enclosing_pub_fn(TREE_INDEX, d["file"], d["line"]) if TREE_INDEX else None
+                entry = TREE_INDEX.get(name) if name else None
+                if entry is None or entry["refs"] or entry["quoted"]:
+                    dead_referenced.append(
+                        (d["file"], d["line"], name,
+                         len(entry["refs"]) if entry else None,
+                         entry["quoted"] if entry else None)
+                    )
             if not d["reason"]:
                 dead_no_reason.append((d["file"], d["line"]))
             txt = zig_text(d["file"])
@@ -2354,6 +2562,13 @@ def verdict(portmap, claims, zig_text, rust_text, facade_sources=None, report=Fa
         out.append(
             f"RED: {len(dead_no_reason)} dead-site declaration(s) with no reason: "
             f"{dead_no_reason[:5]}"
+        )
+        rc = 1
+    if dead_referenced:
+        out.append(
+            f"RED: {len(dead_referenced)} `unreferenced-pub` dead-site declaration(s) whose "
+            "site is not in a `pub fn` the reference tree never names (file, line, fn, "
+            f"references, quoted): {dead_referenced[:5]}"
         )
         rc = 1
     if dead_bogus:
@@ -2404,6 +2619,8 @@ def verdict(portmap, claims, zig_text, rust_text, facade_sources=None, report=Fa
                      "pick one copy with `fn#k`",
         "duplicate": "select an emission another row already selects — it would be "
                      "subtracted twice",
+        "not_test_only": "are `test-only-reference` rows whose match is not the message "
+                         "of any TEST-ONLY site of the named reference file",
     }
     for key, label in po_labels.items():
         bad = po_problems.get(key, [])
@@ -3666,6 +3883,99 @@ def self_test():
     cases.append(("...and a port with exactly the production sites reconciles",
                   run([("src/testonly.zig", "c/testonly.rs", "0", "")])[0], 0))
 
+    # 10m2. TEST-ONLY ACROSS FILES (task S-1c). `src/tt_lib.zig` exports helpers;
+    #       which are test-only is decided by where the WHOLE fixture tree names them.
+    TT = {
+        "src/tt_lib.zig": (
+            'const log = std.log.scoped(.x);\n'                                   # 1
+            'pub fn onlyTests() void { log.warn("only tests", .{}); inner(); }\n' # 2 test-only
+            'fn inner() void { log.warn("inner of test helper", .{}); }\n'        # 3 test-only (file rule, extra region)
+            'pub fn prod() void { log.warn("prod site", .{}); }\n'                # 4 counted
+            'pub fn quoted() void { log.warn("reflected site", .{}); }\n'         # 5 counted (reflection)
+            'pub fn chained() void { log.warn("chain site", .{}); }\n'            # 6 test-only (fixed point via onlyTests2)
+            'pub fn onlyTests2() void { chained(); }\n'                           # 7
+            'pub fn renamed() void { log.warn("renamed site", .{}); }\n'          # 8 counted (renaming alias)
+            'pub fn unused() void { log.warn("unused site", .{}); }\n'            # 9 counted (no reference: not test-only)
+            'pub fn selfRec() void { log.warn("recursive", .{}); selfRec(); }\n'  # 10 test-only (recursion is no caller)
+        ),
+        "src/tt_reexport.zig": (
+            'const lib = @import("tt_lib.zig");\n'
+            'pub const onlyTests = lib.onlyTests;\n'
+            'pub const other_name = lib.renamed;\n'
+        ),
+        "src/tt_user.zig": (
+            'const lib = @import("tt_reexport.zig");\n'
+            'fn run() void { lib.prod(); lib.other_name(); }\n'
+            'fn refl() void { _ = @field(lib, "quoted"); }\n'
+            'test "t" { lib.onlyTests(); lib.onlyTests2(); lib.selfRec(); lib.renamed(); }\n'
+        ),
+    }
+    tt_map, tt_fns = zig_tree_test_only(TT)
+    TREE_TEST_ONLY.update(tt_map)
+    try:
+        cases.append(("tree rule: a pub fn named only in other files' tests is test-only, "
+                      "with its private callee, a fixed-point chain and a recursive one; "
+                      "production, quoted, renamed-alias and unreferenced ones are kept",
+                      zig_prod_sites(TT["src/tt_lib.zig"]), [4, 5, 8, 9]))
+        cases.append(("tree rule: the test-only pub fns it reports",
+                      tt_fns, ["chained", "onlyTests", "onlyTests2", "selfRec"]))
+    finally:
+        for t in TT.values():
+            TREE_TEST_ONLY.pop(t, None)
+    cases.append(("...and without the tree rule only the file rule applies",
+                  zig_prod_sites(TT["src/tt_lib.zig"]), [2, 3, 4, 5, 6, 8, 9, 10]))
+
+    # 10m3. `unreferenced-pub` dead sites and `test-only-reference` port-only rows,
+    #       both verified against the tree index.
+    tt_index = zig_tree_index(TT)
+    TREE_INDEX.update(tt_index)
+    TREE_TEST_ONLY.update(tt_map)
+    zig.update(TT)
+    rs["c/tt.rs"] = (
+        'fn a() { log::warn!(target: S, "prod site"); log::warn!(target: S, "reflected site"); }\n'
+        'fn b() { log::warn!(target: S, "renamed site"); }\n'
+        'fn c() { log::warn!(target: S, "only tests"); }\n'
+    )
+
+    def run_tt(dead=None, po=None, red_for=None):
+        pm = [{"oracle": "src/tt_lib.zig", "excluded": False, "arms": [["c/tt.rs"]],
+               "allowance": "0", "bypass_cap": "0", "reason": "", "lineno": 0}]
+        rc_, lines_ = verdict(pm, {}, zt, rt, oracle_log_files=None,
+                              dead_sites=dead or [], dead_site_cap=len(dead or []) or None,
+                              port_only=po or [], port_only_cap=len(po or []) or None)
+        if red_for is None:
+            return rc_
+        # RED for the STATED reason: the named check's own line is present.
+        return int(rc_ == 1 and any(l.startswith("RED") and red_for in l for l in lines_))
+
+    UNREF = {"file": "src/tt_lib.zig", "line": 9, "kind": "unreferenced-pub",
+             "reason": "fixture", "lineno": 1}
+    TOR = {"oracle": "src/tt_lib.zig", "file": "c/tt.rs", "fn": "c", "occurrence": None,
+           "match": '"only tests"', "kind": "test-only-reference", "reason": "fixture",
+           "lineno": 1}
+    try:
+        cases.append(("unreferenced-pub: a site in a pub fn nothing names drops out "
+                      "(and the port's test-only counterpart is declared)",
+                      run_tt([UNREF], [TOR]), 0))
+        cases.append(("...WITHOUT the dead row the file is short",
+                      run_tt([], [TOR]), 1))
+        cases.append(("unreferenced-pub on a pub fn the tree DOES name is RED (that check)",
+                      run_tt([dict(UNREF, line=4)], [TOR], "`unreferenced-pub`"), 1))
+        cases.append(("unreferenced-pub on a QUOTED pub fn is RED (that check)",
+                      run_tt([dict(UNREF, line=5)], [TOR], "`unreferenced-pub`"), 1))
+        cases.append(("test-only-reference: WITHOUT it the test-only counterpart "
+                      "over-credits and the unused site is masked (GREEN, 4 of 4)",
+                      run_tt([], []), 0))
+        cases.append(("test-only-reference whose match is a PRODUCTION site is RED (that check)",
+                      run_tt([UNREF], [dict(TOR, fn="b", match='"renamed site"')],
+                             "`test-only-reference` rows"), 1))
+    finally:
+        TREE_INDEX.clear()
+        for t in TT.values():
+            TREE_TEST_ONLY.pop(t, None)
+    cases.append(("unreferenced-pub with no tree index to verify against is RED (that check)",
+                  run_tt([UNREF], [TOR], "`unreferenced-pub`"), 1))
+
     # 10n. ABSENT REFERENCE SITES (task tail-s1b). `src/ab.zig` has three sites;
     #      :3 is the catch arm of a call the port cannot fail, :4 shares :2's text.
     zig["src/ab.zig"] = (
@@ -4151,6 +4461,14 @@ def main():
             file=sys.stderr,
         )
         return 3
+    # The tree-wide test-only rule (task S-1c) must be installed before any count.
+    tree_files = dict(zig_walk())
+    TREE_INDEX.clear()
+    TREE_INDEX.update(zig_tree_index(tree_files))
+    tree_map, tree_fns = zig_tree_test_only(tree_files, TREE_INDEX)
+    TREE_TEST_ONLY.clear()
+    TREE_TEST_ONLY.update(tree_map)
+    TREE_TEST_ONLY_FNS[:] = tree_fns
     oracle_log_files = oracle_files_with_log_sites(
         zig_walk, dead_lines_by_file(dead_sites)
     )
