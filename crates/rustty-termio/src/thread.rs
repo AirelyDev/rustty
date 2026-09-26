@@ -1371,7 +1371,7 @@ fn failure_screen_text(err: crate::Error) -> String {
         ),
 
         // else => {
-        crate::Error::Other => format!(
+        crate::Error::Other | crate::Error::OutOfMemory => format!(
             "error starting IO thread: {err}\n\
              \n\
              The underlying shell or command was unable to be started.\n\

@@ -271,7 +271,18 @@ pub fn inflate_zlib(data: &[u8], max_size: usize) -> Result<Vec<u8>, InflateErro
 
 /// The growable output an inflate appends to: a caller-owned byte list, so
 /// the caller decides which allocator the decompressed bytes live in.
-pub trait InflateOut {
+///
+/// # Safety
+/// The inflate loop hands zlib a raw pointer into the buffer and trusts these
+/// methods, so an implementation must guarantee:
+/// - after `try_grow(n)` returns `Ok`, `len() == n`, and `as_mut_ptr()` is
+///   valid for writes of `len()` bytes (initialized or not: inflate only
+///   reads back what it wrote);
+/// - `as_mut_ptr()` stays valid until the next `try_grow`/`truncate` call,
+///   and `len()` never reports more bytes than the buffer holds;
+/// - after `truncate(n)` with `n <= len()`, `len() == n` and the first `n`
+///   bytes are kept.
+pub unsafe trait InflateOut {
     /// The current length.
     fn len(&self) -> usize;
     /// Whether the output is empty.
@@ -288,7 +299,9 @@ pub trait InflateOut {
     fn as_mut_ptr(&mut self) -> *mut u8;
 }
 
-impl InflateOut for Vec<u8> {
+// SAFETY: `resize` makes `len() == new_len` over an initialized buffer; the
+// pointer is the Vec's own and stays valid until it reallocates.
+unsafe impl InflateOut for Vec<u8> {
     fn len(&self) -> usize {
         Vec::len(self)
     }

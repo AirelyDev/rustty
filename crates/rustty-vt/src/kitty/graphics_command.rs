@@ -10,6 +10,10 @@ use rustty_simd as simd;
 use rustty_util::quirks::inlineAssert as assert;
 
 // const log = std.log.scoped(.kitty_gfx);
+//
+// PORT NOTE: the reference's scope tag, carried through the `log` facade as
+// `target: LOG_SCOPE` (DECISION-logging.md §6r4).
+const LOG_SCOPE: &str = "kitty_gfx";
 
 /// PORT NOTE: The reference's parsing surface returns Zig errors
 /// (`error.InvalidFormat`, `error.Overflow`, `error.OutOfMemory`,
@@ -401,8 +405,12 @@ impl Parser {
         // never makes.
         let decoded_len = match simd::base64::decode_in_place(&mut self.data, max_len) {
             Ok(decoded_len) => decoded_len,
-            Err(_err) => {
+            Err(err) => {
                 // log.warn("failed to decode base64 payload data: {}", .{err});
+                log::warn!(
+                    target: LOG_SCOPE,
+                    "failed to decode base64 payload data: {err:?}"
+                );
                 return Err(Error::InvalidData);
             }
         };

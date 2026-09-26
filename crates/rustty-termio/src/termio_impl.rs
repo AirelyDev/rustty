@@ -1789,8 +1789,8 @@ impl<M: AppMailbox> Termio<M> {
     // }
     //
     // PORT NOTE: same raw shared-state seam as `colorSchemeReport` (guard-less
-    // renderer lock). `error{OutOfMemory}` is `Error::Other` (the crate's
-    // `map_err(|_| Error)` convention); the unlock runs before it propagates.
+    // renderer lock). `error{OutOfMemory}` is `Error::OutOfMemory`; the unlock
+    // runs before it propagates.
     pub fn kittyClipboardGrant(
         &mut self,
         pw: &[u8],
@@ -1800,7 +1800,7 @@ impl<M: AppMailbox> Termio<M> {
         unsafe { (*(*self.renderer_state).mutex).lock() };
         let result = self.terminal_stream.handler.kittyClipboardGrant(pw, dir);
         unsafe { (*(*self.renderer_state).mutex).unlock() };
-        result.map_err(|_| crate::Error)
+        result.map_err(|_| crate::Error::OutOfMemory)
     }
 
     /// Sends a DSR response for the current color scheme to the pty.

@@ -1704,8 +1704,11 @@ fn append_remaining_limited(
 #[cfg(not(target_arch = "wasm32"))]
 struct InflateBytes(Bytes);
 
+// SAFETY: `try_grow` reserves, then `resize_copy`s to exactly `new_len`
+// (initialized); `truncate` keeps the prefix; `as_mut_ptr` is the list's own
+// buffer, valid until its next growth.
 #[cfg(not(target_arch = "wasm32"))]
-impl zlib_sys::InflateOut for InflateBytes {
+unsafe impl zlib_sys::InflateOut for InflateBytes {
     fn len(&self) -> usize {
         self.0.len()
     }
