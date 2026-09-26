@@ -5035,3 +5035,61 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   `std.os.linux.getauxval` reads an auxv pointer only Zig's own `_start` sets. Details and proposed
   fix: `UPSTREAM-DEFECTS.md` UD291; PORT NOTE at the port's detector (`d03d273d`).
 - **state**: CLOSED (task L-1).
+
+## N315 — S7-5 routing: the render state's contents, through the allocator it is updated with
+
+- **id**: N315. Not a ledger row: records the S7-5 scope decisions (closes S175-F1; S4-F2's render half).
+- **severity**: informational. **kind**: allocator routing (T1/T2/T3 of the S-7 design).
+- **routed (T1)**: every container of `rustty_vt::render::RenderState` grows through the allocator
+  `update`/`beginUpdate` is given and frees through it: `row_data`, each row's three cell columns
+  (`raw`, grapheme spans, `style`), its grapheme buffer, `highlights` and `applied_styles`, and
+  `pending_styles`. vt-c `new_` resolves `lib.alloc.default(alloc_)` to the runtime handle and keeps it
+  as `RenderStateWrapper.alloc` (the wrapper's Rust-heap `Box<dyn ZigAllocator>` holder is gone), and
+  `update`/`begin_update`/`free` pass `state.alloc` (`c/render.zig:209-232`). Nothing reaches the
+  terminal's allocator or the Rust heap unless that is the state's allocator (the application's
+  `Global`). Not routed: `link_cells` and `string`, whose results are the caller's and are built
+  through the allocator the caller passes (the renderer passes the Rust heap; the C API does not
+  expose them), are unchanged.
+- **fallibility (T2)**: each reference `try` is reachable and returns `error.OutOfMemory`
+  (`GHOSTTY_OUT_OF_MEMORY` through the C API): `row_data.resize`, `cells.resize`, the three
+  `pending_styles.append`s, the grapheme `dupe`, `applied_styles.ensureTotalCapacity`, and the
+  highlight `append` in `updateHighlightsFlattened`. A failed update leaves the state memory-safe
+  (lengths only change after their growth succeeds; unflagged/stale grapheme spans are read through a
+  checked slice). The retry after a failure: UD315 / N316.
+- **per-call vs bound**: the reference passes the allocator per call; the lists bind to it on first
+  growth (`alloc::bind`, rows are created with it) and later calls debug-assert it
+  (`render_state_checks_the_update_allocator`).
+- **T3 (call shape)**: the MultiArrayLists grow as Zig 0.16's `resize` does (to `growCapacity(n)`
+  elements, alloc + copy + free, never `remap`); the `ArrayList`s to `growCapacity(n)` by `remap`
+  first, then alloc + copy + free. The `init_capacity` of each is computed from the REFERENCE's sizes
+  (`Row` fields 24 bytes, `Cell` fields 28, `StyleRun` 36, `Highlight` 6, on a 128-byte cache line),
+  so the element counts the caller's allocator sees match the reference's; byte sizes differ where the
+  Rust element does. Residuals: (1) a row's cells are one allocation per column, not one for all
+  three: MEASURED (`time -l`, paired, interleaved, load 7-15), the single-allocation layout cost
+  +3.4% cycles on `screen-clone.render` at 1.8% fewer instructions (the growCapacity headroom between
+  its columns spread the hot `raw`/`style` columns of a viewport's rows), and the per-column lists
+  measured +0.1%; each column still grows by `setCapacity`'s alloc + copy + free, all three allocated
+  before any is replaced. (2) The per-row arena (grapheme dupes, highlights) is a retained grapheme
+  buffer and a retained highlight list on the same allocator, cleared with capacity kept where the
+  reference resets the arena (`.retain_capacity`) or sets `.empty`: a real arena would hand out
+  grapheme slices that dangle for the stale slots a safe API exposes. The steady state matches (no
+  allocation once capacities are reached); the growth sequence differs. (3) The grapheme buffer grows
+  by `try_reserve` (amortized doubling), an arena stand-in.
+- **perf**: the out-of-line `try_append`/`ensure_total_capacity` calls first measured ~4% of the
+  render samples; they are inline now with the growth out of line. The fence is in the S7-5 report.
+- **state**: CLOSED (task S7-5).
+
+## N316 — a failed render-state update is followed by a partial rebuild (UD315)
+
+- **id**: N316. Not a ledger row: found by task S7-5 when the render state's allocations became
+  fallible (before S7-5 they aborted, so the path was unreachable in the port).
+- **severity**: low. **kind**: reference defect (non-crash, evident intent).
+- **what**: `beginUpdate` stores the new dimensions and viewport pin and clears page and row dirty
+  flags before the allocations that can fail; after a failure the next update is incremental and
+  leaves the unreached rows stale or empty. Details, measurement and proposed fix:
+  `UPSTREAM-DEFECTS.md` UD315.
+- **fix / proof**: `RenderState::begin_update` records the failure and the next update redraws
+  (PORT NOTE: reference defect (R13, UD315)); `failed_update_is_followed_by_a_full_rebuild` and both
+  allocation-failure sweeps compare each retried update with a fresh state; the negative control (the
+  reference's behaviour) fails them.
+- **state**: CLOSED (task S7-5).
