@@ -347,7 +347,7 @@ impl EventWrapper {
     fn deinit(&mut self) {
         if let Some(cps) = self.word_boundary_codepoints.take() {
             // if (cps.len > 0) self.alloc.free(cps);
-            cps.allocator().debug_assert_same(self.alloc);
+            self.alloc.debug_assert_same(*cps.allocator());
             drop(cps);
         }
     }

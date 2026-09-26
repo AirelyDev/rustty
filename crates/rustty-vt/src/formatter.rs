@@ -393,10 +393,10 @@ impl PinMapMap {
         // PORT NOTE: each list is bound to the allocator it grew through, so
         // dropping it frees through that allocator; `alloc` must be it.
         if self.points.capacity() != 0 {
-            self.points.allocator().debug_assert_same(alloc);
+            alloc.debug_assert_same(*self.points.allocator());
         }
         if self.nodes.capacity() != 0 {
-            self.nodes.allocator().debug_assert_same(alloc);
+            alloc.debug_assert_same(*self.nodes.allocator());
         }
         self.points = crate::alloc::AVec::new_in(crate::alloc::VtAllocator::GLOBAL);
         self.nodes = crate::alloc::AVec::new_in(crate::alloc::VtAllocator::GLOBAL);
@@ -1525,7 +1525,7 @@ impl PointMap<'_> {
     #[inline]
     fn append_n_times(&mut self, coord: Coordinate, n: usize) -> io::Result<()> {
         // The list is bound to the allocator the reference passes per call.
-        self.map.allocator().debug_assert_same(self.alloc);
+        self.alloc.debug_assert_same(*self.map.allocator());
         crate::zig_list::append_n_times(self.map, coord, n, COORDINATE_INIT_CAPACITY)
             .map_err(point_map_write_failed)
     }
@@ -1539,7 +1539,7 @@ impl PointMap<'_> {
     /// `map.map.ensureUnusedCapacity(map.alloc, n) catch return error.WriteFailed`.
     #[inline]
     fn ensure_unused_capacity(&mut self, n: usize) -> io::Result<()> {
-        self.map.allocator().debug_assert_same(self.alloc);
+        self.alloc.debug_assert_same(*self.map.allocator());
         crate::zig_list::ensure_unused_capacity(self.map, n, COORDINATE_INIT_CAPACITY)
             .map_err(point_map_write_failed)
     }
