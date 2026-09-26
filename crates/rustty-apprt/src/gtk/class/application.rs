@@ -3491,12 +3491,14 @@ impl Application {
     /// `ApprtApp`, so their callers go through the `*_thunk` seams instead
     /// (`application.zig:803-811`):
     ///
-    ///     /// Returns the core app associated with this application. This is
-    ///     /// not a reference-counted type so you should not store this.
-    ///     pub fn core(self: *Self) *CoreApp
+    /// ```text
+    /// /// Returns the core app associated with this application. This is
+    /// /// not a reference-counted type so you should not store this.
+    /// pub fn core(self: *Self) *CoreApp
     ///
-    ///     /// Returns the apprt application associated with this application.
-    ///     pub fn rt(self: *Self) *ApprtApp
+    /// /// Returns the apprt application associated with this application.
+    /// pub fn rt(self: *Self) *ApprtApp
+    /// ```
     pub fn bind_rt_app(&self, rt_app: *mut c_void) {
         self.imp().rt_app.set(NonNull::new(rt_app));
     }
