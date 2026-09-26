@@ -4230,6 +4230,12 @@ impl Surface {
         use rustty_os::ShellEscapeWriter;
         use std::os::unix::ffi::OsStrExt;
 
+        // `value: *gobject.Value` — see [`ext::drop_target_value`] (N338).
+        let Some(value) = ext::drop_target_value(value) else {
+            return false;
+        };
+        let value = &value;
+
         // gdk.FileList: shell-escape each file path and join with newlines, then
         // paste the whole blob (`:2636-2676`).
         if ext::g_value_holds(value, gdk4::FileList::static_type()) {
@@ -4297,9 +4303,23 @@ impl Surface {
         }
 
         // string: paste it verbatim (`:2703-2708`).
+        //
+        // PORT NOTE (task L-4, NEW-FINDINGS N337): `value.getString()` is a
+        // `?[*:0]const u8` and `std.mem.span` takes its bytes as they are. This
+        // was `value.get::<String>()`, which glib-rs builds with
+        // `CStr::to_str().expect("Invalid UTF-8")` (glib 0.22 `value.rs:898`):
+        // a `G_TYPE_STRING` value holding bytes that are not UTF-8 panicked
+        // inside this C callback and aborted the process (MEASURED on the VM by
+        // `drop_pastes_a_non_utf8_string_verbatim`). Whether GTK itself can
+        // deliver such a value (its text deserializers convert through a
+        // charset converter) is UNVERIFIED; the bytes are now read raw
+        // ([`raw_string_bytes`]), as the reference reads them, and NULL is the
+        // reference's `orelse`.
         if ext::g_value_holds(value, String::static_type()) {
-            if let Ok(string) = value.get::<String>() {
-                this.paste(string.as_bytes());
+            if let Some(string) = raw_string_bytes(value) {
+                #[cfg(test)]
+                tests::LAST_STRING_DROP.with(|l| *l.borrow_mut() = Some(string.clone()));
+                this.paste(&string);
             }
             return true;
         }
@@ -5221,6 +5241,10 @@ impl Surface {
         y: f64,
         this: &Surface,
     ) -> bool {
+        // `v: *const gobject.Value` — see [`ext::drop_target_value`] (N338).
+        let Some(v) = ext::drop_target_value(v) else {
+            return false;
+        };
         // `v.getUint64()`.
         let Ok(dropped_id) = v.get::<u64>() else {
             return false;
@@ -5802,6 +5826,43 @@ mod tests {
         crate::gtk::register_resources();
         let _app = crate::gtk::class::application::Application::build_default_for_test();
         Surface::new(SurfaceOverrides::default())
+    }
+
+    // The bytes the `drop` handler's string branch passed to `paste` (N337).
+    thread_local! {
+        pub(super) static LAST_STRING_DROP: RefCell<Option<Vec<u8>>> = const { RefCell::new(None) };
+    }
+
+    /// N337: a dropped `G_TYPE_STRING` whose bytes are not UTF-8 reaches `paste`
+    /// verbatim, and the handler answers `true` (the reference's `return 1`).
+    /// Through `value.get::<String>()` the same value made glib-rs panic inside
+    /// the C callback and abort the process.
+    #[test]
+    #[ignore = "requires a display; run via cargo test -p rustty-apprt --features gtk,x11,wayland --lib drop_pastes_a_non_utf8 -- --ignored"]
+    fn drop_pastes_a_non_utf8_string_verbatim() {
+        use glib::translate::ToGlibPtrMut;
+        let surface = display_surface();
+        let target = surface.imp().drop_target.get();
+        let raw: &[u8] = b"caf\xe9 \xff\xfe";
+        let mut value = glib::Value::from_type(glib::Type::STRING);
+        let owned = CString::new(raw).expect("no interior NUL");
+        // SAFETY: `value` is a `G_TYPE_STRING` value; `g_value_set_string`
+        // copies the NUL-terminated buffer.
+        unsafe {
+            glib::gobject_ffi::g_value_set_string(value.to_glib_none_mut().0, owned.as_ptr())
+        };
+        LAST_STRING_DROP.with(|l| *l.borrow_mut() = None);
+        let accepted = target.emit_by_name::<bool>(
+            "drop",
+            &[&glib::value::BoxedValue(value), &10.0f64, &10.0f64],
+        );
+        assert!(accepted, "the string branch answers true");
+        let pasted = LAST_STRING_DROP.with(|l| l.borrow_mut().take());
+        assert_eq!(
+            pasted.as_deref(),
+            Some(raw),
+            "the string branch ran and passed the bytes verbatim"
+        );
     }
 
     /// UD295 (R13): `surface_drop` answers `GtkDropTarget::drop`'s `gboolean`.

@@ -5851,3 +5851,85 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   `{3: /dev/pts/ptmx}` leaks); the slave leak is this finding.
 - **UD id**: UD320, with its `docs/ghostty-bug-fixes.md` row.
 - **state**: CLOSED (parity tail L-4).
+
+## N336 — `TemplateCallbackReturn` told gboolean template callbacks to return `i32`, which aborts under glib-rs
+
+- **id**: N336. Not a ledger row: found by task L-4's GTK signal survey (UD295 follow-up).
+- **severity**: low today (latent: no callback used the alias), high if followed (a process abort on the
+  signal). **kind**: port defect (wrong guidance in a type alias and its docs).
+- **what**: `crates/rustty-apprt/src/gtk/class.rs` carried the reference's `class.zig:348-352` guard ("bound
+  function must return c_int instead of bool") as `pub type TemplateCallbackReturn = i32`, documented "must
+  return `i32`, never Rust `bool`". A `#[template_callback]` is called through glib-rs's closure marshaller,
+  which asserts the returned `GValue`'s type is the signal's return type (glib 0.22 `closure.rs:243-247`); an
+  `i32` is `G_TYPE_INT`, so on a `gboolean` signal it panics inside the C callback and aborts.
+- **fix**: the alias is `bool` (`TEMPLATE_CALLBACK_RETURN = true`), with a CORRECTION note quoting the old text.
+  Test `gtk::class::tests::template_callback_return_answers_a_gboolean_signal` (no display:
+  `GApplication::name-lost`, a `gboolean` signal): the handler runs once and its `TRUE` reaches the emitter.
+  NEGATIVE CONTROL (VM): the alias back to `i32` aborts the test process with "Closure returned a value of
+  type gint but caller expected gboolean", then "panic in a function that cannot unwind" (SIGABRT).
+- **state**: CLOSED (parity tail L-4).
+
+## N337 — the surface paste `drop` handler aborted on a dropped string that is not UTF-8
+
+- **id**: N337. Not a ledger row: found by task L-4's GTK signal survey.
+- **severity**: low (reachability through GTK UNVERIFIED). **kind**: port defect (a panic in a C callback where
+  the reference reads bytes).
+- **what**: `Surface::drop` (`crates/rustty-apprt/src/gtk/class/surface.rs`) read the string branch with
+  `value.get::<String>()`, which glib-rs builds with `CStr::to_str().expect("Invalid UTF-8")` (glib 0.22
+  `value.rs:898`); the reference (`surface.zig:2768-2773`) takes `value.getString()`'s bytes with
+  `std.mem.span`. GTK's text deserializers convert through a charset converter, so whether GTK can deliver
+  such a value is UNVERIFIED.
+- **fix**: the bytes are read raw with the existing `raw_string_bytes` (`g_value_get_string`), NULL skipped as
+  the reference's `orelse`. Test `drop_pastes_a_non_utf8_string_verbatim` (display, `#[ignore]`d; VM under a
+  private headless sway): emitting `drop` on `drop_target` with `b"caf\xe9 \xff\xfe"` answers `true` and the
+  string branch passes exactly those bytes to `paste` (a `cfg(test)` thread-local records them). NEGATIVE
+  CONTROL (VM): `value.get::<String>()` restored aborts the process ("Invalid UTF-8: Utf8Error { valid_up_to:
+  3, .. }", "panic in a function that cannot unwind", SIGABRT).
+- **state**: CLOSED (parity tail L-4).
+
+## N338 — the surface's two `GtkDropTarget::drop` handlers read the signal's boxed parameter as the dropped value: drag-and-drop never pasted and never moved a split
+
+- **id**: N338. Not a ledger row: found by task L-4 while writing N337's test (the string branch was never
+  reached).
+- **severity**: high for the feature (file/text drops and split drag-and-drop silently did nothing on Linux).
+  **kind**: port defect (marshalling).
+- **what**: GTK declares `drop`'s first parameter as `G_TYPE_VALUE`. A C handler (the reference's `dtDrop` /
+  `surfaceDrop`, and gtk4-rs's typed `connect_drop` trampoline) receives the dropped `const GValue *` itself;
+  a `#[template_callback]` receives the signal's PARAMETER `GValue`, a box around it, and `&glib::Value`'s
+  `FromValue` returns that box unchanged. So in `Surface::drop` every `G_VALUE_HOLDS(FileList / File /
+  gchararray)` was false and the handler returned `true` having done nothing, and in `surface_drop`
+  `get::<u64>()` always failed, so it returned `false` before `move_split` (UD295's fix made it answer the
+  signal, but it could not yet accept a drop). No test had reached either branch: the UD295 test and the
+  headed KAT emit values that are rejected either way.
+- **fix**: `ext::drop_target_value` unboxes the parameter (`BoxedValue`), and both handlers branch on the
+  dropped value (`None`, which GTK never emits, answers `false`). Tests: `ext::tests::
+  drop_target_value_unboxes_the_signal_parameter` (no display) and N337's
+  `drop_pastes_a_non_utf8_string_verbatim`, which asserts the string branch ran. NEGATIVE CONTROL (VM): the
+  unboxing removed from `drop`, that test fails with `left: None` (the string branch never ran). The headed
+  KAT `gtk_parity_callbacks::parity_callbacks_do_not_abort` and `surface_drop_answers_the_gboolean_drop_signal`
+  pass with the fix. A real pointer-driven drop was not performed (UNVERIFIED end to end; the emission
+  matches GTK's `G_TYPE_VALUE` parameter).
+- **state**: CLOSED (parity tail L-4).
+
+## N339 — survey: every GTK signal connection's return type, port against reference (UD295 follow-up)
+
+- **id**: N339. Task L-4, TASK B. Port at `tail-l4`, reference at `20abdb50a`, return types from the VM's
+  `Gtk-4.0`/`Gdk-4.0`/`Gio-2.0`/`GObject-2.0`/`Adw-1` GIR (glib 0.22.8, gtk4 0.11.4, libadwaita 0.9.2).
+- **scope**: 104 blueprint bindings (the reference's 1.2-1.5 blueprints, same set; 28 `notify::*`), 40
+  production code connections (17 typed `connect_*`, 19 `connect_local`, 1 `connect_closure`, 1 GSignalGroup
+  closure, 1 raw `g_signal_connect_data`, the width/height pair counted twice), 3 GDBus subscriptions, 21 custom
+  signals (all `void` on both sides), 14 test-only connections.
+- **value-returning signals (16 bindings, all return the declared type in the port)**: `GtkGLArea::render` x2
+  (bool), `GtkEventControllerKey::key-pressed` x3 (bool), `GtkEventControllerScroll::scroll` x3 (bool),
+  `GtkDropTarget::drop` x2 (bool), `GtkDropTarget::motion` (`DragAction`), `GtkDragSource::prepare`
+  (`ContentProvider`), `GtkWindow::close-request` (`Propagation`), `AdwTabView::close-page` (`Propagation`),
+  `AdwTabView::create-window` (`TabView`), `AdwTabOverview::create-tab` (`TabPage`). Every untyped code
+  connection is on a `void` signal and returns `None`.
+- **reference**: one `void` handler on a value-returning signal, `surfaceDrop` on `GtkDropTarget::drop`
+  (UD295, already fixed); every other value-returning reference handler returns `c_int` or the right pointer.
+  No new reference defect, so no new UD.
+- **port defects found**: N336, N337, N338 (above), all fixed.
+- **not audited**: handler bodies beyond explicit `unwrap`/`expect`/`panic!`/`unreachable!`; class vfunc
+  overrides (typed by gtk4-rs). The `core().expect(..)` sites in `surface_drag_prepare`/`surface_drop` and
+  `Application::default()` in `on_tab_create_window` are the reference's `.?` invariants (R7).
+- **state**: CLOSED (parity tail L-4).
