@@ -5035,3 +5035,126 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   `std.os.linux.getauxval` reads an auxv pointer only Zig's own `_start` sets. Details and proposed
   fix: `UPSTREAM-DEFECTS.md` UD291; PORT NOTE at the port's detector (`d03d273d`).
 - **state**: CLOSED (task L-1).
+
+## N320 — S7-7 routing and borrowing: the OSC parser (S174-F3 closed; N263 resolved)
+
+- **id**: N320. Not a ledger row: records the S7-7 scope decisions (closes S174-F3).
+- **severity**: informational. **kind**: allocator routing (T1/T2/T3 of the S-7 design) and borrowed payloads.
+- **routed (T1)**: everything the reference sends through `parser.alloc` at the pin (`src/terminal/osc.zig`,
+  `osc/parsers/*.zig`, `c/osc.zig`): the C parser itself (`alloc.create(osc.Parser)`, vt-c `create`), the
+  allocating capture (part 1, tail-a2), `color_operation.requests` (`SegmentedList(Request, 2)`: nothing for up to
+  two requests, the shelf array and shelf 0 for the third, then a new shelf array and shelf 1 for the seventh) and
+  `kitty_color_protocol.list` (an `ArrayList`, first reservation `growCapacity(1)`). Nothing else: the reference's
+  other parsers allocate nothing, and neither does the port now.
+- **N263 resolved**: the command's text payloads were owned `Vec<u8>` copies (about 15 `Command` variants, the
+  nested kitty clipboard / dnd / desktop-notification / text-sizing / semantic-prompt / context-signal payloads,
+  their option values, and a deep `Box<Command>` clone per dispatch through `Parser::next` and a clone on the stream's
+  OSC fast path). They are borrowed now: `osc::Command<'p>` holds `ZStr<'p>` (`[:0]const u8`: the NUL sentinel is
+  inside the borrow, so a C reader of `rustty_osc_command_data`'s string stays inside it) and `&'p [u8]`. The lists
+  are the parser's (`color_requests`, `kitty_color`: what the reference's `parser.command` owns) and are freed at
+  `reset`/`deinit` as the reference's switch frees them; the command borrows them, owns nothing, and is `Copy` like
+  the reference's `cmd.*`.
+- **lifetime design**: `Parser::end(&mut self) -> Option<Command<'_>>`. The reference's documented lifetime ("only
+  valid until the next call to the parser") is the borrow, checked by the compiler; no raw pointers. The command is
+  not a parser field (it would be self-referential and dangle when the parser moves). `parser::Action<'p>` carries
+  the borrowed command; `Parser::next` computes the `osc_string` exit last (unobservable: the table leaves
+  `osc_string` only on BEL/ESC/CAN/SUB, whose transitions and entries do not touch the OSC parser); the stream
+  detaches the other actions (`Action::into_static`) and dispatches `osc_dispatch` against the handler alone. The one
+  lifetime erasure is in vt-c: the wrapper keeps the last command for the C pointer and clears it first in every
+  entry point that touches the parser (`next`, `reset`, `end`, `free`); the wrapper never moves, and the header's
+  lifetime ("valid until the next call ... except command introspection") is exactly that. No header change.
+- **fallibility (T2)**: `parseColor` failing takes the reference's `catch` (`log.info("failed to parse OSC {t} color
+  request err={} data={s}")`, an empty list); a refused kitty `append` warns and continues; the capture keeps its
+  fixed fallback and `WriteFailed` → invalid; `rustty_osc_new` answers `OUT_OF_MEMORY`. The C-API failure sweep
+  (`osc_allocation_failure_sweep_through_the_c_api`) swept 14 allocation indices and every remap index (2).
+- **T3 / deviations**: the kitty list's element size is Rust's, so `growCapacity(1)`'s `cache_line / @sizeOf(T)`
+  differs from Zig's; SegmentedList `shrinkCapacity` always takes the "resize refused" arm (allocator_api2 has no
+  in-place resize; the global heap's adapter refuses anyway, N273); the per-dispatch `Box` of the borrowed command in
+  `Parser::next` stays on the Rust heap (the existing PERF boxing of every dispatch payload, `CSI`/`ESC`/`DCS` too;
+  the reference copies the union by value). Test adaptations: reference tests that read `p.state` while holding
+  `Parser::next`'s actions use a detached-actions helper; `osc: change window title (end in esc)` reads the command
+  before `next('\\')`, which the borrow requires (the reference reads it after, relying on that call not touching
+  the OSC buffer).
+- **API changes** (Rust-side, no C change): `osc::Parser` and `vt::Parser` lose their lifetime parameter;
+  `stream::Stream<H>` (was `Stream<'a, H>`); `stream::Options.allocator: Option<alloc::Allocator>`;
+  `Stream::init_in` removed (S7-4's); `Handler::semantic_prompt(SemanticPrompt<'_>)`,
+  `kitty_clipboard(KittyClipboardProtocol<'_>)`, `kitty_dnd(KittyDndProtocol<'_>)`,
+  `kitty_color_report(&kitty::color::OSC)`, `color_operation(ColorOperation<'_>)` (with `requests: &List`).
+- **state**: CLOSED (parity tail S7-7).
+
+## N321 — `parseGetSetDynamicColor` leaks its grown list when a later `addOne` fails (reference defect, R13)
+
+- **id**: N321. Not a ledger row: found by S7-7 porting the list's growth.
+- **severity**: low. **kind**: reference defect (leak on allocation failure), fixed under R13.
+- **where**: `src/terminal/osc/parsers/color.zig` `parseGetSetDynamicColor` at pin `20abdb50a`: `var result: List =
+  .{};` with no `errdefer result.deinit(alloc);`, unlike its three siblings (`parseGetSetAnsiColor`,
+  `parseResetAnsiColor`, `parseResetDynamicColor`).
+- **reachable**: an OSC 10 (or 11..19) from the pty with seven or more values, while the parser's allocator refuses
+  the seventh request's growth (a C embedder's limited allocator): the third request grew the shelf array and
+  shelf 0, the seventh's `try result.addOne(alloc)` fails, and `result` is dropped without `deinit`. ReleaseSafe and
+  ReleaseFast: the two allocations leak (the caller's `catch` returns an empty list).
+- **port**: `color::List` frees on drop, so the error path frees what it grew (`PORT NOTE: reference defect (R13),
+  N321` in `crates/rustty-vt/src/osc/parsers/color.rs`). Test `dynamic_color_list_growth_failure_frees_what_it_grew`
+  (FailingAllocator `fail_index 2`: allocated == freed, and the catch's log ran); negative control: the list
+  forgotten on the error path leaks 28 bytes and fails the test.
+- **upstream fix**: add `errdefer result.deinit(alloc);` after `var result: List = .{};`.
+- **UD id**: not allocated in this batch's dispatch (N ids only); the controller assigns one and the
+  `docs/ghostty-bug-fixes.md` line.
+- **state**: CLOSED (parity tail S7-7), UD entry owed.
+
+## N322 — the vendored `SegmentedList.growCapacity` cleanup frees the slot that failed (latent reference defect)
+
+- **id**: N322. Not a ledger row: found by S7-7 porting `src/datastruct/segmented_list.zig`.
+- **severity**: low. **kind**: latent reference defect (vendored Zig 0.15.2 std code).
+- **where**: `growCapacity`'s `errdefer while (i > old_shelf_count) : (i -= 1) { allocator.free(
+  new_dynamic_segments[i][0..shelfSize(i)]); }`: when the allocation of shelf `i` fails, the cleanup frees
+  `new_dynamic_segments[i]` (never written: an undefined pointer) and stops before `old_shelf_count` (leaking the
+  first new shelf).
+- **reachable**: only when one call adds two or more shelves (`setCapacity`/`growCapacity` with a large capacity)
+  and a later shelf fails. `addOne`, libghostty-vt's only caller (the OSC color list), adds at most one shelf per
+  call, so it is not reachable there.
+- **port**: frees exactly the shelves the call allocated (`PORT NOTE ... N322` in `rustty_datastruct::segmented_list`);
+  test `a_refused_shelf_in_a_multi_shelf_growth_frees_the_new_shelves` (exact call log); negative control: without
+  the cleanup the shelves leak and the call log differs.
+- **upstream fix**: free indices `old_shelf_count..i` (e.g. `errdefer while (i > old_shelf_count) { i -= 1;
+  allocator.free(...[i]...); }`).
+- **UD id**: owed (kind: latent), as N321.
+- **state**: CLOSED (parity tail S7-7), UD entry owed.
+
+## N323 — `ghostty_osc_command_data` traps on a NULL command the header allows (reference defect, R13)
+
+- **id**: N323. Not a ledger row: found by S7-7's C-API failure sweep.
+- **severity**: medium. **kind**: reference defect (crash / UB), fixed under R13.
+- **where**: `src/terminal/c/osc.zig` `commandDataTyped`: `const command = command_.?;`. The header
+  (`include/ghostty/vt/osc.h`) documents `command` as "may be NULL", and `ghostty_osc_end` returns NULL for every
+  invalid or unfinished OSC.
+- **reachable**: a C caller that asks the result of `end` for its title (`GHOSTTY_OSC_DATA_CHANGE_WINDOW_TITLE_STR`)
+  after an OSC the parser rejected (bytes from the pty). ReleaseSafe: panic; ReleaseFast: a NULL dereference (UB).
+  The port had the same dereference (`&*command_`).
+- **port**: a NULL command answers `false` and leaves `out` untouched, as `commandType` answers NULL with `.invalid`
+  (`PORT NOTE: reference defect (R13), N323` in `crates/rustty-vt-c/src/osc.rs`). Test
+  `command_data_on_a_null_command_is_false`; negative control: without the guard the test process aborts on the
+  NULL dereference.
+- **upstream fix**: `const command = command_ orelse return false;`.
+- **UD id**: owed, as N321.
+- **state**: CLOSED (parity tail S7-7), UD entry owed.
+
+## N324 — a borrowed OSC command that owned its lists cost the per-byte parser loop up to 2.2x
+
+- **id**: N324. Not a ledger row: found by S7-7's perf fence.
+- **severity**: informational. **kind**: performance (codegen), resolved.
+- **what**: with the borrowed `Command<'p>` owning its two lists, `terminal-parser` measured +43% (utf8) and +118%
+  (pure ASCII) against `d8bb504d`. The per-byte `[Option<Action>; 3]` that `Parser::next` returns is discarded, and
+  it costs nothing only while LLVM folds its drop away after inlining. The lists' frees (through the allocator
+  handle, may-unwind to the caller's codegen) put unwind cleanup into the array's drop, which then indexed the
+  array dynamically and kept it in memory, and the larger drop glue stopped the jump threading that makes the print
+  path skip it. Outlining the exit, `nounwind` `extern "C"` frees and an out-of-line command drop each recovered
+  part and moved the register allocation of the rest.
+- **fix**: the lists belong to the parser (as the reference's `parser.command` owns them) and are freed at `reset`;
+  the command owns nothing, and `Box<Command>`'s drop is a deallocation like the other boxed actions. Paired fence
+  (N=31, load 6-11): osc-parser -4.5%, terminal-parser/utf8 -0.6%, terminal-parser/ascii -0.5%,
+  terminal-stream/ascii -0.3%, an OSC-heavy stream -6.6%.
+- **lesson**: anything that gives `Action`'s drop glue work or an unwind edge shows on the per-byte parser loop.
+  Note that `utf8.bin` is OSC-heavy for the VT parser: its many `0x9D` bytes (a UTF-8 continuation byte) enter
+  `osc_string`.
+- **state**: CLOSED (parity tail S7-7).

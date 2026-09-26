@@ -922,6 +922,16 @@ config's 4 remaining G3b misses and global's 31.
    `Vec<EntryOrAlias>` moves elements on realloc and invalidates the alias
    pointers, which is UB in Rust rather than merely wrong — so the `Box` is
    guarded by the type, not by a comment.
+5. **CORRECTION (parity tail S7-7, N320).** Point 2's first leg no longer
+   holds. Once the OSC color `List` grows through the C caller's allocator
+   (S174-F3), `SegmentedList`'s shape is observable to that allocator: two
+   preallocated slots mean an OSC with one or two requests allocates nothing,
+   and the shelves are the calls it sees for more; a `Vec` allocates on the
+   first push and doubles. The file is now ported as
+   `crates/rustty-datastruct/src/segmented_list.rs` (its two reference tests
+   included), and `color::List` is `SegmentedList<Request, 2, VtAllocator>`.
+   `collection.rs` keeps its `Vec<Box<_>>` (its allocations are not
+   caller-routed).
 
 ## A2 — `src/lib/compat/fd.zig` (NEW, 74 lines) — N/A
 
