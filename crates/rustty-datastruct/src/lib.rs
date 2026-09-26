@@ -21,6 +21,7 @@ pub mod intrusive_linked_list;
 pub mod limited_allocator;
 mod main_mod;
 pub mod message_data;
+pub mod segmented_list;
 pub mod split_tree;
 pub mod wasm_page_pool;
 
@@ -39,5 +40,6 @@ pub use circ_buf::CircBuf;
 pub use intrusive_linked_list::DoublyLinkedList as IntrusiveDoublyLinkedList;
 pub use limited_allocator::LimitedAllocator;
 pub use message_data::MessageData;
+pub use segmented_list::SegmentedList;
 pub use split_tree::SplitTree;
 pub use wasm_page_pool::WasmPagePool;
