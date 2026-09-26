@@ -75,7 +75,14 @@ point) is test-only, and so are the private fns only it calls. Conservative by
 construction: a reference is ANY occurrence of the name as an identifier in any
 reference file, so an unrelated field or fn of the same name keeps it counted; a
 quoted `"name"` anywhere (reflection) keeps it counted; only a same-name
-re-export `const name = x.name;` is transparent. `LOG-DEAD-SITES.tsv` also gains
+re-export `const name = x.name;` is transparent. Task S-1d (review S-1c): a name
+whose only references sit inside its own same-name bodies (recursion, or a
+delegation `self.inner.hook()`) has NO caller and stays counted (F1); every
+`pub fn` of a file `@import`ed by a file that walks declarations by reflection
+(`@typeInfo(T).@"struct".decls`, `std.meta.declarations`) is treated like a
+quoted one (F2). "Test-only" means "no production caller in the reference
+tree": a `pub fn` of a module other programs import (libghostty-vt re-exports
+`PageList`) is still classified by the tree's own callers (F3). `LOG-DEAD-SITES.tsv` also gains
 the kind `unreferenced-pub` (a site in a `pub fn` that nothing in the tree names,
 which Zig never analyses), verified against the same index.
 
@@ -373,8 +380,48 @@ def zig_tree_index(files):
     for name, entry in index.items():
         needle = '"' + name + '"'
         entry["quoted"] = any(needle in t for t in files.values())
+    # REFLECTION (review S-1c F2). Production code can call a `pub fn` without
+    # writing its name: `for (@typeInfo(s).@"struct".decls) |d| ... @field(s,
+    # d.name)` (font/sprite/Face.zig:60-104 dispatches every `draw*` fn of eight
+    # imported files this way) or `std.meta.declarations(T)`. The name index
+    # cannot see such a call, so every `pub fn` of a file that a reflecting
+    # file `@import`s is treated like a quoted one: never test-only, never
+    # `unreferenced-pub`. Conservative: the WHOLE import list of the reflecting
+    # file, whichever container the loop walks.
+    reflected = zig_reflected_files(files)
+    for name, entry in index.items():
+        entry["reflected"] = any(d[0] in reflected for d in entry["defs"])
     index[None] = code
     return index
+
+
+ZIG_DECL_REFLECTION = re.compile(
+    r'@typeInfo\s*\([^)]*\)\s*\.\s*@"(?:struct|enum|union|opaque)"\s*\.\s*decls'
+    r"|\bmeta\s*\.\s*declarations\s*\("
+)
+ZIG_IMPORT = re.compile(r'@import\s*\(\s*"([^"]+\.zig)"\s*\)')
+
+
+def zig_reflected_files(files):
+    """Files whose `pub fn`s production code may call by declaration reflection:
+    every `.zig` that a file with a PRODUCTION (not test-only) decl-reflection
+    line `@import`s."""
+    out = set()
+    for rel, text in files.items():
+        lines = text.split("\n")
+        test_only = zig_test_only_lines(text)
+        hits = [
+            k for k, line in enumerate(lines, 1)
+            if k not in test_only
+            and not line.lstrip().startswith("//")
+            and ZIG_DECL_REFLECTION.search(line.split("//")[0] if '"' not in line else line)
+        ]
+        if not hits:
+            continue
+        base = os.path.dirname(rel)
+        for m in ZIG_IMPORT.finditer(text):
+            out.add(os.path.normpath(os.path.join(base, m.group(1))))
+    return out
 
 
 def zig_tree_test_only(files, index=None):
@@ -406,13 +453,22 @@ def zig_tree_test_only(files, index=None):
         changed = False
         cache = {}
         for name, entry in index.items():
-            if name is None or name in tree_fns or entry["quoted"] or not entry["refs"]:
+            if (name is None or name in tree_fns or entry["quoted"]
+                    or entry.get("reflected") or not entry["refs"]):
+                continue
+            # A reference inside one of the name's own bodies (recursion, or a
+            # same-name delegation `self.inner.hook()`) is not a caller. With no
+            # caller left the fn is not test-only: it is unreferenced, which is a
+            # declared, capped `unreferenced-pub` row's business, never automatic
+            # (review S-1c F1; the file rule's own `refs and all(...)`).
+            callers = [
+                (rel, p) for rel, p in entry["refs"]
+                if not any(d[0] == rel and d[2][0] <= p <= d[2][1] for d in entry["defs"])
+            ]
+            if not callers:
                 continue
             ok = True
-            for rel, p in entry["refs"]:
-                # recursion inside one of its own bodies is not a caller
-                if any(d[0] == rel and d[2][0] <= p <= d[2][1] for d in entry["defs"]):
-                    continue
+            for rel, p in callers:
                 if rel not in cache:
                     cache[rel] = file_regions(rel)
                 regions, lines_only, starts = cache[rel]
@@ -473,14 +529,21 @@ def zig_enclosing_pub_fn(index, rel, line):
 # THREE emission shapes coexist in this port; a scanner that knows only the first
 # reads whole crates as emitting nothing (see `discover_emitters`).
 #   1. `log::warn!(target: LOG_SCOPE, ...)`  — the `log` facade, most crates.
-#   2. `eprintln!("warn(gtk): ...")`         — crates that reproduce Zig's default
+#   2. `eprintln!("warning(gtk): ...")`      — crates that reproduce Zig's default
 #      `logFn` output inline, prefix and all (`rustty-apprt`'s GTK tree, and every
 #      `log_*` helper in `rustty-os` / `rustty-config`). Only an `eprintln!` whose
 #      format string CARRIES THAT PREFIX counts: a bare `eprintln!` is ordinary
 #      program output (help-text failures, test-harness skip lines) and counting
 #      it would manufacture emissions the reference never asked for.
 #   3. a `log_*` macro_rules / fn facade wrapping either of the above.
-LOGFN_PREFIX = r'"\s*(?:warn|debug|info|err|error)\s*\('
+# THE PREFIX IS THE ONE ZIG PRINTS (review S-1c F5). `std.log.Level.asText()` is
+# `error`, `warning`, `info`, `debug`, and the default logFn writes
+# `<level>(<scope>): ` for a scoped logger and `<level>: ` for the default scope
+# (`std.log.warn` unscoped). Until task S-1d the scanner accepted `warn(` and
+# `err(` — text no logFn prints — and REJECTED `warning(`, so it steered 25
+# direct prints to a line shape the reference never produces; they were fixed
+# and the wrong shapes are no longer counted.
+LOGFN_PREFIX = r'"\s*(?:error|warning|info|debug)(?:\([^)"]*\))?:'
 FACADE_CALL = re.compile(r"\blog::(?:warn|error|info|debug|trace)!")
 EPRINTLN_LOGFN = re.compile(r"\beprintln!\s*\(\s*" + LOGFN_PREFIX)
 
@@ -920,8 +983,8 @@ ZIG_CALL_IN_COMMENT = re.compile(
     # stream parser for the sake of one regex alternative.
     r"|(?P<once>logUnsupportedOnce)\s*\("
 )
-LOGFN_PREFIX_TEXT = re.compile(r"^(?:warn|debug|info|err|error)\([^)]*\):\s?")
-LEVEL_ALIAS = {"error": "err"}
+LOGFN_PREFIX_TEXT = re.compile(r"^(?:error|warning|info|debug)(?:\([^)]*\))?:\s?")
+LEVEL_ALIAS = {"error": "err", "warning": "warn"}
 # Below this, an emission and a leftover comment are NOT treated as a pair. Tuned
 # so a truncation scores above it against its own comment while two unrelated
 # messages sharing a scope prefix do not; see `pair_messages`.
@@ -1083,7 +1146,8 @@ def live_emission_messages(code, nc):
             level = LEVEL_ALIAS.get(m.group(1), m.group(1))
         else:  # a facade-bypassing print carries the level in its logFn prefix
             pm = LOGFN_PREFIX_TEXT.match(msg or "")
-            level = LEVEL_ALIAS.get(pm.group(0).split("(")[0], pm.group(0).split("(")[0]) if pm else None
+            word = re.match(r"[a-z]+", pm.group(0)).group(0) if pm else None
+            level = LEVEL_ALIAS.get(word, word) if pm else None
         out.append((code.count("\n", 0, pos) + 1, level, msg))
     return out
 
@@ -2513,11 +2577,11 @@ def verdict(portmap, claims, zig_text, rust_text, facade_sources=None, report=Fa
                 # against, so the row is RED.
                 name = zig_enclosing_pub_fn(TREE_INDEX, d["file"], d["line"]) if TREE_INDEX else None
                 entry = TREE_INDEX.get(name) if name else None
-                if entry is None or entry["refs"] or entry["quoted"]:
+                if entry is None or entry["refs"] or entry["quoted"] or entry.get("reflected"):
                     dead_referenced.append(
                         (d["file"], d["line"], name,
                          len(entry["refs"]) if entry else None,
-                         entry["quoted"] if entry else None)
+                         (entry["quoted"] or entry.get("reflected")) if entry else None)
                     )
             if not d["reason"]:
                 dead_no_reason.append((d["file"], d["line"]))
@@ -3320,7 +3384,7 @@ SELF_RS_STUB = 'fn log_warn_a() {\n    // log.warn("a", .{});\n}\nfn a() { log_w
 # prefix is the whole signal: the second `eprintln!` here is ordinary program
 # output and must NOT be counted, or the gate manufactures emissions.
 SELF_RS_EPRINTLN = (
-    'fn a() { eprintln!("warn(gtk): could not do the thing err={err:?}"); }\n'
+    'fn a() { eprintln!("warning(gtk): could not do the thing err={err:?}"); }\n'
     'fn b() { eprintln!("usage: rustty [options]"); }\n'
 )
 
@@ -3441,6 +3505,28 @@ def self_test():
         ("a bare eprintln! is NOT an emission",
          run([("src/eprint2.zig", "c/eprint.rs", "0", "1", "N14")])[0], 1)
     )
+    # 10b2. THE LINE SHAPE IS ZIG'S (review S-1c F5): `<level>(<scope>): ` with
+    #       the level text `asText()` gives (`error`/`warning`/`info`/`debug`),
+    #       and `<level>: ` for the default scope. `warn(`/`err(` are text no
+    #       logFn prints and do not count; a bare `eprintln!` never does.
+    SHAPES = [
+        ('eprintln!("warning(gtk): x");', True, "warn"),
+        ('eprintln!("error(atlas): x");', True, "err"),
+        ('eprintln!("info(a): x");', True, "info"),
+        ('eprintln!("debug({LOG_SCOPE}): x");', True, "debug"),
+        ('eprintln!("error: usage: x");', True, "err"),
+        ('eprintln!("warning: x");', True, "warn"),
+        ('eprintln!(\n    "warning(s): x"\n);', True, "warn"),
+        ('eprintln!("warn(gtk): x");', False, None),
+        ('eprintln!("err(cgroup): x");', False, None),
+        ('eprintln!("usage: rustty [options]");', False, None),
+        ('eprintln!("errors: 3");', False, None),
+    ]
+    for src_, counts, level in SHAPES:
+        fx = "fn f() { " + src_ + " }\n"
+        got = live_emission_messages(rust_strip(fx), rust_strip_comments_only(fx))
+        cases.append((f"logFn shape {src_!r} counts={counts} level={level}",
+                      (len(got), got[0][1] if got else None), (1 if counts else 0, level)))
     # 10c. the BYPASS ratchet: a direct print over the declared cap is RED, and a
     #      cap larger than what is measured is RED too (same ratchet as allowances).
     #      `c/eprint.rs` carries exactly one facade-bypassing print.
@@ -3975,6 +4061,61 @@ def self_test():
             TREE_TEST_ONLY.pop(t, None)
     cases.append(("unreferenced-pub with no tree index to verify against is RED (that check)",
                   run_tt([UNREF], [TOR], "`unreferenced-pub`"), 1))
+
+    # 10m4. Review S-1c F1: a name whose only references are inside its own
+    #       same-name bodies (a delegation `self.inner.hook()`) has NO caller;
+    #       it stays counted (unreferenced is a declared row's business).
+    DEL = {
+        "src/del_a.zig": (
+            'const log = std.log.scoped(.x);\n'
+            'pub fn hook() void { log.warn("delegated site", .{}); }\n'
+        ),
+        "src/del_b.zig": (
+            'const Inner = @import("del_a.zig");\n'
+            'pub fn hook(self: anytype) void { self.inner.hook(); }\n'
+        ),
+    }
+    del_map, del_fns = zig_tree_test_only(DEL)
+    TREE_TEST_ONLY.update(del_map)
+    try:
+        cases.append(("tree rule: a name referenced only by same-name delegation has no "
+                      "caller and stays counted",
+                      (zig_prod_sites(DEL["src/del_a.zig"]), del_fns), ([2], [])))
+    finally:
+        for t in DEL.values():
+            TREE_TEST_ONLY.pop(t, None)
+
+    # 10m5. Review S-1c F2: a file that walks declarations by reflection
+    #       (`@typeInfo(s).@"struct".decls` + `@field`) calls every pub fn of the
+    #       files it imports without naming them. A test naming one of them must
+    #       not make it test-only, and nothing naming it must not make it
+    #       `unreferenced-pub`.
+    REFL = {
+        "src/refl_draw.zig": (
+            'const log = std.log.scoped(.x);\n'
+            'pub fn draw2500(x: u8) void { log.warn("draw site", .{}); _ = x; }\n'
+            'pub fn draw2501(x: u8) void { log.warn("never named", .{}); _ = x; }\n'
+        ),
+        "src/refl_face.zig": (
+            'const draw = @import("refl_draw.zig");\n'
+            'pub fn render() void {\n'
+            '    inline for (@typeInfo(draw).@"struct".decls) |d| @field(draw, d.name)(1);\n'
+            '}\n'
+            'test "t" { draw.draw2500(1); }\n'
+        ),
+    }
+    refl_index = zig_tree_index(REFL)
+    refl_map, refl_fns = zig_tree_test_only(REFL, refl_index)
+    TREE_TEST_ONLY.update(refl_map)
+    try:
+        cases.append(("tree rule: pub fns of a file a production decl-reflection loop "
+                      "imports are never test-only",
+                      (zig_prod_sites(REFL["src/refl_draw.zig"]), refl_fns), ([2, 3], [])))
+        cases.append(("...and never `unreferenced-pub` (the index marks them reflected)",
+                      bool(refl_index["draw2501"]["reflected"]), True))
+    finally:
+        for t in REFL.values():
+            TREE_TEST_ONLY.pop(t, None)
 
     # 10n. ABSENT REFERENCE SITES (task tail-s1b). `src/ab.zig` has three sites;
     #      :3 is the catch arm of a call the port cannot fail, :4 shares :2's text.

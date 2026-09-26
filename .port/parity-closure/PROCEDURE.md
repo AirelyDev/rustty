@@ -388,7 +388,16 @@ point is that they become proposable upstream rather than lost in a task report.
        applies the port side's `#[cfg(test)]` rule to the reference; since task S-1c also
        across files: a `pub fn` that only test code anywhere in the reference names). Where
        the port compiles such a fn anyway, its emission is a `test-only-reference` row in
-       `LOG-PORT-ONLY.tsv`; a `pub fn` nothing names is an `unreferenced-pub` dead site;
+       `LOG-PORT-ONLY.tsv`; a `pub fn` nothing names is an `unreferenced-pub` dead site.
+       "Test-only" means "no production caller in the reference tree": a module other
+       programs import (libghostty-vt re-exports `PageList`) is still judged by the tree's
+       own callers. Two things keep a fn counted that the name index cannot see through:
+       a caller that only delegates under the same name (it is no caller), and a file that
+       walks declarations by reflection (`@typeInfo(T).@"struct".decls`), which makes every
+       `pub fn` of the files it imports reachable (task S-1d);
+     - a direct print that reproduces logFn must carry the line Zig prints:
+       `error(<scope>): `, `warning(<scope>): `, `info(<scope>): `, `debug(<scope>): `, or
+       `<level>: ` for the default scope; `warn(`/`err(` are not counted (task S-1d);
      - a site the reference never reaches goes in `LOG-DEAD-SITES.tsv`;
      - a site the reference reaches on a condition the port (or one platform arm) cannot
        produce — the catch arm of an allocation or a `bufPrint` the port writes as `format!`,
