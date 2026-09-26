@@ -114,21 +114,43 @@ pub(crate) fn append<T>(
 }
 
 /// `try list.appendNTimes(gpa, value, n)`.
-#[inline]
+///
+/// PERF(port): the fill is inline and the growth out of line. The formatter's
+/// point map calls this once per cell (`n` is the cell's byte count); with the
+/// whole function out of line it measured +7% CPU on a search-heavy probe
+/// (task S7-6's perf fence, `sample`: this function ~40% of the formatter).
+#[inline(always)]
 pub(crate) fn append_n_times<T: Copy>(
     v: &mut AVec<T>,
     value: T,
     n: usize,
     init_capacity: usize,
 ) -> Result<(), OutOfMemory> {
-    ensure_unused_capacity(v, n, init_capacity)?;
-    let len = v.len();
-    for slot in &mut v.spare_capacity_mut()[..n] {
-        slot.write(value);
+    if v.capacity() - v.len() < n {
+        ensure_unused_capacity_cold(v, n, init_capacity)?;
     }
-    // SAFETY: the first `n` spare slots were just initialized.
-    unsafe { v.set_len(len + n) };
+    let len = v.len();
+    // SAFETY: room for `n` more elements is ensured above; `T: Copy` needs no
+    // drop, and the `n` slots are initialized before the length covers them.
+    unsafe {
+        let p = v.as_mut_ptr().add(len);
+        for i in 0..n {
+            p.add(i).write(value);
+        }
+        v.set_len(len + n);
+    }
     Ok(())
+}
+
+/// The out-of-line growth of [`append_n_times`].
+#[cold]
+#[inline(never)]
+fn ensure_unused_capacity_cold<T>(
+    v: &mut AVec<T>,
+    n: usize,
+    init_capacity: usize,
+) -> Result<(), OutOfMemory> {
+    ensure_unused_capacity(v, n, init_capacity)
 }
 
 /// `list.shrinkAndFree(gpa, new_len)`: the dropped elements are dropped, then
