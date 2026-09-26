@@ -5393,7 +5393,29 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   `test-only-reference` (the port counterpart of a site the tree rule drops, verified: the match must be
   a test-only site's message) — used for PageList `compact`, whose port compiles and counts the
   emission.
-- **state**: CLOSED (task S-1c) for the rows above; the remainder is N311-N314.
+- **update (task S-1d, review S-1c)**:
+  - **F1**: the tree rule classified a name test-only when its only references were inside its own
+    same-name bodies (delegation), i.e. when it had no caller at all (`redrawInspector`, four defs, no
+    test reference, was reported test-only; no site moved). A name now needs at least one caller
+    outside its bodies; with none it stays counted. Self-test arm (delegation fixture) and mutation.
+  - **F2**: `pub fn`s called by comptime declaration reflection (`font/sprite/Face.zig:60-104` walks
+    the `draw*` fns of eight imported files) were invisible to the name index. Every `pub fn` of a
+    file `@import`ed by a file with a production `@typeInfo(T).@"struct".decls` /
+    `std.meta.declarations` line is now reflected: never test-only, never `unreferenced-pub`. 38 files
+    at the pin; the report now names 78 test-only fns, and the same 3 sites drop.
+  - **F5**: the gate's logFn prefix accepted `warn(`/`err(`, which no logFn prints, and rejected
+    `warning(`, the text Zig's `Level.asText()` gives. It now accepts exactly `error|warning|info|
+    debug` with `(<scope>): ` or, for the default scope, `: `. 25 direct prints that carried the wrong
+    prefix are corrected (`warn(` -> `warning(`, `err(` -> `error(`): imgui_widget.rs x6,
+    inspector_widget.rs x1, post_fork.rs x7, cgroup.rs x1, search/thread.rs x4, search/terminal.rs x5,
+    atlas.rs x1. Atlas.zig's two sites go through `log` now (rustty-font gains `log`; the S-1c "D1"
+    reason was a misreading: D1 forbids a vt edge), bypass cap 2 -> 0. tripwire.rs's correct
+    `warning(tripwire)` print is counted for the first time: bypass cap 1. The controller may assign
+    this record a separate id (the N310-N314 block had none left).
+  - **merge**: at the S-1d merge of parity-closure `602e8f2b` the absent rows media.zig:45 (T-D) and
+    c/terminal.zig :475 :527 :538 (S7-4) were deleted (those sites are live), and N312's row (below).
+  - Allowances: 17 over 8 files at tail-s1c -> 3 over 2 (N314) after the merge, F4 and N313.
+- **state**: CLOSED (task S-1c; updated by task S-1d). The remainder is N311 and N314.
 
 ## N311 — the GTK apprt logs three errors the reference propagates with `try`
 
@@ -5449,11 +5471,29 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   dist-resource check do not exist there (UNVERIFIED for GhosttyDist's `Resource.exists`); the port
   has no `combine_archives` binary (libtool/lipo in `archives.rs`); xtask's `wasm-patch-growable-table`
   reports its usage error as a returned `Err` string printed by xtask's `main`, not as a logFn line.
-- **decision needed**: either retire these four files as `build-tooling:` EXCLUSIONS (the budget goes
-  from 2 files / 2 sites to 6 / 8; an exclusion stops a future upstream site in them from turning the
-  gate RED, which their allowances would still catch), or port the checks into xtask with logFn-shaped
-  lines. Until then the allowances (6 units) stand, each row naming its sites.
-- **state**: OPEN.
+- **correction (review S-1c F7)**: this entry said a `build-tooling:` exclusion "stops a future
+  upstream site in them from turning the gate RED". That is false: `#!exclusion-cap files=N sites=M`
+  is an exact two-way ratchet on the excluded files' site count, so a new site in an excluded file is
+  RED, as it is under an allowance.
+- **resolution (task S-1d, controller decision on the reviewer's per-site plan)**:
+  - `Config.zig:135` PORTED: the `rustty` app crate's build.rs `reject_unsupported_target` prints
+    the default-scope line `error: iOS is not a supported target for the full Rustty build; only
+    librustty-vt supports iOS (-Demit-lib-vt)` (R2 rename declared `identity-rename` in
+    LOG-TEXT-DIVERGENCES.tsv) and exits 1. `build_checks::full_build_rejects_ios_only` tests the
+    predicate; `cargo check -p rustty --target aarch64-apple-ios` measured failing with the line.
+  - `Config.zig:445`: LOG-ABSENT-SITES `unrepresentable-state` (cargo rejects an unknown feature
+    itself: "the package 'rustty-vt-c' does not contain this feature", measured).
+  - `GhosttyDist.zig:245`: the port never chooses between a dist and a generated resource (rustty-cli
+    and rustty-apprt build scripts always generate; xtask's dist ships none), so LOG-ABSENT-SITES
+    `unrepresentable-state`.
+  - `combine_archives.zig` :19 :52: `build-tooling:` EXCLUSION (the binary does not exist in the
+    port); exclusion budget 2/2 -> 3/4.
+  - `wasm_patch_growable_table.zig:23` PORTED: xtask's `wasm-patch-growable-table` usage error prints
+    `error: usage: wasm_growable_table <input.wasm> <output.wasm>` (`report_usage_error`) and exits 1
+    (measured), keeping the reference's name, a latent copy-paste (UD301). The tests now assert the
+    `WasmPatchError::Usage` variant.
+  - All six build/* allowance units are 0.
+- **state**: CLOSED (task S-1d).
 
 ## N314 — two reference sites are test-only or never compiled, but the gate cannot verify it
 

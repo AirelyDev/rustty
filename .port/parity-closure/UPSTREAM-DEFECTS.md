@@ -2485,6 +2485,21 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 
 - upstream status: not reported
 
+### UD301 — `wasm_patch_growable_table`'s usage line names a `wasm_growable_table` binary
+- kind:            latent (copy-paste in a message)
+- upstream project: ghostty
+- severity:        low (a usage line names the wrong program)
+- reference:       `src/build/wasm_patch_growable_table.zig:9` (doc) and `:23` `std.log.err("usage: wasm_growable_table <input.wasm> <output.wasm>", .{})` at 20abdb50a; the build step names the executable `wasm_patch_growable_table` (`src/build/GhosttyLibVt.zig:73`).
+- defect:          the usage error names a program that does not exist; the binary is `wasm_patch_growable_table`.
+- ReleaseSafe:     misleading diagnostic, no behavioural effect.
+- ReleaseFast:     the same.
+- reachability:    running the build helper with the wrong argument count (only the build graph runs it, with two arguments).
+- port handling:   faithful (R13: message text stays faithful): xtask's `report_usage_error` prints the reference's line (task S-1d). Not in `docs/ghostty-bug-fixes.md`.
+- parity row(s):   NEW-FINDINGS N313.
+- test:            none for the text (xtask's `wasm_patch_rejects_*` tests assert the usage path); the line was measured (`cargo run -p xtask -- wasm-patch-growable-table onlyone`: the line, exit 1).
+- proposed fix:    `usage: wasm_patch_growable_table <input.wasm> <output.wasm>` in both places.
+- upstream status: not reported
+
 ## Candidates pending verification
 
 Assembled from this plan's progress notes on 2026-09-11. **Not verified** — do not cite as fact.
