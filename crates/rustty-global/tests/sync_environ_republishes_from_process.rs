@@ -44,22 +44,58 @@ fn sync_environ_makes_a_post_capture_mutation_visible() {
     // `setenv`/`unsetenv` calls do underneath rustty-os.
     unsafe { std::env::set_var(KEY, "after") };
 
-    // Without a re-sync, the captured snapshot is stale.
-    let stale = rustty_global::environ_map();
-    assert_eq!(
-        stale.get(KEY.as_bytes()).map(Vec::as_slice),
-        Some(b"before".as_slice()),
-        "environ_map() must NOT see a live mutation until sync_environ() \
-         re-captures — if this fails the snapshot semantics changed and the \
-         test below is no longer a meaningful check of sync_environ()"
-    );
+    #[cfg(not(windows))]
+    {
+        // Without a re-sync, the captured snapshot is stale.
+        let stale = rustty_global::environ_map();
+        assert_eq!(
+            stale.get(KEY.as_bytes()).map(Vec::as_slice),
+            Some(b"before".as_slice()),
+            "environ_map() must NOT see a live mutation until sync_environ() \
+             re-captures — if this fails the snapshot semantics changed and the \
+             test below is no longer a meaningful check of sync_environ()"
+        );
 
-    rustty_global::sync_environ();
+        rustty_global::sync_environ();
 
-    let synced = rustty_global::environ_map();
-    assert_eq!(
-        synced.get(KEY.as_bytes()).map(Vec::as_slice),
-        Some(b"after".as_slice()),
-        "sync_environ() must re-capture the process environment"
-    );
+        let synced = rustty_global::environ_map();
+        assert_eq!(
+            synced.get(KEY.as_bytes()).map(Vec::as_slice),
+            Some(b"after".as_slice()),
+            "sync_environ() must re-capture the process environment"
+        );
+    }
+
+    // N352 (task W-5): on Windows the reference's environment is the global
+    // block (`.use_global = true`), which `createMap`/`getWindows` read from the
+    // PEB on every call, so a mutation is visible at once and `syncEnviron` is a
+    // no-op there (`global.zig:307-321`). Names are case-insensitive (N340).
+    #[cfg(windows)]
+    {
+        let live = rustty_global::environ_map();
+        assert_eq!(
+            live.get(KEY.as_bytes()).map(Vec::as_slice),
+            Some(b"after".as_slice()),
+            "environ_map() must read the live environment on Windows (N352)"
+        );
+        let lower = KEY.to_ascii_lowercase();
+        assert_eq!(
+            rustty_global::environ().get_alloc(lower.as_bytes()),
+            Some(b"after".to_vec()),
+            "getAlloc must read the live environment, case-insensitively"
+        );
+        assert!(rustty_global::environ().contains_unempty_constant(lower.as_bytes()));
+
+        // SAFETY: as above, the only thread touching the environment.
+        unsafe { std::env::remove_var(KEY) };
+        assert!(
+            !rustty_global::environ().contains_constant(KEY.as_bytes()),
+            "a removal must be visible at once too"
+        );
+        assert_eq!(rustty_global::environ_map().get(KEY.as_bytes()), None);
+
+        // `syncEnviron` is `.windows => {}`: it changes nothing.
+        rustty_global::sync_environ();
+        assert_eq!(rustty_global::environ().get_alloc(KEY.as_bytes()), None);
+    }
 }

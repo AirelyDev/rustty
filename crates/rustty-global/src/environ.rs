@@ -66,10 +66,311 @@ use std::sync::{OnceLock, RwLock, RwLockReadGuard};
 /// (`shell_integration.zig` uses `swapRemove` for `GHOSTTY_BASH_ENV` and
 /// `orderedRemove` for `VTE_VERSION`/`LD_LIBRARY_PATH`). The distinction is
 /// **not observable**: the map is only ever iterated to build `envp`, where
-/// order is unspecified. rustty's map is a plain `HashMap`, which has a single
-/// `remove`, so there is no ordered/unordered choice to mirror — recorded here
-/// rather than silently dropped.
-pub type EnvMap = HashMap<Vec<u8>, Vec<u8>>;
+/// order is unspecified. rustty's map is backed by a `HashMap`, which has a
+/// single `remove`, so there is no ordered/unordered choice to mirror —
+/// recorded here rather than silently dropped.
+///
+/// PORT NOTE (N340, task W-5): the key comparison is the reference map's
+/// `EnvNameHashContext` (`std/process/Environ.zig:107-142`): byte equality
+/// everywhere except Windows, where environment variable names are
+/// case-insensitive and the map hashes and compares keys by
+/// `std.os.windows.toUpperWtf16` over their WTF-8 code points
+/// (`eqlIgnoreCaseWtf8`, `std/os/windows.zig:3754`). So on Windows `get("PATH")`
+/// finds the `Path` the system environment spells. CORRECTION: this was a
+/// plain `HashMap<Vec<u8>, Vec<u8>>`, case-sensitive on every target.
+///
+/// `insert` is the reference's `put`: an existing entry keeps its key spelling
+/// and takes the new value. [`EnvMap::put_move`] is `putMove`, which also
+/// replaces the stored key (what `putWindowsBlock` uses).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct EnvMap {
+    map: HashMap<EnvKey, Vec<u8>>,
+}
+
+/// A key of [`EnvMap`], compared as the reference's `EnvNameHashContext` does.
+#[derive(Clone, Debug)]
+struct EnvKey(Vec<u8>);
+
+impl PartialEq for EnvKey {
+    fn eq(&self, other: &Self) -> bool {
+        eql_keys(&self.0, &other.0)
+    }
+}
+
+impl Eq for EnvKey {}
+
+impl std::hash::Hash for EnvKey {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        // pub fn hash(self: @This(), s: []const u8) u32 {
+        //     switch (native_os) {
+        //         else => return std.array_hash_map.hashString(s),
+        //         .windows => {
+        //             var h = std.hash.Wyhash.init(0);
+        //             var it = unicode.Wtf8View.initUnchecked(s).iterator();
+        //             while (it.nextCodepoint()) |cp| {
+        //                 const cp_upper = if (std.math.cast(u16, cp)) |wtf16|
+        //                     std.os.windows.toUpperWtf16(wtf16)
+        //                 else
+        //                     cp;
+        //                 h.update(&[_]u8{ ... cp_upper's three low bytes ... });
+        //             }
+        //             return @truncate(h.final());
+        //         },
+        //     }
+        // }
+        // PORT NOTE: the hasher is Rust's; only the hash/equality agreement is
+        // load-bearing, and both folds are the reference's.
+        #[cfg(windows)]
+        {
+            for cp in wtf8_code_points(&self.0) {
+                let cp_upper = match u16::try_from(cp) {
+                    Ok(wtf16) => u32::from(to_upper_wtf16(wtf16)),
+                    Err(_) => cp,
+                };
+                state.write_u32(cp_upper);
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            std::hash::Hash::hash(&self.0, state);
+        }
+    }
+}
+
+/// `fn eqlKeys(a: []const u8, b: []const u8) bool`
+/// (`std/process/Environ.zig:137-142`).
+fn eql_keys(a: &[u8], b: &[u8]) -> bool {
+    // return switch (native_os) {
+    //     else => std.array_hash_map.eqlString(a, b),
+    //     .windows => std.os.windows.eqlIgnoreCaseWtf8(a, b),
+    // };
+    #[cfg(windows)]
+    {
+        eql_ignore_case_wtf8(a, b)
+    }
+    #[cfg(not(windows))]
+    {
+        a == b
+    }
+}
+
+/// PORTS: `std.os.windows.toUpperWtf16(c)` (`std/os/windows.zig:3716-3720`),
+/// whose Windows arm is `ntdll.RtlUpcaseUnicodeChar`: the port binds the same
+/// entry point (as `rustty-config`'s `path.rs` does).
+#[cfg(windows)]
+fn to_upper_wtf16(c: u16) -> u16 {
+    #[link(name = "ntdll")]
+    extern "system" {
+        fn RtlUpcaseUnicodeChar(SourceCharacter: u16) -> u16;
+    }
+    // SAFETY: `RtlUpcaseUnicodeChar` takes and returns a WCHAR by value and
+    // reads only the system's upcase table.
+    unsafe { RtlUpcaseUnicodeChar(c) }
+}
+
+/// PORTS: `std.os.windows.eqlIgnoreCaseWtf8(a, b)` (`std/os/windows.zig:3750-3779`).
+/// Compares two WTF-8 strings using the equivalent functionality of
+/// `RtlEqualUnicodeString` (with case insensitive comparison enabled).
+#[cfg(windows)]
+fn eql_ignore_case_wtf8(a: &[u8], b: &[u8]) -> bool {
+    // A length equality check is not possible here because there are
+    // some codepoints that have a different length uppercase UTF-8 representations
+    // than their lowercase counterparts, e.g. U+0250 (2 bytes) <-> U+2C6F (3 bytes).
+    // There are 7 such codepoints in the uppercase data used by Windows.
+    let mut a_it = wtf8_code_points(a);
+    let mut b_it = wtf8_code_points(b);
+    loop {
+        let Some(a_cp) = a_it.next() else { break };
+        let Some(b_cp) = b_it.next() else {
+            return false;
+        };
+        match (u16::try_from(a_cp), u16::try_from(b_cp)) {
+            (Ok(a16), Ok(b16)) => {
+                if a_cp != b_cp && to_upper_wtf16(a16) != to_upper_wtf16(b16) {
+                    return false;
+                }
+            }
+            _ => {
+                if a_cp != b_cp {
+                    return false;
+                }
+            }
+        }
+    }
+    // Make sure there are no leftover codepoints in b
+    b_it.next().is_none()
+}
+
+/// PORTS: `std.unicode.Wtf8View.initUnchecked(s).iterator()`'s
+/// `nextCodepoint` stream.
+///
+/// PORT NOTE: the reference only ever sees valid WTF-8 here (`Map.get`/`put`
+/// assert `validateKeyForFetch`/`validateKeyForPut`, and every key the port
+/// stores comes from `OsStr::as_encoded_bytes`, which is WTF-8 on Windows, or
+/// from a literal). The port does not trap on an invalid sequence: each byte of
+/// one yields `0x110000 + byte`, a value above every code point, so it is
+/// compared exactly and hashes consistently with that comparison.
+#[cfg(windows)]
+fn wtf8_code_points(mut s: &[u8]) -> impl Iterator<Item = u32> + '_ {
+    std::iter::from_fn(move || {
+        let (&first, rest) = s.split_first()?;
+        let len = match first {
+            0x00..=0x7f => 1,
+            0xc2..=0xdf => 2,
+            0xe0..=0xef => 3,
+            0xf0..=0xf4 => 4,
+            _ => 0,
+        };
+        let valid = len > 0
+            && s.len() >= len
+            && s[1..len].iter().all(|&c| c & 0xc0 == 0x80)
+            && match len {
+                3 => !(first == 0xe0 && s[1] < 0xa0),
+                4 => !(first == 0xf0 && s[1] < 0x90) && !(first == 0xf4 && s[1] > 0x8f),
+                _ => true,
+            };
+        if !valid {
+            s = rest;
+            return Some(0x11_0000 + u32::from(first));
+        }
+        let cp = match len {
+            1 => u32::from(first),
+            2 => (u32::from(first & 0x1f) << 6) | u32::from(s[1] & 0x3f),
+            3 => {
+                (u32::from(first & 0x0f) << 12)
+                    | (u32::from(s[1] & 0x3f) << 6)
+                    | u32::from(s[2] & 0x3f)
+            }
+            _ => {
+                (u32::from(first & 0x07) << 18)
+                    | (u32::from(s[1] & 0x3f) << 12)
+                    | (u32::from(s[2] & 0x3f) << 6)
+                    | u32::from(s[3] & 0x3f)
+            }
+        };
+        s = &s[len..];
+        Some(cp)
+    })
+}
+
+impl EnvMap {
+    /// `Map.init(allocator)`.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// An empty map with room for `capacity` entries.
+    #[must_use]
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            map: HashMap::with_capacity(capacity),
+        }
+    }
+
+    /// `pub fn put(self: *Map, key, value)`: `key` and `value` are copied into
+    /// the map; an existing entry keeps its key and takes the new value.
+    /// Returns the replaced value.
+    pub fn insert(&mut self, key: Vec<u8>, value: Vec<u8>) -> Option<Vec<u8>> {
+        self.map.insert(EnvKey(key), value)
+    }
+
+    /// `pub fn putMove(self: *Map, key, value)`: like [`EnvMap::insert`], but an
+    /// existing entry's key is replaced by `key` too.
+    pub fn put_move(&mut self, key: Vec<u8>, value: Vec<u8>) {
+        let key = EnvKey(key);
+        self.map.remove(&key);
+        self.map.insert(key, value);
+    }
+
+    /// `pub fn get(self: Map, key) ?[]const u8`.
+    #[must_use]
+    pub fn get<K: AsRef<[u8]> + ?Sized>(&self, key: &K) -> Option<&Vec<u8>> {
+        self.map.get(&EnvKey(key.as_ref().to_vec()))
+    }
+
+    /// `pub fn getPtr(self: Map, key) ?*[]const u8`.
+    pub fn get_mut<K: AsRef<[u8]> + ?Sized>(&mut self, key: &K) -> Option<&mut Vec<u8>> {
+        self.map.get_mut(&EnvKey(key.as_ref().to_vec()))
+    }
+
+    /// `pub fn contains(m: *const Map, key) bool`.
+    #[must_use]
+    pub fn contains_key<K: AsRef<[u8]> + ?Sized>(&self, key: &K) -> bool {
+        self.map.contains_key(&EnvKey(key.as_ref().to_vec()))
+    }
+
+    /// `swapRemove`/`orderedRemove` (see the type's PORT NOTE). Returns the
+    /// removed value.
+    pub fn remove<K: AsRef<[u8]> + ?Sized>(&mut self, key: &K) -> Option<Vec<u8>> {
+        self.map.remove(&EnvKey(key.as_ref().to_vec()))
+    }
+
+    /// `pub fn count(self: Map) Size`.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.map.len()
+    }
+
+    /// `count() == 0`.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.map.is_empty()
+    }
+
+    /// `pub fn iterator(self: *const Map)`: every entry, with its stored key.
+    pub fn iter(&self) -> impl Iterator<Item = (&Vec<u8>, &Vec<u8>)> + '_ {
+        self.map.iter().map(|(k, v)| (&k.0, v))
+    }
+
+    /// `pub fn keys(map: *const Map)`.
+    pub fn keys(&self) -> impl Iterator<Item = &Vec<u8>> + '_ {
+        self.map.keys().map(|k| &k.0)
+    }
+
+    /// `pub fn values(map: *const Map)`.
+    pub fn values(&self) -> impl Iterator<Item = &Vec<u8>> + '_ {
+        self.map.values()
+    }
+}
+
+impl<'a> IntoIterator for &'a EnvMap {
+    type Item = (&'a Vec<u8>, &'a Vec<u8>);
+    type IntoIter = Box<dyn Iterator<Item = (&'a Vec<u8>, &'a Vec<u8>)> + 'a>;
+    fn into_iter(self) -> Self::IntoIter {
+        Box::new(self.iter())
+    }
+}
+
+impl IntoIterator for EnvMap {
+    type Item = (Vec<u8>, Vec<u8>);
+    type IntoIter = Box<dyn Iterator<Item = (Vec<u8>, Vec<u8>)>>;
+    fn into_iter(self) -> Self::IntoIter {
+        Box::new(self.map.into_iter().map(|(k, v)| (k.0, v)))
+    }
+}
+
+impl FromIterator<(Vec<u8>, Vec<u8>)> for EnvMap {
+    fn from_iter<I: IntoIterator<Item = (Vec<u8>, Vec<u8>)>>(iter: I) -> Self {
+        let mut map = Self::new();
+        map.extend(iter);
+        map
+    }
+}
+
+impl Extend<(Vec<u8>, Vec<u8>)> for EnvMap {
+    fn extend<I: IntoIterator<Item = (Vec<u8>, Vec<u8>)>>(&mut self, iter: I) {
+        for (k, v) in iter {
+            self.insert(k, v);
+        }
+    }
+}
+
+impl<const N: usize> From<[(Vec<u8>, Vec<u8>); N]> for EnvMap {
+    fn from(entries: [(Vec<u8>, Vec<u8>); N]) -> Self {
+        entries.into_iter().collect()
+    }
+}
 
 /// PORT NOTE (P3-W7 T2): `std.process.EnvMap`'s own API is
 /// `put(key, value)` / `get(key)` / `remove(key)` / `getPtr(key)` over
@@ -97,24 +398,43 @@ impl EnvMapExt for EnvMap {
         self.insert(key.to_vec(), value.to_vec());
     }
     fn getv(&self, key: &[u8]) -> Option<&[u8]> {
-        self.get(key).map(Vec::as_slice)
+        EnvMap::get(self, key).map(Vec::as_slice)
     }
     fn removev(&mut self, key: &[u8]) {
-        self.remove(key);
+        EnvMap::remove(self, key);
     }
     fn hasv(&self, key: &[u8]) -> bool {
-        self.contains_key(key)
+        EnvMap::contains_key(self, key)
     }
 }
 
-/// PORT NOTE: `std.process.Environ` — the captured `KEY=VALUE` environment
-/// block. Upstream borrows into the live process block; rustty owns a copy,
-/// because Rust has no way to hand out a `'static` borrow of `**environ` that
-/// stays sound across a `setenv`.
+/// PORT NOTE: `std.process.Environ` — the process environment block.
+///
+/// On POSIX upstream borrows into the live process block (`PosixBlock`);
+/// rustty owns a copy, because Rust has no way to hand out a `'static` borrow
+/// of `**environ` that stays sound across a `setenv`. That is why
+/// `sync_environ` re-captures it, as the reference re-points its block.
+///
+/// On Windows the reference's `Block` is `GlobalBlock` (`std/process/Environ.zig:25-46`):
+/// "the memory pointed at by the PEB changes when the environment is modified,
+/// so a long-lived pointer cannot be used", so the environment holds only
+/// `use_global` and every lookup (`createMap`, `getWindows`, and through them
+/// `getAlloc`/`containsConstant`) reads the LIVE process environment. The
+/// port does the same: [`Environ::from_process`] is `.{ .use_global = true }`
+/// on Windows and reads the process environment on each lookup. CORRECTION
+/// (N352, task W-5): the port captured a snapshot on Windows too, so a
+/// variable set after the capture stayed invisible (and `syncEnviron`, a
+/// no-op on Windows, could not refresh it).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Environ {
-    /// The `KEY=VALUE` entries, in block order.
+    /// The `KEY=VALUE` entries, in block order. On Windows these are the
+    /// entries of an explicit block ([`Environ::from_entries`]); a
+    /// `use_global` environment keeps none and reads the process instead.
     entries: Vec<Vec<u8>>,
+    /// `GlobalBlock.use_global` (Windows): `true` for the process environment,
+    /// `false` for `GlobalBlock.empty` and for an explicit block.
+    #[cfg(windows)]
+    use_global: bool,
 }
 
 impl Environ {
@@ -125,28 +445,47 @@ impl Environ {
     /// with, plus any in-process mutation up to this point. Uses `vars_os`, NOT
     /// `vars`: `std::env::vars` **panics** on a non-UTF-8 variable and POSIX
     /// environment variables are arbitrary byte strings.
+    ///
+    /// On Windows nothing is captured: this is `.{ .block = .global }`, and
+    /// each lookup reads the live environment (see the type's PORT NOTE).
     #[must_use]
     pub fn from_process() -> Self {
-        let mut entries = Vec::new();
-        for (k, v) in std::env::vars_os() {
-            let mut entry = os_bytes(&k).to_vec();
-            entry.push(b'=');
-            entry.extend_from_slice(os_bytes(&v));
-            entries.push(entry);
+        #[cfg(windows)]
+        {
+            Self {
+                entries: Vec::new(),
+                use_global: true,
+            }
         }
-        Self { entries }
+        #[cfg(not(windows))]
+        {
+            Self {
+                entries: process_entries(),
+            }
+        }
     }
 
     /// Build an `Environ` from raw `KEY=VALUE` entries.
     ///
     /// PORT NOTE: upstream's `.c` arm takes the block straight from the C
-    /// caller (`global.init(.{ .c = .{ .environ = ... } })`).
+    /// caller (`global.init(.{ .c = .{ .environ = ... } })`). On Windows the
+    /// reference has no explicit block (its `.c` arm passes `.use_global = true`,
+    /// `main_c.zig:127`); the port keeps this constructor there for tests, and
+    /// reads such a block with the Windows lookup rules (case-insensitive keys).
     #[must_use]
     pub fn from_entries(entries: Vec<Vec<u8>>) -> Self {
-        Self { entries }
+        Self {
+            entries,
+            #[cfg(windows)]
+            use_global: false,
+        }
     }
 
     /// The raw `KEY=VALUE` entries in block order.
+    ///
+    /// PORT NOTE: POSIX only, like the reference's `PosixBlock.view()`; a Windows
+    /// environment is read live.
+    #[cfg(not(windows))]
     #[must_use]
     pub fn entries(&self) -> &[Vec<u8>] {
         &self.entries
@@ -154,7 +493,9 @@ impl Environ {
 
     /// PORT NOTE: `pub fn getPosix(self: Environ, key: []const u8) ?[:0]const u8`
     /// — a borrow into the block, no allocation. Returns the FIRST match, which
-    /// is what `getenv(3)` does.
+    /// is what `getenv(3)` does. POSIX only, as in the reference (a
+    /// `GlobalBlock` has no `view()`).
+    #[cfg(not(windows))]
     #[must_use]
     #[allow(non_snake_case)]
     pub fn get_posix(&self, key: &[u8]) -> Option<&[u8]> {
@@ -169,13 +510,71 @@ impl Environ {
         None
     }
 
+    /// PORT NOTE: `pub fn getWindows(environ: Environ, key) ?[:0]const u16`
+    /// (`std/process/Environ.zig:621-666`): the FIRST entry whose name equals
+    /// `key` case-insensitively (`eqlIgnoreCaseWtf16`, i.e.
+    /// `RtlEqualUnicodeString`), read from the live environment. The value is
+    /// returned owned (WTF-8) because the live block cannot be borrowed.
+    #[cfg(windows)]
+    #[must_use]
+    pub fn get_windows(&self, key: &[u8]) -> Option<Vec<u8>> {
+        // '=' anywhere but the start makes this an invalid environment variable name.
+        if key.is_empty() || key[1..].contains(&b'=') {
+            return None;
+        }
+
+        for entry in self.windows_block().iter() {
+            // There are some special environment variables that start with =,
+            // so we need a special case to not treat = as a key/value separator
+            // if it's the first character.
+            // https://devblogs.microsoft.com/oldnewthing/20100506-00/?p=14133
+            let Some(equal_index) = entry.iter().skip(1).position(|&b| b == b'=').map(|p| p + 1)
+            else {
+                // The reference asserts `unreachable` here: CreateProcess
+                // enforces the `=`. An explicit test block may lack it; the
+                // port skips such an entry.
+                continue;
+            };
+
+            let this_key = &entry[..equal_index];
+            if eql_ignore_case_wtf8(key, this_key) {
+                return Some(entry[equal_index + 1..].to_vec());
+            }
+        }
+        None
+    }
+
+    /// The Windows block's entries: the live process environment for a
+    /// `use_global` environment, none for `GlobalBlock.empty`, and the explicit
+    /// entries otherwise.
+    #[cfg(windows)]
+    fn windows_block(&self) -> std::borrow::Cow<'_, [Vec<u8>]> {
+        if self.use_global {
+            std::borrow::Cow::Owned(process_entries())
+        } else {
+            std::borrow::Cow::Borrowed(&self.entries)
+        }
+    }
+
     /// PORT NOTE: `pub fn getAlloc(self: Environ, alloc, key) ![]u8` — the
     /// portable (Windows-safe) copying form. Upstream returns
     /// `error.EnvironmentVariableMissing` when absent; Rust's `Option` carries
     /// that.
+    ///
+    /// On Windows this is the reference's body: `createMap` (a live read) and a
+    /// case-insensitive `map.get(key)`. On POSIX it is `getPosix`.
     #[must_use]
     pub fn get_alloc(&self, key: &[u8]) -> Option<Vec<u8>> {
-        self.get_posix(key).map(<[u8]>::to_vec)
+        #[cfg(windows)]
+        {
+            // var map = createMap(environ, gpa) catch return error.OutOfMemory;
+            // const val = map.get(key) orelse return error.EnvironmentVariableMissing;
+            self.create_map().get(key).cloned()
+        }
+        #[cfg(not(windows))]
+        {
+            self.get_posix(key).map(<[u8]>::to_vec)
+        }
     }
 
     /// PORT NOTE: `pub inline fn containsConstant(self: Environ, comptime key)
@@ -183,10 +582,18 @@ impl Environ {
     /// probe. The `comptime key` exists upstream only so the Windows arm can
     /// `comptime`-widen the literal to WTF-16; the POSIX arm is exactly
     /// `getPosix(key) != null`, and rustty's block is already byte-oriented on
-    /// every target, so the key stays a runtime `&[u8]`.
+    /// every target, so the key stays a runtime `&[u8]`. The Windows arm is
+    /// `getWindows(key) != null`.
     #[must_use]
     pub fn contains_constant(&self, key: &[u8]) -> bool {
-        self.get_posix(key).is_some()
+        #[cfg(windows)]
+        {
+            self.get_windows(key).is_some()
+        }
+        #[cfg(not(windows))]
+        {
+            self.get_posix(key).is_some()
+        }
     }
 
     /// PORT NOTE: `pub inline fn containsUnemptyConstant(self: Environ, comptime
@@ -197,23 +604,80 @@ impl Environ {
     /// and `crash/sentry.zig:113` (`XDG_CACHE_HOME`).
     #[must_use]
     pub fn contains_unempty_constant(&self, key: &[u8]) -> bool {
-        self.get_posix(key).is_some_and(|v| !v.is_empty())
+        #[cfg(windows)]
+        {
+            self.get_windows(key).is_some_and(|v| !v.is_empty())
+        }
+        #[cfg(not(windows))]
+        {
+            self.get_posix(key).is_some_and(|v| !v.is_empty())
+        }
     }
 
     /// PORT NOTE: `pub fn createMap(self: Environ, alloc) !Map`.
+    ///
+    /// On Windows this is `putWindowsBlock` over the live environment (or the
+    /// explicit block): each entry is `putMove`d, so a later entry replaces an
+    /// earlier one whose name differs only in case, key spelling included.
     #[must_use]
     pub fn create_map(&self) -> EnvMap {
-        let mut map = EnvMap::with_capacity(self.entries.len());
-        for entry in &self.entries {
-            let Some(eq) = entry.iter().position(|&b| b == b'=') else {
-                continue;
-            };
-            // First entry wins, matching `getPosix`/`getenv(3)`.
-            map.entry(entry[..eq].to_vec())
-                .or_insert_with(|| entry[eq + 1..].to_vec());
+        #[cfg(windows)]
+        {
+            let block = self.windows_block();
+            let mut map = EnvMap::with_capacity(block.len());
+            for entry in block.iter() {
+                // if (view.ptr[key_start] == '=') i += 1;
+                let start = usize::from(entry.first() == Some(&b'='));
+                // while (view.ptr[i] != 0 and view.ptr[i] != '=') : (i += 1) {}
+                let i = entry[start..]
+                    .iter()
+                    .position(|&b| b == b'=')
+                    .map_or(entry.len(), |p| p + start);
+                let key = entry[..i].to_vec();
+                // if (view.ptr[i] == '=') i += 1;
+                let value = entry.get(i + 1..).unwrap_or(&[]).to_vec();
+                // PORT NOTE: `putMove` asserts `validateKeyForPut` (a non-empty
+                // name); an explicit test block can hold an empty one, which the
+                // port skips instead of trapping.
+                if key.is_empty() {
+                    continue;
+                }
+                map.put_move(key, value);
+            }
+            map
         }
-        map
+        #[cfg(not(windows))]
+        {
+            let mut map = EnvMap::with_capacity(self.entries.len());
+            for entry in &self.entries {
+                let Some(eq) = entry.iter().position(|&b| b == b'=') else {
+                    continue;
+                };
+                // First entry wins, matching `getPosix`/`getenv(3)`.
+                if !map.contains_key(&entry[..eq]) {
+                    map.insert(entry[..eq].to_vec(), entry[eq + 1..].to_vec());
+                }
+            }
+            map
+        }
     }
+}
+
+/// The process environment as `KEY=VALUE` entries, read now.
+///
+/// `std::env::vars_os` reads `environ` on POSIX and `GetEnvironmentStringsW`
+/// (a copy of the PEB block, taken under the PEB lock as the reference's
+/// `createMap` does) on Windows; its Windows iterator keeps the names that
+/// start with `=` (`=C:`), like `putWindowsBlock`.
+fn process_entries() -> Vec<Vec<u8>> {
+    let mut entries = Vec::new();
+    for (k, v) in std::env::vars_os() {
+        let mut entry = os_bytes(&k).to_vec();
+        entry.push(b'=');
+        entry.extend_from_slice(os_bytes(&v));
+        entries.push(entry);
+    }
+    entries
 }
 
 /// Lossless byte view of an `OsStr` (WTF-8 on Windows, the raw bytes on POSIX).
@@ -483,10 +947,17 @@ mod tests {
             b"NOEQUALS".to_vec(),
         ]);
 
-        assert_eq!(e.get_posix(b"PATH"), Some(&b"/usr/bin"[..]));
-        assert_eq!(e.get_posix(b"WEIRD"), Some(&[0xff_u8, 0xfe, b'x'][..]));
-        assert_eq!(e.get_posix(b"EMPTY"), Some(&b""[..]));
-        assert_eq!(e.get_posix(b"MISSING"), None);
+        // `getPosix` exists on POSIX only, as in the reference.
+        #[cfg(not(windows))]
+        {
+            assert_eq!(e.get_posix(b"PATH"), Some(&b"/usr/bin"[..]));
+            assert_eq!(e.get_posix(b"WEIRD"), Some(&[0xff_u8, 0xfe, b'x'][..]));
+            assert_eq!(e.get_posix(b"EMPTY"), Some(&b""[..]));
+            assert_eq!(e.get_posix(b"MISSING"), None);
+        }
+        assert_eq!(e.get_alloc(b"PATH"), Some(b"/usr/bin".to_vec()));
+        assert_eq!(e.get_alloc(b"EMPTY"), Some(Vec::new()));
+        assert_eq!(e.get_alloc(b"MISSING"), None);
         assert_eq!(e.get_alloc(b"WEIRD"), Some(vec![0xff, 0xfe, b'x']));
 
         let map = e.create_map();
@@ -518,7 +989,11 @@ mod tests {
         assert!(!e.contains_unempty_constant(b"TERM"));
     }
 
+    // POSIX only: `getPosix` does not exist on Windows, and there `createMap`
+    // is `putWindowsBlock` (`putMove`: the last entry wins), which
+    // `windows_create_map_puts_move_the_later_entry` covers.
     #[test]
+    #[cfg(not(windows))]
     fn environ_first_entry_wins() {
         let e = Environ::from_entries(vec![b"K=first".to_vec(), b"K=second".to_vec()]);
         assert_eq!(e.get_posix(b"K"), Some(&b"first"[..]));
@@ -583,7 +1058,7 @@ mod tests {
                 continue;
             }
             assert_eq!(
-                e.get_posix(kb).map(<[u8]>::to_vec),
+                e.get_alloc(kb),
                 Some(os_bytes(&v).to_vec()),
                 "key {k:?} did not round-trip"
             );
@@ -632,5 +1107,130 @@ mod tests {
         );
         #[cfg(not(windows))]
         assert_eq!(p.first(), Some(&b'/'), "POSIX tmp dir must be absolute");
+    }
+
+    #[cfg(windows)]
+    fn first_entry(map: &EnvMap) -> Option<(&[u8], &[u8])> {
+        map.iter().next().map(|(k, v)| (k.as_slice(), v.as_slice()))
+    }
+
+    /// N340: off Windows the map compares names byte for byte
+    /// (`EnvNameHashContext`'s `else => std.array_hash_map.eqlString`), so `Path`
+    /// and `PATH` are two variables, as in the reference.
+    #[test]
+    #[cfg(not(windows))]
+    fn env_map_names_are_case_sensitive_off_windows() {
+        let mut m = EnvMap::new();
+        m.insert(b"Path".to_vec(), b"a".to_vec());
+        assert_eq!(m.get(b"PATH"), None);
+        m.insert(b"PATH".to_vec(), b"b".to_vec());
+        assert_eq!(m.len(), 2);
+        assert_eq!(m.get(b"Path").map(Vec::as_slice), Some(&b"a"[..]));
+        assert_eq!(m.get(b"PATH").map(Vec::as_slice), Some(&b"b"[..]));
+
+        let e = Environ::from_entries(vec![b"Path=x".to_vec()]);
+        assert_eq!(e.get_alloc(b"PATH"), None);
+        assert!(!e.contains_constant(b"PATH"));
+        assert_eq!(e.create_map().get(b"PATH"), None);
+        assert_eq!(e.get_alloc(b"Path"), Some(b"x".to_vec()));
+    }
+
+    /// N340: on Windows the map folds names with `toUpperWtf16` over their
+    /// code points (`EnvNameHashContext`'s `.windows` arm), so `PATH` finds the
+    /// `Path` Windows spells. The fold is Unicode upper-casing, not ASCII, and
+    /// it does not apply above U+FFFF.
+    #[test]
+    #[cfg(windows)]
+    fn windows_env_map_names_fold_case_like_the_reference() {
+        let mut m = EnvMap::new();
+        m.insert(b"Path".to_vec(), b"a".to_vec());
+        assert_eq!(m.get(b"PATH").map(Vec::as_slice), Some(&b"a"[..]));
+        assert_eq!(m.get(b"path").map(Vec::as_slice), Some(&b"a"[..]));
+        assert!(m.contains_key(b"pAtH"));
+
+        // `put`: the existing entry keeps its key spelling and takes the value.
+        m.insert(b"PATH".to_vec(), b"b".to_vec());
+        assert_eq!(m.len(), 1);
+        assert_eq!(first_entry(&m), Some((&b"Path"[..], &b"b"[..])));
+        // `putMove`: the key is replaced too.
+        m.put_move(b"pATH".to_vec(), b"c".to_vec());
+        assert_eq!(m.len(), 1);
+        assert_eq!(first_entry(&m), Some((&b"pATH"[..], &b"c"[..])));
+        assert_eq!(m.remove(b"PATH"), Some(b"c".to_vec()));
+        assert!(m.is_empty());
+
+        // Unicode: Λ/λ, and ɐ (U+0250, 2 bytes) / Ɐ (U+2C6F, 3 bytes).
+        m.insert("λɐ".as_bytes().to_vec(), b"u".to_vec());
+        assert_eq!(m.get("ΛⱯ".as_bytes()).map(Vec::as_slice), Some(&b"u"[..]));
+        // No case folding at or above U+10000.
+        m.insert("𐓏".as_bytes().to_vec(), b"v".to_vec());
+        assert_eq!(m.get("𐓷".as_bytes()), None);
+        assert_eq!(m.len(), 2);
+    }
+
+    /// `test "eqlIgnoreCaseWtf16/Wtf8"` (`std/os/windows.zig:3795-3799`), the
+    /// WTF-8 half (the port has no WTF-16 comparison).
+    #[test]
+    #[cfg(windows)]
+    fn windows_eql_ignore_case_wtf8() {
+        assert!(eql_ignore_case_wtf8(
+            "\x01 a B Λ ɐ".as_bytes(),
+            "\x01 A b λ Ɐ".as_bytes()
+        ));
+        // does not do case-insensitive comparison for codepoints >= U+10000
+        assert!(!eql_ignore_case_wtf8("𐓏".as_bytes(), "𐓷".as_bytes()));
+    }
+
+    /// N340: `getAlloc` (through `createMap`), `containsConstant` and
+    /// `containsUnemptyConstant` (through `getWindows`) look names up
+    /// case-insensitively on Windows; a name may start with `=`.
+    #[test]
+    #[cfg(windows)]
+    fn windows_environ_lookups_fold_case() {
+        let e = Environ::from_entries(vec![
+            b"Path=C:\\x".to_vec(),
+            b"=C:=C:\\w".to_vec(),
+            b"SystemRoot=C:\\Windows".to_vec(),
+            b"Empty=".to_vec(),
+        ]);
+        assert_eq!(e.get_alloc(b"PATH"), Some(b"C:\\x".to_vec()));
+        assert!(e.contains_constant(b"SYSTEMROOT"));
+        assert!(e.contains_unempty_constant(b"path"));
+        assert!(e.contains_constant(b"EMPTY"));
+        assert!(!e.contains_unempty_constant(b"EMPTY"));
+        assert_eq!(
+            e.create_map().get(b"=c:").map(Vec::as_slice),
+            Some(&b"C:\\w"[..])
+        );
+        assert_eq!(e.get_windows(b"=c:"), Some(b"C:\\w".to_vec()));
+        // '=' anywhere but the start makes this an invalid environment variable name.
+        assert_eq!(e.get_windows(b"P=ATH"), None);
+        assert_eq!(e.get_windows(b""), None);
+    }
+
+    /// On Windows `createMap` is `putWindowsBlock`, which `putMove`s each entry:
+    /// of two names that differ only in case the later one wins, spelling
+    /// included. `getWindows` returns the first match.
+    #[test]
+    #[cfg(windows)]
+    fn windows_create_map_puts_move_the_later_entry() {
+        let e = Environ::from_entries(vec![b"K=first".to_vec(), b"k=second".to_vec()]);
+        let map = e.create_map();
+        assert_eq!(map.len(), 1);
+        assert_eq!(first_entry(&map), Some((&b"k"[..], &b"second"[..])));
+        assert_eq!(e.get_windows(b"K"), Some(b"first".to_vec()));
+    }
+
+    /// N352: on Windows `from_process` is `.{ .use_global = true }`, which
+    /// captures nothing (the reference reads the PEB on every lookup).
+    #[test]
+    #[cfg(windows)]
+    fn windows_process_environ_is_the_global_block() {
+        let e = Environ::from_process();
+        assert!(e.use_global);
+        assert!(e.entries.is_empty());
+        assert_eq!(Environ::default(), Environ::from_entries(Vec::new()));
+        assert!(!Environ::default().use_global);
+        assert!(Environ::default().create_map().is_empty());
     }
 }
