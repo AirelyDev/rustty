@@ -2692,8 +2692,88 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - reachability:    any Windows build of the Ghostty executable (`-Dapp-runtime` other than `none`, or an exe build); the reference's Windows CI builds only the library, so it never shows.
 - port handling:   fixed (R13, controller ruling after review W-2 F1): `dist/windows/rustty.rc` adds `#define VS_VERSION_INFO 1` directly above the VERSIONINFO, with `PORT NOTE: reference defect (R13), UD331` (the same form as the file's `#define RT_MANIFEST 1` / `#define ID_ICON_RUSTTY 1`); nothing else in the file changes. Listed in `docs/ghostty-bug-fixes.md`. CORRECTION: the port was faithful until task W-2b (the test read the string-named resource).
 - parity row(s):   LEDGER S63-F5 (found closing it, task W-2).
-- test:            `crates/rustty/tests/windows_resources.rs` (Windows): `the_exe_carries_the_rc_resources` finds `RT_VERSION` id 1 with the two strings and asserts the string-named resource is gone; `windows_reads_the_product_name` reads `\StringFileInfo\040904b0\ProductName` through `GetFileVersionInfoW`/`VerQueryValueW` and expects `Rustty`. NOT YET RUN (task W-2b was Mac-only; rwin was in use by W-4): the Windows run and the negative control (the `#define` removed: both tests must fail) are left to W-4.
+- test:            `crates/rustty/tests/windows_resources.rs` (Windows): `the_exe_carries_the_rc_resources` finds `RT_VERSION` id 1 with the two strings and asserts the string-named resource is gone; `windows_reads_the_product_name` reads `\StringFileInfo\040904b0\ProductName` through `GetFileVersionInfoW`/`VerQueryValueW` and expects `Rustty`. RUN ON WINDOWS by task W-4 (rwin, Windows 11 ARM64, `x86_64-pc-windows-msvc` under emulation, tail-w2 @ 8c5defba): the three `windows_resources` tests pass (3/3). Negative control, the `#define VS_VERSION_INFO 1` line removed: `the_exe_carries_the_rc_resources` fails at `windows_resources.rs:210` (`RT_VERSION resource 1 (VS_VERSION_INFO) is missing`) and `windows_reads_the_product_name` fails at `:240` (`GetFileVersionInfoSizeW` returns 0); the subsystem test still passes; restored, 3/3 pass.
 - proposed fix:    add `#define VS_VERSION_INFO 1` (or `#include <winver.h>`) at the top of `dist/windows/ghostty.rc`.
+- upstream status: not reported
+
+### UD340 — `+toggle-quick-terminal` never flushes its "not supported" message
+
+- kind:            functional (evident intent: output silently lost because a buffer is never flushed); fixed in the port (R13).
+- upstream project: ghostty
+- severity:        low (a diagnostic is lost; the exit status is right)
+- reference:       `src/cli/toggle_quick_terminal.zig:41-63` at 20abdb50a: a 256-byte `std.Io.File.stderr().writer`, `try stderr.print("+toggle-quick-terminal is not supported on this platform.\n", .{})`, `return 1`, with no `flush()`. Its siblings `new_window.zig:185` and `new_tab.zig:191` do `stderr.flush() catch {}`.
+- defect:          the message stays in the writer's buffer, and the buffer is discarded when `run` returns, so the command exits 1 with no output wherever the IPC is not delivered.
+- ReleaseSafe:     not built (UNVERIFIED; no safety check is involved). Debug, MEASURED on Windows 11 (the reference exe built at the pin, GNU ABI, task W-4): `ghostty +toggle-quick-terminal` with stderr captured writes 0 bytes and exits 1. 
+- ReleaseFast:     the same (MEASURED, same host).
+- reachability:    every run of the action on a platform or instance without the IPC (Windows, macOS, a GTK build with no running instance).
+- port handling:   `crates/rustty-cli/src/toggle_quick_terminal.rs` `report_unsupported`: prints the message and flushes with the siblings' `catch {}`. `PORT NOTE: reference defect (R13)` at the site. Before task W-4 the port printed it only through `BufWriter`'s flush on drop, with no record of the difference.
+- parity row(s):   none (found by task W-4's Windows exe differential).
+- test:            `toggle_quick_terminal::tests::unsupported_message_is_flushed_before_returning` (the writer is kept alive across the assertion). Negative control: the `flush` removed, the test fails with `right: ""`. The exe differential (`.port/tools/windows/exe-differential.ps1`, case `toggle-quick-terminal`) records it as a justified stderr difference.
+- proposed fix:    `stderr.flush() catch {};` before `return 1` (and in the IPC error arm), as in `new_window.zig`.
+- upstream status: not reported
+
+### UD341 — on Windows, `+validate-config` exits 1 for a valid config when its stdout is a pipe
+
+- kind:            functional (evident intent: the exit status is the command's answer); fixed in the port (R13).
+- upstream project: ghostty (the cause is Zig 0.16.0's `File.Writer.end()` on a Windows pipe)
+- severity:        medium (scripts and editors that pipe the output read a valid config as invalid)
+- reference:       `src/cli/validate_config.zig:43-48` at 20abdb50a: `try stdout_writer.end()` after `runInner`. Zig 0.16.0 `std/Io/File/Writer.zig:235-251`: `end()` flushes, then, for a writer still in `.positional` mode, calls `file.setLength(pos)`, tolerating only `error.NonResizable`.
+- defect:          on Windows a pipe does not move the writer out of `.positional` mode, and `setLength` on the pipe fails with `error.FileTooBig`, so `run` returns the error and the action exits 1 although the config has no diagnostics. With a file (`> out.txt`) the truncation succeeds and it exits 0. On POSIX a pipe drops the writer to `.streaming` and `end()` does not truncate.
+- ReleaseSafe:     not built (UNVERIFIED). Debug, MEASURED on Windows 11 (reference exe at the pin, task W-4): `ghostty +validate-config --config-file=<valid>` piped (`| Out-String`, or `Process` with redirected stdout) exits 1 with `GHOSTTY_LOG=stderr` showing `error: CLI action failed error=error.FileTooBig`; `cmd /c "... > o.txt"` exits 0. The same with no `--config-file` (the default config).
+- ReleaseFast:     the same (MEASURED, same host).
+- reachability:    any Windows run with stdout on a pipe.
+- port handling:   `crates/rustty-cli/src/validate_config.rs`: flush and return the result (`PORT NOTE: reference defect (R13)` at the site). The port never truncated, so its behaviour is unchanged; this records it.
+- parity row(s):   none (found by task W-4).
+- test:            `crates/rustty/tests/windows_launch.rs` `validate_config_on_a_pipe_reports_a_valid_config_as_valid` (Windows): exit 0 with stdout on a pipe. Negative control: the reference exe itself, MEASURED as above (exit 1); the port has no truncation to reinstate. The exe differential records cases `validate-config-default` and `validate-config-valid` as justified exit-status differences.
+- proposed fix:    `stdout_writer.interface.flush()` instead of `end()` (nothing to truncate on stdout), or tolerate `FileTooBig` / check `isTty`/pipe first. Possibly also a Zig std report (`setLength` on a Windows pipe).
+- upstream status: not reported
+
+### UD342 — `+edit-config` on Windows announces the config file's path and prints none
+
+- kind:            functional (evident intent: "...at the following path:" followed by no path); fixed in the port (R13).
+- upstream project: ghostty
+- severity:        low (the user is not told where the file is)
+- reference:       `src/cli/edit_config.zig:86-97` at 20abdb50a: the Windows arm prints "The `ghostty +edit-config` command is not supported on Windows.\nPlease edit the configuration file manually at the following path:\n\n" and returns 1; `path` (computed at :83) is not used. Commit `0a183c923` ("core/gtk: allow editing Ghostty config in a Ghostty window") removed the `\\{s}` line and the `.{path}` argument from this arm along with the unrelated `$EDITOR` lookup below it.
+- defect:          the message ends at "at the following path:" and a blank line.
+- ReleaseSafe:     not built (UNVERIFIED). Debug, MEASURED on Windows 11 (reference exe at the pin, task W-4): stderr is exactly the two lines and a blank line; exit 1.
+- ReleaseFast:     the same (MEASURED).
+- reachability:    every `+edit-config` on Windows.
+- port handling:   `crates/rustty-cli/src/edit_config.rs` `write_windows_unsupported` prints the path after the blank line, in the arm's own pre-`0a183c923` form (`\\{s}` then a final newline). `PORT NOTE: reference defect (R13)` at the site.
+- parity row(s):   none (found by task W-4).
+- test:            `edit_config::tests::windows_message_names_the_config_path` (every host; the helper is not `cfg(windows)`). Negative control: `stderr.write_all(path)?` removed, the test fails with the path missing. The exe differential records case `edit-config` as a justified stderr difference.
+- proposed fix:    restore the `\\{s}` line and `.{path}` in the Windows arm.
+- upstream status: not reported
+
+### UD343 — the helper-CLI exe cannot be built for Windows at the pin
+
+- kind:            latent (build defects in code the reference's builds do not reach); port follows the evident intent.
+- upstream project: ghostty
+- severity:        low (no shipped artifact is affected)
+- reference:       at 20abdb50a: (1) `build.zig:213-239` installs the exe only when `app_runtime != .none`, and `.none` is the default on Windows (`src/apprt/runtime.zig`), so no `zig build` produces `ghostty.exe` there; (2) forcing it (`exe.install()` in the `.none` branch), `src/main_ghostty.zig:78` `std.io.getStdOut().writer()` fails to compile: Zig 0.16.0's `std` has no `io` member; (3) with that line respelled for 0.16, the reference's default MSVC ABI (`src/build/Config.zig:100-111`) fails to link the GUI-subsystem exe: `lld-link: undefined symbol: WinMain`; (4) the default `zig build -Dapp-runtime=none` on a Windows host (MSVC ABI) also fails in `ghostty-internal.dll`: `lld-link: duplicate symbol: memset` (`src/quirks_memset.zig:105` and `libvcruntime.lib(memset.obj)`). The reference's Windows CI runs only the `test` step and a GNU-ABI build (`.github/workflows/test.yml:959-970`, `:1711-1724`), which reach none of the four.
+- defect:          the `.none` usage-banner branch of `main_ghostty.zig` is dead in every reference build (macOS builds no exe either) and no longer compiles; the Windows exe has no working build.
+- ReleaseSafe:     not built; Debug MEASURED (task W-4): (2) on macOS cross-compiling `-Dtarget=x86_64-windows-gnu`, (3) and (4) on Windows 11 with Zig 0.16.0 x86_64 (the aarch64-windows Zig 0.16.0 crashed with 0xC0000005 on every compile on that host). With (1) and (2) patched (`.port/tools/windows/ghostty-exe-at-pin.patch`) and `-Dtarget=native-native-gnu` the exe builds and runs.
+- ReleaseFast:     the same.
+- reachability:    none in the reference's own builds.
+- port handling:   the port builds `rustty.exe` on Windows (MSVC) and runs the banner branch with Zig's intent (a `stdout` File whose failed write returns the error, N365); `PORT NOTE` at `crates/rustty/src/main_rustty.rs`.
+- parity row(s):   none (task W-4, establishing the Windows exe differential).
+- test:            none (build-level). The patch and recipe are in `.port/tools/windows/exe-differential.ps1`'s header.
+- proposed fix:    `std.Io.File.stdout().writer(io, &buf)` + `flush()` in the banner branch; install the exe (or document that there is none) for `.none` on Windows; an MSVC entry point for the GUI subsystem (`wWinMainCRTStartup`/`-fentry` or a `WinMain`), and a guard for `quirks_memset` against `libvcruntime`'s `memset`.
+- upstream status: not reported
+
+### UD344 — `+list-fonts` on Windows prints most family names as raw UTF-16
+
+- kind:            functional (evident intent: family names are meant to be readable text); port faithful, controller ruling requested (the fix is in the font discovery code, outside task W-4's area).
+- upstream project: ghostty
+- severity:        low (garbled listing; `--family` matching goes through FreeType's `family_name` first)
+- reference:       `src/font/face/freetype.zig:158-182` (`Face.name`) at 20abdb50a, used for `freetype_windows` by `src/font/DeferredFace.zig:143-147` and `src/cli/list_fonts.zig:122`: the first `TT_NAME_ID_FONT_FAMILY` entry is decoded from UTF-16BE only when it is platform Microsoft / `TT_MS_ID_UNICODE_CS`; any other entry is returned as raw bytes, and the comment says only that one encoding has been "seen in the wild so far".
+- defect:          on stock Windows fonts the first family entry is a Unicode-platform (UTF-16BE) one, so `+list-fonts` prints `\0A\0r\0i\0a\0l` for Arial (MEASURED bytes `00 41 00 72 00 69 00 61 00 6c 0a` on Windows 11, reference exe at the pin, task W-4). Which platform/encoding each font's first entry has was not examined (UNVERIFIED).
+- ReleaseSafe:     not built (UNVERIFIED). Debug as above.
+- ReleaseFast:     the same.
+- reachability:    every `+list-fonts` on Windows (the `freetype_windows` backend).
+- port handling:   faithful: the port prints the same bytes (the exe differential matches `list-fonts` byte for byte).
+- parity row(s):   none (found by task W-4).
+- test:            the exe differential's `list-fonts` case (same host: byte-identical output).
+- proposed fix:    decode the Unicode platform (0) entries as UTF-16BE too, or prefer the Microsoft/Unicode-BMP entry when present.
 - upstream status: not reported
 
 ## Candidates pending verification

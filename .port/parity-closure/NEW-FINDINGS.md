@@ -6458,3 +6458,106 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   -k quit <target/debug/deps/rustty_renderer-HASH> || break; done`, and compare `--test-threads=1` runs to
   separate threading from Metal.
 - **state**: OPEN.
+
+## N365 — the CLI's writes to an unusable stdout/stderr succeeded in the port and fail in the reference
+
+- **id**: N365. Not a ledger row: found by task W-4's Windows exe differential.
+- **severity**: medium (the exit status of every action, and of "opening" the exe). **kind**: behavioural difference (library semantics).
+- **finding**: the reference writes through `std.Io.File.stdout()`/`.stderr()`, whose writes fail with
+  `error.NotOpenForWriting` on a missing or unusable handle. Every action `try`s its writes (or its flush), so it
+  exits 1, and the no-action usage banner's `try stdout.print` makes `main` return `error.WriteFailed` (exit 1). The
+  port wrote through Rust's `std::io::stdout()`/`stderr()`, which report success on `ERROR_INVALID_HANDLE`
+  (Windows) and `EBADF` (Unix), so it exited 0. On Windows this is every "open" of the GUI-subsystem exe:
+  MEASURED (Windows 11, reference exe at the pin, Debug and ReleaseFast): a shell start (`Start-Process`,
+  `start /wait`) and a console start (`cmd /c ghostty.exe ...` in a console) of no-args and `+version` exit 1,
+  with nothing on stderr in ReleaseFast (a Debug build dumps the error return trace). The port exited 0 in all
+  four cases.
+- **fix**: `crates/rustty-cli/src/io_file.rs` (Zig's `File.stdout()`/`.stderr()`: raw `WriteFile` / `write(2)`
+  that return the OS error). Every action and `main_rustty.rs` now write through it, behind `BufWriter`s of the
+  reference's buffer sizes (256/1024/2048/4096), so an error surfaces where the reference's buffered writer
+  surfaces it (`try` propagates, `flush() catch {}` ignores). The banner's failure logs `error: WriteFailed`
+  through the log function (off by default for the banner too, as in the reference) and exits 1.
+- **tests**: `crates/rustty/tests/windows_launch.rs` (Windows): shell and console starts, no-args and `+version`,
+  exit 1; positive control: the console start with `> file` exits 0 and writes the version. Negative control on
+  Windows (io_file writing through `std::io::stdout()` again): both exit-1 tests fail with `right: 0`.
+  `io_file::tests::a_write_to_an_unwritable_stdout_fails_where_std_reports_success` (Unix: fd 1 open read-only).
+  Negative control on macOS: the same mutation, `RESULT ours_failed=false std_ok=true`.
+- **residual (not fixable here)**: a CLOSED descriptor on Unix (`rustty +version >&-`). Rust's runtime reopens a
+  closed fd 0-2 on `/dev/null` before `main` (MEASURED on macOS: exit 0 before and after the fix); Zig's start code
+  does not, so Ghostty gets `EBADF` and exits 1 (UNVERIFIED on a Ghostty build; follows from the same `try`s).
+- **state**: CLOSED (fixed), with the Unix closed-fd residual recorded.
+
+## N366 — `+show-config` compared the config against the bare struct defaults
+
+- **id**: N366. Not a ledger row: found by task W-4.
+- **severity**: medium (the command's default output was wrong on every platform). **kind**: port bug.
+- **finding**: `FileFormatter.format` with `changed = true` builds the comparison base with `Config.default(alloc)`
+  (`src/config/formatter.zig`), which adds the default keybinds, command-palette entries and URL link. The port used
+  `Config::default()` (the struct defaults only), so `+show-config` listed every default `keybind` and
+  `command-palette-entry` as a change. MEASURED on Windows against the reference exe: reference `command`,
+  `working-directory`, `click-repeat-interval`, `auto-update-channel`; port the same plus every default keybind and every
+  palette entry. Not Windows-specific.
+- **fix**: `crates/rustty-config/src/formatter_file.rs` uses `Config::default_config()`.
+- **test**: `formatter_file::tests::format_changed_compares_against_the_full_default_config` (a
+  `default_config()` with `font-size = 42` prints exactly `font-size = 42\n`). Negative control: `Config::default()`
+  again, the test fails listing the keybinds. The exe differential's `show-config` case now matches.
+- **state**: CLOSED (fixed).
+
+## N367 — startup log lines printed Rust `Debug` values where the reference prints Zig's `{}`
+
+- **id**: N367. Not a ledger row: found by task W-4 (visible with `RUSTTY_LOG=stderr`).
+- **severity**: low. **kind**: port bug (log text).
+- **finding**: `global.zig:169-177` log `runtime={}`, `font_backend={}`, `renderer={}` and `main_ghostty.zig`
+  `executing CLI action={}`: Zig renders an enum as `.` + tag name and a type as its `@typeName`. The port printed
+  `runtime=None`, `font_backend=FreetypeWindows`, `renderer=Opengl`, `action=ListActions`. MEASURED against the
+  reference exe: `.none`, `.freetype_windows`, `renderer.generic.Renderer(renderer.OpenGL)`, `.list-actions`.
+  The same mapping was already fixed for `+version` (LEDGER S70-F4).
+- **fix**: `crates/rustty-apprt/src/lib.rs` (`zig_runtime`, `zig_font_backend`, `zig_renderer`) and
+  `crates/rustty/src/main_rustty.rs` (`.` + `Action::tag_name`).
+- **test**: `bootstrap_tests::init_log_values_use_zig_rendering` (the three tables); the exe differential's
+  `log-stderr-version` and `log-stderr-list-actions` cases compare the whole log, byte for byte, with the
+  reference's (they failed before the fix, on exactly these lines).
+- **not fixed**: `CLI action failed error={}` still prints the port's `Debug` of its error (the reference prints
+  `error.<Name>`); only visible with logging on and an action error. Recorded, not changed.
+- **state**: CLOSED (fixed), with the action-error log line recorded.
+
+## N368 — `+edit-config`'s Windows message had one blank line too many
+
+- **id**: N368. Not a ledger row: found by task W-4.
+- **severity**: low. **kind**: port bug (message text).
+- **finding**: the reference's multi-line string literal ends with two empty `\\` lines and Zig adds no newline after
+  the last one, so the message ends `path:\n\n`; the port wrote `path:\n\n\n`. MEASURED against the reference exe.
+- **fix**: `crates/rustty-cli/src/edit_config.rs` `write_windows_unsupported`, together with UD342 (which adds the
+  path after the blank line).
+- **test**: `edit_config::tests::windows_message_names_the_config_path` (exact bytes).
+- **state**: CLOSED (fixed).
+
+## N369 — what "running Rustty on Windows" is at the pin, and how it is tested
+
+- **id**: N369. Not a ledger row: task W-4 (the user: "The app seems to build on Windows, but opening it doesn't seem
+  to work").
+- **finding**: at the pin the Windows exe, Ghostty's and Rustty's, is the helper CLI (app runtime `.none`), a
+  GUI-subsystem program with no window. "Opening" it shows nothing and it exits at once; typed at a prompt it shows
+  nothing, because the shell does not wait for it and it cannot write to that console. Its output is visible only
+  piped or redirected. This is the reference's behaviour (MEASURED with the reference exe, W-4 report); user-facing
+  note `docs/windows.md`.
+- **how the reference exe was obtained**: the pin never installs `ghostty.exe` with `.none`, and forcing it hits
+  UD343. It was built on rwin with Zig 0.16.0 x86_64 (the aarch64-windows Zig 0.16.0 crashed with 0xC0000005 on
+  every compile there, including a one-line `build-exe`), from the Mac's oracle checkout at `20abdb50a` with its
+  fetched packages (no source from the internet), with `.port/tools/windows/ghostty-exe-at-pin.patch` and
+  `-Dtarget=native-native-gnu` (the reference's own Windows CI job `build-libghostty-windows-gnu`), Debug and
+  ReleaseFast.
+- **harness**: `.port/tools/windows/exe-differential.ps1`: 50 CLI cases (every action the reference's
+  `src/cli/ghostty.zig` registers, with valid/invalid/missing configs, bad flags, unknown and double actions,
+  logging on), stdout/stderr/exit captured with process redirection, a fresh `LOCALAPPDATA` and home per case;
+  plus the PE subsystem, the shell and console starts (exit code, no process left), and WER/Application Error
+  events. `-Mode diff` (both exes), `-Mode capture` (goldens from the reference exe), `-Mode check` (CI, against
+  `.port/tools/windows/golden/`, captured from the ReleaseFast reference exe). Final run (release vs ReleaseFast,
+  and Debug vs Debug): every case matches except the recorded ones: UD22 (`+list-colors`), UD23 (`+list-themes`),
+  UD340, UD341, UD342, and the R2 identity effects (the product-named palette entry sorts under G/R; the `class`
+  default `com.mitchellh.ghostty`/`io.airely.rustty`).
+- **also found**: the embedded config template is written with CRLF by a Windows build of the port (the checkout's
+  `* text=auto`) and with LF by the reference exe built from the Mac's LF tree. A Windows checkout of Ghostty with
+  `core.autocrlf=true` (the Windows default, and GitHub's runners) would embed CRLF too; the template is not in the
+  matrix (it is a file side effect). UNVERIFIED: a reference build from a Windows checkout.
+- **state**: CLOSED (the harness and goldens are committed and in the Windows CI leg).
