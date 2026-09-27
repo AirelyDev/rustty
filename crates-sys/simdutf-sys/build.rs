@@ -60,14 +60,18 @@ fn main() {
 
     // if (target.result.abi == .msvc) { ... }  (pkg/simdutf/build.zig:55-63)
     //
-    // CAVEAT (task 15 review): this mirror is PARTIALLY INERT. The reference
-    // compiles with Zig's bundled clang even when `abi == .msvc`, so all four
-    // tokens are clang spellings. The `cc` crate on an MSVC host drives `cl.exe`,
-    // which REJECTS `-fno-autolink` and `-fno-stack-protector`; `flag_if_supported`
-    // then silently drops them. Only the two `/D` defines survive. Closing this
-    // row is parity of the DEFINES, not of all four flags — the `-fno-*` pair
-    // needs either a clang-cl path or the `/GS-` + `/Zl` MSVC equivalents, and
-    // there is no MSVC lane here to tell which is right.
+    // The reference compiles with Zig's bundled clang even when `abi == .msvc`,
+    // so all four tokens are clang spellings. On MSVC targets cc drives clang-cl
+    // (above), which takes a clang driver flag through `/clang:`; the two
+    // `-fno-*` flags are passed that way, so all four reach the compiler.
+    //
+    // CORRECTION (task W-1b, review W-1 F6): this was a CAVEAT that the mirror
+    // was "PARTIALLY INERT": cc drove cl.exe, which rejects `-fno-autolink` and
+    // `-fno-stack-protector`, so `flag_if_supported` dropped them and "there is
+    // no MSVC lane here to tell which is right". MEASURED on the Windows lane
+    // (`CC_ENABLE_DEBUG_OUTPUT=1`): under clang-cl the bare `-fno-*` spellings
+    // were still dropped; the `/clang:` spellings are accepted and appear on
+    // the compile line.
     //
     // PORT NOTE (S38-F5): the reference adds four MSVC-only flags inside the
     // same `no_libcxx` branch, and they were not mirrored. `_USE_STD_VECTOR_
@@ -82,8 +86,8 @@ fn main() {
             .define("_USE_STD_VECTOR_ALGORITHMS", Some("0"))
             // -fno-autolink also drops UCRT's /alternatename fallback.
             .define("_Avx2WmemEnabledWeakValue", Some("_Avx2WmemEnabled"))
-            .flag_if_supported("-fno-autolink")
-            .flag_if_supported("-fno-stack-protector");
+            .flag_if_supported("/clang:-fno-autolink")
+            .flag_if_supported("/clang:-fno-stack-protector");
     }
 
     // wasm32: with SIMDUTF_NO_LIBCXX the amalgamation needs no C++ standard

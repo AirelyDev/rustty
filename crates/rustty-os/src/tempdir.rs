@@ -222,21 +222,7 @@ impl Dir {
         // Measured in task W-1: with the verbatim form every shell-integration
         // test that joins `/`-separated paths onto the resources dir failed.
         #[cfg(windows)]
-        let canonical = {
-            use std::os::windows::ffi::{OsStrExt, OsStringExt};
-            let wide: Vec<u16> = canonical.as_os_str().encode_wide().collect();
-            let verbatim: Vec<u16> = r"\\?\".encode_utf16().collect();
-            let unc: Vec<u16> = r"\\?\UNC\".encode_utf16().collect();
-            if wide.starts_with(&unc) {
-                let mut dos: Vec<u16> = r"\\".encode_utf16().collect();
-                dos.extend_from_slice(&wide[unc.len()..]);
-                PathBuf::from(std::ffi::OsString::from_wide(&dos))
-            } else if wide.starts_with(&verbatim) {
-                PathBuf::from(std::ffi::OsString::from_wide(&wide[verbatim.len()..]))
-            } else {
-                canonical
-            }
-        };
+        let canonical = dos_form(canonical);
         Ok(canonical)
     }
 
@@ -324,9 +310,53 @@ fn log_err(msg: &str) {
     eprintln!("[err] [{LOG_SCOPE}] {msg}");
 }
 
+/// The DOS form of a verbatim path, as Zig's `realpath` returns it
+/// (`GetFinalPathNameByHandle` with `.volume_name = .Dos`): `\\?\C:\..` becomes
+/// `C:\..` and `\\?\UNC\server\..` becomes `\\server\..`. Any other verbatim
+/// path (for example `\\?\Volume{GUID}\..`, a volume with no drive letter) has
+/// no DOS form and is returned unchanged.
+///
+/// CORRECTION (task W-1b, review W-1 F5): W-1 stripped `\\?\` from every
+/// verbatim path, which turned a `\\?\Volume{GUID}\..` result into a non-path.
+#[cfg(windows)]
+fn dos_form(canonical: PathBuf) -> PathBuf {
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+    let wide: Vec<u16> = canonical.as_os_str().encode_wide().collect();
+    let verbatim: Vec<u16> = r"\\?\".encode_utf16().collect();
+    let unc: Vec<u16> = r"\\?\UNC\".encode_utf16().collect();
+    if wide.starts_with(&unc) {
+        let mut dos: Vec<u16> = r"\\".encode_utf16().collect();
+        dos.extend_from_slice(&wide[unc.len()..]);
+        return PathBuf::from(std::ffi::OsString::from_wide(&dos));
+    }
+    let rest = wide.get(verbatim.len()..).unwrap_or(&[]);
+    let drive_follows = rest.len() >= 3
+        && u8::try_from(rest[0]).is_ok_and(|c| c.is_ascii_alphabetic())
+        && rest[1] == u16::from(b':')
+        && rest[2] == u16::from(b'\\');
+    if wide.starts_with(&verbatim) && drive_follows {
+        PathBuf::from(std::ffi::OsString::from_wide(rest))
+    } else {
+        canonical
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// W-1b (review W-1 F5): only a drive-letter or UNC verbatim path has a DOS
+    /// form; a volume GUID path is left as it is.
+    #[cfg(windows)]
+    #[test]
+    fn dos_form_strips_only_drive_and_unc_prefixes() {
+        let f = |p: &str| dos_form(PathBuf::from(p));
+        assert_eq!(f(r"\\?\C:\Users\x"), PathBuf::from(r"C:\Users\x"));
+        assert_eq!(f(r"\\?\UNC\srv\share\x"), PathBuf::from(r"\\srv\share\x"));
+        let guid = r"\\?\Volume{0b5b1a3e-0000-0000-0000-100000000000}\x";
+        assert_eq!(f(guid), PathBuf::from(guid));
+        assert_eq!(f(r"C:\already\dos"), PathBuf::from(r"C:\already\dos"));
+    }
 
     // PORT NOTE (1ffdd7415): upstream DELETED its flaky fd-BADF probes from
     // both lifecycle tests ("Don't check the raw handles after close:

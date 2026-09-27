@@ -77,6 +77,21 @@ fn main() {
         build.include(dir);
     }
 
+    // if (target.result.abi == .msvc) try flags.appendSlice(b.allocator, &.{
+    //     // -fno-autolink also drops UCRT's /alternatename fallback.
+    //     "-D_Avx2WmemEnabledWeakValue=_Avx2WmemEnabled",
+    //     "-fno-autolink",
+    // });  (SharedDeps.zig:995-998)
+    //
+    // CORRECTION (task W-1b, review W-1 F6): this arm was missing. On MSVC
+    // targets cc drives clang-cl, which takes the clang flag through `/clang:`.
+    // (The reference's Windows `-fno-sanitize=undefined` pair is added below.)
+    if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
+        build
+            .define("_Avx2WmemEnabledWeakValue", Some("_Avx2WmemEnabled"))
+            .flag_if_supported("/clang:-fno-autolink");
+    }
+
     // MSVC requires explicit std specification otherwise these are guarded, at
     // least on Windows 2025. Doing it unconditionally doesn't cause any issues
     // on other platforms and ensures we get C++17 support on MSVC.
