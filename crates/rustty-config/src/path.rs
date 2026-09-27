@@ -353,7 +353,8 @@ impl Path {
 
         // const abs = dir.realpath(path, &buf) catch |err| abs: {
         let joined = base_path.join(os_str_from_bytes(&path));
-        let abs: Vec<u8> = match std::fs::canonicalize(&joined) {
+        // (`rustty_os::path::realpath`: the DOS form on Windows, task W-2.)
+        let abs: Vec<u8> = match rustty_os::path::realpath(&joined) {
             Ok(p) => path_to_bytes(&p),
             Err(err) => 'abs: {
                 // if (err == error.FileNotFound) {
@@ -948,6 +949,69 @@ fn basename_inner(path: &[u8], windows: bool) -> &[u8] {
         return &path[0..0];
     }
     &path[start_index..end_index]
+}
+
+/// PORTS: `std.fs.path.dirnameInner(path_type, path)` (Zig 0.16.0
+/// `std/fs/path.zig:1334-1339`): `ComponentIterator(path_type, u8)`'s `last()`,
+/// then `previous()`'s path, or `root()` when there is no previous component.
+///
+/// Task W-2: `load_file`'s `std.fs.path.dirname(path).?` used a separator-only
+/// split on `std::path::MAIN_SEPARATOR`, which on Windows missed `/` and every
+/// root form (`C:\`, `\\server\share\`), so it returned `None` for a `/`-joined
+/// path and aborted the load (measured: two config tests on Windows).
+fn dirname_inner(path: &[u8], windows: bool) -> Option<&[u8]> {
+    let is_sep = if windows {
+        is_sep_windows
+    } else {
+        is_sep_posix
+    };
+    let root_len = if windows {
+        parse_path_windows_root_len(path)
+    } else {
+        usize::from(!path.is_empty() && is_sep(path[0]))
+    };
+    let mut root_end_index = root_len;
+    for &c in &path[root_len..] {
+        if !is_sep(c) {
+            break;
+        }
+        root_end_index += 1;
+    }
+    // _ = it.last() orelse return null;
+    let mut end_index = path.len();
+    loop {
+        if end_index == root_end_index {
+            return None;
+        }
+        if !is_sep(path[end_index - 1]) {
+            break;
+        }
+        end_index -= 1;
+    }
+    let mut start_index = end_index;
+    while start_index != root_end_index && !is_sep(path[start_index - 1]) {
+        start_index -= 1;
+    }
+    // const up = it.previous() orelse return it.root();
+    let root = || (root_end_index != 0).then(|| &path[..root_len]);
+    let mut prev_end = start_index;
+    loop {
+        if prev_end == root_end_index {
+            return root();
+        }
+        if !is_sep(path[prev_end - 1]) {
+            break;
+        }
+        prev_end -= 1;
+    }
+    // return up.path;
+    Some(&path[..prev_end])
+}
+
+/// PORTS: `std.fs.path.dirname(path)`: `dirnameWindows` on Windows, else
+/// `dirnamePosix`.
+pub(crate) fn dirname(path: &[u8]) -> Option<&[u8]> {
+    dirname_inner(path, cfg!(windows))
 }
 
 /// PORTS: `std.fs.path.basenameWindows(path)`.
@@ -2004,6 +2068,107 @@ mod tests {
 
     // PARITY (rustty-added): the `Win32PathType` classification the two Windows
     // helpers rest on (`std.fs.path`'s own `test getWin32PathType` cases).
+    /// zig 0.16.0 `std/fs/path.zig` `test dirnameWindows` (`:1355-1401`) and
+    /// `test dirnamePosix` (`:1341-1353`), verbatim, over `dirname_inner` (task W-2).
+    #[test]
+    fn std_fs_path_dirname_windows_and_posix() {
+        assert_eq!(dirname_inner(b"c:\\", true), None);
+        assert_eq!(dirname_inner(b"c:\\\\", true), None);
+        assert_eq!(dirname_inner(b"c:\\foo", true), Some(&b"c:\\"[..]));
+        assert_eq!(dirname_inner(b"c:\\\\foo\\", true), Some(&b"c:\\"[..]));
+        assert_eq!(dirname_inner(b"c:\\foo\\bar", true), Some(&b"c:\\foo"[..]));
+        assert_eq!(
+            dirname_inner(b"c:\\foo\\bar\\", true),
+            Some(&b"c:\\foo"[..])
+        );
+        assert_eq!(
+            dirname_inner(b"c:\\\\foo\\bar\\baz", true),
+            Some(&b"c:\\\\foo\\bar"[..])
+        );
+        assert_eq!(dirname_inner(b"\\", true), None);
+        assert_eq!(dirname_inner(b"\\foo", true), Some(&b"\\"[..]));
+        assert_eq!(dirname_inner(b"\\foo\\", true), Some(&b"\\"[..]));
+        assert_eq!(dirname_inner(b"\\foo\\bar", true), Some(&b"\\foo"[..]));
+        assert_eq!(dirname_inner(b"\\foo\\bar\\", true), Some(&b"\\foo"[..]));
+        assert_eq!(
+            dirname_inner(b"\\foo\\bar\\baz", true),
+            Some(&b"\\foo\\bar"[..])
+        );
+        assert_eq!(dirname_inner(b"c:", true), None);
+        assert_eq!(dirname_inner(b"c:foo", true), Some(&b"c:"[..]));
+        assert_eq!(dirname_inner(b"c:foo\\", true), Some(&b"c:"[..]));
+        assert_eq!(dirname_inner(b"c:foo\\bar", true), Some(&b"c:foo"[..]));
+        assert_eq!(dirname_inner(b"c:foo\\bar\\", true), Some(&b"c:foo"[..]));
+        assert_eq!(
+            dirname_inner(b"c:foo\\bar\\baz", true),
+            Some(&b"c:foo\\bar"[..])
+        );
+        assert_eq!(dirname_inner(b"file:stream", true), None);
+        assert_eq!(dirname_inner(b"dir\\file:stream", true), Some(&b"dir"[..]));
+        assert_eq!(dirname_inner(b"\\\\unc\\share", true), None);
+        assert_eq!(dirname_inner(b"\\\\unc\\share\\\\", true), None);
+        assert_eq!(
+            dirname_inner(b"\\\\unc\\share\\foo", true),
+            Some(&b"\\\\unc\\share\\"[..])
+        );
+        assert_eq!(
+            dirname_inner(b"\\\\unc\\share\\foo\\", true),
+            Some(&b"\\\\unc\\share\\"[..])
+        );
+        assert_eq!(
+            dirname_inner(b"\\\\unc\\share\\foo\\bar", true),
+            Some(&b"\\\\unc\\share\\foo"[..])
+        );
+        assert_eq!(
+            dirname_inner(b"\\\\unc\\share\\foo\\bar\\", true),
+            Some(&b"\\\\unc\\share\\foo"[..])
+        );
+        assert_eq!(
+            dirname_inner(b"\\\\unc\\share\\foo\\bar\\baz", true),
+            Some(&b"\\\\unc\\share\\foo\\bar"[..])
+        );
+        assert_eq!(dirname_inner(b"\\\\.", true), None);
+        assert_eq!(dirname_inner(b"\\\\.\\", true), None);
+        assert_eq!(dirname_inner(b"\\\\.\\device", true), Some(&b"\\\\.\\"[..]));
+        assert_eq!(
+            dirname_inner(b"\\\\.\\device\\", true),
+            Some(&b"\\\\.\\"[..])
+        );
+        assert_eq!(
+            dirname_inner(b"\\\\.\\device\\foo", true),
+            Some(&b"\\\\.\\device"[..])
+        );
+        assert_eq!(dirname_inner(b"\\\\?", true), None);
+        assert_eq!(dirname_inner(b"\\\\?\\", true), None);
+        assert_eq!(dirname_inner(b"\\\\?\\device", true), Some(&b"\\\\?\\"[..]));
+        assert_eq!(
+            dirname_inner(b"\\\\?\\device\\", true),
+            Some(&b"\\\\?\\"[..])
+        );
+        assert_eq!(
+            dirname_inner(b"\\\\?\\device\\foo", true),
+            Some(&b"\\\\?\\device"[..])
+        );
+        assert_eq!(dirname_inner(b"/a/b/", true), Some(&b"/a"[..]));
+        assert_eq!(dirname_inner(b"/a/b", true), Some(&b"/a"[..]));
+        assert_eq!(dirname_inner(b"/a", true), Some(&b"/"[..]));
+        assert_eq!(dirname_inner(b"", true), None);
+        assert_eq!(dirname_inner(b"/", true), None);
+        assert_eq!(dirname_inner(b"////", true), None);
+        assert_eq!(dirname_inner(b"foo", true), None);
+        assert_eq!(dirname_inner(b"/a/b/c", false), Some(&b"/a/b"[..]));
+        assert_eq!(dirname_inner(b"/a/b/c///", false), Some(&b"/a/b"[..]));
+        assert_eq!(dirname_inner(b"/a", false), Some(&b"/"[..]));
+        assert_eq!(dirname_inner(b"/", false), None);
+        assert_eq!(dirname_inner(b"//", false), None);
+        assert_eq!(dirname_inner(b"///", false), None);
+        assert_eq!(dirname_inner(b"////", false), None);
+        assert_eq!(dirname_inner(b"", false), None);
+        assert_eq!(dirname_inner(b"a", false), None);
+        assert_eq!(dirname_inner(b"a/", false), None);
+        assert_eq!(dirname_inner(b"a//", false), None);
+    }
+
     #[test]
     fn std_fs_path_get_win32_path_type() {
         use Win32PathType::*;
@@ -2260,6 +2425,8 @@ mod tests {
         }
     }
 
+    // Only the `#[cfg(unix)]` tests below read it.
+    #[cfg(unix)]
     fn path_bytes(p: &Path) -> Vec<u8> {
         match p {
             Path::Optional(v) | Path::Required(v) => v.clone(),

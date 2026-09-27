@@ -258,6 +258,12 @@ impl TestSurface {
         let state: *mut rustty_renderer::state::State =
             unsafe { std::ptr::addr_of_mut!((*sp).renderer_state) };
 
+        // The stream handler and the Termio each hold a copy of the renderer
+        // wakeup (`Termio.zig:296,316`). On IOCP (Windows) `xev.Async` is a
+        // value, not a Copy handle, so the first copy is an explicit `.clone()`
+        // (Zig's value copy; task W-2, N342/N343).
+        #[allow(clippy::clone_on_copy)]
+        let handler_wakeup = renderer_wakeup.clone();
         let handler = termio::stream_handler::StreamHandler::<SurfaceMailbox<TestApp>> {
             alloc: Allocator,
             size: std::ptr::null_mut(),
@@ -266,7 +272,7 @@ impl TestSurface {
             surface_mailbox,
             renderer_state: state,
             renderer_mailbox,
-            renderer_wakeup,
+            renderer_wakeup: handler_wakeup,
             enquiry_response: derived.enquiry_response.clone(),
             osc_color_report_format: derived.osc_color_report_format,
             clipboard_write: derived.clipboard_write,

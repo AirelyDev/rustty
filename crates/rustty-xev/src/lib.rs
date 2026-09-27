@@ -97,6 +97,15 @@ pub fn backend() -> Backend {
     Backend::Kqueue
 }
 
+/// The backend in use (the reference `xev.backend` read), Windows arm (task W-2,
+/// N342): `backend.zig`'s `.windows => &.{.iocp}` is single-candidate, so the
+/// crate surface is the static IOCP `Api()` and `pub const backend = be;` is the
+/// comptime `.iocp` (as on macOS for kqueue).
+#[cfg(target_os = "windows")]
+pub fn backend() -> Backend {
+    Backend::Iocp
+}
+
 // XEV_BLUEPRINT §1 Linux port: the io_uring/epoll/Dynamic backends (backend.zig's
 // `.linux => &.{ .io_uring, .epoll }` candidates, wired above in `backend.rs`).
 // LT1 landed these as empty stubs; LT3–LT7 filled each in place, and LT8 wires the
@@ -888,6 +897,14 @@ mod backend_accessor_tests {
     #[test]
     fn backend_is_kqueue_on_macos() {
         assert_eq!(crate::Backend::Kqueue, crate::backend());
+    }
+
+    /// Windows: the single-candidate IOCP Api, so the comptime `.iocp`
+    /// (task W-2).
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn backend_is_iocp_on_windows() {
+        assert_eq!(crate::Backend::Iocp, crate::backend());
     }
 
     /// WS3-B: on Linux the accessor is the Dynamic layer's runtime global

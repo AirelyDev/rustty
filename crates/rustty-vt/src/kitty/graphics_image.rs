@@ -1829,12 +1829,20 @@ fn realpath(_path: &[u8]) -> std::io::Result<Vec<u8>> {
     Err(std::io::Error::from(std::io::ErrorKind::Unsupported))
 }
 
+// Windows (task W-2): Zig's `realpath` converts the WTF-8 path to WTF-16 (not
+// WTF-8 is `error.InvalidWtf8`), opens it and returns
+// `GetFinalPathNameByHandle(.Dos)` as WTF-8 — the DOS form, the same form
+// `realpath_of_handle` returns, so the temp-directory prefix check compares like
+// with like. CORRECTION: this arm required UTF-8 and returned `canonicalize`'s
+// verbatim `\\?\C:\..` form, so every temporary-file transmission failed the
+// prefix check against the handle's DOS path (`TemporaryFileNotInTempDir`,
+// measured on Windows).
 #[cfg(windows)]
 fn realpath(path: &[u8]) -> std::io::Result<Vec<u8>> {
-    let s = std::str::from_utf8(path)
-        .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
-    let canon = std::fs::canonicalize(s)?;
-    Ok(canon.to_string_lossy().into_owned().into_bytes())
+    let p = rustty_os::path::os_string_from_bytes(path)
+        .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
+    let canon = rustty_os::path::realpath(std::path::Path::new(&p))?;
+    Ok(canon.into_os_string().into_encoded_bytes())
 }
 
 /// `std.Io.File.realPath(io, buf)` — the canonical path of an OPEN handle.

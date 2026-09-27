@@ -277,7 +277,16 @@ mod tests {
 
         // The year 1400 (the probe value), a report written a minute ago, and one
         // dated in the future (2200), which takes the reference's own "now" arm.
+        //
+        // Windows (task W-2): NTFS stores no time before 1601 (a FILETIME counts
+        // from 1601-01-01, and `SetFileTime` rejects the year 1400 with
+        // ERROR_INVALID_PARAMETER, measured), so the ancient report there is
+        // dated 1601-01-02 (a zero FILETIME means "leave unchanged"); its age
+        // fits a `Duration`, and like APFS it checks the ordinary arm.
+        #[cfg(not(windows))]
         let ancient = UNIX_EPOCH - StdDuration::from_secs(17_987_443_200);
+        #[cfg(windows)]
+        let ancient = UNIX_EPOCH - StdDuration::from_secs(11_644_473_600 - 86_400);
         let recent = SystemTime::now() - StdDuration::from_secs(60);
         let future = UNIX_EPOCH + StdDuration::from_secs(7_258_118_400);
         for (name, mtime) in [("ancient", ancient), ("recent", recent), ("future", future)] {

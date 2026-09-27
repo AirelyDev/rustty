@@ -22,6 +22,8 @@ use crate::rustty::{Action, Error};
 use rustty_config::file_load::preferred_default_file_path;
 use rustty_config::Config;
 // const internal_os = @import("../os/main.zig");
+// (Named only after the Windows arm's comptime `return`, task W-2.)
+#[cfg(not(windows))]
 use rustty_os::edit::{DefaultEditor, Options as EditOptions};
 
 use std::io::Write;
@@ -146,6 +148,9 @@ fn run_inner<We: Write>(stderr: &mut We) -> Result<u8, Error> {
     // if (comptime builtin.os.tag == .windows) {
     #[cfg(windows)]
     {
+        // (The arm prints no path since `0a183c923`; `path` is used only by the
+        // POSIX tail below.)
+        let _ = &path;
         // try stderr.print(
         //     \\The `ghostty +edit-config` command is not supported on Windows.
         //     \\Please edit the configuration file manually at the following path:
@@ -163,52 +168,58 @@ fn run_inner<We: Write>(stderr: &mut We) -> Result<u8, Error> {
             app = rustty_identity::APP_NAME,
         )?;
         // return 1;
-        return Ok(1);
+        // (the tail of the function on Windows)
+        Ok(1)
     }
 
-    // const command = internal_os.getConfigEditCommand(alloc, path, .{ .default_editor = .failure }) catch |err| {
-    //     switch (err) {
-    //         error.NoEditorConfigured => { ... return 1; },
-    //         error.WriteFailed,
-    //         error.OutOfMemory,
-    //         => |e| return e,
-    //     }
-    // };
-    // defer alloc.free(command);
-    //
-    // PORT NOTE (`0a183c923`): the VISUAL/EDITOR resolution + shell-escaped
-    // command build moved into the shared `internal_os.getConfigEditCommand`
-    // (rustty-os `edit.rs`, landed W1). Its rustty error set is only
-    // `NoEditorConfigured` (the `WriteFailed`/`OutOfMemory` propagation arms
-    // collapse — the allocating writer is infallible, the edit.rs Error PORT
-    // NOTE), so the `catch` is a single-arm match. The returned bytes carry
-    // the `toOwnedSliceSentinel(0)` trailing NUL (the edit.rs contract).
-    let command: Vec<u8> = match rustty_os::getConfigEditCommand(
-        &path,
-        &EditOptions {
-            default_editor: DefaultEditor::Failure,
-        },
-    ) {
-        Ok(v) => v,
-        Err(rustty_os::edit::Error::NoEditorConfigured) => {
-            // try stderr.print(
-            //     \\The $EDITOR or $VISUAL environment variable is not set or is empty.
-            //     \\This environment variable is required to edit the Ghostty configuration
-            //     \\via this CLI command.
-            //     \\
-            //     \\Please set the environment variable to your preferred terminal
-            //     \\text editor and try again.
-            //     \\
-            //     \\If you prefer to edit the configuration file another way,
-            //     \\you can find the configuration file at the following path:
-            //     \\
-            //     \\
-            // , .{});
-            //   R2: "Ghostty configuration" -> the Rustty product name
-            //   (APP_NAME_TITLECASE; the oracle prints the capitalized product name).
-            write!(
-                stderr,
-                "The $EDITOR or $VISUAL environment variable is not set or is empty.\n\
+    // The rest is the reference's code after the comptime `return 1`, which Zig
+    // never analyzes on Windows (task W-2, N342: compiled out there, as it is
+    // unreachable and names POSIX-only items).
+    #[cfg(not(windows))]
+    {
+        // const command = internal_os.getConfigEditCommand(alloc, path, .{ .default_editor = .failure }) catch |err| {
+        //     switch (err) {
+        //         error.NoEditorConfigured => { ... return 1; },
+        //         error.WriteFailed,
+        //         error.OutOfMemory,
+        //         => |e| return e,
+        //     }
+        // };
+        // defer alloc.free(command);
+        //
+        // PORT NOTE (`0a183c923`): the VISUAL/EDITOR resolution + shell-escaped
+        // command build moved into the shared `internal_os.getConfigEditCommand`
+        // (rustty-os `edit.rs`, landed W1). Its rustty error set is only
+        // `NoEditorConfigured` (the `WriteFailed`/`OutOfMemory` propagation arms
+        // collapse — the allocating writer is infallible, the edit.rs Error PORT
+        // NOTE), so the `catch` is a single-arm match. The returned bytes carry
+        // the `toOwnedSliceSentinel(0)` trailing NUL (the edit.rs contract).
+        let command: Vec<u8> = match rustty_os::getConfigEditCommand(
+            &path,
+            &EditOptions {
+                default_editor: DefaultEditor::Failure,
+            },
+        ) {
+            Ok(v) => v,
+            Err(rustty_os::edit::Error::NoEditorConfigured) => {
+                // try stderr.print(
+                //     \\The $EDITOR or $VISUAL environment variable is not set or is empty.
+                //     \\This environment variable is required to edit the Ghostty configuration
+                //     \\via this CLI command.
+                //     \\
+                //     \\Please set the environment variable to your preferred terminal
+                //     \\text editor and try again.
+                //     \\
+                //     \\If you prefer to edit the configuration file another way,
+                //     \\you can find the configuration file at the following path:
+                //     \\
+                //     \\
+                // , .{});
+                //   R2: "Ghostty configuration" -> the Rustty product name
+                //   (APP_NAME_TITLECASE; the oracle prints the capitalized product name).
+                write!(
+                    stderr,
+                    "The $EDITOR or $VISUAL environment variable is not set or is empty.\n\
                  This environment variable is required to edit the {app} configuration\n\
                  via this CLI command.\n\
                  \n\
@@ -219,47 +230,48 @@ fn run_inner<We: Write>(stderr: &mut We) -> Result<u8, Error> {
                  you can find the configuration file at the following path:\n\
                  \n\
                  \n",
-                app = rustty_identity::APP_NAME_TITLECASE,
-            )?;
+                    app = rustty_identity::APP_NAME_TITLECASE,
+                )?;
 
-            // Output the path using the OSC8 sequence so that it is linked.
-            // try stderr.print(
-            //     "\x1b]8;;file://{s}\x1b\\{s}\x1b]8;;\x1b\\\n",
-            //     .{ path, path },
-            // );
-            //   (W94-B02-01: `{s}` writes the RAW path bytes; segmented `write_all`
-            //   keeps that byte-exact for a non-UTF-8 path.)
-            stderr.write_all(b"\x1b]8;;file://")?;
-            stderr.write_all(&path)?;
-            stderr.write_all(b"\x1b\\")?;
-            stderr.write_all(&path)?;
-            stderr.write_all(b"\x1b]8;;\x1b\\\n")?;
+                // Output the path using the OSC8 sequence so that it is linked.
+                // try stderr.print(
+                //     "\x1b]8;;file://{s}\x1b\\{s}\x1b]8;;\x1b\\\n",
+                //     .{ path, path },
+                // );
+                //   (W94-B02-01: `{s}` writes the RAW path bytes; segmented `write_all`
+                //   keeps that byte-exact for a non-UTF-8 path.)
+                stderr.write_all(b"\x1b]8;;file://")?;
+                stderr.write_all(&path)?;
+                stderr.write_all(b"\x1b\\")?;
+                stderr.write_all(&path)?;
+                stderr.write_all(b"\x1b]8;;\x1b\\\n")?;
 
-            // return 1;
-            return Ok(1);
+                // return 1;
+                return Ok(1);
+            }
+        };
+        // We require libc because we want to use std.c.environ for envp
+        // and not have to build that ourselves. We can remove this
+        // limitation later but Ghostty already heavily requires libc
+        // so this is not a big deal.
+        // comptime assert(builtin.link_libc);
+        //   PORT NOTE: Rust always links libc; the compile-time assertion holds
+        //   trivially and needs no runtime check.
+        //
+        // (the reference hoists this assert ABOVE the config load at END STATE;
+        // kept at the exec site — it is a comptime no-op either way.)
+
+        #[cfg(unix)]
+        {
+            exec_editor(stderr, &command, &path)
         }
-    };
-    // We require libc because we want to use std.c.environ for envp
-    // and not have to build that ourselves. We can remove this
-    // limitation later but Ghostty already heavily requires libc
-    // so this is not a big deal.
-    // comptime assert(builtin.link_libc);
-    //   PORT NOTE: Rust always links libc; the compile-time assertion holds
-    //   trivially and needs no runtime check.
-    //
-    // (the reference hoists this assert ABOVE the config load at END STATE;
-    // kept at the exec site — it is a comptime no-op either way.)
-
-    #[cfg(unix)]
-    {
-        exec_editor(stderr, &command, &path)
-    }
-    #[cfg(not(unix))]
-    {
-        // Non-POSIX, non-Windows targets have no `exec` syscall; the reference
-        // `comptime assert(builtin.link_libc)` + `execvpeZ` are POSIX-only.
-        let _ = &command;
-        unreachable!("edit-config requires a POSIX exec syscall")
+        #[cfg(not(unix))]
+        {
+            // Non-POSIX, non-Windows targets have no `exec` syscall; the reference
+            // `comptime assert(builtin.link_libc)` + `execvpeZ` are POSIX-only.
+            let _ = &command;
+            unreachable!("edit-config requires a POSIX exec syscall")
+        }
     }
 }
 

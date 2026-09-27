@@ -2894,6 +2894,11 @@ mod picker_tests {
     /// `update` needs the real `Tty`, which opens `/dev/tty`, so the body runs in
     /// a re-executed copy of this test binary whose controlling terminal is a
     /// fresh pty.
+    ///
+    /// POSIX-only, like `the_preview_loop_delivers_a_resize` below: the harness is
+    /// a POSIX pty (`openpty`, `setsid`, `TIOCSCTTY`); on Windows the real `Tty`
+    /// is the console (task W-2, N342).
+    #[cfg(unix)]
     #[test]
     fn keys_on_a_filter_that_matches_nothing_do_not_index_it() {
         const CHILD: &str = "RUSTTY_R13D_LIST_THEMES_CHILD";
@@ -2972,6 +2977,7 @@ mod picker_tests {
         );
     }
 
+    #[cfg(unix)]
     fn empty_filter_keys_child() {
         let dir = std::env::temp_dir().join(format!("rustty-r13d-themes-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();

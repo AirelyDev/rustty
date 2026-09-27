@@ -2336,7 +2336,11 @@ where
         // the Zig LOCAL after it was copied into `self`; Rust MOVES the local
         // at the big write below, so the `Copy` handles are read out first —
         // same values (xev handle unification, CORE_BLUEPRINT §5).
-        let renderer_wakeup = render_thread.wakeup;
+        // Windows (task W-2, N342): on IOCP `xev.Async` is a value, not a Copy
+        // handle, and `.clone()` is Zig's by-value copy (the reference copies it
+        // here, N343: record-only, faithful value semantics).
+        #[allow(clippy::clone_on_copy)]
+        let renderer_wakeup = render_thread.wakeup.clone();
         let renderer_mailbox = render_thread.mailbox;
 
         // Create the IO thread
@@ -16661,12 +16665,6 @@ mod paste_event_mutex_tests {
             }
         };
 
-        // The writer's wakeup (a `Copy` handle): `Mailbox.send` notifies it on
-        // the slow path right before it releases the renderer mutex and blocks.
-        let wakeup: rustty_xev::Async = match &mailbox {
-            termio::mailbox::Mailbox::Spsc { wakeup, .. } => *wakeup,
-        };
-
         let renderer_mutex = Box::into_raw(Box::new(rustty_zigstd::thread::Mutex::new()));
 
         let mut mu: Box<MaybeUninit<Surface<TestApp>>> = Box::new(MaybeUninit::uninit());
@@ -16681,6 +16679,20 @@ mod paste_event_mutex_tests {
                 .write(rustty_vt::kitty::clipboard::Grants::default());
             std::ptr::addr_of_mut!((*sp).io.mailbox).write(mailbox);
         }
+
+        // The writer's wakeup: `Mailbox.send` notifies it on the slow path right
+        // before it releases the renderer mutex and blocks. Taken by pointer into
+        // the surface's own mailbox, as the real writer thread waits on it
+        // (`termio/Thread.zig`'s `.spsc => |*v| v`).
+        // CORRECTION (task W-2, N342): this copied the Async out ("a `Copy`
+        // handle"). On IOCP (Windows) an `xev.Async` is a value whose waiter is
+        // registered in the copy it is called on (N343), so a copy's `wait` is
+        // never woken by the mailbox's `notify`.
+        let wakeup: *const rustty_xev::Async = unsafe {
+            match &(*sp).io.mailbox {
+                termio::mailbox::Mailbox::Spsc { wakeup, .. } => wakeup,
+            }
+        };
 
         // The writer-thread stand-in: once the sender is parked on the full
         // queue it must be able to take the renderer mutex (the mailbox
@@ -16704,10 +16716,11 @@ mod paste_event_mutex_tests {
         unsafe impl<T> Send for SendPtr<T> {}
         let q = SendPtr(queue);
         let m = SendPtr(renderer_mutex as *const rustty_zigstd::thread::Mutex);
+        let w = SendPtr(wakeup);
         let done = Arc::new(AtomicBool::new(false));
         let done2 = done.clone();
         let drainer = std::thread::spawn(move || {
-            let (q, m) = (q, m);
+            let (q, m, w) = (q, m, w);
             let mut loop_ = rustty_xev::Loop::init(rustty_xev::Options::default()).unwrap();
             let mut woke = false;
             let mut timed_out = false;
@@ -16736,7 +16749,7 @@ mod paste_event_mutex_tests {
             // goes out of scope, so the other never fires later.
             let timer = rustty_xev::Timer::init().unwrap();
             unsafe {
-                wakeup.wait(
+                (*w.0).wait(
                     &mut loop_ as *mut rustty_xev::Loop,
                     std::ptr::addr_of_mut!(c_wait),
                     std::ptr::addr_of_mut!(woke),
@@ -16798,7 +16811,7 @@ mod paste_event_mutex_tests {
         // If the sender never took the slow path, the drainer is still
         // waiting for the wakeup; release it so the test fails instead of
         // hanging.
-        let _ = wakeup.notify();
+        let _ = unsafe { (*wakeup).notify() };
         let (woke, timed_out, took_mutex_while_parked, event) = drainer.join().expect("drainer");
         let unlocked_after = unsafe { (*renderer_mutex).try_lock() };
 

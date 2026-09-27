@@ -42,7 +42,45 @@ pub fn realpath_error_name(path: &[u8], e: &io::Error) -> &'static str {
         Some(libc::EIO) => "InputOutput",
         _ => "Unexpected",
     }
-    #[cfg(not(unix))]
+    // Windows (task W-2): `dirRealPathFileWindows` (Zig 0.16.0
+    // `std/Io/Threaded.zig:6073-6100`): `sliceToPrefixedFileW` (not WTF-8 is
+    // `error.BadPathName`), then `OpenFile`'s NTSTATUS mapping
+    // (`Threaded.zig:18868-18885`). The port's open is `CreateFileW`, which
+    // reports the NTSTATUS as its Win32 error (`RtlNtStatusToDosError`); each
+    // arm names the status the error comes from. CORRECTION: this arm returned
+    // `Unexpected` for every error.
+    #[cfg(windows)]
+    {
+        if rustty_os::path::os_string_from_bytes(path).is_none() {
+            return "BadPathName";
+        }
+        match e.raw_os_error() {
+            // OBJECT_NAME_NOT_FOUND, OBJECT_PATH_NOT_FOUND
+            Some(2) | Some(3) => "FileNotFound",
+            // OBJECT_NAME_INVALID
+            Some(123) => "BadPathName",
+            // BAD_NETWORK_PATH, BAD_NETWORK_NAME
+            Some(53) | Some(67) => "NetworkNotFound",
+            // NO_MEDIA_IN_DEVICE
+            Some(21) => "NoDevice",
+            // ACCESS_DENIED, USER_MAPPED_FILE
+            Some(5) => "AccessDenied",
+            // PIPE_BUSY
+            Some(231) => "PipeBusy",
+            // OBJECT_NAME_COLLISION
+            Some(80) | Some(183) => "PathAlreadyExists",
+            // NOT_A_DIRECTORY
+            Some(267) => "NotDir",
+            // SHARING_VIOLATION (after Zig's retries)
+            Some(32) => "FileBusy",
+            // VIRUS_INFECTED, VIRUS_DELETED
+            Some(225) | Some(226) => "AntivirusInterference",
+            // A name past `PATH_MAX_WIDE` (`wToPrefixedFileW`)
+            Some(206) => "NameTooLong",
+            _ => "Unexpected",
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = e;
         "Unexpected"
@@ -69,6 +107,10 @@ pub fn load_error(e: &rustty_config::config_struct::LoadError) -> String {
 /// does not name: both enums are non-exhaustive, and `@tagName` of an unnamed
 /// value is illegal behaviour in Zig, which a kernel-returned `execve` errno
 /// never produces.
+///
+/// POSIX-only: its one caller is `edit_config`'s `execve` failure report, which
+/// Windows does not compile (task W-2).
+#[cfg(unix)]
 pub fn errno_tag_name(code: i32) -> Option<&'static str> {
     #[cfg(target_vendor = "apple")]
     const E: &[(i32, &str)] = &[
@@ -356,6 +398,38 @@ mod tests {
 
     // Each name is what `realPathFile` returns for the same condition
     // (MEASURED with Zig 0.16.0 on macOS, see the T-C task report).
+    /// The name for a path through a regular file on Windows: NTFS answers the
+    /// open with STATUS_OBJECT_PATH_NOT_FOUND (MEASURED on Windows 11, task W-2:
+    /// `ERROR_PATH_NOT_FOUND`), which Zig maps to `error.FileNotFound`; POSIX
+    /// gives `ENOTDIR` (`error.NotDir`).
+    #[cfg(windows)]
+    const WINDOWS_THROUGH_A_FILE: &str = "FileNotFound";
+
+    // The Windows mapping on real paths (task W-2): a missing path, a path
+    // through a regular file, and a byte string that is not WTF-8.
+    #[cfg(windows)]
+    #[test]
+    fn realpath_error_names_follow_the_reference_mapping_on_windows() {
+        let dir = std::env::temp_dir().join(format!("rustty-w2-realpath-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("f");
+        std::fs::write(&file, b"x").unwrap();
+
+        let missing = dir.join("nope").join("x");
+        let e = std::fs::canonicalize(&missing).unwrap_err();
+        let name = realpath_error_name(missing.as_os_str().as_encoded_bytes(), &e);
+        let through = file.join("x");
+        let e2 = std::fs::canonicalize(&through).unwrap_err();
+        let name2 = realpath_error_name(through.as_os_str().as_encoded_bytes(), &e2);
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        assert_eq!("FileNotFound", name, "{e:?}");
+        assert_eq!(WINDOWS_THROUGH_A_FILE, name2, "{e2:?}");
+        let e = io::Error::from(io::ErrorKind::InvalidInput);
+        // An unpaired continuation byte is not WTF-8.
+        assert_eq!("BadPathName", realpath_error_name(b"C:\\a\x80", &e));
+    }
+
     #[cfg(unix)]
     #[test]
     fn realpath_error_names_follow_the_reference_mapping() {

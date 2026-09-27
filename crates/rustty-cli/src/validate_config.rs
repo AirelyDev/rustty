@@ -126,7 +126,8 @@ fn run_inner<W: Write>(opts: &Options, stdout: &mut W) -> Result<u8, Error> {
         // const abs_path = try std.fs.cwd().realpath(config_path, &buf);
         //   `std.fs.cwd().realpath` -> `std::fs::canonicalize` (resolves relative
         //   to cwd + symlinks, returns an absolute path).
-        let abs_path = std::fs::canonicalize(path_from_bytes(config_path))?;
+        //   (`rustty_os::path::realpath`: the DOS form on Windows, task W-2.)
+        let abs_path = rustty_os::path::realpath(&path_from_bytes(config_path))?;
         // try cfg.loadFile(alloc, abs_path);
         cfg.load_file(&path_bytes(&abs_path))?;
         // try cfg.loadRecursiveFiles(alloc);

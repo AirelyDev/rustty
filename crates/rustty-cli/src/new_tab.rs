@@ -178,7 +178,7 @@ impl Options {
             //     defer env.deinit();
             //     break :expanded try homedir.expandHome(global.io(), &env, stripped, &expandhome_buf);
             // };
-            let mut expandhome_buf = [0u8; libc::PATH_MAX as usize];
+            let mut expandhome_buf = [0u8; rustty_os::path::MAX_PATH_BYTES];
             let expanded = expandHome(&rustty_global::environ_map(), stripped, &mut expandhome_buf)
                 .map_err(CheckArgError::ExpandHome)?;
             // var realpath_buf: [std.fs.max_path_bytes]u8 = undefined;
@@ -622,11 +622,15 @@ fn realpath_bytes(path: &[u8]) -> Result<Vec<u8>, std::io::Error> {
         let canon = std::fs::canonicalize(std::path::Path::new(std::ffi::OsStr::from_bytes(path)))?;
         Ok(canon.into_os_string().into_vec())
     }
-    #[cfg(not(unix))]
+    // Windows (task W-2): Zig's `realPathFile` converts the WTF-8 path to WTF-16
+    // (not WTF-8 is `error.BadPathName`, `sliceToPrefixedFileW`) and returns the
+    // DOS form (`rustty_os::path::realpath`). CORRECTION: this arm required
+    // UTF-8 and returned `canonicalize`'s verbatim `\\?\C:\..` form.
+    #[cfg(windows)]
     {
-        let s = std::str::from_utf8(path)
-            .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
-        let canon = std::fs::canonicalize(s)?;
+        let p = rustty_os::path::os_string_from_bytes(path)
+            .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
+        let canon = rustty_os::path::realpath(std::path::Path::new(&p))?;
         Ok(canon.into_os_string().into_encoded_bytes())
     }
 }
