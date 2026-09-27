@@ -343,10 +343,10 @@ function Compare-Results($Ref, $Got, [bool]$OtherHost = $false) {
     $r = $Ref[$name]; $g = $Got[$name]
     $crossHost = $OtherHost -and $HostDependentStdout -contains $name
     $o = ($r.Stdout -ceq $g.Stdout) -or $crossHost
+    $hostCheckFailed = $false
     if ($crossHost) {
-      $sane = $g.Stdout.Length -gt 0 -and -not $g.Stdout.Contains([string][char]0)
-      Write-Host "  ($($name): stdout lists the host's fonts; not compared against another host's golden; Rustty's is $(if ($sane) { 'non-empty with no NUL byte' } else { 'EMPTY or holds a NUL byte (UD344)' }))"
-      if (-not $sane) { $bad++ }
+      $hostCheckFailed = $g.Stdout.Length -eq 0 -or $g.Stdout.Contains([string][char]0)
+      Write-Host "  ($($name): stdout lists the host's fonts; not compared against another host's golden; Rustty's is $(if ($hostCheckFailed) { 'EMPTY or holds a NUL byte (UD344)' } else { 'non-empty with no NUL byte' }))"
     }
     $e = $r.Stderr -ceq $g.Stderr
     $x = $r.Exit -eq $g.Exit
@@ -357,8 +357,8 @@ function Compare-Results($Ref, $Got, [bool]$OtherHost = $false) {
     # A justification whose difference is gone is stale: it fails too, so the
     # list stays exactly the recorded differences. A justified stream that was
     # not compared (host-dependent stdout in check mode) cannot be stale.
-    $compared = if ($Justified.ContainsKey($name)) { @($Justified[$name].Streams | Where-Object { -not ($crossHost -and $_ -eq "stdout") }) } else { @() }
-    $verdict = if ($differs.Count -eq 0 -and $compared.Count -gt 0) { $bad++; "MATCH, but a justification is listed (stale)" } elseif ($differs.Count -eq 0) { "MATCH" } elseif ($covered) { "JUSTIFIED ($($differs -join ',')): $($Justified[$name].Why)" } else { $bad++; "DIFF" }
+    $compared = @(if ($Justified.ContainsKey($name)) { $Justified[$name].Streams | Where-Object { -not ($crossHost -and $_ -eq "stdout") } })
+    $verdict = if ($hostCheckFailed) { $bad++; "DIFF (stdout is empty or holds a NUL byte: UD344)" } elseif ($differs.Count -eq 0 -and $compared.Count -gt 0) { $bad++; "MATCH, but a justification is listed (stale)" } elseif ($differs.Count -eq 0) { "MATCH" } elseif ($covered) { "JUSTIFIED ($($differs -join ',')): $($Justified[$name].Why)" } else { $bad++; "DIFF" }
     Write-Host ("{0,-30} {1,-6} {2,-6} {3,-12} {4}" -f $name, $(if ($o) { "same" } else { "DIFF" }), $(if ($e) { "same" } else { "DIFF" }), "$($r.Exit)/$($g.Exit)", $verdict)
     if ($verdict -eq "DIFF") {
       if (-not $o) { Show-Diff "stdout" $r.Stdout $g.Stdout }
