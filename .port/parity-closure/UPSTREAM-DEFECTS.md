@@ -2464,7 +2464,7 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - ReleaseSafe:     UNVERIFIED (not measured on a Ghostty build): the answer GTK sees is the register left by the last call in `surfaceDrop` (`setDropOverlayDirection`, or `findSurfaceByID`/`moveSplit` on the early returns), so the drag source is told accepted or rejected arbitrarily. No crash is expected in C.
 - ReleaseFast:     the same (C calling convention, not a Zig safety check).
 - reachability:    every drag of a split onto another surface (the surface drag source), from the user.
-- port handling:   `crates/rustty-apprt/src/gtk/class/surface.rs` `surface_drop` returns `bool`: `true` after `move_split`, `false` on each early return, the signal's documented meaning. A `()` handler, the direct translation, is worse in Rust: glib-rs checks the return type and panics inside the C callback, which aborts the process (MEASURED on the VM, task L-2: "Closure returned no value but the caller expected a value of type gboolean", then "panic in a function that cannot unwind"). PORT NOTE: reference defect (R13) at the handler.
+- port handling:   `crates/rustty-apprt/src/gtk/class/surface.rs` `surface_drop` returns `bool`: `true` after `move_split`, `false` on each early return, the signal's documented meaning. A `()` handler, the direct translation, is worse in Rust: glib-rs checks the return type and panics inside the C callback, which aborts the process (MEASURED on the VM, task L-2: "Closure returned no value but the caller expected a value of type gboolean", then "panic in a function that cannot unwind"). PORT NOTE: reference defect (R13) at the handler. CORRECTION (2026-09-27, task L-4b, NEW-FINDINGS N338): until `99693478` the port's handler read GTK's boxed `G_TYPE_VALUE` signal parameter as the dropped value, so every real drop failed `getUint64` and returned `false` before `move_split`; the accepting path is reached since then: MEASURED by `gtk_split_drop::dropping_a_surface_on_another_moves_the_split` (rvm, task L-4b: `true`, and A | B becomes B above A; 3/3; with the unboxing removed it fails at `surface_drop accepted the drop`).
 - parity row(s):   none (found by task L-2 running the headed KAT `gtk_parity_callbacks`); NEW-FINDINGS N300.
 - test:            `surface_drop_answers_the_gboolean_drop_signal` (rustty-apprt, Linux, display): emitting `drop` on `surface_drop_target` with a value that is not a surface id returns `false` and the process survives; the headed KAT `parity_callbacks_do_not_abort` emits `drop` on every drop target. NEGATIVE CONTROL (VM, task L-2): the `()` handler restored aborts the test process.
 - proposed fix:    declare `surfaceDrop` as `callconv(.c) c_int` and return `1` after `moveSplit`, `0` on each early return.
@@ -2576,6 +2576,21 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - proposed fix:    in both `parse` functions, free the previous command's list before assigning `parser.command` (for example call the `reset` cleanup switch first), or have `end` move the state to `.invalid` so a second `end` returns null.
 - upstream status: not reported
 
+### UD314 — `ghostty_selection_gesture_event_set` leaks the word-boundary codepoint copy when a codepoint is out of range
+- kind:            leak
+- upstream project: ghostty
+- severity:        low (C API)
+- reference:       src/terminal/c/selection_gesture.zig:710-731 (`trySetWordBoundaryCodepoints`), at 20abdb50a
+- defect:          the function returns `Result`, not an error union. After `const copy = event.alloc.alloc(u21, value.len)`, the conversion loop's `std.math.cast(u21, cp) orelse return .invalid_value` is a normal return, so the `errdefer event.alloc.free(copy)` above it never runs and the copy leaks. The previous copy was already freed and the event falls back to the default boundaries, so nothing references the leaked block.
+- ReleaseSafe:     `len * 4` bytes leak from the event's allocator per call.
+- ReleaseFast:     the same leak.
+- reachability:    libghostty-vt embedders: `ghostty_selection_gesture_event_set(event, GHOSTTY_SELECTION_GESTURE_EVENT_OPT_WORD_BOUNDARY_CODEPOINTS, &codepoints)` with any codepoint above U+1FFFFF (the header takes `uint32_t` values).
+- port handling:   fixed (R13): `crates/rustty-vt-c/src/selection_gesture.rs` `try_set_word_boundary_codepoints` (PORT NOTE: reference defect (R13, UD314)); returning drops the copy, which frees it through the event's allocator. The result and the event's state are the reference's. Listed in `docs/ghostty-bug-fixes.md`.
+- parity row(s):   none; found by task S7-8 while routing the copy (NEW-FINDINGS N333).
+- test:            `selection_gesture::tests::event_invalid_codepoint_frees_the_copy` (rustty-vt-c): over a counting allocator, a valid copy, then `['a', 0x200000]`: INVALID_VALUE, the 8-byte copy is allocated and freed along with the previous one, the defaults apply, and U+1FFFFF itself is accepted. Negative control (`mem::forget(copy)` before the return, the reference's behaviour): the test fails on the free count (2 expected, 1).
+- proposed fix:    free the copy on the invalid path (`event.alloc.free(copy); return .invalid_value;`), or validate every codepoint before allocating.
+- upstream status: not reported
+
 ### UD315 — after a render-state update fails on an allocation, the next update leaves the rows it did not rebuild stale or empty
 - kind:            functional (evident intent: a successful update must describe the current terminal), and, by reading, UB (UNVERIFIED)
 - upstream project: ghostty
@@ -2589,6 +2604,36 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - parity row(s):   none; found by task S7-5 while making the render state's allocations fallible (LEDGER S175-F1). NEW-FINDINGS N316.
 - test:            `render::tests::failed_update_is_followed_by_a_full_rebuild` (rustty-vt): a failing allocator refuses row 1's first cell column; the retried update must rebuild rows 1 and 2 and equal a fresh state. `render_state_allocation_failure_sweep` (rustty-vt) and `render_state_allocation_failure_sweep_through_the_c_api` (rustty-vt-c) fail every allocation of their scenarios in turn and compare each retried update with a fresh state. Negative control (the flag's check removed, the reference's behaviour): the first test fails with `row 1 is rebuilt` (10 expected, 0 cells), the Rust sweep with `alloc n=0 first update: row 2 raw` (an empty row where the fresh state has text).
 - proposed fix:    make a failed `beginUpdate` force the next one to redraw: a `needs_redraw: bool` field set by an `errdefer` at the top of `beginUpdate`, checked first in the `redraw` block and cleared when a redraw completes (or `errdefer self.rows = 0;`, which reuses the dimension check but also changes what `rows` reports until then).
+- upstream status: not reported
+
+### UD320 — in a Flatpak build, `passwd.get` leaks the pty slave when the host command cannot start
+- kind:            leak (one file descriptor per call)
+- upstream project: ghostty
+- severity:        low (one pty fd per failing call; the calls repeat)
+- reference:       `src/os/passwd.zig:69-89` (`var pty = try Pty.open(.{}); defer pty.deinit();` ... `_ = try cmd.spawn(alloc); _ = try cmd.wait();` then `_ = compat_fd.close(pty.slave);`) and `src/pty.zig:189-192` (`deinit` closes only `self.master`), at 20abdb50a
+- defect:          the slave is closed by hand after `cmd.wait()`, and `Pty.deinit` closes only the master, so when `cmd.spawn` or `cmd.wait` fails the `try` returns with the slave still open. Nothing else holds it.
+- ReleaseSafe:     one leaked pty fd per failing call (an error return, no safety check involved). MEASURED on the port with the reference's behaviour restored (task L-4, Flatpak sandbox on rvm): `{4: /dev/pts/0}` left open after `get` returns the spawn error.
+- ReleaseFast:     the same.
+- reachability:    a Flatpak build of Ghostty whose host command cannot start: the sandbox lacks `--talk-name=org.freedesktop.Flatpak` (a repackaged or locally overridden manifest, `flatpak override --no-talk-name`), or the session bus / flatpak-session-helper is unavailable. `passwd.get` is called by `Config.finalize` (`src/config/Config.zig:4792`) on the config loads that must look up the default shell or home directory (no `command` and no `SHELL` taken from a CLI launch, or `working-directory = home`; for example a desktop launch), and by `homedir.home` (`src/os/homedir.zig:53`) only when `$HOME` is unset (`:25-30` return `$HOME` first); each such call leaks another fd. CORRECTION (task L-4b, review F2): this said `Config.finalize` calls it on "every config load and reload" and did not say the home path needs `$HOME` unset.
+- port handling:   `crates/rustty-os/src/passwd.rs` `get`: the pty guard (the port of the `defer`) also closes the slave while it is still owned, and the hand close after `wait` clears that ownership, so the success path is unchanged. PORT NOTE: reference defect (R13) at the guard.
+- parity row(s):   LEDGER S112-F5 (found closing it); NEW-FINDINGS N335.
+- test:            `passwd::tests::flatpak_spawn_failure_returns_the_host_command_error_and_closes_the_pty` (rustty-os, Linux, run inside `flatpak build` without Flatpak access): `get` returns `Error::HostCommand(FlatpakSpawnFail)` and the process's set of pty fds is unchanged. NEGATIVE CONTROL (task L-4): the slave close removed from the guard, the reference's behaviour, fails with `no pty fd leaked (master or slave)`, left `{4: "/dev/pts/0 (deleted)"}`.
+- proposed fix:    after `defer pty.deinit();` add `var slave_open = true; defer if (slave_open) { _ = compat_fd.close(pty.slave); }`, and set `slave_open = false;` at the hand close after `wait`. (A plain `errdefer close(pty.slave)` would close the slave twice when the read loop's `return err` fires after the hand close.)
+- upstream status: not reported
+
+### UD321 — a single file dropped on a terminal is accepted and never pasted
+- kind:            functional (evident intent: the branch builds the shell-escaped path the file-list branch pastes, then discards it)
+- upstream project: ghostty
+- severity:        low (the drop is lost; nothing crashes)
+- reference:       `src/apprt/gtk/class/surface.zig:2743-2766` (`dtDrop`'s `gio.File` branch) at 20abdb50a: `file.getPath()`, the path and a newline written through `ShellEscapeWriter` into `stream`, `toOwnedSliceSentinel`, then `defer alloc.free(string); return 1;` with no `Clipboard.paste`. The `gdk.FileList` branch above it (`:2701-2741`) builds the same text and calls `Clipboard.paste(self, string)` (`:2739`). The same branch also never frees `path` (`getPath` returns a newly allocated string; the file-list branch `defer glib.free(path)`s it, `:2721`): one small leak per such drop.
+- defect:          the drop target reports the drop accepted (`return 1`) and the path the branch prepared is thrown away, so the user sees nothing happen.
+- ReleaseSafe:     the path is not pasted (by reading; not measured on a Ghostty build).
+- ReleaseFast:     the same.
+- reachability:    a drag source that offers a single `GFile` and no `GdkFileList` (the drop target tries `GdkFileList` first, `:1845-1850`, so a `text/uri-list` drop resolves to the list); by the user.
+- port handling:   `crates/rustty-apprt/src/gtk/class/surface.rs` `drop` pastes the escaped path, as the file-list branch does (controller ruling, task L-4b). PORT NOTE: reference defect (R13) at the branch. The port's path is an owned `PathBuf`, so the leak has no counterpart. Listed in `docs/ghostty-bug-fixes.md`.
+- parity row(s):   none; found by the review of task L-4 (review-L-4 F6), after N338 made the branch reachable in the port.
+- test:            `drop_pastes_a_single_file_path_shell_escaped` (rustty-apprt, Linux, display): emitting `drop` on `drop_target` with a `GFile` for `/tmp/rustty l4b/it's.txt` answers `true` and pastes `/tmp/rustty\ l4b/it\'s.txt` and a newline. Passes on rvm (task L-4b). NEGATIVE CONTROL (rvm, task L-4b): the paste removed, the reference's behaviour, fails with `left: None`.
+- proposed fix:    call `Clipboard.paste(self, string);` before `return 1;` in the `gio.File` branch, and `defer glib.free(path);` after `getPath`.
 - upstream status: not reported
 
 ## Candidates pending verification

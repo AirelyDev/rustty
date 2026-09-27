@@ -5812,7 +5812,8 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   against the points' allocator for that reason.
 - **state**: CLOSED for the search. The formatter residual is OPEN, owned by S7-8
   (`DEFERRALS.md` F-008/W12-01 Tier 2 item 5). The window's own `PointMap` construction
-  debug-asserts that the list is on the window's allocator (S7-6b).
+  debug-asserts that the list is on the window's allocator (S7-6b). The formatter residual is CLOSED by task
+  S7-8 (N330).
 
 ## N329 — Stacked Borrows status of the search after S7-6
 
@@ -5832,6 +5833,284 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   fill. Harness: `.port/phase-2/mirihar-s7-6-search` (isolated, non-FFI, reproduces 1-5 with the same borrow
   shapes; for the controller's Miri lane under `-Zmiri-stacked-borrows` and `-Zmiri-tree-borrows`).
 - **state**: OPEN for the controller's Miri lane (targets listed in the S7-6 report).
+
+## N330 — the formatter pin map grows through the pin map's allocator (the N328 residual)
+
+- **id**: N330. Not a ledger row: closes the formatter residual of N328 (review S7-6 F3, `DEFERRALS.md`
+  F-008 Tier 2 item 5). Task S7-8.
+- **severity**: low. **kind**: allocator routing (T1/T2/T3 of the S-7 design).
+- **oracle**: `src/terminal/formatter.zig:129-231` (`PinMap.Map`: `points`/`nodes` are `std.ArrayList`s grown
+  by `setNode(alloc, ..)`/`append(alloc, ..)` with `appendNTimes`), `:388-540`, `:824-840` (the extras' `m.map.append(m.alloc, ..)
+  catch return error.WriteFailed`), `:916-923` (`PageListFormatter`: `m.map.setNode(m.alloc, chunk.node) catch
+  return error.WriteFailed` and `.point_map = .{ .alloc = m.alloc, .map = &m.map.points, .base = .. }`);
+  `Screen.zig:2944-2995` (`selectionStringMap` passes its `alloc` as the pin map's); at 20abdb50a.
+- **rustty (before)**: `PinMapMap.points` was an allocator-bound list bound to the Rust heap handle, `nodes` a
+  std `Vec`, `set_node`/`append` infallible (`resize_copy`, `push`), and `PointMap` grew the list it points to
+  without reading its `alloc`.
+- **fix**: `crates/rustty-vt/src/formatter.rs` `PinMapMap`: both lists are `AVec`s bound to the pin map's
+  `alloc` on first growth (`alloc::bind`, identity-asserted afterwards and in `deinit`), grown with Zig's
+  `ArrayList` growth (`zig_list::append`/`append_n_times`, `init_capacity` 16 for `Coordinate`, 8 for the
+  16-byte `NodeRun`); `set_node`/`append` return `OutOfMemory`, which every caller maps to the reference's
+  `error.WriteFailed` (an `io::ErrorKind::OutOfMemory` write error). `PageListFormatter` binds `points` before
+  handing it to the page formatter; `PointMap`'s growth debug-asserts its `alloc` is the list's.
+  `StringMap::deinit` frees the map through `PinMapMap::deinit(alloc)`.
+- **verification**: `formatter::tests::pin_map_plain_routes_through_the_pin_maps_allocator` (exact: 2 allocations,
+  `nodes` capacity 9, `points` capacity 17, 144 + 136 live bytes, both freed by `deinit`),
+  `pin_map_extras_route_through_the_pin_maps_allocator` (palette extras first: `points` capacity
+  growCapacity(5522) = 8299), `pin_map_growth_failure_is_write_failed` (plain and vt, first and second growth
+  refused), `selection_string_map_routes_through_the_given_allocator`. Negative controls, one at a time:
+  `PageListFormatter`'s bind removed (3 tests fail: the identity assert), `set_node`'s bind removed (4 fail:
+  `nodes` on Global), `append`'s bind removed (the extras test fails: identity assert), `append` grown with the
+  node-run `init_capacity` (8291 vs 8299), the palette extras' `map_err(..)?` replaced by `expect` (the failure
+  test panics).
+- **residual**: `StringMap::shallow_copy` (oniguruma search matches) deep-copies the map; the copy is on the
+  map's own allocator (the reference's copy is shallow and allocates nothing). Every caller of
+  `selection_string_map` passes the Rust heap handle and it is not reachable from the C API. See N334.
+- **state**: CLOSED (task S7-8). N328's residual is closed by this entry.
+
+## N331 — the C API's allocating writers grow through the reference's allocator and hand over their buffer (`toOwnedSlice`)
+
+- **id**: N331. Not a ledger row: found by the S7-8 audit of what F-008 Tier 2 still left on the Rust heap.
+- **severity**: medium (C API allocator contract). **kind**: allocator routing, T1/T2/T3.
+- **oracle**: `c/formatter.zig:220-238` and `c/selection.zig:226-249` (`format_alloc`: `var aw:
+  std.Io.Writer.Allocating = .init(lib.alloc.default(alloc_))`, `aw.toOwnedSlice() catch return
+  .out_of_memory`), `c/snapshot.zig:622-656` (`encode_alloc`, the same over the caller's allocator),
+  `c/terminal.zig:975-1001` (`continuationAllocIo(.., alloc, ..)`: an allocating writer over `alloc`,
+  `toOwnedSlice`; `alloc.dupe(u8, "")` for an untracked ground stream), `:1084-1114` (`continuation_alloc`
+  passes `lib.alloc.default(alloc_)`), `:759` (`restoreContinuation`: `Writer.Allocating.init(
+  wrapper.terminal.gpa())`), `c/snapshot.zig:512-542` (`continuationOwned`: the copy on `native.gpa()`); Zig 0.16
+  `std/array_list.zig` `toOwnedSlice` (`remap` to the length, else alloc + copy + free); at 20abdb50a.
+- **rustty (before)**: each built its output in a Rust-heap `Vec` (infallible growth) and, for the four C
+  exports, copied it into one exact allocation from the caller's allocator. So the caller's allocator saw one
+  call where the reference makes its growth calls, a Rust-heap allocation it never sees held the whole output
+  (and aborted instead of `OUT_OF_MEMORY`), and `restoreContinuation`/`continuationOwned` never touched the
+  terminal's allocator. `rustty_selection_format_alloc` also made a RAW `alloc(0)` callback for empty output
+  (the S171-F1 class; a NULL answer was papered over with a dangling pointer).
+- **fix**: `zig_list::AllocatingWriter` (S7-6's port of `Writer.Allocating`, now public as
+  `alloc::AllocatingWriter`) gains `to_owned_slice` (`ArrayList.toOwnedSlice`: no call for a writer that never
+  allocated; otherwise the handle's `shrink` = `remap` then alloc + copy + free; on failure the writer keeps and
+  later frees its buffer) and implements the snapshot `io::Writer`. The five sites use it over the reference's
+  allocator; `continuation_alloc_io` takes the allocator again and returns an `AVec` bound to it;
+  `allocator::into_c_bytes` hands the exactly-sized buffer across the ABI (the non-null empty sentinel for 0
+  bytes, as before).
+- **T3 residuals**: the formatter's write granularity follows the port formatter's (N325). The continuation
+  tracker's writes were a one-byte `write` (`ensureUnusedCapacity(1 + 1 + 1)` = 132 bytes) where the
+  reference's `writeByte` rebases (`growCapacity(1)` = 129); S7-8b (review F4) made `Tracker::write` and
+  `Stream::write_continuation` take a `stream_continuation::ByteWriter` (a `std::io::Write` with `writeByte`,
+  overridden by `alloc::AllocatingWriter`), so the first growth is 129 as in the reference. Negative control
+  (the override removed): `continuation_writers_route_through_their_allocators` fails, 129 vs 132.
+- **NULL allocator**: `format_alloc_null_allocator_round_trip` (S7-8b, review F3) produces through the Global
+  arm and frees with `rustty_free(NULL, ..)`, text and empty output.
+- **verification** (rustty-vt-c unless noted): `format_alloc_writer_routes_through_the_callers_allocator` and
+  `selection_format_alloc_writer_routes_…` (1 allocation of growCapacity(11) = 144 bytes, 1 remap to 5, no
+  free), `encode_alloc_writer_routes_…` (caller: 1 allocation of 153, 2 remaps, 1095 bytes handed over;
+  terminal: the continuation copy and the record scratch, N332), `continuation_writers_route_through_their_allocators`
+  (`continuation_alloc`: 129 then a remap to 4; `restoreContinuation`: exactly one 129-byte allocation and free
+  on the terminal's allocator, and `OutOfMemory` when it is refused), the failure arms of each (first growth
+  refused; remap refused and the copy refused), `allocation_failure_sweep_through_the_allocating_writers`
+  (alloc loop, remap loop, and an alloc loop with every remap refused, which reaches the `toOwnedSlice`
+  fallback), rustty-vt `zig_list::tests::allocating_writer_to_owned_slice_is_zigs`. The reference's snapshot
+  test's `FailingAllocator(.fail_index = 0)` now runs as written (it was a rejecting `CountingCAllocator`).
+  Negative controls, one at a time: each of the five writers and the snapshot's continuation copy on the Rust
+  heap (each fails its routing test: `left: 1, right: 0` or the exact count), `toOwnedSlice` without the shrink
+  (every routing test fails: 5 vs 144 bytes), the continuation's `toOwnedSlice` failure turned into a panic
+  (the sweep's third loop panics; the first two loops did not reach it, which is why the third exists).
+- **state**: CLOSED (task S7-8).
+
+## N332 — `snapshot::encode` takes the reference's allocator again; the record scratch spills through it
+
+- **id**: N332. Not a ledger row: S7-8 audit.
+- **severity**: low. **kind**: allocator routing, signature fidelity.
+- **oracle**: `src/terminal/snapshot/snapshot.zig:44-57` (`encode(alloc, destination, t, options)`:
+  `std.heap.stackFallback(512, alloc)` under `record.Writer.init(stack_alloc.get(), destination)`),
+  `record.zig:150-170`; the C API passes `native.gpa()` (`c/snapshot.zig:565`, `:596`, `:606`, `:645`), the
+  benchmark its own allocator (`benchmark/TerminalSnapshot.zig:183`, `:210`); at 20abdb50a.
+- **rustty (before)**: `snapshot::encode(destination, t, options)` dropped `alloc`; `record::Writer`'s
+  stack-fallback scratch spilled to the Rust heap.
+- **fix**: `crates/rustty-vt/src/snapshot/codec.rs` `encode(alloc, destination, t, options)`; `record::Writer::init_in
+  (alloc, destination)` builds the scratch with `StackFallbackWriter::new_in(alloc)` (S7-4's fallible spill);
+  `record::Writer::init` keeps the Rust heap for the record-level tests. vt-c passes the terminal's `gpa()`
+  (read through raw pointers, no `&mut Terminal` retag), rustty-bench its `alloc`.
+- **T3 residual**: the spill is one exact allocation when a payload crosses 512 bytes (513 in the routing test),
+  then the handle's growth; the reference's `ArrayList` inside the stack-fallback allocator can spill a little
+  earlier and grows by `growCapacity` (as recorded for S7-4's `StackFallbackWriter`).
+- **verification**: `encode_alloc_writer_routes_through_the_callers_allocator` pins the terminal side: 2
+  allocations (the continuation copy, 129 since S7-8b; the scratch spill, 513), 2 remaps, 2 frees, live bytes unchanged.
+  Negative control (`init` in place of `init_in` in `encode`): fails (`left: 2, right: 1`). The C-API writer
+  sweep fails the spill on the terminal's allocator (`encode_alloc` reports OUT_OF_MEMORY).
+- **state**: CLOSED (task S7-8).
+
+## N333 — the selection-gesture event's codepoint copy goes through the event's allocator (F-008 Tier 2 item 3)
+
+- **id**: N333. Not a ledger row: `DEFERRALS.md` F-008 Tier 2 item 3, design task S7-8.
+- **severity**: low. **kind**: allocator routing; reference defect handled (UD314).
+- **oracle**: `src/terminal/c/selection_gesture.zig:23-126` (`GestureWrapper`/`EventWrapper.alloc`,
+  `EventWrapper.deinit` frees a non-empty copy), `:218-278` (`new`/`event_new`: `alloc.create`; `free`/`event_free`:
+  `alloc.destroy`), `:710-739` (`trySetWordBoundaryCodepoints`: `event.alloc.alloc(u21, value.len) catch return
+  .out_of_memory`, `std.math.cast(u21, cp) orelse return .invalid_value`; `clearWordBoundaryCodepoints`); at
+  20abdb50a.
+- **rustty (before)**: the wrappers held a `Box<dyn ZigAllocator>` (a Rust-heap box per wrapper for a C
+  allocator) and the copy was a Rust-heap `Vec<u32>`, infallible.
+- **fix**: `crates/rustty-vt-c/src/selection_gesture.rs`: both wrappers hold the `VtAllocator` handle and
+  allocate/free their storage through it; the copy is an `AVec<u32>` on `event.alloc`, one exact
+  `try_reserve_exact(len)` request (`@sizeOf(u21)` is 4: `len * 4` bytes, 4-aligned; a zero `len` makes no
+  call), `OUT_OF_MEMORY` on refusal. An out-of-range codepoint returns `INVALID_VALUE` and frees the copy (the
+  reference leaks it: UD314, R13).
+- **verification**: `selection_gesture::tests::event_codepoints_route_through_the_event_allocator` (exact
+  sizes and order: 12-byte copy, freed before the 4-byte replacement; zero-length and null clears make no
+  call; `event_free` frees the copy then the wrapper; no resize/remap), `event_codepoints_allocation_failure_is_out_of_memory`,
+  `event_invalid_codepoint_frees_the_copy`, `gesture_wrapper_routes_through_the_gesture_allocator`,
+  `selection_gesture_allocation_failure_sweep` (every index of the 4-allocation lifecycle; each call from the
+  failing index on reports OUT_OF_MEMORY, every byte returned). Negative controls, one at a time: the copy on
+  the Rust heap (3 tests fail), the leak reinstated (`mem::forget`; the UD314 test fails on the free count, 2
+  vs 1), an inexact `try_reserve` (16 vs 12 bytes), the event wrapper on the Rust heap (5 tests fail), the
+  copy's OOM turned into a panic (the sweep panics).
+- **state**: CLOSED (task S7-8).
+
+## N334 — F-008/W12-01 Tier 2 closed: the audit, and what stays on the Rust heap
+
+- **id**: N334. Not a ledger row: the closure record for `DEFERRALS.md` F-008/W12-01 Tier 2 (task S7-8).
+- **severity**: informational. **kind**: allocator routing audit.
+- **audit**: every `lib.alloc.default`, `alloc.create/alloc/dupe/free/destroy`, `Writer.Allocating`,
+  `stackFallback` and `gpa()` site in `src/terminal/c/*.zig` (non-test) at 20abdb50a was checked against the
+  port: wrappers (Tier 1), terminal internals (S7-3/S7-4), render (S7-5), search (S7-6), OSC (S7-7), selection
+  gesture, formatter pin map and the allocating writers (S7-8: N330-N333). The snapshot encoder's own encode
+  paths make no other allocation in either.
+- **stays on the Rust heap, not routed, because the reference makes no caller allocation there** (port-only
+  transients): the page formatter's HTML/VT header buffers (`crates/rustty-vt/src/formatter.rs:1723`, `:1749`;
+  the reference uses a fixed 1024-byte stack buffer) and its hyperlink URI copy (`:2170`; the reference
+  borrows the page's bytes); `StringMap::shallow_copy` (`string_map.rs:108`; the reference's copy is shallow);
+  the `Box<dyn ZigAllocator>` adapters that `rustty_lib::allocator::default` builds for a C allocator in the
+  Tier 1 wrappers and helpers (`rustty-vt-c/src/terminal.rs:1620`, `:1958`, `render.rs:1354`, `:1549`,
+  `cwrap.rs`); the kitty temporary-directory path (`rustty-vt-c/src/terminal.rs:3173-3190`: one `to_vec` plus
+  a clone per screen into `TemporaryFileLimit::Enabled { directory: Vec<u8> }`, where the reference copies the
+  bytes into `TerminalWrapper.tmp_dir_path`, a fixed `[max_path_bytes]u8` inside the caller-allocated wrapper,
+  and the limits borrow it; making the limits borrow is a rustty-vt kitty-type change); the response strings
+  and key snapshots listed in N274. These are cleanup candidates (they cost a Rust-heap allocation the reference
+  does not make), not routing gaps (added by S7-8b, review S7-8 F1).
+- **stays on the Rust heap although the reference uses the passed allocator, and why**:
+  `Screen::selection_string_impl`'s output (`crates/rustty-vt/src/screen.rs:4659`, a `Vec` where the
+  reference's `Writer.Allocating` is on `alloc`): not reachable from the C API, and every caller
+  (rustty-core `surface.rs`, rustty-apprt-c, tests) passes the Rust heap handle, so the allocator is the same.
+  `c/terminal.zig` `Io.init`'s `alloc.create(std.Io.Threaded)` is Windows-only (other targets use `TinyIo`,
+  no allocation); the port does not build for Windows. The snapshot decoder's `Source` and `ReaderState`
+  (`rustty-vt-c/src/snapshot.rs:318-324`, `decoder_new_source`: two `Box`es freed by `decoder_free`): the
+  reference keeps `DecoderWrapper.source` inline (`c/snapshot.zig:59-112, 157-176`), so its bytes are part of
+  the caller-allocated wrapper; the port makes the same single caller call for a smaller wrapper plus two
+  Rust-heap allocations, because the core decoder holds a `&mut` to the source for the wrapper's lifetime and
+  that borrow must not overlap accesses to the wrapper (Stacked Borrows; the `DecoderWrapper` PORT NOTE). Added
+  by S7-8b (review S7-8 F1).
+- **page memory** stays on the page allocator in both (design §1.2).
+- **T3**: element sizes (N325), writer call granularity (N331), the record scratch's spill (N332), and
+  allocator_api2 `Vec` growth where the port has not switched to `growCapacity` are call-shape residuals, not
+  routing; S7-9 records them.
+- **state**: CLOSED. `DEFERRALS.md` F-008/W12-01 Tier 2 is marked CLOSED.
+
+## N335 — `passwd.get`'s Flatpak block leaks the pty slave when the host command cannot start (reference defect, R13; UD320)
+
+- **id**: N335. Found by task L-4 while closing LEDGER S112-F5 in a real Flatpak sandbox.
+- **severity**: low. **kind**: reference defect (fd leak on an error path), fixed under R13.
+- **where**: `src/os/passwd.zig:69-89` at pin `20abdb50a`: `defer pty.deinit()` (which closes only the master,
+  `src/pty.zig:189-192`), then `try cmd.spawn(alloc)` / `try cmd.wait()` before the hand `close(pty.slave)`.
+- **reachable**: a Flatpak build whose host command cannot start (no `org.freedesktop.Flatpak` access, no session
+  bus). MEASURED in the sandbox: both failure modes (no bus: "Cannot autolaunch D-Bus"; bus without access:
+  `ServiceUnknown` -> `FlatpakRPCFail`) reach the early return.
+- **port**: the pty guard in `crates/rustty-os/src/passwd.rs` `get` closes the slave while it is still owned
+  (`PORT NOTE: reference defect (R13)`, UD320). Test
+  `passwd::tests::flatpak_spawn_failure_returns_the_host_command_error_and_closes_the_pty`; negative control (the
+  slave close removed) leaks `{4: /dev/pts/0}`.
+- **correction**: LEDGER S112-F5's T-G note said the pre-guard code "leaked both fds" on a failing spawn/wait/read
+  and that the guard fixed it; the guard fixed the master only (measured: without the guard's `deinit`,
+  `{3: /dev/pts/ptmx}` leaks); the slave leak is this finding.
+- **UD id**: UD320, with its `docs/ghostty-bug-fixes.md` row.
+- **state**: CLOSED (parity tail L-4).
+
+## N336 — `TemplateCallbackReturn` told gboolean template callbacks to return `i32`, which aborts under glib-rs
+
+- **id**: N336. Not a ledger row: found by task L-4's GTK signal survey (UD295 follow-up).
+- **severity**: low today (latent: no callback used the alias), high if followed (a process abort on the
+  signal). **kind**: port defect (wrong guidance in a type alias and its docs).
+- **what**: `crates/rustty-apprt/src/gtk/class.rs` carried the reference's `class.zig:348-352` guard ("bound
+  function must return c_int instead of bool") as `pub type TemplateCallbackReturn = i32`, documented "must
+  return `i32`, never Rust `bool`". A `#[template_callback]` is called through glib-rs's closure marshaller,
+  which asserts the returned `GValue`'s type is the signal's return type (glib 0.22 `closure.rs:243-247`); an
+  `i32` is `G_TYPE_INT`, so on a `gboolean` signal it panics inside the C callback and aborts.
+- **fix**: the alias is `bool` (`TEMPLATE_CALLBACK_RETURN = true`), with a CORRECTION note quoting the old text.
+  Test `gtk::class::tests::template_callback_return_answers_a_gboolean_signal` (no display:
+  `GApplication::name-lost`, a `gboolean` signal): the handler runs once and its `TRUE` reaches the emitter.
+  NEGATIVE CONTROL (VM): the alias back to `i32` aborts the test process with "Closure returned a value of
+  type gint but caller expected gboolean", then "panic in a function that cannot unwind" (SIGABRT).
+- **state**: CLOSED (parity tail L-4).
+
+## N337 — the surface paste `drop` handler aborted on a dropped string that is not UTF-8
+
+- **id**: N337. Not a ledger row: found by task L-4's GTK signal survey.
+- **severity**: low (reachability through GTK UNVERIFIED). **kind**: port defect (a panic in a C callback where
+  the reference reads bytes).
+- **what**: `Surface::drop` (`crates/rustty-apprt/src/gtk/class/surface.rs`) read the string branch with
+  `value.get::<String>()`, which glib-rs builds with `CStr::to_str().expect("Invalid UTF-8")` (glib 0.22
+  `value.rs:898`); the reference (`surface.zig:2768-2773`) takes `value.getString()`'s bytes with
+  `std.mem.span`. GTK's text deserializers convert through a charset converter, so whether GTK can deliver
+  such a value is UNVERIFIED.
+- **fix**: the bytes are read raw with the existing `raw_string_bytes` (`g_value_get_string`), NULL skipped as
+  the reference's `orelse`. Test `drop_pastes_a_non_utf8_string_verbatim` (display, `#[ignore]`d; VM under a
+  private headless sway): emitting `drop` on `drop_target` with `b"caf\xe9 \xff\xfe"` answers `true` and the
+  string branch passes exactly those bytes to `paste` (a `cfg(test)` thread-local records them). NEGATIVE
+  CONTROL (VM): `value.get::<String>()` restored aborts the process ("Invalid UTF-8: Utf8Error { valid_up_to:
+  3, .. }", "panic in a function that cannot unwind", SIGABRT).
+- **state**: CLOSED (parity tail L-4).
+
+## N338 — the surface's two `GtkDropTarget::drop` handlers read the signal's boxed parameter as the dropped value: drag-and-drop never pasted and never moved a split
+
+- **id**: N338. Not a ledger row: found by task L-4 while writing N337's test (the string branch was never
+  reached).
+- **severity**: high for the feature (file/text drops and split drag-and-drop silently did nothing on Linux).
+  **kind**: port defect (marshalling).
+- **what**: GTK declares `drop`'s first parameter as `G_TYPE_VALUE`. A C handler (the reference's `dtDrop` /
+  `surfaceDrop`, and gtk4-rs's typed `connect_drop` trampoline) receives the dropped `const GValue *` itself;
+  a `#[template_callback]` receives the signal's PARAMETER `GValue`, a box around it, and `&glib::Value`'s
+  `FromValue` returns that box unchanged. So in `Surface::drop` every `G_VALUE_HOLDS(FileList / File /
+  gchararray)` was false and the handler returned `true` having done nothing, and in `surface_drop`
+  `get::<u64>()` always failed, so it returned `false` before `move_split` (UD295's fix made it answer the
+  signal, but it could not yet accept a drop). No test had reached either branch: the UD295 test and the
+  headed KAT emit values that are rejected either way.
+- **fix**: `ext::drop_target_value` unboxes the parameter (`BoxedValue`), and both handlers branch on the
+  dropped value (`None`, which GTK never emits, answers `false`). Tests: `ext::tests::
+  drop_target_value_unboxes_the_signal_parameter` (no display) and N337's
+  `drop_pastes_a_non_utf8_string_verbatim`, which asserts the string branch ran. NEGATIVE CONTROL (VM): the
+  unboxing removed from `drop`, that test fails with `left: None` (the string branch never ran). The headed
+  KAT `gtk_parity_callbacks::parity_callbacks_do_not_abort` and `surface_drop_answers_the_gboolean_drop_signal`
+  pass with the fix. A real pointer-driven drop was not performed (UNVERIFIED end to end; the emission
+  matches GTK's `G_TYPE_VALUE` parameter).
+- **split move measured (task L-4b, review F1)**: `gtk_split_drop::dropping_a_surface_on_another_moves_the_split`
+  (headed, rvm under a private headless sway, `LIBGL_ALWAYS_SOFTWARE=1`): two live surfaces A | B in a real
+  window's split tree; `drop` on B's split drop target with A's core id at B's bottom edge answers `true` and the
+  tree becomes B above A (vertical). 3/3. NEGATIVE CONTROL: the unboxing removed from `surface_drop` fails at
+  `surface_drop accepted the drop`. The emission still stands in for a pointer-driven drop.
+- **state**: CLOSED (parity tail L-4).
+
+## N339 — survey: every GTK signal connection's return type, port against reference (UD295 follow-up)
+
+- **id**: N339. Task L-4, TASK B. Port at `tail-l4`, reference at `20abdb50a`, return types from the VM's
+  `Gtk-4.0`/`Gdk-4.0`/`Gio-2.0`/`GObject-2.0`/`Adw-1` GIR (glib 0.22.8, gtk4 0.11.4, libadwaita 0.9.2).
+- **scope**: 104 blueprint bindings (the reference's 1.2-1.5 blueprints, same set; 28 `notify::*`), 40
+  production code connections (17 typed `connect_*`, 19 `connect_local`, 1 `connect_closure`, 1 GSignalGroup
+  closure, 1 raw `g_signal_connect_data`, the width/height pair counted twice), 3 GDBus subscriptions, 21 custom
+  signals (all `void` on both sides), 14 test-only connections.
+- **value-returning signals (16 bindings, all return the declared type in the port)**: `GtkGLArea::render` x2
+  (bool), `GtkEventControllerKey::key-pressed` x3 (bool), `GtkEventControllerScroll::scroll` x3 (bool),
+  `GtkDropTarget::drop` x2 (bool), `GtkDropTarget::motion` (`DragAction`), `GtkDragSource::prepare`
+  (`ContentProvider`), `GtkWindow::close-request` (`Propagation`), `AdwTabView::close-page` (`Propagation`),
+  `AdwTabView::create-window` (`TabView`), `AdwTabOverview::create-tab` (`TabPage`). Every untyped code
+  connection is on a `void` signal and returns `None`.
+- **reference**: one `void` handler on a value-returning signal, `surfaceDrop` on `GtkDropTarget::drop`
+  (UD295, already fixed); every other value-returning reference handler returns `c_int` or the right pointer.
+  No new reference defect, so no new UD.
+- **port defects found**: N336, N337, N338 (above), all fixed.
+- **not audited**: handler bodies beyond explicit `unwrap`/`expect`/`panic!`/`unreachable!`; class vfunc
+  overrides (typed by gtk4-rs). The `core().expect(..)` sites in `surface_drag_prepare`/`surface_drop` and
+  `Application::default()` in `on_tab_create_window` are the reference's `.?` invariants (R7).
+- **state**: CLOSED (parity tail L-4).
 
 ## N340 — on Windows `EnvMap` looks `PATH` up case-sensitively, and Windows names it `Path`
 

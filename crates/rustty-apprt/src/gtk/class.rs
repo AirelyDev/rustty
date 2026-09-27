@@ -31,7 +31,7 @@
 //! | `privateObjFieldAccessor`            | `:230`      | `#[property]` on a GObject field — read refs, write unrefs prior (transfer: get `.none`, set `.full`) |
 //! | `privateStringFieldAccessor`         | `:271`      | `#[property]` on a `Option<String>` field — getter `.none` (caller frees the copy), setter `.full` (takes ownership) |
 //! | `Class.bindTemplateChildPrivate`     | `:313`      | `#[template_child]` field in the `CompositeTemplate` derive |
-//! | `Class.bindTemplateCallback` + guard | `:330-352`  | `#[template_callback]` fn — the "return `c_int` not `bool`" ABI guard survives as **`-> i32`** (glib `gboolean` is `c_int`; see [`TEMPLATE_CALLBACK_RETURN`]) |
+//! | `Class.bindTemplateCallback` + guard | `:330-352`  | `#[template_callback]` fn — the "return `c_int` not `bool`" ABI guard becomes **`-> bool`** (glib-rs marshals the return through a `GValue`, which must be `G_TYPE_BOOLEAN`; see [`TemplateCallbackReturn`]) |
 //!
 //! # Transfer-mode fidelity (the fidelity bug surface, PREPORT §5.1)
 //!
@@ -297,26 +297,66 @@ pub const IDIOM_MAP: &[IdiomRow] = &[
     IdiomRow {
         zig: "Class.bindTemplateCallback (+ bool->c_int guard)",
         reference: "class.zig:330",
-        gtk4_rs: "#[template_callback] fn; the gboolean guard survives as -> i32 (TemplateCallbackReturn)",
+        gtk4_rs: "#[template_callback] fn; a gboolean signal's handler returns bool (TemplateCallbackReturn)",
         r1_waiver: false,
     },
 ];
 
-/// The ABI guard `class.zig:348-352` ("bound function must return c_int instead
-/// of bool") survives as this documented return type. glib's `gboolean` is
-/// `c_int`; a `#[template_callback]` that GTK invokes for a gboolean-returning
-/// signal must return `i32`, never Rust `bool` (which is one byte and mismatches
-/// the C ABI, exactly the hazard the oracle's `@compileError` prevents).
-pub type TemplateCallbackReturn = i32;
+/// The return type of a `#[template_callback]` bound to a `gboolean` signal.
+///
+/// The reference's guard `class.zig:348-352` ("bound function must return c_int
+/// instead of bool") protects a C function pointer GTK calls directly, where a
+/// one-byte Zig `bool` would not match `gboolean` (`c_int`). A
+/// `#[template_callback]` is not called that way: glib-rs wraps it in a
+/// `GClosure` whose marshaller converts the Rust return value to a `GValue` and
+/// asserts that its type is the signal's return type (glib 0.22
+/// `closure.rs:243-247`). For a `gboolean` signal that type is
+/// `G_TYPE_BOOLEAN`, which only `bool` (or `glib::Propagation`) produces.
+///
+/// CORRECTION (task L-4, NEW-FINDINGS N336): this was `i32`, documented as "must
+/// return `i32`, never Rust `bool`". An `i32` is a `G_TYPE_INT` value, so a
+/// callback following that advice makes the marshaller panic inside the C
+/// callback ("Closure returned a value of type gint but caller expected
+/// gboolean"), which aborts the process: the UD295 failure mode. No callback
+/// used the alias; every gboolean callback returns `bool` or `Propagation`.
+/// MEASURED on the VM: `template_callback_return_answers_a_gboolean_signal`.
+pub type TemplateCallbackReturn = bool;
 
 /// The gboolean `TRUE` value a `#[template_callback]` returns as
-/// [`TemplateCallbackReturn`] (glib `gboolean` = `c_int`, `TRUE == 1`). Present
-/// so the ABI-guard type has a live, non-`bool` witness the class ports can name.
-pub const TEMPLATE_CALLBACK_RETURN: TemplateCallbackReturn = 1;
+/// [`TemplateCallbackReturn`].
+pub const TEMPLATE_CALLBACK_RETURN: TemplateCallbackReturn = true;
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// N336: a handler returning [`TemplateCallbackReturn`] answers a real
+    /// `gboolean` signal through glib-rs's closure marshaller (the path a
+    /// `#[template_callback]` takes). `GApplication::name-lost` is a `gboolean`
+    /// signal with no arguments that needs no display. The handler must run
+    /// (`fired`) and its answer must reach the emitter; a wrongly typed return
+    /// (the former `i32`) aborts the test process in the marshaller.
+    #[test]
+    fn template_callback_return_answers_a_gboolean_signal() {
+        use gio::prelude::*;
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        let app = gio::Application::new(None, gio::ApplicationFlags::NON_UNIQUE);
+        let fired = Rc::new(Cell::new(0u32));
+        let seen = fired.clone();
+        app.connect_closure(
+            "name-lost",
+            false,
+            glib::closure_local!(move |_: gio::Application| -> TemplateCallbackReturn {
+                seen.set(seen.get() + 1);
+                TEMPLATE_CALLBACK_RETURN
+            }),
+        );
+        let handled = app.emit_by_name::<bool>("name-lost", &[]);
+        assert_eq!(fired.get(), 1, "the handler ran");
+        assert!(handled, "its TRUE reached the emitter");
+    }
 
     /// PORTS: `class.zig:365` `test { refAllDecls(@This()); }` — a compile-touch
     /// over the module's public items. Here the module's public surface is the

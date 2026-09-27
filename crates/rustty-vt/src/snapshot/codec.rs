@@ -214,10 +214,10 @@ pub struct EncodeOptions<'a> {
 /// failure, the destination may contain a snapshot prefix without its required
 /// FINISH marker, and an output failure may have written part of a record.
 // PORT NOTE: the reference threads `alloc` into `record.Writer`'s scratch
-// buffer; the port's `record::Writer` uses the global allocator (see its PORT
-// NOTE), so the parameter is dropped. The destination is `&mut dyn io::Writer`
-// (the reference's type-erased `*std.Io.Writer`).
+// buffer, and so does the port (parity tail S7-8, N332). The destination is
+// `&mut dyn io::Writer` (the reference's type-erased `*std.Io.Writer`).
 pub fn encode(
+    alloc: crate::alloc::Allocator,
     destination: &mut dyn io::Writer,
     t: &Terminal,
     options: EncodeOptions<'_>,
@@ -228,11 +228,12 @@ pub fn encode(
     // A measured 512-byte buffer handles our smallest records on the stack
     // before larger records fall back to the heap.
     //
-    // PORT NOTE (`ee8095d37`): `var stack_alloc = std.heap.stackFallback(512,
-    // alloc); var stream: record.Writer = .init(stack_alloc.get(), destination);`
-    // — the port's `record::Writer` carries the 512-byte stack scratch itself
-    // (`record::RECORD_SCRATCH_STACK_BYTES`), so no allocator is threaded here.
-    let mut stream = record::Writer::init(destination);
+    // var stack_alloc = std.heap.stackFallback(512, alloc);
+    // var stream: record.Writer = .init(stack_alloc.get(), destination);
+    // PORT NOTE (`ee8095d37`): the port's `record::Writer` carries the 512-byte
+    // stack scratch itself (`record::RECORD_SCRATCH_STACK_BYTES`) and spills
+    // through `alloc`.
+    let mut stream = record::Writer::init_in(alloc, destination);
     // defer stream.deinit(); — the writer's scratch frees on drop at every
     // early return; the success path deinits explicitly below.
 
@@ -1631,7 +1632,7 @@ mod tests {
         t.print_string(b"alternate").unwrap();
 
         let mut encoded = io::AllocatingWriter::new();
-        encode(&mut encoded, &t, test_encode_options()).unwrap();
+        encode(Allocator, &mut encoded, &t, test_encode_options()).unwrap();
         assert_eq!(source_memory, unsafe { (*primary).pages.memory_stats() });
         fixture::expect_equal(
             fixture::Kind::Snapshot,
@@ -1648,7 +1649,7 @@ mod tests {
             hasher: record::Crc32c::init(),
             full_count: 0,
         };
-        encode(&mut hashing, &t, test_encode_options()).unwrap();
+        encode(Allocator, &mut hashing, &t, test_encode_options()).unwrap();
         assert_eq!(test_complete_fixture.len() as u64, hashing.full_count);
         assert_eq!(
             record::Crc32c::hash(&test_complete_fixture),
@@ -1704,7 +1705,13 @@ mod tests {
             // TERMINAL, SCREEN, PAGE, and HISTORY fields and both marker
             // boundaries.
             let mut reencoded = io::AllocatingWriter::new();
-            encode(&mut reencoded, restored_terminal, test_encode_options()).unwrap();
+            encode(
+                Allocator,
+                &mut reencoded,
+                restored_terminal,
+                test_encode_options(),
+            )
+            .unwrap();
             assert_eq!(test_complete_fixture.as_slice(), reencoded.written());
         }
         restored.deinit(Allocator);
@@ -1795,6 +1802,7 @@ mod tests {
 
         let mut encoded = io::AllocatingWriter::new();
         encode(
+            Allocator,
             &mut encoded,
             &source_terminal,
             EncodeOptions {
@@ -1874,6 +1882,7 @@ mod tests {
         assert_eq!(
             Err(EncodeError::NoPendingState),
             encode(
+                Allocator,
                 &mut destination,
                 &t,
                 EncodeOptions {
@@ -1886,6 +1895,7 @@ mod tests {
         let mut tail = [0x1bu8, b'[', b'3', b'1'];
         let mut encoded = io::AllocatingWriter::new();
         encode(
+            Allocator,
             &mut encoded,
             &t,
             EncodeOptions {
@@ -1938,6 +1948,7 @@ mod tests {
 
         let mut encoded = io::AllocatingWriter::new();
         encode(
+            Allocator,
             &mut encoded,
             &t,
             EncodeOptions {
@@ -1990,6 +2001,7 @@ mod tests {
 
                 let mut snapshot_bytes = io::AllocatingWriter::new();
                 encode(
+                    Allocator,
                     &mut snapshot_bytes,
                     &source_terminal,
                     EncodeOptions {
@@ -2056,6 +2068,7 @@ mod tests {
 
                 let mut source_final_snapshot = io::AllocatingWriter::new();
                 encode(
+                    Allocator,
                     &mut source_final_snapshot,
                     &source_terminal,
                     EncodeOptions {
@@ -2069,6 +2082,7 @@ mod tests {
                 .unwrap();
                 let mut restored_final_snapshot = io::AllocatingWriter::new();
                 encode(
+                    Allocator,
                     &mut restored_final_snapshot,
                     &restored_terminal,
                     EncodeOptions {
@@ -2168,7 +2182,7 @@ mod tests {
         }
 
         let mut encoded = io::AllocatingWriter::new();
-        encode(&mut encoded, &t, test_encode_options()).unwrap();
+        encode(Allocator, &mut encoded, &t, test_encode_options()).unwrap();
 
         let encoded_written = encoded.written().to_vec();
         let mut encoded_source = io::FixedReader::new(&encoded_written);
@@ -2220,7 +2234,7 @@ mod tests {
         let mut nonempty = io::AllocatingWriter::new();
         nonempty.write_all(b"prefix").unwrap();
         let snapshot_offset = nonempty.written().len();
-        encode(&mut nonempty, &t, test_encode_options()).unwrap();
+        encode(Allocator, &mut nonempty, &t, test_encode_options()).unwrap();
         assert_eq!(
             b"prefix".as_slice(),
             &nonempty.written()[0..snapshot_offset]
@@ -2238,7 +2252,7 @@ mod tests {
         destination.write_all(b"prefix").unwrap();
         assert_eq!(
             Err(EncodeError::InvalidPalette),
-            encode(&mut destination, &t, test_encode_options()),
+            encode(Allocator, &mut destination, &t, test_encode_options()),
         );
         let mut expected_envelope = [0u8; envelope::ENCODED_LEN];
         let mut envelope_writer = io::FixedWriter::new(&mut expected_envelope);
@@ -2532,7 +2546,7 @@ mod tests {
         // defer t.deinit(testing.allocator);
 
         let mut encoded = io::AllocatingWriter::new();
-        encode(&mut encoded, &t, test_encode_options()).unwrap();
+        encode(Allocator, &mut encoded, &t, test_encode_options()).unwrap();
         let snapshot_len = encoded.written().len();
         encoded.write_all(b"pty").unwrap();
 
@@ -2569,8 +2583,8 @@ mod tests {
         // defer t.deinit(testing.allocator);
 
         let mut encoded = io::AllocatingWriter::new();
-        encode(&mut encoded, &t, test_encode_options()).unwrap();
-        encode(&mut encoded, &t, test_encode_options()).unwrap();
+        encode(Allocator, &mut encoded, &t, test_encode_options()).unwrap();
+        encode(Allocator, &mut encoded, &t, test_encode_options()).unwrap();
 
         let encoded_written = encoded.written().to_vec();
         let mut source = io::FixedReader::new(&encoded_written);
@@ -2723,6 +2737,7 @@ mod tests {
         // defer t.deinit(testing.allocator);
         let mut encoded = io::AllocatingWriter::new();
         encode(
+            Allocator,
             &mut encoded,
             &t,
             EncodeOptions {
@@ -2751,7 +2766,7 @@ mod tests {
             .unwrap();
         unsafe { (*active).test_write_string(b"hi") }.unwrap();
         let mut encoded = io::AllocatingWriter::new();
-        encode(&mut encoded, &t, test_encode_options()).unwrap();
+        encode(Allocator, &mut encoded, &t, test_encode_options()).unwrap();
         exercise(encoded.written(), 14);
 
         t.deinit(Allocator);
@@ -2769,7 +2784,7 @@ mod tests {
             stream.next_slice(b"\x1b[1mhi");
         }
         let mut encoded = io::AllocatingWriter::new();
-        encode(&mut encoded, &t, test_encode_options()).unwrap();
+        encode(Allocator, &mut encoded, &t, test_encode_options()).unwrap();
         exercise(encoded.written(), 10);
 
         t.deinit(Allocator);
@@ -2857,7 +2872,7 @@ mod tests {
         // The incremental path restores the same complete terminal as the
         // one-shot decoder, byte for byte.
         let mut reencoded = io::AllocatingWriter::new();
-        encode(&mut reencoded, &restored, test_encode_options()).unwrap();
+        encode(Allocator, &mut reencoded, &restored, test_encode_options()).unwrap();
         assert_eq!(test_complete_fixture.as_slice(), reencoded.written());
 
         decoded.deinit(Allocator);
@@ -2887,7 +2902,7 @@ mod tests {
         let mut t = test_history_terminal(2);
         // defer t.deinit(testing.allocator);
         let mut encoded = io::AllocatingWriter::new();
-        encode(&mut encoded, &t, test_encode_options()).unwrap();
+        encode(Allocator, &mut encoded, &t, test_encode_options()).unwrap();
 
         let encoded_written = encoded.written().to_vec();
         let mut source = io::FixedReader::new(&encoded_written);
@@ -3080,7 +3095,7 @@ mod tests {
         let mut t = test_history_terminal(2);
         // defer t.deinit(testing.allocator);
         let mut encoded = io::AllocatingWriter::new();
-        encode(&mut encoded, &t, test_encode_options()).unwrap();
+        encode(Allocator, &mut encoded, &t, test_encode_options()).unwrap();
 
         let encoded_written = encoded.written().to_vec();
         let mut source = io::FixedReader::new(&encoded_written);
@@ -3134,7 +3149,7 @@ mod tests {
             unsafe { (*primary).pages.limits.set(pagelist::Key::Bytes, Some(1)) };
         }
         let mut encoded = io::AllocatingWriter::new();
-        encode(&mut encoded, &t, test_encode_options()).unwrap();
+        encode(Allocator, &mut encoded, &t, test_encode_options()).unwrap();
         let encoded_written = encoded.written().to_vec();
 
         // Incremental: the newest page fits the effective floor, the next
@@ -3193,7 +3208,7 @@ mod tests {
         let mut t = test_history_terminal(2);
         // defer t.deinit(testing.allocator);
         let mut encoded = io::AllocatingWriter::new();
-        encode(&mut encoded, &t, test_encode_options()).unwrap();
+        encode(Allocator, &mut encoded, &t, test_encode_options()).unwrap();
 
         // Truncate FINISH. READY and both history pages decode, then the
         // failure surfaces on the call that would have completed the snapshot.

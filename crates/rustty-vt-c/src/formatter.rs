@@ -589,18 +589,19 @@ pub unsafe fn format_alloc(
     let wrapper = unsafe { &*formatter_ };
 
     // const alloc = lib.alloc.default(alloc_);
-    let allocator = rustty_lib::allocator::default(alloc_);
+    // SAFETY: a non-NULL `alloc_` is a valid `RusttyAllocator` for the call.
+    let alloc = unsafe { rustty_vt::alloc::default(alloc_) };
 
     // var aw: std.Io.Writer.Allocating = .init(alloc);
+    // defer aw.deinit();
+    // PORT NOTE (parity tail S7-8): the writer grows through the caller's
+    // allocator (Zig's `growCapacity`, `remap` first), and a failed growth is
+    // `error.WriteFailed`; dropping it is `aw.deinit()`.
+    let mut aw = rustty_vt::alloc::AllocatingWriter::init(alloc);
     // switch (wrapper.kind) { .terminal => |*t| t.format(&aw.writer) catch return .out_of_memory };
-    // PORT NOTE: `std.Io.Writer.Allocating` grows a buffer; rustty formats into a
-    // `Vec<u8>` (infallible growth), then `toOwnedSlice` is reproduced by copying
-    // the bytes into a buffer allocated through the SAME resolved C allocator so
-    // the C caller frees it with the matching allocator.
-    let mut buf_vec: Vec<u8> = Vec::new();
     match &wrapper.kind {
         Kind::Terminal(inputs) => {
-            if inputs.build().format(&mut buf_vec).is_err() {
+            if inputs.build().format(&mut aw).is_err() {
                 return Result::OutOfMemory;
             }
         }
@@ -618,15 +619,15 @@ pub unsafe fn format_alloc(
     // crate's documented zero-length short-circuit (`rustty-lib`
     // `allocator.rs`, W36-B06) and reproduces `toOwnedSlice` exactly. Empty
     // output IS reachable: a plain trimmed format of a blank screen.
-    let len = buf_vec.len();
-    let dst = allocator.alloc_bytes(len);
-    if dst.is_null() {
-        return Result::OutOfMemory;
-    }
-    // SAFETY: `dst` is `len` freshly-allocated bytes; `buf_vec` holds `len`
-    // initialized bytes. `copy_nonoverlapping` with `len == 0` is a no-op on
-    // the non-null sentinel `alloc_bytes` returns.
-    unsafe { std::ptr::copy_nonoverlapping(buf_vec.as_ptr(), dst, len) };
+    //
+    // PORT NOTE (parity tail S7-8): `toOwnedSlice` is ported as such
+    // (`AllocatingWriter::to_owned_slice`): the writer's own buffer, shrunk to
+    // the written length through the caller's allocator. An empty output makes
+    // no call, as above.
+    let (dst, len) = match aw.to_owned_slice() {
+        Ok(buf) => crate::allocator::into_c_bytes(buf),
+        Err(_) => return Result::OutOfMemory,
+    };
     // SAFETY: `out_ptr`/`out_len` are writable (caller contract).
     unsafe {
         *out_ptr = dst;
@@ -1424,5 +1425,123 @@ mod tests {
             unsafe { free(f) };
             unsafe { terminal_c::free(t) };
         });
+    }
+
+    // Parity tail S7-8 (N331): `format_alloc`'s `Writer.Allocating` grows
+    // through the caller's allocator, and `toOwnedSlice` hands that buffer
+    // over shrunk to the written length (`remap` first).
+    #[test]
+    fn format_alloc_writer_routes_through_the_callers_allocator() {
+        use rustty_vt::alloc::testing::CountingAllocator;
+        with_test_allocator(|calloc| {
+            let (t_new_result, t, f_new_result, f) = setup_plain(
+                calloc,
+                b"Hello",
+                plain_extra(),
+                Format::Plain,
+                std::ptr::null(),
+            );
+            assert_eq!(Result::Success, t_new_result);
+            assert_eq!(Result::Success, f_new_result);
+
+            let counting = CountingAllocator::over_heap();
+            let c = counting.allocator();
+            let mut out_ptr: *mut u8 = std::ptr::null_mut();
+            let mut out_len: usize = 0;
+            assert_eq!(Result::Success, unsafe {
+                format_alloc(f, Some(&c), &mut out_ptr, &mut out_len)
+            });
+            assert_eq!(b"Hello", unsafe {
+                std::slice::from_raw_parts(out_ptr, out_len)
+            });
+            // One growth for the 5-byte write: `ensureUnusedCapacity(5 + 5 + 1)`
+            // = growCapacity(11) = 11 + 5 + 128 bytes; then `toOwnedSlice`
+            // remaps it to the 5 written bytes. Nothing is freed.
+            assert_eq!(1, counting.alloc_calls.get());
+            assert_eq!(Some((144, 0)), counting.last_alloc.get());
+            assert_eq!(1, counting.remap_calls.get());
+            assert_eq!(0, counting.free_calls.get());
+            // The caller owns exactly the written bytes.
+            assert_eq!(out_len, counting.live_bytes.get());
+            unsafe { crate::allocator::free(Some(&c), out_ptr, out_len) };
+            assert_eq!(0, counting.live_bytes.get());
+
+            unsafe { free(f) };
+            unsafe { terminal_c::free(t) };
+        });
+    }
+
+    #[test]
+    fn format_alloc_writer_failure_is_out_of_memory() {
+        use rustty_vt::alloc::testing::{Config, FailingAllocator};
+        with_test_allocator(|calloc| {
+            let (t_new_result, t, f_new_result, f) = setup_plain(
+                calloc,
+                b"Hello",
+                plain_extra(),
+                Format::Plain,
+                std::ptr::null(),
+            );
+            assert_eq!(Result::Success, t_new_result);
+            assert_eq!(Result::Success, f_new_result);
+            // The first growth fails, then (the remap refused) the
+            // `toOwnedSlice` copy fails.
+            for config in [
+                Config {
+                    fail_index: 0,
+                    ..Config::default()
+                },
+                Config {
+                    fail_index: 1,
+                    resize_fail_index: 0,
+                },
+            ] {
+                let failing = FailingAllocator::over_heap(config);
+                let c = failing.allocator();
+                let mut out_ptr: *mut u8 = std::ptr::null_mut();
+                let mut out_len: usize = 0;
+                assert_eq!(Result::OutOfMemory, unsafe {
+                    format_alloc(f, Some(&c), &mut out_ptr, &mut out_len)
+                });
+                assert!(failing.has_induced_failure.get());
+                assert_eq!(failing.allocated_bytes.get(), failing.freed_bytes.get());
+            }
+            unsafe { free(f) };
+            unsafe { terminal_c::free(t) };
+        });
+    }
+
+    // Parity tail S7-8b (review F3): the NULL-allocator round trip. The output
+    // is built through the handle's Global arm (`lib.alloc.default(null)`) and
+    // released with `rustty_free(NULL, ..)`, whose default allocator is the same
+    // Rust heap; the lengths and alignment must match (Miri checks the layout).
+    // Also the empty output: the non-null empty sentinel and a no-op free.
+    #[test]
+    fn format_alloc_null_allocator_round_trip() {
+        for (input, expected) in [(&b"Hello"[..], &b"Hello"[..]), (&b""[..], &b""[..])] {
+            with_test_allocator(|calloc| {
+                let (t_new_result, t, f_new_result, f) = setup_plain(
+                    calloc,
+                    input,
+                    plain_extra(),
+                    Format::Plain,
+                    std::ptr::null(),
+                );
+                assert_eq!(Result::Success, t_new_result);
+                assert_eq!(Result::Success, f_new_result);
+                let mut out_ptr: *mut u8 = std::ptr::null_mut();
+                let mut out_len: usize = 99;
+                assert_eq!(Result::Success, unsafe {
+                    format_alloc(f, None, &mut out_ptr, &mut out_len)
+                });
+                assert!(!out_ptr.is_null());
+                assert_eq!(expected, unsafe {
+                    std::slice::from_raw_parts(out_ptr, out_len)
+                });
+                unsafe { crate::allocator::free(None, out_ptr, out_len) };
+                unsafe { free(f) };
+                unsafe { terminal_c::free(t) };
+            });
+        }
     }
 }

@@ -15,6 +15,33 @@ use crate::parser::{self, Parser};
 use crate::utf8_decoder::UTF8Decoder;
 use std::io;
 
+/// The `*std.Io.Writer` the continuation is written to, with the reference's
+/// `writeByte` as its own call (parity tail S7-8b).
+///
+/// PORT NOTE: `Tracker.write` emits byte by byte through `writer.writeByte`.
+/// For most writers that is a one-byte `writeAll` (the default below), but on
+/// `std.Io.Writer.Allocating` it grows differently (`rebase(0, 1)`:
+/// `growCapacity(1)`, where a one-byte `write` drains with
+/// `ensureUnusedCapacity(1 + 1 + 1)`), and that growth is what a C embedder's
+/// allocator sees. `alloc::AllocatingWriter` overrides it with its `writeByte`.
+pub trait ByteWriter: io::Write {
+    /// `writer.writeByte(byte)`.
+    fn write_byte(&mut self, byte: u8) -> io::Result<()> {
+        self.write_all(&[byte])
+    }
+}
+
+/// `writeByte` on `std.Io.Writer.Allocating`: a failed growth is
+/// `error.WriteFailed` (an `io::ErrorKind::OutOfMemory` error here).
+impl ByteWriter for crate::zig_list::AllocatingWriter {
+    fn write_byte(&mut self, byte: u8) -> io::Result<()> {
+        crate::zig_list::AllocatingWriter::write_byte(self, byte)
+            .map_err(|_| io::Error::from(io::ErrorKind::OutOfMemory))
+    }
+}
+
+impl ByteWriter for Vec<u8> {}
+
 /// `std.simd.suggestVectorLength(u8)` for `findVTReplayStart`'s backward scan.
 /// Same width source as `stream.rs`'s `APC_SCAN_LANES` (the reference calls
 /// `std.simd.suggestVectorLength` directly).
@@ -298,10 +325,10 @@ impl Tracker {
     //     self: *const Tracker,
     //     writer: *std.Io.Writer,
     // ) std.Io.Writer.Error!void {
-    // PORT NOTE: `*std.Io.Writer` ports to `&mut dyn std::io::Write` (the
-    // `Screen::dumpString` seam precedent); `error.WriteFailed` is the writer's
-    // own `io::Error`.
-    pub fn write(&self, writer: &mut dyn io::Write) -> io::Result<()> {
+    // PORT NOTE: `*std.Io.Writer` ports to `&mut dyn ByteWriter` (a
+    // `std::io::Write` with the reference's `writeByte`, parity tail S7-8b);
+    // `error.WriteFailed` is the writer's own `io::Error`.
+    pub fn write(&self, writer: &mut dyn ByteWriter) -> io::Result<()> {
         // var scanner: BoundaryScanner = .init();
         let mut scanner = BoundaryScanner::init();
         // for (self.bytes.items) |c| {
@@ -312,7 +339,7 @@ impl Tracker {
             if scanner.next(c) == Effect::Omittable {
                 continue;
             }
-            writer.write_all(&[c])?;
+            writer.write_byte(c)?;
         }
         Ok(())
     }
@@ -680,6 +707,9 @@ impl<'a> FixedIoWriter<'a> {
         &self.buf[..self.end]
     }
 }
+
+#[cfg(test)]
+impl ByteWriter for FixedIoWriter<'_> {}
 
 #[cfg(test)]
 impl io::Write for FixedIoWriter<'_> {

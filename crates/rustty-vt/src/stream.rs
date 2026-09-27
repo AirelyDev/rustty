@@ -900,7 +900,7 @@ impl<H: Handler> Stream<H> {
     // })!void {
     pub fn write_continuation(
         &self,
-        writer: &mut dyn std::io::Write,
+        writer: &mut dyn crate::stream_continuation::ByteWriter,
     ) -> Result<(), WriteContinuationError> {
         // const tracker = self.continuation orelse
         //     return error.ContinuationDisabled;

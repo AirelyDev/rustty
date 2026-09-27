@@ -8125,7 +8125,7 @@ The three still-live instances are reopened above.
 5. Four stale "still `todo!()`" claims corrected (`Colors::default()` is implemented;
    two were justifying duplicated test helpers).
 
-# F-008/W12-01 Tier 2 — caller C allocator does not drive rustty-vt INTERNALS (codex-vet w1, 2026-08-10)
+# F-008/W12-01 Tier 2 — caller C allocator does not drive rustty-vt INTERNALS (codex-vet w1, 2026-08-10) — CLOSED (parity tail S7-8, 2026-09-26)
 
 **Tier 1 is FIXED** (batch w1-L02-b02): all six C-ABI constructor/free lifecycles
 (`rustty_terminal_new`/`free`, render_state `new`/`free`,
@@ -8142,51 +8142,88 @@ capture itself was a global-heap `Vec`. It now allocates through
 terminal stream and for `rustty_osc_new` parsers. Proving tests: `CountingCAllocator` (`rustty-vt-c/src/test_util.rs`)
 counting/rejecting arms in `terminal.rs`, `render/tests.rs`,
 `selection_gesture/tests.rs`; W36-B06 zero-length typed-helper short-circuit in
-`rustty-vt-c/src/allocator.rs` + `rustty-lib/src/allocator.rs`.
+`rustty-vt-c/src/allocator.rs` + `rustty-lib/src/allocator.rs`. Since parity
+tail S7-8 the selection-gesture `new`/`free` and `event_new`/`event_free`
+lifecycles allocate their storage through the `rustty_vt::alloc::VtAllocator`
+handle (as render_state `new`/`free` do since S7-5) rather than
+`create_raw`/`destroy_raw`.
 
-**Tier 2 REMAINS OPEN** (structural, cross-crate — the reference threads
-`alloc` into `t.init(alloc, ...)` and every owned growth path):
+**Tier 2 is CLOSED** (parity tail S7-3..S7-8, `.port/parity-closure/S7-ALLOCATOR-DESIGN.md`
+option B; closed by task S7-8, NEW-FINDINGS N334). The reference threads `alloc`
+into `t.init(alloc, ...)` and every owned growth path; the port now does the same
+through the `rustty_vt::alloc::VtAllocator` runtime handle, fallibly, with the
+reference's `OUT_OF_MEMORY`/log-and-drop arms. Item by item:
 
-1. PARTLY FIXED (parity tail S7-3, `.port/parity-closure/S7-ALLOCATOR-DESIGN.md`
-   option B): `rustty_terminal_new` passes the caller's allocator into
-   `Terminal::init` through the `rustty_vt::alloc::VtAllocator` handle, and the
-   PageList node/pin pools, tracked-pin sets, compressed pages, preserved-page
-   buffers, clone pin remap, the Screen storage, the cursor hyperlink, Tabstops,
-   pwd/title, the glyph glossary map and the kitty drag-and-drop state grow and
-   free through it, fallibly (NEW-FINDINGS N272). STILL on the Rust heap, owned by
-   S7-4..S7-7: kitty graphics storage and PNG decode, the APC/DCS builders and
-   the glyph entries' decoded outlines, the stream's own buffers, clipboard state,
-   the wrapper's `tracked_grid_refs`/`searches` maps, `from_decoded`'s terminal
-   (built by the snapshot decoder), `RenderState` contents (`update`/
-   `begin_update`; oracle `state.alloc`) and search state. Search state is
-   routed since parity tail S7-6 (NEW-FINDINGS N325: the search's allocator for
-   its own state, the terminal's for the registry entry and tracked pins).
+1. FIXED. Terminal internals (S7-3, N272): the PageList node/pin pools,
+   tracked-pin sets, compressed pages, preserved-page buffers, clone pin remap,
+   the Screen storage, the cursor hyperlink, Tabstops, pwd/title, the glyph
+   glossary map and the kitty drag-and-drop state. Kitty graphics and PNG
+   decode, the APC/DCS builders and glyph outlines, the stream's buffers,
+   clipboard state, the wrapper's `tracked_grid_refs`/`searches` maps and
+   `from_decoded`'s terminal (S7-4, N274; ledger S179-F2 CLOSED). `RenderState`
+   contents (S7-5, ledger S175-F1 CLOSED). Search state (S7-6, N325: the
+   search's allocator for its own state, the terminal's for the registry entry
+   and tracked pins; ledger S176-F1 and S4-F2 CLOSED).
 2. FIXED (tail-a2, parity S179-F3, 4717bccc): `grid_ref_track`'s
-   `TrackedGridRef` is created and destroyed through a copy of the caller's C
-   allocator (`TerminalWrapper.c_alloc`), with both reference OOM arms. The
-   wrapper's `tracked_grid_refs`/`searches` maps stay on Global with item 1.
-3. selection-gesture event codepoint copy (`selection_gesture.rs`
-   `try_set_word_boundary_codepoints`) uses an owned `Vec` on Global (oracle:
-   `event.alloc.alloc(u21, len)`).
-4. The OSC parser's parsed `Command` payloads (the color and kitty-color
-   request lists the oracle allocates through `parser.alloc`, and owned text
-   payload copies) are Global values (parity S174-F3, OPEN).
-5. OPEN, owned by S7-8 (recorded by S7-6, NEW-FINDINGS N328; review S7-6 F3):
-   the formatter's pin map. `PinMapMap.points` (and `nodes`) grow on the Rust
-   heap whatever the pin map's `alloc` is: `PageListFormatter` hands
-   `m.map.points` to the page formatter's `PointMap` (formatter.rs, the
-   `pin_map` block of `PageListFormatter::format`), and `PointMap` grows the list
-   it points to without reading its own `alloc`. The reference grows both
-   through `map.alloc` (`formatter.zig:916-923`, `PinMap.Map.append`/`setNode`;
-   callers such as `Screen.selectionString(.., pins)` pass the caller's
-   allocator). Fix: bind `points`/`nodes` to the pin map's `alloc` (fallibly,
-   `catch return error.WriteFailed`) and assert it in `PointMap`'s growth.
+   `TrackedGridRef` through the caller's allocator; the registry maps since S7-4.
+3. FIXED (S7-8, N333): the selection-gesture event's codepoint copy is one
+   exact `len * 4`-byte request through `event.alloc` (`event.alloc.alloc(u21,
+   len)`), freed on replace, clear and `event_free`, with the reference's
+   OUT_OF_MEMORY arm; the gesture and event wrappers hold the runtime handle.
+   The reference leaks the copy when a codepoint does not fit in 21 bits; the
+   port frees it (R13, UPSTREAM-DEFECTS UD314). Tests:
+   `selection_gesture::tests::event_codepoints_route_through_the_event_allocator`,
+   `event_codepoints_allocation_failure_is_out_of_memory`,
+   `event_invalid_codepoint_frees_the_copy`,
+   `gesture_wrapper_routes_through_the_gesture_allocator`,
+   `selection_gesture_allocation_failure_sweep` (rustty-vt-c).
+4. FIXED (S7-7; ledger S174-F3 CLOSED): the OSC color and kitty-color request
+   lists go through `parser.alloc`, and text payloads borrow the parser's buffer
+   (N263) instead of being copied.
+5. FIXED (S7-8, N330; the S7-6 N328 residual): the formatter pin map's
+   `points` and `nodes` grow through the pin map's `alloc` (bound on first
+   growth, identity-asserted in `PointMap`'s growth and `deinit`), with Zig's
+   `growCapacity`, and a failed growth is `error.WriteFailed`.
+   `Screen::selection_string_map` therefore builds its map on the allocator it
+   is given. Tests: `formatter::tests::pin_map_plain_routes_…`,
+   `pin_map_extras_route_…`, `pin_map_growth_failure_is_write_failed`,
+   `selection_string_map_routes_through_the_given_allocator` (rustty-vt).
+6. FIXED (S7-8, N331/N332; found by the S7-8 audit, not previously listed): the
+   C API's `std.Io.Writer.Allocating` outputs were Rust-heap `Vec`s copied into
+   the caller's allocator at the end: `rustty_formatter_format_alloc`,
+   `rustty_selection_format_alloc`, `rustty_snapshot_encode_alloc`,
+   `rustty_terminal_continuation_alloc`, plus `restoreContinuation`'s
+   verification copy and the snapshot's continuation copy (both on the
+   terminal's `gpa()`), and the snapshot encoder's record scratch (its
+   `stackFallback(512, gpa())` spill; `snapshot::encode` takes the reference's
+   `alloc` again). They now grow through the reference's allocator and hand
+   the buffer over with a port of `toOwnedSlice` (`remap` first). Tests: the
+   `*_writer_routes_*` tests in rustty-vt-c (`formatter`, `selection`,
+   `snapshot`, `terminal`), `allocation_failure_sweep_through_the_allocating_writers`,
+   `zig_list::tests::allocating_writer_to_owned_slice_is_zigs`; the reference's
+   snapshot `FailingAllocator` test now runs as written.
 
-The runtime handle that unblocks this exists (parity tail S7-1/S7-2) and is
-threaded through `Terminal::init` (S7-3); the remaining families are routed by
-S7-4..S7-7. Until then a caller allocator observes the wrapper lifecycle plus
-the S7-3 terminal internals above (macOS app path — null allocator — is
-unaffected).
+**What stays on the Rust heap, and why** (N334 has the list with file:line):
+port-only transient allocations the reference does not make at all (formatter
+HTML/VT header buffers, where the reference uses a fixed 1024-byte stack buffer;
+the hyperlink URI copy; `StringMap`'s search-match copies; the per-wrapper
+`Box<dyn ZigAllocator>` adapters the Tier 1 wrappers still hold; the kitty
+temporary-directory path, which the reference copies into a fixed buffer inside
+the caller-allocated terminal wrapper and the limits borrow, while the port's
+limits own a `Vec` copy per screen), so there is no caller allocation to route;
+the snapshot decoder's `Source` and `ReaderState` (the reference keeps them
+inline in the caller-allocated `DecoderWrapper`; the port boxes them on the
+Rust heap so the core decoder's stored `&mut` never overlaps wrapper accesses,
+a Stacked Borrows requirement); `Screen::selection_string`'s output `Vec` (not
+reachable from the C API, and every caller passes the Rust heap handle); the
+Windows-only `std.Io.Threaded` box in `c/terminal.zig` `Io.init` (the port does
+not build for Windows). Page memory stays on the page allocator, as in the
+reference. Call-shape (T3) residuals — element sizes, writer call granularity,
+the record scratch's spill size, and allocator_api2 `Vec` growth where not yet
+`growCapacity` — are recorded in N325, N331, N332 and task S7-9.
+
+The macOS app path (null allocator) is unaffected: the handle's Global arm is
+the Rust heap.
 Vet record: `.port/codex-vet/STATE.json` F-008/W12-01 fix_plans (Tier split).
 
 ## `std.fs.path.resolveWindows` not ported — `config/path.zig` `expand`'s two-component `resolve` stays POSIX-shaped [W10-02, 2026-08-11]

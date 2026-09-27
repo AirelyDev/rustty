@@ -57,9 +57,10 @@
 //! was invisible. The gate is now gone and the call sites match the landed
 //! signatures:
 //!
-//!   * `encode(&mut dyn io::Writer, &Terminal, EncodeOptions)` — no allocator
-//!     parameter (`record::Writer` uses the global allocator), and the sink is
-//!     the type-erased writer, so the reusable buffer is an
+//!   * `encode(Allocator, &mut dyn io::Writer, &Terminal, EncodeOptions)` —
+//!     the reference's allocator parameter (restored by parity tail S7-8: the
+//!     record scratch spills through it), and the sink is the type-erased
+//!     writer, so the reusable buffer is an
 //!     `io::AllocatingWriter` (the port's `std.Io.Writer.Allocating`) rather
 //!     than a bare `Vec<u8>`.
 //!   * `decode(&mut dyn io::Reader, Allocator, &DecodeOptions)` — reader
@@ -355,6 +356,7 @@ impl TerminalSnapshot {
         //     .continuation = .ground,
         // });
         snapshot::encode(
+            self.alloc.into(),
             &mut self.encoded,
             terminal,
             snapshot::EncodeOptions {
@@ -394,6 +396,7 @@ impl TerminalSnapshot {
         // distinct fields; the borrows are split so the encoder can read the
         // terminal while writing the buffer.
         let (terminal, encoded) = (self_.terminal.as_mut().unwrap(), &mut self_.encoded);
+        let alloc = self_.alloc.into();
         for _ in 0..self_.opts.loops {
             // self.encoded.shrinkRetainingCapacity(0);
             encoded.shrink_retaining_capacity(0);
@@ -404,6 +407,7 @@ impl TerminalSnapshot {
             //     return error.BenchmarkFailed;
             // };
             if let Err(err) = snapshot::encode(
+                alloc,
                 &mut *encoded,
                 terminal,
                 snapshot::EncodeOptions {

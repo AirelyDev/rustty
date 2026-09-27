@@ -26,7 +26,9 @@ use std::os::raw::c_int;
 // const terminal_c = @import("terminal.zig");
 // const types = @import("types.zig");
 // const Result = @import("result.zig").Result;
+use allocator_api2::alloc::{Allocator as ApiAllocator, Layout};
 use rustty_lib::allocator::Allocator as CAllocator;
+use rustty_vt::alloc::{AVec, VtAllocator};
 use rustty_vt::selection_codepoints;
 use rustty_vt::selection_gesture as sg;
 use rustty_vt::selection_gesture::SelectionGesture;
@@ -78,9 +80,12 @@ pub type Event = *mut EventWrapper;
 //     gesture: SelectionGesture = .init,
 // };
 pub struct GestureWrapper {
-    // PORT NOTE: see render.rs — the C-resolved allocator is kept for parity; the
-    // gesture's pin tracking goes through the terminal's own allocator.
-    pub alloc: Box<dyn rustty_lib::allocator::ZigAllocator>,
+    // PORT NOTE (parity tail S7-8): the reference `alloc: std.mem.Allocator` is
+    // the C-resolved allocator, held as the runtime handle
+    // (`lib.alloc.default(alloc_)`). The wrapper storage goes through it; the
+    // gesture's pin tracking goes through the terminal's own allocator, as in
+    // the reference.
+    pub alloc: VtAllocator,
     pub gesture: SelectionGesture,
 }
 
@@ -131,7 +136,9 @@ pub struct GestureWrapper {
 //     ...
 // };
 pub struct EventWrapper {
-    pub alloc: Box<dyn rustty_lib::allocator::ZigAllocator>,
+    // PORT NOTE (parity tail S7-8): the C-resolved allocator as the runtime
+    // handle; the wrapper storage and the codepoint copy go through it.
+    pub alloc: VtAllocator,
     pub event: EventPayload,
 
     // Validation sidecar for required event fields that don't have safe
@@ -147,9 +154,13 @@ pub struct EventWrapper {
     // event-owned storage so the real payload can safely point at it until the
     // event is changed or freed.
     //
-    // PORT NOTE: `?[]u21` becomes an owned `Option<Vec<u32>>`; an empty slice
-    // (`&.{}`) is represented by `Some(Vec::new())`.
-    pub word_boundary_codepoints: Option<Vec<u32>>,
+    // PORT NOTE: `?[]u21` becomes an owned `Option<AVec<u32>>` allocated
+    // through the event's `alloc` (parity tail S7-8; `@sizeOf(u21)` is 4, so
+    // `u32` elements make the reference's `len * 4`-byte, 4-aligned requests).
+    // An empty slice (`&.{}`, or a zero-length `alloc`) is an empty list that
+    // owns no allocation, which is why the reference skips the free when
+    // `cps.len == 0`.
+    pub word_boundary_codepoints: Option<AVec<u32>>,
 
     // Backing storage for Press.behaviors. The C API sets behaviors as a value
     // struct, but SelectionGesture.Press stores a pointer to a [3]Behavior.
@@ -331,11 +342,12 @@ impl EventWrapper {
     //     }
     // }
     //
-    // PORT NOTE: the owned `Vec<u32>` frees on drop; `deinit` is a no-op kept for
-    // call-site parity (`event_free` invokes it before destroying the wrapper).
+    // PORT NOTE: the list is bound to `self.alloc`; dropping it is
+    // `self.alloc.free(cps)` (an empty list owns nothing and frees nothing).
     fn deinit(&mut self) {
         if let Some(cps) = self.word_boundary_codepoints.take() {
             // if (cps.len > 0) self.alloc.free(cps);
+            self.alloc.debug_assert_same(*cps.allocator());
             drop(cps);
         }
     }
@@ -678,18 +690,21 @@ pub unsafe fn new(alloc_: Option<&CAllocator>, out_gesture: *mut Gesture) -> Res
         return Result::InvalidValue;
     }
     // const alloc = lib.alloc.default(alloc_);
-    let alloc = rustty_lib::allocator::default(alloc_);
+    // SAFETY: a non-NULL `alloc_` is a valid `RusttyAllocator` that outlives
+    // the gesture (the reference's contract, N260).
+    let alloc = unsafe { rustty_vt::alloc::default(alloc_) };
     // const gesture = alloc.create(GestureWrapper) catch { out.* = null; return .out_of_memory; };
     // PORT NOTE (W12-01): through the C-resolved allocator; a rejecting caller
     // allocator yields `.out_of_memory` + null out-param like the reference.
-    let gesture: *mut GestureWrapper = match rustty_lib::allocator::create_raw(&*alloc) {
-        Ok(ptr) => ptr,
-        Err(_) => {
-            // SAFETY: `out_gesture` is a non-null valid writable `Gesture`.
-            unsafe { *out_gesture = std::ptr::null_mut() };
-            return Result::OutOfMemory;
-        }
-    };
+    let gesture: *mut GestureWrapper =
+        match ApiAllocator::allocate(&alloc, Layout::new::<GestureWrapper>()) {
+            Ok(ptr) => ptr.cast().as_ptr(),
+            Err(_) => {
+                // SAFETY: `out_gesture` is a non-null valid writable `Gesture`.
+                unsafe { *out_gesture = std::ptr::null_mut() };
+                return Result::OutOfMemory;
+            }
+        };
     // gesture.* = .{ .alloc = alloc };  (SelectionGesture.init via field default)
     // SAFETY: `gesture` is valid uninitialized `GestureWrapper` storage.
     unsafe {
@@ -734,18 +749,21 @@ pub unsafe fn event_new(
         return Result::InvalidValue;
     }
     // const alloc = lib.alloc.default(alloc_);
-    let alloc = rustty_lib::allocator::default(alloc_);
+    // SAFETY: a non-NULL `alloc_` is a valid `RusttyAllocator` that outlives
+    // the event (the reference's contract, N260).
+    let alloc = unsafe { rustty_vt::alloc::default(alloc_) };
     // const event = alloc.create(EventWrapper) catch { out.* = null; return .out_of_memory; };
     // PORT NOTE (W12-01): through the C-resolved allocator; a rejecting caller
     // allocator yields `.out_of_memory` + null out-param like the reference.
-    let event: *mut EventWrapper = match rustty_lib::allocator::create_raw(&*alloc) {
-        Ok(ptr) => ptr,
-        Err(_) => {
-            // SAFETY: `out_event` is a non-null valid writable `Event`.
-            unsafe { *out_event = std::ptr::null_mut() };
-            return Result::OutOfMemory;
-        }
-    };
+    let event: *mut EventWrapper =
+        match ApiAllocator::allocate(&alloc, Layout::new::<EventWrapper>()) {
+            Ok(ptr) => ptr.cast().as_ptr(),
+            Err(_) => {
+                // SAFETY: `out_event` is a non-null valid writable `Event`.
+                unsafe { *out_event = std::ptr::null_mut() };
+                return Result::OutOfMemory;
+            }
+        };
     // event.* = .{ .alloc = alloc, .event = undefined };  (other fields via defaults)
     // SAFETY: `event` is valid uninitialized `EventWrapper` storage.
     unsafe {
@@ -787,9 +805,8 @@ pub unsafe fn free(gesture_: Gesture, terminal: terminal_c::Terminal) {
         return;
     }
     // PORT NOTE (W12-01): move the wrapper value out of the caller-allocator
-    // storage, deinit, return the STORAGE through the resolved allocator
-    // (`alloc.destroy(wrapper)` — the caller free callback fires), then drop
-    // the value (which drops the `alloc` box itself last).
+    // storage, deinit, then return the STORAGE through the resolved allocator
+    // (`alloc.destroy(wrapper)` — the caller free callback fires).
     // SAFETY: `gesture_` is a live `new`-returned wrapper (caller contract);
     // after the read the storage is treated as uninitialized and freed once.
     let mut wrapper = unsafe { std::ptr::read(gesture_) };
@@ -803,10 +820,17 @@ pub unsafe fn free(gesture_: Gesture, terminal: terminal_c::Terminal) {
         wrapper.gesture.deinit(t_ref);
     }
     // const alloc = wrapper.alloc; alloc.destroy(wrapper);
-    // SAFETY: `gesture_` was created by `new` via `create_raw` with this same
-    // resolved allocator.
-    unsafe { rustty_lib::allocator::destroy_raw(&*wrapper.alloc, gesture_) };
+    let alloc = wrapper.alloc;
     drop(wrapper);
+    // SAFETY: `gesture_` was allocated by `new` through this same allocator
+    // with this layout.
+    unsafe {
+        ApiAllocator::deallocate(
+            &alloc,
+            std::ptr::NonNull::new_unchecked(gesture_.cast()),
+            Layout::new::<GestureWrapper>(),
+        )
+    };
 }
 
 // pub fn event_free(event_: Event) ... void {
@@ -823,19 +847,26 @@ pub unsafe fn event_free(event_: Event) {
         return;
     }
     // PORT NOTE (W12-01): move the wrapper value out of the caller-allocator
-    // storage, deinit, return the STORAGE through the resolved allocator
-    // (`alloc.destroy(event)` — the caller free callback fires), then drop
-    // the value (which drops the `alloc` box itself last).
+    // storage, deinit (which frees the codepoint copy), then return the
+    // STORAGE through the resolved allocator (`alloc.destroy(event)` — the
+    // caller free callback fires).
     // SAFETY: `event_` is a live `event_new`-returned wrapper; after the read
     // the storage is treated as uninitialized and freed exactly once.
     let mut event = unsafe { std::ptr::read(event_) };
     // event.deinit();
     event.deinit();
     // const alloc = event.alloc; alloc.destroy(event);
-    // SAFETY: `event_` was created by `event_new` via `create_raw` with this
-    // same resolved allocator.
-    unsafe { rustty_lib::allocator::destroy_raw(&*event.alloc, event_) };
+    let alloc = event.alloc;
     drop(event);
+    // SAFETY: `event_` was allocated by `event_new` through this same
+    // allocator with this layout.
+    unsafe {
+        ApiAllocator::deallocate(
+            &alloc,
+            std::ptr::NonNull::new_unchecked(event_.cast()),
+            Layout::new::<EventWrapper>(),
+        )
+    };
 }
 
 // pub fn reset(gesture_: Gesture, terminal: terminal_c.Terminal) ... void {
@@ -1706,20 +1737,34 @@ fn try_set_word_boundary_codepoints(event: &mut EventWrapper, value: &Codepoints
     clear_word_boundary_codepoints(event);
     // const ptr = value.ptr orelse { event.word_boundary_codepoints = &.{}; target.* = ...; return .success; };
     if value.ptr.is_null() {
-        // PORT NOTE: `&.{}` (empty slice) becomes an empty owned `Vec`.
-        event.word_boundary_codepoints = Some(Vec::new());
+        // PORT NOTE: `&.{}` (empty slice) becomes an empty list that owns no
+        // allocation.
+        event.word_boundary_codepoints = Some(AVec::new_in(event.alloc));
         return Result::Success;
     }
     // const copy = event.alloc.alloc(u21, value.len) catch return .out_of_memory;
+    // PORT NOTE (parity tail S7-8): one exact `value.len * 4`-byte request
+    // through the event's allocator; a zero `len` makes no call (Zig's
+    // `alloc(u21, 0)` returns an empty slice without calling the vtable).
+    let mut copy: AVec<u32> = AVec::new_in(event.alloc);
+    if copy.try_reserve_exact(value.len).is_err() {
+        return Result::OutOfMemory;
+    }
+    // errdefer event.alloc.free(copy);
     // for (copy, ptr[0..value.len]) |*dst, cp| dst.* = std.math.cast(u21, cp) orelse return .invalid_value;
     // SAFETY: `value.ptr` is non-null with `value.len` readable `u32`s (caller).
     let src = unsafe { std::slice::from_raw_parts(value.ptr, value.len) };
-    let mut copy: Vec<u32> = Vec::with_capacity(value.len);
     for &cp in src {
         // std.math.cast(u21, cp): reject codepoints that don't fit in 21 bits.
         if cp > 0x1F_FFFF {
+            // PORT NOTE: reference defect (R13, UD314). The reference returns
+            // `Result`, not an error union, so `return .invalid_value` does
+            // not run the `errdefer` and the reference leaks `copy` (reachable
+            // from the C API with any codepoint above U+1FFFFF). Returning
+            // here drops `copy`, which frees it through `event.alloc`.
             return Result::InvalidValue;
         }
+        // Capacity for `value.len` elements was reserved above: no growth.
         copy.push(cp);
     }
     // event.word_boundary_codepoints = copy; target.* = copy;

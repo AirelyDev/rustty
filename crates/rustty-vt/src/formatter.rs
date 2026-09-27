@@ -362,30 +362,44 @@ pub struct NodeRun {
 #[derive(Clone)]
 pub struct PinMapMap {
     /// The x/y coordinate within its page for every output byte.
-    // PORT NOTE: `std.ArrayList(Coordinate) = .empty`. An allocator-bound list
-    // (parity tail S7-6) because the page formatter's `PointMap` writes into
-    // it; it stays on the Rust heap handle (the pin map's own `alloc` is not
-    // routed here: the formatter family's convention, outside S7-6).
+    // PORT NOTE: `std.ArrayList(Coordinate) = .empty`, grown through the pin
+    // map's `alloc` (parity tail S7-8, N330). Zig's unmanaged list takes the
+    // allocator per call; this allocator-bound list is bound to it on first
+    // growth (`alloc::bind`) and debug-asserts every later call passes the
+    // same one. The page formatter's `PointMap` writes into it with Zig's
+    // `growCapacity` (`zig_list`).
     pub points: crate::alloc::AVec<Coordinate>,
 
     /// The page node for ranges of output bytes, ordered by offset.
-    pub nodes: Vec<NodeRun>,
+    // PORT NOTE: `std.ArrayList(NodeRun) = .empty`, bound as `points` is.
+    pub nodes: crate::alloc::AVec<NodeRun>,
 }
+
+/// `ArrayList(NodeRun)`'s `init_capacity` (`@sizeOf(NodeRun)` is 16 on the
+/// 64-bit targets the port builds: a `usize` and a pointer).
+const NODE_RUN_INIT_CAPACITY: usize =
+    crate::zig_list::init_capacity(2 * core::mem::size_of::<usize>());
 
 impl PinMapMap {
     // pub const empty: Map = .{};
     pub const EMPTY: PinMapMap = PinMapMap {
         points: crate::alloc::AVec::new_in(crate::alloc::VtAllocator::GLOBAL),
-        nodes: Vec::new(),
+        nodes: crate::alloc::AVec::new_in(crate::alloc::VtAllocator::GLOBAL),
     };
 
     pub fn deinit(&mut self, alloc: Allocator) {
-        // PORT NOTE: the reference frees both `alloc`-owned lists. The owning
-        // `Vec`s free on drop; replacing them here is the faithful
-        // deallocation, and the `alloc` parameter is kept for signature parity.
-        let _ = alloc;
+        // self.points.deinit(alloc);
+        // self.nodes.deinit(alloc);
+        // PORT NOTE: each list is bound to the allocator it grew through, so
+        // dropping it frees through that allocator; `alloc` must be it.
+        if self.points.capacity() != 0 {
+            alloc.debug_assert_same(*self.points.allocator());
+        }
+        if self.nodes.capacity() != 0 {
+            alloc.debug_assert_same(*self.nodes.allocator());
+        }
         self.points = crate::alloc::AVec::new_in(crate::alloc::VtAllocator::GLOBAL);
-        self.nodes = Vec::new();
+        self.nodes = crate::alloc::AVec::new_in(crate::alloc::VtAllocator::GLOBAL);
     }
 
     pub fn clear_retaining_capacity(&mut self) {
@@ -400,39 +414,49 @@ impl PinMapMap {
 
     /// Set the page node for all bytes appended from here on,
     /// until the next call. No-op if the node is unchanged.
-    // PORT NOTE: returns `Allocator.Error!void` in the reference; `Vec` growth
-    // aborts on OOM (the file-wide convention that dropped the
-    // `catch return error.WriteFailed` arms), so this is infallible here.
-    pub fn set_node(&mut self, alloc: Allocator, node: PinMapNode) {
-        let _ = alloc;
+    pub fn set_node(
+        &mut self,
+        alloc: Allocator,
+        node: PinMapNode,
+    ) -> Result<(), crate::alloc::OutOfMemory> {
         if let Some(last) = self.nodes.last() {
             if core::ptr::eq(last.node, node) {
-                return;
+                return Ok(());
             }
         }
 
-        self.nodes.push(NodeRun {
-            offset: self.points.len(),
-            node,
-        });
+        // try self.nodes.append(alloc, .{ .offset = self.points.items.len, .node = node });
+        crate::alloc::bind(&mut self.nodes, alloc);
+        let offset = self.points.len();
+        crate::zig_list::append(
+            &mut self.nodes,
+            NodeRun { offset, node },
+            NODE_RUN_INIT_CAPACITY,
+        )
     }
 
     /// Append `n` bytes that map to `pin`.
-    pub fn append(&mut self, alloc: Allocator, pin: Pin, n: usize) {
+    pub fn append(
+        &mut self,
+        alloc: Allocator,
+        pin: Pin,
+        n: usize,
+    ) -> Result<(), crate::alloc::OutOfMemory> {
         if n == 0 {
-            return;
+            return Ok(());
         }
-        self.set_node(alloc, pin.node);
+        self.set_node(alloc, pin.node)?;
         // try self.points.appendNTimes(alloc, .{ .x = pin.x, .y = pin.y }, n);
-        let len = self.points.len();
-        crate::alloc::CopyVecExt::resize_copy(
+        crate::alloc::bind(&mut self.points, alloc);
+        crate::zig_list::append_n_times(
             &mut self.points,
-            len + n,
             Coordinate {
                 x: pin.x,
                 y: pin.y as u32,
             },
-        );
+            n,
+            COORDINATE_INIT_CAPACITY,
+        )
     }
 
     /// Returns the pin that the byte at the given offset maps to,
@@ -664,13 +688,15 @@ impl<'a> TerminalFormatter<'a> {
 
                     // Map all those bytes to the same pin. Use the top left to ensure
                     // the node pointer is always properly initialized.
-                    m.map.append(
-                        m.alloc,
-                        unsafe { &*terminal.screens.active }
-                            .pages
-                            .get_top_left(point::Tag::Screen),
-                        discarding.count,
-                    );
+                    m.map
+                        .append(
+                            m.alloc,
+                            unsafe { &*terminal.screens.active }
+                                .pages
+                                .get_top_left(point::Tag::Screen),
+                            discarding.count,
+                        )
+                        .map_err(point_map_write_failed)?;
                 }
             }
         }
@@ -713,13 +739,15 @@ impl<'a> TerminalFormatter<'a> {
 
                 // Map all those bytes to the same pin. Use the top left to ensure
                 // the node pointer is always properly initialized.
-                m.map.append(
-                    m.alloc,
-                    unsafe { &*terminal.screens.active }
-                        .pages
-                        .get_top_left(point::Tag::Screen),
-                    discarding.count,
-                );
+                m.map
+                    .append(
+                        m.alloc,
+                        unsafe { &*terminal.screens.active }
+                            .pages
+                            .get_top_left(point::Tag::Screen),
+                        discarding.count,
+                    )
+                    .map_err(point_map_write_failed)?;
             }
         }
 
@@ -758,13 +786,15 @@ impl<'a> TerminalFormatter<'a> {
 
                 // Map all those bytes to the same pin. Use the top left to ensure
                 // the node pointer is always properly initialized.
-                m.map.append(
-                    m.alloc,
-                    unsafe { &*terminal.screens.active }
-                        .pages
-                        .get_top_left(point::Tag::Screen),
-                    discarding.count,
-                );
+                m.map
+                    .append(
+                        m.alloc,
+                        unsafe { &*terminal.screens.active }
+                            .pages
+                            .get_top_left(point::Tag::Screen),
+                        discarding.count,
+                    )
+                    .map_err(point_map_write_failed)?;
             }
         }
 
@@ -840,7 +870,9 @@ impl<'a> TerminalFormatter<'a> {
                         .pages
                         .get_top_left(point::Tag::Screen)
                 });
-                m.map.append(m.alloc, pin, discarding.count);
+                m.map
+                    .append(m.alloc, pin, discarding.count)
+                    .map_err(point_map_write_failed)?;
             }
         }
 
@@ -1213,7 +1245,9 @@ impl<'a> ScreenFormatter<'a> {
                 .map
                 .get_last_or_null()
                 .unwrap_or_else(|| screen.pages.get_top_left(point::Tag::Screen));
-            m.map.append(m.alloc, pin, discarding.count);
+            m.map
+                .append(m.alloc, pin, discarding.count)
+                .map_err(point_map_write_failed)?;
         }
 
         Ok(())
@@ -1382,7 +1416,12 @@ impl<'a> PageListFormatter<'a> {
             // per-byte coordinates directly into our map's point list
             // and we record which page node covers those bytes.
             if let Some(m) = self.pin_map.as_mut() {
-                m.map.set_node(m.alloc, chunk.node);
+                // m.map.setNode(m.alloc, chunk.node) catch return error.WriteFailed;
+                m.map
+                    .set_node(m.alloc, chunk.node)
+                    .map_err(point_map_write_failed)?;
+                // The page formatter grows `points` through `m.alloc`.
+                crate::alloc::bind(&mut m.map.points, m.alloc);
                 let base = m.map.points.len();
                 formatter.point_map = Some(PointMap {
                     alloc: m.alloc,
@@ -1485,6 +1524,8 @@ impl PointMap<'_> {
     /// `map.map.appendNTimes(map.alloc, coord, n) catch return error.WriteFailed`.
     #[inline]
     fn append_n_times(&mut self, coord: Coordinate, n: usize) -> io::Result<()> {
+        // The list is bound to the allocator the reference passes per call.
+        self.alloc.debug_assert_same(*self.map.allocator());
         crate::zig_list::append_n_times(self.map, coord, n, COORDINATE_INIT_CAPACITY)
             .map_err(point_map_write_failed)
     }
@@ -1498,6 +1539,7 @@ impl PointMap<'_> {
     /// `map.map.ensureUnusedCapacity(map.alloc, n) catch return error.WriteFailed`.
     #[inline]
     fn ensure_unused_capacity(&mut self, n: usize) -> io::Result<()> {
+        self.alloc.debug_assert_same(*self.map.allocator());
         crate::zig_list::ensure_unused_capacity(self.map, n, COORDINATE_INIT_CAPACITY)
             .map_err(point_map_write_failed)
     }
@@ -7068,6 +7110,189 @@ mod tests {
         for i in closing_idx..closing_idx + "</a>".len() {
             assert_eq!(expected_coord, point_map[i]);
         }
+        t.deinit(Global);
+    }
+
+    // -----------------------------------------------------------------------
+    // Parity tail S7-8 (N330): the pin map's two lists grow through the pin
+    // map's `alloc` (`m.map.setNode(m.alloc, ..)`, `m.map.append(m.alloc, ..)`,
+    // and the page formatter's `PointMap{ .alloc = m.alloc, .map =
+    // &m.map.points }`), with Zig's `growCapacity`, and a failed growth is
+    // `error.WriteFailed`.
+    // -----------------------------------------------------------------------
+
+    /// Format the active screen of `t` through a `TerminalFormatter` with a
+    /// pin map over `alloc`.
+    fn format_with_pin_map(
+        t: &Terminal,
+        opts: Options,
+        alloc: crate::alloc::VtAllocator,
+        pin_map: &mut PinMapMap,
+    ) -> (io::Result<()>, Vec<u8>) {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut formatter: TerminalFormatter = TerminalFormatter::init(t, opts);
+        formatter.pin_map = Some(PinMap {
+            alloc,
+            map: pin_map,
+        });
+        let r = formatter.format(&mut builder);
+        (r, builder)
+    }
+
+    #[test]
+    fn pin_map_plain_routes_through_the_pin_maps_allocator() {
+        use crate::alloc::testing::{with_handle, CountingAllocator};
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"hello\r\nworld");
+        }
+        let counting = CountingAllocator::over_heap();
+        let c = counting.allocator();
+        with_handle(&c, |alloc| {
+            let mut pin_map: PinMapMap = PinMapMap::EMPTY;
+            let (r, output) = format_with_pin_map(&t, Options::plain(), alloc, &mut pin_map);
+            r.unwrap();
+            assert_eq!(b"hello\nworld", output.as_slice());
+            assert_eq!(output.len(), pin_map.count());
+            // Both lists are on the pin map's allocator.
+            assert_eq!(alloc, *pin_map.points.allocator());
+            assert_eq!(alloc, *pin_map.nodes.allocator());
+            // One node run: `growCapacity(1)` with `init_capacity` 128 / 16.
+            assert_eq!(1, pin_map.nodes.len());
+            assert_eq!(1 + 8, pin_map.nodes.capacity());
+            // The points list: the page formatter's first append is one
+            // cell (`growCapacity(1)` with `init_capacity` 128 / 8 = 17),
+            // which the 11 output bytes fit.
+            assert_eq!(1 + 16, pin_map.points.capacity());
+            assert_eq!(2, counting.alloc_calls.get());
+            assert_eq!(0, counting.remap_calls.get());
+            assert_eq!(0, counting.free_calls.get());
+            assert_eq!(9 * 16 + 17 * 8, counting.live_bytes.get());
+            pin_map.deinit(alloc);
+            assert_eq!(2, counting.free_calls.get());
+            assert_eq!(0, counting.live_bytes.get());
+        });
+        t.deinit(Global);
+    }
+
+    #[test]
+    fn pin_map_extras_route_through_the_pin_maps_allocator() {
+        use crate::alloc::testing::{with_handle, CountingAllocator};
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"\x1b]4;0;rgb:12/34/56\x1b\\");
+            s.next_slice(b"test");
+        }
+        let counting = CountingAllocator::over_heap();
+        let c = counting.allocator();
+        with_handle(&c, |alloc| {
+            let mut pin_map: PinMapMap = PinMapMap::EMPTY;
+            let (r, output) = format_with_pin_map(&t, Options::vt(), alloc, &mut pin_map);
+            r.unwrap();
+            assert_eq!(output.len(), pin_map.count());
+            // The palette bytes (the first `m.map.append`) come first: the
+            // points list's first reservation is `growCapacity(P)` for those
+            // P bytes, on the pin map's allocator.
+            assert_eq!(alloc, *pin_map.points.allocator());
+            assert_eq!(alloc, *pin_map.nodes.allocator());
+            // 5522 palette bytes, then `test` and its trailing reset:
+            // growCapacity(5522) = 5522 + 2761 + 16 = 8299 holds them all.
+            assert_eq!(5530, output.len());
+            assert_eq!(1, pin_map.nodes.len());
+            assert_eq!(9, pin_map.nodes.capacity());
+            assert_eq!(8299, pin_map.points.capacity());
+            assert_eq!(2, counting.alloc_calls.get());
+            assert_eq!(0, counting.remap_calls.get());
+            assert_eq!(0, counting.free_calls.get());
+            assert_eq!(9 * 16 + 8299 * 8, counting.live_bytes.get());
+            pin_map.deinit(alloc);
+            assert_eq!(0, counting.live_bytes.get());
+        });
+        t.deinit(Global);
+    }
+
+    #[test]
+    fn pin_map_growth_failure_is_write_failed() {
+        use crate::alloc::testing::{with_handle, Config, FailingAllocator};
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"hello");
+        }
+        // Every growth index fails in turn: the format reports the
+        // reference's `error.WriteFailed` (`OutOfMemory` here), never aborts,
+        // and the map frees what it holds.
+        // Plain reaches the page formatter's `PointMap`; vt reaches the
+        // palette extras' `m.map.append` first.
+        for (fail_index, vt) in [(0, false), (1, false), (0, true), (1, true)] {
+            let failing = FailingAllocator::over_heap(Config {
+                fail_index,
+                ..Config::default()
+            });
+            let c = failing.allocator();
+            with_handle(&c, |alloc| {
+                let mut pin_map: PinMapMap = PinMapMap::EMPTY;
+                let o = if vt { Options::vt() } else { Options::plain() };
+                let (r, _) = format_with_pin_map(&t, o, alloc, &mut pin_map);
+                let err = r.expect_err("the pin map's growth fails");
+                assert_eq!(io::ErrorKind::OutOfMemory, err.kind());
+                assert!(failing.has_induced_failure.get());
+                assert_eq!(fail_index, failing.allocations.get());
+                pin_map.deinit(alloc);
+                assert_eq!(failing.allocated_bytes.get(), failing.freed_bytes.get());
+            });
+        }
+        t.deinit(Global);
+    }
+
+    #[test]
+    fn selection_string_map_routes_through_the_given_allocator() {
+        use crate::alloc::testing::{with_handle, Config, CountingAllocator, FailingAllocator};
+        let mut t = Terminal::init(Global, opts(10, 5)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"hello");
+        }
+        let screen = unsafe { &mut *t.screens.active };
+        let sel = crate::selection::Selection::init(
+            screen
+                .pages
+                .pin(point::Point::Active(point::Coordinate { x: 0, y: 0 }))
+                .unwrap(),
+            screen
+                .pages
+                .pin(point::Point::Active(point::Coordinate { x: 4, y: 0 }))
+                .unwrap(),
+            false,
+        );
+        let counting = CountingAllocator::over_heap();
+        let c = counting.allocator();
+        with_handle(&c, |alloc| {
+            let map = screen
+                .selection_string_map(alloc, crate::screen::SelectionString { sel, trim: true })
+                .unwrap();
+            assert_eq!(b"hello", map.string.as_slice());
+            assert_eq!(5, map.map.count());
+            assert_eq!(alloc, *map.map.points.allocator());
+            assert_eq!(alloc, *map.map.nodes.allocator());
+            assert_eq!(2, counting.alloc_calls.get());
+            map.deinit(alloc);
+            assert_eq!(0, counting.live_bytes.get());
+        });
+        // A failing allocator: `selectionStringMap` returns OutOfMemory.
+        let failing = FailingAllocator::over_heap(Config {
+            fail_index: 0,
+            ..Config::default()
+        });
+        let c = failing.allocator();
+        with_handle(&c, |alloc| {
+            let r = screen
+                .selection_string_map(alloc, crate::screen::SelectionString { sel, trim: true });
+            assert!(r.is_err());
+            assert!(failing.has_induced_failure.get());
+        });
         t.deinit(Global);
     }
 }

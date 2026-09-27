@@ -101,6 +101,9 @@ impl std::io::Write for FixedWriter<'_> {
     }
 }
 
+/// `writeByte` on a fixed writer is its one-byte `writeAll`.
+impl rustty_vt::stream_continuation::ByteWriter for FixedWriter<'_> {}
+
 /// Mirrors `std.Io.Writer.Discarding`: discards all bytes but counts how many
 /// were written (`count`). Never fails.
 #[derive(Default)]
@@ -131,6 +134,9 @@ impl std::io::Write for CountingWriter {
         Ok(())
     }
 }
+
+/// `writeByte` on the discarding writer counts one byte.
+impl rustty_vt::stream_continuation::ByteWriter for CountingWriter {}
 
 #[cfg(test)]
 mod tests {

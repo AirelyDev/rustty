@@ -840,14 +840,15 @@ pub unsafe fn format_alloc(
     }
 
     // const alloc = lib.alloc.default(alloc_);
-    let alloc = rustty_lib::allocator::default(unsafe { alloc_.as_ref() });
+    // SAFETY: a non-NULL `alloc_` is a valid `RusttyAllocator` for the call.
+    let alloc = unsafe { rustty_vt::alloc::default(alloc_.as_ref()) };
 
     // var aw: std.Io.Writer.Allocating = .init(alloc);
-    // PORT NOTE: rustty accumulates into an in-process `Vec<u8>`, then copies into
-    // a buffer allocated through the C allocator (`alloc`) so the returned pointer
-    // is owned by — and freeable through — that allocator (mirroring the
-    // reference's `Allocating` writer backed by the C allocator + `toOwnedSlice`).
-    let mut aw: Vec<u8> = Vec::new();
+    // defer aw.deinit();
+    // PORT NOTE (parity tail S7-8): the writer grows through the caller's
+    // allocator (Zig's `growCapacity`, `remap` first); a failed growth is
+    // `error.WriteFailed`, which maps to OUT_OF_MEMORY below.
+    let mut aw = rustty_vt::alloc::AllocatingWriter::init(alloc);
     // formatSelection(t, opts, &aw.writer) catch |err| return switch (err) { ... };
     if let Err(err) = format_selection(t, opts, &mut aw) {
         return match err {
@@ -859,29 +860,15 @@ pub unsafe fn format_alloc(
 
     // const buf = aw.toOwnedSlice() catch return .out_of_memory;
     // out_ptr.* = buf.ptr; out_len.* = buf.len;
-    let len = aw.len();
-    // PORT NOTE: an empty selection yields a zero-length buffer; the reference
-    // `toOwnedSlice` returns an empty (`ptr`, 0) slice. We allocate `len` bytes
-    // (alignment 1, matching `[]u8`); a 0-length alloc returns whatever the
-    // allocator gives, and `out_len` is 0.
-    let ptr = alloc.alloc(len, rustty_lib::allocator::Alignment::from_byte_units(1), 0);
-    if ptr.is_null() && len != 0 {
-        return Result::OutOfMemory;
-    }
-    // For an empty selection there is nothing to copy, and `copy_nonoverlapping`
-    // requires a NON-NULL dst even for count 0 — so a pathological caller
-    // allocator returning NULL for a 0-byte request would make the copy UB and
-    // hand back a NULL `out_ptr` (the reference `toOwnedSlice` always yields a
-    // non-null empty sentinel). Skip the copy and substitute a non-null aligned
-    // sentinel in that case, matching Zig. (VALIDATION_REPORT_2 apprt-c audit, LOW.)
-    let ptr = if len != 0 {
-        // SAFETY: `ptr` is a fresh `len`-byte allocation; `aw` holds `len` bytes.
-        unsafe { core::ptr::copy_nonoverlapping(aw.as_ptr(), ptr, len) };
-        ptr
-    } else if ptr.is_null() {
-        core::ptr::NonNull::<u8>::dangling().as_ptr()
-    } else {
-        ptr
+    //
+    // PORT NOTE (parity tail S7-8): `toOwnedSlice` is ported as such: the
+    // writer's own buffer, shrunk to the written length through the caller's
+    // allocator. An empty output (an empty selection) makes no allocator call
+    // at all and yields the non-null empty sentinel (this also retires the
+    // raw zero-length `alloc` the copy-out made before, S171-F1's class).
+    let (ptr, len) = match aw.to_owned_slice() {
+        Ok(buf) => crate::allocator::into_c_bytes(buf),
+        Err(_) => return Result::OutOfMemory,
     };
     unsafe {
         *out_ptr = ptr;
@@ -1511,5 +1498,97 @@ mod tests {
             rustty_lib::allocator::Alignment::from_byte_units(1),
             0,
         );
+    }
+
+    /// A terminal holding "Hello World" with "World" selected, on the Rust
+    /// heap test allocator.
+    fn world_selected(alloc: &CAllocator) -> terminal::Terminal {
+        let mut t: terminal::Terminal = std::ptr::null_mut();
+        assert_eq!(Result::Success, unsafe {
+            terminal::new(alloc, &mut t, 80, 24)
+        });
+        let input = b"Hello World";
+        unsafe { terminal::vt_write(t, input.as_ptr(), input.len()) };
+        let mut start_ref = CGridRef::default();
+        assert_eq!(Result::Success, unsafe {
+            terminal::grid_ref(t, active_point(6, 0), &mut start_ref)
+        });
+        let mut end_ref = CGridRef::default();
+        assert_eq!(Result::Success, unsafe {
+            terminal::grid_ref(t, active_point(10, 0), &mut end_ref)
+        });
+        let sel = CSelection {
+            start: start_ref,
+            end: end_ref,
+            ..CSelection::default()
+        };
+        assert_eq!(Result::Success, unsafe {
+            terminal::set(
+                t,
+                terminal::Option_::Selection,
+                &sel as *const CSelection as *const std::ffi::c_void,
+            )
+        });
+        t
+    }
+
+    // Parity tail S7-8 (N331): `format_alloc`'s `Writer.Allocating` grows
+    // through the caller's allocator and `toOwnedSlice` hands its buffer over
+    // shrunk to the written length; a failed growth is OUT_OF_MEMORY.
+    #[test]
+    fn selection_format_alloc_writer_routes_through_the_callers_allocator() {
+        use rustty_vt::alloc::testing::{Config, CountingAllocator, FailingAllocator};
+        with_test_allocator(|alloc| {
+            let t = world_selected(alloc);
+            let opts = FormatOptions {
+                emit: Format::Plain as c_int,
+                unwrap: true,
+                trim: true,
+                ..format_options_default()
+            };
+
+            let counting = CountingAllocator::over_heap();
+            let c = counting.allocator();
+            let mut out_ptr: *mut u8 = std::ptr::null_mut();
+            let mut out_len: usize = 0;
+            assert_eq!(Result::Success, unsafe {
+                format_alloc(t, &c, opts, &mut out_ptr, &mut out_len)
+            });
+            assert_eq!(b"World", unsafe {
+                core::slice::from_raw_parts(out_ptr, out_len)
+            });
+            // One growth for the 5-byte write (growCapacity(5 + 5 + 1) = 144),
+            // then `toOwnedSlice` remaps it to 5 bytes.
+            assert_eq!(1, counting.alloc_calls.get());
+            assert_eq!(Some((144, 0)), counting.last_alloc.get());
+            assert_eq!(1, counting.remap_calls.get());
+            assert_eq!(0, counting.free_calls.get());
+            assert_eq!(5, counting.live_bytes.get());
+            free_c_buf(&c, out_ptr, out_len);
+            assert_eq!(0, counting.live_bytes.get());
+
+            for config in [
+                Config {
+                    fail_index: 0,
+                    ..Config::default()
+                },
+                Config {
+                    fail_index: 1,
+                    resize_fail_index: 0,
+                },
+            ] {
+                let failing = FailingAllocator::over_heap(config);
+                let c = failing.allocator();
+                let mut out_ptr: *mut u8 = std::ptr::null_mut();
+                let mut out_len: usize = 0;
+                assert_eq!(Result::OutOfMemory, unsafe {
+                    format_alloc(t, &c, opts, &mut out_ptr, &mut out_len)
+                });
+                assert!(out_ptr.is_null());
+                assert!(failing.has_induced_failure.get());
+                assert_eq!(failing.allocated_bytes.get(), failing.freed_bytes.get());
+            }
+            unsafe { terminal::free(t) };
+        });
     }
 }

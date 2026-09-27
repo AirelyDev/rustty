@@ -1881,10 +1881,13 @@ pub unsafe fn restore_continuation(
 
     // var exported: std.Io.Writer.Allocating = .init(wrapper.terminal.gpa());
     // defer exported.deinit();
-    // PORT NOTE: the allocating writer maps to a `Vec<u8>` (the crate-wide
-    // `std.Io.Writer.Allocating` treatment); a Vec write cannot fail, so the
-    // reference's `WriteFailed => OutOfMemory` arm is unreachable but kept.
-    let mut exported: Vec<u8> = Vec::new();
+    // PORT NOTE (parity tail S7-8): the writer grows through the terminal's
+    // allocator, and a failed growth is the `WriteFailed => OutOfMemory` arm.
+    // SAFETY: `terminal_` is a live wrapper (caller contract); raw reads of
+    // the active screen's allocator (`Terminal.gpa()`), no `&mut` retag of
+    // the terminal the stream handler aliases.
+    let gpa = unsafe { (*(*(*terminal_).terminal).screens.active).alloc };
+    let mut exported = rustty_vt::alloc::AllocatingWriter::init(gpa);
     // wrapper.stream.writeContinuation(&exported.writer) catch |err| switch (err) { ... };
     // SAFETY: `terminal_` is a live wrapper (caller contract).
     match unsafe { (*terminal_).stream.write_continuation(&mut exported) } {
@@ -1902,7 +1905,7 @@ pub unsafe fn restore_continuation(
     // if (!std.mem.eql(u8, continuation, exported.written())) {
     //     return error.InvalidContinuation;
     // }
-    if continuation != exported.as_slice() {
+    if continuation != exported.written() {
         return Err(RestoreContinuationError::InvalidContinuation);
     }
     Ok(())
@@ -2148,7 +2151,7 @@ pub enum ContinuationWriteError {
 /// `terminal_`, if non-null, must be a live terminal handle.
 pub unsafe fn continuation_write_io(
     terminal_: Terminal,
-    writer: &mut dyn std::io::Write,
+    writer: &mut dyn rustty_vt::stream_continuation::ByteWriter,
 ) -> std::result::Result<(), ContinuationWriteError> {
     // Keep handle validation here so the three public output forms and the
     // snapshot encoder all use exactly the same continuation preflight.
@@ -2199,18 +2202,17 @@ pub enum ContinuationAllocError {
 //     allow_untracked_ground: bool,
 // ) ContinuationAllocError![]u8 {
 //
-// PORT NOTE: the reference returns an `alloc`-owned slice; rustty's snapshot
-// encoder consumes the bytes internally, so the port returns a `Vec<u8>` (the
-// crate-wide `std.Io.Writer.Allocating` treatment) and drops the allocator
-// parameter. The public `continuation_alloc` export below copies through the
-// caller's C allocator itself (the `format_alloc` precedent).
+// PORT NOTE (parity tail S7-8): the reference's `alloc`-owned slice is an
+// `AVec<u8>` bound to `alloc`, built by an allocating writer over `alloc` and
+// handed out by `toOwnedSlice` (exactly sized); dropping it is `alloc.free`.
 ///
 /// # Safety
 /// `terminal_`, if non-null, must be a live terminal handle.
 pub unsafe fn continuation_alloc_io(
     terminal_: Terminal,
+    alloc: rustty_vt::alloc::VtAllocator,
     allow_untracked_ground: bool,
-) -> std::result::Result<Vec<u8>, ContinuationAllocError> {
+) -> std::result::Result<rustty_vt::alloc::AVec<u8>, ContinuationAllocError> {
     // const wrapper = terminal_ orelse return error.InvalidValue;
     if terminal_.is_null() {
         return Err(ContinuationAllocError::InvalidValue);
@@ -2223,12 +2225,15 @@ pub unsafe fn continuation_alloc_io(
         && unsafe { (*terminal_).stream.continuation.is_none() }
         && unsafe { (*terminal_).stream.ground() }
     {
-        return Ok(Vec::new());
+        // `alloc.dupe(u8, "")`: an empty slice, no allocator call.
+        return Ok(rustty_vt::alloc::AVec::new_in(alloc));
     }
 
     // The allocating writer gives snapshot encoding and the public allocation
     // API one common way to obtain an exact owned continuation.
-    let mut aw: Vec<u8> = Vec::new();
+    // var aw: std.Io.Writer.Allocating = .init(alloc);
+    // defer aw.deinit();
+    let mut aw = rustty_vt::alloc::AllocatingWriter::init(alloc);
 
     // A write failure from an Allocating writer can only be allocation failure;
     // no external callback participates in this path.
@@ -2245,7 +2250,9 @@ pub unsafe fn continuation_alloc_io(
     })?;
 
     // Transfer the buffer out before the deferred writer cleanup runs.
-    Ok(aw)
+    // return aw.toOwnedSlice() catch error.OutOfMemory;
+    aw.to_owned_slice()
+        .map_err(|_| ContinuationAllocError::OutOfMemory)
 }
 
 /// Map errors that are intrinsic to continuation export. Public callback
@@ -2401,8 +2408,10 @@ pub unsafe fn continuation_alloc(
 
     // Resolve NULL to librustty-vt's default allocator before entering the
     // shared Zig allocation path.
+    // SAFETY: a non-NULL `alloc_` is a valid `RusttyAllocator` for the call.
+    let alloc = unsafe { rustty_vt::alloc::default(alloc_) };
     // SAFETY: `terminal_` validity is the caller's contract.
-    let bytes = match unsafe { continuation_alloc_io(terminal_, false) } {
+    let bytes = match unsafe { continuation_alloc_io(terminal_, alloc, false) } {
         Ok(bytes) => bytes,
         Err(err) => {
             return match err {
@@ -2416,26 +2425,11 @@ pub unsafe fn continuation_alloc(
 
     // Ownership crosses the ABI here; callers release this exact pointer and
     // length with rustty_free and the same allocator selection.
-    // PORT NOTE: the reference's allocating writer already produced the bytes
-    // in the caller allocator; the port copies the `Vec` through it (the
-    // `format_alloc` precedent) so the ownership contract is identical.
-    let allocator = rustty_lib::allocator::default(alloc_);
-    let len = bytes.len();
-    // PORT NOTE (parity S171-F1's class, found outside that row's anchors): the
-    // TYPED helper `alloc_bytes`, not the RAW `alloc`. `toOwnedSlice` on empty
-    // output returns the writer's own empty buffer without calling any
-    // allocator callback, so the reference never hands a C embedder a zero-size
-    // request; `alloc_bytes` short-circuits it the same way, and `rustty_free`
-    // already short-circuits the matching zero-length free.
-    let dst = allocator.alloc_bytes(len);
-    if dst.is_null() {
-        return Result::OutOfMemory;
-    }
-    if len != 0 {
-        // SAFETY: `dst` is `len` freshly allocated bytes; `bytes` holds `len`
-        // initialized bytes.
-        unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), dst, len) };
-    }
+    // PORT NOTE (parity tail S7-8): the bytes are the allocating writer's own
+    // buffer on the caller's allocator (`toOwnedSlice`); an empty
+    // continuation made no allocator call.
+    let (dst, len) = crate::allocator::into_c_bytes(bytes);
+    // out_ptr.* = bytes.ptr; out_len.* = bytes.len;
     unsafe {
         *out_ptr_ = dst;
         *out_len_ = len;
@@ -5207,8 +5201,8 @@ mod tests {
 
             // const alloc = lib.alloc.default(&lib.alloc.test_allocator);
             // const bytes = try continuationAllocIo(source, alloc, false);
-            // (rustty: the internal helper returns a `Vec` — see its PORT NOTE.)
-            let bytes = unsafe { continuation_alloc_io(source, false) }.unwrap();
+            let default_alloc = unsafe { rustty_vt::alloc::default(Some(alloc)) };
+            let bytes = unsafe { continuation_alloc_io(source, default_alloc, false) }.unwrap();
             assert_eq!(b"\x1b[31", bytes.as_slice());
 
             let (new_result, restored) = new_t(alloc, 80, 24);
@@ -5216,7 +5210,8 @@ mod tests {
             test_enable_continuation(restored);
             unsafe { restore_continuation(restored, &bytes) }.unwrap();
 
-            let reexported = unsafe { continuation_alloc_io(restored, false) }.unwrap();
+            let reexported =
+                unsafe { continuation_alloc_io(restored, default_alloc, false) }.unwrap();
             assert_eq!(bytes, reexported);
 
             let (new_result, invalid) = new_t(alloc, 80, 24);
@@ -12007,5 +12002,250 @@ mod tests {
 
         unsafe { free(t) };
         assert_eq!(0, counting.live_bytes.get());
+    }
+
+    // Parity tail S7-8 (N331): `continuation_alloc` builds the continuation in
+    // a `Writer.Allocating` over the caller's allocator (`continuationAllocIo(
+    // .., lib.alloc.default(alloc_), ..)`) and hands its buffer over
+    // (`toOwnedSlice`); `restoreContinuation`'s verification writer is on the
+    // terminal's allocator and is freed before returning. The continuation is
+    // written a byte at a time (the tracker's `writeByte` loop, which
+    // `Writer.Allocating` grows by `growCapacity(1)`).
+    #[test]
+    fn continuation_writers_route_through_their_allocators() {
+        use rustty_vt::alloc::testing::{Config, CountingAllocator, FailingAllocator};
+        with_test_allocator(|alloc| {
+            let (new_result, t) = new_t(alloc, 80, 24);
+            assert_eq!(Result::Success, new_result);
+            test_enable_continuation(t);
+            vtw(t, b"\x1b[31");
+
+            let counting = CountingAllocator::over_heap();
+            let c = counting.allocator();
+            let mut out_ptr: *mut u8 = std::ptr::null_mut();
+            let mut out_len: usize = 0;
+            assert_eq!(Result::Success, unsafe {
+                continuation_alloc(t, Some(&c), &mut out_ptr, &mut out_len)
+            });
+            assert_eq!(b"\x1b[31", unsafe {
+                core::slice::from_raw_parts(out_ptr, out_len)
+            });
+            // One growth (the first `writeByte` rebases: growCapacity(1) =
+            // 129 bytes), then `toOwnedSlice` remaps it to the 4 bytes.
+            assert_eq!(1, counting.alloc_calls.get());
+            assert_eq!(Some((129, 0)), counting.last_alloc.get());
+            assert_eq!(1, counting.remap_calls.get());
+            assert_eq!(0, counting.free_calls.get());
+            assert_eq!(4, counting.live_bytes.get());
+            unsafe { crate::allocator::free(Some(&c), out_ptr, out_len) };
+            assert_eq!(0, counting.live_bytes.get());
+
+            // A failing caller allocator: OUT_OF_MEMORY, nothing handed out.
+            for config in [
+                Config {
+                    fail_index: 0,
+                    ..Config::default()
+                },
+                Config {
+                    fail_index: 1,
+                    resize_fail_index: 0,
+                },
+            ] {
+                let failing = FailingAllocator::over_heap(config);
+                let fc = failing.allocator();
+                let mut out_ptr: *mut u8 = std::ptr::null_mut();
+                let mut out_len: usize = 0;
+                assert_eq!(Result::OutOfMemory, unsafe {
+                    continuation_alloc(t, Some(&fc), &mut out_ptr, &mut out_len)
+                });
+                assert!(out_ptr.is_null());
+                assert!(failing.has_induced_failure.get());
+                assert_eq!(failing.allocated_bytes.get(), failing.freed_bytes.get());
+            }
+            unsafe { free(t) };
+        });
+
+        // restoreContinuation: the exported copy is on the terminal's
+        // allocator, and a failure there is `error.OutOfMemory`.
+        let counting = CountingAllocator::over_heap();
+        let c = counting.allocator();
+        let (new_result, restored) = new_t(&c, 80, 24);
+        assert_eq!(Result::Success, new_result);
+        test_enable_continuation(restored);
+        let (allocs, frees, live) = (
+            counting.alloc_calls.get(),
+            counting.free_calls.get(),
+            counting.live_bytes.get(),
+        );
+        unsafe { restore_continuation(restored, b"") }.unwrap();
+        // An empty continuation writes nothing: no call.
+        assert_eq!(allocs, counting.alloc_calls.get());
+        unsafe { restore_continuation(restored, b"\x1b[31") }.unwrap();
+        // The replay fits the tracker's reservation; the exported copy is
+        // one 129-byte growth, freed on return.
+        assert_eq!(allocs + 1, counting.alloc_calls.get());
+        assert_eq!(frees + 1, counting.free_calls.get());
+        assert_eq!(Some((129, 0)), counting.last_alloc.get());
+        assert_eq!(Some((129, 0)), counting.last_free.get());
+        assert_eq!(live, counting.live_bytes.get());
+        unsafe { free(restored) };
+        assert_eq!(0, counting.live_bytes.get());
+
+        let failing = FailingAllocator::over_heap(Config::default());
+        let fc = failing.allocator();
+        let (new_result, restored) = new_t(&fc, 80, 24);
+        assert_eq!(Result::Success, new_result);
+        test_enable_continuation(restored);
+        vtw(restored, b"\x1b[31");
+        // The next allocation (the exported copy) fails.
+        failing.fail_index.set(failing.alloc_index.get());
+        assert_eq!(Err(RestoreContinuationError::OutOfMemory), unsafe {
+            restore_continuation(restored, b"")
+        });
+        assert!(failing.has_induced_failure.get());
+        failing.fail_index.set(usize::MAX);
+        unsafe { free(restored) };
+        assert_eq!(failing.allocated_bytes.get(), failing.freed_bytes.get());
+    }
+
+    // Parity tail S7-8 (T2, no reference counterpart): the allocation-failure
+    // sweep over the C API's allocating writers. For every n, a
+    // `FailingAllocator` refusing its n-th allocation is both the terminal's
+    // allocator and the output allocator of `encode_alloc` (whose continuation
+    // copy is on the terminal's) and `continuation_alloc`, and
+    // `restoreContinuation` exports on the terminal's. Nothing aborts, every
+    // result is SUCCESS or OUT_OF_MEMORY (restore: `InvalidContinuation`, the
+    // comparison against an empty continuation, or `OutOfMemory`), and every
+    // byte is returned. A second loop refuses remap/resize from their n-th
+    // call on: the writers fall back to alloc + copy + free and nothing fails.
+    #[test]
+    fn allocation_failure_sweep_through_the_allocating_writers() {
+        use rustty_vt::alloc::testing::{Config, FailingAllocator};
+
+        fn once(failing: &FailingAllocator, what: &str) -> (bool, usize) {
+            let calloc = failing.allocator();
+            let mut t: Terminal = std::ptr::null_mut();
+            match unsafe { new(&calloc as *const CAllocator, &mut t, 10, 3) } {
+                Result::Success => {}
+                Result::OutOfMemory => {
+                    assert!(t.is_null(), "{what}");
+                    assert_eq!(failing.allocated_bytes.get(), failing.freed_bytes.get());
+                    return (true, 0);
+                }
+                other => panic!("{what}: new returned {other:?}"),
+            }
+            let limit: usize = 1024;
+            let r = unsafe {
+                set(
+                    t,
+                    Option_::ContinuationMaxBytes,
+                    &limit as *const usize as *const c_void,
+                )
+            };
+            assert!(
+                matches!(r, Result::Success | Result::OutOfMemory),
+                "{what}: {r:?}"
+            );
+            vtw(t, b"hello\x1b[31");
+
+            let mut failures = 0usize;
+            let mut out_ptr: *mut u8 = std::ptr::null_mut();
+            let mut out_len: usize = 0;
+            let r = unsafe {
+                crate::snapshot::encode_alloc(t, Some(&calloc), &mut out_ptr, &mut out_len)
+            };
+            match r {
+                Result::Success => unsafe {
+                    crate::allocator::free(Some(&calloc), out_ptr, out_len)
+                },
+                // A tracker that could not be built or grown leaves the
+                // continuation unavailable: INVALID_VALUE, as in the reference.
+                Result::OutOfMemory | Result::InvalidValue => failures += 1,
+                other => panic!("{what}: encode_alloc returned {other:?}"),
+            }
+            let r = unsafe { continuation_alloc(t, Some(&calloc), &mut out_ptr, &mut out_len) };
+            match r {
+                Result::Success => unsafe {
+                    crate::allocator::free(Some(&calloc), out_ptr, out_len)
+                },
+                Result::OutOfMemory | Result::InvalidValue => failures += 1,
+                other => panic!("{what}: continuation_alloc returned {other:?}"),
+            }
+            match unsafe { restore_continuation(t, b"") } {
+                Ok(()) => {}
+                Err(RestoreContinuationError::OutOfMemory) => failures += 1,
+                Err(
+                    RestoreContinuationError::InvalidContinuation
+                    | RestoreContinuationError::ContinuationDisabled
+                    | RestoreContinuationError::ContinuationUnavailable,
+                ) => {}
+            }
+            unsafe { free(t) };
+            assert_eq!(
+                failing.allocated_bytes.get(),
+                failing.freed_bytes.get(),
+                "{what}: every byte is returned"
+            );
+            assert_eq!(
+                failing.allocations.get(),
+                failing.deallocations.get(),
+                "{what}"
+            );
+            (false, failures)
+        }
+
+        let mut n = 0usize;
+        let mut call_failures = 0usize;
+        loop {
+            let failing = FailingAllocator::over_heap(Config {
+                fail_index: n,
+                ..Config::default()
+            });
+            let (_, calls) = once(&failing, &format!("alloc n={n}"));
+            call_failures += calls;
+            if !failing.has_induced_failure.get() {
+                break;
+            }
+            n += 1;
+            assert!(n < 10_000, "the sweep must terminate");
+        }
+        assert!(call_failures > 0, "no writer reported a failure");
+
+        let clean = FailingAllocator::over_heap(Config::default());
+        assert_eq!((false, 0), once(&clean, "remap clean run"));
+        let remaps = clean.resize_index.get();
+        // The writers' `toOwnedSlice` remaps, at least.
+        assert!(remaps >= 3, "only {remaps} remaps");
+        for n in 0..=remaps {
+            let failing = FailingAllocator::over_heap(Config {
+                resize_fail_index: n,
+                ..Config::default()
+            });
+            assert_eq!(
+                (false, 0),
+                once(&failing, &format!("remap n={n}")),
+                "remap n={n}: a refused remap never fails a call"
+            );
+        }
+
+        // Every remap refused AND the n-th allocation refused: the
+        // `toOwnedSlice` fallback allocations fail too (the alloc loop's
+        // remaps succeed, so it never reaches them).
+        let mut n = 0usize;
+        let mut call_failures = 0usize;
+        loop {
+            let failing = FailingAllocator::over_heap(Config {
+                fail_index: n,
+                resize_fail_index: 0,
+            });
+            let (_, calls) = once(&failing, &format!("no-remap alloc n={n}"));
+            call_failures += calls;
+            if !failing.has_induced_failure.get() {
+                break;
+            }
+            n += 1;
+            assert!(n < 10_000, "the sweep must terminate");
+        }
+        assert!(call_failures > 0, "no writer reported a failure");
     }
 }
