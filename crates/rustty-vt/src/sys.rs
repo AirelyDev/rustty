@@ -333,6 +333,16 @@ pub fn io_failing(_buffer: &mut [u8]) -> Result<(), RandomSecureError> {
 /// CSPRNG. The platform sources live os-side; `rustty_os::file::random_secure`
 /// carries `TinyIo.randomSecure` (arc4random_buf on Darwin, getrandom on
 /// Linux, no entropy elsewhere).
+///
+/// Windows (task W-2, N345): there the reference's Io is `std.Io.Threaded` in
+/// every artifact — the application's `global.io()`, the tests' `testing.io`,
+/// and libghostty-vt's C API (`terminal/c/terminal.zig:57-67`: "On Windows we
+/// use `std.Io.Threaded` since TinyIo doesn't implement the NT operations") —
+/// so this reads Threaded's CNG device source
+/// (`rustty_os::file::random_secure_threaded`), not TinyIo's failing one.
+/// CORRECTION: this doc said only "`rustty_os::file::random_secure` carries
+/// `TinyIo.randomSecure`", used on every target, which left Windows with no
+/// entropy (five vt tests failed there).
 pub fn io_native(buffer: &mut [u8]) -> Result<(), RandomSecureError> {
     // On wasm32-freestanding the reference's lib artifact has no TinyIo — it
     // degrades to `std.Io.failing` (see the `random_secure` doc above), whose
@@ -343,7 +353,12 @@ pub fn io_native(buffer: &mut [u8]) -> Result<(), RandomSecureError> {
     {
         io_failing(buffer)
     }
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(windows)]
+    {
+        rustty_os::file::random_secure_threaded(buffer)
+            .map_err(|_| RandomSecureError::EntropyUnavailable)
+    }
+    #[cfg(not(any(target_arch = "wasm32", windows)))]
     {
         rustty_os::file::random_secure(buffer).map_err(|_| RandomSecureError::EntropyUnavailable)
     }

@@ -195,4 +195,12 @@ rustty-util = { workspace = true }
 # `rustty_vt::alloc::testing` (the `std.testing.FailingAllocator` port and a
 # counting allocator on the C ABI) to this crate's tests, under the same
 # dev-dependency unification rule.
-rustty-vt = { path = "../rustty-vt", features = ["tripwire-test", "test-allocators"] }
+#
+# TEST-ONLY (task W-2, N346): `test-decommit-sim` is the crate-external switch
+# for Zig's `builtin.is_test` in `terminal/mem.zig` (`canReclaim`/`decommit`/
+# `recommit`), which holds for the WHOLE test binary in the reference, so its
+# C-API compression tests use the simulated reclamation on every target. Without
+# it this crate's tests took the OS path, which Windows does not have
+# (`compression_activity_and_incremental_scheduling` hit `.unsupported =>
+# unreachable` there). Same dev-dependency unification rule as above.
+rustty-vt = { path = "../rustty-vt", features = ["tripwire-test", "test-allocators", "test-decommit-sim"] }

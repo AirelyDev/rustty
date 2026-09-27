@@ -22,10 +22,14 @@ const LOG_SCOPE: &str = "os";
 #[cfg(not(windows))]
 #[allow(non_camel_case_types)]
 pub type rlimit = libc::rlimit;
+//
+// The Windows stand-in is `rustty_global::seam::Rlimit` (`()`, Rust's empty
+// struct) so that `GlobalState.rlimits`, which that leaf crate types, carries
+// `fixMaxFiles()`'s value unchanged (task W-2, N342: the two stand-ins used to be
+// distinct types, and `rustty-apprt` did not compile for Windows).
 #[cfg(windows)]
-#[derive(Clone, Copy)]
 #[allow(non_camel_case_types)]
-pub struct rlimit;
+pub type rlimit = rustty_global::seam::Rlimit;
 
 /// This maximizes the number of file descriptors we can have open. We
 /// need to do this because each window consumes at least a handful of fds.
@@ -87,7 +91,8 @@ pub fn fixMaxFiles() -> Option<rlimit> {
 pub fn restoreMaxFiles(lim: rlimit) {
     #[cfg(windows)]
     {
-        let _ = lim;
+        // (`rlimit` is `()` on Windows, task W-2.)
+        let () = lim;
     }
     #[cfg(not(windows))]
     {
@@ -415,6 +420,229 @@ pub fn random_secure(buffer: &mut [u8]) -> Result<(), EntropyUnavailable> {
     Err(EntropyUnavailable)
 }
 
+/// `std.Io.Threaded.randomSecure`'s Windows arm (Zig 0.16.0
+/// `std/Io/Threaded.zig:17011-17054`, with `getCngDevice` at `:15792-15835`):
+/// the platform entropy of the Io the reference uses on Windows everywhere —
+/// the application's `global.io()`, the tests' `testing.io`, and libghostty-vt's
+/// C API, whose `Io.Impl` is `*std.Io.Threaded` on Windows "since TinyIo doesn't
+/// implement the NT operations" (`terminal/c/terminal.zig:57-67`). TinyIo's own
+/// `randomSecure` (above) is `std.Io.failing` there.
+///
+/// Zig's comment on the source, kept:
+/// ProcessPrng from bcryptprimitives.dll has the following properties:
+/// * introduces a dependency on bcryptprimitives.dll, which apparently
+///   runs a test suite every time it is loaded
+/// * heap allocates a 48-byte buffer, handling failure by returning NO_MEMORY in a BOOL
+///   despite the function being documented to always return TRUE
+/// * reads from "\\Device\\CNG" which then seeds a per-CPU AES CSPRNG
+///
+/// Therefore, that function is avoided in favor of using the device directly.
+///
+/// PORT NOTE (task W-2, N345): the CNG device handle is cached per `Threaded`
+/// instance in Zig (`t.random_file`, closed by `Threaded.deinit`); the port's
+/// terminal Io is a stateless fn, so the handle is cached process-wide, opened
+/// on first use under the same lock-then-race shape and never closed (the
+/// application's `global.io()` Threaded also lives for the whole process).
+/// Cancelation does not exist here, so `CANCELLED` simply retries.
+#[cfg(windows)]
+pub fn random_secure_threaded(buffer: &mut [u8]) -> Result<(), EntropyUnavailable> {
+    use win_cng::*;
+
+    // if (buffer.len == 0) return;
+    if buffer.is_empty() {
+        return Ok(());
+    }
+    // const cng_device = try getCngDevice(t);
+    let cng_device = get_cng_device()?;
+    // var i: usize = 0;
+    let mut i: usize = 0;
+    loop {
+        // const remaining_len = std.math.lossyCast(u32, buffer.len - i);
+        let remaining_len = u32::try_from(buffer.len() - i).unwrap_or(u32::MAX);
+        let mut io_status_block = IO_STATUS_BLOCK::default();
+        // SAFETY: `buffer[i..]` is live and writable for `remaining_len` bytes
+        // (`remaining_len <= buffer.len() - i`); the handle is the open CNG
+        // device; every other pointer argument is null, as in Zig's call.
+        let rc = unsafe {
+            NtDeviceIoControlFile(
+                cng_device,
+                core::ptr::null_mut(),
+                core::ptr::null_mut(),
+                core::ptr::null_mut(),
+                &mut io_status_block,
+                IOCTL_KSEC_GEN_RANDOM,
+                core::ptr::null_mut(),
+                0,
+                buffer[i..].as_mut_ptr().cast(),
+                remaining_len,
+            )
+        };
+        match rc {
+            SUCCESS => {
+                i += remaining_len as usize;
+                if buffer.len() - i == 0 {
+                    return Ok(());
+                }
+                continue;
+            }
+            CANCELLED => continue,
+            // else => return syscall.fail(error.EntropyUnavailable),
+            _ => return Err(EntropyUnavailable),
+        }
+    }
+}
+
+/// `getCngDevice` (Zig 0.16.0 `std/Io/Threaded.zig:15792-15835`).
+#[cfg(windows)]
+fn get_cng_device() -> Result<win_cng::HANDLE, EntropyUnavailable> {
+    use std::sync::Mutex;
+    use win_cng::*;
+
+    // The cached `t.random_file.handle` (as an address, for `Send`).
+    static RANDOM_FILE: Mutex<Option<usize>> = Mutex::new(None);
+    {
+        let guard = RANDOM_FILE.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(handle) = *guard {
+            return Ok(handle as HANDLE);
+        }
+    }
+
+    // `&.{ '\\', 'D', 'e', 'v', 'i', 'c', 'e', '\\', 'C', 'N', 'G' }`
+    let name: Vec<u16> = r"\Device\CNG".encode_utf16().collect();
+    let mut object_name = UNICODE_STRING {
+        Length: (name.len() * 2) as u16,
+        MaximumLength: (name.len() * 2) as u16,
+        Buffer: name.as_ptr().cast_mut(),
+    };
+    let attributes = OBJECT_ATTRIBUTES {
+        Length: core::mem::size_of::<OBJECT_ATTRIBUTES>() as u32,
+        RootDirectory: core::ptr::null_mut(),
+        ObjectName: &mut object_name,
+        Attributes: 0,
+        SecurityDescriptor: core::ptr::null_mut(),
+        SecurityQualityOfService: core::ptr::null_mut(),
+    };
+    loop {
+        let mut fresh_handle: HANDLE = core::ptr::null_mut();
+        let mut io_status_block = IO_STATUS_BLOCK::default();
+        // SAFETY: every pointer is to a live local; `object_name.Buffer` points
+        // into `name`, which outlives the call.
+        let rc = unsafe {
+            NtOpenFile(
+                &mut fresh_handle,
+                SYNCHRONIZE | FILE_READ_DATA,
+                &attributes,
+                &mut io_status_block,
+                FILE_SHARE_VALID_FLAGS,
+                FILE_SYNCHRONOUS_IO_NONALERT,
+            )
+        };
+        match rc {
+            SUCCESS => {
+                // Another thread might have won the race.
+                let mut guard = RANDOM_FILE.lock().unwrap_or_else(|e| e.into_inner());
+                if let Some(prev_handle) = *guard {
+                    // SAFETY: `fresh_handle` was just opened and is not shared.
+                    unsafe { CloseHandle(fresh_handle) };
+                    return Ok(prev_handle as HANDLE);
+                }
+                *guard = Some(fresh_handle as usize);
+                return Ok(fresh_handle);
+            }
+            CANCELLED => continue,
+            // .OBJECT_NAME_NOT_FOUND => return syscall.fail(error.EntropyUnavailable), // Observed on wine 10.0
+            // else => return syscall.fail(error.EntropyUnavailable),
+            _ => return Err(EntropyUnavailable),
+        }
+    }
+}
+
+/// The NT declarations `random_secure_threaded` needs, spelled as in Zig's
+/// `std/os/windows.zig` / `ntdll.zig` (the `page_allocator.rs` `win_ntdll`
+/// convention: private to the one module that calls them).
+#[cfg(windows)]
+#[allow(clippy::upper_case_acronyms, non_snake_case, non_camel_case_types)]
+mod win_cng {
+    pub type HANDLE = *mut core::ffi::c_void;
+    pub type NTSTATUS = i32;
+    /// `NTSTATUS.SUCCESS`
+    pub const SUCCESS: NTSTATUS = 0;
+    /// `NTSTATUS.CANCELLED` (0xC0000120)
+    pub const CANCELLED: NTSTATUS = 0xC000_0120_u32 as i32;
+    /// `STANDARD_RIGHTS.SYNCHRONIZE`
+    pub const SYNCHRONIZE: u32 = 0x0010_0000;
+    /// `FILE.READ_DATA`
+    pub const FILE_READ_DATA: u32 = 0x0000_0001;
+    /// `FILE.SHARE.VALID_FLAGS` (read | write | delete)
+    pub const FILE_SHARE_VALID_FLAGS: u32 = 0x0000_0007;
+    /// `FILE.MODE.IO = .SYNCHRONOUS_NONALERT`
+    pub const FILE_SYNCHRONOUS_IO_NONALERT: u32 = 0x0000_0020;
+    /// `IOCTL.KSEC.GEN_RANDOM`: `CTL_CODE{ .DeviceType = .KSEC (0x39),
+    /// .Function = 2, .Method = .BUFFERED, .Access = .ANY }`.
+    pub const IOCTL_KSEC_GEN_RANDOM: u32 = (0x39 << 16) | (2 << 2);
+
+    #[repr(C)]
+    pub struct UNICODE_STRING {
+        pub Length: u16,
+        pub MaximumLength: u16,
+        pub Buffer: *mut u16,
+    }
+
+    #[repr(C)]
+    pub struct OBJECT_ATTRIBUTES {
+        pub Length: u32,
+        pub RootDirectory: HANDLE,
+        pub ObjectName: *mut UNICODE_STRING,
+        pub Attributes: u32,
+        pub SecurityDescriptor: *mut core::ffi::c_void,
+        pub SecurityQualityOfService: *mut core::ffi::c_void,
+    }
+
+    #[repr(C)]
+    pub struct IO_STATUS_BLOCK {
+        pub Status: usize,
+        pub Information: usize,
+    }
+
+    impl Default for IO_STATUS_BLOCK {
+        fn default() -> Self {
+            IO_STATUS_BLOCK {
+                Status: 0,
+                Information: 0,
+            }
+        }
+    }
+
+    #[link(name = "ntdll")]
+    extern "system" {
+        pub fn NtOpenFile(
+            FileHandle: *mut HANDLE,
+            DesiredAccess: u32,
+            ObjectAttributes: *const OBJECT_ATTRIBUTES,
+            IoStatusBlock: *mut IO_STATUS_BLOCK,
+            ShareAccess: u32,
+            OpenOptions: u32,
+        ) -> NTSTATUS;
+        pub fn NtDeviceIoControlFile(
+            FileHandle: HANDLE,
+            Event: HANDLE,
+            ApcRoutine: *mut core::ffi::c_void,
+            ApcContext: *mut core::ffi::c_void,
+            IoStatusBlock: *mut IO_STATUS_BLOCK,
+            IoControlCode: u32,
+            InputBuffer: *mut core::ffi::c_void,
+            InputBufferLength: u32,
+            OutputBuffer: *mut core::ffi::c_void,
+            OutputBufferLength: u32,
+        ) -> NTSTATUS;
+    }
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        pub fn CloseHandle(hObject: HANDLE) -> i32;
+    }
+}
+
 #[cfg(not(windows))]
 fn trim_end_bytes(s: &[u8], byte: u8) -> &[u8] {
     let mut end = s.len();
@@ -593,5 +821,27 @@ mod tests {
 
         // Zero-length is a no-op.
         random_secure(&mut a[0..0]).unwrap();
+    }
+
+    // The same assertions over `random_secure_threaded`, the Windows source of
+    // `std.Io.Threaded.randomSecure` (task W-2, N345). No reference test of its
+    // own: the reference reaches it through every `testing.io` test that draws
+    // entropy on Windows (the kitty clipboard OTP tests).
+    #[test]
+    #[cfg(windows)]
+    fn random_secure_threaded_fills_with_fresh_entropy() {
+        let mut a = [0u8; 32];
+        let mut b = [0u8; 32];
+        random_secure_threaded(&mut a).unwrap();
+        random_secure_threaded(&mut b).unwrap();
+        assert!(!a.iter().all(|&x| x == 0));
+        assert!(!b.iter().all(|&x| x == 0));
+        assert_ne!(a, b);
+        // A larger draw through the cached device handle.
+        let mut big = vec![0u8; 1 << 16];
+        random_secure_threaded(&mut big).unwrap();
+        assert!(!big.iter().all(|&x| x == 0));
+        // Zero-length is a no-op.
+        random_secure_threaded(&mut a[0..0]).unwrap();
     }
 }
