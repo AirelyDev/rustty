@@ -672,13 +672,18 @@ suite with a no-op tick would mean the tests never drove the loop.
 
 ---
 
-## V9. `rustty-termio` Windows paths: cannot even be CROSS-CHECKED on this host — **ENVIRONMENT-BLOCKED**
+## V9. `rustty-termio` Windows paths: built, linted and unit-tested on Windows (W-1); the live surface needs a Windows app build — **ENVIRONMENT-BLOCKED**
 
-**W-1 status (2026-09-27, rwin: Windows 11 build 26200 on ARM64, target `x86_64-pc-windows-msvc` under x64 emulation):** recipe steps 1-3 DONE on Windows: `cargo check`/`clippy -- -D warnings`/`test -p rustty-termio` green (3/3 test runs, 65 lib tests + integration tests; the compile errors were mechanical, fixed in place, NEW-FINDINGS N344). The end-to-end path runs in a unit test rather than a surface: `windows_threadenter_reads_the_pty_through_the_windows_read_thread` spawns `cmd.exe` through a real ConPTY via `threadEnter`, sees its output on the Screen through `threadMainWindows`, and `threadExit`'s `CancelIoEx` stops the read loop; negative control (no Windows read loop) fails with an empty Screen (LEDGER S211-F2/F3). Not done: a live surface (the app tier does not compile for Windows, N342). The `CancelIoEx` race found on the way is N341.
+**W-1 status (2026-09-27, rwin: Windows 11 build 26200 on ARM64, target `x86_64-pc-windows-msvc` under x64 emulation):** recipe steps 1-3 DONE on Windows: `cargo check`/`clippy -- -D warnings`/`test -p rustty-termio` green (3/3 test runs, 65 lib tests + integration tests; the compile errors were mechanical, fixed in place, NEW-FINDINGS N344). The end-to-end path runs in a unit test rather than a surface: `windows_threadenter_reads_the_pty_through_the_windows_read_thread` spawns `cmd.exe` through a real ConPTY via `threadEnter`, sees its output on the Screen through `threadMainWindows`, and `threadExit`'s `CancelIoEx` stops the read loop; negative control (no Windows read loop) fails with an empty Screen (LEDGER S211-F2/F3). Not done: a live surface (the app tier does not compile for Windows, N342). The `CancelIoEx` race found on the way is N341 (fixed in W-1b as UD326, with
+the CRT-with-HANDLE crash UD325). Stays open: live surface pending N342.
 
-**Blocked on:** a Windows host with the MSVC toolchain. Cross-checking from
-macOS is additionally blocked by `highway-sys`'s `cc`-driven C++ build (see
-below), so unlike V8 this row has no compile-level evidence either.
+**Blocked on:** a Windows build of the application tier, which does not exist yet:
+NEW-FINDINGS N342 (rustty-core and above do not compile for Windows; batch W-2), so no
+live surface can run there. CORRECTION (task W-1b, review W-1): this
+read "a Windows host with the MSVC toolchain" and the header said "cannot even be
+CROSS-CHECKED on this host"; the Windows lane (rwin) exists since W-1 and discharged
+recipe steps 1-3. Cross-checking from macOS is still blocked by `highway-sys`'s
+`cc`-driven C++ build (see below).
 
 ```
 PORTED: crates/rustty-termio/src/exec.rs

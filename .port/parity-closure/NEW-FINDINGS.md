@@ -6117,20 +6117,24 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 - **id**: N340. Not a ledger row: found by task W-1's first Windows run of `rustty-os`.
 - **severity**: medium (Windows). **kind**: port defect (behavioral difference).
 - **finding**: `rustty_global::EnvMap` is a plain `HashMap<Vec<u8>, Vec<u8>>`. Zig's environment map compares
-  keys case-insensitively on Windows, where environment variable names are case-insensitive. The Windows
+  keys case-insensitively on Windows, where environment variable names are case-insensitive: it hashes and
+  compares by `toUpperWtf16` over the WTF-8 codepoints (`std/process/Environ.zig:107-141`,
+  `std/os/windows.zig:3754` `eqlIgnoreCaseWtf8`). The Windows
   process environment names the search path `Path`, so `path::expand`'s `environ_map.get("PATH")` misses it and
   every lookup returns `null`. MEASURED on rwin (Windows 11 build 26200, ARM64, `x86_64-pc-windows-msvc`):
   `path::tests::expand_hostname` (the reference's own `expandHostname` test) fails with `unwrap()` on `None`; the
   same binary passes when the variable is re-created as `PATH` in a fresh process environment. Every other
   `EnvMap` lookup of a variable Windows spells differently is affected the same way.
-- **fix direction**: an `EnvMap` whose key equality and hash fold ASCII case on Windows (as Zig's map does),
-  which changes the type behind 219 uses in 38 files; too wide for W-1.
+- **fix direction** (R1): an `EnvMap` newtype whose key equality and hash use the Windows Unicode upper-case
+  fold (`toUpperWtf16`), as Zig's map does, which changes the type behind 219 uses in 38 files; too wide for W-1.
+  The reference's `expandHostname` test is the regression test.
+  CORRECTION (task W-1b, review W-1 F3): this said the map folds "ASCII case"; Zig's fold is Unicode upper-case.
 - **state**: OPEN (controller: owner for the `EnvMap` type). `expand_hostname` fails on Windows until then.
 
 ## N341 — Windows read-thread quit: a `CancelIoEx` between two reads is lost (reference race)
 
 - **id**: N341. Not a ledger row: found by task W-1 while testing S211-F2 on Windows.
-- **severity**: low. **kind**: reference defect candidate (a hang at surface close; R13 question for the controller).
+- **severity**: low. **kind**: reference defect (R13, UD326).
 - **finding**: `Exec.threadExit` stops the Windows read thread with a quit byte and one
   `CancelIoEx(read_thread_fd)`, ignoring `ERROR_NOT_FOUND` (`Exec.zig:206-227`). `threadMainWindows` checks the
   quit pipe only after a read fails with `OPERATION_ABORTED` (`Exec.zig:1777-1825`). If the cancel lands while
@@ -6140,13 +6144,27 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   still being processed); the test now repeats the cancel until the thread returns. Also by reading: any other
   `ReadFile` failure (for example `ERROR_BROKEN_PIPE` once the pseudo console's write end closes) reaches the
   reference's `log.err` + `unreachable` (a panic in the port); not triggered in W-1's runs, UNVERIFIED as reachable.
-- **state**: OPEN for a controller R13 ruling (both halves are faithful in the port today).
+  The S211-F3 test calls the real `threadExit`, so it carried the same (small) hang risk (review W-1 F4).
+- **resolution** (task W-1b, controller ruling R13 with UD325): `threadExit`'s interrupt repeats `CancelIoEx`
+  until the read thread has finished (`ReadThread::interruptWindows`), UPSTREAM-DEFECTS UD326, tested by
+  `windows_readthread_quit_survives_a_cancel_between_reads` with a negative control (the reference's single
+  cancel: the thread is still blocked 5 s later), measured on Windows. This also removes F4's risk. The
+  `unreachable`-on-other-errors half stays faithful and is recorded in UD326 (latent, no trigger found).
+- **state**: CLOSED (task W-1b; UD326).
 
 ## N342 — the application tier does not compile for Windows; CI's Windows leg cannot pass as written
 
 - **id**: N342. Not a ledger row: measured by task W-1 (`cargo check --workspace --all-targets --target
   x86_64-pc-windows-msvc` and `cargo build -p rustty --target x86_64-pc-windows-msvc` on rwin).
-- **severity**: medium. **kind**: port gap (platform coverage) + CI gap.
+- **severity**: medium. **kind**: port defect (R1: a missing platform arm) + CI gap.
+  CORRECTION (task W-1b, review W-1 F2): this was kinded "port gap (platform coverage)" as if the reference did
+  not build its application tier for Windows. It does: its `test-windows` job runs `zig build -Dapp-runtime=none
+  test` (`.github/workflows/test.yml:1711-1724`, the full `ghostty-test` binary: renderer, termio, apprt,
+  Command, pty, font, cli, inspector), and `build-libghostty-windows-gnu` (`:959-971`) builds the internal
+  library (App + Surface + the OpenGL renderer, `build.zig:212-235`) for the GNU ABI. The reference's OpenGL
+  renderer carries `apprt.embedded` no-op arms "to allow libghostty to compile for OpenGL targets"
+  (`renderer/OpenGL.zig:172-176, 211-215, 231-233`). So `rustty-core` and everything above it compiling for
+  Windows is required by R1. rustty's `ci.yml` Windows header said the opposite; it carries a CORRECTION now.
 - **finding**: `rustty-core`'s `renderer_seam` names `rustty_renderer::Renderer`, `generic::Error` and
   `generic::AnimationWakeKind`, which exist only for macOS (Metal), Linux/FreeBSD (OpenGL over EGL) and wasm; the
   reference's Windows renderer is OpenGL (`renderer/backend.zig:20-21`). 10 errors, all in `renderer_seam.rs`.
@@ -6156,8 +6174,15 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   cmake tests cannot run on Windows. Two workspace members also fail as standalone builds: `libxml2-sys` (its
   vendored config includes `iconv.h`; nothing depends on it on Windows since W-1's apprt fix) and `sentry-sys`
   (the breakpad backend's `client/windows/handler/exception_handler.h` is not vendored). CI's GNU-ABI step was
-  not run (no MinGW toolchain on rwin, which was kept lean for disk).
-- **state**: OPEN (controller: the Windows renderer arm and the CI leg's scope).
+  not run (no MinGW toolchain on rwin, which was kept lean for disk). The two standalone-member failures are a
+  Cargo-workspace artefact (the reference never builds fontconfig/libxml2 on Windows, `font/backend.zig:49-55`,
+  nor sentry off macOS, `Config.zig:224-236`); how `cargo build --workspace` should treat them is a controller
+  call.
+- **work** (not done here; controller: batch W-2): an OpenGL `Renderer` arm for Windows in rustty-renderer (the
+  reference's embedded no-op arms), then rustty-core → rustty-apprt-c for `x86_64-pc-windows-msvc` and `-gnu`,
+  then a faithful CI leg (a Windows `cargo test` over the crates the reference's `test` covers, the apprt-c
+  build for the GNU ABI).
+- **state**: OPEN (batch W-2).
 
 ## N343 — `xev.Async` on Windows is a value, and copies of it do not share a wakeup
 
@@ -6172,7 +6197,11 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   `termio::Thread::threadMain_` copied the mailbox's `wakeup` out before `wait` (harmless for a handle); on
   Windows the wait would have been registered on a copy that no notify reaches. It now waits on the mailbox's
   own Async through a pointer, as the reference's `|*v|` capture does.
-- **state**: the port defect CLOSED (W-1); the reference question OPEN for a controller R13 ruling.
+- **ruling** (controller, task W-1b): record only. At the pin the reference's Windows (embedded OpenGL) renderer
+  is a documented no-op ("libghostty is strictly broken for rendering on this platforms", `OpenGL.zig:172-176`),
+  so a missed renderer wakeup is not observable; the faithful value semantics stay. Re-open for an R13 ruling if
+  a Windows render path is ever ported.
+- **state**: CLOSED (the port defect fixed in W-1; the reference question recorded, no change).
 
 ## N344 — Windows compile, link and test fixes made by task W-1
 
@@ -6190,8 +6219,10 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   build with i18n off (Windows) does not reference libintl.
 - **code**: `rustty-font-shaper` matches FreeType's error and render-mode constants in bindgen's own type
   (`c_int` on MSVC, `c_uint` elsewhere). `rustty-renderer`'s shader-file open converts WTF-8 path bytes on
-  Windows. `rustty-termio`'s Windows arms: the child pid type, `posix.close`/`posix.write` on the quit pipe as
-  `CloseHandle`/`WriteFile`, `termiosTimer` and `Subprocess.childPreExec` compiled out on Windows (Zig never
+  Windows. `rustty-termio`'s Windows arms: the child pid type, the quit pipe's `posix.system.close`/
+  `posix.system.write` as `CloseHandle`/`WriteFile` (the reference's calls are the C runtime's, which crash on a
+  HANDLE: R13, UPSTREAM-DEFECTS UD325; CORRECTION (task W-1b, review W-1 F1): this said "`posix.close`/
+  `posix.write`", which would be Zig's own Windows mapping), `termiosTimer` and `Subprocess.childPreExec` compiled out on Windows (Zig never
   analyzes them there), an inert placeholder `ThreadData`, `OsPasswd.get` unreachable on Windows (the
   reference's `@compileError`, R7). `rustty-xev` on Windows: `Completion::state_of`, the unprefixed
   `WaitError` export, `Clone` for `Async` (N343). `rustty-os::TempDir::realpath` returns Zig's DOS form, not
@@ -6204,7 +6235,14 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   -xev, -vaxis, -font-shaper, -simd, -vt, -vt-c (and rustty-config below them) was red on Windows-only lints
   (Win32 type spellings, dead code of POSIX-only helpers, comptime-dead tails); fixed with scoped
   `cfg`/`cfg_attr` allows or by compiling POSIX-only items out, each with its reason at the site. Green on rwin.
-- **state**: CLOSED (informational). Results in the W-1 report.
+- **W-1b additions**: the reference's MSVC `-fno-autolink`/`-fno-stack-protector` for simdutf and
+  `-D_Avx2WmemEnabledWeakValue=_Avx2WmemEnabled` + `-fno-autolink` for the SIMD sources (`SharedDeps.zig:995-998`,
+  missing in `rustty-simd` before) reach clang-cl as `/clang:` flags (MEASURED on the compile lines with
+  `CC_ENABLE_DEBUG_OUTPUT=1`; the bare spellings were dropped by `flag_if_supported`); rustty-simd's tests pass on
+  Windows (42/42). `TempDir::realpath` strips `\\?\` only before a drive letter (a `\\?\Volume{GUID}\` path
+  has no DOS form; test `dos_form_strips_only_drive_and_unc_prefixes`, negative control W-1's unconditional strip
+  fails). The lint allow on `impl ReadThread` is narrowed to its six POSIX-only constants.
+- **state**: CLOSED (informational). Results in the W-1 and W-1b reports.
 
 ## N345 — rustty-vt's "real Io" has no entropy on Windows, so five vt tests fail there
 
@@ -6241,3 +6279,19 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   (the pin's) is a discarding writer that compiles on Windows (`tty.zig:17-22` selects it on every OS under
   `is_test`). 131 of 133 vaxis tests pass on Windows.
 - **state**: OPEN (controller: owners of the vt-c test build and the vaxis `TestTty`).
+
+## N347 — under clang-cl, `flag_if_supported` still drops the reference's other `-f` flags (highway, simdutf)
+
+- **id**: N347. Not a ledger row: measured by task W-1b on rwin (`CC_ENABLE_DEBUG_OUTPUT=1` compile lines,
+  `x86_64-pc-windows-msvc`), while checking review W-1 F6.
+- **severity**: low. **kind**: port gap (build flags on MSVC targets).
+- **finding**: clang-cl does not accept every clang driver flag in its bare spelling, and `cc`'s
+  `flag_if_supported` silently drops the ones it rejects. After W-1b's `/clang:` fix of the MSVC-only flags, still
+  missing from the Windows compile lines: `highway-sys`'s `-fno-cxx-exceptions`, `-fno-slp-vectorize`,
+  `-fno-vectorize` (`pkg/highway/build.zig` flag list; `-fmerge-all-constants` and `-Wno-builtin-macro-redefined`
+  do get through) and `simdutf-sys`'s `-fno-exceptions`, `-fno-rtti` (the `no_libcxx` pair). macOS and Linux
+  are unaffected (cc drives clang there).
+- **fix direction**: pass them as `/clang:<flag>` on MSVC targets (as W-1b does for the MSVC-only flags), then
+  re-run the SIMD and vt suites on Windows. Not done in W-1b: each changes code generation (vectorization,
+  exception tables) of code the Windows suites exercise, and needs its own measured run.
+- **state**: OPEN.

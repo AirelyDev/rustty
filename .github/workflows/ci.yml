@@ -401,8 +401,8 @@ jobs:
         run: bash .port/tools/ci.sh
 
   # ── Windows ────────────────────────────────────────────────────────────────
-  # PORTS the reference's `test-windows`, `build-libghostty-vt-windows` and
-  # `build-ghostty-windows-gnu` jobs.
+  # PORTS (in part; see the scope note below) the reference's `test-windows`,
+  # `build-libghostty-vt-windows` and `build-libghostty-windows-gnu` jobs.
   #
   # Until this existed, NO Windows object code was ever produced, linked, or
   # run by anything in this repository. `G-WINCHK` is `cargo check` from a
@@ -413,10 +413,23 @@ jobs:
   # README were checked in, and the README's Status section read "Not run by
   # any gate."
   #
-  # Scope is deliberately the PORTABLE core, matching the reference: rustty-vt
-  # and its C API. The app/apprt/renderer tiers are macOS+Linux (Metal,
-  # CoreText, GTK, OpenGL) and are not built here, exactly as the reference's
-  # Windows jobs build `libghostty-vt` rather than the app.
+  # Scope today is the portable core: rustty-vt and its C API, plus the
+  # apprt-c DLL smoke below. This is NARROWER than the reference, and the gap
+  # is a port defect (NEW-FINDINGS N342, batch W-2): the reference's
+  # `test-windows` runs `zig build -Dapp-runtime=none test`, the full test
+  # binary (renderer, termio, apprt, Command, pty, font, cli, inspector), and
+  # `build-libghostty-windows-gnu` builds the internal library (App + Surface +
+  # the OpenGL renderer) for the GNU ABI; `build-libghostty-vt-windows` covers
+  # the vt library. rustty-core does not compile for Windows yet (no renderer
+  # arm), so the apprt-c step below cannot pass until W-2 lands.
+  #
+  # CORRECTION (task W-1b, review W-1 F2): this paragraph used to say "Scope is
+  # deliberately the PORTABLE core, matching the reference ... The
+  # app/apprt/renderer tiers are macOS+Linux ... and are not built here,
+  # exactly as the reference's Windows jobs build `libghostty-vt` rather than
+  # the app", and the header above named a `build-ghostty-windows-gnu` job.
+  # Both were wrong at the pin (`.github/workflows/test.yml:938-971, 1711-1724`):
+  # the job is `build-libghostty-windows-gnu`, and it builds the app library.
   windows:
     name: rustty-windows
     runs-on: windows-latest
