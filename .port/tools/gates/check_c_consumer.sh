@@ -63,18 +63,34 @@ echo "=== G-CCONSUMER 3/5 :: cmake install + artifact check ==="
 cmake --install "$BUILD" --prefix "$PREFIX" > "$WORK/install.log" 2>&1 \
   || { sed 's/^/    /' "$WORK/install.log"; red "cmake install failed"; }
 
-# Shared-library suffix differs per platform; cargo emits no versioned soname.
+# The installed names are the reference's `libghostty-vt` layout, renamed
+# (S64-F5, `GhosttyLibVt.zig:384-490`): a versioned real name plus the soname
+# and link-name symlinks, and `librustty-vt.a`. Parity tail P-1 found this gate
+# still expecting cargo's `librustty_vt_c.*` names, so it had been RED on every
+# host since S64-F5 landed.
+#
+# The library directory is CMake's GNUInstallDirs `CMAKE_INSTALL_LIBDIR`, which
+# is `lib64` on Fedora/RHEL-family 64-bit hosts and `lib` elsewhere (the
+# reference's CMake wrapper uses the same variable). The .pc files and the
+# cmake package config follow it, so the gate does too.
+LIBDIR=lib
+[ -d "$PREFIX/lib64" ] && LIBDIR=lib64
+VERSION="$(sed -n 's/^project(rustty-vt VERSION \([0-9.]*\).*/\1/p' "$ROOT/CMakeLists.txt")"
+[ -n "$VERSION" ] || red "could not read the project VERSION from CMakeLists.txt"
+MAJOR="${VERSION%%.*}"
 case "$(uname -s)" in
-  Darwin) SHLIB="librustty_vt_c.dylib" ;;
-  *)      SHLIB="librustty_vt_c.so"    ;;
+  Darwin) SHLIBS=("librustty-vt.$VERSION.dylib" "librustty-vt.$MAJOR.dylib" "librustty-vt.dylib") ;;
+  *)      SHLIBS=("librustty-vt.so.$VERSION" "librustty-vt.so.$MAJOR" "librustty-vt.so") ;;
 esac
 
 REQUIRED=(
-  "lib/$SHLIB"
-  "lib/librustty_vt_c.a"
+  "$LIBDIR/${SHLIBS[0]}"
+  "$LIBDIR/${SHLIBS[1]}"
+  "$LIBDIR/${SHLIBS[2]}"
+  "$LIBDIR/librustty-vt.a"
   "include/rustty/vt.h"
-  "lib/cmake/rustty-vt/rustty-vt-config.cmake"
-  "lib/cmake/rustty-vt/rustty-vt-config-version.cmake"
+  "$LIBDIR/cmake/rustty-vt/rustty-vt-config.cmake"
+  "$LIBDIR/cmake/rustty-vt/rustty-vt-config-version.cmake"
   "share/pkgconfig/librustty-vt.pc"
   "share/pkgconfig/librustty-vt-static.pc"
 )
@@ -105,7 +121,7 @@ echo "=== G-CCONSUMER 5/5 :: compile, link and RUN the smoke test ==="
 # shellcheck disable=SC2046  # pkg-config output is an intentional word-split.
 "$CC_BIN" -o "$WORK/t_shared" "$SRC" \
   $(pkg-config --cflags --libs librustty-vt) \
-  -Wl,-rpath,"$PREFIX/lib" > "$WORK/cc_shared.log" 2>&1 \
+  -Wl,-rpath,"$PREFIX/$LIBDIR" > "$WORK/cc_shared.log" 2>&1 \
   || { grep -v '^ld: warning' "$WORK/cc_shared.log" | sed 's/^/    /'; red "shared link failed"; }
 "$WORK/t_shared" > "$WORK/run_shared.log" 2>&1 \
   || { sed 's/^/    /' "$WORK/run_shared.log"; red "the shared-linked binary did not run"; }
@@ -124,7 +140,7 @@ echo "    ok      static:  $(cat "$WORK/run_static.log")"
 # ...and it must not have quietly picked up the shared library instead.
 if [ "$(uname -s)" = "Darwin" ]; then deps="$(otool -L "$WORK/t_static" 2>/dev/null)"
 else deps="$(ldd "$WORK/t_static" 2>/dev/null)"; fi
-if printf '%s' "$deps" | grep -q 'librustty_vt_c'; then
+if printf '%s' "$deps" | grep -q 'librustty-vt\|librustty_vt_c'; then
   printf '%s\n' "$deps" | sed 's/^/    /'
   red "the static-linked binary still depends on the shared library"
 fi
