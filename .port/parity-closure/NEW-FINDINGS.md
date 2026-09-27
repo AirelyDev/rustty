@@ -6182,7 +6182,16 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   reference's embedded no-op arms), then rustty-core → rustty-apprt-c for `x86_64-pc-windows-msvc` and `-gnu`,
   then a faithful CI leg (a Windows `cargo test` over the crates the reference's `test` covers, the apprt-c
   build for the GNU ABI).
-- **state**: OPEN (batch W-2).
+- **resolution** (task W-2): the OpenGL arm now serves Windows too (`any(linux, freebsd, windows)` at every
+  gate: `rustty-renderer` crate root, `generic`, `image`, `overlay`, the `gl`/`khronos-egl` dependency table and
+  the GLSL staging in `build.rs`), and `generic::linux_impl`'s `surface_init`/`thread_enter`/`thread_exit` switch on
+  `rustty_build_config::app_runtime()` as `OpenGL.zig:165-233` switches on `apprt.runtime`, with the reference's
+  empty `apprt.embedded` arms (Windows' runtime is `.none`). The compile, link and test fixes this took above the
+  renderer are N351. `cargo build`, `cargo clippy --all-targets -- -D warnings` and `cargo test` of the workspace
+  now run for `x86_64-pc-windows-msvc` on rwin, except the three members of N350. The `rustty` executable links
+  with its resources (LEDGER S63-F5). The GNU-ABI build of `rustty-apprt-c` is in the CI leg but was NOT run
+  (no MinGW on rwin: its disk was at the 5 GB floor during the task); UNVERIFIED.
+- **state**: CLOSED (task W-2), GNU-ABI half UNVERIFIED.
 
 ## N343 — `xev.Async` on Windows is a value, and copies of it do not share a wakeup
 
@@ -6261,8 +6270,19 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 - **vt-c cascade (UNVERIFIED cause, not traced)**: most likely the same entropy gap takes down `rustty-vt-c`'s `paste::tests::terminal_paste_event` on Windows (`left: Success
   right: IoError`), and six more `paste::tests` then fail on the `PASTE_TEST_LOCK` it poisoned (`PoisonError`);
   measured by `cargo test -p rustty-vt-c --target x86_64-pc-windows-msvc` (531 pass, 8 fail; the eighth is N346).
-- **state**: OPEN (controller: the vt test Io on Windows, and whether the application artifact's Io needs a Windows
-  entropy source).
+- **resolution** (task W-2): the reference's Io on Windows is `std.Io.Threaded` in EVERY artifact: the application's
+  `global.io()`, the tests' `testing.io`, and libghostty-vt's C API (`terminal/c/terminal.zig:57-67`: "On Windows
+  we use `std.Io.Threaded` since TinyIo doesn't implement the NT operations"). So the port's native Io
+  (`rustty_vt::sys::io_native`, the default of every `Terminal`, in the app and in vt-c alike) reads Threaded's
+  Windows source on Windows: `rustty_os::file::random_secure_threaded`, the port of `Threaded.randomSecure`'s
+  Windows arm (`NtDeviceIoControlFile(\Device\CNG, IOCTL_KSEC_GEN_RANDOM)`, `std/Io/Threaded.zig:17011-17054`,
+  `getCngDevice` `:15792-15835`; the handle is cached process-wide). The five vt failures and the vt-c paste
+  cascade (7 tests, confirmed the same cause: they pass with the fix) are gone; test
+  `random_secure_threaded_fills_with_fresh_entropy` (rustty-os, Windows). Negative control on Windows: the first
+  W-2 full run (the same tree without this fix) failed exactly those 12 tests, with `EntropyUnavailable` and the
+  poisoned locks, and the core paste test S42-F1 (`completeClipboardPasteEvent` returned the entropy error).
+- **state**: CLOSED (task W-2). (Was: OPEN (controller: the vt test Io on Windows, and whether the application artifact's Io needs a Windows
+  entropy source).)
 
 ## N346 — two Windows test-harness gaps outside W-1's rows (rustty-vt-c, rustty-vaxis)
 
@@ -6278,7 +6298,10 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   port narrowed `TestTty` to non-Windows on the premise that it needs `posix.pipe`; libvaxis 0.6.0's `TestTty`
   (the pin's) is a discarding writer that compiles on Windows (`tty.zig:17-22` selects it on every OS under
   `is_test`). 131 of 133 vaxis tests pass on Windows.
-- **state**: OPEN (controller: owners of the vt-c test build and the vaxis `TestTty`).
+- **resolution** (task W-2): rustty-vt-c's dev-dependency on rustty-vt enables `test-decommit-sim` (Zig's
+  whole-binary `builtin.is_test`), and rustty-vaxis's test alias is `TestTty` on every target, with a Windows
+  `TestTty` that ports libvaxis 0.6.0's discarding-writer arm (`tty.zig:814-842`). Both suites pass on Windows.
+- **state**: CLOSED (task W-2).
 
 ## N347 — under clang-cl, `flag_if_supported` still drops the reference's other `-f` flags (highway, simdutf)
 
@@ -6294,4 +6317,119 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 - **fix direction**: pass them as `/clang:<flag>` on MSVC targets (as W-1b does for the MSVC-only flags), then
   re-run the SIMD and vt suites on Windows. Not done in W-1b: each changes code generation (vectorization,
   exception tables) of code the Windows suites exercise, and needs its own measured run.
+- **resolution** (task W-2): the five flags go through `/clang:` on MSVC targets (`highway-sys`'s
+  `-fno-cxx-exceptions`/`-fno-slp-vectorize`/`-fno-vectorize`, `simdutf-sys`'s `-fno-exceptions`/`-fno-rtti`), and
+  highway's own MSVC arm (`pkg/highway/build.zig:102-108`: `-D_Avx2WmemEnabledWeakValue=_Avx2WmemEnabled`,
+  `-fno-autolink`, `-fno-stack-protector`), which was not mirrored at all, is added. MEASURED on rwin (`CC_ENABLE_DEBUG_OUTPUT=1`, release build of `rustty-bench` for `x86_64-pc-windows-msvc`):
+  highway's compile line gains `/clang:-fno-slp-vectorize`, `/clang:-fno-vectorize`, `/EHs-c-`,
+  `-D_Avx2WmemEnabledWeakValue=_Avx2WmemEnabled`, `/clang:-fno-autolink` and `/clang:-fno-stack-protector`; simdutf's
+  gains `/clang:-fno-exceptions` and `/clang:-fno-rtti`. `-fno-cxx-exceptions` has no clang-cl spelling (the
+  driver ignores it even through `/clang:`: "argument unused during compilation"); clang-cl's switch for it is
+  `/EH`, and with no `/EH` at all (cc adds none) C++ exceptions were already off (measured: `throw` is rejected),
+  so `/EHs-c-` states it without changing code. Timing (9 runs each, median; 16 MiB of mixed UTF-8 and SGR data;
+  x64 binaries under Windows' ARM64 emulation, so the absolute numbers say little): `+codepoint-width --mode=simd`
+  131.7 ms before / 130.5 ms after; `--mode=table` (a control without SIMD) 58.8 / 59.3; `+terminal-stream`
+  391.9 / 387.7. No difference above the noise. The SIMD, highway and simdutf suites pass on Windows with the
+  flags (42 + 18 + 2).
+- **state**: CLOSED (task W-2).
+
+## N350 — three workspace members are excluded from the Windows build, explicitly
+
+- **id**: N350. Not a ledger row: task W-2 (N342's standalone-member question, a controller call it was handed).
+- **kind**: build scope (documented exclusion, not a gap).
+- **finding**: `libxml2-sys` and `fontconfig-sys` (its only dependent) and `sentry-sys` do not build for
+  `x86_64-pc-windows-msvc` as standalone workspace members (`libxml2`'s vendored config includes `iconv.h`;
+  breakpad's `client/windows/handler/exception_handler.h` is not vendored). The reference never builds them for
+  Windows: its Windows font backend is `freetype_windows` (`font/backend.zig:49-55`, no fontconfig/libxml2) and it
+  builds sentry only for Darwin (`build/Config.zig:224-236`). Nothing in the Windows dependency graph reaches them
+  (`cargo tree --target x86_64-pc-windows-msvc -i libxml2-sys` / `-i sentry-sys`: roots only).
+- **decision**: every Windows workspace command excludes exactly these three, by name:
+  `--exclude libxml2-sys --exclude fontconfig-sys --exclude sentry-sys` (the CI leg's `WINDOWS_EXCLUDE`, with this
+  reason at the job). `breakpad-sys` builds on Windows as a member (with cl.exe dropping `-std:gnu++17`, N353) and
+  is not excluded, although the reference does not build it there either.
+- **state**: CLOSED (documented; `.github/workflows/ci.yml` `windows` job).
+
+## N351 — Windows compile, link and test fixes made by task W-2
+
+- **id**: N351. Not a ledger row: the changes that made the workspace above the portable tier build, lint and test
+  on Windows (`x86_64-pc-windows-msvc`), each measured on rwin (Windows 11 build 26200, ARM64, x64 emulation).
+- **renderer** (N342): the OpenGL arm serves Windows, with the `apprt.embedded` no-op arms; `prepBackgroundImage`
+  opens the WTF-8 path as Zig's `openFile` does (was `OsStrExt`, unix-only).
+- **core**: `cursorCancelCallback` has an IOCP arm (libxev's IOCP `CancelError` is `error{Unexpected}`, the
+  reference's `else`; same handling as the Linux arm, UD73; the second static copy of the warning is declared in
+  `LOG-PORT-ONLY.tsv`); the by-value `xev.Async` copies (`renderer_wakeup`, `draw_now`) are `.clone()` (Zig's value
+  copy; on IOCP an Async is a value, N343); the S42-F1 paste test waits on the mailbox's own Async through a pointer
+  (a copy's waiter is never notified on IOCP).
+- **apprt**: `Surface.init`'s `openDirAbsolute` has a Windows arm (Zig's `dirOpenDirWindows`: WTF-8 path, a
+  directory-only open that fails `NotDir` on a file); the `rlimit` stand-ins of `rustty-os` and `rustty-global`
+  are one type on Windows (`()`), so `ResourceLimits.init(fixMaxFiles())` compiles.
+- **cli**: `std.fs.max_path_bytes` buffers use `rustty_os::path::MAX_PATH_BYTES` (was `libc::PATH_MAX`, POSIX
+  only); `+edit-config`'s code after the reference's comptime Windows `return 1` is compiled out on Windows; the
+  `--working-directory` realpath converts WTF-8 and returns the DOS form, and `realPathFile`'s Windows error names
+  are mapped (`dirRealPathFileWindows` + `OpenFile`'s NTSTATUS table; they were all `Unexpected`).
+- **realpath DOS form** (`rustty_os::path::realpath`): Zig's `realpath` on Windows returns the DOS form
+  (`GetFinalPathNameByHandle(.Dos)`); `std::fs::canonicalize` returns `\\?\C:\...`. MEASURED consequence: the kitty
+  temporary-file medium rejected every in-directory file on Windows (`TemporaryFileNotInTempDir`: the file's
+  canonical path kept the verbatim prefix, the handle's did not). The config loader's path expansion, its cwd
+  realpath, `TempDir.realPath` and `+validate-config` use it too.
+- **config**: the two `assert(std.fs.path.isAbsolute(path))` sites use the ported Zig `isAbsolute`
+  (`crate::path::is_absolute`); Rust's `Path::is_absolute` is false on Windows for a rooted `/x` that Zig calls
+  absolute (it aborted the whole rustty-config test binary on Windows).
+- **xev**: `backend()` has the Windows arm (`.iocp`, single candidate, as kqueue on macOS).
+- **checkout**: `.gitattributes` keeps `crates/rustty-extra/testdata/**` (`-text`) and `dist/linux/**` (`eol=lf`)
+  LF on a Windows checkout; under `* text=auto` they were CRLF there and the extra goldens and Linux-resource tests
+  failed.
+- **tests** (R14 form 1, each with its reason at the site): POSIX-only on Windows — the list-themes pty test,
+  `load_path_errors_propagate.rs` (`HOME`; Windows reads `LOCALAPPDATA`), the apprt-c tests that need
+  `rustty_init` to succeed (the reference's `ghostty_init` returns 1 on Windows, `UnsupportedOSForCApi`; new test
+  `rustty_init_is_unsupported_on_windows`) and its C smoke (Windows smoke = `test_dll_init.c`), the i18n catalog
+  test (i18n is off on Windows, `Config.zig:263-271`), zf's `/`-path tests (UD330), xtask's four `tic` tests (no
+  ncurses on the host; the reference's Windows build compiles no terminfo); Windows arms — `panic_policy`'s abort
+  status (`0xC0000409`), the bench `ensureLocale` line (the CRT ignores `LANG`), the NTFS-dated crash report, the
+  `new_window` error name, the CMake install layout and `.pc` checks (xtask), the OpenGL gate guard (now requires
+  `windows` and reads wrapped attributes whole; negative control: the `windows` target removed from one wrapped
+  gate fails the guard).
+- **results** (x86_64-pc-windows-msvc, rwin): final `cargo test --workspace` (the three N350 members excluded, 194 test binaries): 5982 passed, 4 failed, 69 ignored. Per crate (passed/failed/ignored): dcimgui-sys 5/0/0; freetype-sys 1/0/0; glslang-sys 1/0/0; harfbuzz-sys 1/0/0; highway-sys 18/0/0; libpng-sys 2/0/0; oniguruma-sys 1/0/0; rustty 16/0/0; rustty-apprt 30/0/0; rustty-apprt-api 27/0/0; rustty-apprt-c 26/0/0; rustty-args 71/0/10; rustty-bench 47/0/1; rustty-build-config 3/0/0; rustty-cfg-fmt 9/0/0; rustty-cli 102/0/5; rustty-config 259/0/0; rustty-core 72/0/0; rustty-crash 20/0/0; rustty-datastruct 87/0/2; rustty-extra 36/0/0; rustty-font 89/0/0; rustty-font-shaper 105/0/3; rustty-global 8/2/1; rustty-helpgen 6/0/0; rustty-identity 1/0/0; rustty-input 117/0/1; rustty-inspector 23/0/0; rustty-lib 41/0/2; rustty-os 86/1/8; rustty-render-types 12/0/0; rustty-renderer 124/0/0; rustty-simd 42/0/0; rustty-synthetic 27/0/0; rustty-terminfo 7/0/0; rustty-termio 67/1/14; rustty-unicode 20/0/0; rustty-util 6/0/0; rustty-vaxis 157/0/0; rustty-version 5/0/0; rustty-vt 3268/0/17; rustty-vt-c 554/0/1; rustty-wasm 0/0/1; rustty-web-canvas 1/0/0; rustty-wuffs 19/0/0; rustty-xev 43/0/0; rustty-z2d 105/0/0; rustty-zf 7/0/0; rustty-zigimg 28/0/0; rustty-zigstd 85/0/0; simdutf-sys 2/0/0; spirv-cross-sys 1/0/0; wuffs-sys 3/0/0; xtask 78/0/3; zlib-sys 11/0/0. The 4 failures: `rustty-os` `path::tests::expand_hostname` and `rustty-global` `environ::tests::global_environ_map_reflects_the_process` (N340, `Path` vs `PATH`), `sync_environ_makes_a_post_capture_mutation_visible` (N352), and `rustty-termio` `windows_threadenter_reads_the_pty_through_the_windows_read_thread` (N354; it passed in the two earlier full runs and 3/3 alone). Before W-2 (first full run, same host): 5682 passed, 55 failed, and the whole `rustty-config` unit binary aborted (its `isAbsolute` assert).
+- **state**: CLOSED (informational).
+
+## N352 — on Windows the port's global `Environ` is a snapshot, Zig's reads the process environment live
+
+- **id**: N352. Not a ledger row: found by task W-2 (`sync_environ_makes_a_post_capture_mutation_visible` fails on
+  Windows).
+- **severity**: low. **kind**: port defect (R1, Windows only).
+- **finding**: Zig 0.16's `std.process.Environ` on Windows is a `GlobalBlock` (`use_global`), and `createMap` reads
+  the live PEB environment block every time (`std/process/Environ.zig:20-34, 482-491`); the reference's
+  `global.init` gives the global state that block (`.{ .block = .{ .use_global = true } }`), so `environMap()` sees
+  every later `SetEnvironmentVariable`, which is why `syncEnviron` is a no-op there (`global.zig:307-321`). The port
+  captures a snapshot on every target (`rustty_global::environ`), so on Windows a mutation after the capture is
+  invisible and `sync_environ` (faithfully a no-op there) cannot refresh it.
+- **fix direction**: a Windows `Environ` that reads the live environment on each `create_map`/lookup (the Zig
+  `GlobalBlock`), keeping explicit `from_entries` environments for tests; belongs with N340's `EnvMap` change (same
+  owner, same types).
+- **state**: OPEN (controller: owner of N340). The one Windows test failure it causes is listed in the W-2 report.
+
+## N353 — on MSVC targets most vendored C/C++ dependencies are compiled by cl.exe, the reference compiles them with clang
+
+- **id**: N353. Not a ledger row: measured by task W-2 on rwin (`cargo:warning` lines of the Windows build).
+- **severity**: low. **kind**: port gap (build fidelity on MSVC targets).
+- **finding**: only `simdutf-sys`, `highway-sys` and `rustty-simd` set `prefer_clang_cl_over_msvc` (N344). Every other
+  `cc` build (`zlib-sys`, `freetype-sys`, `harfbuzz-sys`, `libpng-sys`, `oniguruma-sys`, `glslang-sys`,
+  `spirv-cross-sys`, `wuffs-sys`, `dcimgui-sys`, `gettext-sys`, `breakpad-sys`, and the `rustty-os`/`rustty-apprt`/
+  `rustty-font-shaper` shims) uses cl.exe on an MSVC target, while the reference compiles every C/C++ unit with Zig's
+  clang, `abi == .msvc` included. Observable: cl.exe ignores clang flags passed with `.flag()` (MEASURED: `zlib-sys`
+  `-fno-sanitize=undefined`, `-fno-sanitize-trap=undefined`; `breakpad-sys` `-std:gnu++17`, D9002), and
+  `flag_if_supported` drops others silently. Everything builds and its tests pass; the difference is the compiler.
+- **fix direction**: `prefer_clang_cl_over_msvc(true)` in each build, the clang-only flags through `/clang:` (the
+  N347 pattern), then a measured Windows run per dependency.
+- **state**: OPEN.
+
+## N354 — `windows_threadenter_reads_the_pty_through_the_windows_read_thread` failed once in a full Windows run
+
+- **id**: N354. Not a ledger row: observed by task W-2 on rwin.
+- **severity**: low. **kind**: flaky test (cause not traced).
+- **finding**: the W-1 test (LEDGER S211-F3) failed once, in the third full `cargo test --workspace` run, at
+  `threadEnter(..).expect("threadEnter")` with `threadEnter: Error` (the error's Debug form carries no detail). It
+  passed in the two earlier full runs and 3/3 when `rustty-termio`'s suite ran alone right after. Cause UNVERIFIED:
+  the call spawns `cmd.exe` on a fresh ConPTY while the rest of the suite runs in parallel under x64 emulation.
+- **next step**: make the test report which step of `threadEnter` failed, then rerun it under load.
 - **state**: OPEN.

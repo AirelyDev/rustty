@@ -2666,6 +2666,36 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - proposed fix:    repeat `CancelIoEx` until the read thread exits (for example until `WaitForSingleObject` on the thread handle succeeds), or have the read thread check the quit pipe before each `ReadFile` and use an overlapped read with a cancellable wait.
 - upstream status: not reported
 
+### UD330 — zf's own path tests hardcode `/`, so they fail on Windows, where its separator is `\`
+- kind:            test-weakness
+- upstream project: zf (natecraddock/zf, the version Ghostty pins, a Ghostty dependency)
+- severity:        low (tests only; the scorer itself is right on Windows)
+- reference:       zf `src/zf/filter.zig`: `const sep = std.fs.path.sep;` (`'\\'` on Windows) feeds `hasSeparator`, `PathIterator`, `segmentLen` and `isStartOfWord`, while `test "path iterator"`, `test "segmentLen"`, `test "rankToken"`/`rankNeedle` and the highlight tests in `zf.zig`/`clib.zig` spell every path with `/`.
+- defect:          on Windows every one of those tests sees a `/`-separated string as one segment, so its expected segments, lengths, ranks and highlight indices are wrong for the separator the code actually uses. Nothing skips them on Windows.
+- ReleaseSafe:     the tests fail on a Windows host (MEASURED on the port's line-for-line copy, task W-2, Windows 11: `filter::path_iterator` `left: [47, 97]`, `filter::segment_len_test` `left: 2`, `filter::rank_needle_test`, `zf::highlight_library_interface`, `clib::tests::highlight_exported_c_library_interface`). Not measured on zf itself.
+- ReleaseFast:     the same.
+- reachability:    running zf's test suite on Windows. Ghostty's own Windows CI does not run dependency tests, so it never sees them.
+- port handling:   the five tests are `#[cfg(not(windows))]` with the reason at each site (R14 form 1), and `filter::windows_separator_is_the_path_separator` checks the Windows separator (`crates/rustty-zf/src/filter.rs`).
+- parity row(s):   none; found by task W-2's first Windows run of the workspace. NEW-FINDINGS N351.
+- test:            `filter::windows_separator_is_the_path_separator` (rustty-zf, Windows) passes.
+- proposed fix:    build the test paths with `std.fs.path.sep_str` (or skip them on Windows).
+- upstream status: not reported
+
+### UD331 — `dist/windows/ghostty.rc`'s VERSIONINFO is named by a string, so Windows never finds the version information
+- kind:            latent (evident-intent question pending a controller ruling; port kept faithful)
+- upstream project: ghostty
+- severity:        low (metadata only: the executable's Properties show no product name)
+- reference:       `dist/windows/ghostty.rc` at 20abdb50a: `VS_VERSION_INFO VERSIONINFO` with no `#include <winver.h>` / `<windows.h>` and no `#define VS_VERSION_INFO 1` (the file does define its other two ids, `RT_MANIFEST 1` and `ID_ICON_GHOSTTY 1`), compiled into the exe by `src/build/GhosttyExe.zig:44-49`.
+- defect:          an undefined identifier used as a resource name is a STRING name, so the version resource is `RT_VERSION` named `"VS_VERSION_INFO"`, not id 1; `GetFileVersionInfo` looks up `MAKEINTRESOURCE(VS_VERSION_INFO)` (= 1) and does not find it, so the `ProductName`/`OriginalFilename` the block declares are never shown.
+- ReleaseSafe:     MEASURED on the port (the reference's `.rc`, renamed; rc.exe from Windows SDK 10.0.26100; task W-2): `FindResourceW(RT_VERSION, 1)` fails and the string name succeeds; PowerShell's `(Get-Item rustty.exe).VersionInfo` reports `ProductName=[] OriginalFilename=[]`. Zig's own resource compiler (which builds the reference) was not run; it follows rc.exe's rule for undefined names by design (UNVERIFIED).
+- ReleaseFast:     the same.
+- reachability:    any Windows build of the Ghostty executable (`-Dapp-runtime` other than `none`, or an exe build); the reference's Windows CI builds only the library, so it never shows.
+- port handling:   faithful: `dist/windows/rustty.rc` is the reference's file renamed; the test (`crates/rustty/tests/windows_resources.rs`) reads the resource by its string name and says why. Whether to add `#define VS_VERSION_INFO 1` (the evident intent) is a controller question.
+- parity row(s):   LEDGER S63-F5 (found closing it, task W-2).
+- test:            `the_exe_carries_the_rc_resources` (rustty, Windows).
+- proposed fix:    add `#define VS_VERSION_INFO 1` (or `#include <winver.h>`) at the top of `dist/windows/ghostty.rc`.
+- upstream status: not reported
+
 ## Candidates pending verification
 
 Assembled from this plan's progress notes on 2026-09-11. **Not verified** — do not cite as fact.
