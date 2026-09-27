@@ -20,6 +20,40 @@
 
 use std::path::PathBuf;
 
+/// Whether cc drives clang-cl here (an MSVC target, `prefer_clang_cl_over_msvc`).
+fn is_msvc() -> bool {
+    std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc")
+}
+
+/// A clang driver `-f` flag in the spelling the compiler accepts: bare for clang,
+/// `/clang:<flag>` for clang-cl on MSVC targets.
+///
+/// Task W-2 (N347): clang-cl rejects `-fno-slp-vectorize` and `-fno-vectorize`
+/// (and `-fno-cxx-exceptions`, see `no_cxx_exceptions`) in their bare spelling,
+/// and `flag_if_supported` silently dropped them (MEASURED on the Windows lane
+/// with `CC_ENABLE_DEBUG_OUTPUT=1`), while the reference passes all three to
+/// Zig's clang on every target (`pkg/highway/build.zig:83-85`).
+fn clang_flag(flag: &str) -> String {
+    if is_msvc() {
+        format!("/clang:{flag}")
+    } else {
+        flag.to_string()
+    }
+}
+
+/// `-fno-cxx-exceptions` in the spelling the compiler accepts. clang-cl ignores
+/// the clang driver flag even through `/clang:` ("argument unused during
+/// compilation", MEASURED, task W-2) because clang-cl drives C++ exceptions with
+/// `/EH`: its `/EHs-c-` is the same switch (MEASURED: with it, or with no `/EH`
+/// at all, `throw` is "cannot use 'throw' with exceptions disabled").
+fn no_cxx_exceptions() -> String {
+    if is_msvc() {
+        "/EHs-c-".to_string()
+    } else {
+        "-fno-cxx-exceptions".to_string()
+    }
+}
+
 fn main() {
     // Check-only cross lane (W2D_WINDOWS_OS / F-001): type-checking a target
     // this host has no C toolchain/sysroot for (e.g. `cargo check --target
@@ -62,9 +96,9 @@ fn main() {
         .define("__TIME__", Some("\"redacted\""))
         // Optimizations
         .flag_if_supported("-fmerge-all-constants")
-        .flag_if_supported("-fno-cxx-exceptions")
-        .flag_if_supported("-fno-slp-vectorize")
-        .flag_if_supported("-fno-vectorize")
+        .flag_if_supported(no_cxx_exceptions())
+        .flag_if_supported(clang_flag("-fno-slp-vectorize"))
+        .flag_if_supported(clang_flag("-fno-vectorize"))
         // Fixes linker issues for release builds missing ubsanitizer symbols
         .flag_if_supported("-fno-sanitize=undefined")
         .flag_if_supported("-fno-sanitize-trap=undefined");
@@ -73,6 +107,16 @@ fn main() {
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
         build.flag_if_supported("-fmath-errno");
         build.flag_if_supported("-fno-exceptions");
+    } else if is_msvc() {
+        // } else if (target.result.abi == .msvc) {  (pkg/highway/build.zig:102-108)
+        //
+        // Task W-2 (N347): this arm was not mirrored. Same four tokens and
+        // reason as simdutf-sys's MSVC arm; the `-f` flags go through `/clang:`.
+        build
+            // -fno-autolink also drops UCRT's /alternatename fallback.
+            .define("_Avx2WmemEnabledWeakValue", Some("_Avx2WmemEnabled"))
+            .flag_if_supported("/clang:-fno-autolink")
+            .flag_if_supported("/clang:-fno-stack-protector");
     }
 
     // wasm32: Highway is compiled with HWY_NO_LIBCXX (above), so it needs no C++
