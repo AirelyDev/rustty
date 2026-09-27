@@ -3,7 +3,7 @@
   Differential test of rustty.exe against Ghostty's exe at the pin, on Windows.
 
 .DESCRIPTION
-  WHAT "RUNNING RUSTTY ON WINDOWS" MEANS AT THE PIN (20abdb50a)
+  WHAT "RUNNING RUSTTY ON WINDOWS" MEANS AT THE PIN (.port/tools/gates/ORACLE_PIN)
 
   Ghostty has no Windows GUI at the pin. `src/apprt/runtime.zig` picks the
   `.none` app runtime everywhere but Linux/FreeBSD, and with `.none`
