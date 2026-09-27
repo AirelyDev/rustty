@@ -105,7 +105,7 @@ pub fn run() -> Result<u8, Error> {
     // var buf: [256]u8 = undefined;
     // var stderr_writer = std.fs.File.stderr().writer(&buf);
     // const stderr = &stderr_writer.interface;
-    let mut stderr = std::io::BufWriter::new(std::io::stderr().lock());
+    let mut stderr = std::io::BufWriter::with_capacity(256, crate::io_file::stderr());
 
     // if (apprt.App.performIpc(
     //     alloc,
@@ -141,11 +141,27 @@ pub fn run() -> Result<u8, Error> {
         Err(ipc::Errors::IPCFailed) => return Ok(1),
     }
 
+    report_unsupported(&mut stderr)
+}
+
+/// The action's last two lines: the "not supported" message, then `return 1`.
+///
+/// PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS UD340. The reference
+/// prints the message into its 256-byte stderr buffer and returns without
+/// `flush()`, so the message never reaches stderr: `+toggle-quick-terminal`
+/// exits 1 silently wherever there is no IPC (MEASURED against the reference exe
+/// on Windows, task W-4). Its siblings `+new-window`/`+new-tab` flush
+/// (`stderr.flush() catch {}`), and the message exists to be read; the port
+/// flushes, with the siblings' `catch {}`. Listed in `docs/ghostty-bug-fixes.md`.
+/// (The port printed the message before this note too, through `BufWriter`'s
+/// flush on drop, with no record of the difference.)
+fn report_unsupported<W: Write>(stderr: &mut W) -> Result<u8, Error> {
     // try stderr.print("+toggle-quick-terminal is not supported on this platform.\n", .{});
     writeln!(
         stderr,
         "+toggle-quick-terminal is not supported on this platform."
     )?;
+    let _ = stderr.flush();
     // return 1;
     Ok(1)
 }
@@ -154,6 +170,19 @@ pub fn run() -> Result<u8, Error> {
 mod tests {
     use super::*;
     use rustty_args::args::Target;
+
+    // UD340 (R13): the message reaches the stream before the action returns,
+    // not only when the writer happens to be dropped. The writer is kept alive
+    // across the assertion.
+    #[test]
+    fn unsupported_message_is_flushed_before_returning() {
+        let mut stderr = std::io::BufWriter::with_capacity(256, Vec::new());
+        assert_eq!(1, report_unsupported(&mut stderr).unwrap());
+        assert_eq!(
+            "+toggle-quick-terminal is not supported on this platform.\n",
+            String::from_utf8_lossy(stderr.get_ref())
+        );
+    }
 
     // parity S70-F7: `--class=` (set but empty) resets `class` to its default
     // (null), the generic `parseIntoField` rule. Neither side's `run` parses

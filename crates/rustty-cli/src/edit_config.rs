@@ -98,7 +98,7 @@ pub fn run() -> Result<u8, Error> {
     // var buffer: [1024]u8 = undefined;
     // var stderr_writer = std.fs.File.stderr().writer(&buffer);
     // const stderr = &stderr_writer.interface;
-    let mut stderr = std::io::BufWriter::new(std::io::stderr().lock());
+    let mut stderr = std::io::BufWriter::with_capacity(1024, crate::io_file::stderr());
 
     // var opts: Options = .{};
     // defer opts.deinit();
@@ -126,6 +126,33 @@ pub fn run() -> Result<u8, Error> {
     result
 }
 
+/// The Windows arm's message (`edit_config.zig:87-97`).
+///
+/// PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS UD342. The message ends
+/// "...at the following path:" and a blank line, and prints no path: commit
+/// `0a183c923` ("allow editing Ghostty config in a Ghostty window") deleted the
+/// `\\{s}` line and its `.{path}` argument together with the unrelated
+/// `$EDITOR` code below it, leaving `path` computed and unused on Windows. The
+/// port prints the path in the reference's own earlier form (the `\\{s}` line
+/// then a final newline). Listed in `docs/ghostty-bug-fixes.md`.
+///
+/// R2: the `ghostty` binary name -> the Rustty product name. CORRECTION (task
+/// W-4, NEW-FINDINGS N368): the port wrote one newline more than the reference's
+/// multi-line literal (Zig adds no newline after its last `\\` line).
+/// Not `cfg(windows)` so that every host tests the text.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn write_windows_unsupported<We: Write>(stderr: &mut We, path: &[u8]) -> std::io::Result<()> {
+    write!(
+        stderr,
+        "The `{app} +edit-config` command is not supported on Windows.\n\
+         Please edit the configuration file manually at the following path:\n\
+         \n",
+        app = rustty_identity::APP_NAME,
+    )?;
+    stderr.write_all(path)?;
+    stderr.write_all(b"\n")
+}
+
 // fn runInner(alloc: Allocator, stderr: *std.Io.Writer) !u8 {
 fn run_inner<We: Write>(stderr: &mut We) -> Result<u8, Error> {
     // We load the configuration once because that will write our
@@ -148,25 +175,13 @@ fn run_inner<We: Write>(stderr: &mut We) -> Result<u8, Error> {
     // if (comptime builtin.os.tag == .windows) {
     #[cfg(windows)]
     {
-        // (The arm prints no path since `0a183c923`; `path` is used only by the
-        // POSIX tail below.)
-        let _ = &path;
         // try stderr.print(
         //     \\The `ghostty +edit-config` command is not supported on Windows.
         //     \\Please edit the configuration file manually at the following path:
         //     \\
         //     \\
         // , .{});
-        //   R2: the `ghostty` binary name -> the Rustty product name.
-        //   (`0a183c923` dropped the `{s}` path interpolation from this arm.)
-        write!(
-            stderr,
-            "The `{app} +edit-config` command is not supported on Windows.\n\
-             Please edit the configuration file manually at the following path:\n\
-             \n\
-             \n",
-            app = rustty_identity::APP_NAME,
-        )?;
+        write_windows_unsupported(stderr, &path)?;
         // return 1;
         // (the tail of the function on Windows)
         Ok(1)
@@ -593,5 +608,27 @@ mod exec_tests {
             "execve returned: {r:?}: {}",
             String::from_utf8_lossy(&stderr)
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // UD342 (R13) + N368: the Windows arm's exact bytes: the reference's text,
+    // no extra blank line, and the path it announces.
+    #[test]
+    fn windows_message_names_the_config_path() {
+        let path = b"C:\\Users\\u\\AppData\\Local\\rustty\\config.rustty";
+        let mut out = Vec::new();
+        write_windows_unsupported(&mut out, path).unwrap();
+        let want = format!(
+            "The `{} +edit-config` command is not supported on Windows.\n\
+             Please edit the configuration file manually at the following path:\n\
+             \n\
+             C:\\Users\\u\\AppData\\Local\\rustty\\config.rustty\n",
+            rustty_identity::APP_NAME
+        );
+        assert_eq!(want, String::from_utf8(out).unwrap());
     }
 }
