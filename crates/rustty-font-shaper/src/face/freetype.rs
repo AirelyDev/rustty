@@ -623,6 +623,8 @@ impl Face {
             for i in 0..unsafe { (*mm).num_axis } as usize {
                 let axis = unsafe { *(*mm).axis.add(i) };
                 // const id = std.math.cast(u32, axis.tag) orelse continue;
+                // (`FT_ULong` is already `u32` on Windows, where `long` is 32 bits.)
+                #[allow(clippy::useless_conversion)]
                 let id: u32 = match u32::try_from(axis.tag) {
                     Ok(v) => v,
                     Err(_) => continue,

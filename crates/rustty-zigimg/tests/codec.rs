@@ -194,8 +194,7 @@ fn from_file_path_matches_from_memory() {
 
     let mut read_buffer = vec![0u8; 1024 * 1024];
     let from_path = {
-        use std::os::unix::ffi::OsStrExt;
-        rustty_zigimg::from_file_path(path.as_os_str().as_bytes(), &mut read_buffer)
+        rustty_zigimg::from_file_path(path.as_os_str().as_encoded_bytes(), &mut read_buffer)
             .expect("from_file_path must succeed")
     };
     let from_mem = rustty_zigimg::from_memory(&png).unwrap();
@@ -223,10 +222,7 @@ fn from_file_path_refuses_a_file_larger_than_the_read_buffer() {
     std::fs::write(&path, &png).unwrap();
 
     let mut tiny = vec![0u8; 4];
-    let r = {
-        use std::os::unix::ffi::OsStrExt;
-        rustty_zigimg::from_file_path(path.as_os_str().as_bytes(), &mut tiny)
-    };
+    let r = { rustty_zigimg::from_file_path(path.as_os_str().as_encoded_bytes(), &mut tiny) };
     let _ = std::fs::remove_file(&path);
     assert!(matches!(r, Err(Error::NoSpaceLeft)));
 }

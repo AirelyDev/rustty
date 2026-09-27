@@ -590,7 +590,10 @@ pub mod ws2_32 {
     // PORT NOTE: `ws2_32.AcceptEx` — in the real Winsock this is reached through
     // `WSAIoctl(SIO_GET_EXTENSION_FUNCTION_POINTER)`, but `mswsock.lib` exports
     // it directly and Zig's std declares it as a plain extern, which is what the
-    // reference calls. Same declaration here.
+    // reference calls. Same declaration here, with Zig's library name
+    // (`extern "mswsock"`, std/os/windows/ws2_32.zig): Rust std does not link
+    // mswsock, and without it the link fails (measured on Windows, task W-1).
+    #[link(name = "mswsock")]
     extern "system" {
         pub fn AcceptEx(
             sListenSocket: SOCKET,

@@ -1912,7 +1912,9 @@ mod tests {
             // (`realpathAlloc` returns `[]u8`, and POSIX paths are byte strings, not
             // UTF-8). `OsStrExt::as_bytes` is the exact analogue: the platform bytes,
             // unmodified. See memory `zig-byteslice-to-rust-rawbytes`.
-            let path = std::os::unix::ffi::OsStrExt::as_bytes(base.as_os_str()).to_vec();
+            // (`as_encoded_bytes`: the same bytes as `OsStrExt::as_bytes` on unix,
+            // and WTF-8, what Zig's `realpathAlloc` returns, on Windows.)
+            let path = base.as_os_str().as_encoded_bytes().to_vec();
 
             // const shell_path = try std.fmt.allocPrint(
             //     allocator,
@@ -1969,7 +1971,8 @@ mod tests {
     /// discriminator for this change. See memory `zig-byteslice-to-rust-rawbytes`.
     fn realpath_bytes(tmp_dir: &TempDir) -> Vec<u8> {
         let path = tmp_dir.dir().realpath(".").unwrap();
-        std::os::unix::ffi::OsStrExt::as_bytes(path.as_os_str()).to_vec()
+        // (`as_encoded_bytes`: `OsStrExt::as_bytes` on unix, WTF-8 on Windows.)
+        path.as_os_str().as_encoded_bytes().to_vec()
     }
 
     /// RED/GREEN DISCRIMINATOR for WS19 T15 (audit row O21) — not a smoke test.
@@ -1987,6 +1990,8 @@ mod tests {
     /// filesystem-based fixture cannot exist on the primary host. The property under
     /// test is the CONVERSION, not the syscall, and the conversion is host-independent.
     /// The filesystem round-trip is exercised on Linux by the sibling test below.
+    // (unix: a Windows `OsStr` cannot hold the raw 0xFF byte this fixture needs.)
+    #[cfg(unix)]
     #[test]
     fn non_utf8_path_bytes_survive_the_conversion_but_not_the_lossy_one() {
         use std::ffi::OsStr;

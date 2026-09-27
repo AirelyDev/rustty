@@ -63,7 +63,12 @@ pub enum InitError {
 // path is built from bytes, not from `Path::display`, which is lossy.
 pub fn init(resources_dir: impl AsRef<[u8]>) -> Result<(), InitError> {
     let resources_dir = resources_dir.as_ref();
-    if !build_config::i18n() {
+    // (`comptime !build_config.i18n`: each check in this file is an inline
+    // `const`, so a disabled build does not code-generate the libintl calls
+    // behind it (R8). Windows has i18n off and links no libintl; with a
+    // run-time check the unreachable `dgettext` reference failed the link,
+    // measured on Windows in task W-1.)
+    if !const { build_config::i18n() } {
         return Ok(());
     }
 
@@ -117,7 +122,7 @@ fn log_debug_binding(domain: &str, path: &std::ffi::CStr) {
 /// This should only be called for apprts that are fully owning the
 /// Rustty application. This should not be called for librustty users.
 pub fn initGlobalDomain() -> Result<(), OutOfMemoryError> {
-    if !build_config::i18n() {
+    if !const { build_config::i18n() } {
         return Ok(());
     }
     let domain = std::ffi::CString::new(build_config::BUNDLE_ID).map_err(|_| OutOfMemoryError)?;
@@ -147,7 +152,7 @@ pub struct OutOfMemoryError;
 // valid function name in Rust, so it is named `gettext_` here; its behavior is
 // identical.
 pub fn gettext_(msgid: &std::ffi::CStr) -> &'static std::ffi::CStr {
-    if !build_config::i18n() {
+    if !const { build_config::i18n() } {
         // PORT NOTE: the reference returns `msgid` directly; we extend its lifetime to
         // `'static` to match the C-string return surface. Callers pass
         // `'static` literals here in practice.
@@ -195,7 +200,7 @@ pub fn N_(msgid: &[u8]) -> &[u8] {
 pub fn canonicalizeLocale<'a>(buf: &'a mut [u8], locale: &str) -> Result<&'a [u8], NoSpaceLeft> {
     let locale = locale.as_bytes();
 
-    if !build_config::i18n() {
+    if !const { build_config::i18n() } {
         if buf.len() < locale.len() + 1 {
             return Err(NoSpaceLeft);
         }
@@ -295,6 +300,8 @@ pub fn staticLocale(v: &str) -> &'static str {
 // Manually include function definitions for the gettext functions
 // as libintl.h isn't always easily available (e.g. in musl)
 extern "C" {
+    // (Windows: only `init`'s non-Windows arm binds a text domain.)
+    #[cfg_attr(windows, allow(dead_code))]
     fn bindtextdomain(
         domainname: *const std::ffi::c_char,
         dirname: *const std::ffi::c_char,

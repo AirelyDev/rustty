@@ -87,7 +87,8 @@ mod tests;
 // scrollback workload under `cargo test --release` and reports MEASURED numbers
 // (latency median, peak RSS via getrusage, page allocs+bytes via the
 // `page_tracking` TrackingAllocator seam). Not part of the parity contract.
-#[cfg(test)]
+// (unix: `getrusage` has no Windows counterpart in `libc`.)
+#[cfg(all(test, unix))]
 mod bench;
 
 // Zig surface parity: the reference nests these in PageList.zig

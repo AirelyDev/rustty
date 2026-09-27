@@ -798,11 +798,15 @@ impl Thread {
         //     // else => return error.TermioUnsupportedMailbox,
         // };
         //
-        // (PORT NOTE: extract the `wakeup` Async — `Copy` — for the `wait` below; the
-        // queue itself is reached via `cb.io` in `drainMailbox`. Single-variant
-        // match, irrefutable.)
-        let mailbox_wakeup = match unsafe { &(*io).mailbox } {
-            Mailbox::Spsc { wakeup, .. } => *wakeup,
+        // (PORT NOTE: a pointer to the mailbox's own `wakeup` Async for the
+        // `wait` below, as the reference's `|*v|` capture is; the queue itself is
+        // reached via `cb.io` in `drainMailbox`. Single-variant match,
+        // irrefutable. CORRECTION (task W-1): this used to copy the Async out,
+        // which works only where `Async` is a `Copy` handle to a kernel object
+        // (kqueue, eventfd); the Windows Async holds its own state, so a wait
+        // registered on a copy would never see the mailbox's notifications.)
+        let mailbox_wakeup: *const xev::Async = match unsafe { &(*io).mailbox } {
+            Mailbox::Spsc { wakeup, .. } => wakeup,
         };
 
         // This is the data sent to xev callbacks. We want a pointer to both
@@ -839,9 +843,9 @@ impl Thread {
         //
         // SAFETY: `loop_`/`wakeup_c`/`stop_c` are stable fields of the frame-pinned
         // Thread; `cb_ptr` is the frame-pinned userdata pointer; the callbacks are
-        // ZST fn-items. `mailbox_wakeup`/`stop` are `Copy` Asyncs.
+        // ZST fn-items. `mailbox_wakeup` points at the live mailbox's Async.
         unsafe {
-            mailbox_wakeup.wait(
+            (*mailbox_wakeup).wait(
                 &raw mut (*self_).loop_,
                 &raw mut (*self_).wakeup_c,
                 cb_ptr,

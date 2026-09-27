@@ -80,6 +80,21 @@ struct AsyncWaiter {
 unsafe impl Send for Async {}
 unsafe impl Sync for Async {}
 
+// PORT NOTE: Zig copies `xev.Async` by value wherever it is passed or stored
+// (termio's `renderer_wakeup` is copied into `Termio` and its stream
+// handler), including this backend's `guard`/`wakeup`/`waiter`. `Clone` is that
+// value copy: a copy with the same `wakeup`/`waiter` and its own unlocked
+// guard (a copy is taken while nothing holds the guard). As in the reference,
+// a copy does not share its state with the original.
+impl Clone for Async {
+    fn clone(&self) -> Async {
+        let state = *self.guard.lock().unwrap_or_else(|e| e.into_inner());
+        Async {
+            guard: Mutex::new(state),
+        }
+    }
+}
+
 /// PORT NOTE: `pub const WaitError = xev.Sys.AsyncError;` — the naming follows
 /// the crate's `<Watcher><X>Error` convention (`AsyncWaitError`, `TimerRunError`,
 /// `ProcessWaitError`).

@@ -537,6 +537,7 @@ impl PageAllocator {
 // (`zstd:std/os/windows.zig:3595-3626`, `zstd:std/os/windows/ntdll.zig:363-380`).
 // Private to this module (see the layering note above).
 #[cfg(all(not(miri), windows))]
+#[allow(clippy::upper_case_acronyms)] // the Win32 spellings, as in `windows.rs`
 mod win_ntdll {
     pub type PVOID = *mut core::ffi::c_void;
     // The Win32 spelling is `SIZE_T`; renaming it would break the 1:1 read
@@ -622,7 +623,11 @@ mod tests {
         let alloc = page_allocator();
 
         // sysconf page size (Darwin uses 16K on aarch64; any page works here).
+        #[cfg(unix)]
         let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) as usize };
+        // Windows: the comptime page size (asserted to be 4096 above).
+        #[cfg(windows)]
+        let page = page_size();
         let layout = Layout::from_size_align(page, page).unwrap();
 
         let region = alloc.allocate(layout).expect("mmap page failed");
@@ -712,7 +717,11 @@ mod tests {
     fn over_aligned_request_is_aligned_and_freeable() {
         let alloc = page_allocator();
 
+        #[cfg(unix)]
         let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) as usize };
+        // Windows: the comptime page size (asserted to be 4096 above).
+        #[cfg(windows)]
+        let page = page_size();
         let align = page * 4;
         let size = page * 2;
         let layout = Layout::from_size_align(size, align).unwrap();

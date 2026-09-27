@@ -689,7 +689,10 @@ impl<M: AppMailbox> Termio<M> {
             (&raw mut (*self_).config).write(opts.config);
             (&raw mut (*self_).terminal).write(term);
             (&raw mut (*self_).renderer_state).write(renderer_state);
-            (&raw mut (*self_).renderer_wakeup).write(renderer_wakeup);
+            // (`clone`: the Zig value copy. `xev::Async` is `Copy` on every
+            // backend but Windows', whose guarded state is only `Clone`.)
+            #[allow(clippy::clone_on_copy)]
+            (&raw mut (*self_).renderer_wakeup).write(renderer_wakeup.clone());
             (&raw mut (*self_).renderer_mailbox).write(renderer_mailbox);
             (&raw mut (*self_).surface_mailbox).write(surface_mailbox);
             (&raw mut (*self_).size).write(opts.size);

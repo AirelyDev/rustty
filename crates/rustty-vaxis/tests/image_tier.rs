@@ -718,8 +718,10 @@ fn load_image_from_path_png_transmits_identically_to_mem() {
     let mut vx_path = vaxis_with_kitty(true);
     let mut sink_path: Vec<u8> = Vec::new();
     let r = {
-        use std::os::unix::ffi::OsStrExt;
-        vx_path.load_image(&mut sink_path, Source::Path(path.as_os_str().as_bytes()))
+        vx_path.load_image(
+            &mut sink_path,
+            Source::Path(path.as_os_str().as_encoded_bytes()),
+        )
     };
     let _ = std::fs::remove_file(&path);
     r.expect("load from path must succeed");

@@ -5625,6 +5625,10 @@ fn render_config_template(path: &[u8]) -> Vec<u8> {
 /// We should keep the set of behaviors that depend on this as small
 /// as possible because magic sucks, but each place is well documented.
 // fn probableCliEnvironment() bool {
+//
+// (Windows: the `.windows => return false` arm below ends the function there,
+// as the reference's comptime switch does; the rest is unreachable.)
+#[cfg_attr(windows, allow(unreachable_code))]
 fn probable_cli_environment() -> bool {
     // switch (builtin.os.tag) {
     //     // Windows has its own problems, just ignore it for now since

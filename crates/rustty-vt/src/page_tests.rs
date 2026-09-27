@@ -490,6 +490,10 @@ mod tests {
     // `ref_counted_set.rs`) and this goes red: the styles section is 3,168
     // bytes against 4,000, and the port's old geometry holds 594 rows at 80
     // columns against the reference's 593 (macOS, test build).
+    #[cfg(any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(target_os = "linux", target_arch = "aarch64")
+    ))]
     struct RefGeometry {
         grapheme_bytes: u32,
         total_size: usize,

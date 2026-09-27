@@ -130,10 +130,19 @@ pub type Error = FtError;
 /// Map a raw `FT_Error` to `Result`: `FT_Err_Ok` (0) → `Ok`, else the named error.
 // PORT NOTE: `errors.intToError`.
 pub fn int_to_error(err: c::FT_Error) -> Result<(), FtError> {
-    // The bindgen `FT_Err_*` constants are `c_uint`; `FT_Error` is `c_int`. Match
-    // on the unsigned reinterpretation so the constants can be used as patterns
-    // (all FreeType error codes are small positive values).
-    Err(match err as core::ffi::c_uint {
+    // The bindgen `FT_Err_*` constants have the type of FreeType's anonymous
+    // error enum, which bindgen gives the C compiler's underlying type for it:
+    // `c_uint` on macOS/Linux, `c_int` on MSVC (measured on Windows, task W-1).
+    // `FT_Error` is `c_int`. Convert to the constants' own type so they can be
+    // used as patterns (all FreeType error codes are small positive values; a
+    // value that does not convert is not one of them).
+    fn like<T: TryFrom<c::FT_Error>>(_: T, v: c::FT_Error) -> Option<T> {
+        T::try_from(v).ok()
+    }
+    let Some(code) = like(c::FT_Err_Ok, err) else {
+        return Err(FtError::UnknownFreetypeError);
+    };
+    Err(match code {
         c::FT_Err_Ok => return Ok(()),
         c::FT_Err_Cannot_Open_Resource => FtError::CannotOpenResource,
         c::FT_Err_Unknown_File_Format => FtError::UnknownFileFormat,
@@ -1157,7 +1166,9 @@ mod tests {
         // (`FT_LOAD_TARGET_( x ) = ((FT_Int32)((x) & 15) << 16)` over the
         // `FT_RENDER_MODE_*` values), which bindgen cannot const-evaluate; they are
         // reproduced here from the same header definition.
-        fn ft_load_target(render_mode: u32) -> c::FT_Int32 {
+        // (`FT_Render_Mode_`: bindgen gives the enum's constants `c_uint` on
+        // macOS/Linux and `c_int` on MSVC.)
+        fn ft_load_target(render_mode: c::FT_Render_Mode_) -> c::FT_Int32 {
             ((render_mode & 15) << 16) as c::FT_Int32
         }
 

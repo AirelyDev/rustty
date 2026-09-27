@@ -346,6 +346,8 @@ impl Path {
         // error returned, as the reference's `try` does. The port used to skip
         // this and resolve `base/path` as a string when the base was missing,
         // fabricating an absolute path where the reference fails `expand`.
+        // (unit on Windows and wasm, whose stand-in returns no handle)
+        #[allow(clippy::let_unit_value)]
         let _dir = open_dir_absolute(base)?;
         let base_path = std::path::Path::new(os_str_from_bytes(base));
 
@@ -957,6 +959,8 @@ pub(crate) fn basename_windows(path: &[u8]) -> &[u8] {
 }
 
 /// PORTS: `std.fs.path.basenamePosix(path)`.
+// (Windows dispatches to `basename_windows`; the POSIX arm is unit-tested there.)
+#[cfg_attr(windows, allow(dead_code))]
 pub(crate) fn basename_posix(path: &[u8]) -> &[u8] {
     basename_inner(path, false)
 }

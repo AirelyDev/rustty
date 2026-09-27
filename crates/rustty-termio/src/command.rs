@@ -778,7 +778,7 @@ impl<'a> Command<'a> {
 
         // const attribute_list, const stdin, const stdout, const stderr =
         //     if (self.pseudo_console) |pseudo_console| b: { ... } else b: { ... };
-        let mut attribute_list_buf: Vec<u8> = Vec::new();
+        let mut attribute_list_buf: Vec<u8>;
         let (attribute_list, stdin, stdout, stderr): (
             windows::exp::LPPROC_THREAD_ATTRIBUTE_LIST,
             Option<windows::HANDLE>,
@@ -929,6 +929,8 @@ impl<'a> Command<'a> {
         #[cfg(windows)]
         {
             use rustty_os::windows;
+            // (The reference's Windows arm always waits; `block` is unused.)
+            let _ = block;
             // Block until the process exits. This returns immediately if the
             // process already exited.
             //
@@ -2404,6 +2406,8 @@ mod tests {
         assert_eq!(got, libc::ENOTDIR);
     }
 
+    // (POSIX: `write_exec_failure` is the fork/exec child's report.)
+    #[cfg(not(windows))]
     fn exec_failure_text(err: i32) -> String {
         let mut out = String::new();
         write_exec_failure(&mut out, err);
@@ -3050,6 +3054,8 @@ mod tests {
         assert!(matches!(exit, Exit::Exited(_)));
         // try testing.expectEqual(@as(u32, 0), @as(u32, exit.Exited));
         match exit {
+            // (`code` is already `u32` on Windows.)
+            #[allow(clippy::useless_conversion)]
             Exit::Exited(code) => assert_eq!(0u32, u32::from(code)),
             #[cfg(not(windows))]
             _ => unreachable!(),

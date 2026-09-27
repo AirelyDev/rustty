@@ -436,7 +436,11 @@ fn trim_end_u16(s: &[u16], byte: u16) -> &[u16] {
     &s[0..end]
 }
 
+// (`SystemFunction036`, RtlGenRandom, is exported by advapi32, which Rust
+// std does not link; Zig's std declares it `extern "advapi32"`,
+// std/os/windows/advapi32.zig.)
 #[cfg(windows)]
+#[link(name = "advapi32")]
 extern "system" {
     #[link_name = "GetTempPathW"]
     fn windows_GetTempPathW(buffer_length: u32, buffer: *mut u16) -> u32;

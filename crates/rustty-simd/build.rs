@@ -53,6 +53,12 @@ fn main() {
     let mut build = cc::Build::new();
     build
         .cpp(true)
+        // Windows (MSVC ABI): the reference compiles this with Zig's bundled
+        // clang, never cl.exe, and the sources rely on it (GCC/clang
+        // attributes and builtins). So on an MSVC target cc drives clang-cl, the
+        // MSVC-ABI clang driver (a CC/CXX override still wins). Measured on
+        // Windows 11 arm64 (task W-1): cl.exe rejects the sources.
+        .prefer_clang_cl_over_msvc(true)
         // Vendored/copied upstream-style C++: do not let warnings fail the host
         // build (the reference compiles these with highway's own warning model).
         .warnings(false)

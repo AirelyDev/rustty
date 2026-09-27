@@ -705,6 +705,11 @@ pub use iocp_watcher::{
     Async, AsyncWaitError, PollError, PollEvent, Process, ProcessWaitError,
     RunError as TimerRunError, Stream, Timer, TimerCancelError, WriteQueue, WriteRequest,
 };
+// `Async.WaitError` under the unprefixed name the kqueue and Linux surfaces
+// export (termio and core spell `xev::WaitError`), so the flat seam needs no
+// per-target spelling on Windows either.
+#[cfg(target_os = "windows")]
+pub use iocp_watcher::AsyncWaitError as WaitError;
 #[cfg(target_os = "wasi")]
 pub use wasi_watcher::{
     Async, AsyncWaitError, PollError, PollEvent, Process, RunError as TimerRunError, Stream, Timer,

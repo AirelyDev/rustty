@@ -16,6 +16,8 @@
 #[cfg(not(windows))]
 use rustty_build_config as build_config;
 
+// (Windows: `get` and its helpers do not exist there.)
+#[cfg(not(windows))]
 const LOG_SCOPE: &str = "passwd";
 
 // We want to be extra sure since this will force bad symbols into our import table
@@ -279,6 +281,7 @@ fn trim_right<'a>(input: &'a [u8], cutset: &[u8]) -> &'a [u8] {
 // `crate::flatpak::is_flatpak` when the flatpak group lands. No behavior is
 // added or lost.
 /// Returns true if we're running in a Flatpak environment.
+#[cfg(not(windows))]
 fn is_flatpak() -> bool {
     // If we're not on Linux then we'll make this comptime false.
     #[cfg(not(target_os = "linux"))]
@@ -291,6 +294,7 @@ fn is_flatpak() -> bool {
     }
 }
 
+#[cfg(not(windows))]
 fn log_warn(msg: &str) {
     eprintln!("[warn] [{LOG_SCOPE}] {msg}");
 }
@@ -300,13 +304,15 @@ fn log_info(msg: &str) {
     eprintln!("[info] [{LOG_SCOPE}] {msg}");
 }
 
-#[cfg(test)]
+// if (builtin.os.tag == .windows) return error.SkipZigTest;
+// (R14 compile-time scope: `get` does not exist on Windows, and it is this
+// module's only test.)
+#[cfg(all(test, not(windows)))]
 mod tests {
     use super::*;
 
     #[test]
     #[cfg_attr(miri, ignore)] // real-OS getpwuid_r syscall
-    #[cfg_attr(windows, ignore = "SkipZigTest on Windows (R14)")]
     fn passwd_entry() {
         // We should be able to get an entry
         let entry = get().unwrap();

@@ -122,6 +122,7 @@ mod imp {
 // the rest of `os/windows.zig` binds. Best-effort: the result is ignored, since
 // this is only used for diagnostics.
 #[cfg(windows)]
+#[allow(clippy::upper_case_acronyms)] // the Win32 spellings, as in `windows.rs`
 mod imp {
     use core::ffi::c_void;
 

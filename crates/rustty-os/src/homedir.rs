@@ -430,10 +430,12 @@ fn expandHomeUnix<'a>(
 mod tests {
     use super::*;
 
+    // if (builtin.os.tag == .windows) return error.SkipZigTest;
+    // (R14 compile-time scope: `expandHomeUnix` does not exist on Windows.)
+    #[cfg(not(windows))]
     #[test]
     #[cfg_attr(miri, ignore)] // env/passwd/objc home lookup hits real OS state
     #[allow(non_snake_case)]
-    #[cfg_attr(windows, ignore = "SkipZigTest on Windows (R14)")]
     fn expand_home_unix() {
         // PORT NOTE (P3-W7 T3): upstream's test now builds the map from
         // `testing.environ`; rustty's equivalent is the captured process
@@ -638,9 +640,8 @@ mod tests {
         );
     }
 
-    // `std.fs.path.sep`.
-    #[cfg(windows)]
-    const SEP: u8 = b'\\';
+    // `std.fs.path.sep` (read only by `expand_home_unix`, which does not
+    // exist on Windows).
     #[cfg(not(windows))]
     const SEP: u8 = b'/';
 }

@@ -231,6 +231,12 @@ enum PreadOutcome {
 /// PORT NOTE: the reference nests `const SharedMemoryRange = struct { start:
 /// usize, end: usize };` inside `LoadingImage`; hoisted to module level because
 /// Rust has no nested type namespacing on structs.
+// (Used only by the POSIX shared-memory medium, unsupported on Windows,
+// Android and wasm32; see `readSharedMemory`.)
+#[cfg_attr(
+    any(windows, target_os = "android", target_arch = "wasm32"),
+    allow(dead_code)
+)]
 struct SharedMemoryRange {
     start: usize,
     end: usize,
@@ -387,7 +393,7 @@ impl LoadingImage {
         #[cfg(any(windows, target_os = "android", target_arch = "wasm32"))]
         {
             let _ = (alloc, t, path);
-            return Err(Error::UnsupportedMedium);
+            Err(Error::UnsupportedMedium)
         }
         #[cfg(not(any(windows, target_os = "android", target_arch = "wasm32")))]
         {
@@ -657,6 +663,10 @@ impl LoadingImage {
     // PORT NOTE: the reference return type is the inline error set
     // `error{ InvalidData, DimensionsTooLarge }!SharedMemoryRange`; both members
     // exist on the module `Error` enum, so it is used directly.
+    #[cfg_attr(
+        any(windows, target_os = "android", target_arch = "wasm32"),
+        allow(dead_code)
+    )]
     fn sharedMemoryRange(
         &self,
         t: &command::Transmission,
@@ -1730,6 +1740,10 @@ unsafe impl zlib_sys::InflateOut for InflateBytes {
 }
 
 /// Returns whether a name follows the POSIX shared memory name format.
+#[cfg_attr(
+    any(windows, target_os = "android", target_arch = "wasm32"),
+    allow(dead_code)
+)]
 fn validSharedMemoryName(name: &[u8], name_max: usize) -> bool {
     if name.len() < 2 || name.len() > name_max || name[0] != b'/' {
         return false;

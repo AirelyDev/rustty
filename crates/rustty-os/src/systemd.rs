@@ -245,7 +245,7 @@ pub mod notify {
 }
 
 /// Which step of the `/proc/<ppid>/comm` check failed.
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(target_os = "linux", all(test, unix)))]
 #[derive(Debug, PartialEq, Eq)]
 enum CommError {
     /// `openFileAbsolute` failed: "unable to open '{s}' for reading".
@@ -261,7 +261,7 @@ enum CommError {
 // PORT NOTE (S112-F8): the reference has two failure arms with two messages
 // (open, then read) and reads into a 16-byte buffer. The port read the whole
 // file with `std::fs::read` and logged every failure as the open message.
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(target_os = "linux", all(test, unix)))]
 fn comm_is_systemd(comm_path: &[u8]) -> Result<bool, CommError> {
     use std::io::Read;
     use std::os::unix::ffi::OsStrExt;
@@ -294,7 +294,7 @@ fn comm_is_systemd(comm_path: &[u8]) -> Result<bool, CommError> {
 }
 
 /// Why a `NOTIFY_SOCKET` value cannot be used; each is the reference's warning.
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(target_os = "linux", all(test, unix)))]
 #[derive(Debug, PartialEq, Eq)]
 enum NotifyAddressError {
     /// "only AF_UNIX sockets with path or abstract namespace addresses are supported!"
@@ -325,7 +325,7 @@ enum NotifyAddressError {
 // becomes the leading NUL and the length is the name's. Path addresses keep
 // the reference's length, `@offsetOf(sockaddr.un, "path") + path.len` (the
 // whole struct; S112-F8).
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(target_os = "linux", all(test, unix)))]
 fn notify_address(
     socket_path: &[u8],
 ) -> Result<(libc::sockaddr_un, libc::socklen_t), NotifyAddressError> {
@@ -364,7 +364,7 @@ fn notify_address(
 }
 
 // PORT NOTE: `std.mem.trimRight(u8, slice, "\n")`.
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(target_os = "linux", all(test, unix)))]
 fn trim_right<'a>(slice: &'a [u8], strip: &[u8]) -> &'a [u8] {
     let mut end = slice.len();
     while end > 0 && strip.contains(&slice[end - 1]) {
@@ -383,7 +383,9 @@ fn log_warn(msg: &str) {
     eprintln!("[warn] [{LOG_SCOPE}] {msg}");
 }
 
-#[cfg(test)]
+// (unix: the helpers these test are the Linux arm's, compiled for tests on
+// every unix host; Windows has no `/proc` or `sockaddr_un`.)
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 

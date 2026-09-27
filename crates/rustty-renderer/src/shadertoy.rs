@@ -392,10 +392,19 @@ pub fn load_from_file(path: &CStr, target: Target) -> Result<CString, Error> {
 
 // PORT NOTE (helper): the reference's `openFile` + `readToEndAlloc(alloc, 4MB)`.
 // Byte-faithful path handling (unix `OsStrExt::from_bytes`); 4MB cap -> StreamTooLong.
+// On Windows the path bytes are WTF-8, converted as Zig's `openFile` does
+// (`rustty_os::path::os_string_from_bytes`); a path that is not WTF-8 is Zig's
+// `error.InvalidWtf8`, which this port's error set folds into `Io` like the
+// other open errors.
 fn read_shader_file(path: &CStr) -> Result<Vec<u8>, Error> {
     use std::io::Read;
-    use std::os::unix::ffi::OsStrExt;
-    let os = std::ffi::OsStr::from_bytes(path.to_bytes());
+    #[cfg(not(windows))]
+    let os = {
+        use std::os::unix::ffi::OsStrExt;
+        std::ffi::OsStr::from_bytes(path.to_bytes())
+    };
+    #[cfg(windows)]
+    let os = rustty_os::path::os_string_from_bytes(path.to_bytes()).ok_or(Error::Io)?;
     let mut file = std::fs::File::open(os).map_err(|e| match e.kind() {
         std::io::ErrorKind::NotFound => Error::FileNotFound,
         _ => Error::Io,

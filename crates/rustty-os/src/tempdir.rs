@@ -213,7 +213,31 @@ impl Dir {
     /// fills a caller-provided `[max_path_bytes]u8` buffer; the Rust port
     /// returns an owning `PathBuf` and the caller obtains the bytes from it.
     pub fn realpath(&self, sub_path: &str) -> std::io::Result<PathBuf> {
-        std::fs::canonicalize(self.path.join(sub_path))
+        let canonical = std::fs::canonicalize(self.path.join(sub_path))?;
+        // Windows: `canonicalize` returns a verbatim `\\?\C:\...` path, which
+        // turns off separator normalization, so a `/` joined onto it later no
+        // longer resolves. Zig's `realpath` returns the DOS form
+        // (`GetFinalPathNameByHandle` with `.volume_name = .Dos`, which drops
+        // the prefix): `C:\...`, and `\\server\share\...` for `\\?\UNC\...`.
+        // Measured in task W-1: with the verbatim form every shell-integration
+        // test that joins `/`-separated paths onto the resources dir failed.
+        #[cfg(windows)]
+        let canonical = {
+            use std::os::windows::ffi::{OsStrExt, OsStringExt};
+            let wide: Vec<u16> = canonical.as_os_str().encode_wide().collect();
+            let verbatim: Vec<u16> = r"\\?\".encode_utf16().collect();
+            let unc: Vec<u16> = r"\\?\UNC\".encode_utf16().collect();
+            if wide.starts_with(&unc) {
+                let mut dos: Vec<u16> = r"\\".encode_utf16().collect();
+                dos.extend_from_slice(&wide[unc.len()..]);
+                PathBuf::from(std::ffi::OsString::from_wide(&dos))
+            } else if wide.starts_with(&verbatim) {
+                PathBuf::from(std::ffi::OsString::from_wide(&wide[verbatim.len()..]))
+            } else {
+                canonical
+            }
+        };
+        Ok(canonical)
     }
 
     /// `std.fs.Dir.access`: check that `path` is accessible. `path` may be
@@ -425,6 +449,10 @@ mod tests {
     /// the process cwd. The parent re-runs this test in a child whose
     /// environment has `TMPDIR=` and whose cwd is a fresh empty directory, and
     /// asserts that the child ran the test, passed, and left the cwd empty.
+    //
+    // (Not Windows: there `allocTmpDir` is `GetTempPathW`, which does not read
+    // `TMPDIR`; measured in task W-1, the child gets the user's temp dir.)
+    #[cfg(not(windows))]
     #[test]
     #[cfg_attr(miri, ignore)] // spawns a child process
     fn init_fails_with_not_found_when_tmpdir_is_empty() {

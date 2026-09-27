@@ -108,7 +108,7 @@ fn isExecutable(mode: Mode) -> bool {
     #[cfg(windows)]
     {
         let _ = mode;
-        return true;
+        true
     }
     #[cfg(not(windows))]
     {
@@ -232,8 +232,10 @@ pub(crate) fn os_str_from_bytes(b: &[u8]) -> &std::ffi::OsStr {
 // PORT NOTE (S112-F4): this was `OsStr::new(str::from_utf8(b).unwrap_or(""))`,
 // which turned a WTF-8 path (an unpaired surrogate, as Windows file names may
 // hold) into `""`, so `expand` opened `""` and skipped a real candidate.
+//
+// (pub: the renderer's shader-file open takes the same conversion.)
 #[cfg(windows)]
-pub(crate) fn os_string_from_bytes(b: &[u8]) -> Option<std::ffi::OsString> {
+pub fn os_string_from_bytes(b: &[u8]) -> Option<std::ffi::OsString> {
     use std::os::windows::ffi::OsStringExt;
     Some(std::ffi::OsString::from_wide(&wtf8_to_wtf16le(b)?))
 }
@@ -395,6 +397,21 @@ mod tests {
         assert_eq!(f(b"\xd0\x96"), Some(vec![1046]));
         assert_eq!(f(b"\xed\xa0"), None);
         assert_eq!(f(b"\xe0\x9f\xbf"), None);
+    }
+
+    /// UD201 / S112-F4, Windows: a `PATH` entry holding the overlong form
+    /// `E0 9F BF`, which Zig's WTF-8 validator accepts and its decoder then
+    /// traps on (`catch unreachable`), makes `expand` fail with
+    /// `error.InvalidWtf8` through the conversion `openFile` does.
+    #[cfg(windows)]
+    #[test]
+    fn expand_reports_invalid_wtf8_for_an_overlong_path_entry() {
+        let mut env = rustty_global::EnvMap::new();
+        env.insert(b"PATH".to_vec(), b"C:\\bad\xe0\x9f\xbf".to_vec());
+        assert!(matches!(
+            expand(&env, b"hostname.exe"),
+            Err(ExpandError::InvalidWtf8)
+        ));
     }
 
     #[test]

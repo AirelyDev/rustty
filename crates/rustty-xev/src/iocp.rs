@@ -1511,6 +1511,13 @@ impl Completion {
         }
     }
 
+    /// Convenience wrapper for `state` callable on a `&Completion`, as the
+    /// other backends have (termio's `c.state()` calls spell it `state_of`).
+    pub fn state_of(&self) -> CompletionState {
+        // SAFETY: a live `&Completion`; `state` only reads its state flag.
+        unsafe { Completion::state(self as *const Completion as *mut Completion) }
+    }
+
     /// Returns a handle for the current operation if it makes sense.
     ///
     /// # Safety

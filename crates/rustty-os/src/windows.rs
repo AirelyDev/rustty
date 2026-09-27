@@ -148,6 +148,9 @@ pub fn unexpectedError<T>(err: DWORD) -> std::io::Result<T> {
     Err(std::io::Error::from_raw_os_error(err as i32))
 }
 
+// (`HANDLE` is a raw pointer that is only passed through to Win32, never
+// dereferenced here; the reference's std wrappers are plain functions too.)
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub fn CloseHandle(hObject: HANDLE) -> BOOL {
     extern "system" {
         fn CloseHandle(hObject: HANDLE) -> BOOL;
@@ -165,6 +168,7 @@ pub fn GetCurrentProcessId() -> DWORD {
 /// PORT NOTE: `windows.SetHandleInformation` returns a `BOOL` from the Win32 call but
 /// the reference's std wrapper returns `!void`. We mirror the wrapper's error
 /// propagation by returning an `io::Result`.
+#[allow(clippy::not_unsafe_ptr_arg_deref)] // (see `CloseHandle`)
 pub fn SetHandleInformation(hObject: HANDLE, dwMask: DWORD, dwFlags: DWORD) -> std::io::Result<()> {
     if unsafe { kernel32::SetHandleInformation(hObject, dwMask, dwFlags) } == 0 {
         return unexpectedError(unsafe { kernel32::GetLastError() });
@@ -173,6 +177,7 @@ pub fn SetHandleInformation(hObject: HANDLE, dwMask: DWORD, dwFlags: DWORD) -> s
 }
 
 /// PORT NOTE: BOOL GetComputerNameA(LPSTR lpBuffer, LPDWORD nSize)
+#[allow(clippy::not_unsafe_ptr_arg_deref)] // (see `CloseHandle`)
 pub fn GetComputerNameA(lpBuffer: LPSTR, nSize: *mut DWORD) -> BOOL {
     extern "system" {
         fn GetComputerNameA(lpBuffer: LPSTR, nSize: *mut DWORD) -> BOOL;
@@ -302,6 +307,15 @@ pub mod exp {
                 lpOverlapped: super::super::LPVOID,
             ) -> BOOL;
             pub fn CancelIoEx(hFile: HANDLE, lpOverlapped: super::super::LPVOID) -> BOOL;
+            // `Exec.threadExit`'s quit-pipe write (Zig's `posix.write` on a
+            // Windows `fd_t`, which is a HANDLE, is `WriteFile`).
+            pub fn WriteFile(
+                hFile: HANDLE,
+                lpBuffer: *const core::ffi::c_void,
+                nNumberOfBytesToWrite: DWORD,
+                lpNumberOfBytesWritten: *mut DWORD,
+                lpOverlapped: super::super::LPVOID,
+            ) -> BOOL;
             // The reference declares these two right after `CloseHandle` in
             // `exp.kernel32` (`src/os/windows.zig:205-216`). Their live caller
             // is `terminal/page.zig`'s `AllocWindows`, which reaches them as

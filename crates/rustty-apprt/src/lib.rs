@@ -380,6 +380,10 @@ pub fn init_with_action(action_detected: bool) -> Result<rustty_core::Logging, I
     }
     // if (comptime build_config.font_backend.hasFontconfig())
     //     std.log.info("dependency fontconfig={d}", .{fontconfig.version()});
+    //
+    // (Not on Windows: no fontconfig is linked there; see the Cargo.toml
+    // table. The Windows backend, `freetype_windows`, has no fontconfig.)
+    #[cfg(not(target_os = "windows"))]
     if build_config::font_backend().has_fontconfig() {
         // SAFETY: FcGetVersion takes no args, reads a compile-time constant.
         let v = unsafe { fontconfig_sys::FcGetVersion() };

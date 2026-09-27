@@ -102,11 +102,15 @@ fn main() {
     }
 
     // The reference defines IMGUI_IMPL_API for the backend impl headers. On
-    // non-Windows it is `extern "C"` (Windows adds `__declspec(dllexport)`).
-    // None of the TUs compiled here reference it (the platform backend impl
-    // files are deferred), but it is part of the reference's "flags common to
-    // all", so mirror it on non-Windows.
-    if target_os != "windows" {
+    // non-Windows it is `extern "C"` (Windows adds `__declspec(dllexport)`),
+    // pkg/dcimgui/build.zig:73-80. The OpenGL3 backend compiled below declares
+    // its functions with it, and `ext.cpp` and the Rust bindings call them by
+    // their C names. CORRECTION (task W-1): the Windows arm was missing, so on
+    // Windows the backend got C++ linkage and `ImGui_ImplOpenGL3_Shutdown` was
+    // an unresolved symbol at link time (measured).
+    if target_os == "windows" {
+        build.define("IMGUI_IMPL_API", "extern \"C\" __declspec(dllexport)");
+    } else {
         build.define("IMGUI_IMPL_API", "extern \"C\"");
     }
 

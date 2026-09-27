@@ -38,6 +38,12 @@ fn main() {
     let mut build = cc::Build::new();
     build
         .cpp(true)
+        // Windows (MSVC ABI): the reference compiles this with Zig's bundled
+        // clang, never cl.exe, and the sources rely on it (GCC/clang
+        // attributes and builtins). So on an MSVC target cc drives clang-cl, the
+        // MSVC-ABI clang driver (a CC/CXX override still wins). Measured on
+        // Windows 11 arm64 (task W-1): cl.exe rejects the sources.
+        .prefer_clang_cl_over_msvc(true)
         .std("c++17")
         // The vendored Highway headers live under vendor/ (so <hwy/highway.h>
         // resolves). The reference adds the upstream root as an include path.
@@ -90,6 +96,8 @@ fn main() {
 
     let mut cbuild = cc::Build::new();
     cbuild
+        // (the same compiler as the C++ unit above: clang-cl on MSVC)
+        .prefer_clang_cl_over_msvc(true)
         .include(&vendor)
         .warnings(false)
         .flag_if_supported("-w")

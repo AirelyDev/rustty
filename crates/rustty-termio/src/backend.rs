@@ -224,7 +224,6 @@ impl ThreadData {
     /// `self.backend.threadEnter` overwrites it. Since `Backend`/`ThreadData` have
     /// the single `Exec` variant, the only inhabited "undefined" value is
     /// `Exec(placeholder)` — see `exec::ThreadData::placeholder`.
-    #[cfg(not(windows))]
     pub(crate) fn placeholder() -> ThreadData {
         ThreadData::Exec(exec::ThreadData::placeholder())
     }
