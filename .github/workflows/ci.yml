@@ -429,7 +429,8 @@ jobs:
   # batch W-2)". Before that (task W-1b) it claimed the narrow scope matched the
   # reference, which was wrong at the pin.
   #
-  # EXCLUDED, explicitly (NEW-FINDINGS N350): three workspace members the
+  # EXCLUDED, explicitly (NEW-FINDINGS N350; the `--exclude`s on the build,
+  # clippy and test steps): three workspace members the
   # reference never builds for Windows, and which do not build there as
   # standalone members: `libxml2-sys` and `fontconfig-sys` (the reference's
   # Windows font backend is `freetype_windows`, `font/backend.zig:49-55`; nothing
@@ -439,8 +440,6 @@ jobs:
     name: rustty-windows
     runs-on: windows-latest
     timeout-minutes: 90
-    env:
-      WINDOWS_EXCLUDE: --exclude libxml2-sys --exclude fontconfig-sys --exclude sentry-sys
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
@@ -494,17 +493,23 @@ jobs:
           echo $rc.DirectoryName >> $env:GITHUB_PATH
 
       # test-windows: `zig build -Dapp-runtime=none test`.
+      #
+      # The three `--exclude`s are N350's (see the job header), written inline in
+      # a native shell: task W-2 measured these commands from `cmd`, and Git
+      # Bash's MSYS layer rewrites PATH/HOME/TMP for native children.
+      # CORRECTION (task W-2b, review W-2 F8): these steps ran under
+      # `shell: bash` with the flags in a `WINDOWS_EXCLUDE` variable.
       - name: Build the workspace
-        shell: bash
-        run: cargo build --workspace $WINDOWS_EXCLUDE --locked
+        shell: pwsh
+        run: cargo build --workspace --exclude libxml2-sys --exclude fontconfig-sys --exclude sentry-sys --locked
 
       - name: Clippy the workspace (Windows arms)
-        shell: bash
-        run: cargo clippy --workspace $WINDOWS_EXCLUDE --all-targets --locked -- -D warnings
+        shell: pwsh
+        run: cargo clippy --workspace --exclude libxml2-sys --exclude fontconfig-sys --exclude sentry-sys --all-targets --locked -- -D warnings
 
       - name: Test the workspace
-        shell: bash
-        run: cargo test --workspace $WINDOWS_EXCLUDE --locked
+        shell: pwsh
+        run: cargo test --workspace --exclude libxml2-sys --exclude fontconfig-sys --exclude sentry-sys --locked
 
       # build-libghostty-vt-windows: `zig build -Demit-lib-vt`. (Its
       # `test-lib-vt` step is covered by the workspace test above.)
@@ -545,6 +550,9 @@ jobs:
       # CORRECTION (task W-2): this step built `rustty-vt-c` under the name of a
       # `build-ghostty-windows-gnu` job; the reference's job builds the app
       # library, which rustty-apprt-c ports.
+      # UNVERIFIED (review W-2 F8): the vendored C/C++ needs a MinGW-w64
+      # `gcc`/`g++` on PATH for this target; whether windows-latest provides it
+      # has not been checked, and this step has never run.
       - name: Build the apprt-c library for the GNU ABI
         run: |
           rustup target add x86_64-pc-windows-gnu
