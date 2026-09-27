@@ -95,6 +95,9 @@ rin = "rin"
 ower = "ower"
 # OpenType table names
 loca = "loca"
+# TinyIo
+tio = "tio"
+WRONLY = "WRONLY"
 # `mis-` is a live English prefix and the docs use it constantly
 # (mis-attribution, mis-cited, mis-paired, mis-specification, …).
 mis = "mis"
@@ -115,7 +118,6 @@ propt = "propt"
 clen = "clen"
 ba = "ba"
 caf = "caf"
-tio = "tio"
 # From `TAG-ASSERTs` in the renderer's tag-assertion comments.
 ASSER = "ASSER"
 

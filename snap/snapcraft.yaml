@@ -10,7 +10,9 @@
 #     sudo dnf install snapd && sudo ln -s /var/lib/snapd/snap /snap
 #     sudo snap install snapcraft --classic
 #     cargo run -p xtask -- dist        # the vendored tarball this consumes
-#     snapcraft --verbose               # from the repo root
+#     mkdir snapsrc && tar -xzf dist/rustty-*.tar.gz --strip-components 1 -C snapsrc
+#     cd snapsrc && snapcraft --verbose # from the EXTRACTED tarball (VERSION,
+#                                       # vendor/ and .cargo/ live only there)
 #     sudo snap install --dangerous --classic ./rustty_*.snap
 #     rustty +version
 #
@@ -18,9 +20,13 @@
 # carried over from the reference and pin Ubuntu 24.04 (core24) package names.
 # The flatpak build DID surface one thing that likely applies here too: bindgen
 # needs libclang at build time, which is why `clang` is in build-packages below.
+#
+# .github/workflows/snap.yml runs exactly this on GitHub's runners once the
+# RUSTTY_SNAP_ENABLED repository variable is set; it is UNVERIFIED too.
+# Deferred verification is tracked in .port/phase-2/VERIFICATION_DEBT.md (P-1).
 # ============================================================================
 #
-# TWO STRUCTURAL DIFFERENCES FROM THE REFERENCE:
+# THREE STRUCTURAL DIFFERENCES FROM THE REFERENCE:
 #
 # 1. No `zig` part. The reference downloads a Zig tarball at build time; the
 #    Rust toolchain comes from the `rust` plugin's own snapcraft support, so
@@ -31,13 +37,17 @@
 #    the store, and the tarball already ships `vendor/` plus a
 #    `.cargo/config.toml` redirecting crates.io to it. The reference solves the
 #    equivalent problem with its Zig package cache.
+#
+# 3. gtk4-layer-shell is its own `meson` part (see that part) instead of the
+#    reference's `-fno-sys=gtk4-layer-shell`, because rustty has no vendored
+#    copy of it to fall back to.
 name: rustty
 base: core24
 summary: A terminal emulator
 description: |
   Rustty is a fast, feature-rich, and cross-platform terminal emulator that
   uses platform-native UI and GPU acceleration.
-grade: devel
+grade: stable
 confinement: classic
 contact: https://github.com/AirelyDev/rustty/discussions
 issues: https://github.com/AirelyDev/rustty/issues
@@ -56,6 +66,7 @@ apps:
     command-chain: [app/launcher]
     completer: share/bash-completion/completions/rustty.bash
     desktop: share/applications/io.airely.rustty.desktop
+    #refresh-mode: ignore-running # Store rejects this, needs fix in review-tools
     environment:
       PATH: /snap/rustty/current/bin:/snap/rustty/current/usr/bin:$PATH
       LC_ALL: C.UTF-8
@@ -69,8 +80,31 @@ parts:
     organize:
       launcher: app/
 
+  # PORTS the reference's `-fno-sys=gtk4-layer-shell`: core24 (Ubuntu 24.04)
+  # does not package gtk4-layer-shell, so the reference builds its vendored
+  # copy instead of linking a system one. rustty links gtk4-layer-shell through
+  # pkg-config (gtk4-layer-shell-sys) and has no vendored copy, so the snap
+  # builds the same library from source as its own part — the same release the
+  # flatpak's dependencies.yml builds, for the same reason.
+  gtk4-layer-shell:
+    plugin: meson
+    source: https://github.com/wmww/gtk4-layer-shell/archive/refs/tags/v1.1.0.tar.gz
+    # Keep this version synchronized with flatpak/dependencies.yml.
+    source-checksum: sha256/98284281260a5eef5b4f63a55f16c4bf6a788a1020a6db037ecb0f71fa336988
+    meson-parameters:
+      - --prefix=/usr
+      - -Dintrospection=false
+      - -Dvapi=false
+    build-packages:
+      - meson
+      - ninja-build
+      - libgtk-4-dev
+      - libwayland-dev
+      - wayland-protocols
+
   rustty:
     source: .
+    after: [gtk4-layer-shell]
     plugin: nil
     build-attributes: [enable-patchelf]
     build-packages:
@@ -85,6 +119,7 @@ parts:
     build-snaps:
       # rust-toolchain.toml pins 1.93.1; the `rustup` snap honours it.
       - rustup
+    # TODO: Remove the gtk4-layer-shell part when we upgrade to a version that packages it Ubuntu 24.10+
     override-build: |
       craftctl set version=$(cat VERSION)
       # `snap` is the port of the reference's `-Dsnap`, which its own
@@ -95,8 +130,18 @@ parts:
       # inside the snap.
       cargo build --release --offline --locked \
         -p rustty --no-default-features --features "gtk wayland x11 snap"
+      # `-Dpatch-rpath=...`: cargo has no post-link hook, so the port of the
+      # reference's patch-rpath option is `xtask patchelf`, run on the built
+      # binary (S63-F4).
+      cargo run --release --offline --locked -p xtask -- patchelf \
+        --patch-rpath \$ORIGIN/../usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR:/snap/core24/current/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR \
+        target/release/rustty
+      # `--optimize ReleaseFast` is the resource half of the reference's
+      # `-Doptimize=ReleaseFast`: a release build installs only the compiled
+      # terminfo database, not the terminfo source and termcap a Debug build
+      # adds (Config.zig emit-terminfo/emit-termcap defaults).
       cargo run --release --offline --locked -p xtask -- resources \
-        --target-os linux --prefix /snap/rustty/current
+        --target-os linux --prefix /snap/rustty/current --optimize ReleaseFast
       install -Dm755 target/release/rustty $CRAFT_PART_INSTALL/bin/rustty
       cp -rp zig-out/share $CRAFT_PART_INSTALL/
       sed -i 's|Icon=io.airely.rustty|Icon=${SNAP}/share/icons/hicolor/512x512/apps/io.airely.rustty.png|g' \

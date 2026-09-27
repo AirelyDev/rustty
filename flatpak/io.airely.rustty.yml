@@ -87,6 +87,11 @@ modules:
         # than a confusing hang.
         CARGO_NET_OFFLINE: "true"
         CARGO_HOME: /run/build/rustty/cargo-home
+        # `-Dstrip=false`: keep the release binary's debug info and symbols so
+        # flatpak-builder can split them into the .Debug extension. Cargo's
+        # release profile carries no debug info and strips it by default.
+        CARGO_PROFILE_RELEASE_DEBUG: "true"
+        CARGO_PROFILE_RELEASE_STRIP: "false"
     build-commands:
       # `flatpak` is the port of the reference's `-Dflatpak=true`, which its own
       # manifest passes. Without it `build_config.flatpak` is false and the
@@ -103,9 +108,12 @@ modules:
       # locale / the desktop-app files. --flatpak swaps in the flatpak D-Bus
       # service and caps the icon at 512, matching the reference's
       # `-Dflatpak=true`. (This half was always passed; the binary half above
-      # was the one that was missing.)
+      # was the one that was missing.) `--optimize ReleaseFast` is the resource
+      # half of the reference's `-Doptimize=ReleaseFast`: a release build
+      # installs only the compiled terminfo database, not the terminfo source
+      # and termcap a Debug build adds.
       - cargo run --release --offline --locked -p xtask -- resources
-        --target-os linux --prefix /app --flatpak
+        --target-os linux --prefix /app --flatpak --optimize ReleaseFast
       - install -Dm755 target/release/rustty /app/bin/rustty
       - cp -r zig-out/share/. /app/share/
     sources:
