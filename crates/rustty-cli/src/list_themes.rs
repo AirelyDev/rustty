@@ -274,12 +274,12 @@ fn run_opts(opts: Options) -> Result<u8, Error> {
     // var stdout_file: std.fs.File = .stdout();
     // var stdout_writer = stdout_file.writer(&stdout_buf);
     // const stdout = &stdout_writer.interface;
-    let mut stdout = std::io::BufWriter::new(std::io::stdout().lock());
+    let mut stdout = std::io::BufWriter::with_capacity(4096, crate::io_file::stdout());
 
     // var stderr_buf: [4096]u8 = undefined;
     // var stderr_writer = std.fs.File.stderr().writer(&stderr_buf);
     // const stderr = &stderr_writer.interface;
-    let mut stderr = std::io::BufWriter::new(std::io::stderr().lock());
+    let mut stderr = std::io::BufWriter::with_capacity(4096, crate::io_file::stderr());
 
     // const resources_dir = global_state.resources_dir.app();
     // if (resources_dir == null)

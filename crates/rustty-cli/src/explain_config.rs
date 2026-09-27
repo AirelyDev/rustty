@@ -153,7 +153,8 @@ pub fn run() -> Result<u8, Error> {
             //     return 1;
             //   R2: user-facing `ghostty` -> the Rustty product name (APP_NAME).
             let app = rustty_identity::APP_NAME;
-            let mut stderr = std::io::stderr().lock();
+            //   (Zig's stderr File behind a 4096-byte buffer, task W-4 N365.)
+            let mut stderr = std::io::BufWriter::with_capacity(4096, crate::io_file::stderr());
             stderr.write_all(format!("Usage: {app} +explain-config <option>\n").as_bytes())?;
             stderr.write_all(
                 format!("       {app} +explain-config --option=<option>\n").as_bytes(),

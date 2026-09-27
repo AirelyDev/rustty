@@ -366,7 +366,7 @@ pub fn run() -> Result<u8, Error> {
     // var buffer: [1024]u8 = undefined;
     // var stderr_writer = std.fs.File.stderr().writer(&buffer);
     // const stderr = &stderr_writer.interface;
-    let mut stderr = std::io::BufWriter::new(std::io::stderr().lock());
+    let mut stderr = std::io::BufWriter::with_capacity(1024, crate::io_file::stderr());
 
     // const result = runArgs(alloc, &iter, stderr);
     let result = run_args(&mut iter, &mut stderr);

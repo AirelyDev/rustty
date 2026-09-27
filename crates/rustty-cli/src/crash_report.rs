@@ -18,7 +18,7 @@ use rustty_config::value_types::Duration;
 // const crash = @import("../crash/main.zig");
 use rustty_crash as crash;
 
-use std::io::{IsTerminal, Write};
+use std::io::Write;
 
 // std.time.ns_per_s — the seconds rounding factor for the relative age.
 const NS_PER_S: u64 = 1_000_000_000;
@@ -98,9 +98,10 @@ pub fn run() -> Result<u8, Error> {
     //   PORT NOTE: the reference keeps `stdout_file` separate from the buffered
     //   `stdout` writer to `posix.isatty(stdout_file.handle)`; Rust queries
     //   `is_terminal()` on the stdout handle before wrapping it in the BufWriter.
-    let stdout_file = std::io::stdout();
+    //   (Zig's stdout File, task W-4 N365.)
+    let stdout_file = crate::io_file::stdout();
     let stdout_is_tty = stdout_file.is_terminal();
-    let mut stdout = std::io::BufWriter::new(stdout_file.lock());
+    let mut stdout = std::io::BufWriter::with_capacity(1024, stdout_file);
 
     // var environ_map = try global.environMap();
     // defer environ_map.deinit();

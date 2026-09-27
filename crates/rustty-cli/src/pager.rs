@@ -78,7 +78,8 @@ impl Pager {
             // child.stdin.?
             Sink::Child(child.stdin.as_mut().unwrap())
         } else {
-            Sink::Stdout(std::io::stdout().lock())
+            // (Zig's stdout File, task W-4 N365.)
+            Sink::Stdout(crate::io_file::stdout())
         };
         PagerWriter {
             inner: std::io::BufWriter::new(sink),
@@ -213,7 +214,7 @@ impl Writer for PagerWriter<'_> {
 /// (`child.stdin.?.writer` vs `std.fs.File.stdout().writer`).
 enum Sink<'a> {
     Child(&'a mut std::process::ChildStdin),
-    Stdout(std::io::StdoutLock<'static>),
+    Stdout(crate::io_file::StdFile),
 }
 
 impl Write for Sink<'_> {

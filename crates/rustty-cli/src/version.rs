@@ -135,15 +135,14 @@ fn release_channel_tag(channel: build_config::ReleaseChannel) -> &'static str {
 /// as either `+version` or `--version`.
 // pub fn run(alloc: Allocator) !u8 {
 pub fn run() -> Result<u8, Error> {
-    use std::io::IsTerminal;
-
     // var buffer: [1024]u8 = undefined;
     // const stdout_file: std.fs.File = .stdout();
-    let stdout_file = std::io::stdout();
+    //   (Zig's File: a failed write fails the action, task W-4 N365.)
+    let stdout_file = crate::io_file::stdout();
     // const tty = stdout_file.isTty();
     let tty = stdout_file.is_terminal();
     // var stdout_writer = stdout_file.writer(&buffer); const stdout = &..interface;
-    let mut stdout = std::io::BufWriter::new(stdout_file.lock());
+    let mut stdout = std::io::BufWriter::with_capacity(1024, stdout_file);
 
     write_version(&mut stdout, tty)
 }

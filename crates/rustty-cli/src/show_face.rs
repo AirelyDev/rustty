@@ -224,7 +224,7 @@ pub fn run() -> Result<u8, Error> {
     // var stdout_buffer: [1024]u8 = undefined;
     // var stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
     // const stdout = &stdout_writer.interface;
-    let mut stdout = std::io::BufWriter::new(std::io::stdout());
+    let mut stdout = std::io::BufWriter::with_capacity(1024, crate::io_file::stdout());
 
     // var stderr_buffer: [1024]u8 = undefined;
     // var stderr_writer = std.fs.File.stdout().writer(&stderr_buffer);
@@ -233,7 +233,7 @@ pub fn run() -> Result<u8, Error> {
     //   built from `File.stdout()` — the reference writes its error/diagnostic
     //   output to STDOUT, not stderr. Reproduced faithfully (R3): our `stderr`
     //   writer also targets stdout.
-    let mut stderr = std::io::BufWriter::new(std::io::stdout());
+    let mut stderr = std::io::BufWriter::with_capacity(1024, crate::io_file::stdout());
 
     // const result = runArgs(alloc, &iter, stdout, stderr);
     let result = run_args(&mut iter, &mut stdout, &mut stderr);

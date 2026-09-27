@@ -412,7 +412,7 @@ impl Action {
                 // to stdout. In the future we can style this much prettier
                 // for all commands by just changing this one place.
                 // var buffer: [1024]u8; var stdout_writer = File.stdout().writer(&buffer);
-                let mut stdout = std::io::BufWriter::new(std::io::stdout().lock());
+                let mut stdout = std::io::BufWriter::with_capacity(1024, crate::io_file::stdout());
                 // const text = @field(help_strings.Action, field.name) ++ "\n";
                 let text = self.help_text();
                 Ok(write_help_text(&mut stdout, text))

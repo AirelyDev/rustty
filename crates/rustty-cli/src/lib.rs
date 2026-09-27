@@ -75,6 +75,9 @@ const _: () = {
 pub mod action;
 
 pub mod help_strings;
+// Zig's `std.Io.File.stdout()`/`.stderr()`: standard-handle writers that report
+// write errors (task W-4, N365). Every action writes through these.
+pub mod io_file;
 // TEST-ONLY `log::Log` capture backend for the restored `log.*` sites
 // (task-14e-2, S68-F4/S68-F5). See the module header.
 #[cfg(test)]

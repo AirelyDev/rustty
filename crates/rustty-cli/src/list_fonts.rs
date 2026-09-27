@@ -212,7 +212,7 @@ where
         // var buffer: [1024]u8 = undefined;
         // var stderr_writer = std.fs.File.stderr().writer(&buffer);
         // const stderr = &stderr_writer.interface;
-        let mut stderr = std::io::BufWriter::new(std::io::stderr().lock());
+        let mut stderr = std::io::BufWriter::with_capacity(1024, crate::io_file::stderr());
         // try stderr.print(
         //     \\Ghostty was built without a font discovery mechanism. ...
         // , .{});
@@ -299,7 +299,7 @@ fn run_discovery(
     // var buffer: [2048]u8 = undefined;
     // var stdout_writer = std.fs.File.stdout().writer(&buffer);
     // const stdout = &stdout_writer.interface;
-    let mut stdout = std::io::BufWriter::new(std::io::stdout().lock());
+    let mut stdout = std::io::BufWriter::with_capacity(2048, crate::io_file::stdout());
 
     // We'll be putting our fonts into a list categorized by family
     // so it is easier to read the output.
