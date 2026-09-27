@@ -597,8 +597,10 @@ impl PageEntry {
 // invalidate that pointer's Stacked-Borrows tag (the `set.context.page = self`
 // assignment is followed by `&mut self.hyperlink_set` accesses). Round-tripping
 // through `usize` gives the stored pointer exposed provenance that survives those
-// accesses — the same sound pattern `render-types`' `Offset` uses for its
-// int-to-ptr base resolution. The address is reconstructed on each use.
+// accesses. The address is reconstructed on each use. (`render-types`' `Offset`
+// used to resolve its base the same way; since S7-9 it derives the pointer from
+// the base with `with_addr`, so this context and vt-c's `wrapper_from_handler`
+// are the remaining exposed-provenance sites — NEW-FINDINGS N361.)
 #[derive(Clone, Copy, Default)]
 pub struct SetContext {
     /// The page which holds the strings for items in this set (exposed address).

@@ -1446,9 +1446,10 @@ mod tests {
             // var out_ptr: ?[*]u8 = @ptrFromInt(1); var out_len: usize = 123;
             // PORT NOTE: `@ptrFromInt(1)` is a deliberately non-null sentinel the
             // test asserts `format_alloc` overwrites to null; it is never
-            // dereferenced. `with_exposed_provenance_mut` builds it without the
-            // dangling-pointer lint firing.
-            let mut out_ptr: *mut u8 = std::ptr::with_exposed_provenance_mut(1);
+            // dereferenced. `without_provenance_mut` builds it without the
+            // dangling-pointer lint firing, and without an integer-to-pointer
+            // cast (strict provenance, S7-9).
+            let mut out_ptr: *mut u8 = std::ptr::without_provenance_mut(1);
             let mut out_len: usize = 123;
             // try testing.expectEqual(Result.no_value, format_alloc(t, &test_allocator, .{ .emit = .plain, .unwrap = true, .trim = true }, &out_ptr, &out_len));
             let opts = FormatOptions {

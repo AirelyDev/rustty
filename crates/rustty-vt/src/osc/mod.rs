@@ -2276,8 +2276,7 @@ mod s7_7_tests {
         }
         impl Handler for Titles {
             fn window_title(&mut self, v: WindowTitle) {
-                self.seen
-                    .push((v.title.to_vec(), v.title.as_ptr() as usize));
+                self.seen.push((v.title.to_vec(), v.title.as_ptr().addr()));
             }
         }
 
@@ -2286,7 +2285,10 @@ mod s7_7_tests {
             allocator: Some(crate::alloc::Global),
             continuation_max_bytes: None,
         });
+        // (Compared as addresses, so no integer is cast back to a pointer:
+        // strict provenance, S7-9.)
         let buffer = s.parser.osc_parser.buffer.as_ptr_range();
+        let buffer = buffer.start.addr()..buffer.end.addr();
         // BEL (the bulk fast path), ESC \ (the fast path), and a byte at a
         // time (the action loop).
         s.next_slice(b"\x1b]0;one\x07\x1b]2;two\x1b\\");
@@ -2299,10 +2301,7 @@ mod s7_7_tests {
             seen.iter().map(|(t, _)| t.clone()).collect::<Vec<_>>()
         );
         for (_, addr) in &seen {
-            assert!(
-                buffer.contains(&(*addr as *const u8)),
-                "the handler saw the parser's buffer"
-            );
+            assert!(buffer.contains(addr), "the handler saw the parser's buffer");
         }
         s.deinit();
     }
