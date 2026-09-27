@@ -1510,4 +1510,38 @@ mod tests {
             unsafe { terminal_c::free(t) };
         });
     }
+
+    // Parity tail S7-8b (review F3): the NULL-allocator round trip. The output
+    // is built through the handle's Global arm (`lib.alloc.default(null)`) and
+    // released with `rustty_free(NULL, ..)`, whose default allocator is the same
+    // Rust heap; the lengths and alignment must match (Miri checks the layout).
+    // Also the empty output: the non-null empty sentinel and a no-op free.
+    #[test]
+    fn format_alloc_null_allocator_round_trip() {
+        for (input, expected) in [(&b"Hello"[..], &b"Hello"[..]), (&b""[..], &b""[..])] {
+            with_test_allocator(|calloc| {
+                let (t_new_result, t, f_new_result, f) = setup_plain(
+                    calloc,
+                    input,
+                    plain_extra(),
+                    Format::Plain,
+                    std::ptr::null(),
+                );
+                assert_eq!(Result::Success, t_new_result);
+                assert_eq!(Result::Success, f_new_result);
+                let mut out_ptr: *mut u8 = std::ptr::null_mut();
+                let mut out_len: usize = 99;
+                assert_eq!(Result::Success, unsafe {
+                    format_alloc(f, None, &mut out_ptr, &mut out_len)
+                });
+                assert!(!out_ptr.is_null());
+                assert_eq!(expected, unsafe {
+                    std::slice::from_raw_parts(out_ptr, out_len)
+                });
+                unsafe { crate::allocator::free(None, out_ptr, out_len) };
+                unsafe { free(f) };
+                unsafe { terminal_c::free(t) };
+            });
+        }
+    }
 }
