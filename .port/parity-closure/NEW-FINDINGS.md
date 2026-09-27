@@ -6301,6 +6301,9 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 - **resolution** (task W-2): rustty-vt-c's dev-dependency on rustty-vt enables `test-decommit-sim` (Zig's
   whole-binary `builtin.is_test`), and rustty-vaxis's test alias is `TestTty` on every target, with a Windows
   `TestTty` that ports libvaxis 0.6.0's discarding-writer arm (`tty.zig:814-842`). Both suites pass on Windows.
+  Consequence (review W-2 F7, info): `cargo test -p rustty-vt-c` on macOS/Linux now takes the simulated
+  reclamation too, as the reference's test binary does; the real Darwin/Linux `madvise` paths are exercised only by
+  the bench binary (the reference does not test them either).
 - **state**: CLOSED (task W-2).
 
 ## N347 — under clang-cl, `flag_if_supported` still drops the reference's other `-f` flags (highway, simdutf)
@@ -6331,6 +6334,11 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   131.7 ms before / 130.5 ms after; `--mode=table` (a control without SIMD) 58.8 / 59.3; `+terminal-stream`
   391.9 / 387.7. No difference above the noise. The SIMD, highway and simdutf suites pass on Windows with the
   flags (42 + 18 + 2).
+  NOT CHECKED (review W-2 F6): highway's `-fmerge-all-constants`, `-fno-sanitize=undefined` and
+  `-fno-sanitize-trap=undefined` are still passed BARE through `flag_if_supported`. The measured compile line
+  above does list all three (so clang-cl accepted them there), but whether clang-cl honours or merely tolerates
+  each was not established; confirm with `CC_ENABLE_DEBUG_OUTPUT=1` (and `-###`) on Windows and route any
+  ignored one through `/clang:` (left for W-4/W-3; task W-2b had no Windows host).
 - **state**: CLOSED (task W-2).
 
 ## N350 — three workspace members are excluded from the Windows build, explicitly
@@ -6344,8 +6352,8 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   builds sentry only for Darwin (`build/Config.zig:224-236`). Nothing in the Windows dependency graph reaches them
   (`cargo tree --target x86_64-pc-windows-msvc -i libxml2-sys` / `-i sentry-sys`: roots only).
 - **decision**: every Windows workspace command excludes exactly these three, by name:
-  `--exclude libxml2-sys --exclude fontconfig-sys --exclude sentry-sys` (the CI leg's `WINDOWS_EXCLUDE`, with this
-  reason at the job). `breakpad-sys` builds on Windows as a member (with cl.exe dropping `-std:gnu++17`, N353) and
+  `--exclude libxml2-sys --exclude fontconfig-sys --exclude sentry-sys` (inline on the CI leg's build, clippy and test
+  steps, with this reason at the job; they were a `WINDOWS_EXCLUDE` variable until task W-2b). `breakpad-sys` builds on Windows as a member (with cl.exe dropping `-std:gnu++17`, N353) and
   is not excluded, although the reference does not build it there either.
 - **state**: CLOSED (documented; `.github/workflows/ci.yml` `windows` job).
 
@@ -6432,4 +6440,21 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   passed in the two earlier full runs and 3/3 when `rustty-termio`'s suite ran alone right after. Cause UNVERIFIED:
   the call spawns `cmd.exe` on a fresh ConPTY while the rest of the suite runs in parallel under x64 emulation.
 - **next step**: make the test report which step of `threadEnter` failed, then rerun it under load.
+- **state**: OPEN.
+
+## N355 — a one-off SIGSEGV of `rustty-renderer`'s unit-test binary on macOS
+
+- **id**: N355. Not a ledger row: observed by task W-2 on the Mac.
+- **severity**: unknown. **kind**: crash, unreproduced (cause not traced).
+- **finding**: in round 2 of W-2's three rounds of `cargo test` over the touched crates, `rustty-renderer --lib`
+  died with `signal: 11, SIGSEGV` after `message::change_config_tests::init_change_config_builds_both_derived`
+  printed `ok`. Not reproduced since: 36 runs in W-2 (6 `cargo test`, 30 direct), and 670 in review W-2 (50
+  `cargo test`, 300 serial direct runs, 40 rounds of 8 concurrent copies, one multi-crate round), all green;
+  no crash report in `~/Library/Logs/DiagnosticReports`. W-2 changed no code that compiles into macOS's
+  renderer (its renderer changes are `windows` cfg widenings); it may be pre-existing UB, Metal/driver state,
+  or environmental.
+- **if it recurs**: a signal gives no Rust backtrace (`RUST_BACKTRACE` does not help). Run the binary under a
+  debugger loop until it stops, e.g. `for i in $(seq 1 500); do lldb --batch -o run -k 'thread backtrace all'
+  -k quit <target/debug/deps/rustty_renderer-HASH> || break; done`, and compare `--test-threads=1` runs to
+  separate threading from Metal.
 - **state**: OPEN.
