@@ -34,6 +34,18 @@ const RT_MANIFEST: usize = 24;
 const LOAD_LIBRARY_AS_DATAFILE: u32 = 0x0000_0002;
 const LOAD_LIBRARY_AS_IMAGE_RESOURCE: u32 = 0x0000_0020;
 
+#[link(name = "version")]
+extern "system" {
+    fn GetFileVersionInfoSizeW(name: *const u16, handle: *mut u32) -> u32;
+    fn GetFileVersionInfoW(name: *const u16, handle: u32, len: u32, data: *mut c_void) -> i32;
+    fn VerQueryValueW(
+        block: *const c_void,
+        sub: *const u16,
+        buf: *mut *mut c_void,
+        len: *mut u32,
+    ) -> i32;
+}
+
 #[link(name = "kernel32")]
 extern "system" {
     fn LoadLibraryExW(name: *const u16, file: *mut c_void, flags: u32) -> *mut c_void;
@@ -188,14 +200,18 @@ fn the_exe_carries_the_rc_resources() {
     }
 
     // `VS_VERSION_INFO VERSIONINFO`: the two string values the `.rc` keeps,
-    // UTF-16 in the StringFileInfo block. The `.rc` (the reference's, renamed)
-    // includes no `winver.h` and does not define `VS_VERSION_INFO`, so the
-    // resource compiler names the resource by the STRING `VS_VERSION_INFO`, not
-    // id 1 (MEASURED with rc.exe, task W-2: id 1 is absent; UPSTREAM-DEFECTS
-    // UD331 for what that costs).
+    // UTF-16 in the StringFileInfo block, under id 1 (`#define VS_VERSION_INFO 1`,
+    // the R13 fix of UD331).
+    // CORRECTION (task W-2b, review W-2 F1): this looked the resource up by the
+    // STRING name `VS_VERSION_INFO`, which is what the reference's `.rc` (no
+    // define) produces and why Windows showed no version information.
     let version = res
-        .get_named(RT_VERSION, "VS_VERSION_INFO")
-        .expect("RT_VERSION resource \"VS_VERSION_INFO\" is missing");
+        .get(RT_VERSION, 1)
+        .expect("RT_VERSION resource 1 (VS_VERSION_INFO) is missing");
+    assert!(
+        res.get_named(RT_VERSION, "VS_VERSION_INFO").is_none(),
+        "the version resource is still named by the string VS_VERSION_INFO (UD331)"
+    );
     for (key, value) in [
         ("OriginalFilename", "rustty.exe"),
         ("ProductName", "Rustty"),
@@ -206,4 +222,45 @@ fn the_exe_carries_the_rc_resources() {
             "version info lacks {key} = {value}"
         );
     }
+}
+
+/// What a user sees (UD331, R13): Windows' own version API finds the
+/// `ProductName` the `.rc` declares (`\StringFileInfo\040904b0\ProductName`).
+/// With the reference's `.rc` (no `#define VS_VERSION_INFO 1`) there is none,
+/// as `(Get-Item rustty.exe).VersionInfo.ProductName` was empty (measured, task W-2).
+#[test]
+fn windows_reads_the_product_name() {
+    let wide = |s: &str| s.encode_utf16().chain(Some(0)).collect::<Vec<u16>>();
+    let exe = wide(EXE);
+    let mut handle = 0u32;
+    // SAFETY: `exe` is NUL-terminated; `data` is `size` bytes; `VerQueryValueW`
+    // returns a pointer into `data` and the value's length in characters.
+    let product = unsafe {
+        let size = GetFileVersionInfoSizeW(exe.as_ptr(), &mut handle);
+        assert!(
+            size > 0,
+            "GetFileVersionInfoSizeW: {}",
+            std::io::Error::last_os_error()
+        );
+        let mut data = vec![0u8; size as usize];
+        assert_ne!(
+            0,
+            GetFileVersionInfoW(exe.as_ptr(), 0, size, data.as_mut_ptr().cast()),
+            "GetFileVersionInfoW: {}",
+            std::io::Error::last_os_error()
+        );
+        let sub = wide(r"\StringFileInfo\040904b0\ProductName");
+        let mut buf: *mut c_void = core::ptr::null_mut();
+        let mut len = 0u32;
+        assert_ne!(
+            0,
+            VerQueryValueW(data.as_ptr().cast(), sub.as_ptr(), &mut buf, &mut len),
+            "VerQueryValueW found no ProductName"
+        );
+        let chars = std::slice::from_raw_parts(buf as *const u16, len as usize);
+        String::from_utf16_lossy(chars)
+            .trim_end_matches('\0')
+            .to_string()
+    };
+    assert_eq!("Rustty", product);
 }

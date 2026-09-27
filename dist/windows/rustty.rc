@@ -7,6 +7,12 @@ RT_MANIFEST 24 "rustty.manifest"
 #define ID_ICON_RUSTTY 1
 ID_ICON_RUSTTY ICON "rustty.ico"
 
+// PORT NOTE: reference defect (R13), UD331. The reference's ghostty.rc uses
+// VS_VERSION_INFO without defining it (no winver.h include), so the resource
+// compiler names the version resource by the STRING "VS_VERSION_INFO" and
+// Windows, which looks up id 1, shows no version information. Defined here as
+// the file defines its other two ids (RT_MANIFEST, ID_ICON_RUSTTY).
+#define VS_VERSION_INFO 1
 VS_VERSION_INFO VERSIONINFO
 //FILEVERSION     VERSION_MAJOR,VERSION_MINOR,VERSION_PATCH,VERSION_COMMIT_HEIGHT
 //PRODUCTVERSION  VERSION_MAJOR,VERSION_MINOR,VERSION_PATCH,VERSION_COMMIT_HEIGHT
