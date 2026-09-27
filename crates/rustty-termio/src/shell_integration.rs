@@ -503,7 +503,7 @@ fn setupBash(
                 "unable to open {}: {err:?}",
                 String::from_utf8_lossy(&script_path)
             );
-            env.removev(&env_name("BASH_ENV"));
+            env.swap_remove(&env_name("BASH_ENV"));
             return Ok(None);
         }
     }

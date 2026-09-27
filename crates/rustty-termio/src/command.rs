@@ -2709,6 +2709,34 @@ mod tests {
         }
     }
 
+    /// N384 (task W-5b): the child's `envp` is the map in its iteration order,
+    /// which for the reference's `ArrayHashMap` is insertion order; an updated
+    /// entry keeps its place, `orderedRemove` closes the gap and `swapRemove`
+    /// moves the last entry into it.
+    #[test]
+    fn create_null_delimited_env_map_keeps_the_map_order() {
+        let envp = |m: &EnvMap| -> Vec<Vec<u8>> {
+            let environ = createNullDelimitedEnvMap(m);
+            environ.ptrs[..environ.len()]
+                .iter()
+                .map(|&p| unsafe { CStr::from_ptr(p) }.to_bytes().to_vec())
+                .collect()
+        };
+        let mut m = EnvMap::new();
+        for k in [&b"ZED"[..], b"HOME", b"MID", b"ALPHA", b"TAIL"] {
+            m.put(k, b"1");
+        }
+        m.put(b"HOME", b"2");
+        assert_eq!(
+            envp(&m),
+            [&b"ZED=1"[..], b"HOME=2", b"MID=1", b"ALPHA=1", b"TAIL=1"]
+        );
+        m.removev(b"HOME");
+        assert_eq!(envp(&m), [&b"ZED=1"[..], b"MID=1", b"ALPHA=1", b"TAIL=1"]);
+        m.swap_remove(b"ZED");
+        assert_eq!(envp(&m), [&b"TAIL=1"[..], b"MID=1", b"ALPHA=1"]);
+    }
+
     // test "Command: os pre exec 1" {
     #[test]
     #[cfg_attr(miri, ignore)] // real fork/exec/waitpid syscalls (termio's G6 tool is ASan, not Miri)

@@ -28,3 +28,7 @@ rustty-build-config = { path = "../rustty-build-config" }
 # setrlimit syscall directly (rustty-os sits ABOVE this leaf, so the one-line
 # syscall body is mirrored here rather than imported — R4 acyclic).
 libc = "0.2"
+# `std.process.Environ.Map` is an `ArrayHashMap` (insertion-ordered, with
+# `swapRemove`/`orderedRemove`); `EnvMap` keeps that order on an `IndexMap`
+# (N384). A pure-Rust map crate, already in the workspace graph (rustty-crash).
+indexmap = "2"

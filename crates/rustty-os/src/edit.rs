@@ -92,14 +92,15 @@ fn getConfigEditCommandEnviron(
         //
         // PORT NOTE: the reference's `v:`/`e:` labeled blocks probe with the
         // runtime `environ().containsUnempty(alloc, key)` (map-based, present +
-        // non-empty), then read the value with `getAlloc` (a `getPosix` copy),
-        // `catch break :<label>` on any error. In rustty `containsUnempty`
-        // maps to `contains_unempty_constant` (both the map and `getPosix` are
-        // first-entry-wins here, so the result is byte-identical on POSIX for a
-        // literal key), and the copy is `get_alloc`; neither can error, so the
+        // non-empty), then read the value with `getAlloc` (also map-based),
+        // `catch break :<label>` on any error. Both read `createMap`, so of two
+        // same-named entries the LAST decides; neither can error here, so the
         // `catch break` fall-through is expressed as `if let Some(..)`.
+        // CORRECTION (N381, task W-5b): the probe was
+        // `contains_unempty_constant` (the first entry), on the claim that the
+        // map was first-entry-wins too; Zig's map keeps the last entry.
         {
-            if environ.contains_unempty_constant(b"VISUAL") {
+            if environ.contains_unempty(b"VISUAL") {
                 if let Some(v) = environ.get_alloc(b"VISUAL") {
                     break 'editor v;
                 }
@@ -107,7 +108,7 @@ fn getConfigEditCommandEnviron(
         }
 
         {
-            if environ.contains_unempty_constant(b"EDITOR") {
+            if environ.contains_unempty(b"EDITOR") {
                 if let Some(v) = environ.get_alloc(b"EDITOR") {
                     break 'editor v;
                 }
@@ -202,6 +203,21 @@ mod tests {
         // containsUnempty requires a NON-empty value, so an empty VISUAL is
         // skipped in favor of EDITOR.
         let e = env(&[("VISUAL", ""), ("EDITOR", "vim")]);
+        let r = getConfigEditCommandEnviron(&e, b"/tmp/config", &Options::default()).unwrap();
+        assert_eq!(b"vim /tmp/config".as_slice(), cmd(&r));
+    }
+
+    /// N381: `containsUnempty` and `getAlloc` both read `createMap`, where the
+    /// LAST of two same-named entries wins: an empty first `VISUAL` followed by
+    /// a set one selects it; a set first `VISUAL` followed by an empty one falls
+    /// through to `EDITOR`.
+    #[test]
+    fn duplicate_visual_entries_use_the_last_one() {
+        let e = env(&[("VISUAL", ""), ("VISUAL", "nvim"), ("EDITOR", "vim")]);
+        let r = getConfigEditCommandEnviron(&e, b"/tmp/config", &Options::default()).unwrap();
+        assert_eq!(b"nvim /tmp/config".as_slice(), cmd(&r));
+
+        let e = env(&[("VISUAL", "nvim"), ("VISUAL", ""), ("EDITOR", "vim")]);
         let r = getConfigEditCommandEnviron(&e, b"/tmp/config", &Options::default()).unwrap();
         assert_eq!(b"vim /tmp/config".as_slice(), cmd(&r));
     }

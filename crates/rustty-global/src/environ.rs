@@ -55,20 +55,25 @@
 //! (`std.testing.environ`) is, and it keeps `#[test]` code and library
 //! consumers working without an initialized global.
 
-use std::collections::HashMap;
+use indexmap::map::MutableKeys as _;
+use indexmap::{Equivalent, IndexMap};
 use std::ffi::{OsStr, OsString};
 use std::sync::{OnceLock, RwLock, RwLockReadGuard};
 
 /// PORT NOTE: `std.process.Environ.Map` — the owned key/value map built off the
 /// captured block. Byte-typed for the same reason `Environ` is.
 ///
-/// Upstream's `Map` is an `ArrayHashMap`, so it has `swapRemove`/`orderedRemove`
-/// (`shell_integration.zig` uses `swapRemove` for `GHOSTTY_BASH_ENV` and
-/// `orderedRemove` for `VTE_VERSION`/`LD_LIBRARY_PATH`). The distinction is
-/// **not observable**: the map is only ever iterated to build `envp`, where
-/// order is unspecified. rustty's map is backed by a `HashMap`, which has a
-/// single `remove`, so there is no ordered/unordered choice to mirror —
-/// recorded here rather than silently dropped.
+/// Upstream's `Map` is an `ArrayHashMap`: it iterates in INSERTION order, and
+/// that order is observable, because `Command` builds the child's `envp` by
+/// iterating the map (`createNullDelimitedEnvMap`), so a child sees its
+/// `environ` in that order. The port keeps it (an `IndexMap`): `put`
+/// appends a new name and leaves an existing one where it is, `putMove` too,
+/// `orderedRemove` ([`EnvMap::remove`]) shifts the later entries down and
+/// `swapRemove` ([`EnvMap::swap_remove`]) moves the last entry into the hole.
+/// The reference uses `swapRemove` for `GHOSTTY_BASH_ENV`
+/// (`shell_integration.zig:382`) and `orderedRemove` everywhere else.
+/// CORRECTION (N384, task W-5b): this was a `HashMap` with a random iteration
+/// order and one `remove`, and the note said the order was not observable.
 ///
 /// PORT NOTE (N340, task W-5): the key comparison is the reference map's
 /// `EnvNameHashContext` (`std/process/Environ.zig:107-142`): byte equality
@@ -81,15 +86,19 @@ use std::sync::{OnceLock, RwLock, RwLockReadGuard};
 ///
 /// `insert` is the reference's `put`: an existing entry keeps its key spelling
 /// and takes the new value. [`EnvMap::put_move`] is `putMove`, which also
-/// replaces the stored key (what `putWindowsBlock` uses).
+/// replaces the stored key (what `putWindowsBlock` uses). Lookups take a
+/// borrowed key and do not allocate.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct EnvMap {
-    map: HashMap<EnvKey, Vec<u8>>,
+    map: IndexMap<EnvKey, Vec<u8>>,
 }
 
 /// A key of [`EnvMap`], compared as the reference's `EnvNameHashContext` does.
 #[derive(Clone, Debug)]
 struct EnvKey(Vec<u8>);
+
+/// A borrowed [`EnvKey`] for lookups: the same hash and the same comparison.
+struct EnvKeyRef<'a>(&'a [u8]);
 
 impl PartialEq for EnvKey {
     fn eq(&self, other: &Self) -> bool {
@@ -101,39 +110,56 @@ impl Eq for EnvKey {}
 
 impl std::hash::Hash for EnvKey {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        // pub fn hash(self: @This(), s: []const u8) u32 {
-        //     switch (native_os) {
-        //         else => return std.array_hash_map.hashString(s),
-        //         .windows => {
-        //             var h = std.hash.Wyhash.init(0);
-        //             var it = unicode.Wtf8View.initUnchecked(s).iterator();
-        //             while (it.nextCodepoint()) |cp| {
-        //                 const cp_upper = if (std.math.cast(u16, cp)) |wtf16|
-        //                     std.os.windows.toUpperWtf16(wtf16)
-        //                 else
-        //                     cp;
-        //                 h.update(&[_]u8{ ... cp_upper's three low bytes ... });
-        //             }
-        //             return @truncate(h.final());
-        //         },
-        //     }
-        // }
-        // PORT NOTE: the hasher is Rust's; only the hash/equality agreement is
-        // load-bearing, and both folds are the reference's.
-        #[cfg(windows)]
-        {
-            for cp in wtf8_code_points(&self.0) {
-                let cp_upper = match u16::try_from(cp) {
-                    Ok(wtf16) => u32::from(to_upper_wtf16(wtf16)),
-                    Err(_) => cp,
-                };
-                state.write_u32(cp_upper);
-            }
+        hash_key(&self.0, state);
+    }
+}
+
+impl std::hash::Hash for EnvKeyRef<'_> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        hash_key(self.0, state);
+    }
+}
+
+impl Equivalent<EnvKey> for EnvKeyRef<'_> {
+    fn equivalent(&self, key: &EnvKey) -> bool {
+        eql_keys(self.0, &key.0)
+    }
+}
+
+/// `EnvNameHashContext.hash` (`std/process/Environ.zig:108-129`).
+fn hash_key<H: std::hash::Hasher>(s: &[u8], state: &mut H) {
+    // pub fn hash(self: @This(), s: []const u8) u32 {
+    //     switch (native_os) {
+    //         else => return std.array_hash_map.hashString(s),
+    //         .windows => {
+    //             var h = std.hash.Wyhash.init(0);
+    //             var it = unicode.Wtf8View.initUnchecked(s).iterator();
+    //             while (it.nextCodepoint()) |cp| {
+    //                 const cp_upper = if (std.math.cast(u16, cp)) |wtf16|
+    //                     std.os.windows.toUpperWtf16(wtf16)
+    //                 else
+    //                     cp;
+    //                 h.update(&[_]u8{ ... cp_upper's three low bytes ... });
+    //             }
+    //             return @truncate(h.final());
+    //         },
+    //     }
+    // }
+    // PORT NOTE: the hasher is Rust's; only the hash/equality agreement is
+    // load-bearing, and both folds are the reference's.
+    #[cfg(windows)]
+    {
+        for cp in wtf8_code_points(s) {
+            let cp_upper = match u16::try_from(cp) {
+                Ok(wtf16) => u32::from(to_upper_wtf16(wtf16)),
+                Err(_) => cp,
+            };
+            state.write_u32(cp_upper);
         }
-        #[cfg(not(windows))]
-        {
-            std::hash::Hash::hash(&self.0, state);
-        }
+    }
+    #[cfg(not(windows))]
+    {
+        std::hash::Hash::hash(s, state);
     }
 }
 
@@ -264,46 +290,56 @@ impl EnvMap {
     #[must_use]
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
-            map: HashMap::with_capacity(capacity),
+            map: IndexMap::with_capacity(capacity),
         }
     }
 
     /// `pub fn put(self: *Map, key, value)`: `key` and `value` are copied into
-    /// the map; an existing entry keeps its key and takes the new value.
-    /// Returns the replaced value.
+    /// the map; an existing entry keeps its key and its position and takes the
+    /// new value, a new one is appended. Returns the replaced value.
     pub fn insert(&mut self, key: Vec<u8>, value: Vec<u8>) -> Option<Vec<u8>> {
         self.map.insert(EnvKey(key), value)
     }
 
     /// `pub fn putMove(self: *Map, key, value)`: like [`EnvMap::insert`], but an
-    /// existing entry's key is replaced by `key` too.
+    /// existing entry's key is replaced by `key` too (in place: `getOrPut` then
+    /// `key_ptr.* = key`, so the entry keeps its position).
     pub fn put_move(&mut self, key: Vec<u8>, value: Vec<u8>) {
-        let key = EnvKey(key);
-        self.map.remove(&key);
-        self.map.insert(key, value);
+        if let Some((_, k, v)) = self.map.get_full_mut2(&EnvKeyRef(&key)) {
+            *k = EnvKey(key);
+            *v = value;
+        } else {
+            self.map.insert(EnvKey(key), value);
+        }
     }
 
     /// `pub fn get(self: Map, key) ?[]const u8`.
     #[must_use]
     pub fn get<K: AsRef<[u8]> + ?Sized>(&self, key: &K) -> Option<&Vec<u8>> {
-        self.map.get(&EnvKey(key.as_ref().to_vec()))
+        self.map.get(&EnvKeyRef(key.as_ref()))
     }
 
     /// `pub fn getPtr(self: Map, key) ?*[]const u8`.
     pub fn get_mut<K: AsRef<[u8]> + ?Sized>(&mut self, key: &K) -> Option<&mut Vec<u8>> {
-        self.map.get_mut(&EnvKey(key.as_ref().to_vec()))
+        self.map.get_mut(&EnvKeyRef(key.as_ref()))
     }
 
     /// `pub fn contains(m: *const Map, key) bool`.
     #[must_use]
     pub fn contains_key<K: AsRef<[u8]> + ?Sized>(&self, key: &K) -> bool {
-        self.map.contains_key(&EnvKey(key.as_ref().to_vec()))
+        self.map.contains_key(&EnvKeyRef(key.as_ref()))
     }
 
-    /// `swapRemove`/`orderedRemove` (see the type's PORT NOTE). Returns the
-    /// removed value.
+    /// `pub fn orderedRemove(self: *Map, key) bool`: the later entries move
+    /// down one place. Returns the removed value.
     pub fn remove<K: AsRef<[u8]> + ?Sized>(&mut self, key: &K) -> Option<Vec<u8>> {
-        self.map.remove(&EnvKey(key.as_ref().to_vec()))
+        self.map.shift_remove(&EnvKeyRef(key.as_ref()))
+    }
+
+    /// `pub fn swapRemove(self: *Map, key) bool`: the last entry takes the
+    /// removed one's place. Returns the removed value.
+    pub fn swap_remove<K: AsRef<[u8]> + ?Sized>(&mut self, key: &K) -> Option<Vec<u8>> {
+        self.map.swap_remove(&EnvKeyRef(key.as_ref()))
     }
 
     /// `pub fn count(self: Map) Size`.
@@ -318,7 +354,8 @@ impl EnvMap {
         self.map.is_empty()
     }
 
-    /// `pub fn iterator(self: *const Map)`: every entry, with its stored key.
+    /// `pub fn iterator(self: *const Map)`: every entry, with its stored key,
+    /// in the map's order (see the type's PORT NOTE).
     pub fn iter(&self) -> impl Iterator<Item = (&Vec<u8>, &Vec<u8>)> + '_ {
         self.map.iter().map(|(k, v)| (&k.0, v))
     }
@@ -374,9 +411,9 @@ impl<const N: usize> From<[(Vec<u8>, Vec<u8>); N]> for EnvMap {
 
 /// PORT NOTE (P3-W7 T2): `std.process.EnvMap`'s own API is
 /// `put(key, value)` / `get(key)` / `remove(key)` / `getPtr(key)` over
-/// `[]const u8`, i.e. byte slices. rustty's `EnvMap` is a plain `HashMap`, whose
-/// inherent `insert`/`get`/`remove` want owned `Vec<u8>` keys and `Borrow`ed
-/// lookups. This extension trait restores the reference's own spelling AND
+/// `[]const u8`, i.e. byte slices. rustty's `EnvMap` (once a plain `HashMap`,
+/// whose inherent `insert` wants owned `Vec<u8>` keys) spells them
+/// `insert`/`get`/`remove`. This extension trait restores the reference's own spelling AND
 /// keeps every call site byte-typed, so a non-UTF-8 key or value round-trips
 /// instead of panicking (the defect this task removes).
 pub trait EnvMapExt {
@@ -384,10 +421,9 @@ pub trait EnvMapExt {
     fn put(&mut self, key: &[u8], value: &[u8]);
     /// PORT NOTE: `env.get(key)`.
     fn getv(&self, key: &[u8]) -> Option<&[u8]>;
-    /// PORT NOTE: `env.remove(key)`. Upstream's `Map` is an array hash map, so
-    /// it spells this `orderedRemove`/`swapRemove`; the map is only ever
-    /// iterated to build `envp`, where order is unspecified, so the
-    /// distinction is not observable and a `HashMap` has only the one removal.
+    /// PORT NOTE: `_ = env.orderedRemove(key)`. The one `swapRemove` caller
+    /// uses [`EnvMap::swap_remove`] (see the type's PORT NOTE). CORRECTION
+    /// (N384, task W-5b): this said the order was not observable.
     fn removev(&mut self, key: &[u8]);
     /// PORT NOTE: `env.get(key) != null`.
     fn hasv(&self, key: &[u8]) -> bool;
@@ -561,20 +597,33 @@ impl Environ {
     /// `error.EnvironmentVariableMissing` when absent; Rust's `Option` carries
     /// that.
     ///
-    /// On Windows this is the reference's body: `createMap` (a live read) and a
-    /// case-insensitive `map.get(key)`. On POSIX it is `getPosix`.
+    /// The reference's body on every target (`std/process/Environ.zig:689-695`):
+    /// `createMap` and `map.get(key)`, so of two entries with the same name the
+    /// LAST one is returned (`createMap` `put`s each entry), where `getPosix`
+    /// returns the first. CORRECTION (N381, task W-5b): the POSIX arm was
+    /// `getPosix`, the first entry.
     #[must_use]
     pub fn get_alloc(&self, key: &[u8]) -> Option<Vec<u8>> {
-        #[cfg(windows)]
-        {
-            // var map = createMap(environ, gpa) catch return error.OutOfMemory;
-            // const val = map.get(key) orelse return error.EnvironmentVariableMissing;
-            self.create_map().get(key).cloned()
-        }
-        #[cfg(not(windows))]
-        {
-            self.get_posix(key).map(<[u8]>::to_vec)
-        }
+        // var map = createMap(environ, gpa) catch return error.OutOfMemory;
+        // const val = map.get(key) orelse return error.EnvironmentVariableMissing;
+        self.create_map().get(key).cloned()
+    }
+
+    /// PORT NOTE: `pub fn contains(environ: Environ, gpa, key) ContainsError!bool`
+    /// (`std/process/Environ.zig:540-545`): `createMap` then `map.contains(key)`.
+    /// Zig's `error.InvalidWtf8` (Windows, an invalid key) reads as absent.
+    #[must_use]
+    pub fn contains(&self, key: &[u8]) -> bool {
+        self.create_map().contains_key(key)
+    }
+
+    /// PORT NOTE: `pub fn containsUnempty(environ: Environ, gpa, key)
+    /// ContainsError!bool` (`std/process/Environ.zig:554-560`): through
+    /// `createMap`, so the LAST of two same-named entries decides, where
+    /// [`Environ::contains_unempty_constant`] (`getPosix`) takes the first.
+    #[must_use]
+    pub fn contains_unempty(&self, key: &[u8]) -> bool {
+        self.create_map().get(key).is_some_and(|v| !v.is_empty())
     }
 
     /// PORT NOTE: `pub inline fn containsConstant(self: Environ, comptime key)
@@ -648,15 +697,18 @@ impl Environ {
         }
         #[cfg(not(windows))]
         {
+            // `putPosixBlock` (`std/process/Environ.zig:184-196`): `map.put`
+            // for every entry, so a later entry with the same name replaces the
+            // value (the first entry's key and position stay; `:256-271`).
+            // CORRECTION (N381, task W-5b): the first entry won here.
             let mut map = EnvMap::with_capacity(self.entries.len());
             for entry in &self.entries {
+                // PORT NOTE: an entry with no `=` never comes from a real
+                // `environ`; the port skips it (unchanged).
                 let Some(eq) = entry.iter().position(|&b| b == b'=') else {
                     continue;
                 };
-                // First entry wins, matching `getPosix`/`getenv(3)`.
-                if !map.contains_key(&entry[..eq]) {
-                    map.insert(entry[..eq].to_vec(), entry[eq + 1..].to_vec());
-                }
+                map.insert(entry[..eq].to_vec(), entry[eq + 1..].to_vec());
             }
             map
         }
@@ -1000,15 +1052,27 @@ mod tests {
     // POSIX only: `getPosix` does not exist on Windows, and there `createMap`
     // is `putWindowsBlock` (`putMove`: the last entry wins), which
     // `windows_create_map_puts_move_the_later_entry` covers.
+    //
+    // N381 (task W-5b): of two entries with the same name `getPosix` (and so
+    // `containsConstant`/`containsUnemptyConstant`) takes the FIRST, and
+    // `createMap` (and so `getAlloc`/`contains`/`containsUnempty`) the LAST, as
+    // Zig 0.16's `putPosixBlock` `put`s every entry. CORRECTION: this test was
+    // `environ_first_entry_wins` and asserted `create_map` kept the first.
     #[test]
     #[cfg(not(windows))]
-    fn environ_first_entry_wins() {
-        let e = Environ::from_entries(vec![b"K=first".to_vec(), b"K=second".to_vec()]);
+    fn environ_get_posix_takes_the_first_duplicate_and_the_map_the_last() {
+        let e = Environ::from_entries(vec![
+            b"K=first".to_vec(),
+            b"A=1".to_vec(),
+            b"K=second".to_vec(),
+        ]);
         assert_eq!(e.get_posix(b"K"), Some(&b"first"[..]));
-        assert_eq!(
-            e.create_map().get(&b"K"[..]).map(Vec::as_slice),
-            Some(&b"first"[..])
-        );
+        assert_eq!(e.get_alloc(b"K"), Some(b"second".to_vec()));
+        let map = e.create_map();
+        assert_eq!(map.get(b"K").map(Vec::as_slice), Some(&b"second"[..]));
+        // `put` keeps the first entry's position.
+        let keys: Vec<&[u8]> = map.keys().map(Vec::as_slice).collect();
+        assert_eq!(keys, [&b"K"[..], &b"A"[..]]);
     }
 
     /// `containsUnemptyConstant` is NOT a bare presence check: upstream's two
@@ -1047,6 +1111,21 @@ mod tests {
     /// Both predicates read the SAME block `get_posix` does, so the
     /// first-entry-wins rule (`getenv(3)`) applies to them too: a later
     /// non-empty `K=` cannot resurrect an earlier empty one.
+    /// N381: the map-based `containsUnempty` reads the LAST entry, so a later
+    /// non-empty `K=later` makes it true where `containsUnemptyConstant` (the
+    /// first entry: `getPosix` on POSIX, `getWindows` on Windows) is false.
+    #[test]
+    fn environ_contains_unempty_reads_the_last_entry() {
+        let e = Environ::from_entries(vec![b"K=".to_vec(), b"K=later".to_vec()]);
+        assert!(e.contains(b"K"));
+        assert!(e.contains_unempty(b"K"));
+        assert!(!e.contains_unempty_constant(b"K"));
+        let e = Environ::from_entries(vec![b"K=first".to_vec(), b"K=".to_vec()]);
+        assert!(!e.contains_unempty(b"K"));
+        assert!(e.contains_unempty_constant(b"K"));
+        assert!(!e.contains(b"MISSING"));
+    }
+
     #[test]
     fn environ_contains_unempty_constant_respects_first_entry_wins() {
         let e = Environ::from_entries(vec![b"K=".to_vec(), b"K=later".to_vec()]);
@@ -1240,5 +1319,33 @@ mod tests {
         assert_eq!(Environ::default(), Environ::from_entries(Vec::new()));
         assert!(!Environ::default().use_global);
         assert!(Environ::default().create_map().is_empty());
+    }
+
+    /// N384 (task W-5b): `EnvMap` iterates like the reference's `ArrayHashMap`:
+    /// insertion order; `put` and `putMove` on an existing name keep its
+    /// position; `orderedRemove` shifts the later entries; `swapRemove` moves
+    /// the last entry into the hole. `createMap` keeps the block's order.
+    #[test]
+    fn env_map_keeps_the_array_hash_map_order() {
+        fn keys(m: &EnvMap) -> Vec<&[u8]> {
+            m.keys().map(Vec::as_slice).collect()
+        }
+        let mut m = EnvMap::new();
+        for k in [&b"Z"[..], b"B", b"M", b"A", b"T"] {
+            m.insert(k.to_vec(), b"1".to_vec());
+        }
+        assert_eq!(keys(&m), [&b"Z"[..], b"B", b"M", b"A", b"T"]);
+        m.insert(b"B".to_vec(), b"2".to_vec());
+        m.put_move(b"M".to_vec(), b"3".to_vec());
+        assert_eq!(keys(&m), [&b"Z"[..], b"B", b"M", b"A", b"T"]);
+        assert_eq!(m.get(b"M").map(Vec::as_slice), Some(&b"3"[..]));
+        assert_eq!(m.remove(b"B"), Some(b"2".to_vec()));
+        assert_eq!(keys(&m), [&b"Z"[..], b"M", b"A", b"T"]);
+        assert_eq!(m.swap_remove(b"Z"), Some(b"1".to_vec()));
+        assert_eq!(keys(&m), [&b"T"[..], b"M", b"A"]);
+        assert_eq!(m.remove(b"missing"), None);
+
+        let e = Environ::from_entries(vec![b"Q=1".to_vec(), b"C=2".to_vec(), b"X=3".to_vec()]);
+        assert_eq!(keys(&e.create_map()), [&b"Q"[..], b"C", b"X"]);
     }
 }

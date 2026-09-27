@@ -1488,6 +1488,7 @@ dependencies = [
 name = "rustty-global"
 version = "0.1.0"
 dependencies = [
+ "indexmap",
  "libc",
  "rustty-build-config",
 ]
