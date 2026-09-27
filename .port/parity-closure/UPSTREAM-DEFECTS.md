@@ -2667,17 +2667,17 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - upstream status: not reported
 
 ### UD345 — `.envrc` watches `nix/wraptest.nix`, which does not exist (the file is `nix/pkgs/wraptest.nix`)
-- kind:            latent
+- kind:            non-crash (evident intent broken): developer environment only
 - upstream project: ghostty
-- severity:        low (latent; developer tooling only)
+- severity:        low (developer tooling only; no product artifact is affected)
 - reference:       `.envrc:4` `watch_file nix/{devShell,package,wraptest}.nix`, at 20abdb50a. The derivation lives at `nix/pkgs/wraptest.nix` (`flake.nix` calls `./nix/pkgs/wraptest.nix`); there is no `nix/wraptest.nix`.
 - defect:          direnv is told to re-evaluate the dev shell when `nix/wraptest.nix` changes, a path that does not exist, so an edit to the real `nix/pkgs/wraptest.nix` (which the dev shell consumes) does not reload it.
 - ReleaseSafe:     n/a (not part of any build artifact).
 - ReleaseFast:     n/a.
 - reachability:    a developer using direnv who edits `nix/pkgs/wraptest.nix` keeps a stale shell until something else triggers a reload.
-- port handling:   ported verbatim (`.envrc` is byte-identical to the reference after parity tail P-1): no behaviour of any artifact changes, and the intent (which of the three paths was meant) is evident but the effect is confined to a developer convenience, so it is recorded rather than fixed. Not listed in `docs/ghostty-bug-fixes.md`.
+- port handling:   fixed (R13, evident intent; controller ruling, task P-1b): `.envrc` watches `nix/{devShell,package}.nix nix/pkgs/wraptest.nix` (PORT NOTE: reference defect (R13, UD345) at the line). P-1 first recorded it as "ported verbatim, developer convenience"; review P-1 F5 noted R13 has no such exemption. Listed in `docs/ghostty-bug-fixes.md`.
 - parity row(s):   none; found by parity tail P-1 (packaging parity). NEW-FINDINGS N375.
-- test:            none (no behaviour change). Verify with `ls nix/wraptest.nix` (absent) and `ls nix/pkgs/wraptest.nix` (present) in the reference.
+- test:            none automated (direnv is not part of any gate). Verified by inspection: `ls nix/wraptest.nix` is absent and `ls nix/pkgs/wraptest.nix` present in both trees; every path the fixed `watch_file` names exists in rustty (`nix/devShell.nix`, `nix/package.nix`, `nix/pkgs/wraptest.nix`). UNVERIFIED under direnv itself (no Nix/direnv on the verification hosts, V24).
 - proposed fix:    `watch_file nix/{devShell,package}.nix nix/pkgs/wraptest.nix`.
 - upstream status: not reported
 
