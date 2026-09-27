@@ -16719,6 +16719,8 @@ mod paste_event_mutex_tests {
         let w = SendPtr(wakeup);
         let done = Arc::new(AtomicBool::new(false));
         let done2 = done.clone();
+        let notified = Arc::new(AtomicBool::new(false));
+        let notified2 = notified.clone();
         let drainer = std::thread::spawn(move || {
             let (q, m, w) = (q, m, w);
             let mut loop_ = rustty_xev::Loop::init(rustty_xev::Options::default()).unwrap();
@@ -16773,7 +16775,6 @@ mod paste_event_mutex_tests {
             while ran.is_ok() && !woke && !timed_out {
                 ran = loop_.run(rustty_xev::RunMode::Once);
             }
-            loop_.deinit();
             let woke = woke && ran.is_ok();
 
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
@@ -16801,6 +16802,18 @@ mod paste_event_mutex_tests {
                 }
                 std::thread::yield_now();
             }
+            // N382 (task W-5b): on IOCP the Async keeps pointing at `c_wait`
+            // and `loop_` after its wait completed (libxev `AsyncIOCP` sets
+            // `waiter` in `wait` and reads it in every `notify`), and the main
+            // thread notifies once more after the paste. Both live on this
+            // thread's stack, so they must outlive that last notify: wait for
+            // it before deinitializing the loop and returning. CORRECTION:
+            // the loop was deinitialized right after `run`, and a notify after
+            // this thread exited read its freed stack (0xC0000005 on Windows).
+            while !notified2.load(Ordering::SeqCst) {
+                std::thread::yield_now();
+            }
+            loop_.deinit();
             (woke, timed_out, took_mutex_while_parked, event)
         });
 
@@ -16812,6 +16825,8 @@ mod paste_event_mutex_tests {
         // waiting for the wakeup; release it so the test fails instead of
         // hanging.
         let _ = unsafe { (*wakeup).notify() };
+        // The drainer's loop and wait completion may be released now (N382).
+        notified.store(true, Ordering::SeqCst);
         let (woke, timed_out, took_mutex_while_parked, event) = drainer.join().expect("drainer");
         let unlocked_after = unsafe { (*renderer_mutex).try_lock() };
 
