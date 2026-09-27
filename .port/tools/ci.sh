@@ -1099,6 +1099,12 @@ GATE_REGISTRY=(
   # a test configuration. PROGRESS on first landing per the bedding-in
   # convention; a genuine drift RED is escalated by run_gate's
   # PROGRESS-went-RED branch.
+  # G-VTFEAT-SELF (parity tail P-1b): the BLOCKED arms (pin missing, oracle
+  # absent / not a repository / nested in another repository / off the pin /
+  # dirty) run against fixture oracles and must exit 3; a clean pinned fixture
+  # must pass the check. Needs no oracle, so it is real evidence on CI, where
+  # G-VTFEAT itself reports BLOCKED (no oracle checkout there).
+  "G-VTFEAT-SELF|HARD|python3 $GATES/check_vt_features.py --self-test"
   "G-VTFEAT|PROGRESS|python3 $GATES/check_vt_features.py"
   # G-ABISCHEMA (P4-W5 Bundle T, oracle c75559589) — the librustty-vt ABI type
   # manifest (`rustty_type_json`) validates against its checked-in JSON Schema

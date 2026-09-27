@@ -37,6 +37,7 @@ BUILD configuration, not a test configuration; adding guards the oracle lacks
 would be an R1 divergence.
 """
 
+import os
 import re
 import subprocess
 import sys
@@ -202,31 +203,176 @@ def exported_symbols():
     return set(re.findall(r"\s(rustty_[a-z0-9_]+)$", out, re.M))
 
 
-print("G-VTFEAT: -Dvt-features parity")
-print(f"  oracle: {ORACLE}")
+def oracle_check():
+    """None when the oracle is the pinned reference, else the BLOCKED reason.
 
-
-def require_oracle():
-    """`_gatelib.oracle_root`'s contract: a missing or off-pin oracle is BLOCKED
+    `_gatelib.oracle_root`'s contract: a missing or off-pin oracle is BLOCKED
     (exit 3), never a pass and never a crash. Before parity tail P-1 this gate
     read the oracle unguarded, so on a host without the checkout (every CI leg)
     the uncaught FileNotFoundError exited 1, which ci.sh counts as a RED
-    regression of a PROGRESS gate."""
+    regression of a PROGRESS gate. The checks are G-REFGEOM's (`oracle_check`
+    in check_ref_item_geometry.py): every git read goes through
+    `G.oracle_git` (`GIT_*` stripped); a git that cannot run or exits non-zero
+    is BLOCKED; `--show-toplevel` rejects a directory that is not a repository
+    of its own (git would otherwise answer from an enclosing repository); and
+    the tracked tree must be clean, because this gate reads the oracle's
+    WORKING TREE, not `git show <pin>:`."""
     pin = G.oracle_pin()
     if pin is None:
-        print("G-VTFEAT BLOCKED: .port/tools/gates/ORACLE_PIN is missing or malformed")
-        sys.exit(3)
+        return (f"the oracle pin file {G.ORACLE_PIN_FILE} is missing or not a "
+                "40-hex commit, so the oracle's commit cannot be checked")
     if not (ORACLE / "src" / "lib_vt.zig").is_file():
-        print(f"G-VTFEAT BLOCKED: the ghostty oracle checkout is absent ({ORACLE})")
-        sys.exit(3)
-    head = G.oracle_git(str(ORACLE), "rev-parse", "HEAD", text=True)
-    if head.returncode != 0 or head.stdout.strip() != pin:
-        print(f"G-VTFEAT BLOCKED: the oracle is not at the pin {pin} "
-              f"(HEAD {head.stdout.strip() or '?'})")
-        sys.exit(3)
+        return f"the ghostty oracle checkout is absent ({ORACLE})"
+    try:
+        r = G.oracle_git(str(ORACLE), "rev-parse", "--show-toplevel", "HEAD", text=True)
+    except OSError as exc:
+        return f"git could not run on the oracle at {ORACLE} ({exc})"
+    if r.returncode != 0:
+        return (f"the oracle at {ORACLE} is not a git repository "
+                f"(rev-parse exit {r.returncode}: {r.stderr.strip()})")
+    out = r.stdout.split()
+    if len(out) != 2:
+        return f"rev-parse gave an unexpected answer for the oracle: {r.stdout!r}"
+    top, head = out
+    if os.path.realpath(top) != os.path.realpath(ORACLE):
+        return (f"the oracle at {ORACLE} is not the top level of its own "
+                f"repository (git answered from {top})")
+    if head != pin:
+        return f"the oracle is at {head}, not the pin {pin}"
+    try:
+        r = G.oracle_git(str(ORACLE), "status", "--porcelain", "--untracked-files=no", text=True)
+    except OSError as exc:
+        return f"git could not run on the oracle at {ORACLE} ({exc})"
+    if r.returncode != 0:
+        return (f"status failed on the oracle at {ORACLE} "
+                f"(exit {r.returncode}: {r.stderr.strip()})")
+    modified = [line for line in r.stdout.splitlines() if line.strip()]
+    if modified:
+        return ("the oracle has modified files, so it is not the pinned reference:\n  "
+                + "\n  ".join(modified[:10]))
+    return None
 
 
-require_oracle()
+def self_test():
+    """Run COPIES of this gate against fixture oracles and assert each
+    BLOCKED arm exits 3 and a clean pinned oracle passes the check.
+
+    Layout: `<tmp>/rustty` is a git repository holding a copy of this gate,
+    `_gatelib.py` and a fixture `ORACLE_PIN`, so `_gatelib.oracle_root`
+    resolves the oracle to `<tmp>/ghostty` exactly as it does for the real
+    checkout. The positive arm runs the copy with `--check-oracle-only`, which
+    stops after the oracle check (the build matrix needs the real workspace)."""
+    import shutil
+    import tempfile
+
+    print("=== G-VTFEAT SELF-TEST ===")
+    ok = True
+
+    def case(name, good, detail=""):
+        nonlocal ok
+        if not good:
+            ok = False
+        print(f"  [{'ok ' if good else 'FAIL'}] {name}"
+              + (f"\n         ({detail})" if detail and not good else ""))
+
+    env = G.git_env()
+    cfg = ["-c", "user.name=selftest", "-c", "user.email=selftest@invalid",
+           "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null",
+           "-c", "init.defaultBranch=main"]
+
+    def git(where, *args):
+        return subprocess.run(["git", *cfg, *args], cwd=where, env=env,
+                              capture_output=True, text=True, check=True).stdout.strip()
+
+    base = os.path.realpath(tempfile.mkdtemp(prefix="gvtfeat_selftest_"))
+    try:
+        co = os.path.join(base, "rustty")
+        gates = os.path.join(co, ".port", "tools", "gates")
+        oracle = os.path.join(base, "ghostty")
+        os.makedirs(gates)
+        for f in ("check_vt_features.py", "_gatelib.py"):
+            shutil.copy(os.path.join(os.path.dirname(os.path.abspath(__file__)), f), gates)
+        git(co, "init", "-q")
+        git(co, "commit", "-q", "--allow-empty", "-m", "fixture")
+        pin_file = os.path.join(gates, "ORACLE_PIN")
+
+        def run_copy():
+            r = subprocess.run([sys.executable, os.path.join(gates, "check_vt_features.py"),
+                                "--check-oracle-only"], env=env, cwd=base,
+                               capture_output=True, text=True)
+            return r.returncode, r.stdout + r.stderr
+
+        # 1. pin file missing.
+        rc, out = run_copy()
+        case("missing ORACLE_PIN -> BLOCKED (exit 3)", rc == 3 and "BLOCKED" in out, f"rc={rc} {out[-300:]}")
+        with open(pin_file, "w") as fh:
+            fh.write("0" * 40 + "\n")
+
+        # 2. oracle absent.
+        rc, out = run_copy()
+        case("oracle absent -> BLOCKED (exit 3)",
+             rc == 3 and "absent" in out, f"rc={rc} {out[-300:]}")
+
+        # 3. oracle present but not a repository (nothing encloses it).
+        os.makedirs(os.path.join(oracle, "src"))
+        with open(os.path.join(oracle, "src", "lib_vt.zig"), "w") as fh:
+            fh.write("// fixture\n")
+        rc, out = run_copy()
+        case("oracle not a repository -> BLOCKED (exit 3)",
+             rc == 3 and "not a git repository" in out, f"rc={rc} {out[-300:]}")
+
+        # 4. the oracle is its own repository at a commit other than the pin.
+        git(oracle, "init", "-q")
+        git(oracle, "add", "-A")
+        git(oracle, "commit", "-q", "-m", "pinned")
+        pin = git(oracle, "rev-parse", "HEAD")
+        rc, out = run_copy()
+        case("oracle off the pin -> BLOCKED (exit 3)",
+             rc == 3 and "not the pin" in out, f"rc={rc} {out[-300:]}")
+
+        # 5. at the pin, but a tracked file is modified.
+        with open(pin_file, "w") as fh:
+            fh.write(pin + "\n")
+        with open(os.path.join(oracle, "src", "lib_vt.zig"), "a") as fh:
+            fh.write("// edited\n")
+        rc, out = run_copy()
+        case("oracle dirty -> BLOCKED (exit 3)",
+             rc == 3 and "modified files" in out, f"rc={rc} {out[-300:]}")
+        git(oracle, "checkout", "-q", "--", "src/lib_vt.zig")
+
+        # 6. positive control: the clean pinned oracle passes the check.
+        rc, out = run_copy()
+        case("clean pinned oracle -> check passes (exit 0)",
+             rc == 0 and "BLOCKED" not in out, f"rc={rc} {out[-300:]}")
+
+        # 7. a fixture oracle nested inside an enclosing repository is rejected
+        #    by --show-toplevel (git would answer from the enclosing repo).
+        shutil.rmtree(os.path.join(oracle, ".git"))
+        git(base, "init", "-q")
+        git(base, "commit", "-q", "--allow-empty", "-m", "enclosing")
+        rc, out = run_copy()
+        case("oracle inside an enclosing repository -> BLOCKED (exit 3)",
+             rc == 3 and "not the top level" in out, f"rc={rc} {out[-300:]}")
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+
+    print(f"\nG-VTFEAT SELF-TEST: {'GREEN' if ok else 'RED'}")
+    return 0 if ok else 1
+
+
+if "--self-test" in sys.argv[1:]:
+    sys.exit(self_test())
+
+print("G-VTFEAT: -Dvt-features parity")
+print(f"  oracle: {ORACLE}")
+
+_blocked = oracle_check()
+if _blocked is not None:
+    print(f"G-VTFEAT BLOCKED: {_blocked}")
+    sys.exit(3)
+if "--check-oracle-only" in sys.argv[1:]:
+    print("G-VTFEAT: oracle check passed (--check-oracle-only)")
+    sys.exit(0)
 
 exports = parse_lib_vt()
 print(f"  lib_vt.zig exports: {len(exports)}")
