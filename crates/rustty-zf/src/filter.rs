@@ -169,6 +169,33 @@ impl<'a> PathIterator<'a> {
     }
 }
 
+// Not on Windows (task W-2, R14 form 1): upstream zf's own test hardcodes `/`
+// path separators, while `sep` is `std.fs.path.sep` (`'\\'` on Windows), so it
+// cannot pass there upstream either (zf's tests are not part of the reference's
+// Windows run). The Windows separator is covered by
+// `filter::windows_separator_is_the_path_separator`.
+/// The Windows arm of `sep` (task W-2): the path helpers split on `'\\'` and a
+/// `/` is an ordinary byte there, as with Zig's `std.fs.path.sep` on Windows.
+#[cfg(windows)]
+#[test]
+fn windows_separator_is_the_path_separator() {
+    assert_eq!(b'\\', SEP);
+    let mut iter = PathIterator::init(b"src\\data\\b.zig");
+    assert_eq!(iter.next().unwrap(), b"src");
+    assert_eq!(iter.next().unwrap(), b"\\");
+    assert_eq!(iter.next().unwrap(), b"data");
+    assert_eq!(iter.next().unwrap(), b"\\");
+    assert_eq!(iter.next().unwrap(), b"b.zig");
+    assert!(iter.next().is_none());
+    let mut iter = PathIterator::init(b"a/b");
+    assert_eq!(iter.next().unwrap(), b"a/b");
+    assert!(iter.next().is_none());
+    assert_eq!(segment_len(b"src\\main.zig", 5), 8);
+    assert_eq!(segment_len(b"src/main.zig", 5), 12);
+    assert_eq!(basename(b"a\\path\\to\\file"), b"file");
+}
+
+#[cfg(not(windows))]
 #[test]
 fn path_iterator() {
     let mut iter = PathIterator::init(b"");
@@ -228,6 +255,12 @@ pub fn segment_len(str: &[u8], index: usize) -> usize {
     end - start
 }
 
+// Not on Windows (task W-2, R14 form 1): upstream zf's own test hardcodes `/`
+// path separators, while `sep` is `std.fs.path.sep` (`'\\'` on Windows), so it
+// cannot pass there upstream either (zf's tests are not part of the reference's
+// Windows run). The Windows separator is covered by
+// `filter::windows_separator_is_the_path_separator`.
+#[cfg(not(windows))]
 #[test]
 fn segment_len_test() {
     assert_eq!(segment_len(b"a", 0), 1);
@@ -353,6 +386,12 @@ pub fn rank_needle(
     best_rank
 }
 
+// Not on Windows (task W-2, R14 form 1): upstream zf's own test hardcodes `/`
+// path separators, while `sep` is `std.fs.path.sep` (`'\\'` on Windows), so it
+// cannot pass there upstream either (zf's tests are not part of the reference's
+// Windows run). The Windows separator is covered by
+// `filter::windows_separator_is_the_path_separator`.
+#[cfg(not(windows))]
 #[test]
 fn rank_needle_test() {
     // plain string matching

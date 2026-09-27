@@ -32,8 +32,16 @@ fn global_init_runs_before_the_benchmark() {
 
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(out.status.success(), "rustty-bench failed: {stderr}");
+    // On Windows the C runtime's `setlocale(LC_ALL, "")` ignores `LANG` and
+    // returns the "implementation-defined native environment" (the reference's
+    // own comment, `os/locale.zig:35-45`; measured: `English_United
+    // States.1252`), so there the line carries the native name (task W-2).
+    #[cfg(not(windows))]
+    let want = "setlocale from env result=en_US.UTF-8";
+    #[cfg(windows)]
+    let want = "setlocale from env result=";
     assert!(
-        stderr.contains("setlocale from env result=en_US.UTF-8"),
+        stderr.contains(want),
         "global.init's ensureLocale did not run; stderr was:\n{stderr}"
     );
 }

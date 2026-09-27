@@ -67,6 +67,15 @@ Makefile        text eol=lf
 # by convention (`ghostty.compiled`). Named for the same reason as the seeds.
 .port/phase-0/corpora/terminfo/compiled/**      binary
 
+# Byte-exact fixtures a test compares with `include_bytes!`, and templates a
+# generator copies into non-Windows artifacts: kept LF on EVERY checkout. Under
+# `* text=auto` a Windows checkout (core.eol=native) turned them CRLF, and the
+# golden and Linux-resource tests failed on the Windows lane (task W-2, measured
+# on Windows 11). `-text` for the goldens (no conversion either way, like the
+# `.golden` rule), `eol=lf` for the templates.
+crates/rustty-extra/testdata/**                 -text
+dist/linux/**                                   text eol=lf
+
 # Generated/large binaries
 *.a         binary
 *.so        binary

@@ -47,11 +47,25 @@ fn exported_c_abi_panic_aborts_host() {
         .env(MARKER, "1")
         .output()
         .expect("spawn child test process");
-    use std::os::unix::process::ExitStatusExt;
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        assert_eq!(
+            Some(6), // SIGABRT
+            out.status.signal(),
+            "a panicking extern \"C\" export must abort (SIGABRT), not unwind or \
+             exit; status={:?} stderr={}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr),
+        );
+    }
+    // Windows (task W-2): Rust's abort is `__fastfail`, which ends the process
+    // with STATUS_STACK_BUFFER_OVERRUN (0xC0000409) whatever the fail code.
+    #[cfg(windows)]
     assert_eq!(
-        Some(6), // SIGABRT
-        out.status.signal(),
-        "a panicking extern \"C\" export must abort (SIGABRT), not unwind or \
+        Some(0xC000_0409_u32 as i32),
+        out.status.code(),
+        "a panicking extern \"C\" export must abort (__fastfail), not unwind or \
          exit; status={:?} stderr={}",
         out.status,
         String::from_utf8_lossy(&out.stderr),
