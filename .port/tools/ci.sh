@@ -492,6 +492,9 @@ GATE_REGISTRY=(
   # static archive, and a CMake custom command that never re-invoked cargo.
   # HARD: green, and the artifact arm has a demonstrated RED flip (remove a
   # .pc from the install list -> "the install tree is incomplete").
+  # G-CCONSUMER-SELF (parity tail P-1b): the install-layout check over fake
+  # prefixes (complete tree passes; a missing soname link is RED).
+  "G-CCONSUMER-SELF|HARD|bash $GATES/check_c_consumer.sh --self-test"
   "G-CCONSUMER|HARD|bash $GATES/check_c_consumer.sh"
   # G-EXAMPLES (2026-08-25) — build (and run) every example/ program, the
   # analog of the reference's list-examples + build-examples-* jobs. 32 example
@@ -553,7 +556,11 @@ GATE_REGISTRY=(
   # the slices are the reference's Apple universal set (macos-arm64_x86_64,
   # plus ios-arm64 and ios-arm64-simulator with the iOS SDK), and the gate's
   # --self-test runs first, in the same step, over synthetic bundles.
-  "G-XCF|HARD|bash $GATES/check_xcframework.sh --self-test && bash $GATES/check_xcframework.sh"
+  # Two entries, not `--self-test && <gate>`: run_gate executes its command
+  # as a word-split argv, not through a shell, so `&&` reached the script as an
+  # argument and only the self-test ever ran (found by parity tail P-1b).
+  "G-XCF-SELF|HARD|bash $GATES/check_xcframework.sh --self-test"
+  "G-XCF|HARD|bash $GATES/check_xcframework.sh"
   # G-FEATMATRIX (2026-08-26) — the reference's test-pkg-linux (build a pkg/
   # subproject ALONE) and test-sentry-linux (build both sides of a build
   # option). Standalone builds are not redundant with `cargo build
@@ -668,7 +675,9 @@ GATE_REGISTRY=(
   # acceptance arm and the workstream derivation can still FAIL. Without it, a green
   # G-P2 could mean "nothing is open" or "the checker stopped binding", and those look
   # identical from the outside.
-  "G-P2|HARD|$PY $GATES/check_phase2_closure.py --self-test && $PY $GATES/check_phase2_closure.py"
+  # Two entries, for the same run_gate argv reason as G-XCF (P-1b).
+  "G-P2-SELF|HARD|$PY $GATES/check_phase2_closure.py --self-test"
+  "G-P2|HARD|$PY $GATES/check_phase2_closure.py"
   # G-XEVREACH (WS20, 2026-07-30 — was G-XEVSCOPE, WS19 T7). The gate's FACT is
   # unchanged; its CONCLUSION is deleted. It used to justify classifying the
   # `iocp`/`wasi_poll` backends as "out of scope by platform" — that
