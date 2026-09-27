@@ -83,7 +83,8 @@ lint_fixture() {
   local conf="$1" out
   # Each config lints into its own target dir, so cargo never replays another
   # config's cached diagnostics.
-  local tdir="$WORK/target-$(printf '%s' "$conf" | tr -c 'A-Za-z0-9' '_')"
+  local tdir
+  tdir="$WORK/target-$(printf '%s' "$conf" | tr -c 'A-Za-z0-9' '_')"
   out="$(cd "$WORK/crate" && CLIPPY_CONF_DIR="$conf" CARGO_TARGET_DIR="$tdir" \
     cargo clippy --offline --quiet --message-format=short -- \
     -W clippy::disallowed_methods 2>&1)"
