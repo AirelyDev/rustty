@@ -139,6 +139,24 @@ use rustty_datastruct::blocking_queue::Timeout;
 // The `LOG-PORTMAP.tsv` allowance is held at 4 for the four above.
 const LOG_SCOPE: &str = "io_exec";
 
+/// Test builds only (N354, task W-5): record on the calling thread which step of
+/// `threadEnter` (or of `Subprocess.start` under it) failed, and the error it
+/// failed with. The reference returns a distinct error per step
+/// (`error.ProcessNoPid`, `Command.start`'s error, the spawn's
+/// `std.Thread.SpawnError`, ...); the port's `crate::Error` carries only the
+/// members some caller dispatches on (S212-F1), so a test reads the step here.
+/// Expands to nothing outside tests.
+macro_rules! note_thread_enter_failure {
+    ($step:expr, $detail:expr) => {{
+        #[cfg(test)]
+        tests::THREAD_ENTER_FAILURE.with(|f| {
+            f.borrow_mut().push(format!("{}: {:?}", $step, $detail));
+        });
+        #[cfg(not(test))]
+        let _ = &$detail;
+    }};
+}
+
 /// PORT NOTE (Zig-std shim, task-14e-1): `@tagName(posix.errno(...))` — the
 /// reference renders three of this file's diagnostics as `err=E{s}` where `{s}`
 /// is the errno's NAME with the leading `E` stripped (`EBADF` -> `BADF`), so the
@@ -466,7 +484,13 @@ impl Exec {
         // is known, since the opaque `crate::Error` cannot carry the discriminant
         // here; see start's PORT NOTE. Every error that reaches here is a parent
         // error and bubbles up.)
-        let pty_fds = self.subprocess.start(alloc)?;
+        let pty_fds = match self.subprocess.start(alloc) {
+            Ok(fds) => fds,
+            Err(e) => {
+                note_thread_enter_failure!("subprocess.start", e);
+                return Err(e);
+            }
+        };
         // errdefer self.subprocess.stop();
         // (PORT NOTE: no `errdefer`; each fallible step below runs the accumulated
         // cleanup explicitly, in reverse registration order, before returning.)
@@ -498,6 +522,7 @@ impl Exec {
         let mut process: Option<xev::Process> = match which {
             // } else return error.ProcessNotStarted;
             ProcessWhich::NotStarted => {
+                note_thread_enter_failure!("threadEnter", "ProcessNotStarted");
                 // WS19 T17a [R1-DIVERGENCE]: drain the pty master BEFORE stop() — the
                 // io-reader thread does not exist on this arm, so without this the
                 // SIGHUP'd child can wedge unreapably (`?Es`). See
@@ -512,6 +537,7 @@ impl Exec {
             // .fork_exec => |cmd| try xev.Process.init(cmd.pid orelse return error.ProcessNoPid)
             ProcessWhich::ForkExec(None) => {
                 // return error.ProcessNoPid (errdefer stop fires)
+                note_thread_enter_failure!("threadEnter", "ProcessNoPid");
                 // WS19 T17a [R1-DIVERGENCE]: drain the pty master BEFORE stop() — the
                 // io-reader thread does not exist on this arm, so without this the
                 // SIGHUP'd child can wedge unreapably (`?Es`). See
@@ -523,7 +549,8 @@ impl Exec {
             }
             ProcessWhich::ForkExec(Some(pid)) => match xev::Process::init(pid) {
                 Ok(p) => Some(p),
-                Err(_) => {
+                Err(_e) => {
+                    note_thread_enter_failure!("threadEnter: xev.Process.init", _e);
                     // WS19 T17a [R1-DIVERGENCE]: drain the pty master BEFORE stop() — the
                     // io-reader thread does not exist on this arm, so without this the
                     // SIGHUP'd child can wedge unreapably (`?Es`). See
@@ -546,7 +573,8 @@ impl Exec {
         // const pipe = try internal_os.pipe();
         let pipe = match rustty_os::pipe::pipe() {
             Ok(p) => p,
-            Err(_) => {
+            Err(_e) => {
+                note_thread_enter_failure!("threadEnter: internal_os.pipe", _e);
                 // errdefer if (process) |*p| p.deinit(); errdefer self.subprocess.stop();
                 if let Some(p) = &mut process {
                     p.deinit();
@@ -575,7 +603,8 @@ impl Exec {
         // var termios_timer = try xev.Timer.init();
         let termios_timer = match xev::Timer::init() {
             Ok(t) => t,
-            Err(_) => {
+            Err(_e) => {
+                note_thread_enter_failure!("threadEnter: xev.Timer.init", _e);
                 // errdefer (reverse): stream.deinit(); close pipe[1]; close pipe[0];
                 //          process.deinit(); self.subprocess.stop();
                 stream.deinit();
@@ -638,7 +667,8 @@ impl Exec {
             ReadThread::threadMainPosix::<M>(args.0, args.1, args.2);
         }) {
             Ok(t) => t,
-            Err(_) => {
+            Err(_e) => {
+                note_thread_enter_failure!("threadEnter: std.Thread.spawn", _e);
                 // errdefer (reverse): termios_timer.deinit(); stream.deinit();
                 //          close pipe[1]; close pipe[0]; process.deinit();
                 //          self.subprocess.stop();
@@ -3040,7 +3070,10 @@ impl Subprocess {
                 ws_xpixel: self.screen_size.width.try_into().unwrap(),
                 ws_ypixel: self.screen_size.height.try_into().unwrap(),
             })
-            .map_err(|_| crate::Error)?;
+            .map_err(|_e| {
+                note_thread_enter_failure!("Subprocess.start: Pty.open", _e);
+                crate::Error
+            })?;
             // (capture the handles the reference's `pty.*` reads want before the
             // move into `self.pty`; they are `Copy` HANDLEs.)
             let out_pipe = pty.out_pipe;
@@ -3131,7 +3164,10 @@ impl Subprocess {
 
             // cmd.start(alloc) catch |err| { ... else => return err };
             let result: Result<PtyFds, crate::Error> = match cmd.start(alloc) {
-                Err(_e) => Err(crate::Error),
+                Err(_e) => {
+                    note_thread_enter_failure!("Subprocess.start: Command.start", _e);
+                    Err(crate::Error)
+                }
                 Ok(()) => {
                     // errdefer killCommand(&cmd) catch ...;
                     // (no reachable error return between here and the success
@@ -6140,6 +6176,10 @@ mod tests {
         /// Make `threadEnter`'s read-thread spawn fail on this thread.
         pub(super) static FAIL_READ_THREAD_SPAWN: std::cell::Cell<bool> =
             const { std::cell::Cell::new(false) };
+        /// The `threadEnter` steps that failed on this thread, innermost
+        /// first, with their errors (`note_thread_enter_failure!`, N354).
+        pub(super) static THREAD_ENTER_FAILURE: std::cell::RefCell<Vec<String>> =
+            const { std::cell::RefCell::new(Vec::new()) };
         /// Make `threadMainPosix`'s gather-thread spawn fail on this thread
         /// (S211-F6).
         pub(super) static FAIL_GATHER_SPAWN: std::cell::Cell<bool> =
@@ -7997,6 +8037,7 @@ mod tests {
         DRAIN_CALLS.with(|c| c.set(0));
         STOP_CALLS.with(|c| c.set(0));
         STOPS_BEFORE_DRAIN.with(|c| c.set(None));
+        THREAD_ENTER_FAILURE.with(|f| f.borrow_mut().clear());
         FAIL_READ_THREAD_SPAWN.with(|f| f.set(true));
         let result = unsafe { exec.threadEnter(Global, t.io, &mut td) };
         FAIL_READ_THREAD_SPAWN.with(|f| f.set(false));
@@ -8004,6 +8045,13 @@ mod tests {
         assert!(
             result.is_err(),
             "a failed read-thread spawn fails threadEnter"
+        );
+        // N354: the test-only diagnostic names the step that failed.
+        let steps = THREAD_ENTER_FAILURE.with(|f| f.borrow().clone());
+        assert_eq!(steps.len(), 1, "one failed step is recorded: {steps:?}");
+        assert!(
+            steps[0].starts_with("threadEnter: std.Thread.spawn: "),
+            "the failed step is the read-thread spawn: {steps:?}"
         );
         assert_eq!(
             DRAIN_CALLS.with(std::cell::Cell::get),
@@ -8733,7 +8781,12 @@ mod tests {
             mailbox: std::ptr::null_mut(),
         };
 
-        unsafe { exec.threadEnter(Global, io_ptr, &mut td) }.expect("threadEnter");
+        // N354: on failure, name the step that failed and its error.
+        THREAD_ENTER_FAILURE.with(|f| f.borrow_mut().clear());
+        if let Err(e) = unsafe { exec.threadEnter(Global, io_ptr, &mut td) } {
+            let steps = THREAD_ENTER_FAILURE.with(|f| f.borrow().clone());
+            panic!("threadEnter: {e:?}; failed steps (innermost first): {steps:?}");
+        }
 
         let needle = b"RUSTTY_W1_MARK";
         let deadline = Instant::now() + Duration::from_secs(10);
