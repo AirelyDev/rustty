@@ -6200,7 +6200,19 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   fold (`toUpperWtf16`), as Zig's map does, which changes the type behind 219 uses in 38 files; too wide for W-1.
   The reference's `expandHostname` test is the regression test.
   CORRECTION (task W-1b, review W-1 F3): this said the map folds "ASCII case"; Zig's fold is Unicode upper-case.
-- **state**: OPEN (controller: owner for the `EnvMap` type). `expand_hostname` fails on Windows until then.
+- **state**: CLOSED (fixed, task W-5). `rustty_global::EnvMap` is a newtype over a `HashMap` keyed by the
+  reference's `EnvNameHashContext`: byte equality off Windows, and on Windows `eqlIgnoreCaseWtf8` with a hash of
+  the `toUpperWtf16` fold (the Windows arm binds ntdll `RtlUpcaseUnicodeChar`, as Zig does). `insert` is Zig's `put`
+  (an existing entry keeps its key spelling), `put_move` is `putMove`. The ~38 files that use the map compiled
+  unchanged against the newtype's API. On Windows `Environ` lookups use the same rules (`getAlloc` through
+  `createMap`, `containsConstant`/`containsUnemptyConstant` through the ported `getWindows`); `getPosix` is
+  POSIX-only, as Zig's. macOS/Linux behaviour is unchanged. Tests (`crates/rustty-global/src/environ.rs`):
+  `windows_env_map_names_fold_case_like_the_reference` (Path/PATH, `put`/`putMove` spelling, Λ/λ, ɐ/Ɐ, no fold at
+  U+10000+), `windows_eql_ignore_case_wtf8` (Zig's `test "eqlIgnoreCaseWtf16/Wtf8"`), `windows_environ_lookups_fold_case`,
+  `windows_create_map_puts_move_the_later_entry`, and on macOS/Linux `env_map_names_are_case_sensitive_off_windows`;
+  the reference's `expandHostname` test and `global_environ_map_reflects_the_process` now pass on Windows (rwin,
+  `x86_64-pc-windows-msvc`). Negative control on Windows (byte equality and a byte hash in the Windows arm): those
+  seven tests fail, `expand_hostname` at `path.rs:342` (`unwrap()` on `None`), as in W-1's measurement.
 
 ## N341 — Windows read-thread quit: a `CancelIoEx` between two reads is lost (reference race)
 
@@ -6485,7 +6497,17 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 - **fix direction**: a Windows `Environ` that reads the live environment on each `create_map`/lookup (the Zig
   `GlobalBlock`), keeping explicit `from_entries` environments for tests; belongs with N340's `EnvMap` change (same
   owner, same types).
-- **state**: OPEN (controller: owner of N340). The one Windows test failure it causes is listed in the W-2 report.
+- **state**: CLOSED (fixed, task W-5). On Windows `Environ` carries `use_global` (Zig's `GlobalBlock`):
+  `Environ::from_process()` is `.{ .use_global = true }` and captures nothing, and `create_map`/`get_alloc`/
+  `get_windows`/`contains_*` read the live process environment (`std::env::vars_os`, which is
+  `GetEnvironmentStringsW`) on every call; `Environ::default()` is `GlobalBlock.empty`; `from_entries` stays for tests.
+  `sync_environ` stays a no-op there. Tests: `sync_environ_republishes_from_process.rs` has a Windows arm (a variable
+  set after the first lookup is visible at once, case-insensitively, and a removal too; `syncEnviron` changes
+  nothing) and `windows_process_environ_is_the_global_block`. Negative control on Windows (`from_process` back to a
+  snapshot): both fail, the first with `left: Some("before") right: Some("after")` ("environ_map() must read the live
+  environment on Windows (N352)"). Not changed: `rustty-font-shaper`'s Windows discovery reads `SYSTEMROOT` and
+  `LOCALAPPDATA` with `std::env::var_os` where the reference uses `global.environ().getAlloc` (no `rustty-global` edge
+  there); both are live, case-insensitive reads, so the behaviour is the same.
 
 ## N353 — on MSVC targets most vendored C/C++ dependencies are compiled by cl.exe, the reference compiles them with clang
 
@@ -7174,3 +7196,18 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 - **not covered**: other crates' `eprintln!`/`println!` sites (renderer, apprt GTK, vt search thread, termio, ...)
   were not audited one by one here; the survey found no other `"[lvl] [scope]"` helper outside these files.
 - **state**: CLOSED (fixed).
+
+## N381 — POSIX `createMap`/`getAlloc`: the reference's last entry wins, the port's first
+
+- **id**: N381. Not a ledger row: found by task W-5 while porting N340.
+- **severity**: low (an `envp` with a duplicate name; only a C caller or `execve` can hand one over).
+  **kind**: port difference (R1, macOS/Linux), recorded, not changed.
+- **finding**: Zig 0.16's `putPosixBlock` calls `Map.put` for every entry (`std/process/Environ.zig:184-196`), and
+  `put` replaces the value of an existing name (`:256-271`), so in `createMap` the LAST of two `K=` entries wins; and
+  `getAlloc` goes through `createMap` (`:689-695`), so it returns the last one too. `getPosix` returns the FIRST
+  (`:606-619`). The port's POSIX `create_map` keeps the first (`or_insert` / `contains_key`), and its `get_alloc` is
+  `get_posix`, so both return the first; `environ_first_entry_wins` pins that. On Windows (task W-5) `create_map` is
+  `putWindowsBlock`'s `putMove` (last wins), as in the reference.
+- **why not changed**: task W-5's dispatch keeps macOS/Linux environment behaviour unchanged; the test above asserts
+  the current behaviour deliberately.
+- **state**: OPEN (controller ruling: fix under R1, or record as accepted).
