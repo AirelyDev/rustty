@@ -5832,3 +5832,133 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   fill. Harness: `.port/phase-2/mirihar-s7-6-search` (isolated, non-FFI, reproduces 1-5 with the same borrow
   shapes; for the controller's Miri lane under `-Zmiri-stacked-borrows` and `-Zmiri-tree-borrows`).
 - **state**: OPEN for the controller's Miri lane (targets listed in the S7-6 report).
+
+## N340 — on Windows `EnvMap` looks `PATH` up case-sensitively, and Windows names it `Path`
+
+- **id**: N340. Not a ledger row: found by task W-1's first Windows run of `rustty-os`.
+- **severity**: medium (Windows). **kind**: port defect (behavioral difference).
+- **finding**: `rustty_global::EnvMap` is a plain `HashMap<Vec<u8>, Vec<u8>>`. Zig's environment map compares
+  keys case-insensitively on Windows, where environment variable names are case-insensitive. The Windows
+  process environment names the search path `Path`, so `path::expand`'s `environ_map.get("PATH")` misses it and
+  every lookup returns `null`. MEASURED on rwin (Windows 11 build 26200, ARM64, `x86_64-pc-windows-msvc`):
+  `path::tests::expand_hostname` (the reference's own `expandHostname` test) fails with `unwrap()` on `None`; the
+  same binary passes when the variable is re-created as `PATH` in a fresh process environment. Every other
+  `EnvMap` lookup of a variable Windows spells differently is affected the same way.
+- **fix direction**: an `EnvMap` whose key equality and hash fold ASCII case on Windows (as Zig's map does),
+  which changes the type behind 219 uses in 38 files; too wide for W-1.
+- **state**: OPEN (controller: owner for the `EnvMap` type). `expand_hostname` fails on Windows until then.
+
+## N341 — Windows read-thread quit: a `CancelIoEx` between two reads is lost (reference race)
+
+- **id**: N341. Not a ledger row: found by task W-1 while testing S211-F2 on Windows.
+- **severity**: low. **kind**: reference defect candidate (a hang at surface close; R13 question for the controller).
+- **finding**: `Exec.threadExit` stops the Windows read thread with a quit byte and one
+  `CancelIoEx(read_thread_fd)`, ignoring `ERROR_NOT_FOUND` (`Exec.zig:206-227`). `threadMainWindows` checks the
+  quit pipe only after a read fails with `OPERATION_ABORTED` (`Exec.zig:1777-1825`). If the cancel lands while
+  the thread is between two `ReadFile` calls (processing output), nothing is cancelled, the thread re-enters
+  `ReadFile` and blocks until the pseudo console produces more output, and `threadExit`'s `join` waits with it.
+  MEASURED: the W-1 test that stops the thread the same way hit `ERROR_NOT_FOUND` in a parallel run (the BEL was
+  still being processed); the test now repeats the cancel until the thread returns. Also by reading: any other
+  `ReadFile` failure (for example `ERROR_BROKEN_PIPE` once the pseudo console's write end closes) reaches the
+  reference's `log.err` + `unreachable` (a panic in the port); not triggered in W-1's runs, UNVERIFIED as reachable.
+- **state**: OPEN for a controller R13 ruling (both halves are faithful in the port today).
+
+## N342 — the application tier does not compile for Windows; CI's Windows leg cannot pass as written
+
+- **id**: N342. Not a ledger row: measured by task W-1 (`cargo check --workspace --all-targets --target
+  x86_64-pc-windows-msvc` and `cargo build -p rustty --target x86_64-pc-windows-msvc` on rwin).
+- **severity**: medium. **kind**: port gap (platform coverage) + CI gap.
+- **finding**: `rustty-core`'s `renderer_seam` names `rustty_renderer::Renderer`, `generic::Error` and
+  `generic::AnimationWakeKind`, which exist only for macOS (Metal), Linux/FreeBSD (OpenGL over EGL) and wasm; the
+  reference's Windows renderer is OpenGL (`renderer/backend.zig:20-21`). 10 errors, all in `renderer_seam.rs`.
+  So nothing above `rustty-core` builds for Windows: `rustty`, `rustty-cli`, `rustty-apprt`, `rustty-apprt-c`,
+  `rustty-bench`, `rustty-extra`, `xtask`. Consequences: CI's Windows step `cargo build -p rustty-apprt-c --release
+  --no-default-features` and the `test_dll_init` smoke after it cannot pass; S63-F5's exe link and xtask's
+  cmake tests cannot run on Windows. Two workspace members also fail as standalone builds: `libxml2-sys` (its
+  vendored config includes `iconv.h`; nothing depends on it on Windows since W-1's apprt fix) and `sentry-sys`
+  (the breakpad backend's `client/windows/handler/exception_handler.h` is not vendored). CI's GNU-ABI step was
+  not run (no MinGW toolchain on rwin, which was kept lean for disk).
+- **state**: OPEN (controller: the Windows renderer arm and the CI leg's scope).
+
+## N343 — `xev.Async` on Windows is a value, and copies of it do not share a wakeup
+
+- **id**: N343. Not a ledger row: found by task W-1 making `rustty-termio` compile for Windows.
+- **severity**: low. **kind**: reference defect candidate (R13 question) + one port defect, fixed.
+- **finding**: on kqueue and eventfd backends `xev.Async` is a handle to a kernel object, so a copy notifies the
+  same waiter. On IOCP (`watcher/async.zig:533-545`) it is `{guard, wakeup, waiter}` by value. The reference
+  copies it: `Termio.init` stores `opts.renderer_wakeup` in the Termio and again in its stream handler, both
+  copies of the renderer thread's own Async (`Surface.zig:685`, `Termio.zig:296,316`), so on Windows a notify through either copy sets `wakeup` on the
+  copy and never wakes the renderer loop, whose waiter is registered on the original (by reading). The port
+  keeps that value semantics (`impl Clone for Async` in `iocp_watcher.rs`, the Zig copy). PORT DEFECT, FIXED:
+  `termio::Thread::threadMain_` copied the mailbox's `wakeup` out before `wait` (harmless for a handle); on
+  Windows the wait would have been registered on a copy that no notify reaches. It now waits on the mailbox's
+  own Async through a pointer, as the reference's `|*v|` capture does.
+- **state**: the port defect CLOSED (W-1); the reference question OPEN for a controller R13 ruling.
+
+## N344 — Windows compile, link and test fixes made by task W-1
+
+- **id**: N344. Not a ledger row: the fixes that made the portable tier build, link and pass on Windows
+  (`x86_64-pc-windows-msvc`), each measured on rwin.
+- **build**: `simdutf-sys`, `highway-sys` and `rustty-simd` compile with clang-cl on MSVC targets
+  (`prefer_clang_cl_over_msvc`): the reference compiles them with Zig's clang, and cl.exe rejects their
+  GCC/clang attributes and builtins. `dcimgui-sys` defines `IMGUI_IMPL_API` on Windows as the reference does
+  (`extern "C" __declspec(dllexport)`, `pkg/dcimgui/build.zig:73-80`); without it the OpenGL3 backend had C++
+  linkage and failed the link. `rustty-apprt`'s `fontconfig-sys` edge is off Windows, like
+  `rustty-font-shaper`'s (`font/backend.zig:49-55`: no fontconfig on Windows); it was dragging `libxml2` into
+  every crate above apprt.
+- **link**: `SystemFunction036` (advapi32) and `AcceptEx` (mswsock) get their libraries, as Zig's std declares
+  them; `rustty-os::i18n`'s `build_config.i18n` checks are inline `const` (R8: the reference's `comptime`), so a
+  build with i18n off (Windows) does not reference libintl.
+- **code**: `rustty-font-shaper` matches FreeType's error and render-mode constants in bindgen's own type
+  (`c_int` on MSVC, `c_uint` elsewhere). `rustty-renderer`'s shader-file open converts WTF-8 path bytes on
+  Windows. `rustty-termio`'s Windows arms: the child pid type, `posix.close`/`posix.write` on the quit pipe as
+  `CloseHandle`/`WriteFile`, `termiosTimer` and `Subprocess.childPreExec` compiled out on Windows (Zig never
+  analyzes them there), an inert placeholder `ThreadData`, `OsPasswd.get` unreachable on Windows (the
+  reference's `@compileError`, R7). `rustty-xev` on Windows: `Completion::state_of`, the unprefixed
+  `WaitError` export, `Clone` for `Async` (N343). `rustty-os::TempDir::realpath` returns Zig's DOS form, not
+  a verbatim `\\?\` path (13 shell-integration tests failed on the verbatim form).
+- **tests**: compile-time scopes (R14 form 1) for tests of POSIX-only items (`expandHomeUnix`, `passwd.get`,
+  the systemd `/proc` helpers, the empty-`TMPDIR` child test, the pagelist RSS bench, a non-UTF-8 `OsStr`
+  fixture); test path bytes via `as_encoded_bytes`; the Windows expectation of the NUL-argument `execCommand`
+  test (the Windows shell arm tokenizes instead of wrapping in `/bin/sh -c`).
+- **lint**: `cargo clippy --all-targets -- -D warnings` for `x86_64-pc-windows-msvc` over rustty-os, -termio,
+  -xev, -vaxis, -font-shaper, -simd, -vt, -vt-c (and rustty-config below them) was red on Windows-only lints
+  (Win32 type spellings, dead code of POSIX-only helpers, comptime-dead tails); fixed with scoped
+  `cfg`/`cfg_attr` allows or by compiling POSIX-only items out, each with its reason at the site. Green on rwin.
+- **state**: CLOSED (informational). Results in the W-1 report.
+
+## N345 — rustty-vt's "real Io" has no entropy on Windows, so five vt tests fail there
+
+- **id**: N345. Not a ledger row: measured by task W-1 (`cargo test -p rustty-vt --target x86_64-pc-windows-msvc`
+  on rwin, the CI Windows leg's command): 3186 pass, 19 ignored, 5 fail.
+- **severity**: medium (Windows CI). **kind**: port gap (test Io).
+- **finding**: the reference's tests pass `testing.io` (`std.Io.Threaded`), whose `randomSecure` has a Windows
+  source. The port maps it to `sys::io_native`, which is `rustty_os::file::random_secure`, the port of
+  `TinyIo.randomSecure`: it has no Windows arm, because TinyIo is `!supported` on Windows (`TinyIo.zig:35-38`).
+  So on Windows `kitty::clipboard_grants::tests::generate_otp_length_and_alphabet_with_a_real_io` and
+  `stream_terminal::tests::{paste_reader_contents_are_read_on_demand, paste_mode_5522_sends_an_event_the_program_can_read_with,
+  paste_mode_5522_reports_the_selection_as_primary}` fail `EntropyUnavailable`, and
+  `paste_mode_5522_without_entropy_fails_and_records_no_grant` then fails on the `random_secure_test_lock`
+  those panics poisoned (`PoisonError`). The library behaviour itself (no entropy through TinyIo on Windows) is
+  the reference's; the application-tier Io that the tests stand for is what is missing.
+- **vt-c cascade (UNVERIFIED cause, not traced)**: most likely the same entropy gap takes down `rustty-vt-c`'s `paste::tests::terminal_paste_event` on Windows (`left: Success
+  right: IoError`), and six more `paste::tests` then fail on the `PASTE_TEST_LOCK` it poisoned (`PoisonError`);
+  measured by `cargo test -p rustty-vt-c --target x86_64-pc-windows-msvc` (531 pass, 8 fail; the eighth is N346).
+- **state**: OPEN (controller: the vt test Io on Windows, and whether the application artifact's Io needs a Windows
+  entropy source).
+
+## N346 — two Windows test-harness gaps outside W-1's rows (rustty-vt-c, rustty-vaxis)
+
+- **id**: N346. Not a ledger row: measured by task W-1 on rwin (`x86_64-pc-windows-msvc`).
+- **severity**: low. **kind**: port gap (test scaffolding on Windows).
+- **rustty-vt-c**: `terminal::tests::compression_activity_and_incremental_scheduling` hits its
+  `.unsupported => unreachable` arm: `mem::can_reclaim` answers `true` under `cfg!(test)` only for rustty-vt's
+  own unit tests, while Zig's `builtin.is_test` holds for the whole test binary (`terminal/mem.zig:37-42`), and
+  Windows has no OS reclamation. The crate-external switch `test-decommit-sim` exists (rustty-bench enables it)
+  but rustty-vt-c's tests do not; on macOS and Linux the test passes through the OS path instead.
+- **rustty-vaxis**: `loop_::tests::{loop_lifecycle, queued_key_text_is_owned_not_a_view_of_the_read_buffer}` fail
+  `InvalidHandle`: on Windows the test build's `Tty` is the real `WindowsTty` (no console under ssh), because the
+  port narrowed `TestTty` to non-Windows on the premise that it needs `posix.pipe`; libvaxis 0.6.0's `TestTty`
+  (the pin's) is a discarding writer that compiles on Windows (`tty.zig:17-22` selects it on every OS under
+  `is_test`). 131 of 133 vaxis tests pass on Windows.
+- **state**: OPEN (controller: owners of the vt-c test build and the vaxis `TestTty`).

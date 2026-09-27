@@ -582,6 +582,8 @@ LANG=he_IL.UTF-8 LC_ALL=he_IL.UTF-8 \
 
 ## V8. libxev `wasi_poll` + `iocp` backends: cross-compile-verified only, never EXECUTED — **ENVIRONMENT-BLOCKED**
 
+**W-1 status (2026-09-27, rwin: Windows 11 build 26200 on ARM64, target `x86_64-pc-windows-msvc` under x64 emulation):** the `iocp` half now EXECUTES: `cargo test -p rustty-xev` passes 42/42 on Windows, and `cargo clippy -p rustty-xev --all-targets -- -D warnings` is green there (`AcceptEx` needed its `mswsock` link, NEW-FINDINGS N344). NOT done: the recipe's no-op-`tick` negative control, and the `wasi_poll` half. Row stays open for those.
+
 **Blocked on:** a Windows host (for `iocp`) and a WASI runtime host (for
 `wasi_poll`). Neither exists in this project; the porting host is macOS aarch64.
 
@@ -672,6 +674,8 @@ suite with a no-op tick would mean the tests never drove the loop.
 
 ## V9. `rustty-termio` Windows paths: cannot even be CROSS-CHECKED on this host — **ENVIRONMENT-BLOCKED**
 
+**W-1 status (2026-09-27, rwin: Windows 11 build 26200 on ARM64, target `x86_64-pc-windows-msvc` under x64 emulation):** recipe steps 1-3 DONE on Windows: `cargo check`/`clippy -- -D warnings`/`test -p rustty-termio` green (3/3 test runs, 65 lib tests + integration tests; the compile errors were mechanical, fixed in place, NEW-FINDINGS N344). The end-to-end path runs in a unit test rather than a surface: `windows_threadenter_reads_the_pty_through_the_windows_read_thread` spawns `cmd.exe` through a real ConPTY via `threadEnter`, sees its output on the Screen through `threadMainWindows`, and `threadExit`'s `CancelIoEx` stops the read loop; negative control (no Windows read loop) fails with an empty Screen (LEDGER S211-F2/F3). Not done: a live surface (the app tier does not compile for Windows, N342). The `CancelIoEx` race found on the way is N341.
+
 **Blocked on:** a Windows host with the MSVC toolchain. Cross-checking from
 macOS is additionally blocked by `highway-sys`'s `cc`-driven C++ build (see
 below), so unlike V8 this row has no compile-level evidence either.
@@ -722,6 +726,8 @@ read thread would prove nothing.
 ---
 
 ## V10. `rustty-vaxis` Windows console backend: PORTED, but uncompilable for a Windows target on this host — **ENVIRONMENT-BLOCKED**
+
+**W-1 status (2026-09-27, rwin: Windows 11 build 26200 on ARM64, target `x86_64-pc-windows-msvc` under x64 emulation):** compiled, `clippy -- -D warnings` green, and `cargo test -p rustty-vaxis` runs 131/133 on Windows; the key-record decode is tested there (`windows_tty::tests::function_key_records_decode_to_their_own_keys`, UD245). The two failures are the Loop tests, which get the real console `WindowsTty` under ssh (no console): NEW-FINDINGS N346. A live console session was not driven.
 
 **Blocked on:** a Windows host with the MSVC toolchain (`zlib-sys`'s vendored C
 cannot cross-compile to MSVC from macOS — detail below).
