@@ -69,8 +69,10 @@ fn x11_window_add_subprocess_env_publishes_windowid() {
     // P3-W7 byte-typed the subprocess env map (`EnvMap` is Zig byte-slices, so
     // rustty spells it `HashMap<Vec<u8>, Vec<u8>>`); this `x11`-feature-gated
     // test was not updated with it and has not compiled since. Found and fixed
-    // in P3-W8 T5 while building the GTK arm on the Linux VM.
-    let mut env: std::collections::HashMap<Vec<u8>, Vec<u8>> = std::collections::HashMap::new();
+    // in P3-W8 T5 while building the GTK arm on the Linux VM. CORRECTION (task
+    // W-5, N340): `rustty_global::EnvMap` is now a newtype with the reference
+    // map's key comparison, no longer a `HashMap` alias.
+    let mut env = rustty_global::EnvMap::new();
     wp.add_subprocess_env(&mut env)
         .expect("add_subprocess_env must succeed on the X11 arm");
 

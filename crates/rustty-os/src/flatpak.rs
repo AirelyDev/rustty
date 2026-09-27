@@ -81,7 +81,9 @@ mod host_command {
     // `std.process.EnvMap` (flatpak.zig:58 `env: ?*const EnvMap`). Zig's EnvMap
     // keys and values are `[]const u8` byte slices, NOT validated UTF-8 — an
     // environment block is arbitrary bytes on every Unix — so the faithful Rust
-    // map is the shared `HashMap<Vec<u8>, Vec<u8>>`.
+    // map is the shared byte-typed `rustty_global::EnvMap`. CORRECTION (task
+    // W-5, N340): this said `HashMap<Vec<u8>, Vec<u8>>`, the alias `EnvMap` was
+    // until it became a newtype with the reference map's key comparison.
     //
     // This was a local `HashMap<String, String>` placeholder, which was BOTH
     // lossy and the reason `--features flatpak` did not compile: `Exec`'s
