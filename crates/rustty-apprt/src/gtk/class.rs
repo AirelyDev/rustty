@@ -330,10 +330,6 @@ pub const TEMPLATE_CALLBACK_RETURN: TemplateCallbackReturn = true;
 mod tests {
     use super::*;
 
-    /// PORTS: `class.zig:365` `test { refAllDecls(@This()); }` — a compile-touch
-    /// over the module's public items. Here the module's public surface is the
-    /// porter's map itself, so the touch also asserts the map is populated and
-    /// covers the `Common` constructs the class ports depend on.
     /// N336: a handler returning [`TemplateCallbackReturn`] answers a real
     /// `gboolean` signal through glib-rs's closure marshaller (the path a
     /// `#[template_callback]` takes). `GApplication::name-lost` is a `gboolean`
@@ -362,6 +358,10 @@ mod tests {
         assert!(handled, "its TRUE reached the emitter");
     }
 
+    /// PORTS: `class.zig:365` `test { refAllDecls(@This()); }` — a compile-touch
+    /// over the module's public items. Here the module's public surface is the
+    /// porter's map itself, so the touch also asserts the map is populated and
+    /// covers the `Common` constructs the class ports depend on.
     #[test]
     fn class_ref_all_decls() {
         // compile-touch the public type aliases / consts (refAllDecls analogue)

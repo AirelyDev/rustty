@@ -135,8 +135,12 @@ pub fn get() -> Result<Entry, Error> {
                 // slave by hand after `cmd.wait()`, so when `cmd.spawn` or
                 // `cmd.wait` fails (the session helper is unreachable, or the
                 // sandbox may not talk to `org.freedesktop.Flatpak`) the `try`
-                // returns with the slave still open: one pty fd leaked per call,
-                // and `passwd.get` runs on every config load and home-dir lookup.
+                // returns with the slave still open: one pty fd leaked per call.
+                // `passwd.get` runs on config loads that must look up the default
+                // shell or home directory (`Config.zig:4792`) and on home-dir
+                // lookups when `$HOME` is unset (`homedir.zig:25-30`).
+                // CORRECTION (task L-4b): this said it "runs on every config load
+                // and home-dir lookup".
                 // The guard also closes the slave while it is still ours
                 // (`slave_open`), which the hand close below clears. MEASURED in a
                 // Flatpak sandbox (task L-4):

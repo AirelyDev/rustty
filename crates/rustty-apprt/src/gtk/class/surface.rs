@@ -4207,7 +4207,7 @@ impl Surface {
     }
 
     // -- DropTarget (surface.blp:224-227) ----------------------------------
-    /// PORTS: `surface.zig:2627-2718` `dtDrop`.
+    /// PORTS: `surface.zig:2692-2777` `dtDrop`.
     ///
     /// NON-SWAPPED template callback (`surface.blp:225` `drop => $drop()`): the
     /// `DropTarget` emitter is arg0 and the `Surface` template instance is the
@@ -4216,8 +4216,12 @@ impl Surface {
     ///
     /// Files can be dropped from Nautilus and strings from many programs; the
     /// drop-target gtypes are set IN ORDER FileList, File, string
-    /// (`constructed`, `:1818-1826`), and we branch on the value's runtime type
-    /// with [`ext::g_value_holds`] in the same order (`:2636`, `:2678`, `:2703`).
+    /// (`constructed`, `:1845-1850`), and we branch on the value's runtime type
+    /// with [`ext::g_value_holds`] in the same order (`:2701`, `:2743`, `:2769`).
+    ///
+    /// CORRECTION (task L-4b): the line numbers in this handler's comments
+    /// predated the pin (`:2627-2718`, `:1818-1826`, `:2636`, `:2678`, `:2703`,
+    /// ...); they are now the lines at `20abdb50a`.
     #[template_callback]
     fn drop(
         _target: &gtk4::DropTarget,
@@ -4237,20 +4241,20 @@ impl Surface {
         let value = &value;
 
         // gdk.FileList: shell-escape each file path and join with newlines, then
-        // paste the whole blob (`:2636-2676`).
+        // paste the whole blob (`:2701-2741`).
         if ext::g_value_holds(value, gdk4::FileList::static_type()) {
             let Ok(list) = value.get::<gdk4::FileList>() else {
                 return false;
             };
 
             // `var stream: Allocating` + `ShellEscapeWriter.init(&stream.writer)`
-            // (`:2637-2641`). The escape writer excludes linefeeds so newlines
+            // (`:2702-2706`). The escape writer excludes linefeeds so newlines
             // delimit the list of paths.
             let mut stream = AllocatingWriter::init();
             {
                 let mut shell_escape_writer = ShellEscapeWriter::init(&mut stream);
 
-                // `while (current) |item| : file.getPath()` (`:2650-2668`).
+                // `while (current) |item| : file.getPath()` (`:2716-2731`).
                 for file in list.files() {
                     let Some(path) = file.path() else {
                         continue;
@@ -4268,15 +4272,22 @@ impl Surface {
                 }
             }
 
-            // `Clipboard.paste(self, string)` (`:2674`).
+            // `Clipboard.paste(self, string)` (`:2739`).
             this.paste(stream.written());
             return true;
         }
 
-        // gio.File: shell-escape the single path (`:2678-2701`). NOTE: the
-        // reference builds the escaped string but does NOT paste it (`:2694-2700`
-        // ends `return 1` without a `Clipboard.paste` call), so we mirror that —
-        // the byte-faithful behaviour is to consume the drop without inserting.
+        // gio.File: shell-escape the single path (`:2743-2766`).
+        //
+        // PORT NOTE: reference defect (R13), `UPSTREAM-DEFECTS.md` UD321. The
+        // reference builds the escaped path and then returns 1 without a
+        // `Clipboard.paste` (`:2761-2766`), so the drop is accepted and the path
+        // silently lost, where the file-list branch above pastes the same
+        // escaped text. Reachable by a drag source that offers a single `GFile`
+        // but no `GdkFileList` (the list type is tried first). The port pastes
+        // it, as the file-list branch does (controller ruling, task L-4b).
+        // CORRECTION (task L-4b): this said "we mirror that — the byte-faithful
+        // behaviour is to consume the drop without inserting".
         if ext::g_value_holds(value, gio::File::static_type()) {
             let Ok(file) = value.get::<gio::File>() else {
                 return false;
@@ -4298,11 +4309,11 @@ impl Surface {
                     return false;
                 }
             }
-            let _ = stream.written();
+            this.paste(stream.written());
             return true;
         }
 
-        // string: paste it verbatim (`:2703-2708`).
+        // string: paste it verbatim (`:2769-2774`).
         //
         // PORT NOTE (task L-4, NEW-FINDINGS N337): `value.getString()` is a
         // `?[*:0]const u8` and `std.mem.span` takes its bytes as they are. This
@@ -4317,8 +4328,6 @@ impl Surface {
         // reference's `orelse`.
         if ext::g_value_holds(value, String::static_type()) {
             if let Some(string) = raw_string_bytes(value) {
-                #[cfg(test)]
-                tests::LAST_STRING_DROP.with(|l| *l.borrow_mut() = Some(string.clone()));
                 this.paste(&string);
             }
             return true;
@@ -4334,6 +4343,8 @@ impl Surface {
     /// Mirrors the Phase-A `clipboard_request` completion path (the core mutable
     /// deref + the `UnsafePaste`/`UnauthorizedPaste` → confirmation fallback).
     fn paste(&self, text: &[u8]) {
+        #[cfg(test)]
+        tests::LAST_PASTE.with(|l| *l.borrow_mut() = Some(text.to_vec()));
         // `if (text.len == 0) return;` (`:3903`).
         if text.is_empty() {
             return;
@@ -5828,9 +5839,11 @@ mod tests {
         Surface::new(SurfaceOverrides::default())
     }
 
-    // The bytes the `drop` handler's string branch passed to `paste` (N337).
+    // The bytes the last `Surface::paste` call received (recorded before its
+    // empty-text and no-core returns), so the `drop` tests can assert which
+    // branch pasted what (N337, UD321).
     thread_local! {
-        pub(super) static LAST_STRING_DROP: RefCell<Option<Vec<u8>>> = const { RefCell::new(None) };
+        pub(super) static LAST_PASTE: RefCell<Option<Vec<u8>>> = const { RefCell::new(None) };
     }
 
     /// N337: a dropped `G_TYPE_STRING` whose bytes are not UTF-8 reaches `paste`
@@ -5851,17 +5864,44 @@ mod tests {
         unsafe {
             glib::gobject_ffi::g_value_set_string(value.to_glib_none_mut().0, owned.as_ptr())
         };
-        LAST_STRING_DROP.with(|l| *l.borrow_mut() = None);
+        LAST_PASTE.with(|l| *l.borrow_mut() = None);
         let accepted = target.emit_by_name::<bool>(
             "drop",
             &[&glib::value::BoxedValue(value), &10.0f64, &10.0f64],
         );
         assert!(accepted, "the string branch answers true");
-        let pasted = LAST_STRING_DROP.with(|l| l.borrow_mut().take());
+        let pasted = LAST_PASTE.with(|l| l.borrow_mut().take());
         assert_eq!(
             pasted.as_deref(),
             Some(raw),
             "the string branch ran and passed the bytes verbatim"
+        );
+    }
+
+    /// UD321 (R13): a dropped single `GFile` pastes its shell-escaped path and a
+    /// newline, as the file-list branch does. The reference builds that text and
+    /// returns without pasting it, so the drop is accepted and lost.
+    #[test]
+    #[ignore = "requires a display; run via cargo test -p rustty-apprt --features gtk,x11,wayland --lib drop_pastes_a_single_file -- --ignored"]
+    fn drop_pastes_a_single_file_path_shell_escaped() {
+        let surface = display_surface();
+        let target = surface.imp().drop_target.get();
+        let file = gio::File::for_path("/tmp/rustty l4b/it's.txt");
+        LAST_PASTE.with(|l| *l.borrow_mut() = None);
+        let accepted = target.emit_by_name::<bool>(
+            "drop",
+            &[
+                &glib::value::BoxedValue(file.to_value()),
+                &10.0f64,
+                &10.0f64,
+            ],
+        );
+        assert!(accepted, "the file branch answers true");
+        let pasted = LAST_PASTE.with(|l| l.borrow_mut().take());
+        assert_eq!(
+            pasted.as_deref(),
+            Some(&b"/tmp/rustty\\ l4b/it\\'s.txt\n"[..]),
+            "the file branch pasted the shell-escaped path and a newline"
         );
     }
 
