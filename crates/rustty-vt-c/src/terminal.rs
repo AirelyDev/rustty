@@ -2151,7 +2151,7 @@ pub enum ContinuationWriteError {
 /// `terminal_`, if non-null, must be a live terminal handle.
 pub unsafe fn continuation_write_io(
     terminal_: Terminal,
-    writer: &mut dyn std::io::Write,
+    writer: &mut dyn rustty_vt::stream_continuation::ByteWriter,
 ) -> std::result::Result<(), ContinuationWriteError> {
     // Keep handle validation here so the three public output forms and the
     // snapshot encoder all use exactly the same continuation preflight.
@@ -12009,7 +12009,8 @@ mod tests {
     // .., lib.alloc.default(alloc_), ..)`) and hands its buffer over
     // (`toOwnedSlice`); `restoreContinuation`'s verification writer is on the
     // terminal's allocator and is freed before returning. The continuation is
-    // written a byte at a time (the tracker's `writeByte` loop).
+    // written a byte at a time (the tracker's `writeByte` loop, which
+    // `Writer.Allocating` grows by `growCapacity(1)`).
     #[test]
     fn continuation_writers_route_through_their_allocators() {
         use rustty_vt::alloc::testing::{Config, CountingAllocator, FailingAllocator};
@@ -12029,10 +12030,10 @@ mod tests {
             assert_eq!(b"\x1b[31", unsafe {
                 core::slice::from_raw_parts(out_ptr, out_len)
             });
-            // One growth (the first 1-byte write: growCapacity(1 + 1 + 1) =
-            // 132 bytes), then `toOwnedSlice` remaps it to the 4 bytes.
+            // One growth (the first `writeByte` rebases: growCapacity(1) =
+            // 129 bytes), then `toOwnedSlice` remaps it to the 4 bytes.
             assert_eq!(1, counting.alloc_calls.get());
-            assert_eq!(Some((132, 0)), counting.last_alloc.get());
+            assert_eq!(Some((129, 0)), counting.last_alloc.get());
             assert_eq!(1, counting.remap_calls.get());
             assert_eq!(0, counting.free_calls.get());
             assert_eq!(4, counting.live_bytes.get());
@@ -12081,11 +12082,11 @@ mod tests {
         assert_eq!(allocs, counting.alloc_calls.get());
         unsafe { restore_continuation(restored, b"\x1b[31") }.unwrap();
         // The replay fits the tracker's reservation; the exported copy is
-        // one 132-byte growth, freed on return.
+        // one 129-byte growth, freed on return.
         assert_eq!(allocs + 1, counting.alloc_calls.get());
         assert_eq!(frees + 1, counting.free_calls.get());
-        assert_eq!(Some((132, 0)), counting.last_alloc.get());
-        assert_eq!(Some((132, 0)), counting.last_free.get());
+        assert_eq!(Some((129, 0)), counting.last_alloc.get());
+        assert_eq!(Some((129, 0)), counting.last_free.get());
         assert_eq!(live, counting.live_bytes.get());
         unsafe { free(restored) };
         assert_eq!(0, counting.live_bytes.get());

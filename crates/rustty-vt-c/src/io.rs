@@ -627,6 +627,9 @@ impl std::io::Write for WriterAdapter {
     }
 }
 
+/// `writeByte` on the adapter is its buffered one-byte `writeAll`.
+impl rustty_vt::stream_continuation::ByteWriter for WriterAdapter {}
+
 #[cfg(test)]
 mod tests {
     use super::*;

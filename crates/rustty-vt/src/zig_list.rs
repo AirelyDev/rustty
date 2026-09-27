@@ -274,8 +274,9 @@ impl AllocatingWriter {
         &mut self.buf
     }
 
-    /// `toOwnedSlice()`: `ArrayList.toOwnedSlice` over the written bytes
-    /// (Zig 0.16 `std/array_list.zig`): `remap` the buffer to exactly the
+    /// `toOwnedSlice()` (Zig 0.16 `std/Io/Writer.zig:2646`,
+    /// `Allocating.toOwnedSlice`, which hands the written bytes to
+    /// `ArrayList.toOwnedSlice`): `remap` the buffer to exactly the
     /// written length, else allocate that length, copy, and free the buffer;
     /// the writer is left empty. A writer that never allocated makes no call
     /// (`remap` of an empty slice to 0 is a no-op `free`). On failure the

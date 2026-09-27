@@ -2738,7 +2738,7 @@ mod tests {
         assert_eq!(2, counting.remap_calls.get());
         assert_eq!(0, counting.free_calls.get());
         // The terminal's allocator (`native.gpa()`): the continuation copy
-        // (`\\x1b[31`, written a byte first: growCapacity(1 + 1 + 1) = 132,
+        // (`\\x1b[31`, written with `writeByte`: growCapacity(1) = 129,
         // then the `toOwnedSlice` remap to 4) and the record scratch's spill
         // past its 512 stack bytes (S7-8 N332: 513 bytes, then one remap
         // growth), both freed before returning, the continuation copy last.
