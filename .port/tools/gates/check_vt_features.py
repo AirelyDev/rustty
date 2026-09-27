@@ -42,8 +42,13 @@ import subprocess
 import sys
 from pathlib import Path
 
-ORACLE = Path("/Users/gael/projects/ghostty")
 ROOT = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _gatelib as G  # noqa: E402
+
+# The one resolver every sibling-oracle gate uses (it is right inside a git
+# worktree, where `ROOT/../ghostty` is not).
+ORACLE = Path(G.oracle_root(str(ROOT)))
 
 failures = []
 
@@ -199,6 +204,29 @@ def exported_symbols():
 
 print("G-VTFEAT: -Dvt-features parity")
 print(f"  oracle: {ORACLE}")
+
+
+def require_oracle():
+    """`_gatelib.oracle_root`'s contract: a missing or off-pin oracle is BLOCKED
+    (exit 3), never a pass and never a crash. Before parity tail P-1 this gate
+    read the oracle unguarded, so on a host without the checkout (every CI leg)
+    the uncaught FileNotFoundError exited 1, which ci.sh counts as a RED
+    regression of a PROGRESS gate."""
+    pin = G.oracle_pin()
+    if pin is None:
+        print("G-VTFEAT BLOCKED: .port/tools/gates/ORACLE_PIN is missing or malformed")
+        sys.exit(3)
+    if not (ORACLE / "src" / "lib_vt.zig").is_file():
+        print(f"G-VTFEAT BLOCKED: the ghostty oracle checkout is absent ({ORACLE})")
+        sys.exit(3)
+    head = G.oracle_git(str(ORACLE), "rev-parse", "HEAD", text=True)
+    if head.returncode != 0 or head.stdout.strip() != pin:
+        print(f"G-VTFEAT BLOCKED: the oracle is not at the pin {pin} "
+              f"(HEAD {head.stdout.strip() or '?'})")
+        sys.exit(3)
+
+
+require_oracle()
 
 exports = parse_lib_vt()
 print(f"  lib_vt.zig exports: {len(exports)}")
