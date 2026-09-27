@@ -241,6 +241,27 @@ fn zig_renderer(r: rustty_build_config::renderer::Backend) -> &'static str {
     }
 }
 
+/// `std.log.info("runtime={}", .{build_config.app_runtime})` (`global.zig:169`).
+fn runtime_line() -> String {
+    format!(
+        "runtime={}",
+        zig_runtime(rustty_build_config::app_runtime())
+    )
+}
+
+/// `std.log.info("font_backend={}", .{build_config.font_backend})` (`global.zig:170`).
+fn font_backend_line() -> String {
+    format!(
+        "font_backend={}",
+        zig_font_backend(rustty_build_config::font_backend())
+    )
+}
+
+/// `std.log.info("renderer={}", .{renderer.Renderer})` (`global.zig:177`).
+fn renderer_line() -> String {
+    format!("renderer={}", zig_renderer(rustty_build_config::renderer()))
+}
+
 /// Error returned by [`init_with_action`] / [`init`] (the global-state bootstrap).
 ///
 /// PORT NOTE: the reference `state.init()` returns `!void` over the union of
@@ -392,21 +413,8 @@ pub fn init_with_action(action_detected: bool) -> Result<rustty_core::Logging, I
         &format!("rustty build optimize={}", build_config::mode_string()),
         &logging,
     );
-    log_with(
-        Level::Info,
-        "default",
-        &format!("runtime={}", zig_runtime(build_config::app_runtime())),
-        &logging,
-    );
-    log_with(
-        Level::Info,
-        "default",
-        &format!(
-            "font_backend={}",
-            zig_font_backend(build_config::font_backend())
-        ),
-        &logging,
-    );
+    log_with(Level::Info, "default", &runtime_line(), &logging);
+    log_with(Level::Info, "default", &font_backend_line(), &logging);
     // if (comptime build_config.font_backend.hasHarfbuzz())
     //     std.log.info("dependency harfbuzz={s}", .{harfbuzz.versionString()});
     if build_config::font_backend().has_harfbuzz() {
@@ -436,12 +444,7 @@ pub fn init_with_action(action_detected: bool) -> Result<rustty_core::Logging, I
             &logging,
         );
     }
-    log_with(
-        Level::Info,
-        "default",
-        &format!("renderer={}", zig_renderer(build_config::renderer())),
-        &logging,
-    );
+    log_with(Level::Info, "default", &renderer_line(), &logging);
     // std.log.info("libxev default backend={t}", .{xev.backend});
     //
     // CORRECTED (task 14d-1, closes S43-F2): this was a HARDCODED
@@ -691,6 +694,44 @@ mod bootstrap_tests {
     // port's `Debug` (`None`, `FreetypeWindows`, `Opengl`). MEASURED against the
     // reference exe on Windows: `runtime=.none`, `font_backend=.freetype_windows`,
     // `renderer=renderer.generic.Renderer(renderer.OpenGL)`.
+    // Review W-4 F8: the lines `init_with_action` logs (its call sites use
+    // these builders), for this build's own configuration.
+    #[test]
+    fn init_log_lines_are_the_references() {
+        // The build's own values, whichever backend options it was built with:
+        // each line is one of the reference's `{}` renderings.
+        assert!(
+            ["runtime=.none", "runtime=.gtk"].contains(&runtime_line().as_str()),
+            "{}",
+            runtime_line()
+        );
+        assert!(
+            [
+                "font_backend=.freetype",
+                "font_backend=.freetype_windows",
+                "font_backend=.fontconfig_freetype",
+                "font_backend=.coretext",
+                "font_backend=.coretext_freetype",
+                "font_backend=.coretext_harfbuzz",
+                "font_backend=.coretext_noshape",
+                "font_backend=.web_canvas",
+            ]
+            .contains(&font_backend_line().as_str()),
+            "{}",
+            font_backend_line()
+        );
+        assert!(
+            [
+                "renderer=renderer.generic.Renderer(renderer.Metal)",
+                "renderer=renderer.generic.Renderer(renderer.OpenGL)",
+                "renderer=renderer.WebGL",
+            ]
+            .contains(&renderer_line().as_str()),
+            "{}",
+            renderer_line()
+        );
+    }
+
     #[test]
     fn init_log_values_use_zig_rendering() {
         use rustty_build_config::{font, renderer, Runtime};

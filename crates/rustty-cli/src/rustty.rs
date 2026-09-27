@@ -83,6 +83,47 @@ pub enum Error {
     OutOfMemory,
 }
 
+impl Error {
+    /// `{}` of the error, as the reference's `std.log.err("CLI action failed
+    /// error={}", .{err})` prints it: `error.<Name>` (review W-4 F8; before, the
+    /// log printed the port's `Debug`).
+    ///
+    /// - `Io` is a failed write through a CLI writer: the reference's writers are
+    ///   `std.Io.Writer`s, whose error is `error.WriteFailed` (MEASURED with the
+    ///   reference exe on Windows, task W-4).
+    /// - `Parse`/`Config` reuse the existing `error.<Name>` renderings.
+    /// - The wrapped foreign errors print their innermost variant name, which is
+    ///   the reference's name where the port kept Zig's names; UNVERIFIED for
+    ///   each error set one by one.
+    pub fn zig_name(&self) -> String {
+        match self {
+            Error::ActionHelpRequested => "error.ActionHelpRequested".to_string(),
+            Error::Io(_) => "error.WriteFailed".to_string(),
+            Error::Parse(e) => crate::zig_error::args_error(e),
+            Error::Config(e) => rustty_config::zig_error::load_error(e),
+            Error::OutOfMemory => "error.OutOfMemory".to_string(),
+            Error::ArgsInit(e) => innermost_variant(&format!("{e:?}")),
+            Error::Xdg(e) => innermost_variant(&format!("{e:?}")),
+            Error::FileLoad(e) => innermost_variant(&format!("{e:?}")),
+            #[cfg(not(target_arch = "wasm32"))]
+            Error::FontDiscover(e) => innermost_variant(&format!("{e:?}")),
+            #[cfg(not(target_arch = "wasm32"))]
+            Error::FontLibrary(e) => innermost_variant(&format!("{e:?}")),
+            Error::Tty(e) => innermost_variant(&format!("{e:?}")),
+        }
+    }
+}
+
+/// `error.<Name>` from a `Debug` form such as `Fc(OutOfMemory)` or `Errno(5)`:
+/// the innermost identifier that is a name (a bare number is skipped).
+fn innermost_variant(debug: &str) -> String {
+    let name = debug
+        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .rfind(|t| t.chars().next().is_some_and(|c| c.is_ascii_alphabetic()))
+        .unwrap_or("Unexpected");
+    format!("error.{name}")
+}
+
 impl From<std::io::Error> for Error {
     fn from(e: std::io::Error) -> Self {
         Error::Io(e)
@@ -305,10 +346,11 @@ impl action::Action for Action {
 //
 // PORT NOTE (S68-F5): the reference writes these two arms INLINE inside
 // `run`'s `inline for`. They are lifted here for one reason only: both arms
-// are IO-failure arms on the process's real stdout, and a test cannot make
-// `std::io::stdout()` fail. The control flow, the messages, the levels and the
-// exit codes are the reference's, unchanged; `run` passes the same
-// `BufWriter<StdoutLock>` it built inline before.
+// are IO-failure arms on the process's real stdout, which a unit test cannot
+// make fail in-process. The control flow, the messages, the levels and the
+// exit codes are the reference's, unchanged; `run` passes the 1024-byte
+// `BufWriter<io_file::StdFile>` (Zig's stdout File, task W-4 N365) it builds
+// inline. CORRECTION (review W-4 F6): this said `BufWriter<StdoutLock>`.
 fn write_help_text<W: std::io::Write>(stdout: &mut W, text: &str) -> u8 {
     // stdout.writeAll(text) catch |write_err| { ... break :err 1; };
     if let Err(write_err) = writeln!(stdout, "{text}") {
@@ -765,6 +807,22 @@ mod tests {
     use super::Action;
     use crate::action::{detect_iter, DetectError};
     use crate::test_util::ArgIteratorGeneral;
+
+    // Review W-4 F8: `CLI action failed error={}` prints `error.<Name>`.
+    #[test]
+    fn action_errors_render_as_zig_error_names() {
+        use super::{innermost_variant, Error};
+        let io = Error::Io(std::io::Error::from_raw_os_error(9));
+        assert_eq!("error.WriteFailed", io.zig_name());
+        assert_eq!("error.OutOfMemory", Error::OutOfMemory.zig_name());
+        assert_eq!(
+            "error.ActionHelpRequested",
+            Error::ActionHelpRequested.zig_name()
+        );
+        assert_eq!("error.OutOfMemory", innermost_variant("Fc(OutOfMemory)"));
+        assert_eq!("error.Errno", innermost_variant("Errno(5)"));
+        assert_eq!("error.NoHomeDir", innermost_variant("NoHomeDir"));
+    }
 
     // test "parse action none"
     #[test]

@@ -81,8 +81,11 @@ impl Pager {
             // (Zig's stdout File, task W-4 N365.)
             Sink::Stdout(crate::io_file::stdout())
         };
+        // Both callers hand the reference's `writer` a 4096-byte buffer
+        // (`show_config.zig:87`, `explain_config.zig:98`); CORRECTION (review
+        // W-4 F7): this was `BufWriter`'s 8 KiB default.
         PagerWriter {
-            inner: std::io::BufWriter::new(sink),
+            inner: std::io::BufWriter::with_capacity(4096, sink),
         }
     }
 

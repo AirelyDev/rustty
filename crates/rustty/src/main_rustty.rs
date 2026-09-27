@@ -244,7 +244,9 @@ pub fn main() {
         let code = action.run().unwrap_or_else(|err| {
             log_fn(
                 LogLevel::Err,
-                &format!("CLI action failed error={err:?}"),
+                //   `{}` of the error is `error.<Name>`; CORRECTION (review W-4 F8):
+                //   this printed the port's `Debug`.
+                &format!("CLI action failed error={}", err.zig_name()),
                 &state.logging,
             );
             1
