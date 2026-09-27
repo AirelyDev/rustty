@@ -6775,10 +6775,17 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   Windows (io_file writing through `std::io::stdout()` again): both exit-1 tests fail with `right: 0`.
   `io_file::tests::a_write_to_an_unwritable_stdout_fails_where_std_reports_success` (Unix: fd 1 open read-only).
   Negative control on macOS: the same mutation, `RESULT ours_failed=false std_ok=true`.
-- **residual (not fixable here)**: a CLOSED descriptor on Unix (`rustty +version >&-`). Rust's runtime reopens a
-  closed fd 0-2 on `/dev/null` before `main` (MEASURED on macOS: exit 0 before and after the fix); Zig's start code
-  does not, so Ghostty gets `EBADF` and exits 1 (UNVERIFIED on a Ghostty build; follows from the same `try`s).
-- **state**: CLOSED (fixed), with the Unix closed-fd residual recorded.
+- **closed descriptor (task W-4b, review W-4 F1)**: a CLOSED fd on Unix (`rustty +version >&-`). Rust's runtime
+  reopens a closed fd 0-2 on `/dev/null` before `main`, so the write succeeded (MEASURED on macOS: exit 0); Zig's
+  start code does not, and a Zig 0.16.0 program writing through `std.Io.File.stdout().writer(io, &buf)` gets
+  `error.WriteFailed` (`NotOpenForWriting`, EBADF) and exits 1 (MEASURED by review W-4 with a Zig probe; not with a
+  Ghostty build). Now matched: a C constructor in `io_file` (`.init_array` on Linux/FreeBSD/Android,
+  `__DATA,__mod_init_func` on macOS), which runs before `lang_start`, records which of fd 1/2 were closed at exec,
+  and a write to such a stream returns `EBADF`. MEASURED on macOS: `rustty +version >&-` and `rustty >&-` exit 1.
+  Test `io_file::tests::a_write_to_a_stdout_closed_at_exec_fails_with_ebadf` (child with fd 1 closed before exec);
+  negative control (the probe records nothing): `RESULT ebadf=false std_ok=true`. CORRECTION: this entry called
+  the closed case "not fixable here".
+- **state**: CLOSED (fixed, including the closed-descriptor case).
 
 ## N366 — `+show-config` compared the config against the bare struct defaults
 
@@ -6810,9 +6817,14 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 - **test**: `bootstrap_tests::init_log_values_use_zig_rendering` (the three tables); the exe differential's
   `log-stderr-version` and `log-stderr-list-actions` cases compare the whole log, byte for byte, with the
   reference's (they failed before the fix, on exactly these lines).
-- **not fixed**: `CLI action failed error={}` still prints the port's `Debug` of its error (the reference prints
-  `error.<Name>`); only visible with logging on and an action error. Recorded, not changed.
-- **state**: CLOSED (fixed), with the action-error log line recorded.
+- **task W-4b (review W-4 F8)**: the three lines are built by `runtime_line`/`font_backend_line`/`renderer_line`,
+  which `init_with_action` logs; `bootstrap_tests::init_log_lines_are_the_references` asserts each line is one of
+  the reference's `{}` renderings (negative control: `runtime_line` back on `{:?}` fails with `runtime=None`).
+  `CLI action failed error={}` now prints `error.<Name>` (`rustty-cli` `Error::zig_name`: `Io` is
+  `error.WriteFailed`, the writer error; `Parse`/`Config` reuse the existing renderings; the wrapped foreign error
+  sets print their innermost variant name, UNVERIFIED set by set); test
+  `rustty::tests::action_errors_render_as_zig_error_names`. CORRECTION: this entry left that line "not fixed".
+- **state**: CLOSED (fixed).
 
 ## N368 — `+edit-config`'s Windows message had one blank line too many
 
@@ -6854,3 +6866,26 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   `core.autocrlf=true` (the Windows default, and GitHub's runners) would embed CRLF too; the template is not in the
   matrix (it is a file side effect). UNVERIFIED: a reference build from a Windows checkout.
 - **state**: CLOSED (the harness and goldens are committed and in the Windows CI leg).
+
+## N380 — rustty-os and CLI diagnostics bypassed the log facade through `eprintln!`
+
+- **id**: N380 (provisional: W-4's block N365-N369 was used up and N370-N379 are P-1's; the controller may
+  renumber). Not a ledger row: found by review W-4 (out of scope there), fixed by task W-4b.
+- **severity**: low. **kind**: port bug (diagnostics printed where the reference prints none).
+- **finding**: the reference's `std.log.scoped(..)` calls go through `logFn`, whose stderr sink is off for a CLI
+  action unless `GHOSTTY_LOG` turns it on. Fourteen port `log_*` helpers printed with a bare `eprintln!("[lvl] [scope] ...")`,
+  which ignores the logging settings and the reference's `level(scope): message` form: rustty-os `mouse.rs`
+  (`log_err`; on macOS every `+show-config` printed `[err] [os] NSEvent class not found. Can't get click
+  interval.`), `file.rs` (`log_warn`, `log_debug`; a debug build printed `[debug] [os] file handle limit raised
+  ...` on every run), `edit.rs`, `tempdir.rs`, `systemd.rs` (2), `flatpak.rs` (2), `open.rs`, `passwd.rs` (2), and
+  rustty-cli `ssh.rs` (`log_warn`, beside the reference's own `Warning:` line) and `ssh_cache/entry.rs`
+  (unscoped `std.log.warn`). Every scope matched the reference's already.
+- **fix**: each helper calls the `log` facade with the reference's level and scope (`log::error!(target: LOG_SCOPE,
+  ..)`, the empty target for the unscoped `std.log`), as `pty.rs` already did. The debug helpers lost their
+  `cfg(debug_assertions)` gate: the facade applies the reference's Debug-only rule.
+- **test**: `crates/rustty/tests/cli_log_facade.rs` (macOS): `rustty +show-config --no-pager` prints nothing on
+  stderr; with `RUSTTY_LOG=stderr` it prints `error(os): NSEvent class not found. Can't get click interval.`.
+  Negative control: `mouse.rs` `log_err` back on `eprintln!`, both tests fail.
+- **not covered**: other crates' `eprintln!`/`println!` sites (renderer, apprt GTK, vt search thread, termio, ...)
+  were not audited one by one here; the survey found no other `"[lvl] [scope]"` helper outside these files.
+- **state**: CLOSED (fixed).

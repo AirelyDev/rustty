@@ -2705,7 +2705,7 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - defect:          the message stays in the writer's buffer, and the buffer is discarded when `run` returns, so the command exits 1 with no output wherever the IPC is not delivered.
 - ReleaseSafe:     not built (UNVERIFIED; no safety check is involved). Debug, MEASURED on Windows 11 (the reference exe built at the pin, GNU ABI, task W-4): `ghostty +toggle-quick-terminal` with stderr captured writes 0 bytes and exits 1. 
 - ReleaseFast:     the same (MEASURED, same host).
-- reachability:    every run of the action on a platform or instance without the IPC (Windows, macOS, a GTK build with no running instance).
+- reachability:    every run of the action in a build whose app runtime has no IPC for it (`.none`: Windows and the macOS CLI). CORRECTION (review W-4 F5): this also named "a GTK build with no running instance"; GTK's `toggleQuickTerminal` (`src/apprt/gtk/ipc/toggle_quick_terminal.zig:19-23`) returns `true` or an error, so a GTK build never reaches the message.
 - port handling:   `crates/rustty-cli/src/toggle_quick_terminal.rs` `report_unsupported`: prints the message and flushes with the siblings' `catch {}`. `PORT NOTE: reference defect (R13)` at the site. Before task W-4 the port printed it only through `BufWriter`'s flush on drop, with no record of the difference.
 - parity row(s):   none (found by task W-4's Windows exe differential).
 - test:            `toggle_quick_terminal::tests::unsupported_message_is_flushed_before_returning` (the writer is kept alive across the assertion). Negative control: the `flush` removed, the test fails with `right: ""`. The exe differential (`.port/tools/windows/exe-differential.ps1`, case `toggle-quick-terminal`) records it as a justified stderr difference.
@@ -2718,7 +2718,7 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - upstream project: ghostty (the cause is Zig 0.16.0's `File.Writer.end()` on a Windows pipe)
 - severity:        medium (scripts and editors that pipe the output read a valid config as invalid)
 - reference:       `src/cli/validate_config.zig:43-48` at 20abdb50a: `try stdout_writer.end()` after `runInner`. Zig 0.16.0 `std/Io/File/Writer.zig:235-251`: `end()` flushes, then, for a writer still in `.positional` mode, calls `file.setLength(pos)`, tolerating only `error.NonResizable`.
-- defect:          on Windows a pipe does not move the writer out of `.positional` mode, and `setLength` on the pipe fails with `error.FileTooBig`, so `run` returns the error and the action exits 1 although the config has no diagnostics. With a file (`> out.txt`) the truncation succeeds and it exits 0. On POSIX a pipe drops the writer to `.streaming` and `end()` does not truncate.
+- defect:          on Windows a pipe does not move the writer out of `.positional` mode, and `setLength` on the pipe fails with `error.FileTooBig`, so `run` returns the error and the action exits 1 although the config has no diagnostics. With a file (`> out.txt`) the truncation succeeds and it exits 0. On a POSIX pipe the writer drops to `.streaming` and `end()` does not truncate; on a POSIX regular file it does (see UD346). CORRECTION (review W-4 F2): this said "On POSIX ... `end()` does not truncate", which holds for pipes only.
 - ReleaseSafe:     not built (UNVERIFIED). Debug, MEASURED on Windows 11 (reference exe at the pin, task W-4): `ghostty +validate-config --config-file=<valid>` piped (`| Out-String`, or `Process` with redirected stdout) exits 1 with `GHOSTTY_LOG=stderr` showing `error: CLI action failed error=error.FileTooBig`; `cmd /c "... > o.txt"` exits 0. The same with no `--config-file` (the default config).
 - ReleaseFast:     the same (MEASURED, same host).
 - reachability:    any Windows run with stdout on a pipe.
@@ -2774,6 +2774,22 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - parity row(s):   none (found by task W-4).
 - test:            the exe differential's `list-fonts` case (same host: byte-identical output).
 - proposed fix:    decode the Unicode platform (0) entries as UTF-16BE too, or prefer the Microsoft/Unicode-BMP entry when present.
+- upstream status: not reported
+
+### UD346 — the CLI's stdout/stderr writers write from offset 0, overwriting a redirected file, and `end()` truncates it
+
+- kind:            functional (evident intent: a shell redirection's offset and `O_APPEND`); fixed in the port (R13).
+- upstream project: ghostty (the behaviour is Zig 0.16.0's `File.writer()` default, which every CLI writer uses)
+- severity:        medium (appending a command's output to a log destroys the log)
+- reference:       every CLI writer at 20abdb50a is `std.Io.File.stdout()`/`.stderr()` `.writer(global.io(), &buffer)` (e.g. `src/cli/version.zig:19-21`, `validate_config.zig:43-47`, `explain_config.zig:79-85`). Zig 0.16.0 `std/Io/File/Writer.zig` `init` sets `.mode = .positional, .pos = 0`, so the bytes go out with `pwrite` at offset 0 whatever the descriptor's offset or `O_APPEND`; `end()` (`:235-251`) then calls `setLength(pos)` on a positional writer.
+- defect:          `(echo header; ghostty +version) > f` overwrites the header; `ghostty +version >> f` overwrites the start of an existing file; `+validate-config` (and `+explain-config`'s usage on stderr, `2>> log`) run `end()`, which truncates the file to the command's own output, so a `>>` log is destroyed.
+- ReleaseSafe:     MEASURED on macOS by review W-4 with Zig 0.16.0 programs using the reference's exact writer calls (not a Ghostty build): `(echo header-line; prog) > f` gives `zig\ner-line\n`; `printf 'existing-content\n' > f; prog >> f` gives `zig\nting-content`; with `end()`, `>>` onto a two-line log leaves `zig\n`. Windows (`cmd >>`) UNVERIFIED.
+- ReleaseFast:     the same (the writer mode is not a safety check).
+- reachability:    any action whose stdout (or stderr) is a regular file not at offset 0, or opened for appending.
+- port handling:   `crates/rustty-cli/src/io_file.rs` writes at the descriptor's current offset (`write(2)` / `WriteFile`), which honours the shell's `>>` and a shared offset, and the port never truncates (`validate_config.rs` flushes; see UD341). `PORT NOTE: reference defect (R13)` in the module doc. Listed in `docs/ghostty-bug-fixes.md`.
+- parity row(s):   none (found by review W-4; recorded by task W-4b).
+- test:            `io_file::tests::an_appended_stdout_keeps_the_existing_content` (Unix: a child writes through `io_file::stdout()` into a file opened for appending that holds `existing-content\n`; the content is kept and the bytes follow it). Negative control: the write as `pwrite(fd, .., 0)` (the reference's positional write) gives `zig\nting-content...` and the test fails.
+- proposed fix:    create the CLI writers in streaming mode (`File.writerStreaming`), and flush rather than `end()` on stdout/stderr.
 - upstream status: not reported
 
 ## Candidates pending verification
