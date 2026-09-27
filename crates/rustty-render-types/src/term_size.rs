@@ -140,7 +140,16 @@ impl<T> Offset<T> {
         // The offset must be properly aligned for the type since
         // our return type is naturally aligned. We COULD modify this
         // to return arbitrary alignment, but its not something we need.
-        let addr = base.int_from_base() + self.offset as usize;
+        //
+        // PORT NOTE (S7-9, strict provenance): the reference computes
+        // `@intFromPtr(base) + offset` and returns `@ptrFromInt(addr)`. The
+        // address arithmetic is kept as integer arithmetic, but the result is
+        // built with `with_addr` on the base pointer rather than an
+        // integer-to-pointer cast, so it keeps the base's provenance (same
+        // address, same codegen; Miri no longer has to guess the provenance of
+        // an exposed integer, which weakened its checking).
+        let base_ptr = base.ptr_from_base();
+        let addr = base_ptr.addr() + self.offset as usize;
         // PARITY: the reference is `assert(addr % @alignOf(T) == 0)`; the modulo
         // form is kept verbatim rather than rewritten to `is_multiple_of` so the
         // ported expression matches the reference char-for-char.
@@ -148,7 +157,7 @@ impl<T> Offset<T> {
         {
             assert(addr % core::mem::align_of::<T>() == 0);
         }
-        addr as *mut T
+        base_ptr.with_addr(addr).cast::<T>()
     }
 }
 
@@ -299,8 +308,11 @@ impl OffsetBuf {
 
     /// Initialize from some base pointer and offset.
     pub fn init_offset<B: IntFromBase>(base: B, offset: usize) -> OffsetBuf {
+        // PORT NOTE (S7-9, strict provenance): the reference stores
+        // `@ptrFromInt(intFromBase(base))`; the base pointer itself carries the
+        // same address and keeps its provenance (see `Offset::ptr`).
         OffsetBuf {
-            base: base.int_from_base() as *mut u8,
+            base: base.ptr_from_base(),
             offset,
         }
     }
@@ -369,7 +381,7 @@ impl OffsetBuf {
 #[inline]
 pub unsafe fn get_offset<T, B: IntFromBase>(base: B, ptr: *const T) -> Offset<T> {
     let base_int = base.int_from_base();
-    let ptr_int = ptr as usize;
+    let ptr_int = ptr.addr();
     let offset = ptr_int - base_int;
     Offset::new(offset as OffsetInt)
 }
@@ -384,40 +396,53 @@ pub unsafe fn get_offset<T, B: IntFromBase>(base: B, ptr: *const T) -> Offset<T>
 /// Rust expresses this type-directed dispatch with a trait implemented for the
 /// accepted base types; an unaccepted type simply does not implement it (the
 /// compile-time equivalent of the `@compileError` arm).
-pub trait IntFromBase {
-    fn int_from_base(self) -> usize;
+///
+/// PORT NOTE (S7-9, strict provenance): each arm returns the base **pointer**
+/// (`ptr_from_base`); `int_from_base` is its address. Callers that turn an
+/// address back into a pointer derive it from `ptr_from_base` with
+/// `with_addr` instead of casting an integer, so the result keeps the base's
+/// provenance. The address, and so every offset computed from it, is the
+/// reference's `@intFromPtr` value.
+pub trait IntFromBase: Sized {
+    /// The base pointer the reference passes to `@intFromPtr`.
+    fn ptr_from_base(self) -> *mut u8;
+
+    /// `@intFromPtr(base)`: the base pointer's address.
+    fn int_from_base(self) -> usize {
+        self.ptr_from_base().addr()
+    }
 }
 
 // .one, .many, .c => @intFromPtr(base),
 impl<T> IntFromBase for *const T {
-    fn int_from_base(self) -> usize {
-        self as usize
+    fn ptr_from_base(self) -> *mut u8 {
+        self.cast_mut().cast::<u8>()
     }
 }
 
 impl<T> IntFromBase for *mut T {
-    fn int_from_base(self) -> usize {
-        self as usize
+    fn ptr_from_base(self) -> *mut u8 {
+        self.cast::<u8>()
     }
 }
 
 // .slice => @intFromPtr(base.ptr),
 impl<T> IntFromBase for &[T] {
-    fn int_from_base(self) -> usize {
-        self.as_ptr() as usize
+    fn ptr_from_base(self) -> *mut u8 {
+        self.as_ptr().cast_mut().cast::<u8>()
     }
 }
 
 impl<T> IntFromBase for &mut [T] {
-    fn int_from_base(self) -> usize {
-        self.as_ptr() as usize
+    fn ptr_from_base(self) -> *mut u8 {
+        self.as_mut_ptr().cast::<u8>()
     }
 }
 
 // OffsetBuf => @intFromPtr(base.base),
 impl IntFromBase for OffsetBuf {
-    fn int_from_base(self) -> usize {
-        self.base as usize
+    fn ptr_from_base(self) -> *mut u8 {
+        self.base
     }
 }
 
@@ -450,11 +475,11 @@ mod tests {
         }
         let offset: Offset<Struct> =
             Offset::new((core::mem::align_of::<Struct>() * 4) as OffsetInt);
-        let base_int: usize = align_forward(
-            (&offset as *const Offset<Struct>) as usize,
-            core::mem::align_of::<Struct>(),
-        );
-        let base: *const u8 = base_int as *const u8;
+        // (The rounded base is derived from the local's pointer with
+        // `map_addr`, not cast from an integer: strict provenance, S7-9.)
+        let base: *const u8 = (&offset as *const Offset<Struct> as *const u8)
+            .map_addr(|a| align_forward(a, core::mem::align_of::<Struct>()));
+        let base_int: usize = base.addr();
         let actual = unsafe { offset.ptr(base) };
         assert_eq!(base_int + offset.offset as usize, actual as usize);
     }

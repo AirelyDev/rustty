@@ -1,6 +1,7 @@
 # S-7 — caller allocator for libghostty-vt internals: design study (S-7a)
 
-Status: DESIGN STUDY with a measured prototype. Nothing here is merged behaviour.
+Status: DESIGN STUDY with a measured prototype, IMPLEMENTED by tasks S7-1..S7-9
+(see §9 "Outcome"). The body below is the study as written; §9 records what shipped.
 Pin: `20abdb50a`. Branch `tail-s7a` (this document); prototype branch
 `tail-s7a-proto` (NOT FOR MERGE: `045dd4f0` prototype, `8f150e0d` harness).
 
@@ -502,3 +503,40 @@ S7-4, within the ≤ 3 building worktrees disk budget.
 - **N264.** `PageList::init` lost the reference's `alloc` parameter (336 call
   sites). S7-2 restores it together with `MemoryPool.init(gen_alloc, page_alloc,
   preheat)`.
+
+## 9. Outcome (task S7-9, 2026-09-27)
+
+Option (B) shipped as recommended, in the planned order (S7-1 foundation, S7-2
+import swap, S7-3 PageList/Screen/Terminal, S7-4 kitty/APC/stream/clipboard/vt-c
+wrapper, S7-5 RenderState, S7-6 search, S7-7 OSC commands, S7-8 selection-gesture
+codepoints and the C API's allocating writers, S7-9 records). The runtime handle is
+`rustty_vt::alloc::VtAllocator`.
+
+- **Rows**: S174-F3, S175-F1, S176-F1, S179-F2 and S4-F2 are CLOSED in `LEDGER.tsv`,
+  each with routing tests over counting allocators and negative controls (N272,
+  N274, N315, N320, N325). `DEFERRALS.md` F-008/W12-01: Tier 1 FIXED, Tier 2 CLOSED
+  (N334), Tier 3 RECORDED (N360).
+- **T1/T2**: every allocation the reference sends to the caller's allocator reaches
+  it, page memory stays on the page allocator, and every reference `try` is
+  reachable as `OUT_OF_MEMORY`, log-and-drop or the fixed fallback. The C-API
+  failure sweeps (terminal, render, search, OSC, selection gesture, allocating
+  writers, snapshot decode) never abort and return every byte.
+- **T3**: the call-shape differences that remain are consolidated in N360, with
+  file:line and reason for each. One of them was taken for performance and accepted
+  by the user (2026-09-26): the render state's per-column cell storage (N315). The
+  allocator_api2 growth residual is pinned by
+  `zig_list::tests::rawvec_growth_is_the_recorded_t3_residual`.
+- **Findings of this study**: N260-N264 are filed in `NEW-FINDINGS.md` (all CLOSED or
+  informational). The series found and fixed the reference defects UD305, UD310-UD315
+  (R13), and the port soundness defects N270 and N273.
+- **Where the implementation departed from §7**: the per-row arena became retained
+  lists, and the cells are per-column allocations (N315). The tracker, pin map and
+  writers use a port of Zig's `ArrayList` growth (`zig_list.rs`), not allocator_api2
+  growth. `Stream::init_in` was retired again by S7-7 (`Options.allocator`).
+- **Miri**: the controller's lane runs the S7 targets
+  (`.superpowers/.../miri/run.sh`). S7-9 made them tractable and removed the
+  integer-to-pointer casts on the page-offset path (N361, N362). The results are the
+  lane's to record.
+- **Perf**: the tasks' reports carry their paired-fence numbers (not re-measured
+  here). The idle-machine G8b rerun that §5 asks for is not part of
+  this record (UNVERIFIED here).

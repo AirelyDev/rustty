@@ -358,6 +358,45 @@ mod tests {
     use crate::alloc::testing::{with_handle, Config, CountingAllocator, FailingAllocator};
     use std::io::Write;
 
+    // Parity tail S7-9 (NEW-FINDINGS N360, the T3 call-shape residual; Rust-only):
+    // a caller-routed container that still grows by allocator_api2's amortized
+    // `RawVec` policy (`try_reserve`/`try_extend_copy` on an `AVec`, e.g. the
+    // `StackFallbackWriter` spill after its first allocation, N332/N274, and the
+    // render state's grapheme buffer, N315) shows the caller's allocator other
+    // sizes than Zig's `growCapacity`. Pinned here so a change on either side
+    // (an allocator_api2 bump, a switch of a site to `zig_list`) is noticed and
+    // the record updated.
+    #[test]
+    fn rawvec_growth_is_the_recorded_t3_residual() {
+        use crate::alloc::{Bytes, CopyVecExt};
+        let counting = CountingAllocator::over_heap();
+        let c = counting.allocator();
+        with_handle(&c, |alloc| {
+            // A first push of one byte: RawVec's minimum non-zero capacity for
+            // a 1-byte element is 8; Zig's `ArrayList(u8)` asks for
+            // growCapacity(1) = 129.
+            let mut v = Bytes::new_in(alloc);
+            v.try_extend_copy(&[1]).unwrap();
+            assert_eq!(Some((8, 0)), counting.last_alloc.get());
+            assert_eq!(1 + 0 + 128, grow_capacity(1, init_capacity(1)));
+            drop(v);
+
+            // The stack-fallback spill: one exact request for the payload
+            // (513 at a 512-byte buffer), then a growth by one byte doubles to
+            // 1026, where `growCapacity(514)` is 899.
+            let mut b = Bytes::new_in(alloc);
+            b.try_reserve(513).unwrap();
+            assert_eq!(Some((513, 0)), counting.last_alloc.get());
+            b.extend_copy(&[0u8; 513]);
+            b.try_extend_copy(&[0u8]).unwrap();
+            assert_eq!(1026, b.capacity());
+            assert_eq!(1026, counting.live_bytes.get(), "the caller saw 1026 bytes");
+            assert_eq!(514 + 257 + 128, grow_capacity(514, init_capacity(1)));
+            drop(b);
+            assert_eq!(0, counting.live_bytes.get());
+        });
+    }
+
     #[test]
     fn grow_capacity_matches_zig() {
         // ArrayList(u8) on a 128-byte cache line: init_capacity 128.

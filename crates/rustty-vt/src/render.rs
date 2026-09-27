@@ -3768,7 +3768,17 @@ mod tests {
         with_handle(&c, |alloc| {
             let mut state = RenderState::empty();
             state.update(alloc, &mut t).unwrap();
-            let _ = state.update(Global, &mut t);
+            // The expected panic is caught so the state and the terminal are
+            // still torn down (Miri reports the leak otherwise), then re-raised
+            // for `should_panic` (S7-9; the pattern of 16ef8680).
+            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _ = state.update(Global, &mut t);
+            }));
+            state.deinit(alloc);
+            t.deinit(Global);
+            if let Err(p) = r {
+                std::panic::resume_unwind(p);
+            }
         });
     }
 

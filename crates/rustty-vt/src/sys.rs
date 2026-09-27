@@ -62,7 +62,9 @@ impl RawAllocator for GlobalRawAllocator {
             // Zig: a zero-length alloc returns a valid, aligned,
             // dereference-free pointer; model it with a non-null aligned
             // sentinel so the global allocator never sees a 0-size layout.
-            return alignment.to_byte_units() as *mut u8;
+            // (`without_provenance_mut`: an address with no provenance, not an
+            // integer-to-pointer cast — strict provenance, S7-9.)
+            return core::ptr::without_provenance_mut(alignment.to_byte_units());
         }
         let layout = std::alloc::Layout::from_size_align(len, alignment.to_byte_units()).unwrap();
         // SAFETY(zig-port-idiom/sys): `layout` has a nonzero size (guarded

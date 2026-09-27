@@ -18950,6 +18950,35 @@ fn pagelist_diagram_writes_replacement_for_unencodable_codepoints() {
     s.deinit();
 }
 
+/// Make the first page of a fresh single-page list cold in constant time: fill
+/// it to capacity by bumping `size.rows` (`init_buf` formats every row up to
+/// capacity, so the rows are valid blank rows), `grow()` once for the second
+/// page, and bump that page to the active area's height. The first page is
+/// then entirely history (S7-9; see `pagelist_grow_prune_miri_tractable`).
+fn make_first_page_cold_surgically_for_test(s: &mut PageList) {
+    assert!(core::ptr::eq(s.pages.first, s.pages.last), "a fresh list");
+    unsafe {
+        let first = &mut (*super::Node::page(s.pages.first));
+        first.size.rows = first.capacity.rows;
+    }
+    s.total_rows = s.total_rows();
+    let second = s.grow().unwrap().expect("the second page is allocated");
+    assert!(core::ptr::eq(second, s.pages.last));
+    unsafe {
+        let last = &mut (*super::Node::page(s.pages.last));
+        assert!(s.rows as usize <= last.capacity.rows as usize);
+        last.size.rows = s.rows;
+    }
+    s.total_rows = s.total_rows();
+    s.assert_integrity();
+    let active = s.get_top_left(point::Tag::Active).node;
+    assert!(
+        core::ptr::eq(s.pages.last, active),
+        "the active area is on page 2"
+    );
+    assert_eq!(2, s.total_pages());
+}
+
 // Parity tail S7-3 routing evidence (Rust-only; the reference has no unit test
 // for this, its routing is by construction): every PageList allocation the
 // reference makes through `alloc` (the node and pin pools, every tracked-pin
@@ -19004,7 +19033,19 @@ fn pagelist_internals_route_through_the_allocator_handle() {
         s.untrack_pin(p);
 
         // Compression: the exact-sized encoding is allocated through `alloc`.
-        grow_cold_pages_for_test(&mut s, 1);
+        //
+        // One cold page is made surgically (S7-9, Miri budget): the first page
+        // is filled to capacity and the second to the active area by bumping
+        // `size.rows` (`init_buf` formats rows to full capacity, the
+        // `pagelist_grow_prune_miri_tractable` precedent), with one `grow()`
+        // between them, instead of `grow_cold_pages_for_test`'s one `grow()`
+        // per row. Each of those ~600 grows runs the O(page) integrity walk,
+        // which under Miri was quadratic (the test ran 18 h). The routing
+        // claims below are about the compression, decode and clone calls, not
+        // about how the history was written, and the list is the same shape
+        // (two standard pages, the first one cold), so the one configuration
+        // serves both the native and the Miri lane.
+        make_first_page_cold_surgically_for_test(&mut s);
         let before = counting.alloc_calls.get();
         let first = s.pages.first;
         assert!(s.compress_page(first));
@@ -19028,9 +19069,18 @@ fn pagelist_internals_route_through_the_allocator_handle() {
 
         // clone(alloc): the clone's pools (sized to its page count) and its
         // tracked-pin set. First without a pin remap, as the baseline...
+        //
+        // The clones start at the last history row, so they span both pages
+        // (the pools are sized for two) but copy 1 + 24 rows rather than the
+        // whole first page (S7-9: row-by-row cloning of a full page is the
+        // bulk of this test's cost natively, and far more under Miri).
+        let last_history_row = (s.total_rows - s.rows as usize - 1) as u32;
         let before = counting.alloc_calls.get();
         let mut plain = super::access::Clone {
-            top: point::Point::Screen(point::Coordinate { x: 0, y: 0 }),
+            top: point::Point::Screen(point::Coordinate {
+                x: 0,
+                y: last_history_row,
+            }),
             bot: None,
             tracked_pins: None,
         };
@@ -19045,10 +19095,21 @@ fn pagelist_internals_route_through_the_allocator_handle() {
 
         // ...then with one: exactly one more allocation, the remap map's
         // table (`TrackedPinsRemap.init(alloc)`, grown by `putNoClobber`). The
-        // remapped viewport pin fits the clone's pin set as built.
+        // one remapped pin fits the clone's pin set as built. (The viewport
+        // pin is above the cloned range, so a pin is tracked inside it: the
+        // top of the active area.)
+        let q = s
+            .track_pin(
+                s.pin(point::Point::Active(point::Coordinate { x: 0, y: 0 }))
+                    .unwrap(),
+            )
+            .unwrap();
         let before = counting.alloc_calls.get();
         let mut opts = super::access::Clone {
-            top: point::Point::Screen(point::Coordinate { x: 0, y: 0 }),
+            top: point::Point::Screen(point::Coordinate {
+                x: 0,
+                y: last_history_row,
+            }),
             bot: None,
             tracked_pins: Some(super::access::TrackedPinsRemap::with_hasher_in(
                 Default::default(),
@@ -19061,8 +19122,14 @@ fn pagelist_internals_route_through_the_allocator_handle() {
             counting.alloc_calls.get() - before,
             "the pin remap allocates through alloc"
         );
+        assert_eq!(
+            1,
+            opts.tracked_pins.as_ref().unwrap().len(),
+            "one pin remapped"
+        );
         drop(opts);
         cloned.deinit();
+        s.untrack_pin(q);
 
         s.deinit();
     });
