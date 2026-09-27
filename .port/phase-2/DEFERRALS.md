@@ -8215,12 +8215,30 @@ the snapshot decoder's `Source` and `ReaderState` (the reference keeps them
 inline in the caller-allocated `DecoderWrapper`; the port boxes them on the
 Rust heap so the core decoder's stored `&mut` never overlaps wrapper accesses,
 a Stacked Borrows requirement); `Screen::selection_string`'s output `Vec` (not
-reachable from the C API, and every caller passes the Rust heap handle); the
-Windows-only `std.Io.Threaded` box in `c/terminal.zig` `Io.init` (the port does
-not build for Windows). Page memory stays on the page allocator, as in the
-reference. Call-shape (T3) residuals — element sizes, writer call granularity,
-the record scratch's spill size, and allocator_api2 `Vec` growth where not yet
-`growCapacity` — are recorded in N325, N331, N332 and task S7-9.
+reachable from the C API, and every caller passes the Rust heap handle). Page
+memory stays on the page allocator, as in the reference.
+
+**Tier 3 (call shape) is RECORDED, not a routing gap** (parity tail S7-9,
+NEW-FINDINGS N360, which consolidates N272/N274/N315/N320/N325/N331/N332/N334).
+Every remaining C-observable difference in the calls a C allocator sees is
+listed there with file:line and reason: the render state's per-column cell
+storage (user-accepted 2026-09-26), the per-row arena stand-ins, the search's
+Rust element sizes, writer call granularity, the kitty-color list's element
+size, the kitty payload hand-over without `toOwnedSlice`'s shrink,
+allocator_api2 amortized growth where a site has not switched to `growCapacity`
+(e.g. the 513-byte exact stack-fallback spill; pinned by
+`zig_list::tests::rawvec_growth_is_the_recorded_t3_residual`), hashbrown-backed
+maps, `ret_addr = 0`, and the Windows `std.Io.Threaded` allocation. CORRECTION
+(S7-9): this entry used to list that allocation under "stays on the Rust heap"
+with the reason "the port does not build for Windows". The reference's
+`c/terminal.zig` `Io.init` makes it through the caller's allocator on Windows;
+the port has no `std.Io` model (the TinyIo row of `.port/phase-4/NON_PORTS.md`)
+and makes no call. Since task W-1 rustty-vt-c builds for Windows, so this is a
+C-observable call-count difference there (one allocation per terminal), recorded
+as N360 item 10.
+
+Status of every tier: Tier 1 FIXED; Tier 2 CLOSED (S7-3..S7-8); Tier 3 RECORDED
+(N360; no open routing or failure-semantics item).
 
 The macOS app path (null allocator) is unaffected: the handle's Global arm is
 the Rust heap.

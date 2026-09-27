@@ -4590,6 +4590,77 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   (green), then restored. It runs on a FreeBSD host (`VERIFICATION_DEBT.md` V23).
 - **state**: CLOSED (task tail-s13).
 
+## N260 — the caller's allocator must outlive every object built from it; the header does not say so
+
+- **id**: N260. Not a ledger row: recorded by the S-7 design study (`.port/parity-closure/S7-ALLOCATOR-DESIGN.md`
+  §1.1, §8), filed by task S7-9.
+- **severity**: informational. **kind**: reference documentation gap (no port change).
+- **oracle**: `src/lib/allocator.zig:78-87` at 20abdb50a: `Allocator.zig()` builds a `std.mem.Allocator` whose
+  `.ptr` is the caller's own `GhosttyAllocator*` (`@ptrCast(@constCast(self))`); no copy of the struct is taken,
+  and every call re-reads `ctx`/`vtable` through that pointer. `include/ghostty/vt/allocator.h` never states the
+  lifetime this implies.
+- **rustty**: `crates/rustty-vt/src/alloc.rs` (module doc: `VtAllocator`'s `Some` arm is the caller's own
+  `RusttyAllocator` pointer, re-read on every call; "the caller's `RusttyAllocator` must outlive every object
+  built from it"); `crates/rustty-lib/src/allocator.rs` `zig()` / `CAllocatorAsZig`. The port matches the
+  reference: same pointer, same re-read, same implied contract. `include/rustty/vt/allocator.h` stays verbatim
+  (R1), so it is silent too.
+- **state**: CLOSED (informational; filed by S7-9).
+
+## N261 — allocator_api2's stable `Vec` has no memcpy/fill specialization (+81% on `screen-clone.render` when swapped naively)
+
+- **id**: N261. Not a ledger row: measured by the S-7 design study (§4 (B) perf, §5), filed by task S7-9.
+- **severity**: medium (performance hazard). **kind**: container codegen.
+- **what**: allocator_api2 0.2.21's stable `Vec::extend_from_slice` is `extend(iter.cloned())` and `resize` a
+  per-element `ptr::write` loop, with no memcpy or fill specialization (std's `Vec` has both). Swapping
+  RenderState's std `Vec`s for it cost +80.5% (L1) / +81.0% (L5) on `screen-clone.render` (design §5 table,
+  N=9). `Extend` takes the same per-element loop (review S7-12 F8).
+- **fix**: `crates/rustty-vt/src/alloc.rs` `CopyVecExt` (`extend_copy`, `resize_copy` and the fallible
+  `try_extend_copy`, `try_resize_copy`): a bulk copy / fill after one reservation. The prototype with it
+  measured within noise of the baseline (design §5). Gated: clippy `disallowed-methods` bans allocator_api2
+  `Vec::{extend_from_slice, resize}` in `crates/rustty-vt/clippy.toml` and `crates/rustty-vt-c/clippy.toml`,
+  and G-VTALLOC (`.port/tools/gates/check_vt_alloc_vec_ban.sh`, with a self-test that proves the ban fires).
+- **state**: CLOSED (task S7-1; filed by S7-9).
+
+## N262 — a search's allocations are split between the search's allocator and the terminal's
+
+- **id**: N262. Not a ledger row: found by the S-7 design study (§1.2 table, §8), filed by task S7-9.
+- **severity**: informational. **kind**: allocator routing (reference behaviour to reproduce).
+- **oracle**: `src/terminal/c/search.zig:143-146` (the `searches` registry entry, `putNoClobber(terminal.gpa(),
+  ..)`), `src/terminal/search/pagelist.zig:58`, `search/screen.zig:557` and `highlight.zig:71-73` (the three
+  `trackPin` sites, on the screen's `PageList`, whose pin pool and pin set are the terminal's), at 20abdb50a.
+  Everything else a search allocates goes through the search's own allocator.
+- **rustty**: reproduced by task S7-6: the registry entry and the tracked pins are charged to the terminal, the
+  rest to the search (NEW-FINDINGS N325, "charged to the TERMINAL's allocator"; tests
+  `terminal_search_internals_route_through_the_allocator_handle`,
+  `terminal_search_terminal_charged_allocation_failure_sweep`, vt-c
+  `search_registry_routes_through_the_terminals_allocator`).
+- **state**: CLOSED (task S7-6, N325; filed by S7-9).
+
+## N263 — OSC `Command` text payloads were owned copies where the reference borrows
+
+- **id**: N263. Not a ledger row: found by the S-7 design study (§2, §8), filed by task S7-9.
+- **severity**: low. **kind**: port-only allocations (routing them would over-report calls the reference never
+  makes; leaving them on the Rust heap leaves memory unaccounted).
+- **oracle**: `src/terminal/osc.zig` and `osc/parsers/*.zig` at 20abdb50a: text payloads are slices into the
+  parser's buffer or capture, valid until the next parser call.
+- **rustty (before)**: about 15 `osc::Command` variants held owned `Vec<u8>` copies (`osc/mod.rs:52-211` at the
+  design's base `d33aef69`), plus a deep `Box<Command>` clone per dispatch.
+- **fix**: task S7-7 made the command borrow (`osc::Command<'p>`, `ZStr<'p>`, `&'p [u8]`); the lists belong to
+  the parser. Recorded as resolved in N320.
+- **state**: CLOSED (task S7-7, N320; filed by S7-9).
+
+## N264 — `PageList::init` had lost the reference's `alloc` parameter
+
+- **id**: N264. Not a ledger row: found by the S-7 design study (§2, §8), filed by task S7-9.
+- **severity**: low. **kind**: signature fidelity (R1).
+- **oracle**: `src/terminal/PageList.zig` `init(alloc, cols, rows, max_size)` and `MemoryPool.init(gen_alloc,
+  page_alloc, preheat)` at 20abdb50a.
+- **rustty (before)**: `PageList::init(opts)` with no allocator, 336 call sites (almost all tests), and pools on
+  the Rust heap.
+- **fix**: task S7-2 restored `PageList::init(alloc, opts)` and `MemoryPool::init(alloc, page_backing_alloc(),
+  preheat)` (`crates/rustty-vt/src/pagelist/mod.rs`); S7-3 routed the pools through the handle (N272).
+- **state**: CLOSED (tasks S7-2/S7-3; filed by S7-9).
+
 ## N265 — the reference's `test "face metrics"` never checks anything: its backend guard is inverted
 
 - **id**: N265. Not a ledger row: found by G2 once the `font` crate key was graded with its
@@ -6295,3 +6366,225 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   re-run the SIMD and vt suites on Windows. Not done in W-1b: each changes code generation (vectorization,
   exception tables) of code the Windows suites exercise, and needs its own measured run.
 - **state**: OPEN.
+
+## N360 — allocator call-shape residuals (T3): every C-observable difference the S-7 series leaves
+
+- **id**: N360. Not a ledger row: the T3 record the S-7 design asks of task S7-9
+  (`.port/parity-closure/S7-ALLOCATOR-DESIGN.md` §3 "T3 call shape", §7 item 9). It consolidates the T3
+  residuals recorded per family in N272, N274, N315, N320, N325, N331, N332 and N334, and adds the ones
+  those records do not carry. Routing (T1) and failure semantics (T2) are closed (`DEFERRALS.md` F-008
+  Tier 2). Nothing below routes an allocation to the wrong allocator or turns a reference `try` into an
+  abort.
+- **severity**: low. **kind**: allocator call shape (the sizes, counts and order of the calls a C
+  `RusttyAllocator` sees), against pin 20abdb50a.
+- **what "C-observable" means here**: a C embedder's allocator callbacks see a different number, size,
+  alignment or order of `alloc`/`resize`/`remap`/`free` calls from the reference's, so a failing-after-n
+  allocator fails at a different call. Output bytes, results, and live bytes after `free` are the same in
+  every item unless the item says otherwise.
+- **C-observable residuals** (each: port site, reason):
+  1. **Render-state cell storage (USER-ACCEPTED 2026-09-26)** (N315, review S7-5 F2):
+     `crates/rustty-vt/src/render.rs:400` (`CellList`) and `:570` (`set_capacity`).
+     - A row's cells are three allocations (the raw, grapheme-span and style columns), not one
+       `MultiArrayList` block. So each row growth makes three alloc calls (and later three frees) instead
+       of one: a 24-row first update makes 73 allocations where the reference makes 25.
+     - The allocator sees per-column sizes and alignments instead of `capacityInBytes(cap)` at `big_align`.
+     - If the second or third column is refused, the port makes an extra alloc/free pair.
+     - Reason: the faithful single block was implemented and measured at +3.4% cycles on
+       `screen-clone.render`, outside the +2% fence. The per-column lists measured +0.1%.
+  2. **Render-state per-row arena** (N315 (2) and (3)): `render.rs:404` (`grapheme_buf`), and the
+     `reset(.retain_capacity)` sites at `:588-591` and `:1830-1838`.
+     - The reference's per-row `ArenaAllocator` (grapheme dupes, highlights) is, in the port, a retained
+       grapheme buffer plus a retained highlight list on the same allocator.
+     - The grapheme buffer grows by `try_reserve`, allocator_api2's amortized policy (item 7).
+     - The steady state matches: once capacities are reached, neither allocates. The growth sequence
+       differs.
+     - Reason: a real arena would hand out grapheme slices that dangle for the stale slots a safe API
+       exposes.
+  3. **Search element sizes** (N325 (1)):
+     - `crates/rustty-vt/src/highlight.rs:170`: `Chunk` is 24 bytes in an array of structs, against Zig's
+       20 in a struct of arrays. So a clone of a one-chunk highlight is 17 x 24 bytes, not 17 x 20.
+     - `highlight.rs:144`: `Flattened` is 40 bytes, against 32.
+     - `search/screen.rs:469`: `matches()` returns 24-byte shallow copies, against 32.
+     - Element COUNTS follow the reference (`init_capacity` uses the reference's sizes); byte sizes are
+       Rust's. Reason: Rust layouts. No SoA `MultiArrayList` port was taken for these, since nothing measured
+       a need for one.
+  4. **Search and formatter write granularity** (N325 (2), N331):
+     - The search's encoding buffer and the C API's allocating writers (`rustty_formatter_format_alloc`,
+       `rustty_selection_format_alloc`) grow as the port formatter writes. Its 512-byte cell-run buffer
+       mirrors the reference's, but the growth has not been verified call for call against the reference's
+       `Writer` drains.
+     - The continuation writers match exactly since S7-8b (first growth 129).
+  5. **OSC kitty-color list** (N320):
+     - Its element is Rust's size, so the first reservation, `growCapacity(1)`'s `cache_line / @sizeOf(T)`,
+       differs from Zig's.
+     - `SegmentedList::shrink_capacity` (`crates/rustty-datastruct/src/segmented_list.rs:433`) always takes
+       the "resize refused" arm. No OSC path calls it.
+  6. **Kitty graphics payload hand-over** (N274): `crates/rustty-vt/src/kitty/graphics_command.rs:384-429`
+     (`decode_data`).
+     - The reference's `toOwnedSlice(alloc)` shrinks the list to the decoded length (a `remap`, else
+       alloc + copy + free).
+     - The port hands the list over at its full capacity. So there is one call fewer, and the later `free`
+       passes the capacity instead of the decoded length.
+  7. **allocator_api2 amortized growth where a site has not switched to `growCapacity`**:
+     - A caller-routed `AVec` grown with `try_reserve`/`try_extend_copy` follows RawVec's policy: a minimum
+       non-zero capacity of 8 for 1-byte elements (4 up to 1 KiB), then `max(2 * cap, needed)`. Zig's
+       `ArrayList` asks for `growCapacity(n) = n + n/2 + init_capacity`.
+     - Pinned by `zig_list::tests::rawvec_growth_is_the_recorded_t3_residual`:
+       - a first push of one byte: 8 bytes, against Zig's 129;
+       - a 513-byte buffer grown by one byte: 1026, against 899.
+     - Sites that still grow this way:
+       - The stack-fallback writers' spill (`crates/rustty-vt/src/snapshot/io.rs:328`,
+         `StackFallbackWriter`; PORT NOTE at `:354`). The first spill is one exact request at the crossing
+         (513 bytes at N = 512), then RawVec growth. That covers the snapshot record scratch (N332) and the
+         stream's eight response writers (N274). Zig's `Writer.Allocating` inside `stackFallback` can reach
+         the fallback a little under N, and grows by `growCapacity`.
+       - The render state's grapheme buffer (item 2).
+       - The kitty graphics data, loading and frame lists (N274: the arenas became per-value `Bytes`).
+     - Sites the S7 tasks moved to Zig's growth (`crates/rustty-vt/src/zig_list.rs`,
+       `alloc::ArrayListUnmanaged`) match the reference: the render MultiArrayLists and ArrayLists (N315),
+       the search lists (N325), the formatter pin map (N330), the continuation tracker (N274, since S7-4b),
+       and the allocating writers (N331).
+  8. **Hash maps**:
+     - The kitty image and placement maps are `hashbrown` over the handle
+       (`crates/rustty-vt/src/kitty/graphics_storage.rs:168`, `:170`). The reference's
+       `AutoHashMapUnmanaged` is Zig's open-addressing table: one block holding the header, metadata, keys
+       and values, at power-of-two capacity and 80% load. hashbrown allocates control bytes and buckets at
+       7/8 load.
+     - The zigstd `AutoArrayHashMapUnmanaged` (`crates/rustty-zigstd/src/array_hash_map.rs:91`) backs
+       `PageList.tracked_pins`, the glyph glossary, and vt-c's `tracked_grid_refs`/`searches`. It is an
+       `AVec` of entries plus a `hashbrown` index (`:62`). Zig's is a `MultiArrayList` plus an index
+       header, built only above its linear-scan threshold (N272).
+     - So one tracked pin costs 2 allocations (entries + index) where the reference makes 1. The routing
+       tests pin the port's counts (`PageList.init`: pools 4 + pin set 2).
+     - Call-for-call sizes against Zig's tables: UNVERIFIED (not measured).
+  9. **`ret_addr`**:
+     - Every C-arm call passes `ret_addr = 0` (`crates/rustty-vt/src/alloc.rs:672`, PORT NOTE W36-B06),
+       where the reference forwards `@returnAddress()`.
+     - Reason: stable Rust has no return-address intrinsic.
+     - An embedder that logs or keys on `ret_addr` sees 0.
+  10. **Windows `std.Io.Threaded`**:
+      - On Windows, the reference's `ghostty_terminal_new` makes one more call through the caller's
+        allocator, `alloc.create(std.Io.Threaded)` (`src/terminal/c/terminal.zig:73-80`), and frees it at
+        `free` (`:87-95`, `:1864`).
+      - The port makes no such call, because it has no `std.Io` model (`crates/rustty-vt-c/src/terminal.rs:128-167`;
+        the TinyIo row of `.port/phase-4/NON_PORTS.md`).
+      - CORRECTION of N334 and `DEFERRALS.md` F-008: both give the reason as "the port does not build for
+        Windows". Since task W-1 (N342), rustty-vt-c builds and is tested on Windows, so this difference is
+        now reachable there.
+      - It is one allocation per terminal, not a routing gap.
+- **Not C-observable** (listed so the inventory is complete):
+  - **Rust-heap allocations** that the reference never makes, or makes inside caller-allocated storage
+    (N334 has the details). Current lines:
+    - rustty-vt: `formatter.rs:1723`, `:1749`, `:2170`; `string_map.rs:108`; `screen.rs:4659`
+      (`Screen::selection_string_impl`'s output);
+    - rustty-vt-c: the `Box<dyn ZigAllocator>` adapters at `terminal.rs:1620`, `:1958` and
+      `render.rs:1354`, `:1549`; the kitty temporary-directory copies at `terminal.rs:3179`, `:3187`; the
+      snapshot decoder's `Source`/`ReaderState` boxes at `snapshot.rs:323-324`;
+    - N274's port-only transients: response strings, `format!` reports, map-key snapshots, tmux
+      notification copies, and zlib's own `malloc` for inflate state;
+    - the per-dispatch `Box` of the borrowed OSC command (N320).
+
+    The C allocator sees none of these, so a C embedder's memory accounting misses them.
+  - **Render `string`/`link_cells`** (`render.rs:1580`, `:1637`) ignore their `alloc` and abort on OOM
+    (N315's T1/T2 residual). They are not reachable from the C API, and every caller passes the Rust heap.
+  - **`alloc::page_allocator()`**, the handle for the inspector's
+    `pagePreservingState(std.heap.page_allocator)`, carries the PageList's VM tag on Darwin. The
+    reference's page allocator is untagged (N274).
+  - **The NULL allocator** is the Rust heap, whose `resize` succeeds only for an unchanged length (N270,
+    N273). Zig's `c_allocator` also shrinks in place. This is internal to the library.
+  - **Test-only differences**:
+    - The setPwd/setTitle and stream-continuation failure tests refuse `remap`, to reproduce the reference
+      `DebugAllocator`'s call sequence (N271, N277).
+    - S7-3's pagelist fail points are port-local seams with no reference `tripwire.module`:
+      `crates/rustty-vt/src/pagelist/grow.rs:19-46` (`GROW_TW`) and `pagelist/resize.rs:36-61`
+      (`RESIZE_TW`), both for `createPage`. The reference reaches those errors with
+      `std.testing.failing_allocator`.
+    - It is UNVERIFIED whether their three tests could now run over a `FailingAllocator`, since the node
+      pool has been on the handle since S7-3. The tests are `pagelist_erase_active_logs_when_regrow_fails`,
+      `pagelist_resize_no_reflow_grow_rows_oom_restores_limits` and
+      `pagelist_resize_no_reflow_grow_cols_oom_preserves_total_rows_and_limits`.
+- **state**: RECORDED. The residuals are accepted as documented T3 deviations; item 1 is user-accepted,
+  and item 10 is new since W-1. Any change is a future task per item; none is required for F-008's closure.
+
+## N361 — strict provenance for page offsets; the remaining exposed-provenance sites
+
+- **id**: N361. Not a ledger row: task S7-9 (Miri readiness of the S7 lane).
+- **severity**: low. **kind**: Miri checking strength (no behaviour change).
+- **found by**: the controller's S7 Miri lane. Every group warned "integer-to-pointer cast" at
+  `crates/rustty-render-types/src/term_size.rs:303` (`OffsetBuf::init_offset`) and `:151` (`Offset::ptr`).
+  An integer-to-pointer cast gives the pointer wildcard (exposed) provenance, so Miri may miss pointer bugs
+  through any page offset.
+- **fix**:
+  - `IntFromBase` returns the base POINTER (`ptr_from_base`), and `int_from_base` is its address
+    (`.addr()`).
+  - `Offset::ptr` builds its result with `base_ptr.with_addr(addr)`, `OffsetBuf::init_offset` stores the
+    base pointer, and `get_offset` subtracts `.addr()`s.
+  - The addresses, the alignment assert and the codegen are unchanged: the reference's `@intFromPtr` +
+    `@ptrFromInt` arithmetic stays address arithmetic.
+  - The `&mut [T]` arm now uses `as_mut_ptr()`; the old `as_ptr()` went through a shared reborrow.
+  - `rustty_vt::sys::GlobalRawAllocator::raw_alloc`'s zero-length sentinel is now
+    `ptr::without_provenance_mut(align)` (it was `align as *mut u8`).
+  - The vt-c `format_alloc` test's `@ptrFromInt(1)` sentinel is now `without_provenance_mut(1)`.
+  - The S7-7 borrowed-command test compares addresses instead of casting an address back to a pointer.
+- **verification**: `cargo +nightly miri test -p rustty-render-types`.
+  - Before: "integer-to-pointer cast" at `term_size.rs:151`, and in `Offset_ptr_structural`.
+  - After: no warning. It also passes under `MIRIFLAGS=-Zmiri-strict-provenance` (12/12).
+  - This task did not run rustty-vt under Miri; that is the controller's lane.
+- **remaining exposed-provenance sites (deliberate)**:
+  - `crates/rustty-vt/src/hyperlink.rs:603-630` (`SetContext`) stores the page pointers as exposed
+    addresses, so they survive the `&mut self.hyperlink_set` retags between the context assignment and its
+    use.
+  - `crates/rustty-vt-c/src/terminal.rs:715-737` (`wrapper_from_handler`) is the `@fieldParentPtr`
+    recovery over the exposed wrapper allocation (memory `vtc-effects-trampoline-seam-d3`).
+  - Each is its site's documented soundness mechanism, so Miri still warns once per group at
+    `hyperlink.rs` when a test touches hyperlinks. Removing them needs a pointer derivation that does not
+    pass through `&mut`; this task did not attempt that.
+  - Test-only integer-to-pointer casts outside the S7 lane: the `crates/rustty-vt/src/bitmap_allocator.rs`
+    tests (20 `*_addr as *const _` sites), and `pagelist/tests.rs:3339`, `:3395` (`node_addr as *…Node`,
+    to move a pointer into `catch_unwind`).
+- **risk to watch**: page pointers now carry the base's provenance instead of a wildcard. The next Miri run
+  may therefore report Stacked Borrows violations that the wildcard hid, for example a pointer derived from
+  `memory_ptr` used after a `&mut` over the whole page memory. Such a report is a real finding, not a
+  regression from this change.
+- **state**: CLOSED for `term_size.rs` (the warning is gone). The two deliberate sites stay (RECORDED).
+
+## N362 — three S7 tests were not Miri-ready: a Stacked Borrows violation in a test, a should_panic leak, an 18-hour test
+
+- **id**: N362. Not a ledger row: task S7-9, from the controller's S7 Miri lane logs.
+- **severity**: low. **kind**: test soundness and Miri tractability (no production change).
+- **1. `stream_terminal::tests::response_writers_spill_through_gpa`**. Miri reported "not granted access
+  to tag" at the `(*ptr).kitty_dnd` read.
+  - The test took `let ptr: *mut Terminal = &mut t`, then called `t.vt_stream()`, whose `&mut self` retag
+    invalidated `ptr`. The later `(*ptr).kitty_dnd` read is UB under Stacked Borrows.
+  - Fixed: the serve closure takes the stream and reads the DnD slot through the stream's own
+    `handler.terminal` pointer, which is derived from the `&mut t` that `vt_stream` took. Test-only.
+- **2. `render::tests::render_state_checks_the_update_allocator`** (`#[should_panic]`).
+  - The expected identity-assert panic unwound past the render state and the terminal. Neither has a
+    `Drop` (their `deinit` frees), so Miri reported the leak.
+  - Fixed with the pattern of `16ef8680`: catch the panic, `deinit` both, then `resume_unwind`.
+  - Audit of the other S7 `should_panic` tests:
+    - `terminal::tests::glyph_protocol_checks_the_glossary_allocator`: fixed by `16ef8680`;
+    - `highlight::tests::flattened_deinit_checks_the_allocator`: the list is an `AVec`, whose `Drop` frees
+      it during unwinding, so there is no leak;
+    - `alloc::tests::debug_assert_same_fires_on_a_different_allocator`: builds nothing.
+  - rustty-vt-c has no `should_panic` tests.
+- **3. `pagelist::tests::pagelist_internals_route_through_the_allocator_handle`** ran 18 h under Miri
+  before it was stopped.
+  - Cause: `grow_cold_pages_for_test` makes a page cold with one `grow()` per row, about 600 grows, each
+    running the O(page) integrity walk. The two clones also copied the whole first page row by row.
+  - The page size itself has no test knob: `std_capacity` is fixed.
+  - Fixed for both lanes, following the `pagelist_grow_prune_miri_tractable` precedent:
+    - `make_first_page_cold_surgically_for_test` makes the cold page in constant time: it bumps
+      `size.rows` to capacity, calls `grow()` once, and bumps the second page to the active height.
+    - The clones start at the last history row. They still span both pages (pools sized for two), but copy
+      25 rows.
+    - The pin-remap step tracks a pin inside the cloned range (the viewport pin lies above it) and asserts
+      that exactly one pin was remapped.
+  - Every routing assertion is unchanged. Native debug runtime: 2.97 s before, 0.01 s after. Miri
+    runtime: not measured by this task (controller lane).
+- **not changed**:
+  - `search::sliding_window::tests::sliding_window_decode_buffer_routes_through_the_allocator_handle`
+    keeps its in-source MIRI EXCEPTION (multi-page history plus LZ4, the WS19 T6 class). It is not listed
+    by name in `MIRI_EXCEPTIONS.md`.
+  - The other S7 sweeps already shrink their corpus under `cfg(miri)`.
+- **state**: CLOSED (task S7-9). Miri confirmation is the controller's lane.
