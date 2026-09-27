@@ -56,7 +56,7 @@ fn split_drop_target(surface: &Surface) -> gtk4::DropTarget {
         found.extend(
             drop_targets(&w)
                 .into_iter()
-                .filter(|dt| dt.types() == [glib::Type::U64]),
+                .filter(|dt| dt.types().as_slice() == [glib::Type::U64]),
         );
         let mut child = w.first_child();
         while let Some(c) = child {
@@ -69,14 +69,18 @@ fn split_drop_target(surface: &Surface) -> gtk4::DropTarget {
 }
 
 /// The root split of the tree: (layout, left leaf, right leaf).
-fn root_split(tab: &Tab) -> (Layout, *mut Surface, *mut Surface) {
+///
+/// `get_tree` returns a copy whose leaves are its own boxed refs, freed when the
+/// copy drops, so the leaves are cloned out (a strong ref each) while it lives.
+fn root_split(tab: &Tab) -> (Layout, Surface, Surface) {
     let tree = tab.get_split_tree().get_tree().expect("the tab has a tree");
     let nodes = &tree.0.nodes;
     let Node::Split(split) = &nodes[0] else {
         panic!("the root is a split");
     };
     let leaf = |i: usize| match &nodes[i] {
-        Node::Leaf(v) => *v,
+        // SAFETY: a leaf of `tree`, alive until `tree` drops below.
+        Node::Leaf(v) => unsafe { (**v).clone() },
         Node::Split(_) => panic!("both children of the root are leaves"),
     };
     (
@@ -84,11 +88,6 @@ fn root_split(tab: &Tab) -> (Layout, *mut Surface, *mut Surface) {
         leaf(split.left.idx()),
         leaf(split.right.idx()),
     )
-}
-
-fn is(p: *mut Surface, s: &Surface) -> bool {
-    // SAFETY: `p` is a leaf of the live tree, which holds a strong ref.
-    unsafe { &*p == s }
 }
 
 #[test]
@@ -148,9 +147,8 @@ fn dropping_a_surface_on_another_moves_the_split() {
         .expect("split A to the right");
     let (layout, left, right) = root_split(&tab);
     assert!(matches!(layout, Layout::Horizontal), "A | B is horizontal");
-    assert!(is(left, &a), "A is on the left");
-    // SAFETY: a leaf of the live tree.
-    let b: Surface = unsafe { (*right).clone() };
+    assert!(left == a, "A is on the left");
+    let b: Surface = right;
     assert!(b != a, "B is a new surface");
 
     window.set_default_size(800, 480);
@@ -188,8 +186,8 @@ fn dropping_a_surface_on_another_moves_the_split() {
         matches!(layout, Layout::Vertical),
         "the tree is now vertical"
     );
-    assert!(is(top, &b), "B is on top");
-    assert!(is(bottom, &a), "A moved below B");
+    assert!(top == b, "B is on top");
+    assert!(bottom == a, "A moved below B");
 
     // Teardown as `gtk_window_live.rs`: the live-shell surfaces are forgotten
     // (the documented termio `Subprocess::drop` gap).

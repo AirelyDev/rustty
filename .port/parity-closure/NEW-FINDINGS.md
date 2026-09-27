@@ -5909,6 +5909,11 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   KAT `gtk_parity_callbacks::parity_callbacks_do_not_abort` and `surface_drop_answers_the_gboolean_drop_signal`
   pass with the fix. A real pointer-driven drop was not performed (UNVERIFIED end to end; the emission
   matches GTK's `G_TYPE_VALUE` parameter).
+- **split move measured (task L-4b, review F1)**: `gtk_split_drop::dropping_a_surface_on_another_moves_the_split`
+  (headed, rvm under a private headless sway, `LIBGL_ALWAYS_SOFTWARE=1`): two live surfaces A | B in a real
+  window's split tree; `drop` on B's split drop target with A's core id at B's bottom edge answers `true` and the
+  tree becomes B above A (vertical). 3/3. NEGATIVE CONTROL: the unboxing removed from `surface_drop` fails at
+  `surface_drop accepted the drop`. The emission still stands in for a pointer-driven drop.
 - **state**: CLOSED (parity tail L-4).
 
 ## N339 — survey: every GTK signal connection's return type, port against reference (UD295 follow-up)
