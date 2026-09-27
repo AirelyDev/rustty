@@ -480,10 +480,15 @@ impl Exec {
         // (PORT NOTE: copy the pid out from behind the `&self.subprocess.process`
         // borrow first, so the error arms can call `&mut self.subprocess.stop()`
         // — the `errdefer self.subprocess.stop()` — without a borrow conflict.)
+        // (`posix.pid_t`: a HANDLE on Windows, the `Command.pid` type.)
+        #[cfg(not(windows))]
+        type ChildPid = libc::pid_t;
+        #[cfg(windows)]
+        type ChildPid = rustty_os::windows::HANDLE;
         enum ProcessWhich {
             NotStarted,
             Flatpak,
-            ForkExec(Option<libc::pid_t>),
+            ForkExec(Option<ChildPid>),
         }
         let which = match &self.subprocess.process {
             None => ProcessWhich::NotStarted,
@@ -497,6 +502,7 @@ impl Exec {
                 // io-reader thread does not exist on this arm, so without this the
                 // SIGHUP'd child can wedge unreapably (`?Es`). See
                 // `drain_pty_master_once`.
+                #[cfg(not(windows))]
                 let _ = drain_pty_master_once(pty_fds.read);
                 self.subprocess.stop();
                 return Err(crate::Error);
@@ -510,6 +516,7 @@ impl Exec {
                 // io-reader thread does not exist on this arm, so without this the
                 // SIGHUP'd child can wedge unreapably (`?Es`). See
                 // `drain_pty_master_once`.
+                #[cfg(not(windows))]
                 let _ = drain_pty_master_once(pty_fds.read);
                 self.subprocess.stop();
                 return Err(crate::Error);
@@ -521,6 +528,7 @@ impl Exec {
                     // io-reader thread does not exist on this arm, so without this the
                     // SIGHUP'd child can wedge unreapably (`?Es`). See
                     // `drain_pty_master_once`.
+                    #[cfg(not(windows))]
                     let _ = drain_pty_master_once(pty_fds.read);
                     self.subprocess.stop();
                     return Err(crate::Error);
@@ -547,6 +555,7 @@ impl Exec {
                 // io-reader thread does not exist on this arm, so without this the
                 // SIGHUP'd child can wedge unreapably (`?Es`). See
                 // `drain_pty_master_once`.
+                #[cfg(not(windows))]
                 let _ = drain_pty_master_once(pty_fds.read);
                 self.subprocess.stop();
                 return Err(crate::Error);
@@ -571,8 +580,8 @@ impl Exec {
                 //          process.deinit(); self.subprocess.stop();
                 stream.deinit();
                 unsafe {
-                    libc::close(pipe[1]);
-                    libc::close(pipe[0]);
+                    close_fd(pipe[1]);
+                    close_fd(pipe[0]);
                 }
                 if let Some(p) = &mut process {
                     p.deinit();
@@ -581,6 +590,7 @@ impl Exec {
                 // io-reader thread does not exist on this arm, so without this the
                 // SIGHUP'd child can wedge unreapably (`?Es`). See
                 // `drain_pty_master_once`.
+                #[cfg(not(windows))]
                 let _ = drain_pty_master_once(pty_fds.read);
                 self.subprocess.stop();
                 return Err(crate::Error);
@@ -620,9 +630,8 @@ impl Exec {
             //
             // PORT NOTE (S211-F3): this always called `threadMainPosix`, so the
             // ported `threadMainWindows` had no caller. Selected per target now,
-            // as the reference does at comptime. The Windows arm is written but
-            // not compiled here (rustty-termio cannot be cross-checked for
-            // Windows from macOS: `highway-sys`, VERIFICATION_DEBT.md).
+            // as the reference does at comptime. Built and run on Windows by
+            // task W-1 (`windows_threadenter_reads_the_pty_through_the_windows_read_thread`).
             #[cfg(windows)]
             ReadThread::threadMainWindows::<M>(args.0, args.1, args.2);
             #[cfg(not(windows))]
@@ -636,8 +645,8 @@ impl Exec {
                 termios_timer.deinit();
                 stream.deinit();
                 unsafe {
-                    libc::close(pipe[1]);
-                    libc::close(pipe[0]);
+                    close_fd(pipe[1]);
+                    close_fd(pipe[0]);
                 }
                 if let Some(p) = &mut process {
                     p.deinit();
@@ -646,6 +655,7 @@ impl Exec {
                 // io-reader thread does not exist on this arm, so without this the
                 // SIGHUP'd child can wedge unreapably (`?Es`). See
                 // `drain_pty_master_once`.
+                #[cfg(not(windows))]
                 let _ = drain_pty_master_once(pty_fds.read);
                 self.subprocess.stop();
                 return Err(crate::Error);
@@ -846,6 +856,7 @@ impl Exec {
         // until `ThreadData::deinit` closes it. A closed read end yields EPIPE
         // (Rust ignores SIGPIPE), which — like the reference's `error.BrokenPipe`
         // — is fine (the read thread is already gone).
+        #[cfg(not(windows))]
         let rc = unsafe {
             libc::write(
                 exec.read_thread_pipe,
@@ -853,6 +864,37 @@ impl Exec {
                 1,
             )
         };
+        // PORT NOTE (Windows): `posix.fd_t` is a HANDLE there, and the write is
+        // `WriteFile` on the quit pipe's write end. A read end that is already
+        // closed fails with ERROR_BROKEN_PIPE (109) or ERROR_NO_DATA (232), the
+        // Windows form of the EPIPE the POSIX arm ignores; any other failure
+        // gets the same warning, with the Win32 error code.
+        #[cfg(windows)]
+        {
+            use rustty_os::windows as win;
+            let mut written: win::DWORD = 0;
+            let ok = unsafe {
+                win::exp::kernel32::WriteFile(
+                    exec.read_thread_pipe,
+                    b"x".as_ptr().cast::<std::ffi::c_void>(),
+                    1,
+                    &mut written,
+                    std::ptr::null_mut(),
+                )
+            };
+            if ok == win::FALSE {
+                let e = unsafe { win::kernel32::GetLastError() };
+                const ERROR_BROKEN_PIPE: win::DWORD = 109;
+                const ERROR_NO_DATA: win::DWORD = 232;
+                if e != ERROR_BROKEN_PIPE && e != ERROR_NO_DATA {
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "error writing to read thread quit pipe err={e}"
+                    );
+                }
+            }
+        }
+        #[cfg(not(windows))]
         if rc < 0 {
             // .SUCCESS => {}, .PIPE => {},
             // else => |e| log.warn(
@@ -955,6 +997,9 @@ impl Exec {
     //         }
     //     }
     // }
+    // (Windows returns before the termios half, as the reference's comptime
+    // `return` does, so its locals go unused there.)
+    #[cfg_attr(windows, allow(unused_variables))]
     pub fn focusGained<M: rustty_apprt_api::surface::AppMailbox + 'static>(
         &mut self,
         td: &mut crate::termio_impl::ThreadData<M>,
@@ -1330,7 +1375,11 @@ impl Exec {
     //     _: *xev.Completion,
     //     r: xev.Timer.RunError!void,
     // ) xev.CallbackAction
-    #[cfg_attr(windows, allow(unreachable_code, unused_variables))]
+    //
+    // (Windows: every caller is gated off Windows, as the reference's comptime
+    // guards gate them, so Zig never analyzes this fn there; it is compiled
+    // out the same way. The `@panic` arm below is kept for R1.)
+    #[cfg(not(windows))]
     fn termiosTimer<M: rustty_apprt_api::surface::AppMailbox + 'static>(
         td_: *mut crate::termio_impl::ThreadData<M>,
         _l: *mut xev::Loop,
@@ -1896,20 +1945,24 @@ impl ThreadData {
     /// already-finished dummy thread + inert (`-1`) fds + empty pools, so its drop
     /// (on the `Exec.threadEnter` overwrite) is a cheap no-op. It is never observed
     /// (the write path only touches it after `Exec.threadEnter` has replaced it).
-    #[cfg(not(windows))]
     pub(crate) fn placeholder() -> ThreadData {
+        // Inert descriptors: `-1` on POSIX, `INVALID_HANDLE_VALUE` on Windows.
+        #[cfg(not(windows))]
+        let inert: ReadThreadFd = -1;
+        #[cfg(windows)]
+        let inert: ReadThreadFd = rustty_os::windows::INVALID_HANDLE_VALUE;
         ThreadData {
             start: std::time::Instant::now(),
             exited: false,
-            write_stream: xev::Stream::init_fd(-1),
+            write_stream: xev::Stream::init_fd(inert),
             process: None,
             write_pool: MemoryPool::init(Allocator),
             write_queue: xev::WriteQueue::default(),
             process_wait_c: xev::Completion::default(),
             flatpak_wait_c: FlatpakHostCommandCompletion::default(),
             read_thread: std::thread::spawn(|| {}),
-            read_thread_pipe: -1,
-            read_thread_fd: -1,
+            read_thread_pipe: inert,
+            read_thread_fd: inert,
             termios_timer: xev::Timer::init().expect("placeholder Timer::init"),
             termios_timer_c: xev::Completion::default(),
             termios_timer_running: false,
@@ -2952,10 +3005,10 @@ impl Subprocess {
     // } {
     pub fn start(&mut self, alloc: Allocator) -> Result<PtyFds, crate::Error> {
         // The windows spawn half (out_pipe/in_pipe + pseudo_console), PORTED
-        // (WS20). VERIFICATION DEBT, not a scope exclusion: this host cannot even
-        // cross-CHECK `rustty-termio` for Windows (its transitive `highway-sys`
-        // C++ build script cannot cross-compile to MSVC from macOS). Recipe in
-        // `.port/phase-2/VERIFICATION_DEBT.md`.
+        // (WS20). It cannot be cross-checked from macOS (the `highway-sys` C++
+        // build needs an MSVC sysroot); task W-1 built and ran it on a Windows
+        // host (a ConPTY child through `threadEnter`, see
+        // `windows_threadenter_reads_the_pty_through_the_windows_read_thread`).
         //
         // PORT NOTE (why this is a separate arm rather than `if (windows)` inside
         // one body, as the reference has it): the reference's single body differs
@@ -3596,7 +3649,7 @@ impl Subprocess {
     // (The only reference caller is `start`'s os_pre_exec closure — the
     // `subprocess_pre_exec` trampoline, live in `start`; on windows os_pre_exec
     // is null, so the fn is unused there.)
-    #[cfg_attr(windows, allow(dead_code))]
+    #[cfg(not(windows))]
     fn childPreExec(&mut self) -> Result<(), crate::Error> {
         // Setup our pty
         self.pty
@@ -4433,6 +4486,8 @@ pub(crate) type ReadThreadFd = rustty_os::windows::HANDLE;
 // `IoThreadArgs` unsafe-Send discipline (surface.rs).
 unsafe impl<M: rustty_apprt_api::surface::AppMailbox> Send for ReadThreadArgs<M> {}
 
+// (Windows: the gather/bridge constants belong to `threadMainPosix`.)
+#[cfg_attr(windows, allow(dead_code))]
 impl ReadThread {
     /// The number of buffers rotated between the gather and parse
     /// stages. The gather stage can run at most this many batches
@@ -5435,12 +5490,9 @@ impl ReadThread {
     //         }
     //     }
     // }
-    // PORTED (WS20). VERIFICATION DEBT: this host builds macOS/Linux only and
-    // `rustty-termio` cannot even be cross-CHECKED for Windows here — its
-    // transitive `highway-sys` C++ build script cannot cross-compile to MSVC from
-    // macOS (`fatal error: 'stdlib.h' file not found`). Recipe in
-    // `.port/phase-2/VERIFICATION_DEBT.md`. That is verification debt, NOT a
-    // scope exclusion.
+    // PORTED (WS20). It cannot be cross-checked from macOS (the `highway-sys`
+    // C++ build needs an MSVC sysroot); task W-1 built and ran it on a Windows
+    // host (`windows_readthread_sets_io_crash_thread_state`).
     #[cfg(windows)]
     fn threadMainWindows<M: rustty_apprt_api::surface::AppMailbox>(
         fd: rustty_os::windows::HANDLE,
@@ -5569,7 +5621,14 @@ pub struct OsPasswd;
 impl PasswdPkg for OsPasswd {
     type Error = rustty_os::passwd::Error;
     fn get() -> Result<rustty_os::passwd::Entry, Self::Error> {
-        rustty_os::passwd::get()
+        #[cfg(not(windows))]
+        return rustty_os::passwd::get();
+        // `passwd.get`: `if (builtin.os.tag == .windows) @compileError("passwd is
+        // not available on windows");`. Its only caller is `execCommand`'s
+        // comptime-Darwin branch, so Zig never analyzes it on Windows; here the
+        // body must compile, and it is unreachable by construction (R7).
+        #[cfg(windows)]
+        unreachable!("passwd is not available on windows");
     }
 }
 
@@ -5597,6 +5656,10 @@ impl PasswdPkg for OsPasswd {
 //
 // PORT NOTE: the returned `[]const [:0]const u8` is the owned `Vec<CString>`
 // (each element carries the `[:0]` sentinel; the arena collapses).
+//
+// (Windows: the shell arm's `.windows` block returns, as the reference's
+// comptime branch does, so the `/bin/sh -c` tail is unreachable there.)
+#[cfg_attr(windows, allow(unreachable_code))]
 fn execCommand<P: PasswdPkg>(
     command: &configpkg::command::Command,
 ) -> Result<Vec<CString>, ExecCommandError> {
@@ -5893,6 +5956,23 @@ fn execCommand<P: PasswdPkg>(
 // ---------------------------------------------------------------------------
 // PORT NOTE: support shims (Rust-only glue).
 // ---------------------------------------------------------------------------
+
+/// PORT NOTE (Zig-std shim): `posix.close(fd)`. On Windows `posix.fd_t` is a
+/// `HANDLE` and Zig's `posix.close` is `CloseHandle`, the call
+/// `ThreadData::deinit` already makes for `read_thread_pipe`.
+///
+/// # Safety
+/// `fd` must be an open descriptor/handle this code owns.
+unsafe fn close_fd(fd: rustty_os::pipe::fd_t) {
+    #[cfg(not(windows))]
+    unsafe {
+        libc::close(fd);
+    }
+    #[cfg(windows)]
+    {
+        let _ = rustty_os::windows::CloseHandle(fd);
+    }
+}
 
 /// PORT NOTE (Zig-std shim): `posix.errno(rc)` — the calling thread's errno value.
 #[cfg(not(windows))]
@@ -7130,10 +7210,23 @@ mod tests {
             b"exec -l echo hi".as_slice(),
             shell_args.last().expect("a shell arg").to_bytes()
         );
-        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+        #[cfg(not(any(target_os = "macos", target_os = "ios", windows)))]
         assert_eq!(
             b"echo hi".as_slice(),
             shell_args.last().expect("a shell arg").to_bytes()
+        );
+        // Windows: the shell command is tokenized on spaces and tabs
+        // (`std.mem.tokenizeAny(u8, v, " \t")`), not wrapped in `/bin/sh -c`,
+        // so the NUL cuts only its own token, `hi\x00;`.
+        #[cfg(windows)]
+        assert_eq!(
+            vec![
+                b"echo".as_slice(),
+                b"hi".as_slice(),
+                b"echo".as_slice(),
+                b"AFTER".as_slice()
+            ],
+            shell_args.iter().map(|c| c.to_bytes()).collect::<Vec<_>>()
         );
     }
 
@@ -7346,16 +7439,16 @@ mod tests {
     // thread-local (the exit callback runs on the thread that drives the loop,
     // which in these KATs is the test thread), so the process-exit KATs can see
     // which arm of `processExit` produced it.
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     struct TestMailbox;
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     thread_local! {
         static CHILD_EXITED_CODES: std::cell::RefCell<Vec<u32>> =
             const { std::cell::RefCell::new(Vec::new()) };
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     impl rustty_apprt_api::surface::AppMailbox for TestMailbox {
         type Surface = ();
 
@@ -7396,7 +7489,7 @@ mod tests {
 
     /// The `(type, is TEST_CRASH_SURFACE)` crash `thread_state` of the thread
     /// that pushed each `RingBell` through `TestMailbox` (`None` = no state).
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     #[allow(clippy::type_complexity)]
     static BELL_THREAD_STATES: std::sync::Mutex<Vec<Option<(rustty_crash::sentry::Type, bool)>>> =
         std::sync::Mutex::new(Vec::new());
@@ -7411,7 +7504,8 @@ mod tests {
     // started through it). Shared by the B2 write-path + B3 read-path KATs — both
     // now drive the REAL `Termio::processOutput` (B3) so `io` must be a valid,
     // pinned `Termio`, not a placeholder.
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
+    #[cfg_attr(windows, allow(dead_code))] // (the byte counters serve macOS KATs)
     struct TestTermio {
         io: *mut crate::Termio<TestMailbox>,
         state: *mut rustty_renderer::state::State,
@@ -7426,7 +7520,8 @@ mod tests {
         calls_base: usize,
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
+    #[cfg_attr(windows, allow(dead_code))]
     impl TestTermio {
         fn build() -> TestTermio {
             use allocator_api2::alloc::Global;
@@ -7527,7 +7622,9 @@ mod tests {
                 surface_mailbox: TestMailbox,
                 renderer_state: state,
                 renderer_mailbox,
-                renderer_wakeup,
+                // (`clone`: `Copy` everywhere but the Windows Async.)
+                #[allow(clippy::clone_on_copy)]
+                renderer_wakeup: renderer_wakeup.clone(),
                 enquiry_response: derived.enquiry_response.clone(),
                 osc_color_report_format: derived.osc_color_report_format,
                 clipboard_write: derived.clipboard_write,
@@ -7553,7 +7650,8 @@ mod tests {
                 config: derived,
                 terminal,
                 renderer_state: state,
-                renderer_wakeup,
+                #[allow(clippy::clone_on_copy)]
+                renderer_wakeup: renderer_wakeup.clone(),
                 renderer_mailbox,
                 surface_mailbox: TestMailbox,
                 size,
@@ -8303,6 +8401,201 @@ mod tests {
             states,
             vec![Some((rustty_crash::sentry::Type::Io, true))],
             "the read thread's thread_state is .io with the mailbox's surface"
+        );
+    }
+
+    /// Serializes the Windows read-thread tests, which share
+    /// `BELL_THREAD_STATES` (Windows has no `FORK_KAT_SERIAL`: nothing forks).
+    #[cfg(windows)]
+    static WINDOWS_READTHREAD_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Windows: the anonymous pipe pair the reference reads a ConPTY through
+    /// (`CreatePipe`, `pty.zig`'s `out_pipe`), as `[read, write]`.
+    #[cfg(windows)]
+    fn windows_pipe() -> [rustty_os::windows::HANDLE; 2] {
+        rustty_os::pipe::pipe().expect("pipe()")
+    }
+
+    /// Windows: write all of `bytes` to a pipe handle.
+    #[cfg(windows)]
+    fn windows_write(h: rustty_os::windows::HANDLE, bytes: &[u8]) {
+        use rustty_os::windows as win;
+        let mut written: win::DWORD = 0;
+        let ok = unsafe {
+            win::exp::kernel32::WriteFile(
+                h,
+                bytes.as_ptr().cast::<std::ffi::c_void>(),
+                bytes.len() as win::DWORD,
+                &mut written,
+                std::ptr::null_mut(),
+            )
+        };
+        assert_ne!(ok, win::FALSE, "WriteFile");
+        assert_eq!(written as usize, bytes.len(), "short WriteFile");
+    }
+
+    /// S211-F2, Windows arm: `threadMainWindows` tags its crash metadata as an
+    /// `io` thread of the mailbox's surface (`Exec.zig:1776-1781`). A BEL
+    /// written to the pipe it reads makes it push `RingBell`, and `TestMailbox`
+    /// records that thread's `thread_state`. The thread is stopped as
+    /// `threadExit` stops it: a byte on the quit pipe, then `CancelIoEx` on the
+    /// read handle.
+    #[test]
+    #[cfg(windows)]
+    fn windows_readthread_sets_io_crash_thread_state() {
+        use std::time::{Duration, Instant};
+
+        let _serial = WINDOWS_READTHREAD_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        BELL_THREAD_STATES
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+        // The test thread itself has no crash state.
+        assert!(rustty_crash::sentry::threadState().is_none());
+
+        let t = TestTermio::build();
+        let [data_read, data_write] = windows_pipe();
+        let [quit_read, quit_write] = windows_pipe();
+        let read_args = ReadThreadArgs::<TestMailbox>(data_read, t.io, quit_read);
+        let handle = std::thread::spawn(move || {
+            let args = read_args;
+            ReadThread::threadMainWindows::<TestMailbox>(args.0, args.1, args.2);
+        });
+
+        windows_write(data_write, b"\x07");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let states = loop {
+            let states = BELL_THREAD_STATES
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
+            if !states.is_empty() || Instant::now() > deadline {
+                break states;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        };
+
+        // Stop it as `threadExit` does: the quit byte, then `CancelIoEx` on the
+        // read handle. A cancel issued while the thread is between two reads
+        // (still handling the BEL) finds nothing to cancel (measured: a
+        // parallel run hit ERROR_NOT_FOUND), so it is repeated until the thread
+        // has returned.
+        windows_write(quit_write, b"x");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !handle.is_finished() {
+            assert!(
+                Instant::now() < deadline,
+                "the read thread did not stop on the quit byte + CancelIoEx"
+            );
+            let _ = unsafe {
+                rustty_os::windows::exp::kernel32::CancelIoEx(data_read, std::ptr::null_mut())
+            };
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        handle.join().expect("read thread join");
+        // (the read thread closed `quit_read` on exit)
+        for h in [quit_write, data_read, data_write] {
+            let _ = rustty_os::windows::CloseHandle(h);
+        }
+        t.teardown();
+
+        assert_eq!(
+            states,
+            vec![Some((rustty_crash::sentry::Type::Io, true))],
+            "the read thread's thread_state is .io with the mailbox's surface"
+        );
+    }
+
+    /// S211-F3: on Windows `threadEnter` spawns `threadMainWindows`
+    /// (`Exec.zig:135-140`). A real child on a real ConPTY (`cmd.exe /c echo`)
+    /// writes a marker; the only reader of the pseudo console's output pipe is
+    /// the read thread `threadEnter` spawned, so the marker reaching the
+    /// terminal's Screen proves that thread ran the Windows read loop.
+    #[test]
+    #[cfg(windows)]
+    fn windows_threadenter_reads_the_pty_through_the_windows_read_thread() {
+        use allocator_api2::alloc::Global;
+        use std::time::{Duration, Instant};
+
+        let _serial = WINDOWS_READTHREAD_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+
+        let cfg = Config {
+            command: Some(configpkg::command::Command::Direct(vec![
+                b"cmd.exe".to_vec(),
+                b"/c".to_vec(),
+                // `%RUSTTY_W1_VAR%` expands in the child from the environment
+                // given below, so the marker appears only in its output, never
+                // in its command line.
+                b"echo RUSTTY_W1_%RUSTTY_W1_VAR%".to_vec(),
+            ])),
+            env: EnvMap::from([(b"RUSTTY_W1_VAR".to_vec(), b"MARK".to_vec())]),
+            env_override: configpkg::RepeatableStringMap::default(),
+            shell_integration: configpkg::value_types::ShellIntegration::None,
+            shell_integration_features: configpkg::value_types::ShellIntegrationFeatures::default(),
+            cursor_blink: None,
+            working_directory: None,
+            resources_dir: None,
+            term: b"xterm-256color".to_vec(),
+            rt_pre_exec_info: RtPreExecInfo::default(),
+            rt_post_fork_info: RtPostForkInfo::default(),
+        };
+        let mut exec = Exec::init(Global, cfg).expect("Exec::init");
+        // `initTerminalIo`'s initial resize from the terminal (80x24), which
+        // runs before `threadEnter`; ConPTY rejects the default 0x0 size.
+        exec.resize(
+            GridSize {
+                columns: 80,
+                rows: 24,
+            },
+            ScreenSize {
+                width: 800,
+                height: 480,
+            },
+        )
+        .expect("resize");
+        let mut loop_ = xev::Loop::init(xev::Options::default()).expect("Loop::init");
+        let loop_ptr: *mut xev::Loop = std::ptr::addr_of_mut!(loop_);
+        let t = TestTermio::build();
+        let io_ptr = t.io;
+        let mut td: crate::termio_impl::ThreadData<TestMailbox> = crate::termio_impl::ThreadData {
+            alloc: Global,
+            loop_: loop_ptr,
+            renderer_state: t.state,
+            surface_mailbox: TestMailbox,
+            backend: crate::backend::ThreadData::placeholder(),
+            mailbox: std::ptr::null_mut(),
+        };
+
+        unsafe { exec.threadEnter(Global, io_ptr, &mut td) }.expect("threadEnter");
+
+        let needle = b"RUSTTY_W1_MARK";
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut found = false;
+        while Instant::now() < deadline {
+            loop_.run(xev::RunMode::NoWait).expect("loop.run(NoWait)");
+            let dump = t.screen_dump();
+            if dump.windows(needle.len()).any(|w| w == needle) {
+                found = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let screen = String::from_utf8_lossy(&t.screen_dump()).into_owned();
+        eprintln!("screen: {screen:?}");
+
+        exec.threadExit(&mut td);
+        td.deinit();
+        loop_.deinit();
+        exec.deinit();
+        t.teardown();
+
+        assert!(
+            found,
+            "the child's output did not reach the Screen through the read thread; screen: {screen:?}"
         );
     }
 
