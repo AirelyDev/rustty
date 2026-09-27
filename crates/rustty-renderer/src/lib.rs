@@ -128,7 +128,9 @@ pub mod metal;
 // last; the OpenGL arm itself names nothing Linux-specific (EGL via a dlopen'd
 // `libEGL.so.1`, and `gl` is pure generated bindings loaded through
 // `gl::load_with`), so FreeBSD gets the identical arm rather than a second twin.
-#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+// PORT NOTE (task W-2, N342): Windows is the third `.opengl` target (`backend.zig:20-21`);
+// its runtime is `.none`, so it builds the `apprt.embedded` arms of `OpenGL.zig`.
+#[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "windows"))]
 pub mod opengl;
 
 // PORT: the reference `renderer.zig`'s own module doc comment (`:1-8`). The crate
@@ -169,7 +171,14 @@ pub use webgl::WebGL;
 // PORT NOTE (W2D/F-003): this predicate tracks `generic`'s dispatcher arms exactly
 // — it gained `freebsd` in lock-step with the `opengl`/`linux_impl` widening above
 // (`backend.zig:20-21` gives every non-Darwin native target `.opengl`).
-#[cfg(any(target_os = "macos", target_os = "linux", target_os = "freebsd"))]
+// PORT NOTE (task W-2, N342): Windows is the third `.opengl` target (`backend.zig:20-21`);
+// its runtime is `.none`, so it builds the `apprt.embedded` arms of `OpenGL.zig`.
+#[cfg(any(
+    target_os = "macos",
+    target_os = "linux",
+    target_os = "freebsd",
+    target_os = "windows"
+))]
 pub mod image;
 // `overlay` is NOT gated: `Overlay` renders on the CPU via z2d (`Overlay.zig`'s
 // whole point — see the module docs) and names no backend type. Its ONLY
@@ -229,7 +238,9 @@ pub use generic::Renderer;
 // `Renderer`/`RendererError` arms are the EXACT COMPLEMENT of the macOS export
 // (`#[cfg(not(target_os = "macos"))]`, renderer_seam.rs), an invariant that
 // comment already pins — it starts resolving on FreeBSD the moment this line does.
-#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+// PORT NOTE (task W-2, N342): Windows is the third `.opengl` target (`backend.zig:20-21`);
+// its runtime is `.none`, so it builds the `apprt.embedded` arms of `OpenGL.zig`.
+#[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "windows"))]
 pub use generic::Renderer;
 
 // PORT: `.webgl => WebGL` (renderer.zig:41) — the ONLY arm that is NOT

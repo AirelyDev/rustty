@@ -70,9 +70,10 @@ fn main() {
     // `crate::opengl` is compiled (`any(target_os = "linux", target_os =
     // "freebsd")` — `renderer/backend.zig:20-21`'s non-Darwin `.opengl` arm),
     // otherwise the FreeBSD build compiles the module without its staged assets.
+    // (Task W-2, N342: and Windows, the third `.opengl` target.)
     if matches!(
         std::env::var("CARGO_CFG_TARGET_OS").as_deref(),
-        Ok("linux") | Ok("freebsd")
+        Ok("linux") | Ok("freebsd") | Ok("windows")
     ) {
         resolve_glsl_includes();
     }
