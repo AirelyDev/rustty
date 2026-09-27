@@ -898,6 +898,63 @@ mod tests {
         pty.deinit();
     }
 
+    /// Parity S44-F1: a `WindowsPty.open` that fails after creating its pipes
+    /// closes them, as the reference's errdefers do (`pty.zig:383-450`). A 0x0
+    /// console is rejected by `CreatePseudoConsole`, the last step, after all
+    /// four pipe handles exist. The error proves that arm ran; the process
+    /// handle count proves the handles were closed (each failed open used to
+    /// leave four behind).
+    #[cfg(windows)]
+    #[test]
+    fn windows_open_failure_closes_the_handles_it_created() {
+        extern "system" {
+            fn GetCurrentProcess() -> crate::windows::HANDLE;
+            fn GetProcessHandleCount(process: crate::windows::HANDLE, count: *mut u32) -> i32;
+        }
+        let handle_count = || {
+            let mut n = 0u32;
+            assert_ne!(
+                unsafe { GetProcessHandleCount(GetCurrentProcess(), &mut n) },
+                0,
+                "GetProcessHandleCount"
+            );
+            n
+        };
+        let bad = winsize {
+            ws_row: 0,
+            ws_col: 0,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
+
+        // The failure is the `CreatePseudoConsole` arm (the only one that
+        // returns `WindowsPtyError::Unexpected`), so every handle was created.
+        let err = Pty::open(bad)
+            .err()
+            .expect("CreatePseudoConsole must reject a 0x0 console");
+        assert!(
+            matches!(
+                err.downcast_ref::<WindowsPtyError>(),
+                Some(WindowsPtyError::Unexpected)
+            ),
+            "unexpected error: {err}"
+        );
+
+        const OPENS: u32 = 64;
+        let before = handle_count();
+        for _ in 0..OPENS {
+            assert!(Pty::open(bad).is_err());
+        }
+        let after = handle_count();
+        // A leak is 4 handles per open (256); the margin absorbs handles other
+        // test threads open meanwhile.
+        assert!(
+            after < before + OPENS,
+            "{} handles leaked over {OPENS} failed opens (before {before}, after {after})",
+            after.saturating_sub(before)
+        );
+    }
+
     /// Parity S44-F3: the pty diagnostics go through the `log` facade under
     /// the reference's `pty` scope. The TIOCPTYGNAME failure is driven for
     /// real (a `/dev/null` master is not a pty, so the ioctl fails with
