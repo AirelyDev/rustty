@@ -309,7 +309,7 @@ fn os_str_from_bytes(b: &[u8]) -> &std::ffi::OsStr {
 }
 
 fn log_err(msg: &str) {
-    eprintln!("[err] [{LOG_SCOPE}] {msg}");
+    log::error!(target: LOG_SCOPE, "{msg}");
 }
 
 /// The DOS form of a verbatim path, as Zig's `realpath` returns it

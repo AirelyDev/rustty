@@ -1037,7 +1037,7 @@ fn show(bytes: &[u8]) -> std::borrow::Cow<'_, str> {
 }
 
 fn log_warn(msg: &str) {
-    eprintln!("[warn] [{LOG_SCOPE}] {msg}");
+    log::warn!(target: LOG_SCOPE, "{msg}");
 }
 
 // The reference `log.debug` goes to the log system, filtered out at the default

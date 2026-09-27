@@ -304,7 +304,7 @@ fn log_stderr_lines(stderr: impl std::io::Read, mut log: impl FnMut(&[u8])) {
 }
 
 fn log_warn(msg: &str) {
-    eprintln!("[warn] [{LOG_SCOPE}] {msg}");
+    log::warn!(target: LOG_SCOPE, "{msg}");
 }
 
 #[cfg(all(test, unix))]

@@ -41,5 +41,5 @@ pub fn clickInterval() -> Option<u32> {
 
 #[cfg(target_os = "macos")]
 fn log_err(msg: &str) {
-    eprintln!("[err] [{LOG_SCOPE}] {msg}");
+    log::error!(target: LOG_SCOPE, "{msg}");
 }
