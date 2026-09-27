@@ -70,6 +70,12 @@ fn configure(tag: &str) -> Option<PathBuf> {
     Some(dir)
 }
 
+/// A `/`-rooted path, or a Windows drive path (`X:`).
+fn is_absolute_token(t: &str) -> bool {
+    let b = t.as_bytes();
+    t.starts_with('/') || (b.len() > 1 && b[1] == b':' && b[0].is_ascii_alphabetic())
+}
+
 fn field<'a>(pc: &'a str, key: &str) -> &'a str {
     pc.lines()
         .find_map(|l| l.strip_prefix(key))
@@ -91,14 +97,21 @@ fn static_pc_needs_no_libintl_and_no_absolute_paths() {
     let pc = std::fs::read_to_string(dir.join("librustty-vt-static.pc")).unwrap();
     let _ = std::fs::remove_dir_all(&dir);
     let private = field(&pc, "Libs.private:");
-    // Positive: the field was generated (the toolchain runtime is listed).
+    // Positive: the field was generated (the toolchain runtime is listed). On
+    // Windows the toolchain entries are the system import libraries Rust's std
+    // links (`CMakeLists.txt`'s WIN32 arm), not `-lc` (task W-2).
+    #[cfg(not(windows))]
+    let toolchain = "-lc";
+    #[cfg(windows)]
+    let toolchain = "-lkernel32";
     assert!(
-        private.contains("-lc"),
+        private.contains(toolchain),
         "Libs.private lost its toolchain entries: {private:?}"
     );
     assert!(!private.contains("intl"), "Libs.private: {private:?}");
+    // No absolute path: POSIX `/...`, and on Windows also a drive path (`X:`).
     assert!(
-        private.split_whitespace().all(|t| !t.starts_with('/')),
+        private.split_whitespace().all(|t| !is_absolute_token(t)),
         "absolute path in Libs.private: {private:?}"
     );
 }
@@ -132,82 +145,125 @@ fn install_layout_is_versioned_like_the_reference() {
             String::from_utf8_lossy(&out.stderr)
         );
     }
-    // GNUInstallDirs picks the library directory: `lib64` on Fedora-style
-    // multilib hosts (measured on Fedora 44 aarch64), `lib` elsewhere.
-    let lib = ["lib", "lib64"]
-        .iter()
-        .map(|d| prefix.join(d))
-        .find(|d| d.join("librustty-vt.a").is_file())
-        .unwrap_or_else(|| {
-            panic!(
-                "no lib/ or lib64/ under {} holds librustty-vt.a",
-                prefix.display()
-            )
-        });
-    let v = env!("CARGO_PKG_VERSION");
-    let major = v.split('.').next().unwrap();
-    let (real, so, link) = if cfg!(target_os = "macos") {
-        (
-            format!("librustty-vt.{v}.dylib"),
-            format!("librustty-vt.{major}.dylib"),
-            "librustty-vt.dylib".to_string(),
-        )
-    } else {
-        (
-            format!("librustty-vt.so.{v}"),
-            format!("librustty-vt.so.{major}"),
-            "librustty-vt.so".to_string(),
-        )
-    };
-    let meta = std::fs::symlink_metadata(lib.join(&real)).expect("real name installed");
-    assert!(meta.file_type().is_file());
-    assert_eq!(std::fs::read_link(lib.join(&so)).unwrap(), Path::new(&real));
-    assert_eq!(std::fs::read_link(lib.join(&link)).unwrap(), Path::new(&so));
-    assert!(lib.join("librustty-vt.a").is_file());
-    assert!(!lib.join("librustty_vt_c.a").exists());
-
-    if cfg!(target_os = "macos") {
-        let out = Command::new("otool")
-            .arg("-L")
-            .arg(lib.join(&real))
-            .output()
+    // Windows (task W-2): the layout W-1 measured for S64-F5 — the DLL in
+    // `bin/` under cargo's name, its import library renamed to the `.pc`'s link
+    // name, the static library as `rustty-vt-static.lib` (`GhosttyLibVt.zig`'s
+    // `ghostty-vt-static.lib`, `build.zig:172-175`), and no versioned links.
+    #[cfg(windows)]
+    {
+        let lib = prefix.join("lib");
+        assert!(
+            prefix.join("bin").join("rustty_vt_c.dll").is_file(),
+            "the DLL is in bin/"
+        );
+        assert!(
+            lib.join("rustty-vt.lib").is_file(),
+            "the import library is rustty-vt.lib"
+        );
+        assert!(
+            lib.join("rustty-vt-static.lib").is_file(),
+            "the static library"
+        );
+        assert!(
+            !lib.join("rustty_vt_c.dll.lib").exists(),
+            "cargo's import-library name"
+        );
+        assert!(
+            !lib.join("rustty_vt_c.lib").exists(),
+            "cargo's static-library name"
+        );
+        let pc = std::fs::read_to_string(prefix.join("share/pkgconfig/librustty-vt.pc"))
+            .or_else(|_| std::fs::read_to_string(lib.join("pkgconfig/librustty-vt.pc")))
             .unwrap();
-        let text = String::from_utf8_lossy(&out.stdout);
-        // The first entry after the path line is the library's own id.
-        let id = text.lines().nth(1).unwrap_or_default().trim().to_string();
-        assert!(
-            id.starts_with(
-                "@rpath/librustty-vt.dylib (compatibility version 1.0.0, current version"
-            ) && id.contains(&format!("current version {v}")),
-            "{text}"
-        );
+        assert_eq!(field(&pc, "Libs:"), "-L${libdir} -lrustty-vt");
+        let pcs = std::fs::read_to_string(prefix.join("share/pkgconfig/librustty-vt-static.pc"))
+            .or_else(|_| std::fs::read_to_string(lib.join("pkgconfig/librustty-vt-static.pc")))
+            .unwrap();
+        assert_eq!(field(&pcs, "Libs:"), "${libdir}/rustty-vt-static.lib");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
-    if cfg!(any(target_os = "linux", target_os = "freebsd")) {
-        // The ELF soname Zig records for a versioned shared library
-        // (`lib<name>.so.<major>`), which the soname link above resolves.
-        let out = Command::new("readelf")
-            .arg("-d")
-            .arg(lib.join(&real))
-            .output()
-            .expect("run readelf");
-        let text = String::from_utf8_lossy(&out.stdout);
-        assert!(
-            text.lines()
-                .any(|l| l.contains("(SONAME)") && l.contains(&format!("[{so}]"))),
-            "SONAME must be {so}:\n{text}"
-        );
-    }
+    #[cfg(not(windows))]
+    {
+        // GNUInstallDirs picks the library directory: `lib64` on Fedora-style
+        // multilib hosts (measured on Fedora 44 aarch64), `lib` elsewhere.
+        let lib = ["lib", "lib64"]
+            .iter()
+            .map(|d| prefix.join(d))
+            .find(|d| d.join("librustty-vt.a").is_file())
+            .unwrap_or_else(|| {
+                panic!(
+                    "no lib/ or lib64/ under {} holds librustty-vt.a",
+                    prefix.display()
+                )
+            });
+        let v = env!("CARGO_PKG_VERSION");
+        let major = v.split('.').next().unwrap();
+        let (real, so, link) = if cfg!(target_os = "macos") {
+            (
+                format!("librustty-vt.{v}.dylib"),
+                format!("librustty-vt.{major}.dylib"),
+                "librustty-vt.dylib".to_string(),
+            )
+        } else {
+            (
+                format!("librustty-vt.so.{v}"),
+                format!("librustty-vt.so.{major}"),
+                "librustty-vt.so".to_string(),
+            )
+        };
+        let meta = std::fs::symlink_metadata(lib.join(&real)).expect("real name installed");
+        assert!(meta.file_type().is_file());
+        assert_eq!(std::fs::read_link(lib.join(&so)).unwrap(), Path::new(&real));
+        assert_eq!(std::fs::read_link(lib.join(&link)).unwrap(), Path::new(&so));
+        assert!(lib.join("librustty-vt.a").is_file());
+        assert!(!lib.join("librustty_vt_c.a").exists());
 
-    let pc = std::fs::read_to_string(lib.join("pkgconfig/librustty-vt.pc"))
-        .or_else(|_| std::fs::read_to_string(prefix.join("share/pkgconfig/librustty-vt.pc")))
-        .unwrap();
-    assert_eq!(field(&pc, "Libs:"), "-L${libdir} -lrustty-vt");
-    let pcs = std::fs::read_to_string(lib.join("pkgconfig/librustty-vt-static.pc"))
-        .or_else(|_| std::fs::read_to_string(prefix.join("share/pkgconfig/librustty-vt-static.pc")))
-        .unwrap();
-    assert_eq!(field(&pcs, "Libs:"), "${libdir}/librustty-vt.a");
-    let _ = std::fs::remove_dir_all(&dir);
+        if cfg!(target_os = "macos") {
+            let out = Command::new("otool")
+                .arg("-L")
+                .arg(lib.join(&real))
+                .output()
+                .unwrap();
+            let text = String::from_utf8_lossy(&out.stdout);
+            // The first entry after the path line is the library's own id.
+            let id = text.lines().nth(1).unwrap_or_default().trim().to_string();
+            assert!(
+                id.starts_with(
+                    "@rpath/librustty-vt.dylib (compatibility version 1.0.0, current version"
+                ) && id.contains(&format!("current version {v}")),
+                "{text}"
+            );
+        }
+
+        if cfg!(any(target_os = "linux", target_os = "freebsd")) {
+            // The ELF soname Zig records for a versioned shared library
+            // (`lib<name>.so.<major>`), which the soname link above resolves.
+            let out = Command::new("readelf")
+                .arg("-d")
+                .arg(lib.join(&real))
+                .output()
+                .expect("run readelf");
+            let text = String::from_utf8_lossy(&out.stdout);
+            assert!(
+                text.lines()
+                    .any(|l| l.contains("(SONAME)") && l.contains(&format!("[{so}]"))),
+                "SONAME must be {so}:\n{text}"
+            );
+        }
+
+        let pc = std::fs::read_to_string(lib.join("pkgconfig/librustty-vt.pc"))
+            .or_else(|_| std::fs::read_to_string(prefix.join("share/pkgconfig/librustty-vt.pc")))
+            .unwrap();
+        assert_eq!(field(&pc, "Libs:"), "-L${libdir} -lrustty-vt");
+        let pcs = std::fs::read_to_string(lib.join("pkgconfig/librustty-vt-static.pc"))
+            .or_else(|_| {
+                std::fs::read_to_string(prefix.join("share/pkgconfig/librustty-vt-static.pc"))
+            })
+            .unwrap();
+        assert_eq!(field(&pcs, "Libs:"), "${libdir}/librustty-vt.a");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
 
 /// S64-F5, Windows: the `.pc` links `-lrustty-vt`, so the installed import

@@ -147,7 +147,9 @@ pub fn main() {
         Err(err) => {
             // var buffer: [1024]u8; var stderr_writer = File.stderr().writer(&buffer);
             // const stderr = &stderr_writer.interface;
-            let mut stderr = std::io::stderr().lock();
+            //   (Zig's stderr File, task W-4 N365; its failed write changes
+            //   nothing here: the `defer` exits 1 either way.)
+            let mut stderr = rustty_cli::io_file::stderr();
             // defer posix.exit(1);
             // const ErrSet = @TypeOf(err) || error{Unknown};
             // switch (@as(ErrSet, @errorCast(err))) {
@@ -229,7 +231,9 @@ pub fn main() {
         // std.log.info("executing CLI action={}", .{action});
         log_fn(
             LogLevel::Info,
-            &format!("executing CLI action={action:?}"),
+            //   `{}` of an enum is `.` + its tag name (`.list-actions`); CORRECTION
+            //   (task W-4, N367): this printed the Rust `Debug` (`ListActions`).
+            &format!("executing CLI action=.{}", action.tag_name()),
             &state.logging,
         );
         // posix.exit(action.run(alloc) catch |err| err: {
@@ -240,7 +244,9 @@ pub fn main() {
         let code = action.run().unwrap_or_else(|err| {
             log_fn(
                 LogLevel::Err,
-                &format!("CLI action failed error={err:?}"),
+                //   `{}` of the error is `error.<Name>`; CORRECTION (review W-4 F8):
+                //   this printed the port's `Debug`.
+                &format!("CLI action failed error={}", err.zig_name()),
                 &state.logging,
             );
             1
@@ -251,7 +257,14 @@ pub fn main() {
     // if (comptime build_config.app_runtime == .none) {
     if build_config::app_runtime() == build_config::Runtime::None {
         // const stdout = std.io.getStdOut().writer();
-        let mut stdout = std::io::stdout().lock();
+        //   PORT NOTE (task W-4, N365): Zig's stdout File, whose failed write the
+        //   `try`s below return from `main` (exit 1), not Rust's
+        //   `std::io::stdout()`, which reports success on a missing handle (a
+        //   GUI-subsystem exe started from a shell or a console has one).
+        //   `std.io.getStdOut()` itself does not exist in Zig 0.16, the pin's
+        //   compiler: this branch cannot compile in the reference
+        //   (UPSTREAM-DEFECTS UD343); the port follows its evident intent.
+        let mut stdout = rustty_cli::io_file::stdout();
         // try stdout.print("Usage: ghostty +<action> [flags]\n\n", .{});
         // try stdout.print(\\This is the Ghostty helper CLI ... \\, .{});
         //   R2: the `Usage:` command position keeps the lowercase command name
@@ -272,8 +285,15 @@ pub fn main() {
              We don't have proper help output yet, sorry! Please refer to the\n\
              source code or Discord community for help for now. We'll fix this in time.\n",
         );
-        let _ = stdout.write_all(banner.as_bytes());
-        let _ = stdout.flush();
+        // `try`: a failed write makes `main` return `error.WriteFailed` (the
+        // `std.Io.Writer` error), which Zig's start code logs with
+        // `std.log.err("{t}", .{err})` before exiting 1 (Zig 0.16.0
+        // `std/start.zig:761`). A Debug reference build also dumps the error
+        // return trace, which has no Rust counterpart.
+        if stdout.write_all(banner.as_bytes()).is_err() {
+            log_fn(LogLevel::Err, "WriteFailed", &state.logging);
+            std::process::exit(1);
+        }
 
         // posix.exit(0);
         std::process::exit(0);

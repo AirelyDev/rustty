@@ -1,0 +1,12 @@
+Usage: rustty +<action> [flags]
+
+This is the Rustty helper CLI that accompanies the graphical Rustty app.
+To launch the terminal directly, please launch the graphical app
+(i.e. Rustty.app on macOS). This CLI can be used to perform various
+actions such as inspecting the version, listing fonts, etc.
+
+On macOS, the terminal can also be launched using `open -na Rustty.app`,
+or `open -na Rustty.app --args --foo=bar --baz=qux` to pass arguments.
+
+We don't have proper help output yet, sorry! Please refer to the
+source code or Discord community for help for now. We'll fix this in time.

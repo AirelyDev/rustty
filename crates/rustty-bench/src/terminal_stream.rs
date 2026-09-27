@@ -369,10 +369,7 @@ fn terminal_stream_uses_the_full_terminal_handler() {
     }
 
     let opts = Options {
-        data: Some({
-            use std::os::unix::ffi::OsStrExt;
-            path.as_os_str().as_bytes().to_vec()
-        }),
+        data: Some(path.as_os_str().as_encoded_bytes().to_vec()),
         ..Options::default()
     };
 

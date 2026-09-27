@@ -9419,7 +9419,9 @@ pub use macos_impl::*;
 // module keeps its `linux_impl` NAME deliberately: renaming it would churn a file
 // several concurrent lanes are editing for zero fidelity gain (the oracle has no
 // per-OS name here at all — it is one comptime instantiation).
-#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+// PORT NOTE (task W-2, N342): Windows is the third `.opengl` target (`backend.zig:20-21`);
+// its runtime is `.none`, so it builds the `apprt.embedded` arms of `OpenGL.zig`.
+#[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "windows"))]
 mod linux_impl;
-#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+#[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "windows"))]
 pub use linux_impl::*;

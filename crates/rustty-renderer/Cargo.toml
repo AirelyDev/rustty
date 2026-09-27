@@ -266,7 +266,11 @@ block2 = { version = "0.6" }
 # (loaded through `gl::load_with`), and `khronos-egl`'s `dynamic` feature dlopen's
 # `libEGL.so.1` through `libloading` (full unix support; FreeBSD ships libEGL via
 # mesa/libglvnd), so neither names a Linux-only symbol or library.
-[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
+# Task W-2 (N342): and Windows, the third `.opengl` target (`backend.zig:20-21`). Neither
+# crate names a Linux-only symbol; on Windows no EGL is ever loaded at run time (the
+# embedded runtime's `surfaceInit` is a no-op, and the offscreen test context skips
+# through `require_gl_or_skip` like any host without EGL).
+[target.'cfg(any(target_os = "linux", target_os = "freebsd", target_os = "windows"))'.dependencies]
 # `gl`: raw `gl_generator`-produced FFI bindings loaded through an explicit
 # `gl::load_with(|s| …)` closure — Rust's analogue of ghostty's own glad
 # function-pointer context (`pkg/opengl/glad.zig`, `gl.c.gl*` / `gl.c.GL_*`).

@@ -406,6 +406,11 @@ mod tests {
     /// defaults) the source and termcap are NOT installed
     /// (`GhosttyResources.zig:43-77`), but the compiled database still is:
     /// `tic` reads the source from outside the install tree.
+    // Not on a Windows host (task W-2, R14 form 1): it runs the host's ncurses
+    // `tic`, which Windows does not have; the reference's own Windows build
+    // compiles no terminfo (`GhosttyResources.zig:57`, `if (os_tag == .windows)
+    // break :terminfo;`), covered here by `gen_terminfo_windows_emits_source_only`.
+    #[cfg(not(windows))]
     #[test]
     fn gen_terminfo_release_installs_only_the_compiled_database() {
         let base = std::env::temp_dir().join(format!(
@@ -436,6 +441,11 @@ mod tests {
 
     /// The two gates are independent: termcap on, source off installs the
     /// termcap only.
+    // Not on a Windows host (task W-2, R14 form 1): it runs the host's ncurses
+    // `tic`, which Windows does not have; the reference's own Windows build
+    // compiles no terminfo (`GhosttyResources.zig:57`, `if (os_tag == .windows)
+    // break :terminfo;`), covered here by `gen_terminfo_windows_emits_source_only`.
+    #[cfg(not(windows))]
     #[test]
     fn gen_terminfo_termcap_without_source() {
         let base = std::env::temp_dir().join(format!(
@@ -477,6 +487,11 @@ mod tests {
     /// layout `rustty-os`'s FreeBSD sentinels
     /// (`site-terminfo/<letter>/{rustty,xterm-rustty}` under `local/share`)
     /// actually probe. Runs the host tic, so this is host-independent.
+    // Not on a Windows host (task W-2, R14 form 1): it runs the host's ncurses
+    // `tic`, which Windows does not have; the reference's own Windows build
+    // compiles no terminfo (`GhosttyResources.zig:57`, `if (os_tag == .windows)
+    // break :terminfo;`), covered here by `gen_terminfo_windows_emits_source_only`.
+    #[cfg(not(windows))]
     #[test]
     fn gen_terminfo_freebsd_uses_site_terminfo() {
         let base = std::env::temp_dir().join(format!(
@@ -549,6 +564,11 @@ mod tests {
     /// End-to-end: gen_terminfo compiles a real terminfo tree with tic and creates
     /// the share/{APP} root. Verifies the runtime-critical resource actually
     /// materializes (not just that the pipeline returns Ok).
+    // Not on a Windows host (task W-2, R14 form 1): it runs the host's ncurses
+    // `tic`, which Windows does not have; the reference's own Windows build
+    // compiles no terminfo (`GhosttyResources.zig:57`, `if (os_tag == .windows)
+    // break :terminfo;`), covered here by `gen_terminfo_windows_emits_source_only`.
+    #[cfg(not(windows))]
     #[test]
     fn gen_terminfo_produces_compiled_entry() {
         let base =

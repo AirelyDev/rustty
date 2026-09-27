@@ -17,12 +17,13 @@ use crate::shell::ShellEscapeWriter;
 use crate::string_encoding::{AllocatingWriter, Writer};
 use rustty_global::environ::Environ;
 
-// PORT NOTE: `const log = std.log.scoped(.os_edit);`. Routed through the crate's
-// `eprintln!`-based scoped-log convention (see `systemd.rs`).
+// PORT NOTE: `const log = std.log.scoped(.os_edit);`: the log facade with the
+// scope as target. CORRECTION (review W-4, N380): this was an `eprintln!`, which
+// ignored the logging settings.
 const LOG_SCOPE: &str = "os_edit";
 
 fn log_warn(msg: &str) {
-    eprintln!("[warn] [{LOG_SCOPE}] {msg}");
+    log::warn!(target: LOG_SCOPE, "{msg}");
 }
 
 /// PORT NOTE: the reference's anonymous `enum` field type of `Options`. Hoisted

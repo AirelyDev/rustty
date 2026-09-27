@@ -1,0 +1,3 @@
+The `rustty +edit-config` command is not supported on Windows.
+Please edit the configuration file manually at the following path:
+

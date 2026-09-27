@@ -13,6 +13,10 @@
 # (VirtualAlloc/VirtualFree) are proven only up to type-checking against
 # hand-transcribed Win32/Zig-std signatures. A real windows build/test lane is
 # the honest follow-up.
+# CORRECTION (task W-2): "No Windows host or CI lane exists in this repo" is no
+# longer true: `.github/workflows/ci.yml`'s `windows` job builds, lints and tests
+# the whole workspace on windows-latest (NEW-FINDINGS N342/N351). This gate stays
+# the check-only cross lane for hosts without a Windows toolchain.
 #
 # `RUSTTY_SYS_CHECK_ONLY=1` makes the vendored-C `-sys` build scripts
 # (highway/simdutf/zlib + rustty-simd's own cc build) skip their `cc`

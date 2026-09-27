@@ -354,7 +354,7 @@ pub fn run() -> Result<u8, Error> {
     }
 
     // var stderr_buffer: [1024]u8 = undefined; ... const stderr = &stderr_writer.interface;
-    let mut stderr = std::io::BufWriter::new(std::io::stderr().lock());
+    let mut stderr = std::io::BufWriter::with_capacity(1024, crate::io_file::stderr());
 
     // Any diagnostic from the arg parser is an unknown flag or bad
     // value. Reject loudly — silently forwarding `--typo` to ssh would
@@ -1037,7 +1037,7 @@ fn show(bytes: &[u8]) -> std::borrow::Cow<'_, str> {
 }
 
 fn log_warn(msg: &str) {
-    eprintln!("[warn] [{LOG_SCOPE}] {msg}");
+    log::warn!(target: LOG_SCOPE, "{msg}");
 }
 
 // The reference `log.debug` goes to the log system, filtered out at the default

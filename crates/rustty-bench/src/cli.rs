@@ -459,7 +459,6 @@ mod tests {
     #[test]
     fn string_args_honour_quotes_like_arg_iterator_general() {
         use super::{main_action, Args, Error};
-        use std::os::unix::ffi::OsStrExt as _;
 
         let mut dir = std::env::temp_dir();
         dir.push(format!(
@@ -473,7 +472,7 @@ mod tests {
 
         let quoted = |p: &std::path::Path| {
             let mut s = b"--data=\"".to_vec();
-            s.extend_from_slice(p.as_os_str().as_bytes());
+            s.extend_from_slice(p.as_os_str().as_encoded_bytes());
             s.push(b'"');
             s
         };

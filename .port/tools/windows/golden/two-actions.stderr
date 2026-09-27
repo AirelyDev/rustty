@@ -1,0 +1,2 @@
+Error: multiple CLI actions specified. You must specify only one
+action starting with the `+` character.

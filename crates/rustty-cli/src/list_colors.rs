@@ -158,7 +158,7 @@ fn run_opts(opts: Options) -> Result<u8, Error> {
         //   The evident intent (every sibling buffered CLI flushes) is the whole
         //   list, so the port flushes explicitly below. Test:
         //   `plain_listing_reaches_stdout_in_full`.
-        let mut stdout_writer = std::io::BufWriter::new(std::io::stdout().lock());
+        let mut stdout_writer = std::io::BufWriter::with_capacity(4096, crate::io_file::stdout());
         let writer = &mut stdout_writer;
         // for (keys.items) |name| {
         for name in &keys {

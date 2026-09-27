@@ -91,15 +91,19 @@ fn errno_location() -> *mut c_int {
 /// The target TTY implementation. Zig: `if is_test TestTty else switch(os){ .windows =>
 /// WindowsTty, else => PosixTty }`.
 ///
-/// PORT NOTE (windows + test): Zig's `TestTty` is `posix`-only (it calls `posix.pipe`),
-/// so `builtin.is_test` on a Windows target would not compile upstream either. Rust
-/// type-checks every arm, so the `test` alias is narrowed to non-Windows and a Windows
-/// test build aliases `WindowsTty` (the real backend) instead.
+/// CORRECTION (task W-2, N346): this said "Zig's `TestTty` is `posix`-only (it calls
+/// `posix.pipe`), so `builtin.is_test` on a Windows target would not compile upstream
+/// either", and a Windows test build aliased the real `WindowsTty`, whose console
+/// handles do not exist without a console (ssh, CI), so the Loop tests failed
+/// `InvalidHandle`. That was libvaxis 0.5.1; the pin's 0.6.0 `TestTty` is
+/// `switch (builtin.os.tag)` with a discarding-writer arm for every non-Linux target
+/// (`tty.zig:751-842`), so the test alias is `TestTty` on every target, Windows
+/// included.
 #[cfg(all(not(windows), not(test)))]
 pub type Tty = PosixTty;
-#[cfg(all(test, not(windows)))]
+#[cfg(test)]
 pub type Tty = TestTty;
-#[cfg(windows)]
+#[cfg(all(windows, not(test)))]
 pub type Tty = windows_tty::WindowsTty;
 
 /// The restore-relevant state of the [`GLOBAL_TTY`]. Zig stores a COPY of the whole
@@ -182,6 +186,13 @@ impl std::io::Write for TtyWriter {
 
     #[cfg(windows)]
     fn flush(&mut self) -> std::io::Result<()> {
+        // The Windows `TestTty`'s sink (a null handle, test builds only): 0.6.0's
+        // `std.Io.Writer.Discarding` drops what is written.
+        #[cfg(test)]
+        if self.handle.is_null() {
+            self.buf.clear();
+            return Ok(());
+        }
         let mut off = 0;
         while off < self.buf.len() {
             let mut written: u32 = 0;
@@ -1739,6 +1750,68 @@ impl TestTty {
         // Zig returns `error.SkipZigTest`; this path is Windows-API-only and never
         // reached on non-windows targets.
         unimplemented!("TestTty.next_event: Windows-API compat only (Zig: error.SkipZigTest)")
+    }
+
+    pub fn reset_signal_handler() {}
+}
+
+/// The test mock on Windows: libvaxis 0.6.0's `else` arm of `TestTty`
+/// (`tty.zig:814-842`), a `std.Io.Writer.Discarding` with a fixed `getWinsize` and a
+/// `nextEvent` that is `error.SkipZigTest` (task W-2, N346).
+///
+/// PORT NOTE: the sink is a [`TtyWriter`] over a null handle whose `flush` discards
+/// (test builds only), so `writer()` keeps the one return type every `Tty` has.
+/// `next_event` is never reached: the Loop's read thread returns at once in a test
+/// build (`if (builtin.is_test) return;`).
+#[cfg(all(test, windows))]
+pub struct TestTty {
+    d: TtyWriter,
+}
+
+#[cfg(all(test, windows))]
+impl TestTty {
+    // pub fn init(_: std.Io, buf: []u8) !@This() { return .{ .d = .init(buf) }; }
+    pub fn init(buffer: Vec<u8>) -> Result<TestTty, TtyError> {
+        Ok(TestTty {
+            d: TtyWriter::new_handle(core::ptr::null_mut(), buffer),
+        })
+    }
+
+    // pub fn deinit(_: *const @This()) void {}
+    pub fn deinit(self) {}
+
+    // pub fn writer(self: *@This()) *std.Io.Writer { return &self.d.writer; }
+    pub fn writer(&mut self) -> &mut TtyWriter {
+        &mut self.d
+    }
+
+    /// Narrow writer projection (the one `Tty` surface; see `PosixTty::writer_raw`).
+    ///
+    /// # Safety
+    /// `this` must point to a live `TestTty`.
+    pub unsafe fn writer_raw(this: *mut Self) -> *mut TtyWriter {
+        unsafe { std::ptr::addr_of_mut!((*this).d) }
+    }
+
+    pub fn get_winsize(&self) -> Result<crate::Winsize, TtyError> {
+        Ok(crate::Winsize {
+            rows: 40,
+            cols: 80,
+            x_pixel: 40 * 8,
+            y_pixel: 40 * 8 * 2,
+        })
+    }
+
+    /// Implemented for the Windows API
+    ///
+    /// # Safety
+    /// Never called (see the type's PORT NOTE).
+    pub unsafe fn next_event<'e>(
+        _this: *mut Self,
+        _parser: *mut crate::parser::Parser,
+    ) -> Result<crate::event::Event<'e>, TtyError> {
+        // return error.SkipZigTest;
+        unimplemented!("TestTty.next_event: Zig returns error.SkipZigTest")
     }
 
     pub fn reset_signal_handler() {}

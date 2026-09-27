@@ -322,12 +322,12 @@ fn is_flatpak() -> bool {
 
 #[cfg(not(windows))]
 fn log_warn(msg: &str) {
-    eprintln!("[warn] [{LOG_SCOPE}] {msg}");
+    log::warn!(target: LOG_SCOPE, "{msg}");
 }
 
 #[cfg(all(not(windows), feature = "flatpak"))]
 fn log_info(msg: &str) {
-    eprintln!("[info] [{LOG_SCOPE}] {msg}");
+    log::info!(target: LOG_SCOPE, "{msg}");
 }
 
 // if (builtin.os.tag == .windows) return error.SkipZigTest;

@@ -3371,6 +3371,11 @@ mod main_c_tests {
     // `state.action orelse return` branch and RETURN WITHOUT exiting (a windowed
     // launch must not `posix.exit`). If the non-null `unreachable!` fired, or if the
     // fn exited the process, this test would abort rather than complete.
+    // POSIX-only (task W-2, R14 form 1): on Windows `global.init`'s `.c` args
+    // arm is `return error.UnsupportedOSForCApi` (`global.zig:62-77`), so
+    // `rustty_init` returns 1 there, pinned by
+    // `rustty_init_is_unsupported_on_windows`.
+    #[cfg(not(windows))]
     #[test]
     fn cli_try_action_null_action_returns() {
         // reference `ghostty_init` sets the global state (with `action = null`).
@@ -3585,6 +3590,24 @@ mod tests {
         );
     }
 
+    // Windows: `global.init(.{ .c = .. })` fails with
+    // `error.UnsupportedOSForCApi` before anything else (`global.zig:62-77`:
+    // "Using the C API from Windows is unsupported at this time"), and
+    // `ghostty_init` logs it and returns 1 — for a valid action too (task W-2).
+    #[cfg(windows)]
+    #[test]
+    fn rustty_init_is_unsupported_on_windows() {
+        // SAFETY: argc = 0, no argv is read.
+        let rc = unsafe { crate::rustty_init(0, core::ptr::null_mut()) };
+        assert_eq!(rc, 1);
+        let argv0 = std::ffi::CString::new("rustty").unwrap();
+        let arg1 = std::ffi::CString::new("+version").unwrap();
+        let mut argv = [argv0.as_ptr() as *mut c_char, arg1.as_ptr() as *mut c_char];
+        // SAFETY: argv points at 2 valid NUL-terminated strings.
+        let rc = unsafe { crate::rustty_init(2, argv.as_mut_ptr()) };
+        assert_eq!(rc, 1);
+    }
+
     // reference `ghostty_init`: a detect failure means `state.init()` fails →
     // log err + return 1 (main_c.zig:105). No global state is stamped.
     #[test]
@@ -3602,6 +3625,8 @@ mod tests {
     // RUNS it and EXITS with its code — so the whole flow runs in a CHILD
     // process (the panic_policy.rs re-exec pattern); the parent asserts exit 0
     // and the version output. This is the CLI-action-THROUGH-C KAT.
+    // POSIX-only, as `cli_try_action_null_action_returns` (task W-2).
+    #[cfg(not(windows))]
     #[test]
     fn cli_try_action_version_runs_and_exits() {
         const MARKER: &str = "RUSTTY_CLI_ACTION_CHILD";

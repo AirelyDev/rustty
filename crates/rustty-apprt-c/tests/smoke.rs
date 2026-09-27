@@ -45,6 +45,7 @@ fn workspace_root() -> PathBuf {
 /// The `target/<profile>/` dir that holds this test binary and the built lib
 /// artifacts. Derived from the running test executable
 /// (`target/<profile>/deps/smoke-<hash>` → `target/<profile>`).
+#[cfg(not(windows))] // (only the C smoke uses it; task W-2)
 fn target_profile_dir() -> PathBuf {
     let exe = std::env::current_exe().expect("current_exe");
     exe.parent()
@@ -74,6 +75,7 @@ fn c_compiler() -> String {
 }
 
 /// Platform dynamic-library file name for a cdylib crate named `name`.
+#[cfg(not(windows))] // (only the C smoke uses it; task W-2)
 fn dylib_name(name: &str) -> String {
     if cfg!(target_os = "macos") {
         format!("lib{name}.dylib")
@@ -85,6 +87,7 @@ fn dylib_name(name: &str) -> String {
 }
 
 /// Platform static-library file name.
+#[cfg(not(windows))] // (only the C smoke uses it; task W-2)
 fn staticlib_name(name: &str) -> String {
     if cfg!(target_os = "windows") {
         format!("{name}.lib")
@@ -93,6 +96,13 @@ fn staticlib_name(name: &str) -> String {
     }
 }
 
+// Not on Windows (task W-2, R14 form 1): `smoke.c` requires `rustty_init` to
+// succeed, and on Windows the reference's `ghostty_init` fails with
+// `error.UnsupportedOSForCApi` (`global.zig:62-77`; pinned by
+// `rustty_init_is_unsupported_on_windows`). The Windows C-ABI smoke is the
+// reference's own `test/windows/test_dll_init.c` (the `rustty_info` by-value
+// return through the DLL), which the CI Windows leg builds and runs.
+#[cfg(not(windows))]
 #[test]
 fn c_abi_smoke_compile_link_run() {
     let root = workspace_root();

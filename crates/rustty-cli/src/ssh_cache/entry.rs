@@ -160,10 +160,11 @@ fn parse_int_i64(s: &[u8]) -> Result<i64, rustty_zigstd::fmt::ParseIntError> {
     rustty_zigstd::fmt::parse_int::<i64>(s, 10)
 }
 
-// std.log.scoped default: warnings surface on stderr. Mirrors the os/open.rs
-// `log_warn` convention (the reference here uses the unscoped `std.log.warn`).
+// The reference's unscoped `std.log.warn`: the facade's `.default` scope is the
+// empty target. CORRECTION (review W-4, N380): this was an `eprintln!`, which
+// printed whatever the logging settings said.
 fn log_warn(msg: &str) {
-    eprintln!("[warn] {msg}");
+    log::warn!(target: "", "{msg}");
 }
 
 #[cfg(test)]

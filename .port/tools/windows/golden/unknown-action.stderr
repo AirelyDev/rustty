@@ -1,0 +1,4 @@
+Error: unknown CLI action specified. CLI actions are specified with
+the '+' character.
+
+All valid CLI actions can be listed with `rustty +help`

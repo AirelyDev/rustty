@@ -375,12 +375,12 @@ fn trim_right<'a>(slice: &'a [u8], strip: &[u8]) -> &'a [u8] {
 
 #[allow(dead_code)]
 fn log_err(msg: &str) {
-    eprintln!("[err] [{LOG_SCOPE}] {msg}");
+    log::error!(target: LOG_SCOPE, "{msg}");
 }
 
 #[allow(dead_code)]
 fn log_warn(msg: &str) {
-    eprintln!("[warn] [{LOG_SCOPE}] {msg}");
+    log::warn!(target: LOG_SCOPE, "{msg}");
 }
 
 // (unix: the helpers these test are the Linux arm's, compiled for tests on

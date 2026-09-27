@@ -51,7 +51,14 @@ use rustty_vt::render::RenderState;
 // data (identical POD in both twins); the L4 OpenGL twin is what made them reachable
 // on Linux, so this gate now tracks the dispatcher's `any(macos, linux, freebsd)`
 // (W2D/F-003 widened the OpenGL arm to FreeBSD — `backend.zig:20-21`).
-#[cfg(any(target_os = "macos", target_os = "linux", target_os = "freebsd"))]
+// PORT NOTE (task W-2, N342): Windows is the third `.opengl` target (`backend.zig:20-21`);
+// its runtime is `.none`, so it builds the `apprt.embedded` arms of `OpenGL.zig`.
+#[cfg(any(
+    target_os = "macos",
+    target_os = "linux",
+    target_os = "freebsd",
+    target_os = "windows"
+))]
 use crate::image::{Pending, PixelFormat};
 use crate::size::{CellSize, Size};
 
@@ -204,7 +211,12 @@ impl Overlay {
     // (see the gated import above). The body is FULL and target-independent — the
     // gate is purely the `image::Pending` return type, and it lifted to
     // `any(macos, linux, freebsd)` with the L4 OpenGL image twin (W2D/F-003).
-    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "freebsd"))]
+    #[cfg(any(
+        target_os = "macos",
+        target_os = "linux",
+        target_os = "freebsd",
+        target_os = "windows"
+    ))]
     pub fn pending_image(&self) -> Pending {
         Pending {
             // @intCast(self.surface.getWidth()) / getHeight()
@@ -833,7 +845,12 @@ mod tests {
         // return type is — see the module head), so its assertions are too. The
         // init/reset/deinit lifecycle around them is backend-free and stays covered on
         // every target.
-        #[cfg(any(target_os = "macos", target_os = "linux", target_os = "freebsd"))]
+        #[cfg(any(
+            target_os = "macos",
+            target_os = "linux",
+            target_os = "freebsd",
+            target_os = "windows"
+        ))]
         {
             let term = sz.terminal();
             let p = o.pending_image();

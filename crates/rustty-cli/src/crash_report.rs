@@ -18,7 +18,7 @@ use rustty_config::value_types::Duration;
 // const crash = @import("../crash/main.zig");
 use rustty_crash as crash;
 
-use std::io::{IsTerminal, Write};
+use std::io::Write;
 
 // std.time.ns_per_s — the seconds rounding factor for the relative age.
 const NS_PER_S: u64 = 1_000_000_000;
@@ -98,9 +98,10 @@ pub fn run() -> Result<u8, Error> {
     //   PORT NOTE: the reference keeps `stdout_file` separate from the buffered
     //   `stdout` writer to `posix.isatty(stdout_file.handle)`; Rust queries
     //   `is_terminal()` on the stdout handle before wrapping it in the BufWriter.
-    let stdout_file = std::io::stdout();
+    //   (Zig's stdout File, task W-4 N365.)
+    let stdout_file = crate::io_file::stdout();
     let stdout_is_tty = stdout_file.is_terminal();
-    let mut stdout = std::io::BufWriter::new(stdout_file.lock());
+    let mut stdout = std::io::BufWriter::with_capacity(1024, stdout_file);
 
     // var environ_map = try global.environMap();
     // defer environ_map.deinit();
@@ -277,7 +278,16 @@ mod tests {
 
         // The year 1400 (the probe value), a report written a minute ago, and one
         // dated in the future (2200), which takes the reference's own "now" arm.
+        //
+        // Windows (task W-2): NTFS stores no time before 1601 (a FILETIME counts
+        // from 1601-01-01, and `SetFileTime` rejects the year 1400 with
+        // ERROR_INVALID_PARAMETER, measured), so the ancient report there is
+        // dated 1601-01-02 (a zero FILETIME means "leave unchanged"); its age
+        // fits a `Duration`, and like APFS it checks the ordinary arm.
+        #[cfg(not(windows))]
         let ancient = UNIX_EPOCH - StdDuration::from_secs(17_987_443_200);
+        #[cfg(windows)]
+        let ancient = UNIX_EPOCH - StdDuration::from_secs(11_644_473_600 - 86_400);
         let recent = SystemTime::now() - StdDuration::from_secs(60);
         let future = UNIX_EPOCH + StdDuration::from_secs(7_258_118_400);
         for (name, mtime) in [("ancient", ancient), ("recent", recent), ("future", future)] {

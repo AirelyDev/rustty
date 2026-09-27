@@ -672,12 +672,27 @@ suite with a no-op tick would mean the tests never drove the loop.
 
 ---
 
-## V9. `rustty-termio` Windows paths: built, linted and unit-tested on Windows (W-1); the live surface needs a Windows app build — **ENVIRONMENT-BLOCKED**
+## V9. `rustty-termio` Windows paths: built, linted and unit-tested on Windows (W-1); the live-surface step does not exist at the pin (W-2) — **DISCHARGED**
+
+CORRECTION (task W-2): the header read "V9. `rustty-termio` Windows paths: built, linted and unit-tested on Windows (W-1); the live surface needs a Windows app build — **ENVIRONMENT-BLOCKED**".
 
 **W-1 status (2026-09-27, rwin: Windows 11 build 26200 on ARM64, target `x86_64-pc-windows-msvc` under x64 emulation):** recipe steps 1-3 DONE on Windows: `cargo check`/`clippy -- -D warnings`/`test -p rustty-termio` green (3/3 test runs, 65 lib tests + integration tests; the compile errors were mechanical, fixed in place, NEW-FINDINGS N344). The end-to-end path runs in a unit test rather than a surface: `windows_threadenter_reads_the_pty_through_the_windows_read_thread` spawns `cmd.exe` through a real ConPTY via `threadEnter`, sees its output on the Screen through `threadMainWindows`, and `threadExit`'s `CancelIoEx` stops the read loop; negative control (no Windows read loop) fails with an empty Screen (LEDGER S211-F2/F3). Not done: a live surface (the app tier does not compile for Windows, N342). The `CancelIoEx` race found on the way is N341 (fixed in W-1b as UD326, with
 the CRT-with-HANDLE crash UD325). Stays open: live surface pending N342.
 
-**Blocked on:** a Windows build of the application tier, which does not exist yet:
+**W-2 status (2026-09-27, rwin, `x86_64-pc-windows-msvc`): DISCHARGED.** N342 is fixed: the application tier
+(rustty-core, rustty-apprt, rustty-apprt-c, the `rustty` executable) builds, lints and tests on Windows, and
+rustty-termio's suite passes there again with it (counts in NEW-FINDINGS N351). The recipe's remaining step, "launch
+a surface" on Windows, has no counterpart in the reference: on Windows its only runtime is `none` (the embedded
+library), whose `ghostty_init` fails with `error.UnsupportedOSForCApi` (`global.zig:62-77`: "Using the C API from
+Windows is unsupported at this time") and whose `Platform` has only `macos`/`ios` arms, both
+`error.UnsupportedPlatform` off Darwin (`apprt/embedded.zig:382-428`); the reference's OpenGL renderer is a
+documented no-op there ("libghostty is strictly broken for rendering on this platforms", `OpenGL.zig:172-176`). So
+no Windows surface can be created by either program, and the end-to-end path stays covered by the W-1 unit test
+(ConPTY + `threadEnter` + `threadMainWindows` + `threadExit`). Both refusals are pinned on Windows:
+`rustty_init_is_unsupported_on_windows` (rustty-apprt-c) and `non_darwin_platform_init_is_unsupported`
+(rustty-apprt). The row is closed; it comes back if a Windows apprt is ever ported.
+
+**Blocked on (HISTORICAL, until W-2; CORRECTION, task W-2b, review W-2 F5: this paragraph read as current after the row was discharged):** a Windows build of the application tier, which does not exist yet:
 NEW-FINDINGS N342 (rustty-core and above do not compile for Windows; batch W-2), so no
 live surface can run there. CORRECTION (task W-1b, review W-1): this
 read "a Windows host with the MSVC toolchain" and the header said "cannot even be
@@ -733,6 +748,8 @@ read thread would prove nothing.
 ## V10. `rustty-vaxis` Windows console backend: PORTED, but uncompilable for a Windows target on this host — **ENVIRONMENT-BLOCKED**
 
 **W-1 status (2026-09-27, rwin: Windows 11 build 26200 on ARM64, target `x86_64-pc-windows-msvc` under x64 emulation):** compiled, `clippy -- -D warnings` green, and `cargo test -p rustty-vaxis` runs 131/133 on Windows; the key-record decode is tested there (`windows_tty::tests::function_key_records_decode_to_their_own_keys`, UD245). The two failures are the Loop tests, which get the real console `WindowsTty` under ssh (no console): NEW-FINDINGS N346. A live console session was not driven.
+
+**W-2 status (2026-09-27, rwin, `x86_64-pc-windows-msvc`):** N346 is closed: the test build's `Tty` is `TestTty` on Windows too (libvaxis 0.6.0's discarding arm), and `cargo test -p rustty-vaxis` runs **157 passed, 0 failed** on Windows (lib, `image_tier`, `ucd_provenance`). The one remaining step is a live console session (the Windows `WindowsTty` read/write path on a real console), which ssh cannot provide; the row stays open for that step only. The header's "uncompilable for a Windows target on this host" is about cross-checking from macOS and remains true there.
 
 **Blocked on:** a Windows host with the MSVC toolchain (`zlib-sys`'s vendored C
 cannot cross-compile to MSVC from macOS — detail below).

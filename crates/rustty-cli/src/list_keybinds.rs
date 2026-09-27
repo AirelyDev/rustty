@@ -170,7 +170,10 @@ pub fn run() -> Result<u8, Error> {
     // const stdout: std.fs.File = .stdout();
     // var stdout_writer = stdout.writer(&buffer);
     // const writer = &stdout_writer.interface;
-    let mut stdout_writer = IoWriter(std::io::BufWriter::new(std::io::stdout().lock()));
+    let mut stdout_writer = IoWriter(std::io::BufWriter::with_capacity(
+        1024,
+        crate::io_file::stdout(),
+    ));
 
     // if (tui.can_pretty_print and !opts.plain and stdout.isTty()) {
     use std::io::IsTerminal;

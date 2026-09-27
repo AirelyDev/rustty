@@ -5540,17 +5540,15 @@ pub(crate) fn log_debug(msg: String) {
     }
 }
 
-/// `std.fs.path.dirname` — the directory portion of `path`, or `None` if there
-/// is no separator (matching `std.fs.path.dirname` returning null).
+/// `std.fs.path.dirname` — the directory portion of `path`, or `None` when
+/// `std.fs.path.dirname` returns null.
+///
+/// CORRECTION (task W-2): this was a split at the last
+/// `std::path::MAIN_SEPARATOR`, which is not Zig's `dirname` (trailing and
+/// repeated separators, and on Windows `/` and the `C:\` / UNC roots); it is
+/// now the port of Zig's (`crate::path::dirname`).
 fn dirname(path: &[u8]) -> Option<&[u8]> {
-    let sep = std::path::MAIN_SEPARATOR as u8;
-    let idx = path.iter().rposition(|&b| b == sep)?;
-    if idx == 0 {
-        // Root: dirname("/foo") == "/".
-        Some(&path[..1])
-    } else {
-        Some(&path[..idx])
-    }
+    crate::path::dirname(path)
 }
 
 /// Build an `&OsStr` from raw path bytes without a lossy round-trip.
@@ -6075,7 +6073,12 @@ impl Config {
     // pub fn loadFile(self: *Config, alloc: Allocator, path: []const u8) !void {
     pub fn load_file(&mut self, path: &[u8]) -> Result<(), LoadError> {
         // assert(std.fs.path.isAbsolute(path));
-        assert!(std::path::Path::new(os_str_from_bytes(path)).is_absolute());
+        //
+        // CORRECTION (task W-2): this asserted Rust's `Path::is_absolute`, which
+        // on Windows is false for a rooted path (`/x`, `\\x`) that Zig's
+        // `isAbsoluteWindows` calls absolute; `crate::path::is_absolute` is the
+        // port of Zig's.
+        assert!(crate::path::is_absolute(path));
         // var file = file_load.open(path) catch |err| switch (err) {
         let file = match crate::file_load::open(path) {
             Ok(f) => f,
@@ -6881,7 +6884,8 @@ impl Config {
         // `realPathFile(".")` on `cwd()` is libc `realpath(".")`
         // (`Io/Threaded.zig` `dirRealPathFilePosix`, the `AT.FDCWD` arm), which
         // is what `canonicalize` calls.
-        let cwd = path_to_bytes(&std::fs::canonicalize(".")?);
+        // (`rustty_os::path::realpath`: the DOS form on Windows, task W-2.)
+        let cwd = path_to_bytes(&rustty_os::path::realpath(std::path::Path::new("."))?);
         self.expand_paths(&cwd)?;
 
         Ok(())
@@ -6960,7 +6964,8 @@ impl Config {
             // All paths should already be absolute at this point because
             // they're fixed up after each load.
             // assert(std.fs.path.isAbsolute(path));
-            assert!(std::path::Path::new(os_str_from_bytes(&path)).is_absolute());
+            // (Zig's `isAbsolute`, as in `load_file`; task W-2 CORRECTION.)
+            assert!(crate::path::is_absolute(&path));
 
             // We must only load a unique file once
             // if (try loaded.fetchPut(path, {}) != null) {
@@ -13065,6 +13070,21 @@ mod integration_tests {
             .iter()
             .map(|d| d.message.as_slice())
             .collect();
+        // On Windows `CommaSplitter`'s `escape_outside_quotes` is false (the
+        // backslash is the path separator), so the two escape lines are no
+        // `CommaSplitter` error there: `MouseScrollMultiplier` takes its
+        // `InvalidValue` arm (task W-2, measured on Windows).
+        #[cfg(target_os = "windows")]
+        assert_eq!(
+            vec![
+                &b"unknown error error.UnclosedQuote"[..],
+                &b"invalid value \"precision:1\\q\""[..],
+                &b"invalid value \"precision:1\\\""[..],
+                &b"invalid value \"bogus\""[..],
+            ],
+            messages
+        );
+        #[cfg(not(target_os = "windows"))]
         assert_eq!(
             vec![
                 &b"unknown error error.UnclosedQuote"[..],

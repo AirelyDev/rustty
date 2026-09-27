@@ -167,8 +167,11 @@ impl Dir {
     /// absolute path. The reference fills a caller-provided
     /// `[max_path_bytes]u8` buffer and returns the written length; the Rust
     /// port returns an owning `PathBuf`.
+    //
+    // (Windows: the DOS form, as `realpath` below; task W-2 routes both through
+    // `crate::path::realpath`.)
     pub fn realPath(&self) -> std::io::Result<PathBuf> {
-        std::fs::canonicalize(&self.path)
+        crate::path::realpath(&self.path)
     }
 
     /// `std.Io.Dir.openDirAbsolute`: open a directory by absolute path.
@@ -213,7 +216,8 @@ impl Dir {
     /// fills a caller-provided `[max_path_bytes]u8` buffer; the Rust port
     /// returns an owning `PathBuf` and the caller obtains the bytes from it.
     pub fn realpath(&self, sub_path: &str) -> std::io::Result<PathBuf> {
-        let canonical = std::fs::canonicalize(self.path.join(sub_path))?;
+        // (task W-2: the canonicalize + DOS form below is now the shared
+        // `crate::path::realpath`, which the other Windows realpath sites use.)
         // Windows: `canonicalize` returns a verbatim `\\?\C:\...` path, which
         // turns off separator normalization, so a `/` joined onto it later no
         // longer resolves. Zig's `realpath` returns the DOS form
@@ -221,9 +225,7 @@ impl Dir {
         // the prefix): `C:\...`, and `\\server\share\...` for `\\?\UNC\...`.
         // Measured in task W-1: with the verbatim form every shell-integration
         // test that joins `/`-separated paths onto the resources dir failed.
-        #[cfg(windows)]
-        let canonical = dos_form(canonical);
-        Ok(canonical)
+        crate::path::realpath(&self.path.join(sub_path))
     }
 
     /// `std.fs.Dir.access`: check that `path` is accessible. `path` may be
@@ -307,7 +309,7 @@ fn os_str_from_bytes(b: &[u8]) -> &std::ffi::OsStr {
 }
 
 fn log_err(msg: &str) {
-    eprintln!("[err] [{LOG_SCOPE}] {msg}");
+    log::error!(target: LOG_SCOPE, "{msg}");
 }
 
 /// The DOS form of a verbatim path, as Zig's `realpath` returns it
@@ -319,7 +321,7 @@ fn log_err(msg: &str) {
 /// CORRECTION (task W-1b, review W-1 F5): W-1 stripped `\\?\` from every
 /// verbatim path, which turned a `\\?\Volume{GUID}\..` result into a non-path.
 #[cfg(windows)]
-fn dos_form(canonical: PathBuf) -> PathBuf {
+pub(crate) fn dos_form(canonical: PathBuf) -> PathBuf {
     use std::os::windows::ffi::{OsStrExt, OsStringExt};
     let wide: Vec<u16> = canonical.as_os_str().encode_wide().collect();
     let verbatim: Vec<u16> = r"\\?\".encode_utf16().collect();

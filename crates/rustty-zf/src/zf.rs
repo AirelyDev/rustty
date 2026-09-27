@@ -279,6 +279,12 @@ pub fn highlight_needle<'a>(
     )
 }
 
+// Not on Windows (task W-2, R14 form 1): upstream zf's own test hardcodes `/`
+// path separators, while `sep` is `std.fs.path.sep` (`'\\'` on Windows), so it
+// cannot pass there upstream either (zf's tests are not part of the reference's
+// Windows run). The Windows separator is covered by
+// `filter::windows_separator_is_the_path_separator`.
+#[cfg(not(windows))]
 #[test]
 fn highlight_library_interface() {
     let mut matches_buf: [usize; 128] = [0; 128];

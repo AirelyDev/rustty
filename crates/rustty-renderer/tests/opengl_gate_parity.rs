@@ -57,6 +57,13 @@ fn freebsd_pred() -> String {
     format!("target_os = {}freebsd{}", '"', '"')
 }
 
+/// Task W-2 (N342): Windows is the third `.opengl` target (`backend.zig:20-21`,
+/// its runtime is `.none`: the `apprt.embedded` arms of `OpenGL.zig`), so every
+/// OpenGL-arm gate names it too.
+fn windows_pred() -> String {
+    format!("target_os = {}windows{}", '"', '"')
+}
+
 /// Every source file the guard scans: all of `src/**/*.rs`, plus the manifest (its
 /// `[target.'cfg(...)'.dependencies]` table gates the `gl`/`khronos-egl` deps) and
 /// the build script (its `CARGO_CFG_TARGET_OS` branch stages the GLSL assets).
@@ -80,6 +87,36 @@ fn collect_rs(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
+/// The source's lines with every `#[cfg(`/`#[cfg_attr(` attribute that rustfmt
+/// wrapped over several lines joined back into one, numbered by its first line.
+///
+/// Task W-2: a four-target predicate (`macos` + the three OpenGL targets) is
+/// longer than rustfmt's attribute width, so rustfmt WRAPS it, one `target_os`
+/// per line; scanned line by line, the `linux` line then lacks the others. The
+/// guard joins the attribute instead, which also closes the gap its old doc
+/// described: a half-widened wrapped predicate is now judged whole.
+fn logical_lines(src: &str) -> Vec<(usize, String)> {
+    let mut out = Vec::new();
+    let mut lines = src.lines().enumerate();
+    while let Some((i, line)) = lines.next() {
+        let t = line.trim_start();
+        if (t.starts_with("#[cfg(") || t.starts_with("#[cfg_attr(")) && !t.contains(")]") {
+            let mut joined = line.to_string();
+            for (_, next) in lines.by_ref() {
+                joined.push(' ');
+                joined.push_str(next.trim());
+                if next.contains(")]") {
+                    break;
+                }
+            }
+            out.push((i, joined));
+        } else {
+            out.push((i, line.to_string()));
+        }
+    }
+    out
+}
+
 /// True for a line that carries no code: a Rust `//`-comment or a TOML `#`-comment.
 /// The guard is about GATES, not prose — every file here documents its gate in the
 /// comment right above it, and those quotes must not be scanned.
@@ -98,6 +135,7 @@ fn is_comment(line: &str) -> bool {
 fn every_linux_gate_also_names_freebsd() {
     let linux = linux_pred();
     let freebsd = freebsd_pred();
+    let windows = windows_pred();
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 
     let mut violations: Vec<String> = Vec::new();
@@ -111,7 +149,8 @@ fn every_linux_gate_also_names_freebsd() {
             .to_string_lossy()
             .into_owned();
 
-        for (i, line) in src.lines().enumerate() {
+        for (i, line) in logical_lines(&src) {
+            let line = line.as_str();
             if is_comment(line) || !line.contains(&linux) {
                 continue;
             }
@@ -122,7 +161,7 @@ fn every_linux_gate_also_names_freebsd() {
                 continue;
             }
             checked += 1;
-            if !line.contains(&freebsd) {
+            if !line.contains(&freebsd) || !line.contains(&windows) {
                 violations.push(format!("{}:{}: {}", rel, i + 1, line.trim()));
             }
         }
@@ -130,9 +169,10 @@ fn every_linux_gate_also_names_freebsd() {
 
     assert!(
         violations.is_empty(),
-        "cfg gates naming Linux without FreeBSD (renderer/backend.zig:20-21 gives \
-         EVERY non-Darwin native target the OpenGL backend; apprt/runtime.zig:18 makes \
-         FreeBSD a real windowed target). Widen the predicate, or add the site to \
+        "cfg gates naming Linux without FreeBSD and Windows (renderer/backend.zig:20-21 \
+         gives EVERY non-Darwin native target the OpenGL backend; apprt/runtime.zig:18 \
+         makes FreeBSD a real windowed target, and Windows builds the embedded \
+         runtime's OpenGL arms). Widen the predicate, or add the site to \
          LINUX_ONLY_ALLOWLIST with a reason:\n  {}",
         violations.join("\n  ")
     );
@@ -158,7 +198,12 @@ fn every_linux_gate_also_names_freebsd() {
 #[test]
 fn the_four_opengl_arm_gates_are_present() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let gate = format!("any({}, {})", linux_pred(), freebsd_pred());
+    let gate = format!(
+        "any({}, {}, {})",
+        linux_pred(),
+        freebsd_pred(),
+        windows_pred()
+    );
 
     // (file, the item the gate must sit on)
     let sites: &[(&str, &str)] = &[
@@ -207,9 +252,10 @@ fn build_script_stages_glsl_for_freebsd_too() {
 
     let linux_arm = format!("Ok({}linux{})", '"', '"');
     let freebsd_arm = format!("Ok({}freebsd{})", '"', '"');
+    let windows_arm = format!("Ok({}windows{})", '"', '"');
     assert!(
-        code.contains(&linux_arm) && code.contains(&freebsd_arm),
-        "build.rs must stage the GLSL assets for both OpenGL targets"
+        code.contains(&linux_arm) && code.contains(&freebsd_arm) && code.contains(&windows_arm),
+        "build.rs must stage the GLSL assets for every OpenGL target"
     );
     // The pre-W2D shape was an equality test against Linux alone; a regression to it
     // would silently drop the FreeBSD assets.

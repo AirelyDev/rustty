@@ -1,0 +1,1 @@
+Warning: --host is deprecated; pass the destination directly, e.g. `rustty +ssh-cache example.invalid`.

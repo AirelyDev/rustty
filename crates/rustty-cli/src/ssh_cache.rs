@@ -159,9 +159,9 @@ pub fn run() -> Result<u8, Error> {
     let mut opts = Options::default();
 
     // var stdout_buffer: [1024]u8 = undefined; ... const stdout = &stdout_writer.interface;
-    let mut stdout = std::io::BufWriter::new(std::io::stdout().lock());
+    let mut stdout = std::io::BufWriter::with_capacity(1024, crate::io_file::stdout());
     // var stderr_buffer: [1024]u8 = undefined; ... const stderr = &stderr_writer.interface;
-    let mut stderr = std::io::BufWriter::new(std::io::stderr().lock());
+    let mut stderr = std::io::BufWriter::with_capacity(1024, crate::io_file::stderr());
 
     // The cache is queried by a positional destination (`user@host` or a
     // bare `host`). `args.parse` rejects non-`--` tokens, so we lift the

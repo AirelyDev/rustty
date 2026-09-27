@@ -98,10 +98,21 @@ pub fn run() -> Result<u8, Error> {
     // var buffer: [1024]u8 = undefined;
     // var stdout_writer = std.fs.File.stdout().writer(&buffer);
     // const stdout = &stdout_writer.interface;
-    let mut stdout = std::io::BufWriter::new(std::io::stdout().lock());
+    let mut stdout = std::io::BufWriter::with_capacity(1024, crate::io_file::stdout());
     // const result = runInner(alloc, opts, stdout);
     let result = run_inner(&opts, &mut stdout);
     // try stdout_writer.end();
+    //   PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS UD341. `end()` is
+    //   flush, then, for a writer still in positional mode, `setLength(pos)`
+    //   with only `error.NonResizable` tolerated (Zig 0.16.0
+    //   `std/Io/File/Writer.zig:235-251`). On Windows a pipe stays positional
+    //   and its `setLength` fails with `error.FileTooBig`, so `+validate-config`
+    //   of a VALID config exits 1 whenever its stdout is a pipe (MEASURED on the
+    //   reference exe, task W-4: `ghostty +validate-config --config-file=ok |
+    //   Out-String` exits 1, `> file` exits 0). The exit status is the action's
+    //   answer; the port flushes and reports the result (the truncation has
+    //   nothing to do on a pipe, and a shell's `>` has already truncated a
+    //   file). Listed in `docs/ghostty-bug-fixes.md`.
     stdout.flush()?;
 
     opts.deinit();
@@ -126,7 +137,8 @@ fn run_inner<W: Write>(opts: &Options, stdout: &mut W) -> Result<u8, Error> {
         // const abs_path = try std.fs.cwd().realpath(config_path, &buf);
         //   `std.fs.cwd().realpath` -> `std::fs::canonicalize` (resolves relative
         //   to cwd + symlinks, returns an absolute path).
-        let abs_path = std::fs::canonicalize(path_from_bytes(config_path))?;
+        //   (`rustty_os::path::realpath`: the DOS form on Windows, task W-2.)
+        let abs_path = rustty_os::path::realpath(&path_from_bytes(config_path))?;
         // try cfg.loadFile(alloc, abs_path);
         cfg.load_file(&path_bytes(&abs_path))?;
         // try cfg.loadRecursiveFiles(alloc);

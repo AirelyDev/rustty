@@ -1155,7 +1155,13 @@ where
         // (`@hasDecl(Renderer, "loopEnter")` is TRUE for Metal ⇒ the real
         // `loop_enter`. R4: the reference passes `self` and reads `&thr.draw_now`;
         // the real signature takes the Copy `draw_now: Async` directly.)
-        unsafe { (*(*self_).renderer).0.loop_enter((*self_).draw_now) }?;
+        //
+        // Windows (task W-2, N342): on IOCP `xev.Async` is a value, not a Copy
+        // handle, so the by-value argument is Zig's value copy (`.clone()`); the
+        // OpenGL leaf has no `loopEnter` and ignores it.
+        #[allow(clippy::clone_on_copy)]
+        let draw_now = unsafe { (*self_).draw_now.clone() };
+        unsafe { (*(*self_).renderer).0.loop_enter(draw_now) }?;
         let _loop_exit = LoopExitGuard(unsafe { (*self_).renderer });
 
         // Run our thread start/end callbacks. This is important because some
@@ -1568,7 +1574,10 @@ where
                 // before the `&mut` call on the renderer, so the two raw-pointer
                 // accesses never overlap.
                 Message::MacosDisplayId(v) => {
-                    let draw_now = unsafe { (*self_).draw_now };
+                    // (Windows, task W-2: `.clone()` is the value copy; see
+                    // `threadMain_`'s `loop_enter`.)
+                    #[allow(clippy::clone_on_copy)]
+                    let draw_now = unsafe { (*self_).draw_now.clone() };
                     unsafe { (*(*self_).renderer).0.set_macos_display_id(v, draw_now) }?;
                 }
             }
@@ -2029,10 +2038,28 @@ where
         // cursor is a hollow block whatever the blink state,
         // `cursor.zig:58-60`) and the next focus loss cancels it again.
         if let Err(err) = r {
-            #[cfg(not(target_os = "linux"))]
+            #[cfg(not(any(target_os = "linux", windows)))]
             match err {
                 // error.Canceled => {}, // success
                 xev::CancelError::Canceled => {}
+            }
+            // Windows (task W-2, N342): libxev's IOCP `CancelError` is
+            // `error{Unexpected}` (`backend/iocp.zig:1372-1374`), which the
+            // reference's unified set sends to its `else` arm. IOCP's timer
+            // cancel never fills a cancel error (`stop_completion`'s `.timer` arm,
+            // `iocp.zig:801-826`), so the arm is not reached there; it takes the
+            // same handling as the Linux arm below (UD73) rather than a second
+            // policy for one reference `else`.
+            #[cfg(windows)]
+            match err {
+                // else => { log.warn(...); unreachable; },
+                xev::CancelError::Unexpected => {
+                    // log.warn("error in cursor cancel callback err={}", .{err});
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "error in cursor cancel callback err={err:?}"
+                    );
+                }
             }
             #[cfg(target_os = "linux")]
             match err {
@@ -3017,7 +3044,7 @@ mod thread_diagnostics_tests {
     /// one variant (the Linux/dynamic set), and is asserted by the two tests
     /// below, which compile only there.
     #[test]
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", windows)))]
     fn cursor_cancel_callback_is_silent_on_the_success_arm() {
         let cap = log_capture::start();
         let action = Thread::<TestApp>::cursorCancelCallback(
@@ -3085,6 +3112,32 @@ mod thread_diagnostics_tests {
                 "{messages:?}"
             );
         }
+    }
+
+    /// The Windows (IOCP) arm (task W-2, N342): the only `CancelError` there is
+    /// `Unexpected`, the reference's `else` arm; it warns and disarms as the
+    /// Linux arm does (UD73).
+    #[test]
+    #[cfg(windows)]
+    fn cursor_cancel_callback_warns_and_disarms_on_the_iocp_cancel_error() {
+        let err = xev::CancelError::Unexpected;
+        let cap = log_capture::start();
+        let action = Thread::<TestApp>::cursorCancelCallback(
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+            Err(err),
+        );
+        let messages = cap.messages();
+        drop(cap);
+
+        assert_eq!(xev::CallbackAction::Disarm, action);
+        assert_eq!(1, messages.len(), "{messages:?}");
+        assert!(
+            format!("{:?}", messages[0])
+                .contains(&format!("error in cursor cancel callback err={err:?}")),
+            "{messages:?}"
+        );
     }
 
     /// Inventory M16 (R13): the three timer callbacks' `else => unreachable`

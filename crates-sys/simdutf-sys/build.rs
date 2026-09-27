@@ -53,10 +53,22 @@ fn main() {
     // The reference builds the vendored simdutf with no_libcxx (SharedDeps.zig
     // passes `.no_libcxx = true`): set SIMDUTF_NO_LIBCXX and drop
     // exceptions/rtti so we don't need the C++ standard library at runtime.
+    //
+    // On MSVC targets the two `-f` flags go through `/clang:` (task W-2, N347):
+    // clang-cl rejects the bare spellings and `flag_if_supported` silently dropped
+    // them (MEASURED on the Windows lane with `CC_ENABLE_DEBUG_OUTPUT=1`).
+    let msvc = std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc");
+    let clang_flag = |flag: &str| {
+        if msvc {
+            format!("/clang:{flag}")
+        } else {
+            flag.to_string()
+        }
+    };
     build
         .define("SIMDUTF_NO_LIBCXX", Some("1"))
-        .flag_if_supported("-fno-exceptions")
-        .flag_if_supported("-fno-rtti");
+        .flag_if_supported(clang_flag("-fno-exceptions"))
+        .flag_if_supported(clang_flag("-fno-rtti"));
 
     // if (target.result.abi == .msvc) { ... }  (pkg/simdutf/build.zig:55-63)
     //

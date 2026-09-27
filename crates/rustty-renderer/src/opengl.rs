@@ -5,6 +5,10 @@
 //! "freebsd")` — the two windowed non-Darwin targets the oracle ships an app for
 //! (`apprt/runtime.zig:18` `.linux, .freebsd => .gtk`). W2D/F-003.
 //!
+//! CORRECTION (task W-2, N342): the gate is `any(linux, freebsd, windows)` now: Windows is
+//! also an `.opengl` target, and its `.none` runtime builds `OpenGL.zig`'s `apprt.embedded`
+//! arms ("to allow libghostty to compile for OpenGL targets", `OpenGL.zig:172-176`).
+//!
 //! PORTS: ghostty `src/renderer/OpenGL.zig` + `src/renderer/opengl/*.zig`, layered
 //! over [`gl`] — this crate's hand-port of ghostty's own low-level `pkg/opengl`
 //! wrapper package. That two-layer shape is deliberate and mirrors the reference:

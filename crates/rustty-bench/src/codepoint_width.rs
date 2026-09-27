@@ -203,7 +203,8 @@ impl CodepointWidth {
             let _ = ptr;
             // log.warn("wcwidth is not available on Windows", .{});
             log::warn!(target: LOG_SCOPE, "wcwidth is not available on Windows");
-            return Ok(());
+            // (the tail of the function on Windows, task W-2)
+            Ok(())
         }
         #[cfg(not(windows))]
         {

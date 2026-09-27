@@ -72,7 +72,7 @@ pub fn run() -> Result<u8, Error> {
     opts.deinit();
 
     // var buffer: [2048]u8 = undefined; ... const stdout = &stdout_writer.interface;
-    let mut stdout = std::io::BufWriter::new(std::io::stdout().lock());
+    let mut stdout = std::io::BufWriter::with_capacity(2048, crate::io_file::stdout());
 
     // try stdout.writeAll(
     //     \\Usage: ghostty [+action] [options]

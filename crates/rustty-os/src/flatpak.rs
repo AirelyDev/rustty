@@ -981,13 +981,11 @@ mod host_command {
     }
 
     fn log_warn(msg: &str) {
-        eprintln!("[warn] [{LOG_SCOPE}] {msg}");
+        log::warn!(target: LOG_SCOPE, "{msg}");
     }
 
     fn log_debug(msg: &str) {
-        let _ = msg;
-        #[cfg(debug_assertions)]
-        eprintln!("[debug] [{LOG_SCOPE}] {msg}");
+        log::debug!(target: LOG_SCOPE, "{msg}");
     }
 
     // PORT NOTE: `flatpak_wait_c: FlatpakHostCommand.Completion = .{}` in

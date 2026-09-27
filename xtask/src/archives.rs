@@ -535,10 +535,10 @@ mod tests {
             .resolve_under_with(Path::new("/w/target"), &exists)
             .unwrap_err();
         assert!(err.contains("OUTSIDE"), "{err}");
-        assert!(
-            err.contains("/opt/homebrew/opt/gettext/lib/libintl.a"),
-            "{err}"
-        );
+        // The resolved path as the host joins it (`\\` before the file name on
+        // a Windows host, task W-2).
+        let found = Path::new("/opt/homebrew/opt/gettext/lib").join("libintl.a");
+        assert!(err.contains(&found.display().to_string()), "{err}");
         // …and the same request inside the tree is accepted.
         let req = NativeArchiveRequest {
             search_paths: vec![PathBuf::from("/w/target/aarch64/xcframework/build/x/out")],

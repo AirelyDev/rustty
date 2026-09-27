@@ -101,6 +101,9 @@ impl ArgsIter for ArgIteratorGeneral {
 /// and panicking with its output if it does not finish (so a hang in the
 /// child, e.g. a lock held forever, fails the parent instead of stalling it).
 /// The child's stdout and stderr must be small enough for the pipe buffers.
+///
+/// Its callers are the POSIX pty harnesses (task W-2: compiled only there).
+#[cfg(unix)]
 pub(crate) fn wait_with_deadline(
     mut child: std::process::Child,
     secs: u64,

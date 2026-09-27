@@ -91,8 +91,14 @@ impl<'a> FileFormatter<'a> {
         // else
         //     null;
         // defer if (default) |*v| v.deinit();
+        //   CORRECTION (task W-4, NEW-FINDINGS N366): `Config.default(alloc)` is
+        //   `Config::default_config()` (the struct defaults PLUS the default
+        //   keybinds, command-palette entries and URL link). This compared
+        //   against the bare struct defaults (`Config::default()`), so
+        //   `+show-config` listed every default keybind and palette entry as a
+        //   change (MEASURED against the reference exe on Windows).
         let default: Option<Config> = if self.changed {
-            Some(Config::default())
+            Some(Config::default_config())
         } else {
             None
         };
@@ -249,5 +255,24 @@ mod tests {
         fmt.format(&mut buf).unwrap();
 
         //std.log.warn("{s}", .{buf.written()});
+    }
+
+    // Task W-4 (N366): with `changed = true`, a config built like the
+    // reference's `Config.default(alloc)` (default keybinds, palette entries and
+    // link included) with one field changed prints exactly that field. The
+    // reference test above asserts nothing; this pins the comparison base.
+    #[test]
+    #[allow(clippy::field_reassign_with_default)]
+    fn format_changed_compares_against_the_full_default_config() {
+        let mut cfg = Config::default_config();
+        cfg.font_size = 42.0;
+        let mut buf = AllocatingWriter::init();
+        let fmt = FileFormatter {
+            config: &cfg,
+            docs: false,
+            changed: true,
+        };
+        fmt.format(&mut buf).unwrap();
+        assert_eq!("font-size = 42\n", String::from_utf8_lossy(buf.written()));
     }
 }

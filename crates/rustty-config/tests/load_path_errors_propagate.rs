@@ -8,6 +8,14 @@
 //! current directory), so they live in their own test binary and run one after
 //! the other under a lock rather than beside the crate's unit tests.
 
+// POSIX-only (task W-2, R14 form 1): three of the four tests are triggered by
+// `homedir.homeUnix`'s `HOME` (`os/homedir.zig`), which Windows does not read —
+// there `home` is `homeWindows` and the XDG lookup falls back to `LOCALAPPDATA`
+// (`os/xdg.zig:71-74`), and the reference's own XDG tests skip Windows
+// (`xdg.zig:168,207`) — and the fourth was already `#[cfg(unix)]` (it removes the
+// process's current directory).
+#![cfg(not(windows))]
+
 use std::sync::Mutex;
 
 use rustty_config::config_struct::LoadError;

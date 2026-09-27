@@ -3725,21 +3725,10 @@ pub struct ClipboardConfirm {
 /// UTF-8, so it is rendered lossily here — the same choice `rustty-os`'s
 /// byte-path diagnostics make.
 fn requested_working_directory_is_usable(wd: &[u8]) -> bool {
-    use std::os::unix::ffi::OsStrExt;
-    use std::os::unix::fs::OpenOptionsExt;
     let wd_display = String::from_utf8_lossy(wd);
 
-    #[cfg(any(target_os = "linux", target_os = "android"))]
-    let flags = libc::O_DIRECTORY | libc::O_PATH;
-    #[cfg(not(any(target_os = "linux", target_os = "android")))]
-    let flags = libc::O_DIRECTORY;
-
     // var dir = std.Io.Dir.openDirAbsolute(global.io(), wd, .{}) catch |err| {
-    let dir = match std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(flags)
-        .open(std::ffi::OsStr::from_bytes(wd))
-    {
+    let dir = match open_dir_absolute(wd) {
         Ok(dir) => dir,
         Err(err) => {
             // log.warn("error opening requested working directory dir={s} err={}", .{ wd, err });
@@ -3781,11 +3770,56 @@ fn requested_working_directory_is_usable(wd: &[u8]) -> bool {
     true
 }
 
+/// `std.Io.Dir.openDirAbsolute(io, wd, .{})` for
+/// [`requested_working_directory_is_usable`]: the POSIX arm (see its PORT NOTE).
+#[cfg(unix)]
+fn open_dir_absolute(wd: &[u8]) -> std::io::Result<std::fs::File> {
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    let flags = libc::O_DIRECTORY | libc::O_PATH;
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    let flags = libc::O_DIRECTORY;
+
+    std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(flags)
+        .open(std::ffi::OsStr::from_bytes(wd))
+}
+
+/// `std.Io.Dir.openDirAbsolute(io, wd, .{})`, the Windows arm (task W-2, N342).
+/// Zig 0.16's `dirOpenDirWindows` (`std/Io/Threaded.zig:5356-5416`) converts the
+/// WTF-8 path (`error.InvalidWtf8` when it is not) and opens it with one
+/// `NtCreateFile(.., .{ .DIRECTORY_FILE = true, .OPEN_FOR_BACKUP_INTENT = true })`,
+/// which fails with `NOT_A_DIRECTORY` (`error.NotDir`) on a regular file. Rust's
+/// `CreateFileW` has no directory-only flag: the open takes
+/// `FILE_FLAG_BACKUP_SEMANTICS` (`OPEN_FOR_BACKUP_INTENT`, needed to open a
+/// directory at all), and a handle that is not a directory is closed and
+/// reported as the open's `NotADirectory`, so each step still fails where the
+/// reference's does.
+#[cfg(windows)]
+fn open_dir_absolute(wd: &[u8]) -> std::io::Result<std::fs::File> {
+    use std::os::windows::fs::OpenOptionsExt;
+    // winbase.h `FILE_FLAG_BACKUP_SEMANTICS`.
+    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+
+    let path = rustty_os::path::os_string_from_bytes(wd)
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "InvalidWtf8"))?;
+    let dir = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+        .open(path)?;
+    if !dir.metadata()?.is_dir() {
+        return Err(std::io::ErrorKind::NotADirectory.into());
+    }
+    Ok(dir)
+}
+
 #[cfg(test)]
 mod requested_working_directory_tests {
     use super::{requested_working_directory_is_usable, LOG_SCOPE};
     use crate::log_capture;
-    use std::os::unix::ffi::OsStrExt;
 
     /// A unique scratch directory, removed on drop.
     struct Scratch(std::path::PathBuf);
@@ -3821,7 +3855,7 @@ mod requested_working_directory_tests {
         let dir = Scratch::new("dir");
         let cap = log_capture::start();
         assert!(requested_working_directory_is_usable(
-            dir.path().as_os_str().as_bytes()
+            dir.path().as_os_str().as_encoded_bytes()
         ));
         assert_eq!(warns(&cap), Vec::<String>::new());
     }
@@ -3833,7 +3867,7 @@ mod requested_working_directory_tests {
         let missing = dir.path().join("nope");
         let cap = log_capture::start();
         assert!(!requested_working_directory_is_usable(
-            missing.as_os_str().as_bytes()
+            missing.as_os_str().as_encoded_bytes()
         ));
         let got = warns(&cap);
         assert_eq!(got.len(), 1, "{got:?}");
@@ -3856,7 +3890,7 @@ mod requested_working_directory_tests {
         std::fs::write(&file, b"x").unwrap();
         let cap = log_capture::start();
         assert!(!requested_working_directory_is_usable(
-            file.as_os_str().as_bytes()
+            file.as_os_str().as_encoded_bytes()
         ));
         let got = warns(&cap);
         assert_eq!(got.len(), 1, "{got:?}");
@@ -4200,6 +4234,32 @@ mod host_view_tests {
     fn non_darwin_returns_null() {
         assert!(platform_host_view(&Platform::MacOS(MacOS)).is_null());
         assert!(platform_host_view(&Platform::IOS(IOS)).is_null());
+    }
+
+    /// Off Darwin (Linux, FreeBSD, Windows) the embedded apprt has no platform a
+    /// host can create a surface on: both tags are `error.UnsupportedPlatform`
+    /// (`embedded.zig:410-428`, `MacOS`/`IOS` are `void` there), as in the
+    /// reference. Task W-2 (V9): this is why no live embedded surface exists on
+    /// Windows in either program.
+    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+    #[test]
+    fn non_darwin_platform_init_is_unsupported() {
+        for tag in [1, 2] {
+            // SAFETY: an all-zero `PlatformC` is two null view pointers.
+            let c: PlatformC = unsafe { core::mem::zeroed() };
+            assert!(
+                matches!(
+                    Platform::init(tag, c),
+                    Err(PlatformError::UnsupportedPlatform)
+                ),
+                "tag {tag}"
+            );
+        }
+        let c: PlatformC = unsafe { core::mem::zeroed() };
+        assert!(matches!(
+            Platform::init(3, c),
+            Err(PlatformError::InvalidEnumTag)
+        ));
     }
 }
 

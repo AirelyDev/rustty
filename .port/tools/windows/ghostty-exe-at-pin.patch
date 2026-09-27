@@ -1,0 +1,28 @@
+diff --git a/build.zig b/build.zig
+index 5204b3d87..abba17605 100644
+--- a/build.zig
++++ b/build.zig
+@@ -217,6 +217,8 @@ pub fn build(b: *std.Build) !void {
+             if (i18n) |v| v.install();
+         }
+     } else if (!config.emit_lib_vt) {
++        // W4-SCRATCH: install the helper-CLI exe too (the pin never installs it with app-runtime=none)
++        if (config.emit_exe) exe.install();
+         // The macOS Ghostty Library
+         //
+         // This is NOT libghostty (even though its named that for historical
+diff --git a/src/main_ghostty.zig b/src/main_ghostty.zig
+index f4fa74133..ce016f0bc 100644
+--- a/src/main_ghostty.zig
++++ b/src/main_ghostty.zig
+@@ -75,7 +75,9 @@ pub fn main(minimal: std.process.Init.Minimal) !MainReturn {
+     }
+ 
+     if (comptime build_config.app_runtime == .none) {
+-        const stdout = std.io.getStdOut().writer();
++        // W4-SCRATCH: std.io.getStdOut() is gone in Zig 0.16; nearest 0.16 spelling (unbuffered, like 0.14's)
++        var stdout_writer = std.Io.File.stdout().writer(std.Io.Threaded.global_single_threaded.io(), &.{});
++        const stdout = &stdout_writer.interface;
+         try stdout.print("Usage: ghostty +<action> [flags]\n\n", .{});
+         try stdout.print(
+             \\This is the Ghostty helper CLI that accompanies the graphical Ghostty app.

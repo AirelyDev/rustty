@@ -1,0 +1,3 @@
+Usage: rustty +explain-config <option>
+       rustty +explain-config --option=<option>
+       rustty +explain-config --keybind=<action>

@@ -68,10 +68,17 @@ use rustty_zigstd::thread::{Mutex, Semaphore};
 
 use core::mem;
 use core::ptr::addr_of_mut;
-use std::ffi::{CStr, CString, OsStr};
+use std::ffi::{CStr, CString};
 // `prepBackgroundImage` opens the config path (byte-faithful `CString` bytes ->
 // an `OsStr` path) via `std::os::unix::ffi::OsStrExt::from_bytes` — NEVER a lossy
-// `String`. (This module is Linux-gated, so unix is guaranteed.)
+// `String`.
+// CORRECTION (task W-2, N342): this said "(This module is Linux-gated, so unix is
+// guaranteed.)"; the OpenGL arm also serves Windows now (`backend.zig:20-21`), where
+// the path bytes are WTF-8 and are converted as Zig's `openFile` does
+// (`rustty_os::path::os_string_from_bytes`, the same conversion `shadertoy.rs` uses).
+#[cfg(not(windows))]
+use std::ffi::OsStr;
+#[cfg(not(windows))]
 use std::os::unix::ffi::OsStrExt;
 
 // `FileType::detect`/`guessFromExtension` — the background-image file-type sniff
@@ -1237,16 +1244,33 @@ impl Renderer {
         let _ = rt_surface;
         // If our API has to do things here, let it.
         //
-        // (OpenGL.zig:166-170) GTK uses global OpenGL context so we load from null.
-        // try prepareContext(null); — load GL against GDK's current
-        // GLArea context. A version-gate / GL failure folds to `Error::GlFailed`.
         //
-        // OpenGL.zig:172-176, the `apprt.embedded` arm (not built here — the GTK
-        // apprt is the only OpenGL host):
-        //     // TODO(mitchellh): this does nothing today to allow librustty
-        //     // to compile for OpenGL targets but librustty is strictly
-        //     // broken for rendering on this platforms.
-        //
+        // switch (apprt.runtime) { else => @compileError("unsupported app runtime
+        // for OpenGL"), ... } (OpenGL.zig:165-177). The port's `apprt.runtime` is
+        // `rustty_build_config::app_runtime()` (the same per-target const), and its
+        // `Runtime` has exactly the two arms below, so the `@compileError` arm has
+        // no counterpart.
+        // CORRECTION (task W-2, N342): the embedded arm was a comment reading "(not
+        // built here — the GTK apprt is the only OpenGL host)"; Windows is an OpenGL
+        // target whose runtime is `.none` (`apprt/runtime.zig:14-24`), so the arm is
+        // live there.
+        match rustty_build_config::app_runtime() {
+            // GTK uses global OpenGL context so we load from null.
+            // (OpenGL.zig:166-170) try prepareContext(null); — load GL against
+            // GDK's current GLArea context. A version-gate / GL failure folds to
+            // `Error::GlFailed`.
+            rustty_build_config::Runtime::Gtk => {
+                crate::opengl::gl::sys::prepare_context_windowed().map_err(|_| Error::GlFailed)?;
+            }
+
+            // OpenGL.zig:172-176, the `apprt.embedded` arm:
+            rustty_build_config::Runtime::None => {
+                // TODO(mitchellh): this does nothing today to allow librustty
+                // to compile for OpenGL targets but librustty is strictly
+                // broken for rendering on this platforms.
+            }
+        }
+
         // OpenGL.zig:179-186, kept commented as in the reference:
         //     // These are very noisy so this is commented, but easy to uncomment
         //     // whenever we need to check the OpenGL extension list
@@ -1256,7 +1280,6 @@ impl Renderer {
         //     //         log.debug("OpenGL extension available name={s}", .{ext});
         //     //     }
         //     // }
-        crate::opengl::gl::sys::prepare_context_windowed().map_err(|_| Error::GlFailed)?;
         Ok(())
     }
 
@@ -1286,11 +1309,23 @@ impl Renderer {
         let _ = rt_surface;
         // If our API has to do things on thread enter, let it.
         //
-        // OpenGL.zig:204-209, the `apprt.gtk` arm:
-        // GTK doesn't support threaded OpenGL operations as far as I can
-        // tell, so we use the renderer thread to setup all the state
-        // but then do the actual draws and texture syncs and all that
-        // on the main thread. As such, we don't do anything here.
+        // switch (apprt.runtime) (OpenGL.zig:201-217); both arms are empty.
+        match rustty_build_config::app_runtime() {
+            // OpenGL.zig:204-209, the `apprt.gtk` arm:
+            rustty_build_config::Runtime::Gtk => {
+                // GTK doesn't support threaded OpenGL operations as far as I can
+                // tell, so we use the renderer thread to setup all the state
+                // but then do the actual draws and texture syncs and all that
+                // on the main thread. As such, we don't do anything here.
+            }
+
+            // OpenGL.zig:211-215, the `apprt.embedded` arm (task W-2, N342):
+            rustty_build_config::Runtime::None => {
+                // TODO(mitchellh): this does nothing today to allow librustty
+                // to compile for OpenGL targets but librustty is strictly
+                // broken for rendering on this platforms.
+            }
+        }
         Ok(())
     }
 
@@ -1302,9 +1337,19 @@ impl Renderer {
     pub fn thread_exit(&self) {
         // If our API has to do things on thread exit, let it.
         //
-        // OpenGL.zig:226-229, the `apprt.gtk` arm:
-        // We don't need to do any unloading for GTK because we may
-        // be sharing the global bindings with other windows.
+        // switch (apprt.runtime) (OpenGL.zig:223-233); both arms are empty.
+        match rustty_build_config::app_runtime() {
+            // OpenGL.zig:226-229, the `apprt.gtk` arm:
+            rustty_build_config::Runtime::Gtk => {
+                // We don't need to do any unloading for GTK because we may
+                // be sharing the global bindings with other windows.
+            }
+
+            // OpenGL.zig:231-233, the `apprt.embedded` arm (task W-2, N342):
+            rustty_build_config::Runtime::None => {
+                // TODO: see threadEnter
+            }
+        }
     }
 
     /// Run our loop start callback if the renderer cares.
@@ -1686,7 +1731,19 @@ impl Renderer {
             let path_bytes = path.to_bytes();
             let path_display = String::from_utf8_lossy(path_bytes);
             // var file = std.fs.openFileAbsolute(path, .{}) catch |err| { log.warn(...); break; };
-            let mut file = match std::fs::File::open(OsStr::from_bytes(path_bytes)) {
+            #[cfg(not(windows))]
+            let opened = std::fs::File::open(OsStr::from_bytes(path_bytes));
+            // Windows: a path that is not WTF-8 is Zig's `error.InvalidWtf8` from
+            // `openFileAbsolute`, which takes this same warn-and-break arm.
+            #[cfg(windows)]
+            let opened = match rustty_os::path::os_string_from_bytes(path_bytes) {
+                Some(p) => std::fs::File::open(p),
+                None => Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "InvalidWtf8",
+                )),
+            };
+            let mut file = match opened {
                 Ok(f) => f,
                 Err(err) => {
                     // log.warn("error opening background image file \"{s}\": {}", .{ path, err });

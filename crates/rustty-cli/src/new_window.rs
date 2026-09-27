@@ -143,7 +143,7 @@ impl Options {
             // const cwd: std.fs.Dir = std.fs.cwd();
             // var expandhome_buf: [std.fs.max_path_bytes]u8 = undefined;
             // const expanded = try homedir.expandHome(stripped, &expandhome_buf);
-            let mut expandhome_buf = [0u8; libc::PATH_MAX as usize];
+            let mut expandhome_buf = [0u8; rustty_os::path::MAX_PATH_BYTES];
             let expanded = expandHome(&rustty_global::environ_map(), stripped, &mut expandhome_buf)
                 .map_err(CheckArgError::ExpandHome)?;
             // var realpath_buf: [std.fs.max_path_bytes]u8 = undefined;
@@ -366,7 +366,7 @@ pub fn run() -> Result<u8, Error> {
     // var buffer: [1024]u8 = undefined;
     // var stderr_writer = std.fs.File.stderr().writer(&buffer);
     // const stderr = &stderr_writer.interface;
-    let mut stderr = std::io::BufWriter::new(std::io::stderr().lock());
+    let mut stderr = std::io::BufWriter::with_capacity(1024, crate::io_file::stderr());
 
     // const result = runArgs(alloc, &iter, stderr);
     let result = run_args(&mut iter, &mut stderr);
@@ -564,11 +564,15 @@ fn realpath_bytes(path: &[u8]) -> Result<Vec<u8>, std::io::Error> {
         let canon = std::fs::canonicalize(std::path::Path::new(std::ffi::OsStr::from_bytes(path)))?;
         Ok(canon.into_os_string().into_vec())
     }
-    #[cfg(not(unix))]
+    // Windows (task W-2): Zig's `realPathFile` converts the WTF-8 path to WTF-16
+    // (not WTF-8 is `error.BadPathName`, `sliceToPrefixedFileW`) and returns the
+    // DOS form (`rustty_os::path::realpath`). CORRECTION: this arm required
+    // UTF-8 and returned `canonicalize`'s verbatim `\\?\C:\..` form.
+    #[cfg(windows)]
     {
-        let s = std::str::from_utf8(path)
-            .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
-        let canon = std::fs::canonicalize(s)?;
+        let p = rustty_os::path::os_string_from_bytes(path)
+            .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
+        let canon = rustty_os::path::realpath(std::path::Path::new(&p))?;
         Ok(canon.into_os_string().into_encoded_bytes())
     }
 }
@@ -590,6 +594,7 @@ mod tests {
     // Zig error value as `error.<Name>`. The realpath name is the one Zig 0.16.0
     // `realPathFile` returns for a path through a regular file (MEASURED:
     // error.NotDir).
+    #[cfg(unix)]
     #[test]
     fn error_parsing_args_prints_the_zig_error_name() {
         let mut it = VecArgs(vec![b"--working-directory=/etc/hosts/x".to_vec()].into_iter());
@@ -597,5 +602,25 @@ mod tests {
         let rc = run_args(&mut it, &mut stderr).unwrap();
         assert_eq!(1, rc);
         assert_eq!(b"Error parsing args: error.NotDir\n".to_vec(), stderr);
+    }
+
+    // The same message on Windows (task W-2): a path through a regular file is
+    // `error.FileNotFound` there (NTFS answers STATUS_OBJECT_PATH_NOT_FOUND;
+    // `zig_error`'s Windows test measures it), and `/etc/hosts` does not exist.
+    #[cfg(windows)]
+    #[test]
+    fn error_parsing_args_prints_the_zig_error_name() {
+        let dir = std::env::temp_dir().join(format!("rustty-w2-nw-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("f");
+        std::fs::write(&file, b"x").unwrap();
+        let mut arg = b"--working-directory=".to_vec();
+        arg.extend_from_slice(file.join("x").as_os_str().as_encoded_bytes());
+        let mut it = VecArgs(vec![arg].into_iter());
+        let mut stderr: Vec<u8> = Vec::new();
+        let rc = run_args(&mut it, &mut stderr).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(1, rc);
+        assert_eq!(b"Error parsing args: error.FileNotFound\n".to_vec(), stderr);
     }
 }

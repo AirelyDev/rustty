@@ -134,9 +134,9 @@ fn isExecutable(mode: Mode) -> bool {
 // `expand` stack-allocates exactly this many bytes on every target
 // (`ghostty src/os/path.zig:23`), including windows.
 #[cfg(unix)]
-const MAX_PATH_BYTES: usize = libc::PATH_MAX as usize;
+pub const MAX_PATH_BYTES: usize = libc::PATH_MAX as usize;
 #[cfg(windows)]
-const MAX_PATH_BYTES: usize = 32767 * 3 + 1;
+pub const MAX_PATH_BYTES: usize = 32767 * 3 + 1;
 
 // `std.fs.path.sep`: '/' on POSIX, '\\' on Windows.
 #[cfg(windows)]
@@ -223,6 +223,23 @@ fn tokenize_path(path: &[u8]) -> impl Iterator<Item = &[u8]> {
 pub(crate) fn os_str_from_bytes(b: &[u8]) -> &std::ffi::OsStr {
     use std::os::unix::ffi::OsStrExt;
     std::ffi::OsStr::from_bytes(b)
+}
+
+/// Zig's `realpath` (`std.Io.Dir.realPath*`, `std.posix.realpath`): the
+/// canonical absolute path. On Windows Zig opens the path and asks
+/// `GetFinalPathNameByHandle(.{ .volume_name = .Dos })`, which gives the DOS form
+/// (`C:\..`, `\\server\share\..`), where `std::fs::canonicalize` gives the
+/// verbatim `\\?\` form; this converts it (`tempdir::dos_form`).
+///
+/// Task W-2: the realpath sites that print, compare or store the result (the
+/// CLI's `--working-directory`, the kitty temp-file check, the config loader)
+/// used `std::fs::canonicalize` directly and so kept the verbatim prefix on
+/// Windows.
+pub fn realpath(path: &std::path::Path) -> std::io::Result<std::path::PathBuf> {
+    let canonical = std::fs::canonicalize(path)?;
+    #[cfg(windows)]
+    let canonical = crate::tempdir::dos_form(canonical);
+    Ok(canonical)
 }
 
 /// Windows: `[]const u8` paths and argv are WTF-8 in Zig, converted to WTF-16

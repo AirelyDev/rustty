@@ -1,0 +1,12 @@
+Rustty <VERSION>
+
+Version
+  - version: <VERSION>
+  - channel: tip
+Build Config
+  - <TOOLCHAIN> version: <TOOLCHAIN_VERSION>
+  - build mode    : .ReleaseFast
+  - app runtime   : .none
+  - font engine   : .freetype_windows
+  - renderer      : renderer.generic.Renderer(renderer.OpenGL)
+  - libxev        : iocp

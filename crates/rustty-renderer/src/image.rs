@@ -35,7 +35,9 @@ mod macos_impl;
 #[cfg(target_os = "macos")]
 pub use macos_impl::*;
 
-#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+// PORT NOTE (task W-2, N342): Windows is the third `.opengl` target (`backend.zig:20-21`);
+// its runtime is `.none`, so it builds the `apprt.embedded` arms of `OpenGL.zig`.
+#[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "windows"))]
 mod linux_impl;
-#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+#[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "windows"))]
 pub use linux_impl::*;

@@ -98,7 +98,10 @@ pub fn run() -> Result<u8, Error> {
     // var stdout: std.fs.File = .stdout();
     // var buffer: [4096]u8 = undefined;
     // var stdout_writer = stdout.writer(&buffer);
-    let mut stdout = IoWriter(std::io::BufWriter::new(std::io::stdout().lock()));
+    let mut stdout = IoWriter(std::io::BufWriter::with_capacity(
+        4096,
+        crate::io_file::stdout(),
+    ));
 
     // try helpgen_actions.generate(
     //     &stdout_writer.interface,
