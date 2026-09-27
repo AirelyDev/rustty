@@ -63,9 +63,10 @@ pub fn realpath_error_name(path: &[u8], e: &io::Error) -> &'static str {
             Some(53) | Some(67) => "NetworkNotFound",
             // NO_MEDIA_IN_DEVICE
             Some(21) => "NoDevice",
-            // ACCESS_DENIED, USER_MAPPED_FILE
-            Some(5) => "AccessDenied",
-            // PIPE_BUSY
+            // ACCESS_DENIED (5), USER_MAPPED_FILE (ERROR_USER_MAPPED_FILE, 1224)
+            Some(5) | Some(1224) => "AccessDenied",
+            // PIPE_BUSY. (PIPE_NOT_AVAILABLE, Zig's `NoDevice`, also reaches
+            // `CreateFileW` callers as 231 and cannot be told apart here.)
             Some(231) => "PipeBusy",
             // OBJECT_NAME_COLLISION
             Some(80) | Some(183) => "PathAlreadyExists",
