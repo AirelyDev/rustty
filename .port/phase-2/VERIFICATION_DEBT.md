@@ -2332,3 +2332,72 @@ closes its surface.
 arm in `crates/rustty-xev/src/kqueue.rs` return `Ok(0)` without calling `kevent(2)` and
 confirm the timer and process tests in `rustty-xev` FAIL (hang or report no completion). A
 green suite with a no-op `kevent` would mean the loop was never driven.
+
+## V24. Nix and Snap packaging: ported, never run by P-1 — **ENVIRONMENT-BLOCKED** (user-deferred) [parity tail P-1, 2026-09-27]
+
+**Blocked on:** a Nix install (multi-user Nix needs root to create `/nix`) and snapd (a
+system service; installing it and `snapcraft` needs root). The Linux VM `rvm` (Fedora 44
+aarch64) has neither and its user has no passwordless sudo; the macOS host has no Nix.
+The user deferred both on 2026-09-27: record them as debt, do not install.
+
+```
+PORTED: flake.nix
+PORTED: nix/package.nix
+PORTED: nix/devShell.nix
+PORTED: nix/tests.nix
+PORTED: .envrc
+PORTED: .github/workflows/nix.yml
+PORTED: snap/snapcraft.yaml
+PORTED: .github/workflows/snap.yml
+```
+
+**What P-1 changed here without running it.** `flake.nix` (`packages.default` is the app
+on Linux, as in the reference, instead of `librustty-vt` everywhere); `nix/package.nix`
+(passes `xtask resources --optimize <mode>`, so a `rustty-debug` build gets the `-debug`
+app id and the terminfo source); `nix/devShell.nix` (restores `kaitai-struct-compiler`
+and python `wasmtime`, which G-KAITAI and `types-schema-verify.py` use); `nix/tests.nix`
+(header only); `.envrc` (reference text); `snap/snapcraft.yaml` (grade stable,
+`xtask patchelf --patch-rpath`, `--optimize ReleaseFast`, a `gtk4-layer-shell` meson
+part); the new `nix.yml` / `snap.yml` workflows, inert until `RUSTTY_NIX_ENABLED` /
+`RUSTTY_SNAP_ENABLED` is set (`xtask/tests/release_workflows.rs` proves the gating). The
+Nix side was last actually evaluated and built on aarch64-linux by the 2026-08-26 build
+gap work (`docs/superpowers/specs/2026-08-25-build-system-gap-audit.md`), before these
+edits.
+
+**Recipe — Nix** (root once for the installer, then as the user, from the repo root):
+```
+curl -sSfL https://install.determinate.systems/nix | sh -s -- install
+nix flake check                                   # librustty-vt + its passthru tests + the app
+nix build .#rustty-releasefast && result/bin/rustty +version | grep -q 'ReleaseFast'
+ls result/share/applications/io.airely.rustty.desktop            # release app id
+nix build .#rustty-debug && result/bin/rustty +version | grep -q 'Debug'
+ls result/share/applications/io.airely.rustty-debug.desktop      # debug app id
+ls result/share/terminfo/rustty.terminfo                          # Debug installs the source
+nix build                                          # default = the app on Linux
+nix develop -c cargo metadata --locked --format-version 1 >/dev/null   # nix.yml's check
+nix develop -c sh -c 'command -v kaitai-struct-compiler && python3 -c "import wasmtime"'
+RUSTTY_NIX_VM_TESTS=1 bash .port/tools/gates/check_nix.sh         # + the NixOS VM checks (KVM)
+```
+Then arm the workflow: set the repository variable `RUSTTY_NIX_ENABLED=true` and confirm
+`Nix / check-cargo-lock` and `Required Checks: Nix` go green on a push.
+
+**Recipe — Snap** (Ubuntu 24.04, or Fedora with snapd; root once):
+```
+sudo dnf install snapd && sudo ln -s /var/lib/snapd/snap /snap   # Ubuntu: preinstalled
+sudo snap install snapcraft --classic
+cargo run -p xtask -- dist
+mkdir snapsrc && tar -xzf dist/rustty-*.tar.gz --strip-components 1 -C snapsrc
+cd snapsrc && snapcraft --verbose
+sudo snap install --dangerous --classic ./rustty_*.snap
+rustty +version                         # expect "Rustty 0.1.0", build mode .ReleaseFast
+readelf -d /snap/rustty/current/bin/rustty | grep -E 'RUNPATH|RPATH'   # $ORIGIN/../usr/lib/<triplet>:/snap/core24/...
+ls /snap/rustty/current/usr/lib/*/libgtk4-layer-shell.so*          # the meson part was staged
+```
+Then set `RUSTTY_SNAP_ENABLED=true` and dispatch `Snap` on both runners.
+
+**Negative control (what makes each run non-vacuous):** for Nix, build
+`.#rustty-releasefast` with `--optimize` removed from `nix/package.nix`'s resources call
+and confirm the output carries `io.airely.rustty-debug.desktop` (the app-id derivation is
+what the flag feeds); for the Snap, drop the `gtk4-layer-shell` part and confirm the
+`rustty` part fails to link (`gtk4-layer-shell-0` not found by pkg-config), which proves
+the part is what satisfies it on core24.

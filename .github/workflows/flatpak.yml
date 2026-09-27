@@ -16,6 +16,19 @@
 #    crates.io to it, so the build is offline by construction and there is no
 #    `cargo-sources.json` to regenerate or keep in sync.
 #
+# 3. NO REPOSITORY GUARD. The reference's `if: github.repository == ...` sits on
+#    its dispatch-only PUBLISH workflow; its per-push `build-flatpak` job (the
+#    half merged in here) runs on forks too, so this merged job does as well.
+#    Nothing here publishes (no release upload; the repo is a 7-day artifact).
+#
+# 4. THE flatpak-builder CLI, NOT THE flatpak-github-actions ACTION. The
+#    reference's action (bundle/cache-key/arch) only builds and uploads a
+#    bundle; this workflow additionally installs and RUNS the result and checks
+#    the build option reached the binary (steps below), which needs the repo
+#    that the CLI's --repo writes. Same container image family as the
+#    reference (flathub-infra flatpak-github-actions:gnome-47), same arch
+#    matrix (x86_64 + aarch64).
+#
 # VERIFIED LOCALLY before this workflow existed: built, installed and run on
 # aarch64-linux with the same commands (see the manifest's header). This makes
 # it keep happening.
@@ -36,6 +49,10 @@ on:
     paths:
       - "flatpak/**"
       - "dist/linux/**"
+      - "crates/**"
+      - "crates-sys/**"
+      - "xtask/**"
+      - "Cargo.lock"
       - ".github/workflows/flatpak.yml"
   workflow_dispatch:
 
@@ -52,14 +69,16 @@ jobs:
         include:
           - arch: x86_64
             runner: ubuntu-latest
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
     container:
-      # The flathub-infra image ships flatpak-builder plus the GNOME runtimes.
-      # gnome-48 matches the `runtime-version: "50"` the manifest pins closely
-      # enough that the runtime is fetched, not rebuilt; bump both together.
-      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-48
+      # The flathub-infra image ships flatpak-builder. The reference's tag; the
+      # GNOME 50 runtime the manifest pins is installed from flathub by
+      # --install-deps-from below either way.
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-47
       options: --privileged
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Rust toolchain (pinned via rust-toolchain.toml)
         uses: dtolnay/rust-toolchain@stable

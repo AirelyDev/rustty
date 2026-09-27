@@ -651,6 +651,17 @@ re-open it.
    assertions become **mandatory** — and they will pass, because rustc links
    Apple targets through `ld64`. Record it as a precondition on the
    (unscheduled) iOS tier, not as a dismissal.
+5. **P-1 NOTE (2026-09-27) — §2 is partly stale.** The iOS precondition still
+   holds: `xtask xcframework-vt` now packs `ios-arm64` and `ios-arm64-simulator`
+   slices too, but all of them are STATIC archives, so there is still no iOS
+   dylib. Two statements above are no longer true: the xcframework is not
+   "macOS only", and the `xtask/src/main.rs:395`/`:442` citations have moved.
+   More importantly, the reference's `test.yml` job `build-libghostty-vt-macos`
+   runs the script over the per-target macOS **dylibs** (single architecture,
+   install name, one `LC_BUILD_VERSION`), and rustty DOES ship
+   `librustty_vt_c.dylib` (CMake install, G-CCONSUMER), so the macOS rows now
+   have a subject. That job is listed as a remaining CI gap in NEW-FINDINGS N376,
+   not dismissed here.
 
 ## G8 — `1c861e3c4` `pkg/apple-sdk/include/math.h` and `dac134d25` libc++ availability — N/A
 
@@ -710,6 +721,10 @@ note), with the `quirks_memset` force-reference comment beside them.
      Batch 4). **RECORDED AS A REAL REQUIREMENT, NOT DISMISSED:** if a Nix lane
      is ever stood up, the `--set-interpreter` half is load-bearing and a naive
      `--set-rpath`-only port would silently miss it.
+     **[P-1 NOTE, 2026-09-27: stale. The Nix lane exists (`nix/`, `flake.nix`)
+     and `xtask patchelf` ports patch-interp/patch-rpath with BOTH halves —
+     the interpreter defaults to the `ld.so` on `PATH` inside a Nix shell
+     (S63-F4). The snap now uses its `--patch-rpath` arm (N370).]**
    * `slow_runtime_safety`: `grep -rn 'slow_runtime_safety' crates/ xtask/
      Cargo.toml` -> 0 hits. rustty has no such build option; safety checks are
      Cargo profiles, which are per-profile by construction — the bug upstream
@@ -726,6 +741,12 @@ note), with the `quirks_memset` force-reference comment beside them.
 4. **What holds the line.** For D-1: `gen_locale`'s per-catalog `msgfmt`
    exit-status check (`res_misc.rs:398`) — a catalog that stopped being
    discovered would stop being compiled, and the check is per-catalog.
+5. **P-1 NOTE (2026-09-27) — D-1 is stale.** `gen_locale` no longer derives the
+   locales from the `po/*.po` basenames: it now compiles the DECLARED `LOCALES`
+   set (`xtask/src/res_misc.rs`, the reference's `i18n_locales.zig` list), and
+   `po_dir_matches_declared_locales` / `catalogs_error_on_missing_declared_po`
+   hold the two in step. There is still no `.UTF-8` suffix to trim, so
+   `10e6ace6b` stays N/A.
 
 ## G11 — `pkg/harfbuzz/c.zig` and `pkg/wuffs/src/c.zig` DELETIONS — N/A; upstream converged on rustty's design
 
@@ -786,7 +807,7 @@ msgids + scope the walk; regenerate the pot/catalog refs") added them when it
 regenerated the catalogs. Only the zh_CN **translation** was outstanding, and
 that is ported.
 
-## G13 — `.github` (13 files), `nix/` (4), `flatpak/` (1), `build.zig.zon*` (4) — N/A wholesale
+## G13 — `.github` (13 files), `nix/` (4), `flatpak/` (1), `build.zig.zon*` (4) — N/A wholesale [SUPERSEDED by §6 below, parity tail P-1, 2026-09-27: most of this is now ported]
 
 1. **Upstream.** `VOUCHED.td` + 6 `vouch-*.yml` workflows (contributor-vouching
    governance for the upstream GitHub org); ~11 dependabot action-SHA bumps;
@@ -822,7 +843,39 @@ that is ported.
    release_workflows.rs` proves that gating on every CI run.
    **Still N/A here:** `snap.yml`, `flatpak.yml`, `nix.yml`, all of `nix/` and
    `flatpak/`, and `build.zig.zon*` — those remain Nix/flake- and GTK-app-coupled
-   with no rustty counterpart.
+   with no rustty counterpart. [STALE — see §6.]
+6. **REWRITTEN (parity tail P-1, 2026-09-27) — what is ported, what is N/A, what
+   is deferred.** §2's premise ("there is no `nix/` and no `flatpak/`") stopped
+   being true when the build-system gap work (2026-08-25/26,
+   `docs/superpowers/specs/2026-08-25-build-system-gap-audit.md`) ported the
+   Nix flake, the Flatpak and the Snap. The record as of the pin `20abdb50a`:
+
+   | Reference file(s) | Status | Rustty counterpart / reason |
+   |---|---|---|
+   | `flake.nix`, `flake.lock`, `default.nix`, `shell.nix`, `.envrc` | PORTED (Cargo shape) | crane + rust-overlay replace zig + zon2nix; differences recorded in `flake.nix`'s comments |
+   | `nix/devShell.nix`, `nix/package.nix`, `nix/libghostty-vt.nix`, `nix/tests.nix`, `nix/build-support/{build-inputs,gi-typelib-path,ld-library-path}.nix`, `nix/build-support/check-blueprints.sh`, `nix/pkgs/*` (4), `nix/test-src/*`, `nix/vm/*` (16) | PORTED | `nix/`, same paths (`librustty-vt.nix`, `test_librustty_vt.c`); each file's header records its differences |
+   | `nix/zigCacheHash.nix`, `nix/build-support/check-zig-cache.sh` | N/A — no Cargo role | they keep the generated Zig dependency renderings (`build.zig.zon.{nix,txt,json}`, `flatpak/zig-packages.json`) in sync; crane vendors from `Cargo.lock` directly, so there is no rendering to keep in sync. The one lock rustty commits is `Cargo.lock`; the Cargo shape of the check (`cargo metadata --locked` in the dev shell) is `nix.yml`'s job |
+   | `nix/build-support/fetch-zig-cache.sh` | N/A — no Cargo role | a packager helper that pre-fetches the Zig package cache for offline builds; the Cargo equivalent is `cargo fetch --locked` / `cargo vendor`, and `xtask dist` already ships `vendor/` + `.cargo/config.toml` in the source tarball (PACKAGING.md "Source Tarballs") |
+   | `nix/build-support/update-mirror.nu` | N/A — no Cargo role | mirrors the Zig package tarballs named in `build.zig.zon` to the reference's own file host; crates resolve from crates.io or the tarball's `vendor/` |
+   | `build.zig`, `build.zig.zon`, `build.zig.zon.{json,nix,txt}` | N/A — replaced | `Cargo.toml` + `Cargo.lock` + `xtask` (the build graph itself is audited step by step in NEW-FINDINGS N377) |
+   | `flatpak/com.mitchellh.ghostty{,-debug}.yml`, `flatpak/dependencies.yml`, `flatpak/exceptions.json` | PORTED | `flatpak/io.airely.rustty{,-debug}.yml`, `dependencies.yml`, `exceptions.json` |
+   | `flatpak/zig-packages.json` | N/A — replaced by the vendored tarball | the Zig-dependency source list flatpak-builder needs because Flathub builds are offline. Rustty's manifests take the `xtask dist` tarball as their only source; it carries `vendor/` and a `.cargo/config.toml` redirecting crates.io to it, and the manifests set `CARGO_NET_OFFLINE`. P-1 built both manifests offline from that tarball on aarch64 Fedora (N370), so no `cargo-sources.json` counterpart is needed |
+   | `snap/snapcraft.yaml`, `snap/local/launcher` | PORTED, UNVERIFIED | `snap/`; never built (needs snapd, i.e. root) — VERIFICATION_DEBT V24 |
+   | `.github/workflows/flatpak.yml` | PORTED | merged with `test.yml`'s `build-flatpak`; differences recorded in its header |
+   | `.github/workflows/nix.yml` | PORTED (P-1), UNVERIFIED, inert behind `RUSTTY_NIX_ENABLED` | `check-zig-cache-hash` → `check-cargo-lock`; VERIFICATION_DEBT V24 |
+   | `.github/workflows/snap.yml` | PORTED (P-1), UNVERIFIED, inert behind `RUSTTY_SNAP_ENABLED` | VERIFICATION_DEBT V24 |
+   | `.github/workflows/{release-tag,release-tip,publish-tag}.yml`, `.github/scripts/ghostty-tip` | PORTED (§5) | residual differences: NEW-FINDINGS N378 |
+   | `.github/workflows/{update-colorschemes,milestone,clean-artifacts}.yml`, `.github/{dependabot,pinact}.yml`, `.github/DISCUSSION_TEMPLATE/issue-triage.yml` | PORTED | same paths |
+   | `.github/workflows/test.yml` | TRANSLATED job by job | `ci.yml` jobs + `.port/tools/ci.sh` gates; the per-job table and the jobs still without a counterpart are NEW-FINDINGS N376 |
+   | `.github/scripts/check-translations.sh` | TRANSLATED | G-I18N (`check_translations.sh`) |
+   | `.github/scripts/check-apple-libghostty-vt.nu` | N/A with the §G7 precondition, **which has partly changed** — see G7's P-1 note |
+   | `.github/VOUCHED.td`, the **5** `vouch-*.yml` workflows (§1 said 6), `.github/DISCUSSION_TEMPLATE/vouch-request.yml`, `.github/issue-unvouched-message` | NOT PORTED — governance (user ruling) | contributor-vouching governance of the reference's own GitHub organisation; nothing for a port to reproduce |
+
+   **Verification debt, not done:** Nix (`nix build`, `nix flake check`, the VM
+   checks, `nix.yml`) and the Snap (`snapcraft`, `snap.yml`) are deferred by
+   the user (2026-09-27): no Nix install, and snapd needs root. Recorded with
+   the exact commands as VERIFICATION_DEBT V24. The Nix side was last run on
+   aarch64-linux by the 2026-08-26 gap work; P-1's Nix edits are unverified.
 
 ---
 

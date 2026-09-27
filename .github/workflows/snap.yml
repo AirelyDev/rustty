@@ -1,0 +1,81 @@
+# PORTS: ghostty .github/workflows/snap.yml.
+#
+# ============================== UNVERIFIED ==================================
+# Never run. Building a snap needs snapd, which needs root, so snap
+# verification is deferred by the user; see .port/phase-2/VERIFICATION_DEBT.md
+# V24 and the UNVERIFIED header of snap/snapcraft.yaml. The job is INERT until a
+# maintainer sets the RUSTTY_SNAP_ENABLED repository variable to `true`
+# (xtask/tests/release_workflows.rs asserts every job is behind that gate).
+# ============================================================================
+#
+# Differences from the reference:
+#
+# 1. NO ARTIFACT PLUMBING, for the same reason as flatpak.yml. The reference is
+#    dispatched by test.yml's `trigger-snap` job (non-PR events, after
+#    `build-dist` and `build-snap`) with the `source-run-id` /
+#    `source-artifact-id` of the tarball `build-dist` uploaded. Here the job
+#    builds that tarball itself with `xtask dist` — the vendored source tarball
+#    snapcraft.yaml consumes — so it triggers on the same pushes to main that
+#    would have dispatched it, and on manual dispatch, without inputs.
+# 2. The tarball is extracted into `snapsrc/`, not `dist/`: rustty's `dist/` is
+#    a checked-in source directory (dist/linux, dist/cmake, ...) and is where
+#    `xtask dist` writes the tarball.
+# 3. `ubuntu-24.04` / `ubuntu-24.04-arm` for the Namespace snap runner profiles,
+#    and no nscloud-cache step (a Namespace-only action).
+name: Snap
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "snap/**"
+      - "dist/linux/**"
+      - "crates/**"
+      - "crates-sys/**"
+      - "xtask/**"
+      - "Cargo.lock"
+      - ".github/workflows/snap.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    if: vars.RUSTTY_SNAP_ENABLED == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust toolchain (pinned via rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@stable
+
+      # The snap's source: the vendored tarball carries vendor/,
+      # .cargo/config.toml and VERSION, which snapcraft.yaml's offline cargo
+      # build and `craftctl set version` need.
+      - name: Build the vendored source tarball
+        run: cargo run -q -p xtask -- dist
+
+      - name: Extract tarball
+        run: |
+          mkdir snapsrc
+          tar --verbose --extract --strip-components 1 --directory snapsrc --file dist/rustty-*.tar.gz
+
+      - run: sudo apt install -y udev
+
+      - run: sudo systemctl start systemd-udevd
+
+      # Workaround until this is fixed: https://github.com/canonical/lxd-pkg-snap/pull/789
+      - run: |
+          _LXD_SNAP_DEVCGROUP_CONFIG="/var/lib/snapd/cgroup/snap.lxd.device"
+          sudo mkdir -p /var/lib/snapd/cgroup
+          echo 'self-managed=true' | sudo tee  "${_LXD_SNAP_DEVCGROUP_CONFIG}"
+
+      - uses: snapcore/action-build@3bdaa03e1ba6bf59a65f84a751d943d549a54e79 # v1.3.0
+        with:
+          path: snapsrc

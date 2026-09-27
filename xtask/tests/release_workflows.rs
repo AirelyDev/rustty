@@ -437,6 +437,55 @@ fn macos_app_zip_is_universal_everywhere() {
     }
 }
 
+/// Workflows whose tooling is deferred (parity tail P-1: Nix and snapd need an
+/// install or root no verification host has; VERIFICATION_DEBT V24), each with
+/// the repository variable that arms it. Like the release pipelines they must
+/// be INERT until armed, so an unverified workflow can produce no red.
+const TOOLING_GATED_WORKFLOWS: &[(&str, &str)] = &[
+    ("nix.yml", "vars.RUSTTY_NIX_ENABLED == 'true'"),
+    ("snap.yml", "vars.RUSTTY_SNAP_ENABLED == 'true'"),
+];
+
+/// Every job of `nix.yml` and `snap.yml` sits behind its arming variable
+/// (directly or through `needs`), and the gate is not vacuous: the file has
+/// jobs, and at least one carries the gate in its own body.
+#[test]
+fn deferred_tooling_workflows_are_gated_on_their_arming_variable() {
+    for (file, gate) in TOOLING_GATED_WORKFLOWS {
+        let text = read_workflow(file);
+        let jobs = parse_jobs(&text);
+        assert!(!jobs.is_empty(), "{file}: parsed no jobs");
+        assert!(
+            jobs.values().any(|j| j.body.contains(gate)),
+            "{file}: no job carries {gate} itself"
+        );
+        let gated = guarded_jobs(&jobs, gate);
+        for name in jobs.keys() {
+            assert!(
+                gated.contains(name),
+                "{file}: job `{name}` is not gated on {gate} (directly or through `needs`)"
+            );
+        }
+        // Whatever xtask subcommand it drives must exist (snap.yml runs
+        // `xtask dist`).
+        let help = Command::new(env!("CARGO_BIN_EXE_xtask"))
+            .arg("help")
+            .output()
+            .expect("run xtask help");
+        let help = String::from_utf8_lossy(&help.stdout).to_string();
+        for (i, _) in text.match_indices("-p xtask -- ") {
+            let sub = text[i + "-p xtask -- ".len()..]
+                .split_whitespace()
+                .next()
+                .expect("a subcommand follows the separator");
+            assert!(
+                help.contains(sub),
+                "{file}: drives `xtask {sub}`, which `xtask help` does not list"
+            );
+        }
+    }
+}
+
 /// Sanity check on the job parser itself, so a parser bug cannot turn the
 /// gating assertions into silent passes.
 #[test]
