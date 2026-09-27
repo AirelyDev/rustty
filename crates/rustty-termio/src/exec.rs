@@ -864,11 +864,24 @@ impl Exec {
                 1,
             )
         };
-        // PORT NOTE (Windows): `posix.fd_t` is a HANDLE there, and the write is
-        // `WriteFile` on the quit pipe's write end. A read end that is already
-        // closed fails with ERROR_BROKEN_PIPE (109) or ERROR_NO_DATA (232), the
-        // Windows form of the EPIPE the POSIX arm ignores; any other failure
-        // gets the same warning, with the Win32 error code.
+        // PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD325. At the pin
+        // the write is `switch (posix.errno(posix.system.write(exec.read_thread_pipe,
+        // "x", 1)))` (`Exec.zig:206`), and Ghostty links libc, so `posix.system`
+        // is `std.c`: the C runtime's `write`, whose first argument is a CRT file
+        // descriptor. On Windows `read_thread_pipe` is a Win32 HANDLE, which the
+        // UCRT rejects through its invalid-parameter handler: the process
+        // fast-fails (0xC0000409) at every surface close. MEASURED on Windows
+        // (task W-1b, and the W-1 review's C repro). The port writes the byte
+        // with `WriteFile`, the Win32 call for the HANDLE the reference holds. A
+        // read end that is already closed fails with ERROR_BROKEN_PIPE (109) or
+        // ERROR_NO_DATA (232), the Windows form of the EPIPE the POSIX arm
+        // ignores; any other failure gets the reference's warning, with the
+        // Win32 error code.
+        //
+        // CORRECTION (task W-1b, review W-1 F1): this note used to read
+        // "`posix.fd_t` is a HANDLE there, and the write is `WriteFile` on the
+        // quit pipe's write end", as if the reference called Zig's
+        // `posix.write` (which would be `WriteFile`); it calls `posix.system.write`.
         #[cfg(windows)]
         {
             use rustty_os::windows as win;
@@ -927,23 +940,8 @@ impl Exec {
         // }
         #[cfg(windows)]
         {
-            if unsafe {
-                rustty_os::windows::exp::kernel32::CancelIoEx(
-                    exec.read_thread_fd,
-                    std::ptr::null_mut(),
-                )
-            } == 0
-            {
-                // switch (GetLastError()) {
-                //     .NOT_FOUND => {},
-                //     else => |err| log.warn("error interrupting read thread err={}", .{err}),
-                // }
-                let err = unsafe { rustty_os::windows::kernel32::GetLastError() };
-                const ERROR_NOT_FOUND: u32 = 1168;
-                if err != ERROR_NOT_FOUND {
-                    log::warn!(target: LOG_SCOPE, "error interrupting read thread err={err}");
-                }
-            }
+            let read_thread = &exec.read_thread;
+            ReadThread::interruptWindows(exec.read_thread_fd, || read_thread.is_finished());
         }
 
         // exec.read_thread.join();
@@ -1972,11 +1970,18 @@ impl ThreadData {
 
     // pub fn deinit(self: *ThreadData, alloc: Allocator) void {
     pub fn deinit(&mut self, alloc: Allocator) {
-        // posix.close(self.read_thread_pipe);
+        // _ = posix.system.close(self.read_thread_pipe);
         #[cfg(not(windows))]
         unsafe {
             libc::close(self.read_thread_pipe)
         };
+        // PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD325. The
+        // reference's `posix.system.close` is the C runtime's `close` (Ghostty
+        // links libc), and on Windows `read_thread_pipe` is a Win32 HANDLE, which
+        // the CRT rejects by fast-failing the process (0xC0000409). The port
+        // calls `CloseHandle`. CORRECTION (task W-1b, review W-1 F1): the Zig
+        // line above used to read `posix.close(self.read_thread_pipe);`, an older
+        // shape; `Exec.zig:550` at the pin is `_ = posix.system.close(..)`.
         #[cfg(windows)]
         let _ = rustty_os::windows::CloseHandle(self.read_thread_pipe);
 
@@ -4486,8 +4491,6 @@ pub(crate) type ReadThreadFd = rustty_os::windows::HANDLE;
 // `IoThreadArgs` unsafe-Send discipline (surface.rs).
 unsafe impl<M: rustty_apprt_api::surface::AppMailbox> Send for ReadThreadArgs<M> {}
 
-// (Windows: the gather/bridge constants belong to `threadMainPosix`.)
-#[cfg_attr(windows, allow(dead_code))]
 impl ReadThread {
     /// The number of buffers rotated between the gather and parse
     /// stages. The gather stage can run at most this many batches
@@ -4504,6 +4507,7 @@ impl ReadThread {
     // reverted before the pin; at 20abdb50a both constants are unconditional
     // (`Exec.zig:1305`, `:1318`). The doc paragraph that went with it ("Other
     // POSIX platforms keep fewer batches in flight ...") is gone with it.
+    #[cfg_attr(windows, allow(dead_code))] // (read only by `threadMainPosix`)
     pub(crate) const BUFFER_COUNT: usize = 4;
 
     /// The capacity of each gather buffer. One batch is also the unit
@@ -4513,6 +4517,7 @@ impl ReadThread {
     //
     // CORRECTION (S211-F1): was `64 * 1024` on Darwin and `8 * 1024` elsewhere
     // (the same reverted commit).
+    #[cfg_attr(windows, allow(dead_code))] // (read only by `threadMainPosix`)
     pub(crate) const BUFFER_CAPACITY: usize = 64 * 1024;
 
     /// How many gathered bytes mark a stream as saturated. The macOS
@@ -4522,6 +4527,7 @@ impl ReadThread {
     /// anything smaller is an interactive trickle that must be
     /// delivered with no added latency.
     // const bridge_threshold = 1024;
+    #[cfg_attr(windows, allow(dead_code))] // (read only by `threadMainPosix`)
     const BRIDGE_THRESHOLD: usize = 1024;
 
     /// How many times an EAGAIN on a saturated stream is retried
@@ -4541,6 +4547,7 @@ impl ReadThread {
     /// gathered a full kernel queue, so an idle or interactive
     /// terminal never spins.
     // const bridge_spin_max = 16;
+    #[cfg_attr(windows, allow(dead_code))] // (read only by `threadMainPosix`)
     const BRIDGE_SPIN_MAX: usize = 16;
 
     /// How long one bridge poll waits for the writer's next refill
@@ -4548,6 +4555,7 @@ impl ReadThread {
     /// quiet for this long the burst is over and we deliver what we
     /// have.
     // const bridge_poll_timeout_ms = 1;
+    #[cfg_attr(windows, allow(dead_code))] // (read only by `threadMainPosix`)
     const BRIDGE_POLL_TIMEOUT_MS: libc::c_int = 1;
 
     /// The longest one batch may spend bridging refill gaps before it
@@ -4556,6 +4564,7 @@ impl ReadThread {
     /// milliseconds is well under one display frame, so batching is
     /// invisible on screen.
     // const gather_budget_ns = 3 * std.time.ns_per_ms;
+    #[cfg_attr(windows, allow(dead_code))] // (read only by `threadMainPosix`)
     pub(crate) const GATHER_BUDGET_NS: u64 = 3 * 1_000_000;
 
     // [task-18 STALE HEADER STRUCK (S211-F7): this said "DEFERRED (D6 thread
@@ -5438,6 +5447,45 @@ impl ReadThread {
         }
     }
 
+    /// `threadExit`'s Windows interrupt: cancel the read thread's blocking
+    /// `ReadFile` so it sees the quit byte (`Exec.zig:219-227`).
+    ///
+    /// PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD326 (N341). The
+    /// reference cancels once and ignores `ERROR_NOT_FOUND`. `CancelIoEx`
+    /// cancels only I/O that is pending when it is called; if the read thread is
+    /// between two reads (in `processOutput`), nothing is cancelled, the thread
+    /// re-enters `ReadFile`, and `threadExit`'s `join` blocks until the pseudo
+    /// console writes again, possibly forever. MEASURED on Windows (task W-1b,
+    /// `windows_readthread_quit_survives_a_cancel_between_reads`). The port
+    /// repeats the cancel while the thread has not finished (`ERROR_NOT_FOUND`
+    /// means "not reading yet", so it tries again), and stops on any other
+    /// error after the reference's warning, as the reference does.
+    #[cfg(windows)]
+    pub(crate) fn interruptWindows(
+        read_thread_fd: rustty_os::windows::HANDLE,
+        finished: impl Fn() -> bool,
+    ) {
+        const ERROR_NOT_FOUND: u32 = 1168;
+        while !finished() {
+            // if (windows.kernel32.CancelIoEx(exec.read_thread_fd, null) == 0) {
+            if unsafe {
+                rustty_os::windows::exp::kernel32::CancelIoEx(read_thread_fd, std::ptr::null_mut())
+            } == 0
+            {
+                // switch (GetLastError()) {
+                //     .NOT_FOUND => {},
+                //     else => |err| log.warn("error interrupting read thread err={}", .{err}),
+                // }
+                let err = unsafe { rustty_os::windows::kernel32::GetLastError() };
+                if err != ERROR_NOT_FOUND {
+                    log::warn!(target: LOG_SCOPE, "error interrupting read thread err={err}");
+                    return;
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
+
     // The reference body, preserved verbatim (it is PORTED below — this block is
     // the R3 verbatim record, not a deferral marker):
     //
@@ -5504,10 +5552,18 @@ impl ReadThread {
         // Always close our end of the pipe when we exit.
         // defer _ = posix.system.close(quit);
         //
-        // PORT NOTE: `quit` is a Win32 HANDLE here (the reference's `posix.fd_t`
-        // IS a HANDLE on windows), so the close is `CloseHandle` — the same call
-        // the posix arm's `close(2)` maps to for this handle class, and the one
-        // `Exec.deinit` already uses on `read_thread_pipe`.
+        // PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD325. `quit` is a
+        // Win32 HANDLE (the reference's `posix.fd_t` is a HANDLE on Windows), but
+        // the reference closes it with `posix.system.close`, the C runtime's
+        // `close` (Ghostty links libc), which takes a CRT file descriptor and
+        // fast-fails the process on a HANDLE (0xC0000409, MEASURED for the CRT
+        // fd functions on Windows, task W-1b). The port closes it with
+        // `CloseHandle`, the Win32 call for the HANDLE the reference holds.
+        //
+        // CORRECTION (task W-1b, review W-1 F1): this note used to say the
+        // close is "`CloseHandle` — the same call the posix arm's `close(2)` maps
+        // to for this handle class"; the reference's call is the CRT's `close`,
+        // which does not map to `CloseHandle`.
         struct CloseOnExit(win::HANDLE);
         impl Drop for CloseOnExit {
             fn drop(&mut self) {
@@ -5957,9 +6013,17 @@ fn execCommand<P: PasswdPkg>(
 // PORT NOTE: support shims (Rust-only glue).
 // ---------------------------------------------------------------------------
 
-/// PORT NOTE (Zig-std shim): `posix.close(fd)`. On Windows `posix.fd_t` is a
-/// `HANDLE` and Zig's `posix.close` is `CloseHandle`, the call
-/// `ThreadData::deinit` already makes for `read_thread_pipe`.
+/// PORT NOTE (Zig-std shim): `posix.system.close(fd)` (`Exec.zig:126-127`).
+///
+/// PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD325. On Windows
+/// `posix.fd_t` is a `HANDLE`, and `posix.system` is `std.c` (Ghostty links
+/// libc), so the reference passes the HANDLE to the C runtime's `close`, which
+/// fast-fails the process (0xC0000409). The port calls `CloseHandle`, as
+/// `ThreadData::deinit` does for `read_thread_pipe`.
+///
+/// CORRECTION (task W-1b, review W-1 F1): this used to say "Zig's
+/// `posix.close` is `CloseHandle`"; the reference calls `posix.system.close`,
+/// not `posix.close`.
 ///
 /// # Safety
 /// `fd` must be an open descriptor/handle this code owns.
@@ -8477,23 +8541,9 @@ mod tests {
             std::thread::sleep(Duration::from_millis(1));
         };
 
-        // Stop it as `threadExit` does: the quit byte, then `CancelIoEx` on the
-        // read handle. A cancel issued while the thread is between two reads
-        // (still handling the BEL) finds nothing to cancel (measured: a
-        // parallel run hit ERROR_NOT_FOUND), so it is repeated until the thread
-        // has returned.
+        // Stop it as `threadExit` does: the quit byte, then the interrupt.
         windows_write(quit_write, b"x");
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while !handle.is_finished() {
-            assert!(
-                Instant::now() < deadline,
-                "the read thread did not stop on the quit byte + CancelIoEx"
-            );
-            let _ = unsafe {
-                rustty_os::windows::exp::kernel32::CancelIoEx(data_read, std::ptr::null_mut())
-            };
-            std::thread::sleep(Duration::from_millis(1));
-        }
+        ReadThread::interruptWindows(data_read, || handle.is_finished());
         handle.join().expect("read thread join");
         // (the read thread closed `quit_read` on exit)
         for h in [quit_write, data_read, data_write] {
@@ -8505,6 +8555,119 @@ mod tests {
             states,
             vec![Some((rustty_crash::sentry::Type::Io, true))],
             "the read thread's thread_state is .io with the mailbox's surface"
+        );
+    }
+
+    /// UD326 (N341): `threadExit`'s interrupt stops the Windows read thread
+    /// even when its cancel lands between two reads. The test holds the
+    /// renderer mutex, so after the thread reads a byte it blocks in
+    /// `processOutput`, not in `ReadFile`. The quit byte and the interrupt run
+    /// then, on another thread; the mutex is released after the first cancel
+    /// has found nothing to cancel. The reference's single cancel is lost, the
+    /// thread re-enters `ReadFile`, and nothing more is written: it would
+    /// block forever. With the port's repeated cancel it returns.
+    #[test]
+    #[cfg(windows)]
+    fn windows_readthread_quit_survives_a_cancel_between_reads() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+        use std::time::{Duration, Instant};
+
+        let _serial = WINDOWS_READTHREAD_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+
+        let t = TestTermio::build();
+        let [data_read, data_write] = windows_pipe();
+        let [quit_read, quit_write] = windows_pipe();
+        let finished = Arc::new(AtomicBool::new(false));
+        let read_args = ReadThreadArgs::<TestMailbox>(data_read, t.io, quit_read);
+        let done = Arc::clone(&finished);
+        let reader = std::thread::spawn(move || {
+            let args = read_args;
+            ReadThread::threadMainWindows::<TestMailbox>(args.0, args.1, args.2);
+            done.store(true, Ordering::SeqCst);
+        });
+
+        // The thread reads this byte and blocks on the renderer mutex.
+        unsafe { (*t.mutex).lock() };
+        windows_write(data_write, b"a");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let mut avail: rustty_os::windows::DWORD = 0;
+            let ok = unsafe {
+                rustty_os::windows::exp::kernel32::PeekNamedPipe(
+                    data_read,
+                    std::ptr::null_mut(),
+                    0,
+                    std::ptr::null_mut(),
+                    &mut avail,
+                    std::ptr::null_mut(),
+                )
+            };
+            assert_ne!(ok, 0, "PeekNamedPipe");
+            if avail == 0 {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the read thread never read the byte"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        // It is now in (or on its way into) `processOutput`, blocked on the
+        // mutex. Positive check that the cancel really lands between reads:
+        // with no read pending, `CancelIoEx` reports ERROR_NOT_FOUND.
+        std::thread::sleep(Duration::from_millis(50));
+        let cancelled = unsafe {
+            rustty_os::windows::exp::kernel32::CancelIoEx(data_read, std::ptr::null_mut())
+        };
+        let err = unsafe { rustty_os::windows::kernel32::GetLastError() };
+        assert_eq!(
+            (cancelled, err),
+            (0, 1168),
+            "no read may be pending while the thread is in processOutput"
+        );
+
+        // `threadExit`'s sequence, on its own thread: the quit byte, then the
+        // interrupt.
+        let flag = Arc::clone(&finished);
+        let data_read_addr = data_read as usize;
+        let quit_write_addr = quit_write as usize;
+        let stopper = std::thread::spawn(move || {
+            windows_write(quit_write_addr as rustty_os::windows::HANDLE, b"x");
+            ReadThread::interruptWindows(data_read_addr as rustty_os::windows::HANDLE, || {
+                flag.load(Ordering::SeqCst)
+            });
+        });
+        // Let the interrupt's first cancel run while the thread is still
+        // between reads, then let the thread finish processing.
+        std::thread::sleep(Duration::from_millis(100));
+        unsafe { (*t.mutex).unlock() };
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !finished.load(Ordering::SeqCst) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let stopped = finished.load(Ordering::SeqCst);
+        if !stopped {
+            // Unblock it so the test can clean up, then fail.
+            while !finished.load(Ordering::SeqCst) {
+                let _ = unsafe {
+                    rustty_os::windows::exp::kernel32::CancelIoEx(data_read, std::ptr::null_mut())
+                };
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }
+        stopper.join().expect("stopper join");
+        reader.join().expect("read thread join");
+        for h in [quit_write, data_read, data_write] {
+            let _ = rustty_os::windows::CloseHandle(h);
+        }
+        t.teardown();
+        assert!(
+            stopped,
+            "the read thread was still blocked in ReadFile 5 s after threadExit's interrupt"
         );
     }
 

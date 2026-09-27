@@ -2636,6 +2636,36 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - proposed fix:    call `Clipboard.paste(self, string);` before `return 1;` in the `gio.File` branch, and `defer glib.free(path);` after `getPath`.
 - upstream status: not reported
 
+### UD325 — on Windows, termio passes the read thread's quit-pipe HANDLEs to the C runtime's `write`/`close`, which fast-fails the process at surface close
+- kind:            crash (the C runtime's invalid-parameter fast fail, `0xC0000409`)
+- upstream project: ghostty
+- severity:        high on Windows (every surface close kills the process); none elsewhere
+- reference:       `src/termio/Exec.zig` at 20abdb50a: `threadExit` `switch (posix.errno(posix.system.write(exec.read_thread_pipe, "x", 1)))` (`:206`); `threadMainWindows` `defer _ = posix.system.close(quit);` (`:1779`); `threadEnter`'s `errdefer _ = posix.system.close(pipe[0]/pipe[1]);` (`:126-127`); `ThreadData.deinit` `_ = posix.system.close(self.read_thread_pipe);` (`:550`). The pipe comes from `internal_os.pipe()`, which on Windows is `CreatePipe` and returns Win32 HANDLEs (`src/os/pipe.zig`). Ghostty links libc (`SharedDeps.zig`, `link_libc = true`), so `posix.system` is `std.c` (`std/posix.zig:36`), whose `write`/`close` are the C runtime's, taking a CRT file descriptor (`int`) while `fd_t` is `windows.HANDLE` (`std/c.zig`).
+- defect:          the HANDLE reaches the UCRT as a bogus CRT file descriptor; the UCRT's invalid-parameter handler terminates the process with `__fastfail` before the call returns.
+- ReleaseSafe:     process exit `0xC0000409` (STATUS_STACK_BUFFER_OVERRUN). MEASURED on Windows 11 (build 26200, ARM64, `x86_64-pc-windows-msvc`, x64 emulation): the review of task W-1 compiled a C repro (`_write((int)(intptr_t)pipe_handle, "x", 1)`) → `0xC0000409`; task W-1b reinstated the reference's calls in the port: the CRT `write` in `threadExit` makes `windows_threadenter_reads_the_pty_through_the_windows_read_thread` exit `0xc0000409, STATUS_STACK_BUFFER_OVERRUN`, and the CRT `close` of the quit HANDLE at the read thread's exit makes `windows_readthread_sets_io_crash_thread_state` exit the same way. The windows-gnu (mingw) CRT was not measured.
+- ReleaseFast:     the same (the fast fail is the C runtime's, not a Zig safety check).
+- reachability:    every surface close (`threadExit`) of a libghostty embedder on Windows; the reference builds that library for Windows (`build-libghostty-windows-gnu`) and compiles `termio/Exec.zig` in its Windows test job. Also every read-thread exit and every `threadEnter` failure after the pipe is created.
+- port handling:   `crates/rustty-termio/src/exec.rs` uses the Win32 calls for the HANDLEs the reference holds: `WriteFile` for the quit byte (ERROR_BROKEN_PIPE/ERROR_NO_DATA ignored as the POSIX arm ignores EPIPE), `CloseHandle` for every close (`threadMainWindows`'s exit guard, the `close_fd` shim for the errdefers, `ThreadData::deinit`). PORT NOTE: reference defect (R13) at each site, with a CORRECTION of the earlier notes that described these as Zig's `posix.write`/`posix.close`. Listed in `docs/ghostty-bug-fixes.md`.
+- parity row(s):   none; found by the review of task W-1 (review-W-1 F1); LEDGER S211-F2/S211-F3 run through these sites.
+- test:            `exec::tests::windows_threadenter_reads_the_pty_through_the_windows_read_thread` and `windows_readthread_sets_io_crash_thread_state` (rustty-termio, Windows) pass. NEGATIVE CONTROLS on Windows (task W-1b), one at a time: the CRT `write` reinstated in `threadExit` → the test binary exits `0xc0000409`; the CRT `close` reinstated in the read thread's exit guard → the same.
+- proposed fix:    use `posix.write`/`posix.close` (Zig's std maps them to `WriteFile`/`CloseHandle` on Windows), or `windows.WriteFile`/`windows.CloseHandle` directly, at `Exec.zig:126-127`, `:206`, `:550`, `:1779`.
+- upstream status: not reported
+
+### UD326 — on Windows, `threadExit` can wait forever for the read thread: its single `CancelIoEx` is lost when the thread is between two reads
+- kind:            deadlock (a surface close that never finishes)
+- upstream project: ghostty
+- severity:        medium on Windows (masked at the pin by UD325, which kills the process first)
+- reference:       `src/termio/Exec.zig` at 20abdb50a: `threadExit` writes the quit byte, calls `CancelIoEx(exec.read_thread_fd, null)` once and ignores `.NOT_FOUND` (`:219-227`), then joins the read thread; `threadMainWindows` checks the quit pipe only after a `ReadFile` fails with `OPERATION_ABORTED` (`:1788-1825`).
+- defect:          `CancelIoEx` cancels only I/O pending when it is called. If the read thread is in `processOutput` (between two `ReadFile` calls), the cancel finds nothing (`ERROR_NOT_FOUND`, ignored), the thread re-enters `ReadFile`, and blocks until the pseudo console writes again; `threadExit`'s `join` waits with it. `threadExit` exists to stop the thread, so this breaks its evident intent.
+- ReleaseSafe:     `threadExit` blocks until more output arrives, possibly forever. MEASURED on Windows (task W-1b, port with UD325 fixed): with the reference's single cancel, `windows_readthread_quit_survives_a_cancel_between_reads` finds the thread still blocked in `ReadFile` 5 s after the interrupt. Not reachable in the reference binary as it stands, because UD325's fast fail happens first, in the quit write.
+- ReleaseFast:     the same.
+- reachability:    closing a surface on Windows while the child is producing output (the read thread is then usually in `processOutput`); by timing.
+- port handling:   `ReadThread::interruptWindows` (`crates/rustty-termio/src/exec.rs`), called by `threadExit`, repeats `CancelIoEx` every millisecond until the read thread has finished; `ERROR_NOT_FOUND` means "not reading yet", any other error gets the reference's warning and stops the retry. PORT NOTE: reference defect (R13) at the function. Listed in `docs/ghostty-bug-fixes.md`. Recorded, not changed: `threadMainWindows` treats any other `ReadFile` error with `log.err` + `unreachable` (`:1797-1801`); no trigger found (kind latent, UNVERIFIED reachability; for example `ERROR_BROKEN_PIPE` once the pseudo console's write end closes was not observed in W-1's runs).
+- parity row(s):   none; NEW-FINDINGS N341 (task W-1), review-W-1 N341/F4.
+- test:            `exec::tests::windows_readthread_quit_survives_a_cancel_between_reads` (rustty-termio, Windows): with the renderer mutex held, the read thread reads a byte and blocks in `processOutput`; a `CancelIoEx` then reports `ERROR_NOT_FOUND` (asserted, so the cancel really lands between reads); the quit byte and `interruptWindows` run on another thread; the mutex is released; the thread must finish within 5 s. Passes. NEGATIVE CONTROL on Windows (task W-1b; the reference's single cancel): fails `the read thread was still blocked in ReadFile 5 s after threadExit's interrupt`.
+- proposed fix:    repeat `CancelIoEx` until the read thread exits (for example until `WaitForSingleObject` on the thread handle succeeds), or have the read thread check the quit pipe before each `ReadFile` and use an overlapped read with a cancellable wait.
+- upstream status: not reported
+
 ## Candidates pending verification
 
 Assembled from this plan's progress notes on 2026-09-11. **Not verified** — do not cite as fact.
