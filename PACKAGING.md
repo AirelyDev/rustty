@@ -248,8 +248,8 @@ target add wasm32-unknown-unknown`).
 Some notes for packaging the wasm module:
 
 - Upstream Ghostty enables the `simd128` feature by default. This build does
-  not yet; to enable it, append `-C target-feature=+simd128` to the `cargo
-  rustc` flags above. Every browser engine has supported it for years
+  not yet; to enable it, append `-C target-feature=+simd128` to the rustc
+  flags after `--` above. Every browser engine has supported it for years
   (Chrome 91, Firefox 89, Safari 16.4) and it is a large performance win for
   VT parsing. If you target an unusual runtime without SIMD support, leave
   it off.
