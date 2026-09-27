@@ -374,9 +374,26 @@ impl Face {
                     unsafe { std::slice::from_raw_parts(entry.string, entry.string_len as usize) };
                 // There are other encodings that are something other than UTF-8
                 // but this is one we've seen "in the wild" so far.
-                if entry.platform_id == c::TT_PLATFORM_MICROSOFT as c::FT_UShort
-                    && entry.encoding_id == c::TT_MS_ID_UNICODE_CS as c::FT_UShort
-                {
+                // if (entry.platform_id == freetype.c.TT_PLATFORM_MICROSOFT and
+                //     entry.encoding_id == freetype.c.TT_MS_ID_UNICODE_CS) skip: {
+                //
+                // PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD344. The
+                // reference decodes the family record from UTF-16BE only when it is
+                // Microsoft/Unicode-BMP and returns every other record's raw bytes.
+                // The first family record of most stock Windows fonts is a Unicode
+                // platform (0) one, which is UTF-16BE too, so on Windows (the
+                // `freetype_windows` backend, where this is the family name
+                // `DeferredFace.familyName`/`name` return) `+list-fonts` prints
+                // `\0A\0r\0i\0a\0l` for Arial (measured on Windows 11 with the
+                // reference exe at the pin: 61 of the 166 installed faces). The
+                // evident intent is a readable name. The port applies the
+                // reference's own UTF-16BE decoder (below, unchanged, with its
+                // length checks and raw-record fallback) to every record the
+                // OpenType `name` table defines as UTF-16BE: the Unicode platform
+                // (every encoding) and the Windows platform's Symbol, Unicode BMP
+                // and Unicode full-repertoire encodings. Other records (Macintosh,
+                // the legacy Windows code pages) are still returned raw.
+                if name_record_is_utf16be(entry.platform_id, entry.encoding_id) {
                     'skip: {
                         if string.len() % 2 != 0 {
                             break 'skip;
@@ -1648,6 +1665,20 @@ fn f26dot6_to_f64(v: c::FT_F26Dot6) -> f64 {
     F26Dot6::from_raw(v as i32).to_f64()
 }
 
+/// Whether a `name` table record's string is UTF-16BE (OpenType `name` table:
+/// every Unicode-platform record, and the Windows platform's Symbol (0),
+/// Unicode BMP (1) and Unicode full repertoire (10) encodings). See the R13
+/// note (UD344) in [`Face::name`]; the reference tests only Windows/Unicode BMP.
+fn name_record_is_utf16be(platform_id: c::FT_UShort, encoding_id: c::FT_UShort) -> bool {
+    if platform_id == c::TT_PLATFORM_APPLE_UNICODE as c::FT_UShort {
+        return true;
+    }
+    platform_id == c::TT_PLATFORM_MICROSOFT as c::FT_UShort
+        && (encoding_id == c::TT_MS_ID_SYMBOL_CS as c::FT_UShort
+            || encoding_id == c::TT_MS_ID_UNICODE_CS as c::FT_UShort
+            || encoding_id == c::TT_MS_ID_UCS_4 as c::FT_UShort)
+}
+
 /// Decode UTF-16 code units into `buf` as UTF-8, returning the byte length.
 // PORT NOTE: models `std.unicode.utf16LeToUtf8(buf, units)` — returns `None` on
 // an invalid surrogate (the reference's errors, which `name` `catch`es and
@@ -1797,6 +1828,63 @@ mod tests {
             } else {
                 assert_eq!(got, record, "{n} x {ch} returns the raw record");
             }
+            face.deinit();
+        }
+        Ok(())
+    }
+
+    /// UD344 (R13): the first family record of most stock Windows fonts is a
+    /// Unicode-platform (0) UTF-16BE record (Arial: platform 0, encoding 3),
+    /// which the reference returns raw (`\0A\0r\0i\0a\0l`). The port decodes
+    /// every UTF-16BE record kind; the first family record still decides, and
+    /// the byte-oriented kinds are still returned raw.
+    #[test]
+    fn face_name_decodes_every_utf16be_family_record() -> Result<(), Error> {
+        let lib = Library::init()?;
+        let utf16be =
+            |s: &str| -> Vec<u8> { s.encode_utf16().flat_map(|u| u.to_be_bytes()).collect() };
+
+        // (platform, encoding): Unicode platform, every encoding; Windows
+        // Symbol, Unicode BMP and Unicode full repertoire.
+        let decoded: [(u16, u16); 10] = [
+            (0, 0),
+            (0, 1),
+            (0, 2),
+            (0, 3),
+            (0, 4),
+            (0, 5),
+            (0, 6),
+            (3, 0),
+            (3, 1),
+            (3, 10),
+        ];
+        for (platform, encoding) in decoded {
+            let data = font_with_names(&[
+                (platform, encoding, 0, 1, utf16be("Arial Ñ")),
+                (1, 0, 0, 1, b"Second".to_vec()),
+            ]);
+            let mut face = Face::init(lib, &data, opts(size(14.0, 96, 96)))?;
+            let mut buf = [0u8; 256];
+            assert_eq!(
+                face.name(&mut buf)?,
+                "Arial Ñ".as_bytes(),
+                "({platform}, {encoding}) is UTF-16BE and is decoded"
+            );
+            face.deinit();
+        }
+
+        // Byte-oriented records are returned as they are: Macintosh Roman, and
+        // a legacy Windows code page (ShiftJIS), even with an even length.
+        for (platform, encoding) in [(1u16, 0u16), (3, 2)] {
+            let raw = utf16be("Arial");
+            let data = font_with_names(&[(platform, encoding, 0, 1, raw.clone())]);
+            let mut face = Face::init(lib, &data, opts(size(14.0, 96, 96)))?;
+            let mut buf = [0u8; 256];
+            assert_eq!(
+                face.name(&mut buf)?,
+                raw.as_slice(),
+                "({platform}, {encoding}) is raw"
+            );
             face.deinit();
         }
         Ok(())
