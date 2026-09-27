@@ -43,10 +43,11 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** expand takes `&str` cmd (reference: `[]const u8`) and the Windows OsStr shim is lossy
   - **Oracle:** `src/os/path.zig:9-19` → **Rustty:** `crates/rustty-os/src/path.rs:33-41, 208-211`
   - **Audit's suggested fix:** Take `cmd: &[u8]`; on Windows convert bytes via WTF-8/`OsString::from_wide` equivalents rather than defaulting to an empty path.
-- [ ] **S112-F5** · CONFIRMED · `ALLOC` · missing-branch
+- [x] **S112-F5** · CONFIRMED · `ALLOC` · missing-branch
   - **What:** Flatpak host-command block additionally gated on cargo feature `flatpak`; error mapping and NUL handling differ
   - **Oracle:** `src/os/passwd.zig:58-124` → **Rustty:** `crates/rustty-os/src/passwd.rs:84-162`
   - **Audit's suggested fix:** Tie `build_config::flatpak()` to the same cargo feature (or drop the extra cfg), carry real OS errors in `Error::Os`, and truncate/handle interior NUL instead of unwrap.
+  - **Disposition (task L-4):** CLOSED — the host-command block run inside a real Flatpak sandbox (`flatpak build`, rvm): `passwd::tests::flatpak_get_reads_the_host_entry` and `passwd::tests::flatpak_spawn_failure_returns_the_host_command_error_and_closes_the_pty`, with negative controls; the slave-fd leak it found is UD320 (R13). Evidence in the LEDGER owner cell.
 - [ ] **S112-F6** · CONFIRMED · `INDIV` · missing-error-path
   - **What:** macOS pipe fallback leaks both fds when fcntl(F_SETFD) fails
   - **Oracle:** `src/os/pipe.zig:9-11` → **Rustty:** `crates/rustty-os/src/pipe.rs:55-69`
