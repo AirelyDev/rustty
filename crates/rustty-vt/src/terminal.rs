@@ -23310,8 +23310,16 @@ mod tests {
             let mut t = Terminal::init(alloc, opts(10, 2)).unwrap();
             // The matching allocator is accepted...
             let _ = t.glyph_protocol(alloc, &glyph::Request::Support);
-            // ...a different one is not.
-            let _ = t.glyph_protocol(Global, &glyph::Request::Support);
+            // ...a different one is not. The expected panic is caught so the
+            // terminal is still torn down (Miri reports the leak otherwise),
+            // then re-raised for `should_panic`.
+            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _ = t.glyph_protocol(Global, &glyph::Request::Support);
+            }));
+            t.deinit(alloc);
+            if let Err(p) = r {
+                std::panic::resume_unwind(p);
+            }
         });
     }
 }
