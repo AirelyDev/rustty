@@ -320,8 +320,7 @@ jobs:
   # rustty-crash + crates-sys/sentry-sys are already ported, so this is the
   # only missing piece of the crash-reporting pipeline.
   sentry-dsym:
-    needs: [setup, build-macos]
-    if: needs.setup.outputs.should_skip != 'true'
+    needs: [build-macos]
     runs-on: macos-latest
     steps:
       - name: Download macOS Artifacts

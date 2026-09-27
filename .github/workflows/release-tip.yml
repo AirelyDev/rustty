@@ -112,6 +112,7 @@ jobs:
               - '!PACKAGING.md'
               - '!AI_POLICY.md'
               - '!AGENTS.md'
+              - '!CLAUDE.md'
               - '!Doxyfile'
               - '!DoxygenLayout.xml'
               - '!LICENSE'
@@ -119,6 +120,7 @@ jobs:
               - '!CODEOWNERS'
               - '!.clang-format'
               - '!.editorconfig'
+              - '!.envrc'
               - '!.gitattributes'
               - '!.gitignore'
               - '!.mailmap'
@@ -544,9 +546,15 @@ jobs:
           token: ${{ secrets.GH_RELEASE_TOKEN || github.token }}
 
       # Create our appcast for Sparkle.
+      # `github.ref_name == 'main'` on all three appcast steps, as the reference
+      # has it: `setup` admits a workflow_dispatch from ANY branch, which may
+      # rebuild the per-commit binaries and move `tip`, but must never rewrite
+      # the live appcast every tip user's Sparkle reads (review P-1 F2).
       - name: Generate Appcast
         id: appcast
-        if: github.repository == 'AirelyDev/rustty'
+        if: |-
+          github.repository == 'AirelyDev/rustty' &&
+          github.ref_name == 'main'
         env:
           SPARKLE_KEY: ${{ secrets.PROD_MACOS_SPARKLE_KEY }}
         run: |
@@ -613,6 +621,7 @@ jobs:
       - name: Prep R2 Storage for Appcast
         if: |-
           github.repository == 'AirelyDev/rustty' &&
+          github.ref_name == 'main' &&
           steps.appcast.outputs.generated == 'true'
         run: |
           rm -rf blob
@@ -622,6 +631,7 @@ jobs:
       - name: Upload Appcast to R2
         if: |-
           github.repository == 'AirelyDev/rustty' &&
+          github.ref_name == 'main' &&
           steps.appcast.outputs.generated == 'true'
         uses: ryand56/r2-upload-action@b801a390acbdeb034c5e684ff5e1361c06639e7c # v1.4
         with:

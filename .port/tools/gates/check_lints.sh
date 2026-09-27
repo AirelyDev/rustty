@@ -194,6 +194,26 @@ run_pinact() {
   if [ $rc -eq 0 ]; then pass pinact; else printf '%s\n' "$out" | sed 's/^/          /'; fail pinact; fi
 }
 
+# ---------------------------------------------------------------------------
+# actionlint — validates every workflow under .github/workflows (expressions,
+# `needs` outputs, job/step keys, shell). Rustty-only: the reference runs no
+# workflow linter, but rustty's workflows are hand-translated and most of them
+# never run on this repository (the release and packaging workflows are gated
+# off), so a typo would otherwise surface only when a maintainer arms them.
+# `xtask/tests/release_workflows.rs` relies on this for YAML validity. Added by
+# parity tail P-1b after review P-1 found an undefined `needs.setup.outputs`
+# reference in release-tag.yml that nothing had checked.
+# ---------------------------------------------------------------------------
+run_actionlint() {
+  want actionlint || return 0
+  if ! command -v actionlint >/dev/null 2>&1; then
+    skip actionlint "not installed (brew install actionlint)"; return 0
+  fi
+  local out rc
+  out="$(actionlint 2>&1)"; rc=$?
+  if [ $rc -eq 0 ]; then pass actionlint; else printf '%s\n' "$out" | sed 's/^/          /'; fail actionlint; fi
+}
+
 echo "=== G-LINT :: non-Rust linters ==="
 run_shellcheck
 run_prettier
@@ -201,6 +221,7 @@ run_typos
 run_swiftlint
 run_alejandra
 run_pinact
+run_actionlint
 
 echo "--- G-LINT summary: $RAN ran, $(printf '%s' "$SKIPPED" | wc -w | tr -d ' ') skipped ---"
 if [ "$RAN" -eq 0 ]; then

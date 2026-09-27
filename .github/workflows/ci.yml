@@ -321,7 +321,7 @@ jobs:
         run: |
           set -euxo pipefail
           if [ "$RUNNER_OS" = "macOS" ]; then
-            brew install typos-cli pinact shellcheck swiftlint
+            brew install typos-cli pinact shellcheck swiftlint actionlint
           else
             sudo apt-get update
             sudo apt-get install -y shellcheck
@@ -331,6 +331,8 @@ jobs:
               | sudo tar -xz -C /usr/local/bin ./typos
             curl -fsSL https://github.com/suzuki-shunsuke/pinact/releases/download/v4.1.1/pinact_linux_amd64.tar.gz \
               | sudo tar -xz -C /usr/local/bin pinact
+            curl -fsSL https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz \
+              | sudo tar -xz -C /usr/local/bin actionlint
           fi
 
       - name: Show tool versions

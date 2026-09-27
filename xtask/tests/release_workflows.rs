@@ -45,6 +45,9 @@ struct Job {
     body: String,
     /// Jobs named by this job's `needs:` key.
     needs: Vec<String>,
+    /// The job-level `if:` expression (`    if:` at four spaces), including
+    /// the continuation lines of a `|-` / `>-` block. Empty when there is none.
+    job_if: String,
 }
 
 /// Split a workflow's `jobs:` mapping into its jobs.
@@ -52,11 +55,13 @@ struct Job {
 /// Deliberately a small line/indent scanner rather than a YAML dependency:
 /// the workspace has no YAML crate, and the only structure these assertions
 /// need is "which lines belong to which job, and what does it `need`". The
-/// workflows are validated as YAML separately by `actionlint`.
+/// workflows are validated as YAML separately by `actionlint` (G-LINT's
+/// actionlint lane, `.port/tools/gates/check_lints.sh`).
 fn parse_jobs(text: &str) -> BTreeMap<String, Job> {
     let mut jobs: BTreeMap<String, Job> = BTreeMap::new();
     let mut current: Option<String> = None;
     let mut in_jobs = false;
+    let mut in_if_block = false;
     for line in text.lines() {
         if line.starts_with("jobs:") {
             in_jobs = true;
@@ -76,12 +81,14 @@ fn parse_jobs(text: &str) -> BTreeMap<String, Job> {
             && line.trim_end().ends_with(':')
             && !line.trim_start().starts_with('#');
         if is_job_header {
+            in_if_block = false;
             let name = line.trim().trim_end_matches(':').to_string();
             jobs.insert(
                 name.clone(),
                 Job {
                     body: String::new(),
                     needs: Vec::new(),
+                    job_if: String::new(),
                 },
             );
             current = Some(name);
@@ -91,6 +98,22 @@ fn parse_jobs(text: &str) -> BTreeMap<String, Job> {
             let job = jobs.get_mut(name).expect("job inserted above");
             job.body.push_str(line);
             job.body.push('\n');
+            // The job-level `if:`: exactly four spaces of indent (a step's
+            // `if:` sits at eight). A block scalar continues on the lines
+            // indented deeper than the key.
+            if let Some(rest) = line.strip_prefix("    if:") {
+                job.job_if = rest.trim().to_string();
+                in_if_block = matches!(job.job_if.as_str(), "|" | "|-" | ">" | ">-");
+                continue;
+            }
+            if in_if_block {
+                if line.starts_with("      ") {
+                    job.job_if.push(' ');
+                    job.job_if.push_str(line.trim());
+                    continue;
+                }
+                in_if_block = false;
+            }
             // `    needs: [a, b]` — the inline form these workflows use.
             if let Some(rest) = line.strip_prefix("    needs:") {
                 job.needs = rest
@@ -137,6 +160,48 @@ fn guarded_jobs(jobs: &BTreeMap<String, Job>, marker: &str) -> BTreeSet<String> 
     }
 }
 
+/// Status functions that make GitHub run a job even when a job it `needs` was
+/// skipped. A job whose `if:` uses one is NOT gated by its needs.
+const RUNS_PAST_SKIPPED_NEEDS: &[&str] = &["always()", "!cancelled()", "cancelled()", "failure()"];
+
+/// The jobs GitHub can only run when `gate` holds (review P-1 F6).
+///
+/// Stricter than [`guarded_jobs`], which is kept for the repository pin (a
+/// step-level `github.repository` check on the publishing step is enough
+/// there): here the gate must be in the job-level `if:` itself — a gate inside
+/// a step's `if:` leaves the job running — and a job is gated through `needs`
+/// only when all its needs are gated AND its own `if:` does not override the
+/// skip with `always()` / `!cancelled()` / `failure()` (the shape of the
+/// reference's `required` aggregators).
+fn arming_gated_jobs(jobs: &BTreeMap<String, Job>, gate: &str) -> BTreeSet<String> {
+    let mut gated: BTreeSet<String> = jobs
+        .iter()
+        .filter(|(_, j)| j.job_if.contains(gate))
+        .map(|(n, _)| n.clone())
+        .collect();
+    loop {
+        let mut changed = false;
+        for (name, job) in jobs {
+            if gated.contains(name) || job.needs.is_empty() {
+                continue;
+            }
+            if RUNS_PAST_SKIPPED_NEEDS
+                .iter()
+                .any(|f| job.job_if.contains(f))
+            {
+                continue;
+            }
+            if job.needs.iter().all(|n| gated.contains(n)) {
+                gated.insert(name.clone());
+                changed = true;
+            }
+        }
+        if !changed {
+            return gated;
+        }
+    }
+}
+
 fn read_workflow(file: &str) -> String {
     let path = workflows_dir().join(file);
     std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
@@ -172,7 +237,7 @@ fn every_release_job_is_gated_on_the_arming_variable() {
         let text = read_workflow(file);
         let jobs = parse_jobs(&text);
         assert!(!jobs.is_empty(), "{file}: parsed no jobs");
-        let gated = guarded_jobs(&jobs, GATE);
+        let gated = arming_gated_jobs(&jobs, GATE);
         for name in jobs.keys() {
             assert!(
                 gated.contains(name),
@@ -190,7 +255,7 @@ fn publishing_steps_exist_and_live_only_in_gated_jobs() {
     for file in RELEASE_WORKFLOWS {
         let text = read_workflow(file);
         let jobs = parse_jobs(&text);
-        let gated = guarded_jobs(&jobs, GATE);
+        let gated = arming_gated_jobs(&jobs, GATE);
         for (name, job) in &jobs {
             for marker in PUBLISHING_MARKERS {
                 if job.body.contains(marker) {
@@ -456,10 +521,10 @@ fn deferred_tooling_workflows_are_gated_on_their_arming_variable() {
         let jobs = parse_jobs(&text);
         assert!(!jobs.is_empty(), "{file}: parsed no jobs");
         assert!(
-            jobs.values().any(|j| j.body.contains(gate)),
-            "{file}: no job carries {gate} itself"
+            jobs.values().any(|j| j.job_if.contains(gate)),
+            "{file}: no job carries {gate} in its own job-level `if:`"
         );
-        let gated = guarded_jobs(&jobs, gate);
+        let gated = arming_gated_jobs(&jobs, gate);
         for name in jobs.keys() {
             assert!(
                 gated.contains(name),
@@ -483,6 +548,130 @@ fn deferred_tooling_workflows_are_gated_on_their_arming_variable() {
                 "{file}: drives `xtask {sub}`, which `xtask help` does not list"
             );
         }
+    }
+}
+
+/// The two shapes review P-1 F6 showed the body-substring model accepting:
+/// a job whose gate sits only in a STEP's `if:` (GitHub still runs the job),
+/// and a job with `if: always()` that needs a gated job (GitHub runs it when
+/// the need is skipped). Both must count as UNGATED; a plain `needs` on a
+/// gated job and a block-scalar job-level `if:` must still count as gated.
+#[test]
+fn arming_gate_rejects_step_level_and_always_jobs() {
+    let sample = "\
+name: X
+on: push
+jobs:
+  gated:
+    if: vars.RUSTTY_NIX_ENABLED == 'true'
+    steps:
+      - run: echo a
+  block:
+    if: |-
+      github.repository == 'AirelyDev/rustty' &&
+      vars.RUSTTY_NIX_ENABLED == 'true'
+    steps:
+      - run: echo b
+  follower:
+    needs: [gated]
+    steps:
+      - run: echo c
+  aggregator:
+    needs: [gated]
+    if: always()
+    steps:
+      - run: echo d
+  steponly:
+    steps:
+      - name: only this step is gated
+        if: vars.RUSTTY_NIX_ENABLED == 'true'
+        run: echo e
+";
+    let gate = "vars.RUSTTY_NIX_ENABLED == 'true'";
+    let jobs = parse_jobs(sample);
+    assert_eq!(jobs["aggregator"].job_if, "always()");
+    let gated = arming_gated_jobs(&jobs, gate);
+    assert!(gated.contains("gated"));
+    assert!(gated.contains("block"), "a block-scalar job-level if: must count");
+    assert!(gated.contains("follower"));
+    assert!(
+        !gated.contains("aggregator"),
+        "an `if: always()` job runs past its skipped needs"
+    );
+    assert!(
+        !gated.contains("steponly"),
+        "a gate in a step's if: does not stop the job"
+    );
+    // The legacy body-substring model accepts both — the reason the arming
+    // tests no longer use it.
+    let loose = guarded_jobs(&jobs, gate);
+    assert!(loose.contains("aggregator") && loose.contains("steponly"));
+}
+
+/// `release-tip.yml` may be dispatched from any branch (`setup` admits every
+/// `workflow_dispatch`), so every step that generates or uploads the tip
+/// appcast must require `github.ref_name == 'main'`, as the reference's
+/// `Generate Appcast`, `Prep R2 Storage for Appcast` and `Upload Appcast to
+/// R2` do. Otherwise a branch dispatch rewrites the live appcast every tip
+/// user's Sparkle reads (review P-1 F2).
+#[test]
+fn tip_appcast_steps_run_only_on_main() {
+    const MAIN: &str = "github.ref_name == 'main'";
+    let text = read_workflow("release-tip.yml");
+    let mut steps: Vec<(String, String)> = Vec::new(); // (step text, step if)
+    let mut cur: Option<(String, String)> = None;
+    let mut in_if = false;
+    for line in text.lines() {
+        if line.trim_start().starts_with('#') {
+            continue;
+        }
+        if line.starts_with("      - ") {
+            if let Some(st) = cur.take() {
+                steps.push(st);
+            }
+            cur = Some((String::new(), String::new()));
+            in_if = false;
+        } else if !line.starts_with("       ") && !line.trim().is_empty() {
+            // Out of the steps list (a new job or top-level key).
+            if let Some(st) = cur.take() {
+                steps.push(st);
+            }
+            in_if = false;
+            continue;
+        }
+        let Some((body, step_if)) = cur.as_mut() else {
+            continue;
+        };
+        body.push_str(line);
+        body.push('\n');
+        if let Some(rest) = line.strip_prefix("        if:") {
+            *step_if = rest.trim().to_string();
+            in_if = matches!(step_if.as_str(), "|" | "|-" | ">" | ">-");
+        } else if in_if && line.starts_with("          ") {
+            step_if.push(' ');
+            step_if.push_str(line.trim());
+        } else {
+            in_if = false;
+        }
+    }
+    if let Some(st) = cur.take() {
+        steps.push(st);
+    }
+    let appcast: Vec<&(String, String)> =
+        steps.iter().filter(|(b, _)| b.contains("appcast")).collect();
+    assert_eq!(
+        appcast.len(),
+        3,
+        "expected the three appcast steps (generate, prep, upload); found {}",
+        appcast.len()
+    );
+    for (body, step_if) in appcast {
+        let first = body.lines().next().unwrap_or("").trim();
+        assert!(
+            step_if.contains(MAIN),
+            "release-tip.yml step `{first}` touches the appcast but its if: \
+             (`{step_if}`) does not require {MAIN}"
+        );
     }
 }
 
