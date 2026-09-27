@@ -177,10 +177,10 @@ fn eql_ignore_case_wtf8(a: &[u8], b: &[u8]) -> bool {
     // some codepoints that have a different length uppercase UTF-8 representations
     // than their lowercase counterparts, e.g. U+0250 (2 bytes) <-> U+2C6F (3 bytes).
     // There are 7 such codepoints in the uppercase data used by Windows.
-    let mut a_it = wtf8_code_points(a);
+    let a_it = wtf8_code_points(a);
     let mut b_it = wtf8_code_points(b);
-    loop {
-        let Some(a_cp) = a_it.next() else { break };
+    // while (true) { const a_cp = a_wtf8_it.nextCodepoint() orelse break; ... }
+    for a_cp in a_it {
         let Some(b_cp) = b_it.next() else {
             return false;
         };
@@ -226,7 +226,7 @@ fn wtf8_code_points(mut s: &[u8]) -> impl Iterator<Item = u32> + '_ {
             && s[1..len].iter().all(|&c| c & 0xc0 == 0x80)
             && match len {
                 3 => !(first == 0xe0 && s[1] < 0xa0),
-                4 => !(first == 0xf0 && s[1] < 0x90) && !(first == 0xf4 && s[1] > 0x8f),
+                4 => !((first == 0xf0 && s[1] < 0x90) || (first == 0xf4 && s[1] > 0x8f)),
                 _ => true,
             };
         if !valid {
