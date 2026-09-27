@@ -962,7 +962,15 @@ mod tests {
 
         let map = e.create_map();
         // The malformed `NOEQUALS` entry is skipped, like the oracle's parser.
+        #[cfg(not(windows))]
         assert_eq!(map.len(), 3);
+        // On Windows `putWindowsBlock` reads it as a name with an empty value
+        // (a real Windows block always has the `=`; CreateProcess enforces it).
+        #[cfg(windows)]
+        {
+            assert_eq!(map.len(), 4);
+            assert_eq!(map.get(b"NOEQUALS").map(Vec::as_slice), Some(&b""[..]));
+        }
         assert_eq!(
             map.get(&b"WEIRD"[..]).map(Vec::as_slice),
             Some(&[0xff_u8, 0xfe, b'x'][..])
