@@ -8142,7 +8142,11 @@ capture itself was a global-heap `Vec`. It now allocates through
 terminal stream and for `rustty_osc_new` parsers. Proving tests: `CountingCAllocator` (`rustty-vt-c/src/test_util.rs`)
 counting/rejecting arms in `terminal.rs`, `render/tests.rs`,
 `selection_gesture/tests.rs`; W36-B06 zero-length typed-helper short-circuit in
-`rustty-vt-c/src/allocator.rs` + `rustty-lib/src/allocator.rs`.
+`rustty-vt-c/src/allocator.rs` + `rustty-lib/src/allocator.rs`. Since parity
+tail S7-8 the selection-gesture `new`/`free` and `event_new`/`event_free`
+lifecycles allocate their storage through the `rustty_vt::alloc::VtAllocator`
+handle (as render_state `new`/`free` do since S7-5) rather than
+`create_raw`/`destroy_raw`.
 
 **Tier 2 is CLOSED** (parity tail S7-3..S7-8, `.port/parity-closure/S7-ALLOCATOR-DESIGN.md`
 option B; closed by task S7-8, NEW-FINDINGS N334). The reference threads `alloc`
@@ -8203,8 +8207,14 @@ reference's `OUT_OF_MEMORY`/log-and-drop arms. Item by item:
 port-only transient allocations the reference does not make at all (formatter
 HTML/VT header buffers, where the reference uses a fixed 1024-byte stack buffer;
 the hyperlink URI copy; `StringMap`'s search-match copies; the per-wrapper
-`Box<dyn ZigAllocator>` adapters the Tier 1 wrappers still hold), so there is no
-caller allocation to route; `Screen::selection_string`'s output `Vec` (not
+`Box<dyn ZigAllocator>` adapters the Tier 1 wrappers still hold; the kitty
+temporary-directory path, which the reference copies into a fixed buffer inside
+the caller-allocated terminal wrapper and the limits borrow, while the port's
+limits own a `Vec` copy per screen), so there is no caller allocation to route;
+the snapshot decoder's `Source` and `ReaderState` (the reference keeps them
+inline in the caller-allocated `DecoderWrapper`; the port boxes them on the
+Rust heap so the core decoder's stored `&mut` never overlaps wrapper accesses,
+a Stacked Borrows requirement); `Screen::selection_string`'s output `Vec` (not
 reachable from the C API, and every caller passes the Rust heap handle); the
 Windows-only `std.Io.Threaded` box in `c/terminal.zig` `Io.init` (the port does
 not build for Windows). Page memory stays on the page allocator, as in the

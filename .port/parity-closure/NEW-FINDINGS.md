@@ -5893,15 +5893,19 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   allocator; `continuation_alloc_io` takes the allocator again and returns an `AVec` bound to it;
   `allocator::into_c_bytes` hands the exactly-sized buffer across the ABI (the non-null empty sentinel for 0
   bytes, as before).
-- **T3 residuals**: the writer sees the port's write granularity. The continuation tracker writes through
-  `std::io::Write` (`write` of one byte, `ensureUnusedCapacity(1 + 1 + 1)` = 132 bytes) where the reference's
-  `writeByte` rebases (`growCapacity(1)` = 129). The formatter's write granularity follows the port formatter's
-  (N325).
+- **T3 residuals**: the formatter's write granularity follows the port formatter's (N325). The continuation
+  tracker's writes were a one-byte `write` (`ensureUnusedCapacity(1 + 1 + 1)` = 132 bytes) where the
+  reference's `writeByte` rebases (`growCapacity(1)` = 129); S7-8b (review F4) made `Tracker::write` and
+  `Stream::write_continuation` take a `stream_continuation::ByteWriter` (a `std::io::Write` with `writeByte`,
+  overridden by `alloc::AllocatingWriter`), so the first growth is 129 as in the reference. Negative control
+  (the override removed): `continuation_writers_route_through_their_allocators` fails, 129 vs 132.
+- **NULL allocator**: `format_alloc_null_allocator_round_trip` (S7-8b, review F3) produces through the Global
+  arm and frees with `rustty_free(NULL, ..)`, text and empty output.
 - **verification** (rustty-vt-c unless noted): `format_alloc_writer_routes_through_the_callers_allocator` and
   `selection_format_alloc_writer_routes_…` (1 allocation of growCapacity(11) = 144 bytes, 1 remap to 5, no
   free), `encode_alloc_writer_routes_…` (caller: 1 allocation of 153, 2 remaps, 1095 bytes handed over;
   terminal: the continuation copy and the record scratch, N332), `continuation_writers_route_through_their_allocators`
-  (`continuation_alloc`: 132 then a remap to 4; `restoreContinuation`: exactly one 132-byte allocation and free
+  (`continuation_alloc`: 129 then a remap to 4; `restoreContinuation`: exactly one 129-byte allocation and free
   on the terminal's allocator, and `OutOfMemory` when it is refused), the failure arms of each (first growth
   refused; remap refused and the copy refused), `allocation_failure_sweep_through_the_allocating_writers`
   (alloc loop, remap loop, and an alloc loop with every remap refused, which reaches the `toOwnedSlice`
@@ -5931,7 +5935,7 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   then the handle's growth; the reference's `ArrayList` inside the stack-fallback allocator can spill a little
   earlier and grows by `growCapacity` (as recorded for S7-4's `StackFallbackWriter`).
 - **verification**: `encode_alloc_writer_routes_through_the_callers_allocator` pins the terminal side: 2
-  allocations (the continuation copy, 132; the scratch spill, 513), 2 remaps, 2 frees, live bytes unchanged.
+  allocations (the continuation copy, 129 since S7-8b; the scratch spill, 513), 2 remaps, 2 frees, live bytes unchanged.
   Negative control (`init` in place of `init_in` in `encode`): fails (`left: 2, right: 1`). The C-API writer
   sweep fails the spill on the terminal's allocator (`encode_alloc` reports OUT_OF_MEMORY).
 - **state**: CLOSED (task S7-8).
@@ -5978,14 +5982,24 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   borrows the page's bytes); `StringMap::shallow_copy` (`string_map.rs:108`; the reference's copy is shallow);
   the `Box<dyn ZigAllocator>` adapters that `rustty_lib::allocator::default` builds for a C allocator in the
   Tier 1 wrappers and helpers (`rustty-vt-c/src/terminal.rs:1620`, `:1958`, `render.rs:1354`, `:1549`,
-  `cwrap.rs`); the response strings and key snapshots listed in N274. These are cleanup candidates (they cost a
-  Rust-heap allocation the reference does not make), not routing gaps.
+  `cwrap.rs`); the kitty temporary-directory path (`rustty-vt-c/src/terminal.rs:3173-3190`: one `to_vec` plus
+  a clone per screen into `TemporaryFileLimit::Enabled { directory: Vec<u8> }`, where the reference copies the
+  bytes into `TerminalWrapper.tmp_dir_path`, a fixed `[max_path_bytes]u8` inside the caller-allocated wrapper,
+  and the limits borrow it; making the limits borrow is a rustty-vt kitty-type change); the response strings
+  and key snapshots listed in N274. These are cleanup candidates (they cost a Rust-heap allocation the reference
+  does not make), not routing gaps (added by S7-8b, review S7-8 F1).
 - **stays on the Rust heap although the reference uses the passed allocator, and why**:
   `Screen::selection_string_impl`'s output (`crates/rustty-vt/src/screen.rs:4659`, a `Vec` where the
   reference's `Writer.Allocating` is on `alloc`): not reachable from the C API, and every caller
   (rustty-core `surface.rs`, rustty-apprt-c, tests) passes the Rust heap handle, so the allocator is the same.
   `c/terminal.zig` `Io.init`'s `alloc.create(std.Io.Threaded)` is Windows-only (other targets use `TinyIo`,
-  no allocation); the port does not build for Windows.
+  no allocation); the port does not build for Windows. The snapshot decoder's `Source` and `ReaderState`
+  (`rustty-vt-c/src/snapshot.rs:318-324`, `decoder_new_source`: two `Box`es freed by `decoder_free`): the
+  reference keeps `DecoderWrapper.source` inline (`c/snapshot.zig:59-112, 157-176`), so its bytes are part of
+  the caller-allocated wrapper; the port makes the same single caller call for a smaller wrapper plus two
+  Rust-heap allocations, because the core decoder holds a `&mut` to the source for the wrapper's lifetime and
+  that borrow must not overlap accesses to the wrapper (Stacked Borrows; the `DecoderWrapper` PORT NOTE). Added
+  by S7-8b (review S7-8 F1).
 - **page memory** stays on the page allocator in both (design §1.2).
 - **T3**: element sizes (N325), writer call granularity (N331), the record scratch's spill (N332), and
   allocator_api2 `Vec` growth where the port has not switched to `growCapacity` are call-shape residuals, not
