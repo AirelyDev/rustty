@@ -3580,6 +3580,44 @@ mod tests {
         }
     }
 
+    /// UD344 (R13): on `freetype_windows` the family name `+list-fonts` prints
+    /// is `Face.name`'s first family record. Arial's is a Unicode-platform
+    /// UTF-16BE record, which the reference returns raw (`\0A\0r\0i\0a\0l`);
+    /// the port decodes it. Needs a stock Windows install (Arial), like the
+    /// reference's `test "windows"` above.
+    #[test]
+    #[cfg_attr(
+        not(rustty_font_backend = "freetype_windows"),
+        ignore = "freetype_windows backend only (R14)"
+    )]
+    fn windows_family_name_is_decoded_from_utf16() {
+        #[cfg(rustty_font_backend = "freetype_windows")]
+        {
+            use crate::library::Library;
+
+            let mut lib = Library::init().unwrap();
+            let mut win = Windows::init(lib);
+            let mut it = win
+                .discover(Descriptor {
+                    family: Some(b"Arial".to_vec()),
+                    size: 12.0,
+                    ..Descriptor::default()
+                })
+                .unwrap();
+            let mut face = it.next().unwrap().expect("TestFontNotFound");
+
+            let mut buf = [0u8; 256];
+            assert_eq!(face.family_name(&mut buf).unwrap(), b"Arial");
+            let mut buf = [0u8; 256];
+            assert_eq!(face.name(&mut buf).unwrap(), b"Arial");
+
+            face.deinit();
+            it.deinit();
+            win.deinit();
+            lib.deinit();
+        }
+    }
+
     // -----------------------------------------------------------------------
     // task-14c-4 fix round 1 (F4): the two live reference `log.warn` sites in
     // `discovery.zig` (`:762`, `:779`) that NO ledger row named. Recorded as
