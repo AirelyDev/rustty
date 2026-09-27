@@ -7845,7 +7845,6 @@ mod tests {
             let live = || counting.live_bytes.get();
             let mut t = Terminal::init(alloc, opts(80, 24)).unwrap();
             kc_reset();
-            let ptr: *mut Terminal = &mut t;
             {
                 let mut s = t.vt_stream();
                 s.handler.effects.write_pty = Some(kc_write_pty);
@@ -7912,11 +7911,14 @@ mod tests {
 
                 // OSC 72 data serving: 512 bytes on the stack.
                 s.next_slice(b"\x1B]72;t=a;text/plain\x1B\\");
-                let serve = |data: &[u8]| {
+                let serve = |s: &mut Stream<'_>, data: &[u8]| {
                     let mut aw: Vec<u8> = Vec::new();
-                    // SAFETY: the stream's terminal; no other borrow of its
-                    // DnD slot is live.
-                    unsafe { (*ptr).kitty_dnd.as_mut() }
+                    // SAFETY: the stream's own terminal pointer (derived from
+                    // the `&mut t` that `vt_stream` took, so it stays valid
+                    // while the stream lives); no other borrow of its DnD slot
+                    // is live. (A pointer taken from `&mut t` before
+                    // `vt_stream` would be invalidated by that call's retag.)
+                    unsafe { (*s.handler.terminal).kitty_dnd.as_mut() }
                         .unwrap()
                         .drag_drop(
                             alloc,
@@ -7938,9 +7940,9 @@ mod tests {
                         )
                         .unwrap();
                 };
-                serve(b"x");
+                serve(&mut s, b"x");
                 let small = cost(&mut s, b"\x1B]72;t=r:x=1\x1B\\");
-                serve(&[b'Z'; 600]);
+                serve(&mut s, &[b'Z'; 600]);
                 let large = cost(&mut s, b"\x1B]72;t=r:x=1\x1B\\");
                 assert_eq!(small + 1, large, "OSC 72 data serving spills once");
 

@@ -875,9 +875,9 @@ static PAGE_FREE_LIST: rustty_datastruct::wasm_page_pool::FreeList =
 // freestanding targets (`os.tag == .freestanding and !arch.isWasm()`) —
 // "Native freestanding targets don't have an OS page allocator, so use the
 // allocator provided by the embedder." — pages come from the embedder's
-// allocator. The port has no caller allocator to thread: `MemoryPool::init`
-// takes only `preheat` (see its PORT NOTE — the Rust page allocator is a
-// process-wide fact), and `rustty_os::page_allocator` is `mmap`-backed, which
+// allocator. Since parity tail S7-2 `MemoryPool::init(alloc, page_backing_alloc(),
+// preheat)` takes the caller's allocator (N264), but the page arm here still
+// has no use for it: `rustty_os::page_allocator` is `mmap`-backed, which
 // does not exist on `target_os = "none"`. The freestanding arm is therefore
 // NOT compiled here (this crate does not build for a `none` OS today; the
 // honest record of what such a build would need is in
