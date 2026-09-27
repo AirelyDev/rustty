@@ -1264,8 +1264,8 @@ pub mod windows_tty {
                         // PORT NOTE: reference defect (R13), UPSTREAM-DEFECTS.md UD245.
                         // Upstream maps `0x76` (VK_F7) to `Key.f8` (tty.zig:437), a
                         // typo in an otherwise one-to-one F1-F24 table, so F7 reads as
-                        // F8. Mapped to `f7`. Windows-only code, neither compiled nor run on
-                        // Windows here (UD245).
+                        // F8. Mapped to `f7`. Windows-only code, run on Windows by task W-1
+                        // (`windows_tty::tests::function_key_records_decode_to_their_own_keys`).
                         0x76 => key::f7 as u16,
                         0x77 => key::f8 as u16,
                         0x78 => key::f9 as u16,
@@ -1562,6 +1562,65 @@ pub mod windows_tty {
         /// `resetSignalHandler` (there is no SIGWINCH), so this is the empty
         /// counterpart the `Tty` alias needs.
         pub fn reset_signal_handler() {}
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        /// UD245: the console key records for F6, F7 and F8 (`VK_F6` 0x75,
+        /// `VK_F7` 0x76, `VK_F8` 0x77) decode to their own keys; upstream
+        /// decodes 0x76 as F8. The tty is built by hand (no console is needed
+        /// to decode a record); `event_from_record` touches only `buf`.
+        #[test]
+        fn function_key_records_decode_to_their_own_keys() {
+            let mut tty = WindowsTty {
+                stdin: std::ptr::null_mut(),
+                stdout: std::ptr::null_mut(),
+                initial_codepage: 0,
+                initial_input_mode: 0,
+                initial_output_mode: 0,
+                buf: [0; 4],
+                tty_writer: TtyWriter {
+                    handle: std::ptr::null_mut(),
+                    buf: Vec::new(),
+                },
+                last_mouse_button_press: 0,
+                event_state: EventState::default(),
+            };
+            let this: *mut WindowsTty = &mut tty;
+            let mut parser = Parser::default();
+            for (vk, want) in [(0x75u16, key::f6), (0x76, key::f7), (0x77, key::f8)] {
+                // SAFETY: an all-zero INPUT_RECORD is a valid POD value.
+                let mut record: INPUT_RECORD = unsafe { core::mem::zeroed() };
+                record.EventType = 0x0001;
+                record.Event.KeyEvent = KEY_EVENT_RECORD {
+                    bKeyDown: 1,
+                    wRepeatCount: 1,
+                    wVirtualKeyCode: vk,
+                    wVirtualScanCode: 0,
+                    uChar: union_unnamed_248 { UnicodeChar: 0 },
+                    dwControlKeyState: 0,
+                };
+                // SAFETY: `this`, `record` and the state/parser pointers are
+                // live locals; nothing else borrows them.
+                let event = unsafe {
+                    WindowsTty::event_from_record(
+                        this,
+                        &record,
+                        std::ptr::addr_of_mut!((*this).event_state),
+                        &mut parser,
+                    )
+                }
+                .expect("event_from_record");
+                match event {
+                    Some(Event::KeyPress(k)) => {
+                        assert_eq!(want, k.codepoint, "VK 0x{vk:02x}")
+                    }
+                    _ => panic!("VK 0x{vk:02x}: no key press"),
+                }
+            }
+        }
     }
 }
 
