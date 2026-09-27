@@ -6588,3 +6588,245 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
     by name in `MIRI_EXCEPTIONS.md`.
   - The other S7 sweeps already shrink their corpus under `cfg(miri)`.
 - **state**: CLOSED (task S7-9). Miri confirmation is the controller's lane.
+
+## N370 — packaging manifests: the flatpak and snap dropped reference build flags; both flatpaks now verified offline
+
+- **id**: N370. Not a ledger row: parity tail P-1 (packaging parity), 2026-09-27.
+- **severity**: medium (a release flatpak shipped Debug-only resources). **kind**: build-flag translation.
+- **Found by** diffing every reference packaging file, after the R2 rename, against Rustty's
+  (`flatpak/*`, `snap/*`), at the pin `20abdb50a`.
+- **Fixed**:
+  - `flatpak/io.airely.rustty.yml`: `xtask resources` ran with its default `--optimize Debug`, so the
+    release flatpak installed the terminfo source and termcap that only the reference's Debug build
+    installs; it now passes `--optimize ReleaseFast` (the resource half of `-Doptimize=ReleaseFast`).
+    `-Dstrip=false` is now `CARGO_PROFILE_RELEASE_DEBUG=true` + `CARGO_PROFILE_RELEASE_STRIP=false`, so
+    flatpak-builder gets the symbols for the `.Debug` extension (measured: `io.airely.rustty.Debug`
+    exported with content).
+  - `flatpak/io.airely.rustty-debug.yml`: `--optimize Debug` (the reference's `-Doptimize=Debug`) in
+    place of `--debug`. Its header claimed VERIFIED with the RELEASE manifest's commands; it had never
+    been built. Now built and recorded.
+  - `snap/snapcraft.yaml`: `grade: stable` (was `devel`); the dropped `#refresh-mode` comment;
+    `-Dpatch-rpath=$ORIGIN/../usr/lib/<triplet>:/snap/core24/current/lib/<triplet>` as `xtask patchelf
+    --patch-rpath` (the S63-F4 port); `--optimize ReleaseFast`; and `-fno-sys=gtk4-layer-shell` as a
+    `meson` part building gtk4-layer-shell 1.1.0 (the flatpak's pinned release): core24 does not package
+    it and rustty links it through pkg-config with no vendored copy. UNVERIFIED (V24).
+  - `typos.toml`: the reference's `# TinyIo` / `tio` / `WRONLY` block had lost its comment and `WRONLY`.
+- **Recorded, not changed**: `-Dcpu=baseline` (cargo's default target CPU is the baseline);
+  `-fno-sys=oniguruma` (always vendored); the Zig module and pandoc in `dependencies.yml` (no Zig; man
+  pages are generated in-process); `flatpak/zig-packages.json` (NON_PORTS G13 §6: the manifests build
+  from the vendored `xtask dist` tarball with `CARGO_NET_OFFLINE`).
+- **Verified (rvm, Fedora 44 aarch64, org.flatpak.Builder user-level, GNOME 50 SDK + rust-stable and
+  llvm21 extensions)**: both manifests built offline from the `xtask dist` tarball, installed from a
+  local repo and run. Release (rebuilt with `--disable-cache` after the xtask fixes): `+version` ->
+  `Rustty 0.1.0-dev+0000000`, `build mode : .ReleaseFast`, `renderer.OpenGL`, GTK 4.22.5 runtime;
+  `share/terminfo` has only the compiled database; no `share/rustty/webdata` (N373); the
+  `/org/freedesktop/Flatpak/Development` host-command path is in the binary. Debug: `-debug`
+  desktop/metainfo/D-Bus names, `rustty.terminfo` + `rustty.termcap` installed. On both,
+  `desktop-file-validate` passes and `appstreamcli validate --no-net` passes (one pedantic note:
+  `releases-info-missing`, since Rustty has no tagged releases). Of the plain `--target-os linux`
+  resources: `systemd-analyze --user verify` passes on `app-io.airely.rustty.service`; the Nautilus
+  extension byte-compiles; the Dolphin service menu fails `desktop-file-validate` (Type=Service keys)
+  exactly as the reference's byte-identical `ghostty_dolphin.desktop` does: it is a KDE service menu,
+  not an XDG application entry. The flatpak's Rust is the rust-stable extension (1.98.1), not the
+  `rust-toolchain.toml` pin (1.93.1), as its manifest records.
+- **state**: CLOSED (P-1), snap UNVERIFIED (V24).
+
+## N371 — `xtask resources`: the Linux app id ignored the optimize mode
+
+- **id**: N371. P-1. **severity**: medium. **kind**: behavioural difference.
+- `GhosttyResources.zig:268-280` derives the desktop name (` (Debug)`) and the app id (`-debug`) from
+  `-Doptimize` (Debug and ReleaseSafe are debug). `xtask resources` took them from a separate `--debug`
+  flag, so every Debug run without `--debug` installed the release id and a ReleaseSafe build could not
+  get the debug id at all.
+- **Fixed**: `linux_app_is_debug(optimize, --debug)` in `xtask/src/main.rs`; `--debug` stays as an
+  override. Callers now pass the mode: PACKAGING.md, `nix/package.nix` (mapped from its `optimize`),
+  both flatpak manifests, the snap, and G-XTASK arms 2/3 (`--optimize ReleaseFast`).
+- **Test**: `tests::linux_app_debug_id_follows_the_optimize_mode` (xtask). Negative control (the id
+  taken from the flag alone): fails at the `Optimize::Debug` assertion.
+- **state**: CLOSED (P-1).
+
+## N372 — the CMake-built macOS lib-vt had rustc's 11.0 floor, not the reference's 13.0
+
+- **id**: N372. P-1. **severity**: low. **kind**: build-option translation.
+- `Config.zig:143-150` gives every macOS target `osVersionMin` 13.0 unless the caller set one;
+  `xtask xcframework` and the metallib already applied it, but `CMakeLists.txt`'s cargo invocation did
+  not, so `cmake --build` produced a dylib with `minos 11.0`.
+- **Fixed**: on Apple the cargo command runs with `MACOSX_DEPLOYMENT_TARGET=13.0`, or the caller's own
+  value when set (the reference's "if we have no minimum OS version"). Measured with `vtool
+  -show-build`: `minos 13.0` through CMake; `minos 11.0` for the same build without the variable.
+- **Not changed**: a plain `cargo build` still gets rustc's default (a `.cargo/config.toml` `[env]`
+  would collide with the one `xtask dist` writes into the tarball); recorded here.
+- **state**: CLOSED (P-1) for the CMake path.
+
+## N373 — `-Demit-webdata` had no counterpart: every resources run installed the website data
+
+- **id**: N373. P-1. **severity**: low. **kind**: missing build option.
+- The reference installs `share/ghostty/webdata/{config,actions,commands}.mdx` only under
+  `-Demit-webdata` ("Build the website data for the website.", default false; `build.zig:109`,
+  `Config.zig:531-535`). `res_misc::gen_misc` always wrote them, so they shipped in the app bundle, the
+  flatpak and the snap.
+- **Fixed**: `xtask resources --emit-webdata <bool>` (default false) gates `gen_webdata`. G-XTASK arm 1
+  asserts no webdata by default and arm 2 (`--emit-webdata true`) asserts all three `.mdx`; negative
+  control (always emit): arm 1 RED "webdata emitted without --emit-webdata". Measured in the release
+  flatpak: no `share/rustty/webdata`.
+- **state**: CLOSED (P-1).
+
+## N374 — `nix.yml` and `snap.yml` ported; `flatpak.yml` aligned with the reference
+
+- **id**: N374. P-1. **severity**: low. **kind**: missing CI workflows.
+- **Added** `.github/workflows/nix.yml` (the reference's `check-zig-cache-hash` in Cargo shape:
+  `nix develop -c cargo metadata --locked`, plus its `Required Checks: Nix` aggregator) and
+  `.github/workflows/snap.yml` (the reference's snapcraft build: udev + LXD cgroup workaround +
+  `snapcore/action-build`, x86_64 and arm64, building the vendored tarball in-job as `flatpak.yml`
+  does). Both UNVERIFIED and INERT behind `RUSTTY_NIX_ENABLED` / `RUSTTY_SNAP_ENABLED` (user deferral,
+  V24). `xtask/tests/release_workflows.rs::deferred_tooling_workflows_are_gated_on_their_arming_variable`
+  proves every job is gated; negative controls: a removed gate and an extra ungated job both fail it.
+  `actionlint` is clean on all four touched workflows.
+- **flatpak.yml**: the aarch64 leg (`ubuntu-24.04-arm`), the reference's `gnome-47` image, PR paths
+  equal to push paths, `actions/checkout` v7.0.1 (also in `ci.yml`); the header records the merged
+  smoke/publish shape, the missing repository guard (the merged smoke half runs on forks, as the
+  reference's `build-flatpak` does) and the CLI in place of the flatpak-builder action. UNVERIFIED on
+  GitHub (the arm64 container image is assumed multi-arch, as the reference uses it on arm64).
+- **state**: CLOSED (P-1); execution debt V24.
+
+## N375 — Nix, dotfile, example and macOS-plist parity fixes
+
+- **id**: N375. P-1. **severity**: low. **kind**: content parity.
+- **Fixed**:
+  - `flake.nix`: `packages.default` was `librustty-vt` on every system; the reference's is the app on
+    the platforms that build it (Linux). UNVERIFIED (V24).
+  - `nix/devShell.nix`: `kaitai-struct-compiler` restored (the header's reason "G-KAITAI parses
+    in-process" was wrong: `check_kaitai_snapshot.sh` needs the compiler), python `wasmtime` restored
+    (`crates/rustty-vt-c/types-schema-verify.py` imports it), and the DROPPED list now names every
+    dropped input (the vendored C libraries, the commented-out ones, the AFL++ macOS block).
+  - `nix/tests.nix`: header said the VM tests are in `checks`; flake.nix wires them as `vmChecks`.
+  - `.envrc`: the reference text (it had been reworded and watched `librustty-vt.nix` instead of
+    `package.nix`/`wraptest.nix`); the reference's own wrong `wraptest` path is UD345.
+  - `.gitignore`, `.prettierignore`, `.gitattributes`: the reference rules that had no counterpart
+    (`*~`, `*.log` minus the committed `.port` logs, `.vscode/`, `.direnv/`, `.envrc.local`,
+    `CMakeCache.txt`, `CMakeFiles/`, the qcow2 image and test outputs; `flake.lock`, `zig-out/`, the
+    Swift example `.build/`; `*.zon`, the `*-cmin` corpora as generated, `crates/rustty-font/res`
+    vendored). G-EOL stays GREEN.
+  - `example/.gitignore`, `test/windows/.gitignore`: ported (were missing).
+  - `macos/Rustty-Info.plist`: the rebrand-era `CFBundleName` key removed (the reference plist has
+    none; `GENERATE_INFOPLIST_FILE` supplies it from the target name). Not rebuilt with xcodebuild by
+    P-1; the ci.yml `macos-app` job builds it.
+  - `example/c-vt-color-scheme/README.md`: the reference's description.
+  - `Doxyfile` / `xtask/docker/lib-c-docs/Dockerfile`: the `doc/` output root is now recorded (the
+    reference writes into `zig-out/share`, which rustty's packages copy wholesale); the Dockerfile
+    comment claiming `zig-out/` was wrong. G-DOXYGEN GREEN.
+- **Recorded, not changed**: the `CLAUDE.md -> AGENTS.md` symlink (it changes how coding agents load
+  instructions: a user/controller decision); `test/pkgconfig/test_librustty_vt.c` duplicating
+  `nix/test-src/test_librustty_vt.c` (G-CCONSUMER uses one, the Nix tests the other);
+  `macos/build-rustty-signed.sh` citing a `macos/DISTRIBUTION.md` that does not exist (Rustty-only
+  script); `macos/MILESTONE.md:8` naming `dist/GhosttyKit.xcframework` (a dated history note).
+- **state**: CLOSED (P-1).
+
+## N376 — `test.yml` job by job: what `ci.yml` + `ci.sh` cover, and the jobs still without a counterpart
+
+- **id**: N376. P-1 (read-only audit of the 53 jobs at the pin). **severity**: medium. **kind**: CI
+  parity. **state**: OPEN: the remaining items are CI legs P-1 could not run or verify; listed
+  precisely for a follow-up batch.
+- **Covered** (ported or translated, counterpart in brackets): `required` (ci.yml aggregator),
+  `build-bench` (G-BENCH), `list-examples` + `build-examples-zig` (G-EXAMPLES, the 25 C/C++ examples;
+  `zig-*` examples N/A), `build-examples-swift`, `build-cmake` + `test-lib-vt-pkgconfig` (G-CCONSUMER,
+  which P-1 found RED on every host since S64-F5 and fixed), `build-flatpak` + `trigger-flatpak`
+  (flatpak.yml), `build-libghostty-vt-windows`, `build-linux-libghostty`, `build-dist` (G-DIST),
+  `build-macos` (macos-app job), `build-macos-freetype` (G-FONTBACKEND), `test`, `test-lib-vt`
+  (+G-ABISCHEMA), `test-simd`, `test-macos`, `zig-fmt`, `pinact`/`prettier`/`swiftlint`/`typos`/
+  `shellcheck`/`alejandra` (G-LINT), `blueprint-compiler`, `valgrind`; recorded N/A:
+  `build-libghostty-vt-freestanding` (no `no_std`; phase-6 W6), `build-example-zig-vt-macos-no-sdk`.
+- **Gaps (no counterpart or partial, no record)**:
+  1. `skip` (path-filter fan-out; the fork/VOUCHED skip): needs a NON_PORTS record.
+  2. `build-examples-cmake-windows` and the `c-vt-static` step of `build-libghostty-vt-windows`.
+  3. `c-vt-cmake-cross` never builds on CI (no `x86_64-pc-windows-gnu` / `aarch64-unknown-linux-gnu`
+     target or cross toolchain installed).
+  4. `build-libghostty-vt`: no `aarch64-linux`, no `x86_64-linux-musl`.
+  5. `build-libghostty-vt-android`: no NDK, no Android targets (S64-F9 is OPEN elsewhere).
+  6. `build-libghostty-vt-wasm`: one profile, no wasm-opt/ReleaseSmall, no `test/wasm-alloc.mjs`, no
+     schema check on wasm; `simd128` (N377).
+  7. `build-libghostty-vt-features`: G-VTFEAT builds the host only, no wasm32 row and no per-feature
+     `test --no-run`. (P-1 fixed G-VTFEAT exiting 1 on hosts without the oracle.)
+  8. `build-libghostty-vt-macos`: the Mach-O dylib checks (`check-apple-libghostty-vt.nu`) have a
+     subject now: NON_PORTS G7 §5.
+  9. `build-linux` / `build-nix`: no arm64 Linux leg; `build-nix`'s debug build, `+version` mode greps,
+     `nm` strip checks, the no-simd/debug lib variants and `build-example-c-vt-build-info` are not in
+     `checks` (Nix deferred, V24).
+  10. `build-dist-lib-vt`: no size assertion (the reference's 5 MB budget; Rustty's tarball is 43 MB).
+  11. `build-snap`: the app is never compiled with `--features snap` (only the leaf crate).
+  12. `test-kaitai`: G-KAITAI is BLOCKED on CI (no kaitai-struct-compiler installed).
+  13. `test-gtk`: only gtk+wayland+x11 is compiled; the x11-only, wayland-only and neither
+      combinations are not.
+  14. `test-i18n`: there is no `-Di18n` override (N377).
+  15. `test-sentry-linux`: `-p rustty --features sentry` is never built.
+  16. `test-fuzz-libghostty`: CI has no cargo-fuzz, so the harness is never built there.
+  17. `translations`: G-I18N's regenerate-and-msgcmp arm is deferred on a stale premise.
+  18. `test-pkg-linux`: `rustty-wuffs` is built but not tested alone.
+  19. `test-debian-13`: `xtask/docker/debian/Dockerfile` (the full-app build) is run by nothing.
+  20. Workflow level: `on:` (the reference runs on every push to every branch) and `concurrency` (the
+      reference never cancels a `main` run) differ, unrecorded.
+
+## N377 — the Zig build graph (`build.zig` + `src/build/*`) against Cargo + xtask: remaining options
+
+- **id**: N377. P-1 (read-only audit). **severity**: low. **kind**: build-option parity. **state**:
+  OPEN for the items below; everything else is ported, translated or recorded.
+- **Covered**: every `b.step` (`run`, `run-valgrind`, `test`, `test-lib-vt{,-build,-schema}`,
+  `test-valgrind`, `update-translations`, `dist`, `distcheck`), every `Config.zig` option except the
+  ones below, every install artifact (terminfo/termcap per OS, shell integration, themes, completions,
+  vim/nvim/bat, man + doc, locale, the Linux desktop/D-Bus/systemd/metainfo/Nautilus/Dolphin/icons,
+  lib-vt shared/static/headers/.pc/cmake, xcframeworks, `ghostty-internal`), and the per-OS arms
+  (S63-F5 Windows and S64-F9 Android are OPEN in other batches). The 88f57ee66..20abdb50a build changes
+  (native-freestanding lib-vt) are recorded N/A in `.port/phase-6/assessments/W6-platform-tail.md`.
+- **Fixed by P-1**: the app id follows `-Doptimize` (N371); `-Demit-webdata` (N373); the 13.0 macOS
+  floor on the CMake path (N372).
+- **Open**:
+  1. `run` sets `GHOSTTY_RESOURCES_DIR=<prefix>/share/ghostty` (`build.zig:289-292`); `cargo run -p
+     rustty` does not point at `zig-out/share/rustty`.
+  2. `run-valgrind`'s flags (`--num-callers=50 --suppressions=valgrind.supp --gen-suppressions=all`,
+     `build.zig:345-352`) are missing from HACKING.md's command.
+  3. `dist` names the tarball, its prefix and `VERSION` after the full `cfg.version`
+     (`GhosttyDist.zig:52-107`); `xtask dist` uses the bare workspace version. (A build from either
+     tarball reports `X.Y.Z-dev+0000000`, measured in the flatpak, so the binary is unaffected.)
+  4. `-Di18n` has no override and `xtask resources` compiles catalogs for every target.
+  5. `-Dlib-version-string` has no counterpart (`nix/libghostty-vt.nix:79` uses it).
+  6. The wasm `+simd128` default (`Config.zig:113-130`) is recorded only as "performance-only"
+     (`docs/parity-audit/src-build.md:614`), which R8 does not accept for a dropped build switch.
+  7. `-Dsimd=false` cannot be applied to the full app (`rustty-core` pins `simd`).
+  8. `-Dstrip` / `-Dpie` defaults are recorded only as "cargo profile concerns" (`src-build.md:29,616`).
+- **Stale records seen (not edited by P-1)**: `crates/rustty-build-config/src/lib.rs:66` names
+  `app-runtime-*`/`renderer-*`/`i18n` features that do not exist; `xtask/src/main.rs:7` still says
+  "PORT STATUS: scaffold"; PACKAGING.md calls rustc's default target CPU `native` and has no
+  WebAssembly (lib-vt) section (the reference's `PACKAGING.md:126-170`).
+
+## N378 — release workflows: residual differences from the reference
+
+- **id**: N378. P-1 (read-only audit). **severity**: medium (one can overwrite the live tip appcast).
+  **kind**: CI parity. **state**: OPEN: release workflows run only with maintainer secrets, so P-1
+  did not change them.
+- `release-tip.yml`: the appcast upload no longer requires `github.ref_name == 'main'`, so a dispatch
+  from a branch of the canonical repository would overwrite the live tip appcast;
+  `CFBundleShortVersionString $COMMIT`, `Delete :SUEnableAutomaticChecks` and `fetch-depth: 0` are
+  missing; the `pr` dispatch input is dropped; the `source-tarball-lib-vt`,
+  `build-lib-vt-xcframework` and `build-lib-vt-wasm` jobs have no R2 upload / URL echo; wasm ships
+  one artifact where its comment claims two; the tip `sentry-dsym` job is omitted ("no Sentry
+  project") while `release-tag.yml` ports it; `!.envrc` / `!CLAUDE.md` dropped from the paths filter;
+  its header still says two jobs are omitted that exist.
+- `release-tag.yml`: `sentry-dsym` reads `needs.setup.outputs.should_skip`, which `setup` does not
+  output; the sentry-cli command changed; header lines 33-37 stale.
+- `publish-tag.yml`: the staged `rustty-macos-universal-dsym.zip` is no longer checked.
+- Picked up correctly from 88f57ee66..20abdb50a: milestone-action v3.2, Sparkle 2.9.6.
+
+## N379 — the fuzz package, `.github` script records and other residuals
+
+- **id**: N379. P-1. **severity**: low. **kind**: records. **state**: OPEN (records and one gate).
+- `test/fuzz-libghostty/` -> `crates/rustty-vt/fuzz` (cargo-fuzz) is recorded only in
+  `.port/phase-0/harness/FUZZ-INVENTORY.md`; `build.zig`/`build.zig.zon` -> `fuzz/Cargo.toml`,
+  `replay-crashes.nu` and `corpus/sanitize-filenames.sh` (superseded by cargo-fuzz), the stray
+  `.afl-tmin-temp-37266` (tool debris in the reference), `pkg/afl++` -> `libfuzzer-sys`, and the
+  package's `AGENTS.md`/`README.md` have no NON_PORTS record. The reference's `run-<name>` step seeds
+  afl-fuzz from `corpus/<name>-cmin`; `run_fuzz_smoke.sh` starts `cargo fuzz run` from an empty corpus.
+- Governance non-port (user ruling), now listed in NON_PORTS G13 §6: `VOUCHED.td`, the 5
+  `vouch-*.yml`, `DISCUSSION_TEMPLATE/vouch-request.yml`, `issue-unvouched-message`.
+- Stale headers: `.github/scripts/rustty-tip:5-9` (says there is no Nix flake/nushell; both exist);
+  G-XCF's header says the reference runs the Apple check over the xcframework in its release pipeline
+  (it runs over per-target dylibs in `test.yml`).

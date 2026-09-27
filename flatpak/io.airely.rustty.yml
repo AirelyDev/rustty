@@ -1,14 +1,18 @@
 # PORTS: ghostty flatpak/com.mitchellh.ghostty.yml.
 #
 # =============================== VERIFIED ===================================
-# Built, installed and run on aarch64-linux (Fedora 44):
+# Built, installed and run on aarch64-linux (Fedora 44); rebuilt from scratch
+# (--disable-cache) offline from the `xtask dist` tarball by parity tail P-1 on
+# 2026-09-27 — `+version` reports build mode .ReleaseFast, the install has only
+# the compiled terminfo database, the host-command D-Bus path is in the binary,
+# and desktop-file-validate / `appstreamcli validate` pass:
 #
 #     cargo run -p xtask -- dist
 #     flatpak run org.flatpak.Builder --force-clean --user \
 #       --repo=flatpak/repo flatpak/builddir flatpak/io.airely.rustty.yml
 #     flatpak remote-add --user --no-gpg-verify rustty-local flatpak/repo
 #     flatpak install --user rustty-local io.airely.rustty
-#     flatpak run io.airely.rustty +version     # -> "Rustty 0.1.0"
+#     flatpak run io.airely.rustty +version     # -> "Rustty 0.1.0-dev+0000000"
 #
 # flatpak-builder itself is available WITHOUT root as the org.flatpak.Builder
 # flatpak, which is how this was built; the Fedora `flathub` remote is filtered,

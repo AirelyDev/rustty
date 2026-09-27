@@ -2,14 +2,20 @@
 # io.airely.rustty.yml (separate app id so both can be installed at once).
 #
 # =============================== VERIFIED ===================================
-# Built, installed and run on aarch64-linux (Fedora 44):
+# Built offline from the `xtask dist` tarball, installed and run on
+# aarch64-linux (Fedora 44), parity tail P-1, 2026-09-27:
 #
 #     cargo run -p xtask -- dist
 #     flatpak run org.flatpak.Builder --force-clean --user \
-#       --repo=flatpak/repo flatpak/builddir flatpak/io.airely.rustty.yml
+#       --repo=flatpak/repo flatpak/builddir-debug flatpak/io.airely.rustty-debug.yml
 #     flatpak remote-add --user --no-gpg-verify rustty-local flatpak/repo
-#     flatpak install --user rustty-local io.airely.rustty
-#     flatpak run io.airely.rustty +version     # -> "Rustty 0.1.0"
+#     flatpak install --user rustty-local io.airely.rustty-debug
+#     flatpak run io.airely.rustty-debug +version   # -> "Rustty 0.1.0-dev+0000000"
+#
+# The install carries the `-debug` desktop/metainfo/D-Bus names and the
+# terminfo source + termcap (a Debug resource install); desktop-file-validate
+# and `appstreamcli validate` pass on it. (Before P-1 this header repeated the
+# release manifest's commands: the debug manifest itself had not been built.)
 #
 # flatpak-builder itself is available WITHOUT root as the org.flatpak.Builder
 # flatpak, which is how this was built; the Fedora `flathub` remote is filtered,

@@ -2666,6 +2666,21 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - proposed fix:    repeat `CancelIoEx` until the read thread exits (for example until `WaitForSingleObject` on the thread handle succeeds), or have the read thread check the quit pipe before each `ReadFile` and use an overlapped read with a cancellable wait.
 - upstream status: not reported
 
+### UD345 — `.envrc` watches `nix/wraptest.nix`, which does not exist (the file is `nix/pkgs/wraptest.nix`)
+- kind:            latent
+- upstream project: ghostty
+- severity:        low (latent; developer tooling only)
+- reference:       `.envrc:4` `watch_file nix/{devShell,package,wraptest}.nix`, at 20abdb50a. The derivation lives at `nix/pkgs/wraptest.nix` (`flake.nix` calls `./nix/pkgs/wraptest.nix`); there is no `nix/wraptest.nix`.
+- defect:          direnv is told to re-evaluate the dev shell when `nix/wraptest.nix` changes, a path that does not exist, so an edit to the real `nix/pkgs/wraptest.nix` (which the dev shell consumes) does not reload it.
+- ReleaseSafe:     n/a (not part of any build artifact).
+- ReleaseFast:     n/a.
+- reachability:    a developer using direnv who edits `nix/pkgs/wraptest.nix` keeps a stale shell until something else triggers a reload.
+- port handling:   ported verbatim (`.envrc` is byte-identical to the reference after parity tail P-1): no behaviour of any artifact changes, and the intent (which of the three paths was meant) is evident but the effect is confined to a developer convenience, so it is recorded rather than fixed. Not listed in `docs/ghostty-bug-fixes.md`.
+- parity row(s):   none; found by parity tail P-1 (packaging parity). NEW-FINDINGS N375.
+- test:            none (no behaviour change). Verify with `ls nix/wraptest.nix` (absent) and `ls nix/pkgs/wraptest.nix` (present) in the reference.
+- proposed fix:    `watch_file nix/{devShell,package}.nix nix/pkgs/wraptest.nix`.
+- upstream status: not reported
+
 ## Candidates pending verification
 
 Assembled from this plan's progress notes on 2026-09-11. **Not verified** — do not cite as fact.
