@@ -592,7 +592,10 @@ jobs:
     assert_eq!(jobs["aggregator"].job_if, "always()");
     let gated = arming_gated_jobs(&jobs, gate);
     assert!(gated.contains("gated"));
-    assert!(gated.contains("block"), "a block-scalar job-level if: must count");
+    assert!(
+        gated.contains("block"),
+        "a block-scalar job-level if: must count"
+    );
     assert!(gated.contains("follower"));
     assert!(
         !gated.contains("aggregator"),
@@ -657,8 +660,10 @@ fn tip_appcast_steps_run_only_on_main() {
     if let Some(st) = cur.take() {
         steps.push(st);
     }
-    let appcast: Vec<&(String, String)> =
-        steps.iter().filter(|(b, _)| b.contains("appcast")).collect();
+    let appcast: Vec<&(String, String)> = steps
+        .iter()
+        .filter(|(b, _)| b.contains("appcast"))
+        .collect();
     assert_eq!(
         appcast.len(),
         3,
