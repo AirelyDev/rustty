@@ -7226,7 +7226,19 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   `putWindowsBlock`'s `putMove` (last wins), as in the reference.
 - **why not changed**: task W-5's dispatch keeps macOS/Linux environment behaviour unchanged; the test above asserts
   the current behaviour deliberately.
-- **state**: OPEN (controller ruling: fix under R1, or record as accepted).
+- **state**: CLOSED (fixed under R1, controller ruling; task W-5b). POSIX `create_map` `put`s every entry (the last
+  value wins; the first entry's key and position stay), `get_alloc` is `create_map().get(key)` on every target, and the
+  map-based `contains`/`contains_unempty` are added (`Environ.zig:540-560`); `crates/rustty-os/src/edit.rs` now probes
+  `VISUAL`/`EDITOR` with `contains_unempty` as `os/edit.zig:27,33` does. `get_posix` and the `*_constant` probes stay
+  first-wins. Consequence: `Exec` builds the child's environment from `environ_map()`, so a child now inherits the last
+  of two duplicates, as in the reference. Tests: `crates/rustty-global/tests/posix_duplicate_env.rs` re-runs the test
+  binary through `posix_spawn` with the envp `[RUSTTY_N381_CHILD=1, K=first, E=, K=second, E=later]`
+  (`std::process::Command` would drop the duplicate); the child asserts `get_posix` = `first`, `get_alloc`,
+  `create_map`, `environ_map()` = `second`, `contains_unempty(E)` true and `contains_unempty_constant(E)` false; the
+  parent asserts exit 0 and `1 passed`. Unit tests `environ_get_posix_takes_the_first_duplicate_and_the_map_the_last`,
+  `environ_contains_unempty_reads_the_last_entry`, `edit::tests::duplicate_visual_entries_use_the_last_one`. Negative
+  control (first-wins `create_map` restored), macOS and Linux (rvm): the child fails `getAlloc: last`
+  (`left: "first" right: "second"`).
 
 ## N382 — an access violation in `rustty-xev`'s IOCP `async_notify` (once, rustty-core unit tests, Windows)
 
@@ -7245,7 +7257,16 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   crash.
 - **next step**: run the binary under load with `--test-threads=1` and per-test logging to find the test; check the
   mailbox/`Async` teardown order in that test against the reference.
-- **state**: OPEN.
+- **diagnosis (review W-5)**: a port TEST bug, not a product one. In
+  `surface::paste_event_mutex_tests::paste_event_queues_while_holding_the_renderer_mutex_on_a_full_mailbox` the drainer
+  thread waits on the surface mailbox's `Async` with a loop and completion on its own stack, deinitializes the loop and
+  exits; the main thread then notifies once more. On IOCP `Async.wait` stores `waiter = {loop, c}` and every `notify`
+  reads it (faithful to libxev `AsyncIOCP`, `watcher/async.zig:533-615`; the waiter must outlive every notify), so that
+  notify read the freed thread stack. The reference has no counterpart test.
+- **state**: CLOSED (test fixed, task W-5b, 7726df28): the drainer keeps its loop and wait completion until the main
+  thread has set a `notified` flag right after its last `notify()`, then deinitializes. MEASURED on rwin with a 500 ms
+  sleep injected before that notify: before the fix 5/5 runs crash with 0xC0000005, after it 10/10 pass. `iocp.rs` and
+  `Async` unchanged.
 
 ## N383 — `cargo test -p rustty-core` alone on Windows fails two compression tests; the workspace run passes them
 
@@ -7262,3 +7283,39 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 - **fix direction**: give the two tests their own `test-decommit-sim` edge (a rustty-core dev-dependency feature), or
   scope them on the target (R14 form 1) with the workspace-only coverage stated.
 - **state**: OPEN.
+
+## N384 — `EnvMap` iterated in random order; Zig's map iterates in insertion order (the child's envp order)
+
+- **id**: N384. Not a ledger row: review W-5 F4.
+- **severity**: low. **kind**: port defect (R1), fixed.
+- **finding**: `std.process.Environ.Map` is an `ArrayHashMap` (`std/process/Environ.zig:99-103`): insertion order,
+  `put`/`putMove` keep an existing entry's position, `orderedRemove` shifts, `swapRemove` moves the last entry into
+  the hole. `Command` builds the child's `envp` by iterating the map (`createNullDelimitedEnvMap`), so the order is what
+  the child sees in `environ`. The port's map was a `HashMap` (random order, one `remove`), and its note said the order
+  was not observable.
+- **fix** (task W-5b, b4d5ce6c): `EnvMap` is backed by an `IndexMap` (`indexmap` 2, already in the graph): `insert` =
+  `put` (position kept), `put_move` = `putMove` (key replaced in place), `remove` = `orderedRemove`, `swap_remove` =
+  `swapRemove`, used by the one reference `swapRemove` caller (`GHOSTTY_BASH_ENV`, `shell_integration.zig:382`); every
+  other port removal maps to an `orderedRemove`. Lookups borrow the key (`indexmap::Equivalent`), so they no longer
+  allocate (review W-5 F3).
+- **tests**: `environ::tests::env_map_keeps_the_array_hash_map_order`,
+  `command::tests::create_null_delimited_env_map_keeps_the_map_order` (the envp order after `put`, `orderedRemove`,
+  `swapRemove`). Negative controls, one at a time (macOS): `remove` as `swap_remove` and `put_move` as remove+insert
+  each fail the first test; iteration reversed fails the envp test.
+- **state**: CLOSED (fixed).
+
+## N385 — `async_notify` forms `&Loop` on the notifying thread while the loop thread holds `&mut Loop` (IOCP)
+
+- **id**: N385. Not a ledger row: review W-5 (informational).
+- **severity**: low (aliasing-model UB, not a reproduced failure). **kind**: port soundness (Stacked Borrows).
+- **finding**: `Async::notify` on IOCP (`crates/rustty-xev/src/iocp_watcher.rs:206-210`) calls `(*w.loop_).async_notify(w.c)` (the WASI watcher has the same call, but WASI
+  runs one thread), and `iocp::Loop::async_notify` takes `&self`
+  (`iocp.rs:1330`). The notifier is another thread, while the loop thread is inside `Loop::run(&mut self)`
+  (`iocp.rs:319`), which holds a `&mut Loop` for the whole run. Creating the shared reborrow from the raw pointer
+  conflicts with that live unique borrow under Stacked Borrows, even though `async_notify` only reads `iocp_handle`
+  (a HANDLE that does not change after `init`) and writes the completion's atomic `wakeup`. The reference passes a
+  plain `*Loop` (no aliasing model). Pre-existing, not a cause of N382. Not run under Miri (Miri has no IOCP).
+- **fix sketch**: make it `pub unsafe fn async_notify(loop_: *const Loop, completion: *mut Completion)` and read the
+  handle through the raw pointer (`unsafe { (*loop_).iocp_handle }` as a place read via `addr_of!`, or copy the handle
+  into the `Async`'s waiter at `wait` time), with no `&Loop` formed on the notifying thread.
+- **state**: OPEN (recorded, not fixed).
