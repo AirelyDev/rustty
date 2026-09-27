@@ -6715,8 +6715,11 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   - `Doxyfile` / `xtask/docker/lib-c-docs/Dockerfile`: the `doc/` output root is now recorded (the
     reference writes into `zig-out/share`, which rustty's packages copy wholesale); the Dockerfile
     comment claiming `zig-out/` was wrong. G-DOXYGEN GREEN.
-- **Recorded, not changed**: the `CLAUDE.md -> AGENTS.md` symlink (it changes how coding agents load
-  instructions: a user/controller decision); `test/pkgconfig/test_librustty_vt.c` duplicating
+- **P-1b (user decision 2026-09-27)**: `CLAUDE.md` is ported, a symlink to `AGENTS.md` (mode
+  120000) exactly as the reference's `c09ade225`; `release-tip.yml`'s paths filter regains `!CLAUDE.md`
+  and `!.envrc`. `.envrc` now carries the UD345 fix (R13, controller ruling) instead of the reference's
+  wrong `nix/wraptest.nix` path.
+- **Recorded, not changed**: `test/pkgconfig/test_librustty_vt.c` duplicating
   `nix/test-src/test_librustty_vt.c` (G-CCONSUMER uses one, the Nix tests the other);
   `macos/build-rustty-signed.sh` citing a `macos/DISTRIBUTION.md` that does not exist (Rustty-only
   script); `macos/MILESTONE.md:8` naming `dist/GhosttyKit.xcframework` (a dated history note).
@@ -6734,8 +6737,16 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   (flatpak.yml), `build-libghostty-vt-windows`, `build-linux-libghostty`, `build-dist` (G-DIST),
   `build-macos` (macos-app job), `build-macos-freetype` (G-FONTBACKEND), `test`, `test-lib-vt`
   (+G-ABISCHEMA), `test-simd`, `test-macos`, `zig-fmt`, `pinact`/`prettier`/`swiftlint`/`typos`/
-  `shellcheck`/`alejandra` (G-LINT), `blueprint-compiler`, `valgrind`; recorded N/A:
-  `build-libghostty-vt-freestanding` (no `no_std`; phase-6 W6), `build-example-zig-vt-macos-no-sdk`.
+  `shellcheck`/`alejandra` (G-LINT), `blueprint-compiler`, `valgrind`, `build-examples-cmake`
+  (G-EXAMPLES builds `c-vt-cmake` and `c-vt-cmake-static`; `c-vt-cmake-cross` is gap 3),
+  `trigger-snap` (`snap.yml` triggers itself, gated off; its trigger is narrower, recorded in its
+  header); recorded N/A: `build-libghostty-vt-freestanding` (no `no_std`; phase-6 W6),
+  `build-example-zig-vt-macos-no-sdk`.
+- **Counted by review P-1 (all 53 jobs now accounted for)**: `test-windows`
+  (`zig build -Dapp-runtime=none test`) and `build-libghostty-windows-gnu` are gaps analysed in
+  **N342** (the application tier does not compile for Windows; being addressed by W-2/W-4), not
+  repeated below; `build-macos-xcode-27` (a second macOS app build on Xcode 27) has no counterpart and
+  no record since NON_PORTS G13 §1 was superseded: gap 21.
 - **Gaps (no counterpart or partial, no record)**:
   1. `skip` (path-filter fan-out; the fork/VOUCHED skip): needs a NON_PORTS record.
   2. `build-examples-cmake-windows` and the `c-vt-static` step of `build-libghostty-vt-windows`.
@@ -6745,8 +6756,11 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   5. `build-libghostty-vt-android`: no NDK, no Android targets (S64-F9 is OPEN elsewhere).
   6. `build-libghostty-vt-wasm`: one profile, no wasm-opt/ReleaseSmall, no `test/wasm-alloc.mjs`, no
      schema check on wasm; `simd128` (N377).
-  7. `build-libghostty-vt-features`: G-VTFEAT builds the host only, no wasm32 row and no per-feature
-     `test --no-run`. (P-1 fixed G-VTFEAT exiting 1 on hosts without the oracle.)
+  7. `build-libghostty-vt-features`: in effect NO CI counterpart. G-VTFEAT reads the oracle, which no
+     CI leg has, so it reports BLOCKED on every leg (P-1 fixed it exiting 1 there; P-1b gave it a
+     G-VTFEAT-SELF fixture self-test). Locally it builds the host only, with no wasm32 row and no
+     per-feature `test --no-run`. A CI-capable form needs the expected export sets checked in, as
+     A5's symbol manifest does.
   8. `build-libghostty-vt-macos`: the Mach-O dylib checks (`check-apple-libghostty-vt.nu`) have a
      subject now: NON_PORTS G7 §5.
   9. `build-linux` / `build-nix`: no arm64 Linux leg; `build-nix`'s debug build, `+version` mode greps,
@@ -6765,6 +6779,15 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   19. `test-debian-13`: `xtask/docker/debian/Dockerfile` (the full-app build) is run by nothing.
   20. Workflow level: `on:` (the reference runs on every push to every branch) and `concurrency` (the
       reference never cancels a `main` run) differ, unrecorded.
+  21. `build-macos-xcode-27`: no second-Xcode macOS build.
+- **Reviewer's ranking (review P-1, by parity importance: can a shipped configuration or a
+  user-visible behaviour regress unseen)**: 1. `test-windows` / `build-libghostty-windows-gnu` (N342);
+  2. #11 `build-snap`; 3. #15 `test-sentry-linux`; 4. #13 `test-gtk` matrix; 5. #7 features (BLOCKED
+  on CI); 6. #9 arm64 Linux / `build-nix` checks; 7. #4 aarch64-linux and musl; 8. #6 wasm;
+  9. #16 fuzz build; 10. #12 kaitai; 11. #17 translations msgcmp; 12. #5 android (S64-F9); 13. #3
+  `c-vt-cmake-cross`, #2 cmake-windows; 14. #8 macOS dylib checks; 15. #19 debian-13; 16. #18 wuffs
+  alone, #14 `test-i18n`; 17. #10 tarball size; 18. #21 `build-macos-xcode-27`, #1 `skip`, #20
+  `on:`/`concurrency`.
 
 ## N377 — the Zig build graph (`build.zig` + `src/build/*`) against Cargo + xtask: remaining options
 
@@ -6796,6 +6819,15 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
      (`docs/parity-audit/src-build.md:614`), which R8 does not accept for a dropped build switch.
   7. `-Dsimd=false` cannot be applied to the full app (`rustty-core` pins `simd`).
   8. `-Dstrip` / `-Dpie` defaults are recorded only as "cargo profile concerns" (`src-build.md:29,616`).
+  9. `-Demit-docs` (`Config.zig:483-502`: on only when pandoc is found, or for a system package) has no
+     override; `xtask resources` always writes the man pages and the doc tree (the rendering is
+     in-process, so no pandoc is needed). Low severity.
+- **Count**: 8 open (items 1 and 3-9; item 2 was fixed by P-1). The P-1 report's "7 open" predates
+  item 9.
+- **Reviewer's ranking (review P-1)**: 1. #7 `-Dsimd=false` for the full app; 2. #4 `-Di18n`
+  override; 3. #6 wasm `simd128` default; 4. #8 `-Dstrip` / `-Dpie` defaults; 5. #1 `run`
+  resources dir; 6. #9 `-Demit-docs`; 7. #3 dist naming from the full version; 8. #5
+  `-Dlib-version-string`.
 - **Stale records seen (not edited by P-1)**: `crates/rustty-build-config/src/lib.rs:66` names
   `app-runtime-*`/`renderer-*`/`i18n` features that do not exist; `xtask/src/main.rs:7` still says
   "PORT STATUS: scaffold".
@@ -6805,16 +6837,18 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 - **id**: N378. P-1 (read-only audit). **severity**: medium (one can overwrite the live tip appcast).
   **kind**: CI parity. **state**: OPEN: release workflows run only with maintainer secrets, so P-1
   did not change them.
-- `release-tip.yml`: the appcast upload no longer requires `github.ref_name == 'main'`, so a dispatch
-  from a branch of the canonical repository would overwrite the live tip appcast;
+- **Fixed by P-1b**: the three `release-tip.yml` appcast steps require `github.ref_name == 'main'`
+  again (test `tip_appcast_steps_run_only_on_main`, negative control); `release-tag.yml` `sentry-dsym` is
+  `needs: [build-macos]` with no `if:`, as the reference; `!CLAUDE.md` / `!.envrc` restored in the
+  tip paths filter; actionlint now runs in G-LINT. The rest below stays OPEN.
+- `release-tip.yml` (was): the appcast upload no longer required `github.ref_name == 'main'`, so a
+  dispatch from a branch of the canonical repository would overwrite the live tip appcast;
   `CFBundleShortVersionString $COMMIT`, `Delete :SUEnableAutomaticChecks` and `fetch-depth: 0` are
   missing; the `pr` dispatch input is dropped; the `source-tarball-lib-vt`,
   `build-lib-vt-xcframework` and `build-lib-vt-wasm` jobs have no R2 upload / URL echo; wasm ships
   one artifact where its comment claims two; the tip `sentry-dsym` job is omitted ("no Sentry
-  project") while `release-tag.yml` ports it; `!.envrc` / `!CLAUDE.md` dropped from the paths filter;
-  its header still says two jobs are omitted that exist.
-- `release-tag.yml`: `sentry-dsym` reads `needs.setup.outputs.should_skip`, which `setup` does not
-  output; the sentry-cli command changed; header lines 33-37 stale.
+  project") while `release-tag.yml` ports it; its header still says two jobs are omitted that exist.
+- `release-tag.yml`: the sentry-cli command changed; header lines 33-37 stale.
 - `publish-tag.yml`: the staged `rustty-macos-universal-dsym.zip` is no longer checked.
 - Picked up correctly from 88f57ee66..20abdb50a: milestone-action v3.2, Sparkle 2.9.6.
 
@@ -6832,3 +6866,10 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 - Stale headers: `.github/scripts/rustty-tip:5-9` (says there is no Nix flake/nushell; both exist);
   G-XCF's header says the reference runs the Apple check over the xcframework in its release pipeline
   (it runs over per-target dylibs in `test.yml`).
+
+- **P-1b addendum (2026-09-27)**: `ci.sh`'s `run_gate` executes a registry entry as a word-split argv,
+  not through a shell, so the entries written `--self-test && <gate>` (G-XCF, G-P2) passed `&&` and the
+  rest as arguments and ran ONLY the self-test; the real G-XCF and G-P2 never ran in `ci.sh`. Split
+  into `G-XCF-SELF`/`G-XCF` and `G-P2-SELF`/`G-P2` (both real gates GREEN on macOS), and G-CCONSUMER
+  got its own `G-CCONSUMER-SELF`. Also seen, not changed (another batch's file): G-LINT's shellcheck
+  lane is RED on `.port/tools/gates/check_vt_alloc_vec_ban.sh:86` (SC2155).

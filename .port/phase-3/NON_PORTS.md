@@ -659,7 +659,9 @@ re-open it.
    More importantly, the reference's `test.yml` job `build-libghostty-vt-macos`
    runs the script over the per-target macOS **dylibs** (single architecture,
    install name, one `LC_BUILD_VERSION`), and rustty DOES ship
-   `librustty_vt_c.dylib` (CMake install, G-CCONSUMER), so the macOS rows now
+   a macOS dylib — since S64-F5 the CMake install names it
+   `librustty-vt.<version>.dylib` with the `librustty-vt.<major>.dylib` soname
+   and `librustty-vt.dylib` link-name symlinks (G-CCONSUMER) — so the macOS rows now
    have a subject. That job is listed as a remaining CI gap in NEW-FINDINGS N376,
    not dismissed here.
 
@@ -869,6 +871,7 @@ that is ported.
    | `.github/workflows/test.yml` | TRANSLATED job by job | `ci.yml` jobs + `.port/tools/ci.sh` gates; the per-job table and the jobs still without a counterpart are NEW-FINDINGS N376 |
    | `.github/scripts/check-translations.sh` | TRANSLATED | G-I18N (`check_translations.sh`) |
    | `.github/scripts/check-apple-libghostty-vt.nu` | N/A with the §G7 precondition, **which has partly changed** — see G7's P-1 note |
+   | `CLAUDE.md` (a symlink to `AGENTS.md`, reference `c09ade225`) | PORTED (P-1b, user decision 2026-09-27) | the same symlink, mode 120000 |
    | `.github/VOUCHED.td`, the **5** `vouch-*.yml` workflows (§1 said 6), `.github/DISCUSSION_TEMPLATE/vouch-request.yml`, `.github/issue-unvouched-message` | NOT PORTED — governance (user ruling) | contributor-vouching governance of the reference's own GitHub organisation; nothing for a port to reproduce |
 
    **Verification debt, not done:** Nix (`nix build`, `nix flake check`, the VM

@@ -15,8 +15,13 @@
 #    `build-dist` and `build-snap`) with the `source-run-id` /
 #    `source-artifact-id` of the tarball `build-dist` uploaded. Here the job
 #    builds that tarball itself with `xtask dist` — the vendored source tarball
-#    snapcraft.yaml consumes — so it triggers on the same pushes to main that
-#    would have dispatched it, and on manual dispatch, without inputs.
+#    snapcraft.yaml consumes — and triggers directly, on manual dispatch
+#    without inputs and on pushes to `main` that touch the snap's inputs. That
+#    is NARROWER than the reference: its `test.yml` runs on every push to every
+#    branch with no path filter, and `trigger-snap` dispatches this workflow on
+#    every such non-PR run. Recorded here, not reproduced: the job is gated off
+#    (RUSTTY_SNAP_ENABLED) and unverified, and a two-runner snapcraft build on
+#    every push of every branch is a cost to decide when it is armed.
 # 2. The tarball is extracted into `snapsrc/`, not `dist/`: rustty's `dist/` is
 #    a checked-in source directory (dist/linux, dist/cmake, ...) and is where
 #    `xtask dist` writes the tarball.

@@ -30,6 +30,8 @@
 #    (a Debug run installs `io.airely.rustty-debug`, as the reference does), and
 #    `--emit-webdata true`, whose three .mdx files are the positive half of
 #    arm 1's absence check.
+# 2b. `resources --target-os linux` with the default optimize (Debug) installs
+#    the `-debug` app id and not the release one (N371, end to end).
 # 3. `resources --target-os linux --flatpak --optimize ReleaseFast`, the arm the
 #    Flatpak manifest actually passes: the D-Bus service is swapped and icons
 #    capped at 512.
@@ -165,6 +167,36 @@ else
     ok "resources (linux) — desktop + dbus(+systemd) + metainfo + $nicons icons ($nbig above 512)"
   else
     bad "resources (linux) — desktop-app resources incomplete"
+  fi
+fi
+
+# ── 2b. resources, linux layout, DEFAULT optimize (N371 end to end) ─────────
+# `xtask resources` defaults to `--optimize Debug`, like `zig build`, and the
+# reference derives the Linux app id from the optimize mode
+# (GhosttyResources.zig:268-280). So a plain run with no `--optimize` and no
+# `--debug` must install the `-debug` desktop/metainfo/D-Bus names and NOT the
+# release ones; arm 2 (ReleaseFast) is the positive half. This drives the
+# real argument parsing and generation, not just `linux_app_is_debug`.
+echo "=== G-XTASK 2b/6 :: resources --target-os linux (default optimize -> -debug id) ==="
+rm -rf "$SHARE"
+if ! "${XTASK[@]}" resources --target-os linux --prefix /usr > "$WORK/res-linux-dbg.log" 2>&1; then
+  tail -20 "$WORK/res-linux-dbg.log" | sed 's/^/      /'
+  bad "resources (linux, default optimize) — command failed"
+else
+  errs=0
+  for f in \
+    "applications/io.airely.rustty-debug.desktop" \
+    "metainfo/io.airely.rustty-debug.metainfo.xml" \
+    "dbus-1/services/io.airely.rustty-debug.service"
+  do
+    [ -f "$SHARE/$f" ] || { echo "      missing share/$f"; errs=1; }
+  done
+  [ ! -e "$SHARE/applications/io.airely.rustty.desktop" ] \
+    || { echo "      a Debug run installed the RELEASE desktop id"; errs=1; }
+  if [ "$errs" -eq 0 ]; then
+    ok "resources (linux, default optimize) — the -debug app id, as the reference derives it"
+  else
+    bad "resources (linux, default optimize) — the app id did not follow the optimize mode"
   fi
 fi
 
