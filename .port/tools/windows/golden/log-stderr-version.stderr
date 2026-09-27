@@ -5,5 +5,5 @@ info: font_backend=.freetype_windows
 info: dependency harfbuzz=11.0.0
 info: renderer=renderer.generic.Renderer(renderer.OpenGL)
 info: libxev default backend=iocp
-info(os_locale): setlocale from env result=English_United States.1252
+info(os_locale): setlocale from env result=<HOST_SETLOCALE>
 info: executing CLI action=.version

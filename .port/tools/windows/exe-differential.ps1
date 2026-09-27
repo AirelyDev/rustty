@@ -53,11 +53,19 @@
     check    run -Exe (rustty.exe) and compare with the goldens in -Golden (CI).
 
   NORMALISATION (only this, nothing else):
-    * the ghostty -> rustty rename (ghostty/Ghostty/GHOSTTY);
+    * on the REFERENCE's output only, the ghostty -> rustty rename
+      (ghostty/Ghostty/GHOSTTY). rustty.exe's output is never renamed, so a
+      "ghostty" it prints is a difference (R2; review W-4 F3);
     * the version string each exe reports in `+version` becomes <VERSION>, and
       the toolchain line ("Zig version   : 0.16.0" / "Rust version  : 1.93.1 (..)")
       becomes "<TOOLCHAIN> version: <TOOLCHAIN_VERSION>";
     * the per-run scratch directory becomes <WORK>.
+  Two golden lines hold per-host settings, which the goldens keep as
+  placeholders and -Mode check fills with THIS host's values (review W-4 F4):
+    * <HOST_DOUBLE_CLICK_MS>: `click-repeat-interval` in `+show-config`, which
+      the config takes from `GetDoubleClickTime` (a per-user setting);
+    * <HOST_SETLOCALE>: the `setlocale from env result=` log line, which is the
+      C runtime's `setlocale(LC_ALL, "")` (the user's locale and code page).
 
   Each case runs with stdin empty, stdout and stderr captured as bytes, a fresh
   LOCALAPPDATA (Ghostty's config/state/cache root on Windows, `os/xdg.zig`),
@@ -245,40 +253,62 @@ function Get-ReportedVersion([string]$ExePath) {
   return $m.Groups[1].Value
 }
 
-function Normalize([string]$Text, [string]$Version, [string]$RunDir) {
+function Normalize([string]$Text, [string]$Version, [string]$RunDir, [bool]$IsReference) {
   if ($Version) { $Text = $Text.Replace($Version, "<VERSION>") }
   foreach ($d in @($RunDir, $RunDir.Replace("\", "/"))) {
     $Text = [regex]::Replace($Text, [regex]::Escape($d), "<WORK>", "IgnoreCase")
   }
   $Text = [regex]::Replace($Text, '(?m)^  - (Zig|Rust) version +: [^\r\n]*', '  - <TOOLCHAIN> version: <TOOLCHAIN_VERSION>')
-  $Text = $Text.Replace("GHOSTTY", "RUSTTY").Replace("Ghostty", "Rustty").Replace("ghostty", "rustty")
+  if ($IsReference) {
+    $Text = $Text.Replace("GHOSTTY", "RUSTTY").Replace("Ghostty", "Rustty").Replace("ghostty", "rustty")
+  }
   return $Text
 }
 
-function Run-Matrix([string]$ExePath, [string]$Tag) {
+function Run-Matrix([string]$ExePath, [string]$Tag, [bool]$IsReference) {
   $ver = Get-ReportedVersion $ExePath
   $results = [ordered]@{}
   foreach ($name in $Cases.Keys) {
     $d = New-RunDir "$Tag-$name"
     $r = Invoke-Case $ExePath $Cases[$name] $d
     $results[$name] = [pscustomobject]@{
-      Stdout = Normalize $r.Stdout $ver $d
-      Stderr = Normalize $r.Stderr $ver $d
+      Stdout = Normalize $r.Stdout $ver $d $IsReference
+      Stderr = Normalize $r.Stderr $ver $d $IsReference
       Exit   = $r.Exit
     }
   }
   return $results
 }
 
+# This host's double-click time and C-runtime locale (see NORMALISATION).
+function Get-HostValues {
+  Add-Type -AssemblyName System.Windows.Forms
+  if (-not ("W4Crt.Locale" -as [type])) {
+    Add-Type -Namespace W4Crt -Name Locale -MemberDefinition '[DllImport("ucrtbase.dll", CharSet = CharSet.Ansi)] public static extern IntPtr setlocale(int category, string locale);'
+  }
+  $loc = [Runtime.InteropServices.Marshal]::PtrToStringAnsi([W4Crt.Locale]::setlocale(0, ""))
+  return @{ DoubleClick = "$([System.Windows.Forms.SystemInformation]::DoubleClickTime)"; Locale = $loc }
+}
+
+function To-HostPlaceholders([string]$Text, $HostValues) {
+  $Text = [regex]::Replace($Text, '(?m)^click-repeat-interval = ' + [regex]::Escape($HostValues.DoubleClick) + '(?=\r?$)', 'click-repeat-interval = <HOST_DOUBLE_CLICK_MS>')
+  return $Text.Replace("setlocale from env result=$($HostValues.Locale)`n", "setlocale from env result=<HOST_SETLOCALE>`n")
+}
+
+function From-HostPlaceholders([string]$Text, $HostValues) {
+  return $Text.Replace("<HOST_DOUBLE_CLICK_MS>", $HostValues.DoubleClick).Replace("<HOST_SETLOCALE>", $HostValues.Locale)
+}
+
 function Read-Golden([string]$Dir) {
+  $hostValues = Get-HostValues
   $utf8 = New-Object Text.UTF8Encoding $false
   $results = [ordered]@{}
   foreach ($name in $Cases.Keys) {
     $b = Join-Path $Dir $name
     if (-not (Test-Path "$b.exit")) { throw "golden '$b.exit' is missing; regenerate with -Mode capture" }
     $results[$name] = [pscustomobject]@{
-      Stdout = [IO.File]::ReadAllText("$b.stdout", $utf8)
-      Stderr = [IO.File]::ReadAllText("$b.stderr", $utf8)
+      Stdout = From-HostPlaceholders ([IO.File]::ReadAllText("$b.stdout", $utf8)) $hostValues
+      Stderr = From-HostPlaceholders ([IO.File]::ReadAllText("$b.stderr", $utf8)) $hostValues
       Exit   = [IO.File]::ReadAllText("$b.exit", $utf8).Trim()
     }
   }
@@ -378,11 +408,12 @@ switch ($Mode) {
     if (-not $Golden) { throw "-Golden is required with -Mode capture" }
     New-Item -ItemType Directory -Force $Golden | Out-Null
     $utf8 = New-Object Text.UTF8Encoding $false
-    $res = Run-Matrix $Exe "cap"
+    $res = Run-Matrix $Exe "cap" $true
+    $hostValues = Get-HostValues
     foreach ($name in $Cases.Keys) {
       $b = Join-Path $Golden $name
-      [IO.File]::WriteAllText("$b.stdout", $res[$name].Stdout, $utf8)
-      [IO.File]::WriteAllText("$b.stderr", $res[$name].Stderr, $utf8)
+      [IO.File]::WriteAllText("$b.stdout", (To-HostPlaceholders $res[$name].Stdout $hostValues), $utf8)
+      [IO.File]::WriteAllText("$b.stderr", (To-HostPlaceholders $res[$name].Stderr $hostValues), $utf8)
       [IO.File]::WriteAllText("$b.exit", "$($res[$name].Exit)`n", $utf8)
     }
     $lines = @($launch.GetEnumerator() | Where-Object { $_.Key -match '^(open|console) ' } |
@@ -402,7 +433,7 @@ switch ($Mode) {
         if ($a -ne $b) { "FAIL: launch '$k': reference $a, rustty $b"; $failed++ }
       }
     }
-    $failed += Compare-Results (Run-Matrix $RefExe "ref") (Run-Matrix $Exe "rt")
+    $failed += Compare-Results (Run-Matrix $RefExe "ref" $true) (Run-Matrix $Exe "rt" $false)
   }
   "check" {
     if (-not $Golden) { throw "-Golden is required with -Mode check" }
@@ -412,7 +443,7 @@ switch ($Mode) {
       $b = "$($launch[$k])" -replace ' in \d+ms', ''
       if ($want[$k] -ne $b) { "FAIL: launch '$k': reference $($want[$k]), rustty $b"; $failed++ }
     }
-    $failed += Compare-Results (Read-Golden $Golden) (Run-Matrix $Exe "rt") $true
+    $failed += Compare-Results (Read-Golden $Golden) (Run-Matrix $Exe "rt" $false) $true
   }
 }
 

@@ -1,4 +1,4 @@
 command = cmd.exe
 working-directory = <WORK>\home
-click-repeat-interval = 500
+click-repeat-interval = <HOST_DOUBLE_CLICK_MS>
 auto-update-channel = tip
