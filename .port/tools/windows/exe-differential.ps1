@@ -99,6 +99,8 @@ $Justified = @{
   "edit-config"             = @{ Streams = @("stderr"); Why = "UD342: the reference announces the config path and prints none" }
   "validate-config-default" = @{ Streams = @("exit"); Why = "UD341: the reference exits 1 on a pipe (File.Writer.end() -> FileTooBig)" }
   "validate-config-valid"   = @{ Streams = @("exit"); Why = "UD341: the reference exits 1 on a pipe (File.Writer.end() -> FileTooBig)" }
+  "list-fonts"              = @{ Streams = @("stdout"); Why = "UD344: the reference prints UTF-16BE family names raw (\0A\0r\0i\0a\0l)" }
+  "list-fonts-family"       = @{ Streams = @("stdout"); Why = "UD344: the reference prints UTF-16BE family names raw (\0C\0o\0n\0s\0o\0l\0a\0s)" }
   # R2 identity: what the rename changes beyond the normalised spelling.
   "show-config-default"      = @{ Streams = @("stdout"); Why = "R2: the palette entry titled with the product name sorts under G in the reference, R in Rustty" }
   "show-config-default-docs" = @{ Streams = @("stdout"); Why = "R2: the palette entry's sort position, and the class default com.mitchellh.ghostty vs io.airely.rustty" }
@@ -164,7 +166,10 @@ $Cases = [ordered]@{
 
 # Cases whose stdout lists what the HOST has (the installed fonts). -Mode diff
 # (both exes on one host) compares them in full; -Mode check (goldens from
-# another host) compares their stderr and exit code only, and says so.
+# another host) compares their stderr and exit code only, and says so. Their
+# stdout is justified (UD344), so check mode instead requires Rustty's listing
+# to be non-empty and free of NUL bytes: the reference's raw UTF-16 names are
+# what UD344 fixes.
 $HostDependentStdout = @("list-fonts", "list-fonts-family")
 
 # ---------------------------------------------------------------- helpers
@@ -336,8 +341,13 @@ function Compare-Results($Ref, $Got, [bool]$OtherHost = $false) {
   Write-Host ("{0,-30} {1,-6} {2,-6} {3,-12} {4}" -f "case", "stdout", "stderr", "exit(ref/rt)", "verdict")
   foreach ($name in $Cases.Keys) {
     $r = $Ref[$name]; $g = $Got[$name]
-    $o = ($r.Stdout -ceq $g.Stdout) -or ($OtherHost -and $HostDependentStdout -contains $name)
-    if ($OtherHost -and $HostDependentStdout -contains $name) { Write-Host "  ($($name): stdout lists the host's fonts; not compared against another host's golden)" }
+    $crossHost = $OtherHost -and $HostDependentStdout -contains $name
+    $o = ($r.Stdout -ceq $g.Stdout) -or $crossHost
+    if ($crossHost) {
+      $sane = $g.Stdout.Length -gt 0 -and -not $g.Stdout.Contains([string][char]0)
+      Write-Host "  ($($name): stdout lists the host's fonts; not compared against another host's golden; Rustty's is $(if ($sane) { 'non-empty with no NUL byte' } else { 'EMPTY or holds a NUL byte (UD344)' }))"
+      if (-not $sane) { $bad++ }
+    }
     $e = $r.Stderr -ceq $g.Stderr
     $x = $r.Exit -eq $g.Exit
     # A justification names the streams it covers ("stdout", "stderr", "exit");
@@ -345,8 +355,10 @@ function Compare-Results($Ref, $Got, [bool]$OtherHost = $false) {
     $differs = @(); if (-not $o) { $differs += "stdout" }; if (-not $e) { $differs += "stderr" }; if (-not $x) { $differs += "exit" }
     $covered = $Justified.ContainsKey($name) -and @($differs | Where-Object { $Justified[$name].Streams -notcontains $_ }).Count -eq 0
     # A justification whose difference is gone is stale: it fails too, so the
-    # list stays exactly the recorded differences.
-    $verdict = if ($differs.Count -eq 0 -and $Justified.ContainsKey($name)) { $bad++; "MATCH, but a justification is listed (stale)" } elseif ($differs.Count -eq 0) { "MATCH" } elseif ($covered) { "JUSTIFIED ($($differs -join ',')): $($Justified[$name].Why)" } else { $bad++; "DIFF" }
+    # list stays exactly the recorded differences. A justified stream that was
+    # not compared (host-dependent stdout in check mode) cannot be stale.
+    $compared = if ($Justified.ContainsKey($name)) { @($Justified[$name].Streams | Where-Object { -not ($crossHost -and $_ -eq "stdout") }) } else { @() }
+    $verdict = if ($differs.Count -eq 0 -and $compared.Count -gt 0) { $bad++; "MATCH, but a justification is listed (stale)" } elseif ($differs.Count -eq 0) { "MATCH" } elseif ($covered) { "JUSTIFIED ($($differs -join ',')): $($Justified[$name].Why)" } else { $bad++; "DIFF" }
     Write-Host ("{0,-30} {1,-6} {2,-6} {3,-12} {4}" -f $name, $(if ($o) { "same" } else { "DIFF" }), $(if ($e) { "same" } else { "DIFF" }), "$($r.Exit)/$($g.Exit)", $verdict)
     if ($verdict -eq "DIFF") {
       if (-not $o) { Show-Diff "stdout" $r.Stdout $g.Stdout }
