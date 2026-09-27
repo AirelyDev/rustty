@@ -6213,6 +6213,9 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   the reference's `expandHostname` test and `global_environ_map_reflects_the_process` now pass on Windows (rwin,
   `x86_64-pc-windows-msvc`). Negative control on Windows (byte equality and a byte hash in the Windows arm): those
   seven tests fail, `expand_hostname` at `path.rs:342` (`unwrap()` on `None`), as in W-1's measurement.
+  Consequence before the fix, by code reading (not measured): `Exec`'s env setup (`exec.rs`, the reference's
+  `ghostty_path` block) asks `env.get("PATH")`, missed the `Path` of the process environment, and `put` a second
+  variable `PATH` holding only the exe directory, so a Windows child got both `Path` and `PATH`.
 
 ## N341 — Windows read-thread quit: a `CancelIoEx` between two reads is lost (reference race)
 
@@ -6533,7 +6536,20 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   passed in the two earlier full runs and 3/3 when `rustty-termio`'s suite ran alone right after. Cause UNVERIFIED:
   the call spawns `cmd.exe` on a fresh ConPTY while the rest of the suite runs in parallel under x64 emulation.
 - **next step**: make the test report which step of `threadEnter` failed, then rerun it under load.
-- **state**: OPEN.
+- **task W-5**: the reference does not fold: `Exec.threadEnter` returns a distinct error per step
+  (`error.ProcessNoPid`, `error.ProcessNotStarted`, `Command.start`'s error, the spawn's `SpawnError`). The port's
+  `crate::Error` keeps only the members a caller dispatches on (S212-F1), so the step is reported by a test-only
+  diagnostic instead (`note_thread_enter_failure!`, `cfg(test)`, expands to nothing in production): each error
+  arm of `threadEnter` and the Windows arm of `Subprocess.start` (`Pty.open`, `Command.start`) record the step and
+  the error on the calling thread, and the test's panic prints them. Its positive check:
+  `threadenter_read_thread_spawn_failure_drains_before_stop` (macOS) asserts the one recorded step is
+  `threadEnter: std.Thread.spawn: ...`. Reproduction attempts on rwin, all passing: 20 `cargo test -p rustty-termio`
+  runs (68/68 each); 20 more while rustty-vt/core/os unit tests ran in a loop beside them; the test alone in 4
+  parallel processes x 25 and 8 x 20 (260 runs) under that load; 2 full `cargo test --workspace` runs (baseline and
+  final). 0 failures in about 300 runs. Cause still UNVERIFIED; W-2's one failure was on the pre-W-5 environment
+  code (a snapshot `Environ` and a case-sensitive `EnvMap`), which the ConPTY spawn path reads through `Exec`'s
+  env setup; no link to the failure was shown.
+- **state**: OPEN (not reproduced; the next failure names its step).
 
 ## N355 — a one-off SIGSEGV of `rustty-renderer`'s unit-test binary on macOS
 
@@ -7211,3 +7227,38 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
 - **why not changed**: task W-5's dispatch keeps macOS/Linux environment behaviour unchanged; the test above asserts
   the current behaviour deliberately.
 - **state**: OPEN (controller ruling: fix under R1, or record as accepted).
+
+## N382 — an access violation in `rustty-xev`'s IOCP `async_notify` (once, rustty-core unit tests, Windows)
+
+- **id**: N382. Not a ledger row: observed by task W-5 on rwin while loading the machine for N354.
+- **severity**: medium if reachable outside tests (a use-after-free class crash); UNVERIFIED. **kind**: crash, cause
+  not traced.
+- **finding**: running `rustty-core`'s unit-test binary directly (built by `cargo test --no-run -p rustty-vt -p
+  rustty-core -p rustty-os --target x86_64-pc-windows-msvc`, at W-5's 28c271fb) while `rustty-termio`'s suite and the
+  rustty-vt unit tests ran at the same time, the process died with `0xC0000005` (exit -1073741819). Windows Error
+  Reporting recorded fault offset `0x1e73a6` in the test exe; `llvm-symbolizer` (with the exe's PDB) resolves it to
+  `rustty_xev::iocp::Loop::async_notify`, `crates/rustty-xev/src/iocp.rs:1333` (the read of `(*completion).op`), i.e.
+  an `Async` was notified through a completion pointer that no longer pointed at a live `async_wait` completion.
+  Which test, and whether the reference has the same race (N343: on IOCP the reference's `Async` is a value whose
+  copies do not share a wakeup), was not established. 1 crash in 27 direct runs of the binary (the other 26, 16 of them
+  with the rustty-vt load running, did not crash). The Windows workspace runs through cargo (baseline and final, W-5) did not
+  crash.
+- **next step**: run the binary under load with `--test-threads=1` and per-test logging to find the test; check the
+  mailbox/`Async` teardown order in that test against the reference.
+- **state**: OPEN.
+
+## N383 — `cargo test -p rustty-core` alone on Windows fails two compression tests; the workspace run passes them
+
+- **id**: N383. Not a ledger row: found by task W-5 on rwin.
+- **severity**: low (test scoping). **kind**: test depends on cargo feature unification.
+- **finding**: `renderer_seam::compression_tests::compression_idle_pass_compresses_scrollback` and
+  `change_config_restarts_the_pass_only_on_disabled_to_enabled` assert `rustty_vt::compression_enabled()` ("this
+  target supports strict reclamation"). On Windows that is true only when rustty-vt is built with
+  `test-decommit-sim` (`crates/rustty-vt/src/mem.rs:175-188`; Windows has no strict reclamation arm), which
+  rustty-vt-c's dev-dependency enables (N346), so it holds in `cargo test --workspace` and not when rustty-core is
+  tested on its own: MEASURED 25/25 direct runs of a binary built with `-p rustty-vt -p rustty-core -p rustty-os`
+  fail both (`assertion failed: latched.is_some()` at `renderer_seam.rs:2768`, and `:2675`). CI runs the workspace,
+  so the CI leg is not affected.
+- **fix direction**: give the two tests their own `test-decommit-sim` edge (a rustty-core dev-dependency feature), or
+  scope them on the target (R14 form 1) with the workspace-only coverage stated.
+- **state**: OPEN.
