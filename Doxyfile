@@ -53,6 +53,13 @@ EXTRACT_LOCAL_CLASSES  = NO
 # HTML Output
 #---------------------------------------------------------------------------
 
+# The reference writes the docs INTO its install tree, `zig-out/share/ghostty/
+# doc/libghostty` (HTML) and `zig-out/share/man` (man3), because `zig-out/` is
+# `zig build`'s install prefix. Rustty's `zig-out/share` is `xtask resources`'
+# generated resource tree, which the macOS app bundle and the Linux packages
+# copy wholesale, so the C-API docs (never part of either) go to their own
+# `doc/` root instead; `make clean` removes it, and G-DOXYGEN redirects
+# OUTPUT_DIRECTORY to a temp dir.
 OUTPUT_DIRECTORY       = doc
 GENERATE_HTML          = YES
 HTML_OUTPUT            = librustty

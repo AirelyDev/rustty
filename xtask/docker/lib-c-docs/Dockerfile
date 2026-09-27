@@ -8,8 +8,9 @@
 # The paths differ from the reference only where rustty's layout does: the
 # JSON schema is `crates/rustty-vt-c/types.schema.json` (the reference keeps it
 # at `src/terminal/c/types.schema.json`) and the output goes under
-# `zig-out/share/rustty/doc/librustty`, matching the `Doxyfile`'s
-# `OUTPUT_DIRECTORY`/`HTML_OUTPUT` pair.
+# `doc/librustty`, matching the `Doxyfile`'s `OUTPUT_DIRECTORY`/`HTML_OUTPUT`
+# pair (the reference writes `zig-out/share/ghostty/doc/libghostty`; the
+# Doxyfile records why rustty's is `doc/`).
 #
 # Usage:
 #   podman build -f xtask/docker/lib-c-docs/Dockerfile -t rustty-c-docs .

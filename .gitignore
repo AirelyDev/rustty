@@ -154,3 +154,27 @@ example/**/build/
 /parts/
 /stage/
 /prime/
+
+# The reference's own .gitignore rules that the sections above do not already
+# cover (P-1 parity audit). Editor/dev-environment cruft, the direnv state that
+# `.envrc`'s `use flake` / `source_env_if_exists .envrc.local` create, an
+# in-source CMake configure, the nix/vm disk image, and the reference's test
+# output names (renamed).
+*~
+*.log
+# ...except the committed .port/ run logs (e.g. .port/phase-0/test-run.log);
+# the Miri lane logs stay ignored by the rule above, which is re-applied below.
+!/.port/**/*.log
+.port/phase-3/miri/*.log
+.vscode/
+.direnv/
+.envrc.local
+CMakeCache.txt
+CMakeFiles/
+example/*.wasm
+test/rustty
+test/cases/**/*.actual.png
+/Box_test.ppm
+/Box_test_diff.ppm
+/rustty.qcow2
+/sprite_face_test*

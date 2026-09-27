@@ -18,6 +18,7 @@
 *.m     text eol=lf
 *.swift text eol=lf
 *.zig   text eol=lf
+*.zon   text eol=lf
 *.nix   text eol=lf
 *.json  text eol=lf
 *.csv   text eol=lf
@@ -62,6 +63,8 @@ Makefile        text eol=lf
 # PORTS the reference's `test/fuzz-libghostty/.gitattributes`, which marks
 # `corpus/parser-initial/** binary` for exactly this reason.
 .port/phase-0/corpora/cvt/**                    binary
+# ...and, as the reference marks them, the afl-cmin minimized tiers are generated.
+.port/phase-0/corpora/cvt/*-cmin/**             binary linguist-generated=true
 .port/phase-0/harness/fixtures/**               binary
 # Compiled terminfo databases — reference-generated binary goldens, extensionless
 # by convention (`ghostty.compiled`). Named for the same reason as the seeds.
@@ -92,6 +95,7 @@ Makefile        text eol=lf
 crates-sys/*/vendor/**              linguist-vendored -text
 crates/rustty-vaxis/ucd/**          linguist-vendored
 crates/rustty-vt/src/res/**         linguist-vendored
+crates/rustty-font/res/**           linguist-vendored
 crates/rustty-extra/themes/**       linguist-vendored
 include/rustty.h                    linguist-generated=true
 include/rustty-apprt.h              linguist-generated=true

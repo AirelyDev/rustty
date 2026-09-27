@@ -8,9 +8,18 @@
 #
 # DROPPED from the reference, with reasons:
 #   zig, zon2nix          no Zig toolchain; crane vendors from Cargo.lock
-#   kaitai-struct-compiler rustty's G-KAITAI gate parses the .ksy in-process
 #   twiggy, wizer, poop   zig/wasm-size tooling with no rustty consumer yet
 #   snapcraft             commented out in the reference too
+#   glxinfo, vulkan-loader commented out in the reference ("unused")
+#   bzip2 expat fontconfig freetype harfbuzz libpng libxml2 oniguruma simdutf
+#   zlib glslang spirv-cross
+#                         rustty VENDORS these C libraries (crates-sys/*/vendor,
+#                         built by the cc crate); see
+#                         build-support/build-inputs.nix for the same list
+#   the macOS AFL++ `unset NIX_CC ... LDFLAGS` block
+#                         the reference's fuzzer is AFL++ (afl-cc); rustty's is
+#                         cargo-fuzz/libFuzzer (crates/rustty-vt/fuzz), which
+#                         does not go through afl-cc
 {
   mkShell,
   lib,
@@ -62,6 +71,7 @@
   libXrandr,
   alejandra,
   jq,
+  kaitai-struct-compiler,
   minisign,
   pandoc,
   pinact,
@@ -89,6 +99,8 @@
     python-pkgs.jsonschema
     python-pkgs.kaitaistruct
     python-pkgs.ucs-detect
+    # crates/rustty-vt-c/types-schema-verify.py (G-ABISCHEMA) imports it.
+    python-pkgs.wasmtime
   ]);
 in
   mkShell {
@@ -138,6 +150,9 @@ in
         python
         vttest
         hyperfine
+        # G-KAITAI (.port/tools/gates/check_kaitai_snapshot.sh) compiles the
+        # snapshot .ksy with it.
+        kaitai-struct-compiler
 
         # wasm
         binaryen

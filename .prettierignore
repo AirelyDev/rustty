@@ -1,8 +1,10 @@
 # Docs: https://prettier.io/docs/en/ignore.html
+flake.lock
 vendor/
 crates-sys/*/vendor/
 **/*.html
 target/
+zig-out/
 
 # jujutsu
 .jj/
@@ -19,5 +21,9 @@ images/Rustty.icon/icon.json
 # shaders
 *.frag
 
-# port scaffolding & phase-0 goldens
+# port scaffolding & phase-0 goldens (the fuzz corpus lives here too:
+# .port/phase-0/corpora/cvt)
 .port/
+
+# Swift example build outputs
+example/swift-vt-xcframework/.build/

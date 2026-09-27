@@ -141,13 +141,15 @@
         librustty-vt-releasefast-no-simd = librusttyVtFor pkgs ((mkPkgArgs "releasefast") // {simd = false;});
 
         librustty-vt = librustty-vt-releasefast;
-        default = librustty-vt;
       }))
       (forLinuxSystems (pkgs: rec {
         rustty-debug = rusttyFor pkgs (mkPkgArgs "debug");
         rustty-releasesafe = rusttyFor pkgs (mkPkgArgs "releasesafe");
         rustty-releasefast = rusttyFor pkgs (mkPkgArgs "releasefast");
         rustty = rustty-releasefast;
+        # The reference's `default` is the app, on the platforms that build it
+        # (Linux), and there is none elsewhere.
+        default = rustty;
       }));
 
     # `nix flake check` runs these. passthru.tests are the substance — they

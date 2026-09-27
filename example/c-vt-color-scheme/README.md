@@ -1,8 +1,8 @@
 # Example: `rustty-vt` Color Scheme Report Encoding
 
-This contains a simple example of how to use the color scheme report
-encoder (`rustty_color_scheme_report_encode`) to encode a CSI ? 997 n
-color scheme report escape sequence with the `rustty-vt` C library.
+This contains a simple example of how to use the `rustty-vt` color scheme
+report encoding API to encode terminal color scheme reports into escape
+sequences.
 
 This uses a `build.sh` (invoking `clang`) to build the C program against
 `librustty_vt_c`. Rustty emits a standard C library (`librustty_vt_c` +

@@ -6,13 +6,16 @@
 # screendump + ImageMagick histogram colour probe, the home-manager node
 # builders, the ssh-integration node pair — carries over unchanged.
 #
-# These ARE wired into `checks` (flake.nix), Linux only. They boot a NixOS
-# guest under QEMU, which needs /dev/kvm — so `nix flake check` will attempt
-# them wherever KVM is present and the desktop ones are correspondingly heavy.
+# These are wired into flake.nix as the `vmChecks` output (Linux only), NOT
+# `checks` as in the reference — flake.nix records why (the guest's systemd
+# backdoor never comes up in a rootless container, which would make
+# `nix flake check` permanently red there). G-NIX runs them under
+# RUSTTY_NIX_VM_TESTS=1. They boot a NixOS guest under QEMU, which needs
+# /dev/kvm, and the desktop ones are correspondingly heavy.
 # `basic-version-check` is the light one: no desktop, just
 # `su - rustty -c 'rustty +version'` in the guest.
 #
-#     nix build .#checks.aarch64-linux.basic-version-check
+#     nix build .#vmChecks.aarch64-linux.basic-version-check
 {
   self,
   system,
