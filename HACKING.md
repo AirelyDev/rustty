@@ -364,9 +364,14 @@ cannot reach. Build a debug binary and run it under Valgrind with suppressions
 for known false positives:
 
 ```sh
-valgrind --leak-check=full --error-exitcode=1 \
+valgrind --leak-check=full --error-exitcode=1 --num-callers=50 \
+    --suppressions=valgrind.supp --gen-suppressions=all \
     ./target/debug/rustty
 ```
+
+These are the reference's `run-valgrind` flags (`build.zig`), run from the repo
+root so `valgrind.supp` resolves. Arguments after the binary are passed to
+rustty, as with `run`.
 
 ## Input Stack Testing
 

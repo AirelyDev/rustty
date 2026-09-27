@@ -203,11 +203,12 @@ maintainers migrating from other terminal emulators:
   `[profile.*]` you define in `Cargo.toml`.
 
 - **Baseline CPU** (was `-Dcpu=baseline`): Build for the "baseline" CPU of the
-  target architecture with `RUSTFLAGS="-C target-cpu=<baseline>"`. This avoids
-  emitting newer CPU features that may not be available on all target machines.
-  Use `x86-64` for 64-bit x86 and `apple-m1` or a conservative baseline for
-  Apple Silicon. The default (`native`) tunes for the build host and must be
-  avoided for distributed packages.
+  target architecture. This avoids building for newer CPU features that may
+  not be available on all target machines. rustc already does this by
+  default: without `-C target-cpu` it targets the triple's generic baseline
+  (`x86-64` for 64-bit x86, `generic` for aarch64 Linux, `apple-m1` for
+  aarch64 macOS). Do not add `RUSTFLAGS="-C target-cpu=native"` to a
+  distributed package; it tunes for the build host.
 
 - **Windowing protocols** (was `-Dgtk-wayland=<bool>` / `-Dgtk-x11=<bool>`):
   The default feature set builds the Linux GTK app with **both** native
@@ -225,3 +226,58 @@ maintainers migrating from other terminal emulators:
   `rustc --print target-list` to get a full list of available targets, and
   ensure the corresponding `rust-std` component is installed (`rustup target
 add <triple>`).
+
+## WebAssembly (librustty-vt)
+
+librustty-vt can be built for WebAssembly for use in browsers and other
+wasm runtimes:
+
+```sh
+cargo rustc -p rustty-vt-c --target wasm32-unknown-unknown --release -- \
+  -C link-arg=--export-table -C link-arg=-zstack-size=131072
+cargo run -p xtask -- wasm-patch-growable-table \
+  target/wasm32-unknown-unknown/release/rustty_vt_c.wasm zig-out/bin/rustty-vt.wasm
+```
+
+This produces `zig-out/bin/rustty-vt.wasm`: the module exports its indirect
+function table, patched growable, so JavaScript can install effect callbacks,
+and it has a 128 KiB stack. (In a git checkout, `.port/tools/build-vt-wasm.sh`
+runs both steps.) The Rust std for the target must be installed (`rustup
+target add wasm32-unknown-unknown`).
+
+Some notes for packaging the wasm module:
+
+- Upstream Ghostty enables the `simd128` feature by default. This build does
+  not yet; to enable it, append `-C target-feature=+simd128` to the `cargo
+  rustc` flags above. Every browser engine has supported it for years
+  (Chrome 91, Firefox 89, Safari 16.4) and it is a large performance win for
+  VT parsing. If you target an unusual runtime without SIMD support, leave
+  it off.
+
+- Optional feature areas can be compiled out to significantly reduce binary
+  size. Each `-Dvt-features` feature is a Cargo feature of `rustty-vt-c`, all
+  of them on by default; build with `--no-default-features` and list the
+  ones you want. For example, a read-only terminal viewer only needs the
+  render state API:
+
+  ```sh
+  cargo rustc -p rustty-vt-c --target wasm32-unknown-unknown --release \
+    --no-default-features --features render-state -- \
+    -C link-arg=--export-table -C link-arg=-zstack-size=131072
+  ```
+
+  An interactive terminal typically wants
+  `--features render-state,input-encode,selection,color`. Disabled features
+  drop both their C API exports and any escape sequence handling (the
+  sequences are still consumed and safely ignored). See the `vt-features`
+  block of `crates/rustty-vt-c/Cargo.toml` and the per-feature consts in
+  `crates/rustty-vt/src/options.rs` for the full list of features and what
+  each one covers.
+
+- For the smallest module, build with `CARGO_PROFILE_RELEASE_OPT_LEVEL=s` (the
+  analog of `ReleaseSmall`) and run the result through
+  [Binaryen's](https://github.com/WebAssembly/binaryen) `wasm-opt -O3`. When
+  invoking `wasm-opt`, pass the feature flags for what the module uses, e.g.
+  `--enable-simd --enable-bulk-memory --enable-sign-ext
+--enable-nontrapping-float-to-int --enable-multivalue
+--enable-reference-types`, and `--strip-dwarf` to drop any debug info.

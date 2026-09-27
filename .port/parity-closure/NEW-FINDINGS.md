@@ -6778,12 +6778,15 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   (S63-F5 Windows and S64-F9 Android are OPEN in other batches). The 88f57ee66..20abdb50a build changes
   (native-freestanding lib-vt) are recorded N/A in `.port/phase-6/assessments/W6-platform-tail.md`.
 - **Fixed by P-1**: the app id follows `-Doptimize` (N371); `-Demit-webdata` (N373); the 13.0 macOS
-  floor on the CMake path (N372).
+  floor on the CMake path (N372); HACKING.md's Valgrind command now carries `run-valgrind`'s flags
+  (`--num-callers=50 --suppressions=valgrind.supp --gen-suppressions=all`, `build.zig:345-352`);
+  PACKAGING.md gains the reference's "WebAssembly (librustty-vt)" section in Cargo shape (commands
+  run on macOS: the default and a `--no-default-features --features render-state` module build and
+  patch; `+simd128` compiles) and its baseline-CPU bullet no longer calls rustc's default `native`.
 - **Open**:
   1. `run` sets `GHOSTTY_RESOURCES_DIR=<prefix>/share/ghostty` (`build.zig:289-292`); `cargo run -p
      rustty` does not point at `zig-out/share/rustty`.
-  2. `run-valgrind`'s flags (`--num-callers=50 --suppressions=valgrind.supp --gen-suppressions=all`,
-     `build.zig:345-352`) are missing from HACKING.md's command.
+  2. (fixed by P-1, see above: HACKING.md's `run-valgrind` flags.)
   3. `dist` names the tarball, its prefix and `VERSION` after the full `cfg.version`
      (`GhosttyDist.zig:52-107`); `xtask dist` uses the bare workspace version. (A build from either
      tarball reports `X.Y.Z-dev+0000000`, measured in the flatpak, so the binary is unaffected.)
@@ -6795,8 +6798,7 @@ earlier assert divergence is N43); test `pane_state_for_a_pane_with_captures_que
   8. `-Dstrip` / `-Dpie` defaults are recorded only as "cargo profile concerns" (`src-build.md:29,616`).
 - **Stale records seen (not edited by P-1)**: `crates/rustty-build-config/src/lib.rs:66` names
   `app-runtime-*`/`renderer-*`/`i18n` features that do not exist; `xtask/src/main.rs:7` still says
-  "PORT STATUS: scaffold"; PACKAGING.md calls rustc's default target CPU `native` and has no
-  WebAssembly (lib-vt) section (the reference's `PACKAGING.md:126-170`).
+  "PORT STATUS: scaffold".
 
 ## N378 — release workflows: residual differences from the reference
 
