@@ -202,6 +202,45 @@ fn init_signals() {
     }
 }
 
+// Zig's `{}` rendering of the three comptime values `global.zig:169-177` logs
+// (task W-4, NEW-FINDINGS N367): an enum prints as `.` + its tag name, a type as
+// its `@typeName`. The same mapping `rustty-cli`'s `version.rs` uses for
+// `+version`'s Build Config lines (LEDGER S70-F4); apprt cannot depend on the
+// CLI crate, so the three small tables are repeated here.
+
+/// `{}` of `build_config.app_runtime` (`apprt/runtime.zig` `Runtime`).
+fn zig_runtime(rt: rustty_build_config::Runtime) -> &'static str {
+    match rt {
+        rustty_build_config::Runtime::None => ".none",
+        rustty_build_config::Runtime::Gtk => ".gtk",
+    }
+}
+
+/// `{}` of `build_config.font_backend` (`font/backend.zig` `Backend`).
+fn zig_font_backend(b: rustty_build_config::font::Backend) -> &'static str {
+    use rustty_build_config::font::Backend;
+    match b {
+        Backend::Freetype => ".freetype",
+        Backend::FreetypeWindows => ".freetype_windows",
+        Backend::FontconfigFreetype => ".fontconfig_freetype",
+        Backend::Coretext => ".coretext",
+        Backend::CoretextFreetype => ".coretext_freetype",
+        Backend::CoretextHarfbuzz => ".coretext_harfbuzz",
+        Backend::CoretextNoshape => ".coretext_noshape",
+        Backend::WebCanvas => ".web_canvas",
+    }
+}
+
+/// `{}` of the type `renderer.Renderer` (its `@typeName`; `renderer.zig:38-42`).
+fn zig_renderer(r: rustty_build_config::renderer::Backend) -> &'static str {
+    use rustty_build_config::renderer::Backend;
+    match r {
+        Backend::Metal => "renderer.generic.Renderer(renderer.Metal)",
+        Backend::Opengl => "renderer.generic.Renderer(renderer.OpenGL)",
+        Backend::Webgl => "renderer.WebGL",
+    }
+}
+
 /// Error returned by [`init_with_action`] / [`init`] (the global-state bootstrap).
 ///
 /// PORT NOTE: the reference `state.init()` returns `!void` over the union of
@@ -356,13 +395,16 @@ pub fn init_with_action(action_detected: bool) -> Result<rustty_core::Logging, I
     log_with(
         Level::Info,
         "default",
-        &format!("runtime={:?}", build_config::app_runtime()),
+        &format!("runtime={}", zig_runtime(build_config::app_runtime())),
         &logging,
     );
     log_with(
         Level::Info,
         "default",
-        &format!("font_backend={:?}", build_config::font_backend()),
+        &format!(
+            "font_backend={}",
+            zig_font_backend(build_config::font_backend())
+        ),
         &logging,
     );
     // if (comptime build_config.font_backend.hasHarfbuzz())
@@ -397,7 +439,7 @@ pub fn init_with_action(action_detected: bool) -> Result<rustty_core::Logging, I
     log_with(
         Level::Info,
         "default",
-        &format!("renderer={:?}", build_config::renderer()),
+        &format!("renderer={}", zig_renderer(build_config::renderer())),
         &logging,
     );
     // std.log.info("libxev default backend={t}", .{xev.backend});
@@ -643,6 +685,31 @@ pub fn init() -> Result<(), InitError> {
 #[cfg(test)]
 mod bootstrap_tests {
     use super::*;
+
+    // Task W-4 (N367): `global.zig:169-177` log the runtime, font backend and
+    // renderer with `{}`, which is Zig's enum / type-name rendering, not the
+    // port's `Debug` (`None`, `FreetypeWindows`, `Opengl`). MEASURED against the
+    // reference exe on Windows: `runtime=.none`, `font_backend=.freetype_windows`,
+    // `renderer=renderer.generic.Renderer(renderer.OpenGL)`.
+    #[test]
+    fn init_log_values_use_zig_rendering() {
+        use rustty_build_config::{font, renderer, Runtime};
+        assert_eq!(".none", zig_runtime(Runtime::None));
+        assert_eq!(".gtk", zig_runtime(Runtime::Gtk));
+        assert_eq!(
+            ".freetype_windows",
+            zig_font_backend(font::Backend::FreetypeWindows)
+        );
+        assert_eq!(".coretext", zig_font_backend(font::Backend::Coretext));
+        assert_eq!(
+            "renderer.generic.Renderer(renderer.OpenGL)",
+            zig_renderer(renderer::Backend::Opengl)
+        );
+        assert_eq!(
+            "renderer.generic.Renderer(renderer.Metal)",
+            zig_renderer(renderer::Backend::Metal)
+        );
+    }
 
     // reference (global.zig init): `if (self.action != null) self.logging.stderr = false;`
     // then `self.logging = cli.args.parsePackedStruct(Logging, v.value) catch .{};`
