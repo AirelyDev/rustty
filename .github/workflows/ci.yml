@@ -49,6 +49,7 @@ jobs:
     needs:
       - ci
       - windows
+      - windows-examples-cmake
       - macos-app
     if: always()
     steps:
@@ -401,44 +402,52 @@ jobs:
         run: bash .port/tools/ci.sh
 
   # ── Windows ────────────────────────────────────────────────────────────────
-  # PORTS (in part; see the scope note below) the reference's `test-windows`,
-  # `build-libghostty-vt-windows` and `build-libghostty-windows-gnu` jobs.
+  # PORTS the reference's Windows jobs (`.github/workflows/test.yml` at the pin):
   #
-  # Until this existed, NO Windows object code was ever produced, linked, or
-  # run by anything in this repository. `G-WINCHK` is `cargo check` from a
-  # non-Windows host and says so in its own header — "it never LINKS and never
-  # RUNS anything on Windows ... a real windows build/test lane is the honest
-  # follow-up" — and `G-XTARGET`'s `x86_64-pc-windows-msvc` arm skips off
-  # Windows because there is no MSVC. `test/windows/test_dll_init.c` and its
-  # README were checked in, and the README's Status section read "Not run by
-  # any gate."
+  #   test-windows (:1711-1724)         `zig build -Dapp-runtime=none test`, the
+  #                                     full test binary (renderer, termio,
+  #                                     apprt, Command, pty, font, cli, ...)
+  #                                     -> the workspace build + test steps;
+  #   build-libghostty-vt-windows       `test-lib-vt`, `-Demit-lib-vt`, and the
+  #     (:938-957)                      c-vt-static link -> the vt test, release
+  #                                     library and (static link) the
+  #                                     `windows-examples-cmake` job below;
+  #   build-libghostty-windows-gnu      `-Dtarget=native-native-gnu
+  #     (:959-971)                      -Dapp-runtime=none`, the internal
+  #                                     library (App + Surface + the OpenGL
+  #                                     renderer) for the GNU ABI -> the
+  #                                     apprt-c GNU build;
+  #   build-examples-cmake-windows      every CMake example except the cross one
+  #     (:315-341)                      -> `windows-examples-cmake` below.
   #
-  # Scope today is the portable core: rustty-vt and its C API, plus the
-  # apprt-c DLL smoke below. This is NARROWER than the reference, and the gap
-  # is a port defect (NEW-FINDINGS N342, batch W-2): the reference's
-  # `test-windows` runs `zig build -Dapp-runtime=none test`, the full test
-  # binary (renderer, termio, apprt, Command, pty, font, cli, inspector), and
-  # `build-libghostty-windows-gnu` builds the internal library (App + Surface +
-  # the OpenGL renderer) for the GNU ABI; `build-libghostty-vt-windows` covers
-  # the vt library. rustty-core does not compile for Windows yet (no renderer
-  # arm), so the apprt-c step below cannot pass until W-2 lands.
+  # Task W-2 (NEW-FINDINGS N342) made rustty-core and everything above it
+  # compile, link and test on Windows (the OpenGL renderer arm with the
+  # reference's embedded no-op arms), so this leg now runs the whole workspace.
+  # CORRECTION (task W-2): the scope note here read "Scope today is the portable
+  # core: rustty-vt and its C API, plus the apprt-c DLL smoke below. This is
+  # NARROWER than the reference, and the gap is a port defect (NEW-FINDINGS N342,
+  # batch W-2)". Before that (task W-1b) it claimed the narrow scope matched the
+  # reference, which was wrong at the pin.
   #
-  # CORRECTION (task W-1b, review W-1 F2): this paragraph used to say "Scope is
-  # deliberately the PORTABLE core, matching the reference ... The
-  # app/apprt/renderer tiers are macOS+Linux ... and are not built here,
-  # exactly as the reference's Windows jobs build `libghostty-vt` rather than
-  # the app", and the header above named a `build-ghostty-windows-gnu` job.
-  # Both were wrong at the pin (`.github/workflows/test.yml:938-971, 1711-1724`):
-  # the job is `build-libghostty-windows-gnu`, and it builds the app library.
+  # EXCLUDED, explicitly (NEW-FINDINGS N350): three workspace members the
+  # reference never builds for Windows, and which do not build there as
+  # standalone members: `libxml2-sys` and `fontconfig-sys` (the reference's
+  # Windows font backend is `freetype_windows`, `font/backend.zig:49-55`; nothing
+  # in the Windows graph depends on them) and `sentry-sys` (the reference builds
+  # sentry for Darwin only, `build/Config.zig:224-236`).
   windows:
     name: rustty-windows
     runs-on: windows-latest
-    timeout-minutes: 45
+    timeout-minutes: 90
+    env:
+      WINDOWS_EXCLUDE: --exclude libxml2-sys --exclude fontconfig-sys --exclude sentry-sys
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Install Rust toolchain (pinned via rust-toolchain.toml)
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
 
       - name: Cache cargo registry + target
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
@@ -457,30 +466,54 @@ jobs:
       # present, and a guard whose entire purpose is to not depend on that is
       # the wrong place to be unarmed. Env setup, not a check — the check
       # sequence stays solely in ci.sh.
-      - name: Require the mirrored fuzz corpus (repo checkout, parity S63-F8)
+      #
+      # PORT_RULES R14 (task W-2): xtask's tests now run here too, and cmake
+      # ships on the Windows image, so its CMake install/pkg-config tests must
+      # not skip either. `xgettext` is not on the image, so
+      # RUSTTY_REQUIRE_XGETTEXT stays unset on this leg (the resource is absent).
+      - name: Require the mirrored fuzz corpus and cmake (repo checkout, R14)
         # Explicit, like the `test_dll_init` step below: this job's other steps
         # are bare `cargo` invocations that do not care which shell runs them.
         shell: pwsh
-        run: echo "RUSTTY_REQUIRE_FUZZ_CORPUS=1" >> $env:GITHUB_ENV
+        run: |
+          echo "RUSTTY_REQUIRE_FUZZ_CORPUS=1" >> $env:GITHUB_ENV
+          echo "RUSTTY_REQUIRE_CMAKE=1" >> $env:GITHUB_ENV
 
-      # The reference's `zig build test-lib-vt` on its Windows runner. This is
-      # the first time the VT test suite has EXECUTED on Windows — the
-      # `page_allocator` (NtAllocate/NtFreeVirtualMemory) and `page.rs`
-      # (VirtualAlloc/VirtualFree) arms were previously type-checked only.
-      - name: Test rustty-vt
-        run: cargo test -p rustty-vt --locked
+      # The `rustty` executable's build script compiles `dist/windows/rustty.rc`
+      # with the Windows SDK's `rc.exe` (parity S63-F5; the reference's Zig has
+      # its own resource compiler). rc.exe is on PATH only inside a developer
+      # shell, and sourcing vcvarsall would point the build scripts' own
+      # compiles at one architecture, so only the SDK's x64 bin dir is added.
+      - name: Put the Windows SDK resource compiler on PATH (S63-F5)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $rc = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\rc.exe" |
+            Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $rc) { throw "rc.exe not found under the Windows 10/11 SDK" }
+          echo $rc.DirectoryName >> $env:GITHUB_PATH
 
-      - name: Test rustty-vt-c
-        run: cargo test -p rustty-vt-c --locked
+      # test-windows: `zig build -Dapp-runtime=none test`.
+      - name: Build the workspace
+        shell: bash
+        run: cargo build --workspace $WINDOWS_EXCLUDE --locked
 
-      # The reference's `zig build -Demit-lib-vt`.
+      - name: Clippy the workspace (Windows arms)
+        shell: bash
+        run: cargo clippy --workspace $WINDOWS_EXCLUDE --all-targets --locked -- -D warnings
+
+      - name: Test the workspace
+        shell: bash
+        run: cargo test --workspace $WINDOWS_EXCLUDE --locked
+
+      # build-libghostty-vt-windows: `zig build -Demit-lib-vt`. (Its
+      # `test-lib-vt` step is covered by the workspace test above.)
       - name: Build librustty-vt (release)
         run: cargo build -p rustty-vt-c --release --locked
 
       # `test/windows/test_dll_init.c` — the DLL-init smoke its README
-      # describes and that nothing has ever run. It loads the apprt-c DLL and
-      # calls `rustty_info` to prove a by-value struct return survives the
-      # Windows C ABI.
+      # describes. It loads the apprt-c DLL and calls `rustty_info` to prove a
+      # by-value struct return survives the Windows C ABI.
       - name: Build the apprt-c DLL
         run: cargo build -p rustty-apprt-c --release --locked --no-default-features
 
@@ -506,12 +539,46 @@ jobs:
           if ($out -notmatch "rustty_info:") { throw "unexpected output: $out" }
           Pop-Location
 
-      # The reference's `build-ghostty-windows-gnu` — a different C ABI and
-      # linker, which catches things MSVC does not.
-      - name: Build for the GNU ABI
+      # build-libghostty-windows-gnu: the internal library (App + Surface + the
+      # OpenGL renderer) for the GNU ABI — a different C ABI and linker, which
+      # catches things MSVC does not.
+      # CORRECTION (task W-2): this step built `rustty-vt-c` under the name of a
+      # `build-ghostty-windows-gnu` job; the reference's job builds the app
+      # library, which rustty-apprt-c ports.
+      - name: Build the apprt-c library for the GNU ABI
         run: |
           rustup target add x86_64-pc-windows-gnu
-          cargo build -p rustty-vt-c --target x86_64-pc-windows-gnu --locked
+          cargo build -p rustty-apprt-c --target x86_64-pc-windows-gnu --locked
+
+  # build-examples-cmake-windows: each CMake example built against this
+  # checkout, excluding `c-vt-cmake-cross` as the reference does ("Cross-
+  # compilation with zig cc requires a single-config generator ... The Windows CI
+  # uses Visual Studio"). `c-vt-cmake-static` is also the Windows static-link
+  # check (`build-libghostty-vt-windows`'s c-vt-static step: that example's
+  # `build.sh` is a POSIX shell script).
+  windows-examples-cmake:
+    name: Example ${{ matrix.dir }} (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        dir: [c-vt-cmake, c-vt-cmake-static]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Install Rust toolchain (pinned via rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build Example
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          cd example/${{ matrix.dir }}
+          cmake -B build -DFETCHCONTENT_SOURCE_DIR_RUSTTY=${{ github.workspace }}
+          if ($LASTEXITCODE -ne 0) { throw "cmake configure failed" }
+          cmake --build build
+          if ($LASTEXITCODE -ne 0) { throw "cmake build failed" }
 
   # ── macOS app bundle ───────────────────────────────────────────────────────
   # PORTS the reference's `build-macos` and `test-macos` jobs.
