@@ -516,6 +516,21 @@ jobs:
       - name: Build librustty-vt (release)
         run: cargo build -p rustty-vt-c --release --locked
 
+      # The Windows exe against the reference's (task W-4). At the pin both are
+      # the helper CLI, a GUI-subsystem program with no window (app runtime
+      # `.none`). The script runs rustty.exe over the CLI matrix and the "opened"
+      # starts, and compares with the output Ghostty's own exe gave at the pin
+      # (`.port/tools/windows/golden/`, captured on Windows 11; the script's
+      # header has the regeneration recipe, which needs a Zig build of the
+      # reference and so does not run here). The reference's CI has no such
+      # step: it never builds its exe for Windows.
+      - name: Build the rustty exe (release)
+        run: cargo build -p rustty --release --locked
+
+      - name: Differential of rustty.exe against the reference exe's goldens
+        shell: pwsh
+        run: ./.port/tools/windows/exe-differential.ps1 -Mode check -Exe target/release/rustty.exe -Golden .port/tools/windows/golden
+
       # `test/windows/test_dll_init.c` — the DLL-init smoke its README
       # describes. It loads the apprt-c DLL and calls `rustty_info` to prove a
       # by-value struct return survives the Windows C ABI.

@@ -1,0 +1,9 @@
+info: rustty version=<VERSION>
+info: rustty build optimize=ReleaseFast
+info: runtime=.none
+info: font_backend=.freetype_windows
+info: dependency harfbuzz=11.0.0
+info: renderer=renderer.generic.Renderer(renderer.OpenGL)
+info: libxev default backend=iocp
+info(os_locale): setlocale from env result=English_United States.1252
+info: executing CLI action=.list-actions

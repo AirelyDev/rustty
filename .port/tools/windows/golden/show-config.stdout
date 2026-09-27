@@ -1,0 +1,4 @@
+command = cmd.exe
+working-directory = <WORK>\home
+click-repeat-interval = 500
+auto-update-channel = tip

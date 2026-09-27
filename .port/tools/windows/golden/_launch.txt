@@ -1,0 +1,4 @@
+open no-args: exit=1
+console no-args: exit=1
+open +version: exit=1
+console +version: exit=1

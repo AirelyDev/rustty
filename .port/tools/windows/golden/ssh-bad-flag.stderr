@@ -1,0 +1,13 @@
+Error: unknown flag `--no-such-flag`.
+
+Usage: rustty +ssh [flags] [--] <ssh args...>
+
+Flags:
+  --forward-env[=bool]  Enable TERM / SendEnv forwarding. Default: true.
+  --terminfo[=bool]     Install Rustty terminfo on first connect. Default: true.
+  --cache[=bool]        Use the terminfo install cache. Default: true.
+  --ssh=<path>          Path to the ssh binary. Default: first `ssh` on PATH.
+  --verbose             Print +ssh status lines to stderr.
+  --help                Show full help.
+
+ssh flags and the destination go after +ssh's own flags (or after `--`).
