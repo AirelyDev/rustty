@@ -81,6 +81,7 @@ SUBCOMMANDS:
                        consumes.
     resources [--target-os <os>] [--prefix <prefix>] [--flatpak] [--debug] [--system-package]
               [--optimize <mode>] [--emit-terminfo <bool>] [--emit-termcap <bool>] [--emit-themes <bool>]
+              [--emit-webdata <bool>]
                        Generate zig-out/share/{terminfo,<app>,vim,nvim,fish,zsh,bash-completion,man,locale,bat} for the macOS Copy-Resources phase (<app> = rustty by default, ghostty under identity-oracle).
                        --target-os (linux|macos|freebsd|windows|…, default: host) selects the
                        TARGET layout like ghostty's cfg.target: freebsd puts the terminfo tree
@@ -89,12 +90,15 @@ SUBCOMMANDS:
                        hicolor icons — GhosttyResources.zig addLinuxAppResources). For the
                        linux arm: --prefix is the FINAL install prefix baked into Exec= lines
                        (default /usr), --flatpak swaps the D-Bus service + caps icons at 512,
-                       --debug uses the -debug app id, --system-package puts the systemd user
+                       --debug forces the -debug app id, --system-package puts the systemd user
                        unit under zig-out/lib instead of zig-out/share.
                        --optimize (Debug|ReleaseSafe|ReleaseFast|ReleaseSmall, default Debug like
                        `zig build`) picks the emit-terminfo/emit-termcap defaults: the terminfo
                        source and termcap are installed for Debug only (the source always on
-                       windows). --emit-* override them; --emit-themes defaults to true.
+                       windows). --emit-* override them; --emit-themes defaults to true and
+                       --emit-webdata (share/<app>/webdata/*.mdx, the website data) to false. It also
+                       picks the Linux app id: Debug/ReleaseSafe install the -debug id, as the
+                       reference does, so release packaging passes --optimize ReleaseFast.
     update-translations
                        Regenerate po/io.airely.rustty.pot from the GTK-apprt + Nautilus
                        sources and msgmerge every po/*.po catalog (needs xgettext+msgmerge
@@ -1022,7 +1026,7 @@ fn resources(args: &mut impl Iterator<Item = String>) -> Result<PathBuf, String>
     let mut target_os = std::env::consts::OS.to_string();
     let mut prefix = String::from("/usr");
     let mut flatpak = false;
-    let mut debug = false;
+    let mut debug_flag = false;
     let mut system_package = false;
     // `-Doptimize` and the `-Demit-terminfo` / `-Demit-termcap` /
     // `-Demit-themes` overrides (`Config.zig:504-529`, S64-F8).
@@ -1030,6 +1034,8 @@ fn resources(args: &mut impl Iterator<Item = String>) -> Result<PathBuf, String>
     let mut emit_terminfo: Option<bool> = None;
     let mut emit_termcap: Option<bool> = None;
     let mut emit_themes = true;
+    // `-Demit-webdata` (`Config.zig:531-535`, default false).
+    let mut emit_webdata = false;
     let parse_bool = |flag: &str, v: Option<String>| -> Result<bool, String> {
         match v.as_deref() {
             Some("true") => Ok(true),
@@ -1048,6 +1054,7 @@ fn resources(args: &mut impl Iterator<Item = String>) -> Result<PathBuf, String>
             "--emit-terminfo" => emit_terminfo = Some(parse_bool(&arg, args.next())?),
             "--emit-termcap" => emit_termcap = Some(parse_bool(&arg, args.next())?),
             "--emit-themes" => emit_themes = parse_bool(&arg, args.next())?,
+            "--emit-webdata" => emit_webdata = parse_bool(&arg, args.next())?,
             "--target-os" => {
                 target_os = args.next().ok_or("--target-os requires a value")?;
             }
@@ -1055,11 +1062,13 @@ fn resources(args: &mut impl Iterator<Item = String>) -> Result<PathBuf, String>
                 prefix = args.next().ok_or("--prefix requires a value")?;
             }
             "--flatpak" => flatpak = true,
-            "--debug" => debug = true,
+            "--debug" => debug_flag = true,
             "--system-package" => system_package = true,
             other => return Err(format!("unknown `resources` flag `{other}`")),
         }
     }
+
+    let debug = linux_app_is_debug(optimize, debug_flag);
 
     let root = workspace_root();
     let share = root.join("zig-out/share");
@@ -1076,7 +1085,7 @@ fn resources(args: &mut impl Iterator<Item = String>) -> Result<PathBuf, String>
         .map_err(|e| format!("gen_terminfo: {e}"))?;
     res_shell::gen_shell(&share).map_err(|e| format!("gen_shell: {e}"))?;
     res_editor::gen_editor(&share).map_err(|e| format!("gen_editor: {e}"))?;
-    res_misc::gen_misc(&share).map_err(|e| format!("gen_misc: {e}"))?;
+    res_misc::gen_misc(&share, emit_webdata).map_err(|e| format!("gen_misc: {e}"))?;
     // Themes: `if (cfg.emit_themes)` (`GhosttyResources.zig:127-138`).
     if emit_themes {
         res_themes::gen_themes(&share).map_err(|e| format!("gen_themes: {e}"))?;
@@ -1140,9 +1149,35 @@ enum WasmPatchError {
     Failed(String),
 }
 
+/// Whether the Linux desktop resources carry the debug name and app id
+/// (` (Debug)` / `-debug`). The reference derives both from the optimize mode
+/// alone (`GhosttyResources.zig:268-280`: `.Debug, .ReleaseSafe` are debug), so
+/// `--optimize` decides it here too; `--debug` stays as an explicit override
+/// for callers that name the debug app without an optimize mode.
+fn linux_app_is_debug(optimize: res_terminfo::Optimize, debug_flag: bool) -> bool {
+    use res_terminfo::Optimize;
+    debug_flag || matches!(optimize, Optimize::Debug | Optimize::ReleaseSafe)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `GhosttyResources.zig:268-280`: Debug and ReleaseSafe install the
+    /// `-debug` app id and the ` (Debug)` name, ReleaseFast and ReleaseSmall
+    /// the plain ones. Before P-1 the app id ignored `--optimize`, so every
+    /// release packaging run that passed `--optimize ReleaseFast` (and every
+    /// Debug run that did not pass `--debug`) disagreed with the reference.
+    #[test]
+    fn linux_app_debug_id_follows_the_optimize_mode() {
+        use res_terminfo::Optimize;
+        assert!(linux_app_is_debug(Optimize::Debug, false));
+        assert!(linux_app_is_debug(Optimize::ReleaseSafe, false));
+        assert!(!linux_app_is_debug(Optimize::ReleaseFast, false));
+        assert!(!linux_app_is_debug(Optimize::ReleaseSmall, false));
+        // The explicit override still selects the debug id.
+        assert!(linux_app_is_debug(Optimize::ReleaseFast, true));
+    }
 
     /// `Config.zig:22, 183-187`: `xcframework_target` defaults to universal,
     /// and `GhosttyXCFramework.zig:42-57` then packs ONE macOS library, the

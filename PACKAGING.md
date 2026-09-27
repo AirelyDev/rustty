@@ -150,14 +150,18 @@ install -Dm755 target/release/rustty "$DESTDIR$PREFIX/bin/rustty"
 # Nautilus/Dolphin right-click actions, and the hicolor icon set. `--prefix`
 # must match PREFIX so the templated Exec= lines point at the installed
 # binary. (On FreeBSD, `--target-os freebsd` puts the terminfo tree under
-# share/site-terminfo, where the runtime looks it up.)
-cargo run -p xtask -- resources --target-os linux --prefix "$PREFIX"
+# share/site-terminfo, where the runtime looks it up.) `--optimize` is the
+# resource half of `-Doptimize`: a release build installs only the compiled
+# terminfo database, and a Debug/ReleaseSafe one also installs the terminfo
+# source and termcap and names the desktop files with the `-debug` app id.
+cargo run -p xtask -- resources --target-os linux --prefix "$PREFIX" \
+  --optimize ReleaseFast
 cp -R zig-out/share "$DESTDIR$PREFIX/share"
 ```
 
 Flags for special Linux packaging arms: `--flatpak` (flatpak D-Bus
-activation, icons capped at 512x512, no systemd unit), `--debug` (the
-`-debug` app id), and `--system-package` (the systemd user unit is staged
+activation, icons capped at 512x512, no systemd unit), `--debug` (forces
+the `-debug` app id whatever `--optimize` says), and `--system-package` (the systemd user unit is staged
 under `zig-out/lib/systemd/user` — copy `zig-out/lib` into
 `$DESTDIR$PREFIX/lib` as well in that case, since system packages install
 systemd user units under `lib`, not `share`).

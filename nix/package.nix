@@ -54,6 +54,19 @@
     else "release";
   strip = optimize != "debug" && optimize != "releasesafe";
 
+  # The reference's `-Doptimize=` spelling, which `xtask resources --optimize`
+  # takes: it picks the terminfo-source/termcap defaults and the `-debug` app
+  # id, exactly as `-Doptimize` does for the reference's resource install.
+  xtaskOptimize =
+    {
+      debug = "Debug";
+      releasesafe = "ReleaseSafe";
+      releasefast = "ReleaseFast";
+    }
+    .${
+      optimize
+    };
+
   # `-Dgtk-x11` / `-Dgtk-wayland` are cargo features here. `gtk` itself is
   # implied by both, but name it so an all-false build still selects the GTK
   # apprt rather than the headless one.
@@ -150,7 +163,8 @@ in
       # the reference's /usr default.
       cargo run --offline --frozen -p xtask -- resources \
         --target-os linux \
-        --prefix "$out"
+        --prefix "$out" \
+        --optimize ${xtaskOptimize}
 
       runHook postBuild
     '';

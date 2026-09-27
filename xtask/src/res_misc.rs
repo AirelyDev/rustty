@@ -117,16 +117,23 @@ const SUBLIME_SYNTAX: &[u8] =
     include_bytes!("../../crates/rustty-extra/testdata/rustty.sublime-syntax");
 
 /// Generate the remaining build-phase resource folders under `share_dir`:
-/// `man/`, `locale/`, and `bat/`.
+/// `man/`, `locale/`, and `bat/`, plus `{APP}/webdata` when `emit_webdata`.
 ///
 /// `share_dir` is the `…/zig-out/share` root the `resources` subcommand creates.
 /// Returns `Ok(())` after all three subtrees exist and are populated
 /// minimal-but-valid (R5). Any I/O failure is surfaced as a `String` error
 /// naming the offending path.
-pub fn gen_misc(share_dir: &Path) -> Result<(), String> {
+///
+/// `emit_webdata` is `-Demit-webdata` ("Build the website data for the
+/// website.", default false, `Config.zig:531-535`): the reference installs the
+/// webdata only under that option (`build.zig:109`), so a packaging run does
+/// not ship it.
+pub fn gen_misc(share_dir: &Path, emit_webdata: bool) -> Result<(), String> {
     gen_man(share_dir)?;
     gen_doc(share_dir)?;
-    gen_webdata(share_dir)?;
+    if emit_webdata {
+        gen_webdata(share_dir)?;
+    }
     gen_locale(share_dir)?;
     gen_bat(share_dir)?;
     Ok(())

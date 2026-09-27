@@ -21,12 +21,18 @@
 #
 # ── WHAT IT CHECKS ───────────────────────────────────────────────────────────
 # 1. `resources` for the HOST, with per-family floors (not just "exit 0"): a
-#    generator that silently emits an empty tree would otherwise pass.
-# 2. `resources --target-os linux`, which additionally stages the desktop-app
-#    resources. Pure file generation, so it runs from any host — which means the
-#    Linux packaging layout is checked on the macOS leg too.
-# 3. `resources --target-os linux --flatpak`, the arm the Flatpak manifest
-#    actually passes: the D-Bus service is swapped and icons capped at 512.
+#    generator that silently emits an empty tree would otherwise pass. It also
+#    asserts NO website data (`-Demit-webdata` defaults to false).
+# 2. `resources --target-os linux --optimize ReleaseFast`, which additionally
+#    stages the desktop-app resources. Pure file generation, so it runs from any
+#    host — which means the Linux packaging layout is checked on the macOS leg
+#    too. `--optimize ReleaseFast` because the app id follows the optimize mode
+#    (a Debug run installs `io.airely.rustty-debug`, as the reference does), and
+#    `--emit-webdata true`, whose three .mdx files are the positive half of
+#    arm 1's absence check.
+# 3. `resources --target-os linux --flatpak --optimize ReleaseFast`, the arm the
+#    Flatpak manifest actually passes: the D-Bus service is swapped and icons
+#    capped at 512.
 # 4. `gen` for every documented action, each asserted non-empty.
 # 5. `wasm-patch-growable-table` end to end over a hand-built minimal module,
 #    asserting the table limits flag flips 0x01 -> 0x00 and the max is dropped.
@@ -102,6 +108,10 @@ else
   [ "$nthemes" -ge 100 ]  || { echo "      themes: $nthemes, expected >= 100"; errs=1; }
   [ "$nshell" -ge 4 ]     || { echo "      shell-integration: $nshell file(s), expected >= 4"; errs=1; }
   [ "$nterm" -ge 3 ]      || { echo "      terminfo: $nterm file(s), expected >= 3 (source, termcap, compiled db)"; errs=1; }
+  # `-Demit-webdata` defaults to false (Config.zig:531-535): no website data
+  # unless asked for. Arm 2 asks for it, so this pair is differential.
+  [ ! -e "$SHARE/rustty/webdata" ] \
+    || { echo "      webdata emitted without --emit-webdata (the reference default is off)"; errs=1; }
   # R2: nothing may be emitted under the reference's identity.
   if find "$SHARE" -name 'ghostty*' -print -quit 2>/dev/null | grep -q .; then
     echo "      R2: ghostty-named output under $SHARE:"
@@ -118,7 +128,7 @@ fi
 # ── 2. resources, linux layout ───────────────────────────────────────────────
 echo "=== G-XTASK 2/6 :: resources --target-os linux ==="
 rm -rf "$SHARE"
-if ! "${XTASK[@]}" resources --target-os linux --prefix /usr > "$WORK/res-linux.log" 2>&1; then
+if ! "${XTASK[@]}" resources --target-os linux --prefix /usr --optimize ReleaseFast --emit-webdata true > "$WORK/res-linux.log" 2>&1; then
   tail -20 "$WORK/res-linux.log" | sed 's/^/      /'
   bad "resources (linux) — command failed"
 else
@@ -130,6 +140,8 @@ else
   do
     [ -f "$SHARE/$f" ] || { echo "      missing share/$f"; errs=1; }
   done
+  nmdx="$(find "$SHARE/rustty/webdata" -name '*.mdx' 2>/dev/null | wc -l | tr -d ' ')"
+  [ "$nmdx" -eq 3 ] || { echo "      --emit-webdata true: $nmdx .mdx file(s), expected 3"; errs=1; }
   nicons="$(find "$SHARE/icons" -name '*.png' 2>/dev/null | wc -l | tr -d ' ')"
   [ "$nicons" -ge 6 ] || { echo "      icons: $nicons png(s), expected >= 6 hicolor sizes"; errs=1; }
   # The Exec= line must carry the prefix that was asked for.
@@ -159,7 +171,7 @@ fi
 # ── 3. resources, flatpak arm ────────────────────────────────────────────────
 echo "=== G-XTASK 3/6 :: resources --target-os linux --flatpak ==="
 rm -rf "$SHARE"
-if ! "${XTASK[@]}" resources --target-os linux --prefix /app --flatpak > "$WORK/res-fp.log" 2>&1; then
+if ! "${XTASK[@]}" resources --target-os linux --prefix /app --flatpak --optimize ReleaseFast > "$WORK/res-fp.log" 2>&1; then
   tail -20 "$WORK/res-fp.log" | sed 's/^/      /'
   bad "resources (flatpak) — command failed"
 else

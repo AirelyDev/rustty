@@ -212,7 +212,21 @@ endif()
 # cargo is already incremental, so an unconditional invocation costs a fraction
 # of a second when nothing changed. Same reasoning as the WS19 T16 change to
 # the example/*/build.sh scripts, which had the identical staleness bug.
-if(APPLE OR WIN32)
+if(APPLE)
+    # The reference resolves every macOS target with a 13.0 minimum OS version
+    # (Config.zig genericMacOSTarget / osVersionMin), so `zig build` stamps
+    # 13.0 into the library it hands CMake. rustc's own default is older
+    # (11.0 on arm64), so pass the same floor; rustc and cc-rs both read it.
+    # Like the reference, which applies the default only "if we have no
+    # minimum OS version", a caller's own MACOSX_DEPLOYMENT_TARGET wins.
+    if(DEFINED ENV{MACOSX_DEPLOYMENT_TARGET})
+        set(_rustty_macos_min "$ENV{MACOSX_DEPLOYMENT_TARGET}")
+    else()
+        set(_rustty_macos_min "13.0")
+    endif()
+    set(_RUSTTY_CARGO_ENV "${CMAKE_COMMAND}" -E env "MACOSX_DEPLOYMENT_TARGET=${_rustty_macos_min}")
+    set(_RUSTTY_SONAME_LINK_CMD "")
+elseif(WIN32)
     set(_RUSTTY_CARGO_ENV "")
     set(_RUSTTY_SONAME_LINK_CMD "")
 else()

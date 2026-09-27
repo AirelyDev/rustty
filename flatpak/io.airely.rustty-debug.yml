@@ -97,9 +97,11 @@ modules:
       # Stage terminfo / shell-integration / themes / man / completions /
       # locale / the desktop-app files. --flatpak swaps in the flatpak D-Bus
       # service and caps the icon at 512, matching the reference's
-      # `-Dflatpak=true`.
+      # `-Dflatpak=true`. `--optimize Debug` is the resource half of the
+      # reference's `-Doptimize=Debug`: it installs the terminfo source and
+      # termcap, and names the desktop files with the `-debug` app id.
       - cargo run --offline --locked -p xtask -- resources
-        --target-os linux --prefix /app --flatpak --debug
+        --target-os linux --prefix /app --flatpak --optimize Debug
       - install -Dm755 target/debug/rustty /app/bin/rustty
       - cp -r zig-out/share/. /app/share/
     sources:
